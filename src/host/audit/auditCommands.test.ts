@@ -88,6 +88,7 @@ describe('createHostAudit', () => {
     expect(await ids({ taskId: 'task1' })).toEqual([writeOutside.id])
     expect(await ids({ agentProfileId: 'ap1' })).toEqual([writeOutside.id])
     expect(await ids({ action: 'filesystem.read' })).toEqual([readInside.id])
+    expect(await ids({ action: 'filesystem.*' })).toEqual([writeOutside.id, readInside.id])
     expect(await ids({ decision: 'would-deny' })).toEqual([writeOutside.id, push.id])
     expect(await ids({ decision: 'allow' })).toEqual([readInside.id])
     expect(await ids({ since: readInside.at, until: mystery.at })).toEqual([writeOutside.id, readInside.id])
@@ -112,7 +113,7 @@ describe('createHostAudit', () => {
 
   it('refuses filters it cannot read', async () => {
     const h = await rig()
-    for (const args of [{ since: 'yesterday' }, { until: 5 }, { decision: 'deny' }, { sessionId: 7 }, { action: '' }]) {
+    for (const args of [{ since: 'yesterday' }, { until: 5 }, { decision: 'deny' }, { sessionId: 7 }, { action: '' }, { action: 'git.push' }, { action: 'foo.*' }, { action: 'git*x' }]) {
       const r = await h.call('audit-list', args)
       expect(r.status, JSON.stringify(args)).toBe(400)
       expect((await h.call('audit-summary', args)).status, JSON.stringify(args)).toBe(400)
@@ -132,14 +133,28 @@ describe('createHostAudit', () => {
         'filesystem.read': { allow: 1, wouldDeny: 0, unknown: 0 },
         'filesystem.write': { allow: 0, wouldDeny: 1, unknown: 0 },
         'process.execute': { allow: 0, wouldDeny: 0, unknown: 2 }
-      }
+      },
+      stoppedAtLimit: false
     })
     expect((await h.call('audit-summary', { sessionId: 'sess_b' })).body).toEqual({
       allow: 0,
       wouldDeny: 1,
       unknown: 0,
-      byAction: { 'filesystem.write': { allow: 0, wouldDeny: 1, unknown: 0 } }
+      byAction: { 'filesystem.write': { allow: 0, wouldDeny: 1, unknown: 0 } },
+      stoppedAtLimit: false
     })
+  })
+
+  it('says when the records of a day in the period stopped at the size', async () => {
+    const h = await rig()
+    const dir = profilePaths(h.profileDir).auditRecords
+    await fs.mkdir(dir, { recursive: true })
+    const day = new Date(NOW)
+    const name = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}.jsonl`
+    await fs.writeFile(path.join(dir, name), 'x'.repeat(1999) + '\n')
+    await appendRecords(h.profileDir, [rec()], { now: () => NOW, maxBytes: 1000 })
+    expect((await h.call('audit-summary')).body).toMatchObject({ stoppedAtLimit: true })
+    expect((await h.call('audit-summary', { until: new Date(NOW - 3 * 24 * 60 * 60 * 1000).toISOString() })).body).toMatchObject({ stoppedAtLimit: false })
   })
 
   it('judges with the rules in force at the read: editing a rule changes the summary of the past (acceptance 5)', async () => {
@@ -161,7 +176,7 @@ describe('createHostAudit', () => {
   it('answers empty when nothing was recorded', async () => {
     const h = await rig()
     expect((await h.call('audit-list')).body).toEqual({ records: [], truncated: false })
-    expect((await h.call('audit-summary')).body).toEqual({ allow: 0, wouldDeny: 0, unknown: 0, byAction: {} })
+    expect((await h.call('audit-summary')).body).toEqual({ allow: 0, wouldDeny: 0, unknown: 0, byAction: {}, stoppedAtLimit: false })
   })
 
   it('answers 409 while the rules file is damaged, since no decision can be made', async () => {

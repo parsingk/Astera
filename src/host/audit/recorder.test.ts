@@ -7,12 +7,13 @@ import os from 'node:os'
 import path from 'node:path'
 import { removeFixture } from '../../core/testFixtures'
 import { profilePaths } from '../../core/profile/paths'
-import { queryRecords } from '../../core/audit/store'
+import { queryRecords, type AuditRecord } from '../../core/audit/store'
 import { emptyState, type OrchState } from '../../core/orchestration/state'
 import type { Dispatch, JobRun, Task } from '../../core/orchestration/types'
 import type { PtyEntry } from '../../core/host/protocol'
 import type { AuditMode } from '../../core/audit/policy'
-import { AUDIT_COMMANDS_KEPT, createAuditRecorder, dispatchOfSession, registrySessionFacts, type SessionFacts } from './recorder'
+import type { ResolvedAction } from '../../core/audit/resolve'
+import { AUDIT_COMMANDS_KEPT, AUDIT_PENDING_MAX, createAuditRecorder, dispatchOfSession, registrySessionFacts, type SessionFacts } from './recorder'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -22,12 +23,17 @@ afterEach(async () => {
 const NOW = Date.parse('2026-10-23T03:00:00.000Z')
 const cwd = path.resolve('/work/proj')
 
-async function rig(o: { mode?: AuditMode; facts?: SessionFacts | null; dispatch?: { jobId?: string; runId?: string; taskId?: string } | null } = {}) {
+type Deps = Parameters<typeof createAuditRecorder>[0]
+
+async function rig(
+  o: { mode?: AuditMode; facts?: SessionFacts | null; dispatch?: { jobId?: string; runId?: string; taskId?: string } | null; over?: Partial<Deps> } = {}
+) {
   const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-auditrec-'))
   dirs.push(profileDir)
   let mode: AuditMode = o.mode ?? 'observe'
   let modeReads = 0
   const asked: string[] = []
+  const dispatchAsked: Array<[string, string]> = []
   const logs: string[] = []
   let now = NOW
   const facts: SessionFacts | null = o.facts === undefined ? { kind: 'terminal', accountId: 'acc1', agentProfileId: 'ap1', cwd } : o.facts
@@ -41,15 +47,20 @@ async function rig(o: { mode?: AuditMode; facts?: SessionFacts | null; dispatch?
       asked.push(id)
       return facts
     },
-    dispatchOf: () => (o.dispatch === undefined ? null : o.dispatch),
+    dispatchOf: (id, at) => {
+      dispatchAsked.push([id, at])
+      return o.dispatch === undefined ? null : o.dispatch
+    },
     log: (m) => logs.push(m),
-    now: () => now
+    now: () => now,
+    ...o.over
   })
   return {
     profileDir,
     recorder,
     logs,
     asked,
+    dispatchAsked,
     setMode: (m: AuditMode) => (mode = m),
     modeReads: () => modeReads,
     advance: (msBy: number) => (now += msBy),
@@ -71,11 +82,21 @@ const bash = (command: string, extra: { sessionId?: string; dedupeKey?: string; 
 describe('createAuditRecorder', () => {
   it('drops everything in compatibility: no record, no folder, no session asked', async () => {
     const h = await rig({ mode: 'compatibility' })
+    // The mode is read once when the recorder is made
+    await h.recorder.flushed()
     h.recorder.record(bash('git push origin main'))
     h.recorder.record(bash('npm test'))
     await h.recorder.flushed()
     expect(await h.folderExists()).toBe(false)
     expect(h.asked).toEqual([])
+    expect(h.modeReads()).toBe(1)
+  })
+
+  it('holds a call that comes before the mode is known, and drops it without the disk when the mode is compatibility', async () => {
+    const h = await rig({ mode: 'compatibility' })
+    h.recorder.record(bash('git push origin main'))
+    await h.recorder.flushed()
+    expect(await h.folderExists()).toBe(false)
   })
 
   it('keeps one record per call, resolved and stamped with the session and its Dispatch', async () => {
@@ -101,6 +122,8 @@ describe('createAuditRecorder', () => {
       confidence: 'high',
       status: 'ok'
     })
+    // The Dispatch is asked at the call's own time
+    expect(h.dispatchAsked).toEqual([['sess_a', new Date(NOW).toISOString()]])
   })
 
   it('names the provider from the source, keeps the call’s own time, and leaves out what the session does not have', async () => {
@@ -110,6 +133,7 @@ describe('createAuditRecorder', () => {
     const [r] = await h.records()
     expect(r).toMatchObject({ provider: 'codex', kind: 'chat', accountId: 'acc2', source: 'codex-chat', providerTool: 'apply_patch', action: 'filesystem.write', insideProject: false, status: 'failed', at: '2026-10-22T10:00:00.000Z' })
     for (const k of ['agentProfileId', 'jobId', 'runId', 'taskId']) expect(r).not.toHaveProperty(k)
+    expect(h.dispatchAsked).toEqual([['sess_c', '2026-10-22T10:00:00.000Z']])
   })
 
   it('keeps every command of a line with its own place, so the rules can judge it later as they would have then', async () => {
@@ -125,19 +149,11 @@ describe('createAuditRecorder', () => {
   })
 
   it('keeps at most 16 commands, and a line cut short reads unknown', async () => {
-    const h = await rig()
     // The resolver's commands are already without repeats, which today stays under 16 for any line; the cap is the wall
     const commands = Array.from({ length: 20 }, (_, i) => ({ action: 'process.execute' as const, insideProject: i % 2 === 0 }))
-    const recorder = createAuditRecorder({
-      profileDir: h.profileDir,
-      mode: async () => 'observe',
-      sessionInfo: () => ({ kind: 'terminal', accountId: 'acc1', cwd }),
-      dispatchOf: () => null,
-      log: (m) => h.logs.push(m),
-      resolve: () => ({ action: 'process.execute', target: 'a', confidence: 'heuristic', commands })
-    })
-    recorder.record(bash('a && b'))
-    await recorder.flushed()
+    const h = await rig({ over: { resolve: () => ({ action: 'process.execute', target: 'a', confidence: 'heuristic', commands }) } })
+    h.recorder.record(bash('a && b'))
+    await h.recorder.flushed()
     const [r] = await h.records()
     expect(AUDIT_COMMANDS_KEPT).toBe(16)
     expect(r.commands).toEqual(commands.slice(0, 16))
@@ -170,44 +186,106 @@ describe('createAuditRecorder', () => {
     expect(await h.folderExists()).toBe(false)
   })
 
-  it('reads the mode once a while rather than per call, and again at once when the policies say it changed', async () => {
+  it('keeps the mode it read until the policies say it changed', async () => {
     const h = await rig({ mode: 'compatibility' })
-    for (let i = 0; i < 5; i++) h.recorder.record(bash('git status'))
     await h.recorder.flushed()
-    expect(h.modeReads()).toBe(1)
     h.setMode('observe')
+    h.advance(24 * 60 * 60 * 1000)
     h.recorder.record(bash('git status'))
     await h.recorder.flushed()
     expect(await h.records()).toHaveLength(0)
+    expect(h.modeReads()).toBe(1)
     h.recorder.invalidate()
     h.recorder.record(bash('git status'))
     await h.recorder.flushed()
     expect(await h.records()).toHaveLength(1)
     expect(h.modeReads()).toBe(2)
-    // And on its own after a short while
-    h.setMode('compatibility')
-    h.advance(10_000)
+  })
+
+  it('does not keep a mode it could not read: those calls are not recorded, and the next call reads it again', async () => {
+    let fail = true
+    const h = await rig({
+      over: {
+        mode: async () => {
+          if (fail) throw new Error('audit-policy.json is damaged')
+          return 'observe'
+        }
+      }
+    })
+    h.recorder.record(bash('git status'))
+    await h.recorder.flushed()
+    expect(await h.folderExists()).toBe(false)
+    expect(h.logs.join('\n')).toMatch(/damaged/)
+    fail = false
     h.recorder.record(bash('git status'))
     await h.recorder.flushed()
     expect(await h.records()).toHaveLength(1)
-    expect(h.modeReads()).toBe(3)
+  })
+
+  it('resolves a call while it is handed over, so its input is not held', async () => {
+    let resolved = 0
+    const h = await rig({ over: { resolve: (): ResolvedAction => (resolved++, { action: 'git.read', target: 'git status', confidence: 'high' }) } })
+    await h.recorder.flushed()
+    h.recorder.record(bash('git status'))
+    expect(resolved).toBe(1)
+    await h.recorder.flushed()
+  })
+
+  it('holds at most so many records while the disk does not take them, and counts the rest in the log', async () => {
+    let release: () => void = () => {}
+    const stuck = new Promise<void>((r) => (release = r))
+    const written: AuditRecord[][] = []
+    const h = await rig({
+      over: {
+        resolve: () => ({ action: 'git.read', target: 'git status', confidence: 'high' }),
+        append: async (_dir, recs) => {
+          written.push([...recs])
+          await stuck
+        }
+      }
+    })
+    await h.recorder.flushed()
+    // The first goes to the disk and sticks there; the next fill the hold, and three more are dropped
+    h.recorder.record(bash('git status'))
+    await new Promise((r) => setImmediate(r))
+    expect(written.map((w) => w.length)).toEqual([1])
+    for (let i = 0; i < AUDIT_PENDING_MAX + 3; i++) h.recorder.record(bash('git status'))
+    expect(h.logs.filter((m) => /wait for the disk/.test(m))).toHaveLength(1)
+    release()
+    await h.recorder.flushed()
+    expect(written.map((w) => w.length)).toEqual([1, AUDIT_PENDING_MAX])
+    expect(h.logs.join('\n')).toMatch(/3 call\(s\) were not recorded/)
+  })
+
+  it('goes on after a write that threw', async () => {
+    let calls = 0
+    const h = await rig({
+      over: {
+        append: async () => {
+          if (++calls === 1) throw new Error('disk gone')
+        }
+      }
+    })
+    h.recorder.record(bash('git status'))
+    await h.recorder.flushed()
+    h.recorder.record(bash('git status'))
+    await h.recorder.flushed()
+    expect(calls).toBe(2)
+    expect(h.logs.join('\n')).toMatch(/disk gone/)
   })
 
   it('never throws to a source: a failing lookup is logged and the next call is still recorded', async () => {
-    const h = await rig()
-    const recorder = createAuditRecorder({
-      profileDir: h.profileDir,
-      mode: async () => 'observe',
-      sessionInfo: (id) => {
-        if (id === 'boom') throw new Error('registry gone')
-        return { kind: 'terminal', accountId: 'acc1', cwd }
-      },
-      dispatchOf: () => null,
-      log: (m) => h.logs.push(m)
+    const h = await rig({
+      over: {
+        sessionInfo: (id) => {
+          if (id === 'boom') throw new Error('registry gone')
+          return { kind: 'terminal', accountId: 'acc1', cwd }
+        }
+      }
     })
-    expect(() => recorder.record(bash('git status', { sessionId: 'boom' }))).not.toThrow()
-    recorder.record(bash('git status'))
-    await recorder.flushed()
+    expect(() => h.recorder.record(bash('git status', { sessionId: 'boom' }))).not.toThrow()
+    h.recorder.record(bash('git status'))
+    await h.recorder.flushed()
     expect(h.logs.join('\n')).toMatch(/registry gone/)
     expect(await h.records()).toHaveLength(1)
   })
@@ -250,26 +328,62 @@ describe('registrySessionFacts', () => {
 })
 
 describe('dispatchOfSession', () => {
-  const state = (dispatches: Array<Partial<Dispatch>>): OrchState => ({
+  const state = (dispatches: Array<Partial<Dispatch>>, runs: Array<Partial<JobRun>> = [{ id: 'run1', jobId: 'job1' }], tasks: Array<Partial<Task>> = []): OrchState => ({
     ...emptyState(),
-    runs: [{ id: 'run1', jobId: 'job1' } as JobRun],
-    tasks: [{ id: 'task1', runId: 'run1' } as Task, { id: 'task2', runId: 'run1' } as Task],
+    runs: runs as JobRun[],
+    tasks: [{ id: 'task1', runId: 'run1' } as Task, { id: 'task2', runId: 'run1' } as Task, ...(tasks as Task[])],
     dispatches: dispatches as Dispatch[]
   })
+  const T = (hhmm: string): string => `2026-10-23T${hhmm}:00.000Z`
 
-  it('names the Job, Run and Task of the session’s open Dispatch, else its latest', () => {
+  it('names the Job, Run and Task of the Dispatch whose time holds the call', () => {
     const s = state([
-      { id: 'd1', taskId: 'task1', sessionId: 'sess_a', startedAt: '2026-10-23T01:00:00Z', endedAt: '2026-10-23T02:00:00Z' },
-      { id: 'd2', taskId: 'task2', sessionId: 'sess_a', startedAt: '2026-10-23T03:00:00Z' },
-      { id: 'd3', taskId: 'task1', sessionId: 'sess_b', startedAt: '2026-10-23T01:00:00Z', endedAt: '2026-10-23T02:00:00Z' },
-      { id: 'd4', taskId: 'task2', sessionId: 'sess_b', startedAt: '2026-10-23T00:00:00Z', endedAt: '2026-10-23T00:30:00Z' }
+      { id: 'd1', taskId: 'task1', sessionId: 'sess_a', startedAt: T('01:00'), endedAt: T('02:00') },
+      { id: 'd2', taskId: 'task2', sessionId: 'sess_a', startedAt: T('03:00') }
     ])
-    expect(dispatchOfSession(s, 'sess_a')).toEqual({ jobId: 'job1', runId: 'run1', taskId: 'task2' })
-    expect(dispatchOfSession(s, 'sess_b')).toEqual({ jobId: 'job1', runId: 'run1', taskId: 'task1' })
-    expect(dispatchOfSession(s, 'sess_x')).toBeNull()
+    expect(dispatchOfSession(s, 'sess_a', T('01:30'))).toEqual({ jobId: 'job1', runId: 'run1', taskId: 'task1' })
+    expect(dispatchOfSession(s, 'sess_a', T('03:30'))).toEqual({ jobId: 'job1', runId: 'run1', taskId: 'task2' })
+    expect(dispatchOfSession(s, 'sess_x', T('03:30'))).toBeNull()
+  })
+
+  it('takes the Dispatch that ended last when none holds the call', () => {
+    const s = state([
+      { id: 'd1', taskId: 'task1', sessionId: 'sess_b', startedAt: T('01:00'), endedAt: T('02:00') },
+      { id: 'd2', taskId: 'task2', sessionId: 'sess_b', startedAt: T('00:00'), endedAt: T('00:30') }
+    ])
+    expect(dispatchOfSession(s, 'sess_b', T('02:10'))).toEqual({ jobId: 'job1', runId: 'run1', taskId: 'task1' })
   })
 
   it('names what it can find when the Task or Run is gone', () => {
-    expect(dispatchOfSession(state([{ id: 'd1', taskId: 'gone', sessionId: 'sess_a', startedAt: '2026-10-23T01:00:00Z' }]), 'sess_a')).toEqual({ taskId: 'gone' })
+    expect(dispatchOfSession(state([{ id: 'd1', taskId: 'gone', sessionId: 'sess_a', startedAt: T('01:00') }]), 'sess_a', T('01:30'))).toEqual({ taskId: 'gone' })
+  })
+
+  it('names a coordinator’s Run and Job, the unfinished Run first, else the latest', () => {
+    const runs: Array<Partial<JobRun>> = [
+      { id: 'run_old', jobId: 'job1', createdAt: T('00:00'), coordinatorSessionId: 'sess_co' },
+      { id: 'run_live', jobId: 'job1', createdAt: T('01:00'), coordinatorSessionId: 'sess_co' },
+      { id: 'run_done', jobId: 'job2', createdAt: T('02:00'), coordinatorSessionId: 'sess_co' },
+      { id: 'run_ext', jobId: 'job3', createdAt: T('02:00'), externalCoordinatorSessionId: 'sess_ext' }
+    ]
+    // run_old has no Tasks (running); run_live has one at work; run_done's only Task is complete
+    const tasks: Array<Partial<Task>> = [
+      { id: 't_live', runId: 'run_live', status: 'dispatched' },
+      { id: 't_done', runId: 'run_done', status: 'completed' },
+      { id: 't_old', runId: 'run_old', status: 'completed' }
+    ]
+    expect(dispatchOfSession(state([], runs, tasks), 'sess_co', T('03:00'))).toEqual({ jobId: 'job1', runId: 'run_live' })
+    // All finished: the latest
+    const finished = tasks.map((t) => ({ ...t, status: 'completed' as const }))
+    expect(dispatchOfSession(state([], runs, finished), 'sess_co', T('03:00'))).toEqual({ jobId: 'job2', runId: 'run_done' })
+    // A session that drives a Run from outside is not its coordinator here
+    expect(dispatchOfSession(state([], runs, tasks), 'sess_ext', T('03:00'))).toBeNull()
+  })
+
+  it('takes a Dispatch over a coordinator slot', () => {
+    const s = state([{ id: 'd1', taskId: 'task1', sessionId: 'sess_co', startedAt: T('01:00') }], [
+      { id: 'run1', jobId: 'job1', createdAt: T('00:00') },
+      { id: 'run2', jobId: 'job2', createdAt: T('00:00'), coordinatorSessionId: 'sess_co' }
+    ])
+    expect(dispatchOfSession(s, 'sess_co', T('01:30'))).toEqual({ jobId: 'job1', runId: 'run1', taskId: 'task1' })
   })
 })

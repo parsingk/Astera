@@ -1,12 +1,22 @@
 // Observe mode's record store (design §8): the Host's append-only JSONL under `<profile>/audit/`, one file per local day,
 // kept 30 days or 50 MB, whichever comes first. A write never fails the source (Review Focus 4).
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { removeFixture } from '../testFixtures'
 import { profilePaths } from '../profile/paths'
-import { AUDIT_KEEP_DAYS, AUDIT_MAX_BYTES, appendRecords, auditDayOf, pruneRecords, queryRecords, type AuditRecord } from './store'
+import {
+  AUDIT_KEEP_DAYS,
+  AUDIT_MAX_BYTES,
+  AUDIT_READ_YIELD_EVERY,
+  appendRecords,
+  auditDayOf,
+  auditStoppedAtLimit,
+  pruneRecords,
+  queryRecords,
+  type AuditRecord
+} from './store'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -76,6 +86,9 @@ describe('appendRecords and queryRecords', () => {
     expect(await ids({ taskId: 't2' })).toEqual([r2.id])
     expect(await ids({ agentProfileId: 'ap1' })).toEqual([r1.id])
     expect(await ids({ action: 'git.remote.write' })).toEqual([r3.id, r1.id])
+    // A trailing * matches the start of an action, as in a rule
+    expect(await ids({ action: 'git.*' })).toEqual([r3.id, r1.id])
+    expect(await ids({ action: 'filesystem.*' })).toEqual([r2.id])
     // since is inclusive, until is not
     expect(await ids({ since: at('2026-10-22') })).toEqual([r3.id, r2.id])
     expect(await ids({ until: at('2026-10-22') })).toEqual([r1.id])
@@ -110,6 +123,16 @@ describe('appendRecords and queryRecords', () => {
     const logs: string[] = []
     await expect(appendRecords(p, [rec()], { log: (m) => logs.push(m), now: () => ms('2026-10-23') })).resolves.toBeUndefined()
     expect(logs.join('\n')).toMatch(/audit: could not write 1 record/)
+  })
+
+  it('drops a record whose time does not parse, says so, and writes the others', async () => {
+    const p = await profile()
+    const logs: string[] = []
+    const good = rec()
+    await appendRecords(p, [rec({ at: 'not a time' }), good], { now: () => ms('2026-10-23'), log: (m) => logs.push(m) })
+    expect(await files(p)).toEqual(['2026-10-23.jsonl'])
+    expect((await queryRecords(p, {})).map((r) => r.id)).toEqual([good.id])
+    expect(logs.join('\n')).toMatch(/1 record\(s\) with a time that does not parse/)
   })
 
   it('writes one append after another, so concurrent calls never interleave lines', async () => {
@@ -172,6 +195,38 @@ describe('retention (Review Focus 4)', () => {
     expect(await files(p)).toEqual([])
   })
 
+  it('counts what it wrote since the last check, so the size holds between the hourly checks', async () => {
+    const p = await profile()
+    await fs.mkdir(auditDir(p), { recursive: true })
+    for (const d of ['2026-10-21', '2026-10-22']) await fs.writeFile(path.join(auditDir(p), `${d}.jsonl`), 'x'.repeat(799) + '\n')
+    let now = ms('2026-10-23')
+    const o = { now: () => now, maxBytes: 2000 }
+    await appendRecords(p, [rec()], o)
+    expect(await files(p)).toEqual(['2026-10-21.jsonl', '2026-10-22.jsonl', '2026-10-23.jsonl'])
+    // Two minutes on, well inside the hour: two more records would pass the size, so the oldest day goes first
+    now += 2 * 60 * 1000
+    await appendRecords(p, [rec({ at: at('2026-10-23', 1) }), rec({ at: at('2026-10-23', 2) })], o)
+    expect(await files(p)).toEqual(['2026-10-22.jsonl', '2026-10-23.jsonl'])
+    expect(await queryRecords(p, {})).toHaveLength(3)
+  })
+
+  it('stops a day from its own size, not from what a removal that failed left behind', async () => {
+    const p = await profile()
+    await fs.mkdir(auditDir(p), { recursive: true })
+    await fs.writeFile(path.join(auditDir(p), '2026-10-21.jsonl'), 'x'.repeat(1199) + '\n')
+    const rm = vi.spyOn(fs, 'rm').mockRejectedValueOnce(Object.assign(new Error('held by another program'), { code: 'EBUSY' }))
+    try {
+      const logs: string[] = []
+      const today = rec()
+      await appendRecords(p, [today], { now: () => ms('2026-10-23'), maxBytes: 1000, log: (m) => logs.push(m) })
+      expect((await queryRecords(p, {})).map((r) => r.id)).toEqual([today.id])
+      expect(auditStoppedAtLimit(p)).toBe(false)
+      expect(logs.join('\n')).toMatch(/could not remove/)
+    } finally {
+      rm.mockRestore()
+    }
+  })
+
   it('stops filing a day that alone passes the size, and says so once, rather than growing without end', async () => {
     const p = await profile()
     await fs.mkdir(auditDir(p), { recursive: true })
@@ -183,8 +238,52 @@ describe('retention (Review Focus 4)', () => {
     expect((await fs.stat(path.join(auditDir(p), '2026-10-23.jsonl'))).size).toBe(2000)
     expect(logs).toHaveLength(1)
     expect(logs[0]).toMatch(/2026-10-23/)
+    // And a count over a period that holds the day says its records stopped there
+    expect(auditStoppedAtLimit(p)).toBe(true)
+    expect(auditStoppedAtLimit(p, { since: at('2026-10-23'), until: at('2026-10-24') })).toBe(true)
+    expect(auditStoppedAtLimit(p, { until: at('2026-10-22') })).toBe(false)
     // The next day is filed again
     await appendRecords(p, [rec({ at: at('2026-10-24') })], { ...o, now: () => ms('2026-10-24') })
     expect(await files(p)).toContain('2026-10-24.jsonl')
+  })
+})
+
+describe('reading a large day', () => {
+  /** A day of `count` records, a second apart in the order they were written, about 10 MB at 30 000. */
+  async function largeDay(count: number): Promise<{ p: string; newest: string[] }> {
+    const p = await profile()
+    await fs.mkdir(auditDir(p), { recursive: true })
+    const start = ms('2026-10-23') - 6 * 60 * 60 * 1000
+    const lines: string[] = []
+    for (let i = 0; i < count; i++) lines.push(JSON.stringify(rec({ id: `au_big_${i}`, at: new Date(start + i * 1000).toISOString(), target: `src/some/folder/file${i}.ts` })))
+    await fs.writeFile(path.join(auditDir(p), '2026-10-23.jsonl'), lines.join('\n') + '\n')
+    return { p, newest: [count - 1, count - 2, count - 3].map((i) => `au_big_${i}`) }
+  }
+
+  it('reads a page of the newest from the end of the file and stops there', async () => {
+    const { p, newest } = await largeDay(30_000)
+    let looked = 0
+    const page = await queryRecords(p, { limit: 3, where: () => (looked++, true) })
+    expect(page.map((r) => r.id)).toEqual(newest)
+    expect(looked).toBe(3)
+  })
+
+  it('gives the event loop a turn every few thousand lines while it reads the whole day', async () => {
+    const { p } = await largeDay(30_000)
+    let seen = 0
+    let done = false
+    let mostBetweenTurns = 0
+    let atLastTurn = 0
+    const sample = (): void => {
+      mostBetweenTurns = Math.max(mostBetweenTurns, seen - atLastTurn)
+      atLastTurn = seen
+      if (!done) setImmediate(sample)
+    }
+    setImmediate(sample)
+    const all = await queryRecords(p, { where: () => (seen++, true) })
+    done = true
+    sample()
+    expect(all).toHaveLength(30_000)
+    expect(mostBetweenTurns).toBeLessThanOrEqual(2 * AUDIT_READ_YIELD_EVERY)
   })
 })

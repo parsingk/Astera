@@ -5,8 +5,8 @@
 // For this machine's app and CLI: MCP, a remote controller and a plugin never get here, since no gate lists them, and an
 // agent's shell is refused even these reads, so the log of an agent's calls stays away from agents (design §3).
 import { RepairNeeded } from '../../core/settings/repairNeeded'
-import { STARTER_POLICY, decide, readAuditPolicy, type AuditDecision, type AuditPolicy } from '../../core/audit/policy'
-import { queryRecords, type AuditFilter, type AuditRecord } from '../../core/audit/store'
+import { AUDIT_ACTIONS, STARTER_POLICY, decide, isRuleAction, readAuditPolicy, type AuditDecision, type AuditPolicy } from '../../core/audit/policy'
+import { auditStoppedAtLimit, queryRecords, visitRecords, type AuditFilter, type AuditRecord } from '../../core/audit/store'
 import type { OrchCaller } from '../../core/host/orchProtocol'
 
 export const AUDIT_COMMANDS: ReadonlySet<string> = new Set(['audit-list', 'audit-summary'])
@@ -30,7 +30,7 @@ export interface HostAudit {
 const LIST_DEFAULT = 200
 const LIST_MAX = 2000
 const DECISIONS: readonly unknown[] = ['allow', 'would-deny', 'unknown']
-const TEXT_FILTERS = ['sessionId', 'jobId', 'runId', 'taskId', 'agentProfileId', 'action'] as const
+const TEXT_FILTERS = ['sessionId', 'jobId', 'runId', 'taskId', 'agentProfileId'] as const
 
 interface Counts {
   allow: number
@@ -51,6 +51,12 @@ function filterOf(args: Record<string, unknown>): { filter: AuditFilter; decisio
     if (v === undefined) continue
     if (typeof v !== 'string' || v === '') return `${k} must be text`
     filter[k] = v
+  }
+  // As a rule names one: an action, or the start of one ending in * (git.*)
+  if (args.action !== undefined) {
+    if (typeof args.action !== 'string' || !isRuleAction(args.action))
+      return `action must be one of ${AUDIT_ACTIONS.join(', ')}, or the start of one ending in * (git.*)`
+    filter.action = args.action
   }
   for (const k of ['since', 'until'] as const) {
     const v = args[k]
@@ -85,16 +91,19 @@ export function createHostAudit(d: { profileDir: string }): HostAudit {
         const total = noCounts()
         // A Map, so an action read from the file can never name a property of a plain object
         const byAction = new Map<string, Counts>()
-        for (const r of await queryRecords(d.profileDir, f.filter)) {
+        // Counted as they are read, so the whole folder is never held at once
+        await visitRecords(d.profileDir, f.filter, (r) => {
           const { decision } = decide(r, p)
-          if (f.decision !== undefined && decision !== f.decision) continue
+          if (f.decision !== undefined && decision !== f.decision) return
           const key = COUNT_KEY[decision]
           total[key] += 1
           const counts = byAction.get(r.action) ?? noCounts()
           counts[key] += 1
           byAction.set(r.action, counts)
-        }
-        return { status: 200, body: { ...total, byAction: Object.fromEntries(byAction) } }
+        })
+        // A day of the period whose records stopped at the size has fewer of them than its calls
+        const stoppedAtLimit = auditStoppedAtLimit(d.profileDir, { since: f.filter.since, until: f.filter.until })
+        return { status: 200, body: { ...total, byAction: Object.fromEntries(byAction), stoppedAtLimit } }
       }
       default:
         return { status: 501, body: { error: `${cmd} is not answered by this Host` } }

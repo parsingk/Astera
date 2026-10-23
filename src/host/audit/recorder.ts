@@ -4,22 +4,26 @@
 // and Task, and appends it to the record store. In compatibility it drops every call where it is handed over, touching
 // nothing.
 //
-// The mode is read from audit-policy.json, not at every call: a read stands a few seconds, and the policies' commands
-// say at once when they change it (`invalidate`). Calls are taken one after another and never make a source wait or
-// fail: `record` returns at once, and whatever goes wrong behind it is logged and costs that call.
+// A call is resolved while it is handed over, so its input (a file a Write carried, say) is let go at once and only the
+// small record waits for the disk; at most AUDIT_PENDING_MAX of them wait, and past that calls are counted and dropped.
+// The mode is read from audit-policy.json once and kept until the policies' commands say they changed it
+// (`invalidate`); a read that failed is not kept. `record` returns at once and never throws: whatever goes wrong is
+// logged and costs that call.
 import { randomBytes } from 'node:crypto'
 import { redactTarget, resolveAction, type ResolveCall, type ResolvedAction } from '../../core/audit/resolve'
 import { appendRecords, type AuditRecord, type AuditSource } from '../../core/audit/store'
 import type { AuditMode } from '../../core/audit/policy'
 import type { OrchState } from '../../core/orchestration/state'
+import type { Dispatch } from '../../core/orchestration/types'
+import { outcomeOf } from '../../core/orchestration/running'
 import type { PtyEntry } from '../../core/host/protocol'
 import { agentProfileIdOf } from '../../core/sessions/noteInfo'
 
 /** The commands of a line a record keeps. The resolver's are without repeats already; a line with more is cut and kept
  *  as `unknown`, since the rules cannot judge what was cut. */
 export const AUDIT_COMMANDS_KEPT = 16
-/** How long a read of the mode stands. */
-const MODE_FRESH_MS = 5_000
+/** Records that wait for the disk at most; past this, calls are counted and dropped. */
+export const AUDIT_PENDING_MAX = 2000
 /** Dedupe keys kept per session, and sessions kept; past either, the least recently heard go first. */
 const KEYS_PER_SESSION = 1000
 const SESSIONS_KEPT = 200
@@ -68,7 +72,7 @@ export interface AuditEvent {
 export interface AuditRecorder {
   /** Hands a finished call over. Returns at once and never throws. */
   record(ev: AuditEvent): void
-  /** The mode may have changed: the next call reads it again. */
+  /** The mode may have changed: it is read again before the next record is written. */
   invalidate(): void
   /** Settles once every call handed over so far is written or dropped. */
   flushed(): Promise<void>
@@ -76,34 +80,73 @@ export interface AuditRecorder {
 
 export function createAuditRecorder(d: {
   profileDir: string
-  /** The mode sessions are observed in (policy.ts `readPolicyMode`). */
+  /** The mode sessions are observed in, from audit-policy.json; rejects when the file could not be read cleanly. */
   mode(): Promise<AuditMode>
   /** The session's facts, or null for one Astera did not start, which is not observed (design §5). */
   sessionInfo(sessionId: string): SessionFacts | null
-  /** The Job, Run and Task of the session's Dispatch, or null when it has none. */
-  dispatchOf(sessionId: string): DispatchIds | null
+  /** The Job, Run and Task the session worked for at `at`, or null. */
+  dispatchOf(sessionId: string, at: string): DispatchIds | null
   log(message: string): void
   /** Test injection (epoch ms). */
   now?: () => number
   /** Test injection; defaults to the resolver. */
   resolve?: (call: ResolveCall) => ResolvedAction
+  /** Test injection; defaults to the store's. */
+  append?: typeof appendRecords
 }): AuditRecorder {
   const now = d.now ?? Date.now
   const resolve = d.resolve ?? resolveAction
-  let mode: { value: AuditMode; readAt: number } | null = null
-  /** Bumped by `invalidate`, so a read that began before it does not stand after it. */
+  const append = d.append ?? appendRecords
+  /** The mode as last read cleanly; null before that and after `invalidate`. */
+  let mode: AuditMode | null = null
+  /** Bumped by `invalidate`, so a read that began before it is not kept after it. */
   let generation = 0
+  /** Set while reads fail: one log line per streak. */
+  let modeFailing = false
+  let pending: AuditRecord[] = []
+  /** Calls dropped while the hold was full, told when it empties. */
+  let dropped = 0
+  /** A flush is queued or running. */
+  let busy = false
   let queue: Promise<void> = Promise.resolve()
   const heardKeys = new Map<string, Set<string>>()
 
-  const freshMode = (): AuditMode | null => (mode !== null && now() - mode.readAt < MODE_FRESH_MS ? mode.value : null)
   const currentMode = async (): Promise<AuditMode> => {
-    const known = freshMode()
-    if (known !== null) return known
+    if (mode !== null) return mode
     const g = generation
-    const value = await d.mode()
-    if (g === generation) mode = { value, readAt: now() }
-    return value
+    try {
+      const value = await d.mode()
+      if (g === generation) mode = value
+      modeFailing = false
+      return value
+    } catch (err) {
+      // Read as compatibility, which never observes more than the person chose, and read again next time
+      if (!modeFailing) d.log(`audit: the observe mode could not be read, so calls are not recorded until it can: ${String(err)}`)
+      modeFailing = true
+      return 'compatibility'
+    }
+  }
+
+  /** One step after another; a step that throws is logged and does not stop the ones after it. */
+  const enqueue = (step: () => Promise<void>): void => {
+    queue = queue.then(step, step).catch((err) => d.log(`audit: records could not be written: ${String(err)}`))
+  }
+
+  const flush = async (): Promise<void> => {
+    try {
+      while (pending.length > 0) {
+        const m = await currentMode()
+        const batch = pending
+        pending = []
+        if (m === 'observe') await append(d.profileDir, batch, { log: d.log })
+      }
+      if (dropped > 0) {
+        d.log(`audit: ${dropped} call(s) were not recorded while ${AUDIT_PENDING_MAX} records waited for the disk`)
+        dropped = 0
+      }
+    } finally {
+      busy = false
+    }
   }
 
   /** Whether the call was heard before in its session; remembered if not. */
@@ -122,18 +165,15 @@ export function createAuditRecorder(d: {
   const timeOf = (at: string | undefined): string =>
     new Date(at !== undefined && Number.isFinite(Date.parse(at)) ? Date.parse(at) : now()).toISOString()
 
-  const take = async (ev: AuditEvent): Promise<void> => {
-    if ((await currentMode()) !== 'observe') return
-    if (ev.dedupeKey !== undefined && heard(ev.sessionId, ev.dedupeKey)) return
-    const info = d.sessionInfo(ev.sessionId)
-    if (info === null) return
+  const recordOf = (ev: AuditEvent, info: SessionFacts): AuditRecord => {
+    const at = timeOf(ev.at)
     const provider = PROVIDER[ev.source]
     const r = resolve({ provider, tool: ev.tool, input: ev.input, cwd: info.cwd })
-    const ids = d.dispatchOf(ev.sessionId)
+    const ids = d.dispatchOf(ev.sessionId, at)
     const cut = r.commands !== undefined && r.commands.length > AUDIT_COMMANDS_KEPT
-    const record: AuditRecord = {
+    return {
       id: `au_${randomBytes(8).toString('hex')}`,
-      at: timeOf(ev.at),
+      at,
       sessionId: ev.sessionId,
       provider,
       kind: info.kind,
@@ -151,15 +191,35 @@ export function createAuditRecorder(d: {
       confidence: cut ? 'unknown' : r.confidence,
       status: ev.status
     }
-    await appendRecords(d.profileDir, [record], { log: d.log })
   }
+
+  // Read once now, so the calls of a Host in compatibility are dropped where they are handed over from the first
+  enqueue(async () => {
+    await currentMode()
+  })
 
   return {
     record(ev) {
-      // A mode known to be off drops the call here
-      const known = freshMode()
-      if (known !== null && known !== 'observe') return
-      queue = queue.then(() => take(ev)).catch((err) => d.log(`audit: a ${ev.source} call of session ${ev.sessionId} was not recorded: ${String(err)}`))
+      try {
+        // Known to be off: dropped here, touching nothing. Not known yet: resolved and held until it is
+        if (mode === 'compatibility') return
+        if (ev.dedupeKey !== undefined && heard(ev.sessionId, ev.dedupeKey)) return
+        const info = d.sessionInfo(ev.sessionId)
+        if (info === null) return
+        const rec = recordOf(ev, info)
+        if (pending.length >= AUDIT_PENDING_MAX) {
+          if (dropped === 0) d.log(`audit: ${AUDIT_PENDING_MAX} records wait for the disk; later calls are counted and not recorded until it takes them`)
+          dropped += 1
+          return
+        }
+        pending.push(rec)
+        if (!busy) {
+          busy = true
+          enqueue(flush)
+        }
+      } catch (err) {
+        d.log(`audit: a ${String(ev?.source)} call of session ${String(ev?.sessionId)} was not recorded: ${String(err)}`)
+      }
     },
     invalidate() {
       mode = null
@@ -188,13 +248,37 @@ export function registrySessionFacts(d: { ptys: { list(): PtyEntry[] }; procs: {
   }
 }
 
-/** `dispatchOf` over the orchestration state: the session's open Dispatch, else its latest, and that Dispatch's Task, Run
- *  and Job, as far as they are still there. */
-export function dispatchOfSession(s: OrchState, sessionId: string): DispatchIds | null {
+/** The one of `items` with the greatest `key`, the later one on a tie. */
+const latest = <T>(items: T[], key: (x: T) => number): T | undefined => {
+  let best: T | undefined
+  for (const x of items) if (best === undefined || key(x) >= key(best)) best = x
+  return best
+}
+
+/**
+ * `dispatchOf` over the orchestration state. The session's Dispatch whose time holds the call (from its start to its
+ * end, or on while it is open), else the one that ended last, with that Dispatch's Task, Run and Job as far as they are
+ * still there. A session with no Dispatch may be a Run's coordinator, which has none (ruling I1): then that Run and its
+ * Job, the unfinished Run first, else the latest. A session that drives a Run from outside is not looked for.
+ */
+export function dispatchOfSession(s: OrchState, sessionId: string, at: string): DispatchIds | null {
+  const t = Date.parse(at)
   const held = s.dispatches.filter((x) => x.sessionId === sessionId)
-  if (held.length === 0) return null
-  const dispatch = held.find((x) => !x.endedAt) ?? held.reduce((a, b) => (b.startedAt >= a.startedAt ? b : a))
-  const runId = s.tasks.find((t) => t.id === dispatch.taskId)?.runId
-  const jobId = runId !== undefined ? s.runs.find((r) => r.id === runId)?.jobId : undefined
-  return { ...(jobId !== undefined ? { jobId } : {}), ...(runId !== undefined ? { runId } : {}), taskId: dispatch.taskId }
+  const holds = (x: Dispatch): boolean => Date.parse(x.startedAt) <= t && (!x.endedAt || t <= Date.parse(x.endedAt))
+  const dispatch =
+    latest(held.filter(holds), (x) => Date.parse(x.startedAt)) ??
+    latest(
+      held.filter((x) => !!x.endedAt),
+      (x) => Date.parse(x.endedAt!)
+    )
+  if (dispatch) {
+    const runId = s.tasks.find((task) => task.id === dispatch.taskId)?.runId
+    const jobId = runId !== undefined ? s.runs.find((r) => r.id === runId)?.jobId : undefined
+    return { ...(jobId !== undefined ? { jobId } : {}), ...(runId !== undefined ? { runId } : {}), taskId: dispatch.taskId }
+  }
+  const coordinated = s.runs.filter((r) => r.coordinatorSessionId === sessionId)
+  if (coordinated.length === 0) return null
+  const unfinished = coordinated.filter((r) => outcomeOf(s, r.id) === 'running')
+  const run = latest(unfinished.length > 0 ? unfinished : coordinated, (r) => Date.parse(r.createdAt))!
+  return { jobId: run.jobId, runId: run.id }
 }
