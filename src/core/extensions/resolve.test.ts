@@ -7,7 +7,9 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { removeFixture } from '../testFixtures'
-import { extensionPaths } from '../profile/paths'
+import { extensionPaths, profilePaths } from '../profile/paths'
+import { writeAgentProfiles } from '../agentProfiles/store'
+import type { AgentProfile } from '../agentProfiles/types'
 import { writeExtensionRegistry } from './registry'
 import { extensionSecrets } from './secrets'
 import { gatewayTokenEnv, resolveSessionCapabilities, sweepGeneratedMcp } from './resolve'
@@ -44,8 +46,17 @@ async function setup(entries: McpExtension[] = [server()]) {
   return { home, profileDir, claude, codex }
 }
 type S = Awaited<ReturnType<typeof setup>>
-const call = (s: S, account: Account, o: { platform?: NodeJS.Platform; gatewayPort?: number | null; dryRun?: boolean } = {}) =>
-  resolveSessionCapabilities({ profileDir: s.profileDir, homeDir: s.home, account, platform: o.platform ?? 'linux', gatewayPort: o.gatewayPort === undefined ? PORT : o.gatewayPort, ...(o.dryRun ? { dryRun: true } : {}) })
+const call = (
+  s: S,
+  account: Account,
+  o: { platform?: NodeJS.Platform; gatewayPort?: number | null; dryRun?: boolean; agentProfileId?: string; log?: (line: string) => void } = {}
+) =>
+  resolveSessionCapabilities({
+    profileDir: s.profileDir, homeDir: s.home, account, platform: o.platform ?? 'linux', gatewayPort: o.gatewayPort === undefined ? PORT : o.gatewayPort,
+    ...(o.dryRun ? { dryRun: true } : {}),
+    ...(o.agentProfileId !== undefined ? { agentProfileId: o.agentProfileId } : {}),
+    ...(o.log ? { log: o.log } : {})
+  })
 const URL_OF = `http://127.0.0.1:${PORT}/mcp/mcp-linear`
 
 describe('resolveSessionCapabilities', () => {
@@ -165,6 +176,110 @@ describe('resolveSessionCapabilities', () => {
     await sweepGeneratedMcp(s.profileDir, 30 * 24 * 3600 * 1000)
     expect(await fs.stat(old).then(() => true, () => false)).toBe(false)
     expect(await fs.stat(used).then(() => true, () => false)).toBe(true)
+  })
+})
+
+// Agent Profiles (design §5): a session started from a profile gets the shared servers minus the profile's exclusions,
+// and the Gateway grant is built from what is left; without a profile nothing changes (AC-09.4)
+describe('resolveSessionCapabilities with an agent profile', () => {
+  const profile = (over: Partial<AgentProfile> = {}): AgentProfile => ({
+    id: 'ap_000000000001', name: 'Reviewer', status: 'active', accountIds: ['acc_2', 'acc_3'], mcpExclude: ['mcp-linear'],
+    permission: 'bypass', createdAt: '2026-10-22T00:00:00.000Z', updatedAt: '2026-10-22T00:00:00.000Z', ...over
+  })
+  const withProfiles = async (profiles: AgentProfile[]) => {
+    const s = await setup([server(), remote()])
+    await writeAgentProfiles(s.profileDir, { version: 1, profiles })
+    return s
+  }
+
+  it('drops the excluded server from what a Claude session is given, its Gateway grant and its generated file', async () => {
+    const s = await withProfiles([profile()])
+    const r = await call(s, s.claude, { agentProfileId: 'ap_000000000001' })
+    expect(r.given).toEqual(['docs'])
+    expect(r.gatewayGrant).toEqual([])
+    expect(r.skipped).toEqual([])
+    const text = await fs.readFile(r.args[1], 'utf8')
+    expect(JSON.parse(text).mcpServers).toEqual({ docs: { type: 'http', url: 'https://mcp.example.com/mcp' } })
+    expect(text).not.toContain(URL_OF)
+    expect(r.context).toEqual({
+      kind: 'explicit', id: 'ap_000000000001', displayName: 'Reviewer', accounts: ['acc_2'], mcpExclude: ['mcp-linear'],
+      permission: 'bypass', policyMode: 'compatibility', executionMode: 'managed'
+    })
+  })
+
+  it('drops the excluded server from a Codex session’s arguments', async () => {
+    const s = await withProfiles([profile()])
+    const r = await call(s, s.codex, { agentProfileId: 'ap_000000000001' })
+    expect(r.args).toEqual(['-c', "mcp_servers.docs.url='https://mcp.example.com/mcp'"])
+    expect(r.args.join(' ')).not.toContain(URL_OF)
+    expect(r.gatewayGrant).toEqual([])
+    expect(r.given).toEqual(['docs'])
+  })
+
+  it('keeps resolving an archived profile, which work already holding it still runs as', async () => {
+    const s = await withProfiles([profile({ status: 'archived' })])
+    const r = await call(s, s.codex, { agentProfileId: 'ap_000000000001' })
+    expect(r.context.kind).toBe('explicit')
+    expect(r.given).toEqual(['docs'])
+  })
+
+  it('gives a session without a profile exactly what it got before profiles, even with a profile store beside it', async () => {
+    const s = await withProfiles([profile({ mcpExclude: ['mcp-linear', 'mcp-docs'] })])
+    expect(await call(s, s.codex)).toEqual({
+      context: { kind: 'implicit', accounts: ['acc_3'], policyMode: 'compatibility', executionMode: 'managed' },
+      args: [
+        '-c', `mcp_servers.linear.url='${URL_OF}'`,
+        '-c', "mcp_servers.linear.bearer_token_env_var='ASTERA_GATEWAY_TOKEN'",
+        '-c', "mcp_servers.docs.url='https://mcp.example.com/mcp'"
+      ],
+      env: {},
+      given: ['linear', 'docs'],
+      gatewayGrant: ['mcp-linear'],
+      skipped: []
+    })
+    expect(await call(s, s.claude)).toEqual({
+      context: { kind: 'implicit', accounts: ['acc_2'], policyMode: 'compatibility', executionMode: 'managed' },
+      args: ['--mcp-config', expect.stringMatching(/claude-[0-9a-f]{16}\.json$/)],
+      env: {},
+      given: ['linear', 'docs'],
+      gatewayGrant: ['mcp-linear'],
+      skipped: []
+    })
+  })
+
+  it('falls back to no profile, with one log line, for an id that does not resolve', async () => {
+    const s = await withProfiles([profile()])
+    const lines: string[] = []
+    const r = await call(s, s.codex, { agentProfileId: 'ap_gone', log: (l) => lines.push(l) })
+    expect(r.context).toEqual({ kind: 'implicit', accounts: ['acc_3'], policyMode: 'compatibility', executionMode: 'managed' })
+    expect(r.given).toEqual(['linear', 'docs'])
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('ap_gone')
+  })
+
+  it('falls back to no profile, with one log line, when the profile store is damaged', async () => {
+    const s = await setup([server(), remote()])
+    await fs.writeFile(profilePaths(s.profileDir).agentProfiles, '{ half written')
+    const lines: string[] = []
+    const r = await call(s, s.codex, { agentProfileId: 'ap_000000000001', log: (l) => lines.push(l) })
+    expect(r.context.kind).toBe('implicit')
+    expect(r.given).toEqual(['linear', 'docs'])
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('ap_000000000001')
+  })
+
+  // A hand-edited entry with no exclusion list: the session still gets the shared servers, as for a profile that
+  // does not resolve, rather than the whole resolution rejecting and the session getting none
+  it('falls back to no profile, with one log line, for a malformed profile entry', async () => {
+    const s = await setup([server(), remote()])
+    const { mcpExclude: _, ...malformed } = profile()
+    await fs.writeFile(profilePaths(s.profileDir).agentProfiles, JSON.stringify({ version: 1, profiles: [malformed] }))
+    const lines: string[] = []
+    const r = await call(s, s.codex, { agentProfileId: 'ap_000000000001', log: (l) => lines.push(l) })
+    expect(r.context.kind).toBe('implicit')
+    expect(r.given).toEqual(['linear', 'docs'])
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('ap_000000000001')
   })
 })
 

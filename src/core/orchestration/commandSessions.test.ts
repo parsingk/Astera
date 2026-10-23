@@ -5,6 +5,8 @@ import { describe, it, expect, vi } from 'vitest'
 import { handleCommand, type HostSession, type OrchServerDeps } from './command'
 import { emptyState, type OrchState } from './state'
 import { APP_CALLER, HOST_CALLER } from '../host/driver'
+import type { AgentProfile } from '../agentProfiles/types'
+import { RepairNeeded } from '../settings/repairNeeded'
 
 const NOW = '2026-09-26T00:00:00.000Z'
 
@@ -76,6 +78,132 @@ describe('sessions create — what reaches the Host starter', () => {
     expect(createSession).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'chat', unattended: 'hold' }))
     await call(makeDeps({ createSession }), { account: 'acc_c', cwd: 'D:/p', kind: 'chat', unattended: 'deny-after-60s' })
     expect(createSession).toHaveBeenLastCalledWith(expect.objectContaining({ unattended: 'deny-after-60s' }))
+  })
+})
+
+// Agent Profiles design §6: `sessions create --agent-profile <id|name>`. The profile picks the account and the roll
+// chain when none is given (the New Session dialog's way), and the session is started from the profile's real id
+describe('sessions create — from an agent profile', () => {
+  const profile = (over: Partial<AgentProfile> = {}): AgentProfile => ({
+    id: 'ap_1', name: 'Reviewer', status: 'active', accountIds: ['acc_c2', 'acc_gone', 'acc_c'], mcpExclude: [], permission: 'inherit',
+    createdAt: NOW, updatedAt: NOW, ...over
+  })
+  const withProfiles = (profiles: AgentProfile[], createSession = vi.fn(async () => row())) => ({
+    createSession,
+    deps: makeDeps({ createSession, readAgentProfiles: async () => ({ version: 1, profiles }) })
+  })
+
+  it("with no --account, starts on the profile's first live account and rolls onto the rest, as the profile's id", async () => {
+    const { deps, createSession } = withProfiles([profile()])
+    const r = await call(deps, { agentProfile: 'reviewer', cwd: 'D:/p' })
+    expect(r.status, JSON.stringify(r.body)).toBe(200)
+    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'acc_c2', rollAccountIds: ['acc_c2', 'acc_c'], agentProfileId: 'ap_1' }))
+  })
+
+  it("a profile with one live account starts on it with no chain", async () => {
+    const { deps, createSession } = withProfiles([profile({ accountIds: ['acc_c'] })])
+    await call(deps, { agentProfile: 'ap_1', cwd: 'D:/p' })
+    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'acc_c', rollAccountIds: [], agentProfileId: 'ap_1' }))
+  })
+
+  it('an --account given wins, and the profile still decides MCP and permission', async () => {
+    const { deps, createSession } = withProfiles([profile()])
+    await call(deps, { agentProfile: 'Reviewer', account: 'acc_c', cwd: 'D:/p' })
+    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'acc_c', rollAccountIds: [], agentProfileId: 'ap_1' }))
+  })
+
+  it('refuses an unknown or archived profile, one with no live account, and --agent-profile with no value, starting nothing', async () => {
+    const { deps, createSession } = withProfiles([profile({ id: 'ap_old', name: 'Old', status: 'archived' }), profile({ id: 'ap_empty', name: 'Empty', accountIds: ['acc_gone'] })])
+    for (const [args, reason] of [
+      [{ agentProfile: 'nope', cwd: 'D:/p' }, 'agent-profile-unavailable'],
+      [{ agentProfile: 'Old', cwd: 'D:/p' }, 'agent-profile-unavailable'],
+      [{ agentProfile: 'Empty', cwd: 'D:/p' }, 'agent-profile-no-account']
+    ] as const) {
+      const r = await call(deps, args)
+      expect([r.status, (r.body as { reason?: unknown }).reason], JSON.stringify(args)).toEqual([400, reason])
+    }
+    const bare = await call(deps, { agentProfile: true, cwd: 'D:/p' })
+    expect([bare.status, error(bare)]).toEqual([400, '--agent-profile needs a value: a profile id or name (from `agent-profiles list`)'])
+    expect(createSession).not.toHaveBeenCalled()
+  })
+
+  it('without a profile nothing is read and the session carries no profile, as before', async () => {
+    const read = vi.fn(async () => ({ version: 1 as const, profiles: [] }))
+    const createSession = vi.fn(async () => row())
+    await call(makeDeps({ createSession, readAgentProfiles: read }), { account: 'acc_c', cwd: 'D:/p' })
+    expect(read).not.toHaveBeenCalled()
+    expect(createSession.mock.calls[0]).toEqual([expect.not.objectContaining({ agentProfileId: expect.anything() })])
+  })
+})
+
+// The person's decision on the final review (2026-10-22): an agent session's shell, an MCP client or a plugin may start a
+// session as a profile that runs without permission checks only while the app-wide mode already skips them. A person in
+// the app or at their own shell is not asked
+describe('sessions create — a profile that runs without permission checks, by who asks', () => {
+  const profile = (over: Partial<AgentProfile>): AgentProfile => ({
+    id: 'ap_b', name: 'Unattended', status: 'active', accountIds: ['acc_c'], mcpExclude: [], permission: 'bypass', createdAt: NOW, updatedAt: NOW, ...over
+  })
+  const profiles = [profile({}), profile({ id: 'ap_ask', name: 'Asks', permission: 'ask' }), profile({ id: 'ap_in', name: 'Follows', permission: 'inherit' })]
+  type Caller = { sessionId: string; role?: 'app' | 'cli' | 'mcp' | 'controller' | 'plugin' }
+  const AGENTS: Caller[] = [{ sessionId: 'sess_agent', role: 'cli' }, { sessionId: '', role: 'mcp' }, { sessionId: '', role: 'plugin' }]
+  const PEOPLE: Caller[] = [{ sessionId: '', role: 'cli' }, { sessionId: '', role: 'app' }, { sessionId: APP_CALLER }]
+  const asking = async (caller: Caller, agentProfile: string, extra: Partial<OrchServerDeps> = {}) => {
+    const createSession = vi.fn(async () => row())
+    const deps = makeDeps({ createSession, readAgentProfiles: async () => ({ version: 1, profiles }), ...extra })
+    // An MCP client starts sessions only in a registered project
+    await deps.setState({ ...deps.getState(), projects: [{ id: 'prj_p', path: 'D:/p', name: 'p', addedAt: NOW }] })
+    const r = await handleCommand(deps, caller, 'sessions-create', { agentProfile, cwd: 'D:/p' })
+    return { r, createSession }
+  }
+
+  it('refuses an agent’s shell, an MCP client and a plugin while the app-wide mode asks, starting nothing (5)', async () => {
+    for (const caller of AGENTS) {
+      const appWideYolo = vi.fn(async () => false)
+      const { r, createSession } = await asking(caller, 'Unattended', { appWideYolo })
+      expect([r.status, (r.body as { reason?: unknown }).reason], JSON.stringify(caller)).toEqual([403, 'agent-profile-bypass-refused'])
+      expect(error(r)).toContain('Run agents without permission checks')
+      expect(createSession).not.toHaveBeenCalled()
+    }
+  })
+
+  it('lets them once the app-wide mode already skips the checks', async () => {
+    for (const caller of AGENTS) {
+      const { r, createSession } = await asking(caller, 'ap_b', { appWideYolo: async () => true })
+      expect(r.status, JSON.stringify(caller)).toBe(200)
+      expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ agentProfileId: 'ap_b' }))
+    }
+  })
+
+  it('a person in the app or at their own shell is not asked', async () => {
+    for (const caller of PEOPLE) {
+      const appWideYolo = vi.fn(async () => false)
+      const { r } = await asking(caller, 'Unattended', { appWideYolo })
+      expect(r.status, JSON.stringify(caller)).toBe(200)
+      expect(appWideYolo).not.toHaveBeenCalled()
+    }
+  })
+
+  it('a profile that checks permissions or follows the app setting is not asked about', async () => {
+    for (const caller of AGENTS)
+      for (const name of ['Asks', 'Follows']) {
+        const appWideYolo = vi.fn(async () => false)
+        const { r } = await asking(caller, name, { appWideYolo })
+        expect(r.status, `${JSON.stringify(caller)} ${name}`).toBe(200)
+        expect(appWideYolo).not.toHaveBeenCalled()
+      }
+  })
+
+  it('a settings file that cannot be read refuses and names it; a caller that cannot read the setting refuses', async () => {
+    const damaged = await asking({ sessionId: '', role: 'mcp' }, 'Unattended', {
+      appWideYolo: async () => {
+        throw new RepairNeeded('app-settings.json is not a valid settings file; open Astera to repair it', 'app-settings.json')
+      }
+    })
+    expect(damaged.r).toMatchObject({ status: 409, body: { repair: 'app-settings.json' } })
+    expect(damaged.createSession).not.toHaveBeenCalled()
+    const unread = await asking({ sessionId: '', role: 'plugin' }, 'Unattended')
+    expect([unread.r.status, (unread.r.body as { reason?: unknown }).reason]).toEqual([403, 'agent-profile-bypass-refused'])
+    expect(unread.createSession).not.toHaveBeenCalled()
   })
 })
 

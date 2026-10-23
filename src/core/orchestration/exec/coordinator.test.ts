@@ -1386,3 +1386,15 @@ describe('OrchCoordinator.startWorker — launchPhrase', () => {
     expect(spawned.initialPrompt).toBe(`Read ${posix(r.specPath)} and fix it`)
   })
 })
+
+// Agent Profiles design §6: the worker's spawn gets the Task's profile; the wiring's spawnSession resolves it
+describe('OrchCoordinator.startWorker: an agent profile', () => {
+  it('hands the spawn the profile it is given, and no such key when it is given none', async () => {
+    const deps = makeDeps()
+    const co = new OrchCoordinator(deps)
+    await co.startWorker({ ...baseArgs('dsp_1'), runCwd: dir, agentProfileId: 'ap_1' })
+    await co.startWorker({ ...baseArgs('dsp_2'), runCwd: dir })
+    expect(deps.spawned[0]).toMatchObject({ agentProfileId: 'ap_1' })
+    expect(deps.spawned[1]).not.toHaveProperty('agentProfileId')
+  })
+})

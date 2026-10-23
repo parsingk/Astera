@@ -7,6 +7,7 @@ import { readGitHubLifecycleDefaults } from '../core/settings/githubLifecycle'
 import childProcess from 'node:child_process'
 import { createPluginManager } from './plugins/manager'
 import { createHostExtensions } from './extensions/commands'
+import { agentProfileInUse, createHostAgentProfiles } from './agentProfiles/commands'
 import { createGatewayHub } from './gateway/hub'
 import { hidingLog } from '../core/extensions/secrets'
 import { sweepGeneratedMcp } from '../core/extensions/resolve'
@@ -450,7 +451,9 @@ async function main(): Promise<void> {
     // itself, and says so in its `hello.yields` (HOST_YIELD_WORKTREES).
     appKeepsWorktrees: () => server.appKeeps(HOST_YIELD_WORKTREES),
     // Host journal (A19 lifted): the prompt rows of the workers this Host starts, read against its state.
-    onPromptWrite: (e) => hostJournal.promptWrite(e, orch.state())
+    onPromptWrite: (e) => hostJournal.promptWrite(e, orch.state()),
+    // Agent Profiles design §5: a spawn from a profile stamps its use through the Host's own command
+    touchAgentProfile: (id) => touchAgentProfile(id)
   })
 
   // R10: the one read that may heal a damaged worktrees.json, done once — and only when the Host
@@ -754,12 +757,27 @@ async function main(): Promise<void> {
     log: (m) => log.write(m),
     gateway: mcpGateway
   })
+  // Agent Profiles (design §4): the store this Host owns. A profile cannot be deleted while a live session holds it
+  // (the session's note carries `agentProfileId`) or unfinished orchestration work does (a Job, a Task, an open
+  // Dispatch). `orch` is made below; the guard reads it only when a delete is asked.
+  const agentProfiles = createHostAgentProfiles({
+    profileDir,
+    readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
+    inUse: agentProfileInUse({ sessions: () => [...registry.list(), ...procs.list()], orch: () => orch }),
+    log: (m) => log.write(m)
+  })
+  /** `agent-profiles-touch` as the app would send it, not awaited by the spawn that asks: the command logs its own
+   *  failures and answers success, so a stamp never fails or delays a spawn. */
+  const touchAgentProfile = (id: string): void => {
+    void agentProfiles.command({ cmd: 'agent-profiles-touch', args: { id }, role: 'app', marks: { effects: 0 } }).catch((e) => log.write(`agent profile ${id}: its use could not be stamped: ${String(e)}`))
+  }
   const orch = createHostOrch({
     profileDir,
     version: hostVersion,
     controllers,
     plugins,
     extensions,
+    agentProfiles,
     // The job-source plugins a person makes Jobs from (plugin Phase 4 J10), asked through the runtime
     jobSources: hostJobSources({ manager: plugins, runtime: pluginRuntime }),
     // The completion check plugins a Task's checks ask (plugin Phase 5 C8), through the same runtime
@@ -820,8 +838,10 @@ async function main(): Promise<void> {
       chats: rollingWiring?.chats ?? null,
       rolling: rollingWiring?.rolling ?? null,
       readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
-      refreshCapabilities: (account) => spawner?.capabilities?.refresh(account) ?? Promise.resolve(),
+      refreshCapabilities: (account, agentProfileId) => spawner?.capabilities?.refresh(account, agentProfileId) ?? Promise.resolve(),
       bypass: async () => (await readAgentPermissionMode(path.join(profileDir, 'app-settings.json'))) === 'yolo',
+      profileDir,
+      touchAgentProfile: (id) => touchAgentProfile(id),
       probeCwd: defaultCwdProbe,
       announceProc: (procId) => announceChatProc(server, procId, (m) => log.write(m)),
       list: () => hostSessions.listSessions(),

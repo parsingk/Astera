@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { sessionInfoFromNote, chatInfoFromNote } from './noteInfo'
+import { sessionInfoFromNote, chatInfoFromNote, agentProfileIdOf } from './noteInfo'
 
 describe('sessionInfoFromNote', () => {
   it('rebuilds a session from its note, keeping only well-typed optional keys', () => {
@@ -40,5 +40,31 @@ describe('who started a session, read from its note', () => {
     expect(sessionInfoFromNote({ kind: 'session', id: 's1', restore: base })).not.toHaveProperty('startedBy')
     expect(sessionInfoFromNote({ kind: 'session', id: 's1', restore: { ...base, startedBy: 'person' } })).not.toHaveProperty('startedBy')
     expect(chatInfoFromNote({ kind: 'chat', id: 'c1', restore: { ...base, startedBy: true } })).not.toHaveProperty('startedBy')
+  })
+})
+
+// Agent Profiles (ledger Ruling P2): the profile a session was started from rides the note like startedBy, so a session
+// the Host hands back or carries on still resolves the same profile; the Host's delete check reads it the same way
+describe('the agent profile a session was started from, read from its note', () => {
+  const base = { accountId: 'a1', cwd: 'D:/p', title: 't' }
+  it('keeps a profile id', () => {
+    expect(sessionInfoFromNote({ kind: 'session', id: 's1', restore: { ...base, agentProfileId: 'ap_000000000001' } })?.agentProfileId).toBe('ap_000000000001')
+    expect(agentProfileIdOf({ ...base, agentProfileId: 'ap_000000000001' })).toBe('ap_000000000001')
+  })
+  it('leaves a note without one, or with a value that is not a string, without one', () => {
+    expect(sessionInfoFromNote({ kind: 'session', id: 's1', restore: base })).not.toHaveProperty('agentProfileId')
+    expect(sessionInfoFromNote({ kind: 'session', id: 's1', restore: { ...base, agentProfileId: 3 } })).not.toHaveProperty('agentProfileId')
+    expect(sessionInfoFromNote({ kind: 'session', id: 's1', restore: { ...base, agentProfileId: '' } })).not.toHaveProperty('agentProfileId')
+    expect(agentProfileIdOf(undefined)).toBeUndefined()
+  })
+})
+
+// Agent Profiles design §5: a chat session's profile rides its note as a terminal session's does
+describe('a chat session’s agent profile, read from its note', () => {
+  const base = { accountId: 'a1', cwd: 'D:/p', title: 't' }
+  it('keeps a non-empty id, and nothing otherwise', () => {
+    expect(chatInfoFromNote({ kind: 'chat', id: 'c1', restore: { ...base, agentProfileId: 'ap_1' } })?.agentProfileId).toBe('ap_1')
+    expect(chatInfoFromNote({ kind: 'chat', id: 'c1', restore: base })).not.toHaveProperty('agentProfileId')
+    expect(chatInfoFromNote({ kind: 'chat', id: 'c1', restore: { ...base, agentProfileId: '' } })).not.toHaveProperty('agentProfileId')
   })
 })

@@ -31,6 +31,7 @@ import { startHostServer, ADDRESS_TAKEN, type HostServer } from '../host/server'
 import { ensureHostKey, hostProof } from '../core/host/hostKey'
 import { createHostOrch, type HostOrch } from '../host/orch'
 import { createPluginManager } from '../host/plugins/manager'
+import { createHostAgentProfiles } from '../host/agentProfiles/commands'
 import { createHostJournal } from '../host/hostJournal'
 import { JournalReader } from '../core/continuity/journalReader'
 import type { JournalEventRow } from '../core/continuity/journal'
@@ -651,6 +652,13 @@ async function hostRig(
     profileDir,
     version: '9.9.9',
     plugins: createPluginManager({ profileDir, hostVersion: '9.9.9' }),
+    // Agent profiles as index.ts keeps them: the store under the profile, the accounts read for real
+    agentProfiles: createHostAgentProfiles({
+      profileDir,
+      readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
+      inUse: async () => false,
+      log
+    }),
     now: () => new Date().toISOString(),
     hostStartedAt: () => serverOf().startedAt,
     runningSessions: () => registry.liveCount() + procs.liveCount(),
@@ -1142,6 +1150,51 @@ describe('the public CLI against a real Host (§48, §49)', { timeout: 60_000 },
     expect((await astera(['plugins', 'get', '--id', 'astera-hello'], h.env)).code).toBe(4)
   })
 
+  // Agent Profiles design §6 (Task 7): the noun end to end, and a Job made as a profile by its name holds its id.
+  it('agent-profiles create, list, show, then jobs create --agent-profile <name> makes a Job that holds the id', async () => {
+    const h = await hostRig()
+    await fs.mkdir(path.join(h.profileDir, 'extensions'), { recursive: true })
+    await fs.writeFile(
+      path.join(h.profileDir, 'extensions', 'registry.json'),
+      JSON.stringify({ version: 1, entries: [{ id: 'mcp_gh', kind: 'mcp', name: 'github', transport: 'stdio', command: 'gh-mcp', env: {}, providers: ['claude'], importedFrom: h.accountId, enabled: true }] })
+    )
+    const created = okData(
+      await astera(['agent-profiles', 'create', '--name', 'Reviewer', '--account', h.accountId, '--exclude-mcp', 'github', '--permission', 'ask', '--description', 'reads code'], h.env),
+      'agent-profiles create'
+    )
+    expect(created).toMatchObject({ name: 'Reviewer', accountIds: [h.accountId], mcpExclude: ['mcp_gh'], permission: 'ask', status: 'active' })
+    const id = created.id as string
+    expect(id).toMatch(/^ap_/)
+    expect(okData(await astera(['agent-profiles', 'list'], h.env), 'agent-profiles list')).toMatchObject({ profiles: [{ id, name: 'Reviewer' }] })
+    expect(okData(await astera(['agent-profiles', 'show', '--id', 'reviewer'], h.env), 'agent-profiles show')).toMatchObject({ id })
+
+    const job = okData(await astera(['jobs', 'create', '--objective', 'review', '--cwd', h.repo, '--agent-profile', 'Reviewer'], h.env), 'jobs create')
+    expect(job.agentProfileId).toBe(id)
+    expect(h.state().jobs.find((j) => j.id === job.id)?.agentProfileId).toBe(id)
+    expect(okData(await astera(['jobs', 'get', '--id', job.id as string], h.env), 'jobs get')).toMatchObject({ agentProfileId: id })
+
+    // An unknown MCP server name is the caller's mistake (2), named; nothing is changed
+    const unknown = await astera(['agent-profiles', 'update', '--id', 'Reviewer', '--exclude-mcp', 'slack'], h.env)
+    expect(unknown.code, unknown.stdout).toBe(2)
+    expect(unknown.envelope.error?.message).toContain('slack')
+    // A change from an agent's shell is refused (5); a read is not
+    const agent = await astera(['agent-profiles', 'archive', '--id', 'Reviewer'], { ...h.env, ASTERA_SESSION: 'sess_agent' })
+    expect(agent.code, agent.stdout).toBe(5)
+    expect((await astera(['agent-profiles', 'list'], { ...h.env, ASTERA_SESSION: 'sess_agent' })).code).toBe(0)
+
+    expect(okData(await astera(['agent-profiles', 'update', '--id', 'Reviewer', '--name', 'Critic', '--exclude-mcp', ''], h.env), 'agent-profiles update')).toMatchObject({
+      id,
+      name: 'Critic',
+      mcpExclude: []
+    })
+    expect(okData(await astera(['agent-profiles', 'archive', '--id', 'Critic'], h.env), 'agent-profiles archive')).toMatchObject({ status: 'archived' })
+    // An archived profile starts no new work
+    expect((await astera(['jobs', 'create', '--objective', 'o', '--cwd', h.repo, '--agent-profile', 'Critic'], h.env)).code).toBe(2)
+    expect(okData(await astera(['agent-profiles', 'restore', '--id', id], h.env), 'agent-profiles restore')).toMatchObject({ status: 'active' })
+    expect(okData(await astera(['agent-profiles', 'delete', '--id', 'Critic'], h.env), 'agent-profiles delete')).toEqual({ id, name: 'Critic', deleted: true })
+    expect((await astera(['agent-profiles', 'show', '--id', id], h.env)).code).toBe(4)
+  })
+
   // Plugins 2c (spec §23-§24): a setting set from the CLI, a secret one never shown back.
   it('plugins configure sets a plain and a secret setting, and plugins settings never shows the secret', async () => {
     const h = await hostRig({ repo: false })
@@ -1508,7 +1561,7 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
   const cliBuilt = existsSync(cliBundle)
   if (!cliBuilt) console.warn(`skipping "over HTTP" (MCP against the Host): ${cliBundle} is missing; run npm run build first`)
   it.runIf(cliBuilt)(
-    'over HTTP: the Host runs the entrance, a client with the token lists 39 tools and acts, the journal names its address, and off stops it',
+    'over HTTP: the Host runs the entrance, a client with the token lists 40 tools and acts, the journal names its address, and off stops it',
     async () => {
       const cli: HostCliPaths = {
         exec: createRequire(import.meta.url)('electron') as string,
@@ -1536,8 +1589,10 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
       await client.connect(new StreamableHTTPClientTransport(url, { requestInit: { headers: { Authorization: `Bearer ${token}` } } }))
       cleanups.push(() => client.close())
       // 39 since G5c's reconverge_run (44371e05): this test runs only where out/main/cli.js is built, so a stale build
-      // kept the old count passing (found in G7a)
-      expect((await client.listTools()).tools).toHaveLength(39)
+      // kept the old count passing (found in G7a). 40 since list_agent_profiles (Agent Profiles Task 7, 22a03402)
+      const listed = (await client.listTools()).tools
+      expect(listed).toHaveLength(40)
+      expect(listed.map((t) => t.name)).toContain('list_agent_profiles')
       const projects = (await client.callTool({ name: 'list_projects', arguments: {} })) as ToolResult
       expect(projects.isError).toBeFalsy()
       expect(projects.structuredContent).toEqual({ projects: [expect.objectContaining({ id: projectId, path: projectPath })] })
@@ -1840,7 +1895,7 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
   it('astera mcp status is 0 with a Host that speaks mcp and 3 without one', async () => {
     const h = await hostRig({ repo: false })
     const up = okData(await astera(['mcp', 'status'], h.env), 'mcp status')
-    expect(up).toMatchObject({ transport: 'stdio', host: { running: true, version: '9.9.9', protocol: HOST_PROTOCOL, mcp: true }, access: 'control', tools: 41 })
+    expect(up).toMatchObject({ transport: 'stdio', host: { running: true, version: '9.9.9', protocol: HOST_PROTOCOL, mcp: true }, access: 'control', tools: 42 })
     await h.stop()
     const down = await astera(['mcp', 'status'], h.env)
     expect(down.code).toBe(3)

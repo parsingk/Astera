@@ -1,8 +1,14 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { promises as fs } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { announceChatProc, createHostSessionStarter } from './sessionCreate'
 import { wasRefusedBeforeActing } from '../core/host/orchProtocol'
 import type { HostSession } from '../core/orchestration/command'
 import type { Account, SessionInfo } from '../core/types'
+import { removeFixture } from '../core/testFixtures'
+import { writeAgentProfiles } from '../core/agentProfiles/store'
+import type { AgentProfile } from '../core/agentProfiles/types'
 
 const ACCOUNT: Account = { id: 'acc_c', label: 'C', configDir: '/cfg/c', color: '#000', createdAt: 'T', provider: 'claude' }
 
@@ -169,5 +175,65 @@ describe('announceChatProc — proc-opened, to chat-takeover apps only', () => {
     expect(term).toMatchObject({ id: 'term_1', ptyId: 'pty_9', provider: 'claude', sources: { status: 'hooks', conversation: 'transcript' } })
     const chat = await r.start({ kind: 'chat', accountId: 'acc_c', cwd: '/p', rollAccountIds: [], unattended: 'hold' } as never)
     expect(chat).toMatchObject({ id: 'chat_1', procId: 'proc_1', provider: 'claude', sources: { status: 'chat' } })
+  })
+})
+
+// Agent Profiles design §5: a chat session started from a profile behaves like a terminal one: the profile's servers and
+// its permission choice, its real id kept, and its use stamped once it started
+describe('createHostSessionStarter — with an agent profile', () => {
+  const dirs: string[] = []
+  afterEach(async () => {
+    for (const d of dirs.splice(0)) await removeFixture(d)
+  })
+  const P = (over: Partial<AgentProfile>): AgentProfile => ({
+    id: 'ap_000000000001', name: 'Reviewer', status: 'active', accountIds: ['acc_c'], mcpExclude: [], permission: 'inherit',
+    createdAt: 'T', updatedAt: 'T', ...over
+  })
+  const withProfiles = async (profiles: AgentProfile[]): Promise<string> => {
+    const d = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-sesscreate-'))
+    dirs.push(d)
+    await writeAgentProfiles(d, { version: 1, profiles })
+    return d
+  }
+
+  it('a chat session gets the profile’s id, servers and bypass, and its use is stamped after it started', async () => {
+    const profileDir = await withProfiles([P({ id: 'ap_b', name: 'Night shift', permission: 'bypass' })])
+    const refreshed: Array<[string, string | undefined]> = []
+    const touched: string[] = []
+    const h = rig({
+      profileDir,
+      bypass: async () => false,
+      refreshCapabilities: async (a, id) => { refreshed.push([a.id, id]) },
+      touchAgentProfile: (id) => touched.push(id)
+    })
+    await h.start({ kind: 'chat', accountId: 'acc_c', cwd: '/repo', rollAccountIds: [], agentProfileId: 'night shift' })
+    expect(refreshed).toEqual([['acc_c', 'ap_b']])
+    expect(h.chats.spawn).toHaveBeenCalledWith(expect.objectContaining({ bypassPermissions: true, agentProfileId: 'ap_b' }))
+    expect(touched).toEqual(['ap_b'])
+  })
+
+  it('an ask profile asks while the app-wide mode is yolo', async () => {
+    const profileDir = await withProfiles([P({ id: 'ap_a', permission: 'ask' })])
+    const h = rig({ profileDir, bypass: async () => true })
+    await h.start({ kind: 'chat', accountId: 'acc_c', cwd: '/repo', rollAccountIds: [], agentProfileId: 'ap_a' })
+    expect(h.chats.spawn).toHaveBeenCalledWith(expect.objectContaining({ bypassPermissions: false, agentProfileId: 'ap_a' }))
+  })
+
+  it('a profile that does not resolve starts the chat as before, without an id, logged once', async () => {
+    const profileDir = await withProfiles([P({})])
+    const logs: string[] = []
+    const touched: string[] = []
+    const h = rig({ profileDir, bypass: async () => true, log: (m) => logs.push(m), touchAgentProfile: (id) => touched.push(id) })
+    await h.start({ kind: 'chat', accountId: 'acc_c', cwd: '/repo', rollAccountIds: [], agentProfileId: 'ap_gone' })
+    expect(h.chats.spawn.mock.calls[0][0]).not.toHaveProperty('agentProfileId')
+    expect(h.chats.spawn).toHaveBeenCalledWith(expect.objectContaining({ bypassPermissions: true }))
+    expect(logs.filter((l) => l.includes('ap_gone'))).toHaveLength(1)
+    expect(touched).toEqual([])
+  })
+
+  it('a terminal session hands the profile to the spawner, which resolves it', async () => {
+    const h = rig()
+    await h.start({ kind: 'terminal', accountId: 'acc_c', cwd: '/repo', rollAccountIds: [], agentProfileId: 'ap_b' })
+    expect(h.spawner.createSession).toHaveBeenCalledWith({ accountId: 'acc_c', cwd: '/repo', rollAccountIds: [], agentProfileId: 'ap_b' })
   })
 })

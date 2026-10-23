@@ -153,6 +153,7 @@ The coordinator (the default Claude account here) plans the work into Tasks and 
 | `tasks` | `tasks.list`, `tasks.get`, `tasks.create` | `astera tasks list`, MCP's `get_task`, `astera tasks add` |
 | `questions` | `questions.list`, `questions.get`, `questions.answer` | `astera questions list`, `get`, `answer` |
 | `completion` | `completion.get` | MCP's `get_completion` |
+| `agentProfiles` | `agentProfiles.list`, `agentProfiles.get` | `astera agent-profiles list`, `show` |
 | `events` | `events.list`, `events.cursor`, `events.subscribe` | no command ([Events](#events)) |
 
 Answers come in the public shapes the CLI prints with `--json`, typed: `Project`, `Job`, `Run`, `Task`, `Question`,
@@ -193,8 +194,9 @@ repaired, and while a repair runs its `subject`: `ci` with the failing `check`, 
 `jobs.create` takes an `objective`, and where the work happens: a `projectId` (a project registered in the app) or an
 absolute `cwd`. A relative `cwd` is refused, because the Host would resolve it against its own folder. The rest is
 optional: `coordinator` (`{ provider: 'claude' }`, `{ provider: 'codex' }` or `{ accountId }`), `concurrency`, and
-`convergence` (`true` for the Host's repair defaults, or a policy). A Job with no coordinator runs only the Tasks you
-add to it:
+`convergence` (`true` for the Host's repair defaults, or a policy), and `agentProfileId` (an agent profile's id or name:
+its Tasks run as that profile unless a Task names its own; it does not pick the coordinator). A Job with no coordinator
+runs only the Tasks you add to it:
 
 ```ts
 import { randomUUID } from 'node:crypto'
@@ -294,12 +296,41 @@ compare `resolution` with what you sent. When a person takes a while to type, re
 `tasks.create` adds a Task to a Job's definition (`jobId`) or to a Run under way (`runId`): `spec` (what to do), and
 optionally `title`, `deps` (Task ids it waits for), `parentId`, `accountIds` (the accounts to run it on, in failover
 order), `validate` (run configuration ids that check the work, or `plugin:<id>` for a completion check plugin, in
-the order the checks run) and `review`. Without `accountIds` it uses the Job's coordinator account, and is refused when
-the Job has none. A `plugin:<id>` whose plugin is not installed, does not offer completion checks, or is disabled is
+the order the checks run), `review` and `agentProfileId` (an agent profile's id or name, which decides its shared MCP
+servers and permission prompts; without it the Task runs as its Job's profile, if the Job has one). Without
+`accountIds` it runs on its profile's accounts, copied when it is made; with no profile, on the Job's coordinator
+account, and it is refused when the Job has none. A `plugin:<id>` whose plugin is not installed, does not offer completion checks, or is disabled is
 refused with `PLUGIN_CAPABILITY_MISSING` ([plugins.md](plugins.md#completion-check-plugins)). `tasks.list({ runId, status, ready, brief })` and
 `tasks.get` read them. A Task with `kind: 'lifecycle'` is the one Astera adds once every other Task of a GitHub
 lifecycle Run is completed, to carry the Run through GitHub: it has no worker, and `tasks.create` on that Run is
 refused while it is open.
+
+### Agent profiles
+
+An agent profile names a set of accounts, in failover order, the shared MCP servers its sessions leave out and its
+permission choice. Profiles are made and changed in Astera and with `astera agent-profiles`; the SDK reads them.
+`agentProfiles.list()` answers every profile, and `agentProfiles.get(idOrName)` one, by its id or its name (a name
+matches without regard to case, and an unknown one is `NOT_FOUND`). Each is an `AgentProfile`: `id`, `name`,
+`description`, `status` (`active`, or `archived`, which starts no new work), `accountIds`, `mcpExclude` (the ids of the
+shared MCP servers it leaves out), `permission` (`inherit`, `bypass` or `ask`) and when it was made, changed and last
+used. A Job and a Task made as a profile carry its id as `agentProfileId`, and so does a worker attempt of such a
+Task. Profiles need `@astera-app/client` 0.5.0 and the Astera that ships them. A Host from before agent profiles
+answers `agentProfiles.list` and `agentProfiles.get` with `VERSION_MISMATCH`, ignores `agentProfileId` on
+`jobs.create`, and refuses a `tasks.create` that names a profile but no `accountIds`.
+
+A profile whose `permission` is `bypass` runs without permission checks, so **a plugin may make work as one only while
+Astera skips them anyway**: its `jobs.create` or `tasks.create` with such a profile, or a `tasks.create`, `jobs.run` or
+`runs.resume` for a Job that holds one, fails with `PERMISSION_DENIED` (`details.reason` is
+`agent-profile-bypass-refused`) and makes or starts nothing unless **Run agents without permission checks** is on in
+Astera's settings. `jobs.run` and `runs.resume` fail the same way when a Task of the work they would start names such a
+profile in a Job with none. A client your own program makes on this machine is
+answered as your own shell is, and is not asked.
+
+```ts
+const { items } = await astera.agentProfiles.list()
+const reviewer = items.find((p) => p.name === 'Reviewer' && p.status === 'active')
+if (reviewer) await astera.tasks.create({ jobId, spec: 'Review the change', agentProfileId: reviewer.id })
+```
 
 ### Completion
 

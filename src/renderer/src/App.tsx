@@ -48,6 +48,8 @@ import { McpSettings } from './components/McpSettings'
 import { RemoteRuntimesSettings } from './components/RemoteRuntimesSettings'
 import { PluginsSettings } from './components/PluginsSettings'
 import { ExtensionsSettings } from './components/ExtensionsSettings'
+import { AgentProfilesSettings } from './components/AgentProfilesSettings'
+import { profileOfConversation, spawnPermission } from './components/agentProfilesText'
 import { RuntimeSelector } from './components/RuntimeSelector'
 import { createReplyGate } from './lib/replyGate'
 import { LOCAL, controlReason, detailOffScreen, detailRunGone, isRemoteRuntime, offlineNote, remoteDetailKey, remoteNewJobFolder, remotePollReady } from './lib/remoteJobs'
@@ -708,6 +710,7 @@ export default function App(): React.JSX.Element {
     | 'remote'
     | 'plugins'
     | 'extensions'
+    | 'agentProfiles'
     | 'worktree'
     | 'history'
   >('general') // the settings sidebar, with general and accounts added
@@ -1712,6 +1715,8 @@ export default function App(): React.JSX.Element {
     rollPrompt?: string
     slackNotify?: boolean
     bypassPermissions?: boolean
+    /** The agent profile picked in the New Session dialog: sent instead of bypassPermissions (permissionFields). */
+    agentProfileId?: string
     /** chat takeover P8: the New Session dialog's pick for a chat session, forwarded to sessions.spawn
      *  unchanged. Absent for a terminal session, which has no such policy at all. */
     unattendedPermission?: UnattendedPermission
@@ -1759,7 +1764,9 @@ export default function App(): React.JSX.Element {
         rollAccountIds: rolling ? opts.accountIds : undefined,
         rollPrompt: rolling ? opts.rollPrompt : undefined,
         slackNotify: opts.slackNotify, // Slack progress notifications
-        bypassPermissions: opts.bypassPermissions, // start without permission prompts
+        // Start without permission prompts, or as the session's profile says: an explicit bypass wins, so the dialog
+        // sends none with a picked profile, and a restart sends the one the session already resolved
+        ...spawnPermission(opts),
         unattendedPermission: opts.unattendedPermission, // chat takeover P8: hold, or deny after 60 s
         schedule: opts.schedule
       })
@@ -2467,6 +2474,8 @@ export default function App(): React.JSX.Element {
       saveDefault: false,
       slackNotify: old.slackNotify,
       bypassPermissions: old.bypassPermissions,
+      // The session's agent profile: its MCP servers again; the bypass above is what the profile resolved to and wins
+      ...(old.agentProfileId !== undefined ? { agentProfileId: old.agentProfileId } : {}),
       replacesSessionId: old.id,
       kind: old.kind,
       ...(sessionKindOf(old) === 'chat' && old.threadId !== undefined ? { resumeThreadId: old.threadId } : {})
@@ -2485,8 +2494,12 @@ export default function App(): React.JSX.Element {
       roll: boolean
       rollPrompt?: string
       slackNotify: boolean
-      bypassPermissions: boolean
+      /** Left out when the resume carries a profile, which then decides it (spawnPermission) */
+      bypassPermissions?: boolean
       schedule?: ScheduleConfig
+      /** The profile the resume carries, decided once by ResumeDialog (an open tab's, else the recorded one): its MCP
+       *  servers come back and its permission decides */
+      agentProfileId?: string
     }
   ): void => {
     void spawn({
@@ -2509,6 +2522,7 @@ export default function App(): React.JSX.Element {
       rollPrompt: opts.rollPrompt,
       slackNotify: opts.slackNotify,
       bypassPermissions: opts.bypassPermissions,
+      ...(opts.agentProfileId !== undefined ? { agentProfileId: opts.agentProfileId } : {}),
       schedule: opts.schedule
     })
   }
@@ -4611,6 +4625,7 @@ export default function App(): React.JSX.Element {
                   accounts={accounts}
                   ghostAccounts={ghostAccounts}
                   defaultSessionKind={defaultSessionKind}
+                  tabProfileOf={(id) => profileOfConversation(sessionsRef.current, id)}
                   onResume={resumeFromHistory}
                 />
               </>
@@ -4989,6 +5004,9 @@ export default function App(): React.JSX.Element {
                     ['plugins', t('settings.tab.plugins')],
                     // Shared extensions (Agent Control Plane release 1): what every account gets, next to the plugins.
                     ['extensions', t('settings.tab.extensions')],
+                    // Agent profiles (Agent Profiles design §8): accounts, MCP servers and permission under one name,
+                    // right after the MCP servers they choose from.
+                    ['agentProfiles', t('settings.tab.agentProfiles')],
                     ['hiw', t('hiw.title')],
                     ['shortcuts', t('settings.tab.shortcuts')],
                     ['slack', 'Slack'],
@@ -5425,6 +5443,7 @@ export default function App(): React.JSX.Element {
                 {settingsTab === 'remote' && <RemoteRuntimesSettings onChanged={() => setPairedChanged((n) => n + 1)} />}
                 {settingsTab === 'plugins' && <PluginsSettings />}
                 {settingsTab === 'extensions' && <ExtensionsSettings accounts={accounts} />}
+                {settingsTab === 'agentProfiles' && <AgentProfilesSettings accounts={accounts} />}
                 {settingsTab === 'worktree' && (
                   <div className="settings-worktree">
                     <label className="settings-field-label">{t('settings.worktree.createLocation')}</label>

@@ -102,13 +102,17 @@ export interface CodexRollingDeps {
     /** Who started the chain (SessionInfo.startedBy), kept by every roll: the respawned session is the same work, so an
      *  agent's stays an agent's and its tab still closes when it ends. */
     startedBy?: 'agent'
+    /** The agent profile the chain was started from (SessionInfo.agentProfileId), kept by every roll
+     *  (claudeCoordinator.ts's own field, same contract). */
+    agentProfileId?: string
     /** Extra keys for the new pty's note (S6 R6) — `rolledFrom` and the chain's snapshot on its new
      *  account. The manager merges them into `meta.restore` under its own keys. */
     restoreExtra?: RollRespawnExtra
   }): SessionInfo
   /** Everything a respawn needs that can wait or refuse, done while the old session still lives (S6 R5).
-   *  A rejection aborts the roll before the kill and reschedules it. Absent: nothing to prepare. */
-  prepareSpawn?(account: Account, cwd: string): Promise<void>
+   *  A rejection aborts the roll before the kill and reschedules it. Absent: nothing to prepare.
+   *  `agentProfileId` is the chain's own (claudeCoordinator.ts's own dep, same contract). */
+  prepareSpawn?(account: Account, cwd: string, agentProfileId?: string): Promise<void>
   kill(sessionId: string): void
   /** Writes into a live session's PTY. Used only to dismiss the model-switch prompt (answerModelChoice). */
   write(sessionId: string, data: string): void
@@ -1683,7 +1687,7 @@ export class CodexRollingCoordinator {
       // the kill below starts the await-free stretch (the claude side's roll() has the same block).
       if (this.deps.prepareSpawn) {
         try {
-          await this.deps.prepareSpawn(target, chain.cwd)
+          await this.deps.prepareSpawn(target, chain.cwd, chain.liveInfo.agentProfileId)
         } catch (err) {
           const why = err instanceof Error ? err.message : String(err)
           this.deps.log(`codex roll aborted — the respawn would be refused: ${why} session=${chain.liveId}`)
@@ -1770,6 +1774,7 @@ export class CodexRollingCoordinator {
         rollPrompt: chain.liveInfo.rollPrompt,
         startWithBypass: wasBypassed,
         ...(chain.liveInfo.startedBy ? { startedBy: chain.liveInfo.startedBy } : {}),
+        ...(chain.liveInfo.agentProfileId ? { agentProfileId: chain.liveInfo.agentProfileId } : {}),
         // S6 R6: the new pty is born with what a takeover needs if this process dies before the rekey
         // commits — the claude side's field, same contract. awaitingPrompt is false: the carry-on
         // prompt rides this spawn (argv or first chat turn), so nothing is left to type. The tail starts

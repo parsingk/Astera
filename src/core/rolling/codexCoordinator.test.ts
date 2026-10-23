@@ -2736,6 +2736,27 @@ describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
     await advance(100)
   }
 
+  // Agent Profiles design §7: the new session is started from the same profile (claudeCoordinator.test.ts's own test)
+  it('a roll keeps the session’s agent profile, for the respawn and its preparation', async () => {
+    const prepared: unknown[][] = []
+    const h = harness({ prepareSpawn: async (...a) => { prepared.push(a) } })
+    const src = await writeRollout({ accountId: 'c1', uuid: 'cx-ap', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register({ ...h.info1, agentProfileId: 'ap_x' })
+    await advance(1_500) // 매핑 폴링
+    await appendLimitError(src)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(prepared).toEqual([[expect.objectContaining({ id: 'c2' }), h.info1.cwd, 'ap_x']])
+    expect(h.spawnedOpts[0].agentProfileId).toBe('ap_x')
+    h.coord.stop()
+    const pPrepared: unknown[][] = []
+    const p = harness({ prepareSpawn: async (...a) => { pPrepared.push(a) } })
+    await rollNow(p)
+    expect(pPrepared[0][2]).toBeUndefined()
+    expect(p.spawnedOpts[0]).not.toHaveProperty('agentProfileId')
+    p.coord.stop()
+  })
+
   it('awaits prepareSpawn after the copy and before the kill', async () => {
     const h = harness({
       prepareSpawn: async () => {

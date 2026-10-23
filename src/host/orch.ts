@@ -4,6 +4,9 @@
 import { REMOTE_SESSION_CHANGES, REMOTE_SESSION_READS, type RemoteSessions } from './remoteSessions'
 import { PLUGIN_COMMANDS, pluginsCommand } from './plugins/commands'
 import { EXTENSION_COMMANDS, type HostExtensions } from './extensions/commands'
+import { AGENT_PROFILE_COMMANDS, type HostAgentProfiles } from './agentProfiles/commands'
+import { readAgentProfiles } from '../core/agentProfiles/store'
+import { readAgentPermissionMode } from '../core/settings/agentPermissionMode'
 import type { PluginManager } from './plugins/manager'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
@@ -573,6 +576,9 @@ export function createHostOrch(a: {
   /** The shared extensions (Agent Control Plane release 1): every `extensions-*` command, for this machine's app and
    *  CLI, below the receipt line like the plugins. Absent: all of them answer 501. */
   extensions?: Pick<HostExtensions, 'command'>
+  /** The agent profiles (Agent Profiles design §4): every `agent-profiles-*` command, for this machine's app and CLI,
+   *  routed like the extensions. Absent: all of them answer 501. */
+  agentProfiles?: Pick<HostAgentProfiles, 'command'>
   /** Session work units in the Host (E2 §5), asked per call: `index.ts` builds them after this orch (their
    *  in-Run test reads its state). Passed through to `hostOrchDeps` (HOST_TRACKS), and the app only
    *  `work-units-fork`, `-reload`, `-complete`, `-cancel` and `-git-op`. Absent, or null (no spawner, so no
@@ -635,7 +641,8 @@ export function createHostOrch(a: {
     }
   }
 
-  /** **Nothing is read at construction, and `host/index.ts` never calls `ready()`.**
+  /** **Nothing is read at construction, and `host/index.ts` never calls `ready()` at its start** — only from calls
+   *  that need the state as a command does (a notification's wording, the agent profile delete guard).
    *
    *  The load happens at the first call that needs the state — and, once the app has pushed its state
    *  with `state-put`, never at all. Lazy because a Host that nobody asks anything of has no reason to
@@ -815,6 +822,11 @@ export function createHostOrch(a: {
       ...(a.createSession ? { createSession: a.createSession } : {}),
       ...(a.github ? { github: a.github } : {}),
       ...(a.readUnderstanding ? { readUnderstanding: a.readUnderstanding } : {}),
+      // The agent profiles this Host owns (Agent Profiles design §6), read when a Job or Task is made from one
+      readAgentProfiles: () => readAgentProfiles(a.profileDir),
+      // The app-wide mode from the same app-settings.json this Host's spawns read the bypass from, asked when an agent
+      // starts work as a profile that runs without permission checks (Agent Profiles final review)
+      appWideYolo: async () => (await readAgentPermissionMode(path.join(a.profileDir, 'app-settings.json'))) === 'yolo',
       ...(a.changes ? { changes: a.changes } : {}),
       ...(a.jobSources ? { jobSources: a.jobSources } : {}),
       ...(a.completionChecks ? { completionChecks: a.completionChecks } : {}),
@@ -2018,6 +2030,20 @@ export function createHostOrch(a: {
                 marks
               })
             : { status: 501, body: { error: 'this Host does not keep shared extensions' } }
+          return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
+        }
+        // **Agent profiles** (Agent Profiles design §4), the same way. The MCP gate admits only the list (design §6), and
+        // no other gate lists them.
+        if (AGENT_PROFILE_COMMANDS.has(cmd)) {
+          const answered = a.agentProfiles
+            ? await a.agentProfiles.command({
+                cmd,
+                args,
+                role: from?.role,
+                ...(agentShell(from, sessionId) ? { agentRefusal: AGENT_REFUSAL(cmd) } : {}),
+                marks
+              })
+            : { status: 501, body: { error: 'this Host does not keep agent profiles' } }
           return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
         }
         // Design §8: a call that arrives before the state is loaded waits, rather than failing.

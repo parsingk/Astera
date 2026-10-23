@@ -4,6 +4,7 @@
 import { describe, it, expect } from 'vitest'
 import * as types from './types.js'
 import type {
+  AgentProfile,
   AnsweredQuestion,
   AsteraEvent,
   EventGap,
@@ -38,6 +39,7 @@ const job = {
   pendingStart: true,
   paused: false,
   convergence: { maxFixAttempts: 3, blockingSeverity: 'high' },
+  agentProfileId: 'ap_000000000001',
   outcome: 'pending',
   progress: { done: 0, total: 2 },
   questionsOpen: 0
@@ -65,13 +67,14 @@ const task = {
   reviewIssues: [{ id: 'r', severity: 'high', blocking: true, title: 't', description: 'd', file: 'a.ts', line: 3 }],
   completionOverride: { reason: 'ok', at: 'T' },
   consecutiveFailures: 1,
+  agentProfileId: 'ap_000000000001',
   createdAt: 'T',
   updatedAt: 'T',
   spec_truncated: false
 } satisfies Task
 const detail = {
   ...task,
-  attempts: [{ id: 'dsp_1', provider: 'claude', accountId: 'acc', repair: 'check-failure', outcome: 'failed', startedAt: 'T' }],
+  attempts: [{ id: 'dsp_1', provider: 'claude', accountId: 'acc', repair: 'check-failure', outcome: 'failed', startedAt: 'T', agentProfileId: 'ap_000000000001' }],
   openQuestionId: 'gat_1'
 } satisfies TaskDetail
 const question = { id: 'gat_1', runId: 'run_1', taskId: 'tsk_1', question: 'q', kind: 'convergence-exhausted', status: 'open', createdAt: 'T' } satisfies Question
@@ -100,6 +103,19 @@ const endings = [
   { runId: 'run_1', jobId: 'job_1', progress: { done: 2, total: 2 }, state: 'completed' },
   { state: 'timeout', jobId: 'job_1', runId: null, progress: { done: 0, total: 0 } }
 ] satisfies WaitResult[]
+// Agent profiles: a profile as agentProfiles.get answers it
+const profile = {
+  id: 'ap_000000000001',
+  name: 'Reviewer',
+  description: 'd',
+  status: 'archived',
+  accountIds: ['acc'],
+  mcpExclude: ['mcp_1'],
+  permission: 'bypass',
+  createdAt: 'T',
+  updatedAt: 'T',
+  lastUsedAt: 'T'
+} satisfies AgentProfile
 const stopped = { runId: 'run_1', stopped: 2, paused: true, coordinatorStopped: true } satisfies StopResult
 const listed = { items: [project] } satisfies ListResult<Project>
 const withRun = { ...job, run } satisfies JobWithRun
@@ -140,6 +156,6 @@ describe('the public DTOs', () => {
   })
 
   it('take the reference samples', () => {
-    expect([project, job, run, task, detail, question, answered, completion, event, endings, stopped, listed, withRun, runEvent, repairEvent, page, wrongPayload, inputEvent, limitEvent, switchEvent, gapHasNoSession, wrongPrompt].length).toBe(22)
+    expect([project, job, run, task, detail, question, answered, completion, event, endings, stopped, listed, withRun, runEvent, repairEvent, page, wrongPayload, inputEvent, limitEvent, switchEvent, gapHasNoSession, wrongPrompt, profile].length).toBe(23)
   })
 })

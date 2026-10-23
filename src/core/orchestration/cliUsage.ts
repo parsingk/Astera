@@ -109,6 +109,20 @@ const JOB_MAKING_FLAGS: readonly UsageFlag[] = [
   { name: 'github-checks', value: '<name,...>', about: 'CI checks that decide beside the ones the repository requires; needs --github-lifecycle' }
 ]
 
+/** `agent-profiles create`'s flags, and `update`'s, where none is required. */
+const AGENT_PROFILE_FLAGS = (creating: boolean): UsageFlag[] => [
+  { name: 'name', value: '<text>', ...(creating ? { required: true as const } : {}), about: 'what to call it, unique, at most 60 characters' },
+  {
+    name: 'account',
+    value: '<id,…>',
+    ...(creating ? { required: true as const } : {}),
+    about: "its accounts, one provider's, in the order they are tried (from `accounts list`)"
+  },
+  { name: 'exclude-mcp', value: '<name,…>', about: 'the shared MCP servers its sessions do not get (from `ext list`)' },
+  { name: 'permission', value: '<inherit|bypass|ask>', about: "permission prompts: Astera's setting (inherit), none (bypass) or shown (ask)" },
+  { name: 'description', value: '<text>', about: 'a line saying what it is for' }
+]
+
 /** The job-source commands' flags (plugin Phase 4 J21). */
 const SOURCE: UsageFlag = { name: 'source', value: '<sourceId>', required: true, about: 'the source (from `sources list`)' }
 const ITEM: UsageFlag = { name: 'item', value: '<itemId>', required: true, about: 'the item (from `sources items`)' }
@@ -158,7 +172,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'mcp-serve': {
     summary: 'serve Astera to an MCP client over stdio',
     detail:
-      'For an MCP client to launch, not for a person to type: stdout carries the MCP protocol. It connects to the Host of this profile, starting one when none answers, and serves forty-one tools that create, plan, run, observe, answer, stop and resume Jobs, read and use sessions when Settings allows it, read pull requests, CI and issues on GitHub and, when Settings allows it, act on them, read the job sources and make a Job from an item, read the How It Works records of a project and regenerate one, and list the Runtimes this machine is paired with. What it may do is set by MCP access in Settings (CLI tab). See docs/mcp.md.'
+      'For an MCP client to launch, not for a person to type: stdout carries the MCP protocol. It connects to the Host of this profile, starting one when none answers, and serves forty-two tools that create, plan, run, observe, answer, stop and resume Jobs, read and use sessions when Settings allows it, read pull requests, CI and issues on GitHub and, when Settings allows it, act on them, read the job sources and make a Job from an item, read the How It Works records of a project and regenerate one, list the agent profiles, and list the Runtimes this machine is paired with. What it may do is set by MCP access in Settings (CLI tab). See docs/mcp.md.'
   },
   'runtime-start': {
     summary: 'turn Remote Runtime on: other machines may pair with this one',
@@ -320,17 +334,22 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'jobs-run': {
     summary: 'start a run of this Job now',
     detail:
-      'Returns the run it started, which is the id to pass to `runs wait`. Refused while a run of this Job is already going.',
+      'Returns the run it started, which is the id to pass to `runs wait`. Refused while a run of this Job is already going. From inside an agent session, a Job made as a bypass agent profile, or whose tasks the run would copy name one, is refused with 5 unless Astera\'s "Run agents without permission checks" is on.',
     flags: [ID('<jobId>', 'the Job to run')]
   },
   'jobs-create': {
     summary: 'create a Job with no run yet',
     detail:
-      'Returns the Job. Nothing runs until `jobs run`: add its tasks first with `tasks add --job`. Without --cwd the Job belongs to the directory this command was run from. With --coordinator-account a coordinator session starts on that account when the Job runs; without it the workers are placed for you. A Host that announces dispatch places them whether Astera is open or closed, and otherwise Astera does.',
+      'Returns the Job. Nothing runs until `jobs run`: add its tasks first with `tasks add --job`. Without --cwd the Job belongs to the directory this command was run from. With --coordinator-account a coordinator session starts on that account when the Job runs; without it the workers are placed for you. A Host that announces dispatch places them whether Astera is open or closed, and otherwise Astera does. From inside an agent session, a bypass agent profile is refused with 5 unless the setting "Run agents without permission checks" is on.',
     flags: [
       { name: 'objective', value: '<text>', required: true, about: 'what this Job is for' },
       { name: 'cwd', value: '<path>', about: 'the repository root this Job belongs to (default: here)' },
-      ...JOB_MAKING_FLAGS
+      ...JOB_MAKING_FLAGS,
+      {
+        name: 'agent-profile',
+        value: '<id|name>',
+        about: 'the agent profile its tasks run as unless a task names its own (from `agent-profiles list`); it does not pick the coordinator'
+      }
     ]
   },
   'jobs-create-from-source': {
@@ -376,12 +395,14 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   },
   'runs-resume': {
     summary: 'let a paused run go again',
+    detail:
+      'From inside an agent session, a run of a Job made as a bypass agent profile, or with an unfinished task that names one, is refused with 5 unless Astera\'s "Run agents without permission checks" is on.',
     flags: [ID('<runId>', 'the run to resume')]
   },
   'runs-reconverge': {
     summary: 'carry a finished GitHub lifecycle run through GitHub again',
     detail:
-      'Adds a new lifecycle task to the run, with a fresh repair and rerun budget, once its latest one completed or failed, and drops the old merge-ready evidence. Refused (409) for a run whose job is not carried through GitHub, a run with no branch of its own (or whose branch was removed), a run not carried through GitHub yet, a run whose lifecycle task still works, and a pull request that is merged or closed (the Host reads it from GitHub first). A worker session Astera started is refused (5). MCP clients need the "Let MCP clients act on GitHub" setting.',
+      'Adds a new lifecycle task to the run, with a fresh repair and rerun budget, once its latest one completed or failed, and drops the old merge-ready evidence. Refused (409) for a run whose job is not carried through GitHub, a run with no branch of its own (or whose branch was removed), a run not carried through GitHub yet, a run whose lifecycle task still works, and a pull request that is merged or closed (the Host reads it from GitHub first). A worker session Astera started is refused (5). MCP clients need the "Let MCP clients act on GitHub" setting. From inside an agent session, a run of a Job made as a bypass agent profile, or with a task that names one, is refused with 5 unless Astera\'s "Run agents without permission checks" is on.',
     flags: [ID('<runId>', 'the run to carry again')]
   },
   'runs-checks': {
@@ -406,7 +427,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'tasks-add': {
     summary: 'add a task to a Job, or to one run of it',
     detail:
-      'Exactly one of --job or --run. A task added to a Job is copied into every run `jobs run` starts from then on; a task added to a run belongs to that run only. An id of the other kind is not found (4), never quietly the other thing. Returns the task.',
+      "Exactly one of --job or --run. A task added to a Job is copied into every run `jobs run` starts from then on; a task added to a run belongs to that run only. An id of the other kind is not found (4), never quietly the other thing. Returns the task. With --agent-profile, or in a Job made with one, the task runs as that agent profile: without --account it runs on the profile's accounts, copied now, and with --account on those, the profile still deciding its MCP servers and permission prompts. A profile named here must not be archived (2); a task that only inherits its Job's archived profile still gets that profile's accounts. From inside an agent session, a task that would run as a bypass profile, named or its Job's, is refused with 5 unless Astera's \"Run agents without permission checks\" is on. The coordinator Astera started for a run is not asked about its Job's profile when adding tasks to that run, only about one it names; a session driving the run from outside is asked.",
     flags: [
       { name: 'job', value: '<jobId>', about: 'the Job to add it to (exactly one of --job or --run)' },
       { name: 'run', value: '<runId>', about: 'the run to add it to (exactly one of --job or --run)' },
@@ -419,8 +440,12 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
       {
         name: 'account',
         value: '<id,…>',
-        required: true,
-        about: 'the accounts a worker may run on, in failover order (from `accounts list`)'
+        about: 'the accounts a worker may run on, in failover order (from `accounts list`); required unless an agent profile gives them'
+      },
+      {
+        name: 'agent-profile',
+        value: '<id|name>',
+        about: "the agent profile it runs as (from `agent-profiles list`); default: its Job's"
       },
       { name: 'title', value: '<text>', about: "a short name (default: the spec's first line)" },
       { name: 'deps', value: '<json array>', about: 'the task ids this one waits for' },
@@ -438,7 +463,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'tasks-dispatch': {
     summary: 'place one ready task now, the way the loop places one',
     detail:
-      'The Host places it through the same path its loop uses: the account the task names, the run worktree, the placement, then worker-start, so the answer is the worker it started (dispatchId, sessionId). Refused with 6 when the task is not ready, the run is paused or not running, the run is at its concurrency limit, the run is driven by a coordinator (tell the coordinator instead, or stop the run first), or the Host does not drive Jobs right now. What would open a question in the loop (no usable account, a worktree that cannot be made) is a 6 with the reason instead, and nothing is opened. It is for a person or a script, so a worker session is refused with 5. With --request-id a retry is not placed twice.',
+      'The Host places it through the same path its loop uses: the account the task names, the run worktree, the placement, then worker-start, so the answer is the worker it started (dispatchId, sessionId). Refused with 6 when the task is not ready, the run is paused or not running, the run is at its concurrency limit, the run is driven by a coordinator (tell the coordinator instead, or stop the run first), or the Host does not drive Jobs right now. What would open a question in the loop (no usable account, a worktree that cannot be made) is a 6 with the reason instead, and nothing is opened. It is for a person or a script, so a worker session is refused with 5. From inside an agent session, a task that names a bypass agent profile is refused with 5 unless Astera\'s "Run agents without permission checks" is on. With --request-id a retry is not placed twice.',
     flags: [ID('<taskId>', 'the task to place (from `tasks list --ready`)')]
   },
 
@@ -456,6 +481,8 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   },
   'questions-answer': {
     summary: 'answer an open question',
+    detail:
+      'From inside an agent session, an answer that starts a task that runs as a bypass agent profile again (any answer but `mark-failed` on a question whose repair budget is used up, or `continue` or `retry` on a GitHub question, which start its round afresh) is refused with 5 unless Astera\'s "Run agents without permission checks" is on; any other answer is not.',
     flags: [
       ID('<questionId>', 'the question to answer'),
       {
@@ -512,11 +539,50 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
       "The sync the Host runs whenever the shared extensions change. Each item comes back per account as written, unchanged, adopted, restored (an edited copy put back; the edit is kept in extension-state/backups), conflict (the account has its own different copy, left alone), removed, forgotten, not-applicable or failed, and any failed makes it exit 1. Running it twice changes nothing the second time. It needs no Host and no app."
   },
 
+  // Answered by the Host (Agent Profiles design §6), like the sessions below; the CLI resolves a name to the id first.
+  'agent-profiles-list': {
+    summary: 'the agent profiles: named sets of accounts, MCP servers and a permission choice',
+    detail:
+      'Each with its id, name, status (active or archived), accounts in order (an account removed from Astera is left out), `mcpExclude` (the ids of the shared MCP servers it leaves out, as `ext list` names them) and `permission`. Answered by the Host, so it works with Astera closed.'
+  },
+  'agent-profiles-show': {
+    summary: 'one agent profile, by its id or its name',
+    flags: [ID('<profileId|name>', 'the profile (a name is matched without regard to case)')]
+  },
+  'agent-profiles-create': {
+    summary: 'make an agent profile',
+    detail:
+      "Returns the profile. Its accounts must be one provider's, in the order they are tried. --exclude-mcp names shared MCP servers its sessions do not get, as `ext list` names them; a name no shared server has is 2, naming it. Skills and commands are shared by every profile. --permission is inherit (Astera's setting, the default), bypass (run without permission checks) or ask (run with permission checks). A name another profile has is 2. Changing profiles is for a person: from inside an agent session it is refused with 5.",
+    flags: AGENT_PROFILE_FLAGS(true)
+  },
+  'agent-profiles-update': {
+    summary: 'change an agent profile: only the flags given',
+    detail:
+      'Returns the profile. --account and --exclude-mcp replace the lists; `--exclude-mcp ""` leaves no server out. Work already holding the profile reads the change when it next starts a session. From inside an agent session it is refused with 5.',
+    flags: [ID('<profileId|name>', 'the profile to change'), ...AGENT_PROFILE_FLAGS(false)]
+  },
+  'agent-profiles-archive': {
+    summary: 'keep a profile but start no new work as it',
+    detail: 'Work that already holds it goes on. `agent-profiles restore` takes it back. From inside an agent session it is refused with 5.',
+    flags: [ID('<profileId|name>', 'the profile to archive')]
+  },
+  'agent-profiles-restore': {
+    summary: 'let an archived profile start work again',
+    detail: 'From inside an agent session it is refused with 5.',
+    flags: [ID('<profileId|name>', 'the profile to restore')]
+  },
+  'agent-profiles-delete': {
+    summary: 'delete an agent profile',
+    detail:
+      'Refused with 6 while unfinished work holds it (a live session, a queued or running task, an unfinished Job): archive it instead. From inside an agent session it is refused with 5.',
+    flags: [ID('<profileId|name>', 'the profile to delete')]
+  },
+
   // Answered by the Host out of its own registries, so the app may be closed; it needs a Host.
   'sessions-list': {
     summary: 'the agent sessions the Host holds, running and ended',
     detail:
-      'Each with its id, which is the id `sessions read` and `sessions send` take and the one `ASTERA_SESSION` holds inside that session. `kind` is terminal (an agent CLI in a terminal) or chat. `state` is working, waiting or unknown, from the hook events a Claude terminal session writes; Codex and chat sessions are always unknown, and so is a session typed into since its last event. Plain shell tabs and run configurations are not sessions and are not listed. Answered by the Host, so it works with Astera closed. --status alive or ended reads `alive`, and working, waiting or unknown reads `state`. --provider is the provider of the account the session runs on, as `accounts list` prints it; a session whose account is gone matches neither. Any other value is refused with 2. --project keeps the sessions whose folder is inside the project (found the way `projects find` finds it), and the workers and coordinators of its runs wherever their worktree is; a folder no project holds is 4.',
+      'Each with its id, which is the id `sessions read` and `sessions send` take and the one `ASTERA_SESSION` holds inside that session. `kind` is terminal (an agent CLI in a terminal) or chat. `state` is working, waiting or unknown, from the hook events a Claude terminal session writes; Codex and chat sessions are always unknown, and so is a session typed into since its last event. A session started from an agent profile carries `agentProfileId`. Plain shell tabs and run configurations are not sessions and are not listed. Answered by the Host, so it works with Astera closed. --status alive or ended reads `alive`, and working, waiting or unknown reads `state`. --provider is the provider of the account the session runs on, as `accounts list` prints it; a session whose account is gone matches neither. Any other value is refused with 2. --project keeps the sessions whose folder is inside the project (found the way `projects find` finds it), and the workers and coordinators of its runs wherever their worktree is; a folder no project holds is 4.',
     flags: [
       { name: 'status', value: '<alive|ended|working|waiting|unknown>', about: 'only sessions in this state' },
       { name: 'provider', value: '<claude|codex>', about: "only sessions on this vendor's accounts" },
@@ -552,9 +618,10 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'sessions-create': {
     summary: 'start a terminal or chat session on an account, in a folder',
     detail:
-      "The Host starts it, so Astera may be open or closed: a terminal session the way it starts a worker (the agent CLI in a terminal, with Astera's hooks, the folder trusted, and its permission prompts on or off as Astera's setting says), a chat session the way it restarts one after a roll. With Astera open, it takes the session back and shows it as a tab. Answers the session as `sessions list` shows it; its id is what `sessions read` and `sessions send` take. --prompt is the first thing it is asked. --roll-accounts is the chain it rolls onto at a usage limit, --account first unless you place it; every account must be one vendor's. --unattended is for chat sessions: hold (the default) leaves a permission prompt open for someone to answer, deny-after-60s denies it after a minute when nobody has. A folder that does not exist is 2, an unknown account 4, and a Host started without the agent CLI paths is 6. A worker session (one with an open Dispatch) is refused with 5. With --request-id a retry does not start a second session.",
+      "The Host starts it, so Astera may be open or closed: a terminal session the way it starts a worker (the agent CLI in a terminal, with Astera's hooks, the folder trusted, and its permission prompts on or off as Astera's setting says), a chat session the way it restarts one after a roll. With Astera open, it takes the session back and shows it as a tab. Answers the session as `sessions list` shows it; its id is what `sessions read` and `sessions send` take. --prompt is the first thing it is asked. --roll-accounts is the chain it rolls onto at a usage limit, --account first unless you place it; every account must be one vendor's. --unattended is for chat sessions: hold (the default) leaves a permission prompt open for someone to answer, deny-after-60s denies it after a minute when nobody has. A folder that does not exist is 2, an unknown account 4, and a Host started without the agent CLI paths is 6. A worker session (one with an open Dispatch) is refused with 5. With --request-id a retry does not start a second session. With --agent-profile the session starts from that agent profile, which decides its shared MCP servers and its permission prompts; without --account it runs on the profile's first account and rolls onto the others in order. An unknown or archived profile, or one with no account left, is 2. From inside an agent session, a bypass profile is refused with 5 unless Astera's \"Run agents without permission checks\" is on.",
     flags: [
-      { name: 'account', value: '<accountId>', required: true, about: 'the account it runs on (from `accounts list`)' },
+      { name: 'account', value: '<accountId>', about: 'the account it runs on (from `accounts list`); required unless --agent-profile gives it' },
+      { name: 'agent-profile', value: '<id|name>', about: 'the agent profile it starts from (from `agent-profiles list`)' },
       { name: 'cwd', value: '<path>', required: true, about: 'the folder it starts in (a relative path is from here)' },
       { name: 'kind', value: '<terminal|chat>', about: 'terminal (default) or chat' },
       { name: 'title', value: '<text>', about: "the tab's title (default: the folder's name)" },

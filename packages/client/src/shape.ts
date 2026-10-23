@@ -2,6 +2,7 @@
 // function, so the three cannot drift apart.
 import {
   ACCOUNT_FIELDS,
+  AGENT_PROFILE_FIELDS,
   CHAT_PENDING_FIELDS,
   CHAT_PROMPT_FIELDS,
   CHAT_TURN_FIELDS,
@@ -176,6 +177,28 @@ function shapeCompletion(body: unknown): unknown {
   return out
 }
 
+/** The `agent-profiles-*` commands: the Host answers `{ profiles }` for a list and `{ profile }` for one, and the CLI
+ *  prints one profile as `jobs get` prints a Job, the profile itself. Not in `SHAPE`, because the profiles are one layer
+ *  down in the Host's answers. `agent-profiles-delete` names what went and is left alone. */
+const AGENT_PROFILE_COMMANDS: ReadonlySet<string> = new Set([
+  'agent-profiles-list',
+  'agent-profiles-get',
+  'agent-profiles-show',
+  'agent-profiles-create',
+  'agent-profiles-update',
+  'agent-profiles-archive',
+  'agent-profiles-restore'
+])
+
+function shapeAgentProfiles(body: unknown): unknown {
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return body
+  const one = (x: unknown): unknown => (x !== null && typeof x === 'object' ? pick(AGENT_PROFILE_FIELDS, x) : x)
+  const o = body as Record<string, unknown>
+  if (Array.isArray(o.profiles)) return { profiles: o.profiles.map(one) }
+  if ('profile' in o) return { profile: one(o.profile) }
+  return one(body)
+}
+
 /** The public fields of one followed event. Not in `SHAPE`: `runs follow` answers a stream of these and then one
  *  ending, and the ending is `runs wait`'s body, which no table shapes either. */
 export function publicEvent(e: unknown): unknown {
@@ -234,6 +257,7 @@ export function publicFor(cmd: string, body: unknown): unknown {
   if (cmd === 'runs-checks') return shapeRunChecks(body)
   if (cmd === 'runs-completion') return shapeCompletion(body)
   if (cmd === 'events-poll') return shapeEventPage(body)
+  if (AGENT_PROFILE_COMMANDS.has(cmd)) return shapeAgentProfiles(body)
   // Own keys only: a command named like an Object.prototype key ('constructor') is not in the table
   const fields = Object.hasOwn(SHAPE, cmd) ? SHAPE[cmd] : undefined
   if (fields === undefined) return body

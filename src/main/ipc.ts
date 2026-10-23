@@ -54,6 +54,8 @@ import { createHostWorkspaceView, type HostWorkspaceView } from './host/hostWork
 import { clampAppSize } from '../core/workspace/size'
 import { createHostMcpHttpView, type HostMcpHttpView } from './host/hostMcpHttp'
 import { mcpHttpHostsProblem, mcpHttpOf, type McpHttpSettings } from '../core/settings/mcpHttp'
+import { appProfileSpawn, profileSpawn } from '../core/agentProfiles/permission'
+import { readAgentProfiles } from '../core/agentProfiles/store'
 import { createTokenReader, newToken, tokenPath } from '../core/mcp/httpToken'
 import { createOfflineRolls } from './host/offlineRolls'
 import type { BlockRegistry } from '../core/rolling/blockRegistry'
@@ -65,6 +67,7 @@ import { reattachSessions, type ReattachResult } from './host/reattach'
 import { createWorktreeRoute, NO_HOST_CONNECTION, hostDeadlineMessage } from './host/worktreeRoute'
 import { createPluginsRoute } from './host/pluginsRoute'
 import { createExtensionsRoute } from './host/extensionsRoute'
+import { createAgentProfilesRoute } from './host/agentProfilesRoute'
 import { createSourcesRoute } from './host/sourcesRoute'
 import { createHostGitHubRoute } from './host/hostGitHubRoute'
 import { needsHostGitHub } from '../core/orchestration/hostGitHub'
@@ -1797,6 +1800,9 @@ export function registerIpc(
     if (event.type === 'ready') {
       const info = core.chat.info(sessionId)
       if (!info) return
+      // The thread is the conversation a history resume names (a `/clear` names a new one): the profile the session runs
+      // as is written down by it, never waited on
+      void core.profileConversations.learned(sessionId, event.threadId)
       // The rollout watcher is codex's: claude writes no rollout at all, so registering a claude session
       // would set the watcher scanning for a file that is never going to be there (once a second, each
       // one an ENOENT) and leave a log line saying it was looking.
@@ -2007,6 +2013,13 @@ export function registerIpc(
     }
   }
 
+  /** The app-wide permission mode as an agent profile's `inherit` reads it (Agent Profiles design §5). */
+  const appWideYolo = async (): Promise<boolean> => core.appSettings.getAgentPermissionMode() === 'yolo'
+  /** Stamps a profile's use after a spawn started from it (`agent-profiles-touch`), through the Host. Not awaited, and
+   *  any failure (no Host, a deadline) is dropped: a stamp never fails or delays a spawn. */
+  const touchAgentProfile = (id: string): void => {
+    void orchCall({ cmd: 'agent-profiles-touch', args: { id }, sessionId: '' }).catch(() => {})
+  }
   async function spawnSession(opts: any): Promise<SessionInfo> {
     // First, so the guards below look for a live tab on the conversation that will actually be resumed.
     opts = await claudeResumeOpts(opts)
@@ -2075,6 +2088,23 @@ export function registerIpc(
       void core.schedulerConfig.set(resumeId, opts.schedule).catch(() => {})
     }
     const account = core.accounts.get(opts.accountId)
+    // The agent profile it names, by id or name (Agent Profiles design §5): the session keeps the profile's real id, and
+    // the profile's permission decides the bypass when the caller gave none. One that does not resolve is logged and
+    // dropped, and the session starts with the app-wide mode as a dialog spawn without a profile does (the dialog sent
+    // no bypass, so dropping only the id would have left it asking). With none named, nothing here changes the options.
+    if (opts.agentProfileId !== undefined) {
+      const { agentProfileId, ...rest } = opts
+      const resolved = await appProfileSpawn({
+        profileDir: app.getPath('userData'),
+        agentProfileId,
+        bypassPermissions: opts.bypassPermissions,
+        appWideYolo,
+        log: orchLog
+      })
+      opts = { ...rest, ...resolved }
+    }
+    // A resume names its conversation now: the profile it resumes as is written down by it, as the schedule is above
+    if (resumeId && opts.agentProfileId !== undefined) void core.profileConversations.record(resumeId, opts.agentProfileId)
     // win32: a CLI installed since this app started is not on its PATH yet; the Path Windows keeps is
     // read again first (at most every 30 s, and only when the CLI is missing: core/sessions/windowsPath.ts).
     if (account) await ensureOnWindowsPath([providerOf(account)])
@@ -2218,7 +2248,7 @@ export function registerIpc(
       // "왜 시작 버튼이 안 눌리나" exists to keep fast; paying that cost on every chat spawn was fix
       // round 1's own Critical finding.
       const bypassSignal = core.bypassSignalFor(providerOf(account))
-      await core.capabilities.refresh(account)
+      await core.capabilities.refresh(account, opts.agentProfileId)
       const chatInfo = core.chat.spawn({
         account,
         cwd: opts.cwd,
@@ -2230,8 +2260,10 @@ export function registerIpc(
         rollPrompt: opts.rollPrompt,
         // Chat takeover: what a Host does with a prompt nobody is there to answer. Hold unless asked.
         unattendedPermission: isUnattendedPermission(opts.unattendedPermission) ? opts.unattendedPermission : 'hold',
-        bypassSignal
+        bypassSignal,
+        ...(opts.agentProfileId !== undefined ? { agentProfileId: opts.agentProfileId } : {})
       })
+      if (opts.agentProfileId !== undefined) touchAgentProfile(opts.agentProfileId)
       // A claude chat resume's transcript already exists, so it is found now rather than at `ready`:
       // the conversation view asks for it the moment the tab appears, and an empty answer there reads
       // "no record yet" until its next retry, two seconds on (measured 2026-10-07). A miss changes
@@ -2275,7 +2307,7 @@ export function registerIpc(
     // The folder and, on win32, Git Bash are looked for first, off this thread and within the probe
     // limit (core/sessions/pathProbe.ts): an offline drive refuses the spawn in about 1.5 s instead of
     // freezing every window for as long as the SMB redirector takes to give up.
-    await core.sessions.prepare({ account, cwd: opts.cwd })
+    await core.sessions.prepare({ account, cwd: opts.cwd, ...(opts.agentProfileId !== undefined ? { agentProfileId: opts.agentProfileId } : {}) })
     const info = core.sessions.spawn({
       ...opts,
       account,
@@ -2289,6 +2321,7 @@ export function registerIpc(
         ? { resumeSessionId: undefined, initialPrompt: blankSlatePrompt }
         : {})
     })
+    if (opts.agentProfileId !== undefined) touchAgentProfile(opts.agentProfileId)
     // 이어받은 세션이라고 Work Unit 수집기에 알린다 (스펙 §16.1). **추측할 자리가 아니다** — 이
     // 자리가 그것이 resume 이라는 것을 아는 유일한 곳이고, 수집기는 새 세션 id 만 보므로 알리지
     // 않으면 커서 없는 새 세션으로 보아 파일을 0 부터 읽는다. `--resume` 은 이전 대화를 통째로 다시
@@ -2975,6 +3008,15 @@ export function registerIpc(
       spawnSession: async (o) => {
         // 워커는 방금 만들어진 워크트리에서 뜬다 — 사람이 승인한 적 없는 폴더다(위 주석).
         await preTrustWorkspace(o.accountId, o.cwd)
+        // The profile is resolved here, before the bypass below is filled in: once filled, spawnSession would take it
+        // as the caller's own and the profile's permission would never be asked (Agent Profiles design §5).
+        const profile = await profileSpawn({
+          profileDir: app.getPath('userData'),
+          agentProfileId: o.agentProfileId,
+          bypassPermissions: o.bypassPermissions,
+          appWideYolo,
+          log: orchLog
+        })
         // satisfies pins this to the coordinator's opts shape: spawnSession above takes opts: any, so a
         // misspelled field (titel and friends) would fail compilation nowhere but at this hop — the
         // defence of making title required on the coordinator side would end here. Narrowing all of
@@ -2992,7 +3034,7 @@ export function registerIpc(
             // 가 이 칸을 채우지 않지만(그쪽은 앱 설정을 볼 수 없다), 언젠가 Task 하나만 다르게
             // 띄우기로 하면 그 값이 여기서 이겨야 한다. 근거는 startCoordinatorSession 의 주석에 있다.
             bypassPermissions:
-              o.bypassPermissions ?? core.appSettings.getAgentPermissionMode() === 'yolo',
+              profile?.bypassPermissions ?? o.bypassPermissions ?? core.appSettings.getAgentPermissionMode() === 'yolo',
             initialPrompt: o.initialPrompt,
             title: o.title, // the worker tab title is task.title
             // 이 워커의 롤링 체인 — 첫 원소가 이 Dispatch 의 계정이고 나머지는 갈아탈 순서다
@@ -3004,7 +3046,8 @@ export function registerIpc(
             // already exist on the app's spawnSession/core.sessions.spawn, this closure just has to
             // forward them instead of dropping them on the floor.
             resumeSessionId: o.resumeSessionId,
-            resumePrompt: o.resumePrompt
+            resumePrompt: o.resumePrompt,
+            ...(profile ? { agentProfileId: profile.agentProfileId } : {})
           } satisfies typeof o)
         })
         try {
@@ -3231,6 +3274,9 @@ export function registerIpc(
 
     const deps: OrchServerDeps = {
       getState: () => store.get(),
+      // The agent profiles (Agent Profiles design §6): this app answers its own UI's run-create and task-create, so it
+      // reads the store the Host writes, from the same profile folder its spawns resolve profiles from
+      readAgentProfiles: () => readAgentProfiles(app.getPath('userData')),
       // The completion check plugins are the Host's (plugin Phase 5 C7, C8): this copy's early refusals and the app's
       // own checks ask it, as the app.
       completionChecks: createAppCompletionChecks({ call: (m) => orchCall(m) }),
@@ -4064,7 +4110,9 @@ export function registerIpc(
     roll:
       core.rollConfig.get(sessionId) ??
       (await readRollConfigKey(hostRollConfigPath(app.getPath('userData')), sessionId)),
-    schedule: core.schedulerConfig.get(sessionId)
+    schedule: core.schedulerConfig.get(sessionId),
+    // The agent profile it ran as, while that profile is still there (null otherwise: it resumes without one)
+    agentProfileId: await core.profileConversations.profileOf(sessionId)
   }))
 
   // Turning a schedule off — the banner button
@@ -4707,6 +4755,16 @@ export function registerIpc(
   ipcMain.handle('extensions.setEnabled', (_e, id: unknown, enabled: unknown) => extensions.setEnabled(id as string, enabled === true))
   ipcMain.handle('extensions.remove', (_e, id: unknown) => extensions.remove(id as string))
   ipcMain.handle('extensions.replace', (_e, accountId: unknown, id: unknown) => extensions.replace(accountId as string, id as string))
+  // Settings › Agent profiles (Agent Profiles design §8): the Host checks every argument; this only passes them on
+  const agentProfiles = createAgentProfilesRoute({ call: (m) => orchCall(m) })
+  ipcMain.handle('agentProfiles.list', () => agentProfiles.list())
+  ipcMain.handle('agentProfiles.create', (_e, fields: unknown) => agentProfiles.create(fields as Parameters<typeof agentProfiles.create>[0]))
+  ipcMain.handle('agentProfiles.update', (_e, id: unknown, changes: unknown) =>
+    agentProfiles.update(id as string, changes as Parameters<typeof agentProfiles.update>[1])
+  )
+  ipcMain.handle('agentProfiles.archive', (_e, id: unknown) => agentProfiles.archive(id as string))
+  ipcMain.handle('agentProfiles.restore', (_e, id: unknown) => agentProfiles.restore(id as string))
+  ipcMain.handle('agentProfiles.remove', (_e, id: unknown) => agentProfiles.remove(id as string))
   ipcMain.handle('plugins.list', () => plugins.list())
   ipcMain.handle('plugins.inspect', (_e, source: unknown) => plugins.inspect(source as Parameters<typeof plugins.inspect>[0]))
   ipcMain.handle('plugins.install', (_e, a: unknown) => plugins.install(a as Parameters<typeof plugins.install>[0]))

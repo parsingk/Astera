@@ -42,6 +42,7 @@ import type {
   UnattendedPermission
 } from './chat/types'
 import type { ThemeId } from './theme/themes'
+import type { ProfilePermission } from './agentProfiles/types'
 import type { ConvTurn } from './history/convTypes'
 export type { ConvTurn } from './history/convTypes'
 // The Jobs sidebar shows a Task's status, so the orchestration domain's own enum comes in here. Only
@@ -129,6 +130,10 @@ export interface SessionInfo {
    *  the session ends (2026-10-20). Written into the pty's note at spawn, so it survives a Host handing the session back;
    *  absent on every session a person started and on every note written before it. */
   startedBy?: 'agent'
+  /** The agent profile the session was started from (Agent Profiles design §5): its MCP exclusions and permission.
+   *  Written into the pty's note at spawn like startedBy, so it survives a Host handing the session back; absent on a
+   *  session started without one and on every note written before profiles. */
+  agentProfileId?: string
 }
 
 /** The stored settings the resume modal reads to seed its checkboxes.
@@ -137,6 +142,8 @@ export interface SessionInfo {
 export interface ResumeDefaults {
   roll: RollConfig | null
   schedule: ScheduleConfig | null
+  /** The agent profile the conversation ran as, while it is still there; null when none was recorded or it is gone. */
+  agentProfileId: string | null
 }
 
 /** 워크트리 항목의 상태. **'missing' 은 없다** — 폴더가 사라졌다고 확인된 항목은 listWithStatus 가
@@ -490,6 +497,8 @@ export interface JobTask {
    *  스케줄러와 **같은 계정**을 고르려면 이 값이 필요하다 — 없으면 그 버튼이 기본 계정으로 띄워,
    *  같은 Task 가 누가 띄웠는지에 따라 다른 계정에서 돌게 된다. */
   accountIds?: string[]
+  /** The agent profile the Task runs as (Task.agentProfileId), its id; the screen shows its name from the profile list. */
+  agentProfileId?: string
   /** 가장 이른 열린 Gate. 없으면 이 칸이 없다.
    *
    *  **셋을 한 묶음으로 싣는다.** 한때 질문만 따로 실었는데, 화면에서 답하려면 `gate-resolve` 가
@@ -668,6 +677,8 @@ export interface JobRow {
    *  가질 수 있으므로 Run 줄에 실을 하나의 값이 아예 없다. 지금 도는 것의 provider 는 Task 줄이
    *  보여 준다(JobTask.provider — 열린 Dispatch 에서 온다). */
   concurrency?: number
+  /** The agent profile the Job runs as (Job.agentProfileId), its id; the screen shows its name from the profile list. */
+  agentProfileId?: string
   /** 저장된 값이 아니라 Task 에서 계산된다 — core/orchestration/view.ts 의 outcomeOf */
   outcome: RunOutcome
   done: number
@@ -1146,6 +1157,9 @@ export interface CoreApi {
       /** chat takeover P8: the new chat session's unattended-permission policy (hold, the default, or
        *  deny after 60 s). Ignored for a terminal session, which has no such policy. */
       unattendedPermission?: UnattendedPermission
+      /** The agent profile picked in the new-session dialog (Agent Profiles design §6). Sent without bypassPermissions,
+       *  which would otherwise win over the profile's permission. */
+      agentProfileId?: string
     }): Promise<SessionInfo>
     write(id: string, data: string): void
     resize(id: string, cols: number, rows: number): void
@@ -1941,6 +1955,29 @@ export interface ExtensionsApi {
   setIsolation(id: string, isolation: 'folder' | 'session'): Promise<PluginsCallAnswer>
 }
 
+/** What a person sets on an agent profile in Settings › Agent profiles. */
+export interface AgentProfileFields {
+  name: string
+  description?: string
+  /** Ordered: the first is used first, the rest are the roll order. */
+  accountIds: string[]
+  /** Shared MCP entry ids the profile does not get. */
+  mcpExclude?: string[]
+  permission?: ProfilePermission
+}
+
+/** Settings › Agent profiles and the profile pickers (Agent Profiles design §8): the Host's `agent-profiles-*` commands,
+ *  as the app. A refusal carries the Host's `reason` (name-empty, name-taken, mixed-provider, in-use, ...). */
+export interface AgentProfilesApi {
+  list(): Promise<PluginsCallAnswer>
+  create(fields: AgentProfileFields): Promise<PluginsCallAnswer>
+  update(id: string, changes: Partial<AgentProfileFields>): Promise<PluginsCallAnswer>
+  archive(id: string): Promise<PluginsCallAnswer>
+  restore(id: string): Promise<PluginsCallAnswer>
+  /** Refused with reason `in-use` while unfinished work or a live session holds the profile. */
+  remove(id: string): Promise<PluginsCallAnswer>
+}
+
 export interface RemoteApi {
   list(): Promise<RemoteRuntimeInfo[]>
   /** Pairs from the string `astera runtime pair` printed on the Runtime. The token is kept in main, never returned. */
@@ -2081,6 +2118,8 @@ export type RendererApi = CoreApi & {
   remote: RemoteApi
   plugins: PluginsApi
   extensions: ExtensionsApi
+  /** Settings › Agent profiles and the profile pickers: the Host's agent profiles, as the app. */
+  agentProfiles: AgentProfilesApi
   /** The Jobs view's "+ From a source" (plugin Phase 4c): the Host's job sources, as the app. */
   sources: SourcesApi
   remoteSessions: RemoteSessionsApi

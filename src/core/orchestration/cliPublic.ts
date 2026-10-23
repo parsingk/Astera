@@ -15,8 +15,10 @@ import type { ChatPending, ChatPrompt, ChatTurn } from '../sessions/chatRead'
 import type { SkillInstalled, SkillListed, SkillNotEnabled, SkillsAccount } from './skills'
 import type { RunCompletion, TaskCompletion } from './runCompletion'
 import type { CompletionCheckDetail, CompletionDetail } from './completion'
+import type { AgentProfile } from '../agentProfiles/types'
 import type {
   ACCOUNT_FIELDS,
+  AGENT_PROFILE_FIELDS,
   CHAT_PENDING_FIELDS,
   CHAT_PROMPT_FIELDS,
   CHAT_TURN_FIELDS,
@@ -105,6 +107,7 @@ type _run = NothingLeft<Unlisted<JobRun, typeof RUN_FIELDS, typeof RUN_HIDDEN>>
 type _task = NothingLeft<Unlisted<Task, typeof TASK_FIELDS, typeof TASK_HIDDEN>>
 type _question = NothingLeft<Unlisted<Gate, typeof QUESTION_FIELDS, []>>
 type _account = NothingLeft<Unlisted<OrchAccount, typeof ACCOUNT_FIELDS, []>>
+type _agentProfile = NothingLeft<Unlisted<AgentProfile, typeof AGENT_PROFILE_FIELDS, []>>
 type _runConfig = NothingLeft<Unlisted<OrchRunConfig, typeof RUN_CONFIG_FIELDS, []>>
 /** The pty and process ids are the Host's own: a controller reads them from the raw reply to subscribe, and a
  *  printed list leaves them out. */

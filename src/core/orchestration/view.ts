@@ -183,6 +183,7 @@ function jobTaskOf(
     title: task.title,
     status: task.status,
     ...(task.accountIds !== undefined ? { accountIds: task.accountIds } : {}),
+    ...(task.agentProfileId !== undefined ? { agentProfileId: task.agentProfileId } : {}),
     sessionId: latest && isKnownSession(latest.sessionId) ? latest.sessionId : undefined,
     // The oldest open Gate is the one the orchestrator has to answer first, so that is the one the
     // row shows and the one the answer form resolves. openGates carries the rest as a count rather
@@ -413,6 +414,8 @@ export function snapshotFor(
         ? { coordinatorMissing: true }
         : {}),
       concurrency: job.concurrency,
+      // The plan's, on every row of the Job, like `source`; the screen looks its name up (Agent Profiles design §8)
+      ...(job.agentProfileId !== undefined ? { agentProfileId: job.agentProfileId } : {}),
       outcome: outcomeOfTasks(ownedTasks),
       done,
       total,

@@ -18,6 +18,11 @@ describe('chatSpawnOptsOf', () => {
     expect(chatSpawnOptsOf({ account, cwd: 'D:/p', startedBy: 'agent' }, d).startedBy).toBe('agent')
     expect(chatSpawnOptsOf({ account, cwd: 'D:/p' }, d)).not.toHaveProperty('startedBy')
   })
+  it('carries the agent profile, and nothing without one', () => {
+    const d = { unattendedOf: () => 'hold' as const, bypassSignal: null }
+    expect(chatSpawnOptsOf({ account, cwd: 'D:/p', agentProfileId: 'ap_1' }, d).agentProfileId).toBe('ap_1')
+    expect(chatSpawnOptsOf({ account, cwd: 'D:/p' }, d)).not.toHaveProperty('agentProfileId')
+  })
   it('asks the policy of undefined when the respawn names no old session', () => {
     const seen: Array<string | undefined> = []
     chatSpawnOptsOf({ account, cwd: 'D:/p' }, { unattendedOf: (id) => { seen.push(id); return 'hold' }, bypassSignal: null })

@@ -297,16 +297,19 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
               : null
   if (refused !== null) return errorResult('INVALID_ARGUMENTS', refused)
   // create_task without an accountId runs on the Job's coordinator account, the default the
-  // coordinator's own planning brief uses. jobs-get takes a Job id or a Run id.
-  if (t.name === 'create_task' && input.accountId === undefined) {
+  // coordinator's own planning brief uses. jobs-get takes a Job id or a Run id. An agent profile, the Task's own or
+  // its Job's, gives the accounts instead, and the Host copies them (Agent Profiles design §6).
+  if (t.name === 'create_task' && input.accountId === undefined && input.agentProfileId === undefined) {
     const job = await link.call('jobs-get', { id: input.jobId ?? input.runId })
     if ('code' in job) return errorResult(job.code, job.message, 'jobs-get')
     if (job.status !== 200)
       return errorResult(codeForStatus(job.status), refusalMessage(job.status, job.body), 'jobs-get', job.body)
-    const account = (job.body as { coordinatorAccountId?: unknown }).coordinatorAccountId
-    if (typeof account !== 'string')
-      return errorResult('INVALID_ARGUMENTS', 'accountId is required: this Job has no coordinator account to default to')
-    args = { ...input, accountId: account }
+    const { coordinatorAccountId: account, agentProfileId: profile } = job.body as { coordinatorAccountId?: unknown; agentProfileId?: unknown }
+    if (typeof profile !== 'string') {
+      if (typeof account !== 'string')
+        return errorResult('INVALID_ARGUMENTS', 'accountId is required: this Job has no coordinator account to default to')
+      args = { ...input, accountId: account }
+    }
   }
   // create_job and list_jobs take a project id; the Host's jobs-create (`--cwd`) and jobs-list
   // (`--project`) take the project's folder. An unknown id is projects-get's own NOT_FOUND.
@@ -329,8 +332,9 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
     args = { ...input, projectPath: (project.body as { path: string }).path }
   }
   // create_session without an accountId runs on its provider's default account, the one
-  // accounts-list marks `default: true` (claude unless another provider is given).
-  if (t.name === 'create_session' && input.accountId === undefined) {
+  // accounts-list marks `default: true` (claude unless another provider is given). An agent profile picks the
+  // account itself, on the Host (Agent Profiles design §6).
+  if (t.name === 'create_session' && input.accountId === undefined && input.agentProfileId === undefined) {
     const provider = input.provider ?? 'claude'
     const accounts = await link.call('accounts-list', { agent: provider })
     if ('code' in accounts) return errorResult(accounts.code, accounts.message, 'accounts-list')

@@ -14,18 +14,27 @@ import { writeThroughTmp } from '../accounts/fileQueue'
 import { LAUNCH_FORBIDDEN } from '../sessions/commands'
 import { ownMcpNames } from './discover'
 import { readExtensionRegistry } from './registry'
+import { findProfile, readAgentProfiles } from '../agentProfiles/store'
+import type { ProfilePermission } from '../agentProfiles/types'
 import type { Account } from '../types'
 import type { McpExtension, SkipReason } from './types'
 
 export type PolicyMode = 'compatibility' | 'observe' | 'enforce'
 
-/** Who a session runs as, for the Control Plane: release 1 only knows the implicit form, derived from the account. */
-export interface ResolvedAgentContext {
-  kind: 'implicit'
-  accounts: string[]
-  policyMode: PolicyMode
-  executionMode: 'managed'
-}
+/** Who a session runs as, for the Control Plane: the implicit form is derived from the account alone; the explicit one
+ *  is the agent profile it was started from (Agent Profiles design §5), whose exclusions and permission it keeps. */
+export type ResolvedAgentContext =
+  | { kind: 'implicit'; accounts: string[]; policyMode: PolicyMode; executionMode: 'managed' }
+  | {
+      kind: 'explicit'
+      id: string
+      displayName: string
+      accounts: string[]
+      mcpExclude: string[]
+      permission: ProfilePermission
+      policyMode: PolicyMode
+      executionMode: 'managed'
+    }
 
 export type { SkipReason }
 
@@ -60,10 +69,13 @@ export async function resolveSessionCapabilities(a: {
   gatewayPort: number | null
   /** Works out what a session would get without writing the generated file: for Settings › Extensions' status. */
   dryRun?: boolean
+  /** The agent profile the session is started from. One that no longer resolves (deleted, store damaged) is logged and
+   *  the session starts as it would without one (Agent Profiles design §5). */
+  agentProfileId?: string
   log?: (line: string) => void
 }): Promise<SessionCapabilities> {
   const out: SessionCapabilities = {
-    context: { kind: 'implicit', accounts: [a.account.id], policyMode: a.policyMode ?? 'compatibility', executionMode: 'managed' },
+    context: await resolveAgentContext(a),
     args: [],
     env: {},
     given: [],
@@ -76,6 +88,12 @@ export async function resolveSessionCapabilities(a: {
   } catch (e) {
     a.log?.(`extensions: the registry could not be read, no shared server is passed (${e instanceof Error ? e.message : String(e)})`)
     return out
+  }
+  // A profile's exclusions go first, before any other filter, so an excluded server is in neither the arguments nor
+  // the Gateway grant: the Gateway refuses it for this session's token too
+  if (out.context.kind === 'explicit') {
+    const excluded = new Set(out.context.mcpExclude)
+    servers = servers.filter((s) => !excluded.has(s.id))
   }
   if (servers.length === 0) return out
   const provider = providerOf(a.account)
@@ -165,6 +183,41 @@ export async function resolveSessionCapabilities(a: {
     if (o?.disabledTools) out.args.push('-c', `${key}.disabled_tools=[${o.disabledTools.map(literal).join(',')}]`)
   }
   return out
+}
+
+/** The session's context: explicit when its profile id resolves (an archived profile still does, for work already
+ *  holding it), else implicit with one log line, as the session ran before profiles. Never rejects. */
+async function resolveAgentContext(a: {
+  profileDir: string
+  account: Account
+  policyMode?: PolicyMode
+  agentProfileId?: string
+  log?: (line: string) => void
+}): Promise<ResolvedAgentContext> {
+  const policyMode = a.policyMode ?? 'compatibility'
+  const implicit: ResolvedAgentContext = { kind: 'implicit', accounts: [a.account.id], policyMode, executionMode: 'managed' }
+  if (a.agentProfileId === undefined) return implicit
+  // Built inside the try too: a hand-edited entry with no exclusion list falls back as a damaged store does, rather
+  // than rejecting the whole resolution and leaving the session no shared server
+  try {
+    const profile = findProfile(await readAgentProfiles(a.profileDir), a.agentProfileId)
+    if (profile)
+      return {
+        kind: 'explicit',
+        id: profile.id,
+        displayName: profile.name,
+        accounts: [a.account.id],
+        mcpExclude: [...profile.mcpExclude],
+        permission: profile.permission,
+        policyMode,
+        executionMode: 'managed'
+      }
+  } catch (e) {
+    a.log?.(`extensions: the agent profiles could not be read, so profile ${a.agentProfileId} is not applied (${e instanceof Error ? e.message : String(e)})`)
+    return implicit
+  }
+  a.log?.(`extensions: agent profile ${a.agentProfileId} was not found, so the session starts without one`)
+  return implicit
 }
 
 /** The variables one spawn adds for the Gateway (design §4.2): a token made for this spawn alone, and the servers it was

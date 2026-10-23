@@ -128,13 +128,18 @@ export interface RollingDeps {
     /** Who started the chain (SessionInfo.startedBy), kept by every roll: the respawned session is the same work, so an
      *  agent's stays an agent's and its tab still closes when it ends. */
     startedBy?: 'agent'
+    /** The agent profile the chain was started from (SessionInfo.agentProfileId), kept by every roll like startedBy:
+     *  the respawned session gets that profile's MCP servers on its new account (Agent Profiles design §7). */
+    agentProfileId?: string
     /** Extra keys for the new pty's note (S6 R6) — `rolledFrom` and the chain's snapshot on its new
      *  account. The manager merges them into `meta.restore` under its own keys. */
     restoreExtra?: RollRespawnExtra
   }): SessionInfo
   /** Everything a respawn needs that can wait or refuse, done while the old session still lives (S6 R5).
-   *  A rejection aborts the roll before the kill and reschedules it. Absent: nothing to prepare. */
-  prepareSpawn?(account: Account, cwd: string): Promise<void>
+   *  A rejection aborts the roll before the kill and reschedules it. Absent: nothing to prepare.
+   *  `agentProfileId` is the chain's own (the spawn's field above): the target account's capabilities are resolved
+   *  with that profile, so the synchronous respawn finds them ready. */
+  prepareSpawn?(account: Account, cwd: string, agentProfileId?: string): Promise<void>
   /** The model the person picked in this session, or null when they picked none.
    *
    *  A roll has to carry it because Claude's model is argv and nothing about it survives the process —
@@ -1684,7 +1689,7 @@ export class RollingCoordinator {
       // the kill below starts the await-free stretch (constraint 12).
       if (this.deps.prepareSpawn) {
         try {
-          await this.deps.prepareSpawn(target, chain.cwd)
+          await this.deps.prepareSpawn(target, chain.cwd, chain.liveInfo.agentProfileId)
         } catch (err) {
           const why = err instanceof Error ? err.message : String(err)
           this.deps.log(`roll aborted — the respawn would be refused: ${why} session=${chain.liveId}`)
@@ -1750,6 +1755,7 @@ export class RollingCoordinator {
         model: chosenModel,
         startWithBypass: wasBypassed,
         ...(chain.liveInfo.startedBy ? { startedBy: chain.liveInfo.startedBy } : {}),
+        ...(chain.liveInfo.agentProfileId ? { agentProfileId: chain.liveInfo.agentProfileId } : {}),
         // S6 R6: the new pty is born with what a takeover needs if this process dies before the
         // rekey commits: where it came from, and the chain on its new account awaiting its prompt.
         restoreExtra: {

@@ -32,7 +32,9 @@ export const MCP_READ_COMMANDS = [
   'runs-follow',
   // Phase 10: a Run's changed files and one file's diff by id, read from git and never written.
   'runs-changed-files',
-  'runs-diff'
+  'runs-diff',
+  // list_agent_profiles (Agent Profiles design §6): read only; the profiles change only from the app and the CLI.
+  'agent-profiles-list'
 ] as const
 
 export const MCP_CONTROL_COMMANDS = [

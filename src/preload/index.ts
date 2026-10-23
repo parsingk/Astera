@@ -378,6 +378,15 @@ const api = {
     replace: invoke('extensions.replace'),
     setIsolation: invoke('extensions.setIsolation')
   },
+  // Settings › Agent profiles and the profile pickers (Agent Profiles design §8): the Host's profiles, through main's route
+  agentProfiles: {
+    list: invoke('agentProfiles.list'),
+    create: invoke('agentProfiles.create'),
+    update: invoke('agentProfiles.update'),
+    archive: invoke('agentProfiles.archive'),
+    restore: invoke('agentProfiles.restore'),
+    remove: invoke('agentProfiles.remove')
+  },
   // The Jobs view's "+ From a source" (plugin Phase 4c): the Host's job sources, through main's sources route
   sources: {
     list: invoke('sources.list'),

@@ -23,6 +23,8 @@ import type { RecordStatus } from '../../../core/understanding/types'
 import { displayHostOf } from '../../../core/preview/url'
 import { browserSlotDraw } from './browserSlot'
 import { useI18n } from '../i18n/I18nProvider'
+import { useAgentProfilesNaming } from '../lib/agentProfiles'
+import { profileNameOf } from './agentProfilesText'
 import { TerminalView } from './TerminalView'
 import { ConversationPane } from './conversation/ConversationPane'
 import { RemoteTerminalView } from './RemoteTerminalView'
@@ -219,6 +221,8 @@ export function PaneGrid({
     }
   // Session id → session info, file tab id → file tab. Used when a group's tab ids are turned into tabs
   const sessionOf = new Map(sessions.map((s) => [s.id, s]))
+  // A session started from an agent profile names it in its tab's tooltip (Agent Profiles design §8)
+  const profiles = useAgentProfilesNaming(sessions.flatMap((s) => (s.agentProfileId !== undefined ? [s.agentProfileId] : [])))
   const remoteOf = new Map(remoteSessions.map((r) => [r.key, r]))
   const fileTabOf = new Map(fileTabs.map((f) => [f.id, f]))
   // Record tab id → that tab's record. Same shape as fileTabOf
@@ -598,6 +602,7 @@ export function PaneGrid({
                   color: REMOTE_TAB_COLOR,
                   busy: remoteStatus[r.key] === 'working',
                   exited: !r.alive,
+                  profileTooltip: null,
                   rollTooltip: null,
                   remote: true
                 }
@@ -610,6 +615,7 @@ export function PaneGrid({
                 color: colorOf(s.accountId),
                 busy: busy[s.id] === true,
                 exited: s.status === 'exited',
+                profileTooltip: s.agentProfileId !== undefined ? t('agentProfiles.shown', { name: profileNameOf(profiles, s.agentProfileId) }) : null,
                 rollTooltip:
                   s.rollAccountIds && s.rollAccountIds.length > 0
                     ? t('session.tab.rollTooltip', {

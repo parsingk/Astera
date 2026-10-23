@@ -399,6 +399,17 @@ describe('ChatSessionManager.spawn', () => {
     expect(spawned[1].opts.meta!.restore).not.toHaveProperty('startedBy')
   })
 
+  // Agent Profiles design §5: a chat session started from a profile is that profile's, as a terminal one is
+  it('writes the agent profile into the info and the note, and nothing without one', () => {
+    const { spawned, manager } = setup('win32')
+    const profiled = manager.spawn({ account: codexAccount, cwd: 'D:/p', agentProfileId: 'ap_1' })
+    expect(profiled.agentProfileId).toBe('ap_1')
+    expect(spawned[0].opts.meta!.restore).toMatchObject({ agentProfileId: 'ap_1' })
+    const plain = manager.spawn({ account: codexAccount, cwd: 'D:/p' })
+    expect(plain).not.toHaveProperty('agentProfileId')
+    expect(spawned[1].opts.meta!.restore).not.toHaveProperty('agentProfileId')
+  })
+
   it('spawn without the feature fields writes none of them to info or the note', () => {
     const { spawned, manager } = setup('win32')
     const info = manager.spawn({ account: codexAccount, cwd: 'D:/p' })
@@ -1247,6 +1258,16 @@ describe('ChatSessionManager — what a takeover reads (chat takeover Task 2)', 
     expect(factory.mock.calls[1][2].env.ASTERA_GATEWAY_TOKEN).toBeUndefined()
     expect(factory.mock.calls[1][1]).not.toContain('--mcp-config')
     expect(factory.mock.calls[1][2].env.LINEAR_API_KEY).toBeUndefined()
+  })
+
+  it('reads the capabilities resolved for the session’s agent profile', () => {
+    const seen: Array<string | undefined> = []
+    const factory = vi.fn((_f: string, _a: string[], _o: ProcSpawnOptions) => new FakeProc())
+    const deps = { factory, descriptors: makeDescriptors('linux'), homeDir: '/home/t', platform: 'linux' as const, version: '1', log: () => {}, createAdapter: makeAdapterFactory().createAdapter }
+    const manager = new ChatSessionManager({ ...deps, capabilities: { get: (_a, id) => { seen.push(id); return null }, refresh: async () => {} } })
+    manager.spawn({ account: claudeAccount, cwd: '/p', agentProfileId: 'ap_1' })
+    manager.spawn({ account: claudeAccount, cwd: '/p' })
+    expect(seen).toEqual(['ap_1', undefined])
   })
 })
 

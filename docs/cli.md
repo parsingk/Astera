@@ -394,7 +394,9 @@ the first (a history that cannot fast-forward is refused with git's reason, and 
 `retry` runs the round again from the first check, `rerun` reruns the failed jobs of the CI run on GitHub and
 waits for its new attempt (offered for a failure outside the code a rerun can cure, once Astera's own reruns are
 spent or turned off, or GitHub refused one), `pr-<n>` binds pull request n, and `mark-failed` fails the task. Any
-answer it does not list is a 2.
+answer it does not list is a 2. `continue` and `retry` start the round afresh with its failures reset, so from inside an
+agent session they are refused with 5 when its repairs would run as a bypass agent profile, unless **Run agents without
+permission checks** is on; the coordinator Astera started for the run is not asked.
 
 **A worker lost while Astera is closed opens a question.** When a worker ends without reporting while
 Astera is closed, in a run with no coordinator session, the Host opens a question on its task, and
@@ -710,7 +712,7 @@ astera jobs    list   [--status <pending|paused|scheduled|waiting|running|comple
 astera jobs    get    --id <jobId | runId>
 astera jobs    run    --id <jobId>
 astera jobs    wait   --id <jobId>  [--timeout-ms <n>]
-astera jobs    create --objective <text> [--cwd <path>] [--concurrency <n>] [--coordinator-account <accountId>] [--coordinator-provider <claude|codex>] [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>] [--max-total-minutes <n>]] [--github-lifecycle [--github-checks <name,...>]]
+astera jobs    create --objective <text> [--cwd <path>] [--concurrency <n>] [--coordinator-account <accountId>] [--coordinator-provider <claude|codex>] [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>] [--max-total-minutes <n>]] [--github-lifecycle [--github-checks <name,...>]] [--agent-profile <id|name>]
 astera jobs    create-from-source --source <sourceId> --item <itemId> --project <projectId> [--concurrency <n>] [--coordinator-account <accountId>] [--coordinator-provider <claude|codex>] [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>] [--max-total-minutes <n>]] [--github-lifecycle [--github-checks <name,...>]]
 
 astera runs    list   [--job <jobId>] [--project <path>]
@@ -723,7 +725,7 @@ astera runs    checks --id <runId>
 astera runs    reconverge --id <runId>
 
 astera tasks   list   [--run <runId>] [--status <s>] [--ready] [--brief]
-astera tasks   add    [--job <jobId> | --run <runId>] --spec <text|-> --account <id,…> [--title <text>] [--deps <json array>] [--parent <taskId>] [--validate <configId,…>] [--review]
+astera tasks   add    [--job <jobId> | --run <runId>] --spec <text|-> [--account <id,…>] [--agent-profile <id|name>] [--title <text>] [--deps <json array>] [--parent <taskId>] [--validate <configId,…>] [--review]
 astera tasks   dispatch --id <taskId>
 
 astera accounts list  [--agent <claude|codex>]
@@ -739,13 +741,21 @@ astera higgsfield use --account <id|label|email>
 astera ext     list
 astera ext     sync
 
+astera agent-profiles list
+astera agent-profiles show    --id <profileId|name>
+astera agent-profiles create  --name <text> --account <id,…> [--exclude-mcp <name,…>] [--permission <inherit|bypass|ask>] [--description <text>]
+astera agent-profiles update  --id <profileId|name> [--name <text>] [--account <id,…>] [--exclude-mcp <name,…>] [--permission <inherit|bypass|ask>] [--description <text>]
+astera agent-profiles archive --id <profileId|name>
+astera agent-profiles restore --id <profileId|name>
+astera agent-profiles delete  --id <profileId|name>
+
 astera mcp     serve                     serve Astera to an MCP client over stdio
 astera mcp     status                    would mcp serve work here: the Host, MCP access, the tools
 
 astera sessions list  [--status <alive|ended|working|waiting|unknown>] [--provider <claude|codex>] [--project <path>]
 astera sessions read   --id <sessionId> [--lines <n>] [--turns <n>]
 astera sessions send   --id <sessionId> --text <text|-> [--no-enter] [--wait [--timeout-ms <n>]]
-astera sessions create --account <accountId> --cwd <path> [--kind <terminal|chat>] [--title <text>] [--prompt <text|->] [--roll-accounts <id,…>] [--unattended <hold|deny-after-60s>]
+astera sessions create [--account <accountId>] [--agent-profile <id|name>] --cwd <path> [--kind <terminal|chat>] [--title <text>] [--prompt <text|->] [--roll-accounts <id,…>] [--unattended <hold|deny-after-60s>]
 
 astera chats pending   [--session <sessionId>]
 astera chats answer    --id <promptId> [--allow | --deny] [--session <sessionId>]
@@ -977,7 +987,8 @@ What would open a question in the app, such as no usable account or a worktree t
 a 6 carrying the reason instead, and no question is opened: you asked, so you get the answer. When the
 task first needs the worktrees it depends on merged, the Host makes the merge task and says so with a 6;
 the merge task runs first and the task after it. A start that fails is handed back as `worker-start`
-answered it. A worker session is refused with 5, as it is for `worker-start`. The Host places the
+answered it. A worker session is refused with 5, as it is for `worker-start`, and so is any other agent session
+for a task that names a bypass agent profile while **Run agents without permission checks** is off. The Host places the
 task only when its loop is not in the middle of a pass, and judges the run again once it may, so a run
 paused or handed to a coordinator meanwhile gets no worker. That wait can outlast the command's own
 deadline: a 7 then leaves the placement going on the Host, and the task may still get its worker.
@@ -1067,12 +1078,57 @@ account has its own different copy, which is left alone until you replace it in 
 the items in `error.details`. Running it twice changes nothing the second time. A damaged registry or
 `accounts.json` is a 6, and the message names the file.
 
+**`agent-profiles` keeps the agent profiles**: each a name for a set of accounts (one provider's, in the order
+they are tried), the shared MCP servers its sessions leave out and a permission choice: `inherit` (Astera's
+setting), `bypass` (run without permission checks) or `ask` (run with permission checks). Skills and commands are
+shared by every profile. The Host
+answers these commands, so they work with Astera closed. `show`, `update`, `archive`, `restore` and `delete` take
+the profile's id or its name in `--id`. `--exclude-mcp` takes the names `ext list` shows; a name no shared MCP server
+has is refused with 2, naming it, and nothing is changed. `update` changes only the flags given, and its
+`--account` and `--exclude-mcp` replace the lists (`--exclude-mcp ""` leaves no server out). An archived profile
+starts no new work, while the work that holds it goes on; `restore` takes it back. `delete` is refused with 6 while
+unfinished work holds the profile. Changing profiles is for a person: from inside an agent session the changes are
+refused with 5, and the reads are not. A profile the Host refuses says why in `error.details.reason`: `name-empty`,
+`name-too-long`, `name-taken`, `no-account`, `unknown-account` or `mixed-provider` with 2, and `in-use` with 6.
+
+`jobs create`, `tasks add` and `sessions create` take `--agent-profile <id|name>`. A Job's tasks run as its profile
+unless a task names its own, and the profile never picks the coordinator. A task with a profile and no `--account`
+runs on the profile's accounts, copied when it is added. A session with a profile and no `--account` starts on the
+profile's first account and rolls onto the others. With both, the account given is used, and the profile still
+decides the MCP servers and the permission prompts. A profile named with `--agent-profile` must not be archived
+(2); a task that only inherits its Job's archived profile still gets that profile's accounts. **A `bypass` profile is
+for agents only while Astera skips the checks itself**: from inside an agent session, naming one, or adding a task to
+a Job that holds one, is refused with 5 and makes nothing unless **Run agents without permission checks** is on in
+Astera's settings. A person at their own shell is not asked. Nor is the coordinator Astera started for a run about the
+profile its Job holds: the person chose that profile, so the tasks it adds to the run it carries out inherit it. A
+bypass profile the coordinator names itself with `--agent-profile` is asked about like any other, and so is a session
+that drives the run from outside (one that made itself its driver with `check --run`). Running a Job that holds a
+bypass profile starts work as it too, so from inside an agent session `jobs run`, `runs resume` and `runs reconverge`
+of such a Job's runs are refused with 5 and change nothing under the same setting. So are they when the work would run
+as a bypass profile a task names in a Job with none: a task the new run copies, a task of the run not finished yet,
+or for `runs reconverge` any task of the run, since its repair borrows one's profile. Starting one task's worker is
+asked the same about that task's profile: `tasks dispatch`, and `worker-start` unless the caller is the coordinator
+Astera started for that run; the Host's and Astera's own placing is not asked. So is `task-update --status ready` or
+`pending` of such a task, which puts it back where the loop places it, again except from that coordinator while its run
+is running, and so is `questions answer` with an answer that starts the task again: on a question whose repair budget
+is used up any answer but `mark-failed` (`retry-once` opens a new attempt, and any other text puts the task back where
+the loop places it), and on a GitHub question `continue` or `retry`, which start its round afresh. Any other answer
+only lets the task go on and is not asked. A profile deleted since runs as before, and a profile file that cannot be
+read refuses with 6 and `error.details.repair`. These refusals
+say why in `error.details.reason` too: `agent-profile-unavailable` (unknown or archived) and
+`agent-profile-no-account` with 2, `agent-profile-bypass-refused` with 5.
+
+```json
+{"ok":true,"data":{"profiles":[{"id":"ap_3f2a9c01b7de","name":"Reviewer","status":"active",
+  "accountIds":["acc_1","acc_2"],"mcpExclude":["mcp-github"],"permission":"ask", …}]}}
+```
+
 **`mcp serve` is for an MCP client to launch, not for a person to type**: its stdout carries the MCP
 protocol. It connects to the Host of this profile, starting one when none answers, and serves
-forty-one tools that create, plan, run, observe, answer, stop and resume Jobs, read and use
+forty-two tools that create, plan, run, observe, answer, stop and resume Jobs, read and use
 sessions when Settings allows it, read pull requests, CI and issues on GitHub and, when Settings
 allows it, act on them, read the job sources and make a Job from an item, read the How It Works records of a project
-and regenerate one, and list the Runtimes this machine is paired with. What it may do is set by MCP access in
+and regenerate one, list the agent profiles, and list the Runtimes this machine is paired with. What it may do is set by MCP access in
 Settings (CLI tab). The six Job tools that change something (`create_job`, `create_task`, `run_job`, `stop_run`,
 `resume_run`, `answer_question`) take an optional `requestId`, and so do `send_message`, `create_session`, the four
 GitHub writes (`create_pr`, `retry_ci`, `create_job_from_issue`, `reconverge_run`), `create_job_from_source` and

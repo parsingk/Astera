@@ -44,6 +44,7 @@ import { JournalBusy, JournalOlder } from './RunDetailJournal'
 import { ArrowUpRight, Play, Square, WrenchOff, X } from 'lucide-react'
 import { backdropProps } from '../lib/backdrop'
 import { SourceChip } from './SourceChip'
+import { AgentProfileChip } from './AgentProfileField'
 import { jobName } from '../lib/jobName'
 
 /** 종류 배지의 문구. message 는 messageType 이 정한다.
@@ -778,6 +779,7 @@ export function RunDetail({
         <div className="detail-head">
           <h2 title={run?.objective}>{run ? jobName(run) : ''}</h2>
           <SourceChip source={run?.source} />
+          {run?.agentProfileId !== undefined && <AgentProfileChip id={run.agentProfileId} />}
           {running > 0 && (
             <span className="jobs-count">
               <RunIcon kind="running" label={t('jobs.run.running')} />
@@ -913,6 +915,7 @@ export function RunDetail({
                 tasks={tasks}
                 accounts={accounts}
                 runConfigs={runConfigs === null ? null : checkChoicesOf(runConfigs, checkPlugins, t)}
+                {...(run?.agentProfileId !== undefined ? { jobAgentProfileId: run.agentProfileId } : {})}
                 onClose={() => setAuthoring(false)}
                 onCreated={() => setAuthoring(false)}
               />

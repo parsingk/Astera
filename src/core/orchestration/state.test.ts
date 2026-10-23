@@ -4459,3 +4459,65 @@ describe('GitHub lifecycle G3a: every transition to completed adds the lifecycle
     expect(derivePublicEvents(a.s, s).map((e) => e.type)).not.toContain('run.completed')
   })
 })
+
+// Agent Profiles design §6: a Job's and a Task's profile, copied into each Run, carried by the worker's Dispatch
+describe('agent profiles', () => {
+  it('a Job and a Task keep the profile they are made with, and nothing without one', () => {
+    const job = unwrap<{ id: string; agentProfileId?: string }>(createJob(emptyState(), { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_1' }, NOW) as never)
+    expect(job.value.agentProfileId).toBe('ap_1')
+    const plain = unwrap<object>(createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never)
+    expect(plain.value).not.toHaveProperty('agentProfileId')
+    const t = unwrap<object>(createTask(job.state, { jobId: job.value.id, title: 't', spec: 's', deps: [], accountIds: ['acc1'], agentProfileId: 'ap_1' }, NOW) as never)
+    expect(t.value).toMatchObject({ accountIds: ['acc1'], agentProfileId: 'ap_1' })
+    const bare = unwrap<object>(createTask(t.state, { jobId: job.value.id, title: 't', spec: 's', deps: [] }, NOW) as never)
+    expect(bare.value).not.toHaveProperty('agentProfileId')
+  })
+
+  it("a scheduled Job's definition Tasks copy their profile into each Run", () => {
+    const job = unwrap<{ id: string }>(createJob(emptyState(), { objective: 'o', cwd: 'D:/p', schedule: { kind: 'daily', time: '09:00' } }, NOW) as never)
+    let s = unwrap<object>(createTask(job.state, { jobId: job.value.id, title: 'a', spec: 's', deps: [], accountIds: ['acc1'], agentProfileId: 'ap_1' }, NOW) as never).state
+    s = unwrap<object>(createTask(s, { jobId: job.value.id, title: 'b', spec: 's', deps: [], accountIds: ['acc1'] }, NOW) as never).state
+    for (const at of [LATER, EVEN_LATER]) {
+      const run = unwrap<{ id: string }>(startJobRun(s, job.value.id, at) as never)
+      s = run.state
+      const copies = s.tasks.filter((t) => t.runId === run.value.id)
+      expect(copies.find((t) => t.title === 'a')!.agentProfileId).toBe('ap_1')
+      expect(copies.find((t) => t.title === 'b')).not.toHaveProperty('agentProfileId')
+    }
+  })
+
+  it("a worker's Dispatch carries its Task's profile; a reviewer's does not", () => {
+    let { state: s, value: run } = seedRun({ objective: 'o', cwd: 'D:/p' }, NOW)
+    const t = unwrap<{ id: string }>(createTask(s, { runId: run.id, title: 't', spec: 's', deps: [], accountIds: ['acc1'], agentProfileId: 'ap_1', reviewRequested: true }, NOW) as never)
+    const d = unwrap<Dispatch>(openDispatch(t.state, { taskId: t.value.id, provider: 'codex', accountId: 'acc1', sessionId: 'sess1', cwd: 'D:/p', specPath: '' }, NOW) as never)
+    expect(d.value.agentProfileId).toBe('ap_1')
+    s = unwrap(applyWorkerDone(d.state, { taskId: t.value.id, dispatchId: d.value.id, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never).state
+    const r = unwrap<Dispatch>(openReviewDispatch(s, { taskId: t.value.id, provider: 'claude', accountId: 'acc2', sessionId: 'sess2', cwd: 'D:/p', specPath: '' }, NOW) as never)
+    expect(r.value).not.toHaveProperty('agentProfileId')
+    // And none without a profile
+    const { s: plain, dispatchId } = seed()
+    expect(plain.dispatches.find((x) => x.id === dispatchId)).not.toHaveProperty('agentProfileId')
+  })
+
+  it("a repair Dispatch carries the Task's profile", () => {
+    let { state: s, value: run } = seedRun({ objective: 'o', cwd: 'D:/p' }, NOW)
+    const t = unwrap<{ id: string }>(createTask(s, { runId: run.id, title: 't', spec: 's', deps: [], accountIds: ['acc1'], agentProfileId: 'ap_1', validateConfigIds: ['cfg1'] }, NOW) as never)
+    const d = unwrap<Dispatch>(openDispatch(t.state, { taskId: t.value.id, provider: 'codex', accountId: 'acc1', sessionId: 'sess1', cwd: 'D:/p', specPath: '' }, NOW) as never)
+    s = unwrap(applyWorkerDone(d.state, { taskId: t.value.id, dispatchId: d.value.id, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never).state
+    const r = unwrap<Dispatch>(openRepairDispatch(s, { taskId: t.value.id, reason: 'check-failure', target: { kind: 'fresh', cwd: 'D:/p', provider: 'codex', accountId: 'acc1' } }, NOW) as never)
+    expect(r.value.agentProfileId).toBe('ap_1')
+  })
+})
+
+// Task 6 fix round 1 (minor): a Dispatch that types into a session already running records no profile
+describe('agent profiles: a reused session', () => {
+  it('a same-session repair and a reusing openDispatch record none', () => {
+    let { state: s, value: run } = seedRun({ objective: 'o', cwd: 'D:/p' }, NOW)
+    const t = unwrap<{ id: string }>(createTask(s, { runId: run.id, title: 't', spec: 's', deps: [], accountIds: ['acc1'], agentProfileId: 'ap_1', validateConfigIds: ['cfg1'] }, NOW) as never)
+    const d = unwrap<Dispatch>(openDispatch(t.state, { taskId: t.value.id, provider: 'codex', accountId: 'acc1', sessionId: 'sess1', cwd: 'D:/p', specPath: '', reusesSession: true }, NOW) as never)
+    expect(d.value).not.toHaveProperty('agentProfileId')
+    s = unwrap(applyWorkerDone(d.state, { taskId: t.value.id, dispatchId: d.value.id, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never).state
+    const r = unwrap<Dispatch>(openRepairDispatch(s, { taskId: t.value.id, reason: 'check-failure', target: SAME }, NOW) as never)
+    expect(r.value).not.toHaveProperty('agentProfileId')
+  })
+})

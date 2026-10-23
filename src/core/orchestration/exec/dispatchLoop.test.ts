@@ -303,6 +303,19 @@ describe('createDispatchLoop', () => {
     expect(h.handled()).toEqual(['worker-start'])
   })
 
+  // Agent Profiles Review Focus 5: the Task's accounts were copied from its profile when it was made, so a profile
+  // deleted since does not stop it. The loop reads no profile; the spawn drops the unknown id with one log line and
+  // starts implicit (host/spawner.test.ts).
+  it('places a Task whose agent profile was deleted after it was made, on its copied accounts, carrying the id', async () => {
+    const h = rig()
+    h.setState({ ...h.state(), tasks: h.state().tasks.map((t) => (t.id === 'tsk_1' ? { ...t, accountIds: ['accA'], agentProfileId: 'ap_gone' } : t)) })
+    await h.loop.run()
+    await h.settle()
+    expect(h.startWorker).toHaveBeenCalledTimes(1)
+    expect(h.startWorker.mock.calls[0][0]).toMatchObject({ taskId: 'tsk_1', accountId: 'accA', agentProfileId: 'ap_gone' })
+    expect(h.state().dispatches[0]).toMatchObject({ taskId: 'tsk_1', agentProfileId: 'ap_gone' })
+  })
+
   it('asks mayStart before every slot: a driver that changes mid-activation starts no further slot (§4.3)', async () => {
     const h = rig({ concurrency: 2 })
     let allowed = 2 // the entry check, then the first slot (B4)

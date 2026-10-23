@@ -450,6 +450,8 @@ const NOT_FORWARDED = [
   'journalTimeline',
   'github',
   'readUnderstanding',
+  'readAgentProfiles',
+  'appWideYolo',
   'changes',
   'jobSources',
   'completionChecks'
@@ -588,6 +590,12 @@ const EFFECTFUL: Record<Classified, boolean> = {
   // NOT_FORWARDED as well (MCP P2-C): a read of this Host's profile's understanding.json, never the
   // app's. It never writes the file and leaves nothing outside the call.
   readUnderstanding: false,
+  // NOT_FORWARDED as well (Agent Profiles design §6): a read of this Host's agent-profiles.json, which only this Host
+  // writes, never the app's. It leaves nothing outside the call.
+  readAgentProfiles: false,
+  // NOT_FORWARDED as well (Agent Profiles final review): a read of this Host's app-settings.json, the file its spawns
+  // read the bypass from, never the app's. It leaves nothing outside the call.
+  appWideYolo: false,
   // NOT_FORWARDED as well (remote runtime design Phase 10): git reads on this Host's machine, never the app's. It
   // runs `git diff` and leaves nothing outside the call.
   changes: false,
@@ -712,6 +720,12 @@ export function hostOrchDeps(a: {
   /** How It Works records (MCP P2-C): this Host's profile's understanding.json, read per call. Absent:
    *  the `understanding-*` commands answer 409, as a caller that is not the Host. */
   readUnderstanding?: OrchServerDeps['readUnderstanding']
+  /** The agent profile store (Agent Profiles design §6): this Host's agent-profiles.json, read per call; the app's own
+   *  deps read the same file. Absent: a Job or Task named with a profile answers 409. */
+  readAgentProfiles?: OrchServerDeps['readAgentProfiles']
+  /** Whether this Host's app-settings.json skips permission checks, read per call when an agent starts work as a profile
+   *  that runs without them. Absent: such a caller is refused. */
+  appWideYolo?: OrchServerDeps['appWideYolo']
   /** A Run's changed files and diffs from this Host's git (Phase 10). Absent: the two commands answer 409. */
   changes?: OrchServerDeps['changes']
   /** This Host's job-source plugins (plugin Phase 4 J10). Absent: the sources are GitHub's alone. */
@@ -1292,6 +1306,8 @@ export function hostOrchDeps(a: {
     ...(a.journalTimeline ? { journalTimeline: a.journalTimeline } : {}),
     ...(github ? { github } : {}),
     ...(a.readUnderstanding ? { readUnderstanding: a.readUnderstanding } : {}),
+    ...(a.readAgentProfiles ? { readAgentProfiles: a.readAgentProfiles } : {}),
+    ...(a.appWideYolo ? { appWideYolo: a.appWideYolo } : {}),
     ...(a.changes ? { changes: a.changes } : {}),
     ...(a.jobSources ? { jobSources: a.jobSources } : {}),
     ...(a.completionChecks ? { completionChecks: a.completionChecks } : {}),

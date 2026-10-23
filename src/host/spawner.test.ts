@@ -11,6 +11,8 @@ import { HOST_ONLY_ENV } from '../core/host/spawn'
 import { createJob, createTask, emptyState, openDispatch, startJobRun, type OrchState } from '../core/orchestration/state'
 import { SessionManager } from '../core/sessions/manager'
 import { writeExtensionRegistry } from '../core/extensions/registry'
+import { writeAgentProfiles } from '../core/agentProfiles/store'
+import type { AgentProfile } from '../core/agentProfiles/types'
 import { StatusLineManager } from '../core/sessions/statusline'
 import { makeDescriptors } from '../core/providers/descriptor'
 import { previewShotsDir } from '../core/preview/shotsDir'
@@ -41,6 +43,7 @@ const rig = (over: {
   appKeepsWorktrees?: HostSpawnerDeps['appKeepsWorktrees']
   worktrees?: HostSpawnerDeps['worktrees']
   onPromptWrite?: HostSpawnerDeps['onPromptWrite']
+  touchAgentProfile?: HostSpawnerDeps['touchAgentProfile']
 } & LocateHooks = {}) => {
   const spawned: Spawned[] = []
   const logs: string[] = []
@@ -62,6 +65,7 @@ const rig = (over: {
     findRollout: over.findRollout, locatePollMs: over.locatePollMs, locateForMs: over.locateForMs, readAccounts: over.readAccounts,
     appKeepsWorktrees: over.appKeepsWorktrees ?? (() => false),
     onPromptWrite: over.onPromptWrite,
+    touchAgentProfile: over.touchAgentProfile,
     worktrees: over.worktrees ?? { fork: () => Promise.reject(new Error('not in this test')), makeRunWorktree: vi.fn(), mergeWorktrees: vi.fn(), removeWorktrees: vi.fn() } })
   return { spawner, registry, spawned, logs, sent }
 }
@@ -734,6 +738,51 @@ describe('the roll spawn (S6 R5, R6)', () => {
     const cmd = Array.isArray(last.args) ? last.args.join(' ') : last.args
     expect(cmd).toContain('--mcp-config')
   })
+  // Agent Profiles design §7: a roll keeps the session's profile, so the account it rolls onto gets that profile's
+  // servers (its prepare resolves them with the profile) and the new session's info and note keep the id
+  it('a roll respawn of a session started from an agent profile keeps the profile, its exclusions and its id', async () => {
+    const h = await spawnerRig()
+    const account = h.accounts[0]
+    const mcp = (id: string, name: string) => ({ id, kind: 'mcp' as const, name, transport: 'http' as const, url: `https://mcp.example.com/${name}`,
+      env: {}, providers: ['claude' as const, 'codex' as const], importedFrom: 'acc0', enabled: true })
+    await writeExtensionRegistry(h.profileDir, { version: 1, entries: [mcp('mcp-docs', 'docs'), mcp('mcp-linear', 'linear')] })
+    await writeAgentProfiles(h.profileDir, { version: 1, profiles: [{ id: 'ap_x', name: 'X', status: 'active', accountIds: [account.id],
+      mcpExclude: ['mcp-linear'], permission: 'inherit', createdAt: NOW, updatedAt: NOW }] })
+    await h.spawner.prepareRollSpawn(account, h.cwd, 'ap_x')
+    const info = h.spawner.rollSpawn({ account, cwd: h.cwd, rollAccountIds: [account.id], agentProfileId: 'ap_x', restoreExtra: { rolledBy: 'host', rolledFrom: 's0' } })
+    expect(info.agentProfileId).toBe('ap_x')
+    expect(h.registry.metaOf(h.registry.sessionPty(info.id)!)?.restore).toMatchObject({ agentProfileId: 'ap_x' })
+    const config = JSON.stringify(h.spawned[h.spawned.length - 1])
+    expect(config).toContain('--mcp-config')
+    const file = /--mcp-config","([^"]+)"/.exec(config)?.[1]
+    expect(file).toBeDefined()
+    const written = await fs.readFile(JSON.parse(`"${file}"`) as string, 'utf8')
+    expect(written).toContain('docs')
+    expect(written).not.toContain('linear')
+    // Without a profile: every shared server, and no id
+    await h.spawner.prepareRollSpawn(account, h.cwd)
+    const plain = h.spawner.rollSpawn({ account, cwd: h.cwd, rollAccountIds: [account.id] })
+    expect(plain).not.toHaveProperty('agentProfileId')
+  })
+  // Task 4's deferred minor, folded into the final fix wave: a caller's own bypassPermissions wins over the profile's
+  // permission at the spawner too. A roll is the Host's caller that passes both: the bypass its session started with
+  it("a roll's explicit bypassPermissions wins over its profile's permission, both ways", async () => {
+    const h = await spawnerRig()
+    const account = h.accounts[0]
+    await fs.writeFile(path.join(h.profileDir, 'app-settings.json'), JSON.stringify({ agentPermissionMode: 'manual' }))
+    const P = (id: string, permission: AgentProfile['permission']): AgentProfile => ({
+      id, name: id, status: 'active', accountIds: [account.id], mcpExclude: [], permission, createdAt: NOW, updatedAt: NOW
+    })
+    await writeAgentProfiles(h.profileDir, { version: 1, profiles: [P('ap_ask', 'ask'), P('ap_bypass', 'bypass')] })
+    const SKIP = /--dangerously-skip-permissions/
+    const last = (): string => JSON.stringify(h.spawned[h.spawned.length - 1].args)
+    await h.spawner.prepareRollSpawn(account, h.cwd, 'ap_ask')
+    h.spawner.rollSpawn({ account, cwd: h.cwd, rollAccountIds: [account.id], agentProfileId: 'ap_ask', bypassPermissions: true })
+    expect(last()).toMatch(SKIP)
+    await h.spawner.prepareRollSpawn(account, h.cwd, 'ap_bypass')
+    h.spawner.rollSpawn({ account, cwd: h.cwd, rollAccountIds: [account.id], agentProfileId: 'ap_bypass', bypassPermissions: false })
+    expect(last()).not.toMatch(SKIP)
+  })
   it('prepareRollSpawn refuses a retiring Host and a damaged settings file, before anything is spawned', async () => {
     const h = await spawnerRig()
     await fs.writeFile(path.join(h.profileDir, 'app-settings.json'), '{ damaged')
@@ -832,6 +881,89 @@ describe('createHostSpawner — createSession', () => {
     const h = rig()
     await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [] })
     expect(JSON.stringify(h.spawned[0].args)).not.toMatch(/--dangerously-skip-permissions/)
+  })
+
+  // Agent Profiles design §5 and AC 3: the profile's explicit choice overrides the app-wide mode, both ways
+  describe('with an agent profile', () => {
+    const P = (over: Partial<AgentProfile>): AgentProfile => ({
+      id: 'ap_000000000001', name: 'Reviewer', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'inherit',
+      createdAt: NOW, updatedAt: NOW, ...over
+    })
+    const SKIP = /--dangerously-skip-permissions/
+
+    it('a bypass profile starts unattended while the app-wide mode is manual, and its id rides the note', async () => {
+      await fs.writeFile(path.join(profile, 'app-settings.json'), JSON.stringify({ agentPermissionMode: 'manual' }))
+      await writeAgentProfiles(profile, { version: 1, profiles: [P({ id: 'ap_b', permission: 'bypass' })] })
+      const h = rig()
+      const info = await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_b' })
+      expect(JSON.stringify(h.spawned[0].args)).toMatch(SKIP)
+      expect(info.agentProfileId).toBe('ap_b')
+      expect(h.registry.list()[0].meta!.restore).toMatchObject({ bypassPermissions: true, agentProfileId: 'ap_b' })
+    })
+
+    it('an ask profile asks while the app-wide mode is yolo', async () => {
+      await writeAgentProfiles(profile, { version: 1, profiles: [P({ id: 'ap_a', permission: 'ask' })] })
+      const h = rig()
+      await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_a' })
+      expect(JSON.stringify(h.spawned[0].args)).not.toMatch(SKIP)
+      expect(h.registry.list()[0].meta!.restore).toMatchObject({ bypassPermissions: false })
+    })
+
+    it('an inherit profile, and no profile, read the app-wide mode as today', async () => {
+      await fs.writeFile(path.join(profile, 'app-settings.json'), JSON.stringify({ agentPermissionMode: 'manual' }))
+      await writeAgentProfiles(profile, { version: 1, profiles: [P({ id: 'ap_i', permission: 'inherit' })] })
+      const h = rig()
+      await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_i' })
+      await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [] })
+      expect(JSON.stringify(h.spawned[0].args)).not.toMatch(SKIP)
+      expect(JSON.stringify(h.spawned[1].args)).not.toMatch(SKIP)
+      expect(h.registry.list()[1].meta!.restore).not.toHaveProperty('agentProfileId')
+    })
+
+    // Ruling (b): the delete guard compares ids, so a session started by the profile's name keeps its id
+    it('keeps the profile\'s id when the caller named it, and nothing for one that does not resolve, logged once', async () => {
+      await fs.writeFile(path.join(profile, 'app-settings.json'), JSON.stringify({ agentPermissionMode: 'manual' }))
+      await writeAgentProfiles(profile, { version: 1, profiles: [P({ id: 'ap_b', name: 'Night shift', permission: 'bypass' })] })
+      const h = rig()
+      const named = await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], agentProfileId: 'night shift' })
+      expect(named.agentProfileId).toBe('ap_b')
+      expect(h.registry.list()[0].meta!.restore).toMatchObject({ agentProfileId: 'ap_b' })
+      const gone = await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_gone' })
+      expect(gone).not.toHaveProperty('agentProfileId')
+      expect(h.registry.list()[1].meta!.restore).not.toHaveProperty('agentProfileId')
+      // Falls back to the app-wide mode, as before profiles
+      expect(JSON.stringify(h.spawned[1].args)).not.toMatch(SKIP)
+      expect(h.logs.filter((l) => l.includes('ap_gone'))).toHaveLength(1)
+    })
+
+    // Agent Profiles design §6: a Job's worker runs as its Task's profile; a Task whose profile was deleted after it was
+    // made still starts, implicit, with one log line (Review Focus 5)
+    it('starts a worker as its Task\'s profile, and one whose profile is gone without it, logged once', async () => {
+      await fs.writeFile(path.join(profile, 'app-settings.json'), JSON.stringify({ agentPermissionMode: 'manual' }))
+      await writeAgentProfiles(profile, { version: 1, profiles: [P({ id: 'ap_b', permission: 'bypass' })] })
+      const first = seeded()
+      const box = { state: first.s }
+      const h = rig({ state: () => box.state })
+      await h.spawner!.startWorker({ ...startArgs(first.taskId, first.dispatchId), agentProfileId: 'ap_b' })
+      expect(JSON.stringify(h.spawned[0].args)).toMatch(SKIP)
+      expect(h.registry.list()[0].meta!.restore).toMatchObject({ agentProfileId: 'ap_b' })
+      const again = seeded()
+      box.state = again.s
+      await expect(h.spawner!.startWorker({ ...startArgs(again.taskId, again.dispatchId), agentProfileId: 'ap_gone' })).resolves.toMatchObject({ sessionId: expect.any(String) })
+      expect(JSON.stringify(h.spawned[1].args)).not.toMatch(SKIP)
+      expect(h.registry.list()[1].meta!.restore).not.toHaveProperty('agentProfileId')
+      expect(h.logs.filter((l) => l.includes('ap_gone'))).toHaveLength(1)
+    })
+
+    it('stamps the profile\'s use after the spawn, and a stamp that throws costs nothing', async () => {
+      await writeAgentProfiles(profile, { version: 1, profiles: [P({ id: 'ap_b', permission: 'bypass' })] })
+      const touched: string[] = []
+      const h = rig({ touchAgentProfile: (id) => { touched.push(id); throw new Error('store locked') } })
+      await expect(h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_b' })).resolves.toMatchObject({ agentProfileId: 'ap_b' })
+      await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [] })
+      expect(touched).toEqual(['ap_b'])
+      expect(h.logs.some((l) => l.includes('store locked'))).toBe(true)
+    })
   })
 
   it('a folder that does not exist, or an unknown account, starts nothing and is tagged as such', async () => {

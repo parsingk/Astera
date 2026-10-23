@@ -34,7 +34,8 @@ export function sessionInfoFromNote(a: { kind: string; id: string; restore: Reco
     ...(str('rollPrompt') ? { rollPrompt: str('rollPrompt') } : {}),
     ...(typeof r.slackNotify === 'boolean' ? { slackNotify: r.slackNotify } : {}),
     ...(typeof r.bypassPermissions === 'boolean' ? { bypassPermissions: r.bypassPermissions } : {}),
-    ...startedByOf(r)
+    ...startedByOf(r),
+    ...(agentProfileIdOf(r) ? { agentProfileId: agentProfileIdOf(r) } : {})
   }
 }
 
@@ -72,11 +73,19 @@ export function chatInfoFromNote(a: { kind: string; id: string; restore: Record<
       ? { rollAccountIds: [...(r.rollAccountIds as string[])] }
       : {}),
     ...(typeof r.rollPrompt === 'string' ? { rollPrompt: r.rollPrompt } : {}),
-    ...startedByOf(r)
+    ...startedByOf(r),
+    ...(agentProfileIdOf(r) ? { agentProfileId: agentProfileIdOf(r) } : {})
   }
 }
 
 /** Who started the session, as its note says (SessionInfo.startedBy): only the one value means anything. */
 function startedByOf(r: Record<string, unknown>): Pick<SessionInfo, 'startedBy'> {
   return r.startedBy === 'agent' ? { startedBy: 'agent' } : {}
+}
+
+/** The agent profile the session was started from, as its note's restore says (SessionInfo.agentProfileId): only a
+ *  non-empty string means anything. Also how the Host tells whether a live session holds a profile. */
+export function agentProfileIdOf(restore: Record<string, unknown> | undefined): string | undefined {
+  const v = restore?.agentProfileId
+  return typeof v === 'string' && v !== '' ? v : undefined
 }

@@ -11,6 +11,8 @@ import { buildClaudeCommand, buildCodexCommand } from './commands'
 import { makeDescriptors } from '../providers/descriptor'
 import { absPath, foldsCaseHere } from '../testPaths'
 import type { RollSnapshot, RollSpawnExtra } from '../rolling/snapshot'
+import type { SessionCapabilities } from '../extensions/resolve'
+import { sessionInfoFromNote } from './noteInfo'
 
 class FakePty implements PtyLike {
   pid = 4242
@@ -969,6 +971,45 @@ describe('SessionManager', () => {
     const person = manager.spawn({ account, cwd: process.cwd() })
     expect(person).not.toHaveProperty('startedBy')
     expect(spawned[1].opts.meta?.restore).not.toHaveProperty('startedBy')
+  })
+
+  // Agent Profiles (design §5, ledger Ruling P2): the profile a session was started from rides its info and its note
+  // the way startedBy does, and its capabilities are the ones resolved for that account and profile
+  it('writes agentProfileId into the info and the note, reads it back from the note, and nothing without one', () => {
+    const { manager, spawned } = setup()
+    const withProfile = manager.spawn({ account, cwd: process.cwd(), agentProfileId: 'ap_000000000001' })
+    expect(withProfile.agentProfileId).toBe('ap_000000000001')
+    const note = spawned[0].opts.meta!
+    expect(note.restore).toMatchObject({ agentProfileId: 'ap_000000000001' })
+    expect(sessionInfoFromNote(note)?.agentProfileId).toBe('ap_000000000001')
+    const without = manager.spawn({ account, cwd: process.cwd() })
+    expect(without).not.toHaveProperty('agentProfileId')
+    expect(spawned[1].opts.meta?.restore).not.toHaveProperty('agentProfileId')
+    expect(sessionInfoFromNote(spawned[1].opts.meta!)).not.toHaveProperty('agentProfileId')
+  })
+
+  it('prepares and spawns with the capabilities of the session’s account and profile', async () => {
+    const caps = (given: string[]): SessionCapabilities => ({
+      context: { kind: 'implicit', accounts: [account.id], policyMode: 'compatibility', executionMode: 'managed' },
+      args: [], env: { GIVEN: given.join(',') }, given, gatewayGrant: [], skipped: []
+    })
+    const refreshed: [string, string | undefined][] = []
+    const spawned: PtySpawnOptions[] = []
+    const checks: SpawnChecks = {
+      cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform: 'linux', now: Date.now, syncExists: () => true, log: () => {}
+    }
+    const manager = new SessionManager((_f, _a, o) => (spawned.push(o), new FakePty()), makeDescriptors('linux'), 100, 20, '/home/t', undefined, [], {}, checks)
+    manager.capabilities = {
+      get: (a, p) => (p === 'ap_000000000001' ? caps(['docs']) : caps(['docs', 'linear'])),
+      refresh: async (a, p) => void refreshed.push([a.id, p])
+    }
+    await manager.prepare({ account, cwd: '/work', agentProfileId: 'ap_000000000001' })
+    manager.spawn({ account, cwd: '/work', agentProfileId: 'ap_000000000001' })
+    await manager.prepare({ account, cwd: '/work' })
+    manager.spawn({ account, cwd: '/work' })
+    expect(refreshed).toEqual([[account.id, 'ap_000000000001'], [account.id, undefined]])
+    expect(spawned[0].env.GIVEN).toBe('docs')
+    expect(spawned[1].env.GIVEN).toBe('docs,linear')
   })
 
   describe('adopt', () => {

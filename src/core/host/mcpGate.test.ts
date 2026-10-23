@@ -7,6 +7,12 @@ describe('mcpRefusal', () => {
     for (const cmd of ['plugins-inspect', 'plugins-install', 'plugins-list', 'plugins-get', 'plugins-enable', 'plugins-disable', 'plugins-remove'])
       for (const access of ['read', 'control'] as const) expect(mcpRefusal(cmd, access, true, true)?.status).toBe(403)
   })
+  // Agent Profiles design §6: list_agent_profiles reads them; profiles change only from the app and the CLI.
+  it('admits the agent profile list as a read and refuses every profile change at every access level', () => {
+    for (const access of ['read', 'control'] as const) expect(mcpRefusal('agent-profiles-list', access, false, false)).toBeNull()
+    for (const cmd of ['agent-profiles-create', 'agent-profiles-update', 'agent-profiles-archive', 'agent-profiles-restore', 'agent-profiles-delete', 'agent-profiles-touch'])
+      for (const access of ['read', 'control'] as const) expect(mcpRefusal(cmd, access, true, true)?.status, cmd).toBe(403)
+  })
   it('off refuses every command and names the setting', () => {
     const r = mcpRefusal('jobs-list', 'off', false, false)
     expect(r?.status).toBe(403)

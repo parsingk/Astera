@@ -548,6 +548,29 @@ describe('RollingCoordinator', () => {
     expect(p.spawnedOpts[0]).not.toHaveProperty('startedBy')
   })
 
+  // Agent Profiles design §7: a roll is the same work on another account, so the new session is started from the same
+  // profile: its MCP servers are resolved for the new account with that profile (prepareSpawn), and it carries the id
+  it('a roll keeps the session’s agent profile, for the respawn and its preparation', async () => {
+    const prepared: unknown[][] = []
+    const h = harness({ prepareSpawn: async (...a) => { prepared.push(a) } })
+    h.payloads.set('s1', payload(97))
+    h.coord.register({ ...h.info1, agentProfileId: 'ap_x' })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    await flush()
+    expect(prepared).toEqual([[expect.objectContaining({ id: 'a2' }), h.info1.cwd, 'ap_x']])
+    expect(h.spawnedOpts[0].agentProfileId).toBe('ap_x')
+    const pPrepared: unknown[][] = []
+    const p = harness({ prepareSpawn: async (...a) => { pPrepared.push(a) } })
+    p.payloads.set('s1', payload(97))
+    p.coord.register(p.info1)
+    p.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    await flush()
+    expect(pPrepared[0][2]).toBeUndefined()
+    expect(p.spawnedOpts[0]).not.toHaveProperty('agentProfileId')
+  })
+
   it('활성 체인의 claude 세션 ID로 live 세션을 찾는다 (resume 가드)', async () => {
     const h = harness()
     h.payloads.set('s1', payload(97))

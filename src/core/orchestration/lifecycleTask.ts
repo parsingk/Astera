@@ -78,6 +78,13 @@ export function latestOrdinaryWork(s: OrchState, runId: string): { task: Task; d
   return null
 }
 
+/** The agent profile a worker of this Task starts as (Agent Profiles design §6): the Task's own, and for a lifecycle
+ *  Task, which names no account, the one of the latest ordinary Task whose accounts its repair rolls through. */
+export function workerProfileOf(s: OrchState, task: Task): string | undefined {
+  if (task.agentProfileId !== undefined) return task.agentProfileId
+  return isLifecycleTask(task) && task.runId !== undefined ? latestOrdinaryWork(s, task.runId)?.task.agentProfileId : undefined
+}
+
 const BRIEF_TASKS = 20
 
 /** What a lifecycle Task's repair and review are asked to satisfy (G3c1 final review I1): the Run's objective and the

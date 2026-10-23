@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { PLUGIN_COMMAND_PERMISSIONS, pluginRefusal } from './pluginGate'
+import { PLUGIN_COMMAND_PERMISSIONS, SDK_COMMANDS_CLOSED_TO_PLUGINS, pluginRefusal } from './pluginGate'
 import { PLUGIN_PERMISSIONS } from '../plugins/manifest'
 
 const plugin = (granted: string[]) => ({ id: 'astera-hello', granted: new Set(granted) })
@@ -63,6 +63,11 @@ describe('pluginRefusal (plugin runtime design P12)', () => {
     const sent = new Set<string>()
     for (const f of ['namespaces.ts', 'events.ts', 'follow.ts'])
       for (const m of readFileSync(path.join(src, f), 'utf8').matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) sent.add(m[1])
-    expect([...sent].sort()).toEqual(Object.keys(PLUGIN_COMMAND_PERMISSIONS).sort())
+    expect([...sent].filter((c) => !SDK_COMMANDS_CLOSED_TO_PLUGINS.has(c)).sort()).toEqual(Object.keys(PLUGIN_COMMAND_PERMISSIONS).sort())
+    // The ones held back are commands the SDK really sends, and every permission still refuses them
+    for (const cmd of SDK_COMMANDS_CLOSED_TO_PLUGINS) {
+      expect(sent.has(cmd), cmd).toBe(true)
+      expect(pluginRefusal(cmd, { id: 'p', granted: new Set(Object.values(PLUGIN_COMMAND_PERMISSIONS)) })?.status, cmd).toBe(403)
+    }
   })
 })

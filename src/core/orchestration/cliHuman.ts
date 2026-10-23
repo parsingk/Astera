@@ -226,6 +226,14 @@ export function humanFor(cmd: string, data: Record<string, unknown>): string | n
       return columns(
         (Array.isArray(data.checks) ? (data.checks as Record<string, unknown>[]) : []).map((c) => [c.ok !== true ? 'FAIL' : c.warn === true ? 'warn' : 'ok', str(c.name), str(c.detail)])
       )
+    // Agent Profiles design §6: its state first, as plugins list puts it, then what a person picks it by
+    case 'agent-profiles-list':
+      return columns(
+        asList(data, 'profiles').map((p) => {
+          const accounts = Array.isArray(p.accountIds) ? (p.accountIds as unknown[]).map(str) : []
+          return [str(p.status).toUpperCase(), str(p.id), str(p.name), str(p.permission), accounts.length > 0 ? accounts.join(',') : '-']
+        })
+      )
     case 'plugins-list':
       return columns(
         asList(data, 'plugins').map((p) => {
@@ -445,6 +453,12 @@ export function humanFor(cmd: string, data: Record<string, unknown>): string | n
     case 'runs-wait':
     case 'projects-get':
     case 'plugins-get':
+    case 'agent-profiles-show':
+    case 'agent-profiles-create':
+    case 'agent-profiles-update':
+    case 'agent-profiles-archive':
+    case 'agent-profiles-restore':
+    case 'agent-profiles-delete':
     case 'plugins-install':
     case 'plugins-enable':
     case 'plugins-disable':

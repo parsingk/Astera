@@ -35,6 +35,7 @@ import { createHostSpawner, type HostLocal, type HostSpawner, type HostSpawnerDe
 import type { HostMessage } from '../core/host/protocol'
 import { AppUnreachable, leftNothingBehind, refusedBeforeActing, wasRefusedBeforeActing } from '../core/host/orchProtocol'
 import { RepairNeeded } from '../core/settings/repairNeeded'
+import { writeAgentProfiles } from '../core/agentProfiles/store'
 import { PtyRegistry } from './registry'
 import { ProcRegistry } from './procRegistry'
 import { registrySessions } from './sessions'
@@ -1071,6 +1072,89 @@ describe('shared extensions', () => {
 
   it('answers 501 on a Host that keeps none', async () => {
     expect((await orchOver().call({ cmd: 'extensions-list', args: {}, sessionId: '', from: cli })).status).toBe(501)
+  })
+})
+
+// Agent Profiles (design §4): routed like the extensions, below every gate.
+describe('agent profiles', () => {
+  const cli = { role: 'cli' as const, toOthers: () => {} }
+  const answering = () => {
+    const seen: { cmd: string; agentRefusal?: string }[] = []
+    return { seen, agentProfiles: { command: async (a: { cmd: string; agentRefusal?: string }) => (seen.push(a), { status: 200, body: { ok: true } }) } }
+  }
+
+  it('is refused to MCP and a controller by their gates, before the profiles are asked', async () => {
+    const f = answering()
+    const orch = orchOver({ agentProfiles: f.agentProfiles })
+    expect((await orch.call({ cmd: 'agent-profiles-create', args: {}, sessionId: '', from: { role: 'mcp', toOthers: () => {} } })).status).toBe(403)
+    const controller = { role: 'controller' as const, principal: { clientId: 'cli_x', name: 'x', permission: 'full-control' as const }, toOthers: () => {} }
+    expect((await orch.call({ cmd: 'agent-profiles-create', args: {}, sessionId: '', from: controller })).status).toBe(403)
+    expect(f.seen).toEqual([])
+  })
+
+  it('answers the CLI, telling the profiles when an agent session’s shell is the caller', async () => {
+    const f = answering()
+    const orch = orchOver({ agentProfiles: f.agentProfiles })
+    expect((await orch.call({ cmd: 'agent-profiles-list', args: {}, sessionId: '', from: cli })).status).toBe(200)
+    await orch.call({ cmd: 'agent-profiles-delete', args: { id: 'ap_x' }, sessionId: 'sess_1', from: cli })
+    expect(f.seen[0].agentRefusal).toBeUndefined()
+    expect(f.seen[1].agentRefusal).toMatch(/not an agent session/)
+  })
+
+  it('answers 501 on a Host that keeps none', async () => {
+    expect((await orchOver().call({ cmd: 'agent-profiles-list', args: {}, sessionId: '', from: cli })).status).toBe(501)
+  })
+
+  // The person's decision on the final review (2026-10-22): an agent session's shell, an MCP client and a plugin make
+  // work as a profile that runs without permission checks only while app-settings.json already skips them, read per call
+  it('refuses a profile that runs without permission checks to an agent, MCP and a plugin while the app-wide mode asks', async () => {
+    await writeAgentProfiles(dir, { version: 1, profiles: [{ id: 'ap_b', name: 'Unattended', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'bypass', createdAt: NOW, updatedAt: NOW }] })
+    const settings = (extra: object): Promise<void> => fs.writeFile(path.join(dir, 'app-settings.json'), JSON.stringify({ mcpAccess: 'control', ...extra }))
+    const orch = orchOver()
+    const create = (from: OrchCaller, sessionId = ''): ReturnType<typeof orch.call> =>
+      orch.call({ cmd: 'jobs-create', args: { objective: 'o', cwd: 'D:/p', agentProfile: 'Unattended' }, sessionId, from })
+    const agents: Array<[OrchCaller, string]> = [
+      [cli, 'sess_agent'],
+      [{ role: 'mcp', toOthers: () => {} }, ''],
+      [{ role: 'plugin', plugin: { id: 'astera-hello', granted: new Set(['jobs.create']) }, toOthers: () => {} }, '']
+    ]
+    await settings({ agentPermissionMode: 'manual' })
+    for (const [from, sessionId] of agents) {
+      const r = await create(from, sessionId)
+      expect([r.status, (r.body as { reason?: unknown }).reason], from.role).toEqual([403, 'agent-profile-bypass-refused'])
+    }
+    expect(orch.state().jobs).toHaveLength(0)
+    // A person at their own shell and the app are not asked
+    expect((await create(cli)).status).toBe(200)
+    expect((await create({ role: 'app', toOthers: () => {} })).status).toBe(200)
+    // Read per call: once the app-wide mode skips the checks, the agents may too
+    await settings({})
+    for (const [from, sessionId] of agents) expect((await create(from, sessionId)).status, from.role).toBe(200)
+  })
+
+  // Third follow-up, the person's decision: running a person's Job made as such a profile (jobs run, MCP run_job) starts
+  // work as it, so an agent's shell and an MCP client are refused while the app-wide mode asks; the person is not asked
+  it('refuses an agent’s jobs run and MCP run_job of a person’s Job made as such a profile while the app-wide mode asks', async () => {
+    await writeAgentProfiles(dir, { version: 1, profiles: [{ id: 'ap_b', name: 'Unattended', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'bypass', createdAt: NOW, updatedAt: NOW }] })
+    const settings = (extra: object): Promise<void> => fs.writeFile(path.join(dir, 'app-settings.json'), JSON.stringify({ mcpAccess: 'control', ...extra }))
+    const orch = orchOver()
+    const app: OrchCaller = { role: 'app', toOthers: () => {} }
+    const mcp: OrchCaller = { role: 'mcp', toOthers: () => {} }
+    const personsJob = async (): Promise<string> =>
+      ((await orch.call({ cmd: 'jobs-create', args: { objective: 'o', cwd: 'D:/p', agentProfile: 'Unattended' }, sessionId: '', from: app })).body as { id: string }).id
+    const run = (id: string, from: OrchCaller, sessionId = ''): ReturnType<typeof orch.call> => orch.call({ cmd: 'jobs-run', args: { id }, sessionId, from })
+    await settings({ agentPermissionMode: 'manual' })
+    const id = await personsJob()
+    for (const [from, sessionId] of [[cli, 'sess_agent'], [mcp, '']] as Array<[OrchCaller, string]>) {
+      const r = await run(id, from, sessionId)
+      expect([r.status, (r.body as { reason?: unknown }).reason], from.role).toEqual([403, 'agent-profile-bypass-refused'])
+    }
+    expect(orch.state().runs).toHaveLength(0)
+    // The person at their own shell runs it
+    expect((await run(id, cli)).status).toBe(200)
+    // Read per call: once the app-wide mode skips the checks, MCP may run one too
+    await settings({})
+    expect((await run(await personsJob(), mcp)).status).toBe(200)
   })
 })
 

@@ -168,7 +168,7 @@ export class SessionManager {
    * awaits this before `spawn`** — a roll does it before its kill, since the spawn after it has no
    * await. Rejects with CWD_MISSING, or CWD_UNREACHABLE when the folder did not answer in time.
    */
-  async prepare(opts: { account: Account; cwd: string; missing?: string }): Promise<void> {
+  async prepare(opts: { account: Account; cwd: string; missing?: string; agentProfileId?: string }): Promise<void> {
     // A folder confirmed a moment ago (a Host session create checks it, then spawns) is not probed again.
     if (!this.cwdConfirmed(opts.cwd)) {
       await checkCwd(opts.cwd, this.checks.cwd, opts.missing)
@@ -183,8 +183,9 @@ export class SessionManager {
       for (const [k, v] of this.preparedGitBash) if (now - v.at >= CWD_CONFIRMED_MS) this.preparedGitBash.delete(k)
       this.preparedGitBash.set(pathValueOf(env), { bash, timedOut, at: now })
     }
-    // The shared extensions this account's session gets, so the synchronous spawn reads them ready
-    await this.capabilities?.refresh(opts.account)
+    // The shared extensions this account's session gets (from its agent profile, when it has one), so the synchronous
+    // spawn reads them ready
+    await this.capabilities?.refresh(opts.account, opts.agentProfileId)
     // The CLI on PATH and codex's --no-daemon, so the spawn's command builder finds both (second pass M2-1, M2-2).
     await descriptorOf(this.descriptors, opts.account)
       .prepare?.()
@@ -240,6 +241,9 @@ export class SessionManager {
     /** `'agent'`: an agent or Astera started this session, not a person (SessionInfo.startedBy). Written into the info
      *  and the note; its tab closes when it ends. */
     startedBy?: 'agent'
+    /** The agent profile the session is started from (SessionInfo.agentProfileId): its capabilities are the ones
+     *  `prepare` resolved for this account and profile, and it is written into the info and the note like startedBy. */
+    agentProfileId?: string
   }): SessionInfo {
     // The folder `prepare` just confirmed is not looked at again. The sync check is left only for a
     // caller that did not prepare (tests, and anything added later without it): it is the one that can
@@ -280,7 +284,7 @@ export class SessionManager {
       : null
     const env = this.envFor(opts.account)
     // Shared extensions: their environment values only here, in this process's environment (design D5)
-    const caps = this.capabilities?.get(opts.account) ?? null
+    const caps = this.capabilities?.get(opts.account, opts.agentProfileId) ?? null
     if (caps) Object.assign(env, caps.env, gatewayTokenEnv(caps))
     // What Astera offers, told to a codex session as it starts. A Claude session gets the same lines from
     // the SessionStart hook in `sl`'s settings file; codex runs no hook nobody has trusted, so it gets
@@ -384,7 +388,8 @@ export class SessionManager {
           ...(opts.rollPrompt ? { rollPrompt: opts.rollPrompt } : {}),
           ...(opts.slackNotify !== undefined ? { slackNotify: opts.slackNotify } : {}),
           ...(opts.bypassPermissions !== undefined ? { bypassPermissions: opts.bypassPermissions } : {}),
-          ...(opts.startedBy ? { startedBy: opts.startedBy } : {})
+          ...(opts.startedBy ? { startedBy: opts.startedBy } : {}),
+          ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {})
         }
       }
     })
@@ -403,7 +408,8 @@ export class SessionManager {
       slackNotify: opts.slackNotify,
       bypassPermissions: opts.bypassPermissions,
       schedule: opts.schedule,
-      ...(opts.startedBy ? { startedBy: opts.startedBy } : {})
+      ...(opts.startedBy ? { startedBy: opts.startedBy } : {}),
+      ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {})
     }
     return this.track(info, pty)
   }

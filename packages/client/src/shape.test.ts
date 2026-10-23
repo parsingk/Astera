@@ -375,6 +375,31 @@ describe('publicFor', () => {
     })
   })
 
+  // Agent Profiles design §6: the profile a Job or Task runs as is public, by its id
+  it('keeps the agent profile a Job and a Task run as', () => {
+    expect(publicFor('jobs-get', { id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: 'T', agentProfileId: 'ap_1' })).toMatchObject({ agentProfileId: 'ap_1' })
+    expect(publicFor('tasks-add', { id: 't1', agentProfileId: 'ap_1' })).toEqual({ id: 't1', agentProfileId: 'ap_1' })
+  })
+
+  it('shapes the profiles the agent-profiles commands answer, listed, one, or as the CLI prints one', () => {
+    const profile = { id: 'ap_1', name: 'Reviewer', status: 'active', accountIds: ['a'], mcpExclude: [], permission: 'ask', createdAt: 'T', updatedAt: 'T', secret: 'x' }
+    const { secret: _s, ...shaped } = profile
+    expect(publicFor('agent-profiles-list', { profiles: [profile], other: 1 })).toEqual({ profiles: [shaped] })
+    expect(publicFor('agent-profiles-get', { profile })).toEqual({ profile: shaped })
+    for (const cmd of ['agent-profiles-create', 'agent-profiles-update', 'agent-profiles-archive', 'agent-profiles-restore'])
+      expect(publicFor(cmd, { profile }), cmd).toEqual({ profile: shaped })
+    // The CLI prints one profile as `jobs get` prints a Job: the profile itself is its data
+    for (const cmd of ['agent-profiles-show', 'agent-profiles-create', 'agent-profiles-update', 'agent-profiles-archive', 'agent-profiles-restore'])
+      expect(publicFor(cmd, profile), cmd).toEqual(shaped)
+  })
+
+  // Task 7 fix round 1: a session started from an agent profile is listed with its id
+  it('keeps the agent profile a session was started from', () => {
+    const row = { id: 's1', kind: 'terminal', title: 't', accountId: 'a', cwd: 'D:/p', alive: true, state: 'unknown', agentProfileId: 'ap_1', ptyId: 'p' }
+    expect(publicFor('sessions-list', [row])).toEqual([{ id: 's1', kind: 'terminal', title: 't', accountId: 'a', cwd: 'D:/p', alive: true, state: 'unknown', agentProfileId: 'ap_1' }])
+    expect(publicFor('sessions-create', row)).toMatchObject({ agentProfileId: 'ap_1' })
+  })
+
   it('객체가 아닌 것은 그대로 둔다', () => {
     expect(publicFor('jobs-list', [])).toEqual([])
     expect(publicFor('questions-get', null)).toBe(null)
