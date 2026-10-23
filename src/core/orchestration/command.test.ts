@@ -11146,6 +11146,42 @@ describe('agent profiles: a profile that runs without permission checks, by who 
       expect((await yolo.as({ sessionId: '', role: 'mcp' }, 'task-update', { id: 'tsk_l', status: 'ready' })).status).toBe(200)
     })
 
+    // Ninth follow-up (the review): starting or resuming the Run asks its unfinished Tasks' profiles, and the GitHub step,
+    // unfinished, holds none of its own; the one its repairs borrow (workerProfileOf) is asked, in a Job with none
+    it('runs resume and run-start of the Run ask the profile its unfinished GitHub step borrows', async () => {
+      const entries = [
+        {
+          cmd: 'runs-resume',
+          args: { id: 'run_g' },
+          prepare: async (deps: Deps) => {
+            await stoppedStep(deps)
+            await deps.setState({ ...deps.getState(), runs: deps.getState().runs.map((r) => ({ ...r, paused: true })) })
+          }
+        },
+        { cmd: 'run-start', args: { run: 'run_g' }, prepare: (deps: Deps) => stoppedStep(deps) }
+      ]
+      for (const { cmd, args, prepare } of entries) {
+        for (const caller of AGENTS) {
+          const { deps, as } = setup(false)
+          await prepare(deps)
+          const before = JSON.stringify(deps.getState().runs)
+          const r = await as(caller, cmd, args)
+          expect([r.status, reasonOf(r)], `${cmd} ${JSON.stringify(caller)}`).toEqual([403, 'agent-profile-bypass-refused'])
+          expect(JSON.stringify(deps.getState().runs), cmd).toBe(before)
+        }
+        for (const caller of PEOPLE) {
+          const { deps, appWideYolo, as } = setup(false)
+          await prepare(deps)
+          const r = await as(caller, cmd, args)
+          expect(reasonOf(r), `${cmd} ${JSON.stringify(caller)} ${JSON.stringify(r.body)}`).toBeUndefined()
+          expect(appWideYolo).not.toHaveBeenCalled()
+        }
+        const yolo = setup(true)
+        await prepare(yolo.deps)
+        expect(reasonOf(await yolo.as({ sessionId: '', role: 'mcp' }, cmd, args)), cmd).toBeUndefined()
+      }
+    })
+
     it('asks nothing when the step borrows no profile; an unreadable store refuses an agent', async () => {
       const plain = setup(false)
       await stoppedStep(plain.deps, 'github-carry', ['retry', 'mark-failed'], null)

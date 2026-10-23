@@ -1405,12 +1405,13 @@ async function startRefusal(deps: OrchServerDeps, caller: { sessionId: string; r
 /** The profiles the work a start of a Job sets going runs as (startRefusal): the Job's own, which the coordinator Astera
  *  then starts plans with (`drivesRun`); with `plan`, those of the Tasks a new Run copies (tasksOfNextRun); with
  *  `runId`, those of that Run's Tasks not finished yet, or with `everyTask` every ordinary one (runs reconverge, whose
- *  repair borrows a finished Task's, workerProfileOf). */
+ *  repair borrows a finished Task's). Each Task's is the one its worker or repair runs as (workerProfileOf): an unfinished
+ *  GitHub step holds none of its own and borrows a finished Task's (ninth follow-up). */
 function startProfiles(s: OrchState, job: Job | undefined, o: { plan?: boolean; runId?: string; everyTask?: boolean }): Array<string | undefined> {
   if (!job) return []
   const ofRun =
     o.runId === undefined ? [] : s.tasks.filter((t) => t.runId === o.runId && (o.everyTask === true ? !isLifecycleTask(t) : !taskFinished(t)))
-  return [job.agentProfileId, ...(o.plan === true ? tasksOfNextRun(s, job) : []).map((t) => t.agentProfileId), ...ofRun.map((t) => t.agentProfileId)]
+  return [job.agentProfileId, ...[...(o.plan === true ? tasksOfNextRun(s, job) : []), ...ofRun].map((t) => workerProfileOf(s, t))]
 }
 
 /** The commands that set work going, and what each asks of an agent (startRefusal), read from a state of their own:

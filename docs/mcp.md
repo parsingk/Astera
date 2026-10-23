@@ -239,10 +239,11 @@ only while Astera skips them anyway.** `create_job`, `create_task` and `create_s
 `PERMISSION_DENIED` (its `details.reason` is `agent-profile-bypass-refused`) and make or start nothing unless **Run
 agents without permission checks** is on in Astera's settings. `run_job`, `resume_run` and `reconverge_run` are also
 refused when a Task of the work they would start names such a profile in a Job with none, and so is
-`answer_question` with an answer that starts such a Task again: any answer but `mark-failed` on a question whose repair
-budget is used up, or `continue` or `retry` on a GitHub question, which start its round afresh; any other answer is not. A profile set to `inherit` or `ask` is not
-affected, and a person choosing in Astera or at their own shell is not asked. Neither is the coordinator Astera started to carry out such a Job, an agent session and never an MCP
-client, when the Tasks it adds inherit the profile a person chose for the Job.
+`answer_question` with an answer that starts such a Task again: any answer but `mark-failed` on a question whose
+repair budget is used up, or `continue` or `retry` on a GitHub question, which start its round afresh; any other
+answer is not. A profile set to `inherit` or `ask` is not affected, and a person choosing in Astera or at their own
+shell is not asked. Neither is the coordinator Astera started to carry out such a Job, an agent session and never an
+MCP client, when the Tasks it adds inherit the profile a person chose for the Job.
 
 **Who plans the Tasks.** A Job from `create_job` carries only its objective. Run it as it is and its
 coordinator plans it first: it breaks the objective into a few Tasks, with dependencies, an account
