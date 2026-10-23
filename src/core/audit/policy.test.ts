@@ -157,6 +157,7 @@ describe('decide, under the starter rules', () => {
     expect(decide(bash('echo "$(( $(git push) + 1 ))"'), p)).toEqual(push)
     expect(decide(claude('PowerShell', { command: 'Write-Output "$((git push))"' }), p)).toEqual(push)
     expect(decide(claude('PowerShell', { command: 'Write-Output "C:\\dir\\" ; git push' }), p)).toEqual(push)
+    expect(decide(claude('PowerShell', { command: 'Write-Output C:\\dir\\; git push' }), p)).toEqual(push)
     expect(decide(bash("echo '$(git push)'"), p)).toEqual({ decision: 'allow' })
     expect(decide(bash('echo "$(git rev-parse HEAD)"'), p)).toEqual({ decision: 'allow' })
   })

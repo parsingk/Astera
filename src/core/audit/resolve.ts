@@ -857,7 +857,8 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
         } else cur += d
       }
       if (here) i++ // the @ of "@
-    } else if (c === '\\') {
+    } else if (c === '\\' && flavor === 'posix') {
+      // In PowerShell a backslash is a letter, as in its strings: a path ends in one, and the `;` after it still ends the command
       const n = line[i + 1]
       if (n === '\n') i++
       else if (n === '\r' && line[i + 2] === '\n') i += 2

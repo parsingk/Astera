@@ -642,6 +642,18 @@ describe('shell: a command substitution inside double quotes is a command of the
     expect(bash('echo "a\\" ; git push"')).toEqual({ action: 'process.execute', target: 'echo', confidence: 'high' })
   })
 
+  // Nor outside quotes: a Windows path ends in a backslash, and the `;`, `|` or `&` after it still ends the command
+  it('does not let a backslash escape anything outside quotes in PowerShell, as it does in POSIX', () => {
+    expect(acts(ps('Remove-Item C:\\dir\\; git push'))).toEqual(['filesystem.delete', 'git.remote.write'])
+    expect(acts(ps('Get-ChildItem C:\\x\\| Remove-Item'))).toEqual(['filesystem.read', 'filesystem.delete'])
+    expect(acts(ps('Write-Output C:\\x\\& git push'))).toEqual(['process.execute', 'git.remote.write'])
+    expect(acts(ps('Write-Output C:\\x\\\ngit push'))).toEqual(['process.execute', 'git.remote.write'])
+    expect(acts(ps('Write-Output C:\\x\\) ; git push'))).toContain('git.remote.write')
+    // POSIX keeps its escapes: a backslash makes the `;` a letter of the word, and a backslash before a newline joins the lines
+    expect(bash('echo a\\; git push')).toEqual({ action: 'process.execute', target: 'echo', confidence: 'high' })
+    expect(bash('echo a\\\ngit push')).toEqual({ action: 'process.execute', target: 'echo', confidence: 'high' })
+  })
+
   it('reads $( ) in PowerShell, not its backtick, in a string and in a here-string', () => {
     expect(acts(ps('Write-Output "$(git push)"'))).toContain('git.remote.write')
     expect(acts(ps('Write-Output @"\n$(git push)\n"@'))).toContain('git.remote.write')
