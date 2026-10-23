@@ -2,9 +2,10 @@
 // provider already writes, and handed to the recorder (recorder.ts) one call at a time. Nothing here waits on a session
 // and nothing is written back to one.
 //
-// - Claude terminal: the PostToolUse lines the capture appends to hook-events/<session>.jsonl (an observed session's
-//   hook settings capture every tool, statusline.ts ensureObserveFiles). The Host's hook watcher (rolling.ts) already
-//   reads that folder; its tap hands each line to `hook`.
+// - Claude terminal: the PostToolUse and PostToolUseFailure lines an observed session's audit capture appends to
+//   hook-events/<session>.audit.jsonl (statusline.ts ensureObserveFiles), beside the session's own file, which the
+//   other readers keep to. A watcher of these files alone (HookEventWatcher `audit`) is this module's, started at the
+//   end of every file already there.
 // - Claude and Codex chat: the lines of the chat process, which the Host holds for every chat it carries (procRegistry.ts),
 //   whether the app or the Host decodes them. A Claude tool_use is handed over once its tool_result says how it went;
 //   a Codex item once it is completed.
@@ -15,15 +16,20 @@
 //
 // Only sessions whose note says they were started observed are followed (Review Focus 1); the recorder asks the same
 // of a hook line. The Host reads only what it holds: a session the app runs in its own node-pty, with no Host, is not
-// observed (design §8, no second recorder in the app).
+// observed (design §8, no second recorder in the app). While the recorder knows the mode is compatibility nothing is
+// read: the audit watcher is stopped, the rollouts are not read and the chat lines are not parsed; when it may be
+// observe again, the audit files and the rollouts are taken up from where they end then, so nothing done while the
+// mode was off is recorded.
 //
-// Restarts (Review Focus 3): the hook watcher starts every file already there at its end, and a Host's sessions end
+// Restarts (Review Focus 3): the audit watcher starts every file already there at its end, and a Host's sessions end
 // with it (its ptys and chat processes are its children), so a new Host has no earlier line of a live session to read
 // again. Within one Host, a call heard twice is kept once by the recorder's dedupe on the provider's call id. What a
 // Host does not hear while it is down is lost: the app empties hook-events at its next start.
+import type { watch } from 'node:fs'
 import { decodeClaudeFrame } from '../../core/chat/claudeProtocol'
 import { decodeFrame } from '../../core/chat/codexProtocol'
 import { HOOK_EVENT_AT } from '../../core/hooks/eventTime'
+import { HookEventWatcher } from '../../core/hooks/eventWatcher'
 import { JsonlTail } from '../../core/rolling/jsonlTail'
 import type { AuditSource } from '../../core/audit/store'
 import type { PtyMeta } from '../../core/host/protocol'
@@ -51,25 +57,17 @@ const patchNaming = (paths: string[]): string => paths.map((p) => `*** Update Fi
 // ---------------------------------------------------------------------------------------------------------------------
 // Claude hook
 
-/** A PostToolUse line as one call: Claude Code fires it once a tool has run. Its `tool_response` says whether that
- *  went wrong where the tool reports it (`is_error`, an MCP result's `isError`); without one the outcome is unknown.
- *  null for every other hook event. */
+/** An audit line as one call. Claude Code fires PostToolUse once a tool has run and PostToolUseFailure, instead, once
+ *  it failed or was interrupted (`is_interrupt`), so the event is the outcome; the capture keeps no output to read one
+ *  from. null for any other event. */
 export function hookCall(payload: unknown): ObservedCall | null {
   const p = obj(payload)
-  if (!p || p.hook_event_name !== 'PostToolUse') return null
-  const tool = str(p.tool_name)
-  if (tool === null) return null
-  const response = p.tool_response
-  const failed = obj(response)?.is_error === true || obj(response)?.isError === true
+  const status = p?.hook_event_name === 'PostToolUse' ? 'ok' : p?.hook_event_name === 'PostToolUseFailure' ? 'failed' : null
+  const tool = str(p?.tool_name)
+  if (!p || status === null || tool === null) return null
   const id = str(p.tool_use_id)
   const at = isoOf(p[HOOK_EVENT_AT])
-  return {
-    tool,
-    input: p.tool_input,
-    status: response === undefined ? 'unknown' : failed ? 'failed' : 'ok',
-    ...(id !== null ? { dedupeKey: id } : {}),
-    ...(at !== undefined ? { at } : {})
-  }
+  return { tool, input: p.tool_input, status, ...(id !== null ? { dedupeKey: id } : {}), ...(at !== undefined ? { at } : {}) }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -122,8 +120,9 @@ export function claudeChatCalls(): (line: string) => ObservedCall[] {
 
 /**
  * A Codex app-server line as one call, when it is an `item/completed` of a command, a file change or an MCP call that
- * ran (completed or failed). A declined item did not run, and is not a call. The command line goes to the resolver as
- * a Codex shell call's would; a file change as the files it names.
+ * ran (completed or failed), a web search, a file view or an agent spawn. A declined item did not run, and is not a
+ * call. The command line goes to the resolver as a Codex shell call's would; a file change as the files it names; a
+ * search and a spawn with nothing of what they carried (the query, the prompt).
  */
 export function codexChatCall(line: string): ObservedCall | null {
   if (!line.includes('item/completed')) return null
@@ -133,23 +132,36 @@ export function codexChatCall(line: string): ObservedCall | null {
   const item = obj(params?.item)
   const id = str(item?.id)
   if (!item || id === null) return null
+  const at = isoOf(params?.completedAtMs)
+  const call = (tool: string, input: unknown, status: ObservedCall['status']): ObservedCall => ({
+    tool,
+    input,
+    status,
+    dedupeKey: id,
+    ...(at !== undefined ? { at } : {})
+  })
+  // Items with no status of their own: completed is done
+  if (item.type === 'webSearch') return call('web_search', {}, 'ok')
+  if (item.type === 'imageView') return call('view_image', { path: item.path }, 'ok')
+  if (item.type === 'collabAgentToolCall')
+    return item.tool === 'spawnAgent'
+      ? call('spawn_agent', {}, item.status === 'completed' ? 'ok' : item.status === 'failed' ? 'failed' : 'unknown')
+      : null
   const status = item.status === 'completed' ? 'ok' : item.status === 'failed' ? 'failed' : null
   if (status === null) return null
-  const at = isoOf(params?.completedAtMs)
-  const call = (tool: string, input: unknown): ObservedCall => ({ tool, input, status, dedupeKey: id, ...(at !== undefined ? { at } : {}) })
   switch (item.type) {
     case 'commandExecution': {
       const workdir = str(item.cwd)
-      return call('shell', { command: item.command, ...(workdir !== null ? { workdir } : {}) })
+      return call('shell', { command: item.command, ...(workdir !== null ? { workdir } : {}) }, status)
     }
     case 'fileChange': {
       const changes = Array.isArray(item.changes) ? item.changes : []
-      return call('apply_patch', patchNaming(changes.map((c) => str(obj(c)?.path)).filter((p): p is string => p !== null)))
+      return call('apply_patch', patchNaming(changes.map((c) => str(obj(c)?.path)).filter((p): p is string => p !== null)), status)
     }
     case 'mcpToolCall': {
       const server = str(item.server)
       const tool = str(item.tool)
-      return server !== null && tool !== null ? call(`mcp__${server}__${tool}`, {}) : null
+      return server !== null && tool !== null ? call(`mcp__${server}__${tool}`, {}, status) : null
     }
     default:
       return null
@@ -222,27 +234,46 @@ function rolloutCall(type: unknown, p: Record<string, unknown>): ObservedCall | 
 type Listen<A extends unknown[]> = (cb: (...a: A) => void) => () => void
 
 export interface AuditSources {
-  /** The hook watcher's tap: a hook line of a terminal session. Never throws. */
-  hook(sessionId: string, payload: unknown): void
-  /** Reads every followed rollout forward once (what the timer does). Never rejects. */
+  /** Reads the audit files and every followed rollout forward once (the timer reads the rollouts; the audit files are
+   *  watched). Never rejects. */
   poll(): Promise<void>
   dispose(): void
 }
 
 export function createAuditSources(d: {
-  recorder: Pick<AuditRecorder, 'record'>
+  recorder: Pick<AuditRecorder, 'record' | 'observing'>
   ptys: { onMeta: Listen<[string, PtyMeta, 'open' | 'note']>; onExit: Listen<[string, number]> }
   procs: { onMeta: Listen<[string, PtyMeta, 'open' | 'note']>; onLine: Listen<[string, number, string]>; onExit: Listen<[string, number]> }
+  /** The profile's hook-events folder, where the observed sessions' audit files are. */
+  hookEventsDir: string
   log(message: string): void
   /** Test injection (epoch ms). */
   now?: () => number
   /** Test injection: how the rollouts are read again; returns the stop. */
   every?: (ms: number, fn: () => void) => () => void
+  /** Test injection: the audit watcher's folder watch. */
+  watch?: typeof watch
 }): AuditSources {
   const now = d.now ?? Date.now
   const hand = (sessionId: string, source: AuditSource, calls: ObservedCall[]): void => {
     for (const c of calls) d.recorder.record({ sessionId, source, ...c })
   }
+
+  const hooks = new HookEventWatcher(
+    d.hookEventsDir,
+    (sessionId, payload) => {
+      if (!d.recorder.observing()) return
+      try {
+        const c = hookCall(payload)
+        if (c) hand(sessionId, 'claude-hook', [c])
+      } catch (err) {
+        d.log(`audit: an audit line of session ${sessionId} could not be read: ${String(err)}`)
+      }
+    },
+    d.log,
+    undefined,
+    { audit: true, startAtEnd: true, ...(d.watch ? { watch: d.watch } : {}) }
+  )
 
   /** Observed chat processes, by proc id. */
   const chats = new Map<string, { sessionId: string; source: AuditSource; read: (line: string) => ObservedCall[] }>()
@@ -272,7 +303,7 @@ export function createAuditSources(d: {
     }),
     d.procs.onLine((procId, _seq, line) => {
       const chat = chats.get(procId)
-      if (!chat) return
+      if (!chat || !d.recorder.observing()) return
       try {
         hand(chat.sessionId, chat.source, chat.read(line))
       } catch (err) {
@@ -305,8 +336,24 @@ export function createAuditSources(d: {
     })
   ]
 
+  /** Whether the files are being read: false while the recorder knows the mode is compatibility. */
+  let reading = true
+  hooks.start()
+  /** Follows the mode: stops the audit watcher when it goes off, and when it may be on again takes the audit files and
+   *  the rollouts up from where they end now, so what was written meanwhile is not read. */
+  const follow = (): boolean => {
+    const on = d.recorder.observing()
+    if (on && !reading) {
+      hooks.start()
+      for (const r of rollouts.values()) if (r.path !== null) r.tail = new JsonlTail(r.path, { startAtEnd: true })
+    } else if (!on && reading) hooks.stop()
+    reading = on
+    return on
+  }
+
   let polling = false
-  const poll = async (): Promise<void> => {
+  const readRollouts = async (): Promise<void> => {
+    if (!follow()) return
     for (const [ptyId, r] of [...rollouts]) {
       const tail = r.tail
       if (!tail) continue
@@ -328,25 +375,21 @@ export function createAuditSources(d: {
       return () => clearInterval(t)
     })
   const stopPolling = every(ROLLOUT_POLL_MS, () => {
-    if (polling || rollouts.size === 0) return
+    if (polling) return
     polling = true
-    void poll().finally(() => {
+    void readRollouts().finally(() => {
       polling = false
     })
   })
 
   return {
-    hook(sessionId, payload) {
-      try {
-        const c = hookCall(payload)
-        if (c) hand(sessionId, 'claude-hook', [c])
-      } catch (err) {
-        d.log(`audit: a hook line of session ${sessionId} could not be read: ${String(err)}`)
-      }
+    poll: async () => {
+      await readRollouts()
+      if (reading) await hooks.sweep()
     },
-    poll,
     dispose() {
       stopPolling()
+      hooks.stop()
       for (const off of offs) off()
       chats.clear()
       rollouts.clear()

@@ -684,6 +684,27 @@ describe('shell: a quoted first word is not a program', () => {
     expect(ps("& 'git' push")).toMatchObject({ action: 'git.remote.write', confidence: 'high' })
     expect(ps('& $exe --version')).toMatchObject({ confidence: 'unknown' }) // a program picked by a variable is opaque
   })
+
+  // Codex on Windows hands every command as `"<path to pwsh.exe>" -Command '<script>'` (core/chat/codexFixtures.ts): a
+  // quoted absolute path to a shell is that shell, in either flavour, and its script is what ran.
+  it('reads a quoted absolute path to a shell as that shell, and the script it was handed', () => {
+    const win = `"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command 'git push origin main'`
+    for (const r of [codex('shell', { command: win }), codex('shell_command', { command: win }), ps(win), bash(win)])
+      expect(r).toMatchObject({ action: 'git.remote.write', target: 'git push', confidence: 'high' })
+    expect(ps(`"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\POWERSHELL.EXE" -NoProfile -Command "git status"`)).toMatchObject({
+      action: 'git.read', target: 'git status'
+    })
+    expect(ps(`'C:\\Windows\\System32\\cmd.exe' /c "git push"`)).toMatchObject({ action: 'git.remote.write' })
+    expect(ps(`"/usr/bin/bash" -lc "npm test && git push"`)).toMatchObject({
+      confidence: 'heuristic', commands: [{ action: 'process.execute' }, { action: 'git.remote.write' }]
+    })
+    expect(ps(`"/bin/zsh" -c 'rm -rf build'`)).toMatchObject({ action: 'filesystem.delete' })
+  })
+
+  it('leaves a quoted shell name that is not an absolute path, or a quoted path to anything else, as data', () => {
+    for (const line of [`'pwsh' -Command 'git push'`, `"bin\\pwsh.exe" -Command 'git push'`, `"C:\\tools\\pwshx.exe" -Command 'git push'`])
+      expect(ps(line).action, line).not.toBe('git.remote.write')
+  })
 })
 
 describe('structured tools: a home path is not inside the project', () => {

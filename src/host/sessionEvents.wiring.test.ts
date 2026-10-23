@@ -25,10 +25,7 @@ describe('the Host wires its session events', () => {
 
   it('hears every hook event and the rolling’s roll states beside the Slack', () => {
     const rolling = src.slice(src.indexOf('composeHostRolling('))
-    // Observe mode's sources hear the same events after them (audit/sources.ts)
-    expect(rolling).toMatch(
-      /hookTap: \(sid, p\) => \{\s*slackWiring\?\.onHookEvent\(sid, p\)\s*sessionEvents\?\.onHookEvent\(sid, p\)\s*auditSources\.hook\(sid, p\)\s*\}/
-    )
+    expect(rolling).toMatch(/hookTap: \(sid, p\) => \{\s*slackWiring\?\.onHookEvent\(sid, p\)\s*sessionEvents\?\.onHookEvent\(sid, p\)\s*\}/)
     expect(rolling).toMatch(/slackWiring\?\.onRollEvent\(e\)\s*if \(e\.t === 'roll-state'\) sessionEvents\?\.onRollState\(e\.event\)/)
   })
 

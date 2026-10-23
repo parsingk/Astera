@@ -1460,7 +1460,7 @@ describe('observe mode at spawn', () => {
     context: { kind: 'implicit', accounts: [account.id], policyMode, executionMode: 'managed' },
     args: [], env: {}, given: [], gatewayGrant: [], skipped: []
   })
-  const rig = (policyMode: 'compatibility' | 'observe' | null) => {
+  const rig = (policyMode: 'compatibility' | 'observe' | null, filesWritten = true) => {
     const spawned: PtySpawnOptions[] = []
     const argv: Array<string[] | string> = []
     const asked: unknown[] = []
@@ -1469,7 +1469,11 @@ describe('observe mode at spawn', () => {
     }
     const manager = new SessionManager((_f, a, o) => (argv.push(a), spawned.push(o), new FakePty()), makeDescriptors('linux'), 100, 20, '/home/t', (id, _acc, o) => {
       asked.push(o)
-      return { settingsFile: o && 'observe' in o ? 'observe.json' : 's.json', outPath: 'o.json', originalCommand: null, hookOutPath: `/h/${id}.jsonl` }
+      const observed = o?.observe === true && filesWritten
+      return {
+        settingsFile: observed ? 'observe.json' : 's.json', outPath: 'o.json', originalCommand: null, hookOutPath: `/h/${id}.jsonl`,
+        ...(observed ? { observed: true } : {})
+      }
     }, [], {}, checks)
     if (policyMode !== null) manager.capabilities = { get: () => capsIn(policyMode), refresh: async () => {} }
     const observeHooks = vi.fn(async () => {})
@@ -1514,5 +1518,15 @@ describe('observe mode at spawn', () => {
     await expect(manager.prepare({ account, cwd: '/work' })).resolves.toBeUndefined()
     manager.spawn({ account, cwd: '/work' })
     expect(spawned).toHaveLength(1)
+  })
+
+  // Ruling (fix round 1): a Claude session is marked only when it was given the observe files; one left on the plain
+  // file (they could not be written) sends no observe lines and is not observed.
+  it('a Claude session left on the plain file is not marked observed', async () => {
+    const { manager, spawned, argv } = rig('observe', false)
+    await manager.prepare({ account, cwd: '/work' })
+    manager.spawn({ account, cwd: '/work' })
+    expect(argsText(argv[0])).toContain('s.json')
+    expect(spawned[0].meta?.restore).not.toHaveProperty('observed')
   })
 })

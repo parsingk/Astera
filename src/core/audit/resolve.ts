@@ -553,6 +553,12 @@ function programName(word: string): string {
   return base.replace(/\.(?:exe|cmd|bat|com|ps1)$/i, '')
 }
 
+/** A shell named by its absolute path (a drive, a UNC share or `/`), as Codex on Windows hands every command:
+ *  `"C:\Program Files\PowerShell\7\pwsh.exe" -Command '<script>'`. Quoted, such a word is still that shell. */
+const SHELL_PATH = /^(?:[A-Za-z]:[\\/]|[\\/])/
+const isShellPath = (word: string): boolean =>
+  SHELL_PATH.test(word) && /^(?:pwsh|powershell|bash|sh|cmd|zsh)(?:\.exe)?$/i.test(word.split(/[\\/]/).pop() ?? '')
+
 /** Where the command starts after `timeout [-s SIG] [-k DUR] DURATION`. */
 function afterTimeout(words: Words, from: number): number {
   let i = from
@@ -587,8 +593,9 @@ function stripPrefix(raw: Cmd, flavor: Flavor): { cmd: Cmd; syntax: boolean } {
   if (rest.length === 0) return { cmd, syntax }
   if (NO_COMMAND.has(rest[0].toLowerCase())) return dropped
   if (flavor === 'ps' && !raw.call) {
-    // PowerShell never runs a quoted word that is not called with `&`: it is data, whatever was stripped before it.
-    if (cmd.quoted[0]) return dropped
+    // PowerShell never runs a quoted word that is not called with `&`: it is data, whatever was stripped before it. A
+    // quoted absolute path to a shell is the one exception, so the script it was handed is read (scriptOf).
+    if (cmd.quoted[0] && !isShellPath(rest[0])) return dropped
     if (isPsExpression(rest[0])) {
       const method = raw.invoked && rest.length === 1 ? methodFacts(rest[0]) : null
       return method === null ? dropped : { cmd: { ...cmd, method }, syntax }

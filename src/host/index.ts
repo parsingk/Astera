@@ -518,10 +518,16 @@ async function main(): Promise<void> {
     dispatchOf: (sessionId, at) => dispatchOfSession(orch.state(), sessionId, at),
     log: (m) => log.write(m)
   })
-  // Its sources (audit/sources.ts): the chat processes' lines and the Codex rollouts the pty notes name, followed for
-  // the sessions started observed; the Claude hook lines come through the rolling's hook tap below. Before any pty or
-  // process opens, so every session's start is heard.
-  const auditSources = createAuditSources({ recorder: auditRecorder, ptys: registry, procs, log: (m) => log.write(m) })
+  // Its sources (audit/sources.ts): the observed Claude sessions' audit files in hook-events (their own watcher, apart
+  // from the rolling's), the chat processes' lines and the Codex rollouts the pty notes name, followed for the sessions
+  // started observed. Before any pty or process opens, so every session's start is heard.
+  const auditSources = createAuditSources({
+    recorder: auditRecorder,
+    ptys: registry,
+    procs,
+    hookEventsDir: hookEventsDirIn(profileDir),
+    log: (m) => log.write(m)
+  })
 
   /** Declared above the rolling (the S6 final review M3 lesson): Task 6 has the rolling's events reach it,
    *  and a `const` below would be in its temporal dead zone. Null without a spawner or without the SDK. */
@@ -564,7 +570,6 @@ async function main(): Promise<void> {
           hookTap: (sid, p) => {
             slackWiring?.onHookEvent(sid, p)
             sessionEvents?.onHookEvent(sid, p)
-            auditSources.hook(sid, p)
           }
         })
       : null

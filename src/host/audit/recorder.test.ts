@@ -186,6 +186,34 @@ describe('createAuditRecorder', () => {
     expect(await h.folderExists()).toBe(false)
   })
 
+  // A call of a session it does not observe is not remembered: the same call heard again once the session's note is
+  // there (a hook line that came before the note did) is kept.
+  it('remembers a call only once it knows the session', async () => {
+    let facts: SessionFacts | null = null
+    const h = await rig({ over: { sessionInfo: () => facts } })
+    h.recorder.record(bash('git status', { dedupeKey: 'toolu_1' }))
+    facts = { kind: 'terminal', accountId: 'acc1', cwd }
+    h.recorder.record(bash('git status', { dedupeKey: 'toolu_1' }))
+    h.recorder.record(bash('git status', { dedupeKey: 'toolu_1' }))
+    await h.recorder.flushed()
+    expect(await h.records()).toHaveLength(1)
+  })
+
+  // The sources ask before they read a file or parse a line (sources.ts): nothing is read while the mode is known to be
+  // compatibility, and an unknown mode (not read yet, or just changed) may be observe.
+  it('says whether it may be observing', async () => {
+    const h = await rig({ mode: 'compatibility' })
+    expect(h.recorder.observing()).toBe(true)
+    await h.recorder.flushed()
+    expect(h.recorder.observing()).toBe(false)
+    h.setMode('observe')
+    h.recorder.invalidate()
+    expect(h.recorder.observing()).toBe(true)
+    h.recorder.record(bash('git status'))
+    await h.recorder.flushed()
+    expect(h.recorder.observing()).toBe(true)
+  })
+
   it('keeps the mode it read until the policies say it changed', async () => {
     const h = await rig({ mode: 'compatibility' })
     await h.recorder.flushed()

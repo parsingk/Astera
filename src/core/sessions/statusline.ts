@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { Account } from '../types'
-import { hookEventsDirIn, hookEventsFileIn } from '../hooks/sessionState'
+import { AUDIT_HOOK_EVENTS, hookEventsDirIn, hookEventsFileIn } from '../hooks/sessionState'
 import { dirIdentity } from '../files/watchedDir'
 import { HOOK_EVENT_AT } from '../hooks/eventTime'
 import { renameRetrying } from '../renameRetry'
@@ -15,6 +15,7 @@ export interface StatusLineSpawn {
   outPath: string // The file the capture script writes the payload to (one per session)
   originalCommand: string | null // That account's pre-existing global statusLine command — when present it is chained so the HUD stays
   hookOutPath?: string // the file the hook capture appends events to (one per session) — always set
+  observed?: true // the settings file is an observe variant (ensureObserveFiles): the session sends its tool calls to its audit file
 }
 
 // Capture script (node): Claude runs it as the statusLine → it writes the stdin payload to ASTERA_STATUSLINE_OUT, and
@@ -77,6 +78,35 @@ function finish() {
       line = '{"${HOOK_EVENT_AT}":' + at + (rest.startsWith('}') ? '' : ',') + rest
     }
     try { fs.appendFileSync(out, line + '\\n') } catch {}
+  }
+  process.exit(0)
+}
+process.stdin.on('data', (c) => chunks.push(c))
+process.stdin.on('end', finish)
+process.stdin.on('error', finish)
+`
+
+// Observe mode's capture (node): run by the observe-only hooks (PostToolUse and PostToolUseFailure for every tool,
+// ensureObserveFiles). It writes not to the session's own hook file, which attention, `sessions list`, pendingPrompt and
+// Slack read, but beside it, to <session>.audit.jsonl (AUDIT_HOOK_EVENTS), which only the Host's recorder reads; so an
+// observed session's own file holds exactly what a plain session's does. Of the payload it keeps what names the call
+// (the event, the tool, its input, its id, and whether it was interrupted) with the stamp the other capture takes; the
+// tool's output (`tool_response`, a failure's `error`) is never written. Parsed and written again, unlike the other
+// capture: nothing here needs a number past 2^53 kept as it was sent.
+const HOOK_AUDIT_CAPTURE_SCRIPT = `const at = typeof performance === 'object' && Number.isFinite(performance.timeOrigin) ? performance.timeOrigin : Date.now()
+const fs = require('fs')
+const out = process.env.ASTERA_HOOK_OUT
+const chunks = []
+function finish() {
+  if (out && out.endsWith('.jsonl')) {
+    try {
+      const p = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+      if (p && typeof p === 'object' && !Array.isArray(p)) {
+        const kept = { ${HOOK_EVENT_AT}: at, hook_event_name: p.hook_event_name, tool_name: p.tool_name, tool_input: p.tool_input, tool_use_id: p.tool_use_id }
+        if (p.is_interrupt === true) kept.is_interrupt = true
+        fs.appendFileSync(out.slice(0, -'.jsonl'.length) + '${AUDIT_HOOK_EVENTS}', JSON.stringify(kept) + '\\n')
+      }
+    } catch {}
   }
   process.exit(0)
 }
@@ -218,7 +248,6 @@ const TOOL_MATCHER = `${ASK_MATCHER}|Bash|PowerShell|Write|Edit|NotebookEdit`
 
 /** Settings file contents as ensureFiles last built them, for the observe variants. */
 interface BuiltSettings {
-  hookCmd: string
   settings: { hooks: { PostToolUse: unknown[] } }
   hooksSettings: { hooks: { PostToolUse: unknown[] } }
 }
@@ -231,6 +260,7 @@ export class StatusLineManager {
   private readonly hooksSettingsFile: string
   private readonly observeSettingsFile: string
   private readonly observeHooksSettingsFile: string
+  private readonly hookAuditCapturePath: string
   private readonly sessionContextPath: string
   readonly hookEventsDir: string // Watched by index.ts's HookEventWatcher
   private built: BuiltSettings | null = null
@@ -252,6 +282,7 @@ export class StatusLineManager {
     this.hooksSettingsFile = path.join(userDataDir, 'astera-hooks-settings.json')
     this.observeSettingsFile = path.join(userDataDir, 'astera-observe-settings.json')
     this.observeHooksSettingsFile = path.join(userDataDir, 'astera-observe-hooks-settings.json')
+    this.hookAuditCapturePath = path.join(userDataDir, 'astera-hook-audit-capture.cjs')
     this.sessionContextPath = path.join(userDataDir, 'astera-session-context.cjs')
     // The Host reads these files back for `sessions list` (host/sessions.ts), so where they are is one
     // rule in core rather than a path spelled out twice.
@@ -395,7 +426,7 @@ export class StatusLineManager {
       }
     }
     await writeScript(this.hooksSettingsFile, JSON.stringify(hooksSettings, null, 2))
-    this.built = { hookCmd, settings, hooksSettings }
+    this.built = { settings, hooksSettings }
     // The folders the capture scripts write into. Both scripts swallow a write error, so a session
     // spawned before these exist (the Host's first spawn on a fresh profile, where the app's
     // startupCleanup never ran) would lose its statusline and hook output silently. Creating a folder
@@ -405,31 +436,31 @@ export class StatusLineManager {
   }
 
   /**
-   * Observe mode (observe mode design §4, §5): writes the two settings files a session started while the mode is
-   * observe reads instead of the ones above. Each is its plain file with one more PostToolUse entry, for every tool
-   * (`*`), through the same capture into the session's hook events file, where the Host's watcher hands it to the
-   * recorder. `async`, so no tool call waits on the capture's node process; the entries already there stay as they are.
-   *
-   * A tool the plain file already matches (AskUserQuestion, and the write/execute family in the wider file) can then be
-   * captured twice, since Claude Code may or may not fold two entries with the same command into one. Every reader of
-   * PostToolUse goes by `tool_use_id` (attention, pendingPrompt, Slack, the recorder's dedupe), so a second line for
-   * the same call changes nothing.
+   * Observe mode (observe mode design §4, §5): writes the audit capture and the two settings files a session started
+   * while the mode is observe reads instead of the ones above. Each is its plain file with two more entries, for every
+   * tool (`*`): PostToolUse (a call that ran) and PostToolUseFailure (one that failed or was interrupted), both through
+   * the audit capture into the session's audit file, where the Host's recorder reads them (host/audit/sources.ts).
+   * `async`, so no tool call waits on the capture's node process. The entries already there stay as they are and still
+   * write the session's own file, so attention, `sessions list`, pendingPrompt and Slack read an observed session
+   * exactly as a plain one (the review's I2).
    *
    * Separate files, written only when a session is about to start observed (`SessionManager.prepare`), so a
    * compatibility session reads exactly the bytes it always did, and nothing is written for observe until it is on. A
    * session reads its file once at start (see UserPromptSubmit above), so rewriting these later reaches only new
-   * sessions. Until both are written, an observed session gets the plain file (`spawnConfig`). Never throws.
+   * sessions. Until all three are written, an observed session gets the plain file and is not marked observed
+   * (`spawnConfig`). Never throws.
    */
   async ensureObserveFiles(): Promise<void> {
     if (!this.built) await this.ensureFiles()
     const b = this.built
     if (!b) return
-    const observe = { matcher: '*', hooks: [{ type: 'command', command: b.hookCmd, async: true }] }
+    const script = await writeScript(this.hookAuditCapturePath, HOOK_AUDIT_CAPTURE_SCRIPT)
+    const audit = { matcher: '*', hooks: [{ type: 'command', command: captureCommand(this.nodePath, this.hookAuditCapturePath), async: true }] }
     const withObserve = (s: BuiltSettings['settings']): string =>
-      JSON.stringify({ ...s, hooks: { ...s.hooks, PostToolUse: [...s.hooks.PostToolUse, observe] } }, null, 2)
+      JSON.stringify({ ...s, hooks: { ...s.hooks, PostToolUse: [...s.hooks.PostToolUse, audit], PostToolUseFailure: [audit] } }, null, 2)
     const plain = await writeScript(this.observeSettingsFile, withObserve(b.settings))
     const wider = await writeScript(this.observeHooksSettingsFile, withObserve(b.hooksSettings))
-    this.observeReady = plain && wider
+    this.observeReady = script && plain && wider
   }
 
   /** The app-start half: empties the hook events folder (a queue the app drains) and makes the
@@ -499,7 +530,7 @@ export class StatusLineManager {
    *  notification for a choice or an approval is built on, and it is offered for any session.
    *  `opts.toolHooks` adds what only slack.ts reads: the turn summary's Stop and the per-tool-call
    *  capture pair. `opts.observe` (a session started while the mode is observe) points it at the
-   *  observe variant of that file, once ensureObserveFiles has written both. */
+   *  observe variant of that file, once ensureObserveFiles has written them, and says so (`observed`). */
   spawnConfig(sessionId: string, account: Account, opts?: { toolHooks?: boolean; observe?: boolean }): StatusLineSpawn {
     const toolHooks = opts?.toolHooks === true
     const observe = opts?.observe === true && this.observeReady
@@ -517,7 +548,8 @@ export class StatusLineManager {
       originalCommand: this.readOriginalStatusLine(account.configDir),
       // Always set: with ASTERA_HOOK_OUT unset the capture script does nothing, so a hook that is
       // installed but has nowhere to write is the same as no hook at all.
-      hookOutPath: hookEventsFileIn(this.hookEventsDir, sessionId)
+      hookOutPath: hookEventsFileIn(this.hookEventsDir, sessionId),
+      ...(observe ? { observed: true as const } : {})
     }
   }
 

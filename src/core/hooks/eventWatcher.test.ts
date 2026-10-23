@@ -323,4 +323,48 @@ describe('HookEventWatcher', () => {
       await fs.rm(dir, { recursive: true, force: true })
     }
   })
+
+  // Observe mode's audit lines go to <session>.audit.jsonl beside the session's own file (statusline.ts
+  // ensureObserveFiles). Only the recorder's watcher reads them; every other reader of the folder never sees them.
+  describe('the audit files beside the session files', () => {
+    let dir: string
+    beforeEach(async () => {
+      dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-hookaudit-'))
+      await fs.writeFile(path.join(dir, 's1.jsonl'), '{"hook_event_name":"Stop"}\n')
+      await fs.writeFile(path.join(dir, 's1.audit.jsonl'), '{"hook_event_name":"PostToolUse","tool_name":"Read"}\n')
+    })
+    afterEach(async () => {
+      await fs.rm(dir, { recursive: true, force: true })
+    })
+
+    it('a watcher of the session files never reads an audit file', async () => {
+      const got: Array<[string, unknown]> = []
+      const w = new HookEventWatcher(dir, (sid, p) => got.push([sid, p]), () => {})
+      await w.sweep()
+      await w.drain(path.join(dir, 's1.audit.jsonl'))
+      expect(got).toEqual([['s1', { hook_event_name: 'Stop' }]])
+    })
+
+    it('an audit watcher reads only the audit files, named by their session', async () => {
+      const got: Array<[string, unknown]> = []
+      const w = new HookEventWatcher(dir, (sid, p) => got.push([sid, p]), () => {}, undefined, { audit: true })
+      await w.sweep()
+      await w.drain(path.join(dir, 's1.jsonl'))
+      expect(got).toEqual([['s1', { hook_event_name: 'PostToolUse', tool_name: 'Read' }]])
+    })
+
+    it('with startAtEnd, an audit watcher starts each audit file at its end', async () => {
+      const got: unknown[] = []
+      const w = new HookEventWatcher(dir, (_sid, p) => got.push(p), () => {}, 60_000, {
+        audit: true,
+        startAtEnd: true,
+        watch: (() => ({ on: () => {}, close: () => {} })) as never
+      })
+      w.start()
+      await fs.appendFile(path.join(dir, 's1.audit.jsonl'), '{"hook_event_name":"PostToolUseFailure","tool_name":"Bash"}\n')
+      await w.sweep()
+      w.stop()
+      expect(got).toEqual([{ hook_event_name: 'PostToolUseFailure', tool_name: 'Bash' }])
+    })
+  })
 })

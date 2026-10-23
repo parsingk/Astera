@@ -7,8 +7,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { removeFixture } from '../../core/testFixtures'
 import { queryRecords, type AuditRecord } from '../../core/audit/store'
+import { decide, STARTER_POLICY } from '../../core/audit/policy'
 import type { PtyEntry, PtyMeta } from '../../core/host/protocol'
-import { HookEventWatcher } from '../../core/hooks/eventWatcher'
 import { createAuditRecorder, registrySessionFacts, type AuditEvent } from './recorder'
 import { claudeChatCalls, codexChatCall, codexRolloutCalls, createAuditSources, hookCall } from './sources'
 
@@ -29,20 +29,16 @@ const iso = (ms: number): string => new Date(ms).toISOString()
 // ---------------------------------------------------------------------------------------------------------------------
 // Fixtures
 
-/** A PostToolUse line as the capture writes it: the stamp first, then what Claude Code sends. */
-const postToolUse = (tool: string, input: unknown, id: string, response: unknown = { ok: true }) => ({
+/** A line as the audit capture writes it (statusline.ts): the stamp, and what names the call, nothing of its output. */
+const postToolUse = (tool: string, input: unknown, id: string, event = 'PostToolUse', extra: Record<string, unknown> = {}) => ({
   astera_at: T0 + 0.25,
-  session_id: 'claude-own-id',
-  transcript_path: '/t/claude-own-id.jsonl',
-  cwd,
-  permission_mode: 'default',
-  hook_event_name: 'PostToolUse',
+  hook_event_name: event,
   tool_name: tool,
   tool_input: input,
-  tool_response: response,
   tool_use_id: id,
-  duration_ms: 12
+  ...extra
 })
+const lineOf = (p: unknown): string => JSON.stringify(p) + '\n'
 
 const assistant = (blocks: unknown[]): string =>
   JSON.stringify({ type: 'assistant', message: { id: 'msg_1', type: 'message', role: 'assistant', content: blocks }, parent_tool_use_id: null, session_id: 'c1' })
@@ -91,9 +87,37 @@ function fakeRegistry() {
   }
 }
 
+/** A recorder that keeps what it is handed, observing until told otherwise. */
 function capture() {
   const events: AuditEvent[] = []
-  return { events, recorder: { record: (e: AuditEvent) => void events.push(e) } }
+  let on = true
+  return {
+    events,
+    setObserving: (v: boolean) => (on = v),
+    recorder: { record: (e: AuditEvent) => void events.push(e), observing: () => on }
+  }
+}
+
+/** The sources over a hook events folder of their own, with no file watch and no timer: the test reads with `poll`. */
+async function sourcesFor(o: {
+  recorder: Parameters<typeof createAuditSources>[0]['recorder']
+  ptys?: ReturnType<typeof fakeRegistry>
+  procs?: ReturnType<typeof fakeRegistry>
+  now?: () => number
+  hookEventsDir?: string
+}) {
+  const hookEventsDir = o.hookEventsDir ?? (await tempDir())
+  const sources = createAuditSources({
+    recorder: o.recorder,
+    ptys: o.ptys ?? fakeRegistry(),
+    procs: o.procs ?? fakeRegistry(),
+    hookEventsDir,
+    log: () => {},
+    every: () => () => {},
+    watch: (() => ({ on: () => {}, close: () => {} })) as never,
+    ...(o.now ? { now: o.now } : {})
+  })
+  return { sources, hookEventsDir, audit: (sid: string) => path.join(hookEventsDir, `${sid}.audit.jsonl`) }
 }
 
 /** The real recorder over a profile folder, in observe, whose sessions are the given notes. */
@@ -121,7 +145,7 @@ const byAction = by('action')
 // ---------------------------------------------------------------------------------------------------------------------
 
 describe('the Claude hook source', () => {
-  it('reads a PostToolUse into one call, with its id, its time and whether it failed', () => {
+  it('reads an audit line into one call, with its id and time: ran, or failed (an interrupt included)', () => {
     expect(hookCall(postToolUse('Read', { file_path: 'src/a.ts' }, 'toolu_1'))).toEqual({
       tool: 'Read',
       input: { file_path: 'src/a.ts' },
@@ -129,26 +153,31 @@ describe('the Claude hook source', () => {
       dedupeKey: 'toolu_1',
       at: iso(T0)
     })
-    expect(hookCall(postToolUse('mcp__x__y', {}, 'toolu_2', { isError: true }))?.status).toBe('failed')
-    expect(hookCall({ ...postToolUse('Bash', { command: 'ls' }, 'toolu_3'), tool_response: undefined })?.status).toBe('unknown')
-    for (const other of ['PreToolUse', 'Stop', 'Notification', 'UserPromptSubmit'])
-      expect(hookCall({ ...postToolUse('Bash', { command: 'ls' }, 'toolu_4'), hook_event_name: other })).toBeNull()
+    expect(hookCall(postToolUse('Bash', { command: 'git push' }, 'toolu_2', 'PostToolUseFailure'))?.status).toBe('failed')
+    expect(hookCall(postToolUse('Bash', { command: 'sleep 9' }, 'toolu_3', 'PostToolUseFailure', { is_interrupt: true }))?.status).toBe('failed')
+    for (const other of ['PreToolUse', 'Stop', 'Notification', 'UserPromptSubmit', 'StopFailure'])
+      expect(hookCall(postToolUse('Bash', { command: 'ls' }, 'toolu_4', other))).toBeNull()
     expect(hookCall('not an object')).toBeNull()
     expect(hookCall({ hook_event_name: 'PostToolUse' })).toBeNull()
   })
 
-  it('a PostToolUse for PowerShell, Read, Write and an MCP tool makes one record each, a repeat none', async () => {
+  it('a PostToolUse for PowerShell, Read, Write and an MCP tool, and a failed call, make one record each, a repeat none', async () => {
     const r = await realRecorder({ ptys: [entry('pty1', note('session', 'sess_a', OBSERVED))] })
-    const sources = createAuditSources({ recorder: r.recorder, ptys: fakeRegistry(), procs: fakeRegistry(), log: () => {} })
+    const { sources, audit, hookEventsDir } = await sourcesFor({ recorder: r.recorder })
     const calls = [
       postToolUse('PowerShell', { command: 'git status' }, 'toolu_1'),
       postToolUse('Read', { file_path: path.join(cwd, 'src', 'a.ts') }, 'toolu_2'),
       postToolUse('Write', { file_path: path.join(cwd, '..', 'x.ts'), content: 'secret body' }, 'toolu_3'),
-      postToolUse('mcp__github__create_issue', { title: 'x' }, 'toolu_4')
+      postToolUse('mcp__github__create_issue', { title: 'x' }, 'toolu_4'),
+      postToolUse('Bash', { command: 'git push origin main' }, 'toolu_5', 'PostToolUseFailure')
     ]
-    for (const c of [...calls, calls[1]]) sources.hook('sess_a', c)
+    await fs.writeFile(audit('sess_a'), [...calls, calls[1]].map(lineOf).join(''))
+    // The session's own hook file is not the recorder's
+    await fs.writeFile(path.join(hookEventsDir, 'sess_a.jsonl'), lineOf({ ...postToolUse('Grep', { pattern: 'x' }, 'toolu_9'), tool_response: {} }))
+    await sources.poll()
     const records = await r.records()
     expect(records.map(brief).sort(byTool)).toEqual([
+      { source: 'claude-hook', providerTool: 'Bash', action: 'git.remote.write', target: 'git push', status: 'failed' },
       { source: 'claude-hook', providerTool: 'PowerShell', action: 'git.read', target: 'git status', status: 'ok' },
       { source: 'claude-hook', providerTool: 'Read', action: 'filesystem.read', target: 'src/a.ts', status: 'ok' },
       { source: 'claude-hook', providerTool: 'Write', action: 'filesystem.write', target: 'outside project: x.ts', status: 'ok' },
@@ -158,39 +187,46 @@ describe('the Claude hook source', () => {
     sources.dispose()
   })
 
-  // Review Focus 1: a session started before observe was on has no PostToolUse hook for every tool, but a Slack or rolling
-  // one still sends some (Bash, Write, AskUserQuestion); its note carries no mark, so none of them is kept.
+  // Review Focus 1: a session started before observe was on writes no audit file; its note carries no mark either, so
+  // even an audit line of it would not be kept.
   it('keeps nothing of a session started before observe was on, and does not throw', async () => {
     const r = await realRecorder({ ptys: [entry('pty1', note('session', 'sess_old', { accountId: 'acc1', cwd, title: 't' }))] })
-    const sources = createAuditSources({ recorder: r.recorder, ptys: fakeRegistry(), procs: fakeRegistry(), log: () => {} })
-    expect(() => {
-      sources.hook('sess_old', postToolUse('Bash', { command: 'git push' }, 'toolu_1'))
-      sources.hook('sess_old', postToolUse('AskUserQuestion', { questions: [] }, 'toolu_2'))
-    }).not.toThrow()
+    const { sources, audit } = await sourcesFor({ recorder: r.recorder })
+    await fs.writeFile(audit('sess_old'), lineOf(postToolUse('Bash', { command: 'git push' }, 'toolu_1')))
+    await expect(sources.poll()).resolves.toBeUndefined()
     expect(await r.records()).toEqual([])
+    sources.dispose()
   })
 
-  // Review Focus 3: a Host that restarts starts its hook watcher at the end of every file already there, so the lines
+  // Review Focus 3: a Host that restarts starts its audit watcher at the end of every file already there, so the lines
   // read before the restart are not read, and so not recorded, again; a line heard twice in one Host is kept once.
   it('a Host started after lines were written records only the lines written after it, each once', async () => {
     const r = await realRecorder({ ptys: [entry('pty1', note('session', 'sess_a', OBSERVED))] })
-    const dir = await tempDir()
-    const file = path.join(dir, 'sess_a.jsonl')
-    const lineOf = (p: unknown): string => JSON.stringify(p) + '\n'
+    const hookEventsDir = await tempDir()
+    const file = path.join(hookEventsDir, 'sess_a.audit.jsonl')
     await fs.writeFile(file, lineOf(postToolUse('Bash', { command: 'git push' }, 'toolu_1')) + lineOf(postToolUse('Read', { file_path: 'a' }, 'toolu_2')))
-    const sources = createAuditSources({ recorder: r.recorder, ptys: fakeRegistry(), procs: fakeRegistry(), log: () => {} })
-    const watcher = new HookEventWatcher(dir, (sid, p) => sources.hook(sid, p), () => {}, 60_000, { startAtEnd: true, watch: (() => ({ on: () => {}, close: () => {} })) as never })
-    watcher.start()
-    try {
-      await fs.appendFile(file, lineOf(postToolUse('Write', { file_path: 'b.ts' }, 'toolu_3')))
-      await watcher.drain(file)
-      await watcher.drain(file)
-      await fs.appendFile(file, lineOf(postToolUse('Write', { file_path: 'b.ts' }, 'toolu_3')))
-      await watcher.drain(file)
-    } finally {
-      watcher.stop()
-    }
+    const { sources } = await sourcesFor({ recorder: r.recorder, hookEventsDir })
+    await fs.appendFile(file, lineOf(postToolUse('Write', { file_path: 'b.ts' }, 'toolu_3')))
+    await sources.poll()
+    await sources.poll()
+    await fs.appendFile(file, lineOf(postToolUse('Write', { file_path: 'b.ts' }, 'toolu_3')))
+    await sources.poll()
     expect((await r.records()).map((x) => x.providerTool)).toEqual(['Write'])
+    sources.dispose()
+  })
+
+  it('hands over no audit line while the mode is compatibility, nor one written then', async () => {
+    const { events, recorder, setObserving } = capture()
+    const { sources, audit } = await sourcesFor({ recorder })
+    setObserving(false)
+    await fs.writeFile(audit('sess_a'), lineOf(postToolUse('Bash', { command: 'git push' }, 'toolu_1')))
+    await sources.poll()
+    setObserving(true)
+    await sources.poll()
+    await fs.appendFile(audit('sess_a'), lineOf(postToolUse('Read', { file_path: 'a' }, 'toolu_2')))
+    await sources.poll()
+    expect(events.map((e) => e.dedupeKey)).toEqual(['toolu_2'])
+    sources.dispose()
   })
 })
 
@@ -228,10 +264,10 @@ describe('the Claude chat source', () => {
     expect(read(JSON.stringify({ type: 'result', subtype: 'success' }))).toEqual([])
   })
 
-  it('hands an observed Claude chat’s calls to the recorder, and none of an unobserved one', () => {
+  it('hands an observed Claude chat’s calls to the recorder, and none of an unobserved one', async () => {
     const procs = fakeRegistry()
     const { events, recorder } = capture()
-    const sources = createAuditSources({ recorder, ptys: fakeRegistry(), procs, log: () => {} })
+    const { sources } = await sourcesFor({ recorder, procs })
     procs.open('proc1', note('chat', 'sess_c', { ...OBSERVED, provider: 'claude' }))
     procs.open('proc2', note('chat', 'sess_old', { accountId: 'acc1', cwd, title: 't', provider: 'claude' }))
     for (const id of ['proc1', 'proc2']) {
@@ -246,6 +282,21 @@ describe('the Claude chat source', () => {
     expect(events).toHaveLength(1)
     sources.dispose()
     expect(procs.listeners()).toBe(0)
+  })
+
+  it('reads no line while the mode is compatibility', async () => {
+    const procs = fakeRegistry()
+    const { events, recorder, setObserving } = capture()
+    const { sources } = await sourcesFor({ recorder, procs })
+    procs.open('proc1', note('chat', 'sess_c', { ...OBSERVED, provider: 'claude' }))
+    setObserving(false)
+    procs.line('proc1', assistant([{ type: 'tool_use', id: 'toolu_1', name: 'Grep', input: { pattern: 'x' } }]))
+    setObserving(true)
+    procs.line('proc1', user([{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'x' }]))
+    procs.line('proc1', assistant([{ type: 'tool_use', id: 'toolu_2', name: 'Read', input: { file_path: 'a' } }]))
+    procs.line('proc1', user([{ type: 'tool_result', tool_use_id: 'toolu_2', content: 'x' }]))
+    expect(events.map((e) => e.dedupeKey)).toEqual(['toolu_2'])
+    sources.dispose()
   })
 })
 
@@ -280,10 +331,39 @@ describe('the Codex chat source', () => {
     expect(codexChatCall('{"id":1,"result":{}}')).toBeNull()
   })
 
+  // Ruling (fix round 1): web searches, file views and agent spawns too, each with nothing of what it carried
+  it('reads a web search, a file view and an agent spawn, and no query or prompt', () => {
+    const at = iso(T0 + 5000)
+    expect(codexChatCall(itemCompleted({ type: 'webSearch', id: 'ws-1', query: 'private words', action: { type: 'search', query: 'private words' } }))).toEqual({
+      tool: 'web_search', input: {}, status: 'ok', dedupeKey: 'ws-1', at
+    })
+    expect(codexChatCall(itemCompleted({ type: 'imageView', id: 'iv-1', path: path.join(cwd, 'shot.png') }))).toEqual({
+      tool: 'view_image', input: { path: path.join(cwd, 'shot.png') }, status: 'ok', dedupeKey: 'iv-1', at
+    })
+    const spawn = { type: 'collabAgentToolCall', id: 'ca-1', tool: 'spawnAgent', status: 'completed', senderThreadId: 't', receiverThreadIds: [], prompt: 'secret task', model: null }
+    expect(codexChatCall(itemCompleted(spawn))).toEqual({ tool: 'spawn_agent', input: {}, status: 'ok', dedupeKey: 'ca-1', at })
+    expect(codexChatCall(itemCompleted({ ...spawn, status: 'failed' }))?.status).toBe('failed')
+    expect(codexChatCall(itemCompleted({ ...spawn, tool: 'sendInput' }))).toBeNull()
+  })
+
+  // The review's I1: Codex on Windows hands every command wrapped in pwsh (core/chat/codexFixtures.ts)
+  it('a Windows Codex chat git push is a remote write the starter rules would deny', async () => {
+    const procs = fakeRegistry()
+    const r = await realRecorder({ procs: [entry('proc1', note('chat', 'sess_w', { ...OBSERVED, provider: 'codex' }))] })
+    const { sources } = await sourcesFor({ recorder: r.recorder, procs })
+    procs.open('proc1', note('chat', 'sess_w', { ...OBSERVED, provider: 'codex' }))
+    const command = `"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command 'git push origin main'`
+    procs.line('proc1', itemCompleted({ type: 'commandExecution', id: 'exec-1', command, cwd, status: 'completed', exitCode: 0 }))
+    const [rec] = await r.records()
+    expect(brief(rec)).toEqual({ source: 'codex-chat', providerTool: 'shell', action: 'git.remote.write', target: 'git push', status: 'ok' })
+    expect(decide(rec, STARTER_POLICY).decision).toBe('would-deny')
+    sources.dispose()
+  })
+
   it('a Codex chat fixture makes one record per finished call', async () => {
     const procs = fakeRegistry()
     const r = await realRecorder({ procs: [entry('proc1', note('chat', 'sess_x', { ...OBSERVED, provider: 'codex' }))] })
-    const sources = createAuditSources({ recorder: r.recorder, ptys: fakeRegistry(), procs, log: () => {} })
+    const { sources } = await sourcesFor({ recorder: r.recorder, procs })
     procs.open('proc1', note('chat', 'sess_x', { ...OBSERVED, provider: 'codex' }))
     const lines = [
       itemCompleted({ type: 'commandExecution', id: 'exec-1', command: 'git push origin main', cwd, status: 'completed', exitCode: 0 }),
@@ -338,7 +418,7 @@ describe('the Codex rollout source', () => {
     const ptys = fakeRegistry()
     const r = await realRecorder({ ptys: [entry('pty1', note('session', 'sess_cx', { ...OBSERVED, rolloutPath: file }))] })
     let now = T0
-    const sources = createAuditSources({ recorder: r.recorder, ptys, procs: fakeRegistry(), log: () => {}, now: () => now, every: () => () => {} })
+    const { sources } = await sourcesFor({ recorder: r.recorder, ptys, now: () => now })
     ptys.open('pty1', note('session', 'sess_cx', OBSERVED))
     now += 2000
     await fs.appendFile(file, [SHELL(T0 + 1000), PATCH(T0 + 1100), MCP_EXEC(T0 + 1200)].join('\n') + '\n')
@@ -366,7 +446,7 @@ describe('the Codex rollout source', () => {
     await fs.writeFile(file, SHELL(T0 + 5, 'call_earlier') + '\n')
     const ptys = fakeRegistry()
     const { events, recorder } = capture()
-    const sources = createAuditSources({ recorder, ptys, procs: fakeRegistry(), log: () => {}, now: () => T0, every: () => () => {} })
+    const { sources } = await sourcesFor({ recorder, ptys, now: () => T0 })
     ptys.open('pty1', note('session', 'sess_r', { ...OBSERVED, resumeSessionId: 'th_old' }))
     ptys.note('pty1', note('session', 'sess_r', { ...OBSERVED, resumeSessionId: 'th_old', rolloutPath: file }))
     await sources.poll()
@@ -384,7 +464,7 @@ describe('the Codex rollout source', () => {
     await fs.writeFile(fileNew, '')
     const ptys = fakeRegistry()
     const { events, recorder } = capture()
-    const sources = createAuditSources({ recorder, ptys, procs: fakeRegistry(), log: () => {}, now: () => T0, every: () => () => {} })
+    const { sources } = await sourcesFor({ recorder, ptys, now: () => T0 })
     ptys.open('pty_old', note('session', 'sess_old', { accountId: 'acc1', cwd, title: 't', rolloutPath: fileOld }))
     ptys.open('pty_new', note('session', 'sess_new', { ...OBSERVED, rolloutPath: fileNew }))
     await fs.appendFile(fileNew, SHELL(T0 + 20, 'call_7') + '\n')
@@ -393,6 +473,28 @@ describe('the Codex rollout source', () => {
     await fs.appendFile(fileNew, SHELL(T0 + 30, 'call_8') + '\n')
     await sources.poll()
     expect(events.map((e) => [e.sessionId, e.source, e.dedupeKey])).toEqual([['sess_new', 'codex-rollout', 'call_7']])
+    sources.dispose()
+  })
+
+  // Ruling (fix round 1): nothing is read while the mode is compatibility, and what was written then is not read after
+  it('reads no rollout while the mode is compatibility, nor what was written then', async () => {
+    const dir = await tempDir()
+    const file = path.join(dir, 'r.jsonl')
+    await fs.writeFile(file, '')
+    const ptys = fakeRegistry()
+    const { events, recorder, setObserving } = capture()
+    let now = T0
+    const { sources } = await sourcesFor({ recorder, ptys, now: () => now })
+    ptys.open('pty1', note('session', 'sess_cx', { ...OBSERVED, rolloutPath: file }))
+    setObserving(false)
+    await fs.appendFile(file, SHELL(T0 + 10, 'call_off') + '\n')
+    await sources.poll()
+    now = T0 + 100
+    setObserving(true)
+    await sources.poll()
+    await fs.appendFile(file, SHELL(T0 + 200, 'call_on') + '\n')
+    await sources.poll()
+    expect(events.map((e) => e.dedupeKey)).toEqual(['call_on'])
     sources.dispose()
   })
 })

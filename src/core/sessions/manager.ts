@@ -27,6 +27,7 @@ export interface StatusLineSpawnInfo {
   outPath: string
   originalCommand: string | null
   hookOutPath?: string // per-session hook event file — injected as ASTERA_HOOK_OUT
+  observed?: true // the settings file is an observe variant (StatusLineManager.spawnConfig)
 }
 export type StatusLineProvider = (
   sessionId: string,
@@ -294,13 +295,15 @@ export class SessionManager {
     const caps = this.capabilities?.get(opts.account, opts.agentProfileId) ?? null
     // Observe mode (observe mode design §4): the mode the prepare read is this session's for life. Observed, a Claude
     // session gets the hook settings that capture every tool call, and the note says so, which is what the Host's
-    // recorder asks before it keeps a call of this session from any source (Review Focus 1). In compatibility the
-    // provider is asked exactly as before and the note carries no mark.
+    // recorder asks before it keeps a call of this session from any source (Review Focus 1). A Claude session is marked
+    // only when it was given those settings (they may not have been written); a Codex one has none to be given. In
+    // compatibility the provider is asked exactly as before and the note carries no mark.
     const observe = caps?.context.policyMode === 'observe'
     const sl = d.usesStatusLine
       ? (this.statusLineProvider?.(id, opts.account, observe ? { toolHooks: wantToolHooks, observe: true } : { toolHooks: wantToolHooks }) ??
         null)
       : null
+    const observed = observe && (d.usesStatusLine ? sl?.observed === true : true)
     const env = this.envFor(opts.account)
     // Shared extensions: their environment values only here, in this process's environment (design D5)
     if (caps) Object.assign(env, caps.env, gatewayTokenEnv(caps))
@@ -408,7 +411,7 @@ export class SessionManager {
           ...(opts.bypassPermissions !== undefined ? { bypassPermissions: opts.bypassPermissions } : {}),
           ...(opts.startedBy ? { startedBy: opts.startedBy } : {}),
           ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {}),
-          ...(observe ? { observed: true } : {})
+          ...(observed ? { observed: true } : {})
         }
       }
     })

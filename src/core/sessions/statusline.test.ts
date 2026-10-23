@@ -6,6 +6,8 @@ import { spawn } from 'node:child_process'
 import type { Account } from '../types'
 import { StatusLineManager, captureCommand } from './statusline'
 import { dirIdentity } from '../files/watchedDir'
+import { createAttentionState } from './attention'
+import { hookEventState, latestEventLine } from '../hooks/sessionState'
 
 const account: Account = {
   id: 'a1', label: 't', configDir: path.join(os.tmpdir(), 'astera-none-config'), color: '#fff',
@@ -486,6 +488,7 @@ describe('StatusLineManager observe mode', () => {
   afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }) })
 
   const hookCmd = (): string => captureCommand('node', path.join(dir, 'astera-hook-capture.cjs'))
+  const auditCmd = (): string => captureCommand('node', path.join(dir, 'astera-hook-audit-capture.cjs'))
   /** The two settings files as they were before observe mode, byte for byte. This literal passes against the code
    *  before observe mode was added too, which is what makes it the proof that compatibility is unchanged. */
   const before = (): { base: string; wider: string } => {
@@ -525,20 +528,23 @@ describe('StatusLineManager observe mode', () => {
     expect(await read(tools.settingsFile)).toBe(before().wider)
     expect(plain.settingsFile).toBe(path.join(dir, 'astera-statusline-settings.json').replace(/\\/g, '/'))
     expect(tools.settingsFile).toBe(path.join(dir, 'astera-hooks-settings.json').replace(/\\/g, '/'))
-    expect((await fs.readdir(dir)).filter((f) => f.includes('observe'))).toEqual([])
+    expect((await fs.readdir(dir)).filter((f) => /observe|audit/.test(f))).toEqual([])
+    expect(plain).not.toHaveProperty('observed')
   })
 
-  it('observe points the session at a file with one async PostToolUse hook for every tool after the ones it had', async () => {
+  it('observe points the session at a file with async PostToolUse and PostToolUseFailure hooks for every tool, through the audit capture', async () => {
     const mgr = new StatusLineManager(dir)
     await mgr.init()
     await mgr.ensureObserveFiles()
-    const observe = { matcher: '*', hooks: [{ type: 'command', command: hookCmd(), async: true }] }
+    const audit = { matcher: '*', hooks: [{ type: 'command', command: auditCmd(), async: true }] }
     for (const [toolHooks, was] of [[false, before().base], [true, before().wider]] as const) {
       const c = mgr.spawnConfig('s1', account, { toolHooks, observe: true })
       const plain = mgr.spawnConfig('s1', account, { toolHooks })
       expect(c.settingsFile).not.toBe(plain.settingsFile)
+      expect(c.observed).toBe(true)
       const expected = JSON.parse(was)
-      expected.hooks.PostToolUse.push(observe)
+      expected.hooks.PostToolUse.push(audit)
+      expected.hooks.PostToolUseFailure = [audit]
       expect(JSON.parse(await read(c.settingsFile))).toEqual(expected)
       // The compatibility file is left as it was
       expect(await read(plain.settingsFile)).toBe(was)
@@ -546,9 +552,116 @@ describe('StatusLineManager observe mode', () => {
     }
   })
 
-  it('a session asked to be observed before its files are written gets the plain file', () => {
+  it('a session asked to be observed before its files are written gets the plain file, and is not marked observed', () => {
     const mgr = new StatusLineManager(dir)
-    expect(mgr.spawnConfig('s1', account, { observe: true }).settingsFile).toBe(mgr.spawnConfig('s1', account).settingsFile)
+    const c = mgr.spawnConfig('s1', account, { observe: true })
+    expect(c.settingsFile).toBe(mgr.spawnConfig('s1', account).settingsFile)
+    expect(c).not.toHaveProperty('observed')
+  })
+
+  /** Runs one capture script the way Claude Code runs a hook: the payload on stdin, ASTERA_HOOK_OUT set. */
+  const runCapture = async (script: string, out: string, payload: unknown): Promise<void> => {
+    const child = spawn(process.execPath, [script], { env: { ...process.env, ASTERA_HOOK_OUT: out }, stdio: ['pipe', 'ignore', 'ignore'] })
+    const closed = new Promise((r) => child.on('close', r))
+    child.stdin.end(JSON.stringify(payload))
+    await closed
+  }
+  const lines = async (file: string): Promise<Array<Record<string, unknown>>> =>
+    (await fs.readFile(file, 'utf8').catch(() => '')).split('\n').filter((l) => l !== '').map((l) => JSON.parse(l))
+
+  it('the audit capture writes beside the session’s file, keeping what names the call and none of its output', async () => {
+    const mgr = new StatusLineManager(dir)
+    await mgr.init()
+    await mgr.ensureObserveFiles()
+    const out = path.join(mgr.hookEventsDir, 's1.jsonl')
+    const script = path.join(dir, 'astera-hook-audit-capture.cjs')
+    await runCapture(script, out, {
+      session_id: 'c', transcript_path: '/t', cwd: '/w', hook_event_name: 'PostToolUse', tool_name: 'Read',
+      tool_input: { file_path: 'a.ts' }, tool_response: { file: { content: 'secret body' } }, tool_use_id: 'toolu_1', duration_ms: 3
+    })
+    await runCapture(script, out, {
+      hook_event_name: 'PostToolUseFailure', tool_name: 'Bash', tool_input: { command: 'git push' }, tool_use_id: 'toolu_2',
+      error: 'secret output', is_interrupt: true, duration_ms: 9
+    })
+    const got = await lines(path.join(mgr.hookEventsDir, 's1.audit.jsonl'))
+    expect(got.map(({ astera_at, ...rest }) => (expect(typeof astera_at).toBe('number'), rest))).toEqual([
+      { hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: 'a.ts' }, tool_use_id: 'toolu_1' },
+      { hook_event_name: 'PostToolUseFailure', tool_name: 'Bash', tool_input: { command: 'git push' }, tool_use_id: 'toolu_2', is_interrupt: true }
+    ])
+    expect(await fs.readFile(path.join(mgr.hookEventsDir, 's1.audit.jsonl'), 'utf8')).not.toContain('secret')
+    expect(existsSync(out)).toBe(false)
+  })
+
+  // The review's I2: the session's own hook file is what attention, sessions list, Slack and pendingPrompt read. Fired
+  // the way Claude Code fires hooks, an observed session's settings write that file line for line as a plain session's
+  // do, so its state and attention are the same; the observe lines go to the audit file only.
+  it('an observed session’s own hook file, state and attention are a plain session’s for the same tool events', async () => {
+    const mgr = new StatusLineManager(dir)
+    await mgr.init()
+    await mgr.ensureObserveFiles()
+    const scripts = new Map([
+      [hookCmd(), path.join(dir, 'astera-hook-capture.cjs')],
+      [auditCmd(), path.join(dir, 'astera-hook-audit-capture.cjs')]
+    ])
+    const tool = (event: string, name: string, id: string, extra: Record<string, unknown> = {}) => ({
+      hook_event_name: event, tool_name: name, tool_input: {}, tool_use_id: id, ...extra
+    })
+    const events = [
+      { hook_event_name: 'UserPromptSubmit', prompt: 'x' },
+      tool('PreToolUse', 'Bash', 'b1'),
+      tool('PostToolUse', 'Bash', 'b1', { tool_response: { stdout: '' } }),
+      tool('PreToolUse', 'Write', 'w1'),
+      { hook_event_name: 'Notification', notification_type: 'permission_prompt', message: 'Claude needs your permission' },
+      // A subagent's Read while the permission prompt is up
+      tool('PostToolUse', 'Read', 'r1', { tool_response: {} }),
+      tool('PostToolUseFailure', 'Grep', 'g1', { error: 'x' })
+    ]
+    /** Claude Code's dispatch, as far as these files need it: every entry whose matcher takes the tool, in order. */
+    const fire = async (settingsFile: string, out: string): Promise<void> => {
+      const hooks = JSON.parse(await read(settingsFile)).hooks as Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>
+      for (const e of events) {
+        const name = (e as { tool_name?: string }).tool_name
+        for (const entry of hooks[e.hook_event_name] ?? []) {
+          const m = entry.matcher
+          if (m !== undefined && m !== '' && m !== '*' && !(name !== undefined && m.split('|').includes(name))) continue
+          for (const h of entry.hooks) await runCapture(scripts.get(h.command)!, out, e)
+        }
+      }
+    }
+    for (const toolHooks of [false, true]) {
+      const plainOut = path.join(mgr.hookEventsDir, `plain-${toolHooks}.jsonl`)
+      const observedOut = path.join(mgr.hookEventsDir, `observed-${toolHooks}.jsonl`)
+      await fire(mgr.spawnConfig('p', account, { toolHooks }).settingsFile, plainOut)
+      await fire(mgr.spawnConfig('o', account, { toolHooks, observe: true }).settingsFile, observedOut)
+      const plain = await lines(plainOut)
+      const observed = await lines(observedOut)
+      const unstamped = (l: Array<Record<string, unknown>>) => l.map(({ astera_at: _, ...rest }) => rest)
+      expect(unstamped(observed)).toEqual(unstamped(plain))
+      const attentionOf = (l: Array<Record<string, unknown>>) => {
+        const a = createAttentionState()
+        for (const p of l) a.onHookEvent('s', p)
+        return a.get('s')
+      }
+      expect(attentionOf(observed)).toBe(attentionOf(plain))
+      const stateOf = (file: string) => fs.readFile(file, 'utf8').then((t) => hookEventState(JSON.parse(latestEventLine(t.split('\n').filter((x) => x !== ''))!)))
+      expect(await stateOf(observedOut)).toBe(await stateOf(plainOut))
+      // The observe lines: every tool call that ran or failed, in the audit file only
+      expect((await lines(path.join(mgr.hookEventsDir, `observed-${toolHooks}.audit.jsonl`))).map((l) => [l.hook_event_name, l.tool_name])).toEqual([
+        ['PostToolUse', 'Bash'],
+        ['PostToolUse', 'Read'],
+        ['PostToolUseFailure', 'Grep']
+      ])
+      expect(existsSync(path.join(mgr.hookEventsDir, `plain-${toolHooks}.audit.jsonl`))).toBe(false)
+    }
+  }, 60_000)
+
+  it('the app’s start empties the audit files with the session files', async () => {
+    const mgr = new StatusLineManager(dir)
+    await mgr.init()
+    await fs.writeFile(path.join(mgr.hookEventsDir, 's1.audit.jsonl'), '{}\n')
+    await fs.writeFile(path.join(mgr.hookEventsDir, 's1.jsonl'), '{}\n')
+    await mgr.startupCleanup()
+    expect(await fs.readdir(mgr.hookEventsDir)).toEqual([])
   })
 
   it('an observe file that could not be written leaves the session on the plain file', async () => {
@@ -576,7 +689,8 @@ describe('StatusLineManager observe mode', () => {
     await mgr.useNode(node)
     await mgr.ensureObserveFiles()
     const s = JSON.parse(await read(mgr.spawnConfig('s1', account, { observe: true }).settingsFile))
-    expect(s.hooks.PostToolUse.at(-1).hooks[0].command).toBe(captureCommand(node, path.join(dir, 'astera-hook-capture.cjs')))
+    expect(s.hooks.PostToolUse.at(-1).hooks[0].command).toBe(captureCommand(node, path.join(dir, 'astera-hook-audit-capture.cjs')))
+    expect(s.hooks.Stop[0].hooks[0].command).toBe(captureCommand(node, path.join(dir, 'astera-hook-capture.cjs')))
   })
 })
 

@@ -54,6 +54,11 @@ export function hookEventsFileIn(dir: string, sessionId: string): string {
   return path.join(dir, `${sessionId}.jsonl`)
 }
 
+/** How an observed session's audit file is named beside its own: `<session>.audit.jsonl`, the session's file with this
+ *  ending in place of `.jsonl` (the audit capture derives it from ASTERA_HOOK_OUT, statusline.ts). Only the Host's
+ *  recorder reads it; every other reader of the folder passes it by (HookEventWatcher). */
+export const AUDIT_HOOK_EVENTS = '.audit.jsonl'
+
 /** The notification types that mean this session is showing a person something to answer, read off
  *  their emit sites in Claude Code 2.1.280: `permission_prompt` ("Claude needs your permission to
  *  use …", after the dialog has been up a few seconds), `elicitation_dialog` (an MCP server's

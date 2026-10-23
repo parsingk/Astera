@@ -76,6 +76,9 @@ export interface AuditRecorder {
   invalidate(): void
   /** Settles once every call handed over so far is written or dropped. */
   flushed(): Promise<void>
+  /** False while the mode is known to be compatibility, when every call is dropped: the sources read nothing then
+   *  (sources.ts). True while it may be observe, including before it is read and after `invalidate`. */
+  observing(): boolean
 }
 
 export function createAuditRecorder(d: {
@@ -204,9 +207,11 @@ export function createAuditRecorder(d: {
       try {
         // Known to be off: dropped here, touching nothing. Not known yet: resolved and held until it is
         if (mode === 'compatibility') return
-        if (ev.dedupeKey !== undefined && heard(ev.sessionId, ev.dedupeKey)) return
+        // The session first: a call of one not observed is not remembered, so the same call heard once its note is
+        // there is still kept
         const info = d.sessionInfo(ev.sessionId)
         if (info === null) return
+        if (ev.dedupeKey !== undefined && heard(ev.sessionId, ev.dedupeKey)) return
         const rec = recordOf(ev, info)
         if (pending.length >= AUDIT_PENDING_MAX) {
           if (dropped === 0) d.log(`audit: ${AUDIT_PENDING_MAX} records wait for the disk; later calls are counted and not recorded until it takes them`)
@@ -226,7 +231,8 @@ export function createAuditRecorder(d: {
       mode = null
       generation++
     },
-    flushed: () => queue
+    flushed: () => queue,
+    observing: () => mode !== 'compatibility'
   }
 }
 
