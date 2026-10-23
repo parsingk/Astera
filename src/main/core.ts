@@ -292,6 +292,8 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     log: hidingLog(userDataDir, sessionsLog)
   })
   sessions.capabilities = capabilities
+  // Observe mode: an observed Claude session's hook settings, written by its prepare (StatusLineManager.ensureObserveFiles)
+  sessions.observeHooks = () => statusLine.ensureObserveFiles()
   // The chat sessions. It is handed `procRouter.factory` rather than a factory chosen now, for exactly
   // the reason SessionManager is handed `ptyRouter.factory`: which one a spawn reaches is decided at
   // spawn time, once registerIpc has learned whether this Host speaks procs. `version` is the app's

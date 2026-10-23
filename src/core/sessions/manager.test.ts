@@ -1451,3 +1451,68 @@ describe('shared capabilities', () => {
     expect(b.spawned[0].opts.env).toEqual(a.spawned[0].opts.env)
   })
 })
+
+// Observe mode (observe mode design §4, §5, Review Focus 1): the mode a prepare read is the session's for life. Observed,
+// a Claude session is pointed at the hook settings that add the PostToolUse capture, and the note says the session was
+// started observed, which is what the Host's recorder asks before it keeps a call. In compatibility nothing changes.
+describe('observe mode at spawn', () => {
+  const capsIn = (policyMode: 'compatibility' | 'observe'): SessionCapabilities => ({
+    context: { kind: 'implicit', accounts: [account.id], policyMode, executionMode: 'managed' },
+    args: [], env: {}, given: [], gatewayGrant: [], skipped: []
+  })
+  const rig = (policyMode: 'compatibility' | 'observe' | null) => {
+    const spawned: PtySpawnOptions[] = []
+    const argv: Array<string[] | string> = []
+    const asked: unknown[] = []
+    const checks: SpawnChecks = {
+      cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform: 'linux', now: Date.now, syncExists: () => true, log: () => {}
+    }
+    const manager = new SessionManager((_f, a, o) => (argv.push(a), spawned.push(o), new FakePty()), makeDescriptors('linux'), 100, 20, '/home/t', (id, _acc, o) => {
+      asked.push(o)
+      return { settingsFile: o && 'observe' in o ? 'observe.json' : 's.json', outPath: 'o.json', originalCommand: null, hookOutPath: `/h/${id}.jsonl` }
+    }, [], {}, checks)
+    if (policyMode !== null) manager.capabilities = { get: () => capsIn(policyMode), refresh: async () => {} }
+    const observeHooks = vi.fn(async () => {})
+    manager.observeHooks = observeHooks
+    return { manager, spawned, argv, asked, observeHooks }
+  }
+
+  it('in compatibility the hook settings are asked for as before and the note carries no mark', async () => {
+    for (const mode of ['compatibility', null] as const) {
+      const { manager, spawned, asked, observeHooks } = rig(mode)
+      await manager.prepare({ account, cwd: '/work' })
+      manager.spawn({ account, cwd: '/work' })
+      expect(asked[0]).toStrictEqual({ toolHooks: false })
+      expect(spawned[0].meta?.restore).not.toHaveProperty('observed')
+      expect(observeHooks).not.toHaveBeenCalled()
+    }
+  })
+
+  it('observed, the prepare puts the observe files in place and the spawn asks for them and marks the note', async () => {
+    const { manager, spawned, argv, asked, observeHooks } = rig('observe')
+    await manager.prepare({ account, cwd: '/work' })
+    expect(observeHooks).toHaveBeenCalledTimes(1)
+    manager.spawn({ account, cwd: '/work', slackNotify: true })
+    expect(asked[0]).toStrictEqual({ toolHooks: true, observe: true })
+    expect(argsText(argv[0])).toContain('observe.json')
+    expect(spawned[0].meta?.restore).toMatchObject({ observed: true })
+  })
+
+  it('a codex session observed is marked in its note, with no hook files to write', async () => {
+    const { manager, spawned, observeHooks } = rig('observe')
+    await manager.prepare({ account: codexAccount, cwd: '/work' })
+    manager.spawn({ account: codexAccount, cwd: '/work' })
+    expect(observeHooks).not.toHaveBeenCalled()
+    expect(spawned[0].meta?.restore).toMatchObject({ observed: true })
+  })
+
+  it('a prepare whose observe files failed does not fail the spawn', async () => {
+    const { manager, spawned } = rig('observe')
+    manager.observeHooks = async () => {
+      throw new Error('EACCES')
+    }
+    await expect(manager.prepare({ account, cwd: '/work' })).resolves.toBeUndefined()
+    manager.spawn({ account, cwd: '/work' })
+    expect(spawned).toHaveLength(1)
+  })
+})

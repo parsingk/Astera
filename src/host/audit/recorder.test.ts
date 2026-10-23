@@ -296,13 +296,13 @@ describe('registrySessionFacts', () => {
     id: o.id ?? 'pty1',
     pid: 1,
     alive: o.alive ?? true,
-    meta: { kind: o.kind ?? 'session', id: o.sid ?? 'sess_a', restore: o.restore ?? { accountId: 'acc1', cwd, title: 't', agentProfileId: 'ap1' } }
+    meta: { kind: o.kind ?? 'session', id: o.sid ?? 'sess_a', restore: o.restore ?? { accountId: 'acc1', cwd, title: 't', agentProfileId: 'ap1', observed: true } }
   })
 
   it('reads a terminal session from its pty note and a chat from its process note', () => {
     const facts = registrySessionFacts({
       ptys: { list: () => [entry({})] },
-      procs: { list: () => [entry({ id: 'proc1', kind: 'chat', sid: 'sess_c', restore: { accountId: 'acc2', cwd, title: 'c' } })] }
+      procs: { list: () => [entry({ id: 'proc1', kind: 'chat', sid: 'sess_c', restore: { accountId: 'acc2', cwd, title: 'c', observed: true } })] }
     })
     expect(facts('sess_a')).toEqual({ kind: 'terminal', accountId: 'acc1', agentProfileId: 'ap1', cwd })
     expect(facts('sess_c')).toEqual({ kind: 'chat', accountId: 'acc2', cwd })
@@ -313,10 +313,10 @@ describe('registrySessionFacts', () => {
     const facts = registrySessionFacts({
       ptys: {
         list: () => [
-          entry({ id: 'old', alive: false, restore: { accountId: 'acc_old', cwd, title: 't' } }),
-          entry({ id: 'new', restore: { accountId: 'acc_new', cwd, title: 't' } }),
-          entry({ id: 'sh', kind: 'terminal', sid: 'tab1', restore: { cwd } }),
-          entry({ id: 'bad', sid: 'sess_bad', restore: { title: 't' } })
+          entry({ id: 'old', alive: false, restore: { accountId: 'acc_old', cwd, title: 't', observed: true } }),
+          entry({ id: 'new', restore: { accountId: 'acc_new', cwd, title: 't', observed: true } }),
+          entry({ id: 'sh', kind: 'terminal', sid: 'tab1', restore: { cwd, observed: true } }),
+          entry({ id: 'bad', sid: 'sess_bad', restore: { title: 't', observed: true } })
         ]
       },
       procs: { list: () => [] }
@@ -324,6 +324,17 @@ describe('registrySessionFacts', () => {
     expect(facts('sess_a')).toMatchObject({ accountId: 'acc_new' })
     expect(facts('tab1')).toBeNull()
     expect(facts('sess_bad')).toBeNull()
+  })
+
+  // Review Focus 1: a session started while the mode was compatibility keeps its hooks and is not observed, though the
+  // mode is observe now; its note carries no mark, and its calls are not kept from any source.
+  it('is null for a session whose note does not say it was started observed', () => {
+    const facts = registrySessionFacts({
+      ptys: { list: () => [entry({ restore: { accountId: 'acc1', cwd, title: 't' } })] },
+      procs: { list: () => [entry({ id: 'proc1', kind: 'chat', sid: 'sess_c', restore: { accountId: 'acc2', cwd, title: 'c', observed: 'yes' } })] }
+    })
+    expect(facts('sess_a')).toBeNull()
+    expect(facts('sess_c')).toBeNull()
   })
 })
 

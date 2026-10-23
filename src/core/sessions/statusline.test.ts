@@ -478,6 +478,108 @@ describe('StatusLineManager.useNode', () => {
   })
 })
 
+// Observe mode (observe mode design §4, §5): a session started while the mode is observe gets a PostToolUse hook for
+// every tool, `async` so no call waits on it; one started in compatibility gets exactly what it got before.
+describe('StatusLineManager observe mode', () => {
+  let dir: string
+  beforeEach(async () => { dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-sl-observe-')) })
+  afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }) })
+
+  const hookCmd = (): string => captureCommand('node', path.join(dir, 'astera-hook-capture.cjs'))
+  /** The two settings files as they were before observe mode, byte for byte. This literal passes against the code
+   *  before observe mode was added too, which is what makes it the proof that compatibility is unchanged. */
+  const before = (): { base: string; wider: string } => {
+    const hook = hookCmd()
+    const every = {
+      SessionStart: [{ hooks: [{ type: 'command', command: captureCommand('node', path.join(dir, 'astera-session-context.cjs')) }] }],
+      Notification: [{ hooks: [{ type: 'command', command: hook }] }],
+      Stop: [{ hooks: [{ type: 'command', command: hook }] }],
+      PreToolUse: [{ matcher: 'AskUserQuestion', hooks: [{ type: 'command', command: hook }] }],
+      PostToolUse: [{ matcher: 'AskUserQuestion', hooks: [{ type: 'command', command: hook }] }],
+      UserPromptSubmit: [{ hooks: [{ type: 'command', command: hook, async: true }] }],
+      StopFailure: [{ hooks: [{ type: 'command', command: hook, async: true }] }]
+    }
+    const settings = {
+      statusLine: { type: 'command', command: captureCommand('node', path.join(dir, 'astera-statusline-capture.cjs')), padding: 0 },
+      hooks: every
+    }
+    const tools = 'AskUserQuestion|Bash|PowerShell|Write|Edit|NotebookEdit'
+    const wider = {
+      ...settings,
+      hooks: {
+        ...every,
+        PreToolUse: [{ matcher: tools, hooks: [{ type: 'command', command: hook }] }],
+        PostToolUse: [{ matcher: tools, hooks: [{ type: 'command', command: hook }] }]
+      }
+    }
+    return { base: JSON.stringify(settings, null, 2), wider: JSON.stringify(wider, null, 2) }
+  }
+  const read = (file: string): Promise<string> => fs.readFile(file.replace(/\//g, path.sep), 'utf8')
+
+  it('in compatibility the settings files and the files a session is pointed at are what they were, and nothing else is written', async () => {
+    const mgr = new StatusLineManager(dir)
+    await mgr.init()
+    const plain = mgr.spawnConfig('s1', account, { toolHooks: false })
+    const tools = mgr.spawnConfig('s2', account, { toolHooks: true })
+    expect(await read(plain.settingsFile)).toBe(before().base)
+    expect(await read(tools.settingsFile)).toBe(before().wider)
+    expect(plain.settingsFile).toBe(path.join(dir, 'astera-statusline-settings.json').replace(/\\/g, '/'))
+    expect(tools.settingsFile).toBe(path.join(dir, 'astera-hooks-settings.json').replace(/\\/g, '/'))
+    expect((await fs.readdir(dir)).filter((f) => f.includes('observe'))).toEqual([])
+  })
+
+  it('observe points the session at a file with one async PostToolUse hook for every tool after the ones it had', async () => {
+    const mgr = new StatusLineManager(dir)
+    await mgr.init()
+    await mgr.ensureObserveFiles()
+    const observe = { matcher: '*', hooks: [{ type: 'command', command: hookCmd(), async: true }] }
+    for (const [toolHooks, was] of [[false, before().base], [true, before().wider]] as const) {
+      const c = mgr.spawnConfig('s1', account, { toolHooks, observe: true })
+      const plain = mgr.spawnConfig('s1', account, { toolHooks })
+      expect(c.settingsFile).not.toBe(plain.settingsFile)
+      const expected = JSON.parse(was)
+      expected.hooks.PostToolUse.push(observe)
+      expect(JSON.parse(await read(c.settingsFile))).toEqual(expected)
+      // The compatibility file is left as it was
+      expect(await read(plain.settingsFile)).toBe(was)
+      expect(c.hookOutPath).toBe(plain.hookOutPath)
+    }
+  })
+
+  it('a session asked to be observed before its files are written gets the plain file', () => {
+    const mgr = new StatusLineManager(dir)
+    expect(mgr.spawnConfig('s1', account, { observe: true }).settingsFile).toBe(mgr.spawnConfig('s1', account).settingsFile)
+  })
+
+  it('an observe file that could not be written leaves the session on the plain file', async () => {
+    const mgr = new StatusLineManager(dir)
+    await mgr.init()
+    const write = fs.writeFile
+    const spy = vi.spyOn(fs, 'writeFile').mockImplementation((file, ...rest) =>
+      String(file).includes('observe') ? Promise.reject(new Error('EACCES')) : write(file, ...(rest as [string]))
+    )
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await mgr.ensureObserveFiles()
+    } finally {
+      spy.mockRestore()
+      warn.mockRestore()
+    }
+    expect(mgr.spawnConfig('s1', account, { observe: true }).settingsFile).toBe(mgr.spawnConfig('s1', account).settingsFile)
+  })
+
+  it('writes the observe files again with the node it runs under now', async () => {
+    const mgr = new StatusLineManager(dir)
+    await mgr.init()
+    await mgr.ensureObserveFiles()
+    const node = 'C:\\rt\\astera-host.exe'
+    await mgr.useNode(node)
+    await mgr.ensureObserveFiles()
+    const s = JSON.parse(await read(mgr.spawnConfig('s1', account, { observe: true }).settingsFile))
+    expect(s.hooks.PostToolUse.at(-1).hooks[0].command).toBe(captureCommand(node, path.join(dir, 'astera-hook-capture.cjs')))
+  })
+})
+
 // The measurement itself, kept: every command the settings carry, run the way Claude Code runs it,
 // from a profile folder with a space and Hangul in it and under the node running this test (on a
 // stock install that is C:\Program Files\nodejs, a space of its own).

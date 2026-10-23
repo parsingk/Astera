@@ -11,6 +11,7 @@ import { agentProfileInUse, createHostAgentProfiles } from './agentProfiles/comm
 import { createHostPolicies } from './audit/policyCommands'
 import { createHostAudit } from './audit/auditCommands'
 import { createAuditRecorder, dispatchOfSession, registrySessionFacts } from './audit/recorder'
+import { createAuditSources } from './audit/sources'
 import { readAuditPolicy } from '../core/audit/policy'
 import { pruneRecords } from '../core/audit/store'
 import { createGatewayHub } from './gateway/hub'
@@ -273,6 +274,8 @@ async function main(): Promise<void> {
     rollingWiring?.dispose()
     // The session events stop with the rolling that feeds them. Never throws.
     sessionEvents?.dispose()
+    // So do observe mode's sources; what they handed over is flushed below. Never throws.
+    auditSources.dispose()
     // The work units' watchers and their sync timer stop with them. Never throws.
     hostWorkUnits?.dispose()
     // The MCP HTTP entrance stops with the Host (MCP HTTP §3): its stdin ends, which is its way out, and
@@ -515,6 +518,10 @@ async function main(): Promise<void> {
     dispatchOf: (sessionId, at) => dispatchOfSession(orch.state(), sessionId, at),
     log: (m) => log.write(m)
   })
+  // Its sources (audit/sources.ts): the chat processes' lines and the Codex rollouts the pty notes name, followed for
+  // the sessions started observed; the Claude hook lines come through the rolling's hook tap below. Before any pty or
+  // process opens, so every session's start is heard.
+  const auditSources = createAuditSources({ recorder: auditRecorder, ptys: registry, procs, log: (m) => log.write(m) })
 
   /** Declared above the rolling (the S6 final review M3 lesson): Task 6 has the rolling's events reach it,
    *  and a `const` below would be in its temporal dead zone. Null without a spawner or without the SDK. */
@@ -557,6 +564,7 @@ async function main(): Promise<void> {
           hookTap: (sid, p) => {
             slackWiring?.onHookEvent(sid, p)
             sessionEvents?.onHookEvent(sid, p)
+            auditSources.hook(sid, p)
           }
         })
       : null

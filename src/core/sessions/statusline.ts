@@ -102,11 +102,13 @@ process.stdin.on('error', finish)
  *
  * **Never throws.** `init` runs inside createCore, and a rejection there leaves the app with no window
  * (the same path core/scheduler/config.ts's load() documents for a rename EPERM). createCore has no
- * logger, so a failure goes to the console. The temp file is removed on every path.
+ * logger, so a failure goes to the console. The temp file is removed on every path. Resolves to
+ * whether the file holds `content` now, for a caller that must not point a session at a file that is
+ * not there (the observe files).
  */
-async function writeScript(file: string, content: string): Promise<void> {
+async function writeScript(file: string, content: string): Promise<boolean> {
   try {
-    if ((await fs.readFile(file, 'utf8')) === content) return
+    if ((await fs.readFile(file, 'utf8')) === content) return true
   } catch {
     /* no file yet, or unreadable: write it */
   }
@@ -114,12 +116,15 @@ async function writeScript(file: string, content: string): Promise<void> {
   try {
     await fs.writeFile(tmp, content, 'utf8')
     await renameRetrying(tmp, file)
+    return true
   } catch (err) {
     console.warn(`astera: could not swap in ${path.basename(file)} (${(err as Error).message}); writing it in place`)
     try {
       await fs.writeFile(file, content, 'utf8')
+      return true
     } catch (again) {
       console.warn(`astera: could not write ${path.basename(file)} (${(again as Error).message})`)
+      return false
     }
   } finally {
     await fs.rm(tmp, { force: true }).catch(() => {})
@@ -211,14 +216,26 @@ const ASK_MATCHER = 'AskUserQuestion'
  *  so the capture and the invalidation cannot cover different sets — see the PostToolUse comment in ensureFiles(). */
 const TOOL_MATCHER = `${ASK_MATCHER}|Bash|PowerShell|Write|Edit|NotebookEdit`
 
+/** Settings file contents as ensureFiles last built them, for the observe variants. */
+interface BuiltSettings {
+  hookCmd: string
+  settings: { hooks: { PostToolUse: unknown[] } }
+  hooksSettings: { hooks: { PostToolUse: unknown[] } }
+}
+
 export class StatusLineManager {
   private readonly capturePath: string
   private readonly settingsFile: string
   private readonly outDir: string
   private readonly hookCapturePath: string
   private readonly hooksSettingsFile: string
+  private readonly observeSettingsFile: string
+  private readonly observeHooksSettingsFile: string
   private readonly sessionContextPath: string
   readonly hookEventsDir: string // Watched by index.ts's HookEventWatcher
+  private built: BuiltSettings | null = null
+  /** Both observe files hold what the last ensureObserveFiles built; until then an observed session gets the plain file. */
+  private observeReady = false
 
   constructor(
     private userDataDir: string,
@@ -233,6 +250,8 @@ export class StatusLineManager {
     this.outDir = path.join(userDataDir, 'statusline')
     this.hookCapturePath = path.join(userDataDir, 'astera-hook-capture.cjs')
     this.hooksSettingsFile = path.join(userDataDir, 'astera-hooks-settings.json')
+    this.observeSettingsFile = path.join(userDataDir, 'astera-observe-settings.json')
+    this.observeHooksSettingsFile = path.join(userDataDir, 'astera-observe-hooks-settings.json')
     this.sessionContextPath = path.join(userDataDir, 'astera-session-context.cjs')
     // The Host reads these files back for `sessions list` (host/sessions.ts), so where they are is one
     // rule in core rather than a path spelled out twice.
@@ -376,12 +395,41 @@ export class StatusLineManager {
       }
     }
     await writeScript(this.hooksSettingsFile, JSON.stringify(hooksSettings, null, 2))
+    this.built = { hookCmd, settings, hooksSettings }
     // The folders the capture scripts write into. Both scripts swallow a write error, so a session
     // spawned before these exist (the Host's first spawn on a fresh profile, where the app's
     // startupCleanup never ran) would lose its statusline and hook output silently. Creating a folder
     // that is already there touches nothing in it.
     await fs.mkdir(this.hookEventsDir, { recursive: true })
     await fs.mkdir(this.outDir, { recursive: true })
+  }
+
+  /**
+   * Observe mode (observe mode design §4, §5): writes the two settings files a session started while the mode is
+   * observe reads instead of the ones above. Each is its plain file with one more PostToolUse entry, for every tool
+   * (`*`), through the same capture into the session's hook events file, where the Host's watcher hands it to the
+   * recorder. `async`, so no tool call waits on the capture's node process; the entries already there stay as they are.
+   *
+   * A tool the plain file already matches (AskUserQuestion, and the write/execute family in the wider file) can then be
+   * captured twice, since Claude Code may or may not fold two entries with the same command into one. Every reader of
+   * PostToolUse goes by `tool_use_id` (attention, pendingPrompt, Slack, the recorder's dedupe), so a second line for
+   * the same call changes nothing.
+   *
+   * Separate files, written only when a session is about to start observed (`SessionManager.prepare`), so a
+   * compatibility session reads exactly the bytes it always did, and nothing is written for observe until it is on. A
+   * session reads its file once at start (see UserPromptSubmit above), so rewriting these later reaches only new
+   * sessions. Until both are written, an observed session gets the plain file (`spawnConfig`). Never throws.
+   */
+  async ensureObserveFiles(): Promise<void> {
+    if (!this.built) await this.ensureFiles()
+    const b = this.built
+    if (!b) return
+    const observe = { matcher: '*', hooks: [{ type: 'command', command: b.hookCmd, async: true }] }
+    const withObserve = (s: BuiltSettings['settings']): string =>
+      JSON.stringify({ ...s, hooks: { ...s.hooks, PostToolUse: [...s.hooks.PostToolUse, observe] } }, null, 2)
+    const plain = await writeScript(this.observeSettingsFile, withObserve(b.settings))
+    const wider = await writeScript(this.observeHooksSettingsFile, withObserve(b.hooksSettings))
+    this.observeReady = plain && wider
   }
 
   /** The app-start half: empties the hook events folder (a queue the app drains) and makes the
@@ -450,12 +498,21 @@ export class StatusLineManager {
    *  Every session gets the Notification hook and its own hookOutPath — that is what the desktop
    *  notification for a choice or an approval is built on, and it is offered for any session.
    *  `opts.toolHooks` adds what only slack.ts reads: the turn summary's Stop and the per-tool-call
-   *  capture pair. */
-  spawnConfig(sessionId: string, account: Account, opts?: { toolHooks?: boolean }): StatusLineSpawn {
+   *  capture pair. `opts.observe` (a session started while the mode is observe) points it at the
+   *  observe variant of that file, once ensureObserveFiles has written both. */
+  spawnConfig(sessionId: string, account: Account, opts?: { toolHooks?: boolean; observe?: boolean }): StatusLineSpawn {
     const toolHooks = opts?.toolHooks === true
+    const observe = opts?.observe === true && this.observeReady
+    const file = observe
+      ? toolHooks
+        ? this.observeHooksSettingsFile
+        : this.observeSettingsFile
+      : toolHooks
+        ? this.hooksSettingsFile
+        : this.settingsFile
     return {
       // Normalised to forward slashes — this is the --settings argument path passed to the shell/cmd (a verified format). node fs handles it as-is too.
-      settingsFile: (toolHooks ? this.hooksSettingsFile : this.settingsFile).replace(/\\/g, '/'),
+      settingsFile: file.replace(/\\/g, '/'),
       outPath: path.join(this.outDir, `${sessionId}.json`),
       originalCommand: this.readOriginalStatusLine(account.configDir),
       // Always set: with ASTERA_HOOK_OUT unset the capture script does nothing, so a hook that is

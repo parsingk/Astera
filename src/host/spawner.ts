@@ -360,6 +360,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     log: hidingLog(profileDir, log)
   })
   sessions.capabilities = capabilities
+  // Observe mode: an observed Claude session's hook settings, written by its prepare (StatusLineManager.ensureObserveFiles)
+  sessions.observeHooks = () => statusLine.ensureObserveFiles()
   sessions.onExit = (e) => {
     sessions.forget(e.sessionId)
   }

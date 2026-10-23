@@ -82,7 +82,8 @@ export function createAuditRecorder(d: {
   profileDir: string
   /** The mode sessions are observed in, from audit-policy.json; rejects when the file could not be read cleanly. */
   mode(): Promise<AuditMode>
-  /** The session's facts, or null for one Astera did not start, which is not observed (design §5). */
+  /** The session's facts, or null for one Astera did not start, which is not observed (design §5), and for one not
+   *  started while the mode was observe. */
   sessionInfo(sessionId: string): SessionFacts | null
   /** The Job, Run and Task the session worked for at `at`, or null. */
   dispatchOf(sessionId: string, at: string): DispatchIds | null
@@ -231,7 +232,9 @@ export function createAuditRecorder(d: {
 
 /** `sessionInfo` over the Host's two registries: a terminal session's pty note, a chat session's process note, read the
  *  way `sessions list` reads them (sessions.ts). The live one when an ended one shares the id (a roll), and null for a
- *  plain shell tab, a run configuration or a note without its account or folder. */
+ *  plain shell tab, a run configuration or a note without its account or folder. Null too for a session whose note does
+ *  not say it was started while the mode was observe (`observed`, written at spawn): one started before observe was on
+ *  keeps the hooks it started with and is not observed by any source (Review Focus 1). */
 export function registrySessionFacts(d: { ptys: { list(): PtyEntry[] }; procs: { list(): PtyEntry[] } }): (sessionId: string) => SessionFacts | null {
   const liveOrLast = (all: PtyEntry[]): PtyEntry | undefined => [...all].reverse().find((e) => e.alive) ?? all[all.length - 1]
   return (id) => {
@@ -239,6 +242,7 @@ export function registrySessionFacts(d: { ptys: { list(): PtyEntry[] }; procs: {
     const e = terminal ?? liveOrLast(d.procs.list().filter((e) => e.meta?.kind === 'chat' && e.meta.id === id))
     if (!e) return null
     const restore = e.meta!.restore
+    if (restore.observed !== true) return null
     const text = (k: string): string | null => (typeof restore[k] === 'string' && restore[k] !== '' ? (restore[k] as string) : null)
     const accountId = text('accountId')
     const cwd = text('cwd')
