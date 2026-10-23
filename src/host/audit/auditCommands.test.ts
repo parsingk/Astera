@@ -198,6 +198,10 @@ describe('createHostAudit', () => {
     await appendRecords(h.profileDir, [rec()], { now: () => NOW, maxBytes: 1000 })
     expect((await h.call('audit-summary')).body).toMatchObject({ stoppedAtLimit: true })
     expect((await h.call('audit-summary', { until: new Date(NOW - 3 * 24 * 60 * 60 * 1000).toISOString() })).body).toMatchObject({ stoppedAtLimit: false })
+    // `until` is before, as `audit list` reads it: a period that ends where the day starts holds none of its records
+    const startOfDay = new Date(day.getFullYear(), day.getMonth(), day.getDate()).getTime()
+    expect((await h.call('audit-summary', { until: new Date(startOfDay).toISOString() })).body).toMatchObject({ stoppedAtLimit: false })
+    expect((await h.call('audit-summary', { until: new Date(startOfDay + 1).toISOString() })).body).toMatchObject({ stoppedAtLimit: true })
   })
 
   // A Host that restarted has written nothing yet, so it knows a day stopped from what the folder says, which its start's

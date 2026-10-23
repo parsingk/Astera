@@ -376,6 +376,29 @@ describe('retention (Review Focus 4)', () => {
   })
 })
 
+describe('auditStoppedAtLimit at the edges of a period', () => {
+  // `until` is before, as `audit list --until` says (cli usage: "only calls before this time"), and `since` is at or after,
+  // so a day is in the period when the period holds an instant of it: not a day that starts at `until`
+  it('counts a day when the period holds an instant of it: since is at or after, until is before', async () => {
+    const p = await profile()
+    await fs.mkdir(auditDir(p), { recursive: true })
+    await fs.writeFile(path.join(auditDir(p), '2026-10-24.jsonl'), 'x'.repeat(1999) + '\n')
+    await appendRecords(p, [rec({ at: at('2026-10-24') })], { now: () => ms('2026-10-24'), maxBytes: 1000 })
+    expect(auditStoppedAtLimit(p)).toBe(true)
+    const iso = (ms_: number): string => new Date(ms_).toISOString()
+    const startOfDay = new Date(2026, 9, 24).getTime()
+    const startOfNext = new Date(2026, 9, 25).getTime()
+    // The period ends where the day starts: it holds nothing of it
+    expect(auditStoppedAtLimit(p, { until: iso(startOfDay) })).toBe(false)
+    expect(auditStoppedAtLimit(p, { since: iso(startOfDay - 60_000), until: iso(startOfDay) })).toBe(false)
+    // One millisecond more holds the day's first instant
+    expect(auditStoppedAtLimit(p, { until: iso(startOfDay + 1) })).toBe(true)
+    // The period starts at the day's last millisecond: it holds it; at the next day's first, it holds nothing of this one
+    expect(auditStoppedAtLimit(p, { since: iso(startOfNext - 1) })).toBe(true)
+    expect(auditStoppedAtLimit(p, { since: iso(startOfNext) })).toBe(false)
+  })
+})
+
 describe('a day that stopped at the size, across a restart', () => {
   /** The store as a Host that just started has it: nothing known of any folder until its start's prune has read it. */
   const restarted = async (): Promise<typeof import('./store')> => {

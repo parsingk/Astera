@@ -261,12 +261,14 @@ async function prune(dir: string, s: FolderState, o: AuditStoreOptions, room: nu
 }
 
 /** Whether a day in the period (by local day; the whole folder without one) was stopped at the size by this Host, so its
- *  records are fewer than its calls. */
+ *  records are fewer than its calls. The period is read as the records are (AuditFilter): `since` is at or after, `until`
+ *  is before, so the last day is the one holding the millisecond before `until`, and a day that starts at `until` is not
+ *  in it. */
 export function auditStoppedAtLimit(profileDir: string, period: { since?: string; until?: string } = {}): boolean {
   const s = folders.get(profilePaths(profileDir).auditRecords)
   if (!s) return false
   const first = period.since !== undefined ? auditDayOf(period.since) : null
-  const last = period.until !== undefined ? auditDayOf(period.until) : null
+  const last = period.until !== undefined ? localDay(new Date(Date.parse(period.until) - 1)) : null
   return [...s.stopped].some((d) => (first === null || d >= first) && (last === null || d <= last))
 }
 
