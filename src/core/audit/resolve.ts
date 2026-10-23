@@ -536,6 +536,8 @@ const NO_COMMAND = new Set([
   'for', 'foreach', 'select', 'case', 'switch', 'function', 'try', 'catch', 'finally', 'throw', 'fi', 'done', 'esac', 'break',
   'continue', 'return'
 ])
+/** The cmdlets that run a script block per item or for some items: control flow in a pipeline. */
+const PIPELINE_FLOW = new Set(['foreach-object', 'where-object'])
 const DURATION = /^\d+(?:\.\d+)?[smhd]?$/
 const POSIX_SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh'])
 const INTERPRETERS = new Set([...POSIX_SHELLS, 'powershell', 'pwsh', 'cmd'])
@@ -582,9 +584,10 @@ function stripPrefix(raw: Cmd, flavor: Flavor): { cmd: Cmd; syntax: boolean; con
     } else if (programName(w) === 'timeout') i = afterTimeout(words, i + 1)
     else break
   }
-  // So far only a keyword made it syntax
-  const control = syntax
   const rest = words.slice(i)
+  // So far only a keyword made it syntax. ForEach-Object and Where-Object are a loop and a condition written as cmdlets:
+  // the block after them runs once per item, or only for the items let through
+  const control = syntax || (rest.length > 0 && PIPELINE_FLOW.has(programName(rest[0]).toLowerCase()))
   const cmdlet = rest.length > 0 ? cmdletOf(rest[0], flavor) : undefined
   const cmd: Cmd = { words: rest, out: raw.out, call: raw.call, quoted: raw.quoted.slice(i), invoked: raw.invoked, cmdlet }
   const dropped = { cmd: { ...cmd, words: [], quoted: [] }, syntax: true, control }

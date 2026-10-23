@@ -275,6 +275,18 @@ describe('shell: syntax that is not a command', () => {
     expect(bash('bash -c "if true; then git push; fi"')).toMatchObject({ scripted: true })
   })
 
+  // Final re-review: ForEach-Object runs its block once per item and Where-Object only for the items it lets through,
+  // a loop and a condition as much as foreach and if are
+  it('calls a PowerShell line scripted when it has a ForEach-Object or Where-Object', () => {
+    for (const line of [
+      'git branch | ForEach-Object { git push origin $_ }',
+      'Get-ChildItem *.log | ForEach-Object { Remove-Item ..\\x }',
+      '1..3 | Where-Object { git push }',
+      'Get-ChildItem | foreach-object -Process { Remove-Item $_ }'
+    ])
+      expect(ps(line), line).toMatchObject({ confidence: 'heuristic', scripted: true })
+  })
+
   // Final review I1: only control flow makes a line a script. A compound line, a script handed to a shell's -c (as Codex
   // hands every command) and a PowerShell value where a command could be are read as commands
   it('does not call a line scripted for being compound, for a -c script, or for a PowerShell value', () => {

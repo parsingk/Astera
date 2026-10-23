@@ -117,6 +117,8 @@ describe('decide, under the starter rules', () => {
     expect(decide(bash('for b in a c; do git push origin $b; done'), p)).toEqual({ decision: 'unknown' })
     expect(decide(bash('if git diff --quiet; then git push; fi'), p)).toEqual({ decision: 'unknown' })
     expect(decide(claude('PowerShell', { command: 'foreach ($r in $remotes) { git push $r }' }), p)).toEqual({ decision: 'unknown' })
+    expect(decide(claude('PowerShell', { command: 'git branch | ForEach-Object { git push origin $_ }' }), p)).toEqual({ decision: 'unknown' })
+    expect(decide(claude('PowerShell', { command: '1..3 | Where-Object { git push }' }), p)).toEqual({ decision: 'unknown' })
     // A Codex exec script of several calls is a program, not a line
     const exec = 'await tools.exec_command({cmd:"git add -A"});\nawait tools.exec_command({cmd:"git push"});'
     expect(decide(resolveAction({ provider: 'codex', tool: 'exec', input: exec, cwd }), p)).toEqual({ decision: 'unknown' })
