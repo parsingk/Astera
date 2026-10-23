@@ -681,6 +681,19 @@ describe('humanFor — audit and policies', () => {
     expect(out?.split('\n').slice(-2)).toEqual(['', `more: --until ${push.at} --before-id ${push.id}`])
   })
 
+  // Task 7 minor: the next page is the same question, so the hint repeats the filters that were used, in place of the
+  // cursor they had
+  it('audit list’s next page hint repeats the filters that were used', () => {
+    const data = { records: [push], truncated: true, next: { until: push.at, beforeId: push.id } }
+    const args = {
+      session: 'sess_a', agentProfile: 'Reviewer Bot', action: 'git.*', decision: 'would-deny', since: '2026-10-23T00:00:00Z',
+      until: '2026-10-24T00:00:00Z', beforeId: 'au_9', limit: 50
+    }
+    expect(humanFor('audit-list', data, args)?.split('\n').at(-1)).toBe(
+      `more: --session sess_a --agent-profile "Reviewer Bot" --action "git.*" --decision would-deny --since 2026-10-23T00:00:00Z --limit 50 --until ${push.at} --before-id ${push.id}`
+    )
+  })
+
   it('audit summary is the totals, then a row per action, the most seen first', () => {
     expect(
       humanFor('audit-summary', {

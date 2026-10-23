@@ -1172,9 +1172,9 @@ copy of the damaged file is kept beside it.
 `otherwise` did or none could), worked out from the rules in force when you ask: edit a rule and the past calls show
 what it would have done. The filters combine, and `--agent-profile` takes an id or a name. `--limit` is 200 by default
 and at most 2000. When it cuts the list, `truncated` is true and `next` holds the `--until` and `--before-id` that ask
-for the next page, which `--human` prints under the table as `more:`. `audit summary` counts the same calls by
-decision, in all and per action, and `stoppedAtLimit` is true when a day of the period stopped recording at the size
-limit, so it holds fewer calls than were made.
+for the next page, which `--human` prints under the table as `more:`, after the filters you used. `audit summary`
+counts the same calls by decision, in all and per action, and `stoppedAtLimit` is true when a day of the period stopped
+recording at the size limit, so it holds fewer calls than were made.
 
 **These commands are for a person.** From inside an agent session (`ASTERA_SESSION` is set) every change is refused
 with 5, and so are both `audit` reads, so the log of what agents did stays away from agents; `policies show` is not

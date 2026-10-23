@@ -255,10 +255,31 @@ function policyText(data: Record<string, unknown>): string {
   return parts.join('\n\n')
 }
 
-export function humanFor(cmd: string, data: Record<string, unknown>): string | null {
+/** `audit list`'s flags that the next page asks again, as the parser keys them and as they are typed: all but the cursor
+ *  (`--until`, `--before-id`), which the answer's `next` gives. */
+const AUDIT_LIST_REPEATED: ReadonlyArray<readonly [string, string]> = [
+  ['session', 'session'],
+  ['job', 'job'],
+  ['run', 'run'],
+  ['task', 'task'],
+  ['agentProfile', 'agent-profile'],
+  ['action', 'action'],
+  ['decision', 'decision'],
+  ['since', 'since'],
+  ['limit', 'limit']
+]
+
+/** A flag's value as a shell reads it back: bare when it is plain, else in double quotes (a name with a space, `git.*`). */
+const flagValue = (v: unknown): string => {
+  const s = String(v)
+  return /^[\w@%+=:,./-]+$/.test(s) ? s : JSON.stringify(s)
+}
+
+/** `args`: the flags the command was typed with, as the parser keys them, for an answer that names how to ask again. */
+export function humanFor(cmd: string, data: Record<string, unknown>, args: Record<string, unknown> = {}): string | null {
   switch (cmd) {
     // Observe mode design §12: a row per call, its time on the person's clock and its action as a phrase. Under the table,
-    // the flags that ask for the next page.
+    // the flags that ask for the next page: the filters that were used, then where it starts.
     case 'audit-list': {
       const records = asList(data, 'records')
       const table =
@@ -268,7 +289,11 @@ export function humanFor(cmd: string, data: Record<string, unknown>): string | n
               records.map((r) => [localTime(r.at), str(r.sessionId), phraseOf(r.action), str(r.target), str(r.decision), typeof r.ruleId === 'string' ? r.ruleId : '-'])
             )
       const next = data.next !== null && typeof data.next === 'object' ? (data.next as { until?: unknown; beforeId?: unknown }) : null
-      return next === null ? table : [table, '', `more: --until ${str(next.until)} --before-id ${str(next.beforeId)}`].join('\n')
+      if (next === null) return table
+      const again = AUDIT_LIST_REPEATED.flatMap(([key, flag]) =>
+        typeof args[key] === 'string' || typeof args[key] === 'number' ? [`--${flag} ${flagValue(args[key])}`] : []
+      )
+      return [table, '', ['more:', ...again, `--until ${str(next.until)} --before-id ${str(next.beforeId)}`].join(' ')].join('\n')
     }
     // The totals, then a row per action, the most seen first
     case 'audit-summary': {
