@@ -17,13 +17,19 @@
 // conversation carries its running total on. So each session counts only what it spent itself, a roll's two sessions
 // add up once each, and a resumed conversation is not counted twice (Review Focus 5).
 //
-// **A file is followed from its end, less TAIL_CAP**: transcripts measured up to 1 GB and rollouts 93 MB, and what
-// this session wrote is at the end (a session's start is heard well before its first response is written).
+// **A session's own end** is when its pty or process ended: its last read takes nothing dated after it, since a roll
+// onto the same account copies nothing and the next session writes on in the same file, as a Codex chat resumed into
+// its own rollout does (fix round 1, I1).
 //
-// **Whom a response was for** is `ownerOf` at the response's own time: the Dispatch the session held then, else the
-// Run it coordinated. When the state no longer names the session (a roll rekeyed its Dispatch, or its Run's coordinator
-// slot, before its last lines were read), the owner it last had stands. A response for nobody (a person's own tab) is
-// not kept. A session the app runs in its own node-pty, with no Host, is not read: its Tasks show no tokens.
+// **A file is followed from its end, less TAIL_CAP**, and again so when it gets shorter: transcripts measured up to
+// 1 GB and rollouts 93 MB, and what this session wrote is at the end (a session's start is heard well before its first
+// response is written).
+//
+// **Whom a response was for** is `ownerOf` at the response's own time: the Dispatch the session held open then (one
+// that ended holds nothing after its end), else the Run it coordinated. When the state no longer names the session (a
+// roll rekeyed its Dispatch, or its Run's coordinator slot, before its last lines were read), the owner it last had
+// stands, within the same bounds. A response for nobody (a person's own tab) is not kept. A session the app runs in its
+// own node-pty, with no Host, is not read: its Tasks show no tokens.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { JsonlTail } from '../../core/rolling/jsonlTail'
@@ -48,34 +54,51 @@ const latest = <T>(items: readonly T[], key: (x: T) => number): T | undefined =>
   return best
 }
 
+/** Whether the Dispatch was open at `t`: from its start to its end, or on while it has none. */
+const held = (x: Dispatch, t: number): boolean => Date.parse(x.startedAt) <= t && (x.endedAt === undefined || t <= Date.parse(x.endedAt))
+
 /**
- * Whom a session's response at `at` was for: the session's Dispatch that started last at or before it (one that has
- * ended included, so a worker's last words after its report still count for it), else the Run whose coordinator the
- * session is, the unfinished one first. Null for a session that worked for nobody then, a person's own tab before a
- * worker was typed into it among them. A session that drives a Run from outside is not looked for.
+ * Whom a session's response at `at` was for: the session's Dispatch open then (the one started last, when two were),
+ * else the Run whose coordinator the session is, the unfinished one first. A Dispatch holds only what was spent while it
+ * was open, read late or not (fix round 1, ruling 3): a tab a worker was typed into (`worker-start --terminal`) goes on
+ * after the Dispatch ended, and that is not the Task's work, nor is what it spent before.
+ *
+ * `last` is the owner the session's earlier responses had. It stands for a session the state no longer names (a roll
+ * rekeyed its Dispatch or its Run's coordinator slot before its last lines were read), within the same bounds: a
+ * Dispatch still there and open at `at`, a Run still there. Null for a session that worked for nobody then. A session
+ * that drives a Run from outside is not looked for.
  */
-export function tokenOwnerOf(s: OrchState, sessionId: string, at: string): TokenOwner | null {
+export function tokenOwnerOf(s: OrchState, sessionId: string, at: string, last: TokenOwner | null = null): TokenOwner | null {
   const t = Date.parse(at)
   const dispatch = latest(
-    s.dispatches.filter((x: Dispatch) => x.sessionId === sessionId && Date.parse(x.startedAt) <= t),
+    s.dispatches.filter((x: Dispatch) => x.sessionId === sessionId && held(x, t)),
     (x) => Date.parse(x.startedAt)
   )
   if (dispatch) return { dispatchId: dispatch.id }
   const coordinated = s.runs.filter((r: JobRun) => r.coordinatorSessionId === sessionId)
-  if (coordinated.length === 0) return null
-  const unfinished = coordinated.filter((r) => outcomeOf(s, r.id) === 'running')
-  return { coordinatorOf: latest(unfinished.length > 0 ? unfinished : coordinated, (r) => Date.parse(r.createdAt))!.id }
+  if (coordinated.length > 0) {
+    const unfinished = coordinated.filter((r) => outcomeOf(s, r.id) === 'running')
+    return { coordinatorOf: latest(unfinished.length > 0 ? unfinished : coordinated, (r) => Date.parse(r.createdAt))!.id }
+  }
+  if (last === null) return null
+  if ('dispatchId' in last) {
+    const x = s.dispatches.find((d) => d.id === last.dispatchId)
+    return x && held(x, t) ? last : null
+  }
+  return s.runs.some((r) => r.id === last.coordinatorOf) ? last : null
 }
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null)
 
-/** A file followed from its end less TAIL_CAP; a cut first line does not parse and is passed by the readers. */
+/** A file followed from its end less TAIL_CAP, and again so when it gets shorter (made again), never read whole; a cut
+ *  first line does not parse and is passed by the readers. The session's reader goes on across such a restart, so a
+ *  response met again is not counted again (fix round 1, ruling 1). */
 const follow = async (file: string): Promise<JsonlTail> => {
   const size = await fs.stat(file).then(
     (st) => st.size,
     () => 0
   )
-  return new JsonlTail(file, { offset: Math.max(0, size - TAIL_CAP) })
+  return new JsonlTail(file, { offset: Math.max(0, size - TAIL_CAP), restartWithin: TAIL_CAP })
 }
 
 type Listen<A extends unknown[]> = (cb: (...a: A) => void) => () => void
@@ -89,7 +112,8 @@ interface Followed {
   /** Claude terminal: one reader over the transcript and its sub-agents' files, by path. Null for a Codex session. */
   transcript: { read: (lines: readonly string[]) => TokensSpent[]; files: Map<string, JsonlTail> } | null
   chat: ((lines: readonly string[]) => TokensSpent[]) | null
-  ended: boolean
+  /** When its pty or process ended (epoch ms), null while it runs. Its last read takes nothing dated after it. */
+  endedAt: number | null
 }
 
 export interface TokenSources {
@@ -104,7 +128,8 @@ export function createTokenSources(d: {
   procs: { onMeta: Listen<[string, PtyMeta, 'open' | 'note']>; onLine: Listen<[string, number, string]>; onExit: Listen<[string, number]> }
   /** A Claude terminal session's statusline payload, which names its transcript; null before it has one. */
   statusLinePayload(sessionId: string): Promise<unknown | null>
-  ownerOf(sessionId: string, at: string): TokenOwner | null
+  /** `tokenOwnerOf` over the state now; `last` is the owner the session's earlier responses had. */
+  ownerOf(sessionId: string, at: string, last: TokenOwner | null): TokenOwner | null
   log(message: string): void
   /** Test injection (epoch ms). */
   now?: () => number
@@ -114,19 +139,23 @@ export function createTokenSources(d: {
   const now = d.now ?? Date.now
   /** The owner each session last had, for its lines read after the state stopped naming it. */
   const lastOwner = new Map<string, TokenOwner>()
-  const hand = (sessionId: string, spent: TokensSpent[]): void => {
+  const hand = (f: Followed, spent: TokensSpent[]): void => {
     for (const x of spent) {
-      const owner = d.ownerOf(sessionId, x.at ?? new Date(now()).toISOString()) ?? lastOwner.get(sessionId) ?? null
+      const at = x.at ?? new Date(now()).toISOString()
+      // An ended session's file can be written on by the next one (a roll onto the same account copies nothing, a Codex
+      // chat resumes into its own rollout): what is dated after the end is that one's (fix round 1, I1)
+      if (f.endedAt !== null && !(Date.parse(at) <= f.endedAt)) continue
+      const owner = d.ownerOf(f.sessionId, at, lastOwner.get(f.sessionId) ?? null)
       if (!owner) continue
-      lastOwner.set(sessionId, owner)
-      d.store.add(sessionId, owner, x)
+      lastOwner.set(f.sessionId, owner)
+      d.store.add(f.sessionId, owner, x)
     }
   }
 
   /** Followed sessions: a terminal by its pty id, a chat by its process id. */
   const terminals = new Map<string, Followed>()
   const chats = new Map<string, Followed>()
-  const fresh = (sessionId: string): Followed => ({ sessionId, since: now(), rollout: null, transcript: null, chat: null, ended: false })
+  const fresh = (sessionId: string): Followed => ({ sessionId, since: now(), rollout: null, transcript: null, chat: null, endedAt: null })
   /** The rollout a note names, followed from now on when it is new: a later file is Codex's `/new`, a conversation of
    *  its own with its own running total. */
   const noteRollout = (f: Followed, meta: PtyMeta): void => {
@@ -150,7 +179,7 @@ export function createTokenSources(d: {
     }),
     d.ptys.onExit((ptyId) => {
       const f = terminals.get(ptyId)
-      if (f) f.ended = true
+      if (f) f.endedAt = now()
     }),
     d.procs.onMeta((procId, meta) => {
       if (meta.kind !== 'chat') return
@@ -167,7 +196,7 @@ export function createTokenSources(d: {
       const f = chats.get(procId)
       if (!f?.chat) return
       try {
-        hand(f.sessionId, f.chat([line]))
+        hand(f, f.chat([line]))
       } catch (err) {
         d.log(`tokens: a line of chat ${f.sessionId} could not be read: ${String(err)}`)
       }
@@ -175,15 +204,17 @@ export function createTokenSources(d: {
     d.procs.onExit((procId) => {
       const f = chats.get(procId)
       if (!f) return
-      // A Claude chat's lines were all read as they came; a Codex chat's rollout is read once more
-      if (f.chat) chats.delete(procId)
-      else f.ended = true
+      // A Claude chat's lines were all read as they came; a Codex chat's rollout is read once more, up to now
+      if (f.chat) {
+        chats.delete(procId)
+        f.chat = null
+      } else f.endedAt = now()
     })
   ]
 
   const readTail = async (f: Followed, tail: JsonlTail, read: (lines: readonly string[]) => TokensSpent[]): Promise<void> => {
     const got = await tail.read()
-    if (got && got.lines.length > 0) hand(f.sessionId, read(got.lines))
+    if (got && got.lines.length > 0) hand(f, read(got.lines))
   }
 
   const readOne = async (f: Followed): Promise<void> => {
@@ -198,12 +229,19 @@ export function createTokenSources(d: {
     const named = extractStatusLineSession(await d.statusLinePayload(f.sessionId).catch(() => null)).transcriptPath
     if (named !== null) {
       if (!t.files.has(named)) t.files.set(named, await follow(named))
-      // A sub-agent writes a file of its own beside the transcript, made when it starts
+      // A sub-agent writes a file of its own beside the transcript, made when it starts. One last written before this
+      // session started is a session before's, in a resumed conversation's folder (fix round 1, ruling 2): not
+      // followed, and looked at again while it is not, in case its agent is taken up again
       const agents = path.join(path.dirname(named), path.basename(named, '.jsonl'), 'subagents')
       const names = await fs.readdir(agents).catch(() => [] as string[])
       for (const n of names) {
         const file = path.join(agents, n)
-        if (n.endsWith('.jsonl') && !t.files.has(file)) t.files.set(file, await follow(file))
+        if (!n.endsWith('.jsonl') || t.files.has(file)) continue
+        const written = await fs.stat(file).then(
+          (st) => st.mtimeMs,
+          () => -Infinity
+        )
+        if (written >= f.since) t.files.set(file, await follow(file))
       }
     }
     for (const tail of t.files.values()) await readTail(f, tail, t.read)
@@ -212,7 +250,7 @@ export function createTokenSources(d: {
   /** Reads each of `followed` forward; one that had ended is read this last time and let go. */
   const readEach = async (followed: Map<string, Followed>): Promise<void> => {
     for (const [key, f] of [...followed]) {
-      const last = f.ended
+      const last = f.endedAt !== null
       try {
         await readOne(f)
       } catch (err) {
@@ -220,6 +258,9 @@ export function createTokenSources(d: {
       }
       if (!last) continue
       followed.delete(key)
+      // Its readers go with it: the message ids it counted and the files it followed
+      f.transcript = null
+      f.rollout = null
       if (![...terminals.values(), ...chats.values()].some((x) => x.sessionId === f.sessionId)) lastOwner.delete(f.sessionId)
     }
   }

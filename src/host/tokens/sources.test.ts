@@ -70,7 +70,7 @@ function fakeRegistry() {
   }
 }
 
-const dispatch = (id: string, taskId: string, sessionId: string, startedAt = iso(T0)): Dispatch => ({
+const dispatch = (id: string, taskId: string, sessionId: string, startedAt = iso(T0), endedAt?: string): Dispatch => ({
   id,
   taskId,
   provider: 'claude',
@@ -80,7 +80,8 @@ const dispatch = (id: string, taskId: string, sessionId: string, startedAt = iso
   specPath: 'D:/p/s.md',
   startedAt,
   workerState: 'ready',
-  retained: false
+  retained: false,
+  ...(endedAt !== undefined ? { endedAt } : {})
 })
 const orch = (dispatches: Dispatch[], coordinatorSessionId?: string): OrchState => ({
   ...emptyState(),
@@ -101,7 +102,7 @@ async function rig(o: { state: () => OrchState; now: () => number; statusLines?:
     ptys,
     procs,
     statusLinePayload: async (id) => (o.statusLines?.[id] ? { session_id: id, transcript_path: o.statusLines[id] } : null),
-    ownerOf: (sessionId, at) => tokenOwnerOf(o.state(), sessionId, at),
+    ownerOf: (sessionId, at, last) => tokenOwnerOf(o.state(), sessionId, at, last),
     log: () => {},
     now: o.now,
     every: () => () => {}
@@ -118,6 +119,28 @@ describe('tokenOwnerOf', () => {
     expect(tokenOwnerOf(s, 'sess_a', iso(T0 + 2000))).toEqual({ dispatchId: 'd2' })
     // A person's own tab a worker was typed into later: what it spent before was nobody's work
     expect(tokenOwnerOf(s, 'sess_a', iso(T0 - 10))).toBeNull()
+  })
+
+  // Fix round 1, ruling 3: a Dispatch holds only what was spent while it was open. A tab a worker was typed into
+  // (`worker-start --terminal`) goes on being used after the Dispatch ended, and that is not the Task's work
+  it('a Dispatch that ended holds nothing spent after its end, and a response read late counts up to it', () => {
+    const s = orch([dispatch('d1', 't1', 'sess_a', iso(T0), iso(T0 + 500)), dispatch('d2', 't1', 'sess_a', iso(T0 + 1000))])
+    expect(tokenOwnerOf(s, 'sess_a', iso(T0 + 500))).toEqual({ dispatchId: 'd1' })
+    expect(tokenOwnerOf(s, 'sess_a', iso(T0 + 700))).toBeNull()
+    expect(tokenOwnerOf(s, 'sess_a', iso(T0 + 1500))).toEqual({ dispatchId: 'd2' })
+    const ended = orch([dispatch('d1', 't1', 'sess_a', iso(T0), iso(T0 + 500))])
+    expect(tokenOwnerOf(ended, 'sess_a', iso(T0 + 900))).toBeNull()
+  })
+
+  // A roll rekeys the Dispatch before the old session's last lines are read: the owner that session last had stands,
+  // within the same bounds
+  it('a session the state no longer names keeps the owner it last had, while that Dispatch held the time', () => {
+    const s = orch([dispatch('d1', 't1', 'sess_b', iso(T0), iso(T0 + 500))], 'sess_k2')
+    expect(tokenOwnerOf(s, 'sess_a', iso(T0 + 100), { dispatchId: 'd1' })).toEqual({ dispatchId: 'd1' })
+    expect(tokenOwnerOf(s, 'sess_a', iso(T0 + 900), { dispatchId: 'd1' })).toBeNull()
+    expect(tokenOwnerOf(s, 'sess_a', iso(T0 + 100), { dispatchId: 'd_gone' })).toBeNull()
+    expect(tokenOwnerOf(s, 'sess_k1', iso(T0 + 100), { coordinatorOf: 'run_1' })).toEqual({ coordinatorOf: 'run_1' })
+    expect(tokenOwnerOf(s, 'sess_k1', iso(T0 + 100), { coordinatorOf: 'run_gone' })).toBeNull()
   })
 
   it('a coordinator’s are its Run’s, and any other session’s nobody’s', () => {
@@ -204,6 +227,112 @@ describe('createTokenSources', () => {
     r.sources.dispose()
   })
 
+  // Fix round 1, I1: a roll onto the same account copies nothing (source and destination are one path), so the new
+  // session writes on in the old one's own file. The old session's last read must stop at its exit
+  it('a same-account Claude roll writing on in the same transcript counts the new session’s responses once', async () => {
+    let now = T0
+    let state = orch([dispatch('d1', 't1', 'sess_a')])
+    const statusLines: Record<string, string> = {}
+    const r = await rig({ state: () => state, now: () => now, statusLines })
+    const file = path.join(r.dir, 'conv.jsonl')
+    await fs.writeFile(file, '')
+    statusLines.sess_a = file
+    r.ptys.open('pty_a', note('session', 'sess_a'))
+    await fs.appendFile(file, lines(claudeLine(T0 + 10, 'msg_1', 100, 10)))
+    await r.sources.poll()
+    now = T0 + 100
+    state = orch([dispatch('d1', 't1', 'sess_b')])
+    r.ptys.exit('pty_a')
+    statusLines.sess_b = file
+    r.ptys.open('pty_b', note('session', 'sess_b'))
+    // The new session's first response lands before the old one's last read
+    await fs.appendFile(file, lines(claudeLine(T0 + 150, 'msg_2', 7, 3)))
+    await r.sources.poll()
+    await r.sources.poll()
+    expect(taskTokensOf(state, 't1', r.store.spent())).toEqual({ input: 107, output: 13, total: 120 })
+    r.sources.dispose()
+  })
+
+  it('a same-account Codex roll writing on in the same rollout counts the new session’s responses once', async () => {
+    let now = T0
+    let state = orch([dispatch('d1', 't1', 'sess_c')])
+    const r = await rig({ state: () => state, now: () => now })
+    const file = path.join(r.dir, 'rollout.jsonl')
+    await fs.writeFile(file, lines(counted(T0 + 10, [100, 10], [100, 10])))
+    r.ptys.open('pty_c', note('session', 'sess_c', { rolloutPath: file }))
+    await r.sources.poll()
+    now = T0 + 100
+    state = orch([dispatch('d1', 't1', 'sess_d')])
+    r.ptys.exit('pty_c')
+    r.ptys.open('pty_d', note('session', 'sess_d', { rolloutPath: file }))
+    await fs.appendFile(file, lines(counted(T0 + 150, [150, 12], [50, 2])))
+    await r.sources.poll()
+    await r.sources.poll()
+    expect(taskTokensOf(state, 't1', r.store.spent())).toEqual({ input: 150, output: 12, total: 162 })
+    r.sources.dispose()
+  })
+
+  // The same for a Codex chat resumed into its own rollout under a new session
+  it('a Codex chat that ended stops at its end, though its rollout is written on', async () => {
+    let now = T0
+    let state = orch([dispatch('d1', 't1', 'chat_a')])
+    const r = await rig({ state: () => state, now: () => now })
+    const file = path.join(r.dir, 'rollout-chat.jsonl')
+    await fs.writeFile(file, lines(counted(T0 + 10, [100, 10], [100, 10])))
+    r.procs.open('proc_a', note('chat', 'chat_a', { provider: 'codex', rolloutPath: file }))
+    await r.sources.poll()
+    now = T0 + 100
+    state = orch([dispatch('d1', 't1', 'chat_b')])
+    r.procs.exit('proc_a')
+    r.procs.open('proc_b', note('chat', 'chat_b', { provider: 'codex', rolloutPath: file }))
+    await fs.appendFile(file, lines(counted(T0 + 150, [150, 12], [50, 2])))
+    await r.sources.poll()
+    expect(taskTokensOf(state, 't1', r.store.spent())).toEqual({ input: 150, output: 12, total: 162 })
+    r.sources.dispose()
+  })
+
+  // Fix round 1, ruling 2: a resumed session's folder holds the sub-agents of the sessions before it
+  it('follows no sub-agent file last written before the session started', async () => {
+    const now = T0
+    const statusLines: Record<string, string> = {}
+    const r = await rig({ state: () => orch([dispatch('d1', 't1', 'sess_a')]), now: () => now, statusLines })
+    const transcript = path.join(r.dir, 'conv-2.jsonl')
+    await fs.writeFile(transcript, '')
+    const agents = path.join(r.dir, 'conv-2', 'subagents')
+    await fs.mkdir(agents, { recursive: true })
+    const old = path.join(agents, 'agent-old.jsonl')
+    // A line dated after the start in a file last written before it: only the file's time can tell it is not ours
+    await fs.writeFile(old, lines(claudeLine(T0 + 10, 'msg_old_agent', 50, 50)))
+    await fs.utimes(old, new Date(T0 - 3_600_000), new Date(T0 - 3_600_000))
+    const fresh = path.join(agents, 'agent-new.jsonl')
+    await fs.writeFile(fresh, lines(claudeLine(T0 + 20, 'msg_new_agent', 2, 1)))
+    await fs.utimes(fresh, new Date(T0 + 60_000), new Date(T0 + 60_000))
+    statusLines.sess_a = transcript
+    r.ptys.open('pty_a', note('session', 'sess_a'))
+    await r.sources.poll()
+    expect(r.store.spent()).toEqual([{ sessionId: 'sess_a', dispatchId: 'd1', input: 2, output: 1 }])
+    r.sources.dispose()
+  })
+
+  // Fix round 1, ruling 1: a file that got shorter (made again) is never read whole; it is followed again from its end
+  // less the bounded window, by the same reader, so a response it already counted is not counted again
+  it('follows a file that got shorter from its end less the window, counting nothing twice', async () => {
+    const now = T0
+    const statusLines: Record<string, string> = {}
+    const r = await rig({ state: () => orch([dispatch('d1', 't1', 'sess_a')]), now: () => now, statusLines })
+    const file = path.join(r.dir, 'conv-3.jsonl')
+    const padding = (bytes: number): string => lines(...Array.from({ length: Math.ceil(bytes / 1000) }, () => JSON.stringify({ type: 'user', pad: 'x'.repeat(970) })))
+    await fs.writeFile(file, padding(700_000) + lines(claudeLine(T0 + 10, 'msg_1', 100, 10)))
+    statusLines.sess_a = file
+    r.ptys.open('pty_a', note('session', 'sess_a'))
+    await r.sources.poll()
+    // Made again, shorter: a response far from its end, the bounded window's worth of lines, the one counted already
+    await fs.writeFile(file, lines(claudeLine(T0 + 20, 'msg_far', 9000, 900)) + padding(600_000) + lines(claudeLine(T0 + 10, 'msg_1', 100, 10), claudeLine(T0 + 30, 'msg_3', 5, 5)))
+    await r.sources.poll()
+    expect(r.store.spent()).toEqual([{ sessionId: 'sess_a', dispatchId: 'd1', input: 105, output: 15 }])
+    r.sources.dispose()
+  })
+
   it('reads a Claude chat’s stream as it comes, and a Codex chat’s rollout once its note names it', async () => {
     let now = T0
     const state = orch([dispatch('d1', 't1', 'chat_x')], 'chat_k')
@@ -239,8 +368,8 @@ describe('createTokenSources', () => {
     r.ptys.open('pty_tab', note('session', 'sess_tab', { rolloutPath: tab }))
     r.ptys.open('pty_w', note('session', 'sess_w', { rolloutPath: worker }))
     await fs.appendFile(worker, lines(counted(T0 + 20, [10, 1], [10, 1])))
-    r.ptys.exit('pty_w')
     now = T0 + 100
+    r.ptys.exit('pty_w')
     await r.sources.poll()
     await fs.appendFile(worker, lines(counted(T0 + 200, [30, 3], [20, 2])))
     await r.sources.poll()

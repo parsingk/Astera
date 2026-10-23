@@ -4,7 +4,7 @@
 // every mode, by the Host alone, and only once a session of some Run has spent something.
 //
 // One entry per session and owner, each what that session itself spent: a roll's new session is an entry of its own
-// beside the old one, and neither holds the other's tokens (sources.ts reads each from the session's own start), so a
+// beside the old one, and neither holds the other's tokens (sources.ts reads each from its own start to its end), so a
 // Dispatch's entries add up without counting anything twice (Review Focus 5).
 //
 // Pruned with the Runs (the orchestration's Run TTL, store.ts RUN_TTL_MS, or a Run a person deleted): an entry whose

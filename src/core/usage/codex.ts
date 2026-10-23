@@ -157,10 +157,14 @@ function countedOf(raw: string): { at: string; total: { input: number; output: n
  *  (1094 of 1096 measured pairs; the other two repeated a total, which adds nothing here).
  *
  *  `input` is input_tokens, the cached ones inside it; `output` is output_tokens, reasoning inside it. A line without
- *  `info` (the credit balance written at a limit) carries nothing. A total that went down is a new start, counted
- *  from there. */
+ *  `info` (the credit balance written at a limit) carries nothing. Only growth past the highest total seen counts, so
+ *  lines met again (a file made again and read anew) count nothing twice. */
 export function codexTokenReader(since: number): (lines: readonly string[]) => TokensSpent[] {
-  let prev: { input: number; output: number } | null = null
+  /** The highest running total seen: where this session's next growth is measured from. */
+  let high: { input: number; output: number } | null = null
+  const raise = (t: { input: number; output: number }): void => {
+    high = high ? { input: Math.max(high.input, t.input), output: Math.max(high.output, t.output) } : t
+  }
   return (lines) => {
     const out: TokensSpent[] = []
     for (const raw of lines) {
@@ -168,14 +172,14 @@ export function codexTokenReader(since: number): (lines: readonly string[]) => T
       const c = countedOf(raw)
       if (!c) continue
       if (!(Date.parse(c.at) >= since)) {
-        prev = c.total
+        raise(c.total)
         continue
       }
-      const from: { input: number; output: number } = prev ?? (c.last ? { input: c.total.input - c.last.input, output: c.total.output - c.last.output } : c.total)
-      prev = c.total
-      const input = c.total.input - from.input
-      const output = c.total.output - from.output
-      if (input < 0 || output < 0 || input + output === 0) continue
+      const from: { input: number; output: number } = high ?? (c.last ? { input: c.total.input - c.last.input, output: c.total.output - c.last.output } : c.total)
+      const input = Math.max(0, c.total.input - from.input)
+      const output = Math.max(0, c.total.output - from.output)
+      raise(c.total)
+      if (input + output === 0) continue
       out.push({ at: c.at, input, output })
     }
     return out

@@ -215,6 +215,15 @@ describe('codexTokenReader', () => {
     expect(read([counted(T0 + 10, [1100, 110], [100, 10])])).toEqual([{ at: iso(T0 + 10), input: 100, output: 10 }])
   })
 
+  // 파일이 짧아져 다시 읽히면(재생성) 이미 센 누계가 다시 온다: 지금까지 본 가장 큰 누계를 넘은 만큼만 센다
+  it('다시 읽힌 누계는 다시 세지 않는다', () => {
+    const read = codexTokenReader(T0)
+    read([counted(T0 + 10, [100, 10], [100, 10]), counted(T0 + 20, [150, 12], [50, 2])])
+    expect(read([counted(T0 + 10, [100, 10], [100, 10]), counted(T0 + 20, [150, 12], [50, 2]), counted(T0 + 30, [180, 15], [30, 3])])).toEqual([
+      { at: iso(T0 + 30), input: 30, output: 3 }
+    ])
+  })
+
   // 한도에 걸린 순간의 레코드는 같은 누계를 되풀이하고, 크레딧 레코드는 info 가 없다
   it('되풀이된 누계와 info 없는 줄은 아무것도 더하지 않는다', () => {
     const read = codexTokenReader(T0)

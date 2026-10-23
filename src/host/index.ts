@@ -548,7 +548,7 @@ async function main(): Promise<void> {
     ptys: registry,
     procs,
     statusLinePayload: (sid) => (spawner ? spawner.statusLinePayload(sid) : Promise.resolve(null)),
-    ownerOf: (sessionId, at) => tokenOwnerOf(orch.state(), sessionId, at),
+    ownerOf: (sessionId, at, last) => tokenOwnerOf(orch.state(), sessionId, at, last),
     log: (m) => log.write(m)
   })
 
