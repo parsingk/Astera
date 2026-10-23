@@ -1110,9 +1110,11 @@ or for `runs reconverge` any task of the run, since its repair borrows one's pro
 asked the same about that task's profile: `tasks dispatch`, and `worker-start` unless the caller is the coordinator
 Astera started for that run; the Host's and Astera's own placing is not asked. So is `task-update --status ready` or
 `pending` of such a task, which puts it back where the loop places it, again except from that coordinator while its run
-is running, and so is `questions answer` with `retry-once`, which opens a new attempt; any other answer only lets the
-task go on and is not asked. A profile deleted since runs as before,
-and a profile file that cannot be read refuses with 6 and `error.details.repair`. These refusals
+is running, and so is `questions answer` with an answer that starts the task again: on a question whose repair budget
+is used up any answer but `mark-failed` (`retry-once` opens a new attempt, and any other text puts the task back where
+the loop places it), and on a GitHub question `continue` or `retry`, which start its round afresh. Any other answer
+only lets the task go on and is not asked. A profile deleted since runs as before, and a profile file that cannot be
+read refuses with 6 and `error.details.repair`. These refusals
 say why in `error.details.reason` too: `agent-profile-unavailable` (unknown or archived) and
 `agent-profile-no-account` with 2, `agent-profile-bypass-refused` with 5.
 

@@ -482,7 +482,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'questions-answer': {
     summary: 'answer an open question',
     detail:
-      'From inside an agent session, an answer that opens a new attempt for a task that runs as a bypass agent profile (`retry-once`, or `continue` or `retry` on a GitHub question, which start its round afresh) is refused with 5 unless Astera\'s "Run agents without permission checks" is on; any other answer is not.',
+      'From inside an agent session, an answer that starts a task that runs as a bypass agent profile again (any answer but `mark-failed` on a question whose repair budget is used up, or `continue` or `retry` on a GitHub question, which start its round afresh) is refused with 5 unless Astera\'s "Run agents without permission checks" is on; any other answer is not.',
     flags: [
       ID('<questionId>', 'the question to answer'),
       {

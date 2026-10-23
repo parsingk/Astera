@@ -26,7 +26,7 @@ import { TaskValidator } from './exec/validator'
 import { TAIL_EMPTY, TAIL_UNTRACKED } from './exec/tail'
 import { FAILURE_LIMIT, MAX_REVIEW_ROUNDS, type CheckResult, type Dispatch, type JobRun, type Project, type Task } from './types'
 import { parseArgs } from './cliArgs'
-import { slotsToFill } from './schedule'
+import { lifecycleToStart, slotsToFill } from './schedule'
 import { stateWord } from './cliHuman'
 import { outcomeOf, runningRunCount } from './running'
 import { isQueueableReport } from './pendingReports'
@@ -11000,6 +11000,34 @@ describe('agent profiles: a profile that runs without permission checks, by who 
       }
     })
 
+    // Eighth follow-up, the ruling (the final review's reproduction): gate-resolve takes any text, and on the exhausted
+    // question any answer but mark-failed unblocks the Task to ready, where the loop places it again. For an agent that is
+    // a restart; a person's free answer is not asked
+    it('refuses an agent any answer but mark-failed on the exhausted question; a person and yolo answer freely', async () => {
+      for (const caller of AGENTS)
+        for (const answer of ['go on', 'retry-once']) {
+          const { deps, as } = setup(false)
+          const q = await stopped(deps, 'convergence-exhausted')
+          const r = await as(caller, 'questions-answer', { id: 'gate_q', answer })
+          expect([r.status, reasonOf(r)], `${answer} ${JSON.stringify(caller)}`).toEqual([403, 'agent-profile-bypass-refused'])
+          expect(q.gate().status).toBe('open')
+          expect(deps.getState().tasks.find((t) => t.id === q.taskId)!.status).toBe('blocked')
+        }
+      for (const caller of PEOPLE) {
+        const { deps, appWideYolo, as } = setup(false)
+        const q = await stopped(deps, 'convergence-exhausted')
+        expect((await as(caller, 'questions-answer', { id: 'gate_q', answer: 'go on' })).status, JSON.stringify(caller)).toBe(200)
+        expect(q.gate().status).toBe('resolved')
+        expect(appWideYolo).not.toHaveBeenCalled()
+      }
+      for (const caller of AGENTS) {
+        const { deps, as } = setup(true)
+        const q = await stopped(deps, 'convergence-exhausted')
+        expect((await as(caller, 'questions-answer', { id: 'gate_q', answer: 'go on' })).status, JSON.stringify(caller)).toBe(200)
+        expect(q.gate().status).toBe('resolved')
+      }
+    })
+
     it('asks nothing for a Task with no profile; an unreadable store refuses an agent’s retry-once', async () => {
       const plain = setup(false)
       const p = await stopped(plain.deps, 'convergence-exhausted', null)
@@ -11083,6 +11111,39 @@ describe('agent profiles: a profile that runs without permission checks, by who 
         expect((await as({ sessionId: '', role: 'mcp' }, 'gate-resolve', { id: 'gate_g', resolution: answer })).status, answer).toBe(200)
         expect(appWideYolo).not.toHaveBeenCalled()
       }
+    })
+
+    // Eighth follow-up (the final review's reproduction): a lifecycle Task holds no profile of its own, its repairs borrow
+    // one (workerProfileOf), so task-update's re-arm of a failed step, or of one stopped on a GitHub question, asks that
+    // one; otherwise it sidesteps the gated retry
+    it('task-update re-arming the step, failed or stopped on a question, asks the profile its repairs borrow', async () => {
+      const failed = async (deps: Deps): Promise<void> => {
+        await stoppedStep(deps)
+        await deps.setState({
+          ...deps.getState(),
+          gates: [],
+          tasks: deps.getState().tasks.map((t) => (t.id === 'tsk_l' ? { ...t, status: 'failed' as const, consecutiveFailures: FAILURE_LIMIT } : t))
+        })
+      }
+      for (const prepare of [failed, (deps: Deps) => stoppedStep(deps)])
+        for (const caller of AGENTS) {
+          const { deps, as } = setup(false)
+          await prepare(deps)
+          const before = step(deps)
+          const r = await as(caller, 'task-update', { id: 'tsk_l', status: 'ready' })
+          expect([r.status, reasonOf(r)], JSON.stringify(caller)).toEqual([403, 'agent-profile-bypass-refused'])
+          expect(step(deps)).toMatchObject({ status: before.status, consecutiveFailures: before.consecutiveFailures })
+          expect(lifecycleToStart(deps.getState()).some((x) => x.taskId === 'tsk_l')).toBe(false)
+        }
+      for (const caller of PEOPLE) {
+        const { deps, as } = setup(false)
+        await failed(deps)
+        expect((await as(caller, 'task-update', { id: 'tsk_l', status: 'ready' })).status, JSON.stringify(caller)).toBe(200)
+        expect(lifecycleToStart(deps.getState()).some((x) => x.taskId === 'tsk_l'), JSON.stringify(caller)).toBe(true)
+      }
+      const yolo = setup(true)
+      await failed(yolo.deps)
+      expect((await yolo.as({ sessionId: '', role: 'mcp' }, 'task-update', { id: 'tsk_l', status: 'ready' })).status).toBe(200)
     })
 
     it('asks nothing when the step borrows no profile; an unreadable store refuses an agent', async () => {

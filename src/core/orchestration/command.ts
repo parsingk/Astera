@@ -1420,11 +1420,12 @@ function startProfiles(s: OrchState, job: Job | undefined, o: { plan?: boolean; 
  *  the run-start or run-spawn it calls. */
 function startingProfileIds(s: OrchState, caller: { sessionId: string }, cmd: string, args: Record<string, unknown>): string[] {
   const defined = (ids: Array<string | undefined>): string[] => ids.filter((id): id is string => id !== undefined)
-  /** One Task's own profile, for starting or re-arming it */
+  /** The profile one Task's worker or repair runs as, for starting or re-arming it: its own, or for a lifecycle Task,
+   *  which holds none, the one its repairs borrow (workerProfileOf; eighth follow-up) */
   const ofTask = (id: string | null): string[] => {
     const task = id === null ? undefined : s.tasks.find((t) => t.id === id)
     if (!task || (task.runId !== undefined && drivesRun(s, caller, task.runId))) return []
-    return defined([task.agentProfileId])
+    return defined([workerProfileOf(s, task)])
   }
   switch (cmd) {
     case 'run-start': {
@@ -1456,21 +1457,23 @@ function startingProfileIds(s: OrchState, caller: { sessionId: string }, cmd: st
       return ofTask(str(args.taskId ?? args.task))
     case 'tasks-dispatch':
       return ofTask(str(args.id))
-    // Back to ready or pending, its failures cleared: the loop then places it (slotsToFill)
+    // Back to ready or pending, its failures cleared: the loop then places it (slotsToFill), or starts a lifecycle Task's
+    // fresh round (lifecycleToStart)
     case 'task-update':
       return args.status === 'ready' || args.status === 'pending' ? ofTask(str(args.id)) : []
-    // An answer that opens a new attempt restarts the Task (the person's decision, sixth and seventh follow-ups), asked
-    // about the profile its worker or repair runs as (workerProfileOf): the exhausted Gate's retry-once opens a repair
-    // Dispatch (repairOnce), and a GitHub question's answer that starts the step afresh with its failures reset
-    // (answerGitHubGate: continue, retry, or one going back to a wait that is gone, never mark-failed) is task-update's
-    // re-arm. Any other answer only lets it continue and is not asked; `questions-answer` comes here with its answer.
+    // An answer that opens a new attempt restarts the Task (the person's decisions, sixth to eighth follow-ups), asked
+    // about the profile its worker or repair runs as (workerProfileOf): on the exhausted Gate any answer but mark-failed
+    // (retry-once opens a repair Dispatch, repairOnce; any other text unblocks the Task to ready, where the loop places it
+    // again), and a GitHub question's answer that starts the step afresh with its failures reset (answerGitHubGate:
+    // continue, retry, or one going back to a wait that is gone, never mark-failed), which is task-update's re-arm. Any
+    // other answer only lets the Task continue and is not asked; `questions-answer` comes here with its answer.
     case 'gate-resolve': {
       const gate = s.gates.find((g) => g.id === str(args.id))
       const task = gate?.status === 'open' ? s.tasks.find((t) => t.id === gate.taskId) : undefined
       if (!gate || !task || (task.runId !== undefined && drivesRun(s, caller, task.runId))) return []
       const answer = str(args.resolution)
       const restarts =
-        (gate.kind === 'convergence-exhausted' && answer === 'retry-once') ||
+        (gate.kind === 'convergence-exhausted' && answer !== null && answer !== 'mark-failed') ||
         (isGitHubGateKind(gate.kind) &&
           task.status === 'blocked' &&
           answer !== null &&
