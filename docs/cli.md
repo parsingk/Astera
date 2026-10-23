@@ -1155,8 +1155,11 @@ and the rules beside them (`audit-policy.json`), so these commands work with Ast
 The rules say what each call would get if Astera enforced them. They are tried in order: the first rule whose action
 matches a call decides it, `allow` or `would-deny`, and `otherwise` decides a call no rule matches. A rule's action is
 matched exactly, or by a start ending in `*` (`git.*`), and a rule with `--scope inside-project` or `outside-project`
-matches only calls known to be inside, or outside, the session's project folder. A call Astera could not read, such as
-an unknown shell command, or a compound line one of whose parts a rule could deny, is `unknown`. The first time observe
+matches only calls known to be inside, or outside, the session's project folder. Each command of a compound line
+(`cd sub && git push`) is judged on its own, and the first one a rule denies makes the line `would-deny`. A call is
+`unknown` when Astera could not read it, such as a line with an unknown shell command in it, when a denied command sits
+in a loop or a conditional (it may not have run), or when a write or delete names no path and a scoped rule could
+match it. The first time observe
 is turned on, Astera writes the starter rules: deny `git.remote.write`, `github.pr.create` and `github.write`, deny
 `filesystem.write` and `filesystem.delete` outside the project, and otherwise allow. Until then `policies show` shows them
 and nothing is written. The rule commands take a rule's id from `policies show` and its place in the list counted from 0

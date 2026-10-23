@@ -260,16 +260,32 @@ describe('shell: syntax that is not a command', () => {
     expect(acts(bash('SHA=$(git rev-parse HEAD) && git push'))).toEqual(['git.read', 'git.remote.write'])
   })
 
-  it('reads the commands inside a loop or a conditional and calls the line heuristic', () => {
+  it('reads the commands inside a loop or a conditional and calls the line heuristic and scripted', () => {
     expect(bash('for f in a b; do git push; done')).toEqual({
       action: 'git.remote.write',
       target: 'git push',
       confidence: 'heuristic',
-      commands: [{ action: 'git.remote.write' }]
+      commands: [{ action: 'git.remote.write' }],
+      scripted: true
     })
     const r = bash('if [ -f x ]; then cat x; else rm -rf y; fi')
-    expect(r.confidence).toBe('heuristic')
+    expect(r).toMatchObject({ confidence: 'heuristic', scripted: true })
     expect(acts(r)).toEqual(['process.execute', 'filesystem.read', 'filesystem.delete'])
+    expect(bash('while read f; do rm "$f"; done < list')).toMatchObject({ scripted: true })
+    expect(bash('bash -c "if true; then git push; fi"')).toMatchObject({ scripted: true })
+  })
+
+  // Final review I1: only control flow makes a line a script. A compound line, a script handed to a shell's -c (as Codex
+  // hands every command) and a PowerShell value where a command could be are read as commands
+  it('does not call a line scripted for being compound, for a -c script, or for a PowerShell value', () => {
+    for (const r of [
+      bash('git add -A && git commit -m x && git push'),
+      bash('[ -f x ] && git push'),
+      bash('bash -lc "git add -A && git push"'),
+      ps('$r = git push 2>&1; $r'),
+      ps('git push; "pushed"')
+    ])
+      expect(r, r.target).not.toHaveProperty('scripted')
   })
 
   it('drops PowerShell variable and environment assignments, keeping the command an assignment holds', () => {
@@ -604,13 +620,16 @@ describe('Codex exec scripts', () => {
     })
   })
 
-  it('treats a script that calls several tools as a compound line, headlined by the first', () => {
+  it('treats a script that calls several tools as a compound line, headlined by the first, and scripted', () => {
     expect(exec('await tools.exec_command({cmd:"git status"}); await tools.exec_command({cmd:"git push"});')).toEqual({
       action: 'git.read',
       target: 'git status',
       confidence: 'heuristic',
-      commands: [{ action: 'git.read' }, { action: 'git.remote.write' }]
+      commands: [{ action: 'git.read' }, { action: 'git.remote.write' }],
+      scripted: true
     })
+    // One call is the command it runs
+    expect(exec('await tools.exec_command({cmd:"npm test && git push"});')).not.toHaveProperty('scripted')
     const r = exec('await tools.view_image({path:"../x.png"}); await tools.exec_command({cmd:"npm test && git push"});')
     expect(r).toMatchObject({ insideProject: false })
     expect(r.commands).toEqual([
@@ -949,10 +968,10 @@ describe('shell: reading with search tools', () => {
 describe('PowerShell: condition groups and assignments are not commands', () => {
   it('reads the commands in the body of if, foreach and while, not the condition', () => {
     expect(ps('if ($LASTEXITCODE -ne 0) { exit 1 }')).toEqual({
-      action: 'process.execute', target: 'exit', confidence: 'heuristic', commands: [{ action: 'process.execute' }]
+      action: 'process.execute', target: 'exit', confidence: 'heuristic', commands: [{ action: 'process.execute' }], scripted: true
     })
     const r = ps('foreach ($f in Get-ChildItem) { Remove-Item $f }')
-    expect(r.confidence).toBe('heuristic')
+    expect(r).toMatchObject({ confidence: 'heuristic', scripted: true })
     expect(acts(r)).toEqual(['filesystem.delete'])
     expect(acts(ps('if (Test-Path x) { Remove-Item x }'))).toEqual(['process.execute', 'filesystem.delete'])
     expect(acts(ps('if (-not (Test-Path x)) { New-Item x }'))).toEqual(['process.execute', 'filesystem.write'])

@@ -192,6 +192,7 @@ export function createAuditRecorder(d: {
       target: r.target,
       ...(r.insideProject !== undefined ? { insideProject: r.insideProject } : {}),
       ...(r.commands !== undefined ? { commands: r.commands.slice(0, AUDIT_COMMANDS_KEPT) } : {}),
+      ...(r.scripted === true ? { scripted: true as const } : {}),
       confidence: cut ? 'unknown' : r.confidence,
       status: ev.status
     }

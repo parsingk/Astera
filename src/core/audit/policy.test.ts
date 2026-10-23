@@ -84,11 +84,48 @@ describe('decide, under the starter rules', () => {
     expect(decide({ action: 'filesystem.read', insideProject: true, confidence: 'unknown' }, p)).toEqual({ decision: 'unknown' })
   })
 
-  it('cannot tell a compound line while a deny could apply to any of its commands', () => {
-    expect(decide(bash('npm test && git push'), p)).toEqual({ decision: 'unknown' })
-    expect(decide(bash('git push && rm -rf ../x'), p)).toEqual({ decision: 'unknown' })
-    // The redirect into a file outside the project is its own command with its own place
-    expect(decide(bash('npm test > ../out.log'), p)).toEqual({ decision: 'unknown' })
+  // Final review I1: agents push in compound lines. A line whose every command was classified is would-deny as soon as
+  // one of them would be, with that command's rule (design §7, revised)
+  it('would deny a compound line one of whose classified commands a rule denies, naming that rule', () => {
+    const ps = (command: string) => claude('PowerShell', { command })
+    const cases: Array<[ReturnType<typeof bash>, string]> = [
+      [bash('cd ../other && rm -rf build'), 'filesystem.delete'],
+      [bash('cd sub && git push'), 'git.remote.write'],
+      [bash('git add -A && git commit -m x && git push'), 'git.remote.write'],
+      [ps('git push origin main 2>&1 | Out-String'), 'git.remote.write'],
+      [bash('rm -rf ../other && echo ok'), 'filesystem.delete'],
+      // The redirect into a file outside the project is its own command with its own place
+      [bash('npm test > /tmp/out.txt 2>&1'), 'filesystem.write'],
+      [bash('npm test > ../out.log'), 'filesystem.write'],
+      [bash('npm test && git push'), 'git.remote.write'],
+      // The first command a rule denies decides
+      [bash('git push && rm -rf ../x'), 'git.remote.write'],
+      // Codex hands every command to a shell's -c, whose script is read like a typed line
+      [resolveAction({ provider: 'codex', tool: 'shell', input: { command: ['bash', '-lc', 'git add -A && git push'] }, cwd }), 'git.remote.write']
+    ]
+    for (const [r, action] of cases) {
+      expect(r.confidence, r.target).toBe('heuristic')
+      expect(decide(r, p), r.target).toEqual({ decision: 'would-deny', ruleId: starterId(action) })
+    }
+  })
+
+  it('still cannot tell a line with an unknown command, a script, or a write that names no place', () => {
+    // An unknown command
+    expect(decide(bash('./deploy.sh && git push'), p)).toEqual({ decision: 'unknown' })
+    expect(decide(bash('eval "$CMD" && git push'), p)).toEqual({ decision: 'unknown' })
+    // Control flow: a command in it may have run any number of times, or not at all
+    expect(decide(bash('for b in a c; do git push origin $b; done'), p)).toEqual({ decision: 'unknown' })
+    expect(decide(bash('if git diff --quiet; then git push; fi'), p)).toEqual({ decision: 'unknown' })
+    expect(decide(claude('PowerShell', { command: 'foreach ($r in $remotes) { git push $r }' }), p)).toEqual({ decision: 'unknown' })
+    // A Codex exec script of several calls is a program, not a line
+    const exec = 'await tools.exec_command({cmd:"git add -A"});\nawait tools.exec_command({cmd:"git push"});'
+    expect(decide(resolveAction({ provider: 'codex', tool: 'exec', input: exec, cwd }), p)).toEqual({ decision: 'unknown' })
+    // A delete that names no place, which an outside rule could match
+    expect(decide(bash('git push && rm'), p)).toEqual({ decision: 'unknown' })
+  })
+
+  it('allows a scripted line whose commands no rule denies', () => {
+    expect(decide(bash('for f in a b; do npm test; done'), p)).toEqual({ decision: 'allow' })
   })
 
   it('judges each command of a compound line in its own place, so a delete inside and a read outside are allowed', () => {
@@ -134,8 +171,8 @@ describe('decide, by the rules a person writes', () => {
   it('falls to otherwise when no rule matches', () => {
     expect(decide({ action: 'network.request', confidence: 'exact' }, policy([], 'deny'))).toEqual({ decision: 'would-deny' })
     expect(decide({ action: 'network.request', confidence: 'exact' }, policy([], 'allow'))).toEqual({ decision: 'allow' })
-    // A compound line that otherwise would deny cannot be told either
-    expect(decide(bash('npm test && npm run build'), policy([], 'deny'))).toEqual({ decision: 'unknown' })
+    // A compound line of classified commands is denied by otherwise too, naming no rule
+    expect(decide(bash('npm test && npm run build'), policy([], 'deny'))).toEqual({ decision: 'would-deny' })
   })
 
   it('matches a scope by the place, and never matches a call with no place by its scope', () => {

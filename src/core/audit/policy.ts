@@ -94,22 +94,24 @@ function judgeCommand(c: CommandFacts, p: AuditPolicy): Verdict | null {
 }
 
 /**
- * What the rules would have done with a call (design §7). Unknown when the resolver could not name it; otherwise the
- * headline and every command of the line are each judged in their own place. One that would be denied makes the call
- * `would-deny` when the line is sure of its commands, and `unknown` when it is heuristic (its commands may be more or
- * other than it read); one that cannot be told makes it `unknown`. Else the headline's verdict stands. `ruleId` names
- * the rule that decided, and is left out when `otherwise` did, when nothing could, or when a write with no place got
- * the same decision from a different rule in each place.
+ * What the rules would have done with a call (design §7, revised after the final review). Unknown when the resolver
+ * could not name it, which it cannot when any command of the line is one it does not know; otherwise the headline and
+ * every command of the line are each judged in their own place. One that cannot be told (a write or delete with no
+ * place, where the place decides) makes the call `unknown`. Else the first one that would be denied makes it
+ * `would-deny` with its rule, a compound (heuristic) line too: agents push in compound lines, and the preview errs toward
+ * flagging them. A `scripted` line is the exception, `unknown`: a command inside a loop or a conditional may not have
+ * run at all. Else the headline's verdict stands. `ruleId` names the rule that decided, and is left out when `otherwise`
+ * did, when nothing could, or when a write with no place got the same decision from a different rule in each place.
  */
 export function decide(
-  record: Pick<ResolvedAction, 'action' | 'insideProject' | 'confidence' | 'commands'>,
+  record: Pick<ResolvedAction, 'action' | 'insideProject' | 'confidence' | 'commands' | 'scripted'>,
   p: AuditPolicy
 ): { decision: AuditDecision; ruleId?: string } {
   if (record.confidence === 'unknown') return { decision: 'unknown' }
   const verdicts = [record, ...(record.commands ?? [])].map((c) => judgeCommand(c, p))
   if (verdicts.some((v) => v === null)) return { decision: 'unknown' }
   const denied = verdicts.find((v) => v!.decision === 'would-deny')
-  if (denied) return record.confidence === 'heuristic' ? { decision: 'unknown' } : denied
+  if (denied) return record.scripted === true ? { decision: 'unknown' } : denied
   return verdicts[0]!
 }
 

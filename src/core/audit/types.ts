@@ -91,6 +91,8 @@ export interface AuditRecord {
   /** The resolver's commands of a compound line, each with its own place, so the rules judge it later as they would
    *  have then. At most AUDIT_COMMANDS_KEPT (recorder.ts); a line cut short is kept as `unknown`. */
   commands?: CommandFacts[]
+  /** The line has control flow, or is a script of several calls (resolve.ts): kept so the rules can tell it later. */
+  scripted?: true
   confidence: Confidence
   status: 'ok' | 'failed' | 'unknown'
 }

@@ -62,7 +62,8 @@ describe('createHostAudit', () => {
   const readInside = rec({ action: 'filesystem.read', target: 'src/a.ts', insideProject: true, confidence: 'exact', providerTool: 'Read' })
   const writeOutside = rec({ action: 'filesystem.write', target: 'outside project: x.ts', insideProject: false, confidence: 'exact', providerTool: 'Write', sessionId: 'sess_b', jobId: 'job1', runId: 'run1', taskId: 'task1', agentProfileId: 'ap1' })
   const mystery = rec({ action: 'process.execute', target: 'foo-bar.sh', confidence: 'unknown' })
-  const compound = rec({ action: 'process.execute', target: 'npm test', confidence: 'heuristic', commands: [{ action: 'process.execute' }, { action: 'git.remote.write' }] })
+  // A loop around a push: the rules cannot say the push ran (design §7)
+  const compound = rec({ action: 'process.execute', target: 'npm test', confidence: 'heuristic', commands: [{ action: 'process.execute' }, { action: 'git.remote.write' }], scripted: true })
   const all = [push, readInside, writeOutside, mystery, compound]
 
   it('lists newest first with the decision the starter rules give while there is no rules file, and writes nothing', async () => {

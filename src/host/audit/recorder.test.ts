@@ -146,6 +146,15 @@ describe('createAuditRecorder', () => {
       { action: 'filesystem.delete', insideProject: true },
       { action: 'filesystem.read', insideProject: false }
     ])
+    expect(r).not.toHaveProperty('scripted')
+  })
+
+  it('keeps that a line was a script, so the rules can tell it later as they would have then', async () => {
+    const h = await rig()
+    h.recorder.record(bash('for b in a c; do git push origin $b; done'))
+    await h.recorder.flushed()
+    const [r] = await h.records()
+    expect(r).toMatchObject({ action: 'git.remote.write', confidence: 'heuristic', scripted: true })
   })
 
   it('keeps at most 16 commands, and a line cut short reads unknown', async () => {
