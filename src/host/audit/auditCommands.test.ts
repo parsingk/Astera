@@ -1,14 +1,14 @@
 // Observe mode (design §7, §8, §12): the Host's audit commands read the records back with a decision computed from the
 // rules in force at the read, so editing a rule changes what the past would have been. For the app and the CLI only, and
 // never for an agent's shell, which must not read the log its own calls are kept in.
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { removeFixture } from '../../core/testFixtures'
 import { profilePaths } from '../../core/profile/paths'
 import { STARTER_POLICY, writeAuditPolicy } from '../../core/audit/policy'
-import { appendRecords, type AuditRecord } from '../../core/audit/store'
+import { appendRecords, auditStoppedAtLimit, type AuditRecord } from '../../core/audit/store'
 import { AUDIT_COMMANDS, createHostAudit } from './auditCommands'
 
 const dirs: string[] = []
@@ -198,6 +198,24 @@ describe('createHostAudit', () => {
     await appendRecords(h.profileDir, [rec()], { now: () => NOW, maxBytes: 1000 })
     expect((await h.call('audit-summary')).body).toMatchObject({ stoppedAtLimit: true })
     expect((await h.call('audit-summary', { until: new Date(NOW - 3 * 24 * 60 * 60 * 1000).toISOString() })).body).toMatchObject({ stoppedAtLimit: false })
+  })
+
+  // A Host that restarted has written nothing yet, so it knows a day stopped from what the folder says, which its start's
+  // prune reads
+  it('says a day of the period stopped at the size after a restart, before any write', async () => {
+    const h = await rig()
+    const o = { now: () => NOW, maxBytes: 1000 }
+    for (let i = 0; i < 20 && !auditStoppedAtLimit(h.profileDir); i++) await appendRecords(h.profileDir, [rec()], o)
+    expect(auditStoppedAtLimit(h.profileDir)).toBe(true)
+    // The store and the commands as a new process has them
+    vi.resetModules()
+    const store = await import('../../core/audit/store')
+    const { createHostAudit: restartedAudit } = await import('./auditCommands')
+    const audit = restartedAudit({ profileDir: h.profileDir, now: () => NOW })
+    const summary = () => audit.command({ cmd: 'audit-summary', args: {}, role: 'app', marks: { effects: 0 } })
+    expect((await summary()).body).toMatchObject({ stoppedAtLimit: false })
+    await store.pruneRecords(h.profileDir, o)
+    expect((await summary()).body).toMatchObject({ stoppedAtLimit: true })
   })
 
   // An earlier build kept `scripted: true` on a line with control flow, and judged that line unknown. The store drops the

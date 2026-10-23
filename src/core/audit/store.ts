@@ -2,9 +2,10 @@
 // `<profile>/audit/YYYY-MM-DD.jsonl`, the local day the call happened. Kept 30 days or 50 MB, whichever comes first:
 // the days past 30 are dropped at the Host's start and hourly (and are not read in between), and the bytes written since
 // are counted, so the oldest days go as soon as the size would pass, and a day whose own file reaches it is not filed
-// further. A record holds the action and a short target only (the resolver's), never a command, output or file
-// contents, and no decision: that is computed when the records are read, from the rules in force then, so editing a
-// rule re-judges the past.
+// further (an empty `YYYY-MM-DD.stopped` beside it says so, for a Host that starts over, and goes with the day). A
+// record holds the action and a short target only (the resolver's), never a command, output or file contents, and no
+// decision: that is computed when the records are read, from the rules in force then, so editing a rule re-judges the
+// past.
 //
 // The Host is the one writer. Writes go one after another, and a write that fails is logged and dropped: a source never
 // waits on the disk and never fails over it (Review Focus 4). A line torn by a crash costs that line only: the next write
@@ -47,6 +48,8 @@ export interface AuditStoreOptions {
 }
 
 const DAY_FILE = /^\d{4}-\d{2}-\d{2}\.jsonl$/
+/** The empty file beside a day's that says the day stopped at the size (see appendRecords), so a restart still knows. */
+const STOP_MARK = /^\d{4}-\d{2}-\d{2}\.stopped$/
 const DAY_MS = 24 * 60 * 60 * 1000
 
 const pad = (n: number): string => String(n).padStart(2, '0')
@@ -126,6 +129,11 @@ export function appendRecords(profileDir: string, recs: readonly AuditRecord[], 
       if (own + bytes > maxBytes) {
         s.stopped.add(day)
         o.log?.(`audit: the records of ${day} reached ${maxBytes} bytes; no more are kept for that day`)
+        // The file stops short of the size (the record that did not fit was refused), so it cannot tell a Host that starts
+        // over; a mark beside it does, and the prune reads it. Without the folder there is no file to mark.
+        await fs.writeFile(path.join(dir, `${day}.stopped`), '').catch((err) => {
+          if (codeOf(err) !== 'ENOENT') o.log?.(`audit: could not mark ${day} as stopped: ${String(err)}`)
+        })
         continue
       }
       if (total(s) + bytes > maxBytes && (s.prunedAt === null || now - s.prunedAt >= AUDIT_OVERFLOW_PRUNE_MS)) await prune(dir, s, o, bytes)
@@ -216,6 +224,7 @@ async function prune(dir: string, s: FolderState, o: AuditStoreOptions, room: nu
       const file = path.join(dir, `${day}.jsonl`)
       try {
         await fs.rm(file, { force: true })
+        await fs.rm(path.join(dir, `${day}.stopped`), { force: true }).catch(() => {})
         s.stopped.delete(day)
         return true
       } catch (err) {
@@ -238,6 +247,12 @@ async function prune(dir: string, s: FolderState, o: AuditStoreOptions, room: nu
         sizes.delete(day)
         sum -= size
       }
+    }
+    // The days an earlier process stopped, by their marks; a mark whose day file is gone is let go
+    for (const name of names.filter((n) => STOP_MARK.test(n))) {
+      const day = name.slice(0, 10)
+      if (sizes.has(day)) s.stopped.add(day)
+      else await fs.rm(path.join(dir, name), { force: true }).catch(() => {})
     }
     s.sizes = sizes
   } catch (err) {

@@ -372,6 +372,68 @@ describe('retention (Review Focus 4)', () => {
   })
 })
 
+describe('a day that stopped at the size, across a restart', () => {
+  /** The store as a Host that just started has it: nothing known of any folder until its start's prune has read it. */
+  const restarted = async (): Promise<typeof import('./store')> => {
+    vi.resetModules()
+    return import('./store')
+  }
+  /** Fills the day one record at a time until a record no longer fits, as the size cap is small. */
+  const fillUntilStopped = async (p: string, o: { now: () => number; maxBytes: number }, day = '2026-10-23'): Promise<void> => {
+    for (let i = 0; i < 20 && !auditStoppedAtLimit(p, { since: at(day), until: at(day, 1) }); i++) await appendRecords(p, [rec({ at: at(day, i) })], o)
+    expect(auditStoppedAtLimit(p, { since: at(day), until: at(day, 1) })).toBe(true)
+  }
+
+  it('says a day stopped at the size after a restart, before this process has written anything, though its file stops short of the size', async () => {
+    const p = await profile()
+    const o = { now: () => ms('2026-10-23'), maxBytes: 1000 }
+    await fillUntilStopped(p, o)
+    const size = (await fs.stat(path.join(auditDir(p), '2026-10-23.jsonl'))).size
+    // The file never reaches the size: the record that did not fit was refused, so a rule on the file's size alone would miss this day
+    expect(size).toBeLessThan(1000)
+
+    const fresh = await restarted()
+    expect(fresh.auditStoppedAtLimit(p)).toBe(false) // nothing has looked at the folder yet
+    const stop = fresh.keepPruning(p, { ...o, every: () => () => {} })
+    await fresh.pruneRecords(p, o) // the Host's start prune, settled
+    stop()
+    expect(fresh.auditStoppedAtLimit(p)).toBe(true)
+    expect(fresh.auditStoppedAtLimit(p, { since: at('2026-10-23'), until: at('2026-10-24') })).toBe(true)
+    expect(fresh.auditStoppedAtLimit(p, { until: at('2026-10-22') })).toBe(false)
+    // And the day is still not filed further
+    await fresh.appendRecords(p, [rec({ at: at('2026-10-23', 30) })], o)
+    expect((await fs.stat(path.join(auditDir(p), '2026-10-23.jsonl'))).size).toBe(size)
+  })
+
+  it('does not say it of a day that did not stop', async () => {
+    const p = await profile()
+    const o = { now: () => ms('2026-10-23'), maxBytes: 1500 }
+    await appendRecords(p, [rec()], o)
+    const fresh = await restarted()
+    await fresh.pruneRecords(p, o)
+    expect(fresh.auditStoppedAtLimit(p)).toBe(false)
+  })
+
+  it('forgets a day with its file: the days past the kept ones, and a mark whose file is not there', async () => {
+    const p = await profile()
+    const o = { now: () => ms('2026-10-23'), maxBytes: 1000 }
+    await fillUntilStopped(p, o)
+    expect(await files(p)).toEqual(['2026-10-23.jsonl', '2026-10-23.stopped'])
+    // Thirty-one days on, the day is past the kept days: its file goes, and its mark with it
+    const later = { now: () => ms('2026-11-23'), maxBytes: 1000 }
+    const fresh = await restarted()
+    await fresh.pruneRecords(p, later)
+    expect(await files(p)).toEqual([])
+    expect(fresh.auditStoppedAtLimit(p)).toBe(false)
+    // A mark left alone by a file that was removed by hand says nothing, and is cleaned up
+    await fs.mkdir(auditDir(p), { recursive: true })
+    await fs.writeFile(path.join(auditDir(p), '2026-11-22.stopped'), '')
+    await fresh.pruneRecords(p, later)
+    expect(await files(p)).toEqual([])
+    expect(fresh.auditStoppedAtLimit(p)).toBe(false)
+  })
+})
+
 describe('reading a large day', () => {
   /** A day of `count` records, a second apart in the order they were written, about 10 MB at 30 000. */
   async function largeDay(count: number, day = '2026-10-23', into?: string): Promise<{ p: string; newest: string[] }> {
