@@ -148,6 +148,16 @@ describe('decide, under the starter rules', () => {
     expect(decide(bash('echo `git rev-parse HEAD`'), p)).toEqual({ decision: 'allow' })
   })
 
+  // The shell runs a substitution inside double quotes, and not one inside single quotes
+  it('would deny a command substituted inside double quotes, and allows the same text in single quotes', () => {
+    const push = { decision: 'would-deny', ruleId: starterId('git.remote.write') }
+    expect(decide(bash('echo "$(git push)"'), p)).toEqual(push)
+    expect(decide(bash('echo "`git push`"'), p)).toEqual(push)
+    expect(decide(bash('echo "$(rm -rf ../x)"'), p)).toEqual({ decision: 'would-deny', ruleId: starterId('filesystem.delete') })
+    expect(decide(bash("echo '$(git push)'"), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('echo "$(git rev-parse HEAD)"'), p)).toEqual({ decision: 'allow' })
+  })
+
   it('would deny a line cut short whose kept commands include a denied one', () => {
     const cut = { action: 'process.execute' as const, confidence: 'unknown' as const, commands: [{ action: 'process.execute' as const }, { action: 'git.remote.write' as const }] }
     expect(decide(cut, p)).toEqual({ decision: 'would-deny', ruleId: starterId('git.remote.write') })

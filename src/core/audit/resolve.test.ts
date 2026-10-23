@@ -498,6 +498,41 @@ describe('shell: the commands find -exec, xargs, watch, trap and backticks run',
     }
   })
 
+  it('puts {} at the start paths when they are few, and leaves it out when they are many', () => {
+    // Ten starts that are one place are one start
+    expect(bash('find . . . . . . . . . . -exec rm {} \\;')).toMatchObject({ action: 'filesystem.delete', insideProject: true, confidence: 'high' })
+    expect(bash('find ../a b c d e f g h -exec rm {} \\;')).toMatchObject({ action: 'filesystem.delete', insideProject: false })
+    // Nine places are too many to put in a command: the command runs on files this cannot place, and find's own delete says where
+    const nine = 'find ../a b c d e f g h i -exec rm {} \\;'
+    expect(bash(nine).commands).toContainEqual({ action: 'filesystem.delete', insideProject: false })
+    expect(bash(nine).commands).toContainEqual({ action: 'filesystem.delete' })
+    expect(acts(bash('find a b c d e f g h i -exec git push {} \\;'))).toContain('git.remote.write')
+    expect(bash('find a b c d e f g h -exec rm {} \\;')).toMatchObject({ insideProject: true })
+  })
+
+  it('reads watch and trap one script level down, and not at the next level', () => {
+    expect(acts(bash(`bash -c "watch 'git push'"`))).toContain('git.remote.write')
+    expect(acts(bash(`bash -c "trap 'git push' EXIT"`))).toContain('git.remote.write')
+    expect(bash(`bash -c "bash -c \\"watch 'git push'\\""`)).toMatchObject({ confidence: 'unknown' })
+    expect(bash(`bash -c "bash -c \\"trap 'git push' EXIT\\""`)).toMatchObject({ confidence: 'unknown' })
+  })
+
+  it('keeps what a command that runs others says of a delete where it is too deep to be read', () => {
+    // xargs rm names its files, and a delete is a delete wherever it is
+    expect(bash(`bash -c "bash -c 'xargs rm -rf ../x'"`)).toMatchObject({ action: 'filesystem.delete', insideProject: false })
+    expect(bash(`bash -c "bash -c 'find .. -delete'"`)).toMatchObject({ action: 'filesystem.delete', insideProject: false })
+    // find -exec rm has a place only from where find starts, so what it runs there is not known
+    expect(bash(`bash -c "bash -c 'find . -exec rm -rf ../x {} \\;'"`)).toMatchObject({ action: 'filesystem.delete', confidence: 'unknown' })
+  })
+
+  it('takes sl for a move only where it is the cmdlet', () => {
+    const r = bash('sl a/b && rm -rf ../../y')
+    expect(r).toMatchObject({ action: 'process.execute', target: 'sl', confidence: 'unknown' })
+    expect(r.commands).toContainEqual({ action: 'filesystem.delete', insideProject: false })
+    expect(r.commands).not.toContainEqual({ action: 'filesystem.delete', insideProject: true })
+    expect(ps('sl a/b; Remove-Item ../../y')).toMatchObject({ action: 'filesystem.delete', insideProject: true })
+  })
+
   it('keeps a quoted word behind them a value, never shown, and is unknown where it is read no further', () => {
     for (const line of ["xargs git 'hunter2'", "find . -exec git 'hunter2' {} \\;", "watch -n 5 git 'hunter2'", `trap 'git "hunter2"' EXIT`]) {
       const r = bash(line)
@@ -515,6 +550,80 @@ describe('shell: the commands find -exec, xargs, watch, trap and backticks run',
     expect(bash("echo '`git push`'")).toEqual({ action: 'process.execute', target: 'echo', confidence: 'high' })
     // In PowerShell the backtick is the escape character, and nothing runs
     expect(ps('echo `git push`')).toEqual({ action: 'process.execute', target: 'echo', confidence: 'high' })
+  })
+})
+
+// Inside double quotes a shell still runs `$( )` (and, in POSIX, a pair of backticks): the text between is a line of its own,
+// whose commands follow the one the quoted word belongs to. The word stays a value, whatever it held. PowerShell expands only
+// `$( )`, in a double-quoted string and in an @" "@ here-string; its backtick is the escape character.
+describe('shell: a command substitution inside double quotes is a command of the line', () => {
+  it.each([
+    ['echo "$(git push)"', 'git.remote.write'],
+    ['echo "`git push`"', 'git.remote.write'],
+    ['echo "a $(git push) b"', 'git.remote.write'],
+    ['echo "a `git push` b" > /dev/null', 'git.remote.write'],
+    ['echo "\\\\$(git push)"', 'git.remote.write'],
+    ['echo "$(echo "$(git push)")"', 'git.remote.write'],
+    ['echo "`echo "$(git push)"`"', 'git.remote.write']
+  ])('reads %s', (line, action) => {
+    expect(acts(bash(line)), line).toContain(action)
+  })
+
+  it('lists the substitution after the command the quoted word belongs to, and keeps the word a value', () => {
+    expect(acts(bash('echo "$(git push)"'))).toEqual(['process.execute', 'git.remote.write'])
+    expect(bash('echo "$(rm -rf ../x)"').commands).toContainEqual({ action: 'filesystem.delete', insideProject: false })
+    // The word is not a place: rm of a substituted name is not shown to be inside
+    expect(bash('rm -rf "$(echo ../x)"')).toMatchObject({ action: 'filesystem.delete', insideProject: false })
+    expect(bash('git commit -m "$(git push)"')).toMatchObject({ action: 'git.local.write', target: 'git commit' })
+    // An assignment of a substitution is only the command in it
+    expect(bash('x="$(git push)"')).toEqual({ action: 'git.remote.write', target: 'git push', confidence: 'high' })
+  })
+
+  // A substitution runs in a subshell, so a cd in it moves what it runs and nothing after it
+  it('keeps the folder a cd in a substitution goes to inside the substitution', () => {
+    expect(bash('echo "$(cd ../x && pwd)" && touch f')).toMatchObject({ commands: [{ action: 'process.execute' }, { action: 'filesystem.write', insideProject: true }] })
+    expect(bash('echo "$(cd sub && rm -rf ../../y)"').commands).toContainEqual({ action: 'filesystem.delete', insideProject: false })
+    expect(bash('echo "$(cd sub && rm -rf ../y)"').commands).toContainEqual({ action: 'filesystem.delete', insideProject: true })
+    expect(bash('echo "$(bash -c \'cd ../x\')" && touch f').commands).toContainEqual({ action: 'filesystem.write', insideProject: true })
+    expect(bash('cd sub && echo "$(cd ../x && pwd)" && touch ../f').commands).toContainEqual({ action: 'filesystem.write', insideProject: true })
+  })
+
+  it('reads nothing in single quotes, and nothing the shell would not run', () => {
+    expect(bash("echo '$(git push)'")).toEqual({ action: 'process.execute', target: 'echo', confidence: 'high' })
+    expect(bash("echo '`git push`'")).toEqual({ action: 'process.execute', target: 'echo', confidence: 'high' })
+    expect(bash('echo "\\$(git push)"')).toEqual({ action: 'process.execute', target: 'echo', confidence: 'high' })
+    expect(bash('echo "\\`git push\\`"')).toEqual({ action: 'process.execute', target: 'echo', confidence: 'high' })
+    // Arithmetic is no command
+    expect(bash('echo "$((1 + 2))"')).toEqual({ action: 'process.execute', target: 'echo', confidence: 'high' })
+    expect(bash('echo "took $(( $(date +%s) - 5 ))"').confidence).not.toBe('unknown')
+  })
+
+  it('reads two levels of substitution, and no more: the third is unknown', () => {
+    expect(acts(bash('echo "$(echo "$(git push)")"'))).toContain('git.remote.write')
+    expect(bash('echo "$(echo "$(echo "$(git push)")")"')).toMatchObject({ confidence: 'unknown' })
+    // The bound is shared with scripts: one script level leaves one substitution level
+    expect(acts(bash(`bash -c 'echo "$(git push)"'`))).toContain('git.remote.write')
+    expect(bash(`bash -c "bash -c 'echo \\"\\$(git push)\\"'"`)).toMatchObject({ confidence: 'unknown' })
+  })
+
+  it('does not make the commit message idiom unknown, and still reads a push after it', () => {
+    const commit = ['git commit -m "$(cat <<\'EOF\'', 'fix (the thing', '', 'body with ) and `ticks` and $(not run)', 'EOF', ')"'].join('\n')
+    const r = bash(commit)
+    expect(r.confidence).not.toBe('unknown')
+    expect(r).toMatchObject({ action: 'git.local.write', target: 'git commit' })
+    expect(acts(r)).toEqual(['git.local.write', 'process.execute'])
+    expect(acts(bash(`${commit} && git push`))).toContain('git.remote.write')
+  })
+
+  it('reads $( ) in PowerShell, not its backtick, in a string and in a here-string', () => {
+    expect(acts(ps('Write-Output "$(git push)"'))).toContain('git.remote.write')
+    expect(acts(ps('Write-Output @"\n$(git push)\n"@'))).toContain('git.remote.write')
+    expect(acts(ps('Write-Output @"\nshe said "hi" $(git push)\n"@'))).toContain('git.remote.write')
+    expect(acts(ps('Write-Output @\'\n$(git push)\n\'@'))).toBeUndefined()
+    // The backtick escapes the dollar, and a pair of backticks is only text
+    expect(ps('Write-Output "`$(git push)"')).toMatchObject({ target: 'Write-Output', confidence: 'high' })
+    expect(ps('Write-Output "`git push`"')).toMatchObject({ target: 'Write-Output', confidence: 'high' })
+    expect(ps('Write-Output "`git push`"')).not.toHaveProperty('commands')
   })
 })
 
@@ -1725,6 +1834,32 @@ describe('malformed and hostile input', () => {
     bash(`echo ${'`a`'.repeat(50_000)}`)
     bash(`trap '${'a;'.repeat(50_000)}' EXIT`)
     expect(Date.now() - started).toBeLessThan(2000)
+  })
+
+  // Distinct starts, so nothing collapses them: a {} must not be one copy of every start (6000 by 6000 took 3.7 s and 2.5 GB)
+  it('stays fast on a find with thousands of distinct starts and thousands of {} or -exec clauses', () => {
+    const starts = Array.from({ length: 6000 }, (_, i) => `d${i}`).join(' ')
+    const few = 'a b c d e f g h'
+    const started = Date.now()
+    bash(`find ${starts} -exec rm ${'{} '.repeat(6000)}\\;`)
+    bash(`find ${starts} ${'-exec rm {} \\; '.repeat(3000)}`)
+    bash(`find ${few} -exec rm ${'{} '.repeat(20_000)}\\;`)
+    bash(`find ${few} ${'-exec rm {} \\; '.repeat(3000)}`)
+    expect(bash(`find ../${starts} -exec rm ${'{} '.repeat(6000)}\\;`).commands).toContainEqual({ action: 'filesystem.delete', insideProject: false })
+    expect(Date.now() - started).toBeLessThan(1000)
+  })
+
+  it('stays fast on substitutions in double quotes: many, unterminated and nested', () => {
+    const started = Date.now()
+    bash(`echo ${'"$(a)" '.repeat(10_000)}`)
+    bash(`echo ${'"`a`" '.repeat(10_000)}`)
+    bash(`echo "${'$('.repeat(25_000)}`)
+    bash(`echo "${'`'.repeat(25_001)}`)
+    bash(`echo ${'"$(echo '.repeat(10_000)}`)
+    bash(`echo "$(${'a '.repeat(25_000)}`)
+    bash(`echo ${'"$(a'.repeat(10_000)}`)
+    ps(`Write-Output @"\n${'$(a) '.repeat(10_000)}\n"@`)
+    expect(Date.now() - started).toBeLessThan(1000)
   })
 
   it('reads an apply_patch header with a long run of spaces in linear time', () => {

@@ -387,8 +387,12 @@ interface Cmd {
   /** Set by expand on a command whose line holds the commands it runs (`xargs git push`, `find -exec`), which follow it in
    *  the list and headline the line in its place. */
   runs?: true
-  /** Set by expand on a command that runs others too deep in scripts to be read, so what it does is not known. */
+  /** Set by expand on a command that runs others too deep in scripts to be read, and by splitLine on one with a substitution
+   *  in double quotes too deep to be read, so what it does is not known. */
   unread?: true
+  /** Set by splitLine on a command a substitution in double quotes runs, and passed on to what it runs in turn: it runs in a
+   *  subshell, so a `cd` in it moves the commands of the substitution and none after it. */
+  sub?: true
 }
 
 interface Facts {
@@ -430,7 +434,13 @@ function resolveShell(rec: Record<string, unknown>, at: Ctx, flavor: Flavor): Re
 
   const parts: ResolvedAction[] = []
   let lead: ResolvedAction | undefined
+  let held: { base: string | null } | undefined // where the line was before the commands of a substitution, which a cd in them leaves
   for (const cmd of commands) {
+    if (cmd.sub === true) held ??= { base }
+    else if (held !== undefined) {
+      base = held.base
+      held = undefined
+    }
     const ctx: Ctx = { cwd, base }
     let own: ResolvedAction | undefined
     if (cmd.words.length > 0) {
@@ -446,12 +456,14 @@ function resolveShell(rec: Record<string, unknown>, at: Ctx, flavor: Flavor): Re
     parts.push(...writes)
 
     const prog = cmd.words.length > 0 ? programName(cmd.words[0]).toLowerCase() : ''
+    // `sl` is Set-Location in PowerShell only: elsewhere it is a program this does not know, which neither moves nor passes
+    const foreign = cmd.cmdlet === undefined && PS_ONLY_ALIASES.has(prog)
     if (lead === undefined) {
       const onlyPrints = own !== undefined && PRODUCERS.has(prog) && own.action === 'process.execute'
       if (own === undefined || (onlyPrints && writes.length > 0)) lead = writes[0]
-      else if (!PASSIVE.has(prog) && cmd.runs !== true) lead = own
+      else if (!(PASSIVE.has(prog) && !foreign) && cmd.runs !== true) lead = own
     }
-    if (MOVES.has(prog)) base = movedTo(cmd.words.slice(1), ctx, cmd.cmdlet)
+    if (MOVES.has(prog) && !foreign) base = movedTo(cmd.words.slice(1), ctx, cmd.cmdlet)
   }
   if (parts.length === 0) return { action: 'process.execute', target: 'shell', confidence: 'unknown' }
   // A command that runs the ones after it (`xargs`) is not one more command beside them, though it is listed with them
@@ -583,7 +595,9 @@ function stripPrefix(raw: Cmd, flavor: Flavor): { cmd: Cmd; syntax: boolean } {
   }
   const rest = words.slice(i)
   const cmdlet = rest.length > 0 ? cmdletOf(rest[0], flavor) : undefined
-  const cmd: Cmd = { words: rest, out: raw.out, call: raw.call, quoted: raw.quoted.slice(i), invoked: raw.invoked, cmdlet }
+  const cmd: Cmd = {
+    words: rest, out: raw.out, call: raw.call, quoted: raw.quoted.slice(i), invoked: raw.invoked, cmdlet, unread: raw.unread, sub: raw.sub
+  }
   const dropped = { cmd: { ...cmd, words: [], quoted: [] }, syntax: true }
   if (rest.length === 0) return { cmd, syntax }
   if (NO_COMMAND.has(rest[0].toLowerCase())) return dropped
@@ -626,7 +640,7 @@ const commandAmong = (cmd: Cmd, from: number, to = cmd.words.length): Cmd => ({
  * `find -exec`, `-execdir`, `-ok` and `-okdir`, and the shell line `trap` runs on a signal or `watch` is given as one word
  * (which it hands to `sh -c`). None for a trap that only lists, resets or ignores, and for a command with nothing behind it.
  */
-function commandsBehind(cmd: Cmd, flavor: Flavor): Cmd[] {
+function commandsBehind(cmd: Cmd, flavor: Flavor, depth: number): Cmd[] {
   if (cmd.quoted[0] === true) return [] // a quoted word is a value, not a program
   const args = cmd.words.slice(1)
   switch (programName(cmd.words[0]).toLowerCase()) {
@@ -642,17 +656,20 @@ function commandsBehind(cmd: Cmd, flavor: Flavor): Cmd[] {
       return findExecs(cmd)
     case 'watch': {
       const from = 1 + afterWatch(args)
-      if (cmd.words.length === from + 1) return splitLine(cmd.words[from], 'posix')
+      if (cmd.words.length === from + 1) return splitLine(cmd.words[from], 'posix', depth + 1)
       return cmd.words.length > from ? [commandAmong(cmd, from)] : []
     }
     case 'trap': {
       const line = flavor === 'posix' ? trapHandler(args) : null
-      return line === null ? [] : splitLine(line, 'posix')
+      return line === null ? [] : splitLine(line, 'posix', depth + 1)
     }
     default:
       return []
   }
 }
+
+/** The commands a command runs, each in the subshell the command is in, if it is in one. */
+const inSubshell = (cmd: Cmd, run: Cmd[]): Cmd[] => (cmd.sub === true ? run.map((c) => ({ ...c, sub: true })) : run)
 
 /** The commands of a line with the scripts inside `bash -c` and the like replaced by their own commands, and the commands
  *  that xargs, find -exec, watch and trap run put after the one that runs them. Also whether any of it was syntax rather
@@ -667,17 +684,17 @@ function expand(cmds: Cmd[], flavor: Flavor, depth = 0): { commands: Cmd[]; synt
     if (cmd.words.length === 0 && cmd.out.length === 0) continue
     const script = depth < 2 && cmd.words.length > 0 ? scriptOf(cmd.words) : null
     if (script === null) {
-      const behind = cmd.words.length > 0 ? commandsBehind(cmd, flavor) : []
+      const behind = cmd.words.length > 0 ? commandsBehind(cmd, flavor, depth) : []
       if (behind.length === 0) out.push(cmd)
       else if (depth >= 2) out.push({ ...cmd, unread: true }) // past the depth scripts are read to, where a shell's -c is unknown too
       else {
         const inner = expand(behind, flavor, depth + 1)
-        out.push({ ...cmd, runs: true }, ...inner.commands)
+        out.push({ ...cmd, runs: true }, ...inSubshell(cmd, inner.commands))
         syntax ||= inner.syntax
       }
     } else {
-      const inner = expand(splitLine(script.text, script.flavor), script.flavor, depth + 1)
-      out.push(...inner.commands)
+      const inner = expand(splitLine(script.text, script.flavor, depth + 1), script.flavor, depth + 1)
+      out.push(...inSubshell(cmd, inner.commands))
       if (cmd.out.length > 0) out.push({ words: [], out: cmd.out, call: false, quoted: [], invoked: false }) // `bash -c "x" > f`
       syntax ||= inner.syntax
     }
@@ -700,9 +717,27 @@ const SINK = /^(?:\/dev\/(?:null|stdout|stderr|tty|fd\/\d+)|nul|\$null)$/i
  * target is kept apart as a file the command writes; `2>&1`, `< in` and heredoc bodies are left out. A `&` that starts a
  * command is PowerShell's call operator. Backslash is a path separator on Windows, so it only escapes the characters a
  * shell line needs it for.
+ *
+ * Inside double quotes a `$( )` (in a POSIX line also a pair of backticks) is a substitution the shell runs: its text is read
+ * as a line of its own and its commands follow the command the quoted word is in, while the word keeps a `$` where it was,
+ * a value and no place. PowerShell reads only `$( )`, also in an @" "@ here-string. Single quotes, `\$(`, an escaped backtick
+ * and arithmetic (`$((`) hold none. Substitutions nest to the depth scripts are read to, `depth` counting both; a command
+ * with one past it is `unread`.
  */
-function splitLine(line: string, flavor: Flavor): Cmd[] {
+function splitLine(line: string, flavor: Flavor, depth = 0): Cmd[] {
+  return splitFrom(line, 0, 'line', flavor, depth).commands
+}
+
+/** Where `splitFrom` stops: the end of the line, the `)` that closes the `$(` it began after, or the backtick that closes one. */
+type Stop = 'line' | 'paren' | 'tick'
+
+/** `splitLine` from `start` to where `stop` says, with the index of what stopped it (the line's end if nothing did). */
+function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, depth: number): { commands: Cmd[]; end: number } {
   const commands: Cmd[] = []
+  const later: Cmd[] = [] // the commands of substitutions in double quotes, which follow the command the quotes are in
+  let unread = false // that command held a substitution too deep to read
+  let parens = 0 // the `(` read since the start that no `)` has closed
+  let end = line.length
   let words: Words = []
   let out: string[] = []
   let call = false
@@ -732,7 +767,12 @@ function splitLine(line: string, flavor: Flavor): Cmd[] {
   const endCommand = (): void => {
     endWord()
     sink = null
-    if (words.length > 0 || out.length > 0) commands.push({ words, out, call, quoted, invoked })
+    if (words.length > 0 || out.length > 0) {
+      commands.push(unread ? { words, out, call, quoted, invoked, unread: true } : { words, out, call, quoted, invoked })
+    }
+    for (const c of later) commands.push(c)
+    later.length = 0
+    unread = false
     words = []
     out = []
     call = false
@@ -740,22 +780,51 @@ function splitLine(line: string, flavor: Flavor): Cmd[] {
     quoted = []
   }
 
-  for (let i = 0; i < line.length; i++) {
+  for (let i = start; i < line.length; i++) {
     const c = line[i]
     if (c === "'") {
       const j = line.indexOf("'", i + 1)
-      const end = j < 0 ? line.length : j
-      cur += line.slice(i + 1, end)
+      const close = j < 0 ? line.length : j
+      cur += line.slice(i + 1, close)
       has = true
       wordQuoted = true
-      i = end
+      i = close
     } else if (c === '"') {
+      // An @" "@ here-string (PowerShell: its header ends the line) ends at a `"@` that starts a line, and holds quotes
+      const here = flavor === 'ps' && cur === '@' && !wordQuoted && /^\r?\n/.test(line.slice(i + 1, i + 3))
+      const closes = (j: number): boolean => (here ? line[j] === '"' && line[j + 1] === '@' && line[j - 1] === '\n' : line[j] === '"')
       has = true
       wordQuoted = true
-      for (i++; i < line.length && line[i] !== '"'; i++) {
-        if (line[i] === '\\' && (line[i + 1] === '"' || line[i + 1] === '$')) i++
-        cur += line[i]
+      for (i++; i < line.length && !closes(i); i++) {
+        const d = line[i]
+        const n = line[i + 1]
+        if (flavor === 'ps' && d === '`') {
+          cur += n === undefined ? d : d + n // the escape character: `$ is a dollar
+          i++
+        } else if (flavor === 'posix' && d === '\\' && n === '\\') {
+          cur += '\\\\' // a backslash, which does not escape what follows it
+          i++
+        } else if (!here && d === '\\' && (n === '"' || (flavor === 'posix' && (n === '$' || n === '`')))) {
+          cur += n
+          i++
+        } else if (d === '$' && n === '(' && line[i + 2] === '(') {
+          const close = line.indexOf('))', i + 3) // arithmetic, which runs nothing
+          cur += '$'
+          i = close < 0 ? line.length : close + 1
+        } else if ((d === '$' && n === '(') || (d === '`' && flavor === 'posix')) {
+          if (depth >= 2) {
+            unread = true // too deep to read: the text is a word's, and the command is not known
+            cur += d
+          } else {
+            const tick = d === '`'
+            const sub = splitFrom(line, i + (tick ? 1 : 2), tick ? 'tick' : 'paren', flavor, depth + 1)
+            for (const s of sub.commands) later.push({ ...s, sub: true })
+            cur += '$'
+            i = sub.end
+          }
+        } else cur += d
       }
+      if (here) i++ // the @ of "@
     } else if (c === '\\') {
       const n = line[i + 1]
       if (n === '\n') i++
@@ -776,10 +845,15 @@ function splitLine(line: string, flavor: Flavor): Cmd[] {
       heredoc = null
     } else if (c === '#' && !has) {
       while (i + 1 < line.length && line[i + 1] !== '\n') i++ // a comment
+    } else if ((c === ')' && stop === 'paren' && parens === 0) || (c === '`' && stop === 'tick')) {
+      end = i // what closes the substitution this was started for
+      break
     } else if (c === ';' || c === '|' || c === ')' || (c === '`' && flavor === 'posix')) {
+      if (c === ')' && parens > 0) parens--
       endCommand()
     } else if (c === '(') {
       if (has && !wordQuoted && sink === null) invoked = true // `$f.Delete(`, `[IO.File]::Copy(`
+      parens++
       endCommand()
     } else if (c === '&') {
       if (line[i + 1] === '&') {
@@ -829,7 +903,7 @@ function splitLine(line: string, flavor: Flavor): Cmd[] {
     }
   }
   endCommand()
-  return commands
+  return { commands, end }
 }
 
 /** Where the heredoc that opened on the line ending at `nl` closes: the index of the newline after its terminator. */
@@ -1269,16 +1343,21 @@ const PLACEHOLDER = /^\{.*\}$/
 
 const FIND_EXEC = /^-(?:exec|execdir|ok|okdir)$/
 
+/** The most start paths a `{}` is put at. A command line holds a copy of them for each `{}`, so more would make a long line
+ *  of starts and `{}` words quadratic; past it the `{}` is left out, as xargs's is, and find's own facts keep the places. */
+const FIND_STARTS_MAX = 8
+
 /**
  * The command of each `-exec`, `-execdir`, `-ok` and `-okdir` of a `find`: the words up to a `;` (written `\;` or `';'`) or a
- * `{} +`. A `{}` among them is a file find found, so it stands for where find starts, which the files are under. A word
- * that only holds one (`{}.bak`) is left as it is.
+ * `{} +`. A `{}` among them is a file find found, so it stands for where find starts, which the files are under, if those
+ * are few and distinct. A word that only holds one (`{}.bak`) is left as it is.
  */
 function findExecs(cmd: Cmd): Cmd[] {
   const words = cmd.words
   const first = words.findIndex((w, i) => i > 0 && FIND_EXEC.test(w))
   if (first < 0) return []
-  const starts = findStarts(words.slice(1))
+  const distinct = [...new Set(findStarts(words.slice(1)))]
+  const starts = distinct.length <= FIND_STARTS_MAX ? distinct : []
   const runs: Cmd[] = []
   for (let i = first; i < words.length; i++) {
     if (!FIND_EXEC.test(words[i])) continue
@@ -1446,7 +1525,6 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
   // Where cmdletOf found no cmdlet for an alias only PowerShell has, the shell is not PowerShell and the word is a program
   // it does not know. Its words are never read as a cmdlet's, whose `-Value hunter2` would show a value as the path.
   if (cmdlet === undefined && PS_ONLY_ALIASES.has(prog)) return { action: 'process.execute', target: name, known: false }
-  if (cmd.unread === true) return { action: 'process.execute', target: name, known: false }
 
   if (DELETERS.has(prog)) {
     const paths = pathArgs(prog, args, cmdlet)
@@ -1455,8 +1533,9 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
     return facts
   }
 
+  // A find's place is where it starts, not where what it runs deletes, so one that runs commands left unread is not known
   if (prog === 'find' && findDeletes(args)) {
-    return { action: 'filesystem.delete', target: name, known: true, inside: placesOf(findStarts(args), ctx, true).inside }
+    return { action: 'filesystem.delete', target: name, known: cmd.unread !== true, inside: placesOf(findStarts(args), ctx, true).inside }
   }
 
   if (prog === 'xargs') {
@@ -1470,6 +1549,9 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
         : { action: 'filesystem.delete', target: name, known: true, inside: placesOf(named, ctx, true).inside }
     }
   }
+
+  // Past the branches that name their own places: what it runs was not read, so what it does is not known
+  if (cmd.unread === true) return { action: 'process.execute', target: name, known: false }
 
   if (COPIERS.has(prog)) {
     // The destination is named by -t / -Destination, else it is the last of two or more paths.
