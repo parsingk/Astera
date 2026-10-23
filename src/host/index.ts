@@ -521,10 +521,11 @@ async function main(): Promise<void> {
   // rolling, whose hook tap is one of its sources. A session is read from the two registries' notes and its Dispatch
   // from the state as the orch holds it (made below, before any source can call), never loaded for this: a Host that
   // has not loaded has placed none. The mode is read through readAuditPolicy, which throws on a file it cannot read
-  // cleanly, so the recorder keeps only a clean read (a missing file is compatibility).
+  // cleanly, so the recorder keeps only a clean read (a missing file is compatibility); the copy of a damaged one is
+  // the policies commands' to keep.
   const auditRecorder = createAuditRecorder({
     profileDir,
-    mode: async () => (await readAuditPolicy(profileDir))?.mode ?? 'compatibility',
+    mode: async () => (await readAuditPolicy(profileDir, { keepDamaged: false }))?.mode ?? 'compatibility',
     sessionInfo: registrySessionFacts({ ptys: registry, procs }),
     dispatchOf: (sessionId, at) => dispatchOfSession(orch.state(), sessionId, at),
     log: (m) => log.write(m)

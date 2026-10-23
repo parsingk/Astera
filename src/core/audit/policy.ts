@@ -122,8 +122,8 @@ const FILE = 'audit-policy.json'
 const EFFECTS: readonly string[] = ['allow', 'deny']
 const SCOPES: readonly string[] = ['inside-project', 'outside-project']
 
-/** The hash of the damaged text this process last kept aside, by file: every spawn reads the mode, and one copy per
- *  distinct damage is enough (the agent profile store's rule). */
+/** The hash of the damaged text this process last kept aside, by file: the Host's commands read the rules at every call,
+ *  and one copy per distinct damage is enough (the agent profile store's rule). */
 const keptDamage = new Map<string, string>()
 
 /** The file was read but holds no policy. Its bytes are kept beside it, so starting over with the starter rules may write
@@ -160,8 +160,10 @@ function policyOf(v: unknown): AuditPolicy | null {
 }
 
 /** The profile's rules and mode; null when there is no file. Throws RepairNeeded when the file is unreadable, and its
- *  AuditPolicyDamaged when it is damaged. */
-export async function readAuditPolicy(profileDir: string): Promise<AuditPolicy | null> {
+ *  AuditPolicyDamaged when it is damaged, keeping a copy of the damage beside it unless `keepDamaged` is false: only the
+ *  Host's commands keep one, so a read that every spawn makes, in the app's process too, writes nothing (final review
+ *  M9). */
+export async function readAuditPolicy(profileDir: string, o: { keepDamaged?: boolean } = {}): Promise<AuditPolicy | null> {
   const file = profilePaths(profileDir).auditPolicy
   const read = await readStoreFile(file)
   if (read.kind === 'missing') return null
@@ -175,7 +177,7 @@ export async function readAuditPolicy(profileDir: string): Promise<AuditPolicy |
   const p = policyOf(parsed)
   if (p === null) {
     const hash = createHash('sha256').update(read.text).digest('hex')
-    if (keptDamage.get(file) !== hash) {
+    if (o.keepDamaged !== false && keptDamage.get(file) !== hash) {
       keptDamage.set(file, hash)
       await keepDamaged(file, read.text)
     }
@@ -192,9 +194,10 @@ export async function writeAuditPolicy(profileDir: string, p: AuditPolicy): Prom
 }
 
 /** The mode sessions start in, read at every spawn. No file is compatibility; so is a damaged or unreadable one, since a
- *  spawn must not fail over it (the policies commands report that one as RepairNeeded). Never rejects. */
+ *  spawn must not fail over it (the policies commands report that one as RepairNeeded, and keep its copy). Writes
+ *  nothing. Never rejects. */
 export async function readPolicyMode(profileDir: string): Promise<AuditMode> {
-  return readAuditPolicy(profileDir).then(
+  return readAuditPolicy(profileDir, { keepDamaged: false }).then(
     (p) => p?.mode ?? 'compatibility',
     () => 'compatibility'
   )

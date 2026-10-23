@@ -263,6 +263,20 @@ describe('readPolicyMode', () => {
     expect(await readPolicyMode(p)).toBe('compatibility')
   })
 
+  // Final review M9: every spawn reads the mode, in the app's process as well as the Host's; a copy of the damage is
+  // kept by the Host's policies commands, which the person repairs it with, not by each process that spawns
+  it('keeps no copy of a damaged file, which reading the rules still does', async () => {
+    const p = await profile()
+    const bak = async (): Promise<string[]> => (await fs.readdir(p)).filter((f) => f.endsWith('.bak'))
+    await fs.writeFile(profilePaths(p).auditPolicy, '{ "mode": "observe", damaged')
+    expect(await readPolicyMode(p)).toBe('compatibility')
+    expect(await bak()).toEqual([])
+    await expect(readAuditPolicy(p, { keepDamaged: false })).rejects.toBeInstanceOf(RepairNeeded)
+    expect(await bak()).toEqual([])
+    await expect(readAuditPolicy(p)).rejects.toBeInstanceOf(RepairNeeded)
+    expect(await bak()).toHaveLength(1)
+  })
+
   it('does not read the app settings key it replaced', async () => {
     const p = await profile()
     await fs.writeFile(path.join(p, 'app-settings.json'), JSON.stringify({ controlPlanePolicyMode: 'observe' }))

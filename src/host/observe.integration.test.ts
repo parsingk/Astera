@@ -163,7 +163,7 @@ async function hostRig() {
   const tokenStore = await openTokenStore({ profileDir: profile, state: () => (box.orch?.loaded() ? box.orch.state() : null), log })
   const recorder = createAuditRecorder({
     profileDir: profile,
-    mode: async () => (await readAuditPolicy(profile))?.mode ?? 'compatibility',
+    mode: async () => (await readAuditPolicy(profile, { keepDamaged: false }))?.mode ?? 'compatibility',
     sessionInfo: registrySessionFacts({ ptys: registry, procs }),
     dispatchOf: (sessionId, at) => dispatchOfSession(box.orch!.state(), sessionId, at),
     log
