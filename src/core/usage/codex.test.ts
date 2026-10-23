@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { contextFromLines, sessionUsageOf } from './codex'
+import { codexTokenReader, contextFromLines, sessionUsageOf } from './codex'
 import type { CodexLimitState } from '../rolling/codexSignal'
 
 /** 실측한 token_count 레코드의 전체 모양 (codex 0.149.1). 읽지 않는 필드까지 그대로 둔다 —
@@ -165,5 +165,62 @@ describe('sessionUsageOf', () => {
   it('셋 다 없으면 null', () => {
     expect(sessionUsageOf(null, null)).toBeNull()
     expect(sessionUsageOf(null, limitState())).toBeNull()
+  })
+})
+
+/** 토큰 합계용 token_count 레코드. 실측 모양 그대로: input_tokens 는 캐시를 포함하고, total_tokens 는 input + output
+ *  이며, 응답 하나마다 한 줄이라 앞 줄과의 total 차이가 그 줄의 last 다(codex 0.160, 1096 쌍 중 1094). */
+const T0 = Date.parse('2026-10-23T03:00:00.000Z')
+const iso = (ms: number): string => new Date(ms).toISOString()
+const tokens = (input: number, output: number) => ({
+  input_tokens: input,
+  cached_input_tokens: Math.floor(input / 2),
+  cache_write_input_tokens: 0,
+  output_tokens: output,
+  reasoning_output_tokens: Math.floor(output / 3),
+  total_tokens: input + output
+})
+const counted = (at: number, total: [number, number], last: [number, number]): string =>
+  JSON.stringify({
+    timestamp: iso(at),
+    type: 'event_msg',
+    payload: {
+      type: 'token_count',
+      info: { total_token_usage: tokens(...total), last_token_usage: tokens(...last), model_context_window: 258_400 },
+      rate_limits: null
+    }
+  })
+
+describe('codexTokenReader', () => {
+  it('새 대화는 줄마다 그 응답이 쓴 만큼을 낸다', () => {
+    const read = codexTokenReader(T0)
+    expect(read([counted(T0 + 10, [100, 10], [100, 10]), counted(T0 + 20, [250, 30], [150, 20])])).toEqual([
+      { at: iso(T0 + 10), input: 100, output: 10 },
+      { at: iso(T0 + 20), input: 150, output: 20 }
+    ])
+    expect(read([counted(T0 + 30, [400, 35], [150, 5])])).toEqual([{ at: iso(T0 + 30), input: 150, output: 5 }])
+  })
+
+  // Review Focus 5: 이어 받은 대화(롤의 복사본, 기록에서 이어 받기)는 앞 세션의 누계에서 계속 센다(codex 0.160 의
+  // last_token_info_from_rollout). 세션이 시작하기 전의 줄은 그 출발점일 뿐, 이 세션이 쓴 것이 아니다
+  it('세션 시작 전의 줄은 출발점이고, 이어 받은 누계를 다시 세지 않는다', () => {
+    const read = codexTokenReader(T0)
+    expect(read([counted(T0 - 5000, [60, 6], [60, 6]), counted(T0 - 10, [100, 10], [40, 4])])).toEqual([])
+    expect(read([counted(T0 + 10, [150, 12], [50, 2])])).toEqual([{ at: iso(T0 + 10), input: 50, output: 2 }])
+  })
+
+  // 읽기가 파일 끝 근처에서 시작해 시작 전의 줄을 하나도 못 봤으면, 첫 줄의 출발점은 그 줄 자신의 응답을 뺀 누계다
+  it('시작 전의 줄을 못 봤으면 첫 줄에서 그 응답만 센다', () => {
+    const read = codexTokenReader(T0)
+    expect(read([counted(T0 + 10, [1100, 110], [100, 10])])).toEqual([{ at: iso(T0 + 10), input: 100, output: 10 }])
+  })
+
+  // 한도에 걸린 순간의 레코드는 같은 누계를 되풀이하고, 크레딧 레코드는 info 가 없다
+  it('되풀이된 누계와 info 없는 줄은 아무것도 더하지 않는다', () => {
+    const read = codexTokenReader(T0)
+    const credit = JSON.stringify({ timestamp: iso(T0 + 30), type: 'event_msg', payload: { type: 'token_count', info: null, rate_limits: {} } })
+    expect(read([counted(T0 + 10, [100, 10], [100, 10]), counted(T0 + 20, [100, 10], [100, 10]), credit, 'not json'])).toEqual([
+      { at: iso(T0 + 10), input: 100, output: 10 }
+    ])
   })
 })

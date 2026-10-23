@@ -54,7 +54,9 @@ const run = {
   outcome: 'running',
   progress: { done: 1, total: 2 },
   questionsOpen: 1,
-  waitingForApproval: 1
+  waitingForApproval: 1,
+  tokens: { input: 120, output: 12, total: 132 },
+  coordinatorTokens: { input: 5, output: 1, total: 6 }
 } satisfies Run
 const task = {
   id: 'tsk_1',
@@ -75,7 +77,8 @@ const task = {
 const detail = {
   ...task,
   attempts: [{ id: 'dsp_1', provider: 'claude', accountId: 'acc', repair: 'check-failure', outcome: 'failed', startedAt: 'T', agentProfileId: 'ap_000000000001' }],
-  openQuestionId: 'gat_1'
+  openQuestionId: 'gat_1',
+  tokens: { input: 120, output: 12, total: 132 }
 } satisfies TaskDetail
 const question = { id: 'gat_1', runId: 'run_1', taskId: 'tsk_1', question: 'q', kind: 'convergence-exhausted', status: 'open', createdAt: 'T' } satisfies Question
 const answered = { ...question, status: 'resolved', resolution: 'retry-once', retryOnceFailed: 'busy' } satisfies AnsweredQuestion

@@ -12,6 +12,8 @@ import { createHostPolicies } from './audit/policyCommands'
 import { createHostAudit } from './audit/auditCommands'
 import { createAuditRecorder, dispatchOfSession, registrySessionFacts } from './audit/recorder'
 import { createAuditSources } from './audit/sources'
+import { openTokenStore } from './tokens/store'
+import { createTokenSources, tokenOwnerOf } from './tokens/sources'
 import { readAuditPolicy } from '../core/audit/policy'
 import { pruneRecords } from '../core/audit/store'
 import { createGatewayHub } from './gateway/hub'
@@ -276,6 +278,8 @@ async function main(): Promise<void> {
     sessionEvents?.dispose()
     // So do observe mode's sources; what they handed over is flushed below. Never throws.
     auditSources.dispose()
+    // And the token sources; what they handed over is saved below. Never throws.
+    tokenSources.dispose()
     // The work units' watchers and their sync timer stop with them. Never throws.
     hostWorkUnits?.dispose()
     // The MCP HTTP entrance stops with the Host (MCP HTTP §3): its stdin ends, which is its way out, and
@@ -343,6 +347,8 @@ async function main(): Promise<void> {
           eventLog.close()
           // And observe mode's records still on their way to the disk, capped the same way. Never rejects.
           await disposeWithin(auditRecorder.flushed(), LEAVE_LOG_FLUSH_CAP_MS, () => {})
+          // And the tokens read since the last save, capped the same way. Never rejects.
+          await disposeWithin(tokenStore.save(), LEAVE_LOG_FLUSH_CAP_MS, () => {})
           registry.killAll()
           procs.killAll()
           // Every buffered log line on disk before the exits below are armed (stage 3, task 3). First the
@@ -415,6 +421,11 @@ async function main(): Promise<void> {
   // so a cursor outlives the Host that gave it. Only read before the bind; commits, which write it, come after.
   const eventLog = createHostEventLog({ dir: path.join(profileDir, 'orch'), bootId, now: () => new Date().toISOString(), log: (m) => log.write(m) })
   await eventLog.load()
+
+  // What each session spent for a Dispatch or a Run's coordinator (observe mode design §10): <profile>/token-totals.json,
+  // read once here beside the event log; written by the token sources (made below) and pruned with the Runs once the
+  // orch (made below too) has the state in memory.
+  const tokenStore = await openTokenStore({ profileDir, state: () => (orch.loaded() ? orch.state() : null), log: (m) => log.write(m) })
 
   // How It Works (E1 §2, §3): this Host writes understanding.json while every attached app yields it, or
   // none is attached, read per write. Loaded at start whether or not it writes now, so a record a dead
@@ -526,6 +537,18 @@ async function main(): Promise<void> {
     ptys: registry,
     procs,
     hookEventsDir: hookEventsDirIn(profileDir),
+    log: (m) => log.write(m)
+  })
+  // The tokens each session spent (observe mode design §10), in every mode: read from the transcripts, rollouts and
+  // chat lines the providers already write, kept per session for the Dispatch or Run it worked for (whom from the
+  // state as the orch holds it, made below), in the token store opened above. Before any pty or process opens, so every
+  // session's start is heard; `runs get` and `tasks get` total them.
+  const tokenSources = createTokenSources({
+    store: tokenStore,
+    ptys: registry,
+    procs,
+    statusLinePayload: (sid) => (spawner ? spawner.statusLinePayload(sid) : Promise.resolve(null)),
+    ownerOf: (sessionId, at) => tokenOwnerOf(orch.state(), sessionId, at),
     log: (m) => log.write(m)
   })
 
@@ -823,6 +846,8 @@ async function main(): Promise<void> {
     jobSources: hostJobSources({ manager: plugins, runtime: pluginRuntime }),
     // The completion check plugins a Task's checks ask (plugin Phase 5 C8), through the same runtime
     completionChecks: hostCompletionChecks({ manager: plugins, runtime: pluginRuntime }),
+    // What the sessions spent, for `runs get` and `tasks get` (observe mode design §10)
+    spentTokens: () => tokenStore.spent(),
     now: () => new Date().toISOString(),
     // The handshake's own string, not a second one taken here: `requests show` answers with it so a
     // caller can tell "this Host never saw my request" from "it never arrived" (request receipts

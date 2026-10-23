@@ -387,6 +387,23 @@ export interface SessionUsage {
   weekly: RateLimitWindow | null // the weekly (7-day) window
 }
 
+/** What one API response of a session spent, off the lines its provider writes (core/usage/claudeTokens.ts,
+ *  core/usage/codex.ts): `input` counts every input token the model read, cached ones included, so a Claude figure
+ *  and a Codex one mean the same thing. `at` is when the provider wrote it, null for a line that carries no time. */
+export interface TokensSpent {
+  at: string | null
+  input: number
+  output: number
+}
+
+/** The tokens a Task's or a Run's sessions used, as `runs get` and `tasks get` give them (observe mode design §10).
+ *  `total` is `input + output`. Absent where nothing was read, never zeros: cost in money is not known. */
+export interface TokenTotals {
+  input: number
+  output: number
+  total: number
+}
+
 /** Rolling progress (main to renderer, for the banner both views wear — the terminal and the chat pane) */
 export interface RollStateEvent {
   sessionId: string

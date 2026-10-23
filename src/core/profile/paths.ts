@@ -47,6 +47,9 @@ export interface ProfilePaths {
   auditPolicy: string
   /** Observe mode's records: one `YYYY-MM-DD.jsonl` per local day, written by the Host alone. */
   auditRecords: string
+  /** The tokens each session spent for a Dispatch or a Run's coordinator: `{ version, spent }`, written by the Host
+   *  alone, in every mode (observe mode design §10). */
+  tokenTotals: string
 }
 
 export function profilePaths(profileDir: string): ProfilePaths {
@@ -54,6 +57,7 @@ export function profilePaths(profileDir: string): ProfilePaths {
     agentProfiles: path.join(profileDir, 'agent-profiles.json'),
     agentProfileConversations: path.join(profileDir, 'agent-profile-conversations.json'),
     auditPolicy: path.join(profileDir, 'audit-policy.json'),
-    auditRecords: path.join(profileDir, 'audit')
+    auditRecords: path.join(profileDir, 'audit'),
+    tokenTotals: path.join(profileDir, 'token-totals.json')
   }
 }

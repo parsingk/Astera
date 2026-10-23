@@ -305,6 +305,13 @@ refused with `PLUGIN_CAPABILITY_MISSING` ([plugins.md](plugins.md#completion-che
 lifecycle Run is completed, to carry the Run through GitHub: it has no worker, and `tasks.create` on that Run is
 refused while it is open.
 
+`runs.get` carries `tokens`, the tokens the Run's Tasks' sessions spent (every attempt, and each session a roll moved
+one to, counted once), and `coordinatorTokens`, what the coordinator Astera started for the Run spent, apart from them;
+`tasks.get` carries the Task's own `tokens`. Each is a `TokenTotals` (`input`, `output`, `total`, with cached input
+inside `input`), read by the Host from what Claude and Codex write, in every mode, and left out when the Host read
+none (a session the app ran without a Host, or an Astera from before token totals). What they cost in money is not
+known.
+
 ### Agent profiles
 
 An agent profile names a set of accounts, in failover order, the shared MCP servers its sessions leave out and its

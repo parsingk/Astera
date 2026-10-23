@@ -15,6 +15,10 @@ is the guide.
   `accountIds` runs on the profile's accounts, so `tasks.create` no longer needs the Job's coordinator account for it.
 - `Job.agentProfileId` and `Task.agentProfileId`: the profile they run as, by its id. A `Run`'s worker attempts
   (`TaskAttempt.agentProfileId`) carry it too.
+- Token totals (the Astera that ships observe mode or later; an older one leaves them out): `runs.get` carries `tokens`,
+  what the Run's Tasks' sessions spent, and `coordinatorTokens`, what its coordinator spent, apart; `tasks.get` carries
+  the Task's `tokens`. Each is a `TokenTotals` (`input`, `output`, `total`), absent when the Host read none. No cost in
+  money.
 
 ## 0.4.0
 

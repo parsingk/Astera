@@ -42,6 +42,20 @@ describe('publicFor', () => {
     expect(publicFor('runs-get', { id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: 'T', github })).toMatchObject({ github })
   })
 
+  // Observe mode design §10: the tokens its Tasks' sessions used, and its coordinator's apart
+  it('keeps the tokens runs get totals for a Run', () => {
+    const tokens = { input: 120, output: 12, total: 132 }
+    const coordinatorTokens = { input: 5, output: 1, total: 6 }
+    expect(publicFor('runs-get', { id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: 'T', tokens, coordinatorTokens })).toEqual({
+      id: 'run_1',
+      jobId: 'job_1',
+      ordinal: 1,
+      createdAt: 'T',
+      tokens,
+      coordinatorTokens
+    })
+  })
+
   // 없는 것을 undefined 로 찍으면 JSON 에서 사라져 결과는 같지만, 있는데 비어 있는 것과
   // 아예 없는 것이 한 모양이 된다
   it('없는 칸을 만들지 않는다', () => {

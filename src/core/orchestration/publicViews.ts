@@ -2,7 +2,7 @@
 // (publicEvents.ts, SDK 1d): one definition, so an event's payload is what a read of the same object shows. Moved out
 // of command.ts with no change.
 import type { JobOutcome, RunOutcome as RunOutcomePublic } from '../publicContract'
-import type { RunOutcome } from '../types'
+import type { RunOutcome, TokenTotals } from '../types'
 import type { OrchState } from './state'
 import type { Job, JobRun, Task } from './types'
 import { outcomeOf, progressOf } from './view'
@@ -66,6 +66,51 @@ export const runView = (s: OrchState, run: JobRun): Record<string, unknown> => {
     ...(run.paused === true ? { outcome: 'paused' satisfies RunOutcomePublic } : {}),
     ...(github !== undefined ? { github } : {})
   }
+}
+
+/** What one session spent for one owner, as the Host keeps it (host/tokens/store.ts): a worker's for its Dispatch, a
+ *  coordinator's for its Run. A rolled Dispatch has one per session it ran in, each the tokens that session itself
+ *  spent, so adding them counts nothing twice (Review Focus 5). */
+export interface SpentTokens {
+  sessionId: string
+  dispatchId?: string
+  coordinatorOf?: string
+  input: number
+  output: number
+}
+
+/** The sum of `spent`, or undefined when there is nothing in it: unknown is left out, never given as zeros. */
+const totalOf = (spent: readonly SpentTokens[]): TokenTotals | undefined => {
+  if (spent.length === 0) return undefined
+  let input = 0
+  let output = 0
+  for (const e of spent) {
+    input += e.input
+    output += e.output
+  }
+  return { input, output, total: input + output }
+}
+
+const ofDispatches = (s: OrchState, taskIds: ReadonlySet<string>, spent: readonly SpentTokens[]): TokenTotals | undefined => {
+  const dispatches = new Set(s.dispatches.filter((d) => taskIds.has(d.taskId)).map((d) => d.id))
+  return totalOf(spent.filter((e) => e.dispatchId !== undefined && dispatches.has(e.dispatchId)))
+}
+
+/** `tasks get`'s `tokens` (observe mode design §10): what the sessions of every attempt at the Task spent. */
+export const taskTokensOf = (s: OrchState, taskId: string, spent: readonly SpentTokens[]): TokenTotals | undefined =>
+  ofDispatches(s, new Set([taskId]), spent)
+
+/** `runs get`'s `tokens` and `coordinatorTokens`: the Run's total is its Tasks' (design §10), and what the coordinator
+ *  Astera started for it spent is beside it, under its own name, so neither is taken for the other. Each is left out
+ *  when nothing was read for it. */
+export const runTokensOf = (
+  s: OrchState,
+  runId: string,
+  spent: readonly SpentTokens[]
+): { tokens?: TokenTotals; coordinatorTokens?: TokenTotals } => {
+  const tokens = ofDispatches(s, new Set(s.tasks.filter((t) => t.runId === runId).map((t) => t.id)), spent)
+  const coordinatorTokens = totalOf(spent.filter((e) => e.coordinatorOf === runId))
+  return { ...(tokens ? { tokens } : {}), ...(coordinatorTokens ? { coordinatorTokens } : {}) }
 }
 
 /** A spec longer than this is cut in a brief Task (`tasks list --brief`, and every Task an event carries). */

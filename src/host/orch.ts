@@ -552,6 +552,9 @@ export function createHostOrch(a: {
    *  (host/completionChecks.ts): the command layer's early refusals and checks read them, and the app asks through
    *  `checks-plugin-run`. */
   completionChecks?: OrchServerDeps['completionChecks']
+  /** What this Host's sessions spent (observe mode design §10), from its token store (host/tokens/store.ts), passed
+   *  through to `hostOrchDeps`. Absent: `runs get` and `tasks get` carry no tokens. */
+  spentTokens?: OrchServerDeps['spentTokens']
   /** How It Works records (MCP P2-C), passed through to `hostOrchDeps`. Absent: the `understanding-*`
    *  commands answer 409. */
   readUnderstanding?: OrchServerDeps['readUnderstanding']
@@ -838,6 +841,7 @@ export function createHostOrch(a: {
       ...(a.changes ? { changes: a.changes } : {}),
       ...(a.jobSources ? { jobSources: a.jobSources } : {}),
       ...(a.completionChecks ? { completionChecks: a.completionChecks } : {}),
+      ...(a.spentTokens ? { spentTokens: a.spentTokens } : {}),
       workUnits: a.workUnits?.() ?? null,
       ...(a.journal ? { journalTimeline: (runId: string, st: OrchState) => a.journal!.timeline(runId, st) } : {}),
       onEffect: () => {

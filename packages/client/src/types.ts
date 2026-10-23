@@ -47,6 +47,14 @@ export interface Progress {
   readonly total: number
 }
 
+/** Tokens sessions spent, as the Host read them from what Claude and Codex write. `input` counts every input token the
+ *  model read, cached ones included; `total` is `input + output`. What they cost in money is not known. */
+export interface TokenTotals {
+  readonly input: number
+  readonly output: number
+  readonly total: number
+}
+
 /** How a Job stands: `pending` before its first Run, `paused` when its latest Run is. */
 export type JobOutcome = 'running' | 'completed' | 'failed' | 'paused' | 'pending'
 export type RunOutcome = 'running' | 'completed' | 'failed' | 'paused'
@@ -217,6 +225,12 @@ export interface Run {
   readonly waitingForApproval?: number
   /** A GitHub lifecycle Job's Run only: its pull request and CI, derived on every read. */
   readonly github?: GitHubLifecycle
+  /** `runs.get` only: the tokens its Tasks' sessions spent, every attempt and every session a roll moved one to. Absent
+   *  when the Host read none (a session it did not run, an Astera from before token totals). */
+  readonly tokens?: TokenTotals
+  /** `runs.get` only: the tokens the coordinator Astera started for the Run spent, apart from `tokens`. Absent when the
+   *  Host read none. */
+  readonly coordinatorTokens?: TokenTotals
 }
 
 /** `jobs.get`: the Job, with the Run it names or its latest folded in. */
@@ -339,6 +353,8 @@ export interface TaskAttempt {
 export type TaskDetail = Omit<Task, 'spec_truncated'> & {
   readonly attempts: readonly TaskAttempt[]
   readonly openQuestionId?: string
+  /** The tokens the sessions of its attempts spent. Absent when the Host read none. */
+  readonly tokens?: TokenTotals
 }
 
 /** A question for a person (a gate). */

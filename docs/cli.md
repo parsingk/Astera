@@ -849,6 +849,14 @@ permission prompt: the number of those Tasks, read from the same hook events as 
 `waiting`. With none it is left out. A person answers the prompt in Astera, in the worker's terminal
 ([mcp.md](mcp.md) says more).
 
+**`runs get` carries `tokens` and `coordinatorTokens`**: the tokens the run's Tasks' sessions spent (every attempt,
+and each session a roll moved one to, counted once), and apart from them what the coordinator Astera started for the
+run spent, each as `{ input, output, total }`, where `input` counts cached input too. The Host reads them in every mode
+from what Claude and Codex already write (a Claude session's transcript and its sub-agents' files, a chat's stream, a
+Codex rollout) and keeps them in `token-totals.json` in the profile until the run is deleted. Each is left out when the
+Host read none, such as for a session the app ran without a Host. MCP's `get_task` carries the Task's own `tokens`.
+What they cost in money is not shown.
+
 **`runs get` carries `github`** for a run of a `--github-lifecycle` Job: the pull request Astera bound for the run's
 branch, its head, the CI checks of that head with the `verdict` and the check that failed first (with its `class`, such
 as `test` or `infrastructure`, and a one-line `summary`), and a `state` that sums
