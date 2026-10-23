@@ -131,6 +131,23 @@ describe('decide, under the starter rules', () => {
     expect(decide(bash('rm && git push'), p)).toEqual(push)
   })
 
+  // A command another command runs is a command of the line (find -exec, xargs, watch, trap, backticks), so it is judged
+  it('would deny a command hidden behind find -exec, xargs, watch, trap or backticks', () => {
+    const cases: Array<[string, string]> = [
+      ["find . -name '*.log' -exec rm -rf ../x {} \\;", 'filesystem.delete'],
+      ['ls | xargs rm -rf ../x', 'filesystem.delete'],
+      ['echo `git push`', 'git.remote.write'],
+      ['xargs -0 -n 1 git push', 'git.remote.write'],
+      ['watch -n 5 git push', 'git.remote.write'],
+      ["trap 'git push' EXIT", 'git.remote.write'],
+      ['find . -execdir git push \\;', 'git.remote.write']
+    ]
+    for (const [line, action] of cases) expect(decide(bash(line), p), line).toEqual({ decision: 'would-deny', ruleId: starterId(action) })
+    // What they run inside the project is allowed as it is on its own
+    expect(decide(bash('find . -name "*.log" -exec rm {} \\;'), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('echo `git rev-parse HEAD`'), p)).toEqual({ decision: 'allow' })
+  })
+
   it('would deny a line cut short whose kept commands include a denied one', () => {
     const cut = { action: 'process.execute' as const, confidence: 'unknown' as const, commands: [{ action: 'process.execute' as const }, { action: 'git.remote.write' as const }] }
     expect(decide(cut, p)).toEqual({ decision: 'would-deny', ruleId: starterId('git.remote.write') })
@@ -150,6 +167,9 @@ describe('decide, under the starter rules', () => {
 
   it('would deny what otherwise denies, a line it cannot read too: the enforcer would refuse it', () => {
     expect(decide(bash('./deploy.sh'), policy([], 'deny'))).toEqual({ decision: 'would-deny' })
+    // A tool the resolver does not know at all is unknown under the starter rules and, with no rule for it, would-deny here
+    expect(decide(claude('SomeNewTool', {}), p)).toEqual({ decision: 'unknown' })
+    expect(decide(claude('SomeNewTool', {}), policy([], 'deny'))).toEqual({ decision: 'would-deny' })
   })
 
   it('judges each command of a compound line in its own place, so a delete inside and a read outside are allowed', () => {

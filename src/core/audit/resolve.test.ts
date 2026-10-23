@@ -369,6 +369,23 @@ describe('shell: cd', () => {
     expect(tool('Read', { file_path: 'src/a.ts' })).toMatchObject({ target: 'frontend/src/a.ts', insideProject: true })
     expect(tool('Glob', { pattern: '**/*.ts' })).toMatchObject({ target: 'frontend', insideProject: true })
   })
+
+  // Set-Location is a PowerShell cmdlet, so `cd`, `sl` and `chdir` bind its parameters there: -ErrorAction and its value are
+  // not where it went. (Forward slashes, which PowerShell takes too, so the lines mean the same on POSIX. Two folders down,
+  // `../..` comes back to the session's folder, which is how these tell where the `cd` went.)
+  it('follows Set-Location past its common parameters, by name and by alias', () => {
+    expect(ps('Set-Location -ErrorAction Stop ..; Remove-Item build')).toMatchObject({ action: 'filesystem.delete', insideProject: false })
+    expect(ps('Set-Location -Path sub; Remove-Item ../../y')).toMatchObject({ action: 'filesystem.delete', insideProject: false })
+    expect(ps('sl -LiteralPath sub; Remove-Item ../../y')).toMatchObject({ action: 'filesystem.delete', insideProject: false })
+    expect(ps('cd -ErrorAction SilentlyContinue sub; Remove-Item ../../y')).toMatchObject({ action: 'filesystem.delete', insideProject: false })
+    expect(ps('cd -ErrorAction SilentlyContinue a/b; Remove-Item ../../y')).toMatchObject({ action: 'filesystem.delete', insideProject: true })
+    expect(ps('Set-Location -PassThru -StackName s -Path a/b; Remove-Item ../../y')).toMatchObject({ insideProject: true })
+    expect(ps('chdir -ea Stop a/b; Remove-Item ../../y')).toMatchObject({ insideProject: true })
+  })
+
+  it('reads a cd flag in Bash as the program does', () => {
+    expect(bash('cd -P a/b && rm -rf ../../y')).toMatchObject({ action: 'filesystem.delete', insideProject: true })
+  })
 })
 
 describe('shell: unknown', () => {
@@ -414,6 +431,120 @@ describe('shell: wrappers', () => {
   it('skips sudo and env', () => {
     expect(bash('sudo npm install -g x')).toMatchObject({ action: 'package.install' })
     expect(bash('env FOO=1 git push')).toMatchObject({ action: 'git.remote.write' })
+  })
+})
+
+// A command can run another one: xargs and watch take the words after their own options, find -exec and its kin the words
+// up to a `;` or `+`, trap and a watch with one argument a shell line, and backticks hold a command like `$( )` does. What
+// they run is a command of the line, with its own action and place, and it headlines the line in place of the one that runs it
+describe('shell: the commands find -exec, xargs, watch, trap and backticks run', () => {
+  it('reads the command behind find -exec, -execdir, -ok and -okdir, {} standing for where find starts', () => {
+    const r = bash("find . -name '*.log' -exec rm -rf ../x {} \\;")
+    expect(acts(r)).toContain('filesystem.delete')
+    expect(r.commands).toContainEqual({ action: 'filesystem.delete', insideProject: false })
+    expect(r).toMatchObject({ action: 'filesystem.delete', insideProject: false })
+    expect(acts(bash('find . -execdir git push \\;'))).toContain('git.remote.write')
+    expect(acts(bash('find . -ok rm {} +'))).toContain('filesystem.delete')
+    expect(acts(bash('find . -okdir git push {} \\;'))).toContain('git.remote.write')
+    expect(bash('find .. -exec rm {} \\;')).toMatchObject({ action: 'filesystem.delete', insideProject: false })
+    expect(bash('find . -exec rm {} \\;')).toMatchObject({ action: 'filesystem.delete', insideProject: true })
+  })
+
+  it('reads every -exec of one find, and the script one of them hands a shell', () => {
+    expect(acts(bash('find . -exec git add {} \\; -exec git push \\;'))).toEqual(['process.execute', 'git.local.write', 'git.remote.write'])
+    expect(acts(bash("find . -exec sh -c 'git push' _ {} \\;"))).toContain('git.remote.write')
+    expect(bash('find . -name x -print')).toEqual({ action: 'process.execute', target: 'find', confidence: 'high' })
+  })
+
+  it.each([
+    'xargs -0 -n 1 git push',
+    'xargs -I{} git push origin {}',
+    'xargs -P 4 -L 1 git push',
+    'xargs -n1 -P4 -L1 -s100 git push',
+    'xargs -0 -r -t -p -x git push',
+    'xargs -n 1 -L 1 -P 4 -s 100 -I X -d , -E eof -a list git push',
+    'xargs -i{} git push {}',
+    'xargs -i git push {}',
+    'xargs -eEND git push',
+    'xargs --max-args=1 --null git push',
+    'ls | xargs sudo git push'
+  ])('reads git push behind %s', (line) => {
+    expect(acts(bash(line))).toContain('git.remote.write')
+  })
+
+  it('still reads which files xargs rm removes from the line, and the line names none for a placeholder', () => {
+    expect(bash('ls | xargs rm -rf ../x').commands).toContainEqual({ action: 'filesystem.delete', insideProject: false })
+    expect(bash('xargs -I{} rm {}')).toMatchObject({ action: 'filesystem.delete', confidence: 'unknown' })
+    expect(bash('xargs -I{} rm {}')).not.toHaveProperty('insideProject')
+    expect(bash('xargs')).toEqual({ action: 'process.execute', target: 'xargs', confidence: 'high' })
+  })
+
+  it.each([
+    'watch -n 5 git push',
+    "watch -d 'git push'",
+    'watch -n5 -x git push',
+    'watch --interval 5 git push',
+    "watch -n 5 'npm test && git push'"
+  ])('reads git push behind %s', (line) => {
+    expect(acts(bash(line))).toContain('git.remote.write')
+  })
+
+  it('reads the shell line trap runs, and nothing for a trap that only resets, ignores or lists', () => {
+    expect(bash("trap 'git push' EXIT")).toMatchObject({ action: 'git.remote.write', target: 'git push' })
+    expect(acts(bash("trap 'git push' EXIT"))).toContain('git.remote.write')
+    expect(bash("trap 'rm -rf ../x' EXIT")).toMatchObject({ action: 'filesystem.delete', insideProject: false })
+    for (const line of ['trap - EXIT', 'trap -l', 'trap -p', 'trap', 'trap INT', "trap '' INT"]) {
+      expect(bash(line), line).toEqual({ action: 'process.execute', target: 'trap', confidence: 'high' })
+    }
+  })
+
+  it('keeps a quoted word behind them a value, never shown, and is unknown where it is read no further', () => {
+    for (const line of ["xargs git 'hunter2'", "find . -exec git 'hunter2' {} \\;", "watch -n 5 git 'hunter2'", `trap 'git "hunter2"' EXIT`]) {
+      const r = bash(line)
+      expect(r.confidence, line).toBe('unknown')
+      expect(JSON.stringify(r), line).not.toContain('hunter2')
+    }
+    // Two shells deep a script is no longer read, so neither is what xargs runs there
+    expect(bash(`bash -c "bash -c 'xargs git push'"`)).toMatchObject({ confidence: 'unknown' })
+    expect(bash(`bash -c "xargs git push"`)).toMatchObject({ action: 'git.remote.write', confidence: 'heuristic' })
+  })
+
+  it('reads a command in backticks like one in $( ), outside single quotes', () => {
+    expect(acts(bash('echo `git push`'))).toEqual(['process.execute', 'git.remote.write'])
+    expect(acts(bash('x=`git rev-parse HEAD` && echo $x'))).toEqual(['git.read', 'process.execute'])
+    expect(bash("echo '`git push`'")).toEqual({ action: 'process.execute', target: 'echo', confidence: 'high' })
+    // In PowerShell the backtick is the escape character, and nothing runs
+    expect(ps('echo `git push`')).toEqual({ action: 'process.execute', target: 'echo', confidence: 'high' })
+  })
+})
+
+// PowerShell has aliases Bash has no program for (ni, ren, iwr), so in Bash they are programs it does not know, whose words
+// are not read as the parameters of a cmdlet: `-Value hunter2` is no path to show
+describe('shell: a word only PowerShell has is not a program Bash knows', () => {
+  it.each([
+    'ni a.txt -Value hunter2',
+    'ren a b',
+    'iwr https://x',
+    'irm https://x',
+    'ri ../x',
+    'mi a ../b',
+    'cpi a ../b',
+    'rni a b',
+    'ac a hunter2',
+    'gc a',
+    'gci'
+  ])('reads %s as unknown in Bash', (line) => {
+    const r = bash(line)
+    expect(r, line).toMatchObject({ action: 'process.execute', confidence: 'unknown' })
+    expect(JSON.stringify(r), line).not.toContain('hunter2')
+  })
+
+  it('keeps reading them as their cmdlets in PowerShell', () => {
+    expect(ps('ni a.txt -Value hunter2')).toEqual({ action: 'filesystem.write', target: 'a.txt', insideProject: true, confidence: 'high' })
+    expect(ps('ren ../a b')).toMatchObject({ action: 'filesystem.write', target: 'outside project: a', insideProject: false })
+    expect(ps('iwr https://x')).toMatchObject({ action: 'network.request', target: 'x' })
+    expect(ps('ri ../x')).toMatchObject({ action: 'filesystem.delete', insideProject: false })
+    expect(ps('gc ../a')).toMatchObject({ action: 'filesystem.read', insideProject: false })
   })
 })
 
@@ -1583,6 +1714,17 @@ describe('malformed and hostile input', () => {
     bash(`${'token'.repeat(100_000)}`)
     expect(redactTarget('a'.repeat(1_000_000)).length).toBeLessThanOrEqual(1000)
     expect(Date.now() - started).toBeLessThan(5000)
+  })
+
+  it('stays fast on many -exec clauses, xargs options, nested xargs, watch options, backticks and trap lines', () => {
+    const started = Date.now()
+    bash(`find . ${'-exec a {} \\; '.repeat(20_000)}`)
+    bash(`xargs ${'-n 1 '.repeat(100_000)}git push`)
+    expect(bash(`${'xargs '.repeat(50_000)}git push`)).toMatchObject({ confidence: 'unknown' })
+    bash(`watch ${'-n 5 '.repeat(50_000)}git push`)
+    bash(`echo ${'`a`'.repeat(50_000)}`)
+    bash(`trap '${'a;'.repeat(50_000)}' EXIT`)
+    expect(Date.now() - started).toBeLessThan(2000)
   })
 
   it('reads an apply_patch header with a long run of spaces in linear time', () => {

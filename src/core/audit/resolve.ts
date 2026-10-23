@@ -384,6 +384,11 @@ interface Cmd {
   /** Set by stripPrefix: the cmdlet the command is, whose parameters PowerShell binds by name, alias and prefix (`-Val`,
    *  `-ea`). Left out for a program, which reads its own flags. */
   cmdlet?: string
+  /** Set by expand on a command whose line holds the commands it runs (`xargs git push`, `find -exec`), which follow it in
+   *  the list and headline the line in its place. */
+  runs?: true
+  /** Set by expand on a command that runs others too deep in scripts to be read, so what it does is not known. */
+  unread?: true
 }
 
 interface Facts {
@@ -415,13 +420,13 @@ function resolveShell(rec: Record<string, unknown>, at: Ctx, flavor: Flavor): Re
   // Codex may send an argv array; `bash -lc <script>` in it is read below like a typed line.
   const typed: Cmd[] =
     typeof raw === 'string'
-      ? splitLine(raw)
+      ? splitLine(raw, flavor)
       : Array.isArray(raw)
         ? [argvCommand(raw.filter((w): w is string => typeof w === 'string'))]
         : []
   const workdir = str(rec.workdir)
   let base: string | null = workdir === null ? start : path.resolve(start, nativePath(workdir))
-  const { commands, scripted } = expand(typed, flavor)
+  const { commands, syntax } = expand(typed, flavor)
 
   const parts: ResolvedAction[] = []
   let lead: ResolvedAction | undefined
@@ -444,12 +449,13 @@ function resolveShell(rec: Record<string, unknown>, at: Ctx, flavor: Flavor): Re
     if (lead === undefined) {
       const onlyPrints = own !== undefined && PRODUCERS.has(prog) && own.action === 'process.execute'
       if (own === undefined || (onlyPrints && writes.length > 0)) lead = writes[0]
-      else if (!PASSIVE.has(prog)) lead = own
+      else if (!PASSIVE.has(prog) && cmd.runs !== true) lead = own
     }
-    if (MOVES.has(prog)) base = movedTo(cmd.words.slice(1), ctx)
+    if (MOVES.has(prog)) base = movedTo(cmd.words.slice(1), ctx, cmd.cmdlet)
   }
   if (parts.length === 0) return { action: 'process.execute', target: 'shell', confidence: 'unknown' }
-  return combine(parts, commands.length > 1 || scripted, lead)
+  // A command that runs the ones after it (`xargs`) is not one more command beside them, though it is listed with them
+  return combine(parts, commands.filter((c) => c.runs !== true).length > 1 || syntax, lead)
 }
 
 /** A command Codex gave as an argv array: its words are already split and none was quoted in the shell's sense. */
@@ -468,8 +474,8 @@ function partOf(f: Facts): ResolvedAction {
 }
 
 /** Where a `cd` goes, or null when it goes to home, a variable, nowhere or somewhere relative to a place already lost. */
-function movedTo(args: Words, ctx: Ctx): string | null {
-  const [dest] = pathArgs('cd', args)
+function movedTo(args: Words, ctx: Ctx, cmdlet: string | undefined): string | null {
+  const [dest] = pathArgs('cd', args, cmdlet)
   if (dest === undefined || UNFOLLOWABLE.test(dest)) return null
   const native = nativePath(dest)
   return ctx.base === null && !path.isAbsolute(native) ? null : path.resolve(ctx.base ?? ctx.cwd, native)
@@ -559,7 +565,7 @@ function afterTimeout(words: Words, from: number): number {
  * A command without what comes before its program: `NAME=value` and PowerShell `$name =` assignments (their values can
  * be secrets), sudo-like wrappers and `timeout N`, and the keyword of a conditional or loop body (`then`, `do`, `while`).
  * `syntax` is whether a keyword or a word that runs nothing was seen (a loop header, a PowerShell condition or `.Count`),
- * which makes the line a script. A command of only assignments or only a header comes back with no words.
+ * which makes the line compound. A command of only assignments or only a header comes back with no words.
  */
 function stripPrefix(raw: Cmd, flavor: Flavor): { cmd: Cmd; syntax: boolean } {
   const words = raw.words
@@ -609,29 +615,77 @@ function scriptOf(words: Words): { text: string; flavor: Flavor } | null {
   return prog === 'powershell' || prog === 'pwsh' ? { text: rest.slice(i + 1).join(' '), flavor: 'ps' } : null
 }
 
-/** The commands of a line with the scripts inside `bash -c` and the like replaced by their own commands, and whether any
- *  of it was syntax rather than a command (`scripted`), which makes the line compound. */
-function expand(cmds: Cmd[], flavor: Flavor, depth = 0): { commands: Cmd[]; scripted: boolean } {
+/** The words `from` up to `to` of a command as a command of their own, each as quoted as it was: what xargs, watch and
+ *  find -exec run. It has none of the redirections of the command that runs it. */
+const commandAmong = (cmd: Cmd, from: number, to = cmd.words.length): Cmd => ({
+  words: cmd.words.slice(from, to), out: [], call: false, quoted: cmd.quoted.slice(from, to), invoked: false
+})
+
+/**
+ * The commands a command runs for something else, as `expand` reads them: the command of `xargs` and `watch`, of each
+ * `find -exec`, `-execdir`, `-ok` and `-okdir`, and the shell line `trap` runs on a signal or `watch` is given as one word
+ * (which it hands to `sh -c`). None for a trap that only lists, resets or ignores, and for a command with nothing behind it.
+ */
+function commandsBehind(cmd: Cmd, flavor: Flavor): Cmd[] {
+  if (cmd.quoted[0] === true) return [] // a quoted word is a value, not a program
+  const args = cmd.words.slice(1)
+  switch (programName(cmd.words[0]).toLowerCase()) {
+    case 'xargs': {
+      const at = xargsCommandAt(args)
+      if (at < 0) return []
+      const run = commandAmong(cmd, at + 1)
+      // What takes the place of a `{}` is read from stdin, so a word that is one names no file
+      const keep = run.words.map((w, i) => i === 0 || !PLACEHOLDER.test(w))
+      return [{ ...run, words: run.words.filter((_, i) => keep[i]), quoted: run.quoted.filter((_, i) => keep[i]) }]
+    }
+    case 'find':
+      return findExecs(cmd)
+    case 'watch': {
+      const from = 1 + afterWatch(args)
+      if (cmd.words.length === from + 1) return splitLine(cmd.words[from], 'posix')
+      return cmd.words.length > from ? [commandAmong(cmd, from)] : []
+    }
+    case 'trap': {
+      const line = flavor === 'posix' ? trapHandler(args) : null
+      return line === null ? [] : splitLine(line, 'posix')
+    }
+    default:
+      return []
+  }
+}
+
+/** The commands of a line with the scripts inside `bash -c` and the like replaced by their own commands, and the commands
+ *  that xargs, find -exec, watch and trap run put after the one that runs them. Also whether any of it was syntax rather
+ *  than a command (`syntax`), which makes the line compound. */
+function expand(cmds: Cmd[], flavor: Flavor, depth = 0): { commands: Cmd[]; syntax: boolean } {
   const out: Cmd[] = []
-  let scripted = false
+  let syntax = false
   for (const raw of cmds) {
     const stripped = stripPrefix(raw, flavor)
     const cmd = stripped.cmd
-    scripted ||= stripped.syntax
+    syntax ||= stripped.syntax
     if (cmd.words.length === 0 && cmd.out.length === 0) continue
     const script = depth < 2 && cmd.words.length > 0 ? scriptOf(cmd.words) : null
-    if (script === null) out.push(cmd)
-    else {
-      const inner = expand(splitLine(script.text), script.flavor, depth + 1)
+    if (script === null) {
+      const behind = cmd.words.length > 0 ? commandsBehind(cmd, flavor) : []
+      if (behind.length === 0) out.push(cmd)
+      else if (depth >= 2) out.push({ ...cmd, unread: true }) // past the depth scripts are read to, where a shell's -c is unknown too
+      else {
+        const inner = expand(behind, flavor, depth + 1)
+        out.push({ ...cmd, runs: true }, ...inner.commands)
+        syntax ||= inner.syntax
+      }
+    } else {
+      const inner = expand(splitLine(script.text, script.flavor), script.flavor, depth + 1)
       out.push(...inner.commands)
       if (cmd.out.length > 0) out.push({ words: [], out: cmd.out, call: false, quoted: [], invoked: false }) // `bash -c "x" > f`
-      scripted ||= inner.scripted
+      syntax ||= inner.syntax
     }
   }
-  return { commands: out, scripted }
+  return { commands: out, syntax }
 }
 
-const ESCAPABLE = ' "\'&|;()<>$#'
+const ESCAPABLE = ' "\'&|;()<>$#`'
 /** An unquoted heredoc delimiter, matched in place (sticky) so a line of many heredocs is not copied again for each. */
 const TAG = /[\w.-]*/y
 /** Where a redirection can point that writes no file: the null devices and the standard streams. */
@@ -641,11 +695,13 @@ const SINK = /^(?:\/dev\/(?:null|stdout|stderr|tty|fd\/\d+)|nul|\$null)$/i
  * A shell line as the commands it runs, each a list of words with the quotes taken off.
  *
  * Splits on `&&`, `||`, `;`, `|`, `&`, newlines and the brackets of `( )` and `$( )` outside quotes, so the commands in a
- * group or a substitution are seen. A redirection's operator and target are not words: a `>` target is kept apart as a
- * file the command writes; `2>&1`, `< in` and heredoc bodies are left out. A `&` that starts a command is PowerShell's
- * call operator. Backslash is a path separator on Windows, so it only escapes the characters a shell line needs it for.
+ * group or a substitution are seen, and in a POSIX line on the backticks of a substitution too (PowerShell's backtick is
+ * its escape character, so there it is a letter of the word). A redirection's operator and target are not words: a `>`
+ * target is kept apart as a file the command writes; `2>&1`, `< in` and heredoc bodies are left out. A `&` that starts a
+ * command is PowerShell's call operator. Backslash is a path separator on Windows, so it only escapes the characters a
+ * shell line needs it for.
  */
-function splitLine(line: string): Cmd[] {
+function splitLine(line: string, flavor: Flavor): Cmd[] {
   const commands: Cmd[] = []
   let words: Words = []
   let out: string[] = []
@@ -720,7 +776,7 @@ function splitLine(line: string): Cmd[] {
       heredoc = null
     } else if (c === '#' && !has) {
       while (i + 1 < line.length && line[i + 1] !== '\n') i++ // a comment
-    } else if (c === ';' || c === '|' || c === ')') {
+    } else if (c === ';' || c === '|' || c === ')' || (c === '`' && flavor === 'posix')) {
       endCommand()
     } else if (c === '(') {
       if (has && !wordQuoted && sink === null) invoked = true // `$f.Delete(`, `[IO.File]::Copy(`
@@ -1045,7 +1101,7 @@ const PS_VALUED = new Set([
   'erroraction', 'ea', 'warningaction', 'wa', 'errorvariable', 'ev', 'warningvariable', 'informationaction',
   'informationvariable', 'outvariable', 'outbuffer', 'pipelinevariable', 'include', 'exclude', 'filter', 'credential', 'stream',
   'totalcount', 'tail', 'head', 'encoding', 'readcount', 'delimiter', 'depth', 'attributes', 'destination', 'value',
-  'inputobject', 'itemtype', 'type', 'newname', 'width'
+  'inputobject', 'itemtype', 'type', 'newname', 'width', 'stackname'
 ])
 /** PowerShell parameters whose value is a path. */
 const PS_PATH = new Set(['path', 'literalpath', 'filepath'])
@@ -1066,7 +1122,8 @@ for (const [cmdlets, params] of [
   ['remove-item', 'path literalpath filter include exclude recurse force credential stream usetransaction'],
   ['get-content', 'path literalpath readcount totalcount tail filter include exclude force credential delimiter wait raw encoding asbytestream stream usetransaction'],
   ['get-childitem', 'path literalpath filter include exclude recurse depth force name attributes directory file hidden readonly system followsymlink usetransaction'],
-  ['invoke-webrequest invoke-restmethod', 'uri outfile method headers body contenttype useragent usebasicparsing passthru credential']
+  ['invoke-webrequest invoke-restmethod', 'uri outfile method headers body contenttype useragent usebasicparsing passthru credential'],
+  ['set-location', 'path literalpath passthru stackname']
 ] as const) {
   for (const cmdlet of cmdlets.split(' ')) PS_PARAMS.set(cmdlet, params.split(' '))
 }
@@ -1083,8 +1140,12 @@ const CMDLET_OF = new Map([
   ['ren', 'rename-item'], ['cpi', 'copy-item'], ['copy', 'copy-item'], ['cp', 'copy-item'], ['mi', 'move-item'],
   ['move', 'move-item'], ['mv', 'move-item'], ['ri', 'remove-item'], ['rm', 'remove-item'], ['del', 'remove-item'],
   ['erase', 'remove-item'], ['rd', 'remove-item'], ['rmdir', 'remove-item'], ['iwr', 'invoke-webrequest'],
-  ['irm', 'invoke-restmethod']
+  ['irm', 'invoke-restmethod'], ['sl', 'set-location'], ['cd', 'set-location'], ['chdir', 'set-location']
 ])
+/** The aliases above that Bash has no program for (it has `cat`, `rm`, `cp` and `mkdir` of its own, and `del`, `copy` and
+ *  `dir` stay known as cmd's), so in Bash `ni a -Value x` is a program it does not know, not New-Item and its parameters.
+ *  cmd has `ren` too, but a shell that is not PowerShell is read as Bash. */
+const PS_ONLY_ALIASES = new Set('ac gc gci ni rni ren cpi mi ri iwr irm sl'.split(' '))
 
 /**
  * The cmdlet a command is, if PowerShell binds its parameters: a cmdlet named in full in any shell, and in PowerShell one of
@@ -1203,7 +1264,59 @@ const findDeletes = (args: Words): boolean =>
   args.includes('-delete') ||
   args.some((a, i) => /^-(?:exec|execdir|ok|okdir)$/.test(a) && DELETERS.has(programName(args[i + 1] ?? '').toLowerCase()))
 
-const XARGS_VALUED = new Set(['-I', '-n', '-P', '-d', '-L', '-s', '-E', '-a', '-l'])
+/** What takes the place of the files in a command that xargs or find runs, which this cannot place. */
+const PLACEHOLDER = /^\{.*\}$/
+
+const FIND_EXEC = /^-(?:exec|execdir|ok|okdir)$/
+
+/**
+ * The command of each `-exec`, `-execdir`, `-ok` and `-okdir` of a `find`: the words up to a `;` (written `\;` or `';'`) or a
+ * `{} +`. A `{}` among them is a file find found, so it stands for where find starts, which the files are under. A word
+ * that only holds one (`{}.bak`) is left as it is.
+ */
+function findExecs(cmd: Cmd): Cmd[] {
+  const words = cmd.words
+  const first = words.findIndex((w, i) => i > 0 && FIND_EXEC.test(w))
+  if (first < 0) return []
+  const starts = findStarts(words.slice(1))
+  const runs: Cmd[] = []
+  for (let i = first; i < words.length; i++) {
+    if (!FIND_EXEC.test(words[i])) continue
+    let end = i + 1
+    while (end < words.length && !(words[end] === ';' || (words[end] === '+' && words[end - 1] === '{}'))) end++
+    const run: Cmd = { words: [], out: [], call: false, quoted: [], invoked: false }
+    for (let j = i + 1; j < end; j++) {
+      const found = words[j] === '{}'
+      run.words.push(...(found ? starts : [words[j]]))
+      run.quoted.push(...(found ? starts.map(() => false) : [cmd.quoted[j]]))
+    }
+    runs.push(run)
+    i = end
+  }
+  return runs
+}
+
+// The options of xargs that take a value as the next word, GNU's and BSD's. The ones that take it only when written together
+// with it (`-i{}`, `-eEND`, `-l5`, `--replace=X`) are one word and skipped as any other.
+const XARGS_VALUED = new Set([
+  '-a', '-d', '-E', '-I', '-J', '-L', '-n', '-P', '-R', '-S', '-s', '--arg-file', '--delimiter', '--max-args', '--max-procs',
+  '--max-chars'
+])
+
+/** Where the command starts after `watch`'s own options, in its arguments. `-n` and `-q` take a value, also at the end of a
+ *  bundle (`-dn 5`), and so do `--interval` and `--equexit` written apart from it. */
+function afterWatch(args: Words): number {
+  let i = 0
+  while (i < args.length && args[i].startsWith('-')) i += /^-[A-Za-z]*[nq]$|^--(?:interval|equexit)$/.test(args[i]) ? 2 : 1
+  return i
+}
+
+/** The shell line `trap` runs on a signal: its first argument, unless the trap lists (`-l`, `-p`), resets (`-`), or has only
+ *  signals to name (one argument, as in `trap INT`). `''` ignores a signal: a line that runs nothing. */
+function trapHandler(args: Words): string | null {
+  const [first, ...signals] = args[0] === '--' ? args.slice(1) : args
+  return first === undefined || first === '-' || /^-[lp]+$/.test(first) || signals.length === 0 ? null : first
+}
 
 /** The index of the command `xargs` runs, past its own flags. */
 function xargsCommandAt(args: Words): number {
@@ -1330,6 +1443,10 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
   if (cmd.quoted[0] === true && !(knownName && (cmd.call || /[\\/]/.test(words[0])))) return unreadable
   const args = words.slice(1)
   const cmdlet = cmd.cmdlet
+  // Where cmdletOf found no cmdlet for an alias only PowerShell has, the shell is not PowerShell and the word is a program
+  // it does not know. Its words are never read as a cmdlet's, whose `-Value hunter2` would show a value as the path.
+  if (cmdlet === undefined && PS_ONLY_ALIASES.has(prog)) return { action: 'process.execute', target: name, known: false }
+  if (cmd.unread === true) return { action: 'process.execute', target: name, known: false }
 
   if (DELETERS.has(prog)) {
     const paths = pathArgs(prog, args, cmdlet)
@@ -1347,7 +1464,7 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
     const inner = at < 0 ? '' : programName(args[at]).toLowerCase()
     if (DELETERS.has(inner)) {
       // What it removes comes from stdin unless the line names it.
-      const named = pathArgs(inner, args.slice(at + 1)).filter((p) => !/^\{.*\}$/.test(p))
+      const named = pathArgs(inner, args.slice(at + 1)).filter((p) => !PLACEHOLDER.test(p))
       return named.length === 0
         ? { action: 'filesystem.delete', target: name, known: false }
         : { action: 'filesystem.delete', target: name, known: true, inside: placesOf(named, ctx, true).inside }
