@@ -158,6 +158,21 @@ describe('HookEventWatcher', () => {
       expect(events).toEqual([])
     })
 
+    // 직접 띄우지 않는 Host 에는 hook-events 가 아예 없을 수 있다(관찰 모드 최종 리뷰). 그 동안 10초마다 같은 줄을
+    // 남기지 않고, 읽히다가 다시 못 읽게 될 때 한 번 더 남긴다.
+    it('폴더를 못 읽는 동안에는 한 번만 로그하고, 다시 읽혔다가 또 못 읽으면 다시 한 번 로그한다', async () => {
+      const failed = (): number => logs.filter((m) => m.startsWith('hook sweep failed')).length
+      await fs.rm(dir, { recursive: true, force: true })
+      for (let i = 0; i < 3; i++) await watcher.sweep()
+      expect(failed()).toBe(1)
+      await fs.mkdir(dir)
+      await watcher.sweep()
+      await fs.rm(dir, { recursive: true, force: true })
+      await watcher.sweep()
+      await watcher.sweep()
+      expect(failed()).toBe(2)
+    })
+
     // 아래 둘은 훑기가 *걸리고 풀리는지* 만 본다. 훑기가 실제로 줄을 올린다는 것은 위의 테스트들이
     // 이미 증명했다. 여기서 파일을 두고 기다리는 방식을 쓰지 않는 이유는 그것이 결정적이지 않기
     // 때문이다 — start() 직전에 만든 파일을 macOS 의 FSEvents 가 합쳐서 알려 주는 것을 측정했고,

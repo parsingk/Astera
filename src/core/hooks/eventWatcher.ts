@@ -30,6 +30,7 @@ export class HookEventWatcher {
   private offsets = new Map<string, number>() // filePath → byte offset already processed (stable because the file is append-only)
   private draining = new Set<string>() // Per-file re-entrancy guard
   private pending = new Set<string>() // Marks a new event that arrived mid-drain → drain again once this one finishes
+  private sweepFailing = false // The last sweep could not read the folder: said once, until a sweep reads it again
 
   constructor(
     private dir: string,
@@ -162,10 +163,14 @@ export class HookEventWatcher {
     let names: string[]
     try {
       names = await fs.readdir(this.dir)
+      this.sweepFailing = false
     } catch (err) {
       // The directory is recreated on every launch (StatusLineManager.init), so a miss here is a
-      // real oddity rather than a normal state — worth a line, not worth throwing over.
-      this.log(`hook sweep failed to read ${this.dir}: ${err instanceof Error ? err.message : String(err)}`)
+      // real oddity rather than a normal state — worth a line, not worth throwing over. One line while it
+      // lasts: a Host that spawns nothing itself may have no such folder at all, and the sweep runs every
+      // 10 s (observe mode final review).
+      if (!this.sweepFailing) this.log(`hook sweep failed to read ${this.dir}: ${err instanceof Error ? err.message : String(err)}`)
+      this.sweepFailing = true
       return
     }
     // Sequential on purpose: opening every session's file at once buys nothing on a path that is
