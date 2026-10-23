@@ -90,10 +90,11 @@ export function resolveAction(call: ResolveCall): ResolvedAction {
   }
 }
 
-/** The shell a tool runs its command in. Claude names it; Codex and Monitor run the platform's own. */
+/** The shell a tool runs its command in. Claude's PowerShell tool runs PowerShell, and its Bash and Monitor tools the one Bash
+ *  does (Git Bash on Windows). Codex runs the platform's own: PowerShell on Windows. */
 function flavorOf(tool: string): Flavor {
   if (tool === 'PowerShell') return 'ps'
-  if (tool === 'Bash') return 'posix'
+  if (tool === 'Bash' || tool === 'Monitor') return 'posix'
   return process.platform === 'win32' ? 'ps' : 'posix'
 }
 
@@ -863,6 +864,19 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
       if (n === '\n') i++
       else if (n === '\r' && line[i + 2] === '\n') i += 2
       else if (n !== undefined && ESCAPABLE.includes(n)) {
+        cur += n
+        has = true
+        i++
+      } else {
+        cur += c
+        has = true
+      }
+    } else if (c === '`' && flavor === 'ps') {
+      // PowerShell's escape character: at the end of a line it joins the next, and else the next character is a letter
+      const n = line[i + 1]
+      if (n === '\n') i++
+      else if (n === '\r' && line[i + 2] === '\n') i += 2
+      else if (n !== undefined) {
         cur += n
         has = true
         i++

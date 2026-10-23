@@ -156,10 +156,19 @@ describe('decide, under the starter rules', () => {
     expect(decide(bash('echo "$(rm -rf ../x)"'), p)).toEqual({ decision: 'would-deny', ruleId: starterId('filesystem.delete') })
     expect(decide(bash('echo "$(( $(git push) + 1 ))"'), p)).toEqual(push)
     expect(decide(claude('PowerShell', { command: 'Write-Output "$((git push))"' }), p)).toEqual(push)
-    expect(decide(claude('PowerShell', { command: 'Write-Output "C:\\dir\\" ; git push' }), p)).toEqual(push)
-    expect(decide(claude('PowerShell', { command: 'Write-Output C:\\dir\\; git push' }), p)).toEqual(push)
     expect(decide(bash("echo '$(git push)'"), p)).toEqual({ decision: 'allow' })
     expect(decide(bash('echo "$(git rev-parse HEAD)"'), p)).toEqual({ decision: 'allow' })
+  })
+
+  // In PowerShell a backslash is a letter, in a string or outside one, and its escape character is the backtick: a path that
+  // ends in a backslash does not swallow the `;` after it, and a backtick before one does
+  it('would deny a push after a PowerShell path ending in a backslash, and allows what a backtick escapes', () => {
+    const push = { decision: 'would-deny', ruleId: starterId('git.remote.write') }
+    const ps = (command: string) => claude('PowerShell', { command })
+    expect(decide(ps('Write-Output "C:\\dir\\" ; git push'), p)).toEqual(push)
+    expect(decide(ps('Write-Output C:\\dir\\; git push'), p)).toEqual(push)
+    // The backtick makes the `;` a letter of the word, so there is no second command to deny
+    expect(decide(ps('Write-Output a`; git push'), p)).toEqual({ decision: 'allow' })
   })
 
   it('would deny a line cut short whose kept commands include a denied one', () => {

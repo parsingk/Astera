@@ -13,6 +13,16 @@ const bash = (command: string) => claude('Bash', { command })
 const ps = (command: string) => claude('PowerShell', { command })
 /** The actions of a result's commands, without the place each one has. */
 const acts = (r: { commands?: Array<{ action: AuditAction }> }) => r.commands?.map((c) => c.action)
+/** Runs `check` on the named platform whatever the host is: Codex runs the platform's own shell, so which one is read from it. */
+function onPlatform(platform: NodeJS.Platform, check: () => void): void {
+  const original = Object.getOwnPropertyDescriptor(process, 'platform')!
+  Object.defineProperty(process, 'platform', { ...original, value: platform })
+  try {
+    check()
+  } finally {
+    Object.defineProperty(process, 'platform', original)
+  }
+}
 
 describe('shell: the action comes from the first words', () => {
   it('names git push a remote write, with the program and first subcommand as target', () => {
@@ -654,6 +664,22 @@ describe('shell: a command substitution inside double quotes is a command of the
     expect(bash('echo a\\\ngit push')).toEqual({ action: 'process.execute', target: 'echo', confidence: 'high' })
   })
 
+  // PowerShell's escape character is the backtick: at the end of a line it joins the next, and elsewhere outside quotes it
+  // makes the next character a letter, so a `;` after one does not end the command
+  it('joins a line that ends in a backtick in PowerShell, and lets a backtick escape the next character', () => {
+    const joined = ps('Remove-Item `\n../../y')
+    expect(joined).toMatchObject({ action: 'filesystem.delete', insideProject: false })
+    expect(joined).not.toHaveProperty('commands')
+    expect(ps('Remove-Item `\r\n../../y')).not.toHaveProperty('commands')
+    expect(ps('Write-Output a`; git push')).toEqual({ action: 'process.execute', target: 'Write-Output', confidence: 'high' })
+    expect(ps('Write-Output a`| git push')).toEqual({ action: 'process.execute', target: 'Write-Output', confidence: 'high' })
+    // An unescaped one still ends the command, and a backtick that ends the text is a letter
+    expect(acts(ps('Write-Output a; git push'))).toEqual(['process.execute', 'git.remote.write'])
+    expect(ps('Write-Output a`')).toEqual({ action: 'process.execute', target: 'Write-Output', confidence: 'high' })
+    // POSIX takes a backtick pair for a substitution, as before
+    expect(acts(bash('echo `git push`'))).toEqual(['process.execute', 'git.remote.write'])
+  })
+
   it('reads $( ) in PowerShell, not its backtick, in a string and in a here-string', () => {
     expect(acts(ps('Write-Output "$(git push)"'))).toContain('git.remote.write')
     expect(acts(ps('Write-Output @"\n$(git push)\n"@'))).toContain('git.remote.write')
@@ -1189,6 +1215,25 @@ describe('tools that run nothing, and the ones that look like it', () => {
   it('resolves Monitor as the shell tool it is', () => {
     expect(claude('Monitor', { command: 'git push', description: 'x', timeout_ms: 1000 })).toMatchObject({
       action: 'git.remote.write', target: 'git push', confidence: 'high'
+    })
+  })
+
+  // Monitor runs its script in the shell Bash does (Git Bash on Windows), so it is read as POSIX on every platform. Codex
+  // runs the platform's own shell: PowerShell on Windows, where a backslash is no escape
+  it('reads Monitor as POSIX on Windows too, and Codex as PowerShell there and as POSIX elsewhere', () => {
+    onPlatform('win32', () => {
+      // A backslash before a newline joins the lines, and one before a `;` is a letter of the word, as in Bash
+      const joined = claude('Monitor', { command: 'rm -rf a\\\n/../../y' })
+      expect(joined).toMatchObject({ action: 'filesystem.delete', insideProject: false })
+      expect(joined).not.toHaveProperty('commands')
+      expect(claude('Monitor', { command: 'echo a\\; git push' })).toEqual({ action: 'process.execute', target: 'echo', confidence: 'high' })
+      expect(acts(codex('shell_command', { command: 'echo a\\; git push' }))).toEqual(['process.execute', 'git.remote.write'])
+      expect(acts(ps('echo a\\; git push'))).toEqual(['process.execute', 'git.remote.write'])
+      expect(bash('echo a\\; git push')).toEqual({ action: 'process.execute', target: 'echo', confidence: 'high' })
+    })
+    onPlatform('linux', () => {
+      expect(claude('Monitor', { command: 'echo a\\; git push' })).toEqual({ action: 'process.execute', target: 'echo', confidence: 'high' })
+      expect(codex('shell_command', { command: 'echo a\\; git push' })).toEqual({ action: 'process.execute', target: 'echo', confidence: 'high' })
     })
   })
 
