@@ -1318,9 +1318,19 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .security-decision.is-allow { color: var(--ok); background: var(--ok-bg); }
 .security-decision.is-would-deny { color: var(--danger); background: var(--danger-bg); }
 .security-decision.is-unknown { color: var(--text-dim); background: var(--elevated); }
+/* Audit Logs' rows fit the tab without a sideways scroll at the settings window's usual width (the screen finding, at a
+   1280 px window: the action wrapped over four lines and the rule column was cut off). The time is the time of day, with
+   the date heading each day's rows; the time, the action and the decision keep to one line; the session is cut short;
+   the target takes the room left over, cut short, the whole of it on hover; the rule that decided sits under the
+   decision and wraps there, never narrower than a few words. */
+.security-rows td { white-space: nowrap; }
 .security-time { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-dim); }
-.security-session { display: block; color: var(--text); }
-.security-target { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 11.5px; }
+.security-date { display: block; font-size: 11px; color: var(--text-faint); }
+.security-session-cell > span { display: block; max-width: 8em; overflow: hidden; text-overflow: ellipsis; }
+.security-session { color: var(--text); }
+.security-profile { font-size: 11.5px; color: var(--text-faint); }
+.security-rows td.security-target { width: 100%; max-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono); font-size: 11.5px; }
+.security-decided-by { display: block; min-width: 9em; margin-top: 3px; white-space: normal; font-size: 11.5px; color: var(--text-dim); }
 .plugin-card .settings-hint { overflow-wrap: anywhere; }
 /* A fieldset, so a save holds every field at once; its own frame is taken off. */
 .plugin-form { display: flex; flex-direction: column; gap: 12px; min-width: 0; margin: 6px 0 0; padding: 10px 0 0; border: 0; border-top: 1px solid var(--line-soft); }

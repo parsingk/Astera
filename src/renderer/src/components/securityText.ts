@@ -284,11 +284,24 @@ export function filterChoices(rows: readonly AuditRow[], before: FilterChoices =
 
 const two = (n: number): string => String(n).padStart(2, '0')
 
+const dayOf = (d: Date): string => `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`
+const timeOf = (d: Date): string => `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`
+
 /** When a call happened, on the person's clock to the second, with its date: the records span days. As the CLI prints it. */
 export function recordTime(iso: string): string {
   const d = new Date(iso)
   if (!Number.isFinite(d.getTime())) return iso
-  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`
+  return `${dayOf(d)} ${timeOf(d)}`
+}
+
+/** A row's time as Audit Logs shows it: the time of day, and the date only where it is not the row above's (`above`), so
+ *  a date heads each day's rows (newest first) and the column stays narrow. */
+export function rowTime(iso: string, above: string | undefined): { time: string; date?: string } {
+  const d = new Date(iso)
+  if (!Number.isFinite(d.getTime())) return { time: iso }
+  const prev = above === undefined ? null : new Date(above)
+  const sameDay = prev !== null && Number.isFinite(prev.getTime()) && dayOf(prev) === dayOf(d)
+  return sameDay ? { time: timeOf(d) } : { time: timeOf(d), date: dayOf(d) }
 }
 
 /** A session by its tab's title while this app has one, else by its provider and kind and the start of its id (one

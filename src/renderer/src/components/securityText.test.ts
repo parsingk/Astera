@@ -32,6 +32,7 @@ import {
   periodSince,
   recordTime,
   retentionSince,
+  rowTime,
   ruleActionChoices,
   sessionLabel,
   securityFailure,
@@ -121,6 +122,9 @@ describe('securityText', () => {
   it('says each decision in words', () => {
     expect(DECISIONS.map((d) => decisionLabel(d, en))).toEqual(['Allowed', 'Would be denied', 'Unknown'])
     expect(decisionLabel('later', en)).toBe('later')
+    // The screen finding: "would be denied" said plainly, not as "a deny target"
+    const said = (lang: (typeof LANGS)[number]): string => decisionLabel('would-deny', (k, p) => translate(lang, k, p))
+    expect([said('ko'), said('ja'), said('es')]).toEqual(['막혔을 것', '拒否されていたもの', 'Se denegaría'])
   })
 
   // Design §9, the Host's COVERAGE
@@ -279,6 +283,13 @@ describe('securityText', () => {
     const d = new Date(2026, 9, 23, 9, 5, 7)
     expect(recordTime(d.toISOString())).toBe('2026-10-23 09:05:07')
     expect(recordTime('later')).toBe('later')
+    // In the rows, newest first: the time of day, and the date where a day's rows start (the screen finding: a full
+    // timestamp on every row left the action and the rule no room)
+    const iso = (h: number, m: number, day = 23): string => new Date(2026, 9, day, h, m, 0).toISOString()
+    expect(rowTime(iso(9, 5), undefined)).toEqual({ time: '09:05:00', date: '2026-10-23' })
+    expect(rowTime(iso(9, 1), iso(9, 5))).toEqual({ time: '09:01:00' })
+    expect(rowTime(iso(23, 59, 22), iso(9, 1))).toEqual({ time: '23:59:00', date: '2026-10-22' })
+    expect(rowTime('later', iso(9, 1))).toEqual({ time: 'later' })
     expect(sessionLabel(row(), 'Fix the build', en)).toBe('Fix the build')
     expect(sessionLabel(row({ sessionId: '0123456789abcdef', provider: 'codex', kind: 'chat' }), undefined, en)).toBe('Codex Chat 01234567')
   })

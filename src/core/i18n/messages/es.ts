@@ -149,7 +149,7 @@ export const es: Catalog = {
   'settings.security.mode.label': 'Registrar las llamadas a herramientas de los agentes',
   'settings.security.mode.compatibility': 'Desactivado',
   'settings.security.mode.observe': 'Observar',
-  'settings.security.mode.hint': 'Un cambio se aplica a las sesiones que empiecen después. Para observar, el Host tiene que estar en marcha.',
+  'settings.security.mode.hint': 'Al activarlo se registran las sesiones que empiecen después; al desactivarlo se deja de registrar en el acto. Para observar, el Host tiene que estar en marcha.',
   'settings.security.coverage.title': 'Lo que la observación puede ver',
   'settings.security.coverage.row': '{provider} {kind}',
   'settings.security.kind.terminal': 'Terminal',

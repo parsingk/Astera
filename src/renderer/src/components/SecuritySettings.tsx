@@ -31,6 +31,7 @@ import {
   nextPageQuery,
   pageOf,
   recordTime,
+  rowTime,
   ruleActionChoices,
   scopeLabel,
   securityFailure,
@@ -510,30 +511,47 @@ function AuditLogs({
                 <th scope="col">{t('settings.security.col.action')}</th>
                 <th scope="col">{t('settings.security.col.target')}</th>
                 <th scope="col">{t('settings.security.col.decision')}</th>
-                <th scope="col">{t('settings.security.col.rule')}</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
-                <tr key={r.id}>
-                  <td className="security-time">{recordTime(r.at)}</td>
-                  <td>
-                    {/* With what observe sees of such a session (design §9), on hover */}
-                    <span className="security-session" title={coverageLine(coverage, r, t)}>
-                      {sessionLabel(r, sessionTitle(r.sessionId), t)}
-                    </span>
-                    {r.agentProfileId !== undefined && <span className="settings-hint">{profileNameOf(profiles, r.agentProfileId)}</span>}
-                  </td>
-                  <td>{actionPhrase(r.action, t)}</td>
-                  <td className="security-target" title={r.target}>
-                    {r.target}
-                  </td>
-                  <td>
-                    <span className={`security-decision is-${r.decision}`}>{decisionLabel(r.decision, t)}</span>
-                  </td>
-                  <td>{decidingRule(r, rules, t)}</td>
-                </tr>
-              ))}
+              {rows.map((r, i) => {
+                // The date heads each day's rows; the full time is on hover
+                const when = rowTime(r.at, rows[i - 1]?.at)
+                const profile = r.agentProfileId !== undefined ? profileNameOf(profiles, r.agentProfileId) : undefined
+                const rule = decidingRule(r, rules, t)
+                return (
+                  <tr key={r.id}>
+                    <td className="security-time" title={recordTime(r.at)}>
+                      {when.date !== undefined && <span className="security-date">{when.date}</span>}
+                      {when.time}
+                    </td>
+                    <td className="security-session-cell">
+                      {/* With what observe sees of such a session (design §9), on hover */}
+                      <span className="security-session" title={coverageLine(coverage, r, t)}>
+                        {sessionLabel(r, sessionTitle(r.sessionId), t)}
+                      </span>
+                      {profile !== undefined && (
+                        <span className="security-profile" title={profile}>
+                          {profile}
+                        </span>
+                      )}
+                    </td>
+                    <td>{actionPhrase(r.action, t)}</td>
+                    <td className="security-target" title={r.target}>
+                      {r.target}
+                    </td>
+                    {/* The rule that decided, under the decision: a column of its own left no room at the tab's width */}
+                    <td>
+                      <span className={`security-decision is-${r.decision}`}>{decisionLabel(r.decision, t)}</span>
+                      {rule !== '' && (
+                        <span className="security-decided-by" title={`${t('settings.security.col.rule')}: ${rule}`}>
+                          {rule}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>

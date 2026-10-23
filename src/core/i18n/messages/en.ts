@@ -182,7 +182,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.security.mode.label': 'Record agent tool calls',
   'settings.security.mode.compatibility': 'Off',
   'settings.security.mode.observe': 'Observe',
-  'settings.security.mode.hint': 'A change applies to sessions started after it. Observing needs the Host to be running.',
+  'settings.security.mode.hint': 'Observe records the sessions started after you turn it on; Off stops recording at once. Observing needs the Host to be running.',
   'settings.security.coverage.title': 'What observe can see',
   'settings.security.coverage.row': '{provider} {kind}',
   'settings.security.kind.terminal': 'Terminal',
