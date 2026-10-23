@@ -713,11 +713,11 @@ const SINK = /^(?:\/dev\/(?:null|stdout|stderr|tty|fd\/\d+)|nul|\$null)$/i
  * A shell line as the commands it runs, each a list of words with the quotes taken off.
  *
  * Splits on `&&`, `||`, `;`, `|`, `&`, newlines and the brackets of `( )` and `$( )` outside quotes, so the commands in a
- * group or a substitution are seen, and in a POSIX line on the backticks of a substitution too (PowerShell's backtick is
- * its escape character, so there it is a letter of the word). A redirection's operator and target are not words: a `>`
- * target is kept apart as a file the command writes; `2>&1`, `< in` and heredoc bodies are left out. A `&` that starts a
- * command is PowerShell's call operator. Backslash is a path separator on Windows, so it only escapes the characters a
- * shell line needs it for.
+ * group or a substitution are seen, and in a POSIX line on the backticks of a substitution too. A redirection's operator
+ * and target are not words: a `>` target is kept apart as a file the command writes; `2>&1`, `< in` and heredoc bodies
+ * are left out. A `&` that starts a command is PowerShell's call operator. Each flavour escapes its own way: in POSIX a
+ * backslash escapes only the characters a shell line needs it for (it is a path separator on Windows) and joins a line
+ * it ends; in PowerShell a backslash is a letter, and the backtick makes the next character one, or joins a line it ends.
  *
  * Inside double quotes a `$( )` (in a POSIX line also a pair of backticks) is a substitution the shell runs: its text is read
  * as a line of its own and its commands follow the command the quoted word is in, while the word keeps a `$` where it was,
