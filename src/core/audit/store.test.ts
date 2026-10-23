@@ -72,6 +72,49 @@ describe('appendRecords and queryRecords', () => {
     expect(JSON.parse(text.split('\n')[0])).toEqual(c)
   })
 
+  it('orders by time a record written late, within its day and across a page (a Host catching up after a restart)', async () => {
+    const p = await profile()
+    const now = (): number => ms('2026-10-23')
+    const y1 = rec({ id: 'Y1', at: at('2026-10-22', 0) })
+    const y2 = rec({ id: 'Y2', at: at('2026-10-22', 1) })
+    const a = rec({ id: 'A', at: at('2026-10-23', 0) })
+    const b = rec({ id: 'B', at: at('2026-10-23', 5) })
+    const lateC = rec({ id: 'C', at: new Date(ms('2026-10-23') - 60 * 60 * 1000).toISOString() })
+    for (const batch of [[y1, y2], [a], [b], [lateC]]) await appendRecords(p, batch, { now })
+    const ids = async (f: Parameters<typeof queryRecords>[1]): Promise<string[]> => (await queryRecords(p, f)).map((r) => r.id)
+    expect(await ids({})).toEqual(['B', 'A', 'C', 'Y2', 'Y1'])
+    expect(await ids({ limit: 2 })).toEqual(['B', 'A'])
+    expect(await ids({ limit: 2, until: a.at })).toEqual(['C', 'Y2'])
+    expect(await ids({ limit: 2, until: y2.at })).toEqual(['Y1'])
+  })
+
+  it('orders records of the same time by id', async () => {
+    const p = await profile()
+    const t = at('2026-10-23')
+    await appendRecords(p, [rec({ id: 'au_b', at: t }), rec({ id: 'au_c', at: t }), rec({ id: 'au_a', at: t })], { now: () => ms('2026-10-23') })
+    expect((await queryRecords(p, {})).map((r) => r.id)).toEqual(['au_c', 'au_b', 'au_a'])
+    expect((await queryRecords(p, { limit: 2 })).map((r) => r.id)).toEqual(['au_c', 'au_b'])
+  })
+
+  it('pages back with until through records written out of order over three days, each seen once and in time order', async () => {
+    const p = await profile()
+    const now = (): number => ms('2026-10-23')
+    // 60 records, one a minute from the 21st to the 23rd, written in a shuffled order
+    const all = Array.from({ length: 60 }, (_, i) => rec({ id: `au_${String(i).padStart(2, '0')}`, at: at(['2026-10-21', '2026-10-22', '2026-10-23'][i % 3], i) }))
+    const shuffled = [...all].sort((x, y) => ((Number(x.id.slice(3)) * 37) % 61) - ((Number(y.id.slice(3)) * 37) % 61))
+    for (let i = 0; i < shuffled.length; i += 7) await appendRecords(p, shuffled.slice(i, i + 7), { now })
+    const seen: AuditRecord[] = []
+    let until: string | undefined
+    for (;;) {
+      const page = await queryRecords(p, { limit: 7, ...(until !== undefined ? { until } : {}) })
+      if (page.length === 0) break
+      seen.push(...page)
+      until = page[page.length - 1].at
+    }
+    const byTime = [...all].sort((x, y) => Date.parse(y.at) - Date.parse(x.at))
+    expect(seen.map((r) => r.id)).toEqual(byTime.map((r) => r.id))
+  })
+
   it('filters by session, Job, Run, Task, agent profile, action, period and a predicate, and stops at the limit', async () => {
     const p = await profile()
     const now = (): number => ms('2026-10-23')
@@ -114,6 +157,17 @@ describe('appendRecords and queryRecords', () => {
     const next = rec({ at: at('2026-10-23', 5) })
     await appendRecords(p, [next], { now })
     expect((await queryRecords(p, {})).map((r) => r.id)).toEqual([next.id, kept.id])
+  })
+
+  it('looks at the end of the file before every write, so a line torn after its last write does not swallow the next', async () => {
+    const p = await profile()
+    const now = (): number => ms('2026-10-23')
+    const first = rec({ at: at('2026-10-23', 1) })
+    await appendRecords(p, [first], { now })
+    await fs.appendFile(path.join(auditDir(p), '2026-10-23.jsonl'), '{"id":"au_torn","at":')
+    const next = rec({ at: at('2026-10-23', 2) })
+    await appendRecords(p, [next], { now })
+    expect((await queryRecords(p, {})).map((r) => r.id)).toEqual([next.id, first.id])
   })
 
   it('never throws to the caller: a write that fails is logged and dropped', async () => {
@@ -250,22 +304,28 @@ describe('retention (Review Focus 4)', () => {
 
 describe('reading a large day', () => {
   /** A day of `count` records, a second apart in the order they were written, about 10 MB at 30 000. */
-  async function largeDay(count: number): Promise<{ p: string; newest: string[] }> {
-    const p = await profile()
+  async function largeDay(count: number, day = '2026-10-23', into?: string): Promise<{ p: string; newest: string[] }> {
+    const p = into ?? (await profile())
     await fs.mkdir(auditDir(p), { recursive: true })
-    const start = ms('2026-10-23') - 6 * 60 * 60 * 1000
+    const start = ms(day) - 6 * 60 * 60 * 1000
     const lines: string[] = []
     for (let i = 0; i < count; i++) lines.push(JSON.stringify(rec({ id: `au_big_${i}`, at: new Date(start + i * 1000).toISOString(), target: `src/some/folder/file${i}.ts` })))
-    await fs.writeFile(path.join(auditDir(p), '2026-10-23.jsonl'), lines.join('\n') + '\n')
+    await fs.writeFile(path.join(auditDir(p), `${day}.jsonl`), lines.join('\n') + '\n')
     return { p, newest: [count - 1, count - 2, count - 3].map((i) => `au_big_${i}`) }
   }
 
-  it('reads a page of the newest from the end of the file and stops there', async () => {
-    const { p, newest } = await largeDay(30_000)
+  it('reads the newest day whole for a page and does not open an older day once the page is full', async () => {
+    const { p, newest } = await largeDay(30_000, '2026-10-22')
+    // Ten records today, written out of their time order
+    const today = [5, 1, 9, 3, 7, 0, 8, 2, 6, 4].map((m) => rec({ id: `au_today_${m}`, at: at('2026-10-23', m) }))
+    await appendRecords(p, today, { now: () => ms('2026-10-23') })
     let looked = 0
     const page = await queryRecords(p, { limit: 3, where: () => (looked++, true) })
-    expect(page.map((r) => r.id)).toEqual(newest)
-    expect(looked).toBe(3)
+    expect(page.map((r) => r.id)).toEqual(['au_today_9', 'au_today_8', 'au_today_7'])
+    expect(looked).toBe(10)
+    // A page longer than today goes on into yesterday, newest first there too
+    const longer = await queryRecords(p, { limit: 12 })
+    expect(longer.map((r) => r.id)).toEqual([...[9, 8, 7, 6, 5, 4, 3, 2, 1, 0].map((m) => `au_today_${m}`), ...newest.slice(0, 2)])
   })
 
   it('gives the event loop a turn every few thousand lines while it reads the whole day', async () => {

@@ -365,7 +365,7 @@ describe('dispatchOfSession', () => {
       { id: 'run_done', jobId: 'job2', createdAt: T('02:00'), coordinatorSessionId: 'sess_co' },
       { id: 'run_ext', jobId: 'job3', createdAt: T('02:00'), externalCoordinatorSessionId: 'sess_ext' }
     ]
-    // run_old has no Tasks (running); run_live has one at work; run_done's only Task is complete
+    // run_live has a Task at work; run_old's and run_done's only Tasks are complete
     const tasks: Array<Partial<Task>> = [
       { id: 't_live', runId: 'run_live', status: 'dispatched' },
       { id: 't_done', runId: 'run_done', status: 'completed' },

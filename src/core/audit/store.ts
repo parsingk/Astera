@@ -9,9 +9,10 @@
 // waits on the disk and never fails over it (Review Focus 4). A line torn by a crash costs that line only: the next write
 // to its file starts on a line of its own, and a reader skips what it cannot parse.
 //
-// Reads stream: each day file is read from its end in chunks, newest day first, so a page of the newest records reads
-// only the end of the newest file, and a whole-folder count holds one chunk at a time. The event loop gets a turn every
-// AUDIT_READ_YIELD_EVERY lines, so a read of 50 MB never stalls the Host.
+// Reads stream: each day file is read in chunks, newest day first. A page reads whole days, keeping only the newest it
+// has seen, and stops at the first day that fills it (a record is filed under its own day, so no older day holds a
+// newer one); a whole-folder count holds one chunk at a time. The event loop gets a turn every AUDIT_READ_YIELD_EVERY
+// lines, so a read of 50 MB never stalls the Host.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { profilePaths } from '../profile/paths'
@@ -90,15 +91,13 @@ interface FolderState {
   sizes: Map<string, number>
   /** Days whose own file reached the size: nothing more is filed for them. */
   stopped: Set<string>
-  /** Day files this process has seen end with a line break. */
-  whole: Set<string>
 }
 
 const folders = new Map<string, FolderState>()
 const folderOf = (dir: string): FolderState => {
   let s = folders.get(dir)
   if (!s) {
-    s = { queue: Promise.resolve(), prunedAt: null, sizes: new Map(), stopped: new Set(), whole: new Set() }
+    s = { queue: Promise.resolve(), prunedAt: null, sizes: new Map(), stopped: new Set() }
     folders.set(dir, s)
   }
   return s
@@ -150,13 +149,12 @@ export function appendRecords(profileDir: string, recs: readonly AuditRecord[], 
       const file = path.join(dir, `${day}.jsonl`)
       try {
         await fs.mkdir(dir, { recursive: true })
-        const lead = s.whole.has(file) || (await endsWhole(file)) ? '' : '\n'
+        // Looked at before every write, not remembered: a write that failed part way, a crash or anything else that
+        // touched the file may have left it ending inside a line
+        const lead = (await endsWhole(file)) ? '' : '\n'
         await fs.appendFile(file, lead + text)
-        s.whole.add(file)
         s.sizes.set(day, (s.sizes.get(day) ?? 0) + lead.length + textBytes)
       } catch (err) {
-        // Part of the text may have landed: the next write looks at the file's end again
-        s.whole.delete(file)
         o.log?.(`audit: could not write ${rs.length} record(s) to ${file}; they are dropped: ${String(err)}`)
       }
     }
@@ -217,7 +215,6 @@ async function prune(dir: string, s: FolderState, o: AuditStoreOptions, room: nu
       const file = path.join(dir, `${day}.jsonl`)
       try {
         await fs.rm(file, { force: true })
-        s.whole.delete(file)
         s.stopped.delete(day)
         return true
       } catch (err) {
@@ -344,10 +341,21 @@ async function eachLineFromEnd(file: string, visit: (line: string) => boolean): 
 
 /**
  * Hands `visit` each record that passes the filter (its `limit` aside) with its time parsed, newest day first and each
- * day from its last line back: the order the Host appended them in, newest first. `visit` returns false to stop. Damaged
- * lines are skipped; a folder or a day that is not there reads as nothing.
+ * day from its last line back. Within a day that is the order the Host wrote them in, which is not always their time
+ * order (a source catching up writes older calls late). `visit` returns false to stop. Damaged lines are skipped; a
+ * folder or a day that is not there reads as nothing.
  */
-export async function visitRecords(profileDir: string, f: AuditFilter, visit: (r: AuditRecord, at: number) => boolean | void): Promise<void> {
+export function visitRecords(profileDir: string, f: AuditFilter, visit: (r: AuditRecord, at: number) => boolean | void): Promise<void> {
+  return visitDays(profileDir, f, visit, () => false)
+}
+
+/** visitRecords, asking `enough` after each whole day whether to stop there. */
+async function visitDays(
+  profileDir: string,
+  f: AuditFilter,
+  visit: (r: AuditRecord, at: number) => boolean | void,
+  enough: () => boolean
+): Promise<void> {
   const dir = profilePaths(profileDir).auditRecords
   let names: string[]
   try {
@@ -387,18 +395,81 @@ export async function visitRecords(profileDir: string, f: AuditFilter, visit: (r
       const read = recordOf(line)
       return read === null || !passes(read.r, read.at) || visit(read.r, read.at) !== false
     })
-    if (!goOn) return
+    if (!goOn || enough()) return
   }
 }
 
-/** The records that pass the filter, newest first: up to `limit`, read from the newest end, ordered by their time. */
+type Timed = { r: AuditRecord; at: number }
+
+/** Newer first: by time, then by id. A total order, so a page ends at the same place every time it is read. */
+const newerFirst = (a: Timed, b: Timed): number => b.at - a.at || (a.r.id < b.r.id ? 1 : a.r.id > b.r.id ? -1 : 0)
+
+/**
+ * The records that pass the filter, newest first by their time (then id), at most `limit`. Each record is filed under the
+ * local day of its own time, so the days are read newest first and each one whole, keeping the `limit` newest seen so
+ * far; once a day leaves that many, no older day can hold a newer one and the read stops. Memory is bounded by the
+ * limit; without one every passing record is returned.
+ */
 export async function queryRecords(profileDir: string, f: AuditFilter): Promise<AuditRecord[]> {
-  if (f.limit !== undefined && f.limit <= 0) return []
-  const out: Array<{ r: AuditRecord; at: number }> = []
-  await visitRecords(profileDir, f, (r, at) => {
-    out.push({ r, at })
-    return f.limit === undefined || out.length < f.limit
-  })
-  // Stable, so records of the same time keep the order they were written in, newest first
-  return out.sort((a, b) => b.at - a.at).map((x) => x.r)
+  const limit = f.limit
+  if (limit === undefined) {
+    const all: Timed[] = []
+    await visitRecords(profileDir, f, (r, at) => void all.push({ r, at }))
+    return all.sort(newerFirst).map((x) => x.r)
+  }
+  if (limit <= 0) return []
+  const kept = oldestFirstHeap()
+  await visitDays(
+    profileDir,
+    f,
+    (r, at) => {
+      const x = { r, at }
+      if (kept.size() < limit) kept.push(x)
+      // Newer than the oldest kept: it takes that one's place
+      else if (newerFirst(x, kept.peek()!) < 0) kept.replaceTop(x)
+    },
+    () => kept.size() >= limit
+  )
+  return kept.items().sort(newerFirst).map((x) => x.r)
+}
+
+/** A binary heap whose top is the oldest it holds (`newerFirst` reversed). */
+function oldestFirstHeap() {
+  const a: Timed[] = []
+  const older = (i: number, j: number): boolean => newerFirst(a[i], a[j]) > 0
+  const swap = (i: number, j: number): void => {
+    const t = a[i]
+    a[i] = a[j]
+    a[j] = t
+  }
+  const down = (i: number): void => {
+    for (;;) {
+      const l = 2 * i + 1
+      const r = l + 1
+      let m = i
+      if (l < a.length && older(l, m)) m = l
+      if (r < a.length && older(r, m)) m = r
+      if (m === i) return
+      swap(i, m)
+      i = m
+    }
+  }
+  return {
+    size: () => a.length,
+    peek: (): Timed | undefined => a[0],
+    items: (): Timed[] => a,
+    push(x: Timed): void {
+      a.push(x)
+      for (let i = a.length - 1; i > 0; ) {
+        const p = (i - 1) >> 1
+        if (!older(i, p)) return
+        swap(i, p)
+        i = p
+      }
+    },
+    replaceTop(x: Timed): void {
+      a[0] = x
+      down(0)
+    }
+  }
 }
