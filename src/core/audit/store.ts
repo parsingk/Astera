@@ -291,6 +291,7 @@ function recordOf(line: string): { r: AuditRecord; at: number } | null {
   const at = Date.parse(v.at as string)
   if (!Number.isFinite(at)) return null
   if (v.commands !== undefined && !(Array.isArray(v.commands) && v.commands.every((c) => isObject(c) && typeof c.action === 'string'))) return null
+  delete v.scripted // an earlier build marked a line with control flow; nothing reads the mark now
   return { r: v as unknown as AuditRecord, at }
 }
 

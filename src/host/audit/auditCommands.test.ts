@@ -200,14 +200,14 @@ describe('createHostAudit', () => {
     expect((await h.call('audit-summary', { until: new Date(NOW - 3 * 24 * 60 * 60 * 1000).toISOString() })).body).toMatchObject({ stoppedAtLimit: false })
   })
 
-  // An earlier build kept `scripted: true` on a line with control flow, and judged that line unknown. The store passes the
-  // line through whole and the field is ignored: the push in it is what the rules judge
-  it('reads a line written with the old scripted field, and judges its commands', async () => {
+  // An earlier build kept `scripted: true` on a line with control flow, and judged that line unknown. The store drops the
+  // field when it reads the line, and the push in it is what the rules judge
+  it('reads a line written with the old scripted field, without the field, and judges its commands', async () => {
     const old = { ...rec({ confidence: 'heuristic', commands: [{ action: 'git.remote.write' }] }), scripted: true } as AuditRecord
     const h = await rig([old])
     const [r] = listed(await h.call('audit-list')).records
     expect([r.id, r.decision, r.ruleId]).toEqual([old.id, 'would-deny', 'starter-git-remote-write'])
-    expect(r).toMatchObject({ scripted: true })
+    expect(r).not.toHaveProperty('scripted')
     expect((await h.call('audit-summary')).body).toMatchObject({ allow: 0, wouldDeny: 1, unknown: 0 })
   })
 
