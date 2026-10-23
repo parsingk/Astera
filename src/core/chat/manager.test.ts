@@ -1269,6 +1269,23 @@ describe('ChatSessionManager — what a takeover reads (chat takeover Task 2)', 
     manager.spawn({ account: claudeAccount, cwd: '/p' })
     expect(seen).toEqual(['ap_1', undefined])
   })
+
+  // Observe mode (Review Focus 1): the note says whether the session was started observed, which is what the Host's
+  // recorder asks before it keeps one of its calls; a session started in compatibility stays unobserved for life.
+  it('marks the note of a session started while the mode is observe, and only then', () => {
+    const caps = (policyMode: 'compatibility' | 'observe') => ({
+      context: { kind: 'implicit' as const, accounts: ['acc-cl'], policyMode, executionMode: 'managed' as const },
+      args: [], env: {}, given: [], gatewayGrant: [], skipped: []
+    })
+    const factory = vi.fn((_f: string, _a: string[], _o: ProcSpawnOptions) => new FakeProc())
+    const deps = { factory, descriptors: makeDescriptors('linux'), homeDir: '/home/t', platform: 'linux' as const, version: '1', log: () => {}, createAdapter: makeAdapterFactory().createAdapter }
+    new ChatSessionManager({ ...deps, capabilities: { get: () => caps('observe'), refresh: async () => {} } }).spawn({ account: claudeAccount, cwd: '/p' })
+    new ChatSessionManager({ ...deps, capabilities: { get: () => caps('compatibility'), refresh: async () => {} } }).spawn({ account: claudeAccount, cwd: '/p' })
+    new ChatSessionManager(deps).spawn({ account: claudeAccount, cwd: '/p' })
+    expect(factory.mock.calls[0][2].meta?.restore).toMatchObject({ observed: true })
+    expect(factory.mock.calls[1][2].meta?.restore).not.toHaveProperty('observed')
+    expect(factory.mock.calls[2][2].meta?.restore).not.toHaveProperty('observed')
+  })
 })
 
 describe('ChatSessionManager.sendCarryOn — the app sends a carry-on the Host left (final review I1)', () => {

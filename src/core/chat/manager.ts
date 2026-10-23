@@ -321,6 +321,9 @@ export class ChatSessionManager {
         ...(rollPrompt === undefined ? {} : { rollPrompt }),
         ...(opts.startedBy ? { startedBy: opts.startedBy } : {}),
         ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {}),
+        // Observe mode (Review Focus 1): started while the mode was observe, which the Host's recorder asks before it
+        // keeps one of this session's calls. The mode the caller's refresh read, as a terminal session's is.
+        ...(caps?.context.policyMode === 'observe' ? { observed: true } : {}),
         // design F5 fix round 1 (Critical 2): the durable mark, written into the note itself so an
         // app restart's `adopt()` can restore it too, not only `state()`'s in-memory overlay.
         ...(opts.startWithBypass ? { bypassedToolchain: true } : {}),

@@ -749,6 +749,18 @@ astera agent-profiles archive --id <profileId|name>
 astera agent-profiles restore --id <profileId|name>
 astera agent-profiles delete  --id <profileId|name>
 
+astera audit   list    [--session <sessionId>] [--job <jobId>] [--run <runId>] [--task <taskId>] [--agent-profile <id|name>] [--action <action>] [--decision <allow|would-deny|unknown>] [--since <time>] [--until <time>] [--before-id <recordId>] [--limit <n>]
+astera audit   summary [--session <sessionId>] [--job <jobId>] [--run <runId>] [--task <taskId>] [--agent-profile <id|name>] [--action <action>] [--decision <allow|would-deny|unknown>] [--since <time>] [--until <time>]
+
+astera policies show
+astera policies set-mode      --mode <compatibility|observe>
+astera policies set-otherwise --effect <allow|deny>
+astera policies rules-add     --effect <allow|deny> --action <action> [--scope <inside-project|outside-project>] [--at <n>]
+astera policies rules-edit    --id <ruleId> [--effect <allow|deny>] [--action <action>] [--scope <inside-project|outside-project> | --clear-scope]
+astera policies rules-remove  --id <ruleId>
+astera policies rules-move    --id <ruleId> --to <n>
+astera policies rules-reset
+
 astera mcp     serve                     serve Astera to an MCP client over stdio
 astera mcp     status                    would mcp serve work here: the Host, MCP access, the tools
 
@@ -848,6 +860,14 @@ list. Filters on one command combine.
 permission prompt: the number of those Tasks, read from the same hook events as `sessions list`'s
 `waiting`. With none it is left out. A person answers the prompt in Astera, in the worker's terminal
 ([mcp.md](mcp.md) says more).
+
+**`runs get` carries `tokens` and `coordinatorTokens`**: the tokens the run's Tasks' sessions spent (every attempt,
+and each session a roll moved one to, counted once), and apart from them what the coordinator Astera started for the
+run spent, each as `{ input, output, total }`, where `input` counts cached input too. The Host reads them in every mode
+from what Claude and Codex already write (a Claude session's transcript and its sub-agents' files, a chat's stream, a
+Codex rollout) and keeps them in `token-totals.json` in the profile until the run is deleted. Each is left out when the
+Host read none, such as for a session the app ran without a Host. MCP's `get_task` carries the Task's own `tokens`.
+What they cost in money is not shown.
 
 **`runs get` carries `github`** for a run of a `--github-lifecycle` Job: the pull request Astera bound for the run's
 branch, its head, the CI checks of that head with the `verdict` and the check that failed first (with its `class`, such
@@ -1121,6 +1141,58 @@ say why in `error.details.reason` too: `agent-profile-unavailable` (unknown or a
 ```json
 {"ok":true,"data":{"profiles":[{"id":"ap_3f2a9c01b7de","name":"Reviewer","status":"active",
   "accountIds":["acc_1","acc_2"],"mcpExclude":["mcp-github"],"permission":"ask", …}]}}
+```
+
+**`audit` and `policies` are observe mode**, the same as **Settings › Security & Access** in the app. After
+`policies set-mode --mode observe`, every session Astera starts records the tool calls it makes once each has run
+(`coverage` in `policies show` says what can be seen for each provider and kind of session): the kind of action
+(`git.remote.write`, `filesystem.write`, `mcp.call`, …) and a short target (`git push`, a path relative to the
+session's folder or `outside project: <name>`, a host name, `server.tool`), never the full command, its output, a
+file's contents or a secret. Nothing is blocked and no session waits. A session already running keeps what it started
+with. `compatibility`, the default, observes nothing, and observe writes nothing new in it (the token totals `runs get`
+shows are kept in `token-totals.json` in every mode); turning observe off keeps the records and the rules. The Host
+keeps the records in the profile (`audit/`, a file a day, for 30 days or up to 50 MB) and the rules beside them
+(`audit-policy.json`), so these commands work with Astera closed.
+
+The rules say what each call would get if Astera enforced them. They are tried in order: the first rule whose action
+matches a call decides it, `allow` or `would-deny`, and `otherwise` decides a call no rule matches. A rule's action is
+matched exactly, or by a start ending in `*` (`git.*`), and a rule with `--scope inside-project` or `outside-project`
+matches only calls known to be inside, or outside, the session's project folder. Each command of a compound line
+(`cd sub && git push`) is judged on its own, and the first one a rule denies makes the line `would-deny`. A call is
+`unknown` when Astera could not read it, such as a line with an unknown shell command in it, when a denied command sits
+in a loop or an `if` block (`for`, `while`, `if`, `case`, PowerShell `foreach`, `ForEach-Object` or `Where-Object`; it
+may not have run, while `a && b` is read as both commands), or when a write or delete names no path and a scoped rule
+could match it. The first time observe is turned on, Astera writes the starter rules: deny `git.remote.write`,
+`github.pr.create` and `github.write`, deny `filesystem.write` and `filesystem.delete` outside the project, and
+otherwise allow. Until then `policies show` shows them and nothing is written. The rule commands take a rule's id from
+`policies show` and its place in the list counted from 0 (`--at`, `--to`); `rules-reset` puts the starter rules back
+and keeps the mode. Every change answers the mode and the rules as they now are. An action Astera does not know is
+refused with 2 and the message lists them, a rule that is not there is a 4, and a damaged `audit-policy.json` is a 6:
+`policies rules-reset` writes the starter rules over it, and a copy of the damaged file is kept beside it.
+
+`audit list` prints the records newest first, each with `decision` and `ruleId` (the rule that decided, left out when
+`otherwise` did or none could), worked out from the rules in force when you ask: edit a rule and the past calls show
+what it would have done. The filters combine, and `--agent-profile` takes an id or a name. `--limit` is 200 by default
+and at most 2000. When it cuts the list, `truncated` is true and `next` holds the `--until` and `--before-id` that ask
+for the next page, which `--human` prints under the table as `more:`, after the filters you used. `audit summary`
+counts the same calls by decision, in all and per action, and `stoppedAtLimit` is true when a day of the period stopped
+recording at the size limit, so it holds fewer calls than were made.
+
+**These commands are for a person.** From inside an agent session (`ASTERA_SESSION` is set) every change is refused
+with 5, and so are both `audit` reads, so the log of what agents did stays away from agents; `policies show` is not
+refused. MCP clients, plugins, the SDK and a paired controller (`--runtime`) have no audit or policy commands.
+
+```bash
+astera policies set-mode --mode observe
+astera audit list --decision would-deny --since 2026-10-23T00:00:00Z --human
+astera policies rules-add --effect allow --action git.remote.write --at 0
+```
+
+```json
+{"ok":true,"data":{"records":[{"id":"…","at":"2026-10-23T09:14:02.120Z","sessionId":"…","provider":"claude",
+  "kind":"terminal","action":"git.remote.write","target":"git push","confidence":"high","status":"ok",
+  "decision":"would-deny","ruleId":"starter-git-remote-write", …}],"truncated":true,
+  "next":{"until":"2026-10-23T09:14:02.120Z","beforeId":"…"}}}
 ```
 
 **`mcp serve` is for an MCP client to launch, not for a person to type**: its stdout carries the MCP

@@ -270,6 +270,16 @@ describe('docs/sdk.md', () => {
     expect(prose(guide).replace(/\s+/g, ' ')).toContain('ignores `agentProfileId` on `jobs.create`')
   })
 
+  // Observe mode design §10: a Run's and a Task's tokens, in the guide, the CLI guide and the CHANGELOG's 0.5.0 entry
+  it('names the token totals in the guide, the CLI guide and the CHANGELOG’s 0.5.0 entry', () => {
+    const changelog = read('packages/client/CHANGELOG.md')
+    const v050 = changelog.slice(changelog.indexOf('## 0.5.0'), changelog.indexOf('## 0.4.0'))
+    for (const doc of [guide, v050, read('docs/cli.md')]) {
+      expect(doc).toContain('`tokens`')
+      expect(doc).toContain('`coordinatorTokens`')
+    }
+  })
+
   it('is reached from the CLI and MCP guides and from the package README', () => {
     expect(read('docs/cli.md')).toContain('](sdk.md)')
     expect(read('docs/mcp.md')).toContain('](sdk.md)')

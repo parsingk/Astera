@@ -654,3 +654,109 @@ describe('humanFor — the job-source commands', () => {
     expect(humanFor('jobs-create-from-source', { id: 'job_1', objective: 'Resolve' })).toBe(humanFor('jobs-create', { id: 'job_1', objective: 'Resolve' }))
   })
 })
+
+// Observe mode design §11, §12: a call is shown by a plain phrase for its action, never by the action's name
+describe('humanFor — audit and policies', () => {
+  const two = (n: number): string => String(n).padStart(2, '0')
+  /** The local time a person reads, as the table prints it. */
+  const local = (iso: string): string => {
+    const d = new Date(iso)
+    return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`
+  }
+  const push = { id: 'au_2', at: '2026-10-23T03:00:02.000Z', sessionId: 'sess_a', action: 'git.remote.write', target: 'git push', decision: 'would-deny', ruleId: 'starter-git-remote-write' }
+  const read = { id: 'au_1', at: '2026-10-23T03:00:01.000Z', sessionId: 'sess_bb', action: 'filesystem.read', target: 'src/a.ts', decision: 'allow' }
+
+  it('audit list is a row per call: time, session, what it did, its target, the decision and the rule', () => {
+    expect(humanFor('audit-list', { records: [push, read], truncated: false, next: null })).toBe(
+      [
+        `${local(push.at)}  sess_a   git push to a remote  git push  would-deny  starter-git-remote-write`,
+        `${local(read.at)}  sess_bb  read a file           src/a.ts  allow       -`
+      ].join('\n')
+    )
+    expect(humanFor('audit-list', { records: [], truncated: false, next: null })).toBe('(no records)')
+  })
+
+  it('audit list says how to ask for the next page when the limit cut it', () => {
+    const out = humanFor('audit-list', { records: [push], truncated: true, next: { until: push.at, beforeId: push.id } })
+    expect(out?.split('\n').slice(-2)).toEqual(['', `more: --until ${push.at} --before-id ${push.id}`])
+  })
+
+  // Task 7 minor: the next page is the same question, so the hint repeats the filters that were used, in place of the
+  // cursor they had
+  it('audit list’s next page hint repeats the filters that were used', () => {
+    const data = { records: [push], truncated: true, next: { until: push.at, beforeId: push.id } }
+    const args = {
+      session: 'sess_a', agentProfile: 'Reviewer Bot', action: 'git.*', decision: 'would-deny', since: '2026-10-23T00:00:00Z',
+      until: '2026-10-24T00:00:00Z', beforeId: 'au_9', limit: 50
+    }
+    expect(humanFor('audit-list', data, args)?.split('\n').at(-1)).toBe(
+      `more: --session sess_a --agent-profile "Reviewer Bot" --action "git.*" --decision would-deny --since 2026-10-23T00:00:00Z --limit 50 --until ${push.at} --before-id ${push.id}`
+    )
+  })
+
+  it('audit summary is the totals, then a row per action, the most seen first', () => {
+    expect(
+      humanFor('audit-summary', {
+        allow: 2,
+        wouldDeny: 2,
+        unknown: 1,
+        byAction: {
+          'filesystem.read': { allow: 2, wouldDeny: 0, unknown: 0 },
+          'git.remote.write': { allow: 0, wouldDeny: 2, unknown: 1 }
+        },
+        stoppedAtLimit: false
+      })
+    ).toBe(
+      [
+        'allow 2, would-deny 2, unknown 1',
+        '',
+        'git push to a remote  git.remote.write  allow 0  would-deny 2  unknown 1',
+        'read a file           filesystem.read   allow 2  would-deny 0  unknown 0'
+      ].join('\n')
+    )
+    const stopped = humanFor('audit-summary', { allow: 0, wouldDeny: 0, unknown: 0, byAction: {}, stoppedAtLimit: true })
+    expect(stopped?.split('\n')[0]).toBe('allow 0, would-deny 0, unknown 0')
+    expect(stopped).toContain('size limit')
+  })
+
+  const policy = {
+    version: 1,
+    mode: 'observe',
+    rules: [
+      { id: 'starter-git-remote-write', effect: 'deny', action: 'git.remote.write' },
+      { id: 'starter-write-outside', effect: 'deny', action: 'filesystem.write', scope: 'outside-project' },
+      { id: 'ar_1', effect: 'allow', action: 'git.*' }
+    ],
+    otherwise: 'allow'
+  }
+  const rules = [
+    'mode       observe',
+    'otherwise  allow',
+    '',
+    '0  deny   git.remote.write  anywhere         starter-git-remote-write',
+    '1  deny   filesystem.write  outside-project  starter-write-outside',
+    '2  allow  git.*             anywhere         ar_1'
+  ]
+
+  it('policies show is the mode, the rules in order with their place, and what observe can see', () => {
+    const coverage = [
+      { provider: 'claude', kind: 'terminal', classes: { shell: { level: 'seen' }, 'file-read': { level: 'seen' }, 'file-write': { level: 'seen' }, mcp: { level: 'seen' }, network: { level: 'partial', note: 'web-tools-only' } } },
+      { provider: 'codex', kind: 'chat', classes: { shell: { level: 'seen' }, 'file-read': { level: 'partial', note: 'shell-text-only' }, 'file-write': { level: 'seen' }, mcp: { level: 'seen' }, network: { level: 'partial' } } }
+    ]
+    expect(humanFor('policies-show', { mode: 'observe', policy, coverage })).toBe(
+      [
+        ...rules,
+        '',
+        '                 shell  file read                  file write  MCP   network',
+        'claude terminal  seen   seen                       seen        seen  partial (web tools only)',
+        'codex chat       seen   partial (shell text only)  seen        seen  partial'
+      ].join('\n')
+    )
+  })
+
+  it('a change answers the rules as they are now', () => {
+    for (const cmd of ['policies-set-mode', 'policies-set-otherwise', 'policies-rules-add', 'policies-rules-edit', 'policies-rules-remove', 'policies-rules-move', 'policies-rules-reset'])
+      expect(humanFor(cmd, { mode: 'observe', policy, rule: policy.rules[2] }), cmd).toBe(rules.join('\n'))
+    expect(humanFor('policies-rules-reset', { mode: 'compatibility', policy: { ...policy, mode: 'compatibility', rules: [] } })?.split('\n').at(-1)).toBe('(no rules)')
+  })
+})

@@ -116,6 +116,21 @@ describe('JsonlTail', () => {
     expect(result?.lines).toEqual(['{"z":9}'])
   })
 
+  // restartWithin: a follower of files that can be very large (token totals, observe mode design §10) never reads one
+  // whole when it gets shorter; it starts that many bytes before the new end, a cut first line and all
+  it('restartWithin: a file that got shorter is read again from that many bytes before its end', async () => {
+    const p = path.join(dir, 'k.jsonl')
+    await writeFile(p, '{"a":1}\n{"b":2}\n{"c":3}\n')
+    const tail = new JsonlTail(p, { restartWithin: 10 })
+    await tail.read()
+    await writeFile(p, '{"x":1}\n{"y":2}\n') // shorter: 16 bytes, so the read starts at byte 6, the first line's `}`
+    const after = await tail.read()
+    expect(after?.restarted).toBe(true)
+    expect(after?.lines).toEqual(['}', '{"y":2}'])
+    await appendFile(p, '{"z":3}\n')
+    expect((await tail.read())?.lines).toEqual(['{"z":3}'])
+  })
+
   it('position is null while startAtEnd is pending, then the next byte to read (S6 R4)', async () => {
     const f = path.join(dir, 'p.jsonl')
     await writeFile(f, 'a\nb\n')

@@ -5,6 +5,7 @@ import { watch, readdirSync, statSync, type FSWatcher } from 'node:fs'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { dirIdentity, dirIdentityAsync, namesAPath } from '../files/watchedDir'
+import { AUDIT_HOOK_EVENTS } from './sessionState'
 
 /**
  * How often the reconciliation sweep runs. See `sweep` for why there is one at all.
@@ -29,6 +30,7 @@ export class HookEventWatcher {
   private offsets = new Map<string, number>() // filePath → byte offset already processed (stable because the file is append-only)
   private draining = new Set<string>() // Per-file re-entrancy guard
   private pending = new Set<string>() // Marks a new event that arrived mid-drain → drain again once this one finishes
+  private sweepFailing = false // The last sweep could not read the folder: said once, until a sweep reads it again
 
   constructor(
     private dir: string,
@@ -37,9 +39,17 @@ export class HookEventWatcher {
     /** Injectable so a test can use a period it can wait out. */
     private sweepMs: number = HOOK_SWEEP_MS,
     /** Start every file already in `dir` at its current end, so events written before this watcher
-     *  existed are not delivered (the Host, S6 R13). Files that appear later are read from 0. */
-    private opts: { startAtEnd?: boolean; watch?: typeof watch } = {}
+     *  existed are not delivered (the Host, S6 R13). Files that appear later are read from 0.
+     *  `audit`: read the observed sessions' audit files (`<session>.audit.jsonl`) and nothing else, for
+     *  the Host's recorder (host/audit/sources.ts); without it those files are passed by, so no other
+     *  reader of the folder ever sees an observe-only line. */
+    private opts: { startAtEnd?: boolean; watch?: typeof watch; audit?: boolean } = {}
   ) {}
+
+  /** Whether a file of the folder is one this watcher reads. */
+  private reads(name: string): boolean {
+    return this.opts.audit === true ? name.endsWith(AUDIT_HOOK_EVENTS) : name.endsWith('.jsonl') && !name.endsWith(AUDIT_HOOK_EVENTS)
+  }
 
   /** Arms the folder's watch, when it is not running and the folder is there. Never throws. `known`: the folder's id
    *  as the caller just read it (the sweep, asynchronously); read here, synchronously, when left out. */
@@ -55,7 +65,7 @@ export class HookEventWatcher {
       const w = (this.opts.watch ?? watch)(this.dir, (_ev, filename) => {
         const name = filename?.toString()
         if (name && name.endsWith('.jsonl')) {
-          void this.drain(path.join(this.dir, name))
+          if (this.reads(name)) void this.drain(path.join(this.dir, name))
           return
         }
         // **The watched folder itself was removed** (watchedDir.ts has the win32 measurement): the watch
@@ -99,7 +109,7 @@ export class HookEventWatcher {
       // not new stalls. Measured once, here, like JsonlTail's startAtEnd.
       try {
         for (const f of readdirSync(this.dir))
-          if (f.endsWith('.jsonl')) this.offsets.set(path.join(this.dir, f), statSync(path.join(this.dir, f)).size)
+          if (this.reads(f)) this.offsets.set(path.join(this.dir, f), statSync(path.join(this.dir, f)).size)
       } catch (err) {
         this.log(`hook watcher could not read ${this.dir} at start: ${String(err)}`)
       }
@@ -153,15 +163,19 @@ export class HookEventWatcher {
     let names: string[]
     try {
       names = await fs.readdir(this.dir)
+      this.sweepFailing = false
     } catch (err) {
       // The directory is recreated on every launch (StatusLineManager.init), so a miss here is a
-      // real oddity rather than a normal state — worth a line, not worth throwing over.
-      this.log(`hook sweep failed to read ${this.dir}: ${err instanceof Error ? err.message : String(err)}`)
+      // real oddity rather than a normal state — worth a line, not worth throwing over. One line while it
+      // lasts: a Host that spawns nothing itself may have no such folder at all, and the sweep runs every
+      // 10 s (observe mode final review).
+      if (!this.sweepFailing) this.log(`hook sweep failed to read ${this.dir}: ${err instanceof Error ? err.message : String(err)}`)
+      this.sweepFailing = true
       return
     }
     // Sequential on purpose: opening every session's file at once buys nothing on a path that is
     // already the slow fallback, and keeps the sweep from competing with the session doing the work.
-    for (const name of names) if (name.endsWith('.jsonl')) await this.drain(path.join(this.dir, name))
+    for (const name of names) if (this.reads(name)) await this.drain(path.join(this.dir, name))
   }
 
   /** positional-reads only the newly appended bytes, then parses and calls cb for complete lines only. Anything after
@@ -170,6 +184,7 @@ export class HookEventWatcher {
    *  long sessions. The offset only advances to the last \n (0x0A, a single byte) in the buffer, which makes it safe on
    *  multi-byte (e.g. Korean) character boundaries. */
   async drain(filePath: string): Promise<void> {
+    if (!this.reads(path.basename(filePath))) return
     if (this.draining.has(filePath)) {
       this.pending.add(filePath)
       return
@@ -194,7 +209,7 @@ export class HookEventWatcher {
       const lastNlByte = buffer.lastIndexOf(0x0a) // '\n' — a single byte, so multi-byte boundaries stay safe
       if (lastNlByte === -1) return // No complete line — the offset does not advance, deferred to the next call
       this.offsets.set(filePath, start + lastNlByte + 1)
-      const sessionId = path.basename(filePath, '.jsonl')
+      const sessionId = path.basename(filePath, this.opts.audit === true ? AUDIT_HOOK_EVENTS : '.jsonl')
       // lastNlByte points at a \n, so the subarray ends on a complete UTF-8 boundary
       for (const line of buffer.subarray(0, lastNlByte).toString('utf8').split('\n')) {
         const t = line.trim()

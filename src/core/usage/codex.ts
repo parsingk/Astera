@@ -1,4 +1,4 @@
-import type { RateLimitWindow, SessionUsage } from '../types'
+import type { RateLimitWindow, SessionUsage, TokensSpent } from '../types'
 import type { CodexLimitState, CodexWindow } from '../rolling/codexSignal'
 
 // Maps a codex rollout's token_count records to SessionUsage — the codex counterpart of
@@ -122,6 +122,68 @@ export function contextFromLines(
     if (c) out = c
   }
   return out
+}
+
+/** `payload.info.total_token_usage` and `last_token_usage` of a token_count line with its time, or null. */
+function countedOf(raw: string): { at: string; total: { input: number; output: number }; last: { input: number; output: number } | null } | null {
+  let obj: unknown
+  try {
+    obj = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  const o = obj as { timestamp?: unknown; payload?: { type?: unknown; info?: unknown } } | null
+  const info = o?.payload?.type === 'token_count' ? (o.payload.info as { total_token_usage?: unknown; last_token_usage?: unknown } | null) : null
+  if (typeof o?.timestamp !== 'string' || !info || typeof info !== 'object') return null
+  const pair = (u: unknown): { input: number; output: number } | null => {
+    const v = u as { input_tokens?: unknown; output_tokens?: unknown } | null
+    const input = finite(v?.input_tokens)
+    const output = finite(v?.output_tokens)
+    return input === null || output === null ? null : { input, output }
+  }
+  const total = pair(info.total_token_usage)
+  return total ? { at: o.timestamp, total, last: pair(info.last_token_usage) } : null
+}
+
+/** The tokens a Codex session spent, one response at a time, off its rollout's token_count lines (observe mode
+ *  design §10), as many batches as it is handed.
+ *
+ *  total_token_usage is the conversation's running total, not the session's: a resumed or forked conversation starts
+ *  from the total its rollout already holds (codex-rs 0.160 `last_token_info_from_rollout`, on resume and on fork), so
+ *  a roll's new session carries the old one's figure on. What this session spent is therefore what the total grew by
+ *  since the session started: a line written before `since` (epoch ms) is where it starts from. When the read began
+ *  past every such line (it starts near the end of a long rollout), the first line's own response is the step: the
+ *  rollout writes one token_count per response, so its total less its `last_token_usage` is the total before it
+ *  (1094 of 1096 measured pairs; the other two repeated a total, which adds nothing here).
+ *
+ *  `input` is input_tokens, the cached ones inside it; `output` is output_tokens, reasoning inside it. A line without
+ *  `info` (the credit balance written at a limit) carries nothing. Only growth past the highest total seen counts, so
+ *  lines met again (a file made again and read anew) count nothing twice. */
+export function codexTokenReader(since: number): (lines: readonly string[]) => TokensSpent[] {
+  /** The highest running total seen: where this session's next growth is measured from. */
+  let high: { input: number; output: number } | null = null
+  const raise = (t: { input: number; output: number }): void => {
+    high = high ? { input: Math.max(high.input, t.input), output: Math.max(high.output, t.output) } : t
+  }
+  return (lines) => {
+    const out: TokensSpent[] = []
+    for (const raw of lines) {
+      if (!raw.includes('"token_count"')) continue
+      const c = countedOf(raw)
+      if (!c) continue
+      if (!(Date.parse(c.at) >= since)) {
+        raise(c.total)
+        continue
+      }
+      const from: { input: number; output: number } = high ?? (c.last ? { input: c.total.input - c.last.input, output: c.total.output - c.last.output } : c.total)
+      const input = Math.max(0, c.total.input - from.input)
+      const output = Math.max(0, c.total.output - from.output)
+      raise(c.total)
+      if (input + output === 0) continue
+      out.push({ at: c.at, input, output })
+    }
+    return out
+  }
 }
 
 /** Assembles what the usage chips read. null when not one of the three values is known — the same

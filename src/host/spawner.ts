@@ -52,7 +52,7 @@ import type { PtyRegistry } from './registry'
 import type { HostRollSpawner, RollSpawnOpts } from './rolling'
 import type { HostWorktrees } from './worktrees'
 import { createCapabilityCache, type CapabilityCache } from '../core/extensions/capabilityCache'
-import { readControlPlanePolicyMode } from '../core/settings/controlPlanePolicyMode'
+import { readPolicyMode } from '../core/audit/policy'
 import { hidingLog } from '../core/extensions/secrets'
 import { setBounded } from '../core/bounded'
 import { dispatchLookup } from '../core/orchestration/dispatchIndex'
@@ -355,11 +355,13 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     profileDir,
     homeDir,
     platform,
-    policyMode: () => readControlPlanePolicyMode(settingsPath),
+    policyMode: () => readPolicyMode(profileDir),
     ...(d.gatewayPort ? { gatewayPort: d.gatewayPort } : {}),
     log: hidingLog(profileDir, log)
   })
   sessions.capabilities = capabilities
+  // Observe mode: an observed Claude session's hook settings, written by its prepare (StatusLineManager.ensureObserveFiles)
+  sessions.observeHooks = () => statusLine.ensureObserveFiles()
   sessions.onExit = (e) => {
     sessions.forget(e.sessionId)
   }

@@ -38,8 +38,10 @@ import type { EventType } from './types.js'
 
 const JOB = [...JOB_FIELDS, ...DERIVED_FIELDS]
 /** Derived like DERIVED_FIELDS, by `runs get` alone and only when above zero: how many of the Run's Tasks have a
- *  worker showing a permission prompt. `github` is derived for a GitHub lifecycle Job's Run on every read. */
-const RUN = [...RUN_FIELDS, ...DERIVED_FIELDS, 'waitingForApproval', 'github']
+ *  worker showing a permission prompt. `github` is derived for a GitHub lifecycle Job's Run on every read. `tokens` and
+ *  `coordinatorTokens`, by `runs get` alone too and only when known: what its Tasks' sessions and its coordinator's
+ *  spent. */
+const RUN = [...RUN_FIELDS, ...DERIVED_FIELDS, 'waitingForApproval', 'github', 'tokens', 'coordinatorTokens']
 /** `tasks list --brief` adds the mark of where it cut a spec. A Task has no such field, so it is allowed here by
  *  name: left off this list, `--brief` would silently lose the mark. */
 const TASK = [...TASK_FIELDS, 'spec_truncated']

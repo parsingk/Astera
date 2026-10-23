@@ -8,6 +8,14 @@ import childProcess from 'node:child_process'
 import { createPluginManager } from './plugins/manager'
 import { createHostExtensions } from './extensions/commands'
 import { agentProfileInUse, createHostAgentProfiles } from './agentProfiles/commands'
+import { createHostPolicies } from './audit/policyCommands'
+import { createHostAudit } from './audit/auditCommands'
+import { createAuditRecorder, dispatchOfSession, registrySessionFacts } from './audit/recorder'
+import { createAuditSources } from './audit/sources'
+import { openTokenStore } from './tokens/store'
+import { createTokenSources, tokenOwnerOf } from './tokens/sources'
+import { readAuditPolicy } from '../core/audit/policy'
+import { keepPruning } from '../core/audit/store'
 import { createGatewayHub } from './gateway/hub'
 import { hidingLog } from '../core/extensions/secrets'
 import { sweepGeneratedMcp } from '../core/extensions/resolve'
@@ -268,6 +276,10 @@ async function main(): Promise<void> {
     rollingWiring?.dispose()
     // The session events stop with the rolling that feeds them. Never throws.
     sessionEvents?.dispose()
+    // So do observe mode's sources; what they handed over is flushed below. Never throws.
+    auditSources.dispose()
+    // And the token sources; what they handed over is saved below. Never throws.
+    tokenSources.dispose()
     // The work units' watchers and their sync timer stop with them. Never throws.
     hostWorkUnits?.dispose()
     // The MCP HTTP entrance stops with the Host (MCP HTTP §3): its stdin ends, which is its way out, and
@@ -333,6 +345,10 @@ async function main(): Promise<void> {
           // log's own flush below so a stuck disk cannot hold the way out. Never rejects.
           await disposeWithin(eventLog.flushed(), LEAVE_LOG_FLUSH_CAP_MS, () => {})
           eventLog.close()
+          // And observe mode's records still on their way to the disk, capped the same way. Never rejects.
+          await disposeWithin(auditRecorder.flushed(), LEAVE_LOG_FLUSH_CAP_MS, () => {})
+          // And the tokens read since the last save, capped the same way. Never rejects.
+          await disposeWithin(tokenStore.save(), LEAVE_LOG_FLUSH_CAP_MS, () => {})
           registry.killAll()
           procs.killAll()
           // Every buffered log line on disk before the exits below are armed (stage 3, task 3). First the
@@ -405,6 +421,11 @@ async function main(): Promise<void> {
   // so a cursor outlives the Host that gave it. Only read before the bind; commits, which write it, come after.
   const eventLog = createHostEventLog({ dir: path.join(profileDir, 'orch'), bootId, now: () => new Date().toISOString(), log: (m) => log.write(m) })
   await eventLog.load()
+
+  // What each session spent for a Dispatch or a Run's coordinator (observe mode design §10): <profile>/token-totals.json,
+  // read once here beside the event log; written by the token sources (made below) and pruned with the Runs once the
+  // orch (made below too) has the state in memory.
+  const tokenStore = await openTokenStore({ profileDir, state: () => (orch.loaded() ? orch.state() : null), log: (m) => log.write(m) })
 
   // How It Works (E1 §2, §3): this Host writes understanding.json while every attached app yields it, or
   // none is attached, read per write. Loaded at start whether or not it writes now, so a record a dead
@@ -494,6 +515,43 @@ async function main(): Promise<void> {
         journal: hostJournal
       })
     : null
+
+  // Observe mode's recorder (observe mode design §5, §8): the sources hand it the tool calls a session finished, and it
+  // keeps them under <profile>/audit while the mode is observe, touching nothing in compatibility. Made above the
+  // rolling, whose hook tap is one of its sources. A session is read from the two registries' notes and its Dispatch
+  // from the state as the orch holds it (made below, before any source can call), never loaded for this: a Host that
+  // has not loaded has placed none. The mode is read through readAuditPolicy, which throws on a file it cannot read
+  // cleanly, so the recorder keeps only a clean read (a missing file is compatibility); the copy of a damaged one is
+  // the policies commands' to keep.
+  const auditRecorder = createAuditRecorder({
+    profileDir,
+    mode: async () => (await readAuditPolicy(profileDir, { keepDamaged: false }))?.mode ?? 'compatibility',
+    sessionInfo: registrySessionFacts({ ptys: registry, procs }),
+    dispatchOf: (sessionId, at) => dispatchOfSession(orch.state(), sessionId, at),
+    log: (m) => log.write(m)
+  })
+  // Its sources (audit/sources.ts): the observed Claude sessions' audit files in hook-events (their own watcher, apart
+  // from the rolling's), the chat processes' lines and the Codex rollouts the pty notes name, followed for the sessions
+  // started observed. Before any pty or process opens, so every session's start is heard.
+  const auditSources = createAuditSources({
+    recorder: auditRecorder,
+    ptys: registry,
+    procs,
+    hookEventsDir: hookEventsDirIn(profileDir),
+    log: (m) => log.write(m)
+  })
+  // The tokens each session spent (observe mode design §10), in every mode: read from the transcripts, rollouts and
+  // chat lines the providers already write, kept per session for the Dispatch or Run it worked for (whom from the
+  // state as the orch holds it, made below), in the token store opened above. Before any pty or process opens, so every
+  // session's start is heard; `runs get` and `tasks-get` total them.
+  const tokenSources = createTokenSources({
+    store: tokenStore,
+    ptys: registry,
+    procs,
+    statusLinePayload: (sid) => (spawner ? spawner.statusLinePayload(sid) : Promise.resolve(null)),
+    ownerOf: (sessionId, at, last) => tokenOwnerOf(orch.state(), sessionId, at, last),
+    log: (m) => log.write(m)
+  })
 
   /** Declared above the rolling (the S6 final review M3 lesson): Task 6 has the rolling's events reach it,
    *  and a `const` below would be in its temporal dead zone. Null without a spawner or without the SDK. */
@@ -771,6 +829,11 @@ async function main(): Promise<void> {
   const touchAgentProfile = (id: string): void => {
     void agentProfiles.command({ cmd: 'agent-profiles-touch', args: { id }, role: 'app', marks: { effects: 0 } }).catch((e) => log.write(`agent profile ${id}: its use could not be stamped: ${String(e)}`))
   }
+  // Observe mode's rules and mode (observe mode design §7, ruling M1): audit-policy.json, which this Host alone writes. A
+  // change tells the recorder, which reads the mode again at its next call
+  const policies = createHostPolicies({ profileDir, onChange: () => auditRecorder.invalidate() })
+  // And the records read back with the decisions those rules give them now (design §8)
+  const audit = createHostAudit({ profileDir })
   const orch = createHostOrch({
     profileDir,
     version: hostVersion,
@@ -778,10 +841,14 @@ async function main(): Promise<void> {
     plugins,
     extensions,
     agentProfiles,
+    policies,
+    audit,
     // The job-source plugins a person makes Jobs from (plugin Phase 4 J10), asked through the runtime
     jobSources: hostJobSources({ manager: plugins, runtime: pluginRuntime }),
     // The completion check plugins a Task's checks ask (plugin Phase 5 C8), through the same runtime
     completionChecks: hostCompletionChecks({ manager: plugins, runtime: pluginRuntime }),
+    // What the sessions spent, for `runs get` and `tasks-get` (observe mode design §10)
+    spentTokens: () => tokenStore.spent(),
     now: () => new Date().toISOString(),
     // The handshake's own string, not a second one taken here: `requests show` answers with it so a
     // caller can tell "this Host never saw my request" from "it never arrived" (request receipts
@@ -1185,6 +1252,10 @@ async function main(): Promise<void> {
   void mcpGateway.sync().catch(() => null)
   // And the generated MCP files no session used for 30 days (a session in use touches its own at every spawn)
   void sweepGeneratedMcp(profileDir, 30 * 24 * 60 * 60 * 1000)
+  // And observe mode's records past 30 days or 50 MB (design §8): here at the start, then every hour on a timer that
+  // never keeps the Host alive, and by the writes between. Never rejects, and a profile that never observed has no folder
+  // to read.
+  keepPruning(profileDir, { log: (m) => log.write(m) })
 
   handlePty = attachPtyHost({ registry, broadcast: (m, to) => server.broadcast(m, to) })
   handleProc = attachProcHost({ registry: procs, broadcast: (m) => server.broadcast(m) })

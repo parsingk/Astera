@@ -27,11 +27,12 @@ export interface StatusLineSpawnInfo {
   outPath: string
   originalCommand: string | null
   hookOutPath?: string // per-session hook event file — injected as ASTERA_HOOK_OUT
+  observed?: true // the settings file is an observe variant (StatusLineManager.spawnConfig)
 }
 export type StatusLineProvider = (
   sessionId: string,
   account: Account,
-  opts?: { toolHooks?: boolean }
+  opts?: { toolHooks?: boolean; observe?: boolean }
 ) => StatusLineSpawnInfo | null
 
 /** Wait time for the safety net that keeps a pause from ever being permanent. The principle is "a
@@ -157,6 +158,10 @@ export class SessionManager {
   /** Shared extensions (Agent Control Plane release 1): refreshed by `prepare`, read by `spawn`. Unset: nothing is
    *  added, as before shared extensions existed. */
   capabilities?: CapabilitySource
+  /** Observe mode (observe mode design §4): puts the observe variants of the hook settings files in place
+   *  (StatusLineManager.ensureObserveFiles). `prepare` calls it when the mode its capabilities read is observe and the
+   *  session takes a statusLine; unset, nothing is written. */
+  observeHooks?: () => Promise<void>
   /** The Git Bash `prepare` found, per PATH string, and when — held here, not read back from the
    *  resolver's cache, so an entry that expires between a prepare and its spawn cannot send the spawn
    *  to the sync search. Trusted as long as a confirmed folder is. */
@@ -186,6 +191,14 @@ export class SessionManager {
     // The shared extensions this account's session gets (from its agent profile, when it has one), so the synchronous
     // spawn reads them ready
     await this.capabilities?.refresh(opts.account, opts.agentProfileId)
+    // Observe mode: the hook settings an observed session is pointed at, written before the spawn reads the mode the
+    // refresh just read. A failure leaves the session on the plain file (spawnConfig), never the spawn refused.
+    if (
+      this.observeHooks &&
+      descriptorOf(this.descriptors, opts.account).usesStatusLine &&
+      this.capabilities?.get(opts.account, opts.agentProfileId)?.context.policyMode === 'observe'
+    )
+      await this.observeHooks().catch((err) => this.checks.log(`observe hook settings could not be written: ${String(err)}`))
     // The CLI on PATH and codex's --no-daemon, so the spawn's command builder finds both (second pass M2-1, M2-2).
     await descriptorOf(this.descriptors, opts.account)
       .prepare?.()
@@ -279,12 +292,20 @@ export class SessionManager {
     // that only rolls is a separate decision; the condition is left as it was.
     // SlackNotifier.register gates separately on info.slackNotify, so Slack traffic does not grow.
     const wantToolHooks = opts.slackNotify === true || (opts.rollAccountIds?.length ?? 0) >= 1
+    const caps = this.capabilities?.get(opts.account, opts.agentProfileId) ?? null
+    // Observe mode (observe mode design §4): the mode the prepare read is this session's for life. Observed, a Claude
+    // session gets the hook settings that capture every tool call, and the note says so, which is what the Host's
+    // recorder asks before it keeps a call of this session from any source (Review Focus 1). A Claude session is marked
+    // only when it was given those settings (they may not have been written); a Codex one has none to be given. In
+    // compatibility the provider is asked exactly as before and the note carries no mark.
+    const observe = caps?.context.policyMode === 'observe'
     const sl = d.usesStatusLine
-      ? (this.statusLineProvider?.(id, opts.account, { toolHooks: wantToolHooks }) ?? null)
+      ? (this.statusLineProvider?.(id, opts.account, observe ? { toolHooks: wantToolHooks, observe: true } : { toolHooks: wantToolHooks }) ??
+        null)
       : null
+    const observed = observe && (d.usesStatusLine ? sl?.observed === true : true)
     const env = this.envFor(opts.account)
     // Shared extensions: their environment values only here, in this process's environment (design D5)
-    const caps = this.capabilities?.get(opts.account, opts.agentProfileId) ?? null
     if (caps) Object.assign(env, caps.env, gatewayTokenEnv(caps))
     // What Astera offers, told to a codex session as it starts. A Claude session gets the same lines from
     // the SessionStart hook in `sl`'s settings file; codex runs no hook nobody has trusted, so it gets
@@ -389,7 +410,8 @@ export class SessionManager {
           ...(opts.slackNotify !== undefined ? { slackNotify: opts.slackNotify } : {}),
           ...(opts.bypassPermissions !== undefined ? { bypassPermissions: opts.bypassPermissions } : {}),
           ...(opts.startedBy ? { startedBy: opts.startedBy } : {}),
-          ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {})
+          ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {}),
+          ...(observed ? { observed: true } : {})
         }
       }
     })

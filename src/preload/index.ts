@@ -387,6 +387,22 @@ const api = {
     restore: invoke('agentProfiles.restore'),
     remove: invoke('agentProfiles.remove')
   },
+  // Settings › Security & Access and Run detail's token totals (observe mode design §11): the Host's observe rules,
+  // records and tokens, through main's route
+  audit: {
+    policies: invoke('audit.policies'),
+    setMode: invoke('audit.setMode'),
+    setOtherwise: invoke('audit.setOtherwise'),
+    addRule: invoke('audit.addRule'),
+    editRule: invoke('audit.editRule'),
+    removeRule: invoke('audit.removeRule'),
+    moveRule: invoke('audit.moveRule'),
+    resetRules: invoke('audit.resetRules'),
+    list: invoke('audit.list'),
+    summary: invoke('audit.summary'),
+    runTokens: invoke('audit.runTokens'),
+    taskTokens: invoke('audit.taskTokens')
+  },
   // The Jobs view's "+ From a source" (plugin Phase 4c): the Host's job sources, through main's sources route
   sources: {
     list: invoke('sources.list'),

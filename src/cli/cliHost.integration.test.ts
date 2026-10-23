@@ -32,6 +32,10 @@ import { ensureHostKey, hostProof } from '../core/host/hostKey'
 import { createHostOrch, type HostOrch } from '../host/orch'
 import { createPluginManager } from '../host/plugins/manager'
 import { createHostAgentProfiles } from '../host/agentProfiles/commands'
+import { createHostPolicies } from '../host/audit/policyCommands'
+import { createHostAudit } from '../host/audit/auditCommands'
+import { appendRecords, type AuditRecord } from '../core/audit/store'
+import { STARTER_POLICY, type AuditPolicy } from '../core/audit/policy'
 import { createHostJournal } from '../host/hostJournal'
 import { JournalReader } from '../core/continuity/journalReader'
 import type { JournalEventRow } from '../core/continuity/journal'
@@ -659,6 +663,9 @@ async function hostRig(
       inUse: async () => false,
       log
     }),
+    // Observe mode's rules and records as index.ts keeps them: audit-policy.json and audit/ under the profile
+    policies: createHostPolicies({ profileDir }),
+    audit: createHostAudit({ profileDir }),
     now: () => new Date().toISOString(),
     hostStartedAt: () => serverOf().startedAt,
     runningSessions: () => registry.liveCount() + procs.liveCount(),
@@ -1193,6 +1200,143 @@ describe('the public CLI against a real Host (§48, §49)', { timeout: 60_000 },
     expect(okData(await astera(['agent-profiles', 'restore', '--id', id], h.env), 'agent-profiles restore')).toMatchObject({ status: 'active' })
     expect(okData(await astera(['agent-profiles', 'delete', '--id', 'Critic'], h.env), 'agent-profiles delete')).toEqual({ id, name: 'Critic', deleted: true })
     expect((await astera(['agent-profiles', 'show', '--id', id], h.env)).code).toBe(4)
+  })
+
+  // Observe mode design §12 (Task 7): the records read back with the decision the rules in force give them, page by page;
+  // an agent's shell may not read them.
+  it('audit list and summary read the records by decision, profile and page, and an agent shell is refused them', async () => {
+    const h = await hostRig({ repo: false })
+    const profile = okData(await astera(['agent-profiles', 'create', '--name', 'Reviewer', '--account', h.accountId], h.env), 'agent-profiles create')
+    const base = Date.now() - 60_000
+    const rec = (i: number, over: Partial<AuditRecord> = {}): AuditRecord => ({
+      id: `au_${String(i).padStart(4, '0')}`,
+      at: new Date(base + i * 1000).toISOString(),
+      sessionId: 'sess_a',
+      provider: 'claude',
+      kind: 'terminal',
+      accountId: h.accountId,
+      source: 'claude-hook',
+      providerTool: 'Bash',
+      action: 'git.remote.write',
+      target: 'git push',
+      confidence: 'high',
+      status: 'ok',
+      ...over
+    })
+    // Under the starter rules (no rules file yet): a push would be denied, a read inside allowed, an unread line unknown
+    await appendRecords(h.profileDir, [
+      rec(1),
+      rec(2, { action: 'filesystem.read', target: 'src/a.ts', insideProject: true, confidence: 'exact', providerTool: 'Read' }),
+      rec(3, { agentProfileId: profile.id as string }),
+      rec(4, { action: 'process.execute', target: 'foo', confidence: 'unknown' }),
+      rec(5, { sessionId: 'sess_b' })
+    ])
+    type Listed = { records: Array<{ id: string; decision: string; ruleId?: string }>; truncated: boolean; next: { until: string; beforeId: string } | null }
+    const list = async (argv: string[], what: string): Promise<Listed> => okData(await astera(['audit', 'list', ...argv], h.env), what) as unknown as Listed
+
+    const denied = await list(['--decision', 'would-deny'], 'audit list --decision would-deny')
+    expect(denied.records.map((r) => [r.id, r.decision, r.ruleId])).toEqual([
+      ['au_0005', 'would-deny', 'starter-git-remote-write'],
+      ['au_0003', 'would-deny', 'starter-git-remote-write'],
+      ['au_0001', 'would-deny', 'starter-git-remote-write']
+    ])
+    expect((await list(['--agent-profile', 'Reviewer'], 'audit list --agent-profile')).records.map((r) => r.id)).toEqual(['au_0003'])
+    expect((await list(['--session', 'sess_b'], 'audit list --session')).records.map((r) => r.id)).toEqual(['au_0005'])
+    expect((await astera(['audit', 'list', '--agent-profile', 'Nobody'], h.env)).code).toBe(4)
+
+    // Two at a time: each page's `next` is the --until and --before-id of the one after it, and the last has none
+    const pages: string[][] = []
+    let page = await list(['--limit', '2'], 'audit list page 1')
+    pages.push(page.records.map((r) => r.id))
+    while (page.next !== null) {
+      expect(page.truncated).toBe(true)
+      page = await list(['--limit', '2', '--until', page.next.until, '--before-id', page.next.beforeId], `audit list page ${pages.length + 1}`)
+      pages.push(page.records.map((r) => r.id))
+    }
+    expect(pages).toEqual([['au_0005', 'au_0004'], ['au_0003', 'au_0002'], ['au_0001']])
+    expect(page.truncated).toBe(false)
+
+    expect(okData(await astera(['audit', 'summary'], h.env), 'audit summary')).toEqual({
+      allow: 1,
+      wouldDeny: 3,
+      unknown: 1,
+      byAction: {
+        'git.remote.write': { allow: 0, wouldDeny: 3, unknown: 0 },
+        'filesystem.read': { allow: 1, wouldDeny: 0, unknown: 0 },
+        'process.execute': { allow: 0, wouldDeny: 0, unknown: 1 }
+      },
+      stoppedAtLimit: false
+    })
+
+    // A rule edit changes what the past would have been
+    okData(await astera(['policies', 'rules-add', '--effect', 'allow', '--action', 'git.remote.write', '--at', '0'], h.env), 'policies rules-add')
+    expect((await list(['--decision', 'would-deny'], 'audit list after the edit')).records).toEqual([])
+
+    // The log of an agent's calls stays away from agents: both reads are refused to an agent's shell
+    const agent = { ...h.env, ASTERA_SESSION: 'sess_agent' }
+    for (const argv of [['audit', 'list'], ['audit', 'summary'], ['audit', 'list', '--agent-profile', 'Reviewer']]) {
+      const refused = await astera(argv, agent)
+      expect(refused.code, `${argv.join(' ')} → ${refused.stdout}`).toBe(5)
+      expect(refused.envelope.error?.code).toBe('PERMISSION_DENIED')
+    }
+  })
+
+  // Observe mode design §7, §12 (Task 7): the switch and the rules from a person's CLI; never from an agent's shell.
+  it('policies set-mode observe writes the starter rules that policies show reads; the rules change from the CLI and not from an agent shell', async () => {
+    const h = await hostRig({ repo: false })
+    const file = path.join(h.profileDir, 'audit-policy.json')
+    type Shown = { mode: string; policy: AuditPolicy; rule?: { id: string }; coverage?: unknown[] }
+    const policies = async (argv: string[]): Promise<Shown> => okData(await astera(['policies', ...argv], h.env), `policies ${argv.join(' ')}`) as unknown as Shown
+    const starterIds = STARTER_POLICY.rules.map((r) => r.id)
+
+    // Before observe is first turned on, the starter rules are shown and nothing is written
+    expect(await policies(['show'])).toMatchObject({ mode: 'compatibility', policy: { rules: STARTER_POLICY.rules, otherwise: 'allow' } })
+    expect(existsSync(file)).toBe(false)
+
+    expect((await policies(['set-mode', '--mode', 'observe'])).mode).toBe('observe')
+    const shown = await policies(['show'])
+    expect(shown.mode).toBe('observe')
+    expect(shown.policy.rules.map((r) => r.id)).toEqual(starterIds)
+    expect(shown.coverage).toHaveLength(4)
+    expect(existsSync(file)).toBe(true)
+
+    // Added at the top, moved to the end, scoped, unscoped, and the otherwise turned to deny
+    const added = await policies(['rules-add', '--effect', 'allow', '--action', 'git.*', '--at', '0'])
+    const id = added.rule!.id
+    expect(added.policy.rules[0]).toEqual({ id, effect: 'allow', action: 'git.*' })
+    expect((await policies(['rules-move', '--id', id, '--to', String(starterIds.length)])).policy.rules.map((r) => r.id)).toEqual([...starterIds, id])
+    expect((await policies(['rules-edit', '--id', id, '--scope', 'inside-project'])).rule).toEqual({ id, effect: 'allow', action: 'git.*', scope: 'inside-project' })
+    expect((await policies(['rules-edit', '--id', id, '--clear-scope', '--effect', 'deny'])).rule).toEqual({ id, effect: 'deny', action: 'git.*' })
+    expect((await policies(['set-otherwise', '--effect', 'deny'])).policy.otherwise).toBe('deny')
+
+    // A rule that is not there is 4, pointing at the list; a mode Astera does not offer is 2
+    const missing = await astera(['policies', 'rules-remove', '--id', 'ar_nope'], h.env)
+    expect(missing.code, missing.stdout).toBe(4)
+    expect(missing.envelope.error?.nextSteps).toEqual(['astera policies show'])
+    expect((await astera(['policies', 'set-mode', '--mode', 'enforce'], h.env)).code).toBe(2)
+
+    // From an agent's shell every change is refused with 5 and the file is left as it was; reading the rules is not refused
+    const agent = { ...h.env, ASTERA_SESSION: 'sess_agent' }
+    const kept = await fs.readFile(file, 'utf8')
+    for (const argv of [
+      ['set-mode', '--mode', 'compatibility'],
+      ['set-otherwise', '--effect', 'allow'],
+      ['rules-add', '--effect', 'allow', '--action', 'mcp.call'],
+      ['rules-edit', '--id', id, '--effect', 'allow'],
+      ['rules-remove', '--id', id],
+      ['rules-move', '--id', id, '--to', '0'],
+      ['rules-reset']
+    ]) {
+      const refused = await astera(['policies', ...argv], agent)
+      expect(refused.code, `policies ${argv.join(' ')} → ${refused.stdout}`).toBe(5)
+      expect(refused.envelope.error?.code).toBe('PERMISSION_DENIED')
+    }
+    expect(await fs.readFile(file, 'utf8')).toBe(kept)
+    expect((await astera(['policies', 'show'], agent)).code).toBe(0)
+
+    // Removed, then the starter rules and their otherwise back; the mode stays the person's
+    expect((await policies(['rules-remove', '--id', id])).policy.rules.map((r) => r.id)).toEqual(starterIds)
+    expect(await policies(['rules-reset'])).toMatchObject({ mode: 'observe', policy: { rules: STARTER_POLICY.rules, otherwise: 'allow' } })
   })
 
   // Plugins 2c (spec §23-§24): a setting set from the CLI, a secret one never shown back.

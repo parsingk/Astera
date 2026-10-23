@@ -12,6 +12,7 @@ import { createJob, createTask, emptyState, openDispatch, startJobRun, type Orch
 import { SessionManager } from '../core/sessions/manager'
 import { writeExtensionRegistry } from '../core/extensions/registry'
 import { writeAgentProfiles } from '../core/agentProfiles/store'
+import { STARTER_POLICY, writeAuditPolicy } from '../core/audit/policy'
 import type { AgentProfile } from '../core/agentProfiles/types'
 import { StatusLineManager } from '../core/sessions/statusline'
 import { makeDescriptors } from '../core/providers/descriptor'
@@ -737,6 +738,18 @@ describe('the roll spawn (S6 R5, R6)', () => {
     const last = h.spawned[h.spawned.length - 1]
     const cmd = Array.isArray(last.args) ? last.args.join(' ') : last.args
     expect(cmd).toContain('--mcp-config')
+  })
+  // Observe mode (ruling M1): the mode sessions start in is the one the Host keeps in audit-policy.json, read at every
+  // refresh; the app-settings key it replaced is not read
+  it('resolves the policy mode from audit-policy.json, not from app-settings.json', async () => {
+    const h = await spawnerRig()
+    const account = h.accounts[0]
+    await fs.writeFile(path.join(h.profileDir, 'app-settings.json'), JSON.stringify({ controlPlanePolicyMode: 'observe' }))
+    await h.spawner.capabilities!.refresh(account)
+    expect(h.spawner.capabilities!.get(account)?.context.policyMode).toBe('compatibility')
+    await writeAuditPolicy(h.profileDir, { ...STARTER_POLICY, mode: 'observe' })
+    await h.spawner.capabilities!.refresh(account)
+    expect(h.spawner.capabilities!.get(account)?.context.policyMode).toBe('observe')
   })
   // Agent Profiles design §7: a roll keeps the session's profile, so the account it rolls onto gets that profile's
   // servers (its prepare resolves them with the profile) and the new session's info and note keep the id

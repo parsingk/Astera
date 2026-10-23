@@ -13,6 +13,13 @@ describe('mcpRefusal', () => {
     for (const cmd of ['agent-profiles-create', 'agent-profiles-update', 'agent-profiles-archive', 'agent-profiles-restore', 'agent-profiles-delete', 'agent-profiles-touch'])
       for (const access of ['read', 'control'] as const) expect(mcpRefusal(cmd, access, true, true)?.status, cmd).toBe(403)
   })
+  // Observe mode design §3, §12: the audit log stays away from agents, and the rules change from the app and the CLI only
+  it('never lists an audit or policies command, and refuses each at every access level', () => {
+    const listed = [...MCP_READ_COMMANDS, ...MCP_CONTROL_COMMANDS, ...MCP_SESSION_READ_COMMANDS, ...MCP_SESSION_WRITE_COMMANDS, ...MCP_GITHUB_WRITE_COMMANDS]
+    for (const cmd of listed) expect(cmd).not.toMatch(/^(?:audit|policies)-/)
+    for (const cmd of ['audit-list', 'audit-summary', 'policies-show', 'policies-set-mode', 'policies-set-otherwise', 'policies-rules-add', 'policies-rules-edit', 'policies-rules-remove', 'policies-rules-move', 'policies-rules-reset'])
+      for (const access of ['read', 'control'] as const) expect(mcpRefusal(cmd, access, true, true)?.status, cmd).toBe(403)
+  })
   it('off refuses every command and names the setting', () => {
     const r = mcpRefusal('jobs-list', 'off', false, false)
     expect(r?.status).toBe(403)

@@ -43,6 +43,7 @@ import type {
 } from './chat/types'
 import type { ThemeId } from './theme/themes'
 import type { ProfilePermission } from './agentProfiles/types'
+import type { AuditDecision, AuditMode, AuditRule } from './audit/types'
 import type { ConvTurn } from './history/convTypes'
 export type { ConvTurn } from './history/convTypes'
 // The Jobs sidebar shows a Task's status, so the orchestration domain's own enum comes in here. Only
@@ -385,6 +386,24 @@ export interface SessionUsage {
   context: { usedPercent: number; usedTokens: number | null; windowSize: number | null } | null
   session: RateLimitWindow | null // the 5-hour window
   weekly: RateLimitWindow | null // the weekly (7-day) window
+}
+
+/** What one API response of a session spent, off the lines its provider writes (core/usage/claudeTokens.ts,
+ *  core/usage/codex.ts): `input` counts every input token the model read, cached ones included, so a Claude figure
+ *  and a Codex one mean the same thing. `at` is when the provider wrote it, null for a line that carries no time. */
+export interface TokensSpent {
+  at: string | null
+  input: number
+  output: number
+}
+
+/** The tokens a Task's or a Run's sessions used, as `runs get` and `tasks-get` give them (observe mode design §10), and
+ *  through those MCP's get_run and get_task, the SDK's runs.get and tasks.get and Run detail in the app. `total` is
+ *  `input + output`. Absent where nothing was read, never zeros: cost in money is not known. */
+export interface TokenTotals {
+  input: number
+  output: number
+  total: number
 }
 
 /** Rolling progress (main to renderer, for the banner both views wear — the terminal and the chat pane) */
@@ -1978,6 +1997,42 @@ export interface AgentProfilesApi {
   remove(id: string): Promise<PluginsCallAnswer>
 }
 
+/** What Audit Logs asks for (observe mode design §8, §11): audit-list's and audit-summary's filters, the period's start,
+ *  and the next page's cursor as audit-list's `next` gives it. */
+export interface AuditQuery {
+  sessionId?: string
+  agentProfileId?: string
+  jobId?: string
+  runId?: string
+  decision?: AuditDecision
+  /** An action, or the start of one ending in `*`. */
+  action?: string
+  since?: string
+  until?: string
+  beforeId?: string
+}
+
+/** Settings › Security & Access and Run detail (observe mode design §11): the Host's `policies-*` and `audit-*`
+ *  commands, as the app, and its `runs-get` and `tasks-get` for the token totals, which only the Host's token store
+ *  answers (main's own command layer has none). A damaged rules file answers every read and change with CONFLICT;
+ *  `resetRules` is its repair. */
+export interface AuditApi {
+  policies(): Promise<PluginsCallAnswer>
+  setMode(mode: AuditMode): Promise<PluginsCallAnswer>
+  setOtherwise(otherwise: 'allow' | 'deny'): Promise<PluginsCallAnswer>
+  addRule(rule: Omit<AuditRule, 'id'>): Promise<PluginsCallAnswer>
+  /** `scope: null` clears it: the rule then applies wherever the call was. */
+  editRule(id: string, changes: { effect?: AuditRule['effect']; action?: string; scope?: AuditRule['scope'] | null }): Promise<PluginsCallAnswer>
+  removeRule(id: string): Promise<PluginsCallAnswer>
+  /** `to` is the rule's new place, counted from 0. */
+  moveRule(id: string, to: number): Promise<PluginsCallAnswer>
+  resetRules(): Promise<PluginsCallAnswer>
+  list(q: AuditQuery & { limit?: number }): Promise<PluginsCallAnswer>
+  summary(q: AuditQuery): Promise<PluginsCallAnswer>
+  runTokens(runId: string): Promise<PluginsCallAnswer>
+  taskTokens(taskId: string): Promise<PluginsCallAnswer>
+}
+
 export interface RemoteApi {
   list(): Promise<RemoteRuntimeInfo[]>
   /** Pairs from the string `astera runtime pair` printed on the Runtime. The token is kept in main, never returned. */
@@ -2120,6 +2175,8 @@ export type RendererApi = CoreApi & {
   extensions: ExtensionsApi
   /** Settings › Agent profiles and the profile pickers: the Host's agent profiles, as the app. */
   agentProfiles: AgentProfilesApi
+  /** Settings › Security & Access and Run detail's token totals: the Host's observe rules, records and tokens, as the app. */
+  audit: AuditApi
   /** The Jobs view's "+ From a source" (plugin Phase 4c): the Host's job sources, as the app. */
   sources: SourcesApi
   remoteSessions: RemoteSessionsApi

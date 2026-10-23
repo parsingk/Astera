@@ -46,7 +46,7 @@ import type { ProcFactory } from '../core/sessions/proc'
 import type { BypassSignal } from '../core/sessions/retryBypass'
 import { detectBypassableManager } from './cliLocate'
 import { createCapabilityCache, type CapabilityCache } from '../core/extensions/capabilityCache'
-import { readControlPlanePolicyMode } from '../core/settings/controlPlanePolicyMode'
+import { readPolicyMode } from '../core/audit/policy'
 import { settingsImportCopiesCapabilities } from '../core/extensions/registry'
 import { hidingLog } from '../core/extensions/secrets'
 import { profileConversations, type ProfileConversations } from '../core/agentProfiles/conversations'
@@ -288,10 +288,12 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     profileDir: userDataDir,
     homeDir: os.homedir(),
     platform: process.platform,
-    policyMode: () => readControlPlanePolicyMode(path.join(userDataDir, 'app-settings.json')),
+    policyMode: () => readPolicyMode(userDataDir),
     log: hidingLog(userDataDir, sessionsLog)
   })
   sessions.capabilities = capabilities
+  // Observe mode: an observed Claude session's hook settings, written by its prepare (StatusLineManager.ensureObserveFiles)
+  sessions.observeHooks = () => statusLine.ensureObserveFiles()
   // The chat sessions. It is handed `procRouter.factory` rather than a factory chosen now, for exactly
   // the reason SessionManager is handed `ptyRouter.factory`: which one a spawn reaches is decided at
   // spawn time, once registerIpc has learned whether this Host speaks procs. `version` is the app's

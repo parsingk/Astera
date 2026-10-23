@@ -413,3 +413,24 @@ describe('parseArgs — the job-source commands', () => {
     expect(parseArgs(['sources'])).toEqual({ error: 'sources needs one of: list, items, show' })
   })
 })
+
+// Observe mode design §12: the parser takes one verb, so the rule edits are verbs of their own, named as the Host names them
+describe('parseArgs — audit and policies', () => {
+  it('parses them into the Host command names', () => {
+    expect(parseArgs(['audit', 'list', '--decision', 'would-deny', '--action', 'git.*', '--limit', '50', '--before-id', 'au_1'])).toMatchObject({
+      cmd: 'audit-list',
+      args: { decision: 'would-deny', action: 'git.*', limit: 50, beforeId: 'au_1' }
+    })
+    expect(parseArgs(['audit', 'summary', '--agent-profile', 'Reviewer'])).toMatchObject({ cmd: 'audit-summary', args: { agentProfile: 'Reviewer' } })
+    expect(parseArgs(['policies', 'set-mode', '--mode', 'observe'])).toMatchObject({ cmd: 'policies-set-mode', args: { mode: 'observe' } })
+    expect(parseArgs(['policies', 'rules-add', '--effect', 'deny', '--action', 'mcp.call', '--at', '0'])).toMatchObject({
+      cmd: 'policies-rules-add',
+      args: { effect: 'deny', action: 'mcp.call', at: '0' }
+    })
+    expect(parseArgs(['policies', 'rules-edit', '--id', 'ar_1', '--clear-scope'])).toMatchObject({ cmd: 'policies-rules-edit', args: { id: 'ar_1', clearScope: true } })
+    for (const verb of ['show', 'set-otherwise', 'rules-remove', 'rules-move', 'rules-reset']) expect(parseArgs(['policies', verb])).toMatchObject({ cmd: `policies-${verb}` })
+    expect(parseArgs(['audit'])).toEqual({ error: 'audit needs one of: list, summary' })
+    // Two words for a rule edit are refused with the verbs there are
+    expect(parseArgs(['policies', 'rules', 'add'])).toMatchObject({ error: expect.stringContaining('rules-add') })
+  })
+})

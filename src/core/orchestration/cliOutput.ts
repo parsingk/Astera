@@ -225,7 +225,14 @@ const LISTING: Record<string, readonly string[]> = {
   // **The Task or Dispatch a worker_done named** — the same two lines as `worker-*`, the first
   // giving the second its `<taskId>`. `send` is a worker's command, so neither line may be
   // coordinator-only, and neither is.
-  send: ['astera tasks list', 'astera dispatch-show --task <taskId>']
+  send: ['astera tasks list', 'astera dispatch-show --task <taskId>'],
+  // **Observe mode** (design §12): the records' only 404 is the profile `--agent-profile` names, and a rule edit's is the
+  // rule its `--id` names. The noun rule would offer `audit list` again, and `policies` has no `list`.
+  'audit-list': ['astera agent-profiles list'],
+  'audit-summary': ['astera agent-profiles list'],
+  'policies-rules-edit': ['astera policies show'],
+  'policies-rules-remove': ['astera policies show'],
+  'policies-rules-move': ['astera policies show']
 }
 
 /** 없는 id 를 말한 명령에게 줄 목록 명령들. */

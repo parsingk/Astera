@@ -9,7 +9,7 @@
 // knows whether a dependency is answered locally or across a socket, which is what lets the same
 // command layer run in both places.
 import { FOLLOW_WINDOW_MS, type AnsweredQuestion, type StopResult, type WaitEnding, type WaitTimeout } from '../publicContract'
-import { briefTask, jobView, latestRunOf, runView } from './publicViews'
+import { briefTask, jobView, latestRunOf, runTokensOf, runView, taskTokensOf, type SpentTokens } from './publicViews'
 import { lastByState } from './stateMemo'
 import { randomBytes } from 'node:crypto'
 import {
@@ -700,6 +700,10 @@ export interface OrchServerDeps {
    *  the app's goes through the Host (`plugins-list`, `checks-plugin-run`). Absent, nothing is refused early and a
    *  plugin check is an `error` that says so. */
   completionChecks?: CompletionChecksDeps
+  /** What each session spent for a Dispatch or a Run's coordinator (observe mode design §10), which `runs-get` and
+   *  `tasks-get` total. **Only the Host injects it**, from its token store (host/tokens/store.ts): it reads the sessions.
+   *  Absent, the two leave their token fields out. */
+  spentTokens?(): readonly SpentTokens[]
 }
 
 /** A plugin as the early refusal reads it (plugin Phase 5 C7). */
@@ -2598,7 +2602,9 @@ export async function handleCommand(
       const mine = s.dispatches.filter((d) => tasks.has(d.taskId))
       const waiting = await waitingForApprovalIn(deps, mine)
       const waitingTasks = new Set(mine.filter((d) => waiting.has(d.id)).map((d) => d.taskId)).size
-      return okBody({ ...runView(s, run), ...(waitingTasks > 0 ? { waitingForApproval: waitingTasks } : {}) })
+      // The tokens its Tasks' sessions spent, and its coordinator's apart (observe mode design §10); left out when unknown
+      const tokens = deps.spentTokens ? runTokensOf(s, run.id, deps.spentTokens()) : {}
+      return okBody({ ...runView(s, run), ...(waitingTasks > 0 ? { waitingForApproval: waitingTasks } : {}), ...tokens })
     }
     /**
      * One long poll of `astera runs follow` (CLI spec §22). **The client loops; this answers once.**
@@ -3582,7 +3588,10 @@ export async function handleCommand(
       const id = str(args.id)
       if (!id) return bad('--id is required')
       const detail = taskDetailOf(s, id, await waitingForApprovalIn(deps, s.dispatches.filter((d) => d.taskId === id)))
-      return detail ? okBody(detail) : notFound(`unknown task: ${id}`)
+      if (!detail) return notFound(`unknown task: ${id}`)
+      // The tokens its attempts' sessions spent (observe mode design §10); left out when unknown
+      const tokens = deps.spentTokens ? taskTokensOf(s, id, deps.spentTokens()) : undefined
+      return okBody({ ...detail, ...(tokens ? { tokens } : {}) })
     }
     case 'tasks-check-output': {
       const id = str(args.id)

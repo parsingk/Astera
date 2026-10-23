@@ -23,6 +23,7 @@ import { higgsfieldCommand } from './higgsfield'
 import { installFailureOf, resolveSkillsDir, skillsCommand } from './skills'
 import { extensionsCommand } from './extensions'
 import { agentProfilesCommand } from './agentProfiles'
+import { auditCommand, policiesCommand } from './audit'
 import { readExtensionRegistry } from '../core/extensions/registry'
 import { serveMcp } from './mcp/server'
 import { runMcpHttp } from './mcp/http'
@@ -187,8 +188,9 @@ export function connectFailureEnd(a: {
 }
 
 /** 모드에 맞춘 성공 출력. **사람용이 없는 명령은 JSON 으로 되돌린다** — 코디네이터의
- *  명령들에 억지로 표를 씨우면 가이드가 시키는 것을 못 읽게 된다. */
-export function renderOk(cmd: string, body: unknown, mode: OutputMode, mark: ReplayMark = null): string {
+ *  명령들에 억지로 표를 씨우면 가이드가 시키는 것을 못 읽게 된다. `args` 는 입력한 그대로의 플래그다 —
+ *  다음 쪽을 묻는 줄(`audit list` 의 `more:`)이 같은 것을 다시 묻게 한다. */
+export function renderOk(cmd: string, body: unknown, mode: OutputMode, mark: ReplayMark = null, args: Record<string, unknown> = {}): string {
   if (mode === 'json') return jsonSafe(okEnvelope(cmd, body, mark))
   const data = dataFor(cmd, body)
   // What a person's terminal shows carries no control characters (security audit SEC-9); JSON escapes them already.
@@ -196,7 +198,7 @@ export function renderOk(cmd: string, body: unknown, mode: OutputMode, mark: Rep
   // **사람용 두 모드는 표시를 싣지 않는다.** 재생의 요점은 첫 답을 받은 것과 구별되지 않는 것이고,
   // 그것이 재생이었다는 사실은 봉투를 읽는 쪽 — 즉 스크립트 — 의 것이다. `--quiet` 는 id 목록이라
   // 얹을 자리조차 없다. 사람용이 없어 봉투로 되돌아가는 명령은 봉투이므로 그때는 실린다.
-  return terminalSafe(humanFor(cmd, data) ?? okEnvelope(cmd, body, mark))
+  return terminalSafe(humanFor(cmd, data, args) ?? okEnvelope(cmd, body, mark))
 }
 
 /**
@@ -1600,6 +1602,25 @@ export async function main(): Promise<void> {
       if ('unreachable' in answered) return withoutHost(answered.unreachable, lost)
       return answered
     }
+    // **`audit` and `policies` the same way** (cli/audit.ts, observe mode design §12): an agent profile named by its name is
+    // resolved to its id with `agent-profiles-get` before the read, and only the command itself carries the request id.
+    if (parsed.cmd.startsWith('audit-') || parsed.cmd.startsWith('policies-')) {
+      const answered = await keepaliveDuring(keepalive, () => {
+        const line = {
+          cmd: parsed.cmd,
+          args,
+          request: carried.send,
+          call: (cmd: string, callArgs: Record<string, unknown>, request: string | undefined) =>
+            timedCall(verbose, { conn, cmd, args: callArgs, sessionId, request, timeoutMs: clientTimeoutMs({ cmd, args: callArgs }) })
+        }
+        return parsed.cmd.startsWith('audit-') ? auditCommand(line) : policiesCommand(line)
+      })
+      conn.close()
+      const lost = lostAnswerDetails({ argv, request: carried.send, fromStdin: parsed.wantsStdin })
+      if ('stuck' in answered) fail({ code: SILENT_HOST_CODE, message: answered.stuck, details: lost })
+      if ('unreachable' in answered) return withoutHost(answered.unreachable, lost)
+      return answered
+    }
     // Held rather than passed inline: the retry line below has to carry what this actually sent,
     // and `argsForCall` fills a missing `--cwd` that the typed line does not have (`implicitArgs`).
     const sentArgs = argsForCall({ cmd: parsed.cmd, args, cwd: process.cwd() })
@@ -1683,7 +1704,7 @@ export async function main(): Promise<void> {
       const end = sessionTurnEnd(body)
       if (end !== null) fail(end)
     }
-    out(renderOk(parsed.cmd, body, mode, markOf(reply)))
+    out(renderOk(parsed.cmd, body, mode, markOf(reply), args))
     process.exit(0)
   }
   // **`version` 은 저쪽이 답하지 못해도 답한다.** 이 명령이 있는 이유가 "둘이 갈렸는가" 를

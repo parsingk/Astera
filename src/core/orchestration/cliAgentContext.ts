@@ -642,7 +642,19 @@ const NOT_SWITCHED = [
   'agent-profiles-update',
   'agent-profiles-archive',
   'agent-profiles-restore',
-  'agent-profiles-delete'
+  'agent-profiles-delete',
+  // Answered by the Host's observe mode (src/host/audit/auditCommands.ts, policyCommands.ts) through cli/audit.ts, beside
+  // the agent profiles: an agent's shell may read the rules and changes none, and is refused the records altogether.
+  'audit-list',
+  'audit-summary',
+  'policies-show',
+  'policies-set-mode',
+  'policies-set-otherwise',
+  'policies-rules-add',
+  'policies-rules-edit',
+  'policies-rules-remove',
+  'policies-rules-move',
+  'policies-rules-reset'
 ] as const satisfies readonly AgentCommand[]
 
 /**

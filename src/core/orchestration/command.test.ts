@@ -8576,6 +8576,58 @@ describe('handleCommand — tasks-get', () => {
   })
 })
 
+// Observe mode design §10: `runs get` and `tasks-get` carry the tokens the Host kept for their sessions, and say nothing
+// when it kept none or the caller keeps no tokens (the app's own command layer)
+describe('handleCommand — tokens on runs-get and tasks-get', () => {
+  const dispatch = (id: string, taskId: string, sessionId: string): Dispatch => ({
+    id,
+    taskId,
+    provider: 'codex',
+    accountId: 'acc1',
+    sessionId,
+    cwd: 'D:/p',
+    specPath: 'D:/p/s.md',
+    startedAt: NOW,
+    workerState: 'ready',
+    retained: false
+  })
+  const seeded = (): OrchState => ({
+    ...emptyState(),
+    jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW }],
+    runs: [{ id: 'r1', jobId: 'job_1', ordinal: 1, createdAt: NOW, coordinatorSessionId: 'sess_k' }],
+    tasks: [
+      { id: 't1', runId: 'r1', title: 'T', spec: 's', deps: [], status: 'dispatched', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW },
+      { id: 't2', runId: 'r1', title: 'U', spec: 's', deps: [], status: 'ready', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }
+    ],
+    dispatches: [dispatch('d1', 't1', 'sess_b')]
+  })
+  const withTokens = () =>
+    Object.assign(makeDeps(seeded()), {
+      spentTokens: () => [
+        { sessionId: 'sess_a', dispatchId: 'd1', input: 100, output: 10 },
+        { sessionId: 'sess_b', dispatchId: 'd1', input: 20, output: 2 },
+        { sessionId: 'sess_k', coordinatorOf: 'r1', input: 5, output: 1 }
+      ]
+    })
+
+  it('runs get totals the Run’s Tasks, with its coordinator’s apart', async () => {
+    const r = await call(withTokens(), 'runs-get', { id: 'r1' })
+    expect(r.body).toMatchObject({ id: 'r1', tokens: { input: 120, output: 12, total: 132 }, coordinatorTokens: { input: 5, output: 1, total: 6 } })
+  })
+
+  it('tasks-get totals the Task’s attempts, and leaves the field out for a Task nothing was read for', async () => {
+    expect((await call(withTokens(), 'tasks-get', { id: 't1' }, '')).body).toMatchObject({ id: 't1', tokens: { input: 120, output: 12, total: 132 } })
+    expect((await call(withTokens(), 'tasks-get', { id: 't2' }, '')).body).not.toHaveProperty('tokens')
+  })
+
+  it('says nothing of tokens when none are kept', async () => {
+    const run = (await call(makeDeps(seeded()), 'runs-get', { id: 'r1' })).body
+    expect(run).not.toHaveProperty('tokens')
+    expect(run).not.toHaveProperty('coordinatorTokens')
+    expect((await call(makeDeps(seeded()), 'tasks-get', { id: 't1' }, '')).body).not.toHaveProperty('tokens')
+  })
+})
+
 describe('handleCommand — tasks-check-output and tasks-output', () => {
   const dispatch = (id: string, startedAt: string): OrchState['dispatches'][number] =>
     ({ id, taskId: 't1', accountId: 'acc1', sessionId: 's', cwd: 'D:/p', specPath: 'x', startedAt, workerState: 'running' }) as unknown as OrchState['dispatches'][number]

@@ -30,6 +30,12 @@ describe('controllerRefusal (remote runtime design §3.4)', () => {
     for (const cmd of ['plugins-inspect', 'plugins-install', 'plugins-list', 'plugins-get', 'plugins-enable', 'plugins-disable', 'plugins-remove'])
       expect(controllerRefusal(cmd, p('full-control'))).toMatchObject({ status: 403, body: { code: 'RUNTIME_PERMISSION_DENIED' } })
   })
+  // Observe mode design §3, §12: the audit log and the rules are this machine's app's and CLI's only
+  it('never lists an audit or policies command, and refuses each at full control', () => {
+    for (const cmd of [...CONTROLLER_READ_COMMANDS, ...CONTROLLER_CONTROL_COMMANDS]) expect(cmd).not.toMatch(/^(?:audit|policies)-/)
+    for (const cmd of ['audit-list', 'audit-summary', 'policies-show', 'policies-set-mode', 'policies-set-otherwise', 'policies-rules-add', 'policies-rules-edit', 'policies-rules-remove', 'policies-rules-move', 'policies-rules-reset'])
+      expect(controllerRefusal(cmd, p('full-control')), cmd).toMatchObject({ status: 403, body: { code: 'RUNTIME_PERMISSION_DENIED' } })
+  })
   it('denies an unknown level, and a call with no principal at all', () => {
     expect(controllerRefusal('jobs-list', p('control'))).toMatchObject({ status: 403 })
     expect(controllerRefusal('jobs-list', undefined)).toMatchObject({ status: 401, body: { code: 'RUNTIME_AUTH_FAILED' } })
