@@ -161,7 +161,8 @@ function effectsOf(p: ResolvedAction): CommandFacts[] {
 /**
  * What one line of work did when it was several things. The headline (`lead`, the first part unless the caller names
  * another) gives the action, target and place; `commands` lists them all without repeats; the line is unknown if any part
- * was, heuristic if it was `compound` (several commands, or a loop or conditional) and otherwise as sure as its headline.
+ * was, and heuristic if it was `compound` (several commands, or a loop or conditional), if any part was, or if it lists
+ * more than one entry (a command and the file it redirects into is two things to be sure of).
  */
 function combine(parts: ResolvedAction[], compound: boolean, lead: ResolvedAction = parts[0]): ResolvedAction {
   if (parts.length === 1 && !compound) return parts[0]
@@ -170,10 +171,11 @@ function combine(parts: ResolvedAction[], compound: boolean, lead: ResolvedActio
     const key = `${c.action}|${c.insideProject}`
     return seen.has(key) ? false : (seen.add(key), true)
   })
+  const unsure = compound || commands.length > 1 || parts.some((p) => p.confidence === 'heuristic')
   const out: ResolvedAction = {
     action: lead.action,
     target: lead.target,
-    confidence: parts.some((p) => p.confidence === 'unknown') ? 'unknown' : compound ? 'heuristic' : lead.confidence,
+    confidence: parts.some((p) => p.confidence === 'unknown') ? 'unknown' : unsure ? 'heuristic' : lead.confidence,
     commands
   }
   if (lead.insideProject !== undefined) out.insideProject = lead.insideProject
@@ -293,7 +295,7 @@ function hostOf(url: string): string | null {
 
 /** Where a Glob with no `path` searches: the fixed part of an absolute pattern, else the session's folder. */
 function globRoot(pattern: string | null): string {
-  if (pattern === null || !path.isAbsolute(nativePath(pattern))) return '.'
+  if (pattern === null || !(HOME.test(pattern) || path.isAbsolute(nativePath(pattern)))) return '.'
   const wild = pattern.search(/[*?[{]/)
   const head = wild < 0 ? pattern : pattern.slice(0, wild)
   return /[\\/]$/.test(head) ? head : path.dirname(head)
@@ -321,6 +323,10 @@ interface Ctx {
 const UNFOLLOWABLE = /^~|\$|%[^%\s]+%/
 /** A home path as a tool that takes literal paths gets it: `~/x`, `~\x`. A file called `~$draft.docx` is not one. */
 const HOME = /^~(?:[\\/]|$)/
+/** A URL given where a path is expected. path.resolve would collapse its `://` and leave its credentials in the text. */
+const URL_PATH = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//
+/** A path on another machine, as scp and rsync write it: `host:/dir`, `user@host:dir`. (A drive letter is one character.) */
+const REMOTE_PATH = /^(?:[^\s/\\:@]+@[^\s/\\:]+|[^\s/\\:]{2,}):/
 
 interface Place {
   shown: string
@@ -340,7 +346,8 @@ const leaf = (p: string): string => path.basename(p.replace(/[\\/]+$/, '')) || p
  *  `cd` it could not follow counts as outside: the rule about outside is there for what is not provably in the folder. */
 function placeOf(p: string, ctx: Ctx, fromShell: boolean): Place {
   const outside = (name: string): Place => ({ shown: `outside project: ${name}`, inside: false })
-  if (HOME.test(p) || (fromShell && UNFOLLOWABLE.test(p))) return outside(leaf(p))
+  if (URL_PATH.test(p)) return outside(hostOf(p) ?? 'url') // the host only, never the credentials in front of it
+  if (HOME.test(p) || (fromShell && (UNFOLLOWABLE.test(p) || REMOTE_PATH.test(p)))) return outside(leaf(p))
   const native = nativePath(p)
   if (ctx.base === null && !path.isAbsolute(native)) return outside(leaf(p))
   const abs = path.resolve(ctx.base ?? ctx.cwd, native)
@@ -376,8 +383,12 @@ interface Cmd {
   out: string[]
   /** It began with PowerShell's call operator `&`, so its first word is a program however it is spelled. */
   call: boolean
-  /** Its first word was quoted. */
-  quoted: boolean
+  /** For each word, whether it was quoted. A quoted word is a value, so it is never a program or a subcommand shown. */
+  quoted: boolean[]
+  /** Its last word was directly followed by `(`: a method call, in PowerShell `$f.Delete(` or `[IO.File]::Copy(`. */
+  invoked: boolean
+  /** Set by stripPrefix on a PowerShell method call that is a command: its one word is the call's name. */
+  method?: Facts
 }
 
 interface Facts {
@@ -385,9 +396,13 @@ interface Facts {
   target: string
   /** The program (and, where the table looks, its subcommand) is one the table has a row for, and what it acts on is known. */
   known: boolean
+  /** Known only roughly (a method named for what it usually does), so the part is `heuristic`. */
+  heuristic?: true
   inside?: boolean
   /** The target is a path, which keeps to the length a structured tool's does rather than the shell cap. */
   path?: true
+  /** What else the same command does: `curl -o file` also writes the file. */
+  also?: Facts[]
 }
 
 /** Commands that change nothing a rule cares about, so a line is not headlined by its leading `cd` or its `[ -f x ]`. */
@@ -404,7 +419,7 @@ function resolveShell(rec: Record<string, unknown>, cwd: string, flavor: Flavor)
     typeof raw === 'string'
       ? splitLine(raw)
       : Array.isArray(raw)
-        ? [{ words: raw.filter((w): w is string => typeof w === 'string'), out: [], call: false, quoted: false }]
+        ? [argvCommand(raw.filter((w): w is string => typeof w === 'string'))]
         : []
   const workdir = str(rec.workdir)
   let base: string | null = workdir === null ? cwd : path.resolve(cwd, nativePath(workdir))
@@ -417,19 +432,13 @@ function resolveShell(rec: Record<string, unknown>, cwd: string, flavor: Flavor)
     let own: ResolvedAction | undefined
     if (cmd.words.length > 0) {
       const f = classify(cmd, ctx)
-      own = {
-        action: f.action,
-        // Cut before it is redacted, so a long word costs no more than a short one.
-        target: clip(redactTarget(clip(f.target, 200)), f.path === true ? TARGET_MAX : SHELL_TARGET_MAX),
-        confidence: f.known ? 'high' : 'unknown'
-      }
-      if (f.inside !== undefined) own.insideProject = f.inside
+      own = partOf(f)
       parts.push(own)
+      for (const also of f.also ?? []) parts.push(partOf(also))
     }
     const writes: ResolvedAction[] = cmd.out.map((file) => {
       const { target, inside } = placesOf([file], ctx, true)
-      const shown = clip(redactTarget(clip(target, 200)), TARGET_MAX)
-      return { action: 'filesystem.write', target: shown, insideProject: inside, confidence: 'high' }
+      return { action: 'filesystem.write', target: clip(redactTarget(target), TARGET_MAX), insideProject: inside, confidence: 'high' }
     })
     parts.push(...writes)
 
@@ -445,6 +454,21 @@ function resolveShell(rec: Record<string, unknown>, cwd: string, flavor: Flavor)
   return combine(parts, commands.length > 1 || scripted, lead)
 }
 
+/** A command Codex gave as an argv array: its words are already split and none was quoted in the shell's sense. */
+const argvCommand = (words: Words): Cmd => ({ words, out: [], call: false, quoted: words.map(() => false), invoked: false })
+
+/** What a command's facts become in the record. The target is redacted before it is cut, and a path target keeps to the
+ *  length a structured tool's does. */
+function partOf(f: Facts): ResolvedAction {
+  const part: ResolvedAction = {
+    action: f.action,
+    target: clip(redactTarget(f.target), f.path === true ? TARGET_MAX : SHELL_TARGET_MAX),
+    confidence: !f.known ? 'unknown' : f.heuristic === true ? 'heuristic' : 'high'
+  }
+  if (f.inside !== undefined) part.insideProject = f.inside
+  return part
+}
+
 /** Where a `cd` goes, or null when it goes to home, a variable, nowhere or somewhere relative to a place already lost. */
 function movedTo(args: Words, ctx: Ctx): string | null {
   const [dest] = pathArgs('cd', args)
@@ -457,9 +481,45 @@ const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
 /** PowerShell `$env:X='y'` in one word, or `$x` with the `=` as the next word. */
 const PS_ASSIGNED = /^\$[\w:.]+[+-]?=/
 const PS_VARIABLE = /^\$[\w:.]+$/
-/** What PowerShell writes where a command could be but is not: a variable, a member (`.Count`), an operator (`-not`), a
- *  type (`[int]`). */
-const PS_EXPRESSION = /^(?:\$|\.[A-Za-z]|-[A-Za-z]|\[[A-Za-z])/
+/** What PowerShell writes where a command could be but is not: a variable, an array or hashtable (`@(`, `@{`), a member
+ *  (`.Count`), an operator (`-not`), a type (`[int]`), a number, or an item of an argument list (`$p,`). */
+const PS_EXPRESSION = /^(?:[$@]|\.[A-Za-z]|-[A-Za-z]|\[[A-Za-z]|[\d.,]+$)/
+const isPsExpression = (word: string): boolean => PS_EXPRESSION.test(word) || word.endsWith(',')
+
+// The calls an expression can make. `[IO.File]::WriteAllText(` and `$f.Delete(` do something, so they stay commands.
+const SAFE_STATIC_CLASSES = new Set(
+  `math regex convert string char path environment datetime guid array bitconverter version timespan uri enum console encoding`.split(' ')
+)
+const BENIGN_MEMBERS = new Set(
+  `ToString ToLower ToUpper ToLowerInvariant ToUpperInvariant Trim TrimStart TrimEnd Replace Split Substring Contains
+  StartsWith EndsWith IndexOf LastIndexOf PadLeft PadRight Join Format Equals GetType GetValue GetValueKind Add AddSeconds
+  AddMinutes AddHours AddDays AddMonths AddYears Insert OpenSubKey ReadToEnd ReadLine Close Dispose WaitForExit Where ForEach
+  Match Matches IsMatch ContainsKey`.split(/\s+/)
+)
+const WRITE_MEMBERS = new Set(
+  `WriteAllText WriteAllLines WriteAllBytes AppendAllText AppendAllLines AppendText Copy CopyTo Move MoveTo Create CreateText Save`.split(' ')
+)
+const READ_MEMBERS = new Set(
+  `ReadAllText ReadAllLines ReadAllBytes ReadLines Exists GetFiles GetDirectories GetFileSystemEntries EnumerateFiles
+  EnumerateDirectories EnumerateFileSystemEntries OpenRead OpenText`.split(/\s+/)
+)
+
+/**
+ * What a PowerShell method call is, from the one word that names it: null for a call that is only arithmetic, text or
+ * conversion (an expression, not a command), else facts. Known members that write, delete or read a file map to that
+ * action, roughly (`heuristic`), with no place: the paths are in arguments this does not read. Any other call is unknown.
+ */
+function methodFacts(word: string): Facts | null {
+  const stat = /^\[([\w.]+)\]::(\w+)$/.exec(word)
+  const member = stat !== null ? stat[2] : /\.(\w+)$/.exec(word)?.[1]
+  if (member === undefined) return null
+  const benign = stat !== null ? SAFE_STATIC_CLASSES.has((stat[1].split('.').pop() ?? '').toLowerCase()) || member === 'new' : BENIGN_MEMBERS.has(member)
+  if (benign) return null
+  const action = WRITE_MEMBERS.has(member) ? 'filesystem.write' : member === 'Delete' ? 'filesystem.delete' : READ_MEMBERS.has(member) ? 'filesystem.read' : undefined
+  return action === undefined
+    ? { action: 'process.execute', target: 'shell', known: false }
+    : { action, target: member, known: true, heuristic: true }
+}
 const WRAPPERS = new Set(['sudo', 'doas', 'env', 'time', 'nohup', 'command'])
 /** Words that lead a command, which is what follows them. */
 const KEYWORDS = new Set(['if', 'elif', 'elseif', 'while', 'until', 'then', 'else', 'do', '!'])
@@ -507,11 +567,19 @@ function stripPrefix(raw: Cmd, flavor: Flavor): { cmd: Cmd; syntax: boolean } {
     else break
   }
   const rest = words.slice(i)
-  const quoted = i === 0 && raw.quoted
-  const cmd: Cmd = { words: rest, out: raw.out, call: raw.call, quoted }
-  const noCommand = rest.length > 0 && NO_COMMAND.has(rest[0].toLowerCase())
-  const expression = flavor === 'ps' && rest.length > 0 && !raw.call && !quoted && PS_EXPRESSION.test(rest[0])
-  return noCommand || expression ? { cmd: { ...cmd, words: [] }, syntax: true } : { cmd, syntax }
+  const cmd: Cmd = { words: rest, out: raw.out, call: raw.call, quoted: raw.quoted.slice(i), invoked: raw.invoked }
+  const dropped = { cmd: { ...cmd, words: [], quoted: [] }, syntax: true }
+  if (rest.length === 0) return { cmd, syntax }
+  if (NO_COMMAND.has(rest[0].toLowerCase())) return dropped
+  if (flavor === 'ps' && !raw.call) {
+    // PowerShell never runs a quoted word that is not called with `&`: it is data, whatever was stripped before it.
+    if (cmd.quoted[0]) return dropped
+    if (isPsExpression(rest[0])) {
+      const method = raw.invoked && rest.length === 1 ? methodFacts(rest[0]) : null
+      return method === null ? dropped : { cmd: { ...cmd, method }, syntax }
+    }
+  }
+  return { cmd, syntax }
 }
 
 /** The script a shell was handed with -c / -Command / /c, if it was handed one, and the shell it is written for. */
@@ -542,7 +610,7 @@ function expand(cmds: Cmd[], flavor: Flavor, depth = 0): { commands: Cmd[]; scri
     else {
       const inner = expand(splitLine(script.text), script.flavor, depth + 1)
       out.push(...inner.commands)
-      if (cmd.out.length > 0) out.push({ words: [], out: cmd.out, call: false, quoted: false }) // `bash -c "x" > f`
+      if (cmd.out.length > 0) out.push({ words: [], out: cmd.out, call: false, quoted: [], invoked: false }) // `bash -c "x" > f`
       scripted ||= inner.scripted
     }
   }
@@ -568,7 +636,8 @@ function splitLine(line: string): Cmd[] {
   let words: Words = []
   let out: string[] = []
   let call = false
-  let quoted = false // the first word was quoted
+  let invoked = false // the last word was directly followed by `(`
+  let quoted: boolean[] = [] // for each word, whether it was quoted
   let wordQuoted = false // the word being read has had a quote in it
   let cur = ''
   let has = false // a word has begun, so an empty '' counts
@@ -582,7 +651,7 @@ function splitLine(line: string): Cmd[] {
         if (sink.write && !duplicate && !SINK.test(cur)) out.push(cur)
         sink = null
       } else {
-        if (words.length === 0) quoted = wordQuoted
+        quoted.push(wordQuoted)
         words.push(cur)
       }
     }
@@ -593,11 +662,12 @@ function splitLine(line: string): Cmd[] {
   const endCommand = (): void => {
     endWord()
     sink = null
-    if (words.length > 0 || out.length > 0) commands.push({ words, out, call, quoted })
+    if (words.length > 0 || out.length > 0) commands.push({ words, out, call, quoted, invoked })
     words = []
     out = []
     call = false
-    quoted = false
+    invoked = false
+    quoted = []
   }
 
   for (let i = 0; i < line.length; i++) {
@@ -636,7 +706,10 @@ function splitLine(line: string): Cmd[] {
       heredoc = null
     } else if (c === '#' && !has) {
       while (i + 1 < line.length && line[i + 1] !== '\n') i++ // a comment
-    } else if (c === ';' || c === '|' || c === '(' || c === ')') {
+    } else if (c === ';' || c === '|' || c === ')') {
+      endCommand()
+    } else if (c === '(') {
+      if (has && !wordQuoted && sink === null) invoked = true // `$f.Delete(`, `[IO.File]::Copy(`
       endCommand()
     } else if (c === '&') {
       if (line[i + 1] === '&') {
@@ -767,15 +840,17 @@ function positionals(prog: string, args: Words, n: number): string[] {
   return out
 }
 
-/** A subcommand is a plain word; a path or a quoted sentence in its place is not one. */
-function subcommandOf(prog: string, args: Words): string | undefined {
+/** A subcommand is a plain word; a path, or a word that was quoted (a value), in its place is not one. `quoted` is for `args`. */
+function subcommandOf(prog: string, args: Words, quoted: boolean[]): string | undefined {
   const at = subcommandAt(prog, args)
-  const sub = at < 0 ? undefined : args[at]
+  const sub = at < 0 || quoted[at] === true ? undefined : args[at]
   return sub !== undefined && /^[A-Za-z0-9@][\w.:@/+-]{0,39}$/.test(sub) ? sub : undefined
 }
 
 const isSwitch = (a: string, prog: string): boolean =>
-  (a.length > 1 && a.startsWith('-')) || (CMD_SWITCH_PROGRAMS.has(prog) && /^\/[A-Za-z]$/.test(a))
+  (a.length > 1 && a.startsWith('-')) ||
+  (CMD_SWITCH_PROGRAMS.has(prog) && /^\/[A-Za-z]$/.test(a)) ||
+  (MIRRORS.has(prog) && /^\/[A-Za-z][\w:-]*$/.test(a))
 
 const GIT = new Map<string, AuditAction>([
   ...table<AuditAction>(
@@ -889,8 +964,12 @@ function installs(prog: string, args: Words, sub: string | undefined): boolean {
 }
 
 const DELETERS = new Set(['rm', 'rmdir', 'del', 'erase', 'rd', 'unlink', 'remove-item', 'ri'])
-const COPIERS = new Set(['cp', 'mv', 'copy', 'move', 'copy-item', 'move-item', 'cpi', 'mi'])
+const COPIERS = new Set(['cp', 'mv', 'ln', 'copy', 'move', 'copy-item', 'move-item', 'cpi', 'mi'])
 const SETTERS = new Set(['set-content', 'add-content', 'out-file'])
+const MAKERS = new Set(['touch', 'mkdir', 'md']) // create what their words name
+const ITEM_WRITERS = new Set(['new-item', 'ni', 'rename-item', 'rni', 'ren']) // write the item a -Path or first word names
+/** robocopy and xcopy write their second path, past switches such as /E, /MIR and /EXCLUDE:file. */
+const MIRRORS = new Set(['robocopy', 'xcopy'])
 const READERS = new Set(['cat', 'head', 'tail', 'less', 'more', 'bat', 'get-content', 'gc', 'nl'])
 const LISTERS = new Set(['ls', 'dir', 'get-childitem', 'gci', 'tree']) // with no path they read the folder itself
 const SEARCHERS = new Set(['rg', 'grep', 'egrep', 'fgrep'])
@@ -904,6 +983,17 @@ const VALUED_FLAGS = new Map<string, ReadonlySet<string>>([
   ['nl', new Set(['-b', '-d', '-f', '-h', '-i', '-l', '-n', '-s', '-v', '-w'])],
   ['cp', new Set(['-t', '-S', '--target-directory', '--suffix'])],
   ['mv', new Set(['-t', '-S', '--target-directory', '--suffix'])],
+  ['ln', new Set(['-t', '-S', '--target-directory', '--suffix'])],
+  ['touch', new Set(['-d', '-t', '-r', '--date', '--reference'])],
+  ['mkdir', new Set(['-m', '--mode'])],
+  [
+    'rsync',
+    new Set([
+      '-e', '-f', '-T', '--rsh', '--exclude', '--include', '--exclude-from', '--include-from', '--filter', '--port', '--timeout',
+      '--bwlimit', '--chmod', '--chown', '--log-file', '--files-from', '--partial-dir', '--backup-dir', '--suffix', '--max-size',
+      '--min-size', '--temp-dir', '--compare-dest', '--link-dest'
+    ])
+  ],
   [
     'grep',
     new Set([
@@ -917,7 +1007,8 @@ const VALUED_FLAGS = new Map<string, ReadonlySet<string>>([
       '-e', '-f', '-g', '-t', '-T', '-A', '-B', '-C', '-m', '-j', '-d', '-E', '-M', '-r', '--regexp', '--file', '--glob', '--iglob',
       '--type', '--type-not', '--after-context', '--before-context', '--context', '--max-count', '--threads', '--max-depth',
       '--encoding', '--max-columns', '--replace', '--sort', '--sortr', '--ignore-file', '--pre', '--type-add', '--max-filesize',
-      '--path-separator'
+      '--path-separator', '--color', '--colors', '--context-separator', '--field-context-separator', '--field-match-separator',
+      '--engine', '--hostname-bin', '--hyperlink-format', '--pre-glob', '--regex-size-limit', '--dfa-size-limit', '--type-clear'
     ])
   ],
   ['sed', new Set(['-e', '-f', '-l', '--expression', '--file', '--line-length'])]
@@ -927,7 +1018,8 @@ VALUED_FLAGS.set('fgrep', VALUED_FLAGS.get('grep')!)
 /** PowerShell parameters that take a value which is not a path. */
 const PS_VALUED = new Set([
   'erroraction', 'ea', 'warningaction', 'wa', 'errorvariable', 'ev', 'include', 'exclude', 'filter', 'credential', 'stream',
-  'totalcount', 'tail', 'head', 'encoding', 'readcount', 'delimiter', 'depth', 'attributes', 'destination', 'value'
+  'totalcount', 'tail', 'head', 'encoding', 'readcount', 'delimiter', 'depth', 'attributes', 'destination', 'value',
+  'inputobject', 'itemtype', 'type', 'newname'
 ])
 /** PowerShell parameters whose value is a path. */
 const PS_PATH = new Set(['path', 'literalpath', 'filepath'])
@@ -1028,14 +1120,62 @@ function xargsCommandAt(args: Words): number {
   return -1
 }
 
+/** Every value given to one of `flags`, as `-o FILE`, `--output FILE` or `--output=FILE`. */
+function valuesOf(args: Words, flags: string[]): string[] {
+  const out: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]
+    if (flags.includes(a)) {
+      if (i + 1 < args.length) out.push(args[++i])
+      continue
+    }
+    const eq = flags.find((f) => f.startsWith('--') && a.startsWith(`${f}=`))
+    if (eq !== undefined) out.push(a.slice(eq.length + 1))
+  }
+  return out
+}
+
+/** The files a download saves: what curl (`-o`, `--output`), wget (`-O`, `-P`) and Invoke-WebRequest (`-OutFile`) are told.
+ *  `-` and the null devices write no file. */
+function savedFiles(prog: string, args: Words): string[] {
+  const named =
+    prog === 'curl'
+      ? valuesOf(args, ['-o', '--output'])
+      : prog === 'wget'
+        ? valuesOf(args, ['-O', '--output-document', '-P', '--directory-prefix'])
+        : [valueOf(args, [], ['outfile'])].filter((v): v is string => v !== undefined)
+  return named.filter((f) => f !== '-' && !SINK.test(f))
+}
+
+/** Facts for `tar`: extracting writes where it is told with -C (else here), creating writes the archive named with -f. Null
+ *  for listing and for a mode this cannot find. */
+function tarFacts(name: string, args: Words, ctx: Ctx): Facts | null {
+  // The mode letters are in a bundle (`-xzf`, or `xzf` as the first word) or a long flag.
+  const at = args.findIndex((a, i) => /^-[A-Za-z]*[cxtru][A-Za-z]*$/.test(a) || (i === 0 && /^[cxtru][A-Za-z]*$/.test(a)))
+  const bundle = at < 0 ? '' : args[at].replace(/^-/, '')
+  const extract = /x/.test(bundle) || args.some((a) => a === '--extract' || a === '--get')
+  const create = /[cru]/.test(bundle) || args.some((a) => a === '--create' || a === '--append' || a === '--update')
+  if (!extract && !create) return null
+  if (extract) {
+    const dir = valueOf(args, ['-C', '--directory'], []) ?? '.'
+    return writeFacts(name, [dir], ctx)
+  }
+  const file = valuesOf(args, ['-f', '--file'])[0] ?? (/f/.test(bundle) && at >= 0 ? args[at + 1] : undefined)
+  return file === '-' ? null : writeFacts(name, file === undefined ? [] : [file], ctx)
+}
+
 /** Facts for a program the table has a row for. */
 function classify(cmd: Cmd, ctx: Ctx): Facts {
+  if (cmd.method !== undefined) return cmd.method
   const unreadable: Facts = { action: 'process.execute', target: 'shell', known: false }
   const words = cmd.words
   const name = programName(words[0])
-  // A quoted word is a value, not a program, unless it is clearly a path to one or follows the call operator.
-  if (!PROGRAM.test(name) || (cmd.quoted && !cmd.call && !/[\\/]/.test(words[0]))) return unreadable
   const prog = name.toLowerCase()
+  if (!PROGRAM.test(name)) return unreadable
+  // A quoted word is a value, not a program: it is one only when it is clearly a path to a program, or follows the call
+  // operator and names one the table has (`& 'git' push`).
+  const knownName = KNOWN.has(prog) || PYTHON.test(prog) || PS_READ_VERB.test(prog)
+  if (cmd.quoted[0] === true && !/[\\/]/.test(words[0]) && !(cmd.call && knownName)) return unreadable
   const args = words.slice(1)
 
   if (DELETERS.has(prog)) {
@@ -1069,7 +1209,33 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
     return writeFacts(name, dest === undefined ? [] : [dest], ctx)
   }
 
-  if (SETTERS.has(prog)) return writeFacts(name, pathArgs(prog, args).slice(0, 1), ctx)
+  if (SETTERS.has(prog) || ITEM_WRITERS.has(prog)) {
+    // A named -Path / -LiteralPath / -FilePath outranks the positional words, and a value is never the destination.
+    const named = valueOf(args, [], ['path', 'literalpath', 'filepath'])
+    const dest = named ?? pathArgs(prog, args)[0]
+    return writeFacts(name, dest === undefined ? [] : [dest], ctx)
+  }
+
+  if (MAKERS.has(prog)) return writeFacts(name, pathArgs(prog, args), ctx)
+
+  if (MIRRORS.has(prog)) {
+    const dest = pathArgs(prog, args)[1]
+    return writeFacts(name, dest === undefined ? [] : [dest], ctx)
+  }
+
+  if (prog === 'rsync') {
+    const paths = pathArgs(prog, args)
+    return writeFacts(name, paths.length >= 2 ? [paths[paths.length - 1]] : [], ctx)
+  }
+
+  if (prog === 'unzip' && !args.some((a) => /^-(?:[lptvZ]|[A-Za-z]*[lptvZ])$/.test(a))) {
+    return writeFacts(name, [valueOf(args, ['-d'], []) ?? '.'], ctx)
+  }
+
+  if (prog === 'tar') {
+    const facts = tarFacts(name, args, ctx)
+    if (facts !== null) return facts
+  }
 
   if (prog === 'tee') {
     const files = pathArgs(prog, args).filter((f) => !SINK.test(f))
@@ -1095,7 +1261,10 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
 
   if (NETWORK.has(prog)) {
     const url = urlIn(args)
-    return { action: 'network.request', target: (url === null ? null : hostOf(url)) ?? name, known: true }
+    const facts: Facts = { action: 'network.request', target: (url === null ? null : hostOf(url)) ?? name, known: true }
+    const saved = savedFiles(prog, args)
+    if (saved.length > 0) facts.also = [writeFacts(name, saved, ctx)]
+    return facts
   }
 
   if (INTERPRETERS.has(prog)) {
@@ -1105,7 +1274,7 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
     return { action: 'process.execute', target: name, known: asksVersion }
   }
 
-  const sub = SUBCOMMAND_PROGRAMS.has(prog) ? subcommandOf(prog, args) : undefined
+  const sub = SUBCOMMAND_PROGRAMS.has(prog) ? subcommandOf(prog, args, cmd.quoted.slice(1)) : undefined
   const target = withTarget(name, sub)
 
   if (prog === 'git') {

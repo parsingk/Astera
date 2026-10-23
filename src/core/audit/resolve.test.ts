@@ -90,7 +90,7 @@ describe('shell: the action comes from the first words', () => {
 
   it('names a plain ordinary command process.execute at high confidence', () => {
     expect(bash('node scripts/build.js')).toEqual({ action: 'process.execute', target: 'node', confidence: 'high' })
-    expect(bash('mkdir -p out')).toMatchObject({ action: 'process.execute', target: 'mkdir', confidence: 'high' })
+    expect(bash('chmod +x run.sh')).toMatchObject({ action: 'process.execute', target: 'chmod', confidence: 'high' })
   })
 
   it('ignores a leading comment line and environment assignments', () => {
@@ -102,7 +102,7 @@ describe('shell: the action comes from the first words', () => {
     expect(bash('npm test > out.log 2>&1')).toEqual({
       action: 'process.execute',
       target: 'npm test',
-      confidence: 'high',
+      confidence: 'heuristic', // two entries in commands: at most heuristic
       commands: [{ action: 'process.execute' }, { action: 'filesystem.write', insideProject: true }]
     })
     expect(bash('npm test 2>&1')).toEqual({ action: 'process.execute', target: 'npm test', confidence: 'high' })
@@ -672,10 +672,10 @@ describe('shell: a quoted first word is not a program', () => {
   it.each([`'myS3cretPass' | docker login --password-stdin`, `"myS3cretPass" | docker login --password-stdin`])(
     '%s leaves no trace of the word in the record',
     (line) => {
-      for (const r of [bash(line), ps(line)]) {
-        expect(JSON.stringify(r)).not.toContain('myS3cretPass')
-        expect(r).toMatchObject({ action: 'process.execute', target: 'shell', confidence: 'unknown' })
-      }
+      for (const r of [bash(line), ps(line)]) expect(JSON.stringify(r)).not.toContain('myS3cretPass')
+      // Bash runs a quoted word, so it is an unknown program; PowerShell never does, so it is data and the pipe's real command headlines.
+      expect(bash(line)).toMatchObject({ action: 'process.execute', target: 'shell', confidence: 'unknown' })
+      expect(ps(line)).toMatchObject({ action: 'process.execute', target: 'docker login', confidence: 'heuristic' })
     }
   )
 
@@ -710,7 +710,7 @@ describe('shell: writing and deleting files beyond rm', () => {
       action: 'filesystem.write',
       target: 'outside project: outside.txt',
       insideProject: false,
-      confidence: 'high',
+      confidence: 'heuristic',
       commands: [{ action: 'process.execute' }, { action: 'filesystem.write', insideProject: false }]
     })
     expect(bash('printf a >> notes/log.txt')).toMatchObject({ action: 'filesystem.write', target: 'notes/log.txt', insideProject: true })
@@ -780,10 +780,9 @@ describe('shell: writing and deleting files beyond rm', () => {
     expect(bash('tee')).toMatchObject({ action: 'process.execute', target: 'tee' })
   })
 
-  it('keeps the write a quoted PowerShell value pipes into, though the line is unknown', () => {
+  it('sees the write a quoted PowerShell value is piped into: the value is data', () => {
     const r = ps(`"y" | Out-File "${elsewhere('x.txt')}"`)
-    expect(r.confidence).toBe('unknown')
-    expect(r.commands).toContainEqual({ action: 'filesystem.write', insideProject: false })
+    expect(r).toMatchObject({ action: 'filesystem.write', target: 'outside project: x.txt', insideProject: false, confidence: 'heuristic' })
   })
 
   it('maps sed -i to a write of its files', () => {
@@ -936,7 +935,7 @@ describe('PowerShell: condition groups and assignments are not commands', () => 
     expect(r.confidence).toBe('heuristic')
     expect(acts(r)).toEqual(['filesystem.delete'])
     expect(acts(ps('if (Test-Path x) { Remove-Item x }'))).toEqual(['process.execute', 'filesystem.delete'])
-    expect(acts(ps('if (-not (Test-Path x)) { New-Item x }'))).toEqual(['process.execute'])
+    expect(acts(ps('if (-not (Test-Path x)) { New-Item x }'))).toEqual(['process.execute', 'filesystem.write'])
   })
 
   it('reads the command an assignment holds, and drops expression fragments', () => {
@@ -946,6 +945,254 @@ describe('PowerShell: condition groups and assignments are not commands', () => 
 
   it('does not let a shell word starting with $ pass for an expression in Bash', () => {
     expect(bash('$CC main.c').confidence).toBe('unknown')
+  })
+})
+
+// Fix round 2 (re-review).
+describe('a quoted word in command position is data, whatever came before it', () => {
+  it.each([
+    ["$pw = 'P@ssw0rd1'", 'P@ssw0rd1'],
+    ['$token = "abc123def456"', 'abc123def456'],
+    ["$env:API_KEY = 'abc123xyz'", 'abc123xyz'],
+    ["('hunter2') | Out-Null", 'hunter2'],
+    ["@('hunter2','x') | ForEach-Object { $_ }", 'hunter2'],
+    ["$h = @{ pass = 'hunter2' }", 'hunter2'],
+    ["'C:\\pw\\hunter2' | docker login --password-stdin", 'hunter2'],
+    ["$pw = 'hunter2'; docker login -p $pw", 'hunter2']
+  ])('PowerShell %s leaves %s out of the record', (line, secret) => {
+    expect(JSON.stringify(ps(line))).not.toContain(secret)
+  })
+
+  it('lets the next real command headline once PowerShell data is dropped', () => {
+    expect(ps("'C:\\pw\\hunter2' | docker login --password-stdin")).toMatchObject({ target: 'docker login' })
+    expect(ps("$pw = 'hunter2'; docker login -p $pw")).toMatchObject({ target: 'docker login' })
+    expect(ps("('hunter2') | Out-Null")).toMatchObject({ target: 'Out-Null' })
+    expect(ps("$pw = 'hunter2'")).toEqual({ action: 'process.execute', target: 'shell', confidence: 'unknown' })
+  })
+
+  it.each([
+    ["sudo 'hunter2'", 'hunter2'],
+    ["if true; then 'hunter2'; fi", 'hunter2'],
+    ["env FOO=1 'hunter2'", 'hunter2'],
+    ["timeout 5 'hunter2'", 'hunter2'],
+    ["git 'hunter2'", 'hunter2'],
+    ["npx 'hunter2'", 'hunter2']
+  ])('Bash %s leaves %s out of the record', (line, secret) => {
+    expect(JSON.stringify(bash(line))).not.toContain(secret)
+  })
+
+  it('shows a quoted word that follows a stripped prefix as an unknown program, and keeps the subcommand out', () => {
+    expect(bash("sudo 'hunter2'")).toMatchObject({ target: 'shell', confidence: 'unknown' })
+    expect(bash("git 'hunter2'").target).toBe('git')
+    expect(bash("npx 'hunter2'").target).toBe('npx')
+  })
+
+  it('shows a quoted word after the call operator as a program only when it is a path or a known program', () => {
+    expect(ps("& 'hunter2'")).toMatchObject({ target: 'shell', confidence: 'unknown' })
+    expect(ps("& 'git' push")).toMatchObject({ action: 'git.remote.write', confidence: 'high' })
+    expect(ps("& 'C:\\tools\\mytool.exe' --x")).toMatchObject({ target: 'mytool', confidence: 'unknown' })
+  })
+})
+
+describe('a line with more than one entry in commands is at most heuristic', () => {
+  it.each([
+    'npm test > ../out.log',
+    'npm test > out.log',
+    'git diff > ../p.diff',
+    'cat a.txt > ../b.txt',
+    'ls > x.txt',
+    'curl https://a.example.com/x > ../x',
+    'echo x > out.txt'
+  ])('%s', (line) => {
+    const r = bash(line)
+    expect(r.commands?.length).toBeGreaterThan(1)
+    expect(r.confidence).toBe('heuristic')
+  })
+
+  it('holds inside an exec script too', () => {
+    expect(codex('exec', 'await tools.exec_command({cmd:"cat a > ../b"});').confidence).toBe('heuristic')
+  })
+
+  it('leaves a single command, and a redirection alone, as sure as they were', () => {
+    expect(bash('git diff').confidence).toBe('high')
+    expect(bash('> out.txt').confidence).toBe('high')
+  })
+})
+
+describe('PowerShell writers take the named path over a positional word, and never a value', () => {
+  it('reads -Path, -LiteralPath and -FilePath before positional words', () => {
+    expect(ps(`Set-Content 'v' -Path "${elsewhere('x.txt')}"`)).toEqual({
+      action: 'filesystem.write', target: 'outside project: x.txt', insideProject: false, confidence: 'high'
+    })
+    expect(ps(`Add-Content 'v' -LiteralPath "${elsewhere('y.txt')}"`)).toMatchObject({ target: 'outside project: y.txt' })
+  })
+
+  it('skips -InputObject and -Value, so a value is never the target or the place', () => {
+    const r = ps("Out-File -InputObject 'hunter2' -FilePath x.txt")
+    expect(r).toMatchObject({ action: 'filesystem.write', target: 'x.txt', insideProject: true })
+    expect(JSON.stringify(r)).not.toContain('hunter2')
+    const none = ps("Set-Content -InputObject 'hunter2'")
+    expect(none).toMatchObject({ action: 'filesystem.write', confidence: 'unknown' })
+    expect(JSON.stringify(none)).not.toContain('hunter2')
+  })
+})
+
+describe('PowerShell: a call that does something is a command, not an expression', () => {
+  it.each([
+    ["[IO.File]::WriteAllText($p, 'y')", 'filesystem.write'],
+    ['[System.IO.File]::AppendAllText($p, $c)', 'filesystem.write'],
+    ['[IO.File]::Copy($a, $b)', 'filesystem.write'],
+    ['[IO.File]::Move($a, $b)', 'filesystem.write'],
+    ['[IO.Directory]::Delete($d, $true)', 'filesystem.delete'],
+    ['$f.Delete()', 'filesystem.delete'],
+    ['(Get-Item $p).Delete()', 'filesystem.delete'],
+    ['[IO.File]::ReadAllText($p)', 'filesystem.read'],
+    ['[IO.Directory]::GetFiles($d)', 'filesystem.read']
+  ] satisfies Array<[string, AuditAction]>)('%s is %s, heuristic, with no place', (line, action) => {
+    const r = ps(line)
+    expect(r.confidence).toBe('heuristic')
+    expect(r.commands?.map((c) => c.action) ?? [r.action]).toContain(action)
+    expect(r.commands?.every((c) => c.insideProject === undefined) ?? true).toBe(true)
+    expect(r).not.toHaveProperty('insideProject')
+  })
+
+  it('headlines a lone write or delete call by its method name', () => {
+    expect(ps("[IO.File]::WriteAllText($p, 'y')")).toMatchObject({ action: 'filesystem.write', target: 'WriteAllText' })
+    expect(ps('$f.Delete()')).toEqual({ action: 'filesystem.delete', target: 'Delete', confidence: 'heuristic' })
+  })
+
+  it('is unknown for a call it cannot read as a read, a write or a delete', () => {
+    for (const line of ['$p.Kill()', '[Diagnostics.Process]::Start($x)', '(New-Object Net.WebClient).DownloadFile($u, $o)', '[Clipboard]::SetText($t)']) {
+      expect(ps(line).confidence).toBe('unknown')
+    }
+  })
+
+  it('keeps the arithmetic, string and conversion calls of a script as expressions', () => {
+    for (const line of [
+      '$n = [math]::Min(1, 2); Get-Date',
+      "$s = $name.ToLower().Trim(); Get-Date",
+      "$m = [regex]::Match($a, 'x'); Get-Date",
+      "$e = [Environment]::GetEnvironmentVariable('X'); Get-Date",
+      '$i++; Get-Date',
+      '$n = $list.Count; Get-Date',
+      '$x = [int]$y; Get-Date',
+      '$ok = -not $z; Get-Date'
+    ]) {
+      expect(ps(line)).toMatchObject({ action: 'process.execute', target: 'Get-Date', confidence: 'heuristic' })
+    }
+  })
+
+  it('does not read the items of a call\'s argument list as commands', () => {
+    const r = ps('[IO.File]::Copy(a.txt, b.txt)')
+    expect(r).toMatchObject({ action: 'filesystem.write', confidence: 'heuristic' })
+  })
+
+  it('sees a delete inside a loop body', () => {
+    expect(acts(ps('foreach ($f in $files) { $f.Delete() }'))).toEqual(['filesystem.delete'])
+  })
+})
+
+describe('shell: more writers, each with the place of its destination', () => {
+  it.each([
+    ['touch ../x', 'outside project: x', false],
+    ['touch a b', 'a (+1)', true],
+    ['mkdir -p ../x', 'outside project: x', false],
+    ['mkdir -m 755 out', 'out', true],
+    ['ln -s a ../b', 'outside project: b', false],
+    ['unzip a.zip -d ../x', 'outside project: x', false],
+    ['unzip a.zip', '.', true],
+    ['tar -xzf a.tgz -C ../x', 'outside project: x', false],
+    ['tar xzf a.tgz', '.', true],
+    ['tar -C ../x -xf a.tar', 'outside project: x', false],
+    ['tar -czf ../a.tgz src', 'outside project: a.tgz', false],
+    ['tar -cf out.tar src', 'out.tar', true],
+    ['rsync -a src/ ../backup/', 'outside project: backup', false],
+    ['rsync -a -e ssh src/ me@host.example.com:/backup/', 'outside project: backup', false],
+    ['rsync -a --exclude node_modules src/ out/', 'out', true]
+  ])('%s writes %s', (line, target, insideProject) => {
+    expect(bash(line)).toEqual({ action: 'filesystem.write', target, insideProject, confidence: 'high' })
+  })
+
+  it('is unknown when the destination cannot be determined', () => {
+    for (const line of ['touch', 'mkdir', 'rsync -a src/', 'tar -cf', 'ln -s a']) {
+      expect(bash(line)).toMatchObject({ action: 'filesystem.write', confidence: 'unknown' })
+    }
+  })
+
+  it('does not take listing or testing for a write', () => {
+    expect(bash('tar -tf a.tgz')).toMatchObject({ action: 'process.execute', confidence: 'high' })
+    expect(bash('unzip -l a.zip')).toMatchObject({ action: 'process.execute', confidence: 'high' })
+  })
+
+  it('maps robocopy and xcopy to a write of their destination, past the switches', () => {
+    expect(bash(`robocopy src "${elsewhere('dst')}" /E`)).toEqual({
+      action: 'filesystem.write', target: 'outside project: dst', insideProject: false, confidence: 'high'
+    })
+    expect(bash('robocopy src dst /MIR /XD node_modules')).toMatchObject({ target: 'dst', insideProject: true })
+    expect(bash('xcopy src dst /E /I')).toMatchObject({ action: 'filesystem.write', target: 'dst', insideProject: true })
+  })
+
+  it('maps New-Item and Rename-Item to a write of the item', () => {
+    expect(ps(`New-Item -Path "${elsewhere('x.txt')}" -ItemType File -Value y`)).toEqual({
+      action: 'filesystem.write', target: 'outside project: x.txt', insideProject: false, confidence: 'high'
+    })
+    expect(ps('New-Item -ItemType File x.txt')).toMatchObject({ target: 'x.txt', insideProject: true })
+    expect(ps(`Rename-Item "${elsewhere('x')}" y`)).toMatchObject({ target: 'outside project: x', insideProject: false })
+    expect(ps(`Rename-Item -Path "${elsewhere('x')}" -NewName y`)).toMatchObject({ target: 'outside project: x' })
+  })
+
+  it('sees the file curl and wget save, next to the request', () => {
+    expect(bash('curl -o ../x https://a.example.com/x')).toEqual({
+      action: 'network.request',
+      target: 'a.example.com',
+      confidence: 'heuristic',
+      commands: [{ action: 'network.request' }, { action: 'filesystem.write', insideProject: false }]
+    })
+    expect(bash('curl --output=out/x https://a.example.com/x').commands).toEqual([
+      { action: 'network.request' },
+      { action: 'filesystem.write', insideProject: true }
+    ])
+    expect(bash('wget -O ../x https://a.example.com/x').commands).toContainEqual({ action: 'filesystem.write', insideProject: false })
+    expect(bash('wget -P ../dir https://a.example.com/x').commands).toContainEqual({ action: 'filesystem.write', insideProject: false })
+    expect(bash('curl -o - https://a.example.com/x')).toEqual({ action: 'network.request', target: 'a.example.com', confidence: 'high' })
+    expect(bash('wget -O - https://a.example.com/x').commands).toBeUndefined()
+  })
+})
+
+describe('what a target shows of a long path, a URL, a Glob and an rg flag', () => {
+  const ghp = 'ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'
+
+  it('redacts a path before it is cut, so the front of a token at the cap is not shown', () => {
+    const rel = `${'dir/'.repeat(46)}${ghp}`
+    for (const r of [bash(`cat ${rel}`), bash(`echo x > ${rel}`), claude('Read', { file_path: inProj(rel) })]) {
+      expect(r.target).not.toContain('ghp_')
+      expect(r.target.length).toBeLessThanOrEqual(200)
+    }
+  })
+
+  it('does not let a URL used as a path expose its credentials', () => {
+    const r = bash('cp a https://me:hunter2@host.example.com/x')
+    expect(r).toEqual({ action: 'filesystem.write', target: 'outside project: host.example.com', insideProject: false, confidence: 'high' })
+    expect(JSON.stringify(claude('Read', { file_path: 'https://me:hunter2@host.example.com/x' }))).not.toContain('hunter2')
+    expect(claude('Read', { file_path: 'https://me:hunter2@host.example.com/x' })).toMatchObject({ insideProject: false })
+  })
+
+  it('reads host:path as a remote place, outside the project', () => {
+    expect(bash('rsync -a src/ build-host:/srv/app/')).toMatchObject({ target: 'outside project: app', insideProject: false })
+  })
+
+  it('reads a Glob pattern of the home folder as outside', () => {
+    expect(claude('Glob', { pattern: '~/**/*.ts' })).toMatchObject({ action: 'filesystem.read', insideProject: false })
+    expect(claude('Glob', { pattern: '~/notes/*.md' })).toMatchObject({ insideProject: false })
+  })
+
+  it.each([
+    ['rg --color never hunter2 src', 'src'],
+    ['rg --colors match:fg:red hunter2 src lib', 'src (+1)'],
+    ['rg --engine pcre2 hunter2 src', 'src'],
+    ['rg --context-separator -- hunter2 src', 'src']
+  ])('%s reads %s and not the value of the flag', (line, target) => {
+    expect(bash(line)).toMatchObject({ action: 'filesystem.read', target })
   })
 })
 
