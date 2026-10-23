@@ -9,6 +9,7 @@ import {
   AUDIT_LOGS_TITLE,
   COVERAGE_CLASSES,
   DECISIONS,
+  OBSERVE_READ_EVERY_MS,
   POLICIES_TITLE,
   RULE_ACTION_CHOICES,
   SECURITY_KEYS,
@@ -25,13 +26,17 @@ import {
   decisionLabel,
   filterChoices,
   nextPageQuery,
+  observeReadDue,
+  observeTargetOf,
   pageOf,
   periodSince,
   recordTime,
+  retentionSince,
   ruleActionChoices,
   sessionLabel,
   securityFailure,
   summaryOf,
+  summarySince,
   tokensOf,
   wouldDenyLine,
   type AuditRow
@@ -151,21 +156,71 @@ describe('securityText', () => {
     expect(decidingRule(row({ ruleId: 'ar_gone' }), RULES, en)).toBe('ar_gone')
   })
 
-  // A 409 is a damaged rules file: starting over with the starter rules is its repair
-  it('says why the rules could not be read, and offers the repair when the file is damaged', () => {
-    expect(securityFailure({ ok: false, code: 'CONFLICT', message: 'audit-policy.json is damaged; a copy was kept beside it' }, en)).toEqual({
+  // Fix round 1, ruling 1: only a damaged file (the Host's reason) is repaired by starting over; another 409 is said in
+  // the Host's own words
+  it('says why the rules could not be read, and offers the repair only for a damaged file', () => {
+    expect(securityFailure({ ok: false, code: 'CONFLICT', message: 'audit-policy.json is damaged; a copy was kept beside it', reason: 'damaged' }, en)).toEqual({
       line: en('settings.security.damaged'),
       repair: true
+    })
+    expect(securityFailure({ ok: false, code: 'CONFLICT', message: 'audit-policy.json could not be read (EISDIR)' }, en)).toEqual({
+      line: 'audit-policy.json could not be read (EISDIR)',
+      repair: false
     })
     expect(securityFailure({ ok: false, code: 'HOST_NOT_RUNNING', message: '' }, en)).toEqual({ line: en('settings.security.noHost'), repair: false })
     expect(securityFailure({ ok: false, code: 'FAILED', message: 'disk full' }, en)).toEqual({ line: 'disk full', repair: false })
   })
 
-  it('starts a period at the local midnight of its first day', () => {
+  // Fix round 1, ruling 4: the longest period is the records' whole retention (the store drops days before today−30)
+  it('starts a period at the local midnight of its first day, the longest as far back as records are kept', () => {
     const now = new Date(2026, 9, 23, 15, 30)
     expect(periodSince('today', now)).toBe(new Date(2026, 9, 23).toISOString())
     expect(periodSince('week', now)).toBe(new Date(2026, 9, 17).toISOString())
-    expect(periodSince('month', now)).toBe(new Date(2026, 8, 24).toISOString())
+    expect(retentionSince(now)).toBe(new Date(2026, 8, 23).toISOString())
+    expect(periodSince('month', now)).toBe(retentionSince(now))
+  })
+
+  // Fix round 1, I1: Run detail's count reads no further back than the Run or the retention, whichever is later
+  it('bounds a Run’s count by its start or the retention, whichever is later', () => {
+    const now = new Date(2026, 9, 23, 15, 30)
+    expect(summarySince('2026-10-20T01:02:03.000Z', now)).toBe('2026-10-20T01:02:03.000Z')
+    expect(summarySince('2026-01-01T00:00:00.000Z', now)).toBe(retentionSince(now))
+    expect(summarySince(undefined, now)).toBe(retentionSince(now))
+    expect(summarySince('later', now)).toBe(retentionSince(now))
+  })
+
+  // Fix round 1, ruling 8: a Job row folded onto its Run is read as that Run; a Job row with none, or nested, as the Job
+  it('reads a Run’s calls by its Run, and a Job row without one by the Job', () => {
+    expect(observeTargetOf('run_1', 'job_1')).toEqual({ runId: 'run_1' })
+    expect(observeTargetOf(undefined, 'run_2')).toEqual({ runId: 'run_2' })
+    expect(observeTargetOf(undefined, 'job_1')).toEqual({ jobId: 'job_1' })
+  })
+
+  // Fix round 1, I1 and rulings 6, 7: the screens wire these as tested here (no jsdom for the components themselves)
+  it('Run detail reads on the throttle, not on every detail, and Audit Logs keeps its filters when the focus clears', () => {
+    const detail = source('./RunDetail.tsx')
+    expect(detail).toContain('}, [targetId, runState, readAgain, runtimeId, door])')
+    expect(detail).toContain('}, [selectedId, selectedState, readTaskAgain, runtimeId, door])')
+    expect(detail).toContain('summarySince(createdAt, new Date())')
+    const app = source('../App.tsx')
+    const element = app.slice(app.indexOf('<SecuritySettings'), app.indexOf('onClearFocus='))
+    expect(element.length).toBeGreaterThan(0)
+    expect(element).not.toContain('key=')
+  })
+
+  // Fix round 1, I1: the throttle
+  it('reads a Run’s observe facts at once, then only when its state moved, and at most every 30 seconds', () => {
+    expect(OBSERVE_READ_EVERY_MS).toBe(30_000)
+    const at = 1_000_000
+    // Never read, or another Run: now
+    expect(observeReadDue(null, { target: 'run_1', state: 'running|0/3' }, at)).toBe(0)
+    expect(observeReadDue({ target: 'run_1', state: 'running|0/3', at }, { target: 'run_2', state: 'running|0/3' }, at + 1)).toBe(0)
+    // Nothing moved: never, however long it has been
+    expect(observeReadDue({ target: 'run_1', state: 'running|0/3', at }, { target: 'run_1', state: 'running|0/3' }, at + 3_600_000)).toBeNull()
+    // Moved soon after the last read: once the 30 seconds are up
+    expect(observeReadDue({ target: 'run_1', state: 'running|0/3', at }, { target: 'run_1', state: 'running|1/3' }, at + 10_000)).toBe(20_000)
+    // Moved later: now
+    expect(observeReadDue({ target: 'run_1', state: 'running|0/3', at }, { target: 'run_1', state: 'completed|3/3' }, at + 30_000)).toBe(0)
   })
 
   // The filter helper: what audit-list and audit-summary are sent
@@ -231,7 +286,8 @@ describe('securityText', () => {
   // Empty states (design §11): observe off, the Host not running, nothing yet
   it('says why there are no records, or that observe is off above records kept before', () => {
     expect(auditStateLine({ failure: { ok: false, code: 'HOST_NOT_RUNNING', message: '' }, mode: 'observe', count: 0 }, en)).toBe(en('settings.security.audit.noHost'))
-    expect(auditStateLine({ failure: { ok: false, code: 'CONFLICT', message: '' }, mode: null, count: 0 }, en)).toBe(en('settings.security.audit.damaged'))
+    expect(auditStateLine({ failure: { ok: false, code: 'CONFLICT', message: '', reason: 'damaged' }, mode: null, count: 0 }, en)).toBe(en('settings.security.audit.damaged'))
+    expect(auditStateLine({ failure: { ok: false, code: 'CONFLICT', message: 'could not be read' }, mode: null, count: 0 }, en)).toBe('could not be read')
     expect(auditStateLine({ failure: null, mode: 'compatibility', count: 0 }, en)).toBe(en('settings.security.audit.off'))
     expect(auditStateLine({ failure: null, mode: 'observe', count: 0 }, en)).toBe(en('settings.security.audit.empty'))
     expect(auditStateLine({ failure: null, mode: 'compatibility', count: 3 }, en)).toBe(en('settings.security.audit.offWithRows'))

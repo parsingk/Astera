@@ -39,6 +39,7 @@ import {
   type AuditCounts,
   type AuditCursor,
   type AuditFilters,
+  type AuditFocus,
   type AuditRow,
   type FilterChoices,
   type Period
@@ -64,15 +65,16 @@ const PAGE = 100
 /** Settings › Security & Access (observe mode design §11): Policies, the observe switch, what observe can see and the
  *  one rule set, and Audit Logs, the calls observed sessions made judged by those rules as they are now. The Host owns
  *  the rules and the records and answers every change with the rules as they are after it; nothing here decides a call.
- *  `run`: the Run Run detail opened this for, whose calls only Audit Logs shows until the filter is cleared. */
+ *  `focus`: the Run (or a Job row with no Run of its own) Run detail opened this for, whose calls only Audit Logs shows
+ *  until the filter is cleared; clearing it keeps the other filters and the period. */
 export function SecuritySettings({
-  run,
-  onClearRun,
+  focus,
+  onClearFocus,
   sessionTitle,
   runName
 }: {
-  run?: { id: string; name: string }
-  onClearRun: () => void
+  focus?: AuditFocus
+  onClearFocus: () => void
   /** A session's tab title while this app has the tab. */
   sessionTitle: (sessionId: string) => string | undefined
   /** A Run's Job name while this project's Jobs list has it. */
@@ -89,7 +91,12 @@ export function SecuritySettings({
 
   const load = async (): Promise<void> => {
     const r = await window.api.audit.policies().catch(failed)
-    if (!r.ok) return void setFailure(r)
+    if (!r.ok) {
+      setFailure(r)
+      // A damaged file holds no rules to show; the Host away for a moment leaves the last ones read on screen
+      if (r.reason === 'damaged') setPolicy(null)
+      return
+    }
     setFailure(null)
     setPolicy(policyIn(r.body))
     setCoverage(arr<CoverageRow>(r.body.coverage))
@@ -98,30 +105,21 @@ export function SecuritySettings({
     void load()
   }, [])
 
-  /** Runs one change and shows the rules the Host answered with; says why when it did not happen. A damaged rules file
-   *  found on the way shows its repair. */
+  /** Runs one change, shows the rules the Host answered with or says why it did not happen, and reads the rules again
+   *  either way, as Agent profiles does: a failed change may have found the file damaged (its repair is then offered)
+   *  or changed from the CLI meanwhile, and a repair brings back what observe can see. */
   const change = async (work: () => Promise<PluginsCallAnswer>): Promise<void> => {
     if (busy) return
     setBusy(true)
     try {
       const r = await work().catch(failed)
-      if (!r.ok) {
-        const f = securityFailure(r, t)
-        if (f.repair) setFailure(r)
-        toast.error(f.line)
-        return
-      }
+      if (!r.ok) return void toast.error(securityFailure(r, t).line)
       const p = policyIn(r.body)
-      if (p !== null) {
-        setPolicy(p)
-        setFailure(null)
-      }
-      // A change answers the rules only: what observe can see comes with a read, missed when the first one failed (a
-      // damaged file just repaired)
-      if (coverage.length === 0) void load()
+      if (p !== null) setPolicy(p)
       setChanges((n) => n + 1)
     } finally {
       setBusy(false)
+      void load()
     }
   }
 
@@ -139,7 +137,7 @@ export function SecuritySettings({
   return (
     <div className="settings-stack">
       <p className="settings-hint">{t('settings.security.hint')}</p>
-      <section className="security-section">
+      <section className="security-section" aria-busy={busy || (policy === null && failure === null)}>
         <h3 className="security-title">{POLICIES_TITLE}</h3>
         {shownFailure !== null && (
           <div className="settings-group">
@@ -208,7 +206,7 @@ export function SecuritySettings({
                   {policy.rules.map((r, i) => (
                     <li key={r.id} className="ext-row security-rule">
                       <span className="detail-check-no">{i + 1}</span>
-                      <RuleFields rule={r} busy={busy} onChange={(c) => void change(() => window.api.audit.editRule(r.id, c))} />
+                      <RuleFields rule={r} place={i + 1} busy={busy} onChange={(c) => void change(() => window.api.audit.editRule(r.id, c))} />
                       <button
                         type="button"
                         title={t('settings.security.rules.moveUp')}
@@ -267,8 +265,8 @@ export function SecuritySettings({
           rules={policy?.rules ?? []}
           coverage={coverage}
           changes={changes}
-          run={run}
-          onClearRun={onClearRun}
+          focus={focus}
+          onClearFocus={onClearFocus}
           sessionTitle={sessionTitle}
           runName={runName}
         />
@@ -277,13 +275,26 @@ export function SecuritySettings({
   )
 }
 
-/** A rule's effect, action and place, each changed where it stands (policies-rules-edit). */
-function RuleFields({ rule, busy, onChange }: { rule: Pick<AuditRule, 'effect' | 'action' | 'scope'>; busy: boolean; onChange: (c: Changes) => void }): React.JSX.Element {
+/** A rule's effect, action and place, each changed where it stands (policies-rules-edit). `place`: the rule's number in
+ *  the list, which each field's label starts with as the row's buttons' do; none for the rule being added. */
+function RuleFields({
+  rule,
+  place,
+  busy,
+  onChange
+}: {
+  rule: Pick<AuditRule, 'effect' | 'action' | 'scope'>
+  place?: number
+  busy: boolean
+  onChange: (c: Changes) => void
+}): React.JSX.Element {
   const { t } = useI18n()
+  const label = (key: 'settings.security.rules.effect' | 'settings.security.rules.action' | 'settings.security.rules.scope'): string =>
+    place === undefined ? t(key) : `${place}: ${t(key)}`
   return (
     <div className="security-rule-fields">
       <Select
-        ariaLabel={t('settings.security.rules.effect')}
+        ariaLabel={label('settings.security.rules.effect')}
         disabled={busy}
         items={EFFECT_ORDER.map((e) => ({ value: e, label: effectLabel(e, t) }))}
         value={rule.effect}
@@ -291,14 +302,14 @@ function RuleFields({ rule, busy, onChange }: { rule: Pick<AuditRule, 'effect' |
       />
       <Select
         className="security-rule-action"
-        ariaLabel={t('settings.security.rules.action')}
+        ariaLabel={label('settings.security.rules.action')}
         disabled={busy}
         items={ruleActionChoices(rule.action).map((a) => ({ value: a, label: actionPhrase(a, t) }))}
         value={rule.action}
         onChange={(v) => onChange({ action: v })}
       />
       <Select
-        ariaLabel={t('settings.security.rules.scope')}
+        ariaLabel={label('settings.security.rules.scope')}
         disabled={busy}
         items={SCOPE_ORDER.map((s) => ({ value: s, label: scopeLabel(s === 'anywhere' ? undefined : s, t) }))}
         value={rule.scope ?? 'anywhere'}
@@ -338,8 +349,8 @@ function AuditLogs({
   rules,
   coverage,
   changes,
-  run,
-  onClearRun,
+  focus,
+  onClearFocus,
   sessionTitle,
   runName
 }: {
@@ -348,15 +359,16 @@ function AuditLogs({
   rules: readonly AuditRule[]
   coverage: readonly CoverageRow[]
   changes: number
-  run?: { id: string; name: string }
-  onClearRun: () => void
+  focus?: AuditFocus
+  onClearFocus: () => void
   sessionTitle: (sessionId: string) => string | undefined
   runName: (runId: string) => string | undefined
 }): React.JSX.Element {
   const { t } = useI18n()
   const profiles = useAgentProfiles()
-  // A Run's calls may be older than a week; the 30 days the records are kept cover them all
-  const [period, setPeriod] = useState<Period>(run !== undefined ? 'month' : 'week')
+  // A Run's calls may be older than a week: its view reads the whole retention (today−30 on), the same window Run
+  // detail counts them in (summarySince), so the rows here are the ones counted there
+  const [period, setPeriod] = useState<Period>(focus !== undefined ? 'month' : 'week')
   const [filters, setFilters] = useState<AuditFilters>({})
   const [rows, setRows] = useState<AuditRow[] | null>(null)
   const [next, setNext] = useState<AuditCursor | null>(null)
@@ -371,9 +383,12 @@ function AuditLogs({
   /** Which read is the latest: a slower answer to an earlier one is dropped. */
   const reading = useRef(0)
 
-  const runId = run?.id
+  // The focus by its id, so the read follows it and not the object App makes on each render
+  const focusRunId = focus !== undefined && 'runId' in focus ? focus.runId : undefined
+  const focusJobId = focus !== undefined && 'jobId' in focus ? focus.jobId : undefined
   useEffect(() => {
-    const q = auditQuery({ ...filters, ...(runId !== undefined ? { runId } : {}) }, period, new Date())
+    const focused = { ...(focusRunId !== undefined ? { runId: focusRunId } : {}), ...(focusJobId !== undefined ? { jobId: focusJobId } : {}) }
+    const q = auditQuery({ ...filters, ...focused }, period, new Date())
     query.current = q
     const n = ++reading.current
     setLoading(true)
@@ -394,11 +409,12 @@ function AuditLogs({
       setChoices((c) => filterChoices(page.records, c))
       setCounts(sum.ok ? summaryOf(sum.body) : null)
     })
-  }, [period, filters, runId, changes])
+  }, [period, filters, focusRunId, focusJobId, changes])
 
   const more = async (): Promise<void> => {
+    // Not while a new query is being read: its cursor would be paired with the rows of the last one
     const q = nextPageQuery(query.current, next)
-    if (q === null || loadingMore) return
+    if (q === null || loading || loadingMore) return
     const n = reading.current
     setLoadingMore(true)
     try {
@@ -420,12 +436,12 @@ function AuditLogs({
   const line = rows === null ? null : auditStateLine({ failure, mode, count: rows.length }, t)
 
   return (
-    <div className="security-audit">
+    <div className="security-audit" aria-busy={loading || loadingMore}>
       <p className="settings-hint">{t('settings.security.audit.hint')}</p>
-      {run !== undefined && (
+      {focus !== undefined && (
         <div className="security-run-filter">
-          <b>{t('settings.security.filter.run', { name: run.name })}</b>
-          <button className="detail-clear" title={t('settings.security.filter.clear')} aria-label={t('settings.security.filter.clear')} onClick={onClearRun}>
+          <b>{t('settings.security.filter.run', { name: focus.name })}</b>
+          <button className="detail-clear" title={t('settings.security.filter.clear')} aria-label={t('settings.security.filter.clear')} onClick={onClearFocus}>
             <X size={12} />
           </button>
         </div>
@@ -524,7 +540,7 @@ function AuditLogs({
       )}
       {next !== null && (
         <div className="remote-actions">
-          <button className="settings-gen-refresh" disabled={loadingMore} onClick={() => void more()}>
+          <button className="settings-gen-refresh" disabled={loading || loadingMore} onClick={() => void more()}>
             {t('settings.security.audit.more')}
           </button>
           {loadingMore && <span className="loading-spinner" aria-hidden="true" />}

@@ -131,7 +131,9 @@ const REASONS = {
 } as const satisfies Record<string, MessageKey>
 
 export function securityFailure(r: Failure, t: T): { line: string; repair: boolean } {
-  if (r.code === 'CONFLICT') return { line: t(REASONS.damaged), repair: true }
+  // Only a damaged file: the Host says so as its reason. Another 409 (a file it could not read at all) is not repaired
+  // by starting over, and its own sentence says why
+  if (r.reason === 'damaged') return { line: t(REASONS.damaged), repair: true }
   if (r.code === 'HOST_NOT_RUNNING') return { line: t(REASONS.noHost), repair: false }
   return { line: failureLine(r, t, { read: true }), repair: false }
 }
@@ -157,11 +159,49 @@ export const PERIODS: Record<Period, MessageKey> = {
   week: 'settings.security.period.week',
   month: 'settings.security.period.month'
 }
-const PERIOD_DAYS: Record<Period, number> = { today: 1, week: 7, month: 30 }
+/** How many days before today a period starts. The longest is the records' whole retention: the store keeps the days
+ *  from today−30 (core/audit/store.ts prune), so "the last 30 days" reaches as far back as anything is kept. */
+const DAYS_BACK: Record<Period, number> = { today: 0, week: 6, month: 30 }
 
-/** Where a period starts: the local midnight of its first day, today counted as one. */
-export function periodSince(p: Period, now: Date): string {
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate() - (PERIOD_DAYS[p] - 1)).toISOString()
+const midnightDaysBack = (now: Date, days: number): string => new Date(now.getFullYear(), now.getMonth(), now.getDate() - days).toISOString()
+
+/** Where a period starts: the local midnight of its first day. */
+export const periodSince = (p: Period, now: Date): string => midnightDaysBack(now, DAYS_BACK[p])
+
+/** The oldest record the store still keeps can be from this local midnight. */
+export const retentionSince = (now: Date): string => midnightDaysBack(now, DAYS_BACK.month)
+
+/** Where Run detail's count of a Run's calls starts reading: the Run's start (`runs get`'s createdAt) or the retention,
+ *  whichever is later, so the Host never reads days the Run cannot have records in. The Run's Audit Logs view reads
+ *  from the retention, which holds the same records. */
+export function summarySince(createdAt: unknown, now: Date): string {
+  const kept = retentionSince(now)
+  if (typeof createdAt !== 'string' || !Number.isFinite(Date.parse(createdAt))) return kept
+  return Date.parse(createdAt) > Date.parse(kept) ? createdAt : kept
+}
+
+/** What Run detail reads observe facts for: the Run (a Job row folded onto its one Run carries its id), or, for a Job
+ *  row with no Run of its own (nested, or a schedule), the Job. Ids say which by their prefix (view.ts rowFor). */
+export function observeTargetOf(foldedRunId: string | undefined, openedId: string): { runId: string } | { jobId: string } {
+  const id = foldedRunId ?? openedId
+  return id.startsWith('job_') ? { jobId: id } : { runId: id }
+}
+
+/** What Run detail opens Audit Logs on: the Run's calls, or a Job row's with no Run of its own, and its name for the
+ *  filter's chip. */
+export type AuditFocus = ReturnType<typeof observeTargetOf> & { name: string }
+
+/** Run detail reads tokens and the would-deny count no more often than this. */
+export const OBSERVE_READ_EVERY_MS = 30_000
+
+/** When Run detail reads its observe facts again: 0 to read now, a wait in ms to read once it is over, null for no read.
+ *  At once for a target it has not read; after that only when the target's coarse state (a Run's outcome and progress,
+ *  a Task's status) moved, and never sooner than OBSERVE_READ_EVERY_MS after the last read. Every event of a running
+ *  Run re-reads the detail, and each read here asks the Host to read the records. */
+export function observeReadDue(last: { target: string; state: string; at: number } | null, next: { target: string; state: string }, now: number): number | null {
+  if (last === null || last.target !== next.target) return 0
+  if (last.state === next.state) return null
+  return Math.max(0, OBSERVE_READ_EVERY_MS - (now - last.at))
 }
 
 /** The filters Audit Logs offers, and the Run it was opened for from Run detail. */
@@ -262,7 +302,7 @@ export const sessionLabel = (r: Pick<AuditRow, 'sessionId' | 'provider' | 'kind'
 export function auditStateLine(s: { failure: Failure | null; mode: AuditMode | null; count: number }, t: T): string | null {
   if (s.failure !== null) {
     if (s.failure.code === 'HOST_NOT_RUNNING') return t('settings.security.audit.noHost')
-    if (s.failure.code === 'CONFLICT') return t('settings.security.audit.damaged')
+    if (s.failure.reason === 'damaged') return t('settings.security.audit.damaged')
     return failureLine(s.failure, t, { read: true })
   }
   if (s.count === 0) return s.mode === 'compatibility' ? t('settings.security.audit.off') : t('settings.security.audit.empty')

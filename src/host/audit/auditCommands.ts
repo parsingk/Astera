@@ -5,7 +5,16 @@
 // For this machine's app and CLI: MCP, a remote controller and a plugin never get here, since no gate lists them, and an
 // agent's shell is refused even these reads, so the log of an agent's calls stays away from agents (design §3).
 import { RepairNeeded } from '../../core/settings/repairNeeded'
-import { AUDIT_ACTIONS, STARTER_POLICY, decide, isRuleAction, readAuditPolicy, type AuditDecision, type AuditPolicy } from '../../core/audit/policy'
+import {
+  AUDIT_ACTIONS,
+  AuditPolicyDamaged,
+  STARTER_POLICY,
+  decide,
+  isRuleAction,
+  readAuditPolicy,
+  type AuditDecision,
+  type AuditPolicy
+} from '../../core/audit/policy'
 import { auditStoppedAtLimit, queryRecords, visitRecords, type AuditFilter, type AuditRecord } from '../../core/audit/store'
 import type { OrchCaller } from '../../core/host/orchProtocol'
 
@@ -127,8 +136,12 @@ export function createHostAudit(d: { profileDir: string }): HostAudit {
       try {
         return await answer(a.cmd, a.args)
       } catch (e) {
-        // A damaged rules file is the person's to repair (RepairNeeded): no decision can be made until then
-        return { status: e instanceof RepairNeeded ? 409 : 500, body: { error: message(e) } }
+        // A damaged rules file is the person's to repair (RepairNeeded): no decision can be made until then. `reason:
+        // 'damaged'` when starting over with the starter rules (policies-rules-reset) repairs it, as policies-* say
+        return {
+          status: e instanceof RepairNeeded ? 409 : 500,
+          body: { error: message(e), ...(e instanceof AuditPolicyDamaged ? { reason: 'damaged' } : {}) }
+        }
       }
     }
   }

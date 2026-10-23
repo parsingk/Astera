@@ -200,8 +200,12 @@ export function createHostPolicies(d: {
       try {
         r = await answer(a.cmd, a.args)
       } catch (e) {
-        // A damaged file is the person's to repair (RepairNeeded), and nothing is written over it; anything else failed
-        r = { status: e instanceof RepairNeeded ? 409 : 500, body: { error: message(e) } }
+        // A damaged file is the person's to repair (RepairNeeded), and nothing is written over it; anything else failed.
+        // `reason: 'damaged'` when starting over with the starter rules repairs it, so a screen offers that and only then
+        r = {
+          status: e instanceof RepairNeeded ? 409 : 500,
+          body: { error: message(e), ...(e instanceof AuditPolicyDamaged ? { reason: 'damaged' } : {}) }
+        }
       }
       if (r.status === 200 && POLICY_CHANGES.has(a.cmd)) {
         a.marks.effects += 1

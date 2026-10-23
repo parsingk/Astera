@@ -184,7 +184,8 @@ describe('createHostPolicies', () => {
     await fs.writeFile(h.file, '{ not json')
     const r = await h.call('policies-show')
     expect(r.status).toBe(409)
-    expect(r.body).toMatchObject({ error: expect.stringContaining('damaged') })
+    // The reason the screen offers its repair for (Task 8 fix round 1, ruling 1)
+    expect(r.body).toMatchObject({ error: expect.stringContaining('damaged'), reason: 'damaged' })
     for (const [cmd, args] of [
       ['policies-set-mode', { mode: 'observe' }],
       ['policies-rules-add', { effect: 'deny', action: 'git.*' }],
@@ -224,6 +225,9 @@ describe('createHostPolicies', () => {
     expect(r.status).toBe(409)
     expect(r.marks.effects).toBe(0)
     expect((await fs.stat(h.file)).isDirectory()).toBe(true)
+    // Not damaged: starting over cannot repair it, so it gives no reason to offer that
+    expect((r.body as { reason?: unknown }).reason).toBeUndefined()
+    expect((await h.call('policies-show')).body).not.toHaveProperty('reason')
   })
 
   it('edits a rule in place, and clears its scope', async () => {

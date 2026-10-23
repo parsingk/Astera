@@ -51,7 +51,7 @@ import { ExtensionsSettings } from './components/ExtensionsSettings'
 import { AgentProfilesSettings } from './components/AgentProfilesSettings'
 import { profileOfConversation, spawnPermission } from './components/agentProfilesText'
 import { SecuritySettings } from './components/SecuritySettings'
-import { SECURITY_TAB } from './components/securityText'
+import { SECURITY_TAB, type AuditFocus } from './components/securityText'
 import { jobName } from './lib/jobName'
 import { RuntimeSelector } from './components/RuntimeSelector'
 import { createReplyGate } from './lib/replyGate'
@@ -718,9 +718,9 @@ export default function App(): React.JSX.Element {
     | 'worktree'
     | 'history'
   >('general') // the settings sidebar, with general and accounts added
-  /** The Run Run detail opened Settings › Security & Access for: Audit Logs shows its calls only, until the filter is
-   *  cleared or Settings closes. */
-  const [auditRun, setAuditRun] = useState<{ id: string; name: string } | null>(null)
+  /** The Run (or a Job row with no Run of its own) Run detail opened Settings › Security & Access for: Audit Logs shows
+   *  its calls only, until the filter is cleared or Settings closes. */
+  const [auditRun, setAuditRun] = useState<AuditFocus | null>(null)
   useEffect(() => {
     if (!showSettings) setAuditRun(null)
   }, [showSettings])
@@ -5459,10 +5459,8 @@ export default function App(): React.JSX.Element {
                 {settingsTab === 'agentProfiles' && <AgentProfilesSettings accounts={accounts} />}
                 {settingsTab === 'security' && (
                   <SecuritySettings
-                    // A Run picked from Run detail starts Audit Logs over with its filter
-                    key={auditRun?.id ?? ''}
-                    {...(auditRun !== null ? { run: auditRun } : {})}
-                    onClearRun={() => setAuditRun(null)}
+                    {...(auditRun !== null ? { focus: auditRun } : {})}
+                    onClearFocus={() => setAuditRun(null)}
                     sessionTitle={(id) => sessions.find((s) => s.id === id)?.title}
                     runName={(id) => {
                       const row = orchSnapshot ? findRun(orchSnapshot, id) : undefined
@@ -5653,9 +5651,9 @@ export default function App(): React.JSX.Element {
           // Audit Logs filtered to this Run (observe mode design §11): this computer's Runs only, whose records are here
           {...(openRun.runtimeId === undefined
             ? {
-                onOpenAuditLogs: (r: { id: string; name: string }) => {
+                onOpenAuditLogs: (focus: AuditFocus) => {
                   setOpenRun(null) // Settings opens in its place
-                  setAuditRun(r)
+                  setAuditRun(focus)
                   setSettingsTab('security')
                   setShowSettings(true)
                 }

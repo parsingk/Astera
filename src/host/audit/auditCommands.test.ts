@@ -223,8 +223,20 @@ describe('createHostAudit', () => {
   it('answers 409 while the rules file is damaged, since no decision can be made', async () => {
     const h = await rig(all)
     await fs.writeFile(profilePaths(h.profileDir).auditPolicy, '{ not json')
-    expect((await h.call('audit-list')).status).toBe(409)
-    expect((await h.call('audit-summary')).status).toBe(409)
+    for (const cmd of ['audit-list', 'audit-summary']) {
+      const r = await h.call(cmd)
+      expect(r.status).toBe(409)
+      // The reason the screen offers starting over for (Task 8 fix round 1, ruling 1)
+      expect(r.body, cmd).toMatchObject({ reason: 'damaged' })
+    }
+  })
+
+  it('gives no reason for a rules file it could not read at all', async () => {
+    const h = await rig(all)
+    await fs.mkdir(profilePaths(h.profileDir).auditPolicy, { recursive: true })
+    const r = await h.call('audit-list')
+    expect(r.status).toBe(409)
+    expect(r.body).not.toHaveProperty('reason')
   })
 
   it('is for the app and the CLI only, and refuses an agent’s shell even these reads', async () => {
