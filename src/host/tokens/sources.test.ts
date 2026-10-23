@@ -2,7 +2,7 @@
 // transcript and its sub-agents' files, a Claude chat's stream, and a Codex session's rollout, terminal or chat. Each
 // response is handed to the store once, for whoever the session worked for when it ran. Every fixture is written for the
 // test, in the shapes measured from Claude Code 2.1.306 to 2.1.309 and Codex 0.160.
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -332,6 +332,36 @@ describe('createTokenSources', () => {
     await r.sources.poll()
     expect(r.store.spent()).toEqual([{ sessionId: 'sess_a', dispatchId: 'd1', input: 2, output: 1 }])
     r.sources.dispose()
+  })
+
+  // Final review M3: the folder is read every 5 s, its files are not: each is looked at once, when it first appears
+  it('looks at each sub-agent file once, not at every read, and follows one that appears later', async () => {
+    const statusLines: Record<string, string> = {}
+    const r = await rig({ state: () => orch([dispatch('d1', 't1', 'sess_a')]), now: () => T0, statusLines })
+    const transcript = path.join(r.dir, 'conv-3.jsonl')
+    await fs.writeFile(transcript, '')
+    const agents = path.join(r.dir, 'conv-3', 'subagents')
+    await fs.mkdir(agents, { recursive: true })
+    const old = path.join(agents, 'agent-old.jsonl')
+    await fs.writeFile(old, lines(claudeLine(T0 + 10, 'msg_old_agent', 50, 50)))
+    await fs.utimes(old, new Date(T0 - 3_600_000), new Date(T0 - 3_600_000))
+    statusLines.sess_a = transcript
+    r.ptys.open('pty_a', note('session', 'sess_a'))
+    const stat = vi.spyOn(fs, 'stat')
+    try {
+      for (let i = 0; i < 3; i++) await r.sources.poll()
+      expect(stat.mock.calls.filter(([f]) => f === old)).toHaveLength(1)
+      const later = path.join(agents, 'agent-later.jsonl')
+      await fs.writeFile(later, lines(claudeLine(T0 + 30, 'msg_later_agent', 3, 4)))
+      await fs.utimes(later, new Date(T0 + 60_000), new Date(T0 + 60_000))
+      await r.sources.poll()
+      await r.sources.poll()
+      expect(r.store.spent()).toEqual([{ sessionId: 'sess_a', dispatchId: 'd1', input: 3, output: 4 }])
+      expect(stat.mock.calls.filter(([f]) => f === old)).toHaveLength(1)
+    } finally {
+      stat.mockRestore()
+      r.sources.dispose()
+    }
   })
 
   // Fix round 1, ruling 1: a file that got shorter (made again) is never read whole; it is followed again from its end

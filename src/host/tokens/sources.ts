@@ -126,8 +126,9 @@ interface Followed {
   sessionId: string
   since: number
   rollout: { path: string; tail: JsonlTail | null; read: (lines: readonly string[]) => TokensSpent[] } | null
-  /** Claude terminal: one reader over the transcript and its sub-agents' files, by path. Null for a Codex session. */
-  transcript: { read: (lines: readonly string[]) => TokensSpent[]; files: Map<string, JsonlTail> } | null
+  /** Claude terminal: one reader over the transcript and its sub-agents' files, by path, and every sub-agent file looked
+   *  at, followed or not. Null for a Codex session. */
+  transcript: { read: (lines: readonly string[]) => TokensSpent[]; files: Map<string, JsonlTail>; seen: Set<string> } | null
   chat: ((lines: readonly string[]) => TokensSpent[]) | null
   /** When its pty or process ended (epoch ms), null while it runs. Its last read takes nothing dated after it. */
   endedAt: number | null
@@ -189,7 +190,7 @@ export function createTokenSources(d: {
       if (!f) {
         f = fresh(meta.id)
         // A terminal without a rollout is read as Claude's, through its statusline, until a note names one
-        f.transcript = { read: claudeTokenReader(f.since), files: new Map() }
+        f.transcript = { read: claudeTokenReader(f.since), files: new Map(), seen: new Set() }
         terminals.set(ptyId, f)
       }
       noteRollout(f, meta)
@@ -248,16 +249,19 @@ export function createTokenSources(d: {
       if (!t.files.has(named)) t.files.set(named, await follow(named))
       // A sub-agent writes a file of its own beside the transcript, made when it starts. One last written before this
       // session started is a session before's, in a resumed conversation's folder (fix round 1, ruling 2): not
-      // followed, and looked at again while it is not, in case its agent is taken up again
+      // followed. Each file is looked at once, when the folder first lists it, not at every read (final review M3); one
+      // that could not be looked at is tried again at the next
       const agents = path.join(path.dirname(named), path.basename(named, '.jsonl'), 'subagents')
       const names = await fs.readdir(agents).catch(() => [] as string[])
       for (const n of names) {
         const file = path.join(agents, n)
-        if (!n.endsWith('.jsonl') || t.files.has(file)) continue
+        if (!n.endsWith('.jsonl') || t.seen.has(file)) continue
         const written = await fs.stat(file).then(
           (st) => st.mtimeMs,
-          () => -Infinity
+          () => null
         )
+        if (written === null) continue
+        t.seen.add(file)
         if (written >= f.since) t.files.set(file, await follow(file))
       }
     }
