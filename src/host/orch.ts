@@ -5,6 +5,7 @@ import { REMOTE_SESSION_CHANGES, REMOTE_SESSION_READS, type RemoteSessions } fro
 import { PLUGIN_COMMANDS, pluginsCommand } from './plugins/commands'
 import { EXTENSION_COMMANDS, type HostExtensions } from './extensions/commands'
 import { AGENT_PROFILE_COMMANDS, type HostAgentProfiles } from './agentProfiles/commands'
+import { POLICY_COMMANDS, type HostPolicies } from './audit/policyCommands'
 import { readAgentProfiles } from '../core/agentProfiles/store'
 import { readAgentPermissionMode } from '../core/settings/agentPermissionMode'
 import type { PluginManager } from './plugins/manager'
@@ -579,6 +580,9 @@ export function createHostOrch(a: {
   /** The agent profiles (Agent Profiles design §4): every `agent-profiles-*` command, for this machine's app and CLI,
    *  routed like the extensions. Absent: all of them answer 501. */
   agentProfiles?: Pick<HostAgentProfiles, 'command'>
+  /** Observe mode's rules and mode (observe mode design §7, §12): every `policies-*` command, for this machine's app
+   *  and CLI, routed like the agent profiles. Absent: all of them answer 501. */
+  policies?: Pick<HostPolicies, 'command'>
   /** Session work units in the Host (E2 §5), asked per call: `index.ts` builds them after this orch (their
    *  in-Run test reads its state). Passed through to `hostOrchDeps` (HOST_TRACKS), and the app only
    *  `work-units-fork`, `-reload`, `-complete`, `-cancel` and `-git-op`. Absent, or null (no spawner, so no
@@ -2044,6 +2048,19 @@ export function createHostOrch(a: {
                 marks
               })
             : { status: 501, body: { error: 'this Host does not keep agent profiles' } }
+          return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
+        }
+        // **Observe mode's rules** (observe mode design §7, §12), the same way. No gate lists them.
+        if (POLICY_COMMANDS.has(cmd)) {
+          const answered = a.policies
+            ? await a.policies.command({
+                cmd,
+                args,
+                role: from?.role,
+                ...(agentShell(from, sessionId) ? { agentRefusal: AGENT_REFUSAL(cmd) } : {}),
+                marks
+              })
+            : { status: 501, body: { error: 'this Host does not keep observe rules' } }
           return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
         }
         // Design §8: a call that arrives before the state is loaded waits, rather than failing.

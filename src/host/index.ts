@@ -8,6 +8,7 @@ import childProcess from 'node:child_process'
 import { createPluginManager } from './plugins/manager'
 import { createHostExtensions } from './extensions/commands'
 import { agentProfileInUse, createHostAgentProfiles } from './agentProfiles/commands'
+import { createHostPolicies } from './audit/policyCommands'
 import { createGatewayHub } from './gateway/hub'
 import { hidingLog } from '../core/extensions/secrets'
 import { sweepGeneratedMcp } from '../core/extensions/resolve'
@@ -771,6 +772,8 @@ async function main(): Promise<void> {
   const touchAgentProfile = (id: string): void => {
     void agentProfiles.command({ cmd: 'agent-profiles-touch', args: { id }, role: 'app', marks: { effects: 0 } }).catch((e) => log.write(`agent profile ${id}: its use could not be stamped: ${String(e)}`))
   }
+  // Observe mode's rules and mode (observe mode design §7, ruling M1): audit-policy.json, which this Host alone writes
+  const policies = createHostPolicies({ profileDir })
   const orch = createHostOrch({
     profileDir,
     version: hostVersion,
@@ -778,6 +781,7 @@ async function main(): Promise<void> {
     plugins,
     extensions,
     agentProfiles,
+    policies,
     // The job-source plugins a person makes Jobs from (plugin Phase 4 J10), asked through the runtime
     jobSources: hostJobSources({ manager: plugins, runtime: pluginRuntime }),
     // The completion check plugins a Task's checks ask (plugin Phase 5 C8), through the same runtime

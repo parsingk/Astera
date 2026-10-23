@@ -42,11 +42,15 @@ export interface ProfilePaths {
   agentProfiles: string
   /** The agent profile each conversation ran as, by the provider's conversation id: `{ version, conversations }`. */
   agentProfileConversations: string
+  /** Observe mode's rules and the mode itself: `{ version, mode, rules, otherwise }`. Not `policy.json`, which is the
+   *  release update feed. */
+  auditPolicy: string
 }
 
 export function profilePaths(profileDir: string): ProfilePaths {
   return {
     agentProfiles: path.join(profileDir, 'agent-profiles.json'),
-    agentProfileConversations: path.join(profileDir, 'agent-profile-conversations.json')
+    agentProfileConversations: path.join(profileDir, 'agent-profile-conversations.json'),
+    auditPolicy: path.join(profileDir, 'audit-policy.json')
   }
 }
