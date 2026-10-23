@@ -5,7 +5,17 @@
 // but not change the rules its own calls are previewed against.
 import { randomBytes } from 'node:crypto'
 import { RepairNeeded } from '../../core/settings/repairNeeded'
-import { AUDIT_ACTIONS, COVERAGE, STARTER_POLICY, isRuleAction, readAuditPolicy, writeAuditPolicy, type AuditPolicy, type AuditRule } from '../../core/audit/policy'
+import {
+  AUDIT_ACTIONS,
+  AuditPolicyDamaged,
+  COVERAGE,
+  STARTER_POLICY,
+  isRuleAction,
+  readAuditPolicy,
+  writeAuditPolicy,
+  type AuditPolicy,
+  type AuditRule
+} from '../../core/audit/policy'
 import type { OrchCaller } from '../../core/host/orchProtocol'
 
 export const POLICY_COMMANDS: ReadonlySet<string> = new Set([
@@ -13,6 +23,7 @@ export const POLICY_COMMANDS: ReadonlySet<string> = new Set([
   'policies-set-mode',
   'policies-set-otherwise',
   'policies-rules-add',
+  'policies-rules-edit',
   'policies-rules-remove',
   'policies-rules-move',
   'policies-rules-reset'
@@ -23,6 +34,7 @@ export const POLICY_CHANGES: ReadonlySet<string> = new Set([
   'policies-set-mode',
   'policies-set-otherwise',
   'policies-rules-add',
+  'policies-rules-edit',
   'policies-rules-remove',
   'policies-rules-move',
   'policies-rules-reset'
@@ -49,6 +61,7 @@ const EFFECTS: readonly unknown[] = ['allow', 'deny']
 const SCOPES: readonly unknown[] = ['inside-project', 'outside-project']
 
 const bad = (error: string): PoliciesAnswer => ({ status: 400, body: { error } })
+const badAction = (): PoliciesAnswer => bad(`action must be one of ${AUDIT_ACTIONS.join(', ')}, or the start of one ending in * (git.*)`)
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 const newRuleId = (): string => `ar_${randomBytes(6).toString('hex')}`
 /** A position in a list, counted from 0; whether the list is that long is checked against the rules read. */
@@ -95,8 +108,7 @@ export function createHostPolicies(d: { profileDir: string }): HostPolicies {
       }
       case 'policies-rules-add': {
         if (!EFFECTS.includes(args.effect)) return bad('effect must be allow or deny')
-        if (typeof args.action !== 'string' || !isRuleAction(args.action))
-          return bad(`action must be one of ${AUDIT_ACTIONS.join(', ')}, or the start of one ending in * (git.*)`)
+        if (typeof args.action !== 'string' || !isRuleAction(args.action)) return badAction()
         if (args.scope !== undefined && !SCOPES.includes(args.scope)) return bad('scope must be inside-project or outside-project')
         if (args.at !== undefined && !isPosition(args.at)) return bad('at must be a position in the list, from 0')
         const rule: AuditRule = {
@@ -111,6 +123,28 @@ export function createHostPolicies(d: { profileDir: string }): HostPolicies {
           if (at !== undefined && at > p.rules.length) return bad(`at must be from 0 to ${p.rules.length}`)
           const i = at ?? p.rules.length
           return saved({ ...p, rules: [...p.rules.slice(0, i), rule, ...p.rules.slice(i)] }, { rule })
+        })
+      }
+      case 'policies-rules-edit': {
+        if (typeof args.id !== 'string' || args.id === '') return bad('policies-rules-edit needs id')
+        if (args.effect !== undefined && !EFFECTS.includes(args.effect)) return bad('effect must be allow or deny')
+        if (args.action !== undefined && (typeof args.action !== 'string' || !isRuleAction(args.action))) return badAction()
+        // null clears the scope: the rule then applies wherever the call was
+        if (args.scope !== undefined && args.scope !== null && !SCOPES.includes(args.scope))
+          return bad('scope must be inside-project or outside-project, or null to clear it')
+        const { id, effect, action } = args
+        return queued(async () => {
+          const p = await current()
+          const old = p.rules.find((r) => r.id === id)
+          if (!old) return noRule(id)
+          const scope = args.scope === undefined ? old.scope : (args.scope as AuditRule['scope'] | null)
+          const rule: AuditRule = {
+            id,
+            effect: effect !== undefined ? (effect as AuditRule['effect']) : old.effect,
+            action: action !== undefined ? (action as string) : old.action,
+            ...(scope != null ? { scope } : {})
+          }
+          return saved({ ...p, rules: p.rules.map((r) => (r.id === id ? rule : r)) }, { rule })
         })
       }
       case 'policies-rules-remove': {
@@ -136,8 +170,19 @@ export function createHostPolicies(d: { profileDir: string }): HostPolicies {
         })
       }
       case 'policies-rules-reset':
-        // Starts over with the starter rules and their `otherwise`; the mode is the person's switch and stays
-        return queued(async () => saved({ ...STARTER_POLICY, mode: (await current()).mode }))
+        // Starts over with the starter rules and their `otherwise`; the mode is the person's switch and stays. It is also
+        // the repair of a damaged file, whose bytes were kept aside when it was read (its mode is kept if it names one);
+        // a file that could not be read is never written over
+        return queued(async () => {
+          const mode = await readAuditPolicy(d.profileDir).then(
+            (p) => (p ?? STARTER_POLICY).mode,
+            (e: unknown) => {
+              if (e instanceof AuditPolicyDamaged) return e.mode
+              throw e
+            }
+          )
+          return saved({ ...STARTER_POLICY, mode })
+        })
       default:
         return { status: 501, body: { error: `${cmd} is not answered by this Host` } }
     }

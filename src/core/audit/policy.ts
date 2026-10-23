@@ -101,13 +101,14 @@ function judge(action: string, inside: boolean | undefined, p: AuditPolicy): Ver
 const WRITES: ReadonlySet<string> = new Set<AuditAction>(['filesystem.write', 'filesystem.delete'])
 
 /** One command's verdict, or null when it cannot be told. A write or delete that names no place is judged in both
- *  places and stands only when the same rule decides it in each: it is never allowed past an outside rule it might
- *  match (ledger, Task 2's note for Task 3). */
+ *  places: when they differ it cannot be told, so it is never allowed past an outside rule it might match (ledger,
+ *  Task 2's note for Task 3); when they agree the decision stands, naming its rule only if one rule decided both. */
 function judgeCommand(c: CommandFacts, p: AuditPolicy): Verdict | null {
   if (c.insideProject !== undefined || !WRITES.has(c.action)) return judge(c.action, c.insideProject, p)
   const inside = judge(c.action, true, p)
   const outside = judge(c.action, false, p)
-  return inside.decision === outside.decision && inside.ruleId === outside.ruleId ? inside : null
+  if (inside.decision !== outside.decision) return null
+  return inside.ruleId === outside.ruleId ? inside : { decision: inside.decision }
 }
 
 /**
@@ -115,7 +116,8 @@ function judgeCommand(c: CommandFacts, p: AuditPolicy): Verdict | null {
  * headline and every command of the line are each judged in their own place. One that would be denied makes the call
  * `would-deny` when the line is sure of its commands, and `unknown` when it is heuristic (its commands may be more or
  * other than it read); one that cannot be told makes it `unknown`. Else the headline's verdict stands. `ruleId` names
- * the rule that decided, and is left out when `otherwise` did or nothing could.
+ * the rule that decided, and is left out when `otherwise` did, when nothing could, or when a write with no place got
+ * the same decision from a different rule in each place.
  */
 export function decide(
   record: Pick<ResolvedAction, 'action' | 'insideProject' | 'confidence' | 'commands'>,
@@ -133,7 +135,6 @@ export function decide(
 // The file
 
 const FILE = 'audit-policy.json'
-const MODES: readonly string[] = ['compatibility', 'observe']
 const EFFECTS: readonly string[] = ['allow', 'deny']
 const SCOPES: readonly string[] = ['inside-project', 'outside-project']
 
@@ -141,7 +142,22 @@ const SCOPES: readonly string[] = ['inside-project', 'outside-project']
  *  distinct damage is enough (the agent profile store's rule). */
 const keptDamage = new Map<string, string>()
 
+/** The file was read but holds no policy. Its bytes are kept beside it, so starting over with the starter rules may write
+ *  over it (`policies-rules-reset`, the repair); `mode` is the one it names, else compatibility. A file that could not
+ *  be read throws plain RepairNeeded instead, and nothing writes over that one. */
+export class AuditPolicyDamaged extends RepairNeeded {
+  constructor(
+    file: string,
+    readonly mode: AuditMode
+  ) {
+    super(`${file} is damaged; a copy was kept beside it`, file)
+  }
+}
+
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+
+/** A mode it does not know reads as compatibility, which never observes more than the person chose. */
+const modeOf = (v: unknown): AuditMode => (isRecord(v) && v.mode === 'observe' ? 'observe' : 'compatibility')
 
 function ruleOf(v: unknown): AuditRule | null {
   if (!isRecord(v)) return null
@@ -151,21 +167,16 @@ function ruleOf(v: unknown): AuditRule | null {
   return { id, effect: effect as AuditRule['effect'], action, ...(scope !== undefined ? { scope: scope as AuditRule['scope'] } : {}) }
 }
 
-/** The policy a parsed file holds, or null when it is not one. A mode it does not know reads as compatibility, which
- *  never observes more than the person chose. */
+/** The policy a parsed file holds, or null when it is not one. */
 function policyOf(v: unknown): AuditPolicy | null {
   if (!isRecord(v) || v.version !== 1 || !Array.isArray(v.rules) || !EFFECTS.includes(v.otherwise as string)) return null
   const rules = v.rules.map(ruleOf)
   if (rules.some((r) => r === null)) return null
-  return {
-    version: 1,
-    mode: MODES.includes(v.mode as string) ? (v.mode as AuditMode) : 'compatibility',
-    rules: rules as AuditRule[],
-    otherwise: v.otherwise as AuditPolicy['otherwise']
-  }
+  return { version: 1, mode: modeOf(v), rules: rules as AuditRule[], otherwise: v.otherwise as AuditPolicy['otherwise'] }
 }
 
-/** The profile's rules and mode; null when there is no file. Throws RepairNeeded when the file is damaged or unreadable. */
+/** The profile's rules and mode; null when there is no file. Throws RepairNeeded when the file is unreadable, and its
+ *  AuditPolicyDamaged when it is damaged. */
 export async function readAuditPolicy(profileDir: string): Promise<AuditPolicy | null> {
   const file = profilePaths(profileDir).auditPolicy
   const read = await readStoreFile(file)
@@ -184,7 +195,7 @@ export async function readAuditPolicy(profileDir: string): Promise<AuditPolicy |
       keptDamage.set(file, hash)
       await keepDamaged(file, read.text)
     }
-    throw new RepairNeeded(`${FILE} is damaged; a copy was kept beside it`, FILE)
+    throw new AuditPolicyDamaged(FILE, modeOf(parsed))
   }
   return p
 }
@@ -226,15 +237,13 @@ export interface CoverageRow {
 
 const SEEN: CoverageCell = { level: 'seen' }
 const SHELL_TEXT_ONLY: CoverageCell = { level: 'partial', note: 'shell-text-only' }
+/** Claude's network calls are seen when WebFetch or WebSearch make them; a `curl` in the shell is shell text. */
+const WEB_TOOLS_ONLY: CoverageCell = { level: 'partial', note: 'web-tools-only' }
 
 /** What observe can see for each provider and kind of session (design §9), worded for observing, never "enforced". */
 export const COVERAGE: readonly CoverageRow[] = [
-  {
-    provider: 'claude',
-    kind: 'terminal',
-    classes: { shell: SEEN, 'file-read': SEEN, 'file-write': SEEN, mcp: SEEN, network: { level: 'partial', note: 'web-tools-only' } }
-  },
-  { provider: 'claude', kind: 'chat', classes: { shell: SEEN, 'file-read': SEEN, 'file-write': SEEN, mcp: SEEN, network: SEEN } },
+  { provider: 'claude', kind: 'terminal', classes: { shell: SEEN, 'file-read': SEEN, 'file-write': SEEN, mcp: SEEN, network: WEB_TOOLS_ONLY } },
+  { provider: 'claude', kind: 'chat', classes: { shell: SEEN, 'file-read': SEEN, 'file-write': SEEN, mcp: SEEN, network: WEB_TOOLS_ONLY } },
   {
     provider: 'codex',
     kind: 'terminal',

@@ -155,6 +155,7 @@ describe('createHostPolicies', () => {
       ['policies-set-mode', { mode: 'observe' }],
       ['policies-set-otherwise', { otherwise: 'deny' }],
       ['policies-rules-add', { effect: 'allow', action: '*' }],
+      ['policies-rules-edit', { id: STARTER_POLICY.rules[0].id, effect: 'allow' }],
       ['policies-rules-remove', { id: STARTER_POLICY.rules[0].id }],
       ['policies-rules-move', { id: STARTER_POLICY.rules[0].id, to: 1 }],
       ['policies-rules-reset', {}]
@@ -187,13 +188,79 @@ describe('createHostPolicies', () => {
     for (const [cmd, args] of [
       ['policies-set-mode', { mode: 'observe' }],
       ['policies-rules-add', { effect: 'deny', action: 'git.*' }],
-      ['policies-rules-reset', {}]
+      ['policies-rules-edit', { id: STARTER_POLICY.rules[0].id, effect: 'allow' }]
     ] as const) {
       const refused = await h.call(cmd, args)
       expect(refused.status).toBe(409)
       expect(refused.marks.effects).toBe(0)
     }
     expect(await fs.readFile(h.file, 'utf8')).toBe('{ not json')
+  })
+
+  it('repairs a damaged file by starting over with the starter rules, its damage kept aside', async () => {
+    const h = await rig()
+    const kept = async (): Promise<string[]> => (await fs.readdir(path.dirname(h.file))).filter((f) => f.endsWith('.bak'))
+    await fs.writeFile(h.file, '{ not json')
+    const r = await h.call('policies-rules-reset')
+    expect(r.status).toBe(200)
+    expect(r.marks.effects).toBe(1)
+    // A mode that cannot be read is compatibility
+    expect(await readAuditPolicy(h.profileDir)).toEqual(STARTER_POLICY)
+    expect(await kept()).toHaveLength(1)
+    expect(await fs.readFile(path.join(path.dirname(h.file), (await kept())[0]), 'utf8')).toBe('{ not json')
+
+    // A mode that can be read is kept
+    await fs.writeFile(h.file, JSON.stringify({ ...STARTER_POLICY, mode: 'observe', rules: [{ id: 'x', effect: 'maybe', action: 'git.*' }] }))
+    expect((await h.call('policies-rules-reset')).status).toBe(200)
+    expect(await readAuditPolicy(h.profileDir)).toEqual({ ...STARTER_POLICY, mode: 'observe' })
+    expect(await kept()).toHaveLength(2)
+  })
+
+  it('never writes over a file it could not read, even to start over', async () => {
+    const h = await rig()
+    // A folder where the file goes: there, but no read gets its bytes
+    await fs.mkdir(h.file)
+    const r = await h.call('policies-rules-reset')
+    expect(r.status).toBe(409)
+    expect(r.marks.effects).toBe(0)
+    expect((await fs.stat(h.file)).isDirectory()).toBe(true)
+  })
+
+  it('edits a rule in place, and clears its scope', async () => {
+    const h = await rig()
+    const rule = ruleOf(await h.call('policies-rules-add', { effect: 'deny', action: 'git.*', scope: 'outside-project', at: 1 }))
+    const edited = await h.call('policies-rules-edit', { id: rule.id, effect: 'allow', action: 'github.*' })
+    expect(edited.status).toBe(200)
+    expect(edited.marks.effects).toBe(1)
+    expect(ruleOf(edited)).toEqual({ id: rule.id, effect: 'allow', action: 'github.*', scope: 'outside-project' })
+    expect(policyOf(edited).rules[1]).toEqual(ruleOf(edited))
+    expect(policyOf(edited).rules).toHaveLength(STARTER_POLICY.rules.length + 1)
+
+    const scoped = await h.call('policies-rules-edit', { id: rule.id, scope: 'inside-project' })
+    expect(ruleOf(scoped)).toEqual({ id: rule.id, effect: 'allow', action: 'github.*', scope: 'inside-project' })
+    const cleared = await h.call('policies-rules-edit', { id: rule.id, scope: null })
+    expect(ruleOf(cleared)).toEqual({ id: rule.id, effect: 'allow', action: 'github.*' })
+    expect((await readAuditPolicy(h.profileDir))!.rules[1]).toEqual({ id: rule.id, effect: 'allow', action: 'github.*' })
+  })
+
+  it('refuses an edit it cannot read, and answers 404 for a rule it does not have', async () => {
+    const h = await rig()
+    const id = STARTER_POLICY.rules[0].id
+    for (const args of [
+      { id, effect: 'block' },
+      { id, action: 'foo.*' },
+      { id, action: '' },
+      { id, scope: 'anywhere' },
+      { effect: 'allow' }
+    ]) {
+      const r = await h.call('policies-rules-edit', args)
+      expect(r.status).toBe(400)
+      expect(r.marks.effects).toBe(0)
+    }
+    expect(await h.exists()).toBe(false)
+    const gone = await h.call('policies-rules-edit', { id: 'ar_nope', effect: 'allow' })
+    expect(gone.status).toBe(404)
+    expect(await h.exists()).toBe(false)
   })
 
   it('lands two concurrent changes in order', async () => {

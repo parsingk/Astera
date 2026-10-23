@@ -146,10 +146,14 @@ describe('decide, by the rules a person writes', () => {
     expect(decide({ action: 'process.execute', confidence: 'high' }, exec)).toEqual({ decision: 'allow' })
   })
 
-  it('judges a write with no place both ways: sure only when the same rule decides it wherever it is', () => {
+  it('judges a write with no place both ways: sure when both places get the same decision, unknown when they differ', () => {
     const write = { action: 'filesystem.write' as const, confidence: 'high' as const }
     expect(decide(write, policy([]))).toEqual({ decision: 'allow' })
     expect(decide(write, policy([{ effect: 'deny', action: 'filesystem.*' }]))).toEqual({ decision: 'would-deny', ruleId: 'r0' })
+    // The same decision from different rules names no rule
+    expect(decide(write, policy([{ effect: 'deny', action: 'filesystem.write', scope: 'outside-project' }], 'deny'))).toEqual({ decision: 'would-deny' })
+    expect(decide(write, policy([{ effect: 'allow', action: 'filesystem.write', scope: 'inside-project' }]))).toEqual({ decision: 'allow' })
+    // Different decisions cannot be told
     expect(decide(write, policy([{ effect: 'deny', action: 'filesystem.write', scope: 'inside-project' }]))).toEqual({ decision: 'unknown' })
     expect(decide(write, policy([{ effect: 'allow', action: 'filesystem.write', scope: 'inside-project' }, { effect: 'deny', action: 'filesystem.write' }])))
       .toEqual({ decision: 'unknown' })
@@ -243,7 +247,7 @@ describe('COVERAGE', () => {
       for (const c of ['shell', 'file-write', 'mcp']) expect(cell(p, k, c)).toEqual({ level: 'seen' })
     expect(cell('claude', 'terminal', 'file-read')).toEqual({ level: 'seen' })
     expect(cell('claude', 'terminal', 'network')).toEqual({ level: 'partial', note: 'web-tools-only' })
-    expect(cell('claude', 'chat', 'network')).toEqual({ level: 'seen' })
+    expect(cell('claude', 'chat', 'network')).toEqual({ level: 'partial', note: 'web-tools-only' })
     expect(cell('codex', 'terminal', 'file-read')).toEqual({ level: 'partial', note: 'shell-text-only' })
     expect(cell('codex', 'terminal', 'network')).toEqual({ level: 'partial', note: 'web-search-and-shell-text' })
     expect(cell('codex', 'chat', 'file-read')).toEqual({ level: 'partial', note: 'shell-text-only' })
