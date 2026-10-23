@@ -64,6 +64,11 @@ function filterOf(args: Record<string, unknown>): { filter: AuditFilter; decisio
     if (typeof v !== 'string' || !Number.isFinite(Date.parse(v))) return `${k} must be a time such as 2026-10-23T09:00:00Z`
     filter[k] = v
   }
+  // The next page's cursor, as audit-list's `next` gives it
+  if (args.beforeId !== undefined) {
+    if (typeof args.beforeId !== 'string' || args.beforeId === '' || filter.until === undefined) return 'beforeId must be text, given with until'
+    filter.beforeId = args.beforeId
+  }
   if (args.decision !== undefined && !DECISIONS.includes(args.decision)) return 'decision must be allow, would-deny or unknown'
   return { filter, ...(args.decision !== undefined ? { decision: args.decision as AuditDecision } : {}) }
 }
@@ -84,7 +89,12 @@ export function createHostAudit(d: { profileDir: string }): HostAudit {
         const where = f.decision !== undefined ? { where: (r: AuditRecord) => decide(r, p).decision === f.decision } : {}
         // One past the limit, to tell whether it cut anything
         const found = await queryRecords(d.profileDir, { ...f.filter, ...where, limit: n + 1 })
-        return { status: 200, body: { records: found.slice(0, n).map((r) => ({ ...r, ...decide(r, p) })), truncated: found.length > n } }
+        const page = found.slice(0, n)
+        const truncated = found.length > n
+        // Where the next page starts: after this page's last record, in the page's order (time, then id)
+        const last = page[page.length - 1]
+        const next = truncated ? { until: last.at, beforeId: last.id } : null
+        return { status: 200, body: { records: page.map((r) => ({ ...r, ...decide(r, p) })), truncated, next } }
       }
       case 'audit-summary': {
         const p = await rules()

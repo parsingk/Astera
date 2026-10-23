@@ -96,6 +96,28 @@ describe('appendRecords and queryRecords', () => {
     expect((await queryRecords(p, { limit: 2 })).map((r) => r.id)).toEqual(['au_c', 'au_b'])
   })
 
+  it('pages back with until and beforeId through records that share one time across the page ends, each seen once', async () => {
+    const p = await profile()
+    const now = (): number => ms('2026-10-23')
+    // Seven records at one time between two at other times, written out of order
+    const same = ['au_c', 'au_g', 'au_a', 'au_e', 'au_b', 'au_f', 'au_d'].map((id) => rec({ id, at: at('2026-10-23', 30) }))
+    const after = rec({ id: 'au_z', at: at('2026-10-23', 31) })
+    const before = rec({ id: 'au_y', at: at('2026-10-23', 29) })
+    await appendRecords(p, [same[0], same[1], before, same[2], same[3], after, same[4], same[5], same[6]], { now })
+    const seen: string[] = []
+    let cursor: { until: string; beforeId: string } | undefined
+    for (;;) {
+      const page = await queryRecords(p, { limit: 3, ...cursor })
+      if (page.length === 0) break
+      seen.push(...page.map((r) => r.id))
+      const last = page[page.length - 1]
+      cursor = { until: last.at, beforeId: last.id }
+    }
+    expect(seen).toEqual(['au_z', 'au_g', 'au_f', 'au_e', 'au_d', 'au_c', 'au_b', 'au_a', 'au_y'])
+    // Without beforeId, until alone still leaves out its own time
+    expect((await queryRecords(p, { until: same[0].at })).map((r) => r.id)).toEqual(['au_y'])
+  })
+
   it('pages back with until through records written out of order over three days, each seen once and in time order', async () => {
     const p = await profile()
     const now = (): number => ms('2026-10-23')

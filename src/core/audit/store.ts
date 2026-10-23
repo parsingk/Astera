@@ -266,6 +266,9 @@ export interface AuditFilter {
   since?: string
   /** ISO; records before it. */
   until?: string
+  /** With `until`, the next page's cursor: records at exactly `until` are kept too when their id is below this one, the
+   *  order a page is in (time, then id), so records that share a time across a page's end are each seen once. */
+  beforeId?: string
   /** Any further test, such as the decision the rules give. */
   where?: (r: AuditRecord) => boolean
   /** At most this many, newest first. */
@@ -387,7 +390,7 @@ async function visitDays(
     if (f.agentProfileId !== undefined && r.agentProfileId !== f.agentProfileId) return false
     if (!actionPasses(r.action)) return false
     if (since !== undefined && !(at >= since)) return false
-    if (until !== undefined && !(at < until)) return false
+    if (until !== undefined && !(at < until || (at === until && f.beforeId !== undefined && r.id < f.beforeId))) return false
     return f.where === undefined || f.where(r)
   }
   for (const day of days) {

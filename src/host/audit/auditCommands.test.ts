@@ -50,7 +50,11 @@ async function rig(records: AuditRecord[] = []) {
   return { profileDir, call }
 }
 
-type Listed = { records: Array<AuditRecord & { decision: string; ruleId?: string }>; truncated: boolean }
+type Listed = {
+  records: Array<AuditRecord & { decision: string; ruleId?: string }>
+  truncated: boolean
+  next: { until: string; beforeId: string } | null
+}
 const listed = (r: { body: unknown }): Listed => r.body as Listed
 
 describe('createHostAudit', () => {
@@ -111,9 +115,46 @@ describe('createHostAudit', () => {
     for (const limit of [0, 2001, 1.5, 'x']) expect((await h.call('audit-list', { limit })).status, String(limit)).toBe(400)
   })
 
+  it('says where the next page starts, and paging by it sees each record once though several share a time', async () => {
+    const t = new Date(NOW + 10_000).toISOString()
+    const same = ['au_s1', 'au_s4', 'au_s2', 'au_s5', 'au_s3'].map((id) => rec({ id, at: t, action: 'git.read', target: 'git status' }))
+    const h = await rig([rec({ id: 'au_old', at: new Date(NOW).toISOString() }), ...same, rec({ id: 'au_new', at: new Date(NOW + 20_000).toISOString() })])
+    const seen: string[] = []
+    let next: Listed['next'] = null
+    let pages = 0
+    do {
+      const r = listed(await h.call('audit-list', { limit: 2, ...next }))
+      seen.push(...r.records.map((x) => x.id))
+      expect(r.next === null).toBe(!r.truncated)
+      if (r.next) expect(r.next).toEqual({ until: r.records[1].at, beforeId: r.records[1].id })
+      next = r.next
+      pages++
+    } while (next && pages < 10)
+    expect(seen).toEqual(['au_new', 'au_s5', 'au_s4', 'au_s3', 'au_s2', 'au_s1', 'au_old'])
+    expect(pages).toBe(4)
+    // A decision filter pages the same way
+    const denied = listed(await h.call('audit-list', { decision: 'would-deny', limit: 1 }))
+    expect(denied.records.map((x) => x.id)).toEqual(['au_new'])
+    expect(listed(await h.call('audit-list', { decision: 'would-deny', limit: 1, ...denied.next })).records.map((x) => x.id)).toEqual(['au_old'])
+  })
+
   it('refuses filters it cannot read', async () => {
     const h = await rig()
-    for (const args of [{ since: 'yesterday' }, { until: 5 }, { decision: 'deny' }, { sessionId: 7 }, { action: '' }, { action: 'git.push' }, { action: 'foo.*' }, { action: 'git*x' }]) {
+    const until = new Date(NOW).toISOString()
+    for (const args of [
+      { since: 'yesterday' },
+      { until: 5 },
+      { decision: 'deny' },
+      { sessionId: 7 },
+      { action: '' },
+      { action: 'git.push' },
+      { action: 'foo.*' },
+      { action: 'git*x' },
+      // beforeId goes with until, as the next page's cursor
+      { beforeId: 'au_1' },
+      { until, beforeId: 5 },
+      { until, beforeId: '' }
+    ]) {
       const r = await h.call('audit-list', args)
       expect(r.status, JSON.stringify(args)).toBe(400)
       expect((await h.call('audit-summary', args)).status, JSON.stringify(args)).toBe(400)
@@ -175,7 +216,7 @@ describe('createHostAudit', () => {
 
   it('answers empty when nothing was recorded', async () => {
     const h = await rig()
-    expect((await h.call('audit-list')).body).toEqual({ records: [], truncated: false })
+    expect((await h.call('audit-list')).body).toEqual({ records: [], truncated: false, next: null })
     expect((await h.call('audit-summary')).body).toEqual({ allow: 0, wouldDeny: 0, unknown: 0, byAction: {}, stoppedAtLimit: false })
   })
 
