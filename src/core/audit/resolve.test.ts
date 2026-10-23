@@ -1338,8 +1338,11 @@ describe('PowerShell: dot-sourcing, casts and parameter prefixes', () => {
   })
 
   it('does not take an ambiguous prefix for a parameter, nor a bash bundle for a PowerShell one', () => {
-    // -In is Include, InformationAction and InformationVariable: PowerShell refuses it, so it must not eat the next word.
-    expect(ps('Get-Content -In a.txt')).toMatchObject({ action: 'filesystem.read', target: 'a.txt' })
+    // -T starts TotalCount and Tail, both Get-Content's own: PowerShell refuses it, so it must not eat the next word.
+    expect(ps('Get-Content -T a.txt')).toMatchObject({ action: 'filesystem.read', target: 'a.txt' })
+    // -In starts Include and the common InformationAction and InformationVariable: PowerShell binds its own -Include, so
+    // a.txt is a filter and no file is named (measured in PowerShell 7.6 and Windows PowerShell 5.1).
+    expect(ps('Get-Content -In a.txt')).toMatchObject({ action: 'process.execute', target: 'Get-Content' })
     expect(bash('cp -fi a b')).toMatchObject({ target: 'b', insideProject: true })
   })
 })
@@ -1380,6 +1383,86 @@ describe('mv and Move-Item also remove their source', () => {
 
   it('leaves cp alone: a copy removes nothing', () => {
     expect(bash('cp ../a .').commands).toBeUndefined()
+  })
+})
+
+// Fix round 4 (re-review).
+describe('PowerShell binds the parameters of its own commands only', () => {
+  it.each([
+    ['mkdir -pv ../out src', 'filesystem.write', 'outside project: out (+1)'],
+    ['rm -iv ../x a', 'filesystem.delete', 'rm'],
+    ['grep -iv x ../f', 'filesystem.read', 'outside project: f'],
+    ['cat -ev ../x', 'filesystem.read', 'outside project: x'],
+    ['cp -pv a ../b', 'filesystem.write', 'outside project: b'],
+    ['mv -iv a ../b', 'filesystem.write', 'outside project: b'],
+    ['ls -ia ../x', 'filesystem.read', 'outside project: x'],
+    ['touch -ea ../x', 'filesystem.write', 'outside project: x']
+  ] satisfies Array<[string, AuditAction, string]>)('reads bash %s as the program does: %s %s', (line, action, target) => {
+    // In Bash -pv is -p and -v, never PowerShell's -PipelineVariable taking the next word.
+    expect(bash(line)).toMatchObject({ action, target, insideProject: false })
+  })
+
+  it('still binds them as PowerShell does where PowerShell runs its own command', () => {
+    // Measured in PowerShell 7.6 and 5.1: `rm -iv ../x a` removes a (-iv is -InformationVariable), `mkdir -pv ../out src`
+    // makes src only (-pv is -PipelineVariable), and `cat -ev ../zz b` reads b (-ev is -ErrorVariable).
+    expect(ps('rm -iv ../x a')).toMatchObject({ action: 'filesystem.delete', insideProject: true })
+    expect(ps('mkdir -pv ../out src')).toMatchObject({ action: 'filesystem.write', target: 'src', insideProject: true })
+    expect(ps('cat -ev ../zz b')).toMatchObject({ action: 'filesystem.read', target: 'b', insideProject: true })
+    expect(bash('Remove-Item -ea 0 ../x')).toMatchObject({ action: 'filesystem.delete', insideProject: false })
+  })
+
+  it('passes a program its flags as they are in PowerShell too', () => {
+    expect(ps('grep -iv x ../f')).toMatchObject({ action: 'filesystem.read', target: 'outside project: f' })
+    expect(ps('rm.exe -iv ../x a')).toMatchObject({ action: 'filesystem.delete', insideProject: false }) // not the alias
+  })
+})
+
+describe('PowerShell binds a short or lower case prefix as it binds the full name', () => {
+  it('reads a lower case prefix on an alias', () => {
+    const r = ps('ac -va hunter2 ../x')
+    expect(r).toEqual({ action: 'filesystem.write', target: 'outside project: x', insideProject: false, confidence: 'high' })
+    expect(ps('gc -ta 5 ../x')).toMatchObject({ action: 'filesystem.read', target: 'outside project: x' })
+    expect(ps('iwr -outf ../x https://a.example.com/x').commands).toContainEqual({ action: 'filesystem.write', insideProject: false })
+  })
+
+  it("takes the cmdlet's own parameter over a common one, as PowerShell does, so a value is never the target", () => {
+    // Measured: `Set-Content -V hunter2 c` writes hunter2 into c (-Value, not -Verbose); `Out-File -I` is -InputObject.
+    for (const line of ['Set-Content -V hunter2 ../x', 'Out-File -I hunter2 ../x', 'ni -v hunter2 ../x']) {
+      const r = ps(line)
+      expect(r).toMatchObject({ action: 'filesystem.write', target: 'outside project: x', insideProject: false })
+      expect(JSON.stringify(r)).not.toContain('hunter2')
+    }
+    expect(ps('Copy-Item -D ../b a')).toMatchObject({ action: 'filesystem.write', target: 'outside project: b' })
+  })
+
+  it('does not read sc, which is Set-Content in Windows PowerShell and sc.exe in PowerShell 7', () => {
+    const r = ps('sc -va hunter2 ../x')
+    expect(r).toMatchObject({ target: 'sc', confidence: 'unknown' })
+    expect(JSON.stringify(r)).not.toContain('hunter2')
+  })
+})
+
+describe('claude and codex take a prompt, quoted or not, where other programs take a subcommand', () => {
+  it.each(['claude -p "fix the bug"', 'claude "fix the bug"', 'claude -p fix', "claude 'hunter2'"])('%s targets claude', (line) => {
+    expect(bash(line)).toEqual({ action: 'process.execute', target: 'claude', confidence: 'high' })
+  })
+
+  it('targets codex for a prompt, and shows their own subcommands quoted or not', () => {
+    expect(bash('codex "do it"')).toEqual({ action: 'process.execute', target: 'codex', confidence: 'high' })
+    expect(bash('codex exec "do it"')).toEqual({ action: 'process.execute', target: 'codex exec', confidence: 'high' })
+    expect(bash('claude "mcp" list')).toEqual({ action: 'process.execute', target: 'claude mcp', confidence: 'high' })
+  })
+})
+
+describe('PowerShell: the builder calls of a script are expressions', () => {
+  it.each([
+    '[void]$sb.Append("x"); Get-Date',
+    '[void]$sb.AppendLine("x"); Get-Date',
+    "[void]$sb.AppendFormat('{0}', 1); Get-Date",
+    '[void]$list.Add(1); Get-Date',
+    '$s = $sb.ToString(); Get-Date'
+  ])('%s is headlined by Get-Date', (line) => {
+    expect(ps(line)).toMatchObject({ target: 'Get-Date', confidence: 'heuristic' })
   })
 })
 
@@ -1432,6 +1515,17 @@ describe('malformed and hostile input', () => {
     codex('apply_patch', patch)
     codex('exec', `await tools.apply_patch(${JSON.stringify(patch)})`)
     expect(Date.now() - started).toBeLessThan(400)
+  })
+
+  it('names a path with a long run of separators inside it in linear time', () => {
+    const run = '/'.repeat(100_000)
+    const started = Date.now()
+    expect(claude('Write', { file_path: `~${run}x` })).toMatchObject({ target: 'outside project: x', insideProject: false })
+    expect(claude('Read', { file_path: `~${'\\'.repeat(100_000)}x` })).toMatchObject({ insideProject: false })
+    expect(bash(`cat ~${run}x`)).toMatchObject({ target: 'outside project: x', insideProject: false })
+    expect(bash(`rm $HOME${run}x`)).toMatchObject({ action: 'filesystem.delete', insideProject: false })
+    codex('exec', `await tools.exec_command({cmd:"cat ~${run}x"});`)
+    expect(Date.now() - started).toBeLessThan(500)
   })
 
   it('reads apply_patch headers that end in spaces or CRLF', () => {

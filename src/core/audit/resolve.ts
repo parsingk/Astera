@@ -340,7 +340,13 @@ function nativePath(p: string): string {
   return m === null ? p : `${m[1]}:${p.slice(2) || '/'}`
 }
 
-const leaf = (p: string): string => path.basename(p.replace(/[\\/]+$/, '')) || p
+/** The last part of a path, past the separators it ends with. Those are trimmed by hand: `/[\\/]+$/` starts again from each
+ *  separator of a long run that is not at the end, which is quadratic. */
+function leaf(p: string): string {
+  let end = p.length
+  while (end > 0 && (p[end - 1] === '/' || p[end - 1] === '\\')) end--
+  return path.basename(p.slice(0, end)) || p
+}
 
 /** Where one path is. A home path, a shell path this cannot follow (`$VAR`, `%VAR%`, `~user`), or a relative one after a
  *  `cd` it could not follow counts as outside: the rule about outside is there for what is not provably in the folder. */
@@ -389,6 +395,9 @@ interface Cmd {
   invoked: boolean
   /** Set by stripPrefix on a PowerShell method call that is a command: its one word is the call's name. */
   method?: Facts
+  /** Set by stripPrefix: the cmdlet the command is, whose parameters PowerShell binds by name, alias and prefix (`-Val`,
+   *  `-ea`). Left out for a program, which reads its own flags. */
+  cmdlet?: string
 }
 
 interface Facts {
@@ -497,7 +506,7 @@ const BENIGN_MEMBERS = new Set(
   `ToString ToLower ToUpper ToLowerInvariant ToUpperInvariant Trim TrimStart TrimEnd Replace Split Substring Contains
   StartsWith EndsWith IndexOf LastIndexOf PadLeft PadRight Join Format Equals GetType GetValue GetValueKind Add AddSeconds
   AddMinutes AddHours AddDays AddMonths AddYears Insert OpenSubKey ReadToEnd ReadLine Close Dispose WaitForExit Where ForEach
-  Match Matches IsMatch ContainsKey`.split(/\s+/)
+  Match Matches IsMatch ContainsKey Append AppendLine AppendFormat`.split(/\s+/)
 )
 const WRITE_MEMBERS = new Set(
   `WriteAllText WriteAllLines WriteAllBytes AppendAllText AppendAllLines AppendText Copy CopyTo Move MoveTo Create CreateText
@@ -572,7 +581,8 @@ function stripPrefix(raw: Cmd, flavor: Flavor): { cmd: Cmd; syntax: boolean } {
     else break
   }
   const rest = words.slice(i)
-  const cmd: Cmd = { words: rest, out: raw.out, call: raw.call, quoted: raw.quoted.slice(i), invoked: raw.invoked }
+  const cmdlet = rest.length > 0 ? cmdletOf(rest[0], flavor) : undefined
+  const cmd: Cmd = { words: rest, out: raw.out, call: raw.call, quoted: raw.quoted.slice(i), invoked: raw.invoked, cmdlet }
   const dropped = { cmd: { ...cmd, words: [], quoted: [] }, syntax: true }
   if (rest.length === 0) return { cmd, syntax }
   if (NO_COMMAND.has(rest[0].toLowerCase())) return dropped
@@ -1043,9 +1053,12 @@ const PS_VALUED = new Set([
 /** PowerShell parameters whose value is a path. */
 const PS_PATH = new Set(['path', 'literalpath', 'filepath'])
 
-// PowerShell takes a parameter by any prefix of its name that no other parameter of the cmdlet shares (`-Val` is -Value,
-// `-Inp` is -InputObject, `-Wid` is -Width), and by its aliases. The cmdlets below are the ones this reads parameters of.
-const PS_COMMON = 'verbose debug erroraction errorvariable warningaction warningvariable informationaction informationvariable outvariable outbuffer pipelinevariable whatif confirm'
+// PowerShell takes a parameter by its name, by its aliases, and by any prefix of its name in any case (`-Val`, `-va` and `-V`
+// are -Value, `-Inp` is -InputObject). A prefix that a cmdlet's own parameter shares with common ones is the cmdlet's own
+// (`-V` is -Value, not -Verbose); one that two of its own share is refused (`-T` of Get-Content: TotalCount or Tail).
+// Measured in PowerShell 7.6 and Windows PowerShell 5.1. The cmdlets below are the ones this reads parameters of.
+const PS_COMMON = `verbose debug erroraction errorvariable warningaction warningvariable informationaction informationvariable
+  outvariable outbuffer pipelinevariable whatif confirm`.split(/\s+/)
 const PS_PARAMS = new Map<string, readonly string[]>()
 for (const [cmdlets, params] of [
   ['set-content add-content', 'path literalpath value passthru filter include exclude force credential usetransaction nonewline encoding asbytestream stream'],
@@ -1058,40 +1071,63 @@ for (const [cmdlets, params] of [
   ['get-childitem', 'path literalpath filter include exclude recurse depth force name attributes directory file hidden readonly system followsymlink usetransaction'],
   ['invoke-webrequest invoke-restmethod', 'uri outfile method headers body contenttype useragent usebasicparsing passthru credential']
 ] as const) {
-  for (const cmdlet of cmdlets.split(' ')) PS_PARAMS.set(cmdlet, `${params} ${PS_COMMON}`.split(' '))
+  for (const cmdlet of cmdlets.split(' ')) PS_PARAMS.set(cmdlet, params.split(' '))
 }
 const PS_PARAM_ALIASES = new Map([
   ['ea', 'erroraction'], ['ev', 'errorvariable'], ['wa', 'warningaction'], ['wv', 'warningvariable'], ['ia', 'informationaction'],
   ['iv', 'informationvariable'], ['ov', 'outvariable'], ['ob', 'outbuffer'], ['pv', 'pipelinevariable'], ['cf', 'confirm'],
   ['wi', 'whatif'], ['lp', 'literalpath'], ['pspath', 'literalpath']
 ])
+/** PowerShell's aliases, and its mkdir function, for the cmdlets above, as PowerShell 7 and 5.1 both have them on Windows. Not
+ *  `sc`: Windows PowerShell runs Set-Content for it and PowerShell 7 runs sc.exe, so what it does cannot be told. */
 const CMDLET_OF = new Map([
-  ['sc', 'set-content'], ['ac', 'add-content'], ['gc', 'get-content'], ['gci', 'get-childitem'], ['dir', 'get-childitem'],
-  ['ls', 'get-childitem'], ['ni', 'new-item'], ['rni', 'rename-item'], ['ren', 'rename-item'], ['cpi', 'copy-item'],
-  ['copy', 'copy-item'], ['cp', 'copy-item'], ['mi', 'move-item'], ['move', 'move-item'], ['mv', 'move-item'],
-  ['ri', 'remove-item'], ['rm', 'remove-item'], ['del', 'remove-item'], ['erase', 'remove-item'], ['rd', 'remove-item'],
-  ['rmdir', 'remove-item'], ['iwr', 'invoke-webrequest'], ['irm', 'invoke-restmethod']
+  ['ac', 'add-content'], ['gc', 'get-content'], ['cat', 'get-content'], ['gci', 'get-childitem'], ['dir', 'get-childitem'],
+  ['ls', 'get-childitem'], ['ni', 'new-item'], ['mkdir', 'new-item'], ['md', 'new-item'], ['rni', 'rename-item'],
+  ['ren', 'rename-item'], ['cpi', 'copy-item'], ['copy', 'copy-item'], ['cp', 'copy-item'], ['mi', 'move-item'],
+  ['move', 'move-item'], ['mv', 'move-item'], ['ri', 'remove-item'], ['rm', 'remove-item'], ['del', 'remove-item'],
+  ['erase', 'remove-item'], ['rd', 'remove-item'], ['rmdir', 'remove-item'], ['iwr', 'invoke-webrequest'],
+  ['irm', 'invoke-restmethod']
 ])
 
-/** The name a PowerShell parameter token stands for in `prog`'s command, lower case. Only a token written like PowerShell
- *  (a capital, or a full cmdlet name) is read as a prefix, so a Bash bundle such as `-fi` is never taken for one. */
-function psParam(token: string, prog: string): string {
+/**
+ * The cmdlet a command is, if PowerShell binds its parameters: a cmdlet named in full in any shell, and in PowerShell one of
+ * its aliases written bare (`rm.exe` is the program). A program reads its own flags, so in Bash `rm -iv` is -i and -v and
+ * never -InformationVariable, and `grep -iv` is that in PowerShell too.
+ */
+function cmdletOf(word: string, flavor: Flavor): string | undefined {
+  const name = programName(word).toLowerCase()
+  if (PS_PARAMS.has(name)) return name
+  return flavor === 'ps' ? CMDLET_OF.get(word.toLowerCase()) : undefined
+}
+
+/** The name a parameter token stands for in `cmdlet`'s command, lower case: its full name or alias, else the parameter its
+ *  prefix starts, the cmdlet's own before a common one. A prefix two of its own share stays as written, bound to nothing. */
+function psParam(token: string, cmdlet: string): string {
   const t = token.toLowerCase()
+  const own = PS_PARAMS.get(cmdlet) ?? []
+  if (own.includes(t) || PS_COMMON.includes(t)) return t
   const alias = PS_PARAM_ALIASES.get(t)
-  const names = PS_PARAMS.get(CMDLET_OF.get(prog) ?? prog)
-  if (names === undefined) return alias ?? t
-  if (names.includes(t)) return t
   if (alias !== undefined) return alias
-  if (!(prog.includes('-') || /[A-Z]/.test(token))) return t
-  const hits = names.filter((n) => n.startsWith(t))
-  return hits.length === 1 ? hits[0] : t
+  for (const names of [own, PS_COMMON]) {
+    const hits = names.filter((n) => n.startsWith(t))
+    if (hits.length > 0) return hits.length === 1 ? hits[0] : t
+  }
+  return t
+}
+
+/** A cmdlet's parameter token (`-Path`, `-Path:x`, `-va`) as the parameter it binds and the value written after its colon.
+ *  Null for a word that is not one, and for any word of a program. */
+function psToken(word: string, cmdlet: string | undefined): { name: string; inline: string | undefined } | null {
+  if (cmdlet === undefined) return null
+  const m = /^-([A-Za-z]+)(?::(.*))?$/.exec(word)
+  return m === null ? null : { name: psParam(m[1], cmdlet), inline: m[2] }
 }
 
 /**
- * The path-like words of a command: its non-flag words, with `-Path x` (also `-Path:x`) taken and the value of other
- * valued flags skipped.
+ * The path-like words of a command: its non-flag words, with the value of valued flags skipped. For a cmdlet `-Path x`
+ * (also `-Path:x`) is taken and the value of its other valued parameters skipped.
  */
-function pathArgs(prog: string, args: Words): string[] {
+function pathArgs(prog: string, args: Words, cmdlet?: string): string[] {
   const out: string[] = []
   const valued = VALUED_FLAGS.get(prog)
   let afterDashes = false
@@ -1099,28 +1135,27 @@ function pathArgs(prog: string, args: Words): string[] {
     const a = args[i]
     if (!afterDashes && a === '--') afterDashes = true
     else if (!afterDashes && isSwitch(a, prog)) {
-      const ps = /^-([A-Za-z]{2,})(?::(.*))?$/.exec(a)
+      const ps = psToken(a, cmdlet)
       if (ps !== null) {
-        const name = psParam(ps[1], prog)
-        if (PS_PATH.has(name)) {
-          const v = ps[2] ?? args[++i]
+        if (PS_PATH.has(ps.name)) {
+          const v = ps.inline ?? args[++i]
           if (v !== undefined && v !== '') out.push(v)
-        } else if ((PS_VALUED.has(name) || (name === 'name' && (CMDLET_OF.get(prog) ?? prog) === 'new-item')) && ps[2] === undefined) i++
+        } else if ((PS_VALUED.has(ps.name) || (ps.name === 'name' && cmdlet === 'new-item')) && ps.inline === undefined) i++
       } else if (valued?.has(a)) i++
     } else if (a !== '-') out.push(a)
   }
   return out
 }
 
-/** The value of one of `flags`, as `-t DIR` or `--target-directory=DIR`, or of a PowerShell parameter in `psNames`. */
-function valueOf(args: Words, flags: string[], psNames: string[], prog = ''): string | undefined {
+/** The value of one of `flags`, as `-t DIR` or `--target-directory=DIR`, or of a parameter in `psNames` of a cmdlet. */
+function valueOf(args: Words, flags: string[], psNames: string[], cmdlet?: string): string | undefined {
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
     if (flags.includes(a)) return args[i + 1]
     const eq = flags.find((f) => f.startsWith('--') && a.startsWith(`${f}=`))
     if (eq !== undefined) return a.slice(eq.length + 1)
-    const ps = /^-([A-Za-z]{2,})(?::(.*))?$/.exec(a)
-    if (ps !== null && psNames.includes(psParam(ps[1], prog))) return ps[2] ?? args[i + 1]
+    const ps = psToken(a, cmdlet)
+    if (ps !== null && psNames.includes(ps.name)) return ps.inline ?? args[i + 1]
   }
   return undefined
 }
@@ -1247,7 +1282,7 @@ const under = (dir: string | undefined, file: string): string =>
  * `-P`, `--output-document`, `--directory-prefix`) and Invoke-WebRequest (`-OutFile`) are told. `-` and the null devices
  * write no file.
  */
-function savedFiles(prog: string, args: Words): string[] {
+function savedFiles(prog: string, args: Words, cmdlet: string | undefined): string[] {
   let named: string[]
   if (prog === 'curl') {
     const dir = valuesOf(args, ['--output-dir'])[0]
@@ -1263,7 +1298,7 @@ function savedFiles(prog: string, args: Words): string[] {
   if (prog === 'wget') {
     const given = shortOptions(args, WGET_VALUED, 'OP').map((o) => o.value ?? '')
     named = [...given, ...valuesOf(args, ['--output-document', '--directory-prefix'])]
-  } else named = [valueOf(args, [], ['outfile'], prog)].filter((v): v is string => v !== undefined)
+  } else named = [valueOf(args, [], ['outfile'], cmdlet)].filter((v): v is string => v !== undefined)
   return named.filter((f) => f !== '-' && !SINK.test(f))
 }
 
@@ -1297,9 +1332,10 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
   const knownName = KNOWN.has(prog) || PYTHON.test(prog) || PS_READ_VERB.test(prog)
   if (cmd.quoted[0] === true && !(knownName && (cmd.call || /[\\/]/.test(words[0])))) return unreadable
   const args = words.slice(1)
+  const cmdlet = cmd.cmdlet
 
   if (DELETERS.has(prog)) {
-    const paths = pathArgs(prog, args)
+    const paths = pathArgs(prog, args, cmdlet)
     const facts: Facts = { action: 'filesystem.delete', target: name, known: true }
     if (paths.length > 0) facts.inside = placesOf(paths, ctx, true).inside
     return facts
@@ -1323,8 +1359,8 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
 
   if (COPIERS.has(prog)) {
     // The destination is named by -t / -Destination, else it is the last of two or more paths.
-    const paths = pathArgs(prog, args)
-    const named = valueOf(args, ['-t', '--target-directory'], ['destination'], prog)
+    const paths = pathArgs(prog, args, cmdlet)
+    const named = valueOf(args, ['-t', '--target-directory'], ['destination'], cmdlet)
     const dest = named ?? (paths.length >= 2 ? paths[paths.length - 1] : undefined)
     const facts = writeFacts(name, dest === undefined ? [] : [dest], ctx)
     // A move also takes the files from where they were: every path that is not the destination.
@@ -1335,17 +1371,17 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
     return facts
   }
 
-  if (SETTERS.has(prog) || ITEM_WRITERS.has(prog)) {
+  if (SETTERS.has(cmdlet ?? prog) || ITEM_WRITERS.has(prog)) {
     // A named -Path / -LiteralPath / -FilePath outranks the positional words, and a value is never the destination.
-    const named = valueOf(args, [], ['path', 'literalpath', 'filepath'], prog)
-    const base = named ?? pathArgs(prog, args)[0]
+    const named = valueOf(args, [], ['path', 'literalpath', 'filepath'], cmdlet)
+    const base = named ?? pathArgs(prog, args, cmdlet)[0]
     // New-Item puts its -Name under its -Path (or here), however far up the name goes.
-    const item = CMDLET_OF.get(prog) === 'new-item' || prog === 'new-item' ? valueOf(args, [], ['name'], prog) : undefined
+    const item = cmdlet === 'new-item' ? valueOf(args, [], ['name'], cmdlet) : undefined
     const dest = item === undefined ? base : under(base ?? '.', item)
     return writeFacts(name, dest === undefined ? [] : [dest], ctx)
   }
 
-  if (MAKERS.has(prog)) return writeFacts(name, pathArgs(prog, args), ctx)
+  if (MAKERS.has(prog)) return writeFacts(name, pathArgs(prog, args, cmdlet), ctx)
 
   if (MIRRORS.has(prog)) {
     const dest = pathArgs(prog, args)[1]
@@ -1383,7 +1419,7 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
   }
 
   if (READERS.has(prog) || LISTERS.has(prog)) {
-    const paths = pathArgs(prog, args)
+    const paths = pathArgs(prog, args, cmdlet)
     if (paths.length === 0 && LISTERS.has(prog)) paths.push('.')
     if (paths.length > 0) return readFacts(paths, ctx)
   }
@@ -1391,7 +1427,7 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
   if (NETWORK.has(prog)) {
     const url = urlIn(args)
     const facts: Facts = { action: 'network.request', target: (url === null ? null : hostOf(url)) ?? name, known: true }
-    const saved = savedFiles(prog, args)
+    const saved = savedFiles(prog, args, cmdlet)
     if (saved.length > 0) facts.also = [writeFacts(name, saved, ctx)]
     return facts
   }
@@ -1410,7 +1446,8 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
   const sub = word !== undefined && own !== undefined && !own.has(word) ? undefined : word
   // A quoted subcommand is a value. It is classified as the subcommand it names when the table has it (`git "push"`) and
   // shown only then; one the table does not have makes the line unknown and stays out of the target (`git 'hunter2'`).
-  if (subAt >= 0 && cmd.quoted[subAt + 1] === true && (sub === undefined || !inTable(prog, sub))) {
+  // claude and codex show only their own words already, and any other word, quoted or not, is their prompt.
+  if (subAt >= 0 && cmd.quoted[subAt + 1] === true && own === undefined && (sub === undefined || !inTable(prog, sub))) {
     return { action: 'process.execute', target: name, known: false }
   }
   const target = withTarget(name, sub)
