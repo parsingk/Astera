@@ -1160,8 +1160,9 @@ matched exactly, or by a start ending in `*` (`git.*`), and a rule with `--scope
 matches only calls known to be inside, or outside, the session's project folder. Each command of a compound line
 (`cd sub && git push`) is judged on its own, and the first one a rule denies makes the line `would-deny`. A call is
 `unknown` when Astera could not read it, such as a line with an unknown shell command in it, when a denied command sits
-in a loop or a conditional (it may not have run), or when a write or delete names no path and a scoped rule could
-match it. The first time observe is turned on, Astera writes the starter rules: deny `git.remote.write`,
+in a loop or an `if` block (`for`, `while`, `if`, `case`, PowerShell `foreach`, `ForEach-Object` or `Where-Object`; it
+may not have run, while `a && b` is read as both commands), or when a write or delete names no path and a scoped rule
+could match it. The first time observe is turned on, Astera writes the starter rules: deny `git.remote.write`,
 `github.pr.create` and `github.write`, deny `filesystem.write` and `filesystem.delete` outside the project, and
 otherwise allow. Until then `policies show` shows them and nothing is written. The rule commands take a rule's id from
 `policies show` and its place in the list counted from 0 (`--at`, `--to`); `rules-reset` puts the starter rules back
