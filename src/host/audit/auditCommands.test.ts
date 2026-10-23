@@ -63,8 +63,8 @@ describe('createHostAudit', () => {
   const readInside = rec({ action: 'filesystem.read', target: 'src/a.ts', insideProject: true, confidence: 'exact', providerTool: 'Read' })
   const writeOutside = rec({ action: 'filesystem.write', target: 'outside project: x.ts', insideProject: false, confidence: 'exact', providerTool: 'Write', sessionId: 'sess_b', jobId: 'job1', runId: 'run1', taskId: 'task1', agentProfileId: 'ap1' })
   const mystery = rec({ action: 'process.execute', target: 'foo-bar.sh', confidence: 'unknown' })
-  // A loop around a push: the rules cannot say the push ran (design §7)
-  const compound = rec({ action: 'process.execute', target: 'npm test', confidence: 'heuristic', commands: [{ action: 'process.execute' }, { action: 'git.remote.write' }], scripted: true })
+  // A push in a compound line: would be denied wherever in the line it sits (design §7)
+  const compound = rec({ action: 'process.execute', target: 'npm test', confidence: 'heuristic', commands: [{ action: 'process.execute' }, { action: 'git.remote.write' }] })
   const all = [push, readInside, writeOutside, mystery, compound]
 
   it('lists newest first with the decision the starter rules give while there is no rules file, and writes nothing', async () => {
@@ -75,7 +75,7 @@ describe('createHostAudit', () => {
     const { records, truncated } = listed(r)
     expect(truncated).toBe(false)
     expect(records.map((x) => [x.id, x.decision, x.ruleId])).toEqual([
-      [compound.id, 'unknown', undefined],
+      [compound.id, 'would-deny', 'starter-git-remote-write'],
       [mystery.id, 'unknown', undefined],
       [writeOutside.id, 'would-deny', 'starter-write-outside'],
       [readInside.id, 'allow', undefined],
@@ -95,7 +95,7 @@ describe('createHostAudit', () => {
     expect(await ids({ agentProfileId: 'ap1' })).toEqual([writeOutside.id])
     expect(await ids({ action: 'filesystem.read' })).toEqual([readInside.id])
     expect(await ids({ action: 'filesystem.*' })).toEqual([writeOutside.id, readInside.id])
-    expect(await ids({ decision: 'would-deny' })).toEqual([writeOutside.id, push.id])
+    expect(await ids({ decision: 'would-deny' })).toEqual([compound.id, writeOutside.id, push.id])
     expect(await ids({ decision: 'allow' })).toEqual([readInside.id])
     expect(await ids({ since: readInside.at, until: mystery.at })).toEqual([writeOutside.id, readInside.id])
     const cut = listed(await h.call('audit-list', { limit: 2 }))
@@ -103,9 +103,9 @@ describe('createHostAudit', () => {
     expect(cut.truncated).toBe(true)
     // The limit counts what the decision filter kept
     const denied = listed(await h.call('audit-list', { decision: 'would-deny', limit: 1 }))
-    expect(denied.records.map((x) => x.id)).toEqual([writeOutside.id])
+    expect(denied.records.map((x) => x.id)).toEqual([compound.id])
     expect(denied.truncated).toBe(true)
-    expect(listed(await h.call('audit-list', { decision: 'would-deny', limit: 2 })).truncated).toBe(false)
+    expect(listed(await h.call('audit-list', { decision: 'would-deny', limit: 3 })).truncated).toBe(false)
   })
 
   it('lists 200 by default and at most 2000', async () => {
@@ -169,13 +169,13 @@ describe('createHostAudit', () => {
     expect(r.status).toBe(200)
     expect(r.body).toEqual({
       allow: 1,
-      wouldDeny: 2,
-      unknown: 2,
+      wouldDeny: 3,
+      unknown: 1,
       byAction: {
         'git.remote.write': { allow: 0, wouldDeny: 1, unknown: 0 },
         'filesystem.read': { allow: 1, wouldDeny: 0, unknown: 0 },
         'filesystem.write': { allow: 0, wouldDeny: 1, unknown: 0 },
-        'process.execute': { allow: 0, wouldDeny: 0, unknown: 2 }
+        'process.execute': { allow: 0, wouldDeny: 1, unknown: 1 }
       },
       stoppedAtLimit: false
     })
@@ -200,16 +200,27 @@ describe('createHostAudit', () => {
     expect((await h.call('audit-summary', { until: new Date(NOW - 3 * 24 * 60 * 60 * 1000).toISOString() })).body).toMatchObject({ stoppedAtLimit: false })
   })
 
+  // An earlier build kept `scripted: true` on a line with control flow, and judged that line unknown. The store passes the
+  // line through whole and the field is ignored: the push in it is what the rules judge
+  it('reads a line written with the old scripted field, and judges its commands', async () => {
+    const old = { ...rec({ confidence: 'heuristic', commands: [{ action: 'git.remote.write' }] }), scripted: true } as AuditRecord
+    const h = await rig([old])
+    const [r] = listed(await h.call('audit-list')).records
+    expect([r.id, r.decision, r.ruleId]).toEqual([old.id, 'would-deny', 'starter-git-remote-write'])
+    expect(r).toMatchObject({ scripted: true })
+    expect((await h.call('audit-summary')).body).toMatchObject({ allow: 0, wouldDeny: 1, unknown: 0 })
+  })
+
   it('judges with the rules in force at the read: editing a rule changes the summary of the past (acceptance 5)', async () => {
     const h = await rig(all)
     const before = (await h.call('audit-summary')).body as { allow: number; wouldDeny: number }
-    expect([before.allow, before.wouldDeny]).toEqual([1, 2])
+    expect([before.allow, before.wouldDeny]).toEqual([1, 3])
     await writeAuditPolicy(h.profileDir, {
       ...STARTER_POLICY,
       mode: 'observe',
       rules: STARTER_POLICY.rules.map((r) => (r.action === 'git.remote.write' ? { ...r, effect: 'allow' as const } : r))
     })
-    // The push is allowed now, and so is the compound line whose push made it unknown
+    // The push is allowed now, and so is the compound line whose push was what denied it
     const after = (await h.call('audit-summary')).body as { allow: number; wouldDeny: number; unknown: number }
     expect([after.allow, after.wouldDeny, after.unknown]).toEqual([3, 1, 1])
     const pushed = listed(await h.call('audit-list', { action: 'git.remote.write' })).records[0]

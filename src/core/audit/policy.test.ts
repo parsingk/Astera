@@ -79,7 +79,7 @@ describe('decide, under the starter rules', () => {
     expect(decide(claude('Read', { file_path: path.resolve(cwd, '..', 'notes.md') }), p)).toEqual({ decision: 'allow' })
   })
 
-  it('cannot tell a call whose confidence is unknown, whatever the rules say', () => {
+  it('cannot tell a call whose confidence is unknown while no rule denies any of it', () => {
     expect(decide(bash('foo-bar.sh'), p)).toEqual({ decision: 'unknown' })
     expect(decide({ action: 'filesystem.read', insideProject: true, confidence: 'unknown' }, p)).toEqual({ decision: 'unknown' })
   })
@@ -109,25 +109,47 @@ describe('decide, under the starter rules', () => {
     }
   })
 
-  it('still cannot tell a line with an unknown command, a script, or a write that names no place', () => {
-    // An unknown command
-    expect(decide(bash('./deploy.sh && git push'), p)).toEqual({ decision: 'unknown' })
-    expect(decide(bash('eval "$CMD" && git push'), p)).toEqual({ decision: 'unknown' })
-    // Control flow: a command in it may have run any number of times, or not at all
-    expect(decide(bash('for b in a c; do git push origin $b; done'), p)).toEqual({ decision: 'unknown' })
-    expect(decide(bash('if git diff --quiet; then git push; fi'), p)).toEqual({ decision: 'unknown' })
-    expect(decide(claude('PowerShell', { command: 'foreach ($r in $remotes) { git push $r }' }), p)).toEqual({ decision: 'unknown' })
-    expect(decide(claude('PowerShell', { command: 'git branch | ForEach-Object { git push origin $_ }' }), p)).toEqual({ decision: 'unknown' })
-    expect(decide(claude('PowerShell', { command: '1..3 | Where-Object { git push }' }), p)).toEqual({ decision: 'unknown' })
-    // A Codex exec script of several calls is a program, not a line
+  // The person's ruling D2 (2026-10-24): a denied command is denied wherever in the line it sits. A loop or a conditional
+  // that might not have run it, a script file or an unknown command beside it, change nothing: the preview errs toward flagging
+  it('would deny a line with a denied command anywhere in it: in control flow, a script of several calls, or beside what it cannot read', () => {
+    const push = { decision: 'would-deny', ruleId: starterId('git.remote.write') }
+    // Control flow: the command may have run any number of times, or not at all
+    expect(decide(bash('for b in a c; do git push origin $b; done'), p)).toEqual(push)
+    expect(decide(bash('if git diff --quiet; then git push; fi'), p)).toEqual(push)
+    expect(decide(bash('while true; do git push; done'), p)).toEqual(push)
+    expect(decide(claude('PowerShell', { command: 'foreach ($r in $remotes) { git push $r }' }), p)).toEqual(push)
+    expect(decide(claude('PowerShell', { command: 'git branch | ForEach-Object { git push origin $_ }' }), p)).toEqual(push)
+    expect(decide(claude('PowerShell', { command: '1..3 | Where-Object { git push }' }), p)).toEqual(push)
+    // A Codex exec script of several calls
     const exec = 'await tools.exec_command({cmd:"git add -A"});\nawait tools.exec_command({cmd:"git push"});'
-    expect(decide(resolveAction({ provider: 'codex', tool: 'exec', input: exec, cwd }), p)).toEqual({ decision: 'unknown' })
-    // A delete that names no place, which an outside rule could match
-    expect(decide(bash('git push && rm'), p)).toEqual({ decision: 'unknown' })
+    expect(decide(resolveAction({ provider: 'codex', tool: 'exec', input: exec, cwd }), p)).toEqual(push)
+    // An unknown command or script in the line
+    expect(decide(bash('./deploy.sh && git push'), p)).toEqual(push)
+    expect(decide(bash('eval "$CMD" && git push'), p)).toEqual(push)
+    // A delete that names no place, which an outside rule could match, before the denied command or after it
+    expect(decide(bash('git push && rm'), p)).toEqual(push)
+    expect(decide(bash('rm && git push'), p)).toEqual(push)
   })
 
-  it('allows a scripted line whose commands no rule denies', () => {
+  it('would deny a line cut short whose kept commands include a denied one', () => {
+    const cut = { action: 'process.execute' as const, confidence: 'unknown' as const, commands: [{ action: 'process.execute' as const }, { action: 'git.remote.write' as const }] }
+    expect(decide(cut, p)).toEqual({ decision: 'would-deny', ruleId: starterId('git.remote.write') })
+  })
+
+  it('still cannot tell a line with an unknown command or script and no denied command, or a write that names no place', () => {
+    expect(decide(bash('./deploy.sh'), p)).toEqual({ decision: 'unknown' })
+    expect(decide(bash('./deploy.sh && npm test'), p)).toEqual({ decision: 'unknown' })
+    expect(decide(bash('eval "$CMD"'), p)).toEqual({ decision: 'unknown' })
+    expect(decide(bash('rm'), p)).toEqual({ decision: 'unknown' })
+    expect(decide(bash('git status && rm'), p)).toEqual({ decision: 'unknown' })
+  })
+
+  it('allows a line with control flow whose commands no rule denies', () => {
     expect(decide(bash('for f in a b; do npm test; done'), p)).toEqual({ decision: 'allow' })
+  })
+
+  it('would deny what otherwise denies, a line it cannot read too: the enforcer would refuse it', () => {
+    expect(decide(bash('./deploy.sh'), policy([], 'deny'))).toEqual({ decision: 'would-deny' })
   })
 
   it('judges each command of a compound line in its own place, so a delete inside and a read outside are allowed', () => {

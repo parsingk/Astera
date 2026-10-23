@@ -260,36 +260,45 @@ describe('shell: syntax that is not a command', () => {
     expect(acts(bash('SHA=$(git rev-parse HEAD) && git push'))).toEqual(['git.read', 'git.remote.write'])
   })
 
-  it('reads the commands inside a loop or a conditional and calls the line heuristic and scripted', () => {
+  // The record does not say a line had control flow: the rules judge every command in it wherever it sits (policy.ts decide)
+  it('reads the commands inside a loop or a conditional and calls the line heuristic', () => {
     expect(bash('for f in a b; do git push; done')).toEqual({
       action: 'git.remote.write',
       target: 'git push',
       confidence: 'heuristic',
-      commands: [{ action: 'git.remote.write' }],
-      scripted: true
+      commands: [{ action: 'git.remote.write' }]
     })
     const r = bash('if [ -f x ]; then cat x; else rm -rf y; fi')
-    expect(r).toMatchObject({ confidence: 'heuristic', scripted: true })
+    expect(r.confidence).toBe('heuristic')
     expect(acts(r)).toEqual(['process.execute', 'filesystem.read', 'filesystem.delete'])
-    expect(bash('while read f; do rm "$f"; done < list')).toMatchObject({ scripted: true })
-    expect(bash('bash -c "if true; then git push; fi"')).toMatchObject({ scripted: true })
+    const w = bash('while read f; do rm "$f"; done < list')
+    expect(w.confidence).toBe('heuristic')
+    expect(acts(w)).toEqual(['process.execute', 'filesystem.delete'])
+    const inner = bash('bash -c "if true; then git push; fi"')
+    expect(inner.confidence).toBe('heuristic')
+    expect(acts(inner)).toEqual(['process.execute', 'git.remote.write'])
+    for (const line of [r, w, inner]) expect(line, line.target).not.toHaveProperty('scripted')
   })
 
-  // Final re-review: ForEach-Object runs its block once per item and Where-Object only for the items it lets through,
-  // a loop and a condition as much as foreach and if are
-  it('calls a PowerShell line scripted when it has a ForEach-Object or Where-Object', () => {
-    for (const line of [
-      'git branch | ForEach-Object { git push origin $_ }',
-      'Get-ChildItem *.log | ForEach-Object { Remove-Item ..\\x }',
-      '1..3 | Where-Object { git push }',
-      'Get-ChildItem | foreach-object -Process { Remove-Item $_ }'
-    ])
-      expect(ps(line), line).toMatchObject({ confidence: 'heuristic', scripted: true })
+  // Final re-review: ForEach-Object runs its block once per item and Where-Object only for the items it lets through
+  it('reads the commands in the block of a PowerShell ForEach-Object or Where-Object, and calls the line heuristic', () => {
+    const lines: Array<[string, string[]]> = [
+      ['git branch | ForEach-Object { git push origin $_ }', ['git.read', 'process.execute', 'git.remote.write']],
+      ['Get-ChildItem *.log | ForEach-Object { Remove-Item ..\\x }', ['filesystem.read', 'process.execute', 'filesystem.delete']],
+      ['1..3 | Where-Object { git push }', ['process.execute', 'git.remote.write']],
+      ['Get-ChildItem | foreach-object -Process { Remove-Item $_ }', ['filesystem.read', 'process.execute', 'filesystem.delete']]
+    ]
+    for (const [line, actions] of lines) {
+      const r = ps(line)
+      expect(r.confidence, line).toBe('heuristic')
+      expect(acts(r), line).toEqual(actions)
+      expect(r, line).not.toHaveProperty('scripted')
+    }
   })
 
-  // Final review I1: only control flow makes a line a script. A compound line, a script handed to a shell's -c (as Codex
-  // hands every command) and a PowerShell value where a command could be are read as commands
-  it('does not call a line scripted for being compound, for a -c script, or for a PowerShell value', () => {
+  // A compound line, a script handed to a shell's -c (as Codex hands every command) and a PowerShell value where a command
+  // could be are read as commands, with no mark of a script
+  it('has no scripted field for a compound line, for a -c script, or for a PowerShell value', () => {
     for (const r of [
       bash('git add -A && git commit -m x && git push'),
       bash('[ -f x ] && git push'),
@@ -647,13 +656,12 @@ describe('Codex exec scripts', () => {
     })
   })
 
-  it('treats a script that calls several tools as a compound line, headlined by the first, and scripted', () => {
+  it('treats a script that calls several tools as a compound line, headlined by the first', () => {
     expect(exec('await tools.exec_command({cmd:"git status"}); await tools.exec_command({cmd:"git push"});')).toEqual({
       action: 'git.read',
       target: 'git status',
       confidence: 'heuristic',
-      commands: [{ action: 'git.read' }, { action: 'git.remote.write' }],
-      scripted: true
+      commands: [{ action: 'git.read' }, { action: 'git.remote.write' }]
     })
     // One call is the command it runs
     expect(exec('await tools.exec_command({cmd:"npm test && git push"});')).not.toHaveProperty('scripted')
@@ -995,10 +1003,11 @@ describe('shell: reading with search tools', () => {
 describe('PowerShell: condition groups and assignments are not commands', () => {
   it('reads the commands in the body of if, foreach and while, not the condition', () => {
     expect(ps('if ($LASTEXITCODE -ne 0) { exit 1 }')).toEqual({
-      action: 'process.execute', target: 'exit', confidence: 'heuristic', commands: [{ action: 'process.execute' }], scripted: true
+      action: 'process.execute', target: 'exit', confidence: 'heuristic', commands: [{ action: 'process.execute' }]
     })
     const r = ps('foreach ($f in Get-ChildItem) { Remove-Item $f }')
-    expect(r).toMatchObject({ confidence: 'heuristic', scripted: true })
+    expect(r.confidence).toBe('heuristic')
+    expect(r).not.toHaveProperty('scripted')
     expect(acts(r)).toEqual(['filesystem.delete'])
     expect(acts(ps('if (Test-Path x) { Remove-Item x }'))).toEqual(['process.execute', 'filesystem.delete'])
     expect(acts(ps('if (-not (Test-Path x)) { New-Item x }'))).toEqual(['process.execute', 'filesystem.write'])

@@ -37,9 +37,6 @@ export interface ResolvedAction {
   /** Every command of a compound shell line, and every file a redirection or a pipe into a writer touches, in order and
    *  without repeats, each with its own place. Left out for a line that is one command with nothing else. */
   commands?: CommandFacts[]
-  /** The line has control flow (a loop, a conditional, a function), or is a Codex `exec` script of several calls: what ran,
-   *  and how often, is not in its words, so no rule can say one of its commands would have run (policy.ts decide). */
-  scripted?: true
 }
 
 const SHELL_TARGET_MAX = 60
@@ -151,10 +148,9 @@ function effectsOf(p: ResolvedAction): CommandFacts[] {
  * What one line of work did when it was several things. The headline (`lead`, the first part unless the caller names
  * another) gives the action, target and place; `commands` lists them all without repeats; the line is unknown if any part
  * was, and heuristic if it was `compound` (several commands, or a loop or conditional), if any part was, or if it lists
- * more than one entry (a command and the file it redirects into is two things to be sure of). It is `scripted` when the
- * caller says so or any part is.
+ * more than one entry (a command and the file it redirects into is two things to be sure of).
  */
-function combine(parts: ResolvedAction[], compound: boolean, lead: ResolvedAction = parts[0], scripted = false): ResolvedAction {
+function combine(parts: ResolvedAction[], compound: boolean, lead: ResolvedAction = parts[0]): ResolvedAction {
   if (parts.length === 1 && !compound) return parts[0]
   const seen = new Set<string>()
   const commands = parts.flatMap(effectsOf).filter((c) => {
@@ -169,7 +165,6 @@ function combine(parts: ResolvedAction[], compound: boolean, lead: ResolvedActio
     commands
   }
   if (lead.insideProject !== undefined) out.insideProject = lead.insideProject
-  if (scripted || parts.some((p) => p.scripted === true)) out.scripted = true
   return out
 }
 
@@ -177,7 +172,7 @@ function combine(parts: ResolvedAction[], compound: boolean, lead: ResolvedActio
  * A Codex `exec` call. Its input is not arguments but a script: `await tools.exec_command({cmd:"…","workdir":"…"})`,
  * `tools.apply_patch("*** Begin Patch…")`, `tools.mcp__<server>__<tool>({…})`, `tools.view_image({path:"…"})`. Each
  * `tools.<name>(` in the code (not in a string or a comment) is a call, resolved as the tool of that name; several make a
- * compound line, and a scripted one: the code around them, which this does not read, decides which of them run.
+ * compound line: the code around them, which this does not read, decides which of them run.
  */
 function resolveExec(source: string | null, cwd: string): ResolvedAction {
   const text = source ?? ''
@@ -186,7 +181,7 @@ function resolveExec(source: string | null, cwd: string): ResolvedAction {
   const parts = calls.map((c, i) =>
     resolve({ provider: 'codex', tool: c.name, input: execArgs(c.name, text.slice(c.from, calls[i + 1]?.at)), cwd })
   )
-  return combine(parts, parts.length > 1, parts[0], parts.length > 1)
+  return combine(parts, parts.length > 1, parts[0])
 }
 
 const CALL = /tools\.([A-Za-z_][A-Za-z0-9_]*)\s*\(/y
@@ -426,7 +421,7 @@ function resolveShell(rec: Record<string, unknown>, at: Ctx, flavor: Flavor): Re
         : []
   const workdir = str(rec.workdir)
   let base: string | null = workdir === null ? start : path.resolve(start, nativePath(workdir))
-  const { commands, scripted, control } = expand(typed, flavor)
+  const { commands, scripted } = expand(typed, flavor)
 
   const parts: ResolvedAction[] = []
   let lead: ResolvedAction | undefined
@@ -454,7 +449,7 @@ function resolveShell(rec: Record<string, unknown>, at: Ctx, flavor: Flavor): Re
     if (MOVES.has(prog)) base = movedTo(cmd.words.slice(1), ctx)
   }
   if (parts.length === 0) return { action: 'process.execute', target: 'shell', confidence: 'unknown' }
-  return combine(parts, commands.length > 1 || scripted, lead, control)
+  return combine(parts, commands.length > 1 || scripted, lead)
 }
 
 /** A command Codex gave as an argv array: its words are already split and none was quoted in the shell's sense. */
@@ -536,8 +531,6 @@ const NO_COMMAND = new Set([
   'for', 'foreach', 'select', 'case', 'switch', 'function', 'try', 'catch', 'finally', 'throw', 'fi', 'done', 'esac', 'break',
   'continue', 'return'
 ])
-/** The cmdlets that run a script block per item or for some items: control flow in a pipeline. */
-const PIPELINE_FLOW = new Set(['foreach-object', 'where-object'])
 const DURATION = /^\d+(?:\.\d+)?[smhd]?$/
 const POSIX_SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh'])
 const INTERPRETERS = new Set([...POSIX_SHELLS, 'powershell', 'pwsh', 'cmd'])
@@ -566,11 +559,9 @@ function afterTimeout(words: Words, from: number): number {
  * A command without what comes before its program: `NAME=value` and PowerShell `$name =` assignments (their values can
  * be secrets), sudo-like wrappers and `timeout N`, and the keyword of a conditional or loop body (`then`, `do`, `while`).
  * `syntax` is whether a keyword or a word that runs nothing was seen (a loop header, a PowerShell condition or `.Count`),
- * which makes the line a script. `control` is the part of that which is control flow (a keyword, a loop or case header,
- * `function`, `try`), as opposed to a PowerShell value standing where a command could. A command of only assignments or
- * only a header comes back with no words.
+ * which makes the line a script. A command of only assignments or only a header comes back with no words.
  */
-function stripPrefix(raw: Cmd, flavor: Flavor): { cmd: Cmd; syntax: boolean; control: boolean } {
+function stripPrefix(raw: Cmd, flavor: Flavor): { cmd: Cmd; syntax: boolean } {
   const words = raw.words
   let i = 0
   let syntax = false
@@ -585,24 +576,21 @@ function stripPrefix(raw: Cmd, flavor: Flavor): { cmd: Cmd; syntax: boolean; con
     else break
   }
   const rest = words.slice(i)
-  // So far only a keyword made it syntax. ForEach-Object and Where-Object are a loop and a condition written as cmdlets:
-  // the block after them runs once per item, or only for the items let through
-  const control = syntax || (rest.length > 0 && PIPELINE_FLOW.has(programName(rest[0]).toLowerCase()))
   const cmdlet = rest.length > 0 ? cmdletOf(rest[0], flavor) : undefined
   const cmd: Cmd = { words: rest, out: raw.out, call: raw.call, quoted: raw.quoted.slice(i), invoked: raw.invoked, cmdlet }
-  const dropped = { cmd: { ...cmd, words: [], quoted: [] }, syntax: true, control }
-  if (rest.length === 0) return { cmd, syntax, control }
-  if (NO_COMMAND.has(rest[0].toLowerCase())) return { ...dropped, control: true }
+  const dropped = { cmd: { ...cmd, words: [], quoted: [] }, syntax: true }
+  if (rest.length === 0) return { cmd, syntax }
+  if (NO_COMMAND.has(rest[0].toLowerCase())) return dropped
   if (flavor === 'ps' && !raw.call) {
     // PowerShell never runs a quoted word that is not called with `&`: it is data, whatever was stripped before it. A
     // quoted absolute path to a shell is the one exception, so the script it was handed is read (scriptOf).
     if (cmd.quoted[0] && !isShellPath(rest[0])) return dropped
     if (isPsExpression(rest[0])) {
       const method = raw.invoked && rest.length === 1 ? methodFacts(rest[0]) : null
-      return method === null ? dropped : { cmd: { ...cmd, method }, syntax, control }
+      return method === null ? dropped : { cmd: { ...cmd, method }, syntax }
     }
   }
-  return { cmd, syntax, control }
+  return { cmd, syntax }
 }
 
 /** The script a shell was handed with -c / -Command / /c, if it was handed one, and the shell it is written for. */
@@ -621,18 +609,15 @@ function scriptOf(words: Words): { text: string; flavor: Flavor } | null {
   return prog === 'powershell' || prog === 'pwsh' ? { text: rest.slice(i + 1).join(' '), flavor: 'ps' } : null
 }
 
-/** The commands of a line with the scripts inside `bash -c` and the like replaced by their own commands, whether any of
- *  it was syntax rather than a command (`scripted`), and whether any of that was control flow (`control`). A script
- *  read this way is not itself control flow: its commands are read as a typed line's are. */
-function expand(cmds: Cmd[], flavor: Flavor, depth = 0): { commands: Cmd[]; scripted: boolean; control: boolean } {
+/** The commands of a line with the scripts inside `bash -c` and the like replaced by their own commands, and whether any
+ *  of it was syntax rather than a command (`scripted`), which makes the line compound. */
+function expand(cmds: Cmd[], flavor: Flavor, depth = 0): { commands: Cmd[]; scripted: boolean } {
   const out: Cmd[] = []
   let scripted = false
-  let control = false
   for (const raw of cmds) {
     const stripped = stripPrefix(raw, flavor)
     const cmd = stripped.cmd
     scripted ||= stripped.syntax
-    control ||= stripped.control
     if (cmd.words.length === 0 && cmd.out.length === 0) continue
     const script = depth < 2 && cmd.words.length > 0 ? scriptOf(cmd.words) : null
     if (script === null) out.push(cmd)
@@ -641,10 +626,9 @@ function expand(cmds: Cmd[], flavor: Flavor, depth = 0): { commands: Cmd[]; scri
       out.push(...inner.commands)
       if (cmd.out.length > 0) out.push({ words: [], out: cmd.out, call: false, quoted: [], invoked: false }) // `bash -c "x" > f`
       scripted ||= inner.scripted
-      control ||= inner.control
     }
   }
-  return { commands: out, scripted, control }
+  return { commands: out, scripted }
 }
 
 const ESCAPABLE = ' "\'&|;()<>$#'
