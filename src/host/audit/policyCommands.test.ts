@@ -263,6 +263,23 @@ describe('createHostPolicies', () => {
     expect(await h.exists()).toBe(false)
   })
 
+  it('tells onChange after each change that landed, so the recorder reads the mode again, and not after a read or a refusal', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-host-policies-'))
+    dirs.push(root)
+    let changes = 0
+    const hub = createHostPolicies({ profileDir: root, onChange: () => changes++ })
+    const call = (cmd: string, args: Record<string, unknown> = {}, agentRefusal?: string) =>
+      hub.command({ cmd, args, role: 'app', ...(agentRefusal ? { agentRefusal } : {}), marks: { effects: 0 } })
+    await call('policies-show')
+    await call('policies-set-mode', { mode: 'enforce' })
+    await call('policies-set-mode', { mode: 'observe' }, 'not an agent')
+    expect(changes).toBe(0)
+    await call('policies-set-mode', { mode: 'observe' })
+    expect(changes).toBe(1)
+    await call('policies-rules-reset')
+    expect(changes).toBe(2)
+  })
+
   it('lands two concurrent changes in order', async () => {
     const h = await rig()
     await writeAuditPolicy(h.profileDir, { ...STARTER_POLICY, mode: 'observe' })

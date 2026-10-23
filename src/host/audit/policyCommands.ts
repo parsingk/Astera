@@ -67,7 +67,11 @@ const newRuleId = (): string => `ar_${randomBytes(6).toString('hex')}`
 /** A position in a list, counted from 0; whether the list is that long is checked against the rules read. */
 const isPosition = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 0
 
-export function createHostPolicies(d: { profileDir: string }): HostPolicies {
+export function createHostPolicies(d: {
+  profileDir: string
+  /** Told after every change that landed: the recorder reads the mode again rather than wait out its last read. */
+  onChange?: () => void
+}): HostPolicies {
   // One change at a time: two changes must each read what the other wrote
   let chain: Promise<unknown> = Promise.resolve()
   const queued = <T>(f: () => Promise<T>): Promise<T> => {
@@ -199,7 +203,10 @@ export function createHostPolicies(d: { profileDir: string }): HostPolicies {
         // A damaged file is the person's to repair (RepairNeeded), and nothing is written over it; anything else failed
         r = { status: e instanceof RepairNeeded ? 409 : 500, body: { error: message(e) } }
       }
-      if (r.status === 200 && POLICY_CHANGES.has(a.cmd)) a.marks.effects += 1
+      if (r.status === 200 && POLICY_CHANGES.has(a.cmd)) {
+        a.marks.effects += 1
+        d.onChange?.()
+      }
       return r
     }
   }

@@ -9,6 +9,10 @@ import { createPluginManager } from './plugins/manager'
 import { createHostExtensions } from './extensions/commands'
 import { agentProfileInUse, createHostAgentProfiles } from './agentProfiles/commands'
 import { createHostPolicies } from './audit/policyCommands'
+import { createHostAudit } from './audit/auditCommands'
+import { createAuditRecorder, dispatchOfSession, registrySessionFacts } from './audit/recorder'
+import { readPolicyMode } from '../core/audit/policy'
+import { pruneRecords } from '../core/audit/store'
 import { createGatewayHub } from './gateway/hub'
 import { hidingLog } from '../core/extensions/secrets'
 import { sweepGeneratedMcp } from '../core/extensions/resolve'
@@ -334,6 +338,8 @@ async function main(): Promise<void> {
           // log's own flush below so a stuck disk cannot hold the way out. Never rejects.
           await disposeWithin(eventLog.flushed(), LEAVE_LOG_FLUSH_CAP_MS, () => {})
           eventLog.close()
+          // And observe mode's records still on their way to the disk, capped the same way. Never rejects.
+          await disposeWithin(auditRecorder.flushed(), LEAVE_LOG_FLUSH_CAP_MS, () => {})
           registry.killAll()
           procs.killAll()
           // Every buffered log line on disk before the exits below are armed (stage 3, task 3). First the
@@ -495,6 +501,18 @@ async function main(): Promise<void> {
         journal: hostJournal
       })
     : null
+
+  // Observe mode's recorder (observe mode design §5, §8): the sources hand it the tool calls a session finished, and it
+  // keeps them under <profile>/audit while the mode is observe, touching nothing in compatibility. Made above the
+  // rolling, whose hook tap is one of its sources. A session is read from the two registries' notes and its Dispatch
+  // from the state as the orch holds it (made below), never loaded for this: a Host that has not loaded has placed none.
+  const auditRecorder = createAuditRecorder({
+    profileDir,
+    mode: () => readPolicyMode(profileDir),
+    sessionInfo: registrySessionFacts({ ptys: registry, procs }),
+    dispatchOf: (sessionId) => dispatchOfSession(orch.state(), sessionId),
+    log: (m) => log.write(m)
+  })
 
   /** Declared above the rolling (the S6 final review M3 lesson): Task 6 has the rolling's events reach it,
    *  and a `const` below would be in its temporal dead zone. Null without a spawner or without the SDK. */
@@ -772,8 +790,11 @@ async function main(): Promise<void> {
   const touchAgentProfile = (id: string): void => {
     void agentProfiles.command({ cmd: 'agent-profiles-touch', args: { id }, role: 'app', marks: { effects: 0 } }).catch((e) => log.write(`agent profile ${id}: its use could not be stamped: ${String(e)}`))
   }
-  // Observe mode's rules and mode (observe mode design §7, ruling M1): audit-policy.json, which this Host alone writes
-  const policies = createHostPolicies({ profileDir })
+  // Observe mode's rules and mode (observe mode design §7, ruling M1): audit-policy.json, which this Host alone writes. A
+  // change tells the recorder, which reads the mode again at its next call
+  const policies = createHostPolicies({ profileDir, onChange: () => auditRecorder.invalidate() })
+  // And the records read back with the decisions those rules give them now (design §8)
+  const audit = createHostAudit({ profileDir })
   const orch = createHostOrch({
     profileDir,
     version: hostVersion,
@@ -782,6 +803,7 @@ async function main(): Promise<void> {
     extensions,
     agentProfiles,
     policies,
+    audit,
     // The job-source plugins a person makes Jobs from (plugin Phase 4 J10), asked through the runtime
     jobSources: hostJobSources({ manager: plugins, runtime: pluginRuntime }),
     // The completion check plugins a Task's checks ask (plugin Phase 5 C8), through the same runtime
@@ -1189,6 +1211,9 @@ async function main(): Promise<void> {
   void mcpGateway.sync().catch(() => null)
   // And the generated MCP files no session used for 30 days (a session in use touches its own at every spawn)
   void sweepGeneratedMcp(profileDir, 30 * 24 * 60 * 60 * 1000)
+  // And observe mode's records past 30 days or 50 MB (design §8): here at the start, then by the writes at most hourly.
+  // Never rejects, and a profile that never observed has no folder to read.
+  void pruneRecords(profileDir, { log: (m) => log.write(m) })
 
   handlePty = attachPtyHost({ registry, broadcast: (m, to) => server.broadcast(m, to) })
   handleProc = attachProcHost({ registry: procs, broadcast: (m) => server.broadcast(m) })

@@ -1,0 +1,116 @@
+// The Host's `audit-*` commands (observe mode design §8, §11, §12): the records the recorder kept, read back with the
+// decision the rules in force now give each one, never a stored one, so editing a rule changes what the past would have
+// been. While there is no rules file the starter rules preview them, as `policies-show` shows them. Reads only.
+//
+// For this machine's app and CLI: MCP, a remote controller and a plugin never get here, since no gate lists them, and an
+// agent's shell is refused even these reads, so the log of an agent's calls stays away from agents (design §3).
+import { RepairNeeded } from '../../core/settings/repairNeeded'
+import { STARTER_POLICY, decide, readAuditPolicy, type AuditDecision, type AuditPolicy } from '../../core/audit/policy'
+import { queryRecords, type AuditFilter, type AuditRecord } from '../../core/audit/store'
+import type { OrchCaller } from '../../core/host/orchProtocol'
+
+export const AUDIT_COMMANDS: ReadonlySet<string> = new Set(['audit-list', 'audit-summary'])
+
+export interface AuditAnswer {
+  status: number
+  body: unknown
+}
+
+export interface HostAudit {
+  command(a: {
+    cmd: string
+    args: Record<string, unknown>
+    role: OrchCaller['role'] | undefined
+    /** The sentence an agent's shell is refused with, present exactly when the caller is one. */
+    agentRefusal?: string
+    marks: { effects: number }
+  }): Promise<AuditAnswer>
+}
+
+const LIST_DEFAULT = 200
+const LIST_MAX = 2000
+const DECISIONS: readonly unknown[] = ['allow', 'would-deny', 'unknown']
+const TEXT_FILTERS = ['sessionId', 'jobId', 'runId', 'taskId', 'agentProfileId', 'action'] as const
+
+interface Counts {
+  allow: number
+  wouldDeny: number
+  unknown: number
+}
+const COUNT_KEY: Record<AuditDecision, keyof Counts> = { allow: 'allow', 'would-deny': 'wouldDeny', unknown: 'unknown' }
+const noCounts = (): Counts => ({ allow: 0, wouldDeny: 0, unknown: 0 })
+
+const bad = (error: string): AuditAnswer => ({ status: 400, body: { error } })
+const message = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+
+/** The filter the arguments name, or the sentence that refuses them. */
+function filterOf(args: Record<string, unknown>): { filter: AuditFilter; decision?: AuditDecision } | string {
+  const filter: AuditFilter = {}
+  for (const k of TEXT_FILTERS) {
+    const v = args[k]
+    if (v === undefined) continue
+    if (typeof v !== 'string' || v === '') return `${k} must be text`
+    filter[k] = v
+  }
+  for (const k of ['since', 'until'] as const) {
+    const v = args[k]
+    if (v === undefined) continue
+    if (typeof v !== 'string' || !Number.isFinite(Date.parse(v))) return `${k} must be a time such as 2026-10-23T09:00:00Z`
+    filter[k] = v
+  }
+  if (args.decision !== undefined && !DECISIONS.includes(args.decision)) return 'decision must be allow, would-deny or unknown'
+  return { filter, ...(args.decision !== undefined ? { decision: args.decision as AuditDecision } : {}) }
+}
+
+export function createHostAudit(d: { profileDir: string }): HostAudit {
+  /** The rules in force: the file's, or the starter rules while there is none. */
+  const rules = async (): Promise<AuditPolicy> => (await readAuditPolicy(d.profileDir)) ?? STARTER_POLICY
+
+  const answer = async (cmd: string, args: Record<string, unknown>): Promise<AuditAnswer> => {
+    const f = filterOf(args)
+    if (typeof f === 'string') return bad(f)
+    switch (cmd) {
+      case 'audit-list': {
+        const limit = args.limit ?? LIST_DEFAULT
+        if (!Number.isInteger(limit) || (limit as number) < 1 || (limit as number) > LIST_MAX) return bad(`limit must be from 1 to ${LIST_MAX}`)
+        const n = limit as number
+        const p = await rules()
+        const where = f.decision !== undefined ? { where: (r: AuditRecord) => decide(r, p).decision === f.decision } : {}
+        // One past the limit, to tell whether it cut anything
+        const found = await queryRecords(d.profileDir, { ...f.filter, ...where, limit: n + 1 })
+        return { status: 200, body: { records: found.slice(0, n).map((r) => ({ ...r, ...decide(r, p) })), truncated: found.length > n } }
+      }
+      case 'audit-summary': {
+        const p = await rules()
+        const total = noCounts()
+        // A Map, so an action read from the file can never name a property of a plain object
+        const byAction = new Map<string, Counts>()
+        for (const r of await queryRecords(d.profileDir, f.filter)) {
+          const { decision } = decide(r, p)
+          if (f.decision !== undefined && decision !== f.decision) continue
+          const key = COUNT_KEY[decision]
+          total[key] += 1
+          const counts = byAction.get(r.action) ?? noCounts()
+          counts[key] += 1
+          byAction.set(r.action, counts)
+        }
+        return { status: 200, body: { ...total, byAction: Object.fromEntries(byAction) } }
+      }
+      default:
+        return { status: 501, body: { error: `${cmd} is not answered by this Host` } }
+    }
+  }
+
+  return {
+    command: async (a) => {
+      if (a.role !== 'app' && a.role !== 'cli') return { status: 403, body: { error: `${a.cmd} is for this machine's app and CLI only` } }
+      if (a.agentRefusal !== undefined) return { status: 403, body: { error: a.agentRefusal } }
+      try {
+        return await answer(a.cmd, a.args)
+      } catch (e) {
+        // A damaged rules file is the person's to repair (RepairNeeded): no decision can be made until then
+        return { status: e instanceof RepairNeeded ? 409 : 500, body: { error: message(e) } }
+      }
+    }
+  }
+}
