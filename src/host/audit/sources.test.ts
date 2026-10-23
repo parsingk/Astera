@@ -10,7 +10,7 @@ import { queryRecords, type AuditRecord } from '../../core/audit/store'
 import { decide, STARTER_POLICY } from '../../core/audit/policy'
 import type { PtyEntry, PtyMeta } from '../../core/host/protocol'
 import { createAuditRecorder, registrySessionFacts, type AuditEvent } from './recorder'
-import { claudeChatCalls, codexChatCall, codexRolloutCalls, createAuditSources, hookCall } from './sources'
+import { claudeChatCalls, codexChatCall, codexRolloutCalls, createAuditSources, hookCall, hookShellAfter } from './sources'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -160,17 +160,59 @@ describe('the Claude hook source', () => {
       expect(hookCall(postToolUse('Bash', { command: 'ls' }, 'toolu_4', other))).toBeNull()
     expect(hookCall('not an object')).toBeNull()
     expect(hookCall({ hook_event_name: 'PostToolUse' })).toBeNull()
-    // Where the call ran, as the hook says
-    expect(hookCall(postToolUse('Bash', { command: 'ls' }, 'toolu_5', 'PostToolUse', { cwd: '/w/frontend' }))?.cwd).toBe('/w/frontend')
+    // The hook's cwd is where the shell was left, not where the call ran: that is the caller's to say
+    const after = postToolUse('Bash', { command: 'cd frontend' }, 'toolu_5', 'PostToolUse', { cwd: '/w/frontend' })
+    expect(hookCall(after)).not.toHaveProperty('cwd')
+    expect(hookCall(after, '/w')?.cwd).toBe('/w')
+    expect(hookShellAfter(after)).toBe('/w/frontend')
+    expect(hookShellAfter(postToolUse('Bash', { command: 'ls' }, 'toolu_6'))).toBeNull()
   })
 
-  // Final review M2: Claude's shell keeps its directory between calls; the hook's cwd says where this one ran
-  it('reads a shell path from where the call ran, so after cd frontend, ../backend is still inside the project', async () => {
+  // Final re-review: Claude Code reads the hook's cwd once the call is over, after a `cd` in the line, so a call ran
+  // where the call before it left the shell; the first one heard ran in the session's folder
+  it('reads a shell path from where the call before it left the shell, never from where this call left it', async () => {
     const r = await realRecorder({ ptys: [entry('pty1', note('session', 'sess_a', OBSERVED))] })
     const { sources, audit } = await sourcesFor({ recorder: r.recorder })
-    await fs.writeFile(audit('sess_a'), lineOf(postToolUse('Bash', { command: 'rm -rf ../backend/dist' }, 'toolu_1', 'PostToolUse', { cwd: path.join(cwd, 'frontend') })))
+    const ranThenLeft = (command: string, id: string, left: string) =>
+      lineOf(postToolUse('Bash', { command }, id, 'PostToolUse', { cwd: path.join(cwd, left), astera_at: T0 + Number(id.slice(-1)) }))
+    await fs.writeFile(
+      audit('sess_a'),
+      [
+        // Ran in the session's folder and left the shell in sub: ../../y is outside the project
+        ranThenLeft('cd sub && rm -rf ../../y', 'toolu_1', 'sub'),
+        ranThenLeft('cd ../frontend', 'toolu_2', 'frontend'),
+        // Ran in frontend: ../backend/dist is inside
+        ranThenLeft('rm -rf ../backend/dist', 'toolu_3', 'frontend'),
+        // Ran in frontend and left the shell at the project's root: build is the project's own
+        ranThenLeft('cd .. && rm -rf build', 'toolu_4', '.')
+      ].join('')
+    )
     await sources.poll()
-    expect(await r.records()).toMatchObject([{ action: 'filesystem.delete', insideProject: true }])
+    const records = (await r.records()).sort((a, b) => (a.at < b.at ? -1 : 1))
+    expect(records.map((x) => [x.action, x.insideProject])).toEqual([
+      ['filesystem.delete', false],
+      ['process.execute', undefined],
+      ['filesystem.delete', true],
+      ['filesystem.delete', true]
+    ])
+    sources.dispose()
+  })
+
+  it('forgets where a shell was left while the mode was compatibility, as the calls then were not read', async () => {
+    const { events, recorder, setObserving } = capture()
+    const { sources, audit } = await sourcesFor({ recorder })
+    await fs.writeFile(audit('sess_a'), lineOf(postToolUse('Bash', { command: 'cd sub' }, 'toolu_1', 'PostToolUse', { cwd: '/w/sub' })))
+    await sources.poll()
+    setObserving(false)
+    await sources.poll()
+    setObserving(true)
+    await sources.poll()
+    await fs.appendFile(audit('sess_a'), lineOf(postToolUse('Bash', { command: 'ls' }, 'toolu_2', 'PostToolUse', { cwd: '/w/other' })))
+    await sources.poll()
+    expect(events.map((e) => [e.dedupeKey, e.cwd])).toEqual([
+      ['toolu_1', undefined],
+      ['toolu_2', undefined]
+    ])
     sources.dispose()
   })
 

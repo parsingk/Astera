@@ -334,7 +334,7 @@ describe('shell: cd', () => {
     expect(bash(`cd $DIR && rm -rf "${inProj('x')}"`)).toMatchObject({ insideProject: true })
   })
 
-  // Final review M2: Claude's shell keeps its directory between calls, and its hook says where a call ran (`cwd`). A
+  // Final review M2: Claude's shell keeps its directory between calls, so the source knows where a call ran. A
   // relative path is read from there; inside or outside is still measured against the session's folder
   it('reads a relative path from where the call ran, when the provider says, and measures it against the session’s folder', () => {
     const at = (command: string, base: string) => resolveAction({ provider: 'claude', tool: 'Bash', input: { command }, cwd, base })

@@ -67,7 +67,8 @@ export interface AuditEvent {
   dedupeKey?: string
   /** When the call happened, when the source knows (a hook line read after a restart); else when it is recorded. */
   at?: string
-  /** Where the call ran, when the source knows (Claude's hook `cwd`): its relative paths are read from there, and inside
+  /** Where the call ran, when the source knows (where the session's call before it left Claude's shell, sources.ts
+   *  hookShellAfter): its relative paths are read from there, and inside
    *  the project is still measured against the session's folder (resolve.ts `ResolveCall.base`). */
   cwd?: string
 }

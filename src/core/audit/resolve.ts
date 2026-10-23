@@ -18,8 +18,8 @@ export interface ResolveCall {
   input: unknown
   /** The session's folder, what "inside the project" is measured against. */
   cwd: string
-  /** Where the call ran, when the provider says (Claude's hook `cwd`, which follows the shell's `cd`s from call to call):
-   *  a relative path is read from there. Left out: from `cwd`. */
+  /** Where the call ran, when the source knows (for Claude, where its call before left the shell, which follows the
+   *  shell's `cd`s from call to call): a relative path is read from there. Left out: from `cwd`. */
   base?: string
 }
 

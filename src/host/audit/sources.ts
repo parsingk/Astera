@@ -42,6 +42,8 @@ export type ObservedCall = Omit<AuditEvent, 'sessionId' | 'source'>
 export const ROLLOUT_POLL_MS = 1_000
 /** Claude chat calls that wait for their result, per session, at most; past it the oldest is let go. */
 const PENDING_MAX = 200
+/** Claude terminal sessions whose shell's place is kept, at most; past it the one heard least recently is let go. */
+const SHELLS_KEPT = 200
 
 const obj = (v: unknown): Record<string, unknown> | null =>
   typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null
@@ -57,27 +59,30 @@ const patchNaming = (paths: string[]): string => paths.map((p) => `*** Update Fi
 // ---------------------------------------------------------------------------------------------------------------------
 // Claude hook
 
-/** An audit line as one call. Claude Code fires PostToolUse once a tool has run and PostToolUseFailure, instead, once
- *  it failed or was interrupted (`is_interrupt`), so the event is the outcome; the capture keeps no output to read one
- *  from. The hook's `cwd` is where the call ran: Claude's shell keeps its directory from call to call. null for any
- *  other event. */
-export function hookCall(payload: unknown): ObservedCall | null {
+/** An audit line as one call, run in `ranIn` when the caller knows where. Claude Code fires PostToolUse once a tool has
+ *  run and PostToolUseFailure, instead, once it failed or was interrupted (`is_interrupt`), so the event is the outcome;
+ *  the capture keeps no output to read one from. null for any other event. */
+export function hookCall(payload: unknown, ranIn?: string): ObservedCall | null {
   const p = obj(payload)
   const status = p?.hook_event_name === 'PostToolUse' ? 'ok' : p?.hook_event_name === 'PostToolUseFailure' ? 'failed' : null
   const tool = str(p?.tool_name)
   if (!p || status === null || tool === null) return null
   const id = str(p.tool_use_id)
   const at = isoOf(p[HOOK_EVENT_AT])
-  const cwd = str(p.cwd)
   return {
     tool,
     input: p.tool_input,
     status,
     ...(id !== null ? { dedupeKey: id } : {}),
     ...(at !== undefined ? { at } : {}),
-    ...(cwd !== null ? { cwd } : {})
+    ...(ranIn !== undefined ? { cwd: ranIn } : {})
   }
 }
+
+/** Where an audit line's call left Claude's shell: the hook's `cwd`, which Claude Code reads when the hook fires, after
+ *  a `cd` in the line (and after its own reset to the project, in a version that resets). Claude's shell keeps its
+ *  directory from call to call, so this is where the session's next call runs. */
+export const hookShellAfter = (payload: unknown): string | null => str(obj(payload)?.cwd)
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Claude chat
@@ -268,13 +273,22 @@ export function createAuditSources(d: {
     for (const c of calls) d.recorder.record({ sessionId, source, ...c })
   }
 
+  /** Where each observed Claude session's last call left its shell (hookShellAfter), so where its next call runs. Not
+   *  known for a session's first call heard, which the resolver reads from the session's folder. */
+  const shellAt = new Map<string, string>()
   const hooks = new HookEventWatcher(
     d.hookEventsDir,
     (sessionId, payload) => {
       if (!d.recorder.observing()) return
       try {
-        const c = hookCall(payload)
-        if (c) hand(sessionId, 'claude-hook', [c])
+        const c = hookCall(payload, shellAt.get(sessionId))
+        if (!c) return
+        hand(sessionId, 'claude-hook', [c])
+        const after = hookShellAfter(payload)
+        // Moved to the end: the session heard least recently is the first to go
+        shellAt.delete(sessionId)
+        if (after !== null) shellAt.set(sessionId, after)
+        if (shellAt.size > SHELLS_KEPT) shellAt.delete(shellAt.keys().next().value as string)
       } catch (err) {
         d.log(`audit: an audit line of session ${sessionId} could not be read: ${String(err)}`)
       }
@@ -353,6 +367,8 @@ export function createAuditSources(d: {
   const follow = (): boolean => {
     const on = d.recorder.observing()
     if (on && !reading) {
+      // The calls made meanwhile were not read, so where they left the shells is not known
+      shellAt.clear()
       hooks.start()
       for (const r of rollouts.values()) if (r.path !== null) r.tail = new JsonlTail(r.path, { startAtEnd: true })
     } else if (!on && reading) hooks.stop()
