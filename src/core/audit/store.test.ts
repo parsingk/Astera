@@ -281,9 +281,12 @@ describe('retention (Review Focus 4)', () => {
   it('prunes at the start and then every hour, with nothing to write, until stopped', async () => {
     const p = await profile()
     await fs.mkdir(auditDir(p), { recursive: true })
+    await fs.writeFile(path.join(auditDir(p), '2026-09-23.jsonl'), '\n')
     let now = ms('2026-10-23')
     let tick: (() => void) | null = null
     let period = 0
+    // An append of nothing takes its turn after every prune queued before it and does none itself: so it only waits
+    const settled = (): Promise<void> => appendRecords(p, [])
     const stop = keepPruning(p, {
       now: () => now,
       every: (ms_, fn) => {
@@ -293,13 +296,14 @@ describe('retention (Review Focus 4)', () => {
       }
     })
     expect(period).toBe(AUDIT_PRUNE_EVERY_MS)
-    await fs.writeFile(path.join(auditDir(p), '2026-09-23.jsonl'), '\n')
-    await pruneRecords(p, { now: () => now }) // the start's prune, settled
+    await settled() // the start's prune
     expect(await files(p)).toEqual(['2026-09-23.jsonl'])
-    // A day on, the hour's prune lets 2026-09-23 go
+    // A day on, the only thing that can let 2026-09-23 go is the hour's prune: nothing here prunes but the timer
     now = ms('2026-10-24')
+    await settled()
+    expect(await files(p)).toEqual(['2026-09-23.jsonl'])
     tick!()
-    await pruneRecords(p, { now: () => now })
+    await settled()
     expect(await files(p)).toEqual([])
     stop()
     expect(tick).toBeNull()
