@@ -9,6 +9,8 @@
 import { jobNameOf } from './jobName'
 import { diagnosticLine, findingsCountOf, oneLine } from './pluginChecks'
 import type { CheckResult, JobSourceRef } from './types'
+import type { AuditAction } from '../audit/resolve'
+import type { CoverageNote } from '../audit/policy'
 
 /** 상태 한 낱말. **파생값과 플래그를 한 낱말로 접는다** — 사람이 목록에서 훑는 것이 이것이고,
  *  훑으려면 한 칸에 있어야 한다.
@@ -192,8 +194,122 @@ function pluginCheckLines(validation: unknown): { before: string[]; after: strin
   return { before, after }
 }
 
+/** What each action is called on a person's screen (observe mode design §11): a plain phrase, never `git.remote.write`. */
+const ACTION_PHRASES: Record<AuditAction, string> = {
+  'process.execute': 'run a command',
+  'git.read': 'read from git',
+  'git.local.write': 'change git locally',
+  'git.remote.write': 'git push to a remote',
+  'github.pr.create': 'open a pull request',
+  'github.write': 'change something on GitHub',
+  'package.install': 'install a package',
+  'filesystem.read': 'read a file',
+  'filesystem.write': 'write a file',
+  'filesystem.delete': 'delete a file',
+  'network.request': 'make a web request',
+  'mcp.call': 'call an MCP tool',
+  'agent.spawn': 'start a subagent',
+  other: 'use another tool'
+}
+
+/** An action's phrase; one this build does not know (a newer Host's) as it was named. */
+const phraseOf = (action: unknown): string => (Object.hasOwn(ACTION_PHRASES, str(action)) ? ACTION_PHRASES[str(action) as AuditAction] : str(action))
+
+const two = (n: number): string => String(n).padStart(2, '0')
+
+/** An ISO time as the person's clock shows it, to the second: the records span days, so the date is kept. */
+function localTime(iso: unknown): string {
+  const d = new Date(str(iso))
+  if (!Number.isFinite(d.getTime())) return str(iso)
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`
+}
+
+const COVERAGE_CLASSES = [
+  ['shell', 'shell'],
+  ['file-read', 'file read'],
+  ['file-write', 'file write'],
+  ['mcp', 'MCP'],
+  ['network', 'network']
+] as const
+
+const COVERAGE_NOTES: Record<CoverageNote, string> = {
+  'web-tools-only': 'web tools only',
+  'shell-text-only': 'shell text only',
+  'web-search-and-shell-text': 'web search and shell text'
+}
+
+/** What observe can see, a row per provider and kind of session, with why a class is only partly seen. */
+function coverageText(rows: Record<string, unknown>[]): string {
+  return columns([
+    ['', ...COVERAGE_CLASSES.map(([, name]) => name)],
+    ...rows.map((row) => {
+      const classes = (row.classes ?? {}) as Record<string, { level?: unknown; note?: unknown } | undefined>
+      return [
+        `${str(row.provider)} ${str(row.kind)}`,
+        ...COVERAGE_CLASSES.map(([key]) => {
+          const c = Object.hasOwn(classes, key) ? classes[key] : undefined
+          const note = typeof c?.note === 'string' ? (Object.hasOwn(COVERAGE_NOTES, c.note) ? COVERAGE_NOTES[c.note as CoverageNote] : c.note) : undefined
+          return note === undefined ? str(c?.level) : `${str(c?.level)} (${note})`
+        })
+      ]
+    })
+  ])
+}
+
+/** The observe switch and the rules, a row each in the order they are tried, its place first (what `--at` and `--to`
+ *  take); with `coverage`, as `policies show` answers, what observe can see under them. */
+function policyText(data: Record<string, unknown>): string {
+  const p = (data.policy ?? {}) as { rules?: unknown; otherwise?: unknown }
+  const rules = Array.isArray(p.rules) ? (p.rules as Record<string, unknown>[]) : []
+  const parts = [
+    columns([
+      ['mode', str(data.mode)],
+      ['otherwise', str(p.otherwise)]
+    ]),
+    rules.length === 0
+      ? '(no rules)'
+      : columns(rules.map((r, i) => [String(i), str(r.effect), str(r.action), r.scope === undefined ? 'anywhere' : str(r.scope), str(r.id)]))
+  ]
+  if (Array.isArray(data.coverage)) parts.push(coverageText(data.coverage as Record<string, unknown>[]))
+  return parts.join('\n\n')
+}
+
 export function humanFor(cmd: string, data: Record<string, unknown>): string | null {
   switch (cmd) {
+    // Observe mode design §12: a row per call, its time on the person's clock and its action as a phrase. Under the table,
+    // the flags that ask for the next page.
+    case 'audit-list': {
+      const records = asList(data, 'records')
+      const table =
+        records.length === 0
+          ? '(no records)'
+          : columns(
+              records.map((r) => [localTime(r.at), str(r.sessionId), phraseOf(r.action), str(r.target), str(r.decision), typeof r.ruleId === 'string' ? r.ruleId : '-'])
+            )
+      const next = data.next !== null && typeof data.next === 'object' ? (data.next as { until?: unknown; beforeId?: unknown }) : null
+      return next === null ? table : [table, '', `more: --until ${str(next.until)} --before-id ${str(next.beforeId)}`].join('\n')
+    }
+    // The totals, then a row per action, the most seen first
+    case 'audit-summary': {
+      const counts = (c: Record<string, unknown>): string[] => [`allow ${str(c.allow)}`, `would-deny ${str(c.wouldDeny)}`, `unknown ${str(c.unknown)}`]
+      const total = (c: Record<string, unknown>): number => Number(c.allow ?? 0) + Number(c.wouldDeny ?? 0) + Number(c.unknown ?? 0)
+      const byAction = data.byAction !== null && typeof data.byAction === 'object' ? Object.entries(data.byAction as Record<string, Record<string, unknown>>) : []
+      byAction.sort(([a, x], [b, y]) => total(y) - total(x) || a.localeCompare(b))
+      return [
+        counts(data).join(', '),
+        ...(byAction.length === 0 ? [] : ['', columns(byAction.map(([action, c]) => [phraseOf(action), action, ...counts(c)]))]),
+        ...(data.stoppedAtLimit === true ? ['', '(a day of this period stopped recording at the size limit, so it holds fewer calls than were made)'] : [])
+      ].join('\n')
+    }
+    case 'policies-show':
+    case 'policies-set-mode':
+    case 'policies-set-otherwise':
+    case 'policies-rules-add':
+    case 'policies-rules-edit':
+    case 'policies-rules-remove':
+    case 'policies-rules-move':
+    case 'policies-rules-reset':
+      return policyText(data)
     case 'plugins-logs': {
       const lines = Array.isArray(data.lines) ? (data.lines as unknown[]).map(str) : []
       return lines.length > 0 ? lines.join('\n') : 'no log yet'

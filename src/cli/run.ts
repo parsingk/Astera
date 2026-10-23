@@ -23,6 +23,7 @@ import { higgsfieldCommand } from './higgsfield'
 import { installFailureOf, resolveSkillsDir, skillsCommand } from './skills'
 import { extensionsCommand } from './extensions'
 import { agentProfilesCommand } from './agentProfiles'
+import { auditCommand, policiesCommand } from './audit'
 import { readExtensionRegistry } from '../core/extensions/registry'
 import { serveMcp } from './mcp/server'
 import { runMcpHttp } from './mcp/http'
@@ -1594,6 +1595,25 @@ export async function main(): Promise<void> {
           mcpEntries: async () => (await readExtensionRegistry(profileDir)).entries
         })
       )
+      conn.close()
+      const lost = lostAnswerDetails({ argv, request: carried.send, fromStdin: parsed.wantsStdin })
+      if ('stuck' in answered) fail({ code: SILENT_HOST_CODE, message: answered.stuck, details: lost })
+      if ('unreachable' in answered) return withoutHost(answered.unreachable, lost)
+      return answered
+    }
+    // **`audit` and `policies` the same way** (cli/audit.ts, observe mode design §12): an agent profile named by its name is
+    // resolved to its id with `agent-profiles-get` before the read, and only the command itself carries the request id.
+    if (parsed.cmd.startsWith('audit-') || parsed.cmd.startsWith('policies-')) {
+      const answered = await keepaliveDuring(keepalive, () => {
+        const line = {
+          cmd: parsed.cmd,
+          args,
+          request: carried.send,
+          call: (cmd: string, callArgs: Record<string, unknown>, request: string | undefined) =>
+            timedCall(verbose, { conn, cmd, args: callArgs, sessionId, request, timeoutMs: clientTimeoutMs({ cmd, args: callArgs }) })
+        }
+        return parsed.cmd.startsWith('audit-') ? auditCommand(line) : policiesCommand(line)
+      })
       conn.close()
       const lost = lostAnswerDetails({ argv, request: carried.send, fromStdin: parsed.wantsStdin })
       if ('stuck' in answered) fail({ code: SILENT_HOST_CODE, message: answered.stuck, details: lost })

@@ -37,6 +37,7 @@
 // The text is plain, not JSON, and no part of it needs a Host. `--help` is for a person, and a
 // person asking what the commands are must get an answer with nothing running.
 import { APP_VERBS, BROWSER_VERBS, NOUNS, camel, leadingGlobals, renamedTo, verbsOf } from './cliArgs'
+import { AUDIT_ACTIONS } from '../audit/policy'
 
 /** `jobs-wait`, `host-start`, … — every noun/verb pair `NOUNS` declares. */
 type NounCommand = {
@@ -122,6 +123,28 @@ const AGENT_PROFILE_FLAGS = (creating: boolean): UsageFlag[] => [
   { name: 'permission', value: '<inherit|bypass|ask>', about: "permission prompts: Astera's setting (inherit), none (bypass) or shown (ask)" },
   { name: 'description', value: '<text>', about: 'a line saying what it is for' }
 ]
+
+/** `audit list`'s and `audit summary`'s filters (observe mode design §12). */
+const AUDIT_FILTERS: readonly UsageFlag[] = [
+  { name: 'session', value: '<sessionId>', about: "only this session's calls (from `sessions list`)" },
+  { name: 'job', value: '<jobId>', about: "only the calls of this Job's workers and coordinator" },
+  { name: 'run', value: '<runId>', about: "only the calls of this run's workers and coordinator" },
+  { name: 'task', value: '<taskId>', about: "only the calls of this task's workers" },
+  { name: 'agent-profile', value: '<id|name>', about: 'only the calls of sessions started from this agent profile (from `agent-profiles list`)' },
+  { name: 'action', value: '<action>', about: 'only this action, or the actions a start ending in * names (git.*)' },
+  { name: 'decision', value: '<allow|would-deny|unknown>', about: 'only the calls the rules in force decide so' },
+  { name: 'since', value: '<time>', about: 'only calls at or after this time (2026-10-23T09:00:00Z)' },
+  { name: 'until', value: '<time>', about: 'only calls before this time' }
+]
+
+/** What a rule's `--action` takes, said once for `rules-add` and `rules-edit`. */
+const RULE_ACTION = `An action is one of ${AUDIT_ACTIONS.join(', ')}, or the start of one ending in * (git.* matches every git action).`
+const RULE_ID: UsageFlag = ID('<ruleId>', 'the rule (from `policies show`)')
+const RULE_SCOPE: UsageFlag = {
+  name: 'scope',
+  value: '<inside-project|outside-project>',
+  about: "match only calls inside, or outside, the session's project folder"
+}
 
 /** The job-source commands' flags (plugin Phase 4 J21). */
 const SOURCE: UsageFlag = { name: 'source', value: '<sourceId>', required: true, about: 'the source (from `sources list`)' }
@@ -576,6 +599,75 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     detail:
       'Refused with 6 while unfinished work holds it (a live session, a queued or running task, an unfinished Job): archive it instead. From inside an agent session it is refused with 5.',
     flags: [ID('<profileId|name>', 'the profile to delete')]
+  },
+
+  // Answered by the Host (observe mode design §12): the records are read back with the decision the rules give them now.
+  'audit-list': {
+    summary: 'the tool calls observe mode recorded, newest first, each with what the rules would do with it',
+    detail:
+      'Each call with its session, action, short target (never the full command, output or file contents) and the decision the rules in force give it now: allow, would-deny or unknown (the rules cannot tell), with `ruleId`, the rule that decided, when one did. The decision is never stored, so editing a rule changes what past calls show. The filters combine. `truncated` says --limit cut the list, and `next` holds the --until and --before-id that ask for the next page. Answered by the Host, so it works with Astera closed. The log of what agents did is for a person: from inside an agent session it is refused with 5.',
+    flags: [
+      ...AUDIT_FILTERS,
+      { name: 'before-id', value: '<recordId>', about: 'with --until, the page after this record (both from the last page’s `next`)' },
+      { name: 'limit', value: '<n>', about: 'how many, from 1 to 2000 (default 200)' }
+    ]
+  },
+  'audit-summary': {
+    summary: 'how many recorded calls the rules allow, would deny or cannot tell, in all and per action',
+    detail:
+      'The counts for the calls the filters keep, decided by the rules in force now. `stoppedAtLimit` is true when a day of the period stopped recording at the size limit, so it holds fewer calls than were made. From inside an agent session it is refused with 5.',
+    flags: AUDIT_FILTERS
+  },
+  'policies-show': {
+    summary: 'whether observe mode is on, the rules in order, and what it can see',
+    detail:
+      '`mode` is compatibility (nothing is observed) or observe. The first rule whose action matches a call decides it; `otherwise` decides a call no rule matches. Until observe is first turned on these are the starter rules, and nothing is written. `coverage` says, per provider and kind of session, what observe can see of shell commands, file reads and writes, MCP calls and network requests. An agent session may read it.'
+  },
+  'policies-set-mode': {
+    summary: 'turn observe mode on or off',
+    detail:
+      'Sessions started afterwards follow it; a running session keeps what it started with. The first time observe is turned on the starter rules are written. Turning it off keeps the records and the rules. From inside an agent session it is refused with 5.',
+    flags: [{ name: 'mode', value: '<compatibility|observe>', required: true, about: 'compatibility observes nothing; observe records every tool call' }]
+  },
+  'policies-set-otherwise': {
+    summary: 'what a call no rule matches gets',
+    detail: 'From inside an agent session it is refused with 5.',
+    flags: [{ name: 'effect', value: '<allow|deny>', required: true, about: 'allow, or deny (shown as would-deny)' }]
+  },
+  'policies-rules-add': {
+    summary: 'add a rule, at the end or at a place in the list',
+    detail: `Returns the rule with its id, and the rules. ${RULE_ACTION} A rule with --scope matches only calls known to be inside, or outside, the session's project folder. From inside an agent session it is refused with 5.`,
+    flags: [
+      { name: 'effect', value: '<allow|deny>', required: true, about: 'what a call it matches gets' },
+      { name: 'action', value: '<action>', required: true, about: 'the action it matches, or the start of one ending in * (git.*)' },
+      RULE_SCOPE,
+      { name: 'at', value: '<n>', about: 'its place in the list, from 0 (default: the end)' }
+    ]
+  },
+  'policies-rules-edit': {
+    summary: 'change a rule: only the flags given',
+    detail: `Returns the rule, and the rules. ${RULE_ACTION} --clear-scope makes it match wherever the call was. A rule that is not there is 4. From inside an agent session it is refused with 5.`,
+    flags: [
+      RULE_ID,
+      { name: 'effect', value: '<allow|deny>', about: 'what a call it matches gets' },
+      { name: 'action', value: '<action>', about: 'the action it matches, or the start of one ending in * (git.*)' },
+      RULE_SCOPE,
+      { name: 'clear-scope', about: 'match wherever the call was (not with --scope)' }
+    ]
+  },
+  'policies-rules-remove': {
+    summary: 'remove a rule',
+    detail: 'A rule that is not there is 4. From inside an agent session it is refused with 5.',
+    flags: [RULE_ID]
+  },
+  'policies-rules-move': {
+    summary: 'move a rule to another place in the list',
+    detail: 'The rules are tried in order, so a rule moved up decides before the ones it passed. A rule that is not there is 4. From inside an agent session it is refused with 5.',
+    flags: [RULE_ID, { name: 'to', value: '<n>', required: true, about: 'its new place in the list, from 0' }]
+  },
+  'policies-rules-reset': {
+    summary: 'put back the starter rules and their otherwise; the mode stays',
+    detail: 'It also repairs a damaged rules file, a copy of which was kept beside it. From inside an agent session it is refused with 5.'
   },
 
   // Answered by the Host out of its own registries, so the app may be closed; it needs a Host.
