@@ -1,6 +1,6 @@
 // The tokens each session spent, and for whom (observe mode design §10): a worker's for its Dispatch, a coordinator's
 // for its Run. The Host keeps them in memory and in <profile>/token-totals.json, so a Host restart keeps the totals of
-// sessions it no longer holds; `runs get` and `tasks get` add them up (core/orchestration/publicViews.ts). Written in
+// sessions it no longer holds; `runs get` and `tasks-get` add them up (core/orchestration/publicViews.ts). Written in
 // every mode, by the Host alone, and only once a session of some Run has spent something.
 //
 // One entry per session and owner, each what that session itself spent: a roll's new session is an entry of its own

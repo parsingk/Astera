@@ -315,7 +315,7 @@ const totalsOf = (v: unknown): TokenTotals | undefined => {
   return typeof input === 'number' && typeof output === 'number' && typeof total === 'number' ? { input, output, total } : undefined
 }
 
-/** The token totals `runs get` and `tasks get` carry (design §10); each left out when the Host does not know it, never
+/** The token totals `runs get` and `tasks-get` carry (design §10); each left out when the Host does not know it, never
  *  made zeros. */
 export function tokensOf(body: unknown): { tokens?: TokenTotals; coordinatorTokens?: TokenTotals } {
   const b = isObject(body) ? body : {}

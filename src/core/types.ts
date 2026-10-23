@@ -397,8 +397,9 @@ export interface TokensSpent {
   output: number
 }
 
-/** The tokens a Task's or a Run's sessions used, as `runs get` and `tasks get` give them (observe mode design §10).
- *  `total` is `input + output`. Absent where nothing was read, never zeros: cost in money is not known. */
+/** The tokens a Task's or a Run's sessions used, as `runs get` and `tasks-get` give them (observe mode design §10), and
+ *  through those MCP's get_run and get_task, the SDK's runs.get and tasks.get and Run detail in the app. `total` is
+ *  `input + output`. Absent where nothing was read, never zeros: cost in money is not known. */
 export interface TokenTotals {
   input: number
   output: number

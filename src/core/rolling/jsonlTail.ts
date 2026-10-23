@@ -20,7 +20,8 @@ export interface JsonlTailOptions {
    *  Not combined with startAtEnd: if both are given, startAtEnd wins, since it needs the file's
    *  current size (stat'd in the constructor) while offset is a value the caller already has. After
    *  construction this behaves like any other offset: recreation detection is unchanged — a file that
-   *  got shorter than this offset still resets to 0 and reports restarted: true. */
+   *  got shorter than this offset still resets (to 0, or to `restartWithin` bytes before its new end)
+   *  and reports restarted: true. */
   offset?: number
   /** When the file got shorter (recreated), start this many bytes before its new end instead of at 0, for a follower
    *  of files too large to read whole (token totals, host/tokens/sources.ts; transcripts measured up to 1 GB). The
@@ -81,7 +82,8 @@ export class JsonlTail {
   }
 
   /** The lines newly **completed** since the last call (blank lines excluded).
-   *  If the file got shorter (recreated), read from the start again and report `restarted: true`.
+   *  If the file got shorter (recreated), read from the start again (or from `restartWithin` bytes
+   *  before its end, when that was given) and report `restarted: true`.
    *  A missing file or a permission error gives `null` — the caller has to be able to tell that apart
    *  from "no new lines". */
   read(): Promise<{ lines: string[]; restarted: boolean } | null> {

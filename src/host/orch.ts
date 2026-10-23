@@ -553,7 +553,7 @@ export function createHostOrch(a: {
    *  `checks-plugin-run`. */
   completionChecks?: OrchServerDeps['completionChecks']
   /** What this Host's sessions spent (observe mode design §10), from its token store (host/tokens/store.ts), passed
-   *  through to `hostOrchDeps`. Absent: `runs get` and `tasks get` carry no tokens. */
+   *  through to `hostOrchDeps`. Absent: `runs get` and `tasks-get` carry no tokens. */
   spentTokens?: OrchServerDeps['spentTokens']
   /** How It Works records (MCP P2-C), passed through to `hostOrchDeps`. Absent: the `understanding-*`
    *  commands answer 409. */

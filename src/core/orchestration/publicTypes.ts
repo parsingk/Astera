@@ -76,7 +76,7 @@ type _run = Check<Fits<Pick<JobRun, Fields<typeof RUN_FIELDS>>, Omit<RunDto, Der
 type _runKeys = Check<SameKeys<Omit<RunDto, Derived | RunGetOnly | 'github'>, Fields<typeof RUN_FIELDS>>>
 /** The derived github field (GitHub lifecycle) is the DTO the package promises. */
 type _githubLifecycle = Check<Fits<GitHubLifecycleView, GitHubLifecycleDto>>
-/** The token totals `runs get` and `tasks get` add (observe mode design §10) are the DTO the package promises. */
+/** The token totals `runs get` and `tasks-get` add (observe mode design §10) are the DTO the package promises. */
 type _tokenTotals = Check<Fits<TokenTotals, TokenTotalsDto>>
 type _tokenTotalsKeys = Check<SameKeys<TokenTotalsDto, keyof TokenTotals>>
 type _runTokens = Check<Fits<ReturnType<typeof runTokensOf>, Pick<RunDto, 'tokens' | 'coordinatorTokens'>>>

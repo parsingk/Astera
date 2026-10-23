@@ -295,7 +295,7 @@ describe('securityText', () => {
   })
 
   // Run detail (design §10): totals as the Host gives them, nothing when unknown, never zeros made up
-  it('reads the token totals runs get and tasks get carry', () => {
+  it('reads the token totals runs get and tasks-get carry', () => {
     expect(tokensOf({ id: 'run_1', tokens: { input: 10, output: 5, total: 15 }, coordinatorTokens: { input: 3, output: 1, total: 4 } })).toEqual({
       tokens: { input: 10, output: 5, total: 15 },
       coordinatorTokens: { input: 3, output: 1, total: 4 }

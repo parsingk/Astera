@@ -1145,12 +1145,14 @@ say why in `error.details.reason` too: `agent-profile-unavailable` (unknown or a
 
 **`audit` and `policies` are observe mode**, the same as **Settings › Security & Access** in the app. After
 `policies set-mode --mode observe`, every session Astera starts records the tool calls it makes once each has run
-(`coverage` in `policies show` says what can be seen for each provider and kind of session): the kind of action (`git.remote.write`, `filesystem.write`, `mcp.call`, …) and a short target (`git push`, a path
-relative to the session's folder or `outside project: <name>`, a host name, `server.tool`), never the full command, its
-output, a file's contents or a secret. Nothing is blocked and no session waits. A session already running keeps what it
-started with. `compatibility`, the default, observes nothing and writes nothing new; turning observe off keeps the
-records and the rules. The Host keeps the records in the profile (`audit/`, a file a day, for 30 days or up to 50 MB)
-and the rules beside them (`audit-policy.json`), so these commands work with Astera closed.
+(`coverage` in `policies show` says what can be seen for each provider and kind of session): the kind of action
+(`git.remote.write`, `filesystem.write`, `mcp.call`, …) and a short target (`git push`, a path relative to the
+session's folder or `outside project: <name>`, a host name, `server.tool`), never the full command, its output, a
+file's contents or a secret. Nothing is blocked and no session waits. A session already running keeps what it started
+with. `compatibility`, the default, observes nothing, and observe writes nothing new in it (the token totals `runs get`
+shows are kept in `token-totals.json` in every mode); turning observe off keeps the records and the rules. The Host
+keeps the records in the profile (`audit/`, a file a day, for 30 days or up to 50 MB) and the rules beside them
+(`audit-policy.json`), so these commands work with Astera closed.
 
 The rules say what each call would get if Astera enforced them. They are tried in order: the first rule whose action
 matches a call decides it, `allow` or `would-deny`, and `otherwise` decides a call no rule matches. A rule's action is
@@ -1159,14 +1161,13 @@ matches only calls known to be inside, or outside, the session's project folder.
 (`cd sub && git push`) is judged on its own, and the first one a rule denies makes the line `would-deny`. A call is
 `unknown` when Astera could not read it, such as a line with an unknown shell command in it, when a denied command sits
 in a loop or a conditional (it may not have run), or when a write or delete names no path and a scoped rule could
-match it. The first time observe
-is turned on, Astera writes the starter rules: deny `git.remote.write`, `github.pr.create` and `github.write`, deny
-`filesystem.write` and `filesystem.delete` outside the project, and otherwise allow. Until then `policies show` shows them
-and nothing is written. The rule commands take a rule's id from `policies show` and its place in the list counted from 0
-(`--at`, `--to`); `rules-reset` puts the starter rules back and keeps the mode. Every change answers the mode and the
-rules as they now are. An action Astera does not know is refused with 2 and the message lists them, a rule that is not
-there is a 4, and a damaged `audit-policy.json` is a 6: `policies rules-reset` writes the starter rules over it, and a
-copy of the damaged file is kept beside it.
+match it. The first time observe is turned on, Astera writes the starter rules: deny `git.remote.write`,
+`github.pr.create` and `github.write`, deny `filesystem.write` and `filesystem.delete` outside the project, and
+otherwise allow. Until then `policies show` shows them and nothing is written. The rule commands take a rule's id from
+`policies show` and its place in the list counted from 0 (`--at`, `--to`); `rules-reset` puts the starter rules back
+and keeps the mode. Every change answers the mode and the rules as they now are. An action Astera does not know is
+refused with 2 and the message lists them, a rule that is not there is a 4, and a damaged `audit-policy.json` is a 6:
+`policies rules-reset` writes the starter rules over it, and a copy of the damaged file is kept beside it.
 
 `audit list` prints the records newest first, each with `decision` and `ruleId` (the rule that decided, left out when
 `otherwise` did or none could), worked out from the rules in force when you ask: edit a rule and the past calls show

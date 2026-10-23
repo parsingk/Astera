@@ -8576,7 +8576,7 @@ describe('handleCommand — tasks-get', () => {
   })
 })
 
-// Observe mode design §10: `runs get` and `tasks get` carry the tokens the Host kept for their sessions, and say nothing
+// Observe mode design §10: `runs get` and `tasks-get` carry the tokens the Host kept for their sessions, and say nothing
 // when it kept none or the caller keeps no tokens (the app's own command layer)
 describe('handleCommand — tokens on runs-get and tasks-get', () => {
   const dispatch = (id: string, taskId: string, sessionId: string): Dispatch => ({
@@ -8615,7 +8615,7 @@ describe('handleCommand — tokens on runs-get and tasks-get', () => {
     expect(r.body).toMatchObject({ id: 'r1', tokens: { input: 120, output: 12, total: 132 }, coordinatorTokens: { input: 5, output: 1, total: 6 } })
   })
 
-  it('tasks get totals the Task’s attempts, and leaves the field out for a Task nothing was read for', async () => {
+  it('tasks-get totals the Task’s attempts, and leaves the field out for a Task nothing was read for', async () => {
     expect((await call(withTokens(), 'tasks-get', { id: 't1' }, '')).body).toMatchObject({ id: 't1', tokens: { input: 120, output: 12, total: 132 } })
     expect((await call(withTokens(), 'tasks-get', { id: 't2' }, '')).body).not.toHaveProperty('tokens')
   })

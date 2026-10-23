@@ -96,7 +96,7 @@ const ofDispatches = (s: OrchState, taskIds: ReadonlySet<string>, spent: readonl
   return totalOf(spent.filter((e) => e.dispatchId !== undefined && dispatches.has(e.dispatchId)))
 }
 
-/** `tasks get`'s `tokens` (observe mode design §10): what the sessions of every attempt at the Task spent. */
+/** `tasks-get`'s `tokens` (observe mode design §10): what the sessions of every attempt at the Task spent. */
 export const taskTokensOf = (s: OrchState, taskId: string, spent: readonly SpentTokens[]): TokenTotals | undefined =>
   ofDispatches(s, new Set([taskId]), spent)
 

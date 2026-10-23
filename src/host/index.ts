@@ -543,7 +543,7 @@ async function main(): Promise<void> {
   // The tokens each session spent (observe mode design §10), in every mode: read from the transcripts, rollouts and
   // chat lines the providers already write, kept per session for the Dispatch or Run it worked for (whom from the
   // state as the orch holds it, made below), in the token store opened above. Before any pty or process opens, so every
-  // session's start is heard; `runs get` and `tasks get` total them.
+  // session's start is heard; `runs get` and `tasks-get` total them.
   const tokenSources = createTokenSources({
     store: tokenStore,
     ptys: registry,
@@ -847,7 +847,7 @@ async function main(): Promise<void> {
     jobSources: hostJobSources({ manager: plugins, runtime: pluginRuntime }),
     // The completion check plugins a Task's checks ask (plugin Phase 5 C8), through the same runtime
     completionChecks: hostCompletionChecks({ manager: plugins, runtime: pluginRuntime }),
-    // What the sessions spent, for `runs get` and `tasks get` (observe mode design §10)
+    // What the sessions spent, for `runs get` and `tasks-get` (observe mode design §10)
     spentTokens: () => tokenStore.spent(),
     now: () => new Date().toISOString(),
     // The handshake's own string, not a second one taken here: `requests show` answers with it so a
