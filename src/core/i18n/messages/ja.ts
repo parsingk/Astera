@@ -185,7 +185,7 @@ export const ja: Catalog = {
   'settings.security.reset.title': '初期ルールでやり直しますか？',
   'settings.security.reset.body': '今のルールが初期ルールに置き換わります。観察のオンとオフはそのままです。',
   'settings.security.decision.allow': '許可',
-  'settings.security.decision.would-deny': '拒否されていたもの',
+  'settings.security.decision.would-deny': '拒否対象',
   'settings.security.decision.unknown': '不明',
   'settings.security.audit.hint': '観察したセッションのツール呼び出しを、今のルールで判断した結果です。記録は Host が行うため、Host が動いていない間の呼び出しは残りません。',
   'settings.security.period.label': '期間',

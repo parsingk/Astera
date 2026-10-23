@@ -226,7 +226,7 @@ export const ko = {
   'settings.security.reset.title': '기본 규칙으로 다시 시작할까요?',
   'settings.security.reset.body': '지금의 규칙이 기본 규칙으로 바뀝니다. 관찰을 켜고 끈 상태는 그대로입니다.',
   'settings.security.decision.allow': '허용',
-  'settings.security.decision.would-deny': '막혔을 것',
+  'settings.security.decision.would-deny': '거부 대상',
   'settings.security.decision.unknown': '알 수 없음',
   'settings.security.audit.hint': '관찰한 세션의 도구 호출마다 지금의 규칙으로 판단한 결과입니다. 기록은 Host 가 하므로 Host 가 꺼져 있는 동안의 호출은 남지 않습니다.',
   'settings.security.period.label': '기간',

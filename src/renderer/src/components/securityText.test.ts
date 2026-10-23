@@ -122,9 +122,9 @@ describe('securityText', () => {
   it('says each decision in words', () => {
     expect(DECISIONS.map((d) => decisionLabel(d, en))).toEqual(['Allowed', 'Would be denied', 'Unknown'])
     expect(decisionLabel('later', en)).toBe('later')
-    // The screen finding: "would be denied" said plainly, not as "a deny target"
     const said = (lang: (typeof LANGS)[number]): string => decisionLabel('would-deny', (k, p) => translate(lang, k, p))
-    expect([said('ko'), said('ja'), said('es')]).toEqual(['막혔을 것', '拒否されていたもの', 'Se denegaría'])
+    // The person's ruling D1 (2026-10-24): the Korean and Japanese labels say what the rules deny; English and Spanish stay
+    expect([said('ko'), said('ja'), said('es')]).toEqual(['거부 대상', '拒否対象', 'Se denegaría'])
   })
 
   // Design §9, the Host's COVERAGE
