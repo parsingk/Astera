@@ -72,7 +72,7 @@ export interface AuditEvent {
 export interface AuditRecorder {
   /** Hands a finished call over. Returns at once and never throws. */
   record(ev: AuditEvent): void
-  /** The mode may have changed: it is read again before the next record is written. */
+  /** The mode may have changed: it is read again at once, and before the next record is written. */
   invalidate(): void
   /** Settles once every call handed over so far is written or dropped. */
   flushed(): Promise<void>
@@ -230,6 +230,10 @@ export function createAuditRecorder(d: {
     invalidate() {
       mode = null
       generation++
+      // Read again now, not at the next call: the sources ask `observing` before they read anything
+      enqueue(async () => {
+        await currentMode()
+      })
     },
     flushed: () => queue,
     observing: () => mode !== 'compatibility'

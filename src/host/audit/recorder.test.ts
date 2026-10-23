@@ -212,6 +212,11 @@ describe('createAuditRecorder', () => {
     h.recorder.record(bash('git status'))
     await h.recorder.flushed()
     expect(h.recorder.observing()).toBe(true)
+    // A change back is read at once, with no call to bring it
+    h.setMode('compatibility')
+    h.recorder.invalidate()
+    await h.recorder.flushed()
+    expect(h.recorder.observing()).toBe(false)
   })
 
   it('keeps the mode it read until the policies say it changed', async () => {
