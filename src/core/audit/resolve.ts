@@ -18,7 +18,14 @@ export interface ResolveCall {
   input: unknown
   /** The session's folder, what "inside the project" is measured against. */
   cwd: string
+  /** Where the call ran, when the provider says (Claude's hook `cwd`, which follows the shell's `cd`s from call to call):
+   *  a relative path is read from there. Left out: from `cwd`. */
+  base?: string
 }
+
+/** The fields of a Claude tool's input this reads. The audit capture keeps these and drops the rest (a Write's contents,
+ *  an Edit's strings), so nothing more of a call waits on disk (statusline.ts). */
+export const CLAUDE_INPUT_FIELDS = ['command', 'cmd', 'workdir', 'file_path', 'notebook_path', 'path', 'pattern', 'url'] as const
 
 export interface ResolvedAction {
   action: AuditAction
@@ -93,14 +100,14 @@ function flavorOf(tool: string): Flavor {
   return process.platform === 'win32' ? 'ps' : 'posix'
 }
 
-function resolve({ provider, tool, input, cwd }: ResolveCall): ResolvedAction {
+function resolve({ provider, tool, input, cwd, base }: ResolveCall): ResolvedAction {
   const mcp = mcpTarget(tool)
   if (mcp !== null) return { action: 'mcp.call', target: mcp, confidence: 'exact' }
   const rec = asRecord(input)
-  const ctx: Ctx = { cwd, base: cwd }
+  const ctx: Ctx = { cwd, base: base === undefined ? cwd : path.resolve(cwd, nativePath(base)) }
   switch (KINDS[provider].get(tool)) {
     case 'shell':
-      return resolveShell(rec, cwd, flavorOf(tool))
+      return resolveShell(rec, ctx, flavorOf(tool))
     case 'exec':
       return resolveExec(str(input), cwd)
     case 'read':
@@ -405,7 +412,10 @@ const MOVES = new Set(['cd', 'chdir', 'pushd', 'set-location', 'sl'])
 /** Commands that only print what they are given, so with a redirection the file written is the point of the line. */
 const PRODUCERS = new Set(['echo', 'printf', 'cat', 'write-output', 'write-host'])
 
-function resolveShell(rec: Record<string, unknown>, cwd: string, flavor: Flavor): ResolvedAction {
+/** A shell call. `at.base` is where it started: the session's folder, or where the provider says it ran. */
+function resolveShell(rec: Record<string, unknown>, at: Ctx, flavor: Flavor): ResolvedAction {
+  const cwd = at.cwd
+  const start = at.base ?? cwd
   const raw = rec.command ?? rec.cmd
   // Codex may send an argv array; `bash -lc <script>` in it is read below like a typed line.
   const typed: Cmd[] =
@@ -415,7 +425,7 @@ function resolveShell(rec: Record<string, unknown>, cwd: string, flavor: Flavor)
         ? [argvCommand(raw.filter((w): w is string => typeof w === 'string'))]
         : []
   const workdir = str(rec.workdir)
-  let base: string | null = workdir === null ? cwd : path.resolve(cwd, nativePath(workdir))
+  let base: string | null = workdir === null ? start : path.resolve(start, nativePath(workdir))
   const { commands, scripted, control } = expand(typed, flavor)
 
   const parts: ResolvedAction[] = []

@@ -8,6 +8,7 @@ import { dirIdentity } from '../files/watchedDir'
 import { HOOK_EVENT_AT } from '../hooks/eventTime'
 import { renameRetrying } from '../renameRetry'
 import { SESSION_CONTEXT_SCRIPT } from './sessionContext'
+import { CLAUDE_INPUT_FIELDS } from '../audit/resolve'
 
 /** The statusLine injection info handed to SessionManager when a session is spawned. */
 export interface StatusLineSpawn {
@@ -90,20 +91,26 @@ process.stdin.on('error', finish)
 // ensureObserveFiles). It writes not to the session's own hook file, which attention, `sessions list`, pendingPrompt and
 // Slack read, but beside it, to <session>.audit.jsonl (AUDIT_HOOK_EVENTS), which only the Host's recorder reads; so an
 // observed session's own file holds exactly what a plain session's does. Of the payload it keeps what names the call
-// (the event, the tool, its input, its id, and whether it was interrupted) with the stamp the other capture takes; the
-// tool's output (`tool_response`, a failure's `error`) is never written. Parsed and written again, unlike the other
-// capture: nothing here needs a number past 2^53 kept as it was sent.
+// (the event, the tool, its id, whether it was interrupted, where it ran, and of its input only the fields the resolver
+// reads, CLAUDE_INPUT_FIELDS) with the stamp the other capture takes; the tool's output (`tool_response`, a failure's
+// `error`) and the rest of its input (a Write's contents, an Edit's strings) are never written. Parsed and written
+// again, unlike the other capture: nothing here needs a number past 2^53 kept as it was sent.
 const HOOK_AUDIT_CAPTURE_SCRIPT = `const at = typeof performance === 'object' && Number.isFinite(performance.timeOrigin) ? performance.timeOrigin : Date.now()
 const fs = require('fs')
 const out = process.env.ASTERA_HOOK_OUT
+const FIELDS = ${JSON.stringify(CLAUDE_INPUT_FIELDS)}
 const chunks = []
 function finish() {
   if (out && out.endsWith('.jsonl')) {
     try {
       const p = JSON.parse(Buffer.concat(chunks).toString('utf8'))
       if (p && typeof p === 'object' && !Array.isArray(p)) {
-        const kept = { ${HOOK_EVENT_AT}: at, hook_event_name: p.hook_event_name, tool_name: p.tool_name, tool_input: p.tool_input, tool_use_id: p.tool_use_id }
+        const input = {}
+        const given = p.tool_input
+        if (given && typeof given === 'object' && !Array.isArray(given)) for (const k of FIELDS) if (given[k] !== undefined) input[k] = given[k]
+        const kept = { ${HOOK_EVENT_AT}: at, hook_event_name: p.hook_event_name, tool_name: p.tool_name, tool_input: input, tool_use_id: p.tool_use_id }
         if (p.is_interrupt === true) kept.is_interrupt = true
+        if (typeof p.cwd === 'string') kept.cwd = p.cwd
         fs.appendFileSync(out.slice(0, -'.jsonl'.length) + '${AUDIT_HOOK_EVENTS}', JSON.stringify(kept) + '\\n')
       }
     } catch {}

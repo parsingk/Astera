@@ -159,6 +159,18 @@ describe('the Claude hook source', () => {
       expect(hookCall(postToolUse('Bash', { command: 'ls' }, 'toolu_4', other))).toBeNull()
     expect(hookCall('not an object')).toBeNull()
     expect(hookCall({ hook_event_name: 'PostToolUse' })).toBeNull()
+    // Where the call ran, as the hook says
+    expect(hookCall(postToolUse('Bash', { command: 'ls' }, 'toolu_5', 'PostToolUse', { cwd: '/w/frontend' }))?.cwd).toBe('/w/frontend')
+  })
+
+  // Final review M2: Claude's shell keeps its directory between calls; the hook's cwd says where this one ran
+  it('reads a shell path from where the call ran, so after cd frontend, ../backend is still inside the project', async () => {
+    const r = await realRecorder({ ptys: [entry('pty1', note('session', 'sess_a', OBSERVED))] })
+    const { sources, audit } = await sourcesFor({ recorder: r.recorder })
+    await fs.writeFile(audit('sess_a'), lineOf(postToolUse('Bash', { command: 'rm -rf ../backend/dist' }, 'toolu_1', 'PostToolUse', { cwd: path.join(cwd, 'frontend') })))
+    await sources.poll()
+    expect(await r.records()).toMatchObject([{ action: 'filesystem.delete', insideProject: true }])
+    sources.dispose()
   })
 
   it('a PostToolUse for PowerShell, Read, Write and an MCP tool, and a failed call, make one record each, a repeat none', async () => {

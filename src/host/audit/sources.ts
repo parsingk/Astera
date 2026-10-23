@@ -59,7 +59,8 @@ const patchNaming = (paths: string[]): string => paths.map((p) => `*** Update Fi
 
 /** An audit line as one call. Claude Code fires PostToolUse once a tool has run and PostToolUseFailure, instead, once
  *  it failed or was interrupted (`is_interrupt`), so the event is the outcome; the capture keeps no output to read one
- *  from. null for any other event. */
+ *  from. The hook's `cwd` is where the call ran: Claude's shell keeps its directory from call to call. null for any
+ *  other event. */
 export function hookCall(payload: unknown): ObservedCall | null {
   const p = obj(payload)
   const status = p?.hook_event_name === 'PostToolUse' ? 'ok' : p?.hook_event_name === 'PostToolUseFailure' ? 'failed' : null
@@ -67,7 +68,15 @@ export function hookCall(payload: unknown): ObservedCall | null {
   if (!p || status === null || tool === null) return null
   const id = str(p.tool_use_id)
   const at = isoOf(p[HOOK_EVENT_AT])
-  return { tool, input: p.tool_input, status, ...(id !== null ? { dedupeKey: id } : {}), ...(at !== undefined ? { at } : {}) }
+  const cwd = str(p.cwd)
+  return {
+    tool,
+    input: p.tool_input,
+    status,
+    ...(id !== null ? { dedupeKey: id } : {}),
+    ...(at !== undefined ? { at } : {}),
+    ...(cwd !== null ? { cwd } : {})
+  }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

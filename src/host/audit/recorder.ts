@@ -67,6 +67,9 @@ export interface AuditEvent {
   dedupeKey?: string
   /** When the call happened, when the source knows (a hook line read after a restart); else when it is recorded. */
   at?: string
+  /** Where the call ran, when the source knows (Claude's hook `cwd`): its relative paths are read from there, and inside
+   *  the project is still measured against the session's folder (resolve.ts `ResolveCall.base`). */
+  cwd?: string
 }
 
 export interface AuditRecorder {
@@ -172,7 +175,7 @@ export function createAuditRecorder(d: {
   const recordOf = (ev: AuditEvent, info: SessionFacts): AuditRecord => {
     const at = timeOf(ev.at)
     const provider = PROVIDER[ev.source]
-    const r = resolve({ provider, tool: ev.tool, input: ev.input, cwd: info.cwd })
+    const r = resolve({ provider, tool: ev.tool, input: ev.input, cwd: info.cwd, ...(ev.cwd !== undefined ? { base: ev.cwd } : {}) })
     const ids = d.dispatchOf(ev.sessionId, at)
     const cut = r.commands !== undefined && r.commands.length > AUDIT_COMMANDS_KEPT
     return {

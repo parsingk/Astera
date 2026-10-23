@@ -333,6 +333,21 @@ describe('shell: cd', () => {
     expect(bash('cd $DIR && rm -rf /nowhere/x')).toMatchObject({ insideProject: false })
     expect(bash(`cd $DIR && rm -rf "${inProj('x')}"`)).toMatchObject({ insideProject: true })
   })
+
+  // Final review M2: Claude's shell keeps its directory between calls, and its hook says where a call ran (`cwd`). A
+  // relative path is read from there; inside or outside is still measured against the session's folder
+  it('reads a relative path from where the call ran, when the provider says, and measures it against the session’s folder', () => {
+    const at = (command: string, base: string) => resolveAction({ provider: 'claude', tool: 'Bash', input: { command }, cwd, base })
+    expect(at('rm -rf ../backend/dist', inProj('frontend'))).toMatchObject({ action: 'filesystem.delete', insideProject: true })
+    expect(bash('rm -rf ../backend/dist')).toMatchObject({ insideProject: false })
+    expect(at('rm -rf ../../other', inProj('frontend'))).toMatchObject({ insideProject: false })
+    expect(at('cd .. && rm -rf build', inProj('frontend'))).toMatchObject({ insideProject: true })
+    expect(at('echo x > ../out.txt', inProj('frontend'))).toMatchObject({ target: 'out.txt', insideProject: true })
+    // A structured tool's relative path and a Glob with no path too
+    const tool = (name: string, input: unknown) => resolveAction({ provider: 'claude', tool: name, input, cwd, base: inProj('frontend') })
+    expect(tool('Read', { file_path: 'src/a.ts' })).toMatchObject({ target: 'frontend/src/a.ts', insideProject: true })
+    expect(tool('Glob', { pattern: '**/*.ts' })).toMatchObject({ target: 'frontend', insideProject: true })
+  })
 })
 
 describe('shell: unknown', () => {

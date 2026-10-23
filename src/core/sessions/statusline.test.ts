@@ -8,6 +8,7 @@ import { StatusLineManager, captureCommand } from './statusline'
 import { dirIdentity } from '../files/watchedDir'
 import { createAttentionState } from './attention'
 import { hookEventState, latestEventLine } from '../hooks/sessionState'
+import { resolveAction } from '../audit/resolve'
 
 const account: Account = {
   id: 'a1', label: 't', configDir: path.join(os.tmpdir(), 'astera-none-config'), color: '#fff',
@@ -585,11 +586,49 @@ describe('StatusLineManager observe mode', () => {
     })
     const got = await lines(path.join(mgr.hookEventsDir, 's1.audit.jsonl'))
     expect(got.map(({ astera_at, ...rest }) => (expect(typeof astera_at).toBe('number'), rest))).toEqual([
-      { hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: 'a.ts' }, tool_use_id: 'toolu_1' },
+      { hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: 'a.ts' }, tool_use_id: 'toolu_1', cwd: '/w' },
       { hook_event_name: 'PostToolUseFailure', tool_name: 'Bash', tool_input: { command: 'git push' }, tool_use_id: 'toolu_2', is_interrupt: true }
     ])
     expect(await fs.readFile(path.join(mgr.hookEventsDir, 's1.audit.jsonl'), 'utf8')).not.toContain('secret')
     expect(existsSync(out)).toBe(false)
+  })
+
+  // Final review M1: of a tool's input the capture keeps only the fields the resolver reads, so a Write's contents or an
+  // Edit's strings never wait on disk until the app's next start
+  it('the audit capture keeps of a tool’s input only what the resolver reads, which resolves the same', async () => {
+    const mgr = new StatusLineManager(dir)
+    await mgr.init()
+    await mgr.ensureObserveFiles()
+    const out = path.join(mgr.hookEventsDir, 's2.jsonl')
+    const script = path.join(dir, 'astera-hook-audit-capture.cjs')
+    const inputs: Array<[string, Record<string, unknown>]> = [
+      ['Write', { file_path: '/w/a.ts', content: 'secret body' }],
+      ['Edit', { file_path: '/w/a.ts', old_string: 'secret old', new_string: 'secret new', replace_all: true }],
+      ['NotebookEdit', { notebook_path: '/w/n.ipynb', new_source: 'secret cell', cell_id: 'c1' }],
+      ['Bash', { command: 'git push', description: 'secret words', timeout: 5000, run_in_background: true }],
+      ['Grep', { pattern: 'secret', path: 'src', glob: '*.ts', output_mode: 'content' }],
+      ['Glob', { pattern: '/w/src/**/*.ts' }],
+      ['WebFetch', { url: 'https://example.com/x', prompt: 'secret prompt' }],
+      ['Agent', { description: 'd', prompt: 'secret task' }],
+      ['mcp__github__create_issue', { title: 'secret title', body: 'b' }]
+    ]
+    for (const [tool, input] of inputs) await runCapture(script, out, { hook_event_name: 'PostToolUse', tool_name: tool, tool_input: input, tool_use_id: tool })
+    const got = await lines(path.join(mgr.hookEventsDir, 's2.audit.jsonl'))
+    expect(got.map((l) => l.tool_input)).toEqual([
+      { file_path: '/w/a.ts' },
+      { file_path: '/w/a.ts' },
+      { notebook_path: '/w/n.ipynb' },
+      { command: 'git push' },
+      { pattern: 'secret', path: 'src' },
+      { pattern: '/w/src/**/*.ts' },
+      { url: 'https://example.com/x' },
+      {},
+      {}
+    ])
+    for (const [i, [tool, input]] of inputs.entries())
+      expect(resolveAction({ provider: 'claude', tool, input: got[i].tool_input, cwd: '/w' }), tool).toEqual(resolveAction({ provider: 'claude', tool, input, cwd: '/w' }))
+    // Grep's pattern is the one field kept that may be a person's words; it names no file and is never recorded
+    expect(JSON.stringify(got.map((l) => ({ ...(l.tool_input as object), pattern: undefined })))).not.toContain('secret')
   })
 
   // The review's I2: the session's own hook file is what attention, sessions list, Slack and pendingPrompt read. Fired
