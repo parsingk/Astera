@@ -1,0 +1,719 @@
+import { describe, it, expect } from 'vitest'
+import path from 'node:path'
+import { resolveAction, redactTarget, type AuditAction } from './resolve'
+
+// Paths are built with node:path so the same tests hold on win32 and POSIX.
+const cwd = path.resolve('/work/proj')
+const inProj = (...p: string[]): string => path.join(cwd, ...p)
+const elsewhere = (...p: string[]): string => path.resolve(cwd, '..', 'elsewhere', ...p)
+
+const claude = (tool: string, input: unknown) => resolveAction({ provider: 'claude', tool, input, cwd })
+const codex = (tool: string, input: unknown, at: string = cwd) => resolveAction({ provider: 'codex', tool, input, cwd: at })
+const bash = (command: string) => claude('Bash', { command })
+
+describe('shell: the action comes from the first words', () => {
+  it('names git push a remote write, with the program and first subcommand as target', () => {
+    expect(bash('git push origin main')).toEqual({ action: 'git.remote.write', target: 'git push', confidence: 'high' })
+  })
+
+  it('looks past git global options and a program path with .exe', () => {
+    expect(bash('git -C ../other push')).toMatchObject({ action: 'git.remote.write', target: 'git push' })
+    expect(bash('git -c core.pager=cat --no-pager log')).toMatchObject({ action: 'git.read', target: 'git log' })
+    expect(bash('"C:\\Program Files\\Git\\bin\\git.exe" status')).toMatchObject({ action: 'git.read', target: 'git status' })
+    expect(bash('/usr/bin/git push')).toMatchObject({ action: 'git.remote.write', target: 'git push' })
+  })
+
+  it.each([
+    ['git status', 'git.read'],
+    ['git log --oneline -5', 'git.read'],
+    ['git diff HEAD~1', 'git.read'],
+    ['git show abc1234', 'git.read'],
+    ['git check-ignore -v build', 'git.read'],
+    ['git ls-remote origin', 'git.read'],
+    ['git commit -m "x"', 'git.local.write'],
+    ['git add -A', 'git.local.write'],
+    ['git checkout -b feature', 'git.local.write'],
+    ['git merge develop', 'git.local.write'],
+    ['git push', 'git.remote.write']
+  ] satisfies Array<[string, AuditAction]>)('%s is %s', (command, action) => {
+    expect(bash(command)).toMatchObject({ action, confidence: 'high' })
+  })
+
+  it('treats a git subcommand it does not know as unknown rather than guessing', () => {
+    expect(bash('git pushf')).toMatchObject({ action: 'process.execute', target: 'git pushf', confidence: 'unknown' })
+  })
+
+  it.each([
+    ['gh pr create --title "x" --body "y"', 'github.pr.create'],
+    ['gh issue create --title x', 'github.write'],
+    ['gh pr merge 12 --squash', 'github.write'],
+    ['gh release create v1.0.0', 'github.write'],
+    ['gh api -X POST repos/o/r/issues -f title=x', 'github.write'],
+    ['gh api repos/o/r/issues --method DELETE', 'github.write'],
+    ['gh pr view 12', 'process.execute'],
+    ['gh api repos/o/r/pulls', 'process.execute'],
+    ['gh api repos/o/r/pulls --method GET -f state=open', 'process.execute']
+  ] satisfies Array<[string, AuditAction]>)('%s is %s', (command, action) => {
+    expect(bash(command)).toMatchObject({ action, confidence: 'high' })
+  })
+
+  it('keeps gh to the program and its first subcommand', () => {
+    expect(bash('gh pr create --title "secret title"').target).toBe('gh pr')
+  })
+
+  it.each([
+    ['npm install', 'package.install'],
+    ['npm i left-pad', 'package.install'],
+    ['npm ci', 'package.install'],
+    ['pnpm add zod', 'package.install'],
+    ['yarn', 'package.install'],
+    ['yarn add react', 'package.install'],
+    ['pip install requests', 'package.install'],
+    ['python -m pip install requests', 'package.install'],
+    ['uv pip install requests', 'package.install'],
+    ['cargo install ripgrep', 'package.install'],
+    ['npm test', 'process.execute'],
+    ['npm run build', 'process.execute'],
+    ['yarn test', 'process.execute']
+  ] satisfies Array<[string, AuditAction]>)('%s is %s', (command, action) => {
+    expect(bash(command)).toMatchObject({ action, confidence: 'high' })
+  })
+
+  it('shows npm test as npm test and npm run build as npm run', () => {
+    expect(bash('npm test').target).toBe('npm test')
+    expect(bash('npm run build').target).toBe('npm run')
+    expect(bash('npx vitest run src/a.test.ts').target).toBe('npx vitest')
+  })
+
+  it('names a plain ordinary command process.execute at high confidence', () => {
+    expect(bash('node scripts/build.js')).toEqual({ action: 'process.execute', target: 'node', confidence: 'high' })
+    expect(bash('mkdir -p out')).toMatchObject({ action: 'process.execute', target: 'mkdir', confidence: 'high' })
+  })
+
+  it('ignores a leading comment line and environment assignments', () => {
+    expect(bash('# check the tree\ngit status')).toMatchObject({ action: 'git.read', confidence: 'high' })
+    expect(bash('NODE_ENV=test CI=1 npm test')).toMatchObject({ target: 'npm test', confidence: 'high' })
+  })
+
+  it('does not take the 2>&1 of a redirection for a second command', () => {
+    expect(bash('npm test > out.log 2>&1')).toEqual({ action: 'process.execute', target: 'npm test', confidence: 'high' })
+  })
+})
+
+describe('shell: deleting and reading files', () => {
+  it('maps rm, del and Remove-Item to filesystem.delete and keeps the program as target', () => {
+    expect(bash('rm -rf build')).toEqual({
+      action: 'filesystem.delete', target: 'rm', insideProject: true, confidence: 'high'
+    })
+    expect(claude('PowerShell', { command: 'Remove-Item -Recurse -Force dist' })).toEqual({
+      action: 'filesystem.delete', target: 'Remove-Item', insideProject: true, confidence: 'high'
+    })
+    expect(bash('del /q build.log')).toMatchObject({ action: 'filesystem.delete', target: 'del', insideProject: true })
+  })
+
+  it('says a delete outside the folder is outside, including when one of several paths is', () => {
+    expect(bash(`rm -rf "${elsewhere('old')}"`)).toMatchObject({ action: 'filesystem.delete', insideProject: false })
+    expect(bash('rm -rf ../old')).toMatchObject({ insideProject: false })
+    expect(bash(`rm a.txt "${elsewhere('b.txt')}"`)).toMatchObject({ insideProject: false })
+    expect(bash('rm -rf ~/old')).toMatchObject({ insideProject: false })
+    expect(bash('rm -rf $HOME/old')).toMatchObject({ insideProject: false })
+  })
+
+  it('does not mistake the value of a PowerShell parameter for the path', () => {
+    expect(
+      claude('PowerShell', { command: `Remove-Item -ErrorAction SilentlyContinue "${elsewhere('x')}"` })
+    ).toMatchObject({ action: 'filesystem.delete', insideProject: false })
+  })
+
+  it('leaves insideProject out when a delete names no path', () => {
+    expect(bash('rm')).not.toHaveProperty('insideProject')
+  })
+
+  it('maps cat, head and Get-Content to filesystem.read with a path target', () => {
+    expect(bash('cat src/a.ts')).toEqual({
+      action: 'filesystem.read', target: 'src/a.ts', insideProject: true, confidence: 'high'
+    })
+    expect(bash('head -n 5 src/a.ts')).toMatchObject({ action: 'filesystem.read', target: 'src/a.ts' })
+    expect(claude('PowerShell', { command: 'Get-Content -Path src/a.ts -TotalCount 5' })).toMatchObject({
+      action: 'filesystem.read', target: 'src/a.ts', insideProject: true
+    })
+    expect(bash('cat src/a.ts src/b.ts')).toMatchObject({ target: 'src/a.ts (+1)' })
+  })
+
+  it('names a read outside the folder by its file name only', () => {
+    expect(bash('cat ../secret.txt')).toEqual({
+      action: 'filesystem.read', target: 'outside project: secret.txt', insideProject: false, confidence: 'high'
+    })
+  })
+
+  it('reads the folder itself for a bare ls, and is a plain command for a bare cat', () => {
+    expect(bash('ls -la')).toMatchObject({ action: 'filesystem.read', target: '.', insideProject: true })
+    expect(bash('cat')).toMatchObject({ action: 'process.execute', target: 'cat' })
+  })
+})
+
+describe('shell: network', () => {
+  it('maps curl, wget and Invoke-WebRequest to network.request with the host name only', () => {
+    expect(bash('curl -s https://api.example.com/v1/items?page=2')).toEqual({
+      action: 'network.request', target: 'api.example.com', confidence: 'high'
+    })
+    expect(bash('wget -q "http://files.example.org:8080/a.zip"').target).toBe('files.example.org')
+    expect(claude('PowerShell', { command: 'Invoke-WebRequest -Uri https://a.example.net/x -OutFile y' }).target).toBe(
+      'a.example.net'
+    )
+    expect(claude('PowerShell', { command: 'iwr https://b.example.net/y' })).toMatchObject({ action: 'network.request' })
+  })
+
+  it('falls back to the program when no URL is in the line', () => {
+    expect(bash('curl localhost:3000/health')).toMatchObject({ action: 'network.request', target: 'curl' })
+  })
+})
+
+describe('shell: compound lines are heuristic and list every command', () => {
+  it('classifies npm test && git push by its first command and lists both', () => {
+    expect(bash('npm test && git push')).toEqual({
+      action: 'process.execute',
+      target: 'npm test',
+      confidence: 'heuristic',
+      commands: ['process.execute', 'git.remote.write']
+    })
+  })
+
+  it.each([
+    ['cd src; ls', 2],
+    ['git status | head -5', 2],
+    ['git fetch || git pull', 2],
+    ['npm run build & npm run lint', 2],
+    ['echo a\ngit log\nnpm test', 3]
+  ])('splits %j into %i commands', (command, count) => {
+    const r = bash(command)
+    expect(r.confidence).toBe('heuristic')
+    expect(r.commands).toHaveLength(count)
+  })
+
+  it('does not split on operators inside quotes', () => {
+    expect(bash('git commit -m "fix a && b; c | d"')).toEqual({
+      action: 'git.local.write', target: 'git commit', confidence: 'high'
+    })
+    expect(bash("git commit -m 'one; two'")).toMatchObject({ confidence: 'high' })
+  })
+
+  it('does not read the body of a heredoc as commands', () => {
+    const r = bash("git commit -F - <<'EOF'\nsubject && git push\nEOF")
+    expect(r).toEqual({ action: 'git.local.write', target: 'git commit', confidence: 'high' })
+  })
+
+  it('sees the command inside $( ) and ( ) groups', () => {
+    expect(bash('echo $(git push)').commands).toEqual(['process.execute', 'git.remote.write'])
+    expect(bash('(cd x && git push)').commands).toEqual(['process.execute', 'git.remote.write'])
+  })
+
+  it('sees the commands in a PowerShell script block', () => {
+    const r = claude('PowerShell', { command: 'Get-ChildItem | ForEach-Object { Remove-Item $_ }' })
+    expect(r.confidence).toBe('heuristic')
+    expect(r.commands).toEqual(['filesystem.read', 'process.execute', 'filesystem.delete'])
+    expect(r.insideProject).toBe(false) // $_ cannot be shown to be inside
+  })
+
+  it('is false for insideProject when any command reaches outside', () => {
+    expect(bash('rm a.txt && rm ../b.txt')).toMatchObject({ insideProject: false })
+    expect(bash('rm a.txt && rm b.txt')).toMatchObject({ insideProject: true })
+  })
+
+  it('gives a single command no commands list', () => {
+    expect(bash('git push')).not.toHaveProperty('commands')
+  })
+})
+
+// Measured on 6,814 real Bash and PowerShell calls: assignment-only commands, control-flow words and a leading cd were
+// the bulk of what made lines unknown or gave them a useless headline.
+describe('shell: syntax that is not a command', () => {
+  it('drops assignment-only commands, which run nothing', () => {
+    expect(bash('BRANCH=main; git push origin $BRANCH')).toEqual({
+      action: 'git.remote.write', target: 'git push', confidence: 'high'
+    })
+    expect(bash('SHA=$(git rev-parse HEAD) && git push').commands).toEqual(['git.read', 'git.remote.write'])
+  })
+
+  it('reads the commands inside a loop or a conditional and calls the line heuristic', () => {
+    expect(bash('for f in a b; do git push; done')).toEqual({
+      action: 'git.remote.write', target: 'git push', confidence: 'heuristic', commands: ['git.remote.write']
+    })
+    const r = bash('if [ -f x ]; then cat x; else rm -rf y; fi')
+    expect(r.confidence).toBe('heuristic')
+    expect(r.commands).toEqual(['process.execute', 'filesystem.read', 'filesystem.delete'])
+  })
+
+  it('drops PowerShell variable and environment assignments, keeping the command an assignment holds', () => {
+    const ps = (command: string) => claude('PowerShell', { command })
+    expect(ps("$env:CI='1'; npm test")).toEqual({ action: 'process.execute', target: 'npm test', confidence: 'high' })
+    expect(ps('$x = Get-Content a.txt')).toMatchObject({ action: 'filesystem.read', target: 'a.txt', confidence: 'high' })
+    expect(ps("$env:A='b'; $env:B='c'; git push")).toMatchObject({ action: 'git.remote.write', confidence: 'high' })
+  })
+
+  it('reads through timeout and its duration', () => {
+    expect(bash('timeout 30 npm test')).toEqual({ action: 'process.execute', target: 'npm test', confidence: 'high' })
+    expect(bash('timeout -s KILL 5 git push')).toMatchObject({ action: 'git.remote.write', confidence: 'high' })
+  })
+
+  it('treats the verbs PowerShell reserves for reading as known', () => {
+    const r = claude('PowerShell', { command: 'Get-Service | Where-Object Status -eq Running | Format-Table' })
+    expect(r).toMatchObject({ action: 'process.execute', confidence: 'heuristic' })
+    expect(r.commands).toHaveLength(3)
+  })
+})
+
+describe('shell: cd', () => {
+  it('does not headline a line with its leading cd', () => {
+    expect(bash('cd src && npm test')).toEqual({
+      action: 'process.execute', target: 'npm test', confidence: 'heuristic', commands: ['process.execute', 'process.execute']
+    })
+    expect(bash('cd src && git push')).toMatchObject({ action: 'git.remote.write', target: 'git push' })
+    expect(bash('cd src')).toMatchObject({ target: 'cd', confidence: 'high' })
+  })
+
+  it('measures what follows a cd from where it went', () => {
+    expect(bash('cd src && rm -rf build')).toMatchObject({ action: 'filesystem.delete', insideProject: true })
+    expect(bash('cd .. && rm -rf build')).toMatchObject({ insideProject: false })
+    expect(bash(`cd "${elsewhere()}" && cat a.txt`)).toMatchObject({
+      action: 'filesystem.read', target: 'outside project: a.txt', insideProject: false
+    })
+    expect(bash(`cd "${elsewhere()}" && cd "${inProj('src')}" && cat a.txt`)).toMatchObject({
+      target: 'src/a.txt', insideProject: true
+    })
+  })
+
+  it('cannot follow a cd to home, a variable or nowhere, so a relative path after it is not shown to be inside', () => {
+    expect(bash('cd ~ && rm -rf x')).toMatchObject({ insideProject: false })
+    expect(bash('cd $DIR && rm -rf x')).toMatchObject({ insideProject: false })
+    expect(bash('cd && rm -rf x')).toMatchObject({ insideProject: false })
+    expect(bash('cd $DIR && rm -rf /nowhere/x')).toMatchObject({ insideProject: false })
+    expect(bash(`cd $DIR && rm -rf "${inProj('x')}"`)).toMatchObject({ insideProject: true })
+  })
+})
+
+describe('shell: unknown', () => {
+  it('is unknown for a program it has no row for', () => {
+    expect(bash('foo-bar.sh')).toEqual({ action: 'process.execute', target: 'foo-bar.sh', confidence: 'unknown' })
+  })
+
+  it('shows only the file name of a script run by path', () => {
+    expect(bash('./scripts/deploy.sh --prod')).toMatchObject({ target: 'deploy.sh', confidence: 'unknown' })
+  })
+
+  it('is unknown for a line with one unknown command among known ones', () => {
+    expect(bash('npm test && ./foo.sh')).toEqual({
+      action: 'process.execute',
+      target: 'npm test',
+      confidence: 'unknown',
+      commands: ['process.execute', 'process.execute']
+    })
+  })
+
+  it('is unknown for a shell running a script file, an empty line, or a word that is no program', () => {
+    expect(bash('bash deploy.sh')).toMatchObject({ confidence: 'unknown' })
+    expect(bash('')).toEqual({ action: 'process.execute', target: 'shell', confidence: 'unknown' })
+    expect(bash('$(whoami)')).toMatchObject({ confidence: 'unknown' })
+  })
+})
+
+describe('shell: wrappers', () => {
+  it('reads the script inside bash -lc, powershell -Command and cmd /c', () => {
+    expect(bash('bash -lc "git push origin main"')).toMatchObject({ action: 'git.remote.write', confidence: 'high' })
+    expect(
+      claude('PowerShell', { command: 'powershell.exe -NoProfile -Command "git push"' })
+    ).toMatchObject({ action: 'git.remote.write', confidence: 'high' })
+    expect(bash('cmd /c "git push"')).toMatchObject({ action: 'git.remote.write' })
+  })
+
+  it('makes a wrapped compound line compound', () => {
+    expect(bash("sh -c 'npm test && git push'")).toMatchObject({
+      confidence: 'heuristic', commands: ['process.execute', 'git.remote.write']
+    })
+  })
+
+  it('skips sudo and env', () => {
+    expect(bash('sudo npm install -g x')).toMatchObject({ action: 'package.install' })
+    expect(bash('env FOO=1 git push')).toMatchObject({ action: 'git.remote.write' })
+  })
+})
+
+describe('files, structured tools', () => {
+  it('maps Read to filesystem.read, exact, with a path relative to the session folder', () => {
+    expect(claude('Read', { file_path: inProj('src', 'a.ts') })).toEqual({
+      action: 'filesystem.read', target: 'src/a.ts', insideProject: true, confidence: 'exact'
+    })
+  })
+
+  it('names a path outside the folder by its file name only', () => {
+    expect(claude('Read', { file_path: elsewhere('notes.md') })).toEqual({
+      action: 'filesystem.read', target: 'outside project: notes.md', insideProject: false, confidence: 'exact'
+    })
+  })
+
+  it('maps Write ../x.ts from the session folder to outside the project', () => {
+    expect(claude('Write', { file_path: '../x.ts', content: 'secret body' })).toEqual({
+      action: 'filesystem.write', target: 'outside project: x.ts', insideProject: false, confidence: 'exact'
+    })
+  })
+
+  it('keeps a sibling folder with the same prefix outside', () => {
+    expect(claude('Write', { file_path: `${cwd}2${path.sep}a.ts` })).toMatchObject({ insideProject: false })
+  })
+
+  it.each([
+    ['Edit', { file_path: inProj('a.ts'), old_string: 'x', new_string: 'y' }],
+    ['MultiEdit', { file_path: inProj('a.ts'), edits: [] }],
+    ['NotebookEdit', { notebook_path: inProj('a.ipynb'), new_source: 'x' }]
+  ])('maps %s to filesystem.write', (tool, input) => {
+    expect(claude(tool, input)).toMatchObject({ action: 'filesystem.write', insideProject: true, confidence: 'exact' })
+  })
+
+  it('never puts file contents in the target', () => {
+    const r = claude('Write', { file_path: inProj('a.ts'), content: 'const k = "sk-abcdefghijklmnopqrstuvwx"' })
+    expect(JSON.stringify(r)).not.toContain('sk-')
+  })
+
+  it('maps Grep and Glob to filesystem.read of their folder, the session folder by default', () => {
+    expect(claude('Grep', { pattern: 'TODO' })).toEqual({
+      action: 'filesystem.read', target: '.', insideProject: true, confidence: 'exact'
+    })
+    expect(claude('Glob', { pattern: '**/*.ts', path: inProj('src') })).toMatchObject({ target: 'src', insideProject: true })
+    expect(claude('Grep', { pattern: 'x', path: elsewhere() })).toMatchObject({
+      target: 'outside project: elsewhere', insideProject: false
+    })
+  })
+
+  it('reads an absolute Glob pattern as a read of its fixed part when no path is given', () => {
+    expect(claude('Glob', { pattern: path.join(elsewhere(), '**', '*.ts') })).toEqual({
+      action: 'filesystem.read', target: 'outside project: elsewhere', insideProject: false, confidence: 'exact'
+    })
+    expect(claude('Glob', { pattern: path.join(inProj('src'), '*.ts') })).toMatchObject({ target: 'src', insideProject: true })
+    expect(claude('Glob', { pattern: '**/*.ts' })).toMatchObject({ target: '.' })
+  })
+
+  it('is unknown, not a guess, when a file tool carries no readable path', () => {
+    expect(claude('Write', {})).toEqual({ action: 'filesystem.write', target: 'Write', confidence: 'unknown' })
+    expect(claude('Read', 'not an object')).toMatchObject({ action: 'filesystem.read', confidence: 'unknown' })
+  })
+
+  it.runIf(process.platform === 'win32')('compares paths without case on win32', () => {
+    expect(claude('Write', { file_path: inProj('A.ts').toUpperCase() })).toMatchObject({ insideProject: true })
+  })
+
+  it.runIf(process.platform === 'win32')('reads a Git Bash drive path like /c/work as C:/work', () => {
+    const msys = `/${cwd[0].toLowerCase()}${cwd.slice(2).split(path.sep).join('/')}/src/a.ts`
+    expect(bash(`cat ${msys}`)).toMatchObject({ target: 'src/a.ts', insideProject: true })
+    expect(claude('Read', { file_path: msys })).toMatchObject({ target: 'src/a.ts', insideProject: true })
+  })
+})
+
+describe('web, MCP, agents, anything else', () => {
+  it('maps WebFetch to the host name only', () => {
+    expect(claude('WebFetch', { url: 'https://a.example.com/x?q', prompt: 'summarise' })).toEqual({
+      action: 'network.request', target: 'a.example.com', confidence: 'exact'
+    })
+  })
+
+  it('drops credentials and port from the host', () => {
+    expect(claude('WebFetch', { url: 'https://user:pw@h.example.com:8443/p' }).target).toBe('h.example.com')
+  })
+
+  it('keeps the search text out of a WebSearch record', () => {
+    expect(claude('WebSearch', { query: 'how to rotate sk-abcdefghijklmnopqrstuvwx' })).toEqual({
+      action: 'network.request', target: 'web search', confidence: 'exact'
+    })
+  })
+
+  it('is unknown for a WebFetch with no usable URL', () => {
+    expect(claude('WebFetch', { url: 'not a url' })).toMatchObject({ action: 'network.request', confidence: 'unknown' })
+  })
+
+  it('maps mcp__server__tool to mcp.call with server.tool, whatever the input', () => {
+    expect(claude('mcp__github__create_issue', { title: 'x', body: 'token=abcdef' })).toEqual({
+      action: 'mcp.call', target: 'github.create_issue', confidence: 'exact'
+    })
+    expect(claude('mcp__claude_ai_Claude_Docs__batch', {}).target).toBe('claude_ai_Claude_Docs.batch')
+    expect(claude('mcp__a__b__c', {}).target).toBe('a.b__c')
+  })
+
+  it('is other for a malformed MCP name', () => {
+    expect(claude('mcp__github', {})).toMatchObject({ action: 'other', target: 'mcp__github', confidence: 'unknown' })
+  })
+
+  it('maps Agent and Task to agent.spawn with no target', () => {
+    expect(claude('Agent', { description: 'x', prompt: 'y' })).toEqual({ action: 'agent.spawn', target: '', confidence: 'exact' })
+    expect(claude('Task', { prompt: 'y' })).toMatchObject({ action: 'agent.spawn', target: '' })
+  })
+
+  it('is other, unknown, for a tool it has no row for, named by the tool', () => {
+    expect(claude('TodoWrite', { todos: [] })).toEqual({ action: 'other', target: 'TodoWrite', confidence: 'unknown' })
+  })
+
+  it('does not take a Codex tool name for a Claude tool', () => {
+    expect(claude('shell_command', { command: 'git push' })).toMatchObject({ action: 'other' })
+    expect(codex('Bash', { command: 'git push' })).toMatchObject({ action: 'other' })
+  })
+})
+
+describe('Codex', () => {
+  it('reads shell_command arguments given as the JSON string the rollout holds', () => {
+    expect(codex('shell_command', '{"command":"npm run build","workdir":"/w/demo","timeout_ms":120000}')).toEqual({
+      action: 'process.execute', target: 'npm run', confidence: 'high'
+    })
+  })
+
+  it('reads exec_command cmd, as object or JSON string', () => {
+    expect(codex('exec_command', { cmd: 'git push origin main' })).toMatchObject({ action: 'git.remote.write' })
+    expect(codex('exec_command', '{"cmd":"git log -1"}')).toMatchObject({ action: 'git.read' })
+  })
+
+  it('reads a command given as an argv array, unwrapping bash -lc', () => {
+    expect(codex('shell', { command: ['bash', '-lc', 'git push origin main'] })).toMatchObject({
+      action: 'git.remote.write', confidence: 'high'
+    })
+    expect(codex('shell', { command: ['git', 'status'] })).toMatchObject({ action: 'git.read' })
+    expect(codex('local_shell', { command: ['bash', '-lc', 'npm test && git push'] })).toMatchObject({
+      confidence: 'heuristic', commands: ['process.execute', 'git.remote.write']
+    })
+  })
+
+  it('measures a relative path from the call workdir, not the session folder', () => {
+    expect(codex('shell_command', { command: 'cat package.json', workdir: elsewhere() })).toMatchObject({
+      action: 'filesystem.read', target: 'outside project: package.json', insideProject: false
+    })
+    expect(codex('shell_command', { command: 'cat package.json', workdir: inProj('sub') })).toMatchObject({
+      target: 'sub/package.json', insideProject: true
+    })
+  })
+
+  it('lists the first of two apply_patch files and a count', () => {
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: src/a.ts',
+      '@@',
+      '-old',
+      '+new',
+      '*** Add File: src/b.ts',
+      '+body that must not be recorded',
+      '*** End Patch'
+    ].join('\n')
+    const expected = { action: 'filesystem.write', target: 'src/a.ts (+1)', insideProject: true, confidence: 'exact' }
+    expect(codex('apply_patch', patch)).toEqual(expected)
+    expect(codex('apply_patch', { input: patch })).toEqual(expected)
+    expect(codex('apply_patch', JSON.stringify({ input: patch }))).toEqual(expected)
+  })
+
+  it('counts a Move to destination and a Delete File, and flags one outside', () => {
+    const patch = [
+      '*** Begin Patch',
+      '*** Delete File: src/old.ts',
+      '*** Update File: src/a.ts',
+      '*** Move to: ../moved.ts',
+      '*** End Patch'
+    ].join('\n')
+    expect(codex('apply_patch', patch)).toMatchObject({
+      action: 'filesystem.write', target: 'src/old.ts (+2)', insideProject: false
+    })
+  })
+
+  it('is unknown for an apply_patch with no file header', () => {
+    expect(codex('apply_patch', '*** Begin Patch\n*** End Patch')).toEqual({
+      action: 'filesystem.write', target: 'apply_patch', confidence: 'unknown'
+    })
+  })
+
+  it('maps web search to network.request without the query', () => {
+    expect(codex('web_search', { action: { type: 'search', query: 'ts2345 meaning' } })).toEqual({
+      action: 'network.request', target: 'web search', confidence: 'exact'
+    })
+    expect(codex('web_search_call', { action: { query: 'x' } })).toMatchObject({ action: 'network.request' })
+  })
+
+  it('maps MCP and spawn_agent like Claude does', () => {
+    expect(codex('mcp__github__create_issue', {})).toMatchObject({ action: 'mcp.call', target: 'github.create_issue' })
+    expect(codex('spawn_agent', { message: 'x' })).toEqual({ action: 'agent.spawn', target: '', confidence: 'exact' })
+    expect(codex('update_plan', { plan: [] })).toMatchObject({ action: 'other', target: 'update_plan' })
+  })
+})
+
+// codex 0.160 sends every tool through `exec`, whose input is a little script (measured on 4,392 real calls: 2,783
+// start with exec_command, 720 with apply_patch, and 46% call more than one tool).
+describe('Codex exec scripts', () => {
+  const exec = (source: string, at: string = cwd) => codex('exec', source, at)
+
+  it('reads the command of tools.exec_command, escapes included', () => {
+    expect(exec('const r = await tools.exec_command({cmd:"git push origin main"}); text(r.output);\n')).toEqual({
+      action: 'git.remote.write', target: 'git push', confidence: 'high'
+    })
+    expect(exec('text(await tools.exec_command({cmd:"git commit -m \\"a && b\\"",yield_time_ms:1000}));')).toEqual({
+      action: 'git.local.write', target: 'git commit', confidence: 'high'
+    })
+  })
+
+  it('measures a relative path from the call workdir', () => {
+    const source = `text(await tools.exec_command({cmd:"cat package.json","workdir":${JSON.stringify(elsewhere())}}));`
+    expect(exec(source)).toMatchObject({ action: 'filesystem.read', target: 'outside project: package.json', insideProject: false })
+  })
+
+  it('reads the patch of tools.apply_patch', () => {
+    const patch = '*** Begin Patch\n*** Update File: src/a.ts\n@@\n-x\n+y\n*** Add File: src/b.ts\n+z\n*** End Patch'
+    expect(exec(`await tools.apply_patch(${JSON.stringify(patch)});`)).toEqual({
+      action: 'filesystem.write', target: 'src/a.ts (+1)', insideProject: true, confidence: 'exact'
+    })
+  })
+
+  it('names an MCP call from the tool name alone', () => {
+    expect(exec('text(await tools.mcp__github__create_issue({title:"x",body:"token=abc123456"}));')).toEqual({
+      action: 'mcp.call', target: 'github.create_issue', confidence: 'exact'
+    })
+  })
+
+  it('maps view_image to a file read and web__run to a web request', () => {
+    expect(exec('await tools.view_image({path:"src/a.png"});')).toEqual({
+      action: 'filesystem.read', target: 'src/a.png', insideProject: true, confidence: 'exact'
+    })
+    expect(exec('await tools.web__run({search_query:[{q:"ts2345"}]});')).toEqual({
+      action: 'network.request', target: 'web search', confidence: 'exact'
+    })
+  })
+
+  it('treats a script that calls several tools as a compound line, headlined by the first', () => {
+    expect(exec('await tools.exec_command({cmd:"git status"}); await tools.exec_command({cmd:"git push"});')).toEqual({
+      action: 'git.read', target: 'git status', confidence: 'heuristic', commands: ['git.read', 'git.remote.write']
+    })
+    const r = exec('await tools.view_image({path:"../x.png"}); await tools.exec_command({cmd:"npm test && git push"});')
+    expect(r).toMatchObject({ insideProject: false, commands: ['filesystem.read', 'process.execute', 'git.remote.write'] })
+  })
+
+  it('is unknown for a tool it has no row for, a command it cannot read, or a script with no tool call', () => {
+    expect(exec('await tools.write_stdin({session_id:3,chars:""});')).toEqual({
+      action: 'other', target: 'write_stdin', confidence: 'unknown'
+    })
+    expect(exec('await tools.exec_command({cmd:`git push`});')).toEqual({
+      action: 'process.execute', target: 'shell', confidence: 'unknown'
+    })
+    expect(exec('const x = 1;')).toEqual({ action: 'other', target: 'exec', confidence: 'unknown' })
+  })
+
+  it('reads view_image sent as a plain function call', () => {
+    expect(codex('view_image', '{"path":"../x.png"}')).toMatchObject({
+      action: 'filesystem.read', target: 'outside project: x.png', insideProject: false
+    })
+  })
+
+  it('keeps a token in an exec script out of the target', () => {
+    const r = exec('await tools.exec_command({cmd:"curl -H \\"Authorization: Bearer abc123def456\\" https://api.example.com/x"});')
+    expect(JSON.stringify(r)).not.toContain('abc123def456')
+    expect(r.target).toBe('api.example.com')
+  })
+})
+
+// The Host feeds this from files and streams it does not control.
+describe('malformed and hostile input', () => {
+  it('never throws, and says other and unknown when it cannot read the call', () => {
+    const bad = [undefined, null, 42, [], {}, 'x']
+    for (const input of bad) {
+      for (const tool of ['Bash', 'Read', 'Write', 'WebFetch', 'mcp__a__b', 'Agent']) {
+        expect(() => claude(tool, input)).not.toThrow()
+      }
+      expect(() => codex('exec', input)).not.toThrow()
+      expect(() => codex('apply_patch', input)).not.toThrow()
+    }
+    expect(resolveAction({ provider: 'claude', tool: undefined as never, input: {}, cwd })).toEqual({
+      action: 'other', target: 'unknown', confidence: 'unknown'
+    })
+    expect(() => resolveAction({ provider: 'claude', tool: 'Read', input: { file_path: 'a' }, cwd: undefined as never })).not.toThrow()
+    expect(claude('Bash', { command: ['a', 1, null, { x: 1 }] })).toMatchObject({ confidence: 'unknown' })
+  })
+
+  it('stays fast on a huge word, many heredocs and unbalanced quotes', () => {
+    const started = Date.now()
+    const huge = bash('a1B2'.repeat(250_000))
+    expect(huge.target.length).toBeLessThanOrEqual(60)
+    bash("cat <<A\n".repeat(20_000))
+    bash(`echo "${'x'.repeat(500_000)}`)
+    bash(`${'token'.repeat(100_000)}`)
+    expect(redactTarget('a'.repeat(1_000_000)).length).toBeLessThanOrEqual(1000)
+    expect(Date.now() - started).toBeLessThan(5000)
+  })
+})
+
+describe('redactTarget', () => {
+  it.each([
+    ['Bearer abc123.def456-ghi', 'abc123'],
+    ['Authorization: token ghp_abcdefghijklmnopqrstuvwxyz0123456789', 'ghp_'],
+    ['api_key=hunter2hunter2', 'hunter2'],
+    ['--token s3cr3tvalue', 's3cr3t'],
+    ['sk-ant-api03-abcdefghijklmnopqrstuvwxyz', 'sk-ant'],
+    ['github_pat_11ABCDEFG0123456789_abcdefghijklmnop', 'github_pat_11'],
+    ['xoxb-1234567890-abcdefghij', 'xoxb-'],
+    ['AKIAABCDEFGHIJKLMNOP', 'AKIA'],
+    ['eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r', 'eyJ'],
+    ['3f786850e387550fdab836ed7e6dc881de23001b', '3f786850'],
+    ['QWxhZGRpbjpPcGVuU2VzYW1lMTIzNDU2Nzg5MGFiY2Q=', 'QWxhZGRpbjpP'],
+    ['https://user:hunter2@host.example.com/x', 'hunter2']
+  ])('masks %s', (input, leak) => {
+    const out = redactTarget(input)
+    expect(out).not.toContain(leak)
+    expect(out).toContain('[redacted]')
+  })
+
+  it.each([
+    'git push',
+    'npm test',
+    'src/components/Button.tsx',
+    'outside project: notes.md',
+    '2026-10-23-observe-mode-design-doc.md',
+    'github.create_issue',
+    'api.example.com',
+    'web search'
+  ])('leaves %s alone', (input) => {
+    expect(redactTarget(input)).toBe(input)
+  })
+
+  it('is idempotent', () => {
+    const once = redactTarget('curl -H "Authorization: Bearer abc123def456"')
+    expect(redactTarget(once)).toBe(once)
+  })
+})
+
+describe('no secret reaches a target (review focus 2)', () => {
+  const secrets = [
+    'abc123def456ghi789',
+    'ghp_abcdefghijklmnopqrstuvwxyz0123456789',
+    'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789',
+    'hunter2hunter2'
+  ]
+  const lines = [
+    `curl -s -H "Authorization: Bearer ${secrets[0]}" https://api.example.com/v1`,
+    `curl -u admin:${secrets[3]} https://api.example.com/v1`,
+    `curl https://user:${secrets[3]}@host.example.com/path?token=${secrets[0]}`,
+    `TOKEN=${secrets[0]} npm publish`,
+    `GITHUB_TOKEN=${secrets[1]} gh pr create --body "x"`,
+    `git push https://user:${secrets[1]}@github.com/o/r.git main`,
+    `npm config set //registry.npmjs.org/:_authToken=${secrets[0]}`,
+    `export API_KEY=${secrets[2]} && npm test`,
+    `docker login -u me -p ${secrets[3]}`,
+    `${secrets[2]}`,
+    `./${secrets[2]}.sh`,
+    `Invoke-WebRequest -Uri https://a.example.com -Headers @{Authorization="Bearer ${secrets[0]}"}`
+  ]
+
+  it.each(lines)('%s', (line) => {
+    const text = JSON.stringify(bash(line))
+    for (const s of secrets) expect(text).not.toContain(s)
+    expect(JSON.stringify(claude('PowerShell', { command: line }))).not.toContain(secrets[0])
+    expect(JSON.stringify(codex('exec_command', { cmd: line }))).not.toContain(secrets[1])
+  })
+
+  it('redacts before it clips, so the front of a cut token cannot slip through', () => {
+    const token = 'Zq9Xk2LmVb7NcR4tYp1WsE8dFg5HjA3u6IoP0'
+    const r = bash(`${'a'.repeat(50)}.${token}`)
+    expect(r.target).not.toContain(token.slice(0, 6))
+  })
+
+  it('keeps a target at the shell length cap', () => {
+    expect(bash(`${'a'.repeat(200)}`).target.length).toBeLessThanOrEqual(60)
+  })
+})
