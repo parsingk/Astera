@@ -53,6 +53,13 @@ describe('pluginRefusal (plugin runtime design P12)', () => {
       expect(pluginRefusal(cmd, plugin([...PLUGIN_PERMISSIONS])), cmd).toEqual({ status: 403, body: { error: `${cmd} is not available to plugins` } })
   })
 
+  // Observe mode design §3, §12: no plugin reads the audit log or the rules, whatever it was granted
+  it('never maps an audit or policies command, and refuses each whatever was granted', () => {
+    for (const cmd of [...Object.keys(PLUGIN_COMMAND_PERMISSIONS), ...SDK_COMMANDS_CLOSED_TO_PLUGINS]) expect(cmd).not.toMatch(/^(?:audit|policies)-/)
+    for (const cmd of ['audit-list', 'audit-summary', 'policies-show', 'policies-set-mode', 'policies-set-otherwise', 'policies-rules-add', 'policies-rules-edit', 'policies-rules-remove', 'policies-rules-move', 'policies-rules-reset'])
+      expect(pluginRefusal(cmd, plugin([...PLUGIN_PERMISSIONS])), cmd).toEqual({ status: 403, body: { error: `${cmd} is not available to plugins` } })
+  })
+
   it('refuses a call that names no plugin', () => {
     expect(pluginRefusal('projects-list', undefined)).toEqual({ status: 403, body: { error: 'a plugin call needs its plugin' } })
   })

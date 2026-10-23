@@ -528,3 +528,14 @@ describe('observe mode on the Host, end to end through the CLI', { timeout: 60_0
     })
   })
 })
+
+// The rig above builds what index.ts builds; index.ts itself never runs in a test, so the four places where observe mode
+// is wired into the Host are guarded by its text (as the plugin manager's wiring is, plugins/commands.test.ts)
+describe('index.ts wires observe mode into the Host', () => {
+  it('makes the sources, re-reads the mode when the policies change it, and hands the orch the spent tokens', async () => {
+    const { fileURLToPath } = await import('node:url')
+    const src = await fs.readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8')
+    for (const wiring of ['createAuditSources({', 'createTokenSources({', 'onChange: () => auditRecorder.invalidate()', 'spentTokens: () => tokenStore.spent()'])
+      expect(src, wiring).toContain(wiring)
+  })
+})
