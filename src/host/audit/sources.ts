@@ -18,8 +18,9 @@
 // of a hook line. The Host reads only what it holds: a session the app runs in its own node-pty, with no Host, is not
 // observed (design §8, no second recorder in the app). While the recorder knows the mode is compatibility nothing is
 // read: the audit watcher is stopped, the rollouts are not read and the chat lines are not parsed; when it may be
-// observe again, the audit files and the rollouts are taken up from where they end then, so nothing done while the
-// mode was off is recorded.
+// observe again, the audit files and the rollouts are taken up from where they end then (the recorder tells the sources
+// at the switch, not at their next poll), so nothing done while the mode was off is recorded and nothing done after
+// it is missed.
 //
 // Restarts (Review Focus 3): the audit watcher starts every file already there at its end, and a Host's sessions end
 // with it (its ptys and chat processes are its children), so a new Host has no earlier line of a live session to read
@@ -255,7 +256,7 @@ export interface AuditSources {
 }
 
 export function createAuditSources(d: {
-  recorder: Pick<AuditRecorder, 'record' | 'observing'>
+  recorder: Pick<AuditRecorder, 'record' | 'observing' | 'onObservingChange'>
   ptys: { onMeta: Listen<[string, PtyMeta, 'open' | 'note']>; onExit: Listen<[string, number]> }
   procs: { onMeta: Listen<[string, PtyMeta, 'open' | 'note']>; onLine: Listen<[string, number, string]>; onExit: Listen<[string, number]> }
   /** The profile's hook-events folder, where the observed sessions' audit files are. */
@@ -363,7 +364,9 @@ export function createAuditSources(d: {
   let reading = true
   hooks.start()
   /** Follows the mode: stops the audit watcher when it goes off, and when it may be on again takes the audit files and
-   *  the rollouts up from where they end now, so what was written meanwhile is not read. */
+   *  the rollouts up from where they end now, so what was written meanwhile is not read. Run when the recorder says the
+   *  mode changed, so "now" is the switch, and again at every rollout poll, which finds nothing to do unless that
+   *  was missed. */
   const follow = (): boolean => {
     const on = d.recorder.observing()
     if (on && !reading) {
@@ -375,6 +378,7 @@ export function createAuditSources(d: {
     reading = on
     return on
   }
+  const offMode = d.recorder.onObservingChange(() => void follow())
 
   let polling = false
   const readRollouts = async (): Promise<void> => {
@@ -413,6 +417,7 @@ export function createAuditSources(d: {
       if (reading) await hooks.sweep()
     },
     dispose() {
+      offMode()
       stopPolling()
       hooks.stop()
       for (const off of offs) off()

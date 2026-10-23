@@ -230,6 +230,37 @@ describe('createAuditRecorder', () => {
     expect(h.recorder.observing()).toBe(false)
   })
 
+  // The sources follow the mode from this, not from their next poll (sources.ts): turning observe on must not wait for a
+  // timer, or the lines written until it fires are lost
+  it('tells its listeners when observing() changes: at once when a change may turn observe on, and when a read says it is off', async () => {
+    const h = await rig({ mode: 'compatibility' })
+    const seen: boolean[] = []
+    const off = h.recorder.onObservingChange(() => seen.push(h.recorder.observing()))
+    await h.recorder.flushed()
+    expect(seen).toEqual([false])
+    h.setMode('observe')
+    h.recorder.invalidate()
+    // Before the mode is read again: the sources start at the ends as of this moment
+    expect(seen).toEqual([false, true])
+    await h.recorder.flushed()
+    // The read says observe: nothing changed
+    expect(seen).toEqual([false, true])
+    h.setMode('compatibility')
+    h.recorder.invalidate()
+    await h.recorder.flushed()
+    expect(seen).toEqual([false, true, false])
+    // Any change may turn it on until the mode is read again, so a rule edited while it is off is a true and a false
+    h.recorder.invalidate()
+    await h.recorder.flushed()
+    expect(seen).toEqual([false, true, false, true, false])
+    // A listener that left hears nothing
+    off()
+    h.setMode('observe')
+    h.recorder.invalidate()
+    await h.recorder.flushed()
+    expect(seen).toEqual([false, true, false, true, false])
+  })
+
   it('keeps the mode it read until the policies say it changed', async () => {
     const h = await rig({ mode: 'compatibility' })
     await h.recorder.flushed()

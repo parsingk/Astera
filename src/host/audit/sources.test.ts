@@ -87,14 +87,25 @@ function fakeRegistry() {
   }
 }
 
-/** A recorder that keeps what it is handed, observing until told otherwise. */
+/** A recorder that keeps what it is handed, observing until told otherwise, and tells its listeners when that changes as
+ *  the real one does. */
 function capture() {
   const events: AuditEvent[] = []
   let on = true
+  const listeners = new Set<() => void>()
   return {
     events,
-    setObserving: (v: boolean) => (on = v),
-    recorder: { record: (e: AuditEvent) => void events.push(e), observing: () => on }
+    listening: () => listeners.size,
+    setObserving: (v: boolean) => {
+      if (v === on) return
+      on = v
+      for (const cb of [...listeners]) cb()
+    },
+    recorder: {
+      record: (e: AuditEvent) => void events.push(e),
+      observing: () => on,
+      onObservingChange: (cb: () => void) => (listeners.add(cb), () => void listeners.delete(cb))
+    }
   }
 }
 
@@ -282,6 +293,36 @@ describe('the Claude hook source', () => {
     await sources.poll()
     expect(events.map((e) => e.dedupeKey)).toEqual(['toolu_2'])
     sources.dispose()
+  })
+
+  // The audit watcher starts when the recorder says the mode changed, not at the next rollout poll: a line written
+  // between the switch and that tick would otherwise be lost
+  it('hands over a line written the moment observe is turned on, before any poll has run since', async () => {
+    const { events, recorder, setObserving } = capture()
+    const { sources, audit } = await sourcesFor({ recorder })
+    await fs.writeFile(audit('sess_a'), lineOf(postToolUse('Bash', { command: 'ls' }, 'toolu_0')))
+    setObserving(false)
+    await sources.poll()
+    // Written while the mode was off: not read, as before
+    await fs.appendFile(audit('sess_a'), lineOf(postToolUse('Bash', { command: 'git status' }, 'toolu_1')))
+    setObserving(true)
+    // No poll between the switch and these lines: one of an audit file already there, one of a session whose file is new
+    await fs.appendFile(audit('sess_a'), lineOf(postToolUse('Bash', { command: 'git push' }, 'toolu_2')))
+    await fs.writeFile(audit('sess_b'), lineOf(postToolUse('Read', { file_path: 'a' }, 'toolu_3')))
+    await sources.poll()
+    expect(events.map((e) => [e.sessionId, e.dedupeKey]).sort()).toEqual([
+      ['sess_a', 'toolu_2'],
+      ['sess_b', 'toolu_3']
+    ])
+    sources.dispose()
+  })
+
+  it('follows the recorder for as long as it runs, and not after it is disposed', async () => {
+    const { recorder, listening } = capture()
+    const { sources } = await sourcesFor({ recorder })
+    expect(listening()).toBe(1)
+    sources.dispose()
+    expect(listening()).toBe(0)
   })
 })
 
@@ -548,6 +589,25 @@ describe('the Codex rollout source', () => {
     setObserving(true)
     await sources.poll()
     await fs.appendFile(file, SHELL(T0 + 200, 'call_on') + '\n')
+    await sources.poll()
+    expect(events.map((e) => e.dedupeKey)).toEqual(['call_on'])
+    sources.dispose()
+  })
+
+  // The rollouts are taken up from their ends at the switch, as the audit files are, not at the next poll
+  it('reads a rollout line written the moment observe is turned on, before any poll has run since', async () => {
+    const dir = await tempDir()
+    const file = path.join(dir, 'r.jsonl')
+    await fs.writeFile(file, '')
+    const ptys = fakeRegistry()
+    const { events, recorder, setObserving } = capture()
+    const { sources } = await sourcesFor({ recorder, ptys, now: () => T0 })
+    ptys.open('pty1', note('session', 'sess_cx', { ...OBSERVED, rolloutPath: file }))
+    setObserving(false)
+    await sources.poll()
+    await fs.appendFile(file, SHELL(T0 + 10, 'call_off') + '\n')
+    setObserving(true)
+    await fs.appendFile(file, SHELL(T0 + 20, 'call_on') + '\n')
     await sources.poll()
     expect(events.map((e) => e.dedupeKey)).toEqual(['call_on'])
     sources.dispose()

@@ -83,6 +83,10 @@ export interface AuditRecorder {
   /** False while the mode is known to be compatibility, when every call is dropped: the sources read nothing then
    *  (sources.ts). True while it may be observe, including before it is read and after `invalidate`. */
   observing(): boolean
+  /** Told each time `observing()` changes, as it does: at `invalidate`, which may turn it on before the mode is read
+   *  again, and when a read says compatibility. The sources follow the mode from this rather than from a timer, so
+   *  their files are taken up from where they end at the switch (sources.ts). Returns the stop. */
+  onObservingChange(cb: () => void): () => void
 }
 
 export function createAuditRecorder(d: {
@@ -109,6 +113,20 @@ export function createAuditRecorder(d: {
   let mode: AuditMode | null = null
   /** Bumped by `invalidate`, so a read that began before it is not kept after it. */
   let generation = 0
+  const listeners = new Set<() => void>()
+  /** Keeps `next` as the mode, and tells the listeners when that changed `observing()`. */
+  const keep = (next: AuditMode | null): void => {
+    const was = mode !== 'compatibility'
+    mode = next
+    if (was === (mode !== 'compatibility')) return
+    for (const cb of [...listeners]) {
+      try {
+        cb()
+      } catch (err) {
+        d.log(`audit: a listener of the observe mode failed: ${String(err)}`)
+      }
+    }
+  }
   /** Set while reads fail: one log line per streak. */
   let modeFailing = false
   let pending: AuditRecord[] = []
@@ -124,7 +142,7 @@ export function createAuditRecorder(d: {
     const g = generation
     try {
       const value = await d.mode()
-      if (g === generation) mode = value
+      if (g === generation) keep(value)
       modeFailing = false
       return value
     } catch (err) {
@@ -232,15 +250,16 @@ export function createAuditRecorder(d: {
       }
     },
     invalidate() {
-      mode = null
       generation++
+      keep(null)
       // Read again now, not at the next call: the sources ask `observing` before they read anything
       enqueue(async () => {
         await currentMode()
       })
     },
     flushed: () => queue,
-    observing: () => mode !== 'compatibility'
+    observing: () => mode !== 'compatibility',
+    onObservingChange: (cb) => (listeners.add(cb), () => void listeners.delete(cb))
   }
 }
 
