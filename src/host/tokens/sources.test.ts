@@ -771,3 +771,25 @@ describe('createTokenSources', () => {
     expect(r.ptys.listeners() + r.procs.listeners()).toBe(0)
   })
 })
+
+// Fix round 1, Minor 6: a text guard, as cliUsage.test.ts keeps on docs/cli.md. What the two paragraphs promise about a
+// finished run holds for every run, a run finished before this version included, and they are wrapped as the file is
+describe('docs/cli.md on how long a finished run’s sessions count', () => {
+  const paragraph = (doc: string, opening: string): string[] => {
+    const lines = doc.split(/\r?\n/)
+    const from = lines.findIndex((l) => l.startsWith(opening))
+    if (from < 0) throw new Error(`docs/cli.md has no paragraph opening ${opening}`)
+    const to = lines.findIndex((l, i) => i > from && l.trim() === '')
+    return lines.slice(from, to)
+  }
+  it('says when a run finished before this version ends, and keeps both paragraphs within 120 columns', async () => {
+    const { fileURLToPath } = await import('node:url')
+    const doc = await fs.readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), '../../../docs/cli.md'), 'utf8')
+    const tokens = paragraph(doc, '**`runs get` carries `tokens` and `coordinatorTokens`**')
+    const audit = paragraph(doc, '`audit list` prints the records newest first')
+    for (const p of [tokens, audit]) {
+      expect(p.join(' ')).toMatch(/finished before this version/)
+      for (const line of p) expect(line.length, line).toBeLessThanOrEqual(120)
+    }
+  })
+})
