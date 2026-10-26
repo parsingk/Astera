@@ -30,6 +30,7 @@ import {
   effectLabel,
   filterChoices,
   chooseJob,
+  auditScrollDue,
   focusedFilters,
   jobFilterView,
   nextPageQuery,
@@ -94,6 +95,14 @@ export function SecuritySettings({
   /** Counts the rule changes: Audit Logs reads again after each, since the rules decide every row it shows. */
   const [changes, setChanges] = useState(0)
   const radioGroup = useId()
+  const auditSection = useRef<HTMLElement>(null)
+  const auditShown = useRef<string | null>(null)
+  useEffect(() => {
+    const due = auditScrollDue(focus, policy !== null || failure !== null, auditShown.current)
+    if (due === null) return
+    auditShown.current = due
+    auditSection.current?.scrollIntoView({ block: 'start' })
+  }, [focus, policy, failure])
 
   const load = async (): Promise<void> => {
     const r = await window.api.audit.policies().catch(failed)
@@ -264,7 +273,7 @@ export function SecuritySettings({
           </>
         )}
       </section>
-      <section className="security-section">
+      <section className="security-section" ref={auditSection}>
         <h3 className="security-title">{AUDIT_LOGS_TITLE}</h3>
         <AuditLogs
           mode={policy?.mode ?? null}

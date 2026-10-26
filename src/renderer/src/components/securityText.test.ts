@@ -35,6 +35,7 @@ import {
   OBSERVE_RETRIES,
   jobFilterView,
   chooseJob,
+  auditScrollDue,
   runDetailInstanceKey,
   FOCUS_VALUE,
   focusedFilters,
@@ -469,5 +470,17 @@ describe('an observe read that finishes after Run detail closed', () => {
     expect(observeReadIsCurrent(true, 'run_1', 'run_1')).toBe(true)
     expect(observeReadIsCurrent(false, 'run_1', 'run_1')).toBe(false)
     expect(observeReadIsCurrent(true, 'run_2', 'run_1')).toBe(false)
+  })
+})
+
+// Found on the dev app: Run detail's link opened Security & Access at Policies, the Run's calls a scroll below
+describe('bringing Audit Logs into view for a focus', () => {
+  it('is due once per focus, after the rules have loaded, and never without a focus', () => {
+    const run = { runId: 'run_1', name: 'Fix it' }
+    expect(auditScrollDue(run, false, null)).toBeNull()
+    expect(auditScrollDue(run, true, null)).toBe('run:run_1')
+    expect(auditScrollDue(run, true, 'run:run_1')).toBeNull()
+    expect(auditScrollDue({ jobId: 'job_2', name: 'Other' }, true, 'run:run_1')).toBe('job:job_2')
+    expect(auditScrollDue(undefined, true, null)).toBeNull()
   })
 })

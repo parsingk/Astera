@@ -235,6 +235,15 @@ export function chooseJob(value: string, focus: AuditFocus | undefined, filters:
   return { clearFocus: focus !== undefined, filters: value === '' ? rest : { ...rest, jobId: value } }
 }
 
+/** Whether to bring Audit Logs into view: the focus's key when it is due (a focus not yet shown, once the rules above it
+ *  have loaded and taken their height), null otherwise. Run detail's link is for the Run's calls, which sit below the
+ *  rules (found on the dev app: the tab opened at Policies). */
+export function auditScrollDue(focus: AuditFocus | undefined, loaded: boolean, shown: string | null): string | null {
+  if (focus === undefined || !loaded) return null
+  const key = 'runId' in focus ? `run:${focus.runId}` : `job:${focus.jobId}`
+  return key === shown ? null : key
+}
+
 /** Run detail reads tokens and the would-deny count no more often than this. */
 export const OBSERVE_READ_EVERY_MS = 30_000
 
