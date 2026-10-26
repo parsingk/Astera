@@ -65,13 +65,21 @@ describe('attachProcHost', () => {
     h2.proc.exit(0)
     expect(h2.broadcast.at(-1)).not.toHaveProperty('stderrTail')
   })
+  it('proc-write marked typed is a person’s line', () => {
+    const h = harness()
+    h.spawn()
+    h.send({ t: 'proc-write', id: 'p1', line: '{"type":"user"}', typed: true })
+    expect(h.proc.sent).toEqual(['{"type":"user"}\n'])
+    expect(h.registry.submittedBetween('p1', 0, Date.now() + 1)).toBe('person')
+  })
   it('proc-write reaches stdin with a newline; proc-kill kills; proc-note merges', () => {
     const h = harness()
     h.spawn()
     h.send({ t: 'proc-write', id: 'p1', line: '{"id":1}' })
     expect(h.proc.sent).toEqual(['{"id":1}\n'])
-    // What the app writes is a person's, as an app's pty-write is (observe deferred fix round 1, Important 1)
-    expect(h.registry.submittedBetween('p1', 0, Date.now() + 1)).toBe('person')
+    // A line the app writes is a person's only when it says so (observe deferred fix round 2, Important a): its handshake,
+    // control lines and own turns are not
+    expect(h.registry.submittedBetween('p1', 0, Date.now() + 1)).toBe('host')
     h.send({ t: 'proc-note', id: 'p1', patch: { threadId: 't' } })
     expect(h.registry.list()[0].meta?.restore).toEqual({ threadId: 't' })
     h.send({ t: 'proc-kill', id: 'p1' })

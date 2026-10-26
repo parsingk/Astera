@@ -46,6 +46,21 @@ describe('createHostProcFactory', () => {
     expect(p.pid).toBe(0)
     expect(t.sent[0]).toMatchObject({ t: 'proc-spawn', file: 'codex', args: ['app-server'], opts: { cwd: 'D:/p', env: {} }, meta: opts.meta })
   })
+  // Observe deferred fix round 2, Important a: a person's turn goes to the Host marked, live and from the queue
+  it('marks a line written for a person, live and queued, and no other', () => {
+    const t = transport()
+    const p = createHostProcFactory(t).factory('claude', [], opts)
+    p.write('early', { person: true })
+    p.write('handshake')
+    t.deliver({ t: 'proc-spawned', id: spawnedId(t), pid: 7 })
+    p.write('late', { person: true })
+    expect(t.sent.filter((m) => m.t === 'proc-write')).toEqual([
+      { t: 'proc-write', id: spawnedId(t), line: 'early', typed: true },
+      { t: 'proc-write', id: spawnedId(t), line: 'handshake' },
+      { t: 'proc-write', id: spawnedId(t), line: 'late', typed: true }
+    ])
+  })
+
   it('queues writes until proc-spawned, then flushes them in order and takes the pid', () => {
     const t = transport()
     const p = createHostProcFactory(t).factory('codex', [], opts)

@@ -550,8 +550,10 @@ export class PtyRegistry {
 
   /** `by.person`: a person typed this (an app's `pty-write`, a Slack reply), not the Host itself. `by.side`: which
    *  side typed it; typing that is not only terminal reports gives that side the size, applied before the keystroke
-   *  so what it typed is drawn for its window (`sizeOwner`). */
-  write(id: string, data: string, by?: { person: true; side?: string }): void {
+   *  so what it typed is drawn for its window (`sizeOwner`). `by.delivery`: the app's own delivery (a schedule, a roll's
+   *  prompt), which holds a finished Run's sessions open as a person's input does, but whose Enter is not a person's
+   *  prompt (`submittedBetween`; observe deferred fix round 2, Important a). */
+  write(id: string, data: string, by?: { person: true; side?: string; delivery?: true }): void {
     const e = this.live(id)
     if (!e) return
     const reports = isOnlyTerminalReports(data)
@@ -568,7 +570,7 @@ export class PtyRegistry {
     const at = (this.deps.now ?? Date.now)()
     e.lastWriteAt = at
     if (by?.person) e.lastPersonWriteAt = at
-    if (data.includes('\r')) keepSubmission(e.submissions, { at, person: by?.person === true })
+    if (data.includes('\r')) keepSubmission(e.submissions, { at, person: by?.person === true && by.delivery !== true })
   }
 
   /** When `write` last reached this pty, or null for one never written to or never here. */

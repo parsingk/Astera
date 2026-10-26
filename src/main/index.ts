@@ -598,7 +598,8 @@ app.whenReady().then(async () => {
       write: (sessionId, data) => {
         const alive = core!.sessions.list().some((s) => s.id === sessionId && s.status === 'running')
         if (!alive) return false
-        core!.sessions.write(sessionId, data)
+        // A person's reply: the Host reads its Enter as a person's prompt (observe deferred fix round 2, Important a)
+        core!.sessions.write(sessionId, data, { person: true })
         return true
       },
       postNote: (ts, text) => slack.postThreadNote(ts, text),
@@ -609,7 +610,8 @@ app.whenReady().then(async () => {
       // out through the session driver or as the card's answer (slice 4 design §7.3).
       isChat: (sid) => core!.chat.has(sid),
       pendingRequest: (sid) => core!.chat.state(sid)?.request ?? null,
-      deliverChat: (sid, text) => sessionDriver.deliver(sid, text),
+      // A person's reply, written marked as a person's (observe deferred fix round 2, Important a)
+      deliverChat: (sid, text) => sessionDriver.deliver(sid, text, { person: true }),
       answerChat: (sid, requestId, answer) => core!.chat.answer(sid, requestId, answer),
       log: slackLog
     }),
@@ -735,8 +737,8 @@ app.whenReady().then(async () => {
   const sessionDriver = routedDriver(
     (id) => core!.chat.has(id),
     ptyDriver({
-      write: (id, d) => {
-        core!.sessions.write(id, d) // a throw is the rejection the caller sees
+      write: (id, d, by) => {
+        core!.sessions.write(id, d, by) // a throw is the rejection the caller sees
       }
     }),
     // The manager's `send` resolves for an id it does not know, and a silent resolve reads as "delivered"
@@ -746,8 +748,8 @@ app.whenReady().then(async () => {
     // gone**, so the second half is kept here, at the seam, rather than left to the router's `isChat`
     // check a microsecond earlier.
     chatDriver({
-      send: (id, text) =>
-        core!.chat.has(id) ? core!.chat.send(id, text) : Promise.reject(new Error(`no chat session: ${id}`))
+      send: (id, text, by) =>
+        core!.chat.has(id) ? core!.chat.send(id, text, by) : Promise.reject(new Error(`no chat session: ${id}`))
     })
   )
   // Session scheduler: runs periodic commands automatically. Logs share rolling.log ([sched] prefix)
@@ -1220,7 +1222,7 @@ app.whenReady().then(async () => {
       onTabResumeReady: (fn) => {
         tabResumeTextRef = fn
       },
-      deliverChat: (sid, text) => sessionDriver.deliver(sid, text)
+      deliverChat: (sid, text, by) => sessionDriver.deliver(sid, text, by)
     },
     () => refreshTrayMenu(win), // rebuild Open/Quit in the new language after settings.setLang
     // 위 두 send 탭이 부를 자리를 받아 둔다. registerIpc 가 돌아오면서 바로 채워지고,

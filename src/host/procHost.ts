@@ -24,8 +24,9 @@ export function attachProcHost(a: {
         return true
       }
       case 'proc-write':
-        // What the app writes is a person's, as its pty-write is: a turn typed in a chat pane, an answer to a card
-        a.registry.write(m.id, m.line, { person: true })
+        // A person's line only when the app marks it so: the turn a person sent (observe deferred fix round 2, I-a). Its
+        // handshake, control lines and own turns (a schedule, a roll's carry-on) are not, nor any line from an older app
+        a.registry.write(m.id, m.line, m.typed === true ? { person: true } : undefined)
         return true
       case 'proc-kill':
         a.registry.kill(m.id)

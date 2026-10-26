@@ -1374,3 +1374,45 @@ describe('ChatSessionManager.spawn — the session id in the CLI env (final revi
     expect(factory.mock.calls[1][2].env.ASTERA_SESSION).toBe(codex.id)
   })
 })
+
+// Observe deferred fix round 2, Important a: the Host tells a person's prompt by the line that carries it, so only the
+// turn a person's send writes goes out marked; the carry-on, an answer and every other line do not
+describe('ChatSessionManager.send — a person’s turn is written marked', () => {
+  const marking = (): NonNullable<ChatManagerDeps['createAdapter']> => (a) => {
+    a.proc.onLine(() => {})
+    return {
+      start: () => Promise.resolve(),
+      send: (text) => {
+        a.proc.write(`turn ${text}`)
+        return Promise.resolve()
+      },
+      interrupt: () => Promise.resolve(),
+      answer: () => {
+        a.proc.write('answer')
+        return Promise.resolve()
+      },
+      setModel: () => Promise.resolve(),
+      setPermissionMode: () => Promise.resolve(),
+      listPermissionModes: () => Promise.resolve([]),
+      listModels: () => Promise.resolve([]),
+      state: () => ({}) as ChatState,
+      on: () => () => {},
+      kill: () => {}
+    }
+  }
+  it('marks the line a person’s send writes, and no other', async () => {
+    const proc = new FakeProc()
+    const by: Array<[string, unknown]> = []
+    proc.write = (line: string, mark?: { person: true }) => void by.push([line, mark])
+    const manager = new ChatSessionManager({ factory: () => new FakeProc(), descriptors: makeDescriptors('win32'), homeDir: path.join('home', 'tester'), platform: 'win32', version: '1.0.0', log: () => {}, createAdapter: marking() })
+    manager.adopt({ id: 'c1', proc, restore: { accountId: 'acc-cl', cwd: 'D:/p', title: 't', provider: 'claude', threadId: 'th' }, truncated: false })
+    await manager.send('c1', 'from a person', { person: true })
+    await manager.send('c1', 'from a schedule')
+    await manager.answer('c1', 'r1', { kind: 'approval', decision: 'accept' })
+    expect(by).toEqual([
+      ['turn from a person', { person: true }],
+      ['turn from a schedule', undefined],
+      ['answer', undefined]
+    ])
+  })
+})

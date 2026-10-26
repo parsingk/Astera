@@ -35,7 +35,8 @@ describe('hostInboxRoutes (Slack in the Host Task 7, spec §3.4)', () => {
   it('a reply to a chat the app writes goes to the app\'s chatSend, never to the Host adapter', async () => {
     const h = rig({ hostWrites: false })
     await h.routes.deliverChat!('c1', 'next turn')
-    expect(h.act).toHaveBeenCalledWith('chatSend', ['c1', 'next turn'])
+    // A person's reply, so the app writes it marked as a person's (observe deferred fix round 2, Important a)
+    expect(h.act).toHaveBeenCalledWith('chatSend', ['c1', 'next turn', { person: true }])
     expect(h.chats.send).not.toHaveBeenCalled()
     const w = rig()
     await w.routes.deliverChat!('c1', 'next turn')

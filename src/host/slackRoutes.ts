@@ -57,7 +57,8 @@ export function hostInboxRoutes(d: {
       if (d.chats?.isWriter(sid)) return d.chats.send(sid, text, undefined, { person: true })
       const server = d.server()
       if (!server.hasApp()) throw new Error(NOBODY)
-      const r = (await server.act('chatSend', [sid, text])) as { sent?: unknown; reason?: unknown; pending?: unknown } | null
+      // A person's reply: the app writes it marked as a person's (observe deferred fix round 2, Important a)
+      const r = (await server.act('chatSend', [sid, text, { person: true }])) as { sent?: unknown; reason?: unknown; pending?: unknown } | null
       if (r?.sent !== true) throw new Error(r?.pending ? 'a card is open in Astera' : String(r?.reason ?? 'Astera did not deliver it'))
     },
     answerChat: async (sid: string, requestId: string, answer: ChatAnswer): Promise<void> => {

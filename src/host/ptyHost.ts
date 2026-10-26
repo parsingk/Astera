@@ -55,8 +55,13 @@ export function attachPtyHost(a: {
         // A person typing in a tab, as far as the Host can tell: the app's own few deliveries come this
         // way too, which only makes a finished Run's grace wait longer (registry.ts, lastPersonWriteAt).
         // The app's side for the size: a person typing in the tab takes it back from a controller (registry `sizeOwner`);
-        // the app's own writes do not (final review I4).
-        a.registry.write(m.id, m.data, m.typed === true ? { person: true, side: 'local' } : { person: true })
+        // the app's own writes do not (final review I4). Only what the app marks a person's, typed in the tab or sent from
+        // elsewhere (a Slack reply), is a person's prompt; its own deliveries are not (observe deferred fix round 2, I-a).
+        a.registry.write(
+          m.id,
+          m.data,
+          m.typed === true ? { person: true, side: 'local' } : m.person === true ? { person: true } : { person: true, delivery: true }
+        )
         return true
       case 'pty-resize': {
         // Kept, not applied, while a controller owns the size: the app is told the size the pty has instead.

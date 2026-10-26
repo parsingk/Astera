@@ -68,3 +68,32 @@ describe('routedDriver', () => {
     expect(calls).toEqual(['chat:c1', 'pty:s1', 'pty:c1'])
   })
 })
+
+// Observe deferred fix round 2, Important a: a delivery made for a person (a Slack reply) carries the mark down to the
+// write, through either driver, so the Host can tell the prompt was a person's; any other delivery carries none
+describe('a delivery made for a person', () => {
+  it('passes the mark to the pty’s writes and to the chat’s send, and none for any other delivery', async () => {
+    vi.useFakeTimers()
+    const writes: Array<[string, unknown]> = []
+    const sends: Array<[string, unknown]> = []
+    const d = routedDriver(
+      (id) => id === 'c1',
+      ptyDriver({ write: (_id, data, by) => void writes.push([data, by]) }),
+      chatDriver({ send: async (_id, text, by) => void sends.push([text, by]) })
+    )
+    const typed = d.deliver('s1', 'hi', { person: true })
+    await vi.advanceTimersByTimeAsync(ENTER_DELAY_MS)
+    await typed
+    await d.deliver('c1', 'hello', { person: true })
+    await d.deliver('c1', 'scheduled')
+    vi.useRealTimers()
+    expect(writes).toEqual([
+      ['hi', { person: true }],
+      ['\r', { person: true }]
+    ])
+    expect(sends).toEqual([
+      ['hello', { person: true }],
+      ['scheduled', undefined]
+    ])
+  })
+})

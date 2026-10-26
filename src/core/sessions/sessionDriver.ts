@@ -11,31 +11,35 @@
 /** The gap between the command text and Enter on a pty — time for the TUI to digest the paste. */
 export const ENTER_DELAY_MS = 150
 
+/** A delivery made for a person (a Slack reply): carried down to the write, where the Host tells a person's prompt by it
+ *  (observe deferred fix round 2, Important a). A schedule's or a roll's delivery carries none. */
+export type ForPerson = { person: true } | undefined
+
 export interface SessionDriver {
   /** One message to the session. Resolves once it has been handed to the CLI (for a pty: after the
    *  Enter went out); rejects when the CLI refused it or the session is gone. */
-  deliver(sessionId: string, text: string): Promise<void>
+  deliver(sessionId: string, text: string, by?: ForPerson): Promise<void>
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 export function ptyDriver(deps: {
-  write(sessionId: string, data: string): void
+  write(sessionId: string, data: string, by?: ForPerson): void
   wait?: (ms: number) => Promise<void>
 }): SessionDriver {
   const wait = deps.wait ?? sleep
   return {
-    async deliver(sessionId, text) {
-      deps.write(sessionId, text) // a throw here is the rejection — no Enter follows a failed paste
+    async deliver(sessionId, text, by) {
+      deps.write(sessionId, text, by) // a throw here is the rejection — no Enter follows a failed paste
       await wait(ENTER_DELAY_MS)
-      deps.write(sessionId, '\r')
+      deps.write(sessionId, '\r', by)
     }
   }
 }
 
-export function chatDriver(deps: { send(sessionId: string, text: string): Promise<void> }): SessionDriver {
+export function chatDriver(deps: { send(sessionId: string, text: string, by?: ForPerson): Promise<void> }): SessionDriver {
   return {
-    deliver: (sessionId, text) => deps.send(sessionId, text)
+    deliver: (sessionId, text, by) => deps.send(sessionId, text, by)
   }
 }
 
@@ -47,6 +51,6 @@ export function routedDriver(
   chat: SessionDriver
 ): SessionDriver {
   return {
-    deliver: (sessionId, text) => (isChat(sessionId) ? chat : pty).deliver(sessionId, text)
+    deliver: (sessionId, text, by) => (isChat(sessionId) ? chat : pty).deliver(sessionId, text, by)
   }
 }

@@ -13,8 +13,9 @@ export interface ProcLike {
    *  absent when nothing was collected — an older Host does not send it (design S4) — and that is
    *  different from a process that simply printed nothing. */
   onExit(cb: (e: { exitCode: number; stderrTail?: string }) => void): void | (() => void)
-  /** One line to stdin; the newline is added. */
-  write(line: string): void
+  /** One line to stdin; the newline is added. `by.person`: the turn a person sent, which only a process behind the Host
+   *  reads (it tells a person's prompt by it, observe deferred fix round 2); never a handshake or control line. */
+  write(line: string, by?: { person: true }): void
   kill(): void
   /** Merges keys into the note this process was spawned with. Absent on the fallback for the reason
    *  PtyLike.remember is: only a Host-owned process has anywhere to keep a note. */

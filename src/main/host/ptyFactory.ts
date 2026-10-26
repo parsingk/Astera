@@ -40,11 +40,11 @@ export interface HostPtyTransport {
 /** Defined in core so the Host can read it as well; kept exported here for the app's callers. */
 export { SPAWN_DEADLINE_MS } from '../../core/host/unresponsive'
 
-type Queued = { t: 'pty-write'; data: string; typed?: true } | { t: 'pty-resize'; cols: number; rows: number }
+type Queued = { t: 'pty-write'; data: string; typed?: true; person?: true } | { t: 'pty-resize'; cols: number; rows: number }
 
 const sent = (id: string, q: Queued): ClientMessage =>
   q.t === 'pty-write'
-    ? { t: 'pty-write', id, data: q.data, ...(q.typed ? { typed: true as const } : {}) }
+    ? { t: 'pty-write', id, data: q.data, ...(q.typed ? { typed: true as const } : {}), ...(q.person ? { person: true as const } : {}) }
     : { t: 'pty-resize', id, cols: q.cols, rows: q.rows }
 
 function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: number, startDead = false): PtyLike {
@@ -169,7 +169,8 @@ function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: n
     onExit: (cb) => {
       onExit = cb
     },
-    write: (data, by) => forward({ t: 'pty-write', data, ...(by?.typed ? { typed: true as const } : {}) }),
+    write: (data, by) =>
+      forward({ t: 'pty-write', data, ...(by?.typed ? { typed: true as const } : {}), ...(by?.person ? { person: true as const } : {}) }),
     resize: (cols, rows) => forward({ t: 'pty-resize', cols, rows }),
     // kill, pause and resume go out at once, even while pending, rather than queuing like write and
     // resize do: they carry no payload the Host needs the pty to already exist for, and the

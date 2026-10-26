@@ -179,6 +179,20 @@ describe('PtyRegistry', () => {
     expect(r.submittedBetween('p1', 0, 3000)).toBeNull()
   })
 
+  // Fix round 2, Important a: an app's own delivery (a schedule, a roll's prompt) still holds a finished Run's sessions
+  // open as before, but its Enter is not a person's prompt
+  it('counts an app’s own delivery toward lastPersonWrite, but not as a person’s submission', () => {
+    let clock = 1000
+    const r = new PtyRegistry({ spawn: () => fakePty(), log: () => {}, now: () => clock })
+    r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    r.write('p1', 'status\r', { person: true, delivery: true })
+    expect(r.lastPersonWrite('p1')).toBe(1000)
+    expect(r.submittedBetween('p1', 0, 2000)).toBe('host')
+    clock = 1500
+    r.write('p1', 'hi\r', { person: true })
+    expect(r.submittedBetween('p1', 0, 2000)).toBe('person')
+  })
+
   // A message for a session that has gone is ordinary, not exceptional: the app may have sent it
   // before it learned the pty exited.
   it('ignores every command for an id it does not have', () => {

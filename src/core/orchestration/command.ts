@@ -617,8 +617,9 @@ export interface OrchServerDeps {
   /** One turn into a chat session. With the app attached the app delivers it through its session
    *  driver (the scheduler's and Slack's), so its turn state stays its own, and refuses while a card
    *  is open. With no app the Host writes the adapter's own bytes to the process itself
-   *  (host/orchDeps.ts `chatSend`). Either way one at a time per session. */
-  chatSend?(id: string, text: string): Promise<ChatSendResult>
+   *  (host/orchDeps.ts `chatSend`). Either way one at a time per session. `by.person`: a person sent it (a person's
+   *  `sessions send`, a Slack reply), written marked as a person's line (observe deferred fix round 2). */
+  chatSend?(id: string, text: string, by?: { person: true }): Promise<ChatSendResult>
   /** The open prompts, from the process that is each session's writer (chat takeover §3.5). The Host
    *  answers its own writer sessions and asks an attached app for the rest; `complete` is false when the
    *  app could not be asked. The app answers every session it holds, complete. */

@@ -131,13 +131,11 @@ export function createHostChats(d: HostChatsDeps): HostChats {
   // tell a send the adapter refused before the wire (codex with no thread, a NotWriterError) from one
   // whose line went out. Only a registry write that returned counts.
   const writes = new Map<string, number>()
-  /** Set during the synchronous part of a send made for a person (`send`'s `by`), where the adapter writes the turn:
-   *  its line is written as a person's (observe deferred fix round 1, I1). */
-  let forPerson = false
   const counted: HostProcsDeps['registry'] = {
     open: (o) => d.procs.open(o),
-    write: (procId, line) => {
-      d.procs.write(procId, line, forPerson ? { person: true } : undefined)
+    // `by`: the turn a send made for a person writes (the manager marks it), written as a person's line
+    write: (procId, line, by) => {
+      d.procs.write(procId, line, by)
       writes.set(procId, (writes.get(procId) ?? 0) + 1)
     },
     kill: (procId) => d.procs.kill(procId),
@@ -306,16 +304,7 @@ export function createHostChats(d: HostChatsDeps): HostChats {
 
   const send = async (id: string, text: string, wrote?: () => void, by?: { person: true }): Promise<void> => {
     if (!isWriter(id)) throw new Error('not the writer')
-    // Only for the synchronous part, where both adapters write the turn (carryOnAfterAdopt): a write after the wait is
-    // another's
-    forPerson = by?.person === true
-    let done: Promise<void>
-    try {
-      done = markIfWritten(procOf(id), () => manager.send(id, text), wrote)
-    } finally {
-      forPerson = false
-    }
-    await done
+    await markIfWritten(procOf(id), () => manager.send(id, text, by), wrote)
   }
 
   return {
