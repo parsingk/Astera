@@ -602,7 +602,12 @@ export function createHostOrch(a: {
       })
     | null
 }): HostOrch {
-  const store = new OrchestrationStore(path.join(a.profileDir, 'orchestration.json'))
+  // The TTL cleanup reads the Host's clock; a time it cannot parse falls back to the wall clock rather than
+  // pruning every finished Run.
+  const store = new OrchestrationStore(path.join(a.profileDir, 'orchestration.json'), () => {
+    const at = Date.parse(a.now())
+    return Number.isFinite(at) ? at : Date.now()
+  })
   // Built at the first ask: only a call that marks the default needs the descriptors.
   let descriptors: ReturnType<typeof makeDescriptors> | undefined
   const loggedIn = a.isLoggedIn ?? ((x: Account) => isLoggedIn(x, (descriptors ??= makeDescriptors(process.platform))))

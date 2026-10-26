@@ -423,7 +423,7 @@ async function rig(o: RigOpts = {}) {
     statusOf: (id: string) => orch.state().tasks.find((t) => t.id === id)?.status,
     touch: async (id: string): Promise<void> => {
       const s = orch.state()
-      await orch.internalDeps().setState({ ...s, tasks: s.tasks.map((t) => (t.id === id ? { ...t, updatedAt: '2026-09-25T00:00:09.000Z' } : t)) })
+      await orch.internalDeps().setState({ ...s, tasks: s.tasks.map((t) => (t.id === id ? { ...t, updatedAt: new Date(NOW_MS + 9_000).toISOString() } : t)) })
     },
     gates: () => openGates(),
     openGateQuestion: () => openGates()[0]?.question ?? ''
