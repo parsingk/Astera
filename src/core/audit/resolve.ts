@@ -800,7 +800,9 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
     let j = at + 3
     for (; j < line.length; j++) {
       const e = line[j]
-      if (e === '$' && line[j + 1] === '(') {
+      if (e === '"') return -1 // the quote that ends the word comes before any `))`: this is no arithmetic
+      if (e === '\\') j++
+      else if (e === '$' && line[j + 1] === '(') {
         if (line[j + 2] === '(') {
           open++
           j += 2
@@ -847,7 +849,16 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
           i++
         } else if (flavor === 'posix' && d === '$' && n === '(' && line[i + 2] === '(') {
           cur += '$' // in PowerShell `$((` is a sub-expression that starts with a parenthesis
-          i = arithmetic(i)
+          const kept: number = later.length
+          const wasUnread: boolean = unread
+          const to = arithmetic(i)
+          if (to >= 0) i = to
+          else {
+            // no `))` closed it before the quote, so the shell reads a command substitution that starts with a subshell
+            later.length = kept
+            unread = wasUnread
+            i = substitute(i, false)
+          }
         } else if ((d === '$' && n === '(') || (d === '`' && flavor === 'posix')) {
           const to = substitute(i, d === '`')
           if (to === i) cur += d // too deep to read: the text stays the word's

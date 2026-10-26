@@ -389,4 +389,12 @@ describe('decide, a denied command the resolver must reach', () => {
     expect(decide(ps('try {git push} catch {}'), p)).toEqual(push)
     expect(decide(ps('switch ($x) {a {git push}}'), p)).toEqual(push)
   })
+
+  it('would deny after a quoted $(( that no )) closes, which the shell reads as a substitution', () => {
+    expect(decide(bash('echo "$((git push) )" ; rm -rf ../x'), p)).toEqual(push)
+    expect(decide(bash('echo "$((git push) )"'), p)).toEqual(push)
+    expect(decide(bash('echo "$((1 + 2))" ; git push'), p)).toEqual(push)
+    expect(decide(bash('echo "$(( $(git push) + 1 ))"'), p)).toEqual(push)
+    expect(decide(bash('echo "$((1 + 2))"'), p)).toEqual({ decision: 'allow' })
+  })
 })
