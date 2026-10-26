@@ -245,7 +245,6 @@ export const ko = {
   'settings.security.filter.action': '동작',
   'settings.security.filter.allActions': '모든 동작',
   'settings.security.filter.run': '{name} 의 호출만',
-  'settings.security.filter.clear': '필터 해제',
   'settings.security.col.time': '시각',
   'settings.security.col.session': '세션',
   'settings.security.col.action': '동작',

@@ -1310,8 +1310,6 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .security-rule-action { min-width: 200px; }
 .security-new-rule { flex-wrap: wrap; }
 .security-audit { display: flex; flex-direction: column; gap: 12px; }
-.security-run-filter { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-dim); }
-.security-run-filter b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .security-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .security-counts { display: flex; flex-wrap: wrap; gap: 8px; }
 .security-decision { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: var(--radius-sm); white-space: nowrap; font-variant-numeric: tabular-nums; }

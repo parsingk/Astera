@@ -30,6 +30,9 @@ import {
   observeTargetOf,
   pageOf,
   periodSince,
+  FOCUS_VALUE,
+  focusedFilters,
+  jobFilterChange,
   recordTime,
   retentionSince,
   rowTime,
@@ -325,3 +328,23 @@ describe('securityText', () => {
     expect(wouldDenyLine({ allow: 0, wouldDeny: 0, unknown: 0, stoppedAtLimit: false }, en)).toBeNull()
   })
 })
+
+// The Job focus Run detail opens Audit Logs on is the Job filter's own choice, not a chip beside the filters
+describe('the Job focus', () => {
+  it('shows as the selected Job filter, and the focus is the Job filter, not another filter over it', () => {
+    const focus = { runId: 'run_1', name: 'Fix it' }
+    expect(focusedFilters({ jobId: 'job_9', decision: 'allow' }, focus)).toEqual({ decision: 'allow', runId: 'run_1' })
+    expect(focusedFilters({ jobId: 'job_9', runId: 'run_7' }, { jobId: 'job_2', name: 'x' })).toEqual({ jobId: 'job_2' })
+    expect(focusedFilters({ jobId: 'job_9' }, undefined)).toEqual({ jobId: 'job_9' })
+    expect(FOCUS_VALUE).not.toBe('')
+  })
+
+  it('clears the focus when the Job filter is changed to another Job or to all Jobs, and keeps it when it is picked again', () => {
+    expect(jobFilterChange('job_3', true)).toEqual({ clearFocus: true, jobId: 'job_3' })
+    expect(jobFilterChange('', true)).toEqual({ clearFocus: true, jobId: undefined })
+    expect(jobFilterChange(FOCUS_VALUE, true)).toEqual({ clearFocus: false })
+    expect(jobFilterChange('job_3', false)).toEqual({ clearFocus: false, jobId: 'job_3' })
+    expect(jobFilterChange('', false)).toEqual({ clearFocus: false, jobId: undefined })
+  })
+})
+

@@ -241,7 +241,6 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.security.filter.action': 'Action',
   'settings.security.filter.allActions': 'All actions',
   'settings.security.filter.run': 'Only calls from {name}',
-  'settings.security.filter.clear': 'Clear filter',
   'settings.security.col.time': 'Time',
   'settings.security.col.session': 'Session',
   'settings.security.col.action': 'Action',

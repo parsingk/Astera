@@ -208,7 +208,6 @@ export const es: Catalog = {
   'settings.security.filter.action': 'Acción',
   'settings.security.filter.allActions': 'Todas las acciones',
   'settings.security.filter.run': 'Solo las llamadas de {name}',
-  'settings.security.filter.clear': 'Quitar filtro',
   'settings.security.col.time': 'Hora',
   'settings.security.col.session': 'Sesión',
   'settings.security.col.action': 'Acción',

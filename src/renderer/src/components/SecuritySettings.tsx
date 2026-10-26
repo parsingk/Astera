@@ -28,6 +28,9 @@ import {
   decisionLabel,
   effectLabel,
   filterChoices,
+  FOCUS_VALUE,
+  focusedFilters,
+  jobFilterChange,
   nextPageQuery,
   pageOf,
   recordTime,
@@ -388,8 +391,8 @@ function AuditLogs({
   const focusRunId = focus !== undefined && 'runId' in focus ? focus.runId : undefined
   const focusJobId = focus !== undefined && 'jobId' in focus ? focus.jobId : undefined
   useEffect(() => {
-    const focused = { ...(focusRunId !== undefined ? { runId: focusRunId } : {}), ...(focusJobId !== undefined ? { jobId: focusJobId } : {}) }
-    const q = auditQuery({ ...filters, ...focused }, period, new Date())
+    const focused: AuditFocus | undefined = focusRunId !== undefined ? { runId: focusRunId, name: '' } : focusJobId !== undefined ? { jobId: focusJobId, name: '' } : undefined
+    const q = auditQuery(focusedFilters(filters, focused), period, new Date())
     query.current = q
     const n = ++reading.current
     setLoading(true)
@@ -433,20 +436,14 @@ function AuditLogs({
 
   const setFilter = (k: keyof AuditFilters, v: string): void => setFilters((f) => ({ ...f, [k]: v === '' ? undefined : v }))
   const sessionItems = choices.sessions.map((s) => ({ value: s.sessionId, label: sessionLabel(s, sessionTitle(s.sessionId), t) }))
-  const jobItems = choices.jobs.map((j) => ({ value: j.id, label: (j.runId !== undefined ? runName(j.runId) : undefined) ?? j.id.slice(0, 12) }))
+  const jobItems = choices.jobs
+    .filter((j) => focus === undefined || ('runId' in focus ? j.runId !== focus.runId : j.id !== focus.jobId))
+    .map((j) => ({ value: j.id, label: (j.runId !== undefined ? runName(j.runId) : undefined) ?? j.id.slice(0, 12) }))
   const line = rows === null ? null : auditStateLine({ failure, mode, count: rows.length }, t)
 
   return (
     <div className="security-audit" aria-busy={loading || loadingMore}>
       <p className="settings-hint">{t('settings.security.audit.hint')}</p>
-      {focus !== undefined && (
-        <div className="security-run-filter">
-          <b>{t('settings.security.filter.run', { name: focus.name })}</b>
-          <button className="detail-clear" title={t('settings.security.filter.clear')} aria-label={t('settings.security.filter.clear')} onClick={onClearFocus}>
-            <X size={12} />
-          </button>
-        </div>
-      )}
       <div className="security-filters">
         <Select
           ariaLabel={t('settings.security.period.label')}
@@ -468,9 +465,17 @@ function AuditLogs({
         />
         <Select
           ariaLabel={t('settings.security.filter.job')}
-          items={[{ value: '', label: t('settings.security.filter.allJobs') }, ...jobItems]}
-          value={filters.jobId ?? ''}
-          onChange={(v) => setFilter('jobId', v)}
+          items={[
+            { value: '', label: t('settings.security.filter.allJobs') },
+            ...(focus !== undefined ? [{ value: FOCUS_VALUE, label: t('settings.security.filter.run', { name: focus.name }) }] : []),
+            ...jobItems
+          ]}
+          value={focus !== undefined ? FOCUS_VALUE : (filters.jobId ?? '')}
+          onChange={(v) => {
+            const c = jobFilterChange(v, focus !== undefined)
+            if (c.clearFocus) onClearFocus()
+            if ('jobId' in c) setFilters((f) => ({ ...f, jobId: c.jobId }))
+          }}
         />
         <Select
           ariaLabel={t('settings.security.filter.decision')}

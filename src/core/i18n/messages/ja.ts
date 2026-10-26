@@ -204,7 +204,6 @@ export const ja: Catalog = {
   'settings.security.filter.action': '動作',
   'settings.security.filter.allActions': 'すべての動作',
   'settings.security.filter.run': '{name} の呼び出しだけ',
-  'settings.security.filter.clear': 'フィルターを解除',
   'settings.security.col.time': '時刻',
   'settings.security.col.session': 'セッション',
   'settings.security.col.action': '動作',

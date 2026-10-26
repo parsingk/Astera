@@ -192,6 +192,24 @@ export function observeTargetOf(foldedRunId: string | undefined, openedId: strin
  *  filter's chip. */
 export type AuditFocus = ReturnType<typeof observeTargetOf> & { name: string }
 
+/** The Job filter's value while a focus is the Job it shows. */
+export const FOCUS_VALUE = '@focus'
+
+/** The filters with the focus in place of any Job or Run filter: the focus is what the Job filter shows, so nothing
+ *  under it speaks for the rows. */
+export function focusedFilters(f: AuditFilters, focus: AuditFocus | undefined): AuditFilters {
+  if (focus === undefined) return f
+  const { jobId: _job, runId: _run, ...rest } = f
+  return { ...rest, ...('runId' in focus ? { runId: focus.runId } : { jobId: focus.jobId }) }
+}
+
+/** What choosing `value` in the Job filter does: the Job it sets (none for all Jobs), and whether the focus ends. The
+ *  focus ends with any change of the filter; picking the focus again changes nothing. */
+export function jobFilterChange(value: string, focused: boolean): { clearFocus: boolean; jobId?: string } {
+  if (focused && value === FOCUS_VALUE) return { clearFocus: false }
+  return { clearFocus: focused, jobId: value === '' ? undefined : value }
+}
+
 /** Run detail reads tokens and the would-deny count no more often than this. */
 export const OBSERVE_READ_EVERY_MS = 30_000
 
