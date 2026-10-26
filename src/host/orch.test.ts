@@ -2719,6 +2719,32 @@ describe('GitHub writes and request receipts (MCP P2-B)', () => {
     expect(g.created).toHaveLength(1)
   })
 
+  // Credential-use records (credentials design §6): a GitHub write through the Host is recorded for whoever asked
+  it('an agent’s github-ci-rerun leaves a session record, and the app’s an app record', async () => {
+    const { projectId } = await finishedRun()
+    const g = github()
+    const got: { actor: string; sessionId?: string; action: string; resource: string }[] = []
+    const orch = orchOver({ act, github: g.dep, useRecorder: { record: (u) => void got.push(u) } })
+    const caller = (role: 'cli' | 'app') => ({ role, toOthers: () => {} })
+    await orch.call({ cmd: 'github-ci-rerun', args: { project: projectId, runId: 77 }, sessionId: 'ses_agent', from: caller('cli') })
+    await orch.call({ cmd: 'github-ci-rerun', args: { project: projectId, runId: 78 }, sessionId: '', from: caller('app') })
+    expect(got.map((u) => [u.actor, u.sessionId, u.action, u.resource])).toEqual([
+      ['session', 'ses_agent', 'github.ci.rerun', 'unknown repository 77'],
+      ['app', undefined, 'github.ci.rerun', 'unknown repository 78']
+    ])
+  })
+
+  it('github-pr-create hands the pull request maker runners that record for the caller', async () => {
+    const { runId } = await finishedRun()
+    const g = github()
+    const deps: unknown[] = []
+    const orch = orchOver({ act, github: { ...g.dep, createPr: async (req: unknown, d?: unknown) => (deps.push(d), g.dep.createPr(req)) }, useRecorder: { record: () => {} } })
+    await orch.call({ cmd: 'github-pr-create', args: { run: runId }, sessionId: '' })
+    expect(deps).toHaveLength(1)
+    expect(typeof (deps[0] as { runGh?: unknown }).runGh).toBe('function')
+    expect(typeof (deps[0] as { runGit?: unknown }).runGit).toBe('function')
+  })
+
   // The reads still leave no receipt: a second read reads GitHub again.
   it('a GitHub read with a request id leaves no receipt', async () => {
     const { projectId } = await finishedRun()

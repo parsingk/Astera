@@ -56,14 +56,16 @@ export interface PrCreateDeps {
   normalizeBase?: (repo: string, base: string) => Promise<string>
 }
 
+/** The push `createPullRequest` makes when it is given no git runner, so a caller wrapping it keeps the same timeout. */
+export const defaultPrGit = (a: string[], cwd: string): Promise<GitResult> => git(a, { cwd, timeoutMs: PUSH_TIMEOUT_MS })
+
 /** Pushes when asked, then creates the pull request. Two steps behind one submit, in that order,
  *  and never a force push — a rejection is the person's call to make, not the app's. */
 export async function createPullRequest(
   req: PrCreateRequest,
   deps: PrCreateDeps = {}
 ): Promise<PrCreateResult> {
-  const runGit =
-    deps.runGit ?? ((a: string[], cwd: string) => git(a, { cwd, timeoutMs: PUSH_TIMEOUT_MS }))
+  const runGit = deps.runGit ?? defaultPrGit
   const runGh = deps.runGh ?? defaultGhRunner
   const normalize = deps.normalizeBase ?? normalizeBaseForGh
 

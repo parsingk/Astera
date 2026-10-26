@@ -113,7 +113,7 @@ export interface CredentialUse {
   /** The Credentials list's entry (`mcp:<serverId>`); absent for a login Astera does not manage (gh, git). */
   entryId?: string
   provider: 'mcp' | 'github'
-  action: 'mcp.call' | 'github.read' | 'github.pr.create' | 'github.ci.rerun' | 'git.remote.write'
+  action: 'mcp.call' | 'github.read' | 'github.pr.create' | 'github.ci.rerun' | 'github.write' | 'git.remote.write'
   /** `<server>/<tool>`, or `owner/repo` with `#123` or a run id. */
   resource: string
   outcome: 'ok' | 'failed'

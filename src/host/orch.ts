@@ -62,6 +62,8 @@ import type { SessionWorkUnit } from '../core/workUnit/types'
 import { justFinished, runRecordInputOf, stampRunEnds } from '../core/orchestration/runRecord'
 import type { WorkspaceManager } from './workspace/manager'
 import { DESKTOP_ACTOR, HOST_ACTOR, actorOf, type JournalActor } from '../core/continuity/actor'
+import { recordingGhRunner, recordingGitRunner, workOfSession, type UseCaller, type UseRecorder } from './credentials/recordUses'
+import { defaultPrGit } from '../core/github/prCreate'
 import { parseJournalOps } from '../core/continuity/journalOps'
 
 /** One reply — today's HTTP status and body, the shape `OrchCall.call` already answers with. Named
@@ -548,6 +550,9 @@ export function createHostOrch(a: {
   /** GitHub through the Host's gh (MCP P2-B), passed through to `hostOrchDeps`. Absent: the `github-*`
    *  commands answer 409. */
   github?: OrchServerDeps['github']
+  /** Credential-use records (credentials design §6): each call's `github` records its gh calls and push for the caller.
+   *  Absent: nothing is recorded. */
+  useRecorder?: UseRecorder
   /** This Host's job-source plugins (plugin Phase 4 J10), from its plugin manager and runtime (host/jobSources.ts). */
   jobSources?: OrchServerDeps['jobSources']
   /** This Host's completion check plugins (plugin Phase 5 C7, C8), from its plugin manager and runtime
@@ -781,7 +786,32 @@ export function createHostOrch(a: {
   /** The `check --wait` calls this Host serves, for its whole life (final round 2, I-A): built once, not
    *  per call like the deps below, since a wait entered by one call is asked about by another. */
   const checkWaits = createCheckWaits()
-  const depsFor = (marks: CallMarks, actor: JournalActor): OrchServerDeps =>
+  /** The call's `github`, its runners recording for `use` (credentials design §6); the Host's own calls read as its
+   *  background. */
+  const githubFor = (use: { caller: UseCaller; background: boolean } | undefined): OrchServerDeps['github'] | undefined => {
+    const base = a.github
+    const rec = a.useRecorder
+    if (!base || !rec) return base
+    const { caller, background } = use ?? { caller: { actor: 'host' as const }, background: true }
+    const originOf = base.originOf ?? (async () => null)
+    const run = recordingGhRunner(base.run, caller, rec, { background, originOf })
+    return {
+      ...base,
+      run,
+      createPr: (req, deps) => base.createPr(req, { ...deps, runGh: run, runGit: recordingGitRunner(deps?.runGit ?? defaultPrGit, caller, rec, { originOf }) })
+    }
+  }
+  /** Who a call's credential uses are recorded for: the app, a controller, Astera's MCP server, an Astera session with the
+   *  work it holds, or a caller Astera did not start. */
+  const useOf = (from: OrchCaller | undefined, sessionId: string): { caller: UseCaller; background: boolean } => {
+    const role = from?.role
+    if (role === 'app') return { caller: { actor: 'app' }, background: false }
+    if (role === 'controller') return { caller: { actor: 'controller' }, background: false }
+    if (role === 'mcp') return { caller: { actor: 'mcp' }, background: false }
+    if (role !== 'plugin' && sessionId !== '') return { caller: { actor: 'session', sessionId, ...workOfSession(store.get(), sessionId) }, background: false }
+    return { caller: { actor: 'outside' }, background: false }
+  }
+  const depsFor = (marks: CallMarks, actor: JournalActor, use?: { caller: UseCaller; background: boolean }): OrchServerDeps =>
     hostOrchDeps({
       checkWaits,
       getState: () => store.get(),
@@ -840,7 +870,7 @@ export function createHostOrch(a: {
       chatAppAnswers: a.chatAppAnswers,
       ...(a.dispatchTask ? { dispatchTask: a.dispatchTask } : {}),
       ...(a.createSession ? { createSession: a.createSession } : {}),
-      ...(a.github ? { github: a.github } : {}),
+      ...(a.github ? { github: githubFor(use) } : {}),
       ...(a.readUnderstanding ? { readUnderstanding: a.readUnderstanding } : {}),
       // The agent profiles this Host owns (Agent Profiles design §6), read when a Job or Task is made from one
       readAgentProfiles: () => readAgentProfiles(a.profileDir),
@@ -936,7 +966,7 @@ export function createHostOrch(a: {
     const drainedNow = await applyPendingReports({
       queued,
       apply: (r) =>
-        handleCommand(depsFor(throwaway(), { surface: 'agent', sessionId: r.sessionId }), { sessionId: r.sessionId }, r.cmd, r.args).then((reply) => ({
+        handleCommand(depsFor(throwaway(), { surface: 'agent', sessionId: r.sessionId }, useOf(undefined, r.sessionId)), { sessionId: r.sessionId }, r.cmd, r.args).then((reply) => ({
           ok: reply.status >= 200 && reply.status < 300,
           detail: `${reply.status} ${JSON.stringify(reply.body)}`
         })),
@@ -2103,7 +2133,7 @@ export function createHostOrch(a: {
         // P5: judged on the state the call found, so a worker's report that closes its own Dispatch is
         // still the agent's.
         const actor = actorOf({ sessionId, role: from?.role, client: from?.client, remote: from?.remote, principal: from?.principal, plugin: from?.plugin, state: store.get() })
-        const r = await handleCommand(depsFor(marks, actor), { sessionId, role: from?.role }, cmd, runArgs)
+        const r = await handleCommand(depsFor(marks, actor, useOf(from, sessionId)), { sessionId, role: from?.role }, cmd, runArgs)
         const answered = answerOf(r, marks)
         // **Who drives, on `status`, from the Host and not from `handleCommand`** (R6): the two fields
         // exist only on a Host that drives, and their absence tells a script this one does not.
