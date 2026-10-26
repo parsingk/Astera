@@ -226,12 +226,29 @@ function exitCodeOf(text: string): number | null {
   return m ? Number(m[1]) : null
 }
 
+/** A completed exec script's calls, from the JSON it printed after its header: codex 0.160 runs a command inside the
+ *  script, which completes even when the command fails, so each call's own `exit_code` (and a rejected call) decides.
+ *  What a command printed is a string inside that JSON, its quotes escaped, so an `"exit_code"` in it is never read.
+ *  No code at all: a call that printed none (an MCP call) is ok, a command left running in the background is unknown. */
+function execResults(rest: string): ObservedCall['status'] {
+  let codes = 0
+  for (const m of rest.matchAll(/(?<!\\)"exit_code":\s*(-?\d+)/g)) {
+    if (Number(m[1]) !== 0) return 'failed'
+    codes++
+  }
+  if (/(?<!\\)"status":\s*"rejected"/.test(rest)) return 'failed'
+  if (codes === 0 && /(?<!\\)"session_id":/.test(rest)) return 'unknown'
+  return 'ok'
+}
+
 /** How a call went, from the text of its output: ok, failed, or unknown when it says nothing (or the call goes on). */
 function outcomeOf(kind: 'shell' | 'exec' | 'patch', text: string | null): ObservedCall['status'] {
   if (text === null || text.trim() === '') return 'unknown'
   if (kind === 'exec') {
     const first = text.split('\n')[0].trim()
-    return first.startsWith('Script completed') ? 'ok' : first.startsWith('Script failed') || first.startsWith('aborted') ? 'failed' : 'unknown'
+    if (first.startsWith('Script failed') || first.startsWith('aborted')) return 'failed'
+    if (!first.startsWith('Script completed')) return 'unknown'
+    return execResults(text.slice(first.length))
   }
   if (kind === 'patch') {
     if (text.startsWith('Success')) return 'ok'

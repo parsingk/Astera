@@ -559,6 +559,27 @@ describe('the Codex rollout source', () => {
       expect(statusOf(MCP_EXEC(T0 + 10), OUT(T0 + 20, 'call_3', 'Script completed'))).toBe('ok')
     })
 
+    // Found on the dev app: codex 0.160 runs a command inside an exec script, which completes even when the command
+    // fails; the command's own exit code is in the JSON after the header, and decides
+    it('reads the exit codes of the commands an exec script ran: any non-zero one, or a rejected call, is failed', () => {
+      const EXEC_OUT = (parts: string[]) =>
+        rollout(T0 + 20, 'response_item', { type: 'custom_tool_call_output', call_id: 'call_3', output: parts.map((text) => ({ type: 'input_text', text })) })
+      const head = 'Script completed\nWall time 3.1 seconds\nOutput:\n'
+      const result = (code: number, printed = 'x') => JSON.stringify({ chunk_id: 'a1', wall_time_seconds: 0.4, exit_code: code, original_token_count: 3, output: printed })
+      expect(statusOf(MCP_EXEC(T0 + 10), EXEC_OUT([head, result(1, 'fatal: unrecognized argument: --nope\n')]))).toBe('failed')
+      expect(statusOf(MCP_EXEC(T0 + 10), EXEC_OUT([head, result(0)]))).toBe('ok')
+      // Several calls in one script, one per line: one that failed makes the call failed
+      const several = (codes: number[]) =>
+        codes.map((code, i) => JSON.stringify({ i, result: { status: 'fulfilled', value: JSON.parse(result(code)) } })).join('\n')
+      expect(statusOf(MCP_EXEC(T0 + 10), EXEC_OUT([head, several([0, 1, 0])]))).toBe('failed')
+      expect(statusOf(MCP_EXEC(T0 + 10), EXEC_OUT([head, several([0, 0])]))).toBe('ok')
+      expect(statusOf(MCP_EXEC(T0 + 10), EXEC_OUT([head, JSON.stringify({ i: 0, result: { status: 'rejected', reason: 'boom' } })]))).toBe('failed')
+      // What the command printed is a string inside the JSON: an exit_code in it is escaped, and never read
+      expect(statusOf(MCP_EXEC(T0 + 10), EXEC_OUT([head, result(0, '{"exit_code": 1}')]))).toBe('ok')
+      // A command left running in the background has no code yet
+      expect(statusOf(MCP_EXEC(T0 + 10), EXEC_OUT([head, JSON.stringify({ chunk_id: 'a1', wall_time_seconds: 10, session_id: 7, output: '' })]))).toBe('unknown')
+    })
+
     it('reads an apply_patch from its result: success is ok, a refusal is failed', () => {
       expect(statusOf(PATCH(T0 + 10), CUSTOM_OUT(T0 + 20, 'call_2', 'Success. Updated the following files:\nM src/a.ts'))).toBe('ok')
       expect(statusOf(PATCH(T0 + 10), OUT(T0 + 20, 'call_2', 'Success. Updated the following files:\nM src/a.ts'))).toBe('ok')
