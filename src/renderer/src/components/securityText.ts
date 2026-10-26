@@ -159,9 +159,10 @@ export const PERIODS: Record<Period, MessageKey> = {
   week: 'settings.security.period.week',
   month: 'settings.security.period.month'
 }
-/** How many days before today a period starts. The longest is the records' whole retention: the store keeps the days
- *  from today−30 (core/audit/store.ts prune), so "the last 30 days" reaches as far back as anything is kept. */
-const DAYS_BACK: Record<Period, number> = { today: 0, week: 6, month: 30 }
+/** How many days before today a period starts: "the last 30 days" is today and the 29 before it, thirty calendar days. */
+const DAYS_BACK: Record<Period, number> = { today: 0, week: 6, month: 29 }
+/** The store keeps the days from today−30 (core/audit/store.ts prune), one day further back than the longest period. */
+const RETENTION_DAYS_BACK = 30
 
 const midnightDaysBack = (now: Date, days: number): string => new Date(now.getFullYear(), now.getMonth(), now.getDate() - days).toISOString()
 
@@ -169,7 +170,7 @@ const midnightDaysBack = (now: Date, days: number): string => new Date(now.getFu
 export const periodSince = (p: Period, now: Date): string => midnightDaysBack(now, DAYS_BACK[p])
 
 /** The oldest record the store still keeps can be from this local midnight. */
-export const retentionSince = (now: Date): string => midnightDaysBack(now, DAYS_BACK.month)
+export const retentionSince = (now: Date): string => midnightDaysBack(now, RETENTION_DAYS_BACK)
 
 /** Where Run detail's count of a Run's calls starts reading: the Run's start (`runs get`'s createdAt) or the retention,
  *  whichever is later, so the Host never reads days the Run cannot have records in. The Run's Audit Logs view reads

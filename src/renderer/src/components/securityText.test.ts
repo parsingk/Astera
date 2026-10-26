@@ -176,12 +176,15 @@ describe('securityText', () => {
   })
 
   // Fix round 1, ruling 4: the longest period is the records' whole retention (the store drops days before today−30)
-  it('starts a period at the local midnight of its first day, the longest as far back as records are kept', () => {
+  it('starts a period at the local midnight of its first day, the longest thirty calendar days', () => {
     const now = new Date(2026, 9, 23, 15, 30)
     expect(periodSince('today', now)).toBe(new Date(2026, 9, 23).toISOString())
     expect(periodSince('week', now)).toBe(new Date(2026, 9, 17).toISOString())
+    // a day boundary: just after midnight still counts today as the first of the thirty
+    expect(periodSince('month', new Date(2026, 9, 23, 0, 0, 1))).toBe(new Date(2026, 8, 24).toISOString())
     expect(retentionSince(now)).toBe(new Date(2026, 8, 23).toISOString())
-    expect(periodSince('month', now)).toBe(retentionSince(now))
+    // "Last 30 days" is today and the 29 before it, thirty calendar days, not thirty-one
+    expect(periodSince('month', now)).toBe(new Date(2026, 8, 24).toISOString())
   })
 
   // Fix round 1, I1: Run detail's count reads no further back than the Run or the retention, whichever is later
