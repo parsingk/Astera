@@ -813,9 +813,17 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
     has = false
     wordQuoted = false
   }
+  let failedFrom = -1 // where the last arithmetic reading that found none began, and how far it had read
+  let failedTo = -1
+  const failed = (from: number, to: number): number => {
+    failedFrom = from
+    failedTo = to
+    return -1
+  }
   /** `arithmetic`, but a reading that finds no arithmetic leaves nothing behind: -1, with the commands and the unread mark it
    *  collected taken back. */
   const tryArithmetic = (at: number): number => {
+    if (at > failedFrom && at <= failedTo) return -1 // inside what a reading just failed to close: not read again, which would be quadratic
     const kept: number = later.length
     const wasUnread: boolean = unread
     const to = arithmetic(at)
@@ -839,7 +847,7 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
       const e = line[j]
       if (e === '\\') j++
       else if (e === '$' && line[j + 1] === '(' && line[j + 2] === '(') {
-        const k = arithmetic(j)
+        const k = tryArithmetic(j)
         j = k >= 0 ? k : substitute(j, false)
       } else if ((e === '$' && line[j + 1] === '(') || e === '`') j = substitute(j, e === '`')
     }
@@ -898,7 +906,7 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
         // a quoted operand, skipped whole; with no closing quote, the one that ends the word came before any `))`
         let k = j + 1
         while (k < line.length && line[k] !== '"') k += line[k] === '\\' ? 2 : 1
-        if (k >= line.length) return -1
+        if (k >= line.length) return failed(at, line.length)
         j = k
       } else if (e === '\\') j++
       else if (e === '$' && line[j + 1] === '(') {
@@ -913,7 +921,7 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
         else if (line[j + 1] === ')') {
           j++
           if (--open === 0) break
-        } else return -1 // a `)` that no second one follows: bash reads `$((git push) )` as a substitution
+        } else return failed(at, j) // a `)` that no second one follows: bash reads `$((git push) )` as a substitution
       }
     }
     return j

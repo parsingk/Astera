@@ -1951,6 +1951,19 @@ describe('malformed and hostile input', () => {
     expect(Date.now() - started).toBeLessThan(1000)
   })
 
+  it('stays fast on arithmetic that never closes, quoted or not, at 200k characters', () => {
+    const started = Date.now()
+    bash(`${'$(( '.repeat(50_000)}"`)
+    bash(`${'x=$(( '.repeat(33_000)}"`)
+    bash(`${'$(( '.repeat(50_000)}x) y`)
+    bash(`echo "${'$(( '.repeat(50_000)}"`)
+    bash(`echo ${'"$(( " '.repeat(25_000)}`)
+    bash(`${'$(( "a" '.repeat(30_000)}`)
+    expect(Date.now() - started).toBeLessThan(2000)
+    // a failed reading of one does not hide a later one that closes
+    expect(bash('echo $((git push) ) $((1+2)); npm test')).toMatchObject({ action: 'process.execute' })
+  })
+
   it('reads an apply_patch header with a long run of spaces in linear time', () => {
     const patch = `*** Begin Patch\n*** Add File: a${' '.repeat(40_000)}b\n*** End Patch`
     const started = Date.now()
