@@ -398,6 +398,15 @@ describe('decide, a denied command the resolver must reach', () => {
     expect(decide(bash('echo "$((1 + 2))"'), p)).toEqual({ decision: 'allow' })
   })
 
+  it('would deny after the pattern of a case inside a substitution, whose ) does not close it', () => {
+    expect(decide(bash('echo "$(case x in a) git push;; esac)"'), p)).toEqual(push)
+    expect(decide(bash('echo "$(case x in a) echo hi;; b) git push;; esac)"'), p)).toEqual(push)
+    expect(decide(bash('X=$(case x in\na) git push;;\nesac)'), p)).toEqual(push)
+    expect(decide(bash('echo "$(case x in a) case y in b) git push;; esac;; esac)"'), p)).toEqual(push)
+    expect(decide(bash('echo "$(case x in a) echo hi;; esac)" ; git push'), p)).toEqual(push)
+    expect(decide(bash('echo "$(case x in a) echo hi;; esac)"'), p)).toEqual({ decision: 'allow' })
+  })
+
   // An unquoted heredoc delimiter makes its body a double-quoted text: the shell runs the substitutions in it
   it('would deny a substitution in the body of a heredoc whose delimiter is not quoted, and reads none in a quoted one', () => {
     expect(decide(bash('cat <<EOF\n$(rm -rf ../x)\nEOF'), p)).toEqual(del)

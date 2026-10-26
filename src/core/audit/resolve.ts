@@ -748,6 +748,7 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
   let cur = ''
   let has = false // a word has begun, so an empty '' counts
   let sink: { write: boolean; dup: boolean } | null = null // the next word is a redirection's target
+  let cases = 0 // the `case … in` read since the start that no `esac` has closed: a `)` in one ends a pattern, not a substitution
   let heredoc: { tag: string; indent: boolean; expands: boolean } | null = null // `expands`: its tag was not quoted, so the shell runs the substitutions in the body
 
   const endWord = (): void => {
@@ -759,6 +760,7 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
       } else {
         quoted.push(wordQuoted)
         words.push(cur)
+        if (cur === 'in' && words.length === 3 && words[0] === 'case') cases++
       }
     }
     cur = ''
@@ -785,6 +787,7 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
   }
   const endCommand = (): void => {
     endWord()
+    if (words[0] === 'esac' && cases > 0) cases--
     sink = null
     if (words.length > 0 || out.length > 0) {
       commands.push(unread ? { words, out, call, quoted, invoked, unread: true } : { words, out, call, quoted, invoked })
@@ -924,7 +927,7 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
       heredoc = null
     } else if (c === '#' && !has) {
       while (i + 1 < line.length && line[i + 1] !== '\n') i++ // a comment
-    } else if ((c === ')' && stop === 'paren' && parens === 0) || (c === '`' && stop === 'tick')) {
+    } else if ((c === ')' && stop === 'paren' && parens === 0 && cases - (has && sink === null && cur === 'esac' && words.length === 0 ? 1 : 0) <= 0) || (c === '`' && stop === 'tick')) {
       end = i // what closes the substitution this was started for
       break
     } else if (c === ';' || c === '|' || c === ')' || (c === '`' && flavor === 'posix')) {
