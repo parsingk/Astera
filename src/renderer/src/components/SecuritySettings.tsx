@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import type { AuditQuery, PluginsCallAnswer } from '../../../core/types'
+import type { AgentProfile } from '../../../core/agentProfiles/types'
 import type { AuditMode, AuditPolicy, AuditRule, CoverageRow } from '../../../core/audit/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
@@ -508,59 +509,7 @@ function AuditLogs({
       {counts?.stoppedAtLimit === true && <p className="settings-hint is-warning">{t('settings.security.audit.stoppedAtLimit')}</p>}
       {line !== null && <p className="settings-hint">{line}</p>}
       {rows !== null && rows.length > 0 && (
-        <div className="security-table-wrap">
-          <table className="security-table security-rows" role="table">
-            <thead role="rowgroup">
-              <tr role="row">
-                <th scope="col" role="columnheader">{t('settings.security.col.time')}</th>
-                <th scope="col" role="columnheader">{t('settings.security.col.session')}</th>
-                <th scope="col" role="columnheader">{t('settings.security.col.action')}</th>
-                <th scope="col" role="columnheader">{t('settings.security.col.target')}</th>
-                <th scope="col" role="columnheader">{t('settings.security.col.decision')}</th>
-              </tr>
-            </thead>
-            <tbody role="rowgroup">
-              {rows.map((r, i) => {
-                // The date heads each day's rows; the full time is on hover
-                const when = rowTime(r.at, rows[i - 1]?.at)
-                const profile = r.agentProfileId !== undefined ? profileNameOf(profiles, r.agentProfileId) : undefined
-                const rule = decidingRule(r, rules, t)
-                return (
-                  <tr key={r.id} role="row">
-                    <td role="cell" className="security-time" title={recordTime(r.at)}>
-                      {when.date !== undefined && <span className="security-date">{when.date}</span>}
-                      {when.time}
-                    </td>
-                    <td role="cell" className="security-session-cell">
-                      {/* With what observe sees of such a session (design §9), on hover */}
-                      <span className="security-session" title={coverageLine(coverage, r, t)}>
-                        {sessionLabel(r, sessionTitle(r.sessionId), t)}
-                      </span>
-                      {profile !== undefined && (
-                        <span className="security-profile" title={profile}>
-                          {profile}
-                        </span>
-                      )}
-                    </td>
-                    <td role="cell">{actionPhrase(r.action, t)}</td>
-                    <td role="cell" className="security-target" title={r.target}>
-                      {r.target}
-                    </td>
-                    {/* The rule that decided, under the decision: a column of its own left no room at the tab's width */}
-                    <td role="cell">
-                      <span className={`security-decision is-${r.decision}`}>{decisionLabel(r.decision, t)}</span>
-                      {rule !== '' && (
-                        <span className="security-decided-by" title={`${t('settings.security.col.rule')}: ${rule}`}>
-                          {rule}
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
+        <AuditTable rows={rows} rules={rules} coverage={coverage} profiles={profiles} sessionTitle={sessionTitle} />
       )}
       {next !== null && (
         <div className="remote-actions">
@@ -570,6 +519,78 @@ function AuditLogs({
           {loadingMore && <span className="loading-spinner" aria-hidden="true" />}
         </div>
       )}
+    </div>
+  )
+}
+
+/** The rows of Audit Logs, newest first: the date heads each day, the rule that decided is under the decision. */
+export function AuditTable({
+  rows,
+  rules,
+  coverage,
+  profiles,
+  sessionTitle
+}: {
+  rows: readonly AuditRow[]
+  rules: readonly AuditRule[]
+  coverage: readonly CoverageRow[]
+  profiles: readonly AgentProfile[]
+  sessionTitle: (sessionId: string) => string | undefined
+}): React.JSX.Element {
+  const { t } = useI18n()
+  return (
+    <div className="security-table-wrap">
+      <table className="security-table security-rows" role="table">
+        <thead role="rowgroup">
+          <tr role="row">
+            <th scope="col" role="columnheader">{t('settings.security.col.time')}</th>
+            <th scope="col" role="columnheader">{t('settings.security.col.session')}</th>
+            <th scope="col" role="columnheader">{t('settings.security.col.action')}</th>
+            <th scope="col" role="columnheader">{t('settings.security.col.target')}</th>
+            <th scope="col" role="columnheader">{t('settings.security.col.decision')}</th>
+          </tr>
+        </thead>
+        <tbody role="rowgroup">
+          {rows.map((r, i) => {
+            // The date heads each day's rows; the full time is on hover
+            const when = rowTime(r.at, rows[i - 1]?.at)
+            const profile = r.agentProfileId !== undefined ? profileNameOf(profiles, r.agentProfileId) : undefined
+            const rule = decidingRule(r, rules, t)
+            return (
+              <tr key={r.id} role="row">
+                <td role="cell" className="security-time" title={recordTime(r.at)}>
+                  {when.date !== undefined && <span className="security-date">{when.date}</span>}
+                  {when.time}
+                </td>
+                <td role="cell" className="security-session-cell">
+                  {/* With what observe sees of such a session (design §9), on hover */}
+                  <span className="security-session" title={coverageLine(coverage, r, t)}>
+                    {sessionLabel(r, sessionTitle(r.sessionId), t)}
+                  </span>
+                  {profile !== undefined && (
+                    <span className="security-profile" title={profile}>
+                      {profile}
+                    </span>
+                  )}
+                </td>
+                <td role="cell">{actionPhrase(r.action, t)}</td>
+                <td role="cell" className="security-target" title={r.target}>
+                  {r.target}
+                </td>
+                {/* The rule that decided, under the decision: a column of its own left no room at the tab's width */}
+                <td role="cell">
+                  <span className={`security-decision is-${r.decision}`}>{decisionLabel(r.decision, t)}</span>
+                  {rule !== '' && (
+                    <span className="security-decided-by" title={`${t('settings.security.col.rule')}: ${rule}`}>
+                      {rule}
+                    </span>
+                  )}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
     </div>
   )
 }
