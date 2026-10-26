@@ -28,10 +28,10 @@
 // **Whom a response was for** is `ownerOf` at the response's own time: the Dispatch the session held open then, or one
 // that had ended while the turn running at its end went on (observe deferred minor c), else the Run it coordinated,
 // while that Run was unfinished and after it finished to the end of the turn that was running then (final review I2,
-// observe deferred minor b). When the state no
-// longer names the session (a roll rekeyed its Dispatch, or its Run's coordinator slot, before its last lines were
-// read), the owner it last had stands, within the same bounds. A response for nobody (a person's own tab) is not kept.
-// A session the app runs in its own node-pty, with no Host, is not read: its Tasks show no tokens.
+// observe deferred minor b). When the state no longer names the session (a roll rekeyed its Dispatch, or its Run's
+// coordinator slot, before its last lines were read), the owner it last had stands, within the same bounds. A response
+// for nobody (a person's own tab) is not kept. A session the app runs in its own node-pty, with no Host, is not read:
+// its Tasks show no tokens.
 //
 // **A session's turns** are told by its own lines as they are read: a Claude transcript's prompts (a person's or one
 // Astera typed, never a tool's result coming back), a Codex rollout's task_started and user_message, and in a Claude
@@ -154,9 +154,10 @@ const timeOf = (o: Record<string, unknown> | null): number | null => {
 
 /** When a Claude transcript line is a prompt that begins a turn, a person's or one Astera typed: a user line of the main
  *  conversation that is not a tool's result coming back, nor one Claude Code writes for itself (`isMeta`, a compaction's
- *  summary). An interruption's note is one too, and the turn it ends is over. Null for any other line. */
+ *  summary). An interruption's note is one too, and the turn it ends is over. Null for any other line. A tool's result,
+ *  often a file's whole contents, is passed by unparsed: `"tool_result"` unescaped is only ever its block's type. */
 const claudePromptAt = (line: string): number | null => {
-  if (!line.includes('"user"')) return null
+  if (!line.includes('"user"') || line.includes('"tool_result"')) return null
   const o = parsed(line)
   if (!o || o.type !== 'user' || o.isSidechain === true || o.isMeta === true || o.isCompactSummary === true) return null
   const content = (o.message as { content?: unknown } | undefined)?.content
