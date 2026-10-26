@@ -543,6 +543,10 @@ describe('index.ts wires observe mode into the Host', () => {
     const src = await fs.readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8')
     for (const wiring of ['createAuditSources({', 'createTokenSources({', 'dispatchOf: dispatchOfWithTurns(() => orch.state(), tokenSources)', 'onChange: (cmd) => auditRecorder.invalidate(', 'spentTokens: () => tokenStore.spent()'])
       expect(src, wiring).toContain(wiring)
+    // A proc write is told which app wrote it, and only an app that says it marks a person's writes is trusted to:
+    // lose either and an older app's chats are held for good, or every chat falls back to two minutes
+    for (const wiring of ['handleProc?.(m, send, { socket: from.socket })', 'marksWrites: (socket) => server.yieldsOf(socket)?.has(HOST_YIELD_PERSON_WRITES) === true'])
+      expect(src, wiring).toContain(wiring)
     // The recorder's note says what bounds a finished Run's coordinator: a person's prompt (fix round 2)
     expect(src.replace(/\s*\/\/\s*/g, ' ')).toContain('until a person prompts the session')
   })
