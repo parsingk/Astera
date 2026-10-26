@@ -872,8 +872,13 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
     let j = at + 3
     for (; j < line.length; j++) {
       const e = line[j]
-      if (e === '"') return -1 // the quote that ends the word comes before any `))`: this is no arithmetic
-      if (e === '\\') j++
+      if (e === '"') {
+        // a quoted operand, skipped whole; with no closing quote, the one that ends the word came before any `))`
+        let k = j + 1
+        while (k < line.length && line[k] !== '"') k += line[k] === '\\' ? 2 : 1
+        if (k >= line.length) return -1
+        j = k
+      } else if (e === '\\') j++
       else if (e === '$' && line[j + 1] === '(') {
         if (line[j + 2] === '(') {
           open++
@@ -886,7 +891,7 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
         else if (line[j + 1] === ')') {
           j++
           if (--open === 0) break
-        }
+        } else return -1 // a `)` that no second one follows: bash reads `$((git push) )` as a substitution
       }
     }
     return j

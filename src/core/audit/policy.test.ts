@@ -494,6 +494,13 @@ describe('decide, a denied command the resolver must reach', () => {
     expect(decide(bash('taskset -c 0 npm test'), p)).toEqual({ decision: 'allow' })
   })
 
+  it('reads a quoted operand inside quoted arithmetic, and still reads $(( ) that no )) closes as a substitution', () => {
+    expect(decide(bash('echo "$(( "1" + 2 ))"'), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('echo "$(( "1" + $(git push) ))"'), p)).toEqual(push)
+    expect(decide(bash('echo "$(( "1" + 2 ))" ; git push'), p)).toEqual(push)
+    expect(decide(bash('echo "$((git push) )" ; echo "x))" ; rm -rf ../x'), p)).toEqual(push)
+  })
+
   // An unquoted heredoc delimiter makes its body a double-quoted text: the shell runs the substitutions in it
   it('would deny a substitution in the body of a heredoc whose delimiter is not quoted, and reads none in a quoted one', () => {
     expect(decide(bash('cat <<EOF\n$(rm -rf ../x)\nEOF'), p)).toEqual(del)
