@@ -110,6 +110,18 @@ describe('securityText', () => {
     expect(shown('es').filter(([, v]) => /observ(?!e\b)/i.test(v))).toEqual([])
   })
 
+  // 2026-10-26, the person: the sentences say 기록 without the mode as their subject, the table is 기록 범위, and the
+  // hint no longer adds that nothing is blocked; the name Observe stays on the switch alone
+  it('words the Korean sentences around recording, not around Observe as a subject', () => {
+    const shown = Object.entries(CATALOGS.ko.messages as Record<string, string>).filter(([k]) => k.startsWith('settings.security.'))
+    expect(shown.filter(([, v]) => /Observe/.test(v))).toEqual([])
+    expect(ko('settings.security.hint')).toBe('에이전트 세션의 도구 호출을 기록하고, Rules 대로라면 각각 어떻게 됐을지 보여 줍니다.')
+    expect(ko('settings.security.coverage.title')).toBe('기록 범위')
+    expect(ko('settings.security.audit.off')).toBe('기록이 꺼져 있습니다. 위의 Policies 에서 켤 수 있습니다.')
+    // No language's hint says it any more
+    for (const lang of LANGS) expect(translate(lang, 'settings.security.hint'), lang).not.toMatch(/막지|never blocks|ブロックしません|bloquea/)
+  })
+
   // The constraints: the tab and its two sections keep the names the person chose, in English in every language
   it('names the tab and its sections in English', () => {
     expect([SECURITY_TAB, POLICIES_TITLE, AUDIT_LOGS_TITLE]).toEqual(['Security & Access', 'Policies', 'Audit Logs'])
