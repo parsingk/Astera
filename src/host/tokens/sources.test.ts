@@ -918,6 +918,9 @@ describe('docs/cli.md on how long a finished run’s sessions count', () => {
     const audit = paragraph(doc, '`audit list` prints the records newest first')
     for (const p of [tokens, audit]) {
       expect(p.join(' ')).toMatch(/finished before this version/)
+      // What ends the hold, in a terminal, a chat or Codex alike, and what does not (fix round 2)
+      expect(p.join(' ')).toMatch(/`astera sessions send`/)
+      expect(p.join(' ')).toMatch(/what Astera types itself/)
       for (const line of p) expect(line.length, line).toBeLessThanOrEqual(120)
     }
   })

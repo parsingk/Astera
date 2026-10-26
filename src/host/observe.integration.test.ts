@@ -543,5 +543,7 @@ describe('index.ts wires observe mode into the Host', () => {
     const src = await fs.readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8')
     for (const wiring of ['createAuditSources({', 'createTokenSources({', 'dispatchOf: dispatchOfWithTurns(() => orch.state(), tokenSources)', 'onChange: (cmd) => auditRecorder.invalidate(', 'spentTokens: () => tokenStore.spent()'])
       expect(src, wiring).toContain(wiring)
+    // The recorder's note says what bounds a finished Run's coordinator: a person's prompt (fix round 2)
+    expect(src.replace(/\s*\/\/\s*/g, ' ')).toContain('until a person prompts the session')
   })
 })

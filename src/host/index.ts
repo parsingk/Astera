@@ -533,8 +533,9 @@ async function main(): Promise<void> {
   // keeps them under <profile>/audit while the mode is observe, touching nothing in compatibility. Made above the
   // rolling, whose hook tap is one of its sources. A session is read from the two registries' notes and its Dispatch
   // from the state as the orch holds it (made below, before any source can call), never loaded for this: a Host that
-  // has not loaded has placed none; a finished Run's coordinator up to the end of the turn the token sources say was
-  // running when the Run finished. The mode is read through readAuditPolicy, which throws on a file it cannot read
+  // has not loaded has placed none; an ended attempt's worker and a finished Run's coordinator after the end, until a
+  // person prompts the session, as the token sources read its prompts (a task notification or what Astera types into
+  // it does not end it). The mode is read through readAuditPolicy, which throws on a file it cannot read
   // cleanly, so the recorder keeps only a clean read (a missing file is compatibility); the copy of a damaged one is
   // the policies commands' to keep.
   const auditRecorder = createAuditRecorder({
