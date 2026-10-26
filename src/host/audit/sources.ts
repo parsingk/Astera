@@ -229,26 +229,31 @@ function exitCodeOf(text: string): number | null {
 /** A completed exec script's calls, from the JSON it printed after its header: codex 0.160 runs a command inside the
  *  script, which completes even when the command fails, so each call's own `exit_code` (and a rejected call) decides.
  *  What a command printed is a string inside that JSON, its quotes escaped, so an `"exit_code"` in it is never read.
- *  No code at all: a call that printed none (an MCP call) is ok, a command left running in the background is unknown. */
-function execResults(rest: string): ObservedCall['status'] {
+ *  No code at all: a script that ran a command printed only its text (`text(r.output)`), or left it running in the
+ *  background, so how the command went is unknown; a script of MCP calls alone, which fails when one is refused, is ok. */
+function execResults(rest: string, runsCommand: boolean): ObservedCall['status'] {
   let codes = 0
   for (const m of rest.matchAll(/(?<!\\)"exit_code":\s*(-?\d+)/g)) {
     if (Number(m[1]) !== 0) return 'failed'
     codes++
   }
   if (/(?<!\\)"status":\s*"rejected"/.test(rest)) return 'failed'
-  if (codes === 0 && /(?<!\\)"session_id":/.test(rest)) return 'unknown'
-  return 'ok'
+  if (codes > 0) return 'ok'
+  return runsCommand || /(?<!\\)"session_id":/.test(rest) ? 'unknown' : 'ok'
 }
 
-/** How a call went, from the text of its output: ok, failed, or unknown when it says nothing (or the call goes on). */
-function outcomeOf(kind: 'shell' | 'exec' | 'patch', text: string | null): ObservedCall['status'] {
+/** Whether an exec script runs a command: one of Codex's shell tools called from it. */
+const EXEC_RUNS_COMMAND = /\btools\.(?:exec_command|shell_command|shell|local_shell)\s*\(/
+
+/** How a call went, from the text of its output (and for an exec script, the script it ran): ok, failed, or unknown
+ *  when it says nothing (or the call goes on). */
+function outcomeOf(kind: 'shell' | 'exec' | 'patch', text: string | null, input?: unknown): ObservedCall['status'] {
   if (text === null || text.trim() === '') return 'unknown'
   if (kind === 'exec') {
     const first = text.split('\n')[0].trim()
     if (first.startsWith('Script failed') || first.startsWith('aborted')) return 'failed'
     if (!first.startsWith('Script completed')) return 'unknown'
-    return execResults(text.slice(first.length))
+    return execResults(text.slice(first.length), typeof input === 'string' && EXEC_RUNS_COMMAND.test(input))
   }
   if (kind === 'patch') {
     if (text.startsWith('Success')) return 'ok'
@@ -296,7 +301,7 @@ export function codexRolloutCalls(now: () => number = Date.now): RolloutReader {
           const held = id === null ? undefined : waiting.get(id)
           if (!held) continue
           waiting.delete(id!)
-          out.push({ ...held.call, status: outcomeOf(held.kind, outputText(p.output)) })
+          out.push({ ...held.call, status: outcomeOf(held.kind, outputText(p.output), held.call.input) })
           continue
         }
         const t = Date.parse(str(o?.timestamp) ?? '')

@@ -561,6 +561,22 @@ describe('the Codex rollout source', () => {
 
     // Found on the dev app: codex 0.160 runs a command inside an exec script, which completes even when the command
     // fails; the command's own exit code is in the JSON after the header, and decides
+    // Found on the dev app too: the script printed only the command's text (`text(r.output)`), so no exit code is seen;
+    // a completed script then says nothing of the command, which may have failed
+    it('reads an exec script that ran a command and printed no exit code as unknown, and an MCP-only one as ok', () => {
+      const CMD_EXEC = rollout(T0 + 10, 'response_item', {
+        type: 'custom_tool_call', name: 'exec', call_id: 'call_3', status: 'completed',
+        input: 'const r = await tools.exec_command({cmd:"git log --nope"}); text(r.output);\n'
+      })
+      const out = (parts: string[]) =>
+        rollout(T0 + 20, 'response_item', { type: 'custom_tool_call_output', call_id: 'call_3', output: parts.map((text) => ({ type: 'input_text', text })) })
+      const head = 'Script completed\nWall time 6.5 seconds\nOutput:\n'
+      expect(statusOf(CMD_EXEC, out([head, 'fatal: unrecognized argument: --nope\n']))).toBe('unknown')
+      expect(statusOf(CMD_EXEC, out([head, JSON.stringify({ chunk_id: 'a1', exit_code: 1, output: 'fatal' })]))).toBe('failed')
+      expect(statusOf(CMD_EXEC, out([head, JSON.stringify({ chunk_id: 'a1', exit_code: 0, output: '' })]))).toBe('ok')
+      expect(statusOf(MCP_EXEC(T0 + 10), out([head, '{"number":12}']))).toBe('ok')
+    })
+
     it('reads the exit codes of the commands an exec script ran: any non-zero one, or a rejected call, is failed', () => {
       const EXEC_OUT = (parts: string[]) =>
         rollout(T0 + 20, 'response_item', { type: 'custom_tool_call_output', call_id: 'call_3', output: parts.map((text) => ({ type: 'input_text', text })) })
