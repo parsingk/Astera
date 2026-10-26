@@ -397,4 +397,17 @@ describe('decide, a denied command the resolver must reach', () => {
     expect(decide(bash('echo "$(( $(git push) + 1 ))"'), p)).toEqual(push)
     expect(decide(bash('echo "$((1 + 2))"'), p)).toEqual({ decision: 'allow' })
   })
+
+  // An unquoted heredoc delimiter makes its body a double-quoted text: the shell runs the substitutions in it
+  it('would deny a substitution in the body of a heredoc whose delimiter is not quoted, and reads none in a quoted one', () => {
+    expect(decide(bash('cat <<EOF\n$(rm -rf ../x)\nEOF'), p)).toEqual(del)
+    expect(decide(bash('cat <<EOF\nhello `git push`\nEOF'), p)).toEqual(push)
+    expect(decide(bash('cat <<-EOF\n\t$(git push)\n\tEOF'), p)).toEqual(push)
+    expect(decide(bash('cat <<EOF\n$(git push)\nEOF\nrm -rf ../x'), p)).toEqual(push)
+    expect(decide(bash('cat <<EOF\nline\nEOF\ngit push'), p)).toEqual(push)
+    expect(decide(bash("cat <<'EOF'\n$(rm -rf ../x)\nEOF"), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('cat <<"EOF"\n$(rm -rf ../x)\nEOF'), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('cat <<EOF\n\\$(rm -rf ../x)\nEOF'), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('cat <<EOF\n$(git rev-parse HEAD)\nEOF'), p)).toEqual({ decision: 'allow' })
+  })
 })

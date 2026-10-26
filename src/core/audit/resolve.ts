@@ -748,7 +748,7 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
   let cur = ''
   let has = false // a word has begun, so an empty '' counts
   let sink: { write: boolean; dup: boolean } | null = null // the next word is a redirection's target
-  let heredoc: { tag: string; indent: boolean } | null = null
+  let heredoc: { tag: string; indent: boolean; expands: boolean } | null = null // `expands`: its tag was not quoted, so the shell runs the substitutions in the body
 
   const endWord = (): void => {
     if (has) {
@@ -764,6 +764,24 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
     cur = ''
     has = false
     wordQuoted = false
+  }
+  /** The body of a heredoc whose tag was not quoted, `from` to `to`, is read like the inside of double quotes: a `$( )` or a pair
+   *  of backticks in it is run. Its commands follow the command that opened the heredoc.
+   *  Says where the reading ended, past `to` when a substitution did not close inside the body (and then none is read twice). */
+  const bodySubstitutions = (from: number, to: number): number => {
+    let j = from
+    for (; j < to; j++) {
+      const e = line[j]
+      if (e === '\\') j++
+      else if (e === '$' && line[j + 1] === '(' && line[j + 2] === '(') {
+        const k = arithmetic(j)
+        j = k >= 0 ? k : substitute(j, false)
+      } else if ((e === '$' && line[j + 1] === '(') || e === '`') j = substitute(j, e === '`')
+    }
+    for (const c of later) commands.push(c)
+    later.length = 0
+    unread = false
+    return j
   }
   const endCommand = (): void => {
     endWord()
@@ -899,7 +917,10 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
       endWord()
     } else if (c === '\n') {
       endCommand()
-      if (heredoc !== null) i = endOfHeredoc(line, i, heredoc)
+      if (heredoc !== null) {
+        const to = endOfHeredoc(line, i, heredoc)
+        i = heredoc.expands && flavor === 'posix' ? Math.max(to, bodySubstitutions(i + 1, to)) : to
+      }
       heredoc = null
     } else if (c === '#' && !has) {
       while (i + 1 < line.length && line[i + 1] !== '\n') i++ // a comment
@@ -941,7 +962,8 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
       if (indent) j++
       while (line[j] === ' ' || line[j] === '\t') j++
       let tag: string
-      if (line[j] === "'" || line[j] === '"') {
+      const expands = line[j] !== "'" && line[j] !== '"'
+      if (!expands) {
         const k = line.indexOf(line[j], j + 1)
         tag = line.slice(j + 1, k < 0 ? line.length : k)
         j = k < 0 ? line.length : k + 1
@@ -950,7 +972,7 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
         tag = TAG.exec(line)?.[0] ?? ''
         j += tag.length
       }
-      heredoc = tag === '' ? null : { tag, indent }
+      heredoc = tag === '' ? null : { tag, indent, expands }
       i = j - 1
     } else if (c === '>' || c === '<') {
       if (/^\d*&?$/.test(cur)) {
