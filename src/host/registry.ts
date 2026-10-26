@@ -149,6 +149,9 @@ interface Entry {
    *  A write of nothing but terminal reports (a focus change, a reply to the TUI's own query) is not
    *  typing, and leaves it alone (core/terminal/reports.ts). */
   lastWriteAt: number | null
+  /** When the pty last printed anything: `sessions send` waits for the TUI to have drawn its text and gone quiet before
+   *  the Enter (core/sessions/sessionDriver.ts). */
+  lastOutputAt: number | null
   /** The part of `lastWriteAt` a person made: a write marked `person` (an app's `pty-write`, a Slack
    *  reply), never the Host's own (a nudge, a spawn's or a roll's prompt). A finished Run's sessions end
    *  once nobody has typed into them for a while (dispatchLoop.ts, FINISHED_RUN_GRACE_MS). */
@@ -343,6 +346,7 @@ export class PtyRegistry {
       cols: a.opts.cols,
       rows: a.opts.rows,
       lastWriteAt: null,
+      lastOutputAt: null,
       lastPersonWriteAt: null,
       submissions: [],
       exitCode: null,
@@ -361,6 +365,7 @@ export class PtyRegistry {
       // The listeners still hear it.
       // Output after the exit is still a ring event (§3.7): node-pty can deliver it, and a controller replaying the
       // end sees it. The ring is bounded and goes with the exited retention.
+      entry.lastOutputAt = this.now()
       this.record(entry, { kind: 'data', data: d })
       for (const cb of this.dataCbs) this.tell(cb, 'data', a.id, () => cb(a.id, d))
     })
@@ -580,6 +585,11 @@ export class PtyRegistry {
   /** When `write` last reached this pty, or null for one never written to or never here. */
   lastWrite(id: string): number | null {
     return this.entries.get(id)?.lastWriteAt ?? null
+  }
+
+  /** When this pty last printed anything, or null for one that never has or was never here. */
+  lastOutput(id: string): number | null {
+    return this.entries.get(id)?.lastOutputAt ?? null
   }
 
   /** Who sent the latest write with an Enter in it in (from, to], epoch ms: a person (a write marked so) or the Host

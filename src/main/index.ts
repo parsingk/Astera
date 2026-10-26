@@ -739,7 +739,10 @@ app.whenReady().then(async () => {
     ptyDriver({
       write: (id, d, by) => {
         core!.sessions.write(id, d, by) // a throw is the rejection the caller sees
-      }
+      },
+      // Enter waits for the session to have drawn the text and gone quiet: Codex turns an Enter that comes right after
+      // a long text into a newline
+      lastOutputAt: (id) => core!.sessions.lastOutput(id)
     }),
     // The manager's `send` resolves for an id it does not know, and a silent resolve reads as "delivered"
     // to everything on the other side of this seam — the scheduler zeroes its refusal count on it, and

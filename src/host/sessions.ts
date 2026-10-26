@@ -165,7 +165,7 @@ function emptyScreen(size: { cols: number; rows: number }): SessionScreen {
 }
 
 export function registrySessions(a: {
-  ptys: Pick<PtyRegistry, 'list' | 'buffer' | 'write' | 'size' | 'lastWrite' | 'readScreen'>
+  ptys: Pick<PtyRegistry, 'list' | 'buffer' | 'write' | 'size' | 'lastWrite' | 'lastOutput' | 'readScreen'>
   procs: Pick<ProcRegistry, 'list' | 'write'>
   /** The profile's hook-events folder (core/hooks/sessionState.ts `hookEventsDirIn`). */
   hookEventsDir: string
@@ -210,8 +210,9 @@ export function registrySessions(a: {
     const pty = ptyOf(id)
     if (pty === null) return
     const write = (_: string, data: string): void => a.ptys.write(pty, data, by)
-    // 붙여 넣고 Enter — 앱의 스케줄러·롤링·Slack 이 쓰는 그 약속 그대로다(ptyDriver).
-    if (enter) await ptyDriver({ write }).deliver(id, value)
+    // 붙여 넣고 Enter — 앱의 스케줄러·롤링·Slack 이 쓰는 그 약속 그대로다(ptyDriver). Enter 는 에이전트가 글자를 다
+    // 그리고 조용해진 뒤에 간다: Codex 는 긴 글자의 끝 120ms 안에 온 Enter 를 줄바꿈으로 삼킨다.
+    if (enter) await ptyDriver({ write, lastOutputAt: () => a.ptys.lastOutput(pty) }).deliver(id, value)
     else write(id, value)
   }
 

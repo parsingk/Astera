@@ -128,6 +128,9 @@ interface LiveSession {
    *  what lets the failsafe **actually** decide "there is no consumer" — without it, the backpressure
    *  of a live but slow consumer gets switched off too. */
   ackedSincePause: boolean
+  /** When the pty last printed anything (epoch ms): a delivery's Enter waits for the quiet after its text
+   *  (core/sessions/sessionDriver.ts). */
+  lastOutputAt: number | null
 }
 
 export class SessionManager {
@@ -446,10 +449,12 @@ export class SessionManager {
       pendingBytes: 0,
       paused: false,
       resumeFailsafe: null,
-      ackedSincePause: false
+      ackedSincePause: false,
+      lastOutputAt: null
     }
     this.sessions.set(info.id, live)
     pty.onData((data) => {
+      live.lastOutputAt = Date.now()
       live.pendingBytes += data.length
       if (!live.paused && live.pendingBytes > this.highWater) {
         pty.pause()
@@ -589,6 +594,11 @@ export class SessionManager {
     const live = this.sessions.get(id)
     if (!live || live.info.status === 'exited') return
     live.pty.write(data, by)
+  }
+
+  /** When the session's pty last printed anything, or null for one that never has or is not here. */
+  lastOutput(id: string): number | null {
+    return this.sessions.get(id)?.lastOutputAt ?? null
   }
 
   // exited guard, for the same reason as write

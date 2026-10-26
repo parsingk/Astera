@@ -111,6 +111,23 @@ describe('PtyRegistry', () => {
     expect(r.lastWrite('nope')).toBe(null)
   })
 
+  // `sessions send` waits for the TUI to have drawn the text and gone quiet before its Enter (sessionDriver.ts)
+  it('remembers when a pty last printed anything', () => {
+    let clock = 1000
+    const pty = fakePty()
+    const r = new PtyRegistry({ spawn: () => pty, log: () => {}, now: () => clock })
+    r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    expect(r.lastOutput('p1')).toBe(null)
+    pty.emit('hello')
+    expect(r.lastOutput('p1')).toBe(1000)
+    clock = 2500
+    r.write('p1', 'x')
+    expect(r.lastOutput('p1')).toBe(1000)
+    pty.emit('x')
+    expect(r.lastOutput('p1')).toBe(2500)
+    expect(r.lastOutput('nope')).toBe(null)
+  })
+
   // The app's xterm writes its own reports into the pty — a focus change, the answer to a query the
   // agent's TUI sent. They reach the pty (the TUI asked for them), but nobody typed them.
   it('a write of only terminal reports reaches the pty but is not input; a keystroke is', () => {

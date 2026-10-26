@@ -5,7 +5,7 @@ import path from 'node:path'
 import { PtyRegistry, type RegistryPty } from './registry'
 import { ProcRegistry, type RegistryProc } from './procRegistry'
 import { registrySessions } from './sessions'
-import { ENTER_DELAY_MS } from '../core/sessions/sessionDriver'
+import { ENTER_MAX_WAIT_MS, ENTER_QUIET_MS } from '../core/sessions/sessionDriver'
 import { encodeUserTurn } from '../core/chat/claudeProtocol'
 import { encodeRequest, turnStartParams } from '../core/chat/codexProtocol'
 import type { Account } from '../core/types'
@@ -464,14 +464,22 @@ describe('registrySessions — read renders the screen', () => {
 })
 
 describe('registrySessions — send', () => {
-  // **ptyDriver's convention** — the text, then Enter ENTER_DELAY_MS later (core/sessions/sessionDriver.ts).
-  it('types the text, then Enter after ENTER_DELAY_MS, into the pty behind the id', async () => {
+  /** The agent draws what it was sent, on the registry's clock, at the fake timers' now. */
+  const draw = (agent: { emit(d: string): void }, d: string): void => {
+    clock.now = Date.now()
+    agent.emit(d)
+  }
+
+  // **ptyDriver's convention** — the text, then Enter once the agent has drawn it and gone quiet (sessionDriver.ts).
+  it('types the text, then Enter once the agent has drawn it and been quiet ENTER_QUIET_MS, into the pty behind the id', async () => {
     vi.useFakeTimers()
     try {
       const { sessions, agent, shell } = harness()
       const p = sessions.sendSession('ses-1', 'echo hi', true)
       expect(agent.sent).toEqual(['echo hi'])
-      await vi.advanceTimersByTimeAsync(ENTER_DELAY_MS - 1)
+      await vi.advanceTimersByTimeAsync(20)
+      draw(agent, 'echo hi')
+      await vi.advanceTimersByTimeAsync(ENTER_QUIET_MS - 1)
       expect(agent.sent).toEqual(['echo hi'])
       await vi.advanceTimersByTimeAsync(1)
       await p
@@ -482,20 +490,43 @@ describe('registrySessions — send', () => {
     }
   })
 
+  // Found on the dev app: Codex turned an Enter 150 ms after a long text into a newline (its paste window) and left
+  // the message in its input. Enter waits while the agent is still drawing what it was sent
+  it('holds Enter while the agent is still drawing a long text', async () => {
+    vi.useFakeTimers()
+    try {
+      const { sessions, agent } = harness()
+      const p = sessions.sendSession('ses-1', 'a long instruction '.repeat(20), true)
+      for (const at of [100, 250, 400]) {
+        await vi.advanceTimersByTimeAsync(at - (at === 100 ? 0 : at === 250 ? 100 : 250))
+        draw(agent, 'part')
+      }
+      expect(agent.sent).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(ENTER_QUIET_MS)
+      await p
+      expect(agent.sent).toHaveLength(2)
+      expect(agent.sent[1]).toBe('\r')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   // Observe deferred fix round 2, Minor b: a person's `sessions send` is written as a person's, its Enter a person's
   // prompt; an agent's or the Host's is the Host's own
   it('writes a person’s send marked as a person’s, and any other as the Host’s own', async () => {
     vi.useFakeTimers()
     try {
-      const { sessions, ptys } = harness()
+      const { sessions, ptys, agent } = harness()
       const sent = sessions.sendSession('ses-1', 'go', true, { person: true })
-      await vi.advanceTimersByTimeAsync(ENTER_DELAY_MS)
+      draw(agent, 'go')
+      await vi.advanceTimersByTimeAsync(ENTER_QUIET_MS)
       await sent
       expect(ptys.submittedBetween('pty-a', -Infinity, Infinity)).toBe('person')
       expect(ptys.lastPersonWrite('pty-a')).not.toBeNull()
-      clock.now += 1000
+      await vi.advanceTimersByTimeAsync(1000)
       const other = sessions.sendSession('ses-1', 'go', true)
-      await vi.advanceTimersByTimeAsync(ENTER_DELAY_MS)
+      draw(agent, 'go')
+      await vi.advanceTimersByTimeAsync(ENTER_QUIET_MS)
       await other
       expect(ptys.submittedBetween('pty-a', -Infinity, Infinity)).toBe('host')
     } finally {
@@ -517,7 +548,8 @@ describe('registrySessions — send', () => {
       const { sessions, agent } = harness()
       const a = sessions.sendSession('ses-1', 'a', true)
       const b = sessions.sendSession('ses-1', 'b', true)
-      await vi.advanceTimersByTimeAsync(ENTER_DELAY_MS * 3)
+      // An agent that draws nothing: each Enter goes at the longest wait
+      await vi.advanceTimersByTimeAsync(ENTER_MAX_WAIT_MS * 2)
       await Promise.all([a, b])
       expect(agent.sent).toEqual(['a', '\r', 'b', '\r'])
     } finally {

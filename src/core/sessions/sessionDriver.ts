@@ -10,6 +10,13 @@
 
 /** The gap between the command text and Enter on a pty — time for the TUI to digest the paste. */
 export const ENTER_DELAY_MS = 150
+/** With the session's output to go by, Enter waits until the TUI has shown the text and been quiet this long. Codex
+ *  takes a fast run of keys as a paste and turns an Enter that comes within 120 ms of its last key into a newline (its
+ *  PASTE_ENTER_SUPPRESS_WINDOW), and a long text reaches it well after it was written, so a fixed 150 ms left a long
+ *  message in its input unsent (found on the dev app, 2026-10-26). Its last key comes before the output it draws. */
+export const ENTER_QUIET_MS = 200
+/** How long Enter waits for that quiet at most: a session that keeps drawing (a spinner) never goes quiet. */
+export const ENTER_MAX_WAIT_MS = 5000
 
 /** A delivery made for a person (a Slack reply): carried down to the write, where the Host tells a person's prompt by it
  *  (observe deferred fix round 2, Important a). A schedule's or a roll's delivery carries none. */
@@ -26,12 +33,27 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 export function ptyDriver(deps: {
   write(sessionId: string, data: string, by?: ForPerson): void
   wait?: (ms: number) => Promise<void>
+  /** When the session's pty last printed anything (epoch ms), null for never. Given, Enter waits for the quiet after
+   *  the text (ENTER_QUIET_MS); left out, it goes ENTER_DELAY_MS after the text as it always did. */
+  lastOutputAt?: (sessionId: string) => number | null
 }): SessionDriver {
   const wait = deps.wait ?? sleep
+  const lastOutputAt = deps.lastOutputAt
   return {
     async deliver(sessionId, text, by) {
+      const wroteAt = Date.now()
       deps.write(sessionId, text, by) // a throw here is the rejection — no Enter follows a failed paste
       await wait(ENTER_DELAY_MS)
+      // Output after the text, then quiet: the TUI has taken the text in. Output from before does not count, as the
+      // text may not have reached it yet
+      while (lastOutputAt) {
+        const now = Date.now()
+        const last = lastOutputAt(sessionId)
+        const since = last !== null && last >= wroteAt ? last : null
+        const left = ENTER_MAX_WAIT_MS - (now - wroteAt)
+        if (left <= 0 || (since !== null && now - since >= ENTER_QUIET_MS)) break
+        await wait(Math.min(left, since !== null ? since + ENTER_QUIET_MS - now : ENTER_QUIET_MS))
+      }
       deps.write(sessionId, '\r', by)
     }
   }
