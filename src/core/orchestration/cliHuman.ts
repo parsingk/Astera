@@ -269,14 +269,23 @@ const AUDIT_LIST_REPEATED: ReadonlyArray<readonly [string, string]> = [
   ['limit', 'limit']
 ]
 
-/** A flag's value as a shell reads it back: bare when it is plain, else in double quotes (a name with a space, `git.*`). */
-const flagValue = (v: unknown): string => {
+/** A flag's value as the shell it is pasted into reads it back: bare when it is plain, else in single quotes, which no
+ *  shell expands (`$HOME` stays text). A quote inside is doubled in PowerShell, and closed, escaped and reopened in a POSIX
+ *  shell. A comma or a percent sign is not plain: PowerShell reads the one as an array, cmd the other as a variable. */
+export const flagValue = (v: unknown, platform: NodeJS.Platform = process.platform): string => {
   const s = String(v)
-  return /^[\w@%+=:,./-]+$/.test(s) ? s : JSON.stringify(s)
+  if (/^[A-Za-z0-9._:/@=+-]+$/.test(s)) return s
+  return platform === 'win32' ? `'${s.replaceAll("'", "''")}'` : `'${s.replaceAll("'", "'\\''")}'`
 }
 
-/** `args`: the flags the command was typed with, as the parser keys them, for an answer that names how to ask again. */
-export function humanFor(cmd: string, data: Record<string, unknown>, args: Record<string, unknown> = {}): string | null {
+/** `args`: the flags the command was typed with, as the parser keys them, for an answer that names how to ask again;
+ *  `platform`, the shell family a hint is quoted for (this machine's). */
+export function humanFor(
+  cmd: string,
+  data: Record<string, unknown>,
+  args: Record<string, unknown> = {},
+  platform: NodeJS.Platform = process.platform
+): string | null {
   switch (cmd) {
     // Observe mode design §12: a row per call, its time on the person's clock and its action as a phrase. Under the table,
     // the flags that ask for the next page: the filters that were used, then where it starts.
@@ -291,7 +300,7 @@ export function humanFor(cmd: string, data: Record<string, unknown>, args: Recor
       const next = data.next !== null && typeof data.next === 'object' ? (data.next as { until?: unknown; beforeId?: unknown }) : null
       if (next === null) return table
       const again = AUDIT_LIST_REPEATED.flatMap(([key, flag]) =>
-        typeof args[key] === 'string' || typeof args[key] === 'number' ? [`--${flag} ${flagValue(args[key])}`] : []
+        typeof args[key] === 'string' || typeof args[key] === 'number' ? [`--${flag} ${flagValue(args[key], platform)}`] : []
       )
       return [table, '', ['more:', ...again, `--until ${str(next.until)} --before-id ${str(next.beforeId)}`].join(' ')].join('\n')
     }

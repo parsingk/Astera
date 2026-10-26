@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { columns, displayWidth, humanFor, quietFor, stateWord } from './cliHuman'
+import { ACTION_PHRASES, COVERAGE_NOTE_PHRASES } from '../audit/phrases'
+import type { AuditAction, CoverageNote } from '../audit/types'
+import type { MessageKey } from '../i18n'
+import { en } from '../i18n/messages/en'
 
 describe('stateWord', () => {
   // 순서가 뜻이다 — 멈춘 것이 결과보다 앞선다
@@ -690,8 +694,68 @@ describe('humanFor — audit and policies', () => {
       until: '2026-10-24T00:00:00Z', beforeId: 'au_9', limit: 50
     }
     expect(humanFor('audit-list', data, args)?.split('\n').at(-1)).toBe(
-      `more: --session sess_a --agent-profile "Reviewer Bot" --action "git.*" --decision would-deny --since 2026-10-23T00:00:00Z --limit 50 --until ${push.at} --before-id ${push.id}`
+      `more: --session sess_a --agent-profile 'Reviewer Bot' --action 'git.*' --decision would-deny --since 2026-10-23T00:00:00Z --limit 50 --until ${push.at} --before-id ${push.id}`
     )
+  })
+
+  // The hint is pasted into the shell the person types in: single quotes there never expand a `$`, and a quote in the
+  // value is doubled in PowerShell and closed, escaped and reopened in a POSIX shell.
+  it('audit list’s next page hint quotes each value for the shell it is pasted into', () => {
+    const data = { records: [push], truncated: true, next: { until: push.at, beforeId: push.id } }
+    const hint = (platform: NodeJS.Platform, args: Record<string, unknown>): string => humanFor('audit-list', data, args, platform)?.split('\n').at(-1) ?? ''
+    const tail = ` --until ${push.at} --before-id ${push.id}`
+    expect(hint('win32', { agentProfile: "it's $HOME" })).toBe(`more: --agent-profile 'it''s $HOME'${tail}`)
+    expect(hint('linux', { agentProfile: "it's $HOME" })).toBe(`more: --agent-profile 'it'\\''s $HOME'${tail}`)
+    expect(hint('darwin', { action: 'git.*', agentProfile: 'a b' })).toBe(`more: --agent-profile 'a b' --action 'git.*'${tail}`)
+    // Only safe characters stay bare, and a number is text like the rest
+    for (const platform of ['win32', 'linux'] as const)
+      expect(hint(platform, { session: 'sess_a', agentProfile: 'Reviewer.v2:x/y@z=1+2-3', limit: 50 })).toBe(
+        `more: --session sess_a --agent-profile Reviewer.v2:x/y@z=1+2-3 --limit 50${tail}`
+      )
+    // A comma and a percent sign are not safe: PowerShell reads the one as an array and cmd the other as a variable
+    expect(hint('win32', { agentProfile: 'a,b%c' })).toBe(`more: --agent-profile 'a,b%c'${tail}`)
+  })
+
+  // Task 5 minor: the CLI's English is the screen's English, so the two cannot drift
+  describe('the English the CLI prints is the one the screen says', () => {
+    const screen = (key: MessageKey): string => en[key]
+    const rowOf = (record: Record<string, unknown>): string => humanFor('audit-list', { records: [record], truncated: false, next: null }) ?? ''
+
+    it('an action is its screen phrase, in audit list and in audit summary', () => {
+      for (const action of Object.keys(ACTION_PHRASES) as AuditAction[]) {
+        const phrase = screen(ACTION_PHRASES[action])
+        expect(rowOf({ ...read, action }), action).toContain(`  ${phrase}  `)
+        const summary = humanFor('audit-summary', { allow: 1, wouldDeny: 0, unknown: 0, byAction: { [action]: { allow: 1, wouldDeny: 0, unknown: 0 } } })
+        expect(summary, action).toContain(phrase)
+      }
+    })
+
+    it('a coverage note is its screen phrase', () => {
+      for (const note of Object.keys(COVERAGE_NOTE_PHRASES) as CoverageNote[]) {
+        const out = humanFor('policies-show', {
+          mode: 'observe',
+          policy: { rules: [], otherwise: 'allow' },
+          coverage: [{ provider: 'claude', kind: 'chat', classes: { shell: { level: 'partial', note } } }]
+        })
+        expect(out, note).toContain(`partial (${screen(COVERAGE_NOTE_PHRASES[note])})`)
+      }
+    })
+
+    // Where the CLI deliberately differs: its words are the ones a flag takes back (`--decision would-deny`), so a script
+    // reads the table it prints and a person types what it says. The screen has a sentence-case label for the same three
+    // decisions, five coverage classes and three levels; the keys exist there, which this holds to the same sets.
+    it('decisions, coverage classes and levels are the CLI’s flag words, one for each screen label', () => {
+      expect(rowOf({ ...push, ruleId: undefined })).toContain('would-deny')
+      expect(['allow', 'would-deny', 'unknown'].map((d) => en[`settings.security.decision.${d}` as MessageKey])).toEqual(['Allowed', 'Would be denied', 'Unknown'])
+      const coverage = humanFor('policies-show', {
+        mode: 'observe',
+        policy: { rules: [], otherwise: 'allow' },
+        coverage: [{ provider: 'claude', kind: 'chat', classes: { shell: { level: 'seen' }, mcp: { level: 'none' }, network: { level: 'partial' } } }]
+      })
+      for (const word of ['shell', 'file read', 'file write', 'MCP', 'network', 'seen', 'none', 'partial']) expect(coverage, word).toContain(word)
+      for (const key of ['shell', 'file-read', 'file-write', 'mcp', 'network']) expect(en[`settings.security.coverage.class.${key}` as MessageKey], key).toBeTruthy()
+      for (const key of ['seen', 'partial', 'none']) expect(en[`settings.security.coverage.level.${key}` as MessageKey], key).toBeTruthy()
+    })
   })
 
   it('audit summary is the totals, then a row per action, the most seen first', () => {
