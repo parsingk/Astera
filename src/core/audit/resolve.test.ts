@@ -1961,7 +1961,8 @@ describe('malformed and hostile input', () => {
     bash(`${'$(( "a" '.repeat(30_000)}`)
     expect(Date.now() - started).toBeLessThan(2000)
     // a failed reading of one does not hide a later one that closes
-    expect(bash('echo $((git push) ) $((1+2)); npm test')).toMatchObject({ action: 'process.execute' })
+    const after = bash('echo $((git push) ) $((1+2)); npm test')
+    expect(acts(after)).toContain('git.remote.write')
   })
 
   it('reads an apply_patch header with a long run of spaces in linear time', () => {
