@@ -630,6 +630,15 @@ describe('dispatchOfSession', () => {
     expect(dispatchOfSession(s, 'sess_b', T('00:45'))).toBeNull()
   })
 
+  // Deferred minor c: a worker's last calls inside the turn that was running when its Dispatch ended keep its Task
+  // however late they come; a prompt typed into the tab after the end begins a turn that is nobody's Task
+  it('takes an ended Dispatch for a call in the turn running at its end, however late, and none for a turn begun after', () => {
+    const s = state([{ id: 'd1', taskId: 'task1', sessionId: 'sess_b', startedAt: T('01:00'), endedAt: T('02:00') }])
+    const began = (at: string) => () => Date.parse(at)
+    expect(dispatchOfSession(s, 'sess_b', T('02:03'), began(T('01:30')))).toEqual({ jobId: 'job1', runId: 'run1', taskId: 'task1' })
+    expect(dispatchOfSession(s, 'sess_b', '2026-10-23T02:01:30.000Z', began(T('02:01')))).toBeNull()
+  })
+
   it('falls to the coordinator slot once the ended Dispatch’s window has passed', () => {
     const s = state(
       [{ id: 'd1', taskId: 'task1', sessionId: 'sess_co', startedAt: T('01:00'), endedAt: T('02:00') }],

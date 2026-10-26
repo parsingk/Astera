@@ -25,9 +25,10 @@
 // 1 GB and rollouts 93 MB, and what this session wrote is at the end (a session's start is heard well before its first
 // response is written).
 //
-// **Whom a response was for** is `ownerOf` at the response's own time: the Dispatch the session held open then (one
-// that ended holds nothing after its end), else the Run it coordinated, while that Run was unfinished and after it
-// finished to the end of the turn that was running then (final review I2, observe deferred minor b). When the state no
+// **Whom a response was for** is `ownerOf` at the response's own time: the Dispatch the session held open then, or one
+// that had ended while the turn running at its end went on (observe deferred minor c), else the Run it coordinated,
+// while that Run was unfinished and after it finished to the end of the turn that was running then (final review I2,
+// observe deferred minor b). When the state no
 // longer names the session (a roll rekeyed its Dispatch, or its Run's coordinator slot, before its last lines were
 // read), the owner it last had stands, within the same bounds. A response for nobody (a person's own tab) is not kept.
 // A session the app runs in its own node-pty, with no Host, is not read: its Tasks show no tokens.
@@ -63,6 +64,12 @@ const latest = <T>(items: readonly T[], key: (x: T) => number): T | undefined =>
 /** Whether the Dispatch was open at `t`: from its start to its end, or on while it has none. */
 const held = (x: Dispatch, t: number): boolean => Date.parse(x.startedAt) <= t && (x.endedAt === undefined || t <= Date.parse(x.endedAt))
 
+/** Whether the Dispatch, which ended before `t`, still holds its session's work at `t`: to the end of the turn that was
+ *  running when it ended (`heldPastEnd`; observe deferred minor c), where a worker's last response after its report
+ *  lands. */
+const heldAfter = (x: Dispatch, t: number, turn: () => number | null): boolean =>
+  x.endedAt !== undefined && Date.parse(x.endedAt) < t && heldPastEnd(Date.parse(x.endedAt), t, turn)
+
 /** Whether the coordinator of the Run spent `t` for it: while the Run is unfinished, and after it finished to the end of
  *  the turn that was running when its outcome became final (`heldPastEnd` at `runEndOf`; observe deferred minor b). */
 const coordinating = (s: OrchState, r: JobRun, t: number, turn: () => number | null): boolean =>
@@ -70,11 +77,13 @@ const coordinating = (s: OrchState, r: JobRun, t: number, turn: () => number | n
 
 /**
  * Whom a session's response at `at` was for: the session's Dispatch open then (the one started last, when two were),
- * else the Run whose coordinator the session is while it coordinates it (`coordinating`), the unfinished one first. A
- * Dispatch holds only what was spent while it was open, read late or not (fix round 1, ruling 3): a tab a worker was
- * typed into (`worker-start --terminal`) goes on after the Dispatch ended, and that is not the Task's work, nor is what
- * it spent before. A finished Run's coordinator holds its wrap-up, to the end of the turn that was running when the Run
- * finished: a prompt typed into its tab after that is nobody's Run.
+ * else the one that ended last while the turn running at its end goes on, else the Run whose coordinator the session
+ * is while it coordinates it (`coordinating`), the unfinished one first. A Dispatch holds what was spent while it was
+ * open, read late or not, and after its end to the end of the turn that was running then, where a worker's last
+ * response after its report lands (observe deferred minor c); not what a prompt typed afterwards led to (fix round 1,
+ * ruling 3): a tab a worker was typed into (`worker-start --terminal`) goes on after the Dispatch ended, and that is not
+ * the Task's work, nor is what it spent before. A finished Run's coordinator holds its wrap-up, to the end of the turn
+ * that was running when the Run finished: a prompt typed into its tab after that is nobody's Run.
  *
  * `turn` is when the turn holding `at` began, at the latest (epoch ms), as the session's own lines tell it
  * (createTokenSources' turns); null when they cannot, and then two minutes after the end stand in for the turn.
@@ -87,10 +96,16 @@ const coordinating = (s: OrchState, r: JobRun, t: number, turn: () => number | n
 export function tokenOwnerOf(s: OrchState, sessionId: string, at: string, last: TokenOwner | null = null, turn: number | null = null): TokenOwner | null {
   const t = Date.parse(at)
   const turnOf = (): number | null => turn
-  const dispatch = latest(
-    s.dispatches.filter((x: Dispatch) => x.sessionId === sessionId && held(x, t)),
-    (x) => Date.parse(x.startedAt)
-  )
+  const mine = s.dispatches.filter((x: Dispatch) => x.sessionId === sessionId)
+  const dispatch =
+    latest(
+      mine.filter((x) => held(x, t)),
+      (x) => Date.parse(x.startedAt)
+    ) ??
+    latest(
+      mine.filter((x) => heldAfter(x, t, turnOf)),
+      (x) => Date.parse(x.endedAt!)
+    )
   if (dispatch) return { dispatchId: dispatch.id }
   const coordinated = s.runs.filter((r: JobRun) => r.coordinatorSessionId === sessionId)
   if (coordinated.length > 0) {
@@ -101,7 +116,7 @@ export function tokenOwnerOf(s: OrchState, sessionId: string, at: string, last: 
   if (last === null) return null
   if ('dispatchId' in last) {
     const x = s.dispatches.find((d) => d.id === last.dispatchId)
-    return x && held(x, t) ? last : null
+    return x && (held(x, t) || heldAfter(x, t, turnOf)) ? last : null
   }
   const run = s.runs.find((r) => r.id === last.coordinatorOf)
   return run && coordinating(s, run, t, turnOf) ? last : null

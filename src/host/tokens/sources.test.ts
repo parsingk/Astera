@@ -44,6 +44,8 @@ const counted = (at: number, total: [number, number], last: [number, number]): s
   return JSON.stringify({ timestamp: iso(at), type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: u(total), last_token_usage: u(last) }, rate_limits: null } })
 }
 const lines = (...ls: string[]): string => ls.map((l) => l + '\n').join('')
+/** A Codex rollout event with no more to it than its kind (task_started, user_message, task_complete). */
+const codexEvent = (at: number, type: string): string => JSON.stringify({ timestamp: iso(at), type: 'event_msg', payload: { type } })
 /** A prompt a person (or Astera) typed, as the transcript writes it. */
 const prompt = (at: number, text: string): string => JSON.stringify({ type: 'user', timestamp: iso(at), message: { role: 'user', content: text } })
 /** A tool's result coming back inside a turn: written as a user line too, and not a prompt. */
@@ -127,14 +129,33 @@ describe('tokenOwnerOf', () => {
   })
 
   // Fix round 1, ruling 3: a Dispatch holds only what was spent while it was open. A tab a worker was typed into
-  // (`worker-start --terminal`) goes on being used after the Dispatch ended, and that is not the Task's work
-  it('a Dispatch that ended holds nothing spent after its end, and a response read late counts up to it', () => {
+  // (`worker-start --terminal`) goes on being used after the Dispatch ended, and that is not the Task's work: a prompt
+  // typed after the end begins a turn of its own (deferred minor c)
+  it('a Dispatch that ended holds nothing spent in a turn begun after its end, and a response read late counts up to it', () => {
     const s = orch([dispatch('d1', 't1', 'sess_a', iso(T0), iso(T0 + 500)), dispatch('d2', 't1', 'sess_a', iso(T0 + 1000))])
     expect(tokenOwnerOf(s, 'sess_a', iso(T0 + 500))).toEqual({ dispatchId: 'd1' })
-    expect(tokenOwnerOf(s, 'sess_a', iso(T0 + 700))).toBeNull()
-    expect(tokenOwnerOf(s, 'sess_a', iso(T0 + 1500))).toEqual({ dispatchId: 'd2' })
+    expect(tokenOwnerOf(s, 'sess_a', iso(T0 + 700), null, T0 + 600)).toBeNull()
+    expect(tokenOwnerOf(s, 'sess_a', iso(T0 + 1500), null, T0 + 600)).toEqual({ dispatchId: 'd2' })
     const ended = orch([dispatch('d1', 't1', 'sess_a', iso(T0), iso(T0 + 500))])
-    expect(tokenOwnerOf(ended, 'sess_a', iso(T0 + 900))).toBeNull()
+    expect(tokenOwnerOf(ended, 'sess_a', iso(T0 + 900), null, T0 + 800)).toBeNull()
+  })
+
+  // Deferred minor c: a worker's last response can finish after its report closed the Dispatch, inside the turn that was
+  // running then; it is the Task's however long it takes. Lines that cannot tell turns: two minutes, as the audit has
+  it('a Dispatch holds its session’s responses to the end of the turn running when it ended, or two minutes when turns are not known', () => {
+    const MIN = 60_000
+    const end = T0 + MIN
+    const s = orch([dispatch('d1', 't1', 'sess_w', iso(T0), iso(end))])
+    expect(tokenOwnerOf(s, 'sess_w', iso(end + 3 * MIN), null, T0 + 100)).toEqual({ dispatchId: 'd1' })
+    expect(tokenOwnerOf(s, 'sess_w', iso(end + 3 * MIN), null, end + 2 * MIN)).toBeNull()
+    expect(tokenOwnerOf(s, 'sess_w', iso(end + 2 * MIN), null, null)).toEqual({ dispatchId: 'd1' })
+    expect(tokenOwnerOf(s, 'sess_w', iso(end + 2 * MIN + 1), null, null)).toBeNull()
+    // Never what it spent before its start
+    expect(tokenOwnerOf(s, 'sess_w', iso(T0 - 10), null, T0 - 100)).toBeNull()
+    // The owner it last had, within the same bounds
+    const rekeyed = orch([dispatch('d1', 't1', 'sess_w2', iso(T0), iso(end))])
+    expect(tokenOwnerOf(rekeyed, 'sess_w', iso(end + 3 * MIN), { dispatchId: 'd1' }, T0 + 100)).toEqual({ dispatchId: 'd1' })
+    expect(tokenOwnerOf(rekeyed, 'sess_w', iso(end + 3 * MIN), { dispatchId: 'd1' }, end + 2 * MIN)).toBeNull()
   })
 
   // A roll rekeys the Dispatch before the old session's last lines are read: the owner that session last had stands,
@@ -142,7 +163,7 @@ describe('tokenOwnerOf', () => {
   it('a session the state no longer names keeps the owner it last had, while that Dispatch held the time', () => {
     const s = orch([dispatch('d1', 't1', 'sess_b', iso(T0), iso(T0 + 500))], 'sess_k2')
     expect(tokenOwnerOf(s, 'sess_a', iso(T0 + 100), { dispatchId: 'd1' })).toEqual({ dispatchId: 'd1' })
-    expect(tokenOwnerOf(s, 'sess_a', iso(T0 + 900), { dispatchId: 'd1' })).toBeNull()
+    expect(tokenOwnerOf(s, 'sess_a', iso(T0 + 900), { dispatchId: 'd1' }, T0 + 800)).toBeNull()
     expect(tokenOwnerOf(s, 'sess_a', iso(T0 + 100), { dispatchId: 'd_gone' })).toBeNull()
     expect(tokenOwnerOf(s, 'sess_k1', iso(T0 + 100), { coordinatorOf: 'run_1' })).toEqual({ coordinatorOf: 'run_1' })
     expect(tokenOwnerOf(s, 'sess_k1', iso(T0 + 100), { coordinatorOf: 'run_gone' })).toBeNull()
@@ -473,6 +494,37 @@ describe('createTokenSources', () => {
       tokens: { input: 7, output: 3, total: 10 },
       coordinatorTokens: { input: 500, output: 50, total: 550 }
     })
+    r.sources.dispose()
+  })
+
+  // Deferred minor c, end to end: a Codex worker's rollout tells its turns by task_started and user_message
+  it('counts a Codex worker’s response that finished three minutes after its report, inside the same turn, and not the next turn', async () => {
+    const MIN = 60_000
+    const end = T0 + MIN
+    let now = T0
+    let state = orch([dispatch('d1', 't1', 'sess_w')])
+    const r = await rig({ state: () => state, now: () => now })
+    const file = path.join(r.dir, 'rollout-w.jsonl')
+    await fs.writeFile(file, '')
+    r.ptys.open('pty_w', note('session', 'sess_w', { rolloutPath: file }))
+    await fs.appendFile(file, lines(codexEvent(T0 + 100, 'task_started'), codexEvent(T0 + 100, 'user_message'), counted(T0 + 200, [100, 10], [100, 10])))
+    await r.sources.poll()
+    // The report closes the Dispatch; the model's last response of the turn ends three minutes later
+    state = orch([dispatch('d1', 't1', 'sess_w', iso(T0), iso(end))])
+    await fs.appendFile(
+      file,
+      lines(
+        counted(end + 3 * MIN, [150, 20], [50, 10]),
+        codexEvent(end + 3 * MIN + 10, 'task_complete'),
+        // A person types into the tab after that turn
+        codexEvent(end + 4 * MIN, 'task_started'),
+        codexEvent(end + 4 * MIN, 'user_message'),
+        counted(end + 4 * MIN + 500, [400, 40], [250, 20])
+      )
+    )
+    now = end + 5 * MIN
+    await r.sources.poll()
+    expect(taskTokensOf(state, 't1', r.store.spent())).toEqual({ input: 150, output: 20, total: 170 })
     r.sources.dispose()
   })
 
