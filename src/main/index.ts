@@ -740,8 +740,8 @@ app.whenReady().then(async () => {
       write: (id, d, by) => {
         core!.sessions.write(id, d, by) // a throw is the rejection the caller sees
       },
-      // Enter waits for the session to have drawn the text and gone quiet: Codex turns an Enter that comes right after
-      // a long text into a newline
+      // Enter waits for the session to have drawn the text and gone quiet: Codex swallows an Enter that comes right
+      // after a long text (openai/codex#56982)
       lastOutputAt: (id) => core!.sessions.lastOutput(id)
     }),
     // The manager's `send` resolves for an id it does not know, and a silent resolve reads as "delivered"

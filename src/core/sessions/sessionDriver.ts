@@ -11,9 +11,9 @@
 /** The gap between the command text and Enter on a pty — time for the TUI to digest the paste. */
 export const ENTER_DELAY_MS = 150
 /** With the session's output to go by, Enter waits until the TUI has shown the text and been quiet this long. Codex
- *  takes a fast run of keys as a paste and turns an Enter that comes within 120 ms of its last key into a newline (its
- *  PASTE_ENTER_SUPPRESS_WINDOW), and a long text reaches it well after it was written, so a fixed 150 ms left a long
- *  message in its input unsent (found on the dev app, 2026-10-26). Its last key comes before the output it draws. */
+ *  takes a fast run of keys as a paste and swallows an Enter that comes within 120 ms of it, and through ConPTY a long
+ *  text reaches it well after it was written, so a fixed 150 ms left a long message in its input unsent (found on the
+ *  dev app, 2026-10-26; openai/codex#56982 reports it with a 200 ms gap). Its last key comes before the output it draws. */
 export const ENTER_QUIET_MS = 200
 /** How long Enter waits for that quiet at most: a session that keeps drawing (a spinner) never goes quiet. */
 export const ENTER_MAX_WAIT_MS = 5000

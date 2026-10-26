@@ -16,8 +16,8 @@ describe('ptyDriver', () => {
     vi.useRealTimers()
   })
 
-  // Found on the dev app: Codex takes a fast run of keys as a paste and turns an Enter within 120 ms of its last key
-  // into a newline, and a long text reaches it later than it was written, so Enter at 150 ms left it unsent
+  // Found on the dev app: Codex takes a fast run of keys as a paste and swallows an Enter within 120 ms of it, and a
+  // long text reaches it later than it was written, so Enter at 150 ms left it unsent (openai/codex#56982)
   describe('with the time of the session’s last output', () => {
     afterEach(() => vi.useRealTimers())
     const rig = () => {

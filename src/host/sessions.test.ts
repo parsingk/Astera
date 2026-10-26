@@ -490,8 +490,8 @@ describe('registrySessions — send', () => {
     }
   })
 
-  // Found on the dev app: Codex turned an Enter 150 ms after a long text into a newline (its paste window) and left
-  // the message in its input. Enter waits while the agent is still drawing what it was sent
+  // Found on the dev app: Codex swallowed an Enter 150 ms after a long text (its paste detection, openai/codex#56982)
+  // and left the message in its input. Enter waits while the agent is still drawing what it was sent
   it('holds Enter while the agent is still drawing a long text', async () => {
     vi.useFakeTimers()
     try {
