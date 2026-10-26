@@ -6,6 +6,7 @@ import { t as translate, LANGS, type MessageKey, type MessageParams } from '../.
 import type { AgentProfile } from '../../../core/agentProfiles/types'
 import {
   PROFILE_REASONS,
+  addableAccounts,
   chatHoldsPrompts,
   permissionFields,
   permissionLabel,
@@ -14,6 +15,7 @@ import {
   profileFailureLine,
   profileNameOf,
   profileOfConversation,
+  providerSuffix,
   reasonLine,
   resumeAsLine,
   resumeProfile,
@@ -216,5 +218,36 @@ describe('agentProfilesText', () => {
   it('names a profile by its name, or by its id when the list does not have it', () => {
     expect(profileNameOf([profile()], 'ap_1')).toBe('Reviewer')
     expect(profileNameOf([profile()], 'ap_9')).toBe('ap_9')
+  })
+})
+
+// 2026-10-26: the add list offered Claude and Codex accounts together, and saving a mix was refused (mixed-provider). Once
+// one account is picked it offers only that provider's, and every item says its provider by name
+describe('the editor’s add list', () => {
+  const c1 = { id: 'c1', provider: 'claude' as const }
+  const c2: { id: string; provider?: 'claude' | 'codex' } = { id: 'c2' } // no provider: a Claude account, as every older one is
+  const x1 = { id: 'x1', provider: 'codex' as const }
+  const x2 = { id: 'x2', provider: 'codex' as const }
+  const all = [c1, x1, c2, x2]
+
+  it('offers every account before one is picked, then only the picked one’s provider', () => {
+    expect(addableAccounts(all, []).map((a) => a.id)).toEqual(['c1', 'x1', 'c2', 'x2'])
+    expect(addableAccounts(all, ['c1']).map((a) => a.id)).toEqual(['c2'])
+    expect(addableAccounts(all, ['x1']).map((a) => a.id)).toEqual(['x2'])
+    expect(addableAccounts(all, ['x1', 'x2'])).toEqual([])
+    // The first picked decides; an id no account has any more decides nothing
+    expect(addableAccounts(all, ['gone']).map((a) => a.id)).toEqual(['c1', 'x1', 'c2', 'x2'])
+  })
+
+  it('says each account’s provider by name', () => {
+    expect(providerSuffix(c1)).toBe(' (Claude)')
+    expect(providerSuffix(c2)).toBe(' (Claude)')
+    expect(providerSuffix(x1)).toBe(' (Codex)')
+  })
+
+  it('is the list the editor offers, with the provider after each name', () => {
+    const editor = source('AgentProfilesSettings.tsx')
+    expect(editor).toContain('const unpicked = addableAccounts(accounts, d.accountIds)')
+    expect(editor).toMatch(/<AccountSelect accounts=\{unpicked\}[^>]*suffixOf=\{providerSuffix\}/)
   })
 })

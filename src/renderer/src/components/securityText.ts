@@ -23,6 +23,9 @@ type Failure = { ok: false; code: string; message: string; reason?: string }
 export const SECURITY_TAB = 'Security & Access'
 export const POLICIES_TITLE = 'Policies'
 export const AUDIT_LOGS_TITLE = 'Audit Logs'
+/** The observe mode and the rules, named in English in every language too (the person, 2026-10-26). */
+export const OBSERVE_NAME = 'Observe'
+export const RULES_TITLE = 'Rules'
 
 /** A record as audit-list answers it: with the decision the rules in force give it, and the rule that gave it. */
 export type AuditRow = AuditRecord & { decision: AuditDecision; ruleId?: string }
@@ -75,10 +78,8 @@ const SCOPES: Record<NonNullable<AuditRule['scope']> | 'anywhere', MessageKey> =
 }
 export const scopeLabel = (s: AuditRule['scope'], t: T): string => t(SCOPES[s ?? 'anywhere'])
 
-export const MODES: Record<AuditMode, MessageKey> = {
-  compatibility: 'settings.security.mode.compatibility',
-  observe: 'settings.security.mode.observe'
-}
+/** The switch's two choices: Off in the person's language, and the mode by its English name. */
+export const modeLabel = (m: AuditMode, t: T): string => (m === 'observe' ? OBSERVE_NAME : t('settings.security.mode.compatibility'))
 
 export const COVERAGE_CLASSES: CoverageClass[] = ['shell', 'file-read', 'file-write', 'mcp', 'network']
 const CLASS_WORDS: Record<CoverageClass, MessageKey> = {
@@ -438,7 +439,7 @@ export const SECURITY_KEYS: MessageKey[] = [
   ...Object.values(DECISION_WORDS),
   ...Object.values(EFFECTS),
   ...Object.values(SCOPES),
-  ...Object.values(MODES),
+  'settings.security.mode.compatibility',
   ...Object.values(CLASS_WORDS),
   ...Object.values(LEVELS),
   ...Object.values(KINDS),
