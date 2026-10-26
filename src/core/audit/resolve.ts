@@ -391,10 +391,15 @@ interface Cmd {
   /** Set by expand on a command that runs others too deep in scripts to be read, and by splitLine on one with a substitution
    *  in double quotes too deep to be read, so what it does is not known. */
   unread?: true
-  /** Set by splitLine on a command a substitution in double quotes runs, and passed on to what it runs in turn: it runs in a
-   *  subshell, so a `cd` in it moves the commands of the substitution and none after it. */
-  sub?: true
+  /** Set by splitLine on a command that runs in a subshell: the group `( )`, `$( )` or substitution it is in, and the ones
+   *  those are in, outermost first. A `cd` in a subshell moves the commands of that subshell and none after it. */
+  groups?: number[]
 }
+
+/** The ids of subshells, which only have to differ from each other. */
+let nextGroup = 0
+/** How many unquoted groups deep a command is told apart (each command carries the list), so a run of `(` costs no more than a line of them. */
+const MAX_GROUPS = 16
 
 interface Facts {
   action: AuditAction
@@ -435,13 +440,11 @@ function resolveShell(rec: Record<string, unknown>, at: Ctx, flavor: Flavor): Re
 
   const parts: ResolvedAction[] = []
   let lead: ResolvedAction | undefined
-  let held: { base: string | null } | undefined // where the line was before the commands of a substitution, which a cd in them leaves
+  const held: Array<{ id: number; base: string | null }> = [] // where the line was outside each subshell open now, which a cd in it leaves
   for (const cmd of commands) {
-    if (cmd.sub === true) held ??= { base }
-    else if (held !== undefined) {
-      base = held.base
-      held = undefined
-    }
+    const chain = cmd.groups ?? []
+    while (held.length > 0 && (held.length > chain.length || held[held.length - 1].id !== chain[held.length - 1])) base = held.pop()!.base
+    for (let k = held.length; k < chain.length; k++) held.push({ id: chain[k], base })
     const ctx: Ctx = { cwd, base }
     let own: ResolvedAction | undefined
     if (cmd.words.length > 0) {
@@ -626,7 +629,7 @@ function stripPrefix(raw: Cmd, flavor: Flavor): { cmd: Cmd; syntax: boolean } {
   const rest = words.slice(i)
   const cmdlet = rest.length > 0 ? cmdletOf(rest[0], flavor) : undefined
   const cmd: Cmd = {
-    words: rest, out: raw.out, call: raw.call, quoted: raw.quoted.slice(i), invoked: raw.invoked, cmdlet, unread: raw.unread, sub: raw.sub
+    words: rest, out: raw.out, call: raw.call, quoted: raw.quoted.slice(i), invoked: raw.invoked, cmdlet, unread: raw.unread, groups: raw.groups
   }
   const dropped = { cmd: { ...cmd, words: [], quoted: [] }, syntax: true }
   if (rest.length === 0) return { cmd, syntax }
@@ -699,7 +702,8 @@ function commandsBehind(cmd: Cmd, flavor: Flavor, depth: number): Cmd[] {
 }
 
 /** The commands a command runs, each in the subshell the command is in, if it is in one. */
-const inSubshell = (cmd: Cmd, run: Cmd[]): Cmd[] => (cmd.sub === true ? run.map((c) => ({ ...c, sub: true })) : run)
+const inSubshell = (cmd: Cmd, run: Cmd[]): Cmd[] =>
+  cmd.groups === undefined ? run : run.map((c) => ({ ...c, groups: [...cmd.groups!, ...(c.groups ?? [])] }))
 
 /** The commands of a line with the scripts inside `bash -c` and the like replaced by their own commands, and the commands
  *  that xargs, find -exec, watch and trap run put after the one that runs them. Also whether any of it was syntax rather
@@ -777,6 +781,8 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
   let cur = ''
   let has = false // a word has begun, so an empty '' counts
   let sink: { write: boolean; dup: boolean } | null = null // the next word is a redirection's target
+  const chain: number[] = [] // the unquoted `(` open now, as subshells, up to MAX_GROUPS deep: beyond it they share the last
+  let beyond = 0 // the `(` open past that
   let cases = 0 // the `case … in` read since the start that no `esac` has closed: a `)` in one ends a pattern, not a substitution
   let heredoc: { tag: string; indent: boolean; expands: boolean } | null = null // `expands`: its tag was not quoted, so the shell runs the substitutions in the body
 
@@ -796,6 +802,11 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
     has = false
     wordQuoted = false
   }
+  /** The commands of substitutions join the line, in the subshells the command they follow is in. */
+  const flushLater = (): void => {
+    for (const c of later) commands.push(chain.length > 0 ? { ...c, groups: [...chain, ...(c.groups ?? [])] } : c)
+    later.length = 0
+  }
   /** The body of a heredoc whose tag was not quoted, `from` to `to`, is read like the inside of double quotes: a `$( )` or a pair
    *  of backticks in it is run. Its commands follow the command that opened the heredoc.
    *  Says where the reading ended, past `to` when a substitution did not close inside the body (and then none is read twice). */
@@ -809,8 +820,7 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
         j = k >= 0 ? k : substitute(j, false)
       } else if ((e === '$' && line[j + 1] === '(') || e === '`') j = substitute(j, e === '`')
     }
-    for (const c of later) commands.push(c)
-    later.length = 0
+    flushLater()
     unread = false
     return j
   }
@@ -822,11 +832,10 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
       // Inside an unquoted ( ) or $( ) the command runs in a subshell, as the commands of a quoted substitution do
       const cmd: Cmd = { words, out, call, quoted, invoked }
       if (unread) cmd.unread = true
-      if (parens > 0) cmd.sub = true
+      if (chain.length > 0) cmd.groups = [...chain]
       commands.push(cmd)
     }
-    for (const c of later) commands.push(c)
-    later.length = 0
+    flushLater()
     unread = false
     words = []
     out = []
@@ -842,7 +851,8 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
       return at
     }
     const sub = splitFrom(line, at + (tick ? 1 : 2), tick ? 'tick' : 'paren', flavor, depth + 1)
-    for (const s of sub.commands) later.push({ ...s, sub: true })
+    const id = nextGroup++
+    for (const s of sub.commands) later.push({ ...s, groups: [id, ...(s.groups ?? [])] })
     return sub.end
   }
   /** Reads the POSIX arithmetic `$(( ))` at `at`, which runs nothing, for the substitutions inside it, and says where it ends
@@ -965,11 +975,17 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
       break
     } else if (c === ';' || c === '|' || c === ')' || (c === '`' && flavor === 'posix')) {
       endCommand()
-      if (c === ')' && parens > 0) parens--
+      if (c === ')' && parens > 0) {
+        parens--
+        if (beyond > 0) beyond--
+        else chain.pop()
+      }
     } else if (c === '(') {
       if (has && !wordQuoted && sink === null) invoked = true // `$f.Delete(`, `[IO.File]::Copy(`
       endCommand()
       parens++
+      if (chain.length < MAX_GROUPS) chain.push(nextGroup++)
+      else beyond++
     } else if (c === '&') {
       if (line[i + 1] === '&') {
         endCommand()

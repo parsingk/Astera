@@ -419,6 +419,17 @@ describe('decide, a denied command the resolver must reach', () => {
     expect(decide(bash('(cd sub); cd sub; rm -rf ../x'), p)).toEqual({ decision: 'allow' })
   })
 
+  it('starts each unquoted group from the folder held outside it, and restores it after the group', () => {
+    expect(decide(bash('(cd sub); (cd .. && rm -rf x)'), p)).toEqual(del)
+    expect(decide(bash('(cd sub); rm -rf ../x'), p)).toEqual(del)
+    expect(decide(bash('X="$(cd sub)" Y="$(cd .. && rm -rf x)"'), p)).toEqual(del)
+    // The inner group's cd does not move the outer group's next command, which is in the outer group's folder
+    expect(decide(bash('(cd a && (cd ../.. ) && rm -rf y)'), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('(cd a && (cd b); rm -rf ../../y)'), p)).toEqual(del)
+    // Inside one group the cd still carries on
+    expect(decide(bash('(cd sub && cd .. && rm -rf x)'), p)).toEqual({ decision: 'allow' })
+  })
+
   it('would deny a command that exec, nice, setsid, stdbuf, ionice, chrt, taskset, coproc or builtin run', () => {
     for (const line of [
       'exec git push',
