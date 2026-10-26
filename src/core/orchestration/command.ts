@@ -601,8 +601,8 @@ export interface OrchServerDeps {
   /** A terminal session's screen, rendered, by the app's session id, with up to `lines` rows of
    *  scrollback — empty once it has ended, because the scrollback goes with it. */
   readSession?(id: string, lines: number): Promise<SessionScreen>
-  /** Types into a terminal session by the app's session id, then presses Enter 150ms later when
-   *  `enter` (ptyDriver's convention), one delivery at a time per session. A write to one that has
+  /** Types into a terminal session by the app's session id, then presses Enter when `enter` once the session has
+   *  shown the text and gone quiet (ptyDriver's convention), one delivery at a time per session. A write to one that has
    *  ended is dropped by the registry, as every write is. `by.person`: a person sent it, written marked as a person's
    *  (observe deferred fix round 2, Minor b). */
   sendSession?(id: string, text: string, enter: boolean, by?: { person: true }): Promise<void>

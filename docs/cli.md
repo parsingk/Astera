@@ -1370,8 +1370,8 @@ out for a session Astera has not taken back yet after it starts, and for one nei
 card of, in which case it reads the same as one with no card. `--human` prints each turn under its
 role, the tools as `[tool]` lines, and the card last.
 
-`sessions send` types `--text` into a terminal session and presses Enter 150ms later, which is how
-the app delivers a scheduled message; `--no-enter` types the text and stops there. It answers
+`sessions send` types `--text` into a terminal session and presses Enter once the session has shown
+it and gone quiet (5 seconds at most), which is how the app delivers a scheduled message; `--no-enter` types the text and stops there. It answers
 `{"id":…,"sent":true,"enter":true}` once the Enter has gone out, and `sent` means the Host handed the
 text to the session. Two sends to one session are typed one after the other, never interleaved.
 `--text -` reads the text from standard input and drops one trailing newline, so a heredoc is typed

@@ -191,8 +191,8 @@ export function registrySessions(a: {
     return all.find((e) => e.alive) ?? all[0] ?? null
   }
 
-  /** One delivery at a time per session: the text-then-Enter pair is two writes 150ms apart, and a
-   *  second sender inside that window would put its text between them. Only what goes through here
+  /** One delivery at a time per session: the text-then-Enter pair is two writes with a wait between them
+   *  (untilEnter), and a second sender inside that window would put its text between them. Only what goes through here
    *  is ordered — the app's own writes reach the pty directly. */
   const queues = new Map<string, Promise<unknown>>()
   const serial = <T>(id: string, run: () => Promise<T>): Promise<T> => {

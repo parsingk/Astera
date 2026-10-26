@@ -1,12 +1,12 @@
 // How a coordinator hands one message to a session without knowing what kind of session it is — the
-// chat-sessions slice 4 design's seam ① (§3, §5.4). A terminal session takes the text and an Enter
-// 150 ms later (the paste-then-Enter convention rolling and the scheduler have always used); a chat
-// session takes one `chat.send`. Slice 4a uses this from the scheduler; 4b (Slack) and 4c (rolling)
+// chat-sessions slice 4 design's seam ① (§3, §5.4). A terminal session takes the text and then an Enter
+// once it has drawn the text and gone quiet (untilEnter; it was a fixed 150 ms until Codex was seen to
+// swallow that Enter, openai/codex#56982); a chat session takes one `chat.send`. Slice 4a uses this from the scheduler; 4b (Slack) and 4c (rolling)
 // route their sends through it too.
 //
 // In core rather than main because the Host types into sessions too (`astera sessions send`, answered
 // by the command layer inside the Host bundle), and it must use this same paste-then-Enter convention
-// rather than a second copy of the delay.
+// rather than a second copy of the wait.
 
 /** The gap between the command text and Enter on a pty — time for the TUI to digest the paste. */
 export const ENTER_DELAY_MS = 150

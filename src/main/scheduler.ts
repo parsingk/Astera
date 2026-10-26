@@ -145,7 +145,7 @@ export class SchedulerCoordinator {
         // here would then latch forever, because the signal that releases it would never arrive. Every
         // 'nudged' now comes from an in-place resume, which publishes 'none' right after sending Enter,
         // following the same pattern as sendPrompt, so that risk is gone — and the remaining risk, a schedule
-        // firing inside the window where the resume writes its prompt to the PTY and sends Enter 150ms later,
+        // firing inside the window where the resume has written its prompt to the PTY and waits to send Enter,
         // is suppressed just like every other resume window.
         entry.suppressed = true
         return
