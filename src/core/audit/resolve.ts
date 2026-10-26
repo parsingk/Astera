@@ -820,6 +820,12 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
         j = k >= 0 ? k : substitute(j, false)
       } else if ((e === '$' && line[j + 1] === '(') || e === '`') j = substitute(j, e === '`')
     }
+    if (unread) {
+      // too deep to read: what the heredoc's command does is not known, as for any substitution past the depth
+      const opener = commands[commands.length - 1]
+      if (opener === undefined) commands.push({ words: ['heredoc'], out: [], call: false, quoted: [false], invoked: false, unread: true })
+      else opener.unread = true
+    }
     flushLater()
     unread = false
     return j

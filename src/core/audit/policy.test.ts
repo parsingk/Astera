@@ -430,6 +430,11 @@ describe('decide, a denied command the resolver must reach', () => {
     expect(decide(bash('(cd sub && cd .. && rm -rf x)'), p)).toEqual({ decision: 'allow' })
   })
 
+  it('cannot tell a heredoc body substitution past the depth limit, and never allows it', () => {
+    expect(decide(bash('echo "$(echo "$(cat <<EOF\n$(git push)\nEOF\n)")"'), p)).toEqual({ decision: 'unknown' })
+    expect(decide(bash('echo "$(echo "$(cat <<EOF\n$(git push)\nEOF\n)")" ; git push'), p)).toEqual(push)
+  })
+
   it('would deny a command that exec, nice, setsid, stdbuf, ionice, chrt, taskset, coproc or builtin run', () => {
     for (const line of [
       'exec git push',
