@@ -390,6 +390,21 @@ describe('decide, a denied command the resolver must reach', () => {
     expect(decide(ps('switch ($x) {a {git push}}'), p)).toEqual(push)
   })
 
+  // PowerShell takes `\` as a path separator on Linux and macOS too, where Node's path reads it as part of a name: the
+  // brace test's `..\x` was read as a file inside the folder there (develop CI 40287863263, ubuntu and macos)
+  it('reads a PowerShell path’s backslashes as separators on every platform', () => {
+    const write = { decision: 'would-deny', ruleId: starterId('filesystem.write') }
+    expect(decide(ps('Remove-Item ..\\x -Recurse'), p)).toEqual(del)
+    expect(decide(ps('cd ..\\other; Remove-Item x -Recurse'), p)).toEqual(del)
+    expect(decide(ps('Get-Date > ..\\out.txt'), p)).toEqual(write)
+    expect(decide(ps('Remove-Item .\\build -Recurse'), p)).toEqual({ decision: 'allow' })
+  })
+
+  // A POSIX shell keeps a quoted backslash as part of the name, so the PowerShell reading must not reach it
+  it.runIf(process.platform !== 'win32')('keeps a quoted backslash in a POSIX shell path as part of the name', () => {
+    expect(decide(bash("rm -r '..\\x'"), p)).toEqual({ decision: 'allow' })
+  })
+
   it('would deny after a quoted $(( that no )) closes, which the shell reads as a substitution', () => {
     expect(decide(bash('echo "$((git push) )" ; rm -rf ../x'), p)).toEqual(push)
     expect(decide(bash('echo "$((git push) )"'), p)).toEqual(push)

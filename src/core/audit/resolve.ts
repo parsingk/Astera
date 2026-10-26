@@ -304,6 +304,8 @@ interface Ctx {
   /** What a relative path is relative to: the session's folder, a Codex call's own working directory, or where a `cd`
    *  went. Null after a `cd` to somewhere this cannot follow. */
   base: string | null
+  /** The paths are a PowerShell command's, which takes `\` as a separator on every platform. */
+  ps?: true
 }
 
 /** A shell path that names a place this cannot follow: home (also `~user`), or a variable. */
@@ -321,6 +323,12 @@ interface Place {
 }
 
 /** Git Bash, which Claude's Bash tool uses on Windows, writes the C: drive as /c. */
+/** A shell path as this platform's path functions read it. PowerShell takes `\` as a separator on Linux and macOS too, where
+ *  Node's path reads it as part of a name; a POSIX shell keeps a quoted `\` as part of the name, so only PowerShell's turn. */
+function shellPath(p: string, ctx: Ctx): string {
+  return ctx.ps === true && process.platform !== 'win32' ? nativePath(p.replace(/\\/g, '/')) : nativePath(p)
+}
+
 function nativePath(p: string): string {
   if (process.platform !== 'win32') return p
   const m = /^\/([A-Za-z])(?=\/|$)/.exec(p)
@@ -341,7 +349,7 @@ function placeOf(p: string, ctx: Ctx, fromShell: boolean): Place {
   const outside = (name: string): Place => ({ shown: `outside project: ${name}`, inside: false })
   if (URL_PATH.test(p)) return outside(hostOf(p) ?? 'url') // the host only, never the credentials in front of it
   if (HOME.test(p) || (fromShell && (UNFOLLOWABLE.test(p) || REMOTE_PATH.test(p)))) return outside(leaf(p))
-  const native = nativePath(p)
+  const native = shellPath(p, ctx)
   if (ctx.base === null && !path.isAbsolute(native)) return outside(leaf(p))
   const abs = path.resolve(ctx.base ?? ctx.cwd, native)
   if (!isPathWithin(ctx.cwd, abs)) return outside(leaf(abs))
@@ -394,6 +402,8 @@ interface Cmd {
   /** Set by splitLine on a command that runs in a subshell: the group `( )`, `$( )` or substitution it is in, and the ones
    *  those are in, outermost first. A `cd` in a subshell moves the commands of that subshell and none after it. */
   groups?: number[]
+  /** Set by splitLine on a command of a PowerShell line, whose paths take `\` as a separator on every platform. */
+  ps?: true
 }
 
 /** The ids of subshells, which only have to differ from each other. */
@@ -452,7 +462,7 @@ function resolveShell(rec: Record<string, unknown>, at: Ctx, flavor: Flavor): Re
     const chain = cmd.groups ?? []
     while (held.length > 0 && (held.length > chain.length || held[held.length - 1].id !== chain[held.length - 1])) base = held.pop()!.base
     for (let k = held.length; k < chain.length; k++) held.push({ id: chain[k], base })
-    const ctx: Ctx = { cwd, base }
+    const ctx: Ctx = cmd.ps === true ? { cwd, base, ps: true } : { cwd, base }
     let own: ResolvedAction | undefined
     if (cmd.words.length > 0) {
       const f = classify(cmd, ctx)
@@ -500,7 +510,7 @@ function partOf(f: Facts): ResolvedAction {
 function movedTo(args: Words, ctx: Ctx, cmdlet: string | undefined): string | null {
   const [dest] = pathArgs('cd', args, cmdlet)
   if (dest === undefined || UNFOLLOWABLE.test(dest)) return null
-  const native = nativePath(dest)
+  const native = shellPath(dest, ctx)
   return ctx.base === null && !path.isAbsolute(native) ? null : path.resolve(ctx.base ?? ctx.cwd, native)
 }
 
@@ -646,7 +656,8 @@ function stripPrefix(raw: Cmd, flavor: Flavor): { cmd: Cmd; syntax: boolean } {
   const rest = words.slice(i)
   const cmdlet = rest.length > 0 ? cmdletOf(rest[0], flavor) : undefined
   const cmd: Cmd = {
-    words: rest, out: raw.out, call: raw.call, quoted: raw.quoted.slice(i), invoked: raw.invoked, cmdlet, unread: raw.unread, groups: raw.groups
+    words: rest, out: raw.out, call: raw.call, quoted: raw.quoted.slice(i), invoked: raw.invoked, cmdlet, unread: raw.unread, groups: raw.groups,
+    ...(raw.ps === true ? { ps: true as const } : {})
   }
   const dropped = { cmd: { ...cmd, words: [], quoted: [] }, syntax: true }
   if (rest.length === 0) return { cmd, syntax }
@@ -682,7 +693,8 @@ function scriptOf(words: Words): { text: string; flavor: Flavor } | null {
 /** The words `from` up to `to` of a command as a command of their own, each as quoted as it was: what xargs, watch and
  *  find -exec run. It has none of the redirections of the command that runs it. */
 const commandAmong = (cmd: Cmd, from: number, to = cmd.words.length): Cmd => ({
-  words: cmd.words.slice(from, to), out: [], call: false, quoted: cmd.quoted.slice(from, to), invoked: false
+  words: cmd.words.slice(from, to), out: [], call: false, quoted: cmd.quoted.slice(from, to), invoked: false,
+  ...(cmd.ps === true ? { ps: true as const } : {})
 })
 
 /**
@@ -746,7 +758,7 @@ function expand(cmds: Cmd[], flavor: Flavor, depth = 0): { commands: Cmd[]; synt
     } else {
       const inner = expand(splitLine(script.text, script.flavor, depth + 1), script.flavor, depth + 1)
       out.push(...inSubshell(cmd, inner.commands))
-      if (cmd.out.length > 0) out.push({ words: [], out: cmd.out, call: false, quoted: [], invoked: false }) // `bash -c "x" > f`
+      if (cmd.out.length > 0) out.push({ words: [], out: cmd.out, call: false, quoted: [], invoked: false, ...(cmd.ps === true ? { ps: true as const } : {}) }) // `bash -c "x" > f`
       syntax ||= inner.syntax
     }
   }
@@ -878,6 +890,7 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
     if (words.length > 0 || out.length > 0) {
       // Inside an unquoted ( ) or $( ) the command runs in a subshell, as the commands of a quoted substitution do
       const cmd: Cmd = { words, out, call, quoted, invoked }
+      if (flavor === 'ps') cmd.ps = true
       if (unread) cmd.unread = true
       if (chain.length > 0) cmd.groups = [...chain]
       commands.push(cmd)
