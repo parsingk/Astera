@@ -13,6 +13,8 @@
 //   from the session's start. Its function_call and custom_tool_call lines are the calls (an `exec` script is handed
 //   over whole, the resolver reads it), with mcp_tool_call_end, patch_apply_end and web_search_call from versions that
 //   write those. Its item_completed lines repeat an exec's inner calls and are not read, or a call would count twice.
+//   A shell, apply_patch or exec call is held until its output line says how it went (exit code, Script completed or
+//   failed, Success.); one whose output never comes is handed over as unknown when its session or the Host ends.
 //
 // Only sessions whose note says they were started observed are followed (Review Focus 1); the recorder asks the same
 // of a hook line. The Host reads only what it holds: a session the app runs in its own node-pty, with no Host, is not
@@ -29,6 +31,7 @@
 import type { watch } from 'node:fs'
 import { decodeClaudeFrame } from '../../core/chat/claudeProtocol'
 import { decodeFrame } from '../../core/chat/codexProtocol'
+import { outputText } from '../../core/history/codexConversation'
 import { HOOK_EVENT_AT } from '../../core/hooks/eventTime'
 import { HookEventWatcher } from '../../core/hooks/eventWatcher'
 import { JsonlTail } from '../../core/rolling/jsonlTail'
@@ -188,29 +191,115 @@ export function codexChatCall(line: string): ObservedCall | null {
 
 /** The rollout lines that can be a call, told apart before a line is parsed. */
 const ROLLOUT_CALL = /"(?:function_call|custom_tool_call|mcp_tool_call_end|patch_apply_end|web_search_call)"/
+/** The lines that end a call, told apart the same way. */
+const ROLLOUT_OUTPUT = /"(?:function_call_output|custom_tool_call_output)"/
+/** Calls waiting for their output, per rollout, at most; past it the oldest is handed over as unknown. */
+const WAITING_MAX = 200
 
-/**
- * The calls in rollout lines written at `since` or after (a line without its time is passed). A call's own line has no
- * outcome, so its status is unknown; an end event's says how it went. A call and its end event share the call id, and
- * the recorder keeps whichever it hears first.
- */
-export function codexRolloutCalls(lines: readonly string[], since: number): ObservedCall[] {
-  const out: ObservedCall[] = []
-  for (const line of lines) {
-    if (!ROLLOUT_CALL.test(line)) continue
-    let o: Record<string, unknown> | null
+/** What reads a tool's output for how it went: a command's exit code, an exec script's opening, an apply_patch's result.
+ *  Other tools (agents, goals, searches) have an output that says nothing of the sort, so their call is handed at once. */
+const OUTCOME_OF: Record<string, 'shell' | 'exec' | 'patch'> = {
+  shell: 'shell', shell_command: 'shell', exec_command: 'shell', local_shell: 'shell', 'container.exec': 'shell',
+  exec: 'exec', apply_patch: 'patch'
+}
+
+/** The exit code a command's output opens with: "Exit code: N" or "Process exited with code N" before the `Output:`
+ *  line (what the command printed is never read), or the `metadata.exit_code` of the JSON older Codex wrote. */
+function exitCodeOf(text: string): number | null {
+  if (text.startsWith('{')) {
     try {
-      o = obj(JSON.parse(line))
+      const code = obj(obj(JSON.parse(text))?.metadata)?.exit_code
+      return typeof code === 'number' ? code : null
     } catch {
-      continue
+      return null
     }
-    const t = Date.parse(str(o?.timestamp) ?? '')
-    const p = obj(o?.payload)
-    if (!(t >= since) || !p) continue
-    const call = rolloutCall(o!.type, p)
-    if (call) out.push({ ...call, at: new Date(t).toISOString() })
   }
-  return out
+  const at = text.indexOf('\nOutput:')
+  const head = at < 0 ? text : text.slice(0, at)
+  const m = /^(?:Exit code:|Process exited with code)\s*(-?\d+)/m.exec(head)
+  return m ? Number(m[1]) : null
+}
+
+/** How a call went, from the text of its output: ok, failed, or unknown when it says nothing (or the call goes on). */
+function outcomeOf(kind: 'shell' | 'exec' | 'patch', text: string | null): ObservedCall['status'] {
+  if (text === null) return 'unknown'
+  if (kind === 'exec') {
+    const first = text.split('\n')[0].trim()
+    return first.startsWith('Script completed') ? 'ok' : first.startsWith('Script failed') || first.startsWith('aborted') ? 'failed' : 'unknown'
+  }
+  if (kind === 'patch') {
+    if (text.startsWith('Success')) return 'ok'
+    const code = exitCodeOf(text)
+    return code === null ? 'failed' : code === 0 ? 'ok' : 'failed'
+  }
+  const code = exitCodeOf(text)
+  return code === null ? 'unknown' : code === 0 ? 'ok' : 'failed'
+}
+
+export interface RolloutReader {
+  /** The calls finished by the lines read (rollout lines written at `since` or after; a line without its time is
+   *  passed). A shell, apply_patch or exec call is held until its output line says how it went, however many reads
+   *  later; an end event's own status stands for its call. */
+  read(lines: readonly string[], since: number): ObservedCall[]
+  /** The calls still waiting for an output, as unknown, once: the session ended or the rollout is not read any more. */
+  unfinished(): ObservedCall[]
+  /** Lets go of what waits, handing nothing over: the lines in between were not read. */
+  forget(): void
+}
+
+export function codexRolloutCalls(): RolloutReader {
+  const waiting = new Map<string, { call: ObservedCall; kind: 'shell' | 'exec' | 'patch' }>()
+  return {
+    read(lines, since) {
+      const out: ObservedCall[] = []
+      for (const line of lines) {
+        const isOutput = ROLLOUT_OUTPUT.test(line)
+        if (isOutput ? waiting.size === 0 : !ROLLOUT_CALL.test(line)) continue
+        let o: Record<string, unknown> | null
+        try {
+          o = obj(JSON.parse(line))
+        } catch {
+          continue
+        }
+        const p = obj(o?.payload)
+        if (!p) continue
+        if (isOutput) {
+          const id = str(p.call_id)
+          const held = id === null ? undefined : waiting.get(id)
+          if (!held) continue
+          waiting.delete(id!)
+          out.push({ ...held.call, status: outcomeOf(held.kind, outputText(p.output)) })
+          continue
+        }
+        const t = Date.parse(str(o?.timestamp) ?? '')
+        if (!(t >= since)) continue
+        const call = rolloutCall(o!.type, p)
+        if (!call) continue
+        const stamped = { ...call, at: new Date(t).toISOString() }
+        const kind = call.status === 'unknown' && call.dedupeKey !== undefined ? OUTCOME_OF[call.tool] : undefined
+        if (!kind) {
+          // An end event stands for the call it ends
+          if (call.dedupeKey !== undefined) waiting.delete(call.dedupeKey)
+          out.push(stamped)
+          continue
+        }
+        waiting.delete(call.dedupeKey!)
+        waiting.set(call.dedupeKey!, { call: stamped, kind })
+        if (waiting.size > WAITING_MAX) {
+          const [oldest] = waiting
+          waiting.delete(oldest[0])
+          out.push(oldest[1].call)
+        }
+      }
+      return out
+    },
+    unfinished() {
+      const left = [...waiting.values()].map((w) => w.call)
+      waiting.clear()
+      return left
+    },
+    forget: () => waiting.clear()
+  }
 }
 
 function rolloutCall(type: unknown, p: Record<string, unknown>): ObservedCall | null {
@@ -304,7 +393,7 @@ export function createAuditSources(d: {
   /** Observed terminal sessions, by pty id: the rollout followed, once the note names one. */
   const rollouts = new Map<
     string,
-    { sessionId: string; since: number | null; path: string | null; tail: JsonlTail | null; ended: boolean }
+    { sessionId: string; since: number | null; path: string | null; tail: JsonlTail | null; ended: boolean; calls: RolloutReader }
   >()
 
   const offs = [
@@ -339,7 +428,7 @@ export function createAuditSources(d: {
       if (meta.kind !== 'session' || meta.restore.observed !== true) return
       let r = rollouts.get(ptyId)
       if (!r) {
-        r = { sessionId: meta.id, since: why === 'open' ? now() : null, path: null, tail: null, ended: false }
+        r = { sessionId: meta.id, since: why === 'open' ? now() : null, path: null, tail: null, ended: false, calls: codexRolloutCalls() }
         rollouts.set(ptyId, r)
       }
       const file = str(meta.restore.rolloutPath)
@@ -348,6 +437,8 @@ export function createAuditSources(d: {
       // for a path it is handed. A later file is codex's `/new`, all of it this session's. A session whose start this
       // Host did not hear starts at the end too. Lines from before the session's start are passed either way.
       const resumed = r.path === null && str(meta.restore.resumeSessionId) !== null
+      // What the old file's calls still waited for will not be heard: their last word
+      hand(r.sessionId, 'codex-rollout', r.calls.unfinished())
       r.path = file
       r.tail = new JsonlTail(file, { startAtEnd: resumed || r.since === null })
     }),
@@ -373,7 +464,10 @@ export function createAuditSources(d: {
       // The calls made meanwhile were not read, so where they left the shells is not known
       shellAt.clear()
       hooks.start()
-      for (const r of rollouts.values()) if (r.path !== null) r.tail = new JsonlTail(r.path, { startAtEnd: true })
+      for (const r of rollouts.values()) {
+        r.calls.forget()
+        if (r.path !== null) r.tail = new JsonlTail(r.path, { startAtEnd: true })
+      }
     } else if (!on && reading) hooks.stop()
     reading = on
     return on
@@ -389,11 +483,14 @@ export function createAuditSources(d: {
       const last = r.ended
       try {
         const got = await tail.read()
-        if (got && r.tail === tail) hand(r.sessionId, 'codex-rollout', codexRolloutCalls(got.lines, r.since ?? -Infinity))
+        if (got && r.tail === tail) hand(r.sessionId, 'codex-rollout', r.calls.read(got.lines, r.since ?? -Infinity))
       } catch (err) {
         d.log(`audit: the rollout of session ${r.sessionId} could not be read: ${String(err)}`)
       }
-      if (last) rollouts.delete(ptyId)
+      if (last) {
+        hand(r.sessionId, 'codex-rollout', r.calls.unfinished())
+        rollouts.delete(ptyId)
+      }
     }
   }
   const every =
@@ -419,6 +516,11 @@ export function createAuditSources(d: {
     dispose() {
       offMode()
       stopPolling()
+      // The Host is leaving: what still waits for an output will never hear it
+      for (const r of rollouts.values()) {
+        if (d.recorder.observing()) hand(r.sessionId, 'codex-rollout', r.calls.unfinished())
+        else r.calls.forget()
+      }
       hooks.stop()
       for (const off of offs) off()
       chats.clear()

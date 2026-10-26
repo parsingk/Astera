@@ -68,6 +68,20 @@ const MCP_EXEC = (at: number) =>
     status: 'completed'
   })
 
+/** What Codex writes when a call is over, as the shapes go: a function's output is a string, a custom tool's a list of
+ *  `input_text` parts whose first one opens with how it ended. Only the openings are Codex's; the rest is made up. */
+const OUT = (at: number, id: string, text: string) => rollout(at, 'response_item', { type: 'function_call_output', call_id: id, output: text })
+const CUSTOM_OUT = (at: number, id: string, text: string) =>
+  rollout(at, 'response_item', {
+    type: 'custom_tool_call_output',
+    call_id: id,
+    output: [
+      { type: 'input_text', text },
+      { type: 'input_text', text: 'what it printed' }
+    ]
+  })
+const SHELL_DONE = (at: number, id = 'call_1', code = 0) => OUT(at, id, `Exit code: ${code}\nWall time: 0.1 seconds\nOutput:\nwhat it printed`)
+
 /** A registry that tells its listeners what the test says. */
 function fakeRegistry() {
   const meta = new Set<(id: string, meta: PtyMeta, why: 'open' | 'note') => void>()
@@ -493,8 +507,11 @@ describe('the Codex rollout source', () => {
       'not json',
       JSON.stringify({ type: 'response_item', payload: { type: 'function_call', name: 'shell', arguments: '{}', call_id: 'no_time' } })
     ]
-    const calls = codexRolloutCalls(lines, T0)
-    expect(calls.map((c) => [c.tool, c.dedupeKey, c.status])).toEqual([
+    // A shell, apply_patch or exec call is held for its output: a later line of `lines` gives call_1 one that says
+    // nothing, and the other two are handed over as unknown when the reader is asked what is left
+    const read = codexRolloutCalls()
+    const calls = [...read.read(lines, T0), ...read.unfinished()]
+    expect(calls.map((c) => [c.tool, c.dedupeKey, c.status]).sort((a, b) => (a[1]! < b[1]! ? -1 : 1))).toEqual([
       ['shell', 'call_1', 'unknown'],
       ['apply_patch', 'call_2', 'unknown'],
       ['exec', 'call_3', 'unknown'],
@@ -502,8 +519,117 @@ describe('the Codex rollout source', () => {
       ['apply_patch', 'call_5', 'ok'],
       ['web_search_call', 'ws_1', 'ok']
     ])
-    expect(calls[0].at).toBe(iso(T0 + 10))
-    expect(JSON.stringify(calls.slice(3))).not.toMatch(/secret|private words|"id":"x"/)
+    expect(calls.find((c) => c.dedupeKey === 'call_1')?.at).toBe(iso(T0 + 10))
+    expect(JSON.stringify(calls)).not.toMatch(/secret|private words|"id":"x"/)
+  })
+
+  describe('how a call went, from its output', () => {
+    /** The status a call gets from the output line written for it, the call line having been read first. */
+    const statusOf = (call: string, output: string): string | undefined => {
+      const read = codexRolloutCalls()
+      const calls = [...read.read([call, output], T0), ...read.unfinished()]
+      expect(calls).toHaveLength(1)
+      return calls[0].status
+    }
+
+    it('reads a command’s exit code: 0 is ok, any other is failed', () => {
+      expect(statusOf(SHELL(T0 + 10), SHELL_DONE(T0 + 20, 'call_1', 0))).toBe('ok')
+      expect(statusOf(SHELL(T0 + 10), SHELL_DONE(T0 + 20, 'call_1', 2))).toBe('failed')
+      expect(statusOf(SHELL(T0 + 10), SHELL_DONE(T0 + 20, 'call_1', -1))).toBe('failed')
+      // An unattended session that ran in the background reports the code the same way
+      expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', 'Chunk ID: a1\nWall time: 0.0 seconds\nProcess exited with code 1\nOriginal token count: 4\nOutput:\nx'))).toBe('failed')
+      expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', 'Chunk ID: a1\nWall time: 0.0 seconds\nProcess exited with code 0\nOutput:\nx'))).toBe('ok')
+      // Codex before the text form wrote JSON with the code in its metadata
+      expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', JSON.stringify({ output: 'x', metadata: { exit_code: 0, duration_seconds: 0.1 } })))).toBe('ok')
+      expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', JSON.stringify({ output: 'x', metadata: { exit_code: 127, duration_seconds: 0.1 } })))).toBe('failed')
+    })
+
+    it('reads the code from the header only, never from what the command printed', () => {
+      expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', 'Exit code: 1\nWall time: 0.1 seconds\nOutput:\nExit code: 0'))).toBe('failed')
+      expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', 'Exit code: 0\nWall time: 0.1 seconds\nOutput:\nExit code: 1\nScript failed'))).toBe('ok')
+    })
+
+    it('reads an exec script from how it opens: completed is ok, failed or aborted is failed, running says nothing yet', () => {
+      expect(statusOf(MCP_EXEC(T0 + 10), CUSTOM_OUT(T0 + 20, 'call_3', 'Script completed\nWall time 0.1 seconds'))).toBe('ok')
+      expect(statusOf(MCP_EXEC(T0 + 10), CUSTOM_OUT(T0 + 20, 'call_3', 'Script failed\nWall time 0.1 seconds'))).toBe('failed')
+      expect(statusOf(MCP_EXEC(T0 + 10), CUSTOM_OUT(T0 + 20, 'call_3', 'aborted by user after 3.4s'))).toBe('failed')
+      // Still running in the background: the result comes later, from a call of its own, so this call's stays unknown
+      expect(statusOf(MCP_EXEC(T0 + 10), CUSTOM_OUT(T0 + 20, 'call_3', 'Script running with cell ID 7'))).toBe('unknown')
+      // The same openings as a plain string
+      expect(statusOf(MCP_EXEC(T0 + 10), OUT(T0 + 20, 'call_3', 'Script completed'))).toBe('ok')
+    })
+
+    it('reads an apply_patch from its result: success is ok, a refusal is failed', () => {
+      expect(statusOf(PATCH(T0 + 10), CUSTOM_OUT(T0 + 20, 'call_2', 'Success. Updated the following files:\nM src/a.ts'))).toBe('ok')
+      expect(statusOf(PATCH(T0 + 10), OUT(T0 + 20, 'call_2', 'Success. Updated the following files:\nM src/a.ts'))).toBe('ok')
+      expect(statusOf(PATCH(T0 + 10), CUSTOM_OUT(T0 + 20, 'call_2', 'apply_patch verification failed: could not find the lines to change'))).toBe('failed')
+      expect(statusOf(PATCH(T0 + 10), OUT(T0 + 20, 'call_2', JSON.stringify({ output: 'Success.', metadata: { exit_code: 0 } })))).toBe('ok')
+    })
+
+    it('keeps unknown when the output says nothing: prose, nothing, or a command still running', () => {
+      expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', 'ok'))).toBe('unknown')
+      expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', ''))).toBe('unknown')
+      expect(statusOf(SHELL(T0 + 10), rollout(T0 + 20, 'response_item', { type: 'function_call_output', call_id: 'call_1' }))).toBe('unknown')
+      expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', 'Process running with session ID 5\nOutput:\nx'))).toBe('unknown')
+      expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', JSON.stringify({ output: 'x' })))).toBe('unknown')
+      expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', '{ not json'))).toBe('unknown')
+    })
+
+    it('holds a call until its output comes, in a later read too, and hands it over once', () => {
+      const read = codexRolloutCalls()
+      expect(read.read([SHELL(T0 + 10)], T0)).toEqual([])
+      expect(read.read(['not json', rollout(T0 + 15, 'response_item', { type: 'message', role: 'assistant', content: [] })], T0)).toEqual([])
+      const [done] = read.read([SHELL_DONE(T0 + 20)], T0)
+      expect(done).toMatchObject({ tool: 'shell', dedupeKey: 'call_1', status: 'ok', at: iso(T0 + 10) })
+      // The output again: nothing waits for it any more
+      expect(read.read([SHELL_DONE(T0 + 21)], T0)).toEqual([])
+      expect(read.unfinished()).toEqual([])
+    })
+
+    it('hands over a call whose output never came as unknown when asked, and forgets it', () => {
+      const read = codexRolloutCalls()
+      read.read([SHELL(T0 + 10), MCP_EXEC(T0 + 11)], T0)
+      expect(read.unfinished().map((c) => [c.dedupeKey, c.status, c.at])).toEqual([
+        ['call_1', 'unknown', iso(T0 + 10)],
+        ['call_3', 'unknown', iso(T0 + 11)]
+      ])
+      expect(read.unfinished()).toEqual([])
+      // And one that was let go is not handed over by a late output
+      read.read([SHELL(T0 + 12)], T0)
+      read.forget()
+      expect(read.read([SHELL_DONE(T0 + 20)], T0)).toEqual([])
+      expect(read.unfinished()).toEqual([])
+    })
+
+    it('hands over a tool whose output cannot say how it went at once, as unknown', () => {
+      const read = codexRolloutCalls()
+      const spawn = rollout(T0 + 10, 'response_item', { type: 'function_call', name: 'spawn_agent', arguments: '{}', call_id: 'call_9' })
+      expect(read.read([spawn], T0).map((c) => [c.tool, c.status])).toEqual([['spawn_agent', 'unknown']])
+    })
+
+    it('lets an end event stand for its call: a patch that ended is handed over once, with the end’s own status', () => {
+      const read = codexRolloutCalls()
+      const end = rollout(T0 + 15, 'event_msg', { type: 'patch_apply_end', call_id: 'call_2', success: false, stdout: '', stderr: 'no', changes: { [path.join(cwd, 'src/a.ts')]: {} } })
+      const first = read.read([PATCH(T0 + 10), end], T0)
+      expect(first.map((c) => [c.tool, c.dedupeKey, c.status])).toEqual([['apply_patch', 'call_2', 'failed']])
+      expect(read.read([CUSTOM_OUT(T0 + 20, 'call_2', 'Success. Updated the following files:\nM src/a.ts')], T0)).toEqual([])
+      expect(read.unfinished()).toEqual([])
+    })
+
+    it('does not parse an output that no call waits for, and holds at most 200 calls, the oldest handed over unknown', () => {
+      const read = codexRolloutCalls()
+      expect(read.read([OUT(T0 + 20, 'call_x', 'x'.repeat(2000))], T0)).toEqual([])
+      const calls = Array.from({ length: 201 }, (_, i) => SHELL(T0 + 10 + i, `call_${i}`))
+      const letGo = read.read(calls, T0)
+      expect(letGo.map((c) => [c.dedupeKey, c.status])).toEqual([['call_0', 'unknown']])
+      expect(read.unfinished()).toHaveLength(200)
+    })
+
+    it('reads no output for a call made before the time given', () => {
+      const read = codexRolloutCalls()
+      expect(read.read([SHELL(T0 - 1000), SHELL_DONE(T0 + 20)], T0)).toEqual([])
+      expect(read.unfinished()).toEqual([])
+    })
   })
 
   it('a rollout with a shell call, an apply_patch and an MCP exec makes three records, read from the session’s start', async () => {
@@ -517,7 +643,12 @@ describe('the Codex rollout source', () => {
     const { sources } = await sourcesFor({ recorder: r.recorder, ptys, now: () => now })
     ptys.open('pty1', note('session', 'sess_cx', OBSERVED))
     now += 2000
-    await fs.appendFile(file, [SHELL(T0 + 1000), PATCH(T0 + 1100), MCP_EXEC(T0 + 1200)].join('\n') + '\n')
+    const finished = [
+      SHELL_DONE(T0 + 1010),
+      CUSTOM_OUT(T0 + 1110, 'call_2', 'Success. Updated the following files:\nM src/a.ts'),
+      CUSTOM_OUT(T0 + 1210, 'call_3', 'Script completed\nWall time 0.1 seconds')
+    ]
+    await fs.appendFile(file, [SHELL(T0 + 1000), PATCH(T0 + 1100), MCP_EXEC(T0 + 1200), ...finished].join('\n') + '\n')
     ptys.note('pty1', note('session', 'sess_cx', { ...OBSERVED, rolloutPath: file }))
     await sources.poll()
     await sources.poll()
@@ -526,9 +657,9 @@ describe('the Codex rollout source', () => {
     await sources.poll()
     const records = await r.records()
     expect(records.map(brief).sort(byAction)).toEqual([
-      { source: 'codex-rollout', providerTool: 'apply_patch', action: 'filesystem.write', target: 'src/a.ts', status: 'unknown' },
-      { source: 'codex-rollout', providerTool: 'shell', action: 'git.read', target: 'git status', status: 'unknown' },
-      { source: 'codex-rollout', providerTool: 'exec', action: 'mcp.call', target: 'github.create_issue', status: 'unknown' }
+      { source: 'codex-rollout', providerTool: 'apply_patch', action: 'filesystem.write', target: 'src/a.ts', status: 'ok' },
+      { source: 'codex-rollout', providerTool: 'shell', action: 'git.read', target: 'git status', status: 'ok' },
+      { source: 'codex-rollout', providerTool: 'exec', action: 'mcp.call', target: 'github.create_issue', status: 'ok' }
     ])
     expect(records.every((x) => x.sessionId === 'sess_cx' && x.kind === 'terminal')).toBe(true)
     sources.dispose()
@@ -546,7 +677,7 @@ describe('the Codex rollout source', () => {
     ptys.open('pty1', note('session', 'sess_r', { ...OBSERVED, resumeSessionId: 'th_old' }))
     ptys.note('pty1', note('session', 'sess_r', { ...OBSERVED, resumeSessionId: 'th_old', rolloutPath: file }))
     await sources.poll()
-    await fs.appendFile(file, SHELL(T0 + 50, 'call_new') + '\n')
+    await fs.appendFile(file, [SHELL(T0 + 50, 'call_new'), SHELL_DONE(T0 + 60, 'call_new')].join('\n') + '\n')
     await sources.poll()
     expect(events.map((e) => e.dedupeKey)).toEqual(['call_new'])
     sources.dispose()
@@ -588,7 +719,7 @@ describe('the Codex rollout source', () => {
     now = T0 + 100
     setObserving(true)
     await sources.poll()
-    await fs.appendFile(file, SHELL(T0 + 200, 'call_on') + '\n')
+    await fs.appendFile(file, [SHELL(T0 + 200, 'call_on'), SHELL_DONE(T0 + 210, 'call_on')].join('\n') + '\n')
     await sources.poll()
     expect(events.map((e) => e.dedupeKey)).toEqual(['call_on'])
     sources.dispose()
@@ -607,9 +738,57 @@ describe('the Codex rollout source', () => {
     await sources.poll()
     await fs.appendFile(file, SHELL(T0 + 10, 'call_off') + '\n')
     setObserving(true)
-    await fs.appendFile(file, SHELL(T0 + 20, 'call_on') + '\n')
+    await fs.appendFile(file, [SHELL(T0 + 20, 'call_on'), SHELL_DONE(T0 + 30, 'call_on')].join('\n') + '\n')
     await sources.poll()
     expect(events.map((e) => e.dedupeKey)).toEqual(['call_on'])
     sources.dispose()
+  })
+
+  // What a Codex session ran when its output never came: the session ended, the Host is leaving, or a new file began
+  it('hands over a call still waiting for its output as unknown when its session ends, the Host leaves or a new rollout begins', async () => {
+    const dir = await tempDir()
+    const files = ['a', 'b', 'c'].map((n) => path.join(dir, `${n}.jsonl`))
+    for (const f of files) await fs.writeFile(f, '')
+    const ptys = fakeRegistry()
+    const { events, recorder } = capture()
+    const { sources } = await sourcesFor({ recorder, ptys, now: () => T0 })
+    ptys.open('pty_a', note('session', 'sess_a', { ...OBSERVED, rolloutPath: files[0] }))
+    ptys.open('pty_b', note('session', 'sess_b', { ...OBSERVED, rolloutPath: files[1] }))
+    ptys.open('pty_c', note('session', 'sess_c', { ...OBSERVED, rolloutPath: files[2] }))
+    for (const [i, f] of files.entries()) await fs.appendFile(f, SHELL(T0 + 10, `call_${i}`) + '\n')
+    await sources.poll()
+    // Waiting: nothing handed over yet
+    expect(events).toEqual([])
+    // The session of the first ends: what it still waited for is its last word
+    ptys.exit('pty_a')
+    await sources.poll()
+    expect(events.map((e) => [e.sessionId, e.dedupeKey, e.status])).toEqual([['sess_a', 'call_0', 'unknown']])
+    // The second goes on to a new rollout (Codex's /new): the old file is not followed any more
+    ptys.note('pty_b', note('session', 'sess_b', { ...OBSERVED, rolloutPath: path.join(dir, 'b2.jsonl') }))
+    expect(events.map((e) => [e.sessionId, e.dedupeKey, e.status])).toEqual([
+      ['sess_a', 'call_0', 'unknown'],
+      ['sess_b', 'call_1', 'unknown']
+    ])
+    // The Host leaves: the third will never be heard end
+    sources.dispose()
+    expect(events.map((e) => e.dedupeKey)).toEqual(['call_0', 'call_1', 'call_2'])
+  })
+
+  it('forgets what waited for an output while the mode was off, as the calls then were not read', async () => {
+    const dir = await tempDir()
+    const file = path.join(dir, 'r.jsonl')
+    await fs.writeFile(file, '')
+    const ptys = fakeRegistry()
+    const { events, recorder, setObserving } = capture()
+    const { sources } = await sourcesFor({ recorder, ptys, now: () => T0 })
+    ptys.open('pty1', note('session', 'sess_cx', { ...OBSERVED, rolloutPath: file }))
+    await fs.appendFile(file, SHELL(T0 + 10, 'call_before') + '\n')
+    await sources.poll()
+    setObserving(false)
+    setObserving(true)
+    await fs.appendFile(file, SHELL_DONE(T0 + 20, 'call_before') + '\n')
+    await sources.poll()
+    sources.dispose()
+    expect(events).toEqual([])
   })
 })

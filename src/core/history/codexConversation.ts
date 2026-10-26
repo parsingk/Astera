@@ -116,7 +116,7 @@ function shellOutcome(output: unknown): { ok: boolean; detail: string } {
  * parts a message does (measured 2026-09-12 across 649 real outputs). Reading only the string shape
  * meant every `exec` result was judged as if it were empty — no outcome, nothing to open.
  */
-function outputText(output: unknown): string | null {
+export function outputText(output: unknown): string | null {
   const direct = str(output)
   if (direct !== null) return direct
   if (!Array.isArray(output)) return null
