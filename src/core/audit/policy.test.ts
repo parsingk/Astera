@@ -405,6 +405,10 @@ describe('decide, a denied command the resolver must reach', () => {
     expect(decide(bash('echo "$(case x in a) case y in b) git push;; esac;; esac)"'), p)).toEqual(push)
     expect(decide(bash('echo "$(case x in a) echo hi;; esac)" ; git push'), p)).toEqual(push)
     expect(decide(bash('echo "$(case x in a) echo hi;; esac)"'), p)).toEqual({ decision: 'allow' })
+    // `esac` ends the case as soon as it ends as a word, with space before the ) or not
+    expect(decide(bash('echo "$(case x in a) echo hi;; esac )"; git push'), p)).toEqual(push)
+    expect(decide(bash('echo "$(case x in a) echo hi;; esac )"'), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('echo "$(case x in a) echo hi\nesac )"; git push'), p)).toEqual(push)
   })
 
   // A cd inside ( ) or $( ) moves that subshell only, as it already does inside a quoted substitution

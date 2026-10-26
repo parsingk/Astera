@@ -797,6 +797,7 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
         quoted.push(wordQuoted)
         words.push(cur)
         if (cur === 'in' && words.length === 3 && words[0] === 'case') cases++
+        else if (cur === 'esac' && words.length === 1 && cases > 0) cases--
       }
     }
     cur = ''
@@ -833,7 +834,6 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
   }
   const endCommand = (): void => {
     endWord()
-    if (words[0] === 'esac' && cases > 0) cases--
     sink = null
     if (words.length > 0 || out.length > 0) {
       // Inside an unquoted ( ) or $( ) the command runs in a subshell, as the commands of a quoted substitution do
