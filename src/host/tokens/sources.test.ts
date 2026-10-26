@@ -1071,4 +1071,13 @@ describe('docs/cli.md on how long a finished run’s sessions count', () => {
       for (const line of p) expect(line.length, line).toBeLessThanOrEqual(120)
     }
   })
+  // Observe final review: who sent it is read from the caller's environment, as for every agent refusal
+  it('says a send ends the hold as a person’s prompt by the caller’s ASTERA_SESSION, which an agent can clear', async () => {
+    const { fileURLToPath } = await import('node:url')
+    const doc = await fs.readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), '../../../docs/cli.md'), 'utf8')
+    const send = paragraph(doc, '`sessions send` types `--text` into a terminal session').join(' ')
+    expect(send).toMatch(/a person's prompt/)
+    expect(send).toMatch(/`ASTERA_SESSION`/)
+    expect(send).toMatch(/clears it reads as a person/)
+  })
 })

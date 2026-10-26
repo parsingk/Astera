@@ -1380,7 +1380,10 @@ at a permission prompt or a question is refused with 6 before anything is typed,
 not answer one by accident; from a shell it goes through, because that is you answering. Like
 `chats answer`'s check below, this reads the caller's environment and is not a boundary. A session
 that has ended is a 6. With `--request-id`, a retried `sessions send` is replayed
-rather than typed a second time.
+rather than typed a second time. A send from a shell is a person's prompt: it ends what a finished run's
+or an ended attempt's session still holds for `runs get`'s `tokens` and `audit list`'s records, and one
+from inside an agent session does not. That too reads `ASTERA_SESSION` from the caller's environment, so
+an agent that clears it reads as a person, as with every role check in this CLI.
 
 **To a chat session, `sessions send` is one turn**, and it answers `{"id":…,"sent":true}`.
 `--no-enter` belongs to terminal sessions and is a 2 here. Sends to one session go one at a time.
