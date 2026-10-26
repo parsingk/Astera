@@ -566,6 +566,18 @@ describe('the Codex rollout source', () => {
       expect(statusOf(PATCH(T0 + 10), OUT(T0 + 20, 'call_2', JSON.stringify({ output: 'Success.', metadata: { exit_code: 0 } })))).toBe('ok')
     })
 
+    it('reads an apply_patch only by known signs: an unrecognised or blank result says nothing', () => {
+      // The text form of a command result, with its own words under Output:
+      expect(statusOf(PATCH(T0 + 10), OUT(T0 + 20, 'call_2', 'Exit code: 0\nWall time: 0.1 seconds\nOutput:\nSuccess. Updated the following files:\nM src/a.ts'))).toBe('ok')
+      expect(statusOf(PATCH(T0 + 10), OUT(T0 + 20, 'call_2', 'Exit code: 1\nWall time: 0.1 seconds\nOutput:\nSuccess.'))).toBe('failed')
+      expect(statusOf(PATCH(T0 + 10), CUSTOM_OUT(T0 + 20, 'call_2', 'Error: could not write the file'))).toBe('failed')
+      expect(statusOf(PATCH(T0 + 10), CUSTOM_OUT(T0 + 20, 'call_2', 'Failed to apply the patch'))).toBe('failed')
+      expect(statusOf(PATCH(T0 + 10), CUSTOM_OUT(T0 + 20, 'call_2', 'The patch went through, I think'))).toBe('unknown')
+      expect(statusOf(PATCH(T0 + 10), CUSTOM_OUT(T0 + 20, 'call_2', ''))).toBe('unknown')
+      expect(statusOf(PATCH(T0 + 10), CUSTOM_OUT(T0 + 20, 'call_2', ' \n\t '))).toBe('unknown')
+      expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', '  \n'))).toBe('unknown')
+    })
+
     it('keeps unknown when the output says nothing: prose, nothing, or a command still running', () => {
       expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', 'ok'))).toBe('unknown')
       expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', ''))).toBe('unknown')

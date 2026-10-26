@@ -222,7 +222,7 @@ function exitCodeOf(text: string): number | null {
 
 /** How a call went, from the text of its output: ok, failed, or unknown when it says nothing (or the call goes on). */
 function outcomeOf(kind: 'shell' | 'exec' | 'patch', text: string | null): ObservedCall['status'] {
-  if (text === null) return 'unknown'
+  if (text === null || text.trim() === '') return 'unknown'
   if (kind === 'exec') {
     const first = text.split('\n')[0].trim()
     return first.startsWith('Script completed') ? 'ok' : first.startsWith('Script failed') || first.startsWith('aborted') ? 'failed' : 'unknown'
@@ -230,7 +230,9 @@ function outcomeOf(kind: 'shell' | 'exec' | 'patch', text: string | null): Obser
   if (kind === 'patch') {
     if (text.startsWith('Success')) return 'ok'
     const code = exitCodeOf(text)
-    return code === null ? 'failed' : code === 0 ? 'ok' : 'failed'
+    if (code !== null) return code === 0 ? 'ok' : 'failed'
+    // Only the signs known to mean a refusal count; any other wording says nothing about how it went
+    return /^\s*(apply_patch verification failed|error\b|failed\b)/i.test(text) ? 'failed' : 'unknown'
   }
   const code = exitCodeOf(text)
   return code === null ? 'unknown' : code === 0 ? 'ok' : 'failed'
