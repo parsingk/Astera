@@ -407,6 +407,18 @@ describe('decide, a denied command the resolver must reach', () => {
     expect(decide(bash('echo "$(case x in a) echo hi;; esac)"'), p)).toEqual({ decision: 'allow' })
   })
 
+  // A cd inside ( ) or $( ) moves that subshell only, as it already does inside a quoted substitution
+  it('keeps the folder of the line after a cd in an unquoted group or substitution', () => {
+    expect(decide(bash('(cd sub && make); rm -rf ../x'), p)).toEqual(del)
+    expect(decide(bash('X=$(cd sub && pwd); rm -rf ../x'), p)).toEqual(del)
+    expect(decide(bash('X="$(cd sub && pwd)"; rm -rf ../x'), p)).toEqual(del)
+    expect(decide(bash('(cd sub && make) && rm -rf ../x'), p)).toEqual(del)
+    // Inside the group the cd still counts, and a cd outside it still moves the line
+    expect(decide(bash('(cd sub && rm -rf ../x)'), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('cd sub && rm -rf ../x'), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('(cd sub); cd sub; rm -rf ../x'), p)).toEqual({ decision: 'allow' })
+  })
+
   // An unquoted heredoc delimiter makes its body a double-quoted text: the shell runs the substitutions in it
   it('would deny a substitution in the body of a heredoc whose delimiter is not quoted, and reads none in a quoted one', () => {
     expect(decide(bash('cat <<EOF\n$(rm -rf ../x)\nEOF'), p)).toEqual(del)

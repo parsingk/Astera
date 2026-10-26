@@ -790,7 +790,11 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
     if (words[0] === 'esac' && cases > 0) cases--
     sink = null
     if (words.length > 0 || out.length > 0) {
-      commands.push(unread ? { words, out, call, quoted, invoked, unread: true } : { words, out, call, quoted, invoked })
+      // Inside an unquoted ( ) or $( ) the command runs in a subshell, as the commands of a quoted substitution do
+      const cmd: Cmd = { words, out, call, quoted, invoked }
+      if (unread) cmd.unread = true
+      if (parens > 0) cmd.sub = true
+      commands.push(cmd)
     }
     for (const c of later) commands.push(c)
     later.length = 0
@@ -931,12 +935,12 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
       end = i // what closes the substitution this was started for
       break
     } else if (c === ';' || c === '|' || c === ')' || (c === '`' && flavor === 'posix')) {
-      if (c === ')' && parens > 0) parens--
       endCommand()
+      if (c === ')' && parens > 0) parens--
     } else if (c === '(') {
       if (has && !wordQuoted && sink === null) invoked = true // `$f.Delete(`, `[IO.File]::Copy(`
-      parens++
       endCommand()
+      parens++
     } else if (c === '&') {
       if (line[i + 1] === '&') {
         endCommand()
