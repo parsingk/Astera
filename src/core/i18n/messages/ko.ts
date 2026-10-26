@@ -183,7 +183,7 @@ export const ko = {
   // every language (securityText.ts); these are the words around them.
   'settings.security.hint': '관찰은 에이전트 세션이 한 도구 호출을 기록하고, 규칙대로라면 각각 어떻게 됐을지를 보여 줍니다. 아무것도 막지 않습니다.',
   'settings.security.noHost': '이 화면은 Host 가 필요한데, 지금 앱이 Host 에 연결되어 있지 않습니다.',
-  'settings.security.damaged': '규칙 파일이 손상되어 아무것도 판단할 수 없습니다. 손상된 파일은 옆에 복사해 두었습니다. 고쳐질 때까지 기록은 멈춥니다. 기본 규칙으로 다시 시작하면 고쳐집니다.',
+  'settings.security.damaged': '규칙 파일이 손상되어 아무것도 판단할 수 없습니다. 손상된 파일은 옆에 복사해 두었습니다. 손상된 동안에는 아무것도 기록하지 않습니다. 기본 규칙으로 다시 시작하면 고쳐집니다.',
   'settings.security.mode.label': '에이전트의 도구 호출 기록',
   'settings.security.mode.compatibility': '끔',
   'settings.security.mode.observe': '관찰',

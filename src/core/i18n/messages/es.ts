@@ -145,7 +145,7 @@ export const es: Catalog = {
     'La observación registra las llamadas a herramientas que hacen las sesiones de agentes y muestra qué habrían hecho tus reglas con cada una. Nunca bloquea nada.',
   'settings.security.noHost': 'Esto necesita el Host, y la aplicación no está conectada a él ahora mismo.',
   'settings.security.damaged':
-    'El archivo de reglas está dañado, así que no se puede decidir nada. Se guardó una copia a su lado. Mientras no se repare, no se registra nada. Volver a empezar con las reglas iniciales lo repara.',
+    'El archivo de reglas está dañado, así que no se puede decidir nada. Se guardó una copia a su lado. Mientras esté dañado no se registra nada. Volver a empezar con las reglas iniciales lo repara.',
   'settings.security.mode.label': 'Registrar las llamadas a herramientas de los agentes',
   'settings.security.mode.compatibility': 'Desactivado',
   'settings.security.mode.observe': 'Observar',

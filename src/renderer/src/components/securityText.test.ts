@@ -455,7 +455,12 @@ describe('the start over confirmation', () => {
     expect(resetBodyKey(true)).toBe('settings.security.reset.bodyDamaged')
     expect(resetBodyKey(false)).toBe('settings.security.reset.body')
     expect(en('settings.security.reset.bodyDamaged')).toMatch(/nothing is recorded/)
-    expect(en('settings.security.damaged')).toMatch(/paused/)
+    // The banner says nothing is recorded while damaged, never that recording comes back by itself after the repair
+    for (const lang of ['en', 'ko', 'ja', 'es'] as const) {
+      const banner = translate(lang, 'settings.security.damaged')
+      expect(banner, lang).not.toMatch(/paused|until it is repaired|고쳐질 때까지|修復されるまで|Mientras no se repare/)
+    }
+    expect(en('settings.security.damaged')).toMatch(/nothing is recorded while it is damaged/i)
   })
 })
 

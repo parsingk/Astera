@@ -142,7 +142,7 @@ export const ja: Catalog = {
   'agentProfiles.resumeAs': 'エージェントプロファイル「{name}」で会話を再開します。',
   'settings.security.hint': '観察は、エージェントのセッションが行ったツール呼び出しを記録し、ルールならそれぞれをどう扱ったかを示します。何もブロックしません。',
   'settings.security.noHost': 'この画面には Host が必要ですが、今アプリは Host に接続していません。',
-  'settings.security.damaged': 'ルールファイルが壊れているため、何も判断できません。壊れたファイルのコピーを横に残しました。修復されるまで記録は止まっています。初期ルールでやり直すと修復されます。',
+  'settings.security.damaged': 'ルールファイルが壊れているため、何も判断できません。壊れたファイルのコピーを横に残しました。壊れている間は何も記録しません。初期ルールでやり直すと修復されます。',
   'settings.security.mode.label': 'エージェントのツール呼び出しを記録',
   'settings.security.mode.compatibility': 'オフ',
   'settings.security.mode.observe': '観察',
