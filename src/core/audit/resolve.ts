@@ -791,7 +791,8 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
   let sink: { write: boolean; dup: boolean } | null = null // the next word is a redirection's target
   const chain: number[] = [] // the unquoted `(` open now, as subshells, up to MAX_GROUPS deep: beyond it they share the last
   let beyond = 0 // the `(` open past that
-  const braces: Array<'block' | 'hash'> = [] // the PowerShell braces open now: a block or a hashtable
+  const braces: Array<'block' | 'hash' | 'switch'> = [] // the PowerShell braces open now: a block, a hashtable or a switch's body
+  let switchNext = false // a PowerShell `switch` was read, so the next brace opens its body
   let cases = 0 // the `case … in` read since the start that no `esac` has closed: a `)` in one ends a pattern, not a substitution
   let heredoc: { tag: string; indent: boolean; expands: boolean } | null = null // `expands`: its tag was not quoted, so the shell runs the substitutions in the body
 
@@ -855,6 +856,7 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
   const endCommand = (): void => {
     endWord()
     sink = null
+    if (flavor === 'ps' && words[0]?.toLowerCase() === 'switch') switchNext = true
     if (words.length > 0 || out.length > 0) {
       // Inside an unquoted ( ) or $( ) the command runs in a subshell, as the commands of a quoted substitution do
       const cmd: Cmd = { words, out, call, quoted, invoked }
@@ -1037,9 +1039,19 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
       if (!wordQuoted && cur.endsWith('@')) {
         braces.push('hash')
         cur += c
+      } else if (braces[braces.length - 1] === 'switch') {
+        // directly in a switch's body what stands before a block is its label (or `default`): a value, not a command
+        endWord()
+        words = []
+        quoted = []
+        out = []
+        call = false
+        invoked = false
+        braces.push('block')
       } else {
         endCommand()
-        braces.push('block')
+        braces.push(switchNext ? 'switch' : 'block')
+        switchNext = false
       }
     } else if (flavor === 'ps' && c === '}') {
       if (braces.pop() === 'hash') cur += c // closes a hashtable

@@ -521,6 +521,18 @@ describe('decide, a denied command the resolver must reach', () => {
     expect(decide(ps('Write-Output $((git push))'), p)).toEqual(push)
   })
 
+  it('reads the labels of a PowerShell switch as values and the blocks after them as commands', () => {
+    expect(decide(ps('switch ($x) {a {npm test}}'), p)).toEqual({ decision: 'allow' })
+    expect(decide(ps('switch ($x) { a { npm test } b { npm run build } default { npm test } }'), p)).toEqual({ decision: 'allow' })
+    expect(decide(ps('switch -Regex ($x)\n{\n  "a.*" { npm test }\n  default { npm test }\n}'), p)).toEqual({ decision: 'allow' })
+    expect(decide(ps('switch ($x) {a {git push}}'), p)).toEqual(push)
+    expect(decide(ps('switch ($x) { a { npm test } default { git push } }'), p)).toEqual(push)
+    expect(decide(ps('switch ($x) {a {npm test}}; git push'), p)).toEqual(push)
+    // Outside a switch body a word before a block is still a command
+    expect(decide(ps('Invoke-Foo { npm test }'), p)).toEqual({ decision: 'unknown' })
+    expect(decide(ps('switch ($x) {a {npm test}}; Invoke-Foo { npm test }'), p)).toEqual({ decision: 'unknown' })
+  })
+
   // An unquoted heredoc delimiter makes its body a double-quoted text: the shell runs the substitutions in it
   it('would deny a substitution in the body of a heredoc whose delimiter is not quoted, and reads none in a quoted one', () => {
     expect(decide(bash('cat <<EOF\n$(rm -rf ../x)\nEOF'), p)).toEqual(del)
