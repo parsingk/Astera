@@ -99,13 +99,18 @@ const queued = (dir: string, f: (s: FolderState) => Promise<void>): Promise<void
 /** Appends the records to their days' files. Never throws: a write that fails is logged and its records dropped, and so
  *  is a record whose time does not parse. */
 export function appendRecords(profileDir: string, recs: readonly AuditRecord[], o: AuditStoreOptions = {}): Promise<void> {
-  const dir = profilePaths(profileDir).auditRecords
+  return appendDated(profilePaths(profileDir).auditRecords, recs, o, 'audit')
+}
+
+/** appendRecords over any folder of day files and any record with a time: the credential-use records share the same
+ *  retention, size limit and torn-line handling (credentials design §6). `label` starts the log lines. */
+export function appendDated<T extends { at: string }>(dir: string, recs: readonly T[], o: AuditStoreOptions, label: string): Promise<void> {
   return queued(dir, async (s) => {
     if (recs.length === 0) return
     const now = (o.now ?? Date.now)()
     const maxBytes = o.maxBytes ?? AUDIT_MAX_BYTES
     if (s.prunedAt === null || now - s.prunedAt >= AUDIT_PRUNE_EVERY_MS) await prune(dir, s, o, 0)
-    const byDay = new Map<string, AuditRecord[]>()
+    const byDay = new Map<string, T[]>()
     let untimed = 0
     for (const r of recs) {
       if (!Number.isFinite(Date.parse(r.at))) {
@@ -117,7 +122,7 @@ export function appendRecords(profileDir: string, recs: readonly AuditRecord[], 
       if (list) list.push(r)
       else byDay.set(day, [r])
     }
-    if (untimed > 0) o.log?.(`audit: ${untimed} record(s) with a time that does not parse were dropped`)
+    if (untimed > 0) o.log?.(`${label}: ${untimed} record(s) with a time that does not parse were dropped`)
     for (const [day, rs] of byDay) {
       if (s.stopped.has(day)) continue
       const text = rs.map((r) => `${JSON.stringify(r)}\n`).join('')
@@ -128,11 +133,11 @@ export function appendRecords(profileDir: string, recs: readonly AuditRecord[], 
       // The day's own file is at the size: no prune can make room for it, and it must not grow without end
       if (own + bytes > maxBytes) {
         s.stopped.add(day)
-        o.log?.(`audit: the records of ${day} reached ${maxBytes} bytes; no more are kept for that day`)
+        o.log?.(`${label}: the records of ${day} reached ${maxBytes} bytes; no more are kept for that day`)
         // The file stops short of the size (the record that did not fit was refused), so it cannot tell a Host that starts
         // over; a mark beside it does, and the prune reads it. Without the folder there is no file to mark.
         await fs.writeFile(path.join(dir, `${day}.stopped`), '').catch((err) => {
-          if (codeOf(err) !== 'ENOENT') o.log?.(`audit: could not mark ${day} as stopped: ${String(err)}`)
+          if (codeOf(err) !== 'ENOENT') o.log?.(`${label}: could not mark ${day} as stopped: ${String(err)}`)
         })
         continue
       }
@@ -146,7 +151,7 @@ export function appendRecords(profileDir: string, recs: readonly AuditRecord[], 
         await fs.appendFile(file, lead + text)
         s.sizes.set(day, (s.sizes.get(day) ?? 0) + lead.length + textBytes)
       } catch (err) {
-        o.log?.(`audit: could not write ${rs.length} record(s) to ${file}; they are dropped: ${String(err)}`)
+        o.log?.(`${label}: could not write ${rs.length} record(s) to ${file}; they are dropped: ${String(err)}`)
       }
     }
   })
@@ -383,14 +388,47 @@ export function visitRecords(
 }
 
 /** visitRecords, asking `enough` after each whole day whether to stop there. */
-async function visitDays(
+function visitDays(
   profileDir: string,
   f: AuditFilter,
   visit: (r: AuditRecord, at: number) => boolean | void,
   enough: () => boolean,
   o: Pick<AuditStoreOptions, 'now' | 'keepDays'>
 ): Promise<void> {
-  const dir = profilePaths(profileDir).auditRecords
+  const action = f.action
+  const actionPasses =
+    action === undefined ? () => true : action.endsWith('*') ? (a: string) => a.startsWith(action.slice(0, -1)) : (a: string) => a === action
+  const passes = (r: AuditRecord): boolean => {
+    if (f.sessionId !== undefined && r.sessionId !== f.sessionId) return false
+    if (f.jobId !== undefined && r.jobId !== f.jobId) return false
+    if (f.runId !== undefined && r.runId !== f.runId) return false
+    if (f.taskId !== undefined && r.taskId !== f.taskId) return false
+    if (f.agentProfileId !== undefined && r.agentProfileId !== f.agentProfileId) return false
+    if (!actionPasses(r.action)) return false
+    return f.where === undefined || f.where(r)
+  }
+  return visitDaysIn(profilePaths(profileDir).auditRecords, recordOf, passes, f, visit, enough, o)
+}
+
+/** The period and page a dated folder is read for: records at or after `since`, before `until` (or at it with an id below
+ *  `beforeId`). */
+export interface DatedPeriod {
+  since?: string
+  until?: string
+  beforeId?: string
+}
+
+/** visitDays over any folder of day files, with the parser of its lines and a test of the record itself (the period is
+ *  tested here). */
+export async function visitDaysIn<T extends { id: string }>(
+  dir: string,
+  parse: (line: string) => { r: T; at: number } | null,
+  test: (r: T) => boolean,
+  f: DatedPeriod,
+  visit: (r: T, at: number) => boolean | void,
+  enough: () => boolean,
+  o: Pick<AuditStoreOptions, 'now' | 'keepDays'>
+): Promise<void> {
   let names: string[]
   try {
     names = await fs.readdir(dir)
@@ -411,33 +449,24 @@ async function visitDays(
     .filter((d) => d >= kept && (first === null || d >= first) && (last === null || d <= last))
     .sort()
     .reverse()
-  const action = f.action
-  const actionPasses =
-    action === undefined ? () => true : action.endsWith('*') ? (a: string) => a.startsWith(action.slice(0, -1)) : (a: string) => a === action
-  const passes = (r: AuditRecord, at: number): boolean => {
-    if (f.sessionId !== undefined && r.sessionId !== f.sessionId) return false
-    if (f.jobId !== undefined && r.jobId !== f.jobId) return false
-    if (f.runId !== undefined && r.runId !== f.runId) return false
-    if (f.taskId !== undefined && r.taskId !== f.taskId) return false
-    if (f.agentProfileId !== undefined && r.agentProfileId !== f.agentProfileId) return false
-    if (!actionPasses(r.action)) return false
+  const passes = (r: T, at: number): boolean => {
     if (since !== undefined && !(at >= since)) return false
     if (until !== undefined && !(at < until || (at === until && f.beforeId !== undefined && r.id < f.beforeId))) return false
-    return f.where === undefined || f.where(r)
+    return test(r)
   }
   for (const day of days) {
     const goOn = await eachLineFromEnd(path.join(dir, `${day}.jsonl`), (line) => {
-      const read = recordOf(line)
+      const read = parse(line)
       return read === null || !passes(read.r, read.at) || visit(read.r, read.at) !== false
     })
     if (!goOn || enough()) return
   }
 }
 
-type Timed = { r: AuditRecord; at: number }
+type Timed<T extends { id: string } = AuditRecord> = { r: T; at: number }
 
 /** Newer first: by time, then by id. A total order, so a page ends at the same place every time it is read. */
-const newerFirst = (a: Timed, b: Timed): number => b.at - a.at || (a.r.id < b.r.id ? 1 : a.r.id > b.r.id ? -1 : 0)
+const newerFirst = <T extends { id: string }>(a: Timed<T>, b: Timed<T>): number => b.at - a.at || (a.r.id < b.r.id ? 1 : a.r.id > b.r.id ? -1 : 0)
 
 /**
  * The records that pass the filter, newest first by their time (then id), at most `limit`. Each record is filed under the
@@ -447,33 +476,47 @@ const newerFirst = (a: Timed, b: Timed): number => b.at - a.at || (a.r.id < b.r.
  * zone move between writes, a newer record can sit under an older local day than one already read, and a page that
  * stopped is not shown it; `audit-summary` still counts it.
  */
-export async function queryRecords(profileDir: string, f: AuditFilter, o: Pick<AuditStoreOptions, 'now' | 'keepDays'> = {}): Promise<AuditRecord[]> {
-  const limit = f.limit
+export function queryRecords(profileDir: string, f: AuditFilter, o: Pick<AuditStoreOptions, 'now' | 'keepDays'> = {}): Promise<AuditRecord[]> {
+  return queryWith<AuditRecord>((visit, enough) => visitDays(profileDir, f, visit, enough, o), f.limit)
+}
+
+/** queryRecords over any folder of day files (credentials design §6). */
+export function queryDatedIn<T extends { id: string }>(
+  dir: string,
+  parse: (line: string) => { r: T; at: number } | null,
+  test: (r: T) => boolean,
+  f: DatedPeriod & { limit?: number },
+  o: Pick<AuditStoreOptions, 'now' | 'keepDays'> = {}
+): Promise<T[]> {
+  return queryWith<T>((visit, enough) => visitDaysIn(dir, parse, test, f, visit, enough, o), f.limit)
+}
+
+async function queryWith<T extends { id: string }>(
+  read: (visit: (r: T, at: number) => boolean | void, enough: () => boolean) => Promise<void>,
+  limit: number | undefined
+): Promise<T[]> {
   if (limit === undefined) {
-    const all: Timed[] = []
-    await visitRecords(profileDir, f, (r, at) => void all.push({ r, at }), o)
+    const all: Timed<T>[] = []
+    await read((r, at) => void all.push({ r, at }), () => false)
     return all.sort(newerFirst).map((x) => x.r)
   }
   if (limit <= 0) return []
-  const kept = oldestFirstHeap()
-  await visitDays(
-    profileDir,
-    f,
+  const kept = oldestFirstHeap<T>()
+  await read(
     (r, at) => {
       const x = { r, at }
       if (kept.size() < limit) kept.push(x)
       // Newer than the oldest kept: it takes that one's place
       else if (newerFirst(x, kept.peek()!) < 0) kept.replaceTop(x)
     },
-    () => kept.size() >= limit,
-    o
+    () => kept.size() >= limit
   )
   return kept.items().sort(newerFirst).map((x) => x.r)
 }
 
 /** A binary heap whose top is the oldest it holds (`newerFirst` reversed). */
-function oldestFirstHeap() {
-  const a: Timed[] = []
+function oldestFirstHeap<T extends { id: string }>() {
+  const a: Timed<T>[] = []
   const older = (i: number, j: number): boolean => newerFirst(a[i], a[j]) > 0
   const swap = (i: number, j: number): void => {
     const t = a[i]
@@ -494,9 +537,9 @@ function oldestFirstHeap() {
   }
   return {
     size: () => a.length,
-    peek: (): Timed | undefined => a[0],
-    items: (): Timed[] => a,
-    push(x: Timed): void {
+    peek: (): Timed<T> | undefined => a[0],
+    items: (): Timed<T>[] => a,
+    push(x: Timed<T>): void {
       a.push(x)
       for (let i = a.length - 1; i > 0; ) {
         const p = (i - 1) >> 1
@@ -505,7 +548,7 @@ function oldestFirstHeap() {
         i = p
       }
     },
-    replaceTop(x: Timed): void {
+    replaceTop(x: Timed<T>): void {
       a[0] = x
       down(0)
     }

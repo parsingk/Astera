@@ -94,3 +94,30 @@ export interface AuditRecord {
   confidence: Confidence
   status: 'ok' | 'failed' | 'unknown'
 }
+
+/** One use of a credential that passed through Astera (credentials design §6): a shared MCP server's stored secret through
+ *  the Gateway, or a GitHub operation an agent asked Astera for or Astera made itself. Never a value, never a message. */
+export interface CredentialUse {
+  /** `cu_` + random. */
+  id: string
+  /** When it happened, ISO. */
+  at: string
+  /** Who asked: an Astera session (from its Gateway token, or `ASTERA_SESSION` for a command), Astera's MCP server (which
+   *  carries no session today), the app, the Host's own automation, a paired controller, or a caller Astera did not start. */
+  actor: 'session' | 'mcp' | 'app' | 'host' | 'controller' | 'outside'
+  sessionId?: string
+  runId?: string
+  jobId?: string
+  taskId?: string
+  agentProfileId?: string
+  /** The Credentials list's entry (`mcp:<serverId>`); absent for a login Astera does not manage (gh, git). */
+  entryId?: string
+  provider: 'mcp' | 'github'
+  action: 'mcp.call' | 'github.read' | 'github.pr.create' | 'github.ci.rerun' | 'git.remote.write'
+  /** `<server>/<tool>`, or `owner/repo` with `#123` or a run id. */
+  resource: string
+  outcome: 'ok' | 'failed'
+  /** `managed`: a stored secret reached the tool through Astera; `observed`: Astera ran it with a login it does not manage. */
+  evidence: 'managed' | 'observed'
+  requestId: string
+}
