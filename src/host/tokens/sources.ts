@@ -37,7 +37,8 @@
 // transcript's prompts and a Codex rollout's user_message lines, each unless the Host typed it itself (a nudge, a roll's
 // carry-on: the pty or process keeps who sent what, PtyRegistry.submittedBetween) or the agent wrote it for itself (a
 // background task's notification, a tool's result); and in a Claude chat's stream, which carries no prompt, the first
-// frame after the `result` that ended the turn before, when a person's line reached the chat in between. A turn begun
+// frame after the `result` that ended the turn before, when a person's line reached the chat in between. A roll's new
+// session's first prompt is the carry-on its roll handed it, the Host's, unless a person typed before it. A turn begun
 // any other way goes on with the work before it. The audit asks them too (`SessionTurns`), for the same bound on where
 // a coordinator's and a worker's calls are filed.
 import { promises as fs } from 'node:fs'
@@ -252,6 +253,9 @@ interface Followed {
   endedAt: number | null
   /** When its last read of its files began (epoch ms), null before one: what was written before it is read. */
   readFrom: number | null
+  /** A roll's new session (`rolledFrom` in its note) whose carry-on prompt is not read yet: its first prompt since it
+   *  started is that carry-on, the Host's, unless a person typed before it (fix round 4). */
+  carryOn: boolean
 }
 
 /** A session's turns as the token sources read them, for the audit's lookup (recorder.ts `dispatchOfWithTurns`). */
@@ -276,7 +280,13 @@ export function createTokenSources(d: {
   store: Pick<TokenStore, 'add' | 'save'>
   /** Each registry also says who sent what an entry was last given (PtyRegistry.submittedBetween,
    *  ProcRegistry.submittedBetween): a prompt the Host typed itself is not a person's. Without it, every prompt is. */
-  ptys: { onMeta: Listen<[string, PtyMeta, 'open' | 'note']>; onExit: Listen<[string, number]>; submittedBetween?: SentBy }
+  ptys: {
+    onMeta: Listen<[string, PtyMeta, 'open' | 'note']>
+    onExit: Listen<[string, number]>
+    submittedBetween?: SentBy
+    /** Whether a person submitted anything in (from, to] (PtyRegistry.personSubmittedBetween). */
+    personSubmittedBetween?: (id: string, from: number, to: number) => boolean
+  }
   procs: {
     onMeta: Listen<[string, PtyMeta, 'open' | 'note']>
     onLine: Listen<[string, number, string]>
@@ -328,8 +338,14 @@ export function createTokenSources(d: {
   /** Who sent the latest of what the session's pty or process was given in (from, to]; null when nothing is kept. */
   const sentBy = (f: Followed, from: number, to: number): 'person' | 'host' | null =>
     (f.via === 'pty' ? d.ptys.submittedBetween?.(f.key, from, to) : d.procs.submittedBetween?.(f.key, from, to)) ?? null
+  /** Whether a person submitted anything to the session's pty or process at or before `to`. */
+  const personBefore = (f: Followed, to: number): boolean =>
+    (f.via === 'pty' ? d.ptys.personSubmittedBetween?.(f.key, -Infinity, to) : d.procs.personSubmittedBetween?.(f.key, -Infinity, to)) === true
   /** Notes the person's prompts among `lines` of a session's main file, and the first moment read. `typedAt` tells a
-   *  prompt typed into it; one the Host's own typing sent within TYPED_WITHIN_MS before it is Astera's, not a person's. */
+   *  prompt typed into it; one the Host's own typing sent within TYPED_WITHIN_MS before it is Astera's, not a person's.
+   *  A roll's new session's first prompt since it started is the carry-on its roll handed it, the Host's however long
+   *  the agent took to start and record it (a Codex carry-on is an argument, typed by nobody), unless a person typed into
+   *  it before that prompt; every prompt after it goes by the ordinary rule (fix round 4). */
   const noteTurns = (f: Followed, lines: readonly string[], typedAt: (line: string) => number | null): void => {
     const log = turnsFor(f.sessionId)
     if (log.from === null)
@@ -341,7 +357,12 @@ export function createTokenSources(d: {
       }
     for (const line of lines) {
       const at = typedAt(line)
-      if (at !== null && sentBy(f, at - TYPED_WITHIN_MS, at) !== 'host') turnBegan(log, at)
+      if (at === null) continue
+      if (f.carryOn && at >= f.since) {
+        f.carryOn = false
+        if (!personBefore(f, at)) continue
+      }
+      if (sentBy(f, at - TYPED_WITHIN_MS, at) !== 'host') turnBegan(log, at)
     }
   }
   /** A Claude chat frame's part in its turns: a `result` ends the turn under way, and the first frame of the model's after
@@ -390,9 +411,10 @@ export function createTokenSources(d: {
   /** Followed sessions: a terminal by its pty id, a chat by its process id. */
   const terminals = new Map<string, Followed>()
   const chats = new Map<string, Followed>()
-  const fresh = (sessionId: string, key: string, via: Followed['via']): Followed => {
+  const fresh = (sessionId: string, key: string, via: Followed['via'], meta: PtyMeta): Followed => {
     const since = now()
-    return { sessionId, key, via, since, rollout: null, transcript: null, chat: null, chatTurn: false, chatTurnAt: since, endedAt: null, readFrom: null }
+    const carryOn = str(meta.restore.rolledFrom) !== null
+    return { sessionId, key, via, since, rollout: null, transcript: null, chat: null, chatTurn: false, chatTurnAt: since, endedAt: null, readFrom: null, carryOn }
   }
   /** The rollout a note names, followed from now on when it is new: a later file is Codex's `/new`, a conversation of
    *  its own with its own running total. */
@@ -408,7 +430,7 @@ export function createTokenSources(d: {
       if (meta.kind !== 'session') return
       let f = terminals.get(ptyId)
       if (!f) {
-        f = fresh(meta.id, ptyId, 'pty')
+        f = fresh(meta.id, ptyId, 'pty', meta)
         seedFrom(f.sessionId, meta)
         // A terminal without a rollout is read as Claude's, through its statusline, until a note names one
         f.transcript = { read: claudeTokenReader(f.since), files: new Map(), seen: new Map() }
@@ -424,7 +446,7 @@ export function createTokenSources(d: {
       if (meta.kind !== 'chat') return
       let f = chats.get(procId)
       if (!f) {
-        f = fresh(meta.id, procId, 'proc')
+        f = fresh(meta.id, procId, 'proc', meta)
         seedFrom(f.sessionId, meta)
         // A note written before Claude chats carried a provider is a Codex chat's (ChatSessionManager.adopt)
         if (meta.restore.provider === 'claude') {

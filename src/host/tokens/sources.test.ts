@@ -849,12 +849,17 @@ describe('createTokenSources', () => {
     r.sources.dispose()
   })
 
-  // Fix round 3: a Codex roll's carry-on is an argument of the new process (codexCoordinator.ts: "the prompt is a CLI
-  // argument, so there is no PTY typing"). The real registry notes a roll's respawn as the Host's submission at its
-  // spawn, so that prompt is the Host's and the hold goes on
-  it('carries the hold across a Codex roll onto a fresh rollout, its carry-on an argument nothing typed', async () => {
-    const MIN = 60_000
-    const E = T0 + 10 * MIN
+  // Fix rounds 3 and 4: a Codex roll's carry-on is an argument of the new process (codexCoordinator.ts: "the prompt is a
+  // CLI argument, so there is no PTY typing"), recorded once Codex has started, which can take minutes on Windows. A
+  // roll's new session takes its first prompt as that carry-on, the Host's, unless a person typed before it; every prompt
+  // after it goes by the ordinary rule. Driven through a real pty registry
+  const codexRoll = async (o: {
+    spawnAt: number
+    carryAt: number
+    personTypesAt?: number
+    secondAt: number
+    secondTyped: boolean
+  }): Promise<unknown> => {
     let now = T0
     const ptysMade = new Map<string, { exit(code: number): void }>()
     let next = ''
@@ -872,6 +877,8 @@ describe('createTokenSources', () => {
       next = id
       registry.open({ id, file: 'codex', args, opts: { cwd: 'D:/p', cols: 80, rows: 24, env: {} }, meta: m })
     }
+    const MIN = 60_000
+    const E = T0 + 10 * MIN
     let state = orch([], 'sess_k1')
     const r = await rig({ state: () => state, now: () => now, ptys: registry })
     const first = path.join(r.dir, 'rollout-k1.jsonl')
@@ -879,7 +886,7 @@ describe('createTokenSources', () => {
     open('pty_k1', ['Coordinate the run'], note('session', 'sess_k1', { rolloutPath: first }))
     await r.sources.poll()
     state = { ...state, runs: state.runs.map((x) => ({ ...x, endedAt: iso(E) })), tasks: state.tasks.map((t) => ({ ...t, status: 'completed', updatedAt: iso(E) })) }
-    now = E + 3 * MIN
+    now = E + 30_000
     ptysMade.get('pty_k1')!.exit(0)
     await r.sources.poll()
     state = { ...state, runs: state.runs.map((x) => ({ ...x, coordinatorSessionId: 'sess_k2' })) }
@@ -887,24 +894,48 @@ describe('createTokenSources', () => {
     await fs.writeFile(
       second,
       lines(
-        codexEvent(E + 4 * MIN, 'task_started'),
-        codexUser(E + 4 * MIN, 'Continue where you left off'),
-        counted(E + 4 * MIN + 500, [20, 5], [20, 5]),
-        codexEvent(E + 6 * MIN, 'task_started'),
-        codexUser(E + 6 * MIN, 'thanks, something else now'),
-        counted(E + 6 * MIN + 500, [320, 35], [300, 30])
+        codexEvent(o.carryAt, 'task_started'),
+        codexUser(o.carryAt, 'Continue where you left off'),
+        counted(o.carryAt + 500, [20, 5], [20, 5]),
+        codexEvent(o.secondAt, 'task_started'),
+        codexUser(o.secondAt, 'thanks, something else now'),
+        counted(o.secondAt + 500, [320, 35], [300, 30])
       )
     )
     // The roll spawns `codex resume` with the carry-on as its argument, typing nothing
-    now = E + 4 * MIN - 2000
+    now = o.spawnAt
     open('pty_k2', ['resume', 'th1', 'Continue where you left off'], note('session', 'sess_k2', { rolloutPath: second, rolledFrom: 'sess_k1' }))
-    // A person types into the new tab
-    now = E + 6 * MIN - 100
-    registry.write('pty_k2', 'thanks, something else now\r', { person: true })
-    now = E + 7 * MIN
+    if (o.personTypesAt !== undefined) {
+      now = o.personTypesAt
+      registry.write('pty_k2', 'hello?\r', { person: true })
+    }
+    if (o.secondTyped) {
+      now = o.secondAt - 100
+      registry.write('pty_k2', 'thanks, something else now\r', { person: true })
+    }
+    now = o.secondAt + 60_000
     await r.sources.poll()
-    expect(runTokensOf(state, 'run_1', r.store.spent())).toEqual({ coordinatorTokens: { input: 120, output: 15, total: 135 } })
+    const spent = runTokensOf(state, 'run_1', r.store.spent())
     r.sources.dispose()
+    return spent
+  }
+
+  it('takes a roll’s carry-on recorded three minutes after the spawn as the Host’s: the hold goes on to a person’s prompt', async () => {
+    const E = T0 + 10 * 60_000
+    const carried = await codexRoll({ spawnAt: E + 60_000, carryAt: E + 4 * 60_000, secondAt: E + 6 * 60_000, secondTyped: true })
+    expect(carried).toEqual({ coordinatorTokens: { input: 120, output: 15, total: 135 } })
+  })
+
+  it('takes the first prompt as a person’s when a person typed into the new tab before the carry-on was recorded', async () => {
+    const E = T0 + 10 * 60_000
+    const typed = await codexRoll({ spawnAt: E + 60_000, personTypesAt: E + 2 * 60_000, carryAt: E + 4 * 60_000, secondAt: E + 6 * 60_000, secondTyped: true })
+    expect(typed).toEqual({ coordinatorTokens: { input: 100, output: 10, total: 110 } })
+  })
+
+  it('ends the hold at a second prompt after the carry-on with no Host typing, however soon after the spawn', async () => {
+    const E = T0 + 10 * 60_000
+    const soon = await codexRoll({ spawnAt: E + 60_000, carryAt: E + 60_000 + 5000, secondAt: E + 60_000 + 20_000, secondTyped: false })
+    expect(soon).toEqual({ coordinatorTokens: { input: 120, output: 15, total: 135 } })
   })
 
   // What the audit asks (recorder.ts dispatchOfWithTurns): the turn a moment of a session fell in, from the lines read

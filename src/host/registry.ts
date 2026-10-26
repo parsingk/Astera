@@ -353,11 +353,6 @@ export class PtyRegistry {
     }
     this.entries.set(a.id, entry)
     const openedAt = this.now()
-    // A roll's respawn (`rolledFrom` in its note) is handed its carry-on by whoever rolled it, and for Codex as an
-    // argument of the new process, typed by nobody: that prompt is noted as the Host's own at the spawn, so it is not
-    // read as a person's (`submittedBetween`; observe deferred fix round 3)
-    const rolledFrom = a.meta?.restore?.rolledFrom
-    if (typeof rolledFrom === 'string' && rolledFrom !== '') keepSubmission(entry.submissions, { at: openedAt, person: false })
     this.sweepExited()
     pty.onData((d) => {
       // The same shape TerminalManager's own buffer uses: append, then keep the tail. **Only while
@@ -591,6 +586,12 @@ export class PtyRegistry {
    *  itself; null for none kept there, or a pty never here (observe deferred fix round 1, I1). */
   submittedBetween(id: string, from: number, to: number): 'person' | 'host' | null {
     return submitterIn(this.entries.get(id)?.submissions, from, to)
+  }
+
+  /** Whether a person submitted anything in (from, to], whatever came after it: a roll's new session takes its first
+   *  prompt as the Host's carry-on unless a person typed before it (observe deferred fix round 4). */
+  personSubmittedBetween(id: string, from: number, to: number): boolean {
+    return personIn(this.entries.get(id)?.submissions, from, to)
   }
 
   /** When a write marked `person` last reached this pty, or null for none or one never here. */
