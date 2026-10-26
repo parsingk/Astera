@@ -863,7 +863,9 @@ permission prompt: the number of those Tasks, read from the same hook events as 
 
 **`runs get` carries `tokens` and `coordinatorTokens`**: the tokens the run's Tasks' sessions spent (every attempt,
 and each session a roll moved one to, counted once), and apart from them what the coordinator Astera started for the
-run spent, each as `{ input, output, total }`, where `input` counts cached input too. The Host reads them in every mode
+run spent, each as `{ input, output, total }`, where `input` counts cached input too. A finished run's coordinator
+counts until the end of the turn it was in when the run finished, however long its wrap-up takes; what you type into
+its tab after that is not the run's, and editing a Task later does not change it. The Host reads them in every mode
 from what Claude and Codex already write (a Claude session's transcript and its sub-agents' files, a chat's stream, a
 Codex rollout) and keeps them in `token-totals.json` in the profile until the run is deleted. Each is left out when the
 Host read none, such as for a session the app ran without a Host. MCP's `get_task` carries the Task's own `tokens`.
@@ -1177,7 +1179,9 @@ the file) and leaves the file as it is.
 
 `audit list` prints the records newest first, each with `decision` and `ruleId` (the rule that decided, left out when
 `otherwise` did or none could), worked out from the rules in force when you ask: edit a rule and the past calls show
-what it would have done. The filters combine, and `--agent-profile` takes an id or a name. `--limit` is 200 by default
+what it would have done. A record carries the Job, run and Task its session worked for when the call ran; a finished
+run's coordinator files its calls under the run until the end of the turn it was in when the run finished, and a call
+made in its tab after that carries no run. The filters combine, and `--agent-profile` takes an id or a name. `--limit` is 200 by default
 and at most 2000. When it cuts the list, `truncated` is true and `next` holds the `--until` and `--before-id` that ask
 for the next page, which `--human` prints under the table as `more:`, after the filters you used. `audit summary`
 counts the same calls by decision, in all and per action, and `stoppedAtLimit` is true when a day of the period stopped

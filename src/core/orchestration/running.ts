@@ -1,6 +1,6 @@
 import type { JobTask, RunOutcome } from '../types'
 import type { OrchState } from './state'
-import { FAILURE_LIMIT, type Task } from './types'
+import { FAILURE_LIMIT, type JobRun, type Task } from './types'
 
 // tasksOwnedBy, isTerminal and outcomeOf moved here from view.ts so runningRunCount can ask outcomeOf:
 // the renderer's build includes this file and not view.ts, which re-exports them.
@@ -59,6 +59,33 @@ export function outcomeOfTasks(tasks: readonly Task[]): RunOutcome {
   if (counted.length === 0) return 'running'
   if (!counted.every(isTerminal)) return 'running'
   return counted.some((t) => t.status === 'failed') ? 'failed' : 'completed'
+}
+
+/** How long after the end of a Dispatch or a Run its session's work is still taken to be for it when the session's own
+ *  lines cannot tell its turns (final review I2): the worker's report and the coordinator's last responses land just
+ *  after the end. */
+export const END_GRACE_MS = 2 * 60 * 1000
+
+/** When a finished Run's outcome became final (epoch ms): the Host's stamp (`JobRun.endedAt`), or for a Run that finished
+ *  before it was kept, its last Task's last change, which a later edit of a Task moves. Asked of a finished Run. */
+export function runEndOf(s: OrchState, r: JobRun): number {
+  const stamped = r.endedAt === undefined ? NaN : Date.parse(r.endedAt)
+  if (Number.isFinite(stamped)) return stamped
+  return Math.max(...withoutSupersededLifecycle(tasksOwnedBy(s, r.id)).map((x) => Date.parse(x.updatedAt)))
+}
+
+/**
+ * Whether a session's work at `t` is still for a Dispatch or a Run whose time ended at `end` (observe deferred minors b
+ * and c): up to the end, and after it to the end of the turn that was running then, so a coordinator's wrap-up and a
+ * worker's last response after its report count however long they take, and a prompt typed into the tab afterwards is
+ * not theirs. `turn` asks when the turn holding `t` began, at the latest (epoch ms), from the session's own lines, or
+ * null when they cannot tell; then END_GRACE_MS after the end stands in for the turn. It is asked only for a `t` past
+ * the end, so a caller can tell whether the answer turned on it.
+ */
+export function heldPastEnd(end: number, t: number, turn: () => number | null): boolean {
+  if (t <= end) return true
+  const began = turn()
+  return began !== null ? began <= end : t <= end + END_GRACE_MS
 }
 
 /** 지금 일이 도는 Task 의 개수. 사이드바의 `+N` 과 두 화면(JobsView·RunDetail)의 머리 숫자가

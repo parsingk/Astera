@@ -13,7 +13,15 @@ import type { Dispatch, JobRun, Task } from '../../core/orchestration/types'
 import type { PtyEntry } from '../../core/host/protocol'
 import type { AuditMode } from '../../core/audit/policy'
 import type { ResolvedAction } from '../../core/audit/resolve'
-import { AUDIT_COMMANDS_KEPT, AUDIT_PENDING_MAX, createAuditRecorder, dispatchOfSession, registrySessionFacts, type SessionFacts } from './recorder'
+import {
+  AUDIT_COMMANDS_KEPT,
+  AUDIT_PENDING_MAX,
+  createAuditRecorder,
+  dispatchOfSession,
+  dispatchOfWithTurns,
+  registrySessionFacts,
+  type SessionFacts
+} from './recorder'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -496,6 +504,33 @@ describe('createAuditRecorder', () => {
     expect(h.logs.join('\n')).toMatch(/disk gone/)
   })
 
+  // Deferred minor b: a lookup that turns on which turn the call fell in waits for the session's lines to be read past it
+  it('writes a call whose Dispatch lookup has to wait once it settles, with what it found, and keeps it when the lookup fails', async () => {
+    let settle: (ids: { jobId: string; runId: string } | null) => void = () => {}
+    let fail: (err: Error) => void = () => {}
+    let n = 0
+    const h = await rig({
+      over: {
+        dispatchOf: () => (++n === 1 ? new Promise((r) => (settle = r)) : new Promise((_r, j) => (fail = j)))
+      }
+    })
+    await h.recorder.flushed()
+    h.recorder.record(bash('git status', { dedupeKey: 'toolu_1' }))
+    await new Promise((r) => setImmediate(r))
+    expect(await h.records()).toEqual([])
+    settle({ jobId: 'job2', runId: 'run_done' })
+    await h.recorder.flushed()
+    expect(await h.records()).toMatchObject([{ jobId: 'job2', runId: 'run_done', target: 'git status' }])
+    h.recorder.record(bash('npm test', { dedupeKey: 'toolu_2' }))
+    await new Promise((r) => setImmediate(r))
+    fail(new Error('turns gone'))
+    await h.recorder.flushed()
+    const records = await h.records()
+    expect(records).toHaveLength(2)
+    expect(records.find((r) => r.target !== 'git status')).not.toHaveProperty('runId')
+    expect(h.logs.join('\n')).toMatch(/turns gone/)
+  })
+
   it('never throws to a source: a failing lookup is logged and the next call is still recorded', async () => {
     const h = await rig({
       over: {
@@ -625,11 +660,44 @@ describe('dispatchOfSession', () => {
       { id: 't_old', runId: 'run_old', status: 'completed' }
     ]
     expect(dispatchOfSession(state([], runs, tasks), 'sess_co', T('03:00'))).toEqual({ jobId: 'job1', runId: 'run_live' })
-    // All finished: the latest
-    const finished = tasks.map((t) => ({ ...t, status: 'completed' as const }))
+    // All finished: the latest whose bound holds the call
+    const finished = tasks.map((t) => ({ ...t, status: 'completed' as const, updatedAt: T('02:59') }))
     expect(dispatchOfSession(state([], runs, finished), 'sess_co', T('03:00'))).toEqual({ jobId: 'job2', runId: 'run_done' })
     // A session that drives a Run from outside is not its coordinator here
     expect(dispatchOfSession(state([], runs, tasks), 'sess_ext', T('03:00'))).toBeNull()
+  })
+
+  // Deferred minor b: a finished Run's coordinator tab files its calls under the Run up to the end of the turn that was
+  // running when the Run's outcome became final (its `endedAt`); a tab reused after that, minutes or days later, is
+  // nobody's Run, and a Task edited after the end opens nothing
+  it('names a finished Run’s coordinator only up to the end of the turn running when the Run finished', () => {
+    const runs: Array<Partial<JobRun>> = [{ id: 'run_done', jobId: 'job2', createdAt: T('00:00'), coordinatorSessionId: 'sess_co', endedAt: T('02:00') }]
+    const tasks: Array<Partial<Task>> = [{ id: 't_done', runId: 'run_done', status: 'completed', updatedAt: T('05:00') }]
+    const s = state([], runs, tasks)
+    const began = (at: string) => () => Date.parse(at)
+    const ids = { jobId: 'job2', runId: 'run_done' }
+    expect(dispatchOfSession(s, 'sess_co', T('01:59'))).toEqual(ids)
+    // The wrap-up ten minutes on, inside the turn that began before the end
+    expect(dispatchOfSession(s, 'sess_co', T('02:10'), began(T('01:30')))).toEqual(ids)
+    // Reused after that turn
+    expect(dispatchOfSession(s, 'sess_co', T('02:30'), began(T('02:20')))).toBeNull()
+    expect(dispatchOfSession(s, 'sess_co', '2026-10-26T09:00:00.000Z', began('2026-10-26T08:59:00.000Z'))).toBeNull()
+    // Turns the session's lines cannot tell: two minutes after the end, not after the edit
+    expect(dispatchOfSession(s, 'sess_co', '2026-10-23T02:02:00.000Z')).toEqual(ids)
+    expect(dispatchOfSession(s, 'sess_co', T('02:03'))).toBeNull()
+    expect(dispatchOfSession(s, 'sess_co', T('05:01'))).toBeNull()
+  })
+
+  it('asks the turn only for a call past an end', () => {
+    const runs: Array<Partial<JobRun>> = [{ id: 'run_done', jobId: 'job2', createdAt: T('00:00'), coordinatorSessionId: 'sess_co', endedAt: T('02:00') }]
+    const s = state([{ id: 'd1', taskId: 'task1', sessionId: 'sess_w', startedAt: T('01:00') }], runs, [{ id: 't_done', runId: 'run_done', status: 'completed' }])
+    let asked = 0
+    const turn = () => (asked++, null)
+    dispatchOfSession(s, 'sess_co', T('01:30'), turn)
+    dispatchOfSession(s, 'sess_w', T('01:30'), turn)
+    expect(asked).toBe(0)
+    dispatchOfSession(s, 'sess_co', T('02:30'), turn)
+    expect(asked).toBe(1)
   })
 
   it('takes a Dispatch over a coordinator slot', () => {
@@ -638,5 +706,55 @@ describe('dispatchOfSession', () => {
       { id: 'run2', jobId: 'job2', createdAt: T('00:00'), coordinatorSessionId: 'sess_co' }
     ])
     expect(dispatchOfSession(s, 'sess_co', T('01:30'))).toEqual({ jobId: 'job1', runId: 'run1', taskId: 'task1' })
+  })
+})
+
+// The recorder's lookup as the Host wires it (index.ts): the token sources read each session's own lines and tell its
+// turns, a few seconds behind the call the audit hears at once
+describe('dispatchOfWithTurns', () => {
+  const T = (hhmm: string): string => `2026-10-23T${hhmm}:00.000Z`
+  const s: OrchState = {
+    ...emptyState(),
+    runs: [{ id: 'run_done', jobId: 'job2', ordinal: 1, createdAt: T('00:00'), coordinatorSessionId: 'sess_co', endedAt: T('02:00') }],
+    tasks: [{ id: 't_done', runId: 'run_done', status: 'completed', consecutiveFailures: 0 } as Task]
+  }
+  const ids = { jobId: 'job2', runId: 'run_done' }
+
+  it('answers at once when no turn was asked, and when the session was read past the call', () => {
+    let reads = 0
+    const of = dispatchOfWithTurns(() => s, { turnOf: () => Date.parse(T('01:30')), readPast: () => (reads++, null) })
+    expect(of('sess_co', T('01:00'))).toEqual(ids)
+    expect(reads).toBe(0)
+    expect(of('sess_co', T('02:10'))).toEqual(ids)
+    expect(reads).toBe(1)
+  })
+
+  // A read can only find later starts, so a turn known to have begun after the end stays after it: a tab used on long
+  // after does not read every session's files at each of its calls
+  it('answers at once a call whose turn is known to have begun after the end', () => {
+    let reads = 0
+    const of = dispatchOfWithTurns(() => s, { turnOf: () => Date.parse(T('02:20')), readPast: () => (reads++, Promise.resolve()) })
+    expect(of('sess_co', T('02:30'))).toBeNull()
+    expect(reads).toBe(0)
+  })
+
+  it('waits for a read past the call when the answer turned on a turn, and answers from what that read found', async () => {
+    // Read so far: the turn that was running at the end. The read past the call finds a prompt typed after it
+    let turn = Date.parse(T('01:30'))
+    let read: () => void = () => {}
+    const of = dispatchOfWithTurns(() => s, {
+      turnOf: () => turn,
+      readPast: () =>
+        new Promise<void>((r) => {
+          read = () => {
+            turn = Date.parse(T('02:20'))
+            r()
+          }
+        })
+    })
+    const later = of('sess_co', T('02:30'))
+    expect(later).toBeInstanceOf(Promise)
+    read()
+    expect(await later).toBeNull()
   })
 })

@@ -4446,6 +4446,67 @@ describe('the Host journal at the commit points (Host journal Task 5)', () => {
   })
 })
 
+// Deferred minor b: the Host stamps when a Run's outcome became final at both of its commit points, so what a coordinator
+// spent and did is bounded by that moment, not by the last change of a Task
+describe('a Run’s end at the commit points', () => {
+  const LATER = '2026-09-22T02:00:00.000Z'
+  const app: OrchCaller = { role: 'app', toOthers: () => {} }
+  const seedWorker = async (): Promise<{ taskId: string; dispatchId: string }> => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW)
+    if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW)
+    if (!run.ok) throw new Error(run.error)
+    const task = createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW)
+    if (!task.ok) throw new Error(task.error)
+    const dsp = openDispatch(task.state, { taskId: task.value.id, provider: 'codex', accountId: 'accA', sessionId: 'ses_w', cwd: 'D:/p', specPath: 'D:/p/s.md' }, NOW)
+    if (!dsp.ok) throw new Error(dsp.error)
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(dsp.state), 'utf8')
+    return { taskId: task.value.id, dispatchId: dsp.value.id }
+  }
+  const stateNow = async (orch: ReturnType<typeof createHostOrch>) =>
+    (await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })).body as { state: OrchState; version: number }
+
+  it('a command’s commit that finishes a Run stamps it, in memory and on disk, and a later edit of a Task leaves it', async () => {
+    const ids = await seedWorker()
+    let clock = NOW
+    const orch = orchOver({ now: () => clock, aliveSessionIds: () => new Set(['ses_w']) })
+    const send = { cmd: 'send', args: { type: 'worker_done', ...ids, outcome: 'succeeded', subject: 's', body: 'b' }, sessionId: 'ses_w' }
+    expect((await orch.call(send)).status).toBe(200)
+    expect(orch.state().runs[0].endedAt).toBe(NOW)
+    expect((JSON.parse(await fs.readFile(path.join(dir, 'orchestration.json'), 'utf8')) as OrchState).runs[0].endedAt).toBe(NOW)
+    // The app renames the Task two hours later, from a mirror that had not heard of the end yet
+    clock = LATER
+    const got = await stateNow(orch)
+    const renamed: OrchState = {
+      ...got.state,
+      runs: got.state.runs.map(({ endedAt: _unheard, ...r }) => r),
+      tasks: got.state.tasks.map((t) => ({ ...t, title: 'renamed', updatedAt: LATER }))
+    }
+    expect((await orch.call({ cmd: 'state-put', args: { state: renamed, version: got.version }, sessionId: '', from: app })).status).toBe(200)
+    expect(orch.state().runs[0].endedAt).toBe(NOW)
+  })
+
+  it('a state-put that finishes a Run stamps it, one that adds a Task clears it, and a cold Host’s first put stamps nothing', async () => {
+    const ids = await seedWorker()
+    let clock = NOW
+    const orch = orchOver({ now: () => clock })
+    const got = await stateNow(orch)
+    const finished: OrchState = { ...got.state, tasks: got.state.tasks.map((t) => (t.id === ids.taskId ? { ...t, status: 'completed' } : t)) }
+    expect((await orch.call({ cmd: 'state-put', args: { state: finished, version: got.version }, sessionId: '', from: app })).status).toBe(200)
+    expect(orch.state().runs[0].endedAt).toBe(NOW)
+    clock = LATER
+    const ended = await stateNow(orch)
+    const more = createTask(ended.state, { runId: ended.state.runs[0].id, title: 'more', spec: 's', deps: [] }, LATER)
+    if (!more.ok) throw new Error(more.error)
+    expect((await orch.call({ cmd: 'state-put', args: { state: more.state, version: ended.version }, sessionId: '', from: app })).status).toBe(200)
+    expect(orch.state().runs[0]).not.toHaveProperty('endedAt')
+
+    const cold = orchOver({ now: () => LATER })
+    expect((await cold.call({ cmd: 'state-put', args: { state: finished }, sessionId: '', from: app })).status).toBe(200)
+    expect(cold.state().runs[0]).not.toHaveProperty('endedAt')
+  })
+})
+
 describe('How It Works at the commit points (E1 Task 3)', () => {
   type Input = Parameters<HostUnderstanding['onRunFinished']>[0]
   const seedOne = async (): Promise<{ taskId: string; dispatchId: string }> => {

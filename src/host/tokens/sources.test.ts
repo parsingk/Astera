@@ -44,6 +44,11 @@ const counted = (at: number, total: [number, number], last: [number, number]): s
   return JSON.stringify({ timestamp: iso(at), type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: u(total), last_token_usage: u(last) }, rate_limits: null } })
 }
 const lines = (...ls: string[]): string => ls.map((l) => l + '\n').join('')
+/** A prompt a person (or Astera) typed, as the transcript writes it. */
+const prompt = (at: number, text: string): string => JSON.stringify({ type: 'user', timestamp: iso(at), message: { role: 'user', content: text } })
+/** A tool's result coming back inside a turn: written as a user line too, and not a prompt. */
+const toolResult = (at: number): string =>
+  JSON.stringify({ type: 'user', timestamp: iso(at), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] } })
 
 const note = (kind: PtyMeta['kind'], id: string, restore: Record<string, unknown> = {}): PtyMeta => ({
   kind,
@@ -102,7 +107,7 @@ async function rig(o: { state: () => OrchState; now: () => number; statusLines?:
     ptys,
     procs,
     statusLinePayload: async (id) => (o.statusLines?.[id] ? { session_id: id, transcript_path: o.statusLines[id] } : null),
-    ownerOf: (sessionId, at, last) => tokenOwnerOf(o.state(), sessionId, at, last),
+    ownerOf: (sessionId, at, last, turn) => tokenOwnerOf(o.state(), sessionId, at, last, turn),
     log: () => {},
     now: o.now,
     every: () => () => {}
@@ -149,8 +154,36 @@ describe('tokenOwnerOf', () => {
     expect(tokenOwnerOf(s, 'sess_tab', iso(T0))).toBeNull()
   })
 
+  // Deferred minor b: a finished Run's coordinator spends for it up to the end of the turn that was running when the
+  // Run's outcome became final (its `endedAt`), whatever its Tasks do after; a turn is told by the session's own lines
+  it('a coordinator’s are its Run’s up to the end of the turn running when the Run finished, and a Task edited after opens nothing', () => {
+    const MIN = 60_000
+    const E = T0 + 10 * MIN
+    const base = orch([], 'sess_k')
+    const ended: OrchState = {
+      ...base,
+      runs: base.runs.map((r) => ({ ...r, endedAt: iso(E) })),
+      // A Task's title edited half an hour after the end
+      tasks: base.tasks.map((t) => ({ ...t, status: 'completed' as const, title: 'renamed', updatedAt: iso(E + 30 * MIN) }))
+    }
+    // The wrap-up ten minutes on, inside the turn that began before the end
+    expect(tokenOwnerOf(ended, 'sess_k', iso(E + 10 * MIN), null, E - 5 * MIN)).toEqual({ coordinatorOf: 'run_1' })
+    // A prompt typed into the tab after that turn
+    expect(tokenOwnerOf(ended, 'sess_k', iso(E + 20 * MIN), null, E + 15 * MIN)).toBeNull()
+    expect(tokenOwnerOf(ended, 'sess_k', iso(E + 31 * MIN), null, E + 15 * MIN)).toBeNull()
+    // Lines that cannot tell turns: two minutes after the end, not after the edit
+    expect(tokenOwnerOf(ended, 'sess_k', iso(E + 2 * MIN), null, null)).toEqual({ coordinatorOf: 'run_1' })
+    expect(tokenOwnerOf(ended, 'sess_k', iso(E + 2 * MIN + 1), null, null)).toBeNull()
+    expect(tokenOwnerOf(ended, 'sess_k', iso(E + 31 * MIN), null, null)).toBeNull()
+    // The owner it last had stands within the same bounds
+    const noSlot: OrchState = { ...ended, runs: ended.runs.map(({ coordinatorSessionId: _gone, ...r }) => r) }
+    expect(tokenOwnerOf(noSlot, 'sess_k1', iso(E + 10 * MIN), { coordinatorOf: 'run_1' }, E - 5 * MIN)).toEqual({ coordinatorOf: 'run_1' })
+    expect(tokenOwnerOf(noSlot, 'sess_k1', iso(E + 20 * MIN), { coordinatorOf: 'run_1' }, E + 15 * MIN)).toBeNull()
+  })
+
   // Final review I2: a finished Run's coordinator tab may be used on; what it spends then is not the Run's. Its last
-  // responses, written as the Run finished, still are
+  // responses, written as the Run finished, still are. A Run finished before its end was kept is bounded by its last
+  // Task's last change
   it('a coordinator’s are its Run’s while the Run is unfinished, and up to two minutes after it finished', () => {
     const MIN = 60_000
     const finished = (s: OrchState, at: number): OrchState => ({
@@ -440,6 +473,80 @@ describe('createTokenSources', () => {
       tokens: { input: 7, output: 3, total: 10 },
       coordinatorTokens: { input: 500, output: 50, total: 550 }
     })
+    r.sources.dispose()
+  })
+
+  // Deferred minor b, end to end: a Claude coordinator's transcript tells its turns by its prompts; a tool's result
+  // coming back (the `runs wait` the Run's end returns from) is not one
+  it('counts a Claude coordinator’s wrap-up inside the turn running when its Run finished, and nothing after its next prompt', async () => {
+    const MIN = 60_000
+    const E = T0 + 10 * MIN
+    let state = orch([], 'sess_k')
+    const statusLines: Record<string, string> = {}
+    const r = await rig({ state: () => state, now: () => T0, statusLines })
+    const transcript = path.join(r.dir, 'coord.jsonl')
+    await fs.writeFile(transcript, lines(prompt(T0 + 1000, 'Coordinate the run'), claudeLine(T0 + 2000, 'msg_1', 10, 1)))
+    statusLines.sess_k = transcript
+    r.ptys.open('pty_k', note('session', 'sess_k'))
+    await r.sources.poll()
+    // The last Task finishes while the coordinator waits in a tool call; then a Task is renamed after the end
+    state = { ...state, runs: state.runs.map((x) => ({ ...x, endedAt: iso(E) })), tasks: state.tasks.map((t) => ({ ...t, status: 'completed', updatedAt: iso(E) })) }
+    state = { ...state, tasks: state.tasks.map((t) => ({ ...t, title: 'renamed', updatedAt: iso(E + 12 * MIN) })) }
+    await fs.appendFile(
+      transcript,
+      lines(
+        toolResult(E + 1000),
+        claudeLine(E + 10 * MIN, 'msg_wrap', 20, 2),
+        // A person types into the coordinator tab after that turn
+        prompt(E + 11 * MIN, 'something else'),
+        claudeLine(E + 11 * MIN + 1000, 'msg_after', 300, 30)
+      )
+    )
+    await r.sources.poll()
+    expect(runTokensOf(state, 'run_1', r.store.spent())).toEqual({ coordinatorTokens: { input: 30, output: 3, total: 33 } })
+    r.sources.dispose()
+  })
+
+  // A Claude chat's stream carries no prompt; each turn ends with a `result` frame, so a response after one begins a turn
+  it('tells a Claude chat coordinator’s turns by the result frame that ends each', () => {
+    const MIN = 60_000
+    const E = T0 + 10 * MIN
+    let state = orch([], 'chat_k')
+    return rig({ state: () => state, now: () => T0 }).then((r) => {
+      r.procs.open('proc_k', note('chat', 'chat_k', { provider: 'claude' }))
+      r.procs.line('proc_k', claudeLine(T0 + 1000, 'msg_1', 10, 1, { parent_tool_use_id: null, session_id: 'c1' }))
+      state = { ...state, runs: state.runs.map((x) => ({ ...x, endedAt: iso(E) })), tasks: state.tasks.map((t) => ({ ...t, status: 'completed', updatedAt: iso(E) })) }
+      r.procs.line('proc_k', claudeLine(E + 10 * MIN, 'msg_wrap', 20, 2, { parent_tool_use_id: null, session_id: 'c1' }))
+      r.procs.line('proc_k', '{"type":"result","subtype":"success","usage":{"input_tokens":30,"output_tokens":3}}')
+      r.procs.line('proc_k', claudeLine(E + 11 * MIN, 'msg_after', 300, 30, { parent_tool_use_id: null, session_id: 'c1' }))
+      expect(runTokensOf(state, 'run_1', r.store.spent())).toEqual({ coordinatorTokens: { input: 30, output: 3, total: 33 } })
+      r.sources.dispose()
+    })
+  })
+
+  // What the audit asks (recorder.ts dispatchOfWithTurns): the turn a moment of a session fell in, from the lines read
+  // so far, and a read past a moment not read to yet
+  it('tells which turn a moment of a session fell in, and reads the session past a moment it has not read to', async () => {
+    let now = T0
+    const statusLines: Record<string, string> = {}
+    const r = await rig({ state: () => orch([], 'sess_k'), now: () => now, statusLines })
+    const transcript = path.join(r.dir, 'turns.jsonl')
+    await fs.writeFile(transcript, lines(claudeLine(T0 - 9000, 'msg_0', 1, 1), prompt(T0 + 1000, 'go'), claudeLine(T0 + 2000, 'msg_1', 1, 1)))
+    statusLines.sess_k = transcript
+    r.ptys.open('pty_k', note('session', 'sess_k'))
+    expect(r.sources.turnOf('sess_k', T0 + 5000)).toBeNull()
+    expect(r.sources.readPast('sess_nobody', T0 + 5000)).toBeNull()
+    now = T0 + 6000
+    const wait = r.sources.readPast('sess_k', T0 + 5000)
+    expect(wait).not.toBeNull()
+    await wait
+    expect(r.sources.turnOf('sess_k', T0 + 5000)).toBe(T0 + 1000)
+    // Before the first prompt read, the turn began no later than the first line read
+    expect(r.sources.turnOf('sess_k', T0 - 5000)).toBe(T0 - 9000)
+    expect(r.sources.turnOf('sess_k', T0 - 10_000)).toBeNull()
+    // Read from a moment past it: nothing to wait for
+    expect(r.sources.readPast('sess_k', T0 + 5000)).toBeNull()
+    expect(r.sources.readPast('sess_k', T0 + 7000)).not.toBeNull()
     r.sources.dispose()
   })
 

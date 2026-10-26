@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { justFinished, runRecordInputOf } from './runRecord'
+import { justFinished, runRecordInputOf, stampRunEnds } from './runRecord'
 import { foldsCaseHere } from '../testPaths'
 import { createJob, createTask, emptyState, jobOf, startJobRun, type OrchState } from './state'
 import type { CheckResult, Task } from './types'
@@ -74,6 +74,51 @@ describe('justFinished', () => {
     const before = state([{ runId: 'r1', status: 'dispatched' }])
     const after = state([{ runId: 'r1', status: 'failed', consecutiveFailures: 1 }])
     expect(justFinished(before, after)).toEqual([])
+  })
+})
+
+// Deferred minor b: when a Run's outcome became final, kept on the Run, so a later edit of a Task (its title, which
+// moves updatedAt) does not move it
+describe('stampRunEnds', () => {
+  const T = '2026-10-23T03:00:00.000Z'
+  const LATER = '2026-10-23T05:00:00.000Z'
+  const run = (s: OrchState, id: string) => s.runs.find((r) => r.id === id) as { endedAt?: string }
+
+  it('stamps a Run whose outcome became final on this commit with the commit’s time, completed or failed', () => {
+    const before = state([{ runId: 'r1', status: 'dispatched' }, { runId: 'r2', status: 'dispatched' }])
+    const after = state([{ runId: 'r1', status: 'completed' }, { runId: 'r2', status: 'failed', consecutiveFailures: 3 }])
+    const stamped = stampRunEnds(before, after, T)
+    expect(run(stamped, 'r1').endedAt).toBe(T)
+    expect(run(stamped, 'r2').endedAt).toBe(T)
+  })
+
+  it('keeps the end through a later edit of a Task and through a writer that left it out', () => {
+    const before = stampRunEnds(state([{ runId: 'r1', status: 'dispatched' }]), state([{ runId: 'r1', status: 'completed' }]), T)
+    const edited = { ...before, tasks: before.tasks.map((t) => ({ ...t, title: 'renamed', updatedAt: LATER })) }
+    expect(run(stampRunEnds(before, edited, LATER), 'r1').endedAt).toBe(T)
+    // An app mirror that had not heard of it yet writes the Run without it
+    const dropped = { ...edited, runs: edited.runs.map(({ ...r }) => (delete (r as { endedAt?: string }).endedAt, r)) }
+    expect(run(stampRunEnds(before, dropped, LATER), 'r1').endedAt).toBe(T)
+  })
+
+  it('clears it when the Run runs again, and stamps the new end when it finishes again', () => {
+    const ended = stampRunEnds(state([{ runId: 'r1', status: 'dispatched' }]), state([{ runId: 'r1', status: 'completed' }]), T)
+    const reopened = { ...ended, tasks: [...ended.tasks, { id: 't9', runId: 'r1', status: 'ready', consecutiveFailures: 0 }] } as unknown as OrchState
+    const running = stampRunEnds(ended, reopened, LATER)
+    expect(run(running, 'r1')).not.toHaveProperty('endedAt')
+    const again = { ...running, tasks: running.tasks.map((t) => ({ ...t, status: 'completed' as const })) }
+    expect(run(stampRunEnds(running, again, LATER), 'r1').endedAt).toBe(LATER)
+  })
+
+  it('does not stamp a Run it did not see finish: one new to the commit, or one finished before ends were kept', () => {
+    const finished = state([{ runId: 'r1', status: 'completed' }])
+    expect(run(stampRunEnds(emptyState(), finished, T), 'r1')).not.toHaveProperty('endedAt')
+    expect(run(stampRunEnds(finished, finished, T), 'r1')).not.toHaveProperty('endedAt')
+  })
+
+  it('hands back the same state when no Run’s end moved', () => {
+    const s = state([{ runId: 'r1', status: 'dispatched' }])
+    expect(stampRunEnds(s, s, T)).toBe(s)
   })
 })
 

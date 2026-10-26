@@ -26,11 +26,16 @@
 // response is written).
 //
 // **Whom a response was for** is `ownerOf` at the response's own time: the Dispatch the session held open then (one
-// that ended holds nothing after its end), else the Run it coordinated, while that Run was unfinished or had just
-// finished (final review I2). When the state no longer names the session (a
-// roll rekeyed its Dispatch, or its Run's coordinator slot, before its last lines were read), the owner it last had
-// stands, within the same bounds. A response for nobody (a person's own tab) is not kept. A session the app runs in its
-// own node-pty, with no Host, is not read: its Tasks show no tokens.
+// that ended holds nothing after its end), else the Run it coordinated, while that Run was unfinished and after it
+// finished to the end of the turn that was running then (final review I2, observe deferred minor b). When the state no
+// longer names the session (a roll rekeyed its Dispatch, or its Run's coordinator slot, before its last lines were
+// read), the owner it last had stands, within the same bounds. A response for nobody (a person's own tab) is not kept.
+// A session the app runs in its own node-pty, with no Host, is not read: its Tasks show no tokens.
+//
+// **A session's turns** are told by its own lines as they are read: a Claude transcript's prompts (a person's or one
+// Astera typed, never a tool's result coming back), a Codex rollout's task_started and user_message, and in a Claude
+// chat's stream, which carries no prompt, the first frame after the `result` that ended the turn before. The audit asks
+// them too (`SessionTurns`), for the same bound on where a coordinator's calls are filed.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { JsonlTail } from '../../core/rolling/jsonlTail'
@@ -38,7 +43,7 @@ import { TAIL_CAP } from '../../core/rolling/tailLines'
 import { claudeTokenReader } from '../../core/usage/claudeTokens'
 import { codexTokenReader } from '../../core/usage/codex'
 import { extractStatusLineSession } from '../../core/usage/statusline'
-import { outcomeOf, tasksOwnedBy, withoutSupersededLifecycle } from '../../core/orchestration/running'
+import { heldPastEnd, outcomeOf, runEndOf } from '../../core/orchestration/running'
 import type { OrchState } from '../../core/orchestration/state'
 import type { Dispatch, JobRun } from '../../core/orchestration/types'
 import type { PtyMeta } from '../../core/host/protocol'
@@ -58,33 +63,30 @@ const latest = <T>(items: readonly T[], key: (x: T) => number): T | undefined =>
 /** Whether the Dispatch was open at `t`: from its start to its end, or on while it has none. */
 const held = (x: Dispatch, t: number): boolean => Date.parse(x.startedAt) <= t && (x.endedAt === undefined || t <= Date.parse(x.endedAt))
 
-/** How long after its Run finished a coordinator's response is still the Run's: the last ones are written as it
- *  finishes. Past it, a finished Run's coordinator tab used on is nobody's Run (final review I2; the recorder's
- *  DISPATCH_END_GRACE_MS). */
-export const RUN_END_GRACE_MS = 2 * 60 * 1000
-
-/** Whether the coordinator of the Run spent `t` for it: while the Run is unfinished, and up to RUN_END_GRACE_MS after it
- *  finished, which is when its last Task last changed. */
-const coordinating = (s: OrchState, r: JobRun, t: number): boolean => {
-  if (outcomeOf(s, r.id) === 'running') return true
-  const finished = Math.max(...withoutSupersededLifecycle(tasksOwnedBy(s, r.id)).map((x) => Date.parse(x.updatedAt)))
-  return t <= finished + RUN_END_GRACE_MS
-}
+/** Whether the coordinator of the Run spent `t` for it: while the Run is unfinished, and after it finished to the end of
+ *  the turn that was running when its outcome became final (`heldPastEnd` at `runEndOf`; observe deferred minor b). */
+const coordinating = (s: OrchState, r: JobRun, t: number, turn: () => number | null): boolean =>
+  outcomeOf(s, r.id) === 'running' || heldPastEnd(runEndOf(s, r), t, turn)
 
 /**
  * Whom a session's response at `at` was for: the session's Dispatch open then (the one started last, when two were),
  * else the Run whose coordinator the session is while it coordinates it (`coordinating`), the unfinished one first. A
  * Dispatch holds only what was spent while it was open, read late or not (fix round 1, ruling 3): a tab a worker was
  * typed into (`worker-start --terminal`) goes on after the Dispatch ended, and that is not the Task's work, nor is what
- * it spent before. A finished Run's coordinator tab is the same.
+ * it spent before. A finished Run's coordinator holds its wrap-up, to the end of the turn that was running when the Run
+ * finished: a prompt typed into its tab after that is nobody's Run.
+ *
+ * `turn` is when the turn holding `at` began, at the latest (epoch ms), as the session's own lines tell it
+ * (createTokenSources' turns); null when they cannot, and then two minutes after the end stand in for the turn.
  *
  * `last` is the owner the session's earlier responses had. It stands for a session the state no longer names (a roll
  * rekeyed its Dispatch or its Run's coordinator slot before its last lines were read), within the same bounds: a
  * Dispatch still there and open at `at`, a Run still there and coordinated at `at`. Null for a session that worked for
  * nobody then. A session that drives a Run from outside is not looked for.
  */
-export function tokenOwnerOf(s: OrchState, sessionId: string, at: string, last: TokenOwner | null = null): TokenOwner | null {
+export function tokenOwnerOf(s: OrchState, sessionId: string, at: string, last: TokenOwner | null = null, turn: number | null = null): TokenOwner | null {
   const t = Date.parse(at)
+  const turnOf = (): number | null => turn
   const dispatch = latest(
     s.dispatches.filter((x: Dispatch) => x.sessionId === sessionId && held(x, t)),
     (x) => Date.parse(x.startedAt)
@@ -93,7 +95,7 @@ export function tokenOwnerOf(s: OrchState, sessionId: string, at: string, last: 
   const coordinated = s.runs.filter((r: JobRun) => r.coordinatorSessionId === sessionId)
   if (coordinated.length > 0) {
     const unfinished = coordinated.filter((r) => outcomeOf(s, r.id) === 'running')
-    const run = latest(unfinished.length > 0 ? unfinished : coordinated.filter((r) => coordinating(s, r, t)), (r) => Date.parse(r.createdAt))
+    const run = latest(unfinished.length > 0 ? unfinished : coordinated.filter((r) => coordinating(s, r, t, turnOf)), (r) => Date.parse(r.createdAt))
     return run ? { coordinatorOf: run.id } : null
   }
   if (last === null) return null
@@ -102,7 +104,60 @@ export function tokenOwnerOf(s: OrchState, sessionId: string, at: string, last: 
     return x && held(x, t) ? last : null
   }
   const run = s.runs.find((r) => r.id === last.coordinatorOf)
-  return run && coordinating(s, run, t) ? last : null
+  return run && coordinating(s, run, t, turnOf) ? last : null
+}
+
+/** A session's turns as its own lines tell them (observe deferred minor b): when each began, in order. */
+interface Turns {
+  starts: number[]
+  /** The turn holding a moment before every start kept began no later than this: the first line read, or the latest
+   *  start let go of. Null before a line with a time was read. */
+  from: number | null
+}
+
+/** Starts kept per session; past it the earliest goes, and `from` takes its place. */
+const TURNS_KEPT = 256
+
+/** When the turn holding `t` began, at the latest; null when the lines read cannot tell. */
+const turnIn = (log: Turns, t: number): number | null => {
+  for (let i = log.starts.length - 1; i >= 0; i--) if (log.starts[i] <= t) return log.starts[i]
+  return log.from !== null && log.from <= t ? log.from : null
+}
+
+const parsed = (line: string): Record<string, unknown> | null => {
+  try {
+    const v: unknown = JSON.parse(line)
+    return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null
+  } catch {
+    return null
+  }
+}
+const timeOf = (o: Record<string, unknown> | null): number | null => {
+  const at = typeof o?.timestamp === 'string' ? Date.parse(o.timestamp) : NaN
+  return Number.isFinite(at) ? at : null
+}
+
+/** When a Claude transcript line is a prompt that begins a turn, a person's or one Astera typed: a user line of the main
+ *  conversation that is not a tool's result coming back, nor one Claude Code writes for itself (`isMeta`, a compaction's
+ *  summary). An interruption's note is one too, and the turn it ends is over. Null for any other line. */
+const claudePromptAt = (line: string): number | null => {
+  if (!line.includes('"user"')) return null
+  const o = parsed(line)
+  if (!o || o.type !== 'user' || o.isSidechain === true || o.isMeta === true || o.isCompactSummary === true) return null
+  const content = (o.message as { content?: unknown } | undefined)?.content
+  const typed =
+    typeof content === 'string' ||
+    (Array.isArray(content) && content.length > 0 && !content.some((b) => (b as { type?: unknown } | null)?.type === 'tool_result'))
+  return typed ? timeOf(o) : null
+}
+
+/** When a Codex rollout line begins a turn: its `task_started` or `user_message` event, the marks host/sessionFacts.ts
+ *  reads a turn's start from. Null for any other line. */
+const codexTurnAt = (line: string): number | null => {
+  if (!line.includes('"task_started"') && !line.includes('"user_message"')) return null
+  const o = parsed(line)
+  const kind = (o?.payload as { type?: unknown } | undefined)?.type
+  return o?.type === 'event_msg' && (kind === 'task_started' || kind === 'user_message') ? timeOf(o) : null
 }
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null)
@@ -130,12 +185,27 @@ interface Followed {
    *  at, followed or not. Null for a Codex session. */
   transcript: { read: (lines: readonly string[]) => TokensSpent[]; files: Map<string, JsonlTail>; seen: Set<string> } | null
   chat: ((lines: readonly string[]) => TokensSpent[]) | null
+  /** A Claude chat: whether a turn is under way, begun by its first frame after the `result` that ended the one before. */
+  chatTurn: boolean
   /** When its pty or process ended (epoch ms), null while it runs. Its last read takes nothing dated after it. */
   endedAt: number | null
+  /** When its last read of its files began (epoch ms), null before one: what was written before it is read. */
+  readFrom: number | null
 }
 
-export interface TokenSources {
-  /** Reads every followed file forward once and saves the store. Never rejects. */
+/** A session's turns as the token sources read them, for the audit's lookup (recorder.ts `dispatchOfWithTurns`). */
+export interface SessionTurns {
+  /** When the turn holding `t` (epoch ms) began, at the latest, from the session's lines read so far; null when they
+   *  cannot tell: none read, a moment before them, a session not followed. */
+  turnOf(sessionId: string, t: number): number | null
+  /** Null when the session's files were last read from a moment at or after `t`, so a prompt written before it is
+   *  known, and when it has none to read (not followed, or a Claude chat, whose lines are read as they come); else a
+   *  read of every followed file that begins now, or right after the one under way. Never rejects. */
+  readPast(sessionId: string, t: number): Promise<void> | null
+}
+
+export interface TokenSources extends SessionTurns {
+  /** Reads every followed file forward once (after the read under way, if one is) and saves the store. Never rejects. */
   poll(): Promise<void>
   dispose(): void
 }
@@ -146,8 +216,9 @@ export function createTokenSources(d: {
   procs: { onMeta: Listen<[string, PtyMeta, 'open' | 'note']>; onLine: Listen<[string, number, string]>; onExit: Listen<[string, number]> }
   /** A Claude terminal session's statusline payload, which names its transcript; null before it has one. */
   statusLinePayload(sessionId: string): Promise<unknown | null>
-  /** `tokenOwnerOf` over the state now; `last` is the owner the session's earlier responses had. */
-  ownerOf(sessionId: string, at: string, last: TokenOwner | null): TokenOwner | null
+  /** `tokenOwnerOf` over the state now; `last` is the owner the session's earlier responses had, `turn` when the turn
+   *  holding `at` began, at the latest, or null when the session's lines cannot tell. */
+  ownerOf(sessionId: string, at: string, last: TokenOwner | null, turn: number | null): TokenOwner | null
   log(message: string): void
   /** Test injection (epoch ms). */
   now?: () => number
@@ -157,13 +228,60 @@ export function createTokenSources(d: {
   const now = d.now ?? Date.now
   /** The owner each session last had, for its lines read after the state stopped naming it. */
   const lastOwner = new Map<string, TokenOwner>()
+  /** Each session's turns, from its main file's lines (its transcript or rollout) or its chat frames. */
+  const turns = new Map<string, Turns>()
+  const turnsFor = (sessionId: string): Turns => {
+    let log = turns.get(sessionId)
+    if (!log) turns.set(sessionId, (log = { starts: [], from: null }))
+    return log
+  }
+  const turnBegan = (log: Turns, at: number): void => {
+    let i = log.starts.length
+    while (i > 0 && log.starts[i - 1] > at) i--
+    if (log.starts[i - 1] === at) return
+    log.starts.splice(i, 0, at)
+    if (log.starts.length > TURNS_KEPT) log.from = log.starts.shift()!
+  }
+  /** Notes the turns `lines` of a session's main file begin, by `startOf`, and the first moment read. */
+  const noteTurns = (sessionId: string, lines: readonly string[], startOf: (line: string) => number | null): void => {
+    const log = turnsFor(sessionId)
+    if (log.from === null)
+      for (const line of lines) {
+        const at = timeOf(parsed(line))
+        if (at === null) continue
+        log.from = at
+        break
+      }
+    for (const line of lines) {
+      const at = startOf(line)
+      if (at !== null) turnBegan(log, at)
+    }
+  }
+  /** A Claude chat frame's part in its turns: a `result` ends the turn under way, and the first frame of the model's after
+   *  it begins the next one, at its time. */
+  const noteChatTurn = (f: Followed, line: string): void => {
+    if (!line.includes('"result"') && !line.includes('"assistant"')) return
+    const o = parsed(line)
+    if (o?.type === 'result') f.chatTurn = false
+    else if (o?.type === 'assistant' && !f.chatTurn) {
+      f.chatTurn = true
+      turnBegan(turnsFor(f.sessionId), timeOf(o) ?? now())
+    }
+  }
+  /** Lets go of what is kept for a session once nothing follows it. */
+  const forget = (sessionId: string): void => {
+    if ([...terminals.values(), ...chats.values()].some((x) => x.sessionId === sessionId)) return
+    lastOwner.delete(sessionId)
+    turns.delete(sessionId)
+  }
   const hand = (f: Followed, spent: TokensSpent[]): void => {
     for (const x of spent) {
       const at = x.at ?? new Date(now()).toISOString()
       // An ended session's file can be written on by the next one (a roll onto the same account copies nothing, a Codex
       // chat resumes into its own rollout): what is dated after the end is that one's (fix round 1, I1)
       if (f.endedAt !== null && !(Date.parse(at) <= f.endedAt)) continue
-      const owner = d.ownerOf(f.sessionId, at, lastOwner.get(f.sessionId) ?? null)
+      const log = turns.get(f.sessionId)
+      const owner = d.ownerOf(f.sessionId, at, lastOwner.get(f.sessionId) ?? null, log ? turnIn(log, Date.parse(at)) : null)
       if (!owner) continue
       lastOwner.set(f.sessionId, owner)
       d.store.add(f.sessionId, owner, x)
@@ -173,7 +291,16 @@ export function createTokenSources(d: {
   /** Followed sessions: a terminal by its pty id, a chat by its process id. */
   const terminals = new Map<string, Followed>()
   const chats = new Map<string, Followed>()
-  const fresh = (sessionId: string): Followed => ({ sessionId, since: now(), rollout: null, transcript: null, chat: null, endedAt: null })
+  const fresh = (sessionId: string): Followed => ({
+    sessionId,
+    since: now(),
+    rollout: null,
+    transcript: null,
+    chat: null,
+    chatTurn: false,
+    endedAt: null,
+    readFrom: null
+  })
   /** The rollout a note names, followed from now on when it is new: a later file is Codex's `/new`, a conversation of
    *  its own with its own running total. */
   const noteRollout = (f: Followed, meta: PtyMeta): void => {
@@ -214,6 +341,7 @@ export function createTokenSources(d: {
       const f = chats.get(procId)
       if (!f?.chat) return
       try {
+        noteChatTurn(f, line)
         hand(f, f.chat([line]))
       } catch (err) {
         d.log(`tokens: a line of chat ${f.sessionId} could not be read: ${String(err)}`)
@@ -226,14 +354,22 @@ export function createTokenSources(d: {
       if (f.chat) {
         chats.delete(procId)
         f.chat = null
+        forget(f.sessionId)
       } else f.endedAt = now()
     })
   ]
 
-  /** Reads `tail` forward and hands what it spent; true when lines came. */
-  const readTail = async (f: Followed, tail: JsonlTail, read: (lines: readonly string[]) => TokensSpent[]): Promise<boolean> => {
+  /** Reads `tail` forward and hands what it spent, after the turns its lines begin when it is the session's main file
+   *  (`startOf`); true when lines came. */
+  const readTail = async (
+    f: Followed,
+    tail: JsonlTail,
+    read: (lines: readonly string[]) => TokensSpent[],
+    startOf?: (line: string) => number | null
+  ): Promise<boolean> => {
     const got = await tail.read()
     if (!got || got.lines.length === 0) return false
+    if (startOf) noteTurns(f.sessionId, got.lines, startOf)
     hand(f, read(got.lines))
     return true
   }
@@ -242,7 +378,7 @@ export function createTokenSources(d: {
     if (f.rollout) {
       const r = f.rollout
       r.tail ??= await follow(r.path)
-      if (f.rollout === r) await readTail(f, r.tail, r.read)
+      if (f.rollout === r) await readTail(f, r.tail, r.read, codexTurnAt)
       return
     }
     const t = f.transcript
@@ -251,7 +387,8 @@ export function createTokenSources(d: {
     if (named !== null) {
       let main = t.files.get(named)
       if (!main) t.files.set(named, (main = await follow(named)))
-      const grew = await readTail(f, main, t.read)
+      // Its prompts tell its turns; its sub-agents' files hold none of its own (their prompts come from it)
+      const grew = await readTail(f, main, t.read, claudePromptAt)
       // A sub-agent writes a file of its own beside the transcript, made when it starts. One last written before this
       // session started is a session before's, in a resumed conversation's folder (fix round 1, ruling 2): not
       // followed. Each file is looked at when the folder first lists it, not at every read (final review M3); one that
@@ -279,8 +416,10 @@ export function createTokenSources(d: {
   const readEach = async (followed: Map<string, Followed>): Promise<void> => {
     for (const [key, f] of [...followed]) {
       const last = f.endedAt !== null
+      const from = now()
       try {
         await readOne(f)
+        f.readFrom = from
       } catch (err) {
         d.log(`tokens: the files of session ${f.sessionId} could not be read: ${String(err)}`)
       }
@@ -289,7 +428,7 @@ export function createTokenSources(d: {
       // Its readers go with it: the message ids it counted and the files it followed
       f.transcript = null
       f.rollout = null
-      if (![...terminals.values(), ...chats.values()].some((x) => x.sessionId === f.sessionId)) lastOwner.delete(f.sessionId)
+      forget(f.sessionId)
     }
   }
   const readAll = async (): Promise<void> => {
@@ -298,7 +437,24 @@ export function createTokenSources(d: {
     await d.store.save()
   }
 
-  let polling = false
+  /** The read under way, and the one asked for after it. */
+  let reading: Promise<void> | null = null
+  let next: Promise<void> | null = null
+  /** A read of every followed file that begins now, or right after the one under way: one begun before the ask may
+   *  have passed by what was written since. */
+  const readSoon = (): Promise<void> => {
+    if (reading === null) {
+      reading = readAll().finally(() => {
+        reading = null
+      })
+      return reading
+    }
+    next ??= reading.then(() => {
+      next = null
+      return readSoon()
+    })
+    return next
+  }
   const every =
     d.every ??
     ((ms: number, fn: () => void) => {
@@ -307,21 +463,26 @@ export function createTokenSources(d: {
       return () => clearInterval(t)
     })
   const stopPolling = every(TOKEN_POLL_MS, () => {
-    if (polling) return
-    polling = true
-    void readAll().finally(() => {
-      polling = false
-    })
+    if (reading === null) void readSoon()
   })
 
   return {
-    poll: readAll,
+    poll: readSoon,
+    turnOf(sessionId, t) {
+      const log = turns.get(sessionId)
+      return log ? turnIn(log, t) : null
+    },
+    readPast(sessionId, t) {
+      const files = [...terminals.values(), ...chats.values()].filter((f) => f.sessionId === sessionId && f.chat === null)
+      return files.every((f) => f.readFrom !== null && f.readFrom >= t) ? null : readSoon()
+    },
     dispose() {
       stopPolling()
       for (const off of offs) off()
       terminals.clear()
       chats.clear()
       lastOwner.clear()
+      turns.clear()
     }
   }
 }
