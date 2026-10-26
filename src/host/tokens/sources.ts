@@ -19,7 +19,8 @@
 //
 // **A session's own end** is when its pty or process ended: its last read takes nothing dated after it, since a roll
 // onto the same account copies nothing and the next session writes on in the same file, as a Codex chat resumed into
-// its own rollout does (fix round 1, I1).
+// its own rollout does (fix round 1, I1). A roll's new session (`rolledFrom`) is heard open before the old one's exit,
+// as a roll kills and respawns with no wait between, so the old one takes nothing dated from the new one's start either.
 //
 // **A file is followed from its end, less TAIL_CAP**, and again so when it gets shorter: transcripts measured up to
 // 1 GB and rollouts 93 MB, and what this session wrote is at the end (a session's start is heard well before its first
@@ -251,6 +252,9 @@ interface Followed {
   chatTurnAt: number
   /** When its pty or process ended (epoch ms), null while it runs. Its last read takes nothing dated after it. */
   endedAt: number | null
+  /** When a roll's new session (`rolledFrom` naming this one) started (epoch ms), null before: it takes nothing dated
+   *  from then. A roll kills and respawns with no wait between, so the new session is heard before this one's exit. */
+  rolledAt: number | null
   /** When its last read of its files began (epoch ms), null before one: what was written before it is read. */
   readFrom: number | null
   /** A roll's new session (`rolledFrom` in its note) whose carry-on prompt is not read yet: its first prompt since it
@@ -400,6 +404,9 @@ export function createTokenSources(d: {
       // An ended session's file can be written on by the next one (a roll onto the same account copies nothing, a Codex
       // chat resumes into its own rollout): what is dated after the end is that one's (fix round 1, I1)
       if (f.endedAt !== null && !(Date.parse(at) <= f.endedAt)) continue
+      // A respawn on the same account writes on in the same file before this one's exit is heard: that is the new one's,
+      // which counts from its start
+      if (f.rolledAt !== null && !(Date.parse(at) < f.rolledAt)) continue
       const log = turns.get(f.sessionId)
       const owner = d.ownerOf(f.sessionId, at, lastOwner.get(f.sessionId) ?? null, log ? turnIn(log, Date.parse(at)) : null)
       if (!owner) continue
@@ -413,8 +420,11 @@ export function createTokenSources(d: {
   const chats = new Map<string, Followed>()
   const fresh = (sessionId: string, key: string, via: Followed['via'], meta: PtyMeta): Followed => {
     const since = now()
-    const carryOn = str(meta.restore.rolledFrom) !== null
-    return { sessionId, key, via, since, rollout: null, transcript: null, chat: null, chatTurn: false, chatTurnAt: since, endedAt: null, readFrom: null, carryOn }
+    const from = str(meta.restore.rolledFrom)
+    // The session it rolled from takes nothing dated from this one's start
+    if (from !== null) for (const x of [...terminals.values(), ...chats.values()]) if (x.sessionId === from) x.rolledAt ??= since
+    const carryOn = from !== null
+    return { sessionId, key, via, since, rollout: null, transcript: null, chat: null, chatTurn: false, chatTurnAt: since, endedAt: null, rolledAt: null, readFrom: null, carryOn }
   }
   /** The rollout a note names, followed from now on when it is new: a later file is Codex's `/new`, a conversation of
    *  its own with its own running total. */

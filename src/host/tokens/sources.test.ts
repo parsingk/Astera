@@ -374,6 +374,30 @@ describe('createTokenSources', () => {
     r.sources.dispose()
   })
 
+  // A roll kills the old session and spawns the new one with no wait between (codexCoordinator.ts roll): the new one is
+  // heard open before the old one's exit, and a respawn on the same account (an in-place resume that did not recover)
+  // writes on in the same rollout. What is dated from the new one's start is the new one's.
+  it('a same-account Codex roll whose new session opens before the old one exits counts the new responses once', async () => {
+    let now = T0
+    let state = orch([dispatch('d1', 't1', 'sess_c')])
+    const r = await rig({ state: () => state, now: () => now })
+    const file = path.join(r.dir, 'rollout.jsonl')
+    await fs.writeFile(file, lines(counted(T0 + 10, [100, 10], [100, 10])))
+    r.ptys.open('pty_c', note('session', 'sess_c', { rolloutPath: file }))
+    await r.sources.poll()
+    now = T0 + 100
+    state = orch([dispatch('d1', 't1', 'sess_d')])
+    r.ptys.open('pty_d', note('session', 'sess_d', { rolloutPath: file, rolledFrom: 'sess_c' }))
+    await fs.appendFile(file, lines(counted(T0 + 150, [150, 12], [50, 2])))
+    await r.sources.poll()
+    now = T0 + 200
+    r.ptys.exit('pty_c')
+    await r.sources.poll()
+    await r.sources.poll()
+    expect(taskTokensOf(state, 't1', r.store.spent())).toEqual({ input: 150, output: 12, total: 162 })
+    r.sources.dispose()
+  })
+
   // The same for a Codex chat resumed into its own rollout under a new session
   it('a Codex chat that ended stops at its end, though its rollout is written on', async () => {
     let now = T0
