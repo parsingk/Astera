@@ -28,7 +28,7 @@ import { JobsView } from './components/JobsView'
 import { jobsStall, jobsStallRecheckInMs } from '../../core/orchestration/jobsView'
 import { UnderstandingView } from './components/UnderstandingView'
 import { RecordDetailHost } from './components/RecordDetail'
-import { RunDetail } from './components/RunDetail'
+import { KeyedRunDetail } from './components/RunDetail'
 import { NewRunModal } from './components/NewRunModal'
 import { SourceJobModal } from './components/SourceJobModal'
 import { NewSessionDialog } from './components/NewSessionDialog'
@@ -51,7 +51,7 @@ import { ExtensionsSettings } from './components/ExtensionsSettings'
 import { AgentProfilesSettings } from './components/AgentProfilesSettings'
 import { profileOfConversation, spawnPermission } from './components/agentProfilesText'
 import { SecuritySettings } from './components/SecuritySettings'
-import { runDetailInstanceKey, SECURITY_TAB, type AuditFocus } from './components/securityText'
+import { SECURITY_TAB, type AuditFocus } from './components/securityText'
 import { jobName } from './lib/jobName'
 import { RuntimeSelector } from './components/RuntimeSelector'
 import { createReplyGate } from './lib/replyGate'
@@ -5617,8 +5617,8 @@ export default function App(): React.JSX.Element {
         />
       )}
       {openRun && detailDoor && (
-        <RunDetail
-          key={runDetailInstanceKey(openRun)}
+        <KeyedRunDetail
+          open={openRun}
           door={detailDoor}
           // 그래프의 노드는 제목·상태·세션을 스냅샷에서 읽는다(detail 의 layers 는 id 뿐이다).
           // 그 Run 이 스냅샷에서 사라졌으면(다른 프로젝트로 갔거나 지워졌다) undefined 다.

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -31,10 +31,13 @@ import {
   pageOf,
   periodSince,
   afterObserveRead,
+  startObserveRead,
+  OBSERVE_RETRIES,
+  jobFilterView,
+  chooseJob,
   runDetailInstanceKey,
   FOCUS_VALUE,
   focusedFilters,
-  jobFilterChange,
   recordTime,
   retentionSince,
   rowTime,
@@ -341,12 +344,44 @@ describe('the Job focus', () => {
     expect(FOCUS_VALUE).not.toBe('')
   })
 
+  const jobs = [
+    { id: 'job_1', runId: 'run_1' },
+    { id: 'job_2', runId: 'run_2' }
+  ]
+  const nameOf = (runId: string): string | undefined => (runId === 'run_1' ? 'Fix it' : undefined)
+  const labels = { all: 'All Jobs', focus: (name: string) => `Only ${name}` }
+
+  it('offers the focus as the Job filter’s selected choice, once, among the Jobs read', () => {
+    const v = jobFilterView({ focus: { runId: 'run_1', name: 'Fix it' }, filters: { jobId: 'job_9' }, jobs, runName: nameOf, labels })
+    expect(v.value).toBe(FOCUS_VALUE)
+    expect(v.items).toEqual([
+      { value: '', label: 'All Jobs' },
+      { value: FOCUS_VALUE, label: 'Only Fix it' },
+      { value: 'job_2', label: 'job_2' }
+    ])
+    const byJob = jobFilterView({ focus: { jobId: 'job_2', name: 'Job two' }, filters: {}, jobs, runName: nameOf, labels })
+    expect(byJob.items.map((i) => i.value)).toEqual(['', FOCUS_VALUE, 'job_1'])
+  })
+
+  it('shows the filter the person set when there is no focus', () => {
+    const v = jobFilterView({ focus: undefined, filters: { jobId: 'job_2' }, jobs, runName: nameOf, labels })
+    expect(v.value).toBe('job_2')
+    expect(v.items).toEqual([
+      { value: '', label: 'All Jobs' },
+      { value: 'job_1', label: 'Fix it' },
+      { value: 'job_2', label: 'job_2' }
+    ])
+    expect(jobFilterView({ focus: undefined, filters: {}, jobs, runName: nameOf, labels }).value).toBe('')
+  })
+
   it('clears the focus when the Job filter is changed to another Job or to all Jobs, and keeps it when it is picked again', () => {
-    expect(jobFilterChange('job_3', true)).toEqual({ clearFocus: true, jobId: 'job_3' })
-    expect(jobFilterChange('', true)).toEqual({ clearFocus: true, jobId: undefined })
-    expect(jobFilterChange(FOCUS_VALUE, true)).toEqual({ clearFocus: false })
-    expect(jobFilterChange('job_3', false)).toEqual({ clearFocus: false, jobId: 'job_3' })
-    expect(jobFilterChange('', false)).toEqual({ clearFocus: false, jobId: undefined })
+    const f = { decision: 'allow' as const, jobId: 'job_9' }
+    const focus = { runId: 'run_1', name: 'Fix it' }
+    expect(chooseJob('job_3', focus, f)).toEqual({ clearFocus: true, filters: { decision: 'allow', jobId: 'job_3' } })
+    expect(chooseJob('', focus, f)).toEqual({ clearFocus: true, filters: { decision: 'allow' } })
+    expect(chooseJob(FOCUS_VALUE, focus, f)).toEqual({ clearFocus: false, filters: f })
+    expect(chooseJob('job_3', undefined, f)).toEqual({ clearFocus: false, filters: { decision: 'allow', jobId: 'job_3' } })
+    expect(chooseJob('', undefined, f)).toEqual({ clearFocus: false, filters: { decision: 'allow' } })
   })
 })
 
@@ -358,12 +393,57 @@ describe('Run detail reads', () => {
     expect(runDetailInstanceKey({ runId: 'run_1', runtimeId: 'rt_1' })).toBe(runDetailInstanceKey({ runId: 'run_1', runtimeId: 'rt_1' }))
   })
 
-  it('tries a failed first read of a finished Run again once the wait is over, and keeps a good read as it is', () => {
-    const read = { target: 'run_1', state: 'completed|3/3', at: 1000 }
-    const same = { target: 'run_1', state: 'completed|3/3' }
-    expect(observeReadDue(afterObserveRead(read, true), same, 1000 + 5000)).toBeNull()
-    expect(observeReadDue(afterObserveRead(read, false), same, 1000 + 5000)).toBe(OBSERVE_READ_EVERY_MS - 5000)
-    expect(observeReadDue(afterObserveRead(read, false), same, 1000 + OBSERVE_READ_EVERY_MS)).toBe(0)
+  const key = { target: 'run_1', state: 'completed|3/3' }
+
+  it('keeps a good read as it is: nothing is read again until the Run moves', () => {
+    const first = startObserveRead(null, key, 1000)
+    const done = afterObserveRead(first, true)
+    expect(done.retryIn).toBeNull()
+    expect(observeReadDue(done.last, key, 1000 + 5000)).toBeNull()
+  })
+
+  it('tries a failed read again once the wait is over, up to the cap, then only when the Run moves', () => {
+    let last = startObserveRead(null, key, 1000)
+    const retries: Array<number | null> = []
+    for (let i = 0; i < OBSERVE_RETRIES + 1; i++) {
+      const out = afterObserveRead(last, false)
+      retries.push(out.retryIn)
+      // the retry reads the same state at the end of the wait, which the read finds due
+      expect(observeReadDue(out.last, key, last.at + 5000)).toBe(OBSERVE_READ_EVERY_MS - 5000)
+      expect(observeReadDue(out.last, key, last.at + OBSERVE_READ_EVERY_MS)).toBe(0)
+      last = startObserveRead(out.last, key, last.at + OBSERVE_READ_EVERY_MS)
+    }
+    expect(retries).toEqual([OBSERVE_READ_EVERY_MS, OBSERVE_READ_EVERY_MS, OBSERVE_READ_EVERY_MS, null])
+  })
+
+  it('counts failures per Run, and a good read starts the count again', () => {
+    const failed = afterObserveRead(startObserveRead(null, key, 0), false).last
+    expect(startObserveRead(failed, key, 40_000).failures).toBe(1)
+    expect(startObserveRead(failed, { target: 'run_2', state: 'x' }, 40_000).failures).toBe(0)
+    const good = afterObserveRead(startObserveRead(failed, key, 40_000), true).last
+    expect(startObserveRead(good, { ...key, state: 'later' }, 80_000).failures).toBe(0)
   })
 })
 
+// "Today and the 29 before" is counted on the person's clock: where the local day and the UTC day differ
+describe('the 30 days on the person’s clock', () => {
+  const was = process.env.TZ
+  afterEach(() => {
+    if (was === undefined) delete process.env.TZ
+    else process.env.TZ = was
+  })
+
+  it('starts at the local midnight 29 days back where the local day is behind UTC', () => {
+    process.env.TZ = 'America/Los_Angeles'
+    // 2026-10-24T03:00Z is still the evening of the 23rd in Los Angeles (UTC-7)
+    expect(periodSince('month', new Date('2026-10-24T03:00:00Z'))).toBe('2026-09-24T07:00:00.000Z')
+    expect(periodSince('today', new Date('2026-10-24T03:00:00Z'))).toBe('2026-10-23T07:00:00.000Z')
+  })
+
+  it('starts at the local midnight 29 days back where the local day is ahead of UTC', () => {
+    process.env.TZ = 'Asia/Seoul'
+    // 2026-10-23T16:00Z is already the 24th at 01:00 in Seoul (UTC+9)
+    expect(periodSince('month', new Date('2026-10-23T16:00:00Z'))).toBe('2026-09-24T15:00:00.000Z')
+    expect(periodSince('today', new Date('2026-10-23T16:00:00Z'))).toBe('2026-10-23T15:00:00.000Z')
+  })
+})

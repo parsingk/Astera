@@ -203,11 +203,31 @@ export function focusedFilters(f: AuditFilters, focus: AuditFocus | undefined): 
   return { ...rest, ...('runId' in focus ? { runId: focus.runId } : { jobId: focus.jobId }) }
 }
 
-/** What choosing `value` in the Job filter does: the Job it sets (none for all Jobs), and whether the focus ends. The
- *  focus ends with any change of the filter; picking the focus again changes nothing. */
-export function jobFilterChange(value: string, focused: boolean): { clearFocus: boolean; jobId?: string } {
-  if (focused && value === FOCUS_VALUE) return { clearFocus: false }
-  return { clearFocus: focused, jobId: value === '' ? undefined : value }
+/** What the Job filter shows: its choices (all Jobs, the focus once, the Jobs the rows named) and the one selected, the
+ *  focus while there is one. A Job the focus already stands for is not offered twice. */
+export function jobFilterView(a: {
+  focus: AuditFocus | undefined
+  filters: AuditFilters
+  jobs: readonly { id: string; runId?: string }[]
+  runName: (runId: string) => string | undefined
+  labels: { all: string; focus: (name: string) => string }
+}): { items: { value: string; label: string }[]; value: string } {
+  const { focus } = a
+  const own = a.jobs
+    .filter((j) => focus === undefined || ('runId' in focus ? j.runId !== focus.runId : j.id !== focus.jobId))
+    .map((j) => ({ value: j.id, label: (j.runId !== undefined ? a.runName(j.runId) : undefined) ?? j.id.slice(0, 12) }))
+  return {
+    items: [{ value: '', label: a.labels.all }, ...(focus !== undefined ? [{ value: FOCUS_VALUE, label: a.labels.focus(focus.name) }] : []), ...own],
+    value: focus !== undefined ? FOCUS_VALUE : (a.filters.jobId ?? '')
+  }
+}
+
+/** Choosing `value` in the Job filter: the filters after it (no Job for all Jobs), and whether the focus ends. The focus
+ *  ends with any change of the filter; picking the focus again changes nothing. */
+export function chooseJob(value: string, focus: AuditFocus | undefined, filters: AuditFilters): { clearFocus: boolean; filters: AuditFilters } {
+  if (focus !== undefined && value === FOCUS_VALUE) return { clearFocus: false, filters }
+  const { jobId: _job, ...rest } = filters
+  return { clearFocus: focus !== undefined, filters: value === '' ? rest : { ...rest, jobId: value } }
 }
 
 /** Run detail reads tokens and the would-deny count no more often than this. */
@@ -223,10 +243,32 @@ export function observeReadDue(last: { target: string; state: string; at: number
   return Math.max(0, OBSERVE_READ_EVERY_MS - (now - last.at))
 }
 
-/** What Run detail remembers of a read: a read that failed is remembered as one of another state, so the next trigger
- *  reads again once the wait is over instead of finding nothing moved and leaving the facts empty for good. */
-export const afterObserveRead = (read: { target: string; state: string; at: number }, ok: boolean): { target: string; state: string; at: number } =>
-  ok ? read : { ...read, state: '' }
+/** What Run detail remembers of its last read, and how many in a row failed. */
+export interface ObserveRead {
+  target: string
+  state: string
+  at: number
+  failures: number
+}
+
+/** How many times a failed read is asked again on its own, a wait apart. After that it waits for the Run to move. */
+export const OBSERVE_RETRIES = 3
+
+/** The read that starts now: its failures are those of the reads of the same target before it. */
+export const startObserveRead = (last: ObserveRead | null, next: { target: string; state: string }, now: number): ObserveRead => ({
+  ...next,
+  at: now,
+  failures: last !== null && last.target === next.target ? last.failures : 0
+})
+
+/** What Run detail remembers of a read, and when to ask again. A read that failed is remembered as one of another state,
+ *  so the next trigger reads again once the wait is over instead of finding nothing moved and leaving the facts empty
+ *  for good; on its own it asks again after one wait, OBSERVE_RETRIES times. A good read starts the count again. */
+export function afterObserveRead(read: ObserveRead, ok: boolean): { last: ObserveRead; retryIn: number | null } {
+  if (ok) return { last: { ...read, failures: 0 }, retryIn: null }
+  const failures = read.failures + 1
+  return { last: { ...read, state: '', failures }, retryIn: failures <= OBSERVE_RETRIES ? OBSERVE_READ_EVERY_MS : null }
+}
 
 /** Run detail's key: one component per Run it shows (and Runtime), so another Run never starts from the last one's facts. */
 export const runDetailInstanceKey = (open: { runId: string; runtimeId?: string }): string => `${open.runtimeId ?? ''}|${open.runId}`

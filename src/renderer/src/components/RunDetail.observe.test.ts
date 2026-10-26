@@ -5,8 +5,10 @@ import { fileURLToPath } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const css = readFileSync(path.join(here, '..', 'styles.css'), 'utf8')
+import { KeyedRunDetail, RunDetail } from './RunDetail'
+import { runDetailInstanceKey } from './securityText'
+
 const app = readFileSync(path.join(here, '..', 'App.tsx'), 'utf8')
-const detail = readFileSync(path.join(here, 'RunDetail.tsx'), 'utf8')
 
 const rule = (selector: string): string => {
   const m = css.match(new RegExp(`^${selector.replaceAll('.', '[.]')}\\s*[{]([^}]*)[}]`, 'm'))
@@ -20,8 +22,17 @@ describe('Run detail observe line', () => {
     expect(rule('.detail-observe-note')).not.toContain('--text-faint')
   })
 
-  it('is keyed by the Run it shows, and a failed read is recorded as one', () => {
-    expect(app).toContain('key={runDetailInstanceKey(openRun)}')
-    expect(detail).toContain('afterObserveRead(')
+  it('renders Run detail under a key of the Run (and Runtime) it shows, so another Run is a new component', () => {
+    const props = { open: { runId: 'run_1' } } as unknown as Parameters<typeof KeyedRunDetail>[0]
+    const a = KeyedRunDetail(props)
+    expect(a.type).toBe(RunDetail)
+    expect(a.key).toBe(runDetailInstanceKey({ runId: 'run_1' }))
+    expect(KeyedRunDetail({ ...props, open: { runId: 'run_2' } }).key).not.toBe(a.key)
+    expect(KeyedRunDetail({ ...props, open: { runId: 'run_1', runtimeId: 'rt_1' } }).key).not.toBe(a.key)
+  })
+
+  it('is the component App renders for the open Run', () => {
+    expect(app).toMatch(/<KeyedRunDetail\s/)
+    expect(app).not.toMatch(/<RunDetail\s/)
   })
 })

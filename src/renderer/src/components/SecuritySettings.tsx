@@ -28,9 +28,9 @@ import {
   decisionLabel,
   effectLabel,
   filterChoices,
-  FOCUS_VALUE,
+  chooseJob,
   focusedFilters,
-  jobFilterChange,
+  jobFilterView,
   nextPageQuery,
   pageOf,
   recordTime,
@@ -436,9 +436,13 @@ function AuditLogs({
 
   const setFilter = (k: keyof AuditFilters, v: string): void => setFilters((f) => ({ ...f, [k]: v === '' ? undefined : v }))
   const sessionItems = choices.sessions.map((s) => ({ value: s.sessionId, label: sessionLabel(s, sessionTitle(s.sessionId), t) }))
-  const jobItems = choices.jobs
-    .filter((j) => focus === undefined || ('runId' in focus ? j.runId !== focus.runId : j.id !== focus.jobId))
-    .map((j) => ({ value: j.id, label: (j.runId !== undefined ? runName(j.runId) : undefined) ?? j.id.slice(0, 12) }))
+  const jobView = jobFilterView({
+    focus,
+    filters,
+    jobs: choices.jobs,
+    runName,
+    labels: { all: t('settings.security.filter.allJobs'), focus: (name) => t('settings.security.filter.run', { name }) }
+  })
   const line = rows === null ? null : auditStateLine({ failure, mode, count: rows.length }, t)
 
   return (
@@ -465,16 +469,12 @@ function AuditLogs({
         />
         <Select
           ariaLabel={t('settings.security.filter.job')}
-          items={[
-            { value: '', label: t('settings.security.filter.allJobs') },
-            ...(focus !== undefined ? [{ value: FOCUS_VALUE, label: t('settings.security.filter.run', { name: focus.name }) }] : []),
-            ...jobItems
-          ]}
-          value={focus !== undefined ? FOCUS_VALUE : (filters.jobId ?? '')}
+          items={jobView.items}
+          value={jobView.value}
           onChange={(v) => {
-            const c = jobFilterChange(v, focus !== undefined)
+            const c = chooseJob(v, focus, filters)
             if (c.clearFocus) onClearFocus()
-            if ('jobId' in c) setFilters((f) => ({ ...f, jobId: c.jobId }))
+            setFilters(c.filters)
           }}
         />
         <Select

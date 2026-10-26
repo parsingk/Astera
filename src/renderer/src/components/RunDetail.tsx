@@ -50,7 +50,9 @@ import { jobName } from '../lib/jobName'
 import {
   afterObserveRead,
   observeReadDue,
-  OBSERVE_READ_EVERY_MS,
+  runDetailInstanceKey,
+  startObserveRead,
+  type ObserveRead,
   observeTargetOf,
   summaryOf,
   summarySince,
@@ -355,7 +357,15 @@ export function RunDetail({
   const target = observeTargetOf(run?.foldedRunId, runId)
   const targetId = 'runId' in target ? target.runId : target.jobId
   const runState = run === undefined ? null : `${run.outcome}|${run.done}/${run.total}`
-  const lastRead = useRef<{ target: string; state: string; at: number } | null>(null)
+  const lastRead = useRef<ObserveRead | null>(null)
+  /** The retry a failed read asked for, ended with the window. */
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (retryTimer.current !== null) clearTimeout(retryTimer.current)
+    },
+    []
+  )
   /** Whose facts are on screen: an answer that arrives for another target is dropped. */
   const shownTarget = useRef(targetId)
   const [readAgain, setReadAgain] = useState(0)
@@ -374,7 +384,7 @@ export function RunDetail({
       const timer = setTimeout(() => setReadAgain((n) => n + 1), wait)
       return () => clearTimeout(timer)
     }
-    lastRead.current = { target: targetId, state: runState, at: Date.now() }
+    lastRead.current = startObserveRead(lastRead.current, { target: targetId, state: runState }, Date.now())
     const ids = observeTargetOf(undefined, targetId)
     const mine = (): boolean => shownTarget.current === targetId
     const read = lastRead.current
@@ -391,10 +401,12 @@ export function RunDetail({
         if (r?.ok === true && mine()) setDenyCounts(summaryOf(r.body))
         if (r?.ok !== true) ok = false
       }
-      if (!ok && mine() && lastRead.current === read) {
-        lastRead.current = afterObserveRead(read, false)
+      if (mine() && lastRead.current === read) {
+        const out = afterObserveRead(read, ok)
+        lastRead.current = out.last
         // Nothing else may come for a finished Run, so the retry is asked for here, after the wait
-        setTimeout(() => setReadAgain((n) => n + 1), OBSERVE_READ_EVERY_MS)
+        if (retryTimer.current !== null) clearTimeout(retryTimer.current)
+        retryTimer.current = out.retryIn === null ? null : setTimeout(() => setReadAgain((n) => n + 1), out.retryIn)
       }
     })()
   }, [targetId, runState, readAgain, runtimeId, door])
@@ -1683,4 +1695,10 @@ function Graph({
       )}
     </>
   )
+}
+
+/** Run detail for the Run `open` names, under a key of it (and its Runtime): another Run is a new component, so it never
+ *  starts from the last one's tokens, not even for a frame. */
+export function KeyedRunDetail({ open, ...props }: React.ComponentProps<typeof RunDetail> & { open: { runId: string; runtimeId?: string } }): React.JSX.Element {
+  return <RunDetail key={runDetailInstanceKey(open)} {...props} />
 }
