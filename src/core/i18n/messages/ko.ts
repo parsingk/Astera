@@ -183,7 +183,7 @@ export const ko = {
   // every language (securityText.ts); these are the words around them.
   'settings.security.hint': '관찰은 에이전트 세션이 한 도구 호출을 기록하고, 규칙대로라면 각각 어떻게 됐을지를 보여 줍니다. 아무것도 막지 않습니다.',
   'settings.security.noHost': '이 화면은 Host 가 필요한데, 지금 앱이 Host 에 연결되어 있지 않습니다.',
-  'settings.security.damaged': '규칙 파일이 손상되어 아무것도 판단할 수 없습니다. 손상된 파일은 옆에 복사해 두었습니다. 기본 규칙으로 다시 시작하면 고쳐집니다.',
+  'settings.security.damaged': '규칙 파일이 손상되어 아무것도 판단할 수 없습니다. 손상된 파일은 옆에 복사해 두었습니다. 손상된 동안에는 아무것도 기록하지 않습니다. 기본 규칙으로 다시 시작하면 고쳐집니다.',
   'settings.security.mode.label': '에이전트의 도구 호출 기록',
   'settings.security.mode.compatibility': '끔',
   'settings.security.mode.observe': '관찰',
@@ -225,8 +225,10 @@ export const ko = {
   'settings.security.reset': '기본 규칙으로 다시 시작',
   'settings.security.reset.title': '기본 규칙으로 다시 시작할까요?',
   'settings.security.reset.body': '지금의 규칙이 기본 규칙으로 바뀝니다. 관찰을 켜고 끈 상태는 그대로입니다.',
+  'settings.security.reset.bodyDamaged':
+    '지금의 규칙이 기본 규칙으로 바뀝니다. 파일이 손상된 동안에는 아무것도 기록되지 않았고, 고친 뒤에도 Policies 에서 다시 켜기 전까지 관찰은 꺼진 채로 있습니다.',
   'settings.security.decision.allow': '허용',
-  'settings.security.decision.would-deny': '막혔을 것',
+  'settings.security.decision.would-deny': '거부 대상',
   'settings.security.decision.unknown': '알 수 없음',
   'settings.security.audit.hint': '관찰한 세션의 도구 호출마다 지금의 규칙으로 판단한 결과입니다. 기록은 Host 가 하므로 Host 가 꺼져 있는 동안의 호출은 남지 않습니다.',
   'settings.security.period.label': '기간',
@@ -245,7 +247,6 @@ export const ko = {
   'settings.security.filter.action': '동작',
   'settings.security.filter.allActions': '모든 동작',
   'settings.security.filter.run': '{name} 의 호출만',
-  'settings.security.filter.clear': '필터 해제',
   'settings.security.col.time': '시각',
   'settings.security.col.session': '세션',
   'settings.security.col.action': '동작',

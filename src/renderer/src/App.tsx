@@ -28,7 +28,7 @@ import { JobsView } from './components/JobsView'
 import { jobsStall, jobsStallRecheckInMs } from '../../core/orchestration/jobsView'
 import { UnderstandingView } from './components/UnderstandingView'
 import { RecordDetailHost } from './components/RecordDetail'
-import { RunDetail } from './components/RunDetail'
+import { KeyedRunDetail } from './components/RunDetail'
 import { NewRunModal } from './components/NewRunModal'
 import { SourceJobModal } from './components/SourceJobModal'
 import { NewSessionDialog } from './components/NewSessionDialog'
@@ -152,7 +152,7 @@ import { AGENT_TAB_CLOSE_DELAY_MS, AGENT_TAB_LOST_SIGHT_CLOSE_MS, closesWhenEnde
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
 import { holdActivationFocus } from './lib/focusHold'
 import { displayHostOf, linkDestination, normalizeUrl, previewTargetOf } from '../../core/preview/url'
-import { isWaitingOnDialog, POST_PASTE_SUBMIT_DELAY_MS } from '../../core/preview/pick/send'
+import { isWaitingOnDialog } from '../../core/preview/pick/send'
 import { PaneGrid } from './components/PaneGrid'
 import { ContextMenu, type MenuItem } from './components/ContextMenu'
 import { onFileChanges } from './lib/fileChanges'
@@ -3444,11 +3444,9 @@ export default function App(): React.JSX.Element {
           // follows it, leaving no sign the batch was ever sent. Checked before anything is written.
           const screen = sessionBus.screenOf(sessionId)
           if (screen !== null && isWaitingOnDialog(screen)) return 'waiting'
-          // Through the terminal's own paste, never sessions.write — see sessionBus.registerPaste
-          if (!sessionBus.pasteInto(sessionId, text)) return 'no-terminal'
-          // The paste has to be through the terminal and into the agent's input box before the Enter
-          // lands, or the Enter submits an empty prompt.
-          window.setTimeout(() => sessionBus.submitInto(sessionId), POST_PASTE_SUBMIT_DELAY_MS)
+          // Through the terminal's own paste, never sessions.write — see sessionBus.registerPaste. The Enter waits
+          // for the session to have drawn the paste and gone quiet (sessionBus.pasteAndSubmit)
+          if (!sessionBus.pasteAndSubmit(sessionId, text)) return 'no-terminal'
           selectWorkbenchTab(sessionTab(sessionId))
           return 'sent'
         }}
@@ -5617,7 +5615,8 @@ export default function App(): React.JSX.Element {
         />
       )}
       {openRun && detailDoor && (
-        <RunDetail
+        <KeyedRunDetail
+          open={openRun}
           door={detailDoor}
           // 그래프의 노드는 제목·상태·세션을 스냅샷에서 읽는다(detail 의 layers 는 id 뿐이다).
           // 그 Run 이 스냅샷에서 사라졌으면(다른 프로젝트로 갔거나 지워졌다) undefined 다.

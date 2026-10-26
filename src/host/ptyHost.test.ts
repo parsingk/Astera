@@ -93,6 +93,24 @@ describe('attachPtyHost', () => {
     expect(h.registry.lastPersonWrite('p1')).not.toBe(null)
   })
 
+  // Observe deferred fix round 2, Important a: a prompt is a person's only when the app says a person sent it, typed in
+  // the tab or sent from elsewhere (a Slack reply); its own deliveries (a schedule, a roll's prompt) are not
+  it('takes an app’s Enter as a person’s prompt only when the write is marked typed or a person’s', async () => {
+    const h = harness()
+    h.send(spawnMsg)
+    const until = (): number => Date.now() + 1
+    h.send({ t: 'pty-write', id: 'p1', data: 'status\r' })
+    expect(h.registry.submittedBetween('p1', 0, until())).toBe('host')
+    await new Promise((r) => setTimeout(r, 2))
+    h.send({ t: 'pty-write', id: 'p1', data: 'ls\r', typed: true })
+    expect(h.registry.submittedBetween('p1', 0, until())).toBe('person')
+    await new Promise((r) => setTimeout(r, 2))
+    h.send({ t: 'pty-write', id: 'p1', data: 'status\r' })
+    await new Promise((r) => setTimeout(r, 2))
+    h.send({ t: 'pty-write', id: 'p1', data: 'from slack\r', person: true })
+    expect(h.registry.submittedBetween('p1', 0, until())).toBe('person')
+  })
+
   it('lists what it holds', () => {
     const h = harness()
     h.send(spawnMsg)

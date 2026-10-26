@@ -167,8 +167,9 @@ interface LiveChatSession {
 
 /** Counts the lines `proc` took, for the mark-then-count rule of a carry-on (host/hostChats.ts
  *  carryOnAfterAdopt): only a write that returned counts. Everything else goes straight through, with the
- *  two plain fields read and written live, as watchFirstLine does. */
-function countWrites(proc: ProcLike): { proc: ProcLike; writes: () => number } {
+ *  two plain fields read and written live, as watchFirstLine does. A line written while `forPerson()` says a person's
+ *  send is under way is marked a person's (observe deferred fix round 2, Important a). */
+function countWrites(proc: ProcLike, forPerson: () => boolean = () => false): { proc: ProcLike; writes: () => number } {
   let n = 0
   const counted: ProcLike = {
     get pid() {
@@ -185,8 +186,8 @@ function countWrites(proc: ProcLike): { proc: ProcLike; writes: () => number } {
     },
     onLine: (cb) => proc.onLine(cb),
     onExit: (cb) => proc.onExit(cb),
-    write: (line) => {
-      proc.write(line)
+    write: (line, by) => {
+      proc.write(line, by ?? (forPerson() ? { person: true } : undefined))
       n += 1
     },
     kill: () => proc.kill(),
@@ -519,15 +520,27 @@ export class ChatSessionManager {
       .map((s) => ({ ...s.info }))
   }
 
-  send(id: string, text: string): Promise<void> {
+  /** `by.person`: a person sent it (the composer, a Slack reply). The turn line the adapter writes in the synchronous
+   *  part of its send is then marked a person's (ProcLike.write), as the Host tells a person's prompt by it; nothing
+   *  else it writes is (observe deferred fix round 2, Important a). Both adapters write the turn there
+   *  (host/hostChats.ts carryOnAfterAdopt). */
+  send(id: string, text: string, by?: { person: true }): Promise<void> {
     const live = this.sessions.get(id)
     if (!live) return Promise.resolve()
     // A fresh turn starting is where the bypass notice (Task 7) has said what it had to say — mirrors
     // the adapters' own `patch({ error: null })` on send (codexAdapter.ts/claudeAdapter.ts), which is
     // the same "a new turn retires the last one's news" rule, one level up.
     live.notice = null
-    return live.adapter.send(text)
+    this.forPerson = by?.person === true
+    try {
+      return live.adapter.send(text)
+    } finally {
+      this.forPerson = false
+    }
   }
+
+  /** Set only during a person's send's synchronous part (`send`). */
+  private forPerson = false
 
   interrupt(id: string): Promise<void> {
     const live = this.sessions.get(id)
@@ -604,7 +617,8 @@ export class ChatSessionManager {
   }
 
   private makeAdapter(proc: ProcLike, mode: AdapterMode, provider: Provider): ChatAdapter {
-    const args = { proc, mode, version: this.deps.version, log: this.deps.log, provider }
+    // The adapter writes through a handle that marks the turn a person's send writes (`send`)
+    const args = { proc: countWrites(proc, () => this.forPerson).proc, mode, version: this.deps.version, log: this.deps.log, provider }
     if (this.deps.createAdapter) return this.deps.createAdapter(args)
     return provider === 'claude' ? createClaudeAdapter(args) : createCodexAdapter(args)
   }

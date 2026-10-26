@@ -348,8 +348,9 @@ export interface OrchWiring {
   /** One turn into a chat session through index.ts's session driver — the scheduler's and Slack's
    *  (`sessionDriver.deliver`), so `astera sessions send` moves the adapter's turn state the way they
    *  do. Handed over rather than rebuilt here: a second driver is a second place for the seam's
-   *  "a rejection means not sent" contract to drift. */
-  deliverChat: (sessionId: string, text: string) => Promise<void>
+   *  "a rejection means not sent" contract to drift. `by.person`: a person sent it (a Slack reply the Host relays, a
+   *  person's `sessions send`), written marked as a person's (observe deferred fix round 2). */
+  deliverChat: (sessionId: string, text: string, by?: { person: true }) => Promise<void>
 }
 
 /** The index.ts side of the Astera Host (design §4). Its own wiring rather than a member of
@@ -3064,6 +3065,7 @@ export function registerIpc(
         return info
       },
       writeToSession: (id, data) => core.sessions.write(id, data),
+      lastOutputAt: (id) => core.sessions.lastOutput(id),
       isBusy: orchIsBusy,
       isAlive: (id) => core.sessions.list().some((s) => s.id === id && s.status === 'running'),
       // A worker the Host started is not the app's until `pty-opened` has been answered, and
@@ -3227,6 +3229,7 @@ export function registerIpc(
           .some((x) => x.id === id && x.status === 'exited' && x.exitCode !== undefined && x.exitCode !== PTY_LOST_SIGHT_EXIT_CODE),
       sessionBusy: (id) => busyState.get(id) ?? null,
       typeInto: (id, text) => core.sessions.write(id, text),
+      lastOutputAt: (id) => core.sessions.lastOutput(id),
       lastPersonInputAt: (id) => personInputAt.get(id) ?? null,
       // 앱에서 "운전해도 되는가" 는 서버가 서 있고, dispatch 를 알리는 Host 가 몰지 않는가다(§4.2, N8).
       // 슬롯마다 다시 묻으므로, 한 바퀴 도중에 그런 Host 가 붙으면 그 자리에서 멈춘다.
@@ -3551,13 +3554,13 @@ export function registerIpc(
           return failed
         }
       },
-      chatSend: async (sessionId, text) => {
+      chatSend: async (sessionId, text, by) => {
         // 아직 되찾지 않은 세션 — 지금 상태 때문이다. 오류(1)가 아니라 거절(6)로 돌려준다.
         if (!core.chat.has(sessionId)) return { sent: false, reason: 'not-held' }
         const pending = chatPendingOf(core.chat.state(sessionId)?.request ?? null)
         if (pending !== null) return { sent: false, pending }
         if (!orchWiring) throw new Error('orchestration is not wired in this app')
-        await orchWiring.deliverChat(sessionId, text)
+        await orchWiring.deliverChat(sessionId, text, by)
         return { sent: true }
       },
       // 큐에 넣고, 그 옆에서 완료 정책 지문과 의심 파일을 계산한다 — 본문은 validation.ts 에 있다.
@@ -7700,7 +7703,8 @@ export function registerIpc(
   // with the harmless nothing — a resolved promise, an empty model list, a null state — which is the
   // same convention `sessions.kill` has always had, and it means a stale renderer call arriving just
   // after a session exited is not an error anybody has to handle.
-  ipcMain.handle('chat.send', (_e, sessionId: string, text: string) => core.chat.send(sessionId, text))
+  // The composer: a person's turn, written marked as a person's (observe deferred fix round 2, Important a)
+  ipcMain.handle('chat.send', (_e, sessionId: string, text: string) => core.chat.send(sessionId, text, { person: true }))
   ipcMain.handle('chat.interrupt', (_e, sessionId: string) => core.chat.interrupt(sessionId))
   ipcMain.handle('chat.answer', (_e, sessionId: string, requestId: string, answer: ChatAnswer) =>
     core.chat.answer(sessionId, requestId, answer)

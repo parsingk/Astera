@@ -49,7 +49,9 @@ export interface HostSessions {
   /** One session by its id, or null; the same row `listSessions` has for it, computed for it alone. */
   sessionById?(id: string): Promise<HostSession | null>
   readSession(id: string, lines: number): Promise<SessionScreen>
-  sendSession(id: string, text: string, enter: boolean): Promise<void>
+  /** `by.person`: a person sent it (a person's `sessions send`), written as a person's, so its Enter is a person's
+   *  prompt (observe deferred fix round 2, Minor b); otherwise it is the Host's own typing. */
+  sendSession(id: string, text: string, enter: boolean, by?: { person: true }): Promise<void>
   /** A chat session's last `turns` turns, oldest first; `[]` when there is no file to read yet. */
   readChat(id: string, turns: number): Promise<ChatTurn[]>
   /** One turn written to a chat session's process, in the bytes the app's adapter writes. **Not
@@ -57,8 +59,9 @@ export interface HostSessions {
    *  so both routes share one order. Rejects, writing nothing, when it cannot be written: no Codex
    *  thread yet, a provider it does not know, a session that has ended. `beforeWrite` runs right
    *  before the bytes go out, after every check, and never on a refusal: orchDeps passes the receipt
-   *  mark there, so a send that wrote nothing leaves no receipt. */
-  sendChat(id: string, text: string, beforeWrite?: () => void): Promise<void>
+   *  mark there, so a send that wrote nothing leaves no receipt. `by.person`: a person sent it, and its line is written
+   *  as a person's (observe deferred fix round 2, Minor b). */
+  sendChat(id: string, text: string, beforeWrite?: () => void, by?: { person: true }): Promise<void>
   /** Runs `run` after every earlier `serial` call for the same session id has settled. A rejection
    *  is the caller's and does not hold up the next one. */
   serial<T>(id: string, run: () => Promise<T>): Promise<T>
@@ -162,7 +165,7 @@ function emptyScreen(size: { cols: number; rows: number }): SessionScreen {
 }
 
 export function registrySessions(a: {
-  ptys: Pick<PtyRegistry, 'list' | 'buffer' | 'write' | 'size' | 'lastWrite' | 'readScreen'>
+  ptys: Pick<PtyRegistry, 'list' | 'buffer' | 'write' | 'size' | 'lastWrite' | 'lastOutput' | 'readScreen'>
   procs: Pick<ProcRegistry, 'list' | 'write'>
   /** The profile's hook-events folder (core/hooks/sessionState.ts `hookEventsDirIn`). */
   hookEventsDir: string
@@ -188,8 +191,8 @@ export function registrySessions(a: {
     return all.find((e) => e.alive) ?? all[0] ?? null
   }
 
-  /** One delivery at a time per session: the text-then-Enter pair is two writes 150ms apart, and a
-   *  second sender inside that window would put its text between them. Only what goes through here
+  /** One delivery at a time per session: the text-then-Enter pair is two writes with a wait between them
+   *  (untilEnter), and a second sender inside that window would put its text between them. Only what goes through here
    *  is ordered — the app's own writes reach the pty directly. */
   const queues = new Map<string, Promise<unknown>>()
   const serial = <T>(id: string, run: () => Promise<T>): Promise<T> => {
@@ -203,12 +206,13 @@ export function registrySessions(a: {
     })
     return p
   }
-  const deliver = async (id: string, value: string, enter: boolean): Promise<void> => {
+  const deliver = async (id: string, value: string, enter: boolean, by?: { person: true }): Promise<void> => {
     const pty = ptyOf(id)
     if (pty === null) return
-    const write = (_: string, data: string): void => a.ptys.write(pty, data)
-    // 붙여 넣고 Enter — 앱의 스케줄러·롤링·Slack 이 쓰는 그 약속 그대로다(ptyDriver).
-    if (enter) await ptyDriver({ write }).deliver(id, value)
+    const write = (_: string, data: string): void => a.ptys.write(pty, data, by)
+    // 붙여 넣고 Enter — 앱의 스케줄러·롤링·Slack 이 쓰는 그 약속 그대로다(ptyDriver). Enter 는 에이전트가 글자를 다
+    // 그리고 조용해진 뒤에 간다: Codex 는 긴 글자의 끝 120ms 안에 온 Enter 를 삼킨다(openai/codex#56982).
+    if (enter) await ptyDriver({ write, lastOutputAt: () => a.ptys.lastOutput(pty) }).deliver(id, value)
     else write(id, value)
   }
 
@@ -261,7 +265,7 @@ export function registrySessions(a: {
         ? Promise.resolve(emptyScreen(size))
         : a.ptys.readScreen(pty, lines).then((s) => s ?? emptyScreen(size))
     },
-    sendSession: (id, value, enter) => serial(id, () => deliver(id, value, enter)),
+    sendSession: (id, value, enter, by) => serial(id, () => deliver(id, value, enter, by)),
     sessionTurn: async (id, since) => {
       const all = a.ptys.list().filter((e) => e.meta?.kind === 'session' && e.meta.id === id)
       const e = all.find((x) => x.alive) ?? all[0]
@@ -300,14 +304,14 @@ export function registrySessions(a: {
       const file = await findClaudeTranscript(account.configDir, threadId)
       return file === null ? [] : readChatTurns(file, 'claude', turns)
     },
-    sendChat: async (id, value, beforeWrite) => {
+    sendChat: async (id, value, beforeWrite, by) => {
       const e = chatOf(id)
       if (e === null || !e.alive) throw new Error(`chat session ${id} has ended`)
       const restore = e.meta!.restore ?? {}
       if (restore.provider === 'claude') {
         // claudeAdapter.ts doSend's write. The registry adds the newline, as it does for proc-write.
         beforeWrite?.()
-        a.procs.write(e.id, encodeUserTurn(value))
+        a.procs.write(e.id, encodeUserTurn(value), by)
         return
       }
       if (restore.provider === 'codex') {
@@ -325,7 +329,7 @@ export function registrySessions(a: {
           threadModel: null
         })
         beforeWrite?.()
-        a.procs.write(e.id, encodeRequest(mintId(), 'turn/start', params))
+        a.procs.write(e.id, encodeRequest(mintId(), 'turn/start', params), by)
         return
       }
       throw new Error(`chat session ${id} has a provider the Host does not know: ${String(restore.provider)}`)

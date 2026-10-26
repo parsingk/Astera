@@ -10,8 +10,10 @@ import {
   AuditPolicyDamaged,
   COVERAGE,
   STARTER_POLICY,
+  damageIsKept,
   isRuleAction,
   readAuditPolicy,
+  readPolicyMode,
   writeAuditPolicy,
   type AuditPolicy,
   type AuditRule
@@ -70,7 +72,7 @@ const isPosition = (v: unknown): v is number => Number.isInteger(v) && (v as num
 export function createHostPolicies(d: {
   profileDir: string
   /** Told after every change that landed: the recorder reads the mode again rather than wait out its last read. */
-  onChange?: () => void
+  onChange?: (cmd: string) => void
 }): HostPolicies {
   // One change at a time: two changes must each read what the other wrote
   let chain: Promise<unknown> = Promise.resolve()
@@ -136,6 +138,9 @@ export function createHostPolicies(d: {
         // null clears the scope: the rule then applies wherever the call was
         if (args.scope !== undefined && args.scope !== null && !SCOPES.includes(args.scope))
           return bad('scope must be inside-project or outside-project, or null to clear it')
+        // An edit that names nothing to change is a mistake, not a change that happens to land on what is there
+        if (args.effect === undefined && args.action === undefined && args.scope === undefined)
+          return { status: 400, body: { error: 'policies-rules-edit needs something to change: effect, action or scope', reason: 'nothing-to-change' } }
         const { id, effect, action } = args
         return queued(async () => {
           const p = await current()
@@ -175,14 +180,17 @@ export function createHostPolicies(d: {
       }
       case 'policies-rules-reset':
         // Starts over with the starter rules and their `otherwise`; the mode is the person's switch and stays. It is also
-        // the repair of a damaged file, whose bytes were kept aside when it was read (its mode is kept if it names one);
-        // a file that could not be read is never written over
+        // the repair of a damaged file, whose bytes were kept aside when it was read: the mode is the one sessions have
+        // been starting in meanwhile (readPolicyMode), so the repair never turns observing on or off by itself. A file
+        // that could not be read is never written over, nor is a damaged one whose copy could not be kept
         return queued(async () => {
           const mode = await readAuditPolicy(d.profileDir).then(
             (p) => (p ?? STARTER_POLICY).mode,
-            (e: unknown) => {
-              if (e instanceof AuditPolicyDamaged) return e.mode
-              throw e
+            async (e: unknown) => {
+              if (!(e instanceof AuditPolicyDamaged)) throw e
+              if (!(await damageIsKept(d.profileDir)))
+                throw new RepairNeeded(`${e.file} is damaged and a copy of it could not be kept, so it is not written over`, e.file)
+              return readPolicyMode(d.profileDir)
             }
           )
           return saved({ ...STARTER_POLICY, mode })
@@ -204,12 +212,17 @@ export function createHostPolicies(d: {
         // `reason: 'damaged'` when starting over with the starter rules repairs it, so a screen offers that and only then
         r = {
           status: e instanceof RepairNeeded ? 409 : 500,
-          body: { error: message(e), ...(e instanceof AuditPolicyDamaged ? { reason: 'damaged' } : {}) }
+          body: {
+            error: message(e),
+            ...(e instanceof AuditPolicyDamaged ? { reason: 'damaged' } : {}),
+            // A file the reset cannot repair: the 409 names it, so the CLI says which one
+            ...(e instanceof RepairNeeded && !(e instanceof AuditPolicyDamaged) ? { repair: e.file } : {})
+          }
         }
       }
       if (r.status === 200 && POLICY_CHANGES.has(a.cmd)) {
         a.marks.effects += 1
-        d.onChange?.()
+        d.onChange?.(a.cmd)
       }
       return r
     }

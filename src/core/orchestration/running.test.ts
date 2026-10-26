@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { runningCount, isStoppedWorker, runningRunCount, outcomeOfTasks, holdsAgentProfile } from './running'
+import { runningCount, isStoppedWorker, runningRunCount, outcomeOfTasks, holdsAgentProfile, runEndOf } from './running'
 import { snapshotFor } from './view'
 import { createJob, createTask, emptyState, openDispatch, startJobRun, applyWorkerDone } from './state'
 import type { OrchState } from './state'
-import type { Dispatch, Task } from './types'
+import type { Dispatch, JobRun, Task } from './types'
 import { stateFromLegacy } from './legacyState'
 import type { LegacyRun } from './legacy'
 import { absPath } from '../testPaths'
@@ -258,5 +258,24 @@ describe('holdsAgentProfile', () => {
     expect(holdsAgentProfile(dispatchOnly, 'ap_1')).toBe(true)
     const done = ok(applyWorkerDone(d.state, { taskId: t.value.id, dispatchId: d.value.id, outcome: 'succeeded', subject: 's', body: 'b' }, T0))
     expect(holdsAgentProfile(done.state, 'ap_1')).toBe(false)
+  })
+})
+
+// Fix round 1, Minor 5: a Run's stamp is read only when it is a time; anything else a hand left there falls back to its
+// Tasks' last change
+describe('runEndOf', () => {
+  const stateWith = (endedAt: unknown): { s: OrchState; run: JobRun } => {
+    const run = { id: 'r1', jobId: 'j1', ordinal: 1, createdAt: '2026-10-23T00:00:00.000Z', ...(endedAt !== undefined ? { endedAt } : {}) } as JobRun
+    const task = { id: 't1', runId: 'r1', status: 'completed', consecutiveFailures: 0, updatedAt: '2026-10-23T01:00:00.000Z' } as Task
+    return { s: { ...emptyState(), runs: [run], tasks: [task] }, run }
+  }
+  it('takes the stamp when it is a time, and the Tasks’ last change for none or anything else', () => {
+    const last = Date.parse('2026-10-23T01:00:00.000Z')
+    const stamped = stateWith('2026-10-23T00:30:00.000Z')
+    expect(runEndOf(stamped.s, stamped.run)).toBe(Date.parse('2026-10-23T00:30:00.000Z'))
+    for (const v of [undefined, 'soon', 12345]) {
+      const x = stateWith(v)
+      expect(runEndOf(x.s, x.run)).toBe(last)
+    }
   })
 })

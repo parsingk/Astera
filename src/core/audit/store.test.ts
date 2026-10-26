@@ -1,6 +1,6 @@
 // Observe mode's record store (design §8): the Host's append-only JSONL under `<profile>/audit/`, one file per local day,
 // kept 30 days or 50 MB, whichever comes first. A write never fails the source (Review Focus 4).
-import { describe, it, expect, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -281,9 +281,12 @@ describe('retention (Review Focus 4)', () => {
   it('prunes at the start and then every hour, with nothing to write, until stopped', async () => {
     const p = await profile()
     await fs.mkdir(auditDir(p), { recursive: true })
+    await fs.writeFile(path.join(auditDir(p), '2026-09-23.jsonl'), '\n')
     let now = ms('2026-10-23')
     let tick: (() => void) | null = null
     let period = 0
+    // An append of nothing takes its turn after every prune queued before it and does none itself: so it only waits
+    const settled = (): Promise<void> => appendRecords(p, [])
     const stop = keepPruning(p, {
       now: () => now,
       every: (ms_, fn) => {
@@ -293,13 +296,14 @@ describe('retention (Review Focus 4)', () => {
       }
     })
     expect(period).toBe(AUDIT_PRUNE_EVERY_MS)
-    await fs.writeFile(path.join(auditDir(p), '2026-09-23.jsonl'), '\n')
-    await pruneRecords(p, { now: () => now }) // the start's prune, settled
+    await settled() // the start's prune
     expect(await files(p)).toEqual(['2026-09-23.jsonl'])
-    // A day on, the hour's prune lets 2026-09-23 go
+    // A day on, the only thing that can let 2026-09-23 go is the hour's prune: nothing here prunes but the timer
     now = ms('2026-10-24')
+    await settled()
+    expect(await files(p)).toEqual(['2026-09-23.jsonl'])
     tick!()
-    await pruneRecords(p, { now: () => now })
+    await settled()
     expect(await files(p)).toEqual([])
     stop()
     expect(tick).toBeNull()
@@ -369,6 +373,93 @@ describe('retention (Review Focus 4)', () => {
     // The next day is filed again
     await appendRecords(p, [rec({ at: at('2026-10-24') })], { ...o, now: () => ms('2026-10-24') })
     expect(await files(p)).toContain('2026-10-24.jsonl')
+  })
+})
+
+describe('auditStoppedAtLimit at the edges of a period', () => {
+  // `until` is before, as `audit list --until` says (cli usage: "only calls before this time"), and `since` is at or after,
+  // so a day is in the period when the period holds an instant of it: not a day that starts at `until`
+  it('counts a day when the period holds an instant of it: since is at or after, until is before', async () => {
+    const p = await profile()
+    await fs.mkdir(auditDir(p), { recursive: true })
+    await fs.writeFile(path.join(auditDir(p), '2026-10-24.jsonl'), 'x'.repeat(1999) + '\n')
+    await appendRecords(p, [rec({ at: at('2026-10-24') })], { now: () => ms('2026-10-24'), maxBytes: 1000 })
+    expect(auditStoppedAtLimit(p)).toBe(true)
+    const iso = (ms_: number): string => new Date(ms_).toISOString()
+    const startOfDay = new Date(2026, 9, 24).getTime()
+    const startOfNext = new Date(2026, 9, 25).getTime()
+    // The period ends where the day starts: it holds nothing of it
+    expect(auditStoppedAtLimit(p, { until: iso(startOfDay) })).toBe(false)
+    expect(auditStoppedAtLimit(p, { since: iso(startOfDay - 60_000), until: iso(startOfDay) })).toBe(false)
+    // One millisecond more holds the day's first instant
+    expect(auditStoppedAtLimit(p, { until: iso(startOfDay + 1) })).toBe(true)
+    // The period starts at the day's last millisecond: it holds it; at the next day's first, it holds nothing of this one
+    expect(auditStoppedAtLimit(p, { since: iso(startOfNext - 1) })).toBe(true)
+    expect(auditStoppedAtLimit(p, { since: iso(startOfNext) })).toBe(false)
+  })
+})
+
+describe('a day that stopped at the size, across a restart', () => {
+  // Each test starts from the module state a fresh process has, whichever test ran before it
+  beforeEach(() => void vi.resetModules())
+  /** The store as a Host that just started has it: nothing known of any folder until its start's prune has read it. */
+  const restarted = async (): Promise<typeof import('./store')> => {
+    vi.resetModules()
+    return import('./store')
+  }
+  /** Fills the day one record at a time until a record no longer fits, as the size cap is small. */
+  const fillUntilStopped = async (p: string, o: { now: () => number; maxBytes: number }, day = '2026-10-23'): Promise<void> => {
+    for (let i = 0; i < 20 && !auditStoppedAtLimit(p, { since: at(day), until: at(day, 1) }); i++) await appendRecords(p, [rec({ at: at(day, i) })], o)
+    expect(auditStoppedAtLimit(p, { since: at(day), until: at(day, 1) })).toBe(true)
+  }
+
+  it('says a day stopped at the size after a restart, before this process has written anything, though its file stops short of the size', async () => {
+    const p = await profile()
+    const o = { now: () => ms('2026-10-23'), maxBytes: 1000 }
+    await fillUntilStopped(p, o)
+    const size = (await fs.stat(path.join(auditDir(p), '2026-10-23.jsonl'))).size
+    // The file never reaches the size: the record that did not fit was refused, so a rule on the file's size alone would miss this day
+    expect(size).toBeLessThan(1000)
+
+    const fresh = await restarted()
+    expect(fresh.auditStoppedAtLimit(p)).toBe(false) // nothing has looked at the folder yet
+    const stop = fresh.keepPruning(p, { ...o, every: () => () => {} })
+    await fresh.pruneRecords(p, o) // the Host's start prune, settled
+    stop()
+    expect(fresh.auditStoppedAtLimit(p)).toBe(true)
+    expect(fresh.auditStoppedAtLimit(p, { since: at('2026-10-23'), until: at('2026-10-24') })).toBe(true)
+    expect(fresh.auditStoppedAtLimit(p, { until: at('2026-10-22') })).toBe(false)
+    // And the day is still not filed further
+    await fresh.appendRecords(p, [rec({ at: at('2026-10-23', 30) })], o)
+    expect((await fs.stat(path.join(auditDir(p), '2026-10-23.jsonl'))).size).toBe(size)
+  })
+
+  it('does not say it of a day that did not stop', async () => {
+    const p = await profile()
+    const o = { now: () => ms('2026-10-23'), maxBytes: 1500 }
+    await appendRecords(p, [rec()], o)
+    const fresh = await restarted()
+    await fresh.pruneRecords(p, o)
+    expect(fresh.auditStoppedAtLimit(p)).toBe(false)
+  })
+
+  it('forgets a day with its file: the days past the kept ones, and a mark whose file is not there', async () => {
+    const p = await profile()
+    const o = { now: () => ms('2026-10-23'), maxBytes: 1000 }
+    await fillUntilStopped(p, o)
+    expect(await files(p)).toEqual(['2026-10-23.jsonl', '2026-10-23.stopped'])
+    // Thirty-one days on, the day is past the kept days: its file goes, and its mark with it
+    const later = { now: () => ms('2026-11-23'), maxBytes: 1000 }
+    const fresh = await restarted()
+    await fresh.pruneRecords(p, later)
+    expect(await files(p)).toEqual([])
+    expect(fresh.auditStoppedAtLimit(p)).toBe(false)
+    // A mark left alone by a file that was removed by hand says nothing, and is cleaned up
+    await fs.mkdir(auditDir(p), { recursive: true })
+    await fs.writeFile(path.join(auditDir(p), '2026-11-22.stopped'), '')
+    await fresh.pruneRecords(p, later)
+    expect(await files(p)).toEqual([])
+    expect(fresh.auditStoppedAtLimit(p)).toBe(false)
   })
 })
 

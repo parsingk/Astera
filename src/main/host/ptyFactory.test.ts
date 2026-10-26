@@ -94,6 +94,21 @@ describe('createHostPtyFactory', () => {
     ])
   })
 
+  // Observe deferred fix round 2, Important a: a person's words not typed in the tab (a Slack reply) go marked as a
+  // person's, apart from `typed`, which would take the size
+  it('marks a write a person sent from elsewhere, live and queued', () => {
+    const t = transport()
+    const { factory } = createHostPtyFactory(t)
+    const p = factory('claude', [], opts)
+    p.write('early', { person: true })
+    t.deliver({ t: 'pty-spawned', id: spawned(t), pid: 1 })
+    p.write('late', { person: true })
+    expect(t.sent.slice(-2)).toEqual([
+      { t: 'pty-write', id: spawned(t), data: 'early', person: true },
+      { t: 'pty-write', id: spawned(t), data: 'late', person: true }
+    ])
+  })
+
   // pid is read in exactly one place in this repository, RunManager's tree-kill, long after the
   // spawn — which is what lets the factory stay synchronous (slice 2 design §3).
   it('fills the pid in when the Host answers', () => {

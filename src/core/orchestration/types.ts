@@ -304,6 +304,14 @@ export interface JobRun {
    *  lives is asked when a question is judged, because a chat session's end never reaches the orchestration (E4). A
    *  roll moves it (`rekeyExternalCoordinator`). */
   externalCoordinatorSessionId?: string
+  /** When this Run's outcome became final, as the Host committed it (observe deferred minor b). **Stamped, not derived**:
+   *  the outcome is derived from the Tasks (`outcomeOf`) and no Task keeps when its status changed, so the last Task's
+   *  `updatedAt` stood in for it, and any later edit of a Task (its title) moved it. The Host stamps it at both of its
+   *  commit points, on the commit that finishes the Run, keeps it through later commits and drops it on one that sets
+   *  the Run running again (`stampRunEnds`, runRecord.ts). What a coordinator spent and did for a finished Run is
+   *  bounded by it (`runEndOf`, running.ts). Absent on a Run that runs, and on one that finished before it was kept.
+   *  Kept back from the public surface. */
+  endedAt?: string
   /** 이 회차의 워커들이 일하는 워크트리. **없으면 아직 만들어지지 않았다** — 첫 워커를 띄우기
    *  직전에 만들고 기록한다: 예약의 게으른 포크는 배선이 `run-worktree-set` 으로(src/main/ipc.ts),
    *  코디네이터가 있는 Job 의 첫 실행은 command.ts 가 직접(Host 도 만든다, Host S3).

@@ -73,8 +73,9 @@ export interface HostChats {
   deliver(sessionId: string, text: string): void
   /** A turn by the Host adapter; rejects when the Host is not the writer or the adapter refuses.
    *  `wrote` runs once a line of the turn reached the proc, in the same synchronous step as the write
-   *  (Task 8 fix round 1, D4 I1): a send refused before the wire marks nothing. */
-  send(sessionId: string, text: string, wrote?: () => void): Promise<void>
+   *  (Task 8 fix round 1, D4 I1): a send refused before the wire marks nothing. `by.person`: a person sent it (a Slack
+   *  reply), and its line is written as a person's (ProcRegistry.write); any other send is the Host's own. */
+  send(sessionId: string, text: string, wrote?: () => void, by?: { person: true }): Promise<void>
   requests(sessionId: string): ChatRequest[]
   hasOpenRequest(sessionId: string): boolean
   /** Where the session's turn is, as this Host's adapter decodes it (writer or reader): `status` and the
@@ -132,8 +133,9 @@ export function createHostChats(d: HostChatsDeps): HostChats {
   const writes = new Map<string, number>()
   const counted: HostProcsDeps['registry'] = {
     open: (o) => d.procs.open(o),
-    write: (procId, line) => {
-      d.procs.write(procId, line)
+    // `by`: the turn a send made for a person writes (the manager marks it), written as a person's line
+    write: (procId, line, by) => {
+      d.procs.write(procId, line, by)
       writes.set(procId, (writes.get(procId) ?? 0) + 1)
     },
     kill: (procId) => d.procs.kill(procId),
@@ -300,9 +302,9 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     return done
   }
 
-  const send = async (id: string, text: string, wrote?: () => void): Promise<void> => {
+  const send = async (id: string, text: string, wrote?: () => void, by?: { person: true }): Promise<void> => {
     if (!isWriter(id)) throw new Error('not the writer')
-    await markIfWritten(procOf(id), () => manager.send(id, text), wrote)
+    await markIfWritten(procOf(id), () => manager.send(id, text, by), wrote)
   }
 
   return {

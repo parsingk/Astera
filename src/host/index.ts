@@ -10,7 +10,7 @@ import { createHostExtensions } from './extensions/commands'
 import { agentProfileInUse, createHostAgentProfiles } from './agentProfiles/commands'
 import { createHostPolicies } from './audit/policyCommands'
 import { createHostAudit } from './audit/auditCommands'
-import { createAuditRecorder, dispatchOfSession, registrySessionFacts } from './audit/recorder'
+import { createAuditRecorder, dispatchOfWithTurns, registrySessionFacts } from './audit/recorder'
 import { createAuditSources } from './audit/sources'
 import { openTokenStore } from './tokens/store'
 import { createTokenSources, tokenOwnerOf } from './tokens/sources'
@@ -52,7 +52,7 @@ import { attachProcHost } from './procHost'
 import { ProcRegistry } from './procRegistry'
 import { createProcHolders, procHeldBy } from './procHolders'
 import { nodeProcSpawn } from './nodeProc'
-import { HOST_FEATURE_ORCH, HOST_FEATURE_REQUESTS, HOST_PROTOCOL, HOST_YIELD_JOURNAL, HOST_YIELD_UNDERSTANDING, HOST_YIELD_WORK_UNITS, HOST_YIELD_WORKSPACE, HOST_YIELD_WORKTREES } from '../core/host/protocol'
+import { HOST_FEATURE_ORCH, HOST_FEATURE_REQUESTS, HOST_PROTOCOL, HOST_YIELD_JOURNAL, HOST_YIELD_PERSON_WRITES, HOST_YIELD_UNDERSTANDING, HOST_YIELD_WORK_UNITS, HOST_YIELD_WORKSPACE, HOST_YIELD_WORKTREES } from '../core/host/protocol'
 import { createHostJournal } from './hostJournal'
 import { createHostEventLog } from './eventLog'
 import { hostNotifier } from './pluginNotify'
@@ -516,18 +516,33 @@ async function main(): Promise<void> {
       })
     : null
 
+  // The tokens each session spent (observe mode design §10), in every mode: read from the transcripts, rollouts and
+  // chat lines the providers already write, kept per session for the Dispatch or Run it worked for (whom from the
+  // state as the orch holds it, made below), in the token store opened above. Before any pty or process opens, so every
+  // session's start is heard; `runs get` and `tasks-get` total them. Made before the recorder, which asks them the turns
+  // the sessions' lines tell.
+  const tokenSources = createTokenSources({
+    store: tokenStore,
+    ptys: registry,
+    procs,
+    statusLinePayload: (sid) => (spawner ? spawner.statusLinePayload(sid) : Promise.resolve(null)),
+    ownerOf: (sessionId, at, last, turn) => tokenOwnerOf(orch.state(), sessionId, at, last, turn),
+    log: (m) => log.write(m)
+  })
   // Observe mode's recorder (observe mode design §5, §8): the sources hand it the tool calls a session finished, and it
   // keeps them under <profile>/audit while the mode is observe, touching nothing in compatibility. Made above the
   // rolling, whose hook tap is one of its sources. A session is read from the two registries' notes and its Dispatch
   // from the state as the orch holds it (made below, before any source can call), never loaded for this: a Host that
-  // has not loaded has placed none. The mode is read through readAuditPolicy, which throws on a file it cannot read
+  // has not loaded has placed none; an ended attempt's worker and a finished Run's coordinator after the end, until a
+  // person prompts the session, as the token sources read its prompts (a task notification or what Astera types into
+  // it does not end it). The mode is read through readAuditPolicy, which throws on a file it cannot read
   // cleanly, so the recorder keeps only a clean read (a missing file is compatibility); the copy of a damaged one is
   // the policies commands' to keep.
   const auditRecorder = createAuditRecorder({
     profileDir,
     mode: async () => (await readAuditPolicy(profileDir, { keepDamaged: false }))?.mode ?? 'compatibility',
     sessionInfo: registrySessionFacts({ ptys: registry, procs }),
-    dispatchOf: (sessionId, at) => dispatchOfSession(orch.state(), sessionId, at),
+    dispatchOf: dispatchOfWithTurns(() => orch.state(), tokenSources),
     log: (m) => log.write(m)
   })
   // Its sources (audit/sources.ts): the observed Claude sessions' audit files in hook-events (their own watcher, apart
@@ -538,18 +553,6 @@ async function main(): Promise<void> {
     ptys: registry,
     procs,
     hookEventsDir: hookEventsDirIn(profileDir),
-    log: (m) => log.write(m)
-  })
-  // The tokens each session spent (observe mode design §10), in every mode: read from the transcripts, rollouts and
-  // chat lines the providers already write, kept per session for the Dispatch or Run it worked for (whom from the
-  // state as the orch holds it, made below), in the token store opened above. Before any pty or process opens, so every
-  // session's start is heard; `runs get` and `tasks-get` total them.
-  const tokenSources = createTokenSources({
-    store: tokenStore,
-    ptys: registry,
-    procs,
-    statusLinePayload: (sid) => (spawner ? spawner.statusLinePayload(sid) : Promise.resolve(null)),
-    ownerOf: (sessionId, at, last) => tokenOwnerOf(orch.state(), sessionId, at, last),
     log: (m) => log.write(m)
   })
 
@@ -831,7 +834,7 @@ async function main(): Promise<void> {
   }
   // Observe mode's rules and mode (observe mode design §7, ruling M1): audit-policy.json, which this Host alone writes. A
   // change tells the recorder, which reads the mode again at its next call
-  const policies = createHostPolicies({ profileDir, onChange: () => auditRecorder.invalidate() })
+  const policies = createHostPolicies({ profileDir, onChange: (cmd) => auditRecorder.invalidate({ modeUnchanged: cmd !== 'policies-set-mode' }) })
   // And the records read back with the decisions those rules give them now (design §8)
   const audit = createHostAudit({ profileDir })
   const orch = createHostOrch({
@@ -1150,7 +1153,7 @@ async function main(): Promise<void> {
           if (sessionEvents && from.greeted && from.role === 'app') sessionEvents.forwarded(m.signal)
           return true
         }
-        return (handlePty?.(m, send, { socket: from.socket }) ?? false) || (handleProc?.(m, send) ?? false)
+        return (handlePty?.(m, send, { socket: from.socket }) ?? false) || (handleProc?.(m, send, { socket: from.socket }) ?? false)
       },
       // Released by the socket number whatever role the socket gave last: a second `hello` can change
       // it, and marks made as an app must still go when that socket closes. A socket that never held a
@@ -1258,7 +1261,8 @@ async function main(): Promise<void> {
   keepPruning(profileDir, { log: (m) => log.write(m) })
 
   handlePty = attachPtyHost({ registry, broadcast: (m, to) => server.broadcast(m, to) })
-  handleProc = attachProcHost({ registry: procs, broadcast: (m) => server.broadcast(m) })
+  // An older app marks no person's chat line: its hello leaves HOST_YIELD_PERSON_WRITES out
+  handleProc = attachProcHost({ registry: procs, broadcast: (m) => server.broadcast(m), marksWrites: (socket) => server.yieldsOf(socket)?.has(HOST_YIELD_PERSON_WRITES) === true })
   // The leftovers of a Host that died with workspaces open (spec, Lifecycle): killed when their start
   // time still matches, then the file is cleared. A launch waits for this. Never rejects.
   void workspaces.sweepLeftovers().catch((err) => log.write(`workspace leftovers: ${String(err)}`))

@@ -425,6 +425,21 @@ describe('hostOrchDeps', () => {
       expect(acted).toBe(1)
     })
 
+    // Observe deferred fix round 2, Minor b: a person's send carries the mark to the app's chatSend and to the Host's own
+    // write, so the line is written as a person's
+    it('carries a person’s mark to the app’s chatSend and to the Host’s own write', async () => {
+      const app = chatHost()
+      const act = appAnswers(null)
+      const withApp = hostOrchDeps(base({ act, sessions: app.sessions }))
+      expect(await withApp.chatSend?.('chat-1', '다음', { person: true })).toEqual({ sent: true })
+      expect(act.mock.calls.at(-1)).toEqual(['chatSend', ['chat-1', '다음', { person: true }]])
+      const alone = chatHost()
+      const sendChat = vi.spyOn(alone.sessions, 'sendChat')
+      const noApp = hostOrchDeps(base({ act: vi.fn(), sessions: alone.sessions, hasApp: () => false }))
+      expect(await noApp.chatSend?.('chat-1', '다음', { person: true })).toEqual({ sent: true })
+      expect(sendChat).toHaveBeenCalledWith('chat-1', '다음', expect.any(Function), { person: true })
+    })
+
     // **거절은 움직인 것이 아니다**(I1). 카드는 치기 전에 물으므로, 카드 때문에 돌아선 호출은 영수증을
     // 남기지 않는다 — 카드에 답한 뒤 같은 요청 id 로 다시 치면 이번엔 간다.
     it('카드가 열려 있으면 치기를 묻지도 않고 돌아선다 — 움직인 것이 아니다', async () => {
@@ -1219,7 +1234,7 @@ describe('hostOrchDeps — HOST_CHATS (chat takeover §3.5)', () => {
     c.send.mockImplementation(async (_id: string, _text: string, mark?: () => void) => { mark?.() })
     const deps = hostOrchDeps(base({ act, chats: c }))
     expect(await deps.chatSend?.('c1', 'hi')).toEqual({ sent: true })
-    expect(c.send).toHaveBeenCalledWith('c1', 'hi', expect.any(Function))
+    expect(c.send).toHaveBeenCalledWith('c1', 'hi', expect.any(Function), undefined)
     expect(act).not.toHaveBeenCalled()
     const card = { id: 'r1', kind: 'approval' as const, about: { tool: 'Bash', lines: ['ls'] }, decisions: ['accept' as const] }
     const carded = hostOrchDeps(base({ act, chats: { ...chats(['c1']), requests: () => [card] } }))
@@ -1235,7 +1250,7 @@ describe('hostOrchDeps — HOST_CHATS (chat takeover §3.5)', () => {
     const deps = hostOrchDeps({ ...b, sessions: { ...b.sessions, sendChat } })
     expect(await deps.chatPending?.('c1')).toBe(null)
     expect(await deps.chatSend?.('c1', 'hi')).toEqual({ sent: true })
-    expect(c.send).toHaveBeenCalledWith('c1', 'hi', expect.any(Function))
+    expect(c.send).toHaveBeenCalledWith('c1', 'hi', expect.any(Function), undefined)
     expect(sendChat).not.toHaveBeenCalled()
     expect(onEffect).toHaveBeenCalledTimes(1)
   })

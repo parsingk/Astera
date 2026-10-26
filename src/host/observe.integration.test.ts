@@ -32,7 +32,7 @@ import { PtyRegistry, type RegistryPty } from './registry'
 import { ProcRegistry, type RegistryProc } from './procRegistry'
 import { createHostPolicies } from './audit/policyCommands'
 import { createHostAudit } from './audit/auditCommands'
-import { createAuditRecorder, dispatchOfSession, registrySessionFacts } from './audit/recorder'
+import { createAuditRecorder, dispatchOfWithTurns, registrySessionFacts } from './audit/recorder'
 import { createAuditSources } from './audit/sources'
 import { openTokenStore } from './tokens/store'
 import { createTokenSources, tokenOwnerOf } from './tokens/sources'
@@ -158,26 +158,27 @@ async function hostRig() {
     worktrees: { fork: () => Promise.reject(new Error('not in this test')), makeRunWorktree: async () => { throw new Error('no') }, mergeWorktrees: async () => { throw new Error('no') }, removeWorktrees: async () => { throw new Error('no') } }
   })!
 
-  // As index.ts makes them, before any pty opens: the token store, the recorder reading the mode from
-  // audit-policy.json, its sources over the two registries and the profile's hook-events folder, and the token sources
+  // As index.ts makes them, before any pty opens: the token store, the token sources, the recorder reading the mode
+  // from audit-policy.json and the turns from the token sources, and its sources over the two registries and the
+  // profile's hook-events folder
   const tokenStore = await openTokenStore({ profileDir: profile, state: () => (box.orch?.loaded() ? box.orch.state() : null), log })
-  const recorder = createAuditRecorder({
-    profileDir: profile,
-    mode: async () => (await readAuditPolicy(profile, { keepDamaged: false }))?.mode ?? 'compatibility',
-    sessionInfo: registrySessionFacts({ ptys: registry, procs }),
-    dispatchOf: (sessionId, at) => dispatchOfSession(box.orch!.state(), sessionId, at),
-    log
-  })
-  const auditSources = createAuditSources({ recorder, ptys: registry, procs, hookEventsDir: hookEventsDirIn(profile), log, every: noTick })
   const tokenSources = createTokenSources({
     store: tokenStore,
     ptys: registry,
     procs,
     statusLinePayload: (sid) => spawner.statusLinePayload(sid),
-    ownerOf: (sessionId, at, last) => tokenOwnerOf(box.orch!.state(), sessionId, at, last),
+    ownerOf: (sessionId, at, last, turn) => tokenOwnerOf(box.orch!.state(), sessionId, at, last, turn),
     log,
     every: noTick
   })
+  const recorder = createAuditRecorder({
+    profileDir: profile,
+    mode: async () => (await readAuditPolicy(profile, { keepDamaged: false }))?.mode ?? 'compatibility',
+    sessionInfo: registrySessionFacts({ ptys: registry, procs }),
+    dispatchOf: dispatchOfWithTurns(() => box.orch!.state(), tokenSources),
+    log
+  })
+  const auditSources = createAuditSources({ recorder, ptys: registry, procs, hookEventsDir: hookEventsDirIn(profile), log, every: noTick })
 
   const hostSessions = registrySessions({ ptys: registry, procs, hookEventsDir: hookEventsDirIn(profile), accounts: readAccounts })
   const orch = createHostOrch({
@@ -328,6 +329,9 @@ const CODEX_CALLS = (): Array<{ type: string; payload: Record<string, unknown> }
     type: 'response_item',
     payload: { type: 'custom_tool_call', name: 'apply_patch', input: '*** Begin Patch\n*** Update File: src/a.ts\n@@\n-a\n+b\n*** End Patch\n', call_id: 'call_patch', status: 'completed' }
   },
+  // What Codex writes when they are over: the exec's exit code, and the patch's result
+  { type: 'response_item', payload: { type: 'function_call_output', call_id: 'call_push', output: 'Exit code: 0\nWall time: 0.1 seconds\nOutput:\n' } },
+  { type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: 'call_patch', output: [{ type: 'input_text', text: 'Success. Updated the following files:\nM src/a.ts' }] } },
   {
     type: 'event_msg',
     payload: { type: 'mcp_tool_call_end', call_id: 'call_mcp', invocation: { server: 'linear', tool: 'get_issue', arguments: { id: 'LIN-1' } }, result: { Ok: { content: [], isError: false } } }
@@ -418,6 +422,8 @@ describe('observe mode on the Host, end to end through the CLI', { timeout: 60_0
       { action: 'mcp.call', target: 'linear.get_issue', decision: 'allow' }
     ])
     for (const r of listed) expect(r).toMatchObject({ sessionId: s.id, accountId: CODEX, provider: 'codex', kind: 'terminal', source: 'codex-rollout' })
+    // The calls Codex wrote an output for are told how they went; the MCP end event says it itself
+    expect(listed.map((r) => r.status)).toEqual(['ok', 'ok', 'ok'])
     expect((await astera(['audit', 'summary'])).data).toMatchObject({ allow: 2, wouldDeny: 1, unknown: 0 })
 
     // Read again, nothing is recorded twice
@@ -529,13 +535,19 @@ describe('observe mode on the Host, end to end through the CLI', { timeout: 60_0
   })
 })
 
-// The rig above builds what index.ts builds; index.ts itself never runs in a test, so the four places where observe mode
+// The rig above builds what index.ts builds; index.ts itself never runs in a test, so the places where observe mode
 // is wired into the Host are guarded by its text (as the plugin manager's wiring is, plugins/commands.test.ts)
 describe('index.ts wires observe mode into the Host', () => {
   it('makes the sources, re-reads the mode when the policies change it, and hands the orch the spent tokens', async () => {
     const { fileURLToPath } = await import('node:url')
     const src = await fs.readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8')
-    for (const wiring of ['createAuditSources({', 'createTokenSources({', 'onChange: () => auditRecorder.invalidate()', 'spentTokens: () => tokenStore.spent()'])
+    for (const wiring of ['createAuditSources({', 'createTokenSources({', 'dispatchOf: dispatchOfWithTurns(() => orch.state(), tokenSources)', 'onChange: (cmd) => auditRecorder.invalidate(', 'spentTokens: () => tokenStore.spent()'])
       expect(src, wiring).toContain(wiring)
+    // A proc write is told which app wrote it, and only an app that says it marks a person's writes is trusted to:
+    // lose either and an older app's chats are held for good, or every chat falls back to two minutes
+    for (const wiring of ['handleProc?.(m, send, { socket: from.socket })', 'marksWrites: (socket) => server.yieldsOf(socket)?.has(HOST_YIELD_PERSON_WRITES) === true'])
+      expect(src, wiring).toContain(wiring)
+    // The recorder's note says what bounds a finished Run's coordinator: a person's prompt (fix round 2)
+    expect(src.replace(/\s*\/\/\s*/g, ' ')).toContain('until a person prompts the session')
   })
 })

@@ -13,6 +13,8 @@ import type { Dispatch } from '../../core/orchestration/types'
 import type { PtyMeta } from '../../core/host/protocol'
 import { openTokenStore } from './store'
 import { createTokenSources, tokenOwnerOf } from './sources'
+import { dispatchOfWithTurns } from '../audit/recorder'
+import { PtyRegistry } from '../registry'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -44,6 +46,26 @@ const counted = (at: number, total: [number, number], last: [number, number]): s
   return JSON.stringify({ timestamp: iso(at), type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: u(total), last_token_usage: u(last) }, rate_limits: null } })
 }
 const lines = (...ls: string[]): string => ls.map((l) => l + '\n').join('')
+/** A Codex rollout event with no more to it than its kind (task_started, task_complete). */
+const codexEvent = (at: number, type: string): string => JSON.stringify({ timestamp: iso(at), type: 'event_msg', payload: { type } })
+/** What a person, Astera or Codex itself put to the model, as Codex 0.160 to 0.164 write it: a user message item. */
+const codexUser = (at: number, text: string): string =>
+  JSON.stringify({ timestamp: iso(at), type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } })
+/** The same as an older Codex wrote it: a user_message event. */
+const codexUserOld = (at: number, message: string): string => JSON.stringify({ timestamp: iso(at), type: 'event_msg', payload: { type: 'user_message', message, images: [] } })
+/** Claude Code's note that a background task finished, written as a user line, in the three ways it may say so. */
+const taskNotification = (at: number, how: 'source' | 'origin' | 'prefix'): string =>
+  JSON.stringify({
+    type: 'user',
+    timestamp: iso(at),
+    ...(how === 'source' ? { promptSource: 'system' } : how === 'origin' ? { turnOrigin: 'task_notification' } : {}),
+    message: { role: 'user', content: how === 'prefix' ? '<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>' : 'Background command "astera check --wait" completed' }
+  })
+/** A prompt a person (or Astera) typed, as the transcript writes it. */
+const prompt = (at: number, text: string): string => JSON.stringify({ type: 'user', timestamp: iso(at), message: { role: 'user', content: text } })
+/** A tool's result coming back inside a turn: written as a user line too, and not a prompt. */
+const toolResult = (at: number): string =>
+  JSON.stringify({ type: 'user', timestamp: iso(at), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] } })
 
 const note = (kind: PtyMeta['kind'], id: string, restore: Record<string, unknown> = {}): PtyMeta => ({
   kind,
@@ -51,21 +73,42 @@ const note = (kind: PtyMeta['kind'], id: string, restore: Record<string, unknown
   restore: { accountId: 'acc1', cwd: 'D:/p', title: 't', ...restore }
 })
 
-/** A registry that tells its listeners what the test says (the audit sources' test registry). */
+/** A registry that tells its listeners what the test says (the audit sources' test registry), and who sent what was
+ *  submitted into an entry (`typed`: a person's keys, or the Host's own typing). */
 function fakeRegistry() {
   const meta = new Set<(id: string, meta: PtyMeta, why: 'open' | 'note') => void>()
   const lineCbs = new Set<(id: string, seq: number, line: string) => void>()
   const exits = new Set<(id: string, code: number) => void>()
   const add = <T>(s: Set<T>, cb: T): (() => void) => (s.add(cb), () => void s.delete(cb))
+  const sent = new Map<string, Array<{ at: number; person: boolean }>>()
+  const unmarked = new Set<string>()
   let seq = 0
   return {
     onMeta: (cb: (id: string, meta: PtyMeta, why: 'open' | 'note') => void) => add(meta, cb),
     onLine: (cb: (id: string, seq: number, line: string) => void) => add(lineCbs, cb),
     onExit: (cb: (id: string, code: number) => void) => add(exits, cb),
+    sent,
+    // A method that reads `this`, as the registries' are, so a caller that detaches it fails here too
+    submittedBetween(this: { sent: typeof sent }, id: string, from: number, to: number): 'person' | 'host' | null {
+      const last = (this.sent.get(id) ?? []).filter((x) => from < x.at && x.at <= to).at(-1)
+      return last === undefined ? null : last.person ? 'person' : 'host'
+    },
+    personSubmittedBetween(this: { sent: typeof sent }, id: string, from: number, to: number): boolean {
+      return (this.sent.get(id) ?? []).some((x) => x.person && from < x.at && x.at <= to)
+    },
     open: (id: string, m: PtyMeta) => meta.forEach((cb) => cb(id, m, 'open')),
     note: (id: string, m: PtyMeta) => meta.forEach((cb) => cb(id, m, 'note')),
     line: (id: string, l: string) => lineCbs.forEach((cb) => cb(id, ++seq, l)),
     exit: (id: string) => exits.forEach((cb) => cb(id, 0)),
+    /** `unmarked`: written by an app that does not mark a person's lines (an older app, ProcRegistry.writesUnmarked). */
+    typed: (id: string, at: number, by: 'person' | 'host' | 'unmarked') => {
+      sent.set(id, [...(sent.get(id) ?? []), { at, person: by === 'person' }])
+      if (by === 'unmarked') unmarked.add(id)
+    },
+    unmarked,
+    writesUnmarked(this: { unmarked: Set<string> }, id: string): boolean {
+      return this.unmarked.has(id)
+    },
     listeners: () => meta.size + lineCbs.size + exits.size
   }
 }
@@ -91,18 +134,19 @@ const orch = (dispatches: Dispatch[], coordinatorSessionId?: string): OrchState 
   dispatches
 })
 
-/** The sources over a real store, with no timer: the test reads with `poll`. */
-async function rig(o: { state: () => OrchState; now: () => number; statusLines?: Record<string, string> }) {
+/** The sources over a real store, with no timer: the test reads with `poll`. `ptys`: a real pty registry in place of
+ *  the test one, where what the registry itself notes is under test. */
+async function rig(o: { state: () => OrchState; now: () => number; statusLines?: Record<string, string>; ptys?: PtyRegistry }) {
   const profileDir = await tempDir()
   const store = await openTokenStore({ profileDir, state: () => null, log: () => {} })
   const ptys = fakeRegistry()
   const procs = fakeRegistry()
   const sources = createTokenSources({
     store,
-    ptys,
+    ptys: o.ptys ?? ptys,
     procs,
     statusLinePayload: async (id) => (o.statusLines?.[id] ? { session_id: id, transcript_path: o.statusLines[id] } : null),
-    ownerOf: (sessionId, at, last) => tokenOwnerOf(o.state(), sessionId, at, last),
+    ownerOf: (sessionId, at, last, turn) => tokenOwnerOf(o.state(), sessionId, at, last, turn),
     log: () => {},
     now: o.now,
     every: () => () => {}
@@ -122,14 +166,33 @@ describe('tokenOwnerOf', () => {
   })
 
   // Fix round 1, ruling 3: a Dispatch holds only what was spent while it was open. A tab a worker was typed into
-  // (`worker-start --terminal`) goes on being used after the Dispatch ended, and that is not the Task's work
-  it('a Dispatch that ended holds nothing spent after its end, and a response read late counts up to it', () => {
+  // (`worker-start --terminal`) goes on being used after the Dispatch ended, and that is not the Task's work: a prompt
+  // typed after the end begins a turn of its own (deferred minor c)
+  it('a Dispatch that ended holds nothing spent in a turn begun after its end, and a response read late counts up to it', () => {
     const s = orch([dispatch('d1', 't1', 'sess_a', iso(T0), iso(T0 + 500)), dispatch('d2', 't1', 'sess_a', iso(T0 + 1000))])
     expect(tokenOwnerOf(s, 'sess_a', iso(T0 + 500))).toEqual({ dispatchId: 'd1' })
-    expect(tokenOwnerOf(s, 'sess_a', iso(T0 + 700))).toBeNull()
-    expect(tokenOwnerOf(s, 'sess_a', iso(T0 + 1500))).toEqual({ dispatchId: 'd2' })
+    expect(tokenOwnerOf(s, 'sess_a', iso(T0 + 700), null, T0 + 600)).toBeNull()
+    expect(tokenOwnerOf(s, 'sess_a', iso(T0 + 1500), null, T0 + 600)).toEqual({ dispatchId: 'd2' })
     const ended = orch([dispatch('d1', 't1', 'sess_a', iso(T0), iso(T0 + 500))])
-    expect(tokenOwnerOf(ended, 'sess_a', iso(T0 + 900))).toBeNull()
+    expect(tokenOwnerOf(ended, 'sess_a', iso(T0 + 900), null, T0 + 800)).toBeNull()
+  })
+
+  // Deferred minor c: a worker's last response can finish after its report closed the Dispatch, inside the turn that was
+  // running then; it is the Task's however long it takes. Lines that cannot tell turns: two minutes, as the audit has
+  it('a Dispatch holds its session’s responses to the end of the turn running when it ended, or two minutes when turns are not known', () => {
+    const MIN = 60_000
+    const end = T0 + MIN
+    const s = orch([dispatch('d1', 't1', 'sess_w', iso(T0), iso(end))])
+    expect(tokenOwnerOf(s, 'sess_w', iso(end + 3 * MIN), null, T0 + 100)).toEqual({ dispatchId: 'd1' })
+    expect(tokenOwnerOf(s, 'sess_w', iso(end + 3 * MIN), null, end + 2 * MIN)).toBeNull()
+    expect(tokenOwnerOf(s, 'sess_w', iso(end + 2 * MIN), null, null)).toEqual({ dispatchId: 'd1' })
+    expect(tokenOwnerOf(s, 'sess_w', iso(end + 2 * MIN + 1), null, null)).toBeNull()
+    // Never what it spent before its start
+    expect(tokenOwnerOf(s, 'sess_w', iso(T0 - 10), null, T0 - 100)).toBeNull()
+    // The owner it last had, within the same bounds
+    const rekeyed = orch([dispatch('d1', 't1', 'sess_w2', iso(T0), iso(end))])
+    expect(tokenOwnerOf(rekeyed, 'sess_w', iso(end + 3 * MIN), { dispatchId: 'd1' }, T0 + 100)).toEqual({ dispatchId: 'd1' })
+    expect(tokenOwnerOf(rekeyed, 'sess_w', iso(end + 3 * MIN), { dispatchId: 'd1' }, end + 2 * MIN)).toBeNull()
   })
 
   // A roll rekeys the Dispatch before the old session's last lines are read: the owner that session last had stands,
@@ -137,7 +200,7 @@ describe('tokenOwnerOf', () => {
   it('a session the state no longer names keeps the owner it last had, while that Dispatch held the time', () => {
     const s = orch([dispatch('d1', 't1', 'sess_b', iso(T0), iso(T0 + 500))], 'sess_k2')
     expect(tokenOwnerOf(s, 'sess_a', iso(T0 + 100), { dispatchId: 'd1' })).toEqual({ dispatchId: 'd1' })
-    expect(tokenOwnerOf(s, 'sess_a', iso(T0 + 900), { dispatchId: 'd1' })).toBeNull()
+    expect(tokenOwnerOf(s, 'sess_a', iso(T0 + 900), { dispatchId: 'd1' }, T0 + 800)).toBeNull()
     expect(tokenOwnerOf(s, 'sess_a', iso(T0 + 100), { dispatchId: 'd_gone' })).toBeNull()
     expect(tokenOwnerOf(s, 'sess_k1', iso(T0 + 100), { coordinatorOf: 'run_1' })).toEqual({ coordinatorOf: 'run_1' })
     expect(tokenOwnerOf(s, 'sess_k1', iso(T0 + 100), { coordinatorOf: 'run_gone' })).toBeNull()
@@ -149,8 +212,36 @@ describe('tokenOwnerOf', () => {
     expect(tokenOwnerOf(s, 'sess_tab', iso(T0))).toBeNull()
   })
 
+  // Deferred minor b: a finished Run's coordinator spends for it up to the end of the turn that was running when the
+  // Run's outcome became final (its `endedAt`), whatever its Tasks do after; a turn is told by the session's own lines
+  it('a coordinator’s are its Run’s up to the end of the turn running when the Run finished, and a Task edited after opens nothing', () => {
+    const MIN = 60_000
+    const E = T0 + 10 * MIN
+    const base = orch([], 'sess_k')
+    const ended: OrchState = {
+      ...base,
+      runs: base.runs.map((r) => ({ ...r, endedAt: iso(E) })),
+      // A Task's title edited half an hour after the end
+      tasks: base.tasks.map((t) => ({ ...t, status: 'completed' as const, title: 'renamed', updatedAt: iso(E + 30 * MIN) }))
+    }
+    // The wrap-up ten minutes on, inside the turn that began before the end
+    expect(tokenOwnerOf(ended, 'sess_k', iso(E + 10 * MIN), null, E - 5 * MIN)).toEqual({ coordinatorOf: 'run_1' })
+    // A prompt typed into the tab after that turn
+    expect(tokenOwnerOf(ended, 'sess_k', iso(E + 20 * MIN), null, E + 15 * MIN)).toBeNull()
+    expect(tokenOwnerOf(ended, 'sess_k', iso(E + 31 * MIN), null, E + 15 * MIN)).toBeNull()
+    // Lines that cannot tell turns: two minutes after the end, not after the edit
+    expect(tokenOwnerOf(ended, 'sess_k', iso(E + 2 * MIN), null, null)).toEqual({ coordinatorOf: 'run_1' })
+    expect(tokenOwnerOf(ended, 'sess_k', iso(E + 2 * MIN + 1), null, null)).toBeNull()
+    expect(tokenOwnerOf(ended, 'sess_k', iso(E + 31 * MIN), null, null)).toBeNull()
+    // The owner it last had stands within the same bounds
+    const noSlot: OrchState = { ...ended, runs: ended.runs.map(({ coordinatorSessionId: _gone, ...r }) => r) }
+    expect(tokenOwnerOf(noSlot, 'sess_k1', iso(E + 10 * MIN), { coordinatorOf: 'run_1' }, E - 5 * MIN)).toEqual({ coordinatorOf: 'run_1' })
+    expect(tokenOwnerOf(noSlot, 'sess_k1', iso(E + 20 * MIN), { coordinatorOf: 'run_1' }, E + 15 * MIN)).toBeNull()
+  })
+
   // Final review I2: a finished Run's coordinator tab may be used on; what it spends then is not the Run's. Its last
-  // responses, written as the Run finished, still are
+  // responses, written as the Run finished, still are. A Run finished before its end was kept is bounded by its last
+  // Task's last change
   it('a coordinator’s are its Run’s while the Run is unfinished, and up to two minutes after it finished', () => {
     const MIN = 60_000
     const finished = (s: OrchState, at: number): OrchState => ({
@@ -292,6 +383,30 @@ describe('createTokenSources', () => {
     r.sources.dispose()
   })
 
+  // A roll kills the old session and spawns the new one with no wait between (codexCoordinator.ts roll): the new one is
+  // heard open before the old one's exit, and a respawn on the same account (an in-place resume that did not recover)
+  // writes on in the same rollout. What is dated from the new one's start is the new one's.
+  it('a same-account Codex roll whose new session opens before the old one exits counts the new responses once', async () => {
+    let now = T0
+    let state = orch([dispatch('d1', 't1', 'sess_c')])
+    const r = await rig({ state: () => state, now: () => now })
+    const file = path.join(r.dir, 'rollout.jsonl')
+    await fs.writeFile(file, lines(counted(T0 + 10, [100, 10], [100, 10])))
+    r.ptys.open('pty_c', note('session', 'sess_c', { rolloutPath: file }))
+    await r.sources.poll()
+    now = T0 + 100
+    state = orch([dispatch('d1', 't1', 'sess_d')])
+    r.ptys.open('pty_d', note('session', 'sess_d', { rolloutPath: file, rolledFrom: 'sess_c' }))
+    await fs.appendFile(file, lines(counted(T0 + 150, [150, 12], [50, 2])))
+    await r.sources.poll()
+    now = T0 + 200
+    r.ptys.exit('pty_c')
+    await r.sources.poll()
+    await r.sources.poll()
+    expect(taskTokensOf(state, 't1', r.store.spent())).toEqual({ input: 150, output: 12, total: 162 })
+    r.sources.dispose()
+  })
+
   // The same for a Codex chat resumed into its own rollout under a new session
   it('a Codex chat that ended stops at its end, though its rollout is written on', async () => {
     let now = T0
@@ -364,6 +479,64 @@ describe('createTokenSources', () => {
     }
   })
 
+  // Deferred minor a: a sub-agent resumed in a resumed conversation writes on in its own old file, which was passed by
+  // at its first look. It is looked at again on a poll where the main transcript grew, as it does around a sub-agent's
+  // work, never at every read
+  it('looks at an old sub-agent file again on a poll where the main transcript grew, and counts what it gained once', async () => {
+    const statusLines: Record<string, string> = {}
+    const r = await rig({ state: () => orch([dispatch('d1', 't1', 'sess_a')]), now: () => T0, statusLines })
+    const transcript = path.join(r.dir, 'conv-4.jsonl')
+    await fs.writeFile(transcript, '')
+    const agents = path.join(r.dir, 'conv-4', 'subagents')
+    await fs.mkdir(agents, { recursive: true })
+    const old = path.join(agents, 'agent-old.jsonl')
+    await fs.writeFile(old, lines(claudeLine(T0 - 3_000_000, 'msg_before', 50, 50, { isSidechain: true })))
+    await fs.utimes(old, new Date(T0 - 3_600_000), new Date(T0 - 3_600_000))
+    statusLines.sess_a = transcript
+    r.ptys.open('pty_a', note('session', 'sess_a'))
+    const stat = vi.spyOn(fs, 'stat')
+    try {
+      await r.sources.poll()
+      // Resumed: the old file gains a response, written now
+      await fs.appendFile(old, lines(claudeLine(T0 + 30, 'msg_resumed', 3, 4, { isSidechain: true })))
+      // The main transcript did not grow: the old file is not looked at again
+      await r.sources.poll()
+      expect(r.store.spent()).toEqual([])
+      expect(stat.mock.calls.filter(([f]) => f === old)).toHaveLength(1)
+      await fs.appendFile(transcript, lines(claudeLine(T0 + 40, 'msg_main', 1, 1)))
+      await r.sources.poll()
+      await fs.appendFile(transcript, lines(claudeLine(T0 + 50, 'msg_main2', 1, 1)))
+      await r.sources.poll()
+      expect(r.store.spent()).toEqual([{ sessionId: 'sess_a', dispatchId: 'd1', input: 5, output: 6 }])
+    } finally {
+      stat.mockRestore()
+      r.sources.dispose()
+    }
+  })
+
+  // Fix round 1, Minor 4: a background sub-agent resumed into its old file may write more than the window while its
+  // parent's transcript is idle; looked at again, the file is followed from where it ended when it was passed by
+  it('follows an old sub-agent file looked at again from where it ended when it was passed by, however much it gained', async () => {
+    const statusLines: Record<string, string> = {}
+    const r = await rig({ state: () => orch([dispatch('d1', 't1', 'sess_a')]), now: () => T0, statusLines })
+    const transcript = path.join(r.dir, 'conv-5.jsonl')
+    await fs.writeFile(transcript, '')
+    const agents = path.join(r.dir, 'conv-5', 'subagents')
+    await fs.mkdir(agents, { recursive: true })
+    const old = path.join(agents, 'agent-old.jsonl')
+    await fs.writeFile(old, lines(claudeLine(T0 - 3_000_000, 'msg_before', 50, 50, { isSidechain: true })))
+    await fs.utimes(old, new Date(T0 - 3_600_000), new Date(T0 - 3_600_000))
+    statusLines.sess_a = transcript
+    r.ptys.open('pty_a', note('session', 'sess_a'))
+    await r.sources.poll()
+    const padding = lines(...Array.from({ length: 700 }, () => JSON.stringify({ type: 'user', isSidechain: true, pad: 'x'.repeat(970) })))
+    await fs.appendFile(old, lines(claudeLine(T0 + 30, 'msg_resumed', 3, 4, { isSidechain: true })) + padding)
+    await fs.appendFile(transcript, lines(claudeLine(T0 + 40, 'msg_main', 1, 1)))
+    await r.sources.poll()
+    expect(r.store.spent()).toEqual([{ sessionId: 'sess_a', dispatchId: 'd1', input: 4, output: 5 }])
+    r.sources.dispose()
+  })
+
   // Fix round 1, ruling 1: a file that got shorter (made again) is never read whole; it is followed again from its end
   // less the bounded window, by the same reader, so a response it already counted is not counted again
   it('follows a file that got shorter from its end less the window, counting nothing twice', async () => {
@@ -408,6 +581,452 @@ describe('createTokenSources', () => {
     r.sources.dispose()
   })
 
+  // Deferred minor c, end to end: a Codex worker's rollout tells a person's prompts by its user_message lines; one
+  // Astera typed (a roll's carry-on) or one Codex wraps (a task notification) does not end the work its report left
+  it('counts a Codex worker’s response that finished three minutes after its report, inside the same turn, and not after a person’s prompt', async () => {
+    const MIN = 60_000
+    const end = T0 + MIN
+    let now = T0
+    let state = orch([dispatch('d1', 't1', 'sess_w')])
+    const r = await rig({ state: () => state, now: () => now })
+    const file = path.join(r.dir, 'rollout-w.jsonl')
+    await fs.writeFile(file, '')
+    r.ptys.open('pty_w', note('session', 'sess_w', { rolloutPath: file }))
+    r.ptys.typed('pty_w', T0 + 50, 'host')
+    await fs.appendFile(file, lines(codexEvent(T0 + 100, 'task_started'), codexUser(T0 + 100, 'Do the task in s.md'), counted(T0 + 200, [100, 10], [100, 10])))
+    await r.sources.poll()
+    // The report closes the Dispatch; the model's last response of the turn ends three minutes later
+    state = orch([dispatch('d1', 't1', 'sess_w', iso(T0), iso(end))])
+    r.ptys.typed('pty_w', end + 4 * MIN - 100, 'host')
+    r.ptys.typed('pty_w', end + 6 * MIN - 100, 'person')
+    await fs.appendFile(
+      file,
+      lines(
+        counted(end + 3 * MIN, [150, 20], [50, 10]),
+        codexEvent(end + 3 * MIN + 10, 'task_complete'),
+        // A turn Astera typed after it, and one Codex was handed a task notification in
+        codexEvent(end + 4 * MIN, 'task_started'),
+        codexUser(end + 4 * MIN, 'Continue where you left off'),
+        counted(end + 4 * MIN + 500, [170, 25], [20, 5]),
+        codexEvent(end + 5 * MIN, 'task_started'),
+        codexUser(end + 5 * MIN, '<task-notification><task-id>b1</task-id></task-notification>'),
+        counted(end + 5 * MIN + 500, [180, 30], [10, 5]),
+        // A turn Codex begins itself (a `/goal` carried on): a bare task_started, with its own wrappers as user items
+        codexEvent(end + 5 * MIN + 30_000, 'task_started'),
+        codexUser(end + 5 * MIN + 30_000, '<environment_context>\n  <cwd>D:/p</cwd>\n</environment_context>'),
+        codexUser(end + 5 * MIN + 30_000, '# AGENTS.md instructions for D:/p\n\nKeep it short.'),
+        counted(end + 5 * MIN + 40_000, [190, 35], [10, 5]),
+        // A person types into the tab
+        codexEvent(end + 6 * MIN, 'task_started'),
+        codexUser(end + 6 * MIN, 'thanks, something else now'),
+        counted(end + 6 * MIN + 500, [400, 40], [210, 5])
+      )
+    )
+    now = end + 7 * MIN
+    await r.sources.poll()
+    expect(taskTokensOf(state, 't1', r.store.spent())).toEqual({ input: 190, output: 35, total: 225 })
+    r.sources.dispose()
+  })
+
+  // Fix round 2, Important c: an older Codex wrote the person's prompt as a user_message event; that still ends the hold
+  it('ends a Codex worker’s hold at a person’s prompt an older Codex wrote as a user_message event', async () => {
+    const MIN = 60_000
+    const end = T0 + MIN
+    let now = T0
+    let state = orch([dispatch('d1', 't1', 'sess_w')])
+    const r = await rig({ state: () => state, now: () => now })
+    const file = path.join(r.dir, 'rollout-old.jsonl')
+    await fs.writeFile(file, lines(codexEvent(T0 + 100, 'task_started'), codexUserOld(T0 + 100, 'Do the task'), counted(T0 + 200, [100, 10], [100, 10])))
+    r.ptys.open('pty_w', note('session', 'sess_w', { rolloutPath: file }))
+    await r.sources.poll()
+    state = orch([dispatch('d1', 't1', 'sess_w', iso(T0), iso(end))])
+    await fs.appendFile(
+      file,
+      lines(counted(end + 3 * MIN, [150, 20], [50, 10]), codexUserOld(end + 6 * MIN, 'thanks, something else now'), counted(end + 6 * MIN + 500, [400, 40], [250, 20]))
+    )
+    now = end + 7 * MIN
+    await r.sources.poll()
+    expect(taskTokensOf(state, 't1', r.store.spent())).toEqual({ input: 150, output: 20, total: 170 })
+    r.sources.dispose()
+  })
+
+  // Deferred minor b, end to end: a Claude coordinator's transcript tells its turns by its prompts; a tool's result
+  // coming back (the `runs wait` the Run's end returns from) is not one
+  it('counts a Claude coordinator’s wrap-up inside the turn running when its Run finished, and nothing after its next prompt', async () => {
+    const MIN = 60_000
+    const E = T0 + 10 * MIN
+    let state = orch([], 'sess_k')
+    const statusLines: Record<string, string> = {}
+    const r = await rig({ state: () => state, now: () => T0, statusLines })
+    const transcript = path.join(r.dir, 'coord.jsonl')
+    await fs.writeFile(transcript, lines(prompt(T0 + 1000, 'Coordinate the run'), claudeLine(T0 + 2000, 'msg_1', 10, 1)))
+    statusLines.sess_k = transcript
+    r.ptys.open('pty_k', note('session', 'sess_k'))
+    await r.sources.poll()
+    // The last Task finishes while the coordinator waits in a tool call; then a Task is renamed after the end
+    state = { ...state, runs: state.runs.map((x) => ({ ...x, endedAt: iso(E) })), tasks: state.tasks.map((t) => ({ ...t, status: 'completed', updatedAt: iso(E) })) }
+    state = { ...state, tasks: state.tasks.map((t) => ({ ...t, title: 'renamed', updatedAt: iso(E + 12 * MIN) })) }
+    await fs.appendFile(
+      transcript,
+      lines(
+        toolResult(E + 1000),
+        claudeLine(E + 10 * MIN, 'msg_wrap', 20, 2),
+        // A person types into the coordinator tab after that turn
+        prompt(E + 11 * MIN, 'something else'),
+        claudeLine(E + 11 * MIN + 1000, 'msg_after', 300, 30)
+      )
+    )
+    await r.sources.poll()
+    expect(runTokensOf(state, 'run_1', r.store.spent())).toEqual({ coordinatorTokens: { input: 30, output: 3, total: 33 } })
+    r.sources.dispose()
+  })
+
+  // Fix round 1, Important 1: a coordinator usually waits in a background `astera check --wait`, ends its turn, and is
+  // woken by Claude Code's task notification when the last worker reports. That turn begins after the Run's end and is
+  // its wrap-up; only a person's prompt closes it, in the token totals and in the audit records alike
+  it('counts a Claude coordinator’s wrap-up woken by a task notification after its Run finished, files its calls under the Run, and stops at a person’s prompt', async () => {
+    const MIN = 60_000
+    const E = T0 + 10 * MIN
+    let state = orch([], 'sess_k')
+    const statusLines: Record<string, string> = {}
+    const r = await rig({ state: () => state, now: () => T0, statusLines })
+    const transcript = path.join(r.dir, 'coord-bg.jsonl')
+    r.ptys.typed('pty_k', T0 + 900, 'host')
+    // The handover Astera typed, and the background wait it launched
+    await fs.writeFile(transcript, lines(prompt(T0 + 1000, 'Coordinate the run'), claudeLine(T0 + 2000, 'msg_1', 10, 1), toolResult(T0 + 3000)))
+    statusLines.sess_k = transcript
+    r.ptys.open('pty_k', note('session', 'sess_k'))
+    await r.sources.poll()
+    state = { ...state, runs: state.runs.map((x) => ({ ...x, endedAt: iso(E) })), tasks: state.tasks.map((t) => ({ ...t, status: 'completed', updatedAt: iso(E) })) }
+    r.ptys.typed('pty_k', E + 20 * MIN - 100, 'person')
+    await fs.appendFile(
+      transcript,
+      lines(
+        taskNotification(E + 5 * MIN, 'source'),
+        claudeLine(E + 6 * MIN, 'msg_wrap', 20, 2),
+        taskNotification(E + 7 * MIN, 'origin'),
+        claudeLine(E + 8 * MIN, 'msg_wrap2', 4, 4),
+        taskNotification(E + 9 * MIN, 'prefix'),
+        claudeLine(E + 10 * MIN, 'msg_wrap3', 1, 1),
+        prompt(E + 20 * MIN, 'thanks, now something else'),
+        claudeLine(E + 20 * MIN + 1000, 'msg_after', 300, 30)
+      )
+    )
+    await r.sources.poll()
+    expect(runTokensOf(state, 'run_1', r.store.spent())).toEqual({ coordinatorTokens: { input: 35, output: 8, total: 43 } })
+    const lookup = dispatchOfWithTurns(() => state, r.sources)
+    const filed = async (at: number) => {
+      const x = lookup('sess_k', iso(at))
+      return x !== null && 'later' in x ? x.later : x
+    }
+    expect(await filed(E + 9 * MIN + 30_000)).toEqual({ jobId: 'job_1', runId: 'run_1' })
+    expect(await filed(E + 20 * MIN + 2000)).toBeNull()
+    r.sources.dispose()
+  })
+
+  // The nudge Astera types into a coordinator with unread mail (dispatchLoop.ts) begins the wrap-up turn when the
+  // coordinator had stopped: the transcript writes it as any prompt, so the Host's own typing tells it apart
+  it('counts a wrap-up that Astera’s nudge began after the Run finished, and not one a person’s prompt began, however soon', async () => {
+    const MIN = 60_000
+    const E = T0 + 10 * MIN
+    const ended = (s: OrchState): OrchState => ({
+      ...s,
+      runs: s.runs.map((x) => ({ ...x, endedAt: iso(E) })),
+      tasks: s.tasks.map((t) => ({ ...t, status: 'completed' as const, updatedAt: iso(E) }))
+    })
+    for (const by of ['host', 'person'] as const) {
+      let state = orch([], 'sess_k')
+      const statusLines: Record<string, string> = {}
+      const r = await rig({ state: () => state, now: () => T0, statusLines })
+      const transcript = path.join(r.dir, `coord-${by}.jsonl`)
+      await fs.writeFile(transcript, lines(prompt(T0 + 1000, 'Coordinate the run'), claudeLine(T0 + 2000, 'msg_1', 10, 1)))
+      statusLines.sess_k = transcript
+      r.ptys.open('pty_k', note('session', 'sess_k'))
+      await r.sources.poll()
+      state = ended(state)
+      r.ptys.typed('pty_k', E + 30_000, by)
+      await fs.appendFile(
+        transcript,
+        lines(prompt(E + 30_200, 'Your Run has 1 unread message(s). Run `astera check --json`, handle them.'), claudeLine(E + 5 * MIN, 'msg_wrap', 20, 2))
+      )
+      await r.sources.poll()
+      expect(runTokensOf(state, 'run_1', r.store.spent())).toEqual({
+        coordinatorTokens: by === 'host' ? { input: 30, output: 3, total: 33 } : { input: 10, output: 1, total: 11 }
+      })
+      r.sources.dispose()
+    }
+  })
+
+  // A Claude chat's stream carries no prompt: each turn ends with a `result` frame, and the turn after one is a person's
+  // when a person's line reached the chat since (fix round 1, Important 1). One a background task's end begins, or one
+  // the Host sent itself, is still the wrap-up
+  it('tells a Claude chat coordinator’s turns by the result frame that ends each and the person’s line that begins one', async () => {
+    const MIN = 60_000
+    const E = T0 + 10 * MIN
+    let now = T0
+    let state = orch([], 'chat_k')
+    const r = await rig({ state: () => state, now: () => now })
+    const frame = (at: number, id: string, input: number, output: number): void => {
+      now = at
+      r.procs.line('proc_k', claudeLine(at, id, input, output, { parent_tool_use_id: null, session_id: 'c1' }))
+    }
+    const result = (at: number): void => {
+      now = at
+      r.procs.line('proc_k', '{"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":1}}')
+    }
+    r.procs.open('proc_k', note('chat', 'chat_k', { provider: 'claude' }))
+    r.procs.typed('proc_k', T0 + 500, 'host')
+    frame(T0 + 1000, 'msg_1', 10, 1)
+    result(T0 + 2000)
+    state = { ...state, runs: state.runs.map((x) => ({ ...x, endedAt: iso(E) })), tasks: state.tasks.map((t) => ({ ...t, status: 'completed', updatedAt: iso(E) })) }
+    // A background task's end begins a turn: nothing was written to the chat
+    frame(E + 5 * MIN, 'msg_wrap', 20, 2)
+    result(E + 6 * MIN)
+    // The Host sends a line itself (a roll's carry-on)
+    r.procs.typed('proc_k', E + 7 * MIN, 'host')
+    frame(E + 7 * MIN + 500, 'msg_carry', 5, 5)
+    result(E + 8 * MIN)
+    // A person writes
+    r.procs.typed('proc_k', E + 9 * MIN, 'person')
+    frame(E + 9 * MIN + 500, 'msg_after', 300, 30)
+    expect(runTokensOf(state, 'run_1', r.store.spent())).toEqual({ coordinatorTokens: { input: 35, output: 8, total: 43 } })
+    r.sources.dispose()
+  })
+
+  // An app from before the marks writes to the chat and never marks a person's line, so who began a turn is not known:
+  // two minutes after the end stand in for the turn, as before the marks, rather than a hold no person's line can end
+  it('reads a chat’s turns as unknown while an app that does not mark a person’s lines writes to it: two minutes after the end', async () => {
+    const MIN = 60_000
+    const E = T0 + 10 * MIN
+    let now = T0
+    let state = orch([], 'chat_k')
+    const r = await rig({ state: () => state, now: () => now })
+    const frame = (at: number, id: string, input: number, output: number): void => {
+      now = at
+      r.procs.line('proc_k', claudeLine(at, id, input, output, { parent_tool_use_id: null, session_id: 'c1' }))
+    }
+    const result = (at: number): void => {
+      now = at
+      r.procs.line('proc_k', '{"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":1}}')
+    }
+    r.procs.open('proc_k', note('chat', 'chat_k', { provider: 'claude' }))
+    r.procs.typed('proc_k', T0 + 500, 'unmarked')
+    frame(T0 + 1000, 'msg_1', 10, 1)
+    result(T0 + 2000)
+    state = { ...state, runs: state.runs.map((x) => ({ ...x, endedAt: iso(E) })), tasks: state.tasks.map((t) => ({ ...t, status: 'completed', updatedAt: iso(E) })) }
+    frame(E + MIN, 'msg_wrap', 20, 2)
+    result(E + MIN + 30_000)
+    r.procs.typed('proc_k', E + 4 * MIN, 'unmarked')
+    frame(E + 4 * MIN + 500, 'msg_after', 300, 30)
+    expect(runTokensOf(state, 'run_1', r.store.spent())).toEqual({ coordinatorTokens: { input: 30, output: 3, total: 33 } })
+    expect(r.sources.turnOf('chat_k', E + 4 * MIN + 500)).toBeNull()
+    r.sources.dispose()
+  })
+
+  // Fix round 2: a person may write while a turn is under way; the chat takes the line when that turn ends, so the turn
+  // after it is the person's though their line came before the `result`
+  it('takes the turn after a person’s line written during the turn before as the person’s', async () => {
+    const MIN = 60_000
+    const E = T0 + 10 * MIN
+    let now = T0
+    let state = orch([], 'chat_k')
+    const r = await rig({ state: () => state, now: () => now })
+    const frame = (at: number, id: string, input: number, output: number): void => {
+      now = at
+      r.procs.line('proc_k', claudeLine(at, id, input, output, { parent_tool_use_id: null, session_id: 'c1' }))
+    }
+    const result = (at: number): void => {
+      now = at
+      r.procs.line('proc_k', '{"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":1}}')
+    }
+    r.procs.open('proc_k', note('chat', 'chat_k', { provider: 'claude' }))
+    frame(T0 + 1000, 'msg_1', 10, 1)
+    state = { ...state, runs: state.runs.map((x) => ({ ...x, endedAt: iso(E) })), tasks: state.tasks.map((t) => ({ ...t, status: 'completed', updatedAt: iso(E) })) }
+    // The wrap-up runs on past the end; a person writes during it
+    frame(E + 5 * MIN, 'msg_wrap', 20, 2)
+    r.procs.typed('proc_k', E + 6 * MIN, 'person')
+    result(E + 7 * MIN)
+    frame(E + 7 * MIN + 500, 'msg_after', 300, 30)
+    expect(runTokensOf(state, 'run_1', r.store.spent())).toEqual({ coordinatorTokens: { input: 30, output: 3, total: 33 } })
+    r.sources.dispose()
+  })
+
+  // Fix round 3: a line the person did not write after theirs in the same turn (a card answered, a model picked) does
+  // not hide it: the chat takes its queued lines in order, so any person's turn line since the turn before began makes
+  // the next turn theirs
+  it('takes the turn after a person’s mid-turn line as theirs though an unmarked line came after it', async () => {
+    const MIN = 60_000
+    const E = T0 + 10 * MIN
+    let now = T0
+    let state = orch([], 'chat_k')
+    const r = await rig({ state: () => state, now: () => now })
+    const frame = (at: number, id: string, input: number, output: number): void => {
+      now = at
+      r.procs.line('proc_k', claudeLine(at, id, input, output, { parent_tool_use_id: null, session_id: 'c1' }))
+    }
+    r.procs.open('proc_k', note('chat', 'chat_k', { provider: 'claude' }))
+    frame(T0 + 1000, 'msg_1', 10, 1)
+    state = { ...state, runs: state.runs.map((x) => ({ ...x, endedAt: iso(E) })), tasks: state.tasks.map((t) => ({ ...t, status: 'completed', updatedAt: iso(E) })) }
+    frame(E + 5 * MIN, 'msg_wrap', 20, 2)
+    r.procs.typed('proc_k', E + 6 * MIN, 'person')
+    // A card answered after it: a line not marked a person's
+    r.procs.typed('proc_k', E + 6 * MIN + 30_000, 'host')
+    now = E + 7 * MIN
+    r.procs.line('proc_k', '{"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":1}}')
+    frame(E + 7 * MIN + 500, 'msg_after', 300, 30)
+    expect(runTokensOf(state, 'run_1', r.store.spent())).toEqual({ coordinatorTokens: { input: 30, output: 3, total: 33 } })
+    r.sources.dispose()
+  })
+
+  // Fix round 2: a roll during the wrap-up moves it onto a new session (`rolledFrom` in its note), whose own lines begin
+  // after the Run's end; the hold goes with it, so its carry-on work counts until a person prompts it
+  it('carries the hold across a roll onto a new session: the carry-on work counts until a person’s prompt', async () => {
+    const MIN = 60_000
+    const E = T0 + 10 * MIN
+    let now = T0
+    let state = orch([], 'chat_k1')
+    const r = await rig({ state: () => state, now: () => now })
+    const frame = (proc: string, at: number, id: string, input: number, output: number): void => {
+      now = at
+      r.procs.line(proc, claudeLine(at, id, input, output, { parent_tool_use_id: null, session_id: 'c1' }))
+    }
+    const result = (proc: string, at: number): void => {
+      now = at
+      r.procs.line(proc, '{"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":1}}')
+    }
+    r.procs.open('proc_k1', note('chat', 'chat_k1', { provider: 'claude' }))
+    frame('proc_k1', T0 + 1000, 'msg_1', 10, 1)
+    state = { ...state, runs: state.runs.map((x) => ({ ...x, endedAt: iso(E) })), tasks: state.tasks.map((t) => ({ ...t, status: 'completed', updatedAt: iso(E) })) }
+    frame('proc_k1', E + 2 * MIN, 'msg_wrap', 20, 2)
+    // The account's limit: the chat rolls onto a new session, which the slot follows, and the Host sends the carry-on
+    now = E + 3 * MIN
+    r.procs.exit('proc_k1')
+    state = { ...state, runs: state.runs.map((x) => ({ ...x, coordinatorSessionId: 'chat_k2' })) }
+    r.procs.open('proc_k2', note('chat', 'chat_k2', { provider: 'claude', rolledFrom: 'chat_k1' }))
+    r.procs.typed('proc_k2', E + 4 * MIN, 'host')
+    frame('proc_k2', E + 4 * MIN + 500, 'msg_carry', 5, 5)
+    result('proc_k2', E + 5 * MIN)
+    r.procs.typed('proc_k2', E + 6 * MIN, 'person')
+    frame('proc_k2', E + 6 * MIN + 500, 'msg_after', 300, 30)
+    expect(runTokensOf(state, 'run_1', r.store.spent())).toEqual({ coordinatorTokens: { input: 35, output: 8, total: 43 } })
+    r.sources.dispose()
+  })
+
+  // Fix rounds 3 and 4: a Codex roll's carry-on is an argument of the new process (codexCoordinator.ts: "the prompt is a
+  // CLI argument, so there is no PTY typing"), recorded once Codex has started, which can take minutes on Windows. A
+  // roll's new session takes its first prompt as that carry-on, the Host's, unless a person typed before it; every prompt
+  // after it goes by the ordinary rule. Driven through a real pty registry
+  const codexRoll = async (o: {
+    spawnAt: number
+    carryAt: number
+    personTypesAt?: number
+    secondAt: number
+    secondTyped: boolean
+  }): Promise<unknown> => {
+    let now = T0
+    const ptysMade = new Map<string, { exit(code: number): void }>()
+    let next = ''
+    const registry = new PtyRegistry({
+      spawn: () => {
+        let onExit: (e: { exitCode: number }) => void = () => {}
+        const p = { pid: 1, onData: () => {}, onExit: (cb: typeof onExit) => void (onExit = cb), write: () => {}, resize: () => {}, kill: () => {}, pause: () => {}, resume: () => {} }
+        ptysMade.set(next, { exit: (code) => onExit({ exitCode: code }) })
+        return p
+      },
+      log: () => {},
+      now: () => now
+    })
+    const open = (id: string, args: string[], m: PtyMeta): void => {
+      next = id
+      registry.open({ id, file: 'codex', args, opts: { cwd: 'D:/p', cols: 80, rows: 24, env: {} }, meta: m })
+    }
+    const MIN = 60_000
+    const E = T0 + 10 * MIN
+    let state = orch([], 'sess_k1')
+    const r = await rig({ state: () => state, now: () => now, ptys: registry })
+    const first = path.join(r.dir, 'rollout-k1.jsonl')
+    await fs.writeFile(first, lines(codexEvent(T0 + 100, 'task_started'), codexUser(T0 + 100, 'Coordinate the run'), counted(T0 + 200, [100, 10], [100, 10])))
+    open('pty_k1', ['Coordinate the run'], note('session', 'sess_k1', { rolloutPath: first }))
+    await r.sources.poll()
+    state = { ...state, runs: state.runs.map((x) => ({ ...x, endedAt: iso(E) })), tasks: state.tasks.map((t) => ({ ...t, status: 'completed', updatedAt: iso(E) })) }
+    now = E + 30_000
+    ptysMade.get('pty_k1')!.exit(0)
+    await r.sources.poll()
+    state = { ...state, runs: state.runs.map((x) => ({ ...x, coordinatorSessionId: 'sess_k2' })) }
+    const second = path.join(r.dir, 'rollout-k2.jsonl')
+    await fs.writeFile(
+      second,
+      lines(
+        codexEvent(o.carryAt, 'task_started'),
+        codexUser(o.carryAt, 'Continue where you left off'),
+        counted(o.carryAt + 500, [20, 5], [20, 5]),
+        codexEvent(o.secondAt, 'task_started'),
+        codexUser(o.secondAt, 'thanks, something else now'),
+        counted(o.secondAt + 500, [320, 35], [300, 30])
+      )
+    )
+    // The roll spawns `codex resume` with the carry-on as its argument, typing nothing
+    now = o.spawnAt
+    open('pty_k2', ['resume', 'th1', 'Continue where you left off'], note('session', 'sess_k2', { rolloutPath: second, rolledFrom: 'sess_k1' }))
+    if (o.personTypesAt !== undefined) {
+      now = o.personTypesAt
+      registry.write('pty_k2', 'hello?\r', { person: true })
+    }
+    if (o.secondTyped) {
+      now = o.secondAt - 100
+      registry.write('pty_k2', 'thanks, something else now\r', { person: true })
+    }
+    now = o.secondAt + 60_000
+    await r.sources.poll()
+    const spent = runTokensOf(state, 'run_1', r.store.spent())
+    r.sources.dispose()
+    return spent
+  }
+
+  it('takes a roll’s carry-on recorded three minutes after the spawn as the Host’s: the hold goes on to a person’s prompt', async () => {
+    const E = T0 + 10 * 60_000
+    const carried = await codexRoll({ spawnAt: E + 60_000, carryAt: E + 4 * 60_000, secondAt: E + 6 * 60_000, secondTyped: true })
+    expect(carried).toEqual({ coordinatorTokens: { input: 120, output: 15, total: 135 } })
+  })
+
+  it('takes the first prompt as a person’s when a person typed into the new tab before the carry-on was recorded', async () => {
+    const E = T0 + 10 * 60_000
+    const typed = await codexRoll({ spawnAt: E + 60_000, personTypesAt: E + 2 * 60_000, carryAt: E + 4 * 60_000, secondAt: E + 6 * 60_000, secondTyped: true })
+    expect(typed).toEqual({ coordinatorTokens: { input: 100, output: 10, total: 110 } })
+  })
+
+  it('ends the hold at a second prompt after the carry-on with no Host typing, however soon after the spawn', async () => {
+    const E = T0 + 10 * 60_000
+    const soon = await codexRoll({ spawnAt: E + 60_000, carryAt: E + 60_000 + 5000, secondAt: E + 60_000 + 20_000, secondTyped: false })
+    expect(soon).toEqual({ coordinatorTokens: { input: 120, output: 15, total: 135 } })
+  })
+
+  // What the audit asks (recorder.ts dispatchOfWithTurns): the turn a moment of a session fell in, from the lines read
+  // so far, and a read past a moment not read to yet
+  it('tells which turn a moment of a session fell in, and reads the session past a moment it has not read to', async () => {
+    let now = T0
+    const statusLines: Record<string, string> = {}
+    const r = await rig({ state: () => orch([], 'sess_k'), now: () => now, statusLines })
+    const transcript = path.join(r.dir, 'turns.jsonl')
+    await fs.writeFile(transcript, lines(claudeLine(T0 - 9000, 'msg_0', 1, 1), prompt(T0 + 1000, 'go'), claudeLine(T0 + 2000, 'msg_1', 1, 1)))
+    statusLines.sess_k = transcript
+    r.ptys.open('pty_k', note('session', 'sess_k'))
+    expect(r.sources.turnOf('sess_k', T0 + 5000)).toBeNull()
+    expect(r.sources.readPast('sess_nobody', T0 + 5000)).toBeNull()
+    now = T0 + 6000
+    const wait = r.sources.readPast('sess_k', T0 + 5000)
+    expect(wait).not.toBeNull()
+    await wait
+    expect(r.sources.turnOf('sess_k', T0 + 5000)).toBe(T0 + 1000)
+    // Before the first prompt read, the turn began no later than the first line read
+    expect(r.sources.turnOf('sess_k', T0 - 5000)).toBe(T0 - 9000)
+    expect(r.sources.turnOf('sess_k', T0 - 10_000)).toBeNull()
+    // Read from a moment past it: nothing to wait for
+    expect(r.sources.readPast('sess_k', T0 + 5000)).toBeNull()
+    expect(r.sources.readPast('sess_k', T0 + 7000)).not.toBeNull()
+    r.sources.dispose()
+  })
+
   it('keeps nothing a session spent for nobody, reads an ended session one last time, and lets go of it', async () => {
     let now = T0
     const r = await rig({ state: () => orch([dispatch('d1', 't1', 'sess_w')]), now: () => now })
@@ -426,5 +1045,43 @@ describe('createTokenSources', () => {
     expect(r.store.spent()).toEqual([{ sessionId: 'sess_w', dispatchId: 'd1', input: 10, output: 1 }])
     r.sources.dispose()
     expect(r.ptys.listeners() + r.procs.listeners()).toBe(0)
+  })
+})
+
+// Fix round 1, Minor 6: a text guard, as cliUsage.test.ts keeps on docs/cli.md. What the two paragraphs promise about a
+// finished run holds for every run, a run finished before this version included, and they are wrapped as the file is
+describe('docs/cli.md on how long a finished run’s sessions count', () => {
+  const paragraph = (doc: string, opening: string): string[] => {
+    const lines = doc.split(/\r?\n/)
+    const from = lines.findIndex((l) => l.startsWith(opening))
+    if (from < 0) throw new Error(`docs/cli.md has no paragraph opening ${opening}`)
+    const to = lines.findIndex((l, i) => i > from && l.trim() === '')
+    return lines.slice(from, to)
+  }
+  it('says when a run finished before this version ends, and keeps both paragraphs within 120 columns', async () => {
+    const { fileURLToPath } = await import('node:url')
+    const doc = await fs.readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), '../../../docs/cli.md'), 'utf8')
+    const tokens = paragraph(doc, '**`runs get` carries `tokens` and `coordinatorTokens`**')
+    const audit = paragraph(doc, '`audit list` prints the records newest first')
+    for (const p of [tokens, audit]) {
+      expect(p.join(' ')).toMatch(/finished before this version/)
+      // What ends the hold, in a terminal, a chat or Codex alike, and what does not (fix round 2)
+      expect(p.join(' ')).toMatch(/`astera sessions send`/)
+      expect(p.join(' ')).toMatch(/what Astera types itself/)
+      // A roll's carry-on, onto the same account or another, and the two minutes an older app's chats fall back to
+      expect(p.join(' ')).toMatch(/a roll's carry-on/)
+      expect(p.join(' ')).toMatch(/older Astera app/)
+      expect(p.join(' ')).toMatch(/two minutes/)
+      for (const line of p) expect(line.length, line).toBeLessThanOrEqual(120)
+    }
+  })
+  // Observe final review: who sent it is read from the caller's environment, as for every agent refusal
+  it('says a send ends the hold as a person’s prompt by the caller’s ASTERA_SESSION, which an agent can clear', async () => {
+    const { fileURLToPath } = await import('node:url')
+    const doc = await fs.readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), '../../../docs/cli.md'), 'utf8')
+    const send = paragraph(doc, '`sessions send` types `--text` into a terminal session').join(' ')
+    expect(send).toMatch(/a person's prompt/)
+    expect(send).toMatch(/`ASTERA_SESSION`/)
+    expect(send).toMatch(/clears it reads as a person/)
   })
 })

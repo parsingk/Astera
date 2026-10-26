@@ -23,6 +23,7 @@ import { ORCH_FIRE_TICK_MS } from '../core/orchestration/exec/dispatchLoop'
 import { pendingReportFileName, pendingReportsDirIn, serializePendingReport } from '../core/orchestration/pendingReports'
 import type { Lang } from '../core/i18n'
 import type { Account } from '../core/types'
+import { ENTER_QUIET_MS } from '../core/sessions/sessionDriver'
 
 const NOW = '2026-09-25T00:00:00.000Z'
 const NOW_MS = Date.parse(NOW)
@@ -95,6 +96,8 @@ interface RigOpts {
   /** Run_1 has a live coordinator (`coord-1`, a pty in the registry) with unread upward mail older than
    *  COORDINATOR_NUDGE_MS. */
   sleepingCoordinator?: boolean
+  /** The registry answers the coordinator's pty's last output: it draws for this many ms after the nudge is typed. */
+  coordinatorDrawsFor?: number
   /** Every restart Gate the tick asks for is refused (interruptStalledTask answers not interrupted). */
   refuseGates?: boolean
   /** Leftovers Task 1: no appPid seam, so the real liveAppPid over the profile's app.pid and the server's
@@ -191,10 +194,18 @@ async function rig(o: RigOpts = {}) {
   const server = { app: false, keeps: false, keepsOnly: [] as string[], lastPid: null as number | null, pidAsks: 0 }
   const coordinator = { busy: false as boolean | null }
   const typed: Array<[string, string]> = []
+  /** When each write reached typeInto (Date.now()), beside `typed`. */
+  const typedAt: number[] = []
   const typeInto = vi.fn((id: string, text: string) => {
     typed.push([id, text])
+    typedAt.push(Date.now())
     return true
   })
+  const drawsFor = o.coordinatorDrawsFor
+  const lastOutput =
+    drawsFor === undefined
+      ? {}
+      : { lastOutput: (p: string) => (p === 'pty-coord' && typedAt.length > 0 ? Math.min(Date.now(), typedAt[0] + drawsFor) : null) }
   /** While set, every settings read waits in `heldReads` until the test releases it. */
   const gateReads = { hold: false }
   const heldReads: Array<() => void> = []
@@ -294,6 +305,7 @@ async function rig(o: RigOpts = {}) {
     checks: { resumeSweep, stopForeignValidations, checking, accounts: async () => [ACCOUNT], loginStatus: async () => true, langNow: () => langNow, lang },
     startRepair,
     registry: {
+      ...lastOutput,
       sessionPty: (id) => (o.sleepingCoordinator && id === 'coord-1' ? 'pty-coord' : null),
       list: () =>
         o.openDispatchSpec ? [{ id: 'pty-live', pid: 1, alive: true, meta: { kind: 'session', id: 'ses_live', restore: {} } }] : []
@@ -378,6 +390,7 @@ async function rig(o: RigOpts = {}) {
     drainHook,
     coordinator,
     typed: () => typed,
+    typedAt: () => typedAt,
     gateReads,
     /** Releases the i-th held settings read (in the order they were asked). */
     releaseRead: (i: number) => heldReads[i](),
@@ -423,7 +436,7 @@ async function rig(o: RigOpts = {}) {
     statusOf: (id: string) => orch.state().tasks.find((t) => t.id === id)?.status,
     touch: async (id: string): Promise<void> => {
       const s = orch.state()
-      await orch.internalDeps().setState({ ...s, tasks: s.tasks.map((t) => (t.id === id ? { ...t, updatedAt: '2026-09-25T00:00:09.000Z' } : t)) })
+      await orch.internalDeps().setState({ ...s, tasks: s.tasks.map((t) => (t.id === id ? { ...t, updatedAt: new Date(NOW_MS + 9_000).toISOString() } : t)) })
     },
     gates: () => openGates(),
     openGateQuestion: () => openGates()[0]?.question ?? ''
@@ -1001,6 +1014,15 @@ describe('createHostDriving — review round 1', () => {
     await h.tickNow()
     expect(h.typed().map(([id]) => id)).toEqual(['coord-1', 'coord-1'])
     expect(h.typed()[0][1]).toMatch(/unread message/)
+  })
+  // Codex swallows an Enter that comes right after a long text (openai/codex#56982): the Host's nudge reads the pty's
+  // last output from its registry, so the Enter waits until the coordinator has drawn the nudge and gone quiet
+  it('the nudge’s Enter waits for the coordinator’s pty to draw it and go quiet', async () => {
+    const h = await rig({ sleepingCoordinator: true, coordinatorDrawsFor: 300 })
+    await h.load()
+    await h.tickNow()
+    expect(h.typed().map(([, t]) => t)).toEqual([expect.stringMatching(/unread message/), '\r'])
+    expect(h.typedAt()[1] - h.typedAt()[0]).toBeGreaterThanOrEqual(300 + ENTER_QUIET_MS)
   })
 })
 

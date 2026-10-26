@@ -120,8 +120,10 @@ export function createHostDriving(d: {
   checks: Pick<HostChecks, 'resumeSweep' | 'stopForeignValidations' | 'checking' | 'accounts' | 'loginStatus' | 'langNow' | 'lang'>
   /** The handover belt (N1): starts one open repair Dispatch that has no spec yet. */
   startRepair(a: { dispatchId: string }): void
-  /** `sessionExitCode` answers the loop's `sessionGone` (limits pass L1); optional for the test fakes. */
-  registry: Pick<PtyRegistry, 'sessionPty' | 'list'> & Partial<Pick<PtyRegistry, 'sessionExitCode' | 'lastPersonWrite'>>
+  /** `sessionExitCode` answers the loop's `sessionGone` (limits pass L1), `lastOutput` its nudge's Enter; optional for
+   *  the test fakes. */
+  registry: Pick<PtyRegistry, 'sessionPty' | 'list'> &
+    Partial<Pick<PtyRegistry, 'sessionExitCode' | 'lastPersonWrite' | 'lastOutput'>>
   /** The chat sessions' line processes, so `sessionAlive` sees a Run's external coordinator on a chat (spec E5).
    *  Optional for the test fakes. */
   procs?: Pick<ProcRegistry, 'list'>
@@ -405,6 +407,15 @@ export function createHostDriving(d: {
       const p = d.registry.sessionPty(id)
       return p === null ? null : (d.registry.lastPersonWrite?.(p) ?? null)
     },
+    // The nudge's Enter waits for the coordinator to have drawn it and gone quiet (openai/codex#56982)
+    ...(d.registry.lastOutput
+      ? {
+          lastOutputAt: (id: string) => {
+            const p = d.registry.sessionPty(id)
+            return p === null ? null : (d.registry.lastOutput?.(p) ?? null)
+          }
+        }
+      : {}),
     mayStart,
     log,
     nowMs: () => d.nowMs()

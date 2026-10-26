@@ -66,6 +66,18 @@ describe('createHostChats — the writer rule (spec §3.2)', () => {
     expect(n).toBe(2)
   })
 
+  // Observe deferred fix round 1, Important 1: a turn a person sent (a Slack reply) is written as a person's line, one the
+  // Host sends itself (a roll's carry-on, `sessions send`) as the Host's
+  it('writes a turn sent for a person as a person’s line, and any other as the Host’s', async () => {
+    const r = rig()
+    r.chats.adopt(r.entry())
+    await r.chats.send('c1', 'from the Host')
+    expect(r.registry.submittedBetween('p1', 0, Date.now() + 1)).toBe('host')
+    await new Promise((done) => setTimeout(done, 2))
+    await r.chats.send('c1', 'from Slack', undefined, { person: true })
+    expect(r.registry.submittedBetween('p1', 0, Date.now() + 1)).toBe('person')
+  })
+
   it('a turn goes through the Host adapter while it writes, and to the app chatSend while the app does', async () => {
     const r = rig()
     r.chats.adopt(r.entry())

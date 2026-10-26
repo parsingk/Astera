@@ -19,13 +19,13 @@ function fakeProc(pid = 11): RegistryProc & { sent: string[]; killed: boolean; e
   }
 }
 
-const harness = (proc = fakeProc()) => {
+const harness = (proc = fakeProc(), over: { marksWrites?: (socket: number) => boolean } = {}) => {
   const logs: string[] = []
   const broadcast: HostMessage[] = []
   const replies: HostMessage[] = []
   const registry = new ProcRegistry({ spawn: () => proc, log: (m) => logs.push(m) })
-  const handle = attachProcHost({ registry, broadcast: (m) => broadcast.push(m) })
-  const send = (m: ClientMessage): boolean => handle(m, (h) => replies.push(h))
+  const handle = attachProcHost({ registry, broadcast: (m) => broadcast.push(m), ...over })
+  const send = (m: ClientMessage, from?: { socket: number }): boolean => handle(m, (h) => replies.push(h), from)
   const spawn = (id = 'p1'): boolean =>
     send({ t: 'proc-spawn', id, file: 'codex', args: ['app-server'], opts: { cwd: 'D:/p', env: {} }, meta: { kind: 'chat', id: 'chat_1', restore: {} } })
   return { proc, logs, broadcast, replies, registry, send, spawn }
@@ -65,11 +65,37 @@ describe('attachProcHost', () => {
     h2.proc.exit(0)
     expect(h2.broadcast.at(-1)).not.toHaveProperty('stderrTail')
   })
+  it('proc-write marked typed is a person’s line', () => {
+    const h = harness()
+    h.spawn()
+    h.send({ t: 'proc-write', id: 'p1', line: '{"type":"user"}', typed: true })
+    expect(h.proc.sent).toEqual(['{"type":"user"}\n'])
+    expect(h.registry.submittedBetween('p1', 0, Date.now() + 1)).toBe('person')
+  })
+  // An app from before the marks says nothing of who wrote its lines, so the Host cannot tell the chat's turns by them;
+  // an app that marks them says so in its hello (HOST_YIELD_PERSON_WRITES)
+  it('proc-write from an app that does not say it marks a person’s lines leaves who began the chat’s turns unknown', () => {
+    const marks = new Map([
+      [1, true],
+      [2, false]
+    ])
+    const h = harness(fakeProc(), { marksWrites: (socket) => marks.get(socket) === true })
+    h.spawn()
+    h.send({ t: 'proc-write', id: 'p1', line: '{"type":"user"}', typed: true }, { socket: 1 })
+    expect(h.registry.submittedBetween('p1', 0, Date.now() + 1)).toBe('person')
+    expect(h.registry.writesUnmarked('p1')).toBe(false)
+    h.send({ t: 'proc-write', id: 'p1', line: '{"type":"user"}' }, { socket: 2 })
+    expect(h.proc.sent).toEqual(['{"type":"user"}\n', '{"type":"user"}\n'])
+    expect(h.registry.writesUnmarked('p1')).toBe(true)
+  })
   it('proc-write reaches stdin with a newline; proc-kill kills; proc-note merges', () => {
     const h = harness()
     h.spawn()
     h.send({ t: 'proc-write', id: 'p1', line: '{"id":1}' })
     expect(h.proc.sent).toEqual(['{"id":1}\n'])
+    // A line the app writes is a person's only when it says so (observe deferred fix round 2, Important a): its handshake,
+    // control lines and own turns are not
+    expect(h.registry.submittedBetween('p1', 0, Date.now() + 1)).toBe('host')
     h.send({ t: 'proc-note', id: 'p1', patch: { threadId: 't' } })
     expect(h.registry.list()[0].meta?.restore).toEqual({ threadId: 't' })
     h.send({ t: 'proc-kill', id: 'p1' })

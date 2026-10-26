@@ -1,4 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
+import { ENTER_QUIET_MS } from '../../../core/sessions/sessionDriver'
 
 // 모듈 싱글턴이라 테스트마다 새로 import해 상태(buffers·listeners·initialized)를 격리한다
 // — worktreeBus.test.ts와 같은 관례.
@@ -178,5 +179,52 @@ describe('discard', () => {
     const got: string[] = []
     mod.attach('s1', (d) => got.push(d))
     expect(got).toEqual(['new'])
+  })
+})
+
+// Codex swallows an Enter that comes right after a paste (openai/codex#56982), and the browser pane's send pressed Enter
+// 50 ms after its paste: the Enter now waits until the session has drawn the paste and gone quiet
+describe('pasteAndSubmit', () => {
+  const rig = () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    const writes: Array<[number, string, string]> = []
+    const pasted: string[] = []
+    ;(window as unknown as { api: Record<string, unknown> }).api.sessions = {
+      write: (id: string, data: string) => void writes.push([Date.now(), id, data])
+    }
+    mod.registerPaste('s1', (text) => void pasted.push(text))
+    return { writes, pasted }
+  }
+  afterEach(() => vi.useRealTimers())
+
+  it('pastes, then presses Enter once the session has drawn the paste and gone quiet', async () => {
+    const r = rig()
+    expect(mod.pasteAndSubmit('s1', 'a long batch')).toBe(true)
+    expect(r.pasted).toEqual(['a long batch'])
+    for (const t of [50, 180, 300]) {
+      await vi.advanceTimersByTimeAsync(t - Date.now())
+      emit({ sessionId: 's1', data: 'drawn' })
+    }
+    await vi.advanceTimersByTimeAsync(ENTER_QUIET_MS - 1)
+    expect(r.writes).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(r.writes).toEqual([[300 + ENTER_QUIET_MS, 's1', '\r']])
+  })
+
+  it('output of another session does not count as this one drawing the paste', async () => {
+    const r = rig()
+    mod.pasteAndSubmit('s1', 'a long batch')
+    await vi.advanceTimersByTimeAsync(50)
+    emit({ sessionId: 's2', data: 'elsewhere' })
+    await vi.advanceTimersByTimeAsync(400)
+    expect(r.writes).toEqual([])
+  })
+
+  it('answers false and writes nothing when no terminal is registered for the session', async () => {
+    const r = rig()
+    expect(mod.pasteAndSubmit('gone', 'x')).toBe(false)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(r.writes).toEqual([])
   })
 })

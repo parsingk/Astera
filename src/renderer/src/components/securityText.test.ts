@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9,7 +9,6 @@ import {
   AUDIT_LOGS_TITLE,
   COVERAGE_CLASSES,
   DECISIONS,
-  OBSERVE_READ_EVERY_MS,
   POLICIES_TITLE,
   RULE_ACTION_CHOICES,
   SECURITY_KEYS,
@@ -27,14 +26,26 @@ import {
   filterChoices,
   nextPageQuery,
   observeReadDue,
+  OBSERVE_READ_EVERY_MS,
   observeTargetOf,
   pageOf,
   periodSince,
+  afterObserveRead,
+  startObserveRead,
+  OBSERVE_RETRIES,
+  jobFilterView,
+  chooseJob,
+  auditScrollDue,
+  runDetailInstanceKey,
+  FOCUS_VALUE,
+  focusedFilters,
   recordTime,
   retentionSince,
   rowTime,
   ruleActionChoices,
   sessionLabel,
+  observeReadIsCurrent,
+  resetBodyKey,
   securityFailure,
   summaryOf,
   summarySince,
@@ -122,9 +133,9 @@ describe('securityText', () => {
   it('says each decision in words', () => {
     expect(DECISIONS.map((d) => decisionLabel(d, en))).toEqual(['Allowed', 'Would be denied', 'Unknown'])
     expect(decisionLabel('later', en)).toBe('later')
-    // The screen finding: "would be denied" said plainly, not as "a deny target"
     const said = (lang: (typeof LANGS)[number]): string => decisionLabel('would-deny', (k, p) => translate(lang, k, p))
-    expect([said('ko'), said('ja'), said('es')]).toEqual(['막혔을 것', '拒否されていたもの', 'Se denegaría'])
+    // The person's ruling D1 (2026-10-24): the Korean and Japanese labels say what the rules deny; English and Spanish stay
+    expect([said('ko'), said('ja'), said('es')]).toEqual(['거부 대상', '拒否対象', 'Se denegaría'])
   })
 
   // Design §9, the Host's COVERAGE
@@ -176,12 +187,15 @@ describe('securityText', () => {
   })
 
   // Fix round 1, ruling 4: the longest period is the records' whole retention (the store drops days before today−30)
-  it('starts a period at the local midnight of its first day, the longest as far back as records are kept', () => {
+  it('starts a period at the local midnight of its first day, the longest thirty calendar days', () => {
     const now = new Date(2026, 9, 23, 15, 30)
     expect(periodSince('today', now)).toBe(new Date(2026, 9, 23).toISOString())
     expect(periodSince('week', now)).toBe(new Date(2026, 9, 17).toISOString())
+    // a day boundary: just after midnight still counts today as the first of the thirty
+    expect(periodSince('month', new Date(2026, 9, 23, 0, 0, 1))).toBe(new Date(2026, 8, 24).toISOString())
     expect(retentionSince(now)).toBe(new Date(2026, 8, 23).toISOString())
-    expect(periodSince('month', now)).toBe(retentionSince(now))
+    // "Last 30 days" is today and the 29 before it, thirty calendar days, not thirty-one
+    expect(periodSince('month', now)).toBe(new Date(2026, 8, 24).toISOString())
   })
 
   // Fix round 1, I1: Run detail's count reads no further back than the Run or the retention, whichever is later
@@ -320,5 +334,153 @@ describe('securityText', () => {
     expect(wouldDenyLine({ allow: 3, wouldDeny: 2, unknown: 0, stoppedAtLimit: false }, en)).toBe(en('jobs.detail.wouldDeny', { count: 2 }))
     expect(wouldDenyLine({ allow: 3, wouldDeny: 0, unknown: 1, stoppedAtLimit: false }, en)).toBe(en('jobs.detail.wouldDenyNone'))
     expect(wouldDenyLine({ allow: 0, wouldDeny: 0, unknown: 0, stoppedAtLimit: false }, en)).toBeNull()
+  })
+})
+
+// The Job focus Run detail opens Audit Logs on is the Job filter's own choice, not a chip beside the filters
+describe('the Job focus', () => {
+  it('shows as the selected Job filter, and the focus is the Job filter, not another filter over it', () => {
+    const focus = { runId: 'run_1', name: 'Fix it' }
+    expect(focusedFilters({ jobId: 'job_9', decision: 'allow' }, focus)).toEqual({ decision: 'allow', runId: 'run_1' })
+    expect(focusedFilters({ jobId: 'job_9', runId: 'run_7' }, { jobId: 'job_2', name: 'x' })).toEqual({ jobId: 'job_2' })
+    expect(focusedFilters({ jobId: 'job_9' }, undefined)).toEqual({ jobId: 'job_9' })
+    expect(FOCUS_VALUE).not.toBe('')
+  })
+
+  const jobs = [
+    { id: 'job_1', runId: 'run_1' },
+    { id: 'job_2', runId: 'run_2' }
+  ]
+  const nameOf = (runId: string): string | undefined => (runId === 'run_1' ? 'Fix it' : undefined)
+  const labels = { all: 'All Jobs', focus: (name: string) => `Only ${name}` }
+
+  it('offers the focus as the Job filter’s selected choice, once, among the Jobs read', () => {
+    const v = jobFilterView({ focus: { runId: 'run_1', name: 'Fix it' }, filters: { jobId: 'job_9' }, jobs, runName: nameOf, labels })
+    expect(v.value).toBe(FOCUS_VALUE)
+    expect(v.items).toEqual([
+      { value: '', label: 'All Jobs' },
+      { value: FOCUS_VALUE, label: 'Only Fix it' },
+      { value: 'job_2', label: 'job_2' }
+    ])
+    const byJob = jobFilterView({ focus: { jobId: 'job_2', name: 'Job two' }, filters: {}, jobs, runName: nameOf, labels })
+    expect(byJob.items.map((i) => i.value)).toEqual(['', FOCUS_VALUE, 'job_1'])
+  })
+
+  it('shows the filter the person set when there is no focus', () => {
+    const v = jobFilterView({ focus: undefined, filters: { jobId: 'job_2' }, jobs, runName: nameOf, labels })
+    expect(v.value).toBe('job_2')
+    expect(v.items).toEqual([
+      { value: '', label: 'All Jobs' },
+      { value: 'job_1', label: 'Fix it' },
+      { value: 'job_2', label: 'job_2' }
+    ])
+    expect(jobFilterView({ focus: undefined, filters: {}, jobs, runName: nameOf, labels }).value).toBe('')
+  })
+
+  it('clears the focus when the Job filter is changed to another Job or to all Jobs, and keeps it when it is picked again', () => {
+    const f = { decision: 'allow' as const, jobId: 'job_9' }
+    const focus = { runId: 'run_1', name: 'Fix it' }
+    expect(chooseJob('job_3', focus, f)).toEqual({ clearFocus: true, filters: { decision: 'allow', jobId: 'job_3' } })
+    expect(chooseJob('', focus, f)).toEqual({ clearFocus: true, filters: { decision: 'allow' } })
+    expect(chooseJob(FOCUS_VALUE, focus, f)).toEqual({ clearFocus: false, filters: f })
+    expect(chooseJob('job_3', undefined, f)).toEqual({ clearFocus: false, filters: { decision: 'allow', jobId: 'job_3' } })
+    expect(chooseJob('', undefined, f)).toEqual({ clearFocus: false, filters: { decision: 'allow' } })
+  })
+})
+
+// Run detail's facts: one component per Run it shows, and a read that failed is not final
+describe('Run detail reads', () => {
+  it('is keyed by the Run it shows, and by its Runtime, so switching Runs never shows the last one’s tokens', () => {
+    expect(runDetailInstanceKey({ runId: 'run_1' })).not.toBe(runDetailInstanceKey({ runId: 'run_2' }))
+    expect(runDetailInstanceKey({ runId: 'run_1' })).not.toBe(runDetailInstanceKey({ runId: 'run_1', runtimeId: 'rt_1' }))
+    expect(runDetailInstanceKey({ runId: 'run_1', runtimeId: 'rt_1' })).toBe(runDetailInstanceKey({ runId: 'run_1', runtimeId: 'rt_1' }))
+  })
+
+  const key = { target: 'run_1', state: 'completed|3/3' }
+
+  it('keeps a good read as it is: nothing is read again until the Run moves', () => {
+    const first = startObserveRead(null, key, 1000)
+    const done = afterObserveRead(first, true)
+    expect(done.retryIn).toBeNull()
+    expect(observeReadDue(done.last, key, 1000 + 5000)).toBeNull()
+  })
+
+  it('tries a failed read again once the wait is over, up to the cap, then only when the Run moves', () => {
+    let last = startObserveRead(null, key, 1000)
+    const retries: Array<number | null> = []
+    for (let i = 0; i < OBSERVE_RETRIES + 1; i++) {
+      const out = afterObserveRead(last, false)
+      retries.push(out.retryIn)
+      // the retry reads the same state at the end of the wait, which the read finds due
+      expect(observeReadDue(out.last, key, last.at + 5000)).toBe(OBSERVE_READ_EVERY_MS - 5000)
+      expect(observeReadDue(out.last, key, last.at + OBSERVE_READ_EVERY_MS)).toBe(0)
+      last = startObserveRead(out.last, key, last.at + OBSERVE_READ_EVERY_MS)
+    }
+    expect(retries).toEqual([OBSERVE_READ_EVERY_MS, OBSERVE_READ_EVERY_MS, OBSERVE_READ_EVERY_MS, null])
+  })
+
+  it('counts failures per Run, and a good read starts the count again', () => {
+    const failed = afterObserveRead(startObserveRead(null, key, 0), false).last
+    expect(startObserveRead(failed, key, 40_000).failures).toBe(1)
+    expect(startObserveRead(failed, { target: 'run_2', state: 'x' }, 40_000).failures).toBe(0)
+    const good = afterObserveRead(startObserveRead(failed, key, 40_000), true).last
+    expect(startObserveRead(good, { ...key, state: 'later' }, 80_000).failures).toBe(0)
+  })
+})
+
+// "Today and the 29 before" is counted on the person's clock: where the local day and the UTC day differ
+describe('the 30 days on the person’s clock', () => {
+  const was = process.env.TZ
+  afterEach(() => {
+    if (was === undefined) delete process.env.TZ
+    else process.env.TZ = was
+  })
+
+  it('starts at the local midnight 29 days back where the local day is behind UTC', () => {
+    process.env.TZ = 'America/Los_Angeles'
+    // 2026-10-24T03:00Z is still the evening of the 23rd in Los Angeles (UTC-7)
+    expect(periodSince('month', new Date('2026-10-24T03:00:00Z'))).toBe('2026-09-24T07:00:00.000Z')
+    expect(periodSince('today', new Date('2026-10-24T03:00:00Z'))).toBe('2026-10-23T07:00:00.000Z')
+  })
+
+  it('starts at the local midnight 29 days back where the local day is ahead of UTC', () => {
+    process.env.TZ = 'Asia/Seoul'
+    // 2026-10-23T16:00Z is already the 24th at 01:00 in Seoul (UTC+9)
+    expect(periodSince('month', new Date('2026-10-23T16:00:00Z'))).toBe('2026-09-24T15:00:00.000Z')
+    expect(periodSince('today', new Date('2026-10-23T16:00:00Z'))).toBe('2026-10-23T15:00:00.000Z')
+  })
+})
+
+describe('the start over confirmation', () => {
+  it('says recording stays off after the repair of a damaged file, and that the mode stays otherwise', () => {
+    expect(resetBodyKey(true)).toBe('settings.security.reset.bodyDamaged')
+    expect(resetBodyKey(false)).toBe('settings.security.reset.body')
+    expect(en('settings.security.reset.bodyDamaged')).toMatch(/nothing is recorded/)
+    // The banner says nothing is recorded while damaged, never that recording comes back by itself after the repair
+    for (const lang of ['en', 'ko', 'ja', 'es'] as const) {
+      const banner = translate(lang, 'settings.security.damaged')
+      expect(banner, lang).not.toMatch(/paused|until it is repaired|고쳐질 때까지|修復されるまで|Mientras no se repare/)
+    }
+    expect(en('settings.security.damaged')).toMatch(/nothing is recorded while it is damaged/i)
+  })
+})
+
+describe('an observe read that finishes after Run detail closed', () => {
+  it('is dropped, as is one for another target, so no state is set and no retry is scheduled', () => {
+    expect(observeReadIsCurrent(true, 'run_1', 'run_1')).toBe(true)
+    expect(observeReadIsCurrent(false, 'run_1', 'run_1')).toBe(false)
+    expect(observeReadIsCurrent(true, 'run_2', 'run_1')).toBe(false)
+  })
+})
+
+// Found on the dev app: Run detail's link opened Security & Access at Policies, the Run's calls a scroll below
+describe('bringing Audit Logs into view for a focus', () => {
+  it('is due once per focus, after the rules have loaded, and never without a focus', () => {
+    const run = { runId: 'run_1', name: 'Fix it' }
+    expect(auditScrollDue(run, false, null)).toBeNull()
+    expect(auditScrollDue(run, true, null)).toBe('run:run_1')
+    expect(auditScrollDue(run, true, 'run:run_1')).toBeNull()
+    expect(auditScrollDue({ jobId: 'job_2', name: 'Other' }, true, 'run:run_1')).toBe('job:job_2')
+    expect(auditScrollDue(undefined, true, null)).toBeNull()
   })
 })

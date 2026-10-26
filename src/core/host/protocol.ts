@@ -256,6 +256,10 @@ export const HOST_YIELD_ORCH_STATE_LATEST = 'orch-state-latest'
  *  (remote runtime design §2.6, DC-3). An older app sends none and keeps recovering, and the Host then recovers
  *  nothing while it is attached. */
 export const HOST_YIELD_RECOVERY = 'recovery'
+/** `hello.yields` value: this app marks a person's turn line in `proc-write` (`typed`), so the Host tells a chat's turns
+ *  by them. An older app sends none and marks nothing: the Host reads the turns of a chat it writes to as unknown, so
+ *  two minutes after a Run's or Dispatch's end stand in for them, as before the marks. */
+export const HOST_YIELD_PERSON_WRITES = 'person-writes'
 /** The shortest gap between two `orch-state` pushes to one client that reads the latest (above): about
  *  ten a second. The first push after a quiet spell goes out at once. */
 export const ORCH_STATE_PUSH_MS = 100
@@ -364,8 +368,10 @@ export type ClientMessage =
    *  and shellSpawn in core/run/shell.ts for the win32 case that produces a string). */
   | { t: 'pty-spawn'; id: string; file: string; args: string[] | string; opts: PtyOpenOptions; meta?: PtyMeta }
   /** `typed`: a person typed this in the tab (not the app's own write: a schedule, a Slack reply, a roll's prompt), which
-   *  gives this machine the pty's size when a controller had it (registry `sizeOwner`). An older app sends none. */
-  | { t: 'pty-write'; id: string; data: string; typed?: true }
+   *  gives this machine the pty's size when a controller had it (registry `sizeOwner`). `person`: a person's words sent
+   *  from elsewhere (a Slack reply), which do not take the size. Either makes an Enter in it a person's prompt (observe
+   *  deferred fix round 2, Important a); with neither it is the app's own delivery. An older app sends neither. */
+  | { t: 'pty-write'; id: string; data: string; typed?: true; person?: true }
   | { t: 'pty-resize'; id: string; cols: number; rows: number }
   | { t: 'pty-kill'; id: string }
   | { t: 'pty-pause'; id: string }
@@ -379,8 +385,11 @@ export type ClientMessage =
   /** A stdio child that speaks lines — a chat session's `codex app-server` or `claude` (chat-sessions
    *  design §6.5). `args` is always an array: nothing here goes through a shell. */
   | { t: 'proc-spawn'; id: string; file: string; args: string[]; opts: ProcOpenOptions; meta?: PtyMeta }
-  /** One line to the process's stdin; the Host appends the newline. */
-  | { t: 'proc-write'; id: string; line: string }
+  /** One line to the process's stdin; the Host appends the newline. `typed`: the turn a person sent (the chat composer,
+   *  a Slack reply), never a handshake, control or the app's own turn: the Host tells a person's prompt by it (observe
+   *  deferred fix round 2, Important a). An older app sends none and says so by leaving HOST_YIELD_PERSON_WRITES out of
+   *  its hello: the turns of a chat it writes to are then not known. */
+  | { t: 'proc-write'; id: string; line: string; typed?: true }
   | { t: 'proc-kill'; id: string }
   /** Same contract as pty-note, for a line process. */
   | { t: 'proc-note'; id: string; patch: Record<string, unknown> }

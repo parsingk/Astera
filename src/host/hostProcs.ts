@@ -135,9 +135,9 @@ export function createHostProcs(d: HostProcsDeps): HostProcs {
         }
       },
       mayWrite: () => d.mayWrite(procId),
-      write(line) {
+      write(line, by) {
         if (!gate('write')) throw new NotWriterError(procId)
-        d.registry.write(procId, line)
+        d.registry.write(procId, line, by)
       },
       kill() {
         d.registry.kill(procId)

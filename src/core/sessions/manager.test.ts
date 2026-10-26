@@ -246,6 +246,27 @@ describe('SessionManager', () => {
     expect(spawned[0].pty.written).toEqual(['ls\r'])
   })
 
+  // 스케줄러·롤링·Slack 의 Enter 는 에이전트가 글자를 다 그리고 조용해진 뒤에 간다(sessionDriver.ts)
+  it('pty 가 마지막으로 무언가 출력한 시각을 기억한다', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(5000)
+      const { manager, spawned } = setup()
+      const info = manager.spawn({ account, cwd: process.cwd() })
+      expect(manager.lastOutput(info.id)).toBeNull()
+      spawned[0].pty.dataCb('hello')
+      expect(manager.lastOutput(info.id)).toBe(5000)
+      vi.setSystemTime(7000)
+      manager.write(info.id, 'x')
+      expect(manager.lastOutput(info.id)).toBe(5000)
+      spawned[0].pty.dataCb('x')
+      expect(manager.lastOutput(info.id)).toBe(7000)
+      expect(manager.lastOutput('nope')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('미확인 바이트가 highWater를 넘으면 pause, ack로 lowWater 아래로 내려가면 resume', () => {
     const { manager, spawned } = setup(100, 20)
     const info = manager.spawn({ account, cwd: process.cwd() })

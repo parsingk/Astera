@@ -94,24 +94,24 @@ function judgeCommand(c: CommandFacts, p: AuditPolicy): Verdict | null {
 }
 
 /**
- * What the rules would have done with a call (design §7, revised after the final review). Unknown when the resolver
- * could not name it, which it cannot when any command of the line is one it does not know; otherwise the headline and
- * every command of the line are each judged in their own place. One that cannot be told (a write or delete with no
- * place, where the place decides) makes the call `unknown`. Else the first one that would be denied makes it
- * `would-deny` with its rule, a compound (heuristic) line too: agents push in compound lines, and the preview errs toward
- * flagging them. A `scripted` line is the exception, `unknown`: a command inside a loop or a conditional may not have
- * run at all. Else the headline's verdict stands. `ruleId` names the rule that decided, and is left out when `otherwise`
- * did, when nothing could, or when a write with no place got the same decision from a different rule in each place.
+ * What the rules would have done with a call (design §7, revised after the final review and again on 2026-10-24). The
+ * headline and every command of the line are each judged in their own place, and a denied command is denied wherever in
+ * the line it sits: the first one that would be denied, headline first and then in line order, makes the call
+ * `would-deny` with its rule, though the line is compound (agents push in compound lines, and the preview errs toward
+ * flagging them), has control flow, runs a script or a command the resolver does not know, or was cut short. Else the
+ * call is `unknown` when the resolver could not name all of it (`confidence` unknown) or one command cannot be told (a
+ * write or delete with no place, where the place decides). Else the headline's verdict stands. `ruleId` names the rule
+ * that decided, and is left out when `otherwise` did, or when a write with no place got the same decision from a
+ * different rule in each place.
  */
 export function decide(
-  record: Pick<ResolvedAction, 'action' | 'insideProject' | 'confidence' | 'commands' | 'scripted'>,
+  record: Pick<ResolvedAction, 'action' | 'insideProject' | 'confidence' | 'commands'>,
   p: AuditPolicy
 ): { decision: AuditDecision; ruleId?: string } {
-  if (record.confidence === 'unknown') return { decision: 'unknown' }
   const verdicts = [record, ...(record.commands ?? [])].map((c) => judgeCommand(c, p))
-  if (verdicts.some((v) => v === null)) return { decision: 'unknown' }
-  const denied = verdicts.find((v) => v!.decision === 'would-deny')
-  if (denied) return record.scripted === true ? { decision: 'unknown' } : denied
+  const denied = verdicts.find((v) => v?.decision === 'would-deny')
+  if (denied) return denied
+  if (record.confidence === 'unknown' || verdicts.some((v) => v === null)) return { decision: 'unknown' }
   return verdicts[0]!
 }
 
@@ -127,13 +127,10 @@ const SCOPES: readonly string[] = ['inside-project', 'outside-project']
 const keptDamage = new Map<string, string>()
 
 /** The file was read but holds no policy. Its bytes are kept beside it, so starting over with the starter rules may write
- *  over it (`policies-rules-reset`, the repair); `mode` is the one it names, else compatibility. A file that could not
- *  be read throws plain RepairNeeded instead, and nothing writes over that one. */
+ *  over it (`policies-rules-reset`, the repair), in the mode sessions have been starting in meanwhile (compatibility). A
+ *  file that could not be read throws plain RepairNeeded instead, and nothing writes over that one. */
 export class AuditPolicyDamaged extends RepairNeeded {
-  constructor(
-    file: string,
-    readonly mode: AuditMode
-  ) {
+  constructor(file: string) {
     super(`${file} is damaged; a copy was kept beside it`, file)
   }
 }
@@ -181,9 +178,28 @@ export async function readAuditPolicy(profileDir: string, o: { keepDamaged?: boo
       keptDamage.set(file, hash)
       await keepDamaged(file, read.text)
     }
-    throw new AuditPolicyDamaged(FILE, modeOf(parsed))
+    throw new AuditPolicyDamaged(FILE)
   }
   return p
+}
+
+/** Whether the damaged file's bytes are kept beside it: a copy of exactly this text is there, or could be made now. The
+ *  repair starts over only when it is, since what it writes over would be gone otherwise. Never rejects. */
+export async function damageIsKept(profileDir: string): Promise<boolean> {
+  const file = profilePaths(profileDir).auditPolicy
+  const read = await readStoreFile(file)
+  if (read.kind !== 'text') return false
+  const dir = path.dirname(file)
+  const has = async (): Promise<boolean> => {
+    for (const n of await fs.readdir(dir).catch(() => [] as string[])) {
+      if (!n.startsWith(`${path.basename(file)}.`) || !n.endsWith('.bak')) continue
+      if ((await fs.readFile(path.join(dir, n), 'utf8').catch(() => null)) === read.text) return true
+    }
+    return false
+  }
+  if (await has()) return true
+  await keepDamaged(file, read.text)
+  return has()
 }
 
 /** Writes the rules and mode atomically. */

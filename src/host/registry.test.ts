@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { LAST_SCREEN_WITHIN_MS, PtyRegistry, SCROLLBACK_CHARS, DEAD_ENTRIES_KEPT, ENDED_SESSIONS_KEPT, ENDED_SESSION_CODES_KEPT, EXITED_RETAIN_MS, EXITED_RINGS_MAX, EXITED_RING_BYTES_MAX, EXITED_TERMINAL_BYTES, type PtyReplay, type RegistryPty } from './registry'
+import { LAST_SCREEN_WITHIN_MS, PtyRegistry, SCROLLBACK_CHARS, DEAD_ENTRIES_KEPT, ENDED_SESSIONS_KEPT, ENDED_SESSION_CODES_KEPT, EXITED_RETAIN_MS, EXITED_RINGS_MAX, EXITED_RING_BYTES_MAX, EXITED_TERMINAL_BYTES, SUBMISSIONS_KEPT, type PtyReplay, type RegistryPty } from './registry'
 import type { PtyMeta } from '../core/host/protocol'
 import { RING_EVENT_COST } from './ptyRing'
 
@@ -111,6 +111,23 @@ describe('PtyRegistry', () => {
     expect(r.lastWrite('nope')).toBe(null)
   })
 
+  // `sessions send` waits for the TUI to have drawn the text and gone quiet before its Enter (sessionDriver.ts)
+  it('remembers when a pty last printed anything', () => {
+    let clock = 1000
+    const pty = fakePty()
+    const r = new PtyRegistry({ spawn: () => pty, log: () => {}, now: () => clock })
+    r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    expect(r.lastOutput('p1')).toBe(null)
+    pty.emit('hello')
+    expect(r.lastOutput('p1')).toBe(1000)
+    clock = 2500
+    r.write('p1', 'x')
+    expect(r.lastOutput('p1')).toBe(1000)
+    pty.emit('x')
+    expect(r.lastOutput('p1')).toBe(2500)
+    expect(r.lastOutput('nope')).toBe(null)
+  })
+
   // The app's xterm writes its own reports into the pty — a focus change, the answer to a query the
   // agent's TUI sent. They reach the pty (the TUI asked for them), but nobody typed them.
   it('a write of only terminal reports reaches the pty but is not input; a keystroke is', () => {
@@ -152,6 +169,63 @@ describe('PtyRegistry', () => {
     r.write('p1', 'prompt\r')
     expect(r.lastPersonWrite('p1')).toBe(2000)
     expect(r.lastPersonWrite('nope')).toBe(null)
+  })
+
+  // Observe deferred fix round 1, Important 1: a prompt in a transcript does not say who typed it, so the pty keeps who
+  // sent each of its last submissions (a write with an Enter in it): a person's keys, or the Host's own typing
+  it('tells who sent the latest submission in a span, a person or the Host, and keeps only the last few', () => {
+    let clock = 1000
+    const r = new PtyRegistry({ spawn: () => fakePty(), log: () => {}, now: () => clock })
+    r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    r.write('p1', 'Your Run has 1 unread message(s).')
+    clock = 1100
+    r.write('p1', '\r')
+    clock = 2000
+    r.write('p1', 'a', { person: true })
+    clock = 2100
+    r.write('p1', '\r', { person: true })
+    expect(r.submittedBetween('p1', 0, 1500)).toBe('host')
+    expect(r.submittedBetween('p1', 1100, 1500)).toBeNull()
+    expect(r.submittedBetween('p1', 1500, 2050)).toBeNull()
+    expect(r.submittedBetween('p1', 0, 3000)).toBe('person')
+    expect(r.submittedBetween('nope', 0, 3000)).toBeNull()
+    for (let i = 0; i < SUBMISSIONS_KEPT; i++) {
+      clock = 5000 + i
+      r.write('p1', '\r')
+    }
+    expect(r.submittedBetween('p1', 0, 3000)).toBeNull()
+  })
+
+  // Fix round 4: a roll's new session takes its first prompt as the Host's carry-on unless a person typed before it, so
+  // the pty is asked whether a person submitted anything in a span, apart from who submitted the latest. Its spawn notes
+  // nothing: the carry-on may be recorded minutes after it
+  it('tells whether a person submitted anything in a span, and notes nothing at a roll’s spawn', () => {
+    let clock = 1000
+    const r = new PtyRegistry({ spawn: () => fakePty(), log: () => {}, now: () => clock })
+    r.open({ id: 'p1', file: 'codex', args: ['resume', 'th', 'Continue where you left off'], opts, meta: meta({ kind: 'session', id: 's2', restore: { rolledFrom: 's1' } }) })
+    expect(r.submittedBetween('p1', 0, 2000)).toBeNull()
+    clock = 1500
+    r.write('p1', 'hi\r', { person: true })
+    clock = 1800
+    r.write('p1', 'nudge\r')
+    expect(r.submittedBetween('p1', 0, 2000)).toBe('host')
+    expect(r.personSubmittedBetween('p1', 0, 2000)).toBe(true)
+    expect(r.personSubmittedBetween('p1', 1500, 2000)).toBe(false)
+    expect(r.personSubmittedBetween('nope', 0, 2000)).toBe(false)
+  })
+
+  // Fix round 2, Important a: an app's own delivery (a schedule, a roll's prompt) still holds a finished Run's sessions
+  // open as before, but its Enter is not a person's prompt
+  it('counts an app’s own delivery toward lastPersonWrite, but not as a person’s submission', () => {
+    let clock = 1000
+    const r = new PtyRegistry({ spawn: () => fakePty(), log: () => {}, now: () => clock })
+    r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    r.write('p1', 'status\r', { person: true, delivery: true })
+    expect(r.lastPersonWrite('p1')).toBe(1000)
+    expect(r.submittedBetween('p1', 0, 2000)).toBe('host')
+    clock = 1500
+    r.write('p1', 'hi\r', { person: true })
+    expect(r.submittedBetween('p1', 0, 2000)).toBe('person')
   })
 
   // A message for a session that has gone is ordinary, not exceptional: the app may have sent it

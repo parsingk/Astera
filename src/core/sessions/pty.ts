@@ -4,9 +4,10 @@ export interface PtyLike {
   pid: number
   onData(cb: (data: string) => void): void
   onExit(cb: (e: { exitCode: number }) => void): void
-  /** `by.typed`: a person typed this in the tab, not the app's own write. Only a pty behind the Host reads it (it gives
-   *  this machine the size back from a controller); node-pty's ignores it. */
-  write(data: string, by?: { typed: true }): void
+  /** `by.typed`: a person typed this in the tab, not the app's own write. `by.person`: a person's words sent from
+   *  elsewhere (a Slack reply). Only a pty behind the Host reads them (`typed` gives this machine the size back from a
+   *  controller; either makes an Enter a person's prompt, observe deferred fix round 2); node-pty's ignores them. */
+  write(data: string, by?: { typed?: true; person?: true }): void
   resize(cols: number, rows: number): void
   kill(): void
   pause(): void

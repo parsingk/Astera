@@ -44,7 +44,11 @@ export async function auditCommand<R extends object>(a: {
   /** The request id this invocation carries; it goes on the read itself, not on the profile lookup. */
   request: string | undefined
   call: Call<R>
+  /** Run in an agent's shell (`ASTERA_SESSION` is set): the Host refuses it every audit command (5), so the command goes
+   *  as it is, with no flag checked and no name looked up first, or a name that matches nothing would answer 4 before it. */
+  agentSession?: boolean
 }): Promise<R | Answer> {
+  if (a.agentSession === true) return a.call(a.cmd, {}, a.request)
   const sent: Record<string, unknown> = {}
   for (const [flag, key, hostKey] of FILTERS) {
     if (a.args[key] === undefined) continue

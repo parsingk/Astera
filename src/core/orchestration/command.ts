@@ -601,10 +601,11 @@ export interface OrchServerDeps {
   /** A terminal session's screen, rendered, by the app's session id, with up to `lines` rows of
    *  scrollback — empty once it has ended, because the scrollback goes with it. */
   readSession?(id: string, lines: number): Promise<SessionScreen>
-  /** Types into a terminal session by the app's session id, then presses Enter 150ms later when
-   *  `enter` (ptyDriver's convention), one delivery at a time per session. A write to one that has
-   *  ended is dropped by the registry, as every write is. */
-  sendSession?(id: string, text: string, enter: boolean): Promise<void>
+  /** Types into a terminal session by the app's session id, then presses Enter when `enter` once the session has
+   *  shown the text and gone quiet (ptyDriver's convention), one delivery at a time per session. A write to one that has
+   *  ended is dropped by the registry, as every write is. `by.person`: a person sent it, written marked as a person's
+   *  (observe deferred fix round 2, Minor b). */
+  sendSession?(id: string, text: string, enter: boolean, by?: { person: true }): Promise<void>
   /** A chat session's last `turns` turns, oldest first, from the transcript or rollout file its agent
    *  CLI writes (core/sessions/chatRead.ts). Host-injected, beside the three above. */
   readChat?(id: string, turns: number): Promise<ChatTurn[]>
@@ -617,8 +618,9 @@ export interface OrchServerDeps {
   /** One turn into a chat session. With the app attached the app delivers it through its session
    *  driver (the scheduler's and Slack's), so its turn state stays its own, and refuses while a card
    *  is open. With no app the Host writes the adapter's own bytes to the process itself
-   *  (host/orchDeps.ts `chatSend`). Either way one at a time per session. */
-  chatSend?(id: string, text: string): Promise<ChatSendResult>
+   *  (host/orchDeps.ts `chatSend`). Either way one at a time per session. `by.person`: a person sent it (a person's
+   *  `sessions send`, a Slack reply), written marked as a person's line (observe deferred fix round 2). */
+  chatSend?(id: string, text: string, by?: { person: true }): Promise<ChatSendResult>
   /** The open prompts, from the process that is each session's writer (chat takeover §3.5). The Host
    *  answers its own writer sessions and asks an attached app for the rest; `complete` is false when the
    *  app could not be asked. The app answers every session it holds, complete. */
@@ -4920,6 +4922,10 @@ export async function handleCommand(
       const fromMcp = caller.role === 'mcp'
       const fromAgent =
         (caller.sessionId !== '' && caller.sessionId !== APP_CALLER && caller.sessionId !== HOST_CALLER) || fromMcp
+      // A person's send (a shell, the app) is a person's prompt, written marked down to the pty or process: it ends what a
+      // finished Run's or an ended attempt's session still holds, and an agent's or the Host's does not (observe deferred
+      // fix round 2, Minor b)
+      const by = !fromAgent && caller.sessionId !== HOST_CALLER ? ({ person: true } as const) : undefined
       if (session.kind === 'terminal' && fromAgent && !resuming && deps.sessionTurn) {
         const now = await deps.sessionTurn(id)
         if (now !== null && now.alive && now.state === 'waiting' && now.prompt !== null)
@@ -4995,7 +5001,7 @@ export async function handleCommand(
       // 앱이 붙어 있으면 앱의 세션 드라이버로, 없으면 Host 가 어댑터의 바이트를 직접 쓴다(orchDeps 의
       // chatSend). 카드가 열려 있으면 앱이 거절한다 — 그 답은 앱에서 사람이 한다(R4.3).
       if (session.kind === 'chat') {
-        const r = await deps.chatSend(id, text as string)
+        const r = await deps.chatSend(id, text as string, by)
         if (!r.sent && 'reason' in r)
           return conflict(`Astera does not hold ${id} right now (it may still be taking its sessions back); nothing was sent, try again in a moment`)
         if (!r.sent)
@@ -5007,7 +5013,7 @@ export async function handleCommand(
       }
       const enter = args.noEnter !== true
       // 붙여 넣고 Enter 를 치는 약속(ptyDriver)과 세션마다 한 번에 하나씩은 Host 가 지킨다.
-      await deps.sendSession(id, text as string, enter)
+      await deps.sendSession(id, text as string, enter, by)
       if (waitFor) return okBody({ id, sent: true, enter, turn: await pollTurn(waitFor, timeoutMs) })
       return okBody({ id, sent: true, enter })
     }

@@ -25,7 +25,3 @@ export function isWaitingOnDialog(screen: string): boolean {
   if (looksLikeChoicePrompt(screen)) return true
   return CODEX_CHOICE_CURSOR_RE.test(stripAnsi(screen))
 }
-
-/** How long to wait between the paste and the Enter. The paste has to be through the terminal and
- *  into the agent's input box before the Enter lands, or the Enter submits an empty prompt. */
-export const POST_PASTE_SUBMIT_DELAY_MS = 50

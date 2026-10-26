@@ -210,6 +210,7 @@ function localTime(iso: unknown): string {
   return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`
 }
 
+/** Terse column heads, not the screen's labels (en.ts `settings.security.coverage.class.*`): the CLI prints words a script reads. */
 const COVERAGE_CLASSES = [
   ['shell', 'shell'],
   ['file-read', 'file read'],
@@ -269,14 +270,38 @@ const AUDIT_LIST_REPEATED: ReadonlyArray<readonly [string, string]> = [
   ['limit', 'limit']
 ]
 
-/** A flag's value as a shell reads it back: bare when it is plain, else in double quotes (a name with a space, `git.*`). */
-const flagValue = (v: unknown): string => {
-  const s = String(v)
-  return /^[\w@%+=:,./-]+$/.test(s) ? s : JSON.stringify(s)
+export type ShellFamily = 'powershell' | 'posix'
+
+/** The shell a pasted line is read by: PowerShell on Windows, unless the environment names a POSIX one (Git Bash sets
+ *  MSYSTEM; a `SHELL` ending in sh, as bash, zsh or dash). Elsewhere always a POSIX shell. */
+export const shellOf = (platform: NodeJS.Platform = process.platform, env: Record<string, string | undefined> = process.env): ShellFamily => {
+  if (platform !== 'win32') return 'posix'
+  if ((env.MSYSTEM ?? '') !== '') return 'posix'
+  return /(^|[\\/])(ba|z|da|k|fi|a)?sh(\.exe)?$/i.test(env.SHELL ?? '') ? 'posix' : 'powershell'
 }
 
-/** `args`: the flags the command was typed with, as the parser keys them, for an answer that names how to ask again. */
-export function humanFor(cmd: string, data: Record<string, unknown>, args: Record<string, unknown> = {}): string | null {
+/** A flag's value as the shell it is pasted into reads it back: bare when it is plain, else in single quotes, which no
+ *  shell expands (`$HOME` stays text). A quote inside is doubled in PowerShell (which counts the curly single quotes as
+ *  quotes too), and closed, escaped and reopened in a POSIX shell. A comma or a percent sign is not plain: PowerShell reads
+ *  the one as an array, cmd the other as a variable; a leading `@` is splatting there. */
+export const flagValue = (v: unknown, shell: ShellFamily = shellOf()): string => {
+  const s = String(v)
+  if (/^[A-Za-z0-9._:/=+][A-Za-z0-9._:/@=+-]*$/.test(s)) return s
+  return shell === 'powershell' ? `'${s.replace(/['‘’‚‛]/g, '$&$&')}'` : `'${s.replaceAll("'", "'\\''")}'`
+}
+
+/** A value the parser (cliArgs.ts) cannot take as a flag's value whatever the quoting: `-` is stdin, `--…` the next flag. */
+const unpassable = (s: string): boolean => s === '-' || s.startsWith('--')
+
+/** `args`: the flags the command was typed with, as the parser keys them, for an answer that names how to ask again;
+ *  `shell`, the family a hint is quoted for (this machine's). The CLI's words differ from the screen's (strings in
+ *  en.ts) for decisions, coverage classes and levels: they are the flag words and terse column heads a script reads back. */
+export function humanFor(
+  cmd: string,
+  data: Record<string, unknown>,
+  args: Record<string, unknown> = {},
+  shell: ShellFamily = shellOf()
+): string | null {
   switch (cmd) {
     // Observe mode design §12: a row per call, its time on the person's clock and its action as a phrase. Under the table,
     // the flags that ask for the next page: the filters that were used, then where it starts.
@@ -290,10 +315,11 @@ export function humanFor(cmd: string, data: Record<string, unknown>, args: Recor
             )
       const next = data.next !== null && typeof data.next === 'object' ? (data.next as { until?: unknown; beforeId?: unknown }) : null
       if (next === null) return table
-      const again = AUDIT_LIST_REPEATED.flatMap(([key, flag]) =>
-        typeof args[key] === 'string' || typeof args[key] === 'number' ? [`--${flag} ${flagValue(args[key])}`] : []
-      )
-      return [table, '', ['more:', ...again, `--until ${str(next.until)} --before-id ${str(next.beforeId)}`].join(' ')].join('\n')
+      const used = AUDIT_LIST_REPEATED.filter(([key]) => typeof args[key] === 'string' || typeof args[key] === 'number')
+      const left = used.filter(([key]) => unpassable(String(args[key])))
+      const again = used.filter((u) => !left.includes(u)).map(([key, flag]) => `--${flag} ${flagValue(args[key], shell)}`)
+      const note = left.length === 0 ? [] : [`(${left.map(([, flag]) => `--${flag}`).join(', ')} is not repeated below: its value cannot be given on the command line)`, '']
+      return [table, '', ...note, ['more:', ...again, `--until ${str(next.until)} --before-id ${str(next.beforeId)}`].join(' ')].join('\n')
     }
     // The totals, then a row per action, the most seen first
     case 'audit-summary': {

@@ -6,7 +6,7 @@
 // into the Host's own executable.
 import type { PtyEntry, PtyMeta, ProcOpenOptions } from '../core/host/protocol'
 import { createLineSplitter, type LineSplitter } from '../core/host/lines'
-import { DEAD_ENTRIES_KEPT, ENDED_SESSIONS_KEPT } from './registry'
+import { DEAD_ENTRIES_KEPT, ENDED_SESSIONS_KEPT, keepSubmission, personIn, submitterIn, type Submission } from './registry'
 
 /** The same caps as PtyRegistry's, one number each for both. **Here an ended chat is what is kept longer**, where
  *  PtyRegistry keeps an ended session: `sessions list` shows an ended chat and `sessions read` finds its transcript
@@ -47,6 +47,10 @@ interface Entry {
   truncated: boolean
   alive: boolean
   splitter: LineSplitter
+  /** The last SUBMISSIONS_KEPT lines written to it, and whether a person wrote each (`submittedBetween`). */
+  submissions: Submission[]
+  /** An app that does not mark a person's lines wrote to it (`writesUnmarked`). */
+  unmarked: boolean
 }
 
 export interface ProcRegistryDeps {
@@ -54,6 +58,8 @@ export interface ProcRegistryDeps {
   log(m: string): void
   /** Test injection; the wiring leaves it out and gets PROC_BUFFER_CHARS. */
   bufferChars?: number
+  /** Test injection (epoch ms). */
+  now?: () => number
 }
 
 export class ProcRegistry {
@@ -135,7 +141,9 @@ export class ProcRegistry {
       chars: 0,
       truncated: false,
       alive: true,
-      splitter: createLineSplitter((line) => this.keep(entry, line))
+      splitter: createLineSplitter((line) => this.keep(entry, line)),
+      submissions: [],
+      unmarked: false
     }
     this.entries.set(a.id, entry)
     proc.onData((chunk) => entry.splitter.push(chunk))
@@ -210,9 +218,34 @@ export class ProcRegistry {
     return e && e.alive ? e : null
   }
 
-  /** One line to stdin. The newline is added here, once, so no caller has to remember it. */
-  write(id: string, line: string): void {
-    this.live(id)?.proc.write(`${line}\n`)
+  /** One line to stdin. The newline is added here, once, so no caller has to remember it. `by.person`: a person wrote
+   *  it (an app's `proc-write`, a Slack reply), not the Host itself (PtyRegistry.write's mark). `by.unmarked`: an app that
+   *  does not mark a person's lines wrote it (an older app), so who wrote it is not known (`writesUnmarked`). */
+  write(id: string, line: string, by?: { person: true } | { unmarked: true }): void {
+    const e = this.live(id)
+    if (!e) return
+    e.proc.write(`${line}\n`)
+    if (by !== undefined && 'unmarked' in by) e.unmarked = true
+    keepSubmission(e.submissions, { at: (this.deps.now ?? Date.now)(), person: by !== undefined && 'person' in by })
+  }
+
+  /** Whether an app that does not mark a person's lines (an older app) has written to it: then whether a person began
+   *  any of its turns is not known, from then on. */
+  writesUnmarked(id: string): boolean {
+    return this.entries.get(id)?.unmarked === true
+  }
+
+  /** Who wrote the latest line in (from, to], epoch ms: a person or the Host itself; null for none kept there, or a
+   *  process never here (observe deferred fix round 1, I1: a chat's stream does not echo the line that began a turn). */
+  submittedBetween(id: string, from: number, to: number): 'person' | 'host' | null {
+    return submitterIn(this.entries.get(id)?.submissions, from, to)
+  }
+
+  /** Whether a person wrote any line in (from, to], whatever was written after it: a chat takes its queued lines in
+   *  order, so a person's line written during a turn begins the next one even when a card answer followed it (observe
+   *  deferred fix round 3). */
+  personSubmittedBetween(id: string, from: number, to: number): boolean {
+    return personIn(this.entries.get(id)?.submissions, from, to)
   }
 
   kill(id: string): void {

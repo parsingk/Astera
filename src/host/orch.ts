@@ -59,7 +59,7 @@ import { NOT_WRITER, type HostUnderstanding } from './hostUnderstanding'
 import type { HostWorkUnits } from './hostWorkUnits'
 import { ensureProject, findProject } from '../core/orchestration/projects'
 import type { SessionWorkUnit } from '../core/workUnit/types'
-import { justFinished, runRecordInputOf } from '../core/orchestration/runRecord'
+import { justFinished, runRecordInputOf, stampRunEnds } from '../core/orchestration/runRecord'
 import type { WorkspaceManager } from './workspace/manager'
 import { DESKTOP_ACTOR, HOST_ACTOR, actorOf, type JournalActor } from '../core/continuity/actor'
 import { parseJournalOps } from '../core/continuity/journalOps'
@@ -421,8 +421,10 @@ export interface HostOrch extends OrchCall {
  *  and the drivers' own lifecycle steps (G3a: starting a lifecycle Task, keeping its handed-off round). A socket that
  *  names itself the Host's caller is refused them. */
 const HOST_OWN_RECORDS: ReadonlySet<string> = new Set(['runs-git-record', 'runs-github-record', 'lifecycle-start', 'lifecycle-ci-begin', 'lifecycle-ci-wait', 'lifecycle-gate'])
-/** The app's own dispatch-loop step: under the app's caller id it is taken only from the app's connection. */
-const APP_OWN_STEPS: ReadonlySet<string> = new Set(['lifecycle-start'])
+/** Under the app's caller id, taken only from the app's connection: the app's own dispatch-loop step, and a send, which
+ *  from the app is a person's prompt and ends what a finished Run's or an ended attempt's session still holds (observe
+ *  final review). */
+const APP_OWN_STEPS: ReadonlySet<string> = new Set(['lifecycle-start', 'sessions-send'])
 
 export function createHostOrch(a: {
   profileDir: string
@@ -602,7 +604,12 @@ export function createHostOrch(a: {
       })
     | null
 }): HostOrch {
-  const store = new OrchestrationStore(path.join(a.profileDir, 'orchestration.json'))
+  // The TTL cleanup reads the Host's clock; a time it cannot parse falls back to the wall clock rather than
+  // pruning every finished Run.
+  const store = new OrchestrationStore(path.join(a.profileDir, 'orchestration.json'), () => {
+    const at = Date.parse(a.now())
+    return Number.isFinite(at) ? at : Date.now()
+  })
   // Built at the first ask: only a call that marks the default needs the descriptors.
   let descriptors: ReturnType<typeof makeDescriptors> | undefined
   const loggedIn = a.isLoggedIn ?? ((x: Account) => isLoggedIn(x, (descriptors ??= makeDescriptors(process.platform))))
@@ -778,9 +785,11 @@ export function createHostOrch(a: {
     hostOrchDeps({
       checkWaits,
       getState: () => store.get(),
-      setState: async (next, how) => {
+      setState: async (sent, how) => {
         // The diff base, read before the save moves memory: each commit is journaled once, from here.
         const prev = store.get()
+        // A Run this commit finishes is stamped with when (observe deferred minor b), and every later commit keeps it.
+        const next = stampRunEnds(prev, sent, a.now())
         // Reserved before the write, for `reserveVersion`'s reason and for one that is this path's
         // own: a `state-put` arriving while this commit is still writing would otherwise read the
         // pre-commit number, pass the check, and land a whole state that does not contain this
@@ -1012,23 +1021,28 @@ export function createHostOrch(a: {
       }
     // The diff base, read before the save moves memory.
     const prev = store.get()
+    // A Run the app's write finishes is stamped with when, and one it already had keeps its stamp, which the app's
+    // mirror may not have heard of yet (observe deferred minor b). A put that stood in for the load has nothing in
+    // `prev`: the stamps its Runs carry are the Host before's, kept (fix round 1, Minor 5). The sender hears of a stamp
+    // with the next push.
+    const landed = stampRunEnds(prev, state, a.now(), { standsInForLoad: !hadState })
     // Taken here, not after the write lands — the whole of `reserveVersion`'s note.
     const committed = reserveVersion()
     // Published as memory moves, for the reason in `depsFor`'s setState.
-    const saving = store.save(state)
+    const saving = store.save(landed)
     loaded = true
-    publish(state, committed)
+    publish(landed, committed)
     // P15 again: a put that stood in for the load has no base, and every Job and Run it carries would read as new.
-    if (hadState) recordEvents(prev, state)
+    if (hadState) recordEvents(prev, landed)
     await saving
     // To the others and not back to the sender: the state came from there, and an app that received
     // its own push would write its own state back over itself.
-    from.toOthers({ t: 'orch-state', state, version: committed })
+    from.toOthers({ t: 'orch-state', state: landed, version: committed })
     // P15: a put that stood in for the load has no base to diff against.
     // Not recorded either without one: every Run the put carries would read as just finished.
     if (hadState) {
-      journalSafely('recording a state-put', () => a.journal?.committed({ prev, next: state, version: committed, actor: DESKTOP_ACTOR }))
-      recordFinishedRuns(prev, state)
+      journalSafely('recording a state-put', () => a.journal?.committed({ prev, next: landed, version: committed, actor: DESKTOP_ACTOR }))
+      recordFinishedRuns(prev, landed)
     } else a.log('state-put: taken before this Host held a state, so it is not journaled as a diff from nothing')
     // An accepted whole state is a commit like any other (R5): the app may have just added the work
     // the driver is to place. A refused one above changed nothing, so it kicks nothing.

@@ -896,8 +896,9 @@ export function hostOrchDeps(a: {
     if (chats && chats.isWriter(id)) return Promise.resolve(chatPendingOf(chats.requests(id)[0] ?? null))
     return askPending(id)
   }
+  // `by.person`: a person's `sessions send`, carried to whichever writes the line (observe deferred fix round 2, Minor b)
   const hostWhenAbsent = (name: (typeof HOST_WHEN_ABSENT)[number]) =>
-    (id: string, text: string): Promise<unknown> =>
+    (id: string, text: string, by?: { person: true }): Promise<unknown> =>
       a.sessions.serial(id, async () => {
         // P10: a session the Host writes to goes through the Host adapter, so a turn never lands around
         // a card the adapter holds and the adapter's turn state moves with the write. An open card
@@ -910,9 +911,14 @@ export function hostOrchDeps(a: {
           const card = chats.requests(id)[0]
           if (card !== undefined) return { sent: false, pending: chatPendingOf(card) }
           try {
-            await chats.send(id, text, () => {
-              if (EFFECTFUL[name]) a.onEffect?.()
-            })
+            await chats.send(
+              id,
+              text,
+              () => {
+                if (EFFECTFUL[name]) a.onEffect?.()
+              },
+              by
+            )
           } catch (err) {
             const refused = new AppUnreachable(
               `APP_REQUIRED: ${name} could not be done by the Host: ${err instanceof Error ? err.message : String(err)}`
@@ -927,12 +933,17 @@ export function hostOrchDeps(a: {
           const pending = await askPending(id)
           if (pending === undefined) return { sent: false, reason: 'not-held' }
           if (pending !== null) return { sent: false, pending }
-          return forward(name, true)(id, text)
+          return by ? forward(name, true)(id, text, by) : forward(name, true)(id, text)
         }
         try {
-          await a.sessions.sendChat(id, text, () => {
-            if (EFFECTFUL[name]) a.onEffect?.()
-          })
+          await a.sessions.sendChat(
+            id,
+            text,
+            () => {
+              if (EFFECTFUL[name]) a.onEffect?.()
+            },
+            by
+          )
         } catch (err) {
           const refused = new AppUnreachable(
             `APP_REQUIRED: ${name} could not be done without the app: ${err instanceof Error ? err.message : String(err)}`

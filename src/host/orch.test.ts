@@ -1573,7 +1573,8 @@ describe('요청 영수증', () => {
       const second = await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-c2' })
       expect(first.status).toBe(200)
       expect(second.replayed).toBe(true)
-      expect(acts.filter(([n]) => n === 'chatSend')).toEqual([['chatSend', ['chat-1', '다음으로']]])
+      // A shell's send is a person's (observe deferred fix round 2, Minor b)
+      expect(acts.filter(([n]) => n === 'chatSend')).toEqual([['chatSend', ['chat-1', '다음으로', { person: true }]]])
       expect(written).toEqual([])
     })
 
@@ -1623,7 +1624,7 @@ describe('요청 영수증', () => {
       expect(retried.replayed, '거절이 영수증으로 남아 재생됐다').toBeFalsy()
       const again = await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-c7' })
       expect(again.replayed).toBe(true)
-      expect(sent).toEqual([['chat-1', '다음으로']])
+      expect(sent).toEqual([['chat-1', '다음으로', { person: true }]])
       expect(written).toEqual([])
     })
 
@@ -4443,6 +4444,73 @@ describe('the Host journal at the commit points (Host journal Task 5)', () => {
     expect(await orch.call({ cmd: 'journal-append', args: { ops }, sessionId: '', from: app })).toEqual({ status: 200, body: { applied: 1, failed: 0 } })
     expect(f.journal.append).toHaveBeenCalledWith([{ op: 'recovery-finish', id: 'rca_1', status: 'failed', at: NOW }])
     expect(await orch.call({ cmd: 'journal-reload', args: {}, sessionId: '', from: app })).toEqual({ status: 200, body: { enabled: true, writer: true } })
+  })
+})
+
+// Deferred minor b: the Host stamps when a Run's outcome became final at both of its commit points, so what a coordinator
+// spent and did is bounded by that moment, not by the last change of a Task
+describe('a Run’s end at the commit points', () => {
+  const LATER = '2026-09-22T02:00:00.000Z'
+  const app: OrchCaller = { role: 'app', toOthers: () => {} }
+  const seedWorker = async (): Promise<{ taskId: string; dispatchId: string }> => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW)
+    if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW)
+    if (!run.ok) throw new Error(run.error)
+    const task = createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW)
+    if (!task.ok) throw new Error(task.error)
+    const dsp = openDispatch(task.state, { taskId: task.value.id, provider: 'codex', accountId: 'accA', sessionId: 'ses_w', cwd: 'D:/p', specPath: 'D:/p/s.md' }, NOW)
+    if (!dsp.ok) throw new Error(dsp.error)
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(dsp.state), 'utf8')
+    return { taskId: task.value.id, dispatchId: dsp.value.id }
+  }
+  const stateNow = async (orch: ReturnType<typeof createHostOrch>) =>
+    (await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })).body as { state: OrchState; version: number }
+
+  it('a command’s commit that finishes a Run stamps it, in memory and on disk, and a later edit of a Task leaves it', async () => {
+    const ids = await seedWorker()
+    let clock = NOW
+    const orch = orchOver({ now: () => clock, aliveSessionIds: () => new Set(['ses_w']) })
+    const send = { cmd: 'send', args: { type: 'worker_done', ...ids, outcome: 'succeeded', subject: 's', body: 'b' }, sessionId: 'ses_w' }
+    expect((await orch.call(send)).status).toBe(200)
+    expect(orch.state().runs[0].endedAt).toBe(NOW)
+    expect((JSON.parse(await fs.readFile(path.join(dir, 'orchestration.json'), 'utf8')) as OrchState).runs[0].endedAt).toBe(NOW)
+    // The app renames the Task two hours later, from a mirror that had not heard of the end yet
+    clock = LATER
+    const got = await stateNow(orch)
+    const renamed: OrchState = {
+      ...got.state,
+      runs: got.state.runs.map(({ endedAt: _unheard, ...r }) => r),
+      tasks: got.state.tasks.map((t) => ({ ...t, title: 'renamed', updatedAt: LATER }))
+    }
+    expect((await orch.call({ cmd: 'state-put', args: { state: renamed, version: got.version }, sessionId: '', from: app })).status).toBe(200)
+    expect(orch.state().runs[0].endedAt).toBe(NOW)
+  })
+
+  it('a state-put that finishes a Run stamps it, one that adds a Task clears it, and a cold Host’s first put keeps a stamp it carries', async () => {
+    const ids = await seedWorker()
+    let clock = NOW
+    const orch = orchOver({ now: () => clock })
+    const got = await stateNow(orch)
+    const finished: OrchState = { ...got.state, tasks: got.state.tasks.map((t) => (t.id === ids.taskId ? { ...t, status: 'completed' } : t)) }
+    expect((await orch.call({ cmd: 'state-put', args: { state: finished, version: got.version }, sessionId: '', from: app })).status).toBe(200)
+    expect(orch.state().runs[0].endedAt).toBe(NOW)
+    clock = LATER
+    const ended = await stateNow(orch)
+    const more = createTask(ended.state, { runId: ended.state.runs[0].id, title: 'more', spec: 's', deps: [] }, LATER)
+    if (!more.ok) throw new Error(more.error)
+    expect((await orch.call({ cmd: 'state-put', args: { state: more.state, version: ended.version }, sessionId: '', from: app })).status).toBe(200)
+    expect(orch.state().runs[0]).not.toHaveProperty('endedAt')
+
+    // A Host that holds nothing yet, handed the app's mirror (Minor 5): the stamp it carries is the last Host's, kept;
+    // with none, the Run's Tasks' last change, not this put's time
+    const carried: OrchState = { ...finished, runs: finished.runs.map((x) => ({ ...x, endedAt: NOW })) }
+    const cold = orchOver({ now: () => LATER })
+    expect((await cold.call({ cmd: 'state-put', args: { state: carried }, sessionId: '', from: app })).status).toBe(200)
+    expect(cold.state().runs[0].endedAt).toBe(NOW)
+    const bare = orchOver({ now: () => LATER })
+    expect((await bare.call({ cmd: 'state-put', args: { state: finished }, sessionId: '', from: app })).status).toBe(200)
+    expect(bare.state().runs[0].endedAt).toBe(NOW)
   })
 })
 

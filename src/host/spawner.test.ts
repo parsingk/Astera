@@ -18,6 +18,7 @@ import { StatusLineManager } from '../core/sessions/statusline'
 import { makeDescriptors } from '../core/providers/descriptor'
 import { previewShotsDir } from '../core/preview/shotsDir'
 import type { PromptWriteEvent } from '../core/orchestration/exec/coordinator'
+import { ENTER_QUIET_MS } from '../core/sessions/sessionDriver'
 
 const NOW = '2026-09-24T00:00:00.000Z'
 let dir: string
@@ -671,6 +672,32 @@ describe('createHostSpawner — the loop’s session doors', () => {
     write.mockClear()
     expect(h.spawner!.typeInto('never-here', 'hello')).toBe(false)
     expect(write).not.toHaveBeenCalled()
+  })
+  // Codex swallows an Enter that comes right after a long text (openai/codex#56982): a --terminal reuse's Enter waits
+  // until the session's pty has drawn the prompt and gone quiet, read from the registry
+  it('holds a --terminal reuse’s Enter until the session’s pty has drawn the prompt and gone quiet', async () => {
+    const { s, taskId, dispatchId } = seeded()
+    const h = rig({ state: () => s })
+    h.registry.open({ id: 'pty_t', file: 'claude', args: [], opts: { cwd: repo, cols: 120, rows: 30, env: {} },
+      meta: { kind: 'session', id: 'ses_1', restore: { accountId: 'acc1' } } })
+    const pty = h.spawned[0].pty
+    const at: Array<[number, string]> = []
+    let drewAt = 0
+    vi.spyOn(h.registry, 'write').mockImplementation((_id, data) => {
+      at.push([Date.now(), data])
+      if (at.length > 1) return
+      // The session draws the prompt for 300 ms after it was typed
+      const until = Date.now() + 300
+      const drawing = setInterval(() => {
+        if (Date.now() >= until) return clearInterval(drawing)
+        drewAt = Date.now()
+        pty.emit('x')
+      }, 20)
+    })
+    await h.spawner!.startWorker({ ...startArgs(taskId, dispatchId), terminal: 'ses_1', terminalCwd: repo, terminalProvider: 'claude', terminalAccountId: 'acc1' })
+    expect(at.map(([, d]) => d)).toEqual([expect.any(String), '\r'])
+    expect(drewAt).toBeGreaterThan(at[0][0])
+    expect(at[1][0] - drewAt).toBeGreaterThanOrEqual(ENTER_QUIET_MS)
   })
   it('says it is retiring from the moment closeAndSettle is called', async () => {
     const h = rig()

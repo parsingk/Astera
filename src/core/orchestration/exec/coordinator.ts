@@ -87,6 +87,10 @@ export interface CoordinatorDeps {
     agentProfileId?: string
   }): Promise<{ id: string }>
   writeToSession(sessionId: string, data: string): void
+  /** When that session's pty last printed anything (epoch ms), null for never. Given, a typed prompt's Enter waits for
+   *  the session to have drawn the prompt and gone quiet (ptyDriver): Codex swallows an Enter that comes right after a
+   *  long text (openai/codex#56982). Left out, Enter goes ENTER_DELAY_MS after the prompt. */
+  lastOutputAt?(sessionId: string): number | null
   /** Is that session working. **null = it cannot be decided for this provider** (codex — a
    *  decorative spinner keeps running in the window title and child processes overwrite the title,
    *  which makes the signal meaningless; measured directly). The coordinator does not need to know
@@ -120,9 +124,8 @@ export interface CoordinatorDeps {
 /** Characters that break quoting under win32's cmd.exe /c wrapping if they reach the launch prompt —
  *  the rule lives beside sanitizeResumePrompt now, and `sessions create` checks it too */
 import { LAUNCH_FORBIDDEN } from '../../sessions/commands'
+import { ptyDriver } from '../../sessions/sessionDriver'
 export { LAUNCH_FORBIDDEN }
-/** Gap between the prompt and Enter when injecting into a reused session. Same value as rolling and the scheduler */
-const ENTER_DELAY_MS = 150
 /** Polling interval while waiting for the busy -> idle transition. Same value as the server's check/ask polling (POLL_MS) */
 const IDLE_POLL_MS = 50
 /** Default limit for waitUntilIdle. BusyScanner.busy (core/terminal/busy.ts) is a sticky value that
@@ -1046,9 +1049,11 @@ export class OrchCoordinator {
       // says the same thing where it describes --terminal, so a coordinator is told not to mix the two.
       await this.waitUntilIdle(a.terminal)
       promptWrite('requested', 'typed')
-      this.deps.writeToSession(a.terminal, prompt)
-      await sleep(ENTER_DELAY_MS)
-      this.deps.writeToSession(a.terminal, '\r')
+      // The prompt and its Enter go the way `sessions send` types into a session (core/sessions/sessionDriver.ts)
+      await ptyDriver({
+        write: (id, data) => this.deps.writeToSession(id, data),
+        lastOutputAt: this.deps.lastOutputAt?.bind(this.deps)
+      }).deliver(a.terminal, prompt)
       promptWrite('confirmed', 'typed')
     } else {
       // bypassPermissions is not passed **from here** — it is decided now, but not by this module:

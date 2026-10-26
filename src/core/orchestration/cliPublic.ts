@@ -64,13 +64,15 @@ type NothingLeft<T extends never> = T
  *  external coordinator; publishing it would add to the SDK's contract, which nothing has asked for). What a script
  *  needs from the first, that the Run waits for a reset and until when, is the `limited` ending of `runs wait`. Also
  *  held back: the Run's raw GitHub record (`githubState`, GitHub lifecycle), whose public face is the derived `github`
- *  field. */
+ *  field, and the Host's stamp of when its outcome became final (`endedAt`), which bounds what its coordinator's work is
+ *  filed under and is not part of the SDK's contract. */
 const RUN_HIDDEN = [
   'coordinatorStop',
   'coordinatorStartingAt',
   'coordinatorStopPending',
   'externalCoordinatorSessionId',
-  'githubState'
+  'githubState',
+  'endedAt'
 ] as const
 
 /**

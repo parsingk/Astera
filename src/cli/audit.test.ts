@@ -63,6 +63,25 @@ describe('auditCommand', () => {
     expect(h.calls).toEqual([])
   })
 
+  // From an agent's shell (ASTERA_SESSION set) the Host refuses every audit command, 5; the CLI asks it before it looks any
+  // name up or checks any flag, so a name that matches nothing cannot answer 4 (or a bare flag 2) ahead of the refusal
+  it('from an agent shell, every audit command with any filter is sent as it is for the Host to refuse, before any lookup', async () => {
+    const REFUSED = { status: 403, body: { error: 'audit-list is for a person at their own shell or in the Astera app, not an agent session (ASTERA_SESSION is set)' } }
+    const filters: Record<string, unknown>[] = [
+      { agentProfile: 'no-such-name' },
+      { agentProfile: 'Reviewer', decision: 'unknown' },
+      { agentProfile: true },
+      { session: true },
+      { session: 's1', job: 'j1', run: 'r1', task: 't1', action: 'git.*', since: '2026-10-23T00:00:00Z', limit: 5 }
+    ]
+    for (const cmd of ['audit-list', 'audit-summary'])
+      for (const args of filters) {
+        const h = host({ [cmd]: REFUSED })
+        expect(await auditCommand({ cmd, args, request: 'req-1', call: h.call, agentSession: true }), `${cmd} ${JSON.stringify(args)}`).toEqual(REFUSED)
+        expect(h.calls, `${cmd} ${JSON.stringify(args)}`).toEqual([{ cmd, args: {}, request: 'req-1' }])
+      }
+  })
+
   it('a refusal is answered as the Host refused it', async () => {
     const h = host({ 'audit-list': { status: 403, body: { error: 'not from an agent session' } } })
     expect(await audit(h, 'audit-list', {})).toEqual({ status: 403, body: { error: 'not from an agent session' } })

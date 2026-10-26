@@ -79,7 +79,7 @@ describe('decide, under the starter rules', () => {
     expect(decide(claude('Read', { file_path: path.resolve(cwd, '..', 'notes.md') }), p)).toEqual({ decision: 'allow' })
   })
 
-  it('cannot tell a call whose confidence is unknown, whatever the rules say', () => {
+  it('cannot tell a call whose confidence is unknown while no rule denies any of it', () => {
     expect(decide(bash('foo-bar.sh'), p)).toEqual({ decision: 'unknown' })
     expect(decide({ action: 'filesystem.read', insideProject: true, confidence: 'unknown' }, p)).toEqual({ decision: 'unknown' })
   })
@@ -109,25 +109,90 @@ describe('decide, under the starter rules', () => {
     }
   })
 
-  it('still cannot tell a line with an unknown command, a script, or a write that names no place', () => {
-    // An unknown command
-    expect(decide(bash('./deploy.sh && git push'), p)).toEqual({ decision: 'unknown' })
-    expect(decide(bash('eval "$CMD" && git push'), p)).toEqual({ decision: 'unknown' })
-    // Control flow: a command in it may have run any number of times, or not at all
-    expect(decide(bash('for b in a c; do git push origin $b; done'), p)).toEqual({ decision: 'unknown' })
-    expect(decide(bash('if git diff --quiet; then git push; fi'), p)).toEqual({ decision: 'unknown' })
-    expect(decide(claude('PowerShell', { command: 'foreach ($r in $remotes) { git push $r }' }), p)).toEqual({ decision: 'unknown' })
-    expect(decide(claude('PowerShell', { command: 'git branch | ForEach-Object { git push origin $_ }' }), p)).toEqual({ decision: 'unknown' })
-    expect(decide(claude('PowerShell', { command: '1..3 | Where-Object { git push }' }), p)).toEqual({ decision: 'unknown' })
-    // A Codex exec script of several calls is a program, not a line
+  // The person's ruling D2 (2026-10-24): a denied command is denied wherever in the line it sits. A loop or a conditional
+  // that might not have run it, a script file or an unknown command beside it, change nothing: the preview errs toward flagging
+  it('would deny a line with a denied command anywhere in it: in control flow, a script of several calls, or beside what it cannot read', () => {
+    const push = { decision: 'would-deny', ruleId: starterId('git.remote.write') }
+    // Control flow: the command may have run any number of times, or not at all
+    expect(decide(bash('for b in a c; do git push origin $b; done'), p)).toEqual(push)
+    expect(decide(bash('if git diff --quiet; then git push; fi'), p)).toEqual(push)
+    expect(decide(bash('while true; do git push; done'), p)).toEqual(push)
+    expect(decide(claude('PowerShell', { command: 'foreach ($r in $remotes) { git push $r }' }), p)).toEqual(push)
+    expect(decide(claude('PowerShell', { command: 'git branch | ForEach-Object { git push origin $_ }' }), p)).toEqual(push)
+    expect(decide(claude('PowerShell', { command: '1..3 | Where-Object { git push }' }), p)).toEqual(push)
+    // A Codex exec script of several calls
     const exec = 'await tools.exec_command({cmd:"git add -A"});\nawait tools.exec_command({cmd:"git push"});'
-    expect(decide(resolveAction({ provider: 'codex', tool: 'exec', input: exec, cwd }), p)).toEqual({ decision: 'unknown' })
-    // A delete that names no place, which an outside rule could match
-    expect(decide(bash('git push && rm'), p)).toEqual({ decision: 'unknown' })
+    expect(decide(resolveAction({ provider: 'codex', tool: 'exec', input: exec, cwd }), p)).toEqual(push)
+    // An unknown command or script in the line
+    expect(decide(bash('./deploy.sh && git push'), p)).toEqual(push)
+    expect(decide(bash('eval "$CMD" && git push'), p)).toEqual(push)
+    // A delete that names no place, which an outside rule could match, before the denied command or after it
+    expect(decide(bash('git push && rm'), p)).toEqual(push)
+    expect(decide(bash('rm && git push'), p)).toEqual(push)
   })
 
-  it('allows a scripted line whose commands no rule denies', () => {
+  // A command another command runs is a command of the line (find -exec, xargs, watch, trap, backticks), so it is judged
+  it('would deny a command hidden behind find -exec, xargs, watch, trap or backticks', () => {
+    const cases: Array<[string, string]> = [
+      ["find . -name '*.log' -exec rm -rf ../x {} \\;", 'filesystem.delete'],
+      ['ls | xargs rm -rf ../x', 'filesystem.delete'],
+      ['echo `git push`', 'git.remote.write'],
+      ['xargs -0 -n 1 git push', 'git.remote.write'],
+      ['watch -n 5 git push', 'git.remote.write'],
+      ["trap 'git push' EXIT", 'git.remote.write'],
+      ['find . -execdir git push \\;', 'git.remote.write']
+    ]
+    for (const [line, action] of cases) expect(decide(bash(line), p), line).toEqual({ decision: 'would-deny', ruleId: starterId(action) })
+    // What they run inside the project is allowed as it is on its own
+    expect(decide(bash('find . -name "*.log" -exec rm {} \\;'), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('echo `git rev-parse HEAD`'), p)).toEqual({ decision: 'allow' })
+  })
+
+  // The shell runs a substitution inside double quotes, and not one inside single quotes
+  it('would deny a command substituted inside double quotes, and allows the same text in single quotes', () => {
+    const push = { decision: 'would-deny', ruleId: starterId('git.remote.write') }
+    expect(decide(bash('echo "$(git push)"'), p)).toEqual(push)
+    expect(decide(bash('echo "`git push`"'), p)).toEqual(push)
+    expect(decide(bash('echo "$(rm -rf ../x)"'), p)).toEqual({ decision: 'would-deny', ruleId: starterId('filesystem.delete') })
+    expect(decide(bash('echo "$(( $(git push) + 1 ))"'), p)).toEqual(push)
+    expect(decide(claude('PowerShell', { command: 'Write-Output "$((git push))"' }), p)).toEqual(push)
+    expect(decide(bash("echo '$(git push)'"), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('echo "$(git rev-parse HEAD)"'), p)).toEqual({ decision: 'allow' })
+  })
+
+  // In PowerShell a backslash is a letter, in a string or outside one, and its escape character is the backtick: a path that
+  // ends in a backslash does not swallow the `;` after it, and a backtick before one does
+  it('would deny a push after a PowerShell path ending in a backslash, and allows what a backtick escapes', () => {
+    const push = { decision: 'would-deny', ruleId: starterId('git.remote.write') }
+    const ps = (command: string) => claude('PowerShell', { command })
+    expect(decide(ps('Write-Output "C:\\dir\\" ; git push'), p)).toEqual(push)
+    expect(decide(ps('Write-Output C:\\dir\\; git push'), p)).toEqual(push)
+    // The backtick makes the `;` a letter of the word, so there is no second command to deny
+    expect(decide(ps('Write-Output a`; git push'), p)).toEqual({ decision: 'allow' })
+  })
+
+  it('would deny a line cut short whose kept commands include a denied one', () => {
+    const cut = { action: 'process.execute' as const, confidence: 'unknown' as const, commands: [{ action: 'process.execute' as const }, { action: 'git.remote.write' as const }] }
+    expect(decide(cut, p)).toEqual({ decision: 'would-deny', ruleId: starterId('git.remote.write') })
+  })
+
+  it('still cannot tell a line with an unknown command or script and no denied command, or a write that names no place', () => {
+    expect(decide(bash('./deploy.sh'), p)).toEqual({ decision: 'unknown' })
+    expect(decide(bash('./deploy.sh && npm test'), p)).toEqual({ decision: 'unknown' })
+    expect(decide(bash('eval "$CMD"'), p)).toEqual({ decision: 'unknown' })
+    expect(decide(bash('rm'), p)).toEqual({ decision: 'unknown' })
+    expect(decide(bash('git status && rm'), p)).toEqual({ decision: 'unknown' })
+  })
+
+  it('allows a line with control flow whose commands no rule denies', () => {
     expect(decide(bash('for f in a b; do npm test; done'), p)).toEqual({ decision: 'allow' })
+  })
+
+  it('would deny what otherwise denies, a line it cannot read too: the enforcer would refuse it', () => {
+    expect(decide(bash('./deploy.sh'), policy([], 'deny'))).toEqual({ decision: 'would-deny' })
+    // A tool the resolver does not know at all is unknown under the starter rules and, with no rule for it, would-deny here
+    expect(decide(claude('SomeNewTool', {}), p)).toEqual({ decision: 'unknown' })
+    expect(decide(claude('SomeNewTool', {}), policy([], 'deny'))).toEqual({ decision: 'would-deny' })
   })
 
   it('judges each command of a compound line in its own place, so a delete inside and a read outside are allowed', () => {
@@ -305,5 +370,193 @@ describe('COVERAGE', () => {
     expect(cell('codex', 'terminal', 'network')).toEqual({ level: 'partial', note: 'web-search-and-shell-text' })
     expect(cell('codex', 'chat', 'file-read')).toEqual({ level: 'partial', note: 'shell-text-only' })
     expect(cell('codex', 'chat', 'network')).toEqual({ level: 'partial' })
+  })
+})
+
+// Final whole-branch review: the resolver reads a command wherever the shell can hide it, and D2 denies it wherever it sits
+describe('decide, a denied command the resolver must reach', () => {
+  const p = { ...STARTER_POLICY, mode: 'observe' as const }
+  const push = { decision: 'would-deny', ruleId: starterId('git.remote.write') }
+  const del = { decision: 'would-deny', ruleId: starterId('filesystem.delete') }
+  const ps = (command: string) => claude('PowerShell', { command })
+
+  it('would deny a command in a PowerShell brace that is not standing alone', () => {
+    expect(decide(ps('git branch | ForEach-Object {git push origin $_}'), p)).toEqual(push)
+    expect(decide(ps('ForEach-Object -Process {git push}'), p)).toEqual(push)
+    expect(decide(ps('Get-ChildItem | ForEach-Object {Remove-Item ..\\x -Recurse}'), p)).toEqual(del)
+    expect(decide(ps('foreach ($r in $remotes) {git push $r}'), p)).toEqual(push)
+    expect(decide(ps('if ($x) {git push}'), p)).toEqual(push)
+    expect(decide(ps('try {git push} catch {}'), p)).toEqual(push)
+    expect(decide(ps('switch ($x) {a {git push}}'), p)).toEqual(push)
+  })
+
+  it('would deny after a quoted $(( that no )) closes, which the shell reads as a substitution', () => {
+    expect(decide(bash('echo "$((git push) )" ; rm -rf ../x'), p)).toEqual(push)
+    expect(decide(bash('echo "$((git push) )"'), p)).toEqual(push)
+    expect(decide(bash('echo "$((1 + 2))" ; git push'), p)).toEqual(push)
+    expect(decide(bash('echo "$(( $(git push) + 1 ))"'), p)).toEqual(push)
+    expect(decide(bash('echo "$((1 + 2))"'), p)).toEqual({ decision: 'allow' })
+  })
+
+  it('would deny after the pattern of a case inside a substitution, whose ) does not close it', () => {
+    expect(decide(bash('echo "$(case x in a) git push;; esac)"'), p)).toEqual(push)
+    expect(decide(bash('echo "$(case x in a) echo hi;; b) git push;; esac)"'), p)).toEqual(push)
+    expect(decide(bash('X=$(case x in\na) git push;;\nesac)'), p)).toEqual(push)
+    expect(decide(bash('echo "$(case x in a) case y in b) git push;; esac;; esac)"'), p)).toEqual(push)
+    expect(decide(bash('echo "$(case x in a) echo hi;; esac)" ; git push'), p)).toEqual(push)
+    expect(decide(bash('echo "$(case x in a) echo hi;; esac)"'), p)).toEqual({ decision: 'allow' })
+    // `esac` ends the case as soon as it ends as a word, with space before the ) or not
+    expect(decide(bash('echo "$(case x in a) echo hi;; esac )"; git push'), p)).toEqual(push)
+    expect(decide(bash('echo "$(case x in a) echo hi;; esac )"'), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('echo "$(case x in a) echo hi\nesac )"; git push'), p)).toEqual(push)
+  })
+
+  // A cd inside ( ) or $( ) moves that subshell only, as it already does inside a quoted substitution
+  it('keeps the folder of the line after a cd in an unquoted group or substitution', () => {
+    expect(decide(bash('(cd sub && make); rm -rf ../x'), p)).toEqual(del)
+    expect(decide(bash('X=$(cd sub && pwd); rm -rf ../x'), p)).toEqual(del)
+    expect(decide(bash('X="$(cd sub && pwd)"; rm -rf ../x'), p)).toEqual(del)
+    expect(decide(bash('(cd sub && make) && rm -rf ../x'), p)).toEqual(del)
+    // Inside the group the cd still counts, and a cd outside it still moves the line
+    expect(decide(bash('(cd sub && rm -rf ../x)'), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('cd sub && rm -rf ../x'), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('(cd sub); cd sub; rm -rf ../x'), p)).toEqual({ decision: 'allow' })
+  })
+
+  it('starts each unquoted group from the folder held outside it, and restores it after the group', () => {
+    expect(decide(bash('(cd sub); (cd .. && rm -rf x)'), p)).toEqual(del)
+    expect(decide(bash('(cd sub); rm -rf ../x'), p)).toEqual(del)
+    expect(decide(bash('X="$(cd sub)" Y="$(cd .. && rm -rf x)"'), p)).toEqual(del)
+    // The inner group's cd does not move the outer group's next command, which is in the outer group's folder
+    expect(decide(bash('(cd a && (cd ../.. ) && rm -rf y)'), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('(cd a && (cd b); rm -rf ../../y)'), p)).toEqual(del)
+    // Inside one group the cd still carries on
+    expect(decide(bash('(cd sub && cd .. && rm -rf x)'), p)).toEqual({ decision: 'allow' })
+  })
+
+  // In PowerShell a `{` always starts a new token (so `git stash apply stash@{0}` splits there), unless it is ${name} or @{
+  it('reads the block after a PowerShell brace wherever the brace sits', () => {
+    expect(decide(ps('git branch | %{git push origin $_}'), p)).toEqual(push)
+    expect(decide(ps('ForEach-Object{git push}'), p)).toEqual(push)
+    expect(decide(ps('ForEach-Object -Process{git push}'), p)).toEqual(push)
+    expect(decide(ps('Get-ChildItem | Where-Object -FilterScript{git push}'), p)).toEqual(push)
+    expect(decide(ps('Write-Output a{git push}'), p)).toEqual(push)
+    expect(decide(ps('try{git push}catch{}'), p)).toEqual(push)
+    expect(decide(ps('if ($x){git push}else{git status}'), p)).toEqual(push)
+    expect(decide(ps('$h = @{a={git push}}'), p)).toEqual(push)
+    expect(decide(ps('Write-Output a{2}; git push'), p)).toEqual(push)
+    expect(decide(ps('Write-Output ${env:PATH}'), p)).toEqual({ decision: 'allow' })
+  })
+
+  // PowerShell runs ( ), $( ) and @( ) in the same runspace, so a Set-Location in them moves every later statement
+  it('follows a Set-Location in a PowerShell group or substitution to the rest of the line', () => {
+    expect(decide(ps('(Set-Location ..); Remove-Item -Recurse build'), p)).toEqual(del)
+    expect(decide(ps('(cd ..) ; Remove-Item build -Recurse'), p)).toEqual(del)
+    expect(decide(ps('$(Set-Location ..); Remove-Item build -Recurse'), p)).toEqual(del)
+    expect(decide(ps('@(Set-Location ..); Remove-Item build -Recurse'), p)).toEqual(del)
+    expect(decide(ps('Write-Output "$(Set-Location ..)"; Remove-Item -Recurse build'), p)).toEqual(del)
+    expect(decide(ps('(Set-Location sub); Remove-Item -Recurse build'), p)).toEqual({ decision: 'allow' })
+    // POSIX keeps each subshell's folder to itself
+    expect(decide(bash('(cd ..); rm -rf build'), p)).toEqual({ decision: 'allow' })
+  })
+
+  it('cannot tell a heredoc body substitution past the depth limit, and never allows it', () => {
+    expect(decide(bash('echo "$(echo "$(cat <<EOF\n$(git push)\nEOF\n)")"'), p)).toEqual({ decision: 'unknown' })
+    expect(decide(bash('echo "$(echo "$(cat <<EOF\n$(git push)\nEOF\n)")" ; git push'), p)).toEqual(push)
+  })
+
+  it('reads chrt, taskset and ionice with -p as the programs they are, running nothing', () => {
+    for (const line of ['chrt -p 1234', 'chrt -r -p 10 1234', 'taskset -p 1234', 'taskset -pc 0,1 1234', 'ionice -p 1234', 'ionice --pid 1234']) {
+      expect(bash(line), line).toMatchObject({ action: 'process.execute', confidence: 'high' })
+      expect(decide(bash(line), p), line).toEqual({ decision: 'allow' })
+    }
+    expect(bash('chrt -p 1234').target).toBe('chrt')
+    expect(decide(bash('chrt -p 1234; git push'), p)).toEqual(push)
+  })
+
+  it('would deny a command that exec, nice, setsid, stdbuf, ionice, chrt, taskset, coproc or builtin run', () => {
+    for (const line of [
+      'exec git push',
+      'exec -a name git push',
+      'builtin command git push',
+      'nice git push',
+      'nice -n 5 git push',
+      'nice -5 git push',
+      'nice --adjustment=5 git push',
+      'setsid git push',
+      'setsid -f git push',
+      'stdbuf -oL git push',
+      'stdbuf -o L -e0 git push',
+      'ionice git push',
+      'ionice -c 3 git push',
+      'ionice -c 2 -n 7 git push',
+      'chrt -r 10 git push',
+      'chrt --fifo 10 git push',
+      'taskset 0x3 git push',
+      'taskset -c 0,1 git push',
+      'coproc git push',
+      'sudo nice -n 5 git push'
+    ]) expect(decide(bash(line), p), line).toEqual(push)
+    expect(decide(bash('nice -n 5 rm -rf ../x'), p)).toEqual(del)
+    expect(decide(bash('exec rm -rf ../x'), p)).toEqual(del)
+    expect(decide(bash('nice -n 5 npm test'), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('taskset -c 0 npm test'), p)).toEqual({ decision: 'allow' })
+  })
+
+  it('reads a quoted operand inside quoted arithmetic, and still reads $(( ) that no )) closes as a substitution', () => {
+    expect(decide(bash('echo "$(( "1" + 2 ))"'), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('echo "$(( "1" + $(git push) ))"'), p)).toEqual(push)
+    expect(decide(bash('echo "$(( "1" + 2 ))" ; git push'), p)).toEqual(push)
+    expect(decide(bash('echo "$((git push) )" ; echo "x))" ; rm -rf ../x'), p)).toEqual(push)
+  })
+
+  it('reads an unquoted $(( )) as arithmetic that runs nothing, with its substitutions read', () => {
+    expect(decide(bash('x=$((1+2)); npm test'), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('echo $(( (1+2)*3 )) $(( 4 ))'), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('echo $(( $(git push) + 1 ))'), p)).toEqual(push)
+    expect(decide(bash('echo $(( (1+2)*3 )); git push'), p)).toEqual(push)
+    expect(decide(bash('echo $((git push) )'), p)).toEqual(push)
+    expect(decide(bash('echo $((1+2)) && rm -rf ../x'), p)).toEqual(del)
+    // PowerShell's $(( is a sub-expression that starts with a parenthesis
+    expect(decide(ps('Write-Output $((git push))'), p)).toEqual(push)
+  })
+
+  it('reads the labels of a PowerShell switch as values and the blocks after them as commands', () => {
+    expect(decide(ps('switch ($x) {a {npm test}}'), p)).toEqual({ decision: 'allow' })
+    expect(decide(ps('switch ($x) { a { npm test } b { npm run build } default { npm test } }'), p)).toEqual({ decision: 'allow' })
+    expect(decide(ps('switch -Regex ($x)\n{\n  "a.*" { npm test }\n  default { npm test }\n}'), p)).toEqual({ decision: 'allow' })
+    expect(decide(ps('switch ($x) {a {git push}}'), p)).toEqual(push)
+    expect(decide(ps('switch ($x) { a { npm test } default { git push } }'), p)).toEqual(push)
+    expect(decide(ps('switch ($x) {a {npm test}}; git push'), p)).toEqual(push)
+    // A block inside the subject is no switch body: what stands before it is a command
+    expect(decide(ps('switch ((Get-ChildItem) | % { Remove-Item -Recurse ../x -Include {a} }) {1 {npm test}}'), p)).toEqual(del)
+    expect(decide(ps('switch (Get-X | ForEach-Object { git push }) {1 {npm test}}'), p)).toEqual(push)
+    expect(decide(ps('switch (Get-X | ForEach-Object { npm test }) {1 {npm test} default {npm test}}'), p)).toEqual({ decision: 'allow' })
+    // A command end that is not the switch's own subject or body disarms it
+    expect(decide(ps('switch $x; Foo { Remove-Item -Recurse ../x { npm test } }'), p)).toEqual(del)
+    expect(decide(ps('switch $x | Foo { Remove-Item -Recurse ../x { npm test } }'), p)).toEqual(del)
+    expect(decide(ps('switch $x && Foo { Remove-Item -Recurse ../x { npm test } }'), p)).toEqual(del)
+    expect(decide(ps('switch $x\nFoo { Remove-Item -Recurse ../x { npm test } }'), p)).toEqual(del)
+    expect(decide(ps('switch ($x)\n{\n  a { npm test }\n}'), p)).toEqual({ decision: 'allow' })
+    expect(decide(ps('switch ($x; $y) {a {npm test}}'), p)).toEqual({ decision: 'allow' })
+    // A switch without parentheses: the brace that ends its command opens its body
+    expect(decide(ps('switch $x {a {npm test}}'), p)).toEqual({ decision: 'allow' })
+    expect(decide(ps('switch -Regex $x { "a.*" { npm test } default { git push } }'), p)).toEqual(push)
+    // Outside a switch body a word before a block is still a command
+    expect(decide(ps('Invoke-Foo { npm test }'), p)).toEqual({ decision: 'unknown' })
+    expect(decide(ps('switch ($x) {a {npm test}}; Invoke-Foo { npm test }'), p)).toEqual({ decision: 'unknown' })
+  })
+
+  // An unquoted heredoc delimiter makes its body a double-quoted text: the shell runs the substitutions in it
+  it('would deny a substitution in the body of a heredoc whose delimiter is not quoted, and reads none in a quoted one', () => {
+    expect(decide(bash('cat <<EOF\n$(rm -rf ../x)\nEOF'), p)).toEqual(del)
+    expect(decide(bash('cat <<EOF\nhello `git push`\nEOF'), p)).toEqual(push)
+    expect(decide(bash('cat <<-EOF\n\t$(git push)\n\tEOF'), p)).toEqual(push)
+    expect(decide(bash('cat <<EOF\n$(git push)\nEOF\nrm -rf ../x'), p)).toEqual(push)
+    expect(decide(bash('cat <<EOF\nline\nEOF\ngit push'), p)).toEqual(push)
+    expect(decide(bash("cat <<'EOF'\n$(rm -rf ../x)\nEOF"), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('cat <<"EOF"\n$(rm -rf ../x)\nEOF'), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('cat <<EOF\n\\$(rm -rf ../x)\nEOF'), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('cat <<EOF\n$(git rev-parse HEAD)\nEOF'), p)).toEqual({ decision: 'allow' })
   })
 })

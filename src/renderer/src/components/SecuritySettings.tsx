@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import type { AuditQuery, PluginsCallAnswer } from '../../../core/types'
+import type { AgentProfile } from '../../../core/agentProfiles/types'
 import type { AuditMode, AuditPolicy, AuditRule, CoverageRow } from '../../../core/audit/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
@@ -28,12 +29,17 @@ import {
   decisionLabel,
   effectLabel,
   filterChoices,
+  chooseJob,
+  auditScrollDue,
+  focusedFilters,
+  jobFilterView,
   nextPageQuery,
   pageOf,
   recordTime,
   rowTime,
   ruleActionChoices,
   scopeLabel,
+  resetBodyKey,
   securityFailure,
   sessionLabel,
   summaryOf,
@@ -89,6 +95,14 @@ export function SecuritySettings({
   /** Counts the rule changes: Audit Logs reads again after each, since the rules decide every row it shows. */
   const [changes, setChanges] = useState(0)
   const radioGroup = useId()
+  const auditSection = useRef<HTMLElement>(null)
+  const auditShown = useRef<string | null>(null)
+  useEffect(() => {
+    const due = auditScrollDue(focus, policy !== null || failure !== null, auditShown.current)
+    if (due === null) return
+    auditShown.current = due
+    auditSection.current?.scrollIntoView({ block: 'start' })
+  }, [focus, policy, failure])
 
   const load = async (): Promise<void> => {
     const r = await window.api.audit.policies().catch(failed)
@@ -125,10 +139,10 @@ export function SecuritySettings({
   }
 
   /** Starting over is also the repair of a damaged rules file (the Host keeps the damaged copy beside it). */
-  const reset = async (): Promise<void> => {
+  const reset = async (damaged: boolean): Promise<void> => {
     const ok = await confirmModal({
       title: t('settings.security.reset.title'),
-      body: t('settings.security.reset.body'),
+      body: t(resetBodyKey(damaged)),
       confirmLabel: t('settings.security.reset')
     })
     if (ok) await change(() => window.api.audit.resetRules())
@@ -144,7 +158,7 @@ export function SecuritySettings({
           <div className="settings-group">
             <p className="settings-hint is-warning">{shownFailure.line}</p>
             {shownFailure.repair && (
-              <button className="settings-gen-refresh" disabled={busy} onClick={() => void reset()}>
+              <button className="settings-gen-refresh" disabled={busy} onClick={() => void reset(true)}>
                 {t('settings.security.reset')}
               </button>
             )}
@@ -253,13 +267,13 @@ export function SecuritySettings({
                 onChange={(v) => void change(() => window.api.audit.setOtherwise(v as AuditPolicy['otherwise']))}
               />
             </div>
-            <button className="settings-gen-refresh" disabled={busy} onClick={() => void reset()}>
+            <button className="settings-gen-refresh" disabled={busy} onClick={() => void reset(false)}>
               {t('settings.security.reset')}
             </button>
           </>
         )}
       </section>
-      <section className="security-section">
+      <section className="security-section" ref={auditSection}>
         <h3 className="security-title">{AUDIT_LOGS_TITLE}</h3>
         <AuditLogs
           mode={policy?.mode ?? null}
@@ -388,8 +402,8 @@ function AuditLogs({
   const focusRunId = focus !== undefined && 'runId' in focus ? focus.runId : undefined
   const focusJobId = focus !== undefined && 'jobId' in focus ? focus.jobId : undefined
   useEffect(() => {
-    const focused = { ...(focusRunId !== undefined ? { runId: focusRunId } : {}), ...(focusJobId !== undefined ? { jobId: focusJobId } : {}) }
-    const q = auditQuery({ ...filters, ...focused }, period, new Date())
+    const focused: AuditFocus | undefined = focusRunId !== undefined ? { runId: focusRunId, name: '' } : focusJobId !== undefined ? { jobId: focusJobId, name: '' } : undefined
+    const q = auditQuery(focusedFilters(filters, focused), period, new Date())
     query.current = q
     const n = ++reading.current
     setLoading(true)
@@ -433,20 +447,18 @@ function AuditLogs({
 
   const setFilter = (k: keyof AuditFilters, v: string): void => setFilters((f) => ({ ...f, [k]: v === '' ? undefined : v }))
   const sessionItems = choices.sessions.map((s) => ({ value: s.sessionId, label: sessionLabel(s, sessionTitle(s.sessionId), t) }))
-  const jobItems = choices.jobs.map((j) => ({ value: j.id, label: (j.runId !== undefined ? runName(j.runId) : undefined) ?? j.id.slice(0, 12) }))
+  const jobView = jobFilterView({
+    focus,
+    filters,
+    jobs: choices.jobs,
+    runName,
+    labels: { all: t('settings.security.filter.allJobs'), focus: (name) => t('settings.security.filter.run', { name }) }
+  })
   const line = rows === null ? null : auditStateLine({ failure, mode, count: rows.length }, t)
 
   return (
     <div className="security-audit" aria-busy={loading || loadingMore}>
       <p className="settings-hint">{t('settings.security.audit.hint')}</p>
-      {focus !== undefined && (
-        <div className="security-run-filter">
-          <b>{t('settings.security.filter.run', { name: focus.name })}</b>
-          <button className="detail-clear" title={t('settings.security.filter.clear')} aria-label={t('settings.security.filter.clear')} onClick={onClearFocus}>
-            <X size={12} />
-          </button>
-        </div>
-      )}
       <div className="security-filters">
         <Select
           ariaLabel={t('settings.security.period.label')}
@@ -468,9 +480,13 @@ function AuditLogs({
         />
         <Select
           ariaLabel={t('settings.security.filter.job')}
-          items={[{ value: '', label: t('settings.security.filter.allJobs') }, ...jobItems]}
-          value={filters.jobId ?? ''}
-          onChange={(v) => setFilter('jobId', v)}
+          items={jobView.items}
+          value={jobView.value}
+          onChange={(v) => {
+            const c = chooseJob(v, focus, filters)
+            if (c.clearFocus) onClearFocus()
+            setFilters(c.filters)
+          }}
         />
         <Select
           ariaLabel={t('settings.security.filter.decision')}
@@ -502,59 +518,7 @@ function AuditLogs({
       {counts?.stoppedAtLimit === true && <p className="settings-hint is-warning">{t('settings.security.audit.stoppedAtLimit')}</p>}
       {line !== null && <p className="settings-hint">{line}</p>}
       {rows !== null && rows.length > 0 && (
-        <div className="security-table-wrap">
-          <table className="security-table security-rows">
-            <thead>
-              <tr>
-                <th scope="col">{t('settings.security.col.time')}</th>
-                <th scope="col">{t('settings.security.col.session')}</th>
-                <th scope="col">{t('settings.security.col.action')}</th>
-                <th scope="col">{t('settings.security.col.target')}</th>
-                <th scope="col">{t('settings.security.col.decision')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r, i) => {
-                // The date heads each day's rows; the full time is on hover
-                const when = rowTime(r.at, rows[i - 1]?.at)
-                const profile = r.agentProfileId !== undefined ? profileNameOf(profiles, r.agentProfileId) : undefined
-                const rule = decidingRule(r, rules, t)
-                return (
-                  <tr key={r.id}>
-                    <td className="security-time" title={recordTime(r.at)}>
-                      {when.date !== undefined && <span className="security-date">{when.date}</span>}
-                      {when.time}
-                    </td>
-                    <td className="security-session-cell">
-                      {/* With what observe sees of such a session (design §9), on hover */}
-                      <span className="security-session" title={coverageLine(coverage, r, t)}>
-                        {sessionLabel(r, sessionTitle(r.sessionId), t)}
-                      </span>
-                      {profile !== undefined && (
-                        <span className="security-profile" title={profile}>
-                          {profile}
-                        </span>
-                      )}
-                    </td>
-                    <td>{actionPhrase(r.action, t)}</td>
-                    <td className="security-target" title={r.target}>
-                      {r.target}
-                    </td>
-                    {/* The rule that decided, under the decision: a column of its own left no room at the tab's width */}
-                    <td>
-                      <span className={`security-decision is-${r.decision}`}>{decisionLabel(r.decision, t)}</span>
-                      {rule !== '' && (
-                        <span className="security-decided-by" title={`${t('settings.security.col.rule')}: ${rule}`}>
-                          {rule}
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
+        <AuditTable rows={rows} rules={rules} coverage={coverage} profiles={profiles} sessionTitle={sessionTitle} />
       )}
       {next !== null && (
         <div className="remote-actions">
@@ -564,6 +528,78 @@ function AuditLogs({
           {loadingMore && <span className="loading-spinner" aria-hidden="true" />}
         </div>
       )}
+    </div>
+  )
+}
+
+/** The rows of Audit Logs, newest first: the date heads each day, the rule that decided is under the decision. */
+export function AuditTable({
+  rows,
+  rules,
+  coverage,
+  profiles,
+  sessionTitle
+}: {
+  rows: readonly AuditRow[]
+  rules: readonly AuditRule[]
+  coverage: readonly CoverageRow[]
+  profiles: readonly AgentProfile[]
+  sessionTitle: (sessionId: string) => string | undefined
+}): React.JSX.Element {
+  const { t } = useI18n()
+  return (
+    <div className="security-table-wrap">
+      <table className="security-table security-rows" role="table">
+        <thead role="rowgroup">
+          <tr role="row">
+            <th scope="col" role="columnheader">{t('settings.security.col.time')}</th>
+            <th scope="col" role="columnheader">{t('settings.security.col.session')}</th>
+            <th scope="col" role="columnheader">{t('settings.security.col.action')}</th>
+            <th scope="col" role="columnheader">{t('settings.security.col.target')}</th>
+            <th scope="col" role="columnheader">{t('settings.security.col.decision')}</th>
+          </tr>
+        </thead>
+        <tbody role="rowgroup">
+          {rows.map((r, i) => {
+            // The date heads each day's rows; the full time is on hover
+            const when = rowTime(r.at, rows[i - 1]?.at)
+            const profile = r.agentProfileId !== undefined ? profileNameOf(profiles, r.agentProfileId) : undefined
+            const rule = decidingRule(r, rules, t)
+            return (
+              <tr key={r.id} role="row">
+                <td role="cell" className="security-time" title={recordTime(r.at)}>
+                  {when.date !== undefined && <span className="security-date">{when.date}</span>}
+                  {when.time}
+                </td>
+                <td role="cell" className="security-session-cell">
+                  {/* With what observe sees of such a session (design §9), on hover */}
+                  <span className="security-session" title={coverageLine(coverage, r, t)}>
+                    {sessionLabel(r, sessionTitle(r.sessionId), t)}
+                  </span>
+                  {profile !== undefined && (
+                    <span className="security-profile" title={profile}>
+                      {profile}
+                    </span>
+                  )}
+                </td>
+                <td role="cell">{actionPhrase(r.action, t)}</td>
+                <td role="cell" className="security-target" title={r.target}>
+                  {r.target}
+                </td>
+                {/* The rule that decided, under the decision: a column of its own left no room at the tab's width */}
+                <td role="cell">
+                  <span className={`security-decision is-${r.decision}`}>{decisionLabel(r.decision, t)}</span>
+                  {rule !== '' && (
+                    <span className="security-decided-by" title={`${t('settings.security.col.rule')}: ${rule}`}>
+                      {rule}
+                    </span>
+                  )}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
     </div>
   )
 }

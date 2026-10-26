@@ -130,6 +130,11 @@ const REASONS = {
   noHost: 'settings.security.noHost'
 } as const satisfies Record<string, MessageKey>
 
+/** The body of the start over confirmation. Repairing a damaged file writes the mode sessions have been starting in
+ *  meanwhile, which is off, so it says recording stays off; starting over from a readable file keeps the mode. */
+export const resetBodyKey = (damaged: boolean): MessageKey =>
+  damaged ? 'settings.security.reset.bodyDamaged' : 'settings.security.reset.body'
+
 export function securityFailure(r: Failure, t: T): { line: string; repair: boolean } {
   // Only a damaged file: the Host says so as its reason. Another 409 (a file it could not read at all) is not repaired
   // by starting over, and its own sentence says why
@@ -159,9 +164,10 @@ export const PERIODS: Record<Period, MessageKey> = {
   week: 'settings.security.period.week',
   month: 'settings.security.period.month'
 }
-/** How many days before today a period starts. The longest is the records' whole retention: the store keeps the days
- *  from today−30 (core/audit/store.ts prune), so "the last 30 days" reaches as far back as anything is kept. */
-const DAYS_BACK: Record<Period, number> = { today: 0, week: 6, month: 30 }
+/** How many days before today a period starts: "the last 30 days" is today and the 29 before it, thirty calendar days. */
+const DAYS_BACK: Record<Period, number> = { today: 0, week: 6, month: 29 }
+/** The store keeps the days from today−30 (core/audit/store.ts prune), one day further back than the longest period. */
+const RETENTION_DAYS_BACK = 30
 
 const midnightDaysBack = (now: Date, days: number): string => new Date(now.getFullYear(), now.getMonth(), now.getDate() - days).toISOString()
 
@@ -169,7 +175,7 @@ const midnightDaysBack = (now: Date, days: number): string => new Date(now.getFu
 export const periodSince = (p: Period, now: Date): string => midnightDaysBack(now, DAYS_BACK[p])
 
 /** The oldest record the store still keeps can be from this local midnight. */
-export const retentionSince = (now: Date): string => midnightDaysBack(now, DAYS_BACK.month)
+export const retentionSince = (now: Date): string => midnightDaysBack(now, RETENTION_DAYS_BACK)
 
 /** Where Run detail's count of a Run's calls starts reading: the Run's start (`runs get`'s createdAt) or the retention,
  *  whichever is later, so the Host never reads days the Run cannot have records in. The Run's Audit Logs view reads
@@ -191,6 +197,53 @@ export function observeTargetOf(foldedRunId: string | undefined, openedId: strin
  *  filter's chip. */
 export type AuditFocus = ReturnType<typeof observeTargetOf> & { name: string }
 
+/** The Job filter's value while a focus is the Job it shows. */
+export const FOCUS_VALUE = '@focus'
+
+/** The filters with the focus in place of any Job or Run filter: the focus is what the Job filter shows, so nothing
+ *  under it speaks for the rows. */
+export function focusedFilters(f: AuditFilters, focus: AuditFocus | undefined): AuditFilters {
+  if (focus === undefined) return f
+  const { jobId: _job, runId: _run, ...rest } = f
+  return { ...rest, ...('runId' in focus ? { runId: focus.runId } : { jobId: focus.jobId }) }
+}
+
+/** What the Job filter shows: its choices (all Jobs, the focus once, the Jobs the rows named) and the one selected, the
+ *  focus while there is one. A Job the focus already stands for is not offered twice. */
+export function jobFilterView(a: {
+  focus: AuditFocus | undefined
+  filters: AuditFilters
+  jobs: readonly { id: string; runId?: string }[]
+  runName: (runId: string) => string | undefined
+  labels: { all: string; focus: (name: string) => string }
+}): { items: { value: string; label: string }[]; value: string } {
+  const { focus } = a
+  const own = a.jobs
+    .filter((j) => focus === undefined || ('runId' in focus ? j.runId !== focus.runId : j.id !== focus.jobId))
+    .map((j) => ({ value: j.id, label: (j.runId !== undefined ? a.runName(j.runId) : undefined) ?? j.id.slice(0, 12) }))
+  return {
+    items: [{ value: '', label: a.labels.all }, ...(focus !== undefined ? [{ value: FOCUS_VALUE, label: a.labels.focus(focus.name) }] : []), ...own],
+    value: focus !== undefined ? FOCUS_VALUE : (a.filters.jobId ?? '')
+  }
+}
+
+/** Choosing `value` in the Job filter: the filters after it (no Job for all Jobs), and whether the focus ends. The focus
+ *  ends with any change of the filter; picking the focus again changes nothing. */
+export function chooseJob(value: string, focus: AuditFocus | undefined, filters: AuditFilters): { clearFocus: boolean; filters: AuditFilters } {
+  if (focus !== undefined && value === FOCUS_VALUE) return { clearFocus: false, filters }
+  const { jobId: _job, ...rest } = filters
+  return { clearFocus: focus !== undefined, filters: value === '' ? rest : { ...rest, jobId: value } }
+}
+
+/** Whether to bring Audit Logs into view: the focus's key when it is due (a focus not yet shown, once the rules above it
+ *  have loaded and taken their height), null otherwise. Run detail's link is for the Run's calls, which sit below the
+ *  rules (found on the dev app: the tab opened at Policies). */
+export function auditScrollDue(focus: AuditFocus | undefined, loaded: boolean, shown: string | null): string | null {
+  if (focus === undefined || !loaded) return null
+  const key = 'runId' in focus ? `run:${focus.runId}` : `job:${focus.jobId}`
+  return key === shown ? null : key
+}
+
 /** Run detail reads tokens and the would-deny count no more often than this. */
 export const OBSERVE_READ_EVERY_MS = 30_000
 
@@ -203,6 +256,40 @@ export function observeReadDue(last: { target: string; state: string; at: number
   if (last.state === next.state) return null
   return Math.max(0, OBSERVE_READ_EVERY_MS - (now - last.at))
 }
+
+/** Whether a read's answer is still wanted: Run detail is open and still shows the target it was asked for. One that
+ *  finishes after the window closed sets no state and asks for no retry. */
+export const observeReadIsCurrent = (alive: boolean, shown: string, target: string): boolean => alive && shown === target
+
+/** What Run detail remembers of its last read, and how many in a row failed. */
+export interface ObserveRead {
+  target: string
+  state: string
+  at: number
+  failures: number
+}
+
+/** How many times a failed read is asked again on its own, a wait apart. After that it waits for the Run to move. */
+export const OBSERVE_RETRIES = 3
+
+/** The read that starts now: its failures are those of the reads of the same target before it. */
+export const startObserveRead = (last: ObserveRead | null, next: { target: string; state: string }, now: number): ObserveRead => ({
+  ...next,
+  at: now,
+  failures: last !== null && last.target === next.target ? last.failures : 0
+})
+
+/** What Run detail remembers of a read, and when to ask again. A read that failed is remembered as one of another state,
+ *  so the next trigger reads again once the wait is over instead of finding nothing moved and leaving the facts empty
+ *  for good; on its own it asks again after one wait, OBSERVE_RETRIES times. A good read starts the count again. */
+export function afterObserveRead(read: ObserveRead, ok: boolean): { last: ObserveRead; retryIn: number | null } {
+  if (ok) return { last: { ...read, failures: 0 }, retryIn: null }
+  const failures = read.failures + 1
+  return { last: { ...read, state: '', failures }, retryIn: failures <= OBSERVE_RETRIES ? OBSERVE_READ_EVERY_MS : null }
+}
+
+/** Run detail's key: one component per Run it shows (and Runtime), so another Run never starts from the last one's facts. */
+export const runDetailInstanceKey = (open: { runId: string; runtimeId?: string }): string => `${open.runtimeId ?? ''}|${open.runId}`
 
 /** The filters Audit Logs offers, and the Run it was opened for from Run detail. */
 export type AuditFilters = Pick<AuditQuery, 'sessionId' | 'agentProfileId' | 'jobId' | 'runId' | 'decision' | 'action'>
@@ -356,5 +443,7 @@ export const SECURITY_KEYS: MessageKey[] = [
   ...Object.values(LEVELS),
   ...Object.values(KINDS),
   ...Object.values(REASONS),
+  resetBodyKey(true),
+  resetBodyKey(false),
   ...Object.values(PERIODS)
 ]

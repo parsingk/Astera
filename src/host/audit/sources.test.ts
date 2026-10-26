@@ -68,6 +68,20 @@ const MCP_EXEC = (at: number) =>
     status: 'completed'
   })
 
+/** What Codex writes when a call is over, as the shapes go: a function's output is a string, a custom tool's a list of
+ *  `input_text` parts whose first one opens with how it ended. Only the openings are Codex's; the rest is made up. */
+const OUT = (at: number, id: string, text: string) => rollout(at, 'response_item', { type: 'function_call_output', call_id: id, output: text })
+const CUSTOM_OUT = (at: number, id: string, text: string) =>
+  rollout(at, 'response_item', {
+    type: 'custom_tool_call_output',
+    call_id: id,
+    output: [
+      { type: 'input_text', text },
+      { type: 'input_text', text: 'what it printed' }
+    ]
+  })
+const SHELL_DONE = (at: number, id = 'call_1', code = 0) => OUT(at, id, `Exit code: ${code}\nWall time: 0.1 seconds\nOutput:\nwhat it printed`)
+
 /** A registry that tells its listeners what the test says. */
 function fakeRegistry() {
   const meta = new Set<(id: string, meta: PtyMeta, why: 'open' | 'note') => void>()
@@ -87,14 +101,25 @@ function fakeRegistry() {
   }
 }
 
-/** A recorder that keeps what it is handed, observing until told otherwise. */
+/** A recorder that keeps what it is handed, observing until told otherwise, and tells its listeners when that changes as
+ *  the real one does. */
 function capture() {
   const events: AuditEvent[] = []
   let on = true
+  const listeners = new Set<() => void>()
   return {
     events,
-    setObserving: (v: boolean) => (on = v),
-    recorder: { record: (e: AuditEvent) => void events.push(e), observing: () => on }
+    listening: () => listeners.size,
+    setObserving: (v: boolean) => {
+      if (v === on) return
+      on = v
+      for (const cb of [...listeners]) cb()
+    },
+    recorder: {
+      record: (e: AuditEvent) => void events.push(e),
+      observing: () => on,
+      onObservingChange: (cb: () => void) => (listeners.add(cb), () => void listeners.delete(cb))
+    }
   }
 }
 
@@ -283,6 +308,36 @@ describe('the Claude hook source', () => {
     expect(events.map((e) => e.dedupeKey)).toEqual(['toolu_2'])
     sources.dispose()
   })
+
+  // The audit watcher starts when the recorder says the mode changed, not at the next rollout poll: a line written
+  // between the switch and that tick would otherwise be lost
+  it('hands over a line written the moment observe is turned on, before any poll has run since', async () => {
+    const { events, recorder, setObserving } = capture()
+    const { sources, audit } = await sourcesFor({ recorder })
+    await fs.writeFile(audit('sess_a'), lineOf(postToolUse('Bash', { command: 'ls' }, 'toolu_0')))
+    setObserving(false)
+    await sources.poll()
+    // Written while the mode was off: not read, as before
+    await fs.appendFile(audit('sess_a'), lineOf(postToolUse('Bash', { command: 'git status' }, 'toolu_1')))
+    setObserving(true)
+    // No poll between the switch and these lines: one of an audit file already there, one of a session whose file is new
+    await fs.appendFile(audit('sess_a'), lineOf(postToolUse('Bash', { command: 'git push' }, 'toolu_2')))
+    await fs.writeFile(audit('sess_b'), lineOf(postToolUse('Read', { file_path: 'a' }, 'toolu_3')))
+    await sources.poll()
+    expect(events.map((e) => [e.sessionId, e.dedupeKey]).sort()).toEqual([
+      ['sess_a', 'toolu_2'],
+      ['sess_b', 'toolu_3']
+    ])
+    sources.dispose()
+  })
+
+  it('follows the recorder for as long as it runs, and not after it is disposed', async () => {
+    const { recorder, listening } = capture()
+    const { sources } = await sourcesFor({ recorder })
+    expect(listening()).toBe(1)
+    sources.dispose()
+    expect(listening()).toBe(0)
+  })
 })
 
 describe('the Claude chat source', () => {
@@ -452,8 +507,11 @@ describe('the Codex rollout source', () => {
       'not json',
       JSON.stringify({ type: 'response_item', payload: { type: 'function_call', name: 'shell', arguments: '{}', call_id: 'no_time' } })
     ]
-    const calls = codexRolloutCalls(lines, T0)
-    expect(calls.map((c) => [c.tool, c.dedupeKey, c.status])).toEqual([
+    // A shell, apply_patch or exec call is held for its output: a later line of `lines` gives call_1 one that says
+    // nothing, and the other two are handed over as unknown when the reader is asked what is left
+    const read = codexRolloutCalls()
+    const calls = [...read.read(lines, T0), ...read.unfinished()]
+    expect(calls.map((c) => [c.tool, c.dedupeKey, c.status]).sort((a, b) => (a[1]! < b[1]! ? -1 : 1))).toEqual([
       ['shell', 'call_1', 'unknown'],
       ['apply_patch', 'call_2', 'unknown'],
       ['exec', 'call_3', 'unknown'],
@@ -461,8 +519,196 @@ describe('the Codex rollout source', () => {
       ['apply_patch', 'call_5', 'ok'],
       ['web_search_call', 'ws_1', 'ok']
     ])
-    expect(calls[0].at).toBe(iso(T0 + 10))
-    expect(JSON.stringify(calls.slice(3))).not.toMatch(/secret|private words|"id":"x"/)
+    expect(calls.find((c) => c.dedupeKey === 'call_1')?.at).toBe(iso(T0 + 10))
+    expect(JSON.stringify(calls)).not.toMatch(/secret|private words|"id":"x"/)
+  })
+
+  describe('how a call went, from its output', () => {
+    /** The status a call gets from the output line written for it, the call line having been read first. */
+    const statusOf = (call: string, output: string): string | undefined => {
+      const read = codexRolloutCalls()
+      const calls = [...read.read([call, output], T0), ...read.unfinished()]
+      expect(calls).toHaveLength(1)
+      return calls[0].status
+    }
+
+    it('reads a command’s exit code: 0 is ok, any other is failed', () => {
+      expect(statusOf(SHELL(T0 + 10), SHELL_DONE(T0 + 20, 'call_1', 0))).toBe('ok')
+      expect(statusOf(SHELL(T0 + 10), SHELL_DONE(T0 + 20, 'call_1', 2))).toBe('failed')
+      expect(statusOf(SHELL(T0 + 10), SHELL_DONE(T0 + 20, 'call_1', -1))).toBe('failed')
+      // An unattended session that ran in the background reports the code the same way
+      expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', 'Chunk ID: a1\nWall time: 0.0 seconds\nProcess exited with code 1\nOriginal token count: 4\nOutput:\nx'))).toBe('failed')
+      expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', 'Chunk ID: a1\nWall time: 0.0 seconds\nProcess exited with code 0\nOutput:\nx'))).toBe('ok')
+      // Codex before the text form wrote JSON with the code in its metadata
+      expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', JSON.stringify({ output: 'x', metadata: { exit_code: 0, duration_seconds: 0.1 } })))).toBe('ok')
+      expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', JSON.stringify({ output: 'x', metadata: { exit_code: 127, duration_seconds: 0.1 } })))).toBe('failed')
+    })
+
+    it('reads the code from the header only, never from what the command printed', () => {
+      expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', 'Exit code: 1\nWall time: 0.1 seconds\nOutput:\nExit code: 0'))).toBe('failed')
+      expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', 'Exit code: 0\nWall time: 0.1 seconds\nOutput:\nExit code: 1\nScript failed'))).toBe('ok')
+    })
+
+    it('reads an exec script from how it opens: completed is ok, failed or aborted is failed, running says nothing yet', () => {
+      expect(statusOf(MCP_EXEC(T0 + 10), CUSTOM_OUT(T0 + 20, 'call_3', 'Script completed\nWall time 0.1 seconds'))).toBe('ok')
+      expect(statusOf(MCP_EXEC(T0 + 10), CUSTOM_OUT(T0 + 20, 'call_3', 'Script failed\nWall time 0.1 seconds'))).toBe('failed')
+      expect(statusOf(MCP_EXEC(T0 + 10), CUSTOM_OUT(T0 + 20, 'call_3', 'aborted by user after 3.4s'))).toBe('failed')
+      // Still running in the background: the result comes later, from a call of its own, so this call's stays unknown
+      expect(statusOf(MCP_EXEC(T0 + 10), CUSTOM_OUT(T0 + 20, 'call_3', 'Script running with cell ID 7'))).toBe('unknown')
+      // The same openings as a plain string
+      expect(statusOf(MCP_EXEC(T0 + 10), OUT(T0 + 20, 'call_3', 'Script completed'))).toBe('ok')
+    })
+
+    // Found on the dev app: codex 0.160 runs a command inside an exec script, which completes even when the command
+    // fails; the command's own exit code is in the JSON after the header, and decides
+    // Found on the dev app too: the script printed only the command's text (`text(r.output)`), so no exit code is seen;
+    // a completed script then says nothing of the command, which may have failed
+    it('reads an exec script that ran a command and printed no exit code as unknown, and an MCP-only one as ok', () => {
+      const CMD_EXEC = rollout(T0 + 10, 'response_item', {
+        type: 'custom_tool_call', name: 'exec', call_id: 'call_3', status: 'completed',
+        input: 'const r = await tools.exec_command({cmd:"git log --nope"}); text(r.output);\n'
+      })
+      const out = (parts: string[]) =>
+        rollout(T0 + 20, 'response_item', { type: 'custom_tool_call_output', call_id: 'call_3', output: parts.map((text) => ({ type: 'input_text', text })) })
+      const head = 'Script completed\nWall time 6.5 seconds\nOutput:\n'
+      expect(statusOf(CMD_EXEC, out([head, 'fatal: unrecognized argument: --nope\n']))).toBe('unknown')
+      expect(statusOf(CMD_EXEC, out([head, JSON.stringify({ chunk_id: 'a1', exit_code: 1, output: 'fatal' })]))).toBe('failed')
+      expect(statusOf(CMD_EXEC, out([head, JSON.stringify({ chunk_id: 'a1', exit_code: 0, output: '' })]))).toBe('ok')
+      expect(statusOf(MCP_EXEC(T0 + 10), out([head, '{"number":12}']))).toBe('ok')
+    })
+
+    it('reads the exit codes of the commands an exec script ran: any non-zero one, or a rejected call, is failed', () => {
+      const EXEC_OUT = (parts: string[]) =>
+        rollout(T0 + 20, 'response_item', { type: 'custom_tool_call_output', call_id: 'call_3', output: parts.map((text) => ({ type: 'input_text', text })) })
+      const head = 'Script completed\nWall time 3.1 seconds\nOutput:\n'
+      const result = (code: number, printed = 'x') => JSON.stringify({ chunk_id: 'a1', wall_time_seconds: 0.4, exit_code: code, original_token_count: 3, output: printed })
+      expect(statusOf(MCP_EXEC(T0 + 10), EXEC_OUT([head, result(1, 'fatal: unrecognized argument: --nope\n')]))).toBe('failed')
+      expect(statusOf(MCP_EXEC(T0 + 10), EXEC_OUT([head, result(0)]))).toBe('ok')
+      // Several calls in one script, one per line: one that failed makes the call failed
+      const several = (codes: number[]) =>
+        codes.map((code, i) => JSON.stringify({ i, result: { status: 'fulfilled', value: JSON.parse(result(code)) } })).join('\n')
+      expect(statusOf(MCP_EXEC(T0 + 10), EXEC_OUT([head, several([0, 1, 0])]))).toBe('failed')
+      expect(statusOf(MCP_EXEC(T0 + 10), EXEC_OUT([head, several([0, 0])]))).toBe('ok')
+      expect(statusOf(MCP_EXEC(T0 + 10), EXEC_OUT([head, JSON.stringify({ i: 0, result: { status: 'rejected', reason: 'boom' } })]))).toBe('failed')
+      // What the command printed is a string inside the JSON: an exit_code in it is escaped, and never read
+      expect(statusOf(MCP_EXEC(T0 + 10), EXEC_OUT([head, result(0, '{"exit_code": 1}')]))).toBe('ok')
+      // A command left running in the background has no code yet
+      expect(statusOf(MCP_EXEC(T0 + 10), EXEC_OUT([head, JSON.stringify({ chunk_id: 'a1', wall_time_seconds: 10, session_id: 7, output: '' })]))).toBe('unknown')
+    })
+
+    it('reads an apply_patch from its result: success is ok, a refusal is failed', () => {
+      expect(statusOf(PATCH(T0 + 10), CUSTOM_OUT(T0 + 20, 'call_2', 'Success. Updated the following files:\nM src/a.ts'))).toBe('ok')
+      expect(statusOf(PATCH(T0 + 10), OUT(T0 + 20, 'call_2', 'Success. Updated the following files:\nM src/a.ts'))).toBe('ok')
+      expect(statusOf(PATCH(T0 + 10), CUSTOM_OUT(T0 + 20, 'call_2', 'apply_patch verification failed: could not find the lines to change'))).toBe('failed')
+      expect(statusOf(PATCH(T0 + 10), OUT(T0 + 20, 'call_2', JSON.stringify({ output: 'Success.', metadata: { exit_code: 0 } })))).toBe('ok')
+    })
+
+    it('reads an apply_patch only by known signs: an unrecognised or blank result says nothing', () => {
+      // The text form of a command result, with its own words under Output:
+      expect(statusOf(PATCH(T0 + 10), OUT(T0 + 20, 'call_2', 'Exit code: 0\nWall time: 0.1 seconds\nOutput:\nSuccess. Updated the following files:\nM src/a.ts'))).toBe('ok')
+      expect(statusOf(PATCH(T0 + 10), OUT(T0 + 20, 'call_2', 'Exit code: 1\nWall time: 0.1 seconds\nOutput:\nSuccess.'))).toBe('failed')
+      expect(statusOf(PATCH(T0 + 10), CUSTOM_OUT(T0 + 20, 'call_2', 'Error: could not write the file'))).toBe('failed')
+      expect(statusOf(PATCH(T0 + 10), CUSTOM_OUT(T0 + 20, 'call_2', 'Failed to apply the patch'))).toBe('failed')
+      expect(statusOf(PATCH(T0 + 10), CUSTOM_OUT(T0 + 20, 'call_2', 'The patch went through, I think'))).toBe('unknown')
+      expect(statusOf(PATCH(T0 + 10), CUSTOM_OUT(T0 + 20, 'call_2', ''))).toBe('unknown')
+      expect(statusOf(PATCH(T0 + 10), CUSTOM_OUT(T0 + 20, 'call_2', ' \n\t '))).toBe('unknown')
+      expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', '  \n'))).toBe('unknown')
+    })
+
+    it('keeps unknown when the output says nothing: prose, nothing, or a command still running', () => {
+      expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', 'ok'))).toBe('unknown')
+      expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', ''))).toBe('unknown')
+      expect(statusOf(SHELL(T0 + 10), rollout(T0 + 20, 'response_item', { type: 'function_call_output', call_id: 'call_1' }))).toBe('unknown')
+      expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', 'Process running with session ID 5\nOutput:\nx'))).toBe('unknown')
+      expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', JSON.stringify({ output: 'x' })))).toBe('unknown')
+      expect(statusOf(SHELL(T0 + 10), OUT(T0 + 20, 'call_1', '{ not json'))).toBe('unknown')
+    })
+
+    it('holds a call until its output comes, in a later read too, and hands it over once', () => {
+      const read = codexRolloutCalls()
+      expect(read.read([SHELL(T0 + 10)], T0)).toEqual([])
+      expect(read.read(['not json', rollout(T0 + 15, 'response_item', { type: 'message', role: 'assistant', content: [] })], T0)).toEqual([])
+      const [done] = read.read([SHELL_DONE(T0 + 20)], T0)
+      expect(done).toMatchObject({ tool: 'shell', dedupeKey: 'call_1', status: 'ok', at: iso(T0 + 10) })
+      // The output again: nothing waits for it any more
+      expect(read.read([SHELL_DONE(T0 + 21)], T0)).toEqual([])
+      expect(read.unfinished()).toEqual([])
+    })
+
+    it('hands over a call whose output never came as unknown when asked, and forgets it', () => {
+      const read = codexRolloutCalls()
+      read.read([SHELL(T0 + 10), MCP_EXEC(T0 + 11)], T0)
+      expect(read.unfinished().map((c) => [c.dedupeKey, c.status, c.at])).toEqual([
+        ['call_1', 'unknown', iso(T0 + 10)],
+        ['call_3', 'unknown', iso(T0 + 11)]
+      ])
+      expect(read.unfinished()).toEqual([])
+      // And one that was let go is not handed over by a late output
+      read.read([SHELL(T0 + 12)], T0)
+      read.forget()
+      expect(read.read([SHELL_DONE(T0 + 20)], T0)).toEqual([])
+      expect(read.unfinished()).toEqual([])
+    })
+
+    it('hands over a tool whose output cannot say how it went at once, as unknown', () => {
+      const read = codexRolloutCalls()
+      const spawn = rollout(T0 + 10, 'response_item', { type: 'function_call', name: 'spawn_agent', arguments: '{}', call_id: 'call_9' })
+      expect(read.read([spawn], T0).map((c) => [c.tool, c.status])).toEqual([['spawn_agent', 'unknown']])
+    })
+
+    it('hands over a tool named like an object’s own property at once, as any other tool it does not know', () => {
+      const read = codexRolloutCalls()
+      const named = ['constructor', 'toString', 'hasOwnProperty', '__proto__'].map((name, i) =>
+        rollout(T0 + 10 + i, 'response_item', { type: 'function_call', name, arguments: '{}', call_id: `call_p${i}` })
+      )
+      expect(read.read(named, T0).map((c) => [c.tool, c.status])).toEqual([
+        ['constructor', 'unknown'],
+        ['toString', 'unknown'],
+        ['hasOwnProperty', 'unknown'],
+        ['__proto__', 'unknown']
+      ])
+      expect(read.unfinished()).toEqual([])
+    })
+
+    it('lets an end event stand for its call: a patch that ended is handed over once, with the end’s own status', () => {
+      const read = codexRolloutCalls()
+      const end = rollout(T0 + 15, 'event_msg', { type: 'patch_apply_end', call_id: 'call_2', success: false, stdout: '', stderr: 'no', changes: { [path.join(cwd, 'src/a.ts')]: {} } })
+      const first = read.read([PATCH(T0 + 10), end], T0)
+      expect(first.map((c) => [c.tool, c.dedupeKey, c.status])).toEqual([['apply_patch', 'call_2', 'failed']])
+      expect(read.read([CUSTOM_OUT(T0 + 20, 'call_2', 'Success. Updated the following files:\nM src/a.ts')], T0)).toEqual([])
+      expect(read.unfinished()).toEqual([])
+    })
+
+    it('does not parse an output that no call waits for, and holds at most 200 calls, the oldest handed over unknown', () => {
+      const read = codexRolloutCalls()
+      expect(read.read([OUT(T0 + 20, 'call_x', 'x'.repeat(2000))], T0)).toEqual([])
+      const calls = Array.from({ length: 201 }, (_, i) => SHELL(T0 + 10 + i, `call_${i}`))
+      const letGo = read.read(calls, T0)
+      expect(letGo.map((c) => [c.dedupeKey, c.status])).toEqual([['call_0', 'unknown']])
+      expect(read.unfinished()).toHaveLength(200)
+    })
+
+    it('hands over a call that waited a minute for its output as unknown, and nothing for its output after', () => {
+      let clock = T0
+      const read = codexRolloutCalls(() => clock)
+      expect(read.read([SHELL(T0 + 10, 'call_1')], T0)).toEqual([])
+      clock += 30_000
+      expect(read.read([SHELL(T0 + 20, 'call_2')], T0)).toEqual([])
+      clock += 29_999
+      expect(read.overdue()).toEqual([])
+      clock += 1
+      expect(read.overdue().map((c) => [c.dedupeKey, c.status, c.at])).toEqual([['call_1', 'unknown', iso(T0 + 10)]])
+      expect(read.overdue()).toEqual([])
+      expect(read.read([SHELL_DONE(T0 + 30, 'call_1')], T0)).toEqual([])
+      expect(read.read([SHELL_DONE(T0 + 40, 'call_2')], T0).map((c) => [c.dedupeKey, c.status])).toEqual([['call_2', 'ok']])
+      expect(read.unfinished()).toEqual([])
+    })
+
+    it('reads no output for a call made before the time given', () => {
+      const read = codexRolloutCalls()
+      expect(read.read([SHELL(T0 - 1000), SHELL_DONE(T0 + 20)], T0)).toEqual([])
+      expect(read.unfinished()).toEqual([])
+    })
   })
 
   it('a rollout with a shell call, an apply_patch and an MCP exec makes three records, read from the session’s start', async () => {
@@ -476,7 +722,12 @@ describe('the Codex rollout source', () => {
     const { sources } = await sourcesFor({ recorder: r.recorder, ptys, now: () => now })
     ptys.open('pty1', note('session', 'sess_cx', OBSERVED))
     now += 2000
-    await fs.appendFile(file, [SHELL(T0 + 1000), PATCH(T0 + 1100), MCP_EXEC(T0 + 1200)].join('\n') + '\n')
+    const finished = [
+      SHELL_DONE(T0 + 1010),
+      CUSTOM_OUT(T0 + 1110, 'call_2', 'Success. Updated the following files:\nM src/a.ts'),
+      CUSTOM_OUT(T0 + 1210, 'call_3', 'Script completed\nWall time 0.1 seconds')
+    ]
+    await fs.appendFile(file, [SHELL(T0 + 1000), PATCH(T0 + 1100), MCP_EXEC(T0 + 1200), ...finished].join('\n') + '\n')
     ptys.note('pty1', note('session', 'sess_cx', { ...OBSERVED, rolloutPath: file }))
     await sources.poll()
     await sources.poll()
@@ -485,9 +736,9 @@ describe('the Codex rollout source', () => {
     await sources.poll()
     const records = await r.records()
     expect(records.map(brief).sort(byAction)).toEqual([
-      { source: 'codex-rollout', providerTool: 'apply_patch', action: 'filesystem.write', target: 'src/a.ts', status: 'unknown' },
-      { source: 'codex-rollout', providerTool: 'shell', action: 'git.read', target: 'git status', status: 'unknown' },
-      { source: 'codex-rollout', providerTool: 'exec', action: 'mcp.call', target: 'github.create_issue', status: 'unknown' }
+      { source: 'codex-rollout', providerTool: 'apply_patch', action: 'filesystem.write', target: 'src/a.ts', status: 'ok' },
+      { source: 'codex-rollout', providerTool: 'shell', action: 'git.read', target: 'git status', status: 'ok' },
+      { source: 'codex-rollout', providerTool: 'exec', action: 'mcp.call', target: 'github.create_issue', status: 'ok' }
     ])
     expect(records.every((x) => x.sessionId === 'sess_cx' && x.kind === 'terminal')).toBe(true)
     sources.dispose()
@@ -505,7 +756,7 @@ describe('the Codex rollout source', () => {
     ptys.open('pty1', note('session', 'sess_r', { ...OBSERVED, resumeSessionId: 'th_old' }))
     ptys.note('pty1', note('session', 'sess_r', { ...OBSERVED, resumeSessionId: 'th_old', rolloutPath: file }))
     await sources.poll()
-    await fs.appendFile(file, SHELL(T0 + 50, 'call_new') + '\n')
+    await fs.appendFile(file, [SHELL(T0 + 50, 'call_new'), SHELL_DONE(T0 + 60, 'call_new')].join('\n') + '\n')
     await sources.poll()
     expect(events.map((e) => e.dedupeKey)).toEqual(['call_new'])
     sources.dispose()
@@ -547,9 +798,154 @@ describe('the Codex rollout source', () => {
     now = T0 + 100
     setObserving(true)
     await sources.poll()
-    await fs.appendFile(file, SHELL(T0 + 200, 'call_on') + '\n')
+    await fs.appendFile(file, [SHELL(T0 + 200, 'call_on'), SHELL_DONE(T0 + 210, 'call_on')].join('\n') + '\n')
     await sources.poll()
     expect(events.map((e) => e.dedupeKey)).toEqual(['call_on'])
     sources.dispose()
+  })
+
+  // The rollouts are taken up from their ends at the switch, as the audit files are, not at the next poll
+  it('reads a rollout line written the moment observe is turned on, before any poll has run since', async () => {
+    const dir = await tempDir()
+    const file = path.join(dir, 'r.jsonl')
+    await fs.writeFile(file, '')
+    const ptys = fakeRegistry()
+    const { events, recorder, setObserving } = capture()
+    const { sources } = await sourcesFor({ recorder, ptys, now: () => T0 })
+    ptys.open('pty1', note('session', 'sess_cx', { ...OBSERVED, rolloutPath: file }))
+    setObserving(false)
+    await sources.poll()
+    await fs.appendFile(file, SHELL(T0 + 10, 'call_off') + '\n')
+    setObserving(true)
+    await fs.appendFile(file, [SHELL(T0 + 20, 'call_on'), SHELL_DONE(T0 + 30, 'call_on')].join('\n') + '\n')
+    await sources.poll()
+    expect(events.map((e) => e.dedupeKey)).toEqual(['call_on'])
+    sources.dispose()
+  })
+
+  it('asks the recorder to retry a mode it could not read at every tick of its timer, and stops with it', () => {
+    let tick: () => void = () => {}
+    let stopped = false
+    let retried = 0
+    const { recorder } = capture()
+    const sources = createAuditSources({
+      recorder: { ...recorder, retryMode: () => void retried++ },
+      ptys: fakeRegistry(),
+      procs: fakeRegistry(),
+      hookEventsDir: os.tmpdir(),
+      log: () => {},
+      every: (_ms, fn) => ((tick = fn), () => void (stopped = true)),
+      watch: (() => ({ on: () => {}, close: () => {} })) as never
+    })
+    tick()
+    tick()
+    expect(retried).toBe(2)
+    sources.dispose()
+    expect(stopped).toBe(true)
+  })
+
+  // What a Codex session ran when its output never came: the session ended, the Host is leaving, or a new file began
+  it('hands over a call still waiting for its output as unknown when its session ends, the Host leaves or a new rollout begins', async () => {
+    const dir = await tempDir()
+    const files = ['a', 'b', 'c'].map((n) => path.join(dir, `${n}.jsonl`))
+    for (const f of files) await fs.writeFile(f, '')
+    const ptys = fakeRegistry()
+    const { events, recorder } = capture()
+    const { sources } = await sourcesFor({ recorder, ptys, now: () => T0 })
+    ptys.open('pty_a', note('session', 'sess_a', { ...OBSERVED, rolloutPath: files[0] }))
+    ptys.open('pty_b', note('session', 'sess_b', { ...OBSERVED, rolloutPath: files[1] }))
+    ptys.open('pty_c', note('session', 'sess_c', { ...OBSERVED, rolloutPath: files[2] }))
+    for (const [i, f] of files.entries()) await fs.appendFile(f, SHELL(T0 + 10, `call_${i}`) + '\n')
+    await sources.poll()
+    // Waiting: nothing handed over yet
+    expect(events).toEqual([])
+    // The session of the first ends: what it still waited for is its last word
+    ptys.exit('pty_a')
+    await sources.poll()
+    expect(events.map((e) => [e.sessionId, e.dedupeKey, e.status])).toEqual([['sess_a', 'call_0', 'unknown']])
+    // The second goes on to a new rollout (Codex's /new): the old file is read once more, then not followed any more
+    ptys.note('pty_b', note('session', 'sess_b', { ...OBSERVED, rolloutPath: path.join(dir, 'b2.jsonl') }))
+    await sources.poll()
+    expect(events.map((e) => [e.sessionId, e.dedupeKey, e.status])).toEqual([
+      ['sess_a', 'call_0', 'unknown'],
+      ['sess_b', 'call_1', 'unknown']
+    ])
+    // The Host leaves: the third will never be heard end
+    sources.dispose()
+    expect(events.map((e) => e.dedupeKey)).toEqual(['call_0', 'call_1', 'call_2'])
+  })
+
+  // Codex's /new names a new file while the old one may still hold unread lines: the outputs its calls waited for
+  it('reads the old rollout one last time when a new one begins, so an output in its unread tail says how its call went', async () => {
+    const dir = await tempDir()
+    const [oldFile, newFile] = ['old', 'new'].map((n) => path.join(dir, `${n}.jsonl`))
+    await fs.writeFile(oldFile, '')
+    await fs.writeFile(newFile, '')
+    const ptys = fakeRegistry()
+    const { events, recorder } = capture()
+    const { sources } = await sourcesFor({ recorder, ptys, now: () => T0 })
+    ptys.open('pty1', note('session', 'sess_cx', { ...OBSERVED, rolloutPath: oldFile }))
+    await fs.appendFile(oldFile, [SHELL(T0 + 10, 'call_a'), SHELL(T0 + 11, 'call_b')].join('\n') + '\n')
+    await sources.poll()
+    // Written before the note, not read yet: call_a's output, and a call that never gets one
+    await fs.appendFile(oldFile, [SHELL_DONE(T0 + 20, 'call_a', 1), SHELL(T0 + 21, 'call_c')].join('\n') + '\n')
+    ptys.note('pty1', note('session', 'sess_cx', { ...OBSERVED, rolloutPath: newFile }))
+    await fs.appendFile(newFile, [SHELL(T0 + 30, 'call_n'), SHELL_DONE(T0 + 31, 'call_n')].join('\n') + '\n')
+    await sources.poll()
+    expect(events.map((e) => [e.dedupeKey, e.status])).toEqual([
+      ['call_a', 'failed'],
+      ['call_b', 'unknown'],
+      ['call_c', 'unknown'],
+      ['call_n', 'ok']
+    ])
+    // The old file is not followed any more
+    await fs.appendFile(oldFile, SHELL_DONE(T0 + 40, 'call_b') + '\n')
+    await sources.poll()
+    sources.dispose()
+    expect(events).toHaveLength(4)
+  })
+
+  // Before a call waited for its output it was recorded at once: a Host that dies while one waits loses at most a minute
+  it('records a call still waiting for its output after a minute, as unknown, and once only when the output comes', async () => {
+    const dir = await tempDir()
+    const file = path.join(dir, 'r.jsonl')
+    await fs.writeFile(file, '')
+    const ptys = fakeRegistry()
+    const r = await realRecorder({ ptys: [entry('pty1', note('session', 'sess_cx', { ...OBSERVED, rolloutPath: file }))] })
+    let now = T0
+    const { sources } = await sourcesFor({ recorder: r.recorder, ptys, now: () => now })
+    ptys.open('pty1', note('session', 'sess_cx', { ...OBSERVED, rolloutPath: file }))
+    await fs.appendFile(file, SHELL(T0 + 10, 'call_long') + '\n')
+    await sources.poll()
+    now += 59_000
+    await sources.poll()
+    expect(await r.records()).toEqual([])
+    now += 1_000
+    await sources.poll()
+    expect((await r.records()).map(brief)).toEqual([
+      { source: 'codex-rollout', providerTool: 'shell', action: 'git.read', target: 'git status', status: 'unknown' }
+    ])
+    await fs.appendFile(file, SHELL_DONE(T0 + 70_000, 'call_long') + '\n')
+    await sources.poll()
+    sources.dispose()
+    expect(await r.records()).toHaveLength(1)
+  })
+
+  it('forgets what waited for an output while the mode was off, as the calls then were not read', async () => {
+    const dir = await tempDir()
+    const file = path.join(dir, 'r.jsonl')
+    await fs.writeFile(file, '')
+    const ptys = fakeRegistry()
+    const { events, recorder, setObserving } = capture()
+    const { sources } = await sourcesFor({ recorder, ptys, now: () => T0 })
+    ptys.open('pty1', note('session', 'sess_cx', { ...OBSERVED, rolloutPath: file }))
+    await fs.appendFile(file, SHELL(T0 + 10, 'call_before') + '\n')
+    await sources.poll()
+    setObserving(false)
+    setObserving(true)
+    await fs.appendFile(file, SHELL_DONE(T0 + 20, 'call_before') + '\n')
+    await sources.poll()
+    sources.dispose()
+    expect(events).toEqual([])
   })
 })

@@ -863,11 +863,18 @@ permission prompt: the number of those Tasks, read from the same hook events as 
 
 **`runs get` carries `tokens` and `coordinatorTokens`**: the tokens the run's Tasks' sessions spent (every attempt,
 and each session a roll moved one to, counted once), and apart from them what the coordinator Astera started for the
-run spent, each as `{ input, output, total }`, where `input` counts cached input too. The Host reads them in every mode
-from what Claude and Codex already write (a Claude session's transcript and its sub-agents' files, a chat's stream, a
-Codex rollout) and keeps them in `token-totals.json` in the profile until the run is deleted. Each is left out when the
-Host read none, such as for a session the app ran without a Host. MCP's `get_task` carries the Task's own `tokens`.
-What they cost in money is not shown.
+run spent, each as `{ input, output, total }`, where `input` counts cached input too. After a worker's attempt ends, and
+after the run finishes, what the session goes on to spend still counts until a person prompts it: types in its tab or
+chat, replies from Slack, or runs `astera sessions send` from a shell. So a response that finishes after the worker's
+report counts, and so does the coordinator's wrap-up however long it takes, whether a background task's end woke it or
+what Astera types itself (a nudge, or a roll's carry-on, onto the same account or another). What a person sends after
+that is not the run's. In a chat an older Astera app writes to, which does not say which lines a person typed, two
+minutes after the end stand in for that. A run counts as finished from when its outcome was settled, which a later edit
+of a Task does not move; a run that finished before this version of Astera counts from when its Tasks last changed
+before the update. The Host reads them in every mode from what Claude and Codex already write (a Claude session's
+transcript and its sub-agents' files, a chat's stream, a Codex rollout) and keeps them in `token-totals.json` in the
+profile until the run is deleted. Each is left out when the Host read none, such as for a session the app ran without a
+Host. MCP's `get_task` carries the Task's own `tokens`. What they cost in money is not shown.
 
 **`runs get` carries `github`** for a run of a `--github-lifecycle` Job: the pull request Astera bound for the run's
 branch, its head, the CI checks of that head with the `verdict` and the check that failed first (with its `class`, such
@@ -1157,29 +1164,48 @@ keeps the records in the profile (`audit/`, a file a day, for 30 days or up to 5
 The rules say what each call would get if Astera enforced them. They are tried in order: the first rule whose action
 matches a call decides it, `allow` or `would-deny`, and `otherwise` decides a call no rule matches. A rule's action is
 matched exactly, or by a start ending in `*` (`git.*`), and a rule with `--scope inside-project` or `outside-project`
-matches only calls known to be inside, or outside, the session's project folder. Each command of a compound line
-(`cd sub && git push`) is judged on its own, and the first one a rule denies makes the line `would-deny`. A call is
-`unknown` when Astera could not read it, such as a line with an unknown shell command in it, when a denied command sits
-in a loop or an `if` block (`for`, `while`, `if`, `case`, PowerShell `foreach`, `ForEach-Object` or `Where-Object`; it
-may not have run, while `a && b` is read as both commands), or when a write or delete names no path and a scoped rule
-could match it. The first time observe is turned on, Astera writes the starter rules: deny `git.remote.write`,
+matches only calls known to be inside, or outside, the session's project folder. Each command of a line
+(`cd sub && git push`) is judged on its own, and a command a rule denies makes the line `would-deny` wherever it sits:
+in a compound line, in a loop or an `if` block (it may not have run, and the preview errs toward flagging it), or beside
+a command Astera could not read. A line with no denied command is `unknown` when Astera could not read all of it (a
+shell command or script it does not know, or a call to a tool it does not know at all), or when a write or delete names
+no path and a scoped rule could match it. With `otherwise` deny, a call that no rule matches is `would-deny` even when
+Astera could not read it. The first time observe is turned on, Astera writes the starter rules: deny `git.remote.write`,
 `github.pr.create` and `github.write`, deny `filesystem.write` and `filesystem.delete` outside the project, and
 otherwise allow. Until then `policies show` shows them and nothing is written. The rule commands take a rule's id from
-`policies show` and its place in the list counted from 0 (`--at`, `--to`); `rules-reset` puts the starter rules back
-and keeps the mode. Every change answers the mode and the rules as they now are. An action Astera does not know is
-refused with 2 and the message lists them, a rule that is not there is a 4, and a damaged `audit-policy.json` is a 6:
-`policies rules-reset` writes the starter rules over it, and a copy of the damaged file is kept beside it.
+`policies show` and its place in the list counted from 0 (`--at`, `--to`); `rules-reset` puts the starter rules back and
+keeps the mode, except that a damaged file is repaired to `compatibility`, the mode sessions were starting in while it
+was damaged, so the repair never turns observing on or off by itself. Every change answers the mode and the rules as they
+now are. An action Astera does not know is refused with 2 and the message lists them, so is a `rules-edit` that names
+nothing to change (`error.details.reason` is `nothing-to-change`), a rule that is not there is a 4, and a damaged
+`audit-policy.json` is a 6: `policies rules-reset` writes the starter rules over it, and a copy of the damaged file is
+kept beside it. When that copy could not be kept, `rules-reset` is refused with 6 as well (`error.details.repair` names
+the file) and leaves the file as it is.
 
 `audit list` prints the records newest first, each with `decision` and `ruleId` (the rule that decided, left out when
 `otherwise` did or none could), worked out from the rules in force when you ask: edit a rule and the past calls show
-what it would have done. The filters combine, and `--agent-profile` takes an id or a name. `--limit` is 200 by default
-and at most 2000. When it cuts the list, `truncated` is true and `next` holds the `--until` and `--before-id` that ask
-for the next page, which `--human` prints under the table as `more:`, after the filters you used. `audit summary`
-counts the same calls by decision, in all and per action, and `stoppedAtLimit` is true when a day of the period stopped
-recording at the size limit, so it holds fewer calls than were made.
+what it would have done. A record carries the Job, run and Task its session worked for when the call ran: a worker files
+its calls under its Task, and the coordinator under the run, also after the attempt ends or the run finishes, until a
+person prompts the session (types in its tab or chat, replies from Slack, or runs `astera sessions send` from a shell);
+a task notification or what Astera types itself (a nudge, a roll's carry-on) does not end it, and the calls a person's
+prompt leads to carry neither. In a chat an older Astera app writes to, which does not say which lines a person typed,
+two minutes after the end stand in for that. A run counts as finished from when its outcome was settled, which a later
+edit of a Task does not move; a run that finished before this version of Astera counts from when its Tasks last changed
+before the update. The filters combine, and `--agent-profile <id|name>` takes an id or a name, on `audit list` and on
+`audit summary` alike (an id of a profile deleted since still filters its records; a name that matches none is 4).
+`--limit` is 200 by default and at most 2000. When it cuts the list, `truncated` is true and `next` holds the `--until`
+and `--before-id` that ask for the next page, which `--human` prints under the table as `more:`, after the filters you
+used, each value in single quotes unless it is plain letters, digits and `._:/@=+-` (not starting with `@` or `-`),
+written for the shell you are in (PowerShell on Windows, a POSIX shell elsewhere and in Git Bash, which sets `MSYSTEM`,
+or any shell named in `SHELL`), so the line can be pasted as it is. The parser takes a lone `-` as "read stdin" and a
+value starting with `--` as the next flag, so no quoting can pass one as a filter value: the hint leaves that filter out
+and says so above it. `audit summary` counts the same calls by decision, in all and per action, and `stoppedAtLimit` is
+true when a day of the period stopped recording at the size limit, so it holds fewer calls than were made.
 
 **These commands are for a person.** From inside an agent session (`ASTERA_SESSION` is set) every change is refused
-with 5, and so are both `audit` reads, so the log of what agents did stays away from agents; `policies show` is not
+with 5, and so are both `audit` reads, whatever filter values they carry: the refusal comes first, before any
+`--agent-profile` name is looked up, so a name that matches nothing is 5 there, not 4 (a mistake in the line itself,
+such as an unknown flag, is still 2). The log of what agents did stays away from agents; `policies show` is not
 refused. MCP clients, plugins, the SDK and a paired controller (`--runtime`) have no audit or policy commands.
 
 ```bash
@@ -1344,8 +1370,8 @@ out for a session Astera has not taken back yet after it starts, and for one nei
 card of, in which case it reads the same as one with no card. `--human` prints each turn under its
 role, the tools as `[tool]` lines, and the card last.
 
-`sessions send` types `--text` into a terminal session and presses Enter 150ms later, which is how
-the app delivers a scheduled message; `--no-enter` types the text and stops there. It answers
+`sessions send` types `--text` into a terminal session and presses Enter once the session has shown
+it and gone quiet (5 seconds at most), which is how the app delivers a scheduled message; `--no-enter` types the text and stops there. It answers
 `{"id":…,"sent":true,"enter":true}` once the Enter has gone out, and `sent` means the Host handed the
 text to the session. Two sends to one session are typed one after the other, never interleaved.
 `--text -` reads the text from standard input and drops one trailing newline, so a heredoc is typed
@@ -1356,7 +1382,10 @@ at a permission prompt or a question is refused with 6 before anything is typed,
 not answer one by accident; from a shell it goes through, because that is you answering. Like
 `chats answer`'s check below, this reads the caller's environment and is not a boundary. A session
 that has ended is a 6. With `--request-id`, a retried `sessions send` is replayed
-rather than typed a second time.
+rather than typed a second time. A send from a shell is a person's prompt: it ends what a finished run's
+or an ended attempt's session still holds for `runs get`'s `tokens` and `audit list`'s records, and one
+from inside an agent session does not. That too reads `ASTERA_SESSION` from the caller's environment, so
+an agent that clears it reads as a person, as with every role check in this CLI.
 
 **To a chat session, `sessions send` is one turn**, and it answers `{"id":…,"sent":true}`.
 `--no-enter` belongs to terminal sessions and is a 2 here. Sends to one session go one at a time.

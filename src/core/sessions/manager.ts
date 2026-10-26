@@ -128,6 +128,9 @@ interface LiveSession {
    *  what lets the failsafe **actually** decide "there is no consumer" — without it, the backpressure
    *  of a live but slow consumer gets switched off too. */
   ackedSincePause: boolean
+  /** When the pty last printed anything (epoch ms): a delivery's Enter waits for the quiet after its text
+   *  (core/sessions/sessionDriver.ts). */
+  lastOutputAt: number | null
 }
 
 export class SessionManager {
@@ -446,10 +449,12 @@ export class SessionManager {
       pendingBytes: 0,
       paused: false,
       resumeFailsafe: null,
-      ackedSincePause: false
+      ackedSincePause: false,
+      lastOutputAt: null
     }
     this.sessions.set(info.id, live)
     pty.onData((data) => {
+      live.lastOutputAt = Date.now()
       live.pendingBytes += data.length
       if (!live.paused && live.pendingBytes > this.highWater) {
         pty.pause()
@@ -583,11 +588,17 @@ export class SessionManager {
   // node-pty 1.1.0's Windows path is a socket write, so a failure most likely surfaces as an async
   // 'error' emit rather than a synchronous throw, and with no error listener on that socket a
   // caller's try/catch cannot catch it — which is why the guard lives in write itself.
-  /** `by.typed`: a person typed this in the tab (the renderer's input), which the Host reads for the pty's size. */
-  write(id: string, data: string, by?: { typed: true }): void {
+  /** `by.typed`: a person typed this in the tab (the renderer's input), which the Host reads for the pty's size.
+   *  `by.person`: a person's words sent from elsewhere (a Slack reply), which the Host reads as a person's prompt. */
+  write(id: string, data: string, by?: { typed?: true; person?: true }): void {
     const live = this.sessions.get(id)
     if (!live || live.info.status === 'exited') return
     live.pty.write(data, by)
+  }
+
+  /** When the session's pty last printed anything, or null for one that never has or is not here. */
+  lastOutput(id: string): number | null {
+    return this.sessions.get(id)?.lastOutputAt ?? null
   }
 
   // exited guard, for the same reason as write
