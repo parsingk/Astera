@@ -1,3 +1,5 @@
+import { untilEnter } from '../../../core/sessions/sessionDriver'
+
 type Listener = (data: string) => void
 
 /** Cap on how much output is held until a listener (TerminalView) attaches.
@@ -217,5 +219,23 @@ export function screenOf(sessionId: string): string | null {
 export function submitInto(sessionId: string): boolean {
   if (!pasters.has(sessionId)) return false
   window.api.sessions.write(sessionId, '\r')
+  return true
+}
+
+/** Pastes into that session's terminal, then presses Enter once the session has drawn the paste and gone quiet
+ *  (untilEnter, core/sessions/sessionDriver.ts), the way every delivery into a pty waits. The paste has to be in the
+ *  agent's input box before the Enter lands, or the Enter submits an empty prompt, and Codex swallows an Enter that
+ *  comes right after a paste (openai/codex#56982). false, with nothing written, when no terminal is registered. */
+export function pasteAndSubmit(sessionId: string, text: string): boolean {
+  if (!pasteInto(sessionId, text)) return false
+  const wroteAt = Date.now()
+  let drawnAt: number | null = null
+  const stop = observe(sessionId, () => {
+    drawnAt = Date.now()
+  })
+  void untilEnter({ wroteAt, outputAfter: () => drawnAt }).then(() => {
+    stop()
+    submitInto(sessionId)
+  })
   return true
 }
