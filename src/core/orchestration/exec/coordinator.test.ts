@@ -13,6 +13,7 @@ import {
   LAUNCH_FORBIDDEN,
   type CoordinatorDeps
 } from './coordinator'
+import { ENTER_QUIET_MS } from '../../sessions/sessionDriver'
 import type { CheckResult, ReviewIssue } from '../types'
 import type { WeakeningFinding } from '../../github/weakening'
 
@@ -727,6 +728,35 @@ describe('OrchCoordinator.startWorker', () => {
     expect(seen).toEqual(['requested:typed', 'confirmed:typed'])
     expect(deps.written).toHaveLength(2)
     expect(deps.written[1]).toBe('\r')
+  })
+
+  // Codex swallows an Enter that comes right after a long text (openai/codex#56982): with the session's output to go
+  // by, the typed prompt's Enter waits until the session has drawn it and gone quiet, as `sessions send` does
+  it('holds a typed prompt’s Enter until the session has drawn it and gone quiet', async () => {
+    const deps = makeDeps()
+    const at: Array<[number, string]> = []
+    let typedAt: number | null = null
+    const co = new OrchCoordinator({
+      ...deps,
+      writeToSession: (_id, data) => {
+        at.push([Date.now(), data])
+        if (typedAt === null) typedAt = Date.now()
+      },
+      // The session draws the prompt for 300 ms after it was typed
+      lastOutputAt: () => (typedAt === null ? null : Math.min(Date.now(), typedAt + 300))
+    })
+    await co.startWorker({
+      ...baseArgs(),
+      accountId: 'acc',
+      rollAccountIds: ['acc'],
+      runCwd: dir,
+      terminal: 'sess-live',
+      terminalCwd: dir,
+      terminalProvider: 'codex',
+      terminalAccountId: 'acc'
+    })
+    expect(at.map(([, d]) => d)).toEqual([expect.any(String), '\r'])
+    expect(at[1][0] - typedAt!).toBeGreaterThanOrEqual(300 + ENTER_QUIET_MS)
   })
 
   it('resumes the provider session and names the new dispatch in the phrase', async () => {

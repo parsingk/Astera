@@ -3065,6 +3065,7 @@ export function registerIpc(
         return info
       },
       writeToSession: (id, data) => core.sessions.write(id, data),
+      lastOutputAt: (id) => core.sessions.lastOutput(id),
       isBusy: orchIsBusy,
       isAlive: (id) => core.sessions.list().some((s) => s.id === id && s.status === 'running'),
       // A worker the Host started is not the app's until `pty-opened` has been answered, and
@@ -3228,6 +3229,7 @@ export function registerIpc(
           .some((x) => x.id === id && x.status === 'exited' && x.exitCode !== undefined && x.exitCode !== PTY_LOST_SIGHT_EXIT_CODE),
       sessionBusy: (id) => busyState.get(id) ?? null,
       typeInto: (id, text) => core.sessions.write(id, text),
+      lastOutputAt: (id) => core.sessions.lastOutput(id),
       lastPersonInputAt: (id) => personInputAt.get(id) ?? null,
       // 앱에서 "운전해도 되는가" 는 서버가 서 있고, dispatch 를 알리는 Host 가 몰지 않는가다(§4.2, N8).
       // 슬롯마다 다시 묻으므로, 한 바퀴 도중에 그런 Host 가 붙으면 그 자리에서 멈춘다.

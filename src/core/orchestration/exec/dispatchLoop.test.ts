@@ -20,6 +20,7 @@ import { APP_CALLER } from '../../host/driver'
 import { COORDINATOR_START_WINDOW_MS, emptyState, type OrchState } from '../state'
 import type { Dispatch, Job, Message, Task } from '../types'
 import type { Account } from '../../types'
+import { ENTER_QUIET_MS } from '../../sessions/sessionDriver'
 
 const NOW = '2026-09-24T00:00:00.000Z'
 const NOW_MS = Date.parse(NOW)
@@ -508,6 +509,23 @@ describe('createDispatchLoop', () => {
     await h.loop.nudge()
     expect(h.typed[0]).toMatch(/unread message/)
     expect(h.typed[1]).toBe('\r')
+  })
+
+  // Codex swallows an Enter that comes right after a long text (openai/codex#56982), and the nudge typed its Enter at
+  // once: with the session's output to go by, the Enter waits until the session has drawn the nudge and gone quiet
+  it('holds the nudge’s Enter until the coordinator has drawn it and gone quiet', async () => {
+    const h = rig({ coordinatorMail: true })
+    const at: Array<[number, string]> = []
+    let typedAt: number | null = null
+    h.ctx.typeInto = (_id, text) => {
+      at.push([Date.now(), text])
+      if (typedAt === null) typedAt = Date.now()
+    }
+    // The session draws the nudge for 300 ms after it was typed
+    h.ctx.lastOutputAt = () => (typedAt === null ? null : Math.min(Date.now(), typedAt + 300))
+    await h.loop.nudge()
+    expect(at.map(([, t]) => t)).toEqual([expect.stringMatching(/unread message/), '\r'])
+    expect(at[1][0] - typedAt!).toBeGreaterThanOrEqual(300 + ENTER_QUIET_MS)
   })
 
   it('forks the Run worktree lazily and records it before the first worker', async () => {

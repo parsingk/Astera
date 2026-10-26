@@ -600,6 +600,11 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
         const p = registry.sessionPty(sid)
         if (p) registry.write(p, data)
       },
+      // A typed prompt's Enter waits for the session to have drawn it and gone quiet (openai/codex#56982)
+      lastOutputAt: (sid) => {
+        const p = registry.sessionPty(sid)
+        return p === null ? null : registry.lastOutput(p)
+      },
       isAlive: (sid) => registry.sessionPty(sid) !== null,
       killSession: (sid) => {
         const p = registry.sessionPty(sid)
