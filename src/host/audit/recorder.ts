@@ -25,6 +25,9 @@ export const AUDIT_COMMANDS_KEPT = 16
 /** Records that wait for the disk at most; past this, calls are counted and dropped. */
 export const AUDIT_PENDING_MAX = 2000
 /** Dedupe keys kept per session, and sessions kept; past either, the least recently heard go first. */
+/** How long after a failed read of the mode the next try waits, doubling up to the longest. */
+const RETRY_FIRST_MS = 5_000
+const RETRY_MAX_MS = 30_000
 const KEYS_PER_SESSION = 1000
 const SESSIONS_KEPT = 200
 const TOOL_MAX = 100
@@ -80,6 +83,10 @@ export interface AuditRecorder {
    *  change cannot have turned it (a rule edited): what is known stays until the read, and nobody is told of a
    *  change that did not happen. */
   invalidate(o?: { modeUnchanged?: boolean }): void
+  /** While the last read of the mode failed (the file locked, damaged), reads it again once the wait has passed (5 s,
+   *  doubling to 30 s); a no-op otherwise, so it may be called at every tick of a timer. A read that works resumes the
+   *  sources through `onObservingChange`. */
+  retryMode(): void
   /** Settles once every call handed over so far is written or dropped. */
   flushed(): Promise<void>
   /** False while the mode is known to be compatibility, when every call is dropped: the sources read nothing then
@@ -129,8 +136,11 @@ export function createAuditRecorder(d: {
       }
     }
   }
-  /** Set while reads fail: one log line per streak. */
+  /** Set while reads fail: one log line per streak, and a retry (`retryMode`) is due at `retryAt`. */
   let modeFailing = false
+  let retryAt = 0
+  let retryWait = RETRY_FIRST_MS
+  let retrying = false
   let pending: AuditRecord[] = []
   /** Calls dropped while the hold was full, told when it empties. */
   let dropped = 0
@@ -146,6 +156,7 @@ export function createAuditRecorder(d: {
     try {
       const value = await d.mode()
       if (g === generation) keep(value)
+      if (modeFailing) d.log('audit: the observe mode can be read again')
       modeFailing = false
       return value
     } catch (err) {
@@ -153,6 +164,8 @@ export function createAuditRecorder(d: {
       // cannot be read, and the next change (a repair) reads it again
       if (g === generation) keep('compatibility')
       if (!modeFailing) d.log(`audit: the observe mode could not be read, so calls are not recorded until it can: ${String(err)}`)
+      retryWait = modeFailing ? Math.min(retryWait * 2, RETRY_MAX_MS) : RETRY_FIRST_MS
+      retryAt = now() + retryWait
       modeFailing = true
       return 'compatibility'
     }
@@ -260,6 +273,17 @@ export function createAuditRecorder(d: {
       // Read again now, not at the next call: the sources ask `observing` before they read anything
       enqueue(async () => {
         await readMode()
+      })
+    },
+    retryMode() {
+      if (!modeFailing || retrying || now() < retryAt) return
+      retrying = true
+      enqueue(async () => {
+        try {
+          await readMode()
+        } finally {
+          retrying = false
+        }
       })
     },
     flushed: () => queue,

@@ -756,6 +756,27 @@ describe('the Codex rollout source', () => {
     sources.dispose()
   })
 
+  it('asks the recorder to retry a mode it could not read at every tick of its timer, and stops with it', () => {
+    let tick: () => void = () => {}
+    let stopped = false
+    let retried = 0
+    const { recorder } = capture()
+    const sources = createAuditSources({
+      recorder: { ...recorder, retryMode: () => void retried++ },
+      ptys: fakeRegistry(),
+      procs: fakeRegistry(),
+      hookEventsDir: os.tmpdir(),
+      log: () => {},
+      every: (_ms, fn) => ((tick = fn), () => void (stopped = true)),
+      watch: (() => ({ on: () => {}, close: () => {} })) as never
+    })
+    tick()
+    tick()
+    expect(retried).toBe(2)
+    sources.dispose()
+    expect(stopped).toBe(true)
+  })
+
   // What a Codex session ran when its output never came: the session ended, the Host is leaving, or a new file began
   it('hands over a call still waiting for its output as unknown when its session ends, the Host leaves or a new rollout begins', async () => {
     const dir = await tempDir()

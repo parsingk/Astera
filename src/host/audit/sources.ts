@@ -347,7 +347,8 @@ export interface AuditSources {
 }
 
 export function createAuditSources(d: {
-  recorder: Pick<AuditRecorder, 'record' | 'observing' | 'onObservingChange'>
+  /** `retryMode` is asked at every tick of the timer: the recorder says when it is due. */
+  recorder: Pick<AuditRecorder, 'record' | 'observing' | 'onObservingChange'> & Partial<Pick<AuditRecorder, 'retryMode'>>
   ptys: { onMeta: Listen<[string, PtyMeta, 'open' | 'note']>; onExit: Listen<[string, number]> }
   procs: { onMeta: Listen<[string, PtyMeta, 'open' | 'note']>; onLine: Listen<[string, number, string]>; onExit: Listen<[string, number]> }
   /** The profile's hook-events folder, where the observed sessions' audit files are. */
@@ -503,6 +504,7 @@ export function createAuditSources(d: {
       return () => clearInterval(t)
     })
   const stopPolling = every(ROLLOUT_POLL_MS, () => {
+    d.recorder.retryMode?.()
     if (polling) return
     polling = true
     void readRollouts().finally(() => {

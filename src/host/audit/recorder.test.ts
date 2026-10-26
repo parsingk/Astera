@@ -303,6 +303,88 @@ describe('createAuditRecorder', () => {
     await fresh.recorder.flushed()
   })
 
+  it('stops the sources while the mode cannot be read, and reads it again on its own: after a pause, backing off, with no change told', async () => {
+    let fail = true
+    let reads = 0
+    const h = await rig({
+      over: {
+        mode: async () => {
+          reads++
+          if (fail) throw new Error('audit-policy.json is locked')
+          return 'observe'
+        }
+      }
+    })
+    const seen: boolean[] = []
+    h.recorder.onObservingChange(() => seen.push(h.recorder.observing()))
+    h.recorder.record(bash('git status'))
+    await h.recorder.flushed()
+    expect(h.recorder.observing()).toBe(false)
+    expect(seen).toEqual([false])
+    const before = reads
+    // The throttle: a tick a second on, or four, reads nothing
+    for (const s of [1000, 1000, 1000, 1000]) {
+      h.advance(s)
+      h.recorder.retryMode()
+      await h.recorder.flushed()
+    }
+    expect(reads).toBe(before)
+    // The first retry after five seconds still fails; the next waits twice as long
+    h.advance(1000)
+    h.recorder.retryMode()
+    await h.recorder.flushed()
+    expect(reads).toBe(before + 1)
+    h.advance(9000)
+    h.recorder.retryMode()
+    await h.recorder.flushed()
+    expect(reads).toBe(before + 1)
+    // The wait stops growing at thirty seconds
+    h.advance(1000)
+    h.recorder.retryMode()
+    await h.recorder.flushed()
+    expect(reads).toBe(before + 2)
+    // 20 s, then 30 s, and 30 s again rather than 40
+    for (const [wait, total] of [[20_000, 3], [30_000, 4], [30_000, 5]] as const) {
+      h.advance(wait - 1)
+      h.recorder.retryMode()
+      await h.recorder.flushed()
+      expect(reads).toBe(before + total - 1)
+      h.advance(1)
+      h.recorder.retryMode()
+      await h.recorder.flushed()
+      expect(reads).toBe(before + total)
+    }
+    // Said once that it failed, not at every retry
+    expect(h.logs.filter((m) => /could not be read/.test(m))).toHaveLength(1)
+    // The file is readable again: the next retry resumes the sources and records, with no invalidate
+    fail = false
+    h.advance(30_000)
+    h.recorder.retryMode()
+    await h.recorder.flushed()
+    expect(h.recorder.observing()).toBe(true)
+    expect(seen).toEqual([false, true])
+    expect(h.logs.filter((m) => /can be read again/.test(m))).toHaveLength(1)
+    h.recorder.record(bash('git status'))
+    await h.recorder.flushed()
+    expect(await h.records()).toHaveLength(1)
+    // Nothing to retry once it is read: no more reads
+    const after = reads
+    h.advance(60_000)
+    h.recorder.retryMode()
+    await h.recorder.flushed()
+    expect(reads).toBe(after)
+  })
+
+  it('does not retry a clean compatibility', async () => {
+    const h = await rig({ mode: 'compatibility' })
+    await h.recorder.flushed()
+    const reads = h.modeReads()
+    h.advance(60_000)
+    h.recorder.retryMode()
+    await h.recorder.flushed()
+    expect(h.modeReads()).toBe(reads)
+  })
+
   it('does not keep a mode it could not read as observe: sources stop while the file is damaged, and a repair that tells of the change starts them', async () => {
     let fail = true
     const h = await rig({
