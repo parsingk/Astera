@@ -436,7 +436,14 @@ function resolveShell(rec: Record<string, unknown>, at: Ctx, flavor: Flavor): Re
         : []
   const workdir = str(rec.workdir)
   let base: string | null = workdir === null ? start : path.resolve(start, nativePath(workdir))
-  const { commands, syntax } = expand(typed, flavor)
+  // Astera's own variable names its CLI (the worker guide's fallback for a PATH without `astera`), as trusted as the name
+  // itself, unless the line sets it: then it is a variable program like any other
+  const line = typeof raw === 'string' ? raw : Array.isArray(raw) ? raw.join(' ') : ''
+  const asteraCli = !/ASTERA_CLI\s*=/i.test(line)
+  const { commands: expanded, syntax } = expand(typed, flavor)
+  const commands = asteraCli
+    ? expanded.map((c) => (c.words.length > 0 && ASTERA_CLI_WORD.test(c.words[0]) ? { ...c, words: ['astera', ...c.words.slice(1)], quoted: [false, ...c.quoted.slice(1)] } : c))
+    : expanded
 
   const parts: ResolvedAction[] = []
   let lead: ResolvedAction | undefined
@@ -497,6 +504,8 @@ function movedTo(args: Words, ctx: Ctx, cmdlet: string | undefined): string | nu
   return ctx.base === null && !path.isAbsolute(native) ? null : path.resolve(ctx.base ?? ctx.cwd, native)
 }
 
+/** Astera's CLI named by its own variable, as a POSIX shell or PowerShell writes it. */
+const ASTERA_CLI_WORD = /^\$(?:ASTERA_CLI|\{ASTERA_CLI\}|env:ASTERA_CLI)$/i
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
 /** PowerShell `$env:X='y'` in one word, or `$x` with the `=` as the next word. */
 const PS_ASSIGNED = /^\$[\w:.]+[+-]?=/

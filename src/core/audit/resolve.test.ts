@@ -407,6 +407,19 @@ describe('shell: unknown', () => {
     expect(bash('./scripts/deploy.sh --prod')).toMatchObject({ target: 'deploy.sh', confidence: 'unknown' })
   })
 
+  // Found on the dev app: every worker reports with `astera send … || "$ASTERA_CLI" send …`, the fallback the worker
+  // guide gives for a PATH without astera. Astera's own variable names its CLI, as trusted as the name `astera`; a line
+  // that sets it itself is read as any variable program is
+  it('reads $ASTERA_CLI as Astera’s CLI unless the line sets it', () => {
+    expect(bash('"$ASTERA_CLI" send --type worker_done --body -')).toMatchObject({ action: 'process.execute', target: 'astera send', confidence: 'high' })
+    expect(bash('${ASTERA_CLI} runs get --id r1')).toMatchObject({ target: 'astera runs', confidence: 'high' })
+    expect(ps('& $env:ASTERA_CLI send --type worker_done')).toMatchObject({ target: 'astera send', confidence: 'high' })
+    expect(bash('astera send --x y || "$ASTERA_CLI" send --x y')).toMatchObject({ confidence: 'heuristic' })
+    expect(bash('ASTERA_CLI=rm "$ASTERA_CLI" -rf ../x').confidence).toBe('unknown')
+    expect(bash('export ASTERA_CLI=rm; "$ASTERA_CLI" -rf ../x').confidence).toBe('unknown')
+    expect(ps('$env:ASTERA_CLI = "rm"; & $env:ASTERA_CLI -rf ../x').confidence).toBe('unknown')
+  })
+
   it('is unknown for a line with one unknown command among known ones', () => {
     expect(bash('npm test && ./foo.sh')).toEqual({
       action: 'process.execute',
