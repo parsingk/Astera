@@ -560,12 +560,16 @@ const WRAPPER_OPTIONS = new Map<string, { valued: ReadonlySet<string>; positiona
   ['taskset', { valued: new Set(['-c', '--cpu-list']), positional: 1 }]
 ])
 
-/** Where the command starts after the wrapper at `from` and its options. */
+/** Programs that act on a running process with -p / --pid, and run no command then. */
+const PID_WRAPPERS = new Set(['chrt', 'taskset', 'ionice'])
+
+/** Where the command starts after the wrapper at `from` and its options; `from` itself when it runs none (`chrt -p PID`). */
 function afterWrapper(words: Words, from: number, prog: string): number {
   const spec = WRAPPER_OPTIONS.get(prog)!
   let positional = spec.positional
   let i = from + 1
   while (i < words.length && words[i].startsWith('-') && words[i].length > 1) {
+    if (PID_WRAPPERS.has(prog) && (words[i] === '--pid' || /^-[A-Za-z]*p[A-Za-z]*$/.test(words[i]))) return from
     if (spec.valued.has(words[i])) {
       if (prog === 'taskset') positional = 0 // `-c LIST` stands for the mask
       i++
@@ -623,7 +627,11 @@ function stripPrefix(raw: Cmd, flavor: Flavor): { cmd: Cmd; syntax: boolean } {
       i++
       syntax = true
     } else if (programName(w) === 'timeout') i = afterTimeout(words, i + 1)
-    else if (WRAPPER_OPTIONS.has(programName(w))) i = afterWrapper(words, i, programName(w))
+    else if (WRAPPER_OPTIONS.has(programName(w))) {
+      const next = afterWrapper(words, i, programName(w))
+      if (next === i) break // it runs no command: it is the program
+      i = next
+    }
     else break
   }
   const rest = words.slice(i)
@@ -1099,7 +1107,7 @@ const KNOWN = new Set(
   basename dirname realpath readlink mktemp
   git gh node npm npx pnpm pnpx yarn bun bunx deno tsc tsx vitest jest mocha eslint prettier vite webpack esbuild rollup turbo nx
   python python3 py pip pip3 pytest uv poetry ruff mypy black cargo rustc rustup go gofmt java javac mvn mvnw gradle gradlew dotnet
-  make cmake ninja gcc g++ clang docker docker-compose kubectl helm terraform curl wget ssh scp rsync code claude codex astera
+  chrt taskset ionice make cmake ninja gcc g++ clang docker docker-compose kubectl helm terraform curl wget ssh scp rsync code claude codex astera
   set-location sl foreach-object new-item set-content add-content out-file copy-item move-item rename-item remove-item stop-process
   start-sleep out-string out-host out-null out-default gc gci`
     .split(/\s+/)

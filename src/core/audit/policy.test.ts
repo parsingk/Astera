@@ -465,6 +465,15 @@ describe('decide, a denied command the resolver must reach', () => {
     expect(decide(bash('echo "$(echo "$(cat <<EOF\n$(git push)\nEOF\n)")" ; git push'), p)).toEqual(push)
   })
 
+  it('reads chrt, taskset and ionice with -p as the programs they are, running nothing', () => {
+    for (const line of ['chrt -p 1234', 'chrt -r -p 10 1234', 'taskset -p 1234', 'taskset -pc 0,1 1234', 'ionice -p 1234', 'ionice --pid 1234']) {
+      expect(bash(line), line).toMatchObject({ action: 'process.execute', confidence: 'high' })
+      expect(decide(bash(line), p), line).toEqual({ decision: 'allow' })
+    }
+    expect(bash('chrt -p 1234').target).toBe('chrt')
+    expect(decide(bash('chrt -p 1234; git push'), p)).toEqual(push)
+  })
+
   it('would deny a command that exec, nice, setsid, stdbuf, ionice, chrt, taskset, coproc or builtin run', () => {
     for (const line of [
       'exec git push',
