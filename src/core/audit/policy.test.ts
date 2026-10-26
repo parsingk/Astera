@@ -419,6 +419,35 @@ describe('decide, a denied command the resolver must reach', () => {
     expect(decide(bash('(cd sub); cd sub; rm -rf ../x'), p)).toEqual({ decision: 'allow' })
   })
 
+  it('would deny a command that exec, nice, setsid, stdbuf, ionice, chrt, taskset, coproc or builtin run', () => {
+    for (const line of [
+      'exec git push',
+      'exec -a name git push',
+      'builtin command git push',
+      'nice git push',
+      'nice -n 5 git push',
+      'nice -5 git push',
+      'nice --adjustment=5 git push',
+      'setsid git push',
+      'setsid -f git push',
+      'stdbuf -oL git push',
+      'stdbuf -o L -e0 git push',
+      'ionice git push',
+      'ionice -c 3 git push',
+      'ionice -c 2 -n 7 git push',
+      'chrt -r 10 git push',
+      'chrt --fifo 10 git push',
+      'taskset 0x3 git push',
+      'taskset -c 0,1 git push',
+      'coproc git push',
+      'sudo nice -n 5 git push'
+    ]) expect(decide(bash(line), p), line).toEqual(push)
+    expect(decide(bash('nice -n 5 rm -rf ../x'), p)).toEqual(del)
+    expect(decide(bash('exec rm -rf ../x'), p)).toEqual(del)
+    expect(decide(bash('nice -n 5 npm test'), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('taskset -c 0 npm test'), p)).toEqual({ decision: 'allow' })
+  })
+
   // An unquoted heredoc delimiter makes its body a double-quoted text: the shell runs the substitutions in it
   it('would deny a substitution in the body of a heredoc whose delimiter is not quoted, and reads none in a quoted one', () => {
     expect(decide(bash('cat <<EOF\n$(rm -rf ../x)\nEOF'), p)).toEqual(del)

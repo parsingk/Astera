@@ -543,6 +543,34 @@ function methodFacts(called: string): Facts | null {
     : { action, target: member, known: true, heuristic: true }
 }
 const WRAPPERS = new Set(['sudo', 'doas', 'env', 'time', 'nohup', 'command'])
+/** Wrappers that run their arguments after options of their own: the options that take a value, and how many plain words
+ *  (a priority, a CPU mask) come before the command. */
+const WRAPPER_OPTIONS = new Map<string, { valued: ReadonlySet<string>; positional: number }>([
+  ['exec', { valued: new Set(['-a']), positional: 0 }],
+  ['builtin', { valued: new Set(), positional: 0 }],
+  ['coproc', { valued: new Set(), positional: 0 }],
+  ['setsid', { valued: new Set(), positional: 0 }],
+  ['nice', { valued: new Set(['-n', '--adjustment']), positional: 0 }],
+  ['stdbuf', { valued: new Set(['-i', '-o', '-e', '--input', '--output', '--error']), positional: 0 }],
+  ['ionice', { valued: new Set(['-c', '-n', '--class', '--classdata']), positional: 0 }],
+  ['chrt', { valued: new Set(), positional: 1 }],
+  ['taskset', { valued: new Set(['-c', '--cpu-list']), positional: 1 }]
+])
+
+/** Where the command starts after the wrapper at `from` and its options. */
+function afterWrapper(words: Words, from: number, prog: string): number {
+  const spec = WRAPPER_OPTIONS.get(prog)!
+  let positional = spec.positional
+  let i = from + 1
+  while (i < words.length && words[i].startsWith('-') && words[i].length > 1) {
+    if (spec.valued.has(words[i])) {
+      if (prog === 'taskset') positional = 0 // `-c LIST` stands for the mask
+      i++
+    }
+    i++
+  }
+  return Math.min(i + positional, words.length)
+}
 /** Words that lead a command, which is what follows them. */
 const KEYWORDS = new Set(['if', 'elif', 'elseif', 'while', 'until', 'then', 'else', 'do', '!'])
 /** Words that start a command which runs nothing: a loop or case header, a closer, a jump. */
@@ -592,6 +620,7 @@ function stripPrefix(raw: Cmd, flavor: Flavor): { cmd: Cmd; syntax: boolean } {
       i++
       syntax = true
     } else if (programName(w) === 'timeout') i = afterTimeout(words, i + 1)
+    else if (WRAPPER_OPTIONS.has(programName(w))) i = afterWrapper(words, i, programName(w))
     else break
   }
   const rest = words.slice(i)
