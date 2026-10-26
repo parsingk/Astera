@@ -1016,8 +1016,9 @@ export function createHostOrch(a: {
     const prev = store.get()
     // A Run the app's write finishes is stamped with when, and one it already had keeps its stamp, which the app's
     // mirror may not have heard of yet (observe deferred minor b). A put that stood in for the load has nothing in
-    // `prev`, so it stamps nothing. The sender hears of a stamp with the next push.
-    const landed = stampRunEnds(prev, state, a.now())
+    // `prev`: the stamps its Runs carry are the Host before's, kept (fix round 1, Minor 5). The sender hears of a stamp
+    // with the next push.
+    const landed = stampRunEnds(prev, state, a.now(), { standsInForLoad: !hadState })
     // Taken here, not after the write lands — the whole of `reserveVersion`'s note.
     const committed = reserveVersion()
     // Published as memory moves, for the reason in `depsFor`'s setState.

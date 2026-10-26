@@ -110,10 +110,28 @@ describe('stampRunEnds', () => {
     expect(run(stampRunEnds(running, again, LATER), 'r1').endedAt).toBe(LATER)
   })
 
-  it('does not stamp a Run it did not see finish: one new to the commit, or one finished before ends were kept', () => {
-    const finished = state([{ runId: 'r1', status: 'completed' }])
-    expect(run(stampRunEnds(emptyState(), finished, T), 'r1')).not.toHaveProperty('endedAt')
-    expect(run(stampRunEnds(finished, finished, T), 'r1')).not.toHaveProperty('endedAt')
+  // Fix round 1, Minor 5: with nothing to carry, the Host stamps the end itself; a writer's value is kept only on the put
+  // that stands in for the load (a Host that holds nothing yet, handed the app's mirror of what the last Host stamped),
+  // and only when it is a time
+  it('stamps a Run it did not see finish with its Tasks’ last change, keeping a writer’s end only on the put that stands in for the load', () => {
+    const EARLIER = '2026-10-23T01:00:00.000Z'
+    const finishedAt = (at: string, endedAt?: unknown): OrchState =>
+      ({
+        runs: [{ id: 'r1', ...(endedAt !== undefined ? { endedAt } : {}) }],
+        tasks: [{ id: 't0', runId: 'r1', status: 'completed', consecutiveFailures: 0, updatedAt: at }]
+      }) as unknown as OrchState
+    // Finished before ends were kept: its Tasks' last change before this commit, not the edit this commit makes, nor
+    // what a writer says
+    expect(run(stampRunEnds(finishedAt(EARLIER), finishedAt(LATER, T), LATER), 'r1').endedAt).toBe(EARLIER)
+    // New to the commit: its Tasks' last change, whatever a writer says
+    expect(run(stampRunEnds(emptyState(), finishedAt(EARLIER, T), LATER), 'r1').endedAt).toBe(EARLIER)
+    // The put that stands in for the load: a writer's end that is a time is kept, any other is not
+    expect(run(stampRunEnds(emptyState(), finishedAt(EARLIER, T), LATER, { standsInForLoad: true }), 'r1').endedAt).toBe(T)
+    expect(run(stampRunEnds(emptyState(), finishedAt(EARLIER, 'soon'), LATER, { standsInForLoad: true }), 'r1').endedAt).toBe(EARLIER)
+    expect(run(stampRunEnds(emptyState(), finishedAt(EARLIER, 12345), LATER, { standsInForLoad: true }), 'r1').endedAt).toBe(EARLIER)
+    // No Task time to go by: the commit's own
+    const timeless = state([{ runId: 'r1', status: 'completed' }])
+    expect(run(stampRunEnds(emptyState(), timeless, LATER), 'r1').endedAt).toBe(LATER)
   })
 
   it('hands back the same state when no Run’s end moved', () => {

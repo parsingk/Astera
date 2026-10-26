@@ -4486,7 +4486,7 @@ describe('a Run’s end at the commit points', () => {
     expect(orch.state().runs[0].endedAt).toBe(NOW)
   })
 
-  it('a state-put that finishes a Run stamps it, one that adds a Task clears it, and a cold Host’s first put stamps nothing', async () => {
+  it('a state-put that finishes a Run stamps it, one that adds a Task clears it, and a cold Host’s first put keeps a stamp it carries', async () => {
     const ids = await seedWorker()
     let clock = NOW
     const orch = orchOver({ now: () => clock })
@@ -4501,9 +4501,15 @@ describe('a Run’s end at the commit points', () => {
     expect((await orch.call({ cmd: 'state-put', args: { state: more.state, version: ended.version }, sessionId: '', from: app })).status).toBe(200)
     expect(orch.state().runs[0]).not.toHaveProperty('endedAt')
 
+    // A Host that holds nothing yet, handed the app's mirror (Minor 5): the stamp it carries is the last Host's, kept;
+    // with none, the Run's Tasks' last change, not this put's time
+    const carried: OrchState = { ...finished, runs: finished.runs.map((x) => ({ ...x, endedAt: NOW })) }
     const cold = orchOver({ now: () => LATER })
-    expect((await cold.call({ cmd: 'state-put', args: { state: finished }, sessionId: '', from: app })).status).toBe(200)
-    expect(cold.state().runs[0]).not.toHaveProperty('endedAt')
+    expect((await cold.call({ cmd: 'state-put', args: { state: carried }, sessionId: '', from: app })).status).toBe(200)
+    expect(cold.state().runs[0].endedAt).toBe(NOW)
+    const bare = orchOver({ now: () => LATER })
+    expect((await bare.call({ cmd: 'state-put', args: { state: finished }, sessionId: '', from: app })).status).toBe(200)
+    expect(bare.state().runs[0].endedAt).toBe(NOW)
   })
 })
 

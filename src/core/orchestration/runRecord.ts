@@ -35,26 +35,38 @@ export function justFinished(
   return out
 }
 
+/** Whether `v` is a time a Run's end can be: a string that parses. */
+const isTime = (v: unknown): v is string => typeof v === 'string' && Number.isFinite(Date.parse(v))
+
+/** The last change of a Run's counted Tasks (what `runEndOf` falls back to), or null when none has a time. */
+const lastChangeOf = (tasks: readonly Task[] | undefined): string | null => {
+  const at = Math.max(...withoutSupersededLifecycle(tasks ?? []).map((t) => Date.parse(t.updatedAt)))
+  return Number.isFinite(at) ? new Date(at).toISOString() : null
+}
+
 /**
  * `next` with each Run's `endedAt` kept true (observe deferred minor b): stamped `now` on the Run whose outcome became
  * final on this commit (`justFinished`'s edge), kept from `prev` while it stays final, whatever the writer sent (an app
- * mirror that has not heard of it yet writes the Run without it), and dropped once it runs again. A Run this commit did
- * not see finish (new to it, or finished before ends were kept) keeps what it came with. The same state back when no
- * end moved. The Host runs every commit through this, a command's and an accepted `state-put` alike (host/orch.ts).
+ * mirror that has not heard of it yet writes the Run without it), and dropped once it runs again. A finished Run with
+ * nothing to carry is stamped by the Host too (fix round 1, Minor 5): with its Tasks' last change before this commit (one
+ * that finished before ends were kept, so an edit this commit makes does not move it), or as this commit has them (one
+ * new to it). A writer's own value is kept only on the put that stands in for the load (`standsInForLoad`: a Host that
+ * holds nothing yet, handed the app's mirror of what the Host before it stamped), and only when it is a time. The same
+ * state back when no end moved. The Host runs every commit through this, a command's and an accepted `state-put` alike
+ * (host/orch.ts).
  */
-export function stampRunEnds(prev: OrchState, next: OrchState, now: string): OrchState {
+export function stampRunEnds(prev: OrchState, next: OrchState, now: string, o: { standsInForLoad?: boolean } = {}): OrchState {
   const nextTasks = tasksByOwner(next)
   const prevTasks = tasksByOwner(prev)
   const prevRuns = new Map(prev.runs.map((r) => [r.id, r]))
   let changed = false
   const runs = next.runs.map((run) => {
     const before = prevRuns.get(run.id)
-    let endedAt: string | undefined = run.endedAt
+    let endedAt: string | undefined
     if (outcomeOfTasks(nextTasks.get(run.id) ?? []) === 'running') endedAt = undefined
-    else if (before !== undefined) {
-      if (outcomeOfTasks(prevTasks.get(run.id) ?? []) === 'running') endedAt = now
-      else if (before.endedAt !== undefined) endedAt = before.endedAt
-    }
+    else if (before !== undefined && outcomeOfTasks(prevTasks.get(run.id) ?? []) === 'running') endedAt = now
+    else if (before !== undefined) endedAt = isTime(before.endedAt) ? before.endedAt : (lastChangeOf(prevTasks.get(run.id)) ?? now)
+    else endedAt = o.standsInForLoad === true && isTime(run.endedAt) ? run.endedAt : (lastChangeOf(nextTasks.get(run.id)) ?? now)
     if (endedAt === run.endedAt) return run
     changed = true
     const { endedAt: _was, ...rest } = run

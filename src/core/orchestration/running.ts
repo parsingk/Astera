@@ -69,7 +69,8 @@ export const END_GRACE_MS = 2 * 60 * 1000
 /** When a finished Run's outcome became final (epoch ms): the Host's stamp (`JobRun.endedAt`), or for a Run that finished
  *  before it was kept, its last Task's last change, which a later edit of a Task moves. Asked of a finished Run. */
 export function runEndOf(s: OrchState, r: JobRun): number {
-  const stamped = r.endedAt === undefined ? NaN : Date.parse(r.endedAt)
+  // Only a string: a number a hand left in the file would parse as a year
+  const stamped = typeof r.endedAt === 'string' ? Date.parse(r.endedAt) : NaN
   if (Number.isFinite(stamped)) return stamped
   return Math.max(...withoutSupersededLifecycle(tasksOwnedBy(s, r.id)).map((x) => Date.parse(x.updatedAt)))
 }
