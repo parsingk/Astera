@@ -186,6 +186,25 @@ export async function readAuditPolicy(profileDir: string, o: { keepDamaged?: boo
   return p
 }
 
+/** Whether the damaged file's bytes are kept beside it: a copy of exactly this text is there, or could be made now. The
+ *  repair starts over only when it is, since what it writes over would be gone otherwise. Never rejects. */
+export async function damageIsKept(profileDir: string): Promise<boolean> {
+  const file = profilePaths(profileDir).auditPolicy
+  const read = await readStoreFile(file)
+  if (read.kind !== 'text') return false
+  const dir = path.dirname(file)
+  const has = async (): Promise<boolean> => {
+    for (const n of await fs.readdir(dir).catch(() => [] as string[])) {
+      if (!n.startsWith(`${path.basename(file)}.`) || !n.endsWith('.bak')) continue
+      if ((await fs.readFile(path.join(dir, n), 'utf8').catch(() => null)) === read.text) return true
+    }
+    return false
+  }
+  if (await has()) return true
+  await keepDamaged(file, read.text)
+  return has()
+}
+
 /** Writes the rules and mode atomically. */
 export async function writeAuditPolicy(profileDir: string, p: AuditPolicy): Promise<void> {
   const file = profilePaths(profileDir).auditPolicy

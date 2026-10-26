@@ -1,12 +1,12 @@
 // Observe mode (design §7, §12, ruling M1): the Host's policies commands. For the app and the CLI only, changes refused
 // to an agent's shell; the starter rules are written the first time observe is turned on and kept after.
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { removeFixture } from '../../core/testFixtures'
 import { profilePaths } from '../../core/profile/paths'
-import { COVERAGE, STARTER_POLICY, readAuditPolicy, writeAuditPolicy, type AuditPolicy, type AuditRule } from '../../core/audit/policy'
+import { COVERAGE, STARTER_POLICY, readAuditPolicy, readPolicyMode, writeAuditPolicy, type AuditPolicy, type AuditRule } from '../../core/audit/policy'
 import { POLICY_CHANGES, POLICY_COMMANDS, createHostPolicies } from './policyCommands'
 
 const dirs: string[] = []
@@ -210,11 +210,52 @@ describe('createHostPolicies', () => {
     expect(await kept()).toHaveLength(1)
     expect(await fs.readFile(path.join(path.dirname(h.file), (await kept())[0]), 'utf8')).toBe('{ not json')
 
-    // A mode that can be read is kept
+    // A mode the damaged file names is not turned on by the repair: while it was damaged sessions started in compatibility
     await fs.writeFile(h.file, JSON.stringify({ ...STARTER_POLICY, mode: 'observe', rules: [{ id: 'x', effect: 'maybe', action: 'git.*' }] }))
     expect((await h.call('policies-rules-reset')).status).toBe(200)
-    expect(await readAuditPolicy(h.profileDir)).toEqual({ ...STARTER_POLICY, mode: 'observe' })
+    expect(await readAuditPolicy(h.profileDir)).toEqual({ ...STARTER_POLICY, mode: 'compatibility' })
     expect(await kept()).toHaveLength(2)
+  })
+
+  it('the repair writes the mode the damaged file was in effect, never turning observing on or off by itself', async () => {
+    for (const named of ['observe', 'compatibility'] as const) {
+      const h = await rig()
+      // Damaged for its rules, though it names a mode: what sessions started in meanwhile is what readPolicyMode says
+      await fs.writeFile(h.file, JSON.stringify({ ...STARTER_POLICY, mode: named, rules: [{ id: 'x', effect: 'maybe', action: 'git.*' }] }))
+      const inEffect = await readPolicyMode(h.profileDir)
+      expect(inEffect).toBe('compatibility')
+      expect((await h.call('policies-rules-reset')).status).toBe(200)
+      expect(await readPolicyMode(h.profileDir)).toBe(inEffect)
+      expect(await readAuditPolicy(h.profileDir)).toEqual({ ...STARTER_POLICY, mode: inEffect })
+    }
+    // A file that reads keeps its own mode through the reset
+    const ok = await rig()
+    await writeAuditPolicy(ok.profileDir, { ...STARTER_POLICY, mode: 'observe', otherwise: 'deny' })
+    expect((await ok.call('policies-rules-reset')).status).toBe(200)
+    expect(await readAuditPolicy(ok.profileDir)).toEqual({ ...STARTER_POLICY, mode: 'observe' })
+  })
+
+  it('refuses to start over when the damaged copy could not be kept, and leaves the file as it is', async () => {
+    const h = await rig()
+    await fs.writeFile(h.file, '{ not json')
+    // Nothing can be written beside the file with `wx`, which is how a kept copy is made
+    const real = fs.writeFile.bind(fs)
+    const spy = vi.spyOn(fs, 'writeFile').mockImplementation(((f: unknown, d: unknown, o?: { flag?: string }) =>
+      o && typeof o === 'object' && o.flag === 'wx' ? Promise.reject(new Error('disk full')) : real(f as string, d as string, o as never)) as typeof fs.writeFile)
+    try {
+      const r = await h.call('policies-rules-reset')
+      expect(r.status).toBe(409)
+      expect(r.marks.effects).toBe(0)
+      expect(r.body).toMatchObject({ error: expect.stringContaining('copy'), repair: 'audit-policy.json' })
+      // Not a damage the repair can fix, so no reason to offer it
+      expect((r.body as { reason?: unknown }).reason).toBeUndefined()
+    } finally {
+      spy.mockRestore()
+    }
+    expect(await fs.readFile(h.file, 'utf8')).toBe('{ not json')
+    // With the disk back, the same repair keeps its copy and goes through
+    expect((await h.call('policies-rules-reset')).status).toBe(200)
+    expect((await fs.readdir(path.dirname(h.file))).filter((f) => f.endsWith('.bak'))).toHaveLength(1)
   })
 
   it('never writes over a file it could not read, even to start over', async () => {
@@ -245,6 +286,18 @@ describe('createHostPolicies', () => {
     const cleared = await h.call('policies-rules-edit', { id: rule.id, scope: null })
     expect(ruleOf(cleared)).toEqual({ id: rule.id, effect: 'allow', action: 'github.*' })
     expect((await readAuditPolicy(h.profileDir))!.rules[1]).toEqual({ id: rule.id, effect: 'allow', action: 'github.*' })
+  })
+
+  it('refuses an edit that changes nothing, with the reason, and writes nothing', async () => {
+    const h = await rig()
+    const id = STARTER_POLICY.rules[0].id
+    const r = await h.call('policies-rules-edit', { id })
+    expect(r.status).toBe(400)
+    expect(r.marks.effects).toBe(0)
+    expect(r.body).toMatchObject({ reason: 'nothing-to-change' })
+    expect(await h.exists()).toBe(false)
+    // A scope of null is a change (it clears the scope)
+    expect((await h.call('policies-rules-edit', { id, scope: null })).status).toBe(200)
   })
 
   it('refuses an edit it cannot read, and answers 404 for a rule it does not have', async () => {
