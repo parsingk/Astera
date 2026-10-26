@@ -170,19 +170,28 @@ export function createAuditRecorder(d: {
   /** The records whose Job, Run and Task are still being looked up, and the lookup each waits for (`bounded`). */
   const lookups = new WeakMap<AuditRecord, Promise<DispatchIds | null>>()
   const lookupWaitMs = d.lookupWaitMs ?? LOOKUP_WAIT_MS
+  /** Set while lookups take longer than the wait: one log line per streak, and one when a lookup answers in time again. */
+  let lookupsLate = false
   /** The later answer of a lookup that waits, or the one known at once when it fails or takes longer than the wait.
    *  Never rejects, and is handled from the moment it is made, so a record let go unwritten (a change to compatibility)
    *  leaves no rejection unheard (fix round 1, Minors 1 and 2). */
   const bounded = (sessionId: string, late: LateDispatchIds): Promise<DispatchIds | null> =>
     new Promise((resolve) => {
+      let timedOut = false
       const timer = setTimeout(() => {
-        d.log(`audit: a call of session ${sessionId} is written with the Job, Run and Task known when it was heard: its session's lines were not read within ${lookupWaitMs} ms`)
+        timedOut = true
+        if (!lookupsLate) d.log(`audit: a call of session ${sessionId} is written with the Job, Run and Task known when it was heard: its session's lines were not read within ${lookupWaitMs} ms; no more of these are logged until a lookup answers within it`)
+        lookupsLate = true
         resolve(late.now)
       }, lookupWaitMs)
       timer.unref?.()
       late.later.then(
         (ids) => {
           clearTimeout(timer)
+          if (!timedOut && lookupsLate) {
+            lookupsLate = false
+            d.log(`audit: the sessions' lines are read in time again for the Job, Run and Task of their calls`)
+          }
           resolve(ids)
         },
         (err: unknown) => {

@@ -553,6 +553,31 @@ describe('createAuditRecorder', () => {
     expect(records.find((r) => r.target === 'git status')).toMatchObject({ jobId: 'job_now', runId: 'run_now' })
   })
 
+  // A slow token read makes every record's lookup time out: the log says so once per streak, not once per record
+  it('logs lookups that time out once per streak, and once when they answer in time again', async () => {
+    const answers: Array<'never' | 'now'> = ['never', 'never', 'never', 'now', 'now', 'never']
+    let n = 0
+    const h = await rig({
+      over: {
+        lookupWaitMs: 20,
+        dispatchOf: () => ({ now: null, later: answers[n++] === 'now' ? Promise.resolve({ jobId: 'job1' }) : new Promise<null>(() => {}) })
+      }
+    })
+    await h.recorder.flushed()
+    const late = () => h.logs.filter((m) => /were not read within/.test(m)).length
+    const again = () => h.logs.filter((m) => /in time again/.test(m)).length
+    for (let i = 0; i < 3; i++) h.recorder.record(bash('git status', { dedupeKey: `toolu_${i}` }))
+    await h.recorder.flushed()
+    expect([late(), again()]).toEqual([1, 0])
+    for (let i = 3; i < 5; i++) h.recorder.record(bash('git status', { dedupeKey: `toolu_${i}` }))
+    await h.recorder.flushed()
+    expect([late(), again()]).toEqual([1, 1])
+    h.recorder.record(bash('git status', { dedupeKey: 'toolu_5' }))
+    await h.recorder.flushed()
+    expect([late(), again()]).toEqual([2, 1])
+    expect(await h.records()).toHaveLength(6)
+  })
+
   // Fix round 1, Minor 7: an ordinary call queued behind one whose lookup waits is written after it, in the order heard
   it('writes an ordinary call queued behind a waiting lookup after it, in order', async () => {
     let settle: (ids: { jobId: string; runId: string } | null) => void = () => {}
