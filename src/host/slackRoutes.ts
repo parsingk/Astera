@@ -21,7 +21,10 @@ import type { ProcRegistry } from './procRegistry'
 import type { HostChats } from './hostChats'
 import type { HostServer } from './server'
 
-export type HostInboxRoutes = Pick<SlackInboxDeps, 'write' | 'isChat' | 'pendingRequest' | 'deliverChat' | 'answerChat'>
+export type HostInboxRoutes = Pick<
+  SlackInboxDeps,
+  'write' | 'lastOutputAt' | 'isChat' | 'pendingRequest' | 'deliverChat' | 'answerChat'
+>
 
 /** A live chat proc carries this session id: the Host's own session list, adopted or not. */
 const liveChat = (procs: Pick<ProcRegistry, 'list'>, sid: string): boolean =>
@@ -30,7 +33,7 @@ const liveChat = (procs: Pick<ProcRegistry, 'list'>, sid: string): boolean =>
 const NOBODY = 'nobody holds this session right now'
 
 export function hostInboxRoutes(d: {
-  registry: Pick<PtyRegistry, 'sessionPty' | 'write'>
+  registry: Pick<PtyRegistry, 'sessionPty' | 'write' | 'lastOutput'>
   procs: Pick<ProcRegistry, 'list'>
   chats: Pick<HostChats, 'has' | 'isWriter' | 'send' | 'requests' | 'answerCard'> | null
   notifier: Pick<SlackNotifier, 'chatRequestOf'>
@@ -46,6 +49,11 @@ export function hostInboxRoutes(d: {
       // A person's reply from Slack (registry.ts, lastPersonWriteAt).
       d.registry.write(pty, data, { person: true })
       return true
+    },
+    // The reply's Enter waits for the pty to have drawn it and gone quiet (openai/codex#56982)
+    lastOutputAt: (sid: string): number | null => {
+      const pty = d.registry.sessionPty(sid)
+      return pty === null ? null : d.registry.lastOutput(pty)
     },
     isChat: (sid: string): boolean => liveChat(d.procs, sid),
     // P18: the adapter's open list (less the note's answered ids) where the Host holds one, else the card

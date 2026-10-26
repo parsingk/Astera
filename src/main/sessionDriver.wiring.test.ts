@@ -28,6 +28,12 @@ describe('ipc.ts gives the orchestration’s typing the session’s last output'
       /writeToSession: \(id, data\) => core\.sessions\.write\(id, data\),\s*lastOutputAt: \(id\) => core\.sessions\.lastOutput\(id\),/
     )
   })
+  it('passes lastOutputAt beside the Slack inbox’s write', () => {
+    const start = src.indexOf('new SlackInboxController({')
+    expect(start).toBeGreaterThan(-1)
+    const deps = src.slice(start, src.indexOf('createClient:', start))
+    expect(deps).toContain('lastOutputAt: (sid) => core!.sessions.lastOutput(sid)')
+  })
   it('passes lastOutputAt beside the dispatch loop’s typeInto', () => {
     expect(ipc).toMatch(
       /typeInto: \(id, text\) => core\.sessions\.write\(id, text\),\s*lastOutputAt: \(id\) => core\.sessions\.lastOutput\(id\),/

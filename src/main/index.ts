@@ -602,6 +602,8 @@ app.whenReady().then(async () => {
         core!.sessions.write(sessionId, data, { person: true })
         return true
       },
+      // The reply's Enter waits for the session to have drawn it and gone quiet (openai/codex#56982)
+      lastOutputAt: (sid) => core!.sessions.lastOutput(sid),
       postNote: (ts, text) => slack.postThreadNote(ts, text),
       isOwnMessage: (ts) => slack.isOwnMessage(ts),
       // On a choice prompt, turn the reply into a key sequence and carry it through Submit

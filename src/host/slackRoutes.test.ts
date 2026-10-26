@@ -12,7 +12,11 @@ function rig(o: { hostWrites?: boolean; hostHolds?: boolean; app?: boolean; appA
     answerCard: vi.fn(async () => {})
   }
   const routes = hostInboxRoutes({
-    registry: { sessionPty: (id) => (id === 's1' ? 'p1' : null), write: (p, data) => { writes.push([p, data]) } },
+    registry: {
+      sessionPty: (id) => (id === 's1' ? 'p1' : null),
+      write: (p, data) => { writes.push([p, data]) },
+      lastOutput: (p) => (p === 'p1' ? 1234 : null)
+    },
     procs: { list: () => [{ id: 'q1', pid: 1, alive: true, meta: { kind: 'chat', id: 'c1', restore: {} } }, { id: 'q2', pid: 2, alive: true, meta: { kind: 'chat', id: 'c2', restore: {} } }] },
     chats,
     notifier: { chatRequestOf: (id) => (id === 'c2' ? { id: 'r9', kind: 'approval', about: { tool: 'Edit', lines: [] }, decisions: ['accept', 'decline'] } : null) },
@@ -29,6 +33,14 @@ describe('hostInboxRoutes (Slack in the Host Task 7, spec §3.4)', () => {
     expect(h.writes).toEqual([['p1', 'hi']])
     expect(h.routes.isChat!('c1')).toBe(true)
     expect(h.routes.isChat!('s1')).toBe(false)
+  })
+
+  // Codex swallows an Enter that comes right after a long text (openai/codex#56982): the inbox's Enter waits for the
+  // session's pty to have drawn the reply and gone quiet, read from the registry
+  it('answers the session\'s pty\'s last output, and null for a session with none', () => {
+    const h = rig()
+    expect(h.routes.lastOutputAt!('s1')).toBe(1234)
+    expect(h.routes.lastOutputAt!('gone')).toBe(null)
   })
 
   // Review Focus 3.

@@ -30,6 +30,29 @@ export interface SessionDriver {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
+/** Waits from a text written into a pty until its Enter may go: ENTER_DELAY_MS, then, given the session's output,
+ *  until the session has printed something after the text and been quiet ENTER_QUIET_MS, at most ENTER_MAX_WAIT_MS
+ *  after the write. `outputAfter` answers the last output that came after the text, null while none has: output from
+ *  before does not count, as the text may not have reached the TUI yet. Left out, Enter goes after ENTER_DELAY_MS.
+ *  ptyDriver's deliver, the Slack inbox's reply and the codex roll's in-place resume all wait by this. */
+export async function untilEnter(o: {
+  wroteAt: number
+  outputAfter?: () => number | null
+  now?: () => number
+  wait?: (ms: number) => Promise<void>
+}): Promise<void> {
+  const wait = o.wait ?? sleep
+  const now = o.now ?? Date.now
+  await wait(ENTER_DELAY_MS)
+  while (o.outputAfter) {
+    const at = now()
+    const since = o.outputAfter()
+    const left = ENTER_MAX_WAIT_MS - (at - o.wroteAt)
+    if (left <= 0 || (since !== null && at - since >= ENTER_QUIET_MS)) return
+    await wait(Math.min(left, since !== null ? since + ENTER_QUIET_MS - at : ENTER_QUIET_MS))
+  }
+}
+
 export function ptyDriver(deps: {
   write(sessionId: string, data: string, by?: ForPerson): void
   wait?: (ms: number) => Promise<void>
@@ -37,23 +60,23 @@ export function ptyDriver(deps: {
    *  the text (ENTER_QUIET_MS); left out, it goes ENTER_DELAY_MS after the text as it always did. */
   lastOutputAt?: (sessionId: string) => number | null
 }): SessionDriver {
-  const wait = deps.wait ?? sleep
   const lastOutputAt = deps.lastOutputAt
   return {
     async deliver(sessionId, text, by) {
       const wroteAt = Date.now()
       deps.write(sessionId, text, by) // a throw here is the rejection — no Enter follows a failed paste
-      await wait(ENTER_DELAY_MS)
-      // Output after the text, then quiet: the TUI has taken the text in. Output from before does not count, as the
-      // text may not have reached it yet
-      while (lastOutputAt) {
-        const now = Date.now()
-        const last = lastOutputAt(sessionId)
-        const since = last !== null && last >= wroteAt ? last : null
-        const left = ENTER_MAX_WAIT_MS - (now - wroteAt)
-        if (left <= 0 || (since !== null && now - since >= ENTER_QUIET_MS)) break
-        await wait(Math.min(left, since !== null ? since + ENTER_QUIET_MS - now : ENTER_QUIET_MS))
-      }
+      await untilEnter({
+        wroteAt,
+        wait: deps.wait,
+        ...(lastOutputAt
+          ? {
+              outputAfter: () => {
+                const last = lastOutputAt(sessionId)
+                return last !== null && last >= wroteAt ? last : null
+              }
+            }
+          : {})
+      })
       deps.write(sessionId, '\r', by)
     }
   }
