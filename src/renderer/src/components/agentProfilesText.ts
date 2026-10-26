@@ -3,6 +3,7 @@
 // this side only says it.
 import type { MessageKey, MessageParams } from '../../../core/i18n'
 import type { AgentProfile, ProfilePermission } from '../../../core/agentProfiles/types'
+import { metaOf, providerOf, type Provider } from '../../../core/providers/meta'
 import { failureLine } from './extensionsText'
 
 type T = (key: MessageKey, params?: MessageParams) => string
@@ -106,3 +107,14 @@ export function chatHoldsPrompts(profile: AgentProfile | undefined, appWideYolo:
 /** A profile's name for the screens that show only its id (Job card, Run detail, a session tab): the id itself when
  *  this computer's list does not have it, a profile deleted since or one on a paired Runtime. */
 export const profileNameOf = (profiles: readonly AgentProfile[], id: string): string => profiles.find((p) => p.id === id)?.name ?? id
+
+/** What the editor's add list offers: the accounts not picked yet, and once one is picked only its provider's. A
+ *  profile's accounts take turns on one conversation, which only one provider's CLI can carry on (the Host refuses a mix
+ *  as `mixed-provider`). */
+export function addableAccounts<A extends { id: string; provider?: Provider }>(accounts: readonly A[], picked: readonly string[]): A[] {
+  const first = accounts.find((a) => a.id === picked[0])
+  return accounts.filter((a) => !picked.includes(a.id) && (first === undefined || providerOf(a) === providerOf(first)))
+}
+
+/** An account's provider by name, after its label in the add list. */
+export const providerSuffix = (a: { provider?: Provider }): string => ` (${metaOf(a).displayName})`

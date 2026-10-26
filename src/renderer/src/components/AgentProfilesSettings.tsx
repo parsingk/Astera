@@ -9,7 +9,7 @@ import { confirmModal } from '../lib/confirm'
 import { publishAgentProfiles } from '../lib/agentProfiles'
 import { AccountSelect } from './AccountSelect'
 import { failureLine } from './extensionsText'
-import { permissionLabel, profileFailureLine } from './agentProfilesText'
+import { addableAccounts, permissionLabel, profileFailureLine, providerSuffix } from './agentProfilesText'
 
 type Failure = Extract<PluginsCallAnswer, { ok: false }>
 /** A shared MCP server; `off` when it is switched off in MCP & Skills, so no session gets it whatever is ticked. */
@@ -205,7 +205,7 @@ function ProfileEditor({
     ;[ys[i], ys[i + dir]] = [ys[i + dir], ys[i]]
     set('accountIds', ys)
   }
-  const unpicked = accounts.filter((a) => !d.accountIds.includes(a.id))
+  const unpicked = addableAccounts(accounts, d.accountIds)
   return (
     <div className="ext-row-body">
       {warning !== undefined && <span className="settings-hint is-warning">{warning}</span>}
@@ -251,7 +251,7 @@ function ProfileEditor({
         )}
         {unpicked.length > 0 && (
           // Holds no value: picking adds the account at the end, as the new Task form adds a check
-          <AccountSelect accounts={unpicked} value="" allLabel={t('settings.agentProfiles.addAccount')} onChange={(id) => id !== '' && set('accountIds', [...d.accountIds, id])} />
+          <AccountSelect accounts={unpicked} value="" allLabel={t('settings.agentProfiles.addAccount')} suffixOf={providerSuffix} onChange={(id) => id !== '' && set('accountIds', [...d.accountIds, id])} />
         )}
         <span className="settings-hint">{t('settings.agentProfiles.accountsHint')}</span>
       </div>
