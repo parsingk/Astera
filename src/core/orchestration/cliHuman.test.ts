@@ -854,3 +854,27 @@ describe('humanFor — audit and policies', () => {
     expect(humanFor('policies-rules-reset', { mode: 'compatibility', policy: { ...policy, mode: 'compatibility', rules: [] } })?.split('\n').at(-1)).toBe('(no rules)')
   })
 })
+
+// The Credentials list (credentials design §7): a row per entry, never a value; doctor's lines with their level
+describe('humanFor — credentials', () => {
+  const list = {
+    entries: [
+      { kind: 'hide-only', id: 'hc_1', alias: 'Cloud', envNames: ['STRIPE_KEY'], presets: ['aws'], hide: { on: true, projects: ['D:/p'] }, createdAt: '2026-10-26T00:00:00.000Z' },
+      { kind: 'mcp-secret', id: 'mcp:m1', serverId: 'm1', serverName: 'linear', secretNames: ['linear-key'], envNames: ['LINEAR_API_KEY'], protectedNames: [], hide: { on: false } }
+    ],
+    presets: []
+  }
+  it('lists each entry with its kind, what it hides and where', () => {
+    const out = humanFor('credentials-list', list) ?? ''
+    expect(out).toContain('Cloud')
+    expect(out).toContain('STRIPE_KEY, preset aws')
+    expect(out).toContain('hidden in D:/p')
+    expect(out).toContain('linear')
+    expect(out).toContain('not hidden')
+    expect(out).not.toContain('linear-key')
+    expect(humanFor('credentials-list', { entries: [], presets: [] })).toBe('(nothing listed)')
+  })
+  it('prints doctor’s lines with their level', () => {
+    expect(humanFor('credentials-doctor', { lines: [{ level: 'ok', text: 'fine' }, { level: 'warn', text: 'careful' }] })).toBe(['ok    fine', 'warn  careful'].join('\n'))
+  })
+})

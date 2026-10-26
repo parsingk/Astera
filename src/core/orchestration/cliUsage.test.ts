@@ -649,3 +649,11 @@ describe('cliUsage — completion check plugins', () => {
     expect(guide).toContain('`no-ci`')
   })
 })
+
+// The Credentials list is changed in the app only (credentials design §4): the CLI's help says where
+describe('usage — credentials', () => {
+  it('says changes are made in the Astera app', () => {
+    for (const cmd of ['credentials-list', 'credentials-show', 'credentials-doctor'] as const) expect(USAGE[cmd].summary.length, cmd).toBeGreaterThan(0)
+    expect(USAGE['credentials-list'].detail).toMatch(/changed only in the Astera app/)
+  })
+})

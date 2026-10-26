@@ -618,6 +618,22 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
       'The counts for the calls the filters keep, decided by the rules in force now. `stoppedAtLimit` is true when a day of the period stopped recording at the size limit, so it holds fewer calls than were made. From inside an agent session it is refused with 5.',
     flags: AUDIT_FILTERS
   },
+  // Answered by the Host (credentials design §7): what Astera keeps out of agent sessions, read here, changed in the app.
+  'credentials-list': {
+    summary: 'what the Credentials list keeps out of agent sessions: shared MCP servers\' secrets and the entries you registered',
+    detail:
+      'Each entry with the variable names and CLI login presets it hides, whether hiding is on, and the projects it is narrowed to (none: every agent session). Shared MCP servers that hold a stored secret appear on their own, hidden by default; the entries you registered hold no value, only names. Nothing is a value. The list is changed only in the Astera app (Settings › Security & Access › Credentials), so an agent cannot switch off its own hiding. A change counts for sessions started afterwards. An agent session may read it.'
+  },
+  'credentials-show': {
+    summary: 'one entry of the Credentials list, by its id or its name, with its last uses',
+    detail: 'A shared MCP server is named by its server name or `mcp:<id>`; its last 20 uses through the Gateway come with it. An agent session may read it.',
+    flags: [ID('<id|name>', 'the entry')]
+  },
+  'credentials-doctor': {
+    summary: 'what hiding reaches and what it cannot, on this machine',
+    detail:
+      'Each entry\'s hiding, the presets and the platforms they were measured on, the names that are never hidden, and the limits: a program running as you can still read your files and OS stores, git and Docker hand their stored logins to any program that asks. An agent session may read it.'
+  },
   'policies-show': {
     summary: 'whether observe mode is on, the rules in order, and what it can see',
     detail:
