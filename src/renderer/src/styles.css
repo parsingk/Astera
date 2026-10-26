@@ -1290,7 +1290,7 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .security-title { margin: 0; font-size: 15px; font-weight: 600; color: var(--text); }
 .security-choices { display: flex; align-items: center; gap: 14px; }
 /* The coverage table and the rows: wide, so they scroll sideways inside the tab rather than widen it */
-.security-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+.security-table-wrap { container-type: inline-size; overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
 .security-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .security-table th, .security-table td { padding: 6px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line-soft); }
 .security-table tr:last-child > * { border-bottom: 0; }
@@ -1329,6 +1329,19 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .security-profile { font-size: 11.5px; color: var(--text-faint); }
 .security-rows td.security-target { width: 100%; max-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono); font-size: 11.5px; }
 .security-decided-by { display: block; min-width: 9em; margin-top: 3px; white-space: normal; font-size: 11.5px; color: var(--text-dim); }
+/* Where the tab is narrower than the table needs (measured: 455 px, the minimum window, overflowed by 50 px; 595 px and up
+   fit) each row stacks in its own box: the time, the session and the action on a line, the target under them, and the
+   decision with the rule that decided it last. The column heads are kept for screen readers only. */
+@container (max-width: 520px) {
+  .security-rows thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .security-rows, .security-rows tbody { display: block; }
+  .security-rows tr { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 2px 10px; padding: 6px 10px; border-bottom: 1px solid var(--line-soft); }
+  .security-rows tr:last-child { border-bottom: 0; }
+  .security-rows td { min-width: 0; padding: 0; border-bottom: 0; }
+  .security-rows td.security-target { grid-column: 1 / -1; width: auto; max-width: none; }
+  .security-rows tr > td:last-child { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; }
+  .security-rows .security-decided-by { flex: 1 1 9em; min-width: 0; margin-top: 0; }
+}
 .plugin-card .settings-hint { overflow-wrap: anywhere; }
 /* A fieldset, so a save holds every field at once; its own frame is taken off. */
 .plugin-form { display: flex; flex-direction: column; gap: 12px; min-width: 0; margin: 6px 0 0; padding: 10px 0 0; border: 0; border-top: 1px solid var(--line-soft); }
