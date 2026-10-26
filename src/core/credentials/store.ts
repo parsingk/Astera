@@ -55,6 +55,16 @@ function fileOf(v: unknown): CredentialsFile | null {
   return { version: 1, entries: entries as HideOnlyEntry[], mcpHide }
 }
 
+/** The list in `text`, or null when it is not one (damaged). Shared with the session managers' synchronous read
+ *  (hiding.ts). */
+export function parseCredentials(text: string): CredentialsFile | null {
+  try {
+    return fileOf(JSON.parse(text))
+  } catch {
+    return null
+  }
+}
+
 /** The damaged bytes are copied aside once per distinct text, so a file read at every spawn is not copied every time. */
 const keptDamage = new Map<string, string>()
 
@@ -64,13 +74,7 @@ export async function readCredentials(profileDir: string): Promise<CredentialsFi
   const read = await readStoreFile(file)
   if (read.kind === 'missing') return { version: 1, entries: [], mcpHide: {} }
   if (read.kind === 'unreadable') throw new RepairNeeded(`${FILE} could not be read (${String(read.error)})`, FILE)
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(read.text)
-  } catch {
-    parsed = null
-  }
-  const f = fileOf(parsed)
+  const f = parseCredentials(read.text)
   if (f === null) {
     const hash = createHash('sha256').update(read.text).digest('hex')
     if (keptDamage.get(file) !== hash) {

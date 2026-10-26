@@ -1551,3 +1551,55 @@ describe('observe mode at spawn', () => {
     expect(spawned[0].meta?.restore).not.toHaveProperty('observed')
   })
 })
+
+// The Credentials list (credentials design §5): the inherited environment loses what the list hides before Astera adds its
+// own variables, so an entry can never take away the session's identity, its Gateway token or a shared server's value.
+describe('credentials hiding', () => {
+  const caps = {
+    context: { kind: 'implicit' as const, accounts: ['acc-1'], policyMode: 'compatibility' as const, executionMode: 'managed' as const },
+    args: [],
+    env: { LINEAR_API_KEY: 'from-astera' },
+    given: ['linear'],
+    gatewayGrant: ['mcp-linear'],
+    skipped: []
+  }
+  const base = { PATH: process.env.PATH ?? '', GH_TOKEN: 'inherited', LINEAR_API_KEY: 'inherited-raw', KEEP: 'k' }
+  const made = () => {
+    const spawned: { opts: PtySpawnOptions }[] = []
+    const factory: PtyFactory = (_file, _args, opts) => {
+      spawned.push({ opts })
+      return new FakePty()
+    }
+    const manager = new SessionManager(factory, makeDescriptors(process.platform), 100, 20, undefined, undefined, undefined, base)
+    return { manager, spawned }
+  }
+
+  it('a session started after an entry is on has none of its variables', () => {
+    const { manager, spawned } = made()
+    manager.hiding = { get: () => ({ remove: ['GH_TOKEN'], set: { GH_CONFIG_DIR: 'C:/empty/gh' } }), damaged: () => false }
+    manager.spawn({ account, cwd: os.tmpdir() })
+    const env = spawned[0].opts.env ?? {}
+    expect(env.GH_TOKEN).toBeUndefined()
+    expect(env.GH_CONFIG_DIR).toBe('C:/empty/gh')
+    expect(env.KEEP).toBe('k')
+  })
+
+  it('never removes what Astera plants', () => {
+    const { manager, spawned } = made()
+    manager.capabilities = { get: () => caps, refresh: async () => {} }
+    manager.hiding = { get: () => ({ remove: ['LINEAR_API_KEY', 'ASTERA_SESSION', 'ASTERA_GATEWAY_TOKEN'], set: {} }), damaged: () => false }
+    const info = manager.spawn({ account, cwd: os.tmpdir(), orchEnv: { cliPath: 'C:/cli/astera.cmd', skillsPath: 'C:/u/skills', profileDir: 'C:/u' } })
+    const env = spawned[0].opts.env ?? {}
+    expect(env.LINEAR_API_KEY).toBe('from-astera')
+    expect(env.ASTERA_SESSION).toBe(info.id)
+    expect(env.ASTERA_GATEWAY_TOKEN).toMatch(/^[A-Za-z0-9_-]{43}$/)
+  })
+
+  it('asks the hiding for the session\'s folder', () => {
+    const { manager } = made()
+    const asked: string[] = []
+    manager.hiding = { get: (cwd) => (asked.push(cwd), { remove: [], set: {} }), damaged: () => false }
+    manager.spawn({ account, cwd: os.tmpdir() })
+    expect(asked).toEqual([os.tmpdir()])
+  })
+})

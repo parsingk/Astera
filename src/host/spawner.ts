@@ -52,6 +52,7 @@ import type { PtyRegistry } from './registry'
 import type { HostRollSpawner, RollSpawnOpts } from './rolling'
 import type { HostWorktrees } from './worktrees'
 import { createCapabilityCache, type CapabilityCache } from '../core/extensions/capabilityCache'
+import { createHidingSource, projectOfWorktrees, type HidingSource } from '../core/credentials/hiding'
 import { readPolicyMode } from '../core/audit/policy'
 import { hidingLog } from '../core/extensions/secrets'
 import { setBounded } from '../core/bounded'
@@ -101,7 +102,7 @@ export interface HostSpawnerDeps {
   log(m: string): void
   /** The Host's own worktree registry (Host S3, §3.1): the fork behind `--worktree new`, and the three
    *  `OrchServerDeps` names this file used to refuse. */
-  worktrees: Pick<HostWorktrees, 'fork' | 'makeRunWorktree' | 'mergeWorktrees' | 'removeWorktrees'>
+  worktrees: Pick<HostWorktrees, 'fork' | 'makeRunWorktree' | 'mergeWorktrees' | 'removeWorktrees'> & Partial<Pick<HostWorktrees, 'list'>>
   /** Whether an attached app still does worktree work itself (`server.appKeeps`, ruling R4). Asked
    *  fresh on every `owns` call — an app can attach or detach between two of them. */
   appKeepsWorktrees(): boolean
@@ -132,6 +133,8 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
   /** Shared extensions each account's sessions get (Agent Control Plane release 1): refreshed before every spawn,
    *  shared with the Host's chat sessions. */
   capabilities?: CapabilityCache
+  /** The Credentials list's hiding (credentials design §5), asked at each spawn; shared with the Host's chat sessions. */
+  hiding?: HidingSource
   /** The session shuttle's values once the Host wrote it (kicked at creation); undefined until then. */
   orchEnvNow(): ChatOrchEnv | undefined
   /** How many worker and coordinator starts are under way right now. */
@@ -360,6 +363,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     log: hidingLog(profileDir, log)
   })
   sessions.capabilities = capabilities
+  // The Credentials list (credentials design §5): a worker's worktree counts as its project's folder
+  const hiding = createHidingSource({ profileDir, projectOf: projectOfWorktrees(() => d.worktrees.list?.() ?? []) })
+  sessions.hiding = hiding
   // Observe mode: an observed Claude session's hook settings, written by its prepare (StatusLineManager.ensureObserveFiles)
   sessions.observeHooks = () => statusLine.ensureObserveFiles()
   sessions.onExit = (e) => {
@@ -718,6 +724,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
 
   return {
     capabilities,
+    hiding,
     orchEnvNow: () => orchEnvReady,
     inFlight: () => spawnsInFlight,
     closeAndSettle: (ms) => {
