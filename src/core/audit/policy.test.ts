@@ -539,6 +539,9 @@ describe('decide, a denied command the resolver must reach', () => {
     expect(decide(ps('switch $x\nFoo { Remove-Item -Recurse ../x { npm test } }'), p)).toEqual(del)
     expect(decide(ps('switch ($x)\n{\n  a { npm test }\n}'), p)).toEqual({ decision: 'allow' })
     expect(decide(ps('switch ($x; $y) {a {npm test}}'), p)).toEqual({ decision: 'allow' })
+    // A switch without parentheses: the brace that ends its command opens its body
+    expect(decide(ps('switch $x {a {npm test}}'), p)).toEqual({ decision: 'allow' })
+    expect(decide(ps('switch -Regex $x { "a.*" { npm test } default { git push } }'), p)).toEqual(push)
     // Outside a switch body a word before a block is still a command
     expect(decide(ps('Invoke-Foo { npm test }'), p)).toEqual({ decision: 'unknown' })
     expect(decide(ps('switch ($x) {a {npm test}}; Invoke-Foo { npm test }'), p)).toEqual({ decision: 'unknown' })

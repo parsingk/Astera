@@ -1070,8 +1070,10 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
         braces.push('block')
       } else {
         endCommand()
-        // a brace inside the subject `switch (…)` is an ordinary block; the body is the first one after the subject closes
-        const body = armed !== null && armed.parens === parens && armed.braces === braces.length
+        // a brace inside the subject `switch (…)` is an ordinary block; the body is the first one after the subject closes.
+        // Read again after endCommand: a switch without parentheses (`switch $x {`) is armed by this very brace
+        const now = switchNext as { parens: number; braces: number } | null
+        const body = now !== null && now.parens === parens && now.braces === braces.length
         braces.push(body ? 'switch' : 'block')
         if (body) switchNext = null
       }
