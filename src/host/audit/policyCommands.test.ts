@@ -324,7 +324,14 @@ describe('createHostPolicies', () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-host-policies-'))
     dirs.push(root)
     let changes = 0
-    const hub = createHostPolicies({ profileDir: root, onChange: () => changes++ })
+    const told: string[] = []
+    const hub = createHostPolicies({
+      profileDir: root,
+      onChange: (cmd) => {
+        changes++
+        told.push(cmd)
+      }
+    })
     const call = (cmd: string, args: Record<string, unknown> = {}, agentRefusal?: string) =>
       hub.command({ cmd, args, role: 'app', ...(agentRefusal ? { agentRefusal } : {}), marks: { effects: 0 } })
     await call('policies-show')
@@ -335,6 +342,8 @@ describe('createHostPolicies', () => {
     expect(changes).toBe(1)
     await call('policies-rules-reset')
     expect(changes).toBe(2)
+    // It says which change it was, so the recorder knows whether the mode may have turned
+    expect(told).toEqual(['policies-set-mode', 'policies-rules-reset'])
   })
 
   it('lands two concurrent changes in order', async () => {

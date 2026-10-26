@@ -831,7 +831,7 @@ async function main(): Promise<void> {
   }
   // Observe mode's rules and mode (observe mode design §7, ruling M1): audit-policy.json, which this Host alone writes. A
   // change tells the recorder, which reads the mode again at its next call
-  const policies = createHostPolicies({ profileDir, onChange: () => auditRecorder.invalidate() })
+  const policies = createHostPolicies({ profileDir, onChange: (cmd) => auditRecorder.invalidate({ modeUnchanged: cmd !== 'policies-set-mode' }) })
   // And the records read back with the decisions those rules give them now (design §8)
   const audit = createHostAudit({ profileDir })
   const orch = createHostOrch({

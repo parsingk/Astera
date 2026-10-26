@@ -76,8 +76,10 @@ export interface AuditEvent {
 export interface AuditRecorder {
   /** Hands a finished call over. Returns at once and never throws. */
   record(ev: AuditEvent): void
-  /** The mode may have changed: it is read again at once, and before the next record is written. */
-  invalidate(): void
+  /** The mode may have changed: it is read again at once, and before the next record is written. `modeUnchanged` says the
+   *  change cannot have turned it (a rule edited): what is known stays until the read, and nobody is told of a
+   *  change that did not happen. */
+  invalidate(o?: { modeUnchanged?: boolean }): void
   /** Settles once every call handed over so far is written or dropped. */
   flushed(): Promise<void>
   /** False while the mode is known to be compatibility, when every call is dropped: the sources read nothing then
@@ -137,8 +139,9 @@ export function createAuditRecorder(d: {
   let queue: Promise<void> = Promise.resolve()
   const heardKeys = new Map<string, Set<string>>()
 
-  const currentMode = async (): Promise<AuditMode> => {
-    if (mode !== null) return mode
+  const currentMode = async (): Promise<AuditMode> => (mode !== null ? mode : readMode())
+  /** Reads the mode from the file and keeps it, unless a change came while it was read. */
+  const readMode = async (): Promise<AuditMode> => {
     const g = generation
     try {
       const value = await d.mode()
@@ -146,7 +149,9 @@ export function createAuditRecorder(d: {
       modeFailing = false
       return value
     } catch (err) {
-      // Read as compatibility, which never observes more than the person chose, and read again next time
+      // Read as compatibility, which never observes more than the person chose: the sources stop reading while the file
+      // cannot be read, and the next change (a repair) reads it again
+      if (g === generation) keep('compatibility')
       if (!modeFailing) d.log(`audit: the observe mode could not be read, so calls are not recorded until it can: ${String(err)}`)
       modeFailing = true
       return 'compatibility'
@@ -249,12 +254,12 @@ export function createAuditRecorder(d: {
         d.log(`audit: a ${String(ev?.source)} call of session ${String(ev?.sessionId)} was not recorded: ${String(err)}`)
       }
     },
-    invalidate() {
+    invalidate(o) {
       generation++
-      keep(null)
+      if (!(o?.modeUnchanged === true && mode !== null)) keep(null)
       // Read again now, not at the next call: the sources ask `observing` before they read anything
       enqueue(async () => {
-        await currentMode()
+        await readMode()
       })
     },
     flushed: () => queue,

@@ -72,7 +72,7 @@ const isPosition = (v: unknown): v is number => Number.isInteger(v) && (v as num
 export function createHostPolicies(d: {
   profileDir: string
   /** Told after every change that landed: the recorder reads the mode again rather than wait out its last read. */
-  onChange?: () => void
+  onChange?: (cmd: string) => void
 }): HostPolicies {
   // One change at a time: two changes must each read what the other wrote
   let chain: Promise<unknown> = Promise.resolve()
@@ -222,7 +222,7 @@ export function createHostPolicies(d: {
       }
       if (r.status === 200 && POLICY_CHANGES.has(a.cmd)) {
         a.marks.effects += 1
-        d.onChange?.()
+        d.onChange?.(a.cmd)
       }
       return r
     }

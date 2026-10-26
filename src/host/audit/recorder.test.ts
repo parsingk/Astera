@@ -253,6 +253,13 @@ describe('createAuditRecorder', () => {
     h.recorder.invalidate()
     await h.recorder.flushed()
     expect(seen).toEqual([false, true, false, true, false])
+    // A change that leaves the mode as it was (a rule edited, the starter rules put back) is read again without a word:
+    // the sources have nothing to start or stop for it
+    h.recorder.invalidate({ modeUnchanged: true })
+    expect(h.recorder.observing()).toBe(false)
+    await h.recorder.flushed()
+    expect(seen).toEqual([false, true, false, true, false])
+    expect(h.modeReads()).toBe(5)
     // A listener that left hears nothing
     off()
     h.setMode('observe')
@@ -277,7 +284,26 @@ describe('createAuditRecorder', () => {
     expect(h.modeReads()).toBe(2)
   })
 
-  it('does not keep a mode it could not read: those calls are not recorded, and the next call reads it again', async () => {
+  it('a change that leaves the mode unchanged keeps what it knew while it reads again, and tells of a mode that turned out different', async () => {
+    const h = await rig({ mode: 'observe' })
+    const seen: boolean[] = []
+    h.recorder.onObservingChange(() => seen.push(h.recorder.observing()))
+    await h.recorder.flushed()
+    expect(h.recorder.observing()).toBe(true)
+    h.recorder.invalidate({ modeUnchanged: true })
+    expect(h.recorder.observing()).toBe(true)
+    h.setMode('compatibility')
+    await h.recorder.flushed()
+    expect(h.recorder.observing()).toBe(false)
+    expect(seen).toEqual([false])
+    // Nothing known yet: it is the same as any change
+    const fresh = await rig({ mode: 'compatibility' })
+    fresh.recorder.invalidate({ modeUnchanged: true })
+    expect(fresh.recorder.observing()).toBe(true)
+    await fresh.recorder.flushed()
+  })
+
+  it('does not keep a mode it could not read as observe: sources stop while the file is damaged, and a repair that tells of the change starts them', async () => {
     let fail = true
     const h = await rig({
       over: {
@@ -287,11 +313,17 @@ describe('createAuditRecorder', () => {
         }
       }
     })
+    expect(h.recorder.observing()).toBe(true)
     h.recorder.record(bash('git status'))
     await h.recorder.flushed()
     expect(await h.folderExists()).toBe(false)
     expect(h.logs.join('\n')).toMatch(/damaged/)
+    // The sources have nothing to read while it is damaged, rather than parse every line for the recorder to drop
+    expect(h.recorder.observing()).toBe(false)
     fail = false
+    h.recorder.invalidate()
+    await h.recorder.flushed()
+    expect(h.recorder.observing()).toBe(true)
     h.recorder.record(bash('git status'))
     await h.recorder.flushed()
     expect(await h.records()).toHaveLength(1)
