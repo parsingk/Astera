@@ -47,8 +47,11 @@ const counted = (at: number, total: [number, number], last: [number, number]): s
 const lines = (...ls: string[]): string => ls.map((l) => l + '\n').join('')
 /** A Codex rollout event with no more to it than its kind (task_started, task_complete). */
 const codexEvent = (at: number, type: string): string => JSON.stringify({ timestamp: iso(at), type: 'event_msg', payload: { type } })
-/** A Codex user_message: what a person, Astera or Codex itself put to the model. */
-const codexUser = (at: number, message: string): string => JSON.stringify({ timestamp: iso(at), type: 'event_msg', payload: { type: 'user_message', message, images: [] } })
+/** What a person, Astera or Codex itself put to the model, as Codex 0.160 to 0.164 write it: a user message item. */
+const codexUser = (at: number, text: string): string =>
+  JSON.stringify({ timestamp: iso(at), type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } })
+/** The same as an older Codex wrote it: a user_message event. */
+const codexUserOld = (at: number, message: string): string => JSON.stringify({ timestamp: iso(at), type: 'event_msg', payload: { type: 'user_message', message, images: [] } })
 /** Claude Code's note that a background task finished, written as a user line, in the three ways it may say so. */
 const taskNotification = (at: number, how: 'source' | 'origin' | 'prefix'): string =>
   JSON.stringify({
@@ -570,15 +573,42 @@ describe('createTokenSources', () => {
         codexEvent(end + 5 * MIN, 'task_started'),
         codexUser(end + 5 * MIN, '<task-notification><task-id>b1</task-id></task-notification>'),
         counted(end + 5 * MIN + 500, [180, 30], [10, 5]),
+        // A turn Codex begins itself (a `/goal` carried on): a bare task_started, with its own wrappers as user items
+        codexEvent(end + 5 * MIN + 30_000, 'task_started'),
+        codexUser(end + 5 * MIN + 30_000, '<environment_context>\n  <cwd>D:/p</cwd>\n</environment_context>'),
+        codexUser(end + 5 * MIN + 30_000, '# AGENTS.md instructions for D:/p\n\nKeep it short.'),
+        counted(end + 5 * MIN + 40_000, [190, 35], [10, 5]),
         // A person types into the tab
         codexEvent(end + 6 * MIN, 'task_started'),
         codexUser(end + 6 * MIN, 'thanks, something else now'),
-        counted(end + 6 * MIN + 500, [400, 40], [220, 10])
+        counted(end + 6 * MIN + 500, [400, 40], [210, 5])
       )
     )
     now = end + 7 * MIN
     await r.sources.poll()
-    expect(taskTokensOf(state, 't1', r.store.spent())).toEqual({ input: 180, output: 30, total: 210 })
+    expect(taskTokensOf(state, 't1', r.store.spent())).toEqual({ input: 190, output: 35, total: 225 })
+    r.sources.dispose()
+  })
+
+  // Fix round 2, Important c: an older Codex wrote the person's prompt as a user_message event; that still ends the hold
+  it('ends a Codex worker’s hold at a person’s prompt an older Codex wrote as a user_message event', async () => {
+    const MIN = 60_000
+    const end = T0 + MIN
+    let now = T0
+    let state = orch([dispatch('d1', 't1', 'sess_w')])
+    const r = await rig({ state: () => state, now: () => now })
+    const file = path.join(r.dir, 'rollout-old.jsonl')
+    await fs.writeFile(file, lines(codexEvent(T0 + 100, 'task_started'), codexUserOld(T0 + 100, 'Do the task'), counted(T0 + 200, [100, 10], [100, 10])))
+    r.ptys.open('pty_w', note('session', 'sess_w', { rolloutPath: file }))
+    await r.sources.poll()
+    state = orch([dispatch('d1', 't1', 'sess_w', iso(T0), iso(end))])
+    await fs.appendFile(
+      file,
+      lines(counted(end + 3 * MIN, [150, 20], [50, 10]), codexUserOld(end + 6 * MIN, 'thanks, something else now'), counted(end + 6 * MIN + 500, [400, 40], [250, 20]))
+    )
+    now = end + 7 * MIN
+    await r.sources.poll()
+    expect(taskTokensOf(state, 't1', r.store.spent())).toEqual({ input: 150, output: 20, total: 170 })
     r.sources.dispose()
   })
 

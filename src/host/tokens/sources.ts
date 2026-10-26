@@ -49,7 +49,7 @@ import { codexTokenReader } from '../../core/usage/codex'
 import { extractStatusLineSession } from '../../core/usage/statusline'
 import { heldPastEnd, outcomeOf, runEndOf } from '../../core/orchestration/running'
 import { isRealUserText } from '../../core/history/parser'
-import { isRealCodexUserText } from '../../core/history/codexParser'
+import { contentText, isRealCodexUserText } from '../../core/history/codexParser'
 import type { OrchState } from '../../core/orchestration/state'
 import type { Dispatch, JobRun } from '../../core/orchestration/types'
 import type { PtyMeta } from '../../core/host/protocol'
@@ -191,14 +191,22 @@ const claudeTypedAt = (line: string): number | null => {
   return typedText(textOf((o.message as { content?: unknown } | undefined)?.content)) ? timeOf(o) : null
 }
 
-/** When a Codex rollout line is a prompt typed into the session, by a person or by Astera: a `user_message` event
- *  that is not one Codex wraps itself (its environment, a task notification; codexParser.ts isRealCodexUserText). Every
- *  turn has a `task_started`, Astera's too, so that mark says nothing about who began it. Null for any other line. */
+/** When a Codex rollout line is a prompt typed into the session, by a person or by Astera: a user message item (a
+ *  `response_item` of `role: 'user'`, its text blocks joined; what Codex 0.160 to 0.164 write), or an older Codex's
+ *  `user_message` event, either one not a wrapper Codex puts there itself (its environment, the project's AGENTS.md, an
+ *  agent history, a task notification; codexParser.ts isRealCodexUserText). Every turn has a `task_started`, Astera's
+ *  and Codex's own (a `/goal` carried on) too, so that mark says nothing about who began it. Null for any other line. */
 const codexTypedAt = (line: string): number | null => {
-  if (!line.includes('"user_message"')) return null
+  if (!line.includes('"role":"user"') && !line.includes('"user_message"')) return null
   const o = parsed(line)
-  const p = o?.payload as { type?: unknown; message?: unknown } | undefined
-  return o?.type === 'event_msg' && p?.type === 'user_message' && typeof p.message === 'string' && isRealCodexUserText(p.message) ? timeOf(o) : null
+  const p = o?.payload as { type?: unknown; role?: unknown; content?: unknown; message?: unknown } | undefined
+  const text =
+    o?.type === 'response_item' && p?.type === 'message' && p.role === 'user'
+      ? contentText(p.content)
+      : o?.type === 'event_msg' && p?.type === 'user_message' && typeof p.message === 'string'
+        ? p.message
+        : null
+  return text !== null && isRealCodexUserText(text) ? timeOf(o) : null
 }
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null)
