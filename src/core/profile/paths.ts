@@ -50,6 +50,12 @@ export interface ProfilePaths {
   /** The tokens each session spent for a Dispatch or a Run's coordinator: `{ version, spent }`, written by the Host
    *  alone, in every mode (observe mode design §10). */
   tokenTotals: string
+  /** The Credentials list (credentials design §4): `{ version, entries, mcpHide }`, written by the Host alone. */
+  credentials: string
+  /** Empty folders and files a hidden CLI login's configuration is pointed at (credentials design §5). */
+  credentialEmpty: string
+  /** Credential-use records: one `YYYY-MM-DD.jsonl` per local day, written by the Host alone (credentials design §6). */
+  credentialUses: string
 }
 
 export function profilePaths(profileDir: string): ProfilePaths {
@@ -58,6 +64,9 @@ export function profilePaths(profileDir: string): ProfilePaths {
     agentProfileConversations: path.join(profileDir, 'agent-profile-conversations.json'),
     auditPolicy: path.join(profileDir, 'audit-policy.json'),
     auditRecords: path.join(profileDir, 'audit'),
-    tokenTotals: path.join(profileDir, 'token-totals.json')
+    tokenTotals: path.join(profileDir, 'token-totals.json'),
+    credentials: path.join(profileDir, 'credentials.json'),
+    credentialEmpty: path.join(profileDir, 'credentials', 'empty'),
+    credentialUses: path.join(profileDir, 'credential-uses')
   }
 }
