@@ -505,13 +505,16 @@ describe('createAuditRecorder', () => {
   })
 
   // Deferred minor b: a lookup that turns on which turn the call fell in waits for the session's lines to be read past it
-  it('writes a call whose Dispatch lookup has to wait once it settles, with what it found, and keeps it when the lookup fails', async () => {
+  it('writes a call whose Dispatch lookup has to wait once it settles, with what it found, and with what was known at once when the lookup fails', async () => {
     let settle: (ids: { jobId: string; runId: string } | null) => void = () => {}
     let fail: (err: Error) => void = () => {}
     let n = 0
     const h = await rig({
       over: {
-        dispatchOf: () => (++n === 1 ? new Promise((r) => (settle = r)) : new Promise((_r, j) => (fail = j)))
+        dispatchOf: () =>
+          ++n === 1
+            ? { now: null, later: new Promise<{ jobId: string; runId: string } | null>((r) => (settle = r)) }
+            : { now: { jobId: 'job_now', runId: 'run_now' }, later: new Promise<null>((_r, j) => (fail = j)) }
       }
     })
     await h.recorder.flushed()
@@ -527,8 +530,88 @@ describe('createAuditRecorder', () => {
     await h.recorder.flushed()
     const records = await h.records()
     expect(records).toHaveLength(2)
-    expect(records.find((r) => r.target !== 'git status')).not.toHaveProperty('runId')
+    expect(records.find((r) => r.target !== 'git status')).toMatchObject({ jobId: 'job_now', runId: 'run_now' })
     expect(h.logs.join('\n')).toMatch(/turns gone/)
+  })
+
+  // Fix round 1, Minor 2: a lookup that never settles holds its record, and every one behind it, only so long; then the
+  // record takes what was known at once
+  it('writes a call whose lookup never settles after the wait, with what was known at once, and the calls behind it', async () => {
+    let n = 0
+    const h = await rig({
+      over: {
+        lookupWaitMs: 30,
+        dispatchOf: () => (++n === 1 ? { now: { jobId: 'job_now', runId: 'run_now' }, later: new Promise<null>(() => {}) } : null)
+      }
+    })
+    await h.recorder.flushed()
+    h.recorder.record(bash('git status', { dedupeKey: 'toolu_1' }))
+    h.recorder.record(bash('npm test', { dedupeKey: 'toolu_2' }))
+    await h.recorder.flushed()
+    const records = await h.records()
+    expect(records).toHaveLength(2)
+    expect(records.find((r) => r.target === 'git status')).toMatchObject({ jobId: 'job_now', runId: 'run_now' })
+  })
+
+  // Fix round 1, Minor 7: an ordinary call queued behind one whose lookup waits is written after it, in the order heard
+  it('writes an ordinary call queued behind a waiting lookup after it, in order', async () => {
+    let settle: (ids: { jobId: string; runId: string } | null) => void = () => {}
+    let n = 0
+    const written: AuditRecord[][] = []
+    const h = await rig({
+      over: {
+        dispatchOf: () => (++n === 1 ? { now: null, later: new Promise<{ jobId: string; runId: string } | null>((r) => (settle = r)) } : null),
+        append: async (_dir, recs) => {
+          written.push([...recs])
+        }
+      }
+    })
+    await h.recorder.flushed()
+    h.recorder.record(bash('git status', { dedupeKey: 'toolu_1' }))
+    h.recorder.record(bash('npm test', { dedupeKey: 'toolu_2' }))
+    await new Promise((r) => setTimeout(r, 10))
+    expect(written).toEqual([])
+    settle({ jobId: 'job2', runId: 'run_done' })
+    await h.recorder.flushed()
+    expect(written.flat().map((r) => [r.target, r.runId])).toEqual([
+      ['git status', 'run_done'],
+      ['npm test', undefined]
+    ])
+  })
+
+  // Fix round 1, Minor 1: a call dropped while the hold is full is not looked up, and a lookup whose record was let go
+  // (dropped by a change to compatibility before it was written) never rejects unheard
+  it('looks up no call it drops, and leaves no lookup of a record it let go rejecting unhandled', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (err: unknown): void => void unhandled.push(err)
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      let release: () => void = () => {}
+      const stuck = new Promise<void>((r) => (release = r))
+      let asked = 0
+      const h = await rig({
+        over: {
+          dispatchOf: () => (++asked, { now: null, later: Promise.reject(new Error('turns gone')) }),
+          append: async () => {
+            await stuck
+          }
+        }
+      })
+      await h.recorder.flushed()
+      h.recorder.record(bash('git status'))
+      await new Promise((r) => setImmediate(r))
+      for (let i = 0; i < AUDIT_PENDING_MAX + 3; i++) h.recorder.record(bash('git status'))
+      expect(asked).toBe(1 + AUDIT_PENDING_MAX)
+      // The mode turns off before the waiting records reach the disk: they are let go unwritten
+      h.setMode('compatibility')
+      h.recorder.invalidate()
+      release()
+      await h.recorder.flushed()
+      await new Promise((r) => setTimeout(r, 20))
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
   })
 
   it('never throws to a source: a failing lookup is logged and the next call is still recorded', async () => {
@@ -761,9 +844,25 @@ describe('dispatchOfWithTurns', () => {
           }
         })
     })
-    const later = of('sess_co', T('02:30'))
-    expect(later).toBeInstanceOf(Promise)
+    // What is known at once goes with it, for a read that never ends (Minor 2)
+    const deferred = of('sess_co', T('02:30')) as { now: unknown; later: Promise<unknown> }
+    expect(deferred.now).toEqual(ids)
     read()
-    expect(await later).toBeNull()
+    expect(await deferred.later).toBeNull()
+  })
+
+  // Fix round 1, Minor 3: a read can change only an answer that turned on the turn. An ended Dispatch past its end asks
+  // the turn, and a turn known to have begun after that end leaves the answer to the unfinished Run, which no read moves
+  it('answers at once when the answer is an unfinished Run’s, though an ended Dispatch asked the turn', () => {
+    const live: OrchState = {
+      ...emptyState(),
+      runs: [{ id: 'run_live', jobId: 'job1', ordinal: 1, createdAt: T('00:00'), coordinatorSessionId: 'sess_co' }],
+      tasks: [{ id: 't_live', runId: 'run_live', status: 'dispatched', consecutiveFailures: 0 } as Task],
+      dispatches: [{ id: 'd1', taskId: 't_live', sessionId: 'sess_co', startedAt: T('00:10'), endedAt: T('01:00') } as Dispatch]
+    }
+    let reads = 0
+    const of = dispatchOfWithTurns(() => live, { turnOf: () => Date.parse(T('01:30')), readPast: () => (reads++, Promise.resolve()) })
+    expect(of('sess_co', T('02:00'))).toEqual({ jobId: 'job1', runId: 'run_live' })
+    expect(reads).toBe(0)
   })
 })

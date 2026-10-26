@@ -623,9 +623,13 @@ describe('createTokenSources', () => {
     )
     await r.sources.poll()
     expect(runTokensOf(state, 'run_1', r.store.spent())).toEqual({ coordinatorTokens: { input: 35, output: 8, total: 43 } })
-    const filed = dispatchOfWithTurns(() => state, r.sources)
-    expect(await filed('sess_k', iso(E + 9 * MIN + 30_000))).toEqual({ jobId: 'job_1', runId: 'run_1' })
-    expect(await filed('sess_k', iso(E + 20 * MIN + 2000))).toBeNull()
+    const lookup = dispatchOfWithTurns(() => state, r.sources)
+    const filed = async (at: number) => {
+      const x = lookup('sess_k', iso(at))
+      return x !== null && 'later' in x ? x.later : x
+    }
+    expect(await filed(E + 9 * MIN + 30_000)).toEqual({ jobId: 'job_1', runId: 'run_1' })
+    expect(await filed(E + 20 * MIN + 2000)).toBeNull()
     r.sources.dispose()
   })
 

@@ -27,6 +27,9 @@ import type { SessionTurns } from '../tokens/sources'
 export const AUDIT_COMMANDS_KEPT = 16
 /** Records that wait for the disk at most; past this, calls are counted and dropped. */
 export const AUDIT_PENDING_MAX = 2000
+/** How long a call whose Job, Run and Task wait for its session's lines to be read (`dispatchOfWithTurns`) is held, and
+ *  every call behind it; past it, it is written with what was known at once (fix round 1, Minor 2). */
+export const LOOKUP_WAIT_MS = 10_000
 /** How long after a failed read of the mode the next try waits, doubling up to the longest. */
 const RETRY_FIRST_MS = 5_000
 const RETRY_MAX_MS = 30_000
@@ -56,6 +59,13 @@ export interface DispatchIds {
   jobId?: string
   runId?: string
   taskId?: string
+}
+
+/** A lookup that has to wait for the session's own lines to be read past the call (`dispatchOfWithTurns`): what is
+ *  known at once, and the answer once they are. */
+export interface LateDispatchIds {
+  now: DispatchIds | null
+  later: Promise<DispatchIds | null>
 }
 
 /** One finished tool call, as a source hands it over. */
@@ -108,11 +118,14 @@ export function createAuditRecorder(d: {
   /** The session's facts, or null for one Astera did not start, which is not observed (design §5), and for one not
    *  started while the mode was observe. */
   sessionInfo(sessionId: string): SessionFacts | null
-  /** The Job, Run and Task the session worked for at `at`, or null. A promise when the answer has to wait for the
-   *  session's own lines to be read past the call (`dispatchOfWithTurns`): the record waits for it before it is written,
-   *  and is written without them when it fails. */
-  dispatchOf(sessionId: string, at: string): DispatchIds | null | Promise<DispatchIds | null>
+  /** The Job, Run and Task the session worked for at `at`, or null. When the answer has to wait for the session's own
+   *  lines to be read past the call (`dispatchOfWithTurns`), what is known at once and the answer later: the record waits
+   *  for the later one up to LOOKUP_WAIT_MS before it is written, and takes the one known at once when it fails or does
+   *  not come in time. */
+  dispatchOf(sessionId: string, at: string): DispatchIds | null | LateDispatchIds
   log(message: string): void
+  /** Test injection: LOOKUP_WAIT_MS. */
+  lookupWaitMs?: number
   /** Test injection (epoch ms). */
   now?: () => number
   /** Test injection; defaults to the resolver. */
@@ -153,8 +166,31 @@ export function createAuditRecorder(d: {
   let busy = false
   let queue: Promise<void> = Promise.resolve()
   const heardKeys = new Map<string, Set<string>>()
-  /** The records whose Job, Run and Task are still being looked up, and the lookup each waits for. */
+  /** The records whose Job, Run and Task are still being looked up, and the lookup each waits for (`bounded`). */
   const lookups = new WeakMap<AuditRecord, Promise<DispatchIds | null>>()
+  const lookupWaitMs = d.lookupWaitMs ?? LOOKUP_WAIT_MS
+  /** The later answer of a lookup that waits, or the one known at once when it fails or takes longer than the wait.
+   *  Never rejects, and is handled from the moment it is made, so a record let go unwritten (a change to compatibility)
+   *  leaves no rejection unheard (fix round 1, Minors 1 and 2). */
+  const bounded = (sessionId: string, late: LateDispatchIds): Promise<DispatchIds | null> =>
+    new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        d.log(`audit: a call of session ${sessionId} is written with the Job, Run and Task known when it was heard: its session's lines were not read within ${lookupWaitMs} ms`)
+        resolve(late.now)
+      }, lookupWaitMs)
+      timer.unref?.()
+      late.later.then(
+        (ids) => {
+          clearTimeout(timer)
+          resolve(ids)
+        },
+        (err: unknown) => {
+          clearTimeout(timer)
+          d.log(`audit: the Job, Run and Task of a call of session ${sessionId} could not be found: ${String(err)}`)
+          resolve(late.now)
+        }
+      )
+    })
 
   const currentMode = async (): Promise<AuditMode> => (mode !== null ? mode : readMode())
   /** Reads the mode from the file and keeps it, unless a change came while it was read. */
@@ -192,15 +228,15 @@ export function createAuditRecorder(d: {
         const batch = pending
         pending = []
         if (m !== 'observe') continue
-        // A record whose lookup had to wait takes what it found before it is written, or is written without it
+        // A record whose lookup had to wait takes what it found before it is written, the ones behind it waiting with it
         for (const r of batch) {
           const lookup = lookups.get(r)
           if (!lookup) continue
           lookups.delete(r)
-          const ids = await lookup.catch((err: unknown) => {
-            d.log(`audit: the Job, Run and Task of a call of session ${r.sessionId} could not be found: ${String(err)}`)
-            return null
-          })
+          const ids = await lookup
+          delete r.jobId
+          delete r.runId
+          delete r.taskId
           Object.assign(r, idsOf(ids))
         }
         await append(d.profileDir, batch, { log: d.log })
@@ -235,7 +271,7 @@ export function createAuditRecorder(d: {
     const provider = PROVIDER[ev.source]
     const r = resolve({ provider, tool: ev.tool, input: ev.input, cwd: info.cwd, ...(ev.cwd !== undefined ? { base: ev.cwd } : {}) })
     const found = d.dispatchOf(ev.sessionId, at)
-    const lookup = typeof (found as { then?: unknown } | null)?.then === 'function' ? (found as Promise<DispatchIds | null>) : null
+    const late = found !== null && 'later' in found ? found : null
     const cut = r.commands !== undefined && r.commands.length > AUDIT_COMMANDS_KEPT
     const rec: AuditRecord = {
       id: `au_${randomBytes(8).toString('hex')}`,
@@ -245,7 +281,7 @@ export function createAuditRecorder(d: {
       kind: info.kind,
       accountId: info.accountId,
       ...(info.agentProfileId !== undefined ? { agentProfileId: info.agentProfileId } : {}),
-      ...idsOf(lookup === null ? (found as DispatchIds | null) : null),
+      ...idsOf(late ? late.now : (found as DispatchIds | null)),
       source: ev.source,
       providerTool: redactTarget(ev.tool).slice(0, TOOL_MAX),
       action: r.action,
@@ -255,7 +291,7 @@ export function createAuditRecorder(d: {
       confidence: cut ? 'unknown' : r.confidence,
       status: ev.status
     }
-    if (lookup !== null) lookups.set(rec, lookup)
+    if (late) lookups.set(rec, bounded(ev.sessionId, late))
     return rec
   }
 
@@ -274,13 +310,14 @@ export function createAuditRecorder(d: {
         const info = d.sessionInfo(ev.sessionId)
         if (info === null) return
         if (ev.dedupeKey !== undefined && heard(ev.sessionId, ev.dedupeKey)) return
-        const rec = recordOf(ev, info)
+        // Before the call is resolved and looked up (fix round 1, Minor 1): a dropped call costs no lookup, which may read
+        // the sessions' files
         if (pending.length >= AUDIT_PENDING_MAX) {
           if (dropped === 0) d.log(`audit: ${AUDIT_PENDING_MAX} records wait for the disk; later calls are counted and not recorded until it takes them`)
           dropped += 1
           return
         }
-        pending.push(rec)
+        pending.push(recordOf(ev, info))
         if (!busy) {
           busy = true
           enqueue(flush)
@@ -364,12 +401,34 @@ const latest = <T>(items: T[], key: (x: T) => number): T | undefined => {
  * asked only for a call past an end, once. A session that drives a Run from outside is not looked for.
  */
 export function dispatchOfSession(s: OrchState, sessionId: string, at: string, turn: () => number | null = () => null): DispatchIds | null {
+  return dispatchLookup(s, sessionId, at, turn).ids
+}
+
+/**
+ * `dispatchOfSession`'s answer, and whether it turned on the turn (fix round 1, Minor 3): whether a later read of the
+ * session's lines could change it. The turn was asked, and it was not known (two minutes stood in for it) or it held
+ * the call past an end, where a person's prompt found later between them would end the hold. A turn known to have begun
+ * after every end it was asked about can only be found later still, so that answer stands.
+ */
+export function dispatchLookup(
+  s: OrchState,
+  sessionId: string,
+  at: string,
+  turn: () => number | null = () => null
+): { ids: DispatchIds | null; turned: boolean } {
   const t = Date.parse(at)
   let began: number | null | undefined
   const turnOnce = (): number | null => (began === undefined ? (began = turn()) : began)
+  let heldByTurn = false
+  const past = (end: number): boolean => {
+    const held = heldPastEnd(end, t, turnOnce)
+    if (held && t > end) heldByTurn = true
+    return held
+  }
+  const answer = (ids: DispatchIds | null) => ({ ids, turned: began !== undefined && (began === null || heldByTurn) })
   const held = s.dispatches.filter((x) => x.sessionId === sessionId)
   const holds = (x: Dispatch): boolean => Date.parse(x.startedAt) <= t && (!x.endedAt || t <= Date.parse(x.endedAt))
-  const heldAfter = (x: Dispatch): boolean => !!x.endedAt && Date.parse(x.endedAt) < t && heldPastEnd(Date.parse(x.endedAt), t, turnOnce)
+  const heldAfter = (x: Dispatch): boolean => !!x.endedAt && Date.parse(x.endedAt) < t && past(Date.parse(x.endedAt))
   const dispatch =
     latest(held.filter(holds), (x) => Date.parse(x.startedAt)) ??
     latest(
@@ -379,39 +438,30 @@ export function dispatchOfSession(s: OrchState, sessionId: string, at: string, t
   if (dispatch) {
     const runId = s.tasks.find((task) => task.id === dispatch.taskId)?.runId
     const jobId = runId !== undefined ? s.runs.find((r) => r.id === runId)?.jobId : undefined
-    return { ...(jobId !== undefined ? { jobId } : {}), ...(runId !== undefined ? { runId } : {}), taskId: dispatch.taskId }
+    return answer({ ...(jobId !== undefined ? { jobId } : {}), ...(runId !== undefined ? { runId } : {}), taskId: dispatch.taskId })
   }
   const coordinated = s.runs.filter((r) => r.coordinatorSessionId === sessionId)
-  if (coordinated.length === 0) return null
+  if (coordinated.length === 0) return answer(null)
   const unfinished = coordinated.filter((r) => outcomeOf(s, r.id) === 'running')
-  const run = latest(unfinished.length > 0 ? unfinished : coordinated.filter((r) => heldPastEnd(runEndOf(s, r), t, turnOnce)), (r) => Date.parse(r.createdAt))
-  return run ? { jobId: run.jobId, runId: run.id } : null
+  const run = latest(unfinished.length > 0 ? unfinished : coordinated.filter((r) => past(runEndOf(s, r))), (r) => Date.parse(r.createdAt))
+  return answer(run ? { jobId: run.jobId, runId: run.id } : null)
 }
 
 /**
  * The recorder's `dispatchOf` as the Host wires it (index.ts): `dispatchOfSession` over the state now and the sessions'
  * turns as the token sources read them (tokens/sources.ts `SessionTurns`). Those read a session's files every few
  * seconds, and the audit hears a call at once, so when the answer turned on the turn the call fell in and the session
- * was not read past the call yet, it is answered once a read past it is done: a prompt typed into a finished Run's
- * coordinator tab is then known before the calls it led to are filed. Otherwise at once, and so when no end held the
- * call by a turn known to have begun after it: a read finds only later starts, so a tab used on long after does not
- * read every session's files at each of its calls.
+ * was not read past the call yet, it is answered once a read past it is done, with what is known at once beside it: a
+ * person's prompt typed into a finished Run's coordinator tab is then known before the calls it led to are filed.
+ * Otherwise at once, as when the answer did not turn on the turn (`dispatchLookup`): a read finds only later prompts,
+ * so a tab used on long after does not read every session's files at each of its calls.
  */
-export function dispatchOfWithTurns(
-  state: () => OrchState,
-  turns: SessionTurns
-): (sessionId: string, at: string) => DispatchIds | null | Promise<DispatchIds | null> {
+export function dispatchOfWithTurns(state: () => OrchState, turns: SessionTurns): (sessionId: string, at: string) => DispatchIds | null | LateDispatchIds {
   return (sessionId, at) => {
     const t = Date.parse(at)
-    let asked = false
-    let known: number | null = null
-    const turn = (): number | null => {
-      asked = true
-      return (known = turns.turnOf(sessionId, t))
-    }
-    const now = dispatchOfSession(state(), sessionId, at, turn)
-    const settled = !asked || (now === null && known !== null)
-    const read = settled ? null : turns.readPast(sessionId, t)
-    return read === null ? now : read.then(() => dispatchOfSession(state(), sessionId, at, () => turns.turnOf(sessionId, t)))
+    const turn = (): number | null => turns.turnOf(sessionId, t)
+    const { ids, turned } = dispatchLookup(state(), sessionId, at, turn)
+    const read = turned ? turns.readPast(sessionId, t) : null
+    return read === null ? ids : { now: ids, later: read.then(() => dispatchOfSession(state(), sessionId, at, turn)) }
   }
 }
