@@ -197,11 +197,12 @@ const ROLLOUT_OUTPUT = /"(?:function_call_output|custom_tool_call_output)"/
 const WAITING_MAX = 200
 
 /** What reads a tool's output for how it went: a command's exit code, an exec script's opening, an apply_patch's result.
- *  Other tools (agents, goals, searches) have an output that says nothing of the sort, so their call is handed at once. */
-const OUTCOME_OF: Record<string, 'shell' | 'exec' | 'patch'> = {
-  shell: 'shell', shell_command: 'shell', exec_command: 'shell', local_shell: 'shell', 'container.exec': 'shell',
-  exec: 'exec', apply_patch: 'patch'
-}
+ *  Other tools (agents, goals, searches) have an output that says nothing of the sort, so their call is handed at once.
+ *  A Map, so a tool named `constructor` or `toString` finds nothing, not an object's own function. */
+const OUTCOME_OF = new Map<string, 'shell' | 'exec' | 'patch'>([
+  ['shell', 'shell'], ['shell_command', 'shell'], ['exec_command', 'shell'], ['local_shell', 'shell'], ['container.exec', 'shell'],
+  ['exec', 'exec'], ['apply_patch', 'patch']
+])
 
 /** The exit code a command's output opens with: "Exit code: N" or "Process exited with code N" before the `Output:`
  *  line (what the command printed is never read), or the `metadata.exit_code` of the JSON older Codex wrote. */
@@ -278,7 +279,7 @@ export function codexRolloutCalls(): RolloutReader {
         const call = rolloutCall(o!.type, p)
         if (!call) continue
         const stamped = { ...call, at: new Date(t).toISOString() }
-        const kind = call.status === 'unknown' && call.dedupeKey !== undefined ? OUTCOME_OF[call.tool] : undefined
+        const kind = call.status === 'unknown' && call.dedupeKey !== undefined ? OUTCOME_OF.get(call.tool) : undefined
         if (!kind) {
           // An end event stands for the call it ends
           if (call.dedupeKey !== undefined) waiting.delete(call.dedupeKey)

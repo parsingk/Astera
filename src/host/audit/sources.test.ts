@@ -619,6 +619,20 @@ describe('the Codex rollout source', () => {
       expect(read.read([spawn], T0).map((c) => [c.tool, c.status])).toEqual([['spawn_agent', 'unknown']])
     })
 
+    it('hands over a tool named like an object’s own property at once, as any other tool it does not know', () => {
+      const read = codexRolloutCalls()
+      const named = ['constructor', 'toString', 'hasOwnProperty', '__proto__'].map((name, i) =>
+        rollout(T0 + 10 + i, 'response_item', { type: 'function_call', name, arguments: '{}', call_id: `call_p${i}` })
+      )
+      expect(read.read(named, T0).map((c) => [c.tool, c.status])).toEqual([
+        ['constructor', 'unknown'],
+        ['toString', 'unknown'],
+        ['hasOwnProperty', 'unknown'],
+        ['__proto__', 'unknown']
+      ])
+      expect(read.unfinished()).toEqual([])
+    })
+
     it('lets an end event stand for its call: a patch that ended is handed over once, with the end’s own status', () => {
       const read = codexRolloutCalls()
       const end = rollout(T0 + 15, 'event_msg', { type: 'patch_apply_end', call_id: 'call_2', success: false, stdout: '', stderr: 'no', changes: { [path.join(cwd, 'src/a.ts')]: {} } })
