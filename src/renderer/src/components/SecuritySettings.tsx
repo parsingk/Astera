@@ -14,9 +14,10 @@ import {
   AUDIT_LOGS_TITLE,
   COVERAGE_CLASSES,
   DECISIONS,
-  MODES,
+  modeLabel,
   PERIODS,
   POLICIES_TITLE,
+  RULES_TITLE,
   actionPhrase,
   appendPage,
   auditQuery,
@@ -173,7 +174,7 @@ export function SecuritySettings({
                   {MODE_ORDER.map((m) => (
                     <label key={m} className="check-small">
                       <input type="radio" name={radioGroup} checked={policy.mode === m} disabled={busy} onChange={() => void change(() => window.api.audit.setMode(m))} />
-                      <span>{t(MODES[m])}</span>
+                      <span>{modeLabel(m, t)}</span>
                     </label>
                   ))}
                 </div>
@@ -212,7 +213,7 @@ export function SecuritySettings({
               </div>
             )}
             <div className="settings-group">
-              <div className="settings-field-label">{t('settings.security.rules.title')}</div>
+              <div className="settings-field-label">{RULES_TITLE}</div>
               <p className="settings-hint">{t('settings.security.rules.hint')}</p>
               {policy.rules.length === 0 ? (
                 <p className="settings-hint">{t('settings.security.rules.none')}</p>

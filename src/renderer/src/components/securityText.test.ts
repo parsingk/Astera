@@ -9,7 +9,9 @@ import {
   AUDIT_LOGS_TITLE,
   COVERAGE_CLASSES,
   DECISIONS,
+  OBSERVE_NAME,
   POLICIES_TITLE,
+  RULES_TITLE,
   RULE_ACTION_CHOICES,
   SECURITY_KEYS,
   SECURITY_TAB,
@@ -34,6 +36,7 @@ import {
   startObserveRead,
   OBSERVE_RETRIES,
   jobFilterView,
+  modeLabel,
   chooseJob,
   auditScrollDue,
   runDetailInstanceKey,
@@ -84,6 +87,29 @@ const RULES: AuditRule[] = [
 ]
 
 describe('securityText', () => {
+  // 2026-10-26, the person: Observe and Rules are named in English too, as Policies and Audit Logs are
+  it('names the observe mode and the rules in English in every language', () => {
+    expect([OBSERVE_NAME, RULES_TITLE]).toEqual(['Observe', 'Rules'])
+    for (const lang of LANGS) expect(modeLabel('observe', (k, p) => translate(lang, k, p))).toBe('Observe')
+    expect(modeLabel('compatibility', ko)).toBe('끔')
+    const screen = source('SecuritySettings.tsx')
+    expect(screen).toContain('{RULES_TITLE}')
+    expect(screen).toContain('{modeLabel(m, t)}')
+    expect(screen).not.toContain("t('settings.security.rules.title')")
+  })
+
+  it('says Observe and Rule in the Korean screen and Run detail, never 관찰 or 규칙', () => {
+    const shown = (lang: 'ko' | 'ja' | 'es'): Array<[string, string]> =>
+      Object.entries(CATALOGS[lang].messages as Record<string, string>).filter(
+        ([k]) => k.startsWith('settings.security.') || k.startsWith('jobs.detail.wouldDeny')
+      )
+    expect(shown('ko').length).toBeGreaterThan(50)
+    expect(shown('ko').filter(([, v]) => /관찰|규칙/.test(v))).toEqual([])
+    // Japanese and Spanish name the mode Observe too, and keep their own word for a rule
+    expect(shown('ja').filter(([, v]) => /観察/.test(v))).toEqual([])
+    expect(shown('es').filter(([, v]) => /observ(?!e\b)/i.test(v))).toEqual([])
+  })
+
   // The constraints: the tab and its two sections keep the names the person chose, in English in every language
   it('names the tab and its sections in English', () => {
     expect([SECURITY_TAB, POLICIES_TITLE, AUDIT_LOGS_TITLE]).toEqual(['Security & Access', 'Policies', 'Audit Logs'])
@@ -157,7 +183,7 @@ describe('securityText', () => {
       { provider: 'claude', kind: 'terminal', classes: { shell: seen, 'file-read': seen, 'file-write': seen, mcp: seen, network: { level: 'partial', note: 'web-tools-only' } } }
     ]
     expect(coverageLine(rows, { provider: 'claude', kind: 'terminal' }, en)).toBe(
-      'What observe can see: Shell commands Seen, Reading files Seen, Writing files Seen, MCP tools Seen, Web requests Partly (web tools only)'
+      'What Observe can see: Shell commands Seen, Reading files Seen, Writing files Seen, MCP tools Seen, Web requests Partly (web tools only)'
     )
     expect(coverageLine(rows, { provider: 'codex', kind: 'chat' }, en)).toBe('')
   })
