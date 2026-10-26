@@ -812,6 +812,18 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
     has = false
     wordQuoted = false
   }
+  /** `arithmetic`, but a reading that finds no arithmetic leaves nothing behind: -1, with the commands and the unread mark it
+   *  collected taken back. */
+  const tryArithmetic = (at: number): number => {
+    const kept: number = later.length
+    const wasUnread: boolean = unread
+    const to = arithmetic(at)
+    if (to < 0) {
+      later.length = kept
+      unread = wasUnread
+    }
+    return to
+  }
   /** The commands of substitutions join the line, in the subshells the command they follow is in. */
   const flushLater = (): void => {
     for (const c of later) commands.push(chain.length > 0 ? { ...c, groups: [...chain, ...(c.groups ?? [])] } : c)
@@ -934,16 +946,9 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
           i++
         } else if (flavor === 'posix' && d === '$' && n === '(' && line[i + 2] === '(') {
           cur += '$' // in PowerShell `$((` is a sub-expression that starts with a parenthesis
-          const kept: number = later.length
-          const wasUnread: boolean = unread
-          const to = arithmetic(i)
-          if (to >= 0) i = to
-          else {
-            // no `))` closed it before the quote, so the shell reads a command substitution that starts with a subshell
-            later.length = kept
-            unread = wasUnread
-            i = substitute(i, false)
-          }
+          const to = tryArithmetic(i)
+          // no `))` closed it before the quote, so the shell reads a command substitution that starts with a subshell
+          i = to >= 0 ? to : substitute(i, false)
         } else if ((d === '$' && n === '(') || (d === '`' && flavor === 'posix')) {
           const to = substitute(i, d === '`')
           if (to === i) cur += d // too deep to read: the text stays the word's
@@ -1072,6 +1077,12 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
         i++
       }
       sink = { write: c === '>', dup }
+    } else if (flavor === 'posix' && c === '$' && line[i + 1] === '(' && line[i + 2] === '(') {
+      // arithmetic outside quotes runs nothing either: its substitutions are read, and the word keeps a `$`, a value
+      cur += c
+      has = true
+      const to = tryArithmetic(i)
+      if (to >= 0) i = to // else the `(` that follows is read as a group
     } else {
       cur += c
       has = true

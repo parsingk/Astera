@@ -510,6 +510,17 @@ describe('decide, a denied command the resolver must reach', () => {
     expect(decide(bash('echo "$((git push) )" ; echo "x))" ; rm -rf ../x'), p)).toEqual(push)
   })
 
+  it('reads an unquoted $(( )) as arithmetic that runs nothing, with its substitutions read', () => {
+    expect(decide(bash('x=$((1+2)); npm test'), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('echo $(( (1+2)*3 )) $(( 4 ))'), p)).toEqual({ decision: 'allow' })
+    expect(decide(bash('echo $(( $(git push) + 1 ))'), p)).toEqual(push)
+    expect(decide(bash('echo $(( (1+2)*3 )); git push'), p)).toEqual(push)
+    expect(decide(bash('echo $((git push) )'), p)).toEqual(push)
+    expect(decide(bash('echo $((1+2)) && rm -rf ../x'), p)).toEqual(del)
+    // PowerShell's $(( is a sub-expression that starts with a parenthesis
+    expect(decide(ps('Write-Output $((git push))'), p)).toEqual(push)
+  })
+
   // An unquoted heredoc delimiter makes its body a double-quoted text: the shell runs the substitutions in it
   it('would deny a substitution in the body of a heredoc whose delimiter is not quoted, and reads none in a quoted one', () => {
     expect(decide(bash('cat <<EOF\n$(rm -rf ../x)\nEOF'), p)).toEqual(del)
