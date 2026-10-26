@@ -6,6 +6,7 @@ import { PLUGIN_COMMANDS, pluginsCommand } from './plugins/commands'
 import { EXTENSION_COMMANDS, type HostExtensions } from './extensions/commands'
 import { AGENT_PROFILE_COMMANDS, type HostAgentProfiles } from './agentProfiles/commands'
 import { POLICY_COMMANDS, type HostPolicies } from './audit/policyCommands'
+import { CREDENTIAL_COMMANDS, type HostCredentials } from './credentials/commands'
 import { AUDIT_COMMANDS, type HostAudit } from './audit/auditCommands'
 import { readAgentProfiles } from '../core/agentProfiles/store'
 import { readAgentPermissionMode } from '../core/settings/agentPermissionMode'
@@ -594,6 +595,9 @@ export function createHostOrch(a: {
   /** Observe mode's rules and mode (observe mode design §7, §12): every `policies-*` command, for this machine's app
    *  and CLI, routed like the agent profiles. Absent: all of them answer 501. */
   policies?: Pick<HostPolicies, 'command'>
+  /** The Credentials list (credentials design §7): every `credentials-*` command, for this machine's app and CLI, routed
+   *  like the policies; only the app changes it. Absent: all of them answer 501. */
+  credentials?: Pick<HostCredentials, 'command'>
   /** Observe mode's records (observe mode design §8, §12): `audit-list` and `audit-summary`, for this machine's app and
    *  CLI, routed like the policies; an agent's shell is refused even these reads. Absent: both answer 501. */
   audit?: Pick<HostAudit, 'command'>
@@ -2113,6 +2117,19 @@ export function createHostOrch(a: {
                 marks
               })
             : { status: 501, body: { error: 'this Host does not keep observe rules' } }
+          return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
+        }
+        // **The Credentials list** (credentials design §7), the same way. No gate lists them.
+        if (CREDENTIAL_COMMANDS.has(cmd)) {
+          const answered = a.credentials
+            ? await a.credentials.command({
+                cmd,
+                args,
+                role: from?.role,
+                ...(agentShell(from, sessionId) ? { agentRefusal: AGENT_REFUSAL(cmd) } : {}),
+                marks
+              })
+            : { status: 501, body: { error: 'this Host does not keep the Credentials list' } }
           return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
         }
         // **Observe mode's records** (observe mode design §8, §12), the same way. No gate lists them.

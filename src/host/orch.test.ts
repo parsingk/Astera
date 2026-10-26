@@ -1192,6 +1192,39 @@ describe('policies', () => {
   })
 })
 
+// The Credentials list (credentials design §7): routed like the policies, below every gate, and no gate lists them.
+describe('credentials', () => {
+  const cli = { role: 'cli' as const, toOthers: () => {} }
+  const answering = () => {
+    const seen: { cmd: string; role?: string; agentRefusal?: string }[] = []
+    return { seen, credentials: { command: async (a: { cmd: string; role?: string; agentRefusal?: string }) => (seen.push(a), { status: 200, body: { ok: true } }) } }
+  }
+
+  it('is refused to MCP by its gate, before the list is asked', async () => {
+    const f = answering()
+    const orch = orchOver({ credentials: f.credentials })
+    expect((await orch.call({ cmd: 'credentials-list', args: {}, sessionId: '', from: { role: 'mcp', toOthers: () => {} } })).status).toBe(403)
+    expect(f.seen).toEqual([])
+  })
+
+  it('answers the app and the CLI, telling the list who asks and when an agent session’s shell is the caller', async () => {
+    const f = answering()
+    const orch = orchOver({ credentials: f.credentials })
+    await orch.call({ cmd: 'credentials-list', args: {}, sessionId: '', from: cli })
+    await orch.call({ cmd: 'credentials-uses', args: {}, sessionId: 'sess_1', from: cli })
+    await orch.call({ cmd: 'credentials-set-hiding', args: { id: 'x', hide: { on: false } }, sessionId: '', from: { role: 'app', toOthers: () => {} } })
+    expect(f.seen.map((s) => [s.cmd, s.role, s.agentRefusal !== undefined])).toEqual([
+      ['credentials-list', 'cli', false],
+      ['credentials-uses', 'cli', true],
+      ['credentials-set-hiding', 'app', false]
+    ])
+  })
+
+  it('answers 501 on a Host that keeps none', async () => {
+    expect((await orchOver().call({ cmd: 'credentials-list', args: {}, sessionId: '', from: cli })).status).toBe(501)
+  })
+})
+
 // Observe mode's records (design §8, §12): routed like the policies, below every gate, and no gate lists them. An agent's
 // shell is told so even for these reads, and the audit commands refuse it.
 describe('audit', () => {

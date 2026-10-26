@@ -18,6 +18,7 @@ import { readAuditPolicy } from '../core/audit/policy'
 import { keepPruning } from '../core/audit/store'
 import { createGatewayHub } from './gateway/hub'
 import { createUseRecorder, recordPush, recordingGhRunner, workOfSession } from './credentials/recordUses'
+import { createHostCredentials } from './credentials/commands'
 import { hidingLog } from '../core/extensions/secrets'
 import { sweepGeneratedMcp } from '../core/extensions/resolve'
 import { hostJobSources } from './jobSources'
@@ -865,6 +866,8 @@ async function main(): Promise<void> {
   const policies = createHostPolicies({ profileDir, onChange: (cmd) => auditRecorder.invalidate({ modeUnchanged: cmd !== 'policies-set-mode' }) })
   // And the records read back with the decisions those rules give them now (design §8)
   const audit = createHostAudit({ profileDir })
+  // The Credentials list and its uses (credentials design §7); the session managers read the file at each spawn
+  const credentials = createHostCredentials({ profileDir })
   const orch = createHostOrch({
     profileDir,
     useRecorder,
@@ -874,6 +877,7 @@ async function main(): Promise<void> {
     extensions,
     agentProfiles,
     policies,
+    credentials,
     audit,
     // The job-source plugins a person makes Jobs from (plugin Phase 4 J10), asked through the runtime
     jobSources: hostJobSources({ manager: plugins, runtime: pluginRuntime }),
