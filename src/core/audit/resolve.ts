@@ -581,6 +581,8 @@ const NO_COMMAND = new Set([
   'for', 'foreach', 'select', 'case', 'switch', 'function', 'try', 'catch', 'finally', 'throw', 'fi', 'done', 'esac', 'break',
   'continue', 'return'
 ])
+/** PowerShell keywords that take a block, which may follow one with no space: `try{`, `else{`. */
+const PS_BLOCK_KEYWORDS = new Set(['try', 'catch', 'finally', 'else', 'do'])
 const DURATION = /^\d+(?:\.\d+)?[smhd]?$/
 const POSIX_SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh'])
 const INTERPRETERS = new Set([...POSIX_SHELLS, 'powershell', 'pwsh', 'cmd'])
@@ -783,6 +785,7 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
   let sink: { write: boolean; dup: boolean } | null = null // the next word is a redirection's target
   const chain: number[] = [] // the unquoted `(` open now, as subshells, up to MAX_GROUPS deep: beyond it they share the last
   let beyond = 0 // the `(` open past that
+  const braces: Array<'block' | 'hash' | 'word'> = [] // the PowerShell braces open now: a block, a hashtable, or part of a word
   let cases = 0 // the `case … in` read since the start that no `esac` has closed: a `)` in one ends a pattern, not a substitution
   let heredoc: { tag: string; indent: boolean; expands: boolean } | null = null // `expands`: its tag was not quoted, so the shell runs the substitutions in the body
 
@@ -1009,8 +1012,21 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
       for (; j < line.length && braces > 0; j++) braces += line[j] === '{' ? 1 : line[j] === '}' ? -1 : 0
       cur += line.slice(i, j)
       i = j - 1
-    } else if (flavor === 'ps' && (c === '{' || c === '}') && !(c === '{' && cur === '@' && !wordQuoted)) {
-      endCommand() // in PowerShell a brace is always a token (a script block, a body); `@{` is a hashtable, a value
+    } else if (flavor === 'ps' && c === '{') {
+      // A brace starts a block at the start of a token (or after the keyword that takes one: `try{`), and inside a hashtable
+      // after `=`. In the middle of a word it is a letter of that word, and `@{` is a hashtable, a value.
+      const word = wordQuoted ? '' : cur.toLowerCase()
+      if (!has || PS_BLOCK_KEYWORDS.has(word) || (word.endsWith('=') && braces.includes('hash'))) {
+        endCommand()
+        braces.push('block')
+      } else {
+        braces.push(word === '@' ? 'hash' : 'word')
+        cur += c
+      }
+    } else if (flavor === 'ps' && c === '}') {
+      const opened = braces.pop()
+      if (opened === 'hash' || opened === 'word') cur += c // closes what a word opened
+      else endCommand() // closes a block (a stray one too)
     } else if ((c === '{' || c === '}') && !has && /^(?:\s|;|$)/.test(line.slice(i + 1, i + 2))) {
       endCommand() // a group or script block's brace, standing alone
     } else if (c === '<' && line[i + 1] === '<' && line[i + 2] !== '<') {

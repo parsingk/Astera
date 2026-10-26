@@ -430,6 +430,15 @@ describe('decide, a denied command the resolver must reach', () => {
     expect(decide(bash('(cd sub && cd .. && rm -rf x)'), p)).toEqual({ decision: 'allow' })
   })
 
+  it('keeps a PowerShell word with braces in the middle whole, and still reads the command after it', () => {
+    expect(decide(ps('Write-Output a{2}; git push'), p)).toEqual(push)
+    expect(decide(ps('Get-Item x{y}z; git push'), p)).toEqual(push)
+    expect(decide(ps('try{git push}catch{}'), p)).toEqual(push)
+    expect(decide(ps('if ($x){git push}else{git status}'), p)).toEqual(push)
+    expect(decide(ps('$h = @{a={git push}}'), p)).toEqual(push)
+    expect(decide(ps('Write-Output a{2}'), p)).toEqual({ decision: 'allow' })
+  })
+
   it('cannot tell a heredoc body substitution past the depth limit, and never allows it', () => {
     expect(decide(bash('echo "$(echo "$(cat <<EOF\n$(git push)\nEOF\n)")"'), p)).toEqual({ decision: 'unknown' })
     expect(decide(bash('echo "$(echo "$(cat <<EOF\n$(git push)\nEOF\n)")" ; git push'), p)).toEqual(push)

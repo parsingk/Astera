@@ -2088,6 +2088,13 @@ describe('shell: what the final whole-branch review found the resolver could not
     expect(acts(ps('switch ($x) {a {git push}}'))).toContain('git.remote.write')
   })
 
+  it('keeps a PowerShell word with braces in the middle as one word', () => {
+    expect(ps('Write-Output a{2}')).toMatchObject({ action: 'process.execute', target: 'Write-Output', confidence: 'high' })
+    expect(ps('Write-Output a{2}').commands).toBeUndefined()
+    expect(ps('Get-Item x{y}z; git push').commands).toHaveLength(2)
+    expect(acts(ps('Get-Item x{y}z; git push'))).toEqual(['process.execute', 'git.remote.write'])
+  })
+
   it('keeps ${name} and @{ } as values in PowerShell, and POSIX braces as they were', () => {
     expect(ps('Write-Output ${env:PATH}')).toMatchObject({ action: 'process.execute', target: 'Write-Output', confidence: 'high' })
     expect(ps('Write-Output ${env:PATH}').commands).toBeUndefined()
