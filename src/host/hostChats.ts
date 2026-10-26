@@ -73,8 +73,9 @@ export interface HostChats {
   deliver(sessionId: string, text: string): void
   /** A turn by the Host adapter; rejects when the Host is not the writer or the adapter refuses.
    *  `wrote` runs once a line of the turn reached the proc, in the same synchronous step as the write
-   *  (Task 8 fix round 1, D4 I1): a send refused before the wire marks nothing. */
-  send(sessionId: string, text: string, wrote?: () => void): Promise<void>
+   *  (Task 8 fix round 1, D4 I1): a send refused before the wire marks nothing. `by.person`: a person sent it (a Slack
+   *  reply), and its line is written as a person's (ProcRegistry.write); any other send is the Host's own. */
+  send(sessionId: string, text: string, wrote?: () => void, by?: { person: true }): Promise<void>
   requests(sessionId: string): ChatRequest[]
   hasOpenRequest(sessionId: string): boolean
   /** Where the session's turn is, as this Host's adapter decodes it (writer or reader): `status` and the
@@ -130,10 +131,13 @@ export function createHostChats(d: HostChatsDeps): HostChats {
   // tell a send the adapter refused before the wire (codex with no thread, a NotWriterError) from one
   // whose line went out. Only a registry write that returned counts.
   const writes = new Map<string, number>()
+  /** Set during the synchronous part of a send made for a person (`send`'s `by`), where the adapter writes the turn:
+   *  its line is written as a person's (observe deferred fix round 1, I1). */
+  let forPerson = false
   const counted: HostProcsDeps['registry'] = {
     open: (o) => d.procs.open(o),
     write: (procId, line) => {
-      d.procs.write(procId, line)
+      d.procs.write(procId, line, forPerson ? { person: true } : undefined)
       writes.set(procId, (writes.get(procId) ?? 0) + 1)
     },
     kill: (procId) => d.procs.kill(procId),
@@ -300,9 +304,18 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     return done
   }
 
-  const send = async (id: string, text: string, wrote?: () => void): Promise<void> => {
+  const send = async (id: string, text: string, wrote?: () => void, by?: { person: true }): Promise<void> => {
     if (!isWriter(id)) throw new Error('not the writer')
-    await markIfWritten(procOf(id), () => manager.send(id, text), wrote)
+    // Only for the synchronous part, where both adapters write the turn (carryOnAfterAdopt): a write after the wait is
+    // another's
+    forPerson = by?.person === true
+    let done: Promise<void>
+    try {
+      done = markIfWritten(procOf(id), () => manager.send(id, text), wrote)
+    } finally {
+      forPerson = false
+    }
+    await done
   }
 
   return {

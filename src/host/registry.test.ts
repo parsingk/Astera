@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { LAST_SCREEN_WITHIN_MS, PtyRegistry, SCROLLBACK_CHARS, DEAD_ENTRIES_KEPT, ENDED_SESSIONS_KEPT, ENDED_SESSION_CODES_KEPT, EXITED_RETAIN_MS, EXITED_RINGS_MAX, EXITED_RING_BYTES_MAX, EXITED_TERMINAL_BYTES, type PtyReplay, type RegistryPty } from './registry'
+import { LAST_SCREEN_WITHIN_MS, PtyRegistry, SCROLLBACK_CHARS, DEAD_ENTRIES_KEPT, ENDED_SESSIONS_KEPT, ENDED_SESSION_CODES_KEPT, EXITED_RETAIN_MS, EXITED_RINGS_MAX, EXITED_RING_BYTES_MAX, EXITED_TERMINAL_BYTES, SUBMISSIONS_KEPT, type PtyReplay, type RegistryPty } from './registry'
 import type { PtyMeta } from '../core/host/protocol'
 import { RING_EVENT_COST } from './ptyRing'
 
@@ -152,6 +152,31 @@ describe('PtyRegistry', () => {
     r.write('p1', 'prompt\r')
     expect(r.lastPersonWrite('p1')).toBe(2000)
     expect(r.lastPersonWrite('nope')).toBe(null)
+  })
+
+  // Observe deferred fix round 1, Important 1: a prompt in a transcript does not say who typed it, so the pty keeps who
+  // sent each of its last submissions (a write with an Enter in it): a person's keys, or the Host's own typing
+  it('tells who sent the latest submission in a span, a person or the Host, and keeps only the last few', () => {
+    let clock = 1000
+    const r = new PtyRegistry({ spawn: () => fakePty(), log: () => {}, now: () => clock })
+    r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    r.write('p1', 'Your Run has 1 unread message(s).')
+    clock = 1100
+    r.write('p1', '\r')
+    clock = 2000
+    r.write('p1', 'a', { person: true })
+    clock = 2100
+    r.write('p1', '\r', { person: true })
+    expect(r.submittedBetween('p1', 0, 1500)).toBe('host')
+    expect(r.submittedBetween('p1', 1100, 1500)).toBeNull()
+    expect(r.submittedBetween('p1', 1500, 2050)).toBeNull()
+    expect(r.submittedBetween('p1', 0, 3000)).toBe('person')
+    expect(r.submittedBetween('nope', 0, 3000)).toBeNull()
+    for (let i = 0; i < SUBMISSIONS_KEPT; i++) {
+      clock = 5000 + i
+      r.write('p1', '\r')
+    }
+    expect(r.submittedBetween('p1', 0, 3000)).toBeNull()
   })
 
   // A message for a session that has gone is ordinary, not exceptional: the app may have sent it

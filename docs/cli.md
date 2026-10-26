@@ -863,11 +863,11 @@ permission prompt: the number of those Tasks, read from the same hook events as 
 
 **`runs get` carries `tokens` and `coordinatorTokens`**: the tokens the run's Tasks' sessions spent (every attempt,
 and each session a roll moved one to, counted once), and apart from them what the coordinator Astera started for the
-run spent, each as `{ input, output, total }`, where `input` counts cached input too. A worker's session counts for its
-attempt until the end of the turn it was in when the attempt ended, so a response that finishes after its report is
-counted, and a finished run's coordinator counts until the end of the turn it was in when the run finished, however
-long its wrap-up takes. What you type into either tab after that is not the run's, and editing a Task later does not
-change it. The Host reads them in every mode
+run spent, each as `{ input, output, total }`, where `input` counts cached input too. After a worker's attempt ends, and
+after the run finishes, what the session goes on to spend still counts until a person types a prompt into it: a response
+that finishes after the worker's report, and the coordinator's wrap-up however long it takes, whether a background
+task's end or Astera woke it. What you type into either tab after that is not the run's, and editing a Task later does
+not change it. The Host reads them in every mode
 from what Claude and Codex already write (a Claude session's transcript and its sub-agents' files, a chat's stream, a
 Codex rollout) and keeps them in `token-totals.json` in the profile until the run is deleted. Each is left out when the
 Host read none, such as for a session the app ran without a Host. MCP's `get_task` carries the Task's own `tokens`.
@@ -1182,8 +1182,8 @@ the file) and leaves the file as it is.
 `audit list` prints the records newest first, each with `decision` and `ruleId` (the rule that decided, left out when
 `otherwise` did or none could), worked out from the rules in force when you ask: edit a rule and the past calls show
 what it would have done. A record carries the Job, run and Task its session worked for when the call ran: a worker
-files its calls under its Task, and a finished run's coordinator under the run, until the end of the turn the session
-was in when the attempt or the run ended, and a call made in that tab after it carries neither. The filters combine, and `--agent-profile` takes an id or a name. `--limit` is 200 by default
+files its calls under its Task, and the coordinator under the run, also after the attempt ends or the run finishes,
+until a person types a prompt into that tab; the calls it leads to carry neither. The filters combine, and `--agent-profile` takes an id or a name. `--limit` is 200 by default
 and at most 2000. When it cuts the list, `truncated` is true and `next` holds the `--until` and `--before-id` that ask
 for the next page, which `--human` prints under the table as `more:`, after the filters you used. `audit summary`
 counts the same calls by decision, in all and per action, and `stoppedAtLimit` is true when a day of the period stopped

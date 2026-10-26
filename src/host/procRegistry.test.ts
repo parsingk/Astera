@@ -21,7 +21,7 @@ function fakeProc(pid = 4242): RegistryProc & { sent: string[]; killed: boolean;
   }
 }
 
-const harness = (over: { bufferChars?: number; spawnThrows?: boolean } = {}) => {
+const harness = (over: { bufferChars?: number; spawnThrows?: boolean; now?: () => number } = {}) => {
   const procs: ReturnType<typeof fakeProc>[] = []
   const logs: string[] = []
   const lines: Array<[string, number, string]> = []
@@ -34,7 +34,8 @@ const harness = (over: { bufferChars?: number; spawnThrows?: boolean } = {}) => 
       return p
     },
     log: (m) => logs.push(m),
-    bufferChars: over.bufferChars
+    bufferChars: over.bufferChars,
+    ...(over.now ? { now: over.now } : {})
   })
   registry.onLine((id, seq, line) => lines.push([id, seq, line]))
   registry.onExit((id, code) => exits.push([id, code]))
@@ -86,6 +87,20 @@ describe('ProcRegistry — lines', () => {
     h.registry.write('p1', 'x')
     h.registry.write('nope', 'x')
     expect(h.procs[0].sent).toEqual([])
+  })
+  // Observe deferred fix round 1, Important 1: a chat's stream does not echo the line that began a turn, so the registry
+  // keeps who wrote each of its last lines: a person (a line marked so) or the Host itself
+  it('tells who wrote the latest line in a span, a person or the Host', () => {
+    let clock = 1000
+    const h = harness({ now: () => clock })
+    h.open()
+    h.registry.write('p1', '{"type":"user"}')
+    clock = 2000
+    h.registry.write('p1', '{"type":"user"}', { person: true })
+    expect(h.registry.submittedBetween('p1', 0, 1500)).toBe('host')
+    expect(h.registry.submittedBetween('p1', 0, 2000)).toBe('person')
+    expect(h.registry.submittedBetween('p1', 1000, 1999)).toBeNull()
+    expect(h.registry.submittedBetween('nope', 0, 2000)).toBeNull()
   })
 })
 

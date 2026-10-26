@@ -53,7 +53,8 @@ export function hostInboxRoutes(d: {
     pendingRequest: (sid: string): ChatRequest | null =>
       d.chats?.has(sid) ? (d.chats.requests(sid)[0] ?? null) : d.notifier.chatRequestOf(sid),
     deliverChat: async (sid: string, text: string): Promise<void> => {
-      if (d.chats?.isWriter(sid)) return d.chats.send(sid, text)
+      // A person's reply from Slack, as the terminal's is (`write` above)
+      if (d.chats?.isWriter(sid)) return d.chats.send(sid, text, undefined, { person: true })
       const server = d.server()
       if (!server.hasApp()) throw new Error(NOBODY)
       const r = (await server.act('chatSend', [sid, text])) as { sent?: unknown; reason?: unknown; pending?: unknown } | null

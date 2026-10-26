@@ -94,6 +94,27 @@ export const EXITED_RING_BYTES_MAX = 64 << 20
 export const EXITED_TERMINAL_BYTES = 4 << 20
 /** How often an exited pty past its time is cleared while any is held: an idle Host frees them without being asked. */
 const SWEEP_EVERY_MS = 60_000
+
+/** Submissions kept per entry: what a pty was sent with an Enter, or a line a process was written (observe deferred fix
+ *  round 1, I1). A prompt in a transcript, or a turn in a chat's stream, does not say whether a person sent it or the
+ *  Host typed it (a nudge, a roll's carry-on), and the token sources read it a few seconds later; the last few are
+ *  plenty for that. */
+export const SUBMISSIONS_KEPT = 32
+export interface Submission {
+  at: number
+  person: boolean
+}
+/** Keeps `s`, the oldest going past SUBMISSIONS_KEPT. */
+export const keepSubmission = (list: Submission[], s: Submission): void => {
+  list.push(s)
+  if (list.length > SUBMISSIONS_KEPT) list.shift()
+}
+/** Who sent the latest of `list` in (from, to], or null for none kept there. */
+export const submitterIn = (list: readonly Submission[] | undefined, from: number, to: number): 'person' | 'host' | null => {
+  if (!list) return null
+  for (let i = list.length - 1; i >= 0; i--) if (list[i].at > from && list[i].at <= to) return list[i].person ? 'person' : 'host'
+  return null
+}
 /** A replay's tries for a checkpoint with no hole after it, and the wait between them for the terminal to catch up. */
 const REPLAY_TRIES = 8
 const REPLAY_WAIT_MS = 50
@@ -128,6 +149,8 @@ interface Entry {
    *  reply), never the Host's own (a nudge, a spawn's or a roll's prompt). A finished Run's sessions end
    *  once nobody has typed into them for a while (dispatchLoop.ts, FINISHED_RUN_GRACE_MS). */
   lastPersonWriteAt: number | null
+  /** The last SUBMISSIONS_KEPT writes with an Enter in them, and whether a person made each (`submittedBetween`). */
+  submissions: Submission[]
   /** How the pty ended, or null while it is alive. Kept after the ring is cleared, because the
    *  Host's exit handling asks for it after the fact (`sessionExitCode`). */
   exitCode: number | null
@@ -317,6 +340,7 @@ export class PtyRegistry {
       rows: a.opts.rows,
       lastWriteAt: null,
       lastPersonWriteAt: null,
+      submissions: [],
       exitCode: null,
       killSent: false,
       treeKillSent: false,
@@ -544,11 +568,18 @@ export class PtyRegistry {
     const at = (this.deps.now ?? Date.now)()
     e.lastWriteAt = at
     if (by?.person) e.lastPersonWriteAt = at
+    if (data.includes('\r')) keepSubmission(e.submissions, { at, person: by?.person === true })
   }
 
   /** When `write` last reached this pty, or null for one never written to or never here. */
   lastWrite(id: string): number | null {
     return this.entries.get(id)?.lastWriteAt ?? null
+  }
+
+  /** Who sent the latest write with an Enter in it in (from, to], epoch ms: a person (a write marked so) or the Host
+   *  itself; null for none kept there, or a pty never here (observe deferred fix round 1, I1). */
+  submittedBetween(id: string, from: number, to: number): 'person' | 'host' | null {
+    return submitterIn(this.entries.get(id)?.submissions, from, to)
   }
 
   /** When a write marked `person` last reached this pty, or null for none or one never here. */

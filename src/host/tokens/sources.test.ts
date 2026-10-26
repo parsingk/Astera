@@ -13,6 +13,7 @@ import type { Dispatch } from '../../core/orchestration/types'
 import type { PtyMeta } from '../../core/host/protocol'
 import { openTokenStore } from './store'
 import { createTokenSources, tokenOwnerOf } from './sources'
+import { dispatchOfWithTurns } from '../audit/recorder'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -44,8 +45,18 @@ const counted = (at: number, total: [number, number], last: [number, number]): s
   return JSON.stringify({ timestamp: iso(at), type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: u(total), last_token_usage: u(last) }, rate_limits: null } })
 }
 const lines = (...ls: string[]): string => ls.map((l) => l + '\n').join('')
-/** A Codex rollout event with no more to it than its kind (task_started, user_message, task_complete). */
+/** A Codex rollout event with no more to it than its kind (task_started, task_complete). */
 const codexEvent = (at: number, type: string): string => JSON.stringify({ timestamp: iso(at), type: 'event_msg', payload: { type } })
+/** A Codex user_message: what a person, Astera or Codex itself put to the model. */
+const codexUser = (at: number, message: string): string => JSON.stringify({ timestamp: iso(at), type: 'event_msg', payload: { type: 'user_message', message, images: [] } })
+/** Claude Code's note that a background task finished, written as a user line, in the three ways it may say so. */
+const taskNotification = (at: number, how: 'source' | 'origin' | 'prefix'): string =>
+  JSON.stringify({
+    type: 'user',
+    timestamp: iso(at),
+    ...(how === 'source' ? { promptSource: 'system' } : how === 'origin' ? { turnOrigin: 'task_notification' } : {}),
+    message: { role: 'user', content: how === 'prefix' ? '<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>' : 'Background command "astera check --wait" completed' }
+  })
 /** A prompt a person (or Astera) typed, as the transcript writes it. */
 const prompt = (at: number, text: string): string => JSON.stringify({ type: 'user', timestamp: iso(at), message: { role: 'user', content: text } })
 /** A tool's result coming back inside a turn: written as a user line too, and not a prompt. */
@@ -58,21 +69,30 @@ const note = (kind: PtyMeta['kind'], id: string, restore: Record<string, unknown
   restore: { accountId: 'acc1', cwd: 'D:/p', title: 't', ...restore }
 })
 
-/** A registry that tells its listeners what the test says (the audit sources' test registry). */
+/** A registry that tells its listeners what the test says (the audit sources' test registry), and who sent what was
+ *  submitted into an entry (`typed`: a person's keys, or the Host's own typing). */
 function fakeRegistry() {
   const meta = new Set<(id: string, meta: PtyMeta, why: 'open' | 'note') => void>()
   const lineCbs = new Set<(id: string, seq: number, line: string) => void>()
   const exits = new Set<(id: string, code: number) => void>()
   const add = <T>(s: Set<T>, cb: T): (() => void) => (s.add(cb), () => void s.delete(cb))
+  const sent = new Map<string, Array<{ at: number; person: boolean }>>()
   let seq = 0
   return {
     onMeta: (cb: (id: string, meta: PtyMeta, why: 'open' | 'note') => void) => add(meta, cb),
     onLine: (cb: (id: string, seq: number, line: string) => void) => add(lineCbs, cb),
     onExit: (cb: (id: string, code: number) => void) => add(exits, cb),
+    sent,
+    // A method that reads `this`, as the registries' are, so a caller that detaches it fails here too
+    submittedBetween(this: { sent: typeof sent }, id: string, from: number, to: number): 'person' | 'host' | null {
+      const last = (this.sent.get(id) ?? []).filter((x) => from < x.at && x.at <= to).at(-1)
+      return last === undefined ? null : last.person ? 'person' : 'host'
+    },
     open: (id: string, m: PtyMeta) => meta.forEach((cb) => cb(id, m, 'open')),
     note: (id: string, m: PtyMeta) => meta.forEach((cb) => cb(id, m, 'note')),
     line: (id: string, l: string) => lineCbs.forEach((cb) => cb(id, ++seq, l)),
     exit: (id: string) => exits.forEach((cb) => cb(id, 0)),
+    typed: (id: string, at: number, by: 'person' | 'host') => sent.set(id, [...(sent.get(id) ?? []), { at, person: by === 'person' }]),
     listeners: () => meta.size + lineCbs.size + exits.size
   }
 }
@@ -497,8 +517,9 @@ describe('createTokenSources', () => {
     r.sources.dispose()
   })
 
-  // Deferred minor c, end to end: a Codex worker's rollout tells its turns by task_started and user_message
-  it('counts a Codex worker’s response that finished three minutes after its report, inside the same turn, and not the next turn', async () => {
+  // Deferred minor c, end to end: a Codex worker's rollout tells a person's prompts by its user_message lines; one
+  // Astera typed (a roll's carry-on) or one Codex wraps (a task notification) does not end the work its report left
+  it('counts a Codex worker’s response that finished three minutes after its report, inside the same turn, and not after a person’s prompt', async () => {
     const MIN = 60_000
     const end = T0 + MIN
     let now = T0
@@ -507,24 +528,34 @@ describe('createTokenSources', () => {
     const file = path.join(r.dir, 'rollout-w.jsonl')
     await fs.writeFile(file, '')
     r.ptys.open('pty_w', note('session', 'sess_w', { rolloutPath: file }))
-    await fs.appendFile(file, lines(codexEvent(T0 + 100, 'task_started'), codexEvent(T0 + 100, 'user_message'), counted(T0 + 200, [100, 10], [100, 10])))
+    r.ptys.typed('pty_w', T0 + 50, 'host')
+    await fs.appendFile(file, lines(codexEvent(T0 + 100, 'task_started'), codexUser(T0 + 100, 'Do the task in s.md'), counted(T0 + 200, [100, 10], [100, 10])))
     await r.sources.poll()
     // The report closes the Dispatch; the model's last response of the turn ends three minutes later
     state = orch([dispatch('d1', 't1', 'sess_w', iso(T0), iso(end))])
+    r.ptys.typed('pty_w', end + 4 * MIN - 100, 'host')
+    r.ptys.typed('pty_w', end + 6 * MIN - 100, 'person')
     await fs.appendFile(
       file,
       lines(
         counted(end + 3 * MIN, [150, 20], [50, 10]),
         codexEvent(end + 3 * MIN + 10, 'task_complete'),
-        // A person types into the tab after that turn
+        // A turn Astera typed after it, and one Codex was handed a task notification in
         codexEvent(end + 4 * MIN, 'task_started'),
-        codexEvent(end + 4 * MIN, 'user_message'),
-        counted(end + 4 * MIN + 500, [400, 40], [250, 20])
+        codexUser(end + 4 * MIN, 'Continue where you left off'),
+        counted(end + 4 * MIN + 500, [170, 25], [20, 5]),
+        codexEvent(end + 5 * MIN, 'task_started'),
+        codexUser(end + 5 * MIN, '<task-notification><task-id>b1</task-id></task-notification>'),
+        counted(end + 5 * MIN + 500, [180, 30], [10, 5]),
+        // A person types into the tab
+        codexEvent(end + 6 * MIN, 'task_started'),
+        codexUser(end + 6 * MIN, 'thanks, something else now'),
+        counted(end + 6 * MIN + 500, [400, 40], [220, 10])
       )
     )
-    now = end + 5 * MIN
+    now = end + 7 * MIN
     await r.sources.poll()
-    expect(taskTokensOf(state, 't1', r.store.spent())).toEqual({ input: 150, output: 20, total: 170 })
+    expect(taskTokensOf(state, 't1', r.store.spent())).toEqual({ input: 180, output: 30, total: 210 })
     r.sources.dispose()
   })
 
@@ -559,21 +590,112 @@ describe('createTokenSources', () => {
     r.sources.dispose()
   })
 
-  // A Claude chat's stream carries no prompt; each turn ends with a `result` frame, so a response after one begins a turn
-  it('tells a Claude chat coordinator’s turns by the result frame that ends each', () => {
+  // Fix round 1, Important 1: a coordinator usually waits in a background `astera check --wait`, ends its turn, and is
+  // woken by Claude Code's task notification when the last worker reports. That turn begins after the Run's end and is
+  // its wrap-up; only a person's prompt closes it, in the token totals and in the audit records alike
+  it('counts a Claude coordinator’s wrap-up woken by a task notification after its Run finished, files its calls under the Run, and stops at a person’s prompt', async () => {
     const MIN = 60_000
     const E = T0 + 10 * MIN
-    let state = orch([], 'chat_k')
-    return rig({ state: () => state, now: () => T0 }).then((r) => {
-      r.procs.open('proc_k', note('chat', 'chat_k', { provider: 'claude' }))
-      r.procs.line('proc_k', claudeLine(T0 + 1000, 'msg_1', 10, 1, { parent_tool_use_id: null, session_id: 'c1' }))
-      state = { ...state, runs: state.runs.map((x) => ({ ...x, endedAt: iso(E) })), tasks: state.tasks.map((t) => ({ ...t, status: 'completed', updatedAt: iso(E) })) }
-      r.procs.line('proc_k', claudeLine(E + 10 * MIN, 'msg_wrap', 20, 2, { parent_tool_use_id: null, session_id: 'c1' }))
-      r.procs.line('proc_k', '{"type":"result","subtype":"success","usage":{"input_tokens":30,"output_tokens":3}}')
-      r.procs.line('proc_k', claudeLine(E + 11 * MIN, 'msg_after', 300, 30, { parent_tool_use_id: null, session_id: 'c1' }))
-      expect(runTokensOf(state, 'run_1', r.store.spent())).toEqual({ coordinatorTokens: { input: 30, output: 3, total: 33 } })
-      r.sources.dispose()
+    let state = orch([], 'sess_k')
+    const statusLines: Record<string, string> = {}
+    const r = await rig({ state: () => state, now: () => T0, statusLines })
+    const transcript = path.join(r.dir, 'coord-bg.jsonl')
+    r.ptys.typed('pty_k', T0 + 900, 'host')
+    // The handover Astera typed, and the background wait it launched
+    await fs.writeFile(transcript, lines(prompt(T0 + 1000, 'Coordinate the run'), claudeLine(T0 + 2000, 'msg_1', 10, 1), toolResult(T0 + 3000)))
+    statusLines.sess_k = transcript
+    r.ptys.open('pty_k', note('session', 'sess_k'))
+    await r.sources.poll()
+    state = { ...state, runs: state.runs.map((x) => ({ ...x, endedAt: iso(E) })), tasks: state.tasks.map((t) => ({ ...t, status: 'completed', updatedAt: iso(E) })) }
+    r.ptys.typed('pty_k', E + 20 * MIN - 100, 'person')
+    await fs.appendFile(
+      transcript,
+      lines(
+        taskNotification(E + 5 * MIN, 'source'),
+        claudeLine(E + 6 * MIN, 'msg_wrap', 20, 2),
+        taskNotification(E + 7 * MIN, 'origin'),
+        claudeLine(E + 8 * MIN, 'msg_wrap2', 4, 4),
+        taskNotification(E + 9 * MIN, 'prefix'),
+        claudeLine(E + 10 * MIN, 'msg_wrap3', 1, 1),
+        prompt(E + 20 * MIN, 'thanks, now something else'),
+        claudeLine(E + 20 * MIN + 1000, 'msg_after', 300, 30)
+      )
+    )
+    await r.sources.poll()
+    expect(runTokensOf(state, 'run_1', r.store.spent())).toEqual({ coordinatorTokens: { input: 35, output: 8, total: 43 } })
+    const filed = dispatchOfWithTurns(() => state, r.sources)
+    expect(await filed('sess_k', iso(E + 9 * MIN + 30_000))).toEqual({ jobId: 'job_1', runId: 'run_1' })
+    expect(await filed('sess_k', iso(E + 20 * MIN + 2000))).toBeNull()
+    r.sources.dispose()
+  })
+
+  // The nudge Astera types into a coordinator with unread mail (dispatchLoop.ts) begins the wrap-up turn when the
+  // coordinator had stopped: the transcript writes it as any prompt, so the Host's own typing tells it apart
+  it('counts a wrap-up that Astera’s nudge began after the Run finished, and not one a person’s prompt began, however soon', async () => {
+    const MIN = 60_000
+    const E = T0 + 10 * MIN
+    const ended = (s: OrchState): OrchState => ({
+      ...s,
+      runs: s.runs.map((x) => ({ ...x, endedAt: iso(E) })),
+      tasks: s.tasks.map((t) => ({ ...t, status: 'completed' as const, updatedAt: iso(E) }))
     })
+    for (const by of ['host', 'person'] as const) {
+      let state = orch([], 'sess_k')
+      const statusLines: Record<string, string> = {}
+      const r = await rig({ state: () => state, now: () => T0, statusLines })
+      const transcript = path.join(r.dir, `coord-${by}.jsonl`)
+      await fs.writeFile(transcript, lines(prompt(T0 + 1000, 'Coordinate the run'), claudeLine(T0 + 2000, 'msg_1', 10, 1)))
+      statusLines.sess_k = transcript
+      r.ptys.open('pty_k', note('session', 'sess_k'))
+      await r.sources.poll()
+      state = ended(state)
+      r.ptys.typed('pty_k', E + 30_000, by)
+      await fs.appendFile(
+        transcript,
+        lines(prompt(E + 30_200, 'Your Run has 1 unread message(s). Run `astera check --json`, handle them.'), claudeLine(E + 5 * MIN, 'msg_wrap', 20, 2))
+      )
+      await r.sources.poll()
+      expect(runTokensOf(state, 'run_1', r.store.spent())).toEqual({
+        coordinatorTokens: by === 'host' ? { input: 30, output: 3, total: 33 } : { input: 10, output: 1, total: 11 }
+      })
+      r.sources.dispose()
+    }
+  })
+
+  // A Claude chat's stream carries no prompt: each turn ends with a `result` frame, and the turn after one is a person's
+  // when a person's line reached the chat since (fix round 1, Important 1). One a background task's end begins, or one
+  // the Host sent itself, is still the wrap-up
+  it('tells a Claude chat coordinator’s turns by the result frame that ends each and the person’s line that begins one', async () => {
+    const MIN = 60_000
+    const E = T0 + 10 * MIN
+    let now = T0
+    let state = orch([], 'chat_k')
+    const r = await rig({ state: () => state, now: () => now })
+    const frame = (at: number, id: string, input: number, output: number): void => {
+      now = at
+      r.procs.line('proc_k', claudeLine(at, id, input, output, { parent_tool_use_id: null, session_id: 'c1' }))
+    }
+    const result = (at: number): void => {
+      now = at
+      r.procs.line('proc_k', '{"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":1}}')
+    }
+    r.procs.open('proc_k', note('chat', 'chat_k', { provider: 'claude' }))
+    r.procs.typed('proc_k', T0 + 500, 'host')
+    frame(T0 + 1000, 'msg_1', 10, 1)
+    result(T0 + 2000)
+    state = { ...state, runs: state.runs.map((x) => ({ ...x, endedAt: iso(E) })), tasks: state.tasks.map((t) => ({ ...t, status: 'completed', updatedAt: iso(E) })) }
+    // A background task's end begins a turn: nothing was written to the chat
+    frame(E + 5 * MIN, 'msg_wrap', 20, 2)
+    result(E + 6 * MIN)
+    // The Host sends a line itself (a roll's carry-on)
+    r.procs.typed('proc_k', E + 7 * MIN, 'host')
+    frame(E + 7 * MIN + 500, 'msg_carry', 5, 5)
+    result(E + 8 * MIN)
+    // A person writes
+    r.procs.typed('proc_k', E + 9 * MIN, 'person')
+    frame(E + 9 * MIN + 500, 'msg_after', 300, 30)
+    expect(runTokensOf(state, 'run_1', r.store.spent())).toEqual({ coordinatorTokens: { input: 35, output: 8, total: 43 } })
+    r.sources.dispose()
   })
 
   // What the audit asks (recorder.ts dispatchOfWithTurns): the turn a moment of a session fell in, from the lines read

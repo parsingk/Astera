@@ -39,7 +39,8 @@ describe('hostInboxRoutes (Slack in the Host Task 7, spec §3.4)', () => {
     expect(h.chats.send).not.toHaveBeenCalled()
     const w = rig()
     await w.routes.deliverChat!('c1', 'next turn')
-    expect(w.chats.send).toHaveBeenCalledWith('c1', 'next turn')
+    // A person's reply: written as a person's line (observe deferred fix round 1, Important 1)
+    expect(w.chats.send).toHaveBeenCalledWith('c1', 'next turn', undefined, { person: true })
     expect(w.act).not.toHaveBeenCalled()
   })
 

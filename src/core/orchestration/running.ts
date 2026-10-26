@@ -76,11 +76,12 @@ export function runEndOf(s: OrchState, r: JobRun): number {
 
 /**
  * Whether a session's work at `t` is still for a Dispatch or a Run whose time ended at `end` (observe deferred minors b
- * and c): up to the end, and after it to the end of the turn that was running then, so a coordinator's wrap-up and a
- * worker's last response after its report count however long they take, and a prompt typed into the tab afterwards is
- * not theirs. `turn` asks when the turn holding `t` began, at the latest (epoch ms), from the session's own lines, or
- * null when they cannot tell; then END_GRACE_MS after the end stands in for the turn. It is asked only for a `t` past
- * the end, so a caller can tell whether the answer turned on it.
+ * and c): up to the end, and after it until a person prompts the session, so a coordinator's wrap-up and a worker's last
+ * response after its report count however long they take, woken by a background task's end or Astera's nudge or not,
+ * and what a person's prompt afterwards leads to is not theirs (fix round 1, I1). `turn` asks when the turn holding `t`
+ * began, at the latest (epoch ms): the person's last prompt at or before it, from the session's own lines, or null when
+ * they cannot tell; then END_GRACE_MS after the end stands in for it. It is asked only for a `t` past the end, so a
+ * caller can tell whether the answer turned on it.
  */
 export function heldPastEnd(end: number, t: number, turn: () => number | null): boolean {
   if (t <= end) return true

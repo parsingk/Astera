@@ -352,16 +352,16 @@ const latest = <T>(items: T[], key: (x: T) => number): T | undefined => {
 
 /**
  * `dispatchOf` over the orchestration state. The session's Dispatch whose time holds the call (from its start to its
- * end, or on while it is open), else the one that ended last while the turn that was running at its end goes on: the
- * worker's own last calls (its report, and what follows it in that turn) land after the end, and a tab a worker was
- * typed into is used on after it, which is nobody's Task (final review I2, observe deferred minor c). That Dispatch's
- * Task, Run and Job as far as they are still there. A session with no such Dispatch may be a Run's coordinator, which
- * has none (ruling I1): then that Run and its Job, the unfinished Run first, else the latest finished one whose
- * coordinator's work the call still is: up to the end of the turn that was running when its outcome became final
- * (`runEndOf`; observe deferred minor b), so a coordinator tab used on after that files nothing under the Run. Both
- * bounds are `heldPastEnd`'s: `turn` asks when the turn holding the call began, from the session's own lines, or null
- * when they cannot tell (then two minutes after the end stand in); it is asked only for a call past an end, once. A
- * session that drives a Run from outside is not looked for.
+ * end, or on while it is open), else the one that ended last with no person's prompt since: the worker's own last calls
+ * (its report, and what follows it) land after the end, and a tab a worker was typed into is used on after it, which is
+ * nobody's Task (final review I2, observe deferred minor c). That Dispatch's Task, Run and Job as far as they are still
+ * there. A session with no such Dispatch may be a Run's coordinator, which has none (ruling I1): then that Run and its
+ * Job, the unfinished Run first, else the latest finished one whose coordinator's work the call still is: after its
+ * outcome became final (`runEndOf`; observe deferred minor b) until a person prompts the session, so the wrap-up a
+ * background task's end or Astera's nudge woke is filed under the Run and a person's use of the tab afterwards is not
+ * (fix round 1, I1). Both bounds are `heldPastEnd`'s: `turn` asks when the person's last prompt at or before the call
+ * came, from the session's own lines, or null when they cannot tell (then two minutes after the end stand in); it is
+ * asked only for a call past an end, once. A session that drives a Run from outside is not looked for.
  */
 export function dispatchOfSession(s: OrchState, sessionId: string, at: string, turn: () => number | null = () => null): DispatchIds | null {
   const t = Date.parse(at)

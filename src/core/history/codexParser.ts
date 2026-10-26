@@ -137,7 +137,9 @@ const CODEX_WRAPPER_PREFIXES = [
   '<codex_internal_context'
 ]
 
-function isRealCodexUserText(text: string): boolean {
+/** Whether a user_message's text is something typed into the session rather than one of the wrappers above. The token
+ *  sources tell a person's prompt by it too (host/tokens/sources.ts). */
+export function isRealCodexUserText(text: string): boolean {
   const t = text.trim()
   if (!t) return false
   return !CODEX_WRAPPER_PREFIXES.some((p) => t.startsWith(p))

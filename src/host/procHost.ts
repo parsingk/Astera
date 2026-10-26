@@ -24,7 +24,8 @@ export function attachProcHost(a: {
         return true
       }
       case 'proc-write':
-        a.registry.write(m.id, m.line)
+        // What the app writes is a person's, as its pty-write is: a turn typed in a chat pane, an answer to a card
+        a.registry.write(m.id, m.line, { person: true })
         return true
       case 'proc-kill':
         a.registry.kill(m.id)
