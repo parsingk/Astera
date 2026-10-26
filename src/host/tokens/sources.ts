@@ -140,6 +140,8 @@ interface Turns {
 
 /** Starts kept per session; past it the earliest goes, and `from` takes its place. */
 const TURNS_KEPT = 256
+/** Turn logs kept after their sessions are let go, for a roll's successor (`seedFrom`); past it the oldest goes. */
+const RETIRED_KEPT = 64
 
 /** How long before a prompt line the Enter that sent it may have come: the Host's own typing within it makes the prompt
  *  Astera's (PtyRegistry.submittedBetween). A prompt typed while the agent was busy is written once it is taken, later
@@ -302,6 +304,18 @@ export function createTokenSources(d: {
     if (!log) turns.set(sessionId, (log = { starts: [], from: null }))
     return log
   }
+  /** The turns of sessions let go of lately, newest last, for a roll's successor heard after its predecessor's last read
+   *  (`seedFrom`). */
+  const retired = new Map<string, Turns>()
+  /** A roll's new session (`rolledFrom` in its note) goes on with its predecessor's work: it starts from that session's
+   *  turns, so a wrap-up the roll moved is held as it was, until a person prompts the new one (fix round 2). Its own lines
+   *  are added as they are read. */
+  const seedFrom = (sessionId: string, meta: PtyMeta): void => {
+    const from = str(meta.restore.rolledFrom)
+    const before = from === null ? undefined : (turns.get(from) ?? retired.get(from))
+    if (!before || turns.has(sessionId)) return
+    turns.set(sessionId, { starts: [...before.starts], from: before.from })
+  }
   const turnBegan = (log: Turns, at: number): void => {
     let i = log.starts.length
     while (i > 0 && log.starts[i - 1] > at) i--
@@ -348,7 +362,12 @@ export function createTokenSources(d: {
   const forget = (sessionId: string): void => {
     if ([...terminals.values(), ...chats.values()].some((x) => x.sessionId === sessionId)) return
     lastOwner.delete(sessionId)
+    const log = turns.get(sessionId)
     turns.delete(sessionId)
+    if (!log) return
+    retired.delete(sessionId)
+    retired.set(sessionId, log)
+    if (retired.size > RETIRED_KEPT) retired.delete(retired.keys().next().value as string)
   }
   const hand = (f: Followed, spent: TokensSpent[]): void => {
     for (const x of spent) {
@@ -386,6 +405,7 @@ export function createTokenSources(d: {
       let f = terminals.get(ptyId)
       if (!f) {
         f = fresh(meta.id, ptyId, 'pty')
+        seedFrom(f.sessionId, meta)
         // A terminal without a rollout is read as Claude's, through its statusline, until a note names one
         f.transcript = { read: claudeTokenReader(f.since), files: new Map(), seen: new Map() }
         terminals.set(ptyId, f)
@@ -401,6 +421,7 @@ export function createTokenSources(d: {
       let f = chats.get(procId)
       if (!f) {
         f = fresh(meta.id, procId, 'proc')
+        seedFrom(f.sessionId, meta)
         // A note written before Claude chats carried a provider is a Codex chat's (ChatSessionManager.adopt)
         if (meta.restore.provider === 'claude') {
           f.chat = claudeTokenReader(f.since)
@@ -560,6 +581,7 @@ export function createTokenSources(d: {
       chats.clear()
       lastOwner.clear()
       turns.clear()
+      retired.clear()
     }
   }
 }

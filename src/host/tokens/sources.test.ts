@@ -783,6 +783,77 @@ describe('createTokenSources', () => {
     r.sources.dispose()
   })
 
+  // Fix round 2: a roll during the wrap-up moves it onto a new session (`rolledFrom` in its note), whose own lines begin
+  // after the Run's end; the hold goes with it, so its carry-on work counts until a person prompts it
+  it('carries the hold across a roll onto a new session: the carry-on work counts until a person’s prompt', async () => {
+    const MIN = 60_000
+    const E = T0 + 10 * MIN
+    let now = T0
+    let state = orch([], 'chat_k1')
+    const r = await rig({ state: () => state, now: () => now })
+    const frame = (proc: string, at: number, id: string, input: number, output: number): void => {
+      now = at
+      r.procs.line(proc, claudeLine(at, id, input, output, { parent_tool_use_id: null, session_id: 'c1' }))
+    }
+    const result = (proc: string, at: number): void => {
+      now = at
+      r.procs.line(proc, '{"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":1}}')
+    }
+    r.procs.open('proc_k1', note('chat', 'chat_k1', { provider: 'claude' }))
+    frame('proc_k1', T0 + 1000, 'msg_1', 10, 1)
+    state = { ...state, runs: state.runs.map((x) => ({ ...x, endedAt: iso(E) })), tasks: state.tasks.map((t) => ({ ...t, status: 'completed', updatedAt: iso(E) })) }
+    frame('proc_k1', E + 2 * MIN, 'msg_wrap', 20, 2)
+    // The account's limit: the chat rolls onto a new session, which the slot follows, and the Host sends the carry-on
+    now = E + 3 * MIN
+    r.procs.exit('proc_k1')
+    state = { ...state, runs: state.runs.map((x) => ({ ...x, coordinatorSessionId: 'chat_k2' })) }
+    r.procs.open('proc_k2', note('chat', 'chat_k2', { provider: 'claude', rolledFrom: 'chat_k1' }))
+    r.procs.typed('proc_k2', E + 4 * MIN, 'host')
+    frame('proc_k2', E + 4 * MIN + 500, 'msg_carry', 5, 5)
+    result('proc_k2', E + 5 * MIN)
+    r.procs.typed('proc_k2', E + 6 * MIN, 'person')
+    frame('proc_k2', E + 6 * MIN + 500, 'msg_after', 300, 30)
+    expect(runTokensOf(state, 'run_1', r.store.spent())).toEqual({ coordinatorTokens: { input: 35, output: 8, total: 43 } })
+    r.sources.dispose()
+  })
+
+  it('carries the hold across a Codex roll onto a fresh rollout', async () => {
+    const MIN = 60_000
+    const E = T0 + 10 * MIN
+    let now = T0
+    let state = orch([], 'sess_k1')
+    const r = await rig({ state: () => state, now: () => now })
+    const first = path.join(r.dir, 'rollout-k1.jsonl')
+    await fs.writeFile(first, lines(codexEvent(T0 + 100, 'task_started'), codexUser(T0 + 100, 'Coordinate the run'), counted(T0 + 200, [100, 10], [100, 10])))
+    r.ptys.typed('pty_k1', T0 + 50, 'host')
+    r.ptys.open('pty_k1', note('session', 'sess_k1', { rolloutPath: first }))
+    await r.sources.poll()
+    state = { ...state, runs: state.runs.map((x) => ({ ...x, endedAt: iso(E) })), tasks: state.tasks.map((t) => ({ ...t, status: 'completed', updatedAt: iso(E) })) }
+    now = E + 3 * MIN
+    r.ptys.exit('pty_k1')
+    await r.sources.poll()
+    state = { ...state, runs: state.runs.map((x) => ({ ...x, coordinatorSessionId: 'sess_k2' })) }
+    const second = path.join(r.dir, 'rollout-k2.jsonl')
+    r.ptys.typed('pty_k2', E + 4 * MIN - 100, 'host')
+    r.ptys.typed('pty_k2', E + 6 * MIN - 100, 'person')
+    await fs.writeFile(
+      second,
+      lines(
+        codexEvent(E + 4 * MIN, 'task_started'),
+        codexUser(E + 4 * MIN, 'Continue where you left off'),
+        counted(E + 4 * MIN + 500, [20, 5], [20, 5]),
+        codexEvent(E + 6 * MIN, 'task_started'),
+        codexUser(E + 6 * MIN, 'thanks, something else now'),
+        counted(E + 6 * MIN + 500, [320, 35], [300, 30])
+      )
+    )
+    r.ptys.open('pty_k2', note('session', 'sess_k2', { rolloutPath: second, rolledFrom: 'sess_k1' }))
+    now = E + 7 * MIN
+    await r.sources.poll()
+    expect(runTokensOf(state, 'run_1', r.store.spent())).toEqual({ coordinatorTokens: { input: 120, output: 15, total: 135 } })
+    r.sources.dispose()
+  })
+
   // What the audit asks (recorder.ts dispatchOfWithTurns): the turn a moment of a session fell in, from the lines read
   // so far, and a read past a moment not read to yet
   it('tells which turn a moment of a session fell in, and reads the session past a moment it has not read to', async () => {
