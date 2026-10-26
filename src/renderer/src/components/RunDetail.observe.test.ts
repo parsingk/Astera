@@ -2,11 +2,11 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { KeyedRunDetail, RunDetail } from './RunDetail'
+import { runDetailInstanceKey } from './securityText'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const css = readFileSync(path.join(here, '..', 'styles.css'), 'utf8')
-import { KeyedRunDetail, RunDetail } from './RunDetail'
-import { runDetailInstanceKey } from './securityText'
 
 const app = readFileSync(path.join(here, '..', 'App.tsx'), 'utf8')
 
