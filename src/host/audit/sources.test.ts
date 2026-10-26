@@ -810,8 +810,9 @@ describe('the Codex rollout source', () => {
     ptys.exit('pty_a')
     await sources.poll()
     expect(events.map((e) => [e.sessionId, e.dedupeKey, e.status])).toEqual([['sess_a', 'call_0', 'unknown']])
-    // The second goes on to a new rollout (Codex's /new): the old file is not followed any more
+    // The second goes on to a new rollout (Codex's /new): the old file is read once more, then not followed any more
     ptys.note('pty_b', note('session', 'sess_b', { ...OBSERVED, rolloutPath: path.join(dir, 'b2.jsonl') }))
+    await sources.poll()
     expect(events.map((e) => [e.sessionId, e.dedupeKey, e.status])).toEqual([
       ['sess_a', 'call_0', 'unknown'],
       ['sess_b', 'call_1', 'unknown']
@@ -819,6 +820,36 @@ describe('the Codex rollout source', () => {
     // The Host leaves: the third will never be heard end
     sources.dispose()
     expect(events.map((e) => e.dedupeKey)).toEqual(['call_0', 'call_1', 'call_2'])
+  })
+
+  // Codex's /new names a new file while the old one may still hold unread lines: the outputs its calls waited for
+  it('reads the old rollout one last time when a new one begins, so an output in its unread tail says how its call went', async () => {
+    const dir = await tempDir()
+    const [oldFile, newFile] = ['old', 'new'].map((n) => path.join(dir, `${n}.jsonl`))
+    await fs.writeFile(oldFile, '')
+    await fs.writeFile(newFile, '')
+    const ptys = fakeRegistry()
+    const { events, recorder } = capture()
+    const { sources } = await sourcesFor({ recorder, ptys, now: () => T0 })
+    ptys.open('pty1', note('session', 'sess_cx', { ...OBSERVED, rolloutPath: oldFile }))
+    await fs.appendFile(oldFile, [SHELL(T0 + 10, 'call_a'), SHELL(T0 + 11, 'call_b')].join('\n') + '\n')
+    await sources.poll()
+    // Written before the note, not read yet: call_a's output, and a call that never gets one
+    await fs.appendFile(oldFile, [SHELL_DONE(T0 + 20, 'call_a', 1), SHELL(T0 + 21, 'call_c')].join('\n') + '\n')
+    ptys.note('pty1', note('session', 'sess_cx', { ...OBSERVED, rolloutPath: newFile }))
+    await fs.appendFile(newFile, [SHELL(T0 + 30, 'call_n'), SHELL_DONE(T0 + 31, 'call_n')].join('\n') + '\n')
+    await sources.poll()
+    expect(events.map((e) => [e.dedupeKey, e.status])).toEqual([
+      ['call_a', 'failed'],
+      ['call_b', 'unknown'],
+      ['call_c', 'unknown'],
+      ['call_n', 'ok']
+    ])
+    // The old file is not followed any more
+    await fs.appendFile(oldFile, SHELL_DONE(T0 + 40, 'call_b') + '\n')
+    await sources.poll()
+    sources.dispose()
+    expect(events).toHaveLength(4)
   })
 
   it('forgets what waited for an output while the mode was off, as the calls then were not read', async () => {

@@ -394,10 +394,19 @@ export function createAuditSources(d: {
 
   /** Observed chat processes, by proc id. */
   const chats = new Map<string, { sessionId: string; source: AuditSource; read: (line: string) => ObservedCall[] }>()
-  /** Observed terminal sessions, by pty id: the rollout followed, once the note names one. */
+  /** Observed terminal sessions, by pty id: the rollout followed, once the note names one, and the files a newer one
+   *  replaced (`left`), each read once more at the next poll with the calls it still waits for. */
   const rollouts = new Map<
     string,
-    { sessionId: string; since: number | null; path: string | null; tail: JsonlTail | null; ended: boolean; calls: RolloutReader }
+    {
+      sessionId: string
+      since: number | null
+      path: string | null
+      tail: JsonlTail | null
+      ended: boolean
+      calls: RolloutReader
+      left: Array<{ tail: JsonlTail; calls: RolloutReader }>
+    }
   >()
 
   const offs = [
@@ -432,7 +441,7 @@ export function createAuditSources(d: {
       if (meta.kind !== 'session' || meta.restore.observed !== true) return
       let r = rollouts.get(ptyId)
       if (!r) {
-        r = { sessionId: meta.id, since: why === 'open' ? now() : null, path: null, tail: null, ended: false, calls: codexRolloutCalls() }
+        r = { sessionId: meta.id, since: why === 'open' ? now() : null, path: null, tail: null, ended: false, calls: codexRolloutCalls(), left: [] }
         rollouts.set(ptyId, r)
       }
       const file = str(meta.restore.rolloutPath)
@@ -441,8 +450,10 @@ export function createAuditSources(d: {
       // for a path it is handed. A later file is codex's `/new`, all of it this session's. A session whose start this
       // Host did not hear starts at the end too. Lines from before the session's start are passed either way.
       const resumed = r.path === null && str(meta.restore.resumeSessionId) !== null
-      // What the old file's calls still waited for will not be heard: their last word
-      hand(r.sessionId, 'codex-rollout', r.calls.unfinished())
+      // The old file's unread lines may hold the outputs its calls wait for: it is read once more, as on exit, and what
+      // still waits then is handed over as unknown
+      if (r.tail) r.left.push({ tail: r.tail, calls: r.calls })
+      r.calls = codexRolloutCalls()
       r.path = file
       r.tail = new JsonlTail(file, { startAtEnd: resumed || r.since === null })
     }),
@@ -470,6 +481,7 @@ export function createAuditSources(d: {
       hooks.start()
       for (const r of rollouts.values()) {
         r.calls.forget()
+        r.left = []
         if (r.path !== null) r.tail = new JsonlTail(r.path, { startAtEnd: true })
       }
     } else if (!on && reading) hooks.stop()
@@ -482,12 +494,23 @@ export function createAuditSources(d: {
   const readRollouts = async (): Promise<void> => {
     if (!follow()) return
     for (const [ptyId, r] of [...rollouts]) {
+      for (const old of r.left.splice(0)) {
+        try {
+          const got = await old.tail.read()
+          if (got) hand(r.sessionId, 'codex-rollout', old.calls.read(got.lines, r.since ?? -Infinity))
+        } catch (err) {
+          d.log(`audit: the rollout of session ${r.sessionId} could not be read: ${String(err)}`)
+        }
+        hand(r.sessionId, 'codex-rollout', old.calls.unfinished())
+      }
       const tail = r.tail
       if (!tail) continue
       const last = r.ended
+      const calls = r.calls
       try {
         const got = await tail.read()
-        if (got && r.tail === tail) hand(r.sessionId, 'codex-rollout', r.calls.read(got.lines, r.since ?? -Infinity))
+        // A file a newer one replaced meanwhile keeps what was read of it, for its last read
+        if (got && (r.tail === tail || r.left.some((o) => o.tail === tail))) hand(r.sessionId, 'codex-rollout', calls.read(got.lines, r.since ?? -Infinity))
       } catch (err) {
         d.log(`audit: the rollout of session ${r.sessionId} could not be read: ${String(err)}`)
       }
@@ -523,8 +546,10 @@ export function createAuditSources(d: {
       stopPolling()
       // The Host is leaving: what still waits for an output will never hear it
       for (const r of rollouts.values()) {
-        if (d.recorder.observing()) hand(r.sessionId, 'codex-rollout', r.calls.unfinished())
-        else r.calls.forget()
+        for (const calls of [...r.left.map((o) => o.calls), r.calls]) {
+          if (d.recorder.observing()) hand(r.sessionId, 'codex-rollout', calls.unfinished())
+          else calls.forget()
+        }
       }
       hooks.stop()
       for (const off of offs) off()
