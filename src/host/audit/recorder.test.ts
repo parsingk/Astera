@@ -375,6 +375,39 @@ describe('createAuditRecorder', () => {
     expect(reads).toBe(after)
   })
 
+  it('starts the wait over at five seconds when a policies change finds the file still unreadable', async () => {
+    let reads = 0
+    const h = await rig({
+      over: {
+        mode: async () => {
+          reads++
+          throw new Error('audit-policy.json is locked')
+        }
+      }
+    })
+    await h.recorder.flushed()
+    // Two retries fail, so the wait has grown to twenty seconds
+    for (const wait of [5000, 10_000]) {
+      h.advance(wait)
+      h.recorder.retryMode()
+      await h.recorder.flushed()
+    }
+    // A person's policies changes read it too and fail; they do not grow the wait, they start it over
+    for (let i = 0; i < 3; i++) {
+      h.recorder.invalidate({ modeUnchanged: true })
+      await h.recorder.flushed()
+    }
+    const before = reads
+    h.advance(4999)
+    h.recorder.retryMode()
+    await h.recorder.flushed()
+    expect(reads).toBe(before)
+    h.advance(1)
+    h.recorder.retryMode()
+    await h.recorder.flushed()
+    expect(reads).toBe(before + 1)
+  })
+
   it('does not retry a clean compatibility', async () => {
     const h = await rig({ mode: 'compatibility' })
     await h.recorder.flushed()

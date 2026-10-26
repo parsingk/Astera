@@ -24,10 +24,10 @@ import { agentProfileIdOf } from '../../core/sessions/noteInfo'
 export const AUDIT_COMMANDS_KEPT = 16
 /** Records that wait for the disk at most; past this, calls are counted and dropped. */
 export const AUDIT_PENDING_MAX = 2000
-/** Dedupe keys kept per session, and sessions kept; past either, the least recently heard go first. */
 /** How long after a failed read of the mode the next try waits, doubling up to the longest. */
 const RETRY_FIRST_MS = 5_000
 const RETRY_MAX_MS = 30_000
+/** Dedupe keys kept per session, and sessions kept; past either, the least recently heard go first. */
 const KEYS_PER_SESSION = 1000
 const SESSIONS_KEPT = 200
 const TOOL_MAX = 100
@@ -151,7 +151,9 @@ export function createAuditRecorder(d: {
 
   const currentMode = async (): Promise<AuditMode> => (mode !== null ? mode : readMode())
   /** Reads the mode from the file and keeps it, unless a change came while it was read. */
-  const readMode = async (): Promise<AuditMode> => {
+  /** `retry`: asked by `retryMode`. Only a retry that fails again grows the wait; any other failed read (the first, a
+   *  person's policies change) starts it over, so a repair is seen soon after it. */
+  const readMode = async (retry = false): Promise<AuditMode> => {
     const g = generation
     try {
       const value = await d.mode()
@@ -164,7 +166,7 @@ export function createAuditRecorder(d: {
       // cannot be read, and the next change (a repair) reads it again
       if (g === generation) keep('compatibility')
       if (!modeFailing) d.log(`audit: the observe mode could not be read, so calls are not recorded until it can: ${String(err)}`)
-      retryWait = modeFailing ? Math.min(retryWait * 2, RETRY_MAX_MS) : RETRY_FIRST_MS
+      retryWait = modeFailing && retry ? Math.min(retryWait * 2, RETRY_MAX_MS) : RETRY_FIRST_MS
       retryAt = now() + retryWait
       modeFailing = true
       return 'compatibility'
@@ -280,7 +282,7 @@ export function createAuditRecorder(d: {
       retrying = true
       enqueue(async () => {
         try {
-          await readMode()
+          await readMode(true)
         } finally {
           retrying = false
         }
