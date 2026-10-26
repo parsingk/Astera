@@ -540,7 +540,7 @@ describe('index.ts wires observe mode into the Host', () => {
   it('makes the sources, re-reads the mode when the policies change it, and hands the orch the spent tokens', async () => {
     const { fileURLToPath } = await import('node:url')
     const src = await fs.readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8')
-    for (const wiring of ['createAuditSources({', 'createTokenSources({', 'onChange: () => auditRecorder.invalidate()', 'spentTokens: () => tokenStore.spent()'])
+    for (const wiring of ['createAuditSources({', 'createTokenSources({', 'onChange: (cmd) => auditRecorder.invalidate(', 'spentTokens: () => tokenStore.spent()'])
       expect(src, wiring).toContain(wiring)
   })
 })
