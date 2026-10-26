@@ -651,6 +651,22 @@ describe('the Codex rollout source', () => {
       expect(read.unfinished()).toHaveLength(200)
     })
 
+    it('hands over a call that waited a minute for its output as unknown, and nothing for its output after', () => {
+      let clock = T0
+      const read = codexRolloutCalls(() => clock)
+      expect(read.read([SHELL(T0 + 10, 'call_1')], T0)).toEqual([])
+      clock += 30_000
+      expect(read.read([SHELL(T0 + 20, 'call_2')], T0)).toEqual([])
+      clock += 29_999
+      expect(read.overdue()).toEqual([])
+      clock += 1
+      expect(read.overdue().map((c) => [c.dedupeKey, c.status, c.at])).toEqual([['call_1', 'unknown', iso(T0 + 10)]])
+      expect(read.overdue()).toEqual([])
+      expect(read.read([SHELL_DONE(T0 + 30, 'call_1')], T0)).toEqual([])
+      expect(read.read([SHELL_DONE(T0 + 40, 'call_2')], T0).map((c) => [c.dedupeKey, c.status])).toEqual([['call_2', 'ok']])
+      expect(read.unfinished()).toEqual([])
+    })
+
     it('reads no output for a call made before the time given', () => {
       const read = codexRolloutCalls()
       expect(read.read([SHELL(T0 - 1000), SHELL_DONE(T0 + 20)], T0)).toEqual([])
@@ -850,6 +866,32 @@ describe('the Codex rollout source', () => {
     await sources.poll()
     sources.dispose()
     expect(events).toHaveLength(4)
+  })
+
+  // Before a call waited for its output it was recorded at once: a Host that dies while one waits loses at most a minute
+  it('records a call still waiting for its output after a minute, as unknown, and once only when the output comes', async () => {
+    const dir = await tempDir()
+    const file = path.join(dir, 'r.jsonl')
+    await fs.writeFile(file, '')
+    const ptys = fakeRegistry()
+    const r = await realRecorder({ ptys: [entry('pty1', note('session', 'sess_cx', { ...OBSERVED, rolloutPath: file }))] })
+    let now = T0
+    const { sources } = await sourcesFor({ recorder: r.recorder, ptys, now: () => now })
+    ptys.open('pty1', note('session', 'sess_cx', { ...OBSERVED, rolloutPath: file }))
+    await fs.appendFile(file, SHELL(T0 + 10, 'call_long') + '\n')
+    await sources.poll()
+    now += 59_000
+    await sources.poll()
+    expect(await r.records()).toEqual([])
+    now += 1_000
+    await sources.poll()
+    expect((await r.records()).map(brief)).toEqual([
+      { source: 'codex-rollout', providerTool: 'shell', action: 'git.read', target: 'git status', status: 'unknown' }
+    ])
+    await fs.appendFile(file, SHELL_DONE(T0 + 70_000, 'call_long') + '\n')
+    await sources.poll()
+    sources.dispose()
+    expect(await r.records()).toHaveLength(1)
   })
 
   it('forgets what waited for an output while the mode was off, as the calls then were not read', async () => {

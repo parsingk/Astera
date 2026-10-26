@@ -14,7 +14,9 @@
 //   over whole, the resolver reads it), with mcp_tool_call_end, patch_apply_end and web_search_call from versions that
 //   write those. Its item_completed lines repeat an exec's inner calls and are not read, or a call would count twice.
 //   A shell, apply_patch or exec call is held until its output line says how it went (exit code, Script completed or
-//   failed, Success.); one whose output never comes is handed over as unknown when its session or the Host ends.
+//   failed, Success.); one whose output has not come within a minute (CALL_WAIT_MS), or before its session, its file
+//   (Codex's /new, read once more first) or the Host ends, is handed over as unknown, and an output after that adds
+//   nothing.
 //
 // Only sessions whose note says they were started observed are followed (Review Focus 1); the recorder asks the same
 // of a hook line. The Host reads only what it holds: a session the app runs in its own node-pty, with no Host, is not
@@ -195,6 +197,9 @@ const ROLLOUT_CALL = /"(?:function_call|custom_tool_call|mcp_tool_call_end|patch
 const ROLLOUT_OUTPUT = /"(?:function_call_output|custom_tool_call_output)"/
 /** Calls waiting for their output, per rollout, at most; past it the oldest is handed over as unknown. */
 const WAITING_MAX = 200
+/** How long a call waits for its output, from when it was read; past it, it is handed over as unknown, so a Host that
+ *  ends first loses at most this much, and its output, should it come later, adds nothing. */
+export const CALL_WAIT_MS = 60_000
 
 /** What reads a tool's output for how it went: a command's exit code, an exec script's opening, an apply_patch's result.
  *  Other tools (agents, goals, searches) have an output that says nothing of the sort, so their call is handed at once.
@@ -241,17 +246,20 @@ function outcomeOf(kind: 'shell' | 'exec' | 'patch', text: string | null): Obser
 
 export interface RolloutReader {
   /** The calls finished by the lines read (rollout lines written at `since` or after; a line without its time is
-   *  passed). A shell, apply_patch or exec call is held until its output line says how it went, however many reads
-   *  later; an end event's own status stands for its call. */
+   *  passed). A shell, apply_patch or exec call is held until its output line says how it went, in a later read too, up
+   *  to `overdue`; an end event's own status stands for its call. */
   read(lines: readonly string[], since: number): ObservedCall[]
+  /** The calls that have waited CALL_WAIT_MS for an output, as unknown, once. */
+  overdue(): ObservedCall[]
   /** The calls still waiting for an output, as unknown, once: the session ended or the rollout is not read any more. */
   unfinished(): ObservedCall[]
   /** Lets go of what waits, handing nothing over: the lines in between were not read. */
   forget(): void
 }
 
-export function codexRolloutCalls(): RolloutReader {
-  const waiting = new Map<string, { call: ObservedCall; kind: 'shell' | 'exec' | 'patch' }>()
+/** `now` (epoch ms) is when a call is read, for CALL_WAIT_MS. */
+export function codexRolloutCalls(now: () => number = Date.now): RolloutReader {
+  const waiting = new Map<string, { call: ObservedCall; kind: 'shell' | 'exec' | 'patch'; readAt: number }>()
   return {
     read(lines, since) {
       const out: ObservedCall[] = []
@@ -287,12 +295,22 @@ export function codexRolloutCalls(): RolloutReader {
           continue
         }
         waiting.delete(call.dedupeKey!)
-        waiting.set(call.dedupeKey!, { call: stamped, kind })
+        waiting.set(call.dedupeKey!, { call: stamped, kind, readAt: now() })
         if (waiting.size > WAITING_MAX) {
           const [oldest] = waiting
           waiting.delete(oldest[0])
           out.push(oldest[1].call)
         }
+      }
+      return out
+    },
+    overdue() {
+      const out: ObservedCall[] = []
+      // In the order they were read, so the first that has not waited long enough ends the look
+      for (const [id, w] of waiting) {
+        if (now() - w.readAt < CALL_WAIT_MS) break
+        waiting.delete(id)
+        out.push(w.call)
       }
       return out
     },
@@ -441,7 +459,7 @@ export function createAuditSources(d: {
       if (meta.kind !== 'session' || meta.restore.observed !== true) return
       let r = rollouts.get(ptyId)
       if (!r) {
-        r = { sessionId: meta.id, since: why === 'open' ? now() : null, path: null, tail: null, ended: false, calls: codexRolloutCalls(), left: [] }
+        r = { sessionId: meta.id, since: why === 'open' ? now() : null, path: null, tail: null, ended: false, calls: codexRolloutCalls(now), left: [] }
         rollouts.set(ptyId, r)
       }
       const file = str(meta.restore.rolloutPath)
@@ -453,7 +471,7 @@ export function createAuditSources(d: {
       // The old file's unread lines may hold the outputs its calls wait for: it is read once more, as on exit, and what
       // still waits then is handed over as unknown
       if (r.tail) r.left.push({ tail: r.tail, calls: r.calls })
-      r.calls = codexRolloutCalls()
+      r.calls = codexRolloutCalls(now)
       r.path = file
       r.tail = new JsonlTail(file, { startAtEnd: resumed || r.since === null })
     }),
@@ -517,7 +535,7 @@ export function createAuditSources(d: {
       if (last) {
         hand(r.sessionId, 'codex-rollout', r.calls.unfinished())
         rollouts.delete(ptyId)
-      }
+      } else hand(r.sessionId, 'codex-rollout', r.calls.overdue())
     }
   }
   const every =
