@@ -528,6 +528,10 @@ describe('decide, a denied command the resolver must reach', () => {
     expect(decide(ps('switch ($x) {a {git push}}'), p)).toEqual(push)
     expect(decide(ps('switch ($x) { a { npm test } default { git push } }'), p)).toEqual(push)
     expect(decide(ps('switch ($x) {a {npm test}}; git push'), p)).toEqual(push)
+    // A block inside the subject is no switch body: what stands before it is a command
+    expect(decide(ps('switch ((Get-ChildItem) | % { Remove-Item -Recurse ../x -Include {a} }) {1 {npm test}}'), p)).toEqual(del)
+    expect(decide(ps('switch (Get-X | ForEach-Object { git push }) {1 {npm test}}'), p)).toEqual(push)
+    expect(decide(ps('switch (Get-X | ForEach-Object { npm test }) {1 {npm test} default {npm test}}'), p)).toEqual({ decision: 'allow' })
     // Outside a switch body a word before a block is still a command
     expect(decide(ps('Invoke-Foo { npm test }'), p)).toEqual({ decision: 'unknown' })
     expect(decide(ps('switch ($x) {a {npm test}}; Invoke-Foo { npm test }'), p)).toEqual({ decision: 'unknown' })

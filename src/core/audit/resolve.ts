@@ -792,7 +792,7 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
   const chain: number[] = [] // the unquoted `(` open now, as subshells, up to MAX_GROUPS deep: beyond it they share the last
   let beyond = 0 // the `(` open past that
   const braces: Array<'block' | 'hash' | 'switch'> = [] // the PowerShell braces open now: a block, a hashtable or a switch's body
-  let switchNext = false // a PowerShell `switch` was read, so the next brace opens its body
+  let switchNext: { parens: number; braces: number } | null = null // a PowerShell `switch` was read: the first brace at this depth opens its body
   let cases = 0 // the `case … in` read since the start that no `esac` has closed: a `)` in one ends a pattern, not a substitution
   let heredoc: { tag: string; indent: boolean; expands: boolean } | null = null // `expands`: its tag was not quoted, so the shell runs the substitutions in the body
 
@@ -864,7 +864,7 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
   const endCommand = (): void => {
     endWord()
     sink = null
-    if (flavor === 'ps' && words[0]?.toLowerCase() === 'switch') switchNext = true
+    if (flavor === 'ps' && words[0]?.toLowerCase() === 'switch') switchNext = { parens, braces: braces.length }
     if (words.length > 0 || out.length > 0) {
       // Inside an unquoted ( ) or $( ) the command runs in a subshell, as the commands of a quoted substitution do
       const cmd: Cmd = { words, out, call, quoted, invoked }
@@ -1058,8 +1058,11 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
         braces.push('block')
       } else {
         endCommand()
-        braces.push(switchNext ? 'switch' : 'block')
-        switchNext = false
+        // a brace inside the subject `switch (…)` is an ordinary block; the body is the first one after the subject closes
+        const armed = switchNext as { parens: number; braces: number } | null // set in endCommand, which TypeScript does not follow
+        const body = armed !== null && armed.parens === parens && armed.braces === braces.length
+        braces.push(body ? 'switch' : 'block')
+        if (body) switchNext = null
       }
     } else if (flavor === 'ps' && c === '}') {
       if (braces.pop() === 'hash') cur += c // closes a hashtable
