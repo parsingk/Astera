@@ -79,9 +79,25 @@ const LIMITS = [
   'The app’s role on the Host pipe is a claim the Host cannot verify against a program of the same user.'
 ]
 
-export function createHostCredentials(d: { profileDir: string; platform?: NodeJS.Platform; now?: () => number; onChange?: (cmd: string) => void }): HostCredentials {
+export function createHostCredentials(d: {
+  profileDir: string
+  platform?: NodeJS.Platform
+  now?: () => number
+  onChange?: (cmd: string) => void
+  /** The environment sessions inherit (the Host's own): only its names are read. */
+  env?: Record<string, string | undefined>
+  /** The projects this Host has registered, which an entry can be narrowed to (C9). */
+  projects?: () => Promise<readonly { path: string; name: string }[]>
+}): HostCredentials {
   const platform = d.platform ?? process.platform
   const now = d.now ?? Date.now
+  const env = d.env ?? process.env
+  /** Whether a session would inherit any of these variables: names compared as the platform does (Windows ignores case). */
+  const inEnv = (names: readonly string[]): boolean => {
+    const fold = (n: string): string => (platform === 'win32' ? n.toUpperCase() : n)
+    const have = new Set(Object.keys(env).filter((k) => env[k] !== undefined).map(fold))
+    return names.some((n) => have.has(fold(n)))
+  }
   let chain: Promise<unknown> = Promise.resolve()
   const queued = <T>(f: () => Promise<T>): Promise<T> => {
     const run = chain.then(f, f)
@@ -94,7 +110,9 @@ export function createHostCredentials(d: { profileDir: string; platform?: NodeJS
     const mcp = await Promise.all(
       mcpSecretEntries(registry, f.mcpHide).map(async (e) => {
         const [last] = await queryCredentialUses(d.profileDir, { entryId: e.id, limit: 1 }, { now }).catch(() => [])
-        return last ? { ...e, lastUsedAt: last.at } : e
+        // `present`: whether hiding it changes anything for a session started now (the screen says so when not)
+        const listed = { ...e, present: inEnv(e.envNames) }
+        return last ? { ...listed, lastUsedAt: last.at } : listed
       })
     )
     return [...f.entries, ...mcp]
@@ -127,7 +145,12 @@ export function createHostCredentials(d: { profileDir: string; platform?: NodeJS
     switch (cmd) {
       case 'credentials-list': {
         const file = await readCredentials(d.profileDir)
-        return { status: 200, body: { entries: await entriesOf(file), presets: PRESETS.map((p) => ({ id: p.id, label: p.label, measuredOn: p.measuredOn })) } }
+        // The projects are a choice offered, not the list: a state that cannot be read leaves none to pick
+        const projects = ((await d.projects?.().catch(() => [])) ?? []).map((p) => ({ path: p.path, name: p.name }))
+        return {
+          status: 200,
+          body: { entries: await entriesOf(file), presets: PRESETS.map((p) => ({ id: p.id, label: p.label, measuredOn: p.measuredOn })), projects }
+        }
       }
       case 'credentials-show': {
         const key = typeof args.id === 'string' ? args.id : null

@@ -1316,6 +1316,14 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .security-decision.is-allow { color: var(--ok); background: var(--ok-bg); }
 .security-decision.is-would-deny { color: var(--danger); background: var(--danger-bg); }
 .security-decision.is-unknown { color: var(--text-dim); background: var(--elevated); }
+/* A credential use's outcome, in the same badge (credentials design §7) */
+.security-decision.is-ok { color: var(--ok); background: var(--ok-bg); }
+.security-decision.is-failed { color: var(--danger); background: var(--danger-bg); }
+/* Settings › Security & Access › Credentials: the list's notes, its rows, a new entry's box; what a row hides may be long,
+   so its head wraps rather than widen the tab, and the projects an entry is narrowed to sit under their choice. */
+.security-credentials { display: flex; flex-direction: column; gap: 12px; }
+.credential-hides { overflow-wrap: anywhere; }
+.credential-projects { display: flex; flex-direction: column; gap: 4px; padding-left: 22px; }
 /* Audit Logs' rows fit the tab without a sideways scroll at the settings window's usual width (the screen finding, at a
    1280 px window: the action wrapped over four lines and the rule column was cut off). The time is the time of day, with
    the date heading each day's rows; the time, the action and the decision keep to one line; the session is cut short;

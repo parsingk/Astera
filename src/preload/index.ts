@@ -403,6 +403,19 @@ const api = {
     runTokens: invoke('audit.runTokens'),
     taskTokens: invoke('audit.taskTokens')
   },
+  // Settings › Security & Access › Credentials and Audit Logs' credential uses (credentials design §7): the Host's
+  // Credentials list, through main's route
+  credentials: {
+    list: invoke('credentials.list'),
+    show: invoke('credentials.show'),
+    doctor: invoke('credentials.doctor'),
+    uses: invoke('credentials.uses'),
+    addHideOnly: invoke('credentials.addHideOnly'),
+    editHideOnly: invoke('credentials.editHideOnly'),
+    deleteHideOnly: invoke('credentials.deleteHideOnly'),
+    setHiding: invoke('credentials.setHiding'),
+    reset: invoke('credentials.reset')
+  },
   // The Jobs view's "+ From a source" (plugin Phase 4c): the Host's job sources, through main's sources route
   sources: {
     list: invoke('sources.list'),

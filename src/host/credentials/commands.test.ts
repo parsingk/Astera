@@ -55,6 +55,37 @@ describe('credentials commands', () => {
     expect((body(r).presets as { id: string }[]).map((p) => p.id)).toContain('gh')
   })
 
+  // The screen says "nothing changes now" for an MCP entry none of whose variables a session would inherit (design \u00a75)
+  it('says whether an MCP entry\u2019s variables are in the environment sessions inherit, by name only', async () => {
+    await writeRegistry()
+    const list = async (platform: NodeJS.Platform, env: Record<string, string | undefined>) => {
+      const h = createHostCredentials({ profileDir: dir, platform, now: () => NOW, env })
+      const r = await h.command({ cmd: 'credentials-list', args: {}, ...cli, marks: marks() })
+      return (body(r).entries as { kind: string; present?: unknown }[]).find((e) => e.kind === 'mcp-secret')
+    }
+    expect(await list('win32', { PATH: 'x' })).toMatchObject({ present: false })
+    expect(await list('win32', { linear_api_key: 'secret-value' })).toMatchObject({ present: true })
+    expect(await list('linux', { linear_api_key: 'secret-value' })).toMatchObject({ present: false })
+    expect(await list('linux', { LINEAR_API_KEY: 'secret-value' })).toMatchObject({ present: true })
+    const h = createHostCredentials({ profileDir: dir, platform: 'linux', now: () => NOW, env: { LINEAR_API_KEY: 'secret-value' } })
+    expect(JSON.stringify((await h.command({ cmd: 'credentials-list', args: {}, ...cli, marks: marks() })).body)).not.toContain('secret-value')
+  })
+
+  // An entry is narrowed to projects (C9): the screen picks them from the projects this Host has registered
+  it('answers the registered projects an entry can be narrowed to, by folder and name', async () => {
+    const h = createHostCredentials({
+      profileDir: dir,
+      now: () => NOW,
+      projects: async () => [{ id: 'p1', path: 'D:\\work\\astera', name: 'astera', addedAt: '2026-10-01T00:00:00.000Z' }]
+    })
+    const r = await h.command({ cmd: 'credentials-list', args: {}, ...app, marks: marks() })
+    expect(body(r).projects).toEqual([{ path: 'D:\\work\\astera', name: 'astera' }])
+    const failing = createHostCredentials({ profileDir: dir, now: () => NOW, projects: async () => Promise.reject(new Error('state unreadable')) })
+    const f = await failing.command({ cmd: 'credentials-list', args: {}, ...app, marks: marks() })
+    expect(f.status).toBe(200)
+    expect(body(f).projects).toEqual([])
+  })
+
   it('refuses every change but the app\u2019s', async () => {
     const h = host()
     for (const caller of [cli, agent, { role: 'mcp' as const }]) {

@@ -69,6 +69,7 @@ import { createPluginsRoute } from './host/pluginsRoute'
 import { createExtensionsRoute } from './host/extensionsRoute'
 import { createAgentProfilesRoute } from './host/agentProfilesRoute'
 import { createAuditRoute } from './host/auditRoute'
+import { createCredentialsRoute } from './host/credentialsRoute'
 import { createSourcesRoute } from './host/sourcesRoute'
 import { createHostGitHubRoute } from './host/hostGitHubRoute'
 import { needsHostGitHub } from '../core/orchestration/hostGitHub'
@@ -4784,6 +4785,18 @@ export function registerIpc(
   ipcMain.handle('audit.summary', (_e, q: unknown) => audit.summary(q as Parameters<typeof audit.summary>[0]))
   ipcMain.handle('audit.runTokens', (_e, runId: unknown) => audit.runTokens(runId as string))
   ipcMain.handle('audit.taskTokens', (_e, taskId: unknown) => audit.taskTokens(taskId as string))
+  // Settings › Security & Access › Credentials (credentials design §7): the Host's list, as the app
+  const credentials = createCredentialsRoute({ call: (m) => orchCall(m) })
+  type Cred = typeof credentials
+  ipcMain.handle('credentials.list', () => credentials.list())
+  ipcMain.handle('credentials.show', (_e, id: unknown) => credentials.show(id as string))
+  ipcMain.handle('credentials.doctor', () => credentials.doctor())
+  ipcMain.handle('credentials.uses', (_e, q: unknown) => credentials.uses(q as Parameters<Cred['uses']>[0]))
+  ipcMain.handle('credentials.addHideOnly', (_e, e: unknown) => credentials.addHideOnly(e as Parameters<Cred['addHideOnly']>[0]))
+  ipcMain.handle('credentials.editHideOnly', (_e, id: unknown, changes: unknown) => credentials.editHideOnly(id as string, changes as Parameters<Cred['editHideOnly']>[1]))
+  ipcMain.handle('credentials.deleteHideOnly', (_e, id: unknown) => credentials.deleteHideOnly(id as string))
+  ipcMain.handle('credentials.setHiding', (_e, id: unknown, hide: unknown) => credentials.setHiding(id as string, hide as Parameters<Cred['setHiding']>[1]))
+  ipcMain.handle('credentials.reset', () => credentials.reset())
   ipcMain.handle('plugins.list', () => plugins.list())
   ipcMain.handle('plugins.inspect', (_e, source: unknown) => plugins.inspect(source as Parameters<typeof plugins.inspect>[0]))
   ipcMain.handle('plugins.install', (_e, a: unknown) => plugins.install(a as Parameters<typeof plugins.install>[0]))

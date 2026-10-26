@@ -866,8 +866,15 @@ async function main(): Promise<void> {
   const policies = createHostPolicies({ profileDir, onChange: (cmd) => auditRecorder.invalidate({ modeUnchanged: cmd !== 'policies-set-mode' }) })
   // And the records read back with the decisions those rules give them now (design §8)
   const audit = createHostAudit({ profileDir })
-  // The Credentials list and its uses (credentials design §7); the session managers read the file at each spawn
-  const credentials = createHostCredentials({ profileDir })
+  // The Credentials list and its uses (credentials design §7); the session managers read the file at each spawn. The
+  // projects an entry can be narrowed to are the registered ones, read after the state's load (`orch` is made below)
+  const credentials = createHostCredentials({
+    profileDir,
+    projects: async () => {
+      await orch.ready()
+      return orch.state().projects
+    }
+  })
   const orch = createHostOrch({
     profileDir,
     useRecorder,
