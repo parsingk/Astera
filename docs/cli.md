@@ -1193,15 +1193,18 @@ combine, and `--agent-profile <id|name>` takes an id or a name, on `audit list` 
 profile deleted since still filters its records; a name that matches none is 4). `--limit` is 200 by default and at
 most 2000. When it cuts the list, `truncated` is true and `next` holds the `--until` and `--before-id` that ask for the
 next page, which `--human` prints under the table as `more:`, after the filters you used, each value in single quotes
-unless it is plain letters, digits and `._:/@=+-`, written for the shell you are in (PowerShell on Windows, a POSIX
-shell elsewhere), so the line can be pasted as it is. `audit summary` counts the same calls by decision, in all and per
-action, and `stoppedAtLimit` is true when a day of the period stopped recording at the size limit, so it holds fewer
-calls than were made.
+unless it is plain letters, digits and `._:/@=+-` (not starting with `@` or `-`), written for the shell you are in
+(PowerShell on Windows, a POSIX shell elsewhere and in Git Bash, which sets `MSYSTEM`, or any shell named in `SHELL`),
+so the line can be pasted as it is. The parser takes a lone `-` as "read stdin" and a value starting with `--` as the
+next flag, so no quoting can pass one as a filter value: the hint leaves that filter out and says so above it.
+`audit summary` counts the same calls by decision, in all and per action, and `stoppedAtLimit` is true when a day of
+the period stopped recording at the size limit, so it holds fewer calls than were made.
 
 **These commands are for a person.** From inside an agent session (`ASTERA_SESSION` is set) every change is refused
-with 5, and so are both `audit` reads, whatever filters they carry: the refusal comes first, before any
-`--agent-profile` name is looked up, so a name that matches nothing is 5 there, not 4. The log of what agents did stays
-away from agents; `policies show` is not refused. MCP clients, plugins, the SDK and a paired controller (`--runtime`) have no audit or policy commands.
+with 5, and so are both `audit` reads, whatever filter values they carry: the refusal comes first, before any
+`--agent-profile` name is looked up, so a name that matches nothing is 5 there, not 4 (a mistake in the line itself,
+such as an unknown flag, is still 2). The log of what agents did stays away from agents; `policies show` is not
+refused. MCP clients, plugins, the SDK and a paired controller (`--runtime`) have no audit or policy commands.
 
 ```bash
 astera policies set-mode --mode observe

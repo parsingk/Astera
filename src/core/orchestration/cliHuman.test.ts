@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { columns, displayWidth, humanFor, quietFor, stateWord } from './cliHuman'
+import { columns, displayWidth, humanFor, quietFor, shellOf, stateWord } from './cliHuman'
 import { ACTION_PHRASES, COVERAGE_NOTE_PHRASES } from '../audit/phrases'
 import type { AuditAction, CoverageNote } from '../audit/types'
 import type { MessageKey } from '../i18n'
@@ -702,18 +702,47 @@ describe('humanFor — audit and policies', () => {
   // value is doubled in PowerShell and closed, escaped and reopened in a POSIX shell.
   it('audit list’s next page hint quotes each value for the shell it is pasted into', () => {
     const data = { records: [push], truncated: true, next: { until: push.at, beforeId: push.id } }
-    const hint = (platform: NodeJS.Platform, args: Record<string, unknown>): string => humanFor('audit-list', data, args, platform)?.split('\n').at(-1) ?? ''
+    const hint = (shell: 'powershell' | 'posix', args: Record<string, unknown>): string => humanFor('audit-list', data, args, shell)?.split('\n').at(-1) ?? ''
     const tail = ` --until ${push.at} --before-id ${push.id}`
-    expect(hint('win32', { agentProfile: "it's $HOME" })).toBe(`more: --agent-profile 'it''s $HOME'${tail}`)
-    expect(hint('linux', { agentProfile: "it's $HOME" })).toBe(`more: --agent-profile 'it'\\''s $HOME'${tail}`)
-    expect(hint('darwin', { action: 'git.*', agentProfile: 'a b' })).toBe(`more: --agent-profile 'a b' --action 'git.*'${tail}`)
+    expect(hint('powershell', { agentProfile: "it's $HOME" })).toBe(`more: --agent-profile 'it''s $HOME'${tail}`)
+    expect(hint('posix', { agentProfile: "it's $HOME" })).toBe(`more: --agent-profile 'it'\\''s $HOME'${tail}`)
+    expect(hint('posix', { action: 'git.*', agentProfile: 'a b' })).toBe(`more: --agent-profile 'a b' --action 'git.*'${tail}`)
     // Only safe characters stay bare, and a number is text like the rest
-    for (const platform of ['win32', 'linux'] as const)
-      expect(hint(platform, { session: 'sess_a', agentProfile: 'Reviewer.v2:x/y@z=1+2-3', limit: 50 })).toBe(
+    for (const shell of ['powershell', 'posix'] as const)
+      expect(hint(shell, { session: 'sess_a', agentProfile: 'Reviewer.v2:x/y@z=1+2-3', limit: 50 })).toBe(
         `more: --session sess_a --agent-profile Reviewer.v2:x/y@z=1+2-3 --limit 50${tail}`
       )
     // A comma and a percent sign are not safe: PowerShell reads the one as an array and cmd the other as a variable
-    expect(hint('win32', { agentProfile: 'a,b%c' })).toBe(`more: --agent-profile 'a,b%c'${tail}`)
+    expect(hint('powershell', { agentProfile: 'a,b%c' })).toBe(`more: --agent-profile 'a,b%c'${tail}`)
+    // A leading @ is splatting in PowerShell
+    expect(hint('powershell', { agentProfile: '@bot' })).toBe(`more: --agent-profile '@bot'${tail}`)
+    // PowerShell ends a single quoted string at a curly single quote too: each of the four is doubled
+    for (const quote of ['\u2018', '\u2019', '\u201A', '\u201B'])
+      expect(hint('powershell', { agentProfile: `Bob${quote}s bot` }), quote).toBe(`more: --agent-profile 'Bob${quote}${quote}s bot'${tail}`)
+    expect(hint('posix', { agentProfile: 'Bob’s bot' })).toBe(`more: --agent-profile 'Bob’s bot'${tail}`)
+  })
+
+  // The shell is told from the platform and the environment: Git Bash on Windows is win32 with a POSIX shell
+  it('the hint is quoted for the shell the environment names', () => {
+    expect(shellOf('win32', {})).toBe('powershell')
+    expect(shellOf('win32', { MSYSTEM: 'MINGW64' })).toBe('posix')
+    expect(shellOf('win32', { SHELL: '/usr/bin/bash' })).toBe('posix')
+    expect(shellOf('win32', { SHELL: 'C:\\Program Files\\Git\\bin\\zsh.exe' })).toBe('posix')
+    expect(shellOf('win32', { SHELL: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe' })).toBe('powershell')
+    expect(shellOf('linux', {})).toBe('posix')
+    expect(shellOf('darwin', { SHELL: '/bin/zsh' })).toBe('posix')
+  })
+
+  // The parser takes a `-` as "read stdin" and a `--…` as the next flag, so no quoting makes them a value
+  it('the hint leaves out a filter whose value the CLI could not take back, and says so', () => {
+    const data = { records: [push], truncated: true, next: { until: push.at, beforeId: push.id } }
+    for (const bad of ['-', '--x']) {
+      const out = humanFor('audit-list', data, { session: 'sess_a', agentProfile: bad }, 'posix')?.split('\n')
+      expect(out?.at(-1), bad).toBe(`more: --session sess_a --until ${push.at} --before-id ${push.id}`)
+      expect(out?.at(-3), bad).toBe('(--agent-profile is not repeated below: its value cannot be given on the command line)')
+    }
+    // A single dash first is a plain value to the parser
+    expect(humanFor('audit-list', data, { agentProfile: '-x' }, 'posix')?.split('\n').at(-1)).toBe(`more: --agent-profile '-x' --until ${push.at} --before-id ${push.id}`)
   })
 
   // Task 5 minor: the CLI's English is the screen's English, so the two cannot drift
@@ -742,19 +771,20 @@ describe('humanFor — audit and policies', () => {
     })
 
     // Where the CLI deliberately differs: its words are the ones a flag takes back (`--decision would-deny`), so a script
-    // reads the table it prints and a person types what it says. The screen has a sentence-case label for the same three
-    // decisions, five coverage classes and three levels; the keys exist there, which this holds to the same sets.
-    it('decisions, coverage classes and levels are the CLI’s flag words, one for each screen label', () => {
-      expect(rowOf({ ...push, ruleId: undefined })).toContain('would-deny')
-      expect(['allow', 'would-deny', 'unknown'].map((d) => en[`settings.security.decision.${d}` as MessageKey])).toEqual(['Allowed', 'Would be denied', 'Unknown'])
-      const coverage = humanFor('policies-show', {
-        mode: 'observe',
-        policy: { rules: [], otherwise: 'allow' },
-        coverage: [{ provider: 'claude', kind: 'chat', classes: { shell: { level: 'seen' }, mcp: { level: 'none' }, network: { level: 'partial' } } }]
-      })
-      for (const word of ['shell', 'file read', 'file write', 'MCP', 'network', 'seen', 'none', 'partial']) expect(coverage, word).toContain(word)
-      for (const key of ['shell', 'file-read', 'file-write', 'mcp', 'network']) expect(en[`settings.security.coverage.class.${key}` as MessageKey], key).toBeTruthy()
-      for (const key of ['seen', 'partial', 'none']) expect(en[`settings.security.coverage.level.${key}` as MessageKey], key).toBeTruthy()
+    // reads the table it prints and a person types what it says. The screen has its own label for the same three
+    // decisions, five coverage classes and three levels (the keys exist there); the wording is the screen's to change.
+    it('decisions, coverage classes and levels are the CLI’s own words, each with a screen label', () => {
+      for (const d of ['allow', 'would-deny', 'unknown']) {
+        expect(rowOf({ ...push, decision: d, ruleId: undefined }), d).toContain(`  ${d}  `)
+        expect(Object.hasOwn(en, `settings.security.decision.${d}`), d).toBe(true)
+      }
+      const classes = { shell: { level: 'seen' }, 'file-read': { level: 'partial' }, 'file-write': { level: 'none' }, mcp: { level: 'seen' }, network: { level: 'none' } }
+      const coverage = humanFor('policies-show', { mode: 'observe', policy: { rules: [], otherwise: 'allow' }, coverage: [{ provider: 'claude', kind: 'chat', classes }] })
+      const [head, row] = (coverage ?? '').split('\n\n')[2].split('\n')
+      expect(head.trim().split(/\s{2,}/)).toEqual(['shell', 'file read', 'file write', 'MCP', 'network'])
+      expect(row.replace('claude chat', '').trim().split(/\s{2,}/)).toEqual(['seen', 'partial', 'none', 'seen', 'none'])
+      for (const key of Object.keys(classes)) expect(Object.hasOwn(en, `settings.security.coverage.class.${key}`), key).toBe(true)
+      for (const key of ['seen', 'partial', 'none']) expect(Object.hasOwn(en, `settings.security.coverage.level.${key}`), key).toBe(true)
     })
   })
 
