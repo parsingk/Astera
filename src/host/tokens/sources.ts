@@ -205,8 +205,11 @@ const str = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? 
 
 /** A file followed from its end less TAIL_CAP, and again so when it gets shorter (made again), never read whole; a cut
  *  first line does not parse and is passed by the readers. The session's reader goes on across such a restart, so a
- *  response met again is not counted again (fix round 1, ruling 1). */
-const follow = async (file: string): Promise<JsonlTail> => {
+ *  response met again is not counted again (fix round 1, ruling 1). `from`: follow it from this byte instead, where it
+ *  ended when it was passed by (a sub-agent file looked at again, fix round 1 Minor 4), so nothing it gained since is
+ *  missed however much it was. */
+const follow = async (file: string, from?: number): Promise<JsonlTail> => {
+  if (from !== undefined) return new JsonlTail(file, { offset: from, restartWithin: TAIL_CAP })
   const size = await fs.stat(file).then(
     (st) => st.size,
     () => 0
@@ -228,8 +231,8 @@ interface Followed {
   since: number
   rollout: { path: string; tail: JsonlTail | null; read: (lines: readonly string[]) => TokensSpent[] } | null
   /** Claude terminal: one reader over the transcript and its sub-agents' files, by path, and every sub-agent file looked
-   *  at, followed or not. Null for a Codex session. */
-  transcript: { read: (lines: readonly string[]) => TokensSpent[]; files: Map<string, JsonlTail>; seen: Set<string> } | null
+   *  at and passed by, with its size then. Null for a Codex session. */
+  transcript: { read: (lines: readonly string[]) => TokensSpent[]; files: Map<string, JsonlTail>; seen: Map<string, number> } | null
   chat: ((lines: readonly string[]) => TokensSpent[]) | null
   /** A Claude chat: whether a turn is under way, begun by its first frame after the `result` that ended the one before,
    *  and when that `result` came (or when the chat was first heard of). */
@@ -374,7 +377,7 @@ export function createTokenSources(d: {
       if (!f) {
         f = fresh(meta.id, ptyId, 'pty')
         // A terminal without a rollout is read as Claude's, through its statusline, until a note names one
-        f.transcript = { read: claudeTokenReader(f.since), files: new Map(), seen: new Set() }
+        f.transcript = { read: claudeTokenReader(f.since), files: new Map(), seen: new Map() }
         terminals.set(ptyId, f)
       }
       noteRollout(f, meta)
@@ -457,19 +460,20 @@ export function createTokenSources(d: {
       // followed. Each file is looked at when the folder first lists it, not at every read (final review M3); one that
       // could not be looked at is tried again at the next. One passed by is looked at again only on a read where the
       // main transcript grew, as it does around a sub-agent's work: a sub-agent resumed in a resumed conversation writes
-      // on in its own old file (deferred minor a), and the reader's message ids count what it holds once
+      // on in its own old file (deferred minor a), followed then from where it ended when it was passed by (fix round 1,
+      // Minor 4), and the reader's message ids count what it holds once
       const agents = path.join(path.dirname(named), path.basename(named, '.jsonl'), 'subagents')
       const names = await fs.readdir(agents).catch(() => [] as string[])
       for (const n of names) {
         const file = path.join(agents, n)
         if (!n.endsWith('.jsonl') || t.files.has(file) || (t.seen.has(file) && !grew)) continue
-        const written = await fs.stat(file).then(
-          (st) => st.mtimeMs,
+        const st = await fs.stat(file).then(
+          (s) => ({ written: s.mtimeMs, size: s.size }),
           () => null
         )
-        if (written === null) continue
-        t.seen.add(file)
-        if (written >= f.since) t.files.set(file, await follow(file))
+        if (st === null) continue
+        if (st.written >= f.since) t.files.set(file, await follow(file, t.seen.get(file)))
+        else if (!t.seen.has(file)) t.seen.set(file, st.size)
       }
     }
     for (const [file, tail] of t.files) if (file !== named) await readTail(f, tail, t.read)

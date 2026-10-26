@@ -473,6 +473,29 @@ describe('createTokenSources', () => {
     }
   })
 
+  // Fix round 1, Minor 4: a background sub-agent resumed into its old file may write more than the window while its
+  // parent's transcript is idle; looked at again, the file is followed from where it ended when it was passed by
+  it('follows an old sub-agent file looked at again from where it ended when it was passed by, however much it gained', async () => {
+    const statusLines: Record<string, string> = {}
+    const r = await rig({ state: () => orch([dispatch('d1', 't1', 'sess_a')]), now: () => T0, statusLines })
+    const transcript = path.join(r.dir, 'conv-5.jsonl')
+    await fs.writeFile(transcript, '')
+    const agents = path.join(r.dir, 'conv-5', 'subagents')
+    await fs.mkdir(agents, { recursive: true })
+    const old = path.join(agents, 'agent-old.jsonl')
+    await fs.writeFile(old, lines(claudeLine(T0 - 3_000_000, 'msg_before', 50, 50, { isSidechain: true })))
+    await fs.utimes(old, new Date(T0 - 3_600_000), new Date(T0 - 3_600_000))
+    statusLines.sess_a = transcript
+    r.ptys.open('pty_a', note('session', 'sess_a'))
+    await r.sources.poll()
+    const padding = lines(...Array.from({ length: 700 }, () => JSON.stringify({ type: 'user', isSidechain: true, pad: 'x'.repeat(970) })))
+    await fs.appendFile(old, lines(claudeLine(T0 + 30, 'msg_resumed', 3, 4, { isSidechain: true })) + padding)
+    await fs.appendFile(transcript, lines(claudeLine(T0 + 40, 'msg_main', 1, 1)))
+    await r.sources.poll()
+    expect(r.store.spent()).toEqual([{ sessionId: 'sess_a', dispatchId: 'd1', input: 4, output: 5 }])
+    r.sources.dispose()
+  })
+
   // Fix round 1, ruling 1: a file that got shorter (made again) is never read whole; it is followed again from its end
   // less the bounded window, by the same reader, so a response it already counted is not counted again
   it('follows a file that got shorter from its end less the window, counting nothing twice', async () => {
