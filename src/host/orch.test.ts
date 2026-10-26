@@ -1573,7 +1573,8 @@ describe('요청 영수증', () => {
       const second = await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-c2' })
       expect(first.status).toBe(200)
       expect(second.replayed).toBe(true)
-      expect(acts.filter(([n]) => n === 'chatSend')).toEqual([['chatSend', ['chat-1', '다음으로']]])
+      // A shell's send is a person's (observe deferred fix round 2, Minor b)
+      expect(acts.filter(([n]) => n === 'chatSend')).toEqual([['chatSend', ['chat-1', '다음으로', { person: true }]]])
       expect(written).toEqual([])
     })
 
@@ -1623,7 +1624,7 @@ describe('요청 영수증', () => {
       expect(retried.replayed, '거절이 영수증으로 남아 재생됐다').toBeFalsy()
       const again = await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-c7' })
       expect(again.replayed).toBe(true)
-      expect(sent).toEqual([['chat-1', '다음으로']])
+      expect(sent).toEqual([['chat-1', '다음으로', { person: true }]])
       expect(written).toEqual([])
     })
 

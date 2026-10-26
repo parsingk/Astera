@@ -720,3 +720,42 @@ describe('chats answer — refused to an MCP client', () => {
     expect(chatAnswer).toHaveBeenCalledTimes(1)
   })
 })
+
+// Observe deferred fix round 2, Minor b: a person's prompt ends the work a finished Run's or an ended attempt's session
+// still holds, and an agent's or the Host's does not, so a send says down to the write whether a person sent it: from
+// a shell or the app, and not from an agent session, an MCP client or the Host
+describe('sessions send — says whether a person sent it', () => {
+  const terminal: HostSession = { id: 't1', kind: 'terminal', title: 't', accountId: 'acc_c', cwd: 'D:/p', alive: true, state: 'waiting' }
+  const chat: HostSession = { ...terminal, id: 'c1', kind: 'chat', state: 'unknown' }
+  const rig = () => {
+    const sendSession = vi.fn(async () => {})
+    const chatSend = vi.fn(async () => ({ sent: true as const }))
+    const deps = makeDeps({
+      listSessions: async () => [terminal, chat],
+      readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }),
+      sendSession,
+      readChat: async () => [],
+      chatSend,
+      sessionTurn: vi.fn(async () => ({ alive: true, state: 'waiting' as const, prompt: null }))
+    } as Partial<OrchServerDeps>)
+    return { deps, sendSession, chatSend }
+  }
+
+  it('marks a send from a shell or the app a person’s, and none from an agent, an MCP client or the Host', async () => {
+    const callers: Array<[{ sessionId: string; role?: 'mcp' }, boolean]> = [
+      [{ sessionId: '' }, true],
+      [{ sessionId: APP_CALLER }, true],
+      [{ sessionId: 'sess_agent' }, false],
+      [{ sessionId: '', role: 'mcp' }, false],
+      [{ sessionId: HOST_CALLER }, false]
+    ]
+    for (const [caller, person] of callers) {
+      const h = rig()
+      expect((await handleCommand(h.deps, caller, 'sessions-send', { id: 't1', text: 'go' })).status, JSON.stringify(caller)).toBe(200)
+      expect((await handleCommand(h.deps, caller, 'sessions-send', { id: 'c1', text: 'go' })).status, JSON.stringify(caller)).toBe(200)
+      const by = person ? { person: true } : undefined
+      expect(h.sendSession, JSON.stringify(caller)).toHaveBeenCalledWith('t1', 'go', true, by)
+      expect(h.chatSend, JSON.stringify(caller)).toHaveBeenCalledWith('c1', 'go', by)
+    }
+  })
+})

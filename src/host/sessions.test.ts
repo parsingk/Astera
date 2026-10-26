@@ -482,6 +482,27 @@ describe('registrySessions — send', () => {
     }
   })
 
+  // Observe deferred fix round 2, Minor b: a person's `sessions send` is written as a person's, its Enter a person's
+  // prompt; an agent's or the Host's is the Host's own
+  it('writes a person’s send marked as a person’s, and any other as the Host’s own', async () => {
+    vi.useFakeTimers()
+    try {
+      const { sessions, ptys } = harness()
+      const sent = sessions.sendSession('ses-1', 'go', true, { person: true })
+      await vi.advanceTimersByTimeAsync(ENTER_DELAY_MS)
+      await sent
+      expect(ptys.submittedBetween('pty-a', -Infinity, Infinity)).toBe('person')
+      expect(ptys.lastPersonWrite('pty-a')).not.toBeNull()
+      clock.now += 1000
+      const other = sessions.sendSession('ses-1', 'go', true)
+      await vi.advanceTimersByTimeAsync(ENTER_DELAY_MS)
+      await other
+      expect(ptys.submittedBetween('pty-a', -Infinity, Infinity)).toBe('host')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('without Enter types the text only, and waits for nothing', async () => {
     const { sessions, agent } = harness()
     await sessions.sendSession('ses-1', 'draft', false)
@@ -575,7 +596,7 @@ describe('registrySessions — chat', () => {
       accounts: async () => [account],
       mintId: () => `id-${++n}`
     })
-    return { sessions, written, cfg, exit: () => exit(0) }
+    return { sessions, written, cfg, procs, exit: () => exit(0) }
   }
   /** The transcript where the Claude rule looks for it: <configDir>/projects/<slug>/<threadId>.jsonl. */
   const plantTranscript = (cfg: string, threadId: string) => {
@@ -631,6 +652,18 @@ describe('registrySessions — chat', () => {
     const { sessions, written } = chatHarness({ provider: 'claude', threadId: 'th' })
     await sessions.sendChat('chat-9', '다음으로 가자')
     expect(written).toEqual([encodeUserTurn('다음으로 가자') + '\n'])
+  })
+
+  // Observe deferred fix round 2, Minor b: a person's send is written as a person's line, any other as the Host's own
+  it('writes a person’s turn marked as a person’s line, and any other as the Host’s own', async () => {
+    for (const provider of ['claude', 'codex'] as const) {
+      const person = chatHarness({ provider, threadId: 'th' })
+      await person.sessions.sendChat('chat-9', 'go', undefined, { person: true })
+      expect(person.procs.submittedBetween('proc-x', -Infinity, Infinity), provider).toBe('person')
+      const host = chatHarness({ provider, threadId: 'th' })
+      await host.sessions.sendChat('chat-9', 'go')
+      expect(host.procs.submittedBetween('proc-x', -Infinity, Infinity), provider).toBe('host')
+    }
   })
 
   // turn/start on the thread in the note, with an id of the Host's own that the app's adapter never
