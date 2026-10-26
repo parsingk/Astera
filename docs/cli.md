@@ -1158,10 +1158,14 @@ say why in `error.details.reason` too: `agent-profile-unavailable` (unknown or a
 Astera keeps out of the sessions it starts. Shared MCP servers that hold a stored secret appear on their own, hidden by
 default (the Gateway gives the session the server, so the raw variables go); the entries you registered name environment
 variables and CLI login presets (`gh`, AWS CLI, Google Cloud CLI, npm, Docker, kubectl), never a value. Hiding applies to
-every agent session, or to the projects an entry is narrowed to, and counts for sessions started afterwards. The list is
-changed only in the app, so an agent cannot switch off its own hiding; an agent session may read it. `credentials doctor`
-says what hiding reaches and what it cannot: a program running as you can still read your files and OS stores, and git
-and Docker hand their stored logins to any program that asks. Astera does not search the machine for credentials.
+every agent session, or to the projects an entry is narrowed to, and counts for sessions started afterwards. A preset
+points its CLI at an empty location of the session's own, so a login made inside one session stays in that session.
+Names the CLIs, Astera or the OS need (`ASTERA_*`, `CLAUDE_*`, `PATH`, `TEMP` and the like) are never hidden. The list is
+changed only in the app, so an agent cannot switch off its own hiding; an agent session may read it, but not the uses
+`credentials show` lists. `credentials doctor` says what hiding reaches and what it cannot: a program running as you can
+still read your files and OS stores, git and Docker hand their stored logins to any program that asks, and a variable
+your shell startup files set can come back in the commands an agent runs through a shell. Astera does not search the
+machine for credentials.
 
 **`audit` and `policies` are observe mode**, the same as **Settings › Security & Access** in the app. After
 `policies set-mode --mode observe`, every session Astera starts records the tool calls it makes once each has run

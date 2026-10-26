@@ -20,7 +20,7 @@ const hideOnly = (over: Partial<HideOnlyEntry> = {}): HideOnlyEntry => ({
   kind: 'hide-only', id: 'hc_1', alias: 'keys', envNames: [], presets: [], hide: { on: true }, createdAt: '2026-10-26T00:00:00.000Z', ...over
 })
 const mcp = (over: Partial<McpSecretEntry> = {}): McpSecretEntry => ({
-  kind: 'mcp-secret', id: 'mcp:m1', serverId: 'm1', serverName: 'linear', secretNames: ['m1-key'], envNames: ['LINEAR_API_KEY'], protectedNames: [], hide: { on: true }, ...over
+  kind: 'mcp-secret', id: 'mcp:m1', serverId: 'm1', serverName: 'linear', secretNames: ['m1-key'], envNames: ['LINEAR_API_KEY'], protectedNames: [], hide: { on: true }, enabled: true, ...over
 })
 const same = (cwd: string): string => cwd
 const forCwd = (entries: CredentialEntry[], cwd = 'D:/work/p', projectOf = same) => hidingFor({ entries, cwd, projectOf, emptyDir: path.join(dir, 'empty') })
@@ -59,6 +59,11 @@ describe('hidingFor', () => {
 
   it('never removes a protected name even if an entry lists one', () => {
     expect(forCwd([hideOnly({ envNames: ['ASTERA_SESSION', 'openai_api_key', 'KEEP_OUT'] })]).remove).toEqual(['KEEP_OUT'])
+  })
+
+  // Final review M3: a session cannot run without its command path, system folders or temp folders
+  it('never removes a variable the OS gives every program, whatever its case', () => {
+    expect(forCwd([hideOnly({ envNames: ['PATH', 'SystemRoot', 'temp', 'TMPDIR', 'HOME', 'KEEP_OUT'] })]).remove).toEqual(['KEEP_OUT'])
   })
 
   it('every preset names what it removes or redirects, and where it was measured', () => {
@@ -111,11 +116,67 @@ describe('createHidingSource', () => {
     expect(src.damaged()).toBe(false)
   })
 
-  it('starts sessions without hiding when the file is damaged', () => {
+  const linear = {
+    version: 1,
+    entries: [{ id: 'm1', kind: 'mcp', name: 'linear', transport: 'stdio', command: 'x', env: { LINEAR_API_KEY: { secret: 'k' } }, providers: ['claude'], importedFrom: 'a', enabled: true }]
+  }
+
+  // Final review M2: the person's own switches are in the damaged file, so the shared servers' keys keep their default
+  it('starts sessions without the registered entries when the file is damaged, the shared servers\u2019 keys still hidden', () => {
+    writeJson('extensions/registry.json', linear)
     writeJson('credentials.json', { version: 7 })
     const src = createHidingSource({ profileDir: dir, projectOf: same })
-    expect(src.get('D:/p')).toEqual({ remove: [], set: {} })
+    expect(src.get('D:/p', 's1')).toEqual({ remove: ['LINEAR_API_KEY'], set: {} })
     expect(src.damaged()).toBe(true)
     expect(existsSync(path.join(dir, 'credentials.json'))).toBe(true)
+  })
+
+  // Final review M1: a file that cannot be read for a moment (Windows renames it into place on every change) is not "no
+  // list": the last list read is used
+  it('uses the last list it read when the file cannot be read, and says so', () => {
+    writeJson('credentials.json', { version: 1, entries: [hideOnly({ envNames: ['A'] })], mcpHide: {} })
+    const logged: string[] = []
+    const src = createHidingSource({ profileDir: dir, projectOf: same, log: (m) => void logged.push(m) })
+    expect(src.get('D:/p', 's1').remove).toEqual(['A'])
+    rmSync(path.join(dir, 'credentials.json'))
+    mkdirSync(path.join(dir, 'credentials.json'))
+    expect(src.get('D:/p', 's2').remove).toEqual(['A'])
+    expect(logged.join('\n')).toMatch(/credentials\.json could not be read/)
+    expect(src.damaged()).toBe(false)
+  })
+
+  // Final review I3: a login made inside one session (gh auth login, npm login) lands in that session's own empty
+  // location, never in one every later session shares
+  it('gives each session its own empty locations, the same again when that session starts again', () => {
+    writeJson('credentials.json', { version: 1, entries: [hideOnly({ presets: ['gh', 'npm'] })], mcpHide: {} })
+    const src = createHidingSource({ profileDir: dir, projectOf: same })
+    const a = src.get('D:/p', 'sess-a')
+    const b = src.get('D:/p', 'sess-b')
+    expect(a.set.GH_CONFIG_DIR).not.toBe(b.set.GH_CONFIG_DIR)
+    expect(a.set.NPM_CONFIG_USERCONFIG).not.toBe(b.set.NPM_CONFIG_USERCONFIG)
+    expect(src.get('D:/p', 'sess-a')).toEqual(a)
+    for (const v of [...Object.values(a.set), ...Object.values(b.set)]) expect(v.startsWith(path.join(dir, 'credentials', 'empty'))).toBe(true)
+    applyHiding({}, a, 'win32')
+    writeFileSync(path.join(a.set.GH_CONFIG_DIR, 'hosts.yml'), 'github.com:\n  user: someone\n')
+    applyHiding({}, b, 'win32')
+    expect(readdirSync(b.set.GH_CONFIG_DIR)).toEqual([])
+    // Two sessions with no id of their own (a How It Works run) never share either
+    expect(src.get('D:/p').set.GH_CONFIG_DIR).not.toBe(src.get('D:/p').set.GH_CONFIG_DIR)
+  })
+
+  it('removes the empty locations of sessions not started for 30 days', () => {
+    writeJson('credentials.json', { version: 1, entries: [hideOnly({ presets: ['gh'] })], mcpHide: {} })
+    // From the real clock: the folders' times are the file system's
+    let now = Date.now()
+    const logged: string[] = []
+    const src = createHidingSource({ profileDir: dir, projectOf: same, now: () => now, log: (m) => void logged.push(m) })
+    const old = src.get('D:/p', 'old-one')
+    applyHiding({}, old, 'win32')
+    now += 31 * 24 * 60 * 60 * 1000
+    const fresh = src.get('D:/p', 'new-one')
+    applyHiding({}, fresh, 'win32')
+    expect(existsSync(fresh.set.GH_CONFIG_DIR)).toBe(true)
+    expect(existsSync(path.dirname(old.set.GH_CONFIG_DIR))).toBe(false)
+    expect(logged.join('\n')).toMatch(/removed/)
   })
 })

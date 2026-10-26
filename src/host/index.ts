@@ -20,6 +20,7 @@ import { createGatewayHub } from './gateway/hub'
 import { createUseRecorder, recordPush, recordingGhRunner, workOfSession } from './credentials/recordUses'
 import { createHostCredentials } from './credentials/commands'
 import { hidingLog } from '../core/extensions/secrets'
+import { createHidingSource, projectOfWorktrees } from '../core/credentials/hiding'
 import { sweepGeneratedMcp } from '../core/extensions/resolve'
 import { hostJobSources } from './jobSources'
 import { hostCompletionChecks } from './completionChecks'
@@ -472,7 +473,9 @@ async function main(): Promise<void> {
     // The app's reader for the same material (ipc.ts): no range, or one git could not read, gives none.
     readCommits: async (root, from, to) => (from && to ? ((await readRange(root, from, to))?.subjects ?? []) : []),
     log: (m) => log.write(m),
-    push: (root) => server.broadcast({ t: 'understanding-state', root })
+    push: (root) => server.broadcast({ t: 'understanding-state', root }),
+    // The Credentials list: the agent writing a record is started in the project, so it loses what a session there would
+    hiding: createHidingSource({ profileDir, projectOf: projectOfWorktrees(() => worktrees.list()), log: hidingLog(profileDir, (m) => log.write(m)) })
   })
   await hostUnderstanding.load()
 
@@ -870,6 +873,8 @@ async function main(): Promise<void> {
   // projects an entry can be narrowed to are the registered ones, read after the state's load (`orch` is made below)
   const credentials = createHostCredentials({
     profileDir,
+    // The app's own GitHub writes (its worktree panel's Create PR) are kept with the uses this Host records itself
+    record: (u) => useRecorder.record(u),
     projects: async () => {
       await orch.ready()
       return orch.state().projects

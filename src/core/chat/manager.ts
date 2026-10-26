@@ -281,7 +281,7 @@ export class ChatSessionManager {
     })
     // The Credentials list's hidden keys and logins go from what the session inherits, before Astera adds its own
     // (credentials design §5), as a terminal session's do
-    if (this.deps.hiding) applyHiding(inherited, this.deps.hiding.get(opts.cwd), this.deps.platform)
+    if (this.deps.hiding) applyHiding(inherited, this.deps.hiding.get(opts.cwd, id), this.deps.platform)
     const env: Record<string, string | undefined> = {
       ...inherited,
       ...(opts.startWithBypass ? BYPASS_ENV : {}),

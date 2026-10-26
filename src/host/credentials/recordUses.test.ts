@@ -4,6 +4,8 @@ import { describe, it, expect } from 'vitest'
 import type { GhResult, GhRunner } from '../../core/github/gh'
 import type { CredentialUse } from '../../core/audit/types'
 import { emptyState, type OrchState } from '../../core/orchestration/state'
+import { readPrState } from '../../core/github/prState'
+import { listIssueItems } from '../../core/github/issueSource'
 import { recordingGhRunner, recordingGitRunner, workOfSession, type UseRecorder } from './recordUses'
 
 const ok = (stdout = ''): GhResult => ({ ok: true, stdout, stderr: '', exitCode: 0 })
@@ -36,6 +38,29 @@ describe('recordingGhRunner', () => {
     await host(['pr', 'checks', '3'], 'D:/p')
     await host(['run', 'rerun', '9', '--failed'], 'D:/p')
     expect(rec.got.map((u) => u.action)).toEqual(['github.ci.rerun'])
+  })
+
+  // Final review I1: the Host's own readers, with their exact arguments, leave nothing when they run in the background
+  it('leaves the lifecycle watch\u2019s PR read and the issue search out of a background caller\u2019s records', async () => {
+    const rec = recorder()
+    const sent: string[][] = []
+    const host = recordingGhRunner(
+      async (args) => {
+        sent.push(args)
+        return ok(args.includes('graphql') ? '{"data":null}' : args.includes('--jq') ? 'o/r' : '{"items":[]}')
+      },
+      { actor: 'host' },
+      rec,
+      { background: true, originOf }
+    )
+    await readPrState(host, 'D:/p', { host: 'github.com', owner: 'o', name: 'r' }, 3)
+    await listIssueItems(host, 'D:/p', { query: 'crash' })
+    expect(sent.length).toBe(3)
+    expect(rec.got).toEqual([])
+    // And the app's own search is a read, which the app's caller does not record either
+    const app = recordingGhRunner(async () => ok('{"items":[]}'), { actor: 'app' }, rec, { background: false, originOf })
+    await listIssueItems(app, 'D:/q', { query: 'crash' })
+    expect(rec.got).toEqual([])
   })
 
   it('records no message text', async () => {

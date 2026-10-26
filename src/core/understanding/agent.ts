@@ -4,6 +4,7 @@
 // 도 거기 적혀 있고, 여기서는 프로세스와 그 주변만 다룬다 — 출력에서 값을 꺼내는 일은
 // core/understanding/agentOutput.ts 가 한다.
 import { spawn } from 'node:child_process'
+import { applyHiding, type HidingSource } from '../credentials/hiding'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { providerOf } from '../providers/meta'
@@ -49,6 +50,9 @@ interface RunArgs {
   log?: (m: string) => void
   /** Test seam; defaults to the session folder's probe (core/sessions/pathProbe.ts). */
   probe?: Probe
+  /** The Credentials list: what it keeps out of a session started in `cwd` is kept out of this agent too (credentials
+   *  final review M12). */
+  hiding?: HidingSource
 }
 
 /** 에이전트를 돌려 **JSON 객체 하나**를 받는다. 스키마 검증은 부르는 쪽(validate.ts)이 한다.
@@ -72,7 +76,9 @@ export async function runAgent(a: RunArgs): Promise<AgentRun> {
   // synchronously, which a dead drive on PATH held for 20 to 60 s.
   if (process.platform === 'win32') await warmWindowsExecutable(d.cliFile).catch(() => null)
   const cmd = wrap(d.cliFile, args)
-  const env = { ...process.env, [d.configDirEnv]: a.account.configDir }
+  const env: Record<string, string | undefined> = { ...process.env }
+  if (a.hiding) applyHiding(env, a.hiding.get(a.cwd), process.platform)
+  env[d.configDirEnv] = a.account.configDir
 
   // **없는 작업 디렉터리는 실행 파일 문제처럼 보인다.** win32 에서 존재하지 않는 cwd 로
   // spawn 하면 오류가 `spawn cmd.exe ENOENT` 로 오는데(실측), 그것을 그대로 사용자에게 보이면

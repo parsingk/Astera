@@ -626,13 +626,14 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   },
   'credentials-show': {
     summary: 'one entry of the Credentials list, by its id or its name, with its last uses',
-    detail: 'A shared MCP server is named by its server name or `mcp:<id>`; its last 20 uses through the Gateway come with it. An agent session may read it.',
+    detail:
+      'A shared MCP server is named by its server name or `mcp:<id>`; its last 20 uses through the Gateway come with it, except to an agent session, which may read the entry but not its uses. A name two entries share answers with their ids; use one.',
     flags: [ID('<id|name>', 'the entry')]
   },
   'credentials-doctor': {
     summary: 'what hiding reaches and what it cannot, on this machine',
     detail:
-      'Each entry\'s hiding, the presets and the platforms they were measured on, the names that are never hidden, and the limits: a program running as you can still read your files and OS stores, git and Docker hand their stored logins to any program that asks. An agent session may read it.'
+      'Each entry\'s hiding, the presets and the platforms they were measured on, the names that are never hidden (what the CLIs and Astera need, and what the OS gives every program, such as PATH and TEMP), where a login made inside a session goes (that session\'s own empty location), and the limits: a program running as you can still read your files and OS stores, git and Docker hand their stored logins to any program that asks, and a variable your shell startup files set can come back in the commands an agent runs through a shell. An agent session may read it.'
   },
   'policies-show': {
     summary: 'whether observe mode is on, the rules in order, and what it can see',

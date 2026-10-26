@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { HideOnlyFields, PluginsCallAnswer } from '../../../core/types'
 import type { HideOnlyEntry, Hiding } from '../../../core/credentials/types'
 import { useI18n } from '../i18n/I18nProvider'
@@ -10,10 +10,12 @@ import {
   entryName,
   hidesText,
   listOf,
+  presetNote,
   projectNameOf,
   samePath,
   splitNames,
   switchNote,
+  whereReady,
   whereText,
   type ListedEntry,
   type ListedPreset,
@@ -40,9 +42,13 @@ export function CredentialsSection(): React.JSX.Element {
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set())
   const [adding, setAdding] = useState(false)
   const platform = window.api.platform
+  /** Which read is the latest: a slower answer to an earlier one is dropped, so it cannot put a switch back. */
+  const reading = useRef(0)
 
   const load = async (): Promise<void> => {
+    const n = ++reading.current
     const r = await window.api.credentials.list().catch(failed)
+    if (n !== reading.current) return
     if (!r.ok) {
       setFailure(r)
       // A damaged file holds no entries to show; the Host away for a moment leaves the last ones read on screen
@@ -59,7 +65,8 @@ export function CredentialsSection(): React.JSX.Element {
     void load()
   }, [])
 
-  /** Runs one change, says why when it did not happen, and reads the list again either way. True when it happened. */
+  /** Runs one change, says why when it did not happen, and reads the list again either way. True when it happened. Busy
+   *  until the list is read again: a control used before that would start from what the change replaced. */
   const change = async (work: () => Promise<PluginsCallAnswer>): Promise<boolean> => {
     if (busy) return false
     setBusy(true)
@@ -71,8 +78,8 @@ export function CredentialsSection(): React.JSX.Element {
       }
       return true
     } finally {
+      await load()
       setBusy(false)
-      void load()
     }
   }
 
@@ -215,17 +222,24 @@ function WherePicker({
   projects,
   platform,
   busy,
-  onChange
+  onChange,
+  narrowing: heldNarrowing,
+  onNarrowing
 }: {
   value: string[] | undefined
   projects: readonly ListedProject[]
   platform: string
   busy: boolean
   onChange: (projects: string[] | undefined) => void
+  /** "Only the projects picked" chosen with none picked yet, when the caller holds it (a new entry does). */
+  narrowing?: boolean
+  onNarrowing?: (on: boolean) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   const group = useId()
-  const [narrowing, setNarrowing] = useState(false)
+  const [ownNarrowing, setOwnNarrowing] = useState(false)
+  const narrowing = heldNarrowing ?? ownNarrowing
+  const setNarrowing = onNarrowing ?? setOwnNarrowing
   const narrow = value !== undefined || narrowing
   const picked = value ?? []
   const unknown = picked.filter((p) => !projects.some((x) => samePath(x.path, p, platform))).map((p) => ({ path: p, name: p }))
@@ -286,8 +300,9 @@ function EntryEditor({
   saveLabel,
   onSave,
   onCancel,
-  ghNote = false,
+  presetNotes = false,
   fields,
+  saveHeld = false,
   children
 }: {
   initial: Draft
@@ -297,9 +312,11 @@ function EntryEditor({
   saveLabel: string
   onSave: (d: Omit<HideOnlyFields, 'hide'>) => void
   onCancel?: () => void
-  /** Says what the gh preset takes away while it is picked: a new entry has no switch of its own yet to say it under. */
-  ghNote?: boolean
+  /** Says what each picked preset takes beside its login: a new entry has no switch of its own yet to say it under. */
+  presetNotes?: boolean
   fields?: React.ReactNode
+  /** Save cannot be pressed yet; `fields` says why. */
+  saveHeld?: boolean
   children?: React.ReactNode
 }): React.JSX.Element {
   const { t } = useI18n()
@@ -322,6 +339,7 @@ function EntryEditor({
           onChange={(e) => setD({ ...d, envNames: e.target.value })}
         />
         <span className="settings-hint">{t('settings.credentials.envNames.hint')}</span>
+        <span className="settings-hint">{t('settings.credentials.envNames.startup')}</span>
       </label>
       <div className="plugin-field">
         <span className="plugin-field-label">{t('settings.credentials.presets')}</span>
@@ -336,12 +354,20 @@ function EntryEditor({
             {!p.measuredOn.includes(platform) && <span className="plugin-status">{t('settings.credentials.preset.unmeasured')}</span>}
           </label>
         ))}
-        {ghNote && d.presets.includes('gh') && <span className="settings-hint">{t('settings.credentials.note.gh')}</span>}
+        {presetNotes &&
+          d.presets.map((id) => {
+            const note = presetNote(id, t)
+            return note === null ? null : (
+              <span key={id} className="settings-hint">
+                {note}
+              </span>
+            )
+          })}
         <span className="settings-hint">{t('settings.credentials.presetNote')}</span>
       </div>
       {fields}
       <div className="remote-actions">
-        <button className="settings-gen-refresh" disabled={busy} onClick={() => onSave({ alias: d.alias, envNames: splitNames(d.envNames), presets: d.presets })}>
+        <button className="settings-gen-refresh" disabled={busy || saveHeld} onClick={() => onSave({ alias: d.alias, envNames: splitNames(d.envNames), presets: d.presets })}>
           {saveLabel}
         </button>
         {onCancel && (
@@ -373,6 +399,8 @@ function NewEntry({
 }): React.JSX.Element {
   const { t } = useI18n()
   const [where, setWhere] = useState<string[] | undefined>(undefined)
+  const [narrowing, setNarrowing] = useState(false)
+  const ready = whereReady(narrowing, where ?? [])
   return (
     <EntryEditor
       initial={{ alias: '', envNames: '', presets: [] }}
@@ -380,8 +408,22 @@ function NewEntry({
       platform={platform}
       busy={busy}
       saveLabel={t('settings.credentials.create')}
-      ghNote
-      fields={<WherePicker value={where} projects={projects} platform={platform} busy={busy} onChange={setWhere} />}
+      presetNotes
+      saveHeld={!ready}
+      fields={
+        <>
+          <WherePicker
+            value={where}
+            projects={projects}
+            platform={platform}
+            busy={busy}
+            onChange={setWhere}
+            narrowing={narrowing}
+            onNarrowing={setNarrowing}
+          />
+          {!ready && <span className="settings-hint is-warning">{t('settings.credentials.scope.pickOne')}</span>}
+        </>
+      }
       onSave={(d) => onAdd({ ...d, hide: where === undefined ? { on: true } : { on: true, projects: where } })}
       onCancel={onCancel}
     />

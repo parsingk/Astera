@@ -19,8 +19,6 @@ describe('the credentials route (credentials design §7)', () => {
   it('sends each command the screen uses, with its arguments, as the app with no session', async () => {
     const { route, sent } = host()
     await route.list()
-    await route.show('mcp:m1')
-    await route.doctor()
     await route.uses({ provider: 'mcp', until: '2026-10-26T10:00:00.000Z', beforeId: 'cu_1', limit: 100 })
     await route.addHideOnly({ alias: 'Cloud', envNames: ['STRIPE_KEY'], presets: ['gh'], hide: { on: true } })
     await route.editHideOnly('hc_1', { presets: [] })
@@ -29,8 +27,6 @@ describe('the credentials route (credentials design §7)', () => {
     await route.reset()
     expect(sent.map(({ cmd, args, sessionId }) => ({ cmd, args, sessionId }))).toEqual([
       { cmd: 'credentials-list', args: {}, sessionId: '' },
-      { cmd: 'credentials-show', args: { id: 'mcp:m1' }, sessionId: '' },
-      { cmd: 'credentials-doctor', args: {}, sessionId: '' },
       { cmd: 'credentials-uses', args: { provider: 'mcp', until: '2026-10-26T10:00:00.000Z', beforeId: 'cu_1', limit: 100 }, sessionId: '' },
       { cmd: 'credentials-add-hide-only', args: { alias: 'Cloud', envNames: ['STRIPE_KEY'], presets: ['gh'], hide: { on: true } }, sessionId: '' },
       { cmd: 'credentials-edit-hide-only', args: { id: 'hc_1', presets: [] }, sessionId: '' },
@@ -41,7 +37,8 @@ describe('the credentials route (credentials design §7)', () => {
   })
 
   it('offers exactly the commands the screen uses', () => {
-    expect(Object.keys(host().route).sort()).toEqual(['addHideOnly', 'deleteHideOnly', 'doctor', 'editHideOnly', 'list', 'reset', 'setHiding', 'show', 'uses'].sort())
+    // `show` and `doctor` are the CLI's: the screen reads an entry's uses in Audit Logs and says the limits itself
+    expect(Object.keys(host().route).sort()).toEqual(['addHideOnly', 'deleteHideOnly', 'editHideOnly', 'list', 'reset', 'setHiding', 'uses'].sort())
   })
 
   it('passes a refusal on with its reason, and a damaged list as a conflict', async () => {

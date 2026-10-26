@@ -364,7 +364,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   })
   sessions.capabilities = capabilities
   // The Credentials list (credentials design §5): a worker's worktree counts as its project's folder
-  const hiding = createHidingSource({ profileDir, projectOf: projectOfWorktrees(() => d.worktrees.list?.() ?? []) })
+  const hiding = createHidingSource({ profileDir, projectOf: projectOfWorktrees(() => d.worktrees.list?.() ?? []), log: hidingLog(profileDir, log) })
   sessions.hiding = hiding
   // Observe mode: an observed Claude session's hook settings, written by its prepare (StatusLineManager.ensureObserveFiles)
   sessions.observeHooks = () => statusLine.ensureObserveFiles()

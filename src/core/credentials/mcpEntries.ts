@@ -2,7 +2,7 @@
 // read from the extension registry each time so the list cannot drift from MCP & Skills. Hidden by default: the Gateway
 // gives the session the server, so the raw variables can go.
 import type { ExtensionRegistry } from '../extensions/types'
-import { isProtectedName } from './store'
+import { isNeverHidden } from './store'
 import type { Hiding, McpSecretEntry } from './types'
 
 export function mcpSecretEntries(registry: ExtensionRegistry, mcpHide: Record<string, Hiding>): McpSecretEntry[] {
@@ -17,9 +17,10 @@ export function mcpSecretEntries(registry: ExtensionRegistry, mcpHide: Record<st
       serverId: e.id,
       serverName: e.name,
       secretNames: secrets.map((s) => s.secret),
-      envNames: secrets.map((s) => s.name).filter((n) => !isProtectedName(n)),
-      protectedNames: secrets.map((s) => s.name).filter(isProtectedName),
-      hide: mcpHide[e.id] ?? { on: true }
+      envNames: secrets.map((s) => s.name).filter((n) => !isNeverHidden(n)),
+      protectedNames: secrets.map((s) => s.name).filter(isNeverHidden),
+      hide: mcpHide[e.id] ?? { on: true },
+      enabled: e.enabled
     })
   }
   return out

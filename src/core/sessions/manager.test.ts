@@ -1595,11 +1595,12 @@ describe('credentials hiding', () => {
     expect(env.ASTERA_GATEWAY_TOKEN).toMatch(/^[A-Za-z0-9_-]{43}$/)
   })
 
-  it('asks the hiding for the session\'s folder', () => {
+  // Final review I3: the session's id names its own empty locations
+  it('asks the hiding for the session\'s folder and its id', () => {
     const { manager } = made()
-    const asked: string[] = []
-    manager.hiding = { get: (cwd) => (asked.push(cwd), { remove: [], set: {} }), damaged: () => false }
-    manager.spawn({ account, cwd: os.tmpdir() })
-    expect(asked).toEqual([os.tmpdir()])
+    const asked: [string, string | undefined][] = []
+    manager.hiding = { get: (cwd, sessionId) => (asked.push([cwd, sessionId]), { remove: [], set: {} }), damaged: () => false }
+    const info = manager.spawn({ account, cwd: os.tmpdir() })
+    expect(asked).toEqual([[os.tmpdir(), info.id]])
   })
 })

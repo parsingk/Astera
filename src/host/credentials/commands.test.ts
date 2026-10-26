@@ -36,9 +36,11 @@ describe('credentials commands', () => {
   it('names its commands and which of them change the list', () => {
     expect([...CREDENTIAL_COMMANDS].sort()).toEqual([
       'credentials-add-hide-only', 'credentials-delete-hide-only', 'credentials-doctor', 'credentials-edit-hide-only', 'credentials-list',
-      'credentials-reset', 'credentials-set-hiding', 'credentials-show', 'credentials-uses'
+      'credentials-record', 'credentials-reset', 'credentials-set-hiding', 'credentials-show', 'credentials-uses'
     ])
-    expect([...CREDENTIAL_CHANGES].sort()).toEqual(['credentials-add-hide-only', 'credentials-delete-hide-only', 'credentials-edit-hide-only', 'credentials-reset', 'credentials-set-hiding'])
+    expect([...CREDENTIAL_CHANGES].sort()).toEqual([
+      'credentials-add-hide-only', 'credentials-delete-hide-only', 'credentials-edit-hide-only', 'credentials-record', 'credentials-reset', 'credentials-set-hiding'
+    ])
   })
 
   it('lists MCP and hide-only entries with no value', async () => {
@@ -55,7 +57,7 @@ describe('credentials commands', () => {
     expect((body(r).presets as { id: string }[]).map((p) => p.id)).toContain('gh')
   })
 
-  // The screen says "nothing changes now" for an MCP entry none of whose variables a session would inherit (design \u00a75)
+  // The screen says "nothing changes now" for an MCP entry none of whose variables a session would inherit (design §5)
   it('says whether an MCP entry\u2019s variables are in the environment sessions inherit, by name only', async () => {
     await writeRegistry()
     const list = async (platform: NodeJS.Platform, env: Record<string, string | undefined>) => {
@@ -69,6 +71,15 @@ describe('credentials commands', () => {
     expect(await list('linux', { LINEAR_API_KEY: 'secret-value' })).toMatchObject({ present: true })
     const h = createHostCredentials({ profileDir: dir, platform: 'linux', now: () => NOW, env: { LINEAR_API_KEY: 'secret-value' } })
     expect(JSON.stringify((await h.command({ cmd: 'credentials-list', args: {}, ...cli, marks: marks() })).body)).not.toContain('secret-value')
+  })
+
+  // Final review I4: an app started from the macOS Dock inherits no shell exports, so a registered name may be in no session
+  it('says the same of an entry you added', async () => {
+    const h = createHostCredentials({ profileDir: dir, platform: 'darwin', now: () => NOW, env: { SENTRY_DSN: 'x' } })
+    await h.command({ cmd: 'credentials-add-hide-only', args: { alias: 'a', envNames: ['STRIPE_KEY'], presets: [] }, ...app, marks: marks() })
+    await h.command({ cmd: 'credentials-add-hide-only', args: { alias: 'b', envNames: ['SENTRY_DSN'], presets: [] }, ...app, marks: marks() })
+    const entries = body(await h.command({ cmd: 'credentials-list', args: {}, ...app, marks: marks() })).entries as { alias: string; present?: unknown }[]
+    expect(entries.map((e) => [e.alias, e.present])).toEqual([['a', false], ['b', true]])
   })
 
   // An entry is narrowed to projects (C9): the screen picks them from the projects this Host has registered
@@ -165,6 +176,86 @@ describe('credentials commands', () => {
     expect((await h.command({ cmd: 'credentials-reset', args: {}, ...app, marks: marks() })).status).toBe(200)
     expect((await h.command({ cmd: 'credentials-list', args: {}, ...app, marks: marks() })).status).toBe(200)
     expect(await fs.readFile(path.join(dir, 'credentials.json.bak'), 'utf8')).toBe('{ broken')
+  })
+
+  // Final review M6: the uses an agent's shell may not list, it may not read through show either
+  it('shows an MCP entry\u2019s last uses to the app and the CLI, not to an agent\u2019s shell', async () => {
+    await writeRegistry()
+    await appendCredentialUses(dir, [{ id: 'cu_1', at: '2026-10-26T11:00:00.000Z', actor: 'session', sessionId: 's9', entryId: 'mcp:m1', provider: 'mcp', action: 'mcp.call', resource: 'linear/x', outcome: 'ok', evidence: 'managed', requestId: 'rq' }], { now: () => NOW })
+    const h = host()
+    expect((body(await h.command({ cmd: 'credentials-show', args: { id: 'linear' }, ...cli, marks: marks() })).uses as unknown[]).length).toBe(1)
+    const asAgent = await h.command({ cmd: 'credentials-show', args: { id: 'linear' }, ...agent, marks: marks() })
+    expect(asAgent.status).toBe(200)
+    expect(body(asAgent).entry).toMatchObject({ id: 'mcp:m1' })
+    expect(body(asAgent).uses).toBeUndefined()
+  })
+
+  // Final review M7: a name is how show finds an entry, so two entries never share one
+  it('refuses a second entry with a name already used, whatever its case, and an ambiguous name in show', async () => {
+    const h = host()
+    const first = await h.command({ cmd: 'credentials-add-hide-only', args: { alias: 'Cloud', envNames: ['A'], presets: [] }, ...app, marks: marks() })
+    const again = await h.command({ cmd: 'credentials-add-hide-only', args: { alias: 'cloud', envNames: ['B'], presets: [] }, ...app, marks: marks() })
+    expect(again.status).toBe(400)
+    expect(body(again).reason).toBe('alias-taken')
+    const other = await h.command({ cmd: 'credentials-add-hide-only', args: { alias: 'Other', envNames: ['B'], presets: [] }, ...app, marks: marks() })
+    const otherId = (body(other).entry as { id: string }).id
+    const renamed = await h.command({ cmd: 'credentials-edit-hide-only', args: { id: otherId, alias: 'CLOUD' }, ...app, marks: marks() })
+    expect(body(renamed).reason).toBe('alias-taken')
+    // Renaming an entry to its own name in another case is no clash
+    const firstId = (body(first).entry as { id: string }).id
+    expect((await h.command({ cmd: 'credentials-edit-hide-only', args: { id: firstId, alias: 'CLOUD' }, ...app, marks: marks() })).status).toBe(200)
+    // A shared server named like an entry: show asks for the id
+    await writeRegistry()
+    await h.command({ cmd: 'credentials-edit-hide-only', args: { id: otherId, alias: 'linear' }, ...app, marks: marks() })
+    const both = await h.command({ cmd: 'credentials-show', args: { id: 'linear' }, ...cli, marks: marks() })
+    expect(both.status).toBe(409)
+    expect(String(body(both).error)).toMatch(/use the id/)
+  })
+
+  // Final review M10: one newest-first pass over the uses finds every entry's last one
+  it('lists each MCP entry\u2019s last use, an unused one with none', async () => {
+    await fs.mkdir(path.join(dir, 'extensions'), { recursive: true })
+    const server = (id: string, name: string) => ({ ...registry.entries[0], id, name })
+    await fs.writeFile(path.join(dir, 'extensions', 'registry.json'), JSON.stringify({ version: 1, entries: [server('m1', 'linear'), server('m2', 'sentry'), server('m3', 'quiet')] }))
+    const use = (id: string, at: string, entryId: string): CredentialUse => ({ id, at, actor: 'session', sessionId: 's1', entryId, provider: 'mcp', action: 'mcp.call', resource: 'x/y', outcome: 'ok', evidence: 'managed', requestId: 'rq' })
+    await appendCredentialUses(dir, [use('cu_1', '2026-10-24T10:00:00.000Z', 'mcp:m2'), use('cu_2', '2026-10-25T10:00:00.000Z', 'mcp:m1'), use('cu_3', '2026-10-26T09:00:00.000Z', 'mcp:m1')], { now: () => NOW })
+    const entries = body(await host().command({ cmd: 'credentials-list', args: {}, ...app, marks: marks() })).entries as { id: string; lastUsedAt?: string }[]
+    expect(Object.fromEntries(entries.map((e) => [e.id, e.lastUsedAt ?? null]))).toEqual({
+      'mcp:m1': '2026-10-26T09:00:00.000Z',
+      'mcp:m2': '2026-10-24T10:00:00.000Z',
+      'mcp:m3': null
+    })
+  })
+
+  // Final review I2: the app's own Create PR runs in the app; the Host keeps its records, as the app's, and nobody else's
+  it('records the app\u2019s own GitHub writes for the app alone, names and outcomes only', async () => {
+    const got: unknown[] = []
+    const h = createHostCredentials({ profileDir: dir, now: () => NOW, record: (u) => void got.push(u) })
+    const uses = [
+      { action: 'git.remote.write', resource: 'o/r feat/x', outcome: 'ok' },
+      { action: 'github.pr.create', resource: 'o/r', outcome: 'failed' }
+    ]
+    expect((await h.command({ cmd: 'credentials-record', args: { uses }, ...app, marks: marks() })).status).toBe(200)
+    expect(got).toEqual([
+      { actor: 'app', provider: 'github', action: 'git.remote.write', resource: 'o/r feat/x', outcome: 'ok', evidence: 'observed' },
+      { actor: 'app', provider: 'github', action: 'github.pr.create', resource: 'o/r', outcome: 'failed', evidence: 'observed' }
+    ])
+    for (const caller of [cli, agent]) expect((await h.command({ cmd: 'credentials-record', args: { uses }, ...caller, marks: marks() })).status).toBe(403)
+    const bad = await h.command({ cmd: 'credentials-record', args: { uses: [{ action: 'mcp.call', resource: 'x', outcome: 'ok' }] }, ...app, marks: marks() })
+    expect(bad.status).toBe(400)
+    const long = await h.command({ cmd: 'credentials-record', args: { uses: [{ action: 'github.write', resource: 'x'.repeat(400), outcome: 'ok' }] }, ...app, marks: marks() })
+    expect(long.status).toBe(400)
+    expect(got).toHaveLength(2)
+  })
+
+  // Final review M2, M3, I3, I4: what doctor says now
+  it('doctor says what a damaged list still hides, the names the OS needs, where logins made in a session go, and shell startup files', async () => {
+    await fs.writeFile(path.join(dir, 'credentials.json'), '{ broken')
+    const text = (body(await host('linux').command({ cmd: 'credentials-doctor', args: {}, ...cli, marks: marks() })).lines as { text: string }[]).map((l) => l.text).join('\n')
+    expect(text).toMatch(/entries you added are not hidden; shared MCP servers\u2019 keys stay hidden by default/)
+    expect(text).toMatch(/PATH/)
+    expect(text).toMatch(/own empty locations/)
+    expect(text).toMatch(/startup files/)
   })
 
   it('counts a change that landed as an effect', async () => {

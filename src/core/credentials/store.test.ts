@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { CredentialsDamaged, isProtectedName, newHideOnlyId, readCredentials, validateHideOnly, writeCredentials } from './store'
+import { CredentialsDamaged, isProtectedName, isSystemName, newHideOnlyId, readCredentials, validateHideOnly, writeCredentials } from './store'
 import type { CredentialsFile } from './types'
 
 let dir: string
@@ -52,6 +52,14 @@ describe('the credentials registry', () => {
     expect(validateHideOnly({ alias: 'a', envNames: [], presets: ['az'] }, presets)).toEqual({ ok: false, reason: 'unknown-preset' })
     expect(validateHideOnly({ alias: 'a', envNames: [], presets: [] }, presets)).toEqual({ ok: false, reason: 'empty' })
     expect(validateHideOnly({ alias: '  ', envNames: ['X'], presets: [] }, presets)).toEqual({ ok: false, reason: 'alias-empty' })
+  })
+
+  // Final review M3
+  it('validateHideOnly refuses a variable the OS gives every program, whatever its case', () => {
+    for (const n of ['PATH', 'Path', 'SystemRoot', 'TEMP', 'tmp', 'TMPDIR', 'HOME', 'USERPROFILE', 'APPDATA', 'COMSPEC'])
+      expect(validateHideOnly({ alias: 'a', envNames: [n], presets: [] }, []), n).toEqual({ ok: false, reason: 'system-name' })
+    expect(isSystemName('PATHEXT')).toBe(true)
+    expect(isSystemName('MY_PATH')).toBe(false)
   })
 
   it('makes hide-only ids that differ', () => {

@@ -70,6 +70,7 @@ import { createExtensionsRoute } from './host/extensionsRoute'
 import { createAgentProfilesRoute } from './host/agentProfilesRoute'
 import { createAuditRoute } from './host/auditRoute'
 import { createCredentialsRoute } from './host/credentialsRoute'
+import { createAppPullRequests } from './host/appPullRequests'
 import { createSourcesRoute } from './host/sourcesRoute'
 import { createHostGitHubRoute } from './host/hostGitHubRoute'
 import { needsHostGitHub } from '../core/orchestration/hostGitHub'
@@ -4278,9 +4279,16 @@ export function registerIpc(
       return { title, body, commitCount: commits.length, dirtyCount, behindCount }
     }
   )
-  ipcMain.handle('pr.create', (_e, req: Parameters<typeof createPullRequest>[0]) =>
-    createPullRequest(req)
-  )
+  // Its push and `gh pr create` are the app's GitHub uses, kept by the Host with every other (credentials design §6)
+  const createAppPr = createAppPullRequests({
+    call: (m) => orchCall(m),
+    originOf: async (cwd) => {
+      const r = await git(['remote', 'get-url', 'origin'], { cwd })
+      return r.ok && r.stdout !== '' ? r.stdout : null
+    },
+    log: (m) => orchLog(m)
+  })
+  ipcMain.handle('pr.create', (_e, req: Parameters<typeof createPullRequest>[0]) => createAppPr(req))
 
   // PR snapshots for the worktree panel (design doc §4). Created here because it needs `send`;
   // start() probes gh once and announces the result — it fetches nothing until subscribed.
@@ -4789,8 +4797,6 @@ export function registerIpc(
   const credentials = createCredentialsRoute({ call: (m) => orchCall(m) })
   type Cred = typeof credentials
   ipcMain.handle('credentials.list', () => credentials.list())
-  ipcMain.handle('credentials.show', (_e, id: unknown) => credentials.show(id as string))
-  ipcMain.handle('credentials.doctor', () => credentials.doctor())
   ipcMain.handle('credentials.uses', (_e, q: unknown) => credentials.uses(q as Parameters<Cred['uses']>[0]))
   ipcMain.handle('credentials.addHideOnly', (_e, e: unknown) => credentials.addHideOnly(e as Parameters<Cred['addHideOnly']>[0]))
   ipcMain.handle('credentials.editHideOnly', (_e, id: unknown, changes: unknown) => credentials.editHideOnly(id as string, changes as Parameters<Cred['editHideOnly']>[1]))
@@ -4926,6 +4932,8 @@ export function registerIpc(
    *  무엇을 하는지 모르고, 이쪽은 수집기가 어떻게 Unit 을 찾는지 모른다. */
   const understandingPipeline = new UnderstandingPipeline({
     store: understanding,
+    // The Credentials list: the agent writing a record is started in the project, so it loses what a session there would
+    hiding: core.sessions.hiding,
     accountOf: (id) => {
       try {
         return core.accounts.get(id)

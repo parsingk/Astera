@@ -11,8 +11,6 @@ export function createCredentialsRoute(d: { call: Call }): CredentialsApi {
   const send = hostSender(d)
   return {
     list: () => send('credentials-list', {}),
-    show: (id) => send('credentials-show', { id }),
-    doctor: () => send('credentials-doctor', {}),
     uses: (q) => send('credentials-uses', { ...q }),
     addHideOnly: (e) => send('credentials-add-hide-only', { ...e }),
     editHideOnly: (id, changes) => send('credentials-edit-hide-only', { id, ...changes }),

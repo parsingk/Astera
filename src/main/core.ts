@@ -295,7 +295,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   sessions.capabilities = capabilities
   // The Credentials list (credentials design §5), shared by both managers: a worker's worktree counts as its project's
   // folder. `worktrees` is made below; this only reads it at a spawn, long after.
-  const hiding = createHidingSource({ profileDir: userDataDir, projectOf: projectOfWorktrees(() => worktrees.list()) })
+  const hiding = createHidingSource({ profileDir: userDataDir, projectOf: projectOfWorktrees(() => worktrees.list()), log: hidingLog(userDataDir, sessionsLog) })
   sessions.hiding = hiding
   // Observe mode: an observed Claude session's hook settings, written by its prepare (StatusLineManager.ensureObserveFiles)
   sessions.observeHooks = () => statusLine.ensureObserveFiles()

@@ -21,6 +21,15 @@ export class CredentialsDamaged extends RepairNeeded {
 /** Names the provider CLIs and Astera need to run (credentials design §4, my call 1): never hidden, whatever their case. */
 const PROTECTED = /^(?:ASTERA_|CLAUDE_|CODEX_|ANTHROPIC_|OPENAI_)/i
 export const isProtectedName = (name: string): boolean => PROTECTED.test(name)
+/** What the OS gives every program, which a session cannot run without (final review M3): the command path, the system
+ *  and temp folders, home and the user. Never hidden either, whatever their case. */
+const SYSTEM: ReadonlySet<string> = new Set([
+  'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'SYSTEMDRIVE', 'TEMP', 'TMP', 'TMPDIR', 'HOME', 'HOMEDRIVE', 'HOMEPATH',
+  'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA', 'PROGRAMFILES', 'USERNAME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'TERM'
+])
+export const isSystemName = (name: string): boolean => SYSTEM.has(name.toUpperCase())
+/** Names no entry ever takes from a session: the protected ones and the OS's. */
+export const isNeverHidden = (name: string): boolean => isProtectedName(name) || isSystemName(name)
 export const isEnvName = (name: string): boolean => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)
 
 export const newHideOnlyId = (): string => `hc_${randomBytes(6).toString('hex')}`
@@ -92,7 +101,7 @@ export async function writeCredentials(profileDir: string, f: CredentialsFile): 
   await writeThroughTmp(file, JSON.stringify(f, null, 2) + '\n')
 }
 
-export type HideOnlyRefusal = 'protected-name' | 'bad-name' | 'empty' | 'unknown-preset' | 'alias-empty'
+export type HideOnlyRefusal = 'protected-name' | 'system-name' | 'bad-name' | 'empty' | 'unknown-preset' | 'alias-empty'
 
 /** Whether a hide-only entry may be kept: a name, a preset Astera knows, nothing protected. */
 export function validateHideOnly(
@@ -103,6 +112,7 @@ export function validateHideOnly(
   if (e.envNames.length === 0 && e.presets.length === 0) return { ok: false, reason: 'empty' }
   if (e.envNames.some((n) => !isEnvName(n))) return { ok: false, reason: 'bad-name' }
   if (e.envNames.some(isProtectedName)) return { ok: false, reason: 'protected-name' }
+  if (e.envNames.some(isSystemName)) return { ok: false, reason: 'system-name' }
   if (e.presets.some((p) => !knownPresets.includes(p))) return { ok: false, reason: 'unknown-preset' }
   return { ok: true }
 }

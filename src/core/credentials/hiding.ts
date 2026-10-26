@@ -1,14 +1,15 @@
 // Keeping the Credentials list's keys and logins out of agent sessions (credentials design §5). The session managers ask
 // `HidingSource.get(cwd)` while they build a session's environment, before Astera adds its own variables, so nothing an
 // entry names can take away the session's identity, its Gateway token or a value a shared server is given.
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, rmSync, statSync, utimesSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import path from 'node:path'
 import { isPathWithin } from '../files/tree'
 import { extensionPaths, profilePaths } from '../profile/paths'
 import type { ExtensionRegistry } from '../extensions/types'
 import { mcpSecretEntries } from './mcpEntries'
 import { PRESETS } from './presets'
-import { isProtectedName, parseCredentials } from './store'
+import { isNeverHidden, parseCredentials } from './store'
 import type { CredentialEntry, CredentialsFile, Hiding } from './types'
 
 export interface HidingChange {
@@ -28,7 +29,7 @@ export function hidingFor(a: { entries: CredentialEntry[]; cwd: string; projectO
   const remove: string[] = []
   const set: Record<string, string> = {}
   const add = (n: string): void => {
-    if (!isProtectedName(n) && !remove.includes(n)) remove.push(n)
+    if (!isNeverHidden(n) && !remove.includes(n)) remove.push(n)
   }
   for (const e of a.entries) {
     if (!applies(e.hide, project)) continue
@@ -39,7 +40,7 @@ export function hidingFor(a: { entries: CredentialEntry[]; cwd: string; projectO
       if (!p) continue
       for (const n of p.remove) add(n)
       for (const [name, kind] of Object.entries(p.redirect)) {
-        if (isProtectedName(name)) continue
+        if (isNeverHidden(name)) continue
         set[name] = kind === 'empty-dir' ? path.join(a.emptyDir, p.id) : path.join(a.emptyDir, p.id, name)
       }
     }
@@ -71,26 +72,75 @@ export function projectOfWorktrees(list: () => readonly { path: string; repoPath
 }
 
 export interface HidingSource {
-  get(cwd: string): HidingChange
-  /** The list file is damaged: nothing is hidden until it is repaired (Settings and `doctor` say so). */
+  /** What a session started in `cwd` loses. `sessionId` names its own empty locations (one nobody shares without it). */
+  get(cwd: string, sessionId?: string): HidingChange
+  /** The list file is damaged: the registered entries are not hidden until it is repaired (Settings and `doctor` say
+   *  so); the shared servers' keys keep their default. */
   damaged(): boolean
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
+const EMPTY_LIST: CredentialsFile = { version: 1, entries: [], mcpHide: {} }
+/** How long a session's empty locations are kept after it last started (the records' own 30 days). */
+const KEEP_EMPTY_MS = 30 * 24 * 60 * 60 * 1000
+const SWEEP_EVERY_MS = 60 * 60 * 1000
+
 /** Reads the list and the shared MCP servers at every call, so a change counts for the next session whichever process
- *  starts it. Both are small files read once per spawn. Never throws: a damaged list hides nothing. */
-export function createHidingSource(a: { profileDir: string; projectOf: (cwd: string) => string }): HidingSource {
+ *  starts it. Both are small files read once per spawn. Never throws. A damaged list hides only the shared servers' keys
+ *  by their default (C7, final review M2); a list that cannot be read for a moment is the last one read (final review
+ *  M1). Each session gets empty locations of its own, the same ones each time it starts again, so a login made inside it
+ *  stays its own (final review I3); those of a session not started for 30 days are removed. */
+export function createHidingSource(a: {
+  profileDir: string
+  projectOf: (cwd: string) => string
+  now?: () => number
+  log?: (m: string) => void
+}): HidingSource {
+  const now = a.now ?? Date.now
+  const emptyRoot = profilePaths(a.profileDir).credentialEmpty
   let damaged = false
+  /** The last list read, for a moment the file cannot be read. */
+  let last: CredentialsFile = EMPTY_LIST
   const readList = (): CredentialsFile | null => {
     let text: string
     try {
       text = readFileSync(profilePaths(a.profileDir).credentials, 'utf8')
-    } catch {
-      return { version: 1, entries: [], mcpHide: {} }
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code
+      if (code === 'ENOENT' || code === 'ENOTDIR') return (last = EMPTY_LIST)
+      a.log?.(`credentials.json could not be read (${String(e)}); this session is hidden by the list as last read`)
+      return last
     }
-    return parseCredentials(text)
+    const f = parseCredentials(text)
+    if (f !== null) last = f
+    return f
   }
+  let sweptAt = -Infinity
+  const sweep = (t: number): void => {
+    if (t - sweptAt < SWEEP_EVERY_MS) return
+    sweptAt = t
+    let names: string[]
+    try {
+      names = readdirSync(emptyRoot)
+    } catch {
+      return
+    }
+    for (const n of names) {
+      const p = path.join(emptyRoot, n)
+      try {
+        const st = statSync(p)
+        if (!st.isDirectory() || t - st.mtimeMs < KEEP_EMPTY_MS) continue
+        rmSync(p, { recursive: true, force: true })
+        a.log?.(`credentials: removed ${p}, the CLI login locations of a session not started for 30 days`)
+      } catch (e) {
+        a.log?.(`credentials: could not remove ${p}: ${String(e)}`)
+      }
+    }
+  }
+  /** A session's own folder of empty locations; a spawn with no session id gets one nobody else has. */
+  const rootOf = (sessionId: string | undefined): string =>
+    path.join(emptyRoot, sessionId === undefined ? `once-${randomBytes(6).toString('hex')}` : sessionId.replace(/[^A-Za-z0-9_-]/g, '_'))
   const readRegistry = (): ExtensionRegistry => {
     try {
       const v: unknown = JSON.parse(readFileSync(extensionPaths(a.profileDir).registry, 'utf8'))
@@ -100,18 +150,31 @@ export function createHidingSource(a: { profileDir: string; projectOf: (cwd: str
     }
   }
   return {
-    get(cwd) {
+    get(cwd, sessionId) {
       const list = readList()
       damaged = list === null
-      if (list === null) return { remove: [], set: {} }
       let shared: CredentialEntry[] = []
       try {
-        shared = mcpSecretEntries(readRegistry(), list.mcpHide)
+        shared = mcpSecretEntries(readRegistry(), list?.mcpHide ?? {})
       } catch {
         // A registry Astera did not write in this shape: its servers' variables are not hidden, the spawn goes on
       }
-      const entries: CredentialEntry[] = [...list.entries, ...shared]
-      return hidingFor({ entries, cwd, projectOf: a.projectOf, emptyDir: profilePaths(a.profileDir).credentialEmpty })
+      // A damaged list holds the person's own switches: none of them is guessed, the shared servers keep their default
+      const entries: CredentialEntry[] = list === null ? shared : [...list.entries, ...shared]
+      const t = now()
+      sweep(t)
+      const root = rootOf(sessionId)
+      const change = hidingFor({ entries, cwd, projectOf: a.projectOf, emptyDir: root })
+      if (Object.keys(change.set).length > 0) {
+        // Started now: the sweep counts its 30 days from here
+        try {
+          mkdirSync(root, { recursive: true })
+          utimesSync(root, t / 1000, t / 1000)
+        } catch (e) {
+          a.log?.(`credentials: could not prepare ${root}: ${String(e)}`)
+        }
+      }
+      return change
     },
     damaged: () => damaged
   }

@@ -22,8 +22,19 @@ describe('mcpSecretEntries', () => {
   it('lists a shared server with a stored secret, its variable names, hidden by default', () => {
     const r = registry(mcp('m1', { GITHUB_TOKEN: { secret: 'm1-github' }, LOG_LEVEL: { value: 'info' } }))
     expect(mcpSecretEntries(r, {})).toEqual([
-      { kind: 'mcp-secret', id: 'mcp:m1', serverId: 'm1', serverName: 'server-m1', secretNames: ['m1-github'], envNames: ['GITHUB_TOKEN'], protectedNames: [], hide: { on: true } }
+      { kind: 'mcp-secret', id: 'mcp:m1', serverId: 'm1', serverName: 'server-m1', secretNames: ['m1-github'], envNames: ['GITHUB_TOKEN'], protectedNames: [], hide: { on: true }, enabled: true }
     ])
+  })
+
+  // Final review M8: a server switched off in MCP & Skills is not used, so its note must not say it is
+  it('says whether the server is switched on', () => {
+    expect(mcpSecretEntries(registry({ ...mcp('m1', { K: { secret: 's' } }), enabled: false }), {})[0].enabled).toBe(false)
+  })
+
+  it('keeps a variable the OS gives every program out of the hiding', () => {
+    const [e] = mcpSecretEntries(registry(mcp('m1', { PATH: { secret: 'p' }, SERP_KEY: { secret: 's' } })), {})
+    expect(e.envNames).toEqual(['SERP_KEY'])
+    expect(e.protectedNames).toEqual(['PATH'])
   })
 
   it('leaves out a server with no stored secret', () => {

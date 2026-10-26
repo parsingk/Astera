@@ -31,9 +31,11 @@ export interface McpSecretEntry {
   secretNames: string[]
   /** The variable names its secrets go into, less the protected ones. */
   envNames: string[]
-  /** Variable names of its secrets that can never be hidden (`isProtectedName`). */
+  /** Variable names of its secrets that can never be hidden (`isNeverHidden`). */
   protectedNames: string[]
   hide: Hiding
+  /** Switched on in MCP & Skills: a server switched off is not used, though its variables are still hidden. */
+  enabled: boolean
 }
 
 export type CredentialEntry = HideOnlyEntry | McpSecretEntry

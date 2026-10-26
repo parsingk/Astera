@@ -2767,6 +2767,45 @@ describe('GitHub writes and request receipts (MCP P2-B)', () => {
     ])
   })
 
+  // Final review M11: the work a session holds reaches its records through the Host's own state: a coordinator's Run and
+  // Job, a worker's Task with them (a worker reads GitHub through Astera; only the coordinator and the person write)
+  it('a coordinator’s github-pr-create and a worker’s GitHub read leave session records with their work', async () => {
+    const { runId, projectId } = await finishedRun()
+    const file = path.join(dir, 'orchestration.json')
+    const s = JSON.parse(await fs.readFile(file, 'utf8')) as OrchState
+    const task = s.tasks.find((t) => t.runId === runId)!
+    const jobId = s.runs.find((r) => r.id === runId)!.jobId
+    s.runs = s.runs.map((r) => (r.id === runId ? { ...r, coordinatorSessionId: 'ses_coord' } : r))
+    s.dispatches = [
+      ...s.dispatches,
+      { id: 'd_w', taskId: task.id, provider: 'claude', accountId: 'acc', sessionId: 'ses_worker', cwd: WT, specPath: 'D:/specs/s.md', startedAt: new Date().toISOString(), workerState: 'ready', retained: false }
+    ]
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const g = github()
+    const got: { actor: string; sessionId?: string; taskId?: string; runId?: string; jobId?: string; action: string }[] = []
+    const orch = orchOver({
+      act,
+      // Both sessions are alive, so the load's restart cleanup leaves their Dispatch and coordinator slot open
+      aliveSessionIds: () => new Set(['ses_coord', 'ses_worker']),
+      github: {
+        ...g.dep,
+        // As the real maker does: `gh pr create` through the runner it is handed
+        createPr: async (req: unknown, d?: { runGh?: (args: string[], cwd: string) => Promise<unknown> }) => {
+          await d?.runGh?.(['pr', 'create', '--title', 't'], WT)
+          return g.dep.createPr(req)
+        }
+      },
+      useRecorder: { record: (u) => void got.push(u) }
+    })
+    const cli = { role: 'cli' as const, toOthers: () => {} }
+    expect((await orch.call({ cmd: 'github-pr-create', args: { run: runId }, sessionId: 'ses_coord', from: cli })).status).toBe(200)
+    expect((await orch.call({ cmd: 'github-issue', args: { project: projectId, number: 5 }, sessionId: 'ses_worker', from: cli })).status).toBe(200)
+    expect(got.map(({ actor, sessionId, taskId, runId: run, jobId: job, action }) => ({ actor, sessionId, taskId, runId: run, jobId: job, action }))).toEqual([
+      { actor: 'session', sessionId: 'ses_coord', taskId: undefined, runId, jobId, action: 'github.pr.create' },
+      { actor: 'session', sessionId: 'ses_worker', taskId: task.id, runId, jobId, action: 'github.read' }
+    ])
+  })
+
   it('github-pr-create hands the pull request maker runners that record for the caller', async () => {
     const { runId } = await finishedRun()
     const g = github()

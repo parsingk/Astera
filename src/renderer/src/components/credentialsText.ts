@@ -81,19 +81,41 @@ export function whereText(e: CredentialEntry, projectName: (path: string) => str
   return t('settings.credentials.where.projects', { names: e.hide.projects.map((p) => projectName(p) ?? p).join(', ') })
 }
 
-/** What turning an entry's switch on changes for the person, where it is more than the names it lists: the gh preset
- *  takes away what agents did with gh; an MCP server keeps working through Astera, or nothing changes now when no
- *  session would inherit its variables. Null when the names say it all. */
-export function switchNote(e: CredentialEntry & { present?: boolean }, t: T): string | null {
-  if (e.kind === 'mcp-secret') return e.present === false ? t('settings.credentials.note.mcpNothingNow') : t('settings.credentials.note.mcp')
-  return e.presets.includes('gh') ? t('settings.credentials.note.gh') : null
+/** What else an agent loses with each preset, beside the login (final review M13). */
+const PRESET_NOTES: Record<string, MessageKey> = {
+  gh: 'settings.credentials.note.gh',
+  aws: 'settings.credentials.preset.note.aws',
+  gcloud: 'settings.credentials.preset.note.gcloud',
+  npm: 'settings.credentials.preset.note.npm',
+  docker: 'settings.credentials.preset.note.docker',
+  kubectl: 'settings.credentials.preset.note.kubectl'
 }
+
+export const presetNote = (id: string, t: T): string | null => (Object.hasOwn(PRESET_NOTES, id) ? t(PRESET_NOTES[id]) : null)
+
+/** What turning an entry's switch on changes for the person, where it is more than the names it lists: what its presets
+ *  take besides the login; that an MCP server keeps working through Astera, or is switched off and not used; that
+ *  nothing changes now when no session started now inherits its variables (`present`). Null when the names say it all. */
+export function switchNote(e: CredentialEntry & { present?: boolean }, t: T): string | null {
+  if (e.kind === 'mcp-secret') {
+    if (e.enabled === false) return t('settings.credentials.note.mcpOff')
+    return e.present === false ? t('settings.credentials.note.nothingNow') : t('settings.credentials.note.mcp')
+  }
+  const notes = e.presets.flatMap((id) => presetNote(id, t) ?? [])
+  if (notes.length > 0) return notes.join(' ')
+  return e.present === false ? t('settings.credentials.note.nothingNow') : null
+}
+
+/** Whether a new entry's place can be saved: "only the projects picked" needs one picked (final review M4). */
+export const whereReady = (narrowing: boolean, picked: readonly string[]): boolean => !narrowing || picked.length > 0
 
 /** Variable names as typed: separated by commas or spaces, each once. */
 export const splitNames = (s: string): string[] => [...new Set(s.split(/[\s,]+/).filter((n) => n !== ''))]
 
 const REFUSALS: Record<string, MessageKey> = {
   'protected-name': 'settings.credentials.refuse.protected-name',
+  'system-name': 'settings.credentials.refuse.system-name',
+  'alias-taken': 'settings.credentials.refuse.alias-taken',
   'bad-name': 'settings.credentials.refuse.bad-name',
   empty: 'settings.credentials.refuse.empty',
   'unknown-preset': 'settings.credentials.refuse.unknown-preset',
@@ -207,7 +229,11 @@ export const CREDENTIAL_KEYS: MessageKey[] = [
   'settings.credentials.scope.noProjects',
   'settings.credentials.note.gh',
   'settings.credentials.note.mcp',
-  'settings.credentials.note.mcpNothingNow',
+  'settings.credentials.note.mcpOff',
+  'settings.credentials.note.nothingNow',
+  ...Object.values(PRESET_NOTES),
+  'settings.credentials.envNames.startup',
+  'settings.credentials.scope.pickOne',
   'settings.credentials.presetNote',
   'settings.credentials.preset.unmeasured',
   'settings.credentials.damaged',

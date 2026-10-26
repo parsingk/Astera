@@ -314,7 +314,7 @@ export class SessionManager {
     const env = this.envFor(opts.account)
     // The Credentials list's hidden keys and logins go from what the session inherits, before Astera adds its own below
     // (credentials design §5): no entry can take away the session's identity, its Gateway token or a shared server's value
-    if (this.hiding) applyHiding(env, this.hiding.get(opts.cwd), this.checks.platform)
+    if (this.hiding) applyHiding(env, this.hiding.get(opts.cwd, id), this.checks.platform)
     // Shared extensions: their environment values only here, in this process's environment (design D5)
     if (caps) Object.assign(env, caps.env, gatewayTokenEnv(caps))
     // What Astera offers, told to a codex session as it starts. A Claude session gets the same lines from

@@ -407,8 +407,6 @@ const api = {
   // Credentials list, through main's route
   credentials: {
     list: invoke('credentials.list'),
-    show: invoke('credentials.show'),
-    doctor: invoke('credentials.doctor'),
     uses: invoke('credentials.uses'),
     addHideOnly: invoke('credentials.addHideOnly'),
     editHideOnly: invoke('credentials.editHideOnly'),

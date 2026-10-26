@@ -2,7 +2,7 @@
 // kept as long and as large as the tool calls are (the audit store's own machinery, audit/store.ts).
 import { randomBytes } from 'node:crypto'
 import { profilePaths } from '../profile/paths'
-import { appendDated, queryDatedIn, type AuditStoreOptions } from '../audit/store'
+import { appendDated, queryDatedIn, visitDaysIn, type AuditStoreOptions } from '../audit/store'
 import type { CredentialUse } from '../audit/types'
 
 export const newUseId = (): string => `cu_${randomBytes(8).toString('hex')}`
@@ -49,4 +49,25 @@ export function queryCredentialUses(
     (f.provider === undefined || u.provider === f.provider) &&
     (f.sessionId === undefined || u.sessionId === f.sessionId)
   return queryDatedIn(profilePaths(profileDir).credentialUses, useOf, test, f, o)
+}
+
+/** The newest use of each of these entries, in one newest-first pass that stops once each has one (final review M10): the
+ *  list asks it for every shared server at every read, and an entry never used would otherwise read every kept day. */
+export async function lastUses(profileDir: string, entryIds: readonly string[], o: Pick<AuditStoreOptions, 'now' | 'keepDays'> = {}): Promise<Map<string, string>> {
+  const want = new Set(entryIds)
+  const found = new Map<string, string>()
+  if (want.size === 0) return found
+  await visitDaysIn(
+    profilePaths(profileDir).credentialUses,
+    useOf,
+    (u) => u.entryId !== undefined && want.has(u.entryId) && !found.has(u.entryId),
+    {},
+    (u) => {
+      found.set(u.entryId as string, u.at)
+      return found.size < want.size
+    },
+    () => found.size >= want.size,
+    o
+  )
+  return found
 }

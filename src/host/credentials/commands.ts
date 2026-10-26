@@ -8,7 +8,9 @@ import { readExtensionRegistry } from '../../core/extensions/registry'
 import { mcpSecretEntries } from '../../core/credentials/mcpEntries'
 import { PRESETS, PRESET_IDS } from '../../core/credentials/presets'
 import { CredentialsDamaged, isEnvName, newHideOnlyId, readCredentials, validateHideOnly, writeCredentials } from '../../core/credentials/store'
-import { queryCredentialUses } from '../../core/credentials/uses'
+import { lastUses, queryCredentialUses } from '../../core/credentials/uses'
+import type { CredentialUse } from '../../core/audit/types'
+import type { UseFields } from './recordUses'
 import type { CredentialsFile, HideOnlyEntry, Hiding } from '../../core/credentials/types'
 import { keepDamaged, readStoreFile } from '../../core/storeFile'
 import { profilePaths } from '../../core/profile/paths'
@@ -22,17 +24,24 @@ export const CREDENTIAL_COMMANDS: ReadonlySet<string> = new Set([
   'credentials-edit-hide-only',
   'credentials-delete-hide-only',
   'credentials-set-hiding',
-  'credentials-reset'
+  'credentials-reset',
+  'credentials-record'
 ])
 
-/** The ones that change the list: the app's alone. */
+/** The app's alone: the list's changes, and the records of the GitHub writes the app makes itself. */
 export const CREDENTIAL_CHANGES: ReadonlySet<string> = new Set([
   'credentials-add-hide-only',
   'credentials-edit-hide-only',
   'credentials-delete-hide-only',
   'credentials-set-hiding',
-  'credentials-reset'
+  'credentials-reset',
+  'credentials-record'
 ])
+
+/** What the app may record of its own: GitHub uses with its login (final review I2). */
+const APP_USE_ACTIONS: ReadonlySet<string> = new Set(['github.read', 'github.pr.create', 'github.ci.rerun', 'github.write', 'git.remote.write'])
+const APP_USES_MAX = 20
+const RESOURCE_MAX = 200
 
 export interface CredentialsAnswer {
   status: number
@@ -65,6 +74,8 @@ function hidingArg(v: unknown): Hiding | null {
 
 const REFUSALS: Record<string, string> = {
   'protected-name': 'that variable is one Claude, Codex or Astera need to run, so it cannot be hidden',
+  'system-name': 'that variable is one the OS gives every program and a session needs to run, so it cannot be hidden',
+  'alias-taken': 'another entry already has that name',
   'bad-name': 'a variable name is letters, digits and _ and does not start with a digit',
   empty: 'name at least one variable or pick a preset',
   'unknown-preset': `presets are ${PRESET_IDS.join(', ')}`,
@@ -76,7 +87,8 @@ const LIMITS = [
   'Hiding keeps what is listed out of the sessions Astera starts; a program running as the same user can still read your files and OS stores.',
   'git hands its stored logins to any program that asks (git credential fill, measured 2026-10-26); git logins are not hidden.',
   'Docker’s credential helper answers any program that asks, whatever the Docker preset redirects.',
-  'The app’s role on the Host pipe is a claim the Host cannot verify against a program of the same user.'
+  'The app’s role on the Host pipe is a claim the Host cannot verify against a program of the same user.',
+  'A variable your shell startup files set (~/.zshenv, ~/.bash_profile, a PowerShell profile) can come back in the commands an agent runs through a shell that reads them; not measured.'
 ]
 
 export function createHostCredentials(d: {
@@ -88,6 +100,8 @@ export function createHostCredentials(d: {
   env?: Record<string, string | undefined>
   /** The projects this Host has registered, which an entry can be narrowed to (C9). */
   projects?: () => Promise<readonly { path: string; name: string }[]>
+  /** Keeps a credential use (the Host's recorder): the app's own GitHub writes come here. */
+  record?: (u: UseFields) => void
 }): HostCredentials {
   const platform = d.platform ?? process.platform
   const now = d.now ?? Date.now
@@ -105,18 +119,27 @@ export function createHostCredentials(d: {
     return run
   }
 
+  /** The entries as the list answers them. `present`: whether a session started now inherits any of an entry's variables,
+   *  so hiding them changes something (the screen says so when not). */
   const entriesOf = async (f: CredentialsFile) => {
     const registry = await readExtensionRegistry(d.profileDir).catch(() => ({ version: 1 as const, entries: [] }))
-    const mcp = await Promise.all(
-      mcpSecretEntries(registry, f.mcpHide).map(async (e) => {
-        const [last] = await queryCredentialUses(d.profileDir, { entryId: e.id, limit: 1 }, { now }).catch(() => [])
-        // `present`: whether hiding it changes anything for a session started now (the screen says so when not)
-        const listed = { ...e, present: inEnv(e.envNames) }
-        return last ? { ...listed, lastUsedAt: last.at } : listed
-      })
-    )
-    return [...f.entries, ...mcp]
+    const shared = mcpSecretEntries(registry, f.mcpHide)
+    const last = await lastUses(
+      d.profileDir,
+      shared.map((e) => e.id),
+      { now }
+    ).catch(() => new Map<string, string>())
+    const mcp = shared.map((e) => {
+      const listed = { ...e, present: inEnv(e.envNames) }
+      const at = last.get(e.id)
+      return at !== undefined ? { ...listed, lastUsedAt: at } : listed
+    })
+    return [...f.entries.map((e) => ({ ...e, present: inEnv(e.envNames) })), ...mcp]
   }
+
+  /** Whether another registered entry has this name, whatever its case: show finds an entry by it (final review M7). */
+  const taken = (f: CredentialsFile, alias: string, except?: string): boolean =>
+    f.entries.some((x) => x.id !== except && x.alias.toLowerCase() === alias.toLowerCase())
 
   const change = (f: (file: CredentialsFile) => CredentialsFile | CredentialsAnswer, answer: (file: CredentialsFile) => unknown): Promise<CredentialsAnswer> =>
     queued(async () => {
@@ -141,7 +164,8 @@ export function createHostCredentials(d: {
     return v.ok ? e : bad(REFUSALS[v.reason], v.reason)
   }
 
-  const answer = async (cmd: string, args: Record<string, unknown>): Promise<CredentialsAnswer> => {
+  /** `agent`: the caller is an agent's shell, which reads the list but not the uses (final review M6). */
+  const answer = async (cmd: string, args: Record<string, unknown>, agent: boolean): Promise<CredentialsAnswer> => {
     switch (cmd) {
       case 'credentials-list': {
         const file = await readCredentials(d.profileDir)
@@ -156,8 +180,14 @@ export function createHostCredentials(d: {
         const key = typeof args.id === 'string' ? args.id : null
         if (key === null) return bad('an id or a name is required')
         const entries = await entriesOf(await readCredentials(d.profileDir))
-        const e = entries.find((x) => x.id === key || (x.kind === 'hide-only' ? x.alias === key : x.serverName === key))
+        const nameOf = (x: (typeof entries)[number]): string => (x.kind === 'hide-only' ? x.alias : x.serverName)
+        const byId = entries.find((x) => x.id === key)
+        const byName = entries.filter((x) => nameOf(x).toLowerCase() === key.toLowerCase())
+        if (!byId && byName.length > 1)
+          return { status: 409, body: { error: `${byName.length} entries are named ${key}; use the id (${byName.map((x) => x.id).join(', ')})` } }
+        const e = byId ?? byName[0]
         if (!e) return notFound(key)
+        if (agent) return { status: 200, body: { entry: e } }
         const uses = e.kind === 'mcp-secret' ? await queryCredentialUses(d.profileDir, { entryId: e.id, limit: 20 }, { now }) : []
         return { status: 200, body: { entry: e, uses } }
       }
@@ -188,7 +218,7 @@ export function createHostCredentials(d: {
           file = await readCredentials(d.profileDir)
           lines.push({ level: 'ok', text: 'The list file reads correctly.' })
         } catch (e) {
-          lines.push({ level: 'warn', text: `The list file cannot be used, so nothing is hidden: ${message(e)}` })
+          lines.push({ level: 'warn', text: `The list file cannot be used, so the entries you added are not hidden; shared MCP servers’ keys stay hidden by default: ${message(e)}` })
         }
         if (file) {
           for (const e of await entriesOf(file)) {
@@ -201,7 +231,14 @@ export function createHostCredentials(d: {
           const here = p.measuredOn.includes(platform)
           lines.push({ level: here ? 'ok' : 'warn', text: `${p.id}: measured on ${p.measuredOn.join(', ')}${here ? '' : `; not measured on ${platform}`}` })
         }
-        lines.push({ level: 'ok', text: 'Never hidden: ASTERA_*, CLAUDE_*, CODEX_*, ANTHROPIC_*, OPENAI_* (the CLIs and Astera need them).' })
+        lines.push({
+          level: 'ok',
+          text: 'Never hidden: ASTERA_*, CLAUDE_*, CODEX_*, ANTHROPIC_*, OPENAI_* (the CLIs and Astera need them), and what the OS gives every program (PATH, TEMP, TMP, TMPDIR, HOME, USERPROFILE, APPDATA, SystemRoot and the like).'
+        })
+        lines.push({
+          level: 'ok',
+          text: 'Each session gets its own empty locations for the CLI logins a preset hides, so a login made inside a session stays in that session; those of a session not started for 30 days are removed.'
+        })
         for (const t of LIMITS) lines.push({ level: 'warn', text: t })
         if (platform === 'win32') lines.push({ level: 'warn', text: 'The Host’s Windows pipe keeps the default access list (Node cannot narrow it): any local program can connect.' })
         lines.push({ level: 'ok', text: 'A change counts for sessions started afterwards; a running session keeps its environment.' })
@@ -211,7 +248,7 @@ export function createHostCredentials(d: {
         const e = hideOnlyArgs(args)
         if ('status' in e) return e
         const entry: HideOnlyEntry = { kind: 'hide-only', id: newHideOnlyId(), ...e, createdAt: new Date(now()).toISOString() }
-        return change((f) => ({ ...f, entries: [...f.entries, entry] }), () => ({ entry }))
+        return change((f) => (taken(f, entry.alias) ? bad(REFUSALS['alias-taken'], 'alias-taken') : { ...f, entries: [...f.entries, entry] }), () => ({ entry }))
       }
       case 'credentials-edit-hide-only': {
         const id = typeof args.id === 'string' ? args.id : null
@@ -223,6 +260,7 @@ export function createHostCredentials(d: {
             if (!base) return notFound(id)
             const e = hideOnlyArgs(args, base)
             if ('status' in e) return e
+            if (taken(f, e.alias, id)) return bad(REFUSALS['alias-taken'], 'alias-taken')
             edited = { ...base, ...e }
             return { ...f, entries: f.entries.map((x) => (x.id === id ? edited! : x)) }
           },
@@ -260,6 +298,25 @@ export function createHostCredentials(d: {
           await writeCredentials(d.profileDir, { version: 1, entries: [], mcpHide: {} })
           return { status: 200, body: { entries: [] } }
         })
+      case 'credentials-record': {
+        // The GitHub writes the app makes itself (its worktree panel's Create PR, final review I2), kept here with every other
+        // use, as the app's. An action, a repository and an outcome each: never text the app was told, which can quote a
+        // secret.
+        const uses = Array.isArray(args.uses) ? (args.uses as unknown[]) : []
+        const fields: UseFields[] = []
+        for (const u of uses) {
+          const o = typeof u === 'object' && u !== null ? (u as Record<string, unknown>) : {}
+          const { action, resource, outcome } = o
+          if (typeof action !== 'string' || !APP_USE_ACTIONS.has(action)) return bad(`an app use is one of ${[...APP_USE_ACTIONS].join(', ')}`)
+          if (typeof resource !== 'string' || resource === '' || resource.length > RESOURCE_MAX) return bad(`an app use names its repository in 1 to ${RESOURCE_MAX} characters`)
+          if (outcome !== 'ok' && outcome !== 'failed') return bad('an app use ends ok or failed')
+          fields.push({ actor: 'app', provider: 'github', action: action as CredentialUse['action'], resource, outcome, evidence: 'observed' })
+        }
+        if (fields.length === 0 || fields.length > APP_USES_MAX) return bad(`uses is a list of 1 to ${APP_USES_MAX} { action, resource, outcome }`)
+        if (!d.record) return { status: 501, body: { error: 'this Host keeps no credential uses' } }
+        for (const u of fields) d.record(u)
+        return { status: 200, body: { recorded: fields.length } }
+      }
       default:
         return { status: 501, body: { error: `${cmd} is not answered by this Host` } }
     }
@@ -272,7 +329,7 @@ export function createHostCredentials(d: {
       if (a.cmd === 'credentials-uses' && a.agentRefusal !== undefined) return { status: 403, body: { error: a.agentRefusal } }
       let r: CredentialsAnswer
       try {
-        r = await answer(a.cmd, a.args)
+        r = await answer(a.cmd, a.args, a.agentRefusal !== undefined)
       } catch (e) {
         r = {
           status: e instanceof RepairNeeded ? 409 : 500,

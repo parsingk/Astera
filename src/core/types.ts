@@ -2058,8 +2058,6 @@ export interface HideOnlyFields {
  *  CONFLICT and reason `damaged`; `reset` is its repair. */
 export interface CredentialsApi {
   list(): Promise<PluginsCallAnswer>
-  show(id: string): Promise<PluginsCallAnswer>
-  doctor(): Promise<PluginsCallAnswer>
   uses(q: CredentialUsesQuery): Promise<PluginsCallAnswer>
   addHideOnly(e: HideOnlyFields): Promise<PluginsCallAnswer>
   editHideOnly(id: string, changes: Partial<HideOnlyFields>): Promise<PluginsCallAnswer>
