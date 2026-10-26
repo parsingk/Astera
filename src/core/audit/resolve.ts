@@ -858,8 +858,9 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
       return at
     }
     const sub = splitFrom(line, at + (tick ? 1 : 2), tick ? 'tick' : 'paren', flavor, depth + 1)
+    // A POSIX substitution is a subshell. PowerShell's run in the same runspace, so a Set-Location in them moves the line.
     const id = nextGroup++
-    for (const s of sub.commands) later.push({ ...s, groups: [id, ...(s.groups ?? [])] })
+    for (const s of sub.commands) later.push(flavor === 'posix' ? { ...s, groups: [id, ...(s.groups ?? [])] } : s)
     return sub.end
   }
   /** Reads the POSIX arithmetic `$(( ))` at `at`, which runs nothing, for the substitutions inside it, and says where it ends
@@ -991,7 +992,9 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
       if (has && !wordQuoted && sink === null) invoked = true // `$f.Delete(`, `[IO.File]::Copy(`
       endCommand()
       parens++
-      if (chain.length < MAX_GROUPS) chain.push(nextGroup++)
+      if (flavor !== 'posix') {
+        // not a subshell: PowerShell's ( ), $( ) and @( ) run in the same runspace
+      } else if (chain.length < MAX_GROUPS) chain.push(nextGroup++)
       else beyond++
     } else if (c === '&') {
       if (line[i + 1] === '&') {

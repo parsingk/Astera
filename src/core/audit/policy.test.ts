@@ -444,6 +444,18 @@ describe('decide, a denied command the resolver must reach', () => {
     expect(decide(ps('Write-Output ${env:PATH}'), p)).toEqual({ decision: 'allow' })
   })
 
+  // PowerShell runs ( ), $( ) and @( ) in the same runspace, so a Set-Location in them moves every later statement
+  it('follows a Set-Location in a PowerShell group or substitution to the rest of the line', () => {
+    expect(decide(ps('(Set-Location ..); Remove-Item -Recurse build'), p)).toEqual(del)
+    expect(decide(ps('(cd ..) ; Remove-Item build -Recurse'), p)).toEqual(del)
+    expect(decide(ps('$(Set-Location ..); Remove-Item build -Recurse'), p)).toEqual(del)
+    expect(decide(ps('@(Set-Location ..); Remove-Item build -Recurse'), p)).toEqual(del)
+    expect(decide(ps('Write-Output "$(Set-Location ..)"; Remove-Item -Recurse build'), p)).toEqual(del)
+    expect(decide(ps('(Set-Location sub); Remove-Item -Recurse build'), p)).toEqual({ decision: 'allow' })
+    // POSIX keeps each subshell's folder to itself
+    expect(decide(bash('(cd ..); rm -rf build'), p)).toEqual({ decision: 'allow' })
+  })
+
   it('cannot tell a heredoc body substitution past the depth limit, and never allows it', () => {
     expect(decide(bash('echo "$(echo "$(cat <<EOF\n$(git push)\nEOF\n)")"'), p)).toEqual({ decision: 'unknown' })
     expect(decide(bash('echo "$(echo "$(cat <<EOF\n$(git push)\nEOF\n)")" ; git push'), p)).toEqual(push)
