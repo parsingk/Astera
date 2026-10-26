@@ -52,7 +52,7 @@ import { attachProcHost } from './procHost'
 import { ProcRegistry } from './procRegistry'
 import { createProcHolders, procHeldBy } from './procHolders'
 import { nodeProcSpawn } from './nodeProc'
-import { HOST_FEATURE_ORCH, HOST_FEATURE_REQUESTS, HOST_PROTOCOL, HOST_YIELD_JOURNAL, HOST_YIELD_UNDERSTANDING, HOST_YIELD_WORK_UNITS, HOST_YIELD_WORKSPACE, HOST_YIELD_WORKTREES } from '../core/host/protocol'
+import { HOST_FEATURE_ORCH, HOST_FEATURE_REQUESTS, HOST_PROTOCOL, HOST_YIELD_JOURNAL, HOST_YIELD_PERSON_WRITES, HOST_YIELD_UNDERSTANDING, HOST_YIELD_WORK_UNITS, HOST_YIELD_WORKSPACE, HOST_YIELD_WORKTREES } from '../core/host/protocol'
 import { createHostJournal } from './hostJournal'
 import { createHostEventLog } from './eventLog'
 import { hostNotifier } from './pluginNotify'
@@ -1153,7 +1153,7 @@ async function main(): Promise<void> {
           if (sessionEvents && from.greeted && from.role === 'app') sessionEvents.forwarded(m.signal)
           return true
         }
-        return (handlePty?.(m, send, { socket: from.socket }) ?? false) || (handleProc?.(m, send) ?? false)
+        return (handlePty?.(m, send, { socket: from.socket }) ?? false) || (handleProc?.(m, send, { socket: from.socket }) ?? false)
       },
       // Released by the socket number whatever role the socket gave last: a second `hello` can change
       // it, and marks made as an app must still go when that socket closes. A socket that never held a
@@ -1261,7 +1261,8 @@ async function main(): Promise<void> {
   keepPruning(profileDir, { log: (m) => log.write(m) })
 
   handlePty = attachPtyHost({ registry, broadcast: (m, to) => server.broadcast(m, to) })
-  handleProc = attachProcHost({ registry: procs, broadcast: (m) => server.broadcast(m) })
+  // An older app marks no person's chat line: its hello leaves HOST_YIELD_PERSON_WRITES out
+  handleProc = attachProcHost({ registry: procs, broadcast: (m) => server.broadcast(m), marksWrites: (socket) => server.yieldsOf(socket)?.has(HOST_YIELD_PERSON_WRITES) === true })
   // The leftovers of a Host that died with workspaces open (spec, Lifecycle): killed when their start
   // time still matches, then the file is cleared. A launch waits for this. Never rejects.
   void workspaces.sweepLeftovers().catch((err) => log.write(`workspace leftovers: ${String(err)}`))

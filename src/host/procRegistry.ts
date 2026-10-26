@@ -49,6 +49,8 @@ interface Entry {
   splitter: LineSplitter
   /** The last SUBMISSIONS_KEPT lines written to it, and whether a person wrote each (`submittedBetween`). */
   submissions: Submission[]
+  /** An app that does not mark a person's lines wrote to it (`writesUnmarked`). */
+  unmarked: boolean
 }
 
 export interface ProcRegistryDeps {
@@ -140,7 +142,8 @@ export class ProcRegistry {
       truncated: false,
       alive: true,
       splitter: createLineSplitter((line) => this.keep(entry, line)),
-      submissions: []
+      submissions: [],
+      unmarked: false
     }
     this.entries.set(a.id, entry)
     proc.onData((chunk) => entry.splitter.push(chunk))
@@ -216,12 +219,20 @@ export class ProcRegistry {
   }
 
   /** One line to stdin. The newline is added here, once, so no caller has to remember it. `by.person`: a person wrote
-   *  it (an app's `proc-write`, a Slack reply), not the Host itself (PtyRegistry.write's mark). */
-  write(id: string, line: string, by?: { person: true }): void {
+   *  it (an app's `proc-write`, a Slack reply), not the Host itself (PtyRegistry.write's mark). `by.unmarked`: an app that
+   *  does not mark a person's lines wrote it (an older app), so who wrote it is not known (`writesUnmarked`). */
+  write(id: string, line: string, by?: { person: true } | { unmarked: true }): void {
     const e = this.live(id)
     if (!e) return
     e.proc.write(`${line}\n`)
-    keepSubmission(e.submissions, { at: (this.deps.now ?? Date.now)(), person: by?.person === true })
+    if (by !== undefined && 'unmarked' in by) e.unmarked = true
+    keepSubmission(e.submissions, { at: (this.deps.now ?? Date.now)(), person: by !== undefined && 'person' in by })
+  }
+
+  /** Whether an app that does not mark a person's lines (an older app) has written to it: then whether a person began
+   *  any of its turns is not known, from then on. */
+  writesUnmarked(id: string): boolean {
+    return this.entries.get(id)?.unmarked === true
   }
 
   /** Who wrote the latest line in (from, to], epoch ms: a person or the Host itself; null for none kept there, or a

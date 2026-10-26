@@ -40,8 +40,9 @@
 // background task's notification, a tool's result); and in a Claude chat's stream, which carries no prompt, the first
 // frame after the `result` that ended the turn before, when a person's line reached the chat in between. A roll's new
 // session's first prompt is the carry-on its roll handed it, the Host's, unless a person typed before it. A turn begun
-// any other way goes on with the work before it. The audit asks them too (`SessionTurns`), for the same bound on where
-// a coordinator's and a worker's calls are filed.
+// any other way goes on with the work before it. A chat an older app writes to has no turns known: that app marks no
+// person's line (HOST_YIELD_PERSON_WRITES), so two minutes after an end stand in, as before the marks. The audit asks
+// them too (`SessionTurns`), for the same bound on where a coordinator's and a worker's calls are filed.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { JsonlTail } from '../../core/rolling/jsonlTail'
@@ -298,6 +299,9 @@ export function createTokenSources(d: {
     submittedBetween?: SentBy
     /** Whether a person wrote any line in (from, to], whatever came after it (ProcRegistry.personSubmittedBetween). */
     personSubmittedBetween?: (id: string, from: number, to: number) => boolean
+    /** Whether an app that does not mark a person's lines wrote to the process (ProcRegistry.writesUnmarked): its chat's
+     *  turns are then not known. */
+    writesUnmarked?: (id: string) => boolean
   }
   /** A Claude terminal session's statusline payload, which names its transcript; null before it has one. */
   statusLinePayload(sessionId: string): Promise<unknown | null>
@@ -398,6 +402,14 @@ export function createTokenSources(d: {
     retired.set(sessionId, log)
     if (retired.size > RETIRED_KEPT) retired.delete(retired.keys().next().value as string)
   }
+  /** When the turn holding `t` began, at the latest, for the session; null when its lines cannot tell, and while an app
+   *  that does not mark a person's lines (an older app) writes to its chat: then two minutes after an end stand in for
+   *  the turn, as before the marks, rather than a hold no person's line can end. */
+  const turnAt = (sessionId: string, t: number): number | null => {
+    const log = turns.get(sessionId)
+    if (!log || [...chats.values()].some((x) => x.sessionId === sessionId && d.procs.writesUnmarked?.(x.key) === true)) return null
+    return turnIn(log, t)
+  }
   const hand = (f: Followed, spent: TokensSpent[]): void => {
     for (const x of spent) {
       const at = x.at ?? new Date(now()).toISOString()
@@ -407,8 +419,7 @@ export function createTokenSources(d: {
       // A respawn on the same account writes on in the same file before this one's exit is heard: that is the new one's,
       // which counts from its start
       if (f.rolledAt !== null && !(Date.parse(at) < f.rolledAt)) continue
-      const log = turns.get(f.sessionId)
-      const owner = d.ownerOf(f.sessionId, at, lastOwner.get(f.sessionId) ?? null, log ? turnIn(log, Date.parse(at)) : null)
+      const owner = d.ownerOf(f.sessionId, at, lastOwner.get(f.sessionId) ?? null, turnAt(f.sessionId, Date.parse(at)))
       if (!owner) continue
       lastOwner.set(f.sessionId, owner)
       d.store.add(f.sessionId, owner, x)
@@ -602,10 +613,7 @@ export function createTokenSources(d: {
 
   return {
     poll: readSoon,
-    turnOf(sessionId, t) {
-      const log = turns.get(sessionId)
-      return log ? turnIn(log, t) : null
-    },
+    turnOf: turnAt,
     readPast(sessionId, t) {
       const files = [...terminals.values(), ...chats.values()].filter((f) => f.sessionId === sessionId && f.chat === null)
       return files.every((f) => f.readFrom !== null && f.readFrom >= t) ? null : readSoon()

@@ -10,13 +10,16 @@ import type { ProcRegistry } from './procRegistry'
 export function attachProcHost(a: {
   registry: ProcRegistry
   broadcast(m: HostMessage): void
-}): (m: ClientMessage, send: (h: HostMessage) => void) => boolean {
+  /** Whether the client on this socket marks a person's lines (its hello yields HOST_YIELD_PERSON_WRITES). Absent, or for
+   *  a message with no socket: every sender does. */
+  marksWrites?(socket: number): boolean
+}): (m: ClientMessage, send: (h: HostMessage) => void, from?: { socket: number }) => boolean {
   a.registry.onLine((id, seq, line) => a.broadcast({ t: 'proc-line', id, seq, line }))
   a.registry.onExit((id, exitCode, stderrTail) =>
     a.broadcast({ t: 'proc-exit', id, exitCode, ...(stderrTail !== undefined ? { stderrTail } : {}) })
   )
 
-  return (m, send) => {
+  return (m, send, from) => {
     switch (m.t) {
       case 'proc-spawn': {
         const res = a.registry.open({ id: m.id, file: m.file, args: m.args, opts: m.opts, meta: m.meta })
@@ -25,8 +28,13 @@ export function attachProcHost(a: {
       }
       case 'proc-write':
         // A person's line only when the app marks it so: the turn a person sent (observe deferred fix round 2, I-a). Its
-        // handshake, control lines and own turns (a schedule, a roll's carry-on) are not, nor any line from an older app
-        a.registry.write(m.id, m.line, m.typed === true ? { person: true } : undefined)
+        // handshake, control lines and own turns (a schedule, a roll's carry-on) are not. An older app marks nothing, so
+        // who wrote its lines is not known, and the chat's turns are read as unknown
+        a.registry.write(
+          m.id,
+          m.line,
+          from !== undefined && a.marksWrites?.(from.socket) === false ? { unmarked: true } : m.typed === true ? { person: true } : undefined
+        )
         return true
       case 'proc-kill':
         a.registry.kill(m.id)

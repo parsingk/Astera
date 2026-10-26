@@ -256,6 +256,10 @@ export const HOST_YIELD_ORCH_STATE_LATEST = 'orch-state-latest'
  *  (remote runtime design §2.6, DC-3). An older app sends none and keeps recovering, and the Host then recovers
  *  nothing while it is attached. */
 export const HOST_YIELD_RECOVERY = 'recovery'
+/** `hello.yields` value: this app marks a person's turn line in `proc-write` (`typed`), so the Host tells a chat's turns
+ *  by them. An older app sends none and marks nothing: the Host reads the turns of a chat it writes to as unknown, so
+ *  two minutes after a Run's or Dispatch's end stand in for them, as before the marks. */
+export const HOST_YIELD_PERSON_WRITES = 'person-writes'
 /** The shortest gap between two `orch-state` pushes to one client that reads the latest (above): about
  *  ten a second. The first push after a quiet spell goes out at once. */
 export const ORCH_STATE_PUSH_MS = 100
@@ -383,7 +387,8 @@ export type ClientMessage =
   | { t: 'proc-spawn'; id: string; file: string; args: string[]; opts: ProcOpenOptions; meta?: PtyMeta }
   /** One line to the process's stdin; the Host appends the newline. `typed`: the turn a person sent (the chat composer,
    *  a Slack reply), never a handshake, control or the app's own turn: the Host tells a person's prompt by it (observe
-   *  deferred fix round 2, Important a). An older app sends none, and its lines are read as not a person's. */
+   *  deferred fix round 2, Important a). An older app sends none and says so by leaving HOST_YIELD_PERSON_WRITES out of
+   *  its hello: the turns of a chat it writes to are then not known. */
   | { t: 'proc-write'; id: string; line: string; typed?: true }
   | { t: 'proc-kill'; id: string }
   /** Same contract as pty-note, for a line process. */

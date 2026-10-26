@@ -81,6 +81,7 @@ function fakeRegistry() {
   const exits = new Set<(id: string, code: number) => void>()
   const add = <T>(s: Set<T>, cb: T): (() => void) => (s.add(cb), () => void s.delete(cb))
   const sent = new Map<string, Array<{ at: number; person: boolean }>>()
+  const unmarked = new Set<string>()
   let seq = 0
   return {
     onMeta: (cb: (id: string, meta: PtyMeta, why: 'open' | 'note') => void) => add(meta, cb),
@@ -99,7 +100,15 @@ function fakeRegistry() {
     note: (id: string, m: PtyMeta) => meta.forEach((cb) => cb(id, m, 'note')),
     line: (id: string, l: string) => lineCbs.forEach((cb) => cb(id, ++seq, l)),
     exit: (id: string) => exits.forEach((cb) => cb(id, 0)),
-    typed: (id: string, at: number, by: 'person' | 'host') => sent.set(id, [...(sent.get(id) ?? []), { at, person: by === 'person' }]),
+    /** `unmarked`: written by an app that does not mark a person's lines (an older app, ProcRegistry.writesUnmarked). */
+    typed: (id: string, at: number, by: 'person' | 'host' | 'unmarked') => {
+      sent.set(id, [...(sent.get(id) ?? []), { at, person: by === 'person' }])
+      if (by === 'unmarked') unmarked.add(id)
+    },
+    unmarked,
+    writesUnmarked(this: { unmarked: Set<string> }, id: string): boolean {
+      return this.unmarked.has(id)
+    },
     listeners: () => meta.size + lineCbs.size + exits.size
   }
 }
@@ -781,6 +790,36 @@ describe('createTokenSources', () => {
     r.procs.typed('proc_k', E + 9 * MIN, 'person')
     frame(E + 9 * MIN + 500, 'msg_after', 300, 30)
     expect(runTokensOf(state, 'run_1', r.store.spent())).toEqual({ coordinatorTokens: { input: 35, output: 8, total: 43 } })
+    r.sources.dispose()
+  })
+
+  // An app from before the marks writes to the chat and never marks a person's line, so who began a turn is not known:
+  // two minutes after the end stand in for the turn, as before the marks, rather than a hold no person's line can end
+  it('reads a chat’s turns as unknown while an app that does not mark a person’s lines writes to it: two minutes after the end', async () => {
+    const MIN = 60_000
+    const E = T0 + 10 * MIN
+    let now = T0
+    let state = orch([], 'chat_k')
+    const r = await rig({ state: () => state, now: () => now })
+    const frame = (at: number, id: string, input: number, output: number): void => {
+      now = at
+      r.procs.line('proc_k', claudeLine(at, id, input, output, { parent_tool_use_id: null, session_id: 'c1' }))
+    }
+    const result = (at: number): void => {
+      now = at
+      r.procs.line('proc_k', '{"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":1}}')
+    }
+    r.procs.open('proc_k', note('chat', 'chat_k', { provider: 'claude' }))
+    r.procs.typed('proc_k', T0 + 500, 'unmarked')
+    frame(T0 + 1000, 'msg_1', 10, 1)
+    result(T0 + 2000)
+    state = { ...state, runs: state.runs.map((x) => ({ ...x, endedAt: iso(E) })), tasks: state.tasks.map((t) => ({ ...t, status: 'completed', updatedAt: iso(E) })) }
+    frame(E + MIN, 'msg_wrap', 20, 2)
+    result(E + MIN + 30_000)
+    r.procs.typed('proc_k', E + 4 * MIN, 'unmarked')
+    frame(E + 4 * MIN + 500, 'msg_after', 300, 30)
+    expect(runTokensOf(state, 'run_1', r.store.spent())).toEqual({ coordinatorTokens: { input: 30, output: 3, total: 33 } })
+    expect(r.sources.turnOf('chat_k', E + 4 * MIN + 500)).toBeNull()
     r.sources.dispose()
   })
 
