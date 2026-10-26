@@ -248,6 +248,10 @@ export function observeReadDue(last: { target: string; state: string; at: number
   return Math.max(0, OBSERVE_READ_EVERY_MS - (now - last.at))
 }
 
+/** Whether a read's answer is still wanted: Run detail is open and still shows the target it was asked for. One that
+ *  finishes after the window closed sets no state and asks for no retry. */
+export const observeReadIsCurrent = (alive: boolean, shown: string, target: string): boolean => alive && shown === target
+
 /** What Run detail remembers of its last read, and how many in a row failed. */
 export interface ObserveRead {
   target: string

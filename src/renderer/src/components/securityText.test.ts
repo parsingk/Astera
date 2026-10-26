@@ -43,6 +43,7 @@ import {
   rowTime,
   ruleActionChoices,
   sessionLabel,
+  observeReadIsCurrent,
   resetBodyKey,
   securityFailure,
   summaryOf,
@@ -455,5 +456,13 @@ describe('the start over confirmation', () => {
     expect(resetBodyKey(false)).toBe('settings.security.reset.body')
     expect(en('settings.security.reset.bodyDamaged')).toMatch(/nothing is recorded/)
     expect(en('settings.security.damaged')).toMatch(/paused/)
+  })
+})
+
+describe('an observe read that finishes after Run detail closed', () => {
+  it('is dropped, as is one for another target, so no state is set and no retry is scheduled', () => {
+    expect(observeReadIsCurrent(true, 'run_1', 'run_1')).toBe(true)
+    expect(observeReadIsCurrent(false, 'run_1', 'run_1')).toBe(false)
+    expect(observeReadIsCurrent(true, 'run_2', 'run_1')).toBe(false)
   })
 })

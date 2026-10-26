@@ -50,6 +50,7 @@ import { jobName } from '../lib/jobName'
 import {
   afterObserveRead,
   observeReadDue,
+  observeReadIsCurrent,
   runDetailInstanceKey,
   startObserveRead,
   type ObserveRead,
@@ -360,12 +361,16 @@ export function RunDetail({
   const lastRead = useRef<ObserveRead | null>(null)
   /** The retry a failed read asked for, ended with the window. */
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(
-    () => () => {
+  /** False once the window closed: a read still in flight then sets nothing and asks for no retry. Set true by the effect
+   *  itself, since StrictMode runs its cleanup between two mounts. */
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
       if (retryTimer.current !== null) clearTimeout(retryTimer.current)
-    },
-    []
-  )
+    }
+  }, [])
   /** Whose facts are on screen: an answer that arrives for another target is dropped. */
   const shownTarget = useRef(targetId)
   const [readAgain, setReadAgain] = useState(0)
@@ -386,7 +391,7 @@ export function RunDetail({
     }
     lastRead.current = startObserveRead(lastRead.current, { target: targetId, state: runState }, Date.now())
     const ids = observeTargetOf(undefined, targetId)
-    const mine = (): boolean => shownTarget.current === targetId
+    const mine = (): boolean => observeReadIsCurrent(alive.current, shownTarget.current, targetId)
     const read = lastRead.current
     void (async () => {
       // A read that failed (a deadline, the Host away a moment) keeps what is shown rather than clearing it, and is
