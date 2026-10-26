@@ -178,7 +178,7 @@ export const en: Record<keyof typeof ko, string> = {
   'agentProfiles.resumeAs': 'This conversation resumes as the agent profile “{name}”.',
   'settings.security.hint': 'Observe records the tool calls agent sessions make and shows what your rules would have done with each. It never blocks anything.',
   'settings.security.noHost': 'This needs the Host, and the app is not connected to it right now.',
-  'settings.security.damaged': 'The rules file is damaged, so nothing can be decided. A copy of it was kept beside it. Starting over with the starter rules repairs it.',
+  'settings.security.damaged': 'The rules file is damaged, so nothing can be decided. A copy of it was kept beside it. Recording is paused until it is repaired. Starting over with the starter rules repairs it.',
   'settings.security.mode.label': 'Record agent tool calls',
   'settings.security.mode.compatibility': 'Off',
   'settings.security.mode.observe': 'Observe',
@@ -220,6 +220,8 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.security.reset': 'Start over with the starter rules',
   'settings.security.reset.title': 'Start over with the starter rules?',
   'settings.security.reset.body': 'Your rules are replaced by the starter rules. Whether observe is on stays as it is.',
+  'settings.security.reset.bodyDamaged':
+    'Your rules are replaced by the starter rules. While the file is damaged nothing is recorded, and after the repair observe stays off until you turn it on again under Policies.',
   'settings.security.decision.allow': 'Allowed',
   'settings.security.decision.would-deny': 'Would be denied',
   'settings.security.decision.unknown': 'Unknown',

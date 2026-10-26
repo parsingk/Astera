@@ -130,6 +130,11 @@ const REASONS = {
   noHost: 'settings.security.noHost'
 } as const satisfies Record<string, MessageKey>
 
+/** The body of the start over confirmation. Repairing a damaged file writes the mode sessions have been starting in
+ *  meanwhile, which is off, so it says recording stays off; starting over from a readable file keeps the mode. */
+export const resetBodyKey = (damaged: boolean): MessageKey =>
+  damaged ? 'settings.security.reset.bodyDamaged' : 'settings.security.reset.body'
+
 export function securityFailure(r: Failure, t: T): { line: string; repair: boolean } {
   // Only a damaged file: the Host says so as its reason. Another 409 (a file it could not read at all) is not repaired
   // by starting over, and its own sentence says why
@@ -425,5 +430,7 @@ export const SECURITY_KEYS: MessageKey[] = [
   ...Object.values(LEVELS),
   ...Object.values(KINDS),
   ...Object.values(REASONS),
+  resetBodyKey(true),
+  resetBodyKey(false),
   ...Object.values(PERIODS)
 ]

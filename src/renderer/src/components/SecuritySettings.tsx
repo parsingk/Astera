@@ -37,6 +37,7 @@ import {
   rowTime,
   ruleActionChoices,
   scopeLabel,
+  resetBodyKey,
   securityFailure,
   sessionLabel,
   summaryOf,
@@ -128,10 +129,10 @@ export function SecuritySettings({
   }
 
   /** Starting over is also the repair of a damaged rules file (the Host keeps the damaged copy beside it). */
-  const reset = async (): Promise<void> => {
+  const reset = async (damaged: boolean): Promise<void> => {
     const ok = await confirmModal({
       title: t('settings.security.reset.title'),
-      body: t('settings.security.reset.body'),
+      body: t(resetBodyKey(damaged)),
       confirmLabel: t('settings.security.reset')
     })
     if (ok) await change(() => window.api.audit.resetRules())
@@ -147,7 +148,7 @@ export function SecuritySettings({
           <div className="settings-group">
             <p className="settings-hint is-warning">{shownFailure.line}</p>
             {shownFailure.repair && (
-              <button className="settings-gen-refresh" disabled={busy} onClick={() => void reset()}>
+              <button className="settings-gen-refresh" disabled={busy} onClick={() => void reset(true)}>
                 {t('settings.security.reset')}
               </button>
             )}
@@ -256,7 +257,7 @@ export function SecuritySettings({
                 onChange={(v) => void change(() => window.api.audit.setOtherwise(v as AuditPolicy['otherwise']))}
               />
             </div>
-            <button className="settings-gen-refresh" disabled={busy} onClick={() => void reset()}>
+            <button className="settings-gen-refresh" disabled={busy} onClick={() => void reset(false)}>
               {t('settings.security.reset')}
             </button>
           </>

@@ -43,6 +43,7 @@ import {
   rowTime,
   ruleActionChoices,
   sessionLabel,
+  resetBodyKey,
   securityFailure,
   summaryOf,
   summarySince,
@@ -445,5 +446,14 @@ describe('the 30 days on the person’s clock', () => {
     // 2026-10-23T16:00Z is already the 24th at 01:00 in Seoul (UTC+9)
     expect(periodSince('month', new Date('2026-10-23T16:00:00Z'))).toBe('2026-09-24T15:00:00.000Z')
     expect(periodSince('today', new Date('2026-10-23T16:00:00Z'))).toBe('2026-10-23T15:00:00.000Z')
+  })
+})
+
+describe('the start over confirmation', () => {
+  it('says recording stays off after the repair of a damaged file, and that the mode stays otherwise', () => {
+    expect(resetBodyKey(true)).toBe('settings.security.reset.bodyDamaged')
+    expect(resetBodyKey(false)).toBe('settings.security.reset.body')
+    expect(en('settings.security.reset.bodyDamaged')).toMatch(/nothing is recorded/)
+    expect(en('settings.security.damaged')).toMatch(/paused/)
   })
 })
