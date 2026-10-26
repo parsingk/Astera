@@ -1,6 +1,6 @@
 // Observe mode's record store (design §8): the Host's append-only JSONL under `<profile>/audit/`, one file per local day,
 // kept 30 days or 50 MB, whichever comes first. A write never fails the source (Review Focus 4).
-import { describe, it, expect, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -400,6 +400,8 @@ describe('auditStoppedAtLimit at the edges of a period', () => {
 })
 
 describe('a day that stopped at the size, across a restart', () => {
+  // Each test starts from the module state a fresh process has, whichever test ran before it
+  beforeEach(() => void vi.resetModules())
   /** The store as a Host that just started has it: nothing known of any folder until its start's prune has read it. */
   const restarted = async (): Promise<typeof import('./store')> => {
     vi.resetModules()

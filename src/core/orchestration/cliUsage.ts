@@ -646,7 +646,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   },
   'policies-rules-edit': {
     summary: 'change a rule: only the flags given',
-    detail: `Returns the rule, and the rules. ${RULE_ACTION} --clear-scope makes it match wherever the call was. A rule that is not there is 4. From inside an agent session it is refused with 5.`,
+    detail: `Returns the rule, and the rules. ${RULE_ACTION} --clear-scope makes it match wherever the call was. An edit that names none of --effect, --action, --scope and --clear-scope is refused with 2 (reason nothing-to-change). A rule that is not there is 4. From inside an agent session it is refused with 5.`,
     flags: [
       RULE_ID,
       { name: 'effect', value: '<allow|deny>', about: 'what a call it matches gets' },
@@ -667,7 +667,8 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   },
   'policies-rules-reset': {
     summary: 'put back the starter rules and their otherwise; the mode stays',
-    detail: 'It also repairs a damaged rules file, a copy of which was kept beside it. From inside an agent session it is refused with 5.'
+    detail:
+      'It also repairs a damaged rules file, a copy of which was kept beside it, and writes compatibility then (the mode sessions were starting in while it was damaged). When that copy could not be kept it is refused with 6 and leaves the file as it is. From inside an agent session it is refused with 5.'
   },
 
   // Answered by the Host out of its own registries, so the app may be closed; it needs a Host.

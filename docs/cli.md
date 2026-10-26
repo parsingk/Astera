@@ -1167,9 +1167,13 @@ Astera could not read it. The first time observe is turned on, Astera writes the
 `github.pr.create` and `github.write`, deny `filesystem.write` and `filesystem.delete` outside the project, and
 otherwise allow. Until then `policies show` shows them and nothing is written. The rule commands take a rule's id from
 `policies show` and its place in the list counted from 0 (`--at`, `--to`); `rules-reset` puts the starter rules back and
-keeps the mode. Every change answers the mode and the rules as they now are. An action Astera does not know is refused
-with 2 and the message lists them, a rule that is not there is a 4, and a damaged `audit-policy.json` is a 6:
-`policies rules-reset` writes the starter rules over it, and a copy of the damaged file is kept beside it.
+keeps the mode, except that a damaged file is repaired to `compatibility`, the mode sessions were starting in while it
+was damaged, so the repair never turns observing on or off by itself. Every change answers the mode and the rules as they
+now are. An action Astera does not know is refused with 2 and the message lists them, so is a `rules-edit` that names
+nothing to change (`error.details.reason` is `nothing-to-change`), a rule that is not there is a 4, and a damaged
+`audit-policy.json` is a 6: `policies rules-reset` writes the starter rules over it, and a copy of the damaged file is
+kept beside it. When that copy could not be kept, `rules-reset` is refused with 6 as well (`error.details.repair` names
+the file) and leaves the file as it is.
 
 `audit list` prints the records newest first, each with `decision` and `ruleId` (the rule that decided, left out when
 `otherwise` did or none could), worked out from the rules in force when you ask: edit a rule and the past calls show

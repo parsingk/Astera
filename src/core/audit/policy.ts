@@ -127,13 +127,10 @@ const SCOPES: readonly string[] = ['inside-project', 'outside-project']
 const keptDamage = new Map<string, string>()
 
 /** The file was read but holds no policy. Its bytes are kept beside it, so starting over with the starter rules may write
- *  over it (`policies-rules-reset`, the repair); `mode` is the one it names, else compatibility. A file that could not
- *  be read throws plain RepairNeeded instead, and nothing writes over that one. */
+ *  over it (`policies-rules-reset`, the repair), in the mode sessions have been starting in meanwhile (compatibility). A
+ *  file that could not be read throws plain RepairNeeded instead, and nothing writes over that one. */
 export class AuditPolicyDamaged extends RepairNeeded {
-  constructor(
-    file: string,
-    readonly mode: AuditMode
-  ) {
+  constructor(file: string) {
     super(`${file} is damaged; a copy was kept beside it`, file)
   }
 }
@@ -181,7 +178,7 @@ export async function readAuditPolicy(profileDir: string, o: { keepDamaged?: boo
       keptDamage.set(file, hash)
       await keepDamaged(file, read.text)
     }
-    throw new AuditPolicyDamaged(FILE, modeOf(parsed))
+    throw new AuditPolicyDamaged(FILE)
   }
   return p
 }
