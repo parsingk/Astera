@@ -7,7 +7,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { removeFixture } from '../../core/testFixtures'
 import { profilePaths } from '../../core/profile/paths'
-import { queryRecords, type AuditRecord } from '../../core/audit/store'
+import { appendRecords, auditStoppedAtLimit, queryRecords, type AuditRecord } from '../../core/audit/store'
 import { emptyState, type OrchState } from '../../core/orchestration/state'
 import type { Dispatch, JobRun, Task } from '../../core/orchestration/types'
 import type { PtyEntry } from '../../core/host/protocol'
@@ -612,6 +612,27 @@ describe('createAuditRecorder', () => {
     } finally {
       process.off('unhandledRejection', onUnhandled)
     }
+  })
+
+  // A stopped day keeps no record, so its calls cost no resolver and no lookup, which may read the sessions' files
+  it('resolves and looks up no call of a day stopped at the size, and still records another day’s', async () => {
+    const resolved: unknown[] = []
+    const h = await rig({
+      dispatch: { jobId: 'job1' },
+      over: {
+        resolve: (c): ResolvedAction => (resolved.push((c.input as { command: string }).command), { action: 'git.read', target: 'git status', confidence: 'high' }),
+        // The first record alone passes the size, so its day stops
+        append: (dir, recs, o) => appendRecords(dir, recs, { ...o, maxBytes: 1, now: () => NOW })
+      }
+    })
+    h.recorder.record(bash('git status', { dedupeKey: 'a' }))
+    await h.recorder.flushed()
+    expect(auditStoppedAtLimit(h.profileDir)).toBe(true)
+    h.recorder.record(bash('git push origin main', { dedupeKey: 'b' }))
+    h.recorder.record(bash('npm test', { dedupeKey: 'c', at: new Date(NOW + 24 * 60 * 60 * 1000).toISOString() }))
+    await h.recorder.flushed()
+    expect(resolved).toEqual(['git status', 'npm test'])
+    expect(h.dispatchAsked.map(([, at]) => at)).toEqual([new Date(NOW).toISOString(), new Date(NOW + 24 * 60 * 60 * 1000).toISOString()])
   })
 
   it('never throws to a source: a failing lookup is logged and the next call is still recorded', async () => {

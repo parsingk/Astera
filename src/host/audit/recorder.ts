@@ -6,6 +6,7 @@
 //
 // A call is resolved while it is handed over, so its input (a file a Write carried, say) is let go at once and only the
 // small record waits for the disk; at most AUDIT_PENDING_MAX of them wait, and past that calls are counted and dropped.
+// A call of a day the store stopped at its size is dropped before it is resolved, as no record of it would be kept.
 // Its Job, Run and Task are looked up then too, except when the answer turns on the turn the call fell in and the
 // session's lines are not read past it yet (`dispatchOfWithTurns`): that record waits for the read before it is written.
 // The mode is read from audit-policy.json once and kept until the policies' commands say they changed it
@@ -13,7 +14,7 @@
 // logged and costs that call.
 import { randomBytes } from 'node:crypto'
 import { redactTarget, resolveAction, type ResolveCall, type ResolvedAction } from '../../core/audit/resolve'
-import { appendRecords, type AuditRecord, type AuditSource } from '../../core/audit/store'
+import { appendRecords, auditDayStopped, type AuditRecord, type AuditSource } from '../../core/audit/store'
 import type { AuditMode } from '../../core/audit/policy'
 import type { OrchState } from '../../core/orchestration/state'
 import type { Dispatch } from '../../core/orchestration/types'
@@ -266,8 +267,7 @@ export function createAuditRecorder(d: {
   const timeOf = (at: string | undefined): string =>
     new Date(at !== undefined && Number.isFinite(Date.parse(at)) ? Date.parse(at) : now()).toISOString()
 
-  const recordOf = (ev: AuditEvent, info: SessionFacts): AuditRecord => {
-    const at = timeOf(ev.at)
+  const recordOf = (ev: AuditEvent, info: SessionFacts, at: string): AuditRecord => {
     const provider = PROVIDER[ev.source]
     const r = resolve({ provider, tool: ev.tool, input: ev.input, cwd: info.cwd, ...(ev.cwd !== undefined ? { base: ev.cwd } : {}) })
     const found = d.dispatchOf(ev.sessionId, at)
@@ -310,6 +310,9 @@ export function createAuditRecorder(d: {
         const info = d.sessionInfo(ev.sessionId)
         if (info === null) return
         if (ev.dedupeKey !== undefined && heard(ev.sessionId, ev.dedupeKey)) return
+        const at = timeOf(ev.at)
+        // A day the store stopped at its size keeps no record: its calls are not resolved or looked up either
+        if (auditDayStopped(d.profileDir, at)) return
         // Before the call is resolved and looked up (fix round 1, Minor 1): a dropped call costs no lookup, which may read
         // the sessions' files
         if (pending.length >= AUDIT_PENDING_MAX) {
@@ -317,7 +320,7 @@ export function createAuditRecorder(d: {
           dropped += 1
           return
         }
-        pending.push(recordOf(ev, info))
+        pending.push(recordOf(ev, info, at))
         if (!busy) {
           busy = true
           enqueue(flush)
