@@ -1189,15 +1189,19 @@ until a person prompts the session (types in its tab or chat, replies from Slack
 shell); a task notification or what Astera types itself does not end it, and the calls a person's prompt leads to carry
 neither. A run counts as finished from when its outcome was settled, which a later edit of a Task does not move; a run
 that finished before this version of Astera counts from when its Tasks last changed before the update. The filters
-combine, and `--agent-profile` takes an id or a name. `--limit` is 200 by default and at most 2000. When it cuts the
-list, `truncated` is true and `next` holds the `--until` and `--before-id` that ask for the next page, which `--human`
-prints under the table as `more:`, after the filters you used. `audit summary` counts the same calls by decision, in all
-and per action, and `stoppedAtLimit` is true when a day of the period stopped recording at the size limit, so it holds
-fewer calls than were made.
+combine, and `--agent-profile <id|name>` takes an id or a name, on `audit list` and on `audit summary` alike (an id of a
+profile deleted since still filters its records; a name that matches none is 4). `--limit` is 200 by default and at
+most 2000. When it cuts the list, `truncated` is true and `next` holds the `--until` and `--before-id` that ask for the
+next page, which `--human` prints under the table as `more:`, after the filters you used, each value in single quotes
+unless it is plain letters, digits and `._:/@=+-`, written for the shell you are in (PowerShell on Windows, a POSIX
+shell elsewhere), so the line can be pasted as it is. `audit summary` counts the same calls by decision, in all and per
+action, and `stoppedAtLimit` is true when a day of the period stopped recording at the size limit, so it holds fewer
+calls than were made.
 
 **These commands are for a person.** From inside an agent session (`ASTERA_SESSION` is set) every change is refused
-with 5, and so are both `audit` reads, so the log of what agents did stays away from agents; `policies show` is not
-refused. MCP clients, plugins, the SDK and a paired controller (`--runtime`) have no audit or policy commands.
+with 5, and so are both `audit` reads, whatever filters they carry: the refusal comes first, before any
+`--agent-profile` name is looked up, so a name that matches nothing is 5 there, not 4. The log of what agents did stays
+away from agents; `policies show` is not refused. MCP clients, plugins, the SDK and a paired controller (`--runtime`) have no audit or policy commands.
 
 ```bash
 astera policies set-mode --mode observe

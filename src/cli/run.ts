@@ -1613,7 +1613,7 @@ export async function main(): Promise<void> {
           call: (cmd: string, callArgs: Record<string, unknown>, request: string | undefined) =>
             timedCall(verbose, { conn, cmd, args: callArgs, sessionId, request, timeoutMs: clientTimeoutMs({ cmd, args: callArgs }) })
         }
-        return parsed.cmd.startsWith('audit-') ? auditCommand(line) : policiesCommand(line)
+        return parsed.cmd.startsWith('audit-') ? auditCommand({ ...line, agentSession: sessionId !== '' }) : policiesCommand(line)
       })
       conn.close()
       const lost = lostAnswerDetails({ argv, request: carried.send, fromStdin: parsed.wantsStdin })

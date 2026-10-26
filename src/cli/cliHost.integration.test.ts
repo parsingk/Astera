@@ -1274,7 +1274,8 @@ describe('the public CLI against a real Host (§48, §49)', { timeout: 60_000 },
 
     // The log of an agent's calls stays away from agents: both reads are refused to an agent's shell
     const agent = { ...h.env, ASTERA_SESSION: 'sess_agent' }
-    for (const argv of [['audit', 'list'], ['audit', 'summary'], ['audit', 'list', '--agent-profile', 'Reviewer']]) {
+    // and before any name is looked up: a profile that does not exist is 5 here, where a person's shell gets 4
+    for (const argv of [['audit', 'list'], ['audit', 'summary'], ['audit', 'list', '--agent-profile', 'Reviewer'], ['audit', 'list', '--agent-profile', 'Nobody'], ['audit', 'summary', '--agent-profile', 'Nobody']]) {
       const refused = await astera(argv, agent)
       expect(refused.code, `${argv.join(' ')} → ${refused.stdout}`).toBe(5)
       expect(refused.envelope.error?.code).toBe('PERMISSION_DENIED')
