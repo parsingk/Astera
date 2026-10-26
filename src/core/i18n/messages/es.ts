@@ -142,7 +142,7 @@ export const es: Catalog = {
   'agentProfiles.shown': 'Perfil de agente: {name}',
   'agentProfiles.resumeAs': 'La conversación se reanuda con el perfil de agente «{name}».',
   'settings.security.hint':
-    'Observe registra las llamadas a herramientas que hacen las sesiones de agentes y muestra qué habrían hecho tus reglas con cada una. Nunca bloquea nada.',
+    'Observe registra las llamadas a herramientas que hacen las sesiones de agentes y muestra qué habrían hecho tus reglas con cada una.',
   'settings.security.noHost': 'Esto necesita el Host, y la aplicación no está conectada a él ahora mismo.',
   'settings.security.damaged':
     'El archivo de reglas está dañado, así que no se puede decidir nada. Se guardó una copia a su lado. Mientras esté dañado no se registra nada. Volver a empezar con las reglas iniciales lo repara.',

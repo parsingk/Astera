@@ -176,7 +176,7 @@ export const en: Record<keyof typeof ko, string> = {
   'agentProfiles.pick.followJob': "Follow the job's profile ({name})",
   'agentProfiles.shown': 'Agent profile: {name}',
   'agentProfiles.resumeAs': 'This conversation resumes as the agent profile “{name}”.',
-  'settings.security.hint': 'Observe records the tool calls agent sessions make and shows what your rules would have done with each. It never blocks anything.',
+  'settings.security.hint': 'Observe records the tool calls agent sessions make and shows what your rules would have done with each.',
   'settings.security.noHost': 'This needs the Host, and the app is not connected to it right now.',
   'settings.security.damaged': 'The rules file is damaged, so nothing can be decided. A copy of it was kept beside it. Nothing is recorded while it is damaged. Starting over with the starter rules repairs it.',
   'settings.security.mode.label': 'Record agent tool calls',
