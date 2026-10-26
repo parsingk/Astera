@@ -230,9 +230,12 @@ export function createTokenSources(d: {
     })
   ]
 
-  const readTail = async (f: Followed, tail: JsonlTail, read: (lines: readonly string[]) => TokensSpent[]): Promise<void> => {
+  /** Reads `tail` forward and hands what it spent; true when lines came. */
+  const readTail = async (f: Followed, tail: JsonlTail, read: (lines: readonly string[]) => TokensSpent[]): Promise<boolean> => {
     const got = await tail.read()
-    if (got && got.lines.length > 0) hand(f, read(got.lines))
+    if (!got || got.lines.length === 0) return false
+    hand(f, read(got.lines))
+    return true
   }
 
   const readOne = async (f: Followed): Promise<void> => {
@@ -246,16 +249,20 @@ export function createTokenSources(d: {
     if (!t) return
     const named = extractStatusLineSession(await d.statusLinePayload(f.sessionId).catch(() => null)).transcriptPath
     if (named !== null) {
-      if (!t.files.has(named)) t.files.set(named, await follow(named))
+      let main = t.files.get(named)
+      if (!main) t.files.set(named, (main = await follow(named)))
+      const grew = await readTail(f, main, t.read)
       // A sub-agent writes a file of its own beside the transcript, made when it starts. One last written before this
       // session started is a session before's, in a resumed conversation's folder (fix round 1, ruling 2): not
-      // followed. Each file is looked at once, when the folder first lists it, not at every read (final review M3); one
-      // that could not be looked at is tried again at the next
+      // followed. Each file is looked at when the folder first lists it, not at every read (final review M3); one that
+      // could not be looked at is tried again at the next. One passed by is looked at again only on a read where the
+      // main transcript grew, as it does around a sub-agent's work: a sub-agent resumed in a resumed conversation writes
+      // on in its own old file (deferred minor a), and the reader's message ids count what it holds once
       const agents = path.join(path.dirname(named), path.basename(named, '.jsonl'), 'subagents')
       const names = await fs.readdir(agents).catch(() => [] as string[])
       for (const n of names) {
         const file = path.join(agents, n)
-        if (!n.endsWith('.jsonl') || t.seen.has(file)) continue
+        if (!n.endsWith('.jsonl') || t.files.has(file) || (t.seen.has(file) && !grew)) continue
         const written = await fs.stat(file).then(
           (st) => st.mtimeMs,
           () => null
@@ -265,7 +272,7 @@ export function createTokenSources(d: {
         if (written >= f.since) t.files.set(file, await follow(file))
       }
     }
-    for (const tail of t.files.values()) await readTail(f, tail, t.read)
+    for (const [file, tail] of t.files) if (file !== named) await readTail(f, tail, t.read)
   }
 
   /** Reads each of `followed` forward; one that had ended is read this last time and let go. */
