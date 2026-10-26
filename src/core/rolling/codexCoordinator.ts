@@ -41,6 +41,7 @@ import {
 } from './codexSignal'
 import { t, type Lang } from '../i18n'
 import { ROLL_SNAPSHOT_VERSION, snapshotKey, type RollSnapshot, type RollRespawnExtra } from './snapshot'
+import { untilEnter } from '../sessions/sessionDriver'
 
 const TICK_MS = 15_000 // how often state is refreshed and the fallback trigger checked (mirrors claudeCoordinator.ts)
 const LOCATE_POLL_MS = 1_000 // how often we poll to map the rollout
@@ -263,7 +264,7 @@ interface Chain {
   // the tick for a chat chain (spec §14.6) — as does a successful in-place settle (settleInPlace).
   inPlaceUsed: boolean
   // The state-publication generation counter, incremented on every pushState. The deferred 'none' of
-  // resumeInPlace (its 150ms Enter timer) captures the generation at scheduling time; on firing it
+  // resumeInPlace (after its Enter wait) captures the generation at scheduling time; on firing it
   // publishes only if the generation is unchanged, and skips as stale if a 'waiting' or 'switching'
   // has published something more recent in the meantime. Same mechanism and same reason as the claude
   // side (claudeCoordinator.ts) — codex got its first deferred publish with the in-place resume.
@@ -1371,8 +1372,8 @@ export class CodexRollingCoordinator {
   }
 
   /** Continuing on the same account — no kill, no spawn, no copy; only one line plus Enter go into
-   *  the live PTY. This is the same channel `answerModelChoice` already uses, and the same constant
-   *  (ENTER_DELAY_MS).
+   *  the live PTY. This is the same channel `answerModelChoice` already uses; the Enter waits the way every
+   *  pty delivery does (untilEnter in core/sessions/sessionDriver.ts).
    *
    *  What this function actually does is undo three things.
    *   ① **Re-attach the tail at the end of the file.** Through the wait, tick skipped this chain
@@ -1416,7 +1417,7 @@ export class CodexRollingCoordinator {
       this.deps.log(`codex limit reset → resume in place session=${liveId}`)
       // The baseline the deadline compares against, read **before** anything is submitted. An earlier
       // version only *started* this read here and let settleInPlace await it, to keep a file-system
-      // round trip out of the way of the 150ms Enter. That is not safe: if the stat resolved after
+      // round trip out of the way of the Enter. That is not safe: if the stat resolved after
       // codex had already appended the record for the line we submitted, the baseline would contain
       // that record, the deadline would see no growth against it — and a swallowed line would look
       // like a session that is working, which is exactly the eternal stall settleInPlace exists to
@@ -1436,17 +1437,28 @@ export class CodexRollingCoordinator {
         return
       }
       const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same convention as the claude side
+      // Enter waits for codex to have drawn the line and gone quiet (untilEnter): it swallows an Enter that comes
+      // right after a paste (openai/codex#56982), and a fixed 150 ms could leave the line in its composer. Output
+      // counts once it is newer than the last output before the line (the resume itself stamped that one above).
+      const wroteAt = this.now()
+      const outputBefore = chain.lastOutputAt
       this.deps.write(liveId, prompt)
       this.snap(chain)
-      setTimeout(() => {
-        if (chain.disposed || chain.liveId !== liveId) return
-        this.deps.write(liveId, '\r')
-        // 'none' has to be published after Enter for the scheduler's suppression to lift (same order
-        // as the claude side). If a more recent state was published in between, ours is stale and is
-        // skipped — publishing it anyway would lift the suppression and clear the orchestration stop
-        // marker while the chain is in fact waiting or switching again.
-        if (chain.stateSeq === stateSeq) this.pushState(chain, 'none')
-      }, ENTER_DELAY_MS)
+      void untilEnter({
+        wroteAt,
+        outputAfter: () => (chain.lastOutputAt > outputBefore ? chain.lastOutputAt : null),
+        now: this.now
+      })
+        .then(() => {
+          if (chain.disposed || chain.liveId !== liveId) return
+          this.deps.write(liveId, '\r')
+          // 'none' has to be published after Enter for the scheduler's suppression to lift (same order
+          // as the claude side). If a more recent state was published in between, ours is stale and is
+          // skipped — publishing it anyway would lift the suppression and clear the orchestration stop
+          // marker while the chain is in fact waiting or switching again.
+          if (chain.stateSeq === stateSeq) this.pushState(chain, 'none')
+        })
+        .catch((err) => this.deps.log(`codex resume in place Enter failed: ${String(err)} session=${liveId}`))
       chain.healthyTimer = setTimeout(() => {
         void this.settleInPlace(chain, liveId, sizeBefore)
       }, HEALTHY_MS)
