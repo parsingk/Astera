@@ -6,7 +6,7 @@
 // into the Host's own executable.
 import type { PtyEntry, PtyMeta, ProcOpenOptions } from '../core/host/protocol'
 import { createLineSplitter, type LineSplitter } from '../core/host/lines'
-import { DEAD_ENTRIES_KEPT, ENDED_SESSIONS_KEPT, keepSubmission, submitterIn, type Submission } from './registry'
+import { DEAD_ENTRIES_KEPT, ENDED_SESSIONS_KEPT, keepSubmission, personIn, submitterIn, type Submission } from './registry'
 
 /** The same caps as PtyRegistry's, one number each for both. **Here an ended chat is what is kept longer**, where
  *  PtyRegistry keeps an ended session: `sessions list` shows an ended chat and `sessions read` finds its transcript
@@ -228,6 +228,13 @@ export class ProcRegistry {
    *  process never here (observe deferred fix round 1, I1: a chat's stream does not echo the line that began a turn). */
   submittedBetween(id: string, from: number, to: number): 'person' | 'host' | null {
     return submitterIn(this.entries.get(id)?.submissions, from, to)
+  }
+
+  /** Whether a person wrote any line in (from, to], whatever was written after it: a chat takes its queued lines in
+   *  order, so a person's line written during a turn begins the next one even when a card answer followed it (observe
+   *  deferred fix round 3). */
+  personSubmittedBetween(id: string, from: number, to: number): boolean {
+    return personIn(this.entries.get(id)?.submissions, from, to)
   }
 
   kill(id: string): void {

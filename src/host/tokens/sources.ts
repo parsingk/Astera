@@ -282,6 +282,8 @@ export function createTokenSources(d: {
     onLine: Listen<[string, number, string]>
     onExit: Listen<[string, number]>
     submittedBetween?: SentBy
+    /** Whether a person wrote any line in (from, to], whatever came after it (ProcRegistry.personSubmittedBetween). */
+    personSubmittedBetween?: (id: string, from: number, to: number) => boolean
   }
   /** A Claude terminal session's statusline payload, which names its transcript; null before it has one. */
   statusLinePayload(sessionId: string): Promise<unknown | null>
@@ -345,7 +347,9 @@ export function createTokenSources(d: {
   /** A Claude chat frame's part in its turns: a `result` ends the turn under way, and the first frame of the model's after
    *  it begins the next one, at its time. That turn is a person's when a person's turn line reached the chat since the
    *  turn before began: after that turn's `result`, or during it, since the chat takes a line written mid-turn once the
-   *  turn ends (fix round 2). Only turn lines are marked a person's, so a card answered mid-turn does not count. One a
+   *  turn ends (fix round 2). Any person's line there counts, whatever was written after it (fix round 3): the chat takes
+   *  its queued lines in order, and a card answered or a model picked after it is not a person's turn line, so it hides
+   *  nothing. Only turn lines are marked a person's, so a card answered mid-turn does not count by itself. One a
    *  background task's end began, or one the Host sent itself, goes on with the work before it. */
   const noteChatTurn = (f: Followed, line: string): void => {
     if (!line.includes('"result"') && !line.includes('"assistant"')) return
@@ -355,7 +359,7 @@ export function createTokenSources(d: {
       f.chatTurn = true
       const before = f.chatTurnAt
       f.chatTurnAt = now()
-      if (sentBy(f, before, f.chatTurnAt) === 'person') turnBegan(turnsFor(f.sessionId), timeOf(o) ?? f.chatTurnAt)
+      if (d.procs.personSubmittedBetween?.(f.key, before, f.chatTurnAt) === true) turnBegan(turnsFor(f.sessionId), timeOf(o) ?? f.chatTurnAt)
     }
   }
   /** Lets go of what is kept for a session once nothing follows it. */

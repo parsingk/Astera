@@ -102,6 +102,20 @@ describe('ProcRegistry — lines', () => {
     expect(h.registry.submittedBetween('p1', 1000, 1999)).toBeNull()
     expect(h.registry.submittedBetween('nope', 0, 2000)).toBeNull()
   })
+  // Fix round 3: a chat takes its queued lines in order, so whether any person's line is in a span is asked too, apart
+  // from who wrote the latest
+  it('tells whether a person wrote any line in a span, whatever came after it', () => {
+    let clock = 1000
+    const h = harness({ now: () => clock })
+    h.open()
+    h.registry.write('p1', '{"type":"user"}', { person: true })
+    clock = 2000
+    h.registry.write('p1', '{"type":"control_response"}')
+    expect(h.registry.submittedBetween('p1', 0, 3000)).toBe('host')
+    expect(h.registry.personSubmittedBetween('p1', 0, 3000)).toBe(true)
+    expect(h.registry.personSubmittedBetween('p1', 1000, 3000)).toBe(false)
+    expect(h.registry.personSubmittedBetween('nope', 0, 3000)).toBe(false)
+  })
 })
 
 describe('ProcRegistry — the buffer', () => {

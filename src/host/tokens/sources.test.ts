@@ -92,6 +92,9 @@ function fakeRegistry() {
       const last = (this.sent.get(id) ?? []).filter((x) => from < x.at && x.at <= to).at(-1)
       return last === undefined ? null : last.person ? 'person' : 'host'
     },
+    personSubmittedBetween(this: { sent: typeof sent }, id: string, from: number, to: number): boolean {
+      return (this.sent.get(id) ?? []).some((x) => x.person && from < x.at && x.at <= to)
+    },
     open: (id: string, m: PtyMeta) => meta.forEach((cb) => cb(id, m, 'open')),
     note: (id: string, m: PtyMeta) => meta.forEach((cb) => cb(id, m, 'note')),
     line: (id: string, l: string) => lineCbs.forEach((cb) => cb(id, ++seq, l)),
@@ -780,6 +783,33 @@ describe('createTokenSources', () => {
     frame(E + 5 * MIN, 'msg_wrap', 20, 2)
     r.procs.typed('proc_k', E + 6 * MIN, 'person')
     result(E + 7 * MIN)
+    frame(E + 7 * MIN + 500, 'msg_after', 300, 30)
+    expect(runTokensOf(state, 'run_1', r.store.spent())).toEqual({ coordinatorTokens: { input: 30, output: 3, total: 33 } })
+    r.sources.dispose()
+  })
+
+  // Fix round 3: a line the person did not write after theirs in the same turn (a card answered, a model picked) does
+  // not hide it: the chat takes its queued lines in order, so any person's turn line since the turn before began makes
+  // the next turn theirs
+  it('takes the turn after a person’s mid-turn line as theirs though an unmarked line came after it', async () => {
+    const MIN = 60_000
+    const E = T0 + 10 * MIN
+    let now = T0
+    let state = orch([], 'chat_k')
+    const r = await rig({ state: () => state, now: () => now })
+    const frame = (at: number, id: string, input: number, output: number): void => {
+      now = at
+      r.procs.line('proc_k', claudeLine(at, id, input, output, { parent_tool_use_id: null, session_id: 'c1' }))
+    }
+    r.procs.open('proc_k', note('chat', 'chat_k', { provider: 'claude' }))
+    frame(T0 + 1000, 'msg_1', 10, 1)
+    state = { ...state, runs: state.runs.map((x) => ({ ...x, endedAt: iso(E) })), tasks: state.tasks.map((t) => ({ ...t, status: 'completed', updatedAt: iso(E) })) }
+    frame(E + 5 * MIN, 'msg_wrap', 20, 2)
+    r.procs.typed('proc_k', E + 6 * MIN, 'person')
+    // A card answered after it: a line not marked a person's
+    r.procs.typed('proc_k', E + 6 * MIN + 30_000, 'host')
+    now = E + 7 * MIN
+    r.procs.line('proc_k', '{"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":1}}')
     frame(E + 7 * MIN + 500, 'msg_after', 300, 30)
     expect(runTokensOf(state, 'run_1', r.store.spent())).toEqual({ coordinatorTokens: { input: 30, output: 3, total: 33 } })
     r.sources.dispose()

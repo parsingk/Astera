@@ -109,6 +109,10 @@ export const keepSubmission = (list: Submission[], s: Submission): void => {
   list.push(s)
   if (list.length > SUBMISSIONS_KEPT) list.shift()
 }
+/** Whether a person sent any of `list` in (from, to], whatever came after it (fix round 3: a chat takes its queued
+ *  lines in order, so a person's line is not hidden by a card answer written after it). */
+export const personIn = (list: readonly Submission[] | undefined, from: number, to: number): boolean =>
+  list?.some((s) => s.person && s.at > from && s.at <= to) ?? false
 /** Who sent the latest of `list` in (from, to], or null for none kept there. */
 export const submitterIn = (list: readonly Submission[] | undefined, from: number, to: number): 'person' | 'host' | null => {
   if (!list) return null
