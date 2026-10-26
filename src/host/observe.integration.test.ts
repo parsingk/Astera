@@ -328,6 +328,9 @@ const CODEX_CALLS = (): Array<{ type: string; payload: Record<string, unknown> }
     type: 'response_item',
     payload: { type: 'custom_tool_call', name: 'apply_patch', input: '*** Begin Patch\n*** Update File: src/a.ts\n@@\n-a\n+b\n*** End Patch\n', call_id: 'call_patch', status: 'completed' }
   },
+  // What Codex writes when they are over: the exec's exit code, and the patch's result
+  { type: 'response_item', payload: { type: 'function_call_output', call_id: 'call_push', output: 'Exit code: 0\nWall time: 0.1 seconds\nOutput:\n' } },
+  { type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: 'call_patch', output: [{ type: 'input_text', text: 'Success. Updated the following files:\nM src/a.ts' }] } },
   {
     type: 'event_msg',
     payload: { type: 'mcp_tool_call_end', call_id: 'call_mcp', invocation: { server: 'linear', tool: 'get_issue', arguments: { id: 'LIN-1' } }, result: { Ok: { content: [], isError: false } } }
@@ -418,6 +421,8 @@ describe('observe mode on the Host, end to end through the CLI', { timeout: 60_0
       { action: 'mcp.call', target: 'linear.get_issue', decision: 'allow' }
     ])
     for (const r of listed) expect(r).toMatchObject({ sessionId: s.id, accountId: CODEX, provider: 'codex', kind: 'terminal', source: 'codex-rollout' })
+    // The calls Codex wrote an output for are told how they went; the MCP end event says it itself
+    expect(listed.map((r) => r.status)).toEqual(['ok', 'ok', 'ok'])
     expect((await astera(['audit', 'summary'])).data).toMatchObject({ allow: 2, wouldDeny: 1, unknown: 0 })
 
     // Read again, nothing is recorded twice
