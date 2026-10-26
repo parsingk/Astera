@@ -372,3 +372,21 @@ describe('COVERAGE', () => {
     expect(cell('codex', 'chat', 'network')).toEqual({ level: 'partial' })
   })
 })
+
+// Final whole-branch review: the resolver reads a command wherever the shell can hide it, and D2 denies it wherever it sits
+describe('decide, a denied command the resolver must reach', () => {
+  const p = { ...STARTER_POLICY, mode: 'observe' as const }
+  const push = { decision: 'would-deny', ruleId: starterId('git.remote.write') }
+  const del = { decision: 'would-deny', ruleId: starterId('filesystem.delete') }
+  const ps = (command: string) => claude('PowerShell', { command })
+
+  it('would deny a command in a PowerShell brace that is not standing alone', () => {
+    expect(decide(ps('git branch | ForEach-Object {git push origin $_}'), p)).toEqual(push)
+    expect(decide(ps('ForEach-Object -Process {git push}'), p)).toEqual(push)
+    expect(decide(ps('Get-ChildItem | ForEach-Object {Remove-Item ..\\x -Recurse}'), p)).toEqual(del)
+    expect(decide(ps('foreach ($r in $remotes) {git push $r}'), p)).toEqual(push)
+    expect(decide(ps('if ($x) {git push}'), p)).toEqual(push)
+    expect(decide(ps('try {git push} catch {}'), p)).toEqual(push)
+    expect(decide(ps('switch ($x) {a {git push}}'), p)).toEqual(push)
+  })
+})

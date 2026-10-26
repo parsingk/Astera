@@ -2079,3 +2079,21 @@ describe('no secret reaches a target (review focus 2)', () => {
     expect(bash(`${'a'.repeat(200)}`).target.length).toBeLessThanOrEqual(60)
   })
 })
+
+describe('shell: what the final whole-branch review found the resolver could not reach', () => {
+  it('reads the command of a PowerShell brace that is not standing alone', () => {
+    expect(acts(ps('git branch | ForEach-Object {git push origin $_}'))).toContain('git.remote.write')
+    expect(acts(ps('foreach ($r in $remotes) {git push $r}'))).toContain('git.remote.write')
+    expect(acts(ps('try {git push} catch {}'))).toContain('git.remote.write')
+    expect(acts(ps('switch ($x) {a {git push}}'))).toContain('git.remote.write')
+  })
+
+  it('keeps ${name} and @{ } as values in PowerShell, and POSIX braces as they were', () => {
+    expect(ps('Write-Output ${env:PATH}')).toMatchObject({ action: 'process.execute', target: 'Write-Output', confidence: 'high' })
+    expect(ps('Write-Output ${env:PATH}').commands).toBeUndefined()
+    expect(acts(ps('$h = @{a=1}; git push'))).toEqual(['git.remote.write'])
+    expect(ps('Get-Item ${a b}; git status').commands).toHaveLength(2)
+    expect(bash('echo {a,b} ${x}').commands).toBeUndefined()
+    expect(bash('echo {a,b} ${x}')).toMatchObject({ action: 'process.execute', target: 'echo', confidence: 'high' })
+  })
+})

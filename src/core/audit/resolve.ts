@@ -912,6 +912,15 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
       } else if (words.length === 0 && out.length === 0 && !has) {
         call = true // PowerShell's call operator, at the start of a command
       } else endCommand()
+    } else if (flavor === 'ps' && c === '{' && has && !wordQuoted && cur.endsWith('$')) {
+      // `${name}` is a variable named in braces: part of the word, to the brace that closes it
+      let braces = 1
+      let j = i + 1
+      for (; j < line.length && braces > 0; j++) braces += line[j] === '{' ? 1 : line[j] === '}' ? -1 : 0
+      cur += line.slice(i, j)
+      i = j - 1
+    } else if (flavor === 'ps' && (c === '{' || c === '}') && !(c === '{' && cur === '@' && !wordQuoted)) {
+      endCommand() // in PowerShell a brace is always a token (a script block, a body); `@{` is a hashtable, a value
     } else if ((c === '{' || c === '}') && !has && /^(?:\s|;|$)/.test(line.slice(i + 1, i + 2))) {
       endCommand() // a group or script block's brace, standing alone
     } else if (c === '<' && line[i + 1] === '<' && line[i + 2] !== '<') {
