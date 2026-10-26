@@ -21,6 +21,7 @@ import { cliEnvFor } from '../sessions/cliEnv'
 import { EXITED_SESSIONS_KEPT, prependToPath } from '../sessions/manager'
 import type { CapabilitySource } from '../extensions/capabilityCache'
 import { gatewayTokenEnv } from '../extensions/resolve'
+import { applyHiding, type HidingSource } from '../credentials/hiding'
 
 export { EXITED_SESSIONS_KEPT }
 
@@ -63,6 +64,8 @@ export interface ChatManagerDeps {
   orchEnv?: () => ChatOrchEnv | undefined
   /** Shared extensions (Agent Control Plane release 1): read at spawn; the caller refreshes the account first. */
   capabilities?: CapabilitySource
+  /** The Credentials list (credentials design §5): what an agent session starts without, asked at each spawn. */
+  hiding?: HidingSource
 }
 
 /** What `spawn` takes, for a caller that builds it elsewhere (./respawn.ts). */
@@ -270,13 +273,17 @@ export class ChatSessionManager {
     // respawn whose chain was already granted the bypass has to keep it (opts.startWithBypass, set by
     // index.ts's roll callbacks from `bypassedOf(oldId)`). Still never on a fresh, first spawn: that
     // path never passes `startWithBypass` at all, so S7's default holds exactly as before.
+    const inherited = cliEnvFor({
+      base: typeof this.deps.baseEnv === 'function' ? this.deps.baseEnv() : (this.deps.baseEnv ?? process.env),
+      account: opts.account,
+      descriptor,
+      homeDir: this.deps.homeDir
+    })
+    // The Credentials list's hidden keys and logins go from what the session inherits, before Astera adds its own
+    // (credentials design §5), as a terminal session's do
+    if (this.deps.hiding) applyHiding(inherited, this.deps.hiding.get(opts.cwd, id), this.deps.platform)
     const env: Record<string, string | undefined> = {
-      ...cliEnvFor({
-        base: typeof this.deps.baseEnv === 'function' ? this.deps.baseEnv() : (this.deps.baseEnv ?? process.env),
-        account: opts.account,
-        descriptor,
-        homeDir: this.deps.homeDir
-      }),
+      ...inherited,
       ...(opts.startWithBypass ? BYPASS_ENV : {}),
       // The caller's identity for `astera`, as a pty session has it (core/sessions/manager.ts; cliEnvFor
       // cleared any inherited one above). Without it every chat agent read as the shell, and the check

@@ -95,6 +95,8 @@ export interface HostUnderstandingDeps {
   push(root: string): void
   /** Test seam: the agent round trip. */
   runAgent?: PipelineDeps['runAgent']
+  /** The Credentials list's hiding, which the agent gets as a session in the project would. */
+  hiding?: PipelineDeps['hiding']
   /** Test seam: the clock of `generatedAt`. */
   now?(): string
   /** Test seam: the platform whose path rule matches a project's key (isSamePath). */
@@ -257,7 +259,8 @@ export function createHostUnderstanding(d: HostUnderstandingDeps): HostUnderstan
     now: d.now ?? (() => new Date().toISOString()),
     readCommits: d.readCommits,
     log: d.log,
-    runAgent: d.runAgent
+    runAgent: d.runAgent,
+    hiding: d.hiding
   })
 
   const fold = (projectPath: string): string => repoPathOf(d.worktrees(), projectPath)

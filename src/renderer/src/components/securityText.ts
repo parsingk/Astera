@@ -23,6 +23,8 @@ type Failure = { ok: false; code: string; message: string; reason?: string }
 export const SECURITY_TAB = 'Security & Access'
 export const POLICIES_TITLE = 'Policies'
 export const AUDIT_LOGS_TITLE = 'Audit Logs'
+/** The section that keeps keys and logins out of agent sessions (credentials design §5), named like the others. */
+export const CREDENTIALS_TITLE = 'Credentials'
 /** The observe mode and the rules, named in English in every language too (the person, 2026-10-26). */
 export const OBSERVE_NAME = 'Observe'
 export const RULES_TITLE = 'Rules'

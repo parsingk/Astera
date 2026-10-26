@@ -82,6 +82,8 @@ export function createGateway(d: {
   log: (line: string) => void
   /** Takes the stored secret values out of what a session is told; absent leaves the text as it is. */
   hide?: (text: string) => Promise<string>
+  /** Told when a session's `tools/call` settles, with the pty or proc its token belongs to (credentials design §6). */
+  onToolCall?: (c: { ownerId: string; serverId: string; serverName: string; tool: string; ok: boolean }) => void
 }): Gateway {
   const hide = d.hide ?? (async (s: string) => s)
   let server: http.Server | null = null
@@ -105,9 +107,18 @@ export function createGateway(d: {
       return send(res, 502, rpcError(-32603, await hide(err instanceof Error ? err.message : String(err))))
     }
     // The session may have ended while the upstream started: nothing could reach or end this one later (final review I1)
-    if (d.tokens.lookup(token) === null) {
+    const binding = d.tokens.lookup(token)
+    if (binding === null) {
       up.release()
       return send(res, 401, rpcError(-32001, 'Unauthorized'))
+    }
+    const toolCalled = (tool: unknown, ok: boolean): void => {
+      if (typeof tool !== 'string' || !d.onToolCall) return
+      try {
+        d.onToolCall({ ownerId: binding.ownerId, serverId: entry.id, serverName: entry.name, tool, ok })
+      } catch {
+        // a record that could not be made never fails the call
+      }
     }
     // A client initializes again after a reconnect; the MCP session it left is ended rather than held to its pty's exit
     for (const old of [...sessions.values()]) if (old.token === token && old.serverId === entry.id) endSession(old)
@@ -148,10 +159,12 @@ export function createGateway(d: {
         return call.then(
           (r) => {
             d.pool.clearStalled(u.key)
+            if (method === 'tools/call') toolCalled(params.name, (r as { isError?: unknown }).isError !== true)
             return r
           },
           (err: unknown) => {
             if (err instanceof McpError && err.code === ErrorCode.RequestTimeout) d.pool.markStalled(u.key, `a call timed out after ${Math.round(timeout / 1000)} s`)
+            if (method === 'tools/call') toolCalled(params.name, false)
             throw err
           }
         )

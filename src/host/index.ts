@@ -17,7 +17,10 @@ import { createTokenSources, tokenOwnerOf } from './tokens/sources'
 import { readAuditPolicy } from '../core/audit/policy'
 import { keepPruning } from '../core/audit/store'
 import { createGatewayHub } from './gateway/hub'
+import { createUseRecorder, recordPush, recordingGhRunner, workOfSession } from './credentials/recordUses'
+import { createHostCredentials } from './credentials/commands'
 import { hidingLog } from '../core/extensions/secrets'
+import { createHidingSource, projectOfWorktrees } from '../core/credentials/hiding'
 import { sweepGeneratedMcp } from '../core/extensions/resolve'
 import { hostJobSources } from './jobSources'
 import { hostCompletionChecks } from './completionChecks'
@@ -236,7 +239,34 @@ async function main(): Promise<void> {
   procs.onExit((id) => procHolders.ended(id))
   // The MCP Gateway (Agent Control Plane release 2): shared stdio servers run here once per folder, and each session the
   // two registries open with a Gateway token reaches them over 127.0.0.1. Listens only while a stdio server is shared.
-  const mcpGateway = createGatewayHub({ profileDir, ptys: registry, procs, log: hidingLog(profileDir, (m) => log.write(m)) })
+  // Credential-use records (credentials design §6): the Gateway's tool calls, and the GitHub operations the command layer
+  // and the lifecycle run, each for whoever asked. `orch` is read inside the calls, long after it is made below.
+  const useRecorder = createUseRecorder({ profileDir, log: (m) => log.write(m) })
+  const sessionOfOwner = (ownerId: string): string | undefined => {
+    const meta = registry.metaOf(ownerId) ?? procs.list().find((e) => e.id === ownerId)?.meta ?? null
+    return meta && (meta.kind === 'session' || meta.kind === 'chat') ? meta.id : undefined
+  }
+  const mcpGateway = createGatewayHub({
+    profileDir,
+    ptys: registry,
+    procs,
+    log: hidingLog(profileDir, (m) => log.write(m)),
+    onToolCall: (c) => {
+      const sessionId = sessionOfOwner(c.ownerId)
+      useRecorder.record({
+        actor: 'session',
+        ...(sessionId !== undefined ? { sessionId, ...workOfSession(orch.state(), sessionId) } : {}),
+        entryId: `mcp:${c.serverId}`,
+        provider: 'mcp',
+        action: 'mcp.call',
+        resource: `${c.serverName}/${c.tool}`,
+        outcome: c.ok ? 'ok' : 'failed',
+        evidence: 'managed'
+      })
+    }
+  })
+  // The Host's own GitHub calls (the lifecycle's watch and its writes): its scheduled reads are not recorded, its writes are
+  const hostGh = recordingGhRunner(defaultGhRunner, { actor: 'host' }, useRecorder, { background: true, originOf })
 
   let server: Awaited<ReturnType<typeof startHostServer>>
   /** Declared here and assigned below `createHostOrch` (S6 final review M3): the rolling wiring's
@@ -443,7 +473,9 @@ async function main(): Promise<void> {
     // The app's reader for the same material (ipc.ts): no range, or one git could not read, gives none.
     readCommits: async (root, from, to) => (from && to ? ((await readRange(root, from, to))?.subjects ?? []) : []),
     log: (m) => log.write(m),
-    push: (root) => server.broadcast({ t: 'understanding-state', root })
+    push: (root) => server.broadcast({ t: 'understanding-state', root }),
+    // The Credentials list: the agent writing a record is started in the project, so it loses what a session there would
+    hiding: createHidingSource({ profileDir, projectOf: projectOfWorktrees(() => worktrees.list()), log: hidingLog(profileDir, (m) => log.write(m)) })
   })
   await hostUnderstanding.load()
 
@@ -837,14 +869,27 @@ async function main(): Promise<void> {
   const policies = createHostPolicies({ profileDir, onChange: (cmd) => auditRecorder.invalidate({ modeUnchanged: cmd !== 'policies-set-mode' }) })
   // And the records read back with the decisions those rules give them now (design §8)
   const audit = createHostAudit({ profileDir })
+  // The Credentials list and its uses (credentials design §7); the session managers read the file at each spawn. The
+  // projects an entry can be narrowed to are the registered ones, read after the state's load (`orch` is made below)
+  const credentials = createHostCredentials({
+    profileDir,
+    // The app's own GitHub writes (its worktree panel's Create PR) are kept with the uses this Host records itself
+    record: (u) => useRecorder.record(u),
+    projects: async () => {
+      await orch.ready()
+      return orch.state().projects
+    }
+  })
   const orch = createHostOrch({
     profileDir,
+    useRecorder,
     version: hostVersion,
     controllers,
     plugins,
     extensions,
     agentProfiles,
     policies,
+    credentials,
     audit,
     // The job-source plugins a person makes Jobs from (plugin Phase 4 J10), asked through the runtime
     jobSources: hostJobSources({ manager: plugins, runtime: pluginRuntime }),
@@ -925,7 +970,7 @@ async function main(): Promise<void> {
       run: defaultGhRunner,
       ...(spawner ? { worktreeOf: (p: string) => worktrees.infoOf(p) } : {}),
       // github-pr-create: the app's own create PR path (push, then gh pr create), over the Run's worktree.
-      createPr: (req) => createPullRequest(req),
+      createPr: (req, deps) => createPullRequest(req, deps),
       readCommits: (wt, base) => readCommits(wt, base),
       isClean: (wt) => isCleanWorktree(wt),
       // The lifecycle's preflight (design §7.2): this folder's origin, which the lifecycle pushes to alone (L24).
@@ -1013,19 +1058,19 @@ async function main(): Promise<void> {
         worktreeOf: (p) => worktrees.infoOf(p),
         baseBranch: (repoPath, baseRef) => normalizeBaseForGh(repoPath, baseRef),
         originOf,
-        findOpenPrs: (cwd, repo, branch, base) => findOpenPrs(defaultGhRunner, cwd, repo, branch, base),
-        readPrState: (cwd, repo, n) => readPrState(defaultGhRunner, cwd, repo, n),
-        ruleCheckNames: (cwd, repo, branch) => readRuleCheckNames(defaultGhRunner, cwd, repo, branch),
-        readIssue: (cwd, n) => readIssue(defaultGhRunner, cwd, n),
-        readJobLog: (cwd, repo, id) => readJobLog(defaultGhRunner, cwd, repo, id),
-        readAnnotations: (cwd, repo, id) => readAnnotations(defaultGhRunner, cwd, repo, id),
+        findOpenPrs: (cwd, repo, branch, base) => findOpenPrs(hostGh, cwd, repo, branch, base),
+        readPrState: (cwd, repo, n) => readPrState(hostGh, cwd, repo, n),
+        ruleCheckNames: (cwd, repo, branch) => readRuleCheckNames(hostGh, cwd, repo, branch),
+        readIssue: (cwd, n) => readIssue(hostGh, cwd, n),
+        readJobLog: (cwd, repo, id) => readJobLog(hostGh, cwd, repo, id),
+        readAnnotations: (cwd, repo, id) => readAnnotations(hostGh, cwd, repo, id),
         // G3b1: CI on the pushed head settles a lifecycle round through the Host's own validation (its store is the
         // authoritative one). G3b2: where it must stop, a GitHub question keeps the round's wait, in the person's language
         settle: (a) => (wiring ? wiring.checks.settleHandedOff(a) : Promise.resolve()),
         openGitHubGate: (a) => orch.handle('lifecycle-gate', { task: a.taskId, since: a.since, kind: a.kind, question: a.question, options: a.options }),
         ancestry: (cwd, head, sha) => ancestry(realGit, cwd, head, sha),
         // G4 (L9): a CI failure a rerun can cure is rerun in the Run's repository, within the Job's budget
-        rerunCi: (cwd, repo, id) => rerunFailed(defaultGhRunner, cwd, id, repo),
+        rerunCi: (cwd, repo, id) => rerunFailed(hostGh, cwd, id, repo),
         lang: () => (wiring ? wiring.checks.langNow() : 'en'),
         log: (m) => log.write(m)
       })
@@ -1041,13 +1086,17 @@ async function main(): Promise<void> {
         isClean: (cwd) => isCleanWorktree(cwd),
         readCommits: (cwd, base) => readCommitsOrNull(cwd, base),
         baseBranch: (repoPath, baseRef) => normalizeBaseForGh(repoPath, baseRef),
-        push: (cwd, branch) => pushBranch(realGit, cwd, branch),
+        push: async (cwd, branch) => {
+          const r = await pushBranch(realGit, cwd, branch)
+          void recordPush(useRecorder, { actor: 'host' }, { cwd, branch, ok: r.ok, originOf })
+          return r
+        },
         headOf: (cwd, ref) => headOf(realGit, cwd, ref),
-        findOpenPrs: (cwd, repo, branch, base) => findOpenPrs(defaultGhRunner, cwd, repo, branch, base),
-        createDraftPr: (cwd, repo, pr) => createDraftPr(defaultGhRunner, cwd, repo, pr),
+        findOpenPrs: (cwd, repo, branch, base) => findOpenPrs(hostGh, cwd, repo, branch, base),
+        createDraftPr: (cwd, repo, pr) => createDraftPr(hostGh, cwd, repo, pr),
         // G6 (spec §30): the bound pull request as it is now, read before every push
         readPr: async (cwd, repo, n) => {
-          const r = await prByNumber(defaultGhRunner, cwd, repo, n)
+          const r = await prByNumber(hostGh, cwd, repo, n)
           // A pull request gh cannot find is a read that failed, never one to push onto (G6 final review M7)
           if (!r.ok) return r
           return r.pr ? { ok: true, state: r.pr.state } : { ok: false, kind: 'other', message: `pull request #${n} was not found` }

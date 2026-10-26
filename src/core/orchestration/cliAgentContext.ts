@@ -654,7 +654,11 @@ const NOT_SWITCHED = [
   'policies-rules-edit',
   'policies-rules-remove',
   'policies-rules-move',
-  'policies-rules-reset'
+  'policies-rules-reset',
+  // Answered by the Host's Credentials list (src/host/credentials/commands.ts): read here, changed in the app only
+  'credentials-list',
+  'credentials-show',
+  'credentials-doctor'
 ] as const satisfies readonly AgentCommand[]
 
 /**

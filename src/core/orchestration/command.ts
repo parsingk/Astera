@@ -127,7 +127,7 @@ import { prByNumber, prForBranch, prHead } from '../github/prs'
 import { ISSUE_JOB_ASSOCIATIONS, readIssue } from '../github/issue'
 import { GITHUB_SOURCE_ID, issueContext } from '../github/issueSource'
 import { fillFromCommits, type CommitSummary } from '../github/fill'
-import type { PrCreateRequest, PrCreateResult } from '../github/prCreate'
+import type { PrCreateDeps, PrCreateRequest, PrCreateResult } from '../github/prCreate'
 import { GITHUB_CI_CHECK, GITHUB_LIFECYCLE_DEFAULTS, LIFECYCLE_CHECKS_MAX, LIFECYCLE_CHECK_NAME_MAX, type GitHubLifecyclePolicy } from '../github/lifecycle'
 import { lifecyclePreflight } from '../github/preflight'
 import type { GitHubLifecycleDefaults } from '../github/lifecycleDefaults'
@@ -667,7 +667,8 @@ export interface OrchServerDeps {
   github?: {
     run: GhRunner
     worktreeOf?(path: string): WorktreeInfo | null
-    createPr(req: PrCreateRequest): Promise<PrCreateResult>
+    /** `deps` lets the Host record the push and the gh call for whoever asked (credentials design §6). */
+    createPr(req: PrCreateRequest, deps?: PrCreateDeps): Promise<PrCreateResult>
     readCommits(worktree: string, base: string): Promise<CommitSummary[]>
     isClean(worktree: string): Promise<{ changedCount: number }>
     /** The folder's `origin` URL, or null (GitHub lifecycle L24); the lifecycle's preflight reads it. */

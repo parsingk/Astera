@@ -2,17 +2,32 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import type { AuditQuery, PluginsCallAnswer } from '../../../core/types'
 import type { AgentProfile } from '../../../core/agentProfiles/types'
-import type { AuditMode, AuditPolicy, AuditRule, CoverageRow } from '../../../core/audit/types'
+import type { AuditMode, AuditPolicy, AuditRule, CoverageRow, CredentialUse } from '../../../core/audit/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
 import { confirmModal } from '../lib/confirm'
 import { useAgentProfiles } from '../lib/agentProfiles'
 import { Select } from './Select'
 import { profileNameOf } from './agentProfilesText'
+import { CredentialsSection } from './CredentialsSection'
+import {
+  appendUses,
+  credentialFailure,
+  entryName,
+  listOf,
+  sessionName,
+  useLine,
+  useSessions,
+  usesPageOf,
+  usesStateLine,
+  type UsesCursor,
+  type UsesFilters
+} from './credentialsText'
 import {
   AUDIT_ACTIONS,
   AUDIT_LOGS_TITLE,
   COVERAGE_CLASSES,
+  CREDENTIALS_TITLE,
   DECISIONS,
   modeLabel,
   PERIODS,
@@ -70,9 +85,10 @@ const PERIOD_ORDER: Period[] = ['today', 'week', 'month']
 /** Rows a page of Audit Logs reads at a time. */
 const PAGE = 100
 
-/** Settings › Security & Access (observe mode design §11): Policies, the observe switch, what observe can see and the
- *  one rule set, and Audit Logs, the calls observed sessions made judged by those rules as they are now. The Host owns
- *  the rules and the records and answers every change with the rules as they are after it; nothing here decides a call.
+/** Settings › Security & Access (observe mode design §11, credentials design §5-§7): Policies, the observe switch, what
+ *  observe can see and the one rule set; Credentials, what Astera keeps out of agent sessions; and Audit Logs, the calls
+ *  observed sessions made judged by those rules as they are now, or the keys and logins used through Astera. The Host
+ *  owns the rules, the list and the records and answers every change; nothing here decides a call.
  *  `focus`: the Run (or a Job row with no Run of its own) Run detail opened this for, whose calls only Audit Logs shows
  *  until the filter is cleared; clearing it keeps the other filters and the period. */
 export function SecuritySettings({
@@ -89,6 +105,13 @@ export function SecuritySettings({
   runName: (runId: string) => string | undefined
 }): React.JSX.Element {
   const { t } = useI18n()
+  /** Audit Logs shows the tool calls or the credential uses; Run detail opening it for a Run shows the calls. */
+  const [view, setView] = useState<'calls' | 'uses'>('calls')
+  const viewGroup = useId()
+  const focusKey = focus === undefined ? null : 'runId' in focus ? focus.runId : focus.jobId
+  useEffect(() => {
+    if (focusKey !== null) setView('calls')
+  }, [focusKey])
   const [policy, setPolicy] = useState<AuditPolicy | null>(null)
   const [coverage, setCoverage] = useState<CoverageRow[]>([])
   const [failure, setFailure] = useState<Failure | null>(null)
@@ -274,18 +297,36 @@ export function SecuritySettings({
           </>
         )}
       </section>
+      <section className="security-section">
+        <h3 className="security-title">{CREDENTIALS_TITLE}</h3>
+        <CredentialsSection />
+      </section>
       <section className="security-section" ref={auditSection}>
         <h3 className="security-title">{AUDIT_LOGS_TITLE}</h3>
-        <AuditLogs
-          mode={policy?.mode ?? null}
-          rules={policy?.rules ?? []}
-          coverage={coverage}
-          changes={changes}
-          focus={focus}
-          onClearFocus={onClearFocus}
-          sessionTitle={sessionTitle}
-          runName={runName}
-        />
+        <div className="security-choices" role="radiogroup" aria-label={t('settings.credentials.view.label')}>
+          <label className="check-small">
+            <input type="radio" name={viewGroup} checked={view === 'calls'} onChange={() => setView('calls')} />
+            <span>{t('settings.credentials.view.calls')}</span>
+          </label>
+          <label className="check-small">
+            <input type="radio" name={viewGroup} checked={view === 'uses'} onChange={() => setView('uses')} />
+            <span>{t('settings.credentials.view.uses')}</span>
+          </label>
+        </div>
+        {view === 'calls' ? (
+          <AuditLogs
+            mode={policy?.mode ?? null}
+            rules={policy?.rules ?? []}
+            coverage={coverage}
+            changes={changes}
+            focus={focus}
+            onClearFocus={onClearFocus}
+            sessionTitle={sessionTitle}
+            runName={runName}
+          />
+        ) : (
+          <CredentialUses sessionTitle={sessionTitle} />
+        )}
       </section>
     </div>
   )
@@ -520,6 +561,160 @@ function AuditLogs({
       {line !== null && <p className="settings-hint">{line}</p>}
       {rows !== null && rows.length > 0 && (
         <AuditTable rows={rows} rules={rules} coverage={coverage} profiles={profiles} sessionTitle={sessionTitle} />
+      )}
+      {next !== null && (
+        <div className="remote-actions">
+          <button className="settings-gen-refresh" disabled={loading || loadingMore} onClick={() => void more()}>
+            {t('settings.security.audit.more')}
+          </button>
+          {loadingMore && <span className="loading-spinner" aria-hidden="true" />}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Audit Logs' credential uses (credentials design §6, §7): the keys and logins used through Astera, newest first, a page
+ *  at a time on a cursor of their own (the last row's time and id), filtered by entry, kind and session. Kept as long as
+ *  the tool calls are, so there is no period to pick. */
+function CredentialUses({ sessionTitle }: { sessionTitle: (sessionId: string) => string | undefined }): React.JSX.Element {
+  const { t } = useI18n()
+  const [filters, setFilters] = useState<UsesFilters>({})
+  const [rows, setRows] = useState<CredentialUse[] | null>(null)
+  const [next, setNext] = useState<UsesCursor | null>(null)
+  const [failure, setFailure] = useState<Failure | null>(null)
+  const [sessions, setSessions] = useState<string[]>([])
+  const [entries, setEntries] = useState<{ id: string; name: string }[]>([])
+  const [loading, setLoading] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  /** Which read is the latest: a slower answer to an earlier one is dropped. */
+  const reading = useRef(0)
+
+  // The entries a use can name are the shared MCP servers' (a gh or git login is no entry)
+  useEffect(() => {
+    void window.api.credentials
+      .list()
+      .catch(failed)
+      .then((r) => {
+        if (r.ok) setEntries(listOf(r.body).entries.flatMap((e) => (e.kind === 'mcp-secret' ? [{ id: e.id, name: entryName(e) }] : [])))
+      })
+  }, [])
+
+  useEffect(() => {
+    const n = ++reading.current
+    setLoading(true)
+    void window.api.credentials
+      .uses({ ...filters, limit: PAGE })
+      .catch(failed)
+      .then((r) => {
+        if (n !== reading.current) return
+        setLoading(false)
+        if (!r.ok) {
+          setFailure(r)
+          setRows([])
+          setNext(null)
+          return
+        }
+        const page = usesPageOf(r.body)
+        setFailure(null)
+        setRows(page.uses)
+        setNext(page.next)
+        setSessions((s) => useSessions(page.uses, s))
+      })
+  }, [filters])
+
+  const more = async (): Promise<void> => {
+    // Not while a new query is being read: its cursor would be paired with the rows of the last one
+    if (next === null || loading || loadingMore) return
+    const n = reading.current
+    setLoadingMore(true)
+    try {
+      const r = await window.api.credentials.uses({ ...filters, until: next.until, beforeId: next.beforeId, limit: PAGE }).catch(failed)
+      if (n !== reading.current) return
+      if (!r.ok) return void toast.error(credentialFailure(r, t))
+      const page = usesPageOf(r.body)
+      setRows((prev) => appendUses(prev ?? [], page.uses))
+      setNext(page.next)
+      setSessions((s) => useSessions(page.uses, s))
+    } finally {
+      setLoadingMore(false)
+    }
+  }
+
+  const setFilter = (k: keyof UsesFilters, v: string): void => setFilters((f) => ({ ...f, [k]: v === '' ? undefined : v }))
+  const line = rows === null ? null : usesStateLine({ failure, count: rows.length }, t)
+
+  return (
+    <div className="security-audit" aria-busy={loading || loadingMore}>
+      <p className="settings-hint">{t('settings.credentials.uses.hint')}</p>
+      <div className="security-filters">
+        <Select
+          ariaLabel={t('settings.credentials.filter.entry')}
+          items={[{ value: '', label: t('settings.credentials.filter.allEntries') }, ...entries.map((e) => ({ value: e.id, label: e.name }))]}
+          value={filters.entryId ?? ''}
+          onChange={(v) => setFilter('entryId', v)}
+        />
+        <Select
+          ariaLabel={t('settings.credentials.filter.provider')}
+          items={[
+            { value: '', label: t('settings.credentials.filter.allProviders') },
+            { value: 'mcp', label: t('settings.credentials.provider.mcp') },
+            { value: 'github', label: t('settings.credentials.provider.github') }
+          ]}
+          value={filters.provider ?? ''}
+          onChange={(v) => setFilter('provider', v)}
+        />
+        <Select
+          ariaLabel={t('settings.security.filter.session')}
+          items={[{ value: '', label: t('settings.security.filter.allSessions') }, ...sessions.map((id) => ({ value: id, label: sessionName(id, sessionTitle, t) }))]}
+          value={filters.sessionId ?? ''}
+          onChange={(v) => setFilter('sessionId', v)}
+        />
+        {loading && <span className="loading-spinner" aria-hidden="true" />}
+      </div>
+      {line !== null && <p className="settings-hint">{line}</p>}
+      {rows !== null && rows.length > 0 && (
+        <div className="security-table-wrap">
+          <table className="security-table security-rows" role="table">
+            <thead role="rowgroup">
+              <tr role="row">
+                <th scope="col" role="columnheader">{t('settings.security.col.time')}</th>
+                <th scope="col" role="columnheader">{t('settings.credentials.col.who')}</th>
+                <th scope="col" role="columnheader">{t('settings.security.col.action')}</th>
+                <th scope="col" role="columnheader">{t('settings.security.col.target')}</th>
+                <th scope="col" role="columnheader">{t('settings.credentials.col.result')}</th>
+              </tr>
+            </thead>
+            <tbody role="rowgroup">
+              {rows.map((u, i) => {
+                const when = rowTime(u.at, rows[i - 1]?.at)
+                const l = useLine(u, sessionTitle, t)
+                return (
+                  <tr key={u.id} role="row">
+                    <td role="cell" className="security-time" title={recordTime(u.at)}>
+                      {when.date !== undefined && <span className="security-date">{when.date}</span>}
+                      {when.time}
+                    </td>
+                    <td role="cell" className="security-session-cell">
+                      <span className="security-session" title={l.who}>
+                        {l.who}
+                      </span>
+                    </td>
+                    <td role="cell">{l.action}</td>
+                    <td role="cell" className="security-target" title={l.target}>
+                      {l.target}
+                    </td>
+                    {/* How Astera knows, under how it went, as the rule that decided sits under a call's decision */}
+                    <td role="cell">
+                      <span className={`security-decision is-${u.outcome}`}>{l.outcome}</span>
+                      <span className="security-decided-by">{l.evidence}</span>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
       {next !== null && (
         <div className="remote-actions">

@@ -42,6 +42,8 @@ export interface HostChatsDeps {
   askApp(name: 'chatSend', args: [string, string]): Promise<unknown>
   /** Shared extensions, the spawner's cache (Agent Control Plane release 1); the spawn path refreshes it first. */
   capabilities?: ChatManagerDeps['capabilities']
+  /** The Credentials list's hiding, the spawner's (credentials design §5). */
+  hiding?: ChatManagerDeps['hiding']
   log(m: string): void
   /** Test seams. */
   createAdapter?: ChatManagerDeps['createAdapter']
@@ -173,6 +175,7 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     baseEnv: d.baseEnv,
     orchEnv: d.orchEnv,
     capabilities: d.capabilities,
+    hiding: d.hiding,
     ...(d.createAdapter ? { createAdapter: d.createAdapter } : {})
   })
 

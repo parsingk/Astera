@@ -44,6 +44,7 @@ import type {
 import type { ThemeId } from './theme/themes'
 import type { ProfilePermission } from './agentProfiles/types'
 import type { AuditDecision, AuditMode, AuditRule } from './audit/types'
+import type { Hiding } from './credentials/types'
 import type { ConvTurn } from './history/convTypes'
 export type { ConvTurn } from './history/convTypes'
 // The Jobs sidebar shows a Task's status, so the orchestration domain's own enum comes in here. Only
@@ -2033,6 +2034,38 @@ export interface AuditApi {
   taskTokens(taskId: string): Promise<PluginsCallAnswer>
 }
 
+/** What Audit Logs' credential uses view asks for (credentials design §7): its filters and the next page's cursor, the
+ *  last row's `at` and `id`. */
+export interface CredentialUsesQuery {
+  entryId?: string
+  provider?: 'mcp' | 'github'
+  sessionId?: string
+  until?: string
+  beforeId?: string
+  limit?: number
+}
+
+/** A hide-only entry as the screen writes it: names and presets, never a value. */
+export interface HideOnlyFields {
+  alias: string
+  envNames: string[]
+  presets: string[]
+  hide: Hiding
+}
+
+/** Settings › Security & Access › Credentials and Audit Logs' credential uses (credentials design §5, §7): the Host's
+ *  `credentials-*` commands, as the app, the only caller allowed to change the list. A damaged list answers with
+ *  CONFLICT and reason `damaged`; `reset` is its repair. */
+export interface CredentialsApi {
+  list(): Promise<PluginsCallAnswer>
+  uses(q: CredentialUsesQuery): Promise<PluginsCallAnswer>
+  addHideOnly(e: HideOnlyFields): Promise<PluginsCallAnswer>
+  editHideOnly(id: string, changes: Partial<HideOnlyFields>): Promise<PluginsCallAnswer>
+  deleteHideOnly(id: string): Promise<PluginsCallAnswer>
+  setHiding(id: string, hide: Hiding): Promise<PluginsCallAnswer>
+  reset(): Promise<PluginsCallAnswer>
+}
+
 export interface RemoteApi {
   list(): Promise<RemoteRuntimeInfo[]>
   /** Pairs from the string `astera runtime pair` printed on the Runtime. The token is kept in main, never returned. */
@@ -2177,6 +2210,8 @@ export type RendererApi = CoreApi & {
   agentProfiles: AgentProfilesApi
   /** Settings › Security & Access and Run detail's token totals: the Host's observe rules, records and tokens, as the app. */
   audit: AuditApi
+  /** Settings › Security & Access › Credentials and Audit Logs' credential uses: the Host's Credentials list, as the app. */
+  credentials: CredentialsApi
   /** The Jobs view's "+ From a source" (plugin Phase 4c): the Host's job sources, as the app. */
   sources: SourcesApi
   remoteSessions: RemoteSessionsApi

@@ -20,6 +20,7 @@ vi.mock('node:fs', async (importOriginal) => {
 })
 
 import { existsSync } from 'node:fs'
+import { spawn } from 'node:child_process'
 import { runAgent } from './agent'
 import { makeDescriptors } from '../providers/descriptor'
 import type { Account } from '../types'
@@ -57,5 +58,25 @@ describe('runAgent, the project folder check', () => {
     const r = await runAgent({ ...base, probe: async () => 'present' })
     expect(spawned).toEqual(['spawn'])
     expect((r as { reason: string }).reason).toContain('실행하지 못했다')
+  })
+})
+
+// Credentials final review M12: it is an agent Astera starts in the project, so the Credentials list keeps the same keys
+// out of it as out of a session started there
+describe('runAgent, the Credentials list', () => {
+  it('starts the agent without what the list hides for the project folder', async () => {
+    vi.stubEnv('GH_TOKEN', 'inherited-token')
+    vi.mocked(spawn).mockClear()
+    const asked: string[] = []
+    await runAgent({
+      ...base,
+      probe: async () => 'present',
+      hiding: { get: (cwd) => (asked.push(cwd), { remove: ['GH_TOKEN'], set: {} }), damaged: () => false }
+    })
+    vi.unstubAllEnvs()
+    expect(asked).toEqual([base.cwd])
+    const env = vi.mocked(spawn).mock.calls[0][2]?.env as Record<string, string | undefined>
+    expect(env.GH_TOKEN).toBeUndefined()
+    expect(env.CLAUDE_CONFIG_DIR).toBe(account.configDir)
   })
 })

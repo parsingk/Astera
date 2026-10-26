@@ -333,6 +333,22 @@ export function humanFor(
         ...(data.stoppedAtLimit === true ? ['', '(a day of this period stopped recording at the size limit, so it holds fewer calls than were made)'] : [])
       ].join('\n')
     }
+    // Credentials design §7: a row per entry (its name, kind, what it hides, where), never a value
+    case 'credentials-list': {
+      const entries = asList(data, 'entries')
+      if (entries.length === 0) return '(nothing listed)'
+      return columns(entries.map(credentialRow))
+    }
+    case 'credentials-show': {
+      const e = data.entry !== null && typeof data.entry === 'object' ? (data.entry as Record<string, unknown>) : null
+      if (e === null) return null
+      const uses = asList(data, 'uses')
+      return [columns([credentialRow(e)]), ...(uses.length === 0 ? [] : ['', columns(uses.map((u) => [localTime(u.at), str(u.sessionId ?? u.actor), str(u.resource), str(u.outcome)]))])].join('\n')
+    }
+    case 'credentials-doctor':
+      return asList(data, 'lines')
+        .map((l) => `${str(l.level).padEnd(6)}${str(l.text)}`)
+        .join('\n')
     case 'policies-show':
     case 'policies-set-mode':
     case 'policies-set-otherwise':
@@ -647,4 +663,18 @@ export function quietFor(data: Record<string, unknown>): string {
   }
   if (ids.length === 0) take(data)
   return ids.join('\n')
+}
+
+/** One Credentials list entry as a row: its name, its kind, what it hides, and whether and where. */
+function credentialRow(e: Record<string, unknown>): string[] {
+  const names = Array.isArray(e.envNames) ? (e.envNames as unknown[]).map(String) : []
+  const presets = Array.isArray(e.presets) ? (e.presets as unknown[]).map((p) => `preset ${String(p)}`) : []
+  const hide = e.hide !== null && typeof e.hide === 'object' ? (e.hide as { on?: unknown; projects?: unknown }) : {}
+  const where = Array.isArray(hide.projects) ? `hidden in ${(hide.projects as unknown[]).map(String).join(', ')}` : 'hidden in every agent session'
+  return [
+    str(e.kind === 'mcp-secret' ? e.serverName : e.alias),
+    e.kind === 'mcp-secret' ? 'MCP server' : 'registered',
+    [...names, ...presets].join(', ') || '-',
+    hide.on === true ? where : 'not hidden'
+  ]
 }

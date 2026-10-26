@@ -24,11 +24,20 @@ export function createGatewayHub(d: {
   procs: Pick<ProcRegistry, 'open' | 'onExit'>
   log: (line: string) => void
   baseEnv?: NodeJS.ProcessEnv
+  /** Each session's tool call through the Gateway, for its credential-use record (credentials design §6). */
+  onToolCall?: Parameters<typeof createGateway>[0]['onToolCall']
 }): GatewayHub {
   const tokens = createTokenTable()
   const pool = createUpstreamPool({ profileDir: d.profileDir, baseEnv: d.baseEnv ?? process.env, log: d.log })
   const readRegistry = () => readExtensionRegistry(d.profileDir)
-  const gateway = createGateway({ tokens, pool, readRegistry, log: d.log, hide: (s) => hideExtensionSecrets(d.profileDir, s).catch(() => s) })
+  const gateway = createGateway({
+    tokens,
+    pool,
+    readRegistry,
+    log: d.log,
+    hide: (s) => hideExtensionSecrets(d.profileDir, s).catch(() => s),
+    ...(d.onToolCall ? { onToolCall: d.onToolCall } : {})
+  })
   watchGatewayTokens({ ptys: d.ptys, procs: d.procs, table: tokens, onForget: (t) => gateway.forgetTokens(t) })
 
   // One sync at a time: a registry change and a spawn's prepare may both ask

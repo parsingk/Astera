@@ -26,6 +26,7 @@ import { validateRecord, type ValidationResult } from './validate'
 import { evidenceIdOf } from './evidence'
 import type { UnderstandingStore } from './store'
 import { runAgent } from './agent'
+import type { HidingSource } from '../credentials/hiding'
 import { createProber, type ProbeResult } from '../sessions/pathProbe'
 
 export interface PipelineDeps {
@@ -52,6 +53,8 @@ export interface PipelineDeps {
   /** The agent round trip; defaults to runAgent (agent.ts). A test seam: the Host's tests run its
    *  pipeline with a fake one. */
   runAgent?: typeof runAgent
+  /** The Credentials list's hiding, which the agent gets as a session in the project would. */
+  hiding?: HidingSource
 }
 
 export interface RunRecordInput {
@@ -229,6 +232,7 @@ export class UnderstandingPipeline {
     const base = await baseOf(projectRoot, cur, this.deps.log)
     const run = await (this.deps.runAgent ?? runAgent)({
       ...ready.ctx,
+      ...(this.deps.hiding ? { hiding: this.deps.hiding } : {}),
       cwd: base,
       prompt: buildRecordPrompt({
         request: cur.request,

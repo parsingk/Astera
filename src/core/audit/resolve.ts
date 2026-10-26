@@ -1331,6 +1331,15 @@ function ghApiWrites(args: Words): boolean {
  *  comes from a file, which this cannot read). */
 const ghGraphqlWrites = (args: Words): boolean => args.some((a) => /\bmutation\b/.test(a) || /query=@/.test(a))
 
+/** Whether `gh <args>` (the subcommand first) changes something on GitHub, by the rules above. The credential-use records
+ *  read the gh calls Astera runs by the same rules (credentials design §6), so a query sent with fields is a read there
+ *  too. */
+export function ghWrites(args: readonly string[]): boolean {
+  const [group, verb] = args
+  if (group === 'api') return args.includes('graphql') ? ghGraphqlWrites([...args]) : ghApiWrites([...args])
+  return verb !== undefined && GH_WRITES.get(group)?.has(verb) === true
+}
+
 const INSTALLS = new Map<string, ReadonlySet<string>>([
   ['npm', new Set(['install', 'i', 'add', 'ci'])],
   ['pnpm', new Set(['install', 'i', 'add'])],

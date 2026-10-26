@@ -1416,3 +1416,34 @@ describe('ChatSessionManager.send — a person’s turn is written marked', () =
     ])
   })
 })
+
+// The Credentials list (credentials design §5): a chat session loses what the list hides, as a terminal one does, before
+// Astera adds its own variables.
+describe('credentials hiding', () => {
+  it('a chat session started after an entry is on has none of its variables, and keeps what Astera plants', () => {
+    const asked: [string, string | undefined][] = []
+    const factory = vi.fn((_f: string, _a: string[], _o: ProcSpawnOptions) => new FakeProc())
+    const deps = {
+      factory,
+      descriptors: makeDescriptors('linux'),
+      homeDir: '/home/t',
+      platform: 'linux' as const,
+      version: '1',
+      log: () => {},
+      createAdapter: makeAdapterFactory().createAdapter,
+      baseEnv: { PATH: '/bin', GH_TOKEN: 'inherited', KEEP: 'k' },
+      hiding: {
+        get: (cwd: string, sessionId?: string) => (asked.push([cwd, sessionId]), { remove: ['GH_TOKEN', 'ASTERA_SESSION'], set: { GH_CONFIG_DIR: '/empty/gh' } }),
+        damaged: () => false
+      }
+    }
+    const info = new ChatSessionManager(deps).spawn({ account: claudeAccount, cwd: '/p' })
+    // Final review I3: the session's id names its own empty locations
+    expect(asked).toEqual([['/p', info.id]])
+    const env = factory.mock.calls[0][2].env
+    expect(env.GH_TOKEN).toBeUndefined()
+    expect(env.GH_CONFIG_DIR).toBe('/empty/gh')
+    expect(env.KEEP).toBe('k')
+    expect(env.ASTERA_SESSION).toBe(info.id)
+  })
+})

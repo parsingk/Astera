@@ -1192,6 +1192,39 @@ describe('policies', () => {
   })
 })
 
+// The Credentials list (credentials design §7): routed like the policies, below every gate, and no gate lists them.
+describe('credentials', () => {
+  const cli = { role: 'cli' as const, toOthers: () => {} }
+  const answering = () => {
+    const seen: { cmd: string; role?: string; agentRefusal?: string }[] = []
+    return { seen, credentials: { command: async (a: { cmd: string; role?: string; agentRefusal?: string }) => (seen.push(a), { status: 200, body: { ok: true } }) } }
+  }
+
+  it('is refused to MCP by its gate, before the list is asked', async () => {
+    const f = answering()
+    const orch = orchOver({ credentials: f.credentials })
+    expect((await orch.call({ cmd: 'credentials-list', args: {}, sessionId: '', from: { role: 'mcp', toOthers: () => {} } })).status).toBe(403)
+    expect(f.seen).toEqual([])
+  })
+
+  it('answers the app and the CLI, telling the list who asks and when an agent session’s shell is the caller', async () => {
+    const f = answering()
+    const orch = orchOver({ credentials: f.credentials })
+    await orch.call({ cmd: 'credentials-list', args: {}, sessionId: '', from: cli })
+    await orch.call({ cmd: 'credentials-uses', args: {}, sessionId: 'sess_1', from: cli })
+    await orch.call({ cmd: 'credentials-set-hiding', args: { id: 'x', hide: { on: false } }, sessionId: '', from: { role: 'app', toOthers: () => {} } })
+    expect(f.seen.map((s) => [s.cmd, s.role, s.agentRefusal !== undefined])).toEqual([
+      ['credentials-list', 'cli', false],
+      ['credentials-uses', 'cli', true],
+      ['credentials-set-hiding', 'app', false]
+    ])
+  })
+
+  it('answers 501 on a Host that keeps none', async () => {
+    expect((await orchOver().call({ cmd: 'credentials-list', args: {}, sessionId: '', from: cli })).status).toBe(501)
+  })
+})
+
 // Observe mode's records (design §8, §12): routed like the policies, below every gate, and no gate lists them. An agent's
 // shell is told so even for these reads, and the audit commands refuse it.
 describe('audit', () => {
@@ -2717,6 +2750,71 @@ describe('GitHub writes and request receipts (MCP P2-B)', () => {
     expect(retried.status, 'the refusal was kept as a receipt').toBe(200)
     expect(retried.replayed).not.toBe(true)
     expect(g.created).toHaveLength(1)
+  })
+
+  // Credential-use records (credentials design §6): a GitHub write through the Host is recorded for whoever asked
+  it('an agent’s github-ci-rerun leaves a session record, and the app’s an app record', async () => {
+    const { projectId } = await finishedRun()
+    const g = github()
+    const got: { actor: string; sessionId?: string; action: string; resource: string }[] = []
+    const orch = orchOver({ act, github: g.dep, useRecorder: { record: (u) => void got.push(u) } })
+    const caller = (role: 'cli' | 'app') => ({ role, toOthers: () => {} })
+    await orch.call({ cmd: 'github-ci-rerun', args: { project: projectId, runId: 77 }, sessionId: 'ses_agent', from: caller('cli') })
+    await orch.call({ cmd: 'github-ci-rerun', args: { project: projectId, runId: 78 }, sessionId: '', from: caller('app') })
+    expect(got.map((u) => [u.actor, u.sessionId, u.action, u.resource])).toEqual([
+      ['session', 'ses_agent', 'github.ci.rerun', 'unknown repository 77'],
+      ['app', undefined, 'github.ci.rerun', 'unknown repository 78']
+    ])
+  })
+
+  // Final review M11: the work a session holds reaches its records through the Host's own state: a coordinator's Run and
+  // Job, a worker's Task with them (a worker reads GitHub through Astera; only the coordinator and the person write)
+  it('a coordinator’s github-pr-create and a worker’s GitHub read leave session records with their work', async () => {
+    const { runId, projectId } = await finishedRun()
+    const file = path.join(dir, 'orchestration.json')
+    const s = JSON.parse(await fs.readFile(file, 'utf8')) as OrchState
+    const task = s.tasks.find((t) => t.runId === runId)!
+    const jobId = s.runs.find((r) => r.id === runId)!.jobId
+    s.runs = s.runs.map((r) => (r.id === runId ? { ...r, coordinatorSessionId: 'ses_coord' } : r))
+    s.dispatches = [
+      ...s.dispatches,
+      { id: 'd_w', taskId: task.id, provider: 'claude', accountId: 'acc', sessionId: 'ses_worker', cwd: WT, specPath: 'D:/specs/s.md', startedAt: new Date().toISOString(), workerState: 'ready', retained: false }
+    ]
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const g = github()
+    const got: { actor: string; sessionId?: string; taskId?: string; runId?: string; jobId?: string; action: string }[] = []
+    const orch = orchOver({
+      act,
+      // Both sessions are alive, so the load's restart cleanup leaves their Dispatch and coordinator slot open
+      aliveSessionIds: () => new Set(['ses_coord', 'ses_worker']),
+      github: {
+        ...g.dep,
+        // As the real maker does: `gh pr create` through the runner it is handed
+        createPr: async (req: unknown, d?: { runGh?: (args: string[], cwd: string) => Promise<unknown> }) => {
+          await d?.runGh?.(['pr', 'create', '--title', 't'], WT)
+          return g.dep.createPr(req)
+        }
+      },
+      useRecorder: { record: (u) => void got.push(u) }
+    })
+    const cli = { role: 'cli' as const, toOthers: () => {} }
+    expect((await orch.call({ cmd: 'github-pr-create', args: { run: runId }, sessionId: 'ses_coord', from: cli })).status).toBe(200)
+    expect((await orch.call({ cmd: 'github-issue', args: { project: projectId, number: 5 }, sessionId: 'ses_worker', from: cli })).status).toBe(200)
+    expect(got.map(({ actor, sessionId, taskId, runId: run, jobId: job, action }) => ({ actor, sessionId, taskId, runId: run, jobId: job, action }))).toEqual([
+      { actor: 'session', sessionId: 'ses_coord', taskId: undefined, runId, jobId, action: 'github.pr.create' },
+      { actor: 'session', sessionId: 'ses_worker', taskId: task.id, runId, jobId, action: 'github.read' }
+    ])
+  })
+
+  it('github-pr-create hands the pull request maker runners that record for the caller', async () => {
+    const { runId } = await finishedRun()
+    const g = github()
+    const deps: unknown[] = []
+    const orch = orchOver({ act, github: { ...g.dep, createPr: async (req: unknown, d?: unknown) => (deps.push(d), g.dep.createPr(req)) }, useRecorder: { record: () => {} } })
+    await orch.call({ cmd: 'github-pr-create', args: { run: runId }, sessionId: '' })
+    expect(deps).toHaveLength(1)
+    expect(typeof (deps[0] as { runGh?: unknown }).runGh).toBe('function')
+    expect(typeof (deps[0] as { runGit?: unknown }).runGit).toBe('function')
   })
 
   // The reads still leave no receipt: a second read reads GitHub again.

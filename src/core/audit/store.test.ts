@@ -277,6 +277,18 @@ describe('retention (Review Focus 4)', () => {
     expect(await files(p)).toEqual([])
   })
 
+  // Credentials final review M9: the credential uses share the retention, and a Host that records none for weeks still
+  // lets their old days go
+  it('prunes the credential uses beside the tool calls, with nothing to write', async () => {
+    const p = await profile()
+    const uses = profilePaths(p).credentialUses
+    await fs.mkdir(uses, { recursive: true })
+    await fs.writeFile(path.join(uses, '2026-09-20.jsonl'), '\n')
+    await fs.writeFile(path.join(uses, '2026-10-22.jsonl'), '\n')
+    await pruneRecords(p, { now: () => ms('2026-10-23') })
+    expect((await fs.readdir(uses)).sort()).toEqual(['2026-10-22.jsonl'])
+  })
+
   // Final review M4: a Host that writes nothing for days (observe off, or no session) still lets the old days go
   it('prunes at the start and then every hour, with nothing to write, until stopped', async () => {
     const p = await profile()

@@ -49,6 +49,7 @@ import { createCapabilityCache, type CapabilityCache } from '../core/extensions/
 import { readPolicyMode } from '../core/audit/policy'
 import { settingsImportCopiesCapabilities } from '../core/extensions/registry'
 import { hidingLog } from '../core/extensions/secrets'
+import { createHidingSource, projectOfWorktrees } from '../core/credentials/hiding'
 import { profileConversations, type ProfileConversations } from '../core/agentProfiles/conversations'
 
 export interface Core {
@@ -292,6 +293,10 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     log: hidingLog(userDataDir, sessionsLog)
   })
   sessions.capabilities = capabilities
+  // The Credentials list (credentials design §5), shared by both managers: a worker's worktree counts as its project's
+  // folder. `worktrees` is made below; this only reads it at a spawn, long after.
+  const hiding = createHidingSource({ profileDir: userDataDir, projectOf: projectOfWorktrees(() => worktrees.list()), log: hidingLog(userDataDir, sessionsLog) })
+  sessions.hiding = hiding
   // Observe mode: an observed Claude session's hook settings, written by its prepare (StatusLineManager.ensureObserveFiles)
   sessions.observeHooks = () => statusLine.ensureObserveFiles()
   // The chat sessions. It is handed `procRouter.factory` rather than a factory chosen now, for exactly
@@ -306,7 +311,8 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     platform: process.platform,
     version: app.getVersion(),
     log: chatLog,
-    capabilities
+    capabilities,
+    hiding
   })
   // Lazy history: nothing is scanned at startup. The project list comes from a directory listing; sessions are
   // parsed when expanded. index.ts starts the file watcher with startBackground() after the window is up, so window creation never blocks on a scan.

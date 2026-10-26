@@ -434,3 +434,13 @@ describe('parseArgs — audit and policies', () => {
     expect(parseArgs(['policies', 'rules', 'add'])).toMatchObject({ error: expect.stringContaining('rules-add') })
   })
 })
+
+// The Credentials list (credentials design §7): read from the CLI, changed in the app
+describe('parseArgs — credentials', () => {
+  it('parses list, show and doctor into the Host command names', () => {
+    expect(parseArgs(['credentials', 'list'])).toMatchObject({ cmd: 'credentials-list' })
+    expect(parseArgs(['credentials', 'show', '--id', 'Cloud keys'])).toMatchObject({ cmd: 'credentials-show', args: { id: 'Cloud keys' } })
+    expect(parseArgs(['credentials', 'doctor'])).toMatchObject({ cmd: 'credentials-doctor' })
+    expect(parseArgs(['credentials', 'register'])).toHaveProperty('error')
+  })
+})
