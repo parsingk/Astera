@@ -9,7 +9,6 @@ import {
   AUDIT_LOGS_TITLE,
   COVERAGE_CLASSES,
   DECISIONS,
-  OBSERVE_READ_EVERY_MS,
   POLICIES_TITLE,
   RULE_ACTION_CHOICES,
   SECURITY_KEYS,
@@ -27,9 +26,12 @@ import {
   filterChoices,
   nextPageQuery,
   observeReadDue,
+  OBSERVE_READ_EVERY_MS,
   observeTargetOf,
   pageOf,
   periodSince,
+  afterObserveRead,
+  runDetailInstanceKey,
   FOCUS_VALUE,
   focusedFilters,
   jobFilterChange,
@@ -345,6 +347,23 @@ describe('the Job focus', () => {
     expect(jobFilterChange(FOCUS_VALUE, true)).toEqual({ clearFocus: false })
     expect(jobFilterChange('job_3', false)).toEqual({ clearFocus: false, jobId: 'job_3' })
     expect(jobFilterChange('', false)).toEqual({ clearFocus: false, jobId: undefined })
+  })
+})
+
+// Run detail's facts: one component per Run it shows, and a read that failed is not final
+describe('Run detail reads', () => {
+  it('is keyed by the Run it shows, and by its Runtime, so switching Runs never shows the last one’s tokens', () => {
+    expect(runDetailInstanceKey({ runId: 'run_1' })).not.toBe(runDetailInstanceKey({ runId: 'run_2' }))
+    expect(runDetailInstanceKey({ runId: 'run_1' })).not.toBe(runDetailInstanceKey({ runId: 'run_1', runtimeId: 'rt_1' }))
+    expect(runDetailInstanceKey({ runId: 'run_1', runtimeId: 'rt_1' })).toBe(runDetailInstanceKey({ runId: 'run_1', runtimeId: 'rt_1' }))
+  })
+
+  it('tries a failed first read of a finished Run again once the wait is over, and keeps a good read as it is', () => {
+    const read = { target: 'run_1', state: 'completed|3/3', at: 1000 }
+    const same = { target: 'run_1', state: 'completed|3/3' }
+    expect(observeReadDue(afterObserveRead(read, true), same, 1000 + 5000)).toBeNull()
+    expect(observeReadDue(afterObserveRead(read, false), same, 1000 + 5000)).toBe(OBSERVE_READ_EVERY_MS - 5000)
+    expect(observeReadDue(afterObserveRead(read, false), same, 1000 + OBSERVE_READ_EVERY_MS)).toBe(0)
   })
 })
 

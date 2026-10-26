@@ -48,7 +48,9 @@ import { SourceChip } from './SourceChip'
 import { AgentProfileChip } from './AgentProfileField'
 import { jobName } from '../lib/jobName'
 import {
+  afterObserveRead,
   observeReadDue,
+  OBSERVE_READ_EVERY_MS,
   observeTargetOf,
   summaryOf,
   summarySince,
@@ -375,15 +377,25 @@ export function RunDetail({
     lastRead.current = { target: targetId, state: runState, at: Date.now() }
     const ids = observeTargetOf(undefined, targetId)
     const mine = (): boolean => shownTarget.current === targetId
+    const read = lastRead.current
     void (async () => {
-      // A read that failed (a deadline, the Host away a moment) keeps what is shown rather than clearing it
+      // A read that failed (a deadline, the Host away a moment) keeps what is shown rather than clearing it, and is
+      // read again at the next trigger once the wait is over (afterObserveRead)
       const body = 'runId' in ids ? await readTokens(door, runtimeId, 'runs-get', ids.runId).catch(() => null) : null
       if (body !== null && mine()) setSpent(tokensOf(body))
+      let ok = 'jobId' in ids || body !== null
       // The records are this computer's: a Runtime's Run has none here
-      if (runtimeId !== undefined) return
-      const createdAt = typeof body === 'object' && body !== null ? (body as { createdAt?: unknown }).createdAt : undefined
-      const r = await window.api.audit.summary({ ...ids, since: summarySince(createdAt, new Date()) }).catch(() => null)
-      if (r?.ok === true && mine()) setDenyCounts(summaryOf(r.body))
+      if (runtimeId === undefined) {
+        const createdAt = typeof body === 'object' && body !== null ? (body as { createdAt?: unknown }).createdAt : undefined
+        const r = await window.api.audit.summary({ ...ids, since: summarySince(createdAt, new Date()) }).catch(() => null)
+        if (r?.ok === true && mine()) setDenyCounts(summaryOf(r.body))
+        if (r?.ok !== true) ok = false
+      }
+      if (!ok && mine() && lastRead.current === read) {
+        lastRead.current = afterObserveRead(read, false)
+        // Nothing else may come for a finished Run, so the retry is asked for here, after the wait
+        setTimeout(() => setReadAgain((n) => n + 1), OBSERVE_READ_EVERY_MS)
+      }
     })()
   }, [targetId, runState, readAgain, runtimeId, door])
   /** 물어보기(Gate)의 질문을 쓰는 중인 Task id. null 이면 안 쓰는 중이다 — authoring 과 같은 자리에

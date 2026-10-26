@@ -223,6 +223,14 @@ export function observeReadDue(last: { target: string; state: string; at: number
   return Math.max(0, OBSERVE_READ_EVERY_MS - (now - last.at))
 }
 
+/** What Run detail remembers of a read: a read that failed is remembered as one of another state, so the next trigger
+ *  reads again once the wait is over instead of finding nothing moved and leaving the facts empty for good. */
+export const afterObserveRead = (read: { target: string; state: string; at: number }, ok: boolean): { target: string; state: string; at: number } =>
+  ok ? read : { ...read, state: '' }
+
+/** Run detail's key: one component per Run it shows (and Runtime), so another Run never starts from the last one's facts. */
+export const runDetailInstanceKey = (open: { runId: string; runtimeId?: string }): string => `${open.runtimeId ?? ''}|${open.runId}`
+
 /** The filters Audit Logs offers, and the Run it was opened for from Run detail. */
 export type AuditFilters = Pick<AuditQuery, 'sessionId' | 'agentProfileId' | 'jobId' | 'runId' | 'decision' | 'action'>
 
