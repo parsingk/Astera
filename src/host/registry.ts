@@ -349,6 +349,11 @@ export class PtyRegistry {
     }
     this.entries.set(a.id, entry)
     const openedAt = this.now()
+    // A roll's respawn (`rolledFrom` in its note) is handed its carry-on by whoever rolled it, and for Codex as an
+    // argument of the new process, typed by nobody: that prompt is noted as the Host's own at the spawn, so it is not
+    // read as a person's (`submittedBetween`; observe deferred fix round 3)
+    const rolledFrom = a.meta?.restore?.rolledFrom
+    if (typeof rolledFrom === 'string' && rolledFrom !== '') keepSubmission(entry.submissions, { at: openedAt, person: false })
     this.sweepExited()
     pty.onData((d) => {
       // The same shape TerminalManager's own buffer uses: append, then keep the tail. **Only while

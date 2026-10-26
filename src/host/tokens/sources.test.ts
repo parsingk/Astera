@@ -14,6 +14,7 @@ import type { PtyMeta } from '../../core/host/protocol'
 import { openTokenStore } from './store'
 import { createTokenSources, tokenOwnerOf } from './sources'
 import { dispatchOfWithTurns } from '../audit/recorder'
+import { PtyRegistry } from '../registry'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -121,15 +122,16 @@ const orch = (dispatches: Dispatch[], coordinatorSessionId?: string): OrchState 
   dispatches
 })
 
-/** The sources over a real store, with no timer: the test reads with `poll`. */
-async function rig(o: { state: () => OrchState; now: () => number; statusLines?: Record<string, string> }) {
+/** The sources over a real store, with no timer: the test reads with `poll`. `ptys`: a real pty registry in place of
+ *  the test one, where what the registry itself notes is under test. */
+async function rig(o: { state: () => OrchState; now: () => number; statusLines?: Record<string, string>; ptys?: PtyRegistry }) {
   const profileDir = await tempDir()
   const store = await openTokenStore({ profileDir, state: () => null, log: () => {} })
   const ptys = fakeRegistry()
   const procs = fakeRegistry()
   const sources = createTokenSources({
     store,
-    ptys,
+    ptys: o.ptys ?? ptys,
     procs,
     statusLinePayload: async (id) => (o.statusLines?.[id] ? { session_id: id, transcript_path: o.statusLines[id] } : null),
     ownerOf: (sessionId, at, last, turn) => tokenOwnerOf(o.state(), sessionId, at, last, turn),
@@ -817,25 +819,41 @@ describe('createTokenSources', () => {
     r.sources.dispose()
   })
 
-  it('carries the hold across a Codex roll onto a fresh rollout', async () => {
+  // Fix round 3: a Codex roll's carry-on is an argument of the new process (codexCoordinator.ts: "the prompt is a CLI
+  // argument, so there is no PTY typing"). The real registry notes a roll's respawn as the Host's submission at its
+  // spawn, so that prompt is the Host's and the hold goes on
+  it('carries the hold across a Codex roll onto a fresh rollout, its carry-on an argument nothing typed', async () => {
     const MIN = 60_000
     const E = T0 + 10 * MIN
     let now = T0
+    const ptysMade = new Map<string, { exit(code: number): void }>()
+    let next = ''
+    const registry = new PtyRegistry({
+      spawn: () => {
+        let onExit: (e: { exitCode: number }) => void = () => {}
+        const p = { pid: 1, onData: () => {}, onExit: (cb: typeof onExit) => void (onExit = cb), write: () => {}, resize: () => {}, kill: () => {}, pause: () => {}, resume: () => {} }
+        ptysMade.set(next, { exit: (code) => onExit({ exitCode: code }) })
+        return p
+      },
+      log: () => {},
+      now: () => now
+    })
+    const open = (id: string, args: string[], m: PtyMeta): void => {
+      next = id
+      registry.open({ id, file: 'codex', args, opts: { cwd: 'D:/p', cols: 80, rows: 24, env: {} }, meta: m })
+    }
     let state = orch([], 'sess_k1')
-    const r = await rig({ state: () => state, now: () => now })
+    const r = await rig({ state: () => state, now: () => now, ptys: registry })
     const first = path.join(r.dir, 'rollout-k1.jsonl')
     await fs.writeFile(first, lines(codexEvent(T0 + 100, 'task_started'), codexUser(T0 + 100, 'Coordinate the run'), counted(T0 + 200, [100, 10], [100, 10])))
-    r.ptys.typed('pty_k1', T0 + 50, 'host')
-    r.ptys.open('pty_k1', note('session', 'sess_k1', { rolloutPath: first }))
+    open('pty_k1', ['Coordinate the run'], note('session', 'sess_k1', { rolloutPath: first }))
     await r.sources.poll()
     state = { ...state, runs: state.runs.map((x) => ({ ...x, endedAt: iso(E) })), tasks: state.tasks.map((t) => ({ ...t, status: 'completed', updatedAt: iso(E) })) }
     now = E + 3 * MIN
-    r.ptys.exit('pty_k1')
+    ptysMade.get('pty_k1')!.exit(0)
     await r.sources.poll()
     state = { ...state, runs: state.runs.map((x) => ({ ...x, coordinatorSessionId: 'sess_k2' })) }
     const second = path.join(r.dir, 'rollout-k2.jsonl')
-    r.ptys.typed('pty_k2', E + 4 * MIN - 100, 'host')
-    r.ptys.typed('pty_k2', E + 6 * MIN - 100, 'person')
     await fs.writeFile(
       second,
       lines(
@@ -847,7 +865,12 @@ describe('createTokenSources', () => {
         counted(E + 6 * MIN + 500, [320, 35], [300, 30])
       )
     )
-    r.ptys.open('pty_k2', note('session', 'sess_k2', { rolloutPath: second, rolledFrom: 'sess_k1' }))
+    // The roll spawns `codex resume` with the carry-on as its argument, typing nothing
+    now = E + 4 * MIN - 2000
+    open('pty_k2', ['resume', 'th1', 'Continue where you left off'], note('session', 'sess_k2', { rolloutPath: second, rolledFrom: 'sess_k1' }))
+    // A person types into the new tab
+    now = E + 6 * MIN - 100
+    registry.write('pty_k2', 'thanks, something else now\r', { person: true })
     now = E + 7 * MIN
     await r.sources.poll()
     expect(runTokensOf(state, 'run_1', r.store.spent())).toEqual({ coordinatorTokens: { input: 120, output: 15, total: 135 } })

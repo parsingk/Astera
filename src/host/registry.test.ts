@@ -179,6 +179,19 @@ describe('PtyRegistry', () => {
     expect(r.submittedBetween('p1', 0, 3000)).toBeNull()
   })
 
+  // Fix round 3: a Codex roll's carry-on is an argument of the new process, so nothing is typed; a roll's respawn
+  // (`rolledFrom` in its note) is noted as the Host's submission at its spawn, so that prompt reads as the Host's
+  it('notes a roll’s respawn as the Host’s submission at its spawn, and nothing for any other pty', () => {
+    let clock = 1000
+    const r = new PtyRegistry({ spawn: () => fakePty(), log: () => {}, now: () => clock })
+    r.open({ id: 'p1', file: 'codex', args: ['resume', 'th', 'Continue where you left off'], opts, meta: meta({ kind: 'session', id: 's2', restore: { rolledFrom: 's1' } }) })
+    clock = 1500
+    r.open({ id: 'p2', file: 'codex', args: [], opts, meta: meta({ kind: 'session', id: 's3', restore: {} }) })
+    expect(r.submittedBetween('p1', 0, 2000)).toBe('host')
+    expect(r.submittedBetween('p1', 1000, 2000)).toBeNull()
+    expect(r.submittedBetween('p2', 0, 2000)).toBeNull()
+  })
+
   // Fix round 2, Important a: an app's own delivery (a schedule, a roll's prompt) still holds a finished Run's sessions
   // open as before, but its Enter is not a person's prompt
   it('counts an app’s own delivery toward lastPersonWrite, but not as a person’s submission', () => {
