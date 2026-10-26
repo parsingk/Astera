@@ -1068,6 +1068,10 @@ describe('docs/cli.md on how long a finished run’s sessions count', () => {
       // What ends the hold, in a terminal, a chat or Codex alike, and what does not (fix round 2)
       expect(p.join(' ')).toMatch(/`astera sessions send`/)
       expect(p.join(' ')).toMatch(/what Astera types itself/)
+      // A roll's carry-on, onto the same account or another, and the two minutes an older app's chats fall back to
+      expect(p.join(' ')).toMatch(/a roll's carry-on/)
+      expect(p.join(' ')).toMatch(/older Astera app/)
+      expect(p.join(' ')).toMatch(/two minutes/)
       for (const line of p) expect(line.length, line).toBeLessThanOrEqual(120)
     }
   })

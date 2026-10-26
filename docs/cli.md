@@ -867,13 +867,14 @@ run spent, each as `{ input, output, total }`, where `input` counts cached input
 after the run finishes, what the session goes on to spend still counts until a person prompts it: types in its tab or
 chat, replies from Slack, or runs `astera sessions send` from a shell. So a response that finishes after the worker's
 report counts, and so does the coordinator's wrap-up however long it takes, whether a background task's end woke it or
-what Astera types itself (a nudge, or a roll carrying it onto another account). What a person sends after that is not
-the run's. A run counts as finished from when its outcome was settled, which a later edit of a Task does not move; a run
-that finished before this version of Astera counts from when its Tasks last changed before the update. The Host reads
-them in every mode from what Claude and Codex already write (a Claude session's transcript and its sub-agents' files, a
-chat's stream, a Codex rollout) and keeps them in `token-totals.json` in the profile until the run is deleted. Each is
-left out when the Host read none, such as for a session the app ran without a Host. MCP's `get_task` carries the Task's
-own `tokens`. What they cost in money is not shown.
+what Astera types itself (a nudge, or a roll's carry-on, onto the same account or another). What a person sends after
+that is not the run's. In a chat an older Astera app writes to, which does not say which lines a person typed, two
+minutes after the end stand in for that. A run counts as finished from when its outcome was settled, which a later edit
+of a Task does not move; a run that finished before this version of Astera counts from when its Tasks last changed
+before the update. The Host reads them in every mode from what Claude and Codex already write (a Claude session's
+transcript and its sub-agents' files, a chat's stream, a Codex rollout) and keeps them in `token-totals.json` in the
+profile until the run is deleted. Each is left out when the Host read none, such as for a session the app ran without a
+Host. MCP's `get_task` carries the Task's own `tokens`. What they cost in money is not shown.
 
 **`runs get` carries `github`** for a run of a `--github-lifecycle` Job: the pull request Astera bound for the run's
 branch, its head, the CI checks of that head with the `verdict` and the check that failed first (with its `class`, such
@@ -1183,22 +1184,23 @@ the file) and leaves the file as it is.
 
 `audit list` prints the records newest first, each with `decision` and `ruleId` (the rule that decided, left out when
 `otherwise` did or none could), worked out from the rules in force when you ask: edit a rule and the past calls show
-what it would have done. A record carries the Job, run and Task its session worked for when the call ran: a worker
-files its calls under its Task, and the coordinator under the run, also after the attempt ends or the run finishes,
-until a person prompts the session (types in its tab or chat, replies from Slack, or runs `astera sessions send` from a
-shell); a task notification or what Astera types itself does not end it, and the calls a person's prompt leads to carry
-neither. A run counts as finished from when its outcome was settled, which a later edit of a Task does not move; a run
-that finished before this version of Astera counts from when its Tasks last changed before the update. The filters
-combine, and `--agent-profile <id|name>` takes an id or a name, on `audit list` and on `audit summary` alike (an id of a
-profile deleted since still filters its records; a name that matches none is 4). `--limit` is 200 by default and at
-most 2000. When it cuts the list, `truncated` is true and `next` holds the `--until` and `--before-id` that ask for the
-next page, which `--human` prints under the table as `more:`, after the filters you used, each value in single quotes
-unless it is plain letters, digits and `._:/@=+-` (not starting with `@` or `-`), written for the shell you are in
-(PowerShell on Windows, a POSIX shell elsewhere and in Git Bash, which sets `MSYSTEM`, or any shell named in `SHELL`),
-so the line can be pasted as it is. The parser takes a lone `-` as "read stdin" and a value starting with `--` as the
-next flag, so no quoting can pass one as a filter value: the hint leaves that filter out and says so above it.
-`audit summary` counts the same calls by decision, in all and per action, and `stoppedAtLimit` is true when a day of
-the period stopped recording at the size limit, so it holds fewer calls than were made.
+what it would have done. A record carries the Job, run and Task its session worked for when the call ran: a worker files
+its calls under its Task, and the coordinator under the run, also after the attempt ends or the run finishes, until a
+person prompts the session (types in its tab or chat, replies from Slack, or runs `astera sessions send` from a shell);
+a task notification or what Astera types itself (a nudge, a roll's carry-on) does not end it, and the calls a person's
+prompt leads to carry neither. In a chat an older Astera app writes to, which does not say which lines a person typed,
+two minutes after the end stand in for that. A run counts as finished from when its outcome was settled, which a later
+edit of a Task does not move; a run that finished before this version of Astera counts from when its Tasks last changed
+before the update. The filters combine, and `--agent-profile <id|name>` takes an id or a name, on `audit list` and on
+`audit summary` alike (an id of a profile deleted since still filters its records; a name that matches none is 4).
+`--limit` is 200 by default and at most 2000. When it cuts the list, `truncated` is true and `next` holds the `--until`
+and `--before-id` that ask for the next page, which `--human` prints under the table as `more:`, after the filters you
+used, each value in single quotes unless it is plain letters, digits and `._:/@=+-` (not starting with `@` or `-`),
+written for the shell you are in (PowerShell on Windows, a POSIX shell elsewhere and in Git Bash, which sets `MSYSTEM`,
+or any shell named in `SHELL`), so the line can be pasted as it is. The parser takes a lone `-` as "read stdin" and a
+value starting with `--` as the next flag, so no quoting can pass one as a filter value: the hint leaves that filter out
+and says so above it. `audit summary` counts the same calls by decision, in all and per action, and `stoppedAtLimit` is
+true when a day of the period stopped recording at the size limit, so it holds fewer calls than were made.
 
 **These commands are for a person.** From inside an agent session (`ASTERA_SESSION` is set) every change is refused
 with 5, and so are both `audit` reads, whatever filter values they carry: the refusal comes first, before any
