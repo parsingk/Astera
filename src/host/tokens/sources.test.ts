@@ -755,6 +755,34 @@ describe('createTokenSources', () => {
     r.sources.dispose()
   })
 
+  // Fix round 2: a person may write while a turn is under way; the chat takes the line when that turn ends, so the turn
+  // after it is the person's though their line came before the `result`
+  it('takes the turn after a person’s line written during the turn before as the person’s', async () => {
+    const MIN = 60_000
+    const E = T0 + 10 * MIN
+    let now = T0
+    let state = orch([], 'chat_k')
+    const r = await rig({ state: () => state, now: () => now })
+    const frame = (at: number, id: string, input: number, output: number): void => {
+      now = at
+      r.procs.line('proc_k', claudeLine(at, id, input, output, { parent_tool_use_id: null, session_id: 'c1' }))
+    }
+    const result = (at: number): void => {
+      now = at
+      r.procs.line('proc_k', '{"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":1}}')
+    }
+    r.procs.open('proc_k', note('chat', 'chat_k', { provider: 'claude' }))
+    frame(T0 + 1000, 'msg_1', 10, 1)
+    state = { ...state, runs: state.runs.map((x) => ({ ...x, endedAt: iso(E) })), tasks: state.tasks.map((t) => ({ ...t, status: 'completed', updatedAt: iso(E) })) }
+    // The wrap-up runs on past the end; a person writes during it
+    frame(E + 5 * MIN, 'msg_wrap', 20, 2)
+    r.procs.typed('proc_k', E + 6 * MIN, 'person')
+    result(E + 7 * MIN)
+    frame(E + 7 * MIN + 500, 'msg_after', 300, 30)
+    expect(runTokensOf(state, 'run_1', r.store.spent())).toEqual({ coordinatorTokens: { input: 30, output: 3, total: 33 } })
+    r.sources.dispose()
+  })
+
   // What the audit asks (recorder.ts dispatchOfWithTurns): the turn a moment of a session fell in, from the lines read
   // so far, and a read past a moment not read to yet
   it('tells which turn a moment of a session fell in, and reads the session past a moment it has not read to', async () => {

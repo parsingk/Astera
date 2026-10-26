@@ -243,9 +243,9 @@ interface Followed {
   transcript: { read: (lines: readonly string[]) => TokensSpent[]; files: Map<string, JsonlTail>; seen: Map<string, number> } | null
   chat: ((lines: readonly string[]) => TokensSpent[]) | null
   /** A Claude chat: whether a turn is under way, begun by its first frame after the `result` that ended the one before,
-   *  and when that `result` came (or when the chat was first heard of). */
+   *  and when the last one began (or when the chat was first heard of). */
   chatTurn: boolean
-  chatResultAt: number
+  chatTurnAt: number
   /** When its pty or process ended (epoch ms), null while it runs. Its last read takes nothing dated after it. */
   endedAt: number | null
   /** When its last read of its files began (epoch ms), null before one: what was written before it is read. */
@@ -329,17 +329,19 @@ export function createTokenSources(d: {
     }
   }
   /** A Claude chat frame's part in its turns: a `result` ends the turn under way, and the first frame of the model's after
-   *  it begins the next one, at its time. That turn is a person's when a person's line reached the chat since the
-   *  `result`; one a background task's end began, or one the Host sent itself, goes on with the work before it. */
+   *  it begins the next one, at its time. That turn is a person's when a person's turn line reached the chat since the
+   *  turn before began: after that turn's `result`, or during it, since the chat takes a line written mid-turn once the
+   *  turn ends (fix round 2). Only turn lines are marked a person's, so a card answered mid-turn does not count. One a
+   *  background task's end began, or one the Host sent itself, goes on with the work before it. */
   const noteChatTurn = (f: Followed, line: string): void => {
     if (!line.includes('"result"') && !line.includes('"assistant"')) return
     const o = parsed(line)
-    if (o?.type === 'result') {
-      f.chatTurn = false
-      f.chatResultAt = now()
-    } else if (o?.type === 'assistant' && !f.chatTurn) {
+    if (o?.type === 'result') f.chatTurn = false
+    else if (o?.type === 'assistant' && !f.chatTurn) {
       f.chatTurn = true
-      if (sentBy(f, f.chatResultAt, now()) === 'person') turnBegan(turnsFor(f.sessionId), timeOf(o) ?? now())
+      const before = f.chatTurnAt
+      f.chatTurnAt = now()
+      if (sentBy(f, before, f.chatTurnAt) === 'person') turnBegan(turnsFor(f.sessionId), timeOf(o) ?? f.chatTurnAt)
     }
   }
   /** Lets go of what is kept for a session once nothing follows it. */
@@ -367,7 +369,7 @@ export function createTokenSources(d: {
   const chats = new Map<string, Followed>()
   const fresh = (sessionId: string, key: string, via: Followed['via']): Followed => {
     const since = now()
-    return { sessionId, key, via, since, rollout: null, transcript: null, chat: null, chatTurn: false, chatResultAt: since, endedAt: null, readFrom: null }
+    return { sessionId, key, via, since, rollout: null, transcript: null, chat: null, chatTurn: false, chatTurnAt: since, endedAt: null, readFrom: null }
   }
   /** The rollout a note names, followed from now on when it is new: a later file is Codex's `/new`, a conversation of
    *  its own with its own running total. */
