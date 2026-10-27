@@ -11,16 +11,17 @@ export interface ClaudeSandboxSettings {
   permissions: { deny: string[] }
 }
 
-/** Claude's permission paths: `//` marks an absolute path, and on Windows `C:/x` is matched in its POSIX form `/c/x`. */
-function readRule(p: string): string {
+/** Claude's permission paths, as two rules because the gitignore-style match of `p/**` covers a folder's contents but not a
+ *  file named `p` (`.npmrc`, `.git-credentials`): `//` marks an absolute path, and `//` marks an absolute path, and on Windows `C:/x` is matched in its POSIX form `/c/x`. */
+function readRules(p: string): string[] {
   const f = p.replace(/\\/g, '/').replace(/\/+$/, '')
   const drive = /^([A-Za-z]):(\/.*)?$/.exec(f)
   const posix = drive ? `/${drive[1].toLowerCase()}${drive[2] ?? ''}` : f
-  return `Read(/${posix}/**)`
+  return [`Read(/${posix})`, `Read(/${posix}/**)`]
 }
 
 export function claudeSandboxSettings(o: { platform: NodeJS.Platform; denied: string[]; npmCache: string }): ClaudeSandboxSettings {
-  const permissions = { deny: o.denied.map(readRule) }
+  const permissions = { deny: o.denied.flatMap(readRules) }
   if (o.platform === 'win32') return { permissions }
   return {
     sandbox: {

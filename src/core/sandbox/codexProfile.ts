@@ -18,9 +18,9 @@ const entry = (p: string, access: Access): string => `${toml(p)}=${toml(access)}
 /** The git entries of the filesystem table. Codex makes a pointer file's resolved gitdir read-only unless an entry names
  *  that exact path, so a linked worktree's own git directory is named even though the common directory is too. Hooks and
  *  config stay read-only: a session that could write them could run its code outside the sandbox the next time git runs. */
-function gitEntries(layout: GitLayout | null, cwd: string): string[] {
+function gitEntries(layout: GitLayout | null): string[] {
   if (!layout) return []
-  const atTop = layout.top === cwd
+  const atTop = layout.top === layout.cwd
   if (atTop && !layout.worktree) {
     return [`":workspace_roots"={${[entry('.git', 'write'), entry('.git/hooks', 'read'), entry('.git/config', 'read')].join(', ')}}`]
   }
@@ -31,8 +31,8 @@ function gitEntries(layout: GitLayout | null, cwd: string): string[] {
   return out
 }
 
-export function codexSandboxArgs(o: { platform: NodeJS.Platform; layout: GitLayout | null; cwd: string; denied: string[] }): string[] {
-  const entries = [...gitEntries(o.layout, o.cwd), ...o.denied.map((p) => entry(p, 'deny'))]
+export function codexSandboxArgs(o: { platform: NodeJS.Platform; layout: GitLayout | null; denied: string[] }): string[] {
+  const entries = [...gitEntries(o.layout), ...o.denied.map((p) => entry(p, 'deny'))]
   const profile = `permissions={astera={extends=":workspace", filesystem={${entries.join(', ')}}, network={enabled=true}}}`
   const args = ['-a', 'never', '-c', profile, '-c', 'default_permissions="astera"']
   // The unelevated Windows sandbox is not pinned by default, so a session would otherwise run with whichever one Codex picks.

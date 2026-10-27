@@ -4,6 +4,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 export interface GitLayout {
+  /** The folder the layout was asked about, as a real path, so it can be compared with `top` however the caller spelled it. */
+  cwd: string
   /** The folder holding `.git`. */
   top: string
   /** This checkout's own git directory (a linked worktree's lives under the main one's `worktrees`). */
@@ -26,8 +28,10 @@ const real = async (p: string): Promise<string> => {
 /** Walks up from `cwd` to the first `.git`; null when there is none. A `.git` file is a linked worktree's pointer. */
 export async function gitLayoutOf(cwd: string): Promise<GitLayout | null> {
   let dir: string
+  let asked: string
   try {
     dir = await fs.promises.realpath(cwd)
+    asked = slashed(dir)
   } catch {
     return null
   }
@@ -36,7 +40,7 @@ export async function gitLayoutOf(cwd: string): Promise<GitLayout | null> {
     const st = await fs.promises.stat(dotGit).catch(() => null)
     if (st?.isDirectory()) {
       const g = slashed(dotGit)
-      return { top: slashed(dir), gitDir: g, commonDir: g, worktree: false }
+      return { cwd: asked, top: slashed(dir), gitDir: g, commonDir: g, worktree: false }
     }
     if (st?.isFile()) {
       const pointer = /^gitdir:\s*(.+?)\s*$/m.exec(await fs.promises.readFile(dotGit, 'utf8'))
@@ -44,7 +48,7 @@ export async function gitLayoutOf(cwd: string): Promise<GitLayout | null> {
       const gitDir = await real(path.resolve(dir, pointer[1]))
       const common = await fs.promises.readFile(path.join(gitDir, 'commondir'), 'utf8').catch(() => null)
       const commonDir = common?.trim() ? await real(path.resolve(gitDir, common.trim())) : gitDir
-      return { top: slashed(dir), gitDir, commonDir, worktree: true }
+      return { cwd: asked, top: slashed(dir), gitDir, commonDir, worktree: true }
     }
     const parent = path.dirname(dir)
     if (parent === dir) return null
