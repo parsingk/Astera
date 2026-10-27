@@ -1153,7 +1153,9 @@ On Windows the Codex sandbox is Codex's elevated one, which keeps Credential Man
 safe directory for the account it runs as; a repository or home folder whose path holds a character cmd.exe reads as
 syntax (`" & | < > ^ %`) cannot be carried to it. Each Codex account's home must have the elevated sandbox set up once
 (Codex's `codex sandbox setup --elevated --current-user`, which brings up Windows' administrator prompt): Astera asks
-before a sandboxed start, and the app offers to set up the one account a start was refused for. A session the sandbox
+before a sandboxed start, and the app offers to set up the one account a start was refused for. Settings › Agent
+profiles also shows, under a sandboxed profile on Windows, whether each of its Codex accounts is set up (asking runs
+Codex's `doctor`, which brings up no prompt), with Set up for one that is not. A session the sandbox
 cannot be applied to does not start, and says why with `SANDBOX_UNAVAILABLE: <code>`: `codex-daemon codex` for a codex
 that does not take `--no-daemon`, `cli-too-old claude <found> 2.1.306` for an older Claude Code (`cli-version-unknown
 claude` when its version cannot be read, `cli-missing claude` when it is not there), `path-unsafe` for such a path,
@@ -1213,7 +1215,15 @@ changed only in the app, so an agent cannot switch off its own hiding; an agent 
 `credentials show` lists. `credentials doctor` says what hiding reaches and what it cannot: a program running as you can
 still read your files and OS stores, git and Docker hand their stored logins to any program that asks, and a variable
 your shell startup files set can come back in the commands an agent runs through a shell. Astera does not search the
-machine for credentials.
+machine for credentials. Doctor then says, one line each and for every OS whatever this machine is, what an agent
+profile's sandbox does for Codex and for Claude Code (`Sandbox, Codex on Windows: …`; Claude Code on Windows is a
+warning, since its shell is not restricted there), that a sandboxed Claude Code session's git on Linux reads an excludes
+file of Astera's so `git add -A` works, and the sandbox's limits: `curl` fails TLS inside a sandboxed Codex session on
+Windows, `gh` inside cannot use your login (GitHub work goes through Astera), pushes from inside stay with the Host on
+Windows, a chain keeps the sandbox state it started with, a worktree a sandboxed Codex session adds itself has a
+`config.worktree` its sandbox profile does not name, setting up one Codex account's Windows sandbox can leave another
+account's setup stale (from Codex's source, not measured), and Claude Code's use of its sandbox settings was measured on
+the runtime it uses (srt), not with Claude Code itself.
 
 **`audit` and `policies` are observe mode**, the same as **Settings › Security & Access** in the app. After
 `policies set-mode --mode observe`, every session Astera starts records the tool calls it makes once each has run
@@ -1244,6 +1254,15 @@ to 0.13 on macOS and 0.07 to 0.11 on Linux (20 starts a run; macOS and Linux in 
 says what is blocked for each provider and kind of session: what is typed into a Codex shell that is already running is
 not checked. Like observe, the mode counts for sessions started afterwards, and a session started in enforce keeps
 blocking until it ends: its blocked calls are recorded even after the mode is turned off.
+
+`sandboxCoverage` in `policies show`, whatever the mode, says what an agent profile's sandbox (`--sandbox on`) blocks
+for each CLI on each OS (`provider`, `os` as `win32`, `darwin` or `linux`), claiming only what was measured: `write`
+(outside the session's folders), `sensitive` (the folders holding logins), `stores` (the OS secret store) and `network`.
+Codex's sandbox blocks the first three on every OS and allows the network (`seen`, printed `allowed`). Claude Code's
+blocks them on macOS and Linux, with `stores` noted `runtime-measured`: the runtime its sandbox runs on was measured,
+not Claude Code's own use of it. On Windows Claude Code has no sandbox: `write` and `stores` are `none`, and `sensitive`
+is `partial` with the note `file-tools-only`. `--human` prints it as a table of its own, headed `sandbox`, under the
+other.
 
 The rules say what each call would get if Astera enforced them. They are tried in order: the first rule whose action
 matches a call decides it, `allow` or `would-deny`, and `otherwise` decides a call no rule matches. A rule's action is

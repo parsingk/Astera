@@ -1,21 +1,32 @@
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import type { Account, AgentProfileFields, PluginsCallAnswer } from '../../../core/types'
 import type { AgentProfile, ProfilePermission } from '../../../core/agentProfiles/types'
-import { metaOf } from '../../../core/providers/meta'
+import { metaOf, providerOf } from '../../../core/providers/meta'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
 import { confirmModal } from '../lib/confirm'
 import { publishAgentProfiles } from '../lib/agentProfiles'
+import { sandboxSetupOutcome } from '../lib/spawnErrors'
 import { AccountSelect } from './AccountSelect'
 import { failureLine } from './extensionsText'
-import { addableAccounts, permissionLabel, profileFailureLine, providerSuffix } from './agentProfilesText'
+import {
+  addableAccounts,
+  offersSetUp,
+  permissionLabel,
+  profileFailureLine,
+  providerSuffix,
+  readinessRows,
+  sandboxHintKeys,
+  sandboxReadinessShown,
+  sandboxStateLine
+} from './agentProfilesText'
 
 type Failure = Extract<PluginsCallAnswer, { ok: false }>
 /** A shared MCP server; `off` when it is switched off in MCP & Skills, so no session gets it whatever is ticked. */
 type Server = { id: string; name: string; off: boolean }
-/** The sandbox switch is not edited here yet: a save sends none, and the Host's update keeps the one stored. */
-type Draft = Required<Omit<AgentProfileFields, 'sandbox'>> & { description: string }
+/** Every field a save sends, the sandbox switch included. */
+type Draft = Required<AgentProfileFields>
 
 const PERMISSIONS: ProfilePermission[] = ['inherit', 'bypass', 'ask']
 const arr = <V,>(v: unknown): V[] => (Array.isArray(v) ? (v as V[]) : [])
@@ -26,7 +37,8 @@ const draftOf = (p?: AgentProfile): Draft => ({
   description: p?.description ?? '',
   accountIds: p?.accountIds ?? [],
   mcpExclude: p?.mcpExclude ?? [],
-  permission: p?.permission ?? 'inherit'
+  permission: p?.permission ?? 'inherit',
+  sandbox: p?.sandbox ?? false
 })
 
 /** Settings › Agent profiles (Agent Profiles design §8): accounts with their roll order, the shared MCP servers a
@@ -151,6 +163,8 @@ export function AgentProfilesSettings({ accounts }: { accounts: Account[] }): Re
                     saveLabel={t('settings.agentProfiles.save')}
                     onSave={(d) => void change(() => window.api.agentProfiles.update(p.id, d))}
                     warning={p.status === 'active' && p.accountIds.length === 0 ? t('settings.agentProfiles.noAccounts') : undefined}
+                    // Each Codex account's Windows sandbox, for a profile whose sessions start in it (Task 8)
+                    sandboxReadiness={sandboxReadinessShown(p, window.api.platform, accounts) ? <SandboxReadiness profile={p} accounts={accounts} /> : undefined}
                   >
                     <button
                       className="settings-gen-refresh"
@@ -173,8 +187,8 @@ export function AgentProfilesSettings({ accounts }: { accounts: Account[] }): Re
   )
 }
 
-/** One profile's fields: name, description, the ordered accounts, the shared MCP servers it uses and its permission,
- *  then Save and whatever actions the row adds (archive or restore, delete) or Cancel for a new one. */
+/** One profile's fields: name, description, the ordered accounts, the shared MCP servers it uses, its permission and its
+ *  sandbox switch, then Save and whatever actions the row adds (archive or restore, delete) or Cancel for a new one. */
 function ProfileEditor({
   initial,
   accounts,
@@ -184,6 +198,7 @@ function ProfileEditor({
   onSave,
   onCancel,
   warning,
+  sandboxReadiness,
   children
 }: {
   initial: Draft
@@ -194,6 +209,8 @@ function ProfileEditor({
   onSave: (d: Draft) => void
   onCancel?: () => void
   warning?: string
+  /** Shown under the sandbox switch while it is on: the readiness of a stored profile's Codex accounts on Windows. */
+  sandboxReadiness?: React.ReactNode
   children?: React.ReactNode
 }): React.JSX.Element {
   const { t } = useI18n()
@@ -207,6 +224,8 @@ function ProfileEditor({
     set('accountIds', ys)
   }
   const unpicked = addableAccounts(accounts, d.accountIds)
+  // The profile's CLI, from its first account: the switch's lines say what it does for that one
+  const first = accounts.find((a) => a.id === d.accountIds[0])
   return (
     <div className="ext-row-body">
       {warning !== undefined && <span className="settings-hint is-warning">{warning}</span>}
@@ -282,6 +301,18 @@ function ProfileEditor({
         ))}
         <span className="settings-hint">{t('settings.agentProfiles.permissionAgents')}</span>
       </div>
+      <div className="plugin-field">
+        <label className="check-small">
+          <input type="checkbox" checked={d.sandbox} onChange={(e) => set('sandbox', e.target.checked)} />
+          <span>{t('settings.agentProfiles.sandbox')}</span>
+        </label>
+        {sandboxHintKeys(first ? providerOf(first) : undefined).map((k) => (
+          <span key={k} className="settings-hint">
+            {t(k)}
+          </span>
+        ))}
+        {d.sandbox && sandboxReadiness}
+      </div>
       <div className="remote-actions">
         <button className="settings-gen-refresh" disabled={busy} onClick={() => onSave(d)}>
           {saveLabel}
@@ -294,5 +325,58 @@ function ProfileEditor({
         {children}
       </div>
     </div>
+  )
+}
+
+/** Each Codex account's Windows sandbox under a profile whose sessions start in it (Task 8): ready, not set up with
+ *  설정하기, or could not be asked about. A roll refused for an account not set up sends the person here (Task 6). Asked
+ *  of the Host when the row opens and again after a setup; asking runs Codex's doctor (and its echo on a home doctor
+ *  calls complete), which never brings up the administrator prompt. Only 설정하기 does, once, for the one account. */
+function SandboxReadiness({ profile, accounts }: { profile: AgentProfile; accounts: Account[] }): React.JSX.Element {
+  const { t } = useI18n()
+  const [answer, setAnswer] = useState<PluginsCallAnswer | null>(null)
+  const [settingUp, setSettingUp] = useState(false)
+  /** Counts the asks, so an earlier one that comes back late never shows over a later one. */
+  const asked = useRef(0)
+  const ask = async (): Promise<void> => {
+    const n = ++asked.current
+    setAnswer(null)
+    const r = await window.api.agentProfiles.sandboxReadiness(profile.id).catch(failed)
+    if (n === asked.current) setAnswer(r)
+  }
+  useEffect(() => {
+    void ask()
+  }, [profile.id])
+
+  const setUp = async (accountId: string): Promise<void> => {
+    if (settingUp) return
+    setSettingUp(true)
+    try {
+      const answer = await window.api.agentProfiles.sandboxSetup(profile.id, accountId).catch(failed)
+      const outcome = sandboxSetupOutcome(answer)
+      if (outcome.ok) toast.success(t('session.spawn.sandbox.setUpDone'))
+      else toast.error(outcome.line ?? t('session.spawn.sandbox.setUpFailed'))
+    } finally {
+      setSettingUp(false)
+      void ask()
+    }
+  }
+
+  return (
+    <>
+      {readinessRows(profile, accounts, answer).map((r) => (
+        <div key={r.accountId} className="settings-row">
+          <span>{r.label}</span>
+          <div className="remote-actions">
+            {r.state !== null && <span className="settings-hint">{sandboxStateLine(r.state, t)}</span>}
+            {offersSetUp(r.state) && (
+              <button type="button" className="settings-gen-refresh" disabled={settingUp} onClick={() => void setUp(r.accountId)}>
+                {t('session.spawn.sandbox.setUp')}
+              </button>
+            )}
+          </div>
+        </div>
+      ))}
+    </>
   )
 }

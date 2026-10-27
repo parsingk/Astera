@@ -2006,6 +2006,10 @@ export interface AgentProfilesApi {
    *  was refused for (`SANDBOX_UNAVAILABLE: windows-setup codex <accountId>`), bringing up Windows' administrator
    *  prompt once. The body is `{ ok, out }`: whether Codex's setup succeeded, and what it said. */
   sandboxSetup(profileId: string, accountId: string): Promise<PluginsCallAnswer>
+  /** Whether each Codex account of the profile has its Windows sandbox set up, for Settings › Agent profiles (Task 8):
+   *  `{ accounts: [{ accountId, state }] }`, `state` ready, not-set-up or check-failed, in the profile's order. Codex is
+   *  asked the way a sandboxed start asks it, which never brings up the administrator prompt. 501 off Windows. */
+  sandboxReadiness(profileId: string): Promise<PluginsCallAnswer>
 }
 
 /** What Audit Logs asks for (observe mode design §8, §11): audit-list's and audit-summary's filters, the period's start,

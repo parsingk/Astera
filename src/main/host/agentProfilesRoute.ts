@@ -2,7 +2,7 @@
 // over the app's `orch-call` as the app, one method a command the tab and the pickers use, so the renderer names no
 // other command. The Host owns the store and checks everything; this only says what it answered.
 import type { AgentProfilesApi } from '../../core/types'
-import { SETUP_RUN_MS } from '../../core/sandbox/windowsReadiness'
+import { READINESS_RUN_MS, SETUP_RUN_MS } from '../../core/sandbox/windowsReadiness'
 import { TIMEOUT_HEADROOM_MS } from '../../core/publicContract'
 import { hostSender } from './pluginsRoute'
 
@@ -12,8 +12,12 @@ type Call = Parameters<typeof hostSender>[0]['call']
  *  with the headroom the Host's answer needs to come back. */
 export const SANDBOX_SETUP_DEADLINE_MS = SETUP_RUN_MS + TIMEOUT_HEADROOM_MS
 
-/** Nothing here copies files the way an extensions change does, so every call but the sandbox's setup waits the usual
- *  time. `afterSetup` runs once a setup has answered, whatever it said: this process asks the same readiness question
+/** How long the app waits for the readiness of a profile's Codex accounts: the Host asks them at once, each with Codex's
+ *  doctor and, on a home doctor calls complete, the echo, each run stopped at READINESS_RUN_MS. */
+export const SANDBOX_READINESS_DEADLINE_MS = 2 * READINESS_RUN_MS + TIMEOUT_HEADROOM_MS
+
+/** Nothing here copies files the way an extensions change does, so every call but the sandbox's setup and readiness
+ *  waits the usual time. `afterSetup` runs once a setup has answered, whatever it said: this process asks the same readiness question
  *  for its own spawns, and must not keep an answer the setup made old. */
 export function createAgentProfilesRoute(d: { call: Call; afterSetup?: () => void }): AgentProfilesApi {
   const send = hostSender(d)
@@ -28,6 +32,7 @@ export function createAgentProfilesRoute(d: { call: Call; afterSetup?: () => voi
       const r = await send('agent-profiles-sandbox-setup', { id: profileId, accountId }, { timeoutMs: SANDBOX_SETUP_DEADLINE_MS })
       d.afterSetup?.()
       return r
-    }
+    },
+    sandboxReadiness: (profileId) => send('agent-profiles-sandbox-readiness', { id: profileId }, { timeoutMs: SANDBOX_READINESS_DEADLINE_MS })
   }
 }

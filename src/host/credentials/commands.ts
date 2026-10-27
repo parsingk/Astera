@@ -91,6 +91,52 @@ const LIMITS = [
   'A variable your shell startup files set can come back in the commands an agent runs through a shell that reads them. Codex starts its commands as a login shell: on macOS and Linux a login bash reads ~/.bash_profile (or ~/.bash_login, ~/.profile) and a login zsh ~/.zshenv, ~/.zprofile and ~/.zlogin (measured 2026-10-27), and on Windows PowerShell reads your profile. For Claude Code, which takes the aliases and functions of your startup file at session start, this is not measured.'
 ]
 
+/** What an agent profile's sandbox switch does, per CLI and OS (sandbox design §6), whatever this machine is: the switch
+ *  is set in one place for every OS a profile's sessions may start on. Windows was measured on the build's PC (inventory
+ *  §23.3), macOS and Linux on GitHub's runners (§22, §23.4). */
+const LOGIN_FOLDERS = '~/.ssh, ~/.aws, gh’s and gcloud’s settings, ~/.docker, ~/.npmrc, ~/.git-credentials and ~/.kube'
+const SANDBOX_LINES: { level: 'ok' | 'warn'; text: string }[] = [
+  {
+    level: 'ok',
+    text: `Sandbox, Codex on Windows: Codex’s elevated sandbox, set up once for each Codex account; writes stay in the session’s folder, its repository’s git directories (not their hooks or config) and the temp folder, ${LOGIN_FOLDERS} cannot be read, Credential Manager is kept out, and the network works.`
+  },
+  {
+    level: 'ok',
+    text: `Sandbox, Codex on macOS: Codex’s own sandbox; writes stay in the session’s folder, its repository’s git directories (not their hooks or config) and the temp folder, ${LOGIN_FOLDERS} and ~/Library/Keychains cannot be read, and the network works.`
+  },
+  {
+    level: 'ok',
+    text: `Sandbox, Codex on Linux: Codex’s own sandbox; writes stay in the session’s folder, its repository’s git directories (not their hooks or config) and the temp folder, ${LOGIN_FOLDERS} cannot be read, the session bus a secret service answers on cannot be reached, and the network works.`
+  },
+  {
+    level: 'warn',
+    text: `Sandbox, Claude Code on Windows: Claude Code has no sandbox here; the switch adds deny rules that keep its file tools out of ${LOGIN_FOLDERS}, and its shell is not restricted.`
+  },
+  {
+    level: 'ok',
+    text: `Sandbox, Claude Code on macOS: Claude Code’s own sandbox; its commands write only in the session’s folder, its git directories and the temp folder, ${LOGIN_FOLDERS} and ~/Library/Keychains cannot be read, astera runs outside it, and the network works.`
+  },
+  {
+    level: 'ok',
+    text: `Sandbox, Claude Code on Linux: Claude Code’s own sandbox; its commands write only in the session’s folder, its git directories and the temp folder, ${LOGIN_FOLDERS} cannot be read, the session bus cannot be reached, astera runs outside it, and the network works.`
+  },
+  {
+    level: 'ok',
+    text: 'Inside Claude Code’s sandbox on Linux, `git add -A` fails on the placeholders the sandbox keeps for files it protects (such as .bashrc and .vscode); Astera points a sandboxed Claude Code session’s git at an excludes file of its own (your excludes, then those names), so `git add -A` works.'
+  }
+]
+
+/** The sandbox's known limits (sandbox design §6), and those the build found. */
+const SANDBOX_LIMITS = [
+  'Inside a sandboxed Codex session on Windows, curl fails TLS.',
+  'gh inside the sandbox cannot use your login, so GitHub work goes through Astera (astera github-*).',
+  'Git pushes from inside the sandbox use git’s login only where the sandbox lets the credential helper run; on Windows it does not, so pushes stay with the Host as today.',
+  'A chain keeps the sandbox state it started with: the session a roll starts next is in the sandbox exactly when the first one was, whatever the profile’s switch says by then.',
+  'A worktree a sandboxed Codex session adds itself has a config.worktree its sandbox profile does not name, so the session can write that file; the worktrees there when it started are named, and kept read-only.',
+  'On Windows, setting up one Codex account’s sandbox can leave another account’s setup stale (from Codex’s source, not measured): Astera asks before each sandboxed start, and an account found stale is not started on until it is set up again (Set up, in Settings › Agent profiles).',
+  'Claude Code’s use of its sandbox settings is measured on the runtime it uses (srt 0.0.79), not with Claude Code itself.'
+]
+
 export function createHostCredentials(d: {
   profileDir: string
   platform?: NodeJS.Platform
@@ -242,6 +288,9 @@ export function createHostCredentials(d: {
         for (const t of LIMITS) lines.push({ level: 'warn', text: t })
         if (platform === 'win32') lines.push({ level: 'warn', text: 'The Host’s Windows pipe keeps the default access list (Node cannot narrow it): any local program can connect.' })
         lines.push({ level: 'ok', text: 'A change counts for sessions started afterwards; a running session keeps its environment.' })
+        // An agent profile's sandbox switch (sandbox design §6): what it does on each OS, and what it cannot
+        lines.push(...SANDBOX_LINES)
+        for (const t of SANDBOX_LIMITS) lines.push({ level: 'warn', text: t })
         return { status: 200, body: { lines } }
       }
       case 'credentials-add-hide-only': {

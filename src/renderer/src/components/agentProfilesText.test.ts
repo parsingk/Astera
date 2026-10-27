@@ -19,7 +19,12 @@ import {
   reasonLine,
   resumeAsLine,
   resumeProfile,
-  spawnPermission
+  spawnPermission,
+  offersSetUp,
+  readinessRows,
+  sandboxHintKeys,
+  sandboxReadinessShown,
+  sandboxStateLine
 } from './agentProfilesText'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -250,5 +255,75 @@ describe('the editor’s add list', () => {
     const editor = source('AgentProfilesSettings.tsx')
     expect(editor).toContain('const unpicked = addableAccounts(accounts, d.accountIds)')
     expect(editor).toMatch(/<AccountSelect accounts=\{unpicked\}[^>]*suffixOf=\{providerSuffix\}/)
+  })
+})
+
+// Sandbox design §6, Task 8: the switch with its per-OS lines, and on Windows each Codex account's readiness under a
+// sandboxed profile, with 설정하기 for one not set up
+describe('the sandbox switch', () => {
+  const x1 = { id: 'x1', label: 'Work', provider: 'codex' as const }
+  const x2 = { id: 'x2', label: 'Home', provider: 'codex' as const }
+  const c1 = { id: 'c1', label: 'Claude', provider: 'claude' as const }
+  const accounts = [x1, x2, c1]
+  const boxed = profile({ accountIds: ['x2', 'x1'], sandbox: true })
+
+  it('says what it does for the profile’s CLI, then the limits; both CLIs before an account is picked', () => {
+    expect(sandboxHintKeys('codex')).toEqual(['settings.agentProfiles.sandboxHint.codex', 'settings.agentProfiles.sandboxHint.limits'])
+    expect(sandboxHintKeys('claude')).toEqual(['settings.agentProfiles.sandboxHint.claude', 'settings.agentProfiles.sandboxHint.limits'])
+    expect(sandboxHintKeys(undefined)).toEqual([
+      'settings.agentProfiles.sandboxHint.codex',
+      'settings.agentProfiles.sandboxHint.claude',
+      'settings.agentProfiles.sandboxHint.limits'
+    ])
+    expect(en('settings.agentProfiles.sandbox')).toBe('Run in the sandbox')
+    expect(en('settings.agentProfiles.sandboxHint.claude')).toContain('Windows: the shell is not restricted')
+  })
+
+  it('shows readiness only for a stored profile with the sandbox on, on Windows, with a Codex account', () => {
+    expect(sandboxReadinessShown(boxed, 'win32', accounts)).toBe(true)
+    expect(sandboxReadinessShown(boxed, 'darwin', accounts)).toBe(false)
+    expect(sandboxReadinessShown(boxed, 'linux', accounts)).toBe(false)
+    expect(sandboxReadinessShown({ ...boxed, sandbox: false }, 'win32', accounts)).toBe(false)
+    expect(sandboxReadinessShown({ ...boxed, accountIds: ['c1'] }, 'win32', accounts)).toBe(false)
+    // An account removed from Astera since is not asked about
+    expect(sandboxReadinessShown({ ...boxed, accountIds: ['gone'] }, 'win32', accounts)).toBe(false)
+  })
+
+  it('lists the profile’s Codex accounts in its order with what the Host answered for each', () => {
+    const answer = { ok: true as const, body: { accounts: [{ accountId: 'x1', state: 'ready' }, { accountId: 'x2', state: 'not-set-up' }] } }
+    expect(readinessRows(boxed, accounts, answer)).toEqual([
+      { accountId: 'x2', label: 'Home', state: 'not-set-up' },
+      { accountId: 'x1', label: 'Work', state: 'ready' }
+    ])
+    // Still asking: the accounts, with no state yet
+    expect(readinessRows(boxed, accounts, null).map((r) => r.state)).toEqual([null, null])
+    // An account the Host left out, or a call that came back with nothing, could not be asked about
+    expect(readinessRows(boxed, accounts, { ok: true, body: { accounts: [{ accountId: 'x1', state: 'ready' }] } }).map((r) => r.state)).toEqual(['check-failed', 'ready'])
+    expect(readinessRows(boxed, accounts, { ok: false, code: 'HOST_NOT_RUNNING', message: 'no Host' }).map((r) => r.state)).toEqual(['check-failed', 'check-failed'])
+  })
+
+  it('says each readiness in the person’s language, and offers 설정하기 only for one not set up', () => {
+    expect(['ready', 'not-set-up', 'check-failed'].map((s) => sandboxStateLine(s, en))).toEqual(['Sandbox ready', 'Sandbox not set up', 'Could not check'])
+    expect(['ready', 'not-set-up', 'check-failed'].map((s) => sandboxStateLine(s, (k, p) => translate('ko', k, p)))).toEqual(['sandbox 준비됨', 'sandbox 설정 안 됨', '상태를 묻지 못함'])
+    // A state a newer Host gives is shown as it was named
+    expect(sandboxStateLine('pending', en)).toBe('pending')
+    expect(offersSetUp('not-set-up')).toBe(true)
+    for (const s of ['ready', 'check-failed', null]) expect(offersSetUp(s as 'ready' | null)).toBe(false)
+  })
+
+  it('the editor carries the switch and sends it, and asks readiness and sets up through the Host', () => {
+    const editor = source('AgentProfilesSettings.tsx')
+    // The draft carries the switch from what the Host kept, and a save sends the whole draft
+    expect(editor).toContain('sandbox: p?.sandbox ?? false')
+    expect(editor).not.toMatch(/Omit<AgentProfileFields, 'sandbox'>/)
+    expect(editor).toContain("checked={d.sandbox} onChange={(e) => set('sandbox', e.target.checked)}")
+    expect(editor).toContain("t('settings.agentProfiles.sandbox')")
+    expect(editor).toContain('sandboxHintKeys(')
+    expect(editor).toContain('window.api.agentProfiles.sandboxReadiness(profile.id)')
+    expect(editor).toContain('window.api.agentProfiles.sandboxSetup(profile.id, accountId)')
+    expect(editor).toContain("t('session.spawn.sandbox.setUp')")
+    // The setup's outcome is said with Task 6's lines, then the readiness is asked again
+    expect(editor).toContain('sandboxSetupOutcome(answer)')
+    expect(editor).toContain('sandboxReadinessShown(p, window.api.platform, accounts)')
   })
 })

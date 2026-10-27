@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import type { AuditQuery, PluginsCallAnswer } from '../../../core/types'
 import type { AgentProfile } from '../../../core/agentProfiles/types'
-import type { AuditMode, AuditPolicy, AuditRule, CoverageRow, CredentialUse } from '../../../core/audit/types'
+import type { AuditMode, AuditPolicy, AuditRule, CoverageRow, CredentialUse, SandboxCoverageRow } from '../../../core/audit/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
 import { confirmModal } from '../lib/confirm'
@@ -63,6 +63,11 @@ import {
   securityFailure,
   sessionLabel,
   summaryOf,
+  SANDBOX_CLASSES,
+  sandboxCellText,
+  sandboxClassLabel,
+  sandboxCoverageTitle,
+  sandboxRowLabel,
   type AuditCounts,
   type AuditCursor,
   type AuditFilters,
@@ -120,6 +125,8 @@ export function SecuritySettings({
   const [coverage, setCoverage] = useState<CoverageRow[]>([])
   /** What Enforce blocks per session (the Host's COVERAGE_ENFORCE): its preview, and the table while it is on. */
   const [enforceCoverage, setEnforceCoverage] = useState<CoverageRow[]>([])
+  /** What the sandbox blocks per CLI and OS (the Host's SANDBOX_COVERAGE), whatever the mode: an agent profile's switch. */
+  const [sandboxCoverage, setSandboxCoverage] = useState<SandboxCoverageRow[]>([])
   const [failure, setFailure] = useState<Failure | null>(null)
   const [busy, setBusy] = useState(false)
   /** Counts the rule changes: Audit Logs reads again after each, since the rules decide every row it shows. */
@@ -146,6 +153,7 @@ export function SecuritySettings({
     setPolicy(policyIn(r.body))
     setCoverage(arr<CoverageRow>(r.body.coverage))
     setEnforceCoverage(arr<CoverageRow>(r.body.enforceCoverage))
+    setSandboxCoverage(arr<SandboxCoverageRow>(r.body.sandboxCoverage))
   }
   useEffect(() => {
     void load()
@@ -253,6 +261,38 @@ export function SecuritySettings({
                           {COVERAGE_CLASSES.map((c) => (
                             <td key={c} className={`is-${r.classes?.[c]?.level ?? 'none'}`}>
                               {coverageCellText(r.classes?.[c], t)}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+            {sandboxCoverage.length > 0 && (
+              // The second table beside it (sandbox design §6): what an agent profile's sandbox blocks, per CLI and OS
+              <div className="settings-group">
+                <div className="settings-field-label">{sandboxCoverageTitle(t)}</div>
+                <div className="security-table-wrap">
+                  <table className="security-table">
+                    <thead>
+                      <tr>
+                        <th />
+                        {SANDBOX_CLASSES.map((c) => (
+                          <th key={c} scope="col">
+                            {sandboxClassLabel(c, t)}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sandboxCoverage.map((r) => (
+                        <tr key={`${r.provider}-${r.os}`}>
+                          <th scope="row">{sandboxRowLabel(r, t)}</th>
+                          {SANDBOX_CLASSES.map((c) => (
+                            <td key={c} className={`is-${r.classes?.[c]?.level ?? 'none'}`}>
+                              {sandboxCellText(r.classes?.[c], t)}
                             </td>
                           ))}
                         </tr>

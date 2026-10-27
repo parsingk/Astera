@@ -3,7 +3,7 @@ import type { SessionKind } from '../../../core/types'
 import { resolveFileIcon } from '../../../core/files/icons'
 import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
-import { Film, Globe, Image as ImageIcon, MessageSquare, Monitor, Repeat, Terminal } from 'lucide-react'
+import { Film, Globe, Image as ImageIcon, MessageSquare, Monitor, Repeat, Shield, Terminal } from 'lucide-react'
 import { endRenameOnce } from '../lib/renameOnce'
 
 /** File viewer tab. Renderer-only — unlike sessions, main is not involved. id = `file:${path}`.
@@ -78,6 +78,8 @@ export type WorkbenchTab =
       rollTooltip: string | null
       /** The agent profile the session was started from, as a line for the tab's tooltip; null without one. */
       profileTooltip: string | null
+      /** The session runs in its CLI's own sandbox (SessionInfo.sandboxed, sandbox design §6): the tab shows a marker. */
+      sandboxed?: boolean
       /** A session on a paired Runtime (Phase 9b): its title is the Runtime's, so it is not renamed here. */
       remote?: boolean
     }
@@ -364,6 +366,11 @@ ${tab.profileTooltip}`
           {tab.kind === 'file' && tab.hint && <span className="tab-hint">{tab.hint}</span>}
           {tab.kind === 'file' && tab.dirty && (
             <span className="tab-dirty" title={t('explorer.tab.unsaved')} />
+          )}
+          {tab.kind === 'session' && tab.sandboxed === true && (
+            <span className="tab-sandbox" title={t('session.tab.sandboxed')}>
+              <Shield size={11} />
+            </span>
           )}
           {tab.kind === 'session' && tab.rollTooltip && (
             <span className="tab-roll" title={tab.rollTooltip}>

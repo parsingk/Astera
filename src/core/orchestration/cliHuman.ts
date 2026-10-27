@@ -255,7 +255,39 @@ function policyText(data: Record<string, unknown>): string {
   ]
   const coverage = data.mode === 'enforce' && Array.isArray(data.enforceCoverage) ? data.enforceCoverage : data.coverage
   if (Array.isArray(coverage)) parts.push(coverageText(coverage as Record<string, unknown>[]))
+  if (Array.isArray(data.sandboxCoverage)) parts.push(sandboxCoverageText(data.sandboxCoverage as Record<string, unknown>[]))
   return parts.join('\n\n')
+}
+
+/** The sandbox table's terse heads (the screen's are `settings.security.sandboxCoverage.class.*`), and the OS names. */
+const SANDBOX_CLASSES = [
+  ['write', 'write'],
+  ['sensitive', 'login folders'],
+  ['stores', 'OS secret store'],
+  ['network', 'network']
+] as const
+const OS_NAMES: Record<string, string> = { win32: 'Windows', darwin: 'macOS', linux: 'Linux' }
+
+/** What the sandbox blocks (sandbox design §6), a row per CLI and OS, headed `sandbox` so it is not read as the table
+ *  above it. A level is its own word but `seen`, which here is what the sandbox lets through: the network (E3). */
+function sandboxCoverageText(rows: Record<string, unknown>[]): string {
+  return columns([
+    ['sandbox', ...SANDBOX_CLASSES.map(([, name]) => name)],
+    ...rows.map((row) => {
+      const classes = (row.classes ?? {}) as Record<string, { level?: unknown; note?: unknown } | undefined>
+      const os = str(row.os)
+      return [
+        `${str(row.provider)} ${Object.hasOwn(OS_NAMES, os) ? OS_NAMES[os] : os}`,
+        ...SANDBOX_CLASSES.map(([key]) => {
+          const c = Object.hasOwn(classes, key) ? classes[key] : undefined
+          const level = c?.level === 'seen' ? 'allowed' : str(c?.level)
+          const note =
+            typeof c?.note === 'string' ? (Object.hasOwn(COVERAGE_NOTE_PHRASES, c.note) ? t('en', COVERAGE_NOTE_PHRASES[c.note as CoverageNote]) : c.note) : undefined
+          return note === undefined ? level : `${level} (${note})`
+        })
+      ]
+    })
+  ])
 }
 
 /** `audit list`'s flags that the next page asks again, as the parser keys them and as they are typed: all but the cursor

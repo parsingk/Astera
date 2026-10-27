@@ -8,7 +8,9 @@ import type { Account } from '../core/types'
 import type { Provider } from '../core/providers/meta'
 import { descriptorOf, type ProviderDescriptor } from '../core/providers/descriptor'
 import { cliEnvFor } from '../core/sessions/cliEnv'
-import { SETUP_RUN_MS, codexWindowsSetup, runCodex, type CodexRun } from '../core/sandbox/windowsReadiness'
+import { SETUP_RUN_MS, codexWindowsSetup, runCodex, type CodexRun, type Readiness } from '../core/sandbox/windowsReadiness'
+import type { CodexWindowsReady } from '../core/sandbox/prepared'
+import { askCodexWindowsReady } from '../core/sessions/manager'
 
 /** The setup for `agent-profiles-sandbox-setup`, or undefined off Windows, where there is none to run. */
 export function hostSandboxSetup(d: {
@@ -27,5 +29,26 @@ export function hostSandboxSetup(d: {
     // sandboxed start of it asks about
     const env = cliEnvFor({ base: d.baseEnv(), account, descriptor: descriptorOf(d.descriptors, account), homeDir: d.homeDir })
     return codexWindowsSetup({ codexHome: env.CODEX_HOME ?? null, run: runIn(env) })
+  }
+}
+
+/** The readiness Settings › Agent profiles shows for each Codex account of a sandboxed profile (Task 8), or undefined off
+ *  Windows. The same question a sandboxed start asks, in the same home and environment (askCodexWindowsReady: doctor
+ *  first, the echo only on a home doctor calls complete, so no administrator prompt can come from asking), with the
+ *  answers this process keeps shared with the Host's own starts. `log` says why Codex could not be asked, when it could
+ *  not. `ready` is a test seam. */
+export function hostSandboxReadiness(d: {
+  platform: NodeJS.Platform
+  homeDir: string
+  baseEnv: () => NodeJS.ProcessEnv
+  descriptors: Record<Provider, ProviderDescriptor>
+  log?: (m: string) => void
+  ready?: CodexWindowsReady
+}): ((account: Account) => Promise<Readiness>) | undefined {
+  if (d.platform !== 'win32') return undefined
+  const ready = d.ready ?? askCodexWindowsReady
+  return (account) => {
+    const env = cliEnvFor({ base: d.baseEnv(), account, descriptor: descriptorOf(d.descriptors, account), homeDir: d.homeDir })
+    return ready({ codexHome: env.CODEX_HOME ?? null, env, ...(d.log ? { log: d.log } : {}) })
   }
 }

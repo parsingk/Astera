@@ -77,7 +77,7 @@ import { hostFeatures } from './features'
 import { loadSlackSdk } from './slackSdk'
 import { composeHostSlack, type HostSlackWiring } from './slackWiring'
 import { createHostSpawner } from './spawner'
-import { hostSandboxSetup } from './sandboxSetup'
+import { hostSandboxReadiness, hostSandboxSetup } from './sandboxSetup'
 import { createHostWorktrees, loadWorktreesIfSpawning } from './worktrees'
 import { createHostProjectRoots } from './projectRoots'
 import { createHostExits, ptyHeldBy, type HostExits } from './exits'
@@ -890,12 +890,21 @@ async function main(): Promise<void> {
     baseEnv: () => hostWorkerBaseEnv(process.env),
     descriptors: makeDescriptors(process.platform)
   })
+  // And the readiness Settings › Agent profiles shows beside it, asked as the Host's own sandboxed starts ask it
+  const sandboxReadiness = hostSandboxReadiness({
+    platform: process.platform,
+    homeDir: os.homedir(),
+    baseEnv: () => hostWorkerBaseEnv(process.env),
+    descriptors: makeDescriptors(process.platform),
+    log: (m) => log.write(m)
+  })
   const agentProfiles = createHostAgentProfiles({
     profileDir,
     readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
     inUse: agentProfileInUse({ sessions: () => [...registry.list(), ...procs.list()], orch: () => orch }),
     log: (m) => log.write(m),
-    ...(sandboxSetup ? { sandboxSetup } : {})
+    ...(sandboxSetup ? { sandboxSetup } : {}),
+    ...(sandboxReadiness ? { sandboxReadiness } : {})
   })
   /** `agent-profiles-touch` as the app would send it, not awaited by the spawn that asks: the command logs its own
    *  failures and answers success, so a stamp never fails or delays a spawn. */

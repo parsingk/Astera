@@ -19,6 +19,7 @@ import {
   type AuditPolicy,
   type AuditRule
 } from '../../core/audit/policy'
+import { SANDBOX_COVERAGE } from '../../core/sandbox/coverage'
 import type { OrchCaller } from '../../core/host/orchProtocol'
 
 export const POLICY_COMMANDS: ReadonlySet<string> = new Set([
@@ -95,8 +96,12 @@ export function createHostPolicies(d: {
     switch (cmd) {
       case 'policies-show': {
         const p = await current()
-        // What Enforce would block beside what observe sees, so the screen's preview says it before Enforce is on
-        return { status: 200, body: { mode: p.mode, policy: p, coverage: COVERAGE, enforceCoverage: COVERAGE_ENFORCE } }
+        // What Enforce would block beside what observe sees, so the screen's preview says it before Enforce is on, and what
+        // the sandbox blocks per CLI and OS (sandbox design §6), whatever the mode: the sandbox is an agent profile's switch
+        return {
+          status: 200,
+          body: { mode: p.mode, policy: p, coverage: COVERAGE, enforceCoverage: COVERAGE_ENFORCE, sandboxCoverage: SANDBOX_COVERAGE }
+        }
       }
       case 'policies-set-mode': {
         if (!MODES.includes(args.mode)) return bad('mode must be compatibility, observe or enforce')

@@ -264,6 +264,42 @@ describe('credentials commands', () => {
     expect(startup).not.toMatch(/; not measured\.$/)
   })
 
+  // Sandbox design §6: what the sandbox does on each OS for each CLI, and its known limits, whatever this machine is
+  it('doctor names each OS’s sandbox and the limits', async () => {
+    const lines = body(await host('linux').command({ cmd: 'credentials-doctor', args: {}, ...cli, marks: marks() })).lines as { level: string; text: string }[]
+    const sandbox = lines.filter((l) => l.text.startsWith('Sandbox, '))
+    expect(sandbox.map((l) => /^Sandbox, ([^:]+):/.exec(l.text)?.[1])).toEqual([
+      'Codex on Windows',
+      'Codex on macOS',
+      'Codex on Linux',
+      'Claude Code on Windows',
+      'Claude Code on macOS',
+      'Claude Code on Linux'
+    ])
+    const line = (start: string): { level: string; text: string } => sandbox.find((l) => l.text.startsWith(`Sandbox, ${start}:`))!
+    expect(line('Codex on Windows').text).toMatch(/Credential Manager/)
+    expect(line('Codex on macOS').text).toMatch(/~\/Library\/Keychains/)
+    expect(line('Codex on Linux').text).toMatch(/session bus/)
+    // Claude Code has no sandbox on Windows: its shell is not restricted, and doctor warns
+    expect(line('Claude Code on Windows')).toMatchObject({ level: 'warn' })
+    expect(line('Claude Code on Windows').text).toMatch(/shell is not restricted/)
+    for (const l of sandbox) expect(l.text, l.text).toMatch(/network works|not restricted/)
+    const text = lines.map((l) => l.text).join('\n')
+    // The three known limits of the design
+    expect(text).toMatch(/curl[^\n]*TLS/)
+    expect(text).toMatch(/gh inside the sandbox cannot use your login[^\n]*through Astera/)
+    expect(text).toMatch(/pushes stay with the Host/)
+    // And those the build found
+    expect(text).toMatch(/A chain keeps the sandbox state it started with/)
+    expect(text).toMatch(/worktree[^\n]*adds itself[^\n]*config\.worktree/)
+    expect(text).toMatch(/one Codex account[^\n]*stale[^\n]*from Codex’s source, not measured[^\n]*set up again/)
+    expect(text).toMatch(/runtime it uses \(srt[^\n]*not with Claude Code itself/)
+    expect(text).toMatch(/Linux[^\n]*excludes file[^\n]*`git add -A` works/)
+    // Said on every OS alike
+    const win = (body(await host('win32').command({ cmd: 'credentials-doctor', args: {}, ...cli, marks: marks() })).lines as { text: string }[]).filter((l) => l.text.startsWith('Sandbox, '))
+    expect(win.map((l) => l.text)).toEqual(sandbox.map((l) => l.text))
+  })
+
   it('counts a change that landed as an effect', async () => {
     const h = host()
     const m = marks()

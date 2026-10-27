@@ -754,6 +754,8 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .tab-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 /* The rolling-active session marker — a small, restrained, non-interactive mark; the account chain is exposed only through the title tooltip */
 .tab-roll { flex: none; opacity: 0.65; cursor: default; user-select: none; }
+/* A session in its CLI's sandbox (sandbox design §6): drawn like the rolling marker beside it */
+.tab-sandbox { flex: none; display: inline-flex; opacity: 0.65; cursor: default; user-select: none; }
 /* Session working: a spinner in the account colour. Larger than a dot (10px) with a bright semicircular
    arc turning, so it reads clearly. The colour is set inline (a faint track plus full colour on
    top/right = a bright 180° arc). */

@@ -16,7 +16,9 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) await removeFixture(d)
 })
 
-async function rig(o: { sandboxSetup?: Parameters<typeof createHostAgentProfiles>[0]['sandboxSetup'] } = {}) {
+type Deps = Parameters<typeof createHostAgentProfiles>[0]
+
+async function rig(o: { sandboxSetup?: Deps['sandboxSetup']; sandboxReadiness?: Deps['sandboxReadiness'] } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-host-ap-'))
   dirs.push(root)
   const profileDir = path.join(root, 'profile')
@@ -32,7 +34,8 @@ async function rig(o: { sandboxSetup?: Parameters<typeof createHostAgentProfiles
     inUse: async (id) => held.has(id),
     now: () => clock,
     log: (l) => logs.push(l),
-    ...(o.sandboxSetup ? { sandboxSetup: o.sandboxSetup } : {})
+    ...(o.sandboxSetup ? { sandboxSetup: o.sandboxSetup } : {}),
+    ...(o.sandboxReadiness ? { sandboxReadiness: o.sandboxReadiness } : {})
   })
   const call = (cmd: string, args: Record<string, unknown> = {}, extra: { role?: 'app' | 'cli' | 'mcp' | 'agent'; agentRefusal?: string } = {}) => {
     const marks = { effects: 0 }
@@ -215,6 +218,41 @@ describe('createHostAgentProfiles', () => {
     const none = await rig()
     const n = profileOf(await none.call('agent-profiles-create', { name: 'Boxed', accountIds: ['acc_x'], sandbox: true }))
     expect((await none.call('agent-profiles-sandbox-setup', { id: n.id, accountId: 'acc_x' })).status).toBe(501)
+  })
+
+  // Task 8: Settings › Agent profiles shows each Codex account's readiness under a sandboxed profile on Windows, and
+  // offers 설정하기 for one not set up. Asking runs Codex's doctor only (windowsReadiness.ts), never the setup; it is for
+  // the app only all the same, like the setup it leads to
+  it('agent-profiles-sandbox-readiness answers each Codex account of the profile, for the app only', async () => {
+    const asked: string[] = []
+    const states: Record<string, 'ready' | 'not-set-up' | 'check-failed'> = { acc_x: 'ready', acc_y: 'not-set-up' }
+    const h = await rig({ sandboxReadiness: async (account) => (asked.push(account.id), states[account.id] ?? 'check-failed') })
+    const p = profileOf(await h.call('agent-profiles-create', { name: 'Boxed', accountIds: ['acc_y', 'acc_x'], sandbox: true }))
+    const r = await h.call('agent-profiles-sandbox-readiness', { id: p.id })
+    expect(r.status, JSON.stringify(r.body)).toBe(200)
+    // In the profile's order
+    expect(r.body).toEqual({ accounts: [{ accountId: 'acc_y', state: 'not-set-up' }, { accountId: 'acc_x', state: 'ready' }] })
+    expect(r.marks.effects).toBe(0)
+    expect(asked.sort()).toEqual(['acc_x', 'acc_y'])
+    // By its name too, as every other profile command
+    expect((await h.call('agent-profiles-sandbox-readiness', { id: 'Boxed' })).status).toBe(200)
+    for (const extra of [{ role: 'cli' as const, agentRefusal: 'not from an agent' }, { role: 'cli' as const }, { role: 'mcp' as const }, { role: 'agent' as const }])
+      expect((await h.call('agent-profiles-sandbox-readiness', { id: p.id }, extra)).status, JSON.stringify(extra)).toBe(403)
+    // A Claude profile has no Codex account to ask about; an account removed from Astera is left out
+    const claude = profileOf(await h.call('agent-profiles-create', { name: 'Claude', accountIds: ['acc_1'], sandbox: true }))
+    expect((await h.call('agent-profiles-sandbox-readiness', { id: claude.id })).body).toEqual({ accounts: [] })
+    h.setAccounts(h.accounts().filter((a) => a.id !== 'acc_y'))
+    expect((await h.call('agent-profiles-sandbox-readiness', { id: p.id })).body).toEqual({ accounts: [{ accountId: 'acc_x', state: 'ready' }] })
+    expect((await h.call('agent-profiles-sandbox-readiness', { id: 'ap_nope' })).status).toBe(404)
+    expect((await h.call('agent-profiles-sandbox-readiness', {})).status).toBe(400)
+    // A question that throws reads as one that could not be asked
+    const throwing = await rig({ sandboxReadiness: async () => Promise.reject(new Error('spawn EPERM')) })
+    const t = profileOf(await throwing.call('agent-profiles-create', { name: 'Boxed', accountIds: ['acc_x'], sandbox: true }))
+    expect((await throwing.call('agent-profiles-sandbox-readiness', { id: t.id })).body).toEqual({ accounts: [{ accountId: 'acc_x', state: 'check-failed' }] })
+    // A Host with no Windows sandbox to ask about (macOS, Linux) says so
+    const none = await rig()
+    const n = profileOf(await none.call('agent-profiles-create', { name: 'Boxed', accountIds: ['acc_x'], sandbox: true }))
+    expect((await none.call('agent-profiles-sandbox-readiness', { id: n.id })).status).toBe(501)
   })
 
   // Task 6 fix round 1: a second press of 설정하기 for the account while its setup runs (the administrator prompt is up)

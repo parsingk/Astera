@@ -634,12 +634,12 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'credentials-doctor': {
     summary: 'what hiding reaches and what it cannot, on this machine',
     detail:
-      'Each entry\'s hiding, the presets and the platforms they were measured on, the names that are never hidden (what the CLIs and Astera need, and what the OS gives every program, such as PATH and TEMP), where a login made inside a session goes (that session\'s own empty location), and the limits: a program running as you can still read your files and OS stores, git and Docker hand their stored logins to any program that asks, and a variable your shell startup files set can come back in the commands an agent runs through a shell. An agent session may read it.'
+      'Each entry\'s hiding, the presets and the platforms they were measured on, the names that are never hidden (what the CLIs and Astera need, and what the OS gives every program, such as PATH and TEMP), where a login made inside a session goes (that session\'s own empty location), and the limits: a program running as you can still read your files and OS stores, git and Docker hand their stored logins to any program that asks, and a variable your shell startup files set can come back in the commands an agent runs through a shell. Then what the sandbox of an agent profile does for each CLI on each OS, and its limits. An agent session may read it.'
   },
   'policies-show': {
     summary: 'whether observe mode is on, the rules in order, and what it can see',
     detail:
-      '`mode` is compatibility (nothing is observed), observe or enforce. The first rule whose action matches a call decides it; `otherwise` decides a call no rule matches. Until observe is first turned on these are the starter rules, and nothing is written. `coverage` says, per provider and kind of session, what observe can see of shell commands, file reads and writes, MCP calls and network requests, and `enforceCoverage` what enforce blocks of them. An agent session may read it.'
+      '`mode` is compatibility (nothing is observed), observe or enforce. The first rule whose action matches a call decides it; `otherwise` decides a call no rule matches. Until observe is first turned on these are the starter rules, and nothing is written. `coverage` says, per provider and kind of session, what observe can see of shell commands, file reads and writes, MCP calls and network requests, and `enforceCoverage` what enforce blocks of them. `sandboxCoverage` says, per CLI and OS, what the sandbox of an agent profile blocks of writes, the folders holding logins and the OS secret store, and that it allows the network; a note says where only the file tools are kept out, or where the runtime the sandbox of a CLI runs on was measured rather than the CLI itself. An agent session may read it.'
   },
   'policies-set-mode': {
     summary: 'turn observe or enforce mode on, or both off',

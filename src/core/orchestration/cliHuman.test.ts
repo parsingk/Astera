@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { columns, displayWidth, humanFor, quietFor, shellOf, stateWord } from './cliHuman'
 import { ACTION_PHRASES, COVERAGE_NOTE_PHRASES } from '../audit/phrases'
 import type { AuditAction, CoverageNote } from '../audit/types'
+import { SANDBOX_COVERAGE } from '../sandbox/coverage'
 import type { MessageKey } from '../i18n'
 import { en } from '../i18n/messages/en'
 
@@ -892,6 +893,27 @@ describe('humanFor — audit and policies', () => {
     const out = humanFor('policies-show', { mode: 'enforce', policy: { ...policy, mode: 'enforce' }, coverage, enforceCoverage })
     expect(out?.split('\n').at(-1)).toBe('codex chat  enforced  partial (shell text only)  enforced    enforced  partial')
     expect(humanFor('policies-show', { mode: 'observe', policy, coverage, enforceCoverage })).not.toContain('enforced')
+  })
+
+  // Sandbox design §6: what the sandbox blocks, a row per CLI and OS, under what observe or enforce covers; the network
+  // reads allowed (E3), and a note is its screen phrase
+  it('policies show prints what the sandbox blocks, one row per provider and OS', () => {
+    const out = humanFor('policies-show', { mode: 'observe', policy, coverage: [], sandboxCoverage: SANDBOX_COVERAGE }) ?? ''
+    const table = out.split('\n\n').at(-1)?.split('\n') ?? []
+    expect(table[0].trim().split(/\s{2,}/)).toEqual(['sandbox', 'write', 'login folders', 'OS secret store', 'network'])
+    expect(table.slice(1).map((l) => l.split(/\s{2,}/)[0])).toEqual([
+      'claude Windows',
+      'claude macOS',
+      'claude Linux',
+      'codex Windows',
+      'codex macOS',
+      'codex Linux'
+    ])
+    expect(table[1].split(/\s{2,}/).slice(1)).toEqual(['none', 'partial (file tools only)', 'none', 'allowed'])
+    expect(table[2].split(/\s{2,}/).slice(1)).toEqual(['enforced', 'enforced', 'enforced (measured on the runtime)', 'allowed'])
+    expect(table[6].split(/\s{2,}/).slice(1)).toEqual(['enforced', 'enforced', 'enforced', 'allowed'])
+    // A Host that does not answer it prints the rules and the coverage as before
+    expect(humanFor('policies-show', { mode: 'observe', policy })).toBe(rules.join('\n'))
   })
 
   it('a change answers the rules as they are now', () => {

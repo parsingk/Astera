@@ -7,6 +7,7 @@ import { findProfile, liveAccounts, readAgentProfiles, validateProfile, writeAge
 import type { AgentProfile, ProfilePermission } from '../../core/agentProfiles/types'
 import type { OrchCaller } from '../../core/host/orchProtocol'
 import type { Account } from '../../core/types'
+import type { Readiness } from '../../core/sandbox/windowsReadiness'
 import { agentProfileIdOf } from '../../core/sessions/noteInfo'
 import { holdsAgentProfile } from '../../core/orchestration/running'
 import type { OrchState } from '../../core/orchestration/state'
@@ -20,12 +21,14 @@ export const AGENT_PROFILE_COMMANDS: ReadonlySet<string> = new Set([
   'agent-profiles-restore',
   'agent-profiles-delete',
   'agent-profiles-touch',
-  'agent-profiles-sandbox-setup'
+  'agent-profiles-sandbox-setup',
+  'agent-profiles-sandbox-readiness'
 ])
 
 /** What only the app may send: Codex's Windows sandbox setup brings up the administrator prompt on the person's screen,
- *  so it follows a press of 설정하기 and nothing else, not the person's CLI and never an agent's shell. */
-const APP_ONLY_AGENT_PROFILE_COMMANDS: ReadonlySet<string> = new Set(['agent-profiles-sandbox-setup'])
+ *  so it follows a press of 설정하기 and nothing else, not the person's CLI and never an agent's shell. The readiness
+ *  Settings › Agent profiles shows beside it is the app's too: it runs codex for each account, which no shell needs. */
+const APP_ONLY_AGENT_PROFILE_COMMANDS: ReadonlySet<string> = new Set(['agent-profiles-sandbox-setup', 'agent-profiles-sandbox-readiness'])
 
 /** The ones that change the store: all but the two reads and the use stamp, which is not a person's change. */
 export const AGENT_PROFILE_CHANGES: ReadonlySet<string> = new Set([
@@ -77,6 +80,10 @@ export function createHostAgentProfiles(d: {
   /** Sets up the Windows sandbox of one Codex account's home (core/sandbox/windowsReadiness.ts codexWindowsSetup) and
    *  forgets the readiness answers kept. Absent on a Host with no Windows sandbox to set up. Never rejects. */
   sandboxSetup?: (account: Account) => Promise<{ ok: boolean; out: string }>
+  /** Whether one Codex account's home has its Windows sandbox set up, asked as a sandboxed start asks it
+   *  (core/sandbox/windowsReadiness.ts codexWindowsReadiness: doctor first, the echo only on a home doctor calls
+   *  complete, so asking never brings up the administrator prompt). Absent on a Host with no Windows sandbox. */
+  sandboxReadiness?: (account: Account) => Promise<Readiness>
 }): HostAgentProfiles {
   const now = d.now ?? Date.now
   // One change at a time: two updates must each read what the other wrote
@@ -241,6 +248,28 @@ export function createHostAgentProfiles(d: {
           return done
         })
         return { status: 200, body: { ok: r.ok, out: r.out } }
+      }
+      case 'agent-profiles-sandbox-readiness': {
+        // Task 8: Settings › Agent profiles shows each Codex account of a sandboxed profile as ready, not set up (with
+        // 설정하기) or could not ask, in the profile's order. The accounts are asked at once: each is its own home
+        if (typeof args.id !== 'string' || args.id === '') return bad('agent-profiles-sandbox-readiness needs id')
+        const ask = d.sandboxReadiness
+        if (!ask) return { status: 501, body: { error: 'this Host has no Windows sandbox to ask about' } }
+        const p = findProfile(await readAgentProfiles(d.profileDir), args.id)
+        if (!p) return { status: 404, body: { error: `no agent profile ${args.id}` } }
+        const all = await d.readAccounts()
+        const codex = liveAccounts(p, all)
+          .map((id) => all.find((a) => a.id === id))
+          .filter((a): a is Account => a?.provider === 'codex')
+        const accounts = await Promise.all(
+          codex.map(async (a) => ({
+            accountId: a.id,
+            state: await Promise.resolve()
+              .then(() => ask(a))
+              .catch((): Readiness => 'check-failed')
+          }))
+        )
+        return { status: 200, body: { accounts } }
       }
       default:
         return { status: 501, body: { error: `${cmd} is not answered by this Host` } }

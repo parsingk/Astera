@@ -6,7 +6,7 @@ import path from 'node:path'
 import type { Account } from '../core/types'
 import { makeDescriptors } from '../core/providers/descriptor'
 import { SETUP_ARGV } from '../core/sandbox/windowsReadiness'
-import { hostSandboxSetup } from './sandboxSetup'
+import { hostSandboxReadiness, hostSandboxSetup } from './sandboxSetup'
 
 const account = (configDir: string): Account => ({ id: 'acc_x', label: 'x', configDir, color: '#888', createdAt: '2026-10-27T00:00:00.000Z', provider: 'codex' })
 
@@ -37,5 +37,37 @@ describe('hostSandboxSetup', () => {
   it('there is nothing to set up off Windows', () => {
     for (const platform of ['darwin', 'linux'] as const)
       expect(hostSandboxSetup({ platform, homeDir: '/h', baseEnv: () => ({}), descriptors: makeDescriptors(platform, '/h') })).toBeUndefined()
+  })
+})
+
+// Task 8: Settings › Agent profiles asks each Codex account's readiness through the Host, with the question a sandboxed
+// start asks (doctor first, the echo only on a home doctor calls complete), in the account's own home
+describe('hostSandboxReadiness', () => {
+  it("asks about the account's own Codex home, in the Host's environment, and logs why it could not", async () => {
+    const home = path.join(os.tmpdir(), 'astera-readiness-home')
+    const work = path.join(home, '.codex-accounts', 'work')
+    const asked: Array<{ codexHome: string | null; env: Record<string, string | undefined> }> = []
+    const logs: string[] = []
+    const readiness = hostSandboxReadiness({
+      platform: 'win32',
+      homeDir: home,
+      baseEnv: () => ({ Path: 'C:\\Windows', CODEX_HOME: 'C:\\inherited' }),
+      descriptors: makeDescriptors('win32', home),
+      log: (m) => logs.push(m),
+      ready: async (a) => (asked.push({ codexHome: a.codexHome, env: a.env }), a.log?.('codex doctor did not answer'), 'not-set-up')
+    })
+    expect(await readiness!(account(work))).toBe('not-set-up')
+    expect(asked[0].codexHome).toBe(work)
+    expect(asked[0].env.CODEX_HOME).toBe(work)
+    expect(asked[0].env.Path).toBe('C:\\Windows')
+    expect(logs).toEqual(['codex doctor did not answer'])
+    // The ambient account asks without CODEX_HOME
+    await readiness!(account(path.join(home, '.codex')))
+    expect(asked[1].codexHome).toBeNull()
+  })
+
+  it('there is nothing to ask about off Windows', () => {
+    for (const platform of ['darwin', 'linux'] as const)
+      expect(hostSandboxReadiness({ platform, homeDir: '/h', baseEnv: () => ({}), descriptors: makeDescriptors(platform, '/h') })).toBeUndefined()
   })
 })

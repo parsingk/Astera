@@ -57,9 +57,16 @@ import {
   ENFORCE_NAME,
   coverageTitle,
   enforcePreviewBody,
+  SANDBOX_CLASSES,
+  sandboxCellText,
+  sandboxClassLabel,
+  sandboxCoverageTitle,
+  sandboxRowLabel,
   type AuditRow
 } from './securityText'
 import { COVERAGE_ENFORCE } from '../../../core/audit/coverage'
+import { SANDBOX_COVERAGE } from '../../../core/sandbox/coverage'
+import type { SandboxCoverageRow } from '../../../core/audit/types'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const source = (rel: string): string => readFileSync(path.join(here, rel), 'utf8')
@@ -190,6 +197,36 @@ describe('securityText', () => {
     const r: CoverageRow = { provider: 'codex', kind: 'chat', classes: {} as CoverageRow['classes'] }
     expect(coverageRowLabel(r, en)).toBe('Codex Chat')
     expect(coverageRowLabel({ ...r, provider: 'claude', kind: 'terminal' }, ko)).toBe('Claude 터미널')
+  })
+
+  // Sandbox design §6: the second table, what the sandbox blocks per CLI and OS, in its own words: the network is allowed
+  // there (E3), never "seen", and a class it does not block reads so
+  it('puts the sandbox table in words: its title, classes, rows and cells', () => {
+    expect(SANDBOX_CLASSES).toEqual(['write', 'sensitive', 'stores', 'network'])
+    expect(SANDBOX_CLASSES.map((c) => sandboxClassLabel(c, en))).toEqual(['Writes', 'Login folders', 'OS secret store', 'Network'])
+    expect(SANDBOX_CLASSES.map((c) => sandboxClassLabel(c, ko))).toEqual(['쓰기', '로그인 정보 폴더', 'OS 비밀 저장소', '네트워크'])
+    expect(sandboxCoverageTitle(ko)).toBe('Sandbox가 막는 범위')
+    expect(sandboxCoverageTitle(en)).toBe('What the sandbox blocks')
+    const row = (provider: 'claude' | 'codex', os: 'win32' | 'darwin' | 'linux') => SANDBOX_COVERAGE.find((r) => r.provider === provider && r.os === os)!
+    expect(sandboxRowLabel(row('codex', 'win32'), en)).toBe('Codex Windows')
+    expect(sandboxRowLabel(row('claude', 'darwin'), ko)).toBe('Claude macOS')
+    expect(sandboxRowLabel(row('claude', 'linux'), en)).toBe('Claude Linux')
+    const cells = (r: SandboxCoverageRow, t: typeof en) => SANDBOX_CLASSES.map((c) => sandboxCellText(r.classes[c], t))
+    expect(cells(row('claude', 'win32'), en)).toEqual(['Not blocked', 'Partly (file tools only)', 'Not blocked', 'Allowed'])
+    expect(cells(row('claude', 'darwin'), en)).toEqual(['Blocked', 'Blocked', 'Blocked (measured on the runtime)', 'Allowed'])
+    expect(cells(row('codex', 'linux'), ko)).toEqual(['막음', '막음', '막음', '허용'])
+    expect(cells(row('claude', 'win32'), ko)).toEqual(['안 막음', '일부 (파일 도구만)', '안 막음', '허용'])
+    expect(sandboxCellText(row('claude', 'linux').classes.stores, ko)).toBe('막음 (런타임으로 측정)')
+    // A level or note this side does not know (a newer Host's) is shown as it was named
+    expect(sandboxCellText({ level: 'sealed' as 'none', note: 'later' as 'file-tools-only' }, en)).toBe('sealed (later)')
+    expect(sandboxCellText(undefined, en)).toBe('')
+  })
+
+  it('Policies shows the sandbox table from what the Host answered, beside the other one', () => {
+    const screen = source('SecuritySettings.tsx')
+    expect(screen).toContain('r.body.sandboxCoverage')
+    expect(screen).toContain('sandboxCoverageTitle(t)')
+    expect(screen).toContain('sandboxRowLabel(r, t)')
   })
 
   // Design §9: the coverage is also shown with each session in Audit Logs
