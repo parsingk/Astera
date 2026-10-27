@@ -79,9 +79,19 @@ describe('PROBES', () => {
       'git-commit-worktree',
       'git-hooks-write',
       'git-config-write',
+      'git-hooks-write-worktree',
+      'git-config-write-worktree',
       'npm-install'
     ])
     for (const p of PROBES) expect(typeof p.line, p.id).toBe('string')
+  })
+
+  // Final review I1: a worktree's hooks and config live in its common directory, outside the workspace
+  it('writes the hooks of the repository git names, so a worktree reaches its common directory', () => {
+    const line = (id) => PROBES.find((p) => p.id === id).line
+    expect(line('git-hooks-write')).toContain('git rev-parse --path-format=absolute --git-common-dir')
+    expect(line('git-hooks-write-worktree')).toMatch(/^cd wt && .*--git-common-dir/)
+    expect(line('git-config-write-worktree')).toMatch(/^cd wt && git config /)
   })
 })
 

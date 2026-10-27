@@ -5,6 +5,7 @@
 import { spawnSync } from 'node:child_process'
 
 const COMMIT = 'git -c user.name=p -c user.email=p@p commit -qm probe'
+const HOOKS = '$(git rev-parse --path-format=absolute --git-common-dir)/hooks'
 
 export const PROBES = [
   { id: 'write-workspace', line: 'echo x > ./probe-write.txt' },
@@ -27,8 +28,12 @@ export const PROBES = [
   // `git add -A` refuses, so a commit of one named file says whether committing itself is allowed
   { id: 'git-commit-named', line: `echo n >> named.txt && git add named.txt && ${COMMIT}` },
   { id: 'git-commit-worktree', line: `cd wt && echo y >> wt.txt && git add -A && ${COMMIT}` },
-  { id: 'git-hooks-write', line: "printf '#!/bin/sh\\n' > .git/hooks/pre-commit" },
+  // The hooks of the repository git names: `.git/hooks` in a repository, the common directory's in a worktree
+  { id: 'git-hooks-write', line: `printf '#!/bin/sh\\n' > "${HOOKS}/pre-commit"` },
   { id: 'git-config-write', line: 'git config core.hooksPath /tmp/astera-probe-hooks' },
+  // Final review I1: a worktree's hooks and config are in its common directory, outside the workspace
+  { id: 'git-hooks-write-worktree', line: `cd wt && printf '#!/bin/sh\\n' > "${HOOKS}/pre-commit"` },
+  { id: 'git-config-write-worktree', line: 'cd wt && git config core.hooksPath /tmp/astera-probe-hooks' },
   { id: 'npm-install', line: 'npm install --no-audit --no-fund --silent is-number@7.0.0' }
 ]
 

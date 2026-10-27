@@ -39,10 +39,36 @@ describe('presetEnv', () => {
 
 describe('presetVerdict', () => {
   it('says a preset is unmeasured where its tool is missing', () => {
-    expect(presetVerdict({ missing: true, out: '' }, { missing: true, out: '' }, 'm')).toBe('missing')
-    expect(presetVerdict({ missing: false, out: 'logged in as m' }, { missing: false, out: 'not logged in' }, 'm')).toBe('hides')
-    expect(presetVerdict({ missing: false, out: 'm' }, { missing: false, out: 'm' }, 'm')).toBe('does-not-hide')
-    expect(presetVerdict({ missing: false, out: 'x' }, { missing: false, out: 'y' }, 'm')).toBe('not-read')
+    expect(presetVerdict([{ missing: true, out: '' }], { missing: true, out: '' }, ['m'])).toBe('missing')
+    expect(presetVerdict([{ missing: false, out: 'logged in as m' }], { missing: false, out: 'not logged in' }, ['m'])).toBe('hides')
+    expect(presetVerdict([{ missing: false, out: 'm' }], { missing: false, out: 'm' }, ['m'])).toBe('does-not-hide')
+    expect(presetVerdict([{ missing: false, out: 'x' }], { missing: false, out: 'y' }, ['m'])).toBe('not-read')
+  })
+
+  // Final review I2: gh was called hiding on its token alone, its config never shown read
+  it('hides only when every way the tool reads a login was read before and none after', () => {
+    const after = { missing: false, out: 'not logged in' }
+    expect(presetVerdict([{ out: 'config login' }, { out: 'token login' }], after, ['config', 'token'])).toBe('hides')
+    expect(presetVerdict([{ out: 'nothing' }, { out: 'token login' }], after, ['config', 'token'])).toBe('not-read')
+    expect(presetVerdict([{ out: 'config' }, { out: 'token' }], { out: 'token' }, ['config', 'token'])).toBe('does-not-hide')
+  })
+
+  // Final review M4: a run that hung or was killed says nothing about hiding
+  it('says a run that timed out or was killed is not a result', () => {
+    expect(presetVerdict([{ out: 'm' }], { out: '', timedOut: true }, ['m'])).toBe('timeout')
+    expect(presetVerdict([{ out: '', timedOut: true }], { out: '' }, ['m'])).toBe('timeout')
+    expect(presetVerdict([{ out: 'm' }], { out: '', code: null }, ['m'])).toBe('killed')
+    // Exiting non-zero is how these tools say there is no login
+    expect(presetVerdict([{ out: 'm', code: 0 }], { out: 'not logged in', code: 1 }, ['m'])).toBe('hides')
+  })
+})
+
+describe('PRESET_PROBES.gh', () => {
+  it('reads gh’s config without the job token, and the job token on its own', () => {
+    expect(PRESET_PROBES.gh.ways).toEqual([
+      { drop: ['GH_TOKEN', 'GITHUB_TOKEN'], marker: 'astera-probe' },
+      { drop: [], marker: '(GH_TOKEN)' }
+    ])
   })
 })
 
@@ -53,15 +79,17 @@ describe('measurePresets', () => {
       const home = path.join(root, 'home')
       const scratch = path.join(root, 'scratch')
       const seen = []
-      // A tool that reads its login unless one of its preset's variables points elsewhere
+      // A tool that reads its login unless one of its preset's variables points elsewhere; gh also names its token
       const run = (argv, env) => {
         const id = Object.keys(PRESET_PROBES).find((k) => PRESET_PROBES[k].argv[0] === argv[0])
         const probe = PRESET_PROBES[id]
         seen.push(Object.keys(probe.redirect).map((v) => env[v]).filter(Boolean))
-        return { missing: false, out: Object.keys(probe.redirect).some((v) => env[v]) ? 'nothing' : probe.marker }
+        if (Object.keys(probe.redirect).some((v) => env[v])) return { missing: false, out: 'nothing', code: 1 }
+        return { missing: false, out: argv[0] === 'gh' && env.GH_TOKEN ? '(GH_TOKEN)' : 'astera-probe AKIAASTERAPROBE00001 astera-probe@example.com', code: 0 }
       }
-      const results = measurePresets(home, scratch, run, { PATH: '/bin' })
+      const results = measurePresets(home, scratch, run, { PATH: '/bin', GH_TOKEN: 'job' })
       expect(results.map((r) => [r.id, r.verdict])).toEqual(Object.keys(PRESET_PROBES).map((id) => [id, 'hides']))
+      expect(results.find((r) => r.id === 'gh').before).toEqual(['astera-probe AKIAASTERAPROBE00001 astera-probe@example.com', '(GH_TOKEN)'])
       expect(readFileSync(path.join(home, '.aws/credentials'), 'utf8')).toContain('AKIAASTERAPROBE00001')
       for (const paths of seen.filter((p) => p.length > 0)) for (const p of paths) expect(existsSync(p), p).toBe(true)
       expect(statSync(path.join(scratch, 'gh', 'gh_config_dir')).isDirectory()).toBe(true)

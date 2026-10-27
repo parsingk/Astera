@@ -30,8 +30,12 @@ export const PRESET_PROBES = {
     files: { '.config/gh/hosts.yml': 'github.com:\n    oauth_token: gho_astera_probe_fake\n    user: astera-probe\n    git_protocol: https\n' },
     argv: ['gh', 'auth', 'status', '--hostname', 'github.com'],
     marker: 'astera-probe',
-    // The job's own token, set for the run before: gh names it by its variable
-    alsoRead: ['GH_TOKEN']
+    // Final review I2: gh shows only the token when one is set, so its config is read without the job's token, and the
+    // job's token (named by its variable) on its own
+    ways: [
+      { drop: ['GH_TOKEN', 'GITHUB_TOKEN'], marker: 'astera-probe' },
+      { drop: [], marker: '(GH_TOKEN)' }
+    ]
   },
   aws: {
     remove: ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_PROFILE'],
@@ -86,19 +90,25 @@ export function presetEnv(base, probe, scratch) {
   return { env, make }
 }
 
-/** Whether the preset hides the tool's login: read before it applies, not after. `alsoRead`: other words that show the
- *  tool read a login. */
-export function presetVerdict(before, after, marker, alsoRead = []) {
-  if (before.missing || after.missing) return 'missing'
-  const read = (out) => [marker, ...alsoRead].some((m) => out.includes(m))
-  if (!read(before.out)) return 'not-read'
-  return read(after.out) ? 'does-not-hide' : 'hides'
+/** The ways a tool reads a login, each run before the preset applies with `drop` taken away and shown by `marker`. */
+export const waysOf = (probe) => probe.ways ?? [{ drop: [], marker: probe.marker }]
+
+/** Whether the preset hides the tool's login: `befores[i]` (one run per way) shows `markers[i]`, and `after` shows
+ *  none. A run that timed out or was killed by a signal says nothing; a non-zero exit is how these tools say there is no
+ *  login. */
+export function presetVerdict(befores, after, markers) {
+  const runs = [...befores, after]
+  if (runs.some((r) => r.missing)) return 'missing'
+  if (runs.some((r) => r.timedOut)) return 'timeout'
+  if (runs.some((r) => r.code === null)) return 'killed'
+  if (befores.some((b, i) => !b.out.includes(markers[i]))) return 'not-read'
+  return markers.some((m) => after.out.includes(m)) ? 'does-not-hide' : 'hides'
 }
 
 const OUT_MAX = 300
 
-/** Writes each preset's fake files under `home`, runs its command before and after the preset applies, and says what it
- *  found. `run(argv, env)` → `{ missing, out }`. */
+/** Writes each preset's fake files under `home`, runs its command for each way it reads a login and once the preset
+ *  applies, and says what it found. `run(argv, env)` → `{ missing, out, code, timedOut }`. */
 export function measurePresets(home, scratch, run, base = process.env) {
   return Object.entries(PRESET_PROBES).map(([id, probe]) => {
     for (const [rel, text] of Object.entries(probe.files)) {
@@ -106,7 +116,12 @@ export function measurePresets(home, scratch, run, base = process.env) {
       mkdirSync(path.dirname(file), { recursive: true })
       writeFileSync(file, text)
     }
-    const before = run(probe.argv, { ...base, HOME: home })
+    const ways = waysOf(probe)
+    const befores = ways.map((w) => {
+      const env = { ...base, HOME: home }
+      for (const name of w.drop) delete env[name]
+      return run(probe.argv, env)
+    })
     const { env, make } = presetEnv({ ...base, HOME: home }, probe, path.join(scratch, id))
     for (const m of make) {
       if (m.kind === 'dir') mkdirSync(m.path, { recursive: true })
@@ -118,8 +133,12 @@ export function measurePresets(home, scratch, run, base = process.env) {
     const after = run(probe.argv, env)
     return {
       id,
-      verdict: presetVerdict(before, after, probe.marker, probe.alsoRead),
-      before: before.out.slice(0, OUT_MAX),
+      verdict: presetVerdict(
+        befores,
+        after,
+        ways.map((w) => w.marker)
+      ),
+      before: befores.map((b) => b.out.slice(0, OUT_MAX)),
       after: after.out.slice(0, OUT_MAX)
     }
   })
