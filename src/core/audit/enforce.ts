@@ -11,6 +11,12 @@ export const BUILT_IN_RULE_IDS = ['builtin-profile-write', 'builtin-settings-com
 
 export type EnforceVerdict = { deny: false } | { deny: true; ruleId: string; reason: string }
 
+/** A session started in Enforce whose blocking hook is not in place does not start (E5): the error both session
+ *  managers throw, `ENFORCE_UNAVAILABLE: <code>`, whose code the app turns into words. */
+export function enforceUnavailable(code: string): Error {
+  return new Error(`ENFORCE_UNAVAILABLE: ${code}`)
+}
+
 const REASONS = {
   profile: "Blocked by Astera: an agent session cannot write Astera's settings folder.",
   settings: "Blocked by Astera: an agent session cannot change Astera's Policies, Credentials or agent profiles.",

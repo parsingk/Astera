@@ -4,7 +4,8 @@ import path from 'node:path'
 import os from 'node:os'
 import { spawn } from 'node:child_process'
 import type { Account } from '../types'
-import { StatusLineManager, captureCommand } from './statusline'
+import { StatusLineManager, captureCommand, enforceCommand, enforceInterpreter, ENFORCE_HOOK_FILE } from './statusline'
+import enforceHookSource from 'virtual:astera-enforce-hook'
 import { dirIdentity } from '../files/watchedDir'
 import { createAttentionState } from './attention'
 import { hookEventState, latestEventLine } from '../hooks/sessionState'
@@ -775,4 +776,75 @@ describe.runIf(process.platform === 'win32')('captureCommand through the shells 
       expect(JSON.parse(await fs.readFile(out, 'utf8'))).toMatchObject({ x: '한글' })
     }, 30_000)
   }
+})
+
+// Enforce (enforce design §5, E1, E5): a session started in Enforce runs the blocking hook before every tool call, with
+// Astera's own node; an Off or Observe session's files are what they were
+describe('StatusLineManager enforce mode', () => {
+  let dir: string
+  beforeEach(async () => { dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-sl-enforce-')) })
+  afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }) })
+  const read = (file: string): Promise<string> => fs.readFile(file.replace(/\//g, path.sep), 'utf8')
+
+  it('finds Astera’s own node: the Host runtime on Windows, Electron as node elsewhere, none on Windows without the runtime', () => {
+    expect(enforceInterpreter({ platform: 'win32', captureNode: 'C:\\rt\\astera-host.exe', execPath: 'C:/x/electron.exe' })).toEqual({ file: 'C:\\rt\\astera-host.exe' })
+    expect(enforceInterpreter({ platform: 'win32', captureNode: 'node', execPath: 'C:/x/electron.exe' })).toBeNull()
+    expect(enforceInterpreter({ platform: 'linux', captureNode: '/usr/bin/node', execPath: '/opt/astera/astera' })).toEqual({ file: '/opt/astera/astera', env: 'ELECTRON_RUN_AS_NODE=1' })
+    expect(enforceCommand({ file: '/opt/astera/astera', env: 'ELECTRON_RUN_AS_NODE=1' }, '/p/astera-enforce-hook.cjs', 'claude')).toBe(
+      'ELECTRON_RUN_AS_NODE=1 "/opt/astera/astera" "/p/astera-enforce-hook.cjs" claude'
+    )
+    expect(enforceCommand({ file: 'C:/rt/astera-host.exe' }, 'C:/p/astera-enforce-hook.cjs', 'codex')).toBe("C:'/rt/astera-host.exe' 'C:/p/astera-enforce-hook.cjs' codex")
+  })
+
+  it('runs an AppImage’s hook through the AppImage file, not its mount, which is gone once the app quits', () => {
+    const i = enforceInterpreter({ platform: 'linux', captureNode: 'node', execPath: '/tmp/.mount_AsterX/astera', appImage: '/home/u/Astera.AppImage' })
+    expect(i).toEqual({ file: '/home/u/Astera.AppImage', env: 'ELECTRON_RUN_AS_NODE=1', tail: '--no-sandbox' })
+    // After the provider, so the hook still reads it as argv[2]; there, AppRun sees one and adds none in front (shuttle.ts)
+    expect(enforceCommand(i!, '/p/astera-enforce-hook.cjs', 'claude')).toBe(
+      'ELECTRON_RUN_AS_NODE=1 "/home/u/Astera.AppImage" "/p/astera-enforce-hook.cjs" claude --no-sandbox'
+    )
+    expect(enforceInterpreter({ platform: 'darwin', captureNode: 'node', execPath: '/Applications/Astera.app/Contents/MacOS/Astera', appImage: '' })).toEqual({
+      file: '/Applications/Astera.app/Contents/MacOS/Astera',
+      env: 'ELECTRON_RUN_AS_NODE=1'
+    })
+  })
+
+  it('writes the enforce hook and settings with a synchronous PreToolUse for every tool', async () => {
+    const mgr = new StatusLineManager(dir, 'node', () => {}, { platform: 'linux', execPath: '/opt/astera/astera' })
+    await mgr.init()
+    expect(await mgr.ensureEnforceFiles()).toBe(true)
+    expect(await fs.readFile(path.join(dir, ENFORCE_HOOK_FILE), 'utf8')).toBe(enforceHookSource)
+    const pre = { matcher: '*', hooks: [{ type: 'command', command: `ELECTRON_RUN_AS_NODE=1 "/opt/astera/astera" "${path.join(dir, ENFORCE_HOOK_FILE).replace(/\\/g, '/')}" claude`, timeout: 10 }] }
+    for (const toolHooks of [false, true]) {
+      const c = mgr.spawnConfig('s1', account, { toolHooks, observe: true, enforce: true })
+      const observed = mgr.spawnConfig('s1', account, { toolHooks, observe: true })
+      expect(c).toMatchObject({ observed: true, enforced: true })
+      expect(c.settingsFile).not.toBe(observed.settingsFile)
+      const expected = JSON.parse(await read(observed.settingsFile))
+      expected.hooks.PreToolUse.push(pre)
+      expect(JSON.parse(await read(c.settingsFile))).toEqual(expected)
+    }
+    // A chat session takes only the blocking hook, through --settings
+    const args = mgr.enforceChatArgs()
+    expect(args?.[0]).toBe('--settings')
+    expect(JSON.parse(await read(args![1]))).toEqual({ hooks: { PreToolUse: [pre] } })
+  })
+
+  it('leaves the off and observe settings byte for byte as they were', async () => {
+    const mgr = new StatusLineManager(dir, 'node', () => {}, { platform: 'linux', execPath: '/opt/astera/astera' })
+    await mgr.init()
+    await mgr.ensureObserveFiles()
+    const files = [false, true].flatMap((toolHooks) => [mgr.spawnConfig('s', account, { toolHooks }).settingsFile, mgr.spawnConfig('s', account, { toolHooks, observe: true }).settingsFile])
+    const was = await Promise.all(files.map(read))
+    await mgr.ensureEnforceFiles()
+    expect(await Promise.all(files.map(read))).toEqual(was)
+  })
+
+  it('has no interpreter on Windows without the Host runtime, so a session asked to enforce is not marked enforced', async () => {
+    const mgr = new StatusLineManager(dir, 'node', () => {}, { platform: 'win32', execPath: 'C:/x/electron.exe' })
+    await mgr.init()
+    expect(await mgr.ensureEnforceFiles()).toBe(false)
+    expect(mgr.spawnConfig('s1', account, { observe: true, enforce: true })).not.toHaveProperty('enforced')
+    expect(mgr.enforceChatArgs()).toBeNull()
+  })
 })

@@ -23,6 +23,7 @@ import type { CapabilitySource } from '../extensions/capabilityCache'
 import { gatewayTokenEnv } from '../extensions/resolve'
 import { applyHiding, type HidingSource } from '../credentials/hiding'
 import { isObserving } from '../audit/policy'
+import { enforceUnavailable } from '../audit/enforce'
 
 export { EXITED_SESSIONS_KEPT }
 
@@ -67,6 +68,9 @@ export interface ChatManagerDeps {
   capabilities?: CapabilitySource
   /** The Credentials list (credentials design §5): what an agent session starts without, asked at each spawn. */
   hiding?: HidingSource
+  /** Enforce (enforce design §5): the arguments that make a chat of `provider` run the blocking hook, or null when it
+   *  cannot (E5). Asked at each spawn the mode is enforce; unset, such a spawn is refused. */
+  enforce?: { args(provider: 'claude' | 'codex'): string[] | null }
 }
 
 /** What `spawn` takes, for a caller that builds it elsewhere (./respawn.ts). */
@@ -307,10 +311,16 @@ export class ChatSessionManager {
     // Codex resumes over the app-server protocol (thread/resume, sent by the adapter once the process is
     // up); Claude has no such call, so its resume id is argv (--resume=<id>) instead — buildClaudeChatCommand
     // takes it directly.
+    // Enforce (enforce design §5, E5): the blocking hook rides on the session's own arguments, and without it the
+    // session does not start
+    const enforced = caps?.context.policyMode === 'enforce'
+    const enforceArgs = enforced ? (this.deps.enforce?.args(provider) ?? null) : []
+    if (enforceArgs === null) throw enforceUnavailable('no-interpreter')
+    const extraArgs = [...(caps?.args ?? []), ...enforceArgs]
     const { file, args } =
       provider === 'claude'
-        ? buildClaudeChatCommand(this.deps.platform, { resumeSessionId: resumeThreadId, bypass, model: opts.model, extraArgs: caps?.args })
-        : buildCodexAppServerCommand(this.deps.platform, undefined, caps?.args ?? [])
+        ? buildClaudeChatCommand(this.deps.platform, { resumeSessionId: resumeThreadId, bypass, model: opts.model, extraArgs })
+        : buildCodexAppServerCommand(this.deps.platform, undefined, extraArgs)
     const meta: PtyMeta = {
       kind: 'chat',
       id,
@@ -333,6 +343,7 @@ export class ChatSessionManager {
         // Observe mode (Review Focus 1): started while the mode was observe, which the Host's recorder asks before it
         // keeps one of this session's calls. The mode the caller's refresh read, as a terminal session's is.
         ...(isObserving(caps?.context.policyMode ?? 'compatibility') ? { observed: true } : {}),
+        ...(enforced ? { enforced: true } : {}),
         // design F5 fix round 1 (Critical 2): the durable mark, written into the note itself so an
         // app restart's `adopt()` can restore it too, not only `state()`'s in-memory overlay.
         ...(opts.startWithBypass ? { bypassedToolchain: true } : {}),

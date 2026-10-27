@@ -1477,11 +1477,11 @@ describe('shared capabilities', () => {
 // a Claude session is pointed at the hook settings that add the PostToolUse capture, and the note says the session was
 // started observed, which is what the Host's recorder asks before it keeps a call. In compatibility nothing changes.
 describe('observe mode at spawn', () => {
-  const capsIn = (policyMode: 'compatibility' | 'observe'): SessionCapabilities => ({
+  const capsIn = (policyMode: 'compatibility' | 'observe' | 'enforce'): SessionCapabilities => ({
     context: { kind: 'implicit', accounts: [account.id], policyMode, executionMode: 'managed' },
     args: [], env: {}, given: [], gatewayGrant: [], skipped: []
   })
-  const rig = (policyMode: 'compatibility' | 'observe' | null, filesWritten = true) => {
+  const rig = (policyMode: 'compatibility' | 'observe' | 'enforce' | null, filesWritten = true) => {
     const spawned: PtySpawnOptions[] = []
     const argv: Array<string[] | string> = []
     const asked: unknown[] = []
@@ -1491,16 +1491,43 @@ describe('observe mode at spawn', () => {
     const manager = new SessionManager((_f, a, o) => (argv.push(a), spawned.push(o), new FakePty()), makeDescriptors('linux'), 100, 20, '/home/t', (id, _acc, o) => {
       asked.push(o)
       const observed = o?.observe === true && filesWritten
+      const enforced = observed && o?.enforce === true
       return {
-        settingsFile: observed ? 'observe.json' : 's.json', outPath: 'o.json', originalCommand: null, hookOutPath: `/h/${id}.jsonl`,
-        ...(observed ? { observed: true } : {})
+        settingsFile: enforced ? 'enforce.json' : observed ? 'observe.json' : 's.json', outPath: 'o.json', originalCommand: null, hookOutPath: `/h/${id}.jsonl`,
+        ...(observed ? { observed: true } : {}),
+        ...(enforced ? { enforced: true } : {})
       }
     }, [], {}, checks)
     if (policyMode !== null) manager.capabilities = { get: () => capsIn(policyMode), refresh: async () => {} }
     const observeHooks = vi.fn(async () => {})
     manager.observeHooks = observeHooks
-    return { manager, spawned, argv, asked, observeHooks }
+    const enforceHooks = vi.fn(async () => filesWritten)
+    manager.enforceHooks = enforceHooks
+    return { manager, spawned, argv, asked, observeHooks, enforceHooks }
   }
+
+  // Enforce (enforce design §5, E5): the blocking hook's settings, the note's mark, and no start without them
+  it('an enforce session is pointed at the enforce settings and marked enforced, an observe one is not', async () => {
+    const e = rig('enforce')
+    await e.manager.prepare({ account, cwd: '/work' })
+    expect(e.enforceHooks).toHaveBeenCalledTimes(1)
+    e.manager.spawn({ account, cwd: '/work' })
+    expect(e.asked[0]).toStrictEqual({ toolHooks: false, observe: true, enforce: true })
+    expect(argsText(e.argv[0])).toContain('enforce.json')
+    expect(e.spawned[0].meta?.restore).toMatchObject({ observed: true, enforced: true })
+    const o = rig('observe')
+    await o.manager.prepare({ account, cwd: '/work' })
+    expect(o.enforceHooks).not.toHaveBeenCalled()
+    o.manager.spawn({ account, cwd: '/work' })
+    expect(o.spawned[0].meta?.restore).not.toHaveProperty('enforced')
+  })
+
+  it('an enforce start whose blocking hook cannot be written is refused before anything spawns', async () => {
+    const { manager, spawned } = rig('enforce', false)
+    await expect(manager.prepare({ account, cwd: '/work' })).rejects.toThrow(/^ENFORCE_UNAVAILABLE: no-interpreter/)
+    expect(() => manager.spawn({ account, cwd: '/work' })).toThrow(/^ENFORCE_UNAVAILABLE: no-interpreter/)
+    expect(spawned).toHaveLength(0)
+  })
 
   it('in compatibility the hook settings are asked for as before and the note carries no mark', async () => {
     for (const mode of ['compatibility', null] as const) {

@@ -21,6 +21,7 @@ import type { CapabilitySource } from '../extensions/capabilityCache'
 import { gatewayTokenEnv } from '../extensions/resolve'
 import { applyHiding, type HidingSource } from '../credentials/hiding'
 import { isObserving } from '../audit/policy'
+import { enforceUnavailable } from '../audit/enforce'
 
 /** statusLine info injected when a session spawns (provided by main's StatusLineManager,
  *  structurally compatible). */
@@ -30,12 +31,14 @@ export interface StatusLineSpawnInfo {
   originalCommand: string | null
   hookOutPath?: string // per-session hook event file — injected as ASTERA_HOOK_OUT
   observed?: true // the settings file is an observe variant (StatusLineManager.spawnConfig)
+  enforced?: true // the settings file is an enforce variant: the blocking hook runs before every tool call
 }
 export type StatusLineProvider = (
   sessionId: string,
   account: Account,
-  opts?: { toolHooks?: boolean; observe?: boolean }
+  opts?: { toolHooks?: boolean; observe?: boolean; enforce?: boolean }
 ) => StatusLineSpawnInfo | null
+
 
 /** Wait time for the safety net that keeps a pause from ever being permanent. The principle is "a
  *  lost resume must not wedge the shell", and we have an even more common cause than that: the only
@@ -170,6 +173,10 @@ export class SessionManager {
    *  (StatusLineManager.ensureObserveFiles). `prepare` calls it when the mode its capabilities read is observe and the
    *  session takes a statusLine; unset, nothing is written. */
   observeHooks?: () => Promise<void>
+  /** Enforce (enforce design §5): puts the blocking hook and the enforce variants of the settings files in place
+   *  (StatusLineManager.ensureEnforceFiles), and says whether they are. `prepare` calls it, instead of observeHooks, when
+   *  the mode is enforce and the session takes a statusLine; false refuses the start (E5). */
+  enforceHooks?: () => Promise<boolean>
   /** The Git Bash `prepare` found, per PATH string, and when — held here, not read back from the
    *  resolver's cache, so an entry that expires between a prepare and its spawn cannot send the spawn
    *  to the sync search. Trusted as long as a confirmed folder is. */
@@ -201,12 +208,15 @@ export class SessionManager {
     await this.capabilities?.refresh(opts.account, opts.agentProfileId)
     // Observe mode: the hook settings an observed session is pointed at, written before the spawn reads the mode the
     // refresh just read. A failure leaves the session on the plain file (spawnConfig), never the spawn refused.
-    if (
-      this.observeHooks &&
-      descriptorOf(this.descriptors, opts.account).usesStatusLine &&
-      isObserving(this.capabilities?.get(opts.account, opts.agentProfileId)?.context.policyMode ?? 'compatibility')
-    )
-      await this.observeHooks().catch((err) => this.checks.log(`observe hook settings could not be written: ${String(err)}`))
+    // Enforce: the blocking hook's settings (which hold the observe ones), and no start without them (E5).
+    const mode = this.capabilities?.get(opts.account, opts.agentProfileId)?.context.policyMode ?? 'compatibility'
+    if (descriptorOf(this.descriptors, opts.account).usesStatusLine) {
+      if (mode === 'enforce') {
+        const ready = this.enforceHooks ? await this.enforceHooks().catch(() => false) : false
+        if (!ready) throw enforceUnavailable('no-interpreter')
+      } else if (this.observeHooks && isObserving(mode))
+        await this.observeHooks().catch((err) => this.checks.log(`observe hook settings could not be written: ${String(err)}`))
+    }
     // The CLI on PATH and codex's --no-daemon, so the spawn's command builder finds both (second pass M2-1, M2-2).
     await descriptorOf(this.descriptors, opts.account)
       .prepare?.()
@@ -307,11 +317,19 @@ export class SessionManager {
     // only when it was given those settings (they may not have been written); a Codex one has none to be given. In
     // compatibility the provider is asked exactly as before and the note carries no mark.
     const observe = isObserving(caps?.context.policyMode ?? 'compatibility')
+    // Enforce (enforce design §5): a Claude session is pointed at the settings that run the blocking hook, and does not
+    // start without them (E5) — the prepare wrote them, so this is a hook that went missing in between
+    const enforce = caps?.context.policyMode === 'enforce'
     const sl = d.usesStatusLine
-      ? (this.statusLineProvider?.(id, opts.account, observe ? { toolHooks: wantToolHooks, observe: true } : { toolHooks: wantToolHooks }) ??
-        null)
+      ? (this.statusLineProvider?.(
+          id,
+          opts.account,
+          enforce ? { toolHooks: wantToolHooks, observe: true, enforce: true } : observe ? { toolHooks: wantToolHooks, observe: true } : { toolHooks: wantToolHooks }
+        ) ?? null)
       : null
+    if (enforce && d.usesStatusLine && sl?.enforced !== true) throw enforceUnavailable('no-interpreter')
     const observed = observe && (d.usesStatusLine ? sl?.observed === true : true)
+    const enforced = enforce && d.usesStatusLine
     const env = this.envFor(opts.account)
     // The Credentials list's hidden keys and logins go from what the session inherits, before Astera adds its own below
     // (credentials design §5): no entry can take away the session's identity, its Gateway token or a shared server's value
@@ -422,7 +440,8 @@ export class SessionManager {
           ...(opts.bypassPermissions !== undefined ? { bypassPermissions: opts.bypassPermissions } : {}),
           ...(opts.startedBy ? { startedBy: opts.startedBy } : {}),
           ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {}),
-          ...(observed ? { observed: true } : {})
+          ...(observed ? { observed: true } : {}),
+          ...(enforced ? { enforced: true } : {})
         }
       }
     })

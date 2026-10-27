@@ -22,7 +22,7 @@ import { WorkerTails } from '../core/orchestration/exec/tail'
 import { releaseArgsFor } from '../core/orchestration/exec/release'
 import { makeLimitProbe } from '../core/orchestration/exec/limitProbe'
 import { ensureShuttle, sessionCmdLink } from '../core/orchestration/exec/shuttle'
-import type { ChatOrchEnv } from '../core/chat/manager'
+import type { ChatManagerDeps, ChatOrchEnv } from '../core/chat/manager'
 import { binDirFor } from '../core/orchestration/cliInstall'
 import {
   preTrustWorkspace,
@@ -135,6 +135,9 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
   capabilities?: CapabilityCache
   /** The Credentials list's hiding (credentials design §5), asked at each spawn; shared with the Host's chat sessions. */
   hiding?: HidingSource
+  /** Enforce (enforce design §5): the arguments that make a Host chat run the blocking hook, from this spawner's
+   *  StatusLineManager. */
+  enforce?: ChatManagerDeps['enforce']
   /** The session shuttle's values once the Host wrote it (kicked at creation); undefined until then. */
   orchEnvNow(): ChatOrchEnv | undefined
   /** How many worker and coordinator starts are under way right now. */
@@ -268,7 +271,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     profileDir,
     platform === 'win32'
       ? (d.captureNode ?? 'node')
-      : resolveNodePath(d.env as { PATH?: string }, existsSync, platform)
+      : resolveNodePath(d.env as { PATH?: string }, existsSync, platform),
+    undefined,
+    { platform }
   )
   const ensured = once(() => statusLine.ensureFiles())
   // The app writes this same file at its start (bootOrch). Both go through the same junction decision
@@ -358,7 +363,13 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     profileDir,
     homeDir,
     platform,
-    policyMode: () => readPolicyMode(profileDir),
+    // Enforce: the refresh every spawn awaits first puts the blocking hook's files in place, so a chat spawn, which has
+    // no await of its own, finds them written (StatusLineManager.ensureEnforceFiles)
+    policyMode: async () => {
+      const mode = await readPolicyMode(profileDir)
+      if (mode === 'enforce') await statusLine.ensureEnforceFiles()
+      return mode
+    },
     ...(d.gatewayPort ? { gatewayPort: d.gatewayPort } : {}),
     log: hidingLog(profileDir, log)
   })
@@ -368,6 +379,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   sessions.hiding = hiding
   // Observe mode: an observed Claude session's hook settings, written by its prepare (StatusLineManager.ensureObserveFiles)
   sessions.observeHooks = () => statusLine.ensureObserveFiles()
+  // Enforce: a Claude session's blocking hook, written by its prepare, which refuses the start without it (E5)
+  sessions.enforceHooks = () => statusLine.ensureEnforceFiles()
   sessions.onExit = (e) => {
     sessions.forget(e.sessionId)
   }
@@ -725,6 +738,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   return {
     capabilities,
     hiding,
+    enforce: { args: (provider) => (provider === 'claude' ? statusLine.enforceChatArgs() : null) },
     orchEnvNow: () => orchEnvReady,
     inFlight: () => spawnsInFlight,
     closeAndSettle: (ms) => {

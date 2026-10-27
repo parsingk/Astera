@@ -289,7 +289,13 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     profileDir: userDataDir,
     homeDir: os.homedir(),
     platform: process.platform,
-    policyMode: () => readPolicyMode(userDataDir),
+    // Enforce: the refresh every spawn awaits first puts the blocking hook's files in place, so a chat spawn, which has
+    // no await of its own, finds them written (StatusLineManager.ensureEnforceFiles)
+    policyMode: async () => {
+      const mode = await readPolicyMode(userDataDir)
+      if (mode === 'enforce') await statusLine.ensureEnforceFiles()
+      return mode
+    },
     log: hidingLog(userDataDir, sessionsLog)
   })
   sessions.capabilities = capabilities
@@ -299,6 +305,8 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   sessions.hiding = hiding
   // Observe mode: an observed Claude session's hook settings, written by its prepare (StatusLineManager.ensureObserveFiles)
   sessions.observeHooks = () => statusLine.ensureObserveFiles()
+  // Enforce: a Claude session's blocking hook, written by its prepare, which refuses the start without it (E5)
+  sessions.enforceHooks = () => statusLine.ensureEnforceFiles()
   // The chat sessions. It is handed `procRouter.factory` rather than a factory chosen now, for exactly
   // the reason SessionManager is handed `ptyRouter.factory`: which one a spawn reaches is decided at
   // spawn time, once registerIpc has learned whether this Host speaks procs. `version` is the app's
@@ -312,7 +320,8 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     version: app.getVersion(),
     log: chatLog,
     capabilities,
-    hiding
+    hiding,
+    enforce: { args: (provider) => (provider === 'claude' ? statusLine.enforceChatArgs() : null) }
   })
   // Lazy history: nothing is scanned at startup. The project list comes from a directory listing; sessions are
   // parsed when expanded. index.ts starts the file watcher with startBackground() after the window is up, so window creation never blocks on a scan.

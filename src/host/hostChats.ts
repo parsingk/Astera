@@ -44,6 +44,8 @@ export interface HostChatsDeps {
   capabilities?: ChatManagerDeps['capabilities']
   /** The Credentials list's hiding, the spawner's (credentials design §5). */
   hiding?: ChatManagerDeps['hiding']
+  /** Enforce's chat arguments, the spawner's (enforce design §5). */
+  enforce?: ChatManagerDeps['enforce']
   log(m: string): void
   /** Test seams. */
   createAdapter?: ChatManagerDeps['createAdapter']
@@ -176,6 +178,7 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     orchEnv: d.orchEnv,
     capabilities: d.capabilities,
     hiding: d.hiding,
+    enforce: d.enforce,
     ...(d.createAdapter ? { createAdapter: d.createAdapter } : {})
   })
 
