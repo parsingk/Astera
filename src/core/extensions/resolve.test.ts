@@ -284,7 +284,7 @@ describe('resolveSessionCapabilities with an agent profile', () => {
 })
 
 describe('gatewayTokenEnv', () => {
-  it('makes a fresh token for every spawn with the same grant, and nothing when no server goes through the Gateway', async () => {
+  it('makes a fresh token for every spawn with the same grant, and one with an empty grant when no server goes through the Gateway', async () => {
     const s = await setup()
     const caps = await call(s, s.claude)
     const a = gatewayTokenEnv(caps)
@@ -293,6 +293,9 @@ describe('gatewayTokenEnv', () => {
     expect(b.ASTERA_GATEWAY_GRANT).toBe('mcp-linear')
     expect(a.ASTERA_GATEWAY_TOKEN).toMatch(/^[A-Za-z0-9_-]{43}$/)
     expect(a.ASTERA_GATEWAY_TOKEN).not.toBe(b.ASTERA_GATEWAY_TOKEN)
-    expect(gatewayTokenEnv({ ...caps, gatewayGrant: [] })).toEqual({})
+    // A session with no shared server still gets a token, with an empty grant (sandbox design §7)
+    const none = gatewayTokenEnv({ ...caps, gatewayGrant: [] })
+    expect(none.ASTERA_GATEWAY_TOKEN).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(none.ASTERA_GATEWAY_GRANT).toBe('')
   })
 })

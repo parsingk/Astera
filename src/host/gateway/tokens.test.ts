@@ -65,4 +65,22 @@ describe('gateway session tokens', () => {
     expect(h.table.lookup('B' + TOKEN.slice(1))).toBeNull()
     expect(h.table.lookup('')).toBeNull()
   })
+
+  it('every session gets a token, with or without a shared server', () => {
+    const h = rig()
+    h.ptys.open({ id: 'p1', file: 'claude', args: [], opts: { cwd: 'D:/repo', cols: 80, rows: 24, env: { PATH: 'x', ASTERA_GATEWAY_TOKEN: TOKEN, ASTERA_GATEWAY_GRANT: '' } } })
+    expect(h.table.lookup(TOKEN)).toMatchObject({ ownerId: 'p1', folder: 'D:/repo' })
+    expect([...h.table.lookup(TOKEN)!.grant]).toEqual([])
+  })
+
+  it('answers the app session of a live token through the owner mapping, and null for a dead one', () => {
+    const table = createTokenTable((ownerId) => (ownerId === 'p1' ? 'sess-1' : undefined))
+    table.register(TOKEN, { ownerId: 'p1', folder: 'D:/repo', grant: new Set() })
+    table.register('B'.repeat(43), { ownerId: 'p2', folder: 'D:/repo', grant: new Set() })
+    expect(table.sessionOf(TOKEN)).toBe('sess-1')
+    expect(table.sessionOf('B'.repeat(43))).toBeNull()
+    expect(table.sessionOf('C'.repeat(43))).toBeNull()
+    table.forgetOwner('p1')
+    expect(table.sessionOf(TOKEN)).toBeNull()
+  })
 })

@@ -109,11 +109,12 @@ async function filesUnder(root: string): Promise<string[]> {
 }
 
 describe('the MCP Gateway on the Host, end to end', () => {
-  it('opens no port and adds nothing while nothing is shared (G-06)', async () => {
+  it('opens no port and adds no MCP configuration while nothing is shared (G-06)', async () => {
     const h = rig()
     const s = await h.start('acc2')
     expect(line(s)).not.toContain('--mcp-config')
-    expect(s.env.ASTERA_GATEWAY_TOKEN).toBeUndefined()
+    // The token is the session's workload token now; with nothing shared its grant reaches no server.
+    expect(s.env.ASTERA_GATEWAY_GRANT).toBe('')
     expect(h.hub.port()).toBeNull()
   })
 

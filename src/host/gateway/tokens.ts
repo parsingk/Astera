@@ -1,5 +1,6 @@
-// The MCP Gateway's session tokens (Agent Control Plane release 2, Gateway design §4.3). A session given shared stdio
-// servers carries `ASTERA_GATEWAY_TOKEN` and `ASTERA_GATEWAY_GRANT` in its environment; the Host registers that token
+// The MCP Gateway's session tokens (Agent Control Plane release 2, Gateway design §4.3), which are also every session's
+// workload token (sandbox design §7). A session carries `ASTERA_GATEWAY_TOKEN` and `ASTERA_GATEWAY_GRANT` (empty when no
+// stdio server is shared) in its environment; the Host registers that token
 // when it opens the session's pty or chat proc, the one place every session passes whether the app or the Host spawned
 // it, and forgets it when that pty or proc exits. Nothing else makes a token live. Tokens stay in this process's memory
 // and are never logged.
@@ -24,11 +25,24 @@ export interface TokenTable {
   /** Drops every token of that pty or proc; answers the tokens dropped. */
   forgetOwner(ownerId: string): string[]
   lookup(token: string): TokenBinding | null
+  /** The app session id of a live token, or null for a token not live or one whose owner is no session. */
+  sessionOf(token: string): string | null
   owners(): number
 }
 
-export function createTokenTable(): TokenTable {
+/** `sessionOfOwner` turns a binding's pty or proc id into the app's session id (host/index.ts). */
+export function createTokenTable(sessionOfOwner: (ownerId: string) => string | undefined = () => undefined): TokenTable {
   const byToken = new Map<string, TokenBinding>()
+  const lookup = (token: string): TokenBinding | null => {
+    // Compared byte for byte in constant time against every live token, so how long a guess takes says nothing
+    const asked = Buffer.from(token)
+    let found: TokenBinding | null = null
+    for (const [t, b] of byToken) {
+      const live = Buffer.from(t)
+      if (live.length === asked.length && timingSafeEqual(live, asked)) found = b
+    }
+    return found
+  }
   return {
     register: (token, b) => void byToken.set(token, b),
     forgetOwner: (ownerId) => {
@@ -36,15 +50,10 @@ export function createTokenTable(): TokenTable {
       for (const t of gone) byToken.delete(t)
       return gone
     },
-    lookup: (token) => {
-      // Compared byte for byte in constant time against every live token, so how long a guess takes says nothing
-      const asked = Buffer.from(token)
-      let found: TokenBinding | null = null
-      for (const [t, b] of byToken) {
-        const live = Buffer.from(t)
-        if (live.length === asked.length && timingSafeEqual(live, asked)) found = b
-      }
-      return found
+    lookup,
+    sessionOf: (token) => {
+      const b = lookup(token)
+      return b ? (sessionOfOwner(b.ownerId) ?? null) : null
     },
     owners: () => new Set([...byToken.values()].map((b) => b.ownerId)).size
   }

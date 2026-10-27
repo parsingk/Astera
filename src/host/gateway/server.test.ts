@@ -106,6 +106,12 @@ describe('the MCP Gateway', () => {
     expect(await h.raw(bearer, '/elsewhere')).toBe(404)
   })
 
+  it('the Gateway still refuses a token whose grant lacks the server', async () => {
+    const h = await rig()
+    h.tokens.register('E'.repeat(43), { ownerId: 'p3', folder: h.folder, grant: new Set() })
+    expect(await h.raw({ authorization: `Bearer ${'E'.repeat(43)}` })).toBe(403)
+  })
+
   it('shares one upstream between two sessions of one folder, and passes its notifications to both', async () => {
     const h = await rig()
     const a = await h.session(TOKEN)

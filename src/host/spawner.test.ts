@@ -269,8 +269,11 @@ describe('createHostSpawner', () => {
     expect(norm(h.spawned[0].file, r.sessionId)).toEqual(norm(app[0].file, info.id))
     expect(norm(h.spawned[0].args, r.sessionId)).toEqual(norm(app[0].args, info.id))
     expect(norm(h.registry.list()[0].meta, r.sessionId)).toEqual(norm(app[0].meta, info.id))
-    const appEnv = Object.fromEntries(Object.entries(app[0].env).filter(([k]) => !HOST_ONLY_ENV.test(k)))
-    expect(norm(h.spawned[0].opts.env, r.sessionId)).toEqual(norm(appEnv, info.id))
+    // Each spawn's workload token is its own, so it is the one value that differs.
+    const appEnv = Object.fromEntries(Object.entries(app[0].env).filter(([k]) => !HOST_ONLY_ENV.test(k) && k !== 'ASTERA_GATEWAY_TOKEN'))
+    const workerEnv = Object.fromEntries(Object.entries(h.spawned[0].opts.env).filter(([k]) => k !== 'ASTERA_GATEWAY_TOKEN'))
+    expect(norm(workerEnv, r.sessionId)).toEqual(norm(appEnv, info.id))
+    expect(h.spawned[0].opts.env.ASTERA_GATEWAY_TOKEN).toMatch(/^[A-Za-z0-9_-]{43}$/)
   })
 
   it('answers worker-read from the output the registry saw, and owns only the tails it holds', async () => {

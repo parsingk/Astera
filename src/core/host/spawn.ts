@@ -5,14 +5,15 @@ import type { SpawnOptions } from 'node:child_process'
 import path from 'node:path'
 import { INHERITED_AGENT_ENV_KEYS } from '../sessions/cliEnv'
 
-/** Variables that belong to one agent session and must not reach the Host: it is not a worker, and
+/** Variables that belong to one agent session and must not reach the Host (the workload token among them: a Host that
+ *  held one would hand it to every worker it spawns): it is not a worker, and
  *  it spawns workers of its own that would inherit them in turn. The astera ones by prefix; the
  *  Claude Code ones are exactly the session-identity list cliEnvFor clears for an app worker
  *  (INHERITED_AGENT_ENV_KEYS), not the whole CLAUDE_CODE_ family: CLAUDE_CODE_USE_BEDROCK,
  *  CLAUDE_CODE_OAUTH_TOKEN and the like are settings a person chose, and a Host worker must keep
  *  them just as an app worker does. An inherited CLAUDE_CODE_CHILD_SESSION is what turns a worker's
  *  transcript off. */
-const NOT_INHERITED_ASTERA = /^(ASTERA_SESSION|ASTERA_CLI|ASTERA_SKILLS)/
+const NOT_INHERITED_ASTERA = /^(ASTERA_SESSION|ASTERA_CLI|ASTERA_SKILLS|ASTERA_GATEWAY_)/
 const NOT_INHERITED_AGENT: ReadonlySet<string> = new Set(INHERITED_AGENT_ENV_KEYS)
 const notInherited = (k: string): boolean => NOT_INHERITED_ASTERA.test(k) || NOT_INHERITED_AGENT.has(k)
 

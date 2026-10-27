@@ -1469,7 +1469,16 @@ describe('shared capabilities', () => {
     a.manager.spawn({ account, cwd: os.tmpdir() })
     b.manager.spawn({ account, cwd: os.tmpdir() })
     expect(b.spawned[0].args).toEqual(a.spawned[0].args)
-    expect(b.spawned[0].opts.env).toEqual(a.spawned[0].opts.env)
+    // Each spawn's workload token is its own; nothing else differs.
+    const bare = (env: Record<string, string | undefined> | undefined) => ({ ...env, ASTERA_GATEWAY_TOKEN: undefined })
+    expect(bare(b.spawned[0].opts.env)).toEqual(bare(a.spawned[0].opts.env))
+  })
+  it('gives a spawn with no capabilities a workload token and an empty grant', () => {
+    const { manager, spawned } = setup()
+    manager.spawn({ account, cwd: os.tmpdir() })
+    const env = spawned[0].opts.env ?? {}
+    expect(env.ASTERA_GATEWAY_TOKEN).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(env.ASTERA_GATEWAY_GRANT).toBe('')
   })
 })
 

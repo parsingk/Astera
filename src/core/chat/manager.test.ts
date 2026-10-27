@@ -1255,7 +1255,9 @@ describe('ChatSessionManager — what a takeover reads (chat takeover Task 2)', 
     expect(factory.mock.calls[0][2].env.LINEAR_API_KEY).toBe('secret-in-env')
     expect(factory.mock.calls[0][2].env.ASTERA_GATEWAY_GRANT).toBe('mcp-linear')
     expect(factory.mock.calls[0][2].env.ASTERA_GATEWAY_TOKEN).toMatch(/^[A-Za-z0-9_-]{43}$/)
-    expect(factory.mock.calls[1][2].env.ASTERA_GATEWAY_TOKEN).toBeUndefined()
+    // Every session has a workload token; this one has no shared server, so its grant is empty.
+    expect(factory.mock.calls[1][2].env.ASTERA_GATEWAY_TOKEN).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(factory.mock.calls[1][2].env.ASTERA_GATEWAY_GRANT).toBe('')
     expect(factory.mock.calls[1][1]).not.toContain('--mcp-config')
     expect(factory.mock.calls[1][2].env.LINEAR_API_KEY).toBeUndefined()
   })

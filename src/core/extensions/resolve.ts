@@ -220,11 +220,11 @@ async function resolveAgentContext(a: {
   return implicit
 }
 
-/** The variables one spawn adds for the Gateway (design §4.2): a token made for this spawn alone, and the servers it was
- *  given. The Host registers them when it opens the session (host/gateway/tokens.ts). Nothing when no server goes
- *  through the Gateway. */
+/** The variables one spawn adds for the Gateway (design §4.2) and for the Host's own commands: a token made for this
+ *  spawn alone, and the servers it was given. The Host registers them when it opens the session
+ *  (host/gateway/tokens.ts). Every session gets the token, the workload token a call to the Host is known by (sandbox
+ *  design §7); with no shared server the grant is empty and the Gateway lets that token reach none. */
 export function gatewayTokenEnv(caps: Pick<SessionCapabilities, 'gatewayGrant'>): Record<string, string> {
-  if (caps.gatewayGrant.length === 0) return {}
   return { [GATEWAY_TOKEN_ENV]: randomBytes(32).toString('base64url'), [GATEWAY_GRANT_ENV]: caps.gatewayGrant.join(',') }
 }
 

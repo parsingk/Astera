@@ -301,7 +301,8 @@ export class ChatSessionManager {
     }
     // Shared extensions: their environment values only in this process's environment (design D5)
     const caps = this.deps.capabilities?.get(opts.account, opts.agentProfileId) ?? null
-    if (caps) Object.assign(env, caps.env, gatewayTokenEnv(caps))
+    // The workload token goes to every session, shared servers or not.
+    Object.assign(env, caps?.env ?? {}, gatewayTokenEnv(caps ?? { gatewayGrant: [] }))
     const orchEnv = this.deps.orchEnv?.()
     if (orchEnv) {
       env.ASTERA_CLI = orchEnv.cliPath

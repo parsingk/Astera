@@ -252,6 +252,7 @@ async function main(): Promise<void> {
     profileDir,
     ptys: registry,
     procs,
+    sessionOfOwner,
     log: hidingLog(profileDir, (m) => log.write(m)),
     onToolCall: (c) => {
       const sessionId = sessionOfOwner(c.ownerId)
@@ -1189,6 +1190,7 @@ async function main(): Promise<void> {
   }
   try {
     server = await startHostServer({
+      sessionOfToken: (t) => mcpGateway.sessionOfToken(t),
       address: addr.address,
       hostKey,
       bootId,

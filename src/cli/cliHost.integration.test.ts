@@ -45,6 +45,7 @@ import { createHostWorktrees } from '../host/worktrees'
 import { createHostProjectRoots } from '../host/projectRoots'
 import { hostFeatures } from '../host/features'
 import { PtyRegistry, type RegistryPty } from '../host/registry'
+import { createTokenTable, watchGatewayTokens } from '../host/gateway/tokens'
 import { ProcRegistry } from '../host/procRegistry'
 import type { HostLocal, HostSpawner } from '../host/spawner'
 import { registrySessions } from '../host/sessions'
@@ -147,7 +148,7 @@ interface CliRun {
 }
 
 /** The variables that pick a Host and a caller. Each call sets exactly the ones it is given. */
-const CLI_ENV = ['ASTERA_PROFILE_DIR', 'ASTERA_HOST', 'ASTERA_PROFILE', 'ASTERA_SESSION'] as const
+const CLI_ENV = ['ASTERA_PROFILE_DIR', 'ASTERA_HOST', 'ASTERA_PROFILE', 'ASTERA_SESSION', 'ASTERA_GATEWAY_TOKEN'] as const
 
 /** One `astera …` invocation, the way index.ts runs it. Calls are serial (the process globals are
  *  borrowed for the call), which is also how a script runs them. */
@@ -317,7 +318,7 @@ interface Rig {
   exitWorker(s: Spawn, code: number): void
   /** Opens an agent session's pty in the Host's registry, as an app's `pty-open` does: a person's own
    *  terminal, with the note an app writes (`restore` holds its title, account and folder). */
-  openSession(id: string, restore?: Record<string, unknown>): void
+  openSession(id: string, restore?: Record<string, unknown>, env?: Record<string, string>): void
   /** The pty of an agent session (a worker's or an opened one), by its session id. */
   ptyOf(sessionId: string): FakePty
   /** The sessions `sessions create` started here, in order: what the spawner was asked to open. */
@@ -432,12 +433,15 @@ async function hostRig(
     const m = registry.metaOf(ptyId)
     if (m?.kind === 'session') tails.push(m.id, data)
   })
-  const openSession = (id: string, restore: Record<string, unknown> = {}): void => {
+  // The workload tokens, as the Host's Gateway hub keeps them: registered when a pty opens with one in its environment.
+  const tokens = createTokenTable((ownerId) => registry.metaOf(ownerId)?.id)
+  watchGatewayTokens({ ptys: registry, procs, table: tokens })
+  const openSession = (id: string, restore: Record<string, unknown> = {}, env: Record<string, string> = {}): void => {
     const opened = registry.open({
       id: `pty_${id}`,
       file: 'agent',
       args: [],
-      opts: { cwd: typeof restore.cwd === 'string' ? restore.cwd : profileDir, cols: 80, rows: 24, env: {} },
+      opts: { cwd: typeof restore.cwd === 'string' ? restore.cwd : profileDir, cols: 80, rows: 24, env },
       meta: { kind: 'session', id, restore }
     })
     if (!opened.ok) throw new Error(opened.error)
@@ -772,6 +776,7 @@ async function hostRig(
     },
     liveCounts: () => ({ sessions: registry.liveCount() + procs.liveCount(), runs: orch.runningRuns() }),
     orch,
+    sessionOfToken: (t) => tokens.sessionOf(t),
     features: hostFeatures({ spawns: true, slack: false }),
     ...wiring.serverHooks,
     onAppsChanged: () => {
@@ -1155,6 +1160,22 @@ describe('the public CLI against a real Host (§48, §49)', { timeout: 60_000 },
     expect(okData(await astera(['plugins', 'disable', '--id', 'astera-hello'], h.env), 'plugins disable')).toMatchObject({ status: 'disabled', changed: true })
     expect(okData(await astera(['plugins', 'remove', '--id', 'astera-hello'], h.env), 'plugins remove')).toEqual({ id: 'astera-hello', version: '1.0.0', removed: true })
     expect((await astera(['plugins', 'get', '--id', 'astera-hello'], h.env)).code).toBe(4)
+  })
+
+  // Sandbox design §7: a call that carries the session's workload token is that session, with no ASTERA_SESSION at all.
+  it('the CLI sends ASTERA_GATEWAY_TOKEN and the Host reads the session from it, not from ASTERA_SESSION', async () => {
+    const h = await hostRig()
+    const token = 'W'.repeat(43)
+    h.openSession('ses_tokened', { title: 'tokened', accountId: h.accountId, cwd: h.profileDir }, { ASTERA_GATEWAY_TOKEN: token, ASTERA_GATEWAY_GRANT: '' })
+    okData(await astera(['agent-profiles', 'create', '--name', 'Reviewer', '--account', h.accountId], h.env), 'agent-profiles create')
+    // From an agent's session the Host refuses a change to an agent profile (5); a read it allows.
+    const agent = await astera(['agent-profiles', 'archive', '--id', 'Reviewer'], { ...h.env, ASTERA_GATEWAY_TOKEN: token })
+    expect(agent.code, agent.stdout).toBe(5)
+    expect((await astera(['agent-profiles', 'list'], { ...h.env, ASTERA_GATEWAY_TOKEN: token })).code).toBe(0)
+    // A claim of another session does not change whose it is, and a token the Host does not know is refused.
+    const dead = await astera(['agent-profiles', 'list'], { ...h.env, ASTERA_GATEWAY_TOKEN: 'D'.repeat(43) })
+    expect(dead.code, dead.stdout).not.toBe(0)
+    expect(dead.stdout).toContain('workload token not recognised')
   })
 
   // Agent Profiles design §6 (Task 7): the noun end to end, and a Job made as a profile by its name holds its id.

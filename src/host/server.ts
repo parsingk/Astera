@@ -104,6 +104,9 @@ export interface HostServerDeps {
    *  does not have to supply one; `host/index.ts` always does, because it always advertises
    *  HOST_FEATURE_ORCH below. */
   orch?: OrchCall
+  /** The app session id of a live workload token (sandbox design §7), or null. An `orch-call` that carries a token is
+   *  that session; one whose token this does not know is refused. */
+  sessionOfToken?(token: string): string | null
   /** Whether a pid names a live process; defaults to `pidLives` (core/host/pidFile.ts). What
    *  `lastAppPid` probes with, injectable so a test's made-up pid is not judged by this machine. */
   pidLives?(pid: number): boolean
@@ -672,8 +675,19 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
               for (const s of greetedSockets) if (s !== socket && !s.destroyed && !isMcp(s)) writeTo(s, msg, line)
             }
           }
+          // A token names the session, not the `session` field, which any process on the pipe can write. A Host with no
+          // token table cannot vouch for one, so it refuses it too.
+          let sessionId = m.session ?? ''
+          if (m.token !== undefined) {
+            const owner = deps.sessionOfToken?.(m.token) ?? null
+            if (owner === null) {
+              send({ t: 'orch-result', call: m.call, status: 401, body: { error: 'workload token not recognised' } })
+              return
+            }
+            sessionId = owner
+          }
           void deps.orch
-            .call({ cmd: m.cmd, args: m.args, sessionId: m.session ?? '', from, request: m.request })
+            .call({ cmd: m.cmd, args: m.args, sessionId, from, request: m.request })
             .then((r) =>
               send({
                 t: 'orch-result',

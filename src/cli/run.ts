@@ -604,6 +604,12 @@ export function lostAnswerDetails(a: {
 export const markOf = (r: Pick<HostAnswer, 'replayed' | 'observed'>): ReplayMark =>
   r.replayed === true ? 'replayed' : r.observed === true ? 'observed' : null
 
+/** This session's workload token (`ASTERA_GATEWAY_TOKEN`), or undefined outside a session that has one. */
+const workloadToken = (): string | undefined => {
+  const t = process.env.ASTERA_GATEWAY_TOKEN
+  return t === undefined || t === '' ? undefined : t
+}
+
 export function callHost(a: {
   conn: HostConnection
   cmd: string
@@ -615,6 +621,7 @@ export function callHost(a: {
   request?: string
   timeoutMs: number
 }): Promise<HostAnswer | { unreachable: string } | { stuck: string }> {
+  const token = workloadToken()
   return new Promise((resolve) => {
     // 이 프로세스는 명령 하나를 묻고 끝난다 — 한 번에 하나뿐이라 상관 id 는 하나면 된다.
     const call = 'cli_1'
@@ -652,7 +659,9 @@ export function callHost(a: {
       cmd: a.cmd,
       args: a.args,
       session: a.sessionId,
-      ...(a.request === undefined ? {} : { request: a.request })
+      ...(a.request === undefined ? {} : { request: a.request }),
+      // The session's workload token, when it has one: the Host then reads the session from it, not from `session`.
+      ...(token === undefined ? {} : { token })
     })
   })
 }

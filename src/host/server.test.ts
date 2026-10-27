@@ -35,6 +35,7 @@ const server = async (
     onMessage?: HostServerDeps['onMessage']
     liveCounts?: HostServerDeps['liveCounts']
     orch?: HostServerDeps['orch']
+    sessionOfToken?: HostServerDeps['sessionOfToken']
     features?: HostServerDeps['features']
     onClientGone?: HostServerDeps['onClientGone']
     onAppsChanged?: HostServerDeps['onAppsChanged']
@@ -71,6 +72,7 @@ const server = async (
     onMessage: over.onMessage,
     liveCounts: over.liveCounts,
     orch: over.orch ?? versionOnlyOrchCall({ version }),
+    ...(over.sessionOfToken ? { sessionOfToken: over.sessionOfToken } : {}),
     features: over.features,
     onClientGone: over.onClientGone,
     onAppsChanged: over.onAppsChanged,
@@ -157,6 +159,7 @@ const start = async (
     /** The default is the version-only stub, which is what almost every test here wants. Overridden
      *  by the one test that has to talk to the real command layer over a real socket. */
     orch?: HostServerDeps['orch']
+    sessionOfToken?: HostServerDeps['sessionOfToken']
     onMessage?: HostServerDeps['onMessage']
     onClientGone?: HostServerDeps['onClientGone']
     onAppsChanged?: HostServerDeps['onAppsChanged']
@@ -910,6 +913,42 @@ describe('startHostServer', () => {
   })
 
   describe('orch-call', () => {
+    // The workload token (sandbox design §7): a call that carries one is that token's session, whatever `session` it claims.
+    const recordingOrch = (seen: Array<{ sessionId: string }>): HostServerDeps['orch'] => ({
+      call: async (a) => {
+        seen.push({ sessionId: a.sessionId })
+        return { status: 200, body: { sessionId: a.sessionId } }
+      }
+    })
+    const sessionOfToken = (t: string): string | null => (t === 'live-token' ? 'sess-real' : null)
+
+    it('a call with a live token is that token’s session, whatever it claims', async () => {
+      const seen: Array<{ sessionId: string }> = []
+      const h = await start({ orch: recordingOrch(seen), sessionOfToken })
+      const client = await h.connect()
+      client.send({ t: 'orch-call', call: 'c1', cmd: 'status', args: {}, session: 'sess-claimed', token: 'live-token' })
+      expect(await client.next()).toMatchObject({ t: 'orch-result', call: 'c1', status: 200, body: { sessionId: 'sess-real' } })
+      expect(seen).toEqual([{ sessionId: 'sess-real' }])
+    })
+
+    it('a call with a dead token is refused', async () => {
+      const seen: Array<{ sessionId: string }> = []
+      const h = await start({ orch: recordingOrch(seen), sessionOfToken })
+      const client = await h.connect()
+      client.send({ t: 'orch-call', call: 'c1', cmd: 'status', args: {}, session: 'sess-claimed', token: 'dead-token' })
+      expect(await client.next()).toEqual({ t: 'orch-result', call: 'c1', status: 401, body: { error: 'workload token not recognised' } })
+      expect(seen).toEqual([])
+    })
+
+    it('a call without a token keeps the claimed session', async () => {
+      const seen: Array<{ sessionId: string }> = []
+      const h = await start({ orch: recordingOrch(seen), sessionOfToken })
+      const client = await h.connect()
+      client.send({ t: 'orch-call', call: 'c1', cmd: 'status', args: {}, session: 'sess-claimed' })
+      expect(await client.next()).toMatchObject({ status: 200, body: { sessionId: 'sess-claimed' } })
+      expect(seen).toEqual([{ sessionId: 'sess-claimed' }])
+    })
+
     it('orch-call 에 그 call 로 답한다', async () => {
       const h = await start({})
       const client = await h.connect()

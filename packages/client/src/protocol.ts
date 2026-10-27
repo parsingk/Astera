@@ -107,7 +107,7 @@ export interface ClientHelloMessage {
  *  already answered. Additive, so HOST_PROTOCOL stays 3 — a Host from before it destructures
  *  `{cmd, args, session}` and runs the command unprotected, which is why the CLI must not send a
  *  *presented* id to a Host that has not announced the feature. */
-export interface OrchCallMessage { t: 'orch-call'; call: string; cmd: string; args: Record<string, unknown>; session?: string; request?: string }
+export interface OrchCallMessage { t: 'orch-call'; call: string; cmd: string; args: Record<string, unknown>; session?: string; request?: string; token?: string }
 
 export interface HostHelloMessage {
   t: 'hello'

@@ -13,6 +13,8 @@ export interface GatewayHub {
   /** Opens or closes the listener for what the registry shares now; answers the port, or null when closed. */
   sync(): Promise<number | null>
   port(): number | null
+  /** The app session id of a live workload token, or null. */
+  sessionOfToken(token: string): string | null
   states(): UpstreamState[]
   stopServer(serverId: string): Promise<void>
   close(): Promise<void>
@@ -24,10 +26,12 @@ export function createGatewayHub(d: {
   procs: Pick<ProcRegistry, 'open' | 'onExit'>
   log: (line: string) => void
   baseEnv?: NodeJS.ProcessEnv
+  /** The app session a pty or proc id belongs to, for `sessionOfToken` (the workload token). */
+  sessionOfOwner?: (ownerId: string) => string | undefined
   /** Each session's tool call through the Gateway, for its credential-use record (credentials design §6). */
   onToolCall?: Parameters<typeof createGateway>[0]['onToolCall']
 }): GatewayHub {
-  const tokens = createTokenTable()
+  const tokens = createTokenTable(d.sessionOfOwner)
   const pool = createUpstreamPool({ profileDir: d.profileDir, baseEnv: d.baseEnv ?? process.env, log: d.log })
   const readRegistry = () => readExtensionRegistry(d.profileDir)
   const gateway = createGateway({
@@ -68,6 +72,7 @@ export function createGatewayHub(d: {
       return chain
     },
     port: () => gateway.port(),
+    sessionOfToken: (token) => tokens.sessionOf(token),
     states: () => pool.states(),
     stopServer: (serverId) => pool.stopServer(serverId),
     close: async () => {
