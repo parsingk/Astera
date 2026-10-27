@@ -57,6 +57,12 @@ describe('spawnErrorMessage', () => {
     // Task 6 fix round 1: Codex could not be asked. Its own words, and no setup offered: setting up would not help
     expect(spawnErrorMessage(raw('windows-check-failed codex acc_7f3'))).toEqual({ key: 'session.spawn.sandbox.windowsCheckFailed' })
     expect(sandboxSetupAccountOf(raw('windows-check-failed codex acc_7f3'))).toBeNull()
+    // Task 7 fix round 1: a Claude whose version cannot be read or that is not there, and settings that could not be
+    // written, each in its own words
+    expect(spawnErrorMessage(raw('cli-version-unknown claude'))).toEqual({ key: 'session.spawn.sandbox.cliVersionUnknown', params: { cli: 'Claude Code' } })
+    expect(spawnErrorMessage(raw('cli-missing claude'))).toEqual({ key: 'session.spawn.sandbox.cliMissing', params: { cli: 'Claude Code' } })
+    expect(spawnErrorMessage(raw('settings-write-failed'))).toEqual({ key: 'session.spawn.sandbox.settingsWriteFailed' })
+    expect(sandboxSetupAccountOf(raw('cli-missing claude'))).toBeNull()
   })
 
   // Task 6 fix round 1: the account id is an id's characters only, whatever quoting or JSON the error was carried in

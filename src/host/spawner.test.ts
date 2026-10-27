@@ -75,6 +75,10 @@ const rig = (over: {
     // Every Windows home reads set up unless a case says otherwise: the real question runs the codex on this machine
     codexWindowsReady: over.codexWindowsReady ?? (async () => 'ready'),
     ...(over.claudeVersion ? { claudeVersion: over.claudeVersion } : {}),
+    // A sandboxed Claude start makes npm's cache in the temp folder and asks git for the excludes file: the fixture's
+    // folder and no git at all, so a test leaves nothing in the real temp folder and runs no real git
+    tmpDir: path.join(dir, 'tmp'),
+    runGit: async () => null,
     worktrees: over.worktrees ?? { fork: () => Promise.reject(new Error('not in this test')), makeRunWorktree: vi.fn(), mergeWorktrees: vi.fn(), removeWorktrees: vi.fn() } })
   return { spawner, registry, spawned, logs, sent }
 }
@@ -1025,6 +1029,12 @@ describe('createHostSpawner — createSession', () => {
       expect(settingsOf(1)).toMatch(/astera-statusline-settings\.json$/)
       expect(open).not.toHaveProperty('sandboxed')
       expect(h.spawner!.claudeSandbox!.chatArgs(false)?.[1]).toMatch(/astera-sandbox-chat-settings\.json$/)
+      // Task 7 fix round 1: npm's cache goes in the temp folder the spawner was given (none for Claude on Windows, which has
+      // no shell sandbox), never the real one in a test
+      const cache = path.join(dir, 'tmp', 'astera-npm-cache')
+      expect(await fs.stat(cache).then(() => true, () => false)).toBe(process.platform !== 'win32')
+      if (process.platform !== 'win32') expect(h.spawned[0].opts.env.npm_config_cache).toBe(cache.replace(/\\/g, '/'))
+      else expect(h.spawned[0].opts.env).not.toHaveProperty('npm_config_cache')
       const old = rig({ claudeVersion: version('2.1.305') })
       await expect(old.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_box' })).rejects.toThrow(
         /^SANDBOX_UNAVAILABLE: cli-too-old claude 2\.1\.305 2\.1\.306$/

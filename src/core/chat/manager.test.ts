@@ -1751,7 +1751,7 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
       const versions = Object.assign(() => o.version ?? '2.1.310', { warm: async () => {} })
       const claudeSandbox = claudeSandboxStart({
         platform: 'linux', profileDir, homeDir: profileDir, env: {}, tmpDir, files: statusLine, version: versions, uid: 1000,
-        gitGlobalExcludes: async () => null, log: () => {}
+        runGit: async () => null, log: () => {}
       })
       const spawned: Array<{ file: string; args: string[]; opts: ProcSpawnOptions }> = []
       const { createAdapter, handles } = makeAdapterFactory()

@@ -89,6 +89,14 @@ describe('index.ts prepares a roll on the chain’s agent profile', () => {
       new RegExp(String.raw`prepareSpawn: \(account, cwd, agentProfileId, sandbox, kind\) =>\s+${shared}, \.\.\.\(kind === 'chat' \? \{ chat: true \} : \{\}\) \}\)`)
     )
   })
+
+  // Task 7 fix round 1: a refused roll says why in the tab or the pane, from either coordinator, through the one `tell`
+  it('both coordinators are handed the same tell for a refused roll', () => {
+    const claude = index.slice(index.indexOf('  const rolling = new RollingCoordinator({'), index.indexOf('  const codexRolling = new CodexRollingCoordinator({'))
+    const codex = index.slice(index.indexOf('  const codexRolling = new CodexRollingCoordinator({'))
+    expect(claude).toMatch(/\n    tell: tellRollRefusal,/)
+    expect(codex).toMatch(/\n    tell: tellRollRefusal,/)
+  })
 })
 
 // Agent Profiles design §6, Task 6 fix round 1 (I2): the app answers its own UI's run-create and task-create, so its orch

@@ -815,7 +815,11 @@ export const en: Record<keyof typeof ko, string> = {
   'session.spawn.sandbox.gitLayout': "The work folder's git details could not be read, so it cannot start in the sandbox.",
   'session.spawn.sandbox.notPrepared': 'The session tried to start before its sandbox was prepared. Start it again.',
   'session.spawn.sandbox.cliTooOld': 'The sandbox works only on {cli} {min} or later. This one is {found}. Update the CLI.',
+  'session.spawn.sandbox.cliVersionUnknown': 'The {cli} version could not be read, so it cannot start in the sandbox.',
+  'session.spawn.sandbox.cliMissing': '{cli} was not found, so it cannot start in the sandbox.',
+  'session.spawn.sandbox.settingsWriteFailed': 'The sandbox settings file could not be written, so it cannot start. Check that the profile folder can be written.',
   'session.roll.sandbox.windowsSetup': 'Could not move to the {account} account: its Windows sandbox is not set up. Press Set up for it in Settings › Agent profiles.',
+  'session.roll.sandbox.refused': 'Could not move to the next account: {reason}',
   'session.spawn.failedWorktreeKept':
     'Failed to start session: {message} (the worktree “{name}” was kept — delete it from the Worktrees panel)',
   // Rolling-resume guard hit — tells the user the tab was just focused and their chosen options were dropped

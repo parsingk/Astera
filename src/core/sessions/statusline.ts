@@ -693,6 +693,11 @@ export class StatusLineManager {
    * (core/sandbox/claudeStart.ts), so a session without it reads exactly the bytes it always did, at the same path. From
    * then on every file rewritten gets its twin rewritten too. Resolves to 'write-failed' when a twin is not in place: a
    * session asked to be sandboxed is then not marked so (spawnConfig), and its manager refuses it (E5). Never throws.
+   *
+   * The app and the Host each write these same paths in the profile folder, each from its own home, environment and
+   * temp folder, as they already do the files the twins are made from. The Host is started with the app's environment,
+   * so the two write the same bytes; if they ever differ, a session reads the last one written, and the deny list, npm's
+   * cache and the macOS socket in it are still the same person's.
    */
   async ensureSandboxFiles(): Promise<SandboxFilesResult> {
     this.sandboxWanted = true
@@ -700,14 +705,31 @@ export class StatusLineManager {
     return this.writeSandboxTwins()
   }
 
+  /**
+   * macOS: the one address a sandboxed Claude session reaches the Host at, granted in its twin (`allowUnixSockets`) and
+   * put in its environment as ASTERA_HOST (core/sandbox/claudeStart.ts), since inside Claude's sandbox `$TMPDIR` is not
+   * the app's and the socket `astera` would derive from it is not the one granted. The person's own ASTERA_HOST when they
+   * set one (the address `astera` takes before deriving one), else where the Host listens for this profile (hostAddress,
+   * from this process's temp folder, as the app and the Host derive it). Null elsewhere: Linux's sandbox ignores per-path
+   * sockets, and Windows has no sandbox for Claude.
+   */
+  hostSocket(): string | null {
+    if (this.platform !== 'darwin') return null
+    const own = this.env.ASTERA_HOST
+    if (own) return own
+    return hostAddress({ profileDir: this.userDataDir, platform: this.platform, tmpDir: this.tmpDir, protocol: HOST_PROTOCOL }).address
+  }
+
   /** What a sandbox twin adds: the builder's settings, read from this process's home and environment, and on macOS the
-   *  Host's socket, where the Host listens for this profile (hostAddress, as the CLI derives it). */
+   *  Host's socket (hostSocket). Seatbelt matches the real path, and macOS keeps `/var` and `/tmp` as links into
+   *  `/private`, so a socket under either is granted in both spellings. */
   private sandboxPart(): SandboxPart {
     const denied = [...sensitiveLocations(this.platform, this.env, this.homeDir), ...credentialStoreDenies(this.platform, this.env, this.homeDir)]
     const s = claudeSandboxSettings({ platform: this.platform, denied, npmCache: npmCacheOf(this.tmpDir) })
-    if (this.platform !== 'darwin' || !s.sandbox) return s
-    const socket = hostAddress({ profileDir: this.userDataDir, platform: this.platform, tmpDir: this.tmpDir, protocol: HOST_PROTOCOL }).address
-    return { ...s, sandbox: { ...s.sandbox, network: { allowUnixSockets: [socket] } } }
+    const socket = this.hostSocket()
+    if (socket === null || !s.sandbox) return s
+    const real = /^\/(?:var|tmp)\//.test(socket) ? [`/private${socket}`] : []
+    return { ...s, sandbox: { ...s.sandbox, network: { allowUnixSockets: [socket, ...real] } } }
   }
 
   private twinOf(file: string): string {

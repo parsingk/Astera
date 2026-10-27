@@ -25,7 +25,7 @@ import { makeLimitProbe } from '../core/orchestration/exec/limitProbe'
 import { ensureShuttle, sessionCmdLink } from '../core/orchestration/exec/shuttle'
 import type { ChatManagerDeps, ChatOrchEnv } from '../core/chat/manager'
 import type { CodexWindowsReady, PreparedLayouts } from '../core/sandbox/prepared'
-import { claudeSandboxStart, type ClaudeSandboxStart } from '../core/sandbox/claudeStart'
+import { claudeSandboxStart, type ClaudeSandboxStart, type RunGit } from '../core/sandbox/claudeStart'
 import { binDirFor } from '../core/orchestration/cliInstall'
 import {
   preTrustWorkspace,
@@ -143,6 +143,12 @@ export interface HostSpawnerDeps {
   /** Test injection; defaults to asking the claude on this machine's PATH its version (cliVersionProbe), which a sandboxed
    *  Claude start needs. A test never runs the real one. */
   claudeVersion?: CliVersionProbe
+  /** Test injection; defaults to os.tmpdir(): where a sandboxed Claude session's npm cache is made, and on macOS where the
+   *  Host's socket is derived from. A test gives its own folder, so nothing is made in the real one. */
+  tmpDir?: string
+  /** Test injection; defaults to running git, which a sandboxed Claude start on Linux asks for the person's excludes file
+   *  (core/sandbox/claudeStart.ts). */
+  runGit?: RunGit
 }
 
 /** HostRollSpawner's three (prepareRollSpawn, rollSpawn, statusLinePayload) are the S6 roll's respawn
@@ -291,6 +297,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   // Windows readiness for a sandboxed Codex start (sandbox design §6), asked by this spawner's prepares and the Host's chat
   // sessions alike
   const codexWindowsReady = d.codexWindowsReady ?? askCodexWindowsReady
+  // The temp folder a sandboxed Claude session's npm cache and (macOS) the Host's socket are in
+  const tmpDir = d.tmpDir ?? os.tmpdir()
   // The rule core.ts uses for the app's StatusLineManager, so the two write the same settings files. On
   // win32 the app names the Host runtime's node.exe, which is what this Host runs from, so its own
   // executable is the same file — and one that is certain to be there while its sessions run, since a
@@ -311,7 +319,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
         ),
       // The sandbox's denied places are read from the person's home and the environment the Host's sessions inherit
       homeDir,
-      env: d.env
+      env: d.env,
+      tmpDir
     }
   )
   const ensured = once(() => statusLine.ensureFiles())
@@ -444,9 +453,10 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     profileDir,
     homeDir,
     env: d.env,
-    tmpDir: os.tmpdir(),
+    tmpDir,
     files: statusLine,
     version: d.claudeVersion ?? cliVersions,
+    ...(d.runGit ? { runGit: d.runGit } : {}),
     log
   })
   sessions.claudeSandbox = claudeSandbox

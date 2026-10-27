@@ -399,6 +399,8 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
   const claude = new RollingCoordinator({
     ...common,
     spawn: rollSpawn,
+    // A refused sandboxed roll's reason, as the codex coordinator's (Task 7 fix round 1)
+    tell,
     chosenModelOf: (id) => (isChat(id) ? chats!.chosenModelOf(id) : null),
     // A chat session writes no statusline (as in the app): its facts come in through the feed.
     readStatusPayload: safe('statusline read', (id: string) => (isChat(id) ? Promise.resolve(null) : d.spawner.statusLinePayload(id)), null),

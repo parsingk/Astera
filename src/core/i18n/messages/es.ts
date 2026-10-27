@@ -652,7 +652,11 @@ export const es: Catalog = {
   'session.spawn.sandbox.gitLayout': 'No se pudo leer la información de git de la carpeta de trabajo, así que no puede iniciarse en el sandbox.',
   'session.spawn.sandbox.notPrepared': 'La sesión intentó iniciarse antes de preparar su sandbox. Iníciela de nuevo.',
   'session.spawn.sandbox.cliTooOld': 'El sandbox solo funciona con {cli} {min} o posterior. Ahora es {found}. Actualice la CLI.',
+  'session.spawn.sandbox.cliVersionUnknown': 'No se pudo leer la versión de {cli}, así que no puede iniciarse en el sandbox.',
+  'session.spawn.sandbox.cliMissing': 'No se encontró {cli}, así que no puede iniciarse en el sandbox.',
+  'session.spawn.sandbox.settingsWriteFailed': 'No se pudo escribir el archivo de configuración del sandbox, así que no puede iniciarse. Compruebe que se puede escribir en la carpeta del perfil.',
   'session.roll.sandbox.windowsSetup': 'No se pudo pasar a la cuenta {account}: su sandbox de Windows no está configurado. Pulse Configurar para ella en Configuración › Perfiles de agente.',
+  'session.roll.sandbox.refused': 'No se pudo pasar a la siguiente cuenta: {reason}',
   'session.spawn.failedWorktreeKept':
     'No se pudo iniciar la sesión: {message} (el worktree "{name}" se conservó; elimínelo desde el panel Worktrees)',
   // Rolling-resume guard hit — tells the user the tab was just focused and their chosen options were dropped

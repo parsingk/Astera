@@ -1140,10 +1140,13 @@ and gcloud's settings, `~/.docker`, `~/.npmrc`, `~/.git-credentials` or `~/.kube
 `~/Library/Keychains` is closed too, and on Linux the session bus a secret service answers on. A Claude Code session,
 terminal or chat, gets Claude Code's own sandbox on macOS and Linux through its settings file, with the same limits:
 its commands cannot run outside it, and a Claude Code whose sandbox cannot start exits at once and says why in its tab;
-`astera` runs outside it, and on macOS a command can also reach the Host's socket from inside. On Linux its git reads
-an excludes file Astera writes (`<profile>/sandbox/excludes-<uid>`: the person's global excludes, then the names the
-sandbox keeps placeholders for, such as `.bashrc` and `.vscode`), so `git add -A` works. Claude Code has no sandbox on
-Windows: there the switch only keeps its file tools, not its shell, out of those folders. On Windows the Codex sandbox
+`astera` runs outside it. On macOS a command can also reach the Host's socket from inside: the sandbox lets it reach
+that one socket, and the session's `ASTERA_HOST` names it, since inside the sandbox `$TMPDIR` is not the one `astera`
+would derive the address from (an `ASTERA_HOST` the person set is kept, and it is the socket allowed). On Linux its git
+reads an excludes file Astera writes (`<profile>/sandbox/excludes-<uid>`: the person's own `core.excludesFile`, or git's
+default one, then the names the sandbox keeps placeholders for, such as `.bashrc` and `.vscode`), so `git add -A`
+works. Claude Code has no sandbox on Windows: there the switch only keeps its file tools, not its shell, out of those
+folders, and npm keeps its own cache. On Windows the Codex sandbox
 is Codex's elevated one, which keeps Credential Manager out, and the repository is named a safe directory for the
 account it runs as; a repository or home folder whose path holds a character cmd.exe reads as syntax (`" & | < > ^ %`)
 cannot be carried to it. Each Codex account's home must have the elevated sandbox set up once (Codex's
@@ -1154,12 +1157,14 @@ not take `--no-daemon`, `cli-too-old claude <found> 2.1.306` for an older Claude
 its version cannot be read, `cli-missing claude` when it is not there), `path-unsafe` for such a path, `git-layout`
 when the folder's git data could not be read, `windows-setup codex <accountId>` for an account whose Windows sandbox is
 not set up (or no longer works: setting up one account's home can leave another's stale), `windows-check-failed codex
-<accountId>` when Codex could not be asked about it (not there, too old for `doctor --json`, timed out), and
-`not-prepared` for a start that skipped the reading Astera does first (or whose Claude Code settings could not be
-written). A chain keeps the sandbox state it started with: the session a roll starts next is in the sandbox
-exactly when the first one was, whatever the switch says by then, and only a session started afresh reads the switch
-again. A roll onto an account the sandbox refuses waits, as a roll does for any refusal, and says why, naming the
-account and where to set it up (Settings › Agent profiles): a terminal session in its tab, a chat in its pane. Like
+<accountId>` when Codex could not be asked about it (not there, too old for `doctor --json`, timed out),
+`settings-write-failed` when Claude Code's sandbox settings could not be written into the profile folder, and
+`not-prepared` for a start that skipped the reading Astera does first. A chain keeps the sandbox state it started
+with: the session a roll starts next is in the sandbox exactly when the first one was, whatever the switch says by
+then, and only a session started afresh reads the switch again. A roll onto an account the sandbox refuses waits, as a
+roll does for any refusal, and says why: a terminal session in its tab, a chat in its pane, naming the Codex account and
+where to set it up (Settings › Agent profiles) when its Windows sandbox is not set up, and otherwise in the refusal's
+own words (a Claude Code chain's after "Could not move to the next account"). Like
 every profile change, switching it from inside an agent session is refused with 5. A profile store that cannot be read
 refuses a session that names a profile, with 6 and the file to repair, rather than starting it without the profile.
 

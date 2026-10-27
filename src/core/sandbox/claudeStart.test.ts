@@ -43,22 +43,44 @@ describe('the git excludes a sandboxed Claude session on Linux gets', () => {
   // Appended after the person's own GIT_CONFIG_* entries, the way codexSandboxEnv appends: theirs stay
   it('reaches git through GIT_CONFIG after the entries the session inherits, on Linux only', () => {
     const inherited = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.autocrlf', GIT_CONFIG_VALUE_0: 'false' }
-    expect(claudeSandboxEnv({ platform: 'linux', tmpDir: '/t', excludesFile: '/p/sandbox/excludes-1000', env: inherited })).toEqual({
+    expect(claudeSandboxEnv({ platform: 'linux', tmpDir: '/t', excludesFile: '/p/sandbox/excludes-1000', hostSocket: null, env: inherited })).toEqual({
       npm_config_cache: '/t/astera-npm-cache',
       GIT_CONFIG_COUNT: '2',
       GIT_CONFIG_KEY_1: 'core.excludesFile',
       GIT_CONFIG_VALUE_1: '/p/sandbox/excludes-1000'
     })
-    expect(claudeSandboxEnv({ platform: 'linux', tmpDir: '/t', excludesFile: '/p/x', env: {} })).toEqual({
+    expect(claudeSandboxEnv({ platform: 'linux', tmpDir: '/t', excludesFile: '/p/x', hostSocket: null, env: {} })).toEqual({
       npm_config_cache: '/t/astera-npm-cache',
       GIT_CONFIG_COUNT: '1',
       GIT_CONFIG_KEY_0: 'core.excludesFile',
       GIT_CONFIG_VALUE_0: '/p/x'
     })
     // No file (it could not be written): the person's global excludes stay git's own
-    expect(claudeSandboxEnv({ platform: 'linux', tmpDir: '/t', excludesFile: null, env: inherited })).toEqual({ npm_config_cache: '/t/astera-npm-cache' })
-    for (const platform of ['darwin', 'win32'] as const)
-      expect(claudeSandboxEnv({ platform, tmpDir: '/t', excludesFile: '/p/x', env: inherited })).toEqual({ npm_config_cache: '/t/astera-npm-cache' })
+    expect(claudeSandboxEnv({ platform: 'linux', tmpDir: '/t', excludesFile: null, hostSocket: null, env: inherited })).toEqual({ npm_config_cache: '/t/astera-npm-cache' })
+    expect(claudeSandboxEnv({ platform: 'darwin', tmpDir: '/t', excludesFile: '/p/x', hostSocket: null, env: inherited })).toEqual({ npm_config_cache: '/t/astera-npm-cache' })
+  })
+})
+
+// Task 7 fix round 1: inside Claude's sandbox on macOS `$TMPDIR` is not the app's, so `astera` would derive another socket
+// path than the one granted; the session is told the granted address instead, and a person's own ASTERA_HOST is kept
+describe('where a sandboxed Claude session on macOS finds the Host', () => {
+  it('is told the address it is granted, unless the person set their own', () => {
+    expect(claudeSandboxEnv({ platform: 'darwin', tmpDir: '/t', excludesFile: null, hostSocket: '/var/f/T/astera-host-k-v4/sock', env: {} })).toEqual({
+      npm_config_cache: '/t/astera-npm-cache',
+      ASTERA_HOST: '/var/f/T/astera-host-k-v4/sock'
+    })
+    expect(claudeSandboxEnv({ platform: 'darwin', tmpDir: '/t', excludesFile: null, hostSocket: '/mine/sock', env: { ASTERA_HOST: '/mine/sock' } })).toEqual({
+      npm_config_cache: '/t/astera-npm-cache'
+    })
+    // An empty ASTERA_HOST counts as unset, as the CLI reads it
+    expect(claudeSandboxEnv({ platform: 'darwin', tmpDir: '/t', excludesFile: null, hostSocket: '/s', env: { ASTERA_HOST: '' } })).toMatchObject({ ASTERA_HOST: '/s' })
+    // Elsewhere nothing is planted: Linux's sandbox ignores per-path sockets, so excludedCommands is the route there
+    expect(claudeSandboxEnv({ platform: 'linux', tmpDir: '/t', excludesFile: null, hostSocket: '/s', env: {} })).not.toHaveProperty('ASTERA_HOST')
+  })
+
+  // Task 7 fix round 1: Claude on Windows has no shell sandbox, so npm keeps its own cache there
+  it('plants nothing for Claude on Windows', () => {
+    expect(claudeSandboxEnv({ platform: 'win32', tmpDir: 'C:/t', excludesFile: '/p/x', hostSocket: null, env: {} })).toEqual({})
   })
 })
 
@@ -77,6 +99,9 @@ describe('the Claude version a sandboxed start needs', () => {
   it('refuses a Claude whose version cannot be read, or that is not there', () => {
     expect(claudeSandboxBlocker(null)).toBe('SANDBOX_UNAVAILABLE: cli-version-unknown claude')
     expect(claudeSandboxBlocker(undefined)).toBe('SANDBOX_UNAVAILABLE: cli-missing claude')
+    // Task 7 fix round 1: each in its own words
+    expect(sandboxRefusalMessage(claudeSandboxBlocker(null)!)).toEqual({ key: 'session.spawn.sandbox.cliVersionUnknown', params: { cli: 'Claude Code' } })
+    expect(sandboxRefusalMessage(claudeSandboxBlocker(undefined)!)).toEqual({ key: 'session.spawn.sandbox.cliMissing', params: { cli: 'Claude Code' } })
   })
 })
 
@@ -95,28 +120,31 @@ describe('claudeSandboxStart', () => {
     const tmpDir = temp()
     const home = temp()
     const order: string[] = []
+    const gitCalls: Array<{ args: string[]; cwd: string; env: Record<string, string | undefined> }> = []
     const version = Object.assign(
       (cli: 'claude' | 'codex') => (order.push(`version ${cli}`), o.version === undefined ? '2.1.310' : o.version),
       { warm: async (cli: 'claude' | 'codex') => void order.push(`warm ${cli}`) }
     )
     const files = {
       ensureSandboxFiles: async () => (order.push('files'), o.files ?? ('ok' as const)),
-      sandboxChatArgs: (enforce: boolean) => ['--settings', enforce ? 'E.json' : 'S.json']
+      sandboxChatArgs: (enforce: boolean) => ['--settings', enforce ? 'E.json' : 'S.json'],
+      hostSocket: () => (o.platform === 'darwin' ? '/var/f/T/astera-host-k-v4/sock' : null)
     }
+    const env = { HOME: home, GIT_CONFIG_GLOBAL: '/somewhere/.gitconfig' }
     const logged: string[] = []
     const start = claudeSandboxStart({
       platform: o.platform ?? 'linux',
       profileDir,
       homeDir: home,
-      env: {},
+      env,
       tmpDir,
       files,
       version,
       uid: 1000,
-      gitGlobalExcludes: async () => (order.push('git'), o.configured ?? null),
+      runGit: async (args, opts) => (order.push('git'), gitCalls.push({ args, ...opts }), o.configured ?? null),
       log: (m) => logged.push(m)
     })
-    return { start, profileDir, tmpDir, home, order, logged }
+    return { start, profileDir, tmpDir, home, env, order, gitCalls, logged }
   }
 
   it('makes npm’s cache folder, and on Linux writes the excludes file the session’s git reads', async () => {
@@ -135,6 +163,9 @@ describe('claudeSandboxStart', () => {
     })
     // The version is asked first, then the settings are written
     expect(r.order).toEqual(['warm claude', 'version claude', 'files', 'git'])
+    // Task 7 fix round 1: the person's excludes file is git's effective one, asked with no scope, outside any repository
+    // (in the temp folder) and with the environment Astera inherited, so a GIT_CONFIG_GLOBAL or GIT_CONFIG_* of theirs counts
+    expect(r.gitCalls).toEqual([{ args: ['config', '--path', '--get', 'core.excludesFile'], cwd: r.tmpDir, env: r.env }])
     // A configured core.excludesFile is the one read; a person with none at all gets srt's lines alone
     const mine = path.join(temp(), 'mine')
     writeFileSync(mine, 'node_modules/\n')
@@ -146,15 +177,20 @@ describe('claudeSandboxStart', () => {
     expect(readFileSync(gitExcludesFileOf(none.profileDir, 1000), 'utf8')).toBe(gitExcludesText(''))
   })
 
-  it('writes no excludes file elsewhere than Linux', async () => {
-    for (const platform of ['darwin', 'win32'] as const) {
-      const r = rig({ platform })
-      await r.start.prepare()
-      expect(existsSync(path.join(r.profileDir, 'sandbox'))).toBe(false)
-      expect(r.order).not.toContain('git')
-      expect(r.start.env({})).toEqual({ npm_config_cache: npmCacheOf(r.tmpDir) })
-      expect(existsSync(npmCacheOf(r.tmpDir))).toBe(true)
-    }
+  it('writes no excludes file elsewhere than Linux, and on Windows no npm cache either', async () => {
+    const mac = rig({ platform: 'darwin' })
+    await mac.start.prepare()
+    expect(existsSync(path.join(mac.profileDir, 'sandbox'))).toBe(false)
+    expect(mac.order).not.toContain('git')
+    expect(mac.start.env({})).toEqual({ npm_config_cache: npmCacheOf(mac.tmpDir), ASTERA_HOST: '/var/f/T/astera-host-k-v4/sock' })
+    expect(existsSync(npmCacheOf(mac.tmpDir))).toBe(true)
+    // Task 7 fix round 1: Claude on Windows has no shell sandbox, so npm keeps its own cache and nothing is made for it
+    const win = rig({ platform: 'win32' })
+    await win.start.prepare()
+    expect(existsSync(path.join(win.profileDir, 'sandbox'))).toBe(false)
+    expect(win.order).not.toContain('git')
+    expect(win.start.env({})).toEqual({})
+    expect(existsSync(npmCacheOf(win.tmpDir))).toBe(false)
   })
 
   it('refuses an old Claude before anything is written', async () => {
@@ -165,9 +201,11 @@ describe('claudeSandboxStart', () => {
     expect(r.start.blocker()).toBe('SANDBOX_UNAVAILABLE: cli-too-old claude 2.1.305 2.1.306')
   })
 
-  it('refuses when the settings it needs could not be written, and says why in the log', async () => {
+  // Task 7 fix round 1: its own code and words, not not-prepared's "start it again"
+  it('refuses when the settings it needs could not be written, in words that say so', async () => {
     const r = rig({ files: 'write-failed' })
-    await expect(r.start.prepare()).rejects.toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
+    await expect(r.start.prepare()).rejects.toThrow(/^SANDBOX_UNAVAILABLE: settings-write-failed$/)
+    expect(sandboxRefusalMessage('SANDBOX_UNAVAILABLE: settings-write-failed')).toEqual({ key: 'session.spawn.sandbox.settingsWriteFailed' })
     expect(r.logged.join('\n')).toMatch(/settings/)
   })
 

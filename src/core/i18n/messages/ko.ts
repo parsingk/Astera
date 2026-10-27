@@ -841,8 +841,13 @@ export const ko = {
   'session.spawn.sandbox.gitLayout': '작업 폴더의 git 정보를 읽지 못해 sandbox로 시작할 수 없습니다.',
   'session.spawn.sandbox.notPrepared': 'sandbox 준비가 끝나기 전에 시작하려 했습니다. 다시 시작해 주세요.',
   'session.spawn.sandbox.cliTooOld': 'sandbox는 {cli} {min} 이상에서만 쓸 수 있습니다. 지금은 {found} 입니다. CLI를 업데이트해 주세요.',
+  'session.spawn.sandbox.cliVersionUnknown': '{cli} 버전을 읽지 못해 sandbox로 시작할 수 없습니다.',
+  'session.spawn.sandbox.cliMissing': '{cli}를 찾지 못해 sandbox로 시작할 수 없습니다.',
+  'session.spawn.sandbox.settingsWriteFailed': 'sandbox 설정 파일을 쓰지 못해 시작할 수 없습니다. 프로필 폴더에 쓸 수 있는지 확인해 주세요.',
   // A roll refused for the sandbox (core/rolling/codexCoordinator.ts): the line in the tab, or the chat's notice
   'session.roll.sandbox.windowsSetup': '{account} 계정은 Windows sandbox가 설정되지 않아 넘어가지 못했습니다. 설정 › 에이전트 프로필에서 이 계정의 설정하기를 눌러 주세요.',
+  // A Claude roll refused for the sandbox (core/rolling/claudeCoordinator.ts): {reason} is the refusal's own sentence
+  'session.roll.sandbox.refused': '다음 계정으로 넘어가지 못했습니다: {reason}',
   'session.spawn.failedWorktreeKept':
     '세션 시작 실패: {message} (worktree "{name}"는 남아 있으니 Worktrees 패널에서 삭제하세요)',
   // Rolling-resume guard hit — tells the user the tab was just focused and their chosen options were dropped

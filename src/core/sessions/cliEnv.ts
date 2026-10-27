@@ -30,6 +30,9 @@ export const MANAGED_ENV_KEYS = [
   'ASTERA_GATEWAY_GRANT',
   // Where the Host's loopback endpoint is, for a session whose sandbox cannot open the Host's pipe (sandbox design §6)
   'ASTERA_LOOPBACK'
+  // ASTERA_HOST is not here, though a sandboxed Claude session on macOS is given one (core/sandbox/claudeStart.ts): it is
+  // first the person's own override, which every session keeps, and the one planted is only ever where the person set
+  // none, as the address `astera` would derive outside the sandbox
 ] as const
 
 /**

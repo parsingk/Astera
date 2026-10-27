@@ -465,7 +465,7 @@ describe('createHostRolling — chat chains (chat takeover, lifts R20)', () => {
       onRollHeard: (e) => heard.push(e),
       ...(over.chatNotice ? { chatNotice: over.chatNotice } : {})
     })
-    const deps = captured.deps[before] as Deps
+    const deps = captured.deps[before] as Deps & { tell?: (sessionId: string, reason: unknown) => void }
     const codexDeps = captured.codexDeps[codexBefore] as { tell?: (sessionId: string, reason: unknown) => void }
     disposers.push(() => rolling.dispose())
     return {
@@ -478,7 +478,8 @@ describe('createHostRolling — chat chains (chat takeover, lifts R20)', () => {
       mayActDep: (id: string) => deps.mayAct(id),
       spawnDep: (o: RollSpawnOpts) => deps.spawn(o),
       sendDep: (channel: 'session:rolled' | 'session:rollState', payload: unknown) => deps.send(channel, payload),
-      tellDep: (id: string, reason: unknown) => codexDeps.tell?.(id, reason)
+      tellDep: (id: string, reason: unknown) => codexDeps.tell?.(id, reason),
+      claudeTell: deps.tell
     }
   }
   const disposers: Array<() => void> = []
@@ -532,6 +533,15 @@ describe('createHostRolling — chat chains (chat takeover, lifts R20)', () => {
     const h = harness({ chats: fakeChats(), chatMayAct: () => true, chatNotice: (id, n) => notices.push([id, n]) })
     const reason = { key: 'session.roll.sandbox.windowsSetup', params: { account: 'D' } }
     h.tellDep('c1', reason)
+    expect(notices).toEqual([['c1', { key: 'rollRefused', reason }]])
+  })
+  // Task 7 fix round 1: a Claude chain's refused roll is told the same way, through the same `tell`
+  it('hands the Claude coordinator the same tell, so its refused roll reaches the pane too', () => {
+    const notices: Array<[string, unknown]> = []
+    const h = harness({ chats: fakeChats(), chatMayAct: () => true, chatNotice: (id, n) => notices.push([id, n]) })
+    const reason = { key: 'session.roll.sandbox.refused', params: { reason: { key: 'session.spawn.sandbox.cliMissing', params: { cli: 'Claude Code' } } } }
+    expect(h.claudeTell).toBeTypeOf('function')
+    h.claudeTell!('c1', reason)
     expect(notices).toEqual([['c1', { key: 'rollRefused', reason }]])
   })
   // Sandbox design §6: a chat chain started in the sandbox respawns in it (prepareRollSpawn read its folder first)

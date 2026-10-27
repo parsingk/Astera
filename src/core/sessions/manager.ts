@@ -510,7 +510,8 @@ export class SessionManager {
       // report queue and for the state file it falls back to, and an address does not say which
       // profile the Host behind it uses. So the folder travels, and the CLI derives the address from
       // it exactly as this app does (`hostAddress`). `ASTERA_HOST` stays what it was — an override for
-      // pointing at one specific Host.
+      // pointing at one specific Host — except in a sandboxed Claude session on macOS, which is given the
+      // address its sandbox lets it reach when the person set none (core/sandbox/claudeStart.ts, above).
       env.ASTERA_PROFILE_DIR = opts.orchEnv.profileDir
       env.ASTERA_SKILLS = opts.orchEnv.skillsPath
       env.ASTERA_SESSION = id

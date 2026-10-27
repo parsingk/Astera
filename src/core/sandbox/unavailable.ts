@@ -11,11 +11,12 @@ export function sandboxUnavailable(code: string): Error {
 // The codes a start refuses with, wherever the error text was carried (the app's IPC wraps it, the Host's answer quotes
 // it, JSON may close it): `windows-setup codex <account>` (that account's Windows sandbox is not set up,
 // windowsReadiness.ts), `windows-check-failed codex <account>` (Codex could not be asked about it), `codex-daemon codex`,
-// `path-unsafe`, `git-layout`, `not-prepared`, and the version floor's `cli-too-old <cli> <found> <min>` (the Enforce
+// `path-unsafe`, `git-layout`, `not-prepared`, `settings-write-failed` (Claude's sandbox settings, claudeStart.ts), and the
+// version floor's `cli-too-old <cli> <found> <min>`, `cli-version-unknown <cli>` and `cli-missing <cli>` (the Enforce
 // check's shape, core/sessions/cliVersion.ts). Versions take dots; an account id is `[\w-]+` only, so a quote, a brace or
 // a full stop after it is not read as part of it.
 const REFUSAL =
-  /SANDBOX_UNAVAILABLE:\s*(windows-setup|windows-check-failed|codex-daemon|path-unsafe|git-layout|not-prepared|cli-too-old)(?:\s+(claude|codex))?(?:\s+([\w.-]+)(?:\s+([\w.-]+))?)?/
+  /SANDBOX_UNAVAILABLE:\s*(windows-setup|windows-check-failed|codex-daemon|path-unsafe|git-layout|not-prepared|settings-write-failed|cli-too-old|cli-version-unknown|cli-missing)(?:\s+(claude|codex))?(?:\s+([\w.-]+)(?:\s+([\w.-]+))?)?/
 const CLI_NAMES = { claude: 'Claude Code', codex: 'Codex' } as const
 const accountIdIn = (s: string | undefined): string | null => (s ? (/^[\w-]+/.exec(s)?.[0] ?? null) : null)
 
@@ -45,6 +46,12 @@ export function sandboxRefusalMessage(raw: string): Message | null {
       return { key: 'session.spawn.sandbox.gitLayout' }
     case 'not-prepared':
       return { key: 'session.spawn.sandbox.notPrepared' }
+    case 'settings-write-failed':
+      return { key: 'session.spawn.sandbox.settingsWriteFailed' }
+    case 'cli-version-unknown':
+      return { key: 'session.spawn.sandbox.cliVersionUnknown', params: { cli: CLI_NAMES[(m[2] ?? 'claude') as keyof typeof CLI_NAMES] } }
+    case 'cli-missing':
+      return { key: 'session.spawn.sandbox.cliMissing', params: { cli: CLI_NAMES[(m[2] ?? 'claude') as keyof typeof CLI_NAMES] } }
     default:
       return {
         key: 'session.spawn.sandbox.cliTooOld',

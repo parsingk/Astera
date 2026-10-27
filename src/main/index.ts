@@ -62,7 +62,7 @@ import { DesktopNotifier } from './desktopNotifier'
 import { createAttentionState } from '../core/sessions/attention'
 import { createPendingPromptState } from '../core/sessions/pendingPrompt'
 import { CodexRolloutWatcher } from '../core/sessions/codexRolloutWatcher'
-import { t } from '../core/i18n'
+import { t, type Message } from '../core/i18n'
 import { loadPolicy, nextCheckDelayMs, parsePolicyUrl, shouldApplyCampaign } from './updatePolicy'
 import {
   NOTHING_STAGED,
@@ -1008,6 +1008,13 @@ app.whenReady().then(async () => {
       rememberChat: (x, p) => core!.chat.remember(x, p),
       rememberPty: (x, p) => core!.sessions.remember(x, p)
     })
+  /** Why a roll waits, when its respawn would start without the sandbox the chain runs in, for both coordinators: one line
+   *  in the terminal tab, as output, in the app's language (the Host's twin writes its pty's ring, host/rolling.ts); for a
+   *  chat, the chat's notice, which its pane words. */
+  const tellRollRefusal = (id: string, reason: Message): void => {
+    if (core!.chat.has(id)) core!.chat.notice(id, { key: 'rollRefused', reason })
+    else core!.sessions.say(id, `\r\n[Astera] ${t(core!.lang, reason.key, reason.params)}\r\n`)
+  }
   const rolling = new RollingCoordinator({
     // A chain's session may be a pty or a chat session (slice 4c); the coordinator says which through
     // `kind` and the rest is routed here, so neither coordinator imports a manager. A chat respawn
@@ -1034,6 +1041,8 @@ app.whenReady().then(async () => {
     // thread: an offline drive fails the roll here, where it is rescheduled, instead of freezing every
     // window at the spawn.
     prepareSpawn: (account, cwd, agentProfileId, sandbox) => core!.sessions.prepare({ account, cwd, ...(agentProfileId ? { agentProfileId } : {}), ...(sandbox ? { sandbox: true } : {}) }),
+    // Why a roll waits when the sandbox refused its respawn (Task 7 fix round 1), as the codex coordinator's
+    tell: tellRollRefusal,
     // What the roll above carries: the model the person picked, read off the session being rolled
     // before it is killed. Terminal chains never reach this — the manager only knows chat sessions.
     chosenModelOf: (id) => core!.chat.chosenModelOf(id),
@@ -1158,13 +1167,7 @@ app.whenReady().then(async () => {
         /* a write failure must not break the chain — the prompt just stays up */
       }
     },
-    // Why a roll waits, when its respawn would start without the sandbox the chain runs in: one line in the terminal tab,
-    // as output, in the app's language (the Host's twin writes its pty's ring, host/rolling.ts); for a chat, the chat's
-    // notice, which its pane words
-    tell: (id, reason) => {
-      if (core!.chat.has(id)) core!.chat.notice(id, { key: 'rollRefused', reason })
-      else core!.sessions.say(id, `\r\n[Astera] ${t(core!.lang, reason.key, reason.params)}\r\n`)
-    },
+    tell: tellRollRefusal,
     getAccount: (id) => {
       try {
         return core!.accounts.get(id)
