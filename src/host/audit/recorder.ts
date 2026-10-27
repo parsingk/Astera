@@ -13,6 +13,9 @@
 // (`invalidate`); a read that failed is not kept. `record` returns at once and never throws: whatever goes wrong is
 // logged and costs that call.
 import { randomBytes } from 'node:crypto'
+import { existsSync } from 'node:fs'
+import path from 'node:path'
+import { profilePaths } from '../../core/profile/paths'
 import { redactTarget, resolveAction, type ResolveCall, type ResolvedAction } from '../../core/audit/resolve'
 import { appendRecords, auditDayStopped, type AuditRecord, type AuditSource } from '../../core/audit/store'
 import { isObserving, type AuditMode } from '../../core/audit/policy'
@@ -55,6 +58,8 @@ export interface SessionFacts {
   agentProfileId?: string
   /** What "inside the project" is measured against. */
   cwd: string
+  /** Started in Enforce (the note's `enforced`): its calls ran past the blocking hook, which proves it ran. */
+  enforced?: true
 }
 
 export interface DispatchIds {
@@ -89,6 +94,11 @@ export interface AuditEvent {
    *  hookShellAfter): its relative paths are read from there, and inside
    *  the project is still measured against the session's folder (resolve.ts `ResolveCall.base`). */
   cwd?: string
+  /** A call the Enforce hook stopped: the rule that stopped it (enforce design §5). */
+  blockedBy?: string
+  /** What the Enforce hook resolved the call to, kept as it is: the resolver is not asked again, and the call's input
+   *  was never handed over. */
+  resolved?: Pick<ResolvedAction, 'action' | 'target' | 'confidence' | 'insideProject'>
 }
 
 export interface AuditRecorder {
@@ -134,6 +144,12 @@ export function createAuditRecorder(d: {
   resolve?: (call: ResolveCall) => ResolvedAction
   /** Test injection; defaults to the store's. */
   append?: typeof appendRecords
+  /** Whether the Enforce hook ran in the session: its enforce file is there (the hook writes a line for every call it
+   *  sees). Defaults to that file's existence under the profile. */
+  hookRan?: (sessionId: string) => boolean
+  /** A session started in Enforce made a call no hook line proves was checked (enforce design §5, E5): told once per
+   *  session, so the Host stops it. */
+  onHookMissing?: (sessionId: string) => void
 }): AuditRecorder {
   const now = d.now ?? Date.now
   const resolve = d.resolve ?? resolveAction
@@ -168,6 +184,14 @@ export function createAuditRecorder(d: {
   let busy = false
   let queue: Promise<void> = Promise.resolve()
   const heardKeys = new Map<string, Set<string>>()
+  const hookRan = d.hookRan ?? ((id: string) => existsSync(path.join(profilePaths(d.profileDir).enforceEvents, `${id}.jsonl`)))
+  /** Enforced sessions whose hook was seen to run, and those told missing: each asked about once. */
+  const proven = new Set<string>()
+  const toldMissing = new Set<string>()
+  const remember = (s: Set<string>, id: string): void => {
+    s.add(id)
+    if (s.size > SESSIONS_KEPT) s.delete(s.values().next().value as string)
+  }
   /** The records whose Job, Run and Task are still being looked up, and the lookup each waits for (`bounded`). */
   const lookups = new WeakMap<AuditRecord, Promise<DispatchIds | null>>()
   const lookupWaitMs = d.lookupWaitMs ?? LOOKUP_WAIT_MS
@@ -277,9 +301,26 @@ export function createAuditRecorder(d: {
   const timeOf = (at: string | undefined): string =>
     new Date(at !== undefined && Number.isFinite(Date.parse(at)) ? Date.parse(at) : now()).toISOString()
 
-  const recordOf = (ev: AuditEvent, info: SessionFacts, at: string): AuditRecord => {
+  /** The call's action: as the Enforce hook resolved it, else the resolver's. */
+  const resolvedOf = (ev: AuditEvent, info: SessionFacts): ResolvedAction =>
+    ev.resolved ?? resolve({ provider: PROVIDER[ev.source], tool: ev.tool, input: ev.input, cwd: info.cwd, ...(ev.cwd !== undefined ? { base: ev.cwd } : {}) })
+
+  /** A call of a session started in Enforce, heard after it ran, with no line of its hook to show the hook saw it: the
+   *  session runs unchecked (its CLI skipped the hook, or could not run it), and is stopped. A call that runs nothing
+   *  (`other`: a note to itself, a plan) and a hosted web search are not asked of: no hook sees those. */
+  const checkProof = (ev: AuditEvent, info: SessionFacts, resolved: () => ResolvedAction): void => {
+    if (info.enforced !== true || ev.status === 'blocked' || !d.onHookMissing) return
+    if (proven.has(ev.sessionId) || toldMissing.has(ev.sessionId)) return
+    if (hookRan(ev.sessionId)) return remember(proven, ev.sessionId)
+    const r = resolved()
+    if (r.action === 'other' || (r.action === 'network.request' && r.target === 'web search')) return
+    remember(toldMissing, ev.sessionId)
+    d.log(`audit: session ${ev.sessionId} was started in Enforce and made a call its blocking hook never saw; it is stopped`)
+    d.onHookMissing(ev.sessionId)
+  }
+
+  const recordOf = (ev: AuditEvent, info: SessionFacts, at: string, r: ResolvedAction): AuditRecord => {
     const provider = PROVIDER[ev.source]
-    const r = resolve({ provider, tool: ev.tool, input: ev.input, cwd: info.cwd, ...(ev.cwd !== undefined ? { base: ev.cwd } : {}) })
     const found = d.dispatchOf(ev.sessionId, at)
     const late = found !== null && 'later' in found ? found : null
     const cut = r.commands !== undefined && r.commands.length > AUDIT_COMMANDS_KEPT
@@ -299,7 +340,8 @@ export function createAuditRecorder(d: {
       ...(r.insideProject !== undefined ? { insideProject: r.insideProject } : {}),
       ...(r.commands !== undefined ? { commands: r.commands.slice(0, AUDIT_COMMANDS_KEPT) } : {}),
       confidence: cut ? 'unknown' : r.confidence,
-      status: ev.status
+      status: ev.status,
+      ...(ev.blockedBy !== undefined ? { blockedBy: ev.blockedBy } : {})
     }
     if (late) lookups.set(rec, bounded(ev.sessionId, late))
     return rec
@@ -319,6 +361,10 @@ export function createAuditRecorder(d: {
         // there is still kept
         const info = d.sessionInfo(ev.sessionId)
         if (info === null) return
+        // Resolved once, and only when needed: the proof is asked before it, a repeat and a stopped day never resolve
+        let r: ResolvedAction | undefined
+        const resolved = (): ResolvedAction => (r ??= resolvedOf(ev, info))
+        checkProof(ev, info, resolved)
         if (ev.dedupeKey !== undefined && heard(ev.sessionId, ev.dedupeKey)) return
         const at = timeOf(ev.at)
         // A day the store stopped at its size keeps no record: its calls are not resolved or looked up either
@@ -330,7 +376,7 @@ export function createAuditRecorder(d: {
           dropped += 1
           return
         }
-        pending.push(recordOf(ev, info, at))
+        pending.push(recordOf(ev, info, at, resolved()))
         if (!busy) {
           busy = true
           enqueue(flush)
@@ -382,7 +428,13 @@ export function registrySessionFacts(d: { ptys: { list(): PtyEntry[] }; procs: {
     const cwd = text('cwd')
     if (accountId === null || cwd === null) return null
     const agentProfileId = agentProfileIdOf(restore)
-    return { kind: terminal ? 'terminal' : 'chat', accountId, ...(agentProfileId !== undefined ? { agentProfileId } : {}), cwd }
+    return {
+      kind: terminal ? 'terminal' : 'chat',
+      accountId,
+      ...(agentProfileId !== undefined ? { agentProfileId } : {}),
+      cwd,
+      ...(restore.enforced === true ? { enforced: true as const } : {})
+    }
   }
 }
 

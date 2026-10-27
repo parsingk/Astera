@@ -866,6 +866,27 @@ describe('PtyRegistry ring, live terminal and replay (Phase 8)', () => {
     expect(heard).toEqual(['a:1:data', 'a:2:resize', 'a:3:exit'])
   })
 
+  // Enforce (enforce design §5): the Host says in the tab why it stops a session, and an app attaching later sees it
+  it('says Astera’s own line in a pty’s output, replayed like the pty’s, and nothing once it ended', async () => {
+    const { r, open } = made()
+    const data: string[] = []
+    const events: string[] = []
+    r.onData((id, d) => data.push(`${id}:${d}`))
+    r.onEvent((id, e) => events.push(`${id}:${e.seq}:${e.kind}`))
+    const p = open('a')
+    p.emit('hi')
+    r.say('a', '\r\n[Astera] stopped\r\n')
+    expect(data).toEqual(['a:hi', 'a:\r\n[Astera] stopped\r\n'])
+    expect(events).toEqual(['a:1:data', 'a:2:data'])
+    expect(r.buffer('a')).toBe('hi\r\n[Astera] stopped\r\n')
+    const replay = await r.replayFrom('a', { fromSeq: 1, bootId: 'boot-a' })
+    expect(replay).not.toBe('behind')
+    p.exit(0)
+    r.say('a', 'late')
+    r.say('nope', 'x')
+    expect(data).toHaveLength(2)
+  })
+
   it('buffer keeps its meaning: the output while alive, empty once ended', () => {
     const { r, open } = made()
     const p = open('a')

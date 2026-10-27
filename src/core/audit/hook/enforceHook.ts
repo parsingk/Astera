@@ -54,10 +54,17 @@ export function runEnforceHook(a: {
 
   if (a.sessionId !== undefined && a.sessionId !== '') {
     const id = typeof payload.tool_use_id === 'string' ? payload.tool_use_id : null
-    const line: Record<string, unknown> = { at: a.now(), tool, id }
+    // Whose CLI it was, so the Host files a stopped call under that CLI's hook (host/audit/sources.ts)
+    const line: Record<string, unknown> = { at: a.now(), provider: a.provider, tool, id }
     if (v.deny) {
       const r = resolveAction(call)
-      Object.assign(line, { blocked: v.ruleId, action: r.action, target: r.target })
+      Object.assign(line, {
+        blocked: v.ruleId,
+        action: r.action,
+        target: r.target,
+        confidence: r.confidence,
+        ...(r.insideProject !== undefined ? { insideProject: r.insideProject } : {})
+      })
     }
     try {
       a.append(path.join(a.profileDir, 'enforce', `${a.sessionId}.jsonl`), JSON.stringify(line) + '\n')

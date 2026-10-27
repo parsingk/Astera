@@ -1297,13 +1297,14 @@ describe('Enforce in chat sessions', () => {
   })
   const make = (policyMode: 'compatibility' | 'observe' | 'enforce', args: string[] | null, blocker: string | null = null) => {
     const factory = vi.fn((_f: string, _a: string[], _o: ProcSpawnOptions) => new FakeProc())
+    const adapters = makeAdapterFactory()
     const deps = {
       factory, descriptors: makeDescriptors('linux'), homeDir: '/home/t', platform: 'linux' as const, version: '1', log: () => {},
-      createAdapter: makeAdapterFactory().createAdapter,
+      createAdapter: adapters.createAdapter,
       capabilities: { get: () => caps(policyMode), refresh: async () => {} },
       enforce: { args: () => args, blocker: () => blocker }
     }
-    return { factory, manager: new ChatSessionManager(deps) }
+    return { factory, handles: adapters.handles, manager: new ChatSessionManager(deps) }
   }
 
   it('a Claude chat started in enforce gets the chat enforce settings and is marked enforced', () => {
@@ -1330,6 +1331,18 @@ describe('Enforce in chat sessions', () => {
     const { factory, manager } = make('enforce', ['--settings', '/p/x.json'], 'ENFORCE_UNAVAILABLE: cli-too-old claude 2.1.300 2.1.306')
     expect(() => manager.spawn({ account: claudeAccount, cwd: '/p' })).toThrow('ENFORCE_UNAVAILABLE: cli-too-old claude 2.1.300 2.1.306')
     expect(factory).not.toHaveBeenCalled()
+  })
+
+  it('stops a chat with the reason as its last error, which its subscribers hear', () => {
+    const { handles, manager } = make('enforce', ['--settings', '/p/x.json'])
+    const info = manager.spawn({ account: claudeAccount, cwd: '/p' })
+    const heard: unknown[] = []
+    manager.subscribe((id, e) => heard.push([id, e]))
+    manager.stop(info.id, 'The blocking hook did not run in this session, so the session was stopped.')
+    expect(heard).toContainEqual([info.id, { type: 'error', message: 'The blocking hook did not run in this session, so the session was stopped.' }])
+    expect(handles[0].killCalls).toBe(1)
+    // An id it does not hold: nothing
+    expect(() => manager.stop('nope', 'x')).not.toThrow()
   })
 
   it('a chat started in enforce without the hook is refused', () => {

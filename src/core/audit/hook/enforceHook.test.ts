@@ -38,10 +38,15 @@ describe('runEnforceHook', () => {
 
   it('writes the proof and the blocked call to the session’s enforce file', () => {
     const file = path.join(PROFILE, 'enforce', 's1.jsonl')
-    expect(run(payload('Bash', { command: 'git status' })).lines).toEqual([[file, '{"at":1000,"tool":"Bash","id":"toolu_1"}\n']])
+    // Whose CLI, so the Host files it under that CLI's hook; a stopped call as the hook resolved it, which the Host keeps
+    // as it is (host/audit/sources.ts enforceBlockedCall)
+    expect(run(payload('Bash', { command: 'git status' })).lines).toEqual([[file, '{"at":1000,"provider":"claude","tool":"Bash","id":"toolu_1"}\n']])
     expect(run(payload('Bash', { command: 'git push origin main' })).lines).toEqual([
-      [file, '{"at":1000,"tool":"Bash","id":"toolu_1","blocked":"starter-git-remote-write","action":"git.remote.write","target":"git push"}\n']
+      [file, '{"at":1000,"provider":"claude","tool":"Bash","id":"toolu_1","blocked":"starter-git-remote-write","action":"git.remote.write","target":"git push","confidence":"high"}\n']
     ])
+    expect(JSON.parse(run(payload('Write', { file_path: 'D:/elsewhere/x.txt', content: 'x' })).lines[0][1])).toMatchObject({
+      blocked: 'starter-write-outside', action: 'filesystem.write', insideProject: false, confidence: 'exact'
+    })
     // No session: nothing to write, the decision still stands
     expect(run(payload('Bash', { command: 'git push' }), { sessionId: undefined })).toMatchObject({ lines: [], out: deny('Blocked by Astera Rules: git.remote.write is denied.') })
     // A write that fails does not change the decision

@@ -514,6 +514,14 @@ export class ChatSessionManager {
     live.adapter.kill()
   }
 
+  /** Ends the session with `message` as its last error, which every subscriber hears first (the Host's Enforce
+   *  hook-missing, enforce design §5): the pane says why it ended. Unknown id: no-op, as `kill`. */
+  stop(id: string, message: string): void {
+    if (!this.sessions.has(id)) return
+    this.handleEvent(id, { type: 'error', message })
+    this.kill(id)
+  }
+
   /** Writes info.title and the process's own note, returning the stored title — or null for an
    *  unknown id. Unlike the pty SessionManager's rename, there is no normalizeSessionTitle: the brief
    *  for chat sessions does not ask for one, so the title is stored exactly as given. */

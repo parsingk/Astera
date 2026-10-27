@@ -11,7 +11,9 @@ import { agentProfileInUse, createHostAgentProfiles } from './agentProfiles/comm
 import { createHostPolicies } from './audit/policyCommands'
 import { createHostAudit } from './audit/auditCommands'
 import { createAuditRecorder, dispatchOfWithTurns, registrySessionFacts } from './audit/recorder'
-import { createAuditSources } from './audit/sources'
+import { createAuditSources, pruneEnforceFiles } from './audit/sources'
+import { profilePaths } from '../core/profile/paths'
+import { t } from '../core/i18n'
 import { openTokenStore } from './tokens/store'
 import { createTokenSources, tokenOwnerOf } from './tokens/sources'
 import { readAuditPolicy } from '../core/audit/policy'
@@ -570,13 +572,31 @@ async function main(): Promise<void> {
   // it does not end it). The mode is read through readAuditPolicy, which throws on a file it cannot read
   // cleanly, so the recorder keeps only a clean read (a missing file is compatibility); the copy of a damaged one is
   // the policies commands' to keep.
+  // Enforce (enforce design §5, E5): a session started in Enforce whose calls arrive with no line of its blocking hook
+  // runs unchecked, so it is stopped, and its tab says why first, in the app's language: a terminal's in its own output
+  // (replayed to an app that attaches later), a chat's as its last error. The chats are the rolling's, made below.
+  let stopChat: ((sessionId: string, message: string) => void) | null = null
+  const stopUnhooked = (sessionId: string): void => {
+    const sentence = t(wiring ? wiring.checks.langNow() : 'en', 'session.spawn.enforce.hookMissing')
+    const ptyId = registry.sessionPty(sessionId)
+    if (ptyId !== null) {
+      registry.say(ptyId, `\r\n[Astera] ${sentence}\r\n`)
+      registry.kill(ptyId)
+      return
+    }
+    stopChat?.(sessionId, sentence)
+  }
   const auditRecorder = createAuditRecorder({
     profileDir,
     mode: async () => (await readAuditPolicy(profileDir, { keepDamaged: false }))?.mode ?? 'compatibility',
     sessionInfo: registrySessionFacts({ ptys: registry, procs }),
     dispatchOf: dispatchOfWithTurns(() => orch.state(), tokenSources),
-    log: (m) => log.write(m)
+    log: (m) => log.write(m),
+    onHookMissing: (sessionId) => stopUnhooked(sessionId)
   })
+  // The enforce files of an earlier Host's sessions, which ended with it: only the files of sessions alive stay, so a
+  // session's file holds only its own calls. Before any session opens.
+  await pruneEnforceFiles(profilePaths(profileDir).enforceEvents, new Set(registry.liveEntries().flatMap((e) => (e.meta ? [e.meta.id] : []))))
   // Its sources (audit/sources.ts): the observed Claude sessions' audit files in hook-events (their own watcher, apart
   // from the rolling's), the chat processes' lines and the Codex rollouts the pty notes name, followed for the sessions
   // started observed. Before any pty or process opens, so every session's start is heard.
@@ -585,6 +605,7 @@ async function main(): Promise<void> {
     ptys: registry,
     procs,
     hookEventsDir: hookEventsDirIn(profileDir),
+    enforceDir: profilePaths(profileDir).enforceEvents,
     log: (m) => log.write(m)
   })
 
@@ -632,6 +653,8 @@ async function main(): Promise<void> {
           }
         })
       : null
+  // Enforce: a chat whose blocking hook did not run is stopped with the reason as its last error (stopUnhooked above)
+  if (rollingWiring) stopChat = (sessionId, message) => rollingWiring.chats.stop(sessionId, message)
 
   // **The Host's Slack** (Slack in the Host, spec §3): slack.json read only, one notifier, one inbox, and
   // the socket held only while no attached app keeps Slack (P4). **Only with a spawner and the SDK**:

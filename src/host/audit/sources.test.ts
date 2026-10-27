@@ -10,7 +10,7 @@ import { queryRecords, type AuditRecord } from '../../core/audit/store'
 import { decide, STARTER_POLICY } from '../../core/audit/policy'
 import type { PtyEntry, PtyMeta } from '../../core/host/protocol'
 import { createAuditRecorder, registrySessionFacts, type AuditEvent } from './recorder'
-import { claudeChatCalls, codexChatCall, codexRolloutCalls, createAuditSources, hookCall, hookShellAfter } from './sources'
+import { claudeChatCalls, codexChatCall, codexRolloutCalls, createAuditSources, hookCall, hookShellAfter, pruneEnforceFiles } from './sources'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -130,6 +130,7 @@ async function sourcesFor(o: {
   procs?: ReturnType<typeof fakeRegistry>
   now?: () => number
   hookEventsDir?: string
+  enforceDir?: string
 }) {
   const hookEventsDir = o.hookEventsDir ?? (await tempDir())
   const sources = createAuditSources({
@@ -137,6 +138,7 @@ async function sourcesFor(o: {
     ptys: o.ptys ?? fakeRegistry(),
     procs: o.procs ?? fakeRegistry(),
     hookEventsDir,
+    ...(o.enforceDir ? { enforceDir: o.enforceDir } : {}),
     log: () => {},
     every: () => () => {},
     watch: (() => ({ on: () => {}, close: () => {} })) as never,
@@ -947,5 +949,95 @@ describe('the Codex rollout source', () => {
     await sources.poll()
     sources.dispose()
     expect(events).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Enforce (enforce design §5): what the blocking hook stopped never ran, so no source after the call hears it; the hook's
+// own file for the session says so, and the proof that it ran
+
+describe('the enforce file source', () => {
+  /** A line as the hook writes it (core/audit/hook/enforceHook.ts). */
+  const ran = (id: string, provider = 'claude', tool = 'Read') => ({ at: T0, provider, tool, id })
+  const blocked = (id: string, provider = 'claude', at = T0 + 1000) => ({
+    at, provider, tool: 'Bash', id, blocked: 'starter-git-remote-write', action: 'git.remote.write', target: 'git push', confidence: 'high'
+  })
+  const ENFORCED = { ...OBSERVED, enforced: true }
+
+  it('turns a blocked line of the enforce file into a blocked event with its id', async () => {
+    const ptys = fakeRegistry()
+    const procs = fakeRegistry()
+    const { events, recorder } = capture()
+    const enforceDir = await tempDir()
+    const { sources } = await sourcesFor({ recorder, ptys, procs, enforceDir })
+    ptys.open('pty1', note('session', 'sess_e', ENFORCED))
+    ptys.open('pty2', note('session', 'sess_o', OBSERVED))
+    await fs.writeFile(path.join(enforceDir, 'sess_e.jsonl'), lineOf(ran('toolu_1')) + lineOf(blocked('toolu_2')) + '{"at":1,"half')
+    await fs.writeFile(path.join(enforceDir, 'sess_o.jsonl'), lineOf(blocked('toolu_9')))
+    await sources.poll()
+    expect(events).toEqual([
+      {
+        sessionId: 'sess_e', source: 'claude-hook', tool: 'Bash', input: {}, status: 'blocked', blockedBy: 'starter-git-remote-write',
+        dedupeKey: 'toolu_2', at: iso(T0 + 1000), resolved: { action: 'git.remote.write', target: 'git push', confidence: 'high' }
+      }
+    ])
+    // Each line once; a line the hook had not finished is read once it is whole
+    await fs.appendFile(path.join(enforceDir, 'sess_e.jsonl'), '"}\n' + lineOf(blocked('toolu_3')))
+    await sources.poll()
+    expect(events.map((e) => e.dedupeKey)).toEqual(['toolu_2', 'toolu_3'])
+    // A Codex chat's is the Codex hook's
+    procs.open('proc1', note('chat', 'sess_x', { ...ENFORCED, provider: 'codex' }))
+    await fs.writeFile(path.join(enforceDir, 'sess_x.jsonl'), lineOf(blocked('exec-1', 'codex')))
+    await sources.poll()
+    expect(events[2]).toMatchObject({ sessionId: 'sess_x', source: 'codex-hook', status: 'blocked', dedupeKey: 'exec-1' })
+    sources.dispose()
+    expect(ptys.listeners() + procs.listeners()).toBe(0)
+  })
+
+  it('hands the blocked call once, never the provider’s report of it, though the report comes before any poll', async () => {
+    const procs = fakeRegistry()
+    const { events, recorder } = capture()
+    const enforceDir = await tempDir()
+    const { sources } = await sourcesFor({ recorder, procs, enforceDir })
+    procs.open('proc1', note('chat', 'sess_c', { ...ENFORCED, provider: 'claude' }))
+    // The hook wrote its line before Claude Code answered the call
+    await fs.writeFile(path.join(enforceDir, 'sess_c.jsonl'), lineOf(ran('toolu_1')) + lineOf(blocked('toolu_2')))
+    procs.line('proc1', assistant([{ type: 'tool_use', id: 'toolu_1', name: 'Grep', input: { pattern: 'x' } }, { type: 'tool_use', id: 'toolu_2', name: 'Bash', input: { command: 'git push' } }]))
+    procs.line('proc1', user([
+      { type: 'tool_result', tool_use_id: 'toolu_1', content: 'x' },
+      { type: 'tool_result', tool_use_id: 'toolu_2', content: 'Blocked by Astera Rules: git.remote.write is denied.', is_error: true }
+    ]))
+    // The stopped call from the hook's file, which it wrote first; the other from the stream
+    expect(events.map((e) => [e.dedupeKey, e.status])).toEqual([
+      ['toolu_2', 'blocked'],
+      ['toolu_1', 'ok']
+    ])
+    await sources.poll()
+    expect(events).toHaveLength(2)
+    sources.dispose()
+  })
+
+  it('reads nothing of the enforce files while the mode is compatibility', async () => {
+    const ptys = fakeRegistry()
+    const { events, recorder, setObserving } = capture()
+    const enforceDir = await tempDir()
+    const { sources } = await sourcesFor({ recorder, ptys, enforceDir })
+    ptys.open('pty1', note('session', 'sess_e', ENFORCED))
+    setObserving(false)
+    await fs.writeFile(path.join(enforceDir, 'sess_e.jsonl'), lineOf(blocked('toolu_2')))
+    await sources.poll()
+    expect(events).toEqual([])
+    sources.dispose()
+  })
+})
+
+describe('pruneEnforceFiles', () => {
+  it('prunes the enforce files of sessions not alive at start', async () => {
+    const enforceDir = await tempDir()
+    for (const f of ['alive.jsonl', 'gone.jsonl', 'other.txt']) await fs.writeFile(path.join(enforceDir, f), '{}\n')
+    await pruneEnforceFiles(enforceDir, new Set(['alive']))
+    expect((await fs.readdir(enforceDir)).sort()).toEqual(['alive.jsonl', 'other.txt'])
+    // No folder yet: nothing to do, no throw
+    await pruneEnforceFiles(path.join(enforceDir, 'missing'), new Set())
   })
 })

@@ -18,6 +18,12 @@
 //   (Codex's /new, read once more first) or the Host ends, is handed over as unknown, and an output after that adds
 //   nothing.
 //
+// - Enforce (enforce design §5): a call the blocking hook stopped never ran, so none of the above hears it. The hook
+//   writes every call it sees to enforce/<session>.jsonl, a stopped one with its rule and what it resolved the call to;
+//   that file is read for each session whose note says it was started in Enforce, at every poll and, synchronously,
+//   before any of the session's other calls is handed over, so a call the provider reports after the hook stopped it
+//   (a Claude chat's tool_result) is kept once, as blocked.
+//
 // Only sessions whose note says they were started observed are followed (Review Focus 1); the recorder asks the same
 // of a hook line. The Host reads only what it holds: a session the app runs in its own node-pty, with no Host, is not
 // observed (design §8, no second recorder in the app). While the recorder knows the mode is compatibility nothing is
@@ -30,7 +36,10 @@
 // with it (its ptys and chat processes are its children), so a new Host has no earlier line of a live session to read
 // again. Within one Host, a call heard twice is kept once by the recorder's dedupe on the provider's call id. What a
 // Host does not hear while it is down is lost: the app empties hook-events at its next start.
-import type { watch } from 'node:fs'
+import { closeSync, fstatSync, openSync, readSync, promises as fsp, type watch } from 'node:fs'
+import path from 'node:path'
+import { AUDIT_ACTIONS } from '../../core/audit/policy'
+import type { AuditAction } from '../../core/audit/types'
 import { decodeClaudeFrame } from '../../core/chat/claudeProtocol'
 import { decodeFrame } from '../../core/chat/codexProtocol'
 import { outputText } from '../../core/history/codexConversation'
@@ -376,6 +385,114 @@ function rolloutCall(type: unknown, p: Record<string, unknown>): ObservedCall | 
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
+// Enforce
+
+const ACTION_NAMES = new Set<string>(AUDIT_ACTIONS)
+const CONFIDENCES = new Set(['exact', 'high', 'heuristic', 'unknown'])
+/** How much of an enforce file one read takes at most; the rest is read at the next. */
+const ENFORCE_READ_MAX = 1 << 20
+
+/** A line of a session's enforce file as the call the hook stopped, with whose CLI it was; null for a call it let
+ *  through, and for anything that is not a line the hook writes. */
+export function enforceBlockedCall(line: string): (ObservedCall & { provider: 'claude' | 'codex' }) | null {
+  let o: Record<string, unknown> | null
+  try {
+    o = obj(JSON.parse(line))
+  } catch {
+    return null
+  }
+  const blockedBy = str(o?.blocked)
+  const tool = str(o?.tool)
+  const action = str(o?.action)
+  if (!o || blockedBy === null || tool === null || action === null || !ACTION_NAMES.has(action)) return null
+  const target = typeof o.target === 'string' ? o.target : ''
+  const confidence = CONFIDENCES.has(o.confidence as string) ? (o.confidence as 'exact' | 'high' | 'heuristic' | 'unknown') : 'unknown'
+  const id = str(o.id)
+  const at = isoOf(o.at)
+  return {
+    provider: o.provider === 'codex' ? 'codex' : 'claude',
+    tool,
+    input: {},
+    status: 'blocked',
+    blockedBy,
+    ...(id !== null ? { dedupeKey: id } : {}),
+    ...(at !== undefined ? { at } : {}),
+    resolved: {
+      action: action as AuditAction,
+      target,
+      confidence,
+      ...(typeof o.insideProject === 'boolean' ? { insideProject: o.insideProject } : {})
+    }
+  }
+}
+
+/** One session's enforce file, read forward synchronously: the whole lines written since the last read. A file not
+ *  there yet reads as nothing; one that got shorter is read from its start again. */
+class EnforceFile {
+  private offset = 0
+  private rest: Buffer = Buffer.alloc(0)
+  /** The ids of the calls it says were stopped, so the provider's own report of one is not handed over too. */
+  readonly blocked = new Set<string>()
+  constructor(readonly file: string) {}
+
+  readNew(): string[] {
+    let fd: number
+    try {
+      fd = openSync(this.file, 'r')
+    } catch {
+      return []
+    }
+    try {
+      const size = fstatSync(fd).size
+      if (size < this.offset) {
+        this.offset = 0
+        this.rest = Buffer.alloc(0)
+      }
+      if (size === this.offset) return []
+      const buf = Buffer.alloc(Math.min(size - this.offset, ENFORCE_READ_MAX))
+      const n = readSync(fd, buf, 0, buf.length, this.offset)
+      this.offset += n
+      const all = Buffer.concat([this.rest, buf.subarray(0, n)])
+      const end = all.lastIndexOf(0x0a)
+      this.rest = end < 0 ? all : all.subarray(end + 1)
+      return end < 0 ? [] : all.subarray(0, end).toString('utf8').split('\n').filter((l) => l.trim() !== '')
+    } finally {
+      closeSync(fd)
+    }
+  }
+
+  /** Lines written from now on only: what was written while nothing was read is passed. */
+  skipToEnd(): void {
+    try {
+      const fd = openSync(this.file, 'r')
+      try {
+        this.offset = fstatSync(fd).size
+      } finally {
+        closeSync(fd)
+      }
+    } catch {
+      this.offset = 0
+    }
+    this.rest = Buffer.alloc(0)
+  }
+}
+
+/** Deletes the enforce file of every session not in `keep`: run at the Host's start, when no session of an earlier
+ *  Host is alive, so the folder holds only the files of the sessions running now. Never rejects. */
+export async function pruneEnforceFiles(enforceDir: string, keep: ReadonlySet<string>): Promise<void> {
+  let names: string[]
+  try {
+    names = await fsp.readdir(enforceDir)
+  } catch {
+    return
+  }
+  for (const name of names) {
+    if (!name.endsWith('.jsonl') || keep.has(name.slice(0, -'.jsonl'.length))) continue
+    await fsp.rm(path.join(enforceDir, name), { force: true }).catch(() => {})
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
 // The Host's wiring
 
 type Listen<A extends unknown[]> = (cb: (...a: A) => void) => () => void
@@ -394,6 +511,9 @@ export function createAuditSources(d: {
   procs: { onMeta: Listen<[string, PtyMeta, 'open' | 'note']>; onLine: Listen<[string, number, string]>; onExit: Listen<[string, number]> }
   /** The profile's hook-events folder, where the observed sessions' audit files are. */
   hookEventsDir: string
+  /** The profile's enforce folder (profilePaths `enforceEvents`), where the Enforce hook writes each session's calls.
+   *  Unset: no enforce file is read. */
+  enforceDir?: string
   log(message: string): void
   /** Test injection (epoch ms). */
   now?: () => number
@@ -403,8 +523,48 @@ export function createAuditSources(d: {
   watch?: typeof watch
 }): AuditSources {
   const now = d.now ?? Date.now
+
+  /** The sessions started in Enforce, by session id, and which pty or process each runs in. */
+  const enforcing = new Map<string, EnforceFile>()
+  const enforcedBy = new Map<string, string>()
+  const followEnforce = (holder: string, meta: PtyMeta): void => {
+    if (!d.enforceDir || meta.restore.enforced !== true || enforcing.has(meta.id)) return
+    enforcing.set(meta.id, new EnforceFile(path.join(d.enforceDir, `${meta.id}.jsonl`)))
+    enforcedBy.set(holder, meta.id)
+  }
+  /** Hands over what the session's enforce file says was stopped since it was last read. */
+  const readEnforce = (sessionId: string): void => {
+    const f = enforcing.get(sessionId)
+    if (!f || !d.recorder.observing()) return
+    try {
+      for (const line of f.readNew()) {
+        const c = enforceBlockedCall(line)
+        if (!c) continue
+        const { provider, ...call } = c
+        if (call.dedupeKey !== undefined) f.blocked.add(call.dedupeKey)
+        d.recorder.record({ sessionId, source: provider === 'codex' ? 'codex-hook' : 'claude-hook', ...call })
+      }
+    } catch (err) {
+      d.log(`audit: the enforce file of session ${sessionId} could not be read: ${String(err)}`)
+    }
+  }
+  const unfollowEnforce = (holder: string): void => {
+    const sessionId = enforcedBy.get(holder)
+    if (sessionId === undefined) return
+    // Read once more, for what it wrote last
+    readEnforce(sessionId)
+    enforcedBy.delete(holder)
+    enforcing.delete(sessionId)
+  }
+
+  /** A session's finished calls, after what its enforce file says: a call the hook stopped is the file's, not these. */
   const hand = (sessionId: string, source: AuditSource, calls: ObservedCall[]): void => {
-    for (const c of calls) d.recorder.record({ sessionId, source, ...c })
+    const f = enforcing.get(sessionId)
+    if (f) readEnforce(sessionId)
+    for (const c of calls) {
+      if (f && c.dedupeKey !== undefined && f.blocked.has(c.dedupeKey)) continue
+      d.recorder.record({ sessionId, source, ...c })
+    }
   }
 
   /** Where each observed Claude session's last call left its shell (hookShellAfter), so where its next call runs. Not
@@ -451,6 +611,7 @@ export function createAuditSources(d: {
 
   const offs = [
     d.procs.onMeta((procId, meta) => {
+      if (meta.kind === 'chat') followEnforce(procId, meta)
       if (meta.kind !== 'chat' || meta.restore.observed !== true || chats.has(procId)) return
       // A note written before Claude chats carried a provider is a Codex chat's (ChatSessionManager.adopt)
       chats.set(
@@ -476,8 +637,12 @@ export function createAuditSources(d: {
         d.log(`audit: a line of chat ${chat.sessionId} could not be read: ${String(err)}`)
       }
     }),
-    d.procs.onExit((procId) => void chats.delete(procId)),
+    d.procs.onExit((procId) => {
+      chats.delete(procId)
+      unfollowEnforce(procId)
+    }),
     d.ptys.onMeta((ptyId, meta, why) => {
+      if (meta.kind === 'session') followEnforce(ptyId, meta)
       if (meta.kind !== 'session' || meta.restore.observed !== true) return
       let r = rollouts.get(ptyId)
       if (!r) {
@@ -498,6 +663,7 @@ export function createAuditSources(d: {
       r.tail = new JsonlTail(file, { startAtEnd: resumed || r.since === null })
     }),
     d.ptys.onExit((ptyId) => {
+      unfollowEnforce(ptyId)
       const r = rollouts.get(ptyId)
       if (!r) return
       // Read once more, for what it wrote last
@@ -519,6 +685,7 @@ export function createAuditSources(d: {
       // The calls made meanwhile were not read, so where they left the shells is not known
       shellAt.clear()
       hooks.start()
+      for (const f of enforcing.values()) f.skipToEnd()
       for (const r of rollouts.values()) {
         r.calls.forget()
         r.left = []
@@ -533,6 +700,7 @@ export function createAuditSources(d: {
   let polling = false
   const readRollouts = async (): Promise<void> => {
     if (!follow()) return
+    for (const sessionId of [...enforcing.keys()]) readEnforce(sessionId)
     for (const [ptyId, r] of [...rollouts]) {
       for (const old of r.left.splice(0)) {
         try {
@@ -595,6 +763,8 @@ export function createAuditSources(d: {
       for (const off of offs) off()
       chats.clear()
       rollouts.clear()
+      enforcing.clear()
+      enforcedBy.clear()
     }
   }
 }
