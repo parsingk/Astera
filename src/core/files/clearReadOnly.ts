@@ -12,6 +12,14 @@ import path from 'node:path'
  *  thrown, so one stubborn entry does not stop the rest. */
 export async function clearReadOnly(dir: string): Promise<number> {
   if (process.platform !== 'win32') return 0
+  // The root itself is checked too: a stale or replaced entry can be a link, and walking it would
+  // change files outside the folder that was asked about.
+  try {
+    const root = await fs.lstat(dir)
+    if (root.isSymbolicLink() || !root.isDirectory()) return 0
+  } catch {
+    return 0
+  }
   let changed = 0
   const walk = async (d: string): Promise<void> => {
     let names: string[]

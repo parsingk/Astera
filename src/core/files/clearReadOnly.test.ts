@@ -54,6 +54,19 @@ describe('clearReadOnly', () => {
     await fs.chmod(target, 0o666)
   })
 
+  it.runIf(win)('a root that is itself a junction is not walked', async () => {
+    const outside = await tmp()
+    const holder = await tmp()
+    const target = path.join(outside, 'keep.txt')
+    await fs.writeFile(target, 'x')
+    await fs.chmod(target, 0o444)
+    const root = path.join(holder, 'root')
+    await fs.symlink(outside, root, 'junction')
+    expect(await clearReadOnly(root)).toBe(0)
+    expect(await isWritable(target)).toBe(false)
+    await fs.chmod(target, 0o666)
+  })
+
   it.runIf(!win)('returns 0 and touches nothing off Windows', async () => {
     const dir = await tmp()
     const f = path.join(dir, 'one.txt')
