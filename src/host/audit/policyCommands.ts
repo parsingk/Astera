@@ -9,6 +9,7 @@ import {
   AUDIT_ACTIONS,
   AuditPolicyDamaged,
   COVERAGE,
+  COVERAGE_ENFORCE,
   STARTER_POLICY,
   damageIsKept,
   isRuleAction,
@@ -58,7 +59,7 @@ export interface HostPolicies {
   }): Promise<PoliciesAnswer>
 }
 
-const MODES: readonly unknown[] = ['compatibility', 'observe']
+const MODES: readonly unknown[] = ['compatibility', 'observe', 'enforce']
 const EFFECTS: readonly unknown[] = ['allow', 'deny']
 const SCOPES: readonly unknown[] = ['inside-project', 'outside-project']
 
@@ -94,16 +95,17 @@ export function createHostPolicies(d: {
     switch (cmd) {
       case 'policies-show': {
         const p = await current()
-        return { status: 200, body: { mode: p.mode, policy: p, coverage: COVERAGE } }
+        // What Enforce would block beside what observe sees, so the screen's preview says it before Enforce is on
+        return { status: 200, body: { mode: p.mode, policy: p, coverage: COVERAGE, enforceCoverage: COVERAGE_ENFORCE } }
       }
       case 'policies-set-mode': {
-        if (!MODES.includes(args.mode)) return bad('mode must be compatibility or observe')
+        if (!MODES.includes(args.mode)) return bad('mode must be compatibility, observe or enforce')
         const mode = args.mode as AuditPolicy['mode']
         return queued(async () => {
           const p = await readAuditPolicy(d.profileDir)
           // Compatibility writes no new file (the plan's first constraint): with none there is nothing to turn off
           if (p === null && mode === 'compatibility') return { status: 200, body: { mode, policy: STARTER_POLICY } }
-          // The starter rules are written the first time observe is turned on (design §7), and the person's kept after
+          // The starter rules are written the first time observe or enforce is turned on (design §7), and the person's kept after
           return saved({ ...(p ?? STARTER_POLICY), mode })
         })
       }

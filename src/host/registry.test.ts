@@ -1,3 +1,6 @@
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
+import { readFileSync } from 'node:fs'
 import { describe, it, expect, vi } from 'vitest'
 import { LAST_SCREEN_WITHIN_MS, PtyRegistry, SCROLLBACK_CHARS, DEAD_ENTRIES_KEPT, ENDED_SESSIONS_KEPT, ENDED_SESSION_CODES_KEPT, EXITED_RETAIN_MS, EXITED_RINGS_MAX, EXITED_RING_BYTES_MAX, EXITED_TERMINAL_BYTES, SUBMISSIONS_KEPT, type PtyReplay, type RegistryPty } from './registry'
 import type { PtyMeta } from '../core/host/protocol'
@@ -864,6 +867,29 @@ describe('PtyRegistry ring, live terminal and replay (Phase 8)', () => {
     r.resize('a', 100, 30)
     p.exit(0)
     expect(heard).toEqual(['a:1:data', 'a:2:resize', 'a:3:exit'])
+  })
+
+  // Enforce (enforce design §5): the Host says in the tab why it stops a session, and an app attaching later sees it
+  it('says Astera’s own line in a pty’s output, replayed like the pty’s, and nothing once it ended', async () => {
+    // Final review M5: kill keeps its own doc comment
+    expect(readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'registry.ts'), 'utf8')).toMatch(/\*\/\n  kill\(id: string\): void \{/)
+    const { r, open } = made()
+    const data: string[] = []
+    const events: string[] = []
+    r.onData((id, d) => data.push(`${id}:${d}`))
+    r.onEvent((id, e) => events.push(`${id}:${e.seq}:${e.kind}`))
+    const p = open('a')
+    p.emit('hi')
+    r.say('a', '\r\n[Astera] stopped\r\n')
+    expect(data).toEqual(['a:hi', 'a:\r\n[Astera] stopped\r\n'])
+    expect(events).toEqual(['a:1:data', 'a:2:data'])
+    expect(r.buffer('a')).toBe('hi\r\n[Astera] stopped\r\n')
+    const replay = await r.replayFrom('a', { fromSeq: 1, bootId: 'boot-a' })
+    expect(replay).not.toBe('behind')
+    p.exit(0)
+    r.say('a', 'late')
+    r.say('nope', 'x')
+    expect(data).toHaveLength(2)
   })
 
   it('buffer keeps its meaning: the output while alive, empty once ended', () => {

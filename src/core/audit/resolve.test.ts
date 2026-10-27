@@ -849,7 +849,9 @@ describe('web, MCP, agents, anything else', () => {
 
   it('does not take a Codex tool name for a Claude tool', () => {
     expect(claude('shell_command', { command: 'git push' })).toMatchObject({ action: 'other' })
-    expect(codex('Bash', { command: 'git push' })).toMatchObject({ action: 'other' })
+    // `Write` is only a matcher alias of apply_patch in Codex; its hooks send apply_patch (hook_names.rs). Its `Bash` is
+    // real, below.
+    expect(codex('Write', { file_path: 'x.txt' })).toMatchObject({ action: 'other' })
   })
 })
 
@@ -930,6 +932,17 @@ describe('Codex', () => {
   it('maps MCP and spawn_agent like Claude does', () => {
     expect(codex('mcp__github__create_issue', {})).toMatchObject({ action: 'mcp.call', target: 'github.create_issue' })
     expect(codex('spawn_agent', { message: 'x' })).toEqual({ action: 'agent.spawn', target: '', confidence: 'exact' })
+  })
+
+  // What Codex's own hooks send (Enforce): every shell tool as `Bash` with `{command}`, a patch as apply_patch with the
+  // patch in `command` (codex-rs core/src/tools/hook_names.rs and handlers, rust-v0.160.0; measured 2026-10-27)
+  it('reads the names Codex’s hooks send, its shell as Codex’s own shell', () => {
+    expect(codex('Bash', { command: 'git push origin main' })).toMatchObject({ action: 'git.remote.write', confidence: 'high' })
+    // A Codex shell, PowerShell on Windows: the same reading as the rollout's own shell tool
+    for (const line of ['Remove-Item -Recurse build', 'Set-Content -LiteralPath note.txt -Value hi', 'rm -rf build'])
+      expect(codex('Bash', { command: line }), line).toEqual(codex('shell_command', { command: line }))
+    const patch = '*** Begin Patch\n*** Add File: src/b.ts\n+x\n*** End Patch'
+    expect(codex('apply_patch', { command: patch })).toEqual({ action: 'filesystem.write', target: 'src/b.ts', insideProject: true, confidence: 'exact' })
   })
 })
 

@@ -386,7 +386,12 @@ describe('observe mode on the Host, end to end through the CLI', { timeout: 60_0
       allow: 1,
       wouldDeny: 1,
       unknown: 0,
-      byAction: { 'git.remote.write': { allow: 0, wouldDeny: 1, unknown: 0 }, 'filesystem.read': { allow: 1, wouldDeny: 0, unknown: 0 } },
+      // Enforce's count, none in observe
+      blocked: 0,
+      byAction: {
+        'git.remote.write': { allow: 0, wouldDeny: 1, unknown: 0, blocked: 0 },
+        'filesystem.read': { allow: 1, wouldDeny: 0, unknown: 0, blocked: 0 }
+      },
       stoppedAtLimit: false
     })
 
@@ -549,5 +554,22 @@ describe('index.ts wires observe mode into the Host', () => {
       expect(src, wiring).toContain(wiring)
     // The recorder's note says what bounds a finished Run's coordinator: a person's prompt (fix round 2)
     expect(src.replace(/\s*\/\/\s*/g, ' ')).toContain('until a person prompts the session')
+  })
+
+  // Enforce (enforce design §5): the sources read the hook's files, the recorder's proof stops a session whose hook did
+  // not run (its tab says why first), and the Host starts with only the files of sessions alive
+  it('reads the enforce files, stops a session whose hook did not run, and prunes the enforce files of sessions not alive at start', async () => {
+    const { fileURLToPath } = await import('node:url')
+    const src = await fs.readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8')
+    for (const wiring of [
+      'enforceDir: profilePaths(profileDir).enforceEvents',
+      'onHookMissing: (sessionId) => stopUnhooked(sessionId)',
+      "registry.say(ptyId, `\\r\\n[Astera] ${sentence}\\r\\n`)",
+      'if (procId !== undefined) procs.stop(procId, sentence)',
+      'await pruneEnforceFiles(profilePaths(profileDir).enforceEvents, new Set(registry.liveEntries().flatMap((e) => (e.meta ? [e.meta.id] : []))))'
+    ])
+      expect(src, wiring).toContain(wiring)
+    // Before any session opens, so a new session's file is never the one pruned
+    expect(src.indexOf('await pruneEnforceFiles(')).toBeLessThan(src.indexOf('createAuditSources({'))
   })
 })

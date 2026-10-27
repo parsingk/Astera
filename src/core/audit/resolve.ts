@@ -67,6 +67,9 @@ const KINDS: Record<ResolveCall['provider'], ReadonlyMap<string, Kind>> = {
   ]),
   codex: new Map<string, Kind>([
     ['shell', 'shell'], ['shell_command', 'shell'], ['exec_command', 'shell'], ['local_shell', 'shell'], ['container.exec', 'shell'],
+    // What Codex's hooks call every shell tool (Enforce; codex-rs core/src/tools/hook_names.rs, rust-v0.160.0). A rollout
+    // never does.
+    ['Bash', 'shell'],
     ['exec', 'exec'], ['apply_patch', 'patch'], ['view_image', 'read'],
     ['web_search', 'web-search'], ['web_search_call', 'web-search'], ['web__run', 'web-search'],
     ['spawn_agent', 'agent'],
@@ -91,10 +94,10 @@ export function resolveAction(call: ResolveCall): ResolvedAction {
 }
 
 /** The shell a tool runs its command in. Claude's PowerShell tool runs PowerShell, and its Bash and Monitor tools the one Bash
- *  does (Git Bash on Windows). Codex runs the platform's own: PowerShell on Windows. */
-function flavorOf(tool: string): Flavor {
-  if (tool === 'PowerShell') return 'ps'
-  if (tool === 'Bash' || tool === 'Monitor') return 'posix'
+ *  does (Git Bash on Windows). Codex runs the platform's own: PowerShell on Windows, whatever its hooks call the tool. */
+function flavorOf(provider: ResolveCall['provider'], tool: string): Flavor {
+  if (provider === 'claude' && tool === 'PowerShell') return 'ps'
+  if (provider === 'claude' && (tool === 'Bash' || tool === 'Monitor')) return 'posix'
   return process.platform === 'win32' ? 'ps' : 'posix'
 }
 
@@ -105,7 +108,7 @@ function resolve({ provider, tool, input, cwd, base }: ResolveCall): ResolvedAct
   const ctx: Ctx = { cwd, base: base === undefined ? cwd : path.resolve(cwd, nativePath(base)) }
   switch (KINDS[provider].get(tool)) {
     case 'shell':
-      return resolveShell(rec, ctx, flavorOf(tool))
+      return resolveShell(rec, ctx, flavorOf(provider, tool))
     case 'exec':
       return resolveExec(str(input), cwd)
     case 'read':
@@ -117,7 +120,8 @@ function resolve({ provider, tool, input, cwd, base }: ResolveCall): ResolvedAct
       return fileTool('filesystem.read', tool, [where], ctx)
     }
     case 'patch':
-      return fileTool('filesystem.write', tool, patchPaths(str(rec.input) ?? str(rec.patch) ?? str(input)), ctx)
+      // The rollout holds the patch as the input or in `input`; a Codex hook sends it in `command`
+      return fileTool('filesystem.write', tool, patchPaths(str(rec.input) ?? str(rec.patch) ?? str(rec.command) ?? str(input)), ctx)
     case 'fetch': {
       const host = hostOf(str(rec.url) ?? '')
       return host === null

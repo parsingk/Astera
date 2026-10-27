@@ -54,8 +54,12 @@ import {
   summarySince,
   tokensOf,
   wouldDenyLine,
+  ENFORCE_NAME,
+  coverageTitle,
+  enforcePreviewBody,
   type AuditRow
 } from './securityText'
+import { COVERAGE_ENFORCE } from '../../../core/audit/coverage'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const source = (rel: string): string => readFileSync(path.join(here, rel), 'utf8')
@@ -139,7 +143,7 @@ describe('securityText', () => {
     }
     // Every action the resolver names, every decision and every class is among them
     expect(AUDIT_ACTIONS).toHaveLength(14)
-    expect(DECISIONS).toEqual(['allow', 'would-deny', 'unknown'])
+    expect(DECISIONS).toEqual(['allow', 'would-deny', 'unknown', 'blocked'])
     expect(COVERAGE_CLASSES).toEqual(['shell', 'file-read', 'file-write', 'mcp', 'network'])
   })
 
@@ -169,7 +173,7 @@ describe('securityText', () => {
   })
 
   it('says each decision in words', () => {
-    expect(DECISIONS.map((d) => decisionLabel(d, en))).toEqual(['Allowed', 'Would be denied', 'Unknown'])
+    expect(DECISIONS.map((d) => decisionLabel(d, en))).toEqual(['Allowed', 'Would be denied', 'Unknown', 'Blocked'])
     expect(decisionLabel('later', en)).toBe('later')
     const said = (lang: (typeof LANGS)[number]): string => decisionLabel('would-deny', (k, p) => translate(lang, k, p))
     // The person's ruling D1 (2026-10-24): the Korean and Japanese labels say what the rules deny; English and Spanish stay
@@ -315,8 +319,8 @@ describe('securityText', () => {
 
   // The summary helper
   it('reads the summary’s counts and whether a day stopped at the size limit', () => {
-    expect(summaryOf({ allow: 4, wouldDeny: 2, unknown: 1, byAction: {}, stoppedAtLimit: true })).toEqual({ allow: 4, wouldDeny: 2, unknown: 1, stoppedAtLimit: true })
-    expect(summaryOf({})).toEqual({ allow: 0, wouldDeny: 0, unknown: 0, stoppedAtLimit: false })
+    expect(summaryOf({ allow: 4, wouldDeny: 2, unknown: 1, blocked: 3, byAction: {}, stoppedAtLimit: true })).toEqual({ allow: 4, wouldDeny: 2, unknown: 1, blocked: 3, stoppedAtLimit: true })
+    expect(summaryOf({})).toEqual({ allow: 0, wouldDeny: 0, unknown: 0, blocked: 0, stoppedAtLimit: false })
   })
 
   it('offers the sessions and Jobs the records name, each once', () => {
@@ -369,9 +373,14 @@ describe('securityText', () => {
   })
 
   it('says how many of a Run’s calls would be denied, and nothing when it has no records', () => {
-    expect(wouldDenyLine({ allow: 3, wouldDeny: 2, unknown: 0, stoppedAtLimit: false }, en)).toBe(en('jobs.detail.wouldDeny', { count: 2 }))
-    expect(wouldDenyLine({ allow: 3, wouldDeny: 0, unknown: 1, stoppedAtLimit: false }, en)).toBe(en('jobs.detail.wouldDenyNone'))
-    expect(wouldDenyLine({ allow: 0, wouldDeny: 0, unknown: 0, stoppedAtLimit: false }, en)).toBeNull()
+    expect(wouldDenyLine({ allow: 3, wouldDeny: 2, unknown: 0, blocked: 0, stoppedAtLimit: false }, en)).toBe(en('jobs.detail.wouldDeny', { count: 2 }))
+    expect(wouldDenyLine({ allow: 3, wouldDeny: 0, unknown: 1, blocked: 0, stoppedAtLimit: false }, en)).toBe(en('jobs.detail.wouldDenyNone'))
+    expect(wouldDenyLine({ allow: 0, wouldDeny: 0, unknown: 0, blocked: 0, stoppedAtLimit: false }, en)).toBeNull()
+    // Enforce: what it stopped is said, never "none would be denied" over calls that were blocked
+    expect(wouldDenyLine({ allow: 0, wouldDeny: 0, unknown: 0, blocked: 3, stoppedAtLimit: false }, en)).toBe(en('jobs.detail.blocked', { count: 3 }))
+    expect(wouldDenyLine({ allow: 1, wouldDeny: 2, unknown: 0, blocked: 3, stoppedAtLimit: false }, en)).toBe(
+      `${en('jobs.detail.blocked', { count: 3 })} ${en('jobs.detail.wouldDeny', { count: 2 })}`
+    )
   })
 })
 
@@ -520,5 +529,76 @@ describe('bringing Audit Logs into view for a focus', () => {
     expect(auditScrollDue(run, true, 'run:run_1')).toBeNull()
     expect(auditScrollDue({ jobId: 'job_2', name: 'Other' }, true, 'run:run_1')).toBe('job:job_2')
     expect(auditScrollDue(undefined, true, null)).toBeNull()
+  })
+})
+
+// Enforce (enforce design §5): the third mode, what it blocks and what it costs, said before it is turned on
+describe('Enforce on the screen', () => {
+  it('names Enforce in English in every language', () => {
+    expect(ENFORCE_NAME).toBe('Enforce')
+    for (const lang of LANGS) {
+      const tr = (k: MessageKey, p?: MessageParams): string => translate(lang, k, p)
+      expect([modeLabel('compatibility', tr) !== 'Enforce', modeLabel('observe', tr), modeLabel('enforce', tr)]).toEqual([true, 'Observe', 'Enforce'])
+    }
+    // The screen offers the three, in this order
+    expect(source('SecuritySettings.tsx')).toContain("const MODE_ORDER: AuditMode[] = ['compatibility', 'observe', 'enforce']")
+  })
+
+  it('says a denied call 블록됨 and names a built-in rule in words', () => {
+    expect(decisionLabel('blocked', ko)).toBe('블록됨')
+    const blocked = (ruleId: string): string => decidingRule({ decision: 'blocked', ruleId }, RULES, ko)
+    expect(blocked('builtin-profile-write')).toBe('Astera 설정 폴더 쓰기')
+    expect(blocked('builtin-settings-command')).toBe('Astera 설정 변경 명령')
+    expect(blocked('fail-closed')).toBe('Rules 를 못 읽어 읽기만 허용')
+    expect(blocked('otherwise')).toBe('맞는 Rule 없음')
+    expect(blocked('starter-git-remote-write')).toBe(decidingRule({ decision: 'would-deny', ruleId: 'starter-git-remote-write' }, RULES, ko))
+    // Red, apart from would-deny's
+    expect(source('../styles.css')).toMatch(/\.security-decision\.is-blocked \{[^}]*background: var\(--danger\)/)
+  })
+
+  it('shows the enforce preview’s latency and same-user lines exactly', () => {
+    const body = enforcePreviewBody(
+      { byAction: { 'git.remote.write': { allow: 0, wouldDeny: 3, unknown: 0 }, 'filesystem.read': { allow: 9, wouldDeny: 0, unknown: 0 }, 'github.write': { wouldDeny: 1 } } },
+      COVERAGE_ENFORCE,
+      ko
+    )
+    const lines = body.split('\n')
+    expect(lines).toContain('Enforce 세션은 도구 호출마다 약 0.1초가 더 걸립니다.')
+    expect(lines).toContain('같은 사용자로 도는 에이전트가 스크립트로 설정 파일을 직접 쓰는 것은 막지 못합니다.')
+    expect(lines).toContain('켜고 끈 설정은 그 뒤에 시작하는 세션부터 적용됩니다.')
+    // The counts in words, most first, and none of an action nothing would deny
+    const counted = lines.filter((l) => l.includes('건'))
+    expect(counted).toEqual([`  ${actionPhrase('git.remote.write', ko)}: 3건`, `  ${actionPhrase('github.write', ko)}: 1건`])
+    // Every row of what Enforce blocks, and the built-ins by name
+    for (const r of COVERAGE_ENFORCE) expect(body).toContain(coverageRowLabel(r, ko))
+    expect(body).toContain('Astera 설정 폴더 쓰기')
+    expect(body).toContain('Astera 설정 변경 명령')
+    // The sandbox is not there yet (S2): the screen does not say it closes the gap
+    expect(body).not.toContain('sandbox')
+    expect(enforcePreviewBody({}, COVERAGE_ENFORCE, ko)).toContain('지난 7일 동안 Rules 가 막았을 호출은 없습니다.')
+    // Records the Host could not read are not "none"
+    const unread = enforcePreviewBody(null, COVERAGE_ENFORCE, ko)
+    expect(unread).toContain(ko('settings.security.enforce.countsUnknown'))
+    expect(unread).not.toContain(ko('settings.security.enforce.countsNone'))
+    expect(source('SecuritySettings.tsx')).toContain("confirmLabel: t('settings.security.enforce.confirm')")
+    expect(ko('settings.security.enforce.confirm')).toBe('Enforce 켜기')
+    expect(ko('settings.security.enforce.title')).toBe('Enforce 를 켤까요?')
+  })
+
+  // Final review I7: sessions started in Enforce keep blocking after it is turned off, and the screen says so then too
+  it('says sessions started in Enforce keep blocking, whatever the mode is now', () => {
+    const screen = source('SecuritySettings.tsx')
+    expect(screen).toContain("t(policy.mode === 'enforce' ? 'settings.security.enforce.running' : 'settings.security.enforce.keeps')")
+    expect(ko('settings.security.enforce.keeps')).toContain('끝날 때까지')
+    expect(coverageCellText({ level: 'partial', note: 'interactive-input' }, ko)).toBe(
+      ko('settings.security.coverage.withNote', { level: ko('settings.security.coverage.level.partial'), note: ko('audit.coverageNote.interactive-input') })
+    )
+  })
+
+  it('the coverage title follows the mode', () => {
+    expect(coverageTitle('observe', ko)).toBe('기록 범위')
+    expect(coverageTitle('compatibility', ko)).toBe('기록 범위')
+    expect(coverageTitle('enforce', ko)).toBe('막는 범위')
+    expect(coverageCellText({ level: 'enforced' }, ko)).toBe(ko('settings.security.coverage.level.enforced'))
   })
 })

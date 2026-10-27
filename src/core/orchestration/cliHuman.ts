@@ -239,7 +239,8 @@ function coverageText(rows: Record<string, unknown>[]): string {
 }
 
 /** The observe switch and the rules, a row each in the order they are tried, its place first (what `--at` and `--to`
- *  take); with `coverage`, as `policies show` answers, what observe can see under them. */
+ *  take); with `coverage`, as `policies show` answers, what observe can see under them, or in enforce what enforce
+ *  blocks (`enforceCoverage`). */
 function policyText(data: Record<string, unknown>): string {
   const p = (data.policy ?? {}) as { rules?: unknown; otherwise?: unknown }
   const rules = Array.isArray(p.rules) ? (p.rules as Record<string, unknown>[]) : []
@@ -252,7 +253,8 @@ function policyText(data: Record<string, unknown>): string {
       ? '(no rules)'
       : columns(rules.map((r, i) => [String(i), str(r.effect), str(r.action), r.scope === undefined ? 'anywhere' : str(r.scope), str(r.id)]))
   ]
-  if (Array.isArray(data.coverage)) parts.push(coverageText(data.coverage as Record<string, unknown>[]))
+  const coverage = data.mode === 'enforce' && Array.isArray(data.enforceCoverage) ? data.enforceCoverage : data.coverage
+  if (Array.isArray(coverage)) parts.push(coverageText(coverage as Record<string, unknown>[]))
   return parts.join('\n\n')
 }
 
@@ -323,8 +325,15 @@ export function humanFor(
     }
     // The totals, then a row per action, the most seen first
     case 'audit-summary': {
-      const counts = (c: Record<string, unknown>): string[] => [`allow ${str(c.allow)}`, `would-deny ${str(c.wouldDeny)}`, `unknown ${str(c.unknown)}`]
-      const total = (c: Record<string, unknown>): number => Number(c.allow ?? 0) + Number(c.wouldDeny ?? 0) + Number(c.unknown ?? 0)
+      // The calls Enforce stopped, once there are any: an observe-only summary reads as it did
+      const blocked = typeof data.blocked === 'number' && data.blocked > 0
+      const counts = (c: Record<string, unknown>): string[] => [
+        `allow ${str(c.allow)}`,
+        `would-deny ${str(c.wouldDeny)}`,
+        `unknown ${str(c.unknown)}`,
+        ...(blocked ? [`blocked ${str(c.blocked ?? 0)}`] : [])
+      ]
+      const total = (c: Record<string, unknown>): number => Number(c.allow ?? 0) + Number(c.wouldDeny ?? 0) + Number(c.unknown ?? 0) + Number(c.blocked ?? 0)
       const byAction = data.byAction !== null && typeof data.byAction === 'object' ? Object.entries(data.byAction as Record<string, Record<string, unknown>>) : []
       byAction.sort(([a, x], [b, y]) => total(y) - total(x) || a.localeCompare(b))
       return [

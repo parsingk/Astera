@@ -132,7 +132,7 @@ const AUDIT_FILTERS: readonly UsageFlag[] = [
   { name: 'task', value: '<taskId>', about: "only the calls of this task's workers" },
   { name: 'agent-profile', value: '<id|name>', about: 'only the calls of sessions started from this agent profile (from `agent-profiles list`)' },
   { name: 'action', value: '<action>', about: 'only this action, or the actions a start ending in * names (git.*)' },
-  { name: 'decision', value: '<allow|would-deny|unknown>', about: 'only the calls the rules in force decide so' },
+  { name: 'decision', value: '<allow|would-deny|unknown|blocked>', about: 'only the calls the rules in force decide so, or Enforce blocked' },
   { name: 'since', value: '<time>', about: 'only calls at or after this time (2026-10-23T09:00:00Z)' },
   { name: 'until', value: '<time>', about: 'only calls before this time' }
 ]
@@ -638,13 +638,20 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'policies-show': {
     summary: 'whether observe mode is on, the rules in order, and what it can see',
     detail:
-      '`mode` is compatibility (nothing is observed) or observe. The first rule whose action matches a call decides it; `otherwise` decides a call no rule matches. Until observe is first turned on these are the starter rules, and nothing is written. `coverage` says, per provider and kind of session, what observe can see of shell commands, file reads and writes, MCP calls and network requests. An agent session may read it.'
+      '`mode` is compatibility (nothing is observed), observe or enforce. The first rule whose action matches a call decides it; `otherwise` decides a call no rule matches. Until observe is first turned on these are the starter rules, and nothing is written. `coverage` says, per provider and kind of session, what observe can see of shell commands, file reads and writes, MCP calls and network requests, and `enforceCoverage` what enforce blocks of them. An agent session may read it.'
   },
   'policies-set-mode': {
-    summary: 'turn observe mode on or off',
+    summary: 'turn observe or enforce mode on, or both off',
     detail:
-      'Sessions started afterwards follow it; a running session keeps what it started with. The first time observe is turned on the starter rules are written. Turning it off keeps the records and the rules. From inside an agent session it is refused with 5.',
-    flags: [{ name: 'mode', value: '<compatibility|observe>', required: true, about: 'compatibility observes nothing; observe records every tool call' }]
+      'Sessions started afterwards follow it; a running session keeps what it started with. The first time observe or enforce is turned on the starter rules are written. In enforce every session Astera starts runs a blocking hook before each tool call: a call the rules deny does not run, and is recorded as blocked. Turning it off keeps the records and the rules. From inside an agent session it is refused with 5.',
+    flags: [
+      {
+        name: 'mode',
+        value: '<compatibility|observe|enforce>',
+        required: true,
+        about: 'compatibility observes nothing; observe records every tool call; enforce also stops the calls the rules deny'
+      }
+    ]
   },
   'policies-set-otherwise': {
     summary: 'what a call no rule matches gets',

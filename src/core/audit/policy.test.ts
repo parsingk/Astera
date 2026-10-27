@@ -8,18 +8,7 @@ import { removeFixture } from '../testFixtures'
 import { profilePaths } from '../profile/paths'
 import { RepairNeeded } from '../settings/repairNeeded'
 import { resolveAction, type AuditAction } from './resolve'
-import {
-  AUDIT_ACTIONS,
-  COVERAGE,
-  STARTER_POLICY,
-  decide,
-  isRuleAction,
-  readAuditPolicy,
-  readPolicyMode,
-  writeAuditPolicy,
-  type AuditPolicy,
-  type AuditRule
-} from './policy'
+import { AUDIT_ACTIONS, COVERAGE, COVERAGE_ENFORCE, STARTER_POLICY, decide, isRuleAction, readAuditPolicy, readPolicyMode, writeAuditPolicy, type AuditPolicy, type AuditRule, parseAuditPolicy, isObserving } from './policy'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -315,8 +304,20 @@ describe('the policy file', () => {
 
   it('reads a mode it does not know as compatibility, which never observes more', async () => {
     const p = await profile()
-    await fs.writeFile(profilePaths(p).auditPolicy, JSON.stringify({ ...STARTER_POLICY, mode: 'enforce' }))
+    await fs.writeFile(profilePaths(p).auditPolicy, JSON.stringify({ ...STARTER_POLICY, mode: 'strict' }))
     expect((await readAuditPolicy(p))?.mode).toBe('compatibility')
+  })
+
+  // Enforce (enforce design §5, E1): a mode of its own, and the hook reads the file as text with no promise
+  it('reads enforce as a mode, and parses a policy from text without throwing', async () => {
+    expect(parseAuditPolicy(JSON.stringify({ ...STARTER_POLICY, mode: 'enforce' }))?.mode).toBe('enforce')
+    expect(parseAuditPolicy(JSON.stringify(STARTER_POLICY))).toEqual(STARTER_POLICY)
+    expect(parseAuditPolicy('{')).toBeNull()
+    expect(parseAuditPolicy(JSON.stringify({ ...STARTER_POLICY, otherwise: 'sometimes' }))).toBeNull()
+    const p = await profile()
+    await fs.writeFile(profilePaths(p).auditPolicy, JSON.stringify({ ...STARTER_POLICY, mode: 'enforce' }))
+    expect(await readPolicyMode(p)).toBe('enforce')
+    expect(isObserving('enforce') && isObserving('observe') && !isObserving('compatibility')).toBe(true)
   })
 })
 
@@ -573,5 +574,26 @@ describe('decide, a denied command the resolver must reach', () => {
     expect(decide(bash('cat <<"EOF"\n$(rm -rf ../x)\nEOF'), p)).toEqual({ decision: 'allow' })
     expect(decide(bash('cat <<EOF\n\\$(rm -rf ../x)\nEOF'), p)).toEqual({ decision: 'allow' })
     expect(decide(bash('cat <<EOF\n$(git rev-parse HEAD)\nEOF'), p)).toEqual({ decision: 'allow' })
+  })
+})
+
+// Enforce (enforce design §5, anti-goal: a screen that says Enforced where only a record exists)
+describe('COVERAGE_ENFORCE', () => {
+  it('never says enforced for a class the hook does not reach', () => {
+    const cell = (provider: 'claude' | 'codex', kind: 'terminal' | 'chat', c: 'shell' | 'file-read' | 'file-write' | 'mcp' | 'network') =>
+      COVERAGE_ENFORCE.find((r) => r.provider === provider && r.kind === kind)?.classes[c]
+    expect(COVERAGE_ENFORCE).toHaveLength(4)
+    for (const kind of ['terminal', 'chat'] as const) {
+      for (const c of ['shell', 'file-read', 'file-write', 'mcp'] as const) expect(cell('claude', kind, c)?.level, `claude ${kind} ${c}`).toBe('enforced')
+      for (const c of ['file-write', 'mcp'] as const) expect(cell('codex', kind, c)?.level, `codex ${kind} ${c}`).toBe('enforced')
+      // Final review M10: Codex sends no hook for input typed into a shell already running (write_stdin, codex-rs
+      // core/src/tools/handlers/unified_exec/write_stdin.rs)
+      expect(cell('codex', kind, 'shell')).toEqual({ level: 'partial', note: 'interactive-input' })
+      // Codex reads files through the shell, which the hook reads as text only
+      expect(cell('codex', kind, 'file-read')).toEqual({ level: 'partial', note: 'shell-text-only' })
+      for (const pr of ['claude', 'codex'] as const) expect(cell(pr, kind, 'network')?.level, `${pr} ${kind} network`).toBe('partial')
+    }
+    // Observe's table never says enforced
+    expect(COVERAGE.flatMap((r) => Object.values(r.classes)).some((c) => c.level === 'enforced')).toBe(false)
   })
 })

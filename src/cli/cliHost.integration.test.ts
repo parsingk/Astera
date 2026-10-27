@@ -1260,10 +1260,12 @@ describe('the public CLI against a real Host (§48, §49)', { timeout: 60_000 },
       allow: 1,
       wouldDeny: 3,
       unknown: 1,
+      // Enforce's count, none in observe
+      blocked: 0,
       byAction: {
-        'git.remote.write': { allow: 0, wouldDeny: 3, unknown: 0 },
-        'filesystem.read': { allow: 1, wouldDeny: 0, unknown: 0 },
-        'process.execute': { allow: 0, wouldDeny: 0, unknown: 1 }
+        'git.remote.write': { allow: 0, wouldDeny: 3, unknown: 0, blocked: 0 },
+        'filesystem.read': { allow: 1, wouldDeny: 0, unknown: 0, blocked: 0 },
+        'process.execute': { allow: 0, wouldDeny: 0, unknown: 1, blocked: 0 }
       },
       stoppedAtLimit: false
     })
@@ -1314,7 +1316,7 @@ describe('the public CLI against a real Host (§48, §49)', { timeout: 60_000 },
     const missing = await astera(['policies', 'rules-remove', '--id', 'ar_nope'], h.env)
     expect(missing.code, missing.stdout).toBe(4)
     expect(missing.envelope.error?.nextSteps).toEqual(['astera policies show'])
-    expect((await astera(['policies', 'set-mode', '--mode', 'enforce'], h.env)).code).toBe(2)
+    expect((await astera(['policies', 'set-mode', '--mode', 'strict'], h.env)).code).toBe(2)
 
     // From an agent's shell every change is refused with 5 and the file is left as it was; reading the rules is not refused
     const agent = { ...h.env, ASTERA_SESSION: 'sess_agent' }

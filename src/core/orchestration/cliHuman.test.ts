@@ -680,6 +680,13 @@ describe('humanFor — audit and policies', () => {
     expect(humanFor('audit-list', { records: [], truncated: false, next: null })).toBe('(no records)')
   })
 
+  it('audit list prints a call the hook stopped as blocked, with what stopped it', () => {
+    const stopped = { ...push, decision: 'blocked', ruleId: 'builtin-settings-command' }
+    expect(humanFor('audit-list', { records: [stopped], truncated: false, next: null })).toBe(
+      `${local(push.at)}  sess_a  git push to a remote  git push  blocked  builtin-settings-command`
+    )
+  })
+
   it('audit list says how to ask for the next page when the limit cut it', () => {
     const out = humanFor('audit-list', { records: [push], truncated: true, next: { until: push.at, beforeId: push.id } })
     expect(out?.split('\n').slice(-2)).toEqual(['', `more: --until ${push.at} --before-id ${push.id}`])
@@ -788,6 +795,27 @@ describe('humanFor — audit and policies', () => {
     })
   })
 
+  // Enforce: a count of the calls the hook stopped, shown once there are any, so an observe-only summary reads as before
+  it('audit summary counts the blocked calls once there are any', () => {
+    expect(
+      humanFor('audit-summary', {
+        allow: 1,
+        wouldDeny: 0,
+        unknown: 0,
+        blocked: 2,
+        byAction: { 'git.remote.write': { allow: 0, wouldDeny: 0, unknown: 0, blocked: 2 }, 'filesystem.read': { allow: 1, wouldDeny: 0, unknown: 0, blocked: 0 } },
+        stoppedAtLimit: false
+      })
+    ).toBe(
+      [
+        'allow 1, would-deny 0, unknown 0, blocked 2',
+        '',
+        'git push to a remote  git.remote.write  allow 0  would-deny 0  unknown 0  blocked 2',
+        'read a file           filesystem.read   allow 1  would-deny 0  unknown 0  blocked 0'
+      ].join('\n')
+    )
+  })
+
   it('audit summary is the totals, then a row per action, the most seen first', () => {
     expect(
       humanFor('audit-summary', {
@@ -846,6 +874,17 @@ describe('humanFor — audit and policies', () => {
         'codex chat       seen   partial (shell text only)  seen        seen  partial'
       ].join('\n')
     )
+  })
+
+  // Enforce: what it blocks while it is on, as the screen's table follows the mode
+  it('policies show in enforce prints what enforce blocks', () => {
+    const coverage = [{ provider: 'codex', kind: 'chat', classes: { shell: { level: 'seen' }, 'file-read': { level: 'seen' }, 'file-write': { level: 'seen' }, mcp: { level: 'seen' }, network: { level: 'seen' } } }]
+    const enforceCoverage = [
+      { provider: 'codex', kind: 'chat', classes: { shell: { level: 'enforced' }, 'file-read': { level: 'partial', note: 'shell-text-only' }, 'file-write': { level: 'enforced' }, mcp: { level: 'enforced' }, network: { level: 'partial' } } }
+    ]
+    const out = humanFor('policies-show', { mode: 'enforce', policy: { ...policy, mode: 'enforce' }, coverage, enforceCoverage })
+    expect(out?.split('\n').at(-1)).toBe('codex chat  enforced  partial (shell text only)  enforced    enforced  partial')
+    expect(humanFor('policies-show', { mode: 'observe', policy, coverage, enforceCoverage })).not.toContain('enforced')
   })
 
   it('a change answers the rules as they are now', () => {

@@ -108,6 +108,15 @@ describe('createAuditRecorder', () => {
     expect(await h.folderExists()).toBe(false)
   })
 
+  // Enforce records what observe records (enforce design §5)
+  it('records calls while the mode is enforce', async () => {
+    const h = await rig({ mode: 'enforce' })
+    h.recorder.record(bash('git push origin main'))
+    await h.recorder.flushed()
+    expect((await h.records()).map((r) => r.action)).toEqual(['git.remote.write'])
+    expect(h.recorder.observing()).toBe(true)
+  })
+
   it('keeps one record per call, resolved and stamped with the session and its Dispatch', async () => {
     const h = await rig({ dispatch: { jobId: 'job1', runId: 'run1', taskId: 'task1' } })
     h.recorder.record(bash('git push origin main', { dedupeKey: 'toolu_1' }))
@@ -910,5 +919,113 @@ describe('dispatchOfWithTurns', () => {
     const of = dispatchOfWithTurns(() => live, { turnOf: () => Date.parse(T('01:30')), readPast: () => (reads++, Promise.resolve()) })
     expect(of('sess_co', T('02:00'))).toEqual({ jobId: 'job1', runId: 'run_live' })
     expect(reads).toBe(0)
+  })
+})
+
+// Enforce (enforce design §5, E5): a blocked call is kept as the hook resolved it, once; and a session started in
+// Enforce whose calls come with no proof that its hook ran is stopped
+describe('the recorder in Enforce', () => {
+  const ENFORCED: SessionFacts = { kind: 'terminal', accountId: 'acc1', cwd, enforced: true }
+  const blockedEv = {
+    sessionId: 's1', source: 'claude-hook' as const, tool: 'Bash', input: {}, status: 'blocked' as const, blockedBy: 'starter-git-remote-write',
+    dedupeKey: 'toolu_2', resolved: { action: 'git.remote.write' as const, target: 'git push', confidence: 'high' as const }
+  }
+
+  it('keeps a blocked call once though the provider reports it too', async () => {
+    const resolved: string[] = []
+    const r = await rig({ mode: 'enforce', facts: ENFORCED, over: { hookRan: () => true, resolve: (c) => (resolved.push(c.tool), { action: 'other', target: c.tool, confidence: 'unknown' }) } })
+    r.recorder.record(blockedEv)
+    r.recorder.record({ sessionId: 's1', source: 'claude-chat', tool: 'Bash', input: { command: 'git push' }, status: 'failed', dedupeKey: 'toolu_2' })
+    await r.recorder.flushed()
+    const records = await r.records()
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({ status: 'blocked', blockedBy: 'starter-git-remote-write', action: 'git.remote.write', target: 'git push', confidence: 'high', source: 'claude-hook' })
+    // The hook resolved it: the resolver is not asked again
+    expect(resolved).toEqual([])
+  })
+
+  it('stops an enforced session whose calls arrive with no proof, once', async () => {
+    const missing: string[] = []
+    let proof = false
+    const r = await rig({ mode: 'enforce', facts: ENFORCED, over: { hookRan: () => proof, onHookMissing: (id) => void missing.push(id) } })
+    const call = (key: string) => ({ sessionId: 's1', source: 'claude-hook' as const, tool: 'Bash', input: { command: 'npm test' }, status: 'ok' as const, dedupeKey: key })
+    r.recorder.record(call('a'))
+    r.recorder.record(call('b'))
+    expect(missing).toEqual(['s1'])
+    // A blocked call is the proof itself, and a session with its proof is left alone
+    proof = true
+    r.recorder.record(call('c'))
+    expect(missing).toEqual(['s1'])
+    await r.recorder.flushed()
+  })
+
+  it('does not ask a session started before Enforce for the proof', async () => {
+    const asked: string[] = []
+    const missing: string[] = []
+    const r = await rig({ mode: 'enforce', facts: { kind: 'terminal', accountId: 'acc1', cwd }, over: { hookRan: (id) => (asked.push(id), false), onHookMissing: (id) => void missing.push(id) } })
+    r.recorder.record({ sessionId: 's1', source: 'claude-hook', tool: 'Bash', input: { command: 'npm test' }, status: 'ok', dedupeKey: 'a' })
+    await r.recorder.flushed()
+    expect(asked).toEqual([])
+    expect(missing).toEqual([])
+    expect(await r.records()).toHaveLength(1)
+  })
+
+  it('does not count a quiet tool or a hosted web search as a call that needed the hook', async () => {
+    const missing: string[] = []
+    const r = await rig({ mode: 'enforce', facts: ENFORCED, over: { hookRan: () => false, onHookMissing: (id) => void missing.push(id) } })
+    r.recorder.record({ sessionId: 's1', source: 'claude-hook', tool: 'TodoWrite', input: {}, status: 'ok', dedupeKey: 'a' })
+    r.recorder.record({ sessionId: 's1', source: 'codex-rollout', tool: 'web_search_call', input: {}, status: 'ok', dedupeKey: 'b' })
+    r.recorder.record({ sessionId: 's1', source: 'claude-chat', tool: 'WebSearch', input: { query: 'x' }, status: 'ok', dedupeKey: 'c' })
+    expect(missing).toEqual([])
+    r.recorder.record({ sessionId: 's1', source: 'codex-rollout', tool: 'shell_command', input: { command: 'git status' }, status: 'ok', dedupeKey: 'd' })
+    expect(missing).toEqual(['s1'])
+    await r.recorder.flushed()
+  })
+
+  // Final review I5a: a call read before it ran (a Codex rollout's MCP call, handed at once) may come before its hook did
+  it('asks for the proof only of a call that ran', async () => {
+    const missing: string[] = []
+    const r = await rig({ mode: 'enforce', facts: ENFORCED, over: { hookRan: () => false, onHookMissing: (id) => void missing.push(id) } })
+    r.recorder.record({ sessionId: 's1', source: 'codex-rollout', tool: 'mcp__gh__create_issue', input: {}, status: 'unknown', dedupeKey: 'a' })
+    expect(missing).toEqual([])
+    r.recorder.record({ sessionId: 's1', source: 'codex-rollout', tool: 'mcp__gh__create_issue', input: {}, status: 'ok', dedupeKey: 'b' })
+    expect(missing).toEqual(['s1'])
+    await r.recorder.flushed()
+  })
+
+  // Final review I4: a call of a Claude session that its hook's file has no line for, told by the sources
+  it('stops a session the sources say ran a call unhooked, once', async () => {
+    const missing: string[] = []
+    const r = await rig({ mode: 'enforce', facts: ENFORCED, over: { hookRan: () => true, onHookMissing: (id) => void missing.push(id) } })
+    r.recorder.unhooked('s1')
+    r.recorder.unhooked('s1')
+    expect(missing).toEqual(['s1'])
+    // Nothing for a session not started in Enforce
+    const o = await rig({ mode: 'enforce', facts: { kind: 'terminal', accountId: 'acc1', cwd }, over: { onHookMissing: (id) => void missing.push(id) } })
+    o.recorder.unhooked('s2')
+    expect(missing).toEqual(['s1'])
+  })
+
+  // Final review I7: a session started in Enforce keeps blocking after the person turns the mode off, and its blocks
+  // are what tell them why their agent is still refused
+  it('keeps the blocks of a session started in Enforce after the mode is turned off, and nothing else', async () => {
+    const r = await rig({ mode: 'compatibility', facts: ENFORCED })
+    r.recorder.record(blockedEv)
+    r.recorder.record({ sessionId: 's1', source: 'claude-hook', tool: 'Read', input: { file_path: 'a' }, status: 'ok', dedupeKey: 'r1' })
+    await r.recorder.flushed()
+    expect((await r.records()).map((x) => x.status)).toEqual(['blocked'])
+    const o = await rig({ mode: 'compatibility', facts: { kind: 'terminal', accountId: 'acc1', cwd } })
+    o.recorder.record(blockedEv)
+    await o.recorder.flushed()
+    expect(await o.records()).toEqual([])
+  })
+
+  it('reads a note’s enforced mark into the session’s facts', () => {
+    const facts = registrySessionFacts({
+      ptys: { list: () => [{ id: 'p1', pid: 1, alive: true, meta: { kind: 'session', id: 's1', restore: { accountId: 'acc1', cwd, observed: true, enforced: true } } }] },
+      procs: { list: () => [{ id: 'c1', pid: 2, alive: true, meta: { kind: 'chat', id: 's2', restore: { accountId: 'acc1', cwd, observed: true } } }] }
+    })
+    expect(facts('s1')).toMatchObject({ enforced: true })
+    expect(facts('s2')).not.toHaveProperty('enforced')
   })
 })

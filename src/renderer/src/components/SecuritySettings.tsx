@@ -30,6 +30,10 @@ import {
   CREDENTIALS_TITLE,
   DECISIONS,
   modeLabel,
+  coverageTitle,
+  enforcePreviewBody,
+  periodSince,
+  BUILT_IN_SHOWN,
   PERIODS,
   POLICIES_TITLE,
   RULES_TITLE,
@@ -78,7 +82,7 @@ const policyIn = (body: Record<string, unknown>): AuditPolicy | null => {
   const p = body.policy as AuditPolicy | undefined
   return p && Array.isArray(p.rules) ? p : null
 }
-const MODE_ORDER: AuditMode[] = ['compatibility', 'observe']
+const MODE_ORDER: AuditMode[] = ['compatibility', 'observe', 'enforce']
 const EFFECT_ORDER: AuditRule['effect'][] = ['allow', 'deny']
 const SCOPE_ORDER = ['anywhere', 'inside-project', 'outside-project'] as const
 const PERIOD_ORDER: Period[] = ['today', 'week', 'month']
@@ -114,6 +118,8 @@ export function SecuritySettings({
   }, [focusKey])
   const [policy, setPolicy] = useState<AuditPolicy | null>(null)
   const [coverage, setCoverage] = useState<CoverageRow[]>([])
+  /** What Enforce blocks per session (the Host's COVERAGE_ENFORCE): its preview, and the table while it is on. */
+  const [enforceCoverage, setEnforceCoverage] = useState<CoverageRow[]>([])
   const [failure, setFailure] = useState<Failure | null>(null)
   const [busy, setBusy] = useState(false)
   /** Counts the rule changes: Audit Logs reads again after each, since the rules decide every row it shows. */
@@ -139,6 +145,7 @@ export function SecuritySettings({
     setFailure(null)
     setPolicy(policyIn(r.body))
     setCoverage(arr<CoverageRow>(r.body.coverage))
+    setEnforceCoverage(arr<CoverageRow>(r.body.enforceCoverage))
   }
   useEffect(() => {
     void load()
@@ -162,6 +169,22 @@ export function SecuritySettings({
     }
   }
 
+  /** Choosing a mode. Enforce asks first, with its preview (enforce design §5): the last 7 days' calls the Rules would
+   *  have blocked, what it blocks, what it costs and the limit it leaves. Leaving Enforce asks nothing. */
+  const pickMode = async (m: AuditMode): Promise<void> => {
+    if (busy) return
+    if (m === 'enforce' && policy?.mode !== 'enforce') {
+      const sum = await window.api.audit.summary({ since: periodSince('week', new Date()) }).catch(failed)
+      const ok = await confirmModal({
+        title: t('settings.security.enforce.title'),
+        body: enforcePreviewBody(sum.ok ? sum.body : null, enforceCoverage, t),
+        confirmLabel: t('settings.security.enforce.confirm')
+      })
+      if (!ok) return
+    }
+    await change(() => window.api.audit.setMode(m))
+  }
+
   /** Starting over is also the repair of a damaged rules file (the Host keeps the damaged copy beside it). */
   const reset = async (damaged: boolean): Promise<void> => {
     const ok = await confirmModal({
@@ -173,6 +196,8 @@ export function SecuritySettings({
   }
 
   const shownFailure = failure !== null ? securityFailure(failure, t) : null
+  /** What the coverage table shows: what Enforce blocks while it is on, else what observe sees. */
+  const shownCoverage = policy?.mode === 'enforce' ? enforceCoverage : coverage
   return (
     <div className="settings-stack">
       <p className="settings-hint">{t('settings.security.hint')}</p>
@@ -196,17 +221,19 @@ export function SecuritySettings({
                 <div className="security-choices" role="radiogroup" aria-label={t('settings.security.mode.label')}>
                   {MODE_ORDER.map((m) => (
                     <label key={m} className="check-small">
-                      <input type="radio" name={radioGroup} checked={policy.mode === m} disabled={busy} onChange={() => void change(() => window.api.audit.setMode(m))} />
+                      <input type="radio" name={radioGroup} checked={policy.mode === m} disabled={busy} onChange={() => void pickMode(m)} />
                       <span>{modeLabel(m, t)}</span>
                     </label>
                   ))}
                 </div>
               </div>
               <p className="settings-hint">{t('settings.security.mode.hint')}</p>
+              {/* Sessions started in Enforce keep blocking until they end, also after it is turned off (final review I7) */}
+              <p className="settings-hint">{t(policy.mode === 'enforce' ? 'settings.security.enforce.running' : 'settings.security.enforce.keeps')}</p>
             </div>
-            {coverage.length > 0 && (
+            {shownCoverage.length > 0 && (
               <div className="settings-group">
-                <div className="settings-field-label">{t('settings.security.coverage.title')}</div>
+                <div className="settings-field-label">{coverageTitle(policy.mode, t)}</div>
                 <div className="security-table-wrap">
                   <table className="security-table">
                     <thead>
@@ -220,7 +247,7 @@ export function SecuritySettings({
                       </tr>
                     </thead>
                     <tbody>
-                      {coverage.map((r) => (
+                      {shownCoverage.map((r) => (
                         <tr key={`${r.provider}-${r.kind}`}>
                           <th scope="row">{coverageRowLabel(r, t)}</th>
                           {COVERAGE_CLASSES.map((c) => (
@@ -238,6 +265,20 @@ export function SecuritySettings({
             <div className="settings-group">
               <div className="settings-field-label">{RULES_TITLE}</div>
               <p className="settings-hint">{t('settings.security.rules.hint')}</p>
+              {policy.mode === 'enforce' && (
+                <>
+                  {/* Enforce's built-ins (E7): before every rule of the person's, which cannot remove or move them */}
+                  <ul className="ext-list is-uncapped security-rules is-builtin">
+                    {BUILT_IN_SHOWN.map((k) => (
+                      <li key={k} className="ext-row security-rule is-builtin">
+                        <span className="security-rule-fields">{t(k)}</span>
+                        <span className="security-builtin-tag">{t('settings.security.builtin.tag')}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="settings-hint">{t('settings.security.enforce.sameUser')}</p>
+                </>
+              )}
               {policy.rules.length === 0 ? (
                 <p className="settings-hint">{t('settings.security.rules.none')}</p>
               ) : (
@@ -555,6 +596,11 @@ function AuditLogs({
           <span className="security-decision is-unknown">
             {decisionLabel('unknown', t)} {counts.unknown.toLocaleString()}
           </span>
+          {(counts.blocked > 0 || mode === 'enforce') && (
+            <span className="security-decision is-blocked">
+              {decisionLabel('blocked', t)} {counts.blocked.toLocaleString()}
+            </span>
+          )}
         </div>
       )}
       {counts?.stoppedAtLimit === true && <p className="settings-hint is-warning">{t('settings.security.audit.stoppedAtLimit')}</p>}

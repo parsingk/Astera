@@ -10,6 +10,7 @@ import { keepDamaged, readStoreFile } from '../storeFile'
 import { writeThroughTmp } from '../accounts/fileQueue'
 import { RepairNeeded } from '../settings/repairNeeded'
 import type { ResolvedAction } from './resolve'
+import type { PolicyMode } from '../extensions/resolve'
 import type { AuditAction, AuditDecision, AuditMode, AuditPolicy, AuditRule, CommandFacts, CoverageCell, CoverageRow } from './types'
 
 // Declared beside the other shapes the renderer reads (types.ts), kept importable from here
@@ -138,7 +139,11 @@ export class AuditPolicyDamaged extends RepairNeeded {
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
 /** A mode it does not know reads as compatibility, which never observes more than the person chose. */
-const modeOf = (v: unknown): AuditMode => (isRecord(v) && v.mode === 'observe' ? 'observe' : 'compatibility')
+const modeOf = (v: unknown): AuditMode => (isRecord(v) && (v.mode === 'observe' || v.mode === 'enforce') ? v.mode : 'compatibility')
+
+/** Whether sessions started in this mode have their calls recorded: observe, and enforce, which records as observe does
+ *  and also blocks (enforce design §5). */
+export const isObserving = (m: AuditMode | PolicyMode): boolean => m === 'observe' || m === 'enforce'
 
 function ruleOf(v: unknown): AuditRule | null {
   if (!isRecord(v)) return null
@@ -154,6 +159,16 @@ function policyOf(v: unknown): AuditPolicy | null {
   const rules = v.rules.map(ruleOf)
   if (rules.some((r) => r === null)) return null
   return { version: 1, mode: modeOf(v), rules: rules as AuditRule[], otherwise: v.otherwise as AuditPolicy['otherwise'] }
+}
+
+/** The policy a file's text holds, or null when it is none: what the Enforce hook reads, synchronously, at every call.
+ *  Never throws. */
+export function parseAuditPolicy(text: string): AuditPolicy | null {
+  try {
+    return policyOf(JSON.parse(text))
+  } catch {
+    return null
+  }
 }
 
 /** The profile's rules and mode; null when there is no file. Throws RepairNeeded when the file is unreadable, and its
@@ -238,3 +253,6 @@ export const COVERAGE: readonly CoverageRow[] = [
   },
   { provider: 'codex', kind: 'chat', classes: { shell: SEEN, 'file-read': SHELL_TEXT_ONLY, 'file-write': SEEN, mcp: SEEN, network: { level: 'partial' } } }
 ]
+
+// What Enforce blocks, in a module of its own so the renderer can read it too (coverage.ts)
+export { COVERAGE_ENFORCE } from './coverage'

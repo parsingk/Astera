@@ -51,6 +51,8 @@ interface Entry {
   submissions: Submission[]
   /** An app that does not mark a person's lines wrote to it (`writesUnmarked`). */
   unmarked: boolean
+  /** Set by `stop`: the reason put first in the exit's stderr tail. */
+  stopReason: string | undefined
 }
 
 export interface ProcRegistryDeps {
@@ -143,11 +145,13 @@ export class ProcRegistry {
       alive: true,
       splitter: createLineSplitter((line) => this.keep(entry, line)),
       submissions: [],
-      unmarked: false
+      unmarked: false,
+      stopReason: undefined
     }
     this.entries.set(a.id, entry)
     proc.onData((chunk) => entry.splitter.push(chunk))
-    proc.onExit(({ exitCode, stderrTail }) => {
+    proc.onExit(({ exitCode, stderrTail: ownTail }) => {
+      const stderrTail = entry.stopReason === undefined ? ownTail : [entry.stopReason, ownTail].filter((t) => t !== undefined && t !== '').join('\n')
       // A last line that never got its newline is still a line the app may need — a JSON-RPC error
       // printed on the way out, say.
       entry.splitter.flush()
@@ -250,6 +254,16 @@ export class ProcRegistry {
 
   kill(id: string): void {
     this.live(id)?.proc.kill()
+  }
+
+  /** Ends a live process with `reason` first in its last words (the stderr tail its exit carries), which the app's
+   *  adapter makes the chat's error: the Host stopping a chat whose Enforce hook did not run, whoever writes it (final
+   *  review I3). */
+  stop(id: string, reason: string): void {
+    const e = this.live(id)
+    if (!e) return
+    e.stopReason = reason
+    e.proc.kill()
   }
 
   /** Same contract as PtyRegistry.note: merged, and only into a live entry that has a note. */

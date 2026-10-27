@@ -1288,6 +1288,60 @@ describe('ChatSessionManager — what a takeover reads (chat takeover Task 2)', 
   })
 })
 
+// Enforce (enforce design §5, E5): a Claude chat started in Enforce gets the blocking hook through --settings, and does
+// not start without it
+describe('Enforce in chat sessions', () => {
+  const caps = (policyMode: 'compatibility' | 'observe' | 'enforce') => ({
+    context: { kind: 'implicit' as const, accounts: ['acc-cl'], policyMode, executionMode: 'managed' as const },
+    args: [], env: {}, given: [], gatewayGrant: [], skipped: []
+  })
+  const make = (policyMode: 'compatibility' | 'observe' | 'enforce', args: string[] | null, blocker: string | null = null, kinds: unknown[] = []) => {
+    const factory = vi.fn((_f: string, _a: string[], _o: ProcSpawnOptions) => new FakeProc())
+    const adapters = makeAdapterFactory()
+    const deps = {
+      factory, descriptors: makeDescriptors('linux'), homeDir: '/home/t', platform: 'linux' as const, version: '1', log: () => {},
+      createAdapter: adapters.createAdapter,
+      capabilities: { get: () => caps(policyMode), refresh: async () => {} },
+      enforce: { args: () => args, blocker: (p: 'claude' | 'codex', kind: 'terminal' | 'chat') => (kinds.push([p, kind]), blocker) }
+    }
+    return { factory, handles: adapters.handles, manager: new ChatSessionManager(deps) }
+  }
+
+  it('a Claude chat started in enforce gets the chat enforce settings and is marked enforced', () => {
+    const { factory, manager } = make('enforce', ['--settings', '/p/astera-enforce-chat-settings.json'])
+    manager.spawn({ account: claudeAccount, cwd: '/p' })
+    const argv = factory.mock.calls[0][1]
+    expect(argv.slice(argv.indexOf('--settings'), argv.indexOf('--settings') + 2)).toEqual(['--settings', '/p/astera-enforce-chat-settings.json'])
+    expect(factory.mock.calls[0][2].meta?.restore).toMatchObject({ observed: true, enforced: true })
+    const o = make('observe', ['--settings', '/p/x.json'])
+    o.manager.spawn({ account: claudeAccount, cwd: '/p' })
+    expect(o.factory.mock.calls[0][1]).not.toContain('--settings')
+    expect(o.factory.mock.calls[0][2].meta?.restore).not.toHaveProperty('enforced')
+  })
+
+  it('a Codex chat started in enforce gets the hook args on app-server', () => {
+    const { factory, manager } = make('enforce', ['-c', 'hooks.PreToolUse=[x]'])
+    manager.spawn({ account: codexAccount, cwd: '/p' })
+    const argv = factory.mock.calls[0][1]
+    expect(argv.slice(argv.indexOf('app-server'), argv.indexOf('app-server') + 3)).toEqual(['app-server', '-c', 'hooks.PreToolUse=[x]'])
+    expect(factory.mock.calls[0][2].meta?.restore).toMatchObject({ observed: true, enforced: true })
+  })
+
+  it('a chat started in enforce on an older CLI is refused with the reason', () => {
+    const kinds: unknown[] = []
+    const { factory, manager } = make('enforce', ['--settings', '/p/x.json'], 'ENFORCE_UNAVAILABLE: cli-too-old claude 2.1.300 2.1.306', kinds)
+    expect(() => manager.spawn({ account: claudeAccount, cwd: '/p' })).toThrow('ENFORCE_UNAVAILABLE: cli-too-old claude 2.1.300 2.1.306')
+    expect(factory).not.toHaveBeenCalled()
+    expect(kinds).toEqual([['claude', 'chat']])
+  })
+
+  it('a chat started in enforce without the hook is refused', () => {
+    const { factory, manager } = make('enforce', null)
+    expect(() => manager.spawn({ account: claudeAccount, cwd: '/p' })).toThrow(/^ENFORCE_UNAVAILABLE: no-interpreter/)
+    expect(factory).not.toHaveBeenCalled()
+  })
+})
+
 describe('ChatSessionManager.sendCarryOn — the app sends a carry-on the Host left (final review I1)', () => {
   /** An adapter whose send writes one line to the proc, or none when `refuse` says so. */
   const writingAdapter = (order: string[], refuse = false): NonNullable<ChatManagerDeps['createAdapter']> => (a) => {

@@ -18,6 +18,12 @@
 //   (Codex's /new, read once more first) or the Host ends, is handed over as unknown, and an output after that adds
 //   nothing.
 //
+// - Enforce (enforce design §5): a call the blocking hook stopped never ran, so none of the above hears it. The hook
+//   writes every call it sees to enforce/<session>.jsonl, a stopped one with its rule and what it resolved the call to;
+//   that file is read for each session whose note says it was started in Enforce, at every poll and, synchronously,
+//   before any of the session's other calls is handed over, so a call the provider reports after the hook stopped it
+//   (a Claude chat's tool_result) is kept once, as blocked.
+//
 // Only sessions whose note says they were started observed are followed (Review Focus 1); the recorder asks the same
 // of a hook line. The Host reads only what it holds: a session the app runs in its own node-pty, with no Host, is not
 // observed (design §8, no second recorder in the app). While the recorder knows the mode is compatibility nothing is
@@ -30,7 +36,10 @@
 // with it (its ptys and chat processes are its children), so a new Host has no earlier line of a live session to read
 // again. Within one Host, a call heard twice is kept once by the recorder's dedupe on the provider's call id. What a
 // Host does not hear while it is down is lost: the app empties hook-events at its next start.
-import type { watch } from 'node:fs'
+import { closeSync, fstatSync, openSync, readSync, promises as fsp, type watch } from 'node:fs'
+import path from 'node:path'
+import { AUDIT_ACTIONS } from '../../core/audit/policy'
+import type { AuditAction } from '../../core/audit/types'
 import { decodeClaudeFrame } from '../../core/chat/claudeProtocol'
 import { decodeFrame } from '../../core/chat/codexProtocol'
 import { outputText } from '../../core/history/codexConversation'
@@ -41,8 +50,10 @@ import type { AuditSource } from '../../core/audit/store'
 import type { PtyMeta } from '../../core/host/protocol'
 import type { AuditEvent, AuditRecorder } from './recorder'
 
-/** One finished call as a source reads it, before it is told whose session it was. */
-export type ObservedCall = Omit<AuditEvent, 'sessionId' | 'source'>
+/** One finished call as a source reads it, before it is told whose session it was. `stoppedByHook`: a Codex call whose
+ *  output says a PreToolUse hook stopped its one command (`hookStopped`), which in a session started in Enforce is the
+ *  enforce file's to record. */
+export type ObservedCall = Omit<AuditEvent, 'sessionId' | 'source'> & { stoppedByHook?: true }
 
 /** How often the rollouts are read forward: the rollout watcher's own period. */
 export const ROLLOUT_POLL_MS = 1_000
@@ -245,6 +256,21 @@ function execResults(rest: string, runsCommand: boolean): ObservedCall['status']
 /** Whether an exec script runs a command: one of Codex's shell tools called from it. */
 const EXEC_RUNS_COMMAND = /\btools\.(?:exec_command|shell_command|shell|local_shell)\s*\(/
 
+/** Codex's words when Astera's PreToolUse hook refused an exec script's call, at the start of its output (codex 0.160,
+ *  measured 2026-10-27: "Script failed …" then "Script error:\nCommand blocked by PreToolUse hook: <reason>"), and Astera's
+ *  own reasons start "Blocked by Astera": another hook's refusal, or a command that printed the words, is not it (final
+ *  review M3). A shell call's output says it near its start. */
+const EXEC_STOPPED = /^Script failed[^\n]*\n[\s\S]*?Script error:\s*Command blocked by PreToolUse hook: Blocked by Astera/
+const SHELL_STOPPED = /^[\s\S]{0,200}?Command blocked by PreToolUse hook: Blocked by Astera/
+/** Whether a call's output says Astera's hook stopped it, and it was one call: a shell command, or an exec script that
+ *  calls one tool (Codex's code mode, whose inner call the hook sees under an id of its own). A script of several calls
+ *  ran the others, and stays the record of them. */
+function hookStopped(kind: 'shell' | 'exec' | 'patch', text: string | null, input: unknown): boolean {
+  if (text === null || !(kind === 'exec' ? EXEC_STOPPED : SHELL_STOPPED).test(text)) return false
+  if (kind !== 'exec') return true
+  return typeof input === 'string' && (input.match(/\btools\.[A-Za-z_][A-Za-z0-9_]*\s*\(/g) ?? []).length === 1
+}
+
 /** How a call went, from the text of its output (and for an exec script, the script it ran): ok, failed, or unknown
  *  when it says nothing (or the call goes on). */
 function outcomeOf(kind: 'shell' | 'exec' | 'patch', text: string | null, input?: unknown): ObservedCall['status'] {
@@ -301,7 +327,12 @@ export function codexRolloutCalls(now: () => number = Date.now): RolloutReader {
           const held = id === null ? undefined : waiting.get(id)
           if (!held) continue
           waiting.delete(id!)
-          out.push({ ...held.call, status: outcomeOf(held.kind, outputText(p.output), held.call.input) })
+          const text = outputText(p.output)
+          out.push({
+            ...held.call,
+            status: outcomeOf(held.kind, text, held.call.input),
+            ...(hookStopped(held.kind, text, held.call.input) ? { stoppedByHook: true as const } : {})
+          })
           continue
         }
         const t = Date.parse(str(o?.timestamp) ?? '')
@@ -376,6 +407,123 @@ function rolloutCall(type: unknown, p: Record<string, unknown>): ObservedCall | 
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
+// Enforce
+
+const ACTION_NAMES = new Set<string>(AUDIT_ACTIONS)
+const CONFIDENCES = new Set(['exact', 'high', 'heuristic', 'unknown'])
+/** How much of an enforce file one read takes at most; the rest is read at the next. */
+const ENFORCE_READ_MAX = 1 << 20
+/** Call ids of a session's file kept for the proof; a call's report comes seconds after its hook's line. */
+const ENFORCE_IDS_KEPT = 5000
+/** Claude's tools no hook may see: its hosted web search. */
+const UNHOOKED_CLAUDE_TOOLS = new Set(['WebSearch'])
+
+/** A hook line's call id, blocked or not. */
+function lineId(line: string): string | null {
+  try {
+    return str(obj(JSON.parse(line))?.id)
+  } catch {
+    return null
+  }
+}
+
+/** A line of a session's enforce file as the call the hook stopped, with whose CLI it was; null for a call it let
+ *  through, and for anything that is not a line the hook writes. */
+export function enforceBlockedCall(line: string): (ObservedCall & { provider: 'claude' | 'codex' }) | null {
+  let o: Record<string, unknown> | null
+  try {
+    o = obj(JSON.parse(line))
+  } catch {
+    return null
+  }
+  const blockedBy = str(o?.blocked)
+  const tool = str(o?.tool)
+  const action = str(o?.action)
+  if (!o || blockedBy === null || tool === null || action === null || !ACTION_NAMES.has(action)) return null
+  const target = typeof o.target === 'string' ? o.target : ''
+  const confidence = CONFIDENCES.has(o.confidence as string) ? (o.confidence as 'exact' | 'high' | 'heuristic' | 'unknown') : 'unknown'
+  const id = str(o.id)
+  const at = isoOf(o.at)
+  return {
+    provider: o.provider === 'codex' ? 'codex' : 'claude',
+    tool,
+    input: {},
+    status: 'blocked',
+    blockedBy,
+    ...(id !== null ? { dedupeKey: id } : {}),
+    ...(at !== undefined ? { at } : {}),
+    resolved: {
+      action: action as AuditAction,
+      target,
+      confidence,
+      ...(typeof o.insideProject === 'boolean' ? { insideProject: o.insideProject } : {})
+    }
+  }
+}
+
+/** One session's enforce file, read forward synchronously: the whole lines written since the last read. A file not
+ *  there yet reads as nothing; one that got shorter is read from its start again. */
+class EnforceFile {
+  private offset = 0
+  private rest: Buffer = Buffer.alloc(0)
+  /** The ids of the calls it says were stopped, so the provider's own report of one is not handed over too. */
+  readonly blocked = new Set<string>()
+  /** The ids of every call the hook saw, the newest ENFORCE_IDS_KEPT: a Claude call that ran is among them (final review
+   *  I4). */
+  readonly seen = new Set<string>()
+  /** Blocks not yet matched to a Codex report of one stopped call under another id (`stoppedByHook`). */
+  unmatched = 0
+
+  saw(id: string): void {
+    this.seen.add(id)
+    if (this.seen.size > ENFORCE_IDS_KEPT) this.seen.delete(this.seen.values().next().value as string)
+  }
+  constructor(readonly file: string) {}
+
+  readNew(): string[] {
+    let fd: number
+    try {
+      fd = openSync(this.file, 'r')
+    } catch {
+      return []
+    }
+    try {
+      const size = fstatSync(fd).size
+      if (size < this.offset) {
+        this.offset = 0
+        this.rest = Buffer.alloc(0)
+      }
+      if (size === this.offset) return []
+      const buf = Buffer.alloc(Math.min(size - this.offset, ENFORCE_READ_MAX))
+      const n = readSync(fd, buf, 0, buf.length, this.offset)
+      this.offset += n
+      const all = Buffer.concat([this.rest, buf.subarray(0, n)])
+      const end = all.lastIndexOf(0x0a)
+      this.rest = end < 0 ? all : all.subarray(end + 1)
+      return end < 0 ? [] : all.subarray(0, end).toString('utf8').split('\n').filter((l) => l.trim() !== '')
+    } finally {
+      closeSync(fd)
+    }
+  }
+
+}
+
+/** Deletes the enforce file of every session not in `keep`: run at the Host's start, when no session of an earlier
+ *  Host is alive, so the folder holds only the files of the sessions running now. Never rejects. */
+export async function pruneEnforceFiles(enforceDir: string, keep: ReadonlySet<string>): Promise<void> {
+  let names: string[]
+  try {
+    names = await fsp.readdir(enforceDir)
+  } catch {
+    return
+  }
+  for (const name of names) {
+    if (!name.endsWith('.jsonl') || keep.has(name.slice(0, -'.jsonl'.length))) continue
+    await fsp.rm(path.join(enforceDir, name), { force: true }).catch(() => {})
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
 // The Host's wiring
 
 type Listen<A extends unknown[]> = (cb: (...a: A) => void) => () => void
@@ -389,11 +537,14 @@ export interface AuditSources {
 
 export function createAuditSources(d: {
   /** `retryMode` is asked at every tick of the timer: the recorder says when it is due. */
-  recorder: Pick<AuditRecorder, 'record' | 'observing' | 'onObservingChange'> & Partial<Pick<AuditRecorder, 'retryMode'>>
+  recorder: Pick<AuditRecorder, 'record' | 'observing' | 'onObservingChange'> & Partial<Pick<AuditRecorder, 'retryMode' | 'unhooked'>>
   ptys: { onMeta: Listen<[string, PtyMeta, 'open' | 'note']>; onExit: Listen<[string, number]> }
   procs: { onMeta: Listen<[string, PtyMeta, 'open' | 'note']>; onLine: Listen<[string, number, string]>; onExit: Listen<[string, number]> }
   /** The profile's hook-events folder, where the observed sessions' audit files are. */
   hookEventsDir: string
+  /** The profile's enforce folder (profilePaths `enforceEvents`), where the Enforce hook writes each session's calls.
+   *  Unset: no enforce file is read. */
+  enforceDir?: string
   log(message: string): void
   /** Test injection (epoch ms). */
   now?: () => number
@@ -403,8 +554,61 @@ export function createAuditSources(d: {
   watch?: typeof watch
 }): AuditSources {
   const now = d.now ?? Date.now
+
+  /** The sessions started in Enforce, by session id, and which pty or process each runs in. */
+  const enforcing = new Map<string, EnforceFile>()
+  const enforcedBy = new Map<string, string>()
+  const followEnforce = (holder: string, meta: PtyMeta): void => {
+    if (!d.enforceDir || meta.restore.enforced !== true || enforcing.has(meta.id)) return
+    enforcing.set(meta.id, new EnforceFile(path.join(d.enforceDir, `${meta.id}.jsonl`)))
+    enforcedBy.set(holder, meta.id)
+  }
+  /** Hands over what the session's enforce file says was stopped since it was last read, in any mode: a session started
+   *  in Enforce keeps blocking after the mode is turned off, and its blocks say why (final review I7). */
+  const readEnforce = (sessionId: string): void => {
+    const f = enforcing.get(sessionId)
+    if (!f) return
+    try {
+      for (const line of f.readNew()) {
+        const id = lineId(line)
+        if (id !== null) f.saw(id)
+        const c = enforceBlockedCall(line)
+        if (!c) continue
+        const { provider, ...call } = c
+        if (call.dedupeKey !== undefined) f.blocked.add(call.dedupeKey)
+        f.unmatched++
+        d.recorder.record({ sessionId, source: provider === 'codex' ? 'codex-hook' : 'claude-hook', ...call })
+      }
+    } catch (err) {
+      d.log(`audit: the enforce file of session ${sessionId} could not be read: ${String(err)}`)
+    }
+  }
+  const unfollowEnforce = (holder: string): void => {
+    const sessionId = enforcedBy.get(holder)
+    if (sessionId === undefined) return
+    // Read once more, for what it wrote last
+    readEnforce(sessionId)
+    enforcedBy.delete(holder)
+    enforcing.delete(sessionId)
+  }
+
+  /** A session's finished calls, after what its enforce file says: a call the hook stopped is the file's, not these. */
   const hand = (sessionId: string, source: AuditSource, calls: ObservedCall[]): void => {
-    for (const c of calls) d.recorder.record({ sessionId, source, ...c })
+    const f = enforcing.get(sessionId)
+    if (f) readEnforce(sessionId)
+    for (const { stoppedByHook, ...c } of calls) {
+      if (f && c.dedupeKey !== undefined && f.blocked.has(c.dedupeKey)) continue
+      // Codex's report of the one call the hook stopped, under its own id: the file's blocked line is that call
+      if (f && stoppedByHook && f.unmatched > 0) {
+        f.unmatched--
+        continue
+      }
+      // A Claude call that ran has its hook's line under the same tool_use_id; one without ran unhooked (final review I4)
+      const ran = c.status === 'ok' || c.status === 'failed'
+      if (f && ran && (source === 'claude-hook' || source === 'claude-chat') && c.dedupeKey !== undefined && !f.seen.has(c.dedupeKey) && !UNHOOKED_CLAUDE_TOOLS.has(c.tool))
+        d.recorder.unhooked?.(sessionId)
+      d.recorder.record({ sessionId, source, ...c })
+    }
   }
 
   /** Where each observed Claude session's last call left its shell (hookShellAfter), so where its next call runs. Not
@@ -451,6 +655,7 @@ export function createAuditSources(d: {
 
   const offs = [
     d.procs.onMeta((procId, meta) => {
+      if (meta.kind === 'chat') followEnforce(procId, meta)
       if (meta.kind !== 'chat' || meta.restore.observed !== true || chats.has(procId)) return
       // A note written before Claude chats carried a provider is a Codex chat's (ChatSessionManager.adopt)
       chats.set(
@@ -476,8 +681,12 @@ export function createAuditSources(d: {
         d.log(`audit: a line of chat ${chat.sessionId} could not be read: ${String(err)}`)
       }
     }),
-    d.procs.onExit((procId) => void chats.delete(procId)),
+    d.procs.onExit((procId) => {
+      chats.delete(procId)
+      unfollowEnforce(procId)
+    }),
     d.ptys.onMeta((ptyId, meta, why) => {
+      if (meta.kind === 'session') followEnforce(ptyId, meta)
       if (meta.kind !== 'session' || meta.restore.observed !== true) return
       let r = rollouts.get(ptyId)
       if (!r) {
@@ -499,10 +708,13 @@ export function createAuditSources(d: {
     }),
     d.ptys.onExit((ptyId) => {
       const r = rollouts.get(ptyId)
-      if (!r) return
-      // Read once more, for what it wrote last
-      if (r.tail) r.ended = true
-      else rollouts.delete(ptyId)
+      // Read once more, for what it wrote last; its enforce file is let go after that last read, which may hand the
+      // report of a call the hook stopped (final review M4)
+      if (r?.tail) r.ended = true
+      else {
+        rollouts.delete(ptyId)
+        unfollowEnforce(ptyId)
+      }
     })
   ]
 
@@ -532,6 +744,7 @@ export function createAuditSources(d: {
 
   let polling = false
   const readRollouts = async (): Promise<void> => {
+    for (const sessionId of [...enforcing.keys()]) readEnforce(sessionId)
     if (!follow()) return
     for (const [ptyId, r] of [...rollouts]) {
       for (const old of r.left.splice(0)) {
@@ -557,6 +770,7 @@ export function createAuditSources(d: {
       if (last) {
         hand(r.sessionId, 'codex-rollout', r.calls.unfinished())
         rollouts.delete(ptyId)
+        unfollowEnforce(ptyId)
       } else hand(r.sessionId, 'codex-rollout', r.calls.overdue())
     }
   }
@@ -595,6 +809,8 @@ export function createAuditSources(d: {
       for (const off of offs) off()
       chats.clear()
       rollouts.clear()
+      enforcing.clear()
+      enforcedBy.clear()
     }
   }
 }

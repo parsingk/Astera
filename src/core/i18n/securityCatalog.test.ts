@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest'
 import { CATALOGS, LANGS } from './index'
 
-const PREFIXES = ['settings.security.', 'audit.', 'jobs.detail.tokens', 'jobs.detail.coordinatorTokens', 'jobs.detail.taskTokens', 'jobs.detail.wouldDeny']
+const PREFIXES = ['settings.security.', 'audit.', 'jobs.detail.tokens', 'jobs.detail.coordinatorTokens', 'jobs.detail.taskTokens', 'jobs.detail.wouldDeny', 'jobs.detail.blocked']
 
 const keysOf = (): string[] => Object.keys(CATALOGS.ko.messages).filter((k) => PREFIXES.some((p) => k.startsWith(p)))
 

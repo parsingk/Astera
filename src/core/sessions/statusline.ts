@@ -9,6 +9,8 @@ import { HOOK_EVENT_AT } from '../hooks/eventTime'
 import { renameRetrying } from '../renameRetry'
 import { SESSION_CONTEXT_SCRIPT } from './sessionContext'
 import { CLAUDE_INPUT_FIELDS } from '../audit/resolve'
+import ENFORCE_HOOK_SOURCE from 'virtual:astera-enforce-hook'
+import { codexEnforceArgs } from './codexEnforce'
 
 /** The statusLine injection info handed to SessionManager when a session is spawned. */
 export interface StatusLineSpawn {
@@ -17,6 +19,57 @@ export interface StatusLineSpawn {
   originalCommand: string | null // That account's pre-existing global statusLine command — when present it is chained so the HUD stays
   hookOutPath?: string // the file the hook capture appends events to (one per session) — always set
   observed?: true // the settings file is an observe variant (ensureObserveFiles): the session sends its tool calls to its audit file
+  enforced?: true // the settings file is an enforce variant (ensureEnforceFiles): every tool call waits on the blocking hook first
+}
+
+/** Enforce's hook (enforce design §5), written beside the Rules it reads: the bundle of core/audit/hook/enforceMain.ts. */
+export const ENFORCE_HOOK_FILE = 'astera-enforce-hook.cjs'
+
+/** Whether the hook and its settings are in place, and when not, why (the code a refused start carries, E5). */
+export type EnforceFilesResult = 'ok' | 'no-interpreter' | 'hook-write-failed'
+
+/** Astera's own node, which runs the Enforce hook: `env`, when set, is a `NAME=value` the command starts with; `tail`
+ *  is an argument it ends with. */
+export interface EnforceInterpreter {
+  file: string
+  env?: string
+  tail?: string
+}
+
+/**
+ * What runs the Enforce hook (enforce design §5). A blocking hook must not depend on a node the person may not have, so
+ * it is Astera's own: on Windows the Host runtime (astera-host.exe, the node the capture scripts already run under, when
+ * it is a path); elsewhere the app's executable run as node (`ELECTRON_RUN_AS_NODE=1`), which is what the Host itself
+ * runs as there. Windows without the runtime has none: a bare `node` is not Astera's, and a session started in Enforce
+ * there is refused (E5, `ENFORCE_UNAVAILABLE: no-interpreter`).
+ *
+ * A Linux AppImage's executable is its temporary mount, gone once the app quits while its sessions run on in the Host,
+ * so the hook calls the AppImage file (`APPIMAGE`) the way the public shuttle does, `--no-sandbox` last for the same
+ * reason (core/orchestration/exec/shuttle.ts, appImageShuttle): AppRun adds none in front of node's arguments then.
+ */
+export function enforceInterpreter(o: {
+  platform: NodeJS.Platform
+  captureNode: string
+  execPath: string
+  appImage?: string
+}): EnforceInterpreter | null {
+  if (o.platform === 'linux' && o.appImage) return { file: o.appImage, env: 'ELECTRON_RUN_AS_NODE=1', tail: '--no-sandbox' }
+  // A macOS app opened where it was downloaded runs from a translocated copy that goes when it quits (final review M9)
+  if (o.platform === 'darwin' && o.execPath.includes('/AppTranslocation/')) return null
+  if (o.platform !== 'win32') return { file: o.execPath, env: 'ELECTRON_RUN_AS_NODE=1' }
+  return /^[A-Za-z]:[\\/]/.test(o.captureNode) ? { file: o.captureNode } : null
+}
+
+/**
+ * The command line that runs the Enforce hook for `provider`, quoted as captureCommand quotes a capture script. Both
+ * CLIs run it in a shell that reads that form: Claude Code in Git Bash or PowerShell on Windows, Codex in its own
+ * session shell, which is PowerShell on Windows and the user's sh, bash or zsh elsewhere (codex-rs core/src/session/mod.rs
+ * build_hooks_config, shell-command/src/shell_detect.rs, rust-v0.160.0). Measured 2026-10-27: the double-quoted form
+ * fails in Codex's PowerShell. A Windows without PowerShell sends Codex to cmd.exe, where it fails too; the Host's
+ * proof then stops the session.
+ */
+export function enforceCommand(i: EnforceInterpreter, script: string, provider: 'claude' | 'codex'): string {
+  return `${i.env ? `${i.env} ` : ''}${captureCommand(i.file, script)} ${provider}${i.tail ? ` ${i.tail}` : ''}`
 }
 
 // Capture script (node): Claude runs it as the statusLine → it writes the stdin payload to ASTERA_STATUSLINE_OUT, and
@@ -259,6 +312,12 @@ interface BuiltSettings {
   hooksSettings: { hooks: { PostToolUse: unknown[] } }
 }
 
+/** A settings file's observe variant (ensureObserveFiles): the audit capture `command` after every tool call. */
+function withObserveHooks(s: BuiltSettings['settings'], command: string): string {
+  const audit = { matcher: '*', hooks: [{ type: 'command', command, async: true }] }
+  return JSON.stringify({ ...s, hooks: { ...s.hooks, PostToolUse: [...s.hooks.PostToolUse, audit], PostToolUseFailure: [audit] } }, null, 2)
+}
+
 export class StatusLineManager {
   private readonly capturePath: string
   private readonly settingsFile: string
@@ -269,10 +328,23 @@ export class StatusLineManager {
   private readonly observeHooksSettingsFile: string
   private readonly hookAuditCapturePath: string
   private readonly sessionContextPath: string
+  private readonly enforceHookPath: string
+  private readonly enforceSettingsFile: string
+  private readonly enforceHooksSettingsFile: string
+  private readonly enforceChatSettingsFile: string
   readonly hookEventsDir: string // Watched by index.ts's HookEventWatcher
   private built: BuiltSettings | null = null
   /** Both observe files hold what the last ensureObserveFiles built; until then an observed session gets the plain file. */
   private observeReady = false
+  /** The hook and the three enforce files hold what the last ensureEnforceFiles built; until then a session is not
+   *  marked enforced. */
+  private enforceReady = false
+  private readonly platform: NodeJS.Platform
+  private readonly execPath: string
+  private readonly appImage: string | undefined
+  private readonly findRuntime: (() => Promise<string | null>) | undefined
+  /** A Host runtime found installed, for the Enforce hook only, when the capture scripts have no node of Astera's. */
+  private runtimeExe: string | null = null
 
   constructor(
     private userDataDir: string,
@@ -280,8 +352,22 @@ export class StatusLineManager {
      *  `useNode` changes it once the app knows better. */
     private nodePath: string = 'node',
     /** Where a folder it cannot use is told. */
-    private log: (m: string) => void = (m) => console.warn(m)
+    private log: (m: string) => void = (m) => console.warn(m),
+    /** Where the Enforce hook's interpreter comes from (enforceInterpreter): the process's own, unless a test says. */
+    host: {
+      platform?: NodeJS.Platform
+      execPath?: string
+      appImage?: string
+      /** Windows: a Host runtime an Astera installed (core/host/installedRuntime.ts), asked when the capture node is a
+       *  bare `node`, so the hook still runs with Astera's own node there. */
+      findRuntime?: () => Promise<string | null>
+    } = {}
   ) {
+    this.findRuntime = host.findRuntime
+    this.platform = host.platform ?? process.platform
+    this.execPath = host.execPath ?? process.execPath
+    // A test that names the executable names the AppImage too, or there is none
+    this.appImage = host.execPath === undefined ? process.env.APPIMAGE : host.appImage
     this.capturePath = path.join(userDataDir, 'astera-statusline-capture.cjs')
     this.settingsFile = path.join(userDataDir, 'astera-statusline-settings.json')
     this.outDir = path.join(userDataDir, 'statusline')
@@ -291,6 +377,10 @@ export class StatusLineManager {
     this.observeHooksSettingsFile = path.join(userDataDir, 'astera-observe-hooks-settings.json')
     this.hookAuditCapturePath = path.join(userDataDir, 'astera-hook-audit-capture.cjs')
     this.sessionContextPath = path.join(userDataDir, 'astera-session-context.cjs')
+    this.enforceHookPath = path.join(userDataDir, ENFORCE_HOOK_FILE)
+    this.enforceSettingsFile = path.join(userDataDir, 'astera-enforce-settings.json')
+    this.enforceHooksSettingsFile = path.join(userDataDir, 'astera-enforce-hooks-settings.json')
+    this.enforceChatSettingsFile = path.join(userDataDir, 'astera-enforce-chat-settings.json')
     // The Host reads these files back for `sessions list` (host/sessions.ts), so where they are is one
     // rule in core rather than a path spelled out twice.
     this.hookEventsDir = hookEventsDirIn(userDataDir)
@@ -462,12 +552,75 @@ export class StatusLineManager {
     const b = this.built
     if (!b) return
     const script = await writeScript(this.hookAuditCapturePath, HOOK_AUDIT_CAPTURE_SCRIPT)
-    const audit = { matcher: '*', hooks: [{ type: 'command', command: captureCommand(this.nodePath, this.hookAuditCapturePath), async: true }] }
-    const withObserve = (s: BuiltSettings['settings']): string =>
-      JSON.stringify({ ...s, hooks: { ...s.hooks, PostToolUse: [...s.hooks.PostToolUse, audit], PostToolUseFailure: [audit] } }, null, 2)
-    const plain = await writeScript(this.observeSettingsFile, withObserve(b.settings))
-    const wider = await writeScript(this.observeHooksSettingsFile, withObserve(b.hooksSettings))
+    const command = captureCommand(this.nodePath, this.hookAuditCapturePath)
+    const plain = await writeScript(this.observeSettingsFile, withObserveHooks(b.settings, command))
+    const wider = await writeScript(this.observeHooksSettingsFile, withObserveHooks(b.hooksSettings, command))
     this.observeReady = script && plain && wider
+  }
+
+  /** The Enforce hook's command line for `provider`, or null where there is no Astera node to run it (enforceInterpreter). */
+  enforceHookCommand(provider: 'claude' | 'codex'): string | null {
+    const i =
+      enforceInterpreter({ platform: this.platform, captureNode: this.nodePath, execPath: this.execPath, appImage: this.appImage }) ??
+      (this.runtimeExe !== null ? { file: this.runtimeExe } : null)
+    return i === null ? null : enforceCommand(i, this.enforceHookPath, provider)
+  }
+
+  /**
+   * Enforce mode (enforce design §5, E1): writes the blocking hook and the settings a session started in Enforce reads.
+   * Each terminal file is its observe variant (which it writes first) with one more PreToolUse entry for every tool
+   * (`*`), not `async`: Claude Code waits on it, and the hook prints the deny itself. Every file also says
+   * `"disableAllHooks": false`: it is passed as --settings, above user, project and local settings, so a project's
+   * `.claude/settings.local.json` that turns hooks off cannot turn this one off (final review C2, measured 2026-10-27). A chat session (`--settings` on top
+   * of its own arguments) gets a file with only that entry. Written only when a session is about to start in Enforce, so
+   * an Off or Observe session reads exactly the bytes it did. Resolves to 'ok' once all of it is written, else why not: no
+   * Astera node to run the hook (Windows without the Host runtime), or a file it could not write; the session is then
+   * refused (E5). Never
+   * throws.
+   */
+  async ensureEnforceFiles(): Promise<EnforceFilesResult> {
+    await this.ensureObserveFiles()
+    if (this.platform === 'win32' && this.findRuntime && enforceInterpreter({ platform: 'win32', captureNode: this.nodePath, execPath: this.execPath }) === null)
+      this.runtimeExe = await this.findRuntime().catch(() => null)
+    const b = this.built
+    const command = this.enforceHookCommand('claude')
+    if (command === null) {
+      this.enforceReady = false
+      return 'no-interpreter'
+    }
+    if (!b || !this.observeReady) {
+      this.enforceReady = false
+      return 'hook-write-failed'
+    }
+    const script = await writeScript(this.enforceHookPath, ENFORCE_HOOK_SOURCE)
+    const pre = { matcher: '*', hooks: [{ type: 'command', command, timeout: 10 }] }
+    const withEnforce = (s: BuiltSettings['settings']): string => {
+      const observed = JSON.parse(withObserveHooks(s, captureCommand(this.nodePath, this.hookAuditCapturePath))) as {
+        hooks: { PreToolUse?: unknown[] }
+      }
+      return JSON.stringify(
+        { ...observed, disableAllHooks: false, hooks: { ...observed.hooks, PreToolUse: [...(observed.hooks.PreToolUse ?? []), pre] } },
+        null,
+        2
+      )
+    }
+    const plain = await writeScript(this.enforceSettingsFile, withEnforce(b.settings))
+    const wider = await writeScript(this.enforceHooksSettingsFile, withEnforce(b.hooksSettings))
+    const chat = await writeScript(this.enforceChatSettingsFile, JSON.stringify({ disableAllHooks: false, hooks: { PreToolUse: [pre] } }, null, 2))
+    this.enforceReady = script && plain && wider && chat
+    return this.enforceReady ? 'ok' : 'hook-write-failed'
+  }
+
+  /** A Claude chat session's arguments for Enforce, once ensureEnforceFiles has written them, else null. */
+  enforceChatArgs(): string[] | null {
+    return this.enforceReady ? ['--settings', this.enforceChatSettingsFile.replace(/\\/g, '/')] : null
+  }
+
+  /** A Codex session's arguments for Enforce (terminal and app-server), once ensureEnforceFiles has written the hook,
+   *  else null. */
+  enforceCodexArgs(): string[] | null {
+    const command = this.enforceReady ? this.enforceHookCommand('codex') : null
+    return command === null ? null : codexEnforceArgs({ command, platform: this.platform })
   }
 
   /** The app-start half: empties the hook events folder (a queue the app drains) and makes the
@@ -537,11 +690,18 @@ export class StatusLineManager {
    *  notification for a choice or an approval is built on, and it is offered for any session.
    *  `opts.toolHooks` adds what only slack.ts reads: the turn summary's Stop and the per-tool-call
    *  capture pair. `opts.observe` (a session started while the mode is observe) points it at the
-   *  observe variant of that file, once ensureObserveFiles has written them, and says so (`observed`). */
-  spawnConfig(sessionId: string, account: Account, opts?: { toolHooks?: boolean; observe?: boolean }): StatusLineSpawn {
+   *  observe variant of that file, once ensureObserveFiles has written them, and says so (`observed`).
+   *  `opts.enforce` (with observe, a session started in Enforce) points it at the enforce variant, once
+   *  ensureEnforceFiles has written them, and says so (`enforced`). */
+  spawnConfig(sessionId: string, account: Account, opts?: { toolHooks?: boolean; observe?: boolean; enforce?: boolean }): StatusLineSpawn {
     const toolHooks = opts?.toolHooks === true
     const observe = opts?.observe === true && this.observeReady
-    const file = observe
+    const enforce = observe && opts?.enforce === true && this.enforceReady
+    const file = enforce
+      ? toolHooks
+        ? this.enforceHooksSettingsFile
+        : this.enforceSettingsFile
+      : observe
       ? toolHooks
         ? this.observeHooksSettingsFile
         : this.observeSettingsFile
@@ -556,7 +716,8 @@ export class StatusLineManager {
       // Always set: with ASTERA_HOOK_OUT unset the capture script does nothing, so a hook that is
       // installed but has nowhere to write is the same as no hook at all.
       hookOutPath: hookEventsFileIn(this.hookEventsDir, sessionId),
-      ...(observe ? { observed: true as const } : {})
+      ...(observe ? { observed: true as const } : {}),
+      ...(enforce ? { enforced: true as const } : {})
     }
   }
 

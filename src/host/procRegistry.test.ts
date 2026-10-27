@@ -346,3 +346,22 @@ describe('ProcRegistry.onMeta (Slack in the Host, P7)', () => {
     expect(heard).toEqual(['p1', 'p1'])
   })
 })
+
+// Enforce (final review I3): a chat the Host stops, whoever writes it, ends with the reason first in its last words, which
+// the app's adapter makes the pane's error
+describe('ProcRegistry — stop with a reason', () => {
+  it('puts the reason before the process’s own stderr tail, and leaves an ended one alone', () => {
+    const procs: ReturnType<typeof fakeProc>[] = []
+    const registry = new ProcRegistry({ spawn: () => (procs.push(fakeProc()), procs[procs.length - 1]), log: () => {} })
+    const tails: Array<string | undefined> = []
+    registry.onExit((_id, _code, tail) => tails.push(tail))
+    registry.open({ id: 'p1', file: 'claude', args: [], opts: { cwd: '/w', env: {} }, meta: meta() })
+    registry.stop('p1', 'The blocking hook did not run in this session, so the session was stopped.')
+    expect(procs[0].killed).toBe(true)
+    procs[0].exit(1)
+    expect(tails).toEqual(['The blocking hook did not run in this session, so the session was stopped.'])
+    registry.stop('p1', 'again')
+    registry.stop('nope', 'x')
+    expect(tails).toHaveLength(1)
+  })
+})

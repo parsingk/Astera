@@ -148,6 +148,7 @@ export function composeHostRolling(a: {
     orchEnv: () => a.spawner.orchEnvNow(),
     capabilities: a.spawner.capabilities,
     hiding: a.spawner.hiding,
+    enforce: a.spawner.enforce,
     log,
     ...a.chatsDeps
   })

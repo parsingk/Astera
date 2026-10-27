@@ -6,7 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { removeFixture } from '../../core/testFixtures'
 import { profilePaths } from '../../core/profile/paths'
-import { COVERAGE, STARTER_POLICY, readAuditPolicy, readPolicyMode, writeAuditPolicy, type AuditPolicy, type AuditRule } from '../../core/audit/policy'
+import { COVERAGE, COVERAGE_ENFORCE, STARTER_POLICY, readAuditPolicy, readPolicyMode, writeAuditPolicy, type AuditPolicy, type AuditRule } from '../../core/audit/policy'
 import { POLICY_CHANGES, POLICY_COMMANDS, createHostPolicies } from './policyCommands'
 
 const dirs: string[] = []
@@ -39,7 +39,8 @@ describe('createHostPolicies', () => {
     const h = await rig()
     const r = await h.call('policies-show')
     expect(r.status).toBe(200)
-    expect(r.body).toEqual({ mode: 'compatibility', policy: STARTER_POLICY, coverage: COVERAGE })
+    // With what Enforce would block, so the screen's preview says it before Enforce is on
+    expect(r.body).toEqual({ mode: 'compatibility', policy: STARTER_POLICY, coverage: COVERAGE, enforceCoverage: COVERAGE_ENFORCE })
     expect(r.marks.effects).toBe(0)
     expect(await h.exists()).toBe(false)
   })
@@ -60,18 +61,31 @@ describe('createHostPolicies', () => {
     expect(after.policy.rules).toEqual([...STARTER_POLICY.rules, added])
   })
 
-  it('writes no file to turn compatibility on when there is none, and refuses enforce', async () => {
+  it('writes no file to turn compatibility on when there is none, and refuses a mode it does not know', async () => {
     const h = await rig()
     const r = await h.call('policies-set-mode', { mode: 'compatibility' })
     expect(r.status).toBe(200)
     expect(r.body).toMatchObject({ mode: 'compatibility' })
     expect(await h.exists()).toBe(false)
-    for (const mode of ['enforce', undefined, 'OBSERVE']) {
+    for (const mode of ['strict', undefined, 'OBSERVE', 'ENFORCE']) {
       const bad = await h.call('policies-set-mode', { mode })
       expect(bad.status).toBe(400)
       expect(bad.marks.effects).toBe(0)
     }
     expect(await h.exists()).toBe(false)
+  })
+
+  // Enforce (enforce design §5, E1): set like observe, the starter rules written the first time, never by an agent
+  it('sets the mode to enforce from the app and the CLI, not from an agent’s shell', async () => {
+    const h = await rig()
+    const on = await h.call('policies-set-mode', { mode: 'enforce' })
+    expect(on.status).toBe(200)
+    expect(await readAuditPolicy(h.profileDir)).toEqual({ ...STARTER_POLICY, mode: 'enforce' })
+    expect((await h.call('policies-set-mode', { mode: 'observe' }, { role: 'cli' })).status).toBe(200)
+    expect((await h.call('policies-set-mode', { mode: 'enforce' }, { role: 'cli' })).status).toBe(200)
+    const agent = await h.call('policies-set-mode', { mode: 'compatibility' }, { role: 'cli', agentRefusal: 'not from an agent session' })
+    expect(agent.status).toBe(403)
+    expect(await readPolicyMode(h.profileDir)).toBe('enforce')
   })
 
   it('adds a rule at the end or at a position, with an id of its own', async () => {
@@ -335,7 +349,7 @@ describe('createHostPolicies', () => {
     const call = (cmd: string, args: Record<string, unknown> = {}, agentRefusal?: string) =>
       hub.command({ cmd, args, role: 'app', ...(agentRefusal ? { agentRefusal } : {}), marks: { effects: 0 } })
     await call('policies-show')
-    await call('policies-set-mode', { mode: 'enforce' })
+    await call('policies-set-mode', { mode: 'strict' })
     await call('policies-set-mode', { mode: 'observe' }, 'not an agent')
     expect(changes).toBe(0)
     await call('policies-set-mode', { mode: 'observe' })

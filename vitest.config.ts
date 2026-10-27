@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
 import os from 'node:os'
 import { workersFor } from './vitest.workers'
+import { enforceHookPlugin } from './electron.vite.enforceHook'
 
 export default defineConfig({
   // The vendored shadcn and assistant-ui components (src/renderer/src/components/ui/,
@@ -16,6 +17,8 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src/renderer/src', import.meta.url))
     }
   },
+  // Enforce's hook as the build bundles it, so a test runs the very file the sessions run (electron.vite.enforceHook.ts)
+  plugins: [enforceHookPlugin()],
   test: {
     include: [
       'src/core/**/*.test.ts',

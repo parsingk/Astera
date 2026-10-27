@@ -47,6 +47,11 @@ import type { BypassSignal } from '../core/sessions/retryBypass'
 import { detectBypassableManager } from './cliLocate'
 import { createCapabilityCache, type CapabilityCache } from '../core/extensions/capabilityCache'
 import { readPolicyMode } from '../core/audit/policy'
+import type { EnforceStart } from '../core/audit/enforce'
+import { cliVersionProbe, enforceBlocker } from '../core/sessions/cliVersion'
+import { createManagedHooksCheck } from '../core/sessions/managedHooks'
+import { codexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
+import { findInstalledHostExe } from '../core/host/installedRuntime'
 import { settingsImportCopiesCapabilities } from '../core/extensions/registry'
 import { hidingLog } from '../core/extensions/secrets'
 import { createHidingSource, projectOfWorktrees } from '../core/credentials/hiding'
@@ -238,6 +243,9 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     userData: userDataDir,
     appName: app.getName()
   })
+  // Enforce's hook on Windows when the capture scripts are left a bare node (development, or no runtime put in place):
+  // a runtime an Astera installed here
+  const findRuntime = (): Promise<string | null> => findInstalledHostExe(runtimeBase)
   const statusLine = new StatusLineManager(
     userDataDir,
     process.platform !== 'win32'
@@ -249,7 +257,9 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
             appVersion: app.getVersion(),
             readFile: (p, enc) => fsp.readFile(p, enc)
           })) ?? 'node')
-        : 'node'
+        : 'node',
+    undefined,
+    { findRuntime }
   )
   await statusLine.init()
   // One factory for the app's life. Slice 2's Host-backed one is attached to it by registerIpc once
@@ -284,12 +294,22 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   // Shared extensions (Agent Control Plane release 1 design §4.5). The two managers read the same cache:
   // a chat roll's respawn is prepared through `sessions.prepare`, which refreshes the target account
   const gateway: Core['gateway'] = { ask: async () => null }
+  // Enforce: each CLI's version, asked once per binary (E5: one too old to honour the hook does not start)
+  const cliVersions = cliVersionProbe(process.platform)
+  // Enforce: an organization's Claude Code policy that turns hooks off (final review C2)
+  const managedHooks = createManagedHooksCheck(process.platform)
   const capabilities = createCapabilityCache({
     gatewayPort: () => gateway.ask(),
     profileDir: userDataDir,
     homeDir: os.homedir(),
     platform: process.platform,
-    policyMode: () => readPolicyMode(userDataDir),
+    // Enforce: the refresh every spawn awaits first puts the blocking hook's files in place, so a chat spawn, which has
+    // no await of its own, finds them written (StatusLineManager.ensureEnforceFiles)
+    policyMode: async () => {
+      const mode = await readPolicyMode(userDataDir)
+      if (mode === 'enforce') await Promise.all([statusLine.ensureEnforceFiles(), cliVersions.warm('claude'), cliVersions.warm('codex'), managedHooks.warm()])
+      return mode
+    },
     log: hidingLog(userDataDir, sessionsLog)
   })
   sessions.capabilities = capabilities
@@ -299,6 +319,21 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   sessions.hiding = hiding
   // Observe mode: an observed Claude session's hook settings, written by its prepare (StatusLineManager.ensureObserveFiles)
   sessions.observeHooks = () => statusLine.ensureObserveFiles()
+  // Enforce: the blocking hook, written by a session's prepare, which refuses the start without it (E5). A Claude terminal
+  // session reads it from its settings file; a chat, and any Codex session, from these arguments
+  sessions.enforceHooks = () => statusLine.ensureEnforceFiles()
+  const enforce: EnforceStart = {
+    args: (provider) => (provider === 'claude' ? statusLine.enforceChatArgs() : statusLine.enforceCodexArgs()),
+    blocker: (provider, kind) =>
+      enforceBlocker(provider, cliVersions(provider)) ??
+      (provider === 'claude' && managedHooks.off() ? 'ENFORCE_UNAVAILABLE: hooks-off' : null) ??
+      // A codex terminal without --no-daemon may run its tools in a daemon another session started (final review M11)
+      (provider === 'codex' && kind === 'terminal' && !codexNoDaemonProbe(process.platform)() ? 'ENFORCE_UNAVAILABLE: codex-daemon' : null),
+    warm: async (provider) => {
+      await Promise.all([cliVersions.warm(provider), provider === 'claude' ? managedHooks.warm() : Promise.resolve()])
+    }
+  }
+  sessions.enforce = enforce
   // The chat sessions. It is handed `procRouter.factory` rather than a factory chosen now, for exactly
   // the reason SessionManager is handed `ptyRouter.factory`: which one a spawn reaches is decided at
   // spawn time, once registerIpc has learned whether this Host speaks procs. `version` is the app's
@@ -312,7 +347,8 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     version: app.getVersion(),
     log: chatLog,
     capabilities,
-    hiding
+    hiding,
+    enforce
   })
   // Lazy history: nothing is scanned at startup. The project list comes from a directory listing; sessions are
   // parsed when expanded. index.ts starts the file watcher with startBackground() after the window is up, so window creation never blocks on a scan.

@@ -1477,11 +1477,11 @@ describe('shared capabilities', () => {
 // a Claude session is pointed at the hook settings that add the PostToolUse capture, and the note says the session was
 // started observed, which is what the Host's recorder asks before it keeps a call. In compatibility nothing changes.
 describe('observe mode at spawn', () => {
-  const capsIn = (policyMode: 'compatibility' | 'observe'): SessionCapabilities => ({
+  const capsIn = (policyMode: 'compatibility' | 'observe' | 'enforce'): SessionCapabilities => ({
     context: { kind: 'implicit', accounts: [account.id], policyMode, executionMode: 'managed' },
     args: [], env: {}, given: [], gatewayGrant: [], skipped: []
   })
-  const rig = (policyMode: 'compatibility' | 'observe' | null, filesWritten = true) => {
+  const rig = (policyMode: 'compatibility' | 'observe' | 'enforce' | null, filesWritten = true) => {
     const spawned: PtySpawnOptions[] = []
     const argv: Array<string[] | string> = []
     const asked: unknown[] = []
@@ -1491,16 +1491,124 @@ describe('observe mode at spawn', () => {
     const manager = new SessionManager((_f, a, o) => (argv.push(a), spawned.push(o), new FakePty()), makeDescriptors('linux'), 100, 20, '/home/t', (id, _acc, o) => {
       asked.push(o)
       const observed = o?.observe === true && filesWritten
+      const enforced = observed && o?.enforce === true
       return {
-        settingsFile: observed ? 'observe.json' : 's.json', outPath: 'o.json', originalCommand: null, hookOutPath: `/h/${id}.jsonl`,
-        ...(observed ? { observed: true } : {})
+        settingsFile: enforced ? 'enforce.json' : observed ? 'observe.json' : 's.json', outPath: 'o.json', originalCommand: null, hookOutPath: `/h/${id}.jsonl`,
+        ...(observed ? { observed: true } : {}),
+        ...(enforced ? { enforced: true } : {})
       }
     }, [], {}, checks)
     if (policyMode !== null) manager.capabilities = { get: () => capsIn(policyMode), refresh: async () => {} }
     const observeHooks = vi.fn(async () => {})
     manager.observeHooks = observeHooks
-    return { manager, spawned, argv, asked, observeHooks }
+    const enforceHooks = vi.fn(async () => (filesWritten ? ('ok' as const) : ('no-interpreter' as const)))
+    manager.enforceHooks = enforceHooks
+    manager.enforce = { args: (provider) => (filesWritten && provider === 'codex' ? ['-c', 'hooks.PreToolUse=[x]', '-c', 'hooks.state={y}'] : null) }
+    return { manager, spawned, argv, asked, observeHooks, enforceHooks }
   }
+
+  it('an Enforce start on an older CLI is refused with the reason before anything spawns', async () => {
+    for (const acc of [account, codexAccount]) {
+      const e = rig('enforce')
+      const warmed: string[] = []
+      e.manager.enforce = {
+        args: () => ['-c', 'x'],
+        warm: async (p) => void warmed.push(p),
+        blocker: (p) => `ENFORCE_UNAVAILABLE: cli-too-old ${p} 0.1.0 9.9.9`
+      }
+      const p = acc.provider ?? 'claude'
+      await expect(e.manager.prepare({ account: acc, cwd: '/work' })).rejects.toThrow(`ENFORCE_UNAVAILABLE: cli-too-old ${p} 0.1.0 9.9.9`)
+      expect(warmed).toEqual([p])
+      // Asked before the hook is written, and a spawn nobody prepared is refused the same way
+      expect(e.enforceHooks).not.toHaveBeenCalled()
+      expect(() => e.manager.spawn({ account: acc, cwd: '/work' })).toThrow(`ENFORCE_UNAVAILABLE: cli-too-old ${p} 0.1.0 9.9.9`)
+      expect(e.spawned).toHaveLength(0)
+    }
+    // Observe asks no version
+    const o = rig('observe')
+    const blocker = vi.fn(() => 'ENFORCE_UNAVAILABLE: cli-version-unknown claude')
+    o.manager.enforce = { args: () => null, blocker }
+    await o.manager.prepare({ account, cwd: '/work' })
+    o.manager.spawn({ account, cwd: '/work' })
+    expect(blocker).not.toHaveBeenCalled()
+    expect(o.spawned).toHaveLength(1)
+  })
+
+  it('a Codex session started in enforce carries the hook args, an observe one does not', async () => {
+    const e = rig('enforce')
+    await e.manager.prepare({ account: codexAccount, cwd: '/work' })
+    expect(e.enforceHooks).toHaveBeenCalledTimes(1)
+    e.manager.spawn({ account: codexAccount, cwd: '/work', initialPrompt: 'go' })
+    const a = e.argv[0] as string[]
+    // Root options, ahead of the prompt, so they reach `resume` too
+    expect(a.slice(a.indexOf('hooks.PreToolUse=[x]') - 1, a.indexOf('hooks.PreToolUse=[x]') + 3)).toEqual(['-c', 'hooks.PreToolUse=[x]', '-c', 'hooks.state={y}'])
+    expect(a.indexOf('hooks.PreToolUse=[x]')).toBeLessThan(a.indexOf('go'))
+    expect(e.spawned[0].meta?.restore).toMatchObject({ observed: true, enforced: true })
+    const o = rig('observe')
+    await o.manager.prepare({ account: codexAccount, cwd: '/work' })
+    o.manager.spawn({ account: codexAccount, cwd: '/work' })
+    expect(o.argv[0]).not.toContain('hooks.PreToolUse=[x]')
+    expect(o.spawned[0].meta?.restore).not.toHaveProperty('enforced')
+    // No hook: refused at the prepare, and at the spawn
+    const n = rig('enforce', false)
+    await expect(n.manager.prepare({ account: codexAccount, cwd: '/work' })).rejects.toThrow(/^ENFORCE_UNAVAILABLE: no-interpreter/)
+    expect(() => n.manager.spawn({ account: codexAccount, cwd: '/work' })).toThrow(/^ENFORCE_UNAVAILABLE: no-interpreter/)
+    expect(n.spawned).toHaveLength(0)
+  })
+
+  // Enforce (enforce design §5, E5): the blocking hook's settings, the note's mark, and no start without them
+  it('an enforce session is pointed at the enforce settings and marked enforced, an observe one is not', async () => {
+    const e = rig('enforce')
+    await e.manager.prepare({ account, cwd: '/work' })
+    expect(e.enforceHooks).toHaveBeenCalledTimes(1)
+    e.manager.spawn({ account, cwd: '/work' })
+    expect(e.asked[0]).toStrictEqual({ toolHooks: false, observe: true, enforce: true })
+    expect(argsText(e.argv[0])).toContain('enforce.json')
+    expect(e.spawned[0].meta?.restore).toMatchObject({ observed: true, enforced: true })
+    const o = rig('observe')
+    await o.manager.prepare({ account, cwd: '/work' })
+    expect(o.enforceHooks).not.toHaveBeenCalled()
+    o.manager.spawn({ account, cwd: '/work' })
+    expect(o.spawned[0].meta?.restore).not.toHaveProperty('enforced')
+  })
+
+  // Final review I5b: the hook names its file by ASTERA_SESSION, which a session without orchestration did not get
+  it('an enforce session gets its id whether or not orchestration is up', async () => {
+    const e = rig('enforce')
+    await e.manager.prepare({ account, cwd: '/work' })
+    e.manager.spawn({ account, cwd: '/work' })
+    const id = e.spawned[0].meta?.id
+    expect(e.spawned[0].env?.ASTERA_SESSION).toBe(id)
+    const o = rig('observe')
+    await o.manager.prepare({ account, cwd: '/work' })
+    o.manager.spawn({ account, cwd: '/work' })
+    expect(o.spawned[0].env?.ASTERA_SESSION).toBeUndefined()
+  })
+
+  it('says why the hook is not in place: no interpreter, or files it could not write', async () => {
+    const e = rig('enforce')
+    e.manager.enforceHooks = async () => 'hook-write-failed'
+    await expect(e.manager.prepare({ account, cwd: '/work' })).rejects.toThrow(/^ENFORCE_UNAVAILABLE: hook-write-failed/)
+  })
+
+  it('asks the version check which kind of session it is', async () => {
+    const e = rig('enforce')
+    const asked: unknown[] = []
+    e.manager.enforce = { args: () => ['-c', 'x'], blocker: (p, kind) => (asked.push([p, kind]), null) }
+    await e.manager.prepare({ account: codexAccount, cwd: '/work' })
+    e.manager.spawn({ account: codexAccount, cwd: '/work' })
+    expect(asked).toEqual([
+      ['codex', 'terminal'],
+      ['codex', 'terminal']
+    ])
+  })
+
+  it('an enforce start whose blocking hook cannot be written is refused before anything spawns', async () => {
+    const { manager, spawned } = rig('enforce', false)
+    await expect(manager.prepare({ account, cwd: '/work' })).rejects.toThrow(/^ENFORCE_UNAVAILABLE: no-interpreter/)
+    expect(() => manager.spawn({ account, cwd: '/work' })).toThrow(/^ENFORCE_UNAVAILABLE: no-interpreter/)
+    expect(spawned).toHaveLength(0)
+  })
 
   it('in compatibility the hook settings are asked for as before and the note carries no mark', async () => {
     for (const mode of ['compatibility', null] as const) {

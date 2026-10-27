@@ -22,7 +22,7 @@ import { WorkerTails } from '../core/orchestration/exec/tail'
 import { releaseArgsFor } from '../core/orchestration/exec/release'
 import { makeLimitProbe } from '../core/orchestration/exec/limitProbe'
 import { ensureShuttle, sessionCmdLink } from '../core/orchestration/exec/shuttle'
-import type { ChatOrchEnv } from '../core/chat/manager'
+import type { ChatManagerDeps, ChatOrchEnv } from '../core/chat/manager'
 import { binDirFor } from '../core/orchestration/cliInstall'
 import {
   preTrustWorkspace,
@@ -54,6 +54,12 @@ import type { HostWorktrees } from './worktrees'
 import { createCapabilityCache, type CapabilityCache } from '../core/extensions/capabilityCache'
 import { createHidingSource, projectOfWorktrees, type HidingSource } from '../core/credentials/hiding'
 import { readPolicyMode } from '../core/audit/policy'
+import type { EnforceStart } from '../core/audit/enforce'
+import { cliVersionProbe, enforceBlocker } from '../core/sessions/cliVersion'
+import { createManagedHooksCheck } from '../core/sessions/managedHooks'
+import { codexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
+import { findInstalledHostExe } from '../core/host/installedRuntime'
+import { hostRuntimeBase } from '../core/host/runtime'
 import { hidingLog } from '../core/extensions/secrets'
 import { setBounded } from '../core/bounded'
 import { dispatchLookup } from '../core/orchestration/dispatchIndex'
@@ -135,6 +141,9 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
   capabilities?: CapabilityCache
   /** The Credentials list's hiding (credentials design §5), asked at each spawn; shared with the Host's chat sessions. */
   hiding?: HidingSource
+  /** Enforce (enforce design §5): the arguments that make a Host chat run the blocking hook, from this spawner's
+   *  StatusLineManager. */
+  enforce?: ChatManagerDeps['enforce']
   /** The session shuttle's values once the Host wrote it (kicked at creation); undefined until then. */
   orchEnvNow(): ChatOrchEnv | undefined
   /** How many worker and coordinator starts are under way right now. */
@@ -268,7 +277,17 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     profileDir,
     platform === 'win32'
       ? (d.captureNode ?? 'node')
-      : resolveNodePath(d.env as { PATH?: string }, existsSync, platform)
+      : resolveNodePath(d.env as { PATH?: string }, existsSync, platform),
+    undefined,
+    {
+      platform,
+      // Enforce's hook when this Host runs from the app's Electron (development, or no runtime put in place): a runtime
+      // an Astera installed, under the profile folder's name as the app's own (`astera`), the CLI's rule (cli/host.ts)
+      findRuntime: () =>
+        findInstalledHostExe(
+          hostRuntimeBase({ platform, localAppData: d.env.LOCALAPPDATA, userData: profileDir, appName: path.win32.basename(profileDir) })
+        )
+    }
   )
   const ensured = once(() => statusLine.ensureFiles())
   // The app writes this same file at its start (bootOrch). Both go through the same junction decision
@@ -354,11 +373,21 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   )
   // Shared extensions (Agent Control Plane release 1 design §4.5): `sessions.prepare` refreshes the account before
   // every spawn and roll, and the Host's chat sessions read the same cache
+  // Enforce: each CLI's version, asked once per binary (E5: one too old to honour the hook does not start)
+  const cliVersions = cliVersionProbe(platform)
+  // Enforce: an organization's Claude Code policy that turns hooks off (final review C2)
+  const managedHooks = createManagedHooksCheck(platform)
   const capabilities = createCapabilityCache({
     profileDir,
     homeDir,
     platform,
-    policyMode: () => readPolicyMode(profileDir),
+    // Enforce: the refresh every spawn awaits first puts the blocking hook's files in place, so a chat spawn, which has
+    // no await of its own, finds them written (StatusLineManager.ensureEnforceFiles)
+    policyMode: async () => {
+      const mode = await readPolicyMode(profileDir)
+      if (mode === 'enforce') await Promise.all([statusLine.ensureEnforceFiles(), cliVersions.warm('claude'), cliVersions.warm('codex'), managedHooks.warm()])
+      return mode
+    },
     ...(d.gatewayPort ? { gatewayPort: d.gatewayPort } : {}),
     log: hidingLog(profileDir, log)
   })
@@ -368,6 +397,21 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   sessions.hiding = hiding
   // Observe mode: an observed Claude session's hook settings, written by its prepare (StatusLineManager.ensureObserveFiles)
   sessions.observeHooks = () => statusLine.ensureObserveFiles()
+  // Enforce: the blocking hook, written by a session's prepare, which refuses the start without it (E5). A Claude terminal
+  // session reads it from its settings file; a chat, and any Codex session, from these arguments
+  sessions.enforceHooks = () => statusLine.ensureEnforceFiles()
+  const enforce: EnforceStart = {
+    args: (provider) => (provider === 'claude' ? statusLine.enforceChatArgs() : statusLine.enforceCodexArgs()),
+    blocker: (provider, kind) =>
+      enforceBlocker(provider, cliVersions(provider)) ??
+      (provider === 'claude' && managedHooks.off() ? 'ENFORCE_UNAVAILABLE: hooks-off' : null) ??
+      // A codex terminal without --no-daemon may run its tools in a daemon another session started (final review M11)
+      (provider === 'codex' && kind === 'terminal' && !codexNoDaemonProbe(platform)() ? 'ENFORCE_UNAVAILABLE: codex-daemon' : null),
+    warm: async (provider) => {
+      await Promise.all([cliVersions.warm(provider), provider === 'claude' ? managedHooks.warm() : Promise.resolve()])
+    }
+  }
+  sessions.enforce = enforce
   sessions.onExit = (e) => {
     sessions.forget(e.sessionId)
   }
@@ -725,6 +769,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   return {
     capabilities,
     hiding,
+    enforce,
     orchEnvNow: () => orchEnvReady,
     inFlight: () => spawnsInFlight,
     closeAndSettle: (ms) => {
