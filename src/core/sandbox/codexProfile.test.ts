@@ -13,18 +13,20 @@ describe('codexSandboxArgs', () => {
     expect(a).not.toContain('windows.sandbox')
   })
 
-  // git reads a worktree's own config.worktree under extensions.worktreeConfig, and it can set core.hooksPath
-  it('keeps a worktree’s own config.worktree read, and says nothing of it in a repository', () => {
+  // git reads config.worktree in the git directory of the checkout it runs in, a repository's main one included, under
+  // extensions.worktreeConfig, and it can set core.hooksPath
+  it('keeps config.worktree read in the git directory git reads it from, in every layout', () => {
     for (const cwd of ['/w/wt', '/w/wt/sub']) {
       const a = codexSandboxArgs({ platform: 'linux', layout: { ...wt, cwd }, denied: [] }).join(' ')
       expect(a, cwd).toContain('"/m/.git/worktrees/wt/config.worktree"="read"')
     }
-    for (const cwd of ['/r', '/r/sub']) expect(codexSandboxArgs({ platform: 'linux', layout: { ...repo, cwd }, denied: [] }).join(' '), cwd).not.toContain('config.worktree')
+    expect(codexSandboxArgs({ platform: 'linux', layout: { ...repo, cwd: '/r/sub' }, denied: [] }).join(' ')).toContain('"/r/.git/config.worktree"="read"')
+    expect(codexSandboxArgs({ platform: 'linux', layout: repo, denied: [] }).join(' ')).not.toContain('"/r/.git/config.worktree"')
   })
 
-  it('in a repository, grants its .git and keeps its hooks and config read', () => {
+  it('in a repository, grants its .git and keeps its hooks, config and config.worktree read', () => {
     const a = codexSandboxArgs({ platform: 'linux', layout: repo, denied: [] }).join(' ')
-    expect(a).toContain('":workspace_roots"={".git"="write", ".git/hooks"="read", ".git/config"="read"}')
+    expect(a).toContain('":workspace_roots"={".git"="write", ".git/hooks"="read", ".git/config"="read", ".git/config.worktree"="read"}')
     expect(a).not.toContain('"/r/.git"')
   })
 

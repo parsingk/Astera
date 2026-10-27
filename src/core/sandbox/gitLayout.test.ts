@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { removeFixture } from '../testFixtures'
-import { gitLayoutOf } from './gitLayout'
+import { ensureWorktreeConfigFile, gitLayoutOf, type GitLayout } from './gitLayout'
 
 const git = (cwd: string, ...args: string[]): void => {
   execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, stdio: 'ignore' })
@@ -69,5 +69,79 @@ describe('gitLayoutOf', () => {
     fs.mkdirSync(plain)
     // The temp folder may itself sit inside a repository on an unusual machine; the fixture folder is made to be outside one.
     expect(await gitLayoutOf(plain)).toBeNull()
+  })
+})
+
+// The sandbox keeps config.worktree read-only, but a read-only entry for a file that is not there yet does not stop
+// Codex's Windows sandbox from creating it (inventory §23.3), so the start makes it first wherever git reads it
+describe('ensureWorktreeConfigFile', () => {
+  let root: string
+  let main: string
+  beforeEach(async () => {
+    root = await fs.promises.realpath(await fs.promises.mkdtemp(path.join(os.tmpdir(), 'astera-gitlayout-')))
+    main = path.join(root, 'main')
+    fs.mkdirSync(main)
+    git(main, 'init', '-q')
+    git(main, 'commit', '-q', '--allow-empty', '-m', 'init')
+  })
+  afterEach(() => removeFixture(root))
+
+  const layoutOf = async (cwd: string): Promise<GitLayout> => {
+    const l = await gitLayoutOf(cwd)
+    if (!l) throw new Error(`no repository at ${cwd}`)
+    return l
+  }
+
+  it('makes an empty config.worktree in a linked worktree’s git directory when the extension is on, once', async () => {
+    const wt = path.join(root, 'wt')
+    git(main, 'worktree', 'add', '-q', wt, '-b', 'side')
+    git(main, 'config', 'extensions.worktreeConfig', 'true')
+    const l = await layoutOf(wt)
+    expect(await ensureWorktreeConfigFile(l)).toBe('created')
+    expect(fs.readFileSync(path.join(l.gitDir, 'config.worktree'), 'utf8')).toBe('')
+    expect(fs.existsSync(path.join(l.commonDir, 'config.worktree'))).toBe(false)
+    expect(await ensureWorktreeConfigFile(l)).toBe('present')
+  })
+
+  it('makes it in a repository’s own .git, where its main checkout reads it, and leaves a file that is there alone', async () => {
+    git(main, 'config', 'extensions.worktreeConfig', 'true')
+    const l = await layoutOf(main)
+    expect(await ensureWorktreeConfigFile(l)).toBe('created')
+    fs.writeFileSync(path.join(l.gitDir, 'config.worktree'), '[core]\n')
+    expect(await ensureWorktreeConfigFile(l)).toBe('present')
+    expect(fs.readFileSync(path.join(l.gitDir, 'config.worktree'), 'utf8')).toBe('[core]\n')
+  })
+
+  it('writes nothing when the extension is off, since git then ignores the file', async () => {
+    const wt = path.join(root, 'wt')
+    git(main, 'worktree', 'add', '-q', wt, '-b', 'side')
+    for (const cwd of [main, wt]) {
+      const l = await layoutOf(cwd)
+      expect(await ensureWorktreeConfigFile(l), cwd).toBe('not-needed')
+      expect(fs.existsSync(path.join(l.gitDir, 'config.worktree')), cwd).toBe(false)
+    }
+    git(main, 'config', 'extensions.worktreeConfig', 'false')
+    expect(await ensureWorktreeConfigFile(await layoutOf(wt))).toBe('not-needed')
+  })
+
+  // git's own reading of a boolean: true, yes, on, 1 or a key with no value; the section and key in any case; the last one wins
+  it('reads the extension as git does', async () => {
+    const l = await layoutOf(main)
+    const config = path.join(l.commonDir, 'config')
+    const base = fs.readFileSync(config, 'utf8')
+    for (const [text, want] of [
+      ['[extensions]\n\tworktreeConfig = true\n', 'created'],
+      ['[Extensions]\n\tWorktreeConfig = YES ; a comment\n', 'created'],
+      ['[extensions]\n\tworktreeconfig = on\n', 'created'],
+      ['[extensions]\n\tworktreeConfig = "1"\n', 'created'],
+      ['[extensions]\n\tworktreeConfig\n', 'created'],
+      ['[extensions]\n\tworktreeConfig = true\n\tworktreeConfig = false\n', 'not-needed'],
+      ['[extensions]\n\tworktreeConfig = 0\n', 'not-needed'],
+      ['[core]\n\tworktreeConfig = true\n', 'not-needed']
+    ] as const) {
+      fs.rmSync(path.join(l.gitDir, 'config.worktree'), { force: true })
+      fs.writeFileSync(config, base + text)
+      expect(await ensureWorktreeConfigFile(l), text).toBe(want)
+    }
   })
 })

@@ -21,7 +21,7 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { claudeSandboxSettings } from '../../src/core/sandbox/claudeSettings'
 import { codexSandboxEnv, npmCacheOf } from '../../src/core/sandbox/codexProfile'
-import { gitLayoutOf } from '../../src/core/sandbox/gitLayout'
+import { ensureWorktreeConfigFile, gitLayoutOf } from '../../src/core/sandbox/gitLayout'
 import { initializeParams } from '../../src/core/chat/codexProtocol'
 import { hostAddress } from '../../src/host/address'
 import { HOST_PROTOCOL } from '../../src/core/host/protocol'
@@ -136,7 +136,7 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
       'Each set: probes with no sandbox in a fresh workspace of the same layout (plain), then in the sandbox in another fresh one (sandboxed); verdicts read one against the other (probes.mjs verdict).',
       "Codex sets: codexSandboxArgs for gitLayoutOf(cwd) without its leading -a never, denied = sensitiveLocations + credentialStoreDenies, environment codexSandboxEnv with a temp folder of the set's own.",
       'srt sets: claudeSandboxSettings as Claude Code hands them to srt (s2.mjs srtSettingsOf); the network list names the probes’ hosts. Claude Code’s own use of these settings is not measured (no login): runtime-measured.',
-      'git-worktree-config-write writes config.worktree in the git directory git names for the session. In the srt sets it is informational: how Claude Code itself treats a worktree’s git data is not srt’s.',
+      'git-worktree-config-write writes config.worktree in the git directory git names for the session. Every set’s repository has extensions.worktreeConfig on and the file made first by ensureWorktreeConfigFile (worktreeConfig in each set), as the start does. In the srt sets it is informational: how Claude Code itself treats a worktree’s git data is not srt’s.',
       ...(WIN
         ? [
             'win32: the fake home is in TEMP, which the sandbox may write, so write-home writes ASTERA_PROBE_OUTSIDE (a folder in the checkout, outside TEMP and the workspace); git-credential uses the store helper and the fake .git-credentials, with Git’s system config (Credential Manager) left out.',
@@ -208,6 +208,9 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
             `- mxc: exit ${w.mxc.code}, ready ${w.mxc.ready}`,
             `- codex sandbox setup --help: exit ${w.setupHelp.code}`,
             `- doctor: provisioning ${w.doctor.provisioning}; with a scratch CODEX_HOME: ${w.doctorScratch.provisioning}`,
+            ...(result.windowsMissingWorktreeConfig
+              ? [`- config.worktree left missing, written under codex sandbox: ${result.windowsMissingWorktreeConfig.sandboxed.ok} (exists after: ${result.windowsMissingWorktreeConfig.existsAfter})`]
+              : []),
             ''
           ]
         : [])
@@ -240,8 +243,10 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
     }
   }
 
-  /** A fresh workspace for one run, and the session folder in it for the layout. */
-  async function prepare(name, layout, files = {}) {
+  /** A fresh workspace for one run, and the session folder in it for the layout. Its repository reads config.worktree
+   *  (extensions.worktreeConfig on, in the common config), and the file is made first as the start makes it
+   *  (`ensureWorktreeConfigFile`), unless `ensure` is false for the record of the missing-file case. */
+  async function prepare(name, layout, files = {}, { ensure = true } = {}) {
     const w = workspaceFor(ctx.home, `s2-${name}`, ctx.homeEnv, files)
     let cwd = w.workspace
     if (layout === 'worktree') cwd = w.worktree
@@ -251,7 +256,10 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
     }
     const tmpDir = path.join(ctx.scratch, `tmp-${name}`)
     mkdirSync(tmpDir, { recursive: true })
-    return { cwd, gitLayout: await gitLayoutOf(cwd), tmpDir }
+    const on = sh(['git', 'config', 'extensions.worktreeConfig', 'true'], { cwd, env: ctx.homeEnv })
+    if (on.code !== 0) throw new Error(`could not turn on extensions.worktreeConfig in ${cwd}: ${on.out}`)
+    const gitLayout = await gitLayoutOf(cwd)
+    return { cwd, gitLayout, tmpDir, worktreeConfig: ensure ? await ensureWorktreeConfigFile(gitLayout) : 'left missing' }
   }
 
   /** The builder's environment for a Codex session, and on Windows where the probes find the hooks and the git directory. */
@@ -274,7 +282,7 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
     const { own, env } = codexEnvOf(p)
     const wrap = (line) => ({ file: 'codex', args: ['sandbox', ...args, '--', ...shellArgv(PLATFORM, line)] })
     const sandboxed = runSet(wrap, { cwd: p.cwd, env, probes, timeoutMs: PROBE_MS, sanity: sanityLine(PLATFORM) })
-    return { layout: set.layout, cwd: p.cwd, gitLayout: p.gitLayout, args, env: own, denied, plain, sandboxed, verdicts: verdicts(plain, sandboxed) }
+    return { layout: set.layout, cwd: p.cwd, gitLayout: p.gitLayout, worktreeConfig: p.worktreeConfig, args, env: own, denied, plain, sandboxed, verdicts: verdicts(plain, sandboxed) }
   }
 
   /** A command/exec answer read as a probe's result. */
@@ -301,7 +309,17 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
     const args = codexSetArgs({ platform: PLATFORM, layout: p.gitLayout, denied })
     const profile = profileNameOf(args)
     const { own, env } = codexEnvOf(p)
-    const record = { layout: set.layout, cwd: p.cwd, gitLayout: p.gitLayout, args: ['app-server', ...args], env: own, denied, profile, permissionProfileParam: Boolean(set.profileParam) }
+    const record = {
+      layout: set.layout,
+      cwd: p.cwd,
+      gitLayout: p.gitLayout,
+      worktreeConfig: p.worktreeConfig,
+      args: ['app-server', ...args],
+      env: own,
+      denied,
+      profile,
+      permissionProfileParam: Boolean(set.profileParam)
+    }
     const server = startAppServer({ file: 'codex', args: ['app-server', ...args], cwd: p.cwd, env })
     try {
       record.initialize = clip(await server.request('initialize', initializeParams('s2-measure'), 60_000))
@@ -382,7 +400,7 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
       writeFileSync(settingsFile, JSON.stringify(settings, null, 2))
       const wrap = (file) => (line) => ({ file: 'srt', args: srtArgv(file, line) })
       const env = envOf(p)
-      Object.assign(record, { cwd: p.cwd, gitLayout: p.gitLayout, claude: claude.sandbox, settings, env: { npm_config_cache: npmCache, ...extra } })
+      Object.assign(record, { cwd: p.cwd, gitLayout: p.gitLayout, worktreeConfig: p.worktreeConfig, claude: claude.sandbox, settings, env: { npm_config_cache: npmCache, ...extra } })
       record.sandboxed = runSet(wrap(settingsFile), { cwd: p.cwd, env, probes, timeoutMs: PROBE_MS })
       // srt on Linux skips a write path that does not exist (dist/sandbox/linux-sandbox-utils.js): when the install
       // failed, it runs again with the folder made first, as the Host could make it
@@ -414,6 +432,20 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
       expect(brokenPlain(r.plain), 'probes that failed with no sandbox: the instrument is broken there, not the sandbox').toEqual([])
     })
   }
+
+  // For the record only, not asserted: the case ensureWorktreeConfigFile exists for. The extension on and config.worktree
+  // missing, as a start without it would leave it; codex sandbox on Windows let the probe create it (inventory §23.3)
+  it.skipIf(!WIN)('windows: a missing config.worktree under codex sandbox, for the record', async () => {
+    const p = await prepare('codex-worktree-missing', 'worktree', {}, { ensure: false })
+    const args = codexSetArgs({ platform: PLATFORM, layout: p.gitLayout, denied: codexDenied(PLATFORM, ctx.base, ctx.home) })
+    const file = path.join(p.gitLayout.gitDir, 'config.worktree')
+    const existedBefore = existsSync(file)
+    const wrap = (line) => ({ file: 'codex', args: ['sandbox', ...args, '--', ...shellArgv(PLATFORM, line)] })
+    const probes = probesFor(PLATFORM, 'worktree').filter((x) => x.id === 'git-worktree-config-write')
+    const [sandboxed] = runSet(wrap, { cwd: p.cwd, env: codexEnvOf(p).env, probes, timeoutMs: PROBE_MS, sanity: sanityLine(PLATFORM) })
+    result.windowsMissingWorktreeConfig = { cwd: p.cwd, gitLayout: p.gitLayout, args, existedBefore, sandboxed, existsAfter: existsSync(file) }
+    save()
+  })
 
   // Design §10 item 1, under the person's own CODEX_HOME (set up, so nothing asks for an administrator): the plan's
   // readiness probe, Codex's setup command's help, the probe with mxc, and Codex's own report of the setup, which reads

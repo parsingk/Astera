@@ -18,18 +18,20 @@ const entry = (p: string, access: Access): string => `${toml(p)}=${toml(access)}
 /** The git entries of the filesystem table. Codex makes a pointer file's resolved gitdir read-only unless an entry names
  *  that exact path, so a linked worktree's own git directory is named even though the common directory is too. Hooks and
  *  config stay read-only: a session that could write them could run its code outside the sandbox the next time git runs.
- *  A worktree's own `config.worktree` too: git reads it under `extensions.worktreeConfig`, and it can set
- *  `core.hooksPath`. A repository's git directory is its common directory, whose `config` is already named. */
+ *  So does `config.worktree` in the git directory of the checkout, a worktree's own or a repository's `.git`: git reads
+ *  it under `extensions.worktreeConfig`, and it can set `core.hooksPath`. The entry holds only for a file that exists
+ *  (inventory §23.3), so the start makes it first where git reads it (`ensureWorktreeConfigFile`). */
 function gitEntries(layout: GitLayout | null): string[] {
   if (!layout) return []
   const atTop = layout.top === layout.cwd
   if (atTop && !layout.worktree) {
-    return [`":workspace_roots"={${[entry('.git', 'write'), entry('.git/hooks', 'read'), entry('.git/config', 'read')].join(', ')}}`]
+    const roots = [entry('.git', 'write'), entry('.git/hooks', 'read'), entry('.git/config', 'read'), entry('.git/config.worktree', 'read')]
+    return [`":workspace_roots"={${roots.join(', ')}}`]
   }
   const out: string[] = []
   if (atTop) out.push(`":workspace_roots"={${entry('.git', 'write')}}`)
   if (layout.gitDir !== layout.commonDir) out.push(entry(layout.gitDir, 'write'))
-  if (layout.worktree) out.push(entry(`${layout.gitDir}/config.worktree`, 'read'))
+  out.push(entry(`${layout.gitDir}/config.worktree`, 'read'))
   out.push(entry(layout.commonDir, 'write'), entry(`${layout.commonDir}/hooks`, 'read'), entry(`${layout.commonDir}/config`, 'read'))
   return out
 }
