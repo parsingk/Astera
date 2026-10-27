@@ -47,7 +47,9 @@ export interface Gateway {
  *  the server sets no tool timeout of its own (Codex's `tool_timeout_sec`, which import carries). */
 export const GATEWAY_CALL_TIMEOUT_MS = 600_000
 const BODY_MAX = 4 * 1024 * 1024
-const MAX_CONNECTIONS = 64
+/** How many calls on the command routes may be in flight at once. Only these are capped: the MCP routes hold long-lived
+ *  streams per session and server, and a cap on them would refuse a heavy but ordinary setup. */
+const MAX_COMMANDS = 64
 
 /** The notifications an upstream sends that every session on it should see. */
 const PASSED_ON = new Set(['notifications/tools/list_changed', 'notifications/resources/list_changed', 'notifications/prompts/list_changed', 'notifications/resources/updated', 'notifications/message'])
@@ -103,6 +105,7 @@ export function createGateway(d: {
   let server: http.Server | null = null
   let port: number | null = null
   const sessions = new Map<string, DownSession>()
+  let commandsInFlight = 0
 
   const endSession = (s: DownSession): void => {
     s.ended.abort()
@@ -227,7 +230,7 @@ export function createGateway(d: {
   }
 
   /** The answer of a refusal on the command routes: the connection is closed after it, so a refused caller does not keep
-   *  one of the few this listener allows (`maxConnections`). */
+   *  one of the few slots the command routes have (`MAX_COMMANDS`). */
   const refuse = (res: http.ServerResponse, status: number, error: string): void => {
     res.setHeader('connection', 'close')
     send(res, status, { error })
@@ -329,8 +332,13 @@ export function createGateway(d: {
 
   const handle = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
     const path = new URL(req.url ?? '/', 'http://x').pathname
-    if (path === '/astera/call') return command(req, res)
-    if (path === '/astera/hello') return hello(req, res)
+    if (path === '/astera/call' || path === '/astera/hello') {
+      // The slot is held until the response is done or the connection is gone, whichever the caller does
+      if (commandsInFlight >= MAX_COMMANDS) return refuse(res, 503, 'too many calls')
+      commandsInFlight++
+      res.once('close', () => void commandsInFlight--)
+      return path === '/astera/call' ? command(req, res) : hello(req, res)
+    }
     const match = /^\/mcp\/([^/?#]+)$/.exec(new URL(req.url ?? '/', 'http://x').pathname)
     if (!match) {
       req.resume()
@@ -392,9 +400,8 @@ export function createGateway(d: {
           })
         })
         // A command can legitimately take an hour (`wait`, `ask`, `check`, `follow`; the CLI's own deadline governs), so no
-        // socket idle timeout may end one. The listener is open for the Host's whole life, so what it holds at once is bounded.
+        // socket idle timeout may end one.
         s.timeout = 0
-        s.maxConnections = MAX_CONNECTIONS
         s.once('error', reject)
         s.listen(0, '127.0.0.1', () => {
           // Past the listen, an error (too many open files on accept, say) is logged, never thrown into the Host

@@ -119,6 +119,16 @@ function post(port: number, p: string, headers: Record<string, string>, body: st
     req.end(body)
   })
 }
+async function until(check: () => void): Promise<void> {
+  for (let i = 0; ; i++) {
+    try {
+      return check()
+    } catch (err) {
+      if (i > 100) throw err
+      await new Promise((r) => setTimeout(r, 20))
+    }
+  }
+}
 const text = (r: unknown) => (r as { content: { text: string }[] }).content[0].text
 const line = (s: Spawned) => (Array.isArray(s.args) ? s.args.join(' ') : s.args)
 async function filesUnder(root: string): Promise<string[]> {
@@ -237,6 +247,32 @@ describe('the MCP Gateway on the Host, end to end', () => {
     const bad = await post(port, '/astera/call', { authorization: `Bearer ${s.env.ASTERA_GATEWAY_TOKEN}` }, 'not json')
     expect(bad.status).toBe(400)
     expect(bad.headers.connection).toBe('close')
+  })
+
+  it('caps the command routes at 64 calls in flight with a 503, leaves the MCP routes alone, and frees a slot when a call answers', async () => {
+    const release: Array<() => void> = []
+    const h = rig({ call: () => new Promise((r) => release.push(() => r({ status: 200, body: {} }))) })
+    const s = await h.start('acc2')
+    const port = h.hub.port()!
+    const auth = { authorization: `Bearer ${s.env.ASTERA_GATEWAY_TOKEN}` }
+    const body = JSON.stringify({ cmd: 'status', args: {} })
+    const held = Array.from({ length: 64 }, () => post(port, '/astera/call', auth, body))
+    await until(() => expect(release).toHaveLength(64))
+    const over = await post(port, '/astera/call', auth, body)
+    expect(over.status).toBe(503)
+    expect(JSON.parse(over.text)).toEqual({ error: 'too many calls' })
+    expect(over.headers.connection).toBe('close')
+    // The hello route shares the cap; an MCP route still gets its usual answer at the same time
+    expect((await post(port, '/astera/hello', auth, JSON.stringify({ nonce: 'n' }))).status).toBe(503)
+    expect((await post(port, '/mcp/mcp-echo', { authorization: 'Bearer nope' }, '{}')).status).toBe(401)
+    // One call answers; its slot is free again
+    release[0]()
+    expect((await held[0]).status).toBe(200)
+    const again = post(port, '/astera/call', auth, body)
+    await until(() => expect(release).toHaveLength(65))
+    for (const r of release) r()
+    expect((await again).status).toBe(200)
+    for (const r of await Promise.all(held)) expect(r.status).toBe(200)
   })
 
   it('a command that takes a while still answers, and a command’s state change reaches the Host’s sockets', async () => {
