@@ -72,7 +72,15 @@ describe('hidingFor', () => {
       expect(p.remove.length + Object.keys(p.redirect).length, p.id).toBeGreaterThan(0)
       expect(p.measuredOn, p.id).toContain('win32')
     }
-    expect(PRESETS.find((p) => p.id === 'aws')?.measuredOn).toEqual(['win32', 'linux'])
+    // macOS and Linux from the measure-sandbox runs (inventory §21); the macOS runner has no gcloud, docker or kubectl
+    expect(Object.fromEntries(PRESETS.map((p) => [p.id, p.measuredOn]))).toEqual({
+      gh: ['win32', 'darwin', 'linux'],
+      aws: ['win32', 'darwin', 'linux'],
+      gcloud: ['win32', 'linux'],
+      npm: ['win32', 'darwin', 'linux'],
+      docker: ['win32', 'linux'],
+      kubectl: ['win32', 'linux']
+    })
   })
 })
 

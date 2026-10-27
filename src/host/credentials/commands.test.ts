@@ -159,7 +159,7 @@ describe('credentials commands', () => {
     expect(text).toMatch(/git credential fill/)
     expect(text).toMatch(/same Windows account|same user/)
     expect(text).toMatch(/gh: measured on win32/)
-    expect(text).toMatch(/aws: measured on win32, linux/)
+    expect(text).toMatch(/aws: measured on win32, darwin, linux/)
     expect(text).toMatch(/default access list/)
     const posix = (body(await host('darwin').command({ cmd: 'credentials-doctor', args: {}, ...cli, marks: marks() })).lines as { text: string }[]).map((l) => l.text).join('\n')
     expect(posix).toMatch(/not measured on darwin/)
@@ -256,6 +256,12 @@ describe('credentials commands', () => {
     expect(text).toMatch(/PATH/)
     expect(text).toMatch(/own empty locations/)
     expect(text).toMatch(/startup files/)
+    // The measure-sandbox runs (inventory §22.5): which files a login shell reads, and that Codex starts one
+    const startup = text.split('\n').find((l) => l.includes('startup files')) ?? ''
+    expect(startup).toMatch(/login shell/)
+    expect(startup).toMatch(/~\/\.zprofile/)
+    expect(startup).toMatch(/measured 2026-10-27/)
+    expect(startup).not.toMatch(/; not measured\.$/)
   })
 
   it('counts a change that landed as an effect', async () => {

@@ -1,0 +1,84 @@
+name: Measure sandboxes
+
+# Measures on macOS and Linux, without any login, what the sandbox release builds on
+# (docs/superpowers/specs/2026-10-26-enforce-and-sandbox-design.md §8, E4): the CLIs' own sandboxes against Astera's
+# probes, the Credentials list's login presets, which shell startup files a command reads, and what starting the
+# Enforce hook costs. scripts/measure/measure-sandbox.mjs does the work and refuses to run anywhere but a runner, since
+# it writes fake credentials into the home folder.
+#
+# Run by hand: GitHub lists a workflow as dispatchable only once the file is on the default branch, so a push to a
+# `measure/**` branch starts it (as linux-package.yml notes for its own rehearsal).
+on:
+  push:
+    branches: ['measure/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    # A run takes a few minutes. Probes that all hang would take longer than this; the results file is written after
+    # each part, so a job stopped here keeps what it measured
+    timeout-minutes: 45
+    steps:
+      # The job's token stays out of .git/config: only gh's preset run reads it, from GH_TOKEN below
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Must match ci.yml
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      # Claude's sandbox runtime needs bubblewrap, socat and ripgrep on Linux, and unprivileged user namespaces, which
+      # Ubuntu 24.04 restricts by default (its README); zsh is for the shell startup probe, and libsecret-tools,
+      # gnome-keyring and dbus for the keychain probe
+      - name: Linux sandbox tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bubblewrap socat ripgrep zsh libsecret-tools gnome-keyring dbus
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      # A desktop session's secret store, as a person's Linux desktop has it: a session bus at a path under
+      # XDG_RUNTIME_DIR and a login keyring unlocked with a fake password. The measuring step finds both by the
+      # variables written to GITHUB_ENV.
+      - name: Linux session bus and keyring
+        if: runner.os == 'Linux'
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/astera-runtime"
+          mkdir -p -m 700 "$XDG_RUNTIME_DIR"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+          dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork --nopidfile
+          printf 'astera-probe' | gnome-keyring-daemon --unlock --components=secrets --daemonize
+          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+
+      - name: macOS sandbox tools
+        if: runner.os == 'macOS'
+        run: brew install ripgrep
+
+      - run: npm i -g @openai/codex@0.160.0 @anthropic-ai/sandbox-runtime@0.0.79
+
+      # The Enforce hook is measured as the build bundles it
+      - run: npm ci
+      - run: npx electron-vite build
+
+      - run: node scripts/measure/measure-sandbox.mjs
+        env:
+          # The gh preset is measured against the job's own token as well as a fake config; the probes run without it
+          GH_TOKEN: ${{ github.token }}
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: measure-${{ matrix.os }}
+          path: measure-results/
