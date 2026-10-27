@@ -28,6 +28,7 @@ import { codexSandboxEnv } from '../sandbox/codexProfile'
 import { sandboxUnavailable } from '../sandbox/unavailable'
 import { PreparedLayouts, prepareCodexSandbox, sessionSandboxArgs, type CodexWindowsReady } from '../sandbox/prepared'
 import { codexWindowsReadiness, runCodex } from '../sandbox/windowsReadiness'
+import type { ClaudeSandboxStart } from '../sandbox/claudeStart'
 
 /** statusLine info injected when a session spawns (provided by main's StatusLineManager,
  *  structurally compatible). */
@@ -38,11 +39,12 @@ export interface StatusLineSpawnInfo {
   hookOutPath?: string // per-session hook event file — injected as ASTERA_HOOK_OUT
   observed?: true // the settings file is an observe variant (StatusLineManager.spawnConfig)
   enforced?: true // the settings file is an enforce variant: the blocking hook runs before every tool call
+  sandboxed?: true // the settings file is a sandbox twin: Claude's sandbox and the deny rules are in it
 }
 export type StatusLineProvider = (
   sessionId: string,
   account: Account,
-  opts?: { toolHooks?: boolean; observe?: boolean; enforce?: boolean }
+  opts?: { toolHooks?: boolean; observe?: boolean; enforce?: boolean; sandbox?: boolean }
 ) => StatusLineSpawnInfo | null
 
 
@@ -204,14 +206,19 @@ export class SessionManager {
    *  repository), kept for the spawn the way a confirmed folder is and trusted as long. The wiring gives this manager and
    *  the chat one the same store, since a roll prepares a chat chain's respawn here (core/sandbox/prepared.ts). */
   sandboxLayouts = new PreparedLayouts()
+  /** The sandbox for Claude (sandbox design §6): the version floor, the settings twins and what the session's environment
+   *  gets (core/sandbox/claudeStart.ts), shared with the chat manager. Unset, a sandboxed Claude start is refused, never
+   *  started outside the sandbox. */
+  claudeSandbox?: ClaudeSandboxStart
 
   /**
    * Everything `spawn` would look for on disk, looked for without blocking: the folder, and on win32
    * the Git Bash for this account's env (probed once per PATH string, see gitBash.ts). **Every caller
    * awaits this before `spawn`** — a roll does it before its kill, since the spawn after it has no
    * await. Rejects with CWD_MISSING, or CWD_UNREACHABLE when the folder did not answer in time.
-   * `sandbox`: the session will start in its CLI's sandbox, so the folder's git layout is read here for the spawn, and on
-   * Windows a Codex home that is not set up refuses (`SANDBOX_UNAVAILABLE: windows-setup codex <account>`).
+   * `sandbox`: the session will start in its CLI's sandbox. For Codex the folder's git layout is read here for the spawn, and
+   * on Windows a Codex home that is not set up refuses (`SANDBOX_UNAVAILABLE: windows-setup codex <account>`); for Claude
+   * the version floor is asked and the settings twins written (`cli-too-old claude <found> <min>` refuses).
    * `chat`: what will start is a chat's app-server (a roll prepares a chat chain's respawn here), which is its own server,
    * so its sandbox does not ask for `--no-daemon`; the layout read is the chat manager's too (sandboxLayouts).
    */
@@ -254,8 +261,14 @@ export class SessionManager {
     } else if (this.observeHooks && isObserving(mode) && descriptorOf(this.descriptors, opts.account).usesStatusLine)
       await this.observeHooks().catch((err) => this.checks.log(`observe hook settings could not be written: ${String(err)}`))
     // The sandbox (sandbox design §6): a Codex session's profile names its repository's git directories, so they are read
-    // now, off the thread, for the spawn to use; on Windows the account's Codex home must be set up for it too
-    if (opts.sandbox === true && providerOf(opts.account) === 'codex') await this.prepareSandbox(opts.account, opts.cwd, opts.chat === true)
+    // now, off the thread, for the spawn to use; on Windows the account's Codex home must be set up for it too. A Claude
+    // session's sandbox is its settings file, written now beside the one it would read anyway (after Enforce's, so the
+    // twin holds both), with its version asked first; a chat chain's roll is prepared here too, and its file with them
+    if (opts.sandbox === true) {
+      if (providerOf(opts.account) === 'codex') await this.prepareSandbox(opts.account, opts.cwd, opts.chat === true)
+      else if (this.claudeSandbox) await this.claudeSandbox.prepare()
+      else throw sandboxUnavailable('not-prepared')
+    }
   }
 
   /** Reads the folder's git layout for a sandboxed spawn, asks on Windows whether the account's Codex home is set up, and
@@ -332,8 +345,8 @@ export class SessionManager {
      *  `prepare` resolved for this account and profile, and it is written into the info and the note like startedBy. */
     agentProfileId?: string
     /** Start in the CLI's own sandbox (sandbox design §6), as the profile's switch says; `prepare` must have been told
-     *  too. Marked in the info and the note (SessionInfo.sandboxed). A Codex session only, for now: Claude's sandbox
-     *  is its settings file. */
+     *  too. Marked in the info and the note (SessionInfo.sandboxed). Codex takes it as arguments, Claude as its settings
+     *  file (on Windows the deny rules alone). */
     sandbox?: boolean
   }): SessionInfo {
     // The folder `prepare` just confirmed is not looked at again. The sync check is left only for a
@@ -387,21 +400,25 @@ export class SessionManager {
     // safely itself (an offline drive would freeze the thread), and a profile that does not name the repository's git
     // directories would leave the session unable to commit, so a sandboxed spawn nobody prepared for it is refused
     // rather than started without them (E5)
-    const sandboxed = opts.sandbox === true && providerOf(opts.account) === 'codex'
+    const sandboxed = opts.sandbox === true
+    const sandboxedCodex = sandboxed && providerOf(opts.account) === 'codex'
+    // Claude's sandbox is its settings file: the version the prepare asked is asked again here (the CLI may have been
+    // updated since), and a session the twin was not written for is refused below rather than started outside it
+    const sandboxedClaude = sandboxed && providerOf(opts.account) === 'claude'
     let layout: GitLayout | null = null
-    if (sandboxed) {
+    if (sandboxedCodex) {
       const prepared = this.sandboxLayouts.layoutOf(opts.account.id, opts.cwd, this.checks.now())
       if (prepared === undefined) throw sandboxUnavailable('not-prepared')
       layout = prepared
     }
-    const sl = d.usesStatusLine
-      ? (this.statusLineProvider?.(
-          id,
-          opts.account,
-          enforce ? { toolHooks: wantToolHooks, observe: true, enforce: true } : observe ? { toolHooks: wantToolHooks, observe: true } : { toolHooks: wantToolHooks }
-        ) ?? null)
-      : null
+    if (sandboxedClaude) {
+      const refused = this.claudeSandbox ? this.claudeSandbox.blocker() : sandboxUnavailable('not-prepared').message
+      if (refused !== null) throw new Error(refused)
+    }
+    const slOpts = enforce ? { toolHooks: wantToolHooks, observe: true, enforce: true } : observe ? { toolHooks: wantToolHooks, observe: true } : { toolHooks: wantToolHooks }
+    const sl = d.usesStatusLine ? (this.statusLineProvider?.(id, opts.account, sandboxedClaude ? { ...slOpts, sandbox: true } : slOpts) ?? null) : null
     if (enforce && d.usesStatusLine && sl?.enforced !== true) throw enforceUnavailable('no-interpreter')
+    if (sandboxedClaude && sl?.sandboxed !== true) throw sandboxUnavailable('not-prepared')
     const enforceArgs = enforce && !d.usesStatusLine ? (this.enforce?.args(providerOf(opts.account)) ?? null) : []
     if (enforceArgs === null) throw enforceUnavailable('no-interpreter')
     const extraArgs = [...(caps?.args ?? []), ...enforceArgs]
@@ -413,7 +430,7 @@ export class SessionManager {
     if (this.hiding) applyHiding(env, this.hiding.get(opts.cwd, id), this.checks.platform)
     // The sandbox's profile: the places it may not read come from the environment the session actually starts with (its
     // APPDATA, its session bus), so they are read after the hiding above
-    const sandboxArgs = sandboxed ? this.codexSandboxArgsFor(layout, env) : undefined
+    const sandboxArgs = sandboxedCodex ? this.codexSandboxArgsFor(layout, env) : undefined
     // Shared extensions: their environment values only here, in this process's environment (design D5). The workload
     // token goes to every session, shared servers or not.
     Object.assign(env, caps?.env ?? {}, gatewayTokenEnv(caps ?? { gatewayGrant: [] }))
@@ -441,8 +458,10 @@ export class SessionManager {
       ...(sandboxArgs ? { sandboxArgs } : {})
     })
     // npm's cache in TEMP, and on Windows the repository named safe for the sandbox's own account; after the shared
-    // extensions' values, so none of them can undo it
-    if (sandboxed) Object.assign(env, codexSandboxEnv({ platform: this.checks.platform, layout, tmpDir: os.tmpdir(), env }))
+    // extensions' values, so none of them can undo it. Claude's: the same cache, and on Linux the git excludes srt's
+    // placeholders need (core/sandbox/claudeStart.ts)
+    if (sandboxedCodex) Object.assign(env, codexSandboxEnv({ platform: this.checks.platform, layout, tmpDir: os.tmpdir(), env }))
+    if (sandboxedClaude && this.claudeSandbox) Object.assign(env, this.claudeSandbox.env(env))
     // Windows only: CLAUDE_CODE_GIT_BASH_PATH exists for Git for Windows, and on other platforms the
     // agent's bash is the system one. The agent's hooks and statusLine need a real Git Bash when
     // available; without one the statusLine capture never runs and the app never learns this session's

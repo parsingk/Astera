@@ -1130,25 +1130,33 @@ unfinished work holds the profile. Changing profiles is for a person: from insid
 refused with 5, and the reads are not. A profile the Host refuses says why in `error.details.reason`: `name-empty`,
 `name-too-long`, `name-taken`, `no-account`, `unknown-account` or `mixed-provider` with 2, and `in-use` with 6.
 
-**`--sandbox on` starts the profile's Codex sessions, terminal and chat, in Codex's own sandbox**; `off`, the default,
+**`--sandbox on` starts the profile's sessions, terminal and chat, in their CLI's own sandbox**; `off`, the default,
 starts them as before, and a profile made before the switch existed reads as `off` (`agent-profiles list` shows it as
-`sandbox`). In the sandbox a session never stops to ask (`-a never` takes the place of the permission bypass; a chat's
-thread names the profile and its approval policy is `never`) and a terminal session runs on its own server
+`sandbox`). In Codex's sandbox a session never stops to ask (`-a never` takes the place of the permission bypass; a
+chat's thread names the profile and its approval policy is `never`) and a terminal session runs on its own server
 (`--no-daemon`). On every OS it writes only in its folder, the git directories of the folder's repository (never their
 `hooks` or `config`) and the temp folder, where npm's cache goes; it cannot read `~/.ssh`, `~/.aws`, the GitHub CLI's
 and gcloud's settings, `~/.docker`, `~/.npmrc`, `~/.git-credentials` or `~/.kube`; and the network works. On macOS
-`~/Library/Keychains` is closed too, and on Linux the session bus a secret service answers on. On Windows the sandbox
+`~/Library/Keychains` is closed too, and on Linux the session bus a secret service answers on. A Claude Code session,
+terminal or chat, gets Claude Code's own sandbox on macOS and Linux through its settings file, with the same limits:
+its commands cannot run outside it, and a Claude Code whose sandbox cannot start exits at once and says why in its tab;
+`astera` runs outside it, and on macOS a command can also reach the Host's socket from inside. On Linux its git reads
+an excludes file Astera writes (`<profile>/sandbox/excludes-<uid>`: the person's global excludes, then the names the
+sandbox keeps placeholders for, such as `.bashrc` and `.vscode`), so `git add -A` works. Claude Code has no sandbox on
+Windows: there the switch only keeps its file tools, not its shell, out of those folders. On Windows the Codex sandbox
 is Codex's elevated one, which keeps Credential Manager out, and the repository is named a safe directory for the
 account it runs as; a repository or home folder whose path holds a character cmd.exe reads as syntax (`" & | < > ^ %`)
 cannot be carried to it. Each Codex account's home must have the elevated sandbox set up once (Codex's
 `codex sandbox setup --elevated --current-user`, which brings up Windows' administrator prompt): Astera asks before a
 sandboxed start, and the app offers to set up the one account a start was refused for. A session the sandbox cannot be
 applied to does not start, and says why with `SANDBOX_UNAVAILABLE: <code>`: `codex-daemon codex` for a codex that does
-not take `--no-daemon`, `path-unsafe` for such a path, `git-layout` when the folder's git data could not be read,
-`windows-setup codex <accountId>` for an account whose Windows sandbox is not set up (or no longer works: setting up
-one account's home can leave another's stale), `windows-check-failed codex <accountId>` when Codex could not be asked
-about it (not there, too old for `doctor --json`, timed out), and `not-prepared` for a start that skipped the reading
-Astera does first. A chain keeps the sandbox state it started with: the session a roll starts next is in the sandbox
+not take `--no-daemon`, `cli-too-old claude <found> 2.1.306` for an older Claude Code (`cli-version-unknown claude` when
+its version cannot be read, `cli-missing claude` when it is not there), `path-unsafe` for such a path, `git-layout`
+when the folder's git data could not be read, `windows-setup codex <accountId>` for an account whose Windows sandbox is
+not set up (or no longer works: setting up one account's home can leave another's stale), `windows-check-failed codex
+<accountId>` when Codex could not be asked about it (not there, too old for `doctor --json`, timed out), and
+`not-prepared` for a start that skipped the reading Astera does first (or whose Claude Code settings could not be
+written). A chain keeps the sandbox state it started with: the session a roll starts next is in the sandbox
 exactly when the first one was, whatever the switch says by then, and only a session started afresh reads the switch
 again. A roll onto an account the sandbox refuses waits, as a roll does for any refusal, and says why, naming the
 account and where to set it up (Settings › Agent profiles): a terminal session in its tab, a chat in its pane. Like

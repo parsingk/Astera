@@ -50,6 +50,9 @@ export interface HostChatsDeps {
    *  respawn is prepared through the spawner's prepareRollSpawn. */
   sandboxLayouts?: ChatManagerDeps['sandboxLayouts']
   codexWindowsReady?: ChatManagerDeps['codexWindowsReady']
+  /** The sandbox for Claude, the spawner's (core/sandbox/claudeStart.ts): a sandboxed Claude chat's version floor and its
+   *  one --settings file. */
+  claudeSandbox?: ChatManagerDeps['claudeSandbox']
   log(m: string): void
   /** Test seams. */
   createAdapter?: ChatManagerDeps['createAdapter']
@@ -62,8 +65,8 @@ export interface HostChats {
   adopt(entry: PtyEntry): SessionInfo | null
   /** A roll's respawn, synchronous; the new note says hostStarting until started() settles. */
   spawn(o: ChatRollSpawn): SessionInfo
-  /** What a sandboxed Codex chat's spawn needs read first (ChatSessionManager.prepare); `sessions create` awaits it.
-   *  Rejects with the refusal (`SANDBOX_UNAVAILABLE: …`). */
+  /** What a sandboxed chat's spawn needs first (ChatSessionManager.prepare): a Codex chat's folder read, a Claude chat's
+   *  version asked and settings written; `sessions create` awaits it. Rejects with the refusal (`SANDBOX_UNAVAILABLE: …`). */
   prepare(o: { account: Account; cwd: string; sandbox?: boolean }): Promise<void>
   /** True once the new proc's handshake and carry-on settled; hostStarting is then cleared in the note.
    *  False when they did not settle within CHAT_START_PUSH_MS: the session is killed and the mark stays,
@@ -188,6 +191,7 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     enforce: d.enforce,
     ...(d.sandboxLayouts ? { sandboxLayouts: d.sandboxLayouts } : {}),
     ...(d.codexWindowsReady ? { codexWindowsReady: d.codexWindowsReady } : {}),
+    ...(d.claudeSandbox ? { claudeSandbox: d.claudeSandbox } : {}),
     ...(d.createAdapter ? { createAdapter: d.createAdapter } : {})
   })
 

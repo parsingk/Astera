@@ -126,7 +126,8 @@ export function createHostSessionStarter(d: {
         profile = await profileSpawn({ profileDir: d.profileDir, agentProfileId: o.agentProfileId, appWideYolo: d.bypass, log: d.log })
       bypass = profile?.bypassPermissions ?? (await d.bypass())
       // The profile's sandbox (sandbox design §6): the folder's git layout read for the spawn, and on Windows the account's
-      // Codex home asked whether it is set up; a refusal (`SANDBOX_UNAVAILABLE: …`) starts nothing
+      // Codex home asked whether it is set up (for Claude, its version asked and its settings written); a refusal
+      // (`SANDBOX_UNAVAILABLE: …`) starts nothing
       if (profile?.sandbox === true) await chats.prepare?.({ account, cwd: o.cwd, sandbox: true })
     } catch (err) {
       throw err instanceof Error ? refusedBeforeActing(err) : err

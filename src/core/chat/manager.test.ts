@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { gitLayoutOf } from '../sandbox/gitLayout'
+import { claudeSandboxStart, gitExcludesFileOf } from '../sandbox/claudeStart'
+import { StatusLineManager } from '../sessions/statusline'
 import { credentialStoreDenies, sensitiveLocations } from '../sandbox/locations'
 import { codexSandboxArgs, codexSandboxEnv, npmCacheOf } from '../sandbox/codexProfile'
 import { PreparedLayouts } from '../sandbox/prepared'
@@ -1733,13 +1735,102 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
     expect(handles[1].startCalls).toEqual([{ cwd, resumeThreadId: undefined, bypass: false, sandbox: true }])
   })
 
-  it('a Claude chat is not put in the Codex sandbox', async () => {
-    const cwd = repo()
-    const { manager, spawned, handles } = rig('linux')
-    await manager.prepare({ account: claudeAccount, cwd, sandbox: true })
-    const info = manager.spawn({ account: claudeAccount, cwd, sandbox: true })
-    expect(spawned[0].args).toEqual(claudeLaunchArgs({ resumeSessionId: undefined, bypass: false }))
-    expect(handles[0].startCalls[0]).not.toHaveProperty('sandbox')
-    expect(info).not.toHaveProperty('sandboxed')
+  // A Claude chat's sandbox is its settings, as a terminal session's is (sandbox design §6: "Claude chat gets the same
+  // --settings (hooks and sandbox) as a terminal session"): one --settings file, the Enforce hook in it when the mode is
+  // enforce, and nothing for the adapter to name
+  describe('a Claude chat', () => {
+    const claudeRig = async (o: { version?: string; mode?: 'enforce' } = {}) => {
+      const profileDir = mkdtempSync(path.join(os.tmpdir(), 'astera-chat-claude-sbx-'))
+      const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'astera-chat-claude-tmp-'))
+      dirs.push(profileDir, tmpDir)
+      const statusLine = new StatusLineManager(profileDir, 'node', () => {}, {
+        platform: 'linux', execPath: '/opt/astera/astera', homeDir: HOME.linux, env: { ...BASE.linux }, tmpDir
+      })
+      await statusLine.init()
+      if (o.mode === 'enforce') expect(await statusLine.ensureEnforceFiles()).toBe('ok')
+      const versions = Object.assign(() => o.version ?? '2.1.310', { warm: async () => {} })
+      const claudeSandbox = claudeSandboxStart({
+        platform: 'linux', profileDir, homeDir: profileDir, env: {}, tmpDir, files: statusLine, version: versions, uid: 1000,
+        gitGlobalExcludes: async () => null, log: () => {}
+      })
+      const spawned: Array<{ file: string; args: string[]; opts: ProcSpawnOptions }> = []
+      const { createAdapter, handles } = makeAdapterFactory()
+      const manager = new ChatSessionManager({
+        factory: (file, args, opts) => (spawned.push({ file, args, opts }), new FakeProc()),
+        descriptors: makeDescriptors('linux', HOME.linux),
+        homeDir: HOME.linux,
+        platform: 'linux',
+        version: '1.0.0',
+        log: () => {},
+        createAdapter,
+        baseEnv: { ...BASE.linux },
+        claudeSandbox,
+        ...(o.mode === 'enforce'
+          ? {
+              capabilities: {
+                get: () => ({ context: { kind: 'implicit' as const, accounts: [claudeAccount.id], policyMode: 'enforce' as const, executionMode: 'managed' as const }, args: [], env: {}, given: [], gatewayGrant: [], skipped: [] }),
+                refresh: async () => {}
+              },
+              enforce: { args: () => statusLine.enforceChatArgs(), blocker: () => null }
+            }
+          : {})
+      })
+      return { manager, spawned, handles, statusLine, profileDir, tmpDir }
+    }
+    const read = (file: string): Record<string, unknown> => JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+
+    it('a sandboxed Claude chat gets --settings with the sandbox', async () => {
+      const cwd = repo()
+      const r = await claudeRig()
+      await r.manager.prepare({ account: claudeAccount, cwd, sandbox: true })
+      const info = r.manager.spawn({ account: claudeAccount, cwd, sandbox: true })
+      const chatFile = r.statusLine.sandboxChatArgs(false)![1]
+      expect(r.spawned[0].args).toEqual([...claudeLaunchArgs({ resumeSessionId: undefined, bypass: false }), '--settings', chatFile])
+      expect(read(chatFile).sandbox).toMatchObject({ enabled: true, allowUnsandboxedCommands: false, failIfUnavailable: true })
+      expect(JSON.stringify(read(chatFile).permissions)).toContain('Read(//home/t/.ssh/**)')
+      // The adapter has nothing to name: Claude's sandbox is the file
+      expect(r.handles[0].startCalls[0]).not.toHaveProperty('sandbox')
+      const env = r.spawned[0].opts.env
+      expect(env.npm_config_cache).toBe(npmCacheOf(r.tmpDir))
+      expect(env).toMatchObject({ GIT_CONFIG_KEY_0: 'core.excludesFile', GIT_CONFIG_VALUE_0: gitExcludesFileOf(r.profileDir, 1000) })
+      expect(info.sandboxed).toBe(true)
+      expect(r.spawned[0].opts.meta?.restore).toMatchObject({ sandboxed: true })
+      // Unsandboxed, a Claude chat takes no --settings, as before
+      const open = r.manager.spawn({ account: claudeAccount, cwd })
+      expect(r.spawned[1].args).toEqual(claudeLaunchArgs({ resumeSessionId: undefined, bypass: false }))
+      expect(r.spawned[1].opts.env.npm_config_cache).toBeUndefined()
+      expect(open).not.toHaveProperty('sandboxed')
+    })
+
+    it('in Enforce its one --settings holds the blocking hook and the sandbox', async () => {
+      const cwd = repo()
+      const r = await claudeRig({ mode: 'enforce' })
+      await r.manager.prepare({ account: claudeAccount, cwd, sandbox: true })
+      r.manager.spawn({ account: claudeAccount, cwd, sandbox: true })
+      const args = r.spawned[0].args
+      expect(args.filter((a) => a === '--settings')).toHaveLength(1)
+      const both = read(args[args.indexOf('--settings') + 1])
+      expect(both).toMatchObject({ disableAllHooks: false, hooks: { PreToolUse: [{ matcher: '*' }] }, sandbox: { enabled: true } })
+      expect(args[args.indexOf('--settings') + 1]).not.toBe(r.statusLine.enforceChatArgs()![1])
+      expect(r.spawned[0].opts.meta?.restore).toMatchObject({ enforced: true, sandboxed: true })
+    })
+
+    it('an old Claude, or a chat nobody prepared, does not start in it', async () => {
+      const cwd = repo()
+      const old = await claudeRig({ version: '2.1.305' })
+      await expect(old.manager.prepare({ account: claudeAccount, cwd, sandbox: true })).rejects.toThrow(
+        /^SANDBOX_UNAVAILABLE: cli-too-old claude 2\.1\.305 2\.1\.306$/
+      )
+      expect(() => old.manager.spawn({ account: claudeAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: cli-too-old claude/)
+      expect(old.spawned).toHaveLength(0)
+      const fresh = await claudeRig()
+      expect(() => fresh.manager.spawn({ account: claudeAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
+      expect(fresh.spawned).toHaveLength(0)
+      // A process with no Claude sandbox to start refuses rather than start the chat outside it
+      const { manager, spawned } = rig('linux')
+      await expect(manager.prepare({ account: claudeAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
+      expect(() => manager.spawn({ account: claudeAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
+      expect(spawned).toHaveLength(0)
+    })
   })
 })

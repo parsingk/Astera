@@ -57,10 +57,22 @@ export function appServerSandboxArgs(args: string[]): string[] {
   return args.slice(2)
 }
 
+/** `entries` as git's GIT_CONFIG_COUNT/GIT_CONFIG_KEY_n/GIT_CONFIG_VALUE_n variables, numbered after the ones `env` (the
+ *  environment the session inherits) already holds, with the count made the total: the person's own entries are kept. A
+ *  count git could not read (not a whole number) is taken as none, which git would otherwise refuse to run with. */
+export function appendGitConfig(env: Record<string, string | undefined> | undefined, entries: Array<[key: string, value: string]>): Record<string, string> {
+  const inherited = env?.GIT_CONFIG_COUNT ?? ''
+  const first = /^\d+$/.test(inherited) ? Number(inherited) : 0
+  const out: Record<string, string> = { GIT_CONFIG_COUNT: String(first + entries.length) }
+  entries.forEach(([key, value], i) => {
+    out[`GIT_CONFIG_KEY_${first + i}`] = key
+    out[`GIT_CONFIG_VALUE_${first + i}`] = value
+  })
+  return out
+}
+
 /** On Windows git refuses a repository owned by another account, and the elevated sandbox runs as one, so the checkout and
- *  (for a linked worktree) the main checkout are named safe. `env` is the environment the session inherits: entries of
- *  the person's own `GIT_CONFIG_COUNT` are kept, these numbered after them and the count made the total. A count git
- *  could not read (not a whole number) is taken as none, which git would otherwise refuse to run with. */
+ *  (for a linked worktree) the main checkout are named safe, after the person's own GIT_CONFIG entries (appendGitConfig). */
 export function codexSandboxEnv(o: {
   platform: NodeJS.Platform
   layout: GitLayout | null
@@ -72,12 +84,5 @@ export function codexSandboxEnv(o: {
   const safe = [o.layout.top]
   const main = o.layout.commonDir.replace(/\/[^/]*$/, '')
   if (main && main !== o.layout.top) safe.push(main)
-  const inherited = o.env?.GIT_CONFIG_COUNT ?? ''
-  const first = /^\d+$/.test(inherited) ? Number(inherited) : 0
-  env.GIT_CONFIG_COUNT = String(first + safe.length)
-  safe.forEach((p, i) => {
-    env[`GIT_CONFIG_KEY_${first + i}`] = 'safe.directory'
-    env[`GIT_CONFIG_VALUE_${first + i}`] = p
-  })
-  return env
+  return { ...env, ...appendGitConfig(o.env, safe.map((p): [string, string] => ['safe.directory', p])) }
 }

@@ -49,6 +49,7 @@ import { createCapabilityCache, type CapabilityCache } from '../core/extensions/
 import { readPolicyMode } from '../core/audit/policy'
 import type { EnforceStart } from '../core/audit/enforce'
 import { cliVersionProbe, enforceBlocker } from '../core/sessions/cliVersion'
+import { claudeSandboxStart } from '../core/sandbox/claudeStart'
 import { createManagedHooksCheck } from '../core/sessions/managedHooks'
 import { codexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
 import { findInstalledHostExe } from '../core/host/installedRuntime'
@@ -334,6 +335,19 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     }
   }
   sessions.enforce = enforce
+  // The sandbox for Claude (sandbox design §6): its settings twins, the version floor Enforce asks (one probe for both),
+  // npm's cache folder and on Linux the git excludes, prepared by a sandboxed start of either manager
+  const claudeSandbox = claudeSandboxStart({
+    platform: process.platform,
+    profileDir: userDataDir,
+    homeDir: os.homedir(),
+    env: process.env,
+    tmpDir: os.tmpdir(),
+    files: statusLine,
+    version: cliVersions,
+    log: sessionsLog
+  })
+  sessions.claudeSandbox = claudeSandbox
   // The chat sessions. It is handed `procRouter.factory` rather than a factory chosen now, for exactly
   // the reason SessionManager is handed `ptyRouter.factory`: which one a spawn reaches is decided at
   // spawn time, once registerIpc has learned whether this Host speaks procs. `version` is the app's
@@ -352,7 +366,8 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     // The sandbox (sandbox design §6): what the terminal manager's prepares read is the chat respawn's too, since a chat
     // chain's roll is prepared through `sessions.prepare`; Windows readiness is asked the same way by both
     sandboxLayouts: sessions.sandboxLayouts,
-    codexWindowsReady: askCodexWindowsReady
+    codexWindowsReady: askCodexWindowsReady,
+    claudeSandbox
   })
   // Lazy history: nothing is scanned at startup. The project list comes from a directory listing; sessions are
   // parsed when expanded. index.ts starts the file watcher with startBackground() after the window is up, so window creation never blocks on a scan.

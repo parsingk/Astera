@@ -10,6 +10,7 @@
 // worktrees (the Host's own registry, Host S3 §3.1) — the fork behind `--worktree new` and the three
 // `OrchServerDeps` this file no longer answers by refusing.
 import { existsSync, promises as fs } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { comparablePath } from '../core/files/tree'
 import { randomUUID } from 'node:crypto'
@@ -24,6 +25,7 @@ import { makeLimitProbe } from '../core/orchestration/exec/limitProbe'
 import { ensureShuttle, sessionCmdLink } from '../core/orchestration/exec/shuttle'
 import type { ChatManagerDeps, ChatOrchEnv } from '../core/chat/manager'
 import type { CodexWindowsReady, PreparedLayouts } from '../core/sandbox/prepared'
+import { claudeSandboxStart, type ClaudeSandboxStart } from '../core/sandbox/claudeStart'
 import { binDirFor } from '../core/orchestration/cliInstall'
 import {
   preTrustWorkspace,
@@ -56,7 +58,7 @@ import { createCapabilityCache, type CapabilityCache } from '../core/extensions/
 import { createHidingSource, projectOfWorktrees, type HidingSource } from '../core/credentials/hiding'
 import { readPolicyMode } from '../core/audit/policy'
 import type { EnforceStart } from '../core/audit/enforce'
-import { cliVersionProbe, enforceBlocker } from '../core/sessions/cliVersion'
+import { cliVersionProbe, enforceBlocker, type CliVersionProbe } from '../core/sessions/cliVersion'
 import { createManagedHooksCheck } from '../core/sessions/managedHooks'
 import { codexNoDaemonProbe, type CodexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
 import { findInstalledHostExe } from '../core/host/installedRuntime'
@@ -138,6 +140,9 @@ export interface HostSpawnerDeps {
   /** Test injection; defaults to asking the codex on this machine's PATH whether an account's Windows sandbox is set up
    *  (askCodexWindowsReady), which a sandboxed win32 Codex start needs. A test never runs the real one. */
   codexWindowsReady?: CodexWindowsReady
+  /** Test injection; defaults to asking the claude on this machine's PATH its version (cliVersionProbe), which a sandboxed
+   *  Claude start needs. A test never runs the real one. */
+  claudeVersion?: CliVersionProbe
 }
 
 /** HostRollSpawner's three (prepareRollSpawn, rollSpawn, statusLinePayload) are the S6 roll's respawn
@@ -155,6 +160,9 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
    *  ask, shared with the Host's chat sessions: a roll prepares a chat chain's respawn through prepareRollSpawn. */
   sandboxLayouts?: PreparedLayouts
   codexWindowsReady?: CodexWindowsReady
+  /** The sandbox for Claude (core/sandbox/claudeStart.ts), this spawner's, shared with the Host's chat sessions: a roll
+   *  prepares a Claude chat chain's respawn through prepareRollSpawn, and its settings come from this StatusLineManager. */
+  claudeSandbox?: ClaudeSandboxStart
   /** The session shuttle's values once the Host wrote it (kicked at creation); undefined until then. */
   orchEnvNow(): ChatOrchEnv | undefined
   /** How many worker and coordinator starts are under way right now. */
@@ -300,7 +308,10 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       findRuntime: () =>
         findInstalledHostExe(
           hostRuntimeBase({ platform, localAppData: d.env.LOCALAPPDATA, userData: profileDir, appName: path.win32.basename(profileDir) })
-        )
+        ),
+      // The sandbox's denied places are read from the person's home and the environment the Host's sessions inherit
+      homeDir,
+      env: d.env
     }
   )
   const ensured = once(() => statusLine.ensureFiles())
@@ -426,6 +437,19 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     }
   }
   sessions.enforce = enforce
+  // The sandbox for Claude (sandbox design §6): its settings twins, the version floor Enforce asks (one probe for both),
+  // npm's cache folder and on Linux the git excludes, prepared by a sandboxed start here or in the Host's chat sessions
+  const claudeSandbox = claudeSandboxStart({
+    platform,
+    profileDir,
+    homeDir,
+    env: d.env,
+    tmpDir: os.tmpdir(),
+    files: statusLine,
+    version: d.claudeVersion ?? cliVersions,
+    log
+  })
+  sessions.claudeSandbox = claudeSandbox
   sessions.onExit = (e) => {
     sessions.forget(e.sessionId)
   }
@@ -793,6 +817,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     enforce,
     sandboxLayouts: sessions.sandboxLayouts,
     codexWindowsReady,
+    claudeSandbox,
     orchEnvNow: () => orchEnvReady,
     inFlight: () => spawnsInFlight,
     closeAndSettle: (ms) => {

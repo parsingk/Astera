@@ -48,6 +48,7 @@ const rig = (over: {
   touchAgentProfile?: HostSpawnerDeps['touchAgentProfile']
   codexNoDaemon?: HostSpawnerDeps['codexNoDaemon']
   codexWindowsReady?: HostSpawnerDeps['codexWindowsReady']
+  claudeVersion?: HostSpawnerDeps['claudeVersion']
 } & LocateHooks = {}) => {
   const spawned: Spawned[] = []
   const logs: string[] = []
@@ -73,6 +74,7 @@ const rig = (over: {
     ...(over.codexNoDaemon ? { codexNoDaemon: over.codexNoDaemon } : {}),
     // Every Windows home reads set up unless a case says otherwise: the real question runs the codex on this machine
     codexWindowsReady: over.codexWindowsReady ?? (async () => 'ready'),
+    ...(over.claudeVersion ? { claudeVersion: over.claudeVersion } : {}),
     worktrees: over.worktrees ?? { fork: () => Promise.reject(new Error('not in this test')), makeRunWorktree: vi.fn(), mergeWorktrees: vi.fn(), removeWorktrees: vi.fn() } })
   return { spawner, registry, spawned, logs, sent }
 }
@@ -1000,6 +1002,34 @@ describe('createHostSpawner — createSession', () => {
       expect(h.spawned[1].args).toContain('--dangerously-bypass-approvals-and-sandbox')
       expect(h.spawned[1].args).not.toContain('-a')
       expect(open).not.toHaveProperty('sandboxed')
+    })
+
+    // Sandbox design §6 (Task 7): a sandboxed profile's Claude session reads the sandbox twin of its settings file, from the
+    // Host's own StatusLineManager, and an old Claude starts nothing; the Host's chat sessions are handed the same start
+    it('a sandboxed profile starts its Claude session in Claude’s sandbox, and an unsandboxed one as today', async () => {
+      await writeAgentProfiles(profile, { version: 1, profiles: [P({ id: 'ap_box', name: 'Boxed', sandbox: true }), P({ id: 'ap_open', name: 'Open' })] })
+      const version = (v: string) => Object.assign(() => v, { warm: async () => {} })
+      const h = rig({ claudeVersion: version('2.1.310') })
+      const settingsOf = (i: number): string => {
+        const args = h.spawned[i].args as string[]
+        return args[args.indexOf('--settings') + 1]
+      }
+      const boxed = await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_box' })
+      expect(settingsOf(0)).toMatch(/astera-statusline-settings-sandbox\.json$/)
+      // The denied places are the Host's home's
+      const deny: string[] = JSON.parse(await fs.readFile(settingsOf(0), 'utf8')).permissions.deny
+      expect(deny.some((r) => r.startsWith('Read(//') && r.endsWith('/home/.ssh/**)'))).toBe(true)
+      expect(boxed.sandboxed).toBe(true)
+      expect(h.registry.list()[0].meta!.restore).toMatchObject({ agentProfileId: 'ap_box', sandboxed: true })
+      const open = await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_open' })
+      expect(settingsOf(1)).toMatch(/astera-statusline-settings\.json$/)
+      expect(open).not.toHaveProperty('sandboxed')
+      expect(h.spawner!.claudeSandbox!.chatArgs(false)?.[1]).toMatch(/astera-sandbox-chat-settings\.json$/)
+      const old = rig({ claudeVersion: version('2.1.305') })
+      await expect(old.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_box' })).rejects.toThrow(
+        /^SANDBOX_UNAVAILABLE: cli-too-old claude 2\.1\.305 2\.1\.306$/
+      )
+      expect(old.spawned).toHaveLength(0)
     })
 
     // Windows readiness (sandbox design §6): the spawner's own question is the one its prepares ask, and an account whose
