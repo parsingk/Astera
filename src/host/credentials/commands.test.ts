@@ -159,7 +159,7 @@ describe('credentials commands', () => {
     expect(text).toMatch(/git credential fill/)
     expect(text).toMatch(/same Windows account|same user/)
     expect(text).toMatch(/gh: measured on win32/)
-    expect(text).toMatch(/aws: measured on win32, linux/)
+    expect(text).toMatch(/aws: measured on win32, darwin, linux/)
     expect(text).toMatch(/default access list/)
     const posix = (body(await host('darwin').command({ cmd: 'credentials-doctor', args: {}, ...cli, marks: marks() })).lines as { text: string }[]).map((l) => l.text).join('\n')
     expect(posix).toMatch(/not measured on darwin/)
