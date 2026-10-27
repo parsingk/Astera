@@ -2093,9 +2093,10 @@ export function registerIpc(
     }
     const account = core.accounts.get(opts.accountId)
     // The agent profile it names, by id or name (Agent Profiles design §5): the session keeps the profile's real id, and
-    // the profile's permission decides the bypass when the caller gave none. One that does not resolve is logged and
+    // the profile's permission decides the bypass when the caller gave none. One that is not found is logged and
     // dropped, and the session starts with the app-wide mode as a dialog spawn without a profile does (the dialog sent
-    // no bypass, so dropping only the id would have left it asking). With none named, nothing here changes the options.
+    // no bypass, so dropping only the id would have left it asking); a profile store that cannot be read refuses the
+    // spawn with its repair, since the profile in it may ask or sandbox. With none named, nothing here changes the options.
     // A profile that resolves also gives its sandbox switch (sandbox design §6), which the terminal prepare and spawn
     // below read from the options.
     if (opts.agentProfileId !== undefined) {
@@ -3015,7 +3016,8 @@ export function registerIpc(
         // 워커는 방금 만들어진 워크트리에서 뜬다 — 사람이 승인한 적 없는 폴더다(위 주석).
         await preTrustWorkspace(o.accountId, o.cwd)
         // The profile is resolved here, before the bypass below is filled in: once filled, spawnSession would take it
-        // as the caller's own and the profile's permission would never be asked (Agent Profiles design §5).
+        // as the caller's own and the profile's permission would never be asked (Agent Profiles design §5). A profile
+        // store that cannot be read throws its repair here, and the worker does not start.
         const profile = await profileSpawn({
           profileDir: app.getPath('userData'),
           agentProfileId: o.agentProfileId,

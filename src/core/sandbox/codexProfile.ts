@@ -47,17 +47,26 @@ export function codexSandboxArgs(o: { platform: NodeJS.Platform; layout: GitLayo
 }
 
 /** On Windows git refuses a repository owned by another account, and the elevated sandbox runs as one, so the checkout and
- *  (for a linked worktree) the main checkout are named safe. */
-export function codexSandboxEnv(o: { platform: NodeJS.Platform; layout: GitLayout | null; tmpDir: string }): Record<string, string> {
+ *  (for a linked worktree) the main checkout are named safe. `env` is the environment the session inherits: entries of
+ *  the person's own `GIT_CONFIG_COUNT` are kept, these numbered after them and the count made the total. A count git
+ *  could not read (not a whole number) is taken as none, which git would otherwise refuse to run with. */
+export function codexSandboxEnv(o: {
+  platform: NodeJS.Platform
+  layout: GitLayout | null
+  tmpDir: string
+  env?: Record<string, string | undefined>
+}): Record<string, string> {
   const env: Record<string, string> = { npm_config_cache: npmCacheOf(o.tmpDir) }
   if (o.platform !== 'win32' || !o.layout) return env
   const safe = [o.layout.top]
   const main = o.layout.commonDir.replace(/\/[^/]*$/, '')
   if (main && main !== o.layout.top) safe.push(main)
-  env.GIT_CONFIG_COUNT = String(safe.length)
+  const inherited = o.env?.GIT_CONFIG_COUNT ?? ''
+  const first = /^\d+$/.test(inherited) ? Number(inherited) : 0
+  env.GIT_CONFIG_COUNT = String(first + safe.length)
   safe.forEach((p, i) => {
-    env[`GIT_CONFIG_KEY_${i}`] = 'safe.directory'
-    env[`GIT_CONFIG_VALUE_${i}`] = p
+    env[`GIT_CONFIG_KEY_${first + i}`] = 'safe.directory'
+    env[`GIT_CONFIG_VALUE_${first + i}`] = p
   })
   return env
 }

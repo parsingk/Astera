@@ -105,11 +105,19 @@ describe('profileSpawn', () => {
     expect(logs[0]).toContain('ap_gone')
   })
 
-  it('a store that cannot be read is null, with one log line', async () => {
+  // Task 5 fix round 1: a store that cannot be read may hold this profile's sandbox or its `ask`, so the spawn is refused
+  // with the store's repair reason instead of starting with less than the person set; not found still starts without one
+  it('a store that cannot be read refuses the spawn, naming the file to repair, with one log line', async () => {
     const dir = await profileDir()
     await fs.writeFile(profilePaths(dir).agentProfiles, '{ damaged')
-    const { r, logs } = await call(dir, { agentProfileId: 'ap_000000000001' })
-    expect(r).toBeNull()
+    const logs: string[] = []
+    const refused = await profileSpawn({ profileDir: dir, agentProfileId: 'ap_000000000001', appWideYolo: async () => true, log: (l) => logs.push(l) }).then(
+      () => null,
+      (e: unknown) => e
+    )
+    expect(refused).toBeInstanceOf(RepairNeeded)
+    expect((refused as RepairNeeded).file).toBe('agent-profiles.json')
+    expect((refused as RepairNeeded).message).toMatch(/ap_000000000001/)
     expect(logs).toHaveLength(1)
   })
 
@@ -152,10 +160,11 @@ describe('appProfileSpawn', () => {
     expect(await call(dir, { agentProfileId: 'ap_gone', yolo: false })).toEqual({ bypassPermissions: false })
   })
 
-  it('a damaged store falls back to the app-wide mode too', async () => {
+  // Task 5 fix round 1: the app's spawn is refused too; only a profile that is not there falls back
+  it('a damaged store refuses the spawn instead of falling back', async () => {
     const dir = await profileDir()
     await fs.writeFile(profilePaths(dir).agentProfiles, '{ damaged')
-    expect(await call(dir, { agentProfileId: 'ap_000000000001', yolo: true })).toEqual({ bypassPermissions: true })
+    await expect(call(dir, { agentProfileId: 'ap_000000000001', yolo: true })).rejects.toBeInstanceOf(RepairNeeded)
   })
 
   it('an explicit value from the caller still wins when the profile does not resolve', async () => {

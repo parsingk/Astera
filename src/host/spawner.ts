@@ -532,8 +532,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     await preTrustWorkspace({ account, cwd: o.cwd, homeDir, descriptors, log })
     await ensured()
     const cliPath = await shuttlePath()
-    // The profile it names, by id or name; one that does not resolve is logged and the session starts without it
-    // (Agent Profiles design §5). Its explicit permission decides the bypass when the caller gave none.
+    // The profile it names, by id or name; one that is not found is logged and the session starts without it (Agent
+    // Profiles design §5), while a store that cannot be read refuses the start with its repair (it may hold the profile's
+    // `ask` or sandbox). Its explicit permission decides the bypass when the caller gave none.
     let profile: Awaited<ReturnType<typeof profileSpawn>>
     let bypass = o.bypassPermissions
     try {

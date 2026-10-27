@@ -241,7 +241,7 @@ export class SessionManager {
       await this.observeHooks().catch((err) => this.checks.log(`observe hook settings could not be written: ${String(err)}`))
     // The sandbox (sandbox design §6): a Codex session's profile names its repository's git directories, so they are read
     // now, off the thread, for the spawn to use
-    if (opts.sandbox === true && providerOf(opts.account) === 'codex') await this.prepareSandbox(opts.cwd)
+    if (opts.sandbox === true && providerOf(opts.account) === 'codex') await this.prepareSandbox(opts.account, opts.cwd)
   }
 
   /** Reads the folder's git layout for a sandboxed spawn and keeps it beside the confirmed folders. On Windows every
@@ -249,14 +249,29 @@ export class SessionManager {
    *  one that is missing, and git would read a `core.hooksPath` from it (gitLayout.ts). On macOS and Linux a read entry
    *  already keeps a missing one from being created, so nothing is written there. Either failing refuses the start, since
    *  the profile could not name what it must (E5). */
-  private async prepareSandbox(cwd: string): Promise<void> {
+  private async prepareSandbox(account: Account, cwd: string): Promise<void> {
+    const fail = (err: unknown): Error => {
+      this.checks.log(`sandbox: the git layout of ${cwd} could not be read or prepared: ${String(err)}`)
+      return sandboxUnavailable('git-layout')
+    }
     let layout: GitLayout | null
     try {
       layout = await gitLayoutOf(cwd)
-      if (layout && this.checks.platform === 'win32') await ensureWorktreeConfigFiles(layout)
     } catch (err) {
-      this.checks.log(`sandbox: the git layout of ${cwd} could not be read or prepared: ${String(err)}`)
-      throw sandboxUnavailable('git-layout')
+      throw fail(err)
+    }
+    // What the spawn would refuse (a path cmd.exe cannot carry, a codex without --no-daemon, warmed above) is asked now
+    // too, before anything is written: a roll awaits this before it kills the session it replaces, and the spawn after
+    // the kill can only throw. The spawn still asks for itself, since its environment is built after the hiding and the
+    // codex may change meanwhile. The command is built and dropped: the builder is the one place that knows whether this
+    // codex takes the flag.
+    descriptorOf(this.descriptors, account).buildCommand({ sandboxArgs: this.codexSandboxArgsFor(layout, this.envFor(account)) })
+    if (layout && this.checks.platform === 'win32') {
+      try {
+        await ensureWorktreeConfigFiles(layout)
+      } catch (err) {
+        throw fail(err)
+      }
     }
     const now = this.checks.now()
     for (const [k, v] of this.preparedLayouts) if (now - v.at >= CWD_CONFIRMED_MS) this.preparedLayouts.delete(k)
@@ -426,7 +441,7 @@ export class SessionManager {
     })
     // npm's cache in TEMP, and on Windows the repository named safe for the sandbox's own account; after the shared
     // extensions' values, so none of them can undo it
-    if (sandboxed) Object.assign(env, codexSandboxEnv({ platform: this.checks.platform, layout, tmpDir: os.tmpdir() }))
+    if (sandboxed) Object.assign(env, codexSandboxEnv({ platform: this.checks.platform, layout, tmpDir: os.tmpdir(), env }))
     // Windows only: CLAUDE_CODE_GIT_BASH_PATH exists for Git for Windows, and on other platforms the
     // agent's bash is the system one. The agent's hooks and statusLine need a real Git Bash when
     // available; without one the statusLine capture never runs and the app never learns this session's

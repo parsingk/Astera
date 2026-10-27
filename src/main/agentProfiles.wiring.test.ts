@@ -49,6 +49,17 @@ describe('ipc.ts starts a session from an agent profile', () => {
     expect(before(terminal, 'core.sessions.spawn({', 'touchAgentProfile(opts.agentProfileId)')).toBe(true)
   })
 
+  // Task 5 fix round 1: a profile store that cannot be read refuses the start (profileSpawn rethrows its RepairNeeded,
+  // pinned in permission.test.ts); nothing on the app's two paths may catch it and start without the profile
+  it('a profile store that cannot be read refuses the spawn: neither the person’s path nor a worker’s catches it', () => {
+    const resolving = between('const resolved = await appProfileSpawn(', 'opts = { ...rest, ...resolved }')
+    expect(resolving).not.toMatch(/\.catch\(|try \{/)
+    expect(body.slice(0, body.indexOf('const resolved = await appProfileSpawn('))).not.toMatch(/if \(opts\.agentProfileId !== undefined\) \{\s*try \{/)
+    const worker = between('      spawnSession: async (o) => {', 'const info = await spawnSession(')
+    expect(worker).toMatch(/const profile = await profileSpawn\(/)
+    expect(worker).not.toMatch(/\.catch\(|try \{/)
+  })
+
   it('stamps through the Host, never awaited', () => {
     expect(between('  const touchAgentProfile = ', '\n  }')).toMatch(/void orchCall\(\{ cmd: 'agent-profiles-touch', args: \{ id \}, sessionId: '' \}\)\.catch\(/)
   })

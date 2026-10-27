@@ -1141,8 +1141,11 @@ sandbox is Codex's elevated one, which keeps Credential Manager out, and the rep
 the account it runs as; a repository or home folder whose path holds a character cmd.exe reads as syntax
 (`" & | < > ^ %`) cannot be carried to it. A session the sandbox cannot be applied to does not start, and says why with
 `SANDBOX_UNAVAILABLE: <code>`: `codex-daemon codex` for a codex that does not take `--no-daemon`, `path-unsafe` for
-such a path, `git-layout` when the folder's git data could not be read. The session a roll starts next stays in the
-sandbox. Like every profile change, switching it from inside an agent session is refused with 5.
+such a path, `git-layout` when the folder's git data could not be read. A chain keeps the sandbox state it started
+with: the session a roll starts next is in the sandbox exactly when the first one was, whatever the switch says by
+then, and only a session started afresh reads the switch again. Like every profile change, switching it from inside an
+agent session is refused with 5. A profile store that cannot be read refuses a session that names a profile, with 6
+and the file to repair, rather than starting it without the profile.
 
 `jobs create`, `tasks add` and `sessions create` take `--agent-profile <id|name>`. A Job's tasks run as its profile
 unless a task names its own, and the profile never picks the coordinator. A task with a profile and no `--account`

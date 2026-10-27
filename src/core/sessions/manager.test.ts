@@ -1814,6 +1814,23 @@ describe('the sandbox at spawn', () => {
     }
   })
 
+  // Task 5 fix round 1: the person's own GIT_CONFIG_* entries the session inherits stay, with the safe.directory after them
+  it('a win32 session keeps the GIT_CONFIG entries it inherits', async () => {
+    const cwd = repo()
+    const spawned: PtySpawnOptions[] = []
+    const manager = new SessionManager((_f, _a, o) => (spawned.push(o), new FakePty()), makeDescriptors('win32', HOME.win32, undefined, daemon(true)),
+      100, 20, HOME.win32, undefined, [], { ...BASE.win32, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.autocrlf', GIT_CONFIG_VALUE_0: 'false' }, checksFor('win32'))
+    await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    expect(spawned[0].env).toMatchObject({
+      GIT_CONFIG_COUNT: '2',
+      GIT_CONFIG_KEY_0: 'core.autocrlf',
+      GIT_CONFIG_VALUE_0: 'false',
+      GIT_CONFIG_KEY_1: 'safe.directory',
+      GIT_CONFIG_VALUE_1: (await gitLayoutOf(cwd))!.top
+    })
+  })
+
   it("an unsandboxed session's arguments are unchanged", async () => {
     for (const sandbox of [undefined, false]) {
       const cwd = repo()
@@ -1835,13 +1852,16 @@ describe('the sandbox at spawn', () => {
     expect(argv[0]).toEqual(['--dangerously-skip-permissions', '--', 'go'])
   })
 
+  // Task 5 fix round 1: refused at the prepare, which a roll awaits before its kill, so a roll that would be refused
+  // leaves the session it would replace running
   it('a codex without --no-daemon refuses a sandboxed start', async () => {
     const cwd = repo()
     const { manager, spawned } = rig('linux', { noDaemon: false })
-    await manager.prepare({ account: codexAccount, cwd, sandbox: true })
-    expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: codex-daemon codex$/)
+    await expect(manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: codex-daemon codex$/)
+    expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: /)
     expect(spawned).toHaveLength(0)
     // Unsandboxed, the same codex starts as before
+    await manager.prepare({ account: codexAccount, cwd })
     manager.spawn({ account: codexAccount, cwd })
     expect(spawned).toHaveLength(1)
   })
@@ -1849,8 +1869,8 @@ describe('the sandbox at spawn', () => {
   it('refuses a sandboxed win32 start whose folder holds a cmd.exe character', async () => {
     const cwd = repo('a&b')
     const w = rig('win32')
-    await w.manager.prepare({ account: codexAccount, cwd, sandbox: true })
-    expect(() => w.manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: path-unsafe$/)
+    await expect(w.manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: path-unsafe$/)
+    expect(() => w.manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: /)
     expect(w.spawned).toHaveLength(0)
     // Elsewhere nothing goes through cmd.exe
     const l = rig('linux')
@@ -1865,9 +1885,30 @@ describe('the sandbox at spawn', () => {
     const home = 'C:\\Users\\100%'
     const manager = new SessionManager((_f, a) => (argv.push(a as string[]), new FakePty()), makeDescriptors('win32', home, undefined, daemon(true)),
       100, 20, home, undefined, [], { Path: 'C:\\Windows' }, checksFor('win32'))
-    await manager.prepare({ account: codexAccount, cwd, sandbox: true })
-    expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: path-unsafe$/)
+    await expect(manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: path-unsafe$/)
+    expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: /)
     expect(argv).toHaveLength(0)
+  })
+
+  // The spawn asks again for itself: what it starts with is the environment it builds then, and the codex it finds now
+  it('the spawn keeps its own checks, for a codex and an environment that changed since the prepare', async () => {
+    const cwd = repo()
+    let takes = true
+    const flipping = Object.assign(() => takes, { warm: async () => {} })
+    let appData = 'C:\\Users\\t\\AppData\\Roaming'
+    const spawned: PtySpawnOptions[] = []
+    const manager = new SessionManager((_f, _a, o) => (spawned.push(o), new FakePty()), makeDescriptors('win32', HOME.win32, undefined, flipping),
+      100, 20, HOME.win32, undefined, [], () => ({ Path: 'C:\\Windows', APPDATA: appData }), checksFor('win32'))
+    await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    takes = false
+    expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: codex-daemon codex$/)
+    takes = true
+    appData = 'C:\\Users\\t\\AppData\\R&D'
+    expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: path-unsafe$/)
+    expect(spawned).toHaveLength(0)
+    appData = 'C:\\Users\\t\\AppData\\Roaming'
+    manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    expect(spawned).toHaveLength(1)
   })
 
   it('Enforce and the sandbox together give both sets of -c', async () => {

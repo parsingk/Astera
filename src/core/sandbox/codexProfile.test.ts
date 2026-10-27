@@ -92,6 +92,30 @@ describe('codexSandboxEnv', () => {
     expect(env.GIT_CONFIG_COUNT).toBe('1')
     expect(codexSandboxEnv({ platform: 'win32', layout: null, tmpDir: 'C:/t' })).toEqual({ npm_config_cache: 'C:/t/astera-npm-cache' })
   })
+
+  // Task 5 fix round 1: the person's own GIT_CONFIG_* entries in the inherited environment are kept: the sandbox's are
+  // numbered after them and the count is the total. A count git could not read is taken as none.
+  it('keeps the inherited GIT_CONFIG entries, numbering its own after them', () => {
+    const layout = { cwd: 'C:/w/wt', top: 'C:/w/wt', gitDir: 'C:/m/.git/worktrees/wt', commonDir: 'C:/m/.git', worktree: true, worktreeConfigs: [] }
+    const inherited = { GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'core.autocrlf', GIT_CONFIG_VALUE_0: 'false', GIT_CONFIG_KEY_1: 'user.name', GIT_CONFIG_VALUE_1: 'me' }
+    expect(codexSandboxEnv({ platform: 'win32', layout, tmpDir: 'C:/t', env: inherited })).toEqual({
+      npm_config_cache: 'C:/t/astera-npm-cache',
+      GIT_CONFIG_COUNT: '4',
+      GIT_CONFIG_KEY_2: 'safe.directory',
+      GIT_CONFIG_VALUE_2: 'C:/w/wt',
+      GIT_CONFIG_KEY_3: 'safe.directory',
+      GIT_CONFIG_VALUE_3: 'C:/m'
+    })
+    for (const count of ['x', '-1', '', '1.5', ' 2'])
+      expect(codexSandboxEnv({ platform: 'win32', layout, tmpDir: 'C:/t', env: { GIT_CONFIG_COUNT: count } }), JSON.stringify(count)).toMatchObject({
+        GIT_CONFIG_COUNT: '2',
+        GIT_CONFIG_VALUE_0: 'C:/w/wt',
+        GIT_CONFIG_VALUE_1: 'C:/m'
+      })
+    // Off Windows, and without a repository, the inherited entries are not touched at all
+    expect(codexSandboxEnv({ platform: 'linux', layout, tmpDir: '/t', env: inherited })).toEqual({ npm_config_cache: '/t/astera-npm-cache' })
+    expect(codexSandboxEnv({ platform: 'win32', layout: null, tmpDir: 'C:/t', env: inherited })).toEqual({ npm_config_cache: 'C:/t/astera-npm-cache' })
+  })
 })
 
 describe('sandboxUnavailable', () => {

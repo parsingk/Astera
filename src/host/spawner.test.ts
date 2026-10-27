@@ -848,6 +848,21 @@ describe('the roll spawn (S6 R5, R6)', () => {
     expect(h.spawned[1].args).toContain('--dangerously-bypass-approvals-and-sandbox')
     expect(plain).not.toHaveProperty('sandboxed')
   })
+  // Task 5 fix round 1: what would refuse the sandboxed respawn is asked in its prepare, which the roll awaits before it
+  // kills the session it replaces
+  it('a sandboxed roll whose codex does not take --no-daemon is refused in its prepare, before the kill', async () => {
+    await fs.writeFile(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
+      { id: 'acc2', label: 'two', configDir: path.join(dir, 'cfg2'), color: '#888', createdAt: NOW, provider: 'codex' }
+    ] }))
+    const h = rig({ codexNoDaemon: Object.assign(() => false, { warm: async () => {} }) })
+    const account = JSON.parse(await fs.readFile(path.join(profile, 'accounts.json'), 'utf8')).accounts[0]
+    await expect(h.spawner!.prepareRollSpawn(account, repo, undefined, true)).rejects.toThrow(/^SANDBOX_UNAVAILABLE: codex-daemon codex$/)
+    expect(h.spawned).toHaveLength(0)
+    // The same codex rolls a chain outside the sandbox as before
+    await h.spawner!.prepareRollSpawn(account, repo)
+    h.spawner!.rollSpawn({ account, cwd: repo, rollAccountIds: [account.id] })
+    expect(h.spawned).toHaveLength(1)
+  })
   it('prepareRollSpawn refuses a retiring Host and a damaged settings file, before anything is spawned', async () => {
     const h = await spawnerRig()
     await fs.writeFile(path.join(h.profileDir, 'app-settings.json'), '{ damaged')
@@ -1023,6 +1038,20 @@ describe('createHostSpawner — createSession', () => {
       // Falls back to the app-wide mode, as before profiles
       expect(JSON.stringify(h.spawned[1].args)).not.toMatch(SKIP)
       expect(h.logs.filter((l) => l.includes('ap_gone'))).toHaveLength(1)
+    })
+
+    // Task 5 fix round 1: a store that cannot be read may hold the profile's sandbox or its `ask`, so a session that names
+    // a profile is refused with the store's repair, before any process; one that names none still starts
+    it('a damaged profile store refuses a session that names a profile, and starts nothing', async () => {
+      await fs.writeFile(path.join(profile, 'agent-profiles.json'), '{ damaged')
+      const h = rig()
+      const refused = await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_b' }).catch((e: unknown) => e)
+      expect(refused).toBeInstanceOf(RepairNeeded)
+      expect((refused as RepairNeeded).file).toBe('agent-profiles.json')
+      expect(wasRefusedBeforeActing(refused)).toBe(true)
+      expect(h.spawned).toHaveLength(0)
+      await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [] })
+      expect(h.spawned).toHaveLength(1)
     })
 
     // Agent Profiles design §6: a Job's worker runs as its Task's profile; a Task whose profile was deleted after it was

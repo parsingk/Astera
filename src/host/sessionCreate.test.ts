@@ -9,6 +9,8 @@ import type { Account, SessionInfo } from '../core/types'
 import { removeFixture } from '../core/testFixtures'
 import { writeAgentProfiles } from '../core/agentProfiles/store'
 import type { AgentProfile } from '../core/agentProfiles/types'
+import { profilePaths } from '../core/profile/paths'
+import { RepairNeeded } from '../core/settings/repairNeeded'
 
 const ACCOUNT: Account = { id: 'acc_c', label: 'C', configDir: '/cfg/c', color: '#000', createdAt: 'T', provider: 'claude' }
 
@@ -229,6 +231,22 @@ describe('createHostSessionStarter — with an agent profile', () => {
     expect(h.chats.spawn).toHaveBeenCalledWith(expect.objectContaining({ bypassPermissions: true }))
     expect(logs.filter((l) => l.includes('ap_gone'))).toHaveLength(1)
     expect(touched).toEqual([])
+  })
+
+  // Task 5 fix round 1: a store that cannot be read may hold the profile's sandbox or its `ask`, so the chat does not start
+  // without it: refused before anything started, with the repair the store needs
+  it('a damaged profile store refuses a chat that names a profile, and starts nothing', async () => {
+    const profileDir = await withProfiles([P({})])
+    await fs.writeFile(profilePaths(profileDir).agentProfiles, '{ damaged')
+    const h = rig({ profileDir, bypass: async () => true })
+    const refused = await h.start({ kind: 'chat', accountId: 'acc_c', cwd: '/repo', rollAccountIds: [], agentProfileId: 'ap_000000000001' }).then(
+      () => null,
+      (e: unknown) => e
+    )
+    expect(refused).toBeInstanceOf(RepairNeeded)
+    expect((refused as RepairNeeded).file).toBe('agent-profiles.json')
+    expect(wasRefusedBeforeActing(refused as Error)).toBe(true)
+    expect(h.chats.spawn).not.toHaveBeenCalled()
   })
 
   it('a terminal session hands the profile to the spawner, which resolves it', async () => {
