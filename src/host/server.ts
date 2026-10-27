@@ -20,6 +20,7 @@ import {
 } from '../core/host/protocol'
 import { encodeLine, createLineReader } from './framing'
 import type { HostLog } from './log'
+import { sessionOfPresentedToken } from './gateway/tokens'
 import { AppUnreachable, type OrchCall, type OrchCaller } from '../core/host/orchProtocol'
 import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
 import { pidLives } from '../core/host/pidFile'
@@ -679,9 +680,8 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           // token table cannot vouch for one, so it refuses it too.
           let sessionId = m.session ?? ''
           if (m.token !== undefined) {
-            // Checked before the table sees it: a token that is no string, or longer than any this Host made (43), is
-            // refused outright, so a hostile line cannot make the Host allocate for a guess.
-            const owner = typeof m.token === 'string' && m.token.length <= 256 ? (deps.sessionOfToken?.(m.token) ?? null) : null
+            // A token that is no string, or longer than any this Host made, is refused outright (sessionOfPresentedToken).
+            const owner = sessionOfPresentedToken(deps.sessionOfToken, m.token)
             if (owner === null) {
               send({ t: 'orch-result', call: m.call, status: 401, body: { error: 'workload token not recognised' } })
               return

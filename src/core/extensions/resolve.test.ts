@@ -67,6 +67,14 @@ describe('resolveSessionCapabilities', () => {
     expect(r.context).toEqual({ kind: 'implicit', accounts: ['acc_2'], policyMode: 'compatibility', executionMode: 'managed' })
   })
 
+  it('tells a session where the Host listens, shared server or not, and nothing when there is no Host', async () => {
+    const none = await setup([])
+    expect((await call(none, none.claude)).env).toEqual({ ASTERA_LOOPBACK: `http://127.0.0.1:${PORT}` })
+    expect((await call(none, none.claude, { gatewayPort: null })).env).toEqual({})
+    const s = await setup()
+    expect((await call(s, s.codex)).env).toMatchObject({ ASTERA_LOOPBACK: `http://127.0.0.1:${PORT}` })
+  })
+
   it('gives Claude a stdio server as the Gateway’s URL with a token reference, and no value anywhere', async () => {
     const s = await setup()
     const r = await call(s, s.claude)
@@ -75,7 +83,7 @@ describe('resolveSessionCapabilities', () => {
     expect(JSON.parse(text)).toEqual({
       mcpServers: { linear: { type: 'http', url: URL_OF, headers: { Authorization: 'Bearer ${ASTERA_GATEWAY_TOKEN}' } } }
     })
-    expect(r.env).toEqual({})
+    expect(r.env).toEqual({ ASTERA_LOOPBACK: `http://127.0.0.1:${PORT}` })
     expect(r.gatewayGrant).toEqual(['mcp-linear'])
     expect(JSON.stringify([r.args, r.env, text])).not.toContain(SECRET)
     expect(JSON.stringify([r.args, r.env, text])).not.toContain('info')
@@ -100,7 +108,7 @@ describe('resolveSessionCapabilities', () => {
       '-c', 'mcp_servers.linear.tool_timeout_sec=120',
       '-c', "mcp_servers.linear.enabled_tools=['a']"
     ])
-    expect(r.env).toEqual({})
+    expect(r.env).toEqual({ ASTERA_LOOPBACK: `http://127.0.0.1:${PORT}` })
   })
 
   it('gives Codex on Windows a stdio server whose command holds cmd.exe characters, as a URL (G-05)', async () => {
@@ -232,7 +240,7 @@ describe('resolveSessionCapabilities with an agent profile', () => {
         '-c', "mcp_servers.linear.bearer_token_env_var='ASTERA_GATEWAY_TOKEN'",
         '-c', "mcp_servers.docs.url='https://mcp.example.com/mcp'"
       ],
-      env: {},
+      env: { ASTERA_LOOPBACK: `http://127.0.0.1:${PORT}` },
       given: ['linear', 'docs'],
       gatewayGrant: ['mcp-linear'],
       skipped: []
@@ -240,7 +248,7 @@ describe('resolveSessionCapabilities with an agent profile', () => {
     expect(await call(s, s.claude)).toEqual({
       context: { kind: 'implicit', accounts: ['acc_2'], policyMode: 'compatibility', executionMode: 'managed' },
       args: ['--mcp-config', expect.stringMatching(/claude-[0-9a-f]{16}\.json$/)],
-      env: {},
+      env: { ASTERA_LOOPBACK: `http://127.0.0.1:${PORT}` },
       given: ['linear', 'docs'],
       gatewayGrant: ['mcp-linear'],
       skipped: []

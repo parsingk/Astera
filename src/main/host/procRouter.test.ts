@@ -9,7 +9,7 @@ describe('createProcRouter', () => {
     const seen: Array<Record<string, string | undefined>> = []
     const capture: ProcFactory = (_f, _a, o) => (seen.push(o.env), proc('x'))
     const r = createProcRouter(capture)
-    const env = { PATH: 'x', ASTERA_SESSION: 's', ASTERA_GATEWAY_TOKEN: 'T', ASTERA_GATEWAY_GRANT: 'g' }
+    const env = { PATH: 'x', ASTERA_SESSION: 's', ASTERA_GATEWAY_TOKEN: 'T', ASTERA_GATEWAY_GRANT: 'g', ASTERA_LOOPBACK: 'http://127.0.0.1:1' }
     r.factory('codex', [], { cwd: 'D:/p', env })
     r.use(capture)
     r.factory('codex', [], { cwd: 'D:/p', env })

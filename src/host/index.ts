@@ -240,7 +240,8 @@ async function main(): Promise<void> {
   const procHolders = createProcHolders({ log: (m) => log.write(m) })
   procs.onExit((id) => procHolders.ended(id))
   // The MCP Gateway (Agent Control Plane release 2): shared stdio servers run here once per folder, and each session the
-  // two registries open with a Gateway token reaches them over 127.0.0.1. Listens only while a stdio server is shared.
+  // two registries open with a Gateway token reaches them over 127.0.0.1. Listens for the Host's whole life: the same
+  // listener is where a sandboxed session's commands come in.
   // Credential-use records (credentials design §6): the Gateway's tool calls, and the GitHub operations the command layer
   // and the lifecycle run, each for whoever asked. `orch` is read inside the calls, long after it is made below.
   const useRecorder = createUseRecorder({ profileDir, log: (m) => log.write(m) })
@@ -253,6 +254,10 @@ async function main(): Promise<void> {
     ptys: registry,
     procs,
     sessionOfOwner,
+    // The loopback route a sandboxed session's `astera` calls come in by (sandbox design §6): `orch` and `server` are
+    // read when a call arrives, long after both are made
+    call: (a) => orch.call(a),
+    broadcast: (m) => server.broadcast(m),
     log: hidingLog(profileDir, (m) => log.write(m)),
     onToolCall: (c) => {
       const sessionId = sessionOfOwner(c.ownerId)

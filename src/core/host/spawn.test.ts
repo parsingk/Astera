@@ -77,11 +77,12 @@ describe('hostSpawnPlan', () => {
       profileDir: 'p',
       logPath: 'l',
       version: 'v',
-      env: { PATH: '/usr/bin', ASTERA_GATEWAY_TOKEN: 'T'.repeat(43), ASTERA_GATEWAY_GRANT: 'mcp-a' }
+      env: { PATH: '/usr/bin', ASTERA_GATEWAY_TOKEN: 'T'.repeat(43), ASTERA_GATEWAY_GRANT: 'mcp-a', ASTERA_LOOPBACK: 'http://127.0.0.1:1' }
     })
     expect(dirty.options.env.PATH).toBe('/usr/bin')
     expect('ASTERA_GATEWAY_TOKEN' in dirty.options.env).toBe(false)
     expect('ASTERA_GATEWAY_GRANT' in dirty.options.env).toBe(false)
+    expect('ASTERA_LOOPBACK' in dirty.options.env).toBe(false)
   })
 })
 

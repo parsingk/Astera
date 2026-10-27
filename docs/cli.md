@@ -517,6 +517,14 @@ command, and `ASTERA_SKILLS` is the folder `astera help` reads its guide from. O
 `astera help`, `astera browser help` and `astera app help` read the guides that ship with the
 installed Astera instead.
 
+A session can also carry `ASTERA_GATEWAY_TOKEN`, its own token, and `ASTERA_LOOPBACK`, the address of
+the Host's endpoint on this machine (`http://127.0.0.1:<port>`). Inside a sandbox that cannot open the
+Host's pipe or socket but can reach `127.0.0.1`, the command tries the pipe first, and when nothing can
+be reached there it sends the same command to that address with the token. The Host knows the session
+from the token, not from anything the call says. Outside a session neither variable is set and
+nothing changes. The endpoint accepts only the token of a session the Host is running, and only from
+the machine itself.
+
 ### Remote Runtime
 
 Another machine can run Jobs on this one through Remote Runtime ([remote-runtime.md](remote-runtime.md) covers both
@@ -2069,7 +2077,8 @@ The boundary is your machine and your operating system account.
     the Host's own settings never reach an agent. Then the same steps as for a worker Astera starts:
     the Claude Code list above is cleared once more, the Astera variables a session is given
     (`ASTERA_STATUSLINE_OUT`, `ASTERA_STATUSLINE_ORIGINAL`, `ASTERA_HOOK_OUT`, `ASTERA_CLI`,
-    `ASTERA_PROFILE_DIR`, `ASTERA_SKILLS`, `ASTERA_SESSION`) are cleared and set afresh, and
+    `ASTERA_PROFILE_DIR`, `ASTERA_SKILLS`, `ASTERA_SESSION`, `ASTERA_GATEWAY_TOKEN`, `ASTERA_GATEWAY_GRANT`,
+    `ASTERA_LOOPBACK`) are cleared and set afresh, and
     `CLAUDE_CONFIG_DIR` or `CODEX_HOME` is set to the account's folder, or removed for the default
     account.
 

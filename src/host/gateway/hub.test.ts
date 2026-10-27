@@ -54,15 +54,18 @@ async function rig() {
 }
 
 describe('gateway hub', () => {
-  it('opens no port while no stdio server is shared', async () => {
+  // The listener also carries a sandboxed session's calls to the Host, so it is up for the Host's life, shared server or not.
+  it('listens with no stdio server shared, and reaches no server through it', async () => {
     const h = await rig()
-    expect(await h.hub.sync()).toBeNull()
+    const port = await h.hub.sync()
+    expect(port).toBeGreaterThan(0)
     await h.share([{ ...h.echo, transport: 'http', command: undefined, args: undefined, url: 'https://mcp.example.com' }])
-    expect(await h.hub.sync()).toBeNull()
-    expect(h.hub.port()).toBeNull()
+    expect(await h.hub.sync()).toBe(port)
+    expect(h.hub.port()).toBe(port)
+    expect(await h.status(port!, TOKEN)).toBe(401)
   })
 
-  it('listens once a stdio server is shared, lets in a session the Host opened with its token, and closes when none is', async () => {
+  it('lets in a session the Host opened with its token while a stdio server is shared, and keeps listening when none is', async () => {
     const h = await rig()
     await h.share([h.echo])
     const port = await h.hub.sync()
@@ -73,8 +76,8 @@ describe('gateway hub', () => {
     h.ptyExit[0]({ exitCode: 0 })
     expect(await h.status(port!, TOKEN)).toBe(401)
     await h.share([])
-    expect(await h.hub.sync()).toBeNull()
-    await expect(h.status(port!, TOKEN)).rejects.toThrow()
+    expect(await h.hub.sync()).toBe(port)
+    expect(await h.status(port!, TOKEN)).toBe(401)
   })
 
   it('stops a server’s processes and shows its state', async () => {

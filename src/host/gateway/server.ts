@@ -4,6 +4,10 @@
 // instructions are the shared upstream's (upstream.ts) and whose requests are passed to it. The checks come before
 // anything else: no `Origin` (a browser page), a loopback `Host`, a live token, a granted server. Nothing a session
 // sends can throw into the Host.
+//
+// The same listener carries `POST /astera/call` (sandbox design §6): a session inside Codex's sandbox cannot open the
+// Host's pipe but can reach 127.0.0.1, and the `astera` CLI sends its command here with the session's workload token.
+// The checks are the MCP route's, then the command runs as the session the token stands for.
 import http from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
@@ -26,7 +30,9 @@ import {
   isInitializeRequest
 } from '@modelcontextprotocol/sdk/types.js'
 import type { ExtensionRegistry, McpExtension } from '../../core/extensions/types'
-import type { TokenTable } from './tokens'
+import { sessionOfPresentedToken, type TokenTable } from './tokens'
+import type { OrchCall, OrchCaller } from '../../core/host/orchProtocol'
+import type { HostMessage } from '../../core/host/protocol'
 import type { UpstreamPool } from './upstream'
 
 export interface Gateway {
@@ -84,6 +90,10 @@ export function createGateway(d: {
   hide?: (text: string) => Promise<string>
   /** Told when a session's `tools/call` settles, with the pty or proc its token belongs to (credentials design §6). */
   onToolCall?: (c: { ownerId: string; serverId: string; serverName: string; tool: string; ok: boolean }) => void
+  /** The Host's commands, for `POST /astera/call`. Absent, that route answers 501. */
+  call?: OrchCall['call']
+  /** Sends a message to every socket the Host holds. A command called here has no socket of its own to leave out. */
+  broadcast?: (m: HostMessage) => void
 }): Gateway {
   const hide = d.hide ?? (async (s: string) => s)
   let server: http.Server | null = null
@@ -212,7 +222,59 @@ export function createGateway(d: {
     if (transport.sessionId === undefined || !sessions.has(transport.sessionId) || d.tokens.lookup(token) === null) endSession(session)
   }
 
+  /** `POST /astera/call`: the CLI's command, run as the session the bearer token stands for. */
+  const command = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
+    if (req.headers.origin !== undefined) {
+      req.resume()
+      return send(res, 403, { error: 'Forbidden' })
+    }
+    const host = (req.headers.host ?? '').toLowerCase()
+    if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) {
+      req.resume()
+      return send(res, 421, { error: 'Misdirected request' })
+    }
+    // The token, never the body, names the session
+    const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization ?? '')
+    const sessionId = bearer ? sessionOfPresentedToken((t) => d.tokens.sessionOf(t), bearer[1]) : null
+    if (sessionId === null) {
+      req.resume()
+      return send(res, 401, { error: 'workload token not recognised' })
+    }
+    if (!d.call) {
+      req.resume()
+      return send(res, 501, { error: 'this Host does not answer commands over loopback' })
+    }
+    if (req.method !== 'POST') {
+      req.resume()
+      return send(res, 405, { error: 'POST only' })
+    }
+    const text = await readBody(req)
+    if (text === 'tooLarge') {
+      req.resume()
+      return send(res, 413, { error: 'Request body over 4 MB' })
+    }
+    let body: unknown
+    try {
+      body = JSON.parse(text)
+    } catch {
+      return send(res, 400, { error: 'the body is not JSON' })
+    }
+    const m = body as { cmd?: unknown; args?: unknown; request?: unknown } | null
+    if (typeof m?.cmd !== 'string') return send(res, 400, { error: 'the body needs a string cmd' })
+    const args = typeof m.args === 'object' && m.args !== null && !Array.isArray(m.args) ? (m.args as Record<string, unknown>) : {}
+    // What the pipe builds for a `cli` socket (server.ts), with no socket: pushes go to everyone the Host holds
+    const from: OrchCaller = { role: 'cli', toOthers: (msg) => d.broadcast?.(msg) }
+    const r = await d.call({ cmd: m.cmd, args, sessionId, from, ...(typeof m.request === 'string' ? { request: m.request } : {}) })
+    send(res, 200, {
+      status: r.status,
+      body: r.body,
+      ...(r.replayed === true ? { replayed: true } : {}),
+      ...(r.observed === true ? { observed: true } : {})
+    })
+  }
+
   const handle = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
+    if (new URL(req.url ?? '/', 'http://x').pathname === '/astera/call') return command(req, res)
     const match = /^\/mcp\/([^/?#]+)$/.exec(new URL(req.url ?? '/', 'http://x').pathname)
     if (!match) {
       req.resume()
@@ -273,6 +335,10 @@ export function createGateway(d: {
             send(res, 500, rpcError(-32603, 'Internal error'))
           })
         })
+        // A command can legitimately take an hour (`wait`, `ask`, `check`, `follow`; the CLI's own deadline governs), so no
+        // socket idle timeout may end one, and a connection that sits idle between requests is kept longer than Node's 5 s
+        s.timeout = 0
+        s.keepAliveTimeout = 65_000
         s.once('error', reject)
         s.listen(0, '127.0.0.1', () => {
           // Past the listen, an error (too many open files on accept, say) is logged, never thrown into the Host

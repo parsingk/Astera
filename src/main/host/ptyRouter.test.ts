@@ -16,7 +16,7 @@ describe('createPtyRouter', () => {
     const seen: Array<Record<string, string | undefined>> = []
     const capture = (file: string, _a: string[], o: { env: Record<string, string | undefined> }): PtyLike => (seen.push(o.env), stub('x', [])(file, [], o as never))
     const r = createPtyRouter(capture as PtyFactory)
-    const env = { PATH: 'x', ASTERA_SESSION: 's', ASTERA_GATEWAY_TOKEN: 'T', ASTERA_GATEWAY_GRANT: 'g' }
+    const env = { PATH: 'x', ASTERA_SESSION: 's', ASTERA_GATEWAY_TOKEN: 'T', ASTERA_GATEWAY_GRANT: 'g', ASTERA_LOOPBACK: 'http://127.0.0.1:1' }
     r.factory('a', [], { ...opts, env })
     r.use(capture as PtyFactory)
     r.factory('b', [], { ...opts, env })

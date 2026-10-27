@@ -20,11 +20,11 @@
 // the quit path and the close confirmation both read that.
 import type { PtyFactory } from '../../core/sessions/pty'
 
-/** The environment of a session that runs as the app's own child: without its workload token and grant. Only the Host's
+/** The environment of a session that runs as the app's own child: without its workload token and grant, and the loopback address that only goes with them. Only the Host's
  *  registry makes a token live, so a token on a session outside it would be refused on every call for the session's whole
  *  life; without one the session behaves as it did before tokens (and it cannot reach the Gateway either way). */
 export function withoutWorkloadToken<E extends Record<string, string | undefined>>(env: E): E {
-  const { ASTERA_GATEWAY_TOKEN: _token, ASTERA_GATEWAY_GRANT: _grant, ...rest } = env
+  const { ASTERA_GATEWAY_TOKEN: _token, ASTERA_GATEWAY_GRANT: _grant, ASTERA_LOOPBACK: _loopback, ...rest } = env
   return rest as unknown as E
 }
 

@@ -45,7 +45,7 @@ import { createHostWorktrees } from '../host/worktrees'
 import { createHostProjectRoots } from '../host/projectRoots'
 import { hostFeatures } from '../host/features'
 import { PtyRegistry, type RegistryPty } from '../host/registry'
-import { createTokenTable, watchGatewayTokens } from '../host/gateway/tokens'
+import { createGatewayHub } from '../host/gateway/hub'
 import { ProcRegistry } from '../host/procRegistry'
 import type { HostLocal, HostSpawner } from '../host/spawner'
 import { registrySessions } from '../host/sessions'
@@ -148,7 +148,7 @@ interface CliRun {
 }
 
 /** The variables that pick a Host and a caller. Each call sets exactly the ones it is given. */
-const CLI_ENV = ['ASTERA_PROFILE_DIR', 'ASTERA_HOST', 'ASTERA_PROFILE', 'ASTERA_SESSION', 'ASTERA_GATEWAY_TOKEN'] as const
+const CLI_ENV = ['ASTERA_PROFILE_DIR', 'ASTERA_HOST', 'ASTERA_PROFILE', 'ASTERA_SESSION', 'ASTERA_GATEWAY_TOKEN', 'ASTERA_LOOPBACK'] as const
 
 /** One `astera …` invocation, the way index.ts runs it. Calls are serial (the process globals are
  *  borrowed for the call), which is also how a script runs them. */
@@ -306,6 +306,8 @@ interface Spawn {
 interface Rig {
   profileDir: string
   address: string
+  /** The Host's loopback endpoint (`ASTERA_LOOPBACK`). */
+  loopback: string
   /** The CLI environment that finds this Host: its profile, as the app hands it to a session. */
   env: { ASTERA_PROFILE_DIR: string }
   accountId: string
@@ -434,8 +436,17 @@ async function hostRig(
     if (m?.kind === 'session') tails.push(m.id, data)
   })
   // The workload tokens, as the Host's Gateway hub keeps them: registered when a pty opens with one in its environment.
-  const tokens = createTokenTable((ownerId) => registry.metaOf(ownerId)?.id)
-  watchGatewayTokens({ ptys: registry, procs, table: tokens })
+  // The Gateway hub is what holds them and what listens on loopback for a call a sandboxed session makes.
+  const gateway = createGatewayHub({
+    profileDir,
+    ptys: registry,
+    procs,
+    sessionOfOwner: (ownerId) => registry.metaOf(ownerId)?.id,
+    log,
+    call: (a) => box.orch!.call(a),
+    broadcast: (m) => box.server?.broadcast(m)
+  })
+  cleanups.push(() => gateway.close())
   const openSession = (id: string, restore: Record<string, unknown> = {}, env: Record<string, string> = {}): void => {
     const opened = registry.open({
       id: `pty_${id}`,
@@ -776,7 +787,7 @@ async function hostRig(
     },
     liveCounts: () => ({ sessions: registry.liveCount() + procs.liveCount(), runs: orch.runningRuns() }),
     orch,
-    sessionOfToken: (t) => tokens.sessionOf(t),
+    sessionOfToken: (t) => gateway.sessionOfToken(t),
     features: hostFeatures({ spawns: true, slack: false }),
     ...wiring.serverHooks,
     onAppsChanged: () => {
@@ -792,6 +803,7 @@ async function hostRig(
     log: { write: log, close: () => {} }
   })
   box.server = server
+  const loopbackPort = await gateway.sync()
   void hostUnderstanding.writerMayHaveChanged()
   void units.writerMayHaveChanged()
   void mcpHttp?.reload()
@@ -827,6 +839,7 @@ async function hostRig(
   return {
     profileDir,
     address: addr.address,
+    loopback: `http://127.0.0.1:${loopbackPort}`,
     env: { ASTERA_PROFILE_DIR: profileDir },
     accountId,
     repo,
@@ -1183,6 +1196,33 @@ describe('the public CLI against a real Host (§48, §49)', { timeout: 60_000 },
     const dead = await astera(['agent-profiles', 'list'], { ...h.env, ASTERA_GATEWAY_TOKEN: 'D'.repeat(43) })
     expect(dead.code, dead.stdout).not.toBe(0)
     expect(dead.stdout).toContain('workload token not recognised')
+  })
+
+  // Sandbox design §6: inside a sandbox the pipe cannot be opened, the loopback address can.
+  it('with the pipe unreachable, the CLI reaches the Host through ASTERA_LOOPBACK', async () => {
+    const h = await hostRig()
+    const token = 'L'.repeat(43)
+    h.openSession('ses_boxed', { title: 'boxed', accountId: h.accountId, cwd: h.profileDir }, { ASTERA_GATEWAY_TOKEN: token, ASTERA_GATEWAY_GRANT: '' })
+    okData(await astera(['agent-profiles', 'create', '--name', 'Reviewer', '--account', h.accountId], h.env), 'agent-profiles create')
+    // An address that does not exist: the pipe is not reachable, so the call goes to the loopback endpoint with the token.
+    const nowhere = process.platform === 'win32' ? '\\\\.\\pipe\\astera-no-such-host' : path.join(h.profileDir, 'no-such-socket')
+    const env ={ ...h.env, ASTERA_HOST: nowhere, ASTERA_GATEWAY_TOKEN: token, ASTERA_LOOPBACK: h.loopback }
+    expect((await astera(['agent-profiles', 'list'], env)).code).toBe(0)
+    // As the token's session, which an agent profile cannot be changed from (5), whatever ASTERA_SESSION says
+    const refused = await astera(['agent-profiles', 'archive', '--id', 'Reviewer'], { ...env, ASTERA_SESSION: 'ses_other' })
+    expect(refused.code, refused.stdout).toBe(5)
+    // A token the Host does not know is refused, not read from the file
+    const dead = await astera(['agent-profiles', 'list'], { ...env, ASTERA_GATEWAY_TOKEN: 'D'.repeat(43) })
+    expect(dead.code, dead.stdout).not.toBe(0)
+    expect(dead.stdout).toContain('workload token not recognised')
+  })
+
+  it('without ASTERA_LOOPBACK it falls back to the state file as today', async () => {
+    const h = await hostRig({ seed: emptyState() })
+    const nowhere = process.platform === 'win32' ? '\\\\.\\pipe\\astera-no-such-host' : path.join(h.profileDir, 'no-such-socket')
+    const r =await astera(['status'], { ...h.env, ASTERA_HOST: nowhere, ASTERA_GATEWAY_TOKEN: 'L'.repeat(43) })
+    expect(r.code, r.stdout).toBe(0)
+    expect(r.envelope.data).toMatchObject({ running: false })
   })
 
   // Agent Profiles design §6 (Task 7): the noun end to end, and a Job made as a profile by its name holds its id.

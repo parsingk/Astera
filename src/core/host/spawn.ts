@@ -13,7 +13,7 @@ import { INHERITED_AGENT_ENV_KEYS } from '../sessions/cliEnv'
  *  CLAUDE_CODE_OAUTH_TOKEN and the like are settings a person chose, and a Host worker must keep
  *  them just as an app worker does. An inherited CLAUDE_CODE_CHILD_SESSION is what turns a worker's
  *  transcript off. */
-const NOT_INHERITED_ASTERA = /^(ASTERA_SESSION|ASTERA_CLI|ASTERA_SKILLS|ASTERA_GATEWAY_)/
+const NOT_INHERITED_ASTERA = /^(ASTERA_SESSION|ASTERA_CLI|ASTERA_SKILLS|ASTERA_GATEWAY_|ASTERA_LOOPBACK)/
 const NOT_INHERITED_AGENT: ReadonlySet<string> = new Set(INHERITED_AGENT_ENV_KEYS)
 const notInherited = (k: string): boolean => NOT_INHERITED_ASTERA.test(k) || NOT_INHERITED_AGENT.has(k)
 

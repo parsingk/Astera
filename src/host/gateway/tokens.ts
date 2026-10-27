@@ -31,6 +31,16 @@ export interface TokenTable {
   owners(): number
 }
 
+/** The longest workload token a call may present. Tokens are 43 characters; anything longer than this is no token this
+ *  Host made, so it is refused before the table sees it and a hostile caller cannot make the Host allocate for a guess. */
+export const TOKEN_MAX = 256
+
+/** The session a presented workload token stands for, or null for a token that is no string, is too long or is not live.
+ *  The pipe (host/server.ts) and the loopback route (gateway/server.ts) both ask it, so they refuse the same things. */
+export function sessionOfPresentedToken(sessionOf: ((token: string) => string | null) | undefined, token: unknown): string | null {
+  return typeof token === 'string' && token.length <= TOKEN_MAX ? (sessionOf?.(token) ?? null) : null
+}
+
 /** `sessionOfOwner` turns a binding's pty or proc id into the app's session id (host/index.ts). */
 export function createTokenTable(sessionOfOwner: (ownerId: string) => string | undefined, log: (line: string) => void = () => {}): TokenTable {
   const byToken = new Map<string, TokenBinding>()
