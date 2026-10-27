@@ -139,7 +139,7 @@ describe('securityText', () => {
     }
     // Every action the resolver names, every decision and every class is among them
     expect(AUDIT_ACTIONS).toHaveLength(14)
-    expect(DECISIONS).toEqual(['allow', 'would-deny', 'unknown'])
+    expect(DECISIONS).toEqual(['allow', 'would-deny', 'unknown', 'blocked'])
     expect(COVERAGE_CLASSES).toEqual(['shell', 'file-read', 'file-write', 'mcp', 'network'])
   })
 
@@ -169,7 +169,7 @@ describe('securityText', () => {
   })
 
   it('says each decision in words', () => {
-    expect(DECISIONS.map((d) => decisionLabel(d, en))).toEqual(['Allowed', 'Would be denied', 'Unknown'])
+    expect(DECISIONS.map((d) => decisionLabel(d, en))).toEqual(['Allowed', 'Would be denied', 'Unknown', 'Blocked'])
     expect(decisionLabel('later', en)).toBe('later')
     const said = (lang: (typeof LANGS)[number]): string => decisionLabel('would-deny', (k, p) => translate(lang, k, p))
     // The person's ruling D1 (2026-10-24): the Korean and Japanese labels say what the rules deny; English and Spanish stay
