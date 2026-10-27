@@ -34,7 +34,10 @@ export const PROBES = [
   // Final review I1: a worktree's hooks and config are in its common directory, outside the workspace
   { id: 'git-hooks-write-worktree', line: `cd wt && printf '#!/bin/sh\\n' > "${HOOKS}/pre-commit"` },
   { id: 'git-config-write-worktree', line: 'cd wt && git config core.hooksPath /tmp/astera-probe-hooks' },
-  { id: 'npm-install', line: 'npm install --no-audit --no-fund --silent is-number@7.0.0' }
+  // Found by the S2 smoke run: errors only, not --silent, since a denied install said nothing about why; and `--prefix .`,
+  // since npm installs into the nearest folder above holding a package.json (there, the person's home) when the
+  // workspace has none
+  { id: 'npm-install', line: 'npm install --prefix . --no-audit --no-fund --loglevel=error is-number@7.0.0' }
 ]
 
 const OUT_MAX = 400
