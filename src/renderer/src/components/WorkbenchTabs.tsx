@@ -1,10 +1,11 @@
-import { useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { SessionKind } from '../../../core/types'
 import { resolveFileIcon } from '../../../core/files/icons'
 import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
 import { Film, Globe, Image as ImageIcon, MessageSquare, Monitor, Repeat, Terminal } from 'lucide-react'
 import { endRenameOnce } from '../lib/renameOnce'
+import { scrollThumb, tabFloor, wheelShift } from './tabStrip'
 
 /** File viewer tab. Renderer-only — unlike sessions, main is not involved. id = `file:${path}`.
  *  (FileTabs.tsx가 이 탭 줄로 대체되면서 타입만 여기로 옮겨 왔다) */
@@ -186,6 +187,54 @@ export function WorkbenchTabs({
   /** Which rename already ended (audit UI-2), cleared when a rename begins. */
   const renameEnd = useRef({ ended: null as string | null })
   const [dropAt, setDropAt] = useState<number | null>(null)
+  const stripRef = useRef<HTMLDivElement>(null)
+  /** 탭마다 줄어들 수 있는 최소 너비(px). 이름 말고는 그대로, 이름은 절반까지 (tabFloor) */
+  const [floors, setFloors] = useState<Record<string, number>>({})
+
+  // 렌더링마다 다시 잰다 — 이름이 바뀌거나 탭이 늘고 줄면 최소 너비도 바뀐다. 잰 값은 탭이 지금 얼마나
+  // 눌려 있는지와 상관이 없어서(tabFloor), 저장한 뒤 다시 재도 같은 값이 나오고 거기서 멈춘다.
+  // 탭의 너비 자체는 쓰지 않는다: 줄지 않는 부분보다 좁아진 탭은 내용이 밖으로 넘친 채라 실제보다 작게 잰다
+  useLayoutEffect(() => {
+    const strip = stripRef.current
+    if (!strip) return
+    const next: Record<string, number> = {}
+    let changed = false
+    for (const el of strip.querySelectorAll<HTMLElement>(':scope > .tab')) {
+      const id = el.dataset.tabId as string
+      // 이름을 고치는 동안은 입력칸이 이름 자리에 있어서 잴 이름이 없다 — 고치기 전의 값을 그대로 둔다
+      let floor: number | undefined = floors[id]
+      if (el.querySelector('.tab-title')) {
+        const css = getComputedStyle(el)
+        const parts = [...el.children]
+        const name = parts.filter((part) => part.matches('.tab-title, .tab-hint'))
+        let fixed =
+          (parts.length - 1) * parseFloat(css.columnGap) +
+          parseFloat(css.paddingLeft) + parseFloat(css.paddingRight) +
+          parseFloat(css.borderLeftWidth) + parseFloat(css.borderRightWidth)
+        for (const part of parts) if (!name.includes(part)) fixed += part.getBoundingClientRect().width
+        floor = tabFloor(fixed, name.map((part) => part.scrollWidth))
+      }
+      if (floor === undefined) continue
+      next[id] = floor
+      if (floors[id] !== floor) changed = true
+    }
+    // 닫힌 탭의 값은 next 에 없다 — 개수가 다르면 그것을 지우러 한 번 더 저장한다
+    if (changed || Object.keys(next).length !== Object.keys(floors).length) setFloors(next)
+  })
+
+  // React 의 onWheel 로 받지 않는다 — React 는 wheel 을 passive 로 달아서 preventDefault 가 듣지 않는다
+  useEffect(() => {
+    const strip = stripRef.current
+    if (!strip) return
+    const onWheel = (e: WheelEvent): void => {
+      const shift = wheelShift(e.deltaX, e.deltaY, strip.scrollWidth > strip.clientWidth)
+      if (shift === null) return
+      e.preventDefault()
+      strip.scrollLeft += shift
+    }
+    strip.addEventListener('wheel', onWheel, { passive: false })
+    return () => strip.removeEventListener('wheel', onWheel)
+  }, [])
 
   const endDrag = (): void => {
     setDragId(null)
@@ -213,6 +262,7 @@ export function WorkbenchTabs({
   return (
     <>
     <div
+      ref={stripRef}
       className="tabs"
       onDragOver={(e) => {
         if (!draggingTabId) return
@@ -230,6 +280,7 @@ export function WorkbenchTabs({
       {tabs.map((tab, index) => (
         <div
           key={tab.tabId}
+          data-tab-id={tab.tabId}
           className={
             `tab ${tab.kind === 'file' ? 'file-tab' : ''}` +
             `${tab.tabId === activeTabId ? ' active' : ''}` +
@@ -238,14 +289,14 @@ export function WorkbenchTabs({
             `${dropAt === index ? ' drop-before' : ''}` +
             `${dropAt === index + 1 ? ' drop-after' : ''}`
           }
-          style={
-            focused && tab.tabId === activeTabId
-              ? {
-                  // 파일 탭에는 계정 색이 없으므로 강조색을 쓴다
-                  boxShadow: `inset 0 calc(-1 * var(--marker-w)) 0 ${tab.kind === 'session' ? tab.color : 'var(--accent)'}`
-                }
-              : undefined
-          }
+          style={{
+            minWidth: floors[tab.tabId],
+            boxShadow:
+              focused && tab.tabId === activeTabId
+                ? // 파일 탭에는 계정 색이 없으므로 강조색을 쓴다
+                  `inset 0 calc(-1 * var(--marker-w)) 0 ${tab.kind === 'session' ? tab.color : 'var(--accent)'}`
+                : undefined
+          }}
           title={
             tab.kind === 'file' || tab.kind === 'media'
               ? tab.path
@@ -397,6 +448,7 @@ ${tab.profileTooltip}`
         +
       </button>
     </div>
+    <StripThumb strip={stripRef} />
     {/* What kind of session the active tab is. A sibling of .tabs, not a child of it: .tabs scrolls
         and clips (overflow-x: auto) once there are enough tabs to need it, and this has to stay
         readable regardless, the same reason .new-tab above is pinned with position: sticky rather
@@ -442,4 +494,34 @@ ${tab.profileTooltip}`
     )}
     </>
   )
+}
+
+/** 탭 줄을 스크롤하는 동안만 보이는 얇은 막대. 멈추고 잠시 뒤 사라진다.
+ *
+ *  브라우저 스크롤바를 쓰지 않는 이유: 탭이 넘치는 순간 스크롤바 높이만큼 탭이 납작해지고, 활성 탭의
+ *  밑줄이 탭 줄 아래 선에서 그만큼 떠 버린다. 이 막대는 탭 줄 아래 선 위에 겹쳐 그려서 둘 다 그대로다.
+ *  자기 상태를 따로 갖는 것은 스크롤마다 탭 전체가 다시 그려지지 않게 하려는 것이다. */
+function StripThumb({ strip }: { strip: React.RefObject<HTMLDivElement | null> }): React.JSX.Element | null {
+  const [thumb, setThumb] = useState<{ left: number; width: number } | null>(null)
+  const [shown, setShown] = useState(false)
+
+  useEffect(() => {
+    const el = strip.current
+    if (!el) return
+    let hide: ReturnType<typeof setTimeout> | undefined
+    const onScroll = (): void => {
+      setThumb(scrollThumb(el.scrollLeft, el.scrollWidth, el.clientWidth))
+      setShown(true)
+      clearTimeout(hide)
+      hide = setTimeout(() => setShown(false), 800)
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      el.removeEventListener('scroll', onScroll)
+      clearTimeout(hide)
+    }
+  }, [strip])
+
+  if (!thumb) return null
+  return <div className={`tabs-thumb${shown ? ' shown' : ''}`} style={{ left: thumb.left, width: thumb.width }} />
 }
