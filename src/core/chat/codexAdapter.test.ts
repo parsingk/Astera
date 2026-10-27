@@ -95,6 +95,22 @@ describe('createCodexAdapter — handshake', () => {
     await starting
     expect(a.state().status).toBe('idle')
   })
+  // Sandbox design §6: a chat whose app-server has the Astera permission profile names it on its thread, start or resume
+  it('a sandboxed start names the profile on thread/start and thread/resume, and never asks', async () => {
+    for (const resumeThreadId of [undefined, '01a0a6cd-7f52-7690-a1ae-d7c9cb688c35']) {
+      const p = fakeProc()
+      const a = createCodexAdapter({ proc: p, mode: { mode: 'fresh' }, version: '1', log: () => {}, requestTimeoutMs: 30_000 })
+      const starting = a.start({ cwd: 'D:/x', bypass: false, sandbox: true, ...(resumeThreadId ? { resumeThreadId } : {}) })
+      await tick(); p.feed(replyWith(p, 'initialize', F.INITIALIZE_RESULT)); await tick()
+      p.feed(replyWith(p, 'collaborationMode/list', F.COLLAB_MODES_RESULT)); p.feed(replyWith(p, 'model/list', F.MODEL_LIST_RESULT)); await tick()
+      const req = lastReq(p)
+      expect(req.method).toBe(resumeThreadId ? 'thread/resume' : 'thread/start')
+      expect(req.params).toMatchObject({ cwd: 'D:/x', approvalPolicy: 'never', permissions: 'astera' })
+      expect(req.params).not.toHaveProperty('sandbox')
+      p.feed(replyWith(p, req.method, resumeThreadId ? F.THREAD_RESUME_RESULT : F.THREAD_START_RESULT))
+      await starting
+    }
+  })
   it('a refused collaborationMode/list is not fatal — start still resolves, and plan mode sends without an effort', async () => {
     const p = fakeProc()
     const a = createCodexAdapter({ proc: p, mode: { mode: 'fresh' }, version: '1', log: () => {}, requestTimeoutMs: 30_000})

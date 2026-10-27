@@ -184,7 +184,9 @@ export type ChatEvent =
   | { type: 'notice'; key: 'bypassed' }
 
 export interface ChatAdapter {
-  start(a: { cwd: string; resumeThreadId?: string; bypass: boolean }): Promise<void>
+  /** `sandbox`: Codex only, the process runs with the Astera permission profile's `-c` arguments, and the thread names
+   *  it (sandbox design §6). Claude's adapter has nothing to name: its sandbox is its settings file. */
+  start(a: { cwd: string; resumeThreadId?: string; bypass: boolean; sandbox?: true }): Promise<void>
   send(text: string): Promise<void>
   interrupt(): Promise<void>
   answer(requestId: string, answer: ChatAnswer): Promise<void>

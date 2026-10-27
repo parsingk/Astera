@@ -1748,16 +1748,19 @@ describe('the sandbox at spawn', () => {
     darwin: { PATH: '/usr/bin' },
     win32: { Path: 'C:\\Windows', APPDATA: 'C:\\Users\\t\\AppData\\Roaming' }
   } as const
-  const checksFor = (platform: NodeJS.Platform): SpawnChecks => ({
-    cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform, now: Date.now, syncExists: () => true, log: () => {}
+  type Ready = NonNullable<SpawnChecks['codexWindowsReady']>
+  /** Every Windows home reads set up unless a case says otherwise: the real question runs codex. */
+  const checksFor = (platform: NodeJS.Platform, ready: Ready = async () => 'ready'): SpawnChecks => ({
+    cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform, now: Date.now, syncExists: () => true, log: () => {},
+    codexWindowsReady: ready
   })
-  const rig = (platform: 'linux' | 'darwin' | 'win32', o: { noDaemon?: boolean } = {}) => {
+  const rig = (platform: 'linux' | 'darwin' | 'win32', o: { noDaemon?: boolean; ready?: Ready } = {}) => {
     const argv: string[][] = []
     const spawned: PtySpawnOptions[] = []
     const manager = new SessionManager(
       (_f, a, opts) => (argv.push(a as string[]), spawned.push(opts), new FakePty()),
       makeDescriptors(platform, HOME[platform], undefined, daemon(o.noDaemon ?? true)),
-      100, 20, HOME[platform], undefined, [], { ...BASE[platform] }, checksFor(platform)
+      100, 20, HOME[platform], undefined, [], { ...BASE[platform] }, checksFor(platform, o.ready)
     )
     return { manager, argv, spawned }
   }
@@ -1938,6 +1941,66 @@ describe('the sandbox at spawn', () => {
     await manager.prepare({ account: codexAccount, cwd, sandbox: true })
     manager.spawn({ account: codexAccount, cwd, sandbox: true })
     expect(spawned).toHaveLength(1)
+  })
+
+  // Windows readiness (inventory §23.3): an account whose Codex home has no elevated setup would bring up Windows'
+  // administrator prompt at its first command, so the start is refused at the prepare, naming the account the person
+  // can set up (설정하기), and nothing is written into the repository for it
+  it('a sandboxed win32 Codex start on an account not set up refuses with windows-setup', async () => {
+    const cwd = repo()
+    const asked: Array<string | null> = []
+    const notSetUp: Ready = async ({ codexHome }) => (asked.push(codexHome), 'not-set-up')
+    const w = rig('win32', { ready: notSetUp })
+    await expect(w.manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: windows-setup codex acc-cx$/)
+    // The account's own home is the one asked
+    expect(asked).toEqual([codexAccount.configDir])
+    expect(existsSync(path.join(cwd, '.git', 'config.worktree'))).toBe(false)
+    expect(() => w.manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
+    expect(w.spawned).toHaveLength(0)
+    // A process that cannot ask refuses the same way: a sandboxed start on a home nobody asked about is not risked
+    const none = new SessionManager((_f, _a, o) => (w.spawned.push(o), new FakePty()), makeDescriptors('win32', HOME.win32, undefined, daemon(true)),
+      100, 20, HOME.win32, undefined, [], { ...BASE.win32 }, { ...checksFor('win32'), codexWindowsReady: undefined })
+    await expect(none.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: windows-setup codex acc-cx$/)
+    // Unsandboxed, or elsewhere than Windows, nothing is asked
+    await w.manager.prepare({ account: codexAccount, cwd })
+    w.manager.spawn({ account: codexAccount, cwd })
+    const l = rig('linux', { ready: notSetUp })
+    await l.manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    l.manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    expect(asked).toHaveLength(1)
+    expect(w.spawned).toHaveLength(1)
+    expect(l.spawned).toHaveLength(1)
+  })
+
+  // Readiness is per account, so what a prepare read is kept for the account it was asked for: another account's
+  // sandboxed spawn in the same folder is not let through on it
+  it('a prepared sandbox is kept for its own account', async () => {
+    const cwd = repo()
+    const other: Account = { ...codexAccount, id: 'acc-cx2', configDir: 'C:\\Users\\tester\\.codex-accounts\\other' }
+    const { manager, spawned } = rig('win32')
+    await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    expect(() => manager.spawn({ account: other, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
+    manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    expect(spawned).toHaveLength(1)
+  })
+
+  // The line a refused roll leaves in the app's own tab (main/index.ts's codex rolling `tell`): output, not input
+  it('say puts a line in a live session’s output, and nothing for one that exited or is not here', async () => {
+    const cwd = repo()
+    const ptys: FakePty[] = []
+    const manager = new SessionManager((_f, _a, _o) => { const p = new FakePty(); ptys.push(p); return p }, makeDescriptors('linux', HOME.linux, undefined, daemon(true)),
+      100, 20, HOME.linux, undefined, [], { ...BASE.linux }, checksFor('linux'))
+    const data: Array<{ sessionId: string; data: string }> = []
+    manager.onData = (e) => data.push(e)
+    await manager.prepare({ account: codexAccount, cwd })
+    const info = manager.spawn({ account: codexAccount, cwd })
+    manager.say(info.id, '\r\n[Astera] why\r\n')
+    expect(data).toEqual([{ sessionId: info.id, data: '\r\n[Astera] why\r\n' }])
+    expect(ptys[0].written).toEqual([])
+    manager.say('nobody', 'x')
+    ptys[0].emitExit(0)
+    manager.say(info.id, 'late')
+    expect(data).toHaveLength(1)
   })
 
   it('a folder outside any repository gets no git entries, and still starts', async () => {

@@ -23,6 +23,7 @@ import { releaseArgsFor } from '../core/orchestration/exec/release'
 import { makeLimitProbe } from '../core/orchestration/exec/limitProbe'
 import { ensureShuttle, sessionCmdLink } from '../core/orchestration/exec/shuttle'
 import type { ChatManagerDeps, ChatOrchEnv } from '../core/chat/manager'
+import type { CodexWindowsReady, PreparedLayouts } from '../core/sandbox/prepared'
 import { binDirFor } from '../core/orchestration/cliInstall'
 import {
   preTrustWorkspace,
@@ -41,7 +42,7 @@ import { descriptorOf, makeDescriptors } from '../core/providers/descriptor'
 import { providerOf } from '../core/providers/meta'
 import { ensureOnWindowsPath } from '../core/sessions/windowsPath'
 import { ensureInstallDirOnPath } from '../core/sessions/installDirPath'
-import { SessionManager, defaultSpawnChecks } from '../core/sessions/manager'
+import { SessionManager, askCodexWindowsReady, defaultSpawnChecks } from '../core/sessions/manager'
 import { defaultSessionTitle } from '../core/sessions/title'
 import type { PtyFactory, PtyLike } from '../core/sessions/pty'
 import { StatusLineManager, resolveNodePath } from '../core/sessions/statusline'
@@ -134,6 +135,9 @@ export interface HostSpawnerDeps {
   /** Test injection; defaults to asking the codex on this machine's PATH whether it takes `--no-daemon`, which a
    *  sandboxed Codex session needs (sessions/codexNoDaemon.ts). */
   codexNoDaemon?: CodexNoDaemonProbe
+  /** Test injection; defaults to asking the codex on this machine's PATH whether an account's Windows sandbox is set up
+   *  (askCodexWindowsReady), which a sandboxed win32 Codex start needs. A test never runs the real one. */
+  codexWindowsReady?: CodexWindowsReady
 }
 
 /** HostRollSpawner's three (prepareRollSpawn, rollSpawn, statusLinePayload) are the S6 roll's respawn
@@ -147,6 +151,10 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
   /** Enforce (enforce design §5): the arguments that make a Host chat run the blocking hook, from this spawner's
    *  StatusLineManager. */
   enforce?: ChatManagerDeps['enforce']
+  /** The sandbox (sandbox design §6): the layouts this spawner's prepares read, and the Windows readiness question they
+   *  ask, shared with the Host's chat sessions: a roll prepares a chat chain's respawn through prepareRollSpawn. */
+  sandboxLayouts?: PreparedLayouts
+  codexWindowsReady?: CodexWindowsReady
   /** The session shuttle's values once the Host wrote it (kicked at creation); undefined until then. */
   orchEnvNow(): ChatOrchEnv | undefined
   /** How many worker and coordinator starts are under way right now. */
@@ -272,6 +280,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   const { profileDir, platform, homeDir, registry, log } = d
   const readAccounts = d.readAccounts ?? readAccountEntries
   const descriptors = d.codexNoDaemon ? makeDescriptors(platform, undefined, undefined, d.codexNoDaemon) : makeDescriptors(platform)
+  // Windows readiness for a sandboxed Codex start (sandbox design §6), asked by this spawner's prepares and the Host's chat
+  // sessions alike
+  const codexWindowsReady = d.codexWindowsReady ?? askCodexWindowsReady
   // The rule core.ts uses for the app's StatusLineManager, so the two write the same settings files. On
   // win32 the app names the Host runtime's node.exe, which is what this Host runs from, so its own
   // executable is the same file — and one that is certain to be there while its sessions run, since a
@@ -372,7 +383,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     // Read at each spawn, not once: the Host completes its PATH when a CLI is missing (windowsPath.ts)
     () => hostWorkerBaseEnv(d.env),
     // The Host's own log: a spawn that had to fall back to a sync check says so in host.log.
-    defaultSpawnChecks(log)
+    { ...defaultSpawnChecks(log), codexWindowsReady }
   )
   // Shared extensions (Agent Control Plane release 1 design §4.5): `sessions.prepare` refreshes the account before
   // every spawn and roll, and the Host's chat sessions read the same cache
@@ -779,6 +790,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     capabilities,
     hiding,
     enforce,
+    sandboxLayouts: sessions.sandboxLayouts,
+    codexWindowsReady,
     orchEnvNow: () => orchEnvReady,
     inFlight: () => spawnsInFlight,
     closeAndSettle: (ms) => {

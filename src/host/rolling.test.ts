@@ -9,6 +9,7 @@ import { createHostRolling, type HostRollEvent, type RollSpawnOpts } from './rol
 import { hostRollConfigPath, readRollConfigKey } from '../core/rolling/config'
 import type { RollSnapshot } from '../core/rolling/snapshot'
 import type { Account, RateLimitPeak, SessionInfo } from '../core/types'
+import { t } from '../core/i18n'
 
 // The chat chain harness below reads the deps createHostRolling hands the claude coordinator; the class
 // itself stays the real one, so every other test in this file runs as before.
@@ -265,6 +266,29 @@ describe('createHostRolling (S6 Task 9)', () => {
     r.rolling.dispose()
   })
 
+  // Sandbox design §6, the person's decision (Task 6): a codex roll the sandbox refuses kills nothing, and the reason is
+  // in the session's own tab, as output in the pty's ring, as Enforce's hook-missing line is
+  it('a codex roll onto an account not set up writes the reason into the live pty and waits', async () => {
+    const r = await rig({ prepare: async () => Promise.reject(new Error('SANDBOX_UNAVAILABLE: windows-setup codex c2')) })
+    await r.rolling.refresh()
+    const rollout = path.join(os.tmpdir(), `astera-hr-rollout-sbx-${process.pid}.jsonl`)
+    await fs.writeFile(rollout, '')
+    const said: string[] = []
+    r.registry.onData((id, d) => {
+      if (id === 'p1') said.push(d)
+    })
+    r.open('p1', 's1', { accountId: 'c1', cwd: os.tmpdir(), title: 't', rollAccountIds: ['c1', 'c2'], sandboxed: true })
+    r.rolling.adoptSpawned({ ...info('s1', 'c1'), rollAccountIds: ['c1', 'c2'], sandboxed: true }, codexAccounts[0])
+    r.rolling.attachFresh('s1', 'thread-1', rollout)
+    await r.rolling.forceRoll('s1')
+    await vi.advanceTimersByTimeAsync(100)
+    expect(r.ptys.get('p1')!.killed).toBe(false)
+    expect(r.spawned).toHaveLength(0)
+    expect(said.join('')).toBe(`\r\n[Astera] ${t('en', 'session.spawn.sandbox.windowsSetup')}\r\n`)
+    await fs.rm(rollout, { force: true })
+    r.rolling.dispose()
+  })
+
   it('writes the native session id into the note, so a returning app’s history guard can see it', async () => {
     const r = await rig()
     await r.rolling.refresh()
@@ -484,6 +508,15 @@ describe('createHostRolling — chat chains (chat takeover, lifts R20)', () => {
     expect(chats.spawn).toHaveBeenCalledWith(expect.objectContaining({ agentProfileId: 'ap_x' }))
     h.spawnDep({ kind: 'chat', account: h.accounts[1], cwd: 'D:/p', resumeSessionId: 'th', restoreExtra: { rolledFrom: 'c1', roll: {} as never } })
     expect((chats.spawn.mock.calls[1] as unknown[])[0]).not.toHaveProperty('agentProfileId')
+  })
+  // Sandbox design §6: a chat chain started in the sandbox respawns in it (prepareRollSpawn read its folder first)
+  it('carries the sandbox of a chat chain into its respawn, and nothing for one outside it', () => {
+    const chats = fakeChats()
+    const h = harness({ chats, chatMayAct: () => true })
+    h.spawnDep({ kind: 'chat', account: h.accounts[1], cwd: 'D:/p', resumeSessionId: 'th', sandbox: true, restoreExtra: { rolledFrom: 'c1', roll: {} as never } })
+    expect(chats.spawn).toHaveBeenCalledWith(expect.objectContaining({ sandbox: true }))
+    h.spawnDep({ kind: 'chat', account: h.accounts[1], cwd: 'D:/p', resumeSessionId: 'th', restoreExtra: { rolledFrom: 'c1', roll: {} as never } })
+    expect((chats.spawn.mock.calls[1] as unknown[])[0]).not.toHaveProperty('sandbox')
   })
   it('does not announce a chat roll whose new proc ended before it started (review M2)', async () => {
     const chats = { ...fakeChats(), has: (id: string) => id === 'c1' || id === 'c2', procOf: (id: string) => (id === 'c2' ? null : 'p1') }

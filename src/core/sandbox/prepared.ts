@@ -1,0 +1,103 @@
+// What a sandboxed Codex start does before its spawn (sandbox design §6), for both session managers: the terminal one
+// (core/sessions/manager.ts) and the chat one (core/chat/manager.ts). Their spawns are synchronous and cannot read git
+// safely (an offline drive would freeze the thread), so the folder's git layout is read here, off the thread, and kept
+// for the spawn. A roll prepares a chat chain's respawn through the terminal manager's prepare, as it refreshes the
+// capability cache both managers read, so the two managers of a process hold one PreparedLayouts.
+import { ensureWorktreeConfigFiles, gitLayoutOf, type GitLayout } from './gitLayout'
+import { credentialStoreDenies, sensitiveLocations } from './locations'
+import { codexSandboxArgs } from './codexProfile'
+import { sandboxUnavailable } from './unavailable'
+import type { Readiness } from './windowsReadiness'
+import { LAUNCH_FORBIDDEN } from '../sessions/commands'
+
+/** How long a prepared layout is trusted by the spawn after it: a roll prepares before its kill and spawns right after,
+ *  so a minute is plenty (the confirmed folder's own bound, core/sessions/manager.ts). */
+export const PREPARED_MS = 60_000
+
+/** Whether an account's Codex home has its Windows sandbox set up (windowsReadiness.ts), asked with the environment the
+ *  session would start with. */
+export type CodexWindowsReady = (a: { codexHome: string | null; env: Record<string, string | undefined> }) => Promise<Readiness>
+
+/** The layouts sandboxed prepares read, by account and folder: readiness is the account's, so one account's prepare never
+ *  lets another account's spawn through in the same folder. */
+export class PreparedLayouts {
+  private entries = new Map<string, { layout: GitLayout | null; at: number }>()
+
+  keep(accountId: string, cwd: string, layout: GitLayout | null, now: number): void {
+    for (const [k, v] of this.entries) if (now - v.at >= PREPARED_MS) this.entries.delete(k)
+    this.entries.set(keyOf(accountId, cwd), { layout, at: now })
+  }
+
+  /** The layout a prepare kept for this account and folder within PREPARED_MS (null outside a repository), or undefined
+   *  when there is none: the spawn then refuses with `not-prepared`. */
+  layoutOf(accountId: string, cwd: string, now: number): GitLayout | null | undefined {
+    const e = this.entries.get(keyOf(accountId, cwd))
+    return e && now - e.at < PREPARED_MS ? e.layout : undefined
+  }
+}
+
+const keyOf = (accountId: string, cwd: string): string => `${accountId}\u0000${cwd}`
+
+/** A sandboxed Codex session's `-a never` and permission profile: its repository's git directories writable, the E6
+ *  list and the OS credential store denied, read from the session's own environment and home. On Windows the launch
+ *  goes through cmd.exe, which would break on a path holding one of its characters, so such a start is refused
+ *  instead of launched broken (Review Focus 2). */
+export function sessionSandboxArgs(o: { platform: NodeJS.Platform; homeDir: string; layout: GitLayout | null; env: Record<string, string | undefined> }): string[] {
+  const { platform, homeDir, layout, env } = o
+  const denied = [...sensitiveLocations(platform, env, homeDir), ...credentialStoreDenies(platform, env, homeDir)]
+  if (platform === 'win32') {
+    const named = [...(layout ? [layout.top, layout.gitDir, layout.commonDir, ...layout.worktreeConfigs] : []), ...denied]
+    if (named.some((p) => LAUNCH_FORBIDDEN.test(p))) throw sandboxUnavailable('path-unsafe')
+  }
+  return codexSandboxArgs({ platform, layout, denied })
+}
+
+/**
+ * Reads the folder's git layout for a sandboxed spawn and checks what the spawn would refuse, before anything is written:
+ * a path cmd.exe cannot carry, whatever `check` asks of the arguments (the terminal's codex without `--no-daemon`), and on
+ * Windows whether the account's Codex home is set up (`windows-setup codex <account>`, which the app offers to set up).
+ * A roll awaits this before it kills the session it replaces, and the spawn after the kill can only throw. Then, on
+ * Windows only, every `config.worktree` git may read is made first: the profile keeps them read-only, but Codex's
+ * Windows sandbox creates one that is missing, and git would read a `core.hooksPath` from it (gitLayout.ts); on macOS
+ * and Linux a read entry already keeps a missing one from being created. A layout that cannot be read or prepared
+ * refuses the start (`git-layout`), since the profile could not name what it must (E5).
+ */
+export async function prepareCodexSandbox(o: {
+  accountId: string
+  cwd: string
+  platform: NodeJS.Platform
+  homeDir: string
+  env: Record<string, string | undefined>
+  /** Absent, a Windows start is refused: a home nobody asked about would bring up the administrator prompt. */
+  ready: CodexWindowsReady | undefined
+  check?: (sandboxArgs: string[]) => void
+  log: (m: string) => void
+}): Promise<GitLayout | null> {
+  const fail = (err: unknown): Error => {
+    o.log(`sandbox: the git layout of ${o.cwd} could not be read or prepared: ${String(err)}`)
+    return sandboxUnavailable('git-layout')
+  }
+  let layout: GitLayout | null
+  try {
+    layout = await gitLayoutOf(o.cwd)
+  } catch (err) {
+    throw fail(err)
+  }
+  const args = sessionSandboxArgs({ platform: o.platform, homeDir: o.homeDir, layout, env: o.env })
+  o.check?.(args)
+  if (o.platform === 'win32') {
+    const verdict: Readiness = o.ready ? await o.ready({ codexHome: o.env.CODEX_HOME ?? null, env: o.env }) : 'not-set-up'
+    if (verdict !== 'ready') {
+      o.log(`sandbox: the Windows sandbox of account ${o.accountId} is not set up${o.ready ? '' : ' (this process cannot ask)'}`)
+      throw sandboxUnavailable(`windows-setup codex ${o.accountId}`)
+    }
+    if (layout) {
+      try {
+        await ensureWorktreeConfigFiles(layout)
+      } catch (err) {
+        throw fail(err)
+      }
+    }
+  }
+  return layout
+}

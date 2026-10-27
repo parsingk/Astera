@@ -84,7 +84,8 @@ export interface HostRollSpawner {
 export interface HostRollingDeps {
   profileDir: string
   platform: NodeJS.Platform
-  registry: Pick<PtyRegistry, 'onData' | 'onExit' | 'metaOf' | 'sessionPty' | 'write' | 'kill' | 'list' | 'note'>
+  /** `say` puts a refused roll's reason in the tab (CodexRollingDeps.tell); a registry without it leaves that to the log. */
+  registry: Pick<PtyRegistry, 'onData' | 'onExit' | 'metaOf' | 'sessionPty' | 'write' | 'kill' | 'list' | 'note'> & Partial<Pick<PtyRegistry, 'say'>>
   spawner: HostRollSpawner
   /** R1 for the pty this session runs in (the wiring asks hostMayAct over exits and server). */
   mayAct(ptyId: string): boolean
@@ -330,10 +331,19 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
         ...(o.startWithBypass !== undefined ? { startWithBypass: o.startWithBypass } : {}),
         ...(o.startedBy ? { startedBy: o.startedBy } : {}),
         ...(o.agentProfileId ? { agentProfileId: o.agentProfileId } : {}),
+        // A chain started in the sandbox keeps it; prepareRollSpawn read its folder before the kill
+        ...(o.sandbox ? { sandbox: true } : {}),
         ...restoreExtra
       })
     }
     return d.spawner.rollSpawn({ ...o, ...restoreExtra })
+  }
+  /** A refused roll's reason, in the live session's tab (CodexRollingDeps.tell): a terminal session's ring, as Enforce's
+   *  hook-missing line is put there (index.ts stopUnhooked). A chat session has no tab output the Host can add a line to
+   *  without ending it, so its reason stays in the log. */
+  const tell = (sessionId: string, line: string): void => {
+    const p = ptyOf(sessionId)
+    if (p !== null) d.registry.say?.(p, `\r\n${line}\r\n`)
   }
   const common = {
     // Its async half is done first, while the old session lives (R5). Left rejecting (see `safe`).
@@ -389,6 +399,7 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
   const codex = new CodexRollingCoordinator({
     ...common,
     spawn: rollSpawn,
+    tell,
     log: logCodex
   })
 

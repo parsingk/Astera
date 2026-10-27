@@ -19,11 +19,15 @@ const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 
 /** One Host command sent as the app, answered as the tab reads it: the body on a 200, else a code and the Host's
  *  sentence. Settings › Extensions sends its commands the same way (extensionsRoute.ts). */
-export function hostSender(d: { call: Call }): (cmd: string, args: Record<string, unknown>, change?: boolean) => Promise<PluginsCallAnswer> {
+export function hostSender(
+  d: { call: Call }
+): (cmd: string, args: Record<string, unknown>, change?: boolean | { timeoutMs: number }) => Promise<PluginsCallAnswer> {
   return async (cmd, args, change = false) => {
+    // A change waits PLUGIN_CHANGE_DEADLINE_MS; a command that waits on the person names its own deadline
+    const timeoutMs = typeof change === 'object' ? change.timeoutMs : change ? PLUGIN_CHANGE_DEADLINE_MS : undefined
     let r: { status: number; body: unknown }
     try {
-      r = await d.call({ cmd, args, sessionId: '', ...(change ? { timeoutMs: PLUGIN_CHANGE_DEADLINE_MS } : {}) })
+      r = await d.call({ cmd, args, sessionId: '', ...(timeoutMs !== undefined ? { timeoutMs } : {}) })
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
       // Nothing was sent; the Host's deadline passed; or the connection went with the call out, and the change may

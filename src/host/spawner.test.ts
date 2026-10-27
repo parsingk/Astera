@@ -47,6 +47,7 @@ const rig = (over: {
   onPromptWrite?: HostSpawnerDeps['onPromptWrite']
   touchAgentProfile?: HostSpawnerDeps['touchAgentProfile']
   codexNoDaemon?: HostSpawnerDeps['codexNoDaemon']
+  codexWindowsReady?: HostSpawnerDeps['codexWindowsReady']
 } & LocateHooks = {}) => {
   const spawned: Spawned[] = []
   const logs: string[] = []
@@ -70,6 +71,8 @@ const rig = (over: {
     onPromptWrite: over.onPromptWrite,
     touchAgentProfile: over.touchAgentProfile,
     ...(over.codexNoDaemon ? { codexNoDaemon: over.codexNoDaemon } : {}),
+    // Every Windows home reads set up unless a case says otherwise: the real question runs the codex on this machine
+    codexWindowsReady: over.codexWindowsReady ?? (async () => 'ready'),
     worktrees: over.worktrees ?? { fork: () => Promise.reject(new Error('not in this test')), makeRunWorktree: vi.fn(), mergeWorktrees: vi.fn(), removeWorktrees: vi.fn() } })
   return { spawner, registry, spawned, logs, sent }
 }
@@ -993,6 +996,29 @@ describe('createHostSpawner — createSession', () => {
       expect(h.spawned[1].args).toContain('--dangerously-bypass-approvals-and-sandbox')
       expect(h.spawned[1].args).not.toContain('-a')
       expect(open).not.toHaveProperty('sandboxed')
+    })
+
+    // Windows readiness (sandbox design §6): the spawner's own question is the one its prepares ask, and an account whose
+    // Codex home is not set up starts nothing, naming the account the app offers to set up
+    it.runIf(process.platform === 'win32')('a sandboxed win32 Codex start on an account not set up opens nothing', async () => {
+      await fs.writeFile(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
+        { id: 'acc2', label: 'two', configDir: path.join(dir, 'cfg2'), color: '#888', createdAt: NOW, provider: 'codex' }
+      ] }))
+      await writeAgentProfiles(profile, { version: 1, profiles: [P({ id: 'ap_box', name: 'Boxed', accountIds: ['acc2'], sandbox: true })] })
+      const asked: Array<string | null> = []
+      const h = rig({
+        codexNoDaemon: Object.assign(() => true, { warm: async () => {} }),
+        findRollout: async () => null,
+        codexWindowsReady: async ({ codexHome }) => (asked.push(codexHome), 'not-set-up')
+      })
+      await expect(h.spawner!.createSession({ accountId: 'acc2', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_box' })).rejects.toThrow(
+        /^SANDBOX_UNAVAILABLE: windows-setup codex acc2$/
+      )
+      expect(asked).toEqual([path.join(dir, 'cfg2')])
+      expect(h.spawned).toHaveLength(0)
+      // The Host's chat sessions are handed the same question
+      expect(h.spawner!.codexWindowsReady).toBeDefined()
+      expect(await h.spawner!.codexWindowsReady!({ codexHome: 'x', env: {} })).toBe('not-set-up')
     })
 
     it('a bypass profile starts unattended while the app-wide mode is manual, and its id rides the note', async () => {

@@ -68,6 +68,7 @@ import { createWorktreeRoute, NO_HOST_CONNECTION, hostDeadlineMessage } from './
 import { createPluginsRoute } from './host/pluginsRoute'
 import { createExtensionsRoute } from './host/extensionsRoute'
 import { createAgentProfilesRoute } from './host/agentProfilesRoute'
+import { forgetReadiness } from '../core/sandbox/windowsReadiness'
 import { createAuditRoute } from './host/auditRoute'
 import { createCredentialsRoute } from './host/credentialsRoute'
 import { createAppPullRequests } from './host/appPullRequests'
@@ -2097,8 +2098,8 @@ export function registerIpc(
     // dropped, and the session starts with the app-wide mode as a dialog spawn without a profile does (the dialog sent
     // no bypass, so dropping only the id would have left it asking); a profile store that cannot be read refuses the
     // spawn with its repair, since the profile in it may ask or sandbox. With none named, nothing here changes the options.
-    // A profile that resolves also gives its sandbox switch (sandbox design §6), which the terminal prepare and spawn
-    // below read from the options.
+    // A profile that resolves also gives its sandbox switch (sandbox design §6), which the prepares and spawns below, a
+    // terminal's or a chat's, read from the options.
     if (opts.agentProfileId !== undefined) {
       const { agentProfileId, ...rest } = opts
       const resolved = await appProfileSpawn({
@@ -2256,6 +2257,9 @@ export function registerIpc(
       // round 1's own Critical finding.
       const bypassSignal = core.bypassSignalFor(providerOf(account))
       await core.capabilities.refresh(account, opts.agentProfileId)
+      // The profile's sandbox: the folder's git layout read for the synchronous spawn, and on Windows the account's Codex
+      // home asked whether it is set up; a refusal reaches the toast like any failed spawn (설정하기 for an account not set up)
+      await core.chat.prepare({ account, cwd: opts.cwd, ...(opts.sandbox === true ? { sandbox: true } : {}) })
       const chatInfo = core.chat.spawn({
         account,
         cwd: opts.cwd,
@@ -2268,7 +2272,8 @@ export function registerIpc(
         // Chat takeover: what a Host does with a prompt nobody is there to answer. Hold unless asked.
         unattendedPermission: isUnattendedPermission(opts.unattendedPermission) ? opts.unattendedPermission : 'hold',
         bypassSignal,
-        ...(opts.agentProfileId !== undefined ? { agentProfileId: opts.agentProfileId } : {})
+        ...(opts.agentProfileId !== undefined ? { agentProfileId: opts.agentProfileId } : {}),
+        ...(opts.sandbox === true ? { sandbox: true } : {})
       })
       if (opts.agentProfileId !== undefined) touchAgentProfile(opts.agentProfileId)
       // A claude chat resume's transcript already exists, so it is found now rather than at `ready`:
@@ -4773,7 +4778,8 @@ export function registerIpc(
   ipcMain.handle('extensions.remove', (_e, id: unknown) => extensions.remove(id as string))
   ipcMain.handle('extensions.replace', (_e, accountId: unknown, id: unknown) => extensions.replace(accountId as string, id as string))
   // Settings › Agent profiles (Agent Profiles design §8): the Host checks every argument; this only passes them on
-  const agentProfiles = createAgentProfilesRoute({ call: (m) => orchCall(m) })
+  // A setup gives the machine's sandbox users new passwords, so this process's own readiness answers go after one too
+  const agentProfiles = createAgentProfilesRoute({ call: (m) => orchCall(m), afterSetup: () => forgetReadiness() })
   ipcMain.handle('agentProfiles.list', () => agentProfiles.list())
   ipcMain.handle('agentProfiles.create', (_e, fields: unknown) => agentProfiles.create(fields as Parameters<typeof agentProfiles.create>[0]))
   ipcMain.handle('agentProfiles.update', (_e, id: unknown, changes: unknown) =>
@@ -4782,6 +4788,7 @@ export function registerIpc(
   ipcMain.handle('agentProfiles.archive', (_e, id: unknown) => agentProfiles.archive(id as string))
   ipcMain.handle('agentProfiles.restore', (_e, id: unknown) => agentProfiles.restore(id as string))
   ipcMain.handle('agentProfiles.remove', (_e, id: unknown) => agentProfiles.remove(id as string))
+  ipcMain.handle('agentProfiles.sandboxSetup', (_e, profileId: unknown, accountId: unknown) => agentProfiles.sandboxSetup(profileId as string, accountId as string))
   // Settings › Security & Access and Run detail's token totals (observe mode design §11): the Host checks every
   // argument; this only passes them on
   const audit = createAuditRoute({ call: (m) => orchCall(m) })

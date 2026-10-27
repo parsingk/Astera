@@ -149,6 +149,8 @@ export function composeHostRolling(a: {
     capabilities: a.spawner.capabilities,
     hiding: a.spawner.hiding,
     enforce: a.spawner.enforce,
+    sandboxLayouts: a.spawner.sandboxLayouts,
+    codexWindowsReady: a.spawner.codexWindowsReady,
     log,
     ...a.chatsDeps
   })

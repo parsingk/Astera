@@ -16,12 +16,12 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) await removeFixture(d)
 })
 
-async function rig() {
+async function rig(o: { sandboxSetup?: Parameters<typeof createHostAgentProfiles>[0]['sandboxSetup'] } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-host-ap-'))
   dirs.push(root)
   const profileDir = path.join(root, 'profile')
   const acc = (id: string, provider: 'claude' | 'codex'): Account => ({ id, label: id, configDir: path.join(root, id), color: '#888', createdAt: '2026-10-22T00:00:00.000Z', provider })
-  let accounts = [acc('acc_1', 'claude'), acc('acc_2', 'claude'), acc('acc_x', 'codex')]
+  let accounts = [acc('acc_1', 'claude'), acc('acc_2', 'claude'), acc('acc_x', 'codex'), acc('acc_y', 'codex')]
   const held = new Set<string>()
   let clock = Date.parse('2026-10-22T10:00:00.000Z')
   const logs: string[] = []
@@ -30,7 +30,8 @@ async function rig() {
     readAccounts: async () => accounts,
     inUse: async (id) => held.has(id),
     now: () => clock,
-    log: (l) => logs.push(l)
+    log: (l) => logs.push(l),
+    ...(o.sandboxSetup ? { sandboxSetup: o.sandboxSetup } : {})
   })
   const call = (cmd: string, args: Record<string, unknown> = {}, extra: { role?: 'app' | 'cli' | 'mcp' | 'agent'; agentRefusal?: string } = {}) => {
     const marks = { effects: 0 }
@@ -181,6 +182,37 @@ describe('createHostAgentProfiles', () => {
     expect((await readAgentProfiles(h.profileDir)).profiles).toMatchObject([{ id: p.id, sandbox: true }])
     expect((await h.call('agent-profiles-update', { id: p.id, sandbox: false }, { role: 'cli' })).status).toBe(200)
     expect((await readAgentProfiles(h.profileDir)).profiles[0]!.sandbox).toBe(false)
+  })
+
+  // Sandbox design §6, as the person decided (Task 6): 설정하기 sets up the one Codex account being started, from the
+  // app only. It brings up Windows' administrator prompt, so neither an agent's shell nor anything else may ask for it.
+  it('agent-profiles-sandbox-setup sets up the one Codex account of the profile, for the app only', async () => {
+    const set: string[] = []
+    const h = await rig({ sandboxSetup: async (account) => (set.push(account.id), { ok: true, out: 'set up' }) })
+    const p = profileOf(await h.call('agent-profiles-create', { name: 'Boxed', accountIds: ['acc_x', 'acc_y'], sandbox: true }))
+    const r = await h.call('agent-profiles-sandbox-setup', { id: p.id, accountId: 'acc_y' })
+    expect(r.status, JSON.stringify(r.body)).toBe(200)
+    expect(r.body).toEqual({ ok: true, out: 'set up' })
+    expect(r.marks.effects).toBe(0)
+    // Only that account, not every Codex account of the profile
+    expect(set).toEqual(['acc_y'])
+    for (const extra of [{ role: 'cli' as const, agentRefusal: 'not from an agent' }, { role: 'cli' as const }, { role: 'mcp' as const }, { role: 'agent' as const }])
+      expect((await h.call('agent-profiles-sandbox-setup', { id: p.id, accountId: 'acc_x' }, extra)).status, JSON.stringify(extra)).toBe(403)
+    // An account that is not the profile's, or not a Codex one, and a profile that is not there
+    const claude = profileOf(await h.call('agent-profiles-create', { name: 'Claude', accountIds: ['acc_1'] }))
+    expect((await h.call('agent-profiles-sandbox-setup', { id: p.id, accountId: 'acc_1' })).status).toBe(400)
+    expect((await h.call('agent-profiles-sandbox-setup', { id: claude.id, accountId: 'acc_1' })).status).toBe(400)
+    expect((await h.call('agent-profiles-sandbox-setup', { id: 'ap_nope', accountId: 'acc_x' })).status).toBe(404)
+    expect((await h.call('agent-profiles-sandbox-setup', { id: p.id })).status).toBe(400)
+    expect(set).toEqual(['acc_y'])
+    // A failed setup is answered as Codex said it, still a 200: the command ran
+    const failing = await rig({ sandboxSetup: async () => ({ ok: false, out: 'Error: the elevation was cancelled' }) })
+    const q = profileOf(await failing.call('agent-profiles-create', { name: 'Boxed', accountIds: ['acc_x'], sandbox: true }))
+    expect((await failing.call('agent-profiles-sandbox-setup', { id: q.id, accountId: 'acc_x' })).body).toEqual({ ok: false, out: 'Error: the elevation was cancelled' })
+    // A Host with no Windows sandbox to set up (macOS, Linux) says so
+    const none = await rig()
+    const n = profileOf(await none.call('agent-profiles-create', { name: 'Boxed', accountIds: ['acc_x'], sandbox: true }))
+    expect((await none.call('agent-profiles-sandbox-setup', { id: n.id, accountId: 'acc_x' })).status).toBe(501)
   })
 
   it('deletes a profile, but answers 409 in-use while something holds it', async () => {

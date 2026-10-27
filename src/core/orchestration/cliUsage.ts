@@ -121,7 +121,7 @@ const AGENT_PROFILE_FLAGS = (creating: boolean): UsageFlag[] => [
   },
   { name: 'exclude-mcp', value: '<name,…>', about: 'the shared MCP servers its sessions do not get (from `ext list`)' },
   { name: 'permission', value: '<inherit|bypass|ask>', about: "permission prompts: Astera's setting (inherit), none (bypass) or shown (ask)" },
-  { name: 'sandbox', value: '<on|off>', about: "start its Codex terminal sessions in Codex's own sandbox (default: off)" },
+  { name: 'sandbox', value: '<on|off>', about: "start its Codex sessions, terminal and chat, in Codex's own sandbox (default: off)" },
   { name: 'description', value: '<text>', about: 'a line saying what it is for' }
 ]
 
@@ -567,7 +567,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'agent-profiles-list': {
     summary: 'the agent profiles: named sets of accounts, MCP servers and a permission choice',
     detail:
-      'Each with its id, name, status (active or archived), accounts in order (an account removed from Astera is left out), `mcpExclude` (the ids of the shared MCP servers it leaves out, as `ext list` names them), `permission` and `sandbox` (whether its Codex terminal sessions start in the sandbox of Codex). Answered by the Host, so it works with Astera closed.'
+      'Each with its id, name, status (active or archived), accounts in order (an account removed from Astera is left out), `mcpExclude` (the ids of the shared MCP servers it leaves out, as `ext list` names them), `permission` and `sandbox` (whether its Codex sessions, terminal and chat, start in the sandbox of Codex). Answered by the Host, so it works with Astera closed.'
   },
   'agent-profiles-show': {
     summary: 'one agent profile, by its id or its name',
@@ -576,7 +576,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'agent-profiles-create': {
     summary: 'make an agent profile',
     detail:
-      "Returns the profile. Its accounts must be one provider's, in the order they are tried. --exclude-mcp names shared MCP servers its sessions do not get, as `ext list` names them; a name no shared server has is 2, naming it. Skills and commands are shared by every profile. --permission is inherit (Astera's setting, the default), bypass (run without permission checks) or ask (run with permission checks). --sandbox on starts its Codex terminal sessions in Codex's own sandbox, and a session the sandbox cannot be applied to does not start, saying why; off, the default, starts them as before. A name another profile has is 2. Changing profiles is for a person: from inside an agent session it is refused with 5.",
+      "Returns the profile. Its accounts must be one provider's, in the order they are tried. --exclude-mcp names shared MCP servers its sessions do not get, as `ext list` names them; a name no shared server has is 2, naming it. Skills and commands are shared by every profile. --permission is inherit (Astera's setting, the default), bypass (run without permission checks) or ask (run with permission checks). --sandbox on starts its Codex sessions, terminal and chat, in Codex's own sandbox, and a session the sandbox cannot be applied to does not start, saying why; off, the default, starts them as before. On Windows each Codex account's home needs the sandbox set up once, which the app offers when a start is refused for it. A name another profile has is 2. Changing profiles is for a person: from inside an agent session it is refused with 5.",
     flags: AGENT_PROFILE_FLAGS(true)
   },
   'agent-profiles-update': {

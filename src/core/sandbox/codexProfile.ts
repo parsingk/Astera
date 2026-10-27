@@ -3,6 +3,9 @@
 import type { GitLayout } from './gitLayout'
 
 export const NPM_CACHE_DIR = 'astera-npm-cache'
+/** The permission profile's name: the `-c` arguments define it and make it the default, and a sandboxed chat's thread
+ *  names it (codexProtocol.ts threadStartParams). */
+export const CODEX_PROFILE = 'astera'
 
 const slashed = (p: string): string => p.replace(/\\/g, '/')
 
@@ -39,11 +42,19 @@ function gitEntries(layout: GitLayout | null): string[] {
 
 export function codexSandboxArgs(o: { platform: NodeJS.Platform; layout: GitLayout | null; denied: string[] }): string[] {
   const entries = [...gitEntries(o.layout), ...o.denied.map((p) => entry(p, 'deny'))]
-  const profile = `permissions={astera={extends=":workspace", filesystem={${entries.join(', ')}}, network={enabled=true}}}`
-  const args = ['-a', 'never', '-c', profile, '-c', 'default_permissions="astera"']
+  const profile = `permissions={${CODEX_PROFILE}={extends=":workspace", filesystem={${entries.join(', ')}}, network={enabled=true}}}`
+  const args = ['-a', 'never', '-c', profile, '-c', `default_permissions=${toml(CODEX_PROFILE)}`]
   // The unelevated Windows sandbox is not pinned by default, so a session would otherwise run with whichever one Codex picks.
   if (o.platform === 'win32') args.push('-c', 'windows.sandbox="elevated"')
   return args
+}
+
+/** What `codex app-server` takes of codexSandboxArgs: the profile's `-c` values without the leading `-a never`, which is
+ *  an option of the session command only; a chat's thread carries it as `approvalPolicy: "never"` instead. The shape Task 2
+ *  measured the app-server with (inventory §23.1). */
+export function appServerSandboxArgs(args: string[]): string[] {
+  if (args[0] !== '-a' || args[1] !== 'never') throw new Error(`the sandbox arguments no longer start with -a never: ${args.slice(0, 2).join(' ')}`)
+  return args.slice(2)
 }
 
 /** On Windows git refuses a repository owned by another account, and the elevated sandbox runs as one, so the checkout and

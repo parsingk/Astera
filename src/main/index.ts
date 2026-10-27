@@ -1157,6 +1157,12 @@ app.whenReady().then(async () => {
         /* a write failure must not break the chain — the prompt just stays up */
       }
     },
+    // Why a roll waits, when its respawn would start without the sandbox the chain runs in: one line in the terminal tab,
+    // as output (the Host's twin writes its pty's ring, host/rolling.ts). A chat pane has no such line; its reason stays
+    // in the rolling log.
+    tell: (id, line) => {
+      if (!core!.chat.has(id)) core!.sessions.say(id, `\r\n${line}\r\n`)
+    },
     getAccount: (id) => {
       try {
         return core!.accounts.get(id)

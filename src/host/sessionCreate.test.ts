@@ -249,6 +249,39 @@ describe('createHostSessionStarter — with an agent profile', () => {
     expect(h.chats.spawn).not.toHaveBeenCalled()
   })
 
+  // Sandbox design §6: a sandboxed profile's chat has its folder read (and on Windows its account asked) before the spawn,
+  // and a refusal there starts nothing, tagged so no receipt is kept
+  it('a sandboxed profile’s chat is prepared for the sandbox first, and started in it', async () => {
+    const profileDir = await withProfiles([P({ id: 'ap_box', sandbox: true })])
+    const order: string[] = []
+    const h = rig({ profileDir })
+    const prepare = vi.fn(async (o: { account: Account; cwd: string; sandbox?: boolean }) => {
+      order.push(`prepare ${o.account.id} ${o.cwd} ${String(o.sandbox)}`)
+    })
+    Object.assign(h.chats, { prepare })
+    h.chats.spawn.mockImplementationOnce((o: { cwd: string }) => {
+      order.push('spawn')
+      return { id: 'chat_1', accountId: 'acc_c', cwd: o.cwd, title: 'p', status: 'running' } as SessionInfo
+    })
+    await h.start({ kind: 'chat', accountId: 'acc_c', cwd: '/repo', rollAccountIds: [], agentProfileId: 'ap_box' })
+    expect(order).toEqual(['prepare acc_c /repo true', 'spawn'])
+    expect(h.chats.spawn).toHaveBeenCalledWith(expect.objectContaining({ sandbox: true, agentProfileId: 'ap_box' }))
+    // Unsandboxed, nothing is prepared and the spawn is asked as before
+    const open = rig({ profileDir: await withProfiles([P({ id: 'ap_open' })]) })
+    const noPrepare = vi.fn(async () => {})
+    Object.assign(open.chats, { prepare: noPrepare })
+    await open.start({ kind: 'chat', accountId: 'acc_c', cwd: '/repo', rollAccountIds: [], agentProfileId: 'ap_open' })
+    expect(noPrepare).not.toHaveBeenCalled()
+    expect(open.chats.spawn.mock.calls[0][0]).not.toHaveProperty('sandbox')
+    // A refusal: nothing is spawned, and it is tagged as refused before acting
+    const refusing = rig({ profileDir })
+    Object.assign(refusing.chats, { prepare: async () => Promise.reject(new Error('SANDBOX_UNAVAILABLE: windows-setup codex acc_c')) })
+    const err = await refusing.start({ kind: 'chat', accountId: 'acc_c', cwd: '/repo', rollAccountIds: [], agentProfileId: 'ap_box' }).catch((e: unknown) => e)
+    expect((err as Error).message).toBe('SANDBOX_UNAVAILABLE: windows-setup codex acc_c')
+    expect(wasRefusedBeforeActing(err as Error)).toBe(true)
+    expect(refusing.chats.spawn).not.toHaveBeenCalled()
+  })
+
   it('a terminal session hands the profile to the spawner, which resolves it', async () => {
     const h = rig()
     await h.start({ kind: 'terminal', accountId: 'acc_c', cwd: '/repo', rollAccountIds: [], agentProfileId: 'ap_b' })

@@ -8,7 +8,7 @@
 //
 // Imports nothing outside core and this folder: this bundles into the Host.
 import type { PtyEntry } from '../core/host/protocol'
-import type { SessionInfo } from '../core/types'
+import type { Account, SessionInfo } from '../core/types'
 import { makeDescriptors } from '../core/providers/descriptor'
 import { ChatSessionManager, type ChatManagerDeps, type ChatOrchEnv } from '../core/chat/manager'
 import { chatSpawnOptsOf, type ChatRollSpawn } from '../core/chat/respawn'
@@ -46,6 +46,10 @@ export interface HostChatsDeps {
   hiding?: ChatManagerDeps['hiding']
   /** Enforce's chat arguments, the spawner's (enforce design §5). */
   enforce?: ChatManagerDeps['enforce']
+  /** The sandbox's prepared layouts and Windows readiness question, the spawner's (sandbox design §6): a roll's chat
+   *  respawn is prepared through the spawner's prepareRollSpawn. */
+  sandboxLayouts?: ChatManagerDeps['sandboxLayouts']
+  codexWindowsReady?: ChatManagerDeps['codexWindowsReady']
   log(m: string): void
   /** Test seams. */
   createAdapter?: ChatManagerDeps['createAdapter']
@@ -58,6 +62,9 @@ export interface HostChats {
   adopt(entry: PtyEntry): SessionInfo | null
   /** A roll's respawn, synchronous; the new note says hostStarting until started() settles. */
   spawn(o: ChatRollSpawn): SessionInfo
+  /** What a sandboxed Codex chat's spawn needs read first (ChatSessionManager.prepare); `sessions create` awaits it.
+   *  Rejects with the refusal (`SANDBOX_UNAVAILABLE: …`). */
+  prepare(o: { account: Account; cwd: string; sandbox?: boolean }): Promise<void>
   /** True once the new proc's handshake and carry-on settled; hostStarting is then cleared in the note.
    *  False when they did not settle within CHAT_START_PUSH_MS: the session is killed and the mark stays,
    *  so no app takes over a start still under way (final review I1). Never rejects. */
@@ -179,6 +186,8 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     capabilities: d.capabilities,
     hiding: d.hiding,
     enforce: d.enforce,
+    ...(d.sandboxLayouts ? { sandboxLayouts: d.sandboxLayouts } : {}),
+    ...(d.codexWindowsReady ? { codexWindowsReady: d.codexWindowsReady } : {}),
     ...(d.createAdapter ? { createAdapter: d.createAdapter } : {})
   })
 
@@ -364,6 +373,7 @@ export function createHostChats(d: HostChatsDeps): HostChats {
         throw err
       }
     },
+    prepare: (o) => manager.prepare(o),
     async started(id) {
       let cancel: () => void = () => {}
       const timedOut = new Promise<'timeout'>((resolve) => {

@@ -77,6 +77,7 @@ import { hostFeatures } from './features'
 import { loadSlackSdk } from './slackSdk'
 import { composeHostSlack, type HostSlackWiring } from './slackWiring'
 import { createHostSpawner } from './spawner'
+import { hostSandboxSetup } from './sandboxSetup'
 import { createHostWorktrees, loadWorktreesIfSpawning } from './worktrees'
 import { createHostProjectRoots } from './projectRoots'
 import { createHostExits, ptyHeldBy, type HostExits } from './exits'
@@ -882,11 +883,19 @@ async function main(): Promise<void> {
   // Agent Profiles (design §4): the store this Host owns. A profile cannot be deleted while a live session holds it
   // (the session's note carries `agentProfileId`) or unfinished orchestration work does (a Job, a Task, an open
   // Dispatch). `orch` is made below; the guard reads it only when a delete is asked.
+  // 설정하기 (sandbox design §6): Codex's Windows sandbox setup for one account, run here, where the sessions start
+  const sandboxSetup = hostSandboxSetup({
+    platform: process.platform,
+    homeDir: os.homedir(),
+    baseEnv: () => hostWorkerBaseEnv(process.env),
+    descriptors: makeDescriptors(process.platform)
+  })
   const agentProfiles = createHostAgentProfiles({
     profileDir,
     readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
     inUse: agentProfileInUse({ sessions: () => [...registry.list(), ...procs.list()], orch: () => orch }),
-    log: (m) => log.write(m)
+    log: (m) => log.write(m),
+    ...(sandboxSetup ? { sandboxSetup } : {})
   })
   /** `agent-profiles-touch` as the app would send it, not awaited by the spawn that asks: the command logs its own
    *  failures and answers success, so a stamp never fails or delays a spawn. */

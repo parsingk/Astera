@@ -8,6 +8,7 @@ import { BlockRegistry } from './blockRegistry'
 import { CodexRollingCoordinator, type CodexRollingDeps } from './codexCoordinator'
 import { parseRollSnapshot, type RollSnapshot } from './snapshot'
 import { ENTER_MAX_WAIT_MS, ENTER_QUIET_MS } from '../sessions/sessionDriver'
+import { t } from '../i18n'
 
 let tmp: string
 
@@ -2877,6 +2878,56 @@ describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
     expect(h.events).toEqual(['copy'])
     expect(h.sent.at(-1)?.payload).toMatchObject({ sessionId: 's1', state: 'waiting' })
     expect(logs.join('\n')).toMatch(/spawn refused: app-settings\.json cannot be read/)
+    h.coord.stop()
+  })
+
+  // Sandbox design §6, as the person decided (Task 6): a roll onto a Codex account whose Windows sandbox is not set up
+  // (or has gone stale) is refused before the kill, like any refused respawn, and the person is told why in the tab that
+  // is still running, once: one line of Astera's own, in the language of the app.
+  it('a roll onto an account not set up writes the reason into the live tab and waits', async () => {
+    const told: [string, string][] = []
+    const logs: string[] = []
+    let asked = 0
+    const h = harness({
+      prepareSpawn: async () => {
+        asked++
+        throw new Error('SANDBOX_UNAVAILABLE: windows-setup codex c2')
+      },
+      tell: (id, line) => told.push([id, line]),
+      lang: () => 'en',
+      log: (m) => logs.push(m)
+    })
+    const src = await writeRollout({ accountId: 'c1', uuid: 'cx-ws', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register({ ...h.info1, sandboxed: true })
+    await advance(1_500) // 매핑 폴링
+    await appendLimitError(src)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    // No successor: nothing killed, nothing spawned, and the wait is the one any refused respawn gets
+    expect(h.events).toEqual(['copy'])
+    expect(h.spawned).toEqual([])
+    expect(h.sent.at(-1)?.payload).toMatchObject({ sessionId: 's1', state: 'waiting' })
+    expect(told).toEqual([['s1', `[Astera] ${t('en', 'session.spawn.sandbox.windowsSetup')}`]])
+    expect(logs.join('\n')).toMatch(/spawn refused: SANDBOX_UNAVAILABLE: windows-setup codex c2/)
+    // The wait's next round is refused for the same reason: the tab is not told again
+    await advance(20 * 60_000)
+    expect(asked).toBeGreaterThanOrEqual(2)
+    expect(told).toHaveLength(1)
+    expect(h.spawned).toEqual([])
+    h.coord.stop()
+  })
+
+  it('a refused respawn that is not the sandbox is not written into the tab', async () => {
+    const told: [string, string][] = []
+    const h = harness({
+      prepareSpawn: async () => {
+        throw new Error('CWD_MISSING: /gone')
+      },
+      tell: (id, line) => told.push([id, line])
+    })
+    await rollNow(h)
+    expect(h.spawned).toEqual([])
+    expect(told).toEqual([])
     h.coord.stop()
   })
 

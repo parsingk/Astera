@@ -19,8 +19,13 @@ export const AGENT_PROFILE_COMMANDS: ReadonlySet<string> = new Set([
   'agent-profiles-archive',
   'agent-profiles-restore',
   'agent-profiles-delete',
-  'agent-profiles-touch'
+  'agent-profiles-touch',
+  'agent-profiles-sandbox-setup'
 ])
+
+/** What only the app may send: Codex's Windows sandbox setup brings up the administrator prompt on the person's screen,
+ *  so it follows a press of 설정하기 and nothing else, not the person's CLI and never an agent's shell. */
+const APP_ONLY_AGENT_PROFILE_COMMANDS: ReadonlySet<string> = new Set(['agent-profiles-sandbox-setup'])
 
 /** The ones that change the store: all but the two reads and the use stamp, which is not a person's change. */
 export const AGENT_PROFILE_CHANGES: ReadonlySet<string> = new Set([
@@ -69,6 +74,9 @@ export function createHostAgentProfiles(d: {
   inUse: (id: string) => Promise<boolean>
   now?: () => number
   log: (line: string) => void
+  /** Sets up the Windows sandbox of one Codex account's home (core/sandbox/windowsReadiness.ts codexWindowsSetup) and
+   *  forgets the readiness answers kept. Absent on a Host with no Windows sandbox to set up. Never rejects. */
+  sandboxSetup?: (account: Account) => Promise<{ ok: boolean; out: string }>
 }): HostAgentProfiles {
   const now = d.now ?? Date.now
   // One change at a time: two updates must each read what the other wrote
@@ -76,6 +84,14 @@ export function createHostAgentProfiles(d: {
   const queued = <T>(f: () => Promise<T>): Promise<T> => {
     const run = chain.then(f, f)
     chain = run.catch(() => {})
+    return run
+  }
+  // One setup at a time, apart from the store's changes, which must not wait on a person at the administrator prompt:
+  // two prompts at once would leave the person unsure which account each one is for
+  let setups: Promise<unknown> = Promise.resolve()
+  const oneSetupAtATime = <T>(f: () => Promise<T>): Promise<T> => {
+    const run = setups.then(f, f)
+    setups = run.catch(() => {})
     return run
   }
 
@@ -199,6 +215,27 @@ export function createHostAgentProfiles(d: {
           return { status: 200, body: {} }
         })
       }
+      case 'agent-profiles-sandbox-setup': {
+        // Sandbox design §6, as the person decided (Task 6): the one Codex account being started, not every Codex account
+        // of the profile. Each elevated setup gives the machine's sandbox users new passwords that only the home set up
+        // keeps, so the others would go stale; Codex's own files are never copied between homes either.
+        if (typeof args.id !== 'string' || typeof args.accountId !== 'string') return bad('agent-profiles-sandbox-setup needs id and accountId')
+        const { id, accountId } = args
+        const setUp = d.sandboxSetup
+        if (!setUp) return { status: 501, body: { error: 'this Host has no Windows sandbox to set up' } }
+        const p = findProfile(await readAgentProfiles(d.profileDir), id)
+        if (!p) return { status: 404, body: { error: `no agent profile ${id}` } }
+        const accounts = await d.readAccounts()
+        const account = liveAccounts(p, accounts).includes(accountId) ? accounts.find((a) => a.id === accountId) : undefined
+        if (!account) return bad(`${accountId} is not an account of the profile ${p.name}`)
+        if (account.provider !== 'codex') return bad(`${accountId} is not a Codex account`)
+        return oneSetupAtATime(async () => {
+          d.log(`agent profiles: setting up the Windows sandbox of ${account.id} (profile ${p.id})`)
+          const r = await setUp(account)
+          d.log(`agent profiles: the Windows sandbox setup of ${account.id} ${r.ok ? 'finished' : `failed: ${r.out}`}`)
+          return { status: 200, body: { ok: r.ok, out: r.out } }
+        })
+      }
       default:
         return { status: 501, body: { error: `${cmd} is not answered by this Host` } }
     }
@@ -208,6 +245,7 @@ export function createHostAgentProfiles(d: {
     command: async (a) => {
       const reader = a.role === 'mcp' && MCP_AGENT_PROFILE_COMMANDS.has(a.cmd)
       if (a.role !== 'app' && a.role !== 'cli' && !reader) return { status: 403, body: { error: `${a.cmd} is for this machine's app and CLI only` } }
+      if (APP_ONLY_AGENT_PROFILE_COMMANDS.has(a.cmd) && a.role !== 'app') return { status: 403, body: { error: `${a.cmd} is for this machine's app only` } }
       if (AGENT_PROFILE_CHANGES.has(a.cmd) && a.agentRefusal !== undefined) return { status: 403, body: { error: a.agentRefusal } }
       let r: AgentProfilesAnswer
       try {

@@ -114,7 +114,7 @@ import { toggleSidebarView, type SidebarView } from '../../core/ui/sidebar'
 import { terminalsWithCreated } from './lib/terminalTabs'
 import * as hiddenProjects from './lib/hiddenProjects'
 import { isCancelled as isWorktreeCancelled } from './lib/worktreeErrors'
-import { spawnErrorMessage } from './lib/spawnErrors'
+import { sandboxSetupAccountOf, sandboxSetupOutcome, spawnErrorMessage } from './lib/spawnErrors'
 import { notifyCreated as notifyWorktreeCreated } from './lib/worktreeBus'
 import { useI18n } from './i18n/I18nProvider'
 import {
@@ -1842,6 +1842,27 @@ export default function App(): React.JSX.Element {
             onClick: () => {
               dismiss(id)
               void spawn({ ...opts, takeOverBackground: true })
+            }
+          }
+        })
+        return
+      }
+      // A sandboxed Codex start on an account whose Windows sandbox is not set up: say so, and offer to set up that one
+      // account (Windows' administrator prompt, once). The person starts it again afterwards; the toast after says how
+      // the setup went, or what Codex said.
+      const setupAccount = sandboxSetupAccountOf(raw)
+      if (setupAccount !== null && opts.agentProfileId !== undefined) {
+        const profileId = opts.agentProfileId
+        const id = toast.error(t(msg.key, msg.params), {
+          action: {
+            label: t('session.spawn.sandbox.setUp'),
+            onClick: () => {
+              dismiss(id)
+              void window.api.agentProfiles.sandboxSetup(profileId, setupAccount).then((answer) => {
+                const outcome = sandboxSetupOutcome(answer)
+                if (outcome.ok) toast.success(t('session.spawn.sandbox.setUpDone'))
+                else toast.error(outcome.line)
+              })
             }
           }
         })

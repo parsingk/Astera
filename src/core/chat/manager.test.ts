@@ -1,5 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
+import { gitLayoutOf } from '../sandbox/gitLayout'
+import { credentialStoreDenies, sensitiveLocations } from '../sandbox/locations'
+import { codexSandboxArgs, codexSandboxEnv, npmCacheOf } from '../sandbox/codexProfile'
+import { PreparedLayouts } from '../sandbox/prepared'
+import { chatInfoFromNote } from '../sessions/noteInfo'
+import { SessionManager } from '../sessions/manager'
+import { createGitBashResolver } from '../sessions/gitBash'
 import type { Account, ScheduleConfig, SessionInfo } from '../types'
 import type { Provider } from '../providers/meta'
 import type { ProcFactory, ProcLike, ProcSpawnOptions } from '../sessions/proc'
@@ -44,7 +53,7 @@ class FakeProc implements ProcLike {
 interface FakeAdapterHandle {
   mode: AdapterMode
   provider: Provider
-  startCalls: Array<{ cwd: string; resumeThreadId?: string; bypass: boolean }>
+  startCalls: Array<{ cwd: string; resumeThreadId?: string; bypass: boolean; sandbox?: true }>
   killCalls: number
   sent: string[]
   emit(e: ChatEvent): void
@@ -1513,5 +1522,187 @@ describe('credentials hiding', () => {
     expect(env.GH_CONFIG_DIR).toBe('/empty/gh')
     expect(env.KEEP).toBe('k')
     expect(env.ASTERA_SESSION).toBe(info.id)
+  })
+})
+
+// The sandbox (sandbox design §6): a sandboxed profile's Codex chat runs its app-server with the same permission profile
+// a terminal session gets, minus the TUI's `-a never` (the thread's approvalPolicy carries it), as Task 2 measured
+// (inventory §23). A chat without it starts with exactly today's arguments and parameters.
+describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
+  const dirs: string[] = []
+  beforeEach(() => {
+    vi.stubEnv('PATH', '')
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
+  const repo = (): string => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'astera-chat-sbx-'))
+    dirs.push(root)
+    mkdirSync(path.join(root, '.git'))
+    return root
+  }
+  const HOME = { linux: '/home/t', win32: 'C:\\Users\\t' } as const
+  const BASE = {
+    linux: { PATH: '/usr/bin', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1000/bus' },
+    win32: { Path: 'C:\\Windows', APPDATA: 'C:\\Users\\t\\AppData\\Roaming' }
+  } as const
+  type Ready = NonNullable<ChatManagerDeps['codexWindowsReady']>
+  const rig = (platform: 'linux' | 'win32', o: { ready?: Ready; layouts?: PreparedLayouts } = {}) => {
+    const spawned: Array<{ file: string; args: string[]; opts: ProcSpawnOptions; proc: FakeProc }> = []
+    const { createAdapter, handles } = makeAdapterFactory()
+    const manager = new ChatSessionManager({
+      factory: (file, args, opts) => {
+        const proc = new FakeProc()
+        spawned.push({ file, args, opts, proc })
+        return proc
+      },
+      descriptors: makeDescriptors(platform, HOME[platform]),
+      homeDir: HOME[platform],
+      platform,
+      version: '1.0.0',
+      log: () => {},
+      createAdapter,
+      baseEnv: { ...BASE[platform] },
+      codexWindowsReady: o.ready ?? (async () => 'ready'),
+      ...(o.layouts ? { sandboxLayouts: o.layouts } : {})
+    })
+    return { manager, spawned, handles }
+  }
+  /** What the builders give for this folder, from the chat's own environment and home, without `-a never`. */
+  const expected = async (platform: 'linux' | 'win32', cwd: string) => {
+    const layout = await gitLayoutOf(cwd)
+    const env: Record<string, string> = { ...BASE[platform] }
+    const denied = [...sensitiveLocations(platform, env, HOME[platform]), ...credentialStoreDenies(platform, env, HOME[platform])]
+    const args = codexSandboxArgs({ platform, layout, denied })
+    expect(args.slice(0, 2)).toEqual(['-a', 'never'])
+    return { args: args.slice(2), env: codexSandboxEnv({ platform, layout, tmpDir: os.tmpdir() }) }
+  }
+
+  it("a sandboxed chat's app-server gets the profile's -c and the npm cache", async () => {
+    for (const platform of ['linux', 'win32'] as const) {
+      const cwd = repo()
+      const { manager, spawned, handles } = rig(platform)
+      await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+      const info = manager.spawn({ account: codexAccount, cwd, sandbox: true, bypassPermissions: true })
+      const want = await expected(platform, cwd)
+      expect(spawned[0].args, platform).toEqual(['app-server', ...want.args])
+      expect(spawned[0].args).not.toContain('-a')
+      if (platform === 'win32') expect(spawned[0].args).toContain('windows.sandbox="elevated"')
+      const env = spawned[0].opts.env
+      expect(env.npm_config_cache).toBe(npmCacheOf(os.tmpdir()))
+      expect(env).toMatchObject(want.env)
+      // The thread names the profile and never asks: the sandbox stands where the bypass would
+      expect(handles[0].startCalls).toEqual([{ cwd, resumeThreadId: undefined, bypass: true, sandbox: true }])
+      // Marked in the info and the note, which a Host handing the session back and a roll read
+      expect(info.sandboxed).toBe(true)
+      expect(spawned[0].opts.meta?.restore).toMatchObject({ sandboxed: true })
+      expect(chatInfoFromNote({ kind: 'chat', id: info.id, restore: spawned[0].opts.meta!.restore! })?.sandboxed).toBe(true)
+      // win32: a missing config.worktree is made first, as for a terminal session
+      expect(existsSync(path.join(cwd, '.git', 'config.worktree'))).toBe(platform === 'win32')
+    }
+  })
+
+  it("an unsandboxed chat's arguments and thread parameters are unchanged", async () => {
+    for (const sandbox of [undefined, false]) {
+      const cwd = repo()
+      const { manager, spawned, handles } = rig('win32')
+      await manager.prepare({ account: codexAccount, cwd, ...(sandbox === undefined ? {} : { sandbox }) })
+      const info = manager.spawn({ account: codexAccount, cwd, ...(sandbox === undefined ? {} : { sandbox }) })
+      expect(spawned[0].args).toEqual(['app-server'])
+      expect(spawned[0].opts.env.npm_config_cache).toBeUndefined()
+      expect(spawned[0].opts.env.GIT_CONFIG_COUNT).toBeUndefined()
+      expect(handles[0].startCalls).toEqual([{ cwd, resumeThreadId: undefined, bypass: false }])
+      expect(info).not.toHaveProperty('sandboxed')
+      expect(spawned[0].opts.meta?.restore).not.toHaveProperty('sandboxed')
+      expect(existsSync(path.join(cwd, '.git', 'config.worktree'))).toBe(false)
+    }
+  })
+
+  // The spawn is synchronous and cannot read git safely, so a sandboxed chat whose folder nobody read for it refuses
+  it('a sandboxed chat nobody prepared refuses with not-prepared', async () => {
+    const cwd = repo()
+    const { manager, spawned } = rig('linux')
+    expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
+    await manager.prepare({ account: codexAccount, cwd })
+    expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
+    // Another account's preparation is not this one's
+    await manager.prepare({ account: { ...codexAccount, id: 'acc-cx2' }, cwd, sandbox: true })
+    expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
+    expect(spawned).toHaveLength(0)
+  })
+
+  it('a sandboxed win32 chat on an account not set up refuses with windows-setup, before anything is written', async () => {
+    const cwd = repo()
+    const asked: Array<string | null> = []
+    const { manager, spawned } = rig('win32', { ready: async ({ codexHome }) => (asked.push(codexHome), 'not-set-up') })
+    await expect(manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: windows-setup codex acc-cx$/)
+    expect(asked).toEqual([codexAccount.configDir])
+    expect(existsSync(path.join(cwd, '.git', 'config.worktree'))).toBe(false)
+    expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
+    expect(spawned).toHaveLength(0)
+  })
+
+  it('refuses a sandboxed win32 chat whose folder holds a cmd.exe character', async () => {
+    const root = repo()
+    const cwd = path.join(root, 'a&b')
+    mkdirSync(path.join(cwd, '.git'), { recursive: true })
+    const { manager } = rig('win32')
+    await expect(manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: path-unsafe$/)
+  })
+
+  // A roll's respawn is prepared through the terminal manager's prepare, which the chat respawn's synchronous spawn
+  // then reads: the two managers of a process share what was prepared, as they share the capability cache
+  it("a roll's preparation, read by the terminal manager, is the chat respawn's", async () => {
+    const cwd = repo()
+    const layouts = new PreparedLayouts()
+    const daemon = Object.assign(() => true, { warm: async () => {} })
+    const sessions = new SessionManager(
+      () => {
+        throw new Error('no pty here')
+      },
+      makeDescriptors('linux', HOME.linux, undefined, daemon),
+      100,
+      20,
+      HOME.linux,
+      undefined,
+      [],
+      { ...BASE.linux },
+      { cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform: 'linux', now: Date.now, syncExists: () => true, log: () => {} }
+    )
+    sessions.sandboxLayouts = layouts
+    const { manager, spawned } = rig('linux', { layouts })
+    await sessions.prepare({ account: codexAccount, cwd, sandbox: true })
+    manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    expect(spawned[0].args).toEqual(['app-server', ...(await expected('linux', cwd)).args])
+  })
+
+  // The bypass retry respawns from what the first attempt was spawned with, so a sandboxed chat stays sandboxed: the same
+  // `-c`, the profile on its thread, the sandbox's environment, with the workload token minted again (Task 3)
+  it('a bypass retry of a sandboxed chat stays in the sandbox', async () => {
+    const cwd = repo()
+    const { manager, spawned, handles } = rig('linux')
+    await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    const info = manager.spawn({ account: codexAccount, cwd, sandbox: true, bypassSignal: 'path' })
+    handles[0].emit({ type: 'exit', code: 8, errorDetail: 'error: Could not parse project manifest' })
+    expect(manager.retryWithBypass(info.id)?.sandboxed).toBe(true)
+    expect(spawned).toHaveLength(2)
+    expect(spawned[1].args).toEqual(spawned[0].args)
+    expect(spawned[1].opts.env.npm_config_cache).toBe(spawned[0].opts.env.npm_config_cache)
+    expect(spawned[1].opts.env.VOLTA_BYPASS).toBe('1')
+    expect(spawned[1].opts.env.ASTERA_GATEWAY_TOKEN).not.toBe(spawned[0].opts.env.ASTERA_GATEWAY_TOKEN)
+    expect(spawned[1].opts.meta?.restore).toMatchObject({ sandboxed: true, bypassedToolchain: true })
+    expect(handles[1].startCalls).toEqual([{ cwd, resumeThreadId: undefined, bypass: false, sandbox: true }])
+  })
+
+  it('a Claude chat is not put in the Codex sandbox', async () => {
+    const cwd = repo()
+    const { manager, spawned, handles } = rig('linux')
+    await manager.prepare({ account: claudeAccount, cwd, sandbox: true })
+    const info = manager.spawn({ account: claudeAccount, cwd, sandbox: true })
+    expect(spawned[0].args).toEqual(claudeLaunchArgs({ resumeSessionId: undefined, bypass: false }))
+    expect(handles[0].startCalls[0]).not.toHaveProperty('sandbox')
+    expect(info).not.toHaveProperty('sandboxed')
   })
 })

@@ -34,7 +34,7 @@ export function createHostSessionStarter(d: {
   /** Null for a Host started without the agent CLI paths: it starts no session. */
   spawner: Pick<HostSpawner, 'createSession'> | null
   /** Null when the Host has no chat manager (no spawner, so no rolling wiring). */
-  chats: Pick<HostChats, 'spawn' | 'started' | 'procOf'> | null
+  chats: Pick<HostChats, 'spawn' | 'started' | 'procOf'> & Partial<Pick<HostChats, 'prepare'>> | null
   rolling: Pick<HostRolling, 'adoptSpawned'> | null
   /** The profile's accounts, read now. Rejects on a damaged file (RepairNeeded). */
   readAccounts(): Promise<Account[]>
@@ -125,6 +125,9 @@ export function createHostSessionStarter(d: {
       if (d.profileDir !== undefined)
         profile = await profileSpawn({ profileDir: d.profileDir, agentProfileId: o.agentProfileId, appWideYolo: d.bypass, log: d.log })
       bypass = profile?.bypassPermissions ?? (await d.bypass())
+      // The profile's sandbox (sandbox design §6): the folder's git layout read for the spawn, and on Windows the account's
+      // Codex home asked whether it is set up; a refusal (`SANDBOX_UNAVAILABLE: …`) starts nothing
+      if (profile?.sandbox === true) await chats.prepare?.({ account, cwd: o.cwd, sandbox: true })
     } catch (err) {
       throw err instanceof Error ? refusedBeforeActing(err) : err
     }
@@ -139,7 +142,8 @@ export function createHostSessionStarter(d: {
       unattendedPermission: o.unattended ?? 'hold',
       // Who started it, as the command decided (SessionCreate.startedBy): an agent's tab closes when it ends
       ...(o.startedBy ? { startedBy: o.startedBy } : {}),
-      ...(profile ? { agentProfileId: profile.agentProfileId } : {})
+      ...(profile ? { agentProfileId: profile.agentProfileId } : {}),
+      ...(profile?.sandbox === true ? { sandbox: true } : {})
     })
     // The handshake and the first prompt settle before anyone else may take the session.
     if (!(await chats.started(info.id)))

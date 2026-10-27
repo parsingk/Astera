@@ -2002,6 +2002,10 @@ export interface AgentProfilesApi {
   restore(id: string): Promise<PluginsCallAnswer>
   /** Refused with reason `in-use` while unfinished work or a live session holds the profile. */
   remove(id: string): Promise<PluginsCallAnswer>
+  /** 설정하기 (sandbox design §6): sets up the Windows sandbox of the one Codex account of the profile a sandboxed start
+   *  was refused for (`SANDBOX_UNAVAILABLE: windows-setup codex <accountId>`), bringing up Windows' administrator
+   *  prompt once. The body is `{ ok, out }`: whether Codex's setup succeeded, and what it said. */
+  sandboxSetup(profileId: string, accountId: string): Promise<PluginsCallAnswer>
 }
 
 /** What Audit Logs asks for (observe mode design §8, §11): audit-list's and audit-summary's filters, the period's start,

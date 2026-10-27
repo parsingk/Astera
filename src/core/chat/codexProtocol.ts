@@ -12,6 +12,7 @@ import type { AskForm } from '../prompts/askUserQuestion'
 import { expectedAnswers } from '../prompts/askUserQuestion'
 import type { ModelDescriptor } from '../models/types'
 import { parseCodexModels } from '../models/parse'
+import { CODEX_PROFILE } from '../sandbox/codexProfile'
 
 const str = (v: unknown): string | null => (typeof v === 'string' ? v : null)
 const obj = (v: unknown): Record<string, unknown> | null =>
@@ -73,11 +74,24 @@ export function initializeParams(version: string): { clientInfo: { name: 'astera
   return { clientInfo: { name: 'astera', title: 'Astera', version }, capabilities: { experimentalApi: true, optOutNotificationMethods: [...OPT_OUT_NOTIFICATIONS] } }
 }
 
-export function threadStartParams(a: { cwd: string; bypass: boolean }): { cwd: string; approvalPolicy: 'on-request' | 'never'; sandbox: 'workspace-write' | 'danger-full-access' } {
+export type ThreadStartParams =
+  | { cwd: string; approvalPolicy: 'on-request' | 'never'; sandbox: 'workspace-write' | 'danger-full-access' }
+  | { cwd: string; approvalPolicy: 'never'; permissions: typeof CODEX_PROFILE }
+
+/** `sandbox`: the app-server was started with the Astera permission profile's `-c` arguments (sandbox design §6), so the
+ *  thread names that profile and never asks, as a sandboxed terminal session's `-a never` does: every command still runs
+ *  inside the profile, which the bypass pair would have turned off. The `sandbox` key is left out, since Codex refuses it
+ *  beside `permissions` (they "cannot be combined", thread.rs). Measured in inventory §23: the answer names
+ *  `activePermissionProfile: astera`. Unsandboxed, the parameters are what they always were. */
+export function threadStartParams(a: { cwd: string; bypass: boolean; sandbox?: boolean }): ThreadStartParams {
+  if (a.sandbox === true) return { cwd: a.cwd, approvalPolicy: 'never', permissions: CODEX_PROFILE }
   return { cwd: a.cwd, approvalPolicy: a.bypass ? 'never' : 'on-request', sandbox: a.bypass ? 'danger-full-access' : 'workspace-write' }
 }
 
-export function threadResumeParams(a: { threadId: string; cwd: string; bypass: boolean }): { threadId: string; cwd: string; approvalPolicy: 'on-request' | 'never'; sandbox: 'workspace-write' | 'danger-full-access'; excludeTurns: true } {
+/** thread/resume takes the thread/start overrides (its answer carries `activePermissionProfile` too), so a sandboxed chat
+ *  resumed by a roll or a reopen names the same profile. Not measured on resume itself: the app-server's own
+ *  `default_permissions` names it as well. */
+export function threadResumeParams(a: { threadId: string; cwd: string; bypass: boolean; sandbox?: boolean }): ThreadStartParams & { threadId: string; excludeTurns: true } {
   return { ...threadStartParams(a), threadId: a.threadId, excludeTurns: true }
 }
 

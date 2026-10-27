@@ -2,6 +2,8 @@
 // spawn) and from the Host (host/spawner.ts, host/sessionCreate.ts); everything else a start can fail
 // with is a worktree's, and worktreeErrors.ts already reads those.
 import type { Message } from '../../../core/i18n'
+import type { PluginsCallAnswer } from '../../../core/types'
+import { sandboxRefusalMessage, sandboxSetupAccountOf } from '../../../core/sandbox/unavailable'
 import { worktreeErrorMessage } from './worktreeErrors'
 
 // The app writes `CWD_MISSING: <path>`, the Host `CWD_MISSING: <path> does not exist`. The path runs to
@@ -41,9 +43,27 @@ function enforceMessage(m: RegExpExecArray): Message {
   }
 }
 
+/** The account a sandbox refusal offers to set up (설정하기), or null: only `windows-setup` names one. */
+export { sandboxSetupAccountOf }
+
+/** The longest line a failed setup's toast shows of what Codex said. */
+const SETUP_LINE_MAX = 300
+
+/** What the toast says after 설정하기: set up, or what Codex (or the way to the Host) said, on one line. */
+export function sandboxSetupOutcome(answer: PluginsCallAnswer): { ok: true } | { ok: false; line: string } {
+  const body = answer.ok ? answer.body : null
+  if (body?.ok === true) return { ok: true }
+  const said = body ? (typeof body.out === 'string' ? body.out : '') : answer.ok ? '' : answer.message
+  const line = said.replace(/\s+/g, ' ').trim() || 'codex sandbox setup failed'
+  return { ok: false, line: line.length > SETUP_LINE_MAX ? `${line.slice(0, SETUP_LINE_MAX - 1)}…` : line }
+}
+
 export function spawnErrorMessage(raw: string): Message {
   const enforce = ENFORCE.exec(raw)
   if (enforce) return enforceMessage(enforce)
+  // The sandbox's refusals (sandbox design §6, E5), read where a roll's tab line reads them too
+  const sandbox = sandboxRefusalMessage(raw)
+  if (sandbox) return sandbox
   const background = IN_BACKGROUND.exec(raw)
   if (background)
     return { key: background[1] === 'busy' ? 'session.spawn.inBackgroundBusy' : 'session.spawn.inBackground' }

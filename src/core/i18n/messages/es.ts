@@ -642,6 +642,14 @@ export const es: Catalog = {
   'session.spawn.enforce.hookWriteFailed': 'No se pudieron escribir los archivos del hook de Enforce, así que la sesión no se inició. Compruebe que se puede escribir en la carpeta de ajustes de Astera o cambie Policies a Observe.',
   'session.spawn.enforce.cliMissing': 'No se encontró {cli}, así que la sesión no se inició en Enforce. Instale {cli}.',
   'session.spawn.enforce.codexDaemon': 'Este Codex no acepta --no-daemon, así que la sesión no se inició en Enforce. Actualice Codex o cambie Policies a Observe.',
+  'session.spawn.sandbox.windowsSetup': 'Esta cuenta de Codex aún no tiene el sandbox de Windows configurado. Configurar muestra una vez el aviso de administrador de Windows.',
+  'session.spawn.sandbox.setUp': 'Configurar',
+  'session.spawn.sandbox.setUpDone': 'Configurado. Iníciala de nuevo.',
+  'session.spawn.sandbox.codexDaemon': 'Este Codex no admite --no-daemon, así que no puede iniciarse en el sandbox. Actualiza Codex.',
+  'session.spawn.sandbox.pathUnsafe': 'La ruta de la carpeta tiene un carácter que la línea de comandos de Windows no admite (" & | < > ^ %), así que no puede iniciarse en el sandbox.',
+  'session.spawn.sandbox.gitLayout': 'No se pudo leer la información de git de la carpeta de trabajo, así que no puede iniciarse en el sandbox.',
+  'session.spawn.sandbox.notPrepared': 'La sesión intentó iniciarse antes de preparar su sandbox. Iníciala de nuevo.',
+  'session.spawn.sandbox.cliTooOld': 'El sandbox solo funciona con {cli} {min} o posterior. Ahora es {found}. Actualiza la CLI.',
   'session.spawn.failedWorktreeKept':
     'No se pudo iniciar la sesión: {message} (el worktree "{name}" se conservó; elimínelo desde el panel Worktrees)',
   // Rolling-resume guard hit — tells the user the tab was just focused and their chosen options were dropped

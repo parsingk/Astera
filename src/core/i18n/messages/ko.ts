@@ -830,6 +830,15 @@ export const ko = {
   'session.spawn.enforce.hookWriteFailed': 'Enforce 의 hook 파일을 쓰지 못해 시작하지 않았습니다. Astera 설정 폴더에 쓸 수 있는지 확인하거나 Policies 를 Observe 로 바꾸세요.',
   'session.spawn.enforce.cliMissing': '{cli} 를 찾지 못해 Enforce 로 시작하지 않았습니다. {cli} 를 설치하세요.',
   'session.spawn.enforce.codexDaemon': '이 Codex 는 --no-daemon 을 받지 않아 Enforce 로 시작하지 않았습니다. Codex 를 업데이트하거나 Policies 를 Observe 로 바꾸세요.',
+  // The sandbox's refusals (sandbox design §6, E5): `SANDBOX_UNAVAILABLE: <code>` (core/sandbox/unavailable.ts)
+  'session.spawn.sandbox.windowsSetup': '이 Codex 계정은 Windows sandbox가 설정되지 않았습니다. 설정하기를 누르면 관리자 확인 창이 한 번 뜹니다.',
+  'session.spawn.sandbox.setUp': '설정하기',
+  'session.spawn.sandbox.setUpDone': '설정했습니다. 다시 시작해 주세요.',
+  'session.spawn.sandbox.codexDaemon': '이 Codex는 --no-daemon을 지원하지 않아 sandbox로 시작할 수 없습니다. Codex를 업데이트해 주세요.',
+  'session.spawn.sandbox.pathUnsafe': '폴더 경로에 Windows 명령줄이 다룰 수 없는 문자(" & | < > ^ %)가 있어 sandbox로 시작할 수 없습니다.',
+  'session.spawn.sandbox.gitLayout': '작업 폴더의 git 정보를 읽지 못해 sandbox로 시작할 수 없습니다.',
+  'session.spawn.sandbox.notPrepared': 'sandbox 준비가 끝나기 전에 시작하려 했습니다. 다시 시작해 주세요.',
+  'session.spawn.sandbox.cliTooOld': 'sandbox는 {cli} {min} 이상에서만 쓸 수 있습니다. 지금은 {found} 입니다. CLI를 업데이트해 주세요.',
   'session.spawn.failedWorktreeKept':
     '세션 시작 실패: {message} (worktree "{name}"는 남아 있으니 Worktrees 패널에서 삭제하세요)',
   // Rolling-resume guard hit — tells the user the tab was just focused and their chosen options were dropped

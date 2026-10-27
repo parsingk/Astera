@@ -7,7 +7,7 @@ import { app, net } from 'electron'
 import { AccountRegistry } from '../core/accounts/registry'
 import { PROVIDERS, providerOf } from '../core/providers/meta'
 import { makeDescriptors, descriptorOf, isAmbientDir, type ProviderDescriptor } from '../core/providers/descriptor'
-import { SessionManager, defaultSpawnChecks } from '../core/sessions/manager'
+import { SessionManager, askCodexWindowsReady, defaultSpawnChecks } from '../core/sessions/manager'
 import { setProbeLog } from '../core/sessions/pathProbe'
 import { nodePtyFactory } from '../core/sessions/nodePtyFactory'
 import { createPtyRouter } from './host/ptyRouter'
@@ -348,7 +348,11 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     log: chatLog,
     capabilities,
     hiding,
-    enforce
+    enforce,
+    // The sandbox (sandbox design §6): what the terminal manager's prepares read is the chat respawn's too, since a chat
+    // chain's roll is prepared through `sessions.prepare`; Windows readiness is asked the same way by both
+    sandboxLayouts: sessions.sandboxLayouts,
+    codexWindowsReady: askCodexWindowsReady
   })
   // Lazy history: nothing is scanned at startup. The project list comes from a directory listing; sessions are
   // parsed when expanded. index.ts starts the file watcher with startBackground() after the window is up, so window creation never blocks on a scan.

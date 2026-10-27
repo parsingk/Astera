@@ -23,6 +23,13 @@ describe('chatSpawnOptsOf', () => {
     expect(chatSpawnOptsOf({ account, cwd: 'D:/p', agentProfileId: 'ap_1' }, d).agentProfileId).toBe('ap_1')
     expect(chatSpawnOptsOf({ account, cwd: 'D:/p' }, d)).not.toHaveProperty('agentProfileId')
   })
+  // Sandbox design §6: a chat chain started in the sandbox rolls into one that starts in it too
+  it('carries the sandbox, and nothing for a chain outside it', () => {
+    const d = { unattendedOf: () => 'hold' as const, bypassSignal: null }
+    expect(chatSpawnOptsOf({ account, cwd: 'D:/p', sandbox: true }, d).sandbox).toBe(true)
+    expect(chatSpawnOptsOf({ account, cwd: 'D:/p' }, d)).not.toHaveProperty('sandbox')
+    expect(chatSpawnOptsOf({ account, cwd: 'D:/p', sandbox: false }, d)).not.toHaveProperty('sandbox')
+  })
   it('asks the policy of undefined when the respawn names no old session', () => {
     const seen: Array<string | undefined> = []
     chatSpawnOptsOf({ account, cwd: 'D:/p' }, { unattendedOf: (id) => { seen.push(id); return 'hold' }, bypassSignal: null })

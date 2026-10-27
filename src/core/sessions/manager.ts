@@ -23,11 +23,11 @@ import { applyHiding, type HidingSource } from '../credentials/hiding'
 import { isObserving } from '../audit/policy'
 import { enforceUnavailable, type EnforceStart } from '../audit/enforce'
 import type { EnforceFilesResult } from './statusline'
-import { ensureWorktreeConfigFiles, gitLayoutOf, type GitLayout } from '../sandbox/gitLayout'
-import { credentialStoreDenies, sensitiveLocations } from '../sandbox/locations'
-import { codexSandboxArgs, codexSandboxEnv } from '../sandbox/codexProfile'
+import type { GitLayout } from '../sandbox/gitLayout'
+import { codexSandboxEnv } from '../sandbox/codexProfile'
 import { sandboxUnavailable } from '../sandbox/unavailable'
-import { LAUNCH_FORBIDDEN } from './commands'
+import { PreparedLayouts, prepareCodexSandbox, sessionSandboxArgs, type CodexWindowsReady } from '../sandbox/prepared'
+import { codexWindowsReadiness, runCodex } from '../sandbox/windowsReadiness'
 
 /** statusLine info injected when a session spawns (provided by main's StatusLineManager,
  *  structurally compatible). */
@@ -95,7 +95,15 @@ export interface SpawnChecks {
   syncExists: (p: string) => boolean
   /** Where a spawn that had to fall back to the sync checks says so. */
   log: (m: string) => void
+  /** Whether an account's Codex home has its Windows sandbox set up, asked by a sandboxed win32 Codex prepare. Absent,
+   *  such a start is refused: the real question runs codex, and a home nobody asked about would bring up Windows'
+   *  administrator prompt at the session's first command. */
+  codexWindowsReady?: CodexWindowsReady
 }
+
+/** The real readiness question (windowsReadiness.ts), asked with the session's own environment: its PATH finds the codex
+ *  it would start, and its CODEX_HOME (none for the ambient account) is the home asked about. Answers kept per process. */
+export const askCodexWindowsReady: CodexWindowsReady = ({ codexHome, env }) => codexWindowsReadiness({ codexHome, run: runCodex(env) })
 
 /** One resolver per process, so its cache is shared by every SessionManager in it. */
 let processGitBash: GitBashResolver | null = null
@@ -109,7 +117,8 @@ export function defaultSpawnChecks(log: (m: string) => void = probeLog): SpawnCh
     platform: process.platform,
     now: Date.now,
     syncExists: existsSync,
-    log
+    log,
+    codexWindowsReady: askCodexWindowsReady
   }
 }
 
@@ -190,16 +199,18 @@ export class SessionManager {
    *  resolver's cache, so an entry that expires between a prepare and its spawn cannot send the spawn
    *  to the sync search. Trusted as long as a confirmed folder is. */
   private preparedGitBash = new Map<string, { bash: string | null; timedOut: boolean; at: number }>()
-  /** The sandbox (sandbox design §6): the git layout a sandboxed `prepare` read for a folder (null outside a repository),
-   *  and when, kept for the spawn the way a confirmed folder is and trusted as long. */
-  private preparedLayouts = new Map<string, { layout: GitLayout | null; at: number }>()
+  /** The sandbox (sandbox design §6): the git layout a sandboxed `prepare` read for an account's folder (null outside a
+   *  repository), kept for the spawn the way a confirmed folder is and trusted as long. The wiring gives this manager and
+   *  the chat one the same store, since a roll prepares a chat chain's respawn here (core/sandbox/prepared.ts). */
+  sandboxLayouts = new PreparedLayouts()
 
   /**
    * Everything `spawn` would look for on disk, looked for without blocking: the folder, and on win32
    * the Git Bash for this account's env (probed once per PATH string, see gitBash.ts). **Every caller
    * awaits this before `spawn`** — a roll does it before its kill, since the spawn after it has no
    * await. Rejects with CWD_MISSING, or CWD_UNREACHABLE when the folder did not answer in time.
-   * `sandbox`: the session will start in its CLI's sandbox, so the folder's git layout is read here for the spawn.
+   * `sandbox`: the session will start in its CLI's sandbox, so the folder's git layout is read here for the spawn, and on
+   * Windows a Codex home that is not set up refuses (`SANDBOX_UNAVAILABLE: windows-setup codex <account>`).
    */
   async prepare(opts: { account: Account; cwd: string; missing?: string; agentProfileId?: string; sandbox?: boolean }): Promise<void> {
     // A folder confirmed a moment ago (a Host session create checks it, then spawns) is not probed again.
@@ -240,42 +251,28 @@ export class SessionManager {
     } else if (this.observeHooks && isObserving(mode) && descriptorOf(this.descriptors, opts.account).usesStatusLine)
       await this.observeHooks().catch((err) => this.checks.log(`observe hook settings could not be written: ${String(err)}`))
     // The sandbox (sandbox design §6): a Codex session's profile names its repository's git directories, so they are read
-    // now, off the thread, for the spawn to use
+    // now, off the thread, for the spawn to use; on Windows the account's Codex home must be set up for it too
     if (opts.sandbox === true && providerOf(opts.account) === 'codex') await this.prepareSandbox(opts.account, opts.cwd)
   }
 
-  /** Reads the folder's git layout for a sandboxed spawn and keeps it beside the confirmed folders. On Windows every
-   *  `config.worktree` git may read is made first: the profile keeps them read-only, but Codex's Windows sandbox creates
-   *  one that is missing, and git would read a `core.hooksPath` from it (gitLayout.ts). On macOS and Linux a read entry
-   *  already keeps a missing one from being created, so nothing is written there. Either failing refuses the start, since
-   *  the profile could not name what it must (E5). */
+  /** Reads the folder's git layout for a sandboxed spawn, asks on Windows whether the account's Codex home is set up, and
+   *  keeps the layout beside the confirmed folders (prepareCodexSandbox, core/sandbox/prepared.ts, says what is checked
+   *  and written, and in which order). */
   private async prepareSandbox(account: Account, cwd: string): Promise<void> {
-    const fail = (err: unknown): Error => {
-      this.checks.log(`sandbox: the git layout of ${cwd} could not be read or prepared: ${String(err)}`)
-      return sandboxUnavailable('git-layout')
-    }
-    let layout: GitLayout | null
-    try {
-      layout = await gitLayoutOf(cwd)
-    } catch (err) {
-      throw fail(err)
-    }
-    // What the spawn would refuse (a path cmd.exe cannot carry, a codex without --no-daemon, warmed above) is asked now
-    // too, before anything is written: a roll awaits this before it kills the session it replaces, and the spawn after
-    // the kill can only throw. The spawn still asks for itself, since its environment is built after the hiding and the
-    // codex may change meanwhile. The command is built and dropped: the builder is the one place that knows whether this
-    // codex takes the flag.
-    descriptorOf(this.descriptors, account).buildCommand({ sandboxArgs: this.codexSandboxArgsFor(layout, this.envFor(account)) })
-    if (layout && this.checks.platform === 'win32') {
-      try {
-        await ensureWorktreeConfigFiles(layout)
-      } catch (err) {
-        throw fail(err)
-      }
-    }
-    const now = this.checks.now()
-    for (const [k, v] of this.preparedLayouts) if (now - v.at >= CWD_CONFIRMED_MS) this.preparedLayouts.delete(k)
-    this.preparedLayouts.set(cwd, { layout, at: now })
+    const layout = await prepareCodexSandbox({
+      accountId: account.id,
+      cwd,
+      platform: this.checks.platform,
+      homeDir: this.homeDir,
+      env: this.envFor(account),
+      ready: this.checks.codexWindowsReady,
+      // A codex without --no-daemon (warmed above) is refused now too. The spawn still asks for itself, since its
+      // environment is built after the hiding and the codex may change meanwhile. The command is built and dropped: the
+      // builder is the one place that knows whether this codex takes the flag.
+      check: (sandboxArgs) => descriptorOf(this.descriptors, account).buildCommand({ sandboxArgs }),
+      log: this.checks.log
+    })
+    this.sandboxLayouts.keep(account.id, cwd, layout, this.checks.now())
   }
 
   private cwdConfirmed(cwd: string): boolean {
@@ -389,9 +386,9 @@ export class SessionManager {
     const sandboxed = opts.sandbox === true && providerOf(opts.account) === 'codex'
     let layout: GitLayout | null = null
     if (sandboxed) {
-      const prepared = this.preparedLayouts.get(opts.cwd)
-      if (!prepared || this.checks.now() - prepared.at >= CWD_CONFIRMED_MS) throw sandboxUnavailable('not-prepared')
-      layout = prepared.layout
+      const prepared = this.sandboxLayouts.layoutOf(opts.account.id, opts.cwd, this.checks.now())
+      if (prepared === undefined) throw sandboxUnavailable('not-prepared')
+      layout = prepared
     }
     const sl = d.usesStatusLine
       ? (this.statusLineProvider?.(
@@ -554,18 +551,10 @@ export class SessionManager {
     return this.track(info, pty)
   }
 
-  /** A sandboxed Codex session's `-a never` and permission profile: its repository's git directories writable, the E6
-   *  list and the OS credential store denied, read from the session's own environment and home. On Windows the launch
-   *  goes through cmd.exe, which would break on a path holding one of its characters, so such a start is refused
-   *  instead of launched broken (Review Focus 2). */
+  /** A sandboxed Codex session's `-a never` and permission profile (sessionSandboxArgs, core/sandbox/prepared.ts), with a
+   *  win32 path cmd.exe cannot carry refused. */
   private codexSandboxArgsFor(layout: GitLayout | null, env: Record<string, string | undefined>): string[] {
-    const platform = this.checks.platform
-    const denied = [...sensitiveLocations(platform, env, this.homeDir), ...credentialStoreDenies(platform, env, this.homeDir)]
-    if (platform === 'win32') {
-      const named = [...(layout ? [layout.top, layout.gitDir, layout.commonDir, ...layout.worktreeConfigs] : []), ...denied]
-      if (named.some((p) => LAUNCH_FORBIDDEN.test(p))) throw sandboxUnavailable('path-unsafe')
-    }
-    return codexSandboxArgs({ platform, layout, denied })
+    return sessionSandboxArgs({ platform: this.checks.platform, homeDir: this.homeDir, layout, env })
   }
 
   /** The bookkeeping half of a spawn: the live record, the two callbacks and the backpressure
@@ -723,6 +712,15 @@ export class SessionManager {
     const live = this.sessions.get(id)
     if (!live || live.info.status === 'exited') return
     live.pty.write(data, by)
+  }
+
+  /** Puts Astera's own `text` in a live session's tab as output, not as the person's input: for the line a person must
+   *  find there, such as why a roll is waiting (core/rolling/codexCoordinator.ts). It reaches this app's tab only; a
+   *  Host-run pty's own ring is the Host's to write (PtyRegistry.say). An exited or unknown session is left alone. */
+  say(id: string, text: string): void {
+    const live = this.sessions.get(id)
+    if (!live || live.info.status === 'exited') return
+    this.onData?.({ sessionId: id, data: text })
   }
 
   /** When the session's pty last printed anything, or null for one that never has or is not here. */

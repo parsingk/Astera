@@ -156,9 +156,13 @@ export function buildCodexAppServerCommand(
   platform: NodeJS.Platform,
   resolve: ResolveExecutable = resolveWindowsExecutable,
   /** Shared extensions' `-c` overrides; app-server takes `-c` as its own option (measured, codex 0.160). */
-  extraArgs: string[] = []
+  extraArgs: string[] = [],
+  /** The sandbox (sandbox design §6): the permission profile's `-c` values without `-a never` (appServerSandboxArgs,
+   *  core/sandbox/codexProfile.ts), after the extensions' as a terminal session has them. The app-server takes no
+   *  `--no-daemon`: it is the server its own commands run in (inventory §23.2). */
+  sandboxArgs: string[] = []
 ): { file: string; args: string[] } {
-  const args = ['app-server', ...extraArgs]
+  const args = ['app-server', ...extraArgs, ...sandboxArgs]
   return platform === 'win32' ? windowsSpawn('codex', args, resolve) : { file: 'codex', args }
 }
 

@@ -805,6 +805,14 @@ export const en: Record<keyof typeof ko, string> = {
   'session.spawn.enforce.hookWriteFailed': "The Enforce hook's files could not be written, so the session did not start. Check that Astera's settings folder can be written, or switch Policies to Observe.",
   'session.spawn.enforce.cliMissing': '{cli} was not found, so the session did not start in Enforce. Install {cli}.',
   'session.spawn.enforce.codexDaemon': 'This Codex does not take --no-daemon, so the session did not start in Enforce. Update Codex, or switch Policies to Observe.',
+  'session.spawn.sandbox.windowsSetup': "This Codex account has no Windows sandbox set up yet. Set up shows Windows' administrator prompt once.",
+  'session.spawn.sandbox.setUp': 'Set up',
+  'session.spawn.sandbox.setUpDone': 'Set up. Start it again.',
+  'session.spawn.sandbox.codexDaemon': 'This Codex does not take --no-daemon, so it cannot start in the sandbox. Update Codex.',
+  'session.spawn.sandbox.pathUnsafe': 'The folder\'s path holds a character the Windows command line cannot carry (" & | < > ^ %), so it cannot start in the sandbox.',
+  'session.spawn.sandbox.gitLayout': "The work folder's git details could not be read, so it cannot start in the sandbox.",
+  'session.spawn.sandbox.notPrepared': 'The session tried to start before its sandbox was prepared. Start it again.',
+  'session.spawn.sandbox.cliTooOld': 'The sandbox works only on {cli} {min} or later. This one is {found}. Update the CLI.',
   'session.spawn.failedWorktreeKept':
     'Failed to start session: {message} (the worktree “{name}” was kept — delete it from the Worktrees panel)',
   // Rolling-resume guard hit — tells the user the tab was just focused and their chosen options were dropped

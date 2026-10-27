@@ -40,6 +40,7 @@ import {
   type CodexLimitState
 } from './codexSignal'
 import { t, type Lang } from '../i18n'
+import { sandboxRefusalMessage } from '../sandbox/unavailable'
 import { ROLL_SNAPSHOT_VERSION, snapshotKey, type RollSnapshot, type RollRespawnExtra } from './snapshot'
 import { untilEnter } from '../sessions/sessionDriver'
 
@@ -120,6 +121,10 @@ export interface CodexRollingDeps {
   kill(sessionId: string): void
   /** Writes into a live session's PTY. Used only to dismiss the model-switch prompt (answerModelChoice). */
   write(sessionId: string, data: string): void
+  /** Puts one line of Astera's own in a live session's tab, as its output and not the person's input: why a roll is
+   *  waiting when its respawn would start without the sandbox the chain runs in (sandbox design §6, E5), such as an
+   *  account whose Windows sandbox is not set up. Absent: the reason is only logged. */
+  tell?(sessionId: string, line: string): void
   getAccount(id: string): Account | null
   send(channel: 'session:rolled' | 'session:rollState', payload: unknown): void
   log(message: string): void
@@ -239,6 +244,8 @@ interface Chain {
   textHit: boolean // whether the limit phrase was seen in this window — read only by judgedByPriorBlock and the ignored-phrase log now that the phrase-only verdict is retired
   unmappedWarned: boolean // whether the rollout-unmapped skip has already been logged (suppresses repeats of the same line)
   preemptWarned: boolean // whether the preemption has already been logged — keeps it from piling up on every 1-second poll
+  /** The sandbox refusal last written into the tab (tellSandboxRefusal), cleared once a roll gets through. */
+  sandboxRefusalTold?: string
   lastOutputAt: number
   rolling: boolean
   /** Between the roll's own kill and the re-key: an exit then is the roll's (audit RL-1). */
@@ -1587,6 +1594,22 @@ export class CodexRollingCoordinator {
     this.armWait(chain, plan)
   }
 
+  /** A respawn the sandbox refused (sandbox design §6, the person's decision in Task 6): the session it would replace is
+   *  still running, so the reason goes into its tab, in the app's language, where the person will look; the roll waits as
+   *  any refused one does. Said once per reason for as long as the chain keeps being refused for it: the wait retries
+   *  every round, and a night of rounds would otherwise fill the tab with the same line. Any other refusal is only
+   *  logged, as before. */
+  private tellSandboxRefusal(chain: Chain, why: string): void {
+    const message = sandboxRefusalMessage(why)
+    if (!message || !this.deps.tell || chain.sandboxRefusalTold === why) return
+    chain.sandboxRefusalTold = why
+    try {
+      this.deps.tell(chain.liveId, `[Astera] ${t(this.deps.lang(), message.key, message.params)}`)
+    } catch (err) {
+      this.deps.log(`codex roll: the refusal could not be written into the tab: ${String(err)} session=${chain.liveId}`)
+    }
+  }
+
   /** Runs the roll: copy the rollout → kill → respawn in the same slot with codex resume. When Smart
    *  Resume is on and a briefing was built, the copy and the `--resume` are skipped instead — the new
    *  session starts blank, carrying only the briefing (see the `smart` branch below). */
@@ -1706,6 +1729,7 @@ export class CodexRollingCoordinator {
         } catch (err) {
           const why = err instanceof Error ? err.message : String(err)
           this.deps.log(`codex roll aborted — the respawn would be refused: ${why} session=${chain.liveId}`)
+          this.tellSandboxRefusal(chain, why)
           this.rescheduleAbortedRoll(chain, `spawn refused: ${why}`)
           return
         }
@@ -1818,6 +1842,7 @@ export class CodexRollingCoordinator {
       chain.killing = false
       chain.liveId = info.id
       chain.liveInfo = info
+      chain.sandboxRefusalTold = undefined
       chain.lastOutputAt = this.now()
       chain.state = null
       chain.textHit = false

@@ -172,7 +172,7 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
 
   // ---- the public surface ----
 
-  async function doStart(a: { cwd: string; resumeThreadId?: string; bypass: boolean }): Promise<void> {
+  async function doStart(a: { cwd: string; resumeThreadId?: string; bypass: boolean; sandbox?: true }): Promise<void> {
     if (mode.mode === 'adopt') {
       if (threadId !== null) core.emitReady(threadId, rolloutPath)
       return
@@ -197,8 +197,8 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
       permissionModesAsked = true
       models = modelResult === null ? [] : modelsOf(modelResult)
       const threadResult = a.resumeThreadId
-        ? await request('thread/resume', threadResumeParams({ threadId: a.resumeThreadId, cwd: a.cwd, bypass: a.bypass }))
-        : await request('thread/start', threadStartParams({ cwd: a.cwd, bypass: a.bypass }))
+        ? await request('thread/resume', threadResumeParams({ threadId: a.resumeThreadId, cwd: a.cwd, bypass: a.bypass, sandbox: a.sandbox === true }))
+        : await request('thread/start', threadStartParams({ cwd: a.cwd, bypass: a.bypass, sandbox: a.sandbox === true }))
       const info = threadOf(threadResult)
       if (!info) throw new Error('thread/start: malformed result')
       threadId = info.threadId
