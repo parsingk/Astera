@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { codexSandboxArgs, codexSandboxEnv, npmCacheOf } from './codexProfile'
 import { sandboxUnavailable } from './unavailable'
 
-const wt = { cwd: '/w/wt', top: '/w/wt', gitDir: '/m/.git/worktrees/wt', commonDir: '/m/.git', worktree: true }
-const repo = { cwd: '/r', top: '/r', gitDir: '/r/.git', commonDir: '/r/.git', worktree: false }
+// worktreeConfigs as gitLayoutOf lists them: the checkout's own config.worktree, the main checkout's, the other worktrees'
+const wt = { cwd: '/w/wt', top: '/w/wt', gitDir: '/m/.git/worktrees/wt', commonDir: '/m/.git', worktree: true, worktreeConfigs: ['/m/.git/worktrees/wt/config.worktree', '/m/.git/config.worktree', '/m/.git/worktrees/other/config.worktree'] }
+const repo = { cwd: '/r', top: '/r', gitDir: '/r/.git', commonDir: '/r/.git', worktree: false, worktreeConfigs: ['/r/.git/config.worktree', '/r/.git/worktrees/x/config.worktree'] }
 
 describe('codexSandboxArgs', () => {
   it('names the worktree git directory, keeps the common directory writable and its hooks and config read', () => {
@@ -13,15 +14,21 @@ describe('codexSandboxArgs', () => {
     expect(a).not.toContain('windows.sandbox')
   })
 
-  // git reads config.worktree in the git directory of the checkout it runs in, a repository's main one included, under
-  // extensions.worktreeConfig, and it can set core.hooksPath
-  it('keeps config.worktree read in the git directory git reads it from, in every layout', () => {
+  // git reads config.worktree under extensions.worktreeConfig (which `git sparse-checkout` turns on later), and it can
+  // set core.hooksPath: the checkout's own, the main checkout's and every other worktree's, since a session's git may
+  // run in any of them and the person's git runs in all
+  it('keeps every config.worktree git may read for the repository read, in every layout', () => {
     for (const cwd of ['/w/wt', '/w/wt/sub']) {
       const a = codexSandboxArgs({ platform: 'linux', layout: { ...wt, cwd }, denied: [] }).join(' ')
-      expect(a, cwd).toContain('"/m/.git/worktrees/wt/config.worktree"="read"')
+      for (const p of wt.worktreeConfigs) expect(a, `${cwd} ${p}`).toContain(`"${p}"="read"`)
     }
-    expect(codexSandboxArgs({ platform: 'linux', layout: { ...repo, cwd: '/r/sub' }, denied: [] }).join(' ')).toContain('"/r/.git/config.worktree"="read"')
-    expect(codexSandboxArgs({ platform: 'linux', layout: repo, denied: [] }).join(' ')).not.toContain('"/r/.git/config.worktree"')
+    const sub = codexSandboxArgs({ platform: 'linux', layout: { ...repo, cwd: '/r/sub' }, denied: [] }).join(' ')
+    for (const p of repo.worktreeConfigs) expect(sub, p).toContain(`"${p}"="read"`)
+    // At a repository's top its own is the relative entry in :workspace_roots, the other worktrees' are named
+    const top = codexSandboxArgs({ platform: 'linux', layout: repo, denied: [] }).join(' ')
+    expect(top).toContain('".git/config.worktree"="read"')
+    expect(top).not.toContain('"/r/.git/config.worktree"')
+    expect(top).toContain('"/r/.git/worktrees/x/config.worktree"="read"')
   })
 
   it('in a repository, grants its .git and keeps its hooks, config and config.worktree read', () => {
@@ -40,7 +47,7 @@ describe('codexSandboxArgs', () => {
   })
 
   it('writes git paths with spaces, Korean letters and quotes as TOML basic strings', () => {
-    const l = { cwd: '/w/내 폴더 x', top: '/w/내 폴더 x', gitDir: '/m/내 폴더 x/.git/worktrees/a"b', commonDir: '/m/내 폴더 x/.git', worktree: true }
+    const l = { cwd: '/w/내 폴더 x', top: '/w/내 폴더 x', gitDir: '/m/내 폴더 x/.git/worktrees/a"b', commonDir: '/m/내 폴더 x/.git', worktree: true, worktreeConfigs: [] }
     const a = codexSandboxArgs({ platform: 'linux', layout: l, denied: [] }).join(' ')
     for (const p of [l.gitDir, l.commonDir, l.commonDir + '/hooks', l.commonDir + '/config']) expect(a, p).toContain(JSON.stringify(p) + '=')
   })
@@ -69,7 +76,7 @@ describe('codexSandboxEnv', () => {
   })
 
   it('trusts the checkout and the main checkout on Windows, with forward slashes', () => {
-    const env = codexSandboxEnv({ platform: 'win32', layout: { cwd: 'C:/w/wt', top: 'C:/w/wt', gitDir: 'C:/m/.git/worktrees/wt', commonDir: 'C:/m/.git', worktree: true }, tmpDir: 'C:\\t' })
+    const env = codexSandboxEnv({ platform: 'win32', layout: { cwd: 'C:/w/wt', top: 'C:/w/wt', gitDir: 'C:/m/.git/worktrees/wt', commonDir: 'C:/m/.git', worktree: true, worktreeConfigs: [] }, tmpDir: 'C:\\t' })
     expect(env).toEqual({
       npm_config_cache: 'C:/t/astera-npm-cache',
       GIT_CONFIG_COUNT: '2',
@@ -81,7 +88,7 @@ describe('codexSandboxEnv', () => {
   })
 
   it('trusts only the top when it is the main checkout, and only npm without a layout', () => {
-    const env = codexSandboxEnv({ platform: 'win32', layout: { cwd: 'C:/r', top: 'C:/r', gitDir: 'C:/r/.git', commonDir: 'C:/r/.git', worktree: false }, tmpDir: 'C:/t' })
+    const env = codexSandboxEnv({ platform: 'win32', layout: { cwd: 'C:/r', top: 'C:/r', gitDir: 'C:/r/.git', commonDir: 'C:/r/.git', worktree: false, worktreeConfigs: [] }, tmpDir: 'C:/t' })
     expect(env.GIT_CONFIG_COUNT).toBe('1')
     expect(codexSandboxEnv({ platform: 'win32', layout: null, tmpDir: 'C:/t' })).toEqual({ npm_config_cache: 'C:/t/astera-npm-cache' })
   })

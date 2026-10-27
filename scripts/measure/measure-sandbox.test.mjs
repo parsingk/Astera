@@ -6,7 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { busSocket, codexS2Args, main, probeEnv, s2Denied, sh, srtArgv, srtS2Settings, workspaceFor } from './measure-sandbox.mjs'
-import { PROBES } from './probes.mjs'
+import { PROBES, verdict } from './probes.mjs'
 import {
   GLOBAL_EXCLUDE_PROBE,
   READY_MARKER,
@@ -15,8 +15,11 @@ import {
   SRT_DANGEROUS_DIRECTORIES,
   SRT_DANGEROUS_FILES,
   WIN32_PROBES,
-  WIN32_WORKTREE_CONFIG_PROBE,
-  WORKTREE_CONFIG_PROBE,
+  COMMON_CASE_PROBES,
+  CONFIG_WORKTREE_PROBES,
+  WIN32_CONFIG_WORKTREE_PROBES,
+  execResult,
+  threadStartRecord,
   claudeDenied,
   codexDenied,
   codexSandboxCommandArgs,
@@ -172,7 +175,7 @@ describe('the S2 measurement', () => {
   })
 
   it('skips every case unless its variable is set on a GitHub-hosted runner, or the local one on win32', () => {
-    const hosted = { RUNNER_ENVIRONMENT: 'github-hosted' }
+    const hosted = { GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted' }
     expect(s2Enabled({ ASTERA_MEASURE_S2: '1', ...hosted }, 'linux')).toBe(true)
     expect(s2Enabled({ ASTERA_MEASURE_S2: '1', ...hosted }, 'darwin')).toBe(true)
     expect(s2Enabled({ ASTERA_MEASURE_S2_LOCAL: '1' }, 'win32')).toBe(true)
@@ -181,7 +184,10 @@ describe('the S2 measurement', () => {
       [{}, 'win32'],
       [hosted, 'linux'],
       [{ ASTERA_MEASURE_S2: '1' }, 'linux'],
-      [{ ASTERA_MEASURE_S2: '1', RUNNER_ENVIRONMENT: 'self-hosted' }, 'linux'],
+      [{ ASTERA_MEASURE_S2: '1', GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'self-hosted' }, 'linux'],
+      // The runner variable without GITHUB_ACTIONS, as measure-sandbox.mjs requires both (review)
+      [{ ASTERA_MEASURE_S2: '1', RUNNER_ENVIRONMENT: 'github-hosted' }, 'linux'],
+      [{ ASTERA_MEASURE_S2: '1', GITHUB_ACTIONS: 'false', RUNNER_ENVIRONMENT: 'github-hosted' }, 'linux'],
       [{ ASTERA_MEASURE_S2: '1' }, 'win32'],
       [{ ASTERA_MEASURE_S2_LOCAL: '1' }, 'linux'],
       [{ ASTERA_MEASURE_S2_LOCAL: '1' }, 'darwin'],
@@ -200,7 +206,7 @@ describe('the S2 measurement', () => {
   })
 
   it('names the sets each platform runs', () => {
-    const codex = ['codex-repo', 'codex-subfolder', 'codex-worktree', 'codex-worktree-alt', 'app-server', 'app-server-profile']
+    const codex = ['codex-repo', 'codex-subfolder', 'codex-worktree', 'codex-worktree-alt', 'codex-worktree-common', 'app-server', 'app-server-profile']
     expect(s2SetNames('linux')).toEqual([...codex, 'srt-linux-exclude', 'srt-linux-exclude-dirs'])
     expect(s2SetNames('darwin')).toEqual([...codex, 'srt-mac-socket'])
     expect(s2SetNames('win32')).toEqual(codex)
@@ -216,9 +222,16 @@ describe('the S2 measurement', () => {
 
 describe('the S2 sets’ arguments come from the builders', () => {
   const env = { DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1001/bus' }
-  const repo = { cwd: '/w', top: '/w', gitDir: '/w/.git', commonDir: '/w/.git', worktree: false }
+  const repo = { cwd: '/w', top: '/w', gitDir: '/w/.git', commonDir: '/w/.git', worktree: false, worktreeConfigs: ['/w/.git/config.worktree', '/w/.git/worktrees/s/config.worktree'] }
   const sub = { ...repo, cwd: '/w/sub' }
-  const wt = { cwd: '/w/wt', top: '/w/wt', gitDir: '/m/.git/worktrees/wt', commonDir: '/m/.git', worktree: true }
+  const wt = {
+    cwd: '/w/wt',
+    top: '/w/wt',
+    gitDir: '/m/.git/worktrees/wt',
+    commonDir: '/m/.git',
+    worktree: true,
+    worktreeConfigs: ['/m/.git/worktrees/wt/config.worktree', '/m/.git/config.worktree', '/m/.git/worktrees/wt2/config.worktree']
+  }
 
   it('denies Codex E6 and the credential stores, and Claude E6 with the macOS keychains only', () => {
     for (const platform of ['darwin', 'linux', 'win32']) {
@@ -293,14 +306,24 @@ describe('the Linux exclude file', () => {
 
 describe('the S2 probes', () => {
   it('runs the S4 probes, without the ones that `cd wt` where the session is not the repository, then config.worktree', () => {
-    expect(probesFor('linux', 'repo')).toEqual([...PROBES, WORKTREE_CONFIG_PROBE])
-    const others = [...PROBES.filter((p) => !p.line.startsWith('cd wt ')).map((p) => p.id), 'git-worktree-config-write']
+    expect(probesFor('linux', 'repo')).toEqual([...PROBES, ...CONFIG_WORKTREE_PROBES])
+    const others = [
+      ...PROBES.filter((p) => !p.line.startsWith('cd wt ')).map((p) => p.id),
+      'git-worktree-config-write',
+      'git-common-config-worktree-write',
+      'git-sibling-config-worktree-write'
+    ]
     expect(probesFor('darwin', 'worktree').map((p) => p.id)).toEqual(others)
     expect(probesFor('linux', 'subfolder').map((p) => p.id)).toEqual(others)
     expect(others).toContain('git-commit-named')
     // The git directory git names for the session: a worktree's own, not the common directory
-    expect(WORKTREE_CONFIG_PROBE.line).toContain('git rev-parse --path-format=absolute --git-dir)/config.worktree')
-    expect(WIN32_WORKTREE_CONFIG_PROBE.line).toContain('%ASTERA_PROBE_GITDIR%\\config.worktree')
+    const line = (list, id) => list.find((p) => p.id === id).line
+    expect(line(CONFIG_WORKTREE_PROBES, 'git-worktree-config-write')).toContain('git rev-parse --path-format=absolute --git-dir)/config.worktree')
+    expect(line(CONFIG_WORKTREE_PROBES, 'git-common-config-worktree-write')).toContain('git rev-parse --path-format=absolute --git-common-dir)/config.worktree')
+    expect(line(CONFIG_WORKTREE_PROBES, 'git-sibling-config-worktree-write')).toContain('"$ASTERA_PROBE_SIBLING"')
+    expect(line(WIN32_CONFIG_WORKTREE_PROBES, 'git-worktree-config-write')).toContain('%ASTERA_PROBE_GITDIR%\\config.worktree')
+    expect(line(WIN32_CONFIG_WORKTREE_PROBES, 'git-common-config-worktree-write')).toContain('%ASTERA_PROBE_COMMON%\\config.worktree')
+    expect(line(WIN32_CONFIG_WORKTREE_PROBES, 'git-sibling-config-worktree-write')).toContain('%ASTERA_PROBE_SIBLING%')
     expect(GLOBAL_EXCLUDE_PROBE.line).toContain('git check-ignore')
     expect(SOCKET_PROBE.line).toContain('ASTERA_PROBE_SOCKET')
   })
@@ -319,7 +342,7 @@ describe('the S2 probes', () => {
       'git-config-write',
       'npm-install'
     ])
-    for (const layout of ['repo', 'subfolder', 'worktree']) expect(probesFor('win32', layout)).toEqual([...WIN32_PROBES, WIN32_WORKTREE_CONFIG_PROBE])
+    for (const layout of ['repo', 'subfolder', 'worktree']) expect(probesFor('win32', layout)).toEqual([...WIN32_PROBES, ...WIN32_CONFIG_WORKTREE_PROBES])
     for (const p of probesFor('win32', 'worktree')) expect(p.line, p.id).not.toContain('"')
     expect(shellArgv('win32', 'echo x')).toEqual(['cmd.exe', '/d', '/c', 'echo x'])
     expect(shellArgv('linux', 'echo x')).toEqual(['sh', '-c', 'echo x'])
@@ -333,10 +356,11 @@ describe('the S2 probes', () => {
   })
 
   // codex looks for its sandbox setup in CODEX_HOME, or in the home folder without it: the fake home has none, and a
-  // home without the setup brings up Windows' administrator prompt
-  it('keeps the person’s CODEX_HOME in the local Windows run, whose home is fake', () => {
+  // home without the setup brings up Windows' administrator prompt. Git's global and system config can be pointed
+  // elsewhere by variables, which would let the fixtures' `git config --global` reach the person's own (review)
+  it('keeps the person’s CODEX_HOME in the local Windows run, whose home is fake, and git’s config in it', () => {
     const env = localWin32Env({
-      env: { PATH: 'p', CODEX_WINDOWS_REGISTERED_CORE: '1', GH_TOKEN: 't' },
+      env: { PATH: 'p', CODEX_WINDOWS_REGISTERED_CORE: '1', GH_TOKEN: 't', XDG_CONFIG_HOME: 'C:\\x', GIT_CONFIG_GLOBAL: 'C:\\g', GIT_CONFIG_SYSTEM: 'C:\\s' },
       home: 'C:\\s\\home',
       codexHome: 'C:\\Users\\a\\.codex',
       probeDir: 'C:\\s\\probe',
@@ -387,6 +411,37 @@ describe('the S2 probes', () => {
       permissionProfile: 'astera'
     })
     expect(s2ThreadStart('/w', 'astera')).toEqual({ cwd: '/w', approvalPolicy: 'never', permissions: 'astera' })
+  })
+
+  // The answer's own words on the sandbox stay whole however long the rest is (review)
+  it('keeps thread/start’s sandbox, profile and approval policy out of the clipped answer', () => {
+    const result = { thread: { id: 't', huge: 'x'.repeat(20000) }, sandbox: { type: 'workspaceWrite' }, activePermissionProfile: { id: 'astera' }, approvalPolicy: 'never' }
+    const r = threadStartRecord({ result })
+    expect(r).toMatchObject({ ok: true, sandbox: { type: 'workspaceWrite' }, activePermissionProfile: { id: 'astera' }, approvalPolicy: 'never' })
+    expect(JSON.stringify(r).length).toBeLessThan(9000)
+    expect(threadStartRecord({ error: { code: -32600, message: 'no' } })).toEqual({ ok: false, error: { code: -32600, message: 'no' }, answer: { error: { code: -32600, message: 'no' } } })
+  })
+
+  // codex answers a command that ran past its timeout with "exec failed: sandbox error: command timed out"
+  // (SandboxErr::Timeout behind command_exec.rs's prefix); a denied command's own output never starts that way (review)
+  it('reads command/exec answers as probe results, a timeout as a timeout', () => {
+    expect(execResult('p', { result: { exitCode: 0, stdout: 'a', stderr: 'b' } })).toEqual({ id: 'p', code: 0, ok: true, timedOut: false, missing: false, out: 'ab' })
+    const timedOut = execResult('p', { error: { code: -32603, message: 'exec failed: sandbox error: command timed out' } })
+    expect(timedOut).toMatchObject({ ok: false, timedOut: true })
+    expect(verdict({ ok: true }, timedOut)).toBe('timeout')
+    const denied = execResult('p', { error: { code: -32603, message: 'exec failed: sandbox error: sandbox denied exec error, exit code: 7, stdout: , stderr: curl: (28) Connection timed out' } })
+    expect(denied).toMatchObject({ ok: false, timedOut: false })
+    expect(verdict({ ok: true }, denied)).toBe('denied')
+    expect(execResult('p', { timedOut: true, error: { code: -1, message: 'no answer' } })).toMatchObject({ timedOut: true })
+  })
+
+  // The common case: a worktree whose repository never turned the extension on, and no file made first, so the run
+  // shows what each sandbox does with a missing config.worktree (review)
+  it('runs the common case with the extension off and nothing made first, on every platform', () => {
+    const common = S2_SETS.find((s) => s.name === 'codex-worktree-common')
+    expect(common).toMatchObject({ kind: 'codex', layout: 'worktree', common: true })
+    expect(common.platforms).toBeUndefined()
+    expect(COMMON_CASE_PROBES).toEqual(['git-commit', 'git-worktree-config-write', 'git-common-config-worktree-write', 'git-sibling-config-worktree-write'])
   })
 
   it('writes one row per probe and one column per set, each read against its own run with no sandbox', () => {

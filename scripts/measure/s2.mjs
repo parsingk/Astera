@@ -10,9 +10,10 @@ import { PROBES, verdict } from './probes.mjs'
 import { probeEnv } from './measure-sandbox.mjs'
 
 /** On a GitHub-hosted runner with its variable, or on this Windows PC with the local one. Anywhere else the file runs
- *  as part of the suite and skips: the run writes fake credentials into the home folder. */
+ *  as part of the suite and skips: the run writes fake credentials into the home folder. The runner test is
+ *  measure-sandbox.mjs's own (both variables), so a machine that copied one of them is not taken for a runner. */
 export function s2Enabled(env, platform) {
-  if (env.ASTERA_MEASURE_S2 === '1' && env.RUNNER_ENVIRONMENT === 'github-hosted') return true
+  if (env.ASTERA_MEASURE_S2 === '1' && env.GITHUB_ACTIONS === 'true' && env.RUNNER_ENVIRONMENT === 'github-hosted') return true
   return platform === 'win32' && env.ASTERA_MEASURE_S2_LOCAL === '1'
 }
 
@@ -28,6 +29,9 @@ export const S2_SETS = [
   { name: 'codex-worktree', kind: 'codex', layout: 'worktree' },
   // The fallback candidate: the common directory's `worktrees` folder in place of the worktree's own git directory
   { name: 'codex-worktree-alt', kind: 'codex', layout: 'worktree', variant: 'alt' },
+  // The common case: a repository that never turned extensions.worktreeConfig on, and no config.worktree made first,
+  // so the run shows what each sandbox does with the missing files (bubblewrap may leave a mount-point file)
+  { name: 'codex-worktree-common', kind: 'codex', layout: 'worktree', common: true },
   // `command/exec` with no sandbox parameter, which "defaults to the user's configured policy"
   { name: 'app-server', kind: 'app-server', layout: 'worktree' },
   // `command/exec` naming the profile, as `thread/start`'s `permissions` does for a thread's commands
@@ -176,18 +180,31 @@ export const WIN32_PROBE_FILES = {
   'credential-request.txt': 'protocol=https\nhost=astera-probe.example\n\n'
 }
 
-/** Writes `config.worktree` in the git directory git names for the session (a worktree's own, or a repository's
- *  `.git`): git reads it under `extensions.worktreeConfig`, and it can set `core.hooksPath`. On Windows the git directory
- *  comes from ASTERA_PROBE_GITDIR, which the run sets from `gitLayoutOf`. */
-export const WORKTREE_CONFIG_PROBE = { id: 'git-worktree-config-write', line: `echo '[core]' >> "$(git rev-parse --path-format=absolute --git-dir)/config.worktree"` }
-export const WIN32_WORKTREE_CONFIG_PROBE = { id: 'git-worktree-config-write', line: 'echo [core]>> %ASTERA_PROBE_GITDIR%\\config.worktree' }
+/** Write the `config.worktree` files git may read for the session's repository (git reads them under
+ *  `extensions.worktreeConfig`, and one can set `core.hooksPath`): the one in the git directory git names for the
+ *  session (a worktree's own, or a repository's `.git`), the main checkout's in the common directory, and another
+ *  worktree's (ASTERA_PROBE_SIBLING, a second worktree the run adds). On Windows the directories come from variables the
+ *  run sets from `gitLayoutOf`. */
+export const CONFIG_WORKTREE_PROBES = [
+  { id: 'git-worktree-config-write', line: `echo '[core]' >> "$(git rev-parse --path-format=absolute --git-dir)/config.worktree"` },
+  { id: 'git-common-config-worktree-write', line: `echo '[core]' >> "$(git rev-parse --path-format=absolute --git-common-dir)/config.worktree"` },
+  { id: 'git-sibling-config-worktree-write', line: `echo '[core]' >> "$ASTERA_PROBE_SIBLING"` }
+]
+export const WIN32_CONFIG_WORKTREE_PROBES = [
+  { id: 'git-worktree-config-write', line: 'echo [core]>> %ASTERA_PROBE_GITDIR%\\config.worktree' },
+  { id: 'git-common-config-worktree-write', line: 'echo [core]>> %ASTERA_PROBE_COMMON%\\config.worktree' },
+  { id: 'git-sibling-config-worktree-write', line: 'echo [core]>> %ASTERA_PROBE_SIBLING%' }
+]
+
+/** What the common-case set runs (and its sanity line first): a commit, and the config.worktree writes. */
+export const COMMON_CASE_PROBES = ['git-commit', ...CONFIG_WORKTREE_PROBES.map((p) => p.id)]
 
 /** The probes for a set's layout: the S4 ones on macOS and Linux, without those that `cd wt` (a worktree below the
  *  session's repository) where the session is not that repository's root; the cmd.exe ones on Windows. Both end with
- *  the config.worktree probe, which S4 did not have. */
+ *  the config.worktree probes, which S4 did not have. */
 export function probesFor(platform, layout) {
-  if (platform === 'win32') return [...WIN32_PROBES, WIN32_WORKTREE_CONFIG_PROBE]
-  return [...(layout === 'repo' ? PROBES : PROBES.filter((p) => !p.line.startsWith('cd wt '))), WORKTREE_CONFIG_PROBE]
+  if (platform === 'win32') return [...WIN32_PROBES, ...WIN32_CONFIG_WORKTREE_PROBES]
+  return [...(layout === 'repo' ? PROBES : PROBES.filter((p) => !p.line.startsWith('cd wt '))), ...CONFIG_WORKTREE_PROBES]
 }
 
 export const shellArgv = (platform, line) => (platform === 'win32' ? ['cmd.exe', '/d', '/c', line] : ['sh', '-c', line])
@@ -220,6 +237,8 @@ export function withoutNpmRunEnv(env) {
  * CODEX_HOME. Codex looks for its sandbox setup there, or in the home folder without it, and a home without the setup
  * brings up Windows' administrator prompt. A registered core makes a set-up home read as not set up, so it is left out.
  * Git's system config is left out too: it names Git Credential Manager, which could open a window for the fake host.
+ * So are the variables that point git's global or system config elsewhere (XDG_CONFIG_HOME, GIT_CONFIG_GLOBAL,
+ * GIT_CONFIG_SYSTEM): with them the fixtures' `git config --global` and the global excludes could reach the person's own.
  */
 export function localWin32Env({ env, home, codexHome, probeDir, outside, port }) {
   const e = {
@@ -233,7 +252,7 @@ export function localWin32Env({ env, home, codexHome, probeDir, outside, port })
     GCM_INTERACTIVE: 'never',
     GIT_TERMINAL_PROMPT: '0'
   }
-  delete e.CODEX_WINDOWS_REGISTERED_CORE
+  for (const k of ['CODEX_WINDOWS_REGISTERED_CORE', 'XDG_CONFIG_HOME', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM']) delete e[k]
   return e
 }
 
@@ -247,6 +266,45 @@ export const execParams = ({ platform, line, cwd, profile, timeoutMs }) => ({
   timeoutMs,
   ...(profile ? { permissionProfile: profile } : {})
 })
+
+const OUT_MAX = 400
+const ANSWER_MAX = 8000
+
+/** An answer kept whole when it is short, as text cut at ANSWER_MAX when it is not. */
+export function clip(answer) {
+  const s = JSON.stringify(answer) ?? 'null'
+  return s.length <= ANSWER_MAX ? answer : { truncated: s.slice(0, ANSWER_MAX) }
+}
+
+/** `thread/start`'s answer for the results: what it says about the sandbox, the profile and the approval policy copied
+ *  out first, so they stay whole however long the rest of the answer is. */
+export function threadStartRecord(answer) {
+  const r = answer.result
+  const own = r ? { sandbox: r.sandbox, activePermissionProfile: r.activePermissionProfile, approvalPolicy: r.approvalPolicy } : {}
+  return { ok: Boolean(r), ...own, ...(answer.error ? { error: answer.error } : {}), answer: clip(answer) }
+}
+
+/** codex's words for a command that ran past its timeout: `SandboxErr::Timeout` ("command timed out") behind
+ *  command_exec.rs's "exec failed: " (rust-v0.160.0). A denied command's own output only ever follows "sandbox denied
+ *  exec error", so a probe's "timed out" on stderr cannot read as this. */
+const EXEC_TIMEOUT = /^exec failed: sandbox error: command timed out\b/
+
+/** A `command/exec` answer read as a probe's result (probes.mjs runProbes' shape). A command the sandbox stopped comes
+ *  back as an error rather than an exit code, so the error's text is the output. */
+export function execResult(id, answer) {
+  const r = answer.result
+  const code = typeof r?.exitCode === 'number' ? r.exitCode : null
+  const message = answer.error?.message ?? ''
+  return {
+    id,
+    code,
+    ok: code === 0,
+    timedOut: Boolean(answer.timedOut) || EXEC_TIMEOUT.test(message),
+    missing: false,
+    out: (r ? `${r.stdout ?? ''}${r.stderr ?? ''}` : message).slice(0, OUT_MAX),
+    ...(answer.error ? { error: answer.error } : {})
+  }
+}
 
 /** The probes that failed with no sandbox: an instrument fault, never a finding. */
 export const brokenPlain = (plain) => plain.filter((p) => !p.ok).map((p) => p.id)

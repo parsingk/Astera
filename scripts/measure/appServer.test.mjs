@@ -76,6 +76,18 @@ describe('startAppServer', () => {
     expect(await s.request('late', {})).toMatchObject({ exited: true })
   })
 
+  // Review: a server that keeps running after its input ends and ignores SIGTERM must not hold a case past its own time
+  it('stops a server that ignores the end of its input and SIGTERM, within its bounds', async () => {
+    const stubborn = "process.on('SIGTERM', () => {}); process.stdin.resume(); setInterval(() => {}, 1000); process.stdout.write('{}\\n')"
+    const s = startAppServer({ file: process.execPath, args: ['-e', stubborn], cwd: process.cwd(), env: process.env })
+    await new Promise((r) => setTimeout(r, 500))
+    const started = Date.now()
+    const how = await s.stop({ graceMs: 200, termMs: 300, killMs: 2000 })
+    expect(Date.now() - started).toBeLessThan(4000)
+    expect(['SIGTERM', 'SIGKILL']).toContain(how.signal)
+    expect(() => process.kill(s.pid, 0)).toThrow()
+  })
+
   it('records a program that is not there', async () => {
     const s = startAppServer({ file: 'astera-no-such-program', args: [], cwd: process.cwd(), env: process.env })
     expect(await s.request('initialize', {}, 5000)).toMatchObject({ exited: true })

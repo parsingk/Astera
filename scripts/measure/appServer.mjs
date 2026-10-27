@@ -88,15 +88,21 @@ export function startAppServer({ file, args, cwd, env }) {
     notifications: () => [...notifications],
     stderr: () => stderr,
     spawnError: () => spawnError,
-    /** Closes stdin, which ends the server; stops this one process after a grace period if it has not. */
-    stop(graceMs = 5000) {
+    /** Closes stdin, which ends the server. If it has not ended after `graceMs`, sends this one process SIGTERM, after
+     *  `termMs` more SIGKILL, and after `killMs` more answers anyway, so a case never waits past its own time on a
+     *  server that ignores both (review). */
+    stop({ graceMs = 5000, termMs = 5000, killMs = 2000 } = {}) {
       if (exited !== null) return Promise.resolve(exited)
       return new Promise((resolve) => {
-        const timer = setTimeout(() => child.kill(), graceMs)
-        onExit.push((how) => {
-          clearTimeout(timer)
+        const timers = []
+        const done = (how) => {
+          for (const t of timers) clearTimeout(t)
           resolve(how)
-        })
+        }
+        onExit.push(done)
+        timers.push(setTimeout(() => child.kill('SIGTERM'), graceMs))
+        timers.push(setTimeout(() => child.kill('SIGKILL'), graceMs + termMs))
+        timers.push(setTimeout(() => done({ code: null, signal: 'SIGKILL', forced: true }), graceMs + termMs + killMs))
         child.stdin.end()
       })
     }

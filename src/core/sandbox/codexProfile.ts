@@ -18,22 +18,23 @@ const entry = (p: string, access: Access): string => `${toml(p)}=${toml(access)}
 /** The git entries of the filesystem table. Codex makes a pointer file's resolved gitdir read-only unless an entry names
  *  that exact path, so a linked worktree's own git directory is named even though the common directory is too. Hooks and
  *  config stay read-only: a session that could write them could run its code outside the sandbox the next time git runs.
- *  So does `config.worktree` in the git directory of the checkout, a worktree's own or a repository's `.git`: git reads
- *  it under `extensions.worktreeConfig`, and it can set `core.hooksPath`. The entry holds only for a file that exists
- *  (inventory §23.3), so the start makes it first where git reads it (`ensureWorktreeConfigFile`). */
+ *  So does every `config.worktree` git may read for the repository (`layout.worktreeConfigs`: the checkout's own, the
+ *  main checkout's, the other worktrees'): git reads them under `extensions.worktreeConfig`, and one can set
+ *  `core.hooksPath`. The entry holds only for a file that exists (inventory §23.3), so the start makes them first
+ *  (`ensureWorktreeConfigFiles`). At a repository's top its own is the relative entry beside `.git/config`. */
 function gitEntries(layout: GitLayout | null): string[] {
   if (!layout) return []
   const atTop = layout.top === layout.cwd
+  const configsRead = (skip: string | null): string[] => layout.worktreeConfigs.filter((p) => p !== skip).map((p) => entry(p, 'read'))
   if (atTop && !layout.worktree) {
     const roots = [entry('.git', 'write'), entry('.git/hooks', 'read'), entry('.git/config', 'read'), entry('.git/config.worktree', 'read')]
-    return [`":workspace_roots"={${roots.join(', ')}}`]
+    return [`":workspace_roots"={${roots.join(', ')}}`, ...configsRead(`${layout.gitDir}/config.worktree`)]
   }
   const out: string[] = []
   if (atTop) out.push(`":workspace_roots"={${entry('.git', 'write')}}`)
   if (layout.gitDir !== layout.commonDir) out.push(entry(layout.gitDir, 'write'))
-  out.push(entry(`${layout.gitDir}/config.worktree`, 'read'))
   out.push(entry(layout.commonDir, 'write'), entry(`${layout.commonDir}/hooks`, 'read'), entry(`${layout.commonDir}/config`, 'read'))
-  return out
+  return [...out, ...configsRead(null)]
 }
 
 export function codexSandboxArgs(o: { platform: NodeJS.Platform; layout: GitLayout | null; denied: string[] }): string[] {
