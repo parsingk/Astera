@@ -16,6 +16,20 @@ describe('spawnErrorMessage', () => {
     })
   })
 
+  // Enforce (enforce design E5): a session that cannot be protected does not start, and says why
+  it('says why an Enforce session did not start, with the CLI and its versions', () => {
+    const raw = (code: string): string => `Error invoking remote method 'sessions.spawn': Error: ENFORCE_UNAVAILABLE: ${code}`
+    expect(spawnErrorMessage(raw('no-interpreter'))).toEqual({ key: 'session.spawn.enforce.noInterpreter' })
+    expect(spawnErrorMessage(raw('cli-too-old claude 2.1.300 2.1.306'))).toEqual({
+      key: 'session.spawn.enforce.cliTooOld',
+      params: { cli: 'Claude Code', found: '2.1.300', min: '2.1.306' }
+    })
+    expect(spawnErrorMessage(raw('cli-version-unknown codex'))).toEqual({ key: 'session.spawn.enforce.cliVersionUnknown', params: { cli: 'Codex' } })
+    expect(spawnErrorMessage(raw('hook-missing'))).toEqual({ key: 'session.spawn.enforce.hookMissing' })
+    // The Host's own error, through `astera`
+    expect(spawnErrorMessage('ENFORCE_UNAVAILABLE: cli-too-old codex 0.159.0 0.160.0')).toMatchObject({ params: { cli: 'Codex' } })
+  })
+
   it('응답하지 않는 폴더(CWD_UNREACHABLE)도 경로와 함께 말한다', () => {
     expect(spawnErrorMessage('Error: CWD_UNREACHABLE: folder not reachable: \\\\nas\\share')).toEqual({
       key: 'session.spawn.cwdUnreachable',

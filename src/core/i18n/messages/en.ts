@@ -779,6 +779,10 @@ export const en: Record<keyof typeof ko, string> = {
   'session.spawn.failed': 'Failed to start session: {message}',
   'session.spawn.cwdMissing': 'The folder cannot be found: {path}. Choose the folder again.',
   'session.spawn.cwdUnreachable': 'The folder did not answer in time: {path}. If it is on a network drive, check the connection.',
+  'session.spawn.enforce.noInterpreter': 'The Astera executable Enforce needs was not found, so the session did not start. Reinstall Astera, or switch Policies to Observe.',
+  'session.spawn.enforce.cliTooOld': 'Enforce can block calls only on {cli} {min} or later. This one is {found}. Update the CLI, or switch Policies to Observe.',
+  'session.spawn.enforce.cliVersionUnknown': 'The version of {cli} could not be read, so the session did not start in Enforce.',
+  'session.spawn.enforce.hookMissing': 'The blocking hook did not run in this session, so the session was stopped. Switch Policies to Observe to record calls without blocking them.',
   'session.spawn.failedWorktreeKept':
     'Failed to start session: {message} (the worktree “{name}” was kept — delete it from the Worktrees panel)',
   // Rolling-resume guard hit — tells the user the tab was just focused and their chosen options were dropped

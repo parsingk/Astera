@@ -28,7 +28,7 @@ const HELP_TIMEOUT_MS = 5_000
 
 /** stdout of a `--help` run, or null when it did not exit cleanly. Sync on purpose: the command builder
  *  it feeds is sync, and the run happens once per binary per TTL_MS. */
-function runHelp(cmd: SpawnCommand): string | null {
+export function runHelp(cmd: SpawnCommand): string | null {
   const r = spawnSync(cmd.file, cmd.args, {
     windowsHide: true,
     encoding: 'utf8',
@@ -39,7 +39,7 @@ function runHelp(cmd: SpawnCommand): string | null {
 }
 
 /** `runHelp` off the calling thread (second pass M2-1): what a spawn's prepare runs, so the spawn finds the answer. */
-function runHelpAsync(cmd: SpawnCommand): Promise<string | null> {
+export function runHelpAsync(cmd: SpawnCommand): Promise<string | null> {
   return new Promise((resolve) => {
     execFile(cmd.file, cmd.args, { windowsHide: true, encoding: 'utf8', timeout: HELP_TIMEOUT_MS }, (err, stdout) =>
       resolve(err ? null : stdout)
@@ -47,7 +47,7 @@ function runHelpAsync(cmd: SpawnCommand): Promise<string | null> {
   })
 }
 
-async function fileIdentityAsync(file: string): Promise<string> {
+export async function fileIdentityAsync(file: string): Promise<string> {
   try {
     const real = await fsp.realpath(file)
     const st = await fsp.stat(real)
@@ -59,7 +59,7 @@ async function fileIdentityAsync(file: string): Promise<string> {
 
 /** What changes when codex is updated: the standalone install's bin is a link to the current release
  *  folder, so the real path moves; an npm install rewrites the shim in place, so the time and size do. */
-function fileIdentity(file: string): string {
+export function fileIdentity(file: string): string {
   try {
     const real = realpathSync(file)
     const st = statSync(real)

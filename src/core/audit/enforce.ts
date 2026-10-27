@@ -17,6 +17,18 @@ export function enforceUnavailable(code: string): Error {
   return new Error(`ENFORCE_UNAVAILABLE: ${code}`)
 }
 
+/** What both session managers ask before a session starts in Enforce (enforce design §5, E5). */
+export interface EnforceStart {
+  /** The arguments that make a session of `provider` run the blocking hook (a Claude chat's --settings, Codex's -c),
+   *  or null when it cannot. */
+  args(provider: 'claude' | 'codex'): string[] | null
+  /** Why `provider`'s CLI cannot be enforced (`ENFORCE_UNAVAILABLE: cli-too-old …` or `cli-version-unknown …`), or
+   *  null. Read synchronously: `warm` asked first. */
+  blocker?(provider: 'claude' | 'codex'): string | null
+  /** Asks the CLI its version off the thread, so `blocker` answers at once. */
+  warm?(provider: 'claude' | 'codex'): Promise<void>
+}
+
 const REASONS = {
   profile: "Blocked by Astera: an agent session cannot write Astera's settings folder.",
   settings: "Blocked by Astera: an agent session cannot change Astera's Policies, Credentials or agent profiles.",

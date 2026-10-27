@@ -1507,6 +1507,33 @@ describe('observe mode at spawn', () => {
     return { manager, spawned, argv, asked, observeHooks, enforceHooks }
   }
 
+  it('an Enforce start on an older CLI is refused with the reason before anything spawns', async () => {
+    for (const acc of [account, codexAccount]) {
+      const e = rig('enforce')
+      const warmed: string[] = []
+      e.manager.enforce = {
+        args: () => ['-c', 'x'],
+        warm: async (p) => void warmed.push(p),
+        blocker: (p) => `ENFORCE_UNAVAILABLE: cli-too-old ${p} 0.1.0 9.9.9`
+      }
+      const p = acc.provider ?? 'claude'
+      await expect(e.manager.prepare({ account: acc, cwd: '/work' })).rejects.toThrow(`ENFORCE_UNAVAILABLE: cli-too-old ${p} 0.1.0 9.9.9`)
+      expect(warmed).toEqual([p])
+      // Asked before the hook is written, and a spawn nobody prepared is refused the same way
+      expect(e.enforceHooks).not.toHaveBeenCalled()
+      expect(() => e.manager.spawn({ account: acc, cwd: '/work' })).toThrow(`ENFORCE_UNAVAILABLE: cli-too-old ${p} 0.1.0 9.9.9`)
+      expect(e.spawned).toHaveLength(0)
+    }
+    // Observe asks no version
+    const o = rig('observe')
+    const blocker = vi.fn(() => 'ENFORCE_UNAVAILABLE: cli-version-unknown claude')
+    o.manager.enforce = { args: () => null, blocker }
+    await o.manager.prepare({ account, cwd: '/work' })
+    o.manager.spawn({ account, cwd: '/work' })
+    expect(blocker).not.toHaveBeenCalled()
+    expect(o.spawned).toHaveLength(1)
+  })
+
   it('a Codex session started in enforce carries the hook args, an observe one does not', async () => {
     const e = rig('enforce')
     await e.manager.prepare({ account: codexAccount, cwd: '/work' })

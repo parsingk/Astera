@@ -609,6 +609,10 @@ export const ja: Catalog = {
   'session.spawn.failed': 'セッションの開始に失敗しました: {message}',
   'session.spawn.cwdMissing': 'フォルダーが見つかりません: {path}。フォルダーを選び直してください。',
   'session.spawn.cwdUnreachable': 'フォルダーが時間内に応答しません: {path}。ネットワークドライブの場合は接続を確認してください。',
+  'session.spawn.enforce.noInterpreter': 'Enforce に必要な Astera の実行ファイルが見つからないため、開始しませんでした。Astera を再インストールするか、Policies を Observe に切り替えてください。',
+  'session.spawn.enforce.cliTooOld': 'Enforce で止められるのは {cli} {min} 以降だけです。いまは {found} です。CLI を更新するか、Policies を Observe に切り替えてください。',
+  'session.spawn.enforce.cliVersionUnknown': '{cli} のバージョンがわからないため、Enforce で開始しませんでした。',
+  'session.spawn.enforce.hookMissing': '止める hook がこのセッションで動かなかったため、セッションを止めました。Policies を Observe に切り替えると、止めずに記録だけします。',
   'session.spawn.failedWorktreeKept':
     'セッションの開始に失敗しました: {message} (worktree "{name}" は残っているので Worktrees パネルから削除してください)',
   // Rolling-resume guard hit — tells the user the tab was just focused and their chosen options were dropped

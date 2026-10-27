@@ -47,6 +47,8 @@ import type { BypassSignal } from '../core/sessions/retryBypass'
 import { detectBypassableManager } from './cliLocate'
 import { createCapabilityCache, type CapabilityCache } from '../core/extensions/capabilityCache'
 import { readPolicyMode } from '../core/audit/policy'
+import type { EnforceStart } from '../core/audit/enforce'
+import { cliVersionProbe, enforceBlocker } from '../core/sessions/cliVersion'
 import { settingsImportCopiesCapabilities } from '../core/extensions/registry'
 import { hidingLog } from '../core/extensions/secrets'
 import { createHidingSource, projectOfWorktrees } from '../core/credentials/hiding'
@@ -284,6 +286,8 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   // Shared extensions (Agent Control Plane release 1 design §4.5). The two managers read the same cache:
   // a chat roll's respawn is prepared through `sessions.prepare`, which refreshes the target account
   const gateway: Core['gateway'] = { ask: async () => null }
+  // Enforce: each CLI's version, asked once per binary (E5: one too old to honour the hook does not start)
+  const cliVersions = cliVersionProbe(process.platform)
   const capabilities = createCapabilityCache({
     gatewayPort: () => gateway.ask(),
     profileDir: userDataDir,
@@ -293,7 +297,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     // no await of its own, finds them written (StatusLineManager.ensureEnforceFiles)
     policyMode: async () => {
       const mode = await readPolicyMode(userDataDir)
-      if (mode === 'enforce') await statusLine.ensureEnforceFiles()
+      if (mode === 'enforce') await Promise.all([statusLine.ensureEnforceFiles(), cliVersions.warm('claude'), cliVersions.warm('codex')])
       return mode
     },
     log: hidingLog(userDataDir, sessionsLog)
@@ -308,7 +312,11 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   // Enforce: the blocking hook, written by a session's prepare, which refuses the start without it (E5). A Claude terminal
   // session reads it from its settings file; a chat, and any Codex session, from these arguments
   sessions.enforceHooks = () => statusLine.ensureEnforceFiles()
-  const enforce = { args: (provider: 'claude' | 'codex') => (provider === 'claude' ? statusLine.enforceChatArgs() : statusLine.enforceCodexArgs()) }
+  const enforce: EnforceStart = {
+    args: (provider) => (provider === 'claude' ? statusLine.enforceChatArgs() : statusLine.enforceCodexArgs()),
+    blocker: (provider) => enforceBlocker(provider, cliVersions(provider)),
+    warm: (provider) => cliVersions.warm(provider)
+  }
   sessions.enforce = enforce
   // The chat sessions. It is handed `procRouter.factory` rather than a factory chosen now, for exactly
   // the reason SessionManager is handed `ptyRouter.factory`: which one a spawn reaches is decided at

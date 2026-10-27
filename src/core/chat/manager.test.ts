@@ -1295,13 +1295,13 @@ describe('Enforce in chat sessions', () => {
     context: { kind: 'implicit' as const, accounts: ['acc-cl'], policyMode, executionMode: 'managed' as const },
     args: [], env: {}, given: [], gatewayGrant: [], skipped: []
   })
-  const make = (policyMode: 'compatibility' | 'observe' | 'enforce', args: string[] | null) => {
+  const make = (policyMode: 'compatibility' | 'observe' | 'enforce', args: string[] | null, blocker: string | null = null) => {
     const factory = vi.fn((_f: string, _a: string[], _o: ProcSpawnOptions) => new FakeProc())
     const deps = {
       factory, descriptors: makeDescriptors('linux'), homeDir: '/home/t', platform: 'linux' as const, version: '1', log: () => {},
       createAdapter: makeAdapterFactory().createAdapter,
       capabilities: { get: () => caps(policyMode), refresh: async () => {} },
-      enforce: { args: () => args }
+      enforce: { args: () => args, blocker: () => blocker }
     }
     return { factory, manager: new ChatSessionManager(deps) }
   }
@@ -1324,6 +1324,12 @@ describe('Enforce in chat sessions', () => {
     const argv = factory.mock.calls[0][1]
     expect(argv.slice(argv.indexOf('app-server'), argv.indexOf('app-server') + 3)).toEqual(['app-server', '-c', 'hooks.PreToolUse=[x]'])
     expect(factory.mock.calls[0][2].meta?.restore).toMatchObject({ observed: true, enforced: true })
+  })
+
+  it('a chat started in enforce on an older CLI is refused with the reason', () => {
+    const { factory, manager } = make('enforce', ['--settings', '/p/x.json'], 'ENFORCE_UNAVAILABLE: cli-too-old claude 2.1.300 2.1.306')
+    expect(() => manager.spawn({ account: claudeAccount, cwd: '/p' })).toThrow('ENFORCE_UNAVAILABLE: cli-too-old claude 2.1.300 2.1.306')
+    expect(factory).not.toHaveBeenCalled()
   })
 
   it('a chat started in enforce without the hook is refused', () => {

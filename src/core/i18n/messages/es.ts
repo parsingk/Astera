@@ -616,6 +616,10 @@ export const es: Catalog = {
   'session.spawn.failed': 'No se pudo iniciar la sesión: {message}',
   'session.spawn.cwdMissing': 'No se encuentra la carpeta: {path}. Vuelva a elegir la carpeta.',
   'session.spawn.cwdUnreachable': 'La carpeta no respondió a tiempo: {path}. Si está en una unidad de red, compruebe la conexión.',
+  'session.spawn.enforce.noInterpreter': 'No se encontró el ejecutable de Astera que Enforce necesita, así que la sesión no se inició. Reinstale Astera o cambie Policies a Observe.',
+  'session.spawn.enforce.cliTooOld': 'Enforce solo puede bloquear en {cli} {min} o posterior. Ahora es {found}. Actualice la CLI o cambie Policies a Observe.',
+  'session.spawn.enforce.cliVersionUnknown': 'No se pudo leer la versión de {cli}, así que la sesión no se inició en Enforce.',
+  'session.spawn.enforce.hookMissing': 'El hook que bloquea no se ejecutó en esta sesión, así que la sesión se detuvo. Cambie Policies a Observe para registrar las llamadas sin bloquearlas.',
   'session.spawn.failedWorktreeKept':
     'No se pudo iniciar la sesión: {message} (el worktree "{name}" se conservó; elimínelo desde el panel Worktrees)',
   // Rolling-resume guard hit — tells the user the tab was just focused and their chosen options were dropped

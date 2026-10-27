@@ -54,6 +54,8 @@ import type { HostWorktrees } from './worktrees'
 import { createCapabilityCache, type CapabilityCache } from '../core/extensions/capabilityCache'
 import { createHidingSource, projectOfWorktrees, type HidingSource } from '../core/credentials/hiding'
 import { readPolicyMode } from '../core/audit/policy'
+import type { EnforceStart } from '../core/audit/enforce'
+import { cliVersionProbe, enforceBlocker } from '../core/sessions/cliVersion'
 import { hidingLog } from '../core/extensions/secrets'
 import { setBounded } from '../core/bounded'
 import { dispatchLookup } from '../core/orchestration/dispatchIndex'
@@ -359,6 +361,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   )
   // Shared extensions (Agent Control Plane release 1 design §4.5): `sessions.prepare` refreshes the account before
   // every spawn and roll, and the Host's chat sessions read the same cache
+  // Enforce: each CLI's version, asked once per binary (E5: one too old to honour the hook does not start)
+  const cliVersions = cliVersionProbe(platform)
   const capabilities = createCapabilityCache({
     profileDir,
     homeDir,
@@ -367,7 +371,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     // no await of its own, finds them written (StatusLineManager.ensureEnforceFiles)
     policyMode: async () => {
       const mode = await readPolicyMode(profileDir)
-      if (mode === 'enforce') await statusLine.ensureEnforceFiles()
+      if (mode === 'enforce') await Promise.all([statusLine.ensureEnforceFiles(), cliVersions.warm('claude'), cliVersions.warm('codex')])
       return mode
     },
     ...(d.gatewayPort ? { gatewayPort: d.gatewayPort } : {}),
@@ -382,7 +386,11 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   // Enforce: the blocking hook, written by a session's prepare, which refuses the start without it (E5). A Claude terminal
   // session reads it from its settings file; a chat, and any Codex session, from these arguments
   sessions.enforceHooks = () => statusLine.ensureEnforceFiles()
-  const enforce = { args: (provider: 'claude' | 'codex') => (provider === 'claude' ? statusLine.enforceChatArgs() : statusLine.enforceCodexArgs()) }
+  const enforce: EnforceStart = {
+    args: (provider) => (provider === 'claude' ? statusLine.enforceChatArgs() : statusLine.enforceCodexArgs()),
+    blocker: (provider) => enforceBlocker(provider, cliVersions(provider)),
+    warm: (provider) => cliVersions.warm(provider)
+  }
   sessions.enforce = enforce
   sessions.onExit = (e) => {
     sessions.forget(e.sessionId)

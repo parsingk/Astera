@@ -804,6 +804,10 @@ export const ko = {
   'session.spawn.failed': '세션 시작 실패: {message}',
   'session.spawn.cwdMissing': '폴더를 찾을 수 없습니다: {path}. 폴더를 다시 고르세요.',
   'session.spawn.cwdUnreachable': '폴더가 제때 응답하지 않습니다: {path}. 네트워크 드라이브라면 연결을 확인하세요.',
+  'session.spawn.enforce.noInterpreter': 'Enforce 에 필요한 Astera 실행 파일을 찾지 못해 시작하지 않았습니다. Astera 를 다시 설치하거나 Policies 를 Observe 로 바꾸세요.',
+  'session.spawn.enforce.cliTooOld': 'Enforce 는 {cli} {min} 이상에서만 막을 수 있습니다. 지금은 {found} 입니다. CLI 를 업데이트하거나 Policies 를 Observe 로 바꾸세요.',
+  'session.spawn.enforce.cliVersionUnknown': '{cli} 의 버전을 알 수 없어 Enforce 로 시작하지 않았습니다.',
+  'session.spawn.enforce.hookMissing': '막는 hook 이 이 세션에서 돌지 않아 세션을 멈췄습니다. Policies 를 Observe 로 바꾸면 막지 않고 기록만 합니다.',
   'session.spawn.failedWorktreeKept':
     '세션 시작 실패: {message} (worktree "{name}"는 남아 있으니 Worktrees 패널에서 삭제하세요)',
   // Rolling-resume guard hit — tells the user the tab was just focused and their chosen options were dropped

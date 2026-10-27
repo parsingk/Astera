@@ -23,7 +23,7 @@ import type { CapabilitySource } from '../extensions/capabilityCache'
 import { gatewayTokenEnv } from '../extensions/resolve'
 import { applyHiding, type HidingSource } from '../credentials/hiding'
 import { isObserving } from '../audit/policy'
-import { enforceUnavailable } from '../audit/enforce'
+import { enforceUnavailable, type EnforceStart } from '../audit/enforce'
 
 export { EXITED_SESSIONS_KEPT }
 
@@ -68,9 +68,10 @@ export interface ChatManagerDeps {
   capabilities?: CapabilitySource
   /** The Credentials list (credentials design §5): what an agent session starts without, asked at each spawn. */
   hiding?: HidingSource
-  /** Enforce (enforce design §5): the arguments that make a chat of `provider` run the blocking hook, or null when it
-   *  cannot (E5). Asked at each spawn the mode is enforce; unset, such a spawn is refused. */
-  enforce?: { args(provider: 'claude' | 'codex'): string[] | null }
+  /** Enforce (enforce design §5): the CLI's version check and the arguments that make a chat of `provider` run the
+   *  blocking hook, or null when it cannot (E5). Asked at each spawn the mode is enforce; unset, such a spawn is
+   *  refused. The capability refresh the caller awaits first warms the version. */
+  enforce?: EnforceStart
 }
 
 /** What `spawn` takes, for a caller that builds it elsewhere (./respawn.ts). */
@@ -314,6 +315,8 @@ export class ChatSessionManager {
     // Enforce (enforce design §5, E5): the blocking hook rides on the session's own arguments, and without it the
     // session does not start
     const enforced = caps?.context.policyMode === 'enforce'
+    const blocked = enforced ? (this.deps.enforce?.blocker?.(provider) ?? null) : null
+    if (blocked !== null) throw new Error(blocked)
     const enforceArgs = enforced ? (this.deps.enforce?.args(provider) ?? null) : []
     if (enforceArgs === null) throw enforceUnavailable('no-interpreter')
     const extraArgs = [...(caps?.args ?? []), ...enforceArgs]

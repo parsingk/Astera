@@ -21,7 +21,7 @@ import type { CapabilitySource } from '../extensions/capabilityCache'
 import { gatewayTokenEnv } from '../extensions/resolve'
 import { applyHiding, type HidingSource } from '../credentials/hiding'
 import { isObserving } from '../audit/policy'
-import { enforceUnavailable } from '../audit/enforce'
+import { enforceUnavailable, type EnforceStart } from '../audit/enforce'
 
 /** statusLine info injected when a session spawns (provided by main's StatusLineManager,
  *  structurally compatible). */
@@ -177,9 +177,9 @@ export class SessionManager {
    *  (StatusLineManager.ensureEnforceFiles), and says whether they are. `prepare` calls it, instead of observeHooks, when
    *  the mode is enforce and the session takes a statusLine; false refuses the start (E5). */
   enforceHooks?: () => Promise<boolean>
-  /** Enforce for a session without a statusLine (Codex): the arguments that make it run the blocking hook, or null when
-   *  it cannot (E5). Asked at each spawn in enforce, after the prepare's enforceHooks wrote the hook. */
-  enforce?: { args(provider: Provider): string[] | null }
+  /** Enforce: the CLI's version check (asked at prepare and at spawn), and for a session without a statusLine (Codex)
+   *  the arguments that make it run the blocking hook, or null when it cannot (E5). */
+  enforce?: EnforceStart
   /** The Git Bash `prepare` found, per PATH string, and when — held here, not read back from the
    *  resolver's cache, so an entry that expires between a prepare and its spawn cannot send the spawn
    *  to the sync search. Trusted as long as a confirmed folder is. */
@@ -214,6 +214,11 @@ export class SessionManager {
     // Enforce: the blocking hook's settings (which hold the observe ones), and no start without them (E5).
     const mode = this.capabilities?.get(opts.account, opts.agentProfileId)?.context.policyMode ?? 'compatibility'
     if (mode === 'enforce') {
+      // A CLI too old to honour the hook, or one whose version cannot be read, does not start (E5)
+      const provider = providerOf(opts.account)
+      await this.enforce?.warm?.(provider)
+      const blocked = this.enforce?.blocker?.(provider) ?? null
+      if (blocked !== null) throw new Error(blocked)
       const ready = this.enforceHooks ? await this.enforceHooks().catch(() => false) : false
       if (!ready) throw enforceUnavailable('no-interpreter')
     } else if (this.observeHooks && isObserving(mode) && descriptorOf(this.descriptors, opts.account).usesStatusLine)
@@ -322,6 +327,8 @@ export class SessionManager {
     // gets it as `-c` arguments, and neither starts without it (E5) — the prepare wrote it, so this is a hook that went
     // missing in between
     const enforce = caps?.context.policyMode === 'enforce'
+    const blocked = enforce ? (this.enforce?.blocker?.(providerOf(opts.account)) ?? null) : null
+    if (blocked !== null) throw new Error(blocked)
     const sl = d.usesStatusLine
       ? (this.statusLineProvider?.(
           id,
