@@ -176,6 +176,8 @@ export const ja: Catalog = {
   'settings.security.sandboxCoverage.level.partial': '一部',
   'settings.security.sandboxCoverage.level.none': 'ブロックしない',
   'settings.security.sandboxCoverage.level.seen': '許可',
+  'settings.security.sandboxCoverage.homeReadable': 'ログイン情報のフォルダー以外のホームフォルダーは、サンドボックス内でも読めます。',
+  'settings.security.sandboxCoverage.windowsClaude': 'Windows: シェルは制限なし',
   'settings.security.builtin.profileWrite': 'Astera の設定フォルダーへの書き込み',
   'settings.security.builtin.settingsCommand': 'Astera の設定を変えるコマンド',
   'settings.security.builtin.failClosed': 'Rules を読めないため読み取りのみ許可',
@@ -351,6 +353,7 @@ export const ja: Catalog = {
   'audit.coverageNote.interactive-input': '実行中のシェルへの入力は止められない',
   'audit.coverageNote.runtime-measured': 'ランタイムで測定',
   'audit.coverageNote.file-tools-only': 'ファイルツールのみ',
+  'audit.coverageNote.bus-path-only': 'セッションバスがファイルパスのとき',
   'settings.remote.hint': '別のコンピューターで動く Astera(Runtime)の Job をこのアプリで見ます。接続はそのコンピューターの鍵を確かめた後にだけ行われ、トークンはこのコンピューターにだけ保存されます。',
   'settings.remote.thisMachine.title': 'このコンピューター',
   'settings.remote.thisMachine.off': 'リモート Runtime はオフです。下でアドレスを選んでオンにすると、他のコンピューターがこのコンピューターとペアリングできます。',
@@ -1198,6 +1201,7 @@ export const ja: Catalog = {
   // WorkbenchTabs.tsx
   'session.tab.rollTooltip': 'ローリング: {chain}',
   'session.tab.sandboxed': 'サンドボックスで実行中',
+  'session.tab.denyOnly': 'サンドボックスなし: ファイルツールだけがログイン情報のフォルダーを読めません（シェルは制限なし）',
   // PaneGrid / pane context menu
   'session.pane.splitRight': '右に分割',
   'session.pane.splitDown': '下に分割',

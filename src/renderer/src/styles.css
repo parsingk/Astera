@@ -1302,6 +1302,9 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .security-table td.is-partial { color: var(--warn); }
 .security-table td.is-none { color: var(--text-faint); }
 .security-table td.is-enforced { color: var(--danger); font-weight: 600; }
+/* The sandbox table: what it lets through (the network) is neutral, not the green that reads as covered */
+.security-table td.is-allowed { color: var(--text); }
+.security-table th .security-row-note { display: block; font-weight: normal; font-size: 11px; color: var(--text-faint); }
 /* A rule: its place, its three fields, then up, down and remove, as an account row of an agent profile reads. The list's
    own numbers are its places, so the <ol>'s markers and indent are taken off. */
 .security-rules { margin: 0; padding: 0; list-style: none; }

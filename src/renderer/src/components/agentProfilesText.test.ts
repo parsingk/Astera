@@ -322,8 +322,11 @@ describe('the sandbox switch', () => {
     expect(editor).toContain('window.api.agentProfiles.sandboxReadiness(profile.id)')
     expect(editor).toContain('window.api.agentProfiles.sandboxSetup(profile.id, accountId)')
     expect(editor).toContain("t('session.spawn.sandbox.setUp')")
-    // The setup's outcome is said with Task 6's lines, then the readiness is asked again
+    // A failed setup is said with Task 6's line, then the readiness is asked again. Fix round 1: a setup that worked says
+    // nothing more, since the refreshed line reads ready
     expect(editor).toContain('sandboxSetupOutcome(answer)')
+    expect(editor).toContain("toast.error(outcome.line ?? t('session.spawn.sandbox.setUpFailed'))")
+    expect(editor).not.toContain('setUpDone')
     expect(editor).toContain('sandboxReadinessShown(p, window.api.platform, accounts)')
   })
 })

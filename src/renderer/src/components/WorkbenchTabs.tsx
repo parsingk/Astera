@@ -1,9 +1,9 @@
 import { useRef, useState } from 'react'
-import type { SessionKind } from '../../../core/types'
+import type { SandboxKind, SessionKind } from '../../../core/types'
 import { resolveFileIcon } from '../../../core/files/icons'
 import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
-import { Film, Globe, Image as ImageIcon, MessageSquare, Monitor, Repeat, Shield, Terminal } from 'lucide-react'
+import { Film, Globe, Image as ImageIcon, MessageSquare, Monitor, Repeat, Shield, ShieldOff, Terminal } from 'lucide-react'
 import { endRenameOnce } from '../lib/renameOnce'
 
 /** File viewer tab. Renderer-only — unlike sessions, main is not involved. id = `file:${path}`.
@@ -78,8 +78,9 @@ export type WorkbenchTab =
       rollTooltip: string | null
       /** The agent profile the session was started from, as a line for the tab's tooltip; null without one. */
       profileTooltip: string | null
-      /** The session runs in its CLI's own sandbox (SessionInfo.sandboxed, sandbox design §6): the tab shows a marker. */
-      sandboxed?: boolean
+      /** The session's protection (SessionInfo.sandboxKind, sandbox design §6), as its manager set it: the tab shows a
+       *  marker, titled for what it is. Absent outside the sandbox. */
+      sandboxKind?: SandboxKind
       /** A session on a paired Runtime (Phase 9b): its title is the Runtime's, so it is not renamed here. */
       remote?: boolean
     }
@@ -367,9 +368,15 @@ ${tab.profileTooltip}`
           {tab.kind === 'file' && tab.dirty && (
             <span className="tab-dirty" title={t('explorer.tab.unsaved')} />
           )}
-          {tab.kind === 'session' && tab.sandboxed === true && (
+          {tab.kind === 'session' && tab.sandboxKind === 'sandbox' && (
             <span className="tab-sandbox" title={t('session.tab.sandboxed')}>
               <Shield size={11} />
+            </span>
+          )}
+          {/* Claude Code on Windows: deny rules for its file tools only, and the marker says so rather than "in the sandbox" */}
+          {tab.kind === 'session' && tab.sandboxKind === 'deny-only' && (
+            <span className="tab-sandbox is-deny-only" title={t('session.tab.denyOnly')}>
+              <ShieldOff size={11} />
             </span>
           )}
           {tab.kind === 'session' && tab.rollTooltip && (

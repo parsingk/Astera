@@ -58,10 +58,13 @@ import {
   coverageTitle,
   enforcePreviewBody,
   SANDBOX_CLASSES,
+  sandboxCellClass,
   sandboxCellText,
   sandboxClassLabel,
   sandboxCoverageTitle,
   sandboxRowLabel,
+  sandboxRowNote,
+  sandboxTableCaption,
   type AuditRow
 } from './securityText'
 import { COVERAGE_ENFORCE } from '../../../core/audit/coverage'
@@ -214,7 +217,8 @@ describe('securityText', () => {
     const cells = (r: SandboxCoverageRow, t: typeof en) => SANDBOX_CLASSES.map((c) => sandboxCellText(r.classes[c], t))
     expect(cells(row('claude', 'win32'), en)).toEqual(['Not blocked', 'Partly (file tools only)', 'Not blocked', 'Allowed'])
     expect(cells(row('claude', 'darwin'), en)).toEqual(['Blocked', 'Blocked', 'Blocked (measured on the runtime)', 'Allowed'])
-    expect(cells(row('codex', 'linux'), ko)).toEqual(['막음', '막음', '막음', '허용'])
+    expect(cells(row('codex', 'linux'), ko)).toEqual(['막음', '막음', '막음 (세션 bus가 파일 경로일 때)', '허용'])
+    expect(cells(row('codex', 'darwin'), ko)).toEqual(['막음', '막음', '막음', '허용'])
     expect(cells(row('claude', 'win32'), ko)).toEqual(['안 막음', '일부 (파일 도구만)', '안 막음', '허용'])
     expect(sandboxCellText(row('claude', 'linux').classes.stores, ko)).toBe('막음 (런타임으로 측정)')
     // A level or note this side does not know (a newer Host's) is shown as it was named
@@ -227,6 +231,28 @@ describe('securityText', () => {
     expect(screen).toContain('r.body.sandboxCoverage')
     expect(screen).toContain('sandboxCoverageTitle(t)')
     expect(screen).toContain('sandboxRowLabel(r, t)')
+    // Task 8 fix round 1: the captions, and the neutral class for what it allows
+    expect(screen).toContain('sandboxRowNote(r, t)')
+    expect(screen).toContain('sandboxTableCaption(t)')
+    expect(screen).toContain('sandboxCellClass(r.classes?.[c])')
+  })
+
+  // Task 8 fix round 1: what the table cannot say in a cell. Outside the login folders the home stays readable (spec §6),
+  // and Claude Code's shell on Windows is not restricted, said beside its row
+  it('says under the table that the home stays readable, and beside the Claude Windows row that its shell is not restricted', () => {
+    expect(sandboxTableCaption(en)).toBe('Outside the login folders, the home folder stays readable inside the sandbox.')
+    expect(sandboxTableCaption(ko)).toBe('로그인 정보 폴더 밖의 홈 폴더는 sandbox 안에서도 읽을 수 있습니다.')
+    expect(SANDBOX_COVERAGE.map((r) => sandboxRowNote(r, en))).toEqual(['Windows: the shell is not restricted', null, null, null, null, null])
+    expect(sandboxRowNote({ provider: 'claude', os: 'win32' }, ko)).toBe('Windows: 셸은 제한 없음')
+  })
+
+  // Task 8 fix round 1: what the sandbox lets through (the network) is not drawn in the green that reads as "covered"
+  it('draws an allowed cell neutral, and the others by their level', () => {
+    expect(sandboxCellClass({ level: 'seen' })).toBe('is-allowed')
+    expect(sandboxCellClass({ level: 'enforced' })).toBe('is-enforced')
+    expect(sandboxCellClass({ level: 'partial', note: 'file-tools-only' })).toBe('is-partial')
+    expect(sandboxCellClass({ level: 'none' })).toBe('is-none')
+    expect(sandboxCellClass(undefined)).toBe('is-none')
   })
 
   // Design §9: the coverage is also shown with each session in Audit Logs

@@ -64,10 +64,13 @@ import {
   sessionLabel,
   summaryOf,
   SANDBOX_CLASSES,
+  sandboxCellClass,
   sandboxCellText,
   sandboxClassLabel,
   sandboxCoverageTitle,
   sandboxRowLabel,
+  sandboxRowNote,
+  sandboxTableCaption,
   type AuditCounts,
   type AuditCursor,
   type AuditFilters,
@@ -287,19 +290,27 @@ export function SecuritySettings({
                       </tr>
                     </thead>
                     <tbody>
-                      {sandboxCoverage.map((r) => (
-                        <tr key={`${r.provider}-${r.os}`}>
-                          <th scope="row">{sandboxRowLabel(r, t)}</th>
-                          {SANDBOX_CLASSES.map((c) => (
-                            <td key={c} className={`is-${r.classes?.[c]?.level ?? 'none'}`}>
-                              {sandboxCellText(r.classes?.[c], t)}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
+                      {sandboxCoverage.map((r) => {
+                        // What the cells cannot say, beside the row it is about: Claude Code's shell on Windows
+                        const note = sandboxRowNote(r, t)
+                        return (
+                          <tr key={`${r.provider}-${r.os}`}>
+                            <th scope="row">
+                              {sandboxRowLabel(r, t)}
+                              {note !== null && <span className="security-row-note">{note}</span>}
+                            </th>
+                            {SANDBOX_CLASSES.map((c) => (
+                              <td key={c} className={sandboxCellClass(r.classes?.[c])}>
+                                {sandboxCellText(r.classes?.[c], t)}
+                              </td>
+                            ))}
+                          </tr>
+                        )
+                      })}
                     </tbody>
                   </table>
                 </div>
+                <p className="settings-hint">{sandboxTableCaption(t)}</p>
               </div>
             )}
             <div className="settings-group">

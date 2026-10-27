@@ -280,6 +280,8 @@ describe('credentials commands', () => {
     expect(line('Codex on Windows').text).toMatch(/Credential Manager/)
     expect(line('Codex on macOS').text).toMatch(/~\/Library\/Keychains/)
     expect(line('Codex on Linux').text).toMatch(/session bus/)
+    // Task 8 fix round 1: only a bus at a file path is denied; an abstract socket is not a path
+    expect(line('Codex on Linux').text).toMatch(/when the session bus is a file path[^\n]*abstract socket[^\n]*not denied/)
     // Claude Code has no sandbox on Windows: its shell is not restricted, and doctor warns
     expect(line('Claude Code on Windows')).toMatchObject({ level: 'warn' })
     expect(line('Claude Code on Windows').text).toMatch(/shell is not restricted/)
@@ -293,6 +295,11 @@ describe('credentials commands', () => {
     expect(text).toMatch(/A chain keeps the sandbox state it started with/)
     expect(text).toMatch(/worktree[^\n]*adds itself[^\n]*config\.worktree/)
     expect(text).toMatch(/one Codex account[^\n]*stale[^\n]*from Codex’s source, not measured[^\n]*set up again/)
+    // Task 8 fix round 1: what happens to a ready answer kept when a setup outside Astera makes the home stale
+    const stale = text.split('\n').find((l) => l.includes('stale')) ?? ''
+    expect(stale).toMatch(/ready answer is kept for the process’s life/)
+    expect(stale).toMatch(/dropped only by a setup run through Astera/)
+    expect(stale).toMatch(/setup outside Astera keeps reading ready until Astera restarts/)
     expect(text).toMatch(/runtime it uses \(srt[^\n]*not with Claude Code itself/)
     expect(text).toMatch(/Linux[^\n]*excludes file[^\n]*`git add -A` works/)
     // Said on every OS alike

@@ -1792,10 +1792,11 @@ describe('the sandbox at spawn', () => {
       if (platform === 'linux') expect(profile).toContain('"/run/user/1000/bus"="deny"')
       if (platform === 'darwin') expect(profile).toContain('"/Users/t/Library/Keychains"="deny"')
       if (platform === 'win32') expect(profile).toContain('"C:/Users/t/AppData/Roaming/GitHub CLI"="deny"')
-      // Marked in the info and the note, which a Host handing the session back reads
+      // Marked in the info and the note, which a Host handing the session back reads: Codex's own sandbox on every OS
       expect(info.sandboxed).toBe(true)
-      expect(spawned[0].meta?.restore).toMatchObject({ sandboxed: true })
-      expect(sessionInfoFromNote({ kind: 'session', id: info.id, restore: spawned[0].meta!.restore! })?.sandboxed).toBe(true)
+      expect(info.sandboxKind, platform).toBe('sandbox')
+      expect(spawned[0].meta?.restore).toMatchObject({ sandboxed: true, sandboxKind: 'sandbox' })
+      expect(sessionInfoFromNote({ kind: 'session', id: info.id, restore: spawned[0].meta!.restore! })).toMatchObject({ sandboxed: true, sandboxKind: 'sandbox' })
     }
   })
 
@@ -1848,7 +1849,9 @@ describe('the sandbox at spawn', () => {
       expect(env.npm_config_cache).toBeUndefined()
       expect(env.GIT_CONFIG_COUNT).toBeUndefined()
       expect(info).not.toHaveProperty('sandboxed')
+      expect(info).not.toHaveProperty('sandboxKind')
       expect(spawned[0].meta?.restore).not.toHaveProperty('sandboxed')
+      expect(spawned[0].meta?.restore).not.toHaveProperty('sandboxKind')
       // Nothing is written into the repository for it
       expect(existsSync(path.join(cwd, '.git', 'config.worktree'))).toBe(false)
     }
@@ -2122,8 +2125,9 @@ describe('the sandbox at spawn, for Claude', () => {
     expect(readFileSync(excludes, 'utf8')).toBe(gitExcludesText('*.secret\n'))
     // Marked in the info and the note, which a Host handing the session back and a roll read
     expect(info.sandboxed).toBe(true)
-    expect(r.spawned[0].meta?.restore).toMatchObject({ sandboxed: true })
-    expect(sessionInfoFromNote({ kind: 'session', id: info.id, restore: r.spawned[0].meta!.restore! })?.sandboxed).toBe(true)
+    expect(info.sandboxKind).toBe('sandbox')
+    expect(r.spawned[0].meta?.restore).toMatchObject({ sandboxed: true, sandboxKind: 'sandbox' })
+    expect(sessionInfoFromNote({ kind: 'session', id: info.id, restore: r.spawned[0].meta!.restore! })).toMatchObject({ sandboxed: true, sandboxKind: 'sandbox' })
     // Unsandboxed, the same session reads today's file, with nothing of the sandbox's environment
     await r.manager.prepare({ account, cwd })
     const plain = r.manager.spawn({ account, cwd, bypassPermissions: true })
@@ -2212,6 +2216,10 @@ describe('the sandbox at spawn, for Claude', () => {
     expect(r.spawned[0].env?.GIT_CONFIG_COUNT).toBeUndefined()
     expect(existsSync(path.join(r.profileDir, 'sandbox'))).toBe(false)
     expect(info.sandboxed).toBe(true)
+    // Task 8 fix round 1: deny rules only, and the info and the note say so, so the tab does not claim a sandbox
+    expect(info.sandboxKind).toBe('deny-only')
+    expect(r.spawned[0].meta?.restore).toMatchObject({ sandboxed: true, sandboxKind: 'deny-only' })
+    expect(sessionInfoFromNote({ kind: 'session', id: info.id, restore: r.spawned[0].meta!.restore! })).toMatchObject({ sandboxed: true, sandboxKind: 'deny-only' })
     // Task 7 fix round 1: Claude has no shell sandbox on Windows, so npm keeps its own cache: nothing planted or made
     expect(r.spawned[0].env).not.toHaveProperty('npm_config_cache')
     expect(existsSync(npmCacheOf(r.tmpDir))).toBe(false)

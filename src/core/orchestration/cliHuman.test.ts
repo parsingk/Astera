@@ -899,7 +899,8 @@ describe('humanFor — audit and policies', () => {
   // reads allowed (E3), and a note is its screen phrase
   it('policies show prints what the sandbox blocks, one row per provider and OS', () => {
     const out = humanFor('policies-show', { mode: 'observe', policy, coverage: [], sandboxCoverage: SANDBOX_COVERAGE }) ?? ''
-    const table = out.split('\n\n').at(-1)?.split('\n') ?? []
+    const block = out.split('\n\n').at(-1)?.split('\n') ?? []
+    const table = block.slice(0, 7)
     expect(table[0].trim().split(/\s{2,}/)).toEqual(['sandbox', 'write', 'login folders', 'OS secret store', 'network'])
     expect(table.slice(1).map((l) => l.split(/\s{2,}/)[0])).toEqual([
       'claude Windows',
@@ -909,9 +910,12 @@ describe('humanFor — audit and policies', () => {
       'codex macOS',
       'codex Linux'
     ])
-    expect(table[1].split(/\s{2,}/).slice(1)).toEqual(['none', 'partial (file tools only)', 'none', 'allowed'])
+    // Task 8 fix round 1: beside the Claude Windows row, that its shell is not restricted
+    expect(table[1].split(/\s{2,}/).slice(1)).toEqual(['none', 'partial (file tools only)', 'none', 'allowed', 'Windows: the shell is not restricted'])
     expect(table[2].split(/\s{2,}/).slice(1)).toEqual(['enforced', 'enforced', 'enforced (measured on the runtime)', 'allowed'])
-    expect(table[6].split(/\s{2,}/).slice(1)).toEqual(['enforced', 'enforced', 'enforced', 'allowed'])
+    expect(table[6].split(/\s{2,}/).slice(1)).toEqual(['enforced', 'enforced', 'enforced (when the session bus is a file path)', 'allowed'])
+    // And under it, that the home stays readable outside the login folders
+    expect(block.slice(7)).toEqual(['Outside the login folders, the home folder stays readable inside the sandbox.'])
     // A Host that does not answer it prints the rules and the coverage as before
     expect(humanFor('policies-show', { mode: 'observe', policy })).toBe(rules.join('\n'))
   })

@@ -50,23 +50,40 @@ const render = (tabs: WorkbenchTab[]): string =>
 
 describe('the sandbox marker on a session tab', () => {
   it('marks a sandboxed session’s tab, titled by session.tab.sandboxed', () => {
-    const html = render([session({ sandboxed: true })])
+    const html = render([session({ sandboxKind: 'sandbox' })])
     // Drawn like the rolling marker: a small icon, titled
     expect(html).toMatch(/<span class="tab-sandbox" title="session\.tab\.sandboxed"><svg/)
   })
 
+  // Task 8 fix round 1: Claude Code on Windows has deny rules only, and its tab says that, not "in the sandbox"
+  it('titles a deny-rules-only session’s marker by session.tab.denyOnly', () => {
+    const html = render([session({ sandboxKind: 'deny-only' })])
+    expect(html).toMatch(/<span class="tab-sandbox is-deny-only" title="session\.tab\.denyOnly"><svg/)
+    expect(html).not.toContain('session.tab.sandboxed')
+  })
+
   it('draws no marker on any other tab', () => {
     expect(render([session()])).not.toContain('tab-sandbox')
-    expect(render([session({ sandboxed: false })])).not.toContain('tab-sandbox')
+    expect(render([session({ sandboxKind: undefined })])).not.toContain('tab-sandbox')
   })
 
   it('says what it means in every language', () => {
     const words = { ko: 'Sandbox 안에서 실행 중', en: 'Running in the sandbox', ja: 'サンドボックスで実行中', es: 'Ejecutándose en el sandbox' }
     for (const lang of LANGS) expect(translate(lang, 'session.tab.sandboxed'), lang).toBe(words[lang])
+    const denyOnly = {
+      ko: 'Sandbox 없음: 파일 도구만 로그인 정보 폴더를 읽지 못합니다 (셸은 제한 없음)',
+      en: 'No sandbox: only the file tools cannot read the login folders (the shell is not restricted)',
+      ja: 'サンドボックスなし: ファイルツールだけがログイン情報のフォルダーを読めません（シェルは制限なし）',
+      es: 'Sin sandbox: solo las herramientas de archivos no pueden leer las carpetas de inicio de sesión (el shell no tiene límites)'
+    }
+    for (const lang of LANGS) expect(translate(lang, 'session.tab.denyOnly'), lang).toBe(denyOnly[lang])
   })
 
-  it('the pane grid hands the session’s own flag to its tab', () => {
+  // The kind comes from the session (its manager knows the OS and the CLI), never from the renderer's own platform
+  it('the pane grid hands the session’s own kind to its tab', () => {
     const grid = readFileSync(path.join(here, 'PaneGrid.tsx'), 'utf8')
-    expect(grid).toContain('sandboxed: s.sandboxed === true')
+    expect(grid).toContain("sandboxKind: s.sandboxed === true ? s.sandboxKind : undefined")
+    const tabs = readFileSync(path.join(here, 'WorkbenchTabs.tsx'), 'utf8')
+    expect(tabs).not.toContain('window.api.platform')
   })
 })

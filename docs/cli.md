@@ -1153,9 +1153,12 @@ On Windows the Codex sandbox is Codex's elevated one, which keeps Credential Man
 safe directory for the account it runs as; a repository or home folder whose path holds a character cmd.exe reads as
 syntax (`" & | < > ^ %`) cannot be carried to it. Each Codex account's home must have the elevated sandbox set up once
 (Codex's `codex sandbox setup --elevated --current-user`, which brings up Windows' administrator prompt): Astera asks
-before a sandboxed start, and the app offers to set up the one account a start was refused for. Settings › Agent
-profiles also shows, under a sandboxed profile on Windows, whether each of its Codex accounts is set up (asking runs
-Codex's `doctor`, which brings up no prompt), with Set up for one that is not. A session the sandbox
+before a sandboxed start, Codex's `doctor --json` first and then, only on a home doctor calls complete, an echo through
+the sandbox (on a home with no setup the echo would start the setup and its prompt), and the app offers to set up the
+one account a start was refused for. A ready answer is kept until Astera restarts or a setup runs through it, so a home
+made stale by a setup outside Astera keeps reading ready until then. Settings › Agent profiles also shows, under a
+sandboxed profile on Windows, whether each of its Codex accounts is set up, asked the same way (no prompt comes from
+asking), with Set up for one that is not. A session the sandbox
 cannot be applied to does not start, and says why with `SANDBOX_UNAVAILABLE: <code>`: `codex-daemon codex` for a codex
 that does not take `--no-daemon`, `cli-too-old claude <found> 2.1.306` for an older Claude Code (`cli-version-unknown
 claude` when its version cannot be read, `cli-missing claude` when it is not there), `path-unsafe` for such a path,
@@ -1261,8 +1264,12 @@ for each CLI on each OS (`provider`, `os` as `win32`, `darwin` or `linux`), clai
 Codex's sandbox blocks the first three on every OS and allows the network (`seen`, printed `allowed`). Claude Code's
 blocks them on macOS and Linux, with `stores` noted `runtime-measured`: the runtime its sandbox runs on was measured,
 not Claude Code's own use of it. On Windows Claude Code has no sandbox: `write` and `stores` are `none`, and `sensitive`
-is `partial` with the note `file-tools-only`. `--human` prints it as a table of its own, headed `sandbox`, under the
-other.
+is `partial` with the note `file-tools-only`. Codex's `stores` on Linux is noted `bus-path-only`: the deny names the
+session bus by its file path, and a bus on an abstract socket is not denied. `--human` prints it as a table of its own,
+headed `sandbox`, under the other, with "Windows: the shell is not restricted" beside the Claude Code Windows row and,
+under the table, that outside the login folders the home folder stays readable inside the sandbox. Settings › Security
+& Access shows the same two lines. The tab of a sandboxed session shows a marker; for Claude Code on Windows it says
+there is no sandbox, only deny rules for the file tools (the session's `sandboxKind` is `deny-only`, else `sandbox`).
 
 The rules say what each call would get if Astera enforced them. They are tried in order: the first rule whose action
 matches a call decides it, `allow` or `would-deny`, and `otherwise` decides a call no rule matches. A rule's action is

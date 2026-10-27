@@ -1600,8 +1600,9 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
       expect(handles[0].startCalls).toEqual([{ cwd, resumeThreadId: undefined, bypass: true, sandbox: true }])
       // Marked in the info and the note, which a Host handing the session back and a roll read
       expect(info.sandboxed).toBe(true)
-      expect(spawned[0].opts.meta?.restore).toMatchObject({ sandboxed: true })
-      expect(chatInfoFromNote({ kind: 'chat', id: info.id, restore: spawned[0].opts.meta!.restore! })?.sandboxed).toBe(true)
+      expect(info.sandboxKind, platform).toBe('sandbox')
+      expect(spawned[0].opts.meta?.restore).toMatchObject({ sandboxed: true, sandboxKind: 'sandbox' })
+      expect(chatInfoFromNote({ kind: 'chat', id: info.id, restore: spawned[0].opts.meta!.restore! })).toMatchObject({ sandboxed: true, sandboxKind: 'sandbox' })
       // win32: a missing config.worktree is made first, as for a terminal session
       expect(existsSync(path.join(cwd, '.git', 'config.worktree'))).toBe(platform === 'win32')
     }
@@ -1739,31 +1740,32 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
   // --settings (hooks and sandbox) as a terminal session"): one --settings file, the Enforce hook in it when the mode is
   // enforce, and nothing for the adapter to name
   describe('a Claude chat', () => {
-    const claudeRig = async (o: { version?: string; mode?: 'enforce' } = {}) => {
+    const claudeRig = async (o: { version?: string; mode?: 'enforce'; platform?: 'linux' | 'win32' } = {}) => {
+      const platform = o.platform ?? 'linux'
       const profileDir = mkdtempSync(path.join(os.tmpdir(), 'astera-chat-claude-sbx-'))
       const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'astera-chat-claude-tmp-'))
       dirs.push(profileDir, tmpDir)
       const statusLine = new StatusLineManager(profileDir, 'node', () => {}, {
-        platform: 'linux', execPath: '/opt/astera/astera', homeDir: HOME.linux, env: { ...BASE.linux }, tmpDir
+        platform, execPath: platform === 'win32' ? 'C:/x/electron.exe' : '/opt/astera/astera', homeDir: HOME[platform], env: { ...BASE[platform] }, tmpDir
       })
       await statusLine.init()
       if (o.mode === 'enforce') expect(await statusLine.ensureEnforceFiles()).toBe('ok')
       const versions = Object.assign(() => o.version ?? '2.1.310', { warm: async () => {} })
       const claudeSandbox = claudeSandboxStart({
-        platform: 'linux', profileDir, homeDir: profileDir, env: {}, tmpDir, files: statusLine, version: versions, uid: 1000,
+        platform, profileDir, homeDir: profileDir, env: {}, tmpDir, files: statusLine, version: versions, uid: 1000,
         runGit: async () => null, log: () => {}
       })
       const spawned: Array<{ file: string; args: string[]; opts: ProcSpawnOptions }> = []
       const { createAdapter, handles } = makeAdapterFactory()
       const manager = new ChatSessionManager({
         factory: (file, args, opts) => (spawned.push({ file, args, opts }), new FakeProc()),
-        descriptors: makeDescriptors('linux', HOME.linux),
-        homeDir: HOME.linux,
-        platform: 'linux',
+        descriptors: makeDescriptors(platform, HOME[platform]),
+        homeDir: HOME[platform],
+        platform,
         version: '1.0.0',
         log: () => {},
         createAdapter,
-        baseEnv: { ...BASE.linux },
+        baseEnv: { ...BASE[platform] },
         claudeSandbox,
         ...(o.mode === 'enforce'
           ? {
@@ -1794,12 +1796,26 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
       expect(env.npm_config_cache).toBe(npmCacheOf(r.tmpDir))
       expect(env).toMatchObject({ GIT_CONFIG_KEY_0: 'core.excludesFile', GIT_CONFIG_VALUE_0: gitExcludesFileOf(r.profileDir, 1000) })
       expect(info.sandboxed).toBe(true)
-      expect(r.spawned[0].opts.meta?.restore).toMatchObject({ sandboxed: true })
+      expect(info.sandboxKind).toBe('sandbox')
+      expect(r.spawned[0].opts.meta?.restore).toMatchObject({ sandboxed: true, sandboxKind: 'sandbox' })
       // Unsandboxed, a Claude chat takes no --settings, as before
       const open = r.manager.spawn({ account: claudeAccount, cwd })
       expect(r.spawned[1].args).toEqual(claudeLaunchArgs({ resumeSessionId: undefined, bypass: false }))
       expect(r.spawned[1].opts.env.npm_config_cache).toBeUndefined()
       expect(open).not.toHaveProperty('sandboxed')
+      expect(open).not.toHaveProperty('sandboxKind')
+    })
+
+    // Task 8 fix round 1: on Windows Claude has no sandbox, only deny rules for its file tools, and the info and the note
+    // say so, so the chat's tab does not claim a sandbox
+    it('a sandboxed Claude chat on Windows is marked deny-only', async () => {
+      const cwd = repo()
+      const r = await claudeRig({ platform: 'win32' })
+      await r.manager.prepare({ account: claudeAccount, cwd, sandbox: true })
+      const info = r.manager.spawn({ account: claudeAccount, cwd, sandbox: true })
+      expect(info).toMatchObject({ sandboxed: true, sandboxKind: 'deny-only' })
+      expect(r.spawned[0].opts.meta?.restore).toMatchObject({ sandboxed: true, sandboxKind: 'deny-only' })
+      expect(chatInfoFromNote({ kind: 'chat', id: info.id, restore: r.spawned[0].opts.meta!.restore! })).toMatchObject({ sandboxed: true, sandboxKind: 'deny-only' })
     })
 
     it('in Enforce its one --settings holds the blocking hook and the sandbox', async () => {

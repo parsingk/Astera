@@ -38,7 +38,27 @@ const SANDBOX_GIVEN = {
   'settings.security.sandboxCoverage.level.seen': ['허용', 'Allowed', '許可', 'Permitido'],
   'audit.coverageNote.runtime-measured': ['런타임으로 측정', 'measured on the runtime', 'ランタイムで測定', 'medido en el entorno de ejecución'],
   'audit.coverageNote.file-tools-only': ['파일 도구만', 'file tools only', 'ファイルツールのみ', 'solo herramientas de archivos'],
-  'session.tab.sandboxed': ['Sandbox 안에서 실행 중', 'Running in the sandbox', 'サンドボックスで実行中', 'Ejecutándose en el sandbox']
+  'session.tab.sandboxed': ['Sandbox 안에서 실행 중', 'Running in the sandbox', 'サンドボックスで実行中', 'Ejecutándose en el sandbox'],
+  // Task 8 fix round 1
+  'session.tab.denyOnly': [
+    'Sandbox 없음: 파일 도구만 로그인 정보 폴더를 읽지 못합니다 (셸은 제한 없음)',
+    'No sandbox: only the file tools cannot read the login folders (the shell is not restricted)',
+    'サンドボックスなし: ファイルツールだけがログイン情報のフォルダーを読めません（シェルは制限なし）',
+    'Sin sandbox: solo las herramientas de archivos no pueden leer las carpetas de inicio de sesión (el shell no tiene límites)'
+  ],
+  'settings.security.sandboxCoverage.homeReadable': [
+    '로그인 정보 폴더 밖의 홈 폴더는 sandbox 안에서도 읽을 수 있습니다.',
+    'Outside the login folders, the home folder stays readable inside the sandbox.',
+    'ログイン情報のフォルダー以外のホームフォルダーは、サンドボックス内でも読めます。',
+    'Fuera de las carpetas de inicio de sesión, la carpeta personal sigue siendo legible dentro del sandbox.'
+  ],
+  'settings.security.sandboxCoverage.windowsClaude': ['Windows: 셸은 제한 없음', 'Windows: the shell is not restricted', 'Windows: シェルは制限なし', 'Windows: el shell no tiene límites'],
+  'audit.coverageNote.bus-path-only': [
+    '세션 bus가 파일 경로일 때',
+    'when the session bus is a file path',
+    'セッションバスがファイルパスのとき',
+    'cuando el bus de sesión es una ruta de archivo'
+  ]
 } as const
 
 describe('the agent profiles catalog', () => {

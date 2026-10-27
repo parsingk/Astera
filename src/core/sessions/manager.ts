@@ -26,6 +26,7 @@ import type { EnforceFilesResult } from './statusline'
 import type { GitLayout } from '../sandbox/gitLayout'
 import { codexSandboxEnv } from '../sandbox/codexProfile'
 import { sandboxUnavailable } from '../sandbox/unavailable'
+import { sandboxKindOf } from '../sandbox/coverage'
 import { PreparedLayouts, prepareCodexSandbox, sessionSandboxArgs, type CodexWindowsReady } from '../sandbox/prepared'
 import { codexWindowsReadiness, runCodex } from '../sandbox/windowsReadiness'
 import type { ClaudeSandboxStart } from '../sandbox/claudeStart'
@@ -401,6 +402,8 @@ export class SessionManager {
     // directories would leave the session unable to commit, so a sandboxed spawn nobody prepared for it is refused
     // rather than started without them (E5)
     const sandboxed = opts.sandbox === true
+    // What protection it is, said in the info and the note (SessionInfo.sandboxKind): Claude on Windows has deny rules only
+    const sandboxKind = sandboxed ? sandboxKindOf(providerOf(opts.account), this.checks.platform) : undefined
     const sandboxedCodex = sandboxed && providerOf(opts.account) === 'codex'
     // Claude's sandbox is its settings file: the version the prepare asked is asked again here (the CLI may have been
     // updated since), and a session the twin was not written for is refused below rather than started outside it
@@ -549,7 +552,7 @@ export class SessionManager {
           ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {}),
           ...(observed ? { observed: true } : {}),
           ...(enforced ? { enforced: true } : {}),
-          ...(sandboxed ? { sandboxed: true } : {})
+          ...(sandboxed ? { sandboxed: true, sandboxKind } : {})
         }
       }
     })
@@ -570,7 +573,7 @@ export class SessionManager {
       schedule: opts.schedule,
       ...(opts.startedBy ? { startedBy: opts.startedBy } : {}),
       ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {}),
-      ...(sandboxed ? { sandboxed: true as const } : {})
+      ...(sandboxed ? { sandboxed: true as const, sandboxKind } : {})
     }
     return this.track(info, pty)
   }

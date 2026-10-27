@@ -28,5 +28,6 @@ export const COVERAGE_NOTE_PHRASES: Record<CoverageNote, MessageKey> = {
   'web-search-and-shell-text': 'audit.coverageNote.web-search-and-shell-text',
   'interactive-input': 'audit.coverageNote.interactive-input',
   'runtime-measured': 'audit.coverageNote.runtime-measured',
-  'file-tools-only': 'audit.coverageNote.file-tools-only'
+  'file-tools-only': 'audit.coverageNote.file-tools-only',
+  'bus-path-only': 'audit.coverageNote.bus-path-only'
 }

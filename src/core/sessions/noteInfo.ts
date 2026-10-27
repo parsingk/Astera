@@ -86,9 +86,11 @@ function startedByOf(r: Record<string, unknown>): Pick<SessionInfo, 'startedBy'>
 }
 
 /** Whether the session runs in its CLI's own sandbox, as its note says (SessionInfo.sandboxed): only `true` means it. A
- *  roll reads it off the session it replaces, so its successor starts in the sandbox too. */
-function sandboxedOf(r: Record<string, unknown>): Pick<SessionInfo, 'sandboxed'> {
-  return r.sandboxed === true ? { sandboxed: true } : {}
+ *  roll reads it off the session it replaces, so its successor starts in the sandbox too. Beside it, what protection that
+ *  is (SessionInfo.sandboxKind), only a kind this build knows and only on a sandboxed note. */
+function sandboxedOf(r: Record<string, unknown>): Pick<SessionInfo, 'sandboxed' | 'sandboxKind'> {
+  if (r.sandboxed !== true) return {}
+  return r.sandboxKind === 'sandbox' || r.sandboxKind === 'deny-only' ? { sandboxed: true, sandboxKind: r.sandboxKind } : { sandboxed: true }
 }
 
 /** The agent profile the session was started from, as its note's restore says (SessionInfo.agentProfileId): only a

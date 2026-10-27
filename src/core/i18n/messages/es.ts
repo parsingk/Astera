@@ -179,6 +179,8 @@ export const es: Catalog = {
   'settings.security.sandboxCoverage.level.partial': 'En parte',
   'settings.security.sandboxCoverage.level.none': 'No bloqueado',
   'settings.security.sandboxCoverage.level.seen': 'Permitido',
+  'settings.security.sandboxCoverage.homeReadable': 'Fuera de las carpetas de inicio de sesión, la carpeta personal sigue siendo legible dentro del sandbox.',
+  'settings.security.sandboxCoverage.windowsClaude': 'Windows: el shell no tiene límites',
   'settings.security.builtin.profileWrite': 'Escribir en la carpeta de ajustes de Astera',
   'settings.security.builtin.settingsCommand': 'Comandos que cambian los ajustes de Astera',
   'settings.security.builtin.failClosed': 'Rules ilegibles, solo se permite leer',
@@ -355,6 +357,7 @@ export const es: Catalog = {
   'audit.coverageNote.interactive-input': 'no la entrada a un shell en ejecución',
   'audit.coverageNote.runtime-measured': 'medido en el entorno de ejecución',
   'audit.coverageNote.file-tools-only': 'solo herramientas de archivos',
+  'audit.coverageNote.bus-path-only': 'cuando el bus de sesión es una ruta de archivo',
   'settings.remote.hint': 'Mira desde esta app los Jobs de Astera que se ejecuta en otro equipo (un Runtime). Solo se conecta tras comprobar la clave de ese equipo, y el token se guarda solo en este equipo.',
   'settings.remote.thisMachine.title': 'Este equipo',
   'settings.remote.thisMachine.off': 'Remote Runtime está apagado. Elige una dirección abajo y enciéndelo para que otro equipo pueda emparejarse con este.',
@@ -1212,6 +1215,7 @@ export const es: Catalog = {
   // WorkbenchTabs.tsx
   'session.tab.rollTooltip': 'Rotación: {chain}',
   'session.tab.sandboxed': 'Ejecutándose en el sandbox',
+  'session.tab.denyOnly': 'Sin sandbox: solo las herramientas de archivos no pueden leer las carpetas de inicio de sesión (el shell no tiene límites)',
   // PaneGrid / pane context menu
   'session.pane.splitRight': 'Dividir a la derecha',
   'session.pane.splitDown': 'Dividir abajo',

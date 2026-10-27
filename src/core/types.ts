@@ -140,7 +140,14 @@ export interface SessionInfo {
    *  into the pty's or chat proc's note at spawn like Enforce's `enforced`, so it survives a Host handing the session
    *  back and a roll's successor starts in the sandbox too; absent on every session started outside it. */
   sandboxed?: true
+  /** What protection `sandboxed` gives, set beside it by the session manager that knows the OS and the CLI: `sandbox`, the
+   *  CLI's own sandbox; `deny-only`, Claude Code on Windows, which has none and gets only deny rules for its file tools
+   *  (its shell is not restricted). In the note too, so a session taken back says the same. Absent when not sandboxed. */
+  sandboxKind?: SandboxKind
 }
+
+/** SessionInfo.sandboxKind (core/sandbox/coverage.ts sandboxKindOf decides it). */
+export type SandboxKind = 'sandbox' | 'deny-only'
 
 /** The stored settings the resume modal reads to seed its checkboxes.
  *  A read-only snapshot — what actually gets enabled is settled by the modal and passed down as

@@ -217,6 +217,8 @@ export const ko = {
   'settings.security.sandboxCoverage.level.partial': '일부',
   'settings.security.sandboxCoverage.level.none': '안 막음',
   'settings.security.sandboxCoverage.level.seen': '허용',
+  'settings.security.sandboxCoverage.homeReadable': '로그인 정보 폴더 밖의 홈 폴더는 sandbox 안에서도 읽을 수 있습니다.',
+  'settings.security.sandboxCoverage.windowsClaude': 'Windows: 셸은 제한 없음',
   'settings.security.builtin.profileWrite': 'Astera 설정 폴더 쓰기',
   'settings.security.builtin.settingsCommand': 'Astera 설정 변경 명령',
   'settings.security.builtin.failClosed': 'Rules 를 못 읽어 읽기만 허용',
@@ -393,6 +395,7 @@ export const ko = {
   'audit.coverageNote.interactive-input': '실행 중인 셸에 입력하는 것은 못 막음',
   'audit.coverageNote.runtime-measured': '런타임으로 측정',
   'audit.coverageNote.file-tools-only': '파일 도구만',
+  'audit.coverageNote.bus-path-only': '세션 bus가 파일 경로일 때',
   'settings.plugins.hint': '플러그인은 Astera Host 옆에서 도는 프로그램입니다. 설치하면 이 컴퓨터에서 신뢰된 코드로 실행되고, Astera 에는 허락한 권한 안에서만 요청할 수 있습니다.',
   'settings.plugins.none': '설치된 플러그인이 없습니다.',
   'settings.plugins.installFolder': '폴더에서 설치…',
@@ -1524,6 +1527,7 @@ export const ko = {
   // WorkbenchTabs.tsx
   'session.tab.rollTooltip': '롤링: {chain}',
   'session.tab.sandboxed': 'Sandbox 안에서 실행 중',
+  'session.tab.denyOnly': 'Sandbox 없음: 파일 도구만 로그인 정보 폴더를 읽지 못합니다 (셸은 제한 없음)',
   // PaneGrid / pane context menu
   'session.tab.rename': '이름 변경',
   'session.pane.splitRight': '우측 분할',

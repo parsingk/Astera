@@ -28,6 +28,7 @@ import { enforceUnavailable, type EnforceStart } from '../audit/enforce'
 import { PreparedLayouts, prepareCodexSandbox, sessionSandboxArgs, type CodexWindowsReady } from '../sandbox/prepared'
 import { appServerSandboxArgs, codexSandboxEnv } from '../sandbox/codexProfile'
 import { sandboxUnavailable } from '../sandbox/unavailable'
+import { sandboxKindOf } from '../sandbox/coverage'
 import type { ClaudeSandboxStart } from '../sandbox/claudeStart'
 
 export { EXITED_SESSIONS_KEPT }
@@ -340,6 +341,8 @@ export class ChatSessionManager {
     // safely itself, and a profile that does not name the repository's git directories would leave the session unable to
     // commit, so a sandboxed chat nobody prepared for it is refused rather than started without them (E5)
     const sandboxed = opts.sandbox === true
+    // What protection it is, said in the info and the note (SessionInfo.sandboxKind): Claude on Windows has deny rules only
+    const sandboxKind = sandboxed ? sandboxKindOf(provider, this.deps.platform) : undefined
     const sandboxedCodex = sandboxed && provider === 'codex'
     const layout = sandboxedCodex ? this.sandboxLayouts.layoutOf(opts.account.id, opts.cwd, Date.now()) : null
     if (layout === undefined) throw sandboxUnavailable('not-prepared')
@@ -434,7 +437,7 @@ export class ChatSessionManager {
         ...(isObserving(caps?.context.policyMode ?? 'compatibility') ? { observed: true } : {}),
         ...(enforced ? { enforced: true } : {}),
         // The sandbox, as a terminal session's note has it: a Host handing the session back and a roll's successor read it
-        ...(sandboxed ? { sandboxed: true } : {}),
+        ...(sandboxed ? { sandboxed: true, sandboxKind } : {}),
         // design F5 fix round 1 (Critical 2): the durable mark, written into the note itself so an
         // app restart's `adopt()` can restore it too, not only `state()`'s in-memory overlay.
         ...(opts.startWithBypass ? { bypassedToolchain: true } : {}),
@@ -474,7 +477,7 @@ export class ChatSessionManager {
       ...(rollPrompt === undefined ? {} : { rollPrompt }),
       ...(opts.startedBy ? { startedBy: opts.startedBy } : {}),
       ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {}),
-      ...(sandboxed ? { sandboxed: true as const } : {})
+      ...(sandboxed ? { sandboxed: true as const, sandboxKind } : {})
     }
 
     const adapter = this.makeAdapter(proc, { mode: 'fresh' }, provider)

@@ -9,8 +9,9 @@
 import { jobNameOf } from './jobName'
 import { diagnosticLine, findingsCountOf, oneLine } from './pluginChecks'
 import type { CheckResult, JobSourceRef } from './types'
-import type { AuditAction, CoverageNote } from '../audit/types'
+import type { AuditAction, CoverageNote, SandboxCoverageRow } from '../audit/types'
 import { ACTION_PHRASES, COVERAGE_NOTE_PHRASES } from '../audit/phrases'
+import { SANDBOX_TABLE_CAPTION, sandboxRowCaption } from '../sandbox/coverage'
 import { t } from '../i18n'
 
 /** 상태 한 낱말. **파생값과 플래그를 한 낱말로 접는다** — 사람이 목록에서 훑는 것이 이것이고,
@@ -269,13 +270,16 @@ const SANDBOX_CLASSES = [
 const OS_NAMES: Record<string, string> = { win32: 'Windows', darwin: 'macOS', linux: 'Linux' }
 
 /** What the sandbox blocks (sandbox design §6), a row per CLI and OS, headed `sandbox` so it is not read as the table
- *  above it. A level is its own word but `seen`, which here is what the sandbox lets through: the network (E3). */
+ *  above it. A level is its own word but `seen`, which here is what the sandbox lets through: the network (E3). What a
+ *  cell cannot say is said as the screen says it: beside its row (Claude Code's shell on Windows), and under the table
+ *  (the home stays readable outside the login folders). */
 function sandboxCoverageText(rows: Record<string, unknown>[]): string {
-  return columns([
+  const table = columns([
     ['sandbox', ...SANDBOX_CLASSES.map(([, name]) => name)],
     ...rows.map((row) => {
       const classes = (row.classes ?? {}) as Record<string, { level?: unknown; note?: unknown } | undefined>
       const os = str(row.os)
+      const caption = sandboxRowCaption({ provider: row.provider as SandboxCoverageRow['provider'], os: os as SandboxCoverageRow['os'] })
       return [
         `${str(row.provider)} ${Object.hasOwn(OS_NAMES, os) ? OS_NAMES[os] : os}`,
         ...SANDBOX_CLASSES.map(([key]) => {
@@ -284,10 +288,12 @@ function sandboxCoverageText(rows: Record<string, unknown>[]): string {
           const note =
             typeof c?.note === 'string' ? (Object.hasOwn(COVERAGE_NOTE_PHRASES, c.note) ? t('en', COVERAGE_NOTE_PHRASES[c.note as CoverageNote]) : c.note) : undefined
           return note === undefined ? level : `${level} (${note})`
-        })
+        }),
+        ...(caption === null ? [] : [t('en', caption)])
       ]
     })
   ])
+  return `${table}\n${t('en', SANDBOX_TABLE_CAPTION)}`
 }
 
 /** `audit list`'s flags that the next page asks again, as the parser keys them and as they are typed: all but the cursor

@@ -16,6 +16,7 @@ import type {
   SandboxCoverageRow
 } from '../../../core/audit/types'
 import { ACTION_PHRASES, COVERAGE_NOTE_PHRASES } from '../../../core/audit/phrases'
+import { SANDBOX_TABLE_CAPTION, sandboxRowCaption } from '../../../core/sandbox/coverage'
 import { failureLine } from './extensionsText'
 
 type T = (key: MessageKey, params?: MessageParams) => string
@@ -153,6 +154,19 @@ export const sandboxClassLabel = (c: SandboxCoverageClass, t: T): string => t(SA
 /** A CLI on an OS, as the table's rows are named. One this side does not know (a newer Host's) as it was named. */
 export const sandboxRowLabel = (r: Pick<SandboxCoverageRow, 'provider' | 'os'>, t: T): string =>
   t('settings.security.coverage.row', { provider: PROVIDERS[r.provider] ?? r.provider, kind: Object.hasOwn(OS_NAMES, r.os) ? OS_NAMES[r.os] : r.os })
+
+/** Said under the table: the home stays readable outside the login folders (core/sandbox/coverage.ts). */
+export const sandboxTableCaption = (t: T): string => t(SANDBOX_TABLE_CAPTION)
+
+/** Said beside a row its cells cannot say it for (Claude Code's shell on Windows), or null. */
+export function sandboxRowNote(r: Pick<SandboxCoverageRow, 'provider' | 'os'>, t: T): string | null {
+  const key = sandboxRowCaption(r)
+  return key === null ? null : t(key)
+}
+
+/** A cell's class: by its level, but what the sandbox lets through (the network) is neutral, not the green that reads as
+ *  covered in the other table. */
+export const sandboxCellClass = (cell: CoverageCell | undefined): string => (cell?.level === 'seen' ? 'is-allowed' : `is-${cell?.level ?? 'none'}`)
 
 /** What the sandbox does to a class, with why when only partly or how it was measured. A level or note this side does
  *  not know is shown as it was named. */
@@ -561,6 +575,8 @@ export const SECURITY_KEYS: MessageKey[] = [
   ...Object.values(BUILT_IN_WORDS),
   ...ENFORCE_KEYS,
   'settings.security.sandboxCoverage.title',
+  SANDBOX_TABLE_CAPTION,
+  'settings.security.sandboxCoverage.windowsClaude',
   ...Object.values(SANDBOX_CLASS_WORDS),
   ...Object.values(SANDBOX_LEVELS)
 ]

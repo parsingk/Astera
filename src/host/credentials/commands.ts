@@ -106,7 +106,7 @@ const SANDBOX_LINES: { level: 'ok' | 'warn'; text: string }[] = [
   },
   {
     level: 'ok',
-    text: `Sandbox, Codex on Linux: Codex’s own sandbox; writes stay in the session’s folder, its repository’s git directories (not their hooks or config) and the temp folder, ${LOGIN_FOLDERS} cannot be read, the session bus a secret service answers on cannot be reached, and the network works.`
+    text: `Sandbox, Codex on Linux: Codex’s own sandbox; writes stay in the session’s folder, its repository’s git directories (not their hooks or config) and the temp folder, ${LOGIN_FOLDERS} cannot be read, the session bus a secret service answers on cannot be reached when the session bus is a file path (a bus on an abstract socket is not denied), and the network works.`
   },
   {
     level: 'warn',
@@ -133,7 +133,7 @@ const SANDBOX_LIMITS = [
   'Git pushes from inside the sandbox use git’s login only where the sandbox lets the credential helper run; on Windows it does not, so pushes stay with the Host as today.',
   'A chain keeps the sandbox state it started with: the session a roll starts next is in the sandbox exactly when the first one was, whatever the profile’s switch says by then.',
   'A worktree a sandboxed Codex session adds itself has a config.worktree its sandbox profile does not name, so the session can write that file; the worktrees there when it started are named, and kept read-only.',
-  'On Windows, setting up one Codex account’s sandbox can leave another account’s setup stale (from Codex’s source, not measured): Astera asks before each sandboxed start, and an account found stale is not started on until it is set up again (Set up, in Settings › Agent profiles).',
+  'On Windows, setting up one Codex account’s sandbox can leave another account’s setup stale (from Codex’s source, not measured). Astera asks before each sandboxed start, with Codex’s doctor first and a sandboxed echo only on a home doctor calls complete; a ready answer is kept for the process’s life and dropped only by a setup run through Astera, so a home made stale by a setup outside Astera keeps reading ready until Astera restarts. A home found stale is not started on until it is set up again (Set up, in Settings › Agent profiles).',
   'Claude Code’s use of its sandbox settings is measured on the runtime it uses (srt 0.0.79), not with Claude Code itself.'
 ]
 

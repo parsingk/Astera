@@ -54,7 +54,8 @@ export type CoverageClass = 'shell' | 'file-read' | 'file-write' | 'mcp' | 'netw
 
 /** Why a class is only partly seen, as a key the screens and the CLI put in words. The sandbox's table adds two:
  *  `runtime-measured`, blocked by the runtime Claude Code's sandbox runs on (srt), which was measured, while Claude Code's
- *  own use of it was not; `file-tools-only`, Claude Code on Windows, whose file tools alone are kept out. */
+ *  own use of it was not; `file-tools-only`, Claude Code on Windows, whose file tools alone are kept out; `bus-path-only`,
+ *  Codex on Linux, whose deny names the session bus by its file path (an abstract-socket bus is not denied). */
 export type CoverageNote =
   | 'web-tools-only'
   | 'shell-text-only'
@@ -62,6 +63,7 @@ export type CoverageNote =
   | 'interactive-input'
   | 'runtime-measured'
   | 'file-tools-only'
+  | 'bus-path-only'
 
 export interface CoverageCell {
   /** `enforced`: Enforce's hook decides every call of the class before it runs (COVERAGE_ENFORCE), or the sandbox

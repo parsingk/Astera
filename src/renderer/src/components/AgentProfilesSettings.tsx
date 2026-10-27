@@ -353,9 +353,9 @@ function SandboxReadiness({ profile, accounts }: { profile: AgentProfile; accoun
     setSettingUp(true)
     try {
       const answer = await window.api.agentProfiles.sandboxSetup(profile.id, accountId).catch(failed)
+      // A setup that worked says nothing more: the line asked again below reads ready
       const outcome = sandboxSetupOutcome(answer)
-      if (outcome.ok) toast.success(t('session.spawn.sandbox.setUpDone'))
-      else toast.error(outcome.line ?? t('session.spawn.sandbox.setUpFailed'))
+      if (!outcome.ok) toast.error(outcome.line ?? t('session.spawn.sandbox.setUpFailed'))
     } finally {
       setSettingUp(false)
       void ask()

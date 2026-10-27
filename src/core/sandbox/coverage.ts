@@ -3,6 +3,8 @@
 // Windows on this PC (inventory §23.3), macOS and Linux on GitHub's runners (§22, §23.4). Types only, so the renderer
 // reads it too.
 import type { CoverageCell, SandboxCoverageRow } from '../audit/types'
+import type { MessageKey } from '../i18n'
+import type { SandboxKind } from '../types'
 
 const ENFORCED: CoverageCell = { level: 'enforced' }
 const NONE: CoverageCell = { level: 'none' }
@@ -13,6 +15,9 @@ const ALLOWED: CoverageCell = { level: 'seen' }
  *  locations cannot be read; the OS credential store is kept out (Windows' elevated sandbox keeps Credential Manager out,
  *  measured; macOS and Linux with the denies Astera adds, `~/Library/Keychains` and the session bus, measured). */
 const CODEX = { write: ENFORCED, sensitive: ENFORCED, stores: ENFORCED, network: ALLOWED }
+/** On Linux the deny names the session bus by its file path (locations.ts busSocketOf): a bus on an abstract socket is
+ *  not a path, and is not denied. */
+const CODEX_LINUX = { ...CODEX, stores: { level: 'enforced', note: 'bus-path-only' } } as const
 
 /** Claude Code's sandbox on macOS and Linux. Writes and E6 were measured on the runtime it runs (srt 0.0.79, §23.4), as
  *  were the stores; the stores carry the note, since Claude Code's own use of the keys was not exercised. */
@@ -28,5 +33,18 @@ export const SANDBOX_COVERAGE: readonly SandboxCoverageRow[] = [
   { provider: 'claude', os: 'linux', classes: CLAUDE_POSIX },
   { provider: 'codex', os: 'win32', classes: CODEX },
   { provider: 'codex', os: 'darwin', classes: CODEX },
-  { provider: 'codex', os: 'linux', classes: CODEX }
+  { provider: 'codex', os: 'linux', classes: CODEX_LINUX }
 ]
+
+/** Said under the table: E6 is the list, so the rest of the home stays readable inside the sandbox (spec §6). */
+export const SANDBOX_TABLE_CAPTION: MessageKey = 'settings.security.sandboxCoverage.homeReadable'
+
+/** Said beside a row the cells cannot say it for: Claude Code's shell on Windows is not restricted. Null for the others. */
+export const sandboxRowCaption = (r: Pick<SandboxCoverageRow, 'provider' | 'os'>): MessageKey | null =>
+  r.provider === 'claude' && r.os === 'win32' ? 'settings.security.sandboxCoverage.windowsClaude' : null
+
+/** The protection a sandboxed session of `provider` gets on `platform` (SessionInfo.sandboxKind), decided by the session
+ *  managers, which know both: Claude Code on Windows has no sandbox, only deny rules for its file tools; everything else
+ *  runs in its CLI's own sandbox. `platform` is a string: the renderer, which has no NodeJS types, reads this file. */
+export const sandboxKindOf = (provider: 'claude' | 'codex', platform: string): SandboxKind =>
+  provider === 'claude' && platform === 'win32' ? 'deny-only' : 'sandbox'
