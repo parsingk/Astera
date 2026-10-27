@@ -5,7 +5,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { main } from './measure-sandbox.mjs'
+import { main, s2Denied } from './measure-sandbox.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -35,11 +35,26 @@ describe('measure-sandbox', () => {
       'ripgrep',
       'zsh',
       'kernel.apparmor_restrict_unprivileged_userns=0',
+      // Found by the first run: without these the Linux keychain probe had nothing to read
+      'libsecret-tools',
+      'gnome-keyring',
+      'dbus-daemon --session',
+      'gnome-keyring-daemon --unlock',
       'node scripts/measure/measure-sandbox.mjs',
       'GH_TOKEN: ${{ github.token }}'
     ])
       expect(yml, want).toContain(want)
     // Nothing that writes back to the repository
     expect(yml).not.toMatch(/contents: write|git push/)
+  })
+
+  // Found by the first run: both S2 sets reached a keychain item on macOS
+  it('denies the S2 sets the sensitive locations, and on macOS the keychains folder only when asked', () => {
+    for (const platform of ['darwin', 'linux']) {
+      expect(s2Denied(platform)).toContain('~/.ssh')
+      expect(s2Denied(platform)).not.toContain('~/Library/Keychains')
+    }
+    expect(s2Denied('darwin', true)).toEqual([...s2Denied('darwin'), '~/Library/Keychains'])
+    expect(s2Denied('linux', true)).toEqual(s2Denied('linux'))
   })
 })

@@ -23,6 +23,9 @@ export const PROBES = [
   { id: 'loopback', line: 'curl -sS -m 5 "http://127.0.0.1:$ASTERA_PROBE_PORT/"' },
   // Appended, so there is always a change to commit
   { id: 'git-commit', line: `echo c >> commit.txt && git add -A && ${COMMIT}` },
+  // Found by the first run: on Linux srt puts /dev/null over the startup file names missing in its cwd, which
+  // `git add -A` refuses, so a commit of one named file says whether committing itself is allowed
+  { id: 'git-commit-named', line: `echo n >> named.txt && git add named.txt && ${COMMIT}` },
   { id: 'git-commit-worktree', line: `cd wt && echo y >> wt.txt && git add -A && ${COMMIT}` },
   { id: 'git-hooks-write', line: "printf '#!/bin/sh\\n' > .git/hooks/pre-commit" },
   { id: 'git-config-write', line: 'git config core.hooksPath /tmp/astera-probe-hooks' },

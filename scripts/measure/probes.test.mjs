@@ -75,6 +75,7 @@ describe('PROBES', () => {
       'network',
       'loopback',
       'git-commit',
+      'git-commit-named',
       'git-commit-worktree',
       'git-hooks-write',
       'git-config-write',

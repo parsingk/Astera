@@ -1,8 +1,10 @@
 // The macOS and Linux measurement (enforce and sandbox design §8, E4), run by .github/workflows/measure-sandbox.yml on
 // a GitHub Actions runner and nowhere else: it writes fake credentials into the home folder (~/.ssh, ~/.aws, gh, npm,
-// git's stored logins, kube, docker, gcloud) and the shell startup files. Without any login it measures:
+// git's stored logins, kube, docker, gcloud), the shell startup files, and a fake item in the login keychain (macOS) or
+// the keyring the workflow unlocks (Linux). Without any login it measures:
 // - the sandbox probes (probes.mjs) with no sandbox, in Codex's `:workspace`, in the profile S2 means to use, and in
-//   Claude's sandbox runtime (`srt`) with the settings S2 means to pass;
+//   Claude's sandbox runtime (`srt`) with the settings S2 means to pass; on macOS those two again with the keychains
+//   folder denied;
 // - the Credentials list's login presets against their own tools (presets.mjs);
 // - which shell startup files each shell mode reads (shells.mjs);
 // - what starting the Enforce hook costs with node and with Electron as node (latency.mjs).
@@ -20,6 +22,13 @@ import { extractHookSource, measureHook } from './latency.mjs'
 
 /** E6's sensitive locations, the same list for Codex's profile and Claude's sandbox settings. */
 const SENSITIVE = ['~/.ssh', '~/.aws', '~/.config/gh', '~/.config/gcloud', '~/.docker', '~/.kube', '~/.npmrc', '~/.git-credentials']
+
+/** What an S2 set denies reading: SENSITIVE, and on macOS with `keychains` the login keychain's folder too. Found by
+ *  the first run: both S2 sets read a keychain item on macOS, since Codex's network policy and srt let the sandboxed
+ *  command reach com.apple.SecurityServer. */
+export function s2Denied(platform, keychains = false) {
+  return platform === 'darwin' && keychains ? [...SENSITIVE, '~/Library/Keychains'] : SENSITIVE
+}
 
 const sh = (argv, o = {}) => {
   const r = spawnSync(argv[0], argv.slice(1), { encoding: 'utf8', timeout: 120_000, ...o })
@@ -48,7 +57,7 @@ function workspaceFor(home, name, env) {
   repo(main, env)
   if (sh(['git', 'worktree', 'add', '-q', path.join(workspace, 'wt'), '-b', 'probe'], { cwd: main, env }).code !== 0) throw new Error('could not add the worktree')
   appendFileSync(path.join(workspace, '.git', 'info', 'exclude'), 'wt/\n')
-  return { workspace, commonDir: path.join(main, '.git') }
+  return { name, workspace, commonDir: path.join(main, '.git') }
 }
 
 /** The fake home files and git's stored login, in `env`'s home. */
@@ -64,8 +73,16 @@ function fixtures(home, env) {
   write('.config/gh/hosts.yml', 'github.com:\n    oauth_token: gho_astera_probe_fake\n    user: astera-probe\n')
   write('.git-credentials', 'https://astera-probe:fake@astera-probe.example\n')
   sh(['git', 'config', '--global', 'credential.helper', 'store'], { env })
-  const keychain = process.platform === 'darwin' ? sh(['security', 'add-generic-password', '-a', 'astera', '-s', 'astera-probe', '-w', 'astera-probe-fake', '-U'], { env }) : null
-  return { keychain: keychain === null ? 'not on this platform' : keychain.code === 0 ? 'added' : keychain.out.slice(0, 200) }
+  // On Linux in the session bus and unlocked keyring the workflow starts
+  const keychain =
+    process.platform === 'darwin'
+      ? sh(['security', 'add-generic-password', '-a', 'astera', '-s', 'astera-probe', '-w', 'astera-probe-fake', '-U'], { env })
+      : process.platform === 'linux'
+        ? sh(['secret-tool', 'store', '--label=astera-probe', 'service', 'astera-probe'], { env, input: 'astera-probe-fake' })
+        : null
+  return {
+    keychain: keychain === null ? 'not on this platform' : keychain.code === 0 ? 'added' : keychain.missing ? 'secret-tool is not installed' : keychain.out.slice(0, 200)
+  }
 }
 
 /** A loopback HTTP server in a process of its own (the probes block this one), and its port. */
@@ -103,45 +120,56 @@ export async function main(o = {}) {
   const homeEnv = { ...env, HOME: home }
   const f = fixtures(home, homeEnv)
   const server = await loopbackServer()
-  const base = { ...env, HOME: home, ASTERA_PROBE_PORT: server.port, npm_config_cache: path.join(tmp, 'astera-npm-cache') }
+  const base = { ...env, HOME: home, ASTERA_PROBE_PORT: server.port }
 
   // Codex: `:workspace` as it is, and the profile S2 means to pass (§6), with the worktree's common directory writable
   const workspaceProfile = ['-c', 'permissions={probe={extends=":workspace"}}', '-c', 'default_permissions="probe"']
-  const s2Profile = (commonDir) => {
+  const s2Profile = (commonDir, denied) => {
     const filesystem = [
       `${toml(':workspace_roots')}={".git"="write", ".git/hooks"="read", ".git/config"="read"}`,
       `${toml(commonDir)}="write"`,
-      ...SENSITIVE.map((p) => `${toml(p)}="deny"`)
+      ...denied.map((p) => `${toml(p)}="deny"`)
     ].join(', ')
     return ['-c', `permissions={probe2={extends=":workspace", filesystem={${filesystem}}, network={enabled=true}}}`, '-c', 'default_permissions="probe2"']
   }
   const codex = (profile, form) => (line) => ({ file: 'codex', args: [...form, ...profile, '--', 'sh', '-c', line] })
 
   // Claude's sandbox runtime with the settings S2 means to pass (§6)
-  const srtSettingsFor = (commonDir) => {
-    const file = path.join(scratch, 'srt-settings.json')
+  const srtSettingsFor = (name, commonDir, denied) => {
+    const file = path.join(scratch, `srt-settings-${name}.json`)
     writeFileSync(
       file,
       JSON.stringify({
         network: { allowedDomains: ['example.com', 'registry.npmjs.org'], deniedDomains: [] },
-        filesystem: { denyRead: SENSITIVE, allowRead: [], allowWrite: ['.', tmp, commonDir], denyWrite: ['.git/hooks', '.git/config'] }
+        filesystem: { denyRead: denied, allowRead: [], allowWrite: ['.', tmp, commonDir], denyWrite: ['.git/hooks', '.git/config'] }
       })
     )
     return file
   }
+  // srt hands its command TMPDIR=/tmp/claude and leaves making it to Claude Code, which makes its own (found by the
+  // first run: the temp write failed on a folder that was not there)
+  if (process.platform !== 'win32') mkdirSync('/tmp/claude', { recursive: true })
 
-  // Each set on a workspace of its own
-  const at = (w) => ({ cwd: w.workspace, env: base })
+  // Each set on a workspace and an npm cache of its own (found by the first run: a cache the set before had filled let
+  // an install without the network succeed)
+  const at = (w) => ({ cwd: w.workspace, env: { ...base, npm_config_cache: path.join(tmp, `astera-npm-cache-${w.name}`) } })
   const wPlain = workspaceFor(home, 'plain', homeEnv)
   const plain = runProbes((line) => ({ file: 'sh', args: ['-c', line] }), at(wPlain))
   const wCodex = workspaceFor(home, 'codex-workspace', homeEnv)
   const workspaceForm = codexForm(workspaceProfile, base, wCodex.workspace)
   const codexWorkspace = runSet(codex(workspaceProfile, workspaceForm.form), at(wCodex))
-  const wS2 = workspaceFor(home, 'codex-s2', homeEnv)
-  const codexS2 = runSet(codex(s2Profile(wS2.commonDir), workspaceForm.form), at(wS2))
-  const wSrt = workspaceFor(home, 'srt-s2', homeEnv)
-  const srtSettings = srtSettingsFor(wSrt.commonDir)
-  const srtS2 = runSet((line) => ({ file: 'srt', args: ['--settings', srtSettings, 'sh', '-c', line] }), at(wSrt))
+  const codexSet = (name, keychains) => {
+    const w = workspaceFor(home, name, homeEnv)
+    return runSet(codex(s2Profile(w.commonDir, s2Denied(process.platform, keychains)), workspaceForm.form), at(w))
+  }
+  const srtSet = (name, keychains) => {
+    const w = workspaceFor(home, name, homeEnv)
+    const settings = srtSettingsFor(name, w.commonDir, s2Denied(process.platform, keychains))
+    return runSet((line) => ({ file: 'srt', args: ['--settings', settings, 'sh', '-c', line] }), at(w))
+  }
+  const sets = { codexWorkspace, codexS2: codexSet('codex-s2', false), srtS2: srtSet('srt-s2', false) }
+  // On macOS, the same S2 sets with the keychains folder denied as well
+  if (process.platform === 'darwin') Object.assign(sets, { codexS2Keychains: codexSet('codex-s2-keychains', true), srtS2Keychains: srtSet('srt-s2-keychains', true) })
   server.stop()
 
   const run = (argv, e) => {
@@ -185,7 +213,7 @@ export async function main(o = {}) {
     codexSandboxHelp: sh(['codex', 'sandbox', '--help']).out.slice(0, 3000),
     codexSandboxForm: { form: workspaceForm.form, refused: workspaceForm.tried },
     keychain: f.keychain,
-    probes: { plain, codexWorkspace, codexS2, srtS2 },
+    probes: { plain, ...sets },
     presets,
     shells,
     latency
@@ -197,7 +225,7 @@ export async function main(o = {}) {
   const summary = [
     `## ${process.platform} (${result.image.os ?? '?'} ${result.image.version ?? '?'}), ${result.versions.codex}, srt ${result.versions.srt}`,
     '',
-    probeTable('Sandbox probes', plain, { codexWorkspace, codexS2, srtS2 }),
+    probeTable('Sandbox probes', plain, sets),
     '### Presets',
     '',
     '| preset | verdict |',
