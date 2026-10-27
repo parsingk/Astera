@@ -79,13 +79,15 @@ describe('index.ts prepares a roll on the chain’s agent profile', () => {
   const index = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8')
 
   it('both coordinators’ prepareSpawn pass the profile id and the sandbox to the prepare', () => {
-    const lines = index.split('\n').filter((l) => l.includes('prepareSpawn:'))
-    expect(lines).toHaveLength(2)
-    for (const l of lines) {
-      expect(l).toMatch(
-        /prepareSpawn: \(account, cwd, agentProfileId, sandbox\) => core!\.sessions\.prepare\(\{ account, cwd, \.\.\.\(agentProfileId \? \{ agentProfileId \} : \{\}\), \.\.\.\(sandbox \? \{ sandbox: true \} : \{\}\) \}\)/
-      )
-    }
+    expect(index.split('\n').filter((l) => l.includes('prepareSpawn:'))).toHaveLength(2)
+    const shared = String.raw`core!\.sessions\.prepare\(\{ account, cwd, \.\.\.\(agentProfileId \? \{ agentProfileId \} : \{\}\), \.\.\.\(sandbox \? \{ sandbox: true \} : \{\}\)`
+    // The claude coordinator's, as it was
+    expect(index).toMatch(new RegExp(String.raw`prepareSpawn: \(account, cwd, agentProfileId, sandbox\) => ${shared} \}\)`))
+    // Task 6 fix round 1: the codex coordinator's also says when the respawn is a chat's (its sandbox needs no
+    // --no-daemon)
+    expect(index).toMatch(
+      new RegExp(String.raw`prepareSpawn: \(account, cwd, agentProfileId, sandbox, kind\) =>\s+${shared}, \.\.\.\(kind === 'chat' \? \{ chat: true \} : \{\}\) \}\)`)
+    )
   })
 })
 

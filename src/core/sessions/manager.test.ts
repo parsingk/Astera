@@ -1972,6 +1972,26 @@ describe('the sandbox at spawn', () => {
     expect(l.spawned).toHaveLength(1)
   })
 
+  // Task 6 fix round 1: Codex could not be asked (missing, too old for doctor --json, timed out, a report that does not
+  // read): its own refusal, which offers no setup, and nothing written for it
+  it('a sandboxed win32 Codex start whose readiness could not be asked refuses with windows-check-failed', async () => {
+    const cwd = repo()
+    const w = rig('win32', { ready: async () => 'check-failed' })
+    await expect(w.manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: windows-check-failed codex acc-cx$/)
+    expect(existsSync(path.join(cwd, '.git', 'config.worktree'))).toBe(false)
+    expect(w.spawned).toHaveLength(0)
+  })
+
+  // Task 6 fix round 1: a chat chain's roll is prepared here too, and a chat's app-server needs no --no-daemon, so its
+  // sandbox is not refused for a codex without it; the layout it reads is the chat respawn's
+  it('a chat roll’s preparation does not ask for --no-daemon', async () => {
+    const cwd = repo()
+    const { manager } = rig('linux', { noDaemon: false })
+    await expect(manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: codex-daemon codex$/)
+    await manager.prepare({ account: codexAccount, cwd, sandbox: true, chat: true })
+    expect(manager.sandboxLayouts.layoutOf(codexAccount.id, cwd, Date.now())).toEqual(await gitLayoutOf(cwd))
+  })
+
   // Readiness is per account, so what a prepare read is kept for the account it was asked for: another account's
   // sandboxed spawn in the same folder is not let through on it
   it('a prepared sandbox is kept for its own account', async () => {

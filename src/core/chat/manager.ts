@@ -35,7 +35,7 @@ export { EXITED_SESSIONS_KEPT }
 export const DROPPED_STATES_KEPT = 1024
 import { buildCodexAppServerCommand, buildClaudeChatCommand } from '../sessions/commands'
 import type { PtyMeta } from '../host/protocol'
-import type { ChatAdapter, ChatAnswer, ChatEvent, ChatRequest, ChatState, PermissionMode, PermissionModeChoice, UnattendedPermission } from './types'
+import type { ChatAdapter, ChatAnswer, ChatEvent, ChatRequest, ChatRollRefusedNotice, ChatState, PermissionMode, PermissionModeChoice, UnattendedPermission } from './types'
 import { isUnattendedPermission } from './types'
 import { MAX_SNAPSHOT_PROMPT_CHARS, type RollSpawnExtra } from '../rolling/snapshot'
 import { chatInfoFromNote } from '../sessions/noteInfo'
@@ -166,7 +166,7 @@ interface LiveChatSession {
    *  announced). Cleared on the next `send()`, mirroring the adapters' own `patch({ error: null })` on
    *  a fresh turn — and on the `notice` event itself (useChatState.ts's fold), which is the one this
    *  session actually gets since `respawnWithBypass` calls `adapter.send` directly, never `send()`. */
-  notice: 'bypassed' | null
+  notice: 'bypassed' | ChatRollRefusedNotice | null
   /** design F5: whether this session's exit may be offered the "skip the toolchain and retry" button
    *  — set once, when the exit happens, from `looksLikeRefusal` and `managerDetected` together (never
    *  from either alone: see `handleEvent`'s own comment). `state()` overlays this the same way it
@@ -631,6 +631,16 @@ export class ChatSessionManager {
 
   /** Set only during a person's send's synchronous part (`send`). */
   private forPerson = false
+
+  /** A refused roll's reason, for the chat's pane (sandbox design §6, Task 6 fix round 1): kept in `notice`, which
+   *  `state()` overlays for a pane that mounts later, and told as the event an open pane hears, the way the bypass
+   *  notice is. Cleared by the next turn. Unknown id: no-op. */
+  notice(id: string, notice: ChatRollRefusedNotice): void {
+    const live = this.sessions.get(id)
+    if (!live) return
+    live.notice = notice
+    this.handleEvent(id, { type: 'notice', ...notice })
+  }
 
   interrupt(id: string): Promise<void> {
     const live = this.sessions.get(id)

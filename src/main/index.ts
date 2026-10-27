@@ -1132,8 +1132,9 @@ app.whenReady().then(async () => {
     // What the synchronous respawn above would otherwise look for on disk (the folder, Git Bash on win32,
     // and for a chain in the sandbox its git layout), looked for before the kill and without blocking this
     // thread: an offline drive fails the roll here, where it is rescheduled, instead of freezing every
-    // window at the spawn.
-    prepareSpawn: (account, cwd, agentProfileId, sandbox) => core!.sessions.prepare({ account, cwd, ...(agentProfileId ? { agentProfileId } : {}), ...(sandbox ? { sandbox: true } : {}) }),
+    // window at the spawn. A chat chain's respawn is an app-server, whose sandbox needs no --no-daemon (`chat`).
+    prepareSpawn: (account, cwd, agentProfileId, sandbox, kind) =>
+      core!.sessions.prepare({ account, cwd, ...(agentProfileId ? { agentProfileId } : {}), ...(sandbox ? { sandbox: true } : {}), ...(kind === 'chat' ? { chat: true } : {}) }),
     // design F5 fix round 1 (Important 3): claudeCoordinator.ts's own dep, same contract.
     bypassedOf: (id) => core!.chat.bypassedOf(id),
     kill: (id) => (core!.chat.has(id) ? core!.chat.kill(id) : core!.sessions.kill(id)),
@@ -1158,10 +1159,11 @@ app.whenReady().then(async () => {
       }
     },
     // Why a roll waits, when its respawn would start without the sandbox the chain runs in: one line in the terminal tab,
-    // as output (the Host's twin writes its pty's ring, host/rolling.ts). A chat pane has no such line; its reason stays
-    // in the rolling log.
-    tell: (id, line) => {
-      if (!core!.chat.has(id)) core!.sessions.say(id, `\r\n${line}\r\n`)
+    // as output, in the app's language (the Host's twin writes its pty's ring, host/rolling.ts); for a chat, the chat's
+    // notice, which its pane words
+    tell: (id, reason) => {
+      if (core!.chat.has(id)) core!.chat.notice(id, { key: 'rollRefused', reason })
+      else core!.sessions.say(id, `\r\n[Astera] ${t(core!.lang, reason.key, reason.params)}\r\n`)
     },
     getAccount: (id) => {
       try {

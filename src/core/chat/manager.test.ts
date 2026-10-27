@@ -1549,7 +1549,7 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
     win32: { Path: 'C:\\Windows', APPDATA: 'C:\\Users\\t\\AppData\\Roaming' }
   } as const
   type Ready = NonNullable<ChatManagerDeps['codexWindowsReady']>
-  const rig = (platform: 'linux' | 'win32', o: { ready?: Ready; layouts?: PreparedLayouts } = {}) => {
+  const rig = (platform: 'linux' | 'win32', o: { ready?: Ready; layouts?: PreparedLayouts; noDaemon?: boolean } = {}) => {
     const spawned: Array<{ file: string; args: string[]; opts: ProcSpawnOptions; proc: FakeProc }> = []
     const { createAdapter, handles } = makeAdapterFactory()
     const manager = new ChatSessionManager({
@@ -1558,7 +1558,8 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
         spawned.push({ file, args, opts, proc })
         return proc
       },
-      descriptors: makeDescriptors(platform, HOME[platform]),
+      // A codex that takes --no-daemon unless a case says otherwise: the real probe runs the codex on this machine
+      descriptors: makeDescriptors(platform, HOME[platform], undefined, Object.assign(() => o.noDaemon ?? true, { warm: async () => {} })),
       homeDir: HOME[platform],
       platform,
       version: '1.0.0',
@@ -1642,6 +1643,42 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
     expect(existsSync(path.join(cwd, '.git', 'config.worktree'))).toBe(false)
     expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
     expect(spawned).toHaveLength(0)
+  })
+
+  // Task 6 fix round 1: Codex could not be asked; its own refusal, with no setup offered
+  it('a sandboxed win32 chat whose readiness could not be asked refuses with windows-check-failed', async () => {
+    const cwd = repo()
+    const { manager, spawned } = rig('win32', { ready: async () => 'check-failed' })
+    await expect(manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: windows-check-failed codex acc-cx$/)
+    expect(existsSync(path.join(cwd, '.git', 'config.worktree'))).toBe(false)
+    expect(spawned).toHaveLength(0)
+  })
+
+  // Task 6 fix round 1: the app-server is its own server, so a codex without --no-daemon still starts a sandboxed chat
+  it('a sandboxed chat does not need a codex that takes --no-daemon', async () => {
+    const cwd = repo()
+    const { manager, spawned } = rig('linux', { noDaemon: false })
+    await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    expect(spawned[0].args).toEqual(['app-server', ...(await expected('linux', cwd)).args])
+  })
+
+  // Task 6 fix round 1: a refused roll's reason reaches the chat's pane through its notice, as the bypass retry's does:
+  // in the state a pane mounting later reads, and as the event an open pane hears, until the next turn starts
+  it('a refused roll’s reason is the chat’s notice, in its state and as an event, until a turn starts', () => {
+    const { manager, handles } = rig('linux')
+    const info = manager.spawn({ account: codexAccount, cwd: '/p' })
+    const seen: ChatEvent[] = []
+    manager.subscribe((_id, e) => seen.push(e))
+    const reason = { key: 'session.roll.sandbox.windowsSetup' as const, params: { account: 'Codex B' } }
+    manager.notice(info.id, { key: 'rollRefused', reason })
+    expect(seen).toEqual([{ type: 'notice', key: 'rollRefused', reason }])
+    expect(manager.state(info.id)?.notice).toEqual({ key: 'rollRefused', reason })
+    handles[0].emit({ type: 'status', status: 'working' })
+    expect(manager.state(info.id)?.notice).toBeNull()
+    // A session that is not here is left alone
+    manager.notice('nobody', { key: 'rollRefused', reason })
+    expect(seen.filter((e) => e.type === 'notice')).toHaveLength(1)
   })
 
   it('refuses a sandboxed win32 chat whose folder holds a cmd.exe character', async () => {

@@ -2097,6 +2097,29 @@ describe('chat chains', () => {
     h.coord.stop()
   })
 
+  // Task 6 fix round 1: a chat's respawn is prepared as a chat (its app-server needs no --no-daemon), and its refusal's
+  // reason goes to the same `tell`, which the wiring turns into the chat's notice
+  it('prepares a chat respawn as a chat, and tells a refusal the same way a terminal one is told', async () => {
+    const prepared: unknown[][] = []
+    const told: Array<[string, unknown]> = []
+    const h = harness({
+      prepareSpawn: async (...a) => {
+        prepared.push(a)
+        throw new Error('SANDBOX_UNAVAILABLE: windows-setup codex c2')
+      },
+      tell: (id, reason) => told.push([id, reason])
+    })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-chat-sbx', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register({ ...chatInfo(h.info1), sandboxed: true })
+    h.coord.attachChat('s1', 'cx-chat-sbx', file)
+    await appendLimitError(file)
+    await advance(15_000)
+    expect(prepared[0]).toEqual([expect.objectContaining({ id: 'c2' }), h.info1.cwd, undefined, true, 'chat'])
+    expect(h.spawned).toEqual([])
+    expect(told).toEqual([['s1', { key: 'session.roll.sandbox.windowsSetup', params: { account: 'Codex B' } }]])
+    h.coord.stop()
+  })
+
   it('does not invent the bypass for a chain that was never granted it', async () => {
     const h = harness({ bypassedOf: () => false })
     const file = await writeRollout({ accountId: 'c1', uuid: 'cx-chat-nobp', cwd: h.info1.cwd, primary: 95 })
@@ -2883,9 +2906,10 @@ describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
 
   // Sandbox design §6, as the person decided (Task 6): a roll onto a Codex account whose Windows sandbox is not set up
   // (or has gone stale) is refused before the kill, like any refused respawn, and the person is told why in the tab that
-  // is still running, once: one line of Astera's own, in the language of the app.
+  // is still running, once. Fix round 1: the reason names the account by its name and says where to set it up; the
+  // wiring words it for the tab (a terminal's line, a chat's notice).
   it('a roll onto an account not set up writes the reason into the live tab and waits', async () => {
-    const told: [string, string][] = []
+    const told: [string, unknown][] = []
     const logs: string[] = []
     let asked = 0
     const h = harness({
@@ -2893,8 +2917,7 @@ describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
         asked++
         throw new Error('SANDBOX_UNAVAILABLE: windows-setup codex c2')
       },
-      tell: (id, line) => told.push([id, line]),
-      lang: () => 'en',
+      tell: (id, reason) => told.push([id, reason]),
       log: (m) => logs.push(m)
     })
     const src = await writeRollout({ accountId: 'c1', uuid: 'cx-ws', cwd: h.info1.cwd, primary: 95 })
@@ -2907,7 +2930,10 @@ describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
     expect(h.events).toEqual(['copy'])
     expect(h.spawned).toEqual([])
     expect(h.sent.at(-1)?.payload).toMatchObject({ sessionId: 's1', state: 'waiting' })
-    expect(told).toEqual([['s1', `[Astera] ${t('en', 'session.spawn.sandbox.windowsSetup')}`]])
+    expect(told).toEqual([['s1', { key: 'session.roll.sandbox.windowsSetup', params: { account: 'Codex B' } }]])
+    expect(t('en', 'session.roll.sandbox.windowsSetup', { account: 'Codex B' })).toBe(
+      'Could not move to the Codex B account: its Windows sandbox is not set up. Press Set up for it in Settings › Agent profiles.'
+    )
     expect(logs.join('\n')).toMatch(/spawn refused: SANDBOX_UNAVAILABLE: windows-setup codex c2/)
     // The wait's next round is refused for the same reason: the tab is not told again
     await advance(20 * 60_000)
@@ -2918,16 +2944,32 @@ describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
   })
 
   it('a refused respawn that is not the sandbox is not written into the tab', async () => {
-    const told: [string, string][] = []
+    const told: [string, unknown][] = []
     const h = harness({
       prepareSpawn: async () => {
         throw new Error('CWD_MISSING: /gone')
       },
-      tell: (id, line) => told.push([id, line])
+      tell: (id, reason) => told.push([id, reason])
     })
     await rollNow(h)
     expect(h.spawned).toEqual([])
     expect(told).toEqual([])
+    h.coord.stop()
+  })
+
+  // Task 6 fix round 1: when Codex could not be asked about the account, setting it up would not help: the reason is the
+  // start's own sentence for it
+  it('a roll whose readiness could not be asked says so, with no setup to press', async () => {
+    const told: [string, unknown][] = []
+    const h = harness({
+      prepareSpawn: async () => {
+        throw new Error('SANDBOX_UNAVAILABLE: windows-check-failed codex c2')
+      },
+      tell: (id, reason) => told.push([id, reason])
+    })
+    await rollNow(h)
+    expect(h.spawned).toEqual([])
+    expect(told).toEqual([['s1', { key: 'session.spawn.sandbox.windowsCheckFailed' }]])
     h.coord.stop()
   })
 

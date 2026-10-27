@@ -1134,24 +1134,26 @@ refused with 5, and the reads are not. A profile the Host refuses says why in `e
 starts them as before, and a profile made before the switch existed reads as `off` (`agent-profiles list` shows it as
 `sandbox`). In the sandbox a session never stops to ask (`-a never` takes the place of the permission bypass; a chat's
 thread names the profile and its approval policy is `never`) and a terminal session runs on its own server
-(`--no-daemon`). On every OS it writes only in its folder, the git directories of the folder's repository (never
-their `hooks` or `config`) and the temp folder, where npm's cache goes; it cannot read `~/.ssh`, `~/.aws`, the GitHub
-CLI's and gcloud's settings, `~/.docker`, `~/.npmrc`, `~/.git-credentials` or `~/.kube`; and the network works. On
-macOS `~/Library/Keychains` is closed too, and on Linux the session bus a secret service answers on. On Windows the
-sandbox is Codex's elevated one, which keeps Credential Manager out, and the repository is named a safe directory for
-the account it runs as; a repository or home folder whose path holds a character cmd.exe reads as syntax
-(`" & | < > ^ %`) cannot be carried to it. Each Codex account's home must have the elevated sandbox set up once (Codex's
+(`--no-daemon`). On every OS it writes only in its folder, the git directories of the folder's repository (never their
+`hooks` or `config`) and the temp folder, where npm's cache goes; it cannot read `~/.ssh`, `~/.aws`, the GitHub CLI's
+and gcloud's settings, `~/.docker`, `~/.npmrc`, `~/.git-credentials` or `~/.kube`; and the network works. On macOS
+`~/Library/Keychains` is closed too, and on Linux the session bus a secret service answers on. On Windows the sandbox
+is Codex's elevated one, which keeps Credential Manager out, and the repository is named a safe directory for the
+account it runs as; a repository or home folder whose path holds a character cmd.exe reads as syntax (`" & | < > ^ %`)
+cannot be carried to it. Each Codex account's home must have the elevated sandbox set up once (Codex's
 `codex sandbox setup --elevated --current-user`, which brings up Windows' administrator prompt): Astera asks before a
 sandboxed start, and the app offers to set up the one account a start was refused for. A session the sandbox cannot be
 applied to does not start, and says why with `SANDBOX_UNAVAILABLE: <code>`: `codex-daemon codex` for a codex that does
 not take `--no-daemon`, `path-unsafe` for such a path, `git-layout` when the folder's git data could not be read,
 `windows-setup codex <accountId>` for an account whose Windows sandbox is not set up (or no longer works: setting up
-one account's home can leave another's stale), and `not-prepared` for a start that skipped the reading Astera does
-first. A chain keeps the sandbox state it started with: the session a roll starts next is in the sandbox exactly when
-the first one was, whatever the switch says by then, and only a session started afresh reads the switch again. A roll
-onto an account the sandbox refuses waits, as a roll does for any refusal, and a terminal session says why in its tab. Like every profile change, switching it from inside an
-agent session is refused with 5. A profile store that cannot be read refuses a session that names a profile, with 6
-and the file to repair, rather than starting it without the profile.
+one account's home can leave another's stale), `windows-check-failed codex <accountId>` when Codex could not be asked
+about it (not there, too old for `doctor --json`, timed out), and `not-prepared` for a start that skipped the reading
+Astera does first. A chain keeps the sandbox state it started with: the session a roll starts next is in the sandbox
+exactly when the first one was, whatever the switch says by then, and only a session started afresh reads the switch
+again. A roll onto an account the sandbox refuses waits, as a roll does for any refusal, and says why, naming the
+account and where to set it up (Settings › Agent profiles): a terminal session in its tab, a chat in its pane. Like
+every profile change, switching it from inside an agent session is refused with 5. A profile store that cannot be read
+refuses a session that names a profile, with 6 and the file to repair, rather than starting it without the profile.
 
 `jobs create`, `tasks add` and `sessions create` take `--agent-profile <id|name>`. A Job's tasks run as its profile
 unless a task names its own, and the profile never picks the coordinator. A task with a profile and no `--account`

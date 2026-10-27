@@ -39,8 +39,8 @@ import {
   worstResetAt,
   type CodexLimitState
 } from './codexSignal'
-import { t, type Lang } from '../i18n'
-import { sandboxRefusalMessage } from '../sandbox/unavailable'
+import { t, type Lang, type Message } from '../i18n'
+import { rollRefusalMessage } from '../sandbox/unavailable'
 import { ROLL_SNAPSHOT_VERSION, snapshotKey, type RollSnapshot, type RollRespawnExtra } from './snapshot'
 import { untilEnter } from '../sessions/sessionDriver'
 
@@ -116,15 +116,17 @@ export interface CodexRollingDeps {
   }): SessionInfo
   /** Everything a respawn needs that can wait or refuse, done while the old session still lives (S6 R5).
    *  A rejection aborts the roll before the kill and reschedules it. Absent: nothing to prepare.
-   *  `agentProfileId` and `sandbox` are the chain's own (claudeCoordinator.ts's own dep, same contract). */
-  prepareSpawn?(account: Account, cwd: string, agentProfileId?: string, sandbox?: boolean): Promise<void>
+   *  `agentProfileId` and `sandbox` are the chain's own (claudeCoordinator.ts's own dep, same contract). `kind` is
+   *  `'chat'` for a chat chain, whose respawn is an app-server (its sandbox needs no `--no-daemon`), and absent otherwise. */
+  prepareSpawn?(account: Account, cwd: string, agentProfileId?: string, sandbox?: boolean, kind?: 'chat'): Promise<void>
   kill(sessionId: string): void
   /** Writes into a live session's PTY. Used only to dismiss the model-switch prompt (answerModelChoice). */
   write(sessionId: string, data: string): void
-  /** Puts one line of Astera's own in a live session's tab, as its output and not the person's input: why a roll is
-   *  waiting when its respawn would start without the sandbox the chain runs in (sandbox design §6, E5), such as an
-   *  account whose Windows sandbox is not set up. Absent: the reason is only logged. */
-  tell?(sessionId: string, line: string): void
+  /** Tells the person, in the live session's tab, why a roll is waiting when its respawn would start without the sandbox
+   *  the chain runs in (sandbox design §6, E5), such as an account whose Windows sandbox is not set up: `reason` is the
+   *  catalog message, and the wiring words it for the session's kind (a terminal's `[Astera]` line as output, never as
+   *  the person's input; a chat's notice). Absent: the reason is only logged. */
+  tell?(sessionId: string, reason: Message): void
   getAccount(id: string): Account | null
   send(channel: 'session:rolled' | 'session:rollState', payload: unknown): void
   log(message: string): void
@@ -1595,16 +1597,16 @@ export class CodexRollingCoordinator {
   }
 
   /** A respawn the sandbox refused (sandbox design §6, the person's decision in Task 6): the session it would replace is
-   *  still running, so the reason goes into its tab, in the app's language, where the person will look; the roll waits as
-   *  any refused one does. Said once per reason for as long as the chain keeps being refused for it: the wait retries
-   *  every round, and a night of rounds would otherwise fill the tab with the same line. Any other refusal is only
-   *  logged, as before. */
+   *  still running, so the reason goes into its tab, where the person will look; the roll waits as any refused one does.
+   *  An account that is not set up is named by its display name, with where to set it up (Settings › Agent profiles).
+   *  Said once per reason for as long as the chain keeps being refused for it: the wait retries every round, and a night
+   *  of rounds would otherwise fill the tab with the same line. Any other refusal is only logged, as before. */
   private tellSandboxRefusal(chain: Chain, why: string): void {
-    const message = sandboxRefusalMessage(why)
-    if (!message || !this.deps.tell || chain.sandboxRefusalTold === why) return
+    const reason = rollRefusalMessage(why, (id) => this.deps.getAccount(id)?.label ?? null)
+    if (!reason || !this.deps.tell || chain.sandboxRefusalTold === why) return
     chain.sandboxRefusalTold = why
     try {
-      this.deps.tell(chain.liveId, `[Astera] ${t(this.deps.lang(), message.key, message.params)}`)
+      this.deps.tell(chain.liveId, reason)
     } catch (err) {
       this.deps.log(`codex roll: the refusal could not be written into the tab: ${String(err)} session=${chain.liveId}`)
     }
@@ -1725,7 +1727,10 @@ export class CodexRollingCoordinator {
       // the kill below starts the await-free stretch (the claude side's roll() has the same block).
       if (this.deps.prepareSpawn) {
         try {
-          await this.deps.prepareSpawn(target, chain.cwd, chain.liveInfo.agentProfileId, chain.liveInfo.sandboxed === true)
+          // A chat chain's respawn is prepared as a chat (its app-server needs no --no-daemon); a terminal one's is asked as
+          // it always was
+          const asChat: ['chat'] | [] = chain.kind === 'chat' ? ['chat'] : []
+          await this.deps.prepareSpawn(target, chain.cwd, chain.liveInfo.agentProfileId, chain.liveInfo.sandboxed === true, ...asChat)
         } catch (err) {
           const why = err instanceof Error ? err.message : String(err)
           this.deps.log(`codex roll aborted — the respawn would be refused: ${why} session=${chain.liveId}`)

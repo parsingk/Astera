@@ -38,6 +38,9 @@ export function foldChatEvent(state: NonNullable<ChatPaneState>, event: ChatEven
       // Same arrangement: main keeps it for the status bar to ask about, and the pane draws none of it.
       return state
     case 'notice':
+      // A refused roll's reason (Task 6 fix round 1): news about a roll that did not happen, in a session that is the
+      // same one and still running, so nothing it last said is retired and it is not marked bypassed
+      if (event.key === 'rollRefused') return { ...state, notice: { key: 'rollRefused', reason: event.reason } }
       // design F5: told once, through its own field — never `error`, or the exit banner (T4) would
       // read the bypass as the reason the session died, when the retry is in fact why it did not.
       //

@@ -1,6 +1,6 @@
 // Agent Profiles (design §4): the Host's agent-profiles commands. For the app and the CLI only, changes refused to an
 // agent's shell, and a profile held by something live is never deleted from under it.
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -25,9 +25,10 @@ async function rig(o: { sandboxSetup?: Parameters<typeof createHostAgentProfiles
   const held = new Set<string>()
   let clock = Date.parse('2026-10-22T10:00:00.000Z')
   const logs: string[] = []
+  let accountReads = 0
   const hub = createHostAgentProfiles({
     profileDir,
-    readAccounts: async () => accounts,
+    readAccounts: async () => (accountReads++, accounts),
     inUse: async (id) => held.has(id),
     now: () => clock,
     log: (l) => logs.push(l),
@@ -46,6 +47,7 @@ async function rig(o: { sandboxSetup?: Parameters<typeof createHostAgentProfiles
     logs,
     setAccounts: (a: Account[]) => (accounts = a),
     accounts: () => accounts,
+    accountReads: () => accountReads,
     advance: (ms: number) => (clock += ms)
   }
 }
@@ -213,6 +215,36 @@ describe('createHostAgentProfiles', () => {
     const none = await rig()
     const n = profileOf(await none.call('agent-profiles-create', { name: 'Boxed', accountIds: ['acc_x'], sandbox: true }))
     expect((await none.call('agent-profiles-sandbox-setup', { id: n.id, accountId: 'acc_x' })).status).toBe(501)
+  })
+
+  // Task 6 fix round 1: a second press of 설정하기 for the account while its setup runs (the administrator prompt is up)
+  // shares that setup, so the person sees one prompt; another account's waits its turn
+  it('two presses for the same account while its setup runs share it', async () => {
+    const started: string[] = []
+    const finish: Record<string, (r: { ok: boolean; out: string }) => void> = {}
+    const h = await rig({ sandboxSetup: (account) => new Promise((resolve) => (started.push(account.id), (finish[account.id] = resolve))) })
+    const p = profileOf(await h.call('agent-profiles-create', { name: 'Boxed', accountIds: ['acc_x', 'acc_y'], sandbox: true }))
+    const first = h.call('agent-profiles-sandbox-setup', { id: p.id, accountId: 'acc_x' })
+    await vi.waitFor(() => expect(started).toEqual(['acc_x']))
+    const second = h.call('agent-profiles-sandbox-setup', { id: p.id, accountId: 'acc_x' })
+    const other = h.call('agent-profiles-sandbox-setup', { id: p.id, accountId: 'acc_y' })
+    // Each press reads the accounts before it reaches the setup: once both have, the second shares the first's setup and
+    // the other account's waits its turn
+    const reads = h.accountReads()
+    await vi.waitFor(() => expect(h.accountReads()).toBe(reads + 2))
+    await new Promise((r) => setTimeout(r, 0))
+    expect(started).toEqual(['acc_x'])
+    finish.acc_x({ ok: true, out: 'set up' })
+    expect((await first).body).toEqual({ ok: true, out: 'set up' })
+    expect((await second).body).toEqual({ ok: true, out: 'set up' })
+    await vi.waitFor(() => expect(started).toEqual(['acc_x', 'acc_y']))
+    finish.acc_y({ ok: false, out: 'cancelled' })
+    expect((await other).body).toEqual({ ok: false, out: 'cancelled' })
+    // Once it settled, a new press is a new setup
+    const again = h.call('agent-profiles-sandbox-setup', { id: p.id, accountId: 'acc_x' })
+    await vi.waitFor(() => expect(started).toEqual(['acc_x', 'acc_y', 'acc_x']))
+    finish.acc_x({ ok: true, out: 'again' })
+    expect((await again).body).toEqual({ ok: true, out: 'again' })
   })
 
   it('deletes a profile, but answers 409 in-use while something holds it', async () => {

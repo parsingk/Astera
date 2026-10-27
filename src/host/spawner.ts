@@ -618,7 +618,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   let preparedShuttle: string | null = null
   let preparedBypass: boolean | null = null
   let preparedAccounts: Account[] = []
-  const prepareRollSpawn = async (account: Account, cwd: string, agentProfileId?: string, sandbox?: boolean): Promise<void> => {
+  const prepareRollSpawn = async (account: Account, cwd: string, agentProfileId?: string, sandbox?: boolean, kind?: 'chat'): Promise<void> => {
     if (retiring) throw new HostRetiring()
     const accounts = await readAccounts(accountsPath) // RepairNeeded on a damaged file (A10)
     accountIn(accounts, account.id)
@@ -628,8 +628,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     await ensureOnWindowsPath([providerOf(account)]) // before prepare, which keys what it finds by PATH
     await ensureInstallDirOnPath([providerOf(account)]) // macOS and Linux: Claude Code installed since this process started (installDirPath.ts)
     // The chain's profile id as the session holds it (already resolved when it was started): its capabilities, as at a spawn.
-    // A chain started in the sandbox keeps it (the coordinator carries the flag): its folder is read for it before the kill
-    await sessions.prepare({ account, cwd, ...(agentProfileId ? { agentProfileId } : {}), ...(sandbox ? { sandbox: true } : {}) })
+    // A chain started in the sandbox keeps it (the coordinator carries the flag): its folder is read for it before the kill,
+    // into the layouts the Host's chat sessions read too; a chat's respawn is an app-server, which needs no --no-daemon
+    await sessions.prepare({ account, cwd, ...(agentProfileId ? { agentProfileId } : {}), ...(sandbox ? { sandbox: true } : {}), ...(kind === 'chat' ? { chat: true } : {}) })
     preparedBypass = await bypassFromSettings() // RepairNeeded on a damaged settings file (A10)
     await preTrustWorkspace({ account, cwd, homeDir, descriptors, log })
     await ensured()

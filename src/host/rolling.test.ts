@@ -13,7 +13,7 @@ import { t } from '../core/i18n'
 
 // The chat chain harness below reads the deps createHostRolling hands the claude coordinator; the class
 // itself stays the real one, so every other test in this file runs as before.
-const captured = vi.hoisted(() => ({ deps: [] as unknown[] }))
+const captured = vi.hoisted(() => ({ deps: [] as unknown[], codexDeps: [] as unknown[] }))
 vi.mock('../core/rolling/claudeCoordinator', async (orig) => {
   const m = await orig<typeof import('../core/rolling/claudeCoordinator')>()
   class Recording extends m.RollingCoordinator {
@@ -23,6 +23,17 @@ vi.mock('../core/rolling/claudeCoordinator', async (orig) => {
     }
   }
   return { ...m, RollingCoordinator: Recording }
+})
+// The same for the codex coordinator, whose `tell` a chat chain's case below calls directly
+vi.mock('../core/rolling/codexCoordinator', async (orig) => {
+  const m = await orig<typeof import('../core/rolling/codexCoordinator')>()
+  class Recording extends m.CodexRollingCoordinator {
+    constructor(d: ConstructorParameters<typeof m.CodexRollingCoordinator>[0]) {
+      super(d)
+      captured.codexDeps.push(d)
+    }
+  }
+  return { ...m, CodexRollingCoordinator: Recording }
 })
 
 const LIMIT = 'Claude usage limit ' + 'reached ∙ resets 3am' // constraint 14: never one literal
@@ -284,7 +295,8 @@ describe('createHostRolling (S6 Task 9)', () => {
     await vi.advanceTimersByTimeAsync(100)
     expect(r.ptys.get('p1')!.killed).toBe(false)
     expect(r.spawned).toHaveLength(0)
-    expect(said.join('')).toBe(`\r\n[Astera] ${t('en', 'session.spawn.sandbox.windowsSetup')}\r\n`)
+    // Fix round 1: the account by its name (c2 is "D" here), and where to set it up
+    expect(said.join('')).toBe(`\r\n[Astera] ${t('en', 'session.roll.sandbox.windowsSetup', { account: 'D' })}\r\n`)
     await fs.rm(rollout, { force: true })
     r.rolling.dispose()
   })
@@ -418,12 +430,13 @@ describe('createHostRolling — chat chains (chat takeover, lifts R20)', () => {
     spawn(o: RollSpawnOpts): SessionInfo
     send(channel: 'session:rolled' | 'session:rollState', payload: unknown): void
   }
-  const harness = (over: { chats: unknown; chatMayAct: (p: string) => boolean }) => {
+  const harness = (over: { chats: unknown; chatMayAct: (p: string) => boolean; chatNotice?: (sessionId: string, notice: unknown) => void }) => {
     const spawned: RollSpawnOpts[] = []
     const events: HostRollEvent[] = []
     const heard: HostRollEvent[] = []
     const registry = new PtyRegistry({ spawn: () => fakePty(), log: () => {} })
     const before = captured.deps.length
+    const codexBefore = captured.codexDeps.length
     const rolling = createHostRolling({
       profileDir: path.join(os.tmpdir(), 'astera-hr-chat-never-created'),
       platform: process.platform,
@@ -449,9 +462,11 @@ describe('createHostRolling — chat chains (chat takeover, lifts R20)', () => {
       watchHooks: false,
       chats: over.chats as never,
       chatMayAct: over.chatMayAct,
-      onRollHeard: (e) => heard.push(e)
+      onRollHeard: (e) => heard.push(e),
+      ...(over.chatNotice ? { chatNotice: over.chatNotice } : {})
     })
     const deps = captured.deps[before] as Deps
+    const codexDeps = captured.codexDeps[codexBefore] as { tell?: (sessionId: string, reason: unknown) => void }
     disposers.push(() => rolling.dispose())
     return {
       accounts,
@@ -462,7 +477,8 @@ describe('createHostRolling — chat chains (chat takeover, lifts R20)', () => {
       killDep: (id: string) => deps.kill(id),
       mayActDep: (id: string) => deps.mayAct(id),
       spawnDep: (o: RollSpawnOpts) => deps.spawn(o),
-      sendDep: (channel: 'session:rolled' | 'session:rollState', payload: unknown) => deps.send(channel, payload)
+      sendDep: (channel: 'session:rolled' | 'session:rollState', payload: unknown) => deps.send(channel, payload),
+      tellDep: (id: string, reason: unknown) => codexDeps.tell?.(id, reason)
     }
   }
   const disposers: Array<() => void> = []
@@ -508,6 +524,15 @@ describe('createHostRolling — chat chains (chat takeover, lifts R20)', () => {
     expect(chats.spawn).toHaveBeenCalledWith(expect.objectContaining({ agentProfileId: 'ap_x' }))
     h.spawnDep({ kind: 'chat', account: h.accounts[1], cwd: 'D:/p', resumeSessionId: 'th', restoreExtra: { rolledFrom: 'c1', roll: {} as never } })
     expect((chats.spawn.mock.calls[1] as unknown[])[0]).not.toHaveProperty('agentProfileId')
+  })
+  // Task 6 fix round 1: a chat has no tab output the Host can add a line to, so a refused roll's reason goes to the app's
+  // pane as the chat's notice (the wiring broadcasts it); a terminal session's goes into its pty, as before
+  it('tells a chat chain’s refused roll through its notice, not a pty line', () => {
+    const notices: Array<[string, unknown]> = []
+    const h = harness({ chats: fakeChats(), chatMayAct: () => true, chatNotice: (id, n) => notices.push([id, n]) })
+    const reason = { key: 'session.roll.sandbox.windowsSetup', params: { account: 'D' } }
+    h.tellDep('c1', reason)
+    expect(notices).toEqual([['c1', { key: 'rollRefused', reason }]])
   })
   // Sandbox design §6: a chat chain started in the sandbox respawns in it (prepareRollSpawn read its folder first)
   it('carries the sandbox of a chat chain into its respawn, and nothing for one outside it', () => {

@@ -1218,6 +1218,8 @@ export function registerIpc(
       if (n) adoptedNative.set(n.sessionId, n.native)
     },
     log: (m) => hostWiring?.log(`host: ${m}`),
+    // A Host roll of a chat chain the sandbox refused: its reason, as the chat's notice in its pane (Task 6 fix round 1)
+    chatNotice: (sessionId, notice) => core.chat.notice(sessionId, notice),
     // Fix round 1, I2: the old session's exit waits until the mirror no longer names it.
     orchHolds: (id) => orchHoldsSession(orchMirror.loaded() ? orchMirror.getState() : null, id),
     // Fix round 1, 3: a rekey whose new session was not adopted leaves its forkSeen for the adopter.

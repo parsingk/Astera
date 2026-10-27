@@ -10,6 +10,7 @@ import type { HostDriverReport, RollStateEvent, SessionInfo, WorktreeInfo } from
 import type { SlackForwardedEvent } from '../slack/forwarded'
 import type { SessionSignal } from '../sessions/sessionSignal'
 import type { McpHttpUrl } from '../mcp/httpUrls'
+import type { ChatRollRefusedNotice } from '../chat/types'
 import {
   HOST_FEATURE_EVENTS,
   HOST_FEATURE_ORCH,
@@ -511,6 +512,10 @@ export type HostMessage =
   /** A Host chain's banner state (S6 §3.4). An app forwards it to its renderer, scheduler, Slack and
    *  desktop notices, and keeps the last lasting one per session. Additive. */
   | { t: 'roll-state'; event: RollStateEvent }
+  /** A Host roll of a chat chain was refused before its kill (the sandbox, Task 6 fix round 1): its reason, for the chat's
+   *  pane, which the app shows as the chat's notice. Only to the apps that yield chat takeover. Additive: an older app
+   *  ignores it, and the reason stays in the Host's rolling log. */
+  | { t: 'chat-notice'; sessionId: string; notice: ChatRollRefusedNotice }
   /** A Host roll re-keyed a session (S6 §3.4). `ptyId` is the new session's pty, for the app to adopt
    *  before it forwards the rekey. `dest` is the codex copy the respawn appends to. Additive. */
   | {

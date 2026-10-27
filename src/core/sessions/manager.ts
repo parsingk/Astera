@@ -103,7 +103,8 @@ export interface SpawnChecks {
 
 /** The real readiness question (windowsReadiness.ts), asked with the session's own environment: its PATH finds the codex
  *  it would start, and its CODEX_HOME (none for the ambient account) is the home asked about. Answers kept per process. */
-export const askCodexWindowsReady: CodexWindowsReady = ({ codexHome, env }) => codexWindowsReadiness({ codexHome, run: runCodex(env) })
+export const askCodexWindowsReady: CodexWindowsReady = ({ codexHome, env, log }) =>
+  codexWindowsReadiness({ codexHome, run: runCodex(env), ...(log ? { log } : {}) })
 
 /** One resolver per process, so its cache is shared by every SessionManager in it. */
 let processGitBash: GitBashResolver | null = null
@@ -211,8 +212,10 @@ export class SessionManager {
    * await. Rejects with CWD_MISSING, or CWD_UNREACHABLE when the folder did not answer in time.
    * `sandbox`: the session will start in its CLI's sandbox, so the folder's git layout is read here for the spawn, and on
    * Windows a Codex home that is not set up refuses (`SANDBOX_UNAVAILABLE: windows-setup codex <account>`).
+   * `chat`: what will start is a chat's app-server (a roll prepares a chat chain's respawn here), which is its own server,
+   * so its sandbox does not ask for `--no-daemon`; the layout read is the chat manager's too (sandboxLayouts).
    */
-  async prepare(opts: { account: Account; cwd: string; missing?: string; agentProfileId?: string; sandbox?: boolean }): Promise<void> {
+  async prepare(opts: { account: Account; cwd: string; missing?: string; agentProfileId?: string; sandbox?: boolean; chat?: boolean }): Promise<void> {
     // A folder confirmed a moment ago (a Host session create checks it, then spawns) is not probed again.
     if (!this.cwdConfirmed(opts.cwd)) {
       await checkCwd(opts.cwd, this.checks.cwd, opts.missing)
@@ -252,13 +255,13 @@ export class SessionManager {
       await this.observeHooks().catch((err) => this.checks.log(`observe hook settings could not be written: ${String(err)}`))
     // The sandbox (sandbox design §6): a Codex session's profile names its repository's git directories, so they are read
     // now, off the thread, for the spawn to use; on Windows the account's Codex home must be set up for it too
-    if (opts.sandbox === true && providerOf(opts.account) === 'codex') await this.prepareSandbox(opts.account, opts.cwd)
+    if (opts.sandbox === true && providerOf(opts.account) === 'codex') await this.prepareSandbox(opts.account, opts.cwd, opts.chat === true)
   }
 
   /** Reads the folder's git layout for a sandboxed spawn, asks on Windows whether the account's Codex home is set up, and
    *  keeps the layout beside the confirmed folders (prepareCodexSandbox, core/sandbox/prepared.ts, says what is checked
    *  and written, and in which order). */
-  private async prepareSandbox(account: Account, cwd: string): Promise<void> {
+  private async prepareSandbox(account: Account, cwd: string, chat: boolean): Promise<void> {
     const layout = await prepareCodexSandbox({
       accountId: account.id,
       cwd,
@@ -266,10 +269,11 @@ export class SessionManager {
       homeDir: this.homeDir,
       env: this.envFor(account),
       ready: this.checks.codexWindowsReady,
-      // A codex without --no-daemon (warmed above) is refused now too. The spawn still asks for itself, since its
-      // environment is built after the hiding and the codex may change meanwhile. The command is built and dropped: the
-      // builder is the one place that knows whether this codex takes the flag.
-      check: (sandboxArgs) => descriptorOf(this.descriptors, account).buildCommand({ sandboxArgs }),
+      // A codex without --no-daemon (warmed above) is refused now too, for a terminal session: a chat's app-server needs
+      // no such flag. The spawn still asks for itself, since its environment is built after the hiding and the codex may
+      // change meanwhile. The command is built and dropped: the builder is the one place that knows whether this codex
+      // takes the flag.
+      ...(chat ? {} : { check: (sandboxArgs: string[]) => void descriptorOf(this.descriptors, account).buildCommand({ sandboxArgs }) }),
       log: this.checks.log
     })
     this.sandboxLayouts.keep(account.id, cwd, layout, this.checks.now())

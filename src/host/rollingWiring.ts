@@ -202,6 +202,16 @@ export function composeHostRolling(a: {
         })
         .catch((err) => log(`native session bind failed session=${sid}: ${String(err)}`))
     },
+    // A refused roll's reason for a chat chain (Task 6 fix round 1), to the apps that take chat sessions back, whose pane
+    // shows it as the chat's notice. Not journaled: an app that attaches after it was told does not hear it (the chain
+    // tells each reason once), and the Host's rolling log keeps it.
+    chatNotice: (sessionId, notice) => {
+      try {
+        a.server().broadcast({ t: 'chat-notice', sessionId, notice }, (y) => y.has(HOST_YIELD_CHAT_TAKEOVER))
+      } catch (err) {
+        log(`the chat notice could not be sent session=${sessionId}: ${String(err)}`)
+      }
+    },
     // Both pushes go to every greeted app (Task 13). `session-rolled` carries the new session's pty, which
     // the app adopts before it forwards the rekey (Task 14).
     // With no app attached that reads it, the event is journaled too (D5): nobody else hears it. Its own try, after the

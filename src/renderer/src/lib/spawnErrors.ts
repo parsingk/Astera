@@ -49,12 +49,14 @@ export { sandboxSetupAccountOf }
 /** The longest line a failed setup's toast shows of what Codex said. */
 const SETUP_LINE_MAX = 300
 
-/** What the toast says after 설정하기: set up, or what Codex (or the way to the Host) said, on one line. */
-export function sandboxSetupOutcome(answer: PluginsCallAnswer): { ok: true } | { ok: false; line: string } {
+/** What the toast says after 설정하기: set up, or what Codex (or the way to the Host) said, on one line. `line` is null
+ *  when nothing was said, and the toast then says it in the app's words (session.spawn.sandbox.setUpFailed). */
+export function sandboxSetupOutcome(answer: PluginsCallAnswer): { ok: true } | { ok: false; line: string | null } {
   const body = answer.ok ? answer.body : null
   if (body?.ok === true) return { ok: true }
   const said = body ? (typeof body.out === 'string' ? body.out : '') : answer.ok ? '' : answer.message
-  const line = said.replace(/\s+/g, ' ').trim() || 'codex sandbox setup failed'
+  const line = said.replace(/\s+/g, ' ').trim()
+  if (line === '') return { ok: false, line: null }
   return { ok: false, line: line.length > SETUP_LINE_MAX ? `${line.slice(0, SETUP_LINE_MAX - 1)}…` : line }
 }
 

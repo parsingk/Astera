@@ -20,7 +20,8 @@ import { readResumeStrategy } from '../core/settings/resumeStrategy'
 import { RateLimitFetcher, USAGE_GATE_MAX_AGE_MS } from '../core/usage/rateLimitFetcher'
 import { findClaudeTranscript } from '../core/history/strategies/claude'
 import type { RollSnapshot, RollSpawnExtra } from '../core/rolling/snapshot'
-import type { Lang } from '../core/i18n'
+import { t, type Lang, type Message } from '../core/i18n'
+import type { ChatRollRefusedNotice } from '../core/chat/types'
 import type { Account, RateLimitPeak, ResumeStrategy, RollStateEvent, SessionInfo, SessionKind } from '../core/types'
 import type { PtyRegistry } from './registry'
 import type { HostChats } from './hostChats'
@@ -72,8 +73,9 @@ export interface HostRollSpawner {
   /** Everything a roll's respawn can wait on or be refused by, done while the old session still lives
    *  (R5). Rejects with HostRetiring, a RepairNeeded settings or accounts file, CWD_MISSING, or an
    *  unknown account. `agentProfileId` is the chain's own: the account's capabilities are resolved with it. `sandbox`:
-   *  the chain runs in the sandbox, so the folder is read for it (SessionManager.prepare). */
-  prepareRollSpawn(account: Account, cwd: string, agentProfileId?: string, sandbox?: boolean): Promise<void>
+   *  the chain runs in the sandbox, so the folder is read for it (SessionManager.prepare). `kind: 'chat'`: the respawn
+   *  is a chat's app-server, whose sandbox needs no --no-daemon. */
+  prepareRollSpawn(account: Account, cwd: string, agentProfileId?: string, sandbox?: boolean, kind?: 'chat'): Promise<void>
   /** The respawn itself, synchronous (constraint 12). Throws until the first prepareRollSpawn has
    *  succeeded. */
   rollSpawn(opts: RollSpawnOpts): SessionInfo
@@ -97,6 +99,9 @@ export interface HostRollingDeps {
   /** What an attached app is told (Task 13 broadcasts it). */
   onEvent(e: HostRollEvent): void
   lang(): Lang
+  /** A refused roll's reason for a chat session, which has no tab output the Host can add a line to: the wiring hands it
+   *  to the apps, whose chat pane shows it as the chat's notice (Task 6 fix round 1). Absent: the reason is only logged. */
+  chatNotice?(sessionId: string, notice: ChatRollRefusedNotice): void
   /** Test seams. */
   readAccounts?(): Promise<Account[]>
   readStrategy?(): Promise<ResumeStrategy>
@@ -339,16 +344,20 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
     return d.spawner.rollSpawn({ ...o, ...restoreExtra })
   }
   /** A refused roll's reason, in the live session's tab (CodexRollingDeps.tell): a terminal session's ring, as Enforce's
-   *  hook-missing line is put there (index.ts stopUnhooked). A chat session has no tab output the Host can add a line to
-   *  without ending it, so its reason stays in the log. */
-  const tell = (sessionId: string, line: string): void => {
+   *  hook-missing line is put there (index.ts stopUnhooked), in the Host's language. A chat session has no tab output the
+   *  Host can add a line to without ending it, so its reason goes to the apps as the chat's notice, which the pane words. */
+  const tell = (sessionId: string, reason: Message): void => {
+    if (isChat(sessionId)) {
+      d.chatNotice?.(sessionId, { key: 'rollRefused', reason })
+      return
+    }
     const p = ptyOf(sessionId)
-    if (p !== null) d.registry.say?.(p, `\r\n${line}\r\n`)
+    if (p !== null) d.registry.say?.(p, `\r\n[Astera] ${t(d.lang(), reason.key, reason.params)}\r\n`)
   }
   const common = {
     // Its async half is done first, while the old session lives (R5). Left rejecting (see `safe`).
-    prepareSpawn: (account: Account, cwd: string, agentProfileId?: string, sandbox?: boolean) =>
-      d.spawner.prepareRollSpawn(account, cwd, agentProfileId, sandbox),
+    prepareSpawn: (account: Account, cwd: string, agentProfileId?: string, sandbox?: boolean, kind?: 'chat') =>
+      d.spawner.prepareRollSpawn(account, cwd, agentProfileId, sandbox, kind),
     write,
     kill,
     getAccount: (id: string) => accounts.find((a) => a.id === id) ?? null,

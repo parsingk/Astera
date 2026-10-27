@@ -1851,9 +1851,11 @@ export default function App(): React.JSX.Element {
       // account (Windows' administrator prompt, once). The person starts it again afterwards; the toast after says how
       // the setup went, or what Codex said.
       const setupAccount = sandboxSetupAccountOf(raw)
+      const message = t(msg.key, msg.params)
       if (setupAccount !== null && opts.agentProfileId !== undefined) {
         const profileId = opts.agentProfileId
-        const id = toast.error(t(msg.key, msg.params), {
+        // A worktree made for the start stays, unrolled-back, and the toast still says so, as every other failure's does
+        const id = toast.error(createdWorktreeName ? t('session.spawn.failedWorktreeKept', { message, name: createdWorktreeName }) : message, {
           action: {
             label: t('session.spawn.sandbox.setUp'),
             onClick: () => {
@@ -1861,14 +1863,13 @@ export default function App(): React.JSX.Element {
               void window.api.agentProfiles.sandboxSetup(profileId, setupAccount).then((answer) => {
                 const outcome = sandboxSetupOutcome(answer)
                 if (outcome.ok) toast.success(t('session.spawn.sandbox.setUpDone'))
-                else toast.error(outcome.line)
+                else toast.error(outcome.line ?? t('session.spawn.sandbox.setUpFailed'))
               })
             }
           }
         })
         return
       }
-      const message = t(msg.key, msg.params)
       // On a failure after the worktree was created, the user is also told that it remains, unrolled-back
       toast.error(
         createdWorktreeName

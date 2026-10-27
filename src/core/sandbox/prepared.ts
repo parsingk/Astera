@@ -15,8 +15,8 @@ import { LAUNCH_FORBIDDEN } from '../sessions/commands'
 export const PREPARED_MS = 60_000
 
 /** Whether an account's Codex home has its Windows sandbox set up (windowsReadiness.ts), asked with the environment the
- *  session would start with. */
-export type CodexWindowsReady = (a: { codexHome: string | null; env: Record<string, string | undefined> }) => Promise<Readiness>
+ *  session would start with; `log` says which way Codex could not be asked, when it could not. */
+export type CodexWindowsReady = (a: { codexHome: string | null; env: Record<string, string | undefined>; log?: (m: string) => void }) => Promise<Readiness>
 
 /** The layouts sandboxed prepares read, by account and folder: readiness is the account's, so one account's prepare never
  *  lets another account's spawn through in the same folder. */
@@ -55,7 +55,8 @@ export function sessionSandboxArgs(o: { platform: NodeJS.Platform; homeDir: stri
 /**
  * Reads the folder's git layout for a sandboxed spawn and checks what the spawn would refuse, before anything is written:
  * a path cmd.exe cannot carry, whatever `check` asks of the arguments (the terminal's codex without `--no-daemon`), and on
- * Windows whether the account's Codex home is set up (`windows-setup codex <account>`, which the app offers to set up).
+ * Windows whether the account's Codex home is set up (`windows-setup codex <account>`, which the app offers to set up, or
+ * `windows-check-failed codex <account>` when Codex could not be asked).
  * A roll awaits this before it kills the session it replaces, and the spawn after the kill can only throw. Then, on
  * Windows only, every `config.worktree` git may read is made first: the profile keeps them read-only, but Codex's
  * Windows sandbox creates one that is missing, and git would read a `core.hooksPath` from it (gitLayout.ts); on macOS
@@ -86,7 +87,9 @@ export async function prepareCodexSandbox(o: {
   const args = sessionSandboxArgs({ platform: o.platform, homeDir: o.homeDir, layout, env: o.env })
   o.check?.(args)
   if (o.platform === 'win32') {
-    const verdict: Readiness = o.ready ? await o.ready({ codexHome: o.env.CODEX_HOME ?? null, env: o.env }) : 'not-set-up'
+    const verdict: Readiness = o.ready ? await o.ready({ codexHome: o.env.CODEX_HOME ?? null, env: o.env, log: o.log }) : 'not-set-up'
+    // Codex could not be asked: setting the account up would not help, so no setup is offered for it
+    if (verdict === 'check-failed') throw sandboxUnavailable(`windows-check-failed codex ${o.accountId}`)
     if (verdict !== 'ready') {
       o.log(`sandbox: the Windows sandbox of account ${o.accountId} is not set up${o.ready ? '' : ' (this process cannot ask)'}`)
       throw sandboxUnavailable(`windows-setup codex ${o.accountId}`)

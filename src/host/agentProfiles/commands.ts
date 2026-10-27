@@ -87,11 +87,16 @@ export function createHostAgentProfiles(d: {
     return run
   }
   // One setup at a time, apart from the store's changes, which must not wait on a person at the administrator prompt:
-  // two prompts at once would leave the person unsure which account each one is for
+  // two prompts at once would leave the person unsure which account each one is for. A second press for an account whose
+  // setup is queued or running shares it, so the person sees one prompt for it.
   let setups: Promise<unknown> = Promise.resolve()
-  const oneSetupAtATime = <T>(f: () => Promise<T>): Promise<T> => {
-    const run = setups.then(f, f)
+  const settingUp = new Map<string, Promise<{ ok: boolean; out: string }>>()
+  const setUpOnce = (accountId: string, f: () => Promise<{ ok: boolean; out: string }>): Promise<{ ok: boolean; out: string }> => {
+    const shared = settingUp.get(accountId)
+    if (shared) return shared
+    const run = setups.then(f, f).finally(() => settingUp.delete(accountId))
     setups = run.catch(() => {})
+    settingUp.set(accountId, run)
     return run
   }
 
@@ -229,12 +234,13 @@ export function createHostAgentProfiles(d: {
         const account = liveAccounts(p, accounts).includes(accountId) ? accounts.find((a) => a.id === accountId) : undefined
         if (!account) return bad(`${accountId} is not an account of the profile ${p.name}`)
         if (account.provider !== 'codex') return bad(`${accountId} is not a Codex account`)
-        return oneSetupAtATime(async () => {
+        const r = await setUpOnce(account.id, async () => {
           d.log(`agent profiles: setting up the Windows sandbox of ${account.id} (profile ${p.id})`)
-          const r = await setUp(account)
-          d.log(`agent profiles: the Windows sandbox setup of ${account.id} ${r.ok ? 'finished' : `failed: ${r.out}`}`)
-          return { status: 200, body: { ok: r.ok, out: r.out } }
+          const done = await setUp(account)
+          d.log(`agent profiles: the Windows sandbox setup of ${account.id} ${done.ok ? 'finished' : `failed: ${done.out || 'codex said nothing'}`}`)
+          return done
         })
+        return { status: 200, body: { ok: r.ok, out: r.out } }
       }
       default:
         return { status: 501, body: { error: `${cmd} is not answered by this Host` } }

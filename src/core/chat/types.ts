@@ -3,6 +3,7 @@ import type { AskForm, Answer } from '../prompts/askUserQuestion'
 import type { ToolRequestSummary } from '../prompts/toolRequest'
 import type { ModelDescriptor } from '../models/types'
 import type { Provider } from '../providers/meta'
+import type { Message } from '../i18n'
 
 /** The same three words the attention state uses, on purpose: a chat session's status IS its attention. */
 export type ChatStatus = Attention
@@ -79,7 +80,7 @@ export interface ChatState {
    *  not required-and-null, so the many `ChatState` literals a test builds for something else stay as
    *  they are; absent reads the same as null. Not folded into `error`: the exit banner (T4) would
    *  mistake it for the reason the session died, and this is the opposite of a failure. */
-  notice?: 'bypassed' | null
+  notice?: 'bypassed' | ChatRollRefusedNotice | null
   /** design F5: this death can be retried past a version manager's refusal, if the person chooses to.
    *  True only when **both** the death looked like a refusal (no protocol line, immediate — S7's own
    *  test, `looksLikeRefusal`) *and* main found positive evidence a bypassable manager is actually in
@@ -182,6 +183,16 @@ export type ChatEvent =
    *  mistake it for one. `key` names which notice, the same shape `chat.notice.*` i18n keys use, so a
    *  second cause (a different toolchain manager's bypass) is a second key rather than a new field. */
   | { type: 'notice'; key: 'bypassed' }
+  /** A roll of this chat's chain was refused before its kill (sandbox design §6, Task 6 fix round 1), and the chain waits:
+   *  why, in the words a terminal tab's line has (`reason`, a catalog message the pane words in its own language). */
+  | ({ type: 'notice' } & ChatRollRefusedNotice)
+
+/** `ChatState.notice` for a refused roll: the session is the same one and still running, so unlike the bypass notice it
+ *  retires nothing the session last said. Cleared, like any notice, when the next turn starts. */
+export interface ChatRollRefusedNotice {
+  key: 'rollRefused'
+  reason: Message
+}
 
 export interface ChatAdapter {
   /** `sandbox`: Codex only, the process runs with the Astera permission profile's `-c` arguments, and the thread names

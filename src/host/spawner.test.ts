@@ -865,6 +865,10 @@ describe('the roll spawn (S6 R5, R6)', () => {
     await h.spawner!.prepareRollSpawn(account, repo)
     h.spawner!.rollSpawn({ account, cwd: repo, rollAccountIds: [account.id] })
     expect(h.spawned).toHaveLength(1)
+    // Task 6 fix round 1: a chat chain's respawn is an app-server, which takes no --no-daemon, so its sandbox is not
+    // refused for it, and the layout is read for the Host's chat sessions
+    await h.spawner!.prepareRollSpawn(account, repo, undefined, true, 'chat')
+    expect(h.spawner!.sandboxLayouts!.layoutOf(account.id, repo, Date.now())).not.toBeUndefined()
   })
   it('prepareRollSpawn refuses a retiring Host and a damaged settings file, before anything is spawned', async () => {
     const h = await spawnerRig()

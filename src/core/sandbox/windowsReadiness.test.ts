@@ -2,7 +2,19 @@
 // here is a fake: the real echo on a home that is not set up starts Codex's setup, and with it Windows' administrator
 // prompt.
 import { describe, expect, it } from 'vitest'
-import { DOCTOR_ARGV, READY_ARGV, READY_MARKER, SETUP_ARGV, codexWindowsReadiness, codexWindowsSetup, forgetReadiness, provisioningOf } from './windowsReadiness'
+import os from 'node:os'
+import {
+  DOCTOR_ARGV,
+  READY_ARGV,
+  READY_MARKER,
+  SETUP_ARGV,
+  codexWindowsReadiness,
+  codexWindowsSetup,
+  forgetReadiness,
+  provisioningOf,
+  runCodex,
+  type CodexRun
+} from './windowsReadiness'
 
 /** `codex doctor --json` as Task 2 read it: the provisioning under `sandbox.helpers`, complete for a set-up home, and for
  *  a scratch one the warning and its summary, with exit 1. */
@@ -58,7 +70,7 @@ describe('codexWindowsReadiness', () => {
   })
 
   it('not set up when the echo fails or does not print the marker (a stale home)', async () => {
-    for (const echo of [{ code: 1, out: 'sandbox error: logon failed' }, { code: 0, out: '' }, { code: null, out: READY_MARKER }]) {
+    for (const echo of [{ code: 1, out: 'sandbox error: logon failed' }, { code: 0, out: '' }]) {
       const { run } = fakeRun('complete', echo)
       expect(await codexWindowsReadiness({ codexHome: home(), run }), JSON.stringify(echo)).toBe('not-set-up')
     }
@@ -70,14 +82,63 @@ describe('codexWindowsReadiness', () => {
     const { run, calls } = fakeRun('incomplete')
     expect(await codexWindowsReadiness({ codexHome: home(), run })).toBe('not-set-up')
     expect(calls.map((c) => c.argv)).toEqual([DOCTOR_ARGV])
-    // A report that does not read, a run that throws, a doctor that names no provisioning: not set up, and no echo
-    for (const out of ['not json', '{}', JSON.stringify({ checks: { 'sandbox.helpers': { details: {} } } })]) {
-      const c: Call[] = []
-      const r = await codexWindowsReadiness({ codexHome: home(), run: async (argv, env) => (c.push({ argv, env }), { code: 0, out }) })
-      expect(r, out).toBe('not-set-up')
-      expect(c.map((x) => x.argv), out).toEqual([DOCTOR_ARGV])
+  })
+
+  // Task 6 fix round 1: only a report that reads "incomplete" is a home to set up. When Codex could not be asked at all,
+  // setting up would not help, so the answer is its own, and the log says which case it was. The echo never runs on a
+  // home doctor did not call complete.
+  it('could not ask: codex missing, no doctor --json, a timeout, a report that does not read or names no provisioning', async () => {
+    const cases: Array<{ name: string; run: CodexRun; log: RegExp; echoed?: true }> = [
+      { name: 'codex missing', run: async () => Promise.reject(new Error('spawn codex ENOENT')), log: /could not be run: spawn codex ENOENT/ },
+      { name: 'no doctor --json', run: async () => ({ code: 2, out: '', err: "error: unrecognized subcommand 'doctor'" }), log: /did not read.*exit 2.*unrecognized subcommand/ },
+      { name: 'doctor timed out', run: async () => ({ code: null, out: '', err: 'killed' }), log: /did not answer/ },
+      { name: 'not json', run: async () => ({ code: 0, out: 'not json' }), log: /did not read/ },
+      { name: 'empty report', run: async () => ({ code: 0, out: '{}' }), log: /names no sandbox provisioning/ },
+      { name: 'no provisioning', run: async () => ({ code: 0, out: JSON.stringify({ checks: { 'sandbox.helpers': { details: {} } } }) }), log: /names no sandbox provisioning/ },
+      { name: 'an unknown provisioning', run: async () => ({ code: 0, out: JSON.stringify({ checks: { 'sandbox.helpers': { details: { 'sandbox provisioning': 'pending' } } } }) }), log: /"pending"/ },
+      {
+        name: 'echo timed out',
+        run: async (argv) => (argv.includes('doctor') ? { code: 0, out: doctorOut('complete') } : { code: null, out: '' }),
+        log: /echo did not answer/,
+        echoed: true
+      }
+    ]
+    for (const c of cases) {
+      const argvs: string[][] = []
+      const logs: string[] = []
+      const r = await codexWindowsReadiness({ codexHome: home(), run: async (argv, env) => (argvs.push(argv), c.run(argv, env)), log: (m) => logs.push(m) })
+      expect(r, c.name).toBe('check-failed')
+      expect(logs, c.name).toHaveLength(1)
+      expect(logs[0], c.name).toMatch(c.log)
+      expect(argvs, c.name).toEqual(c.echoed ? [DOCTOR_ARGV, READY_ARGV] : [DOCTOR_ARGV])
     }
-    expect(await codexWindowsReadiness({ codexHome: home(), run: async () => Promise.reject(new Error('ENOENT')) })).toBe('not-set-up')
+  })
+
+  // Task 6 fix round 1: a setup that runs while a start is still asking makes that start's answer old; it is asked again
+  it('an ask under way when a setup is forgotten does not answer, or keep, what it read before the setup', async () => {
+    const h = home()
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => (release = r))
+    let doctors = 0
+    const run: CodexRun = async (argv) => {
+      if (!argv.includes('doctor')) return { code: 0, out: READY_MARKER }
+      doctors++
+      if (doctors === 1) {
+        await gate
+        return { code: 0, out: doctorOut('complete') }
+      }
+      return { code: 1, out: doctorOut('incomplete') }
+    }
+    const asking = codexWindowsReadiness({ codexHome: h, run })
+    await Promise.resolve()
+    forgetReadiness()
+    release()
+    expect(await asking).toBe('not-set-up')
+    expect(doctors).toBe(2)
+    // Nothing ready was kept from the first round
+    const again = fakeRun('incomplete')
+    expect(await codexWindowsReadiness({ codexHome: h, run: again.run })).toBe('not-set-up')
+    expect(again.calls).toHaveLength(1)
   })
 
   it('asked once per CODEX_HOME', async () => {
@@ -119,6 +180,29 @@ describe('codexWindowsReadiness', () => {
   })
 })
 
+// The real runner, with execFile injected: codex runs out of the temp folder, never out of whatever folder the asking
+// process happens to be in, with the caller's variables over the session's and an unset one left out
+describe('runCodex', () => {
+  it('runs codex in the temp folder, with the environment it is given, and reads its exit', async () => {
+    const seen: Array<{ file: string; args: string[]; opts: Record<string, unknown> }> = []
+    const exec = ((file: string, args: string[], opts: Record<string, unknown>, cb: (err: Error | null, out: string, err2: string) => void) => {
+      seen.push({ file, args, opts })
+      cb(null, 'out', 'err')
+    }) as unknown as Parameters<typeof runCodex>[2]
+    const run = runCodex({ PATH: '/bin', CODEX_HOME: '/old', DROP: 'x' }, 1234, exec)
+    expect(await run(DOCTOR_ARGV, { CODEX_HOME: '/h', DROP: undefined })).toEqual({ code: 0, out: 'out', err: 'err' })
+    expect(seen[0].args.slice(-DOCTOR_ARGV.length)).toEqual(DOCTOR_ARGV)
+    expect(seen[0].opts).toMatchObject({ cwd: os.tmpdir(), timeout: 1234, windowsHide: true, env: { PATH: '/bin', CODEX_HOME: '/h' } })
+    expect(seen[0].opts.env).not.toHaveProperty('DROP')
+    const failing = runCodex({}, 1, ((_f: string, _a: string[], _o: unknown, cb: (err: Error | null, out: string, e: string) => void) =>
+      cb(Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' }), '', '')) as unknown as Parameters<typeof runCodex>[2])
+    expect(await failing(DOCTOR_ARGV, {})).toEqual({ code: null, out: '', err: 'spawn codex ENOENT' })
+    const exited = runCodex({}, 1, ((_f: string, _a: string[], _o: unknown, cb: (err: Error | null, out: string, e: string) => void) =>
+      cb(Object.assign(new Error('Command failed'), { code: 3 }), 'o', 'e')) as unknown as Parameters<typeof runCodex>[2])
+    expect(await exited(DOCTOR_ARGV, {})).toEqual({ code: 3, out: 'o', err: 'e' })
+  })
+})
+
 describe('provisioningOf', () => {
   it("reads doctor's provisioning, also with other text around the report", () => {
     expect(provisioningOf(doctorOut('complete'))).toBe('complete')
@@ -148,7 +232,8 @@ describe('codexWindowsSetup', () => {
       ok: false,
       out: 'Error: the elevation was cancelled'
     })
-    expect(await codexWindowsSetup({ codexHome: home(), run: async () => ({ code: 3, out: '' }) })).toEqual({ ok: false, out: 'codex sandbox setup exited with code 3' })
+    // Nothing said: no words of Codex's to show, so the app shows its own (session.spawn.sandbox.setUpFailed)
+    expect(await codexWindowsSetup({ codexHome: home(), run: async () => ({ code: 3, out: '' }) })).toEqual({ ok: false, out: '' })
     expect(await codexWindowsSetup({ codexHome: home(), run: async () => Promise.reject(new Error('spawn codex ENOENT')) })).toEqual({
       ok: false,
       out: 'spawn codex ENOENT'

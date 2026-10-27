@@ -54,6 +54,19 @@ describe('spawnErrorMessage', () => {
     expect(sandboxSetupAccountOf(raw('windows-setup codex acc_7f3'))).toBe('acc_7f3')
     expect(sandboxSetupAccountOf(raw('path-unsafe'))).toBeNull()
     expect(sandboxSetupAccountOf('ENFORCE_UNAVAILABLE: codex-daemon')).toBeNull()
+    // Task 6 fix round 1: Codex could not be asked. Its own words, and no setup offered: setting up would not help
+    expect(spawnErrorMessage(raw('windows-check-failed codex acc_7f3'))).toEqual({ key: 'session.spawn.sandbox.windowsCheckFailed' })
+    expect(sandboxSetupAccountOf(raw('windows-check-failed codex acc_7f3'))).toBeNull()
+  })
+
+  // Task 6 fix round 1: the account id is an id's characters only, whatever quoting or JSON the error was carried in
+  it('reads the account id out of quotes and JSON around the refusal', () => {
+    expect(sandboxSetupAccountOf('{"error":"SANDBOX_UNAVAILABLE: windows-setup codex acc_7f3-x"}')).toBe('acc_7f3-x')
+    expect(sandboxSetupAccountOf("Error: 'SANDBOX_UNAVAILABLE: windows-setup codex acc_1'.")).toBe('acc_1')
+    expect(spawnErrorMessage('{"error":"SANDBOX_UNAVAILABLE: windows-setup codex acc_2"}')).toEqual({
+      key: 'session.spawn.sandbox.windowsSetup',
+      params: { accountId: 'acc_2' }
+    })
   })
 
   // After 설정하기: the toast says it was set up, or shows what Codex said, on one line
@@ -66,8 +79,10 @@ describe('spawnErrorMessage', () => {
     // The Host could not be asked, or refused: its sentence
     expect(sandboxSetupOutcome({ ok: false, code: 'HOST_NOT_RUNNING', message: 'the Host is not running' })).toEqual({ ok: false, line: 'the Host is not running' })
     const long = sandboxSetupOutcome({ ok: true, body: { ok: false, out: 'x'.repeat(1000) } })
-    expect(long.ok === false && long.line.length).toBe(300)
-    expect(sandboxSetupOutcome({ ok: true, body: { ok: false, out: '' } })).toEqual({ ok: false, line: 'codex sandbox setup failed' })
+    expect(long.ok === false && long.line?.length).toBe(300)
+    // Codex said nothing: no line of its own, so the toast says it in the app's words (session.spawn.sandbox.setUpFailed)
+    expect(sandboxSetupOutcome({ ok: true, body: { ok: false, out: '' } })).toEqual({ ok: false, line: null })
+    expect(sandboxSetupOutcome({ ok: true, body: { ok: false, out: ' \n ' } })).toEqual({ ok: false, line: null })
   })
 
   it('응답하지 않는 폴더(CWD_UNREACHABLE)도 경로와 함께 말한다', () => {

@@ -635,14 +635,17 @@ export const ja: Catalog = {
   'session.spawn.enforce.hookWriteFailed': 'Enforce の hook ファイルを書けなかったため、開始しませんでした。Astera の設定フォルダーに書き込めるか確認するか、Policies を Observe に切り替えてください。',
   'session.spawn.enforce.cliMissing': '{cli} が見つからないため、Enforce で開始しませんでした。{cli} をインストールしてください。',
   'session.spawn.enforce.codexDaemon': 'この Codex は --no-daemon を受け付けないため、Enforce で開始しませんでした。Codex を更新するか、Policies を Observe に切り替えてください。',
-  'session.spawn.sandbox.windowsSetup': 'この Codex アカウントには Windows サンドボックスがまだ設定されていません。「設定する」を押すと管理者の確認が一度表示されます。',
+  'session.spawn.sandbox.windowsSetup': 'この Codex アカウントには Windows サンドボックスがまだ設定されていません。「設定する」を押すと管理者の確認が一度表示されます。 Codex はこのアカウントの既定のサンドボックスを elevated として記録します。',
+  'session.spawn.sandbox.windowsCheckFailed': 'この アカウントの Windows サンドボックスの状態を Codex に確認できませんでした。Codex を更新するか、もう一度起動してください。',
   'session.spawn.sandbox.setUp': '設定する',
   'session.spawn.sandbox.setUpDone': '設定しました。もう一度起動してください。',
+  'session.spawn.sandbox.setUpFailed': '設定できませんでした。',
   'session.spawn.sandbox.codexDaemon': 'この Codex は --no-daemon に対応していないため、サンドボックスで起動できません。Codex を更新してください。',
   'session.spawn.sandbox.pathUnsafe': 'フォルダーのパスに Windows のコマンドラインで扱えない文字（" & | < > ^ %）が含まれているため、サンドボックスで起動できません。',
   'session.spawn.sandbox.gitLayout': '作業フォルダーの git 情報を読めないため、サンドボックスで起動できません。',
   'session.spawn.sandbox.notPrepared': 'サンドボックスの準備が終わる前に起動しようとしました。もう一度起動してください。',
   'session.spawn.sandbox.cliTooOld': 'サンドボックスを使えるのは {cli} {min} 以降だけです。いまは {found} です。CLI を更新してください。',
+  'session.roll.sandbox.windowsSetup': '{account} アカウントは Windows サンドボックスが設定されていないため、切り替えられませんでした。設定 › エージェントプロファイルで、このアカウントの「設定する」を押してください。',
   'session.spawn.failedWorktreeKept':
     'セッションの開始に失敗しました: {message} (worktree "{name}" は残っているので Worktrees パネルから削除してください)',
   // Rolling-resume guard hit — tells the user the tab was just focused and their chosen options were dropped
