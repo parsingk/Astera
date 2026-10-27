@@ -2141,13 +2141,15 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .pane-tabbar .tabs { height: 100%; flex: 1; min-width: 0; }
 /* Drops the vertical padding and centres instead — the global tab bar (≈32px) is gone.
    Lets tabs shrink in a narrow group: the global bar was flex:none, so past six tabs it overflowed and got
-   cut. A minimum width keeps them from shrinking past recognition */
+   cut. How far each one may shrink is not here: WorkbenchTabs sets it inline per tab — the icon, close
+   button and padding at full width, and at least half the name (tabStrip.ts tabFloor). Past that the row
+   scrolls instead. A fixed 84px floor, the same for every tab, used to sit here */
 /* align-self: stretch is the crux — .tabs is align-items:center, so with zero vertical padding the tab
    element collapses to the text height and floats in the middle of the bar. The underline
    (inset 0 calc(-1 * var(--marker-w)) 0 <color>, set inline in WorkbenchTabs.tsx) would then be drawn
    just under the text rather than at the bottom of the tab, and the tab divider (border-right) would be
    cut short */
-.pane-tabbar .tab { padding: 0 12px; flex: 0 1 auto; min-width: 84px; align-self: stretch; }
+.pane-tabbar .tab { padding: 0 12px; flex: 0 1 auto; align-self: stretch; }
 .pane-tabbar .tab .tab-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* 이름 고치기. 라벨 자리를 그대로 차지해 탭 너비가 흔들리지 않게 한다 — 폭이 바뀌면 옆 탭들이
    밀려서, 고치는 동안 탭 줄 전체가 움직인다 */
@@ -2159,8 +2161,15 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
   outline: none;
 }
 /* Hides the horizontal scrollbar (10px globally) so it does not eat the vertical space of the tab row —
-   the same convention as the terminal's xterm-viewport. Wheel and trackpad scrolling still work */
+   the same convention as the terminal's xterm-viewport. A sideways trackpad swipe scrolls the row on its
+   own; a mouse wheel is turned sideways by WorkbenchTabs (tabStrip.ts wheelShift), and .tabs-thumb below
+   shows where the row is while it moves */
 .pane-tabbar .tabs::-webkit-scrollbar { height: 0; }
+/* WorkbenchTabs.tsx StripThumb. Drawn over the bar's bottom edge, so it moves nothing; pointer-events:none
+   so a click or a drag on the tab under it still lands on the tab. z-index 2 puts it over the sticky
+   .new-tab (1) below, so the thumb reaches the right end of the row */
+.pane-tabbar .tabs-thumb { position: absolute; bottom: 0; height: 3px; border-radius: 2px; background: var(--text-faint); opacity: 0; pointer-events: none; z-index: 2; transition: opacity var(--ease); }
+.pane-tabbar .tabs-thumb.shown { opacity: 0.6; }
 /* The + must not disappear when the tabs overflow — a group's + is the main entry point for a new session.
    It is sticky above the tabs, so its background has to be the same opaque colour as the bar or the tabs
    passing underneath show through */
