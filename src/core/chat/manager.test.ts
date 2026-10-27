@@ -1295,14 +1295,14 @@ describe('Enforce in chat sessions', () => {
     context: { kind: 'implicit' as const, accounts: ['acc-cl'], policyMode, executionMode: 'managed' as const },
     args: [], env: {}, given: [], gatewayGrant: [], skipped: []
   })
-  const make = (policyMode: 'compatibility' | 'observe' | 'enforce', args: string[] | null, blocker: string | null = null) => {
+  const make = (policyMode: 'compatibility' | 'observe' | 'enforce', args: string[] | null, blocker: string | null = null, kinds: unknown[] = []) => {
     const factory = vi.fn((_f: string, _a: string[], _o: ProcSpawnOptions) => new FakeProc())
     const adapters = makeAdapterFactory()
     const deps = {
       factory, descriptors: makeDescriptors('linux'), homeDir: '/home/t', platform: 'linux' as const, version: '1', log: () => {},
       createAdapter: adapters.createAdapter,
       capabilities: { get: () => caps(policyMode), refresh: async () => {} },
-      enforce: { args: () => args, blocker: () => blocker }
+      enforce: { args: () => args, blocker: (p: 'claude' | 'codex', kind: 'terminal' | 'chat') => (kinds.push([p, kind]), blocker) }
     }
     return { factory, handles: adapters.handles, manager: new ChatSessionManager(deps) }
   }
@@ -1328,21 +1328,11 @@ describe('Enforce in chat sessions', () => {
   })
 
   it('a chat started in enforce on an older CLI is refused with the reason', () => {
-    const { factory, manager } = make('enforce', ['--settings', '/p/x.json'], 'ENFORCE_UNAVAILABLE: cli-too-old claude 2.1.300 2.1.306')
+    const kinds: unknown[] = []
+    const { factory, manager } = make('enforce', ['--settings', '/p/x.json'], 'ENFORCE_UNAVAILABLE: cli-too-old claude 2.1.300 2.1.306', kinds)
     expect(() => manager.spawn({ account: claudeAccount, cwd: '/p' })).toThrow('ENFORCE_UNAVAILABLE: cli-too-old claude 2.1.300 2.1.306')
     expect(factory).not.toHaveBeenCalled()
-  })
-
-  it('stops a chat with the reason as its last error, which its subscribers hear', () => {
-    const { handles, manager } = make('enforce', ['--settings', '/p/x.json'])
-    const info = manager.spawn({ account: claudeAccount, cwd: '/p' })
-    const heard: unknown[] = []
-    manager.subscribe((id, e) => heard.push([id, e]))
-    manager.stop(info.id, 'The blocking hook did not run in this session, so the session was stopped.')
-    expect(heard).toContainEqual([info.id, { type: 'error', message: 'The blocking hook did not run in this session, so the session was stopped.' }])
-    expect(handles[0].killCalls).toBe(1)
-    // An id it does not hold: nothing
-    expect(() => manager.stop('nope', 'x')).not.toThrow()
+    expect(kinds).toEqual([['claude', 'chat']])
   })
 
   it('a chat started in enforce without the hook is refused', () => {

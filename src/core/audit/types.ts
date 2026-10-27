@@ -53,7 +53,7 @@ export type AuditDecision = 'allow' | 'would-deny' | 'unknown' | 'blocked'
 export type CoverageClass = 'shell' | 'file-read' | 'file-write' | 'mcp' | 'network'
 
 /** Why a class is only partly seen, as a key the screens and the CLI put in words. */
-export type CoverageNote = 'web-tools-only' | 'shell-text-only' | 'web-search-and-shell-text'
+export type CoverageNote = 'web-tools-only' | 'shell-text-only' | 'web-search-and-shell-text' | 'interactive-input'
 
 export interface CoverageCell {
   /** `enforced`: Enforce's hook decides every call of the class before it runs (COVERAGE_ENFORCE only). */

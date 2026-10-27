@@ -1185,11 +1185,15 @@ run, the agent is told `Blocked by Astera Rules: …`, and the call is recorded 
 (`ruleId`) that stopped it. Before any rule, an agent session cannot write Astera's profile folder or run an `astera
 policies`, `credentials` or `agent-profiles` command that changes them, and a rules file it cannot read lets only reads
 through. An agent running as you can still write those files from a script it runs. A session does not start in
-enforce when it cannot be protected: Claude Code older than 2.1.306, codex older than 0.160.0, a version that cannot be
-read, or no Astera executable to run the hook (Windows without the Host runtime). A session whose calls arrive with no
-sign that its hook ran is stopped, with the reason in its tab. Each tool call takes about 0.1 seconds longer.
-`enforceCoverage` in `policies show` says what is blocked for each provider and kind of session. Like observe, the mode
-counts for sessions started afterwards.
+enforce when it cannot be protected: Claude Code older than 2.1.306, codex older than 0.160.0, a CLI that is not there
+or whose version cannot be read, Claude Code hooks turned off by your organization's managed settings on this computer
+(a policy served from the claude.ai console cannot be seen), a codex that does not take `--no-daemon`, or no Astera
+executable to run the hook (Windows without the Host runtime). A project's own `disableAllHooks` does not turn the hook
+off. A session whose calls arrive with no sign that its hook ran is stopped, with the reason in its tab. Each tool call
+takes about 0.1 seconds longer on Windows; macOS and Linux are not measured yet. `enforceCoverage` in `policies show`
+says what is blocked for each provider and kind of session: what is typed into a Codex shell that is already running is
+not checked. Like observe, the mode counts for sessions started afterwards, and a session started in enforce keeps
+blocking until it ends: its blocked calls are recorded even after the mode is turned off.
 
 The rules say what each call would get if Astera enforced them. They are tried in order: the first rule whose action
 matches a call decides it, `allow` or `would-deny`, and `otherwise` decides a call no rule matches. A rule's action is

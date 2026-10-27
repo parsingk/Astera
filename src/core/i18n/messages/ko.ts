@@ -214,6 +214,7 @@ export const ko = {
   'settings.security.enforce.builtins': '어떤 Rule 보다 먼저, 에이전트 세션의 Astera 설정 폴더 쓰기와 Astera 설정 변경 명령은 항상 막습니다.',
   'settings.security.enforce.sameUser': '같은 사용자로 도는 에이전트가 스크립트로 설정 파일을 직접 쓰는 것은 막지 못합니다.',
   'settings.security.enforce.running': '켜고 끈 설정은 그 뒤에 시작하는 세션부터 적용됩니다.',
+  'settings.security.enforce.keeps': 'Enforce 로 시작한 세션은 끝날 때까지 계속 막고, 그 막은 호출은 끈 뒤에도 기록합니다.',
   'settings.security.enforce.confirm': 'Enforce 켜기',
   'settings.security.coverage.withNote': '{level} ({note})',
   'settings.security.rules.hint': 'Rules 는 위에서부터 차례로 봅니다. 호출에 처음 맞는 Rule 이 결정합니다.',
@@ -373,6 +374,7 @@ export const ko = {
   'audit.coverageNote.web-tools-only': '웹 도구만',
   'audit.coverageNote.shell-text-only': '셸 명령 글자로만',
   'audit.coverageNote.web-search-and-shell-text': '웹 검색과 셸 명령 글자',
+  'audit.coverageNote.interactive-input': '실행 중인 셸에 입력하는 것은 못 막음',
   'settings.plugins.hint': '플러그인은 Astera Host 옆에서 도는 프로그램입니다. 설치하면 이 컴퓨터에서 신뢰된 코드로 실행되고, Astera 에는 허락한 권한 안에서만 요청할 수 있습니다.',
   'settings.plugins.none': '설치된 플러그인이 없습니다.',
   'settings.plugins.installFolder': '폴더에서 설치…',
@@ -824,6 +826,10 @@ export const ko = {
   'session.spawn.enforce.cliTooOld': 'Enforce 는 {cli} {min} 이상에서만 막을 수 있습니다. 지금은 {found} 입니다. CLI 를 업데이트하거나 Policies 를 Observe 로 바꾸세요.',
   'session.spawn.enforce.cliVersionUnknown': '{cli} 의 버전을 알 수 없어 Enforce 로 시작하지 않았습니다.',
   'session.spawn.enforce.hookMissing': '막는 hook 이 이 세션에서 돌지 않아 세션을 멈췄습니다. Policies 를 Observe 로 바꾸면 막지 않고 기록만 합니다.',
+  'session.spawn.enforce.hooksOff': 'Claude Code 의 관리 설정이 이 PC 에서 hook 을 끄고 있어 Enforce 로 시작하지 않았습니다. 관리자에게 문의하세요.',
+  'session.spawn.enforce.hookWriteFailed': 'Enforce 의 hook 파일을 쓰지 못해 시작하지 않았습니다. Astera 설정 폴더에 쓸 수 있는지 확인하거나 Policies 를 Observe 로 바꾸세요.',
+  'session.spawn.enforce.cliMissing': '{cli} 를 찾지 못해 Enforce 로 시작하지 않았습니다. {cli} 를 설치하세요.',
+  'session.spawn.enforce.codexDaemon': '이 Codex 는 --no-daemon 을 받지 않아 Enforce 로 시작하지 않았습니다. Codex 를 업데이트하거나 Policies 를 Observe 로 바꾸세요.',
   'session.spawn.failedWorktreeKept':
     '세션 시작 실패: {message} (worktree "{name}"는 남아 있으니 Worktrees 패널에서 삭제하세요)',
   // Rolling-resume guard hit — tells the user the tab was just focused and their chosen options were dropped

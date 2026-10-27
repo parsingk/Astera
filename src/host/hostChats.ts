@@ -71,8 +71,6 @@ export interface HostChats {
   /** The one-writer rule for this session: the Host holds an adapter and no socket holds the proc. */
   isWriter(sessionId: string): boolean
   kill(sessionId: string): void
-  /** Ends a chat with `message` as its last error (ChatSessionManager.stop). */
-  stop(sessionId: string, message: string): void
   /** Drops the session's adapter without touching its proc; the adapter decodes no further line. */
   forget(sessionId: string): void
   /** A turn by whichever process is the writer: the Host adapter, or the app's chatSend. Never rejects. */
@@ -414,7 +412,6 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     },
     isWriter,
     kill: (id) => manager.kill(id),
-    stop: (id, message) => manager.stop(id, message),
     forget,
     deliver(id, text) {
       if (isWriter(id)) {

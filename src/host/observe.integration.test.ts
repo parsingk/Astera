@@ -565,8 +565,7 @@ describe('index.ts wires observe mode into the Host', () => {
       'enforceDir: profilePaths(profileDir).enforceEvents',
       'onHookMissing: (sessionId) => stopUnhooked(sessionId)',
       "registry.say(ptyId, `\\r\\n[Astera] ${sentence}\\r\\n`)",
-      'stopChat?.(sessionId, sentence)',
-      'stopChat = (sessionId, message) => rollingWiring.chats.stop(sessionId, message)',
+      'if (procId !== undefined) procs.stop(procId, sentence)',
       'await pruneEnforceFiles(profilePaths(profileDir).enforceEvents, new Set(registry.liveEntries().flatMap((e) => (e.meta ? [e.meta.id] : []))))'
     ])
       expect(src, wiring).toContain(wiring)

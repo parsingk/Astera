@@ -10,8 +10,15 @@ const WIN_PROFILE = 'C:/Users/u/AppData/Roaming/astera'
 const LINUX_PROFILE = '/home/u/.config/astera'
 
 const claude = (tool: string, input: Record<string, unknown>, over: Partial<ResolveCall> = {}): ResolveCall => ({ provider: 'claude', tool, input, cwd: 'D:/proj', ...over })
-const verdict = (call: ResolveCall, policy: AuditPolicy | null = STARTER_POLICY, platform: NodeJS.Platform = 'win32', profileDir = WIN_PROFILE) =>
-  enforceVerdict({ call, policy, profileDir, platform })
+const WIN_ENV = { USERPROFILE: 'C:\\Users\\u', APPDATA: 'C:\\Users\\u\\AppData\\Roaming', LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local' }
+const LINUX_ENV = { HOME: '/home/u' }
+const verdict = (
+  call: ResolveCall,
+  policy: AuditPolicy | null = STARTER_POLICY,
+  platform: NodeJS.Platform = 'win32',
+  profileDir = WIN_PROFILE,
+  env: Record<string, string> = platform === 'win32' ? WIN_ENV : LINUX_ENV
+) => enforceVerdict({ call, policy, profileDir, platform, env })
 
 describe('enforceVerdict', () => {
   it('names its built-in rules', () => {
@@ -61,6 +68,30 @@ describe('enforceVerdict', () => {
     expect(verdict(claude('Write', { file_path: '/home/u/.config/Astera/x.json' }), STARTER_POLICY, 'linux', LINUX_PROFILE)).toMatchObject({ deny: true, ruleId: 'starter-write-outside' })
   })
 
+  // Final review I2: the folder named through the home, a variable, a relative path or a macOS escaped space, and an MCP
+  // tool's own path argument
+  it('blocks a write into the profile however the shell or the tool names it', () => {
+    const open: AuditPolicy = { version: 1, mode: 'enforce', rules: [], otherwise: 'allow' }
+    const blocked = (call: ResolveCall, platform: NodeJS.Platform = 'win32', profileDir = WIN_PROFILE) =>
+      verdict(call, open, platform, profileDir).deny && (verdict(call, open, platform, profileDir) as { ruleId: string }).ruleId
+    expect(blocked(claude('Bash', { command: 'echo x > ~/.config/astera/audit-policy.json' }), 'linux', LINUX_PROFILE)).toBe('builtin-profile-write')
+    expect(blocked(claude('Bash', { command: 'cp a "$HOME/.config/astera/astera-enforce-hook.cjs"' }), 'linux', LINUX_PROFILE)).toBe('builtin-profile-write')
+    expect(blocked(claude('Bash', { command: 'rm ${HOME}/.config/astera/audit-policy.json' }), 'linux', LINUX_PROFILE)).toBe('builtin-profile-write')
+    expect(blocked(claude('PowerShell', { command: 'Set-Content $env:APPDATA\\astera\\audit-policy.json x' }))).toBe('builtin-profile-write')
+    expect(blocked(claude('Bash', { command: 'echo > "$APPDATA/astera/audit-policy.json"' }))).toBe('builtin-profile-write')
+    expect(blocked(claude('Bash', { command: 'cmd /c "echo x > %APPDATA%\\astera\\x.json"' }))).toBe('builtin-profile-write')
+    expect(blocked(claude('Bash', { command: 'echo x > ../../AppData/Roaming/astera/x.json' }, { cwd: 'C:/Users/u/work/proj' }))).toBe('builtin-profile-write')
+    expect(blocked({ provider: 'codex', tool: 'apply_patch', input: { command: '*** Begin Patch\n*** Add File: ../../AppData/Roaming/astera/x.json\n+x\n*** End Patch' }, cwd: 'C:/Users/u/work/proj' })).toBe(
+      'builtin-profile-write'
+    )
+    const mac = '/Users/u/Library/Application Support/astera'
+    expect(blocked(claude('Bash', { command: 'echo x > /Users/u/Library/Application\\ Support/astera/audit-policy.json' }), 'darwin', mac)).toBe('builtin-profile-write')
+    expect(blocked(claude('mcp__fs__write_file', { path: 'C:/Users/u/AppData/Roaming/astera/x.json', content: 'x' }))).toBe('builtin-profile-write')
+    // Elsewhere stays the person's rules'
+    expect(blocked(claude('Bash', { command: 'echo x > ~/notes.txt' }), 'linux', LINUX_PROFILE)).toBe(false)
+    expect(blocked(claude('Bash', { command: 'echo x > ../other/x.json' }, { cwd: 'C:/Users/u/work/proj' }))).toBe(false)
+  })
+
   it('blocks apply_patch into the profile', () => {
     const patch = '*** Begin Patch\n*** Update File: C:/Users/u/AppData/Roaming/astera/agent-profiles.json\n@@\n-a\n+b\n*** End Patch'
     expect(verdict({ provider: 'codex', tool: 'apply_patch', input: patch, cwd: 'D:/proj' })).toMatchObject({ deny: true, ruleId: 'builtin-profile-write' })
@@ -75,6 +106,27 @@ describe('enforceVerdict', () => {
     expect(verdict(claude('Bash', { command: 'astera policies show' }))).toEqual({ deny: false })
     expect(verdict(claude('Bash', { command: 'astera agent-profiles list' }))).toEqual({ deny: false })
     expect(verdict(claude('Bash', { command: 'echo asterapolicies set-mode' }))).toEqual({ deny: false })
+  })
+
+  // Final review C1: the spellings Astera's own guide teaches, global flags before the group, and wrappers
+  it('blocks a changing astera command however the CLI is reached', () => {
+    const changes = [
+      `ASTERA_SESSION= "$ASTERA_CLI" policies rules-add --effect allow --action '*' --at 0`,
+      `$env:ASTERA_SESSION=''; & $env:ASTERA_CLI policies set-otherwise --effect allow`,
+      '& "$env:ASTERA_CLI" agent-profiles delete --id p1',
+      '"${ASTERA_CLI}" policies rules-remove --id r1',
+      '%ASTERA_CLI% policies set-mode --mode compatibility',
+      'astera --json policies set-mode --mode observe',
+      'astera --project . policies rules-reset',
+      'env astera policies rules-move --id r1 --to 0',
+      'command astera agent-profiles update --id p1 --bypass',
+      'cmd /c astera policies set-mode --mode compatibility',
+      'node "C:/Program Files/Astera/resources/app.asar/out/main/cli.js" policies set-otherwise --effect allow'
+    ]
+    for (const command of changes) expect(verdict(claude('Bash', { command })), command).toMatchObject({ deny: true, ruleId: 'builtin-settings-command' })
+    // Reading them is not a change, and a line that only mentions the words runs no astera
+    for (const command of ['"$ASTERA_CLI" policies show', 'astera --json agent-profiles list', 'astera audit list --decision blocked', 'git commit -m "policies: create the rule"'])
+      expect(verdict(claude('Bash', { command })), command).toEqual({ deny: false })
   })
 
   it('fails closed to reads when the rules cannot be read', () => {

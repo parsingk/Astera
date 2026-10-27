@@ -638,7 +638,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'policies-show': {
     summary: 'whether observe mode is on, the rules in order, and what it can see',
     detail:
-      '`mode` is compatibility (nothing is observed) or observe. The first rule whose action matches a call decides it; `otherwise` decides a call no rule matches. Until observe is first turned on these are the starter rules, and nothing is written. `coverage` says, per provider and kind of session, what observe can see of shell commands, file reads and writes, MCP calls and network requests, and `enforceCoverage` what enforce blocks of them. An agent session may read it.'
+      '`mode` is compatibility (nothing is observed), observe or enforce. The first rule whose action matches a call decides it; `otherwise` decides a call no rule matches. Until observe is first turned on these are the starter rules, and nothing is written. `coverage` says, per provider and kind of session, what observe can see of shell commands, file reads and writes, MCP calls and network requests, and `enforceCoverage` what enforce blocks of them. An agent session may read it.'
   },
   'policies-set-mode': {
     summary: 'turn observe or enforce mode on, or both off',

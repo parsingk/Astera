@@ -121,6 +121,9 @@ export interface AuditRecorder {
    *  again, and when a read says compatibility. The sources follow the mode from this rather than from a timer, so
    *  their files are taken up from where they end at the switch (sources.ts). Returns the stop. */
   onObservingChange(cb: () => void): () => void
+  /** A source saw a call of a session started in Enforce that its hook's file has no line for (final review I4): the
+   *  session is stopped, once, as when a call comes with no proof at all. */
+  unhooked(sessionId: string): void
 }
 
 export function createAuditRecorder(d: {
@@ -260,9 +263,10 @@ export function createAuditRecorder(d: {
     try {
       while (pending.length > 0) {
         const m = await currentMode()
-        const batch = pending
+        // Off: only the blocks of sessions started in Enforce, which keep blocking until they end (final review I7)
+        const batch = isObserving(m) ? pending : pending.filter((r) => r.status === 'blocked' && d.sessionInfo(r.sessionId)?.enforced === true)
         pending = []
-        if (!isObserving(m)) continue
+        if (batch.length === 0) continue
         // A record whose lookup had to wait takes what it found before it is written, the ones behind it waiting with it
         for (const r of batch) {
           const lookup = lookups.get(r)
@@ -308,15 +312,21 @@ export function createAuditRecorder(d: {
   /** A call of a session started in Enforce, heard after it ran, with no line of its hook to show the hook saw it: the
    *  session runs unchecked (its CLI skipped the hook, or could not run it), and is stopped. A call that runs nothing
    *  (`other`: a note to itself, a plan) and a hosted web search are not asked of: no hook sees those. */
+  const stopUnhooked = (sessionId: string): void => {
+    if (!d.onHookMissing || toldMissing.has(sessionId)) return
+    remember(toldMissing, sessionId)
+    d.log(`audit: session ${sessionId} was started in Enforce and made a call its blocking hook never saw; it is stopped`)
+    d.onHookMissing(sessionId)
+  }
+  /** Only a call that ran is asked (ok or failed): one a source hands before it ran (a Codex rollout's MCP call, read at
+   *  once) may come before its hook did (final review I5a). */
   const checkProof = (ev: AuditEvent, info: SessionFacts, resolved: () => ResolvedAction): void => {
-    if (info.enforced !== true || ev.status === 'blocked' || !d.onHookMissing) return
+    if (info.enforced !== true || (ev.status !== 'ok' && ev.status !== 'failed') || !d.onHookMissing) return
     if (proven.has(ev.sessionId) || toldMissing.has(ev.sessionId)) return
     if (hookRan(ev.sessionId)) return remember(proven, ev.sessionId)
     const r = resolved()
     if (r.action === 'other' || (r.action === 'network.request' && r.target === 'web search')) return
-    remember(toldMissing, ev.sessionId)
-    d.log(`audit: session ${ev.sessionId} was started in Enforce and made a call its blocking hook never saw; it is stopped`)
-    d.onHookMissing(ev.sessionId)
+    stopUnhooked(ev.sessionId)
   }
 
   const recordOf = (ev: AuditEvent, info: SessionFacts, at: string, r: ResolvedAction): AuditRecord => {
@@ -355,12 +365,14 @@ export function createAuditRecorder(d: {
   return {
     record(ev) {
       try {
-        // Known to be off: dropped here, touching nothing. Not known yet: resolved and held until it is
-        if (mode === 'compatibility') return
+        // Known to be off: dropped here, touching nothing, but for a block of a session started in Enforce, which keeps
+        // blocking until it ends and whose blocks say why (final review I7). Not known yet: resolved and held until it is
+        if (mode === 'compatibility' && ev.status !== 'blocked') return
         // The session first: a call of one not observed is not remembered, so the same call heard once its note is
         // there is still kept
         const info = d.sessionInfo(ev.sessionId)
         if (info === null) return
+        if (mode === 'compatibility' && info.enforced !== true) return
         // Resolved once, and only when needed: the proof is asked before it, a repeat and a stopped day never resolve
         let r: ResolvedAction | undefined
         const resolved = (): ResolvedAction => (r ??= resolvedOf(ev, info))
@@ -405,6 +417,14 @@ export function createAuditRecorder(d: {
       })
     },
     flushed: () => queue,
+    unhooked: (sessionId) => {
+      try {
+        if (mode === 'compatibility' || d.sessionInfo(sessionId)?.enforced !== true) return
+        stopUnhooked(sessionId)
+      } catch (err) {
+        d.log(`audit: session ${sessionId} could not be stopped: ${String(err)}`)
+      }
+    },
     observing: () => mode !== 'compatibility',
     onObservingChange: (cb) => (listeners.add(cb), () => void listeners.delete(cb))
   }

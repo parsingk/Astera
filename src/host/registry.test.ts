@@ -1,3 +1,6 @@
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
+import { readFileSync } from 'node:fs'
 import { describe, it, expect, vi } from 'vitest'
 import { LAST_SCREEN_WITHIN_MS, PtyRegistry, SCROLLBACK_CHARS, DEAD_ENTRIES_KEPT, ENDED_SESSIONS_KEPT, ENDED_SESSION_CODES_KEPT, EXITED_RETAIN_MS, EXITED_RINGS_MAX, EXITED_RING_BYTES_MAX, EXITED_TERMINAL_BYTES, SUBMISSIONS_KEPT, type PtyReplay, type RegistryPty } from './registry'
 import type { PtyMeta } from '../core/host/protocol'
@@ -868,6 +871,8 @@ describe('PtyRegistry ring, live terminal and replay (Phase 8)', () => {
 
   // Enforce (enforce design §5): the Host says in the tab why it stops a session, and an app attaching later sees it
   it('says Astera’s own line in a pty’s output, replayed like the pty’s, and nothing once it ended', async () => {
+    // Final review M5: kill keeps its own doc comment
+    expect(readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'registry.ts'), 'utf8')).toMatch(/\*\/\n  kill\(id: string\): void \{/)
     const { r, open } = made()
     const data: string[] = []
     const events: string[] = []

@@ -574,8 +574,8 @@ async function main(): Promise<void> {
   // the policies commands' to keep.
   // Enforce (enforce design §5, E5): a session started in Enforce whose calls arrive with no line of its blocking hook
   // runs unchecked, so it is stopped, and its tab says why first, in the app's language: a terminal's in its own output
-  // (replayed to an app that attaches later), a chat's as its last error. The chats are the rolling's, made below.
-  let stopChat: ((sessionId: string, message: string) => void) | null = null
+  // (replayed to an app that attaches later), a chat's as its last error, through its process whoever writes it (final
+  // review I3: the Host's own chat manager holds only the chats it writes).
   const stopUnhooked = (sessionId: string): void => {
     const sentence = t(wiring ? wiring.checks.langNow() : 'en', 'session.spawn.enforce.hookMissing')
     const ptyId = registry.sessionPty(sessionId)
@@ -584,7 +584,8 @@ async function main(): Promise<void> {
       registry.kill(ptyId)
       return
     }
-    stopChat?.(sessionId, sentence)
+    const procId = [...procs.list()].reverse().find((e) => e.alive && e.meta?.kind === 'chat' && e.meta.id === sessionId)?.id
+    if (procId !== undefined) procs.stop(procId, sentence)
   }
   const auditRecorder = createAuditRecorder({
     profileDir,
@@ -653,8 +654,6 @@ async function main(): Promise<void> {
           }
         })
       : null
-  // Enforce: a chat whose blocking hook did not run is stopped with the reason as its last error (stopUnhooked above)
-  if (rollingWiring) stopChat = (sessionId, message) => rollingWiring.chats.stop(sessionId, message)
 
   // **The Host's Slack** (Slack in the Host, spec §3): slack.json read only, one notifier, one inbox, and
   // the socket held only while no attached app keeps Slack (P4). **Only with a spawner and the SDK**:

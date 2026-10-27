@@ -982,6 +982,44 @@ describe('the recorder in Enforce', () => {
     await r.recorder.flushed()
   })
 
+  // Final review I5a: a call read before it ran (a Codex rollout's MCP call, handed at once) may come before its hook did
+  it('asks for the proof only of a call that ran', async () => {
+    const missing: string[] = []
+    const r = await rig({ mode: 'enforce', facts: ENFORCED, over: { hookRan: () => false, onHookMissing: (id) => void missing.push(id) } })
+    r.recorder.record({ sessionId: 's1', source: 'codex-rollout', tool: 'mcp__gh__create_issue', input: {}, status: 'unknown', dedupeKey: 'a' })
+    expect(missing).toEqual([])
+    r.recorder.record({ sessionId: 's1', source: 'codex-rollout', tool: 'mcp__gh__create_issue', input: {}, status: 'ok', dedupeKey: 'b' })
+    expect(missing).toEqual(['s1'])
+    await r.recorder.flushed()
+  })
+
+  // Final review I4: a call of a Claude session that its hook's file has no line for, told by the sources
+  it('stops a session the sources say ran a call unhooked, once', async () => {
+    const missing: string[] = []
+    const r = await rig({ mode: 'enforce', facts: ENFORCED, over: { hookRan: () => true, onHookMissing: (id) => void missing.push(id) } })
+    r.recorder.unhooked('s1')
+    r.recorder.unhooked('s1')
+    expect(missing).toEqual(['s1'])
+    // Nothing for a session not started in Enforce
+    const o = await rig({ mode: 'enforce', facts: { kind: 'terminal', accountId: 'acc1', cwd }, over: { onHookMissing: (id) => void missing.push(id) } })
+    o.recorder.unhooked('s2')
+    expect(missing).toEqual(['s1'])
+  })
+
+  // Final review I7: a session started in Enforce keeps blocking after the person turns the mode off, and its blocks
+  // are what tell them why their agent is still refused
+  it('keeps the blocks of a session started in Enforce after the mode is turned off, and nothing else', async () => {
+    const r = await rig({ mode: 'compatibility', facts: ENFORCED })
+    r.recorder.record(blockedEv)
+    r.recorder.record({ sessionId: 's1', source: 'claude-hook', tool: 'Read', input: { file_path: 'a' }, status: 'ok', dedupeKey: 'r1' })
+    await r.recorder.flushed()
+    expect((await r.records()).map((x) => x.status)).toEqual(['blocked'])
+    const o = await rig({ mode: 'compatibility', facts: { kind: 'terminal', accountId: 'acc1', cwd } })
+    o.recorder.record(blockedEv)
+    await o.recorder.flushed()
+    expect(await o.records()).toEqual([])
+  })
+
   it('reads a note’s enforced mark into the session’s facts', () => {
     const facts = registrySessionFacts({
       ptys: { list: () => [{ id: 'p1', pid: 1, alive: true, meta: { kind: 'session', id: 's1', restore: { accountId: 'acc1', cwd, observed: true, enforced: true } } }] },

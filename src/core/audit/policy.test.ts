@@ -585,7 +585,10 @@ describe('COVERAGE_ENFORCE', () => {
     expect(COVERAGE_ENFORCE).toHaveLength(4)
     for (const kind of ['terminal', 'chat'] as const) {
       for (const c of ['shell', 'file-read', 'file-write', 'mcp'] as const) expect(cell('claude', kind, c)?.level, `claude ${kind} ${c}`).toBe('enforced')
-      for (const c of ['shell', 'file-write', 'mcp'] as const) expect(cell('codex', kind, c)?.level, `codex ${kind} ${c}`).toBe('enforced')
+      for (const c of ['file-write', 'mcp'] as const) expect(cell('codex', kind, c)?.level, `codex ${kind} ${c}`).toBe('enforced')
+      // Final review M10: Codex sends no hook for input typed into a shell already running (write_stdin, codex-rs
+      // core/src/tools/handlers/unified_exec/write_stdin.rs)
+      expect(cell('codex', kind, 'shell')).toEqual({ level: 'partial', note: 'interactive-input' })
       // Codex reads files through the shell, which the hook reads as text only
       expect(cell('codex', kind, 'file-read')).toEqual({ level: 'partial', note: 'shell-text-only' })
       for (const pr of ['claude', 'codex'] as const) expect(cell(pr, kind, 'network')?.level, `${pr} ${kind} network`).toBe('partial')

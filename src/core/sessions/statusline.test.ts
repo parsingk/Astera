@@ -815,12 +815,16 @@ describe('StatusLineManager enforce mode', () => {
       file: '/Applications/Astera.app/Contents/MacOS/Astera',
       env: 'ELECTRON_RUN_AS_NODE=1'
     })
+    // Final review M9: a macOS app run where it was downloaded is translocated to a path that goes with it
+    expect(
+      enforceInterpreter({ platform: 'darwin', captureNode: 'node', execPath: '/private/var/folders/x/T/AppTranslocation/1A2B/d/Astera.app/Contents/MacOS/Astera' })
+    ).toBeNull()
   })
 
   it('writes the enforce hook and settings with a synchronous PreToolUse for every tool', async () => {
     const mgr = new StatusLineManager(dir, 'node', () => {}, { platform: 'linux', execPath: '/opt/astera/astera' })
     await mgr.init()
-    expect(await mgr.ensureEnforceFiles()).toBe(true)
+    expect(await mgr.ensureEnforceFiles()).toBe('ok')
     expect(await fs.readFile(path.join(dir, ENFORCE_HOOK_FILE), 'utf8')).toBe(enforceHookSource)
     const pre = { matcher: '*', hooks: [{ type: 'command', command: `ELECTRON_RUN_AS_NODE=1 "/opt/astera/astera" "${path.join(dir, ENFORCE_HOOK_FILE).replace(/\\/g, '/')}" claude`, timeout: 10 }] }
     for (const toolHooks of [false, true]) {
@@ -830,16 +834,29 @@ describe('StatusLineManager enforce mode', () => {
       expect(c.settingsFile).not.toBe(observed.settingsFile)
       const expected = JSON.parse(await read(observed.settingsFile))
       expected.hooks.PreToolUse.push(pre)
+      // Final review C2, measured 2026-10-27: a project's `.claude/settings.local.json` with "disableAllHooks": true
+      // turned the hook off; this file is --settings, above project, local and user settings, and turns it back on
+      expected.disableAllHooks = false
       expect(JSON.parse(await read(c.settingsFile))).toEqual(expected)
     }
     // A chat session takes only the blocking hook, through --settings
     const args = mgr.enforceChatArgs()
     expect(args?.[0]).toBe('--settings')
-    expect(JSON.parse(await read(args![1]))).toEqual({ hooks: { PreToolUse: [pre] } })
+    expect(JSON.parse(await read(args![1]))).toEqual({ disableAllHooks: false, hooks: { PreToolUse: [pre] } })
     // A Codex session takes the same hook, for codex, through -c
     expect(mgr.enforceCodexArgs()).toEqual(
       codexEnforceArgs({ command: `ELECTRON_RUN_AS_NODE=1 "/opt/astera/astera" "${path.join(dir, ENFORCE_HOOK_FILE).replace(/\\/g, '/')}" codex`, platform: 'linux' })
     )
+  })
+
+  // Final review M2: a file that could not be written is not a missing interpreter
+  it('says the hook could not be written when its files cannot be', async () => {
+    const mgr = new StatusLineManager(dir, 'node', () => {}, { platform: 'linux', execPath: '/opt/astera/astera' })
+    await mgr.init()
+    // A folder where the settings file goes: neither the swap nor the write in place can put a file there
+    await fs.mkdir(path.join(dir, 'astera-enforce-settings.json'))
+    expect(await mgr.ensureEnforceFiles()).toBe('hook-write-failed')
+    expect(mgr.enforceChatArgs()).toBeNull()
   })
 
   it('leaves the off and observe settings byte for byte as they were', async () => {
@@ -855,7 +872,7 @@ describe('StatusLineManager enforce mode', () => {
   it('runs the hook with a Host runtime Astera installed when the capture scripts have no node of Astera’s', async () => {
     const mgr = new StatusLineManager(dir, 'node', () => {}, { platform: 'win32', execPath: 'C:/x/electron.exe', findRuntime: async () => 'C:\\rt\\astera-host.exe' })
     await mgr.init()
-    expect(await mgr.ensureEnforceFiles()).toBe(true)
+    expect(await mgr.ensureEnforceFiles()).toBe('ok')
     expect(mgr.enforceHookCommand('claude')).toBe(`C:'/rt/astera-host.exe' '${path.join(dir, ENFORCE_HOOK_FILE).replace(/\\/g, '/')}' claude`)
     // The capture scripts keep their own node, so an Off or Observe session's settings are as they were
     const plain = JSON.parse(await read(mgr.spawnConfig('s', account).settingsFile))
@@ -865,7 +882,7 @@ describe('StatusLineManager enforce mode', () => {
   it('has no interpreter on Windows without the Host runtime, so a session asked to enforce is not marked enforced', async () => {
     const mgr = new StatusLineManager(dir, 'node', () => {}, { platform: 'win32', execPath: 'C:/x/electron.exe' })
     await mgr.init()
-    expect(await mgr.ensureEnforceFiles()).toBe(false)
+    expect(await mgr.ensureEnforceFiles()).toBe('no-interpreter')
     expect(mgr.spawnConfig('s1', account, { observe: true, enforce: true })).not.toHaveProperty('enforced')
     expect(mgr.enforceChatArgs()).toBeNull()
     expect(mgr.enforceCodexArgs()).toBeNull()

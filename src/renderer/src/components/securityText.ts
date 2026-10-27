@@ -415,6 +415,7 @@ const ENFORCE_KEYS: MessageKey[] = [
   'settings.security.enforce.builtins',
   'settings.security.enforce.sameUser',
   'settings.security.enforce.running',
+  'settings.security.enforce.keeps',
   'settings.security.enforce.confirm',
   'settings.security.builtin.tag'
 ]

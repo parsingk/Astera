@@ -256,13 +256,17 @@ function execResults(rest: string, runsCommand: boolean): ObservedCall['status']
 /** Whether an exec script runs a command: one of Codex's shell tools called from it. */
 const EXEC_RUNS_COMMAND = /\btools\.(?:exec_command|shell_command|shell|local_shell)\s*\(/
 
-/** Codex's words when a PreToolUse hook refused a call (codex 0.160, measured 2026-10-27). */
-const HOOK_STOPPED = /blocked by PreToolUse hook/i
-/** Whether a call's output says a hook stopped it, and it was one call: a shell command, or an exec script that calls one
- *  tool (Codex's code mode, whose inner call the hook sees under an id of its own). A script of several calls ran the
- *  others, and stays the record of them. */
+/** Codex's words when Astera's PreToolUse hook refused an exec script's call, at the start of its output (codex 0.160,
+ *  measured 2026-10-27: "Script failed …" then "Script error:\nCommand blocked by PreToolUse hook: <reason>"), and Astera's
+ *  own reasons start "Blocked by Astera": another hook's refusal, or a command that printed the words, is not it (final
+ *  review M3). A shell call's output says it near its start. */
+const EXEC_STOPPED = /^Script failed[^\n]*\n[\s\S]*?Script error:\s*Command blocked by PreToolUse hook: Blocked by Astera/
+const SHELL_STOPPED = /^[\s\S]{0,200}?Command blocked by PreToolUse hook: Blocked by Astera/
+/** Whether a call's output says Astera's hook stopped it, and it was one call: a shell command, or an exec script that
+ *  calls one tool (Codex's code mode, whose inner call the hook sees under an id of its own). A script of several calls
+ *  ran the others, and stays the record of them. */
 function hookStopped(kind: 'shell' | 'exec' | 'patch', text: string | null, input: unknown): boolean {
-  if (text === null || !HOOK_STOPPED.test(text)) return false
+  if (text === null || !(kind === 'exec' ? EXEC_STOPPED : SHELL_STOPPED).test(text)) return false
   if (kind !== 'exec') return true
   return typeof input === 'string' && (input.match(/\btools\.[A-Za-z_][A-Za-z0-9_]*\s*\(/g) ?? []).length === 1
 }
@@ -409,6 +413,19 @@ const ACTION_NAMES = new Set<string>(AUDIT_ACTIONS)
 const CONFIDENCES = new Set(['exact', 'high', 'heuristic', 'unknown'])
 /** How much of an enforce file one read takes at most; the rest is read at the next. */
 const ENFORCE_READ_MAX = 1 << 20
+/** Call ids of a session's file kept for the proof; a call's report comes seconds after its hook's line. */
+const ENFORCE_IDS_KEPT = 5000
+/** Claude's tools no hook may see: its hosted web search. */
+const UNHOOKED_CLAUDE_TOOLS = new Set(['WebSearch'])
+
+/** A hook line's call id, blocked or not. */
+function lineId(line: string): string | null {
+  try {
+    return str(obj(JSON.parse(line))?.id)
+  } catch {
+    return null
+  }
+}
 
 /** A line of a session's enforce file as the call the hook stopped, with whose CLI it was; null for a call it let
  *  through, and for anything that is not a line the hook writes. */
@@ -451,6 +468,16 @@ class EnforceFile {
   private rest: Buffer = Buffer.alloc(0)
   /** The ids of the calls it says were stopped, so the provider's own report of one is not handed over too. */
   readonly blocked = new Set<string>()
+  /** The ids of every call the hook saw, the newest ENFORCE_IDS_KEPT: a Claude call that ran is among them (final review
+   *  I4). */
+  readonly seen = new Set<string>()
+  /** Blocks not yet matched to a Codex report of one stopped call under another id (`stoppedByHook`). */
+  unmatched = 0
+
+  saw(id: string): void {
+    this.seen.add(id)
+    if (this.seen.size > ENFORCE_IDS_KEPT) this.seen.delete(this.seen.values().next().value as string)
+  }
   constructor(readonly file: string) {}
 
   readNew(): string[] {
@@ -479,20 +506,6 @@ class EnforceFile {
     }
   }
 
-  /** Lines written from now on only: what was written while nothing was read is passed. */
-  skipToEnd(): void {
-    try {
-      const fd = openSync(this.file, 'r')
-      try {
-        this.offset = fstatSync(fd).size
-      } finally {
-        closeSync(fd)
-      }
-    } catch {
-      this.offset = 0
-    }
-    this.rest = Buffer.alloc(0)
-  }
 }
 
 /** Deletes the enforce file of every session not in `keep`: run at the Host's start, when no session of an earlier
@@ -524,7 +537,7 @@ export interface AuditSources {
 
 export function createAuditSources(d: {
   /** `retryMode` is asked at every tick of the timer: the recorder says when it is due. */
-  recorder: Pick<AuditRecorder, 'record' | 'observing' | 'onObservingChange'> & Partial<Pick<AuditRecorder, 'retryMode'>>
+  recorder: Pick<AuditRecorder, 'record' | 'observing' | 'onObservingChange'> & Partial<Pick<AuditRecorder, 'retryMode' | 'unhooked'>>
   ptys: { onMeta: Listen<[string, PtyMeta, 'open' | 'note']>; onExit: Listen<[string, number]> }
   procs: { onMeta: Listen<[string, PtyMeta, 'open' | 'note']>; onLine: Listen<[string, number, string]>; onExit: Listen<[string, number]> }
   /** The profile's hook-events folder, where the observed sessions' audit files are. */
@@ -550,16 +563,20 @@ export function createAuditSources(d: {
     enforcing.set(meta.id, new EnforceFile(path.join(d.enforceDir, `${meta.id}.jsonl`)))
     enforcedBy.set(holder, meta.id)
   }
-  /** Hands over what the session's enforce file says was stopped since it was last read. */
+  /** Hands over what the session's enforce file says was stopped since it was last read, in any mode: a session started
+   *  in Enforce keeps blocking after the mode is turned off, and its blocks say why (final review I7). */
   const readEnforce = (sessionId: string): void => {
     const f = enforcing.get(sessionId)
-    if (!f || !d.recorder.observing()) return
+    if (!f) return
     try {
       for (const line of f.readNew()) {
+        const id = lineId(line)
+        if (id !== null) f.saw(id)
         const c = enforceBlockedCall(line)
         if (!c) continue
         const { provider, ...call } = c
         if (call.dedupeKey !== undefined) f.blocked.add(call.dedupeKey)
+        f.unmatched++
         d.recorder.record({ sessionId, source: provider === 'codex' ? 'codex-hook' : 'claude-hook', ...call })
       }
     } catch (err) {
@@ -582,7 +599,14 @@ export function createAuditSources(d: {
     for (const { stoppedByHook, ...c } of calls) {
       if (f && c.dedupeKey !== undefined && f.blocked.has(c.dedupeKey)) continue
       // Codex's report of the one call the hook stopped, under its own id: the file's blocked line is that call
-      if (f && stoppedByHook) continue
+      if (f && stoppedByHook && f.unmatched > 0) {
+        f.unmatched--
+        continue
+      }
+      // A Claude call that ran has its hook's line under the same tool_use_id; one without ran unhooked (final review I4)
+      const ran = c.status === 'ok' || c.status === 'failed'
+      if (f && ran && (source === 'claude-hook' || source === 'claude-chat') && c.dedupeKey !== undefined && !f.seen.has(c.dedupeKey) && !UNHOOKED_CLAUDE_TOOLS.has(c.tool))
+        d.recorder.unhooked?.(sessionId)
       d.recorder.record({ sessionId, source, ...c })
     }
   }
@@ -683,12 +707,14 @@ export function createAuditSources(d: {
       r.tail = new JsonlTail(file, { startAtEnd: resumed || r.since === null })
     }),
     d.ptys.onExit((ptyId) => {
-      unfollowEnforce(ptyId)
       const r = rollouts.get(ptyId)
-      if (!r) return
-      // Read once more, for what it wrote last
-      if (r.tail) r.ended = true
-      else rollouts.delete(ptyId)
+      // Read once more, for what it wrote last; its enforce file is let go after that last read, which may hand the
+      // report of a call the hook stopped (final review M4)
+      if (r?.tail) r.ended = true
+      else {
+        rollouts.delete(ptyId)
+        unfollowEnforce(ptyId)
+      }
     })
   ]
 
@@ -705,7 +731,6 @@ export function createAuditSources(d: {
       // The calls made meanwhile were not read, so where they left the shells is not known
       shellAt.clear()
       hooks.start()
-      for (const f of enforcing.values()) f.skipToEnd()
       for (const r of rollouts.values()) {
         r.calls.forget()
         r.left = []
@@ -719,8 +744,8 @@ export function createAuditSources(d: {
 
   let polling = false
   const readRollouts = async (): Promise<void> => {
-    if (!follow()) return
     for (const sessionId of [...enforcing.keys()]) readEnforce(sessionId)
+    if (!follow()) return
     for (const [ptyId, r] of [...rollouts]) {
       for (const old of r.left.splice(0)) {
         try {
@@ -745,6 +770,7 @@ export function createAuditSources(d: {
       if (last) {
         hand(r.sessionId, 'codex-rollout', r.calls.unfinished())
         rollouts.delete(ptyId)
+        unfollowEnforce(ptyId)
       } else hand(r.sessionId, 'codex-rollout', r.calls.overdue())
     }
   }

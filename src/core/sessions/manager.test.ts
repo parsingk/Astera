@@ -1501,7 +1501,7 @@ describe('observe mode at spawn', () => {
     if (policyMode !== null) manager.capabilities = { get: () => capsIn(policyMode), refresh: async () => {} }
     const observeHooks = vi.fn(async () => {})
     manager.observeHooks = observeHooks
-    const enforceHooks = vi.fn(async () => filesWritten)
+    const enforceHooks = vi.fn(async () => (filesWritten ? ('ok' as const) : ('no-interpreter' as const)))
     manager.enforceHooks = enforceHooks
     manager.enforce = { args: (provider) => (filesWritten && provider === 'codex' ? ['-c', 'hooks.PreToolUse=[x]', '-c', 'hooks.state={y}'] : null) }
     return { manager, spawned, argv, asked, observeHooks, enforceHooks }
@@ -1570,6 +1570,37 @@ describe('observe mode at spawn', () => {
     expect(o.enforceHooks).not.toHaveBeenCalled()
     o.manager.spawn({ account, cwd: '/work' })
     expect(o.spawned[0].meta?.restore).not.toHaveProperty('enforced')
+  })
+
+  // Final review I5b: the hook names its file by ASTERA_SESSION, which a session without orchestration did not get
+  it('an enforce session gets its id whether or not orchestration is up', async () => {
+    const e = rig('enforce')
+    await e.manager.prepare({ account, cwd: '/work' })
+    e.manager.spawn({ account, cwd: '/work' })
+    const id = e.spawned[0].meta?.id
+    expect(e.spawned[0].env?.ASTERA_SESSION).toBe(id)
+    const o = rig('observe')
+    await o.manager.prepare({ account, cwd: '/work' })
+    o.manager.spawn({ account, cwd: '/work' })
+    expect(o.spawned[0].env?.ASTERA_SESSION).toBeUndefined()
+  })
+
+  it('says why the hook is not in place: no interpreter, or files it could not write', async () => {
+    const e = rig('enforce')
+    e.manager.enforceHooks = async () => 'hook-write-failed'
+    await expect(e.manager.prepare({ account, cwd: '/work' })).rejects.toThrow(/^ENFORCE_UNAVAILABLE: hook-write-failed/)
+  })
+
+  it('asks the version check which kind of session it is', async () => {
+    const e = rig('enforce')
+    const asked: unknown[] = []
+    e.manager.enforce = { args: () => ['-c', 'x'], blocker: (p, kind) => (asked.push([p, kind]), null) }
+    await e.manager.prepare({ account: codexAccount, cwd: '/work' })
+    e.manager.spawn({ account: codexAccount, cwd: '/work' })
+    expect(asked).toEqual([
+      ['codex', 'terminal'],
+      ['codex', 'terminal']
+    ])
   })
 
   it('an enforce start whose blocking hook cannot be written is refused before anything spawns', async () => {

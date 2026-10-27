@@ -176,6 +176,7 @@ export const es: Catalog = {
   'settings.security.enforce.builtins': 'Antes que cualquier Rule, en las sesiones de agentes siempre se bloquea escribir en la carpeta de ajustes de Astera y ejecutar comandos que cambian los ajustes de Astera.',
   'settings.security.enforce.sameUser': 'Un agente que se ejecuta con el mismo usuario todavía puede escribir los archivos de ajustes directamente desde un script.',
   'settings.security.enforce.running': 'Un cambio se aplica a las sesiones que empiecen después.',
+  'settings.security.enforce.keeps': 'Las sesiones iniciadas en Enforce siguen bloqueando hasta que terminan, y sus llamadas bloqueadas se registran aunque se desactive.',
   'settings.security.enforce.confirm': 'Activar Enforce',
   'settings.security.coverage.withNote': '{level} ({note})',
   'settings.security.rules.hint': 'Las reglas se prueban desde arriba. La primera que coincide con una llamada decide.',
@@ -335,6 +336,7 @@ export const es: Catalog = {
   'audit.coverageNote.web-tools-only': 'solo herramientas web',
   'audit.coverageNote.shell-text-only': 'solo como texto de shell',
   'audit.coverageNote.web-search-and-shell-text': 'búsqueda web y texto de shell',
+  'audit.coverageNote.interactive-input': 'no la entrada a un shell en ejecución',
   'settings.remote.hint': 'Mira desde esta app los Jobs de Astera que se ejecuta en otro equipo (un Runtime). Solo se conecta tras comprobar la clave de ese equipo, y el token se guarda solo en este equipo.',
   'settings.remote.thisMachine.title': 'Este equipo',
   'settings.remote.thisMachine.off': 'Remote Runtime está apagado. Elige una dirección abajo y enciéndelo para que otro equipo pueda emparejarse con este.',
@@ -636,6 +638,10 @@ export const es: Catalog = {
   'session.spawn.enforce.cliTooOld': 'Enforce solo puede bloquear en {cli} {min} o posterior. Ahora es {found}. Actualice la CLI o cambie Policies a Observe.',
   'session.spawn.enforce.cliVersionUnknown': 'No se pudo leer la versión de {cli}, así que la sesión no se inició en Enforce.',
   'session.spawn.enforce.hookMissing': 'El hook que bloquea no se ejecutó en esta sesión, así que la sesión se detuvo. Cambie Policies a Observe para registrar las llamadas sin bloquearlas.',
+  'session.spawn.enforce.hooksOff': 'La configuración administrada de Claude Code desactiva los hooks en este equipo, así que la sesión no se inició en Enforce. Consulte a su administrador.',
+  'session.spawn.enforce.hookWriteFailed': 'No se pudieron escribir los archivos del hook de Enforce, así que la sesión no se inició. Compruebe que se puede escribir en la carpeta de ajustes de Astera o cambie Policies a Observe.',
+  'session.spawn.enforce.cliMissing': 'No se encontró {cli}, así que la sesión no se inició en Enforce. Instale {cli}.',
+  'session.spawn.enforce.codexDaemon': 'Este Codex no acepta --no-daemon, así que la sesión no se inició en Enforce. Actualice Codex o cambie Policies a Observe.',
   'session.spawn.failedWorktreeKept':
     'No se pudo iniciar la sesión: {message} (el worktree "{name}" se conservó; elimínelo desde el panel Worktrees)',
   // Rolling-resume guard hit — tells the user the tab was just focused and their chosen options were dropped

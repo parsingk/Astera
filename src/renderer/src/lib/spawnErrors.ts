@@ -15,7 +15,8 @@ const IN_BACKGROUND = /CLAUDE_IN_BACKGROUND:\s*(busy|idle)/
 
 // Enforce's refusals (core/audit/enforce.ts, core/sessions/cliVersion.ts): `ENFORCE_UNAVAILABLE: <code>`, the version
 // codes with the CLI and its versions after them.
-const ENFORCE = /ENFORCE_UNAVAILABLE:\s*(no-interpreter|cli-too-old|cli-version-unknown|hook-missing)(?:\s+(claude|codex))?(?:\s+(\S+)\s+(\S+))?/
+const ENFORCE =
+  /ENFORCE_UNAVAILABLE:\s*(no-interpreter|cli-too-old|cli-version-unknown|cli-missing|hook-missing|hooks-off|hook-write-failed|codex-daemon)(?:\s+(claude|codex))?(?:\s+(\S+)\s+(\S+))?/
 const CLI_NAMES = { claude: 'Claude Code', codex: 'Codex' } as const
 
 function enforceMessage(m: RegExpExecArray): Message {
@@ -25,8 +26,16 @@ function enforceMessage(m: RegExpExecArray): Message {
       return { key: 'session.spawn.enforce.cliTooOld', params: { cli, found: m[3] ?? '', min: m[4] ?? '' } }
     case 'cli-version-unknown':
       return { key: 'session.spawn.enforce.cliVersionUnknown', params: { cli } }
+    case 'cli-missing':
+      return { key: 'session.spawn.enforce.cliMissing', params: { cli } }
     case 'hook-missing':
       return { key: 'session.spawn.enforce.hookMissing' }
+    case 'hooks-off':
+      return { key: 'session.spawn.enforce.hooksOff' }
+    case 'hook-write-failed':
+      return { key: 'session.spawn.enforce.hookWriteFailed' }
+    case 'codex-daemon':
+      return { key: 'session.spawn.enforce.codexDaemon' }
     default:
       return { key: 'session.spawn.enforce.noInterpreter' }
   }

@@ -1017,7 +1017,8 @@ describe('the enforce file source', () => {
     sources.dispose()
   })
 
-  it('reads nothing of the enforce files while the mode is compatibility', async () => {
+  // Final review I7: the blocks of a session started in Enforce are read after the mode is turned off too
+  it('keeps reading the enforce files while the mode is compatibility', async () => {
     const ptys = fakeRegistry()
     const { events, recorder, setObserving } = capture()
     const enforceDir = await tempDir()
@@ -1026,7 +1027,25 @@ describe('the enforce file source', () => {
     setObserving(false)
     await fs.writeFile(path.join(enforceDir, 'sess_e.jsonl'), lineOf(blocked('toolu_2')))
     await sources.poll()
-    expect(events).toEqual([])
+    expect(events.map((e) => [e.dedupeKey, e.status])).toEqual([['toolu_2', 'blocked']])
+    sources.dispose()
+  })
+
+  // Final review I4: every Claude call that ran has its hook's line, by the same tool_use_id; one without is unhooked
+  it('tells the recorder of a Claude call its hook never saw, and not of one it saw', async () => {
+    const procs = fakeRegistry()
+    const { recorder } = capture()
+    const unhooked: string[] = []
+    const enforceDir = await tempDir()
+    const { sources } = await sourcesFor({ recorder: { ...recorder, unhooked: (id: string) => void unhooked.push(id) }, procs, enforceDir })
+    procs.open('proc1', note('chat', 'sess_c', { ...ENFORCED, provider: 'claude' }))
+    await fs.writeFile(path.join(enforceDir, 'sess_c.jsonl'), lineOf(ran('toolu_1')))
+    procs.line('proc1', assistant([{ type: 'tool_use', id: 'toolu_1', name: 'Grep', input: { pattern: 'x' } }]))
+    procs.line('proc1', user([{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'x' }]))
+    expect(unhooked).toEqual([])
+    procs.line('proc1', assistant([{ type: 'tool_use', id: 'toolu_9', name: 'Bash', input: { command: 'git push' } }]))
+    procs.line('proc1', user([{ type: 'tool_result', tool_use_id: 'toolu_9', content: 'pushed' }]))
+    expect(unhooked).toEqual(['sess_c'])
     sources.dispose()
   })
 })
@@ -1082,6 +1101,66 @@ describe('the enforce file and a Codex exec script the hook stopped', () => {
 
   it('keeps the stopped call once, as blocked, when the script made only that call', async () => {
     expect(await run({ ...OBSERVED, enforced: true }, ONE)).toEqual([['codex-hook', 'Bash', 'blocked']])
+  })
+
+  // Final review M3: only Codex's words for Astera's own refusal, at the start of the output, and only while the file has
+  // a block it has not matched
+  it('keeps a call whose output only mentions a refusal, one the person’s own hook made, and one with no block in the file', async () => {
+    const said = (text: string) =>
+      rollout(T0 + 1100, 'response_item', { type: 'custom_tool_call_output', call_id: 'call_1', output: [{ type: 'input_text', text: 'Script completed\nOutput:\n' }, { type: 'input_text', text }] })
+    const runWith = async (out: string, file: string) => {
+      const dir = await tempDir()
+      const enforceDir = await tempDir()
+      const rf = path.join(dir, 'rollout-2026-10-27T01-00-00-th.jsonl')
+      await fs.writeFile(rf, '')
+      const ptys = fakeRegistry()
+      const { events, recorder } = capture()
+      let now = T0
+      const { sources } = await sourcesFor({ recorder, ptys, enforceDir, now: () => now })
+      ptys.open('pty1', note('session', 'sess_cx', { ...OBSERVED, enforced: true }))
+      now += 3000
+      await fs.writeFile(path.join(enforceDir, 'sess_cx.jsonl'), file)
+      await fs.appendFile(rf, [EXEC(T0 + 900, 'call_1', ONE), out].join('\n') + '\n')
+      ptys.note('pty1', note('session', 'sess_cx', { ...OBSERVED, enforced: true, rolloutPath: rf }))
+      await sources.poll()
+      await sources.poll()
+      sources.dispose()
+      return events.filter((e) => e.source === 'codex-rollout').length
+    }
+    expect(await runWith(said('a log line: Command blocked by PreToolUse hook: Blocked by Astera Rules'), lineOf(blockedLine))).toBe(1)
+    expect(
+      await runWith(
+        rollout(T0 + 1100, 'response_item', {
+          type: 'custom_tool_call_output',
+          call_id: 'call_1',
+          output: [{ type: 'input_text', text: 'Script failed\n' }, { type: 'input_text', text: 'Script error:\nCommand blocked by PreToolUse hook: my own rule' }]
+        }),
+        lineOf(blockedLine)
+      )
+    ).toBe(1)
+    expect(await runWith(STOPPED(T0 + 1100, 'call_1'), lineOf({ ...blockedLine, blocked: undefined }))).toBe(1)
+  })
+
+  // Final review M4: a session that ends right after a stopped call still has its file read for the rollout's last read
+  it('reads the enforce file for the rollout’s last read when the session ends at once', async () => {
+    const dir = await tempDir()
+    const enforceDir = await tempDir()
+    const rf = path.join(dir, 'rollout-2026-10-27T01-00-00-th.jsonl')
+    await fs.writeFile(rf, '')
+    const ptys = fakeRegistry()
+    const { events, recorder } = capture()
+    let now = T0
+    const { sources } = await sourcesFor({ recorder, ptys, enforceDir, now: () => now })
+    ptys.open('pty1', note('session', 'sess_cx', { ...OBSERVED, enforced: true }))
+    ptys.note('pty1', note('session', 'sess_cx', { ...OBSERVED, enforced: true, rolloutPath: rf }))
+    await sources.poll()
+    now += 3000
+    await fs.writeFile(path.join(enforceDir, 'sess_cx.jsonl'), lineOf(blockedLine))
+    await fs.appendFile(rf, [EXEC(T0 + 900, 'call_1', ONE), STOPPED(T0 + 1100, 'call_1')].join('\n') + '\n')
+    ptys.exit('pty1')
+    await sources.poll()
+    sources.dispose()
+    expect(events.map((e) => [e.source, e.status])).toEqual([['codex-hook', 'blocked']])
   })
 
   it('keeps a script that made other calls too, and a session not in Enforce reports the script as it went', async () => {

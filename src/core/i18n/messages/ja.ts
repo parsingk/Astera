@@ -173,6 +173,7 @@ export const ja: Catalog = {
   'settings.security.enforce.builtins': 'どの Rule よりも先に、エージェントのセッションによる Astera の設定フォルダーへの書き込みと Astera の設定を変えるコマンドを常に止めます。',
   'settings.security.enforce.sameUser': '同じユーザーとして動くエージェントがスクリプトで設定ファイルを直接書くことは止められません。',
   'settings.security.enforce.running': '切り替えは、その後に開始するセッションから適用されます。',
+  'settings.security.enforce.keeps': 'Enforce で開始したセッションは終わるまで止め続け、止めた呼び出しはオフにした後も記録します。',
   'settings.security.enforce.confirm': 'Enforce をオンにする',
   'settings.security.coverage.withNote': '{level}（{note}）',
   'settings.security.rules.hint': 'ルールは上から順に試されます。呼び出しに最初に一致したルールが決めます。',
@@ -331,6 +332,7 @@ export const ja: Catalog = {
   'audit.coverageNote.web-tools-only': 'Web ツールのみ',
   'audit.coverageNote.shell-text-only': 'シェルの文字列のみ',
   'audit.coverageNote.web-search-and-shell-text': 'Web 検索とシェルの文字列',
+  'audit.coverageNote.interactive-input': '実行中のシェルへの入力は止められない',
   'settings.remote.hint': '別のコンピューターで動く Astera(Runtime)の Job をこのアプリで見ます。接続はそのコンピューターの鍵を確かめた後にだけ行われ、トークンはこのコンピューターにだけ保存されます。',
   'settings.remote.thisMachine.title': 'このコンピューター',
   'settings.remote.thisMachine.off': 'リモート Runtime はオフです。下でアドレスを選んでオンにすると、他のコンピューターがこのコンピューターとペアリングできます。',
@@ -629,6 +631,10 @@ export const ja: Catalog = {
   'session.spawn.enforce.cliTooOld': 'Enforce で止められるのは {cli} {min} 以降だけです。いまは {found} です。CLI を更新するか、Policies を Observe に切り替えてください。',
   'session.spawn.enforce.cliVersionUnknown': '{cli} のバージョンがわからないため、Enforce で開始しませんでした。',
   'session.spawn.enforce.hookMissing': '止める hook がこのセッションで動かなかったため、セッションを止めました。Policies を Observe に切り替えると、止めずに記録だけします。',
+  'session.spawn.enforce.hooksOff': 'Claude Code の管理設定がこの PC で hook をオフにしているため、Enforce で開始しませんでした。管理者に問い合わせてください。',
+  'session.spawn.enforce.hookWriteFailed': 'Enforce の hook ファイルを書けなかったため、開始しませんでした。Astera の設定フォルダーに書き込めるか確認するか、Policies を Observe に切り替えてください。',
+  'session.spawn.enforce.cliMissing': '{cli} が見つからないため、Enforce で開始しませんでした。{cli} をインストールしてください。',
+  'session.spawn.enforce.codexDaemon': 'この Codex は --no-daemon を受け付けないため、Enforce で開始しませんでした。Codex を更新するか、Policies を Observe に切り替えてください。',
   'session.spawn.failedWorktreeKept':
     'セッションの開始に失敗しました: {message} (worktree "{name}" は残っているので Worktrees パネルから削除してください)',
   // Rolling-resume guard hit — tells the user the tab was just focused and their chosen options were dropped

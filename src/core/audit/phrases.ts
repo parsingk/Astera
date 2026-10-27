@@ -25,5 +25,6 @@ export const ACTION_PHRASES: Record<AuditAction, MessageKey> = {
 export const COVERAGE_NOTE_PHRASES: Record<CoverageNote, MessageKey> = {
   'web-tools-only': 'audit.coverageNote.web-tools-only',
   'shell-text-only': 'audit.coverageNote.shell-text-only',
-  'web-search-and-shell-text': 'audit.coverageNote.web-search-and-shell-text'
+  'web-search-and-shell-text': 'audit.coverageNote.web-search-and-shell-text',
+  'interactive-input': 'audit.coverageNote.interactive-input'
 }

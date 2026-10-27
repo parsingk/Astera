@@ -35,6 +35,9 @@ function finish(stdin: string): void {
       provider,
       profileDir,
       sessionId: process.env.ASTERA_SESSION,
+      // Claude Code gives every hook the folder the session started in (its hooks reference, CLAUDE_PROJECT_DIR)
+      projectDir: provider === 'claude' ? process.env.CLAUDE_PROJECT_DIR : undefined,
+      env: process.env,
       platform: process.platform,
       now: Date.now,
       readRules,

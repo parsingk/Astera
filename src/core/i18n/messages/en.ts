@@ -209,6 +209,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.security.enforce.builtins': "Before any Rule, agent sessions are always blocked from writing Astera's settings folder and from running commands that change Astera's settings.",
   'settings.security.enforce.sameUser': 'An agent running as the same user can still write the settings files directly from a script.',
   'settings.security.enforce.running': 'A change applies to sessions started after it.',
+  'settings.security.enforce.keeps': 'Sessions started in Enforce keep blocking until they end, and their blocked calls are recorded even after it is turned off.',
   'settings.security.enforce.confirm': 'Turn on Enforce',
   'settings.security.coverage.withNote': '{level} ({note})',
   'settings.security.rules.hint': 'Rules are tried from the top. The first one that matches a call decides it.',
@@ -368,6 +369,7 @@ export const en: Record<keyof typeof ko, string> = {
   'audit.coverageNote.web-tools-only': 'web tools only',
   'audit.coverageNote.shell-text-only': 'shell text only',
   'audit.coverageNote.web-search-and-shell-text': 'web search and shell text',
+  'audit.coverageNote.interactive-input': 'not input typed into a running shell',
   'settings.plugins.hint': 'A plugin is a program that runs beside the Astera Host. Once installed it runs as trusted code on this computer, and asks Astera only for what you granted.',
   'settings.plugins.none': 'No plugins are installed.',
   'settings.plugins.installFolder': 'Install from a folder…',
@@ -799,6 +801,10 @@ export const en: Record<keyof typeof ko, string> = {
   'session.spawn.enforce.cliTooOld': 'Enforce can block calls only on {cli} {min} or later. This one is {found}. Update the CLI, or switch Policies to Observe.',
   'session.spawn.enforce.cliVersionUnknown': 'The version of {cli} could not be read, so the session did not start in Enforce.',
   'session.spawn.enforce.hookMissing': 'The blocking hook did not run in this session, so the session was stopped. Switch Policies to Observe to record calls without blocking them.',
+  'session.spawn.enforce.hooksOff': "Claude Code's managed settings turn hooks off on this computer, so the session did not start in Enforce. Ask your administrator.",
+  'session.spawn.enforce.hookWriteFailed': "The Enforce hook's files could not be written, so the session did not start. Check that Astera's settings folder can be written, or switch Policies to Observe.",
+  'session.spawn.enforce.cliMissing': '{cli} was not found, so the session did not start in Enforce. Install {cli}.',
+  'session.spawn.enforce.codexDaemon': 'This Codex does not take --no-daemon, so the session did not start in Enforce. Update Codex, or switch Policies to Observe.',
   'session.spawn.failedWorktreeKept':
     'Failed to start session: {message} (the worktree “{name}” was kept — delete it from the Worktrees panel)',
   // Rolling-resume guard hit — tells the user the tab was just focused and their chosen options were dropped

@@ -25,6 +25,9 @@ export interface StatusLineSpawn {
 /** Enforce's hook (enforce design §5), written beside the Rules it reads: the bundle of core/audit/hook/enforceMain.ts. */
 export const ENFORCE_HOOK_FILE = 'astera-enforce-hook.cjs'
 
+/** Whether the hook and its settings are in place, and when not, why (the code a refused start carries, E5). */
+export type EnforceFilesResult = 'ok' | 'no-interpreter' | 'hook-write-failed'
+
 /** Astera's own node, which runs the Enforce hook: `env`, when set, is a `NAME=value` the command starts with; `tail`
  *  is an argument it ends with. */
 export interface EnforceInterpreter {
@@ -51,6 +54,8 @@ export function enforceInterpreter(o: {
   appImage?: string
 }): EnforceInterpreter | null {
   if (o.platform === 'linux' && o.appImage) return { file: o.appImage, env: 'ELECTRON_RUN_AS_NODE=1', tail: '--no-sandbox' }
+  // A macOS app opened where it was downloaded runs from a translocated copy that goes when it quits (final review M9)
+  if (o.platform === 'darwin' && o.execPath.includes('/AppTranslocation/')) return null
   if (o.platform !== 'win32') return { file: o.execPath, env: 'ELECTRON_RUN_AS_NODE=1' }
   return /^[A-Za-z]:[\\/]/.test(o.captureNode) ? { file: o.captureNode } : null
 }
@@ -564,21 +569,28 @@ export class StatusLineManager {
   /**
    * Enforce mode (enforce design §5, E1): writes the blocking hook and the settings a session started in Enforce reads.
    * Each terminal file is its observe variant (which it writes first) with one more PreToolUse entry for every tool
-   * (`*`), not `async`: Claude Code waits on it, and the hook prints the deny itself. A chat session (`--settings` on top
+   * (`*`), not `async`: Claude Code waits on it, and the hook prints the deny itself. Every file also says
+   * `"disableAllHooks": false`: it is passed as --settings, above user, project and local settings, so a project's
+   * `.claude/settings.local.json` that turns hooks off cannot turn this one off (final review C2, measured 2026-10-27). A chat session (`--settings` on top
    * of its own arguments) gets a file with only that entry. Written only when a session is about to start in Enforce, so
-   * an Off or Observe session reads exactly the bytes it did. Resolves to whether all of it is written; false too where
-   * there is no Astera node to run the hook (Windows without the Host runtime), and the session is refused (E5). Never
+   * an Off or Observe session reads exactly the bytes it did. Resolves to 'ok' once all of it is written, else why not: no
+   * Astera node to run the hook (Windows without the Host runtime), or a file it could not write; the session is then
+   * refused (E5). Never
    * throws.
    */
-  async ensureEnforceFiles(): Promise<boolean> {
+  async ensureEnforceFiles(): Promise<EnforceFilesResult> {
     await this.ensureObserveFiles()
     if (this.platform === 'win32' && this.findRuntime && enforceInterpreter({ platform: 'win32', captureNode: this.nodePath, execPath: this.execPath }) === null)
       this.runtimeExe = await this.findRuntime().catch(() => null)
     const b = this.built
     const command = this.enforceHookCommand('claude')
-    if (!b || !this.observeReady || command === null) {
+    if (command === null) {
       this.enforceReady = false
-      return false
+      return 'no-interpreter'
+    }
+    if (!b || !this.observeReady) {
+      this.enforceReady = false
+      return 'hook-write-failed'
     }
     const script = await writeScript(this.enforceHookPath, ENFORCE_HOOK_SOURCE)
     const pre = { matcher: '*', hooks: [{ type: 'command', command, timeout: 10 }] }
@@ -586,13 +598,17 @@ export class StatusLineManager {
       const observed = JSON.parse(withObserveHooks(s, captureCommand(this.nodePath, this.hookAuditCapturePath))) as {
         hooks: { PreToolUse?: unknown[] }
       }
-      return JSON.stringify({ ...observed, hooks: { ...observed.hooks, PreToolUse: [...(observed.hooks.PreToolUse ?? []), pre] } }, null, 2)
+      return JSON.stringify(
+        { ...observed, disableAllHooks: false, hooks: { ...observed.hooks, PreToolUse: [...(observed.hooks.PreToolUse ?? []), pre] } },
+        null,
+        2
+      )
     }
     const plain = await writeScript(this.enforceSettingsFile, withEnforce(b.settings))
     const wider = await writeScript(this.enforceHooksSettingsFile, withEnforce(b.hooksSettings))
-    const chat = await writeScript(this.enforceChatSettingsFile, JSON.stringify({ hooks: { PreToolUse: [pre] } }, null, 2))
+    const chat = await writeScript(this.enforceChatSettingsFile, JSON.stringify({ disableAllHooks: false, hooks: { PreToolUse: [pre] } }, null, 2))
     this.enforceReady = script && plain && wider && chat
-    return this.enforceReady
+    return this.enforceReady ? 'ok' : 'hook-write-failed'
   }
 
   /** A Claude chat session's arguments for Enforce, once ensureEnforceFiles has written them, else null. */

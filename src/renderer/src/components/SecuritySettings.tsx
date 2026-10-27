@@ -228,7 +228,8 @@ export function SecuritySettings({
                 </div>
               </div>
               <p className="settings-hint">{t('settings.security.mode.hint')}</p>
-              {policy.mode === 'enforce' && <p className="settings-hint">{t('settings.security.enforce.running')}</p>}
+              {/* Sessions started in Enforce keep blocking until they end, also after it is turned off (final review I7) */}
+              <p className="settings-hint">{t(policy.mode === 'enforce' ? 'settings.security.enforce.running' : 'settings.security.enforce.keeps')}</p>
             </div>
             {shownCoverage.length > 0 && (
               <div className="settings-group">

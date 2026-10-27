@@ -26,6 +26,8 @@ describe('the CLI version Enforce needs', () => {
     expect(enforceBlocker('claude', '2.1.300')).toBe('ENFORCE_UNAVAILABLE: cli-too-old claude 2.1.300 2.1.306')
     expect(enforceBlocker('codex', '0.159.0')).toBe('ENFORCE_UNAVAILABLE: cli-too-old codex 0.159.0 0.160.0')
     expect(enforceBlocker('codex', null)).toBe('ENFORCE_UNAVAILABLE: cli-version-unknown codex')
+    // Final review M2: a CLI that is not there is said so
+    expect(enforceBlocker('claude', undefined)).toBe('ENFORCE_UNAVAILABLE: cli-missing claude')
   })
 })
 
@@ -59,6 +61,10 @@ describe('makeCliVersionProbe', () => {
       platform: 'linux',
       run,
       runAsync: async () => 'codex-cli 0.160.0',
+      which: () => '/usr/bin/codex',
+      whichAsync: async () => '/usr/bin/codex',
+      identity: () => 'codex-1',
+      identityAsync: async () => 'codex-1',
       now: () => 0
     })
     await probe.warm('codex')
@@ -66,8 +72,26 @@ describe('makeCliVersionProbe', () => {
     expect(run).not.toHaveBeenCalled()
   })
 
-  it('a CLI that is not there has no version', () => {
+  it('a CLI that is not there is missing, not of an unknown version', () => {
     const probe = makeCliVersionProbe({ platform: 'win32', resolve: () => null, run: () => 'x', now: () => 0 })
-    expect(probe('claude')).toBeNull()
+    expect(probe('claude')).toBeUndefined()
+    const posix = makeCliVersionProbe({ platform: 'linux', which: () => null, run: () => 'x', now: () => 0 })
+    expect(posix('codex')).toBeUndefined()
+  })
+
+  // Final review M1: an answer that failed is asked again, and an update on macOS and Linux is seen at once
+  it('does not keep a failed answer, and asks again after an update on every platform', () => {
+    let answer: string | null = null
+    let identity = '/usr/local/bin/codex|1|10'
+    const run = vi.fn(() => answer)
+    const probe = makeCliVersionProbe({ platform: 'darwin', which: () => '/usr/local/bin/codex', identity: () => identity, run, now: () => 0 })
+    expect(probe('codex')).toBeNull()
+    answer = 'codex-cli 0.159.0'
+    expect(probe('codex')).toBe('0.159.0')
+    expect(run).toHaveBeenCalledTimes(2)
+    answer = 'codex-cli 0.160.0'
+    expect(probe('codex')).toBe('0.159.0')
+    identity = '/usr/local/bin/codex|2|11'
+    expect(probe('codex')).toBe('0.160.0')
   })
 })

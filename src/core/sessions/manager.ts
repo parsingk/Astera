@@ -22,6 +22,7 @@ import { gatewayTokenEnv } from '../extensions/resolve'
 import { applyHiding, type HidingSource } from '../credentials/hiding'
 import { isObserving } from '../audit/policy'
 import { enforceUnavailable, type EnforceStart } from '../audit/enforce'
+import type { EnforceFilesResult } from './statusline'
 
 /** statusLine info injected when a session spawns (provided by main's StatusLineManager,
  *  structurally compatible). */
@@ -176,7 +177,7 @@ export class SessionManager {
   /** Enforce (enforce design §5): puts the blocking hook and the enforce variants of the settings files in place
    *  (StatusLineManager.ensureEnforceFiles), and says whether they are. `prepare` calls it, instead of observeHooks, when
    *  the mode is enforce and the session takes a statusLine; false refuses the start (E5). */
-  enforceHooks?: () => Promise<boolean>
+  enforceHooks?: () => Promise<EnforceFilesResult>
   /** Enforce: the CLI's version check (asked at prepare and at spawn), and for a session without a statusLine (Codex)
    *  the arguments that make it run the blocking hook, or null when it cannot (E5). */
   enforce?: EnforceStart
@@ -212,21 +213,23 @@ export class SessionManager {
     // Observe mode: the hook settings an observed session is pointed at, written before the spawn reads the mode the
     // refresh just read. A failure leaves the session on the plain file (spawnConfig), never the spawn refused.
     // Enforce: the blocking hook's settings (which hold the observe ones), and no start without them (E5).
-    const mode = this.capabilities?.get(opts.account, opts.agentProfileId)?.context.policyMode ?? 'compatibility'
-    if (mode === 'enforce') {
-      // A CLI too old to honour the hook, or one whose version cannot be read, does not start (E5)
-      const provider = providerOf(opts.account)
-      await this.enforce?.warm?.(provider)
-      const blocked = this.enforce?.blocker?.(provider) ?? null
-      if (blocked !== null) throw new Error(blocked)
-      const ready = this.enforceHooks ? await this.enforceHooks().catch(() => false) : false
-      if (!ready) throw enforceUnavailable('no-interpreter')
-    } else if (this.observeHooks && isObserving(mode) && descriptorOf(this.descriptors, opts.account).usesStatusLine)
-      await this.observeHooks().catch((err) => this.checks.log(`observe hook settings could not be written: ${String(err)}`))
-    // The CLI on PATH and codex's --no-daemon, so the spawn's command builder finds both (second pass M2-1, M2-2).
+    // The CLI on PATH and codex's --no-daemon, so the spawn's command builder finds both (second pass M2-1, M2-2), and
+    // Enforce's check below reads them warmed
     await descriptorOf(this.descriptors, opts.account)
       .prepare?.()
       .catch(() => {})
+    const mode = this.capabilities?.get(opts.account, opts.agentProfileId)?.context.policyMode ?? 'compatibility'
+    if (mode === 'enforce') {
+      // A CLI too old to honour the hook, one not there or whose version cannot be read, hooks an organization's policy
+      // turns off, a codex that would run its tools in a shared daemon: none of them starts (E5)
+      const provider = providerOf(opts.account)
+      await this.enforce?.warm?.(provider)
+      const blocked = this.enforce?.blocker?.(provider, 'terminal') ?? null
+      if (blocked !== null) throw new Error(blocked)
+      const files: EnforceFilesResult = this.enforceHooks ? await this.enforceHooks().catch(() => 'hook-write-failed' as const) : 'no-interpreter'
+      if (files !== 'ok') throw enforceUnavailable(files)
+    } else if (this.observeHooks && isObserving(mode) && descriptorOf(this.descriptors, opts.account).usesStatusLine)
+      await this.observeHooks().catch((err) => this.checks.log(`observe hook settings could not be written: ${String(err)}`))
   }
 
   private cwdConfirmed(cwd: string): boolean {
@@ -327,7 +330,7 @@ export class SessionManager {
     // gets it as `-c` arguments, and neither starts without it (E5) — the prepare wrote it, so this is a hook that went
     // missing in between
     const enforce = caps?.context.policyMode === 'enforce'
-    const blocked = enforce ? (this.enforce?.blocker?.(providerOf(opts.account)) ?? null) : null
+    const blocked = enforce ? (this.enforce?.blocker?.(providerOf(opts.account), 'terminal') ?? null) : null
     if (blocked !== null) throw new Error(blocked)
     const sl = d.usesStatusLine
       ? (this.statusLineProvider?.(
@@ -426,6 +429,8 @@ export class SessionManager {
       // `astera` (core/orchestration/exec/shuttle.ts: astera.cmd on win32, astera on posix).
       prependToPath(env, path.dirname(opts.orchEnv.cliPath))
     }
+    // Enforce: the hook names the session's file by it, orchestration up or not (final review I5b)
+    if (enforced) env.ASTERA_SESSION = id
     const pty = this.ptyFactory(file, args, {
       cwd: opts.cwd,
       cols: opts.cols ?? 120,

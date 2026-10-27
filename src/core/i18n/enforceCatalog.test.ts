@@ -7,7 +7,11 @@ const KEYS = [
   'session.spawn.enforce.noInterpreter',
   'session.spawn.enforce.cliTooOld',
   'session.spawn.enforce.cliVersionUnknown',
-  'session.spawn.enforce.hookMissing'
+  'session.spawn.enforce.hookMissing',
+  'session.spawn.enforce.hooksOff',
+  'session.spawn.enforce.hookWriteFailed',
+  'session.spawn.enforce.cliMissing',
+  'session.spawn.enforce.codexDaemon'
 ] as const
 
 describe('the enforce refusals', () => {

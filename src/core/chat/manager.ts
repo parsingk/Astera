@@ -315,7 +315,7 @@ export class ChatSessionManager {
     // Enforce (enforce design §5, E5): the blocking hook rides on the session's own arguments, and without it the
     // session does not start
     const enforced = caps?.context.policyMode === 'enforce'
-    const blocked = enforced ? (this.deps.enforce?.blocker?.(provider) ?? null) : null
+    const blocked = enforced ? (this.deps.enforce?.blocker?.(provider, 'chat') ?? null) : null
     if (blocked !== null) throw new Error(blocked)
     const enforceArgs = enforced ? (this.deps.enforce?.args(provider) ?? null) : []
     if (enforceArgs === null) throw enforceUnavailable('no-interpreter')
@@ -512,14 +512,6 @@ export class ChatSessionManager {
     if (!live) return
     live.killRequested = true
     live.adapter.kill()
-  }
-
-  /** Ends the session with `message` as its last error, which every subscriber hears first (the Host's Enforce
-   *  hook-missing, enforce design §5): the pane says why it ended. Unknown id: no-op, as `kill`. */
-  stop(id: string, message: string): void {
-    if (!this.sessions.has(id)) return
-    this.handleEvent(id, { type: 'error', message })
-    this.kill(id)
   }
 
   /** Writes info.title and the process's own note, returning the stored title — or null for an

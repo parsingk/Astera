@@ -657,3 +657,10 @@ describe('usage — credentials', () => {
     expect(USAGE['credentials-list'].detail).toMatch(/changed only in the Astera app/)
   })
 })
+
+// Final review M7: policies show names all three modes
+describe('policies show', () => {
+  it('names all three modes', () => {
+    expect(USAGE['policies-show'].detail).toContain('`mode` is compatibility (nothing is observed), observe or enforce')
+  })
+})

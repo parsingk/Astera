@@ -26,6 +26,11 @@ describe('spawnErrorMessage', () => {
     })
     expect(spawnErrorMessage(raw('cli-version-unknown codex'))).toEqual({ key: 'session.spawn.enforce.cliVersionUnknown', params: { cli: 'Codex' } })
     expect(spawnErrorMessage(raw('hook-missing'))).toEqual({ key: 'session.spawn.enforce.hookMissing' })
+    // Final review C2, M2, M11
+    expect(spawnErrorMessage(raw('hooks-off'))).toEqual({ key: 'session.spawn.enforce.hooksOff' })
+    expect(spawnErrorMessage(raw('hook-write-failed'))).toEqual({ key: 'session.spawn.enforce.hookWriteFailed' })
+    expect(spawnErrorMessage(raw('cli-missing codex'))).toEqual({ key: 'session.spawn.enforce.cliMissing', params: { cli: 'Codex' } })
+    expect(spawnErrorMessage(raw('codex-daemon'))).toEqual({ key: 'session.spawn.enforce.codexDaemon' })
     // The Host's own error, through `astera`
     expect(spawnErrorMessage('ENFORCE_UNAVAILABLE: cli-too-old codex 0.159.0 0.160.0')).toMatchObject({ params: { cli: 'Codex' } })
   })

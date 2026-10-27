@@ -31,6 +31,11 @@ export function runEnforceHook(a: {
   profileDir: string
   /** ASTERA_SESSION: names the enforce file. */
   sessionId: string | undefined
+  /** Where the session started (Claude's CLAUDE_PROJECT_DIR): what inside the project is measured against. A Claude
+   *  hook's `cwd` is where a `cd` left the shell (final review I1); without this, that `cwd` is all there is. */
+  projectDir?: string
+  /** The hook's environment: the home folders a path to Astera's settings can be spelled from. */
+  env?: Readonly<Record<string, string | undefined>>
   platform: NodeJS.Platform
   now: () => number
   /** The rules file's text; null when there is none. Throws while it cannot be read. */
@@ -47,10 +52,11 @@ export function runEnforceHook(a: {
   if (!isRecord(payload) || typeof payload.tool_name !== 'string' || payload.tool_name === '') return unreadableCallDeny()
   const tool = payload.tool_name
   const cwd = typeof payload.cwd === 'string' && payload.cwd !== '' ? payload.cwd : process.cwd()
-  const call = { provider: a.provider, tool, input: payload.tool_input, cwd, base: cwd }
+  const project = a.projectDir !== undefined && a.projectDir !== '' ? a.projectDir : cwd
+  const call = { provider: a.provider, tool, input: payload.tool_input, cwd: project, base: cwd }
 
   const policy = readPolicy(a)
-  const v = enforceVerdict({ call, policy, profileDir: a.profileDir, platform: a.platform })
+  const v = enforceVerdict({ call, policy, profileDir: a.profileDir, platform: a.platform, ...(a.env ? { env: a.env } : {}) })
 
   if (a.sessionId !== undefined && a.sessionId !== '') {
     const id = typeof payload.tool_use_id === 'string' ? payload.tool_use_id : null

@@ -5,6 +5,10 @@ import type { CoverageCell, CoverageRow } from './types'
 const SHELL_TEXT_ONLY: CoverageCell = { level: 'partial', note: 'shell-text-only' }
 /** Claude's network calls are hooked when WebFetch or WebSearch make them; a `curl` in the shell is shell text. */
 const WEB_TOOLS_ONLY: CoverageCell = { level: 'partial', note: 'web-tools-only' }
+/** Codex sends no hook for what is typed into a shell already running (write_stdin; codex-rs
+ *  core/src/tools/handlers/unified_exec/write_stdin.rs, rust-v0.160.0): the command that started the shell is checked,
+ *  a line typed into it later is not (final review M10). */
+const INTERACTIVE_INPUT: CoverageCell = { level: 'partial', note: 'interactive-input' }
 const ENFORCED: CoverageCell = { level: 'enforced' }
 
 /** What Enforce's hook decides before a call runs (enforce design §5, inventory §19), per provider and kind of session.
@@ -17,7 +21,7 @@ export const COVERAGE_ENFORCE: readonly CoverageRow[] = [
   {
     provider: 'codex',
     kind: 'terminal',
-    classes: { shell: ENFORCED, 'file-read': SHELL_TEXT_ONLY, 'file-write': ENFORCED, mcp: ENFORCED, network: { level: 'partial', note: 'web-search-and-shell-text' } }
+    classes: { shell: INTERACTIVE_INPUT, 'file-read': SHELL_TEXT_ONLY, 'file-write': ENFORCED, mcp: ENFORCED, network: { level: 'partial', note: 'web-search-and-shell-text' } }
   },
-  { provider: 'codex', kind: 'chat', classes: { shell: ENFORCED, 'file-read': SHELL_TEXT_ONLY, 'file-write': ENFORCED, mcp: ENFORCED, network: { level: 'partial' } } }
+  { provider: 'codex', kind: 'chat', classes: { shell: INTERACTIVE_INPUT, 'file-read': SHELL_TEXT_ONLY, 'file-write': ENFORCED, mcp: ENFORCED, network: { level: 'partial' } } }
 ]

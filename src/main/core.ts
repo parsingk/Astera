@@ -49,6 +49,8 @@ import { createCapabilityCache, type CapabilityCache } from '../core/extensions/
 import { readPolicyMode } from '../core/audit/policy'
 import type { EnforceStart } from '../core/audit/enforce'
 import { cliVersionProbe, enforceBlocker } from '../core/sessions/cliVersion'
+import { createManagedHooksCheck } from '../core/sessions/managedHooks'
+import { codexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
 import { findInstalledHostExe } from '../core/host/installedRuntime'
 import { settingsImportCopiesCapabilities } from '../core/extensions/registry'
 import { hidingLog } from '../core/extensions/secrets'
@@ -294,6 +296,8 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   const gateway: Core['gateway'] = { ask: async () => null }
   // Enforce: each CLI's version, asked once per binary (E5: one too old to honour the hook does not start)
   const cliVersions = cliVersionProbe(process.platform)
+  // Enforce: an organization's Claude Code policy that turns hooks off (final review C2)
+  const managedHooks = createManagedHooksCheck(process.platform)
   const capabilities = createCapabilityCache({
     gatewayPort: () => gateway.ask(),
     profileDir: userDataDir,
@@ -303,7 +307,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     // no await of its own, finds them written (StatusLineManager.ensureEnforceFiles)
     policyMode: async () => {
       const mode = await readPolicyMode(userDataDir)
-      if (mode === 'enforce') await Promise.all([statusLine.ensureEnforceFiles(), cliVersions.warm('claude'), cliVersions.warm('codex')])
+      if (mode === 'enforce') await Promise.all([statusLine.ensureEnforceFiles(), cliVersions.warm('claude'), cliVersions.warm('codex'), managedHooks.warm()])
       return mode
     },
     log: hidingLog(userDataDir, sessionsLog)
@@ -320,8 +324,14 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   sessions.enforceHooks = () => statusLine.ensureEnforceFiles()
   const enforce: EnforceStart = {
     args: (provider) => (provider === 'claude' ? statusLine.enforceChatArgs() : statusLine.enforceCodexArgs()),
-    blocker: (provider) => enforceBlocker(provider, cliVersions(provider)),
-    warm: (provider) => cliVersions.warm(provider)
+    blocker: (provider, kind) =>
+      enforceBlocker(provider, cliVersions(provider)) ??
+      (provider === 'claude' && managedHooks.off() ? 'ENFORCE_UNAVAILABLE: hooks-off' : null) ??
+      // A codex terminal without --no-daemon may run its tools in a daemon another session started (final review M11)
+      (provider === 'codex' && kind === 'terminal' && !codexNoDaemonProbe(process.platform)() ? 'ENFORCE_UNAVAILABLE: codex-daemon' : null),
+    warm: async (provider) => {
+      await Promise.all([cliVersions.warm(provider), provider === 'claude' ? managedHooks.warm() : Promise.resolve()])
+    }
   }
   sessions.enforce = enforce
   // The chat sessions. It is handed `procRouter.factory` rather than a factory chosen now, for exactly

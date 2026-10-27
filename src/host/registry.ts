@@ -685,10 +685,6 @@ export class PtyRegistry {
     return e ? { cols: e.cols, rows: e.rows } : null
   }
 
-  /** Sends a live pty its one kill (`Entry.killSent`). Marked before the call, so a kill that threw is
-   *  not sent again either: whether it freed the handle is not known. **A repeat escalates, once**: the
-   *  pty is still alive after its kill, so its process tree is ended (`deps.killTree`), which never
-   *  touches the ConPTY handle. Any repeat after that is only logged. */
   /** Puts Astera's own `text` in a live pty's output as the pty's own would be: the ring (so an app attaching later
    *  replays it), the live terminal and every data listener. For the line a person must find in the tab when the Host
    *  ends the session (Enforce's hook-missing, enforce design §5). Not the person's input, and not output the session
@@ -700,6 +696,10 @@ export class PtyRegistry {
     for (const cb of this.dataCbs) this.tell(cb, 'data', id, () => cb(id, text))
   }
 
+  /** Sends a live pty its one kill (`Entry.killSent`). Marked before the call, so a kill that threw is
+   *  not sent again either: whether it freed the handle is not known. **A repeat escalates, once**: the
+   *  pty is still alive after its kill, so its process tree is ended (`deps.killTree`), which never
+   *  touches the ConPTY handle. Any repeat after that is only logged. */
   kill(id: string): void {
     const e = this.live(id)
     if (!e) return

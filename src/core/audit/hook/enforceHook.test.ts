@@ -78,6 +78,15 @@ describe('runEnforceHook', () => {
     for (const stdin of ['', 'nope', '{"tool_input":{}}', '[1]']) expect(run(stdin).out, stdin).toBe(unreadable)
   })
 
+  // Final review I1: Claude's hook cwd follows a `cd`; the project is where the session started (CLAUDE_PROJECT_DIR)
+  it('measures inside the project from the session folder, not from where a cd left the shell', () => {
+    const write = (projectDir: string | undefined) =>
+      run(payload('Write', { file_path: 'D:/proj/README.md', content: 'x' }, { cwd: 'D:/proj/packages/app' }), projectDir === undefined ? {} : { projectDir }).out
+    expect(write('D:/proj')).toBe('')
+    // Without it, the payload's own cwd is all there is
+    expect(write(undefined)).toBe(deny('Blocked by Astera Rules: filesystem.write outside the project is denied.'))
+  })
+
   it('uses the starter rules when there is no rules file', () => {
     expect(run(payload('Bash', { command: 'git push' }), { readRules: () => null }).out).toBe(deny('Blocked by Astera Rules: git.remote.write is denied.'))
   })

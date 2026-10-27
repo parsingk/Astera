@@ -585,6 +585,16 @@ describe('Enforce on the screen', () => {
     expect(ko('settings.security.enforce.title')).toBe('Enforce 를 켤까요?')
   })
 
+  // Final review I7: sessions started in Enforce keep blocking after it is turned off, and the screen says so then too
+  it('says sessions started in Enforce keep blocking, whatever the mode is now', () => {
+    const screen = source('SecuritySettings.tsx')
+    expect(screen).toContain("t(policy.mode === 'enforce' ? 'settings.security.enforce.running' : 'settings.security.enforce.keeps')")
+    expect(ko('settings.security.enforce.keeps')).toContain('끝날 때까지')
+    expect(coverageCellText({ level: 'partial', note: 'interactive-input' }, ko)).toBe(
+      ko('settings.security.coverage.withNote', { level: ko('settings.security.coverage.level.partial'), note: ko('audit.coverageNote.interactive-input') })
+    )
+  })
+
   it('the coverage title follows the mode', () => {
     expect(coverageTitle('observe', ko)).toBe('기록 범위')
     expect(coverageTitle('compatibility', ko)).toBe('기록 범위')
