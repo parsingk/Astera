@@ -177,6 +177,9 @@ export class SessionManager {
    *  (StatusLineManager.ensureEnforceFiles), and says whether they are. `prepare` calls it, instead of observeHooks, when
    *  the mode is enforce and the session takes a statusLine; false refuses the start (E5). */
   enforceHooks?: () => Promise<boolean>
+  /** Enforce for a session without a statusLine (Codex): the arguments that make it run the blocking hook, or null when
+   *  it cannot (E5). Asked at each spawn in enforce, after the prepare's enforceHooks wrote the hook. */
+  enforce?: { args(provider: Provider): string[] | null }
   /** The Git Bash `prepare` found, per PATH string, and when — held here, not read back from the
    *  resolver's cache, so an entry that expires between a prepare and its spawn cannot send the spawn
    *  to the sync search. Trusted as long as a confirmed folder is. */
@@ -210,13 +213,11 @@ export class SessionManager {
     // refresh just read. A failure leaves the session on the plain file (spawnConfig), never the spawn refused.
     // Enforce: the blocking hook's settings (which hold the observe ones), and no start without them (E5).
     const mode = this.capabilities?.get(opts.account, opts.agentProfileId)?.context.policyMode ?? 'compatibility'
-    if (descriptorOf(this.descriptors, opts.account).usesStatusLine) {
-      if (mode === 'enforce') {
-        const ready = this.enforceHooks ? await this.enforceHooks().catch(() => false) : false
-        if (!ready) throw enforceUnavailable('no-interpreter')
-      } else if (this.observeHooks && isObserving(mode))
-        await this.observeHooks().catch((err) => this.checks.log(`observe hook settings could not be written: ${String(err)}`))
-    }
+    if (mode === 'enforce') {
+      const ready = this.enforceHooks ? await this.enforceHooks().catch(() => false) : false
+      if (!ready) throw enforceUnavailable('no-interpreter')
+    } else if (this.observeHooks && isObserving(mode) && descriptorOf(this.descriptors, opts.account).usesStatusLine)
+      await this.observeHooks().catch((err) => this.checks.log(`observe hook settings could not be written: ${String(err)}`))
     // The CLI on PATH and codex's --no-daemon, so the spawn's command builder finds both (second pass M2-1, M2-2).
     await descriptorOf(this.descriptors, opts.account)
       .prepare?.()
@@ -317,8 +318,9 @@ export class SessionManager {
     // only when it was given those settings (they may not have been written); a Codex one has none to be given. In
     // compatibility the provider is asked exactly as before and the note carries no mark.
     const observe = isObserving(caps?.context.policyMode ?? 'compatibility')
-    // Enforce (enforce design §5): a Claude session is pointed at the settings that run the blocking hook, and does not
-    // start without them (E5) — the prepare wrote them, so this is a hook that went missing in between
+    // Enforce (enforce design §5): a Claude session is pointed at the settings that run the blocking hook, a Codex one
+    // gets it as `-c` arguments, and neither starts without it (E5) — the prepare wrote it, so this is a hook that went
+    // missing in between
     const enforce = caps?.context.policyMode === 'enforce'
     const sl = d.usesStatusLine
       ? (this.statusLineProvider?.(
@@ -328,8 +330,11 @@ export class SessionManager {
         ) ?? null)
       : null
     if (enforce && d.usesStatusLine && sl?.enforced !== true) throw enforceUnavailable('no-interpreter')
+    const enforceArgs = enforce && !d.usesStatusLine ? (this.enforce?.args(providerOf(opts.account)) ?? null) : []
+    if (enforceArgs === null) throw enforceUnavailable('no-interpreter')
+    const extraArgs = [...(caps?.args ?? []), ...enforceArgs]
     const observed = observe && (d.usesStatusLine ? sl?.observed === true : true)
-    const enforced = enforce && d.usesStatusLine
+    const enforced = enforce
     const env = this.envFor(opts.account)
     // The Credentials list's hidden keys and logins go from what the session inherits, before Astera adds its own below
     // (credentials design §5): no entry can take away the session's identity, its Gateway token or a shared server's value
@@ -356,7 +361,7 @@ export class SessionManager {
       resumePrompt: opts.resumePrompt,
       initialPrompt: opts.initialPrompt,
       developerInstructions,
-      ...(caps && caps.args.length > 0 ? { extraArgs: caps.args } : {})
+      ...(extraArgs.length > 0 ? { extraArgs } : {})
     })
     // Windows only: CLAUDE_CODE_GIT_BASH_PATH exists for Git for Windows, and on other platforms the
     // agent's bash is the system one. The agent's hooks and statusLine need a real Git Bash when

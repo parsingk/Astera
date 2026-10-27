@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process'
 import type { Account } from '../types'
 import { StatusLineManager, captureCommand, enforceCommand, enforceInterpreter, ENFORCE_HOOK_FILE } from './statusline'
 import enforceHookSource from 'virtual:astera-enforce-hook'
+import { codexEnforceArgs } from './codexEnforce'
 import { dirIdentity } from '../files/watchedDir'
 import { createAttentionState } from './attention'
 import { hookEventState, latestEventLine } from '../hooks/sessionState'
@@ -793,7 +794,14 @@ describe('StatusLineManager enforce mode', () => {
     expect(enforceCommand({ file: '/opt/astera/astera', env: 'ELECTRON_RUN_AS_NODE=1' }, '/p/astera-enforce-hook.cjs', 'claude')).toBe(
       'ELECTRON_RUN_AS_NODE=1 "/opt/astera/astera" "/p/astera-enforce-hook.cjs" claude'
     )
-    expect(enforceCommand({ file: 'C:/rt/astera-host.exe' }, 'C:/p/astera-enforce-hook.cjs', 'codex')).toBe("C:'/rt/astera-host.exe' 'C:/p/astera-enforce-hook.cjs' codex")
+    // Both CLIs run a hook's line in a shell that reads captureCommand's form: Claude Code in Git Bash or PowerShell,
+    // Codex in its own session shell, PowerShell on Windows (codex-rs core/src/session/mod.rs build_hooks_config,
+    // shell-command/src/shell_detect.rs, rust-v0.160.0). The quoted form fails there (measured 2026-10-27).
+    expect(enforceCommand({ file: 'C:/rt/astera-host.exe' }, 'C:/p/astera-enforce-hook.cjs', 'claude')).toBe("C:'/rt/astera-host.exe' 'C:/p/astera-enforce-hook.cjs' claude")
+    expect(enforceCommand({ file: 'C:\\rt\\astera-host.exe' }, 'C:\\p\\astera-enforce-hook.cjs', 'codex')).toBe("C:'/rt/astera-host.exe' 'C:/p/astera-enforce-hook.cjs' codex")
+    expect(enforceCommand({ file: '/opt/astera/astera', env: 'ELECTRON_RUN_AS_NODE=1' }, '/p/astera-enforce-hook.cjs', 'codex')).toBe(
+      'ELECTRON_RUN_AS_NODE=1 "/opt/astera/astera" "/p/astera-enforce-hook.cjs" codex'
+    )
   })
 
   it('runs an AppImage’s hook through the AppImage file, not its mount, which is gone once the app quits', () => {
@@ -828,6 +836,10 @@ describe('StatusLineManager enforce mode', () => {
     const args = mgr.enforceChatArgs()
     expect(args?.[0]).toBe('--settings')
     expect(JSON.parse(await read(args![1]))).toEqual({ hooks: { PreToolUse: [pre] } })
+    // A Codex session takes the same hook, for codex, through -c
+    expect(mgr.enforceCodexArgs()).toEqual(
+      codexEnforceArgs({ command: `ELECTRON_RUN_AS_NODE=1 "/opt/astera/astera" "${path.join(dir, ENFORCE_HOOK_FILE).replace(/\\/g, '/')}" codex`, platform: 'linux' })
+    )
   })
 
   it('leaves the off and observe settings byte for byte as they were', async () => {
@@ -846,5 +858,6 @@ describe('StatusLineManager enforce mode', () => {
     expect(await mgr.ensureEnforceFiles()).toBe(false)
     expect(mgr.spawnConfig('s1', account, { observe: true, enforce: true })).not.toHaveProperty('enforced')
     expect(mgr.enforceChatArgs()).toBeNull()
+    expect(mgr.enforceCodexArgs()).toBeNull()
   })
 })

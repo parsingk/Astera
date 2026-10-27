@@ -10,6 +10,7 @@ import { renameRetrying } from '../renameRetry'
 import { SESSION_CONTEXT_SCRIPT } from './sessionContext'
 import { CLAUDE_INPUT_FIELDS } from '../audit/resolve'
 import ENFORCE_HOOK_SOURCE from 'virtual:astera-enforce-hook'
+import { codexEnforceArgs } from './codexEnforce'
 
 /** The statusLine injection info handed to SessionManager when a session is spawned. */
 export interface StatusLineSpawn {
@@ -54,7 +55,14 @@ export function enforceInterpreter(o: {
   return /^[A-Za-z]:[\\/]/.test(o.captureNode) ? { file: o.captureNode } : null
 }
 
-/** The command line that runs the Enforce hook for `provider`, quoted as captureCommand quotes a capture script. */
+/**
+ * The command line that runs the Enforce hook for `provider`, quoted as captureCommand quotes a capture script. Both
+ * CLIs run it in a shell that reads that form: Claude Code in Git Bash or PowerShell on Windows, Codex in its own
+ * session shell, which is PowerShell on Windows and the user's sh, bash or zsh elsewhere (codex-rs core/src/session/mod.rs
+ * build_hooks_config, shell-command/src/shell_detect.rs, rust-v0.160.0). Measured 2026-10-27: the double-quoted form
+ * fails in Codex's PowerShell. A Windows without PowerShell sends Codex to cmd.exe, where it fails too; the Host's
+ * proof then stops the session.
+ */
 export function enforceCommand(i: EnforceInterpreter, script: string, provider: 'claude' | 'codex'): string {
   return `${i.env ? `${i.env} ` : ''}${captureCommand(i.file, script)} ${provider}${i.tail ? ` ${i.tail}` : ''}`
 }
@@ -575,6 +583,13 @@ export class StatusLineManager {
   /** A Claude chat session's arguments for Enforce, once ensureEnforceFiles has written them, else null. */
   enforceChatArgs(): string[] | null {
     return this.enforceReady ? ['--settings', this.enforceChatSettingsFile.replace(/\\/g, '/')] : null
+  }
+
+  /** A Codex session's arguments for Enforce (terminal and app-server), once ensureEnforceFiles has written the hook,
+   *  else null. */
+  enforceCodexArgs(): string[] | null {
+    const command = this.enforceReady ? this.enforceHookCommand('codex') : null
+    return command === null ? null : codexEnforceArgs({ command, platform: this.platform })
   }
 
   /** The app-start half: empties the hook events folder (a queue the app drains) and makes the

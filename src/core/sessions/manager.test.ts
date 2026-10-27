@@ -1503,8 +1503,31 @@ describe('observe mode at spawn', () => {
     manager.observeHooks = observeHooks
     const enforceHooks = vi.fn(async () => filesWritten)
     manager.enforceHooks = enforceHooks
+    manager.enforce = { args: (provider) => (filesWritten && provider === 'codex' ? ['-c', 'hooks.PreToolUse=[x]', '-c', 'hooks.state={y}'] : null) }
     return { manager, spawned, argv, asked, observeHooks, enforceHooks }
   }
+
+  it('a Codex session started in enforce carries the hook args, an observe one does not', async () => {
+    const e = rig('enforce')
+    await e.manager.prepare({ account: codexAccount, cwd: '/work' })
+    expect(e.enforceHooks).toHaveBeenCalledTimes(1)
+    e.manager.spawn({ account: codexAccount, cwd: '/work', initialPrompt: 'go' })
+    const a = e.argv[0] as string[]
+    // Root options, ahead of the prompt, so they reach `resume` too
+    expect(a.slice(a.indexOf('hooks.PreToolUse=[x]') - 1, a.indexOf('hooks.PreToolUse=[x]') + 3)).toEqual(['-c', 'hooks.PreToolUse=[x]', '-c', 'hooks.state={y}'])
+    expect(a.indexOf('hooks.PreToolUse=[x]')).toBeLessThan(a.indexOf('go'))
+    expect(e.spawned[0].meta?.restore).toMatchObject({ observed: true, enforced: true })
+    const o = rig('observe')
+    await o.manager.prepare({ account: codexAccount, cwd: '/work' })
+    o.manager.spawn({ account: codexAccount, cwd: '/work' })
+    expect(o.argv[0]).not.toContain('hooks.PreToolUse=[x]')
+    expect(o.spawned[0].meta?.restore).not.toHaveProperty('enforced')
+    // No hook: refused at the prepare, and at the spawn
+    const n = rig('enforce', false)
+    await expect(n.manager.prepare({ account: codexAccount, cwd: '/work' })).rejects.toThrow(/^ENFORCE_UNAVAILABLE: no-interpreter/)
+    expect(() => n.manager.spawn({ account: codexAccount, cwd: '/work' })).toThrow(/^ENFORCE_UNAVAILABLE: no-interpreter/)
+    expect(n.spawned).toHaveLength(0)
+  })
 
   // Enforce (enforce design §5, E5): the blocking hook's settings, the note's mark, and no start without them
   it('an enforce session is pointed at the enforce settings and marked enforced, an observe one is not', async () => {

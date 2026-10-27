@@ -305,8 +305,11 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   sessions.hiding = hiding
   // Observe mode: an observed Claude session's hook settings, written by its prepare (StatusLineManager.ensureObserveFiles)
   sessions.observeHooks = () => statusLine.ensureObserveFiles()
-  // Enforce: a Claude session's blocking hook, written by its prepare, which refuses the start without it (E5)
+  // Enforce: the blocking hook, written by a session's prepare, which refuses the start without it (E5). A Claude terminal
+  // session reads it from its settings file; a chat, and any Codex session, from these arguments
   sessions.enforceHooks = () => statusLine.ensureEnforceFiles()
+  const enforce = { args: (provider: 'claude' | 'codex') => (provider === 'claude' ? statusLine.enforceChatArgs() : statusLine.enforceCodexArgs()) }
+  sessions.enforce = enforce
   // The chat sessions. It is handed `procRouter.factory` rather than a factory chosen now, for exactly
   // the reason SessionManager is handed `ptyRouter.factory`: which one a spawn reaches is decided at
   // spawn time, once registerIpc has learned whether this Host speaks procs. `version` is the app's
@@ -321,7 +324,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     log: chatLog,
     capabilities,
     hiding,
-    enforce: { args: (provider) => (provider === 'claude' ? statusLine.enforceChatArgs() : null) }
+    enforce
   })
   // Lazy history: nothing is scanned at startup. The project list comes from a directory listing; sessions are
   // parsed when expanded. index.ts starts the file watcher with startBackground() after the window is up, so window creation never blocks on a scan.

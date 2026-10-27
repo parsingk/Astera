@@ -77,8 +77,14 @@ describe('runEnforceHook', () => {
     expect(run(payload('Bash', { command: 'git push' }), { readRules: () => null }).out).toBe(deny('Blocked by Astera Rules: git.remote.write is denied.'))
   })
 
+  // The payload a Codex 0.160 hook got (measured 2026-10-27): its shell is `Bash`, a patch is apply_patch
   it('reads a Codex call as Codex', () => {
-    const out = run(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'shell', tool_input: { command: ['bash', '-lc', 'git push origin main'] }, cwd: 'D:/proj' }), { provider: 'codex' }).out
-    expect(out).toBe(deny('Blocked by Astera Rules: git.remote.write is denied.'))
+    const codex = (tool: string, input: unknown): string =>
+      run(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, cwd: 'D:/proj', tool_use_id: 'exec-1' }), { provider: 'codex' }).out
+    expect(codex('Bash', { command: 'git push origin main' })).toBe(deny('Blocked by Astera Rules: git.remote.write is denied.'))
+    expect(codex('apply_patch', { command: '*** Begin Patch\n*** Add File: ../outside.txt\n+x\n*** End Patch' })).toBe(
+      deny('Blocked by Astera Rules: filesystem.write outside the project is denied.')
+    )
+    expect(codex('apply_patch', { command: '*** Begin Patch\n*** Add File: inside.txt\n+x\n*** End Patch' })).toBe('')
   })
 })

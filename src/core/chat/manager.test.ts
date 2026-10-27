@@ -1318,6 +1318,14 @@ describe('Enforce in chat sessions', () => {
     expect(o.factory.mock.calls[0][2].meta?.restore).not.toHaveProperty('enforced')
   })
 
+  it('a Codex chat started in enforce gets the hook args on app-server', () => {
+    const { factory, manager } = make('enforce', ['-c', 'hooks.PreToolUse=[x]'])
+    manager.spawn({ account: codexAccount, cwd: '/p' })
+    const argv = factory.mock.calls[0][1]
+    expect(argv.slice(argv.indexOf('app-server'), argv.indexOf('app-server') + 3)).toEqual(['app-server', '-c', 'hooks.PreToolUse=[x]'])
+    expect(factory.mock.calls[0][2].meta?.restore).toMatchObject({ observed: true, enforced: true })
+  })
+
   it('a chat started in enforce without the hook is refused', () => {
     const { factory, manager } = make('enforce', null)
     expect(() => manager.spawn({ account: claudeAccount, cwd: '/p' })).toThrow(/^ENFORCE_UNAVAILABLE: no-interpreter/)

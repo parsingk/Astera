@@ -379,8 +379,11 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   sessions.hiding = hiding
   // Observe mode: an observed Claude session's hook settings, written by its prepare (StatusLineManager.ensureObserveFiles)
   sessions.observeHooks = () => statusLine.ensureObserveFiles()
-  // Enforce: a Claude session's blocking hook, written by its prepare, which refuses the start without it (E5)
+  // Enforce: the blocking hook, written by a session's prepare, which refuses the start without it (E5). A Claude terminal
+  // session reads it from its settings file; a chat, and any Codex session, from these arguments
   sessions.enforceHooks = () => statusLine.ensureEnforceFiles()
+  const enforce = { args: (provider: 'claude' | 'codex') => (provider === 'claude' ? statusLine.enforceChatArgs() : statusLine.enforceCodexArgs()) }
+  sessions.enforce = enforce
   sessions.onExit = (e) => {
     sessions.forget(e.sessionId)
   }
@@ -738,7 +741,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   return {
     capabilities,
     hiding,
-    enforce: { args: (provider) => (provider === 'claude' ? statusLine.enforceChatArgs() : null) },
+    enforce,
     orchEnvNow: () => orchEnvReady,
     inFlight: () => spawnsInFlight,
     closeAndSettle: (ms) => {
