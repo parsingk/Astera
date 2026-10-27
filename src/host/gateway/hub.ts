@@ -33,8 +33,9 @@ export function createGatewayHub(d: {
   onToolCall?: Parameters<typeof createGateway>[0]['onToolCall']
   /** The Host's commands, for `POST /astera/call`. Absent, that route answers 501. */
   call?: Parameters<typeof createGateway>[0]['call']
-  /** Sends a message to every socket the Host holds, for a command's state change. */
-  broadcast?: Parameters<typeof createGateway>[0]['broadcast']
+  /** The `cli` caller a loopback command runs as, and the Host's hello for the client to check. */
+  cliCaller?: Parameters<typeof createGateway>[0]['cliCaller']
+  hello?: Parameters<typeof createGateway>[0]['hello']
 }): GatewayHub {
   const tokens = createTokenTable(d.sessionOfOwner, d.log)
   const pool = createUpstreamPool({ profileDir: d.profileDir, baseEnv: d.baseEnv ?? process.env, log: d.log })
@@ -47,7 +48,8 @@ export function createGatewayHub(d: {
     hide: (s) => hideExtensionSecrets(d.profileDir, s).catch(() => s),
     ...(d.onToolCall ? { onToolCall: d.onToolCall } : {}),
     ...(d.call ? { call: d.call } : {}),
-    ...(d.broadcast ? { broadcast: d.broadcast } : {})
+    ...(d.cliCaller ? { cliCaller: d.cliCaller } : {}),
+    ...(d.hello ? { hello: d.hello } : {})
   })
   watchGatewayTokens({ ptys: d.ptys, procs: d.procs, table: tokens, onForget: (t) => gateway.forgetTokens(t) })
 

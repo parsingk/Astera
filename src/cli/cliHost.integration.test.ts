@@ -444,7 +444,8 @@ async function hostRig(
     sessionOfOwner: (ownerId) => registry.metaOf(ownerId)?.id,
     log,
     call: (a) => box.orch!.call(a),
-    broadcast: (m) => box.server?.broadcast(m)
+    cliCaller: () => box.server!.cliCaller(),
+    hello: (nonce) => box.server!.loopbackHello(nonce)
   })
   cleanups.push(() => gateway.close())
   const openSession = (id: string, restore: Record<string, unknown> = {}, env: Record<string, string> = {}): void => {
@@ -1206,7 +1207,7 @@ describe('the public CLI against a real Host (§48, §49)', { timeout: 60_000 },
     okData(await astera(['agent-profiles', 'create', '--name', 'Reviewer', '--account', h.accountId], h.env), 'agent-profiles create')
     // An address that does not exist: the pipe is not reachable, so the call goes to the loopback endpoint with the token.
     const nowhere = process.platform === 'win32' ? '\\\\.\\pipe\\astera-no-such-host' : path.join(h.profileDir, 'no-such-socket')
-    const env ={ ...h.env, ASTERA_HOST: nowhere, ASTERA_GATEWAY_TOKEN: token, ASTERA_LOOPBACK: h.loopback }
+    const env = { ...h.env, ASTERA_HOST: nowhere, ASTERA_GATEWAY_TOKEN: token, ASTERA_LOOPBACK: h.loopback }
     expect((await astera(['agent-profiles', 'list'], env)).code).toBe(0)
     // As the token's session, which an agent profile cannot be changed from (5), whatever ASTERA_SESSION says
     const refused = await astera(['agent-profiles', 'archive', '--id', 'Reviewer'], { ...env, ASTERA_SESSION: 'ses_other' })
@@ -1220,9 +1221,37 @@ describe('the public CLI against a real Host (§48, §49)', { timeout: 60_000 },
   it('without ASTERA_LOOPBACK it falls back to the state file as today', async () => {
     const h = await hostRig({ seed: emptyState() })
     const nowhere = process.platform === 'win32' ? '\\\\.\\pipe\\astera-no-such-host' : path.join(h.profileDir, 'no-such-socket')
-    const r =await astera(['status'], { ...h.env, ASTERA_HOST: nowhere, ASTERA_GATEWAY_TOKEN: 'L'.repeat(43) })
+    const r = await astera(['status'], { ...h.env, ASTERA_HOST: nowhere, ASTERA_GATEWAY_TOKEN: 'L'.repeat(43) })
     expect(r.code, r.stdout).toBe(0)
     expect(r.envelope.data).toMatchObject({ running: false })
+  })
+
+  it('a CLI pointed at another profile never reaches the session’s Host through the loopback: it falls back to that profile’s state file', async () => {
+    const h = await hostRig()
+    const token = 'M'.repeat(43)
+    h.openSession('ses_boxed', { title: 'boxed', accountId: h.accountId, cwd: h.profileDir }, { ASTERA_GATEWAY_TOKEN: token, ASTERA_GATEWAY_GRANT: '' })
+    // Another profile with a Host key of its own, whose Host is down, and a state file to read
+    const other = await tempDir(PROFILE_PREFIX)
+    cleanups.push(() => rmrf(other))
+    await ensureHostKey(other)
+    await fs.writeFile(path.join(other, 'orchestration.json'), JSON.stringify(emptyState()))
+    const nowhere = process.platform === 'win32' ? '\\\\.\\pipe\\astera-no-such-host' : path.join(other, 'no-such-socket')
+    const env = { ASTERA_PROFILE_DIR: other, ASTERA_HOST: nowhere, ASTERA_GATEWAY_TOKEN: token, ASTERA_LOOPBACK: h.loopback }
+    const read = await astera(['status'], env)
+    expect(read.code, read.stdout).toBe(0)
+    expect(read.envelope.data).toMatchObject({ running: false })
+    // A change is not answerable from a file; and nothing was run on the session's Host
+    const write = await astera(['agent-profiles', 'create', '--name', 'Leak', '--account', h.accountId], env)
+    expect(write.code, write.stdout).not.toBe(0)
+    expect(okData(await astera(['agent-profiles', 'list'], h.env), 'agent-profiles list')).toMatchObject({ profiles: [] })
+  })
+
+  it('without the token, ASTERA_LOOPBACK alone reaches nothing', async () => {
+    const h = await hostRig({ seed: emptyState() })
+    const nowhere = process.platform === 'win32' ? '\\\\.\\pipe\\astera-no-such-host' : path.join(h.profileDir, 'no-such-socket')
+    const write = await astera(['agent-profiles', 'create', '--name', 'Leak', '--account', h.accountId], { ...h.env, ASTERA_HOST: nowhere, ASTERA_LOOPBACK: h.loopback })
+    expect(write.code, write.stdout).not.toBe(0)
+    expect(okData(await astera(['agent-profiles', 'list'], h.env), 'agent-profiles list')).toMatchObject({ profiles: [] })
   })
 
   // Agent Profiles design §6 (Task 7): the noun end to end, and a Job made as a profile by its name holds its id.

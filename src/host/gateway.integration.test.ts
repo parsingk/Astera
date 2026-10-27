@@ -1,7 +1,7 @@
 // Agent Control Plane release 2, end to end on the Host (Gateway design §5): a stdio server imported once with a
 // secret reaches the sessions of three accounts through the Host's MCP Gateway. No session holds the value; sessions in
 // one folder share one process and another folder gets its own; a session that ended is refused; a profile that shares
-// nothing opens no port and adds no flag.
+// nothing adds no MCP flag (the listener itself is up for the Host's life, for the loopback route, and reaches no server).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import http from 'node:http'
@@ -20,6 +20,7 @@ import { emptyState } from '../core/orchestration/state'
 import type { Account } from '../core/types'
 import type { OrchCall } from '../core/host/orchProtocol'
 import type { HostMessage } from '../core/host/protocol'
+import type { OrchCaller } from '../core/host/orchProtocol'
 
 const FIXTURE = path.join(__dirname, 'gateway', '__fixtures__', 'echoServer.cjs')
 const NOW = '2026-10-22T00:00:00.000Z'
@@ -57,7 +58,8 @@ afterEach(async () => {
 })
 
 type Spawned = { id: string; args: string[] | string; env: Record<string, string | undefined>; exit: () => void }
-function rig(o: { call?: OrchCall['call']; broadcast?: (m: HostMessage) => void } = {}) {
+const HELLO = { host: '9.9.9', pid: 1, startedAt: 'then', features: ['orch', 'requests'] }
+function rig(o: { call?: OrchCall['call']; cliCaller?: () => OrchCaller; hello?: (nonce: string) => typeof HELLO & { proof?: string } } = {}) {
   const spawned: Spawned[] = []
   const registry = new PtyRegistry({
     spawn: (_file, args, opts) => {
@@ -71,8 +73,9 @@ function rig(o: { call?: OrchCall['call']; broadcast?: (m: HostMessage) => void 
   const procs = new ProcRegistry({ spawn: () => ({ pid: 1, onData: () => {}, onExit: () => {}, write() {}, kill() {} }) as unknown as RegistryProc, log: () => {} })
   // A pty's session is named after it, so a test can tell the session a token stands for
   const hub = createGatewayHub({
+    cliCaller: () => ({ role: 'cli', toOthers: () => {} }),
     profileDir: profile, ptys: registry, procs, sessionOfOwner: (id) => `session-of-${id}`, log: () => {},
-    ...(o.call ? { call: o.call } : {}), ...(o.broadcast ? { broadcast: o.broadcast } : {})
+    ...(o.call ? { call: o.call } : {}), ...(o.cliCaller ? { cliCaller: o.cliCaller } : {}), ...(o.hello ? { hello: o.hello } : {})
   })
   hubs.push(hub)
   const env: NodeJS.ProcessEnv = {
@@ -104,13 +107,13 @@ function rig(o: { call?: OrchCall['call']; broadcast?: (m: HostMessage) => void 
   return { hub, spawned, call, start, connect }
 }
 /** A raw POST, so a test controls every header (fetch would fill Host and Origin in its own way). */
-function post(port: number, p: string, headers: Record<string, string>, body: string): Promise<{ status: number; text: string }> {
+function post(port: number, p: string, headers: Record<string, string>, body: string): Promise<{ status: number; text: string; headers: http.IncomingHttpHeaders }> {
   return new Promise((resolve, reject) => {
     const req = http.request({ host: '127.0.0.1', port, path: p, method: 'POST', headers: { 'content-type': 'application/json', host: `127.0.0.1:${port}`, ...headers } }, (res) => {
       let text = ''
       res.setEncoding('utf8')
       res.on('data', (c: string) => (text += c))
-      res.on('end', () => resolve({ status: res.statusCode ?? 0, text }))
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, text, headers: res.headers }))
     })
     req.on('error', reject)
     req.end(body)
@@ -129,7 +132,7 @@ async function filesUnder(root: string): Promise<string[]> {
 }
 
 describe('the MCP Gateway on the Host, end to end', () => {
-  it('opens no port and adds no MCP configuration while nothing is shared (G-06)', async () => {
+  it('adds no MCP configuration while nothing is shared (G-06)', async () => {
     const h = rig()
     const s = await h.start('acc2')
     expect(line(s)).not.toContain('--mcp-config')
@@ -193,6 +196,49 @@ describe('the MCP Gateway on the Host, end to end', () => {
     expect(calls).toEqual([])
   })
 
+  it('the hello route answers the Host’s hello for a live token, behind the same checks', async () => {
+    const h = rig({ hello: (nonce) => ({ ...HELLO, proof: `proof-of-${nonce}` }) })
+    const s = await h.start('acc2')
+    const port = h.hub.port()!
+    const auth = { authorization: `Bearer ${s.env.ASTERA_GATEWAY_TOKEN}` }
+    const ok = await post(port, '/astera/hello', auth, JSON.stringify({ nonce: 'n1' }))
+    expect(ok.status).toBe(200)
+    expect(JSON.parse(ok.text)).toEqual({ ...HELLO, proof: 'proof-of-n1' })
+    expect((await post(port, '/astera/hello', { ...auth, origin: 'http://evil.example' }, '{}')).status).toBe(403)
+    expect((await post(port, '/astera/hello', { ...auth, host: 'evil.example' }, '{}')).status).toBe(421)
+    expect((await post(port, '/astera/hello', {}, JSON.stringify({ nonce: 'n1' }))).status).toBe(401)
+    expect((await post(port, '/astera/hello', auth, JSON.stringify({ nonce: '' }))).status).toBe(400)
+    expect((await post(port, '/astera/hello', auth, JSON.stringify({ nonce: 'x'.repeat(257) }))).status).toBe(400)
+    expect((await post(port, '/astera/hello', auth, JSON.stringify({}))).status).toBe(400)
+  })
+
+  it('the command route refuses args that are no object and a request that is no string, instead of coercing them', async () => {
+    const calls: unknown[] = []
+    const h = rig({ call: async (a) => (calls.push(a), { status: 200, body: {} }) })
+    const s = await h.start('acc2')
+    const port = h.hub.port()!
+    const auth = { authorization: `Bearer ${s.env.ASTERA_GATEWAY_TOKEN}` }
+    for (const bad of [{ args: 'x' }, { args: [1] }, { args: null }, { request: 5 }, { request: null }])
+      expect((await post(port, '/astera/call', auth, JSON.stringify({ cmd: 'status', ...bad }))).status, JSON.stringify(bad)).toBe(400)
+    expect((await post(port, '/astera/call', auth, JSON.stringify([1]))).status).toBe(400)
+    expect(calls).toEqual([])
+    // and without args at all, the command runs with none
+    expect((await post(port, '/astera/call', auth, JSON.stringify({ cmd: 'status' }))).status).toBe(200)
+    expect(calls).toHaveLength(1)
+  })
+
+  it('every refusal on the command routes closes the connection', async () => {
+    const h = rig({ call: async () => ({ status: 200, body: {} }) })
+    const s = await h.start('acc2')
+    const port = h.hub.port()!
+    const r = await post(port, '/astera/call', { authorization: 'Bearer nope' }, '{}')
+    expect(r.status).toBe(401)
+    expect(r.headers.connection).toBe('close')
+    const bad = await post(port, '/astera/call', { authorization: `Bearer ${s.env.ASTERA_GATEWAY_TOKEN}` }, 'not json')
+    expect(bad.status).toBe(400)
+    expect(bad.headers.connection).toBe('close')
+  })
+
   it('a command that takes a while still answers, and a command’s state change reaches the Host’s sockets', async () => {
     const sent: HostMessage[] = []
     const h = rig({
@@ -201,7 +247,7 @@ describe('the MCP Gateway on the Host, end to end', () => {
         a.from?.toOthers({ t: 'orch-state', state: emptyState(), version: 1 } as HostMessage)
         return { status: 200, body: { waited: true } }
       },
-      broadcast: (m) => sent.push(m)
+      cliCaller: () => ({ role: 'cli', toOthers: (m) => void sent.push(m) })
     })
     const s = await h.start('acc2')
     const r = await post(h.hub.port()!, '/astera/call', { authorization: `Bearer ${s.env.ASTERA_GATEWAY_TOKEN}` }, JSON.stringify({ cmd: 'ask', args: {} }))

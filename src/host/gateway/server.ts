@@ -32,7 +32,6 @@ import {
 import type { ExtensionRegistry, McpExtension } from '../../core/extensions/types'
 import { sessionOfPresentedToken, type TokenTable } from './tokens'
 import type { OrchCall, OrchCaller } from '../../core/host/orchProtocol'
-import type { HostMessage } from '../../core/host/protocol'
 import type { UpstreamPool } from './upstream'
 
 export interface Gateway {
@@ -48,6 +47,7 @@ export interface Gateway {
  *  the server sets no tool timeout of its own (Codex's `tool_timeout_sec`, which import carries). */
 export const GATEWAY_CALL_TIMEOUT_MS = 600_000
 const BODY_MAX = 4 * 1024 * 1024
+const MAX_CONNECTIONS = 64
 
 /** The notifications an upstream sends that every session on it should see. */
 const PASSED_ON = new Set(['notifications/tools/list_changed', 'notifications/resources/list_changed', 'notifications/prompts/list_changed', 'notifications/resources/updated', 'notifications/message'])
@@ -92,8 +92,12 @@ export function createGateway(d: {
   onToolCall?: (c: { ownerId: string; serverId: string; serverName: string; tool: string; ok: boolean }) => void
   /** The Host's commands, for `POST /astera/call`. Absent, that route answers 501. */
   call?: OrchCall['call']
-  /** Sends a message to every socket the Host holds. A command called here has no socket of its own to leave out. */
-  broadcast?: (m: HostMessage) => void
+  /** The caller of a `cli` command that came over no socket (host/server.ts `cliCaller`): the same one the pipe builds for
+   *  a `cli` socket, whose `toOthers` here reaches every socket the Host holds. */
+  cliCaller?: () => OrchCaller
+  /** The Host's hello with the proof of a client's nonce (host/server.ts `loopbackHello`), so the client can tell this
+   *  Host from something else on the address, as it does on the pipe. */
+  hello?: (nonce: string) => { host: string; pid: number; startedAt: string; features: string[]; proof?: string }
 }): Gateway {
   const hide = d.hide ?? (async (s: string) => s)
   let server: http.Server | null = null
@@ -222,49 +226,99 @@ export function createGateway(d: {
     if (transport.sessionId === undefined || !sessions.has(transport.sessionId) || d.tokens.lookup(token) === null) endSession(session)
   }
 
-  /** `POST /astera/call`: the CLI's command, run as the session the bearer token stands for. */
-  const command = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
+  /** The answer of a refusal on the command routes: the connection is closed after it, so a refused caller does not keep
+   *  one of the few this listener allows (`maxConnections`). */
+  const refuse = (res: http.ServerResponse, status: number, error: string): void => {
+    res.setHeader('connection', 'close')
+    send(res, status, { error })
+  }
+
+  /** What both command routes check first, in the MCP route's order: no `Origin`, a loopback `Host`, a live workload token.
+   *  Answers the token's session, or null once the refusal is sent. */
+  const authorize = (req: http.IncomingMessage, res: http.ServerResponse): string | null => {
     if (req.headers.origin !== undefined) {
       req.resume()
-      return send(res, 403, { error: 'Forbidden' })
+      refuse(res, 403, 'Forbidden')
+      return null
     }
     const host = (req.headers.host ?? '').toLowerCase()
     if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) {
       req.resume()
-      return send(res, 421, { error: 'Misdirected request' })
+      refuse(res, 421, 'Misdirected request')
+      return null
     }
     // The token, never the body, names the session
     const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization ?? '')
     const sessionId = bearer ? sessionOfPresentedToken((t) => d.tokens.sessionOf(t), bearer[1]) : null
     if (sessionId === null) {
       req.resume()
-      return send(res, 401, { error: 'workload token not recognised' })
+      refuse(res, 401, 'workload token not recognised')
+      return null
     }
-    if (!d.call) {
-      req.resume()
-      return send(res, 501, { error: 'this Host does not answer commands over loopback' })
-    }
+    return sessionId
+  }
+
+  /** The body of a command route: the object it holds, or null once the refusal is sent. */
+  const objectBody = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<Record<string, unknown> | null> => {
     if (req.method !== 'POST') {
       req.resume()
-      return send(res, 405, { error: 'POST only' })
+      refuse(res, 405, 'POST only')
+      return null
     }
     const text = await readBody(req)
     if (text === 'tooLarge') {
       req.resume()
-      return send(res, 413, { error: 'Request body over 4 MB' })
+      refuse(res, 413, 'Request body over 4 MB')
+      return null
     }
     let body: unknown
     try {
       body = JSON.parse(text)
     } catch {
-      return send(res, 400, { error: 'the body is not JSON' })
+      refuse(res, 400, 'the body is not JSON')
+      return null
     }
-    const m = body as { cmd?: unknown; args?: unknown; request?: unknown } | null
-    if (typeof m?.cmd !== 'string') return send(res, 400, { error: 'the body needs a string cmd' })
-    const args = typeof m.args === 'object' && m.args !== null && !Array.isArray(m.args) ? (m.args as Record<string, unknown>) : {}
-    // What the pipe builds for a `cli` socket (server.ts), with no socket: pushes go to everyone the Host holds
-    const from: OrchCaller = { role: 'cli', toOthers: (msg) => d.broadcast?.(msg) }
-    const r = await d.call({ cmd: m.cmd, args, sessionId, from, ...(typeof m.request === 'string' ? { request: m.request } : {}) })
+    if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+      refuse(res, 400, 'the body must be an object')
+      return null
+    }
+    return body as Record<string, unknown>
+  }
+
+  /** `POST /astera/hello`: the Host's hello with the proof of the client's nonce. The client checks the proof against the
+   *  Host key of the profile it means to reach before it sends a command (packages/client/src/loopback.ts). */
+  const hello = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
+    if (authorize(req, res) === null) return
+    if (!d.hello) {
+      req.resume()
+      return refuse(res, 501, 'this Host does not answer commands over loopback')
+    }
+    const m = await objectBody(req, res)
+    if (m === null) return
+    if (typeof m.nonce !== 'string' || m.nonce === '' || m.nonce.length > 256) return refuse(res, 400, 'the body needs a nonce')
+    send(res, 200, d.hello(m.nonce))
+  }
+
+  /** `POST /astera/call`: the CLI's command, run as the session the bearer token stands for. */
+  const command = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
+    const sessionId = authorize(req, res)
+    if (sessionId === null) return
+    if (!d.call || !d.cliCaller) {
+      req.resume()
+      return refuse(res, 501, 'this Host does not answer commands over loopback')
+    }
+    const m = await objectBody(req, res)
+    if (m === null) return
+    if (typeof m.cmd !== 'string') return refuse(res, 400, 'the body needs a string cmd')
+    if (m.args !== undefined && (typeof m.args !== 'object' || m.args === null || Array.isArray(m.args))) return refuse(res, 400, 'args must be an object')
+    if (m.request !== undefined && typeof m.request !== 'string') return refuse(res, 400, 'request must be a string')
+    const r = await d.call({
+      cmd: m.cmd,
+      args: (m.args as Record<string, unknown> | undefined) ?? {},
+      sessionId,
+      from: d.cliCaller(),
+      ...(m.request !== undefined ? { request: m.request as string } : {})
+    })
     send(res, 200, {
       status: r.status,
       body: r.body,
@@ -274,7 +328,9 @@ export function createGateway(d: {
   }
 
   const handle = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
-    if (new URL(req.url ?? '/', 'http://x').pathname === '/astera/call') return command(req, res)
+    const path = new URL(req.url ?? '/', 'http://x').pathname
+    if (path === '/astera/call') return command(req, res)
+    if (path === '/astera/hello') return hello(req, res)
     const match = /^\/mcp\/([^/?#]+)$/.exec(new URL(req.url ?? '/', 'http://x').pathname)
     if (!match) {
       req.resume()
@@ -336,9 +392,9 @@ export function createGateway(d: {
           })
         })
         // A command can legitimately take an hour (`wait`, `ask`, `check`, `follow`; the CLI's own deadline governs), so no
-        // socket idle timeout may end one, and a connection that sits idle between requests is kept longer than Node's 5 s
+        // socket idle timeout may end one. The listener is open for the Host's whole life, so what it holds at once is bounded.
         s.timeout = 0
-        s.keepAliveTimeout = 65_000
+        s.maxConnections = MAX_CONNECTIONS
         s.once('error', reject)
         s.listen(0, '127.0.0.1', () => {
           // Past the listen, an error (too many open files on accept, say) is logged, never thrown into the Host

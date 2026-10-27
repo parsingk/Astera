@@ -257,7 +257,8 @@ async function main(): Promise<void> {
     // The loopback route a sandboxed session's `astera` calls come in by (sandbox design §6): `orch` and `server` are
     // read when a call arrives, long after both are made
     call: (a) => orch.call(a),
-    broadcast: (m) => server.broadcast(m),
+    cliCaller: () => server.cliCaller(),
+    hello: (nonce) => server.loopbackHello(nonce),
     log: hidingLog(profileDir, (m) => log.write(m)),
     onToolCall: (c) => {
       const sessionId = sessionOfOwner(c.ownerId)
