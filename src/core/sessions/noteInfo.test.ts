@@ -68,3 +68,18 @@ describe('a chat session’s agent profile, read from its note', () => {
     expect(chatInfoFromNote({ kind: 'chat', id: 'c1', restore: { ...base, agentProfileId: '' } })).not.toHaveProperty('agentProfileId')
   })
 })
+
+// Sandbox design §6: a session started in the sandbox says so in its note, so a roll after a Host hands it back keeps it
+describe('whether a session runs in the sandbox, read from its note', () => {
+  const base = { accountId: 'a1', cwd: 'D:/p', title: 't' }
+  it('keeps sandboxed true for a terminal and a chat note', () => {
+    expect(sessionInfoFromNote({ kind: 'session', id: 's1', restore: { ...base, sandboxed: true } })?.sandboxed).toBe(true)
+    expect(chatInfoFromNote({ kind: 'chat', id: 'c1', restore: { ...base, sandboxed: true } })?.sandboxed).toBe(true)
+  })
+  it('leaves a note without it, or with any other value, without it', () => {
+    for (const restore of [base, { ...base, sandboxed: false }, { ...base, sandboxed: 'true' }]) {
+      expect(sessionInfoFromNote({ kind: 'session', id: 's1', restore })).not.toHaveProperty('sandboxed')
+      expect(chatInfoFromNote({ kind: 'chat', id: 'c1', restore })).not.toHaveProperty('sandboxed')
+    }
+  })
+})

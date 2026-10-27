@@ -10056,7 +10056,7 @@ describe('runs-github-record (GitHub lifecycle G1)', () => {
 // is read once, when they are made, and the Task's accounts are copied from it then
 describe('agent profiles: run-create, task-create, worker-start', () => {
   const P = (over: Partial<AgentProfile>): AgentProfile => ({
-    id: 'ap_1', name: 'Night shift', status: 'active', accountIds: ['acc_b', 'acc_a'], mcpExclude: [], permission: 'inherit',
+    id: 'ap_1', name: 'Night shift', status: 'active', accountIds: ['acc_b', 'acc_a'], mcpExclude: [], permission: 'inherit', sandbox: false,
     createdAt: NOW, updatedAt: NOW, ...over
   })
   const profiled = (profiles: AgentProfile[]) => {
@@ -10252,7 +10252,7 @@ describe('agent profiles: a reused session records no profile', () => {
 // (src/main/agentProfiles.wiring.test.ts pins that wiring); task-create from the UI resolves a profile through it
 describe('agent profiles: the app answers task-create from the store on disk', () => {
   it('resolves a profile by name from agent-profiles.json and copies its accounts', async () => {
-    await writeAgentProfiles(dir, { version: 1, profiles: [{ id: 'ap_1', name: 'Night shift', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'inherit', createdAt: NOW, updatedAt: NOW }] })
+    await writeAgentProfiles(dir, { version: 1, profiles: [{ id: 'ap_1', name: 'Night shift', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'inherit', sandbox: false, createdAt: NOW, updatedAt: NOW }] })
     const deps = makeDeps()
     deps.readAgentProfiles = () => readAgentProfiles(dir)
     const runId = ((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' }, APP_CALLER)).body as { id: string }).id
@@ -10269,7 +10269,7 @@ describe('agent profiles: jobs create and tasks add', () => {
     const deps = makeDeps()
     deps.readAgentProfiles = async () => ({
       version: 1,
-      profiles: [{ id: 'ap_1', name: 'Reviewer', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'inherit', createdAt: NOW, updatedAt: NOW }]
+      profiles: [{ id: 'ap_1', name: 'Reviewer', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'inherit', sandbox: false, createdAt: NOW, updatedAt: NOW }]
     })
     return deps
   }
@@ -10314,7 +10314,7 @@ describe('agent profiles: a profile that runs without permission checks, by who 
   const AGENTS: Caller[] = [{ sessionId: 'sess_agent', role: 'cli' }, { sessionId: '', role: 'mcp' }, { sessionId: '', role: 'plugin' }]
   const PEOPLE: Caller[] = [{ sessionId: '', role: 'cli' }, { sessionId: '', role: 'app' }, { sessionId: APP_CALLER }]
   const P = (over: Partial<AgentProfile>): AgentProfile => ({
-    id: 'ap_b', name: 'Unattended', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'bypass', createdAt: NOW, updatedAt: NOW, ...over
+    id: 'ap_b', name: 'Unattended', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'bypass', sandbox: false, createdAt: NOW, updatedAt: NOW, ...over
   })
   const setup = (yolo: boolean | null) => {
     const deps = makeDeps()

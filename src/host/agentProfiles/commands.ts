@@ -53,6 +53,10 @@ const MCP_AGENT_PROFILE_COMMANDS: ReadonlySet<string> = new Set(['agent-profiles
 /** `lastUsedAt` is stamped at most this often per profile. */
 const TOUCH_EVERY_MS = 60_000
 const PERMISSIONS: readonly ProfilePermission[] = ['inherit', 'bypass', 'ask']
+/** The sandbox switch (sandbox design §6) is a boolean only: a value that merely looks like one is refused rather than
+ *  read as on or off. Like every change here it is refused to an agent's shell, so an agent cannot switch off the
+ *  sandbox it runs in (Review Focus 5). */
+const SANDBOX_BOOLEAN = 'sandbox must be true or false'
 
 const bad = (error: string): AgentProfilesAnswer => ({ status: 400, body: { error } })
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e))
@@ -98,12 +102,14 @@ export function createHostAgentProfiles(d: {
         if (args.description !== undefined && typeof args.description !== 'string') return bad('description must be text')
         if (args.mcpExclude !== undefined && !strings(args.mcpExclude)) return bad('mcpExclude must be a list of ids')
         if (args.permission !== undefined && !PERMISSIONS.includes(args.permission as ProfilePermission)) return bad('permission must be inherit, bypass or ask')
+        if (args.sandbox !== undefined && typeof args.sandbox !== 'boolean') return bad(SANDBOX_BOOLEAN)
         const input: ProfileInput = {
           name: args.name,
           accountIds: args.accountIds,
           ...(args.description !== undefined ? { description: args.description as string } : {}),
           ...(args.mcpExclude !== undefined ? { mcpExclude: args.mcpExclude as string[] } : {}),
-          ...(args.permission !== undefined ? { permission: args.permission as ProfilePermission } : {})
+          ...(args.permission !== undefined ? { permission: args.permission as ProfilePermission } : {}),
+          ...(args.sandbox !== undefined ? { sandbox: args.sandbox as boolean } : {})
         }
         return queued(async () => {
           const s = await readAgentProfiles(d.profileDir)
@@ -122,6 +128,7 @@ export function createHostAgentProfiles(d: {
         if (args.accountIds !== undefined && !strings(args.accountIds)) return bad('accountIds must be a list of ids')
         if (args.mcpExclude !== undefined && !strings(args.mcpExclude)) return bad('mcpExclude must be a list of ids')
         if (args.permission !== undefined && !PERMISSIONS.includes(args.permission as ProfilePermission)) return bad('permission must be inherit, bypass or ask')
+        if (args.sandbox !== undefined && typeof args.sandbox !== 'boolean') return bad(SANDBOX_BOOLEAN)
         const { id } = args
         return queued(async () => {
           const s = await readAgentProfiles(d.profileDir)
@@ -138,6 +145,7 @@ export function createHostAgentProfiles(d: {
               accountIds: args.accountIds !== undefined ? (args.accountIds as string[]) : liveAccounts(old, accounts),
               ...(args.mcpExclude !== undefined ? { mcpExclude: args.mcpExclude as string[] } : {}),
               ...(args.permission !== undefined ? { permission: args.permission as ProfilePermission } : {}),
+              ...(args.sandbox !== undefined ? { sandbox: args.sandbox as boolean } : {}),
               updatedAt: new Date(now()).toISOString()
             },
             accounts,

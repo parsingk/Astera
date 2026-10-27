@@ -329,6 +329,8 @@ export interface AgentProfile {
   /** The ids of the shared MCP servers its sessions do not get. */
   readonly mcpExclude: readonly string[]
   readonly permission: AgentProfilePermission
+  /** Its sessions start in their agent CLI's own sandbox. Absent from an Astera before the sandbox, which has none. */
+  readonly sandbox?: boolean
   readonly createdAt: string
   readonly updatedAt: string
   readonly lastUsedAt?: string

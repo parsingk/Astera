@@ -131,6 +131,9 @@ export interface RollingDeps {
     /** The agent profile the chain was started from (SessionInfo.agentProfileId), kept by every roll like startedBy:
      *  the respawned session gets that profile's MCP servers on its new account (Agent Profiles design §7). */
     agentProfileId?: string
+    /** The chain runs in its CLI's sandbox (SessionInfo.sandboxed, sandbox design §6), kept by every roll: the
+     *  successor of a sandboxed session starts in the sandbox too. */
+    sandbox?: boolean
     /** Extra keys for the new pty's note (S6 R6) — `rolledFrom` and the chain's snapshot on its new
      *  account. The manager merges them into `meta.restore` under its own keys. */
     restoreExtra?: RollRespawnExtra
@@ -138,8 +141,9 @@ export interface RollingDeps {
   /** Everything a respawn needs that can wait or refuse, done while the old session still lives (S6 R5).
    *  A rejection aborts the roll before the kill and reschedules it. Absent: nothing to prepare.
    *  `agentProfileId` is the chain's own (the spawn's field above): the target account's capabilities are resolved
-   *  with that profile, so the synchronous respawn finds them ready. */
-  prepareSpawn?(account: Account, cwd: string, agentProfileId?: string): Promise<void>
+   *  with that profile, so the synchronous respawn finds them ready. `sandbox` is the chain's too: the folder is read for
+   *  the sandbox here, since the synchronous respawn cannot. */
+  prepareSpawn?(account: Account, cwd: string, agentProfileId?: string, sandbox?: boolean): Promise<void>
   /** The model the person picked in this session, or null when they picked none.
    *
    *  A roll has to carry it because Claude's model is argv and nothing about it survives the process —
@@ -1689,7 +1693,7 @@ export class RollingCoordinator {
       // the kill below starts the await-free stretch (constraint 12).
       if (this.deps.prepareSpawn) {
         try {
-          await this.deps.prepareSpawn(target, chain.cwd, chain.liveInfo.agentProfileId)
+          await this.deps.prepareSpawn(target, chain.cwd, chain.liveInfo.agentProfileId, chain.liveInfo.sandboxed === true)
         } catch (err) {
           const why = err instanceof Error ? err.message : String(err)
           this.deps.log(`roll aborted — the respawn would be refused: ${why} session=${chain.liveId}`)
@@ -1756,6 +1760,10 @@ export class RollingCoordinator {
         startWithBypass: wasBypassed,
         ...(chain.liveInfo.startedBy ? { startedBy: chain.liveInfo.startedBy } : {}),
         ...(chain.liveInfo.agentProfileId ? { agentProfileId: chain.liveInfo.agentProfileId } : {}),
+        // The sandbox rides the chain as the bypass does, read off the session it replaces rather than off the profile
+        // again: a profile store that cannot be read at the roll, or another chain's roll at the same moment, can then
+        // never start the successor outside the sandbox its chain started in (sandbox design §6)
+        ...(chain.liveInfo.sandboxed ? { sandbox: true } : {}),
         // S6 R6: the new pty is born with what a takeover needs if this process dies before the
         // rekey commits: where it came from, and the chain on its new account awaiting its prompt.
         restoreExtra: {

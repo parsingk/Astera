@@ -558,7 +558,7 @@ describe('RollingCoordinator', () => {
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await flush()
     await flush()
-    expect(prepared).toEqual([[expect.objectContaining({ id: 'a2' }), h.info1.cwd, 'ap_x']])
+    expect(prepared).toEqual([[expect.objectContaining({ id: 'a2' }), h.info1.cwd, 'ap_x', false]])
     expect(h.spawnedOpts[0].agentProfileId).toBe('ap_x')
     const pPrepared: unknown[][] = []
     const p = harness({ prepareSpawn: async (...a) => { pPrepared.push(a) } })
@@ -569,6 +569,29 @@ describe('RollingCoordinator', () => {
     await flush()
     expect(pPrepared[0][2]).toBeUndefined()
     expect(p.spawnedOpts[0]).not.toHaveProperty('agentProfileId')
+  })
+
+  // Sandbox design §6: the successor of a session started in the sandbox starts in it too (codexCoordinator.test.ts's own
+  // test, same contract): the flag rides the chain, and the preparation is told so it reads the folder before the kill
+  it('a roll keeps the session’s sandbox, for the respawn and its preparation', async () => {
+    const prepared: unknown[][] = []
+    const h = harness({ prepareSpawn: async (...a) => { prepared.push(a) } })
+    h.payloads.set('s1', payload(97))
+    h.coord.register({ ...h.info1, sandboxed: true })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    await flush()
+    expect(prepared).toEqual([[expect.objectContaining({ id: 'a2' }), h.info1.cwd, undefined, true]])
+    expect(h.spawnedOpts[0]).toMatchObject({ sandbox: true })
+    const pPrepared: unknown[][] = []
+    const p = harness({ prepareSpawn: async (...a) => { pPrepared.push(a) } })
+    p.payloads.set('s1', payload(97))
+    p.coord.register(p.info1)
+    p.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    await flush()
+    expect(pPrepared[0][3]).toBe(false)
+    expect(p.spawnedOpts[0]).not.toHaveProperty('sandbox')
   })
 
   it('활성 체인의 claude 세션 ID로 live 세션을 찾는다 (resume 가드)', async () => {

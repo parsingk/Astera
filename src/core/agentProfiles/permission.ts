@@ -15,14 +15,15 @@ export async function bypassFor(permission: ProfilePermission | undefined, appWi
 /** The profile a spawn names, by id or by name, with the bypass it starts with: the caller's own when it gave one, else
  *  the profile's choice. Null when it names none, and null with one log line when it names one that is not found or the
  *  store cannot be read: the spawn then starts as it did before profiles. The id is the profile's own, so a session
- *  started by the profile's name still holds it for the Host's delete guard, which compares ids. */
+ *  started by the profile's name still holds it for the Host's delete guard, which compares ids. `sandbox` is the
+ *  profile's switch (sandbox design §6), never a caller's: only the profile turns it on or off. */
 export async function profileSpawn(a: {
   profileDir: string
   agentProfileId?: string
   bypassPermissions?: boolean
   appWideYolo: () => Promise<boolean>
   log: (line: string) => void
-}): Promise<{ agentProfileId: string; bypassPermissions: boolean } | null> {
+}): Promise<{ agentProfileId: string; bypassPermissions: boolean; sandbox: boolean } | null> {
   if (a.agentProfileId === undefined) return null
   let profile: AgentProfile | null
   try {
@@ -35,7 +36,11 @@ export async function profileSpawn(a: {
     a.log(`agent profiles: profile ${a.agentProfileId} was not found, so the session starts without one`)
     return null
   }
-  return { agentProfileId: profile.id, bypassPermissions: a.bypassPermissions ?? (await bypassFor(profile.permission, a.appWideYolo)) }
+  return {
+    agentProfileId: profile.id,
+    bypassPermissions: a.bypassPermissions ?? (await bypassFor(profile.permission, a.appWideYolo)),
+    sandbox: profile.sandbox
+  }
 }
 
 /** The app's spawn path (Task 8 fix round 1): `profileSpawn`, except that a profile which does not resolve leaves the
@@ -47,6 +52,6 @@ export async function appProfileSpawn(a: {
   bypassPermissions?: boolean
   appWideYolo: () => Promise<boolean>
   log: (line: string) => void
-}): Promise<{ agentProfileId?: string; bypassPermissions: boolean }> {
+}): Promise<{ agentProfileId?: string; bypassPermissions: boolean; sandbox?: boolean }> {
   return (await profileSpawn(a)) ?? { bypassPermissions: a.bypassPermissions ?? (await a.appWideYolo()) }
 }

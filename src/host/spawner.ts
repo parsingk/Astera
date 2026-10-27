@@ -57,7 +57,7 @@ import { readPolicyMode } from '../core/audit/policy'
 import type { EnforceStart } from '../core/audit/enforce'
 import { cliVersionProbe, enforceBlocker } from '../core/sessions/cliVersion'
 import { createManagedHooksCheck } from '../core/sessions/managedHooks'
-import { codexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
+import { codexNoDaemonProbe, type CodexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
 import { findInstalledHostExe } from '../core/host/installedRuntime'
 import { hostRuntimeBase } from '../core/host/runtime'
 import { hidingLog } from '../core/extensions/secrets'
@@ -131,6 +131,9 @@ export interface HostSpawnerDeps {
   /** Stamps a profile's use after a spawn started from it (`agent-profiles-touch`). Not awaited, and a throw is logged:
    *  it never fails or delays the spawn. */
   touchAgentProfile?(id: string): void
+  /** Test injection; defaults to asking the codex on this machine's PATH whether it takes `--no-daemon`, which a
+   *  sandboxed Codex session needs (sessions/codexNoDaemon.ts). */
+  codexNoDaemon?: CodexNoDaemonProbe
 }
 
 /** HostRollSpawner's three (prepareRollSpawn, rollSpawn, statusLinePayload) are the S6 roll's respawn
@@ -268,7 +271,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   }
   const { profileDir, platform, homeDir, registry, log } = d
   const readAccounts = d.readAccounts ?? readAccountEntries
-  const descriptors = makeDescriptors(platform)
+  const descriptors = d.codexNoDaemon ? makeDescriptors(platform, undefined, undefined, d.codexNoDaemon) : makeDescriptors(platform)
   // The rule core.ts uses for the app's StatusLineManager, so the two write the same settings files. On
   // win32 the app names the Host runtime's node.exe, which is what this Host runs from, so its own
   // executable is the same file — and one that is certain to be there while its sessions run, since a
@@ -550,7 +553,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     // Before prepare, which keys what it finds by the PATH it sees.
     await ensureOnWindowsPath([providerOf(account)])
     await ensureInstallDirOnPath([providerOf(account)]) // macOS and Linux: Claude Code installed since this process started (installDirPath.ts)
-    await sessions.prepare({ account, cwd: o.cwd, ...(profile ? { agentProfileId: profile.agentProfileId } : {}) })
+    // The profile's sandbox switch (sandbox design §6): the prepare reads the folder for it, and the spawn starts in it
+    const sandbox = profile?.sandbox === true
+    await sessions.prepare({ account, cwd: o.cwd, ...(profile ? { agentProfileId: profile.agentProfileId } : {}), ...(sandbox ? { sandbox: true } : {}) })
     const rollProviders = o.rollAccountIds.map((rid) => providerOf(accounts.find((x) => x.id === rid) ?? account))
     const opensBefore = opens
     let info: ReturnType<SessionManager['spawn']>
@@ -572,7 +577,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       // A Job's worker or coordinator is an agent's, and so is a session the CLI, MCP or a plugin made; one a person opened
       // from a remote controller is not (review M1). An agent's tab closes when it ends (2026-10-20).
       ...(o.startedBy ? { startedBy: o.startedBy } : {}),
-      ...(profile ? { agentProfileId: profile.agentProfileId } : {})
+      ...(profile ? { agentProfileId: profile.agentProfileId } : {}),
+      ...(sandbox ? { sandbox: true } : {})
       })
     } finally {
       // Whether it returned or threw, a moved count means a process is running (A36). A throw before
@@ -600,7 +606,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   let preparedShuttle: string | null = null
   let preparedBypass: boolean | null = null
   let preparedAccounts: Account[] = []
-  const prepareRollSpawn = async (account: Account, cwd: string, agentProfileId?: string): Promise<void> => {
+  const prepareRollSpawn = async (account: Account, cwd: string, agentProfileId?: string, sandbox?: boolean): Promise<void> => {
     if (retiring) throw new HostRetiring()
     const accounts = await readAccounts(accountsPath) // RepairNeeded on a damaged file (A10)
     accountIn(accounts, account.id)
@@ -609,8 +615,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     // the synchronous rollSpawn below will use, so that spawn looks at nothing on disk.
     await ensureOnWindowsPath([providerOf(account)]) // before prepare, which keys what it finds by PATH
     await ensureInstallDirOnPath([providerOf(account)]) // macOS and Linux: Claude Code installed since this process started (installDirPath.ts)
-    // The chain's profile id as the session holds it (already resolved when it was started): its capabilities, as at a spawn
-    await sessions.prepare({ account, cwd, ...(agentProfileId ? { agentProfileId } : {}) })
+    // The chain's profile id as the session holds it (already resolved when it was started): its capabilities, as at a spawn.
+    // A chain started in the sandbox keeps it (the coordinator carries the flag): its folder is read for it before the kill
+    await sessions.prepare({ account, cwd, ...(agentProfileId ? { agentProfileId } : {}), ...(sandbox ? { sandbox: true } : {}) })
     preparedBypass = await bypassFromSettings() // RepairNeeded on a damaged settings file (A10)
     await preTrustWorkspace({ account, cwd, homeDir, descriptors, log })
     await ensured()
@@ -639,7 +646,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       orchEnv: { cliPath: preparedShuttle, skillsPath: cli.skills, profileDir },
       restoreExtra: o.restoreExtra,
       ...(o.startedBy ? { startedBy: o.startedBy } : {}),
-      ...(o.agentProfileId ? { agentProfileId: o.agentProfileId } : {})
+      ...(o.agentProfileId ? { agentProfileId: o.agentProfileId } : {}),
+      ...(o.sandbox ? { sandbox: true } : {})
     })
   }
 

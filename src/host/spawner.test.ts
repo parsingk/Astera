@@ -46,6 +46,7 @@ const rig = (over: {
   worktrees?: HostSpawnerDeps['worktrees']
   onPromptWrite?: HostSpawnerDeps['onPromptWrite']
   touchAgentProfile?: HostSpawnerDeps['touchAgentProfile']
+  codexNoDaemon?: HostSpawnerDeps['codexNoDaemon']
 } & LocateHooks = {}) => {
   const spawned: Spawned[] = []
   const logs: string[] = []
@@ -68,6 +69,7 @@ const rig = (over: {
     appKeepsWorktrees: over.appKeepsWorktrees ?? (() => false),
     onPromptWrite: over.onPromptWrite,
     touchAgentProfile: over.touchAgentProfile,
+    ...(over.codexNoDaemon ? { codexNoDaemon: over.codexNoDaemon } : {}),
     worktrees: over.worktrees ?? { fork: () => Promise.reject(new Error('not in this test')), makeRunWorktree: vi.fn(), mergeWorktrees: vi.fn(), removeWorktrees: vi.fn() } })
   return { spawner, registry, spawned, logs, sent }
 }
@@ -790,7 +792,7 @@ describe('the roll spawn (S6 R5, R6)', () => {
       env: {}, providers: ['claude' as const, 'codex' as const], importedFrom: 'acc0', enabled: true })
     await writeExtensionRegistry(h.profileDir, { version: 1, entries: [mcp('mcp-docs', 'docs'), mcp('mcp-linear', 'linear')] })
     await writeAgentProfiles(h.profileDir, { version: 1, profiles: [{ id: 'ap_x', name: 'X', status: 'active', accountIds: [account.id],
-      mcpExclude: ['mcp-linear'], permission: 'inherit', createdAt: NOW, updatedAt: NOW }] })
+      mcpExclude: ['mcp-linear'], permission: 'inherit', sandbox: false, createdAt: NOW, updatedAt: NOW }] })
     await h.spawner.prepareRollSpawn(account, h.cwd, 'ap_x')
     const info = h.spawner.rollSpawn({ account, cwd: h.cwd, rollAccountIds: [account.id], agentProfileId: 'ap_x', restoreExtra: { rolledBy: 'host', rolledFrom: 's0' } })
     expect(info.agentProfileId).toBe('ap_x')
@@ -814,7 +816,7 @@ describe('the roll spawn (S6 R5, R6)', () => {
     const account = h.accounts[0]
     await fs.writeFile(path.join(h.profileDir, 'app-settings.json'), JSON.stringify({ agentPermissionMode: 'manual' }))
     const P = (id: string, permission: AgentProfile['permission']): AgentProfile => ({
-      id, name: id, status: 'active', accountIds: [account.id], mcpExclude: [], permission, createdAt: NOW, updatedAt: NOW
+      id, name: id, status: 'active', accountIds: [account.id], mcpExclude: [], permission, sandbox: false, createdAt: NOW, updatedAt: NOW
     })
     await writeAgentProfiles(h.profileDir, { version: 1, profiles: [P('ap_ask', 'ask'), P('ap_bypass', 'bypass')] })
     const SKIP = /--dangerously-skip-permissions/
@@ -825,6 +827,26 @@ describe('the roll spawn (S6 R5, R6)', () => {
     await h.spawner.prepareRollSpawn(account, h.cwd, 'ap_bypass')
     h.spawner.rollSpawn({ account, cwd: h.cwd, rollAccountIds: [account.id], agentProfileId: 'ap_bypass', bypassPermissions: false })
     expect(last()).not.toMatch(SKIP)
+  })
+  // Sandbox design §6: a roll's successor stays in the sandbox its chain started in. The coordinator carries the flag
+  // (codexCoordinator.test.ts); the prepare reads the folder for it before the kill, and the respawn starts in it
+  it('a roll respawn of a sandboxed session is prepared for the sandbox and starts in it', async () => {
+    await fs.writeFile(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
+      { id: 'acc2', label: 'two', configDir: path.join(dir, 'cfg2'), color: '#888', createdAt: NOW, provider: 'codex' }
+    ] }))
+    const h = rig({ codexNoDaemon: Object.assign(() => true, { warm: async () => {} }) })
+    const account = JSON.parse(await fs.readFile(path.join(profile, 'accounts.json'), 'utf8')).accounts[0]
+    await h.spawner!.prepareRollSpawn(account, repo, 'ap_box', true)
+    const info = h.spawner!.rollSpawn({ account, cwd: repo, rollAccountIds: [account.id], agentProfileId: 'ap_box', sandbox: true, bypassPermissions: true })
+    const args = h.spawned[0].args as string[]
+    expect(args).toContain('default_permissions="astera"')
+    expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox')
+    expect(info.sandboxed).toBe(true)
+    expect(h.registry.metaOf(h.registry.sessionPty(info.id)!)?.restore).toMatchObject({ sandboxed: true })
+    // A chain that is not sandboxed rolls as today
+    const plain = h.spawner!.rollSpawn({ account, cwd: repo, rollAccountIds: [account.id], bypassPermissions: true })
+    expect(h.spawned[1].args).toContain('--dangerously-bypass-approvals-and-sandbox')
+    expect(plain).not.toHaveProperty('sandboxed')
   })
   it('prepareRollSpawn refuses a retiring Host and a damaged settings file, before anything is spawned', async () => {
     const h = await spawnerRig()
@@ -929,10 +951,34 @@ describe('createHostSpawner — createSession', () => {
   // Agent Profiles design §5 and AC 3: the profile's explicit choice overrides the app-wide mode, both ways
   describe('with an agent profile', () => {
     const P = (over: Partial<AgentProfile>): AgentProfile => ({
-      id: 'ap_000000000001', name: 'Reviewer', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'inherit',
+      id: 'ap_000000000001', name: 'Reviewer', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'inherit', sandbox: false,
       createdAt: NOW, updatedAt: NOW, ...over
     })
     const SKIP = /--dangerously-skip-permissions/
+
+    // Sandbox design §6: the Host's spawn reads the switch from the profile, prepares the folder for it, and starts the
+    // Codex session in Codex's sandbox; the same codex from a profile with the switch off starts as today
+    it('a sandboxed profile starts its Codex session in the sandbox, and an unsandboxed one as today', async () => {
+      await fs.writeFile(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
+        { id: 'acc2', label: 'two', configDir: path.join(dir, 'cfg2'), color: '#888', createdAt: NOW, provider: 'codex' }
+      ] }))
+      await writeAgentProfiles(profile, { version: 1, profiles: [
+        P({ id: 'ap_box', name: 'Boxed', accountIds: ['acc2'], permission: 'bypass', sandbox: true }),
+        P({ id: 'ap_open', name: 'Open', accountIds: ['acc2'], permission: 'bypass' })
+      ] })
+      const h = rig({ codexNoDaemon: Object.assign(() => true, { warm: async () => {} }), findRollout: async () => null })
+      const boxed = await h.spawner!.createSession({ accountId: 'acc2', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_box' })
+      const args = h.spawned[0].args as string[]
+      expect(args.slice(args.indexOf('-a'), args.indexOf('-a') + 2)).toEqual(['-a', 'never'])
+      expect(args).toContain('default_permissions="astera"')
+      expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox')
+      expect(boxed.sandboxed).toBe(true)
+      expect(h.registry.list()[0].meta!.restore).toMatchObject({ agentProfileId: 'ap_box', sandboxed: true })
+      const open = await h.spawner!.createSession({ accountId: 'acc2', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_open' })
+      expect(h.spawned[1].args).toContain('--dangerously-bypass-approvals-and-sandbox')
+      expect(h.spawned[1].args).not.toContain('-a')
+      expect(open).not.toHaveProperty('sandboxed')
+    })
 
     it('a bypass profile starts unattended while the app-wide mode is manual, and its id rides the note', async () => {
       await fs.writeFile(path.join(profile, 'app-settings.json'), JSON.stringify({ agentPermissionMode: 'manual' }))

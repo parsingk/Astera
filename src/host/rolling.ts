@@ -55,6 +55,8 @@ export interface RollSpawnOpts {
   startedBy?: 'agent'
   /** The agent profile the chain was started from (SessionInfo.agentProfileId), kept by the roll. */
   agentProfileId?: string
+  /** The chain started in the sandbox (SessionInfo.sandboxed), so its successor does too. */
+  sandbox?: boolean
 }
 
 /** What the rolling asks of the Host's chat sessions (chat takeover Task 6). `info` answers the session's
@@ -69,8 +71,9 @@ export type HostChatsForRolling = Pick<
 export interface HostRollSpawner {
   /** Everything a roll's respawn can wait on or be refused by, done while the old session still lives
    *  (R5). Rejects with HostRetiring, a RepairNeeded settings or accounts file, CWD_MISSING, or an
-   *  unknown account. `agentProfileId` is the chain's own: the account's capabilities are resolved with it. */
-  prepareRollSpawn(account: Account, cwd: string, agentProfileId?: string): Promise<void>
+   *  unknown account. `agentProfileId` is the chain's own: the account's capabilities are resolved with it. `sandbox`:
+   *  the chain runs in the sandbox, so the folder is read for it (SessionManager.prepare). */
+  prepareRollSpawn(account: Account, cwd: string, agentProfileId?: string, sandbox?: boolean): Promise<void>
   /** The respawn itself, synchronous (constraint 12). Throws until the first prepareRollSpawn has
    *  succeeded. */
   rollSpawn(opts: RollSpawnOpts): SessionInfo
@@ -334,7 +337,8 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
   }
   const common = {
     // Its async half is done first, while the old session lives (R5). Left rejecting (see `safe`).
-    prepareSpawn: (account: Account, cwd: string, agentProfileId?: string) => d.spawner.prepareRollSpawn(account, cwd, agentProfileId),
+    prepareSpawn: (account: Account, cwd: string, agentProfileId?: string, sandbox?: boolean) =>
+      d.spawner.prepareRollSpawn(account, cwd, agentProfileId, sandbox),
     write,
     kill,
     getAccount: (id: string) => accounts.find((a) => a.id === id) ?? null,

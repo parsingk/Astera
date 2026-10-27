@@ -192,7 +192,7 @@ describe('resolveSessionCapabilities', () => {
 describe('resolveSessionCapabilities with an agent profile', () => {
   const profile = (over: Partial<AgentProfile> = {}): AgentProfile => ({
     id: 'ap_000000000001', name: 'Reviewer', status: 'active', accountIds: ['acc_2', 'acc_3'], mcpExclude: ['mcp-linear'],
-    permission: 'bypass', createdAt: '2026-10-22T00:00:00.000Z', updatedAt: '2026-10-22T00:00:00.000Z', ...over
+    permission: 'bypass', sandbox: false, createdAt: '2026-10-22T00:00:00.000Z', updatedAt: '2026-10-22T00:00:00.000Z', ...over
   })
   const withProfiles = async (profiles: AgentProfile[]) => {
     const s = await setup([server(), remote()])

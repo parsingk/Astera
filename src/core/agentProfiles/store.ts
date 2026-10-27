@@ -44,7 +44,9 @@ export async function readAgentProfiles(profileDir: string): Promise<AgentProfil
     }
     throw new RepairNeeded(`${FILE} is damaged; a copy was kept beside it`, FILE)
   }
-  return s
+  // A profile written before the sandbox switch has none, and reads as off; so does any value but `true`, since only the
+  // person's own switch turns it on (sandbox design §6)
+  return { ...s, profiles: s.profiles.map((p) => ({ ...p, sandbox: p.sandbox === true })) }
 }
 
 /** Writes the store atomically. */
@@ -66,6 +68,7 @@ export interface ProfileInput {
   accountIds: string[]
   mcpExclude?: string[]
   permission?: ProfilePermission
+  sandbox?: boolean
   createdAt?: string
   updatedAt?: string
   lastUsedAt?: string
@@ -99,6 +102,7 @@ export function validateProfile(
       accountIds: [...input.accountIds],
       mcpExclude: [...(input.mcpExclude ?? [])],
       permission: input.permission ?? 'inherit',
+      sandbox: input.sandbox ?? false,
       createdAt: input.createdAt ?? now,
       updatedAt: input.updatedAt ?? now,
       ...(lastUsedAt !== undefined ? { lastUsedAt } : {})

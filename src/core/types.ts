@@ -136,6 +136,10 @@ export interface SessionInfo {
    *  Written into the pty's note at spawn like startedBy, so it survives a Host handing the session back; absent on a
    *  session started without one and on every note written before profiles. */
   agentProfileId?: string
+  /** The session runs in its CLI's own sandbox (sandbox design §6), because its agent profile's switch is on. Written
+   *  into the pty's or chat proc's note at spawn like Enforce's `enforced`, so it survives a Host handing the session
+   *  back and a roll's successor starts in the sandbox too; absent on every session started outside it. */
+  sandboxed?: true
 }
 
 /** The stored settings the resume modal reads to seed its checkboxes.
@@ -1984,6 +1988,8 @@ export interface AgentProfileFields {
   /** Shared MCP entry ids the profile does not get. */
   mcpExclude?: string[]
   permission?: ProfilePermission
+  /** Its sessions start in their CLI's own sandbox (sandbox design §6). Off when a new profile leaves it out. */
+  sandbox?: boolean
 }
 
 /** Settings › Agent profiles and the profile pickers (Agent Profiles design §8): the Host's `agent-profiles-*` commands,

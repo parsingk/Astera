@@ -399,12 +399,20 @@ export function humanFor(
       return columns(
         (Array.isArray(data.checks) ? (data.checks as Record<string, unknown>[]) : []).map((c) => [c.ok !== true ? 'FAIL' : c.warn === true ? 'warn' : 'ok', str(c.name), str(c.detail)])
       )
-    // Agent Profiles design §6: its state first, as plugins list puts it, then what a person picks it by
+    // Agent Profiles design §6: its state first, as plugins list puts it, then what a person picks it by. The sandbox
+    // switch (sandbox design §6) as `on`/`off`; a Host from before it sends none, which is off
     case 'agent-profiles-list':
       return columns(
         asList(data, 'profiles').map((p) => {
           const accounts = Array.isArray(p.accountIds) ? (p.accountIds as unknown[]).map(str) : []
-          return [str(p.status).toUpperCase(), str(p.id), str(p.name), str(p.permission), accounts.length > 0 ? accounts.join(',') : '-']
+          return [
+            str(p.status).toUpperCase(),
+            str(p.id),
+            str(p.name),
+            str(p.permission),
+            p.sandbox === true ? 'on' : 'off',
+            accounts.length > 0 ? accounts.join(',') : '-'
+          ]
         })
       )
     case 'plugins-list':

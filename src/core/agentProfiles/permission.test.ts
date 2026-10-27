@@ -23,7 +23,7 @@ const profileDir = async (profiles: AgentProfile[] = []): Promise<string> => {
   return d
 }
 const P = (over: Partial<AgentProfile> = {}): AgentProfile => ({
-  id: 'ap_000000000001', name: 'Reviewer', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'inherit',
+  id: 'ap_000000000001', name: 'Reviewer', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'inherit', sandbox: false,
   createdAt: '2026-10-22T00:00:00.000Z', updatedAt: '2026-10-22T00:00:00.000Z', ...over
 })
 const reader = (yolo: boolean) => {
@@ -73,20 +73,28 @@ describe('profileSpawn', () => {
 
   it('gives the profile\'s real id and its permission', async () => {
     const dir = await profileDir([P({ id: 'ap_b', name: 'Bypasser', permission: 'bypass' }), P({ id: 'ap_a', name: 'Asker', permission: 'ask' })])
-    expect((await call(dir, { agentProfileId: 'ap_b', yolo: false })).r).toEqual({ agentProfileId: 'ap_b', bypassPermissions: true })
-    expect((await call(dir, { agentProfileId: 'ap_a', yolo: true })).r).toEqual({ agentProfileId: 'ap_a', bypassPermissions: false })
+    expect((await call(dir, { agentProfileId: 'ap_b', yolo: false })).r).toEqual({ agentProfileId: 'ap_b', bypassPermissions: true, sandbox: false })
+    expect((await call(dir, { agentProfileId: 'ap_a', yolo: true })).r).toEqual({ agentProfileId: 'ap_a', bypassPermissions: false, sandbox: false })
   })
 
   // Ruling (b): the Host's delete guard compares ids, so a name the caller passed must not be what the session keeps
   it('resolves a name to the profile\'s id', async () => {
     const dir = await profileDir([P({ id: 'ap_r', name: 'Reviewer', permission: 'inherit' })])
-    expect((await call(dir, { agentProfileId: 'reviewer', yolo: true })).r).toEqual({ agentProfileId: 'ap_r', bypassPermissions: true })
+    expect((await call(dir, { agentProfileId: 'reviewer', yolo: true })).r).toEqual({ agentProfileId: 'ap_r', bypassPermissions: true, sandbox: false })
   })
 
   it('an explicit bypassPermissions from the caller still wins', async () => {
     const dir = await profileDir([P({ id: 'ap_b', permission: 'bypass' }), P({ id: 'ap_a', name: 'Asker', permission: 'ask' })])
-    expect((await call(dir, { agentProfileId: 'ap_b', bypassPermissions: false })).r).toEqual({ agentProfileId: 'ap_b', bypassPermissions: false })
-    expect((await call(dir, { agentProfileId: 'ap_a', bypassPermissions: true })).r).toEqual({ agentProfileId: 'ap_a', bypassPermissions: true })
+    expect((await call(dir, { agentProfileId: 'ap_b', bypassPermissions: false })).r).toEqual({ agentProfileId: 'ap_b', bypassPermissions: false, sandbox: false })
+    expect((await call(dir, { agentProfileId: 'ap_a', bypassPermissions: true })).r).toEqual({ agentProfileId: 'ap_a', bypassPermissions: true, sandbox: false })
+  })
+
+  // Sandbox design §6: the switch travels with the profile to every spawn path, whatever the caller's own bypass
+  it("gives the profile's sandbox switch", async () => {
+    const dir = await profileDir([P({ id: 'ap_s', name: 'Boxed', sandbox: true }), P({ id: 'ap_o', name: 'Open' })])
+    expect((await call(dir, { agentProfileId: 'ap_s', bypassPermissions: true })).r).toEqual({ agentProfileId: 'ap_s', bypassPermissions: true, sandbox: true })
+    expect((await call(dir, { agentProfileId: 'boxed' })).r).toMatchObject({ sandbox: true })
+    expect((await call(dir, { agentProfileId: 'ap_o' })).r).toMatchObject({ sandbox: false })
   })
 
   it('a profile that is not found is null, with one log line', async () => {
@@ -130,7 +138,12 @@ describe('appProfileSpawn', () => {
 
   it('a profile that resolves gives its id and permission', async () => {
     const dir = await profileDir([P({ id: 'ap_a', permission: 'ask' })])
-    expect(await call(dir, { agentProfileId: 'ap_a', yolo: true })).toEqual({ agentProfileId: 'ap_a', bypassPermissions: false })
+    expect(await call(dir, { agentProfileId: 'ap_a', yolo: true })).toEqual({ agentProfileId: 'ap_a', bypassPermissions: false, sandbox: false })
+  })
+
+  it('a sandboxed profile that resolves gives its sandbox', async () => {
+    const dir = await profileDir([P({ id: 'ap_s', sandbox: true })])
+    expect(await call(dir, { agentProfileId: 'ap_s', yolo: false })).toEqual({ agentProfileId: 'ap_s', bypassPermissions: false, sandbox: true })
   })
 
   it('a profile that does not resolve falls back to the app-wide mode, with no id', async () => {

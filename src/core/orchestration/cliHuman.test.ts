@@ -141,17 +141,24 @@ describe('humanFor', () => {
     )
   })
 
-  // Agent Profiles design §6: a row per profile, its state first as plugins list does, then its id, name, permission
-  // and accounts in order
+  // Agent Profiles design §6: a row per profile, its state first as plugins list does, then its id, name, permission,
+  // sandbox switch (sandbox design §6; a profile from a Host before it reads as off) and accounts in order
   it('agent-profiles list is a row per profile, and one profile is its fields', () => {
     expect(
       humanFor('agent-profiles-list', {
         profiles: [
-          { id: 'ap_1', name: 'Reviewer', status: 'active', accountIds: ['acc_a', 'acc_b'], mcpExclude: [], permission: 'ask' },
-          { id: 'ap_2', name: 'Night', status: 'archived', accountIds: [], mcpExclude: ['m'], permission: 'inherit' }
+          { id: 'ap_1', name: 'Reviewer', status: 'active', accountIds: ['acc_a', 'acc_b'], mcpExclude: [], permission: 'ask', sandbox: true },
+          { id: 'ap_2', name: 'Night', status: 'archived', accountIds: [], mcpExclude: ['m'], permission: 'inherit', sandbox: false },
+          { id: 'ap_3', name: 'Old', status: 'active', accountIds: ['acc_a'], mcpExclude: [], permission: 'bypass' }
         ]
       })
-    ).toBe(['ACTIVE    ap_1  Reviewer  ask      acc_a,acc_b', 'ARCHIVED  ap_2  Night     inherit  -'].join(String.fromCharCode(10)))
+    ).toBe(
+      [
+        'ACTIVE    ap_1  Reviewer  ask      on   acc_a,acc_b',
+        'ARCHIVED  ap_2  Night     inherit  off  -',
+        'ACTIVE    ap_3  Old       bypass   off  acc_a'
+      ].join(String.fromCharCode(10))
+    )
     expect(humanFor('agent-profiles-show', { id: 'ap_1', name: 'Reviewer' })).toContain('Reviewer')
     expect(humanFor('agent-profiles-delete', { id: 'ap_1', name: 'Reviewer', deleted: true })).toContain('ap_1')
   })

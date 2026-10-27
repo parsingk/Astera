@@ -2820,7 +2820,7 @@ describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
     await appendLimitError(src)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
-    expect(prepared).toEqual([[expect.objectContaining({ id: 'c2' }), h.info1.cwd, 'ap_x']])
+    expect(prepared).toEqual([[expect.objectContaining({ id: 'c2' }), h.info1.cwd, 'ap_x', false]])
     expect(h.spawnedOpts[0].agentProfileId).toBe('ap_x')
     h.coord.stop()
     const pPrepared: unknown[][] = []
@@ -2828,6 +2828,29 @@ describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
     await rollNow(p)
     expect(pPrepared[0][2]).toBeUndefined()
     expect(p.spawnedOpts[0]).not.toHaveProperty('agentProfileId')
+    p.coord.stop()
+  })
+
+  // Sandbox design §6: the successor of a session started in the sandbox starts in it too. The flag rides the chain like
+  // the bypass does, so a profile store that cannot be read at the roll, or another chain rolling at the same moment,
+  // can never start it outside; its preparation is told, so the sandbox's folder is read before the kill.
+  it('a roll keeps the session’s sandbox, for the respawn and its preparation', async () => {
+    const prepared: unknown[][] = []
+    const h = harness({ prepareSpawn: async (...a) => { prepared.push(a) } })
+    const src = await writeRollout({ accountId: 'c1', uuid: 'cx-sb', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register({ ...h.info1, agentProfileId: 'ap_box', sandboxed: true })
+    await advance(1_500) // 매핑 폴링
+    await appendLimitError(src)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(prepared).toEqual([[expect.objectContaining({ id: 'c2' }), h.info1.cwd, 'ap_box', true]])
+    expect(h.spawnedOpts[0]).toMatchObject({ sandbox: true, agentProfileId: 'ap_box' })
+    h.coord.stop()
+    const pPrepared: unknown[][] = []
+    const p = harness({ prepareSpawn: async (...a) => { pPrepared.push(a) } })
+    await rollNow(p)
+    expect(pPrepared[0][3]).toBe(false)
+    expect(p.spawnedOpts[0]).not.toHaveProperty('sandbox')
     p.coord.stop()
   })
 

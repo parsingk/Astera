@@ -97,7 +97,8 @@ export const QUESTION_FIELDS = Object.freeze([
 export const ACCOUNT_FIELDS = Object.freeze(['id', 'label', 'provider', 'default', 'signedIn'] as const)
 
 /** An agent profile (Agent Profiles design §4): a named set of accounts, the shared MCP servers it leaves out (their
- *  registry ids) and its permission choice. Every field is the person's own setting, so all of them are public. */
+ *  registry ids), its permission choice and its sandbox switch. Every field is the person's own setting, so all of them
+ *  are public. */
 export const AGENT_PROFILE_FIELDS = Object.freeze([
   'id',
   'name',
@@ -106,6 +107,7 @@ export const AGENT_PROFILE_FIELDS = Object.freeze([
   'accountIds',
   'mcpExclude',
   'permission',
+  'sandbox',
   'createdAt',
   'updatedAt',
   'lastUsedAt'

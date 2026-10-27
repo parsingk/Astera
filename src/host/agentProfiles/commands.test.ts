@@ -146,6 +146,43 @@ describe('createHostAgentProfiles', () => {
     expect((await h.call('agent-profiles-list', {}, { role: 'cli', agentRefusal: 'not from an agent' })).status).toBe(200)
   })
 
+  // Sandbox design §6: the switch is the person's, off unless they turn it on, and kept by an update that leaves it alone
+  it('create and update take sandbox, and the list shows it', async () => {
+    const h = await rig()
+    const off = profileOf(await h.call('agent-profiles-create', { name: 'Open', accountIds: ['acc_x'] }))
+    expect(off.sandbox).toBe(false)
+    const on = await h.call('agent-profiles-create', { name: 'Boxed', accountIds: ['acc_x'], sandbox: true })
+    expect(on.status).toBe(200)
+    expect(profileOf(on).sandbox).toBe(true)
+    expect((await h.call('agent-profiles-list')).body).toMatchObject({ profiles: [{ name: 'Open', sandbox: false }, { name: 'Boxed', sandbox: true }] })
+    expect(profileOf(await h.call('agent-profiles-update', { id: off.id, sandbox: true })).sandbox).toBe(true)
+    // An update that does not name it keeps it
+    expect(profileOf(await h.call('agent-profiles-update', { id: off.id, description: 'd' })).sandbox).toBe(true)
+    expect(profileOf(await h.call('agent-profiles-update', { id: profileOf(on).id, sandbox: false })).sandbox).toBe(false)
+    expect((await readAgentProfiles(h.profileDir)).profiles.map((p) => p.sandbox)).toEqual([true, false])
+    // Only a boolean, and nothing is written for anything else
+    for (const sandbox of ['on', 1, null]) {
+      expect((await h.call('agent-profiles-create', { name: 'X', accountIds: ['acc_x'], sandbox })).status, String(sandbox)).toBe(400)
+      expect((await h.call('agent-profiles-update', { id: off.id, sandbox })).status, String(sandbox)).toBe(400)
+    }
+    expect((await readAgentProfiles(h.profileDir)).profiles.map((p) => p.sandbox)).toEqual([true, false])
+  })
+
+  // Review Focus 5: an agent cannot switch off what keeps it in, from its own shell; the person's CLI and the app can
+  it("an agent's shell cannot change sandbox", async () => {
+    const h = await rig()
+    const p = profileOf(await h.call('agent-profiles-create', { name: 'Boxed', accountIds: ['acc_x'], sandbox: true }))
+    const agent = { role: 'cli' as const, agentRefusal: 'not from an agent' }
+    const off = await h.call('agent-profiles-update', { id: p.id, sandbox: false }, agent)
+    expect(off.status).toBe(403)
+    expect(off.body).toEqual({ error: 'not from an agent' })
+    expect(off.marks.effects).toBe(0)
+    expect((await h.call('agent-profiles-create', { name: 'Open', accountIds: ['acc_x'], sandbox: false }, agent)).status).toBe(403)
+    expect((await readAgentProfiles(h.profileDir)).profiles).toMatchObject([{ id: p.id, sandbox: true }])
+    expect((await h.call('agent-profiles-update', { id: p.id, sandbox: false }, { role: 'cli' })).status).toBe(200)
+    expect((await readAgentProfiles(h.profileDir)).profiles[0]!.sandbox).toBe(false)
+  })
+
   it('deletes a profile, but answers 409 in-use while something holds it', async () => {
     const h = await rig()
     const p = profileOf(await h.call('agent-profiles-create', { name: 'A', accountIds: ['acc_1'] }))

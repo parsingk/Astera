@@ -39,8 +39,13 @@ describe('ipc.ts starts a session from an agent profile', () => {
     expect(before(chat, 'core.chat.spawn(', 'touchAgentProfile(opts.agentProfileId)')).toBe(true)
   })
 
-  it('a terminal session: the prepare takes the profile, the spawn carries it in opts, and its use is stamped after', () => {
-    expect(terminal).toMatch(/core\.sessions\.prepare\(\{ account, cwd: opts\.cwd, \.\.\.\(opts\.agentProfileId !== undefined \? \{ agentProfileId: opts\.agentProfileId \} : \{\}\) \}\)/)
+  // Sandbox design §6: the profile's switch rides the resolved options (appProfileSpawn, pinned in permission.test.ts), so
+  // the prepare reads the folder for it and the spawn, which takes `...opts`, starts in it
+  it('a terminal session: the prepare takes the profile and its sandbox, the spawn carries them in opts, and its use is stamped after', () => {
+    expect(terminal).toMatch(
+      /core\.sessions\.prepare\(\{ account, cwd: opts\.cwd, \.\.\.\(opts\.agentProfileId !== undefined \? \{ agentProfileId: opts\.agentProfileId \} : \{\}\), \.\.\.\(opts\.sandbox === true \? \{ sandbox: true \} : \{\}\) \}\)/
+    )
+    expect(terminal).toMatch(/core\.sessions\.spawn\(\{\s*\.\.\.opts,/)
     expect(before(terminal, 'core.sessions.spawn({', 'touchAgentProfile(opts.agentProfileId)')).toBe(true)
   })
 
@@ -57,15 +62,18 @@ describe('ipc.ts starts a session from an agent profile', () => {
 })
 
 // Agent Profiles design §7: a roll keeps the profile. The coordinators hand the chain's profile id to prepareSpawn (their
-// own tests pin that), and index.ts's two coordinators must pass it on to the prepare that warms the capabilities.
+// own tests pin that), and index.ts's two coordinators must pass it on to the prepare that warms the capabilities. The
+// sandbox (sandbox design §6) rides beside it, so the folder is read for the sandbox before the kill.
 describe('index.ts prepares a roll on the chain’s agent profile', () => {
   const index = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8')
 
-  it('both coordinators’ prepareSpawn pass the profile id to the prepare', () => {
+  it('both coordinators’ prepareSpawn pass the profile id and the sandbox to the prepare', () => {
     const lines = index.split('\n').filter((l) => l.includes('prepareSpawn:'))
     expect(lines).toHaveLength(2)
     for (const l of lines) {
-      expect(l).toMatch(/prepareSpawn: \(account, cwd, agentProfileId\) => core!\.sessions\.prepare\(\{ account, cwd, \.\.\.\(agentProfileId \? \{ agentProfileId \} : \{\}\) \}\)/)
+      expect(l).toMatch(
+        /prepareSpawn: \(account, cwd, agentProfileId, sandbox\) => core!\.sessions\.prepare\(\{ account, cwd, \.\.\.\(agentProfileId \? \{ agentProfileId \} : \{\}\), \.\.\.\(sandbox \? \{ sandbox: true \} : \{\}\) \}\)/
+      )
     }
   })
 })

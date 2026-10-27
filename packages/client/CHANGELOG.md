@@ -8,7 +8,8 @@ is the guide.
 - Agent profiles (the Astera that ships agent profiles or later; an older one answers these with `VERSION_MISMATCH`):
   `agentProfiles.list()` and `agentProfiles.get(idOrName)` read the profiles a person made in Astera or with
   `astera agent-profiles`, each an `AgentProfile` (its accounts in order, the shared MCP servers it leaves out as
-  `mcpExclude`, and its `permission`: `inherit`, `bypass` or `ask`).
+  `mcpExclude`, its `permission`: `inherit`, `bypass` or `ask`, and `sandbox`, whether its sessions start in their agent
+  CLI's own sandbox, absent from an Astera before the sandbox).
 - `jobs.create` and `tasks.create` take `agentProfileId`, an id or a name (the Astera that ships agent profiles or
   later; an older one ignores it on `jobs.create` and refuses `tasks.create` without `accountIds`). A Job's Tasks run
   as its profile unless a Task names its own, and the profile never picks the coordinator. A Task with a profile and no

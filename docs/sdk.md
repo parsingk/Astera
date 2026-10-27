@@ -319,7 +319,8 @@ permission choice. Profiles are made and changed in Astera and with `astera agen
 `agentProfiles.list()` answers every profile, and `agentProfiles.get(idOrName)` one, by its id or its name (a name
 matches without regard to case, and an unknown one is `NOT_FOUND`). Each is an `AgentProfile`: `id`, `name`,
 `description`, `status` (`active`, or `archived`, which starts no new work), `accountIds`, `mcpExclude` (the ids of the
-shared MCP servers it leaves out), `permission` (`inherit`, `bypass` or `ask`) and when it was made, changed and last
+shared MCP servers it leaves out), `permission` (`inherit`, `bypass` or `ask`), `sandbox` (whether its sessions start
+in their agent CLI's own sandbox; absent from an Astera before the sandbox) and when it was made, changed and last
 used. A Job and a Task made as a profile carry its id as `agentProfileId`, and so does a worker attempt of such a
 Task. Profiles need `@astera-app/client` 0.5.0 and the Astera that ships them. A Host from before agent profiles
 answers `agentProfiles.list` and `agentProfiles.get` with `VERSION_MISMATCH`, ignores `agentProfileId` on

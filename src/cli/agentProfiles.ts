@@ -2,7 +2,8 @@
 // them (host/agentProfiles/commands.ts), as it answers `sessions`; this file turns the line into its commands. Two
 // things are done here first: a profile named by its name is resolved to its id with `agent-profiles-get`, since the
 // changes take the id, and the shared MCP servers `--exclude-mcp` names are turned into their registry ids, which is
-// what a profile keeps. A name no shared server has is refused here, naming it, before anything is sent.
+// what a profile keeps. A name no shared server has is refused here, naming it, before anything is sent. `--sandbox
+// on|off` is sent as the boolean the Host takes.
 import type { ExtensionEntry } from '../core/extensions/types'
 
 type Answer = { status: number; body: unknown }
@@ -51,6 +52,11 @@ export async function agentProfilesCommand<R extends object>(a: {
       const v = text('account', args.account)
       if (typeof v !== 'string') return v
       out.accountIds = list(v)
+    }
+    // The sandbox switch (sandbox design §6), as words a person types: anything but on or off is refused, never guessed
+    if (args.sandbox !== undefined) {
+      if (args.sandbox !== 'on' && args.sandbox !== 'off') return { error: '--sandbox is on or off' }
+      out.sandbox = args.sandbox === 'on'
     }
     if (args.excludeMcp !== undefined) {
       const v = text('exclude-mcp', args.excludeMcp)

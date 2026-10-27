@@ -186,7 +186,7 @@ describe('createHostSessionStarter — with an agent profile', () => {
     for (const d of dirs.splice(0)) await removeFixture(d)
   })
   const P = (over: Partial<AgentProfile>): AgentProfile => ({
-    id: 'ap_000000000001', name: 'Reviewer', status: 'active', accountIds: ['acc_c'], mcpExclude: [], permission: 'inherit',
+    id: 'ap_000000000001', name: 'Reviewer', status: 'active', accountIds: ['acc_c'], mcpExclude: [], permission: 'inherit', sandbox: false,
     createdAt: 'T', updatedAt: 'T', ...over
   })
   const withProfiles = async (profiles: AgentProfile[]): Promise<string> => {

@@ -14,7 +14,8 @@ import { addableAccounts, permissionLabel, profileFailureLine, providerSuffix } 
 type Failure = Extract<PluginsCallAnswer, { ok: false }>
 /** A shared MCP server; `off` when it is switched off in MCP & Skills, so no session gets it whatever is ticked. */
 type Server = { id: string; name: string; off: boolean }
-type Draft = Required<AgentProfileFields> & { description: string }
+/** The sandbox switch is not edited here yet: a save sends none, and the Host's update keeps the one stored. */
+type Draft = Required<Omit<AgentProfileFields, 'sandbox'>> & { description: string }
 
 const PERMISSIONS: ProfilePermission[] = ['inherit', 'bypass', 'ask']
 const arr = <V,>(v: unknown): V[] => (Array.isArray(v) ? (v as V[]) : [])

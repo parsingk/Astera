@@ -2096,6 +2096,8 @@ export function registerIpc(
     // the profile's permission decides the bypass when the caller gave none. One that does not resolve is logged and
     // dropped, and the session starts with the app-wide mode as a dialog spawn without a profile does (the dialog sent
     // no bypass, so dropping only the id would have left it asking). With none named, nothing here changes the options.
+    // A profile that resolves also gives its sandbox switch (sandbox design §6), which the terminal prepare and spawn
+    // below read from the options.
     if (opts.agentProfileId !== undefined) {
       const { agentProfileId, ...rest } = opts
       const resolved = await appProfileSpawn({
@@ -2311,7 +2313,7 @@ export function registerIpc(
     // The folder and, on win32, Git Bash are looked for first, off this thread and within the probe
     // limit (core/sessions/pathProbe.ts): an offline drive refuses the spawn in about 1.5 s instead of
     // freezing every window for as long as the SMB redirector takes to give up.
-    await core.sessions.prepare({ account, cwd: opts.cwd, ...(opts.agentProfileId !== undefined ? { agentProfileId: opts.agentProfileId } : {}) })
+    await core.sessions.prepare({ account, cwd: opts.cwd, ...(opts.agentProfileId !== undefined ? { agentProfileId: opts.agentProfileId } : {}), ...(opts.sandbox === true ? { sandbox: true } : {}) })
     const info = core.sessions.spawn({
       ...opts,
       account,

@@ -27,7 +27,7 @@ const acc = (id: string, provider?: 'claude' | 'codex'): Account => ({
 const ACCOUNTS = [acc('acc_c1'), acc('acc_c2', 'claude'), acc('acc_x1', 'codex')]
 
 const P = (over: Partial<AgentProfile> = {}): AgentProfile => ({
-  id: 'ap_000000000001', name: 'Reviewer', status: 'active', accountIds: ['acc_c1'], mcpExclude: [], permission: 'inherit',
+  id: 'ap_000000000001', name: 'Reviewer', status: 'active', accountIds: ['acc_c1'], mcpExclude: [], permission: 'inherit', sandbox: false,
   createdAt: '2026-10-22T00:00:00.000Z', updatedAt: '2026-10-22T00:00:00.000Z', ...over
 })
 const input = (over: Record<string, unknown> = {}) => ({ name: 'Writer', accountIds: ['acc_c1'], ...over })
@@ -87,6 +87,19 @@ describe('agent profile store', () => {
     expect((await fs.readdir(path.dirname(file))).filter((f) => f.endsWith('.bak'))).toHaveLength(2)
   })
 
+  // Sandbox design §6, Review Focus 5: a profile written before the switch existed reads as off, and only `true` is on
+  it('a stored profile without sandbox reads as off', async () => {
+    const p = await profile()
+    const { sandbox: _none, ...old } = P()
+    await fs.writeFile(
+      profilePaths(p).agentProfiles,
+      JSON.stringify({ version: 1, profiles: [old, { ...old, id: 'ap_000000000002', name: 'On', sandbox: true }, { ...old, id: 'ap_000000000003', name: 'Odd', sandbox: 'yes' }] })
+    )
+    const read = (await readAgentProfiles(p)).profiles
+    expect(read.map((x) => x.sandbox)).toEqual([false, true, false])
+    expect(read[0]).toEqual(P())
+  })
+
   it('generates ids as ap_ and 12 hex characters', () => {
     expect(newProfileId()).toMatch(/^ap_[0-9a-f]{12}$/)
   })
@@ -121,7 +134,8 @@ describe('validateProfile', () => {
     if (!r.ok) return
     expect(r.profile.name).toBe(name)
     expect(r.profile.id).toMatch(/^ap_[0-9a-f]{12}$/)
-    expect(r.profile).toMatchObject({ status: 'active', accountIds: ['acc_c1', 'acc_c2'], mcpExclude: [], permission: 'inherit' })
+    expect(r.profile).toMatchObject({ status: 'active', accountIds: ['acc_c1', 'acc_c2'], mcpExclude: [], permission: 'inherit', sandbox: false })
+    expect(validateProfile(input({ sandbox: true }), ACCOUNTS, others)).toMatchObject({ ok: true, profile: { sandbox: true } })
   })
   it('lets a profile keep its own name when it is not among others', () => {
     expect(validateProfile(input({ name: 'Reviewer' }), ACCOUNTS, [])).toMatchObject({ ok: true })

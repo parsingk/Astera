@@ -23,6 +23,11 @@ import { applyHiding, type HidingSource } from '../credentials/hiding'
 import { isObserving } from '../audit/policy'
 import { enforceUnavailable, type EnforceStart } from '../audit/enforce'
 import type { EnforceFilesResult } from './statusline'
+import { ensureWorktreeConfigFiles, gitLayoutOf, type GitLayout } from '../sandbox/gitLayout'
+import { credentialStoreDenies, sensitiveLocations } from '../sandbox/locations'
+import { codexSandboxArgs, codexSandboxEnv } from '../sandbox/codexProfile'
+import { sandboxUnavailable } from '../sandbox/unavailable'
+import { LAUNCH_FORBIDDEN } from './commands'
 
 /** statusLine info injected when a session spawns (provided by main's StatusLineManager,
  *  structurally compatible). */
@@ -185,14 +190,18 @@ export class SessionManager {
    *  resolver's cache, so an entry that expires between a prepare and its spawn cannot send the spawn
    *  to the sync search. Trusted as long as a confirmed folder is. */
   private preparedGitBash = new Map<string, { bash: string | null; timedOut: boolean; at: number }>()
+  /** The sandbox (sandbox design §6): the git layout a sandboxed `prepare` read for a folder (null outside a repository),
+   *  and when, kept for the spawn the way a confirmed folder is and trusted as long. */
+  private preparedLayouts = new Map<string, { layout: GitLayout | null; at: number }>()
 
   /**
    * Everything `spawn` would look for on disk, looked for without blocking: the folder, and on win32
    * the Git Bash for this account's env (probed once per PATH string, see gitBash.ts). **Every caller
    * awaits this before `spawn`** — a roll does it before its kill, since the spawn after it has no
    * await. Rejects with CWD_MISSING, or CWD_UNREACHABLE when the folder did not answer in time.
+   * `sandbox`: the session will start in its CLI's sandbox, so the folder's git layout is read here for the spawn.
    */
-  async prepare(opts: { account: Account; cwd: string; missing?: string; agentProfileId?: string }): Promise<void> {
+  async prepare(opts: { account: Account; cwd: string; missing?: string; agentProfileId?: string; sandbox?: boolean }): Promise<void> {
     // A folder confirmed a moment ago (a Host session create checks it, then spawns) is not probed again.
     if (!this.cwdConfirmed(opts.cwd)) {
       await checkCwd(opts.cwd, this.checks.cwd, opts.missing)
@@ -230,6 +239,28 @@ export class SessionManager {
       if (files !== 'ok') throw enforceUnavailable(files)
     } else if (this.observeHooks && isObserving(mode) && descriptorOf(this.descriptors, opts.account).usesStatusLine)
       await this.observeHooks().catch((err) => this.checks.log(`observe hook settings could not be written: ${String(err)}`))
+    // The sandbox (sandbox design §6): a Codex session's profile names its repository's git directories, so they are read
+    // now, off the thread, for the spawn to use
+    if (opts.sandbox === true && providerOf(opts.account) === 'codex') await this.prepareSandbox(opts.cwd)
+  }
+
+  /** Reads the folder's git layout for a sandboxed spawn and keeps it beside the confirmed folders. On Windows every
+   *  `config.worktree` git may read is made first: the profile keeps them read-only, but Codex's Windows sandbox creates
+   *  one that is missing, and git would read a `core.hooksPath` from it (gitLayout.ts). On macOS and Linux a read entry
+   *  already keeps a missing one from being created, so nothing is written there. Either failing refuses the start, since
+   *  the profile could not name what it must (E5). */
+  private async prepareSandbox(cwd: string): Promise<void> {
+    let layout: GitLayout | null
+    try {
+      layout = await gitLayoutOf(cwd)
+      if (layout && this.checks.platform === 'win32') await ensureWorktreeConfigFiles(layout)
+    } catch (err) {
+      this.checks.log(`sandbox: the git layout of ${cwd} could not be read or prepared: ${String(err)}`)
+      throw sandboxUnavailable('git-layout')
+    }
+    const now = this.checks.now()
+    for (const [k, v] of this.preparedLayouts) if (now - v.at >= CWD_CONFIRMED_MS) this.preparedLayouts.delete(k)
+    this.preparedLayouts.set(cwd, { layout, at: now })
   }
 
   private cwdConfirmed(cwd: string): boolean {
@@ -284,6 +315,10 @@ export class SessionManager {
     /** The agent profile the session is started from (SessionInfo.agentProfileId): its capabilities are the ones
      *  `prepare` resolved for this account and profile, and it is written into the info and the note like startedBy. */
     agentProfileId?: string
+    /** Start in the CLI's own sandbox (sandbox design §6), as the profile's switch says; `prepare` must have been told
+     *  too. Marked in the info and the note (SessionInfo.sandboxed). A Codex session only, for now: Claude's sandbox
+     *  is its settings file. */
+    sandbox?: boolean
   }): SessionInfo {
     // The folder `prepare` just confirmed is not looked at again. The sync check is left only for a
     // caller that did not prepare (tests, and anything added later without it): it is the one that can
@@ -332,6 +367,17 @@ export class SessionManager {
     const enforce = caps?.context.policyMode === 'enforce'
     const blocked = enforce ? (this.enforce?.blocker?.(providerOf(opts.account), 'terminal') ?? null) : null
     if (blocked !== null) throw new Error(blocked)
+    // The sandbox (sandbox design §6): the git layout the prepare read. This spawn is synchronous and cannot read git
+    // safely itself (an offline drive would freeze the thread), and a profile that does not name the repository's git
+    // directories would leave the session unable to commit, so a sandboxed spawn nobody prepared for it is refused
+    // rather than started without them (E5)
+    const sandboxed = opts.sandbox === true && providerOf(opts.account) === 'codex'
+    let layout: GitLayout | null = null
+    if (sandboxed) {
+      const prepared = this.preparedLayouts.get(opts.cwd)
+      if (!prepared || this.checks.now() - prepared.at >= CWD_CONFIRMED_MS) throw sandboxUnavailable('not-prepared')
+      layout = prepared.layout
+    }
     const sl = d.usesStatusLine
       ? (this.statusLineProvider?.(
           id,
@@ -349,6 +395,9 @@ export class SessionManager {
     // The Credentials list's hidden keys and logins go from what the session inherits, before Astera adds its own below
     // (credentials design §5): no entry can take away the session's identity, its Gateway token or a shared server's value
     if (this.hiding) applyHiding(env, this.hiding.get(opts.cwd, id), this.checks.platform)
+    // The sandbox's profile: the places it may not read come from the environment the session actually starts with (its
+    // APPDATA, its session bus), so they are read after the hiding above
+    const sandboxArgs = sandboxed ? this.codexSandboxArgsFor(layout, env) : undefined
     // Shared extensions: their environment values only here, in this process's environment (design D5). The workload
     // token goes to every session, shared servers or not.
     Object.assign(env, caps?.env ?? {}, gatewayTokenEnv(caps ?? { gatewayGrant: [] }))
@@ -372,8 +421,12 @@ export class SessionManager {
       resumePrompt: opts.resumePrompt,
       initialPrompt: opts.initialPrompt,
       developerInstructions,
-      ...(extraArgs.length > 0 ? { extraArgs } : {})
+      ...(extraArgs.length > 0 ? { extraArgs } : {}),
+      ...(sandboxArgs ? { sandboxArgs } : {})
     })
+    // npm's cache in TEMP, and on Windows the repository named safe for the sandbox's own account; after the shared
+    // extensions' values, so none of them can undo it
+    if (sandboxed) Object.assign(env, codexSandboxEnv({ platform: this.checks.platform, layout, tmpDir: os.tmpdir() }))
     // Windows only: CLAUDE_CODE_GIT_BASH_PATH exists for Git for Windows, and on other platforms the
     // agent's bash is the system one. The agent's hooks and statusLine need a real Git Bash when
     // available; without one the statusLine capture never runs and the app never learns this session's
@@ -459,7 +512,8 @@ export class SessionManager {
           ...(opts.startedBy ? { startedBy: opts.startedBy } : {}),
           ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {}),
           ...(observed ? { observed: true } : {}),
-          ...(enforced ? { enforced: true } : {})
+          ...(enforced ? { enforced: true } : {}),
+          ...(sandboxed ? { sandboxed: true } : {})
         }
       }
     })
@@ -479,9 +533,24 @@ export class SessionManager {
       bypassPermissions: opts.bypassPermissions,
       schedule: opts.schedule,
       ...(opts.startedBy ? { startedBy: opts.startedBy } : {}),
-      ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {})
+      ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {}),
+      ...(sandboxed ? { sandboxed: true as const } : {})
     }
     return this.track(info, pty)
+  }
+
+  /** A sandboxed Codex session's `-a never` and permission profile: its repository's git directories writable, the E6
+   *  list and the OS credential store denied, read from the session's own environment and home. On Windows the launch
+   *  goes through cmd.exe, which would break on a path holding one of its characters, so such a start is refused
+   *  instead of launched broken (Review Focus 2). */
+  private codexSandboxArgsFor(layout: GitLayout | null, env: Record<string, string | undefined>): string[] {
+    const platform = this.checks.platform
+    const denied = [...sensitiveLocations(platform, env, this.homeDir), ...credentialStoreDenies(platform, env, this.homeDir)]
+    if (platform === 'win32') {
+      const named = [...(layout ? [layout.top, layout.gitDir, layout.commonDir, ...layout.worktreeConfigs] : []), ...denied]
+      if (named.some((p) => LAUNCH_FORBIDDEN.test(p))) throw sandboxUnavailable('path-unsafe')
+    }
+    return codexSandboxArgs({ platform, layout, denied })
   }
 
   /** The bookkeeping half of a spawn: the live record, the two callbacks and the backpressure

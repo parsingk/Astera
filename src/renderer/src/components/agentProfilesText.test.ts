@@ -33,6 +33,7 @@ const profile = (over: Partial<AgentProfile> = {}): AgentProfile => ({
   accountIds: ['a', 'b'],
   mcpExclude: [],
   permission: 'inherit',
+  sandbox: false,
   createdAt: '2026-10-22T00:00:00.000Z',
   updatedAt: '2026-10-22T00:00:00.000Z',
   ...over
