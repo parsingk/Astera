@@ -56,6 +56,9 @@ export interface ProfilePaths {
   credentialEmpty: string
   /** Credential-use records: one `YYYY-MM-DD.jsonl` per local day, written by the Host alone (credentials design §6). */
   credentialUses: string
+  /** Enforce's hook writes each call it sees here, one file per session (enforce design §5): the proof it ran, and what it
+   *  blocked. */
+  enforceEvents: string
 }
 
 export function profilePaths(profileDir: string): ProfilePaths {
@@ -67,6 +70,7 @@ export function profilePaths(profileDir: string): ProfilePaths {
     tokenTotals: path.join(profileDir, 'token-totals.json'),
     credentials: path.join(profileDir, 'credentials.json'),
     credentialEmpty: path.join(profileDir, 'credentials', 'empty'),
-    credentialUses: path.join(profileDir, 'credential-uses')
+    credentialUses: path.join(profileDir, 'credential-uses'),
+    enforceEvents: path.join(profileDir, 'enforce')
   }
 }
