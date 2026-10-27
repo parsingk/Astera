@@ -62,19 +62,21 @@ describe('the git excludes a sandboxed Claude session on Linux gets', () => {
 })
 
 // Task 7 fix round 1: inside Claude's sandbox on macOS `$TMPDIR` is not the app's, so `astera` would derive another socket
-// path than the one granted; the session is told the granted address instead, and a person's own ASTERA_HOST is kept
+// path than the one granted; the session is told the granted address. Fix round 2: in its own managed variable,
+// ASTERA_SANDBOX_HOST, which the CLI reads after the person's ASTERA_HOST and which no session or Host inherits; ASTERA_HOST
+// is never planted, so an app started inside such a session does not take it for the person's
 describe('where a sandboxed Claude session on macOS finds the Host', () => {
-  it('is told the address it is granted, unless the person set their own', () => {
+  it('is told the address it is granted, in ASTERA_SANDBOX_HOST and never ASTERA_HOST', () => {
     expect(claudeSandboxEnv({ platform: 'darwin', tmpDir: '/t', excludesFile: null, hostSocket: '/var/f/T/astera-host-k-v4/sock', env: {} })).toEqual({
       npm_config_cache: '/t/astera-npm-cache',
-      ASTERA_HOST: '/var/f/T/astera-host-k-v4/sock'
+      ASTERA_SANDBOX_HOST: '/var/f/T/astera-host-k-v4/sock'
     })
-    expect(claudeSandboxEnv({ platform: 'darwin', tmpDir: '/t', excludesFile: null, hostSocket: '/mine/sock', env: { ASTERA_HOST: '/mine/sock' } })).toEqual({
-      npm_config_cache: '/t/astera-npm-cache'
-    })
-    // An empty ASTERA_HOST counts as unset, as the CLI reads it
-    expect(claudeSandboxEnv({ platform: 'darwin', tmpDir: '/t', excludesFile: null, hostSocket: '/s', env: { ASTERA_HOST: '' } })).toMatchObject({ ASTERA_HOST: '/s' })
+    // The person's own ASTERA_HOST is the socket granted (StatusLineManager.hostSocket), and stays theirs: nothing replaces it
+    const own = claudeSandboxEnv({ platform: 'darwin', tmpDir: '/t', excludesFile: null, hostSocket: '/mine/sock', env: { ASTERA_HOST: '/mine/sock' } })
+    expect(own).toEqual({ npm_config_cache: '/t/astera-npm-cache', ASTERA_SANDBOX_HOST: '/mine/sock' })
+    expect(own).not.toHaveProperty('ASTERA_HOST')
     // Elsewhere nothing is planted: Linux's sandbox ignores per-path sockets, so excludedCommands is the route there
+    expect(claudeSandboxEnv({ platform: 'linux', tmpDir: '/t', excludesFile: null, hostSocket: '/s', env: {} })).not.toHaveProperty('ASTERA_SANDBOX_HOST')
     expect(claudeSandboxEnv({ platform: 'linux', tmpDir: '/t', excludesFile: null, hostSocket: '/s', env: {} })).not.toHaveProperty('ASTERA_HOST')
   })
 
@@ -182,7 +184,7 @@ describe('claudeSandboxStart', () => {
     await mac.start.prepare()
     expect(existsSync(path.join(mac.profileDir, 'sandbox'))).toBe(false)
     expect(mac.order).not.toContain('git')
-    expect(mac.start.env({})).toEqual({ npm_config_cache: npmCacheOf(mac.tmpDir), ASTERA_HOST: '/var/f/T/astera-host-k-v4/sock' })
+    expect(mac.start.env({})).toEqual({ npm_config_cache: npmCacheOf(mac.tmpDir), ASTERA_SANDBOX_HOST: '/var/f/T/astera-host-k-v4/sock' })
     expect(existsSync(npmCacheOf(mac.tmpDir))).toBe(true)
     // Task 7 fix round 1: Claude on Windows has no shell sandbox, so npm keeps its own cache and nothing is made for it
     const win = rig({ platform: 'win32' })

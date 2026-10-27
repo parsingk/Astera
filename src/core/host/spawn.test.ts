@@ -84,6 +84,21 @@ describe('hostSpawnPlan', () => {
     expect('ASTERA_GATEWAY_GRANT' in dirty.options.env).toBe(false)
     expect('ASTERA_LOOPBACK' in dirty.options.env).toBe(false)
   })
+
+  // Task 7 fix round 2: a Host started from inside a sandboxed Claude session on macOS must not take that session's
+  // granted socket with it, or its own sessions would reach the first Host
+  it('does not pass a sandboxed session’s Host address through, and keeps the person’s ASTERA_HOST', () => {
+    const dirty = hostSpawnPlan({
+      execPath: 'x',
+      entryPath: 'y',
+      profileDir: 'p',
+      logPath: 'l',
+      version: 'v',
+      env: { PATH: '/usr/bin', ASTERA_SANDBOX_HOST: '/var/f/T/astera-host-x-v4/sock', ASTERA_HOST: '/mine/sock' }
+    })
+    expect('ASTERA_SANDBOX_HOST' in dirty.options.env).toBe(false)
+    expect(dirty.options.env.ASTERA_HOST).toBe('/mine/sock')
+  })
 })
 
 describe('hostWorkerBaseEnv', () => {

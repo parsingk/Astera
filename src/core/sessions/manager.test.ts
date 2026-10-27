@@ -2143,35 +2143,61 @@ describe('the sandbox at spawn, for Claude', () => {
     expect(r.spawned[0].env?.npm_config_cache).toBe(npmCacheOf(r.tmpDir))
     expect(r.spawned[0].env?.GIT_CONFIG_COUNT).toBeUndefined()
     // Task 7 fix round 1: the session is told the very address it is granted, since inside the sandbox `$TMPDIR` is not the
-    // one `astera` would derive it from
-    const host = r.spawned[0].env?.ASTERA_HOST
+    // one `astera` would derive it from. Fix round 2: in ASTERA_SANDBOX_HOST, never ASTERA_HOST
+    const host = r.spawned[0].env?.ASTERA_SANDBOX_HOST
     expect(host).toBe(r.statusLine.hostSocket())
     expect(settings.sandbox.network.allowUnixSockets[0]).toBe(host)
+    expect(r.spawned[0].env).not.toHaveProperty('ASTERA_HOST')
     // Unsandboxed, nothing is planted
     await r.manager.prepare({ account, cwd })
     r.manager.spawn({ account, cwd })
+    expect(r.spawned[1].env).not.toHaveProperty('ASTERA_SANDBOX_HOST')
     expect(r.spawned[1].env).not.toHaveProperty('ASTERA_HOST')
   })
 
-  it('on macOS a person’s own ASTERA_HOST is the one kept, and the one granted', async () => {
+  /** A darwin manager over its own StatusLineManager, both reading `env` as the process's. */
+  const darwinOver = async (env: Record<string, string>) => {
     const profileDir = temp()
     const tmpDir = temp()
-    const own = { ...BASE.darwin, ASTERA_HOST: '/Users/t/hosts/mine.sock' }
-    const statusLine = new StatusLineManager(profileDir, 'node', () => {}, { platform: 'darwin', execPath: '/opt/astera/astera', homeDir: HOME.darwin, env: own, tmpDir })
+    const statusLine = new StatusLineManager(profileDir, 'node', () => {}, { platform: 'darwin', execPath: '/opt/astera/astera', homeDir: HOME.darwin, env, tmpDir })
     await statusLine.init()
     const spawned: PtySpawnOptions[] = []
     const argv: string[][] = []
     const manager = new SessionManager((_f, a, o) => (argv.push(a as string[]), spawned.push(o), new FakePty()), makeDescriptors('darwin', HOME.darwin),
-      100, 20, HOME.darwin, (id, acc, o) => statusLine.spawnConfig(id, acc, o), [], own, checksFor('darwin'))
+      100, 20, HOME.darwin, (id, acc, o) => statusLine.spawnConfig(id, acc, o), [], env, checksFor('darwin'))
     manager.claudeSandbox = claudeSandboxStart({
-      platform: 'darwin', profileDir, homeDir: HOME.darwin, env: own, tmpDir, files: statusLine,
+      platform: 'darwin', profileDir, homeDir: HOME.darwin, env, tmpDir, files: statusLine,
       version: Object.assign(() => '2.1.310', { warm: async () => {} }), uid: 1000, runGit: async () => null, log: () => {}
     })
+    return { manager, statusLine, spawned, argv }
+  }
+
+  it('on macOS a person’s own ASTERA_HOST is the one kept, and the one granted', async () => {
+    const r = await darwinOver({ ...BASE.darwin, ASTERA_HOST: '/Users/t/hosts/mine.sock' })
     const cwd = temp()
-    await manager.prepare({ account, cwd, sandbox: true })
-    manager.spawn({ account, cwd, sandbox: true })
-    expect(spawned[0].env?.ASTERA_HOST).toBe('/Users/t/hosts/mine.sock')
-    expect(JSON.parse(readFileSync(settingsOf(argv[0]), 'utf8')).sandbox.network.allowUnixSockets).toEqual(['/Users/t/hosts/mine.sock'])
+    await r.manager.prepare({ account, cwd, sandbox: true })
+    r.manager.spawn({ account, cwd, sandbox: true })
+    expect(r.spawned[0].env?.ASTERA_HOST).toBe('/Users/t/hosts/mine.sock')
+    expect(r.spawned[0].env?.ASTERA_SANDBOX_HOST).toBe('/Users/t/hosts/mine.sock')
+    expect(JSON.parse(readFileSync(settingsOf(r.argv[0]), 'utf8')).sandbox.network.allowUnixSockets).toEqual(['/Users/t/hosts/mine.sock'])
+  })
+
+  // Task 7 fix round 2: an app started inside a sandboxed Claude session (a developer's `npm run dev`) inherits that
+  // session's ASTERA_SANDBOX_HOST. Its own sessions do not keep it, and its sandbox grants its own Host's socket, not the
+  // first Host's
+  it('on macOS an inherited ASTERA_SANDBOX_HOST is neither kept nor granted', async () => {
+    const stale = '/var/f/T/astera-host-000000000000-v4/sock'
+    const r = await darwinOver({ ...BASE.darwin, ASTERA_SANDBOX_HOST: stale })
+    expect(r.statusLine.hostSocket()).not.toBe(stale)
+    const cwd = temp()
+    await r.manager.prepare({ account, cwd, sandbox: true })
+    r.manager.spawn({ account, cwd, sandbox: true })
+    expect(r.spawned[0].env?.ASTERA_SANDBOX_HOST).toBe(r.statusLine.hostSocket())
+    expect(JSON.parse(readFileSync(settingsOf(r.argv[0]), 'utf8')).sandbox.network.allowUnixSockets).not.toContain(stale)
+    expect(r.spawned[0].env).not.toHaveProperty('ASTERA_HOST')
+    await r.manager.prepare({ account, cwd })
+    r.manager.spawn({ account, cwd })
+    expect(r.spawned[1].env).not.toHaveProperty('ASTERA_SANDBOX_HOST')
   })
 
   it('on win32 it gets the deny-only variant', async () => {
@@ -2189,7 +2215,7 @@ describe('the sandbox at spawn, for Claude', () => {
     // Task 7 fix round 1: Claude has no shell sandbox on Windows, so npm keeps its own cache: nothing planted or made
     expect(r.spawned[0].env).not.toHaveProperty('npm_config_cache')
     expect(existsSync(npmCacheOf(r.tmpDir))).toBe(false)
-    expect(r.spawned[0].env).not.toHaveProperty('ASTERA_HOST')
+    expect(r.spawned[0].env).not.toHaveProperty('ASTERA_SANDBOX_HOST')
   })
 
   it('a Claude older than 2.1.306 refuses a sandboxed start', async () => {

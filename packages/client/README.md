@@ -28,7 +28,8 @@ try {
 ```
 
 **Which Host.** The installed app's, unless `ASTERA_PROFILE_DIR` names a profile folder or `ASTERA_PROFILE=dev`
-picks the dev app's; `ASTERA_HOST` overrides the address of the discovered profile. The options `profileDir` and
+picks the dev app's; `ASTERA_HOST` overrides the address of the discovered profile, and inside a sandboxed Claude Code
+session on macOS `ASTERA_SANDBOX_HOST` names the socket its sandbox lets it reach. The options `profileDir` and
 `address` override both; an explicit `profileDir` without `address` is always that profile's own Host. The client
 does not start a Host: with none running, `createAsteraClient` rejects `HOST_NOT_RUNNING`.
 

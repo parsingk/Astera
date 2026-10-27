@@ -707,11 +707,12 @@ export class StatusLineManager {
 
   /**
    * macOS: the one address a sandboxed Claude session reaches the Host at, granted in its twin (`allowUnixSockets`) and
-   * put in its environment as ASTERA_HOST (core/sandbox/claudeStart.ts), since inside Claude's sandbox `$TMPDIR` is not
-   * the app's and the socket `astera` would derive from it is not the one granted. The person's own ASTERA_HOST when they
-   * set one (the address `astera` takes before deriving one), else where the Host listens for this profile (hostAddress,
-   * from this process's temp folder, as the app and the Host derive it). Null elsewhere: Linux's sandbox ignores per-path
-   * sockets, and Windows has no sandbox for Claude.
+   * put in its environment as ASTERA_SANDBOX_HOST (core/sandbox/claudeStart.ts), since inside Claude's sandbox `$TMPDIR` is
+   * not the app's and the socket `astera` would derive from it is not the one granted. The person's own ASTERA_HOST when
+   * they set one (the address `astera` takes first), else where the Host listens for this profile (hostAddress, from this
+   * process's temp folder, as the app and the Host derive it). Never an ASTERA_SANDBOX_HOST this process inherited: that
+   * is another session's grant, and an app started inside that session must grant its own Host's socket. Null elsewhere:
+   * Linux's sandbox ignores per-path sockets, and Windows has no sandbox for Claude.
    */
   hostSocket(): string | null {
     if (this.platform !== 'darwin') return null

@@ -12,8 +12,9 @@ import { INHERITED_AGENT_ENV_KEYS } from '../sessions/cliEnv'
  *  (INHERITED_AGENT_ENV_KEYS), not the whole CLAUDE_CODE_ family: CLAUDE_CODE_USE_BEDROCK,
  *  CLAUDE_CODE_OAUTH_TOKEN and the like are settings a person chose, and a Host worker must keep
  *  them just as an app worker does. An inherited CLAUDE_CODE_CHILD_SESSION is what turns a worker's
- *  transcript off. */
-const NOT_INHERITED_ASTERA = /^(ASTERA_SESSION|ASTERA_CLI|ASTERA_SKILLS|ASTERA_GATEWAY_|ASTERA_LOOPBACK)/
+ *  transcript off. ASTERA_SANDBOX_HOST is a sandboxed session's granted socket (core/sandbox/claudeStart.ts): a Host
+ *  started inside one would otherwise hand the first Host's address to every session it starts. */
+const NOT_INHERITED_ASTERA = /^(ASTERA_SESSION|ASTERA_CLI|ASTERA_SKILLS|ASTERA_GATEWAY_|ASTERA_LOOPBACK|ASTERA_SANDBOX_HOST)/
 const NOT_INHERITED_AGENT: ReadonlySet<string> = new Set(INHERITED_AGENT_ENV_KEYS)
 const notInherited = (k: string): boolean => NOT_INHERITED_ASTERA.test(k) || NOT_INHERITED_AGENT.has(k)
 

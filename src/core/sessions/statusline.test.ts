@@ -1021,8 +1021,8 @@ describe('StatusLineManager sandbox', () => {
     const boxed = JSON.parse(await read(mac.spawnConfig('s1', account, { sandbox: true }).settingsFile))
     const socket = hostAddress({ profileDir: dir, platform: 'darwin', tmpDir: TMP.darwin, protocol: HOST_PROTOCOL }).address
     expect(socket).toMatch(/^\/var\/folders\/x\/T\/astera-host-[0-9a-f]{12}-v\d+\/sock$/)
-    // Task 7 fix round 1: one address, which the session is told too (ASTERA_HOST, claudeStart.ts), since `$TMPDIR` inside
-    // the sandbox is not the app's; and Seatbelt sees `/var` as the real `/private/var`, so both spellings are granted
+    // Task 7 fix round 1: one address, which the session is told too (ASTERA_SANDBOX_HOST, claudeStart.ts), since `$TMPDIR`
+    // inside the sandbox is not the app's; and Seatbelt sees `/var` as the real `/private/var`, so both spellings are granted
     expect(mac.hostSocket()).toBe(socket)
     expect(boxed.sandbox).toEqual({ ...builder('darwin').sandbox, network: { allowUnixSockets: [socket, `/private${socket}`] } })
     expect(boxed.permissions.deny).toContain('Read(//Users/t/Library/Keychains/**)')
@@ -1055,6 +1055,15 @@ describe('StatusLineManager sandbox', () => {
     expect(JSON.parse(await read(tmp.spawnConfig('s1', account, { sandbox: true }).settingsFile)).sandbox.network).toEqual({
       allowUnixSockets: ['/tmp/h/sock', '/private/tmp/h/sock']
     })
+  })
+
+  // Task 7 fix round 2: ASTERA_SANDBOX_HOST is what a sandboxed session is told, never what a process grants: an app started
+  // inside such a session inherits it, and granting it would let its sessions reach the first Host
+  it('on macOS an inherited ASTERA_SANDBOX_HOST is not the socket granted', async () => {
+    const mac = new StatusLineManager(dir, 'node', () => {}, {
+      platform: 'darwin', execPath: '/opt/astera/astera', homeDir: HOME.darwin, env: { ASTERA_SANDBOX_HOST: '/var/f/T/astera-host-000000000000-v4/sock' }, tmpDir: TMP.darwin
+    })
+    expect(mac.hostSocket()).toBe(hostAddress({ profileDir: dir, platform: 'darwin', tmpDir: TMP.darwin, protocol: HOST_PROTOCOL }).address)
   })
 
   it('on Windows the twin holds the deny rules only, in Claude’s POSIX form', async () => {

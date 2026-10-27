@@ -2908,9 +2908,19 @@ describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
   // (or has gone stale) is refused before the kill, like any refused respawn, and the person is told why in the tab that
   // is still running, once. Fix round 1: the reason names the account by its name and says where to set it up; the
   // wiring words it for the tab (a terminal's line, a chat's notice).
+  //
+  // Task 7 fix round 2: driven by the coordinator's own milestones (its log lines), never by a wall-clock window. Each step
+  // advances fake time only as far as the next timer this flow needs (the locate poll, the wait's retry) and then awaits
+  // what that timer starts, however long the real file I/O under it takes on a loaded machine; a step that never comes
+  // fails by the test's own timeout, never by a guess about how long I/O lasts.
   it('a roll onto an account not set up writes the reason into the live tab and waits', async () => {
     const told: [string, unknown][] = []
     const logs: string[] = []
+    const waiting: Array<{ reached: () => boolean; resolve: () => void }> = []
+    /** Resolves once the log holds what `reached` asks for. */
+    const when = (reached: () => boolean): Promise<void> =>
+      reached() ? Promise.resolve() : new Promise((resolve) => waiting.push({ reached, resolve }))
+    const count = (prefix: string): number => logs.filter((l) => l.startsWith(prefix)).length
     let asked = 0
     const h = harness({
       prepareSpawn: async () => {
@@ -2918,14 +2928,26 @@ describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
         throw new Error('SANDBOX_UNAVAILABLE: windows-setup codex c2')
       },
       tell: (id, reason) => told.push([id, reason]),
-      log: (m) => logs.push(m)
+      log: (m) => {
+        logs.push(m)
+        for (const w of [...waiting])
+          if (w.reached()) {
+            waiting.splice(waiting.indexOf(w), 1)
+            w.resolve()
+          }
+      }
     })
     const src = await writeRollout({ accountId: 'c1', uuid: 'cx-ws', cwd: h.info1.cwd, primary: 95 })
     h.coord.register({ ...h.info1, sandboxed: true })
-    await advance(1_500) // 매핑 폴링
+    // The locate poll fires at its first second and maps the rollout written above
+    const located = when(() => count('codex rollout located') >= 1)
+    await vi.advanceTimersByTimeAsync(1_500)
+    await located
     await appendLimitError(src)
+    // The limit is read off the rollout (real I/O, no timer), the roll is refused before its kill, and the wait is armed
+    const firstRefusal = when(() => count('codex roll retry scheduled after abort') >= 1)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
-    await advance(100)
+    await firstRefusal
     // No successor: nothing killed, nothing spawned, and the wait is the one any refused respawn gets
     expect(h.events).toEqual(['copy'])
     expect(h.spawned).toEqual([])
@@ -2935,8 +2957,18 @@ describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
       'Could not move to the Codex B account: its Windows sandbox is not set up. Press Set up for it in Settings › Agent profiles.'
     )
     expect(logs.join('\n')).toMatch(/spawn refused: SANDBOX_UNAVAILABLE: windows-setup codex c2/)
-    // The wait's next round is refused for the same reason: the tab is not told again
-    await advance(20 * 60_000)
+    // The wait's next round is refused for the same reason: the tab is not told again. That round is several timers with
+    // real I/O between them (the wait, a resume in place on the first account and its Enter, the verdict that it produced
+    // no turn, then the respawn's preparation), so fake time is moved from timer to timer until the coordinator schedules
+    // its next retry
+    const secondRefusal = when(() => count('codex roll retry scheduled after abort') >= 2)
+    let refusedAgain = false
+    void secondRefusal.then(() => {
+      refusedAgain = true
+    })
+    // Each step fires the next timer due and yields a turn of the real event loop (fake-timers' async tick), so the file
+    // I/O a step starts completes in its own time
+    while (!refusedAgain) await vi.advanceTimersToNextTimerAsync()
     expect(asked).toBeGreaterThanOrEqual(2)
     expect(told).toHaveLength(1)
     expect(h.spawned).toEqual([])
