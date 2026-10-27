@@ -79,9 +79,10 @@ describe('measure-sandbox', () => {
       expect(s.filesystem.allowWrite, layout).toEqual(['.', '/t', '/m/.git'])
       expect(s.filesystem.denyRead, layout).toEqual(['~/.ssh'])
     }
-    // In a worktree `.git` is a file, so nothing is said under it (srt could not mount there)
+    // §6 keeps the workspace root's `.git` writable in both (found by run 3: without it Codex kept the worktree's git
+    // directory read-only); in a worktree `.git` is a file, so nothing is said under it (srt could not mount there)
     expect(codexS2Args({ ...o, layout: 'repo' }).join(' ')).toContain('":workspace_roots"={".git"="write", ".git/hooks"="read", ".git/config"="read"}')
-    expect(codexS2Args({ ...o, layout: 'worktree' }).join(' ')).not.toContain(':workspace_roots')
+    expect(codexS2Args({ ...o, layout: 'worktree' }).join(' ')).toContain('":workspace_roots"={".git"="write"}, ')
     expect(srtS2Settings({ ...o, layout: 'repo' }).filesystem.denyWrite).toEqual(['.git/hooks', '.git/config', '/m/.git/hooks', '/m/.git/config'])
     expect(srtS2Settings({ ...o, layout: 'worktree' }).filesystem.denyWrite).toEqual(['/m/.git/hooks', '/m/.git/config'])
   })

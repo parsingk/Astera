@@ -46,10 +46,12 @@ const toml = (s) => JSON.stringify(s)
 const commonHooks = (commonDir) => [`${commonDir}/hooks`, `${commonDir}/config`]
 
 /** Codex's `-c` arguments for the profile S2 means to pass (§6), with the session in a repository (`layout` 'repo') or
- *  in a worktree, whose `.git` is a file. */
+ *  in a worktree, whose `.git` is a file: the workspace root's `.git` writable in both (found by run 3: without it
+ *  Codex kept the worktree's git directory read-only), its hooks and config only where `.git` is a directory. */
 export function codexS2Args({ layout, commonDir, denied }) {
+  const roots = layout === 'repo' ? '{".git"="write", ".git/hooks"="read", ".git/config"="read"}' : '{".git"="write"}'
   const filesystem = [
-    ...(layout === 'repo' ? [`${toml(':workspace_roots')}={".git"="write", ".git/hooks"="read", ".git/config"="read"}`] : []),
+    `${toml(':workspace_roots')}=${roots}`,
     `${toml(commonDir)}="write"`,
     ...commonHooks(commonDir).map((p) => `${toml(p)}="read"`),
     ...denied.map((p) => `${toml(p)}="deny"`)
