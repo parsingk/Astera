@@ -88,7 +88,7 @@ const LIMITS = [
   'git hands its stored logins to any program that asks (git credential fill, measured 2026-10-26); git logins are not hidden.',
   'Docker’s credential helper answers any program that asks, whatever the Docker preset redirects.',
   'The app’s role on the Host pipe is a claim the Host cannot verify against a program of the same user.',
-  'A variable your shell startup files set (~/.zshenv, ~/.bash_profile, a PowerShell profile) can come back in the commands an agent runs through a shell that reads them; not measured.'
+  'A variable your shell startup files set can come back in the commands an agent runs through a shell that reads them. Codex starts its commands as a login shell: on macOS and Linux a login bash reads ~/.bash_profile (or ~/.bash_login, ~/.profile) and a login zsh ~/.zshenv, ~/.zprofile and ~/.zlogin (measured 2026-10-27), and on Windows PowerShell reads your profile. For Claude Code, which takes the aliases and functions of your startup file at session start, this is not measured.'
 ]
 
 export function createHostCredentials(d: {

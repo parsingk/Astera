@@ -256,6 +256,12 @@ describe('credentials commands', () => {
     expect(text).toMatch(/PATH/)
     expect(text).toMatch(/own empty locations/)
     expect(text).toMatch(/startup files/)
+    // The measure-sandbox runs (inventory §22.5): which files a login shell reads, and that Codex starts one
+    const startup = text.split('\n').find((l) => l.includes('startup files')) ?? ''
+    expect(startup).toMatch(/login shell/)
+    expect(startup).toMatch(/~\/\.zprofile/)
+    expect(startup).toMatch(/measured 2026-10-27/)
+    expect(startup).not.toMatch(/; not measured\.$/)
   })
 
   it('counts a change that landed as an effect', async () => {

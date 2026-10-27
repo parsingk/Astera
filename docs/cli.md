@@ -1190,8 +1190,9 @@ or whose version cannot be read, Claude Code hooks turned off by your organizati
 (a policy served from the claude.ai console cannot be seen), a codex that does not take `--no-daemon`, or no Astera
 executable to run the hook (Windows without the Host runtime). A project's own `disableAllHooks` does not turn the hook
 off. A session whose calls arrive with no sign that its hook ran is stopped, with the reason in its tab. Each tool call
-takes about 0.1 seconds longer: starting the hook took a median of 0.13 seconds on Windows, 0.08 to 0.13 on macOS and
-0.11 on Linux (20 starts a run; macOS and Linux in two runs on GitHub's runners). `enforceCoverage` in `policies show`
+takes about 0.1 seconds longer: starting the hook with the starter Rules took a median of 0.13 seconds on Windows, 0.08
+to 0.13 on macOS and 0.07 to 0.11 on Linux (20 starts a run; macOS and Linux in two runs on GitHub's runners).
+`enforceCoverage` in `policies show`
 says what is blocked for each provider and kind of session: what is typed into a Codex shell that is already running is
 not checked. Like observe, the mode counts for sessions started afterwards, and a session started in enforce keeps
 blocking until it ends: its blocked calls are recorded even after the mode is turned off.
