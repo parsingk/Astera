@@ -27,11 +27,11 @@ export function createGatewayHub(d: {
   log: (line: string) => void
   baseEnv?: NodeJS.ProcessEnv
   /** The app session a pty or proc id belongs to, for `sessionOfToken` (the workload token). */
-  sessionOfOwner?: (ownerId: string) => string | undefined
+  sessionOfOwner: (ownerId: string) => string | undefined
   /** Each session's tool call through the Gateway, for its credential-use record (credentials design §6). */
   onToolCall?: Parameters<typeof createGateway>[0]['onToolCall']
 }): GatewayHub {
-  const tokens = createTokenTable(d.sessionOfOwner)
+  const tokens = createTokenTable(d.sessionOfOwner, d.log)
   const pool = createUpstreamPool({ profileDir: d.profileDir, baseEnv: d.baseEnv ?? process.env, log: d.log })
   const readRegistry = () => readExtensionRegistry(d.profileDir)
   const gateway = createGateway({

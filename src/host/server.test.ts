@@ -940,6 +940,20 @@ describe('startHostServer', () => {
       expect(seen).toEqual([])
     })
 
+    it('a token that is not a string, or is absurdly long, is refused without asking the table', async () => {
+      const seen: Array<{ sessionId: string }> = []
+      const asked: string[] = []
+      const h = await start({ orch: recordingOrch(seen), sessionOfToken: (t) => (asked.push(t), null) })
+      const client = await h.connect()
+      let n = 0
+      for (const token of [null, 7, { length: 200000000 }, 'x'.repeat(257)]) {
+        client.send({ t: 'orch-call', call: `c${++n}`, cmd: 'status', args: {}, session: 'sess-claimed', token } as unknown as ClientMessage)
+        expect(await client.next()).toEqual({ t: 'orch-result', call: `c${n}`, status: 401, body: { error: 'workload token not recognised' } })
+      }
+      expect(asked).toEqual([])
+      expect(seen).toEqual([])
+    })
+
     it('a call without a token keeps the claimed session', async () => {
       const seen: Array<{ sessionId: string }> = []
       const h = await start({ orch: recordingOrch(seen), sessionOfToken })

@@ -679,7 +679,9 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           // token table cannot vouch for one, so it refuses it too.
           let sessionId = m.session ?? ''
           if (m.token !== undefined) {
-            const owner = deps.sessionOfToken?.(m.token) ?? null
+            // Checked before the table sees it: a token that is no string, or longer than any this Host made (43), is
+            // refused outright, so a hostile line cannot make the Host allocate for a guess.
+            const owner = typeof m.token === 'string' && m.token.length <= 256 ? (deps.sessionOfToken?.(m.token) ?? null) : null
             if (owner === null) {
               send({ t: 'orch-result', call: m.call, status: 401, body: { error: 'workload token not recognised' } })
               return

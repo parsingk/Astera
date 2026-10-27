@@ -736,6 +736,18 @@ describe('ChatSessionManager.retryWithBypass (design F5)', () => {
     expect(seen.at(-1)).toEqual({ type: 'notice', key: 'bypassed' })
   })
 
+  it('mints a new workload token for the respawn, under the same session id', () => {
+    const { manager, handles, spawned } = setup()
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj', bypassSignal: 'path' })
+    handles[0].emit({ type: 'exit', code: 8, errorDetail: 'error: Could not parse project manifest' })
+    manager.retryWithBypass(info.id)
+    const [a, b] = [spawned[0].opts.env.ASTERA_GATEWAY_TOKEN, spawned[1].opts.env.ASTERA_GATEWAY_TOKEN]
+    expect(a).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(b).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(b).not.toBe(a)
+    expect(spawned[1].opts.env.ASTERA_SESSION).toBe(info.id)
+  })
+
   // Slack in the Host Task 8 (the Task 4 carry): the Slack thread noted into the first attempt's note
   // follows the session into the retry's note, and spawnNote reads it, so the app registers the retry
   // with it (no second root) and a Host that owns Slack registers the new proc with it from its note.

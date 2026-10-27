@@ -1172,7 +1172,14 @@ describe('the public CLI against a real Host (§48, §49)', { timeout: 60_000 },
     const agent = await astera(['agent-profiles', 'archive', '--id', 'Reviewer'], { ...h.env, ASTERA_GATEWAY_TOKEN: token })
     expect(agent.code, agent.stdout).toBe(5)
     expect((await astera(['agent-profiles', 'list'], { ...h.env, ASTERA_GATEWAY_TOKEN: token })).code).toBe(0)
-    // A claim of another session does not change whose it is, and a token the Host does not know is refused.
+    // A claim of another session does not change whose it is: ASTERA_SESSION names a session that is no agent at all
+    // (a shell reads as no session), yet the token's session decides.
+    const claimed = await astera(['agent-profiles', 'archive', '--id', 'Reviewer'], { ...h.env, ASTERA_GATEWAY_TOKEN: token, ASTERA_SESSION: 'ses_other' })
+    expect(claimed.code, claimed.stdout).toBe(5)
+    // A session that has ended is refused: its token went with its pty.
+    h.ptyOf('ses_tokened').exit(0)
+    await until(async () => expect((await astera(['agent-profiles', 'list'], { ...h.env, ASTERA_GATEWAY_TOKEN: token })).stdout).toContain('workload token not recognised'))
+    // A token the Host does not know is refused.
     const dead = await astera(['agent-profiles', 'list'], { ...h.env, ASTERA_GATEWAY_TOKEN: 'D'.repeat(43) })
     expect(dead.code, dead.stdout).not.toBe(0)
     expect(dead.stdout).toContain('workload token not recognised')

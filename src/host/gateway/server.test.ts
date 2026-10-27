@@ -37,7 +37,7 @@ async function rig(o: { mode?: string; options?: McpExtension['options']; pool?:
   }
   const other: McpExtension = { ...echo, id: 'mcp-other', name: 'other' }
   const registry: ExtensionRegistry = { version: 1, entries: [echo, other] }
-  const tokens = createTokenTable()
+  const tokens = createTokenTable(() => undefined)
   tokens.register(TOKEN, { ownerId: 'p1', folder, grant: new Set(['mcp-echo']) })
   tokens.register(OTHER, { ownerId: 'p2', folder, grant: new Set(['mcp-echo']) })
   const pool = createUpstreamPool({ profileDir: path.join(root, 'profile'), baseEnv: process.env, log: () => {}, ...o.pool })

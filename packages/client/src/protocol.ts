@@ -107,6 +107,9 @@ export interface ClientHelloMessage {
  *  already answered. Additive, so HOST_PROTOCOL stays 3 — a Host from before it destructures
  *  `{cmd, args, session}` and runs the command unprotected, which is why the CLI must not send a
  *  *presented* id to a Host that has not announced the feature. */
+/** `token` is the calling session's workload token (its `ASTERA_GATEWAY_TOKEN`). A Host that knows it reads the session
+ *  from the token and ignores `session`, and refuses a token it does not hold with status 401. An older Host does not
+ *  know the field and uses `session`, so the CLI sends both. */
 export interface OrchCallMessage { t: 'orch-call'; call: string; cmd: string; args: Record<string, unknown>; session?: string; request?: string; token?: string }
 
 export interface HostHelloMessage {

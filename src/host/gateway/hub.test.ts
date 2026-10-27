@@ -31,7 +31,7 @@ async function rig() {
     log: () => {}
   })
   const procs = new ProcRegistry({ spawn: () => ({ pid: 2, onData: () => {}, onExit: () => {}, write() {}, kill() {} }) as unknown as RegistryProc, log: () => {} })
-  const hub = createGatewayHub({ profileDir, ptys, procs, log: () => {} })
+  const hub = createGatewayHub({ profileDir, ptys, procs, sessionOfOwner: () => undefined, log: () => {} })
   hubs.push(hub)
   const echo: McpExtension = {
     id: 'mcp-echo', kind: 'mcp', name: 'echo', transport: 'stdio', command: process.execPath, args: [FIXTURE, path.join(root, 'pids.txt')],

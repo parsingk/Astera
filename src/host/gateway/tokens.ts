@@ -1,9 +1,10 @@
 // The MCP Gateway's session tokens (Agent Control Plane release 2, Gateway design §4.3), which are also every session's
 // workload token (sandbox design §7). A session carries `ASTERA_GATEWAY_TOKEN` and `ASTERA_GATEWAY_GRANT` (empty when no
-// stdio server is shared) in its environment; the Host registers that token
-// when it opens the session's pty or chat proc, the one place every session passes whether the app or the Host spawned
-// it, and forgets it when that pty or proc exits. Nothing else makes a token live. Tokens stay in this process's memory
-// and are never logged.
+// stdio server is shared) in its environment; the Host registers that token when it opens the session's pty or chat
+// proc, the one place every session the Host holds passes whether the app or the Host spawned it, and forgets it when
+// that pty or proc exits. A session the app runs as its own child (the Host not answering) never passes there, so the
+// app strips the token from its spawn (main/host/ptyRouter.ts) and the session makes its calls as before. Nothing else
+// makes a token live. Tokens stay in this process's memory and are never logged.
 import { timingSafeEqual } from 'node:crypto'
 import type { PtyRegistry } from '../registry'
 import type { ProcRegistry } from '../procRegistry'
@@ -31,7 +32,7 @@ export interface TokenTable {
 }
 
 /** `sessionOfOwner` turns a binding's pty or proc id into the app's session id (host/index.ts). */
-export function createTokenTable(sessionOfOwner: (ownerId: string) => string | undefined = () => undefined): TokenTable {
+export function createTokenTable(sessionOfOwner: (ownerId: string) => string | undefined, log: (line: string) => void = () => {}): TokenTable {
   const byToken = new Map<string, TokenBinding>()
   const lookup = (token: string): TokenBinding | null => {
     // Compared byte for byte in constant time against every live token, so how long a guess takes says nothing
@@ -44,7 +45,16 @@ export function createTokenTable(sessionOfOwner: (ownerId: string) => string | u
     return found
   }
   return {
-    register: (token, b) => void byToken.set(token, b),
+    register: (token, b) => {
+      // The first registration wins: a terminal an app opens from inside a session inherits that session's token, and
+      // must not take it over. The token itself is never written to the log.
+      const held = lookup(token)
+      if (held && held.ownerId !== b.ownerId) {
+        log(`gateway: a token already held by ${held.ownerId} was offered again by ${b.ownerId}; kept with the first`)
+        return
+      }
+      byToken.set(token, b)
+    },
     forgetOwner: (ownerId) => {
       const gone = [...byToken].filter(([, b]) => b.ownerId === ownerId).map(([t]) => t)
       for (const t of gone) byToken.delete(t)

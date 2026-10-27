@@ -69,6 +69,20 @@ describe('hostSpawnPlan', () => {
     expect('ASTERA_SESSION' in dirty.options.env).toBe(false)
     expect('CLAUDE_CODE_SESSION_ID' in dirty.options.env).toBe(false)
   })
+
+  it('does not pass a session workload token or its grant through', () => {
+    const dirty = hostSpawnPlan({
+      execPath: 'x',
+      entryPath: 'y',
+      profileDir: 'p',
+      logPath: 'l',
+      version: 'v',
+      env: { PATH: '/usr/bin', ASTERA_GATEWAY_TOKEN: 'T'.repeat(43), ASTERA_GATEWAY_GRANT: 'mcp-a' }
+    })
+    expect(dirty.options.env.PATH).toBe('/usr/bin')
+    expect('ASTERA_GATEWAY_TOKEN' in dirty.options.env).toBe(false)
+    expect('ASTERA_GATEWAY_GRANT' in dirty.options.env).toBe(false)
+  })
 })
 
 describe('hostWorkerBaseEnv', () => {

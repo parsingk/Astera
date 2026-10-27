@@ -1272,6 +1272,25 @@ describe('callHost — 명령 하나를 Host 에 묻는다', () => {
     expect(await p).toEqual({ status: 200, body: { jobs: [] } })
   })
 
+  it('sends the workload token from ASTERA_GATEWAY_TOKEN, and omits the field when it is empty or unset', () => {
+    const saved = process.env.ASTERA_GATEWAY_TOKEN
+    try {
+      const sentWith = (value: string | undefined): ClientMessage => {
+        if (value === undefined) delete process.env.ASTERA_GATEWAY_TOKEN
+        else process.env.ASTERA_GATEWAY_TOKEN = value
+        const f = fakeConn()
+        void callHost({ conn: f.conn, cmd: 'status', args: {}, sessionId: 's', timeoutMs: 1000 })
+        return f.sent[0]
+      }
+      expect(sentWith('T'.repeat(43))).toMatchObject({ token: 'T'.repeat(43) })
+      expect('token' in sentWith('')).toBe(false)
+      expect('token' in sentWith(undefined)).toBe(false)
+    } finally {
+      if (saved === undefined) delete process.env.ASTERA_GATEWAY_TOKEN
+      else process.env.ASTERA_GATEWAY_TOKEN = saved
+    }
+  })
+
   // 답은 자기 call 을 이름으로 부른다 — 남의 것을 자기 답으로 읽으면 안 된다.
   it('다른 call 의 답은 자기 답이 아니다', async () => {
     const f = fakeConn()

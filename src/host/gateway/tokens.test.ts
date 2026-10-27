@@ -22,7 +22,7 @@ function rig(failSpawn = false) {
       ({ pid: 2, onData: () => {}, onExit: (cb: (e: { exitCode: number }) => void) => procExit.push(cb), write() {}, kill() {} }) as unknown as RegistryProc,
     log: () => {}
   })
-  const table = createTokenTable()
+  const table = createTokenTable(() => undefined)
   const forgotten: string[][] = []
   watchGatewayTokens({ ptys, procs, table, onForget: (t) => forgotten.push(t) })
   const env = (token = TOKEN) => ({ PATH: 'x', ASTERA_GATEWAY_TOKEN: token, ASTERA_GATEWAY_GRANT: 'mcp-linear,mcp-files' })
@@ -71,6 +71,19 @@ describe('gateway session tokens', () => {
     h.ptys.open({ id: 'p1', file: 'claude', args: [], opts: { cwd: 'D:/repo', cols: 80, rows: 24, env: { PATH: 'x', ASTERA_GATEWAY_TOKEN: TOKEN, ASTERA_GATEWAY_GRANT: '' } } })
     expect(h.table.lookup(TOKEN)).toMatchObject({ ownerId: 'p1', folder: 'D:/repo' })
     expect([...h.table.lookup(TOKEN)!.grant]).toEqual([])
+  })
+
+  it('the first registration of a live token wins; a second under another owner is ignored and logged without the token', () => {
+    const lines: string[] = []
+    const table = createTokenTable((o) => o, (m) => lines.push(m))
+    table.register(TOKEN, { ownerId: 'p1', folder: 'D:/a', grant: new Set() })
+    table.register(TOKEN, { ownerId: 'p2', folder: 'D:/b', grant: new Set(['mcp-x']) })
+    expect(table.lookup(TOKEN)).toMatchObject({ ownerId: 'p1', folder: 'D:/a' })
+    expect(table.sessionOf(TOKEN)).toBe('p1')
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).not.toContain(TOKEN)
+    table.register(TOKEN, { ownerId: 'p1', folder: 'D:/a', grant: new Set() })
+    expect(lines).toHaveLength(1)
   })
 
   it('answers the app session of a live token through the owner mapping, and null for a dead one', () => {

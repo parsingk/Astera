@@ -20,6 +20,14 @@
 // the quit path and the close confirmation both read that.
 import type { PtyFactory } from '../../core/sessions/pty'
 
+/** The environment of a session that runs as the app's own child: without its workload token and grant. Only the Host's
+ *  registry makes a token live, so a token on a session outside it would be refused on every call for the session's whole
+ *  life; without one the session behaves as it did before tokens (and it cannot reach the Gateway either way). */
+export function withoutWorkloadToken<E extends Record<string, string | undefined>>(env: E): E {
+  const { ASTERA_GATEWAY_TOKEN: _token, ASTERA_GATEWAY_GRANT: _grant, ...rest } = env
+  return rest as unknown as E
+}
+
 export function createPtyRouter(fallback: PtyFactory): {
   factory: PtyFactory
   use(f: PtyFactory | null): void
@@ -34,7 +42,7 @@ export function createPtyRouter(fallback: PtyFactory): {
       // that would have to be kept in step with every spawn, exit and adoption. `attach` in
       // `createHostPtyFactory` stamps its own, being the one creation path that never comes here.
       const outlivesApp = current !== null
-      const p = (current ?? fallback)(file, args, opts)
+      const p = current ? current(file, args, opts) : fallback(file, args, { ...opts, env: withoutWorkloadToken(opts.env) })
       p.outlivesApp = outlivesApp
       return p
     },

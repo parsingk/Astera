@@ -934,7 +934,8 @@ export class ChatSessionManager {
     live.proc.onExit(() => {})
     live.proc.onLine(() => {})
 
-    const env = { ...materials.env, ...BYPASS_ENV }
+    // A new token for the new process, the session id the same: the old process's went when it exited (Host registry).
+    const env = { ...materials.env, ...gatewayTokenEnv({ gatewayGrant: materials.env.ASTERA_GATEWAY_GRANT?.split(',').filter((s) => s !== '') ?? [] }), ...BYPASS_ENV }
     // design F5 fix round 1 (Critical 2): the durable mark goes into the note itself, not only the
     // in-memory `bypassed` flag `track()` sets below — the same reasoning `spawn()`'s own
     // `startWithBypass` branch gives. `materials.meta` is the *original* attempt's meta, built before

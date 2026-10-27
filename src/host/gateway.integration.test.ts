@@ -66,7 +66,7 @@ function rig() {
     log: () => {}
   })
   const procs = new ProcRegistry({ spawn: () => ({ pid: 1, onData: () => {}, onExit: () => {}, write() {}, kill() {} }) as unknown as RegistryProc, log: () => {} })
-  const hub = createGatewayHub({ profileDir: profile, ptys: registry, procs, log: () => {} })
+  const hub = createGatewayHub({ profileDir: profile, ptys: registry, procs, sessionOfOwner: () => undefined, log: () => {} })
   hubs.push(hub)
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH, ASTERA_HOST_PROFILE_DIR: profile, ASTERA_HOST_CLI_EXEC: path.join(dir, 'Astera.exe'),
