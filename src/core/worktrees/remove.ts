@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { WorktreeRemoveResult } from '../types'
 import { isPathWithin, isSamePath } from '../files/tree'
+import { clearReadOnly } from '../files/clearReadOnly'
 import { git, gitVersionAtLeast, isCleanWorktree, listGitWorktrees, GIT_WRITE_TIMEOUT_MS } from './git'
 
 /** Options for a call that changes the repository — see GIT_WRITE_TIMEOUT_MS. A `worktree remove`
@@ -60,6 +61,16 @@ async function detachBeforeRemove(
     throw new Error(
       `LINKS_UNVERIFIED: the links in the folder could not all be checked and taken out, nothing was removed (${worktreePath}): ${r.reason}`
     )
+}
+
+/** Whether a failed removal was a permission refusal (win32 only): an error's EPERM/EACCES code, or
+ *  git's own wording on stderr, since git reports it as text rather than a code. */
+function isPermissionFailure(failure: unknown): boolean {
+  if (process.platform !== 'win32') return false
+  const code = (failure as { code?: unknown } | null)?.code
+  if (code === 'EPERM' || code === 'EACCES') return true
+  const text = typeof failure === 'string' ? failure : failure instanceof Error ? failure.message : ''
+  return /permission denied|access is denied|EPERM|EACCES/i.test(text)
 }
 
 /** Dangerous paths: the repo itself, a parent that contains the repo, home, a parent that contains home, the filesystem root */
@@ -225,7 +236,17 @@ export async function removeWorktree(args: {
       try {
         await fs.rm(info.path, { recursive: true, force: true })
       } catch (err) {
-        throw new Error(`GIT_REMOVE_FAILED: ${err instanceof Error ? err.message : String(err)}`)
+        // The same one retry as for git's removal below, after the read-only attribute is cleared.
+        let failure = err
+        if (isPermissionFailure(err) && (await clearReadOnly(info.path)) > 0) {
+          try {
+            await fs.rm(info.path, { recursive: true, force: true })
+            failure = null
+          } catch (again) {
+            failure = again
+          }
+        }
+        if (failure) throw new Error(`GIT_REMOVE_FAILED: ${failure instanceof Error ? failure.message : String(failure)}`)
       }
     }
   } else {
@@ -244,12 +265,15 @@ export async function removeWorktree(args: {
       }
       await detachBeforeRemove(info.path, args.force === true, args.detach ?? detachLinks)
     }
-    const rm = await git(
-      args.force
-        ? ['worktree', 'remove', '--force', info.path]
-        : ['worktree', 'remove', info.path],
-      write(info.repoPath)
-    )
+    const removeArgs = args.force
+      ? ['worktree', 'remove', '--force', info.path]
+      : ['worktree', 'remove', info.path]
+    let rm = await git(removeArgs, write(info.repoPath))
+    // Files the sandbox's user wrote can be read-only to this one (Windows only), which fails the
+    // removal with a permission error part-way. Clearing the attribute and trying once more is
+    // enough; a second failure is reported as it is.
+    if (!rm.ok && isPermissionFailure(`${rm.stderr}\n${rm.stdout}`) && (await clearReadOnly(info.path)) > 0)
+      rm = await git(removeArgs, write(info.repoPath))
     if (!rm.ok) throw new Error(`GIT_REMOVE_FAILED: ${rm.stderr || rm.stdout}`)
     await git(['worktree', 'prune'], write(info.repoPath))
   }

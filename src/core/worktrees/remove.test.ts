@@ -52,6 +52,18 @@ describe('removeWorktree', () => {
     expect(reg.get(info.id)).toBeNull()
   })
 
+  it.runIf(process.platform === 'win32')('a worktree with a read-only file is removed', async () => {
+    const { info } = await createWorktree({ repoPath: repo, name: 'readonly', registry: reg })
+    await fs.mkdir(path.join(info.path, 'objs'), { recursive: true })
+    const f = path.join(info.path, 'objs', 'obj.bin')
+    await fs.writeFile(f, 'x', 'utf8')
+    await fs.chmod(f, 0o444)
+    const r = await removeWorktree({ id: info.id, force: true, registry: reg, isPathInUse: noUse })
+    expect(r.removed).toBe(true)
+    expect(existsSync(info.path)).toBe(false)
+    expect(reg.get(info.id)).toBeNull()
+  })
+
   it('머지된 브랜치는 -d로 삭제된다', async () => {
     const { info } = await createWorktree({ repoPath: repo, name: 'merged', registry: reg })
     await fs.writeFile(path.join(info.path, 'm.txt'), 'm', 'utf8')
