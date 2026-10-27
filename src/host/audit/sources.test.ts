@@ -1041,3 +1041,55 @@ describe('pruneEnforceFiles', () => {
     await pruneEnforceFiles(path.join(enforceDir, 'missing'), new Set())
   })
 })
+
+// Codex 0.160's code mode (measured 2026-10-27): a call the hook stopped inside an `exec` script has the script's own
+// rollout record beside it, under another id; the script failed because of that one call
+describe('the enforce file and a Codex exec script the hook stopped', () => {
+  const EXEC = (at: number, id: string, source: string) =>
+    rollout(at, 'response_item', { type: 'custom_tool_call', name: 'exec', input: source, call_id: id, status: 'completed' })
+  const STOPPED = (at: number, id: string) =>
+    rollout(at, 'response_item', {
+      type: 'custom_tool_call_output',
+      call_id: id,
+      output: [
+        { type: 'input_text', text: 'Script failed\nWall time 0.7 seconds\nOutput:\n' },
+        { type: 'input_text', text: 'Script error:\nCommand blocked by PreToolUse hook: Blocked by Astera Rules: git.remote.write is denied.. Command: git push origin main' }
+      ]
+    })
+  const ONE = 'const r = await tools.exec_command({cmd:"git push origin main"}); text(r.output)'
+  const TWO = 'await tools.exec_command({cmd:"npm test"}); await tools.exec_command({cmd:"git push origin main"})'
+  const blockedLine = { at: T0 + 1000, provider: 'codex', tool: 'Bash', id: 'exec-1', blocked: 'starter-git-remote-write', action: 'git.remote.write', target: 'git push', confidence: 'high' }
+
+  const run = async (restore: Record<string, unknown>, script: string) => {
+    const dir = await tempDir()
+    const enforceDir = await tempDir()
+    const file = path.join(dir, 'rollout-2026-10-27T01-00-00-th.jsonl')
+    await fs.writeFile(file, '')
+    const ptys = fakeRegistry()
+    const { events, recorder } = capture()
+    let now = T0
+    const { sources } = await sourcesFor({ recorder, ptys, enforceDir, now: () => now })
+    ptys.open('pty1', note('session', 'sess_cx', restore))
+    now += 3000
+    await fs.writeFile(path.join(enforceDir, 'sess_cx.jsonl'), lineOf(blockedLine))
+    await fs.appendFile(file, [EXEC(T0 + 900, 'call_1', script), STOPPED(T0 + 1100, 'call_1')].join('\n') + '\n')
+    ptys.note('pty1', note('session', 'sess_cx', { ...restore, rolloutPath: file }))
+    await sources.poll()
+    await sources.poll()
+    sources.dispose()
+    return events.map((e) => [e.source, e.tool, e.status])
+  }
+
+  it('keeps the stopped call once, as blocked, when the script made only that call', async () => {
+    expect(await run({ ...OBSERVED, enforced: true }, ONE)).toEqual([['codex-hook', 'Bash', 'blocked']])
+  })
+
+  it('keeps a script that made other calls too, and a session not in Enforce reports the script as it went', async () => {
+    expect(await run({ ...OBSERVED, enforced: true }, TWO)).toEqual([
+      ['codex-hook', 'Bash', 'blocked'],
+      ['codex-rollout', 'exec', 'failed']
+    ])
+    // Another hook (the person's own) stopped it: no file of Astera's says so, so the script is the record
+    expect(await run(OBSERVED, ONE)).toEqual([['codex-rollout', 'exec', 'failed']])
+  })
+})

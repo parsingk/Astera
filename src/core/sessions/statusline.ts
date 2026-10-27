@@ -337,6 +337,9 @@ export class StatusLineManager {
   private readonly platform: NodeJS.Platform
   private readonly execPath: string
   private readonly appImage: string | undefined
+  private readonly findRuntime: (() => Promise<string | null>) | undefined
+  /** A Host runtime found installed, for the Enforce hook only, when the capture scripts have no node of Astera's. */
+  private runtimeExe: string | null = null
 
   constructor(
     private userDataDir: string,
@@ -346,8 +349,16 @@ export class StatusLineManager {
     /** Where a folder it cannot use is told. */
     private log: (m: string) => void = (m) => console.warn(m),
     /** Where the Enforce hook's interpreter comes from (enforceInterpreter): the process's own, unless a test says. */
-    host: { platform?: NodeJS.Platform; execPath?: string; appImage?: string } = {}
+    host: {
+      platform?: NodeJS.Platform
+      execPath?: string
+      appImage?: string
+      /** Windows: a Host runtime an Astera installed (core/host/installedRuntime.ts), asked when the capture node is a
+       *  bare `node`, so the hook still runs with Astera's own node there. */
+      findRuntime?: () => Promise<string | null>
+    } = {}
   ) {
+    this.findRuntime = host.findRuntime
     this.platform = host.platform ?? process.platform
     this.execPath = host.execPath ?? process.execPath
     // A test that names the executable names the AppImage too, or there is none
@@ -544,7 +555,9 @@ export class StatusLineManager {
 
   /** The Enforce hook's command line for `provider`, or null where there is no Astera node to run it (enforceInterpreter). */
   enforceHookCommand(provider: 'claude' | 'codex'): string | null {
-    const i = enforceInterpreter({ platform: this.platform, captureNode: this.nodePath, execPath: this.execPath, appImage: this.appImage })
+    const i =
+      enforceInterpreter({ platform: this.platform, captureNode: this.nodePath, execPath: this.execPath, appImage: this.appImage }) ??
+      (this.runtimeExe !== null ? { file: this.runtimeExe } : null)
     return i === null ? null : enforceCommand(i, this.enforceHookPath, provider)
   }
 
@@ -559,6 +572,8 @@ export class StatusLineManager {
    */
   async ensureEnforceFiles(): Promise<boolean> {
     await this.ensureObserveFiles()
+    if (this.platform === 'win32' && this.findRuntime && enforceInterpreter({ platform: 'win32', captureNode: this.nodePath, execPath: this.execPath }) === null)
+      this.runtimeExe = await this.findRuntime().catch(() => null)
     const b = this.built
     const command = this.enforceHookCommand('claude')
     if (!b || !this.observeReady || command === null) {

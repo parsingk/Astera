@@ -876,6 +876,17 @@ describe('humanFor — audit and policies', () => {
     )
   })
 
+  // Enforce: what it blocks while it is on, as the screen's table follows the mode
+  it('policies show in enforce prints what enforce blocks', () => {
+    const coverage = [{ provider: 'codex', kind: 'chat', classes: { shell: { level: 'seen' }, 'file-read': { level: 'seen' }, 'file-write': { level: 'seen' }, mcp: { level: 'seen' }, network: { level: 'seen' } } }]
+    const enforceCoverage = [
+      { provider: 'codex', kind: 'chat', classes: { shell: { level: 'enforced' }, 'file-read': { level: 'partial', note: 'shell-text-only' }, 'file-write': { level: 'enforced' }, mcp: { level: 'enforced' }, network: { level: 'partial' } } }
+    ]
+    const out = humanFor('policies-show', { mode: 'enforce', policy: { ...policy, mode: 'enforce' }, coverage, enforceCoverage })
+    expect(out?.split('\n').at(-1)).toBe('codex chat  enforced  partial (shell text only)  enforced    enforced  partial')
+    expect(humanFor('policies-show', { mode: 'observe', policy, coverage, enforceCoverage })).not.toContain('enforced')
+  })
+
   it('a change answers the rules as they are now', () => {
     for (const cmd of ['policies-set-mode', 'policies-set-otherwise', 'policies-rules-add', 'policies-rules-edit', 'policies-rules-remove', 'policies-rules-move', 'policies-rules-reset'])
       expect(humanFor(cmd, { mode: 'observe', policy, rule: policy.rules[2] }), cmd).toBe(rules.join('\n'))

@@ -749,11 +749,11 @@ astera agent-profiles archive --id <profileId|name>
 astera agent-profiles restore --id <profileId|name>
 astera agent-profiles delete  --id <profileId|name>
 
-astera audit   list    [--session <sessionId>] [--job <jobId>] [--run <runId>] [--task <taskId>] [--agent-profile <id|name>] [--action <action>] [--decision <allow|would-deny|unknown>] [--since <time>] [--until <time>] [--before-id <recordId>] [--limit <n>]
-astera audit   summary [--session <sessionId>] [--job <jobId>] [--run <runId>] [--task <taskId>] [--agent-profile <id|name>] [--action <action>] [--decision <allow|would-deny|unknown>] [--since <time>] [--until <time>]
+astera audit   list    [--session <sessionId>] [--job <jobId>] [--run <runId>] [--task <taskId>] [--agent-profile <id|name>] [--action <action>] [--decision <allow|would-deny|unknown|blocked>] [--since <time>] [--until <time>] [--before-id <recordId>] [--limit <n>]
+astera audit   summary [--session <sessionId>] [--job <jobId>] [--run <runId>] [--task <taskId>] [--agent-profile <id|name>] [--action <action>] [--decision <allow|would-deny|unknown|blocked>] [--since <time>] [--until <time>]
 
 astera policies show
-astera policies set-mode      --mode <compatibility|observe>
+astera policies set-mode      --mode <compatibility|observe|enforce>
 astera policies set-otherwise --effect <allow|deny>
 astera policies rules-add     --effect <allow|deny> --action <action> [--scope <inside-project|outside-project>] [--at <n>]
 astera policies rules-edit    --id <ruleId> [--effect <allow|deny>] [--action <action>] [--scope <inside-project|outside-project> | --clear-scope]
@@ -1177,6 +1177,19 @@ with. `compatibility`, the default, observes nothing, and observe writes nothing
 shows are kept in `token-totals.json` in every mode); turning observe off keeps the records and the rules. The Host
 keeps the records in the profile (`audit/`, a file a day, for 30 days or up to 50 MB) and the rules beside them
 (`audit-policy.json`), so these commands work with Astera closed.
+
+**`policies set-mode --mode enforce` stops what the rules deny.** Every Claude Code or Codex session Astera starts
+afterwards runs a blocking hook before each tool call, with Astera's own executable (the Host runtime on Windows, the
+app run as node elsewhere). The hook reads the rules at that call and decides it there: a call the rules deny does not
+run, the agent is told `Blocked by Astera Rules: …`, and the call is recorded with the decision `blocked` and the rule
+(`ruleId`) that stopped it. Before any rule, an agent session cannot write Astera's profile folder or run an `astera
+policies`, `credentials` or `agent-profiles` command that changes them, and a rules file it cannot read lets only reads
+through. An agent running as you can still write those files from a script it runs. A session does not start in
+enforce when it cannot be protected: Claude Code older than 2.1.306, codex older than 0.160.0, a version that cannot be
+read, or no Astera executable to run the hook (Windows without the Host runtime). A session whose calls arrive with no
+sign that its hook ran is stopped, with the reason in its tab. Each tool call takes about 0.1 seconds longer.
+`enforceCoverage` in `policies show` says what is blocked for each provider and kind of session. Like observe, the mode
+counts for sessions started afterwards.
 
 The rules say what each call would get if Astera enforced them. They are tried in order: the first rule whose action
 matches a call decides it, `allow` or `would-deny`, and `otherwise` decides a call no rule matches. A rule's action is

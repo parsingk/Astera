@@ -50,8 +50,10 @@ import type { AuditSource } from '../../core/audit/store'
 import type { PtyMeta } from '../../core/host/protocol'
 import type { AuditEvent, AuditRecorder } from './recorder'
 
-/** One finished call as a source reads it, before it is told whose session it was. */
-export type ObservedCall = Omit<AuditEvent, 'sessionId' | 'source'>
+/** One finished call as a source reads it, before it is told whose session it was. `stoppedByHook`: a Codex call whose
+ *  output says a PreToolUse hook stopped its one command (`hookStopped`), which in a session started in Enforce is the
+ *  enforce file's to record. */
+export type ObservedCall = Omit<AuditEvent, 'sessionId' | 'source'> & { stoppedByHook?: true }
 
 /** How often the rollouts are read forward: the rollout watcher's own period. */
 export const ROLLOUT_POLL_MS = 1_000
@@ -254,6 +256,17 @@ function execResults(rest: string, runsCommand: boolean): ObservedCall['status']
 /** Whether an exec script runs a command: one of Codex's shell tools called from it. */
 const EXEC_RUNS_COMMAND = /\btools\.(?:exec_command|shell_command|shell|local_shell)\s*\(/
 
+/** Codex's words when a PreToolUse hook refused a call (codex 0.160, measured 2026-10-27). */
+const HOOK_STOPPED = /blocked by PreToolUse hook/i
+/** Whether a call's output says a hook stopped it, and it was one call: a shell command, or an exec script that calls one
+ *  tool (Codex's code mode, whose inner call the hook sees under an id of its own). A script of several calls ran the
+ *  others, and stays the record of them. */
+function hookStopped(kind: 'shell' | 'exec' | 'patch', text: string | null, input: unknown): boolean {
+  if (text === null || !HOOK_STOPPED.test(text)) return false
+  if (kind !== 'exec') return true
+  return typeof input === 'string' && (input.match(/\btools\.[A-Za-z_][A-Za-z0-9_]*\s*\(/g) ?? []).length === 1
+}
+
 /** How a call went, from the text of its output (and for an exec script, the script it ran): ok, failed, or unknown
  *  when it says nothing (or the call goes on). */
 function outcomeOf(kind: 'shell' | 'exec' | 'patch', text: string | null, input?: unknown): ObservedCall['status'] {
@@ -310,7 +323,12 @@ export function codexRolloutCalls(now: () => number = Date.now): RolloutReader {
           const held = id === null ? undefined : waiting.get(id)
           if (!held) continue
           waiting.delete(id!)
-          out.push({ ...held.call, status: outcomeOf(held.kind, outputText(p.output), held.call.input) })
+          const text = outputText(p.output)
+          out.push({
+            ...held.call,
+            status: outcomeOf(held.kind, text, held.call.input),
+            ...(hookStopped(held.kind, text, held.call.input) ? { stoppedByHook: true as const } : {})
+          })
           continue
         }
         const t = Date.parse(str(o?.timestamp) ?? '')
@@ -561,8 +579,10 @@ export function createAuditSources(d: {
   const hand = (sessionId: string, source: AuditSource, calls: ObservedCall[]): void => {
     const f = enforcing.get(sessionId)
     if (f) readEnforce(sessionId)
-    for (const c of calls) {
+    for (const { stoppedByHook, ...c } of calls) {
       if (f && c.dedupeKey !== undefined && f.blocked.has(c.dedupeKey)) continue
+      // Codex's report of the one call the hook stopped, under its own id: the file's blocked line is that call
+      if (f && stoppedByHook) continue
       d.recorder.record({ sessionId, source, ...c })
     }
   }

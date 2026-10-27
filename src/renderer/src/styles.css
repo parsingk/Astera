@@ -1299,6 +1299,7 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .security-table td.is-seen { color: var(--ok); }
 .security-table td.is-partial { color: var(--warn); }
 .security-table td.is-none { color: var(--text-faint); }
+.security-table td.is-enforced { color: var(--danger); font-weight: 600; }
 /* A rule: its place, its three fields, then up, down and remove, as an account row of an agent profile reads. The list's
    own numbers are its places, so the <ol>'s markers and indent are taken off. */
 .security-rules { margin: 0; padding: 0; list-style: none; }
@@ -1308,6 +1309,9 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .security-rule > button:disabled { opacity: .3; cursor: default; }
 .security-rule-fields { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .security-rule-action { min-width: 200px; }
+/* Enforce's built-ins: listed above the person's rules, greyed, with nothing to change */
+.security-rule.is-builtin { color: var(--text-faint); }
+.security-builtin-tag { flex: none; font-size: 11px; color: var(--text-faint); }
 .security-new-rule { flex-wrap: wrap; }
 .security-audit { display: flex; flex-direction: column; gap: 12px; }
 .security-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
@@ -1316,6 +1320,8 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .security-decision.is-allow { color: var(--ok); background: var(--ok-bg); }
 .security-decision.is-would-deny { color: var(--danger); background: var(--danger-bg); }
 .security-decision.is-unknown { color: var(--text-dim); background: var(--elevated); }
+/* Stopped by Enforce before it ran: solid, apart from would-deny's tint */
+.security-decision.is-blocked { color: #fff; background: var(--danger); }
 /* A credential use's outcome, in the same badge (credentials design §7) */
 .security-decision.is-ok { color: var(--ok); background: var(--ok-bg); }
 .security-decision.is-failed { color: var(--danger); background: var(--danger-bg); }

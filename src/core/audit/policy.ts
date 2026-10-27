@@ -253,3 +253,6 @@ export const COVERAGE: readonly CoverageRow[] = [
   },
   { provider: 'codex', kind: 'chat', classes: { shell: SEEN, 'file-read': SHELL_TEXT_ONLY, 'file-write': SEEN, mcp: SEEN, network: { level: 'partial' } } }
 ]
+
+// What Enforce blocks, in a module of its own so the renderer can read it too (coverage.ts)
+export { COVERAGE_ENFORCE } from './coverage'

@@ -8,7 +8,7 @@ import { removeFixture } from '../testFixtures'
 import { profilePaths } from '../profile/paths'
 import { RepairNeeded } from '../settings/repairNeeded'
 import { resolveAction, type AuditAction } from './resolve'
-import { AUDIT_ACTIONS, COVERAGE, STARTER_POLICY, decide, isRuleAction, readAuditPolicy, readPolicyMode, writeAuditPolicy, type AuditPolicy, type AuditRule, parseAuditPolicy, isObserving } from './policy'
+import { AUDIT_ACTIONS, COVERAGE, COVERAGE_ENFORCE, STARTER_POLICY, decide, isRuleAction, readAuditPolicy, readPolicyMode, writeAuditPolicy, type AuditPolicy, type AuditRule, parseAuditPolicy, isObserving } from './policy'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -574,5 +574,23 @@ describe('decide, a denied command the resolver must reach', () => {
     expect(decide(bash('cat <<"EOF"\n$(rm -rf ../x)\nEOF'), p)).toEqual({ decision: 'allow' })
     expect(decide(bash('cat <<EOF\n\\$(rm -rf ../x)\nEOF'), p)).toEqual({ decision: 'allow' })
     expect(decide(bash('cat <<EOF\n$(git rev-parse HEAD)\nEOF'), p)).toEqual({ decision: 'allow' })
+  })
+})
+
+// Enforce (enforce design §5, anti-goal: a screen that says Enforced where only a record exists)
+describe('COVERAGE_ENFORCE', () => {
+  it('never says enforced for a class the hook does not reach', () => {
+    const cell = (provider: 'claude' | 'codex', kind: 'terminal' | 'chat', c: 'shell' | 'file-read' | 'file-write' | 'mcp' | 'network') =>
+      COVERAGE_ENFORCE.find((r) => r.provider === provider && r.kind === kind)?.classes[c]
+    expect(COVERAGE_ENFORCE).toHaveLength(4)
+    for (const kind of ['terminal', 'chat'] as const) {
+      for (const c of ['shell', 'file-read', 'file-write', 'mcp'] as const) expect(cell('claude', kind, c)?.level, `claude ${kind} ${c}`).toBe('enforced')
+      for (const c of ['shell', 'file-write', 'mcp'] as const) expect(cell('codex', kind, c)?.level, `codex ${kind} ${c}`).toBe('enforced')
+      // Codex reads files through the shell, which the hook reads as text only
+      expect(cell('codex', kind, 'file-read')).toEqual({ level: 'partial', note: 'shell-text-only' })
+      for (const pr of ['claude', 'codex'] as const) expect(cell(pr, kind, 'network')?.level, `${pr} ${kind} network`).toBe('partial')
+    }
+    // Observe's table never says enforced
+    expect(COVERAGE.flatMap((r) => Object.values(r.classes)).some((c) => c.level === 'enforced')).toBe(false)
   })
 })

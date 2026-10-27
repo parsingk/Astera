@@ -6,7 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { removeFixture } from '../../core/testFixtures'
 import { profilePaths } from '../../core/profile/paths'
-import { COVERAGE, STARTER_POLICY, readAuditPolicy, readPolicyMode, writeAuditPolicy, type AuditPolicy, type AuditRule } from '../../core/audit/policy'
+import { COVERAGE, COVERAGE_ENFORCE, STARTER_POLICY, readAuditPolicy, readPolicyMode, writeAuditPolicy, type AuditPolicy, type AuditRule } from '../../core/audit/policy'
 import { POLICY_CHANGES, POLICY_COMMANDS, createHostPolicies } from './policyCommands'
 
 const dirs: string[] = []
@@ -39,7 +39,8 @@ describe('createHostPolicies', () => {
     const h = await rig()
     const r = await h.call('policies-show')
     expect(r.status).toBe(200)
-    expect(r.body).toEqual({ mode: 'compatibility', policy: STARTER_POLICY, coverage: COVERAGE })
+    // With what Enforce would block, so the screen's preview says it before Enforce is on
+    expect(r.body).toEqual({ mode: 'compatibility', policy: STARTER_POLICY, coverage: COVERAGE, enforceCoverage: COVERAGE_ENFORCE })
     expect(r.marks.effects).toBe(0)
     expect(await h.exists()).toBe(false)
   })

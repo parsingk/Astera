@@ -56,7 +56,8 @@ export type CoverageClass = 'shell' | 'file-read' | 'file-write' | 'mcp' | 'netw
 export type CoverageNote = 'web-tools-only' | 'shell-text-only' | 'web-search-and-shell-text'
 
 export interface CoverageCell {
-  level: 'seen' | 'partial' | 'none'
+  /** `enforced`: Enforce's hook decides every call of the class before it runs (COVERAGE_ENFORCE only). */
+  level: 'seen' | 'partial' | 'none' | 'enforced'
   note?: CoverageNote
 }
 

@@ -239,7 +239,8 @@ function coverageText(rows: Record<string, unknown>[]): string {
 }
 
 /** The observe switch and the rules, a row each in the order they are tried, its place first (what `--at` and `--to`
- *  take); with `coverage`, as `policies show` answers, what observe can see under them. */
+ *  take); with `coverage`, as `policies show` answers, what observe can see under them, or in enforce what enforce
+ *  blocks (`enforceCoverage`). */
 function policyText(data: Record<string, unknown>): string {
   const p = (data.policy ?? {}) as { rules?: unknown; otherwise?: unknown }
   const rules = Array.isArray(p.rules) ? (p.rules as Record<string, unknown>[]) : []
@@ -252,7 +253,8 @@ function policyText(data: Record<string, unknown>): string {
       ? '(no rules)'
       : columns(rules.map((r, i) => [String(i), str(r.effect), str(r.action), r.scope === undefined ? 'anywhere' : str(r.scope), str(r.id)]))
   ]
-  if (Array.isArray(data.coverage)) parts.push(coverageText(data.coverage as Record<string, unknown>[]))
+  const coverage = data.mode === 'enforce' && Array.isArray(data.enforceCoverage) ? data.enforceCoverage : data.coverage
+  if (Array.isArray(coverage)) parts.push(coverageText(coverage as Record<string, unknown>[]))
   return parts.join('\n\n')
 }
 

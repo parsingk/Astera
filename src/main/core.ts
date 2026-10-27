@@ -49,6 +49,7 @@ import { createCapabilityCache, type CapabilityCache } from '../core/extensions/
 import { readPolicyMode } from '../core/audit/policy'
 import type { EnforceStart } from '../core/audit/enforce'
 import { cliVersionProbe, enforceBlocker } from '../core/sessions/cliVersion'
+import { findInstalledHostExe } from '../core/host/installedRuntime'
 import { settingsImportCopiesCapabilities } from '../core/extensions/registry'
 import { hidingLog } from '../core/extensions/secrets'
 import { createHidingSource, projectOfWorktrees } from '../core/credentials/hiding'
@@ -240,6 +241,9 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     userData: userDataDir,
     appName: app.getName()
   })
+  // Enforce's hook on Windows when the capture scripts are left a bare node (development, or no runtime put in place):
+  // a runtime an Astera installed here
+  const findRuntime = (): Promise<string | null> => findInstalledHostExe(runtimeBase)
   const statusLine = new StatusLineManager(
     userDataDir,
     process.platform !== 'win32'
@@ -251,7 +255,9 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
             appVersion: app.getVersion(),
             readFile: (p, enc) => fsp.readFile(p, enc)
           })) ?? 'node')
-        : 'node'
+        : 'node',
+    undefined,
+    { findRuntime }
   )
   await statusLine.init()
   // One factory for the app's life. Slice 2's Host-backed one is attached to it by registerIpc once

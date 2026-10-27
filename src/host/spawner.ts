@@ -56,6 +56,8 @@ import { createHidingSource, projectOfWorktrees, type HidingSource } from '../co
 import { readPolicyMode } from '../core/audit/policy'
 import type { EnforceStart } from '../core/audit/enforce'
 import { cliVersionProbe, enforceBlocker } from '../core/sessions/cliVersion'
+import { findInstalledHostExe } from '../core/host/installedRuntime'
+import { hostRuntimeBase } from '../core/host/runtime'
 import { hidingLog } from '../core/extensions/secrets'
 import { setBounded } from '../core/bounded'
 import { dispatchLookup } from '../core/orchestration/dispatchIndex'
@@ -275,7 +277,15 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       ? (d.captureNode ?? 'node')
       : resolveNodePath(d.env as { PATH?: string }, existsSync, platform),
     undefined,
-    { platform }
+    {
+      platform,
+      // Enforce's hook when this Host runs from the app's Electron (development, or no runtime put in place): a runtime
+      // an Astera installed, under the profile folder's name as the app's own (`astera`), the CLI's rule (cli/host.ts)
+      findRuntime: () =>
+        findInstalledHostExe(
+          hostRuntimeBase({ platform, localAppData: d.env.LOCALAPPDATA, userData: profileDir, appName: path.win32.basename(profileDir) })
+        )
+    }
   )
   const ensured = once(() => statusLine.ensureFiles())
   // The app writes this same file at its start (bootOrch). Both go through the same junction decision

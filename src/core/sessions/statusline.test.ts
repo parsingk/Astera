@@ -852,6 +852,16 @@ describe('StatusLineManager enforce mode', () => {
     expect(await Promise.all(files.map(read))).toEqual(was)
   })
 
+  it('runs the hook with a Host runtime Astera installed when the capture scripts have no node of Astera’s', async () => {
+    const mgr = new StatusLineManager(dir, 'node', () => {}, { platform: 'win32', execPath: 'C:/x/electron.exe', findRuntime: async () => 'C:\\rt\\astera-host.exe' })
+    await mgr.init()
+    expect(await mgr.ensureEnforceFiles()).toBe(true)
+    expect(mgr.enforceHookCommand('claude')).toBe(`C:'/rt/astera-host.exe' '${path.join(dir, ENFORCE_HOOK_FILE).replace(/\\/g, '/')}' claude`)
+    // The capture scripts keep their own node, so an Off or Observe session's settings are as they were
+    const plain = JSON.parse(await read(mgr.spawnConfig('s', account).settingsFile))
+    expect(JSON.stringify(plain)).not.toContain('astera-host.exe')
+  })
+
   it('has no interpreter on Windows without the Host runtime, so a session asked to enforce is not marked enforced', async () => {
     const mgr = new StatusLineManager(dir, 'node', () => {}, { platform: 'win32', execPath: 'C:/x/electron.exe' })
     await mgr.init()

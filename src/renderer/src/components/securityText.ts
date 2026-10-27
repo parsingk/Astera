@@ -28,6 +28,8 @@ export const CREDENTIALS_TITLE = 'Credentials'
 /** The observe mode and the rules, named in English in every language too (the person, 2026-10-26). */
 export const OBSERVE_NAME = 'Observe'
 export const RULES_TITLE = 'Rules'
+/** The mode that stops what the Rules deny (enforce design §5), named in English like Observe. */
+export const ENFORCE_NAME = 'Enforce'
 
 /** A record as audit-list answers it: with the decision the rules in force give it, and the rule that gave it. */
 export type AuditRow = AuditRecord & { decision: AuditDecision; ruleId?: string }
@@ -81,8 +83,9 @@ const SCOPES: Record<NonNullable<AuditRule['scope']> | 'anywhere', MessageKey> =
 }
 export const scopeLabel = (s: AuditRule['scope'], t: T): string => t(SCOPES[s ?? 'anywhere'])
 
-/** The switch's two choices: Off in the person's language, and the mode by its English name. */
-export const modeLabel = (m: AuditMode, t: T): string => (m === 'observe' ? OBSERVE_NAME : t('settings.security.mode.compatibility'))
+/** The switch's choices: Off in the person's language, and the modes by their English names. */
+export const modeLabel = (m: AuditMode, t: T): string =>
+  m === 'observe' ? OBSERVE_NAME : m === 'enforce' ? ENFORCE_NAME : t('settings.security.mode.compatibility')
 
 export const COVERAGE_CLASSES: CoverageClass[] = ['shell', 'file-read', 'file-write', 'mcp', 'network']
 const CLASS_WORDS: Record<CoverageClass, MessageKey> = {
@@ -95,8 +98,13 @@ const CLASS_WORDS: Record<CoverageClass, MessageKey> = {
 const LEVELS: Record<CoverageCell['level'], MessageKey> = {
   seen: 'settings.security.coverage.level.seen',
   partial: 'settings.security.coverage.level.partial',
-  none: 'settings.security.coverage.level.none'
+  none: 'settings.security.coverage.level.none',
+  enforced: 'settings.security.coverage.level.enforced'
 }
+
+/** The coverage table's title: what Enforce blocks while it is on, else what observe records. */
+const COVERAGE_TITLES = { record: 'settings.security.coverage.title', enforce: 'settings.security.coverage.titleEnforce' } as const satisfies Record<string, MessageKey>
+export const coverageTitle = (m: AuditMode, t: T): string => t(m === 'enforce' ? COVERAGE_TITLES.enforce : COVERAGE_TITLES.record)
 const KINDS: Record<CoverageRow['kind'], MessageKey> = {
   terminal: 'settings.security.kind.terminal',
   chat: 'settings.security.kind.chat'
@@ -153,10 +161,23 @@ export function ruleLine(r: AuditRule, t: T): string {
   return r.scope === undefined ? t('settings.security.rule.line', params) : t('settings.security.rule.lineScoped', { ...params, scope: scopeLabel(r.scope, t) })
 }
 
-/** The rule that decided a call, in words: none matched when `otherwise` decided, nothing when it could not be told, and
- *  the id of a rule the screen's copy does not have (one changed from the CLI since it was read). */
+/** What stopped a blocked call when no Rule did (core/audit/enforce.ts BUILT_IN_RULE_IDS, and its fail-closed). */
+const BUILT_IN_WORDS: Record<string, MessageKey> = {
+  'builtin-profile-write': 'settings.security.builtin.profileWrite',
+  'builtin-settings-command': 'settings.security.builtin.settingsCommand',
+  'fail-closed': 'settings.security.builtin.failClosed'
+}
+/** The built-ins Policies lists above the person's rules in Enforce, in order. */
+export const BUILT_IN_SHOWN: MessageKey[] = [BUILT_IN_WORDS['builtin-profile-write'], BUILT_IN_WORDS['builtin-settings-command']]
+
+/** The rule that decided a call, in words: none matched when `otherwise` decided, nothing when it could not be told, a
+ *  built-in by what it stops, and the id of a rule the screen's copy does not have (one changed from the CLI since it
+ *  was read). */
 export function decidingRule(r: Pick<AuditRow, 'decision' | 'ruleId'>, rules: readonly AuditRule[], t: T): string {
   if (r.ruleId === undefined) return r.decision === 'unknown' ? '' : t('settings.security.rule.otherwise')
+  if (Object.hasOwn(BUILT_IN_WORDS, r.ruleId)) return t(BUILT_IN_WORDS[r.ruleId])
+  // The hook's own id when no rule allowed the call (enforce.ts)
+  if (r.ruleId === 'otherwise') return t('settings.security.rule.otherwise')
   const rule = rules.find((x) => x.id === r.ruleId)
   return rule ? ruleLine(rule, t) : r.ruleId
 }
@@ -342,6 +363,8 @@ export interface AuditCounts {
   allow: number
   wouldDeny: number
   unknown: number
+  /** Stopped by Enforce's hook before they ran. */
+  blocked: number
   /** A day of the period stopped recording at the size limit, so it holds fewer calls than were made. */
   stoppedAtLimit: boolean
 }
@@ -351,8 +374,50 @@ const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(
 /** audit-summary's counts by decision. */
 export function summaryOf(body: unknown): AuditCounts {
   const b = isObject(body) ? body : {}
-  return { allow: count(b.allow), wouldDeny: count(b.wouldDeny), unknown: count(b.unknown), stoppedAtLimit: b.stoppedAtLimit === true }
+  return { allow: count(b.allow), wouldDeny: count(b.wouldDeny), unknown: count(b.unknown), blocked: count(b.blocked), stoppedAtLimit: b.stoppedAtLimit === true }
 }
+
+/** Enforce's preview (enforce design §5): the last 7 days' calls the Rules would deny, by action (audit-summary's
+ *  `byAction`), most first; what Enforce blocks per session; what it costs; the built-ins and the limit they leave; and
+ *  when it applies. One text, its lines apart, for the confirmation's body. */
+export function enforcePreviewBody(summary: unknown, rows: readonly CoverageRow[], t: T): string {
+  const lines: string[] = []
+  // null: the records could not be read, which is not the same as none
+  if (summary === null) lines.push(t('settings.security.enforce.countsUnknown'))
+  const s = isObject(summary) ? summary : {}
+  const byAction = isObject(s.byAction) ? s.byAction : {}
+  const denied = Object.entries(byAction)
+    .map(([action, c]) => [action, count(isObject(c) ? c.wouldDeny : 0)] as const)
+    .filter(([, n]) => n > 0)
+    .sort((a, b) => b[1] - a[1])
+  if (summary === null) {
+    // said above
+  } else if (denied.length === 0) lines.push(t('settings.security.enforce.countsNone'))
+  else {
+    lines.push(t('settings.security.enforce.counts'))
+    for (const [action, n] of denied) lines.push(`  ${t('settings.security.enforce.countLine', { action: actionPhrase(action, t), count: n.toLocaleString() })}`)
+  }
+  lines.push('', t(COVERAGE_TITLES.enforce))
+  for (const r of rows)
+    lines.push(`  ${coverageRowLabel(r, t)}: ${COVERAGE_CLASSES.map((c) => `${coverageClassLabel(c, t)} ${coverageCellText(r.classes?.[c], t)}`).join(', ')}`)
+  lines.push('', t('settings.security.enforce.latency'), t('settings.security.enforce.builtins'), t('settings.security.enforce.sameUser'), t('settings.security.enforce.running'))
+  return lines.join('\n')
+}
+
+/** The keys Enforce's screen says beside the ones above. */
+const ENFORCE_KEYS: MessageKey[] = [
+  'settings.security.enforce.title',
+  'settings.security.enforce.counts',
+  'settings.security.enforce.countLine',
+  'settings.security.enforce.countsNone',
+  'settings.security.enforce.countsUnknown',
+  'settings.security.enforce.latency',
+  'settings.security.enforce.builtins',
+  'settings.security.enforce.sameUser',
+  'settings.security.enforce.running',
+  'settings.security.enforce.confirm',
+  'settings.security.builtin.tag'
+]
 
 export interface FilterChoices {
   /** With what a session is called by when its tab is gone (sessionLabel). */
@@ -428,10 +493,14 @@ export function tokensOf(body: unknown): { tokens?: TokenTotals; coordinatorToke
   return { ...(tokens ? { tokens } : {}), ...(coordinatorTokens ? { coordinatorTokens } : {}) }
 }
 
-/** Run detail's line on how many of the Run's calls would be denied; null when it has no records to count. */
+/** Run detail's line on how many of the Run's calls would be denied, and how many Enforce blocked; null when it has no
+ *  records to count. Blocked calls are never told as none denied. */
 export function wouldDenyLine(c: AuditCounts, t: T): string | null {
-  if (c.allow + c.wouldDeny + c.unknown === 0) return null
-  return c.wouldDeny > 0 ? t('jobs.detail.wouldDeny', { count: c.wouldDeny }) : t('jobs.detail.wouldDenyNone')
+  if (c.allow + c.wouldDeny + c.unknown + c.blocked === 0) return null
+  const denied = c.wouldDeny > 0 ? t('jobs.detail.wouldDeny', { count: c.wouldDeny }) : t('jobs.detail.wouldDenyNone')
+  if (c.blocked === 0) return denied
+  const blocked = t('jobs.detail.blocked', { count: c.blocked })
+  return c.wouldDeny > 0 ? `${blocked} ${denied}` : blocked
 }
 
 /** Every key this file says, so a test can hold the four catalogs to them. */
@@ -449,5 +518,8 @@ export const SECURITY_KEYS: MessageKey[] = [
   ...Object.values(REASONS),
   resetBodyKey(true),
   resetBodyKey(false),
-  ...Object.values(PERIODS)
+  ...Object.values(PERIODS),
+  ...Object.values(COVERAGE_TITLES),
+  ...Object.values(BUILT_IN_WORDS),
+  ...ENFORCE_KEYS
 ]

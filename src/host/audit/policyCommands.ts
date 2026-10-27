@@ -9,6 +9,7 @@ import {
   AUDIT_ACTIONS,
   AuditPolicyDamaged,
   COVERAGE,
+  COVERAGE_ENFORCE,
   STARTER_POLICY,
   damageIsKept,
   isRuleAction,
@@ -94,7 +95,8 @@ export function createHostPolicies(d: {
     switch (cmd) {
       case 'policies-show': {
         const p = await current()
-        return { status: 200, body: { mode: p.mode, policy: p, coverage: COVERAGE } }
+        // What Enforce would block beside what observe sees, so the screen's preview says it before Enforce is on
+        return { status: 200, body: { mode: p.mode, policy: p, coverage: COVERAGE, enforceCoverage: COVERAGE_ENFORCE } }
       }
       case 'policies-set-mode': {
         if (!MODES.includes(args.mode)) return bad('mode must be compatibility, observe or enforce')
