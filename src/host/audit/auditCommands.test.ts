@@ -171,11 +171,12 @@ describe('createHostAudit', () => {
       allow: 1,
       wouldDeny: 3,
       unknown: 1,
+      blocked: 0,
       byAction: {
-        'git.remote.write': { allow: 0, wouldDeny: 1, unknown: 0 },
-        'filesystem.read': { allow: 1, wouldDeny: 0, unknown: 0 },
-        'filesystem.write': { allow: 0, wouldDeny: 1, unknown: 0 },
-        'process.execute': { allow: 0, wouldDeny: 1, unknown: 1 }
+        'git.remote.write': { allow: 0, wouldDeny: 1, unknown: 0, blocked: 0 },
+        'filesystem.read': { allow: 1, wouldDeny: 0, unknown: 0, blocked: 0 },
+        'filesystem.write': { allow: 0, wouldDeny: 1, unknown: 0, blocked: 0 },
+        'process.execute': { allow: 0, wouldDeny: 1, unknown: 1, blocked: 0 }
       },
       stoppedAtLimit: false
     })
@@ -183,9 +184,22 @@ describe('createHostAudit', () => {
       allow: 0,
       wouldDeny: 1,
       unknown: 0,
-      byAction: { 'filesystem.write': { allow: 0, wouldDeny: 1, unknown: 0 } },
+      blocked: 0,
+      byAction: { 'filesystem.write': { allow: 0, wouldDeny: 1, unknown: 0, blocked: 0 } },
       stoppedAtLimit: false
     })
+  })
+
+  // Enforce (enforce design §5): a call the hook stopped is blocked for good, whatever the rules say at the read
+  it('answers a blocked record as blocked with the rule that blocked it, whatever the rules say now', async () => {
+    const stopped = rec({ status: 'blocked', blockedBy: 'starter-git-remote-write' })
+    const h = await rig([stopped, rec({ action: 'filesystem.read', target: 'a.ts', insideProject: true, confidence: 'exact' })])
+    await writeAuditPolicy(h.profileDir, { ...STARTER_POLICY, rules: [{ id: 'ok-push', effect: 'allow', action: 'git.remote.write' }] })
+    const list = listed(await h.call('audit-list'))
+    const row = list.records.find((r) => r.id === stopped.id)
+    expect(row).toMatchObject({ decision: 'blocked', ruleId: 'starter-git-remote-write', status: 'blocked' })
+    expect(listed(await h.call('audit-list', { decision: 'blocked' })).records.map((r) => r.id)).toEqual([stopped.id])
+    expect(await h.call('audit-summary')).toMatchObject({ body: { blocked: 1, byAction: { 'git.remote.write': { blocked: 1, allow: 0 } } } })
   })
 
   it('says when the records of a day in the period stopped at the size', async () => {
@@ -252,7 +266,7 @@ describe('createHostAudit', () => {
   it('answers empty when nothing was recorded', async () => {
     const h = await rig()
     expect((await h.call('audit-list')).body).toEqual({ records: [], truncated: false, next: null })
-    expect((await h.call('audit-summary')).body).toEqual({ allow: 0, wouldDeny: 0, unknown: 0, byAction: {}, stoppedAtLimit: false })
+    expect((await h.call('audit-summary')).body).toEqual({ allow: 0, wouldDeny: 0, unknown: 0, blocked: 0, byAction: {}, stoppedAtLimit: false })
   })
 
   it('answers 409 while the rules file is damaged, since no decision can be made', async () => {

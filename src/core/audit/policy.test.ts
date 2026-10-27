@@ -8,18 +8,7 @@ import { removeFixture } from '../testFixtures'
 import { profilePaths } from '../profile/paths'
 import { RepairNeeded } from '../settings/repairNeeded'
 import { resolveAction, type AuditAction } from './resolve'
-import {
-  AUDIT_ACTIONS,
-  COVERAGE,
-  STARTER_POLICY,
-  decide,
-  isRuleAction,
-  readAuditPolicy,
-  readPolicyMode,
-  writeAuditPolicy,
-  type AuditPolicy,
-  type AuditRule
-} from './policy'
+import { AUDIT_ACTIONS, COVERAGE, STARTER_POLICY, decide, isRuleAction, readAuditPolicy, readPolicyMode, writeAuditPolicy, type AuditPolicy, type AuditRule, parseAuditPolicy, isObserving } from './policy'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -315,8 +304,20 @@ describe('the policy file', () => {
 
   it('reads a mode it does not know as compatibility, which never observes more', async () => {
     const p = await profile()
-    await fs.writeFile(profilePaths(p).auditPolicy, JSON.stringify({ ...STARTER_POLICY, mode: 'enforce' }))
+    await fs.writeFile(profilePaths(p).auditPolicy, JSON.stringify({ ...STARTER_POLICY, mode: 'strict' }))
     expect((await readAuditPolicy(p))?.mode).toBe('compatibility')
+  })
+
+  // Enforce (enforce design §5, E1): a mode of its own, and the hook reads the file as text with no promise
+  it('reads enforce as a mode, and parses a policy from text without throwing', async () => {
+    expect(parseAuditPolicy(JSON.stringify({ ...STARTER_POLICY, mode: 'enforce' }))?.mode).toBe('enforce')
+    expect(parseAuditPolicy(JSON.stringify(STARTER_POLICY))).toEqual(STARTER_POLICY)
+    expect(parseAuditPolicy('{')).toBeNull()
+    expect(parseAuditPolicy(JSON.stringify({ ...STARTER_POLICY, otherwise: 'sometimes' }))).toBeNull()
+    const p = await profile()
+    await fs.writeFile(profilePaths(p).auditPolicy, JSON.stringify({ ...STARTER_POLICY, mode: 'enforce' }))
+    expect(await readPolicyMode(p)).toBe('enforce')
+    expect(isObserving('enforce') && isObserving('observe') && !isObserving('compatibility')).toBe(true)
   })
 })
 

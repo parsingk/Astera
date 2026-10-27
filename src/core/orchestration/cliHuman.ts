@@ -323,8 +323,15 @@ export function humanFor(
     }
     // The totals, then a row per action, the most seen first
     case 'audit-summary': {
-      const counts = (c: Record<string, unknown>): string[] => [`allow ${str(c.allow)}`, `would-deny ${str(c.wouldDeny)}`, `unknown ${str(c.unknown)}`]
-      const total = (c: Record<string, unknown>): number => Number(c.allow ?? 0) + Number(c.wouldDeny ?? 0) + Number(c.unknown ?? 0)
+      // The calls Enforce stopped, once there are any: an observe-only summary reads as it did
+      const blocked = typeof data.blocked === 'number' && data.blocked > 0
+      const counts = (c: Record<string, unknown>): string[] => [
+        `allow ${str(c.allow)}`,
+        `would-deny ${str(c.wouldDeny)}`,
+        `unknown ${str(c.unknown)}`,
+        ...(blocked ? [`blocked ${str(c.blocked ?? 0)}`] : [])
+      ]
+      const total = (c: Record<string, unknown>): number => Number(c.allow ?? 0) + Number(c.wouldDeny ?? 0) + Number(c.unknown ?? 0) + Number(c.blocked ?? 0)
       const byAction = data.byAction !== null && typeof data.byAction === 'object' ? Object.entries(data.byAction as Record<string, Record<string, unknown>>) : []
       byAction.sort(([a, x], [b, y]) => total(y) - total(x) || a.localeCompare(b))
       return [

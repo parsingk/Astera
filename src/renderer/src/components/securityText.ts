@@ -58,11 +58,12 @@ export function actionPhrase(action: string, t: T): string {
   return action
 }
 
-export const DECISIONS: AuditDecision[] = ['allow', 'would-deny', 'unknown']
+export const DECISIONS: AuditDecision[] = ['allow', 'would-deny', 'unknown', 'blocked']
 const DECISION_WORDS: Record<AuditDecision, MessageKey> = {
   allow: 'settings.security.decision.allow',
   'would-deny': 'settings.security.decision.would-deny',
-  unknown: 'settings.security.decision.unknown'
+  unknown: 'settings.security.decision.unknown',
+  blocked: 'settings.security.decision.blocked'
 }
 export const decisionLabel = (d: string, t: T): string => (Object.hasOwn(DECISION_WORDS, d) ? t(DECISION_WORDS[d as AuditDecision]) : d)
 

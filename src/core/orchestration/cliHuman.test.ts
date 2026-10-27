@@ -680,6 +680,13 @@ describe('humanFor — audit and policies', () => {
     expect(humanFor('audit-list', { records: [], truncated: false, next: null })).toBe('(no records)')
   })
 
+  it('audit list prints a call the hook stopped as blocked, with what stopped it', () => {
+    const stopped = { ...push, decision: 'blocked', ruleId: 'builtin-settings-command' }
+    expect(humanFor('audit-list', { records: [stopped], truncated: false, next: null })).toBe(
+      `${local(push.at)}  sess_a  git push to a remote  git push  blocked  builtin-settings-command`
+    )
+  })
+
   it('audit list says how to ask for the next page when the limit cut it', () => {
     const out = humanFor('audit-list', { records: [push], truncated: true, next: { until: push.at, beforeId: push.id } })
     expect(out?.split('\n').slice(-2)).toEqual(['', `more: --until ${push.at} --before-id ${push.id}`])
@@ -786,6 +793,27 @@ describe('humanFor — audit and policies', () => {
       for (const key of Object.keys(classes)) expect(Object.hasOwn(en, `settings.security.coverage.class.${key}`), key).toBe(true)
       for (const key of ['seen', 'partial', 'none']) expect(Object.hasOwn(en, `settings.security.coverage.level.${key}`), key).toBe(true)
     })
+  })
+
+  // Enforce: a count of the calls the hook stopped, shown once there are any, so an observe-only summary reads as before
+  it('audit summary counts the blocked calls once there are any', () => {
+    expect(
+      humanFor('audit-summary', {
+        allow: 1,
+        wouldDeny: 0,
+        unknown: 0,
+        blocked: 2,
+        byAction: { 'git.remote.write': { allow: 0, wouldDeny: 0, unknown: 0, blocked: 2 }, 'filesystem.read': { allow: 1, wouldDeny: 0, unknown: 0, blocked: 0 } },
+        stoppedAtLimit: false
+      })
+    ).toBe(
+      [
+        'allow 1, would-deny 0, unknown 0, blocked 2',
+        '',
+        'git push to a remote  git.remote.write  allow 0  would-deny 0  unknown 0  blocked 2',
+        'read a file           filesystem.read   allow 1  would-deny 0  unknown 0  blocked 0'
+      ].join('\n')
+    )
   })
 
   it('audit summary is the totals, then a row per action, the most seen first', () => {

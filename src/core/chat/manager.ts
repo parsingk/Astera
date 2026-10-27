@@ -22,6 +22,7 @@ import { EXITED_SESSIONS_KEPT, prependToPath } from '../sessions/manager'
 import type { CapabilitySource } from '../extensions/capabilityCache'
 import { gatewayTokenEnv } from '../extensions/resolve'
 import { applyHiding, type HidingSource } from '../credentials/hiding'
+import { isObserving } from '../audit/policy'
 
 export { EXITED_SESSIONS_KEPT }
 
@@ -331,7 +332,7 @@ export class ChatSessionManager {
         ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {}),
         // Observe mode (Review Focus 1): started while the mode was observe, which the Host's recorder asks before it
         // keeps one of this session's calls. The mode the caller's refresh read, as a terminal session's is.
-        ...(caps?.context.policyMode === 'observe' ? { observed: true } : {}),
+        ...(isObserving(caps?.context.policyMode ?? 'compatibility') ? { observed: true } : {}),
         // design F5 fix round 1 (Critical 2): the durable mark, written into the note itself so an
         // app restart's `adopt()` can restore it too, not only `state()`'s in-memory overlay.
         ...(opts.startWithBypass ? { bypassedToolchain: true } : {}),

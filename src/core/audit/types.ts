@@ -28,7 +28,7 @@ export interface CommandFacts {
 }
 
 /** `compatibility`: nothing is observed, as before observe mode existed. `enforce` is not offered in this phase. */
-export type AuditMode = 'compatibility' | 'observe'
+export type AuditMode = 'compatibility' | 'observe' | 'enforce'
 
 export interface AuditRule {
   id: string
@@ -47,7 +47,8 @@ export interface AuditPolicy {
   otherwise: 'allow' | 'deny'
 }
 
-export type AuditDecision = 'allow' | 'would-deny' | 'unknown'
+/** `blocked`: Enforce's hook stopped the call before it ran (enforce design §5), whatever the rules say at the read. */
+export type AuditDecision = 'allow' | 'would-deny' | 'unknown' | 'blocked'
 
 export type CoverageClass = 'shell' | 'file-read' | 'file-write' | 'mcp' | 'network'
 
@@ -66,7 +67,7 @@ export interface CoverageRow {
 }
 
 /** Where a record came from (design §5). The provider is the first word. */
-export type AuditSource = 'claude-hook' | 'claude-chat' | 'codex-rollout' | 'codex-chat'
+export type AuditSource = 'claude-hook' | 'claude-chat' | 'codex-rollout' | 'codex-chat' | 'codex-hook'
 
 export interface AuditRecord {
   id: string
@@ -92,7 +93,11 @@ export interface AuditRecord {
    *  have then. At most AUDIT_COMMANDS_KEPT (recorder.ts); a line cut short is kept as `unknown`. */
   commands?: CommandFacts[]
   confidence: Confidence
-  status: 'ok' | 'failed' | 'unknown'
+  /** `blocked`: Enforce's hook stopped it before it ran (enforce design §5). */
+  status: 'ok' | 'failed' | 'unknown' | 'blocked'
+  /** What stopped a blocked call: a rule's id, `otherwise`, a built-in rule's id (`builtin-profile-write`,
+   *  `builtin-settings-command`) or `fail-closed`. */
+  blockedBy?: string
 }
 
 /** One use of a credential that passed through Astera (credentials design §6): a shared MCP server's stored secret through

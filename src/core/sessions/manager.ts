@@ -20,6 +20,7 @@ import { codexDeveloperInstructions } from './sessionContext'
 import type { CapabilitySource } from '../extensions/capabilityCache'
 import { gatewayTokenEnv } from '../extensions/resolve'
 import { applyHiding, type HidingSource } from '../credentials/hiding'
+import { isObserving } from '../audit/policy'
 
 /** statusLine info injected when a session spawns (provided by main's StatusLineManager,
  *  structurally compatible). */
@@ -203,7 +204,7 @@ export class SessionManager {
     if (
       this.observeHooks &&
       descriptorOf(this.descriptors, opts.account).usesStatusLine &&
-      this.capabilities?.get(opts.account, opts.agentProfileId)?.context.policyMode === 'observe'
+      isObserving(this.capabilities?.get(opts.account, opts.agentProfileId)?.context.policyMode ?? 'compatibility')
     )
       await this.observeHooks().catch((err) => this.checks.log(`observe hook settings could not be written: ${String(err)}`))
     // The CLI on PATH and codex's --no-daemon, so the spawn's command builder finds both (second pass M2-1, M2-2).
@@ -305,7 +306,7 @@ export class SessionManager {
     // recorder asks before it keeps a call of this session from any source (Review Focus 1). A Claude session is marked
     // only when it was given those settings (they may not have been written); a Codex one has none to be given. In
     // compatibility the provider is asked exactly as before and the note carries no mark.
-    const observe = caps?.context.policyMode === 'observe'
+    const observe = isObserving(caps?.context.policyMode ?? 'compatibility')
     const sl = d.usesStatusLine
       ? (this.statusLineProvider?.(id, opts.account, observe ? { toolHooks: wantToolHooks, observe: true } : { toolHooks: wantToolHooks }) ??
         null)

@@ -15,7 +15,7 @@
 import { randomBytes } from 'node:crypto'
 import { redactTarget, resolveAction, type ResolveCall, type ResolvedAction } from '../../core/audit/resolve'
 import { appendRecords, auditDayStopped, type AuditRecord, type AuditSource } from '../../core/audit/store'
-import type { AuditMode } from '../../core/audit/policy'
+import { isObserving, type AuditMode } from '../../core/audit/policy'
 import type { OrchState } from '../../core/orchestration/state'
 import type { Dispatch } from '../../core/orchestration/types'
 import { heldPastEnd, outcomeOf, runEndOf } from '../../core/orchestration/running'
@@ -44,7 +44,8 @@ const PROVIDER: Record<AuditSource, AuditRecord['provider']> = {
   'claude-hook': 'claude',
   'claude-chat': 'claude',
   'codex-rollout': 'codex',
-  'codex-chat': 'codex'
+  'codex-chat': 'codex',
+  'codex-hook': 'codex'
 }
 
 /** What the recorder needs of a session Astera started: its note's facts. */
@@ -237,7 +238,7 @@ export function createAuditRecorder(d: {
         const m = await currentMode()
         const batch = pending
         pending = []
-        if (m !== 'observe') continue
+        if (!isObserving(m)) continue
         // A record whose lookup had to wait takes what it found before it is written, the ones behind it waiting with it
         for (const r of batch) {
           const lookup = lookups.get(r)

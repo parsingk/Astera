@@ -108,6 +108,15 @@ describe('createAuditRecorder', () => {
     expect(await h.folderExists()).toBe(false)
   })
 
+  // Enforce records what observe records (enforce design §5)
+  it('records calls while the mode is enforce', async () => {
+    const h = await rig({ mode: 'enforce' })
+    h.recorder.record(bash('git push origin main'))
+    await h.recorder.flushed()
+    expect((await h.records()).map((r) => r.action)).toEqual(['git.remote.write'])
+    expect(h.recorder.observing()).toBe(true)
+  })
+
   it('keeps one record per call, resolved and stamped with the session and its Dispatch', async () => {
     const h = await rig({ dispatch: { jobId: 'job1', runId: 'run1', taskId: 'task1' } })
     h.recorder.record(bash('git push origin main', { dedupeKey: 'toolu_1' }))

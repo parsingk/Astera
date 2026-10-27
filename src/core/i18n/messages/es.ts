@@ -190,6 +190,7 @@ export const es: Catalog = {
   'settings.security.decision.allow': 'Permitida',
   'settings.security.decision.would-deny': 'Se denegaría',
   'settings.security.decision.unknown': 'Desconocida',
+  'settings.security.decision.blocked': 'Bloqueada',
   'settings.security.audit.hint':
     'Cada llamada a herramienta de una sesión registrada con Observe, juzgada con tus reglas tal como están ahora. El Host guarda estos registros, así que faltan las llamadas hechas mientras no estaba en marcha.',
   'settings.security.period.label': 'Periodo',

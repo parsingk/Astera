@@ -38,16 +38,22 @@ export interface HostAudit {
 
 const LIST_DEFAULT = 200
 const LIST_MAX = 2000
-const DECISIONS: readonly unknown[] = ['allow', 'would-deny', 'unknown']
+const DECISIONS: readonly unknown[] = ['allow', 'would-deny', 'unknown', 'blocked']
 const TEXT_FILTERS = ['sessionId', 'jobId', 'runId', 'taskId', 'agentProfileId'] as const
 
 interface Counts {
   allow: number
   wouldDeny: number
   unknown: number
+  blocked: number
 }
-const COUNT_KEY: Record<AuditDecision, keyof Counts> = { allow: 'allow', 'would-deny': 'wouldDeny', unknown: 'unknown' }
-const noCounts = (): Counts => ({ allow: 0, wouldDeny: 0, unknown: 0 })
+const COUNT_KEY: Record<AuditDecision, keyof Counts> = { allow: 'allow', 'would-deny': 'wouldDeny', unknown: 'unknown', blocked: 'blocked' }
+const noCounts = (): Counts => ({ allow: 0, wouldDeny: 0, unknown: 0, blocked: 0 })
+
+/** A record's decision: a call Enforce's hook stopped is blocked for good, with what stopped it (enforce design §5); any
+ *  other is what the rules in force now give it. */
+const decisionOf = (r: AuditRecord, p: AuditPolicy): { decision: AuditDecision; ruleId?: string } =>
+  r.status === 'blocked' ? { decision: 'blocked', ...(r.blockedBy !== undefined ? { ruleId: r.blockedBy } : {}) } : decide(r, p)
 
 const bad = (error: string): AuditAnswer => ({ status: 400, body: { error } })
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e))
@@ -78,7 +84,7 @@ function filterOf(args: Record<string, unknown>): { filter: AuditFilter; decisio
     if (typeof args.beforeId !== 'string' || args.beforeId === '' || filter.until === undefined) return 'beforeId must be text, given with until'
     filter.beforeId = args.beforeId
   }
-  if (args.decision !== undefined && !DECISIONS.includes(args.decision)) return 'decision must be allow, would-deny or unknown'
+  if (args.decision !== undefined && !DECISIONS.includes(args.decision)) return 'decision must be allow, would-deny, unknown or blocked'
   return { filter, ...(args.decision !== undefined ? { decision: args.decision as AuditDecision } : {}) }
 }
 
@@ -100,7 +106,7 @@ export function createHostAudit(d: {
         if (!Number.isInteger(limit) || (limit as number) < 1 || (limit as number) > LIST_MAX) return bad(`limit must be from 1 to ${LIST_MAX}`)
         const n = limit as number
         const p = await rules()
-        const where = f.decision !== undefined ? { where: (r: AuditRecord) => decide(r, p).decision === f.decision } : {}
+        const where = f.decision !== undefined ? { where: (r: AuditRecord) => decisionOf(r, p).decision === f.decision } : {}
         // One past the limit, to tell whether it cut anything
         const found = await queryRecords(d.profileDir, { ...f.filter, ...where, limit: n + 1 }, kept)
         const page = found.slice(0, n)
@@ -108,7 +114,7 @@ export function createHostAudit(d: {
         // Where the next page starts: after this page's last record, in the page's order (time, then id)
         const last = page[page.length - 1]
         const next = truncated ? { until: last.at, beforeId: last.id } : null
-        return { status: 200, body: { records: page.map((r) => ({ ...r, ...decide(r, p) })), truncated, next } }
+        return { status: 200, body: { records: page.map((r) => ({ ...r, ...decisionOf(r, p) })), truncated, next } }
       }
       case 'audit-summary': {
         const p = await rules()
@@ -117,7 +123,7 @@ export function createHostAudit(d: {
         const byAction = new Map<string, Counts>()
         // Counted as they are read, so the whole folder is never held at once
         await visitRecords(d.profileDir, f.filter, (r) => {
-          const { decision } = decide(r, p)
+          const { decision } = decisionOf(r, p)
           if (f.decision !== undefined && decision !== f.decision) return
           const key = COUNT_KEY[decision]
           total[key] += 1

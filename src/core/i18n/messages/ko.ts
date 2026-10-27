@@ -228,6 +228,7 @@ export const ko = {
   'settings.security.decision.allow': '허용',
   'settings.security.decision.would-deny': '거부 대상',
   'settings.security.decision.unknown': '알 수 없음',
+  'settings.security.decision.blocked': '블록됨',
   'settings.security.audit.hint': '기록한 세션의 도구 호출마다 지금의 Rules 로 판단한 결과입니다. 기록은 Host 가 하므로 Host 가 꺼져 있는 동안의 호출은 남지 않습니다.',
   'settings.security.period.label': '기간',
   'settings.security.period.today': '오늘',

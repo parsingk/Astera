@@ -223,6 +223,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.security.decision.allow': 'Allowed',
   'settings.security.decision.would-deny': 'Would be denied',
   'settings.security.decision.unknown': 'Unknown',
+  'settings.security.decision.blocked': 'Blocked',
   'settings.security.audit.hint':
     'Each tool call an observed session made, judged by your rules as they are now. The Host keeps these records, so calls made while it is not running are missing.',
   'settings.security.period.label': 'Period',

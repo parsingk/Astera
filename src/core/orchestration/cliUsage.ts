@@ -132,7 +132,7 @@ const AUDIT_FILTERS: readonly UsageFlag[] = [
   { name: 'task', value: '<taskId>', about: "only the calls of this task's workers" },
   { name: 'agent-profile', value: '<id|name>', about: 'only the calls of sessions started from this agent profile (from `agent-profiles list`)' },
   { name: 'action', value: '<action>', about: 'only this action, or the actions a start ending in * names (git.*)' },
-  { name: 'decision', value: '<allow|would-deny|unknown>', about: 'only the calls the rules in force decide so' },
+  { name: 'decision', value: '<allow|would-deny|unknown|blocked>', about: 'only the calls the rules in force decide so, or Enforce blocked' },
   { name: 'since', value: '<time>', about: 'only calls at or after this time (2026-10-23T09:00:00Z)' },
   { name: 'until', value: '<time>', about: 'only calls before this time' }
 ]
