@@ -13,6 +13,15 @@ describe('codexSandboxArgs', () => {
     expect(a).not.toContain('windows.sandbox')
   })
 
+  // git reads a worktree's own config.worktree under extensions.worktreeConfig, and it can set core.hooksPath
+  it('keeps a worktree’s own config.worktree read, and says nothing of it in a repository', () => {
+    for (const cwd of ['/w/wt', '/w/wt/sub']) {
+      const a = codexSandboxArgs({ platform: 'linux', layout: { ...wt, cwd }, denied: [] }).join(' ')
+      expect(a, cwd).toContain('"/m/.git/worktrees/wt/config.worktree"="read"')
+    }
+    for (const cwd of ['/r', '/r/sub']) expect(codexSandboxArgs({ platform: 'linux', layout: { ...repo, cwd }, denied: [] }).join(' '), cwd).not.toContain('config.worktree')
+  })
+
   it('in a repository, grants its .git and keeps its hooks and config read', () => {
     const a = codexSandboxArgs({ platform: 'linux', layout: repo, denied: [] }).join(' ')
     expect(a).toContain('":workspace_roots"={".git"="write", ".git/hooks"="read", ".git/config"="read"}')

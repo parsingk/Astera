@@ -176,11 +176,18 @@ export const WIN32_PROBE_FILES = {
   'credential-request.txt': 'protocol=https\nhost=astera-probe.example\n\n'
 }
 
+/** Writes `config.worktree` in the git directory git names for the session (a worktree's own, or a repository's
+ *  `.git`): git reads it under `extensions.worktreeConfig`, and it can set `core.hooksPath`. On Windows the git directory
+ *  comes from ASTERA_PROBE_GITDIR, which the run sets from `gitLayoutOf`. */
+export const WORKTREE_CONFIG_PROBE = { id: 'git-worktree-config-write', line: `echo '[core]' >> "$(git rev-parse --path-format=absolute --git-dir)/config.worktree"` }
+export const WIN32_WORKTREE_CONFIG_PROBE = { id: 'git-worktree-config-write', line: 'echo [core]>> %ASTERA_PROBE_GITDIR%\\config.worktree' }
+
 /** The probes for a set's layout: the S4 ones on macOS and Linux, without those that `cd wt` (a worktree below the
- *  session's repository) where the session is not that repository's root; the cmd.exe ones on Windows. */
+ *  session's repository) where the session is not that repository's root; the cmd.exe ones on Windows. Both end with
+ *  the config.worktree probe, which S4 did not have. */
 export function probesFor(platform, layout) {
-  if (platform === 'win32') return WIN32_PROBES
-  return layout === 'repo' ? PROBES : PROBES.filter((p) => !p.line.startsWith('cd wt '))
+  if (platform === 'win32') return [...WIN32_PROBES, WIN32_WORKTREE_CONFIG_PROBE]
+  return [...(layout === 'repo' ? PROBES : PROBES.filter((p) => !p.line.startsWith('cd wt '))), WORKTREE_CONFIG_PROBE]
 }
 
 export const shellArgv = (platform, line) => (platform === 'win32' ? ['cmd.exe', '/d', '/c', line] : ['sh', '-c', line])

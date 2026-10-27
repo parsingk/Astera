@@ -15,6 +15,8 @@ import {
   SRT_DANGEROUS_DIRECTORIES,
   SRT_DANGEROUS_FILES,
   WIN32_PROBES,
+  WIN32_WORKTREE_CONFIG_PROBE,
+  WORKTREE_CONFIG_PROBE,
   claudeDenied,
   codexDenied,
   codexSandboxCommandArgs,
@@ -290,12 +292,15 @@ describe('the Linux exclude file', () => {
 })
 
 describe('the S2 probes', () => {
-  it('runs the S4 probes, without the ones that `cd wt` where the session is not the repository', () => {
-    expect(probesFor('linux', 'repo')).toEqual(PROBES)
-    const others = PROBES.filter((p) => !p.line.startsWith('cd wt ')).map((p) => p.id)
+  it('runs the S4 probes, without the ones that `cd wt` where the session is not the repository, then config.worktree', () => {
+    expect(probesFor('linux', 'repo')).toEqual([...PROBES, WORKTREE_CONFIG_PROBE])
+    const others = [...PROBES.filter((p) => !p.line.startsWith('cd wt ')).map((p) => p.id), 'git-worktree-config-write']
     expect(probesFor('darwin', 'worktree').map((p) => p.id)).toEqual(others)
     expect(probesFor('linux', 'subfolder').map((p) => p.id)).toEqual(others)
     expect(others).toContain('git-commit-named')
+    // The git directory git names for the session: a worktree's own, not the common directory
+    expect(WORKTREE_CONFIG_PROBE.line).toContain('git rev-parse --path-format=absolute --git-dir)/config.worktree')
+    expect(WIN32_WORKTREE_CONFIG_PROBE.line).toContain('%ASTERA_PROBE_GITDIR%\\config.worktree')
     expect(GLOBAL_EXCLUDE_PROBE.line).toContain('git check-ignore')
     expect(SOCKET_PROBE.line).toContain('ASTERA_PROBE_SOCKET')
   })
@@ -314,8 +319,8 @@ describe('the S2 probes', () => {
       'git-config-write',
       'npm-install'
     ])
-    for (const layout of ['repo', 'subfolder', 'worktree']) expect(probesFor('win32', layout)).toEqual(WIN32_PROBES)
-    for (const p of WIN32_PROBES) expect(p.line, p.id).not.toContain('"')
+    for (const layout of ['repo', 'subfolder', 'worktree']) expect(probesFor('win32', layout)).toEqual([...WIN32_PROBES, WIN32_WORKTREE_CONFIG_PROBE])
+    for (const p of probesFor('win32', 'worktree')) expect(p.line, p.id).not.toContain('"')
     expect(shellArgv('win32', 'echo x')).toEqual(['cmd.exe', '/d', '/c', 'echo x'])
     expect(shellArgv('linux', 'echo x')).toEqual(['sh', '-c', 'echo x'])
   })

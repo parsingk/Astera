@@ -136,6 +136,7 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
       'Each set: probes with no sandbox in a fresh workspace of the same layout (plain), then in the sandbox in another fresh one (sandboxed); verdicts read one against the other (probes.mjs verdict).',
       "Codex sets: codexSandboxArgs for gitLayoutOf(cwd) without its leading -a never, denied = sensitiveLocations + credentialStoreDenies, environment codexSandboxEnv with a temp folder of the set's own.",
       'srt sets: claudeSandboxSettings as Claude Code hands them to srt (s2.mjs srtSettingsOf); the network list names the probes’ hosts. Claude Code’s own use of these settings is not measured (no login): runtime-measured.',
+      'git-worktree-config-write writes config.worktree in the git directory git names for the session. In the srt sets it is informational: how Claude Code itself treats a worktree’s git data is not srt’s.',
       ...(WIN
         ? [
             'win32: the fake home is in TEMP, which the sandbox may write, so write-home writes ASTERA_PROBE_OUTSIDE (a folder in the checkout, outside TEMP and the workspace); git-credential uses the store helper and the fake .git-credentials, with Git’s system config (Credential Manager) left out.',
@@ -253,11 +254,14 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
     return { cwd, gitLayout: await gitLayoutOf(cwd), tmpDir }
   }
 
-  /** The builder's environment for a Codex session, and on Windows where the probe finds the hooks. */
+  /** The builder's environment for a Codex session, and on Windows where the probes find the hooks and the git directory. */
   function codexEnvOf(p) {
     const own = codexSandboxEnv({ platform: PLATFORM, layout: p.gitLayout, tmpDir: p.tmpDir })
-    const hooks = WIN && p.gitLayout ? { ASTERA_PROBE_HOOKS: path.win32.normalize(`${p.gitLayout.commonDir}/hooks`) } : {}
-    return { own, env: { ...ctx.base, ...own, ...hooks } }
+    const dirs =
+      WIN && p.gitLayout
+        ? { ASTERA_PROBE_HOOKS: path.win32.normalize(`${p.gitLayout.commonDir}/hooks`), ASTERA_PROBE_GITDIR: path.win32.normalize(p.gitLayout.gitDir) }
+        : {}
+    return { own, env: { ...ctx.base, ...own, ...dirs } }
   }
 
   async function codexSet(set) {
