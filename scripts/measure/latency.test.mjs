@@ -30,6 +30,9 @@ describe('measureHook', () => {
       const r = measureHook({ hookFile, runs: 3, interpreters: [{ name: 'node', file: process.execPath, env: {} }] })
       expect(r.node.runs).toBe(3)
       expect(r.node.median).toBeGreaterThan(0)
+      // An interpreter that cannot run the hook is said so, never timed as a fast start
+      writeFileSync(hookFile, "process.stderr.write('boom'); process.exit(1)\n")
+      expect(measureHook({ hookFile, runs: 2, interpreters: [{ name: 'node', file: process.execPath, env: {} }] }).node).toEqual({ error: 'exit 1: boom' })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

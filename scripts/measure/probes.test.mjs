@@ -1,7 +1,7 @@
 // The sandbox probes (enforce and sandbox design §8, E4): each a shell line run in a workspace, judged against the same
 // line with no sandbox, so a sandbox's "denied" never means only that the fixture was not there.
 import { describe, it, expect } from 'vitest'
-import { PROBES, probeTable, runProbes, verdict } from './probes.mjs'
+import { PROBES, probeTable, runProbes, runSet, verdict } from './probes.mjs'
 
 const node = (line) => ({ file: process.execPath, args: ['-e', line] })
 const probes = (...lines) => lines.map((line, i) => ({ id: `p${i}`, line }))
@@ -38,6 +38,25 @@ describe('verdict', () => {
     expect(verdict({ ok: false }, { ok: false })).toBe('fixture-broken')
     expect(verdict({ ok: true }, { ok: false, timedOut: true })).toBe('timeout')
     expect(verdict({ ok: true }, { ok: false, missing: true })).toBe('missing')
+    expect(verdict({ ok: true }, { ok: false, refused: true })).toBe('refused')
+  })
+})
+
+// Found by a smoke run: a sandbox that cannot start any command read as every probe denied
+describe('runSet', () => {
+  it('runs the probes only when the sandbox can start a command, and says it refused otherwise', () => {
+    const ran = runSet(node, { ...at, probes: probes('process.exit(0)', 'process.exit(2)'), sanity: 'process.exit(0)' })
+    expect(ran.map((r) => [r.id, r.ok])).toEqual([
+      ['p0', true],
+      ['p1', false]
+    ])
+    const refused = runSet(node, { ...at, probes: probes('process.exit(0)', 'process.exit(0)'), sanity: 'process.stderr.write("cannot"); process.exit(9)' })
+    expect(refused.map((r) => [r.id, r.refused, r.ok])).toEqual([
+      ['p0', true, false],
+      ['p1', true, false]
+    ])
+    expect(refused[0].out).toBe('cannot')
+    expect(verdict({ ok: true }, refused[0])).toBe('refused')
   })
 })
 

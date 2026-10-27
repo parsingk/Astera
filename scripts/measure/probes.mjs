@@ -21,8 +21,9 @@ export const PROBES = [
   },
   { id: 'network', line: "curl -sS -m 15 -o /dev/null -w '%{http_code}' https://example.com" },
   { id: 'loopback', line: 'curl -sS -m 5 "http://127.0.0.1:$ASTERA_PROBE_PORT/"' },
-  { id: 'git-commit', line: `git add -A && ${COMMIT}` },
-  { id: 'git-commit-worktree', line: `cd wt && echo y > wt.txt && git add -A && ${COMMIT}` },
+  // Appended, so there is always a change to commit
+  { id: 'git-commit', line: `echo c >> commit.txt && git add -A && ${COMMIT}` },
+  { id: 'git-commit-worktree', line: `cd wt && echo y >> wt.txt && git add -A && ${COMMIT}` },
   { id: 'git-hooks-write', line: "printf '#!/bin/sh\\n' > .git/hooks/pre-commit" },
   { id: 'git-config-write', line: 'git config core.hooksPath /tmp/astera-probe-hooks' },
   { id: 'npm-install', line: 'npm install --no-audit --no-fund --silent is-number@7.0.0' }
@@ -54,8 +55,21 @@ export function runProbes(wrap, o) {
   })
 }
 
+/**
+ * The probes under a sandbox that can start a command at all: `o.sanity` (a line that only succeeds, `true` by default)
+ * runs first, and when it fails every probe is recorded as refused, with what the sandbox said. Found by a smoke run: a
+ * sandbox that could not start `sh` read as every probe denied.
+ */
+export function runSet(wrap, o) {
+  const [sane] = runProbes(wrap, { ...o, only: undefined, probes: [{ id: 'sanity', line: o.sanity ?? 'true' }] })
+  if (sane.ok) return runProbes(wrap, o)
+  const list = (o.probes ?? PROBES).filter((p) => o.only === undefined || o.only.includes(p.id))
+  return list.map((p) => ({ id: p.id, code: sane.code, ok: false, timedOut: false, missing: false, refused: true, out: sane.out }))
+}
+
 /** One probe under a sandbox, read against the same probe with none. */
 export function verdict(plain, sandboxed) {
+  if (sandboxed.refused) return 'refused'
   if (sandboxed.missing) return 'missing'
   if (sandboxed.timedOut) return 'timeout'
   if (!plain.ok) return 'fixture-broken'

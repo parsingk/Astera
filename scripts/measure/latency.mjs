@@ -36,12 +36,15 @@ export function measureHook(o) {
   const out = {}
   for (const i of o.interpreters) {
     const ms = []
-    for (let n = 0; n < runs; n++) {
+    let error = null
+    for (let n = 0; n < runs && error === null; n++) {
       const started = process.hrtime.bigint()
-      spawnSync(i.file, [o.hookFile, 'claude'], { input: payload, env: { ...process.env, ...i.env, ASTERA_SESSION: 'probe' }, encoding: 'utf8' })
+      const r = spawnSync(i.file, [o.hookFile, 'claude'], { input: payload, env: { ...process.env, ...i.env, ASTERA_SESSION: 'probe' }, encoding: 'utf8' })
       ms.push(Number(process.hrtime.bigint() - started) / 1e6)
+      // An interpreter that cannot run the hook is said so, never timed as a fast start
+      if (r.error || r.status !== 0) error = r.error ? String(r.error.message) : `exit ${r.status}: ${(r.stderr ?? '').slice(0, 300)}`
     }
-    out[i.name] = stats(ms)
+    out[i.name] = error === null ? stats(ms) : { error }
   }
   return out
 }
