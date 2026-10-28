@@ -185,6 +185,10 @@ export interface ProcRow {
  *  (`=`); one -o each, so no `=` is ever read as the start of a header that runs on to the next. */
 export const PS_TREE_ARGS = ['LC_ALL=C', 'ps', '-A', '-o', 'pid=', '-o', 'ppid=', '-o', 'pgid=']
 
+/** Within the desk request limit, not the 30 s other tools get: a hung ps must not hold a close or a
+ *  relaunch that long before the root's group is still ended. */
+const execTreeListing: ExecText = execTextWithin(DESK_REQUEST_MS)
+
 /** `ps -o pid= -o ppid= -o pgid=` lines; anything else (a header, noise) is skipped. */
 export function parsePsTree(text: string): ProcRow[] {
   const out: ProcRow[] = []
@@ -286,7 +290,7 @@ export async function killProcessTree(
   const hostPid = o.hostPid ?? process.pid
   if (!Number.isSafeInteger(pid) || pid <= 1) throw new Error(`not a pid: ${pid}`)
   if (pid === hostPid) throw new Error(`not a pid to end: ${pid} is this Host's own`)
-  const exec = o.exec ?? execText
+  const exec = o.exec ?? execTreeListing
   let rows: ProcRow[]
   try {
     rows = parsePsTree(await exec('env', PS_TREE_ARGS))

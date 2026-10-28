@@ -60,7 +60,8 @@ async function windowsKillTree(pid: number, exec: Exec): Promise<void> {
  *  listing (killProcessTree, R10), so a child started detached goes too. Gone is not a failure: the
  *  result the caller wanted is already true. */
 export async function killTree(pid: number, exec: Exec = defaultExec, platform: string = process.platform, signals: Signals = realSignals): Promise<void> {
-  return platform === 'win32' ? windowsKillTree(pid, exec) : killProcessTree(pid, { exec, signals })
+  // Not this file's 30 s exec off Windows: the tree kill's own listing has the desk request limit.
+  return platform === 'win32' ? windowsKillTree(pid, exec) : killProcessTree(pid, { signals, ...(exec === defaultExec ? {} : { exec }) })
 }
 
 export function freePort(): Promise<number> {
