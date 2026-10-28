@@ -324,9 +324,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
         findInstalledHostExe(
           hostRuntimeBase({ platform, localAppData: d.env.LOCALAPPDATA, userData: profileDir, appName: path.win32.basename(profileDir) })
         ),
-      // The sandbox's denied places are read from the person's home and the environment the Host's sessions inherit
+      // The sandbox's denied places are read under the person's home, from each session's own environment (its scope)
       homeDir,
-      env: d.env,
       tmpDir
     }
   )

@@ -4,7 +4,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { spawn } from 'node:child_process'
 import type { Account } from '../types'
-import { StatusLineManager, captureCommand, enforceCommand, enforceInterpreter, ENFORCE_HOOK_FILE } from './statusline'
+import { SANDBOX_SCOPES_KEPT, StatusLineManager, captureCommand, enforceCommand, enforceInterpreter, ENFORCE_HOOK_FILE, type SandboxScope } from './statusline'
 import enforceHookSource from 'virtual:astera-enforce-hook'
 import { codexEnforceArgs } from './codexEnforce'
 import { dirIdentity } from '../files/watchedDir'
@@ -14,6 +14,7 @@ import { resolveAction } from '../audit/resolve'
 import { claudeSandboxSettings } from '../sandbox/claudeSettings'
 import { credentialStoreDenies, sensitiveLocations } from '../sandbox/locations'
 import { npmCacheOf } from '../sandbox/codexProfile'
+import type { GitLayout } from '../sandbox/gitLayout'
 
 const account: Account = {
   id: 'a1', label: 't', configDir: path.join(os.tmpdir(), 'astera-none-config'), color: '#fff',
@@ -892,9 +893,10 @@ describe('StatusLineManager enforce mode', () => {
   })
 })
 
-// The sandbox (sandbox design §6): a sandboxed Claude session reads the twin of the file it would read anyway, the same
-// JSON with Claude's sandbox and the deny rules added (claudeSandboxSettings), so a session without it reads exactly the
-// bytes it always did.
+// The sandbox (sandbox design §6): a sandboxed Claude session reads its scope's twin of the file it would read anyway, the
+// same JSON with Claude's sandbox and the deny rules added (claudeSandboxSettings), so a session without it reads exactly
+// the bytes it always did. A scope is the session folder's git layout and the environment the session is built from
+// (final fix pass, C1 and minor 2): its twins are its own, beside nobody else's.
 describe('StatusLineManager sandbox', () => {
   let dir: string
   beforeEach(async () => { dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-sl-sandbox-')) })
@@ -907,41 +909,51 @@ describe('StatusLineManager sandbox', () => {
     win32: { APPDATA: 'C:\\Users\\t\\AppData\\Roaming' }
   } as const
   const TMP = { linux: '/tmp', darwin: '/var/folders/x/T', win32: 'C:\\Users\\t\\AppData\\Local\\Temp' } as const
+  const WT: GitLayout = {
+    cwd: '/w/wt', top: '/w/wt', gitDir: '/m/.git/worktrees/wt', commonDir: '/m/.git', worktree: true,
+    worktreeConfigs: ['/m/.git/worktrees/wt/config.worktree', '/m/.git/config.worktree'],
+    gitFiles: ['/m/.git/worktrees/wt/commondir', '/m/.git/commondir', '/m/.git/modules']
+  }
+  /** The scope a start in `layout` (a worktree unless said) prepares, with the platform's session environment. */
+  const scopeOn = (platform: 'linux' | 'darwin' | 'win32', layout: GitLayout | null = WT, env: Record<string, string> = { ...ENV[platform] }): SandboxScope => ({ layout, env })
   const managerOn = (platform: 'linux' | 'darwin' | 'win32') =>
     new StatusLineManager(dir, 'node', () => {}, {
       platform,
       execPath: platform === 'win32' ? 'C:/x/electron.exe' : '/opt/astera/astera',
       ...(platform === 'win32' ? { findRuntime: async () => 'C:\\rt\\astera-host.exe' } : {}),
       homeDir: HOME[platform],
-      env: { ...ENV[platform] },
       tmpDir: TMP[platform]
     })
-  /** What the builder gives for this OS, from the manager's home and environment. */
-  const builder = (platform: 'linux' | 'darwin' | 'win32') => {
-    const env = { ...ENV[platform] }
-    const denied = [...sensitiveLocations(platform, env, HOME[platform]), ...credentialStoreDenies(platform, env, HOME[platform])]
-    return claudeSandboxSettings({ platform, denied, npmCache: npmCacheOf(TMP[platform]) })
+  /** What the builder gives for this OS and scope, under the manager's home. */
+  const builder = (platform: 'linux' | 'darwin' | 'win32', scope: SandboxScope = scopeOn(platform)) => {
+    const denied = [...sensitiveLocations(platform, scope.env, HOME[platform]), ...credentialStoreDenies(platform, scope.env, HOME[platform])]
+    return claudeSandboxSettings({ platform, denied, npmCache: npmCacheOf(TMP[platform]), layout: scope.layout })
   }
+  /** The scope's twins folder a twin is in: sandbox-settings/<hash>. */
+  const folderOf = (file: string): string => path.dirname(file.replace(/\//g, path.sep))
   const VARIANTS = [{}, { observe: true }, { observe: true, enforce: true }].flatMap((o) => [false, true].map((toolHooks) => ({ ...o, toolHooks })))
 
   it('every variant has a sandbox twin that differs only by sandbox and deny rules', async () => {
     const mgr = managerOn('linux')
     await mgr.init()
     expect(await mgr.ensureEnforceFiles()).toBe('ok')
-    expect(await mgr.ensureSandboxFiles()).toBe('ok')
+    const scope = scopeOn('linux')
+    expect(await mgr.ensureSandboxFiles(scope)).toBe('ok')
     const want = builder('linux')
     expect(want.sandbox).toBeDefined()
+    expect(want.sandbox?.filesystem.denyWrite).toContain('/m/.git/commondir')
     expect(want.permissions.deny).toContain('Read(//home/t/.ssh/**)')
     const twins = new Set<string>()
     for (const o of VARIANTS) {
       const plain = mgr.spawnConfig('s1', account, o)
-      const boxed = mgr.spawnConfig('s1', account, { ...o, sandbox: true })
+      const boxed = mgr.spawnConfig('s1', account, { ...o, sandbox: scope })
       expect(plain, JSON.stringify(o)).not.toHaveProperty('sandboxed')
       expect(boxed).toMatchObject({ sandboxed: true, outPath: plain.outPath, hookOutPath: plain.hookOutPath })
       expect(boxed.observed).toBe(plain.observed)
       expect(boxed.enforced).toBe(plain.enforced)
-      // Beside the file it would read, named for it
-      expect(boxed.settingsFile).toBe(plain.settingsFile.replace(/\.json$/, '-sandbox.json'))
+      // In the scope's own folder, named for the file it is a twin of
+      expect(path.basename(boxed.settingsFile)).toBe(path.basename(plain.settingsFile).replace(/\.json$/, '-sandbox.json'))
+      expect(path.relative(dir, folderOf(boxed.settingsFile))).toMatch(/^sandbox-settings[\\/][0-9a-f]{16}$/)
       twins.add(boxed.settingsFile)
       const a = JSON.parse(await read(plain.settingsFile))
       const b = JSON.parse(await read(boxed.settingsFile))
@@ -951,13 +963,54 @@ describe('StatusLineManager sandbox', () => {
       delete b.permissions
       expect(b).toEqual(a)
     }
-    // Six files: plain, hooks, observe, observe hooks, enforce, enforce hooks
+    // Six files, in one folder: plain, hooks, observe, observe hooks, enforce, enforce hooks
     expect(twins.size).toBe(6)
-    // A chat takes only the sandbox, with nothing of the terminal's hooks
-    const chat = mgr.sandboxChatArgs(false)
+    expect(new Set([...twins].map(folderOf)).size).toBe(1)
+    // A chat takes only the sandbox, with nothing of the terminal's hooks, from the same folder
+    const chat = mgr.sandboxChatArgs(false, scope)
     expect(chat?.[0]).toBe('--settings')
-    expect(chat?.[1]).toBe(path.join(dir, 'astera-sandbox-chat-settings.json').replace(/\\/g, '/'))
+    expect(path.basename(chat![1])).toBe('astera-sandbox-chat-settings.json')
+    expect(folderOf(chat![1])).toBe(folderOf([...twins][0]))
     expect(JSON.parse(await read(chat![1]))).toEqual({ sandbox: want.sandbox, permissions: { deny: want.permissions.deny } })
+  })
+
+  // Final fix pass (C1, minor 2): a twin keeps its own repository's git files from being written and denies the places
+  // its own environment names, so two scopes never share a file, and one prepared scope is no other's
+  it('gives each scope its own twins, from its own layout and environment, and none to a scope not prepared', async () => {
+    const mgr = managerOn('linux')
+    await mgr.init()
+    const wt = scopeOn('linux')
+    const repo = scopeOn('linux', { ...WT, cwd: '/r', top: '/r', gitDir: '/r/.git', commonDir: '/r/.git', worktree: false, worktreeConfigs: ['/r/.git/config.worktree'], gitFiles: ['/r/.git/commondir', '/r/.git/modules'] })
+    const otherBus = scopeOn('linux', WT, { DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/2000/bus' })
+    expect(await mgr.ensureSandboxFiles(wt)).toBe('ok')
+    // Not prepared yet: the session is not marked, and its manager refuses it
+    expect(mgr.spawnConfig('s1', account, { sandbox: repo })).not.toHaveProperty('sandboxed')
+    expect(mgr.sandboxChatArgs(false, repo)).toBeNull()
+    expect(await mgr.ensureSandboxFiles(repo)).toBe('ok')
+    expect(await mgr.ensureSandboxFiles(otherBus)).toBe('ok')
+    const files = [wt, repo, otherBus].map((s) => mgr.spawnConfig('s1', account, { sandbox: s }).settingsFile)
+    expect(new Set(files.map(folderOf)).size).toBe(3)
+    const [a, b, c] = await Promise.all(files.map(async (f) => JSON.parse(await read(f))))
+    expect(a.sandbox.filesystem.denyWrite).toEqual(builder('linux', wt).sandbox?.filesystem.denyWrite)
+    expect(a.sandbox.filesystem.denyWrite).toContain('/w/wt/.git')
+    expect(b.sandbox.filesystem.denyWrite).toEqual(['/r/.git/commondir', '/r/.git/modules', '/r/.git/hooks', '/r/.git/config', '/r/.git/config.worktree'])
+    expect(a.permissions.deny).toContain('Read(//run/user/1000/bus)')
+    expect(c.permissions.deny).toContain('Read(//run/user/2000/bus)')
+    expect(c.permissions.deny).not.toContain('Read(//run/user/1000/bus)')
+    // The same scope again, from another start in the same folder, is the same file
+    expect(mgr.spawnConfig('s2', account, { sandbox: scopeOn('linux') }).settingsFile).toBe(files[0])
+  })
+
+  it(`keeps the last ${SANDBOX_SCOPES_KEPT} scopes up to date, and writes an older one again at its next prepare`, async () => {
+    const mgr = managerOn('linux')
+    await mgr.init()
+    const scopes = Array.from({ length: SANDBOX_SCOPES_KEPT + 1 }, (_, i) => scopeOn('linux', { ...WT, cwd: `/w/wt${i}`, top: `/w/wt${i}` }))
+    for (const s of scopes) expect(await mgr.ensureSandboxFiles(s)).toBe('ok')
+    expect(mgr.spawnConfig('s1', account, { sandbox: scopes[0] })).not.toHaveProperty('sandboxed')
+    expect(mgr.spawnConfig('s1', account, { sandbox: scopes[1] }).sandboxed).toBe(true)
+    expect(await mgr.ensureSandboxFiles(scopes[0])).toBe('ok')
+    expect(mgr.spawnConfig('s1', account, { sandbox: scopes[0] }).sandboxed).toBe(true)
+    expect(mgr.spawnConfig('s1', account, { sandbox: scopes[1] })).not.toHaveProperty('sandboxed')
   })
 
   it('an unsandboxed session’s settings file is today’s, at the same path with the same bytes', async () => {
@@ -976,8 +1029,8 @@ describe('StatusLineManager sandbox', () => {
     const was = await Promise.all(files.map(read))
     const chatWas = mgr.enforceChatArgs()
     const chatBytes = await read(chatWas![1])
-    expect(await mgr.ensureSandboxFiles()).toBe('ok')
-    for (const sandbox of [undefined, false]) {
+    expect(await mgr.ensureSandboxFiles(scopeOn('linux'))).toBe('ok')
+    for (const sandbox of [undefined]) {
       const now = VARIANTS.map((o) => mgr.spawnConfig('s1', account, { ...o, ...(sandbox === undefined ? {} : { sandbox }) }))
       expect(now.map((c) => c.settingsFile)).toEqual(files)
       for (const c of now) expect(c).not.toHaveProperty('sandboxed')
@@ -990,56 +1043,60 @@ describe('StatusLineManager sandbox', () => {
   it('Enforce and sandbox together: one file with both', async () => {
     const mgr = managerOn('linux')
     await mgr.init()
+    const scope = scopeOn('linux')
     // Asked for in either order (a Host chat prepares the sandbox before its capabilities refresh writes Enforce's files)
-    expect(await mgr.ensureSandboxFiles()).toBe('ok')
-    expect(mgr.sandboxChatArgs(true)).toBeNull()
-    expect(mgr.spawnConfig('s1', account, { observe: true, enforce: true, sandbox: true })).not.toHaveProperty('enforced')
+    expect(await mgr.ensureSandboxFiles(scope)).toBe('ok')
+    expect(mgr.sandboxChatArgs(true, scope)).toBeNull()
+    expect(mgr.spawnConfig('s1', account, { observe: true, enforce: true, sandbox: scope })).not.toHaveProperty('enforced')
     expect(await mgr.ensureEnforceFiles()).toBe('ok')
     const want = builder('linux')
     const pre = { matcher: '*', hooks: [{ type: 'command', command: mgr.enforceHookCommand('claude'), timeout: 10 }] }
-    const c = mgr.spawnConfig('s1', account, { observe: true, enforce: true, sandbox: true })
+    const c = mgr.spawnConfig('s1', account, { observe: true, enforce: true, sandbox: scope })
     expect(c).toMatchObject({ observed: true, enforced: true, sandboxed: true })
     const both = JSON.parse(await read(c.settingsFile))
     expect(both.hooks.PreToolUse).toContainEqual(pre)
     expect(both.disableAllHooks).toBe(false)
     expect(both.sandbox).toEqual(want.sandbox)
     expect(both.permissions.deny).toEqual(want.permissions.deny)
-    // A chat's one --settings carries both too
-    const chat = mgr.sandboxChatArgs(true)
-    expect(chat?.[1]).toBe(path.join(dir, 'astera-enforce-sandbox-chat-settings.json').replace(/\\/g, '/'))
+    // A chat's one --settings carries both too, from the scope's folder
+    const chat = mgr.sandboxChatArgs(true, scope)
+    expect(path.basename(chat![1])).toBe('astera-enforce-sandbox-chat-settings.json')
+    expect(folderOf(chat![1])).toBe(folderOf(c.settingsFile))
     expect(JSON.parse(await read(chat![1]))).toEqual({ disableAllHooks: false, hooks: { PreToolUse: [pre] }, sandbox: want.sandbox, permissions: { deny: want.permissions.deny } })
   })
 
   // Final fix pass (C2): a sandboxed session reaches the Host only through the loopback and its workload token, so no twin
   // lets a sandboxed command connect to the Host's socket, on macOS or anywhere, whatever ASTERA_HOST says
   it('grants no Unix socket on any OS, the Host’s included', async () => {
-    for (const env of [{}, { ASTERA_HOST: '/Users/t/hosts/mine.sock' }]) {
+    for (const env of [{}, { ASTERA_HOST: '/Users/t/hosts/mine.sock' }] as Array<Record<string, string>>) {
       await fs.rm(dir, { recursive: true, force: true })
       await fs.mkdir(dir)
-      const mac = new StatusLineManager(dir, 'node', () => {}, { platform: 'darwin', execPath: '/opt/astera/astera', homeDir: HOME.darwin, env, tmpDir: TMP.darwin })
+      const mac = managerOn('darwin')
       await mac.init()
-      await mac.ensureSandboxFiles()
-      const boxed = JSON.parse(await read(mac.spawnConfig('s1', account, { sandbox: true }).settingsFile))
-      expect(boxed.sandbox).toEqual(builder('darwin').sandbox)
+      const scope = scopeOn('darwin', WT, env)
+      await mac.ensureSandboxFiles(scope)
+      const boxed = JSON.parse(await read(mac.spawnConfig('s1', account, { sandbox: scope }).settingsFile))
+      expect(boxed.sandbox).toEqual(builder('darwin', scope).sandbox)
       expect(boxed.sandbox).not.toHaveProperty('network')
       expect(boxed.permissions.deny).toContain('Read(//Users/t/Library/Keychains/**)')
       expect('hostSocket' in mac).toBe(false)
     }
     const linux = managerOn('linux')
     await linux.init()
-    await linux.ensureSandboxFiles()
-    expect(JSON.parse(await read(linux.spawnConfig('s1', account, { sandbox: true }).settingsFile)).sandbox).not.toHaveProperty('network')
+    await linux.ensureSandboxFiles(scopeOn('linux'))
+    expect(JSON.parse(await read(linux.spawnConfig('s1', account, { sandbox: scopeOn('linux') }).settingsFile)).sandbox).not.toHaveProperty('network')
   })
 
   it('on Windows the twin holds the deny rules only, in Claude’s POSIX form', async () => {
     const mgr = managerOn('win32')
     await mgr.init()
-    expect(await mgr.ensureSandboxFiles()).toBe('ok')
-    const c = mgr.spawnConfig('s1', account, { sandbox: true })
+    const scope = scopeOn('win32', null)
+    expect(await mgr.ensureSandboxFiles(scope)).toBe('ok')
+    const c = mgr.spawnConfig('s1', account, { sandbox: scope })
     expect(c.sandboxed).toBe(true)
     const boxed = JSON.parse(await read(c.settingsFile))
     expect(boxed).not.toHaveProperty('sandbox')
-    expect(boxed.permissions.deny).toEqual(builder('win32').permissions.deny)
+    expect(boxed.permissions.deny).toEqual(builder('win32', scope).permissions.deny)
     expect(boxed.permissions.deny).toContain('Read(//c/Users/t/.ssh/**)')
     expect(boxed.permissions.deny).toContain('Read(//c/Users/t/AppData/Roaming/GitHub CLI/**)')
   })
@@ -1047,12 +1104,16 @@ describe('StatusLineManager sandbox', () => {
   it('a twin that could not be written leaves the session unsandboxed, which its manager refuses', async () => {
     const mgr = managerOn('linux')
     await mgr.init()
+    const scope = scopeOn('linux')
+    expect(await mgr.ensureSandboxFiles(scope)).toBe('ok')
     // A folder where the twin goes: neither the swap nor the write in place can put a file there
-    await fs.mkdir(path.join(dir, 'astera-statusline-settings-sandbox.json'))
-    expect(await mgr.ensureSandboxFiles()).toBe('write-failed')
-    expect(mgr.spawnConfig('s1', account, { sandbox: true })).not.toHaveProperty('sandboxed')
+    const twin = mgr.spawnConfig('s1', account, { sandbox: scope }).settingsFile.replace(/\//g, path.sep)
+    await fs.rm(twin)
+    await fs.mkdir(twin)
+    expect(await mgr.ensureSandboxFiles(scope)).toBe('write-failed')
+    expect(mgr.spawnConfig('s1', account, { sandbox: scope })).not.toHaveProperty('sandboxed')
     // The other twins are still in place
-    expect(mgr.spawnConfig('s1', account, { toolHooks: true, sandbox: true }).sandboxed).toBe(true)
+    expect(mgr.spawnConfig('s1', account, { toolHooks: true, sandbox: scope }).sandboxed).toBe(true)
   })
 
   // A session reads its settings once, at start, and the files are rewritten whenever what they hold changes: a twin
@@ -1060,9 +1121,10 @@ describe('StatusLineManager sandbox', () => {
   it('the twins follow the files they are twins of', async () => {
     const mgr = managerOn('linux')
     await mgr.init()
-    await mgr.ensureSandboxFiles()
+    const scope = scopeOn('linux')
+    await mgr.ensureSandboxFiles(scope)
     await mgr.useNode('/usr/local/bin/node')
-    const c = mgr.spawnConfig('s1', account, { sandbox: true })
+    const c = mgr.spawnConfig('s1', account, { sandbox: scope })
     expect(c.sandboxed).toBe(true)
     expect(await read(c.settingsFile)).toContain('/usr/local/bin/node')
   })

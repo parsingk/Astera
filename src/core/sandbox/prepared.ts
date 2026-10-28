@@ -3,7 +3,7 @@
 // safely (an offline drive would freeze the thread), so the folder's git layout is read here, off the thread, and kept
 // for the spawn. A roll prepares a chat chain's respawn through the terminal manager's prepare, as it refreshes the
 // capability cache both managers read, so the two managers of a process hold one PreparedLayouts.
-import { ensureWorktreeConfigFiles, gitLayoutOf, type GitLayout } from './gitLayout'
+import { ensureGitFiles, ensureWorktreeConfigFiles, gitLayoutOf, type GitLayout } from './gitLayout'
 import { credentialStoreDenies, hostSocketDenies, sensitiveLocations } from './locations'
 import { codexSandboxArgs } from './codexProfile'
 import { sandboxUnavailable } from './unavailable'
@@ -65,9 +65,11 @@ export function sessionSandboxArgs(o: {
  * Windows whether the account's Codex home is set up (`windows-setup codex <account>`, which the app offers to set up, or
  * `windows-check-failed codex <account>` when Codex could not be asked).
  * A roll awaits this before it kills the session it replaces, and the spawn after the kill can only throw. Then, on
- * Windows only, every `config.worktree` git may read is made first: the profile keeps them read-only, but Codex's
- * Windows sandbox creates one that is missing, and git would read a `core.hooksPath` from it (gitLayout.ts); on macOS
- * and Linux a read entry already keeps a missing one from being created. A layout that cannot be read or prepared
+ * every OS, the missing git files that decide where git reads its config and hooks from are made (ensureGitFiles: a
+ * `commondir` holding `.`, an empty `modules`), since a read entry holds only for a path that exists (final fix pass,
+ * C1); and on Windows only, every `config.worktree` git may read is made first: the profile keeps them read-only, but
+ * Codex's Windows sandbox creates one that is missing, and git would read a `core.hooksPath` from it (gitLayout.ts); on
+ * macOS and Linux a read entry already keeps a missing one from being created. A layout that cannot be read or prepared
  * refuses the start (`git-layout`), since the profile could not name what it must (E5).
  */
 export async function prepareCodexSandbox(o: {
@@ -103,12 +105,13 @@ export async function prepareCodexSandbox(o: {
       o.log(`sandbox: the Windows sandbox of account ${o.accountId} is not set up${o.ready ? '' : ' (this process cannot ask)'}`)
       throw sandboxUnavailable(`windows-setup codex ${o.accountId}`)
     }
-    if (layout) {
-      try {
-        await ensureWorktreeConfigFiles(layout)
-      } catch (err) {
-        throw fail(err)
-      }
+  }
+  if (layout) {
+    try {
+      await ensureGitFiles(layout)
+      if (o.platform === 'win32') await ensureWorktreeConfigFiles(layout)
+    } catch (err) {
+      throw fail(err)
     }
   }
   return layout

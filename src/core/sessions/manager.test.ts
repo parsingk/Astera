@@ -17,6 +17,7 @@ import { gitLayoutOf } from '../sandbox/gitLayout'
 import { credentialStoreDenies, sensitiveLocations } from '../sandbox/locations'
 import { codexSandboxArgs, codexSandboxEnv, npmCacheOf } from '../sandbox/codexProfile'
 import { claudeSandboxSettings } from '../sandbox/claudeSettings'
+import type { GitLayout } from '../sandbox/gitLayout'
 import { claudeSandboxStart, gitExcludesFileOf, gitExcludesText } from '../sandbox/claudeStart'
 import { StatusLineManager } from './statusline'
 
@@ -1829,6 +1830,10 @@ describe('the sandbox at spawn', () => {
       const want = await expected(platform, cwd)
       expect(env.npm_config_cache).toBe(`${os.tmpdir().replace(/\\/g, '/').replace(/\/+$/, '')}/astera-npm-cache`)
       expect(env).toMatchObject(want.env)
+      // Final fix pass (C1): on every OS the git files a read entry keeps are made first, a commondir naming the git
+      // directory itself and an empty modules folder
+      expect(readFileSync(path.join(cwd, '.git', 'commondir'), 'utf8'), platform).toBe('.\n')
+      expect(existsSync(path.join(cwd, '.git', 'modules')), platform).toBe(true)
       if (platform === 'win32') {
         expect(env).toMatchObject({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'safe.directory', GIT_CONFIG_VALUE_0: want.layout!.top })
         // win32 only: git may later read a config.worktree, and the Windows sandbox would create a missing one
@@ -1873,6 +1878,8 @@ describe('the sandbox at spawn', () => {
       expect(spawned[0].meta?.restore).not.toHaveProperty('sandboxKind')
       // Nothing is written into the repository for it
       expect(existsSync(path.join(cwd, '.git', 'config.worktree'))).toBe(false)
+      expect(existsSync(path.join(cwd, '.git', 'commondir'))).toBe(false)
+      expect(existsSync(path.join(cwd, '.git', 'modules'))).toBe(false)
     }
     const { manager, argv } = rig('linux')
     await manager.prepare({ account, cwd: os.tmpdir() })
@@ -1980,6 +1987,7 @@ describe('the sandbox at spawn', () => {
     // The account's own home is the one asked
     expect(asked).toEqual([codexAccount.configDir])
     expect(existsSync(path.join(cwd, '.git', 'config.worktree'))).toBe(false)
+    expect(existsSync(path.join(cwd, '.git', 'commondir'))).toBe(false)
     expect(() => w.manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
     expect(w.spawned).toHaveLength(0)
     // A process that cannot ask refuses the same way: a sandboxed start on a home nobody asked about is not risked
@@ -2090,7 +2098,6 @@ describe('the sandbox at spawn, for Claude', () => {
       platform,
       execPath: platform === 'win32' ? 'C:/x/electron.exe' : '/opt/astera/astera',
       homeDir: HOME[platform],
-      env: { ...BASE[platform], ...extraEnv },
       tmpDir
     })
     await statusLine.init()
@@ -2113,10 +2120,16 @@ describe('the sandbox at spawn, for Claude', () => {
   }
   /** The `--settings` file a session was started with. */
   const settingsOf = (a: string[]): string => a[a.indexOf('--settings') + 1]
-  const builder = (platform: 'linux' | 'darwin' | 'win32', tmpDir: string) => {
+  const builder = (platform: 'linux' | 'darwin' | 'win32', tmpDir: string, layout: GitLayout | null = null) => {
     const env = { ...BASE[platform] }
     const denied = [...sensitiveLocations(platform, env, HOME[platform]), ...credentialStoreDenies(platform, env, HOME[platform])]
-    return claudeSandboxSettings({ platform, denied, npmCache: npmCacheOf(tmpDir) })
+    return claudeSandboxSettings({ platform, denied, npmCache: npmCacheOf(tmpDir), layout })
+  }
+  /** A repository's top in a fresh temp folder: a `.git` folder is all gitLayoutOf needs. */
+  const repoIn = (): string => {
+    const top = temp()
+    mkdirSync(path.join(top, '.git'))
+    return top
   }
 
   it('a sandboxed Claude session on linux gets the sandbox variant', async () => {
@@ -2128,7 +2141,9 @@ describe('the sandbox at spawn, for Claude', () => {
     expect(r.warmed).toEqual(['claude'])
     const info = r.manager.spawn({ account, cwd, sandbox: true, bypassPermissions: true })
     const file = settingsOf(r.argv[0])
-    expect(file).toBe(r.statusLine.spawnConfig('x', account).settingsFile.replace(/\.json$/, '-sandbox.json'))
+    // Its scope's twin: outside a repository, and from the session's own environment
+    expect(file).toBe(r.statusLine.spawnConfig('x', account, { sandbox: { layout: null, env: { ...BASE.linux } } }).settingsFile)
+    expect(path.basename(file)).toBe(path.basename(r.statusLine.spawnConfig('x', account).settingsFile).replace(/\.json$/, '-sandbox.json'))
     const settings = JSON.parse(readFileSync(file, 'utf8'))
     expect(settings.sandbox).toEqual(builder('linux', r.tmpDir).sandbox)
     expect(settings.permissions.deny).toContain('Read(//home/t/.ssh/**)')
@@ -2175,6 +2190,33 @@ describe('the sandbox at spawn, for Claude', () => {
     own.manager.spawn({ account, cwd, sandbox: true })
     expect(own.spawned[0].env?.ASTERA_HOST).toBe('/Users/t/hosts/mine.sock')
     expect(JSON.parse(readFileSync(settingsOf(own.argv[0]), 'utf8')).sandbox).not.toHaveProperty('network')
+  })
+
+  // Final fix pass (C1): in a repository the twin keeps every git file that decides what git runs from being written, the
+  // missing ones made first, on macOS and Linux; a session in a folder nobody prepared for this account is refused
+  it('in a repository its twin keeps the git files from being written, made first, and a folder not prepared refuses', async () => {
+    for (const platform of ['linux', 'darwin'] as const) {
+      const r = await rig(platform)
+      const cwd = repoIn()
+      await r.manager.prepare({ account, cwd, sandbox: true })
+      r.manager.spawn({ account, cwd, sandbox: true })
+      const layout = await gitLayoutOf(cwd)
+      const settings = JSON.parse(readFileSync(settingsOf(r.argv[0]), 'utf8'))
+      expect(settings.sandbox).toEqual(builder(platform, r.tmpDir, layout).sandbox)
+      expect(settings.sandbox.filesystem.denyWrite).toEqual([...layout!.gitFiles, `${layout!.commonDir}/hooks`, `${layout!.commonDir}/config`, ...layout!.worktreeConfigs])
+      expect(readFileSync(path.join(cwd, '.git', 'commondir'), 'utf8')).toBe('.\n')
+      expect(existsSync(path.join(cwd, '.git', 'modules'))).toBe(true)
+      expect(existsSync(path.join(cwd, '.git', 'config.worktree'))).toBe(true)
+      expect(() => r.manager.spawn({ account, cwd: repoIn(), sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
+      expect(() => r.manager.spawn({ account: { ...account, id: 'acc-other' }, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
+    }
+    // Windows: deny rules only, whatever the folder, and nothing is made in its git directory
+    const win = await rig('win32')
+    const cwd = repoIn()
+    await win.manager.prepare({ account, cwd, sandbox: true })
+    win.manager.spawn({ account, cwd, sandbox: true })
+    expect(JSON.parse(readFileSync(settingsOf(win.argv[0]), 'utf8'))).not.toHaveProperty('sandbox')
+    expect(existsSync(path.join(cwd, '.git', 'commondir'))).toBe(false)
   })
 
   it('on win32 it gets the deny-only variant', async () => {

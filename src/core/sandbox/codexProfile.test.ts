@@ -2,14 +2,23 @@ import { describe, expect, it } from 'vitest'
 import { codexSandboxArgs, codexSandboxEnv, npmCacheOf } from './codexProfile'
 import { sandboxUnavailable } from './unavailable'
 
-// worktreeConfigs as gitLayoutOf lists them: the checkout's own config.worktree, the main checkout's, the other worktrees'
-const wt = { cwd: '/w/wt', top: '/w/wt', gitDir: '/m/.git/worktrees/wt', commonDir: '/m/.git', worktree: true, worktreeConfigs: ['/m/.git/worktrees/wt/config.worktree', '/m/.git/config.worktree', '/m/.git/worktrees/other/config.worktree'] }
-const repo = { cwd: '/r', top: '/r', gitDir: '/r/.git', commonDir: '/r/.git', worktree: false, worktreeConfigs: ['/r/.git/config.worktree', '/r/.git/worktrees/x/config.worktree'] }
+// worktreeConfigs as gitLayoutOf lists them: the checkout's own config.worktree, the main checkout's, the other worktrees';
+// gitFiles: the checkout's commondir, the common directory's, its modules, the other worktrees' commondir
+const wt = {
+  cwd: '/w/wt', top: '/w/wt', gitDir: '/m/.git/worktrees/wt', commonDir: '/m/.git', worktree: true,
+  worktreeConfigs: ['/m/.git/worktrees/wt/config.worktree', '/m/.git/config.worktree', '/m/.git/worktrees/other/config.worktree'],
+  gitFiles: ['/m/.git/worktrees/wt/commondir', '/m/.git/commondir', '/m/.git/modules', '/m/.git/worktrees/other/commondir']
+}
+const repo = {
+  cwd: '/r', top: '/r', gitDir: '/r/.git', commonDir: '/r/.git', worktree: false,
+  worktreeConfigs: ['/r/.git/config.worktree', '/r/.git/worktrees/x/config.worktree'],
+  gitFiles: ['/r/.git/commondir', '/r/.git/modules', '/r/.git/worktrees/x/commondir']
+}
 
 describe('codexSandboxArgs', () => {
   it('names the worktree git directory, keeps the common directory writable and its hooks and config read', () => {
     const a = codexSandboxArgs({ platform: 'linux', layout: wt, denied: ['/h/.ssh'] }).join(' ')
-    for (const want of ['-a never', '":workspace_roots"={".git"="write"}', '"/m/.git/worktrees/wt"="write"', '"/m/.git"="write"', '"/m/.git/hooks"="read"', '"/m/.git/config"="read"', '"/h/.ssh"="deny"', 'network={enabled=true}', 'default_permissions="astera"'])
+    for (const want of ['-a never', '":workspace_roots"={".git"="read"}', '"/m/.git/worktrees/wt"="write"', '"/m/.git"="write"', '"/m/.git/hooks"="read"', '"/m/.git/config"="read"', '"/h/.ssh"="deny"', 'network={enabled=true}', 'default_permissions="astera"'])
       expect(a, want).toContain(want)
     expect(a).not.toContain('windows.sandbox')
   })
@@ -31,10 +40,29 @@ describe('codexSandboxArgs', () => {
     expect(top).toContain('"/r/.git/worktrees/x/config.worktree"="read"')
   })
 
-  it('in a repository, grants its .git and keeps its hooks, config and config.worktree read', () => {
+  it('in a repository, grants its .git and keeps its hooks, config, config.worktree, commondir and modules read', () => {
     const a = codexSandboxArgs({ platform: 'linux', layout: repo, denied: [] }).join(' ')
-    expect(a).toContain('":workspace_roots"={".git"="write", ".git/hooks"="read", ".git/config"="read", ".git/config.worktree"="read"}')
+    expect(a).toContain(
+      '":workspace_roots"={".git"="write", ".git/hooks"="read", ".git/config"="read", ".git/config.worktree"="read", ".git/commondir"="read", ".git/modules"="read"}'
+    )
     expect(a).not.toContain('"/r/.git"')
+    expect(a).not.toContain('"/r/.git/commondir"')
+    expect(a).not.toContain('"/r/.git/modules"')
+    // The other worktrees' commondir, outside :workspace_roots
+    expect(a).toContain('"/r/.git/worktrees/x/commondir"="read"')
+  })
+
+  // Final fix pass (C1): a commondir names where git reads config and hooks from, a worktree's `.git` pointer names its
+  // git directory, and `modules` holds the submodules' git directories: none of them is the session's to rewrite
+  it('keeps every commondir, modules and a worktree’s pointer file read, in every layout', () => {
+    for (const cwd of ['/w/wt', '/w/wt/sub']) {
+      const a = codexSandboxArgs({ platform: 'linux', layout: { ...wt, cwd }, denied: [] }).join(' ')
+      for (const p of wt.gitFiles) expect(a, `${cwd} ${p}`).toContain(`"${p}"="read"`)
+      expect(a).not.toContain('".git"="write"')
+    }
+    expect(codexSandboxArgs({ platform: 'linux', layout: wt, denied: [] }).join(' ')).toContain('":workspace_roots"={".git"="read"}')
+    const sub = codexSandboxArgs({ platform: 'linux', layout: { ...repo, cwd: '/r/sub' }, denied: [] }).join(' ')
+    for (const p of repo.gitFiles) expect(sub, p).toContain(`"${p}"="read"`)
   })
 
   it('in a subfolder, names the git directories by absolute path', () => {
@@ -47,7 +75,7 @@ describe('codexSandboxArgs', () => {
   })
 
   it('writes git paths with spaces, Korean letters and quotes as TOML basic strings', () => {
-    const l = { cwd: '/w/내 폴더 x', top: '/w/내 폴더 x', gitDir: '/m/내 폴더 x/.git/worktrees/a"b', commonDir: '/m/내 폴더 x/.git', worktree: true, worktreeConfigs: [] }
+    const l = { cwd: '/w/내 폴더 x', top: '/w/내 폴더 x', gitDir: '/m/내 폴더 x/.git/worktrees/a"b', commonDir: '/m/내 폴더 x/.git', worktree: true, worktreeConfigs: [], gitFiles: [] }
     const a = codexSandboxArgs({ platform: 'linux', layout: l, denied: [] }).join(' ')
     for (const p of [l.gitDir, l.commonDir, l.commonDir + '/hooks', l.commonDir + '/config']) expect(a, p).toContain(JSON.stringify(p) + '=')
   })
@@ -76,7 +104,7 @@ describe('codexSandboxEnv', () => {
   })
 
   it('trusts the checkout and the main checkout on Windows, with forward slashes', () => {
-    const env = codexSandboxEnv({ platform: 'win32', layout: { cwd: 'C:/w/wt', top: 'C:/w/wt', gitDir: 'C:/m/.git/worktrees/wt', commonDir: 'C:/m/.git', worktree: true, worktreeConfigs: [] }, tmpDir: 'C:\\t' })
+    const env = codexSandboxEnv({ platform: 'win32', layout: { cwd: 'C:/w/wt', top: 'C:/w/wt', gitDir: 'C:/m/.git/worktrees/wt', commonDir: 'C:/m/.git', worktree: true, worktreeConfigs: [], gitFiles: [] }, tmpDir: 'C:\\t' })
     expect(env).toEqual({
       npm_config_cache: 'C:/t/astera-npm-cache',
       GIT_CONFIG_COUNT: '2',
@@ -88,7 +116,7 @@ describe('codexSandboxEnv', () => {
   })
 
   it('trusts only the top when it is the main checkout, and only npm without a layout', () => {
-    const env = codexSandboxEnv({ platform: 'win32', layout: { cwd: 'C:/r', top: 'C:/r', gitDir: 'C:/r/.git', commonDir: 'C:/r/.git', worktree: false, worktreeConfigs: [] }, tmpDir: 'C:/t' })
+    const env = codexSandboxEnv({ platform: 'win32', layout: { cwd: 'C:/r', top: 'C:/r', gitDir: 'C:/r/.git', commonDir: 'C:/r/.git', worktree: false, worktreeConfigs: [], gitFiles: [] }, tmpDir: 'C:/t' })
     expect(env.GIT_CONFIG_COUNT).toBe('1')
     expect(codexSandboxEnv({ platform: 'win32', layout: null, tmpDir: 'C:/t' })).toEqual({ npm_config_cache: 'C:/t/astera-npm-cache' })
   })
@@ -96,7 +124,7 @@ describe('codexSandboxEnv', () => {
   // Task 5 fix round 1: the person's own GIT_CONFIG_* entries in the inherited environment are kept: the sandbox's are
   // numbered after them and the count is the total. A count git could not read is taken as none.
   it('keeps the inherited GIT_CONFIG entries, numbering its own after them', () => {
-    const layout = { cwd: 'C:/w/wt', top: 'C:/w/wt', gitDir: 'C:/m/.git/worktrees/wt', commonDir: 'C:/m/.git', worktree: true, worktreeConfigs: [] }
+    const layout = { cwd: 'C:/w/wt', top: 'C:/w/wt', gitDir: 'C:/m/.git/worktrees/wt', commonDir: 'C:/m/.git', worktree: true, worktreeConfigs: [], gitFiles: [] }
     const inherited = { GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'core.autocrlf', GIT_CONFIG_VALUE_0: 'false', GIT_CONFIG_KEY_1: 'user.name', GIT_CONFIG_VALUE_1: 'me' }
     expect(codexSandboxEnv({ platform: 'win32', layout, tmpDir: 'C:/t', env: inherited })).toEqual({
       npm_config_cache: 'C:/t/astera-npm-cache',

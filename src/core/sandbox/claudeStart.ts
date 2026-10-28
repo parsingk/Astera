@@ -1,15 +1,18 @@
 // What a sandboxed Claude start does before its spawn (sandbox design §6), for both session managers: the terminal one
 // (core/sessions/manager.ts) and the chat one (core/chat/manager.ts). Claude's sandbox is its settings file, written by
-// StatusLineManager.ensureSandboxFiles, so there is no git layout to read for it as there is for Codex; what is left is the
-// version floor, npm's cache folder (macOS and Linux) and, on Linux, the git excludes Task 2 measured (inventory §23.4).
+// StatusLineManager.ensureSandboxFiles for the start's scope: the folder's git layout, whose git files it keeps from being
+// written (final fix pass, C1), and the environment the session is built from. What else is done: the version floor,
+// npm's cache folder (macOS and Linux) and, on Linux, the git excludes Task 2 measured (inventory §23.4).
 // Both spawns are synchronous, so everything here that touches the disk or runs a process is done in `prepare`, which
 // every caller awaits first (a roll before its kill).
 import { execFile } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { ENFORCE_MIN, atLeast, type CliVersionProbe } from '../sessions/cliVersion'
-import { writeScript, type SandboxFilesResult } from '../sessions/statusline'
+import { writeScript, type SandboxFilesResult, type SandboxScope } from '../sessions/statusline'
 import { appendGitConfig, npmCacheOf } from './codexProfile'
+import { ensureGitFiles, ensureWorktreeConfigFiles, gitLayoutOf, type GitLayout } from './gitLayout'
+import { PreparedLayouts } from './prepared'
 import { SANDBOX_UNAVAILABLE, sandboxUnavailable } from './unavailable'
 
 const slashed = (p: string): string => p.replace(/\\/g, '/')
@@ -74,14 +77,20 @@ export function claudeSandboxBlocker(version: string | null | undefined): string
 
 /** What both session managers ask of a sandboxed Claude start. */
 export interface ClaudeSandboxStart {
-  /** The version floor, the settings twins (`settings-write-failed` when they cannot be written), npm's cache folder on
-   *  macOS and Linux, and on Linux the exclude file, in that order: an old Claude is refused before anything is written.
-   *  Rejects with `SANDBOX_UNAVAILABLE: …`. */
-  prepare(): Promise<void>
+  /** The version floor; on macOS and Linux the folder's git layout read and its missing git files made (`git-layout` when
+   *  either fails); the settings twins for the scope (`settings-write-failed` when they cannot be written); npm's cache
+   *  folder on macOS and Linux, and on Linux the exclude file, in that order: an old Claude is refused before anything is
+   *  written. `env` is the environment the session is built from (its account's, before the hiding), the one the spawn
+   *  hands scopeOf. Rejects with `SANDBOX_UNAVAILABLE: …`. */
+  prepare(o: { accountId: string; cwd: string; env: Record<string, string | undefined> }): Promise<void>
   /** The version floor again, read synchronously at the spawn (the CLI may have changed since the prepare). */
   blocker(): string | null
-  /** A chat's one `--settings`: the sandbox, with the Enforce hook when `enforce`; null when it was not written. */
-  chatArgs(enforce: boolean): string[] | null
+  /** The scope a prepare wrote twins for, for this account and folder within PREPARED_MS, with `env`, the environment the
+   *  session is built from; undefined when no prepare kept one, and the spawn then refuses with `not-prepared`. */
+  scopeOf(accountId: string, cwd: string, env: Record<string, string | undefined>): SandboxScope | undefined
+  /** A chat's one `--settings`: the sandbox of its scope, with the Enforce hook when `enforce`; null when it was not
+   *  written. */
+  chatArgs(enforce: boolean, scope: SandboxScope): string[] | null
   /** What the session's environment gets, after everything else Astera adds: `inherited` is that environment. */
   env(inherited: Record<string, string | undefined>): Record<string, string>
 }
@@ -112,8 +121,8 @@ export function claudeSandboxStart(o: {
   /** os.tmpdir(), where npm's cache goes. */
   tmpDir: string
   files: {
-    ensureSandboxFiles(): Promise<SandboxFilesResult>
-    sandboxChatArgs(enforce: boolean): string[] | null
+    ensureSandboxFiles(scope: SandboxScope): Promise<SandboxFilesResult>
+    sandboxChatArgs(enforce: boolean, scope: SandboxScope): string[] | null
   }
   /** The version check Enforce asks (cliVersion.ts), shared with it. */
   version: Pick<CliVersionProbe, 'warm'> & ((cli: 'claude') => string | null | undefined)
@@ -121,10 +130,15 @@ export function claudeSandboxStart(o: {
   uid?: number
   /** Test injection; default runs git. */
   runGit?: RunGit
+  /** Test injection; default Date.now. */
+  now?: () => number
   log: (m: string) => void
 }): ClaudeSandboxStart {
   const excludesFile = gitExcludesFileOf(o.profileDir, o.uid ?? process.getuid?.() ?? 0)
   const runGit = o.runGit ?? runGitFile
+  const now = o.now ?? Date.now
+  /** The layouts the prepares read, by account and folder, for the spawn's scope, as a Codex start keeps its own. */
+  const layouts = new PreparedLayouts()
   /** Whether the last prepare wrote the exclude file: a spawn after one that could not points git at nothing new. */
   let excludesWritten = false
   const blocker = (): string | null => claudeSandboxBlocker(o.version('claude'))
@@ -143,12 +157,32 @@ export function claudeSandboxStart(o: {
     return writeScript(excludesFile, text)
   }
 
+  /** The folder's git layout, with its missing git files made, on macOS and Linux; null on Windows, where Claude has no
+   *  sandbox and its twin holds the deny rules only, whatever the folder. The git files a sandbox keeps from being written
+   *  are made first, as a Codex start makes them (gitLayout.ts): srt then denies writing a file that is there rather than
+   *  a path that is not. A layout that cannot be read or prepared refuses the start (`git-layout`). */
+  const layoutFor = async (cwd: string): Promise<GitLayout | null> => {
+    if (o.platform === 'win32') return null
+    try {
+      const layout = await gitLayoutOf(cwd)
+      if (layout) {
+        await ensureGitFiles(layout)
+        await ensureWorktreeConfigFiles(layout)
+      }
+      return layout
+    } catch (err) {
+      o.log(`sandbox: the git layout of ${cwd} could not be read or prepared: ${String(err)}`)
+      throw sandboxUnavailable('git-layout')
+    }
+  }
+
   return {
-    prepare: async () => {
+    prepare: async (p) => {
       await o.version.warm('claude')
       const blocked = blocker()
       if (blocked !== null) throw new Error(blocked)
-      if ((await o.files.ensureSandboxFiles()) !== 'ok') {
+      const layout = await layoutFor(p.cwd)
+      if ((await o.files.ensureSandboxFiles({ layout, env: p.env })) !== 'ok') {
         o.log("sandbox: Claude's sandbox settings could not be written, so the sandboxed start is refused")
         throw sandboxUnavailable('settings-write-failed')
       }
@@ -160,9 +194,14 @@ export function claudeSandboxStart(o: {
         excludesWritten = await writeExcludes()
         if (!excludesWritten) o.log(`sandbox: the git excludes ${excludesFile} could not be written; git add -A may fail in the session`)
       }
+      layouts.keep(p.accountId, p.cwd, layout, now())
     },
     blocker,
-    chatArgs: (enforce) => o.files.sandboxChatArgs(enforce),
+    scopeOf: (accountId, cwd, env) => {
+      const layout = layouts.layoutOf(accountId, cwd, now())
+      return layout === undefined ? undefined : { layout, env }
+    },
+    chatArgs: (enforce, scope) => o.files.sandboxChatArgs(enforce, scope),
     env: (inherited) =>
       claudeSandboxEnv({
         platform: o.platform,

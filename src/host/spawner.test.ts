@@ -19,6 +19,7 @@ import { makeDescriptors } from '../core/providers/descriptor'
 import { previewShotsDir } from '../core/preview/shotsDir'
 import type { PromptWriteEvent } from '../core/orchestration/exec/coordinator'
 import { ENTER_QUIET_MS } from '../core/sessions/sessionDriver'
+import { gitLayoutOf } from '../core/sandbox/gitLayout'
 
 const NOW = '2026-09-24T00:00:00.000Z'
 let dir: string
@@ -1019,7 +1020,8 @@ describe('createHostSpawner — createSession', () => {
         return args[args.indexOf('--settings') + 1]
       }
       const boxed = await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_box' })
-      expect(settingsOf(0)).toMatch(/astera-statusline-settings-sandbox\.json$/)
+      // Its scope's twin, in a folder of its own (final fix pass, C1)
+      expect(settingsOf(0)).toMatch(/sandbox-settings[\\/][0-9a-f]{16}[\\/]astera-statusline-settings-sandbox\.json$/)
       // The denied places are the Host's home's
       const deny: string[] = JSON.parse(await fs.readFile(settingsOf(0), 'utf8')).permissions.deny
       expect(deny.some((r) => r.startsWith('Read(//') && r.endsWith('/home/.ssh/**)'))).toBe(true)
@@ -1028,7 +1030,11 @@ describe('createHostSpawner — createSession', () => {
       const open = await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_open' })
       expect(settingsOf(1)).toMatch(/astera-statusline-settings\.json$/)
       expect(open).not.toHaveProperty('sandboxed')
-      expect(h.spawner!.claudeSandbox!.chatArgs(false)?.[1]).toMatch(/astera-sandbox-chat-settings\.json$/)
+      // A chat of the same scope (the folder's layout, and the session's environment, which names the same denied places)
+      // takes the chat file from the same folder
+      const chat = h.spawner!.claudeSandbox!.chatArgs(false, { layout: process.platform === 'win32' ? null : await gitLayoutOf(repo), env: h.spawned[0].opts.env })
+      expect(chat?.[1]).toMatch(/sandbox-settings[\\/][0-9a-f]{16}[\\/]astera-sandbox-chat-settings\.json$/)
+      expect(path.dirname(chat![1].replace(/\//g, path.sep))).toBe(path.dirname(settingsOf(0).replace(/\//g, path.sep)))
       // Task 7 fix round 1: npm's cache goes in the temp folder the spawner was given (none for Claude on Windows, which has
       // no shell sandbox), never the real one in a test
       const cache = path.join(dir, 'tmp', 'astera-npm-cache')

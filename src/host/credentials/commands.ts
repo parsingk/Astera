@@ -98,15 +98,15 @@ const LOGIN_FOLDERS = '~/.ssh, ~/.aws, gh’s and gcloud’s settings, ~/.docker
 const SANDBOX_LINES: { level: 'ok' | 'warn'; text: string }[] = [
   {
     level: 'ok',
-    text: `Sandbox, Codex on Windows: Codex’s elevated sandbox, set up once for each Codex account; writes stay in the session’s folder, its repository’s git directories (not their hooks or config) and the temp folder, ${LOGIN_FOLDERS} cannot be read, Credential Manager is kept out, and the network works.`
+    text: `Sandbox, Codex on Windows: Codex’s elevated sandbox, set up once for each Codex account; writes stay in the session’s folder, its repository’s git directories (not their hooks, config, commondir files or modules folder) and the temp folder, ${LOGIN_FOLDERS} cannot be read, Credential Manager is kept out, and the network works.`
   },
   {
     level: 'ok',
-    text: `Sandbox, Codex on macOS: Codex’s own sandbox; writes stay in the session’s folder, its repository’s git directories (not their hooks or config) and the temp folder, ${LOGIN_FOLDERS} and ~/Library/Keychains cannot be read, and the network works.`
+    text: `Sandbox, Codex on macOS: Codex’s own sandbox; writes stay in the session’s folder, its repository’s git directories (not their hooks, config, commondir files or modules folder) and the temp folder, ${LOGIN_FOLDERS} and ~/Library/Keychains cannot be read, and the network works.`
   },
   {
     level: 'ok',
-    text: `Sandbox, Codex on Linux: Codex’s own sandbox; writes stay in the session’s folder, its repository’s git directories (not their hooks or config) and the temp folder, ${LOGIN_FOLDERS} cannot be read, the session bus a secret service answers on cannot be reached when the session bus is a file path (a bus on an abstract socket is not denied), and the network works.`
+    text: `Sandbox, Codex on Linux: Codex’s own sandbox; writes stay in the session’s folder, its repository’s git directories (not their hooks, config, commondir files or modules folder) and the temp folder, ${LOGIN_FOLDERS} cannot be read, the session bus a secret service answers on cannot be reached when the session bus is a file path (a bus on an abstract socket is not denied), and the network works.`
   },
   {
     level: 'warn',

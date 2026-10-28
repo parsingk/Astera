@@ -30,6 +30,7 @@ import { sandboxKindOf } from '../sandbox/coverage'
 import { PreparedLayouts, prepareCodexSandbox, sessionSandboxArgs, type CodexWindowsReady } from '../sandbox/prepared'
 import { codexWindowsReadiness, runCodex } from '../sandbox/windowsReadiness'
 import type { ClaudeSandboxStart } from '../sandbox/claudeStart'
+import type { SandboxScope } from './statusline'
 
 /** statusLine info injected when a session spawns (provided by main's StatusLineManager,
  *  structurally compatible). */
@@ -45,7 +46,7 @@ export interface StatusLineSpawnInfo {
 export type StatusLineProvider = (
   sessionId: string,
   account: Account,
-  opts?: { toolHooks?: boolean; observe?: boolean; enforce?: boolean; sandbox?: boolean }
+  opts?: { toolHooks?: boolean; observe?: boolean; enforce?: boolean; sandbox?: SandboxScope }
 ) => StatusLineSpawnInfo | null
 
 
@@ -271,7 +272,7 @@ export class SessionManager {
     // twin holds both), with its version asked first; a chat chain's roll is prepared here too, and its file with them
     if (opts.sandbox === true) {
       if (providerOf(opts.account) === 'codex') await this.prepareSandbox(opts.account, opts.cwd, opts.chat === true)
-      else if (this.claudeSandbox) await this.claudeSandbox.prepare()
+      else if (this.claudeSandbox) await this.claudeSandbox.prepare({ accountId: opts.account.id, cwd: opts.cwd, env: this.envFor(opts.account) })
       else throw sandboxUnavailable('not-prepared')
     }
   }
@@ -419,12 +420,17 @@ export class SessionManager {
       if (prepared === undefined) throw sandboxUnavailable('not-prepared')
       layout = prepared
     }
+    // Its twin is its scope's (the folder's git layout the prepare read, and the environment the session is built from,
+    // before the hiding, which its denied places are read from): a scope nobody prepared refuses below
+    let claudeScope: SandboxScope | undefined
     if (sandboxedClaude) {
       const refused = this.claudeSandbox ? this.claudeSandbox.blocker() : sandboxUnavailable('not-prepared').message
       if (refused !== null) throw new Error(refused)
+      claudeScope = this.claudeSandbox?.scopeOf(opts.account.id, opts.cwd, this.envFor(opts.account))
+      if (claudeScope === undefined) throw sandboxUnavailable('not-prepared')
     }
     const slOpts = enforce ? { toolHooks: wantToolHooks, observe: true, enforce: true } : observe ? { toolHooks: wantToolHooks, observe: true } : { toolHooks: wantToolHooks }
-    const sl = d.usesStatusLine ? (this.statusLineProvider?.(id, opts.account, sandboxedClaude ? { ...slOpts, sandbox: true } : slOpts) ?? null) : null
+    const sl = d.usesStatusLine ? (this.statusLineProvider?.(id, opts.account, claudeScope ? { ...slOpts, sandbox: claudeScope } : slOpts) ?? null) : null
     if (enforce && d.usesStatusLine && sl?.enforced !== true) throw enforceUnavailable('no-interpreter')
     if (sandboxedClaude && sl?.sandboxed !== true) throw sandboxUnavailable('not-prepared')
     const enforceArgs = enforce && !d.usesStatusLine ? (this.enforce?.args(providerOf(opts.account)) ?? null) : []

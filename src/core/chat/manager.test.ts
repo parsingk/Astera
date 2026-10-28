@@ -1604,8 +1604,10 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
       expect(info.sandboxKind, platform).toBe('sandbox')
       expect(spawned[0].opts.meta?.restore).toMatchObject({ sandboxed: true, sandboxKind: 'sandbox' })
       expect(chatInfoFromNote({ kind: 'chat', id: info.id, restore: spawned[0].opts.meta!.restore! })).toMatchObject({ sandboxed: true, sandboxKind: 'sandbox' })
-      // win32: a missing config.worktree is made first, as for a terminal session
+      // win32: a missing config.worktree is made first, as for a terminal session; on every OS the commondir and modules
       expect(existsSync(path.join(cwd, '.git', 'config.worktree'))).toBe(platform === 'win32')
+      expect(readFileSync(path.join(cwd, '.git', 'commondir'), 'utf8'), platform).toBe('.\n')
+      expect(existsSync(path.join(cwd, '.git', 'modules')), platform).toBe(true)
     }
   })
 
@@ -1654,6 +1656,7 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
     await expect(manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: windows-setup codex acc-cx$/)
     expect(asked).toEqual([codexAccount.configDir])
     expect(existsSync(path.join(cwd, '.git', 'config.worktree'))).toBe(false)
+    expect(existsSync(path.join(cwd, '.git', 'commondir'))).toBe(false)
     expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
     expect(spawned).toHaveLength(0)
   })
@@ -1756,7 +1759,7 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
       const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'astera-chat-claude-tmp-'))
       dirs.push(profileDir, tmpDir)
       const statusLine = new StatusLineManager(profileDir, 'node', () => {}, {
-        platform, execPath: platform === 'win32' ? 'C:/x/electron.exe' : '/opt/astera/astera', homeDir: HOME[platform], env: { ...BASE[platform] }, tmpDir
+        platform, execPath: platform === 'win32' ? 'C:/x/electron.exe' : '/opt/astera/astera', homeDir: HOME[platform], tmpDir
       })
       await statusLine.init()
       if (o.mode === 'enforce') expect(await statusLine.ensureEnforceFiles()).toBe('ok')
@@ -1796,10 +1799,19 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
       const r = await claudeRig()
       await r.manager.prepare({ account: claudeAccount, cwd, sandbox: true })
       const info = r.manager.spawn({ account: claudeAccount, cwd, sandbox: true })
-      const chatFile = r.statusLine.sandboxChatArgs(false)![1]
+      // Its scope's file (final fix pass, C1 and minor 2): the folder's git layout, and the chat's own environment
+      const layout = await gitLayoutOf(cwd)
+      const chatFile = r.statusLine.sandboxChatArgs(false, { layout, env: { ...BASE.linux } })![1]
       expect(r.spawned[0].args).toEqual([...claudeLaunchArgs({ resumeSessionId: undefined, bypass: false }), '--settings', chatFile])
       expect(read(chatFile).sandbox).toMatchObject({ enabled: true, allowUnsandboxedCommands: false, failIfUnavailable: true })
       expect(JSON.stringify(read(chatFile).permissions)).toContain('Read(//home/t/.ssh/**)')
+      expect(JSON.stringify(read(chatFile).permissions)).toContain('Read(//run/user/1000/bus)')
+      // The repository's git files are kept from being written, and the missing ones were made first
+      expect((read(chatFile).sandbox as { filesystem: { denyWrite: string[] } }).filesystem.denyWrite).toEqual([
+        ...layout!.gitFiles, `${layout!.commonDir}/hooks`, `${layout!.commonDir}/config`, ...layout!.worktreeConfigs
+      ])
+      expect(readFileSync(path.join(cwd, '.git', 'commondir'), 'utf8')).toBe('.\n')
+      expect(existsSync(path.join(cwd, '.git', 'modules'))).toBe(true)
       // The adapter has nothing to name: Claude's sandbox is the file
       expect(r.handles[0].startCalls[0]).not.toHaveProperty('sandbox')
       const env = r.spawned[0].opts.env

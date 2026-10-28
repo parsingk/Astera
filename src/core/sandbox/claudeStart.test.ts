@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import nodeFs from 'node:fs'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -13,6 +14,8 @@ import {
   globalExcludesPath
 } from './claudeStart'
 import { npmCacheOf } from './codexProfile'
+import { gitLayoutOf } from './gitLayout'
+import type { SandboxScope } from '../sessions/statusline'
 import { sandboxRefusalMessage } from './unavailable'
 
 // srt 0.0.79's own lists, as Task 2 measured them (inventory §23.4, scripts/measure/s2.mjs)
@@ -112,6 +115,11 @@ describe('claudeSandboxStart', () => {
     const profileDir = temp()
     const tmpDir = temp()
     const home = temp()
+    // The session folder: a repository's top (a `.git` folder is all gitLayoutOf needs)
+    const cwd = temp()
+    mkdirSync(path.join(cwd, '.git'))
+    const scopes: SandboxScope[] = []
+    const chatAsked: Array<{ enforce: boolean; scope: SandboxScope }> = []
     const order: string[] = []
     const gitCalls: Array<{ args: string[]; cwd: string; env: Record<string, string | undefined> }> = []
     const version = Object.assign(
@@ -119,8 +127,8 @@ describe('claudeSandboxStart', () => {
       { warm: async (cli: 'claude' | 'codex') => void order.push(`warm ${cli}`) }
     )
     const files = {
-      ensureSandboxFiles: async () => (order.push('files'), o.files ?? ('ok' as const)),
-      sandboxChatArgs: (enforce: boolean) => ['--settings', enforce ? 'E.json' : 'S.json']
+      ensureSandboxFiles: async (scope: SandboxScope) => (order.push('files'), scopes.push(scope), o.files ?? ('ok' as const)),
+      sandboxChatArgs: (enforce: boolean, scope: SandboxScope) => (chatAsked.push({ enforce, scope }), ['--settings', enforce ? 'E.json' : 'S.json'])
     }
     const env = { HOME: home, GIT_CONFIG_GLOBAL: '/somewhere/.gitconfig' }
     const logged: string[] = []
@@ -136,14 +144,17 @@ describe('claudeSandboxStart', () => {
       runGit: async (args, opts) => (order.push('git'), gitCalls.push({ args, ...opts }), o.configured ?? null),
       log: (m) => logged.push(m)
     })
-    return { start, profileDir, tmpDir, home, env, order, gitCalls, logged }
+    /** The session's environment, as its manager hands it: another than the one Astera runs with */
+    const sessionEnv = { DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1000/bus' }
+    const prepare = (over: { accountId?: string; cwd?: string } = {}) => start.prepare({ accountId: over.accountId ?? 'acc-1', cwd: over.cwd ?? cwd, env: sessionEnv })
+    return { start, prepare, profileDir, tmpDir, home, env, cwd, sessionEnv, scopes, chatAsked, order, gitCalls, logged }
   }
 
   it('makes npm’s cache folder, and on Linux writes the excludes file the session’s git reads', async () => {
     const r = rig()
     mkdirSync(path.join(r.home, '.config', 'git'), { recursive: true })
     writeFileSync(path.join(r.home, '.config', 'git', 'ignore'), '*.secret\n')
-    await r.start.prepare()
+    await r.prepare()
     expect(existsSync(npmCacheOf(r.tmpDir))).toBe(true)
     const file = gitExcludesFileOf(r.profileDir, 1000)
     expect(readFileSync(file, 'utf8')).toBe(gitExcludesText('*.secret\n'))
@@ -162,23 +173,23 @@ describe('claudeSandboxStart', () => {
     const mine = path.join(temp(), 'mine')
     writeFileSync(mine, 'node_modules/\n')
     const c = rig({ configured: mine })
-    await c.start.prepare()
+    await c.prepare()
     expect(readFileSync(gitExcludesFileOf(c.profileDir, 1000), 'utf8')).toBe(gitExcludesText('node_modules/\n'))
     const none = rig()
-    await none.start.prepare()
+    await none.prepare()
     expect(readFileSync(gitExcludesFileOf(none.profileDir, 1000), 'utf8')).toBe(gitExcludesText(''))
   })
 
   it('writes no excludes file elsewhere than Linux, and on Windows no npm cache either', async () => {
     const mac = rig({ platform: 'darwin' })
-    await mac.start.prepare()
+    await mac.prepare()
     expect(existsSync(path.join(mac.profileDir, 'sandbox'))).toBe(false)
     expect(mac.order).not.toContain('git')
     expect(mac.start.env({})).toStrictEqual({ npm_config_cache: npmCacheOf(mac.tmpDir) })
     expect(existsSync(npmCacheOf(mac.tmpDir))).toBe(true)
     // Task 7 fix round 1: Claude on Windows has no shell sandbox, so npm keeps its own cache and nothing is made for it
     const win = rig({ platform: 'win32' })
-    await win.start.prepare()
+    await win.prepare()
     expect(existsSync(path.join(win.profileDir, 'sandbox'))).toBe(false)
     expect(win.order).not.toContain('git')
     expect(win.start.env({})).toEqual({})
@@ -187,7 +198,7 @@ describe('claudeSandboxStart', () => {
 
   it('refuses an old Claude before anything is written', async () => {
     const r = rig({ version: '2.1.305' })
-    await expect(r.start.prepare()).rejects.toThrow(/^SANDBOX_UNAVAILABLE: cli-too-old claude 2\.1\.305 2\.1\.306$/)
+    await expect(r.prepare()).rejects.toThrow(/^SANDBOX_UNAVAILABLE: cli-too-old claude 2\.1\.305 2\.1\.306$/)
     expect(r.order).toEqual(['warm claude', 'version claude'])
     expect(existsSync(npmCacheOf(r.tmpDir))).toBe(false)
     expect(r.start.blocker()).toBe('SANDBOX_UNAVAILABLE: cli-too-old claude 2.1.305 2.1.306')
@@ -196,14 +207,56 @@ describe('claudeSandboxStart', () => {
   // Task 7 fix round 1: its own code and words, not not-prepared's "start it again"
   it('refuses when the settings it needs could not be written, in words that say so', async () => {
     const r = rig({ files: 'write-failed' })
-    await expect(r.start.prepare()).rejects.toThrow(/^SANDBOX_UNAVAILABLE: settings-write-failed$/)
+    await expect(r.prepare()).rejects.toThrow(/^SANDBOX_UNAVAILABLE: settings-write-failed$/)
     expect(sandboxRefusalMessage('SANDBOX_UNAVAILABLE: settings-write-failed')).toEqual({ key: 'session.spawn.sandbox.settingsWriteFailed' })
     expect(r.logged.join('\n')).toMatch(/settings/)
   })
 
-  it('hands a chat the settings file for its mode', () => {
+  it('hands a chat the settings file for its mode and scope', () => {
     const r = rig()
-    expect(r.start.chatArgs(false)).toEqual(['--settings', 'S.json'])
-    expect(r.start.chatArgs(true)).toEqual(['--settings', 'E.json'])
+    const scope = { layout: null, env: {} }
+    expect(r.start.chatArgs(false, scope)).toEqual(['--settings', 'S.json'])
+    expect(r.start.chatArgs(true, scope)).toEqual(['--settings', 'E.json'])
+    expect(r.chatAsked).toEqual([{ enforce: false, scope }, { enforce: true, scope }])
+  })
+
+  // Final fix pass (C1, minor 2): the twins are written for the start's scope, the folder's git layout with its missing git
+  // files made first and the environment the session is built from; the spawn asks for that scope by account and folder
+  it('writes the twins for the folder’s layout and the session’s environment, and keeps the scope for the spawn', async () => {
+    for (const platform of ['linux', 'darwin'] as const) {
+      const r = rig({ platform })
+      await r.prepare()
+      const layout = await gitLayoutOf(r.cwd)
+      expect(layout).not.toBeNull()
+      expect(r.scopes).toEqual([{ layout, env: r.sessionEnv }])
+      expect(readFileSync(path.join(r.cwd, '.git', 'commondir'), 'utf8')).toBe('.\n')
+      expect(existsSync(path.join(r.cwd, '.git', 'modules'))).toBe(true)
+      expect(existsSync(path.join(r.cwd, '.git', 'config.worktree'))).toBe(true)
+      expect(r.start.scopeOf('acc-1', r.cwd, r.sessionEnv)).toEqual({ layout, env: r.sessionEnv })
+      // Another account, or another folder, was not prepared
+      expect(r.start.scopeOf('acc-2', r.cwd, r.sessionEnv)).toBeUndefined()
+      expect(r.start.scopeOf('acc-1', temp(), r.sessionEnv)).toBeUndefined()
+    }
+    // Windows: Claude has no sandbox there, its twin is the deny rules whatever the folder, and nothing is made in it
+    const win = rig({ platform: 'win32' })
+    await win.prepare()
+    expect(win.scopes).toEqual([{ layout: null, env: win.sessionEnv }])
+    expect(existsSync(path.join(win.cwd, '.git', 'commondir'))).toBe(false)
+    expect(win.start.scopeOf('acc-1', win.cwd, {})).toEqual({ layout: null, env: {} })
+  })
+
+  it('refuses a folder whose git layout cannot be prepared, before the twins', async () => {
+    const r = rig()
+    // The modules folder cannot be made (a disk that refuses it): nothing is written for the session, and it is not kept
+    const mkdir = vi.spyOn(nodeFs.promises, 'mkdir').mockRejectedValueOnce(Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }))
+    const cwd = r.cwd
+    try {
+      await expect(r.prepare()).rejects.toThrow(/^SANDBOX_UNAVAILABLE: git-layout$/)
+    } finally {
+      mkdir.mockRestore()
+    }
+    expect(r.order).not.toContain('files')
+    expect(r.logged.join(' ')).toMatch(/git layout/)
+    expect(r.start.scopeOf('acc-1', cwd, r.sessionEnv)).toBeUndefined()
   })
 })

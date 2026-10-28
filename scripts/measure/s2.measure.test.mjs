@@ -21,7 +21,7 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { claudeSandboxSettings } from '../../src/core/sandbox/claudeSettings'
 import { codexSandboxEnv, npmCacheOf } from '../../src/core/sandbox/codexProfile'
-import { ensureWorktreeConfigFiles, gitLayoutOf } from '../../src/core/sandbox/gitLayout'
+import { ensureGitFiles, ensureWorktreeConfigFiles, gitLayoutOf } from '../../src/core/sandbox/gitLayout'
 import { initializeParams } from '../../src/core/chat/codexProtocol'
 import { hostAddress } from '../../src/host/address'
 import { HOST_PROTOCOL } from '../../src/core/host/protocol'
@@ -136,6 +136,7 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
       "Codex sets: codexSandboxArgs for gitLayoutOf(cwd) without its leading -a never, denied = sensitiveLocations + credentialStoreDenies, environment codexSandboxEnv with a temp folder of the set's own.",
       'srt sets: claudeSandboxSettings as Claude Code hands them to srt (s2.mjs srtSettingsOf); the network list names the probes’ hosts. Claude Code’s own use of these settings is not measured (no login): runtime-measured.',
       'The config.worktree probes write the one git names for the session, the main checkout’s and a second worktree’s (each set adds one). On the shipped path the repository has extensions.worktreeConfig on and every config.worktree made first by ensureWorktreeConfigFiles (worktreeConfig in each set), as the start does; codex-worktree-common has the extension off and none made (filesBefore, filesAfter). In the srt sets they are informational: how Claude Code itself treats a worktree’s git data is not srt’s.',
+      'Every set makes the missing git files first, as every sandboxed start does (ensureGitFiles: a commondir holding `.` and an empty modules folder; gitFiles in each set), and both profiles keep them read-only with a worktree’s `.git` pointer; the normal-work probes (git-status, git-log, git-worktree-list, and the commits) say whether everyday git still runs.',
       ...(WIN
         ? [
             'win32: the fake home is in TEMP, which the sandbox may write, so write-home writes ASTERA_PROBE_OUTSIDE (a folder in the checkout, outside TEMP and the workspace); git-credential uses the store helper and the fake .git-credentials, with Git’s system config (Credential Manager) left out.',
@@ -284,7 +285,9 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
         : {})
     }
     const worktreeConfig = shipped ? await ensureWorktreeConfigFiles(gitLayout) : { created: [], commonCase: 'extension off, none made first' }
-    return { cwd, gitLayout, tmpDir, sibling, vars, worktreeConfig }
+    // Every sandboxed start makes the missing commondir files and modules folder, on every OS (final fix pass, C1)
+    const gitFiles = await ensureGitFiles(gitLayout)
+    return { cwd, gitLayout, tmpDir, sibling, vars, worktreeConfig, gitFiles }
   }
 
   /** The builder's environment for a Codex session, and where the probes find the git directories. */
@@ -310,7 +313,7 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
     const args = codexSetArgs({ platform: PLATFORM, layout: p.gitLayout, denied, variant: set.variant })
     const { own, env } = codexEnvOf(p)
     const wrap = (line) => ({ file: 'codex', args: ['sandbox', ...args, '--', ...shellArgv(PLATFORM, line)] })
-    const record = { layout: set.layout, cwd: p.cwd, gitLayout: p.gitLayout, sibling: p.sibling, worktreeConfig: p.worktreeConfig, args, env: own, denied }
+    const record = { layout: set.layout, cwd: p.cwd, gitLayout: p.gitLayout, sibling: p.sibling, worktreeConfig: p.worktreeConfig, gitFiles: p.gitFiles, args, env: own, denied }
     if (set.common) {
       record.filesBefore = worktreeConfigFiles(p.gitLayout)
       record.sanity = runProbes(wrap, { cwd: p.cwd, env, probes: [{ id: 'sanity', line: sanityLine(PLATFORM) }], timeoutMs: PROBE_MS })[0]
@@ -335,6 +338,7 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
       gitLayout: p.gitLayout,
       sibling: p.sibling,
       worktreeConfig: p.worktreeConfig,
+      gitFiles: p.gitFiles,
       args: ['app-server', ...args],
       env: own,
       denied,
@@ -414,14 +418,14 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
       record.plain = runProbes(plainWrap, { cwd: pp.cwd, env: envOf(pp), probes, timeoutMs: PROBE_MS })
       const p = await prepare(set.name, set.layout, files)
       const npmCache = npmCacheOf(p.tmpDir)
-      const claude = claudeSandboxSettings({ platform: PLATFORM, denied: claudeDenied(PLATFORM, ctx.base, ctx.home), npmCache })
+      const claude = claudeSandboxSettings({ platform: PLATFORM, denied: claudeDenied(PLATFORM, ctx.base, ctx.home), npmCache, layout: p.gitLayout })
       const commonDir = p.gitLayout?.worktree ? p.gitLayout.commonDir : null
       const settings = srtSettingsOf(claude, { commonDir, ...(socket ? { allowUnixSockets: [socket.path] } : {}) })
       const settingsFile = path.join(ctx.scratch, `srt-settings-${set.name}.json`)
       writeFileSync(settingsFile, JSON.stringify(settings, null, 2))
       const wrap = (file) => (line) => ({ file: 'srt', args: srtArgv(file, line) })
       const env = envOf(p)
-      Object.assign(record, { cwd: p.cwd, gitLayout: p.gitLayout, worktreeConfig: p.worktreeConfig, claude: claude.sandbox, settings, env: { npm_config_cache: npmCache, ...extra } })
+      Object.assign(record, { cwd: p.cwd, gitLayout: p.gitLayout, worktreeConfig: p.worktreeConfig, gitFiles: p.gitFiles, claude: claude.sandbox, settings, env: { npm_config_cache: npmCache, ...extra } })
       record.sandboxed = runSet(wrap(settingsFile), { cwd: p.cwd, env, probes, timeoutMs: PROBE_MS })
       // srt on Linux skips a write path that does not exist (dist/sandbox/linux-sandbox-utils.js): when the install
       // failed, it runs again with the folder made first, as the Host could make it

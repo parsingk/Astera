@@ -1135,7 +1135,9 @@ starts them as before, and a profile made before the switch existed reads as `of
 `sandbox`). In Codex's sandbox a session never stops to ask (`-a never` takes the place of the permission bypass; a
 chat's thread names the profile and its approval policy is `never`) and a terminal session runs on its own server
 (`--no-daemon`). On every OS it writes only in its folder, the git directories of the folder's repository (never their
-`hooks` or `config`) and the temp folder, where npm's cache goes; it cannot read `~/.ssh`, `~/.aws`, the GitHub CLI's
+`hooks` or `config`, nor what decides where git finds them: each `commondir` file, the `modules` folder of submodules'
+git directories, and a worktree's `.git` file; a start makes a missing `commondir`, holding `.`, and an empty
+`modules`, so they can be kept read-only) and the temp folder, where npm's cache goes; it cannot read `~/.ssh`, `~/.aws`, the GitHub CLI's
 and gcloud's settings, `~/.docker`, `~/.npmrc`, `~/.git-credentials` or `~/.kube`; and the network works. On macOS
 `~/Library/Keychains` is closed too, and on Linux the session bus a secret service answers on. On macOS and Linux it
 cannot open the folder the Host's socket is in either, so its `astera` reaches the Host only through the loopback

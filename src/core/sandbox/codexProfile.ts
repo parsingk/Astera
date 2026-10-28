@@ -23,21 +23,34 @@ const entry = (p: string, access: Access): string => `${toml(p)}=${toml(access)}
  *  config stay read-only: a session that could write them could run its code outside the sandbox the next time git runs.
  *  So does every `config.worktree` git may read for the repository (`layout.worktreeConfigs`: the checkout's own, the
  *  main checkout's, the other worktrees'): git reads them under `extensions.worktreeConfig`, and one can set
- *  `core.hooksPath`. The entry holds only for a file that exists (inventory §23.3), so the start makes them first
- *  (`ensureWorktreeConfigFiles`). At a repository's top its own is the relative entry beside `.git/config`. */
+ *  `core.hooksPath`. And so does everything that decides where git reads those from (`layout.gitFiles`, final fix pass
+ *  C1): every `commondir`, which could point a checkout, or all of them, at a git directory of the session's own, and
+ *  `modules`, the submodules' git directories; at a linked worktree's top its `.git` pointer file is read-only too, since
+ *  it names the worktree's git directory. A read entry holds only for a path that exists (inventory §23.3), so the start
+ *  makes them first (`ensureWorktreeConfigFiles`, `ensureGitFiles`). At a repository's top its own are the relative
+ *  entries beside `.git/config`. */
 function gitEntries(layout: GitLayout | null): string[] {
   if (!layout) return []
   const atTop = layout.top === layout.cwd
-  const configsRead = (skip: string | null): string[] => layout.worktreeConfigs.filter((p) => p !== skip).map((p) => entry(p, 'read'))
+  const read = (paths: string[], skip: ReadonlySet<string>): string[] => paths.filter((p) => !skip.has(p)).map((p) => entry(p, 'read'))
   if (atTop && !layout.worktree) {
-    const roots = [entry('.git', 'write'), entry('.git/hooks', 'read'), entry('.git/config', 'read'), entry('.git/config.worktree', 'read')]
-    return [`":workspace_roots"={${roots.join(', ')}}`, ...configsRead(`${layout.gitDir}/config.worktree`)]
+    const own = (name: string): string => `${layout.gitDir}/${name}`
+    const roots = [
+      entry('.git', 'write'),
+      entry('.git/hooks', 'read'),
+      entry('.git/config', 'read'),
+      entry('.git/config.worktree', 'read'),
+      entry('.git/commondir', 'read'),
+      entry('.git/modules', 'read')
+    ]
+    const relative = new Set([own('config.worktree'), own('commondir'), own('modules')])
+    return [`":workspace_roots"={${roots.join(', ')}}`, ...read(layout.worktreeConfigs, relative), ...read(layout.gitFiles, relative)]
   }
   const out: string[] = []
-  if (atTop) out.push(`":workspace_roots"={${entry('.git', 'write')}}`)
+  if (atTop) out.push(`":workspace_roots"={${entry('.git', 'read')}}`)
   if (layout.gitDir !== layout.commonDir) out.push(entry(layout.gitDir, 'write'))
   out.push(entry(layout.commonDir, 'write'), entry(`${layout.commonDir}/hooks`, 'read'), entry(`${layout.commonDir}/config`, 'read'))
-  return [...out, ...configsRead(null)]
+  return [...out, ...read(layout.worktreeConfigs, new Set()), ...read(layout.gitFiles, new Set())]
 }
 
 export function codexSandboxArgs(o: { platform: NodeJS.Platform; layout: GitLayout | null; denied: string[] }): string[] {

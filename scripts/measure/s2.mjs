@@ -40,7 +40,8 @@ export const S2_SETS = [
   // device (inventory §22.5): an exclude file with srt's file names (the plan's candidate), then with its directories too
   { name: 'srt-linux-exclude', kind: 'srt', layout: 'worktree', platforms: ['linux'], exclude: 'files' },
   { name: 'srt-linux-exclude-dirs', kind: 'srt', layout: 'worktree', platforms: ['linux'], exclude: 'directories' },
-  // srt on macOS with the Host's socket allowed, so `astera` could run inside the sandbox
+  // srt on macOS with a socket where the Host listens, granted and not: the shipped settings grant none (final fix pass,
+  // C2), so the ungranted control (socketWithoutGrant) is what a sandboxed Claude session gets
   { name: 'srt-mac-socket', kind: 'srt', layout: 'worktree', platforms: ['darwin'], socket: true }
 ]
 
@@ -87,8 +88,9 @@ export function codexSetArgs({ platform, layout, denied, variant = 'shipped' }) 
  * Claude's sandbox settings (the builder's `sandbox` part) as srt's own settings file, the way Claude Code hands them to
  * the runtime: the session folder writable, Claude's temp folder too (srt's default `/tmp/claude`), the builder's
  * paths, and for a worktree its common directory with the hooks and config kept read-only, which Claude does itself
- * ("Filesystem isolation", code.claude.com/docs/en/sandboxing). srt on its own takes only a list of hosts, so the list
- * names the ones the probes reach; how Claude Code opens the network cannot be measured without a login.
+ * ("Filesystem isolation", code.claude.com/docs/en/sandboxing), after the builder's own denyWrite (the git files that
+ * decide what git runs, final fix pass C1). srt on its own takes only a list of hosts, so the list names the ones the
+ * probes reach; how Claude Code opens the network cannot be measured without a login.
  */
 export function srtSettingsOf(claude, { commonDir = null, allowUnixSockets } = {}) {
   const s = claude.sandbox
@@ -101,7 +103,7 @@ export function srtSettingsOf(claude, { commonDir = null, allowUnixSockets } = {
       denyRead: s.filesystem.denyRead,
       allowRead: [],
       allowWrite: ['.', ...s.filesystem.allowWrite, ...(commonDir ? [commonDir] : [])],
-      denyWrite: commonDir ? [`${commonDir}/hooks`, `${commonDir}/config`] : []
+      denyWrite: [...new Set([...s.filesystem.denyWrite, ...(commonDir ? [`${commonDir}/hooks`, `${commonDir}/config`] : [])])]
     }
   }
 }
@@ -196,15 +198,30 @@ export const WIN32_CONFIG_WORKTREE_PROBES = [
   { id: 'git-sibling-config-worktree-write', line: 'echo [core]>> %ASTERA_PROBE_SIBLING%' }
 ]
 
-/** What the common-case set runs (and its sanity line first): a commit, and the config.worktree writes. */
-export const COMMON_CASE_PROBES = ['git-commit', ...CONFIG_WORKTREE_PROBES.map((p) => p.id)]
+/** Everyday git in the session's checkout (final fix pass, C1): with every commondir, modules and a worktree's `.git`
+ *  pointer read-only, and the missing ones made first, these must still run. Normal work only. */
+export const NORMAL_WORK_PROBES = [
+  { id: 'git-status', line: 'git status --porcelain' },
+  { id: 'git-log', line: 'git log -1 --format=%s' },
+  { id: 'git-worktree-list', line: 'git worktree list' }
+]
+/** The same for cmd.exe, which reads `%` as the start of a variable, so the log line names no format; none of them holds
+ *  a double quote (WIN32_PROBES). */
+export const WIN32_NORMAL_WORK_PROBES = [
+  { id: 'git-status', line: 'git status --porcelain' },
+  { id: 'git-log', line: 'git log -1 --oneline' },
+  { id: 'git-worktree-list', line: 'git worktree list' }
+]
+
+/** What the common-case set runs (and its sanity line first): a commit, the config.worktree writes and normal work. */
+export const COMMON_CASE_PROBES = ['git-commit', ...CONFIG_WORKTREE_PROBES.map((p) => p.id), ...NORMAL_WORK_PROBES.map((p) => p.id)]
 
 /** The probes for a set's layout: the S4 ones on macOS and Linux, without those that `cd wt` (a worktree below the
  *  session's repository) where the session is not that repository's root; the cmd.exe ones on Windows. Both end with
- *  the config.worktree probes, which S4 did not have. */
+ *  the config.worktree probes, which S4 did not have, and the normal-work ones. */
 export function probesFor(platform, layout) {
-  if (platform === 'win32') return [...WIN32_PROBES, ...WIN32_CONFIG_WORKTREE_PROBES]
-  return [...(layout === 'repo' ? PROBES : PROBES.filter((p) => !p.line.startsWith('cd wt '))), ...CONFIG_WORKTREE_PROBES]
+  if (platform === 'win32') return [...WIN32_PROBES, ...WIN32_CONFIG_WORKTREE_PROBES, ...WIN32_NORMAL_WORK_PROBES]
+  return [...(layout === 'repo' ? PROBES : PROBES.filter((p) => !p.line.startsWith('cd wt '))), ...CONFIG_WORKTREE_PROBES, ...NORMAL_WORK_PROBES]
 }
 
 export const shellArgv = (platform, line) => (platform === 'win32' ? ['cmd.exe', '/d', '/c', line] : ['sh', '-c', line])

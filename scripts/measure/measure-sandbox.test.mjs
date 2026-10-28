@@ -18,6 +18,8 @@ import {
   COMMON_CASE_PROBES,
   CONFIG_WORKTREE_PROBES,
   WIN32_CONFIG_WORKTREE_PROBES,
+  NORMAL_WORK_PROBES,
+  WIN32_NORMAL_WORK_PROBES,
   execResult,
   threadStartRecord,
   claudeDenied,
@@ -222,7 +224,11 @@ describe('the S2 measurement', () => {
 
 describe('the S2 sets’ arguments come from the builders', () => {
   const env = { DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1001/bus' }
-  const repo = { cwd: '/w', top: '/w', gitDir: '/w/.git', commonDir: '/w/.git', worktree: false, worktreeConfigs: ['/w/.git/config.worktree', '/w/.git/worktrees/s/config.worktree'] }
+  const repo = {
+    cwd: '/w', top: '/w', gitDir: '/w/.git', commonDir: '/w/.git', worktree: false,
+    worktreeConfigs: ['/w/.git/config.worktree', '/w/.git/worktrees/s/config.worktree'],
+    gitFiles: ['/w/.git/commondir', '/w/.git/modules', '/w/.git/worktrees/s/commondir']
+  }
   const sub = { ...repo, cwd: '/w/sub' }
   const wt = {
     cwd: '/w/wt',
@@ -230,7 +236,8 @@ describe('the S2 sets’ arguments come from the builders', () => {
     gitDir: '/m/.git/worktrees/wt',
     commonDir: '/m/.git',
     worktree: true,
-    worktreeConfigs: ['/m/.git/worktrees/wt/config.worktree', '/m/.git/config.worktree', '/m/.git/worktrees/wt2/config.worktree']
+    worktreeConfigs: ['/m/.git/worktrees/wt/config.worktree', '/m/.git/config.worktree', '/m/.git/worktrees/wt2/config.worktree'],
+    gitFiles: ['/m/.git/worktrees/wt/commondir', '/m/.git/commondir', '/m/.git/modules', '/m/.git/worktrees/wt2/commondir']
   }
 
   it('denies Codex E6 and the credential stores, and Claude E6 with the macOS keychains only', () => {
@@ -268,19 +275,22 @@ describe('the S2 sets’ arguments come from the builders', () => {
   })
 
   // How Claude Code hands its settings to the runtime, for srt run on its own: the folder and the builder's paths
-  // writable, and a worktree's common directory with its hooks and config read-only (Claude does that itself)
-  it('turns Claude’s sandbox settings into srt’s, with the socket only when asked', () => {
-    const claude = claudeSandboxSettings({ platform: 'linux', denied: ['/h/.ssh'], npmCache: '/t/astera-npm-cache' })
+  // writable, a worktree's common directory with its hooks and config read-only (Claude does that itself), and the
+  // builder's own denyWrite, the git files that decide what git runs (final fix pass, C1)
+  it('turns Claude’s sandbox settings into srt’s, with the builder’s git denies and the socket only when asked', () => {
+    const claude = claudeSandboxSettings({ platform: 'linux', denied: ['/h/.ssh'], npmCache: '/t/astera-npm-cache', layout: wt })
     const s = srtSettingsOf(claude, { commonDir: '/m/.git' })
     expect(s.filesystem).toEqual({
       denyRead: ['/h/.ssh'],
       allowRead: [],
       allowWrite: ['.', '/t/astera-npm-cache', '/m/.git'],
-      denyWrite: ['/m/.git/hooks', '/m/.git/config']
+      denyWrite: claude.sandbox.filesystem.denyWrite
     })
+    expect(s.filesystem.denyWrite).toEqual([...wt.gitFiles, '/w/wt/.git', '/m/.git/hooks', '/m/.git/config', ...wt.worktreeConfigs])
     expect(s.network.allowedDomains).toEqual(['example.com', 'registry.npmjs.org'])
     expect(s.network).not.toHaveProperty('allowUnixSockets')
-    expect(srtSettingsOf(claude, { commonDir: null }).filesystem.allowWrite).toEqual(['.', '/t/astera-npm-cache'])
+    const outside = claudeSandboxSettings({ platform: 'linux', denied: [], npmCache: '/t/astera-npm-cache', layout: null })
+    expect(srtSettingsOf(outside, { commonDir: null }).filesystem).toMatchObject({ allowWrite: ['.', '/t/astera-npm-cache'], denyWrite: [] })
     expect(srtSettingsOf(claude, { commonDir: '/m/.git', allowUnixSockets: ['/t/s/sock'] }).network.allowUnixSockets).toEqual(['/t/s/sock'])
   })
 })
@@ -305,13 +315,16 @@ describe('the Linux exclude file', () => {
 })
 
 describe('the S2 probes', () => {
-  it('runs the S4 probes, without the ones that `cd wt` where the session is not the repository, then config.worktree', () => {
-    expect(probesFor('linux', 'repo')).toEqual([...PROBES, ...CONFIG_WORKTREE_PROBES])
+  it('runs the S4 probes, without the ones that `cd wt` where the session is not the repository, then config.worktree and normal work', () => {
+    expect(probesFor('linux', 'repo')).toEqual([...PROBES, ...CONFIG_WORKTREE_PROBES, ...NORMAL_WORK_PROBES])
     const others = [
       ...PROBES.filter((p) => !p.line.startsWith('cd wt ')).map((p) => p.id),
       'git-worktree-config-write',
       'git-common-config-worktree-write',
-      'git-sibling-config-worktree-write'
+      'git-sibling-config-worktree-write',
+      'git-status',
+      'git-log',
+      'git-worktree-list'
     ]
     expect(probesFor('darwin', 'worktree').map((p) => p.id)).toEqual(others)
     expect(probesFor('linux', 'subfolder').map((p) => p.id)).toEqual(others)
@@ -328,6 +341,18 @@ describe('the S2 probes', () => {
     expect(SOCKET_PROBE.line).toContain('ASTERA_PROBE_SOCKET')
   })
 
+  // Final fix pass (C1): with every commondir, modules and a worktree's pointer read-only, the session's everyday git
+  // still runs; normal-work probes only, on every OS, in cmd.exe's form on Windows (no double quotes, as WIN32_PROBES)
+  it('ends with the normal-work probes on every OS', () => {
+    expect(NORMAL_WORK_PROBES.map((p) => p.id)).toEqual(['git-status', 'git-log', 'git-worktree-list'])
+    expect(WIN32_NORMAL_WORK_PROBES.map((p) => p.id)).toEqual(['git-status', 'git-log', 'git-worktree-list'])
+    for (const p of WIN32_NORMAL_WORK_PROBES) expect(p.line).not.toContain('"')
+    expect(probesFor('win32', 'worktree').slice(-3)).toEqual(WIN32_NORMAL_WORK_PROBES)
+    expect(probesFor('darwin', 'worktree').slice(-3)).toEqual(NORMAL_WORK_PROBES)
+    // The common case runs them too, beside its commit
+    expect(COMMON_CASE_PROBES).toEqual(expect.arrayContaining(['git-commit', 'git-status', 'git-log', 'git-worktree-list']))
+  })
+
   it('has the cmd.exe probes the plan lists for Windows, with no double quote (cmd.exe would see it escaped)', () => {
     expect(WIN32_PROBES.map((p) => p.id)).toEqual([
       'write-workspace',
@@ -342,7 +367,7 @@ describe('the S2 probes', () => {
       'git-config-write',
       'npm-install'
     ])
-    for (const layout of ['repo', 'subfolder', 'worktree']) expect(probesFor('win32', layout)).toEqual([...WIN32_PROBES, ...WIN32_CONFIG_WORKTREE_PROBES])
+    for (const layout of ['repo', 'subfolder', 'worktree']) expect(probesFor('win32', layout)).toEqual([...WIN32_PROBES, ...WIN32_CONFIG_WORKTREE_PROBES, ...WIN32_NORMAL_WORK_PROBES])
     for (const p of probesFor('win32', 'worktree')) expect(p.line, p.id).not.toContain('"')
     expect(shellArgv('win32', 'echo x')).toEqual(['cmd.exe', '/d', '/c', 'echo x'])
     expect(shellArgv('linux', 'echo x')).toEqual(['sh', '-c', 'echo x'])
@@ -441,7 +466,7 @@ describe('the S2 probes', () => {
     const common = S2_SETS.find((s) => s.name === 'codex-worktree-common')
     expect(common).toMatchObject({ kind: 'codex', layout: 'worktree', common: true })
     expect(common.platforms).toBeUndefined()
-    expect(COMMON_CASE_PROBES).toEqual(['git-commit', 'git-worktree-config-write', 'git-common-config-worktree-write', 'git-sibling-config-worktree-write'])
+    expect(COMMON_CASE_PROBES).toEqual(['git-commit', 'git-worktree-config-write', 'git-common-config-worktree-write', 'git-sibling-config-worktree-write', 'git-status', 'git-log', 'git-worktree-list'])
   })
 
   it('writes one row per probe and one column per set, each read against its own run with no sandbox', () => {

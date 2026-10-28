@@ -30,6 +30,7 @@ import { appServerSandboxArgs, codexSandboxEnv } from '../sandbox/codexProfile'
 import { sandboxUnavailable } from '../sandbox/unavailable'
 import { sandboxKindOf } from '../sandbox/coverage'
 import type { ClaudeSandboxStart } from '../sandbox/claudeStart'
+import type { SandboxScope } from '../sessions/statusline'
 
 export { EXITED_SESSIONS_KEPT }
 
@@ -265,7 +266,7 @@ export class ChatSessionManager {
     if (opts.sandbox !== true) return
     if (providerOf(opts.account) === 'claude') {
       if (!this.deps.claudeSandbox) throw sandboxUnavailable('not-prepared')
-      return this.deps.claudeSandbox.prepare()
+      return this.deps.claudeSandbox.prepare({ accountId: opts.account.id, cwd: opts.cwd, env: this.inheritedEnv(opts.account) })
     }
     const layout = await prepareCodexSandbox({
       accountId: opts.account.id,
@@ -353,9 +354,14 @@ export class ChatSessionManager {
     // A Claude chat's sandbox is its settings file: the version the prepare asked is asked again (the CLI may have been
     // updated since); the file itself is looked for below, once the mode is known
     const sandboxedClaude = sandboxed && provider === 'claude'
+    // Its file is its scope's: the folder's git layout the prepare read, and the environment the chat is built from,
+    // before the hiding (a terminal session's rule)
+    let claudeScope: SandboxScope | undefined
     if (sandboxedClaude) {
       const refused = this.deps.claudeSandbox ? this.deps.claudeSandbox.blocker() : sandboxUnavailable('not-prepared').message
       if (refused !== null) throw new Error(refused)
+      claudeScope = this.deps.claudeSandbox?.scopeOf(opts.account.id, opts.cwd, this.inheritedEnv(opts.account))
+      if (claudeScope === undefined) throw sandboxUnavailable('not-prepared')
     }
 
     // design F5 fix round 1: BYPASS_ENV rides here, not just on a manual retry's respawn — a rolling
@@ -412,7 +418,7 @@ export class ChatSessionManager {
     if (enforceArgs === null) throw enforceUnavailable('no-interpreter')
     // A sandboxed Claude chat takes one --settings with the sandbox, and in Enforce the blocking hook with it, in the place
     // of Enforce's own; a file not written for it refuses the start rather than drop either (E5)
-    const settingsArgs = sandboxedClaude ? (this.deps.claudeSandbox?.chatArgs(enforced) ?? null) : enforceArgs
+    const settingsArgs = claudeScope ? (this.deps.claudeSandbox?.chatArgs(enforced, claudeScope) ?? null) : enforceArgs
     if (settingsArgs === null) throw sandboxUnavailable('not-prepared')
     const extraArgs = [...(caps?.args ?? []), ...settingsArgs]
     const { file, args } =
