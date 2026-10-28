@@ -43,8 +43,9 @@ describe('killTree', () => {
     await expect(killTree(321, exec, 'win32')).resolves.toBeUndefined()
   })
 
-  it('off Windows ends the process group, never through taskkill (R10)', async () => {
-    const exec = vi.fn(async () => '')
+  it('off Windows ends the tree from one ps listing, the group of a child started detached included, never through taskkill (R10)', async () => {
+    // 321 leads its group; 322 is its child in a session of its own (a detached spawn calls setsid).
+    const exec = vi.fn(async () => '  321     1   321\n  322   321   322\n')
     const sent: Array<[number, NodeJS.Signals | 0]> = []
     const signals = {
       kill: (pid: number, sig: NodeJS.Signals | 0) => {
@@ -54,8 +55,8 @@ describe('killTree', () => {
       sleep: async () => {}
     }
     await killTree(321, exec, 'linux', signals)
-    expect(exec).not.toHaveBeenCalled()
-    expect(sent).toEqual([[-321, 'SIGTERM'], [-321, 0]])
+    expect(exec.mock.calls).toEqual([['env', ['LC_ALL=C', 'ps', '-A', '-o', 'pid=', '-o', 'ppid=', '-o', 'pgid=']]])
+    expect(sent).toEqual([[-321, 'SIGTERM'], [-322, 'SIGTERM'], [-321, 0], [-322, 0]])
   })
 })
 

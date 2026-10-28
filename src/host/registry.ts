@@ -187,7 +187,8 @@ export interface PtyRegistryDeps {
   /** Test injection; the wiring leaves it out and gets Date.now. */
   now?: () => number
   /** Ends a process and everything it started without touching its pty (`workspace/native`'s
-   *  `killTree`: taskkill /T /F on win32, the process group elsewhere). What a repeat kill escalates
+   *  `killTree`: taskkill /T /F on win32, elsewhere every process group in its tree, a detached
+   *  child's included). What a repeat kill escalates
    *  to. Left out, a repeat is only logged. */
   killTree?: (pid: number) => Promise<void>
   /** This Host process's boot id (hello's `bootId`): a replay asked with another one starts from a checkpoint. */

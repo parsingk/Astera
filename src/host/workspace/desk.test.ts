@@ -55,6 +55,48 @@ describe('DESK_PS1', () => {
     expect(DESK_PS1.indexOf('start time mismatch')).toBeLessThan(DESK_PS1.indexOf('taskkill /T /F /PID'))
   })
 
+  it('launches suspended, puts the process in a job of its own, and only then resumes it', () => {
+    expect(DESK_PS1).toContain('CREATE_SUSPENDED = 0x00000004')
+    expect(DESK_PS1).toContain('CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | CREATE_SUSPENDED')
+    const launch = DESK_PS1.slice(DESK_PS1.indexOf('public static AsteraLaunch Launch('))
+    const order = ['CreateProcess(', 'JobFor(pi.hProcess)', 'ResumeThread(pi.hThread)'].map((s) => launch.indexOf(s))
+    expect(order.every((i) => i > 0)).toBe(true)
+    expect(order).toEqual([...order].sort((a, b) => a - b))
+    const jobFor = DESK_PS1.slice(DESK_PS1.indexOf('static IntPtr JobFor('))
+    const steps = ['CreateJobObject(', 'SetInformationJobObject(job, JobObjectExtendedLimitInformation', 'AssignProcessToJobObject(job, process)'].map((s) => jobFor.indexOf(s))
+    expect(steps.every((i) => i > 0)).toBe(true)
+    expect(steps).toEqual([...steps].sort((a, b) => a - b))
+  })
+
+  it('makes a job that ends the whole tree when its last handle closes, and lets nothing break away from it', () => {
+    expect(DESK_PS1).toContain('JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000')
+    expect(DESK_PS1).toContain('JobObjectExtendedLimitInformation = 9')
+    // The job's one limit assignment, and no breakaway limit defined to add to it. (A comment may still
+    // name the flags libuv's own job sets.)
+    expect(DESK_PS1.match(/LimitFlags\s*\|?=[^;]*;/g)).toEqual(['LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;'])
+    expect(DESK_PS1).toContain('info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;')
+    expect(DESK_PS1).not.toMatch(/const uint JOB_OBJECT_LIMIT_\w*BREAKAWAY/)
+  })
+
+  it('still launches when the job cannot be made, and the reply says so with the reason', () => {
+    expect(DESK_PS1).toContain('catch (Exception e) { r.JobError = e.Message; }')
+    expect(DESK_PS1).toContain('job = $r.Job')
+    expect(DESK_PS1).toContain('if (-not $r.Job) { $value.jobError = $r.JobError }')
+  })
+
+  it('never leaves a suspended process behind: one whose thread does not resume is ended and the launch fails', () => {
+    expect(DESK_PS1).toContain('"ResumeThread failed: "')
+    expect(DESK_PS1).toMatch(/if \(!resumed\) \{\s*TerminateProcess\(pi\.hProcess, 1\);/)
+  })
+
+  it('kill ends the launch job and closes its handle, and falls back to taskkill /T only when it holds none', () => {
+    const kill = DESK_PS1.slice(DESK_PS1.indexOf("'kill' {"))
+    const endJob = kill.indexOf('[AsteraDesk]::EndJob([int]$req.pid, [int64]$req.startedAt, $tolerance)')
+    expect(endJob).toBeGreaterThan(0)
+    expect(endJob).toBeLessThan(kill.indexOf('taskkill /T /F /PID'))
+    expect(DESK_PS1).toMatch(/TerminateJobObject\(j\.Handle, 1\);\s*CloseHandle\(j\.Handle\);/)
+  })
+
   it('keeps its escapes as text: no CR byte, and the regex still says \\r\\n', () => {
     expect(DESK_PS1.includes(String.fromCharCode(13))).toBe(false)
     expect(DESK_PS1).toContain('[\\r\\n]+')

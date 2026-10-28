@@ -240,7 +240,16 @@ export async function startDesktopHelper(a: { name: string; spawn: SpawnDesk; re
       // The Desk port takes a shell command (W7); this is where it becomes a Windows command line,
       // by the same rule a Run uses (shellSpawn's win32 string form).
       const s = shellSpawn(command, 'win32')
-      return asLaunched(await request({ op: 'launch', commandLine: `${s.file} ${String(s.args)}`, cwd, env }))
+      const v = await request({ op: 'launch', commandLine: `${s.file} ${String(s.args)}`, cwd, env })
+      const launched = asLaunched(v)
+      // A launch the helper could not put in a job of its own still runs (desk.ts, Launch); only its
+      // end is weaker, so it is said here.
+      if (typeof v === 'object' && v !== null && (v as { job?: unknown }).job === false)
+        a.log(
+          `desktop helper ${a.name} launched pid ${launched.pid} without a job object (${String((v as { jobError?: unknown }).jobError ?? 'no reason given')}); ` +
+            'ending it falls back to taskkill /T, which misses a child whose parent has already exited'
+        )
+      return launched
     },
     kill: async (pid, startedAt) => {
       const v = await request({ op: 'kill', pid, startedAt })

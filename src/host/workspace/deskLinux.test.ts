@@ -78,7 +78,7 @@ const rig = (plan: Mode[] = []) => {
   const procs: FakeProc[] = []
   const runs: Array<{ file: string; args: string[]; env: Record<string, string> }> = []
   const starts = new Map<number, number>()
-  const groupsKilled: number[] = []
+  const treesKilled: number[] = []
   const log: string[] = []
   const sleeps: Array<{ ms: number; signal?: AbortSignal }> = []
   const answers: Array<(file: string, args: string[]) => Buffer | Error | undefined> = []
@@ -157,8 +157,8 @@ const rig = (plan: Mode[] = []) => {
       written.push({ path: p, text })
     },
     startTime: async (pid) => starts.get(pid) ?? null,
-    killGroup: async (pid) => {
-      groupsKilled.push(pid)
+    killTree: async (pid) => {
+      treesKilled.push(pid)
       starts.delete(pid)
     },
     sleep: async (ms, signal) => {
@@ -182,7 +182,7 @@ const rig = (plan: Mode[] = []) => {
   const xdo = (fn: (args: string[]) => Buffer | Error | undefined): void => {
     answers.push((file, args) => (file === 'xdotool' ? fn(args) : undefined))
   }
-  return { deps, desks: createLinuxDesks(deps), files, procs, runs, starts, groupsKilled, log, sleeps, answers, xdo, dirs, made, written }
+  return { deps, desks: createLinuxDesks(deps), files, procs, runs, starts, treesKilled, log, sleeps, answers, xdo, dirs, made, written }
 }
 
 /** Three windows: a Hangul titled one with a pid, one with no _NET_WM_PID, and one that closes
@@ -445,7 +445,7 @@ describe('the Linux desk: start times come from the kernel, never the clock', ()
     expect(got).toEqual({ pid: r.procs[1].pid, startedAt: 0 })
     expect(r.log.some((l) => l.includes(`pid ${got.pid} exited before its start time could be read`))).toBe(true)
     await desk.close()
-    expect(r.groupsKilled).toEqual([])
+    expect(r.treesKilled).toEqual([])
   })
 
   it('refuses a launch whose sh never got a pid, with the reason', async () => {
@@ -479,7 +479,7 @@ describe('the Linux desk: fix round 1', () => {
     const real = r.deps.startTime
     r.deps.startTime = async (pid) => (pid === r.procs[0].pid ? real(pid) : Promise.reject(new Error('/proc/stat has no btime line')))
     await expect(desk.launch({ command: 'app', cwd: '/p', env: {} })).rejects.toThrow('/proc/stat has no btime line')
-    expect(r.groupsKilled).toEqual([r.procs[1].pid])
+    expect(r.treesKilled).toEqual([r.procs[1].pid])
   })
 
   it('still rethrows the start time failure when ending that group fails too, and logs the second failure', async () => {
@@ -487,7 +487,7 @@ describe('the Linux desk: fix round 1', () => {
     const desk = await r.desks.start('a')
     const real = r.deps.startTime
     r.deps.startTime = async (pid) => (pid === r.procs[0].pid ? real(pid) : Promise.reject(new Error('no btime')))
-    r.deps.killGroup = async () => {
+    r.deps.killTree = async () => {
       throw new Error('EPERM')
     }
     await expect(desk.launch({ command: 'app', cwd: '/p', env: {} })).rejects.toThrow('no btime')
@@ -525,7 +525,7 @@ describe('the Linux desk: fix round 1', () => {
     const r = rig()
     const desk = await r.desks.start('a')
     const one = await desk.launch({ command: 'a', cwd: '/p', env: {} })
-    r.deps.killGroup = async () => {
+    r.deps.killTree = async () => {
       throw new Error('EPERM')
     }
     await expect(desk.close()).resolves.toBeUndefined()
@@ -574,12 +574,12 @@ describe('the Linux desk: launch, kill and close', () => {
     const desk = await r.desks.start('a')
     const got = await desk.launch({ command: 'app', cwd: '/p', env: {} })
     await desk.kill(got.pid, got.startedAt + 60_000)
-    expect(r.groupsKilled).toEqual([])
+    expect(r.treesKilled).toEqual([])
     expect(r.log.some((l) => l.includes(`start time mismatch: pid ${got.pid}`))).toBe(true)
     await desk.kill(got.pid, got.startedAt + 1_500)
-    expect(r.groupsKilled).toEqual([got.pid])
+    expect(r.treesKilled).toEqual([got.pid])
     await expect(desk.kill(got.pid, got.startedAt)).resolves.toBeUndefined()
-    expect(r.groupsKilled).toEqual([got.pid])
+    expect(r.treesKilled).toEqual([got.pid])
     expect(r.log.some((l) => l.includes(`pid ${got.pid} is not running`))).toBe(true)
   })
 
@@ -589,7 +589,7 @@ describe('the Linux desk: launch, kill and close', () => {
     const one = await desk.launch({ command: 'a', cwd: '/p', env: {} })
     const two = await desk.launch({ command: 'b', cwd: '/p', env: {} })
     await desk.close()
-    expect(r.groupsKilled).toEqual([one.pid, two.pid])
+    expect(r.treesKilled).toEqual([one.pid, two.pid])
     expect(r.procs[0].signals).toEqual(['SIGTERM'])
     expect(desk.alive()).toBe(false)
     await r.desks.start('b')
@@ -602,7 +602,7 @@ describe('the Linux desk: launch, kill and close', () => {
     const one = await desk.launch({ command: 'a', cwd: '/p', env: {} })
     r.starts.delete(one.pid)
     await expect(desk.close()).resolves.toBeUndefined()
-    expect(r.groupsKilled).toEqual([])
+    expect(r.treesKilled).toEqual([])
     expect(r.procs[0].signals).toEqual(['SIGTERM'])
   })
 })
@@ -803,6 +803,53 @@ describe('the Linux desk: real deps', () => {
     await d.sleep(60_000, stop.signal)
     expect(Date.now() - t0).toBeLessThan(1_000)
   })
+
+  it.runIf(process.platform === 'linux')(
+    'killTree ends a launch the way the desk starts one, and the child it started detached in a session of its own',
+    async () => {
+      const d = realLinuxDeskDeps({ hostEnv: {}, log: () => {} })
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-desklinux-tree-'))
+      const pidFile = path.posix.join(dir, 'child.pid')
+      const script = path.posix.join(dir, 'parent.cjs')
+      // The parent stays, as a dev Astera's Electron does beside the Host it started detached.
+      await fs.writeFile(
+        script,
+        "const c = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })\n" +
+          "require('node:fs').writeFileSync(process.argv[2], String(c.pid))\nc.unref()\nsetInterval(() => {}, 1000)\n"
+      )
+      const gone = (pid: number): boolean => {
+        try {
+          process.kill(pid, 0)
+          return false
+        } catch {
+          return true
+        }
+      }
+      const root = d.spawn('sh', ['-c', `"${process.execPath}" "${script}" "${pidFile}"\n\nwait`], { env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } })
+      let child = 0
+      try {
+        for (let i = 0; i < 100 && !child; i++) {
+          child = Number(await fs.readFile(pidFile, 'utf8').catch(() => '')) || 0
+          if (!child) await new Promise((r) => setTimeout(r, 100))
+        }
+        expect(child).toBeGreaterThan(1)
+        await d.killTree(root.pid!)
+        for (let i = 0; i < 50 && !(gone(child) && gone(root.pid!)); i++) await new Promise((r) => setTimeout(r, 100))
+        expect(gone(child)).toBe(true)
+        expect(gone(root.pid!)).toBe(true)
+      } finally {
+        for (const pid of [child, root.pid ?? 0]) {
+          try {
+            if (pid > 1) process.kill(pid, 'SIGKILL')
+          } catch {
+            /* gone */
+          }
+        }
+        await fs.rm(dir, { recursive: true, force: true })
+      }
+    },
+    20_000
+  )
 })
 
 describe('the Linux desk: fit', () => {

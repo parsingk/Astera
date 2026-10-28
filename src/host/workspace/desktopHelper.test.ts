@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { promises as fs } from 'node:fs'
+import { promises as fs, readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { NOT_INTERACTIVE } from '../../core/workspace/lifecycle'
@@ -250,6 +250,19 @@ describe('startDesktopHelper', () => {
     expect(logs.some((l) => l.includes('did not kill pid 77') && l.includes('start time mismatch'))).toBe(true)
   })
 
+  it('logs a launch the helper could not put in a job, with the reason, and still answers it', async () => {
+    const proc = new FakeProc()
+    const logs: string[] = []
+    const h = await started(proc, logs)
+    await h.launch({ command: 'npm run dev', cwd: 'C:\\app', env: {} })
+    expect(logs).toEqual([])
+    proc.answer = (req) => ({ id: req.id, ok: true, value: { pid: 78, startedAt: 6, job: false, jobError: 'AssignProcessToJobObject failed: 5' } })
+    expect(await h.launch({ command: 'npm run dev', cwd: 'C:\\app', env: {} })).toEqual({ pid: 78, startedAt: 6 })
+    expect(logs).toHaveLength(1)
+    expect(logs[0]).toContain('pid 78')
+    expect(logs[0]).toContain('without a job object (AssignProcessToJobObject failed: 5)')
+  })
+
   it('a request unanswered for 15 s rejects, ends the helper, and every later request rejects at once', async () => {
     vi.useFakeTimers()
     try {
@@ -340,6 +353,107 @@ describe('the real helper', () => {
         await h.close()
         expect(h.alive()).toBe(false)
       } finally {
+        await fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      }
+    },
+    60_000
+  )
+
+  // What taskkill /T cannot reach: a detached child whose parent has already exited, so no parent pid
+  // leads to it from the launched process. cmd runs the parent, which starts the child detached (the
+  // way a dev Astera starts its Host), writes its pid and exits; then cmd stays on ping, so the
+  // launched process itself is alive and passes the start time check.
+  const orphanTree = async (dir: string): Promise<{ command: string; orphan: () => Promise<number> }> => {
+    const script = path.join(dir, 'orphan.cjs')
+    const pidFile = path.join(dir, 'orphan.pid')
+    await fs.writeFile(
+      script,
+      [
+        "const c = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })",
+        "require('node:fs').writeFileSync(process.argv[2], String(c.pid))",
+        'c.unref()',
+        ''
+      ].join('\n'),
+      'utf8'
+    )
+    return {
+      command: `"${process.execPath}" "${script}" "${pidFile}" & ping -n 60 127.0.0.1`,
+      orphan: async () => {
+        let pid = 0
+        await until(() => {
+          try {
+            pid = Number(readFileSync(pidFile, 'utf8')) || 0
+          } catch {
+            /* not written yet */
+          }
+          return pid > 0
+        }, 10_000)
+        return pid
+      }
+    }
+  }
+
+  const liveHelper = async (dir: string, logs: string[]): Promise<Awaited<ReturnType<typeof startDesktopHelper>> | null> => {
+    const file = await writeDeskScript(dir)
+    try {
+      return await startDesktopHelper({ name: `astera-test-${process.pid}-${Date.now()}`, spawn: () => spawnPowerShell(file), readyMs: 30_000, log: (m) => logs.push(m) })
+    } catch (err) {
+      expect(String(err)).toContain('no interactive desktop')
+      return null
+    }
+  }
+
+  const env = (): Record<string, string> => Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => typeof e[1] === 'string'))
+
+  it.runIf(process.platform === 'win32')(
+    'kill ends the launch through its job: a detached child whose parent already exited goes too',
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-desk-job-'))
+      const logs: string[] = []
+      const left: number[] = []
+      try {
+        const h = await liveHelper(dir, logs)
+        if (!h) return
+        const tree = await orphanTree(dir)
+        const l = await h.launch({ command: tree.command, cwd: dir, env: env() })
+        left.push(l.pid)
+        const orphan = await tree.orphan()
+        left.push(orphan)
+        expect(orphan).toBeGreaterThan(0)
+        expect(isAlive(orphan)).toBe(true)
+        await h.kill(l.pid, l.startedAt)
+        expect(await until(() => !isAlive(l.pid) && !isAlive(orphan), 5_000)).toBe(true)
+        expect(logs.filter((m) => m.includes('without a job object'))).toEqual([])
+        await h.close()
+      } finally {
+        for (const pid of left) if (isAlive(pid)) await killTree(pid)
+        await fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      }
+    },
+    60_000
+  )
+
+  it.runIf(process.platform === 'win32')(
+    'a helper that exits takes its launch with it, the detached orphan included (KILL_ON_JOB_CLOSE)',
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-desk-jobclose-'))
+      const logs: string[] = []
+      const left: number[] = []
+      try {
+        const h = await liveHelper(dir, logs)
+        if (!h) return
+        const tree = await orphanTree(dir)
+        const l = await h.launch({ command: tree.command, cwd: dir, env: env() })
+        left.push(l.pid)
+        const orphan = await tree.orphan()
+        left.push(orphan)
+        expect(isAlive(orphan)).toBe(true)
+        // The helper alone, as a crash would end it: no kill and no close request first.
+        process.kill(h.pid)
+        expect(await until(() => !h.alive(), 10_000)).toBe(true)
+        expect(await until(() => !isAlive(l.pid) && !isAlive(orphan), 5_000)).toBe(true)
+      } finally {
+        for (const pid of left) if (isAlive(pid)) await killTree(pid)
         await fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
       }
     },

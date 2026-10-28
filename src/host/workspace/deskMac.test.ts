@@ -48,7 +48,7 @@ const rig = () => {
   const procs: Array<{ file: string; args: string[]; env: Record<string, string>; cwd?: string; stderr?: boolean; pid: number; exit(why: string): void }> = []
   const execs: Array<[string, string[]]> = []
   const starts = new Map<number, number>()
-  const groupsKilled: number[] = []
+  const treesKilled: number[] = []
   const log: string[] = []
   const sleeps: Array<{ ms: number; signal?: AbortSignal }> = []
   const table: Row[] = []
@@ -99,8 +99,8 @@ const rig = () => {
       throw new Error(`unexpected exec ${file} ${args.join(' ')}`)
     },
     startTime: async (pid) => starts.get(pid) ?? null,
-    killGroup: async (pid) => {
-      groupsKilled.push(pid)
+    killTree: async (pid) => {
+      treesKilled.push(pid)
       starts.delete(pid)
     },
     sleep: async (ms, signal) => {
@@ -110,7 +110,7 @@ const rig = () => {
     now: () => clock,
     log: (m) => log.push(m)
   }
-  return Object.assign(r, { deps, desks: createMacDesks(deps), procs, execs, starts, groupsKilled, log, sleeps, table })
+  return Object.assign(r, { deps, desks: createMacDesks(deps), procs, execs, starts, treesKilled, log, sleeps, table })
 }
 
 /** Every bundle launch's app process appears `after` ms later, tagged, at the next free app pid. */
@@ -184,7 +184,7 @@ describe('the macOS desk', () => {
     r.table.push({ pid: 903, startedAt: at(27, 10, 11, 13), args: '/A.app/Contents/MacOS/A' })
     const desk = await r.desks.start('a')
     await expect(desk.launch({ command: '/A.app', cwd: '/', env: {} })).rejects.toThrow('no process of it appeared')
-    expect(r.groupsKilled).toEqual([])
+    expect(r.treesKilled).toEqual([])
   })
 
   it('gives two launches of the same bundle at the same moment each its own pid', async () => {
@@ -226,9 +226,9 @@ describe('the macOS desk', () => {
     const apps = appsAppear(r, '/A.app', DESK_READY_MS + 1_000)
     const desk = await r.desks.start('a')
     await expect(desk.launch({ command: '/A.app', cwd: '/', env: {} })).rejects.toThrow('no process of it appeared within 5 s')
-    expect(r.groupsKilled).toEqual([apps[0]])
+    expect(r.treesKilled).toEqual([apps[0]])
     await desk.close()
-    expect(r.groupsKilled).toEqual([apps[0]])
+    expect(r.treesKilled).toEqual([apps[0]])
   })
 
   it('refuses windows, windowShot and keys with the reason', async () => {
@@ -246,10 +246,10 @@ describe('the macOS desk', () => {
     const three = await desk.launch({ command: 'c', cwd: '/', env: {} })
     // A mismatch means the pid is someone else's now: it is forgotten, and close leaves it alone too.
     await desk.kill(one.pid, one.startedAt + 60_000)
-    expect(r.groupsKilled).toEqual([])
+    expect(r.treesKilled).toEqual([])
     expect(r.log.some((l) => l.includes(`start time mismatch: pid ${one.pid}`))).toBe(true)
     await desk.close()
-    expect(r.groupsKilled).toEqual([two.pid, three.pid])
+    expect(r.treesKilled).toEqual([two.pid, three.pid])
     expect(desk.alive()).toBe(false)
     await expect(desk.launch({ command: 'c', cwd: '/', env: {} })).rejects.toThrow('this workspace is closed')
   })
@@ -264,7 +264,7 @@ describe('the macOS desk: start times, failures and close', () => {
     expect(got).toEqual({ pid: r.procs[0].pid, startedAt: 0 })
     expect(r.log.some((l) => l.includes(`pid ${got.pid} exited before its start time could be read`))).toBe(true)
     await desk.close()
-    expect(r.groupsKilled).toEqual([])
+    expect(r.treesKilled).toEqual([])
   })
 
   it('ends the fresh group and rethrows when the launched start time cannot be read', async () => {
@@ -274,7 +274,7 @@ describe('the macOS desk: start times, failures and close', () => {
       throw Object.assign(new Error('spawn env ENOENT'), { code: 'ENOENT' })
     }
     await expect(desk.launch({ command: 'app', cwd: '/', env: {} })).rejects.toThrow('spawn env ENOENT')
-    expect(r.groupsKilled).toEqual([r.procs[0].pid])
+    expect(r.treesKilled).toEqual([r.procs[0].pid])
   })
 
   it('still rethrows the start time failure when ending that group fails too, and logs the second failure', async () => {
@@ -283,7 +283,7 @@ describe('the macOS desk: start times, failures and close', () => {
     r.deps.startTime = async () => {
       throw new Error('ps timed out')
     }
-    r.deps.killGroup = async () => {
+    r.deps.killTree = async () => {
       throw new Error('EPERM')
     }
     await expect(desk.launch({ command: 'app', cwd: '/', env: {} })).rejects.toThrow('ps timed out')
@@ -451,7 +451,7 @@ describe('the macOS desk: start times, failures and close', () => {
     await settled
     // The late look never sleeps on the aborted signal.
     expect(r.sleeps.slice(1).every((s) => s.signal === undefined)).toBe(true)
-    expect(r.groupsKilled).toEqual([apps[0]])
+    expect(r.treesKilled).toEqual([apps[0]])
   })
 
   it('a bundle process found after close is ended at once, not left running', async () => {
@@ -471,7 +471,7 @@ describe('the macOS desk: start times, failures and close', () => {
     await desk.close()
     release()
     await settled
-    expect(r.groupsKilled).toEqual([901])
+    expect(r.treesKilled).toEqual([901])
   })
 
   it('a command whose start time arrives after close is ended at once, not left running', async () => {
@@ -485,7 +485,7 @@ describe('the macOS desk: start times, failures and close', () => {
     await desk.close()
     release(at(27, 10, 11, 12))
     await settled
-    expect(r.groupsKilled).toEqual([r.procs[0].pid])
+    expect(r.treesKilled).toEqual([r.procs[0].pid])
   })
 
   it('a command found gone after close rejects as closed, not with start time 0', async () => {
@@ -506,10 +506,10 @@ describe('the macOS desk: start times, failures and close', () => {
     const desk = await r.desks.start('a')
     const one = await desk.launch({ command: 'a', cwd: '/', env: {} })
     const two = await desk.launch({ command: 'b', cwd: '/', env: {} })
-    const real = r.deps.killGroup
-    r.deps.killGroup = async (pid) => (pid === one.pid ? Promise.reject(new Error('EPERM')) : real(pid))
+    const real = r.deps.killTree
+    r.deps.killTree = async (pid) => (pid === one.pid ? Promise.reject(new Error('EPERM')) : real(pid))
     await expect(desk.close()).resolves.toBeUndefined()
-    expect(r.groupsKilled).toEqual([two.pid])
+    expect(r.treesKilled).toEqual([two.pid])
     expect(r.log.some((l) => l.includes(`pid ${one.pid} could not be ended: EPERM`))).toBe(true)
   })
 
@@ -624,6 +624,40 @@ describe('the macOS desk: real deps', () => {
         expect(gone(bg)).toBe(true)
       } finally {
         await desk.close()
+        await fs.rm(dir, { recursive: true, force: true })
+      }
+    },
+    20_000
+  )
+
+  it.runIf(process.platform === 'darwin')(
+    'kill ends a child the launched command started detached, in a session of its own, while its parent still runs',
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-deskmac-tree-'))
+      const pidFile = path.posix.join(dir, 'child.pid')
+      const script = path.posix.join(dir, 'parent.cjs')
+      // The parent stays, as a dev Astera's Electron does beside the Host it started detached.
+      await fs.writeFile(
+        script,
+        "const c = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })\n" +
+          "require('node:fs').writeFileSync(process.argv[2], String(c.pid))\nc.unref()\nsetInterval(() => {}, 1000)\n"
+      )
+      const desk = await createMacDesks(realMacDeskDeps({ log: () => {} })).start('real-tree')
+      let child = 0
+      try {
+        const got = await desk.launch({ command: `"${process.execPath}" "${script}" "${pidFile}"`, cwd: dir, env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } })
+        for (let i = 0; i < 50 && !child; i++) {
+          child = Number((await fs.readFile(pidFile, 'utf8').catch(() => '')).trim()) || 0
+          if (!child) await new Promise((res) => setTimeout(res, 100))
+        }
+        expect(child).toBeGreaterThan(1)
+        await desk.kill(got.pid, got.startedAt)
+        await settle(() => gone(got.pid) && gone(child))
+        expect(gone(got.pid)).toBe(true)
+        expect(gone(child)).toBe(true)
+      } finally {
+        await desk.close()
+        if (child > 1 && !gone(child)) process.kill(child, 'SIGKILL')
         await fs.rm(dir, { recursive: true, force: true })
       }
     },

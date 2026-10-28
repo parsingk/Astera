@@ -2,6 +2,8 @@
 // desktop.mac.e2e.test.ts): one window whose page records what reaches it in window.events, which the
 // test reads over its own CDP connection.
 const { app, BrowserWindow } = require('electron')
+const { spawn } = require('node:child_process')
+const { writeFileSync } = require('node:fs')
 
 const HTML = `<!doctype html><html><head><meta charset="utf-8"><title>Astera workspace fixture</title></head><body>
 <textarea id="t"></textarea>
@@ -33,6 +35,28 @@ drop.addEventListener('drop', (e) => { e.preventDefault(); note({ kind: 'files',
 // (Linux and macOS design, L3; plan ruling R5): the fixture then never shows its window, and its page
 // still renders for CDP. Windows and Linux do not set it, so the window shows on their hidden desktop.
 const hidden = Boolean(process.env.ASTERA_APP_CHROMIUM_FLAGS)
+
+// --detached-child=<file>: a child started detached, the way a dev Astera starts its Host, its pid
+// written to <file>. --detached-orphan=<file>: the same through a parent that exits at once, so the
+// child is an orphan before anything ends the app. Each carries the user data folder in its argv, so
+// the e2e counts it as a fixture process and ends it after a failed run.
+const flag = (name) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3)
+const udd = flag('user-data-dir') ?? ''
+const asNode = { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+const KEEP = 'setInterval(() => {}, 1000)'
+const directFile = flag('detached-child')
+if (directFile) {
+  const c = spawn(process.execPath, ['-e', KEEP, '--', `--fixture-of=${udd}`], { detached: true, stdio: 'ignore', env: asNode })
+  writeFileSync(directFile, String(c.pid))
+  c.unref()
+}
+const orphanFile = flag('detached-orphan')
+if (orphanFile) {
+  const middle =
+    `const c = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(KEEP)}, '--', process.argv[2]], { detached: true, stdio: 'ignore' }); ` +
+    "require('node:fs').writeFileSync(process.argv[1], String(c.pid)); c.unref()"
+  spawn(process.execPath, ['-e', middle, '--', orphanFile, `--fixture-of=${udd}`], { detached: true, stdio: 'ignore', env: asNode }).unref()
+}
 
 app.whenReady().then(() => {
   // paintWhenInitiallyHidden and no background throttling: said outright, so a window that is never

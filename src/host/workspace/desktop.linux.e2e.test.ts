@@ -3,8 +3,8 @@
 // job after installing xvfb, xdotool and imagemagick (.github/workflows/ci.yml). It checks that the app
 // ran on the workspace's own display and not on the one the Host was started with; that CDP driving, a
 // drag, a file drop, a native capture and native keys (Hangul too, at xdotool's default delay) work
-// there; and that nothing is left once the workspace is closed or its Xvfb dies: no Xvfb, no fixture,
-// no record.
+// there; and that nothing is left once the workspace is closed or its Xvfb dies: no Xvfb, no fixture
+// (not even a child it started detached), no record.
 //
 // The Host here is given a person's session to stay off: a DISPLAY that names no server, a Wayland one
 // (WAYLAND_DISPLAY, WAYLAND_SOCKET, XDG_SESSION_TYPE=wayland), a session bus and a runtime folder. The
@@ -61,8 +61,8 @@ const hostEnv: Record<string, string | undefined> = {
 
 // --no-sandbox: the runner's Electron has no set up SUID sandbox helper, and Ubuntu 24.04 blocks the
 // unprivileged user namespaces Chromium falls back to.
-const commandFor = (udd: string): string =>
-  `"${electronExe()}" "${path.join(here, 'fixtures', 'app', 'main.cjs')}" --no-sandbox --remote-debugging-port=$ASTERA_APP_CDP_PORT --user-data-dir="${udd}"`
+const commandFor = (udd: string, extra = ''): string =>
+  `"${electronExe()}" "${path.join(here, 'fixtures', 'app', 'main.cjs')}" --no-sandbox --remote-debugging-port=$ASTERA_APP_CDP_PORT --user-data-dir="${udd}"${extra}`
 
 /** Pids whose command line holds this user data folder, read from /proc: the `sh -c` the desk wraps
  *  the command in, Electron, and its helpers. */
@@ -336,6 +336,40 @@ describe.runIf(enabled)('the agent app workspace on a real Linux virtual display
       await vi.waitFor(async () => expect(await exists(runtimeDir)).toBe(false))
       expect(h.events.filter((e) => e.kind === 'state').at(-1)).toMatchObject({ open: false })
       expect(h.m.list()).toEqual([])
+      await h.m.dispose()
+    },
+    120_000
+  )
+
+  it(
+    'ends a child the app started detached, in a session of its own, when the workspace closes',
+    async () => {
+      const base = await tempDir()
+      const udd = path.join(base, 'electron-profile-detached')
+      udds.push(udd)
+      const childFile = path.join(base, 'detached-child.pid')
+      const h = await harness(path.join(base, 'profile-detached'))
+      managers.push(h.m)
+
+      // The way a dev Astera starts its Host: detached, while Electron itself keeps running.
+      const first = await h.m.run('s-e2e-detached', `log(await launch({ command: ${JSON.stringify(commandFor(udd, ` --detached-child="${childFile}"`))} }))`)
+      expect((first.body as { error?: unknown }).error).toBeUndefined()
+      const child = await vi.waitFor(
+        async () => {
+          const pid = Number(await fs.readFile(childFile, 'utf8').catch(() => '')) || 0
+          expect(pid).toBeGreaterThan(1)
+          return pid
+        },
+        { timeout: 10_000, interval: 200 }
+      )
+      // Its own session and group (setsid), so the launch's own group kill alone left it running.
+      const stat = await fs.readFile(`/proc/${child}/stat`, 'utf8')
+      const [pgrp, session] = stat.slice(stat.lastIndexOf(')') + 2).split(' ').slice(2, 4).map(Number)
+      expect([pgrp, session]).toEqual([child, child])
+
+      expect(((await h.m.run('s-e2e-detached', 'await close()')).body as { error?: unknown }).error).toBeUndefined()
+      await vi.waitFor(async () => expect(await exists(`/proc/${child}`)).toBe(false), { timeout: 10_000, interval: 250 })
+      await vi.waitFor(async () => expect(await fixturePids(udd)).toEqual([]), { timeout: 10_000, interval: 250 })
       await h.m.dispose()
     },
     120_000
