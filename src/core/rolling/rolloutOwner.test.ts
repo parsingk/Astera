@@ -1,4 +1,6 @@
 import { promises as fs } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import {
   UNKNOWN_KEEP_MS,
@@ -367,6 +369,31 @@ describe('windowsOwnerReader', () => {
     expect((await read('C:\\x.jsonl', 2 ** 31)).verdict).toBe('unknown')
     expect(h.started).toHaveLength(0)
   })
+})
+
+// Re-review Minor 4: the C# had no test that runs it, so putting back its old answers (the session's process gone or
+// unreadable said "another process", a walk that cannot read an ancestor just ending) failed nothing. This runs the real
+// helper in the real Windows PowerShell, about this test's own process and a temp file it holds open. No codex.
+describe.runIf(process.platform === 'win32')('windowsOwnerReader in the real Windows PowerShell', () => {
+  it('answers own, held open by no process, and gone as the C# says', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-rowner-'))
+    const read = windowsOwnerReader()
+    const held = path.join(dir, 'rollout-held.jsonl')
+    const loose = path.join(dir, 'rollout-loose.jsonl')
+    await fs.writeFile(loose, '{}\n', 'utf8')
+    const handle = await fs.open(held, 'a')
+    try {
+      expect(await read(held, process.pid)).toEqual({ verdict: 'own' })
+      expect(await read(loose, process.pid)).toEqual({ verdict: 'other', why: 'held open by no process' })
+      // A pid no process can have: OpenProcess says ERROR_INVALID_PARAMETER, the one error that means gone
+      const gone = await read(held, 2_147_483_644)
+      expect(gone).toEqual({ verdict: 'unknown', why: "the session's process 2147483644 is gone" })
+    } finally {
+      read.close()
+      await handle.close()
+      await fs.rm(dir, { recursive: true, force: true })
+    }
+  }, 60_000)
 })
 
 describe('rolloutOwnerCheck', () => {
