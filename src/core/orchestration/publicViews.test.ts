@@ -1,8 +1,8 @@
 // The Job, Run and brief Task views the reads answer with (and the public events carry, SDK 1d).
 import { describe, it, expect } from 'vitest'
-import { briefTask, runView } from './publicViews'
+import { briefTask, runTokensOf, runView, taskTokensOf, type SpentTokens } from './publicViews'
 import { emptyState, type OrchState } from './state'
-import type { Gate, Task } from './types'
+import type { Dispatch, Gate, Task } from './types'
 
 const task = (spec: string): Task => ({
   id: 't1',
@@ -95,5 +95,66 @@ describe('runView — GitHub lifecycle (G1)', () => {
     expect(runView(lifecycle, runOf).github).toEqual({ state: 'unbound' })
     const plain = { ...emptyState(), jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: 'T' }], runs: [runOf] }
     expect(runView(plain, runOf)).not.toHaveProperty('github')
+  })
+})
+
+// Observe mode design §10: the tokens a Task's and a Run's sessions used, from what the Host kept per session
+describe('taskTokensOf and runTokensOf', () => {
+  const t = (id: string, runId: string): Task => ({ ...task('s'), id, runId })
+  const d = (id: string, taskId: string, sessionId: string): Dispatch => ({
+    id,
+    taskId,
+    provider: 'claude',
+    accountId: 'acc1',
+    sessionId,
+    cwd: 'D:/p',
+    specPath: 'D:/p/spec.md',
+    startedAt: 'T',
+    workerState: 'ready',
+    retained: false
+  })
+  const s: OrchState = {
+    ...emptyState(),
+    runs: [
+      { id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: 'T' },
+      { id: 'run_2', jobId: 'job_1', ordinal: 2, createdAt: 'T' }
+    ],
+    tasks: [t('t1', 'run_1'), t('t2', 'run_1'), t('t3', 'run_2')],
+    // A roll moved d1 onto sess_b; d2 is t1's retry; d3 is t2's
+    dispatches: [d('d1', 't1', 'sess_b'), d('d2', 't1', 'sess_c'), d('d3', 't2', 'sess_d'), d('d4', 't3', 'sess_e')]
+  }
+  const spent: SpentTokens[] = [
+    { sessionId: 'sess_a', dispatchId: 'd1', input: 100, output: 10 },
+    { sessionId: 'sess_b', dispatchId: 'd1', input: 50, output: 5 },
+    { sessionId: 'sess_c', dispatchId: 'd2', input: 7, output: 1 },
+    { sessionId: 'sess_d', dispatchId: 'd3', input: 1000, output: 100 },
+    { sessionId: 'sess_e', dispatchId: 'd4', input: 9, output: 9 },
+    { sessionId: 'sess_k', coordinatorOf: 'run_1', input: 300, output: 30 },
+    { sessionId: 'sess_l', coordinatorOf: 'run_1', input: 3, output: 3 },
+    { sessionId: 'sess_x', dispatchId: 'gone', input: 5, output: 5 }
+  ]
+
+  // Review Focus 5: a rolled Dispatch's two sessions are each counted once, beside the Task's other attempt
+  it('sums a Task’s Dispatches, both sessions of a rolled one once each', () => {
+    expect(taskTokensOf(s, 't1', spent)).toEqual({ input: 157, output: 16, total: 173 })
+    expect(taskTokensOf(s, 't2', spent)).toEqual({ input: 1000, output: 100, total: 1100 })
+  })
+
+  // The coordinator's sessions are no Task's: kept apart, so the Run's total stays the sum of its Tasks (design §10)
+  it('sums a Run’s Tasks, and its coordinator’s sessions apart', () => {
+    expect(runTokensOf(s, 'run_1', spent)).toEqual({
+      tokens: { input: 1157, output: 116, total: 1273 },
+      coordinatorTokens: { input: 303, output: 33, total: 336 }
+    })
+    expect(runTokensOf(s, 'run_2', spent)).toEqual({ tokens: { input: 9, output: 9, total: 18 } })
+  })
+
+  it('leaves out what nothing was read for, rather than a 0', () => {
+    expect(taskTokensOf(s, 't3', [])).toBeUndefined()
+    expect(taskTokensOf(s, 'nope', spent)).toBeUndefined()
+    expect(runTokensOf(s, 'run_2', [])).toEqual({})
+    expect(runTokensOf(s, 'run_1', [{ sessionId: 'sess_k', coordinatorOf: 'run_1', input: 1, output: 2 }])).toEqual({
+      coordinatorTokens: { input: 1, output: 2, total: 3 }
+    })
   })
 })

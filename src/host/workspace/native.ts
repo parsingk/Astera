@@ -1,10 +1,11 @@
 // The process tools the workspace needs outside a desk: creation times for the leftover rule, a tree
 // kill, and a free loopback port. On Windows, PowerShell and taskkill (the conhost reaper's route,
-// src/host/conhostReaper.ts); on Linux and macOS, /proc or ps and a process group kill (posixProc.ts).
+// src/host/conhostReaper.ts); on Linux and macOS, /proc or ps and a tree kill by process groups
+// (posixProc.ts).
 import { execFile } from 'node:child_process'
 import net from 'node:net'
 import { treeKillCommand } from '../../core/run/kill'
-import { killGroup, linuxStartTimes, macStartTimes, realLinuxProcFs, realSignals, type LinuxProcFs, type Signals } from './posixProc'
+import { killProcessTree, linuxStartTimes, macStartTimes, realLinuxProcFs, realSignals, type LinuxProcFs, type Signals } from './posixProc'
 
 export type Exec = (file: string, args: string[]) => Promise<string>
 
@@ -35,7 +36,7 @@ async function windowsStartTimes(pids: number[], exec: Exec): Promise<Map<number
 /** Each live pid's creation time in epoch ms. One query for all of them. The `platform === 'win32'`
  *  branch here and in `killTree` must agree on every other platform value (fix round 1): anything not
  *  win32 is POSIX, so both dispatch the same way, and only the start-time source further splits on
- *  darwin vs. linux (both use the same process group kill either way). */
+ *  darwin vs. linux (both use the same tree kill either way, killProcessTree in posixProc.ts). */
 export async function processStartTimes(pids: number[], exec: Exec = defaultExec, platform: string = process.platform): Promise<Map<number, number>> {
   for (const p of pids) if (!Number.isSafeInteger(p) || p <= 0) throw new Error(`not a pid: ${p}`)
   return platform === 'win32'
@@ -55,10 +56,12 @@ async function windowsKillTree(pid: number, exec: Exec): Promise<void> {
 }
 
 /** Ends `pid` and every process it started. On Windows through taskkill, which answers 128 for a
- *  process already gone; elsewhere its process group (R10). Gone is not a failure: the result the
- *  caller wanted is already true. */
+ *  process already gone; elsewhere every process group it or a process it started leads, from a ps
+ *  listing taken before any signal and again before SIGKILL (killProcessTree, R10), so a child started
+ *  detached goes too. Gone is not a failure: the result the caller wanted is already true. */
 export async function killTree(pid: number, exec: Exec = defaultExec, platform: string = process.platform, signals: Signals = realSignals): Promise<void> {
-  return platform === 'win32' ? windowsKillTree(pid, exec) : killGroup(pid, signals)
+  // Not this file's 30 s exec off Windows: the tree kill's own listing has the desk request limit.
+  return platform === 'win32' ? windowsKillTree(pid, exec) : killProcessTree(pid, { signals, ...(exec === defaultExec ? {} : { exec }) })
 }
 
 export function freePort(): Promise<number> {

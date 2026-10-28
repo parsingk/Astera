@@ -9,7 +9,7 @@
 // knows whether a dependency is answered locally or across a socket, which is what lets the same
 // command layer run in both places.
 import { FOLLOW_WINDOW_MS, type AnsweredQuestion, type StopResult, type WaitEnding, type WaitTimeout } from '../publicContract'
-import { briefTask, jobView, latestRunOf, runView } from './publicViews'
+import { briefTask, jobView, latestRunOf, runTokensOf, runView, taskTokensOf, type SpentTokens } from './publicViews'
 import { lastByState } from './stateMemo'
 import { randomBytes } from 'node:crypto'
 import {
@@ -57,6 +57,7 @@ import {
   recordDispatchGit,
   placedByApp,
   coordinatorStarting,
+  workSandboxed,
   type OrchState,
   type RepairTarget,
   type Res
@@ -118,24 +119,27 @@ import { isTerminal as taskFinished, outcomeOf, progressOf } from './view'
 import { runningRunCount, withoutSupersededLifecycle } from './running'
 import { FINISHED_RUN_GRACE_MS } from './exec/dispatchLoop'
 import { appDriven } from './schedule'
-import type { JobEvent, WorktreeInfo } from '../types'
+import type { JobEvent, SandboxKind, WorktreeInfo } from '../types'
 import { ghFailureSentence, type GhFailed, type GhRunner } from '../github/gh'
 import { ciRunHead, failedLogTail, readPrChecks, rerunFailed } from '../github/checks'
 import { ghRepoArg, repoOfBinding, type GitHubRepo } from '../github/remote'
-import { isLifecycleTask, openLifecycleTaskOf, withLifecycleTask } from './lifecycleTask'
+import { isLifecycleTask, openLifecycleTaskOf, withLifecycleTask, workerProfileOf } from './lifecycleTask'
 import { prByNumber, prForBranch, prHead } from '../github/prs'
 import { ISSUE_JOB_ASSOCIATIONS, readIssue } from '../github/issue'
 import { GITHUB_SOURCE_ID, issueContext } from '../github/issueSource'
 import { fillFromCommits, type CommitSummary } from '../github/fill'
-import type { PrCreateRequest, PrCreateResult } from '../github/prCreate'
+import type { PrCreateDeps, PrCreateRequest, PrCreateResult } from '../github/prCreate'
 import { GITHUB_CI_CHECK, GITHUB_LIFECYCLE_DEFAULTS, LIFECYCLE_CHECKS_MAX, LIFECYCLE_CHECK_NAME_MAX, type GitHubLifecyclePolicy } from '../github/lifecycle'
 import { lifecyclePreflight } from '../github/preflight'
 import type { GitHubLifecycleDefaults } from '../github/lifecycleDefaults'
 import { RepairNeeded } from '../settings/repairNeeded'
+import { findProfile, liveAccounts } from '../agentProfiles/store'
+import type { AgentProfile, AgentProfileStore } from '../agentProfiles/types'
 import { parseRunGitHubPatch, type RunGitHubPatch } from '../github/runState'
 import { sanitize } from './checkpoint'
 import type { SessionCheck } from '../workUnit/types'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
+import { SANDBOX_UNAVAILABLE } from '../sandbox/unavailable'
 import { LAUNCH_FORBIDDEN } from '../sessions/commands'
 import { parseHandoffBody } from '../handoff/parse'
 import type { HandoffBody } from '../handoff/types'
@@ -199,6 +203,13 @@ export interface HostSession {
   provider?: 'claude' | 'codex'
   /** The session this one replaced in an account roll (the note's `restore.rolledFrom`). */
   rolledFrom?: string
+  /** The agent profile it was started from, by its id (the note's `restore.agentProfileId`, Agent Profiles design §6). */
+  agentProfileId?: string
+  /** It runs in its agent CLI's own sandbox (the note's `restore.sandboxed`, SessionInfo.sandboxed); absent outside it. */
+  sandboxed?: true
+  /** What protection that is (SessionInfo.sandboxKind): `sandbox`, the CLI's own, or `deny-only`, Claude Code on Windows,
+   *  whose shell is not restricted. Absent when not sandboxed, or for a kind this build does not know. */
+  sandboxKind?: SandboxKind
   /** Where the Host reads each fact of this session from (X1-06); `none` means the Host cannot say, and the fact is
    *  shown as unknown, never as idle. */
   sources?: SessionSources
@@ -298,6 +309,13 @@ export interface OrchServerDeps {
     /** The accounts to roll through when the Task names none of its own (GitHub lifecycle G3c1): a lifecycle Task has
      *  no account by design, and its repair rolls through the Run's latest ordinary Task's (startWorkerWithChain). */
     rollFrom?: string[]
+    /** The agent profile the worker starts as (Agent Profiles design §6), read off its Dispatch (`Dispatch.agentProfileId`):
+     *  forwarded to the session spawn, which resolves it and falls back to implicit, logged, when it is gone. A reviewer's
+     *  start never sets it. */
+    agentProfileId?: string
+    /** Start the worker in its CLI's sandbox whatever profile it names (final fix pass, C3): a sandboxed session asked
+     *  for it (`worker-start`). The wiring adds a Task's or Job's own mark (workSandboxed, exec/workerStart.ts). */
+    sandbox?: true
   }): Promise<{ sessionId: string; cwd: string; specPath: string }>
   releaseWorker(a: { dispatchId: string }): Promise<void>
   /** 그 세션의 롤링 체인을 버린다 — **세션은 죽이지 않는다**(releaseWorker 와 그 점이 다르다).
@@ -388,6 +406,9 @@ export interface OrchServerDeps {
     /** 인계 브리핑의 **본문**. 배선이 이것을 파일로 쓰고, 세션에는 그 파일을 가리키는 한 줄만
      *  넣는다(handover.ts 의 coordinatorLaunchPrompt) — 여러 줄은 argv 를 지나갈 수 없다. */
     brief: string
+    /** The Job was made by a sandboxed session (Job.sandboxed): its coordinator starts in its CLI's sandbox (final fix
+     *  pass, C3). */
+    sandbox?: true
   }): Promise<{ sessionId: string }>
   /** Stops a coordinator session `startCoordinator` opened, when the hand-over finds another one
    *  already in the Run's slot (Task 1 fix round 1, I2). Optional: without it that session is left
@@ -593,10 +614,11 @@ export interface OrchServerDeps {
   /** A terminal session's screen, rendered, by the app's session id, with up to `lines` rows of
    *  scrollback — empty once it has ended, because the scrollback goes with it. */
   readSession?(id: string, lines: number): Promise<SessionScreen>
-  /** Types into a terminal session by the app's session id, then presses Enter 150ms later when
-   *  `enter` (ptyDriver's convention), one delivery at a time per session. A write to one that has
-   *  ended is dropped by the registry, as every write is. */
-  sendSession?(id: string, text: string, enter: boolean): Promise<void>
+  /** Types into a terminal session by the app's session id, then presses Enter when `enter` once the session has
+   *  shown the text and gone quiet (ptyDriver's convention), one delivery at a time per session. A write to one that has
+   *  ended is dropped by the registry, as every write is. `by.person`: a person sent it, written marked as a person's
+   *  (observe deferred fix round 2, Minor b). */
+  sendSession?(id: string, text: string, enter: boolean, by?: { person: true }): Promise<void>
   /** A chat session's last `turns` turns, oldest first, from the transcript or rollout file its agent
    *  CLI writes (core/sessions/chatRead.ts). Host-injected, beside the three above. */
   readChat?(id: string, turns: number): Promise<ChatTurn[]>
@@ -609,8 +631,9 @@ export interface OrchServerDeps {
   /** One turn into a chat session. With the app attached the app delivers it through its session
    *  driver (the scheduler's and Slack's), so its turn state stays its own, and refuses while a card
    *  is open. With no app the Host writes the adapter's own bytes to the process itself
-   *  (host/orchDeps.ts `chatSend`). Either way one at a time per session. */
-  chatSend?(id: string, text: string): Promise<ChatSendResult>
+   *  (host/orchDeps.ts `chatSend`). Either way one at a time per session. `by.person`: a person sent it (a person's
+   *  `sessions send`, a Slack reply), written marked as a person's line (observe deferred fix round 2). */
+  chatSend?(id: string, text: string, by?: { person: true }): Promise<ChatSendResult>
   /** The open prompts, from the process that is each session's writer (chat takeover §3.5). The Host
    *  answers its own writer sessions and asks an attached app for the rest; `complete` is false when the
    *  app could not be asked. The app answers every session it holds, complete. */
@@ -627,6 +650,10 @@ export interface OrchServerDeps {
    *  take). **Only the Host injects it.** Rejects with the reason when the start fails; answers the new
    *  session's row as `sessions list` shows it. */
   createSession?(o: SessionCreate): Promise<HostSession>
+  /** Whether the session that made a call runs in its CLI's sandbox (its note's `sandboxed`, by the id the call's token
+   *  names): what it starts then starts in the sandbox too (final fix pass, C3). Only the Host injects it; absent, no
+   *  caller reads as sandboxed. */
+  sessionSandboxed?(sessionId: string): boolean | Promise<boolean>
   /** A terminal session's turn, for `sessions send --wait` (CLI spec §15): the hook-event state
    *  `sessions list` reads, with the prompt a `waiting` is. `since` is when the send began; an event
    *  stamped before it reads `unknown`. null for a session the Host does not hold. Host-injected, beside
@@ -657,7 +684,8 @@ export interface OrchServerDeps {
   github?: {
     run: GhRunner
     worktreeOf?(path: string): WorktreeInfo | null
-    createPr(req: PrCreateRequest): Promise<PrCreateResult>
+    /** `deps` lets the Host record the push and the gh call for whoever asked (credentials design §6). */
+    createPr(req: PrCreateRequest, deps?: PrCreateDeps): Promise<PrCreateResult>
     readCommits(worktree: string, base: string): Promise<CommitSummary[]>
     isClean(worktree: string): Promise<{ changedCount: number }>
     /** The folder's `origin` URL, or null (GitHub lifecycle L24); the lifecycle's preflight reads it. */
@@ -673,6 +701,17 @@ export interface OrchServerDeps {
    *  never written (`readUnderstandingFile`). **Only the Host injects it**, over its profile's file: the
    *  app has the records in its own store and no caller asks it. Absent, `understanding-*` answer 409. */
   readUnderstanding?(): Promise<StoreShape>
+  /** The agent profile store (Agent Profiles design §6), read when a Job or Task is made from a profile: `run-create`
+   *  and `task-create` resolve the id or name and copy the accounts then. The Host and the app both inject it, over the
+   *  same profile's file (the Host writes it; both read it), since the app answers its own UI's creates. Absent (the
+   *  CLI's state-file reader with no Host, which writes nothing anyway), a Job or Task named with a profile answers
+   *  409. Throws RepairNeeded when the file is damaged. */
+  readAgentProfiles?(): Promise<AgentProfileStore>
+  /** Whether the app-wide permission mode skips permission checks (app-settings.json's agentPermissionMode is 'yolo'),
+   *  read per call when an agent's shell, an MCP client or a plugin starts work as a profile that runs without them
+   *  (`profileBypassRefusal`). Rejects with RepairNeeded when the file cannot be read. **Only the Host injects it**: the
+   *  app answers only its own UI, a person. Absent, such a caller is refused. */
+  appWideYolo?(): Promise<boolean>
   /** The job-source plugins (plugin Phase 4 J10): which there are and a question to one. **Only the Host injects it**,
    *  from its plugin manager and runtime; absent, the sources are GitHub's alone. */
   jobSources?: JobSourcesDeps
@@ -681,6 +720,10 @@ export interface OrchServerDeps {
    *  the app's goes through the Host (`plugins-list`, `checks-plugin-run`). Absent, nothing is refused early and a
    *  plugin check is an `error` that says so. */
   completionChecks?: CompletionChecksDeps
+  /** What each session spent for a Dispatch or a Run's coordinator (observe mode design §10), which `runs-get` and
+   *  `tasks-get` total. **Only the Host injects it**, from its token store (host/tokens/store.ts): it reads the sessions.
+   *  Absent, the two leave their token fields out. */
+  spentTokens?(): readonly SpentTokens[]
 }
 
 /** A plugin as the early refusal reads it (plugin Phase 5 C7). */
@@ -723,6 +766,12 @@ export interface SessionCreate {
   /** `'agent'` when the CLI, MCP or a plugin asked for it (SessionInfo.startedBy): its tab closes when it ends. Absent
    *  for a person's, from a remote controller's new-session dialog or the app. */
   startedBy?: 'agent'
+  /** The agent profile the session is started from (Agent Profiles design §5), by its id: `sessions create
+   *  --agent-profile` resolves a name first. */
+  agentProfileId?: string
+  /** A sandboxed session asked for it (final fix pass, C3): it starts in its CLI's sandbox whatever its profile says,
+   *  or is refused (`SANDBOX_UNAVAILABLE`) where that CLI has no sandbox. */
+  sandbox?: true
 }
 
 type Reply = { status: number; body: unknown }
@@ -1268,6 +1317,357 @@ function parseAccountList(
   return { ok: true, ids: parts }
 }
 
+/** A refusal of the agent profile a Job or Task is made from, with its reason as a field so nobody reads it off the
+ *  words (Agent Profiles design §6). */
+const profileRefused = (reason: 'agent-profile-unavailable' | 'agent-profile-no-account', msg: string): Reply => ({
+  status: 400,
+  body: { error: msg, reason }
+})
+
+/** A caller that is an agent rather than a person: an agent session's shell (the CLI with a session id), an MCP client
+ *  or a plugin. The app, a person's own shell (the CLI with none) and a remote controller's dialog are a person's. */
+const agentCaller = (caller: { sessionId: string; role?: string }): boolean =>
+  caller.role === 'mcp' || caller.role === 'plugin' || (caller.role === 'cli' && caller.sessionId !== '')
+
+/** The commands whose work starts in the sandbox when a sandboxed session asks (final fix pass, C3): a session, a Job
+ *  (its coordinator and workers), a Task (its workers), a worker. `tasks add` is `task-create` under another name. */
+const STARTS_WORK: ReadonlySet<string> = new Set(['sessions-create', 'run-create', 'task-create', 'worker-start'])
+
+/** Whether a session the Host holds runs in its CLI's sandbox (OrchServerDeps.sessionSandboxed), answered in the same
+ *  turn when the dep answers so; a session it does not hold, or a caller with no such dep, reads as outside it. */
+function sessionInSandbox(deps: OrchServerDeps, sessionId: string): boolean | Promise<boolean> {
+  const r = deps.sessionSandboxed?.(sessionId)
+  return r === undefined ? false : typeof r === 'boolean' ? r : r.then((v) => v === true)
+}
+
+/** Whether the caller is a session running in its CLI's sandbox (OrchServerDeps.sessionSandboxed): what it starts, a
+ *  session, a Job's coordinator, a worker, starts in the sandbox too (final fix pass, C3, the person's decision). The app
+ *  and the Host's own loops are no session; a shell has none. */
+function sandboxedCaller(deps: OrchServerDeps, caller: { sessionId: string }): boolean | Promise<boolean> {
+  if (caller.sessionId === '' || caller.sessionId === APP_CALLER || caller.sessionId === HOST_CALLER) return false
+  // Answered in the same turn when the answer is (the Host's is a read of its registries): a command that commits before
+  // its first await keeps doing so
+  return sessionInSandbox(deps, caller.sessionId)
+}
+
+/** The commands that hand work on to something that may run outside the caller's sandbox, read before the state
+ *  (outsideSandboxTarget): a Job's work started or set going again, a Task placed, re-armed or let go on by a question's
+ *  answer, a worker started on a Task or typed into another session, a reply a worker reads, a message or a question a
+ *  run's coordinator reads. `sessions send` asks in its own case, once its session is found (final fix pass, parts 2 and
+ *  3). */
+const HANDS_WORK: ReadonlySet<string> = new Set([
+  'run-start',
+  'jobs-run',
+  'run-spawn',
+  'run-resume',
+  'runs-resume',
+  'runs-reconverge',
+  'tasks-dispatch',
+  'task-update',
+  'gate-resolve',
+  'worker-start',
+  'reply',
+  'send',
+  'ask'
+])
+
+/** The statuses `task-update` may set on work outside the sandbox from inside it: the two that only stop the Task. Any
+ *  other sets it going again (ready, pending), lets the Tasks after it go on (completed) or skips a verdict. */
+const STOPS_TASK: ReadonlySet<string> = new Set(['failed', 'blocked'])
+
+/** A sandboxed session's refusal for handing work outside its sandbox (final fix pass, part 2, A, the person's strict
+ *  decision): 403 (exit 5), nothing sent, typed, placed or started. `target` is `session <id>`, `job <id>` or
+ *  `task <id>`; the app's and the CLI's words for it are core/sandbox/unavailable.ts's. */
+const outsideSandbox = (target: string): Reply => denied(`${SANDBOX_UNAVAILABLE}: outside-sandbox ${target}`)
+
+/** What a command a sandboxed session sends (HANDS_WORK) would hand to something outside its sandbox, named for the
+ *  refusal, or null when everything it sets going runs in the sandbox (final fix pass, part 2, A). Read from a state of
+ *  its own before handleCommand reads the one it commits, as startingProfileIds is:
+ *  - a Job's coordinator and plan (`run-start`, `jobs-run`, `run-spawn`, `run-resume`, `runs-resume`,
+ *    `runs-reconverge`): the Job must be one a sandboxed session made (Job.sandboxed, part 1 §3);
+ *  - one Task's worker, reviewer or repair (`tasks-dispatch`, `worker-start` with or without `--terminal`, a
+ *    `task-update` that does more than stop it, a question's answer but mark-failed): the Task must run in the sandbox
+ *    (workSandboxed: its own mark or its Job's). A worker-start on one does start in the sandbox (part 1 §3), but its
+ *    reviewer, validation and repair follow the Task's own mark, so a Task without one is refused (part 3);
+ *  - another session (`worker-start --terminal` types the Task into it, `reply` is read by the asking worker): it must run
+ *    in the sandbox;
+ *  - a message or a question in a run (`send`, `ask`, which its coordinator reads with `check`): open to a worker of
+ *    that run (a session that holds one of its Dispatches) and to the coordinator Astera started for it, else the run's
+ *    Job must be sandboxed (part 3). Driving a run from outside (`check --run`) makes no session its coordinator here.
+ *  An id that names nothing is null here, and the command answers it as before. */
+function outsideSandboxTarget(
+  deps: OrchServerDeps,
+  caller: { sessionId: string },
+  cmd: string,
+  args: Record<string, unknown>
+): string | null | Promise<string | null> {
+  const s = deps.getState()
+  const ofJob = (job: Job | undefined): string | null => (job !== undefined && job.sandboxed !== true ? `job ${job.id}` : null)
+  const ofTask = (task: Task | undefined): string | null => (task !== undefined && !workSandboxed(s, task) ? `task ${task.id}` : null)
+  const ofSession = (id: string | null | undefined): string | null | Promise<string | null> => {
+    if (id === null || id === undefined) return null
+    const inside = sessionInSandbox(deps, id)
+    return typeof inside === 'boolean' ? (inside ? null : `session ${id}`) : inside.then((v) => (v ? null : `session ${id}`))
+  }
+  const runOf = (id: string | null) => (id === null ? undefined : s.runs.find((r) => r.id === id))
+  /** A run the caller posts into: its worker's, its coordinator's, or a sandboxed Job's */
+  const ofRun = (run: JobRun | undefined): string | null => {
+    if (!run || run.coordinatorSessionId === caller.sessionId) return null
+    const worksHere = s.dispatches.some((d) => d.sessionId === caller.sessionId && s.tasks.find((t) => t.id === d.taskId)?.runId === run.id)
+    return worksHere ? null : ofJob(jobOf(s, run))
+  }
+  const jobNamed = (id: string | null) => (id === null ? undefined : s.jobs.find((j) => j.id === id))
+  switch (cmd) {
+    case 'run-start': {
+      // A Run id, its Job's coordinator again; any other id, the Job
+      const run = runOf(str(args.run))
+      return ofJob(run ? jobOf(s, run) : jobNamed(str(args.run)))
+    }
+    case 'jobs-run':
+      return ofJob(jobNamed(str(args.id)))
+    case 'run-spawn':
+    case 'run-resume':
+      return ofJob(jobNamed(str(args.run)))
+    case 'runs-resume':
+    case 'runs-reconverge': {
+      const run = runOf(str(args.id))
+      return ofJob(run ? jobOf(s, run) : undefined)
+    }
+    case 'tasks-dispatch':
+      return ofTask(s.tasks.find((t) => t.id === str(args.id)))
+    case 'task-update': {
+      // `--convergence off` stops the Task's repairs, and the two stopping statuses stop the Task
+      const status = str(args.status)
+      if (args.convergence !== undefined || status === null || STOPS_TASK.has(status)) return null
+      return ofTask(s.tasks.find((t) => t.id === str(args.id)))
+    }
+    case 'gate-resolve': {
+      // Every answer but mark-failed lets the Task go on: a fresh round, a repair, back to ready where it is placed again
+      if (str(args.resolution) === 'mark-failed') return null
+      const gate = s.gates.find((g) => g.id === str(args.id))
+      return ofTask(gate === undefined ? undefined : s.tasks.find((t) => t.id === gate.taskId))
+    }
+    case 'worker-start':
+      // The Task first: its worker, typed into a session or started afresh, is its work
+      return ofTask(s.tasks.find((t) => t.id === str(args.taskId ?? args.task))) ?? ofSession(str(args.terminal))
+    case 'reply': {
+      // The worker that asked reads the answer: the session its Dispatch is on now (a roll moves it)
+      const q = s.messages.find((m) => m.id === str(args.id))
+      if (!q || q.type !== 'question' || q.answered) return null
+      return ofSession(s.dispatches.find((d) => d.id === q.dispatchId)?.sessionId)
+    }
+    // The run the case posts into: its Task's, or the latest run
+    case 'send':
+      return ofRun(runOf(s.tasks.find((t) => t.id === str(args.taskId))?.runId ?? latestRun(s)?.id ?? null))
+    // The run of the question waited on again, or of the Task a new one is about
+    case 'ask': {
+      const resumed = str(args.resume)
+      const runId = resumed !== null ? s.messages.find((m) => m.id === resumed)?.runId : s.tasks.find((t) => t.id === str(args.taskId))?.runId
+      return ofRun(runOf(runId ?? null))
+    }
+    default:
+      return null
+  }
+}
+
+/** The person's decision on the final review (2026-10-22): an agent (`agentCaller`) may start work as a profile that
+ *  runs without permission checks only while the app-wide mode already skips them, so a profile is never an agent's way
+ *  around the app's own setting. A person is not asked, and neither is a profile that checks or follows the app. A
+ *  settings file that cannot be read refuses and names the file, as the Host's spawn does: it may have said manual.
+ *  Null when the caller may. */
+async function profileBypassRefusal(deps: OrchServerDeps, caller: { sessionId: string; role?: string }, profile: AgentProfile): Promise<Reply | null> {
+  if (profile.permission !== 'bypass' || !agentCaller(caller)) return null
+  let yolo: boolean
+  try {
+    yolo = (await deps.appWideYolo?.()) === true
+  } catch (e) {
+    const refused = conflict(`Astera's permission setting could not be read: ${e instanceof Error ? e.message : String(e)}`)
+    return e instanceof RepairNeeded ? { ...refused, body: { ...(refused.body as object), repair: e.file } } : refused
+  }
+  if (yolo) return null
+  return {
+    status: 403,
+    body: {
+      error:
+        `agent profile ${profile.name} runs without permission checks, and an agent, an MCP client or a plugin may start work as it ` +
+        `only while Astera's own setting "Run agents without permission checks" is on. Turn that on in Settings, or start it yourself ` +
+        `from the app or your own shell`,
+      reason: 'agent-profile-bypass-refused'
+    }
+  }
+}
+
+/** The agent profile a Job or Task is made from, by its id or its name (Agent Profiles design §6), or the reply that
+ *  refuses it: one not found or archived is `agent-profile-unavailable`, and a damaged store refuses and names the file
+ *  as the GitHub defaults do (a guess would make the work run as the wrong profile). `held` is for a profile the Job
+ *  already holds: work that holds one keeps resolving it after it is archived (design §4). One an agent may not use is
+ *  refused here too (`profileBypassRefusal`), the one place the three creates resolve a profile, unless `bypassOk`: the
+ *  Job's own profile asked for by the coordinator carrying out that Job (`drivesRun`). */
+async function profileFor(
+  deps: OrchServerDeps,
+  caller: { sessionId: string; role?: string },
+  idOrName: string,
+  opts: { held?: boolean; bypassOk?: boolean } = {}
+): Promise<{ ok: true; profile: AgentProfile } | { ok: false; reply: Reply }> {
+  const read = await profileStore(deps)
+  if (!read.ok) return read
+  const profile = findProfile(read.store, idOrName)
+  if (!profile) return { ok: false, reply: profileRefused('agent-profile-unavailable', `unknown agent profile: ${idOrName}`) }
+  if (profile.status === 'archived' && opts.held !== true)
+    return { ok: false, reply: profileRefused('agent-profile-unavailable', `agent profile ${profile.name} is archived; restore it to start new work as it`) }
+  const refused = opts.bypassOk === true ? null : await profileBypassRefusal(deps, caller, profile)
+  if (refused) return { ok: false, reply: refused }
+  return { ok: true, profile }
+}
+
+/** Whether the caller is the coordinator Astera started for this Run, while the Run is still running —
+ *  `isRunCoordinator`'s test in handleCommand, asked of one Run. The Tasks it adds inherit the profile a person chose for
+ *  the Job, so the person's decision on the final review (people choosing are unaffected) reaches them: it is not asked
+ *  about that profile (`profileBypassRefusal`), only about one it names itself. **Not a session that drives the Run from
+ *  outside** (`externalCoordinatorSessionId`): an agent becomes that with `check --run` on any Run Astera started no
+ *  coordinator for, which would hand it the person's bypass profile while the app asks; a Run an agent made itself went
+ *  through the gate at run-create. */
+function drivesRun(s: OrchState, caller: { sessionId: string }, runId: string): boolean {
+  const run = s.runs.find((r) => r.id === runId)
+  return run !== undefined && run.coordinatorSessionId === caller.sessionId && outcomeOf(s, run.id) === 'running'
+}
+
+/** The agent profile store, or the reply that refuses: a caller with no reader, or a store that cannot be read, which
+ *  names the file. */
+async function profileStore(deps: OrchServerDeps): Promise<{ ok: true; store: AgentProfileStore } | { ok: false; reply: Reply }> {
+  if (!deps.readAgentProfiles) return { ok: false, reply: conflict('this caller cannot read the agent profiles; start Astera and try again') }
+  try {
+    return { ok: true, store: await deps.readAgentProfiles() }
+  } catch (e) {
+    const refused = conflict(`the agent profiles could not be read: ${e instanceof Error ? e.message : String(e)}`)
+    return { ok: false, reply: e instanceof RepairNeeded ? { ...refused, body: { ...(refused.body as object), repair: e.file } } : refused }
+  }
+}
+
+/** A Task an agent gives its own accounts in a Job that holds a profile still runs as that profile, so it is asked the
+ *  same question (`profileBypassRefusal`) about it. Only that: a profile gone since falls back at the spawn as it does for
+ *  a person (design §5), so it is null here, while a store that cannot be read refuses, since it may hold one. */
+async function inheritedBypassRefusal(deps: OrchServerDeps, caller: { sessionId: string; role?: string }, id: string): Promise<Reply | null> {
+  return startRefusal(deps, caller, [id])
+}
+
+/** The person's decision on the third and fourth follow-ups: work an agent sets going is asked about every profile it
+ *  runs as, wherever it starts, not only where a Job or Task is made. Each of `profileIds` that resolves is asked as
+ *  task-create asks an inherited one (`profileBypassRefusal`): a profile gone since, or one that checks or follows the
+ *  app, starts as before, and a store that cannot be read refuses. A person, and work that holds no profile, are not
+ *  asked and nothing is read. */
+async function startRefusal(deps: OrchServerDeps, caller: { sessionId: string; role?: string }, profileIds: ReadonlyArray<string | undefined>): Promise<Reply | null> {
+  if (!agentCaller(caller)) return null
+  const ids = [...new Set(profileIds.filter((id): id is string => id !== undefined))]
+  if (ids.length === 0) return null
+  const read = await profileStore(deps)
+  if (!read.ok) return read.reply
+  for (const id of ids) {
+    const held = findProfile(read.store, id)
+    const refused = held ? await profileBypassRefusal(deps, caller, held) : null
+    if (refused) return refused
+  }
+  return null
+}
+
+/** The profiles the work a start of a Job sets going runs as (startRefusal): the Job's own, which the coordinator Astera
+ *  then starts plans with (`drivesRun`); with `plan`, those of the Tasks a new Run copies (tasksOfNextRun); with
+ *  `runId`, those of that Run's Tasks not finished yet, or with `everyTask` every ordinary one (runs reconverge, whose
+ *  repair borrows a finished Task's). Each Task's is the one its worker or repair runs as (workerProfileOf): an unfinished
+ *  GitHub step holds none of its own and borrows a finished Task's (ninth follow-up). */
+function startProfiles(s: OrchState, job: Job | undefined, o: { plan?: boolean; runId?: string; everyTask?: boolean }): Array<string | undefined> {
+  if (!job) return []
+  const ofRun =
+    o.runId === undefined ? [] : s.tasks.filter((t) => t.runId === o.runId && (o.everyTask === true ? !isLifecycleTask(t) : !taskFinished(t)))
+  return [job.agentProfileId, ...[...(o.plan === true ? tasksOfNextRun(s, job) : []), ...ofRun].map((t) => workerProfileOf(s, t))]
+}
+
+/** The commands that set work going, and what each asks of an agent (startRefusal), read from a state of their own:
+ *  handleCommand asks before it reads the state it commits (the fifth follow-up; the plugin checks' reason), so a write
+ *  that lands during the store read is never committed over. Empty when the command starts nothing that holds a profile,
+ *  or when the coordinator Astera started for the Task's Run starts or re-arms it (`drivesRun`). `jobs-run` asks through
+ *  the run-start or run-spawn it calls. */
+function startingProfileIds(s: OrchState, caller: { sessionId: string }, cmd: string, args: Record<string, unknown>): string[] {
+  const defined = (ids: Array<string | undefined>): string[] => ids.filter((id): id is string => id !== undefined)
+  /** The profile one Task's worker or repair runs as, for starting or re-arming it: its own, or for a lifecycle Task,
+   *  which holds none, the one its repairs borrow (workerProfileOf; eighth follow-up) */
+  const ofTask = (id: string | null): string[] => {
+    const task = id === null ? undefined : s.tasks.find((t) => t.id === id)
+    if (!task || (task.runId !== undefined && drivesRun(s, caller, task.runId))) return []
+    return defined([workerProfileOf(s, task)])
+  }
+  switch (cmd) {
+    case 'run-start': {
+      const id = str(args.run)
+      const run = id === null ? undefined : s.runs.find((r) => r.id === id)
+      // A Run id: its coordinator again, with the Tasks it has not finished
+      if (run) return defined(startProfiles(s, jobOf(s, run), { runId: run.id }))
+      const job = id === null ? undefined : s.jobs.find((j) => j.id === id)
+      if (!job) return []
+      // A Job id: a first Run, or a schedule's fires, copy the plan; a Job that ran already hands its latest Run to a
+      // coordinator, with the Tasks that Run has not finished
+      const latest = job.schedule === undefined ? s.runs.filter((r) => r.jobId === job.id).at(-1) : undefined
+      return defined(startProfiles(s, job, { plan: job.schedule !== undefined || latest === undefined, ...(latest ? { runId: latest.id } : {}) }))
+    }
+    // A later Run, or a schedule's fires again: each copies the plan
+    case 'run-spawn':
+    case 'run-resume': {
+      const id = str(args.run)
+      return id === null ? [] : defined(startProfiles(s, s.jobs.find((j) => j.id === id), { plan: true }))
+    }
+    // Its work and its coordinator again, with the Tasks it has not finished
+    case 'runs-resume':
+    case 'runs-reconverge': {
+      const id = str(args.id)
+      const run = id === null ? undefined : s.runs.find((r) => r.id === id)
+      return run ? defined(startProfiles(s, jobOf(s, run), { runId: run.id, everyTask: cmd === 'runs-reconverge' })) : []
+    }
+    case 'worker-start':
+      return ofTask(str(args.taskId ?? args.task))
+    case 'tasks-dispatch':
+      return ofTask(str(args.id))
+    // Back to ready or pending, its failures cleared: the loop then places it (slotsToFill), or starts a lifecycle Task's
+    // fresh round (lifecycleToStart)
+    case 'task-update':
+      return args.status === 'ready' || args.status === 'pending' ? ofTask(str(args.id)) : []
+    // An answer that opens a new attempt restarts the Task (the person's decisions, sixth to eighth follow-ups), asked
+    // about the profile its worker or repair runs as (workerProfileOf): on the exhausted Gate any answer but mark-failed
+    // (retry-once opens a repair Dispatch, repairOnce; any other text unblocks the Task to ready, where the loop places it
+    // again), and a GitHub question's answer that starts the step afresh with its failures reset (answerGitHubGate:
+    // continue, retry, or one going back to a wait that is gone, never mark-failed), which is task-update's re-arm. Any
+    // other answer only lets the Task continue and is not asked; `questions-answer` comes here with its answer.
+    case 'gate-resolve': {
+      const gate = s.gates.find((g) => g.id === str(args.id))
+      const task = gate?.status === 'open' ? s.tasks.find((t) => t.id === gate.taskId) : undefined
+      if (!gate || !task || (task.runId !== undefined && drivesRun(s, caller, task.runId))) return []
+      const answer = str(args.resolution)
+      const restarts =
+        (gate.kind === 'convergence-exhausted' && answer !== null && answer !== 'mark-failed') ||
+        (isGitHubGateKind(gate.kind) &&
+          task.status === 'blocked' &&
+          answer !== null &&
+          answer !== 'mark-failed' &&
+          (gate.options ?? []).includes(answer) &&
+          (answer === 'continue' || answer === 'retry' || task.ciWait === undefined))
+      return restarts ? defined([workerProfileOf(s, task)]) : []
+    }
+    default:
+      return []
+  }
+}
+
+/** `--agent-profile <id|name>` of the public commands (`jobs create`, `tasks add`) as the `agentProfileId` run-create and
+ *  task-create read, which resolve it (Agent Profiles design §6). A bare flag is refused rather than read as none. */
+function publicProfileArgs(args: Record<string, unknown>): { args: Record<string, unknown> } | { error: string } {
+  const { agentProfile, ...rest } = args
+  if (agentProfile === undefined) return { args: rest }
+  const named = str(agentProfile)
+  if (named === null) return { error: PROFILE_NEEDS_VALUE }
+  return { args: { ...rest, agentProfileId: named } }
+}
+
+const PROFILE_NEEDS_VALUE = '--agent-profile needs a value: a profile id or name (from `agent-profiles list`)'
+
 /** The mark `jobs run` gives the `run-start` it calls: its plugin checks were looked at already (plugin Phase 5 C7). A
  *  symbol, so no JSON a caller sends can carry it. */
 const PLUGIN_CHECKS_PASSED: unique symbol = Symbol('plugin-checks-passed')
@@ -1382,6 +1782,29 @@ export async function handleCommand(
   if ((cmd === 'jobs-run' || cmd === 'run-start') && (args as Record<PropertyKey, unknown>)[PLUGIN_CHECKS_PASSED] !== true) {
     const refusal = await pluginCheckRefusal(deps, startingCheckIds(deps, cmd, args))
     if (refusal) return refusal
+  }
+  // **The agent profiles of the work an agent sets going, before the state too** (the person's decision; fifth
+  // follow-up): the store is a disk read in the Host, and a command that took `s` before it committed that over whatever
+  // landed meanwhile. Awaited only when an agent starts work that holds a profile, so a person, the loops and every
+  // start without one read the state in the same turn as before.
+  if (agentCaller(caller)) {
+    const profileIds = startingProfileIds(deps.getState(), caller, cmd, args)
+    if (profileIds.length > 0) {
+      const refused = await startRefusal(deps, caller, profileIds)
+      if (refused) return refused
+    }
+  }
+  // **Whether the caller runs in the sandbox, before the state too** (final fix pass, C3): what it starts then starts in
+  // the sandbox, and the Host answers it by a read of its registries. Asked only by the commands that start or add work.
+  const boxed = STARTS_WORK.has(cmd) || HANDS_WORK.has(cmd) || cmd === 'sessions-send' ? sandboxedCaller(deps, caller) : false
+  const callerBoxed = typeof boxed === 'boolean' ? boxed : await boxed
+  // **What a sandboxed caller would hand outside its sandbox, before the state too** (final fix pass, part 2, A): a Job's
+  // work, a Task's, another session that is not sandboxed. Refused before anything moves; answered in the same turn as
+  // the Host's registries answer, so a command that commits before its first await still does.
+  if (callerBoxed && HANDS_WORK.has(cmd)) {
+    const outside = outsideSandboxTarget(deps, caller, cmd, args)
+    const named = outside instanceof Promise ? await outside : outside
+    if (named !== null) return outsideSandbox(named)
   }
   const now = deps.now?.() ?? new Date().toISOString()
   const s = deps.getState()
@@ -1637,6 +2060,8 @@ export async function handleCommand(
         runId: target.id,
         cwd: job.cwd,
         accountId,
+        // A Job a sandboxed session made: its coordinator starts in the sandbox too (final fix pass, C3)
+        ...(job.sandboxed === true ? { sandbox: true as const } : {}),
         brief: buildHandoverPrompt({
           runId: target.id,
           objective: job.objective,
@@ -1853,6 +2278,17 @@ export async function handleCommand(
           )
         coordinatorAccountId = chosen.id
       }
+      // The agent profile the Job runs as (Agent Profiles design §6), by id or name, stored as its real id: only its
+      // Tasks' default. It never picks the coordinator: who drives the Job (a coordinator account, `--auto`, or the
+      // calling session) is decided above and below exactly as without a profile, and a coordinator starts without
+      // it, as Astera's own role. Read before the re-read below, since it awaits.
+      const profileArg = str(args.agentProfileId)
+      let agentProfileId: string | undefined
+      if (profileArg !== null) {
+        const found = await profileFor(deps, caller, profileArg)
+        if (!found.ok) return found.reply
+        agentProfileId = found.profile.id
+      }
       // 예약. **규칙만 받는다**(command 없는 반쪽) — Job 에는 타이핑할 명령이 없다(Run.schedule).
       // 지역 변수로 좁히는 이유는 타입이다: `if (a && !guard) return` 은 블록 밖에서 좁혀지지 않는다.
       let schedule: ScheduleRule | undefined
@@ -1933,6 +2369,9 @@ export async function handleCommand(
             ...(project ? { projectId: project.id } : {}),
             ...(concurrency !== null ? { concurrency } : {}),
             ...(coordinatorAccountId ? { coordinatorAccountId } : {}),
+            ...(agentProfileId ? { agentProfileId } : {}),
+            // Made by a sandboxed session: its coordinator and workers start in the sandbox (final fix pass, C3)
+            ...(callerBoxed ? { sandboxed: true } : {}),
             // `--auto` 는 값이 없는 플래그다(task-create --review 와 같은 모양). **예약이면 켜지
             // 않는다** — 템플릿 자신은 돌지 않기 때문이다.
             //
@@ -2106,7 +2545,9 @@ export async function handleCommand(
      * 403 을 받는다 — `jobs run` 이 run-start 로 가며 받는 것과 같은 경계다. tasks-add 도 같다.
      */
     case 'jobs-create': {
-      const reply = await handleCommand(deps, caller, 'run-create', { ...args, auto: true })
+      const profiled = publicProfileArgs(args)
+      if ('error' in profiled) return bad(profiled.error)
+      const reply = await handleCommand(deps, caller, 'run-create', { ...profiled.args, auto: true })
       if (reply.status < 200 || reply.status >= 300) return reply
       const after = deps.getState()
       const created = after.jobs.find((j) => j.id === (reply.body as { id?: unknown }).id)
@@ -2163,7 +2604,9 @@ export async function handleCommand(
             body: { error: `unknown run configuration: ${unknown.join(', ')} (not one of job ${owner.id}'s)`, jobId: owner.id }
           }
       }
-      const { job: _job, ...rest } = args
+      const profiled = publicProfileArgs(args)
+      if ('error' in profiled) return bad(profiled.error)
+      const { job: _job, ...rest } = profiled.args
       return handleCommand(deps, caller, 'task-create', { ...rest, run: job ?? run })
     }
     case 'jobs-wait':
@@ -2339,7 +2782,9 @@ export async function handleCommand(
       const mine = s.dispatches.filter((d) => tasks.has(d.taskId))
       const waiting = await waitingForApprovalIn(deps, mine)
       const waitingTasks = new Set(mine.filter((d) => waiting.has(d.id)).map((d) => d.taskId)).size
-      return okBody({ ...runView(s, run), ...(waitingTasks > 0 ? { waitingForApproval: waitingTasks } : {}) })
+      // The tokens its Tasks' sessions spent, and its coordinator's apart (observe mode design §10); left out when unknown
+      const tokens = deps.spentTokens ? runTokensOf(s, run.id, deps.spentTokens()) : {}
+      return okBody({ ...runView(s, run), ...(waitingTasks > 0 ? { waitingForApproval: waitingTasks } : {}), ...tokens })
     }
     /**
      * One long poll of `astera runs follow` (CLI spec §22). **The client loops; this answers once.**
@@ -3178,13 +3623,42 @@ export async function handleCommand(
       // 받는다. `ask --options` 가 이미 CSV 이므로 그 관례를 쓴다 — 계정 하나만 주는 기존 호출은
       // 쉼표가 없으므로 그대로 흐른다.
       const accountArg = str(args.account)
-      if (accountArg === null) return bad('--account is required')
-      // 검증은 parseAccountList 가 한다 — `run-create --coordinator-account` 와 **같은 규칙**이고,
-      // 두 번 적으면 한쪽만 고쳐지는 날이 온다(그 함수의 주석).
-      const parsedAccounts = parseAccountList(accountArg, await deps.listAccounts(), '--account')
-      if (!parsedAccounts.ok)
-        return parsedAccounts.missing ? notFound(parsedAccounts.reason) : bad(parsedAccounts.reason)
-      const accountIds: string[] = parsedAccounts.ids
+      // The agent profile the Task runs as (Agent Profiles design §6), by id or name, else its Job's. Given one and no
+      // `--account`, the Task's accounts are the profile's live ones, copied now and fixed from then on; given both,
+      // the accounts are the ones given and the profile is still recorded. The Job's own is read only when its accounts
+      // are needed, and may be archived since (the Job holds it); a profile the caller names now must be usable. An
+      // agent's Task given accounts still runs as the Job's profile, so that one is asked about its permission alone
+      // (inheritedBypassRefusal). The coordinator Astera started for this Run is not asked about the Job's profile, with
+      // or without accounts (drivesRun); one it names itself is asked like any agent's, and so is an outside driver.
+      const profileArg = str(args.agentProfileId)
+      const ownerJob = s.jobs.find((j) => j.id === runId) ?? s.jobs.find((j) => j.id === s.runs.find((r) => r.id === runId)?.jobId)
+      let agentProfileId = profileArg === null ? ownerJob?.agentProfileId : undefined
+      if (accountArg === null && profileArg === null && agentProfileId === undefined) return bad('--account is required')
+      const inheritsForItsCoordinator = profileArg === null && drivesRun(s, caller, runId)
+      let profile: AgentProfile | undefined
+      if (profileArg !== null || accountArg === null) {
+        const found = await profileFor(deps, caller, profileArg ?? agentProfileId!, { held: profileArg === null, bypassOk: inheritsForItsCoordinator })
+        if (!found.ok) return found.reply
+        profile = found.profile
+        agentProfileId = found.profile.id
+      } else if (agentProfileId !== undefined && agentCaller(caller) && !inheritsForItsCoordinator) {
+        const refused = await inheritedBypassRefusal(deps, caller, agentProfileId)
+        if (refused) return refused
+      }
+      const known = await deps.listAccounts()
+      let accountIds: string[]
+      if (accountArg !== null) {
+        // 검증은 parseAccountList 가 한다 — `run-create --coordinator-account` 와 **같은 규칙**이고,
+        // 두 번 적으면 한쪽만 고쳐지는 날이 온다(그 함수의 주석).
+        const parsedAccounts = parseAccountList(accountArg, known, '--account')
+        if (!parsedAccounts.ok)
+          return parsedAccounts.missing ? notFound(parsedAccounts.reason) : bad(parsedAccounts.reason)
+        accountIds = parsedAccounts.ids
+      } else {
+        accountIds = liveAccounts(profile!, known)
+        if (accountIds.length === 0)
+          return profileRefused('agent-profile-no-account', `agent profile ${profile!.name} has no account left; add one to it, or name one with --account`)
+      }
       // `--validate` 는 쉼표 목록이다(설계 D8) — `--account` 와 같은 규약. 옛 단일 값도 한 칸짜리
       // 목록으로 저장한다; validateConfigId 는 더 쓰지 않는다(읽기는 checkConfigIdsOf 가 합친다).
       const validateArg = str(args.validate)
@@ -3219,6 +3693,9 @@ export async function handleCommand(
             deps: Array.isArray(args.deps) ? (args.deps as string[]) : [],
             parentId: str(args.parent) ?? undefined,
             ...(accountIds ? { accountIds } : {}),
+            ...(agentProfileId !== undefined ? { agentProfileId } : {}),
+            // Added by a sandboxed session: its workers start in the sandbox, in whichever Job (final fix pass, C3)
+            ...(callerBoxed ? { sandboxed: true } : {}),
             ...(validateIds ? { validateConfigIds: validateIds } : {}),
             // `--review` 는 값이 없는 플래그다(task-list --ready 와 같은 모양). 어느 provider 가
             // 읽을지는 앱이 고른다 — 계정 풀을 아는 것은 앱이다.
@@ -3293,7 +3770,10 @@ export async function handleCommand(
       const id = str(args.id)
       if (!id) return bad('--id is required')
       const detail = taskDetailOf(s, id, await waitingForApprovalIn(deps, s.dispatches.filter((d) => d.taskId === id)))
-      return detail ? okBody(detail) : notFound(`unknown task: ${id}`)
+      if (!detail) return notFound(`unknown task: ${id}`)
+      // The tokens its attempts' sessions spent (observe mode design §10); left out when unknown
+      const tokens = deps.spentTokens ? taskTokensOf(s, id, deps.spentTokens()) : undefined
+      return okBody({ ...detail, ...(tokens ? { tokens } : {}) })
     }
     case 'tasks-check-output': {
       const id = str(args.id)
@@ -3638,7 +4118,8 @@ export async function handleCommand(
           sessionId: pendingSessionId,
           cwd: runJob?.cwd ?? '',
           specPath: '',
-          retryOf
+          retryOf,
+          ...(terminal ? { reusesSession: true } : {})
         },
         now
       )
@@ -3664,7 +4145,13 @@ export async function handleCommand(
           terminal,
           terminalCwd,
           terminalProvider,
-          terminalAccountId
+          terminalAccountId,
+          // What the Task runs as, read off the Dispatch openDispatch just opened (workerProfileOf); not resolved here, so
+          // a profile deleted since starts the worker implicit at the spawn, logged, rather than refusing it
+          ...(opened.value.agentProfileId !== undefined ? { agentProfileId: opened.value.agentProfileId } : {}),
+          // A sandboxed caller's worker starts in the sandbox (final fix pass, C3); the Task's or Job's own mark is the
+          // wiring's (startWorkerWithChain)
+          ...(callerBoxed ? { sandbox: true as const } : {})
         })
       } catch (e) {
         // Failure rollback — this is the server's transaction handling, not a pure-layer transition
@@ -4591,6 +5078,9 @@ export async function handleCommand(
       if (session.kind === 'chat' && args.noEnter !== undefined)
         return bad(`--no-enter is for terminal sessions; ${id} is a chat session, where a send is one turn`)
       if (!session.alive) return conflict(`session ${id} has ended; there is nothing to type into`)
+      // **A sandboxed session types only into a sandboxed one** (final fix pass, part 2, A, the person's strict decision):
+      // text sent to a session outside the sandbox is work handed outside it. Before anything is typed or waited on
+      if (callerBoxed && !(await sessionInSandbox(deps, id))) return outsideSandbox(`session ${id}`)
       /**
        * **The wait is judged before anything is typed.** A turn nobody can see the end of would only time
        * out after the text was delivered, so it is refused while refusing still costs nothing:
@@ -4618,6 +5108,10 @@ export async function handleCommand(
       const fromMcp = caller.role === 'mcp'
       const fromAgent =
         (caller.sessionId !== '' && caller.sessionId !== APP_CALLER && caller.sessionId !== HOST_CALLER) || fromMcp
+      // A person's send (a shell, the app) is a person's prompt, written marked down to the pty or process: it ends what a
+      // finished Run's or an ended attempt's session still holds, and an agent's or the Host's does not (observe deferred
+      // fix round 2, Minor b)
+      const by = !fromAgent && caller.sessionId !== HOST_CALLER ? ({ person: true } as const) : undefined
       if (session.kind === 'terminal' && fromAgent && !resuming && deps.sessionTurn) {
         const now = await deps.sessionTurn(id)
         if (now !== null && now.alive && now.state === 'waiting' && now.prompt !== null)
@@ -4693,7 +5187,7 @@ export async function handleCommand(
       // 앱이 붙어 있으면 앱의 세션 드라이버로, 없으면 Host 가 어댑터의 바이트를 직접 쓴다(orchDeps 의
       // chatSend). 카드가 열려 있으면 앱이 거절한다 — 그 답은 앱에서 사람이 한다(R4.3).
       if (session.kind === 'chat') {
-        const r = await deps.chatSend(id, text as string)
+        const r = await deps.chatSend(id, text as string, by)
         if (!r.sent && 'reason' in r)
           return conflict(`Astera does not hold ${id} right now (it may still be taking its sessions back); nothing was sent, try again in a moment`)
         if (!r.sent)
@@ -4705,7 +5199,7 @@ export async function handleCommand(
       }
       const enter = args.noEnter !== true
       // 붙여 넣고 Enter 를 치는 약속(ptyDriver)과 세션마다 한 번에 하나씩은 Host 가 지킨다.
-      await deps.sendSession(id, text as string, enter)
+      await deps.sendSession(id, text as string, enter, by)
       if (waitFor) return okBody({ id, sent: true, enter, turn: await pollTurn(waitFor, timeoutMs) })
       return okBody({ id, sent: true, enter })
     }
@@ -4725,9 +5219,11 @@ export async function handleCommand(
       if (myDispatch !== undefined)
         return denied('a worker session cannot start sessions; ask your coordinator, or run it from a shell')
       if (!deps.createSession) return conflict('sessions are started by the Astera Host, and this caller is not one')
-      if (args.account === undefined) return bad('--account is required: the account the session runs on (from `accounts list`)')
-      const account = str(args.account)
-      if (account === null) return bad('--account needs a value: an account id (from `accounts list`)')
+      if (args.agentProfile !== undefined && str(args.agentProfile) === null) return bad(PROFILE_NEEDS_VALUE)
+      if (args.account === undefined && args.agentProfile === undefined)
+        return bad('--account is required: the account the session runs on (from `accounts list`)')
+      const accountArg = args.account === undefined ? undefined : str(args.account)
+      if (accountArg === null) return bad('--account needs a value: an account id (from `accounts list`)')
       if (args.cwd === undefined) return bad('--cwd is required: the folder the session starts in')
       const asked = str(args.cwd)
       if (asked === null) return bad('--cwd needs a value: a folder')
@@ -4765,9 +5261,25 @@ export async function handleCommand(
           '--prompt for a terminal session must not contain " & | < > ^ % or a line break: it is passed on the command line. Put the text in a file and ask the session to read it, or start a chat session'
         )
       const known = await deps.listAccounts()
+      // The agent profile it is started from (Agent Profiles design §6), by id or name, as its real id. Without
+      // --account it picks the account and the chain to roll onto, as the New Session dialog does: its live accounts in
+      // order. With one, the account given wins and the profile still decides the MCP servers and the permission.
+      let agentProfileId: string | undefined
+      let profileChain: string[] = []
+      if (args.agentProfile !== undefined) {
+        const found = await profileFor(deps, caller, str(args.agentProfile)!)
+        if (!found.ok) return found.reply
+        agentProfileId = found.profile.id
+        if (accountArg === undefined) {
+          profileChain = liveAccounts(found.profile, known)
+          if (profileChain.length === 0)
+            return profileRefused('agent-profile-no-account', `agent profile ${found.profile.name} has no account left in Astera; give --account`)
+        }
+      }
+      const account = accountArg ?? profileChain[0]!
       const mine = known.find((a) => a.id === account)
       if (!mine) return notFound(`unknown account: ${account}`)
-      let chain: string[] = []
+      let chain: string[] = profileChain.length > 1 ? profileChain : []
       if (args.rollAccounts !== undefined) {
         const raw = str(args.rollAccounts)
         if (raw === null) return bad('--roll-accounts needs a value: account ids, comma-separated')
@@ -4778,19 +5290,23 @@ export async function handleCommand(
         if (odd !== undefined)
           return bad(`--roll-accounts must not mix providers: ${account} is ${mine.provider}, ${odd} is not`)
       }
+      // A sandboxed caller's session starts in the sandbox, whatever its profile (final fix pass, C3)
+      const sandbox = callerBoxed
       try {
         return okBody(
           await deps.createSession({
             kind: sessionKind,
             accountId: account,
             cwd,
+            ...(sandbox ? { sandbox: true as const } : {}),
             ...(args.title !== undefined ? { title: str(args.title)! } : {}),
             ...(args.prompt !== undefined ? { prompt: str(args.prompt)! } : {}),
             rollAccountIds: chain,
             ...(sessionKind === 'chat' ? { unattended: unattended.value ?? 'hold' } : {}),
             // Who started it, by who asked (2026-10-20, review M1): a remote controller's new-session dialog and the app
             // are a person; the CLI, MCP and a plugin are an agent, and its tab closes when it ends
-            ...(caller.role === 'controller' || caller.role === 'app' ? {} : { startedBy: 'agent' as const })
+            ...(caller.role === 'controller' || caller.role === 'app' ? {} : { startedBy: 'agent' as const }),
+            ...(agentProfileId !== undefined ? { agentProfileId } : {})
           })
         )
       } catch (e) {

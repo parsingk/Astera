@@ -1,6 +1,6 @@
 import type { JobTask, RunOutcome } from '../types'
 import type { OrchState } from './state'
-import { FAILURE_LIMIT, type Task } from './types'
+import { FAILURE_LIMIT, type JobRun, type Task } from './types'
 
 // tasksOwnedBy, isTerminal and outcomeOf moved here from view.ts so runningRunCount can ask outcomeOf:
 // the renderer's build includes this file and not view.ts, which re-exports them.
@@ -59,6 +59,35 @@ export function outcomeOfTasks(tasks: readonly Task[]): RunOutcome {
   if (counted.length === 0) return 'running'
   if (!counted.every(isTerminal)) return 'running'
   return counted.some((t) => t.status === 'failed') ? 'failed' : 'completed'
+}
+
+/** How long after the end of a Dispatch or a Run its session's work is still taken to be for it when the session's own
+ *  lines cannot tell its turns (final review I2): the worker's report and the coordinator's last responses land just
+ *  after the end. */
+export const END_GRACE_MS = 2 * 60 * 1000
+
+/** When a finished Run's outcome became final (epoch ms): the Host's stamp (`JobRun.endedAt`), or for a Run that finished
+ *  before it was kept, its last Task's last change, which a later edit of a Task moves. Asked of a finished Run. */
+export function runEndOf(s: OrchState, r: JobRun): number {
+  // Only a string: a number a hand left in the file would parse as a year
+  const stamped = typeof r.endedAt === 'string' ? Date.parse(r.endedAt) : NaN
+  if (Number.isFinite(stamped)) return stamped
+  return Math.max(...withoutSupersededLifecycle(tasksOwnedBy(s, r.id)).map((x) => Date.parse(x.updatedAt)))
+}
+
+/**
+ * Whether a session's work at `t` is still for a Dispatch or a Run whose time ended at `end` (observe deferred minors b
+ * and c): up to the end, and after it until a person prompts the session, so a coordinator's wrap-up and a worker's last
+ * response after its report count however long they take, woken by a background task's end or Astera's nudge or not,
+ * and what a person's prompt afterwards leads to is not theirs (fix round 1, I1). `turn` asks when the turn holding `t`
+ * began, at the latest (epoch ms): the person's last prompt at or before it, from the session's own lines, or null when
+ * they cannot tell; then END_GRACE_MS after the end stands in for it. It is asked only for a `t` past the end, so a
+ * caller can tell whether the answer turned on it.
+ */
+export function heldPastEnd(end: number, t: number, turn: () => number | null): boolean {
+  if (t <= end) return true
+  const began = turn()
+  return began !== null ? began <= end : t <= end + END_GRACE_MS
 }
 
 /** 지금 일이 도는 Task 의 개수. 사이드바의 `+N` 과 두 화면(JobsView·RunDetail)의 머리 숫자가
@@ -139,4 +168,24 @@ export function runningRunCount(s: OrchState): number {
           (t.status === 'dispatched' && open.some((d) => d.taskId === t.id)))
     )
   ).length
+}
+
+/** Whether unfinished orchestration work holds this agent profile, so that deleting it would pull it from under that
+ *  work (Agent Profiles design §4, ruling P1): a Task of a Run that has not ended, an open Dispatch, or a Job that has
+ *  not ended. A Job has not ended while it is a schedule (it fires again), has no Run yet, or has a Run still running;
+ *  its plan's Tasks hold the profile for exactly as long. Ended work keeps the id it ran as, which nothing resolves
+ *  again, so it does not hold it. */
+export function holdsAgentProfile(s: OrchState, id: string): boolean {
+  const unfinished = (jobId: string | undefined): boolean => {
+    const job = s.jobs.find((j) => j.id === jobId)
+    if (!job) return false
+    if (job.schedule !== undefined) return true
+    const runs = s.runs.filter((r) => r.jobId === job.id)
+    return runs.length === 0 || runs.some((r) => outcomeOf(s, r.id) === 'running')
+  }
+  return (
+    s.dispatches.some((d) => d.agentProfileId === id && !d.outcome && !d.endedAt) ||
+    s.tasks.some((t) => t.agentProfileId === id && (t.runId !== undefined ? !isTerminal(t) : unfinished(t.jobId))) ||
+    s.jobs.some((j) => j.agentProfileId === id && unfinished(j.id))
+  )
 }

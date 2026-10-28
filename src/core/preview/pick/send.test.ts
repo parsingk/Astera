@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { looksLikeChoicePrompt } from '../../rolling/detect'
-import { isWaitingOnDialog, POST_PASTE_SUBMIT_DELAY_MS } from './send'
+import { isWaitingOnDialog } from './send'
 
 // Every screen below was captured from a real session during the Design Mode dev-app run, not written
 // from memory. The two trust dialogs are the ones that ate a batch each.
@@ -97,13 +97,6 @@ describe('isWaitingOnDialog', () => {
 
   it('reads through the colour a TUI paints its cursor with', () => {
     expect(isWaitingOnDialog('\u001b[36m›\u001b[0m 1. Yes, continue')).toBe(true)
-  })
-})
-
-describe('POST_PASTE_SUBMIT_DELAY_MS', () => {
-  it('is long enough to be a gap and short enough not to be a wait', () => {
-    expect(POST_PASTE_SUBMIT_DELAY_MS).toBeGreaterThan(0)
-    expect(POST_PASTE_SUBMIT_DELAY_MS).toBeLessThan(500)
   })
 })
 

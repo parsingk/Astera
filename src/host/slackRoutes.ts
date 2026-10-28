@@ -21,7 +21,10 @@ import type { ProcRegistry } from './procRegistry'
 import type { HostChats } from './hostChats'
 import type { HostServer } from './server'
 
-export type HostInboxRoutes = Pick<SlackInboxDeps, 'write' | 'isChat' | 'pendingRequest' | 'deliverChat' | 'answerChat'>
+export type HostInboxRoutes = Pick<
+  SlackInboxDeps,
+  'write' | 'lastOutputAt' | 'isChat' | 'pendingRequest' | 'deliverChat' | 'answerChat'
+>
 
 /** A live chat proc carries this session id: the Host's own session list, adopted or not. */
 const liveChat = (procs: Pick<ProcRegistry, 'list'>, sid: string): boolean =>
@@ -30,7 +33,7 @@ const liveChat = (procs: Pick<ProcRegistry, 'list'>, sid: string): boolean =>
 const NOBODY = 'nobody holds this session right now'
 
 export function hostInboxRoutes(d: {
-  registry: Pick<PtyRegistry, 'sessionPty' | 'write'>
+  registry: Pick<PtyRegistry, 'sessionPty' | 'write' | 'lastOutput'>
   procs: Pick<ProcRegistry, 'list'>
   chats: Pick<HostChats, 'has' | 'isWriter' | 'send' | 'requests' | 'answerCard'> | null
   notifier: Pick<SlackNotifier, 'chatRequestOf'>
@@ -47,16 +50,23 @@ export function hostInboxRoutes(d: {
       d.registry.write(pty, data, { person: true })
       return true
     },
+    // The reply's Enter waits for the pty to have drawn it and gone quiet (openai/codex#56982)
+    lastOutputAt: (sid: string): number | null => {
+      const pty = d.registry.sessionPty(sid)
+      return pty === null ? null : d.registry.lastOutput(pty)
+    },
     isChat: (sid: string): boolean => liveChat(d.procs, sid),
     // P18: the adapter's open list (less the note's answered ids) where the Host holds one, else the card
     // the notifier last heard of from the app's forwarded `request` events.
     pendingRequest: (sid: string): ChatRequest | null =>
       d.chats?.has(sid) ? (d.chats.requests(sid)[0] ?? null) : d.notifier.chatRequestOf(sid),
     deliverChat: async (sid: string, text: string): Promise<void> => {
-      if (d.chats?.isWriter(sid)) return d.chats.send(sid, text)
+      // A person's reply from Slack, as the terminal's is (`write` above)
+      if (d.chats?.isWriter(sid)) return d.chats.send(sid, text, undefined, { person: true })
       const server = d.server()
       if (!server.hasApp()) throw new Error(NOBODY)
-      const r = (await server.act('chatSend', [sid, text])) as { sent?: unknown; reason?: unknown; pending?: unknown } | null
+      // A person's reply: the app writes it marked as a person's (observe deferred fix round 2, Important a)
+      const r = (await server.act('chatSend', [sid, text, { person: true }])) as { sent?: unknown; reason?: unknown; pending?: unknown } | null
       if (r?.sent !== true) throw new Error(r?.pending ? 'a card is open in Astera' : String(r?.reason ?? 'Astera did not deliver it'))
     },
     answerChat: async (sid: string, requestId: string, answer: ChatAnswer): Promise<void> => {

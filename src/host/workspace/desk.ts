@@ -41,6 +41,10 @@ public class AsteraWindow {
 
 public class AsteraShot { public string Data; public int Width; public int Height; public string Title; }
 
+public class AsteraLaunch { public int Pid; public long StartedAt; public bool Job; public string JobError; }
+
+public class AsteraJob { public int Pid; public long StartedAt; public IntPtr Handle; }
+
 public static class AsteraDesk {
   [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
   public struct STARTUPINFO {
@@ -56,6 +60,22 @@ public static class AsteraDesk {
   public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
   [StructLayout(LayoutKind.Sequential)]
   public struct USEROBJECTFLAGS { public int fInherit; public int fReserved; public int dwFlags; }
+  [StructLayout(LayoutKind.Sequential)]
+  public struct JOBOBJECT_BASIC_LIMIT_INFORMATION {
+    public long PerProcessUserTimeLimit; public long PerJobUserTimeLimit; public uint LimitFlags;
+    public UIntPtr MinimumWorkingSetSize; public UIntPtr MaximumWorkingSetSize; public uint ActiveProcessLimit;
+    public UIntPtr Affinity; public uint PriorityClass; public uint SchedulingClass;
+  }
+  [StructLayout(LayoutKind.Sequential)]
+  public struct IO_COUNTERS {
+    public ulong ReadOperationCount; public ulong WriteOperationCount; public ulong OtherOperationCount;
+    public ulong ReadTransferCount; public ulong WriteTransferCount; public ulong OtherTransferCount;
+  }
+  [StructLayout(LayoutKind.Sequential)]
+  public struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+    public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation; public IO_COUNTERS IoInfo;
+    public UIntPtr ProcessMemoryLimit; public UIntPtr JobMemoryLimit; public UIntPtr PeakProcessMemoryUsed; public UIntPtr PeakJobMemoryUsed;
+  }
   public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
 
   [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -81,10 +101,20 @@ public static class AsteraDesk {
   static extern bool GetProcessTimes(IntPtr h, out long creation, out long exit, out long kernel, out long user);
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
   [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern uint ResumeThread(IntPtr thread);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool TerminateProcess(IntPtr process, uint exitCode);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr CreateJobObject(IntPtr sa, IntPtr name);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool SetInformationJobObject(IntPtr job, int infoClass, ref JOBOBJECT_EXTENDED_LIMIT_INFORMATION info, int length);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool TerminateJobObject(IntPtr job, uint exitCode);
 
   const uint GENERIC_ALL = 0x10000000;
+  const uint CREATE_SUSPENDED = 0x00000004;
   const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
   const uint CREATE_NO_WINDOW = 0x08000000;
+  const int JobObjectExtendedLimitInformation = 9;
+  const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
   const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
   const int UOI_FLAGS = 1;
   const int WSF_VISIBLE = 1;
@@ -93,6 +123,9 @@ public static class AsteraDesk {
   const uint WM_KEYUP = 0x0101;
   const uint WM_CHAR = 0x0102;
   static readonly DateTime Epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+  // One job per launch that got one, kept until kill ends it. Whatever is left is ended when this
+  // process exits and its handles close (KILL_ON_JOB_CLOSE).
+  static readonly List<AsteraJob> Jobs = new List<AsteraJob>();
 
   public static bool Interactive() {
     IntPtr ws = GetProcessWindowStation();
@@ -143,7 +176,39 @@ public static class AsteraDesk {
     return h;
   }
 
-  public static long[] Launch(string commandLine, string cwd, string envBlock, string desktop) {
+  // A job of its own for a launched process, one that ends every process in it when its last handle
+  // closes; this helper holds the only one. Zero breakaway flags: a child leaves a job chain only up to
+  // the first job that does not allow breakaway, and this one does not
+  // (learn.microsoft.com/windows/win32/procthread/nested-jobs).
+  static IntPtr JobFor(IntPtr process) {
+    IntPtr job = CreateJobObject(IntPtr.Zero, IntPtr.Zero);
+    if (job == IntPtr.Zero) throw new Exception("CreateJobObject failed: " + Marshal.GetLastWin32Error());
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION info = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    string failed = null;
+    if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, ref info, Marshal.SizeOf(info)))
+      failed = "SetInformationJobObject failed: " + Marshal.GetLastWin32Error();
+    else if (!AssignProcessToJobObject(job, process))
+      failed = "AssignProcessToJobObject failed: " + Marshal.GetLastWin32Error();
+    if (failed == null) return job;
+    CloseHandle(job);
+    throw new Exception(failed);
+  }
+
+  // Started suspended and put in a job of its own before its first instruction, so nothing it starts,
+  // a detached child included, can be outside the job. libuv's detached spawn on Windows asks for no
+  // CREATE_BREAKAWAY_FROM_JOB, and its own job for the children it does not detach sets
+  // JOB_OBJECT_LIMIT_BREAKAWAY_OK | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK |
+  // JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+  // (github.com/libuv/libuv/blob/v1.x/src/win/process.c): a process started in that job leaves it,
+  // silently or when it asks to, but a breakaway of either kind stops at the first job up the chain
+  // that does not allow one, and this one does not (learn.microsoft.com/windows/win32/procthread/nested-jobs;
+  // learn.microsoft.com/windows/win32/api/jobapi2/nf-jobapi2-assignprocesstojobobject). Ending
+  // the job ends the whole tree, and KILL_ON_JOB_CLOSE ends it too when this helper exits (a close,
+  // the Host's death, a helper crash): what the manager already does when its helper dies and what the
+  // next Host's leftover sweep would do, only complete and at once. A job that cannot be made does not
+  // stop the launch; the reply says why, and kill then falls back to taskkill /T.
+  public static AsteraLaunch Launch(string commandLine, string cwd, string envBlock, string desktop) {
     // A null lpDesktop means the caller's own desktop, which is the person's screen. Never.
     if (string.IsNullOrEmpty(desktop)) throw new Exception("no desktop to launch on");
     STARTUPINFO si = new STARTUPINFO();
@@ -153,16 +218,53 @@ public static class AsteraDesk {
     IntPtr env = Marshal.StringToHGlobalUni(envBlock);
     try {
       StringBuilder cmd = new StringBuilder(commandLine);
-      if (!CreateProcess(null, cmd, IntPtr.Zero, IntPtr.Zero, false, CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW, env, cwd, ref si, out pi))
+      if (!CreateProcess(null, cmd, IntPtr.Zero, IntPtr.Zero, false, CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | CREATE_SUSPENDED, env, cwd, ref si, out pi))
         throw new Exception("CreateProcess failed: " + Marshal.GetLastWin32Error());
     } finally { Marshal.FreeHGlobal(env); }
-    long created, exited, kernel, user;
-    long startedAt = 0;
-    if (GetProcessTimes(pi.hProcess, out created, out exited, out kernel, out user))
-      startedAt = (long)(DateTime.FromFileTimeUtc(created) - Epoch).TotalMilliseconds;
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-    return new long[] { pi.dwProcessId, startedAt };
+    AsteraLaunch r = new AsteraLaunch();
+    r.Pid = pi.dwProcessId;
+    IntPtr job = IntPtr.Zero;
+    bool resumed = false;
+    try {
+      try { job = JobFor(pi.hProcess); } catch (Exception e) { r.JobError = e.Message; }
+      if (ResumeThread(pi.hThread) == uint.MaxValue)
+        throw new Exception("ResumeThread failed: " + Marshal.GetLastWin32Error() + "; the process was ended before it ran");
+      resumed = true;
+      long created, exited, kernel, user;
+      if (GetProcessTimes(pi.hProcess, out created, out exited, out kernel, out user))
+        r.StartedAt = (long)(DateTime.FromFileTimeUtc(created) - Epoch).TotalMilliseconds;
+      if (job != IntPtr.Zero) {
+        AsteraJob j = new AsteraJob();
+        j.Pid = r.Pid; j.StartedAt = r.StartedAt; j.Handle = job;
+        Jobs.Add(j);
+        r.Job = true;
+      }
+    } finally {
+      // Never a suspended process left behind: one whose thread did not resume is ended here.
+      if (!resumed) {
+        TerminateProcess(pi.hProcess, 1);
+        if (job != IntPtr.Zero) CloseHandle(job);
+      }
+      CloseHandle(pi.hThread);
+      CloseHandle(pi.hProcess);
+    }
+    return r;
+  }
+
+  // Ends the job of the launch with this pid and start time, and closes its handle; false when this
+  // helper holds none for it. A job holds only what that launch started, so unlike a pid it is never
+  // someone else's: it is ended even when the launched process itself has already exited. Should
+  // TerminateJobObject fail, closing the last handle still ends every process in it (KILL_ON_JOB_CLOSE).
+  public static bool EndJob(int pid, long startedAt, long tolerance) {
+    for (int i = 0; i < Jobs.Count; i++) {
+      AsteraJob j = Jobs[i];
+      if (j.Pid != pid || Math.Abs(j.StartedAt - startedAt) > tolerance) continue;
+      Jobs.RemoveAt(i);
+      TerminateJobObject(j.Handle, 1);
+      CloseHandle(j.Handle);
+      return true;
+    }
+    return false;
   }
 
   public static List<AsteraWindow> Windows(IntPtr desk) {
@@ -306,13 +408,21 @@ while ($true) {
         $pairs = @($req.env.PSObject.Properties | Sort-Object Name | ForEach-Object { $_.Name + '=' + [string]$_.Value })
         $block = [string]::Join([string][char]0, [string[]]$pairs) + [char]0 + [char]0
         $r = [AsteraDesk]::Launch([string]$req.commandLine, $cwd, $block, $deskName)
-        $value = @{ pid = $r[0]; startedAt = $r[1] }
+        $value = @{ pid = $r.Pid; startedAt = $r.StartedAt; job = $r.Job }
+        if (-not $r.Job) { $value.jobError = $r.JobError }
       }
       'kill' {
-        # Only the process launched: Windows hands pids out again, so a pid whose creation time is
-        # further than the lifecycle tolerance (START_TIME_TOLERANCE_MS, lifecycle.ts) from the
-        # launch's is someone else's and is left alone. The reply says why nothing was killed.
+        # The launch's job first: it ends everything the launch started, wherever its parent went,
+        # and holds nothing else (Launch, EndJob). Within the lifecycle tolerance
+        # (START_TIME_TOLERANCE_MS, lifecycle.ts), as below.
         $tolerance = 2000
+        if ([AsteraDesk]::EndJob([int]$req.pid, [int64]$req.startedAt, $tolerance)) {
+          $value = @{ killed = $true }
+          break
+        }
+        # No job for it (its launch could not make one): only the process launched, by pid. Windows
+        # hands pids out again, so a pid whose creation time is further than the tolerance from the
+        # launch's is someone else's and is left alone. The reply says why nothing was killed.
         $live = [AsteraDesk]::StartedAtOf([int]$req.pid)
         if ($live -lt 0) {
           $value = @{ killed = $false; reason = ('pid ' + [int]$req.pid + ' is not running') }

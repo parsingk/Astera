@@ -5,6 +5,8 @@ import { FAILURE_LIMIT, MAX_REVIEW_ROUNDS } from '../../../core/orchestration/ty
 import { useI18n } from '../i18n/I18nProvider'
 import { formFailure, type OrchDoor } from '../lib/orchDoor'
 import { AccountSelect } from './AccountSelect'
+import { AgentProfileField } from './AgentProfileField'
+import { useAgentProfiles } from '../lib/agentProfiles'
 import { ScheduleRuleFields } from './ScheduleRuleFields'
 import { backdropProps } from '../lib/backdrop'
 import { LifecycleField, lifecycleBlocksCreate, useLifecyclePreflight } from './LifecycleField'
@@ -46,6 +48,11 @@ export function NewRunModal({
    *  만들 수 없다 — 이 폼은 코디네이터 없는 Run 을 만들지 않는다. 코드에는 그 갈래가 남아 있지만
    *  (옛 Run·CLI) 여기서 만드는 것은 언제나 관리자가 있는 Run 이다. */
   const [coordinatorAccountId, setCoordinatorAccountId] = useState('')
+  /** 이 Job 의 Task 들이 따로 고르지 않으면 쓰는 에이전트 프로필(Agent Profiles design §6). '' 는 없음.
+   *  코디네이터 계정은 바꾸지 않는다: 코디네이터는 Astera 의 역할이라 프로필 없이 뜬다. 짝 지은 Runtime 의 Job 에는
+   *  고르는 칸이 없다: 이 컴퓨터의 프로필은 그 Runtime 에 없다. */
+  const [agentProfileId, setAgentProfileId] = useState('')
+  const profiles = useAgentProfiles()
   const [scheduled, setScheduled] = useState(false)
   const [schedule, setSchedule] = useState<ScheduleRule | null>(null)
   /** 통과할 때까지 자동 수정(Plan 1 설계 D12). 기본 꺼짐 — 켜면 검사·검토 실패가 코디네이터가 아니라 앱의 손으로
@@ -104,6 +111,7 @@ export function NewRunModal({
         ...(convergence || github ? { convergence: true } : {}),
         // G7a: the Host makes it (the app sends a lifecycle create there, needsHostGitHub) and copies Settings › GitHub in
         ...(github ? { githubLifecycle: true } : {}),
+        ...(agentProfileId !== '' ? { agentProfileId } : {}),
         auto: true
       })
       if (reply.status >= 400) {
@@ -170,6 +178,16 @@ export function NewRunModal({
             <p className="warn-text">{t('jobs.new.folderBusy')}</p>
           )}
         </div>
+        {/* 에이전트 프로필(Agent Profiles design §6): 이 Job 의 Task 들이 기본으로 쓰는 것. 코디네이터 칸 위에 둔다 */}
+        {accounts !== null && !remote && (
+          <AgentProfileField
+            profiles={profiles}
+            accounts={accounts}
+            value={agentProfileId}
+            hint={t('agentProfiles.pick.jobHint')}
+            onChange={(p) => setAgentProfileId(p?.id ?? '')}
+          />
+        )}
         {/* 계정이 없어도 칸을 접지 않는다 — 접으면 만들기 버튼이 왜 죽어 있는지 화면이 말하지
             않는다(NewTaskModal 의 같은 판단). null 은 아직 안 온 것이라 그때만 접는다. */}
         {accounts !== null && (

@@ -846,7 +846,7 @@ describe('the Host drives with no app (§9.3)', { timeout: 40_000 }, () => {
     const intake = src.indexOf("m.t === 'slack-event'")
     expect(src.slice(intake, intake + 300)).toMatch(/from\.greeted && from\.role === 'app'/)
     expect(src.slice(intake, intake + 300)).toMatch(/slackWiring\.forwarded\(m\.event\)/)
-    expect(intake).toBeLessThan(src.indexOf('handlePty?.(m, send, { socket: from.socket })'))
+    expect(intake).toBeLessThan(src.indexOf('handlePty?.(m, send, { socket: from.socket, role: from.role })'))
     const rollingCall = src.slice(src.indexOf('composeHostRolling('))
     // E2 §4: a roll reaches the work units first, then the Slack.
     expect(rollingCall).toMatch(/onRollEvent: \(e\) => \{[^}]*hostWorkUnits\?\.onRolled\([^]*?slackWiring\?\.onRollEvent\(e\)/)

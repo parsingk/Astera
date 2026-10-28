@@ -13,6 +13,7 @@ import {
   LAUNCH_FORBIDDEN,
   type CoordinatorDeps
 } from './coordinator'
+import { ENTER_QUIET_MS } from '../../sessions/sessionDriver'
 import type { CheckResult, ReviewIssue } from '../types'
 import type { WeakeningFinding } from '../../github/weakening'
 
@@ -729,6 +730,35 @@ describe('OrchCoordinator.startWorker', () => {
     expect(deps.written[1]).toBe('\r')
   })
 
+  // Codex swallows an Enter that comes right after a long text (openai/codex#56982): with the session's output to go
+  // by, the typed prompt's Enter waits until the session has drawn it and gone quiet, as `sessions send` does
+  it('holds a typed prompt’s Enter until the session has drawn it and gone quiet', async () => {
+    const deps = makeDeps()
+    const at: Array<[number, string]> = []
+    let typedAt: number | null = null
+    const co = new OrchCoordinator({
+      ...deps,
+      writeToSession: (_id, data) => {
+        at.push([Date.now(), data])
+        if (typedAt === null) typedAt = Date.now()
+      },
+      // The session draws the prompt for 300 ms after it was typed
+      lastOutputAt: () => (typedAt === null ? null : Math.min(Date.now(), typedAt + 300))
+    })
+    await co.startWorker({
+      ...baseArgs(),
+      accountId: 'acc',
+      rollAccountIds: ['acc'],
+      runCwd: dir,
+      terminal: 'sess-live',
+      terminalCwd: dir,
+      terminalProvider: 'codex',
+      terminalAccountId: 'acc'
+    })
+    expect(at.map(([, d]) => d)).toEqual([expect.any(String), '\r'])
+    expect(at[1][0] - typedAt!).toBeGreaterThanOrEqual(300 + ENTER_QUIET_MS)
+  })
+
   it('resumes the provider session and names the new dispatch in the phrase', async () => {
     const deps = makeDeps()
     const co = new OrchCoordinator(deps)
@@ -1384,5 +1414,27 @@ describe('OrchCoordinator.startWorker — launchPhrase', () => {
     const r = await co.startWorker({ ...baseArgs(), runCwd: dir, launchPhrase: 'Read {specPath} and fix it' })
     const spawned = deps.spawned[0] as { initialPrompt: string }
     expect(spawned.initialPrompt).toBe(`Read ${posix(r.specPath)} and fix it`)
+  })
+})
+
+// Agent Profiles design §6: the worker's spawn gets the Task's profile; the wiring's spawnSession resolves it
+describe('OrchCoordinator.startWorker: an agent profile', () => {
+  it('hands the spawn the profile it is given, and no such key when it is given none', async () => {
+    const deps = makeDeps()
+    const co = new OrchCoordinator(deps)
+    await co.startWorker({ ...baseArgs('dsp_1'), runCwd: dir, agentProfileId: 'ap_1' })
+    await co.startWorker({ ...baseArgs('dsp_2'), runCwd: dir })
+    expect(deps.spawned[0]).toMatchObject({ agentProfileId: 'ap_1' })
+    expect(deps.spawned[1]).not.toHaveProperty('agentProfileId')
+  })
+
+  // Final fix pass (C3): a worker of sandboxed work starts in the sandbox, whatever profile it names
+  it('hands the spawn the sandbox when it is asked for, and no such key when it is not', async () => {
+    const deps = makeDeps()
+    const co = new OrchCoordinator(deps)
+    await co.startWorker({ ...baseArgs('dsp_1'), runCwd: dir, agentProfileId: 'ap_open', sandbox: true })
+    await co.startWorker({ ...baseArgs('dsp_2'), runCwd: dir })
+    expect(deps.spawned[0]).toMatchObject({ agentProfileId: 'ap_open', sandbox: true })
+    expect(deps.spawned[1]).not.toHaveProperty('sandbox')
   })
 })

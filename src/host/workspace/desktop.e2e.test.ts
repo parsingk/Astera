@@ -427,4 +427,41 @@ describe.runIf(enabled)('the agent app workspace on a real desktop', () => {
     },
     120_000
   )
+
+  it(
+    'ends what the app started detached when the workspace closes, a child whose parent already exited included',
+    async () => {
+      const base = await tempDir()
+      const profile = path.join(base, 'profile-detached')
+      const udd = path.join(base, 'electron-profile-detached')
+      udds.push(udd)
+      const childFile = path.join(base, 'detached-child.pid')
+      const orphanFile = path.join(base, 'detached-orphan.pid')
+      const h = await harness(profile)
+      managers.push(h.m)
+
+      const command = commandFor(udd, ` --detached-child="${childFile}" --detached-orphan="${orphanFile}"`)
+      const first = await h.m.run('s-e2e-detached', `log(await launch({ command: ${JSON.stringify(command)} }))`)
+      expect((first.body as { error?: unknown }).error).toBeUndefined()
+      const pidIn = (file: string): Promise<number> =>
+        vi.waitFor(
+          async () => {
+            const pid = Number(await fs.readFile(file, 'utf8').catch(() => '')) || 0
+            expect(pid).toBeGreaterThan(0)
+            return pid
+          },
+          { timeout: 10_000, interval: 200 }
+        )
+      const detached = [await pidIn(childFile), await pidIn(orphanFile)]
+      expect((await processStartTimes(detached)).size).toBe(2)
+      // The launch went into a job of its own: no fallback to taskkill /T was logged.
+      expect(h.log.filter((l) => l.includes('without a job object'))).toEqual([])
+
+      expect(((await h.m.run('s-e2e-detached', 'await close()')).body as { error?: unknown }).error).toBeUndefined()
+      await vi.waitFor(async () => expect((await processStartTimes(detached)).size).toBe(0), { timeout: 10_000, interval: 250 })
+      expect(await fixturePids(udd)).toEqual([])
+      await h.m.dispose()
+    },
+    120_000
+  )
 })

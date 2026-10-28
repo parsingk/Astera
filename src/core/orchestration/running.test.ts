@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { runningCount, isStoppedWorker, runningRunCount, outcomeOfTasks } from './running'
+import { runningCount, isStoppedWorker, runningRunCount, outcomeOfTasks, holdsAgentProfile, runEndOf } from './running'
 import { snapshotFor } from './view'
-import { emptyState } from './state'
+import { createJob, createTask, emptyState, openDispatch, startJobRun, applyWorkerDone } from './state'
 import type { OrchState } from './state'
-import type { Dispatch, Task } from './types'
+import type { Dispatch, JobRun, Task } from './types'
 import { stateFromLegacy } from './legacyState'
 import type { LegacyRun } from './legacy'
 import { absPath } from '../testPaths'
@@ -221,5 +221,61 @@ describe('runningRunCount with a coordinator', () => {
   it('does not count a paused Run, nor a finished one, whose coordinator is still attached', () => {
     expect(runningRunCount(withCoordinator([], { paused: true }))).toBe(0)
     expect(runningRunCount(withCoordinator([task('t1', 'completed')]))).toBe(0)
+  })
+})
+
+// Agent Profiles design §4: a profile is not deleted while unfinished work holds it
+describe('holdsAgentProfile', () => {
+  const T0 = '2026-10-22T00:00:00.000Z'
+  const ok = <T>(r: { ok: true; state: OrchState; value: T } | { ok: false; error: string }): { state: OrchState; value: T } => {
+    if (!r.ok) throw new Error(r.error)
+    return r
+  }
+
+  it('a Job that has not run yet, a scheduled one, and a running one hold it; a finished one does not', () => {
+    const job = ok(createJob(emptyState(), { objective: 'o', cwd: PROJ, agentProfileId: 'ap_1' }, T0))
+    expect(holdsAgentProfile(job.state, 'ap_1')).toBe(true)
+    expect(holdsAgentProfile(job.state, 'ap_2')).toBe(false)
+    const sched = ok(createJob(emptyState(), { objective: 'o', cwd: PROJ, agentProfileId: 'ap_1', schedule: { kind: 'daily', time: '09:00' } }, T0))
+    expect(holdsAgentProfile(sched.state, 'ap_1')).toBe(true)
+    // Its one Run, with one Task of no profile, finished
+    const run = ok(startJobRun(job.state, job.value.id, T0))
+    const t = ok(createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [], accountIds: ['acc1'] }, T0))
+    expect(holdsAgentProfile(t.state, 'ap_1')).toBe(true)
+    const d = ok(openDispatch(t.state, { taskId: t.value.id, provider: 'claude', accountId: 'acc1', sessionId: 's1', cwd: PROJ, specPath: '' }, T0))
+    const done = ok(applyWorkerDone(d.state, { taskId: t.value.id, dispatchId: d.value.id, outcome: 'succeeded', subject: 's', body: 'b' }, T0))
+    expect(holdsAgentProfile(done.state, 'ap_1')).toBe(false)
+  })
+
+  it('an unfinished Task holds it, and so does an open Dispatch; a finished Task and a closed Dispatch do not', () => {
+    const job = ok(createJob(emptyState(), { objective: 'o', cwd: PROJ }, T0))
+    const run = ok(startJobRun(job.state, job.value.id, T0))
+    const t = ok(createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [], accountIds: ['acc1'], agentProfileId: 'ap_1' }, T0))
+    expect(holdsAgentProfile(t.state, 'ap_1')).toBe(true)
+    const d = ok(openDispatch(t.state, { taskId: t.value.id, provider: 'claude', accountId: 'acc1', sessionId: 's1', cwd: PROJ, specPath: '' }, T0))
+    // The Task alone, with its profile taken off, still leaves the open Dispatch holding it
+    const dispatchOnly: OrchState = { ...d.state, tasks: d.state.tasks.map((x) => ({ ...x, agentProfileId: undefined })) }
+    expect(holdsAgentProfile(dispatchOnly, 'ap_1')).toBe(true)
+    const done = ok(applyWorkerDone(d.state, { taskId: t.value.id, dispatchId: d.value.id, outcome: 'succeeded', subject: 's', body: 'b' }, T0))
+    expect(holdsAgentProfile(done.state, 'ap_1')).toBe(false)
+  })
+})
+
+// Fix round 1, Minor 5: a Run's stamp is read only when it is a time; anything else a hand left there falls back to its
+// Tasks' last change
+describe('runEndOf', () => {
+  const stateWith = (endedAt: unknown): { s: OrchState; run: JobRun } => {
+    const run = { id: 'r1', jobId: 'j1', ordinal: 1, createdAt: '2026-10-23T00:00:00.000Z', ...(endedAt !== undefined ? { endedAt } : {}) } as JobRun
+    const task = { id: 't1', runId: 'r1', status: 'completed', consecutiveFailures: 0, updatedAt: '2026-10-23T01:00:00.000Z' } as Task
+    return { s: { ...emptyState(), runs: [run], tasks: [task] }, run }
+  }
+  it('takes the stamp when it is a time, and the Tasks’ last change for none or anything else', () => {
+    const last = Date.parse('2026-10-23T01:00:00.000Z')
+    const stamped = stateWith('2026-10-23T00:30:00.000Z')
+    expect(runEndOf(stamped.s, stamped.run)).toBe(Date.parse('2026-10-23T00:30:00.000Z'))
+    for (const v of [undefined, 'soon', 12345]) {
+      const x = stateWith(v)
+      expect(runEndOf(x.s, x.run)).toBe(last)
+    }
   })
 })

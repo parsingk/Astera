@@ -94,6 +94,31 @@ export const EXITED_RING_BYTES_MAX = 64 << 20
 export const EXITED_TERMINAL_BYTES = 4 << 20
 /** How often an exited pty past its time is cleared while any is held: an idle Host frees them without being asked. */
 const SWEEP_EVERY_MS = 60_000
+
+/** Submissions kept per entry: what a pty was sent with an Enter, or a line a process was written (observe deferred fix
+ *  round 1, I1). A prompt in a transcript, or a turn in a chat's stream, does not say whether a person sent it or the
+ *  Host typed it (a nudge, a roll's carry-on), and the token sources read it a few seconds later; the last few are
+ *  plenty for that. */
+export const SUBMISSIONS_KEPT = 32
+export interface Submission {
+  at: number
+  person: boolean
+}
+/** Keeps `s`, the oldest going past SUBMISSIONS_KEPT. */
+export const keepSubmission = (list: Submission[], s: Submission): void => {
+  list.push(s)
+  if (list.length > SUBMISSIONS_KEPT) list.shift()
+}
+/** Whether a person sent any of `list` in (from, to], whatever came after it (fix round 3: a chat takes its queued
+ *  lines in order, so a person's line is not hidden by a card answer written after it). */
+export const personIn = (list: readonly Submission[] | undefined, from: number, to: number): boolean =>
+  list?.some((s) => s.person && s.at > from && s.at <= to) ?? false
+/** Who sent the latest of `list` in (from, to], or null for none kept there. */
+export const submitterIn = (list: readonly Submission[] | undefined, from: number, to: number): 'person' | 'host' | null => {
+  if (!list) return null
+  for (let i = list.length - 1; i >= 0; i--) if (list[i].at > from && list[i].at <= to) return list[i].person ? 'person' : 'host'
+  return null
+}
 /** A replay's tries for a checkpoint with no hole after it, and the wait between them for the terminal to catch up. */
 const REPLAY_TRIES = 8
 const REPLAY_WAIT_MS = 50
@@ -124,10 +149,15 @@ interface Entry {
    *  A write of nothing but terminal reports (a focus change, a reply to the TUI's own query) is not
    *  typing, and leaves it alone (core/terminal/reports.ts). */
   lastWriteAt: number | null
+  /** When the pty last printed anything: `sessions send` waits for the TUI to have drawn its text and gone quiet before
+   *  the Enter (core/sessions/sessionDriver.ts). */
+  lastOutputAt: number | null
   /** The part of `lastWriteAt` a person made: a write marked `person` (an app's `pty-write`, a Slack
    *  reply), never the Host's own (a nudge, a spawn's or a roll's prompt). A finished Run's sessions end
    *  once nobody has typed into them for a while (dispatchLoop.ts, FINISHED_RUN_GRACE_MS). */
   lastPersonWriteAt: number | null
+  /** The last SUBMISSIONS_KEPT writes with an Enter in them, and whether a person made each (`submittedBetween`). */
+  submissions: Submission[]
   /** How the pty ended, or null while it is alive. Kept after the ring is cleared, because the
    *  Host's exit handling asks for it after the fact (`sessionExitCode`). */
   exitCode: number | null
@@ -157,7 +187,8 @@ export interface PtyRegistryDeps {
   /** Test injection; the wiring leaves it out and gets Date.now. */
   now?: () => number
   /** Ends a process and everything it started without touching its pty (`workspace/native`'s
-   *  `killTree`: taskkill /T /F on win32, the process group elsewhere). What a repeat kill escalates
+   *  `killTree`: taskkill /T /F on win32, elsewhere every process group in its tree, a detached
+   *  child's included). What a repeat kill escalates
    *  to. Left out, a repeat is only logged. */
   killTree?: (pid: number) => Promise<void>
   /** This Host process's boot id (hello's `bootId`): a replay asked with another one starts from a checkpoint. */
@@ -316,7 +347,9 @@ export class PtyRegistry {
       cols: a.opts.cols,
       rows: a.opts.rows,
       lastWriteAt: null,
+      lastOutputAt: null,
       lastPersonWriteAt: null,
+      submissions: [],
       exitCode: null,
       killSent: false,
       treeKillSent: false,
@@ -333,6 +366,7 @@ export class PtyRegistry {
       // The listeners still hear it.
       // Output after the exit is still a ring event (§3.7): node-pty can deliver it, and a controller replaying the
       // end sees it. The ring is bounded and goes with the exited retention.
+      entry.lastOutputAt = this.now()
       this.record(entry, { kind: 'data', data: d })
       for (const cb of this.dataCbs) this.tell(cb, 'data', a.id, () => cb(a.id, d))
     })
@@ -526,8 +560,10 @@ export class PtyRegistry {
 
   /** `by.person`: a person typed this (an app's `pty-write`, a Slack reply), not the Host itself. `by.side`: which
    *  side typed it; typing that is not only terminal reports gives that side the size, applied before the keystroke
-   *  so what it typed is drawn for its window (`sizeOwner`). */
-  write(id: string, data: string, by?: { person: true; side?: string }): void {
+   *  so what it typed is drawn for its window (`sizeOwner`). `by.delivery`: the app's own delivery (a schedule, a roll's
+   *  prompt), which holds a finished Run's sessions open as a person's input does, but whose Enter is not a person's
+   *  prompt (`submittedBetween`; observe deferred fix round 2, Important a). */
+  write(id: string, data: string, by?: { person: true; side?: string; delivery?: true }): void {
     const e = this.live(id)
     if (!e) return
     const reports = isOnlyTerminalReports(data)
@@ -544,11 +580,29 @@ export class PtyRegistry {
     const at = (this.deps.now ?? Date.now)()
     e.lastWriteAt = at
     if (by?.person) e.lastPersonWriteAt = at
+    if (data.includes('\r')) keepSubmission(e.submissions, { at, person: by?.person === true && by.delivery !== true })
   }
 
   /** When `write` last reached this pty, or null for one never written to or never here. */
   lastWrite(id: string): number | null {
     return this.entries.get(id)?.lastWriteAt ?? null
+  }
+
+  /** When this pty last printed anything, or null for one that never has or was never here. */
+  lastOutput(id: string): number | null {
+    return this.entries.get(id)?.lastOutputAt ?? null
+  }
+
+  /** Who sent the latest write with an Enter in it in (from, to], epoch ms: a person (a write marked so) or the Host
+   *  itself; null for none kept there, or a pty never here (observe deferred fix round 1, I1). */
+  submittedBetween(id: string, from: number, to: number): 'person' | 'host' | null {
+    return submitterIn(this.entries.get(id)?.submissions, from, to)
+  }
+
+  /** Whether a person submitted anything in (from, to], whatever came after it: a roll's new session takes its first
+   *  prompt as the Host's carry-on unless a person typed before it (observe deferred fix round 4). */
+  personSubmittedBetween(id: string, from: number, to: number): boolean {
+    return personIn(this.entries.get(id)?.submissions, from, to)
   }
 
   /** When a write marked `person` last reached this pty, or null for none or one never here. */
@@ -632,6 +686,17 @@ export class PtyRegistry {
     return e ? { cols: e.cols, rows: e.rows } : null
   }
 
+  /** Puts Astera's own `text` in a live pty's output as the pty's own would be: the ring (so an app attaching later
+   *  replays it), the live terminal and every data listener. For the line a person must find in the tab when the Host
+   *  ends the session (Enforce's hook-missing, enforce design §5). Not the person's input, and not output the session
+   *  wrote, so it moves neither the last write nor the last output. A pty that is not alive is left alone. */
+  say(id: string, text: string): void {
+    const entry = this.entries.get(id)
+    if (!entry || !entry.alive) return
+    this.record(entry, { kind: 'data', data: text })
+    for (const cb of this.dataCbs) this.tell(cb, 'data', id, () => cb(id, text))
+  }
+
   /** Sends a live pty its one kill (`Entry.killSent`). Marked before the call, so a kill that threw is
    *  not sent again either: whether it freed the handle is not known. **A repeat escalates, once**: the
    *  pty is still alive after its kill, so its process tree is ended (`deps.killTree`), which never
@@ -708,6 +773,13 @@ export class PtyRegistry {
     for (const e of this.entries.values())
       if (e.alive && e.meta?.kind === 'session' && e.meta.id === sessionId) last = e.id
     return last
+  }
+
+  /** The process id of the pty `sessionPty` names, or null. Whose codex holds a rollout open is asked about it
+   *  (core/rolling/rolloutOwner.ts). */
+  sessionPid(sessionId: string): number | null {
+    const id = this.sessionPty(sessionId)
+    return id === null ? null : (this.entries.get(id)?.pid ?? null)
   }
 
   /** How the pty for this session ended, or null when it is alive or was never here. A scan, asked

@@ -25,7 +25,7 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) await removeFixture(d)
 })
 
-async function rig(o: { mode?: string; options?: McpExtension['options']; pool?: Partial<Parameters<typeof createUpstreamPool>[0]>; hide?: (s: string) => Promise<string> } = {}) {
+async function rig(o: { mode?: string; options?: McpExtension['options']; pool?: Partial<Parameters<typeof createUpstreamPool>[0]>; hide?: (s: string) => Promise<string>; onToolCall?: Parameters<typeof createGateway>[0]['onToolCall'] } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-gateway-'))
   dirs.push(root)
   const pidFile = path.join(root, 'pids.txt')
@@ -37,11 +37,11 @@ async function rig(o: { mode?: string; options?: McpExtension['options']; pool?:
   }
   const other: McpExtension = { ...echo, id: 'mcp-other', name: 'other' }
   const registry: ExtensionRegistry = { version: 1, entries: [echo, other] }
-  const tokens = createTokenTable()
+  const tokens = createTokenTable(() => undefined)
   tokens.register(TOKEN, { ownerId: 'p1', folder, grant: new Set(['mcp-echo']) })
   tokens.register(OTHER, { ownerId: 'p2', folder, grant: new Set(['mcp-echo']) })
   const pool = createUpstreamPool({ profileDir: path.join(root, 'profile'), baseEnv: process.env, log: () => {}, ...o.pool })
-  const gateway: Gateway = createGateway({ tokens, pool, readRegistry: async () => registry, log: () => {}, ...(o.hide ? { hide: o.hide } : {}) })
+  const gateway: Gateway = createGateway({ tokens, pool, readRegistry: async () => registry, log: () => {}, ...(o.hide ? { hide: o.hide } : {}), ...(o.onToolCall ? { onToolCall: o.onToolCall } : {}) })
   const port = await gateway.listen()
   closers.push(() => pool.close(), () => gateway.close())
   const session = async (token = TOKEN, serverId = 'mcp-echo') => {
@@ -79,6 +79,19 @@ describe('the MCP Gateway', () => {
     expect(text(await c.callTool({ name: 'echo', arguments: { text: 'hi' } }))).toBe('echo: hi')
   })
 
+  // The Credentials list's records (credentials design §6): which session used which shared server, from the token's owner
+  it('reports a tool call with the owner of the token that made it', async () => {
+    const calls: unknown[] = []
+    const r = await rig({ onToolCall: (c) => void calls.push(c) })
+    const c = await r.session()
+    await c.callTool({ name: 'echo', arguments: { text: 'hi' } })
+    await c.callTool({ name: 'crash', arguments: {} }).catch(() => {})
+    expect(calls).toEqual([
+      { ownerId: 'p1', serverId: 'mcp-echo', serverName: 'echo', tool: 'echo', ok: true },
+      { ownerId: 'p1', serverId: 'mcp-echo', serverName: 'echo', tool: 'crash', ok: false }
+    ])
+  })
+
   it('refuses no token, a wrong token, a token only in the query, an Origin, a foreign Host and an ungranted server', async () => {
     const h = await rig()
     const bearer = { authorization: `Bearer ${TOKEN}` }
@@ -91,6 +104,12 @@ describe('the MCP Gateway', () => {
     expect(await h.raw(bearer, '/mcp/mcp-other')).toBe(403)
     expect(await h.raw(bearer, '/mcp/mcp-missing')).toBe(403)
     expect(await h.raw(bearer, '/elsewhere')).toBe(404)
+  })
+
+  it('the Gateway still refuses a token whose grant lacks the server', async () => {
+    const h = await rig()
+    h.tokens.register('E'.repeat(43), { ownerId: 'p3', folder: h.folder, grant: new Set() })
+    expect(await h.raw({ authorization: `Bearer ${'E'.repeat(43)}` })).toBe(403)
   })
 
   it('shares one upstream between two sessions of one folder, and passes its notifications to both', async () => {

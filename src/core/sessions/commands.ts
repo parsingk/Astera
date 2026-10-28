@@ -1,4 +1,5 @@
 import { claudeLaunchArgs } from '../chat/claudeProtocol'
+import { sandboxUnavailable } from '../sandbox/unavailable'
 import { resolveWindowsExecutable, windowsSpawn } from './windowsExecutable'
 
 /** Where a CLI is on win32, by PATH alone — injected so a test can say where `claude` lives. The
@@ -29,6 +30,10 @@ export type CommandBuilder = (opts: {
   /** Shared extensions' arguments (Agent Control Plane release 1): Claude `--mcp-config <file>`, Codex `-c
    *  mcp_servers.*` overrides, from the spawn-time resolver (core/extensions/resolve.ts). */
   extraArgs?: string[]
+  /** codex only: the sandbox (sandbox design §6), `-a never` and the Astera permission profile from codexSandboxArgs
+   *  (core/sandbox/codexProfile.ts). Set, it takes the bypass flag's place and the bypass flag is left out. Claude's
+   *  sandbox is a settings file, not arguments, so its builder ignores this. */
+  sandboxArgs?: string[]
 }) => SpawnCommand
 
 export function buildClaudeCommand(platform: NodeJS.Platform, resolve: ResolveExecutable = resolveWindowsExecutable): CommandBuilder {
@@ -108,7 +113,7 @@ export function buildCodexCommand(
   resolve: ResolveExecutable = resolveWindowsExecutable,
   noDaemon: () => boolean = () => false
 ): CommandBuilder {
-  return ({ resumeSessionId, bypassPermissions, resumePrompt, initialPrompt, developerInstructions, extraArgs }) => {
+  return ({ resumeSessionId, bypassPermissions, resumePrompt, initialPrompt, developerInstructions, extraArgs, sandboxArgs }) => {
     // **No update check, ever.** With an update out, codex opens on "Update available … 1. Update now
     // 2. Skip" (measured 2026-10-07, 0.160.0 with 0.160.1 out), and a worker, a coordinator or a roll's
     // respawn has nobody in front of it to answer: the Job just stops. Settled for every session Astera
@@ -127,9 +132,17 @@ export function buildCodexCommand(
       const safe = resumePrompt ? sanitizeResumePrompt(resumePrompt) : ''
       if (safe) args.push(safe) // a prompt that was nothing but metacharacters is not carried as an empty argument
     }
-    if (noDaemon()) args.push('--no-daemon')
+    const daemonless = noDaemon()
+    // A sandboxed session's shell must run in its own server: one attached to another session's daemon would run its
+    // tools in that session's environment and outside this session's sandbox. A codex that cannot say so does not
+    // start in the sandbox at all (E5), rather than start outside it.
+    if (sandboxArgs && !daemonless) throw sandboxUnavailable('codex-daemon codex')
+    if (daemonless) args.push('--no-daemon')
+    // The sandbox's `-a never` and permission profile stand where the bypass flag would: the session never asks, and
+    // every command still runs inside Codex's sandbox, which the bypass flag would have turned off
+    if (sandboxArgs) args.push(...sandboxArgs)
     // Starts without permission prompts — the counterpart to Claude's --dangerously-skip-permissions (measured on codex 0.143)
-    if (bypassPermissions) args.push('--dangerously-bypass-approvals-and-sandbox')
+    else if (bypassPermissions) args.push('--dangerously-bypass-approvals-and-sandbox')
     if (initialPrompt) args.push(initialPrompt)
     return platform === 'win32' ? windowsSpawn('codex', args, resolve) : { file: 'codex', args }
   }
@@ -143,9 +156,13 @@ export function buildCodexAppServerCommand(
   platform: NodeJS.Platform,
   resolve: ResolveExecutable = resolveWindowsExecutable,
   /** Shared extensions' `-c` overrides; app-server takes `-c` as its own option (measured, codex 0.160). */
-  extraArgs: string[] = []
+  extraArgs: string[] = [],
+  /** The sandbox (sandbox design §6): the permission profile's `-c` values without `-a never` (appServerSandboxArgs,
+   *  core/sandbox/codexProfile.ts), after the extensions' as a terminal session has them. The app-server takes no
+   *  `--no-daemon`: it is the server its own commands run in (inventory §23.2). */
+  sandboxArgs: string[] = []
 ): { file: string; args: string[] } {
-  const args = ['app-server', ...extraArgs]
+  const args = ['app-server', ...extraArgs, ...sandboxArgs]
   return platform === 'win32' ? windowsSpawn('codex', args, resolve) : { file: 'codex', args }
 }
 

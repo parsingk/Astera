@@ -125,7 +125,7 @@ describe('MCP tools with runtimeId (remote runtime design §2.8, X1-07)', () => 
     const names = (await client.listTools()).tools.map((t) => t.name)
     expect(names).not.toContain('list_runtimes')
     expect(names).not.toContain('get_runtime')
-    expect(names).toHaveLength(39)
+    expect(names).toHaveLength(40)
     const r = await client.callTool({ name: 'list_jobs', arguments: { runtimeId: 'rt_a' } })
     expect(textOf(r)).toMatch(/RUNTIME_CAPABILITY_MISSING/)
   })

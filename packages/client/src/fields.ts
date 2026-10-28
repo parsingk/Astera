@@ -33,7 +33,9 @@ export const JOB_FIELDS = Object.freeze([
   'paused',
   'convergence',
   'source',
-  'github'
+  'github',
+  // The agent profile the Job's Tasks run as by default, by its id (Agent Profiles design §6)
+  'agentProfileId'
 ] as const)
 
 export const RUN_FIELDS = Object.freeze([
@@ -71,6 +73,8 @@ export const TASK_FIELDS = Object.freeze([
   'consecutiveFailures',
   // 'lifecycle' for the Task Astera adds to carry a Run through GitHub (GitHub lifecycle G3a); absent otherwise
   'kind',
+  // The agent profile the Task runs as, by its id (Agent Profiles design §6)
+  'agentProfileId',
   'createdAt',
   'updatedAt'
 ] as const)
@@ -92,12 +96,44 @@ export const QUESTION_FIELDS = Object.freeze([
 /** `default` is there only on its provider's default account; `signedIn` says whether the account can run now. */
 export const ACCOUNT_FIELDS = Object.freeze(['id', 'label', 'provider', 'default', 'signedIn'] as const)
 
+/** An agent profile (Agent Profiles design §4): a named set of accounts, the shared MCP servers it leaves out (their
+ *  registry ids), its permission choice and its sandbox switch. Every field is the person's own setting, so all of them
+ *  are public. */
+export const AGENT_PROFILE_FIELDS = Object.freeze([
+  'id',
+  'name',
+  'description',
+  'status',
+  'accountIds',
+  'mcpExclude',
+  'permission',
+  'sandbox',
+  'createdAt',
+  'updatedAt',
+  'lastUsedAt'
+] as const)
+
 /** A run configuration's command, env and cwd stay in the app: an env value can be a secret. */
 export const RUN_CONFIG_FIELDS = Object.freeze(['id', 'name', 'type'] as const)
 
 /** A session's fields come from the note the app left on its pty, which can hold anything (resume ids, rolling
- *  accounts, permission bypass); only these are public. */
-export const SESSION_FIELDS = Object.freeze(['id', 'kind', 'title', 'accountId', 'cwd', 'alive', 'state', 'provider', 'rolledFrom', 'sources'] as const)
+ *  accounts, permission bypass); only these are public. `sandboxed` and `sandboxKind`: it runs in its agent CLI's own
+ *  sandbox, and what protection that is (`sandbox`, or `deny-only` for Claude Code on Windows). */
+export const SESSION_FIELDS = Object.freeze([
+  'id',
+  'kind',
+  'title',
+  'accountId',
+  'cwd',
+  'alive',
+  'state',
+  'provider',
+  'rolledFrom',
+  'agentProfileId',
+  'sandboxed',
+  'sandboxKind',
+  'sources'
+] as const)
 
 export const CHAT_TURN_FIELDS = Object.freeze(['role', 'text', 'tools'] as const)
 export const CHAT_PENDING_FIELDS = Object.freeze(['kind', 'summary'] as const)

@@ -12,7 +12,11 @@ function rig(o: { hostWrites?: boolean; hostHolds?: boolean; app?: boolean; appA
     answerCard: vi.fn(async () => {})
   }
   const routes = hostInboxRoutes({
-    registry: { sessionPty: (id) => (id === 's1' ? 'p1' : null), write: (p, data) => { writes.push([p, data]) } },
+    registry: {
+      sessionPty: (id) => (id === 's1' ? 'p1' : null),
+      write: (p, data) => { writes.push([p, data]) },
+      lastOutput: (p) => (p === 'p1' ? 1234 : null)
+    },
     procs: { list: () => [{ id: 'q1', pid: 1, alive: true, meta: { kind: 'chat', id: 'c1', restore: {} } }, { id: 'q2', pid: 2, alive: true, meta: { kind: 'chat', id: 'c2', restore: {} } }] },
     chats,
     notifier: { chatRequestOf: (id) => (id === 'c2' ? { id: 'r9', kind: 'approval', about: { tool: 'Edit', lines: [] }, decisions: ['accept', 'decline'] } : null) },
@@ -31,15 +35,25 @@ describe('hostInboxRoutes (Slack in the Host Task 7, spec §3.4)', () => {
     expect(h.routes.isChat!('s1')).toBe(false)
   })
 
+  // Codex swallows an Enter that comes right after a long text (openai/codex#56982): the inbox's Enter waits for the
+  // session's pty to have drawn the reply and gone quiet, read from the registry
+  it('answers the session\'s pty\'s last output, and null for a session with none', () => {
+    const h = rig()
+    expect(h.routes.lastOutputAt!('s1')).toBe(1234)
+    expect(h.routes.lastOutputAt!('gone')).toBe(null)
+  })
+
   // Review Focus 3.
   it('a reply to a chat the app writes goes to the app\'s chatSend, never to the Host adapter', async () => {
     const h = rig({ hostWrites: false })
     await h.routes.deliverChat!('c1', 'next turn')
-    expect(h.act).toHaveBeenCalledWith('chatSend', ['c1', 'next turn'])
+    // A person's reply, so the app writes it marked as a person's (observe deferred fix round 2, Important a)
+    expect(h.act).toHaveBeenCalledWith('chatSend', ['c1', 'next turn', { person: true }])
     expect(h.chats.send).not.toHaveBeenCalled()
     const w = rig()
     await w.routes.deliverChat!('c1', 'next turn')
-    expect(w.chats.send).toHaveBeenCalledWith('c1', 'next turn')
+    // A person's reply: written as a person's line (observe deferred fix round 1, Important 1)
+    expect(w.chats.send).toHaveBeenCalledWith('c1', 'next turn', undefined, { person: true })
     expect(w.act).not.toHaveBeenCalled()
   })
 

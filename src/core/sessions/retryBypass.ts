@@ -93,7 +93,7 @@ export function watchFirstLine(proc: ProcLike): { proc: ProcLike; sawLine: () =>
           cb(line)
         }),
       onExit: (cb) => proc.onExit(cb),
-      write: (line) => proc.write(line),
+      write: (line, by) => proc.write(line, by),
       kill: () => proc.kill(),
       ...(proc.remember ? { remember: (patch: Record<string, unknown>) => proc.remember?.(patch) } : {}),
       ...(proc.mayWrite ? { mayWrite: () => proc.mayWrite?.() ?? true } : {})

@@ -66,4 +66,19 @@ describe('the Host caller id over a socket', () => {
       expect(r.status).toBe(403)
     }
   })
+
+  // Observe final review: a send under the app's id is a person's prompt, which ends what a finished Run's or an ended
+  // attempt's session still holds, so an agent writing that id on the raw pipe is not taken for the app
+  it('cannot send to a session under the app’s id from another client, as the app’s send is a person’s prompt', async () => {
+    const orch = orchIn()
+    await orch.ready()
+    const args = { id: 'ses_x', text: 'go on' }
+    for (const role of ['cli', 'mcp'] as const) {
+      const r = await orch.call({ cmd: 'sessions-send', args, sessionId: APP_CALLER, from: { role, toOthers: () => {} } as never })
+      expect(r).toMatchObject({ status: 403, body: { error: expect.stringMatching(/only the app's connection can use it for sessions-send/) } })
+    }
+    // From the app it goes on to the command, which does not know the session
+    const fromApp = await orch.call({ cmd: 'sessions-send', args, sessionId: APP_CALLER, from: { role: 'app', toOthers: () => {} } as never })
+    expect(fromApp.status).toBe(404)
+  })
 })

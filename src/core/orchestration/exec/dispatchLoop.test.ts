@@ -20,6 +20,7 @@ import { APP_CALLER } from '../../host/driver'
 import { COORDINATOR_START_WINDOW_MS, emptyState, type OrchState } from '../state'
 import type { Dispatch, Job, Message, Task } from '../types'
 import type { Account } from '../../types'
+import { ENTER_QUIET_MS } from '../../sessions/sessionDriver'
 
 const NOW = '2026-09-24T00:00:00.000Z'
 const NOW_MS = Date.parse(NOW)
@@ -303,6 +304,19 @@ describe('createDispatchLoop', () => {
     expect(h.handled()).toEqual(['worker-start'])
   })
 
+  // Agent Profiles Review Focus 5: the Task's accounts were copied from its profile when it was made, so a profile
+  // deleted since does not stop it. The loop reads no profile; the spawn drops the unknown id with one log line and
+  // starts implicit (host/spawner.test.ts).
+  it('places a Task whose agent profile was deleted after it was made, on its copied accounts, carrying the id', async () => {
+    const h = rig()
+    h.setState({ ...h.state(), tasks: h.state().tasks.map((t) => (t.id === 'tsk_1' ? { ...t, accountIds: ['accA'], agentProfileId: 'ap_gone' } : t)) })
+    await h.loop.run()
+    await h.settle()
+    expect(h.startWorker).toHaveBeenCalledTimes(1)
+    expect(h.startWorker.mock.calls[0][0]).toMatchObject({ taskId: 'tsk_1', accountId: 'accA', agentProfileId: 'ap_gone' })
+    expect(h.state().dispatches[0]).toMatchObject({ taskId: 'tsk_1', agentProfileId: 'ap_gone' })
+  })
+
   it('asks mayStart before every slot: a driver that changes mid-activation starts no further slot (§4.3)', async () => {
     const h = rig({ concurrency: 2 })
     let allowed = 2 // the entry check, then the first slot (B4)
@@ -495,6 +509,23 @@ describe('createDispatchLoop', () => {
     await h.loop.nudge()
     expect(h.typed[0]).toMatch(/unread message/)
     expect(h.typed[1]).toBe('\r')
+  })
+
+  // Codex swallows an Enter that comes right after a long text (openai/codex#56982), and the nudge typed its Enter at
+  // once: with the session's output to go by, the Enter waits until the session has drawn the nudge and gone quiet
+  it('holds the nudge’s Enter until the coordinator has drawn it and gone quiet', async () => {
+    const h = rig({ coordinatorMail: true })
+    const at: Array<[number, string]> = []
+    let typedAt: number | null = null
+    h.ctx.typeInto = (_id, text) => {
+      at.push([Date.now(), text])
+      if (typedAt === null) typedAt = Date.now()
+    }
+    // The session draws the nudge for 300 ms after it was typed
+    h.ctx.lastOutputAt = () => (typedAt === null ? null : Math.min(Date.now(), typedAt + 300))
+    await h.loop.nudge()
+    expect(at.map(([, t]) => t)).toEqual([expect.stringMatching(/unread message/), '\r'])
+    expect(at[1][0] - typedAt!).toBeGreaterThanOrEqual(300 + ENTER_QUIET_MS)
   })
 
   it('forks the Run worktree lazily and records it before the first worker', async () => {

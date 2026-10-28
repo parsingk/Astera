@@ -649,3 +649,34 @@ describe('cliUsage — completion check plugins', () => {
     expect(guide).toContain('`no-ci`')
   })
 })
+
+// The Credentials list is changed in the app only (credentials design §4): the CLI's help says where
+describe('usage — credentials', () => {
+  it('says changes are made in the Astera app', () => {
+    for (const cmd of ['credentials-list', 'credentials-show', 'credentials-doctor'] as const) expect(USAGE[cmd].summary.length, cmd).toBeGreaterThan(0)
+    expect(USAGE['credentials-list'].detail).toMatch(/changed only in the Astera app/)
+  })
+})
+
+// Final review M7: policies show names all three modes
+describe('policies show', () => {
+  it('names all three modes', () => {
+    expect(USAGE['policies-show'].detail).toContain('`mode` is compatibility (nothing is observed), observe or enforce')
+  })
+})
+
+// Sandbox design §6, Task 5 fix round 1: the switch starts every session of the profile in its CLI's sandbox, terminal and
+// chat since Task 6 and Claude's since Task 7 (deny rules only on Windows), and a chain keeps the sandbox state it started
+// with whatever the switch says later
+describe('agent-profiles --sandbox', () => {
+  it('says which sessions the switch starts in the sandbox, and that a chain keeps the state it started with', () => {
+    const flag = (cmd: 'agent-profiles-create' | 'agent-profiles-update') => USAGE[cmd].flags?.find((f) => f.name === 'sandbox')
+    for (const cmd of ['agent-profiles-create', 'agent-profiles-update'] as const) {
+      expect(flag(cmd)?.about, cmd).toContain("its sessions, terminal and chat, in their CLI's own sandbox")
+      expect(flag(cmd)?.about, cmd).toContain('Claude Code on Windows gets deny rules only')
+    }
+    expect(USAGE['agent-profiles-create'].detail).toContain("--sandbox on starts its sessions, terminal and chat, in their CLI's own sandbox (Codex's, or Claude Code's on macOS and Linux")
+    expect(USAGE['agent-profiles-create'].detail).toContain('Windows')
+    expect(USAGE['agent-profiles-update'].detail).toContain('keeps the sandbox state it started with')
+  })
+})

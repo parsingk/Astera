@@ -402,6 +402,22 @@ describe('OrchestrationStore', () => {
     expect(store.get().runs).toHaveLength(1)
   })
 
+  // Host 는 자기 시계를 넘긴다(host/orch.ts). 고정 날짜로 쓴 프로필이 벽시계로 판정되면 그 날짜로부터
+  // 30일 뒤 조용히 정리된다 — driving.test.ts 의 'reaps … child worktree' 둘이 2026-10-25 에 그렇게 깨졌다.
+  it('TTL 은 받은 시계로 판정한다', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const at = '2020-01-01T00:00:00.000Z'
+    const s = withOpenDispatch()
+    s.runs[0] = { ...s.runs[0], createdAt: at }
+    s.dispatches[0] = { ...s.dispatches[0], endedAt: at, outcome: 'succeeded' }
+    s.tasks[0] = { ...s.tasks[0], status: 'completed', updatedAt: at }
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const kept = new OrchestrationStore(file, () => Date.parse(at) + 24 * 60 * 60 * 1000)
+    expect((await kept.load()).pruned).toBe(0)
+    const pruned = new OrchestrationStore(file, () => Date.parse(at) + RUN_TTL_MS + 1000)
+    expect((await pruned.load()).pruned).toBe(1)
+  })
+
   // 예약이 30일 뒤 조용히 사라지면 안 된다. 템플릿의 Task 는 배치되지 않아 terminal 이 되지
   // 않으므로 지금은 저절로 남지만, 그 성질이 우연히 깨지는 것을 여기서 잡는다
   it('30일이 지나도 예약 계획은 남기고 그 회차만 지운다', async () => {

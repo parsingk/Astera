@@ -36,3 +36,41 @@ export function extensionPaths(profileDir: string): ExtensionPaths {
     generatedMcp: path.join(profileDir, 'materialized', 'mcp')
   }
 }
+
+export interface ProfilePaths {
+  /** The Agent Profiles: `{ version, profiles }`. */
+  agentProfiles: string
+  /** The agent profile each conversation ran as, by the provider's conversation id: `{ version, conversations }`. */
+  agentProfileConversations: string
+  /** Observe mode's rules and the mode itself: `{ version, mode, rules, otherwise }`. Not `policy.json`, which is the
+   *  release update feed. */
+  auditPolicy: string
+  /** Observe mode's records: one `YYYY-MM-DD.jsonl` per local day, written by the Host alone. */
+  auditRecords: string
+  /** The tokens each session spent for a Dispatch or a Run's coordinator: `{ version, spent }`, written by the Host
+   *  alone, in every mode (observe mode design §10). */
+  tokenTotals: string
+  /** The Credentials list (credentials design §4): `{ version, entries, mcpHide }`, written by the Host alone. */
+  credentials: string
+  /** Empty folders and files a hidden CLI login's configuration is pointed at (credentials design §5). */
+  credentialEmpty: string
+  /** Credential-use records: one `YYYY-MM-DD.jsonl` per local day, written by the Host alone (credentials design §6). */
+  credentialUses: string
+  /** Enforce's hook writes each call it sees here, one file per session (enforce design §5): the proof it ran, and what it
+   *  blocked. */
+  enforceEvents: string
+}
+
+export function profilePaths(profileDir: string): ProfilePaths {
+  return {
+    agentProfiles: path.join(profileDir, 'agent-profiles.json'),
+    agentProfileConversations: path.join(profileDir, 'agent-profile-conversations.json'),
+    auditPolicy: path.join(profileDir, 'audit-policy.json'),
+    auditRecords: path.join(profileDir, 'audit'),
+    tokenTotals: path.join(profileDir, 'token-totals.json'),
+    credentials: path.join(profileDir, 'credentials.json'),
+    credentialEmpty: path.join(profileDir, 'credentials', 'empty'),
+    credentialUses: path.join(profileDir, 'credential-uses'),
+    enforceEvents: path.join(profileDir, 'enforce')
+  }
+}

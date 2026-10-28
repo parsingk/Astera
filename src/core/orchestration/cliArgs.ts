@@ -139,6 +139,21 @@ export const NOUNS = {
   // **Answered in the CLI process** (Agent Control Plane release 1 design §4.6): reads the profile's shared extension
   // registry and puts its skills, commands and agents into every account itself (cli/extensions.ts), no Host.
   ext: ['list', 'sync'],
+  // **Answered by the Host** (Agent Profiles design §6), like `sessions`: its `agent-profiles-*` commands, which the CLI
+  // reaches through cli/agentProfiles.ts (a name resolved to the id first, MCP server names to their ids). Changes are
+  // refused to an agent's shell, as `ext sync` and the extension changes are.
+  'agent-profiles': ['list', 'show', 'create', 'update', 'archive', 'restore', 'delete'],
+  // **Answered by the Host** (observe mode design §12), like `agent-profiles`: the records observe mode kept, read with the
+  // decision the rules in force give each (host/audit/auditCommands.ts), through cli/audit.ts. An agent's shell is
+  // refused even these reads.
+  audit: ['list', 'summary'],
+  // **Answered by the Host** (observe mode design §7, §12): the observe switch and the rules (host/audit/policyCommands.ts),
+  // through cli/audit.ts. This parser takes one verb, so each rule edit is a verb of its own, as `jobs create-from-source`
+  // is, named as the Host names it. Changes are refused to an agent's shell; `show` is not.
+  policies: ['show', 'set-mode', 'set-otherwise', 'rules-add', 'rules-edit', 'rules-remove', 'rules-move', 'rules-reset'],
+  // **Answered by the Host** (credentials design §7): the Credentials list, read here and changed in the app only
+  // (host/credentials/commands.ts). An agent's shell may read it.
+  credentials: ['list', 'show', 'doctor'],
   // **Host 가 제 레지스트리로 답한다 — 앱이 닫혀 있어도**(host/sessions.ts). pty 를 쥔 것이 Host 다.
   // id 는 앱의 세션 id(`ASTERA_SESSION`)이다. 대화 세션도 읽고 친다(phase D) — 치기는 앱이 열려 있으면 앱이 한다.
   sessions: ['list', 'read', 'send', 'create'],

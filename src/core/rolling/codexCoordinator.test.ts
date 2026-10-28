@@ -7,6 +7,8 @@ import type { Account, SessionInfo } from '../types'
 import { BlockRegistry } from './blockRegistry'
 import { CodexRollingCoordinator, type CodexRollingDeps } from './codexCoordinator'
 import { parseRollSnapshot, type RollSnapshot } from './snapshot'
+import { ENTER_MAX_WAIT_MS, ENTER_QUIET_MS } from '../sessions/sessionDriver'
+import { t } from '../i18n'
 
 let tmp: string
 
@@ -285,14 +287,17 @@ const advance = async (ms: number): Promise<void> => {
 
 /** 대기 만료가 **제자리 재개**로 이어지는 자리에서 advance 대신 쓴다.
  *
- *  `resumeInPlace` 는 rollout 기준 크기를 await 한 뒤에야 ENTER_DELAY_MS 엔터 타이머를 건다. 그 순서가
+ *  `resumeInPlace` 는 rollout 기준 크기를 await 한 뒤에야 문장을 치고 엔터 대기를 시작한다. 그 순서가
  *  안전의 핵심이다 — 기준선이 제출 기록보다 늦게 읽히면 삼켜진 입력이 살아 있는 것처럼 보인다. 대신 그
  *  await 는 advance 의 마지막 `advanceTimersByTimeAsync(0)` 뒤에 풀릴 수 있어, 엔터 타이머가 그 라운드
  *  밖에 걸린다. 한 라운드를 더 줘야 엔터까지 관찰된다 — 없으면 `written` 이 문장 하나로 끝나고, 그것도
- *  부하에 따라 들쭉날쭉해진다(같은 커밋에서 6건과 5건이 번갈아 실패했다). */
+ *  부하에 따라 들쭉날쭉해진다(같은 커밋에서 6건과 5건이 번갈아 실패했다).
+ *
+ *  그 라운드는 ENTER_MAX_WAIT_MS 를 넘긴다. 엔터는 세션이 문장을 그리고 잠잠해진 뒤에 가는데(untilEnter,
+ *  openai/codex#56982) 이 하네스에는 문장을 그리는 TUI 가 없어서, 엔터가 그 상한에 간다. */
 const advanceIntoResume = async (ms: number): Promise<void> => {
   await advance(ms)
-  await advance(200) // 150ms 엔터 타이머 + 여유
+  await advance(ENTER_MAX_WAIT_MS + 50) // 엔터 대기의 상한 + 여유
 }
 
 beforeEach(async () => {
@@ -303,6 +308,31 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.useRealTimers()
   await fs.rm(tmp, { recursive: true, force: true }) // 실행마다 임시 디렉터리가 쌓이지 않게
+})
+
+// Task D (2026-10-28): the newest rollout in the folder can be another Host's session's, or a codex outside Astera's.
+describe('CodexRollingCoordinator maps only a rollout its session holds', () => {
+  it('skips a newer rollout another process holds and locates its own', async () => {
+    const native: string[] = []
+    const asked: number[] = []
+    const h = harness({
+      onNativeSession: (_id, n) => native.push(n),
+      rolloutOwner: {
+        pidOf: (id) => (id === 's1' ? 5100 : null),
+        read: async (file, pid) => {
+          asked.push(pid)
+          return file.includes('cx-own') ? { verdict: 'own' } : { verdict: 'other', why: 'held by pid 4242 outside the session' }
+        }
+      }
+    })
+    h.coord.register(h.info1)
+    await writeRollout({ accountId: 'c1', uuid: 'cx-own', cwd: h.info1.cwd })
+    await new Promise((r) => realSetTimeout(r, 30)) // a later birth time for the other one
+    await writeRollout({ accountId: 'c1', uuid: 'cx-theirs', cwd: h.info1.cwd })
+    await advance(1_500)
+    expect(native).toEqual(['cx-own'])
+    expect(asked).toEqual([5100, 5100])
+  })
 })
 
 describe('CodexRollingCoordinator', () => {
@@ -742,6 +772,75 @@ describe('CodexRollingCoordinator', () => {
     h.coord.stop()
   })
 
+  // Codex swallows an Enter that comes right after a long text (openai/codex#56982), and the in-place resume typed its
+  // Enter 150 ms after the line. The Enter now waits until the session has drawn the line and gone quiet
+  it('제자리 재개의 엔터는 세션이 문장을 그리고 잠잠해진 뒤에 간다', async () => {
+    const at: Array<[number, string]> = []
+    const h = harness({ write: (_id, data) => void at.push([Date.now(), data]) })
+    const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
+    const resetSec = Math.floor((Date.now() + 300_000) / 1000)
+    const file = await writeRollout({
+      accountId: 'c1', uuid: 'cx-inplace-enter', cwd: single.cwd, primary: 99, primaryReset: resetSec
+    })
+    h.coord.register(single)
+    await advance(1_500)
+    await appendLimitError(file)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    // Up to the moment the wait expires, and no further: the line is typed once its reads are done, and the test
+    // stands where it went in
+    const retryAt = Date.parse(h.sent.at(-1)!.payload.nextRetryAt as string)
+    await advance(retryAt - Date.now())
+    for (let i = 0; i < 20 && at.length === 0; i++) await advance(0)
+    expect(at.map(([, d]) => d)).toEqual(['이어서 작업 진행해 줘'])
+    const typedAt = at[0][0]
+    // The session draws the line until 300 ms after it was typed
+    for (const t of [50, 180, 300]) {
+      await vi.advanceTimersByTimeAsync(typedAt + t - Date.now())
+      h.coord.handleData({ sessionId: 's1', data: '이어서' })
+    }
+    await vi.advanceTimersByTimeAsync(ENTER_QUIET_MS - 1)
+    expect(at.map(([, d]) => d)).toEqual(['이어서 작업 진행해 줘'])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(at).toEqual([
+      [typedAt, '이어서 작업 진행해 줘'],
+      [typedAt + 300 + ENTER_QUIET_MS, '\r']
+    ])
+    expect(h.sent.at(-1)?.payload.state).toBe('none') // published after the Enter, as before
+    h.coord.stop()
+  })
+
+  it('제자리 재개의 엔터가 던지면 로그에 남고, 처리되지 않은 거부가 되지 않는다', async () => {
+    const seen: unknown[] = []
+    const on = (e: unknown): void => void seen.push(e)
+    process.on('unhandledRejection', on)
+    try {
+      const logs: string[] = []
+      const h = harness({
+        write: (_id, data) => {
+          if (data === '\r') throw new Error('pty gone')
+        },
+        log: (m) => void logs.push(m)
+      })
+      const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
+      const resetSec = Math.floor((Date.now() + 120_000) / 1000)
+      const file = await writeRollout({
+        accountId: 'c1', uuid: 'cx-inplace-enter-throws', cwd: single.cwd, primary: 99, primaryReset: resetSec
+      })
+      h.coord.register(single)
+      await advance(1_500)
+      await appendLimitError(file)
+      h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+      await advance(100)
+      await advanceIntoResume(188_400)
+      expect(logs.some((m) => /codex resume in place Enter failed: Error: pty gone session=s1/.test(m))).toBe(true)
+      expect(seen).toEqual([])
+      h.coord.stop()
+    } finally {
+      process.off('unhandledRejection', on)
+    }
+  })
+
   it('제자리 재개는 update 형태로 물어 기존 문장에 덧붙인다 (SPEC §11.5)', async () => {
     const forms: string[] = []
     const h = harness({
@@ -1083,10 +1182,10 @@ describe('CodexRollingCoordinator', () => {
   })
 
   // claudeCoordinator.test.ts 의 '상태 세대 가드' 두 테스트와 같은 성질. codex 는 제자리 재개가 생기면서
-  // 처음으로 **지연 게시**를 갖게 됐다 — 엔터 뒤의 'none' 이 150ms 타이머 안에 있으므로, 그 사이에
+  // 처음으로 **지연 게시**를 갖게 됐다 — 엔터 뒤의 'none' 이 엔터 대기(untilEnter) 뒤에 있으므로, 그 사이에
   // 게시된 'waiting'·'switching' 을 덮어쓴다. 덮으면 스케줄러의 억제가 풀리고 오케스트레이션 정지
   // 표식이 일찍 지워진다.
-  it('제자리 재개 엔터 대기(150ms) 중 방해가 있으면 지연된 none을 건너뛴다', async () => {
+  it('제자리 재개 엔터 대기 중 방해가 있으면 지연된 none을 건너뛴다', async () => {
     const h = harness()
     const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
     const resetSec = Math.floor((Date.now() + 120_000) / 1000)
@@ -1105,10 +1204,11 @@ describe('CodexRollingCoordinator', () => {
     // 엔터 대기 중 방해: rollout 에 구조 에러가 도착해 두 번째 한도가 잡힌다 → 'waiting' (세대 전진)
     await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
-    await advance(100) // 150ms 전 — 판정은 끝났고 엔터는 아직이다
+    await advance(100) // 엔터 대기 중 — 판정은 끝났고 엔터는 아직이다
     const waiting = h.sent.at(-1)
     expect(waiting?.payload.state).toBe('waiting')
-    await advance(100) // 원래 엔터 타이머 발화 시점 통과
+    // 엔터 대기의 끝을 지난다: 이 하네스에는 문장을 그리는 TUI 가 없어 상한(ENTER_MAX_WAIT_MS)에 간다
+    await advance(ENTER_MAX_WAIT_MS)
     expect(h.written.at(-1)).toEqual(['s1', '\r']) // 엔터는 세대와 무관하게 그대로 전송된다
     expect(h.sent.at(-1)).toBe(waiting) // 지연된 none 이 최신 'waiting' 을 덮지 않았다
     h.coord.stop()
@@ -2022,6 +2122,29 @@ describe('chat chains', () => {
     h.coord.stop()
   })
 
+  // Task 6 fix round 1: a chat's respawn is prepared as a chat (its app-server needs no --no-daemon), and its refusal's
+  // reason goes to the same `tell`, which the wiring turns into the chat's notice
+  it('prepares a chat respawn as a chat, and tells a refusal the same way a terminal one is told', async () => {
+    const prepared: unknown[][] = []
+    const told: Array<[string, unknown]> = []
+    const h = harness({
+      prepareSpawn: async (...a) => {
+        prepared.push(a)
+        throw new Error('SANDBOX_UNAVAILABLE: windows-setup codex c2')
+      },
+      tell: (id, reason) => told.push([id, reason])
+    })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-chat-sbx', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register({ ...chatInfo(h.info1), sandboxed: true })
+    h.coord.attachChat('s1', 'cx-chat-sbx', file)
+    await appendLimitError(file)
+    await advance(15_000)
+    expect(prepared[0]).toEqual([expect.objectContaining({ id: 'c2' }), h.info1.cwd, undefined, true, 'chat'])
+    expect(h.spawned).toEqual([])
+    expect(told).toEqual([['s1', { key: 'session.roll.sandbox.windowsSetup', params: { account: 'Codex B' } }]])
+    h.coord.stop()
+  })
+
   it('does not invent the bypass for a chain that was never granted it', async () => {
     const h = harness({ bypassedOf: () => false })
     const file = await writeRollout({ accountId: 'c1', uuid: 'cx-chat-nobp', cwd: h.info1.cwd, primary: 95 })
@@ -2736,6 +2859,50 @@ describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
     await advance(100)
   }
 
+  // Agent Profiles design §7: the new session is started from the same profile (claudeCoordinator.test.ts's own test)
+  it('a roll keeps the session’s agent profile, for the respawn and its preparation', async () => {
+    const prepared: unknown[][] = []
+    const h = harness({ prepareSpawn: async (...a) => { prepared.push(a) } })
+    const src = await writeRollout({ accountId: 'c1', uuid: 'cx-ap', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register({ ...h.info1, agentProfileId: 'ap_x' })
+    await advance(1_500) // 매핑 폴링
+    await appendLimitError(src)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(prepared).toEqual([[expect.objectContaining({ id: 'c2' }), h.info1.cwd, 'ap_x', false]])
+    expect(h.spawnedOpts[0].agentProfileId).toBe('ap_x')
+    h.coord.stop()
+    const pPrepared: unknown[][] = []
+    const p = harness({ prepareSpawn: async (...a) => { pPrepared.push(a) } })
+    await rollNow(p)
+    expect(pPrepared[0][2]).toBeUndefined()
+    expect(p.spawnedOpts[0]).not.toHaveProperty('agentProfileId')
+    p.coord.stop()
+  })
+
+  // Sandbox design §6: the successor of a session started in the sandbox starts in it too. The flag rides the chain like
+  // the bypass does, so a profile store that cannot be read at the roll, or another chain rolling at the same moment,
+  // can never start it outside; its preparation is told, so the sandbox's folder is read before the kill.
+  it('a roll keeps the session’s sandbox, for the respawn and its preparation', async () => {
+    const prepared: unknown[][] = []
+    const h = harness({ prepareSpawn: async (...a) => { prepared.push(a) } })
+    const src = await writeRollout({ accountId: 'c1', uuid: 'cx-sb', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register({ ...h.info1, agentProfileId: 'ap_box', sandboxed: true })
+    await advance(1_500) // 매핑 폴링
+    await appendLimitError(src)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(prepared).toEqual([[expect.objectContaining({ id: 'c2' }), h.info1.cwd, 'ap_box', true]])
+    expect(h.spawnedOpts[0]).toMatchObject({ sandbox: true, agentProfileId: 'ap_box' })
+    h.coord.stop()
+    const pPrepared: unknown[][] = []
+    const p = harness({ prepareSpawn: async (...a) => { pPrepared.push(a) } })
+    await rollNow(p)
+    expect(pPrepared[0][3]).toBe(false)
+    expect(p.spawnedOpts[0]).not.toHaveProperty('sandbox')
+    p.coord.stop()
+  })
+
   it('awaits prepareSpawn after the copy and before the kill', async () => {
     const h = harness({
       prepareSpawn: async () => {
@@ -2759,6 +2926,108 @@ describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
     expect(h.events).toEqual(['copy'])
     expect(h.sent.at(-1)?.payload).toMatchObject({ sessionId: 's1', state: 'waiting' })
     expect(logs.join('\n')).toMatch(/spawn refused: app-settings\.json cannot be read/)
+    h.coord.stop()
+  })
+
+  // Sandbox design §6, as the person decided (Task 6): a roll onto a Codex account whose Windows sandbox is not set up
+  // (or has gone stale) is refused before the kill, like any refused respawn, and the person is told why in the tab that
+  // is still running, once. Fix round 1: the reason names the account by its name and says where to set it up; the
+  // wiring words it for the tab (a terminal's line, a chat's notice).
+  //
+  // Task 7 fix round 2: driven by the coordinator's own milestones (its log lines), never by a wall-clock window. Each step
+  // advances fake time only as far as the next timer this flow needs (the locate poll, the wait's retry) and then awaits
+  // what that timer starts, however long the real file I/O under it takes on a loaded machine; a step that never comes
+  // fails by the test's own timeout, never by a guess about how long I/O lasts.
+  it('a roll onto an account not set up writes the reason into the live tab and waits', async () => {
+    const told: [string, unknown][] = []
+    const logs: string[] = []
+    const waiting: Array<{ reached: () => boolean; resolve: () => void }> = []
+    /** Resolves once the log holds what `reached` asks for. */
+    const when = (reached: () => boolean): Promise<void> =>
+      reached() ? Promise.resolve() : new Promise((resolve) => waiting.push({ reached, resolve }))
+    const count = (prefix: string): number => logs.filter((l) => l.startsWith(prefix)).length
+    let asked = 0
+    const h = harness({
+      prepareSpawn: async () => {
+        asked++
+        throw new Error('SANDBOX_UNAVAILABLE: windows-setup codex c2')
+      },
+      tell: (id, reason) => told.push([id, reason]),
+      log: (m) => {
+        logs.push(m)
+        for (const w of [...waiting])
+          if (w.reached()) {
+            waiting.splice(waiting.indexOf(w), 1)
+            w.resolve()
+          }
+      }
+    })
+    const src = await writeRollout({ accountId: 'c1', uuid: 'cx-ws', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register({ ...h.info1, sandboxed: true })
+    // The locate poll fires at its first second and maps the rollout written above
+    const located = when(() => count('codex rollout located') >= 1)
+    await vi.advanceTimersByTimeAsync(1_500)
+    await located
+    await appendLimitError(src)
+    // The limit is read off the rollout (real I/O, no timer), the roll is refused before its kill, and the wait is armed
+    const firstRefusal = when(() => count('codex roll retry scheduled after abort') >= 1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await firstRefusal
+    // No successor: nothing killed, nothing spawned, and the wait is the one any refused respawn gets
+    expect(h.events).toEqual(['copy'])
+    expect(h.spawned).toEqual([])
+    expect(h.sent.at(-1)?.payload).toMatchObject({ sessionId: 's1', state: 'waiting' })
+    expect(told).toEqual([['s1', { key: 'session.roll.sandbox.windowsSetup', params: { account: 'Codex B' } }]])
+    expect(t('en', 'session.roll.sandbox.windowsSetup', { account: 'Codex B' })).toBe(
+      'Could not move to the Codex B account: its Windows sandbox is not set up. Press Set up for it in Settings › Agent profiles.'
+    )
+    expect(logs.join('\n')).toMatch(/spawn refused: SANDBOX_UNAVAILABLE: windows-setup codex c2/)
+    // The wait's next round is refused for the same reason: the tab is not told again. That round is several timers with
+    // real I/O between them (the wait, a resume in place on the first account and its Enter, the verdict that it produced
+    // no turn, then the respawn's preparation), so fake time is moved from timer to timer until the coordinator schedules
+    // its next retry
+    const secondRefusal = when(() => count('codex roll retry scheduled after abort') >= 2)
+    let refusedAgain = false
+    void secondRefusal.then(() => {
+      refusedAgain = true
+    })
+    // Each step fires the next timer due and yields a turn of the real event loop (fake-timers' async tick), so the file
+    // I/O a step starts completes in its own time
+    while (!refusedAgain) await vi.advanceTimersToNextTimerAsync()
+    expect(asked).toBeGreaterThanOrEqual(2)
+    expect(told).toHaveLength(1)
+    expect(h.spawned).toEqual([])
+    h.coord.stop()
+  })
+
+  it('a refused respawn that is not the sandbox is not written into the tab', async () => {
+    const told: [string, unknown][] = []
+    const h = harness({
+      prepareSpawn: async () => {
+        throw new Error('CWD_MISSING: /gone')
+      },
+      tell: (id, reason) => told.push([id, reason])
+    })
+    await rollNow(h)
+    expect(h.spawned).toEqual([])
+    expect(told).toEqual([])
+    h.coord.stop()
+  })
+
+  // Task 6 fix round 1: when Codex could not be asked about the account, setting it up would not help: the reason is the
+  // start's own sentence for it
+  it('a roll whose readiness could not be asked says so, with no setup to press', async () => {
+    const told: [string, unknown][] = []
+    const h = harness({
+      prepareSpawn: async () => {
+        throw new Error('SANDBOX_UNAVAILABLE: windows-check-failed codex c2')
+      },
+      tell: (id, reason) => told.push([id, reason])
+    })
+    await rollNow(h)
+    expect(h.spawned).toEqual([])
+    // Final fix pass (minor 14): which account it could not ask about, by its name, as a windows-setup refusal says
+    expect(told).toEqual([['s1', { key: 'session.roll.sandbox.windowsCheckFailed', params: { account: 'Codex B' } }]])
     h.coord.stop()
   })
 

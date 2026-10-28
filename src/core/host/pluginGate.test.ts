@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { PLUGIN_COMMAND_PERMISSIONS, pluginRefusal } from './pluginGate'
+import { PLUGIN_COMMAND_PERMISSIONS, SDK_COMMANDS_CLOSED_TO_PLUGINS, pluginRefusal } from './pluginGate'
 import { PLUGIN_PERMISSIONS } from '../plugins/manifest'
 
 const plugin = (granted: string[]) => ({ id: 'astera-hello', granted: new Set(granted) })
@@ -53,6 +53,13 @@ describe('pluginRefusal (plugin runtime design P12)', () => {
       expect(pluginRefusal(cmd, plugin([...PLUGIN_PERMISSIONS])), cmd).toEqual({ status: 403, body: { error: `${cmd} is not available to plugins` } })
   })
 
+  // Observe mode design §3, §12: no plugin reads the audit log or the rules, whatever it was granted
+  it('never maps an audit or policies command, and refuses each whatever was granted', () => {
+    for (const cmd of [...Object.keys(PLUGIN_COMMAND_PERMISSIONS), ...SDK_COMMANDS_CLOSED_TO_PLUGINS]) expect(cmd).not.toMatch(/^(?:audit|policies)-/)
+    for (const cmd of ['audit-list', 'audit-summary', 'policies-show', 'policies-set-mode', 'policies-set-otherwise', 'policies-rules-add', 'policies-rules-edit', 'policies-rules-remove', 'policies-rules-move', 'policies-rules-reset'])
+      expect(pluginRefusal(cmd, plugin([...PLUGIN_PERMISSIONS])), cmd).toEqual({ status: 403, body: { error: `${cmd} is not available to plugins` } })
+  })
+
   it('refuses a call that names no plugin', () => {
     expect(pluginRefusal('projects-list', undefined)).toEqual({ status: 403, body: { error: 'a plugin call needs its plugin' } })
   })
@@ -63,6 +70,11 @@ describe('pluginRefusal (plugin runtime design P12)', () => {
     const sent = new Set<string>()
     for (const f of ['namespaces.ts', 'events.ts', 'follow.ts'])
       for (const m of readFileSync(path.join(src, f), 'utf8').matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) sent.add(m[1])
-    expect([...sent].sort()).toEqual(Object.keys(PLUGIN_COMMAND_PERMISSIONS).sort())
+    expect([...sent].filter((c) => !SDK_COMMANDS_CLOSED_TO_PLUGINS.has(c)).sort()).toEqual(Object.keys(PLUGIN_COMMAND_PERMISSIONS).sort())
+    // The ones held back are commands the SDK really sends, and every permission still refuses them
+    for (const cmd of SDK_COMMANDS_CLOSED_TO_PLUGINS) {
+      expect(sent.has(cmd), cmd).toBe(true)
+      expect(pluginRefusal(cmd, { id: 'p', granted: new Set(Object.values(PLUGIN_COMMAND_PERMISSIONS)) })?.status, cmd).toBe(403)
+    }
   })
 })

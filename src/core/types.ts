@@ -42,6 +42,9 @@ import type {
   UnattendedPermission
 } from './chat/types'
 import type { ThemeId } from './theme/themes'
+import type { ProfilePermission } from './agentProfiles/types'
+import type { AuditDecision, AuditMode, AuditRule } from './audit/types'
+import type { Hiding } from './credentials/types'
 import type { ConvTurn } from './history/convTypes'
 export type { ConvTurn } from './history/convTypes'
 // The Jobs sidebar shows a Task's status, so the orchestration domain's own enum comes in here. Only
@@ -129,7 +132,22 @@ export interface SessionInfo {
    *  the session ends (2026-10-20). Written into the pty's note at spawn, so it survives a Host handing the session back;
    *  absent on every session a person started and on every note written before it. */
   startedBy?: 'agent'
+  /** The agent profile the session was started from (Agent Profiles design §5): its MCP exclusions and permission.
+   *  Written into the pty's note at spawn like startedBy, so it survives a Host handing the session back; absent on a
+   *  session started without one and on every note written before profiles. */
+  agentProfileId?: string
+  /** The session runs in its CLI's own sandbox (sandbox design §6), because its agent profile's switch is on. Written
+   *  into the pty's or chat proc's note at spawn like Enforce's `enforced`, so it survives a Host handing the session
+   *  back and a roll's successor starts in the sandbox too; absent on every session started outside it. */
+  sandboxed?: true
+  /** What protection `sandboxed` gives, set beside it by the session manager that knows the OS and the CLI: `sandbox`, the
+   *  CLI's own sandbox; `deny-only`, Claude Code on Windows, which has none and gets only deny rules for its file tools
+   *  (its shell is not restricted). In the note too, so a session taken back says the same. Absent when not sandboxed. */
+  sandboxKind?: SandboxKind
 }
+
+/** SessionInfo.sandboxKind (core/sandbox/coverage.ts sandboxKindOf decides it). */
+export type SandboxKind = 'sandbox' | 'deny-only'
 
 /** The stored settings the resume modal reads to seed its checkboxes.
  *  A read-only snapshot — what actually gets enabled is settled by the modal and passed down as
@@ -137,6 +155,8 @@ export interface SessionInfo {
 export interface ResumeDefaults {
   roll: RollConfig | null
   schedule: ScheduleConfig | null
+  /** The agent profile the conversation ran as, while it is still there; null when none was recorded or it is gone. */
+  agentProfileId: string | null
 }
 
 /** 워크트리 항목의 상태. **'missing' 은 없다** — 폴더가 사라졌다고 확인된 항목은 listWithStatus 가
@@ -380,6 +400,24 @@ export interface SessionUsage {
   weekly: RateLimitWindow | null // the weekly (7-day) window
 }
 
+/** What one API response of a session spent, off the lines its provider writes (core/usage/claudeTokens.ts,
+ *  core/usage/codex.ts): `input` counts every input token the model read, cached ones included, so a Claude figure
+ *  and a Codex one mean the same thing. `at` is when the provider wrote it, null for a line that carries no time. */
+export interface TokensSpent {
+  at: string | null
+  input: number
+  output: number
+}
+
+/** The tokens a Task's or a Run's sessions used, as `runs get` and `tasks-get` give them (observe mode design §10), and
+ *  through those MCP's get_run and get_task, the SDK's runs.get and tasks.get and Run detail in the app. `total` is
+ *  `input + output`. Absent where nothing was read, never zeros: cost in money is not known. */
+export interface TokenTotals {
+  input: number
+  output: number
+  total: number
+}
+
 /** Rolling progress (main to renderer, for the banner both views wear — the terminal and the chat pane) */
 export interface RollStateEvent {
   sessionId: string
@@ -490,6 +528,8 @@ export interface JobTask {
    *  스케줄러와 **같은 계정**을 고르려면 이 값이 필요하다 — 없으면 그 버튼이 기본 계정으로 띄워,
    *  같은 Task 가 누가 띄웠는지에 따라 다른 계정에서 돌게 된다. */
   accountIds?: string[]
+  /** The agent profile the Task runs as (Task.agentProfileId), its id; the screen shows its name from the profile list. */
+  agentProfileId?: string
   /** 가장 이른 열린 Gate. 없으면 이 칸이 없다.
    *
    *  **셋을 한 묶음으로 싣는다.** 한때 질문만 따로 실었는데, 화면에서 답하려면 `gate-resolve` 가
@@ -668,6 +708,8 @@ export interface JobRow {
    *  가질 수 있으므로 Run 줄에 실을 하나의 값이 아예 없다. 지금 도는 것의 provider 는 Task 줄이
    *  보여 준다(JobTask.provider — 열린 Dispatch 에서 온다). */
   concurrency?: number
+  /** The agent profile the Job runs as (Job.agentProfileId), its id; the screen shows its name from the profile list. */
+  agentProfileId?: string
   /** 저장된 값이 아니라 Task 에서 계산된다 — core/orchestration/view.ts 의 outcomeOf */
   outcome: RunOutcome
   done: number
@@ -1146,6 +1188,9 @@ export interface CoreApi {
       /** chat takeover P8: the new chat session's unattended-permission policy (hold, the default, or
        *  deny after 60 s). Ignored for a terminal session, which has no such policy. */
       unattendedPermission?: UnattendedPermission
+      /** The agent profile picked in the new-session dialog (Agent Profiles design §6). Sent without bypassPermissions,
+       *  which would otherwise win over the profile's permission. */
+      agentProfileId?: string
     }): Promise<SessionInfo>
     write(id: string, data: string): void
     resize(id: string, cols: number, rows: number): void
@@ -1941,6 +1986,107 @@ export interface ExtensionsApi {
   setIsolation(id: string, isolation: 'folder' | 'session'): Promise<PluginsCallAnswer>
 }
 
+/** What a person sets on an agent profile in Settings › Agent profiles. */
+export interface AgentProfileFields {
+  name: string
+  description?: string
+  /** Ordered: the first is used first, the rest are the roll order. */
+  accountIds: string[]
+  /** Shared MCP entry ids the profile does not get. */
+  mcpExclude?: string[]
+  permission?: ProfilePermission
+  /** Its sessions start in their CLI's own sandbox (sandbox design §6). Off when a new profile leaves it out. */
+  sandbox?: boolean
+}
+
+/** Settings › Agent profiles and the profile pickers (Agent Profiles design §8): the Host's `agent-profiles-*` commands,
+ *  as the app. A refusal carries the Host's `reason` (name-empty, name-taken, mixed-provider, in-use, ...). */
+export interface AgentProfilesApi {
+  list(): Promise<PluginsCallAnswer>
+  create(fields: AgentProfileFields): Promise<PluginsCallAnswer>
+  update(id: string, changes: Partial<AgentProfileFields>): Promise<PluginsCallAnswer>
+  archive(id: string): Promise<PluginsCallAnswer>
+  restore(id: string): Promise<PluginsCallAnswer>
+  /** Refused with reason `in-use` while unfinished work or a live session holds the profile. */
+  remove(id: string): Promise<PluginsCallAnswer>
+  /** 설정하기 (sandbox design §6): sets up the Windows sandbox of the one Codex account of the profile a sandboxed start
+   *  was refused for (`SANDBOX_UNAVAILABLE: windows-setup codex <accountId>`), bringing up Windows' administrator
+   *  prompt once. The body is `{ ok, out }`: whether Codex's setup succeeded, and what it said. */
+  sandboxSetup(profileId: string, accountId: string): Promise<PluginsCallAnswer>
+  /** Whether each Codex account of the profile has its Windows sandbox set up, for Settings › Agent profiles (Task 8):
+   *  `{ accounts: [{ accountId, state }] }`, `state` ready, not-set-up or check-failed, in the profile's order. Codex is
+   *  asked the way a sandboxed start asks it, which never brings up the administrator prompt. 501 off Windows. */
+  sandboxReadiness(profileId: string): Promise<PluginsCallAnswer>
+}
+
+/** What Audit Logs asks for (observe mode design §8, §11): audit-list's and audit-summary's filters, the period's start,
+ *  and the next page's cursor as audit-list's `next` gives it. */
+export interface AuditQuery {
+  sessionId?: string
+  agentProfileId?: string
+  jobId?: string
+  runId?: string
+  decision?: AuditDecision
+  /** An action, or the start of one ending in `*`. */
+  action?: string
+  since?: string
+  until?: string
+  beforeId?: string
+}
+
+/** Settings › Security & Access and Run detail (observe mode design §11): the Host's `policies-*` and `audit-*`
+ *  commands, as the app, and its `runs-get` and `tasks-get` for the token totals, which only the Host's token store
+ *  answers (main's own command layer has none). A damaged rules file answers every read and change with CONFLICT;
+ *  `resetRules` is its repair. */
+export interface AuditApi {
+  policies(): Promise<PluginsCallAnswer>
+  setMode(mode: AuditMode): Promise<PluginsCallAnswer>
+  setOtherwise(otherwise: 'allow' | 'deny'): Promise<PluginsCallAnswer>
+  addRule(rule: Omit<AuditRule, 'id'>): Promise<PluginsCallAnswer>
+  /** `scope: null` clears it: the rule then applies wherever the call was. */
+  editRule(id: string, changes: { effect?: AuditRule['effect']; action?: string; scope?: AuditRule['scope'] | null }): Promise<PluginsCallAnswer>
+  removeRule(id: string): Promise<PluginsCallAnswer>
+  /** `to` is the rule's new place, counted from 0. */
+  moveRule(id: string, to: number): Promise<PluginsCallAnswer>
+  resetRules(): Promise<PluginsCallAnswer>
+  list(q: AuditQuery & { limit?: number }): Promise<PluginsCallAnswer>
+  summary(q: AuditQuery): Promise<PluginsCallAnswer>
+  runTokens(runId: string): Promise<PluginsCallAnswer>
+  taskTokens(taskId: string): Promise<PluginsCallAnswer>
+}
+
+/** What Audit Logs' credential uses view asks for (credentials design §7): its filters and the next page's cursor, the
+ *  last row's `at` and `id`. */
+export interface CredentialUsesQuery {
+  entryId?: string
+  provider?: 'mcp' | 'github'
+  sessionId?: string
+  until?: string
+  beforeId?: string
+  limit?: number
+}
+
+/** A hide-only entry as the screen writes it: names and presets, never a value. */
+export interface HideOnlyFields {
+  alias: string
+  envNames: string[]
+  presets: string[]
+  hide: Hiding
+}
+
+/** Settings › Security & Access › Credentials and Audit Logs' credential uses (credentials design §5, §7): the Host's
+ *  `credentials-*` commands, as the app, the only caller allowed to change the list. A damaged list answers with
+ *  CONFLICT and reason `damaged`; `reset` is its repair. */
+export interface CredentialsApi {
+  list(): Promise<PluginsCallAnswer>
+  uses(q: CredentialUsesQuery): Promise<PluginsCallAnswer>
+  addHideOnly(e: HideOnlyFields): Promise<PluginsCallAnswer>
+  editHideOnly(id: string, changes: Partial<HideOnlyFields>): Promise<PluginsCallAnswer>
+  deleteHideOnly(id: string): Promise<PluginsCallAnswer>
+  setHiding(id: string, hide: Hiding): Promise<PluginsCallAnswer>
+  reset(): Promise<PluginsCallAnswer>
+}
+
 export interface RemoteApi {
   list(): Promise<RemoteRuntimeInfo[]>
   /** Pairs from the string `astera runtime pair` printed on the Runtime. The token is kept in main, never returned. */
@@ -2081,6 +2227,12 @@ export type RendererApi = CoreApi & {
   remote: RemoteApi
   plugins: PluginsApi
   extensions: ExtensionsApi
+  /** Settings › Agent profiles and the profile pickers: the Host's agent profiles, as the app. */
+  agentProfiles: AgentProfilesApi
+  /** Settings › Security & Access and Run detail's token totals: the Host's observe rules, records and tokens, as the app. */
+  audit: AuditApi
+  /** Settings › Security & Access › Credentials and Audit Logs' credential uses: the Host's Credentials list, as the app. */
+  credentials: CredentialsApi
   /** The Jobs view's "+ From a source" (plugin Phase 4c): the Host's job sources, as the app. */
   sources: SourcesApi
   remoteSessions: RemoteSessionsApi

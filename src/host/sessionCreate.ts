@@ -28,21 +28,28 @@ import { ensureOnWindowsPath } from '../core/sessions/windowsPath'
 import { ensureInstallDirOnPath } from '../core/sessions/installDirPath'
 import { providerOf } from '../core/providers/meta'
 import { sourcesOf } from './sessions'
+import { profileSpawn } from '../core/agentProfiles/permission'
+import { forcedSandboxBlocker } from '../core/sandbox/unavailable'
 
 export function createHostSessionStarter(d: {
   /** Null for a Host started without the agent CLI paths: it starts no session. */
   spawner: Pick<HostSpawner, 'createSession'> | null
   /** Null when the Host has no chat manager (no spawner, so no rolling wiring). */
-  chats: Pick<HostChats, 'spawn' | 'started' | 'procOf'> | null
+  chats: Pick<HostChats, 'spawn' | 'started' | 'procOf'> & Partial<Pick<HostChats, 'prepare'>> | null
   rolling: Pick<HostRolling, 'adoptSpawned'> | null
   /** The profile's accounts, read now. Rejects on a damaged file (RepairNeeded). */
   readAccounts(): Promise<Account[]>
-  /** Resolves the account's shared extensions before a chat spawn (Agent Control Plane release 1); a terminal
-   *  session's own prepare does it. Never rejects. */
-  refreshCapabilities?(account: Account): Promise<void>
+  /** Resolves the account's shared extensions, with the session's agent profile, before a chat spawn (Agent Control
+   *  Plane release 1); a terminal session's own prepare does it. Never rejects. */
+  refreshCapabilities?(account: Account, agentProfileId?: string): Promise<void>
   /** Whether Astera's setting runs agents without permission checks, read now. Rejects on a damaged
    *  settings file, which may have said manual, so it is never read as the bypass. */
   bypass(): Promise<boolean>
+  /** Where the agent profiles are, for a chat session started from one (Agent Profiles design §5); absent, a chat
+   *  session's profile is not applied. A terminal session's is resolved by the spawner. */
+  profileDir?: string
+  /** Stamps a profile's use once a chat session started from it has started. Never fails or delays the start. */
+  touchAgentProfile?(id: string): void
   /** The session folder, probed off the Host's one thread and within the probe limit
    *  (core/sessions/pathProbe.ts); `timeout` refuses it as not reachable. */
   probeCwd(p: string): Promise<ProbeResult>
@@ -52,6 +59,9 @@ export function createHostSessionStarter(d: {
   list(): Promise<HostSession[]>
   /** The pty a terminal session runs in (registry `sessionPty`), for a row not listed yet. */
   ptyOf?(sessionId: string): string | null
+  /** Test seam: the platform a chat a sandboxed session asks for is judged on (forcedSandboxBlocker). Default: this
+   *  process's. */
+  platform?: NodeJS.Platform
   log(m: string): void
 }): (o: SessionCreate) => Promise<HostSession> {
   // A row not listed yet still names its pty or process, provider and sources, so a controller that just made the
@@ -74,6 +84,8 @@ export function createHostSessionStarter(d: {
       ...(ptyId ? { ptyId } : {}),
       ...(procId ? { procId } : {}),
       ...(provider ? { provider } : {}),
+      ...(info.agentProfileId !== undefined ? { agentProfileId: info.agentProfileId } : {}),
+      ...(info.sandboxed ? { sandboxed: true as const, ...(info.sandboxKind ? { sandboxKind: info.sandboxKind } : {}) } : {}),
       sources: sourcesOf(kind, provider)
     }
   }
@@ -91,7 +103,10 @@ export function createHostSessionStarter(d: {
       ...(o.title !== undefined ? { title: o.title } : {}),
       ...(o.prompt !== undefined ? { initialPrompt: o.prompt } : {}),
       rollAccountIds: o.rollAccountIds,
-      ...(o.startedBy ? { startedBy: o.startedBy } : {})
+      ...(o.startedBy ? { startedBy: o.startedBy } : {}),
+      ...(o.agentProfileId !== undefined ? { agentProfileId: o.agentProfileId } : {}),
+      // A sandboxed caller's session: in the sandbox whatever its profile says, or refused (final fix pass, C3)
+      ...(o.sandbox ? { sandbox: true as const } : {})
     })
     d.log(`sessions create: terminal session ${info.id} on ${o.accountId} in ${o.cwd}`)
     return rowOf(info, 'terminal')
@@ -103,6 +118,8 @@ export function createHostSessionStarter(d: {
     // Everything that can refuse comes before the spawn, so a refusal starts nothing.
     let account: Account
     let bypass: boolean
+    let profile: Awaited<ReturnType<typeof profileSpawn>> = null
+    let sandbox = false
     try {
       const accounts = await d.readAccounts()
       const found = accounts.find((a) => a.id === o.accountId)
@@ -112,11 +129,25 @@ export function createHostSessionStarter(d: {
       // win32: a CLI installed since this Host started, found on the Path Windows keeps (windowsPath.ts)
       await ensureOnWindowsPath([providerOf(account)])
       await ensureInstallDirOnPath([providerOf(account)]) // macOS and Linux: Claude Code installed since this process started (installDirPath.ts)
-      bypass = await d.bypass()
+      // The profile it names, as the spawner resolves a terminal session's: its id and its permission's bypass
+      if (d.profileDir !== undefined)
+        profile = await profileSpawn({ profileDir: d.profileDir, agentProfileId: o.agentProfileId, appWideYolo: d.bypass, log: d.log })
+      bypass = profile?.bypassPermissions ?? (await d.bypass())
+      // A sandboxed caller's chat starts in the sandbox whatever its profile says, and where its CLI has none it is
+      // refused before anything starts (final fix pass, C3)
+      if (o.sandbox === true) {
+        const refused = forcedSandboxBlocker(providerOf(account), d.platform ?? process.platform)
+        if (refused) throw refused
+      }
+      sandbox = profile?.sandbox === true || o.sandbox === true
+      // The profile's sandbox (sandbox design §6): the folder's git layout read for the spawn, and on Windows the account's
+      // Codex home asked whether it is set up (for Claude, its version asked and its settings written); a refusal
+      // (`SANDBOX_UNAVAILABLE: …`) starts nothing
+      if (sandbox) await chats.prepare?.({ account, cwd: o.cwd, sandbox: true })
     } catch (err) {
       throw err instanceof Error ? refusedBeforeActing(err) : err
     }
-    await d.refreshCapabilities?.(account)
+    await d.refreshCapabilities?.(account, profile?.agentProfileId)
     const info = chats.spawn({
       account,
       cwd: o.cwd,
@@ -126,11 +157,20 @@ export function createHostSessionStarter(d: {
       ...(o.rollAccountIds.length > 0 ? { rollAccountIds: o.rollAccountIds } : {}),
       unattendedPermission: o.unattended ?? 'hold',
       // Who started it, as the command decided (SessionCreate.startedBy): an agent's tab closes when it ends
-      ...(o.startedBy ? { startedBy: o.startedBy } : {})
+      ...(o.startedBy ? { startedBy: o.startedBy } : {}),
+      ...(profile ? { agentProfileId: profile.agentProfileId } : {}),
+      ...(sandbox ? { sandbox: true } : {})
     })
     // The handshake and the first prompt settle before anyone else may take the session.
     if (!(await chats.started(info.id)))
       throw new Error(`chat session ${info.id} did not finish starting, so it was ended`)
+    if (profile) {
+      try {
+        d.touchAgentProfile?.(profile.agentProfileId)
+      } catch (err) {
+        d.log(`agent profile ${profile.agentProfileId}: its use could not be stamped: ${String(err)}`)
+      }
+    }
     if (o.rollAccountIds.length > 0) d.rolling?.adoptSpawned(info, account)
     const procId = chats.procOf(info.id)
     if (procId !== null) d.announceProc(procId)

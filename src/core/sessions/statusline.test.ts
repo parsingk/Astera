@@ -2,10 +2,21 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { existsSync, promises as fs, watch } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import type { Account } from '../types'
-import { StatusLineManager, captureCommand } from './statusline'
+import { SANDBOX_SCOPES_KEPT, SANDBOX_TWINS_DIR, StatusLineManager, captureCommand, enforceCommand, enforceInterpreter, ENFORCE_HOOK_FILE, pruneSandboxTwins, type SandboxScope } from './statusline'
+import enforceHookSource from 'virtual:astera-enforce-hook'
+import { codexEnforceArgs } from './codexEnforce'
 import { dirIdentity } from '../files/watchedDir'
+import { createAttentionState } from './attention'
+import { hookEventState, latestEventLine } from '../hooks/sessionState'
+import { resolveAction } from '../audit/resolve'
+import { claudeSandboxSettings } from '../sandbox/claudeSettings'
+import { appKeyDenies, credentialStoreDenies, sensitiveLocations } from '../sandbox/locations'
+import { appKeyPath } from '../host/hostKey'
+import { npmCacheOf } from '../sandbox/codexProfile'
+import type { GitLayout } from '../sandbox/gitLayout'
 
 const account: Account = {
   id: 'a1', label: 't', configDir: path.join(os.tmpdir(), 'astera-none-config'), color: '#fff',
@@ -478,6 +489,258 @@ describe('StatusLineManager.useNode', () => {
   })
 })
 
+// Observe mode (observe mode design §4, §5): a session started while the mode is observe gets a PostToolUse hook for
+// every tool, `async` so no call waits on it; one started in compatibility gets exactly what it got before.
+describe('StatusLineManager observe mode', () => {
+  let dir: string
+  beforeEach(async () => { dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-sl-observe-')) })
+  afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }) })
+
+  const hookCmd = (): string => captureCommand('node', path.join(dir, 'astera-hook-capture.cjs'))
+  const auditCmd = (): string => captureCommand('node', path.join(dir, 'astera-hook-audit-capture.cjs'))
+  /** The two settings files as they were before observe mode, byte for byte. This literal passes against the code
+   *  before observe mode was added too, which is what makes it the proof that compatibility is unchanged. */
+  const before = (): { base: string; wider: string } => {
+    const hook = hookCmd()
+    const every = {
+      SessionStart: [{ hooks: [{ type: 'command', command: captureCommand('node', path.join(dir, 'astera-session-context.cjs')) }] }],
+      Notification: [{ hooks: [{ type: 'command', command: hook }] }],
+      Stop: [{ hooks: [{ type: 'command', command: hook }] }],
+      PreToolUse: [{ matcher: 'AskUserQuestion', hooks: [{ type: 'command', command: hook }] }],
+      PostToolUse: [{ matcher: 'AskUserQuestion', hooks: [{ type: 'command', command: hook }] }],
+      UserPromptSubmit: [{ hooks: [{ type: 'command', command: hook, async: true }] }],
+      StopFailure: [{ hooks: [{ type: 'command', command: hook, async: true }] }]
+    }
+    const settings = {
+      statusLine: { type: 'command', command: captureCommand('node', path.join(dir, 'astera-statusline-capture.cjs')), padding: 0 },
+      hooks: every
+    }
+    const tools = 'AskUserQuestion|Bash|PowerShell|Write|Edit|NotebookEdit'
+    const wider = {
+      ...settings,
+      hooks: {
+        ...every,
+        PreToolUse: [{ matcher: tools, hooks: [{ type: 'command', command: hook }] }],
+        PostToolUse: [{ matcher: tools, hooks: [{ type: 'command', command: hook }] }]
+      }
+    }
+    return { base: JSON.stringify(settings, null, 2), wider: JSON.stringify(wider, null, 2) }
+  }
+  const read = (file: string): Promise<string> => fs.readFile(file.replace(/\//g, path.sep), 'utf8')
+
+  it('in compatibility the settings files and the files a session is pointed at are what they were, and nothing else is written', async () => {
+    const mgr = new StatusLineManager(dir)
+    await mgr.init()
+    const plain = mgr.spawnConfig('s1', account, { toolHooks: false })
+    const tools = mgr.spawnConfig('s2', account, { toolHooks: true })
+    expect(await read(plain.settingsFile)).toBe(before().base)
+    expect(await read(tools.settingsFile)).toBe(before().wider)
+    expect(plain.settingsFile).toBe(path.join(dir, 'astera-statusline-settings.json').replace(/\\/g, '/'))
+    expect(tools.settingsFile).toBe(path.join(dir, 'astera-hooks-settings.json').replace(/\\/g, '/'))
+    expect((await fs.readdir(dir)).filter((f) => /observe|audit/.test(f))).toEqual([])
+    expect(plain).not.toHaveProperty('observed')
+  })
+
+  it('observe points the session at a file with async PostToolUse and PostToolUseFailure hooks for every tool, through the audit capture', async () => {
+    const mgr = new StatusLineManager(dir)
+    await mgr.init()
+    await mgr.ensureObserveFiles()
+    const audit = { matcher: '*', hooks: [{ type: 'command', command: auditCmd(), async: true }] }
+    for (const [toolHooks, was] of [[false, before().base], [true, before().wider]] as const) {
+      const c = mgr.spawnConfig('s1', account, { toolHooks, observe: true })
+      const plain = mgr.spawnConfig('s1', account, { toolHooks })
+      expect(c.settingsFile).not.toBe(plain.settingsFile)
+      expect(c.observed).toBe(true)
+      const expected = JSON.parse(was)
+      expected.hooks.PostToolUse.push(audit)
+      expected.hooks.PostToolUseFailure = [audit]
+      expect(JSON.parse(await read(c.settingsFile))).toEqual(expected)
+      // The compatibility file is left as it was
+      expect(await read(plain.settingsFile)).toBe(was)
+      expect(c.hookOutPath).toBe(plain.hookOutPath)
+    }
+  })
+
+  it('a session asked to be observed before its files are written gets the plain file, and is not marked observed', () => {
+    const mgr = new StatusLineManager(dir)
+    const c = mgr.spawnConfig('s1', account, { observe: true })
+    expect(c.settingsFile).toBe(mgr.spawnConfig('s1', account).settingsFile)
+    expect(c).not.toHaveProperty('observed')
+  })
+
+  /** Runs one capture script the way Claude Code runs a hook: the payload on stdin, ASTERA_HOOK_OUT set. */
+  const runCapture = async (script: string, out: string, payload: unknown): Promise<void> => {
+    const child = spawn(process.execPath, [script], { env: { ...process.env, ASTERA_HOOK_OUT: out }, stdio: ['pipe', 'ignore', 'ignore'] })
+    const closed = new Promise((r) => child.on('close', r))
+    child.stdin.end(JSON.stringify(payload))
+    await closed
+  }
+  const lines = async (file: string): Promise<Array<Record<string, unknown>>> =>
+    (await fs.readFile(file, 'utf8').catch(() => '')).split('\n').filter((l) => l !== '').map((l) => JSON.parse(l))
+
+  it('the audit capture writes beside the session’s file, keeping what names the call and none of its output', async () => {
+    const mgr = new StatusLineManager(dir)
+    await mgr.init()
+    await mgr.ensureObserveFiles()
+    const out = path.join(mgr.hookEventsDir, 's1.jsonl')
+    const script = path.join(dir, 'astera-hook-audit-capture.cjs')
+    await runCapture(script, out, {
+      session_id: 'c', transcript_path: '/t', cwd: '/w', hook_event_name: 'PostToolUse', tool_name: 'Read',
+      tool_input: { file_path: 'a.ts' }, tool_response: { file: { content: 'secret body' } }, tool_use_id: 'toolu_1', duration_ms: 3
+    })
+    await runCapture(script, out, {
+      hook_event_name: 'PostToolUseFailure', tool_name: 'Bash', tool_input: { command: 'git push' }, tool_use_id: 'toolu_2',
+      error: 'secret output', is_interrupt: true, duration_ms: 9
+    })
+    const got = await lines(path.join(mgr.hookEventsDir, 's1.audit.jsonl'))
+    expect(got.map(({ astera_at, ...rest }) => (expect(typeof astera_at).toBe('number'), rest))).toEqual([
+      { hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: 'a.ts' }, tool_use_id: 'toolu_1', cwd: '/w' },
+      { hook_event_name: 'PostToolUseFailure', tool_name: 'Bash', tool_input: { command: 'git push' }, tool_use_id: 'toolu_2', is_interrupt: true }
+    ])
+    expect(await fs.readFile(path.join(mgr.hookEventsDir, 's1.audit.jsonl'), 'utf8')).not.toContain('secret')
+    expect(existsSync(out)).toBe(false)
+  })
+
+  // Final review M1: of a tool's input the capture keeps only the fields the resolver reads, so a Write's contents or an
+  // Edit's strings never wait on disk until the app's next start
+  it('the audit capture keeps of a tool’s input only what the resolver reads, which resolves the same', async () => {
+    const mgr = new StatusLineManager(dir)
+    await mgr.init()
+    await mgr.ensureObserveFiles()
+    const out = path.join(mgr.hookEventsDir, 's2.jsonl')
+    const script = path.join(dir, 'astera-hook-audit-capture.cjs')
+    const inputs: Array<[string, Record<string, unknown>]> = [
+      ['Write', { file_path: '/w/a.ts', content: 'secret body' }],
+      ['Edit', { file_path: '/w/a.ts', old_string: 'secret old', new_string: 'secret new', replace_all: true }],
+      ['NotebookEdit', { notebook_path: '/w/n.ipynb', new_source: 'secret cell', cell_id: 'c1' }],
+      ['Bash', { command: 'git push', description: 'secret words', timeout: 5000, run_in_background: true }],
+      ['Grep', { pattern: 'secret', path: 'src', glob: '*.ts', output_mode: 'content' }],
+      ['Glob', { pattern: '/w/src/**/*.ts' }],
+      ['WebFetch', { url: 'https://example.com/x', prompt: 'secret prompt' }],
+      ['Agent', { description: 'd', prompt: 'secret task' }],
+      ['mcp__github__create_issue', { title: 'secret title', body: 'b' }]
+    ]
+    for (const [tool, input] of inputs) await runCapture(script, out, { hook_event_name: 'PostToolUse', tool_name: tool, tool_input: input, tool_use_id: tool })
+    const got = await lines(path.join(mgr.hookEventsDir, 's2.audit.jsonl'))
+    expect(got.map((l) => l.tool_input)).toEqual([
+      { file_path: '/w/a.ts' },
+      { file_path: '/w/a.ts' },
+      { notebook_path: '/w/n.ipynb' },
+      { command: 'git push' },
+      { pattern: 'secret', path: 'src' },
+      { pattern: '/w/src/**/*.ts' },
+      { url: 'https://example.com/x' },
+      {},
+      {}
+    ])
+    for (const [i, [tool, input]] of inputs.entries())
+      expect(resolveAction({ provider: 'claude', tool, input: got[i].tool_input, cwd: '/w' }), tool).toEqual(resolveAction({ provider: 'claude', tool, input, cwd: '/w' }))
+    // Grep's pattern is the one field kept that may be a person's words; it names no file and is never recorded
+    expect(JSON.stringify(got.map((l) => ({ ...(l.tool_input as object), pattern: undefined })))).not.toContain('secret')
+  })
+
+  // The review's I2: the session's own hook file is what attention, sessions list, Slack and pendingPrompt read. Fired
+  // the way Claude Code fires hooks, an observed session's settings write that file line for line as a plain session's
+  // do, so its state and attention are the same; the observe lines go to the audit file only.
+  it('an observed session’s own hook file, state and attention are a plain session’s for the same tool events', async () => {
+    const mgr = new StatusLineManager(dir)
+    await mgr.init()
+    await mgr.ensureObserveFiles()
+    const scripts = new Map([
+      [hookCmd(), path.join(dir, 'astera-hook-capture.cjs')],
+      [auditCmd(), path.join(dir, 'astera-hook-audit-capture.cjs')]
+    ])
+    const tool = (event: string, name: string, id: string, extra: Record<string, unknown> = {}) => ({
+      hook_event_name: event, tool_name: name, tool_input: {}, tool_use_id: id, ...extra
+    })
+    const events = [
+      { hook_event_name: 'UserPromptSubmit', prompt: 'x' },
+      tool('PreToolUse', 'Bash', 'b1'),
+      tool('PostToolUse', 'Bash', 'b1', { tool_response: { stdout: '' } }),
+      tool('PreToolUse', 'Write', 'w1'),
+      { hook_event_name: 'Notification', notification_type: 'permission_prompt', message: 'Claude needs your permission' },
+      // A subagent's Read while the permission prompt is up
+      tool('PostToolUse', 'Read', 'r1', { tool_response: {} }),
+      tool('PostToolUseFailure', 'Grep', 'g1', { error: 'x' })
+    ]
+    /** Claude Code's dispatch, as far as these files need it: every entry whose matcher takes the tool, in order. */
+    const fire = async (settingsFile: string, out: string): Promise<void> => {
+      const hooks = JSON.parse(await read(settingsFile)).hooks as Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>
+      for (const e of events) {
+        const name = (e as { tool_name?: string }).tool_name
+        for (const entry of hooks[e.hook_event_name] ?? []) {
+          const m = entry.matcher
+          if (m !== undefined && m !== '' && m !== '*' && !(name !== undefined && m.split('|').includes(name))) continue
+          for (const h of entry.hooks) await runCapture(scripts.get(h.command)!, out, e)
+        }
+      }
+    }
+    for (const toolHooks of [false, true]) {
+      const plainOut = path.join(mgr.hookEventsDir, `plain-${toolHooks}.jsonl`)
+      const observedOut = path.join(mgr.hookEventsDir, `observed-${toolHooks}.jsonl`)
+      await fire(mgr.spawnConfig('p', account, { toolHooks }).settingsFile, plainOut)
+      await fire(mgr.spawnConfig('o', account, { toolHooks, observe: true }).settingsFile, observedOut)
+      const plain = await lines(plainOut)
+      const observed = await lines(observedOut)
+      const unstamped = (l: Array<Record<string, unknown>>) => l.map(({ astera_at: _, ...rest }) => rest)
+      expect(unstamped(observed)).toEqual(unstamped(plain))
+      const attentionOf = (l: Array<Record<string, unknown>>) => {
+        const a = createAttentionState()
+        for (const p of l) a.onHookEvent('s', p)
+        return a.get('s')
+      }
+      expect(attentionOf(observed)).toBe(attentionOf(plain))
+      const stateOf = (file: string) => fs.readFile(file, 'utf8').then((t) => hookEventState(JSON.parse(latestEventLine(t.split('\n').filter((x) => x !== ''))!)))
+      expect(await stateOf(observedOut)).toBe(await stateOf(plainOut))
+      // The observe lines: every tool call that ran or failed, in the audit file only
+      expect((await lines(path.join(mgr.hookEventsDir, `observed-${toolHooks}.audit.jsonl`))).map((l) => [l.hook_event_name, l.tool_name])).toEqual([
+        ['PostToolUse', 'Bash'],
+        ['PostToolUse', 'Read'],
+        ['PostToolUseFailure', 'Grep']
+      ])
+      expect(existsSync(path.join(mgr.hookEventsDir, `plain-${toolHooks}.audit.jsonl`))).toBe(false)
+    }
+  }, 60_000)
+
+  it('the app’s start empties the audit files with the session files', async () => {
+    const mgr = new StatusLineManager(dir)
+    await mgr.init()
+    await fs.writeFile(path.join(mgr.hookEventsDir, 's1.audit.jsonl'), '{}\n')
+    await fs.writeFile(path.join(mgr.hookEventsDir, 's1.jsonl'), '{}\n')
+    await mgr.startupCleanup()
+    expect(await fs.readdir(mgr.hookEventsDir)).toEqual([])
+  })
+
+  it('an observe file that could not be written leaves the session on the plain file', async () => {
+    const mgr = new StatusLineManager(dir)
+    await mgr.init()
+    const write = fs.writeFile
+    const spy = vi.spyOn(fs, 'writeFile').mockImplementation((file, ...rest) =>
+      String(file).includes('observe') ? Promise.reject(new Error('EACCES')) : write(file, ...(rest as [string]))
+    )
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await mgr.ensureObserveFiles()
+    } finally {
+      spy.mockRestore()
+      warn.mockRestore()
+    }
+    expect(mgr.spawnConfig('s1', account, { observe: true }).settingsFile).toBe(mgr.spawnConfig('s1', account).settingsFile)
+  })
+
+  it('writes the observe files again with the node it runs under now', async () => {
+    const mgr = new StatusLineManager(dir)
+    await mgr.init()
+    await mgr.ensureObserveFiles()
+    const node = 'C:\\rt\\astera-host.exe'
+    await mgr.useNode(node)
+    await mgr.ensureObserveFiles()
+    const s = JSON.parse(await read(mgr.spawnConfig('s1', account, { observe: true }).settingsFile))
+    expect(s.hooks.PostToolUse.at(-1).hooks[0].command).toBe(captureCommand(node, path.join(dir, 'astera-hook-audit-capture.cjs')))
+    expect(s.hooks.Stop[0].hooks[0].command).toBe(captureCommand(node, path.join(dir, 'astera-hook-capture.cjs')))
+  })
+})
+
 // The measurement itself, kept: every command the settings carry, run the way Claude Code runs it,
 // from a profile folder with a space and Hangul in it and under the node running this test (on a
 // stock install that is C:\Program Files\nodejs, a space of its own).
@@ -520,4 +783,472 @@ describe.runIf(process.platform === 'win32')('captureCommand through the shells 
       expect(JSON.parse(await fs.readFile(out, 'utf8'))).toMatchObject({ x: '한글' })
     }, 30_000)
   }
+})
+
+// Enforce (enforce design §5, E1, E5): a session started in Enforce runs the blocking hook before every tool call, with
+// Astera's own node; an Off or Observe session's files are what they were
+describe('StatusLineManager enforce mode', () => {
+  let dir: string
+  beforeEach(async () => { dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-sl-enforce-')) })
+  afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }) })
+  const read = (file: string): Promise<string> => fs.readFile(file.replace(/\//g, path.sep), 'utf8')
+
+  it('finds Astera’s own node: the Host runtime on Windows, Electron as node elsewhere, none on Windows without the runtime', () => {
+    expect(enforceInterpreter({ platform: 'win32', captureNode: 'C:\\rt\\astera-host.exe', execPath: 'C:/x/electron.exe' })).toEqual({ file: 'C:\\rt\\astera-host.exe' })
+    expect(enforceInterpreter({ platform: 'win32', captureNode: 'node', execPath: 'C:/x/electron.exe' })).toBeNull()
+    expect(enforceInterpreter({ platform: 'linux', captureNode: '/usr/bin/node', execPath: '/opt/astera/astera' })).toEqual({ file: '/opt/astera/astera', env: 'ELECTRON_RUN_AS_NODE=1' })
+    expect(enforceCommand({ file: '/opt/astera/astera', env: 'ELECTRON_RUN_AS_NODE=1' }, '/p/astera-enforce-hook.cjs', 'claude')).toBe(
+      'ELECTRON_RUN_AS_NODE=1 "/opt/astera/astera" "/p/astera-enforce-hook.cjs" claude'
+    )
+    // Both CLIs run a hook's line in a shell that reads captureCommand's form: Claude Code in Git Bash or PowerShell,
+    // Codex in its own session shell, PowerShell on Windows (codex-rs core/src/session/mod.rs build_hooks_config,
+    // shell-command/src/shell_detect.rs, rust-v0.160.0). The quoted form fails there (measured 2026-10-27).
+    expect(enforceCommand({ file: 'C:/rt/astera-host.exe' }, 'C:/p/astera-enforce-hook.cjs', 'claude')).toBe("C:'/rt/astera-host.exe' 'C:/p/astera-enforce-hook.cjs' claude")
+    expect(enforceCommand({ file: 'C:\\rt\\astera-host.exe' }, 'C:\\p\\astera-enforce-hook.cjs', 'codex')).toBe("C:'/rt/astera-host.exe' 'C:/p/astera-enforce-hook.cjs' codex")
+    expect(enforceCommand({ file: '/opt/astera/astera', env: 'ELECTRON_RUN_AS_NODE=1' }, '/p/astera-enforce-hook.cjs', 'codex')).toBe(
+      'ELECTRON_RUN_AS_NODE=1 "/opt/astera/astera" "/p/astera-enforce-hook.cjs" codex'
+    )
+  })
+
+  it('runs an AppImage’s hook through the AppImage file, not its mount, which is gone once the app quits', () => {
+    const i = enforceInterpreter({ platform: 'linux', captureNode: 'node', execPath: '/tmp/.mount_AsterX/astera', appImage: '/home/u/Astera.AppImage' })
+    expect(i).toEqual({ file: '/home/u/Astera.AppImage', env: 'ELECTRON_RUN_AS_NODE=1', tail: '--no-sandbox' })
+    // After the provider, so the hook still reads it as argv[2]; there, AppRun sees one and adds none in front (shuttle.ts)
+    expect(enforceCommand(i!, '/p/astera-enforce-hook.cjs', 'claude')).toBe(
+      'ELECTRON_RUN_AS_NODE=1 "/home/u/Astera.AppImage" "/p/astera-enforce-hook.cjs" claude --no-sandbox'
+    )
+    expect(enforceInterpreter({ platform: 'darwin', captureNode: 'node', execPath: '/Applications/Astera.app/Contents/MacOS/Astera', appImage: '' })).toEqual({
+      file: '/Applications/Astera.app/Contents/MacOS/Astera',
+      env: 'ELECTRON_RUN_AS_NODE=1'
+    })
+    // Final review M9: a macOS app run where it was downloaded is translocated to a path that goes with it
+    expect(
+      enforceInterpreter({ platform: 'darwin', captureNode: 'node', execPath: '/private/var/folders/x/T/AppTranslocation/1A2B/d/Astera.app/Contents/MacOS/Astera' })
+    ).toBeNull()
+  })
+
+  it('writes the enforce hook and settings with a synchronous PreToolUse for every tool', async () => {
+    const mgr = new StatusLineManager(dir, 'node', () => {}, { platform: 'linux', execPath: '/opt/astera/astera' })
+    await mgr.init()
+    expect(await mgr.ensureEnforceFiles()).toBe('ok')
+    expect(await fs.readFile(path.join(dir, ENFORCE_HOOK_FILE), 'utf8')).toBe(enforceHookSource)
+    const pre = { matcher: '*', hooks: [{ type: 'command', command: `ELECTRON_RUN_AS_NODE=1 "/opt/astera/astera" "${path.join(dir, ENFORCE_HOOK_FILE).replace(/\\/g, '/')}" claude`, timeout: 10 }] }
+    for (const toolHooks of [false, true]) {
+      const c = mgr.spawnConfig('s1', account, { toolHooks, observe: true, enforce: true })
+      const observed = mgr.spawnConfig('s1', account, { toolHooks, observe: true })
+      expect(c).toMatchObject({ observed: true, enforced: true })
+      expect(c.settingsFile).not.toBe(observed.settingsFile)
+      const expected = JSON.parse(await read(observed.settingsFile))
+      expected.hooks.PreToolUse.push(pre)
+      // Final review C2, measured 2026-10-27: a project's `.claude/settings.local.json` with "disableAllHooks": true
+      // turned the hook off; this file is --settings, above project, local and user settings, and turns it back on
+      expected.disableAllHooks = false
+      expect(JSON.parse(await read(c.settingsFile))).toEqual(expected)
+    }
+    // A chat session takes only the blocking hook, through --settings
+    const args = mgr.enforceChatArgs()
+    expect(args?.[0]).toBe('--settings')
+    expect(JSON.parse(await read(args![1]))).toEqual({ disableAllHooks: false, hooks: { PreToolUse: [pre] } })
+    // A Codex session takes the same hook, for codex, through -c
+    expect(mgr.enforceCodexArgs()).toEqual(
+      codexEnforceArgs({ command: `ELECTRON_RUN_AS_NODE=1 "/opt/astera/astera" "${path.join(dir, ENFORCE_HOOK_FILE).replace(/\\/g, '/')}" codex`, platform: 'linux' })
+    )
+  })
+
+  // Final review M2: a file that could not be written is not a missing interpreter
+  it('says the hook could not be written when its files cannot be', async () => {
+    const mgr = new StatusLineManager(dir, 'node', () => {}, { platform: 'linux', execPath: '/opt/astera/astera' })
+    await mgr.init()
+    // A folder where the settings file goes: neither the swap nor the write in place can put a file there
+    await fs.mkdir(path.join(dir, 'astera-enforce-settings.json'))
+    expect(await mgr.ensureEnforceFiles()).toBe('hook-write-failed')
+    expect(mgr.enforceChatArgs()).toBeNull()
+  })
+
+  it('leaves the off and observe settings byte for byte as they were', async () => {
+    const mgr = new StatusLineManager(dir, 'node', () => {}, { platform: 'linux', execPath: '/opt/astera/astera' })
+    await mgr.init()
+    await mgr.ensureObserveFiles()
+    const files = [false, true].flatMap((toolHooks) => [mgr.spawnConfig('s', account, { toolHooks }).settingsFile, mgr.spawnConfig('s', account, { toolHooks, observe: true }).settingsFile])
+    const was = await Promise.all(files.map(read))
+    await mgr.ensureEnforceFiles()
+    expect(await Promise.all(files.map(read))).toEqual(was)
+  })
+
+  it('runs the hook with a Host runtime Astera installed when the capture scripts have no node of Astera’s', async () => {
+    const mgr = new StatusLineManager(dir, 'node', () => {}, { platform: 'win32', execPath: 'C:/x/electron.exe', findRuntime: async () => 'C:\\rt\\astera-host.exe' })
+    await mgr.init()
+    expect(await mgr.ensureEnforceFiles()).toBe('ok')
+    expect(mgr.enforceHookCommand('claude')).toBe(`C:'/rt/astera-host.exe' '${path.join(dir, ENFORCE_HOOK_FILE).replace(/\\/g, '/')}' claude`)
+    // The capture scripts keep their own node, so an Off or Observe session's settings are as they were
+    const plain = JSON.parse(await read(mgr.spawnConfig('s', account).settingsFile))
+    expect(JSON.stringify(plain)).not.toContain('astera-host.exe')
+  })
+
+  it('has no interpreter on Windows without the Host runtime, so a session asked to enforce is not marked enforced', async () => {
+    const mgr = new StatusLineManager(dir, 'node', () => {}, { platform: 'win32', execPath: 'C:/x/electron.exe' })
+    await mgr.init()
+    expect(await mgr.ensureEnforceFiles()).toBe('no-interpreter')
+    expect(mgr.spawnConfig('s1', account, { observe: true, enforce: true })).not.toHaveProperty('enforced')
+    expect(mgr.enforceChatArgs()).toBeNull()
+    expect(mgr.enforceCodexArgs()).toBeNull()
+  })
+})
+
+// The sandbox (sandbox design §6): a sandboxed Claude session reads its scope's twin of the file it would read anyway, the
+// same JSON with Claude's sandbox and the deny rules added (claudeSandboxSettings), so a session without it reads exactly
+// the bytes it always did. A scope is the session folder's git layout and the environment the session is built from
+// (final fix pass, C1 and minor 2): its twins are its own, beside nobody else's.
+describe('StatusLineManager sandbox', () => {
+  let dir: string
+  beforeEach(async () => { dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-sl-sandbox-')) })
+  afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }) })
+  const read = (file: string): Promise<string> => fs.readFile(file.replace(/\//g, path.sep), 'utf8')
+  const HOME = { linux: '/home/t', darwin: '/Users/t', win32: 'C:\\Users\\t' } as const
+  const ENV = {
+    linux: { DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1000/bus' },
+    darwin: {},
+    win32: { APPDATA: 'C:\\Users\\t\\AppData\\Roaming' }
+  } as const
+  const TMP = { linux: '/tmp', darwin: '/var/folders/x/T', win32: 'C:\\Users\\t\\AppData\\Local\\Temp' } as const
+  const WT: GitLayout = {
+    cwd: '/w/wt', top: '/w/wt', gitDir: '/m/.git/worktrees/wt', commonDir: '/m/.git', worktree: true,
+    worktreeConfigs: ['/m/.git/worktrees/wt/config.worktree', '/m/.git/config.worktree'],
+    gitFiles: ['/m/.git/worktrees/wt/commondir', '/m/.git/commondir', '/m/.git/modules']
+  }
+  /** The scope a start in `layout` (a worktree unless said) prepares, with the platform's session environment. */
+  const scopeOn = (platform: 'linux' | 'darwin' | 'win32', layout: GitLayout | null = WT, env: Record<string, string> = { ...ENV[platform] }): SandboxScope => ({ layout, env })
+  const managerOn = (platform: 'linux' | 'darwin' | 'win32') =>
+    new StatusLineManager(dir, 'node', () => {}, {
+      platform,
+      execPath: platform === 'win32' ? 'C:/x/electron.exe' : '/opt/astera/astera',
+      ...(platform === 'win32' ? { findRuntime: async () => 'C:\\rt\\astera-host.exe' } : {}),
+      homeDir: HOME[platform],
+      tmpDir: TMP[platform]
+    })
+  /** What the builder gives for this OS and scope, under the manager's home, with the app key of its profile (sandbox
+   *  follow-ups, item 1). */
+  const builder = (platform: 'linux' | 'darwin' | 'win32', scope: SandboxScope = scopeOn(platform)) => {
+    const denied = [...sensitiveLocations(platform, scope.env, HOME[platform]), ...credentialStoreDenies(platform, scope.env, HOME[platform]), ...appKeyDenies(appKeyPath(dir))]
+    return claudeSandboxSettings({ platform, denied, npmCache: npmCacheOf(TMP[platform]), layout: scope.layout })
+  }
+  /** The scope's twins folder a twin is in: sandbox-settings/<hash>. */
+  const folderOf = (file: string): string => path.dirname(file.replace(/\//g, path.sep))
+  const VARIANTS = [{}, { observe: true }, { observe: true, enforce: true }].flatMap((o) => [false, true].map((toolHooks) => ({ ...o, toolHooks })))
+
+  it('every variant has a sandbox twin that differs only by sandbox and deny rules', async () => {
+    const mgr = managerOn('linux')
+    await mgr.init()
+    expect(await mgr.ensureEnforceFiles()).toBe('ok')
+    const scope = scopeOn('linux')
+    expect(await mgr.ensureSandboxFiles(scope)).toBe('ok')
+    const want = builder('linux')
+    expect(want.sandbox).toBeDefined()
+    expect(want.sandbox?.filesystem.denyWrite).toContain('/m/.git/commondir')
+    expect(want.permissions.deny).toContain('Read(//home/t/.ssh/**)')
+    const twins = new Set<string>()
+    for (const o of VARIANTS) {
+      const plain = mgr.spawnConfig('s1', account, o)
+      const boxed = mgr.spawnConfig('s1', account, { ...o, sandbox: scope })
+      expect(plain, JSON.stringify(o)).not.toHaveProperty('sandboxed')
+      expect(boxed).toMatchObject({ sandboxed: true, outPath: plain.outPath, hookOutPath: plain.hookOutPath })
+      expect(boxed.observed).toBe(plain.observed)
+      expect(boxed.enforced).toBe(plain.enforced)
+      // In the scope's own folder, named for the file it is a twin of
+      expect(path.basename(boxed.settingsFile)).toBe(path.basename(plain.settingsFile).replace(/\.json$/, '-sandbox.json'))
+      expect(path.relative(dir, folderOf(boxed.settingsFile))).toMatch(/^sandbox-settings[\\/][0-9a-f]{16}$/)
+      twins.add(boxed.settingsFile)
+      const a = JSON.parse(await read(plain.settingsFile))
+      const b = JSON.parse(await read(boxed.settingsFile))
+      expect(b.sandbox).toEqual(want.sandbox)
+      expect(b.permissions).toEqual({ deny: want.permissions.deny })
+      delete b.sandbox
+      delete b.permissions
+      expect(b).toEqual(a)
+    }
+    // Six files, in one folder: plain, hooks, observe, observe hooks, enforce, enforce hooks
+    expect(twins.size).toBe(6)
+    expect(new Set([...twins].map(folderOf)).size).toBe(1)
+    // A chat takes only the sandbox, with nothing of the terminal's hooks, from the same folder
+    const chat = mgr.sandboxChatArgs(false, scope)
+    expect(chat?.[0]).toBe('--settings')
+    expect(path.basename(chat![1])).toBe('astera-sandbox-chat-settings.json')
+    expect(folderOf(chat![1])).toBe(folderOf([...twins][0]))
+    expect(JSON.parse(await read(chat![1]))).toEqual({ sandbox: want.sandbox, permissions: { deny: want.permissions.deny } })
+  })
+
+  // Sandbox follow-ups, item 1: the app's key lets a process be the app to the Host, so a twin denies it, Claude's sandbox
+  // reads and its Read rules alike (on Windows the rules alone); the Host key beside it stays readable
+  it('denies the app key of its profile, and not the Host key', async () => {
+    for (const platform of ['linux', 'win32'] as const) {
+      const mgr = managerOn(platform)
+      await mgr.init()
+      const scope = scopeOn(platform)
+      expect(await mgr.ensureSandboxFiles(scope)).toBe('ok')
+      const twin = JSON.parse(await read(mgr.spawnConfig('s1', account, { sandbox: scope }).settingsFile))
+      const key = appKeyPath(dir).replace(/\\/g, '/')
+      const drive = /^([A-Za-z]):(\/.*)$/.exec(key)
+      const rule = drive ? `/${drive[1].toLowerCase()}${drive[2]}` : key
+      expect(twin.permissions.deny, platform).toContain(`Read(/${rule})`)
+      expect(JSON.stringify(twin), platform).not.toContain('host.key')
+      if (platform === 'linux') expect(twin.sandbox.filesystem.denyRead).toContain(key)
+    }
+  })
+
+  // Final fix pass (C1, minor 2): a twin keeps its own repository's git files from being written and denies the places
+  // its own environment names, so two scopes never share a file, and one prepared scope is no other's
+  it('gives each scope its own twins, from its own layout and environment, and none to a scope not prepared', async () => {
+    const mgr = managerOn('linux')
+    await mgr.init()
+    const wt = scopeOn('linux')
+    const repo = scopeOn('linux', { ...WT, cwd: '/r', top: '/r', gitDir: '/r/.git', commonDir: '/r/.git', worktree: false, worktreeConfigs: ['/r/.git/config.worktree'], gitFiles: ['/r/.git/commondir', '/r/.git/modules'] })
+    const otherBus = scopeOn('linux', WT, { DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/2000/bus' })
+    expect(await mgr.ensureSandboxFiles(wt)).toBe('ok')
+    // Not prepared yet: the session is not marked, and its manager refuses it
+    expect(mgr.spawnConfig('s1', account, { sandbox: repo })).not.toHaveProperty('sandboxed')
+    expect(mgr.sandboxChatArgs(false, repo)).toBeNull()
+    expect(await mgr.ensureSandboxFiles(repo)).toBe('ok')
+    expect(await mgr.ensureSandboxFiles(otherBus)).toBe('ok')
+    const files = [wt, repo, otherBus].map((s) => mgr.spawnConfig('s1', account, { sandbox: s }).settingsFile)
+    expect(new Set(files.map(folderOf)).size).toBe(3)
+    const [a, b, c] = await Promise.all(files.map(async (f) => JSON.parse(await read(f))))
+    expect(a.sandbox.filesystem.denyWrite).toEqual(builder('linux', wt).sandbox?.filesystem.denyWrite)
+    expect(a.sandbox.filesystem.denyWrite).toContain('/w/wt/.git')
+    expect(b.sandbox.filesystem.denyWrite).toEqual(['/r/.git/commondir', '/r/.git/modules', '/r/.git/hooks', '/r/.git/config', '/r/.git/config.worktree'])
+    expect(a.permissions.deny).toContain('Read(//run/user/1000/bus)')
+    expect(c.permissions.deny).toContain('Read(//run/user/2000/bus)')
+    expect(c.permissions.deny).not.toContain('Read(//run/user/1000/bus)')
+    // The same scope again, from another start in the same folder, is the same file
+    expect(mgr.spawnConfig('s2', account, { sandbox: scopeOn('linux') }).settingsFile).toBe(files[0])
+  })
+
+  it(`keeps the last ${SANDBOX_SCOPES_KEPT} scopes up to date, and writes an older one again at its next prepare`, async () => {
+    const mgr = managerOn('linux')
+    await mgr.init()
+    const scopes = Array.from({ length: SANDBOX_SCOPES_KEPT + 1 }, (_, i) => scopeOn('linux', { ...WT, cwd: `/w/wt${i}`, top: `/w/wt${i}` }))
+    for (const s of scopes) expect(await mgr.ensureSandboxFiles(s)).toBe('ok')
+    expect(mgr.spawnConfig('s1', account, { sandbox: scopes[0] })).not.toHaveProperty('sandboxed')
+    expect(mgr.spawnConfig('s1', account, { sandbox: scopes[1] }).sandboxed).toBe(true)
+    expect(await mgr.ensureSandboxFiles(scopes[0])).toBe('ok')
+    expect(mgr.spawnConfig('s1', account, { sandbox: scopes[0] }).sandboxed).toBe(true)
+    expect(mgr.spawnConfig('s1', account, { sandbox: scopes[1] })).not.toHaveProperty('sandboxed')
+  })
+
+  it('an unsandboxed session’s settings file is today’s, at the same path with the same bytes', async () => {
+    const mgr = managerOn('linux')
+    await mgr.init()
+    await mgr.ensureEnforceFiles()
+    const files = VARIANTS.map((o) => mgr.spawnConfig('s1', account, o).settingsFile)
+    expect(files.map((f) => path.basename(f))).toEqual([
+      'astera-statusline-settings.json',
+      'astera-hooks-settings.json',
+      'astera-observe-settings.json',
+      'astera-observe-hooks-settings.json',
+      'astera-enforce-settings.json',
+      'astera-enforce-hooks-settings.json'
+    ])
+    const was = await Promise.all(files.map(read))
+    const chatWas = mgr.enforceChatArgs()
+    const chatBytes = await read(chatWas![1])
+    expect(await mgr.ensureSandboxFiles(scopeOn('linux'))).toBe('ok')
+    for (const sandbox of [undefined]) {
+      const now = VARIANTS.map((o) => mgr.spawnConfig('s1', account, { ...o, ...(sandbox === undefined ? {} : { sandbox }) }))
+      expect(now.map((c) => c.settingsFile)).toEqual(files)
+      for (const c of now) expect(c).not.toHaveProperty('sandboxed')
+    }
+    expect(await Promise.all(files.map(read))).toEqual(was)
+    expect(mgr.enforceChatArgs()).toEqual(chatWas)
+    expect(await read(chatWas![1])).toBe(chatBytes)
+  })
+
+  it('Enforce and sandbox together: one file with both', async () => {
+    const mgr = managerOn('linux')
+    await mgr.init()
+    const scope = scopeOn('linux')
+    // Asked for in either order (a Host chat prepares the sandbox before its capabilities refresh writes Enforce's files)
+    expect(await mgr.ensureSandboxFiles(scope)).toBe('ok')
+    expect(mgr.sandboxChatArgs(true, scope)).toBeNull()
+    expect(mgr.spawnConfig('s1', account, { observe: true, enforce: true, sandbox: scope })).not.toHaveProperty('enforced')
+    expect(await mgr.ensureEnforceFiles()).toBe('ok')
+    const want = builder('linux')
+    const pre = { matcher: '*', hooks: [{ type: 'command', command: mgr.enforceHookCommand('claude'), timeout: 10 }] }
+    const c = mgr.spawnConfig('s1', account, { observe: true, enforce: true, sandbox: scope })
+    expect(c).toMatchObject({ observed: true, enforced: true, sandboxed: true })
+    const both = JSON.parse(await read(c.settingsFile))
+    expect(both.hooks.PreToolUse).toContainEqual(pre)
+    expect(both.disableAllHooks).toBe(false)
+    expect(both.sandbox).toEqual(want.sandbox)
+    expect(both.permissions.deny).toEqual(want.permissions.deny)
+    // A chat's one --settings carries both too, from the scope's folder
+    const chat = mgr.sandboxChatArgs(true, scope)
+    expect(path.basename(chat![1])).toBe('astera-enforce-sandbox-chat-settings.json')
+    expect(folderOf(chat![1])).toBe(folderOf(c.settingsFile))
+    expect(JSON.parse(await read(chat![1]))).toEqual({ disableAllHooks: false, hooks: { PreToolUse: [pre] }, sandbox: want.sandbox, permissions: { deny: want.permissions.deny } })
+  })
+
+  // Final fix pass (C2): a sandboxed session reaches the Host only through the loopback and its workload token, so no twin
+  // lets a sandboxed command connect to the Host's socket, on macOS or anywhere, whatever ASTERA_HOST says
+  it('grants no Unix socket on any OS, the Host’s included', async () => {
+    for (const env of [{}, { ASTERA_HOST: '/Users/t/hosts/mine.sock' }] as Array<Record<string, string>>) {
+      await fs.rm(dir, { recursive: true, force: true })
+      await fs.mkdir(dir)
+      const mac = managerOn('darwin')
+      await mac.init()
+      const scope = scopeOn('darwin', WT, env)
+      await mac.ensureSandboxFiles(scope)
+      const boxed = JSON.parse(await read(mac.spawnConfig('s1', account, { sandbox: scope }).settingsFile))
+      expect(boxed.sandbox).toEqual(builder('darwin', scope).sandbox)
+      expect(boxed.sandbox).not.toHaveProperty('network')
+      expect(boxed.permissions.deny).toContain('Read(//Users/t/Library/Keychains/**)')
+      expect('hostSocket' in mac).toBe(false)
+    }
+    const linux = managerOn('linux')
+    await linux.init()
+    await linux.ensureSandboxFiles(scopeOn('linux'))
+    expect(JSON.parse(await read(linux.spawnConfig('s1', account, { sandbox: scopeOn('linux') }).settingsFile)).sandbox).not.toHaveProperty('network')
+  })
+
+  it('on Windows the twin holds the deny rules only, in Claude’s POSIX form', async () => {
+    const mgr = managerOn('win32')
+    await mgr.init()
+    const scope = scopeOn('win32', null)
+    expect(await mgr.ensureSandboxFiles(scope)).toBe('ok')
+    const c = mgr.spawnConfig('s1', account, { sandbox: scope })
+    expect(c.sandboxed).toBe(true)
+    const boxed = JSON.parse(await read(c.settingsFile))
+    expect(boxed).not.toHaveProperty('sandbox')
+    expect(boxed.permissions.deny).toEqual(builder('win32', scope).permissions.deny)
+    expect(boxed.permissions.deny).toContain('Read(//c/Users/t/.ssh/**)')
+    expect(boxed.permissions.deny).toContain('Read(//c/Users/t/AppData/Roaming/GitHub CLI/**)')
+  })
+
+  it('a twin that could not be written leaves the session unsandboxed, which its manager refuses', async () => {
+    const mgr = managerOn('linux')
+    await mgr.init()
+    const scope = scopeOn('linux')
+    expect(await mgr.ensureSandboxFiles(scope)).toBe('ok')
+    // A folder where the twin goes: neither the swap nor the write in place can put a file there
+    const twin = mgr.spawnConfig('s1', account, { sandbox: scope }).settingsFile.replace(/\//g, path.sep)
+    await fs.rm(twin)
+    await fs.mkdir(twin)
+    expect(await mgr.ensureSandboxFiles(scope)).toBe('write-failed')
+    expect(mgr.spawnConfig('s1', account, { sandbox: scope })).not.toHaveProperty('sandboxed')
+    // The other twins are still in place
+    expect(mgr.spawnConfig('s1', account, { toolHooks: true, sandbox: scope }).sandboxed).toBe(true)
+  })
+
+  // A session reads its settings once, at start, and the files are rewritten whenever what they hold changes: a twin
+  // built before such a change is not handed out after it
+  it('the twins follow the files they are twins of', async () => {
+    const mgr = managerOn('linux')
+    await mgr.init()
+    const scope = scopeOn('linux')
+    await mgr.ensureSandboxFiles(scope)
+    await mgr.useNode('/usr/local/bin/node')
+    const c = mgr.spawnConfig('s1', account, { sandbox: scope })
+    expect(c.sandboxed).toBe(true)
+    expect(await read(c.settingsFile)).toContain('/usr/local/bin/node')
+  })
+})
+
+// Sandbox follow-ups, item 3: `<profile>/sandbox-settings/<hash>/` folders were never removed. A Host's start removes the
+// ones not written for 30 days that no live session uses, and nothing else: each sandboxed start stamps its folder, so a
+// folder still started from is never old.
+describe('pruneSandboxTwins', () => {
+  let profile: string
+  let outside: string
+  beforeEach(async () => {
+    profile = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-sl-prune-'))
+    outside = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-sl-prune-outside-'))
+  })
+  afterEach(async () => {
+    await fs.rm(profile, { recursive: true, force: true })
+    await fs.rm(outside, { recursive: true, force: true })
+  })
+  const DAY = 24 * 60 * 60 * 1000
+  const NOW = Date.now()
+  const twins = (): string => path.join(profile, SANDBOX_TWINS_DIR)
+  /** A twins folder as the manager writes one, its folder and files last written `age` ago. */
+  const folder = async (name: string, age: number, files: Record<string, string> = { 'astera-settings-sandbox.json': '{}', 'astera-sandbox-chat-settings.json': '{}' }): Promise<string> => {
+    const dir = path.join(twins(), name)
+    await fs.mkdir(dir, { recursive: true })
+    const at = new Date(NOW - age)
+    for (const [f, text] of Object.entries(files)) {
+      await fs.writeFile(path.join(dir, f), text)
+      await fs.utimes(path.join(dir, f), at, at)
+    }
+    await fs.utimes(dir, at, at)
+    return dir
+  }
+  const present = async (p: string): Promise<boolean> => fs.lstat(p).then(() => true, () => false)
+
+  it('removes the folders not written for 30 days, and keeps a fresher one and one a live session uses', async () => {
+    const old = await folder('0123456789abcdef', 31 * DAY)
+    const fresh = await folder('fedcba9876543210', 29 * DAY)
+    const used = await folder('00000000aaaaaaaa', 40 * DAY)
+    expect(await pruneSandboxTwins({ profileDir: profile, now: NOW, inUse: new Set(['00000000aaaaaaaa']) })).toEqual(['0123456789abcdef'])
+    expect(await present(old)).toBe(false)
+    expect(await present(fresh)).toBe(true)
+    expect(await present(used)).toBe(true)
+    expect(await present(twins())).toBe(true)
+  })
+
+  it('counts the newest write in a folder, its own stamp or any twin’s', async () => {
+    const dir = await folder('0123456789abcdef', 45 * DAY)
+    const recent = new Date(NOW - DAY)
+    await fs.utimes(path.join(dir, 'astera-settings-sandbox.json'), recent, recent)
+    expect(await pruneSandboxTwins({ profileDir: profile, now: NOW, inUse: new Set() })).toEqual([])
+    expect(await present(dir)).toBe(true)
+  })
+
+  it('never touches anything else: other names, files, a folder holding anything but twins, a link, the profile', async () => {
+    const odd = await folder('notes', 60 * DAY)
+    const mixed = await folder('1111111111111111', 60 * DAY, { 'astera-settings-sandbox.json': '{}', 'keep.txt': 'mine' })
+    const nested = await folder('2222222222222222', 60 * DAY)
+    await fs.mkdir(path.join(nested, 'inner'))
+    const aFile = path.join(twins(), '3333333333333333')
+    await fs.writeFile(aFile, 'not a folder')
+    const old = new Date(NOW - 60 * DAY)
+    await fs.utimes(aFile, old, old)
+    // A link named as a twins folder, to a folder elsewhere holding a twin-looking file: neither is followed nor removed
+    await fs.writeFile(path.join(outside, 'astera-settings-sandbox.json'), '{}')
+    await fs.utimes(path.join(outside, 'astera-settings-sandbox.json'), old, old)
+    await fs.utimes(outside, old, old)
+    const link = path.join(twins(), '4444444444444444')
+    await fs.symlink(outside, link, process.platform === 'win32' ? 'junction' : 'dir')
+    const beside = path.join(profile, 'astera-settings.json')
+    await fs.writeFile(beside, '{}')
+    expect(await pruneSandboxTwins({ profileDir: profile, now: NOW, inUse: new Set() })).toEqual([])
+    for (const p of [odd, mixed, path.join(mixed, 'keep.txt'), nested, path.join(nested, 'inner'), aFile, link, beside, path.join(outside, 'astera-settings-sandbox.json')])
+      expect(await present(p), p).toBe(true)
+  })
+
+  it('does nothing, and says nothing, with no twins folder at all', async () => {
+    expect(await pruneSandboxTwins({ profileDir: path.join(profile, 'none'), now: NOW, inUse: new Set() })).toEqual([])
+  })
+
+  // What keeps a folder still started from: ensureSandboxFiles stamps it even when every twin already held what it would
+  // write (writeScript writes nothing then)
+  it('a sandboxed start stamps its folder, so a folder still in use is never old', async () => {
+    const mgr = new StatusLineManager(profile, 'node', () => {}, { platform: 'linux', execPath: '/opt/astera/astera', homeDir: '/home/t', tmpDir: '/tmp' })
+    await mgr.init()
+    const scope: SandboxScope = { layout: null, env: {} }
+    expect(await mgr.ensureSandboxFiles(scope)).toBe('ok')
+    const dir = path.dirname(mgr.spawnConfig('s1', account, { sandbox: scope }).settingsFile.replace(/\//g, path.sep))
+    const old = new Date(NOW - 40 * DAY)
+    await fs.utimes(dir, old, old)
+    for (const f of await fs.readdir(dir)) await fs.utimes(path.join(dir, f), old, old)
+    expect(await mgr.ensureSandboxFiles(scope)).toBe('ok')
+    expect((await fs.stat(dir)).mtimeMs).toBeGreaterThan(NOW - DAY)
+    expect(await pruneSandboxTwins({ profileDir: profile, now: NOW, inUse: new Set() })).toEqual([])
+    expect(await present(dir)).toBe(true)
+  })
+
+  // At the Host's start (host/index.ts), before it binds, so no session it starts can have its folder pruned under it
+  it('runs at the Host’s start, before any session can open', async () => {
+    const src = await fs.readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'host', 'index.ts'), 'utf8')
+    expect(src).toMatch(/await pruneSandboxTwins\(\{ profileDir, now: Date\.now\(\), inUse: /)
+    expect(src.indexOf('await pruneSandboxTwins(')).toBeGreaterThan(-1)
+    expect(src.indexOf('await pruneSandboxTwins(')).toBeLessThan(src.indexOf('server = await startHostServer({'))
+  })
 })

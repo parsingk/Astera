@@ -23,6 +23,22 @@ describe('createHostRollView (S6 §3.4)', () => {
     expect(v.holds('s1')).toBe(false)
     expect(v.adopting('s2')).toBe(false)
   })
+  // Task 6 fix round 1: a Host roll the sandbox refused, for a chat chain: its reason, for the chat's pane
+  it('hands a pushed chat notice to the chat it names, and forwards nothing', () => {
+    const notices: Array<[string, unknown]> = []
+    const forwarded: string[] = []
+    const view = createHostRollView({
+      adopt: async () => {},
+      forward: (channel) => forwarded.push(channel),
+      chatNotice: (id, n) => notices.push([id, n]),
+      log: () => {}
+    })
+    const notice = { key: 'rollRefused' as const, reason: { key: 'session.roll.sandbox.windowsSetup' as const, params: { account: 'D' } } }
+    view.pushed({ t: 'chat-notice', sessionId: 'c1', notice })
+    expect(notices).toEqual([['c1', notice]])
+    expect(forwarded).toEqual([])
+    expect(view.knows('c1')).toBe(false)
+  })
   it('adopts the new chat proc of a pushed chat roll before it forwards the rekey', async () => {
     const order: string[] = []
     const view = createHostRollView({

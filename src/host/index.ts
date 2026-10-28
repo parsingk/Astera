@@ -7,8 +7,22 @@ import { readGitHubLifecycleDefaults } from '../core/settings/githubLifecycle'
 import childProcess from 'node:child_process'
 import { createPluginManager } from './plugins/manager'
 import { createHostExtensions } from './extensions/commands'
+import { agentProfileInUse, createHostAgentProfiles } from './agentProfiles/commands'
+import { createHostPolicies } from './audit/policyCommands'
+import { createHostAudit } from './audit/auditCommands'
+import { createAuditRecorder, dispatchOfWithTurns, registrySessionFacts } from './audit/recorder'
+import { createAuditSources, pruneEnforceFiles } from './audit/sources'
+import { profilePaths } from '../core/profile/paths'
+import { t } from '../core/i18n'
+import { openTokenStore } from './tokens/store'
+import { createTokenSources, tokenOwnerOf } from './tokens/sources'
+import { readAuditPolicy } from '../core/audit/policy'
+import { keepPruning } from '../core/audit/store'
 import { createGatewayHub } from './gateway/hub'
+import { createUseRecorder, recordPush, recordingGhRunner, workOfSession } from './credentials/recordUses'
+import { createHostCredentials } from './credentials/commands'
 import { hidingLog } from '../core/extensions/secrets'
+import { createHidingSource, projectOfWorktrees } from '../core/credentials/hiding'
 import { sweepGeneratedMcp } from '../core/extensions/resolve'
 import { hostJobSources } from './jobSources'
 import { hostCompletionChecks } from './completionChecks'
@@ -33,17 +47,19 @@ import { HOST_EXIT, listenExitCode } from './exitCodes'
 import { controllerRecordsFile, createControllerRegistry } from './controllers'
 import { openSecretStore } from '../core/secrets/secretStore'
 import { randomBytes } from 'node:crypto'
-import { ensureHostKey } from '../core/host/hostKey'
+import { ensureAppKey, ensureHostKey, readAppKeySync } from '../core/host/hostKey'
+import { pruneSandboxTwins } from '../core/sessions/statusline'
 import { completeWindowsPath } from '../core/sessions/windowsPath'
 import { PtyRegistry } from './registry'
 import { createConhostReaper, reapWindowsConsoleHosts } from './conhostReaper'
 import { createRemoteSessions, type RemoteSessions } from './remoteSessions'
 import { attachPtyHost } from './ptyHost'
 import { attachProcHost } from './procHost'
+import { sessionSandboxedIn } from './sandboxedSession'
 import { ProcRegistry } from './procRegistry'
 import { createProcHolders, procHeldBy } from './procHolders'
 import { nodeProcSpawn } from './nodeProc'
-import { HOST_FEATURE_ORCH, HOST_FEATURE_REQUESTS, HOST_PROTOCOL, HOST_YIELD_JOURNAL, HOST_YIELD_UNDERSTANDING, HOST_YIELD_WORK_UNITS, HOST_YIELD_WORKSPACE, HOST_YIELD_WORKTREES } from '../core/host/protocol'
+import { HOST_FEATURE_ORCH, HOST_FEATURE_REQUESTS, HOST_PROTOCOL, HOST_YIELD_JOURNAL, HOST_YIELD_PERSON_WRITES, HOST_YIELD_UNDERSTANDING, HOST_YIELD_WORK_UNITS, HOST_YIELD_WORKSPACE, HOST_YIELD_WORKTREES } from '../core/host/protocol'
 import { createHostJournal } from './hostJournal'
 import { createHostEventLog } from './eventLog'
 import { hostNotifier } from './pluginNotify'
@@ -63,6 +79,7 @@ import { hostFeatures } from './features'
 import { loadSlackSdk } from './slackSdk'
 import { composeHostSlack, type HostSlackWiring } from './slackWiring'
 import { createHostSpawner } from './spawner'
+import { hostSandboxReadiness, hostSandboxSetup } from './sandboxSetup'
 import { createHostWorktrees, loadWorktreesIfSpawning } from './worktrees'
 import { createHostProjectRoots } from './projectRoots'
 import { createHostExits, ptyHeldBy, type HostExits } from './exits'
@@ -226,8 +243,42 @@ async function main(): Promise<void> {
   const procHolders = createProcHolders({ log: (m) => log.write(m) })
   procs.onExit((id) => procHolders.ended(id))
   // The MCP Gateway (Agent Control Plane release 2): shared stdio servers run here once per folder, and each session the
-  // two registries open with a Gateway token reaches them over 127.0.0.1. Listens only while a stdio server is shared.
-  const mcpGateway = createGatewayHub({ profileDir, ptys: registry, procs, log: hidingLog(profileDir, (m) => log.write(m)) })
+  // two registries open with a Gateway token reaches them over 127.0.0.1. Listens for the Host's whole life: the same
+  // listener is where a sandboxed session's commands come in.
+  // Credential-use records (credentials design §6): the Gateway's tool calls, and the GitHub operations the command layer
+  // and the lifecycle run, each for whoever asked. `orch` is read inside the calls, long after it is made below.
+  const useRecorder = createUseRecorder({ profileDir, log: (m) => log.write(m) })
+  const sessionOfOwner = (ownerId: string): string | undefined => {
+    const meta = registry.metaOf(ownerId) ?? procs.list().find((e) => e.id === ownerId)?.meta ?? null
+    return meta && (meta.kind === 'session' || meta.kind === 'chat') ? meta.id : undefined
+  }
+  const mcpGateway = createGatewayHub({
+    profileDir,
+    ptys: registry,
+    procs,
+    sessionOfOwner,
+    // The loopback route a sandboxed session's `astera` calls come in by (sandbox design §6): `orch` and `server` are
+    // read when a call arrives, long after both are made
+    call: (a) => orch.call(a),
+    cliCaller: () => server.cliCaller(),
+    hello: (nonce) => server.loopbackHello(nonce),
+    log: hidingLog(profileDir, (m) => log.write(m)),
+    onToolCall: (c) => {
+      const sessionId = sessionOfOwner(c.ownerId)
+      useRecorder.record({
+        actor: 'session',
+        ...(sessionId !== undefined ? { sessionId, ...workOfSession(orch.state(), sessionId) } : {}),
+        entryId: `mcp:${c.serverId}`,
+        provider: 'mcp',
+        action: 'mcp.call',
+        resource: `${c.serverName}/${c.tool}`,
+        outcome: c.ok ? 'ok' : 'failed',
+        evidence: 'managed'
+      })
+    }
+  })
+  // The Host's own GitHub calls (the lifecycle's watch and its writes): its scheduled reads are not recorded, its writes are
+  const hostGh = recordingGhRunner(defaultGhRunner, { actor: 'host' }, useRecorder, { background: true, originOf })
 
   let server: Awaited<ReturnType<typeof startHostServer>>
   /** Declared here and assigned below `createHostOrch` (S6 final review M3): the rolling wiring's
@@ -267,6 +318,10 @@ async function main(): Promise<void> {
     rollingWiring?.dispose()
     // The session events stop with the rolling that feeds them. Never throws.
     sessionEvents?.dispose()
+    // So do observe mode's sources; what they handed over is flushed below. Never throws.
+    auditSources.dispose()
+    // And the token sources; what they handed over is saved below. Never throws.
+    tokenSources.dispose()
     // The work units' watchers and their sync timer stop with them. Never throws.
     hostWorkUnits?.dispose()
     // The MCP HTTP entrance stops with the Host (MCP HTTP §3): its stdin ends, which is its way out, and
@@ -332,6 +387,10 @@ async function main(): Promise<void> {
           // log's own flush below so a stuck disk cannot hold the way out. Never rejects.
           await disposeWithin(eventLog.flushed(), LEAVE_LOG_FLUSH_CAP_MS, () => {})
           eventLog.close()
+          // And observe mode's records still on their way to the disk, capped the same way. Never rejects.
+          await disposeWithin(auditRecorder.flushed(), LEAVE_LOG_FLUSH_CAP_MS, () => {})
+          // And the tokens read since the last save, capped the same way. Never rejects.
+          await disposeWithin(tokenStore.save(), LEAVE_LOG_FLUSH_CAP_MS, () => {})
           registry.killAll()
           procs.killAll()
           // Every buffered log line on disk before the exits below are armed (stage 3, task 3). First the
@@ -405,6 +464,11 @@ async function main(): Promise<void> {
   const eventLog = createHostEventLog({ dir: path.join(profileDir, 'orch'), bootId, now: () => new Date().toISOString(), log: (m) => log.write(m) })
   await eventLog.load()
 
+  // What each session spent for a Dispatch or a Run's coordinator (observe mode design §10): <profile>/token-totals.json,
+  // read once here beside the event log; written by the token sources (made below) and pruned with the Runs once the
+  // orch (made below too) has the state in memory.
+  const tokenStore = await openTokenStore({ profileDir, state: () => (orch.loaded() ? orch.state() : null), log: (m) => log.write(m) })
+
   // How It Works (E1 §2, §3): this Host writes understanding.json while every attached app yields it, or
   // none is attached, read per write. Loaded at start whether or not it writes now, so a record a dead
   // Host left `generating` reads as interrupted; **not the writer before the server listens** (a Host that
@@ -421,7 +485,9 @@ async function main(): Promise<void> {
     // The app's reader for the same material (ipc.ts): no range, or one git could not read, gives none.
     readCommits: async (root, from, to) => (from && to ? ((await readRange(root, from, to))?.subjects ?? []) : []),
     log: (m) => log.write(m),
-    push: (root) => server.broadcast({ t: 'understanding-state', root })
+    push: (root) => server.broadcast({ t: 'understanding-state', root }),
+    // The Credentials list: the agent writing a record is started in the project, so it loses what a session there would
+    hiding: createHidingSource({ profileDir, projectOf: projectOfWorktrees(() => worktrees.list()), log: hidingLog(profileDir, (m) => log.write(m)) })
   })
   await hostUnderstanding.load()
 
@@ -450,7 +516,9 @@ async function main(): Promise<void> {
     // itself, and says so in its `hello.yields` (HOST_YIELD_WORKTREES).
     appKeepsWorktrees: () => server.appKeeps(HOST_YIELD_WORKTREES),
     // Host journal (A19 lifted): the prompt rows of the workers this Host starts, read against its state.
-    onPromptWrite: (e) => hostJournal.promptWrite(e, orch.state())
+    onPromptWrite: (e) => hostJournal.promptWrite(e, orch.state()),
+    // Agent Profiles design §5: a spawn from a profile stamps its use through the Host's own command
+    touchAgentProfile: (id) => touchAgentProfile(id)
   })
 
   // R10: the one read that may heal a damaged worktrees.json, done once — and only when the Host
@@ -491,6 +559,66 @@ async function main(): Promise<void> {
         journal: hostJournal
       })
     : null
+
+  // The tokens each session spent (observe mode design §10), in every mode: read from the transcripts, rollouts and
+  // chat lines the providers already write, kept per session for the Dispatch or Run it worked for (whom from the
+  // state as the orch holds it, made below), in the token store opened above. Before any pty or process opens, so every
+  // session's start is heard; `runs get` and `tasks-get` total them. Made before the recorder, which asks them the turns
+  // the sessions' lines tell.
+  const tokenSources = createTokenSources({
+    store: tokenStore,
+    ptys: registry,
+    procs,
+    statusLinePayload: (sid) => (spawner ? spawner.statusLinePayload(sid) : Promise.resolve(null)),
+    ownerOf: (sessionId, at, last, turn) => tokenOwnerOf(orch.state(), sessionId, at, last, turn),
+    log: (m) => log.write(m)
+  })
+  // Observe mode's recorder (observe mode design §5, §8): the sources hand it the tool calls a session finished, and it
+  // keeps them under <profile>/audit while the mode is observe, touching nothing in compatibility. Made above the
+  // rolling, whose hook tap is one of its sources. A session is read from the two registries' notes and its Dispatch
+  // from the state as the orch holds it (made below, before any source can call), never loaded for this: a Host that
+  // has not loaded has placed none; an ended attempt's worker and a finished Run's coordinator after the end, until a
+  // person prompts the session, as the token sources read its prompts (a task notification or what Astera types into
+  // it does not end it). The mode is read through readAuditPolicy, which throws on a file it cannot read
+  // cleanly, so the recorder keeps only a clean read (a missing file is compatibility); the copy of a damaged one is
+  // the policies commands' to keep.
+  // Enforce (enforce design §5, E5): a session started in Enforce whose calls arrive with no line of its blocking hook
+  // runs unchecked, so it is stopped, and its tab says why first, in the app's language: a terminal's in its own output
+  // (replayed to an app that attaches later), a chat's as its last error, through its process whoever writes it (final
+  // review I3: the Host's own chat manager holds only the chats it writes).
+  const stopUnhooked = (sessionId: string): void => {
+    const sentence = t(wiring ? wiring.checks.langNow() : 'en', 'session.spawn.enforce.hookMissing')
+    const ptyId = registry.sessionPty(sessionId)
+    if (ptyId !== null) {
+      registry.say(ptyId, `\r\n[Astera] ${sentence}\r\n`)
+      registry.kill(ptyId)
+      return
+    }
+    const procId = [...procs.list()].reverse().find((e) => e.alive && e.meta?.kind === 'chat' && e.meta.id === sessionId)?.id
+    if (procId !== undefined) procs.stop(procId, sentence)
+  }
+  const auditRecorder = createAuditRecorder({
+    profileDir,
+    mode: async () => (await readAuditPolicy(profileDir, { keepDamaged: false }))?.mode ?? 'compatibility',
+    sessionInfo: registrySessionFacts({ ptys: registry, procs }),
+    dispatchOf: dispatchOfWithTurns(() => orch.state(), tokenSources),
+    log: (m) => log.write(m),
+    onHookMissing: (sessionId) => stopUnhooked(sessionId)
+  })
+  // The enforce files of an earlier Host's sessions, which ended with it: only the files of sessions alive stay, so a
+  // session's file holds only its own calls. Before any session opens.
+  await pruneEnforceFiles(profilePaths(profileDir).enforceEvents, new Set(registry.liveEntries().flatMap((e) => (e.meta ? [e.meta.id] : []))))
+  // Its sources (audit/sources.ts): the observed Claude sessions' audit files in hook-events (their own watcher, apart
+  // from the rolling's), the chat processes' lines and the Codex rollouts the pty notes name, followed for the sessions
+  // started observed. Before any pty or process opens, so every session's start is heard.
+  const auditSources = createAuditSources({
+    recorder: auditRecorder,
+    ptys: registry,
+    procs,
+    hookEventsDir: hookEventsDirIn(profileDir),
+    enforceDir: profilePaths(profileDir).enforceEvents,
+    log: (m) => log.write(m)
+  })
 
   /** Declared above the rolling (the S6 final review M3 lesson): Task 6 has the rolling's events reach it,
    *  and a `const` below would be in its temporal dead zone. Null without a spawner or without the SDK. */
@@ -754,16 +882,70 @@ async function main(): Promise<void> {
     log: (m) => log.write(m),
     gateway: mcpGateway
   })
+  // Agent Profiles (design §4): the store this Host owns. A profile cannot be deleted while a live session holds it
+  // (the session's note carries `agentProfileId`) or unfinished orchestration work does (a Job, a Task, an open
+  // Dispatch). `orch` is made below; the guard reads it only when a delete is asked.
+  // 설정하기 (sandbox design §6): Codex's Windows sandbox setup for one account, run here, where the sessions start
+  const sandboxSetup = hostSandboxSetup({
+    platform: process.platform,
+    homeDir: os.homedir(),
+    baseEnv: () => hostWorkerBaseEnv(process.env),
+    descriptors: makeDescriptors(process.platform)
+  })
+  // And the readiness Settings › Agent profiles shows beside it, asked as the Host's own sandboxed starts ask it
+  const sandboxReadiness = hostSandboxReadiness({
+    platform: process.platform,
+    homeDir: os.homedir(),
+    baseEnv: () => hostWorkerBaseEnv(process.env),
+    descriptors: makeDescriptors(process.platform),
+    log: (m) => log.write(m)
+  })
+  const agentProfiles = createHostAgentProfiles({
+    profileDir,
+    readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
+    inUse: agentProfileInUse({ sessions: () => [...registry.list(), ...procs.list()], orch: () => orch }),
+    log: (m) => log.write(m),
+    ...(sandboxSetup ? { sandboxSetup } : {}),
+    ...(sandboxReadiness ? { sandboxReadiness } : {})
+  })
+  /** `agent-profiles-touch` as the app would send it, not awaited by the spawn that asks: the command logs its own
+   *  failures and answers success, so a stamp never fails or delays a spawn. */
+  const touchAgentProfile = (id: string): void => {
+    void agentProfiles.command({ cmd: 'agent-profiles-touch', args: { id }, role: 'app', marks: { effects: 0 } }).catch((e) => log.write(`agent profile ${id}: its use could not be stamped: ${String(e)}`))
+  }
+  // Observe mode's rules and mode (observe mode design §7, ruling M1): audit-policy.json, which this Host alone writes. A
+  // change tells the recorder, which reads the mode again at its next call
+  const policies = createHostPolicies({ profileDir, onChange: (cmd) => auditRecorder.invalidate({ modeUnchanged: cmd !== 'policies-set-mode' }) })
+  // And the records read back with the decisions those rules give them now (design §8)
+  const audit = createHostAudit({ profileDir })
+  // The Credentials list and its uses (credentials design §7); the session managers read the file at each spawn. The
+  // projects an entry can be narrowed to are the registered ones, read after the state's load (`orch` is made below)
+  const credentials = createHostCredentials({
+    profileDir,
+    // The app's own GitHub writes (its worktree panel's Create PR) are kept with the uses this Host records itself
+    record: (u) => useRecorder.record(u),
+    projects: async () => {
+      await orch.ready()
+      return orch.state().projects
+    }
+  })
   const orch = createHostOrch({
     profileDir,
+    useRecorder,
     version: hostVersion,
     controllers,
     plugins,
     extensions,
+    agentProfiles,
+    policies,
+    credentials,
+    audit,
     // The job-source plugins a person makes Jobs from (plugin Phase 4 J10), asked through the runtime
     jobSources: hostJobSources({ manager: plugins, runtime: pluginRuntime }),
     // The completion check plugins a Task's checks ask (plugin Phase 5 C8), through the same runtime
     completionChecks: hostCompletionChecks({ manager: plugins, runtime: pluginRuntime }),
+    // What the sessions spent, for `runs get` and `tasks-get` (observe mode design §10)
+    spentTokens: () => tokenStore.spent(),
     now: () => new Date().toISOString(),
     // The handshake's own string, not a second one taken here: `requests show` answers with it so a
     // caller can tell "this Host never saw my request" from "it never arrived" (request receipts
@@ -813,6 +995,9 @@ async function main(): Promise<void> {
       accounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
       chats: rollingWiring?.chats ?? null
     })),
+    // Whether a caller's session runs in the sandbox, from its pty's or chat proc's note: what it starts then starts in
+    // the sandbox too (final fix pass, C3)
+    sessionSandboxed: (sessionId) => sessionSandboxedIn({ ptys: registry, procs }, sessionId),
     // `sessions create` (CLI spec §14): the spawner's path for a terminal session, the chat manager's for
     // a chat one (sessionCreate.ts). Without a spawner both refuse with 6.
     createSession: createHostSessionStarter({
@@ -820,8 +1005,10 @@ async function main(): Promise<void> {
       chats: rollingWiring?.chats ?? null,
       rolling: rollingWiring?.rolling ?? null,
       readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
-      refreshCapabilities: (account) => spawner?.capabilities?.refresh(account) ?? Promise.resolve(),
+      refreshCapabilities: (account, agentProfileId) => spawner?.capabilities?.refresh(account, agentProfileId) ?? Promise.resolve(),
       bypass: async () => (await readAgentPermissionMode(path.join(profileDir, 'app-settings.json'))) === 'yolo',
+      profileDir,
+      touchAgentProfile: (id) => touchAgentProfile(id),
       probeCwd: defaultCwdProbe,
       announceProc: (procId) => announceChatProc(server, procId, (m) => log.write(m)),
       list: () => hostSessions.listSessions(),
@@ -835,7 +1022,7 @@ async function main(): Promise<void> {
       run: defaultGhRunner,
       ...(spawner ? { worktreeOf: (p: string) => worktrees.infoOf(p) } : {}),
       // github-pr-create: the app's own create PR path (push, then gh pr create), over the Run's worktree.
-      createPr: (req) => createPullRequest(req),
+      createPr: (req, deps) => createPullRequest(req, deps),
       readCommits: (wt, base) => readCommits(wt, base),
       isClean: (wt) => isCleanWorktree(wt),
       // The lifecycle's preflight (design §7.2): this folder's origin, which the lifecycle pushes to alone (L24).
@@ -923,19 +1110,19 @@ async function main(): Promise<void> {
         worktreeOf: (p) => worktrees.infoOf(p),
         baseBranch: (repoPath, baseRef) => normalizeBaseForGh(repoPath, baseRef),
         originOf,
-        findOpenPrs: (cwd, repo, branch, base) => findOpenPrs(defaultGhRunner, cwd, repo, branch, base),
-        readPrState: (cwd, repo, n) => readPrState(defaultGhRunner, cwd, repo, n),
-        ruleCheckNames: (cwd, repo, branch) => readRuleCheckNames(defaultGhRunner, cwd, repo, branch),
-        readIssue: (cwd, n) => readIssue(defaultGhRunner, cwd, n),
-        readJobLog: (cwd, repo, id) => readJobLog(defaultGhRunner, cwd, repo, id),
-        readAnnotations: (cwd, repo, id) => readAnnotations(defaultGhRunner, cwd, repo, id),
+        findOpenPrs: (cwd, repo, branch, base) => findOpenPrs(hostGh, cwd, repo, branch, base),
+        readPrState: (cwd, repo, n) => readPrState(hostGh, cwd, repo, n),
+        ruleCheckNames: (cwd, repo, branch) => readRuleCheckNames(hostGh, cwd, repo, branch),
+        readIssue: (cwd, n) => readIssue(hostGh, cwd, n),
+        readJobLog: (cwd, repo, id) => readJobLog(hostGh, cwd, repo, id),
+        readAnnotations: (cwd, repo, id) => readAnnotations(hostGh, cwd, repo, id),
         // G3b1: CI on the pushed head settles a lifecycle round through the Host's own validation (its store is the
         // authoritative one). G3b2: where it must stop, a GitHub question keeps the round's wait, in the person's language
         settle: (a) => (wiring ? wiring.checks.settleHandedOff(a) : Promise.resolve()),
         openGitHubGate: (a) => orch.handle('lifecycle-gate', { task: a.taskId, since: a.since, kind: a.kind, question: a.question, options: a.options }),
         ancestry: (cwd, head, sha) => ancestry(realGit, cwd, head, sha),
         // G4 (L9): a CI failure a rerun can cure is rerun in the Run's repository, within the Job's budget
-        rerunCi: (cwd, repo, id) => rerunFailed(defaultGhRunner, cwd, id, repo),
+        rerunCi: (cwd, repo, id) => rerunFailed(hostGh, cwd, id, repo),
         lang: () => (wiring ? wiring.checks.langNow() : 'en'),
         log: (m) => log.write(m)
       })
@@ -951,13 +1138,17 @@ async function main(): Promise<void> {
         isClean: (cwd) => isCleanWorktree(cwd),
         readCommits: (cwd, base) => readCommitsOrNull(cwd, base),
         baseBranch: (repoPath, baseRef) => normalizeBaseForGh(repoPath, baseRef),
-        push: (cwd, branch) => pushBranch(realGit, cwd, branch),
+        push: async (cwd, branch) => {
+          const r = await pushBranch(realGit, cwd, branch)
+          void recordPush(useRecorder, { actor: 'host' }, { cwd, branch, ok: r.ok, originOf })
+          return r
+        },
         headOf: (cwd, ref) => headOf(realGit, cwd, ref),
-        findOpenPrs: (cwd, repo, branch, base) => findOpenPrs(defaultGhRunner, cwd, repo, branch, base),
-        createDraftPr: (cwd, repo, pr) => createDraftPr(defaultGhRunner, cwd, repo, pr),
+        findOpenPrs: (cwd, repo, branch, base) => findOpenPrs(hostGh, cwd, repo, branch, base),
+        createDraftPr: (cwd, repo, pr) => createDraftPr(hostGh, cwd, repo, pr),
         // G6 (spec §30): the bound pull request as it is now, read before every push
         readPr: async (cwd, repo, n) => {
-          const r = await prByNumber(defaultGhRunner, cwd, repo, n)
+          const r = await prByNumber(hostGh, cwd, repo, n)
           // A pull request gh cannot find is a read that failed, never one to push onto (G6 final review M7)
           if (!r.ok) return r
           return r.pr ? { ok: true, state: r.pr.state } : { ok: false, kind: 'other', message: `pull request #${n} was not found` }
@@ -1026,21 +1217,34 @@ async function main(): Promise<void> {
     log.write(`could not make the Host key: ${String(err)} — not serving`)
     process.exit(HOST_EXIT.keyFailure)
   }
+  // Sandbox follow-ups, item 3: the sandbox twins folders not written for 30 days are removed, before any session this
+  // Host starts. None of this Host's sessions is live yet, and none of an earlier Host's outlived it; the app's own (its
+  // fallback while no Host answers) are what the 30 days keep, since every sandboxed start stamps its folder first.
+  const prunedTwins = await pruneSandboxTwins({ profileDir, now: Date.now(), inUse: new Set<string>(), log: (m) => log.write(m) })
+  if (prunedTwins.length > 0) log.write(`sandbox twins not written for 30 days removed: ${prunedTwins.join(', ')}`)
+  // Sandbox follow-ups, item 1: the key the app proves it is the app with. The app makes it before it first talks to a
+  // Host; made here too when there is none, before any session this Host starts, so a sandboxed session is denied a
+  // file that is there (a deny of a path that does not exist yet holds for nothing on Windows). Not fatal: without it
+  // no socket can be the app, and each is told so.
+  await ensureAppKey(profileDir).catch((err) => log.write(`could not make the app key: ${String(err)} — no app can prove it is the app`))
   try {
     server = await startHostServer({
+      sessionOfToken: (t) => mcpGateway.sessionOfToken(t),
       address: addr.address,
       hostKey,
+      // Read at each proof, so a key made after this Host started is the one checked
+      appKey: () => readAppKeySync(profileDir),
       bootId,
       dirToPrepare: addr.dirToPrepare,
       version: hostVersion,
       idleMs: IDLE_MS,
       onIdle: () => leave(),
       onMessage: (m, send, from) => {
-        // Before the pty handler, so the mark is in place before a spawn can exit. Any role: see
-        // `ptyHeldBy` for the apps that declare none. Only a greeted socket, which close releases.
+        // Before the pty handler, so the mark is in place before a spawn can exit. Only the proven app's,
+        // the one socket its pty messages are served to (`ptyHeldBy`), which close releases.
         const held = ptyHeldBy(m, from)
         if (exits && held !== null) exits.heldBy(held, from.socket)
-        // The chat twin (chat takeover Task 5): a greeted socket's proc-spawn or proc-attach makes it the
+        // The chat twin (chat takeover Task 5): the proven app's proc-spawn or proc-attach makes it the
         // proc's writer, before the proc handler can answer.
         const heldProc = procHeldBy(m, from)
         if (heldProc !== null) procHolders.heldBy(heldProc, from.socket)
@@ -1063,11 +1267,12 @@ async function main(): Promise<void> {
           if (sessionEvents && from.greeted && from.role === 'app') sessionEvents.forwarded(m.signal)
           return true
         }
-        return (handlePty?.(m, send, { socket: from.socket }) ?? false) || (handleProc?.(m, send) ?? false)
+        // The role rides along: a pty-spawn or proc-spawn is served to the app's own connection only (final fix pass, C2)
+        return (handlePty?.(m, send, { socket: from.socket, role: from.role }) ?? false) || (handleProc?.(m, send, { socket: from.socket, role: from.role }) ?? false)
       },
-      // Released by the socket number whatever role the socket gave last: a second `hello` can change
-      // it, and marks made as an app must still go when that socket closes. A socket that never held a
-      // pty, which is every CLI call, runs no sweep (exits.ts).
+      // Released by the socket number, whatever role the socket has when it closes: one that named the
+      // app is a CLI until its proof holds, and marks made as the app must still go when that socket
+      // closes. A socket that never held a pty, which is every CLI call, runs no sweep (exits.ts).
       onClientGone: (from) => {
         exits?.appGone(from.socket)
         // Phase 8 (N2): what this socket paused is resumed, so a dead app does not leave a pty frozen.
@@ -1165,9 +1370,14 @@ async function main(): Promise<void> {
   void mcpGateway.sync().catch(() => null)
   // And the generated MCP files no session used for 30 days (a session in use touches its own at every spawn)
   void sweepGeneratedMcp(profileDir, 30 * 24 * 60 * 60 * 1000)
+  // And observe mode's records past 30 days or 50 MB (design §8): here at the start, then every hour on a timer that
+  // never keeps the Host alive, and by the writes between. Never rejects, and a profile that never observed has no folder
+  // to read.
+  keepPruning(profileDir, { log: (m) => log.write(m) })
 
   handlePty = attachPtyHost({ registry, broadcast: (m, to) => server.broadcast(m, to) })
-  handleProc = attachProcHost({ registry: procs, broadcast: (m) => server.broadcast(m) })
+  // An older app marks no person's chat line: its hello leaves HOST_YIELD_PERSON_WRITES out
+  handleProc = attachProcHost({ registry: procs, broadcast: (m) => server.broadcast(m), marksWrites: (socket) => server.yieldsOf(socket)?.has(HOST_YIELD_PERSON_WRITES) === true })
   // The leftovers of a Host that died with workspaces open (spec, Lifecycle): killed when their start
   // time still matches, then the file is cleared. A launch waits for this. Never rejects.
   void workspaces.sweepLeftovers().catch((err) => log.write(`workspace leftovers: ${String(err)}`))

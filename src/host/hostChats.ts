@@ -8,7 +8,7 @@
 //
 // Imports nothing outside core and this folder: this bundles into the Host.
 import type { PtyEntry } from '../core/host/protocol'
-import type { SessionInfo } from '../core/types'
+import type { Account, SessionInfo } from '../core/types'
 import { makeDescriptors } from '../core/providers/descriptor'
 import { ChatSessionManager, type ChatManagerDeps, type ChatOrchEnv } from '../core/chat/manager'
 import { chatSpawnOptsOf, type ChatRollSpawn } from '../core/chat/respawn'
@@ -42,6 +42,25 @@ export interface HostChatsDeps {
   askApp(name: 'chatSend', args: [string, string]): Promise<unknown>
   /** Shared extensions, the spawner's cache (Agent Control Plane release 1); the spawn path refreshes it first. */
   capabilities?: ChatManagerDeps['capabilities']
+  /** The Credentials list's hiding, the spawner's (credentials design §5). */
+  hiding?: ChatManagerDeps['hiding']
+  /** Enforce's chat arguments, the spawner's (enforce design §5). */
+  enforce?: ChatManagerDeps['enforce']
+  /** The sandbox's prepared layouts and Windows readiness question, the spawner's (sandbox design §6): a roll's chat
+   *  respawn is prepared through the spawner's prepareRollSpawn. */
+  sandboxLayouts?: ChatManagerDeps['sandboxLayouts']
+  codexWindowsReady?: ChatManagerDeps['codexWindowsReady']
+  /** The sandbox for Claude, the spawner's (core/sandbox/claudeStart.ts): a sandboxed Claude chat's version floor and its
+   *  one --settings file. */
+  claudeSandbox?: ChatManagerDeps['claudeSandbox']
+  /** The folder the Host's socket is in, the spawner's: a sandboxed Codex chat's profile denies it on macOS and Linux. */
+  hostSocketDir?: ChatManagerDeps['hostSocketDir']
+  /** The profile's app key file, the spawner's: a sandboxed Codex chat's profile denies it on every OS. */
+  appKeyFile?: ChatManagerDeps['appKeyFile']
+  /** The codex version question, the spawner's: a sandboxed Codex chat's floor (final review I2). */
+  codexVersion?: ChatManagerDeps['codexVersion']
+  /** The copy of the person's git excludes a sandboxed win32 Codex chat reads: the spawner's (HostSpawner.codexExcludes). */
+  codexExcludes?: ChatManagerDeps['codexExcludes']
   log(m: string): void
   /** Test seams. */
   createAdapter?: ChatManagerDeps['createAdapter']
@@ -54,6 +73,9 @@ export interface HostChats {
   adopt(entry: PtyEntry): SessionInfo | null
   /** A roll's respawn, synchronous; the new note says hostStarting until started() settles. */
   spawn(o: ChatRollSpawn): SessionInfo
+  /** What a sandboxed chat's spawn needs first (ChatSessionManager.prepare): a Codex chat's folder read, a Claude chat's
+   *  version asked and settings written; `sessions create` awaits it. Rejects with the refusal (`SANDBOX_UNAVAILABLE: …`). */
+  prepare(o: { account: Account; cwd: string; sandbox?: boolean }): Promise<void>
   /** True once the new proc's handshake and carry-on settled; hostStarting is then cleared in the note.
    *  False when they did not settle within CHAT_START_PUSH_MS: the session is killed and the mark stays,
    *  so no app takes over a start still under way (final review I1). Never rejects. */
@@ -73,8 +95,9 @@ export interface HostChats {
   deliver(sessionId: string, text: string): void
   /** A turn by the Host adapter; rejects when the Host is not the writer or the adapter refuses.
    *  `wrote` runs once a line of the turn reached the proc, in the same synchronous step as the write
-   *  (Task 8 fix round 1, D4 I1): a send refused before the wire marks nothing. */
-  send(sessionId: string, text: string, wrote?: () => void): Promise<void>
+   *  (Task 8 fix round 1, D4 I1): a send refused before the wire marks nothing. `by.person`: a person sent it (a Slack
+   *  reply), and its line is written as a person's (ProcRegistry.write); any other send is the Host's own. */
+  send(sessionId: string, text: string, wrote?: () => void, by?: { person: true }): Promise<void>
   requests(sessionId: string): ChatRequest[]
   hasOpenRequest(sessionId: string): boolean
   /** Where the session's turn is, as this Host's adapter decodes it (writer or reader): `status` and the
@@ -132,8 +155,9 @@ export function createHostChats(d: HostChatsDeps): HostChats {
   const writes = new Map<string, number>()
   const counted: HostProcsDeps['registry'] = {
     open: (o) => d.procs.open(o),
-    write: (procId, line) => {
-      d.procs.write(procId, line)
+    // `by`: the turn a send made for a person writes (the manager marks it), written as a person's line
+    write: (procId, line, by) => {
+      d.procs.write(procId, line, by)
       writes.set(procId, (writes.get(procId) ?? 0) + 1)
     },
     kill: (procId) => d.procs.kill(procId),
@@ -171,6 +195,15 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     baseEnv: d.baseEnv,
     orchEnv: d.orchEnv,
     capabilities: d.capabilities,
+    hiding: d.hiding,
+    enforce: d.enforce,
+    ...(d.sandboxLayouts ? { sandboxLayouts: d.sandboxLayouts } : {}),
+    ...(d.codexWindowsReady ? { codexWindowsReady: d.codexWindowsReady } : {}),
+    ...(d.claudeSandbox ? { claudeSandbox: d.claudeSandbox } : {}),
+    ...(d.hostSocketDir !== undefined ? { hostSocketDir: d.hostSocketDir } : {}),
+    ...(d.appKeyFile !== undefined ? { appKeyFile: d.appKeyFile } : {}),
+    ...(d.codexVersion ? { codexVersion: d.codexVersion } : {}),
+    ...(d.codexExcludes ? { codexExcludes: d.codexExcludes } : {}),
     ...(d.createAdapter ? { createAdapter: d.createAdapter } : {})
   })
 
@@ -300,9 +333,9 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     return done
   }
 
-  const send = async (id: string, text: string, wrote?: () => void): Promise<void> => {
+  const send = async (id: string, text: string, wrote?: () => void, by?: { person: true }): Promise<void> => {
     if (!isWriter(id)) throw new Error('not the writer')
-    await markIfWritten(procOf(id), () => manager.send(id, text), wrote)
+    await markIfWritten(procOf(id), () => manager.send(id, text, by), wrote)
   }
 
   return {
@@ -356,6 +389,7 @@ export function createHostChats(d: HostChatsDeps): HostChats {
         throw err
       }
     },
+    prepare: (o) => manager.prepare(o),
     async started(id) {
       let cancel: () => void = () => {}
       const timedOut = new Promise<'timeout'>((resolve) => {

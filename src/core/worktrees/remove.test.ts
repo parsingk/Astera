@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { promises as fs, existsSync } from 'node:fs'
 import path from 'node:path'
-import { removeWorktree, isDangerousRemovalPath } from './remove'
+import { removeWorktree, isDangerousRemovalPath, isPermissionFailure } from './remove'
 import { createWorktree } from './create'
 import { WorktreeRegistry } from './registry'
 import { localBranchExists } from './git'
@@ -22,6 +22,20 @@ beforeEach(async () => {
   const regDir = await tempDir('astera-wt-rmreg-')
   reg = new WorktreeRegistry(path.join(regDir, 'worktrees.json'), root)
   await reg.load()
+})
+
+describe('isPermissionFailure', () => {
+  it("knows git's Windows wordings and errno codes", () => {
+    expect(isPermissionFailure("error: failed to delete 'a/b': Permission denied", 'win32')).toBe(true)
+    expect(isPermissionFailure('fatal: Access is denied.', 'win32')).toBe(true)
+    expect(isPermissionFailure(new Error('EPERM: operation not permitted, unlink'), 'win32')).toBe(true)
+    expect(isPermissionFailure(Object.assign(new Error('x'), { code: 'EACCES' }), 'win32')).toBe(true)
+  })
+  it('is false for other failures and off Windows', () => {
+    expect(isPermissionFailure('fatal: not a working tree', 'win32')).toBe(false)
+    expect(isPermissionFailure(new Error('ENOENT: no such file'), 'win32')).toBe(false)
+    expect(isPermissionFailure('Permission denied', 'linux')).toBe(false)
+  })
 })
 
 describe('isDangerousRemovalPath', () => {
@@ -50,6 +64,78 @@ describe('removeWorktree', () => {
     expect(existsSync(info.path)).toBe(false)
     expect(await localBranchExists(repo, info.branch)).toBe(true) // 보존
     expect(reg.get(info.id)).toBeNull()
+  })
+
+  it.runIf(process.platform === 'win32')('a worktree with a read-only file is removed', async () => {
+    const { info } = await createWorktree({ repoPath: repo, name: 'readonly', registry: reg })
+    await fs.mkdir(path.join(info.path, 'objs'), { recursive: true })
+    const f = path.join(info.path, 'objs', 'obj.bin')
+    await fs.writeFile(f, 'x', 'utf8')
+    await fs.chmod(f, 0o444)
+    const r = await removeWorktree({ id: info.id, force: true, registry: reg, isPathInUse: noUse })
+    expect(r.removed).toBe(true)
+    expect(existsSync(info.path)).toBe(false)
+    expect(reg.get(info.id)).toBeNull()
+  })
+
+  describe('the retry after a permission failure', () => {
+    const denied = { ok: false, stdout: '', stderr: "error: failed to delete 'x': Permission denied" }
+    const okResult = { ok: true, stdout: '', stderr: '' }
+
+    it.runIf(process.platform === 'win32')('git removal failing once is retried once after files were cleared, with the same args', async () => {
+      const { info } = await createWorktree({ repoPath: repo, name: 'retry-git', registry: reg })
+      const calls: string[][] = []
+      const removeGit = async (args: string[]): Promise<typeof okResult> => {
+        calls.push(args)
+        if (calls.length === 1) return denied
+        await fs.rm(info.path, { recursive: true, force: true })
+        return okResult
+      }
+      const cleared: string[] = []
+      const r = await removeWorktree({
+        id: info.id, registry: reg, isPathInUse: noUse, removeGit, clear: async (dir) => (cleared.push(dir), 3)
+      })
+      expect(r.removed).toBe(true)
+      // Final fix pass (minor 16): what was cleared is the worktree removed, and nothing else
+      expect(cleared).toEqual([info.path])
+      expect(calls).toHaveLength(2)
+      expect(calls[1]).toEqual(calls[0])
+      expect(calls[0]).not.toContain('--force')
+    })
+
+    it.runIf(process.platform === 'win32')('is not retried when nothing was cleared, and the original error is reported', async () => {
+      const { info } = await createWorktree({ repoPath: repo, name: 'retry-none', registry: reg })
+      let n = 0
+      const removeGit = async (): Promise<typeof denied> => {
+        n++
+        return denied
+      }
+      const cleared: string[] = []
+      await expect(
+        removeWorktree({ id: info.id, registry: reg, isPathInUse: noUse, removeGit, clear: async (dir) => (cleared.push(dir), 0) })
+      ).rejects.toThrow(/GIT_REMOVE_FAILED: .*Permission denied/)
+      expect(n).toBe(1)
+      expect(cleared).toEqual([info.path])
+    })
+
+    it.runIf(process.platform === 'win32')('the orphan fs.rm failing with EPERM once is cleared and retried once', async () => {
+      const { info } = await createWorktree({ repoPath: repo, name: 'retry-orphan', registry: reg })
+      await fs.rm(path.join(repo, '.git', 'worktrees', path.basename(info.path)), { recursive: true, force: true })
+      let n = 0
+      const rmDir = async (p: string): Promise<void> => {
+        n++
+        if (n === 1) throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' })
+        await fs.rm(p, { recursive: true, force: true })
+      }
+      const cleared: string[] = []
+      const r = await removeWorktree({
+        id: info.id, force: true, registry: reg, isPathInUse: noUse, rmDir, clear: async (dir) => (cleared.push(dir), 1)
+      })
+      expect(r.removed).toBe(true)
+      expect(cleared).toEqual([info.path])
+      expect(n).toBe(2)
+      expect(existsSync(info.path)).toBe(false)
+    })
   })
 
   it('머지된 브랜치는 -d로 삭제된다', async () => {

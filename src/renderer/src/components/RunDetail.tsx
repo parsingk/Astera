@@ -1,6 +1,6 @@
 import { invalidatedReasonKey } from './githubText'
 import { GitHubBlock } from './GitHubBlock'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type {
   Account,
   JobEvent,
@@ -9,7 +9,8 @@ import type {
   MessageType,
   Provider,
   RunDetail as RunDetailData,
-  TaskStatus
+  TaskStatus,
+  TokenTotals
 } from '../../../core/types'
 import type { MessageKey } from '../../../core/i18n'
 import { accountToDispatchOn } from '../../../core/accounts/dispatchAccount'
@@ -44,7 +45,38 @@ import { JournalBusy, JournalOlder } from './RunDetailJournal'
 import { ArrowUpRight, Play, Square, WrenchOff, X } from 'lucide-react'
 import { backdropProps } from '../lib/backdrop'
 import { SourceChip } from './SourceChip'
+import { AgentProfileChip } from './AgentProfileField'
 import { jobName } from '../lib/jobName'
+import {
+  afterObserveRead,
+  observeReadDue,
+  observeReadIsCurrent,
+  runDetailInstanceKey,
+  startObserveRead,
+  type ObserveRead,
+  observeTargetOf,
+  summaryOf,
+  summarySince,
+  tokensOf,
+  wouldDenyLine,
+  type AuditCounts,
+  type AuditFocus
+} from './securityText'
+
+/** One of the Host's `runs-get` and `tasks-get`, whose bodies carry the token totals (observe mode design §10): this
+ *  computer's through its Host, which alone keeps them (main's own command layer answers both without), a Runtime's
+ *  through its door. Null when it did not answer. */
+function readTokens(door: OrchDoor, runtimeId: string | undefined, cmd: 'runs-get' | 'tasks-get', id: string): Promise<unknown> {
+  if (runtimeId !== undefined) return door.command(cmd, { id }).then((r) => (r.status === 200 ? r.body : null))
+  return (cmd === 'runs-get' ? window.api.audit.runTokens(id) : window.api.audit.taskTokens(id)).then((r) => (r.ok ? r.body : null))
+}
+
+/** A token total's numbers as the person's locale writes them. */
+const tokenParams = (s: TokenTotals): { total: string; input: string; output: string } => ({
+  total: s.total.toLocaleString(),
+  input: s.input.toLocaleString(),
+  output: s.output.toLocaleString()
+})
 
 /** 종류 배지의 문구. message 는 messageType 이 정한다.
  *  heartbeat 과 decision_gate 는 timeline.ts 의 SKIP 이 걸러 지금은 도달하지 않지만, 맵을
@@ -183,7 +215,8 @@ export function RunDetail({
   onShowOlderJournal,
   onClose,
   runtimeId,
-  door
+  door,
+  onOpenAuditLogs
 }: {
   /** 스냅샷에 있는 그 Run. 노드의 제목·상태·세션은 전부 여기서 온다(detail 은 id 만 준다).
    *  스냅샷과 detail 은 서로 다른 호출이라 어긋날 수 있으므로, 한쪽에만 있는 Task 는 그리지 않는다. */
@@ -205,6 +238,9 @@ export function RunDetail({
   runtimeId?: string
   /** Where this Run's commands, accounts and run configurations go: this computer or its Runtime (Phase 7). */
   door: OrchDoor
+  /** Settings › Security & Access › Audit Logs with this Run's calls only (observe mode design §11), or a Job row's with
+   *  no Run of its own. This computer's Runs only: a Runtime's records stay on the Runtime, and no controller reads them. */
+  onOpenAuditLogs?: (focus: AuditFocus) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   /** Why the controls are off: a read-only pairing (Phase 7). They are drawn disabled with it as their title, and it
@@ -312,6 +348,73 @@ export function RunDetail({
       cancelled = true
     }
   }, [authoring, door])
+  /** The tokens the Run's Tasks and its coordinator spent (observe mode design §10), and how many of its calls the rules
+   *  would deny. Read when the window opens on a Run, then only when its outcome or progress moved, and at most every
+   *  30 seconds (observeReadDue): every event of a running Run re-reads the detail, and each count has the Host read the
+   *  records. A Job row folded onto its one Run reads that Run (it was opened with the Job's id); a Job row with no Run
+   *  of its own counts the Job's calls and shows no tokens. */
+  const [spent, setSpent] = useState<{ tokens?: TokenTotals; coordinatorTokens?: TokenTotals }>({})
+  const [denyCounts, setDenyCounts] = useState<AuditCounts | null>(null)
+  const target = observeTargetOf(run?.foldedRunId, runId)
+  const targetId = 'runId' in target ? target.runId : target.jobId
+  const runState = run === undefined ? null : `${run.outcome}|${run.done}/${run.total}`
+  const lastRead = useRef<ObserveRead | null>(null)
+  /** The retry a failed read asked for, ended with the window. */
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** False once the window closed: a read still in flight then sets nothing and asks for no retry. Set true by the effect
+   *  itself, since StrictMode runs its cleanup between two mounts. */
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+      if (retryTimer.current !== null) clearTimeout(retryTimer.current)
+    }
+  }, [])
+  /** Whose facts are on screen: an answer that arrives for another target is dropped. */
+  const shownTarget = useRef(targetId)
+  const [readAgain, setReadAgain] = useState(0)
+  // Another Run's facts are never shown for this one
+  useEffect(() => {
+    shownTarget.current = targetId
+    setSpent({})
+    setDenyCounts(null)
+  }, [targetId])
+  useEffect(() => {
+    // Not before the Run's row is there, so the first read is of its state
+    if (runState === null) return
+    const wait = observeReadDue(lastRead.current, { target: targetId, state: runState }, Date.now())
+    if (wait === null) return
+    if (wait > 0) {
+      const timer = setTimeout(() => setReadAgain((n) => n + 1), wait)
+      return () => clearTimeout(timer)
+    }
+    lastRead.current = startObserveRead(lastRead.current, { target: targetId, state: runState }, Date.now())
+    const ids = observeTargetOf(undefined, targetId)
+    const mine = (): boolean => observeReadIsCurrent(alive.current, shownTarget.current, targetId)
+    const read = lastRead.current
+    void (async () => {
+      // A read that failed (a deadline, the Host away a moment) keeps what is shown rather than clearing it, and is
+      // read again at the next trigger once the wait is over (afterObserveRead)
+      const body = 'runId' in ids ? await readTokens(door, runtimeId, 'runs-get', ids.runId).catch(() => null) : null
+      if (body !== null && mine()) setSpent(tokensOf(body))
+      let ok = 'jobId' in ids || body !== null
+      // The records are this computer's: a Runtime's Run has none here
+      if (runtimeId === undefined) {
+        const createdAt = typeof body === 'object' && body !== null ? (body as { createdAt?: unknown }).createdAt : undefined
+        const r = await window.api.audit.summary({ ...ids, since: summarySince(createdAt, new Date()) }).catch(() => null)
+        if (r?.ok === true && mine()) setDenyCounts(summaryOf(r.body))
+        if (r?.ok !== true) ok = false
+      }
+      if (mine() && lastRead.current === read) {
+        const out = afterObserveRead(read, ok)
+        lastRead.current = out.last
+        // Nothing else may come for a finished Run, so the retry is asked for here, after the wait
+        if (retryTimer.current !== null) clearTimeout(retryTimer.current)
+        retryTimer.current = out.retryIn === null ? null : setTimeout(() => setReadAgain((n) => n + 1), out.retryIn)
+      }
+    })()
+  }, [targetId, runState, readAgain, runtimeId, door])
   /** 물어보기(Gate)의 질문을 쓰는 중인 Task id. null 이면 안 쓰는 중이다 — authoring 과 같은 자리에
    *  서는 세 번째 모습이다(그래프는 그대로, .detail-events 만 바뀐다). authoring 처럼 selected(필터)는
    *  건드리지 않는다. */
@@ -412,6 +515,34 @@ export function RunDetail({
     ? (events ?? []).filter((e) => e.taskId === selectedTask.id)
     : (events ?? [])
   const hidden = (events?.length ?? 0) - shown.length
+  /** The selected Task's tokens, every attempt's (design §10): read when it is picked, then only when its status moved,
+   *  at most every 30 seconds, as the Run's are. Kept with the Task it is for, so a newly picked Task never shows the
+   *  last one's while its own is read; a read that failed keeps what is shown. */
+  const [taskSpent, setTaskSpent] = useState<{ taskId: string; tokens?: TokenTotals } | null>(null)
+  const selectedId = selectedTask?.id
+  const selectedState = selectedTask?.status
+  const lastTaskRead = useRef<{ target: string; state: string; at: number } | null>(null)
+  const [readTaskAgain, setReadTaskAgain] = useState(0)
+  useEffect(() => {
+    if (selectedId === undefined || selectedState === undefined) return
+    const wait = observeReadDue(lastTaskRead.current, { target: selectedId, state: selectedState }, Date.now())
+    if (wait === null) return
+    if (wait > 0) {
+      const timer = setTimeout(() => setReadTaskAgain((n) => n + 1), wait)
+      return () => clearTimeout(timer)
+    }
+    lastTaskRead.current = { target: selectedId, state: selectedState, at: Date.now() }
+    void readTokens(door, runtimeId, 'tasks-get', selectedId).then(
+      (body) => {
+        if (body === null) return
+        const { tokens } = tokensOf(body)
+        setTaskSpent({ taskId: selectedId, ...(tokens ? { tokens } : {}) })
+      },
+      () => {}
+    )
+  }, [selectedId, selectedState, readTaskAgain, runtimeId, door])
+  const selectedTokens = taskSpent !== null && taskSpent.taskId === selectedId ? taskSpent.tokens : undefined
+  const denyLine = denyCounts !== null ? wouldDenyLine(denyCounts, t) : null
 
   const running = runningCount(tasks)
   const counts = HEAD_STATES.map(
@@ -778,6 +909,7 @@ export function RunDetail({
         <div className="detail-head">
           <h2 title={run?.objective}>{run ? jobName(run) : ''}</h2>
           <SourceChip source={run?.source} />
+          {run?.agentProfileId !== undefined && <AgentProfileChip id={run.agentProfileId} />}
           {running > 0 && (
             <span className="jobs-count">
               <RunIcon kind="running" label={t('jobs.run.running')} />
@@ -808,6 +940,31 @@ export function RunDetail({
             </button>
           )}
         </div>
+        {/* What the Run spent and what its rules would have denied (observe mode design §10, §11). The tokens are the
+            Tasks' sum, the coordinator's apart under its own name; that input counts cached input is said once, as text
+            beside them so a screen reader reads it too. No money: cost is not known. */}
+        {(spent.tokens !== undefined || spent.coordinatorTokens !== undefined || (denyLine !== null && onOpenAuditLogs !== undefined)) && (
+          <div className="detail-observe">
+            {(spent.tokens !== undefined || spent.coordinatorTokens !== undefined) && (
+              <span className="detail-observe-tokens">
+                {spent.tokens !== undefined && <span>{t('jobs.detail.tokens', tokenParams(spent.tokens))}</span>}
+                {spent.coordinatorTokens !== undefined && <span>{t('jobs.detail.coordinatorTokens', tokenParams(spent.coordinatorTokens))}</span>}
+                <span className="detail-observe-note">{t('jobs.detail.tokensCached')}</span>
+              </span>
+            )}
+            {denyLine !== null && onOpenAuditLogs !== undefined && (
+              <span className="detail-observe-deny">
+                <span>{denyLine}</span>
+                {/* Leaves this window, so not while a form here holds something unsent (formOpen) */}
+                {!formOpen && (
+                  <button className="detail-observe-link" onClick={() => onOpenAuditLogs({ ...target, name: run ? jobName(run) : targetId })}>
+                    {t('jobs.detail.wouldDenyOpen')}
+                  </button>
+                )}
+              </span>
+            )}
+          </div>
+        )}
         {/* flex: 1; min-height: 0 이 styles.css 에 있다 — 없으면 아래의 두 칸이 줄지 않아 모달 밖으로
             넘치고 닫기 버튼이 밀려난다. 이 저장소가 실제로 그 결함을 냈던 자리다 */}
         <div className="detail-body">
@@ -913,6 +1070,7 @@ export function RunDetail({
                 tasks={tasks}
                 accounts={accounts}
                 runConfigs={runConfigs === null ? null : checkChoicesOf(runConfigs, checkPlugins, t)}
+                {...(run?.agentProfileId !== undefined ? { jobAgentProfileId: run.agentProfileId } : {})}
                 onClose={() => setAuthoring(false)}
                 onCreated={() => setAuthoring(false)}
               />
@@ -997,6 +1155,12 @@ export function RunDetail({
                         {selectedTask.accountIds
                           .map((id) => accounts?.find((a) => a.id === id)?.label ?? id)
                           .join(' → ')}
+                      </span>
+                    )}
+                    {/* The Task's tokens, every attempt's (observe mode design §10) */}
+                    {selectedTokens !== undefined && (
+                      <span className="detail-chip" title={t('jobs.detail.taskTokensTitle', tokenParams(selectedTokens))}>
+                        {t('jobs.detail.taskTokens', tokenParams(selectedTokens))}
                       </span>
                     )}
                     <button
@@ -1536,4 +1700,10 @@ function Graph({
       )}
     </>
   )
+}
+
+/** Run detail for the Run `open` names, under a key of it (and its Runtime): another Run is a new component, so it never
+ *  starts from the last one's tokens, not even for a frame. */
+export function KeyedRunDetail({ open, ...props }: React.ComponentProps<typeof RunDetail> & { open: { runId: string; runtimeId?: string } }): React.JSX.Element {
+  return <RunDetail key={runDetailInstanceKey(open)} {...props} />
 }

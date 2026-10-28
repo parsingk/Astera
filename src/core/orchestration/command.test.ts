@@ -26,6 +26,7 @@ import { TaskValidator } from './exec/validator'
 import { TAIL_EMPTY, TAIL_UNTRACKED } from './exec/tail'
 import { FAILURE_LIMIT, MAX_REVIEW_ROUNDS, type CheckResult, type Dispatch, type JobRun, type Project, type Task } from './types'
 import { parseArgs } from './cliArgs'
+import { lifecycleToStart, slotsToFill } from './schedule'
 import { stateWord } from './cliHuman'
 import { outcomeOf, runningRunCount } from './running'
 import { isQueueableReport } from './pendingReports'
@@ -40,6 +41,8 @@ import type { PrCreateRequest, PrCreateResult } from '../github/prCreate'
 import { parseIssue } from '../github/issue'
 import { issueContext } from '../github/issueSource'
 import { sourcedObjective } from '../sources/objective'
+import type { AgentProfile } from '../agentProfiles/types'
+import { readAgentProfiles, writeAgentProfiles } from '../agentProfiles/store'
 
 const NOW = '2026-08-04T00:00:00.000Z'
 
@@ -8573,6 +8576,58 @@ describe('handleCommand — tasks-get', () => {
   })
 })
 
+// Observe mode design §10: `runs get` and `tasks-get` carry the tokens the Host kept for their sessions, and say nothing
+// when it kept none or the caller keeps no tokens (the app's own command layer)
+describe('handleCommand — tokens on runs-get and tasks-get', () => {
+  const dispatch = (id: string, taskId: string, sessionId: string): Dispatch => ({
+    id,
+    taskId,
+    provider: 'codex',
+    accountId: 'acc1',
+    sessionId,
+    cwd: 'D:/p',
+    specPath: 'D:/p/s.md',
+    startedAt: NOW,
+    workerState: 'ready',
+    retained: false
+  })
+  const seeded = (): OrchState => ({
+    ...emptyState(),
+    jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW }],
+    runs: [{ id: 'r1', jobId: 'job_1', ordinal: 1, createdAt: NOW, coordinatorSessionId: 'sess_k' }],
+    tasks: [
+      { id: 't1', runId: 'r1', title: 'T', spec: 's', deps: [], status: 'dispatched', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW },
+      { id: 't2', runId: 'r1', title: 'U', spec: 's', deps: [], status: 'ready', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }
+    ],
+    dispatches: [dispatch('d1', 't1', 'sess_b')]
+  })
+  const withTokens = () =>
+    Object.assign(makeDeps(seeded()), {
+      spentTokens: () => [
+        { sessionId: 'sess_a', dispatchId: 'd1', input: 100, output: 10 },
+        { sessionId: 'sess_b', dispatchId: 'd1', input: 20, output: 2 },
+        { sessionId: 'sess_k', coordinatorOf: 'r1', input: 5, output: 1 }
+      ]
+    })
+
+  it('runs get totals the Run’s Tasks, with its coordinator’s apart', async () => {
+    const r = await call(withTokens(), 'runs-get', { id: 'r1' })
+    expect(r.body).toMatchObject({ id: 'r1', tokens: { input: 120, output: 12, total: 132 }, coordinatorTokens: { input: 5, output: 1, total: 6 } })
+  })
+
+  it('tasks-get totals the Task’s attempts, and leaves the field out for a Task nothing was read for', async () => {
+    expect((await call(withTokens(), 'tasks-get', { id: 't1' }, '')).body).toMatchObject({ id: 't1', tokens: { input: 120, output: 12, total: 132 } })
+    expect((await call(withTokens(), 'tasks-get', { id: 't2' }, '')).body).not.toHaveProperty('tokens')
+  })
+
+  it('says nothing of tokens when none are kept', async () => {
+    const run = (await call(makeDeps(seeded()), 'runs-get', { id: 'r1' })).body
+    expect(run).not.toHaveProperty('tokens')
+    expect(run).not.toHaveProperty('coordinatorTokens')
+    expect((await call(makeDeps(seeded()), 'tasks-get', { id: 't1' }, '')).body).not.toHaveProperty('tokens')
+  })
+})
+
 describe('handleCommand — tasks-check-output and tasks-output', () => {
   const dispatch = (id: string, startedAt: string): OrchState['dispatches'][number] =>
     ({ id, taskId: 't1', accountId: 'acc1', sessionId: 's', cwd: 'D:/p', specPath: 'x', startedAt, workerState: 'running' }) as unknown as OrchState['dispatches'][number]
@@ -9994,5 +10049,1205 @@ describe('runs-github-record (GitHub lifecycle G1)', () => {
     const { deps, runId } = await seeded()
     expect((await call(deps, 'runs-github-record', { runId, patch: { binding: 1 } }, HOST_CALLER)).status).toBe(400)
     expect((await call(deps, 'runs-github-record', { runId: 'run_nope', patch }, HOST_CALLER)).status).toBe(404)
+  })
+})
+
+// Agent Profiles design §6: a Job and a Task can be made to run as an agent profile, by its id or its name; the profile
+// is read once, when they are made, and the Task's accounts are copied from it then
+describe('agent profiles: run-create, task-create, worker-start', () => {
+  const P = (over: Partial<AgentProfile>): AgentProfile => ({
+    id: 'ap_1', name: 'Night shift', status: 'active', accountIds: ['acc_b', 'acc_a'], mcpExclude: [], permission: 'inherit', sandbox: false,
+    createdAt: NOW, updatedAt: NOW, ...over
+  })
+  const profiled = (profiles: AgentProfile[]) => {
+    const deps = makeDeps()
+    deps.listAccounts = () => [
+      { id: 'acc_a', label: 'a', provider: 'claude' },
+      { id: 'acc_b', label: 'b', provider: 'claude' },
+      { id: 'acc_x', label: 'x', provider: 'codex' }
+    ]
+    const reads = { n: 0 }
+    deps.readAgentProfiles = async () => {
+      reads.n += 1
+      return { version: 1, profiles }
+    }
+    const started: Array<Parameters<OrchServerDeps['startWorker']>[0]> = []
+    deps.startWorker = async (a) => {
+      started.push(a)
+      return { sessionId: `sess_${started.length}`, cwd: 'D:/p', specPath: 'D:/p/orch/specs/a.md' }
+    }
+    return { deps, reads, started }
+  }
+  const reasonOf = (r: { body: unknown }): unknown => (r.body as { reason?: unknown }).reason
+  const idOf = (r: { body: unknown }): string => (r.body as { id: string }).id
+
+  // Fix round 1, I1: the profile is only the Tasks' default; it never picks who drives the Job
+  it('run-create keeps the profile, named, as its real id, and leaves the coordinator as it is without one', async () => {
+    const { deps } = profiled([P({})])
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'night SHIFT' }, APP_CALLER)
+    expect(r.status).toBe(200)
+    expect(deps.getState().jobs[0].agentProfileId).toBe('ap_1')
+    expect(deps.getState().jobs[0]).not.toHaveProperty('coordinatorAccountId')
+    const auto = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_1', auto: true }, APP_CALLER)
+    expect(auto.body).toMatchObject({ agentProfileId: 'ap_1', autoDispatch: true, pendingStart: true })
+    expect(auto.body).not.toHaveProperty('coordinatorAccountId')
+  })
+
+  it("run-create from an agent session with a profile still records that session as the Run's coordinator", async () => {
+    const { deps } = profiled([P({})])
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_1' }, 'sess-drv')
+    expect(r.body).toMatchObject({ externalCoordinatorSessionId: 'sess-drv' })
+    expect(deps.getState().runs[0].externalCoordinatorSessionId).toBe('sess-drv')
+    expect(deps.getState().jobs[0]).not.toHaveProperty('coordinatorAccountId')
+  })
+
+  it("run-create: a coordinator account given wins over the profile's", async () => {
+    const { deps } = profiled([P({})])
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_1', coordinatorAccount: 'acc_a' })
+    expect(deps.getState().jobs[0]).toMatchObject({ agentProfileId: 'ap_1', coordinatorAccountId: 'acc_a' })
+  })
+
+  it('run-create refuses an unknown or archived profile; one with no live account is kept, its Tasks name accounts', async () => {
+    const { deps } = profiled([P({ id: 'ap_old', name: 'Old', status: 'archived' }), P({ id: 'ap_empty', name: 'Empty', accountIds: ['acc_gone'] })])
+    for (const id of ['ap_nope', 'Old']) {
+      const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: id })
+      expect([r.status, reasonOf(r)]).toEqual([400, 'agent-profile-unavailable'])
+    }
+    expect(deps.getState().jobs).toHaveLength(0)
+    expect((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_empty' })).status).toBe(200)
+    expect(deps.getState().jobs[0].agentProfileId).toBe('ap_empty')
+  })
+
+  it('run-create with no profile reads no profile and makes the Job as before', async () => {
+    const { deps, reads } = profiled([P({})])
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    expect(reads.n).toBe(0)
+    expect(deps.getState().jobs[0]).not.toHaveProperty('agentProfileId')
+    expect(deps.getState().jobs[0]).not.toHaveProperty('coordinatorAccountId')
+  })
+
+  it('a damaged profile store refuses and names the file; a caller with no reader answers 409', async () => {
+    const { deps } = profiled([])
+    deps.readAgentProfiles = async () => {
+      throw new RepairNeeded('agent-profiles.json is damaged; a copy was kept beside it', 'agent-profiles.json')
+    }
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_1' })
+    expect(r.status).toBe(409)
+    expect(r.body).toMatchObject({ repair: 'agent-profiles.json' })
+    // A caller that cannot read the store at all (the CLI's state-file reader, with no Host) refuses rather than guess
+    const bare = makeDeps()
+    expect((await call(bare, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_1' })).status).toBe(409)
+    expect(bare.getState().jobs).toHaveLength(0)
+  })
+
+  it("task-create from a profile only gets the profile's live accounts, in its order", async () => {
+    const { deps } = profiled([P({ accountIds: ['acc_b', 'acc_gone', 'acc_a'] })])
+    const runId = idOf(await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' }))
+    const r = await call(deps, 'task-create', { run: runId, spec: 's', agentProfileId: 'Night shift' })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ accountIds: ['acc_b', 'acc_a'], agentProfileId: 'ap_1' })
+  })
+
+  it('task-create with accounts and a profile keeps the accounts given and still records the profile', async () => {
+    const { deps } = profiled([P({})])
+    const runId = idOf(await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' }))
+    const r = await call(deps, 'task-create', { run: runId, spec: 's', account: 'acc_a', agentProfileId: 'ap_1' })
+    expect(r.body).toMatchObject({ accountIds: ['acc_a'], agentProfileId: 'ap_1' })
+  })
+
+  it('task-create refuses an unknown or archived profile, one with no live account, and neither account nor profile', async () => {
+    const { deps } = profiled([P({ id: 'ap_old', name: 'Old', status: 'archived' }), P({ id: 'ap_empty', name: 'Empty', accountIds: ['acc_gone'] })])
+    const runId = idOf(await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' }))
+    for (const id of ['ap_nope', 'ap_old']) {
+      const r = await call(deps, 'task-create', { run: runId, spec: 's', agentProfileId: id, account: 'acc_a' })
+      expect([r.status, reasonOf(r)]).toEqual([400, 'agent-profile-unavailable'])
+    }
+    const empty = await call(deps, 'task-create', { run: runId, spec: 's', agentProfileId: 'ap_empty' })
+    expect([empty.status, reasonOf(empty)]).toEqual([400, 'agent-profile-no-account'])
+    expect((await call(deps, 'task-create', { run: runId, spec: 's' })).body).toMatchObject({ error: '--account is required' })
+    expect(deps.getState().tasks).toHaveLength(0)
+  })
+
+  it("a Job's profile is its Tasks' default, for a Task of its plan and a Task of its Run", async () => {
+    const { deps } = profiled([P({})])
+    const jobId = idOf(await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_1', auto: true }))
+    const def = await call(deps, 'task-create', { run: jobId, spec: 's' })
+    expect(def.body).toMatchObject({ jobId, accountIds: ['acc_b', 'acc_a'], agentProfileId: 'ap_1' })
+    const runId = idOf(await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_1' }))
+    const inRun = await call(deps, 'task-create', { run: runId, spec: 's', account: 'acc_a' })
+    expect(inRun.body).toMatchObject({ accountIds: ['acc_a'], agentProfileId: 'ap_1' })
+  })
+
+  it("a Job's profile deleted since: a Task given accounts still records it, unread; one that needs its accounts is refused", async () => {
+    const { deps, reads } = profiled([P({})])
+    const runId = idOf(await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_1' }))
+    deps.readAgentProfiles = async () => {
+      reads.n += 1
+      return { version: 1, profiles: [] }
+    }
+    const before = reads.n
+    const given = await call(deps, 'task-create', { run: runId, spec: 's', account: 'acc_a' })
+    expect(given.body).toMatchObject({ accountIds: ['acc_a'], agentProfileId: 'ap_1' })
+    expect(reads.n).toBe(before)
+    const needs = await call(deps, 'task-create', { run: runId, spec: 's' })
+    expect([needs.status, reasonOf(needs)]).toEqual([400, 'agent-profile-unavailable'])
+  })
+
+  it("a Job's archived profile still gives a new Task its accounts: work holding it keeps resolving it", async () => {
+    const { deps } = profiled([P({})])
+    const runId = idOf(await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_1' }))
+    deps.readAgentProfiles = async () => ({ version: 1, profiles: [P({ status: 'archived' })] })
+    const r = await call(deps, 'task-create', { run: runId, spec: 's' })
+    expect(r.body).toMatchObject({ accountIds: ['acc_b', 'acc_a'], agentProfileId: 'ap_1' })
+  })
+
+  it("worker-start carries the Task's profile to its Dispatch and its spawn, unread, even once the profile is gone", async () => {
+    const { deps, reads, started } = profiled([P({})])
+    const runId = idOf(await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' }))
+    const taskId = idOf(await call(deps, 'task-create', { run: runId, spec: 's', agentProfileId: 'ap_1' }))
+    deps.readAgentProfiles = async () => ({ version: 1, profiles: [] })
+    const before = reads.n
+    const r = await call(deps, 'worker-start', { taskId, agent: 'claude', account: 'acc_b', worktree: 'current' })
+    expect(r.status).toBe(200)
+    expect(started[0].agentProfileId).toBe('ap_1')
+    expect(deps.getState().dispatches[0].agentProfileId).toBe('ap_1')
+    expect(reads.n).toBe(before)
+  })
+
+  it('worker-start with no profile hands the spawn exactly what it did before', async () => {
+    const { deps, started } = profiled([])
+    const runId = idOf(await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' }))
+    const taskId = idOf(await call(deps, 'task-create', { run: runId, spec: 's', account: 'acc_a' }))
+    await call(deps, 'worker-start', { taskId, agent: 'claude', account: 'acc_a', worktree: 'current' })
+    expect(started[0]).not.toHaveProperty('agentProfileId')
+    expect(deps.getState().dispatches[0]).not.toHaveProperty('agentProfileId')
+  })
+})
+
+// Fix round 1 (minor): a `--terminal` reuse types into a session already running as whatever it started as
+describe('agent profiles: a reused session records no profile', () => {
+  it("worker-start --terminal opens its Dispatch without the Task's profile, and hands none to the start", async () => {
+    const deps = makeDeps()
+    const started: Array<Parameters<OrchServerDeps['startWorker']>[0]> = []
+    deps.startWorker = async (a) => {
+      started.push(a)
+      return { sessionId: a.terminal ?? 'sess1', cwd: 'D:/p', specPath: 'D:/p/orch/specs/a.md' }
+    }
+    const runId = ((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })).body as { id: string }).id
+    const first = ((await call(deps, 'task-create', { run: runId, spec: 's', account: 'acc1' })).body as { id: string }).id
+    await call(deps, 'worker-start', { taskId: first, agent: 'codex', account: 'acc1', worktree: 'current' })
+    // The first worker reported and stays alive for reuse (guide §8)
+    await deps.setState({ ...deps.getState(), dispatches: deps.getState().dispatches.map((d) => ({ ...d, outcome: 'succeeded' as const, endedAt: NOW })) })
+    const t2 = await call(deps, 'task-create', { run: runId, spec: 's2', account: 'acc1' })
+    const second = (t2.body as { id: string }).id
+    await deps.setState({ ...deps.getState(), tasks: deps.getState().tasks.map((t) => (t.id === second ? { ...t, agentProfileId: 'ap_1' } : t)) })
+    const r = await call(deps, 'worker-start', { taskId: second, agent: 'codex', account: 'acc1', terminal: 'sess1', worktree: 'current' })
+    expect(r.status).toBe(200)
+    expect(started[1]).not.toHaveProperty('agentProfileId')
+    expect(deps.getState().dispatches.find((d) => d.taskId === second)).not.toHaveProperty('agentProfileId')
+  })
+})
+
+// Task 6 fix round 1 (I2): the app's deps read the store with readAgentProfiles over its own profile folder
+// (src/main/agentProfiles.wiring.test.ts pins that wiring); task-create from the UI resolves a profile through it
+describe('agent profiles: the app answers task-create from the store on disk', () => {
+  it('resolves a profile by name from agent-profiles.json and copies its accounts', async () => {
+    await writeAgentProfiles(dir, { version: 1, profiles: [{ id: 'ap_1', name: 'Night shift', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'inherit', sandbox: false, createdAt: NOW, updatedAt: NOW }] })
+    const deps = makeDeps()
+    deps.readAgentProfiles = () => readAgentProfiles(dir)
+    const runId = ((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' }, APP_CALLER)).body as { id: string }).id
+    const r = await call(deps, 'task-create', { runId, spec: 's', agentProfileId: 'night shift' }, APP_CALLER)
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ accountIds: ['acc1'], agentProfileId: 'ap_1' })
+  })
+})
+
+// Task 7 (Agent Profiles design §6): the public names take `--agent-profile <id|name>`, which reaches run-create and
+// task-create as their agentProfileId; the Job and the Task hold the real id
+describe('agent profiles: jobs create and tasks add', () => {
+  const profiled = () => {
+    const deps = makeDeps()
+    deps.readAgentProfiles = async () => ({
+      version: 1,
+      profiles: [{ id: 'ap_1', name: 'Reviewer', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'inherit', sandbox: false, createdAt: NOW, updatedAt: NOW }]
+    })
+    return deps
+  }
+
+  it('jobs create --agent-profile <name> makes a Job that holds the id, and answers it', async () => {
+    const deps = profiled()
+    const r = await call(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p', agentProfile: 'Reviewer' }, APP_CALLER)
+    expect(r.status, JSON.stringify(r.body)).toBe(200)
+    expect(r.body).toMatchObject({ agentProfileId: 'ap_1' })
+    expect(deps.getState().jobs[0].agentProfileId).toBe('ap_1')
+  })
+
+  it('tasks add --agent-profile with no --account gets the profile’s accounts; a Task of a profiled Job inherits it', async () => {
+    const deps = profiled()
+    const jobId = ((await call(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p' }, APP_CALLER)).body as { id: string }).id
+    const r = await call(deps, 'tasks-add', { job: jobId, spec: 's', agentProfile: 'reviewer' }, APP_CALLER)
+    expect(r.status, JSON.stringify(r.body)).toBe(200)
+    expect(r.body).toMatchObject({ accountIds: ['acc1'], agentProfileId: 'ap_1' })
+    const profiledJob = ((await call(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p', agentProfile: 'ap_1' }, APP_CALLER)).body as { id: string }).id
+    expect((await call(deps, 'tasks-add', { job: profiledJob, spec: 's' }, APP_CALLER)).body).toMatchObject({ accountIds: ['acc1'], agentProfileId: 'ap_1' })
+  })
+
+  it('refuses --agent-profile with no value, and an unknown profile, making nothing', async () => {
+    const deps = profiled()
+    const bare = await call(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p', agentProfile: true }, APP_CALLER)
+    expect([bare.status, (bare.body as { error: string }).error]).toEqual([400, '--agent-profile needs a value: a profile id or name (from `agent-profiles list`)'])
+    const unknown = await call(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p', agentProfile: 'nope' }, APP_CALLER)
+    expect([unknown.status, (unknown.body as { reason?: string }).reason]).toEqual([400, 'agent-profile-unavailable'])
+    expect(deps.getState().jobs).toHaveLength(0)
+    const jobId = ((await call(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p' }, APP_CALLER)).body as { id: string }).id
+    const task = await call(deps, 'tasks-add', { job: jobId, spec: 's', agentProfile: true }, APP_CALLER)
+    expect(task.status).toBe(400)
+    expect(deps.getState().tasks).toHaveLength(0)
+  })
+})
+
+// The person's decision on the final review (2026-10-22): an agent session's shell, an MCP client or a plugin may make a
+// Job or a Task as a profile that runs without permission checks only while the app-wide mode already skips them; a Task
+// that inherits such a profile from its Job counts the same. A person in the app or at their own shell is not asked
+describe('agent profiles: a profile that runs without permission checks, by who asks', () => {
+  type Caller = { sessionId: string; role?: 'app' | 'cli' | 'mcp' | 'controller' | 'plugin' }
+  const AGENTS: Caller[] = [{ sessionId: 'sess_agent', role: 'cli' }, { sessionId: '', role: 'mcp' }, { sessionId: '', role: 'plugin' }]
+  const PEOPLE: Caller[] = [{ sessionId: '', role: 'cli' }, { sessionId: '', role: 'app' }, { sessionId: APP_CALLER }]
+  const P = (over: Partial<AgentProfile>): AgentProfile => ({
+    id: 'ap_b', name: 'Unattended', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'bypass', sandbox: false, createdAt: NOW, updatedAt: NOW, ...over
+  })
+  const setup = (yolo: boolean | null) => {
+    const deps = makeDeps()
+    deps.readAgentProfiles = async () => ({ version: 1, profiles: [P({}), P({ id: 'ap_ask', name: 'Asks', permission: 'ask' })] })
+    const appWideYolo = vi.fn(async () => yolo === true)
+    if (yolo !== null) deps.appWideYolo = appWideYolo
+    const as = (caller: Caller, cmd: string, args: Record<string, unknown>) => handleCommand(deps, caller, cmd, args)
+    return { deps, appWideYolo, as }
+  }
+  const reasonOf = (r: { body: unknown }): unknown => (r.body as { reason?: unknown }).reason
+  const idOf = (r: { body: unknown }): string => (r.body as { id: string }).id
+
+  it('refuses an agent’s Job and Task made as such a profile while the app-wide mode asks, making nothing', async () => {
+    for (const caller of AGENTS) {
+      const { deps, as } = setup(false)
+      const job = await as(caller, 'jobs-create', { objective: 'o', cwd: 'D:/p', agentProfile: 'Unattended' })
+      expect([job.status, reasonOf(job)], JSON.stringify(caller)).toEqual([403, 'agent-profile-bypass-refused'])
+      expect((job.body as { error: string }).error).toContain('Run agents without permission checks')
+      expect(deps.getState().jobs).toHaveLength(0)
+      const jobId = idOf(await as(caller, 'jobs-create', { objective: 'o', cwd: 'D:/p' }))
+      const task = await as(caller, 'tasks-add', { job: jobId, spec: 's', agentProfile: 'ap_b' })
+      expect([task.status, reasonOf(task)], JSON.stringify(caller)).toEqual([403, 'agent-profile-bypass-refused'])
+      expect(deps.getState().tasks).toHaveLength(0)
+    }
+  })
+
+  /** A person's Job made as the bypass profile and run: its Run, given the coordinator Astera started when `coordinator`
+   *  names one */
+  const personsRun = async (deps: ReturnType<typeof setup>['deps'], coordinator?: string): Promise<string> => {
+    await handleCommand(deps, { sessionId: APP_CALLER }, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_b' })
+    const runId = deps.getState().runs[0].id
+    if (coordinator !== undefined)
+      await deps.setState({ ...deps.getState(), runs: deps.getState().runs.map((r) => (r.id === runId ? { ...r, coordinatorSessionId: coordinator } : r)) })
+    return runId
+  }
+
+  it("refuses an agent's Task that would inherit it from its Job, with or without accounts of its own, unless Astera started it as that Run's coordinator", async () => {
+    for (const caller of AGENTS) {
+      const { deps, as } = setup(false)
+      const jobId = idOf(await as({ sessionId: APP_CALLER }, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_b', auto: true }))
+      for (const args of [{ run: jobId, spec: 's' }, { run: jobId, spec: 's', account: 'acc1' }]) {
+        const r = await as(caller, 'task-create', args)
+        expect([r.status, reasonOf(r)], `${JSON.stringify(caller)} ${JSON.stringify(args)}`).toEqual([403, 'agent-profile-bypass-refused'])
+      }
+      expect(deps.getState().tasks).toHaveLength(0)
+    }
+    // An agent session that coordinates some other Run is no coordinator of this one
+    const { deps, as } = setup(false)
+    const runId = await personsRun(deps)
+    await handleCommand(deps, { sessionId: APP_CALLER }, 'run-create', { objective: 'other', cwd: 'D:/p' })
+    const other = deps.getState().runs.find((r) => r.id !== runId)!.id
+    await deps.setState({ ...deps.getState(), runs: deps.getState().runs.map((r) => (r.id === other ? { ...r, coordinatorSessionId: 'sess_agent' } : r)) })
+    for (const args of [{ run: runId, spec: 's' }, { run: runId, spec: 's', account: 'acc1' }]) {
+      const r = await as({ sessionId: 'sess_agent', role: 'cli' }, 'task-create', args)
+      expect([r.status, reasonOf(r)], JSON.stringify(args)).toEqual([403, 'agent-profile-bypass-refused'])
+    }
+    expect(deps.getState().tasks).toHaveLength(0)
+  })
+
+  // Follow-up F1: the coordinator Astera started to carry out a Job a person made as such a profile is not asked about
+  // the profile its Tasks inherit from that Job: the person chose it
+  it("lets the coordinator Astera started for the Run add Tasks that inherit the person's profile, with or without accounts", async () => {
+    const { deps, appWideYolo, as } = setup(false)
+    const runId = await personsRun(deps, 'sess_coord')
+    const coordinator: Caller = { sessionId: 'sess_coord', role: 'cli' }
+    for (const args of [{ run: runId, spec: 's' }, { run: runId, spec: 's', account: 'acc1' }]) {
+      const r = await as(coordinator, 'task-create', args)
+      expect(r.status, `${JSON.stringify(args)} ${JSON.stringify(r.body)}`).toBe(200)
+      expect(r.body).toMatchObject({ accountIds: ['acc1'], agentProfileId: 'ap_b' })
+    }
+    expect((await as(coordinator, 'tasks-add', { run: runId, spec: 's' })).status).toBe(200)
+    expect(deps.getState().tasks).toHaveLength(3)
+    expect(appWideYolo).not.toHaveBeenCalled()
+  })
+
+  // Second follow-up: an agent can make itself a Run's outside driver with `check --run` while Astera started no
+  // coordinator for it, so driving from outside earns nothing: its Tasks are asked about the Job's profile like any agent's
+  it("refuses an outside driver attached with check --run a Task that inherits the person's bypass profile, while the app asks", async () => {
+    const { deps, as } = setup(false)
+    const runId = await personsRun(deps)
+    const driver: Caller = { sessionId: 'sess_driver', role: 'cli' }
+    expect((await as(driver, 'check', { run: runId })).status).toBe(200)
+    expect(deps.getState().runs[0].externalCoordinatorSessionId).toBe('sess_driver')
+    for (const args of [{ run: runId, spec: 's' }, { run: runId, spec: 's', account: 'acc1' }]) {
+      const r = await as(driver, 'task-create', args)
+      expect([r.status, reasonOf(r)], JSON.stringify(args)).toEqual([403, 'agent-profile-bypass-refused'])
+    }
+    expect([(await as(driver, 'tasks-add', { run: runId, spec: 's' })).status]).toEqual([403])
+    expect(deps.getState().tasks).toHaveLength(0)
+  })
+
+  it('still refuses that coordinator a bypass profile it names itself, the Job’s own included', async () => {
+    const { deps, as } = setup(false)
+    const runId = await personsRun(deps, 'sess_coord')
+    const coordinator: Caller = { sessionId: 'sess_coord', role: 'cli' }
+    for (const args of [
+      { run: runId, spec: 's', agentProfileId: 'ap_b' },
+      { run: runId, spec: 's', agentProfileId: 'Unattended', account: 'acc1' }
+    ]) {
+      const r = await as(coordinator, 'task-create', args)
+      expect([r.status, reasonOf(r)], JSON.stringify(args)).toEqual([403, 'agent-profile-bypass-refused'])
+    }
+    const pub = await as(coordinator, 'tasks-add', { run: runId, spec: 's', agentProfile: 'ap_b' })
+    expect([pub.status, reasonOf(pub)]).toEqual([403, 'agent-profile-bypass-refused'])
+    expect(deps.getState().tasks).toHaveLength(0)
+  })
+
+  // Follow-up to the fix wave: only a profile that resolves to bypass is refused. One deleted since falls back at the
+  // spawn as for a person (design §5), so an agent's Task with its own accounts is made as before, holding the Job's id;
+  // a store that cannot be read refuses an agent, since it may hold a bypass profile
+  it("an agent's Task with its own accounts in a Job whose profile is gone is made as before; an unreadable store refuses", async () => {
+    for (const caller of AGENTS) {
+      const { deps, as } = setup(false)
+      const jobId = idOf(await as({ sessionId: APP_CALLER }, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_b', auto: true }))
+      deps.readAgentProfiles = async () => ({ version: 1, profiles: [] })
+      const r = await as(caller, 'task-create', { run: jobId, spec: 's', account: 'acc1' })
+      expect(r.status, `${JSON.stringify(caller)} ${JSON.stringify(r.body)}`).toBe(200)
+      expect(r.body).toMatchObject({ accountIds: ['acc1'], agentProfileId: 'ap_b' })
+      deps.readAgentProfiles = async () => {
+        throw new RepairNeeded('agent-profiles.json is damaged; a copy was kept beside it', 'agent-profiles.json')
+      }
+      const damaged = await as(caller, 'task-create', { run: jobId, spec: 's', account: 'acc1' })
+      expect(damaged, JSON.stringify(caller)).toMatchObject({ status: 409, body: { repair: 'agent-profiles.json' } })
+      expect(deps.getState().tasks).toHaveLength(1)
+      // A person's is made unread, as before
+      expect((await as({ sessionId: '', role: 'cli' }, 'task-create', { run: jobId, spec: 's', account: 'acc1' })).status).toBe(200)
+    }
+  })
+
+  it('lets an agent once the app-wide mode already skips the checks', async () => {
+    for (const caller of AGENTS) {
+      const { deps, as } = setup(true)
+      const job = await as(caller, 'jobs-create', { objective: 'o', cwd: 'D:/p', agentProfile: 'ap_b' })
+      expect(job.status, JSON.stringify(caller)).toBe(200)
+      const inherited = await as(caller, 'tasks-add', { job: idOf(job), spec: 's', account: 'acc1' })
+      expect(inherited.body, JSON.stringify(caller)).toMatchObject({ accountIds: ['acc1'], agentProfileId: 'ap_b' })
+      expect(deps.getState().tasks).toHaveLength(1)
+    }
+  })
+
+  it('a person in the app or at their own shell is not asked', async () => {
+    for (const caller of PEOPLE) {
+      const { appWideYolo, as } = setup(false)
+      const job = await as(caller, 'jobs-create', { objective: 'o', cwd: 'D:/p', agentProfile: 'Unattended' })
+      expect(job.status, JSON.stringify(caller)).toBe(200)
+      expect((await as(caller, 'tasks-add', { job: idOf(job), spec: 's' })).status, JSON.stringify(caller)).toBe(200)
+      expect(appWideYolo).not.toHaveBeenCalled()
+    }
+  })
+
+  it('a profile that checks permissions is not asked about, and a caller with no reader of the setting is refused', async () => {
+    const { appWideYolo, as } = setup(false)
+    expect((await as({ sessionId: '', role: 'mcp' }, 'jobs-create', { objective: 'o', cwd: 'D:/p', agentProfile: 'Asks' })).status).toBe(200)
+    expect(appWideYolo).not.toHaveBeenCalled()
+    const bare = setup(null)
+    const r = await bare.as({ sessionId: '', role: 'plugin' }, 'jobs-create', { objective: 'o', cwd: 'D:/p', agentProfile: 'Unattended' })
+    expect([r.status, reasonOf(r)]).toEqual([403, 'agent-profile-bypass-refused'])
+  })
+
+  // Third follow-up, the person's decision: starting, running or resuming a Run of a Job whose profile runs without
+  // permission checks starts work as it (Astera's coordinator would then plan its Tasks), so an agent is asked the same
+  // question: jobs run (MCP run_job, the SDK's jobs.run), run-start, run-spawn, runs resume (resume_run), run-resume and
+  // runs reconverge (reconverge_run). A person in the app or at their own shell is not asked
+  describe('starting a Run of a person’s Job made as such a profile', () => {
+    /** A person's Job made as the bypass profile: with `auto` not run yet, with a schedule waiting for its fire, else
+     *  with its first Run (run-create then answers the Run, so the Job's id is read from the state) */
+    const personsJob = async (deps: ReturnType<typeof setup>['deps'], extra: Record<string, unknown> = {}): Promise<string> => {
+      await handleCommand(deps, { sessionId: APP_CALLER }, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_b', ...extra })
+      return deps.getState().jobs.at(-1)!.id
+    }
+    const runOf = (deps: ReturnType<typeof setup>['deps'], jobId: string): string => deps.getState().runs.find((r) => r.jobId === jobId)!.id
+    const paused = async (deps: ReturnType<typeof setup>['deps'], runId: string): Promise<void> =>
+      deps.setState({ ...deps.getState(), runs: deps.getState().runs.map((r) => (r.id === runId ? { ...r, paused: true } : r)) })
+    const pausedSchedule = async (deps: ReturnType<typeof setup>['deps'], jobId: string): Promise<void> =>
+      deps.setState({ ...deps.getState(), jobs: deps.getState().jobs.map((j) => (j.id === jobId ? { ...j, paused: true } : j)) })
+
+    /** Each entry point: the call an agent makes, and what must not have changed when it is refused */
+    const ENTRIES: Array<{ name: string; prepare: (deps: ReturnType<typeof setup>['deps']) => Promise<{ cmd: string; args: Record<string, unknown>; unchanged: () => unknown }> }> = [
+      {
+        name: 'jobs run (MCP run_job), a first run',
+        prepare: async (deps) => {
+          const jobId = await personsJob(deps, { auto: true })
+          return { cmd: 'jobs-run', args: { id: jobId }, unchanged: () => [deps.getState().runs.length, deps.getState().jobs[0].pendingStart] }
+        }
+      },
+      {
+        name: 'run-start of the Job',
+        prepare: async (deps) => {
+          const jobId = await personsJob(deps, { auto: true })
+          return { cmd: 'run-start', args: { run: jobId }, unchanged: () => [deps.getState().runs.length, deps.getState().jobs[0].pendingStart] }
+        }
+      },
+      {
+        name: 'run-start of a Run (its coordinator again)',
+        prepare: async (deps) => {
+          const runId = runOf(deps, await personsJob(deps))
+          return { cmd: 'run-start', args: { run: runId }, unchanged: () => deps.getState().runs.find((r) => r.id === runId)!.coordinatorSessionId }
+        }
+      },
+      {
+        name: 'run-spawn (a later run)',
+        prepare: async (deps) => {
+          const jobId = await personsJob(deps)
+          return { cmd: 'run-spawn', args: { run: jobId }, unchanged: () => deps.getState().runs.length }
+        }
+      },
+      {
+        name: 'runs resume (MCP resume_run)',
+        prepare: async (deps) => {
+          const runId = runOf(deps, await personsJob(deps))
+          await paused(deps, runId)
+          return { cmd: 'runs-resume', args: { id: runId }, unchanged: () => deps.getState().runs.find((r) => r.id === runId)!.paused }
+        }
+      },
+      {
+        name: 'run-resume of a paused schedule',
+        prepare: async (deps) => {
+          const jobId = await personsJob(deps, { schedule: { kind: 'daily', time: '09:00' } })
+          await pausedSchedule(deps, jobId)
+          return { cmd: 'run-resume', args: { run: jobId }, unchanged: () => deps.getState().jobs[0].paused }
+        }
+      },
+      {
+        name: 'runs reconverge (MCP reconverge_run)',
+        prepare: async (deps) => {
+          const runId = runOf(deps, await personsJob(deps))
+          return { cmd: 'runs-reconverge', args: { id: runId }, unchanged: () => deps.getState().tasks.length }
+        }
+      }
+    ]
+
+    it('refuses an agent’s shell, an MCP client and a plugin at every entry point while the app-wide mode asks, changing nothing', async () => {
+      for (const entry of ENTRIES)
+        for (const caller of AGENTS) {
+          const { deps, as } = setup(false)
+          const { cmd, args, unchanged } = await entry.prepare(deps)
+          const before = JSON.stringify(unchanged())
+          const r = await as(caller, cmd, args)
+          expect([r.status, reasonOf(r)], `${entry.name} ${JSON.stringify(caller)}`).toEqual([403, 'agent-profile-bypass-refused'])
+          expect(JSON.stringify(unchanged()), `${entry.name} ${JSON.stringify(caller)}`).toBe(before)
+        }
+    })
+
+    it('a person in the app or at their own shell is not asked, and an agent is let once the app-wide mode skips the checks', async () => {
+      for (const entry of ENTRIES) {
+        for (const caller of PEOPLE) {
+          const { deps, appWideYolo, as } = setup(false)
+          const { cmd, args } = await entry.prepare(deps)
+          const r = await as(caller, cmd, args)
+          expect(reasonOf(r), `${entry.name} ${JSON.stringify(caller)} ${JSON.stringify(r.body)}`).toBeUndefined()
+          expect(appWideYolo, entry.name).not.toHaveBeenCalled()
+        }
+        for (const caller of AGENTS) {
+          const { deps, as } = setup(true)
+          const { cmd, args } = await entry.prepare(deps)
+          const r = await as(caller, cmd, args)
+          expect(reasonOf(r), `${entry.name} ${JSON.stringify(caller)} ${JSON.stringify(r.body)}`).toBeUndefined()
+        }
+      }
+      // The run itself goes through for both
+      const person = setup(false)
+      expect((await person.as({ sessionId: '', role: 'cli' }, 'jobs-run', { id: await personsJob(person.deps, { auto: true }) })).status).toBe(200)
+      const yolo = setup(true)
+      expect((await yolo.as({ sessionId: '', role: 'mcp' }, 'jobs-run', { id: await personsJob(yolo.deps, { auto: true }) })).status).toBe(200)
+    })
+
+    // As task-create's inherited profile: a profile gone since, or one that checks permissions, starts as before; a store
+    // that cannot be read refuses an agent (it may hold a bypass profile) and names the file
+    it('a Job whose profile is gone or checks permissions runs for an agent; an unreadable store refuses it', async () => {
+      const gone = setup(false)
+      const goneJob = await personsJob(gone.deps, { auto: true })
+      gone.deps.readAgentProfiles = async () => ({ version: 1, profiles: [] })
+      expect((await gone.as({ sessionId: 'sess_agent', role: 'cli' }, 'jobs-run', { id: goneJob })).status).toBe(200)
+      const asks = setup(false)
+      const asksJob = idOf(await handleCommand(asks.deps, { sessionId: APP_CALLER }, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_ask', auto: true }))
+      expect((await asks.as({ sessionId: '', role: 'mcp' }, 'jobs-run', { id: asksJob })).status).toBe(200)
+      expect(asks.appWideYolo).not.toHaveBeenCalled()
+      const damaged = setup(false)
+      const damagedJob = await personsJob(damaged.deps, { auto: true })
+      damaged.deps.readAgentProfiles = async () => {
+        throw new RepairNeeded('agent-profiles.json is damaged; a copy was kept beside it', 'agent-profiles.json')
+      }
+      expect(await damaged.as({ sessionId: '', role: 'mcp' }, 'jobs-run', { id: damagedJob })).toMatchObject({ status: 409, body: { repair: 'agent-profiles.json' } })
+      expect(damaged.deps.getState().runs).toHaveLength(0)
+      expect((await damaged.as({ sessionId: APP_CALLER }, 'jobs-run', { id: damagedJob })).status).toBe(200)
+    })
+  })
+
+  // Fourth follow-up, the same decision: the work a start sets going may run as a profile its own Tasks hold, in a Job
+  // with none. The run-start family also asks the profiles of the Run's Tasks not finished yet (for runs reconverge,
+  // whose repair borrows a finished Task's, every ordinary Task's) or of the Job's plan a new Run copies; and starting
+  // one Task's worker (worker-start, tasks dispatch) asks that Task's. Astera's coordinator of its own Run and the
+  // automatic placing (the app's and the Host's own callers) are not asked; a person is not asked
+  describe('work whose own Task holds such a profile, in a Job with none', () => {
+    type Deps = ReturnType<typeof setup>['deps']
+    const plainJob = async (deps: Deps, extra: Record<string, unknown> = {}): Promise<string> => {
+      await handleCommand(deps, { sessionId: APP_CALLER }, 'run-create', { objective: 'o', cwd: 'D:/p', ...extra })
+      return deps.getState().jobs.at(-1)!.id
+    }
+    const runOf = (deps: Deps, jobId: string): string => deps.getState().runs.find((r) => r.jobId === jobId)!.id
+    /** A Task a person made as the bypass profile, in a Job's plan or a Run */
+    const personsTask = async (deps: Deps, target: string): Promise<string> =>
+      idOf(await handleCommand(deps, { sessionId: APP_CALLER }, 'task-create', { run: target, spec: 's', account: 'acc1', agentProfileId: 'ap_b' }))
+    const patch = async (deps: Deps, f: (s: ReturnType<Deps['getState']>) => ReturnType<Deps['getState']>): Promise<void> => deps.setState(f(deps.getState()))
+    const taskStatus = (deps: Deps, id: string, status: 'completed'): Promise<void> =>
+      patch(deps, (s) => ({ ...s, tasks: s.tasks.map((t) => (t.id === id ? { ...t, status } : t)) }))
+
+    const ENTRIES: Array<{ name: string; prepare: (deps: Deps) => Promise<{ cmd: string; args: Record<string, unknown>; unchanged: () => unknown }> }> = [
+      {
+        name: 'jobs run, a plan Task',
+        prepare: async (deps) => {
+          const jobId = await plainJob(deps, { auto: true })
+          await personsTask(deps, jobId)
+          return { cmd: 'jobs-run', args: { id: jobId }, unchanged: () => deps.getState().runs.length }
+        }
+      },
+      {
+        name: 'run-spawn, a plan Task',
+        prepare: async (deps) => {
+          const jobId = await plainJob(deps)
+          await personsTask(deps, jobId)
+          return { cmd: 'run-spawn', args: { run: jobId }, unchanged: () => deps.getState().runs.length }
+        }
+      },
+      {
+        name: 'run-resume of a schedule, a plan Task',
+        prepare: async (deps) => {
+          const jobId = await plainJob(deps, { schedule: { kind: 'daily', time: '09:00' } })
+          await personsTask(deps, jobId)
+          await patch(deps, (s) => ({ ...s, jobs: s.jobs.map((j) => (j.id === jobId ? { ...j, paused: true } : j)) }))
+          return { cmd: 'run-resume', args: { run: jobId }, unchanged: () => deps.getState().jobs[0].paused }
+        }
+      },
+      {
+        name: 'run-start of a Run, a Task not finished',
+        prepare: async (deps) => {
+          const runId = runOf(deps, await plainJob(deps))
+          await personsTask(deps, runId)
+          return { cmd: 'run-start', args: { run: runId }, unchanged: () => deps.getState().runs.find((r) => r.id === runId)!.coordinatorSessionId }
+        }
+      },
+      {
+        name: 'runs resume, a Task not finished',
+        prepare: async (deps) => {
+          const runId = runOf(deps, await plainJob(deps))
+          await personsTask(deps, runId)
+          await patch(deps, (s) => ({ ...s, runs: s.runs.map((r) => (r.id === runId ? { ...r, paused: true } : r)) }))
+          return { cmd: 'runs-resume', args: { id: runId }, unchanged: () => deps.getState().runs.find((r) => r.id === runId)!.paused }
+        }
+      },
+      {
+        name: 'runs reconverge, a finished Task its repair would borrow',
+        prepare: async (deps) => {
+          const runId = runOf(deps, await plainJob(deps))
+          await taskStatus(deps, await personsTask(deps, runId), 'completed')
+          return { cmd: 'runs-reconverge', args: { id: runId }, unchanged: () => deps.getState().tasks.length }
+        }
+      }
+    ]
+
+    it('the run-start family refuses an agent while the app-wide mode asks, changing nothing', async () => {
+      for (const entry of ENTRIES)
+        for (const caller of AGENTS) {
+          const { deps, as } = setup(false)
+          const { cmd, args, unchanged } = await entry.prepare(deps)
+          const before = JSON.stringify(unchanged())
+          const r = await as(caller, cmd, args)
+          expect([r.status, reasonOf(r)], `${entry.name} ${JSON.stringify(caller)}`).toEqual([403, 'agent-profile-bypass-refused'])
+          expect(JSON.stringify(unchanged()), `${entry.name} ${JSON.stringify(caller)}`).toBe(before)
+        }
+    })
+
+    it('the run-start family lets a person, and an agent once the app-wide mode skips the checks', async () => {
+      for (const entry of ENTRIES) {
+        for (const caller of PEOPLE) {
+          const { deps, appWideYolo, as } = setup(false)
+          const { cmd, args } = await entry.prepare(deps)
+          const r = await as(caller, cmd, args)
+          expect(reasonOf(r), `${entry.name} ${JSON.stringify(caller)} ${JSON.stringify(r.body)}`).toBeUndefined()
+          expect(appWideYolo, entry.name).not.toHaveBeenCalled()
+        }
+        for (const caller of AGENTS) {
+          const { deps, as } = setup(true)
+          const { cmd, args } = await entry.prepare(deps)
+          expect(reasonOf(await as(caller, cmd, args)), `${entry.name} ${JSON.stringify(caller)}`).toBeUndefined()
+        }
+      }
+    })
+
+    it('a Task finished already is not asked about when its Run resumes; an unreadable store refuses an agent', async () => {
+      const { deps, as } = setup(false)
+      const runId = runOf(deps, await plainJob(deps))
+      await taskStatus(deps, await personsTask(deps, runId), 'completed')
+      await patch(deps, (s) => ({ ...s, runs: s.runs.map((r) => (r.id === runId ? { ...r, paused: true } : r)) }))
+      expect(reasonOf(await as({ sessionId: 'sess_agent', role: 'cli' }, 'runs-resume', { id: runId }))).toBeUndefined()
+      const damaged = setup(false)
+      const jobId = await plainJob(damaged.deps, { auto: true })
+      await personsTask(damaged.deps, jobId)
+      damaged.deps.readAgentProfiles = async () => {
+        throw new RepairNeeded('agent-profiles.json is damaged; a copy was kept beside it', 'agent-profiles.json')
+      }
+      expect(await damaged.as({ sessionId: '', role: 'mcp' }, 'jobs-run', { id: jobId })).toMatchObject({ status: 409, body: { repair: 'agent-profiles.json' } })
+      expect(damaged.deps.getState().runs).toHaveLength(0)
+    })
+
+    /** A ready Task a person made as the bypass profile, in a Run of a Job with none */
+    const readyTask = async (deps: Deps): Promise<{ runId: string; taskId: string }> => {
+      const runId = runOf(deps, await plainJob(deps))
+      return { runId, taskId: await personsTask(deps, runId) }
+    }
+    const start = (taskId: string) => ({ task: taskId, agent: 'codex', account: 'acc1', worktree: 'current' })
+    const opened = (deps: Deps): number => deps.getState().dispatches.length
+
+    it('worker-start refuses an agent a Task held by such a profile while the app-wide mode asks, opening nothing', async () => {
+      for (const caller of AGENTS) {
+        const { deps, as } = setup(false)
+        const { taskId } = await readyTask(deps)
+        const r = await as(caller, 'worker-start', start(taskId))
+        expect([r.status, reasonOf(r)], JSON.stringify(caller)).toEqual([403, 'agent-profile-bypass-refused'])
+        expect(opened(deps), JSON.stringify(caller)).toBe(0)
+      }
+      // The coordinator of another Run is no coordinator of this one
+      const { deps, as } = setup(false)
+      const { taskId } = await readyTask(deps)
+      await handleCommand(deps, { sessionId: APP_CALLER }, 'run-create', { objective: 'other', cwd: 'D:/p' })
+      await patch(deps, (s) => ({ ...s, runs: s.runs.map((r, i) => (i === 1 ? { ...r, coordinatorSessionId: 'sess_coord' } : r)) }))
+      expect(reasonOf(await as({ sessionId: 'sess_coord', role: 'cli' }, 'worker-start', start(taskId)))).toBe('agent-profile-bypass-refused')
+    })
+
+    it('worker-start lets a person, the automatic placing, its Run’s own coordinator, and an agent under yolo', async () => {
+      const LOOPS: Caller[] = [{ sessionId: APP_CALLER }, { sessionId: HOST_CALLER }]
+      for (const caller of [...PEOPLE, ...LOOPS]) {
+        const { deps, appWideYolo, as } = setup(false)
+        const { taskId } = await readyTask(deps)
+        const r = await as(caller, 'worker-start', start(taskId))
+        expect(r.status, `${JSON.stringify(caller)} ${JSON.stringify(r.body)}`).toBe(200)
+        expect(appWideYolo).not.toHaveBeenCalled()
+      }
+      const own = setup(false)
+      const mine = await readyTask(own.deps)
+      await patch(own.deps, (s) => ({ ...s, runs: s.runs.map((r) => (r.id === mine.runId ? { ...r, coordinatorSessionId: 'sess_coord' } : r)) }))
+      const coordinated = await own.as({ sessionId: 'sess_coord', role: 'cli' }, 'worker-start', start(mine.taskId))
+      expect(coordinated.status, JSON.stringify(coordinated.body)).toBe(200)
+      for (const caller of AGENTS) {
+        const { deps, as } = setup(true)
+        const { taskId } = await readyTask(deps)
+        expect((await as(caller, 'worker-start', start(taskId))).status, JSON.stringify(caller)).toBe(200)
+      }
+      // A Task with no profile is placed by an agent as before, nothing read
+      const plain = setup(false)
+      const runId = runOf(plain.deps, await plainJob(plain.deps))
+      const plainTask = idOf(await handleCommand(plain.deps, { sessionId: APP_CALLER }, 'task-create', { run: runId, spec: 's', account: 'acc1' }))
+      plain.deps.readAgentProfiles = async () => {
+        throw new Error('not read')
+      }
+      expect((await plain.as({ sessionId: 'sess_agent', role: 'cli' }, 'worker-start', start(plainTask))).status).toBe(200)
+    })
+
+    it('tasks dispatch refuses an agent such a Task while the app-wide mode asks, and places it for a person or under yolo', async () => {
+      const placed = (deps: Deps) => {
+        const dispatchTask = vi.fn(async () => ({ status: 200, body: {} }))
+        deps.dispatchTask = dispatchTask
+        return dispatchTask
+      }
+      for (const caller of AGENTS) {
+        const { deps, as } = setup(false)
+        const { taskId } = await readyTask(deps)
+        const dispatchTask = placed(deps)
+        const r = await as(caller, 'tasks-dispatch', { id: taskId })
+        expect([r.status, reasonOf(r)], JSON.stringify(caller)).toEqual([403, 'agent-profile-bypass-refused'])
+        expect(dispatchTask).not.toHaveBeenCalled()
+      }
+      for (const caller of PEOPLE) {
+        const { deps, as } = setup(false)
+        const { taskId } = await readyTask(deps)
+        const dispatchTask = placed(deps)
+        expect((await as(caller, 'tasks-dispatch', { id: taskId })).status, JSON.stringify(caller)).toBe(200)
+        expect(dispatchTask).toHaveBeenCalledWith(taskId)
+      }
+      for (const caller of AGENTS) {
+        const { deps, as } = setup(true)
+        const { taskId } = await readyTask(deps)
+        const dispatchTask = placed(deps)
+        expect((await as(caller, 'tasks-dispatch', { id: taskId })).status, JSON.stringify(caller)).toBe(200)
+        expect(dispatchTask).toHaveBeenCalledWith(taskId)
+      }
+    })
+  })
+
+  // Fifth follow-up (the review's reproduction): the gate reads agent-profiles.json, a disk read in the Host, and a command
+  // that took its state before that read committed it over whatever landed meanwhile; two worker-starts at once kept one
+  // Dispatch of two. The gate is asked before the command reads its state, as the plugin checks are
+  describe('the gate is asked before the command reads its state', () => {
+    type Deps = ReturnType<typeof setup>['deps']
+    const AGENT: Caller = { sessionId: 'sess_agent', role: 'cli' }
+    const MCP: Caller = { sessionId: '', role: 'mcp' }
+    /** Holds the profile read open until the returned call, as a slow disk would */
+    const holding = (deps: Deps): (() => void) => {
+      const read = deps.readAgentProfiles!
+      let open: () => void = () => {}
+      const held = new Promise<void>((r) => (open = r))
+      deps.readAgentProfiles = async () => {
+        await held
+        return read()
+      }
+      return open
+    }
+    const mark = async (deps: Deps): Promise<void> => {
+      const s = deps.getState()
+      await deps.setState({ ...s, projects: [...s.projects, { id: 'prj_marker', path: 'D:/marker', name: 'marker', createdAt: NOW } as never] })
+    }
+    const marked = (deps: Deps): boolean => deps.getState().projects.some((p) => p.id === 'prj_marker')
+    /** A person's Job made as the `ask` profile (the gate reads the store and lets the start go) */
+    const asksJob = async (deps: Deps, extra: Record<string, unknown> = {}): Promise<string> => {
+      await handleCommand(deps, { sessionId: APP_CALLER }, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_ask', ...extra })
+      return deps.getState().jobs.at(-1)!.id
+    }
+    const asksTask = async (deps: Deps, extra: Record<string, unknown> = {}): Promise<{ runId: string; taskId: string }> => {
+      await handleCommand(deps, { sessionId: APP_CALLER }, 'run-create', { objective: 'o', cwd: 'D:/p', ...extra })
+      const runId = deps.getState().runs.at(-1)!.id
+      return { runId, taskId: idOf(await handleCommand(deps, { sessionId: APP_CALLER }, 'task-create', { run: runId, spec: 's', account: 'acc1', agentProfileId: 'ap_ask' })) }
+    }
+    const ENTRIES: Array<{ name: string; prepare: (deps: Deps) => Promise<{ caller: Caller; cmd: string; args: Record<string, unknown> }> }> = [
+      {
+        name: 'runs resume (MCP resume_run)',
+        prepare: async (deps) => {
+          const jobId = await asksJob(deps)
+          const runId = deps.getState().runs.find((r) => r.jobId === jobId)!.id
+          await deps.setState({ ...deps.getState(), runs: deps.getState().runs.map((r) => (r.id === runId ? { ...r, paused: true } : r)) })
+          return { caller: MCP, cmd: 'runs-resume', args: { id: runId } }
+        }
+      },
+      { name: 'jobs run (MCP run_job)', prepare: async (deps) => ({ caller: MCP, cmd: 'jobs-run', args: { id: await asksJob(deps, { auto: true }) } }) },
+      { name: 'run-start of a Job', prepare: async (deps) => ({ caller: AGENT, cmd: 'run-start', args: { run: await asksJob(deps, { auto: true }) } }) },
+      { name: 'run-spawn', prepare: async (deps) => ({ caller: AGENT, cmd: 'run-spawn', args: { run: await asksJob(deps) } }) },
+      {
+        name: 'run-resume of a schedule',
+        prepare: async (deps) => {
+          const jobId = await asksJob(deps, { schedule: { kind: 'daily', time: '09:00' } })
+          await deps.setState({ ...deps.getState(), jobs: deps.getState().jobs.map((j) => (j.id === jobId ? { ...j, paused: true } : j)) })
+          return { caller: AGENT, cmd: 'run-resume', args: { run: jobId } }
+        }
+      },
+      {
+        name: 'worker-start',
+        prepare: async (deps) => ({ caller: AGENT, cmd: 'worker-start', args: { task: (await asksTask(deps)).taskId, agent: 'codex', account: 'acc1', worktree: 'current' } })
+      },
+      {
+        name: 'task-update back to ready',
+        prepare: async (deps) => {
+          const { taskId } = await asksTask(deps)
+          await deps.setState({ ...deps.getState(), tasks: deps.getState().tasks.map((t) => (t.id === taskId ? { ...t, status: 'failed' as const, consecutiveFailures: FAILURE_LIMIT } : t)) })
+          return { caller: AGENT, cmd: 'task-update', args: { id: taskId, status: 'ready' } }
+        }
+      }
+    ]
+
+    it('keeps a write that lands while the gate reads the profiles', async () => {
+      for (const entry of ENTRIES) {
+        const { deps, as } = setup(false)
+        const { caller, cmd, args } = await entry.prepare(deps)
+        const release = holding(deps)
+        const pending = as(caller, cmd, args)
+        await new Promise((r) => setTimeout(r, 5))
+        await mark(deps)
+        release()
+        const r = await pending
+        expect(r.status, `${entry.name} ${JSON.stringify(r.body)}`).toBe(200)
+        expect(marked(deps), `${entry.name}: the write during the read survives`).toBe(true)
+      }
+    })
+
+    it('two worker-starts at once by an agent each keep their Dispatch, profiled or not', async () => {
+      for (const profiled of [true, false]) {
+        const { deps, as } = setup(false)
+        let n = 0
+        deps.startWorker = async () => ({ sessionId: `sess${++n}`, cwd: 'D:/p', specPath: `D:/p/orch/specs/${n}.md` })
+        await handleCommand(deps, { sessionId: APP_CALLER }, 'run-create', { objective: 'o', cwd: 'D:/p', concurrency: 3 })
+        const runId = deps.getState().runs[0].id
+        const ids: string[] = []
+        for (const spec of ['a', 'b'])
+          ids.push(idOf(await handleCommand(deps, { sessionId: APP_CALLER }, 'task-create', { run: runId, spec, account: 'acc1', ...(profiled ? { agentProfileId: 'ap_ask' } : {}) })))
+        const replies = await Promise.all(ids.map((task) => as(AGENT, 'worker-start', { task, agent: 'codex', account: 'acc1', worktree: 'current' })))
+        expect(replies.map((r) => r.status), `${profiled} ${JSON.stringify(replies.map((r) => r.body))}`).toEqual([200, 200])
+        expect(deps.getState().dispatches.map((d) => d.taskId).sort(), `${profiled}: both Dispatches are in the state`).toEqual([...ids].sort())
+      }
+    })
+  })
+
+  // Fifth follow-up, the same decision: task-update moving a failed, circuit-broken or finished Task back to ready (or
+  // pending) re-arms it, and the loop then places it (slotsToFill). For a Task held by a bypass profile that is a restart:
+  // an agent is refused while the app asks; the coordinator Astera started for its Run and a person are not asked
+  describe('task-update re-arming a Task held by such a profile', () => {
+    type Deps = ReturnType<typeof setup>['deps']
+    /** A person's app-placed Run of a Job with none: a Task made as `profile` (none for null) and circuit-broken, and
+     *  `another` Task not started yet, which keeps the Run running */
+    const broken = async (deps: Deps, profile: string | null = 'ap_b', another = false): Promise<{ runId: string; taskId: string }> => {
+      const jobId = idOf(await handleCommand(deps, { sessionId: APP_CALLER }, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true }))
+      await handleCommand(deps, { sessionId: APP_CALLER }, 'task-create', { run: jobId, spec: 's', account: 'acc1', ...(profile !== null ? { agentProfileId: profile } : {}) })
+      if (another) await handleCommand(deps, { sessionId: APP_CALLER }, 'task-create', { run: jobId, spec: 'later', account: 'acc1' })
+      await handleCommand(deps, { sessionId: APP_CALLER }, 'run-start', { run: jobId })
+      const s = deps.getState()
+      const runId = s.runs[0].id
+      const taskId = s.tasks.find((t) => t.runId === runId && t.spec === 's')!.id
+      await deps.setState({ ...s, tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, status: 'failed' as const, consecutiveFailures: FAILURE_LIMIT } : t)) })
+      return { runId, taskId }
+    }
+    const offered = (deps: Deps, taskId: string): boolean => slotsToFill(deps.getState()).some((x) => x.taskId === taskId)
+    const rearm = (taskId: string, status = 'ready') => ({ id: taskId, status })
+
+    it('refuses an agent while the app-wide mode asks, leaving the Task as it was and unplaced', async () => {
+      for (const caller of AGENTS)
+        for (const status of ['ready', 'pending']) {
+          const { deps, as } = setup(false)
+          const { taskId } = await broken(deps)
+          const r = await as(caller, 'task-update', rearm(taskId, status))
+          expect([r.status, reasonOf(r)], `${JSON.stringify(caller)} ${status}`).toEqual([403, 'agent-profile-bypass-refused'])
+          expect(deps.getState().tasks.find((t) => t.id === taskId)).toMatchObject({ status: 'failed', consecutiveFailures: FAILURE_LIMIT })
+          expect(offered(deps, taskId)).toBe(false)
+        }
+    })
+
+    it('lets a person, the coordinator Astera started for the Run, and an agent under yolo, and the loop places it', async () => {
+      for (const caller of PEOPLE) {
+        const { deps, appWideYolo, as } = setup(false)
+        const { taskId } = await broken(deps)
+        expect((await as(caller, 'task-update', rearm(taskId))).status, JSON.stringify(caller)).toBe(200)
+        expect(offered(deps, taskId), JSON.stringify(caller)).toBe(true)
+        expect(appWideYolo).not.toHaveBeenCalled()
+      }
+      // drivesRun's coordinator carries out a Run still running: here its other Task is not started yet
+      const own = setup(false)
+      const mine = await broken(own.deps, 'ap_b', true)
+      await own.deps.setState({ ...own.deps.getState(), runs: own.deps.getState().runs.map((r) => (r.id === mine.runId ? { ...r, coordinatorSessionId: 'sess_coord' } : r)) })
+      expect((await own.as({ sessionId: 'sess_coord', role: 'cli' }, 'task-update', rearm(mine.taskId))).status).toBe(200)
+      for (const caller of AGENTS) {
+        const { deps, as } = setup(true)
+        const { taskId } = await broken(deps)
+        expect((await as(caller, 'task-update', rearm(taskId))).status, JSON.stringify(caller)).toBe(200)
+      }
+    })
+
+    it('asks nothing for a Task with no profile or a move that re-arms nothing; an unreadable store refuses an agent', async () => {
+      const plain = setup(false)
+      const p = await broken(plain.deps, null)
+      plain.deps.readAgentProfiles = async () => {
+        throw new Error('not read')
+      }
+      expect((await plain.as({ sessionId: 'sess_agent', role: 'cli' }, 'task-update', rearm(p.taskId))).status).toBe(200)
+      const done = setup(false)
+      const d = await broken(done.deps)
+      expect((await done.as({ sessionId: '', role: 'mcp' }, 'task-update', rearm(d.taskId, 'completed'))).status).toBe(200)
+      const damaged = setup(false)
+      const x = await broken(damaged.deps)
+      damaged.deps.readAgentProfiles = async () => {
+        throw new RepairNeeded('agent-profiles.json is damaged; a copy was kept beside it', 'agent-profiles.json')
+      }
+      expect(await damaged.as({ sessionId: 'sess_agent', role: 'cli' }, 'task-update', rearm(x.taskId))).toMatchObject({ status: 409, body: { repair: 'agent-profiles.json' } })
+      expect(offered(damaged.deps, x.taskId)).toBe(false)
+    })
+  })
+
+  // Sixth follow-up, the person's decision: answering a stopped Task's question only lets it continue and is not asked;
+  // an answer that opens a new attempt is a restart. The exhausted Gate's retry-once opens a repair Dispatch (repairOnce),
+  // so for a Task held by such a profile an agent is refused while the app asks; mark-failed and a plain answer are not
+  describe('answering a question of a Task held by such a profile', () => {
+    type Deps = ReturnType<typeof setup>['deps']
+    /** A person's Run with a Task made as `profile`, stopped on an open Gate of `kind` (the exhausted one offers
+     *  retry-once and mark-failed); `repairOnce` records the Tasks it opened a repair for */
+    const stopped = async (deps: Deps, kind?: 'convergence-exhausted', profile: string | null = 'ap_b') => {
+      const repairs: string[] = []
+      deps.repairOnce = async (a) => {
+        repairs.push(a.taskId)
+        if (a.from) await deps.setState(a.from)
+        return { ok: true }
+      }
+      await handleCommand(deps, { sessionId: APP_CALLER }, 'run-create', { objective: 'o', cwd: 'D:/p' })
+      const runId = deps.getState().runs[0].id
+      const taskId = idOf(await handleCommand(deps, { sessionId: APP_CALLER }, 'task-create', { run: runId, spec: 's', account: 'acc1', ...(profile !== null ? { agentProfileId: profile } : {}) }))
+      const s = deps.getState()
+      await deps.setState({
+        ...s,
+        tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, status: 'blocked' as const } : t)),
+        gates: [...s.gates, { id: 'gate_q', runId, taskId, question: 'q?', status: 'open', createdAt: NOW, ...(kind ? { kind, options: ['retry-once', 'mark-failed'] } : {}) }]
+      })
+      return { runId, taskId, repairs, gate: () => deps.getState().gates.find((g) => g.id === 'gate_q')! }
+    }
+    const retryOnce = { id: 'gate_q', resolution: 'retry-once' }
+
+    it('refuses an agent’s retry-once while the app-wide mode asks, opening nothing and leaving the question open', async () => {
+      for (const caller of AGENTS) {
+        const { deps, as } = setup(false)
+        const q = await stopped(deps, 'convergence-exhausted')
+        const r = await as(caller, 'gate-resolve', retryOnce)
+        expect([r.status, reasonOf(r)], JSON.stringify(caller)).toEqual([403, 'agent-profile-bypass-refused'])
+        expect(q.repairs).toEqual([])
+        expect(q.gate().status).toBe('open')
+      }
+      // The public name (questions answer, MCP answer_question) goes through the same door
+      const { deps, as } = setup(false)
+      const q = await stopped(deps, 'convergence-exhausted')
+      const r = await as({ sessionId: '', role: 'mcp' }, 'questions-answer', { id: 'gate_q', answer: 'retry-once' })
+      expect([r.status, reasonOf(r)]).toEqual([403, 'agent-profile-bypass-refused'])
+      expect(q.repairs).toEqual([])
+    })
+
+    it('lets an agent answer a question or mark the Task failed, and lets a person, its Run’s coordinator and yolo retry once', async () => {
+      for (const caller of AGENTS) {
+        const plain = setup(false)
+        const q = await stopped(plain.deps)
+        expect((await plain.as(caller, 'questions-answer', { id: 'gate_q', answer: 'go on' })).status, JSON.stringify(caller)).toBe(200)
+        expect(q.gate().status).toBe('resolved')
+        expect(plain.appWideYolo).not.toHaveBeenCalled()
+        const giving = setup(false)
+        await stopped(giving.deps, 'convergence-exhausted')
+        expect((await giving.as(caller, 'gate-resolve', { id: 'gate_q', resolution: 'mark-failed' })).status, JSON.stringify(caller)).toBe(200)
+      }
+      for (const caller of PEOPLE) {
+        const { deps, appWideYolo, as } = setup(false)
+        const q = await stopped(deps, 'convergence-exhausted')
+        expect((await as(caller, 'gate-resolve', retryOnce)).status, JSON.stringify(caller)).toBe(200)
+        expect(q.repairs).toEqual([q.taskId])
+        expect(appWideYolo).not.toHaveBeenCalled()
+      }
+      const own = setup(false)
+      const mine = await stopped(own.deps, 'convergence-exhausted')
+      await own.deps.setState({ ...own.deps.getState(), runs: own.deps.getState().runs.map((r) => (r.id === mine.runId ? { ...r, coordinatorSessionId: 'sess_coord' } : r)) })
+      expect((await own.as({ sessionId: 'sess_coord', role: 'cli' }, 'gate-resolve', retryOnce)).status).toBe(200)
+      expect(mine.repairs).toEqual([mine.taskId])
+      for (const caller of AGENTS) {
+        const { deps, as } = setup(true)
+        const q = await stopped(deps, 'convergence-exhausted')
+        expect((await as(caller, 'gate-resolve', retryOnce)).status, JSON.stringify(caller)).toBe(200)
+        expect(q.repairs).toEqual([q.taskId])
+      }
+    })
+
+    // Eighth follow-up, the ruling (the final review's reproduction): gate-resolve takes any text, and on the exhausted
+    // question any answer but mark-failed unblocks the Task to ready, where the loop places it again. For an agent that is
+    // a restart; a person's free answer is not asked
+    it('refuses an agent any answer but mark-failed on the exhausted question; a person and yolo answer freely', async () => {
+      for (const caller of AGENTS)
+        for (const answer of ['go on', 'retry-once']) {
+          const { deps, as } = setup(false)
+          const q = await stopped(deps, 'convergence-exhausted')
+          const r = await as(caller, 'questions-answer', { id: 'gate_q', answer })
+          expect([r.status, reasonOf(r)], `${answer} ${JSON.stringify(caller)}`).toEqual([403, 'agent-profile-bypass-refused'])
+          expect(q.gate().status).toBe('open')
+          expect(deps.getState().tasks.find((t) => t.id === q.taskId)!.status).toBe('blocked')
+        }
+      for (const caller of PEOPLE) {
+        const { deps, appWideYolo, as } = setup(false)
+        const q = await stopped(deps, 'convergence-exhausted')
+        expect((await as(caller, 'questions-answer', { id: 'gate_q', answer: 'go on' })).status, JSON.stringify(caller)).toBe(200)
+        expect(q.gate().status).toBe('resolved')
+        expect(appWideYolo).not.toHaveBeenCalled()
+      }
+      for (const caller of AGENTS) {
+        const { deps, as } = setup(true)
+        const q = await stopped(deps, 'convergence-exhausted')
+        expect((await as(caller, 'questions-answer', { id: 'gate_q', answer: 'go on' })).status, JSON.stringify(caller)).toBe(200)
+        expect(q.gate().status).toBe('resolved')
+      }
+    })
+
+    it('asks nothing for a Task with no profile; an unreadable store refuses an agent’s retry-once', async () => {
+      const plain = setup(false)
+      const p = await stopped(plain.deps, 'convergence-exhausted', null)
+      plain.deps.readAgentProfiles = async () => {
+        throw new Error('not read')
+      }
+      expect((await plain.as({ sessionId: 'sess_agent', role: 'cli' }, 'gate-resolve', retryOnce)).status).toBe(200)
+      expect(p.repairs).toEqual([p.taskId])
+      const damaged = setup(false)
+      const d = await stopped(damaged.deps, 'convergence-exhausted')
+      damaged.deps.readAgentProfiles = async () => {
+        throw new RepairNeeded('agent-profiles.json is damaged; a copy was kept beside it', 'agent-profiles.json')
+      }
+      expect(await damaged.as({ sessionId: '', role: 'plugin' }, 'gate-resolve', retryOnce)).toMatchObject({ status: 409, body: { repair: 'agent-profiles.json' } })
+      expect(d.repairs).toEqual([])
+      expect(d.gate().status).toBe('open')
+    })
+  })
+
+  // Seventh follow-up, the ruling: a GitHub question's continue and retry start the GitHub step afresh with its failures
+  // reset (answerGitHubGate), the same effect as task-update's re-arm. The step's repairs run as the profile of the
+  // latest finished ordinary Task (workerProfileOf), so that profile is asked; other answers are not
+  describe('answering a GitHub question whose step repairs as such a profile', () => {
+    type Deps = ReturnType<typeof setup>['deps']
+    const GITHUB = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+    /** A person's lifecycle Run: its finished Task made as `profile`, with its attempt, and the GitHub step stopped on an
+     *  open question of `kind` offering `options`, two failures in */
+    const stoppedStep = async (deps: Deps, kind = 'github-carry', options = ['retry', 'mark-failed'], profile: string | null = 'ap_b'): Promise<void> => {
+      await deps.setState({
+        ...emptyState(),
+        jobs: [{ id: 'job_g', objective: 'o', cwd: 'D:/p', createdAt: NOW, github: GITHUB, convergence: {} }],
+        runs: [{ id: 'run_g', jobId: 'job_g', ordinal: 1, createdAt: NOW, worktree: 'D:/wt/run' }],
+        tasks: [
+          { id: 'tsk_a', runId: 'run_g', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW, ...(profile !== null ? { agentProfileId: profile } : {}) },
+          {
+            id: 'tsk_l', runId: 'run_g', kind: 'lifecycle', title: 'GitHub', spec: 's', deps: ['tsk_a'], status: 'blocked', validateConfigIds: ['github:ci'],
+            consecutiveFailures: 2, createdAt: NOW, updatedAt: NOW, ciWait: { since: NOW, done: [], pr: 12, sha: 'c'.repeat(40), waitingSince: NOW }
+          }
+        ],
+        dispatches: [{ id: 'dsp_a', taskId: 'tsk_a', provider: 'codex', accountId: 'acc1', sessionId: 'sess_w', cwd: 'D:/p', specPath: '', startedAt: NOW, workerState: 'ready', retained: false, outcome: 'succeeded', endedAt: NOW }],
+        gates: [{ id: 'gate_g', runId: 'run_g', taskId: 'tsk_l', question: 'q', kind: kind as never, options, status: 'open', createdAt: NOW }]
+      })
+    }
+    const step = (deps: Deps) => deps.getState().tasks.find((t) => t.id === 'tsk_l')!
+    const gateOf = (deps: Deps) => deps.getState().gates.find((g) => g.id === 'gate_g')!
+
+    it('refuses an agent’s continue or retry while the app-wide mode asks, leaving the step stopped', async () => {
+      for (const [kind, answer] of [['github-carry', 'retry'], ['github-external-head', 'continue']] as const)
+        for (const caller of AGENTS) {
+          const { deps, as } = setup(false)
+          await stoppedStep(deps, kind, [answer, 'mark-failed'])
+          const r = await as(caller, 'gate-resolve', { id: 'gate_g', resolution: answer })
+          expect([r.status, reasonOf(r)], `${answer} ${JSON.stringify(caller)}`).toEqual([403, 'agent-profile-bypass-refused'])
+          expect(gateOf(deps).status).toBe('open')
+          expect(step(deps)).toMatchObject({ status: 'blocked', consecutiveFailures: 2 })
+        }
+    })
+
+    it('lets a person, the Run’s own coordinator and an agent under yolo retry it; another answer is not asked', async () => {
+      for (const caller of PEOPLE) {
+        const { deps, appWideYolo, as } = setup(false)
+        await stoppedStep(deps)
+        expect((await as(caller, 'gate-resolve', { id: 'gate_g', resolution: 'retry' })).status, JSON.stringify(caller)).toBe(200)
+        expect(step(deps).consecutiveFailures, JSON.stringify(caller)).toBe(0)
+        expect(appWideYolo).not.toHaveBeenCalled()
+      }
+      const own = setup(false)
+      await stoppedStep(own.deps)
+      await own.deps.setState({ ...own.deps.getState(), runs: own.deps.getState().runs.map((r) => ({ ...r, coordinatorSessionId: 'sess_coord' })) })
+      expect((await own.as({ sessionId: 'sess_coord', role: 'cli' }, 'gate-resolve', { id: 'gate_g', resolution: 'retry' })).status).toBe(200)
+      for (const caller of AGENTS) {
+        const { deps, as } = setup(true)
+        await stoppedStep(deps)
+        expect((await as(caller, 'gate-resolve', { id: 'gate_g', resolution: 'retry' })).status, JSON.stringify(caller)).toBe(200)
+        expect(step(deps).consecutiveFailures).toBe(0)
+      }
+      // Back to the same wait, or giving up, starts nothing afresh
+      for (const [kind, options, answer] of [['github-no-ci', ['wait', 'mark-failed'], 'wait'], ['github-carry', ['retry', 'mark-failed'], 'mark-failed']] as const) {
+        const { deps, appWideYolo, as } = setup(false)
+        await stoppedStep(deps, kind, [...options])
+        expect((await as({ sessionId: '', role: 'mcp' }, 'gate-resolve', { id: 'gate_g', resolution: answer })).status, answer).toBe(200)
+        expect(appWideYolo).not.toHaveBeenCalled()
+      }
+    })
+
+    // Eighth follow-up (the final review's reproduction): a lifecycle Task holds no profile of its own, its repairs borrow
+    // one (workerProfileOf), so task-update's re-arm of a failed step, or of one stopped on a GitHub question, asks that
+    // one; otherwise it sidesteps the gated retry
+    it('task-update re-arming the step, failed or stopped on a question, asks the profile its repairs borrow', async () => {
+      const failed = async (deps: Deps): Promise<void> => {
+        await stoppedStep(deps)
+        await deps.setState({
+          ...deps.getState(),
+          gates: [],
+          tasks: deps.getState().tasks.map((t) => (t.id === 'tsk_l' ? { ...t, status: 'failed' as const, consecutiveFailures: FAILURE_LIMIT } : t))
+        })
+      }
+      for (const prepare of [failed, (deps: Deps) => stoppedStep(deps)])
+        for (const caller of AGENTS) {
+          const { deps, as } = setup(false)
+          await prepare(deps)
+          const before = step(deps)
+          const r = await as(caller, 'task-update', { id: 'tsk_l', status: 'ready' })
+          expect([r.status, reasonOf(r)], JSON.stringify(caller)).toEqual([403, 'agent-profile-bypass-refused'])
+          expect(step(deps)).toMatchObject({ status: before.status, consecutiveFailures: before.consecutiveFailures })
+          expect(lifecycleToStart(deps.getState()).some((x) => x.taskId === 'tsk_l')).toBe(false)
+        }
+      for (const caller of PEOPLE) {
+        const { deps, as } = setup(false)
+        await failed(deps)
+        expect((await as(caller, 'task-update', { id: 'tsk_l', status: 'ready' })).status, JSON.stringify(caller)).toBe(200)
+        expect(lifecycleToStart(deps.getState()).some((x) => x.taskId === 'tsk_l'), JSON.stringify(caller)).toBe(true)
+      }
+      const yolo = setup(true)
+      await failed(yolo.deps)
+      expect((await yolo.as({ sessionId: '', role: 'mcp' }, 'task-update', { id: 'tsk_l', status: 'ready' })).status).toBe(200)
+    })
+
+    // Ninth follow-up (the review): starting or resuming the Run asks its unfinished Tasks' profiles, and the GitHub step,
+    // unfinished, holds none of its own; the one its repairs borrow (workerProfileOf) is asked, in a Job with none
+    it('runs resume and run-start of the Run ask the profile its unfinished GitHub step borrows', async () => {
+      const entries = [
+        {
+          cmd: 'runs-resume',
+          args: { id: 'run_g' },
+          prepare: async (deps: Deps) => {
+            await stoppedStep(deps)
+            await deps.setState({ ...deps.getState(), runs: deps.getState().runs.map((r) => ({ ...r, paused: true })) })
+          }
+        },
+        { cmd: 'run-start', args: { run: 'run_g' }, prepare: (deps: Deps) => stoppedStep(deps) }
+      ]
+      for (const { cmd, args, prepare } of entries) {
+        for (const caller of AGENTS) {
+          const { deps, as } = setup(false)
+          await prepare(deps)
+          const before = JSON.stringify(deps.getState().runs)
+          const r = await as(caller, cmd, args)
+          expect([r.status, reasonOf(r)], `${cmd} ${JSON.stringify(caller)}`).toEqual([403, 'agent-profile-bypass-refused'])
+          expect(JSON.stringify(deps.getState().runs), cmd).toBe(before)
+        }
+        for (const caller of PEOPLE) {
+          const { deps, appWideYolo, as } = setup(false)
+          await prepare(deps)
+          const r = await as(caller, cmd, args)
+          expect(reasonOf(r), `${cmd} ${JSON.stringify(caller)} ${JSON.stringify(r.body)}`).toBeUndefined()
+          expect(appWideYolo).not.toHaveBeenCalled()
+        }
+        const yolo = setup(true)
+        await prepare(yolo.deps)
+        expect(reasonOf(await yolo.as({ sessionId: '', role: 'mcp' }, cmd, args)), cmd).toBeUndefined()
+      }
+    })
+
+    it('asks nothing when the step borrows no profile; an unreadable store refuses an agent', async () => {
+      const plain = setup(false)
+      await stoppedStep(plain.deps, 'github-carry', ['retry', 'mark-failed'], null)
+      plain.deps.readAgentProfiles = async () => {
+        throw new Error('not read')
+      }
+      expect((await plain.as({ sessionId: 'sess_agent', role: 'cli' }, 'gate-resolve', { id: 'gate_g', resolution: 'retry' })).status).toBe(200)
+      const damaged = setup(false)
+      await stoppedStep(damaged.deps)
+      damaged.deps.readAgentProfiles = async () => {
+        throw new RepairNeeded('agent-profiles.json is damaged; a copy was kept beside it', 'agent-profiles.json')
+      }
+      expect(await damaged.as({ sessionId: '', role: 'mcp' }, 'gate-resolve', { id: 'gate_g', resolution: 'retry' })).toMatchObject({ status: 409, body: { repair: 'agent-profiles.json' } })
+      expect(gateOf(damaged.deps).status).toBe('open')
+    })
   })
 })

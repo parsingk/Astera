@@ -46,9 +46,12 @@ import type {
   Progress as ProgressDto,
   TaskCompletion as TaskCompletionDto,
   Task as TaskDto,
-  GitHubLifecycle as GitHubLifecycleDto
+  GitHubLifecycle as GitHubLifecycleDto,
+  TokenTotals as TokenTotalsDto
 } from '../publicContract'
 import type { GitHubLifecycleView } from '../github/view'
+import type { TokenTotals } from '../types'
+import type { runTokensOf, taskTokensOf } from './publicViews'
 
 type Check<T extends true> = T
 /** The app's value is accepted where the DTO is promised. */
@@ -67,10 +70,17 @@ type _project = Check<Fits<Pick<Project, Fields<typeof PROJECT_FIELDS>>, Project
 type _projectKeys = Check<SameKeys<ProjectDto, Fields<typeof PROJECT_FIELDS>>>
 type _job = Check<Fits<Pick<Job, Fields<typeof JOB_FIELDS>>, Omit<JobDto, Derived>>>
 type _jobKeys = Check<SameKeys<Omit<JobDto, Derived>, Fields<typeof JOB_FIELDS>>>
-type _run = Check<Fits<Pick<JobRun, Fields<typeof RUN_FIELDS>>, Omit<RunDto, Derived | 'waitingForApproval' | 'github'>>>
-type _runKeys = Check<SameKeys<Omit<RunDto, Derived | 'waitingForApproval' | 'github'>, Fields<typeof RUN_FIELDS>>>
+/** What `runs get` adds beside the view (command.ts): how many Tasks wait on an approval, and the token totals. */
+type RunGetOnly = 'waitingForApproval' | 'tokens' | 'coordinatorTokens'
+type _run = Check<Fits<Pick<JobRun, Fields<typeof RUN_FIELDS>>, Omit<RunDto, Derived | RunGetOnly | 'github'>>>
+type _runKeys = Check<SameKeys<Omit<RunDto, Derived | RunGetOnly | 'github'>, Fields<typeof RUN_FIELDS>>>
 /** The derived github field (GitHub lifecycle) is the DTO the package promises. */
 type _githubLifecycle = Check<Fits<GitHubLifecycleView, GitHubLifecycleDto>>
+/** The token totals `runs get` and `tasks-get` add (observe mode design §10) are the DTO the package promises. */
+type _tokenTotals = Check<Fits<TokenTotals, TokenTotalsDto>>
+type _tokenTotalsKeys = Check<SameKeys<TokenTotalsDto, keyof TokenTotals>>
+type _runTokens = Check<Fits<ReturnType<typeof runTokensOf>, Pick<RunDto, 'tokens' | 'coordinatorTokens'>>>
+type _taskTokens = Check<Fits<ReturnType<typeof taskTokensOf>, TaskDetailDto['tokens']>>
 type _task = Check<Fits<Pick<Task, Fields<typeof TASK_FIELDS>>, Omit<TaskDto, 'spec_truncated'>>>
 type _taskKeys = Check<SameKeys<Omit<TaskDto, 'spec_truncated'>, Fields<typeof TASK_FIELDS>>>
 type _checkResult = Check<Fits<CheckResult, CheckResultDto>>

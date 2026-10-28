@@ -73,6 +73,7 @@ for await (const item of astera.runs.follow(run.id)) {
 | `tasks` | `list({ runId, status, ready, brief })`, `get`, `create` |
 | `questions` | `list({ runId, taskId, status })`, `get`, `answer` |
 | `completion` | `get` (read only: whether work is done stays Astera's call) |
+| `agentProfiles` | `list`, `get` (by id or name; profiles change only in Astera and with `astera agent-profiles`) |
 
 - Lists come back as `{ items }`. The Host answers whole lists today; `nextCursor` will appear when it pages.
 - A wait or a follow ends with data, not an error: `completed`, `failed`, `waiting` (a question for a person),
@@ -81,8 +82,8 @@ for await (const item of astera.runs.follow(run.id)) {
   takes it back); there is no cancel.
 - `jobs.create` takes a `projectId` (its folder is looked up) or an absolute `cwd`; a relative one is refused, since
   the Host would resolve it against its own folder. With no `coordinator`, the Job runs only the Tasks added to it, as
-  with the CLI. `tasks.create` without `accountIds` uses the Job's coordinator account, and is refused when the Job
-  has none.
+  with the CLI. `tasks.create` without `accountIds` runs on its agent profile's accounts (its own `agentProfileId`, or
+  its Job's), else on the Job's coordinator account, and is refused when the Job has neither.
 - `runs.follow` throws when the Run is deleted (`NOT_FOUND`) or the Host goes away (`HOST_NOT_RUNNING`); it does not
   pick up where it left off. Leaving the loop (`break`, `return()`) or aborting its signal ends the call it is waiting
   on.

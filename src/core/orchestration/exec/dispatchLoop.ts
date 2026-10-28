@@ -41,6 +41,7 @@ import { coordinatorStarting, jobOf, type OrchState } from '../state'
 import { DEFAULT_CONCURRENCY, FAILURE_LIMIT, type JobRun, type Task } from '../types'
 import { tasksOwnedBy } from '../running'
 import { outcomeOf } from '../view'
+import { ptyDriver } from '../../sessions/sessionDriver'
 import type { Integration } from './integrateGit'
 
 /** 15초 — 세션 스케줄러의 TICK_MS 와 같은 값이다 */
@@ -140,6 +141,10 @@ export interface DispatchLoopContext {
   /** true busy, false idle, null cannot tell. */
   sessionBusy(sessionId: string): boolean | null
   typeInto(sessionId: string, text: string): void
+  /** When the session's pty last printed anything (epoch ms), null for never. Given, a nudge's Enter waits for the
+   *  session to have drawn the nudge and gone quiet (ptyDriver): Codex swallows an Enter that comes right after a long
+   *  text (openai/codex#56982). Left out, Enter goes ENTER_DELAY_MS after the nudge. */
+  lastOutputAt?(sessionId: string): number | null
   /** When a person last typed into the session, in ms since the epoch, or null when this process has
    *  not seen it (FINISHED_RUN_GRACE_MS). Only a person's typing: never this loop's own `typeInto`, a
    *  prompt a spawn or a roll types, or a terminal's own reports. In memory, so a restart forgets it.
@@ -1155,12 +1160,12 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
       }
       // **영어다.** 코디네이터는 영어로 인계받았다(handover.ts) — 롤링이 워커의 재개 문구를
       // 앱의 UI 언어로 타이핑하다 같은 어긋남을 겪었고, 그 주석이 이유를 적어 두었다.
-      c.typeInto(
+      // The nudge and its Enter go the way `sessions send` types into a session (core/sessions/sessionDriver.ts)
+      await ptyDriver({ write: (id, text) => c.typeInto(id, text), lastOutputAt: c.lastOutputAt?.bind(c) }).deliver(
         m.sessionId,
         `Your Run has ${m.messageIds.length} unread message(s). Run \`astera check --json\`, ` +
           'handle them, ack the batch, then go back to `astera check --wait`.'
       )
-      c.typeInto(m.sessionId, '\r')
       log(`coordinator nudged run=${m.runId} session=${m.sessionId} unread=${m.messageIds.length}`)
     }
   }

@@ -148,6 +148,18 @@ describe('foldChatEvent — notice', () => {
     expect(next.error).toBeNull()
   })
 
+  // Task 6 fix round 1: a refused roll's reason. It is news about a roll that did not happen, not about a session that
+  // came back, so it neither clears what the session last said nor marks it bypassed
+  it('a refused roll’s notice is folded in with its reason, and leaves the rest of the state alone', () => {
+    const reason = { key: 'session.roll.sandbox.windowsSetup' as const, params: { account: 'Codex B' } }
+    const limited = { ...base, error: 'rate limited', exitCode: null }
+    const next = foldChatEvent(limited, { type: 'notice', key: 'rollRefused', reason })
+    expect(next.notice).toEqual({ key: 'rollRefused', reason })
+    expect(next.error).toBe('rate limited')
+    expect(next.bypassed).toBeUndefined()
+    expect(foldChatEvent(next, { type: 'status', status: 'working', truncated: false }).notice).toBeNull()
+  })
+
   it('새 턴이 시작되면 알림도 error 와 함께 걷힌다', () => {
     const noticed = { ...base, notice: 'bypassed' as const }
     expect(foldChatEvent(noticed, { type: 'status', status: 'working', truncated: false }).notice).toBeNull()

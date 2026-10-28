@@ -5,7 +5,7 @@ import path from 'node:path'
 import { PtyRegistry, type RegistryPty } from './registry'
 import { ProcRegistry, type RegistryProc } from './procRegistry'
 import { registrySessions } from './sessions'
-import { ENTER_DELAY_MS } from '../core/sessions/sessionDriver'
+import { ENTER_MAX_WAIT_MS, ENTER_QUIET_MS } from '../core/sessions/sessionDriver'
 import { encodeUserTurn } from '../core/chat/claudeProtocol'
 import { encodeRequest, turnStartParams } from '../core/chat/codexProtocol'
 import type { Account } from '../core/types'
@@ -156,6 +156,42 @@ describe('registrySessions — list', () => {
     const accounts: Account[] = [{ id: 'cx', label: 'cx', configDir: 'D:/cx', color: '#000', createdAt: 'x', provider: 'codex' }]
     const rows = await registrySessions({ ptys, procs, hookEventsDir: NO_HOOK_DIR, accounts: async () => accounts }).listSessions()
     expect(rows[0]).toMatchObject({ provider: 'codex', rolledFrom: 'ses-1', sources: { status: 'rollout', prompt: 'none', usage: 'rollout', conversation: 'rollout' } })
+  })
+
+  // Task 7 fix round 1: a session started from an agent profile says which, by its id (the note's restore)
+  it('a session started from an agent profile carries its id; one without carries none', async () => {
+    const ptys = new PtyRegistry({ spawn: fakePty, log: () => {} })
+    const procs = new ProcRegistry({ spawn: fakeProc, log: () => {} })
+    ptys.open({ id: 'pty-p', file: 'claude', args: [], opts, meta: { kind: 'session', id: 'ses-p', restore: { accountId: 'cx', cwd: 'D:/repo', agentProfileId: 'ap_1' } } })
+    ptys.open({ id: 'pty-n', file: 'claude', args: [], opts, meta: { kind: 'session', id: 'ses-n', restore: { accountId: 'cx', cwd: 'D:/repo' } } })
+    const rows = await registrySessions({ ptys, procs, hookEventsDir: NO_HOOK_DIR, accounts: async () => [] }).listSessions()
+    expect(rows.find((r) => r.id === 'ses-p')).toMatchObject({ agentProfileId: 'ap_1' })
+    expect(rows.find((r) => r.id === 'ses-n')).not.toHaveProperty('agentProfileId')
+  })
+
+  // A session in its CLI's sandbox says so, and what protection that is (SessionInfo.sandboxed and sandboxKind, which the
+  // spawn writes into the note): only `true` marks it, and only a kind this build knows is named, as the app reads them
+  it('a sandboxed session carries the mark and its kind; one outside the sandbox carries neither', async () => {
+    const ptys = new PtyRegistry({ spawn: fakePty, log: () => {} })
+    const procs = new ProcRegistry({ spawn: fakeProc, log: () => {} })
+    const restore = { accountId: 'cx', cwd: 'D:/repo' }
+    ptys.open({ id: 'pty-s', file: 'codex', args: [], opts, meta: { kind: 'session', id: 'ses-s', restore: { ...restore, sandboxed: true, sandboxKind: 'sandbox' } } })
+    ptys.open({ id: 'pty-d', file: 'claude', args: [], opts, meta: { kind: 'session', id: 'ses-d', restore: { ...restore, sandboxed: true, sandboxKind: 'deny-only' } } })
+    ptys.open({ id: 'pty-u', file: 'claude', args: [], opts, meta: { kind: 'session', id: 'ses-u', restore: { ...restore, sandboxed: true, sandboxKind: 'jail' } } })
+    ptys.open({ id: 'pty-n', file: 'claude', args: [], opts, meta: { kind: 'session', id: 'ses-n', restore } })
+    ptys.open({ id: 'pty-x', file: 'claude', args: [], opts, meta: { kind: 'session', id: 'ses-x', restore: { ...restore, sandboxed: 'yes', sandboxKind: 'sandbox' } } })
+    procs.open({ id: 'proc-s', file: 'codex', args: [], opts: { cwd: 'D:/repo', env: {} }, meta: { kind: 'chat', id: 'chat-s', restore: { ...restore, sandboxed: true, sandboxKind: 'sandbox' } } })
+    const rows = await registrySessions({ ptys, procs, hookEventsDir: NO_HOOK_DIR, accounts: async () => [] }).listSessions()
+    const row = (id: string) => rows.find((r) => r.id === id)
+    expect(row('ses-s')).toMatchObject({ sandboxed: true, sandboxKind: 'sandbox' })
+    expect(row('ses-d')).toMatchObject({ sandboxed: true, sandboxKind: 'deny-only' })
+    expect(row('chat-s')).toMatchObject({ kind: 'chat', sandboxed: true, sandboxKind: 'sandbox' })
+    expect(row('ses-u')).toMatchObject({ sandboxed: true })
+    expect(row('ses-u')).not.toHaveProperty('sandboxKind')
+    for (const id of ['ses-n', 'ses-x']) {
+      expect(row(id), id).not.toHaveProperty('sandboxed')
+      expect(row(id), id).not.toHaveProperty('sandboxKind')
+    }
   })
 
   // The entry stays after the exit so `list` can say it ended (registry.ts) — and so does this one.
@@ -453,19 +489,71 @@ describe('registrySessions — read renders the screen', () => {
 })
 
 describe('registrySessions — send', () => {
-  // **ptyDriver's convention** — the text, then Enter ENTER_DELAY_MS later (core/sessions/sessionDriver.ts).
-  it('types the text, then Enter after ENTER_DELAY_MS, into the pty behind the id', async () => {
+  /** The agent draws what it was sent, on the registry's clock, at the fake timers' now. */
+  const draw = (agent: { emit(d: string): void }, d: string): void => {
+    clock.now = Date.now()
+    agent.emit(d)
+  }
+
+  // **ptyDriver's convention** — the text, then Enter once the agent has drawn it and gone quiet (sessionDriver.ts).
+  it('types the text, then Enter once the agent has drawn it and been quiet ENTER_QUIET_MS, into the pty behind the id', async () => {
     vi.useFakeTimers()
     try {
       const { sessions, agent, shell } = harness()
       const p = sessions.sendSession('ses-1', 'echo hi', true)
       expect(agent.sent).toEqual(['echo hi'])
-      await vi.advanceTimersByTimeAsync(ENTER_DELAY_MS - 1)
+      await vi.advanceTimersByTimeAsync(20)
+      draw(agent, 'echo hi')
+      await vi.advanceTimersByTimeAsync(ENTER_QUIET_MS - 1)
       expect(agent.sent).toEqual(['echo hi'])
       await vi.advanceTimersByTimeAsync(1)
       await p
       expect(agent.sent).toEqual(['echo hi', '\r'])
       expect(shell.sent).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // Found on the dev app: Codex swallowed an Enter 150 ms after a long text (its paste detection, openai/codex#56982)
+  // and left the message in its input. Enter waits while the agent is still drawing what it was sent
+  it('holds Enter while the agent is still drawing a long text', async () => {
+    vi.useFakeTimers()
+    try {
+      const { sessions, agent } = harness()
+      const p = sessions.sendSession('ses-1', 'a long instruction '.repeat(20), true)
+      for (const at of [100, 250, 400]) {
+        await vi.advanceTimersByTimeAsync(at - (at === 100 ? 0 : at === 250 ? 100 : 250))
+        draw(agent, 'part')
+      }
+      expect(agent.sent).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(ENTER_QUIET_MS)
+      await p
+      expect(agent.sent).toHaveLength(2)
+      expect(agent.sent[1]).toBe('\r')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // Observe deferred fix round 2, Minor b: a person's `sessions send` is written as a person's, its Enter a person's
+  // prompt; an agent's or the Host's is the Host's own
+  it('writes a person’s send marked as a person’s, and any other as the Host’s own', async () => {
+    vi.useFakeTimers()
+    try {
+      const { sessions, ptys, agent } = harness()
+      const sent = sessions.sendSession('ses-1', 'go', true, { person: true })
+      draw(agent, 'go')
+      await vi.advanceTimersByTimeAsync(ENTER_QUIET_MS)
+      await sent
+      expect(ptys.submittedBetween('pty-a', -Infinity, Infinity)).toBe('person')
+      expect(ptys.lastPersonWrite('pty-a')).not.toBeNull()
+      await vi.advanceTimersByTimeAsync(1000)
+      const other = sessions.sendSession('ses-1', 'go', true)
+      draw(agent, 'go')
+      await vi.advanceTimersByTimeAsync(ENTER_QUIET_MS)
+      await other
+      expect(ptys.submittedBetween('pty-a', -Infinity, Infinity)).toBe('host')
     } finally {
       vi.useRealTimers()
     }
@@ -485,7 +573,8 @@ describe('registrySessions — send', () => {
       const { sessions, agent } = harness()
       const a = sessions.sendSession('ses-1', 'a', true)
       const b = sessions.sendSession('ses-1', 'b', true)
-      await vi.advanceTimersByTimeAsync(ENTER_DELAY_MS * 3)
+      // An agent that draws nothing: each Enter goes at the longest wait
+      await vi.advanceTimersByTimeAsync(ENTER_MAX_WAIT_MS * 2)
       await Promise.all([a, b])
       expect(agent.sent).toEqual(['a', '\r', 'b', '\r'])
     } finally {
@@ -564,7 +653,7 @@ describe('registrySessions — chat', () => {
       accounts: async () => [account],
       mintId: () => `id-${++n}`
     })
-    return { sessions, written, cfg, exit: () => exit(0) }
+    return { sessions, written, cfg, procs, exit: () => exit(0) }
   }
   /** The transcript where the Claude rule looks for it: <configDir>/projects/<slug>/<threadId>.jsonl. */
   const plantTranscript = (cfg: string, threadId: string) => {
@@ -620,6 +709,18 @@ describe('registrySessions — chat', () => {
     const { sessions, written } = chatHarness({ provider: 'claude', threadId: 'th' })
     await sessions.sendChat('chat-9', '다음으로 가자')
     expect(written).toEqual([encodeUserTurn('다음으로 가자') + '\n'])
+  })
+
+  // Observe deferred fix round 2, Minor b: a person's send is written as a person's line, any other as the Host's own
+  it('writes a person’s turn marked as a person’s line, and any other as the Host’s own', async () => {
+    for (const provider of ['claude', 'codex'] as const) {
+      const person = chatHarness({ provider, threadId: 'th' })
+      await person.sessions.sendChat('chat-9', 'go', undefined, { person: true })
+      expect(person.procs.submittedBetween('proc-x', -Infinity, Infinity), provider).toBe('person')
+      const host = chatHarness({ provider, threadId: 'th' })
+      await host.sessions.sendChat('chat-9', 'go')
+      expect(host.procs.submittedBetween('proc-x', -Infinity, Infinity), provider).toBe('host')
+    }
   })
 
   // turn/start on the thread in the note, with an id of the Host's own that the app's adapter never

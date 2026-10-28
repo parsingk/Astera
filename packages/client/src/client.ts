@@ -16,7 +16,7 @@ import { publicFor } from './shape.js'
 import { createNamespaces, type Namespaces } from './namespaces.js'
 
 /** This package's version, sent in the hello as `sdk-<version>`. Kept equal to package.json by a test. */
-export const CLIENT_VERSION = '0.4.0'
+export const CLIENT_VERSION = '0.5.0'
 
 /** The handshake's deadline when the options name none. */
 export const DEFAULT_CONNECT_TIMEOUT_MS = 5000

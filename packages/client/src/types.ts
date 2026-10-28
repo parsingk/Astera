@@ -47,6 +47,14 @@ export interface Progress {
   readonly total: number
 }
 
+/** Tokens sessions spent, as the Host read them from what Claude and Codex write. `input` counts every input token the
+ *  model read, cached ones included; `total` is `input + output`. What they cost in money is not known. */
+export interface TokenTotals {
+  readonly input: number
+  readonly output: number
+  readonly total: number
+}
+
 /** How a Job stands: `pending` before its first Run, `paused` when its latest Run is. */
 export type JobOutcome = 'running' | 'completed' | 'failed' | 'paused' | 'pending'
 export type RunOutcome = 'running' | 'completed' | 'failed' | 'paused'
@@ -190,6 +198,8 @@ export interface Job {
   readonly source?: JobSource
   /** The GitHub lifecycle policy, when the Job carries its work through a pull request and GitHub CI. */
   readonly github?: GitHubLifecyclePolicy
+  /** The agent profile the Job's Tasks run as unless a Task names its own, by its id. It never picks the coordinator. */
+  readonly agentProfileId?: string
   /** Derived on every read: how the Job's latest Run (or the Job itself before one) stands. */
   readonly outcome: JobOutcome
   readonly progress: Progress
@@ -215,6 +225,12 @@ export interface Run {
   readonly waitingForApproval?: number
   /** A GitHub lifecycle Job's Run only: its pull request and CI, derived on every read. */
   readonly github?: GitHubLifecycle
+  /** `runs.get` only: the tokens its Tasks' sessions spent, every attempt and every session a roll moved one to. Absent
+   *  when the Host read none (a session it did not run, an Astera from before token totals). */
+  readonly tokens?: TokenTotals
+  /** `runs.get` only: the tokens the coordinator Astera started for the Run spent, apart from `tokens`. Absent when the
+   *  Host read none. */
+  readonly coordinatorTokens?: TokenTotals
 }
 
 /** `jobs.get`: the Job, with the Run it names or its latest folded in. */
@@ -286,10 +302,38 @@ export interface Task {
   /** `'lifecycle'`: the Task Astera adds once every other Task of a GitHub lifecycle Run is completed, to carry the
    *  Run through GitHub (push, draft pull request, CI, repair, review). It has no worker. Absent on every other Task. */
   readonly kind?: 'lifecycle'
+  /** The agent profile the Task runs as, by its id: it decides the Task's shared MCP servers and permission prompts, and
+   *  gave the Task its accounts when none were named. */
+  readonly agentProfileId?: string
   readonly createdAt: string
   readonly updatedAt: string
   /** `tasks.list({ brief: true })` only: the spec was cut to 160 characters. */
   readonly spec_truncated?: boolean
+}
+
+/** What an agent profile asks of a session's permission prompts: `inherit` follows Astera's own setting, `bypass` runs
+ *  without them and `ask` shows them. */
+export type AgentProfilePermission = 'inherit' | 'bypass' | 'ask'
+
+/** An agent profile: the accounts a Job, Task or session started from it runs on, in order, the shared MCP servers it
+ *  leaves out and its permission choice. Profiles are made and changed in Astera and with the `astera agent-profiles`
+ *  commands. */
+export interface AgentProfile {
+  readonly id: string
+  readonly name: string
+  readonly description?: string
+  /** An archived profile starts no new work; work that already holds it goes on. */
+  readonly status: 'active' | 'archived'
+  /** The accounts, in failover order. An account removed from Astera is left out. */
+  readonly accountIds: readonly string[]
+  /** The ids of the shared MCP servers its sessions do not get. */
+  readonly mcpExclude: readonly string[]
+  readonly permission: AgentProfilePermission
+  /** Its sessions start in their agent CLI's own sandbox. Absent from an Astera before the sandbox, which has none. */
+  readonly sandbox?: boolean
+  readonly createdAt: string
+  readonly updatedAt: string
+  readonly lastUsedAt?: string
 }
 
 /** One worker attempt at a Task. */
@@ -303,12 +347,16 @@ export interface TaskAttempt {
   readonly startedAt: string
   readonly endedAt?: string
   readonly waitingForApproval?: true
+  /** The agent profile this attempt's worker ran as, by its id. */
+  readonly agentProfileId?: string
 }
 
 /** `tasks.get`: the Task with its attempts and the question it waits on, if any. */
 export type TaskDetail = Omit<Task, 'spec_truncated'> & {
   readonly attempts: readonly TaskAttempt[]
   readonly openQuestionId?: string
+  /** The tokens the sessions of its attempts spent. Absent when the Host read none. */
+  readonly tokens?: TokenTotals
 }
 
 /** A question for a person (a gate). */

@@ -172,11 +172,11 @@ Astera can release it. A damaged `app-settings.json` parks the Host too, until A
 repairs the file. Astera's Jobs sidebar says so too, once it has read a Host's first report, with one
 line naming why: the settings file cannot be read, or the settings migration has not finished yet.
 `data.appAttached` says whether Astera is connected. A Host that does not announce `dispatch` leaves
-both fields out. An Astera 1.3.25 or older counts as attached too, even though its `hello` names no
-role: `data.driver` reads `app` and `data.appAttached` is `true` while one runs. `astera host status`
-says the same thing on its own: `data.legacyApp` is `true` once such an Astera has said hello, and
-`data.warning` carries the notice, "Astera 1.3.25 or older is attached; update it", which `--human`
-prints. The Host also writes it to its own log, once for each attach.
+both fields out. Astera counts as connected only once it has proved it is the app (see "Security"
+below): a connection that names no role, or names the app without that proof, is a CLI to the Host.
+An Astera 1.3.25 or older speaks an older protocol at another address and never reaches this Host.
+`astera host status` shows `data.legacyApp` and `data.warning` ("Astera 1.3.25 or older is attached;
+update it") only for an older Host that still counted such an app as attached.
 
 `skills list` and `skills install` are outside both lists: they never contact a Host and never need
 one. So are `ext list` and `ext sync`, which read the profile's shared extensions the same way. They read the profile's `accounts.json` and `app-settings.json` and work on files in each
@@ -265,13 +265,9 @@ over Astera's sessions once Astera has quit (see below). A Host started by an ol
 could not name the files a worker needs. With such a Host, these commands need the app as they did
 before.
 
-**An Astera 1.3.25 or older attached answers the same commands with an update notice, not a race.**
-Such an app says nothing about its own role, so the Host counts it as attached and holding its own
-worktree work exactly as it counts a current one, but it can never be handed the call these commands
-need. Each is refused at once, exit 6, with a message that starts `APP_REQUIRED` and names the update:
-"needs a newer Astera app: Astera 1.3.25 or older is attached; update it." `astera host status` carries
-the same word beforehand, through `data.legacyApp` and `data.warning` (see above), so a script can tell
-before it tries.
+**With no app that proved itself attached, a command that needs the app is refused at once**, exit 6,
+with a message that starts `APP_REQUIRED`: "needs the Astera app running". A connection that only says
+it is the app is not asked.
 
 The Host reads the permission setting, **Run agents without permission checks**, from the profile's
 `app-settings.json` at every start. With no such file it uses the app's default, which is on. A
@@ -394,7 +390,9 @@ the first (a history that cannot fast-forward is refused with git's reason, and 
 `retry` runs the round again from the first check, `rerun` reruns the failed jobs of the CI run on GitHub and
 waits for its new attempt (offered for a failure outside the code a rerun can cure, once Astera's own reruns are
 spent or turned off, or GitHub refused one), `pr-<n>` binds pull request n, and `mark-failed` fails the task. Any
-answer it does not list is a 2.
+answer it does not list is a 2. `continue` and `retry` start the round afresh with its failures reset, so from inside an
+agent session they are refused with 5 when its repairs would run as a bypass agent profile, unless **Run agents without
+permission checks** is on; the coordinator Astera started for the run is not asked.
 
 **A worker lost while Astera is closed opens a question.** When a worker ends without reporting while
 Astera is closed, in a run with no coordinator session, the Host opens a question on its task, and
@@ -514,6 +512,16 @@ Two more variables exist inside sessions Astera starts: `ASTERA_CLI` is the abso
 command, and `ASTERA_SKILLS` is the folder `astera help` reads its guide from. Outside a session
 `astera help`, `astera browser help` and `astera app help` read the guides that ship with the
 installed Astera instead.
+
+A session can also carry `ASTERA_GATEWAY_TOKEN`, its own token, and `ASTERA_LOOPBACK`, the address of
+the Host's endpoint on this machine (`http://127.0.0.1:<port>`). Inside a sandbox that cannot open the
+Host's pipe or socket but can reach `127.0.0.1`, the command tries the pipe first, and when nothing can
+be reached there it sends the same command to that address with the token. The Host knows the session
+from the token, not from anything the call says. The token goes only to the session's own Host, the
+Host of the profile whose `astera` the session runs (`ASTERA_CLI`), else of its `ASTERA_PROFILE_DIR`:
+a call pointed at another profile's Host, or at another address with `ASTERA_HOST`, carries none and
+is answered as a shell's call is. Outside a session neither variable is set and nothing changes. The
+endpoint accepts only the token of a session the Host is running, and only from the machine itself.
 
 ### Remote Runtime
 
@@ -710,7 +718,7 @@ astera jobs    list   [--status <pending|paused|scheduled|waiting|running|comple
 astera jobs    get    --id <jobId | runId>
 astera jobs    run    --id <jobId>
 astera jobs    wait   --id <jobId>  [--timeout-ms <n>]
-astera jobs    create --objective <text> [--cwd <path>] [--concurrency <n>] [--coordinator-account <accountId>] [--coordinator-provider <claude|codex>] [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>] [--max-total-minutes <n>]] [--github-lifecycle [--github-checks <name,...>]]
+astera jobs    create --objective <text> [--cwd <path>] [--concurrency <n>] [--coordinator-account <accountId>] [--coordinator-provider <claude|codex>] [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>] [--max-total-minutes <n>]] [--github-lifecycle [--github-checks <name,...>]] [--agent-profile <id|name>]
 astera jobs    create-from-source --source <sourceId> --item <itemId> --project <projectId> [--concurrency <n>] [--coordinator-account <accountId>] [--coordinator-provider <claude|codex>] [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>] [--max-total-minutes <n>]] [--github-lifecycle [--github-checks <name,...>]]
 
 astera runs    list   [--job <jobId>] [--project <path>]
@@ -723,7 +731,7 @@ astera runs    checks --id <runId>
 astera runs    reconverge --id <runId>
 
 astera tasks   list   [--run <runId>] [--status <s>] [--ready] [--brief]
-astera tasks   add    [--job <jobId> | --run <runId>] --spec <text|-> --account <id,…> [--title <text>] [--deps <json array>] [--parent <taskId>] [--validate <configId,…>] [--review]
+astera tasks   add    [--job <jobId> | --run <runId>] --spec <text|-> [--account <id,…>] [--agent-profile <id|name>] [--title <text>] [--deps <json array>] [--parent <taskId>] [--validate <configId,…>] [--review]
 astera tasks   dispatch --id <taskId>
 
 astera accounts list  [--agent <claude|codex>]
@@ -739,13 +747,37 @@ astera higgsfield use --account <id|label|email>
 astera ext     list
 astera ext     sync
 
+astera agent-profiles list
+astera agent-profiles show    --id <profileId|name>
+astera agent-profiles create  --name <text> --account <id,…> [--exclude-mcp <name,…>] [--permission <inherit|bypass|ask>] [--sandbox <on|off>] [--description <text>]
+astera agent-profiles update  --id <profileId|name> [--name <text>] [--account <id,…>] [--exclude-mcp <name,…>] [--permission <inherit|bypass|ask>] [--sandbox <on|off>] [--description <text>]
+astera agent-profiles archive --id <profileId|name>
+astera agent-profiles restore --id <profileId|name>
+astera agent-profiles delete  --id <profileId|name>
+
+astera audit   list    [--session <sessionId>] [--job <jobId>] [--run <runId>] [--task <taskId>] [--agent-profile <id|name>] [--action <action>] [--decision <allow|would-deny|unknown|blocked>] [--since <time>] [--until <time>] [--before-id <recordId>] [--limit <n>]
+astera audit   summary [--session <sessionId>] [--job <jobId>] [--run <runId>] [--task <taskId>] [--agent-profile <id|name>] [--action <action>] [--decision <allow|would-deny|unknown|blocked>] [--since <time>] [--until <time>]
+
+astera policies show
+astera policies set-mode      --mode <compatibility|observe|enforce>
+astera policies set-otherwise --effect <allow|deny>
+astera policies rules-add     --effect <allow|deny> --action <action> [--scope <inside-project|outside-project>] [--at <n>]
+astera policies rules-edit    --id <ruleId> [--effect <allow|deny>] [--action <action>] [--scope <inside-project|outside-project> | --clear-scope]
+astera policies rules-remove  --id <ruleId>
+astera policies rules-move    --id <ruleId> --to <n>
+astera policies rules-reset
+
+astera credentials list
+astera credentials show   --id <id|name>
+astera credentials doctor
+
 astera mcp     serve                     serve Astera to an MCP client over stdio
 astera mcp     status                    would mcp serve work here: the Host, MCP access, the tools
 
 astera sessions list  [--status <alive|ended|working|waiting|unknown>] [--provider <claude|codex>] [--project <path>]
 astera sessions read   --id <sessionId> [--lines <n>] [--turns <n>]
 astera sessions send   --id <sessionId> --text <text|-> [--no-enter] [--wait [--timeout-ms <n>]]
-astera sessions create --account <accountId> --cwd <path> [--kind <terminal|chat>] [--title <text>] [--prompt <text|->] [--roll-accounts <id,…>] [--unattended <hold|deny-after-60s>]
+astera sessions create [--account <accountId>] [--agent-profile <id|name>] --cwd <path> [--kind <terminal|chat>] [--title <text>] [--prompt <text|->] [--roll-accounts <id,…>] [--unattended <hold|deny-after-60s>]
 
 astera chats pending   [--session <sessionId>]
 astera chats answer    --id <promptId> [--allow | --deny] [--session <sessionId>]
@@ -838,6 +870,21 @@ list. Filters on one command combine.
 permission prompt: the number of those Tasks, read from the same hook events as `sessions list`'s
 `waiting`. With none it is left out. A person answers the prompt in Astera, in the worker's terminal
 ([mcp.md](mcp.md) says more).
+
+**`runs get` carries `tokens` and `coordinatorTokens`**: the tokens the run's Tasks' sessions spent (every attempt,
+and each session a roll moved one to, counted once), and apart from them what the coordinator Astera started for the
+run spent, each as `{ input, output, total }`, where `input` counts cached input too. After a worker's attempt ends, and
+after the run finishes, what the session goes on to spend still counts until a person prompts it: types in its tab or
+chat, replies from Slack, or runs `astera sessions send` from a shell. So a response that finishes after the worker's
+report counts, and so does the coordinator's wrap-up however long it takes, whether a background task's end woke it or
+what Astera types itself (a nudge, or a roll's carry-on, onto the same account or another). What a person sends after
+that is not the run's. In a chat an older Astera app writes to, which does not say which lines a person typed, two
+minutes after the end stand in for that. A run counts as finished from when its outcome was settled, which a later edit
+of a Task does not move; a run that finished before this version of Astera counts from when its Tasks last changed
+before the update. The Host reads them in every mode from what Claude and Codex already write (a Claude session's
+transcript and its sub-agents' files, a chat's stream, a Codex rollout) and keeps them in `token-totals.json` in the
+profile until the run is deleted. Each is left out when the Host read none, such as for a session the app ran without a
+Host. MCP's `get_task` carries the Task's own `tokens`. What they cost in money is not shown.
 
 **`runs get` carries `github`** for a run of a `--github-lifecycle` Job: the pull request Astera bound for the run's
 branch, its head, the CI checks of that head with the `verdict` and the check that failed first (with its `class`, such
@@ -977,7 +1024,8 @@ What would open a question in the app, such as no usable account or a worktree t
 a 6 carrying the reason instead, and no question is opened: you asked, so you get the answer. When the
 task first needs the worktrees it depends on merged, the Host makes the merge task and says so with a 6;
 the merge task runs first and the task after it. A start that fails is handed back as `worker-start`
-answered it. A worker session is refused with 5, as it is for `worker-start`. The Host places the
+answered it. A worker session is refused with 5, as it is for `worker-start`, and so is any other agent session
+for a task that names a bypass agent profile while **Run agents without permission checks** is off. The Host places the
 task only when its loop is not in the middle of a pass, and judges the run again once it may, so a run
 paused or handed to a coordinator meanwhile gets no worker. That wait can outlast the command's own
 deadline: a 7 then leaves the placement going on the Host, and the task may still get its worker.
@@ -1067,12 +1115,251 @@ account has its own different copy, which is left alone until you replace it in 
 the items in `error.details`. Running it twice changes nothing the second time. A damaged registry or
 `accounts.json` is a 6, and the message names the file.
 
+**`agent-profiles` keeps the agent profiles**: each a name for a set of accounts (one provider's, in the order
+they are tried), the shared MCP servers its sessions leave out and a permission choice: `inherit` (Astera's
+setting), `bypass` (run without permission checks) or `ask` (run with permission checks). Skills and commands are
+shared by every profile. The Host
+answers these commands, so they work with Astera closed. `show`, `update`, `archive`, `restore` and `delete` take
+the profile's id or its name in `--id`. `--exclude-mcp` takes the names `ext list` shows; a name no shared MCP server
+has is refused with 2, naming it, and nothing is changed. `update` changes only the flags given, and its
+`--account` and `--exclude-mcp` replace the lists (`--exclude-mcp ""` leaves no server out). An archived profile
+starts no new work, while the work that holds it goes on; `restore` takes it back. `delete` is refused with 6 while
+unfinished work holds the profile. Changing profiles is for a person: from inside an agent session the changes are
+refused with 5, and the reads are not. A profile the Host refuses says why in `error.details.reason`: `name-empty`,
+`name-too-long`, `name-taken`, `no-account`, `unknown-account` or `mixed-provider` with 2, and `in-use` with 6.
+
+**`--sandbox on` starts the profile's sessions, terminal and chat, in their CLI's own sandbox**; `off`, the default,
+starts them as before, and a profile made before the switch existed reads as `off` (`agent-profiles list` shows it as
+`sandbox`). In Codex's sandbox a session never stops to ask (`-a never` takes the place of the permission bypass; a
+chat's thread names the profile and its approval policy is `never`) and a terminal session runs on its own server
+(`--no-daemon`). It needs codex 0.160.0 or later: an older codex, or one whose version cannot be read, is not started
+(`SANDBOX_UNAVAILABLE: cli-too-old codex …`), and a chat whose thread Codex does not confirm runs under the profile is
+stopped (`SANDBOX_UNAVAILABLE: profile-not-active codex`). On every OS it writes only in its folder, the git directories of the folder's repository (never their
+`hooks` or `config`, nor what decides where git finds them: each `commondir` file, the `modules` folder of submodules'
+git directories, and a worktree's `.git` file; a start makes a missing `commondir`, holding `.`, and an empty
+`modules`, so they can be kept read-only) and the temp folder, where npm's cache goes; it cannot read `~/.ssh`, `~/.aws`, the GitHub CLI's
+and gcloud's settings, `~/.docker`, `~/.npmrc`, `~/.git-credentials` or `~/.kube`; and the network works. On macOS
+`~/Library/Keychains` is closed too, and on Linux the session bus a secret service answers on. On macOS and Linux it
+cannot open the folder the Host's socket is in either, nor any other Host's folder of yours beside it (`astera-host-*`
+that you own, such as the dev app's Host beside the installed app's) that is there when the session starts (a Host
+started later is not closed to it), so its `astera` reaches the Host only through the loopback
+endpoint with the session's own token (`ASTERA_LOOPBACK`, above). A Claude Code session,
+terminal or chat, gets Claude Code's own sandbox on macOS and Linux through its settings file, with the same limits: its
+commands cannot run outside it, and a Claude Code whose sandbox cannot start exits at once and says why in its tab;
+`astera` runs outside it, as a command line of its own: a line that starts with something else (`cd x && astera …`)
+runs inside the sandbox, which reaches no Unix socket, the Host's included, so `astera` fails there on macOS as on
+Linux. On Linux its git reads an excludes file Astera writes
+(`<profile>/sandbox/excludes-<uid>`: the person's own `core.excludesFile`, or git's default one, then the names the
+sandbox keeps placeholders for, such as `.bashrc` and `.vscode`), so `git add -A` works. A sandboxed Codex session on Windows runs as the
+sandbox's own account, which cannot read the person's home, so its git reads a copy of the person's global excludes
+that Astera writes in the temp folder. Claude Code has no sandbox on
+Windows: there the switch only keeps its file tools, not its shell, out of those folders, and npm keeps its own cache.
+What a sandboxed session starts runs in the sandbox too, whatever profile it names: a session it makes with `sessions
+create`, a Job it makes (its coordinator and every worker), a Task it adds to any Job and a worker it starts with
+`worker-start`. Where that CLI has no sandbox (Claude Code on Windows) such a start is refused with
+`SANDBOX_UNAVAILABLE: no-sandbox claude` rather than run without one. Nor does a sandboxed session hand work to what
+runs outside the sandbox: from inside one, typing into a session that is not sandboxed (`sessions send`, a
+`worker-start --terminal` into it, a `reply` its worker reads) is refused with 5 and
+`SANDBOX_UNAVAILABLE: outside-sandbox session <id>`, running a Job no sandboxed session made (`run-start`, `jobs run`,
+`run-spawn`, `run-resume`, `runs resume`, `runs reconverge`) with `outside-sandbox job <id>`, and placing, starting
+or setting going again a Task that neither it nor its Job was made by a sandboxed session, or answering its question
+(`tasks dispatch`, `worker-start` with or without `--terminal`, a `task-update` to any status but `failed` or `blocked`,
+`questions answer` with anything but `mark-failed`) with `outside-sandbox task <id>`, before anything is typed, placed
+or started. A message or a question in a run (`send`, `ask`) is open to a worker of that run and to the coordinator
+Astera started for it; from any other sandboxed session it is refused with `outside-sandbox job <id>` unless the
+run's Job is a sandboxed session's. A sandboxed target is not refused, and a worker's `send` and `ask` in its own run
+stay open whoever its coordinator is.
+On Windows the Codex sandbox is Codex's elevated one, which keeps Credential Manager out, and the repository is named a
+safe directory for the account it runs as; a repository or home folder whose path holds a character cmd.exe reads as
+syntax (`" & | < > ^ %`) cannot be carried to it. Each Codex account's home must have the elevated sandbox set up once
+(Codex's `codex sandbox setup --elevated --current-user`, which brings up Windows' administrator prompt): Astera asks
+before a sandboxed start, Codex's `doctor --json` first and then, only on a home doctor calls complete, an echo through
+the sandbox (on a home with no setup the echo would start the setup and its prompt), and the app offers to set up the
+one account a start was refused for. A ready answer is kept until Astera restarts or a setup runs through it, so a home
+made stale by a setup outside Astera keeps reading ready until then. Settings › Agent profiles also shows, under a
+sandboxed profile on Windows, whether each of its Codex accounts is set up, asked of Codex's doctor alone (no sandboxed
+echo runs from Settings, so a stale home can read ready there and be refused at its start), with Set up for one that
+is not. A session the sandbox
+cannot be applied to does not start, and says why with `SANDBOX_UNAVAILABLE: <code>`: `codex-daemon codex` for a codex
+that does not take `--no-daemon`, `cli-too-old claude <found> 2.1.306` for an older Claude Code (`cli-version-unknown
+claude` when its version cannot be read, `cli-missing claude` when it is not there), `path-unsafe` for such a path,
+`git-layout` when the folder's git data could not be read, `windows-setup codex <accountId>` for an account whose
+Windows sandbox is not set up (or no longer works: setting up one account's home can leave another's stale),
+`windows-check-failed codex <accountId>` when Codex could not be asked about it (not there, too old for `doctor --json`,
+timed out), `settings-write-failed` when Claude Code's sandbox settings could not be written into the profile folder,
+`command-too-long` when on Windows the profile, which names every worktree's git files, would not fit on the command
+line (remove the worktrees you no longer need), and `not-prepared` for a start that skipped the reading Astera does
+first. A chain keeps the sandbox state it started
+with: the session a roll starts next is in the sandbox exactly when the first one was, whatever the switch says by then,
+and only a session started afresh reads the switch again. A roll onto an account the sandbox refuses waits, as a roll
+does for any refusal, and says why: a terminal session in its tab, a chat in its pane, naming the Codex account and
+where to set it up (Settings › Agent profiles) when its Windows sandbox is not set up, and otherwise in the refusal's
+own words (a Claude Code chain's after "Could not move to the next account"). Like every profile change, switching it
+from inside an agent session is refused with 5. A profile store that cannot be read refuses a session that names a
+profile, with 6 and the file to repair, rather than starting it without the profile.
+
+`jobs create`, `tasks add` and `sessions create` take `--agent-profile <id|name>`. A Job's tasks run as its profile
+unless a task names its own, and the profile never picks the coordinator. A task with a profile and no `--account`
+runs on the profile's accounts, copied when it is added. A session with a profile and no `--account` starts on the
+profile's first account and rolls onto the others. With both, the account given is used, and the profile still
+decides the MCP servers and the permission prompts. A profile named with `--agent-profile` must not be archived
+(2); a task that only inherits its Job's archived profile still gets that profile's accounts. **A `bypass` profile is
+for agents only while Astera skips the checks itself**: from inside an agent session, naming one, or adding a task to
+a Job that holds one, is refused with 5 and makes nothing unless **Run agents without permission checks** is on in
+Astera's settings. A person at their own shell is not asked. Nor is the coordinator Astera started for a run about the
+profile its Job holds: the person chose that profile, so the tasks it adds to the run it carries out inherit it. A
+bypass profile the coordinator names itself with `--agent-profile` is asked about like any other, and so is a session
+that drives the run from outside (one that made itself its driver with `check --run`). Running a Job that holds a
+bypass profile starts work as it too, so from inside an agent session `jobs run`, `runs resume` and `runs reconverge`
+of such a Job's runs are refused with 5 and change nothing under the same setting. So are they when the work would run
+as a bypass profile a task names in a Job with none: a task the new run copies, a task of the run not finished yet,
+or for `runs reconverge` any task of the run, since its repair borrows one's profile. Starting one task's worker is
+asked the same about that task's profile: `tasks dispatch`, and `worker-start` unless the caller is the coordinator
+Astera started for that run; the Host's and Astera's own placing is not asked. So is `task-update --status ready` or
+`pending` of such a task, which puts it back where the loop places it, again except from that coordinator while its run
+is running, and so is `questions answer` with an answer that starts the task again: on a question whose repair budget
+is used up any answer but `mark-failed` (`retry-once` opens a new attempt, and any other text puts the task back where
+the loop places it), and on a GitHub question `continue` or `retry`, which start its round afresh. Any other answer
+only lets the task go on and is not asked. A profile deleted since runs as before, and a profile file that cannot be
+read refuses with 6 and `error.details.repair`. These refusals
+say why in `error.details.reason` too: `agent-profile-unavailable` (unknown or archived) and
+`agent-profile-no-account` with 2, `agent-profile-bypass-refused` with 5.
+
+```json
+{"ok":true,"data":{"profiles":[{"id":"ap_3f2a9c01b7de","name":"Reviewer","status":"active",
+  "accountIds":["acc_1","acc_2"],"mcpExclude":["mcp-github"],"permission":"ask", …}]}}
+```
+
+**`credentials` reads the Credentials list**, the same as **Settings › Security & Access › Credentials** in the app: what
+Astera keeps out of the sessions it starts. Shared MCP servers that hold a stored secret appear on their own, hidden by
+default (the Gateway gives the session the server, so the raw variables go); the entries you registered name environment
+variables and CLI login presets (`gh`, AWS CLI, Google Cloud CLI, npm, Docker, kubectl), never a value. Hiding applies to
+every agent session, or to the projects an entry is narrowed to, and counts for sessions started afterwards. A preset
+points its CLI at an empty location of the session's own, so a login made inside one session stays in that session.
+Names the CLIs, Astera or the OS need (`ASTERA_*`, `CLAUDE_*`, `PATH`, `TEMP` and the like) are never hidden. The list is
+changed only in the app, so an agent cannot switch off its own hiding; an agent session may read it, but not the uses
+`credentials show` lists. `credentials doctor` says what hiding reaches and what it cannot: a program running as you can
+still read your files and OS stores, git and Docker hand their stored logins to any program that asks, and a variable
+your shell startup files set can come back in the commands an agent runs through a shell. Astera does not search the
+machine for credentials. Doctor then says, one line each and for every OS whatever this machine is, what an agent
+profile's sandbox does for Codex and for Claude Code (`Sandbox, Codex on Windows: …`; Claude Code on Windows is a
+warning, since its shell is not restricted there), that a sandboxed Claude Code session's git on Linux reads an excludes
+file of Astera's so `git add -A` works, and the sandbox's limits: `curl` fails TLS inside a sandboxed Codex session on
+Windows, `gh` inside cannot use your login (GitHub work goes through Astera), pushes from inside stay with the Host on
+Windows, a chain keeps the sandbox state it started with, a worktree a sandboxed Codex session adds itself has a
+`config.worktree` its sandbox profile does not name, setting up one Codex account's Windows sandbox can leave another
+account's setup stale (from Codex's source, not measured), and Claude Code's use of its sandbox settings was measured on
+the runtime it uses (srt), not with Claude Code itself.
+
+**`audit` and `policies` are observe mode**, the same as **Settings › Security & Access** in the app. After
+`policies set-mode --mode observe`, every session Astera starts records the tool calls it makes once each has run
+(`coverage` in `policies show` says what can be seen for each provider and kind of session): the kind of action
+(`git.remote.write`, `filesystem.write`, `mcp.call`, …) and a short target (`git push`, a path relative to the
+session's folder or `outside project: <name>`, a host name, `server.tool`), never the full command, its output, a
+file's contents or a secret. Nothing is blocked and no session waits. A session already running keeps what it started
+with. `compatibility`, the default, observes nothing, and observe writes nothing new in it (the token totals `runs get`
+shows are kept in `token-totals.json` in every mode); turning observe off keeps the records and the rules. The Host
+keeps the records in the profile (`audit/`, a file a day, for 30 days or up to 50 MB) and the rules beside them
+(`audit-policy.json`), so these commands work with Astera closed.
+
+**`policies set-mode --mode enforce` stops what the rules deny.** Every Claude Code or Codex session Astera starts
+afterwards runs a blocking hook before each tool call, with Astera's own executable (the Host runtime on Windows, the
+app run as node elsewhere). The hook reads the rules at that call and decides it there: a call the rules deny does not
+run, the agent is told `Blocked by Astera Rules: …`, and the call is recorded with the decision `blocked` and the rule
+(`ruleId`) that stopped it. Before any rule, an agent session cannot write Astera's profile folder or run an `astera
+policies`, `credentials` or `agent-profiles` command that changes them, and a rules file it cannot read lets only reads
+through. An agent running as you can still write those files from a script it runs. A session does not start in
+enforce when it cannot be protected: Claude Code older than 2.1.306, codex older than 0.160.0, a CLI that is not there
+or whose version cannot be read, Claude Code hooks turned off by your organization's managed settings on this computer
+(a policy served from the claude.ai console cannot be seen), a codex that does not take `--no-daemon`, or no Astera
+executable to run the hook (Windows without the Host runtime). A project's own `disableAllHooks` does not turn the hook
+off. A session whose calls arrive with no sign that its hook ran is stopped, with the reason in its tab. Each tool call
+takes about 0.1 seconds longer: starting the hook with the starter Rules took a median of 0.13 seconds on Windows, 0.08
+to 0.13 on macOS and 0.07 to 0.11 on Linux (20 starts a run; macOS and Linux in two runs on GitHub's runners).
+`enforceCoverage` in `policies show`
+says what is blocked for each provider and kind of session: what is typed into a Codex shell that is already running is
+not checked. Like observe, the mode counts for sessions started afterwards, and a session started in enforce keeps
+blocking until it ends: its blocked calls are recorded even after the mode is turned off.
+
+`sandboxCoverage` in `policies show`, whatever the mode, says what an agent profile's sandbox (`--sandbox on`) blocks
+for each CLI on each OS (`provider`, `os` as `win32`, `darwin` or `linux`), claiming only what was measured: `write`
+(outside the session's folders), `sensitive` (the folders holding logins), `stores` (the OS secret store) and `network`.
+Codex's sandbox blocks the first three on every OS and allows the network (`seen`, printed `allowed`). Claude Code's
+blocks them on macOS and Linux, with `stores` noted `runtime-measured`: the runtime its sandbox runs on was measured,
+not Claude Code's own use of it. On Windows Claude Code has no sandbox: `write` and `stores` are `none`, and `sensitive`
+is `partial` with the note `file-tools-only`. Codex's `stores` on Linux is noted `bus-path-only`: the deny names the
+session bus by its file path, and a bus on an abstract socket is not denied. `--human` prints it as a table of its own,
+headed `sandbox`, under the other, with "Windows: the shell is not restricted" beside the Claude Code Windows row and,
+under the table, that outside the login folders the home folder stays readable inside the sandbox. Settings › Security
+& Access shows the same two lines. The tab of a sandboxed session shows a marker; for Claude Code on Windows it says
+there is no sandbox, only deny rules for the file tools (the session's `sandboxKind` is `deny-only`, else `sandbox`).
+
+The rules say what each call would get if Astera enforced them. They are tried in order: the first rule whose action
+matches a call decides it, `allow` or `would-deny`, and `otherwise` decides a call no rule matches. A rule's action is
+matched exactly, or by a start ending in `*` (`git.*`), and a rule with `--scope inside-project` or `outside-project`
+matches only calls known to be inside, or outside, the session's project folder. Each command of a line
+(`cd sub && git push`) is judged on its own, and a command a rule denies makes the line `would-deny` wherever it sits:
+in a compound line, in a loop or an `if` block (it may not have run, and the preview errs toward flagging it), or beside
+a command Astera could not read. A line with no denied command is `unknown` when Astera could not read all of it (a
+shell command or script it does not know, or a call to a tool it does not know at all), or when a write or delete names
+no path and a scoped rule could match it. With `otherwise` deny, a call that no rule matches is `would-deny` even when
+Astera could not read it. The first time observe is turned on, Astera writes the starter rules: deny `git.remote.write`,
+`github.pr.create` and `github.write`, deny `filesystem.write` and `filesystem.delete` outside the project, and
+otherwise allow. Until then `policies show` shows them and nothing is written. The rule commands take a rule's id from
+`policies show` and its place in the list counted from 0 (`--at`, `--to`); `rules-reset` puts the starter rules back and
+keeps the mode, except that a damaged file is repaired to `compatibility`, the mode sessions were starting in while it
+was damaged, so the repair never turns observing on or off by itself. Every change answers the mode and the rules as they
+now are. An action Astera does not know is refused with 2 and the message lists them, so is a `rules-edit` that names
+nothing to change (`error.details.reason` is `nothing-to-change`), a rule that is not there is a 4, and a damaged
+`audit-policy.json` is a 6: `policies rules-reset` writes the starter rules over it, and a copy of the damaged file is
+kept beside it. When that copy could not be kept, `rules-reset` is refused with 6 as well (`error.details.repair` names
+the file) and leaves the file as it is.
+
+`audit list` prints the records newest first, each with `decision` and `ruleId` (the rule that decided, left out when
+`otherwise` did or none could), worked out from the rules in force when you ask: edit a rule and the past calls show
+what it would have done. A record carries the Job, run and Task its session worked for when the call ran: a worker files
+its calls under its Task, and the coordinator under the run, also after the attempt ends or the run finishes, until a
+person prompts the session (types in its tab or chat, replies from Slack, or runs `astera sessions send` from a shell);
+a task notification or what Astera types itself (a nudge, a roll's carry-on) does not end it, and the calls a person's
+prompt leads to carry neither. In a chat an older Astera app writes to, which does not say which lines a person typed,
+two minutes after the end stand in for that. A run counts as finished from when its outcome was settled, which a later
+edit of a Task does not move; a run that finished before this version of Astera counts from when its Tasks last changed
+before the update. The filters combine, and `--agent-profile <id|name>` takes an id or a name, on `audit list` and on
+`audit summary` alike (an id of a profile deleted since still filters its records; a name that matches none is 4).
+`--limit` is 200 by default and at most 2000. When it cuts the list, `truncated` is true and `next` holds the `--until`
+and `--before-id` that ask for the next page, which `--human` prints under the table as `more:`, after the filters you
+used, each value in single quotes unless it is plain letters, digits and `._:/@=+-` (not starting with `@` or `-`),
+written for the shell you are in (PowerShell on Windows, a POSIX shell elsewhere and in Git Bash, which sets `MSYSTEM`,
+or any shell named in `SHELL`), so the line can be pasted as it is. The parser takes a lone `-` as "read stdin" and a
+value starting with `--` as the next flag, so no quoting can pass one as a filter value: the hint leaves that filter out
+and says so above it. `audit summary` counts the same calls by decision, in all and per action, and `stoppedAtLimit` is
+true when a day of the period stopped recording at the size limit, so it holds fewer calls than were made.
+
+**These commands are for a person.** From inside an agent session (`ASTERA_SESSION` is set) every change is refused
+with 5, and so are both `audit` reads, whatever filter values they carry: the refusal comes first, before any
+`--agent-profile` name is looked up, so a name that matches nothing is 5 there, not 4 (a mistake in the line itself,
+such as an unknown flag, is still 2). The log of what agents did stays away from agents; `policies show` is not
+refused. MCP clients, plugins, the SDK and a paired controller (`--runtime`) have no audit or policy commands.
+
+```bash
+astera policies set-mode --mode observe
+astera audit list --decision would-deny --since 2026-10-23T00:00:00Z --human
+astera policies rules-add --effect allow --action git.remote.write --at 0
+```
+
+```json
+{"ok":true,"data":{"records":[{"id":"…","at":"2026-10-23T09:14:02.120Z","sessionId":"…","provider":"claude",
+  "kind":"terminal","action":"git.remote.write","target":"git push","confidence":"high","status":"ok",
+  "decision":"would-deny","ruleId":"starter-git-remote-write", …}],"truncated":true,
+  "next":{"until":"2026-10-23T09:14:02.120Z","beforeId":"…"}}}
+```
+
 **`mcp serve` is for an MCP client to launch, not for a person to type**: its stdout carries the MCP
 protocol. It connects to the Host of this profile, starting one when none answers, and serves
-forty-one tools that create, plan, run, observe, answer, stop and resume Jobs, read and use
+forty-two tools that create, plan, run, observe, answer, stop and resume Jobs, read and use
 sessions when Settings allows it, read pull requests, CI and issues on GitHub and, when Settings
 allows it, act on them, read the job sources and make a Job from an item, read the How It Works records of a project
-and regenerate one, and list the Runtimes this machine is paired with. What it may do is set by MCP access in
+and regenerate one, list the agent profiles, and list the Runtimes this machine is paired with. What it may do is set by MCP access in
 Settings (CLI tab). The six Job tools that change something (`create_job`, `create_task`, `run_job`, `stop_run`,
 `resume_run`, `answer_question`) take an optional `requestId`, and so do `send_message`, `create_session`, the four
 GitHub writes (`create_pr`, `retry_ci`, `create_job_from_issue`, `reconverge_run`), `create_job_from_source` and
@@ -1100,6 +1387,11 @@ or Codex, and each chat session. A session's id is the one `ASTERA_SESSION` hold
 - `provider`, `claude` or `codex`, the session's account's agent. It is left out when the account is gone.
 - `rolledFrom`, the id of the session this one replaced when its account was rolled over. Follow it to
   find the conversation that came before.
+- `sandboxed: true` and `sandboxKind`, when the session runs in its agent CLI's own sandbox (its agent
+  profile's sandbox switch, or a sandboxed session asked for it). `sandboxKind` is `sandbox`, the CLI's
+  own sandbox, or `deny-only`: Claude Code on Windows has none, so only its file tools are kept from the
+  denied places and its shell is not restricted. Both are left out for a session outside the sandbox.
+  `--human` prints them as a column before the title: `sandbox`, `deny-only`, or `-`.
 - `sources`, where the Host reads each fact of the session: `status`, `prompt`, `usage` and
   `conversation`. Each is `hooks`, `statusline`, `rollout`, `transcript` or `chat`, or `none` when that
   agent and kind give the Host no way to read it. A fact with no source is reported unknown, never idle.
@@ -1216,8 +1508,8 @@ out for a session Astera has not taken back yet after it starts, and for one nei
 card of, in which case it reads the same as one with no card. `--human` prints each turn under its
 role, the tools as `[tool]` lines, and the card last.
 
-`sessions send` types `--text` into a terminal session and presses Enter 150ms later, which is how
-the app delivers a scheduled message; `--no-enter` types the text and stops there. It answers
+`sessions send` types `--text` into a terminal session and presses Enter once the session has shown
+it and gone quiet (5 seconds at most), which is how the app delivers a scheduled message; `--no-enter` types the text and stops there. It answers
 `{"id":…,"sent":true,"enter":true}` once the Enter has gone out, and `sent` means the Host handed the
 text to the session. Two sends to one session are typed one after the other, never interleaved.
 `--text -` reads the text from standard input and drops one trailing newline, so a heredoc is typed
@@ -1228,7 +1520,10 @@ at a permission prompt or a question is refused with 6 before anything is typed,
 not answer one by accident; from a shell it goes through, because that is you answering. Like
 `chats answer`'s check below, this reads the caller's environment and is not a boundary. A session
 that has ended is a 6. With `--request-id`, a retried `sessions send` is replayed
-rather than typed a second time.
+rather than typed a second time. A send from a shell is a person's prompt: it ends what a finished run's
+or an ended attempt's session still holds for `runs get`'s `tokens` and `audit list`'s records, and one
+from inside an agent session does not. That too reads `ASTERA_SESSION` from the caller's environment, so
+an agent that clears it reads as a person, as with every role check in this CLI.
 
 **To a chat session, `sessions send` is one turn**, and it answers `{"id":…,"sent":true}`.
 `--no-enter` belongs to terminal sessions and is a 2 here. Sends to one session go one at a time.
@@ -1848,6 +2143,16 @@ The boundary is your machine and your operating system account.
   it. The key itself never crosses the pipe. Something at the address that cannot answer is not
   talked to: the app shows why on the Settings Info tab and runs its sessions itself, and `astera`
   ends with `PERMISSION_DENIED` (exit 5).
+- The app proves it is the app. Only the app's own connection may have the Host start a program, list,
+  read back, type into, resize, pause or end a terminal or a chat process directly, is asked to do what
+  only the app can, and counts as you in a Job's records. So the app keeps a second random key,
+  `host/app.key`, beside the Host key, and answers a challenge the Host makes for each of its
+  connections with a proof made from it, once. Until that proof holds, and after a wrong one, the
+  Host serves the connection as a CLI and keeps it open, and both sides write why in their logs. What
+  only the app reads (terminal output, and the Host's pushes of state, rolls and worktrees) is sent to the
+  proven app alone. A sandboxed session may not read `app.key`; it may read `host.key`, which the `astera` inside it
+  checks the Host's proof with. `astera sessions` reads and types through the commands instead,
+  under their own rules.
 - There is no bearer token and no connection file. What used to be a bearer token on a loopback
   HTTP port was removed with the server it protected. The Host key above is not a token: nothing
   presents it, and a process that can read it is already running as you.
@@ -1866,9 +2171,10 @@ The boundary is your machine and your operating system account.
   a CI job for example, therefore hands that shell's variables, secrets included, to every agent it
   starts, exactly as Astera does when you start Astera from that shell. Start the Host from an
   environment that holds only what the agents may see. What is removed is a fixed list:
-  - When the Host starts: every variable whose name begins with `ASTERA_SESSION`, `ASTERA_CLI` or
-    `ASTERA_SKILLS`; the variables a Claude Code session sets about itself (`CLAUDECODE`,
-    `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_CHILD_SESSION`,
+  - When the Host starts: every variable whose name begins with `ASTERA_SESSION`, `ASTERA_CLI`,
+    `ASTERA_SKILLS`, `ASTERA_GATEWAY_` or `ASTERA_LOOPBACK`; the variables a Claude
+    Code session sets about itself (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ID`,
+    `CLAUDE_CODE_CHILD_SESSION`,
     `CLAUDE_CODE_SESSION_ATTENDED`, `CLAUDE_CODE_BRIDGE_SESSION_ID`, `CLAUDE_CODE_MESSAGING_SOCKET`,
     `CLAUDE_CODE_MESSAGING_TOKEN`, `CLAUDE_PID`, `CLAUDE_EFFORT`); and `ELECTRON_RUN_AS_NODE` and every
     `ASTERA_HOST_` variable, which the Host's start then sets for itself.
@@ -1876,7 +2182,8 @@ The boundary is your machine and your operating system account.
     the Host's own settings never reach an agent. Then the same steps as for a worker Astera starts:
     the Claude Code list above is cleared once more, the Astera variables a session is given
     (`ASTERA_STATUSLINE_OUT`, `ASTERA_STATUSLINE_ORIGINAL`, `ASTERA_HOOK_OUT`, `ASTERA_CLI`,
-    `ASTERA_PROFILE_DIR`, `ASTERA_SKILLS`, `ASTERA_SESSION`) are cleared and set afresh, and
+    `ASTERA_PROFILE_DIR`, `ASTERA_SKILLS`, `ASTERA_SESSION`, `ASTERA_GATEWAY_TOKEN`, `ASTERA_GATEWAY_GRANT`,
+    `ASTERA_LOOPBACK`) are cleared and set afresh, and
     `CLAUDE_CONFIG_DIR` or `CODEX_HOME` is set to the account's folder, or removed for the default
     account.
 

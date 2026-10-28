@@ -67,7 +67,7 @@ function rig() {
   }
   // The Host's MCP Gateway over the same registry (release 2): stdio servers reach sessions through it
   const procs = new ProcRegistry({ spawn: () => ({ pid: 1, onData: () => {}, onExit: () => {}, write() {}, kill() {} }) as unknown as RegistryProc, log: () => {} })
-  const hub = createGatewayHub({ profileDir: profile, ptys: registry, procs, log: () => {} })
+  const hub = createGatewayHub({ profileDir: profile, ptys: registry, procs, sessionOfOwner: () => undefined, log: () => {} })
   hubs.push(hub)
   const spawner = createHostSpawner({
     gatewayPort: () => hub.sync(),

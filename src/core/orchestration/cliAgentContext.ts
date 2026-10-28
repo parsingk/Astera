@@ -45,6 +45,9 @@ const req = (name: string, value: string, about: string): UsageFlag => ({
 
 const DISPATCH = (about: string): UsageFlag => req('dispatch', '<dispatchId>', about)
 const RUN_ARG = (value: string, about: string): UsageFlag => req('run', value, about)
+/** What starting work asks of an agent (Agent Profiles follow-up): said once, for the commands that start a run or a worker. */
+const BYPASS_START =
+  'From inside an agent session, work that would run as a bypass agent profile (the Job\'s, or a Task\'s it starts) is refused with 5 unless Astera\'s "Run agents without permission checks" is on.'
 
 /**
  * The commands `USAGE` does not carry — the surface a session uses and a shell does not.
@@ -105,7 +108,7 @@ const SESSION = {
   },
   'run-start': {
     summary: "clear a Job's start gate and run it, or restart a run's coordinator",
-    detail: "Given a run id, it only starts that run's coordinator when it has none; the Job's gate is left alone.",
+    detail: `Given a run id, it only starts that run's coordinator when it has none; the Job's gate is left alone. ${BYPASS_START}`,
     flags: [RUN_ARG('<jobId|runId>', 'the Job to start, or the run whose coordinator to restart')]
   },
   'run-pause': {
@@ -114,11 +117,12 @@ const SESSION = {
   },
   'run-resume': {
     summary: 'let a held Job fire again',
+    detail: BYPASS_START,
     flags: [RUN_ARG('<jobId>', 'the Job to let go')]
   },
   'run-spawn': {
     summary: 'start one more run of a Job',
-    detail: "It starts the run's coordinator when the Job has a coordinator account.",
+    detail: `It starts the run's coordinator when the Job has a coordinator account. ${BYPASS_START}`,
     flags: [
       RUN_ARG('<jobId>', 'the Job to run again'),
       { name: 'unless-running', about: "make no run while the Job's latest run still runs (409); a schedule's fire sends it" }
@@ -256,7 +260,7 @@ const SESSION = {
   'task-update': {
     summary: "set a Task's status by hand",
     detail:
-      'It bypasses the transition table. --convergence off and --status cannot be sent together.',
+      'It bypasses the transition table. --convergence off and --status cannot be sent together. From inside an agent session, moving a Task that runs as a bypass agent profile back to ready or pending is refused with 5 unless Astera\'s "Run agents without permission checks" is on; the coordinator Astera started for its run is not asked.',
     flags: [
       req('id', '<taskId>', 'the Task to change'),
       { name: 'status', value: '<s>', about: 'the status to set' },
@@ -268,7 +272,7 @@ const SESSION = {
   send: {
     summary: "post a message into the run's inbox",
     detail:
-      '--type worker_done is how a worker reports, and it is the one type whose --task-id, --dispatch-id and --outcome are always required. The others take the dispatch of the calling session.',
+      '--type worker_done is how a worker reports, and it is the one type whose --task-id, --dispatch-id and --outcome are always required. The others take the dispatch of the calling session. From inside a sandboxed session that is neither a worker of the run nor its coordinator, a message into the run of a Job no sandboxed session made is refused with 5 (SANDBOX_UNAVAILABLE: outside-sandbox job <jobId>).',
     flags: [
       req('type', '<status|worker_done|question|escalation|heartbeat|decision_gate>', 'what kind of message'),
       { name: 'task-id', value: '<taskId>', about: 'the Task it is about (required for worker_done)' },
@@ -309,7 +313,7 @@ const SESSION = {
   ask: {
     summary: 'ask the coordinator a question and wait for the answer',
     detail:
-      'Either a new question (--question, with --task-id and --dispatch-id) or waiting again on one already asked (--resume). A timeout is success (exit 0) with `timedOut` in the body.',
+      'Either a new question (--question, with --task-id and --dispatch-id) or waiting again on one already asked (--resume). A timeout is success (exit 0) with `timedOut` in the body. From inside a sandboxed session that is neither a worker of the run nor its coordinator, a question in the run of a Job no sandboxed session made is refused with 5 (SANDBOX_UNAVAILABLE: outside-sandbox job <jobId>).',
     flags: [
       { name: 'question', value: '<text|->', about: 'the question (a value of `-` reads it from stdin)' },
       { name: 'task-id', value: '<taskId>', about: 'the Task it is about' },
@@ -330,6 +334,8 @@ const SESSION = {
   },
   'gate-resolve': {
     summary: 'resolve a gate with a decision',
+    detail:
+      'From inside an agent session, a decision that starts a Task that runs as a bypass agent profile again (any decision but `mark-failed` on an exhausted gate, or `continue` or `retry` on a GitHub gate, which start its round afresh) is refused with 5 unless Astera\'s "Run agents without permission checks" is on; any other decision is not, and the coordinator Astera started for the Task\'s run is not asked.',
     flags: [
       req('id', '<questionId>', 'the gate to resolve'),
       req('resolution', '<text|->', 'the decision')
@@ -447,6 +453,7 @@ const SESSION = {
   },
   'worker-start': {
     summary: 'start a worker session for a Task',
+    detail: `${BYPASS_START} The coordinator Astera started for the Task's run is not asked. From inside a sandboxed session, a Task that neither it nor its Job was made by a sandboxed session is refused with 5 (SANDBOX_UNAVAILABLE: outside-sandbox task <taskId>), and so is --terminal into a session that is not sandboxed (outside-sandbox session <sessionId>).`,
     flags: [
       req('task', '<taskId>', 'the Task to work on'),
       req('agent', '<claude|codex>', 'which CLI the worker runs'),
@@ -626,7 +633,32 @@ const NOT_SWITCHED = [
   'sources-list',
   'sources-items',
   'sources-show',
-  'jobs-create-from-source'
+  'jobs-create-from-source',
+  // Answered by the Host's agent profiles (src/host/agentProfiles/commands.ts) through cli/agentProfiles.ts, beside the
+  // plugins: an agent's shell may read them and changes none, as with `ext sync`.
+  'agent-profiles-list',
+  'agent-profiles-show',
+  'agent-profiles-create',
+  'agent-profiles-update',
+  'agent-profiles-archive',
+  'agent-profiles-restore',
+  'agent-profiles-delete',
+  // Answered by the Host's observe mode (src/host/audit/auditCommands.ts, policyCommands.ts) through cli/audit.ts, beside
+  // the agent profiles: an agent's shell may read the rules and changes none, and is refused the records altogether.
+  'audit-list',
+  'audit-summary',
+  'policies-show',
+  'policies-set-mode',
+  'policies-set-otherwise',
+  'policies-rules-add',
+  'policies-rules-edit',
+  'policies-rules-remove',
+  'policies-rules-move',
+  'policies-rules-reset',
+  // Answered by the Host's Credentials list (src/host/credentials/commands.ts): read here, changed in the app only
+  'credentials-list',
+  'credentials-show',
+  'credentials-doctor'
 ] as const satisfies readonly AgentCommand[]
 
 /**

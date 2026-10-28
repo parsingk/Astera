@@ -103,6 +103,27 @@ describe('executeRecovery', () => {
     expect(h.started[0]).toMatchObject({ worktree: 'D:/wt/run', rollFrom: ['acc_9', 'acc_8'] })
   })
 
+  // Agent Profiles design §6: recovery restarts the worker as its Task's profile, and a lifecycle repair borrows the
+  // profile with the accounts
+  it('restarts the worker as its Task’s agent profile, on its new Dispatch too', async () => {
+    const h = deps({}, task({ agentProfileId: 'ap_1' }))
+    const r = await executeRecovery({ attempt: attempt(), decision: decision(), state: h.state, now: NOW }, h.d as never)
+    expect(h.started[0]).toMatchObject({ agentProfileId: 'ap_1' })
+    expect(h.state.dispatches.find((d) => d.id === (r as { newDispatchId: string }).newDispatchId)!.agentProfileId).toBe('ap_1')
+    const plain = deps()
+    await executeRecovery({ attempt: attempt(), decision: decision(), state: plain.state, now: NOW }, plain.d as never)
+    expect(plain.started[0]).not.toHaveProperty('agentProfileId')
+  })
+
+  it('restarts a lost lifecycle repair as the latest ordinary Task’s agent profile', async () => {
+    const h = deps({}, task({ kind: 'lifecycle', accountIds: undefined, checks: [{ configId: 'github:ci', name: 'GitHub CI', status: 'failed', summary: 'x' }] }))
+    const ordinary = { ...task({ id: 'tsk_o', status: 'completed', accountIds: ['acc_9', 'acc_8'], agentProfileId: 'ap_1' }) }
+    const done = { ...lost({ id: 'dsp_o', taskId: 'tsk_o', accountId: 'acc_9', cwd: 'D:/wt/o', workerState: 'stopped', outcome: 'succeeded' }) }
+    await h.d.setState({ ...h.state, tasks: [...h.state.tasks, ordinary], dispatches: [...h.state.dispatches, done] })
+    await executeRecovery({ attempt: attempt({ repair: 'check-failure', cwd: 'D:/wt/run' }), decision: decision(), state: h.state, now: NOW }, h.d as never)
+    expect(h.started[0]).toMatchObject({ rollFrom: ['acc_9', 'acc_8'], agentProfileId: 'ap_1' })
+  })
+
   it('repair attempt 의 resume-native 도 repair 표시를 잇고 repair spec 을 넘긴다', async () => {
     const h = deps({}, task({ checks: [{ configId: 'c1', name: 'Tests', status: 'failed', exitCode: 1 }] }))
     await executeRecovery(

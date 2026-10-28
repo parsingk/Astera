@@ -35,6 +35,7 @@ import { createHostSpawner, type HostLocal, type HostSpawner, type HostSpawnerDe
 import type { HostMessage } from '../core/host/protocol'
 import { AppUnreachable, leftNothingBehind, refusedBeforeActing, wasRefusedBeforeActing } from '../core/host/orchProtocol'
 import { RepairNeeded } from '../core/settings/repairNeeded'
+import { writeAgentProfiles } from '../core/agentProfiles/store'
 import { PtyRegistry } from './registry'
 import { ProcRegistry } from './procRegistry'
 import { registrySessions } from './sessions'
@@ -310,6 +311,25 @@ describe('createHostOrch', () => {
       expect(JSON.stringify(mcp.body)).toContain('MCP clients start sessions only in a registered project')
       expect(JSON.stringify((await create('cli')).body)).not.toContain('registered project')
       expect(createSession).not.toHaveBeenCalled()
+    })
+    // Final fix pass (C3): the Host's lookup of whether a caller's session runs in the sandbox reaches the command layer,
+    // and a sandboxed caller's session is asked for in the sandbox; another caller's is not
+    it('a sandboxed caller’s sessions-create asks for a sandboxed session, through the Host’s lookup', async () => {
+      const createSession = vi.fn(async () => ({ id: 'ses_new', kind: 'terminal' as const, title: 't', accountId: 'acc1', cwd: 'D:/p', alive: true, state: 'unknown' as const }))
+      await fs.writeFile(
+        path.join(dir, 'accounts.json'),
+        JSON.stringify({ accounts: [{ id: 'acc1', label: '일', configDir: path.join(dir, 'cfg', 'acc1'), color: '#fff', createdAt: 'T', provider: 'claude' }] }),
+        'utf8'
+      )
+      const orch = orchOver({ createSession, hasApp: () => false, sessionSandboxed: (id) => id === 'ses_box' })
+      await orch.ready()
+      const create = (sessionId: string): ReturnType<typeof orch.call> =>
+        orch.call({ cmd: 'sessions-create', args: { account: 'acc1', cwd: 'D:/p' }, sessionId, from: caller('cli') })
+      const boxed = await create('ses_box')
+      expect(boxed.status, JSON.stringify(boxed.body)).toBe(200)
+      expect((await create('ses_open')).status).toBe(200)
+      expect((createSession.mock.calls[0] as unknown as [Record<string, unknown>])[0]).toMatchObject({ sandbox: true })
+      expect((createSession.mock.calls[1] as unknown as [Record<string, unknown>])[0]).not.toHaveProperty('sandbox')
     })
     it('an unreadable settings file refuses', async () => {
       await settings('{not json')
@@ -1074,6 +1094,191 @@ describe('shared extensions', () => {
   })
 })
 
+// Agent Profiles (design §4): routed like the extensions, below every gate.
+describe('agent profiles', () => {
+  const cli = { role: 'cli' as const, toOthers: () => {} }
+  const answering = () => {
+    const seen: { cmd: string; agentRefusal?: string }[] = []
+    return { seen, agentProfiles: { command: async (a: { cmd: string; agentRefusal?: string }) => (seen.push(a), { status: 200, body: { ok: true } }) } }
+  }
+
+  it('is refused to MCP and a controller by their gates, before the profiles are asked', async () => {
+    const f = answering()
+    const orch = orchOver({ agentProfiles: f.agentProfiles })
+    expect((await orch.call({ cmd: 'agent-profiles-create', args: {}, sessionId: '', from: { role: 'mcp', toOthers: () => {} } })).status).toBe(403)
+    const controller = { role: 'controller' as const, principal: { clientId: 'cli_x', name: 'x', permission: 'full-control' as const }, toOthers: () => {} }
+    expect((await orch.call({ cmd: 'agent-profiles-create', args: {}, sessionId: '', from: controller })).status).toBe(403)
+    expect(f.seen).toEqual([])
+  })
+
+  it('answers the CLI, telling the profiles when an agent session’s shell is the caller', async () => {
+    const f = answering()
+    const orch = orchOver({ agentProfiles: f.agentProfiles })
+    expect((await orch.call({ cmd: 'agent-profiles-list', args: {}, sessionId: '', from: cli })).status).toBe(200)
+    await orch.call({ cmd: 'agent-profiles-delete', args: { id: 'ap_x' }, sessionId: 'sess_1', from: cli })
+    expect(f.seen[0].agentRefusal).toBeUndefined()
+    expect(f.seen[1].agentRefusal).toMatch(/not an agent session/)
+  })
+
+  it('answers 501 on a Host that keeps none', async () => {
+    expect((await orchOver().call({ cmd: 'agent-profiles-list', args: {}, sessionId: '', from: cli })).status).toBe(501)
+  })
+
+  // The person's decision on the final review (2026-10-22): an agent session's shell, an MCP client and a plugin make
+  // work as a profile that runs without permission checks only while app-settings.json already skips them, read per call
+  it('refuses a profile that runs without permission checks to an agent, MCP and a plugin while the app-wide mode asks', async () => {
+    await writeAgentProfiles(dir, { version: 1, profiles: [{ id: 'ap_b', name: 'Unattended', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'bypass', sandbox: false, createdAt: NOW, updatedAt: NOW }] })
+    const settings = (extra: object): Promise<void> => fs.writeFile(path.join(dir, 'app-settings.json'), JSON.stringify({ mcpAccess: 'control', ...extra }))
+    const orch = orchOver()
+    const create = (from: OrchCaller, sessionId = ''): ReturnType<typeof orch.call> =>
+      orch.call({ cmd: 'jobs-create', args: { objective: 'o', cwd: 'D:/p', agentProfile: 'Unattended' }, sessionId, from })
+    const agents: Array<[OrchCaller, string]> = [
+      [cli, 'sess_agent'],
+      [{ role: 'mcp', toOthers: () => {} }, ''],
+      [{ role: 'plugin', plugin: { id: 'astera-hello', granted: new Set(['jobs.create']) }, toOthers: () => {} }, '']
+    ]
+    await settings({ agentPermissionMode: 'manual' })
+    for (const [from, sessionId] of agents) {
+      const r = await create(from, sessionId)
+      expect([r.status, (r.body as { reason?: unknown }).reason], from.role).toEqual([403, 'agent-profile-bypass-refused'])
+    }
+    expect(orch.state().jobs).toHaveLength(0)
+    // A person at their own shell and the app are not asked
+    expect((await create(cli)).status).toBe(200)
+    expect((await create({ role: 'app', toOthers: () => {} })).status).toBe(200)
+    // Read per call: once the app-wide mode skips the checks, the agents may too
+    await settings({})
+    for (const [from, sessionId] of agents) expect((await create(from, sessionId)).status, from.role).toBe(200)
+  })
+
+  // Third follow-up, the person's decision: running a person's Job made as such a profile (jobs run, MCP run_job) starts
+  // work as it, so an agent's shell and an MCP client are refused while the app-wide mode asks; the person is not asked
+  it('refuses an agent’s jobs run and MCP run_job of a person’s Job made as such a profile while the app-wide mode asks', async () => {
+    await writeAgentProfiles(dir, { version: 1, profiles: [{ id: 'ap_b', name: 'Unattended', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'bypass', sandbox: false, createdAt: NOW, updatedAt: NOW }] })
+    const settings = (extra: object): Promise<void> => fs.writeFile(path.join(dir, 'app-settings.json'), JSON.stringify({ mcpAccess: 'control', ...extra }))
+    const orch = orchOver()
+    const app: OrchCaller = { role: 'app', toOthers: () => {} }
+    const mcp: OrchCaller = { role: 'mcp', toOthers: () => {} }
+    const personsJob = async (): Promise<string> =>
+      ((await orch.call({ cmd: 'jobs-create', args: { objective: 'o', cwd: 'D:/p', agentProfile: 'Unattended' }, sessionId: '', from: app })).body as { id: string }).id
+    const run = (id: string, from: OrchCaller, sessionId = ''): ReturnType<typeof orch.call> => orch.call({ cmd: 'jobs-run', args: { id }, sessionId, from })
+    await settings({ agentPermissionMode: 'manual' })
+    const id = await personsJob()
+    for (const [from, sessionId] of [[cli, 'sess_agent'], [mcp, '']] as Array<[OrchCaller, string]>) {
+      const r = await run(id, from, sessionId)
+      expect([r.status, (r.body as { reason?: unknown }).reason], from.role).toEqual([403, 'agent-profile-bypass-refused'])
+    }
+    expect(orch.state().runs).toHaveLength(0)
+    // The person at their own shell runs it
+    expect((await run(id, cli)).status).toBe(200)
+    // Read per call: once the app-wide mode skips the checks, MCP may run one too
+    await settings({})
+    expect((await run(await personsJob(), mcp)).status).toBe(200)
+  })
+})
+
+// Observe mode's rules (design §7, §12): routed like the agent profiles, below every gate, and no gate lists them.
+describe('policies', () => {
+  const cli = { role: 'cli' as const, toOthers: () => {} }
+  const answering = () => {
+    const seen: { cmd: string; agentRefusal?: string }[] = []
+    return { seen, policies: { command: async (a: { cmd: string; agentRefusal?: string }) => (seen.push(a), { status: 200, body: { ok: true } }) } }
+  }
+
+  it('is refused to MCP, a controller and a plugin by their gates, before the policies are asked', async () => {
+    const f = answering()
+    const orch = orchOver({ policies: f.policies })
+    expect((await orch.call({ cmd: 'policies-show', args: {}, sessionId: '', from: { role: 'mcp', toOthers: () => {} } })).status).toBe(403)
+    const controller = { role: 'controller' as const, principal: { clientId: 'cli_x', name: 'x', permission: 'full-control' as const }, toOthers: () => {} }
+    expect((await orch.call({ cmd: 'policies-set-mode', args: { mode: 'observe' }, sessionId: '', from: controller })).status).toBe(403)
+    const plugin = { role: 'plugin' as const, plugin: { id: 'astera-hello', granted: new Set(['jobs.read', 'jobs.create']) }, toOthers: () => {} }
+    expect((await orch.call({ cmd: 'policies-rules-reset', args: {}, sessionId: '', from: plugin })).status).toBe(403)
+    expect(f.seen).toEqual([])
+  })
+
+  it('answers the CLI, telling the policies when an agent session’s shell is the caller', async () => {
+    const f = answering()
+    const orch = orchOver({ policies: f.policies })
+    expect((await orch.call({ cmd: 'policies-show', args: {}, sessionId: '', from: cli })).status).toBe(200)
+    await orch.call({ cmd: 'policies-rules-add', args: { effect: 'deny', action: 'git.*' }, sessionId: 'sess_1', from: cli })
+    expect(f.seen.map((s) => s.cmd)).toEqual(['policies-show', 'policies-rules-add'])
+    expect(f.seen[0].agentRefusal).toBeUndefined()
+    expect(f.seen[1].agentRefusal).toMatch(/not an agent session/)
+  })
+
+  it('answers 501 on a Host that keeps none', async () => {
+    expect((await orchOver().call({ cmd: 'policies-show', args: {}, sessionId: '', from: cli })).status).toBe(501)
+  })
+})
+
+// The Credentials list (credentials design §7): routed like the policies, below every gate, and no gate lists them.
+describe('credentials', () => {
+  const cli = { role: 'cli' as const, toOthers: () => {} }
+  const answering = () => {
+    const seen: { cmd: string; role?: string; agentRefusal?: string }[] = []
+    return { seen, credentials: { command: async (a: { cmd: string; role?: string; agentRefusal?: string }) => (seen.push(a), { status: 200, body: { ok: true } }) } }
+  }
+
+  it('is refused to MCP by its gate, before the list is asked', async () => {
+    const f = answering()
+    const orch = orchOver({ credentials: f.credentials })
+    expect((await orch.call({ cmd: 'credentials-list', args: {}, sessionId: '', from: { role: 'mcp', toOthers: () => {} } })).status).toBe(403)
+    expect(f.seen).toEqual([])
+  })
+
+  it('answers the app and the CLI, telling the list who asks and when an agent session’s shell is the caller', async () => {
+    const f = answering()
+    const orch = orchOver({ credentials: f.credentials })
+    await orch.call({ cmd: 'credentials-list', args: {}, sessionId: '', from: cli })
+    await orch.call({ cmd: 'credentials-uses', args: {}, sessionId: 'sess_1', from: cli })
+    await orch.call({ cmd: 'credentials-set-hiding', args: { id: 'x', hide: { on: false } }, sessionId: '', from: { role: 'app', toOthers: () => {} } })
+    expect(f.seen.map((s) => [s.cmd, s.role, s.agentRefusal !== undefined])).toEqual([
+      ['credentials-list', 'cli', false],
+      ['credentials-uses', 'cli', true],
+      ['credentials-set-hiding', 'app', false]
+    ])
+  })
+
+  it('answers 501 on a Host that keeps none', async () => {
+    expect((await orchOver().call({ cmd: 'credentials-list', args: {}, sessionId: '', from: cli })).status).toBe(501)
+  })
+})
+
+// Observe mode's records (design §8, §12): routed like the policies, below every gate, and no gate lists them. An agent's
+// shell is told so even for these reads, and the audit commands refuse it.
+describe('audit', () => {
+  const cli = { role: 'cli' as const, toOthers: () => {} }
+  const answering = () => {
+    const seen: { cmd: string; agentRefusal?: string }[] = []
+    return { seen, audit: { command: async (a: { cmd: string; agentRefusal?: string }) => (seen.push(a), { status: 200, body: { ok: true } }) } }
+  }
+
+  it('is refused to MCP, a controller and a plugin by their gates, before the audit is asked', async () => {
+    const f = answering()
+    const orch = orchOver({ audit: f.audit })
+    expect((await orch.call({ cmd: 'audit-list', args: {}, sessionId: '', from: { role: 'mcp', toOthers: () => {} } })).status).toBe(403)
+    const controller = { role: 'controller' as const, principal: { clientId: 'cli_x', name: 'x', permission: 'full-control' as const }, toOthers: () => {} }
+    expect((await orch.call({ cmd: 'audit-summary', args: {}, sessionId: '', from: controller })).status).toBe(403)
+    const plugin = { role: 'plugin' as const, plugin: { id: 'astera-hello', granted: new Set(['jobs.read', 'jobs.create']) }, toOthers: () => {} }
+    expect((await orch.call({ cmd: 'audit-list', args: {}, sessionId: '', from: plugin })).status).toBe(403)
+    expect(f.seen).toEqual([])
+  })
+
+  it('answers the CLI, telling the audit when an agent session’s shell is the caller', async () => {
+    const f = answering()
+    const orch = orchOver({ audit: f.audit })
+    expect((await orch.call({ cmd: 'audit-list', args: {}, sessionId: '', from: cli })).status).toBe(200)
+    await orch.call({ cmd: 'audit-summary', args: {}, sessionId: 'sess_1', from: cli })
+    expect(f.seen.map((s) => s.cmd)).toEqual(['audit-list', 'audit-summary'])
+    expect(f.seen[0].agentRefusal).toBeUndefined()
+    expect(f.seen[1].agentRefusal).toMatch(/not an agent session/)
+  })
+
+  it('answers 501 on a Host that keeps none', async () => {
+    expect((await orchOver().call({ cmd: 'audit-list', args: {}, sessionId: '', from: cli })).status).toBe(501)
+  })
+})
+
 describe('pairing and clients (local only)', () => {
   const cli = { role: 'cli' as const, toOthers: () => {} }
   it('pair-create answers a code to the CLI, and clients-list and clients-revoke see the redeemed client', async () => {
@@ -1420,7 +1625,8 @@ describe('요청 영수증', () => {
       const second = await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-c2' })
       expect(first.status).toBe(200)
       expect(second.replayed).toBe(true)
-      expect(acts.filter(([n]) => n === 'chatSend')).toEqual([['chatSend', ['chat-1', '다음으로']]])
+      // A shell's send is a person's (observe deferred fix round 2, Minor b)
+      expect(acts.filter(([n]) => n === 'chatSend')).toEqual([['chatSend', ['chat-1', '다음으로', { person: true }]]])
       expect(written).toEqual([])
     })
 
@@ -1470,7 +1676,7 @@ describe('요청 영수증', () => {
       expect(retried.replayed, '거절이 영수증으로 남아 재생됐다').toBeFalsy()
       const again = await orch.call({ cmd: 'sessions-send', args, sessionId: '', request: 'req-c7' })
       expect(again.replayed).toBe(true)
-      expect(sent).toEqual([['chat-1', '다음으로']])
+      expect(sent).toEqual([['chat-1', '다음으로', { person: true }]])
       expect(written).toEqual([])
     })
 
@@ -2563,6 +2769,71 @@ describe('GitHub writes and request receipts (MCP P2-B)', () => {
     expect(retried.status, 'the refusal was kept as a receipt').toBe(200)
     expect(retried.replayed).not.toBe(true)
     expect(g.created).toHaveLength(1)
+  })
+
+  // Credential-use records (credentials design §6): a GitHub write through the Host is recorded for whoever asked
+  it('an agent’s github-ci-rerun leaves a session record, and the app’s an app record', async () => {
+    const { projectId } = await finishedRun()
+    const g = github()
+    const got: { actor: string; sessionId?: string; action: string; resource: string }[] = []
+    const orch = orchOver({ act, github: g.dep, useRecorder: { record: (u) => void got.push(u) } })
+    const caller = (role: 'cli' | 'app') => ({ role, toOthers: () => {} })
+    await orch.call({ cmd: 'github-ci-rerun', args: { project: projectId, runId: 77 }, sessionId: 'ses_agent', from: caller('cli') })
+    await orch.call({ cmd: 'github-ci-rerun', args: { project: projectId, runId: 78 }, sessionId: '', from: caller('app') })
+    expect(got.map((u) => [u.actor, u.sessionId, u.action, u.resource])).toEqual([
+      ['session', 'ses_agent', 'github.ci.rerun', 'unknown repository 77'],
+      ['app', undefined, 'github.ci.rerun', 'unknown repository 78']
+    ])
+  })
+
+  // Final review M11: the work a session holds reaches its records through the Host's own state: a coordinator's Run and
+  // Job, a worker's Task with them (a worker reads GitHub through Astera; only the coordinator and the person write)
+  it('a coordinator’s github-pr-create and a worker’s GitHub read leave session records with their work', async () => {
+    const { runId, projectId } = await finishedRun()
+    const file = path.join(dir, 'orchestration.json')
+    const s = JSON.parse(await fs.readFile(file, 'utf8')) as OrchState
+    const task = s.tasks.find((t) => t.runId === runId)!
+    const jobId = s.runs.find((r) => r.id === runId)!.jobId
+    s.runs = s.runs.map((r) => (r.id === runId ? { ...r, coordinatorSessionId: 'ses_coord' } : r))
+    s.dispatches = [
+      ...s.dispatches,
+      { id: 'd_w', taskId: task.id, provider: 'claude', accountId: 'acc', sessionId: 'ses_worker', cwd: WT, specPath: 'D:/specs/s.md', startedAt: new Date().toISOString(), workerState: 'ready', retained: false }
+    ]
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const g = github()
+    const got: { actor: string; sessionId?: string; taskId?: string; runId?: string; jobId?: string; action: string }[] = []
+    const orch = orchOver({
+      act,
+      // Both sessions are alive, so the load's restart cleanup leaves their Dispatch and coordinator slot open
+      aliveSessionIds: () => new Set(['ses_coord', 'ses_worker']),
+      github: {
+        ...g.dep,
+        // As the real maker does: `gh pr create` through the runner it is handed
+        createPr: async (req: unknown, d?: { runGh?: (args: string[], cwd: string) => Promise<unknown> }) => {
+          await d?.runGh?.(['pr', 'create', '--title', 't'], WT)
+          return g.dep.createPr(req)
+        }
+      },
+      useRecorder: { record: (u) => void got.push(u) }
+    })
+    const cli = { role: 'cli' as const, toOthers: () => {} }
+    expect((await orch.call({ cmd: 'github-pr-create', args: { run: runId }, sessionId: 'ses_coord', from: cli })).status).toBe(200)
+    expect((await orch.call({ cmd: 'github-issue', args: { project: projectId, number: 5 }, sessionId: 'ses_worker', from: cli })).status).toBe(200)
+    expect(got.map(({ actor, sessionId, taskId, runId: run, jobId: job, action }) => ({ actor, sessionId, taskId, runId: run, jobId: job, action }))).toEqual([
+      { actor: 'session', sessionId: 'ses_coord', taskId: undefined, runId, jobId, action: 'github.pr.create' },
+      { actor: 'session', sessionId: 'ses_worker', taskId: task.id, runId, jobId, action: 'github.read' }
+    ])
+  })
+
+  it('github-pr-create hands the pull request maker runners that record for the caller', async () => {
+    const { runId } = await finishedRun()
+    const g = github()
+    const deps: unknown[] = []
+    const orch = orchOver({ act, github: { ...g.dep, createPr: async (req: unknown, d?: unknown) => (deps.push(d), g.dep.createPr(req)) }, useRecorder: { record: () => {} } })
+    await orch.call({ cmd: 'github-pr-create', args: { run: runId }, sessionId: '' })
+    expect(deps).toHaveLength(1)
+    expect(typeof (deps[0] as { runGh?: unknown }).runGh).toBe('function')
+    expect(typeof (deps[0] as { runGit?: unknown }).runGit).toBe('function')
   })
 
   // The reads still leave no receipt: a second read reads GitHub again.
@@ -4290,6 +4561,73 @@ describe('the Host journal at the commit points (Host journal Task 5)', () => {
     expect(await orch.call({ cmd: 'journal-append', args: { ops }, sessionId: '', from: app })).toEqual({ status: 200, body: { applied: 1, failed: 0 } })
     expect(f.journal.append).toHaveBeenCalledWith([{ op: 'recovery-finish', id: 'rca_1', status: 'failed', at: NOW }])
     expect(await orch.call({ cmd: 'journal-reload', args: {}, sessionId: '', from: app })).toEqual({ status: 200, body: { enabled: true, writer: true } })
+  })
+})
+
+// Deferred minor b: the Host stamps when a Run's outcome became final at both of its commit points, so what a coordinator
+// spent and did is bounded by that moment, not by the last change of a Task
+describe('a Run’s end at the commit points', () => {
+  const LATER = '2026-09-22T02:00:00.000Z'
+  const app: OrchCaller = { role: 'app', toOthers: () => {} }
+  const seedWorker = async (): Promise<{ taskId: string; dispatchId: string }> => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW)
+    if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW)
+    if (!run.ok) throw new Error(run.error)
+    const task = createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW)
+    if (!task.ok) throw new Error(task.error)
+    const dsp = openDispatch(task.state, { taskId: task.value.id, provider: 'codex', accountId: 'accA', sessionId: 'ses_w', cwd: 'D:/p', specPath: 'D:/p/s.md' }, NOW)
+    if (!dsp.ok) throw new Error(dsp.error)
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(dsp.state), 'utf8')
+    return { taskId: task.value.id, dispatchId: dsp.value.id }
+  }
+  const stateNow = async (orch: ReturnType<typeof createHostOrch>) =>
+    (await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })).body as { state: OrchState; version: number }
+
+  it('a command’s commit that finishes a Run stamps it, in memory and on disk, and a later edit of a Task leaves it', async () => {
+    const ids = await seedWorker()
+    let clock = NOW
+    const orch = orchOver({ now: () => clock, aliveSessionIds: () => new Set(['ses_w']) })
+    const send = { cmd: 'send', args: { type: 'worker_done', ...ids, outcome: 'succeeded', subject: 's', body: 'b' }, sessionId: 'ses_w' }
+    expect((await orch.call(send)).status).toBe(200)
+    expect(orch.state().runs[0].endedAt).toBe(NOW)
+    expect((JSON.parse(await fs.readFile(path.join(dir, 'orchestration.json'), 'utf8')) as OrchState).runs[0].endedAt).toBe(NOW)
+    // The app renames the Task two hours later, from a mirror that had not heard of the end yet
+    clock = LATER
+    const got = await stateNow(orch)
+    const renamed: OrchState = {
+      ...got.state,
+      runs: got.state.runs.map(({ endedAt: _unheard, ...r }) => r),
+      tasks: got.state.tasks.map((t) => ({ ...t, title: 'renamed', updatedAt: LATER }))
+    }
+    expect((await orch.call({ cmd: 'state-put', args: { state: renamed, version: got.version }, sessionId: '', from: app })).status).toBe(200)
+    expect(orch.state().runs[0].endedAt).toBe(NOW)
+  })
+
+  it('a state-put that finishes a Run stamps it, one that adds a Task clears it, and a cold Host’s first put keeps a stamp it carries', async () => {
+    const ids = await seedWorker()
+    let clock = NOW
+    const orch = orchOver({ now: () => clock })
+    const got = await stateNow(orch)
+    const finished: OrchState = { ...got.state, tasks: got.state.tasks.map((t) => (t.id === ids.taskId ? { ...t, status: 'completed' } : t)) }
+    expect((await orch.call({ cmd: 'state-put', args: { state: finished, version: got.version }, sessionId: '', from: app })).status).toBe(200)
+    expect(orch.state().runs[0].endedAt).toBe(NOW)
+    clock = LATER
+    const ended = await stateNow(orch)
+    const more = createTask(ended.state, { runId: ended.state.runs[0].id, title: 'more', spec: 's', deps: [] }, LATER)
+    if (!more.ok) throw new Error(more.error)
+    expect((await orch.call({ cmd: 'state-put', args: { state: more.state, version: ended.version }, sessionId: '', from: app })).status).toBe(200)
+    expect(orch.state().runs[0]).not.toHaveProperty('endedAt')
+
+    // A Host that holds nothing yet, handed the app's mirror (Minor 5): the stamp it carries is the last Host's, kept;
+    // with none, the Run's Tasks' last change, not this put's time
+    const carried: OrchState = { ...finished, runs: finished.runs.map((x) => ({ ...x, endedAt: NOW })) }
+    const cold = orchOver({ now: () => LATER })
+    expect((await cold.call({ cmd: 'state-put', args: { state: carried }, sessionId: '', from: app })).status).toBe(200)
+    expect(cold.state().runs[0].endedAt).toBe(NOW)
+    const bare = orchOver({ now: () => LATER })
+    expect((await bare.call({ cmd: 'state-put', args: { state: finished }, sessionId: '', from: app })).status).toBe(200)
+    expect(bare.state().runs[0].endedAt).toBe(NOW)
   })
 })
 

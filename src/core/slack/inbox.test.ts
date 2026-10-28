@@ -11,6 +11,7 @@ import {
   type SocketClient
 } from './inbox'
 import { MAX_INJECT_CHARS } from './inbound'
+import { ENTER_QUIET_MS } from '../sessions/sessionDriver'
 import type { ChatRequest } from '../chat/types'
 
 const CH = 'C-target'
@@ -124,6 +125,42 @@ describe('SlackInbox 주입', () => {
       expect(h.writes).toEqual([
         { sessionId: 's-1', data: '계속 진행해' },
         { sessionId: 's-1', data: '\r' }
+      ])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // Codex swallows an Enter that comes right after a long text (openai/codex#56982): with the session's output to go
+  // by, the reply's Enter waits until the session has drawn the reply and gone quiet, as `sessions send` does
+  it('holds the reply’s Enter until the session has drawn it and gone quiet', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(0)
+      let last: number | null = -1000
+      const at: Array<[number, string]> = []
+      const h = setup({
+        write: (_sid, data) => {
+          at.push([Date.now(), data])
+          return true
+        },
+        lastOutputAt: () => last
+      })
+      const f = fakeClient()
+      await h.inbox.start(f.client)
+      f.emit('message', { ack: async () => {}, event: message() })
+      await vi.advanceTimersByTimeAsync(0)
+      // The session draws the reply until 300 ms
+      for (const t of [50, 180, 300]) {
+        await vi.advanceTimersByTimeAsync(t - Date.now())
+        last = t
+      }
+      await vi.advanceTimersByTimeAsync(ENTER_QUIET_MS - 1)
+      expect(at.map(([, d]) => d)).toEqual(['계속 진행해'])
+      await vi.advanceTimersByTimeAsync(1)
+      expect(at).toEqual([
+        [0, '계속 진행해'],
+        [300 + ENTER_QUIET_MS, '\r']
       ])
     } finally {
       vi.useRealTimers()

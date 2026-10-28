@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { columns, displayWidth, humanFor, quietFor, stateWord } from './cliHuman'
+import { columns, displayWidth, humanFor, quietFor, shellOf, stateWord } from './cliHuman'
+import { ACTION_PHRASES, COVERAGE_NOTE_PHRASES } from '../audit/phrases'
+import type { AuditAction, CoverageNote } from '../audit/types'
+import { SANDBOX_COVERAGE } from '../sandbox/coverage'
+import type { MessageKey } from '../i18n'
+import { en } from '../i18n/messages/en'
 
 describe('stateWord', () => {
   // 순서가 뜻이다 — 멈춘 것이 결과보다 앞선다
@@ -135,6 +140,28 @@ describe('humanFor', () => {
         `RUNNING       astera-plain       0.1.0  -${' '.repeat(22)}-`
       ].join('\n')
     )
+  })
+
+  // Agent Profiles design §6: a row per profile, its state first as plugins list does, then its id, name, permission,
+  // sandbox switch (sandbox design §6; a profile from a Host before it reads as off) and accounts in order
+  it('agent-profiles list is a row per profile, and one profile is its fields', () => {
+    expect(
+      humanFor('agent-profiles-list', {
+        profiles: [
+          { id: 'ap_1', name: 'Reviewer', status: 'active', accountIds: ['acc_a', 'acc_b'], mcpExclude: [], permission: 'ask', sandbox: true },
+          { id: 'ap_2', name: 'Night', status: 'archived', accountIds: [], mcpExclude: ['m'], permission: 'inherit', sandbox: false },
+          { id: 'ap_3', name: 'Old', status: 'active', accountIds: ['acc_a'], mcpExclude: [], permission: 'bypass' }
+        ]
+      })
+    ).toBe(
+      [
+        'ACTIVE    ap_1  Reviewer  ask      on   acc_a,acc_b',
+        'ARCHIVED  ap_2  Night     inherit  off  -',
+        'ACTIVE    ap_3  Old       bypass   off  acc_a'
+      ].join(String.fromCharCode(10))
+    )
+    expect(humanFor('agent-profiles-show', { id: 'ap_1', name: 'Reviewer' })).toContain('Reviewer')
+    expect(humanFor('agent-profiles-delete', { id: 'ap_1', name: 'Reviewer', deleted: true })).toContain('ap_1')
   })
 
   it('plugins logs prints the lines, and says when there are none', () => {
@@ -515,15 +542,28 @@ describe('humanFor', () => {
     )
   })
 
-  it('sessions list 는 살았는지·하는 일·id·종류·제목이다', () => {
+  // The protection column: `sandbox` (the CLI's own sandbox), `deny-only` (Claude Code on Windows), `sandboxed` for a kind
+  // this build does not name, and `-` for a session outside the sandbox
+  it('sessions list 는 살았는지·하는 일·id·종류·보호·제목이다', () => {
     expect(
       humanFor('sessions-list', {
         sessions: [
           { id: 's1', kind: 'terminal', title: 'repo', alive: true, state: 'working' },
-          { id: 's2', kind: 'chat', title: '대화', alive: false, state: 'unknown' }
+          { id: 's2', kind: 'chat', title: '대화', alive: false, state: 'unknown' },
+          { id: 's3', kind: 'terminal', title: 'box', alive: true, state: 'unknown', sandboxed: true, sandboxKind: 'sandbox' },
+          { id: 's4', kind: 'chat', title: 'deny', alive: true, state: 'unknown', sandboxed: true, sandboxKind: 'deny-only' },
+          { id: 's5', kind: 'chat', title: 'old', alive: true, state: 'unknown', sandboxed: true }
         ]
       })
-    ).toBe(['ALIVE  working  s1  terminal  repo', 'ENDED  unknown  s2  chat      대화'].join('\n'))
+    ).toBe(
+      [
+        'ALIVE  working  s1  terminal  -          repo',
+        'ENDED  unknown  s2  chat      -          대화',
+        'ALIVE  unknown  s3  terminal  sandbox    box',
+        'ALIVE  unknown  s4  chat      deny-only  deny',
+        'ALIVE  unknown  s5  chat      sandboxed  old'
+      ].join('\n')
+    )
   })
 
   // 읽으라고 부른 것이므로 화면 그대로다 — 표로 싸면 사람이 읽으려던 것을 가린다.
@@ -637,5 +677,290 @@ describe('humanFor — the job-source commands', () => {
 
   it('gives the Job made as jobs create does', () => {
     expect(humanFor('jobs-create-from-source', { id: 'job_1', objective: 'Resolve' })).toBe(humanFor('jobs-create', { id: 'job_1', objective: 'Resolve' }))
+  })
+})
+
+// Observe mode design §11, §12: a call is shown by a plain phrase for its action, never by the action's name
+describe('humanFor — audit and policies', () => {
+  const two = (n: number): string => String(n).padStart(2, '0')
+  /** The local time a person reads, as the table prints it. */
+  const local = (iso: string): string => {
+    const d = new Date(iso)
+    return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`
+  }
+  const push = { id: 'au_2', at: '2026-10-23T03:00:02.000Z', sessionId: 'sess_a', action: 'git.remote.write', target: 'git push', decision: 'would-deny', ruleId: 'starter-git-remote-write' }
+  const read = { id: 'au_1', at: '2026-10-23T03:00:01.000Z', sessionId: 'sess_bb', action: 'filesystem.read', target: 'src/a.ts', decision: 'allow' }
+
+  it('audit list is a row per call: time, session, what it did, its target, the decision and the rule', () => {
+    expect(humanFor('audit-list', { records: [push, read], truncated: false, next: null })).toBe(
+      [
+        `${local(push.at)}  sess_a   git push to a remote  git push  would-deny  starter-git-remote-write`,
+        `${local(read.at)}  sess_bb  read a file           src/a.ts  allow       -`
+      ].join('\n')
+    )
+    expect(humanFor('audit-list', { records: [], truncated: false, next: null })).toBe('(no records)')
+  })
+
+  it('audit list prints a call the hook stopped as blocked, with what stopped it', () => {
+    const stopped = { ...push, decision: 'blocked', ruleId: 'builtin-settings-command' }
+    expect(humanFor('audit-list', { records: [stopped], truncated: false, next: null })).toBe(
+      `${local(push.at)}  sess_a  git push to a remote  git push  blocked  builtin-settings-command`
+    )
+  })
+
+  it('audit list says how to ask for the next page when the limit cut it', () => {
+    const out = humanFor('audit-list', { records: [push], truncated: true, next: { until: push.at, beforeId: push.id } })
+    expect(out?.split('\n').slice(-2)).toEqual(['', `more: --until ${push.at} --before-id ${push.id}`])
+  })
+
+  // Task 7 minor: the next page is the same question, so the hint repeats the filters that were used, in place of the
+  // cursor they had
+  it('audit list’s next page hint repeats the filters that were used', () => {
+    const data = { records: [push], truncated: true, next: { until: push.at, beforeId: push.id } }
+    const args = {
+      session: 'sess_a', agentProfile: 'Reviewer Bot', action: 'git.*', decision: 'would-deny', since: '2026-10-23T00:00:00Z',
+      until: '2026-10-24T00:00:00Z', beforeId: 'au_9', limit: 50
+    }
+    expect(humanFor('audit-list', data, args)?.split('\n').at(-1)).toBe(
+      `more: --session sess_a --agent-profile 'Reviewer Bot' --action 'git.*' --decision would-deny --since 2026-10-23T00:00:00Z --limit 50 --until ${push.at} --before-id ${push.id}`
+    )
+  })
+
+  // The hint is pasted into the shell the person types in: single quotes there never expand a `$`, and a quote in the
+  // value is doubled in PowerShell and closed, escaped and reopened in a POSIX shell.
+  it('audit list’s next page hint quotes each value for the shell it is pasted into', () => {
+    const data = { records: [push], truncated: true, next: { until: push.at, beforeId: push.id } }
+    const hint = (shell: 'powershell' | 'posix', args: Record<string, unknown>): string => humanFor('audit-list', data, args, shell)?.split('\n').at(-1) ?? ''
+    const tail = ` --until ${push.at} --before-id ${push.id}`
+    expect(hint('powershell', { agentProfile: "it's $HOME" })).toBe(`more: --agent-profile 'it''s $HOME'${tail}`)
+    expect(hint('posix', { agentProfile: "it's $HOME" })).toBe(`more: --agent-profile 'it'\\''s $HOME'${tail}`)
+    expect(hint('posix', { action: 'git.*', agentProfile: 'a b' })).toBe(`more: --agent-profile 'a b' --action 'git.*'${tail}`)
+    // Only safe characters stay bare, and a number is text like the rest
+    for (const shell of ['powershell', 'posix'] as const)
+      expect(hint(shell, { session: 'sess_a', agentProfile: 'Reviewer.v2:x/y@z=1+2-3', limit: 50 })).toBe(
+        `more: --session sess_a --agent-profile Reviewer.v2:x/y@z=1+2-3 --limit 50${tail}`
+      )
+    // A comma and a percent sign are not safe: PowerShell reads the one as an array and cmd the other as a variable
+    expect(hint('powershell', { agentProfile: 'a,b%c' })).toBe(`more: --agent-profile 'a,b%c'${tail}`)
+    // A leading @ is splatting in PowerShell
+    expect(hint('powershell', { agentProfile: '@bot' })).toBe(`more: --agent-profile '@bot'${tail}`)
+    // PowerShell ends a single quoted string at a curly single quote too: each of the four is doubled
+    for (const quote of ['\u2018', '\u2019', '\u201A', '\u201B'])
+      expect(hint('powershell', { agentProfile: `Bob${quote}s bot` }), quote).toBe(`more: --agent-profile 'Bob${quote}${quote}s bot'${tail}`)
+    expect(hint('posix', { agentProfile: 'Bob’s bot' })).toBe(`more: --agent-profile 'Bob’s bot'${tail}`)
+  })
+
+  // The shell is told from the platform and the environment: Git Bash on Windows is win32 with a POSIX shell
+  it('the hint is quoted for the shell the environment names', () => {
+    expect(shellOf('win32', {})).toBe('powershell')
+    expect(shellOf('win32', { MSYSTEM: 'MINGW64' })).toBe('posix')
+    expect(shellOf('win32', { SHELL: '/usr/bin/bash' })).toBe('posix')
+    expect(shellOf('win32', { SHELL: 'C:\\Program Files\\Git\\bin\\zsh.exe' })).toBe('posix')
+    expect(shellOf('win32', { SHELL: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe' })).toBe('powershell')
+    expect(shellOf('linux', {})).toBe('posix')
+    expect(shellOf('darwin', { SHELL: '/bin/zsh' })).toBe('posix')
+  })
+
+  // The parser takes a `-` as "read stdin" and a `--…` as the next flag, so no quoting makes them a value
+  it('the hint leaves out a filter whose value the CLI could not take back, and says so', () => {
+    const data = { records: [push], truncated: true, next: { until: push.at, beforeId: push.id } }
+    for (const bad of ['-', '--x']) {
+      const out = humanFor('audit-list', data, { session: 'sess_a', agentProfile: bad }, 'posix')?.split('\n')
+      expect(out?.at(-1), bad).toBe(`more: --session sess_a --until ${push.at} --before-id ${push.id}`)
+      expect(out?.at(-3), bad).toBe('(--agent-profile is not repeated below: its value cannot be given on the command line)')
+    }
+    // A single dash first is a plain value to the parser
+    expect(humanFor('audit-list', data, { agentProfile: '-x' }, 'posix')?.split('\n').at(-1)).toBe(`more: --agent-profile '-x' --until ${push.at} --before-id ${push.id}`)
+  })
+
+  // Task 5 minor: the CLI's English is the screen's English, so the two cannot drift
+  describe('the English the CLI prints is the one the screen says', () => {
+    const screen = (key: MessageKey): string => en[key]
+    const rowOf = (record: Record<string, unknown>): string => humanFor('audit-list', { records: [record], truncated: false, next: null }) ?? ''
+
+    it('an action is its screen phrase, in audit list and in audit summary', () => {
+      for (const action of Object.keys(ACTION_PHRASES) as AuditAction[]) {
+        const phrase = screen(ACTION_PHRASES[action])
+        expect(rowOf({ ...read, action }), action).toContain(`  ${phrase}  `)
+        const summary = humanFor('audit-summary', { allow: 1, wouldDeny: 0, unknown: 0, byAction: { [action]: { allow: 1, wouldDeny: 0, unknown: 0 } } })
+        expect(summary, action).toContain(phrase)
+      }
+    })
+
+    it('a coverage note is its screen phrase', () => {
+      for (const note of Object.keys(COVERAGE_NOTE_PHRASES) as CoverageNote[]) {
+        const out = humanFor('policies-show', {
+          mode: 'observe',
+          policy: { rules: [], otherwise: 'allow' },
+          coverage: [{ provider: 'claude', kind: 'chat', classes: { shell: { level: 'partial', note } } }]
+        })
+        expect(out, note).toContain(`partial (${screen(COVERAGE_NOTE_PHRASES[note])})`)
+      }
+    })
+
+    // Where the CLI deliberately differs: its words are the ones a flag takes back (`--decision would-deny`), so a script
+    // reads the table it prints and a person types what it says. The screen has its own label for the same three
+    // decisions, five coverage classes and three levels (the keys exist there); the wording is the screen's to change.
+    it('decisions, coverage classes and levels are the CLI’s own words, each with a screen label', () => {
+      for (const d of ['allow', 'would-deny', 'unknown']) {
+        expect(rowOf({ ...push, decision: d, ruleId: undefined }), d).toContain(`  ${d}  `)
+        expect(Object.hasOwn(en, `settings.security.decision.${d}`), d).toBe(true)
+      }
+      const classes = { shell: { level: 'seen' }, 'file-read': { level: 'partial' }, 'file-write': { level: 'none' }, mcp: { level: 'seen' }, network: { level: 'none' } }
+      const coverage = humanFor('policies-show', { mode: 'observe', policy: { rules: [], otherwise: 'allow' }, coverage: [{ provider: 'claude', kind: 'chat', classes }] })
+      const [head, row] = (coverage ?? '').split('\n\n')[2].split('\n')
+      expect(head.trim().split(/\s{2,}/)).toEqual(['shell', 'file read', 'file write', 'MCP', 'network'])
+      expect(row.replace('claude chat', '').trim().split(/\s{2,}/)).toEqual(['seen', 'partial', 'none', 'seen', 'none'])
+      for (const key of Object.keys(classes)) expect(Object.hasOwn(en, `settings.security.coverage.class.${key}`), key).toBe(true)
+      for (const key of ['seen', 'partial', 'none']) expect(Object.hasOwn(en, `settings.security.coverage.level.${key}`), key).toBe(true)
+    })
+  })
+
+  // Enforce: a count of the calls the hook stopped, shown once there are any, so an observe-only summary reads as before
+  it('audit summary counts the blocked calls once there are any', () => {
+    expect(
+      humanFor('audit-summary', {
+        allow: 1,
+        wouldDeny: 0,
+        unknown: 0,
+        blocked: 2,
+        byAction: { 'git.remote.write': { allow: 0, wouldDeny: 0, unknown: 0, blocked: 2 }, 'filesystem.read': { allow: 1, wouldDeny: 0, unknown: 0, blocked: 0 } },
+        stoppedAtLimit: false
+      })
+    ).toBe(
+      [
+        'allow 1, would-deny 0, unknown 0, blocked 2',
+        '',
+        'git push to a remote  git.remote.write  allow 0  would-deny 0  unknown 0  blocked 2',
+        'read a file           filesystem.read   allow 1  would-deny 0  unknown 0  blocked 0'
+      ].join('\n')
+    )
+  })
+
+  it('audit summary is the totals, then a row per action, the most seen first', () => {
+    expect(
+      humanFor('audit-summary', {
+        allow: 2,
+        wouldDeny: 2,
+        unknown: 1,
+        byAction: {
+          'filesystem.read': { allow: 2, wouldDeny: 0, unknown: 0 },
+          'git.remote.write': { allow: 0, wouldDeny: 2, unknown: 1 }
+        },
+        stoppedAtLimit: false
+      })
+    ).toBe(
+      [
+        'allow 2, would-deny 2, unknown 1',
+        '',
+        'git push to a remote  git.remote.write  allow 0  would-deny 2  unknown 1',
+        'read a file           filesystem.read   allow 2  would-deny 0  unknown 0'
+      ].join('\n')
+    )
+    const stopped = humanFor('audit-summary', { allow: 0, wouldDeny: 0, unknown: 0, byAction: {}, stoppedAtLimit: true })
+    expect(stopped?.split('\n')[0]).toBe('allow 0, would-deny 0, unknown 0')
+    expect(stopped).toContain('size limit')
+  })
+
+  const policy = {
+    version: 1,
+    mode: 'observe',
+    rules: [
+      { id: 'starter-git-remote-write', effect: 'deny', action: 'git.remote.write' },
+      { id: 'starter-write-outside', effect: 'deny', action: 'filesystem.write', scope: 'outside-project' },
+      { id: 'ar_1', effect: 'allow', action: 'git.*' }
+    ],
+    otherwise: 'allow'
+  }
+  const rules = [
+    'mode       observe',
+    'otherwise  allow',
+    '',
+    '0  deny   git.remote.write  anywhere         starter-git-remote-write',
+    '1  deny   filesystem.write  outside-project  starter-write-outside',
+    '2  allow  git.*             anywhere         ar_1'
+  ]
+
+  it('policies show is the mode, the rules in order with their place, and what observe can see', () => {
+    const coverage = [
+      { provider: 'claude', kind: 'terminal', classes: { shell: { level: 'seen' }, 'file-read': { level: 'seen' }, 'file-write': { level: 'seen' }, mcp: { level: 'seen' }, network: { level: 'partial', note: 'web-tools-only' } } },
+      { provider: 'codex', kind: 'chat', classes: { shell: { level: 'seen' }, 'file-read': { level: 'partial', note: 'shell-text-only' }, 'file-write': { level: 'seen' }, mcp: { level: 'seen' }, network: { level: 'partial' } } }
+    ]
+    expect(humanFor('policies-show', { mode: 'observe', policy, coverage })).toBe(
+      [
+        ...rules,
+        '',
+        '                 shell  file read                  file write  MCP   network',
+        'claude terminal  seen   seen                       seen        seen  partial (web tools only)',
+        'codex chat       seen   partial (shell text only)  seen        seen  partial'
+      ].join('\n')
+    )
+  })
+
+  // Enforce: what it blocks while it is on, as the screen's table follows the mode
+  it('policies show in enforce prints what enforce blocks', () => {
+    const coverage = [{ provider: 'codex', kind: 'chat', classes: { shell: { level: 'seen' }, 'file-read': { level: 'seen' }, 'file-write': { level: 'seen' }, mcp: { level: 'seen' }, network: { level: 'seen' } } }]
+    const enforceCoverage = [
+      { provider: 'codex', kind: 'chat', classes: { shell: { level: 'enforced' }, 'file-read': { level: 'partial', note: 'shell-text-only' }, 'file-write': { level: 'enforced' }, mcp: { level: 'enforced' }, network: { level: 'partial' } } }
+    ]
+    const out = humanFor('policies-show', { mode: 'enforce', policy: { ...policy, mode: 'enforce' }, coverage, enforceCoverage })
+    expect(out?.split('\n').at(-1)).toBe('codex chat  enforced  partial (shell text only)  enforced    enforced  partial')
+    expect(humanFor('policies-show', { mode: 'observe', policy, coverage, enforceCoverage })).not.toContain('enforced')
+  })
+
+  // Sandbox design §6: what the sandbox blocks, a row per CLI and OS, under what observe or enforce covers; the network
+  // reads allowed (E3), and a note is its screen phrase
+  it('policies show prints what the sandbox blocks, one row per provider and OS', () => {
+    const out = humanFor('policies-show', { mode: 'observe', policy, coverage: [], sandboxCoverage: SANDBOX_COVERAGE }) ?? ''
+    const block = out.split('\n\n').at(-1)?.split('\n') ?? []
+    const table = block.slice(0, 7)
+    expect(table[0].trim().split(/\s{2,}/)).toEqual(['sandbox', 'write', 'login folders', 'OS secret store', 'network'])
+    expect(table.slice(1).map((l) => l.split(/\s{2,}/)[0])).toEqual([
+      'claude Windows',
+      'claude macOS',
+      'claude Linux',
+      'codex Windows',
+      'codex macOS',
+      'codex Linux'
+    ])
+    // Task 8 fix round 1: beside the Claude Windows row, that its shell is not restricted
+    expect(table[1].split(/\s{2,}/).slice(1)).toEqual(['none', 'partial (file tools only)', 'none', 'allowed', 'Windows: the shell is not restricted'])
+    // Final fix pass (minor 5): every cell Claude's sandbox enforces on macOS and Linux says it was measured on the runtime
+    expect(table[2].split(/\s{2,}/).slice(1)).toEqual(['enforced (measured on the runtime)', 'enforced (measured on the runtime)', 'enforced (measured on the runtime)', 'allowed'])
+    expect(table[6].split(/\s{2,}/).slice(1)).toEqual(['enforced', 'enforced', 'enforced (when the session bus is a file path)', 'allowed'])
+    // And under it, that the home stays readable outside the login folders
+    expect(block.slice(7)).toEqual(['Outside the login folders, the home folder stays readable inside the sandbox.'])
+    // A Host that does not answer it prints the rules and the coverage as before
+    expect(humanFor('policies-show', { mode: 'observe', policy })).toBe(rules.join('\n'))
+  })
+
+  it('a change answers the rules as they are now', () => {
+    for (const cmd of ['policies-set-mode', 'policies-set-otherwise', 'policies-rules-add', 'policies-rules-edit', 'policies-rules-remove', 'policies-rules-move', 'policies-rules-reset'])
+      expect(humanFor(cmd, { mode: 'observe', policy, rule: policy.rules[2] }), cmd).toBe(rules.join('\n'))
+    expect(humanFor('policies-rules-reset', { mode: 'compatibility', policy: { ...policy, mode: 'compatibility', rules: [] } })?.split('\n').at(-1)).toBe('(no rules)')
+  })
+})
+
+// The Credentials list (credentials design §7): a row per entry, never a value; doctor's lines with their level
+describe('humanFor — credentials', () => {
+  const list = {
+    entries: [
+      { kind: 'hide-only', id: 'hc_1', alias: 'Cloud', envNames: ['STRIPE_KEY'], presets: ['aws'], hide: { on: true, projects: ['D:/p'] }, createdAt: '2026-10-26T00:00:00.000Z' },
+      { kind: 'mcp-secret', id: 'mcp:m1', serverId: 'm1', serverName: 'linear', secretNames: ['linear-key'], envNames: ['LINEAR_API_KEY'], protectedNames: [], hide: { on: false } }
+    ],
+    presets: []
+  }
+  it('lists each entry with its kind, what it hides and where', () => {
+    const out = humanFor('credentials-list', list) ?? ''
+    expect(out).toContain('Cloud')
+    expect(out).toContain('STRIPE_KEY, preset aws')
+    expect(out).toContain('hidden in D:/p')
+    expect(out).toContain('linear')
+    expect(out).toContain('not hidden')
+    expect(out).not.toContain('linear-key')
+    expect(humanFor('credentials-list', { entries: [], presets: [] })).toBe('(nothing listed)')
+  })
+  it('prints doctor’s lines with their level', () => {
+    expect(humanFor('credentials-doctor', { lines: [{ level: 'ok', text: 'fine' }, { level: 'warn', text: 'careful' }] })).toBe(['ok    fine', 'warn  careful'].join('\n'))
   })
 })

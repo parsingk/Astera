@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { WorktreeRemoveResult } from '../types'
 import { isPathWithin, isSamePath } from '../files/tree'
+import { clearReadOnly } from '../files/clearReadOnly'
 import { git, gitVersionAtLeast, isCleanWorktree, listGitWorktrees, GIT_WRITE_TIMEOUT_MS } from './git'
 
 /** Options for a call that changes the repository — see GIT_WRITE_TIMEOUT_MS. A `worktree remove`
@@ -60,6 +61,16 @@ async function detachBeforeRemove(
     throw new Error(
       `LINKS_UNVERIFIED: the links in the folder could not all be checked and taken out, nothing was removed (${worktreePath}): ${r.reason}`
     )
+}
+
+/** Whether a failed removal was a permission refusal (win32 only): an error's EPERM/EACCES code, or
+ *  git's own wording on stderr, since git reports it as text rather than a code. */
+export function isPermissionFailure(failure: unknown, platform: NodeJS.Platform = process.platform): boolean {
+  if (platform !== 'win32') return false
+  const code = (failure as { code?: unknown } | null)?.code
+  if (code === 'EPERM' || code === 'EACCES') return true
+  const text = typeof failure === 'string' ? failure : failure instanceof Error ? failure.message : ''
+  return /permission denied|access is denied|EPERM|EACCES/i.test(text)
 }
 
 /** Dangerous paths: the repo itself, a parent that contains the repo, home, a parent that contains home, the filesystem root */
@@ -182,7 +193,15 @@ export async function removeWorktree(args: {
   presence?: PresenceCheck
   /** Test seam: the link walk before git removes the folder (detachLinks.ts). */
   detach?: (root: string, opts: { keep?: (rel: string) => boolean }) => Promise<DetachResult>
+  /** Test seams for the retry after a permission failure: git's `worktree remove` call, the orphan
+   *  folder's delete, and the read-only clearing. */
+  removeGit?: typeof git
+  rmDir?: (p: string) => Promise<void>
+  clear?: (dir: string) => Promise<number>
 }): Promise<WorktreeRemoveResult> {
+  const clear = args.clear ?? clearReadOnly
+  const rmDir = args.rmDir ?? ((p: string) => fs.rm(p, { recursive: true, force: true }))
+  const removeGit = args.removeGit ?? git
   const info = args.registry.get(args.id)
   if (!info) throw new Error(`NOT_MANAGED: not a worktree created by this app (${args.id})`)
   const presence = args.presence ?? defaultActionPresenceCheck
@@ -223,9 +242,19 @@ export async function removeWorktree(args: {
         if (entryCount > 0) throw new Error(`ORPHAN_UNVERIFIABLE: ${info.path}`)
       }
       try {
-        await fs.rm(info.path, { recursive: true, force: true })
+        await rmDir(info.path)
       } catch (err) {
-        throw new Error(`GIT_REMOVE_FAILED: ${err instanceof Error ? err.message : String(err)}`)
+        // The same one retry as for git's removal below, after the read-only attribute is cleared.
+        let failure = err
+        if (isPermissionFailure(err) && (await clear(info.path)) > 0) {
+          try {
+            await rmDir(info.path)
+            failure = null
+          } catch (again) {
+            failure = again
+          }
+        }
+        if (failure) throw new Error(`GIT_REMOVE_FAILED: ${failure instanceof Error ? failure.message : String(failure)}`)
       }
     }
   } else {
@@ -244,12 +273,15 @@ export async function removeWorktree(args: {
       }
       await detachBeforeRemove(info.path, args.force === true, args.detach ?? detachLinks)
     }
-    const rm = await git(
-      args.force
-        ? ['worktree', 'remove', '--force', info.path]
-        : ['worktree', 'remove', info.path],
-      write(info.repoPath)
-    )
+    const removeArgs = args.force
+      ? ['worktree', 'remove', '--force', info.path]
+      : ['worktree', 'remove', info.path]
+    let rm = await removeGit(removeArgs, write(info.repoPath))
+    // Files the sandbox's user wrote can be read-only to this one (Windows only), which fails the
+    // removal with a permission error part-way. Clearing the attribute and trying once more is
+    // enough; a second failure is reported as it is.
+    if (!rm.ok && isPermissionFailure(`${rm.stderr}\n${rm.stdout}`) && (await clear(info.path)) > 0)
+      rm = await removeGit(removeArgs, write(info.repoPath))
     if (!rm.ok) throw new Error(`GIT_REMOVE_FAILED: ${rm.stderr || rm.stdout}`)
     await git(['worktree', 'prune'], write(info.repoPath))
   }

@@ -4,6 +4,12 @@
 import { REMOTE_SESSION_CHANGES, REMOTE_SESSION_READS, type RemoteSessions } from './remoteSessions'
 import { PLUGIN_COMMANDS, pluginsCommand } from './plugins/commands'
 import { EXTENSION_COMMANDS, type HostExtensions } from './extensions/commands'
+import { AGENT_PROFILE_COMMANDS, type HostAgentProfiles } from './agentProfiles/commands'
+import { POLICY_COMMANDS, type HostPolicies } from './audit/policyCommands'
+import { CREDENTIAL_COMMANDS, type HostCredentials } from './credentials/commands'
+import { AUDIT_COMMANDS, type HostAudit } from './audit/auditCommands'
+import { readAgentProfiles } from '../core/agentProfiles/store'
+import { readAgentPermissionMode } from '../core/settings/agentPermissionMode'
 import type { PluginManager } from './plugins/manager'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
@@ -54,9 +60,11 @@ import { NOT_WRITER, type HostUnderstanding } from './hostUnderstanding'
 import type { HostWorkUnits } from './hostWorkUnits'
 import { ensureProject, findProject } from '../core/orchestration/projects'
 import type { SessionWorkUnit } from '../core/workUnit/types'
-import { justFinished, runRecordInputOf } from '../core/orchestration/runRecord'
+import { justFinished, runRecordInputOf, stampRunEnds } from '../core/orchestration/runRecord'
 import type { WorkspaceManager } from './workspace/manager'
 import { DESKTOP_ACTOR, HOST_ACTOR, actorOf, type JournalActor } from '../core/continuity/actor'
+import { recordingGhRunner, recordingGitRunner, workOfSession, type UseCaller, type UseRecorder } from './credentials/recordUses'
+import { defaultPrGit } from '../core/github/prCreate'
 import { parseJournalOps } from '../core/continuity/journalOps'
 
 /** One reply — today's HTTP status and body, the shape `OrchCall.call` already answers with. Named
@@ -416,8 +424,10 @@ export interface HostOrch extends OrchCall {
  *  and the drivers' own lifecycle steps (G3a: starting a lifecycle Task, keeping its handed-off round). A socket that
  *  names itself the Host's caller is refused them. */
 const HOST_OWN_RECORDS: ReadonlySet<string> = new Set(['runs-git-record', 'runs-github-record', 'lifecycle-start', 'lifecycle-ci-begin', 'lifecycle-ci-wait', 'lifecycle-gate'])
-/** The app's own dispatch-loop step: under the app's caller id it is taken only from the app's connection. */
-const APP_OWN_STEPS: ReadonlySet<string> = new Set(['lifecycle-start'])
+/** Under the app's caller id, taken only from the app's connection: the app's own dispatch-loop step, and a send, which
+ *  from the app is a person's prompt and ends what a finished Run's or an ended attempt's session still holds (observe
+ *  final review). */
+const APP_OWN_STEPS: ReadonlySet<string> = new Set(['lifecycle-start', 'sessions-send'])
 
 export function createHostOrch(a: {
   profileDir: string
@@ -538,15 +548,24 @@ export function createHostOrch(a: {
   /** `sessions create` (sessionCreate.ts), passed through to `hostOrchDeps`. Absent: the command
    *  answers 409. */
   createSession?: OrchServerDeps['createSession']
+  /** Whether a session this Host holds runs in its CLI's sandbox (sandboxedSession.ts), passed through to `hostOrchDeps`:
+   *  what such a session starts starts in the sandbox too (final fix pass, C3). Absent: no caller reads as sandboxed. */
+  sessionSandboxed?: OrchServerDeps['sessionSandboxed']
   /** GitHub through the Host's gh (MCP P2-B), passed through to `hostOrchDeps`. Absent: the `github-*`
    *  commands answer 409. */
   github?: OrchServerDeps['github']
+  /** Credential-use records (credentials design §6): each call's `github` records its gh calls and push for the caller.
+   *  Absent: nothing is recorded. */
+  useRecorder?: UseRecorder
   /** This Host's job-source plugins (plugin Phase 4 J10), from its plugin manager and runtime (host/jobSources.ts). */
   jobSources?: OrchServerDeps['jobSources']
   /** This Host's completion check plugins (plugin Phase 5 C7, C8), from its plugin manager and runtime
    *  (host/completionChecks.ts): the command layer's early refusals and checks read them, and the app asks through
    *  `checks-plugin-run`. */
   completionChecks?: OrchServerDeps['completionChecks']
+  /** What this Host's sessions spent (observe mode design §10), from its token store (host/tokens/store.ts), passed
+   *  through to `hostOrchDeps`. Absent: `runs get` and `tasks-get` carry no tokens. */
+  spentTokens?: OrchServerDeps['spentTokens']
   /** How It Works records (MCP P2-C), passed through to `hostOrchDeps`. Absent: the `understanding-*`
    *  commands answer 409. */
   readUnderstanding?: OrchServerDeps['readUnderstanding']
@@ -573,6 +592,18 @@ export function createHostOrch(a: {
   /** The shared extensions (Agent Control Plane release 1): every `extensions-*` command, for this machine's app and
    *  CLI, below the receipt line like the plugins. Absent: all of them answer 501. */
   extensions?: Pick<HostExtensions, 'command'>
+  /** The agent profiles (Agent Profiles design §4): every `agent-profiles-*` command, for this machine's app and CLI,
+   *  routed like the extensions. Absent: all of them answer 501. */
+  agentProfiles?: Pick<HostAgentProfiles, 'command'>
+  /** Observe mode's rules and mode (observe mode design §7, §12): every `policies-*` command, for this machine's app
+   *  and CLI, routed like the agent profiles. Absent: all of them answer 501. */
+  policies?: Pick<HostPolicies, 'command'>
+  /** The Credentials list (credentials design §7): every `credentials-*` command, for this machine's app and CLI, routed
+   *  like the policies; only the app changes it. Absent: all of them answer 501. */
+  credentials?: Pick<HostCredentials, 'command'>
+  /** Observe mode's records (observe mode design §8, §12): `audit-list` and `audit-summary`, for this machine's app and
+   *  CLI, routed like the policies; an agent's shell is refused even these reads. Absent: both answer 501. */
+  audit?: Pick<HostAudit, 'command'>
   /** Session work units in the Host (E2 §5), asked per call: `index.ts` builds them after this orch (their
    *  in-Run test reads its state). Passed through to `hostOrchDeps` (HOST_TRACKS), and the app only
    *  `work-units-fork`, `-reload`, `-complete`, `-cancel` and `-git-op`. Absent, or null (no spawner, so no
@@ -585,7 +616,12 @@ export function createHostOrch(a: {
       })
     | null
 }): HostOrch {
-  const store = new OrchestrationStore(path.join(a.profileDir, 'orchestration.json'))
+  // The TTL cleanup reads the Host's clock; a time it cannot parse falls back to the wall clock rather than
+  // pruning every finished Run.
+  const store = new OrchestrationStore(path.join(a.profileDir, 'orchestration.json'), () => {
+    const at = Date.parse(a.now())
+    return Number.isFinite(at) ? at : Date.now()
+  })
   // Built at the first ask: only a call that marks the default needs the descriptors.
   let descriptors: ReturnType<typeof makeDescriptors> | undefined
   const loggedIn = a.isLoggedIn ?? ((x: Account) => isLoggedIn(x, (descriptors ??= makeDescriptors(process.platform))))
@@ -635,7 +671,8 @@ export function createHostOrch(a: {
     }
   }
 
-  /** **Nothing is read at construction, and `host/index.ts` never calls `ready()`.**
+  /** **Nothing is read at construction, and `host/index.ts` never calls `ready()` at its start** — only from calls
+   *  that need the state as a command does (a notification's wording, the agent profile delete guard).
    *
    *  The load happens at the first call that needs the state — and, once the app has pushed its state
    *  with `state-put`, never at all. Lazy because a Host that nobody asks anything of has no reason to
@@ -756,13 +793,40 @@ export function createHostOrch(a: {
   /** The `check --wait` calls this Host serves, for its whole life (final round 2, I-A): built once, not
    *  per call like the deps below, since a wait entered by one call is asked about by another. */
   const checkWaits = createCheckWaits()
-  const depsFor = (marks: CallMarks, actor: JournalActor): OrchServerDeps =>
+  /** The call's `github`, its runners recording for `use` (credentials design §6); the Host's own calls read as its
+   *  background. */
+  const githubFor = (use: { caller: UseCaller; background: boolean } | undefined): OrchServerDeps['github'] | undefined => {
+    const base = a.github
+    const rec = a.useRecorder
+    if (!base || !rec) return base
+    const { caller, background } = use ?? { caller: { actor: 'host' as const }, background: true }
+    const originOf = base.originOf ?? (async () => null)
+    const run = recordingGhRunner(base.run, caller, rec, { background, originOf })
+    return {
+      ...base,
+      run,
+      createPr: (req, deps) => base.createPr(req, { ...deps, runGh: run, runGit: recordingGitRunner(deps?.runGit ?? defaultPrGit, caller, rec, { originOf }) })
+    }
+  }
+  /** Who a call's credential uses are recorded for: the app, a controller, Astera's MCP server, an Astera session with the
+   *  work it holds, or a caller Astera did not start. */
+  const useOf = (from: OrchCaller | undefined, sessionId: string): { caller: UseCaller; background: boolean } => {
+    const role = from?.role
+    if (role === 'app') return { caller: { actor: 'app' }, background: false }
+    if (role === 'controller') return { caller: { actor: 'controller' }, background: false }
+    if (role === 'mcp') return { caller: { actor: 'mcp' }, background: false }
+    if (role !== 'plugin' && sessionId !== '') return { caller: { actor: 'session', sessionId, ...workOfSession(store.get(), sessionId) }, background: false }
+    return { caller: { actor: 'outside' }, background: false }
+  }
+  const depsFor = (marks: CallMarks, actor: JournalActor, use?: { caller: UseCaller; background: boolean }): OrchServerDeps =>
     hostOrchDeps({
       checkWaits,
       getState: () => store.get(),
-      setState: async (next, how) => {
+      setState: async (sent, how) => {
         // The diff base, read before the save moves memory: each commit is journaled once, from here.
         const prev = store.get()
+        // A Run this commit finishes is stamped with when (observe deferred minor b), and every later commit keeps it.
+        const next = stampRunEnds(prev, sent, a.now())
         // Reserved before the write, for `reserveVersion`'s reason and for one that is this path's
         // own: a `state-put` arriving while this commit is still writing would otherwise read the
         // pre-commit number, pass the check, and land a whole state that does not contain this
@@ -813,11 +877,18 @@ export function createHostOrch(a: {
       chatAppAnswers: a.chatAppAnswers,
       ...(a.dispatchTask ? { dispatchTask: a.dispatchTask } : {}),
       ...(a.createSession ? { createSession: a.createSession } : {}),
-      ...(a.github ? { github: a.github } : {}),
+      ...(a.sessionSandboxed ? { sessionSandboxed: a.sessionSandboxed } : {}),
+      ...(a.github ? { github: githubFor(use) } : {}),
       ...(a.readUnderstanding ? { readUnderstanding: a.readUnderstanding } : {}),
+      // The agent profiles this Host owns (Agent Profiles design §6), read when a Job or Task is made from one
+      readAgentProfiles: () => readAgentProfiles(a.profileDir),
+      // The app-wide mode from the same app-settings.json this Host's spawns read the bypass from, asked when an agent
+      // starts work as a profile that runs without permission checks (Agent Profiles final review)
+      appWideYolo: async () => (await readAgentPermissionMode(path.join(a.profileDir, 'app-settings.json'))) === 'yolo',
       ...(a.changes ? { changes: a.changes } : {}),
       ...(a.jobSources ? { jobSources: a.jobSources } : {}),
       ...(a.completionChecks ? { completionChecks: a.completionChecks } : {}),
+      ...(a.spentTokens ? { spentTokens: a.spentTokens } : {}),
       workUnits: a.workUnits?.() ?? null,
       ...(a.journal ? { journalTimeline: (runId: string, st: OrchState) => a.journal!.timeline(runId, st) } : {}),
       onEffect: () => {
@@ -903,7 +974,7 @@ export function createHostOrch(a: {
     const drainedNow = await applyPendingReports({
       queued,
       apply: (r) =>
-        handleCommand(depsFor(throwaway(), { surface: 'agent', sessionId: r.sessionId }), { sessionId: r.sessionId }, r.cmd, r.args).then((reply) => ({
+        handleCommand(depsFor(throwaway(), { surface: 'agent', sessionId: r.sessionId }, useOf(undefined, r.sessionId)), { sessionId: r.sessionId }, r.cmd, r.args).then((reply) => ({
           ok: reply.status >= 200 && reply.status < 300,
           detail: `${reply.status} ${JSON.stringify(reply.body)}`
         })),
@@ -988,23 +1059,28 @@ export function createHostOrch(a: {
       }
     // The diff base, read before the save moves memory.
     const prev = store.get()
+    // A Run the app's write finishes is stamped with when, and one it already had keeps its stamp, which the app's
+    // mirror may not have heard of yet (observe deferred minor b). A put that stood in for the load has nothing in
+    // `prev`: the stamps its Runs carry are the Host before's, kept (fix round 1, Minor 5). The sender hears of a stamp
+    // with the next push.
+    const landed = stampRunEnds(prev, state, a.now(), { standsInForLoad: !hadState })
     // Taken here, not after the write lands — the whole of `reserveVersion`'s note.
     const committed = reserveVersion()
     // Published as memory moves, for the reason in `depsFor`'s setState.
-    const saving = store.save(state)
+    const saving = store.save(landed)
     loaded = true
-    publish(state, committed)
+    publish(landed, committed)
     // P15 again: a put that stood in for the load has no base, and every Job and Run it carries would read as new.
-    if (hadState) recordEvents(prev, state)
+    if (hadState) recordEvents(prev, landed)
     await saving
     // To the others and not back to the sender: the state came from there, and an app that received
     // its own push would write its own state back over itself.
-    from.toOthers({ t: 'orch-state', state, version: committed })
+    from.toOthers({ t: 'orch-state', state: landed, version: committed })
     // P15: a put that stood in for the load has no base to diff against.
     // Not recorded either without one: every Run the put carries would read as just finished.
     if (hadState) {
-      journalSafely('recording a state-put', () => a.journal?.committed({ prev, next: state, version: committed, actor: DESKTOP_ACTOR }))
-      recordFinishedRuns(prev, state)
+      journalSafely('recording a state-put', () => a.journal?.committed({ prev, next: landed, version: committed, actor: DESKTOP_ACTOR }))
+      recordFinishedRuns(prev, landed)
     } else a.log('state-put: taken before this Host held a state, so it is not journaled as a diff from nothing')
     // An accepted whole state is a commit like any other (R5): the app may have just added the work
     // the driver is to place. A refused one above changed nothing, so it kicks nothing.
@@ -2020,12 +2096,65 @@ export function createHostOrch(a: {
             : { status: 501, body: { error: 'this Host does not keep shared extensions' } }
           return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
         }
+        // **Agent profiles** (Agent Profiles design §4), the same way. The MCP gate admits only the list (design §6), and
+        // no other gate lists them.
+        if (AGENT_PROFILE_COMMANDS.has(cmd)) {
+          const answered = a.agentProfiles
+            ? await a.agentProfiles.command({
+                cmd,
+                args,
+                role: from?.role,
+                ...(agentShell(from, sessionId) ? { agentRefusal: AGENT_REFUSAL(cmd) } : {}),
+                marks
+              })
+            : { status: 501, body: { error: 'this Host does not keep agent profiles' } }
+          return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
+        }
+        // **Observe mode's rules** (observe mode design §7, §12), the same way. No gate lists them.
+        if (POLICY_COMMANDS.has(cmd)) {
+          const answered = a.policies
+            ? await a.policies.command({
+                cmd,
+                args,
+                role: from?.role,
+                ...(agentShell(from, sessionId) ? { agentRefusal: AGENT_REFUSAL(cmd) } : {}),
+                marks
+              })
+            : { status: 501, body: { error: 'this Host does not keep observe rules' } }
+          return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
+        }
+        // **The Credentials list** (credentials design §7), the same way. No gate lists them.
+        if (CREDENTIAL_COMMANDS.has(cmd)) {
+          const answered = a.credentials
+            ? await a.credentials.command({
+                cmd,
+                args,
+                role: from?.role,
+                ...(agentShell(from, sessionId) ? { agentRefusal: AGENT_REFUSAL(cmd) } : {}),
+                marks
+              })
+            : { status: 501, body: { error: 'this Host does not keep the Credentials list' } }
+          return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
+        }
+        // **Observe mode's records** (observe mode design §8, §12), the same way. No gate lists them.
+        if (AUDIT_COMMANDS.has(cmd)) {
+          const answered = a.audit
+            ? await a.audit.command({
+                cmd,
+                args,
+                role: from?.role,
+                ...(agentShell(from, sessionId) ? { agentRefusal: AGENT_REFUSAL(cmd) } : {}),
+                marks
+              })
+            : { status: 501, body: { error: 'this Host does not keep observe records' } }
+          return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
+        }
         // Design §8: a call that arrives before the state is loaded waits, rather than failing.
         await ready()
         // P5: judged on the state the call found, so a worker's report that closes its own Dispatch is
         // still the agent's.
         const actor = actorOf({ sessionId, role: from?.role, client: from?.client, remote: from?.remote, principal: from?.principal, plugin: from?.plugin, state: store.get() })
-        const r = await handleCommand(depsFor(marks, actor), { sessionId, role: from?.role }, cmd, runArgs)
+        const r = await handleCommand(depsFor(marks, actor, useOf(from, sessionId)), { sessionId, role: from?.role }, cmd, runArgs)
         const answered = answerOf(r, marks)
         // **Who drives, on `status`, from the Host and not from `handleCommand`** (R6): the two fields
         // exist only on a Host that drives, and their absence tells a script this one does not.

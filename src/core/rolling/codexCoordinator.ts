@@ -27,6 +27,7 @@ import { sessionKindOf } from '../sessions/kind'
 import { copyTranscript } from './transcript'
 import { codexHistoryStrategy } from '../history/strategies/codex'
 import { findRollout } from './codexLocate'
+import { rolloutOwnerCheck, type RolloutOwnerCheck, type RolloutOwnerSource, type RolloutOwnership } from './rolloutOwner'
 import {
   CodexLimitScanner,
   CodexModelChoiceScanner,
@@ -39,8 +40,10 @@ import {
   worstResetAt,
   type CodexLimitState
 } from './codexSignal'
-import { t, type Lang } from '../i18n'
+import { t, type Lang, type Message } from '../i18n'
+import { rollRefusalMessage } from '../sandbox/unavailable'
 import { ROLL_SNAPSHOT_VERSION, snapshotKey, type RollSnapshot, type RollRespawnExtra } from './snapshot'
+import { untilEnter } from '../sessions/sessionDriver'
 
 const TICK_MS = 15_000 // how often state is refreshed and the fallback trigger checked (mirrors claudeCoordinator.ts)
 const LOCATE_POLL_MS = 1_000 // how often we poll to map the rollout
@@ -102,16 +105,29 @@ export interface CodexRollingDeps {
     /** Who started the chain (SessionInfo.startedBy), kept by every roll: the respawned session is the same work, so an
      *  agent's stays an agent's and its tab still closes when it ends. */
     startedBy?: 'agent'
+    /** The agent profile the chain was started from (SessionInfo.agentProfileId), kept by every roll
+     *  (claudeCoordinator.ts's own field, same contract). */
+    agentProfileId?: string
+    /** The chain runs in its CLI's sandbox (SessionInfo.sandboxed), kept by every roll (claudeCoordinator.ts's own field,
+     *  same contract). */
+    sandbox?: boolean
     /** Extra keys for the new pty's note (S6 R6) — `rolledFrom` and the chain's snapshot on its new
      *  account. The manager merges them into `meta.restore` under its own keys. */
     restoreExtra?: RollRespawnExtra
   }): SessionInfo
   /** Everything a respawn needs that can wait or refuse, done while the old session still lives (S6 R5).
-   *  A rejection aborts the roll before the kill and reschedules it. Absent: nothing to prepare. */
-  prepareSpawn?(account: Account, cwd: string): Promise<void>
+   *  A rejection aborts the roll before the kill and reschedules it. Absent: nothing to prepare.
+   *  `agentProfileId` and `sandbox` are the chain's own (claudeCoordinator.ts's own dep, same contract). `kind` is
+   *  `'chat'` for a chat chain, whose respawn is an app-server (its sandbox needs no `--no-daemon`), and absent otherwise. */
+  prepareSpawn?(account: Account, cwd: string, agentProfileId?: string, sandbox?: boolean, kind?: 'chat'): Promise<void>
   kill(sessionId: string): void
   /** Writes into a live session's PTY. Used only to dismiss the model-switch prompt (answerModelChoice). */
   write(sessionId: string, data: string): void
+  /** Tells the person, in the live session's tab, why a roll is waiting when its respawn would start without the sandbox
+   *  the chain runs in (sandbox design §6, E5), such as an account whose Windows sandbox is not set up: `reason` is the
+   *  catalog message, and the wiring words it for the session's kind (a terminal's `[Astera]` line as output, never as
+   *  the person's input; a chat's notice). Absent: the reason is only logged. */
+  tell?(sessionId: string, reason: Message): void
   getAccount(id: string): Account | null
   send(channel: 'session:rolled' | 'session:rollState', payload: unknown): void
   log(message: string): void
@@ -192,6 +208,10 @@ export interface CodexRollingDeps {
    *  takes no action (no roll, gated inside roll() at entry and right before the kill, R26; no wait
    *  resume; no typing; no recorded block). A roll already past its kill finishes. Absent: always true. */
   mayAct?(sessionId: string): boolean
+  /** Whose codex holds a rollout open (rolloutOwner.ts, Task D): the session's pty process (`pidOf`, null for a chat
+   *  session) and the reader the wiring built for its profile. Given, the locate maps a rollout only when that process
+   *  or one under it holds it, as the rollout watcher does. Absent, or no pid, folder and time decide as before. */
+  rolloutOwner?: RolloutOwnerSource
 }
 
 interface Chain {
@@ -231,6 +251,8 @@ interface Chain {
   textHit: boolean // whether the limit phrase was seen in this window — read only by judgedByPriorBlock and the ignored-phrase log now that the phrase-only verdict is retired
   unmappedWarned: boolean // whether the rollout-unmapped skip has already been logged (suppresses repeats of the same line)
   preemptWarned: boolean // whether the preemption has already been logged — keeps it from piling up on every 1-second poll
+  /** The sandbox refusal last written into the tab (tellSandboxRefusal), cleared once a roll gets through. */
+  sandboxRefusalTold?: string
   lastOutputAt: number
   rolling: boolean
   /** Between the roll's own kill and the re-key: an exit then is the roll's (audit RL-1). */
@@ -259,7 +281,7 @@ interface Chain {
   // the tick for a chat chain (spec §14.6) — as does a successful in-place settle (settleInPlace).
   inPlaceUsed: boolean
   // The state-publication generation counter, incremented on every pushState. The deferred 'none' of
-  // resumeInPlace (its 150ms Enter timer) captures the generation at scheduling time; on firing it
+  // resumeInPlace (after its Enter wait) captures the generation at scheduling time; on firing it
   // publishes only if the generation is unchanged, and skips as stale if a 'waiting' or 'switching'
   // has published something more recent in the meantime. Same mechanism and same reason as the claude
   // side (claudeCoordinator.ts) — codex got its first deferred publish with the in-place resume.
@@ -343,12 +365,21 @@ export class CodexRollingCoordinator {
   private readonly rolloutSize: (filePath: string) => Promise<number | null>
   private readonly now: () => number
   private readonly resumeStrategy: () => ResumeStrategy
+  private readonly owner: RolloutOwnerCheck | null
 
   constructor(private deps: CodexRollingDeps) {
     this.copy = deps.copy ?? copyTranscript
     this.rolloutSize = deps.rolloutSize ?? rolloutSize
     this.now = deps.now ?? Date.now
     this.resumeStrategy = deps.resumeStrategy ?? (() => 'original')
+    this.owner = deps.rolloutOwner ? rolloutOwnerCheck({ read: deps.rolloutOwner.read, log: deps.log, now: this.now }) : null
+  }
+
+  /** The owner question for a session, when its process is known; undefined keeps folder and time alone. */
+  private ownerFor(sessionId: string): ((file: string) => Promise<RolloutOwnership>) | undefined {
+    const check = this.owner
+    const pid = check ? this.deps.rolloutOwner?.pidOf(sessionId) : null
+    return check && pid ? (file) => check(file, pid, sessionId) : undefined
   }
 
   /** Called by ipc right after spawning a codex session that has rollAccountIds. One id means single-account auto-resume.
@@ -924,7 +955,8 @@ export class CodexRollingCoordinator {
         ...(bornBefore !== undefined ? { bornBefore } : {}),
         now: this.now,
         excludePaths: this.claimedRollouts(chain),
-        sessionId: chain.codexSessionId ?? undefined
+        sessionId: chain.codexSessionId ?? undefined,
+        owner: this.ownerFor(liveId)
       })
       // `rolloutPath` joins the guard here and not above: an `attachChat` that lands while findRollout is
       // in flight clears the locate timer, and clearing a timer cannot stop a tick already running. Left
@@ -1367,8 +1399,8 @@ export class CodexRollingCoordinator {
   }
 
   /** Continuing on the same account — no kill, no spawn, no copy; only one line plus Enter go into
-   *  the live PTY. This is the same channel `answerModelChoice` already uses, and the same constant
-   *  (ENTER_DELAY_MS).
+   *  the live PTY. This is the same channel `answerModelChoice` already uses; the Enter waits the way every
+   *  pty delivery does (untilEnter in core/sessions/sessionDriver.ts).
    *
    *  What this function actually does is undo three things.
    *   ① **Re-attach the tail at the end of the file.** Through the wait, tick skipped this chain
@@ -1412,7 +1444,7 @@ export class CodexRollingCoordinator {
       this.deps.log(`codex limit reset → resume in place session=${liveId}`)
       // The baseline the deadline compares against, read **before** anything is submitted. An earlier
       // version only *started* this read here and let settleInPlace await it, to keep a file-system
-      // round trip out of the way of the 150ms Enter. That is not safe: if the stat resolved after
+      // round trip out of the way of the Enter. That is not safe: if the stat resolved after
       // codex had already appended the record for the line we submitted, the baseline would contain
       // that record, the deadline would see no growth against it — and a swallowed line would look
       // like a session that is working, which is exactly the eternal stall settleInPlace exists to
@@ -1432,17 +1464,28 @@ export class CodexRollingCoordinator {
         return
       }
       const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same convention as the claude side
+      // Enter waits for codex to have drawn the line and gone quiet (untilEnter): it swallows an Enter that comes
+      // right after a paste (openai/codex#56982), and a fixed 150 ms could leave the line in its composer. Output
+      // counts once it is newer than the last output before the line (the resume itself stamped that one above).
+      const wroteAt = this.now()
+      const outputBefore = chain.lastOutputAt
       this.deps.write(liveId, prompt)
       this.snap(chain)
-      setTimeout(() => {
-        if (chain.disposed || chain.liveId !== liveId) return
-        this.deps.write(liveId, '\r')
-        // 'none' has to be published after Enter for the scheduler's suppression to lift (same order
-        // as the claude side). If a more recent state was published in between, ours is stale and is
-        // skipped — publishing it anyway would lift the suppression and clear the orchestration stop
-        // marker while the chain is in fact waiting or switching again.
-        if (chain.stateSeq === stateSeq) this.pushState(chain, 'none')
-      }, ENTER_DELAY_MS)
+      void untilEnter({
+        wroteAt,
+        outputAfter: () => (chain.lastOutputAt > outputBefore ? chain.lastOutputAt : null),
+        now: this.now
+      })
+        .then(() => {
+          if (chain.disposed || chain.liveId !== liveId) return
+          this.deps.write(liveId, '\r')
+          // 'none' has to be published after Enter for the scheduler's suppression to lift (same order
+          // as the claude side). If a more recent state was published in between, ours is stale and is
+          // skipped — publishing it anyway would lift the suppression and clear the orchestration stop
+          // marker while the chain is in fact waiting or switching again.
+          if (chain.stateSeq === stateSeq) this.pushState(chain, 'none')
+        })
+        .catch((err) => this.deps.log(`codex resume in place Enter failed: ${String(err)} session=${liveId}`))
       chain.healthyTimer = setTimeout(() => {
         void this.settleInPlace(chain, liveId, sizeBefore)
       }, HEALTHY_MS)
@@ -1568,6 +1611,22 @@ export class CodexRollingCoordinator {
     this.armWait(chain, plan)
   }
 
+  /** A respawn the sandbox refused (sandbox design §6, the person's decision in Task 6): the session it would replace is
+   *  still running, so the reason goes into its tab, where the person will look; the roll waits as any refused one does.
+   *  An account that is not set up is named by its display name, with where to set it up (Settings › Agent profiles).
+   *  Said once per reason for as long as the chain keeps being refused for it: the wait retries every round, and a night
+   *  of rounds would otherwise fill the tab with the same line. Any other refusal is only logged, as before. */
+  private tellSandboxRefusal(chain: Chain, why: string): void {
+    const reason = rollRefusalMessage(why, (id) => this.deps.getAccount(id)?.label ?? null)
+    if (!reason || !this.deps.tell || chain.sandboxRefusalTold === why) return
+    chain.sandboxRefusalTold = why
+    try {
+      this.deps.tell(chain.liveId, reason)
+    } catch (err) {
+      this.deps.log(`codex roll: the refusal could not be written into the tab: ${String(err)} session=${chain.liveId}`)
+    }
+  }
+
   /** Runs the roll: copy the rollout → kill → respawn in the same slot with codex resume. When Smart
    *  Resume is on and a briefing was built, the copy and the `--resume` are skipped instead — the new
    *  session starts blank, carrying only the briefing (see the `smart` branch below). */
@@ -1683,10 +1742,14 @@ export class CodexRollingCoordinator {
       // the kill below starts the await-free stretch (the claude side's roll() has the same block).
       if (this.deps.prepareSpawn) {
         try {
-          await this.deps.prepareSpawn(target, chain.cwd)
+          // A chat chain's respawn is prepared as a chat (its app-server needs no --no-daemon); a terminal one's is asked as
+          // it always was
+          const asChat: ['chat'] | [] = chain.kind === 'chat' ? ['chat'] : []
+          await this.deps.prepareSpawn(target, chain.cwd, chain.liveInfo.agentProfileId, chain.liveInfo.sandboxed === true, ...asChat)
         } catch (err) {
           const why = err instanceof Error ? err.message : String(err)
           this.deps.log(`codex roll aborted — the respawn would be refused: ${why} session=${chain.liveId}`)
+          this.tellSandboxRefusal(chain, why)
           this.rescheduleAbortedRoll(chain, `spawn refused: ${why}`)
           return
         }
@@ -1770,6 +1833,9 @@ export class CodexRollingCoordinator {
         rollPrompt: chain.liveInfo.rollPrompt,
         startWithBypass: wasBypassed,
         ...(chain.liveInfo.startedBy ? { startedBy: chain.liveInfo.startedBy } : {}),
+        ...(chain.liveInfo.agentProfileId ? { agentProfileId: chain.liveInfo.agentProfileId } : {}),
+        // The sandbox rides the chain as the bypass does (claudeCoordinator.ts's own comment says why)
+        ...(chain.liveInfo.sandboxed ? { sandbox: true } : {}),
         // S6 R6: the new pty is born with what a takeover needs if this process dies before the rekey
         // commits — the claude side's field, same contract. awaitingPrompt is false: the carry-on
         // prompt rides this spawn (argv or first chat turn), so nothing is left to type. The tail starts
@@ -1796,6 +1862,7 @@ export class CodexRollingCoordinator {
       chain.killing = false
       chain.liveId = info.id
       chain.liveInfo = info
+      chain.sandboxRefusalTold = undefined
       chain.lastOutputAt = this.now()
       chain.state = null
       chain.textHit = false

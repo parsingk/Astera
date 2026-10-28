@@ -36,12 +36,12 @@ import {
   type ConversationSessions
 } from './conversation'
 import { HostClient, READY_TIMEOUT_MS } from './host/client'
-import { hostSpawnPlan, hostStderr, resolveHostEntry } from '../core/host/spawn'
+import { hostExitReason, hostSpawnPlan, hostStderr, resolveHostEntry } from '../core/host/spawn'
 import { hostRuntimeBase } from '../core/host/runtime'
 import { createRuntimeInstaller, installHostRuntime, spawnableRuntime, spawnWhenInstalled, type InstalledRuntime } from './host/runtimeInstall'
 import { executableProbe, parseExecutablePath, hostKillPlan, killHostCommand } from './host/hostProcess'
 import { hostPidFilePath, parseHostPidFile } from '../core/host/pidFile'
-import { readHostKey } from '../core/host/hostKey'
+import { ensureAppKey, readHostKey } from '../core/host/hostKey'
 import { hostAddress, retireOlderHosts } from '../host/address'
 import { createHostPtyFactory } from './host/ptyFactory'
 import { createHostProcFactory } from './host/procFactory'
@@ -54,6 +54,8 @@ import { createHostWorkspaceView, type HostWorkspaceView } from './host/hostWork
 import { clampAppSize } from '../core/workspace/size'
 import { createHostMcpHttpView, type HostMcpHttpView } from './host/hostMcpHttp'
 import { mcpHttpHostsProblem, mcpHttpOf, type McpHttpSettings } from '../core/settings/mcpHttp'
+import { appProfileSpawn, profileSpawn } from '../core/agentProfiles/permission'
+import { readAgentProfiles } from '../core/agentProfiles/store'
 import { createTokenReader, newToken, tokenPath } from '../core/mcp/httpToken'
 import { createOfflineRolls } from './host/offlineRolls'
 import type { BlockRegistry } from '../core/rolling/blockRegistry'
@@ -65,6 +67,12 @@ import { reattachSessions, type ReattachResult } from './host/reattach'
 import { createWorktreeRoute, NO_HOST_CONNECTION, hostDeadlineMessage } from './host/worktreeRoute'
 import { createPluginsRoute } from './host/pluginsRoute'
 import { createExtensionsRoute } from './host/extensionsRoute'
+import { createAgentProfilesRoute } from './host/agentProfilesRoute'
+import { forgetReadiness } from '../core/sandbox/windowsReadiness'
+import { forcedSandboxBlocker } from '../core/sandbox/unavailable'
+import { createAuditRoute } from './host/auditRoute'
+import { createCredentialsRoute } from './host/credentialsRoute'
+import { createAppPullRequests } from './host/appPullRequests'
 import { createSourcesRoute } from './host/sourcesRoute'
 import { createHostGitHubRoute } from './host/hostGitHubRoute'
 import { needsHostGitHub } from '../core/orchestration/hostGitHub'
@@ -344,8 +352,9 @@ export interface OrchWiring {
   /** One turn into a chat session through index.ts's session driver — the scheduler's and Slack's
    *  (`sessionDriver.deliver`), so `astera sessions send` moves the adapter's turn state the way they
    *  do. Handed over rather than rebuilt here: a second driver is a second place for the seam's
-   *  "a rejection means not sent" contract to drift. */
-  deliverChat: (sessionId: string, text: string) => Promise<void>
+   *  "a rejection means not sent" contract to drift. `by.person`: a person sent it (a Slack reply the Host relays, a
+   *  person's `sessions send`), written marked as a person's (observe deferred fix round 2). */
+  deliverChat: (sessionId: string, text: string, by?: { person: true }) => Promise<void>
 }
 
 /** The index.ts side of the Astera Host (design §4). Its own wiring rather than a member of
@@ -1210,6 +1219,8 @@ export function registerIpc(
       if (n) adoptedNative.set(n.sessionId, n.native)
     },
     log: (m) => hostWiring?.log(`host: ${m}`),
+    // A Host roll of a chat chain the sandbox refused: its reason, as the chat's notice in its pane (Task 6 fix round 1)
+    chatNotice: (sessionId, notice) => core.chat.notice(sessionId, notice),
     // Fix round 1, I2: the old session's exit waits until the mirror no longer names it.
     orchHolds: (id) => orchHoldsSession(orchMirror.loaded() ? orchMirror.getState() : null, id),
     // Fix round 1, 3: a rekey whose new session was not adopted leaves its forkSeen for the adopter.
@@ -1797,6 +1808,9 @@ export function registerIpc(
     if (event.type === 'ready') {
       const info = core.chat.info(sessionId)
       if (!info) return
+      // The thread is the conversation a history resume names (a `/clear` names a new one): the profile the session runs
+      // as is written down by it, never waited on
+      void core.profileConversations.learned(sessionId, event.threadId)
       // The rollout watcher is codex's: claude writes no rollout at all, so registering a claude session
       // would set the watcher scanning for a file that is never going to be there (once a second, each
       // one an ENOENT) and leave a log line saying it was looking.
@@ -2007,6 +2021,13 @@ export function registerIpc(
     }
   }
 
+  /** The app-wide permission mode as an agent profile's `inherit` reads it (Agent Profiles design §5). */
+  const appWideYolo = async (): Promise<boolean> => core.appSettings.getAgentPermissionMode() === 'yolo'
+  /** Stamps a profile's use after a spawn started from it (`agent-profiles-touch`), through the Host. Not awaited, and
+   *  any failure (no Host, a deadline) is dropped: a stamp never fails or delays a spawn. */
+  const touchAgentProfile = (id: string): void => {
+    void orchCall({ cmd: 'agent-profiles-touch', args: { id }, sessionId: '' }).catch(() => {})
+  }
   async function spawnSession(opts: any): Promise<SessionInfo> {
     // First, so the guards below look for a live tab on the conversation that will actually be resumed.
     opts = await claudeResumeOpts(opts)
@@ -2075,6 +2096,40 @@ export function registerIpc(
       void core.schedulerConfig.set(resumeId, opts.schedule).catch(() => {})
     }
     const account = core.accounts.get(opts.accountId)
+    // **The sandbox comes from the profile only** (final fix pass, minor 1; permission.ts: "never a caller's"): a
+    // `sandbox` in the options is dropped, whoever sent it. The app's own start of a sandboxed session's work, a Job's
+    // worker or coordinator, asks for it apart (`forceSandbox`, C3), and where the CLI has no sandbox it is refused
+    // rather than started without one; the renderer's handler clears that one.
+    const forceSandbox = opts.forceSandbox === true
+    {
+      const { sandbox: _callerSandbox, forceSandbox: _forced, ...withoutSandbox } = opts
+      opts = withoutSandbox
+    }
+    if (forceSandbox) {
+      const refused = forcedSandboxBlocker(providerOf(account), process.platform)
+      if (refused) throw refused
+    }
+    // The agent profile it names, by id or name (Agent Profiles design §5): the session keeps the profile's real id, and
+    // the profile's permission decides the bypass when the caller gave none. One that is not found is logged and
+    // dropped, and the session starts with the app-wide mode as a dialog spawn without a profile does (the dialog sent
+    // no bypass, so dropping only the id would have left it asking); a profile store that cannot be read refuses the
+    // spawn with its repair, since the profile in it may ask or sandbox. With none named, nothing here changes the options.
+    // A profile that resolves also gives its sandbox switch (sandbox design §6), which the prepares and spawns below, a
+    // terminal's or a chat's, read from the options.
+    if (opts.agentProfileId !== undefined) {
+      const { agentProfileId, ...rest } = opts
+      const resolved = await appProfileSpawn({
+        profileDir: app.getPath('userData'),
+        agentProfileId,
+        bypassPermissions: opts.bypassPermissions,
+        appWideYolo,
+        log: orchLog
+      })
+      opts = { ...rest, ...resolved }
+    }
+    if (forceSandbox) opts = { ...opts, sandbox: true }
+    // A resume names its conversation now: the profile it resumes as is written down by it, as the schedule is above
+    if (resumeId && opts.agentProfileId !== undefined) void core.profileConversations.record(resumeId, opts.agentProfileId)
     // win32: a CLI installed since this app started is not on its PATH yet; the Path Windows keeps is
     // read again first (at most every 30 s, and only when the CLI is missing: core/sessions/windowsPath.ts).
     if (account) await ensureOnWindowsPath([providerOf(account)])
@@ -2218,7 +2273,10 @@ export function registerIpc(
       // "왜 시작 버튼이 안 눌리나" exists to keep fast; paying that cost on every chat spawn was fix
       // round 1's own Critical finding.
       const bypassSignal = core.bypassSignalFor(providerOf(account))
-      await core.capabilities.refresh(account)
+      await core.capabilities.refresh(account, opts.agentProfileId)
+      // The profile's sandbox: the folder's git layout read for the synchronous spawn, and on Windows the account's Codex
+      // home asked whether it is set up; a refusal reaches the toast like any failed spawn (설정하기 for an account not set up)
+      await core.chat.prepare({ account, cwd: opts.cwd, ...(opts.sandbox === true ? { sandbox: true } : {}) })
       const chatInfo = core.chat.spawn({
         account,
         cwd: opts.cwd,
@@ -2230,8 +2288,11 @@ export function registerIpc(
         rollPrompt: opts.rollPrompt,
         // Chat takeover: what a Host does with a prompt nobody is there to answer. Hold unless asked.
         unattendedPermission: isUnattendedPermission(opts.unattendedPermission) ? opts.unattendedPermission : 'hold',
-        bypassSignal
+        bypassSignal,
+        ...(opts.agentProfileId !== undefined ? { agentProfileId: opts.agentProfileId } : {}),
+        ...(opts.sandbox === true ? { sandbox: true } : {})
       })
+      if (opts.agentProfileId !== undefined) touchAgentProfile(opts.agentProfileId)
       // A claude chat resume's transcript already exists, so it is found now rather than at `ready`:
       // the conversation view asks for it the moment the tab appears, and an empty answer there reads
       // "no record yet" until its next retry, two seconds on (measured 2026-10-07). A miss changes
@@ -2275,7 +2336,7 @@ export function registerIpc(
     // The folder and, on win32, Git Bash are looked for first, off this thread and within the probe
     // limit (core/sessions/pathProbe.ts): an offline drive refuses the spawn in about 1.5 s instead of
     // freezing every window for as long as the SMB redirector takes to give up.
-    await core.sessions.prepare({ account, cwd: opts.cwd })
+    await core.sessions.prepare({ account, cwd: opts.cwd, ...(opts.agentProfileId !== undefined ? { agentProfileId: opts.agentProfileId } : {}), ...(opts.sandbox === true ? { sandbox: true } : {}) })
     const info = core.sessions.spawn({
       ...opts,
       account,
@@ -2289,6 +2350,7 @@ export function registerIpc(
         ? { resumeSessionId: undefined, initialPrompt: blankSlatePrompt }
         : {})
     })
+    if (opts.agentProfileId !== undefined) touchAgentProfile(opts.agentProfileId)
     // 이어받은 세션이라고 Work Unit 수집기에 알린다 (스펙 §16.1). **추측할 자리가 아니다** — 이
     // 자리가 그것이 resume 이라는 것을 아는 유일한 곳이고, 수집기는 새 세션 id 만 보므로 알리지
     // 않으면 커서 없는 새 세션으로 보아 파일을 0 부터 읽는다. `--resume` 은 이전 대화를 통째로 다시
@@ -2342,7 +2404,8 @@ export function registerIpc(
     }
     return info
   }
-  ipcMain.handle('sessions.spawn', async (_e, opts) => spawnSession(opts))
+  // The renderer's options never force the sandbox: only the app's own start of a sandboxed session's work does
+  ipcMain.handle('sessions.spawn', async (_e, opts) => spawnSession({ ...opts, forceSandbox: undefined }))
 
   // ---- agent browser (spec: docs/superpowers/specs/2026-09-06-agent-browser-design.md) ----
   // It sits here, above the orchestration startup, because `agentRuns` is read from the server deps
@@ -2975,6 +3038,16 @@ export function registerIpc(
       spawnSession: async (o) => {
         // 워커는 방금 만들어진 워크트리에서 뜬다 — 사람이 승인한 적 없는 폴더다(위 주석).
         await preTrustWorkspace(o.accountId, o.cwd)
+        // The profile is resolved here, before the bypass below is filled in: once filled, spawnSession would take it
+        // as the caller's own and the profile's permission would never be asked (Agent Profiles design §5). A profile
+        // store that cannot be read throws its repair here, and the worker does not start.
+        const profile = await profileSpawn({
+          profileDir: app.getPath('userData'),
+          agentProfileId: o.agentProfileId,
+          bypassPermissions: o.bypassPermissions,
+          appWideYolo,
+          log: orchLog
+        })
         // satisfies pins this to the coordinator's opts shape: spawnSession above takes opts: any, so a
         // misspelled field (titel and friends) would fail compilation nowhere but at this hop — the
         // defence of making title required on the coordinator side would end here. Narrowing all of
@@ -2984,6 +3057,8 @@ export function registerIpc(
           // A Job's worker, reviewer or repair worker is an agent's session: its tab closes when it ends (2026-10-20).
           // Outside the satisfies below, whose shape is the coordinator's options and has no such field.
           startedBy: 'agent',
+          // A worker of a sandboxed session's work starts in the sandbox whatever its profile says (final fix pass, C3)
+          ...(o.sandbox ? { forceSandbox: true } : {}),
           ...({
             accountId: o.accountId,
             cwd: o.cwd,
@@ -2992,7 +3067,7 @@ export function registerIpc(
             // 가 이 칸을 채우지 않지만(그쪽은 앱 설정을 볼 수 없다), 언젠가 Task 하나만 다르게
             // 띄우기로 하면 그 값이 여기서 이겨야 한다. 근거는 startCoordinatorSession 의 주석에 있다.
             bypassPermissions:
-              o.bypassPermissions ?? core.appSettings.getAgentPermissionMode() === 'yolo',
+              profile?.bypassPermissions ?? o.bypassPermissions ?? core.appSettings.getAgentPermissionMode() === 'yolo',
             initialPrompt: o.initialPrompt,
             title: o.title, // the worker tab title is task.title
             // 이 워커의 롤링 체인 — 첫 원소가 이 Dispatch 의 계정이고 나머지는 갈아탈 순서다
@@ -3004,7 +3079,8 @@ export function registerIpc(
             // already exist on the app's spawnSession/core.sessions.spawn, this closure just has to
             // forward them instead of dropping them on the floor.
             resumeSessionId: o.resumeSessionId,
-            resumePrompt: o.resumePrompt
+            resumePrompt: o.resumePrompt,
+            ...(profile ? { agentProfileId: profile.agentProfileId } : {})
           } satisfies typeof o)
         })
         try {
@@ -3020,6 +3096,7 @@ export function registerIpc(
         return info
       },
       writeToSession: (id, data) => core.sessions.write(id, data),
+      lastOutputAt: (id) => core.sessions.lastOutput(id),
       isBusy: orchIsBusy,
       isAlive: (id) => core.sessions.list().some((s) => s.id === id && s.status === 'running'),
       // A worker the Host started is not the app's until `pty-opened` has been answered, and
@@ -3183,6 +3260,7 @@ export function registerIpc(
           .some((x) => x.id === id && x.status === 'exited' && x.exitCode !== undefined && x.exitCode !== PTY_LOST_SIGHT_EXIT_CODE),
       sessionBusy: (id) => busyState.get(id) ?? null,
       typeInto: (id, text) => core.sessions.write(id, text),
+      lastOutputAt: (id) => core.sessions.lastOutput(id),
       lastPersonInputAt: (id) => personInputAt.get(id) ?? null,
       // 앱에서 "운전해도 되는가" 는 서버가 서 있고, dispatch 를 알리는 Host 가 몰지 않는가다(§4.2, N8).
       // 슬롯마다 다시 묻으므로, 한 바퀴 도중에 그런 Host 가 붙으면 그 자리에서 멈춘다.
@@ -3231,6 +3309,9 @@ export function registerIpc(
 
     const deps: OrchServerDeps = {
       getState: () => store.get(),
+      // The agent profiles (Agent Profiles design §6): this app answers its own UI's run-create and task-create, so it
+      // reads the store the Host writes, from the same profile folder its spawns resolve profiles from
+      readAgentProfiles: () => readAgentProfiles(app.getPath('userData')),
       // The completion check plugins are the Host's (plugin Phase 5 C7, C8): this copy's early refusals and the app's
       // own checks ask it, as the app.
       completionChecks: createAppCompletionChecks({ call: (m) => orchCall(m) }),
@@ -3289,9 +3370,10 @@ export function registerIpc(
             specsDir,
             preTrust: preTrustWorkspace,
             bypassPermissions: async () => core.appSettings.getAgentPermissionMode() === 'yolo',
-            spawn: async (o) => {
-              // A coordinator is an agent's session too: its tab closes when it ends (2026-10-20)
-              const info = await spawnSession({ ...o, startedBy: 'agent' })
+            spawn: async ({ sandbox, ...o }) => {
+              // A coordinator is an agent's session too: its tab closes when it ends (2026-10-20). One of a Job a sandboxed
+              // session made starts in the sandbox (final fix pass, C3)
+              const info = await spawnSession({ ...o, startedBy: 'agent', ...(sandbox ? { forceSandbox: true } : {}) })
               // **탭을 띄우는 것이 이 한 줄이다.** 공용 spawnSession 은 이 이벤트를 내지 않는다 — 사용자
               // 경로에서는 반환값이 렌더러로 가서 App.tsx 가 탭을 만들기 때문이다(그 함수 위의 주석).
               // main 안에서 직접 부르는 이 자리는 반환값이 렌더러에 닿지 않으므로, 워커 세션이 그랬던
@@ -3504,13 +3586,13 @@ export function registerIpc(
           return failed
         }
       },
-      chatSend: async (sessionId, text) => {
+      chatSend: async (sessionId, text, by) => {
         // 아직 되찾지 않은 세션 — 지금 상태 때문이다. 오류(1)가 아니라 거절(6)로 돌려준다.
         if (!core.chat.has(sessionId)) return { sent: false, reason: 'not-held' }
         const pending = chatPendingOf(core.chat.state(sessionId)?.request ?? null)
         if (pending !== null) return { sent: false, pending }
         if (!orchWiring) throw new Error('orchestration is not wired in this app')
-        await orchWiring.deliverChat(sessionId, text)
+        await orchWiring.deliverChat(sessionId, text, by)
         return { sent: true }
       },
       // 큐에 넣고, 그 옆에서 완료 정책 지문과 의심 파일을 계산한다 — 본문은 validation.ts 에 있다.
@@ -4064,7 +4146,9 @@ export function registerIpc(
     roll:
       core.rollConfig.get(sessionId) ??
       (await readRollConfigKey(hostRollConfigPath(app.getPath('userData')), sessionId)),
-    schedule: core.schedulerConfig.get(sessionId)
+    schedule: core.schedulerConfig.get(sessionId),
+    // The agent profile it ran as, while that profile is still there (null otherwise: it resumes without one)
+    agentProfileId: await core.profileConversations.profileOf(sessionId)
   }))
 
   // Turning a schedule off — the banner button
@@ -4225,9 +4309,16 @@ export function registerIpc(
       return { title, body, commitCount: commits.length, dirtyCount, behindCount }
     }
   )
-  ipcMain.handle('pr.create', (_e, req: Parameters<typeof createPullRequest>[0]) =>
-    createPullRequest(req)
-  )
+  // Its push and `gh pr create` are the app's GitHub uses, kept by the Host with every other (credentials design §6)
+  const createAppPr = createAppPullRequests({
+    call: (m) => orchCall(m),
+    originOf: async (cwd) => {
+      const r = await git(['remote', 'get-url', 'origin'], { cwd })
+      return r.ok && r.stdout !== '' ? r.stdout : null
+    },
+    log: (m) => orchLog(m)
+  })
+  ipcMain.handle('pr.create', (_e, req: Parameters<typeof createPullRequest>[0]) => createAppPr(req))
 
   // PR snapshots for the worktree panel (design doc §4). Created here because it needs `send`;
   // start() probes gh once and announces the result — it fetches nothing until subscribed.
@@ -4707,6 +4798,44 @@ export function registerIpc(
   ipcMain.handle('extensions.setEnabled', (_e, id: unknown, enabled: unknown) => extensions.setEnabled(id as string, enabled === true))
   ipcMain.handle('extensions.remove', (_e, id: unknown) => extensions.remove(id as string))
   ipcMain.handle('extensions.replace', (_e, accountId: unknown, id: unknown) => extensions.replace(accountId as string, id as string))
+  // Settings › Agent profiles (Agent Profiles design §8): the Host checks every argument; this only passes them on
+  // A setup gives the machine's sandbox users new passwords, so this process's own readiness answers go after one too
+  const agentProfiles = createAgentProfilesRoute({ call: (m) => orchCall(m), afterSetup: () => forgetReadiness() })
+  ipcMain.handle('agentProfiles.list', () => agentProfiles.list())
+  ipcMain.handle('agentProfiles.create', (_e, fields: unknown) => agentProfiles.create(fields as Parameters<typeof agentProfiles.create>[0]))
+  ipcMain.handle('agentProfiles.update', (_e, id: unknown, changes: unknown) =>
+    agentProfiles.update(id as string, changes as Parameters<typeof agentProfiles.update>[1])
+  )
+  ipcMain.handle('agentProfiles.archive', (_e, id: unknown) => agentProfiles.archive(id as string))
+  ipcMain.handle('agentProfiles.restore', (_e, id: unknown) => agentProfiles.restore(id as string))
+  ipcMain.handle('agentProfiles.remove', (_e, id: unknown) => agentProfiles.remove(id as string))
+  ipcMain.handle('agentProfiles.sandboxSetup', (_e, profileId: unknown, accountId: unknown) => agentProfiles.sandboxSetup(profileId as string, accountId as string))
+  ipcMain.handle('agentProfiles.sandboxReadiness', (_e, profileId: unknown) => agentProfiles.sandboxReadiness(profileId as string))
+  // Settings › Security & Access and Run detail's token totals (observe mode design §11): the Host checks every
+  // argument; this only passes them on
+  const audit = createAuditRoute({ call: (m) => orchCall(m) })
+  ipcMain.handle('audit.policies', () => audit.policies())
+  ipcMain.handle('audit.setMode', (_e, mode: unknown) => audit.setMode(mode as Parameters<typeof audit.setMode>[0]))
+  ipcMain.handle('audit.setOtherwise', (_e, otherwise: unknown) => audit.setOtherwise(otherwise as Parameters<typeof audit.setOtherwise>[0]))
+  ipcMain.handle('audit.addRule', (_e, rule: unknown) => audit.addRule(rule as Parameters<typeof audit.addRule>[0]))
+  ipcMain.handle('audit.editRule', (_e, id: unknown, changes: unknown) => audit.editRule(id as string, changes as Parameters<typeof audit.editRule>[1]))
+  ipcMain.handle('audit.removeRule', (_e, id: unknown) => audit.removeRule(id as string))
+  ipcMain.handle('audit.moveRule', (_e, id: unknown, to: unknown) => audit.moveRule(id as string, to as number))
+  ipcMain.handle('audit.resetRules', () => audit.resetRules())
+  ipcMain.handle('audit.list', (_e, q: unknown) => audit.list(q as Parameters<typeof audit.list>[0]))
+  ipcMain.handle('audit.summary', (_e, q: unknown) => audit.summary(q as Parameters<typeof audit.summary>[0]))
+  ipcMain.handle('audit.runTokens', (_e, runId: unknown) => audit.runTokens(runId as string))
+  ipcMain.handle('audit.taskTokens', (_e, taskId: unknown) => audit.taskTokens(taskId as string))
+  // Settings › Security & Access › Credentials (credentials design §7): the Host's list, as the app
+  const credentials = createCredentialsRoute({ call: (m) => orchCall(m) })
+  type Cred = typeof credentials
+  ipcMain.handle('credentials.list', () => credentials.list())
+  ipcMain.handle('credentials.uses', (_e, q: unknown) => credentials.uses(q as Parameters<Cred['uses']>[0]))
+  ipcMain.handle('credentials.addHideOnly', (_e, e: unknown) => credentials.addHideOnly(e as Parameters<Cred['addHideOnly']>[0]))
+  ipcMain.handle('credentials.editHideOnly', (_e, id: unknown, changes: unknown) => credentials.editHideOnly(id as string, changes as Parameters<Cred['editHideOnly']>[1]))
+  ipcMain.handle('credentials.deleteHideOnly', (_e, id: unknown) => credentials.deleteHideOnly(id as string))
+  ipcMain.handle('credentials.setHiding', (_e, id: unknown, hide: unknown) => credentials.setHiding(id as string, hide as Parameters<Cred['setHiding']>[1]))
+  ipcMain.handle('credentials.reset', () => credentials.reset())
   ipcMain.handle('plugins.list', () => plugins.list())
   ipcMain.handle('plugins.inspect', (_e, source: unknown) => plugins.inspect(source as Parameters<typeof plugins.inspect>[0]))
   ipcMain.handle('plugins.install', (_e, a: unknown) => plugins.install(a as Parameters<typeof plugins.install>[0]))
@@ -4836,6 +4965,8 @@ export function registerIpc(
    *  무엇을 하는지 모르고, 이쪽은 수집기가 어떻게 Unit 을 찾는지 모른다. */
   const understandingPipeline = new UnderstandingPipeline({
     store: understanding,
+    // The Credentials list: the agent writing a record is started in the project, so it loses what a session there would
+    hiding: core.sessions.hiding,
     accountOf: (id) => {
       try {
         return core.accounts.get(id)
@@ -6189,6 +6320,9 @@ export function registerIpc(
       settleSessionsTakenBack(null)
       return
     }
+    // Sandbox follow-ups, item 1: the key this app proves it is the app with, made before it first talks to a Host and
+    // before any session it starts is denied it. Not fatal: without it a Host serves this app as a CLI, and says so.
+    await ensureAppKey(profileDir).catch((err) => hostLog(`the app key could not be made: ${String(err)}`))
     // What the Host is actually started with. Null means `process.execPath` and the asar's host.js —
     // the arrangement every version before this one used, and the one a win32 installer has to fight.
     //
@@ -6259,6 +6393,9 @@ export function registerIpc(
       log: hostLog,
       // Protocol 4: the Host's hello must carry the proof of this key (core/host/hostKey.ts)
       hostKey: () => readHostKey(profileDir),
+      // And this app answers the Host's challenge under the app key (sandbox follow-ups, item 1): made again if it went
+      // missing since, so a Host never meets an app that cannot prove itself
+      appKey: () => ensureAppKey(profileDir),
       // Read at every handshake, so the notice belongs to the Host that just answered rather than to
       // whatever the runtime looked like when the app started.
       runtimeIncomplete: () => runtime?.incomplete ?? false,
@@ -6301,6 +6438,10 @@ export function registerIpc(
         // an uncaught exception in the main process. The client's own retry loop reports the outcome
         // to the person; this only has to keep the failure from being fatal.
         child.on('error', (err) => hostLog(`the Host could not be started: ${String(err)}`))
+        // A Host that crashes in native code or is ended from outside writes nothing itself; this app outlives it and
+        // can still say which of the two it was (core/host/spawn.ts hostExitReason).
+        const pid = child.pid
+        child.on('exit', (code, signal) => hostLog(`the Host (pid ${pid}) ended: ${hostExitReason(code, signal, process.platform)}`))
         child.unref()
       })
     })
@@ -7626,7 +7767,8 @@ export function registerIpc(
   // with the harmless nothing — a resolved promise, an empty model list, a null state — which is the
   // same convention `sessions.kill` has always had, and it means a stale renderer call arriving just
   // after a session exited is not an error anybody has to handle.
-  ipcMain.handle('chat.send', (_e, sessionId: string, text: string) => core.chat.send(sessionId, text))
+  // The composer: a person's turn, written marked as a person's (observe deferred fix round 2, Important a)
+  ipcMain.handle('chat.send', (_e, sessionId: string, text: string) => core.chat.send(sessionId, text, { person: true }))
   ipcMain.handle('chat.interrupt', (_e, sessionId: string) => core.chat.interrupt(sessionId))
   ipcMain.handle('chat.answer', (_e, sessionId: string, requestId: string, answer: ChatAnswer) =>
     core.chat.answer(sessionId, requestId, answer)

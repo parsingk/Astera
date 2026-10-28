@@ -1,4 +1,5 @@
 import type { ChatRequest, ChatState } from '../../../../core/chat/types'
+import type { Message } from '../../../../core/i18n'
 
 /** Task 8: what a session slot's ConversationPane is talking to. `'terminal'` is a terminal session's
  *  conversation view (PendingBanner, ToolRow, etc. all read the CLI's own pty-shaped transcript);
@@ -29,6 +30,10 @@ export type ChatBanner =
    *  need the person's attention now — but over the two quiet notices below: this one is new
    *  information, not a steady state. */
   | { kind: 'notice'; key: 'bypassed' }
+  /** Task 6 fix round 1: a roll of this chat's chain was refused and the chain waits; `reason` is the catalog message to
+   *  word. Ranked over the turn's error (the usage limit that made the roll try), since it says what the person has to
+   *  do for the session to go on, and under a request, which needs an answer now. */
+  | { kind: 'notice'; key: 'rollRefused'; reason: Message }
   /** Truncated replay and no event yet. */
   | { kind: 'checking' }
   /** The fallback process: not Host-owned. */
@@ -41,6 +46,7 @@ export type ChatBanner =
 export function chatBannerFor(chat: ChatPaneState, threadFailure: string | null = null): ChatBanner {
   if (chat === null) return { kind: 'none' }
   if (chat.request !== null) return { kind: 'request', request: chat.request }
+  if (typeof chat.notice === 'object' && chat.notice !== null) return { kind: 'notice', key: 'rollRefused', reason: chat.notice.reason }
   if (chat.error !== null && chat.error !== threadFailure) return { kind: 'error', message: chat.error }
   if (chat.notice) return { kind: 'notice', key: chat.notice }
   if (chat.truncated && chat.status === 'idle') return { kind: 'checking' }

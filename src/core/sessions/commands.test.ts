@@ -122,6 +122,35 @@ describe('codex --no-daemon', () => {
   })
 })
 
+// Sandbox design §6: a sandboxed session's `-a never` and permission profile take the bypass flag's place, which is left
+// out, so the session never asks and still runs inside Codex's sandbox; and it runs on its own server, never another's.
+describe('codex sandboxArgs', () => {
+  const BOX = ['-a', 'never', '-c', 'permissions={astera={extends=":workspace"}}', '-c', 'default_permissions="astera"']
+  const daemonless = buildCodexCommand('linux', undefined, () => true)
+  it('go where the bypass flag goes, and the bypass flag is left out', () => {
+    expect(daemonless({ sandboxArgs: BOX, bypassPermissions: true, initialPrompt: 'do it' }).args).toEqual([...NO_UPDATE, '--no-daemon', ...BOX, 'do it'])
+    expect(daemonless({ sandboxArgs: BOX, bypassPermissions: false }).args).toEqual([...NO_UPDATE, '--no-daemon', ...BOX])
+  })
+  it('follow a resume and its prompt, after --no-daemon', () => {
+    const { args } = daemonless({ sandboxArgs: BOX, resumeSessionId: 'sid', resumePrompt: 'go on', bypassPermissions: true })
+    expect(args).toEqual([...NO_UPDATE, 'resume', 'sid', 'go on', '--no-daemon', ...BOX])
+  })
+  it('sit inside the cmd.exe wrapper on win32', () => {
+    expect(buildCodexCommand('win32', shim, () => true)({ sandboxArgs: BOX }).args).toEqual(['/d', '/c', 'call', SHIMS.codex, ...NO_UPDATE, '--no-daemon', ...BOX])
+  })
+  it('refuse a codex that does not take --no-daemon', () => {
+    expect(() => buildCodexCommand('linux', undefined, () => false)({ sandboxArgs: BOX })).toThrow(/^SANDBOX_UNAVAILABLE: codex-daemon codex$/)
+    expect(() => buildCodexCommand('linux')({ sandboxArgs: BOX })).toThrow(/^SANDBOX_UNAVAILABLE: codex-daemon codex$/)
+  })
+  it('leave an unsandboxed command as it was', () => {
+    expect(daemonless({ bypassPermissions: true, initialPrompt: 'do it' }).args).toEqual([...NO_UPDATE, '--no-daemon', '--dangerously-bypass-approvals-and-sandbox', 'do it'])
+    expect(buildCodexCommand('linux', undefined, () => false)({ bypassPermissions: true }).args).toEqual([...NO_UPDATE, '--dangerously-bypass-approvals-and-sandbox'])
+  })
+  it('are ignored by the Claude builder, whose sandbox is its settings file', () => {
+    expect(buildClaudeCommand('linux')({ sandboxArgs: BOX, bypassPermissions: true }).args).toEqual(['--dangerously-skip-permissions'])
+  })
+})
+
 describe('buildCodexAppServerCommand', () => {
   it('wraps through cmd.exe on win32, by the shim’s absolute path', () => {
     expect(buildCodexAppServerCommand('win32', shim)).toEqual({

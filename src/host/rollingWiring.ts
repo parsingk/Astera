@@ -147,6 +147,15 @@ export function composeHostRolling(a: {
     askApp: (n, args) => a.server().act(n, args),
     orchEnv: () => a.spawner.orchEnvNow(),
     capabilities: a.spawner.capabilities,
+    hiding: a.spawner.hiding,
+    enforce: a.spawner.enforce,
+    sandboxLayouts: a.spawner.sandboxLayouts,
+    codexWindowsReady: a.spawner.codexWindowsReady,
+    claudeSandbox: a.spawner.claudeSandbox,
+    hostSocketDir: a.spawner.hostSocketDir ?? null,
+    appKeyFile: a.spawner.appKeyFile ?? null,
+    ...(a.spawner.codexVersion ? { codexVersion: a.spawner.codexVersion } : {}),
+    ...(a.spawner.codexExcludes ? { codexExcludes: a.spawner.codexExcludes } : {}),
     log,
     ...a.chatsDeps
   })
@@ -198,6 +207,16 @@ export function composeHostRolling(a: {
         })
         .catch((err) => log(`native session bind failed session=${sid}: ${String(err)}`))
     },
+    // A refused roll's reason for a chat chain (Task 6 fix round 1), to the apps that take chat sessions back, whose pane
+    // shows it as the chat's notice. Not journaled: an app that attaches after it was told does not hear it (the chain
+    // tells each reason once), and the Host's rolling log keeps it.
+    chatNotice: (sessionId, notice) => {
+      try {
+        a.server().broadcast({ t: 'chat-notice', sessionId, notice }, (y) => y.has(HOST_YIELD_CHAT_TAKEOVER))
+      } catch (err) {
+        log(`the chat notice could not be sent session=${sessionId}: ${String(err)}`)
+      }
+    },
     // Both pushes go to every greeted app (Task 13). `session-rolled` carries the new session's pty, which
     // the app adopts before it forwards the rekey (Task 14).
     // With no app attached that reads it, the event is journaled too (D5): nobody else hears it. Its own try, after the
@@ -216,8 +235,8 @@ export function composeHostRolling(a: {
       if (m.t === 'session-rolled' && m.procId !== undefined) a.server().broadcast(m, (y) => y.has(HOST_YIELD_CHAT_TAKEOVER))
       else a.server().broadcast(m)
       try {
-        // Leftovers Task 5: an app 1.3.25 or older counts as attached but reads no `session-rolled`, so
-        // only an app that said `role: 'app'` hearing it spares the journal.
+        // Leftovers Task 5: only an app that reads `session-rolled` hearing it spares the journal: one that proved
+        // it is the app (sandbox follow-ups, item 1; a hello with no role is a CLI to the server now).
         const heard = a.server().hasCurrentApp?.() ?? a.server().hasApp()
         if (!heard) journal.append(e)
       } catch (err) {

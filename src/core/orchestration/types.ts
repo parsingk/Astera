@@ -178,6 +178,12 @@ export interface Job {
    *  생기기 전에 만든 Run 과 CLI 로 만든 Run 이 그 갈래다 — UI 가 만들지 못하는 것과 코드가 다루지
    *  못하는 것은 다르다. 그때 워커의 질문을 풀어 주는 것은 앱의 그물이다(inbox.ts). */
   coordinatorAccountId?: string
+  /** The agent profile this Job runs as (Agent Profiles design §6), its real id: only the default of its Tasks. It never
+   *  picks the coordinator account, and the coordinator starts without it (Astera's own role). */
+  agentProfileId?: string
+  /** Made by a session that runs in its CLI's sandbox (final fix pass, C3): its coordinator and every worker of its
+   *  Tasks start in the sandbox too, whatever profile they name (state.ts workSandboxed). */
+  sandboxed?: true
   /** 앱이 이 Job 을 스스로 돌리는가. **UI 가 만든 Job 에만 참이다** — 코디네이터가 만든 Job 을
    *  앱이 함께 돌리면 둘이 같은 ready Task 를 두고 경합하고, 진 쪽(대개 코디네이터)의
    *  worker-start 가 `dispatch already open` 을 받는다. 코디네이터 LLM 에게는 자기 명령이 이유
@@ -301,6 +307,14 @@ export interface JobRun {
    *  lives is asked when a question is judged, because a chat session's end never reaches the orchestration (E4). A
    *  roll moves it (`rekeyExternalCoordinator`). */
   externalCoordinatorSessionId?: string
+  /** When this Run's outcome became final, as the Host committed it (observe deferred minor b). **Stamped, not derived**:
+   *  the outcome is derived from the Tasks (`outcomeOf`) and no Task keeps when its status changed, so the last Task's
+   *  `updatedAt` stood in for it, and any later edit of a Task (its title) moved it. The Host stamps it at both of its
+   *  commit points, on the commit that finishes the Run, keeps it through later commits and drops it on one that sets
+   *  the Run running again (`stampRunEnds`, runRecord.ts). What a coordinator spent and did for a finished Run is
+   *  bounded by it (`runEndOf`, running.ts). Absent on a Run that runs, and on one that finished before it was kept.
+   *  Kept back from the public surface. */
+  endedAt?: string
   /** 이 회차의 워커들이 일하는 워크트리. **없으면 아직 만들어지지 않았다** — 첫 워커를 띄우기
    *  직전에 만들고 기록한다: 예약의 게으른 포크는 배선이 `run-worktree-set` 으로(src/main/ipc.ts),
    *  코디네이터가 있는 Job 의 첫 실행은 command.ts 가 직접(Host 도 만든다, Host S3).
@@ -381,6 +395,13 @@ export interface Task {
    *  그대로 실패해 Gate 를 열고, 첫 계정을 쓸 수 있으면 **뒤 계정** 중 못 쓰는 것만 순서를 지키며
    *  제자리에서 빠진다. */
   accountIds?: string[]
+  /** The agent profile this Task's workers run as (Agent Profiles design §6), its real id. When the Task was made from
+   *  it alone, `accountIds` were copied from it then and stay fixed; the profile decides MCP and permission at each
+   *  spawn, and one deleted since falls back to implicit there. */
+  agentProfileId?: string
+  /** Added by a session that runs in its CLI's sandbox (final fix pass, C3): its workers start in the sandbox too,
+   *  whatever profile they name, in whichever Job it is (state.ts workSandboxed). Kept by a run's copy. */
+  sandboxed?: true
   /** 이 Task 를 완료로 판정할 실행 구성의 id. 없으면 worker_done 을 그대로 믿는다 —
    *  "문서를 고친다" 같은 Task 에 빌드를 거는 것은 틀린 판정이므로 검증 없음이 기본이다. */
   validateConfigId?: string
@@ -507,6 +528,9 @@ export interface Dispatch {
    *  reason: a paused schedule fire is documented not to continue (docs/jobs.md), so resuming the
    *  schedule must not resurrect its Tasks. */
   closedBy?: 'stop' | 'abandon' | 'pause'
+  /** The agent profile this worker was started as (Agent Profiles design §6): its Task's, or for a lifecycle Task the
+   *  one borrowed with the accounts (`workerProfileOf`). A reviewer's Dispatch has none. */
+  agentProfileId?: string
   /**
    * The reset time (epoch ms) for when this Dispatch was judged to have ended at a usage limit.
    * The app derives it from transcript/rollout signals and fills it in — the orchestrator does not

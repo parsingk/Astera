@@ -75,7 +75,7 @@ describe('docs/sdk.md', () => {
 
   // Final review of SDK 1e, minor 1: a method the package lacks, named in a sentence, passed
   it('names no method the package does not have', () => {
-    const named = [...prose(guide).matchAll(/(?<![\w/.-])(projects|jobs|runs|tasks|questions|completion|events)\.([A-Za-z_]+)\b/g)].map((m) => `${m[1]}.${m[2]}`)
+    const named = [...prose(guide).matchAll(/(?<![\w/.-])(projects|jobs|runs|tasks|questions|completion|events|agentProfiles)\.([A-Za-z_]+)\b/g)].map((m) => `${m[1]}.${m[2]}`)
     const known = new Set<string>([...methods, ...EVENT_TYPES, 'runs.cancel'])
     expect(named.length).toBeGreaterThan(20)
     expect(named.filter((n) => !known.has(n))).toEqual([])
@@ -257,6 +257,27 @@ describe('docs/sdk.md', () => {
     expect(code).toContain('Astera 1.4.14')
     const cli = read('docs/cli.md').replace(/\s+/g, ' ')
     expect(cli).toContain('or is disabled, with `PLUGIN_CAPABILITY_MISSING` in `error.code`')
+  })
+
+  // Agent Profiles design §6: the profile a Job or Task runs as, and the reads, in the guide and the CHANGELOG
+  it('names the profile reads and agentProfileId in the guide and in the CHANGELOG’s 0.5.0 entry', () => {
+    expect(guide).toContain('agentProfileId')
+    const changelog = read('packages/client/CHANGELOG.md')
+    const v050 = changelog.slice(changelog.indexOf('## 0.5.0'), changelog.indexOf('## 0.4.0'))
+    expect(changelog.indexOf('## 0.5.0')).toBeGreaterThan(0)
+    for (const named of ['agentProfiles.list', 'agentProfiles.get', 'agentProfileId', 'AgentProfile']) expect(v050, named).toContain(named)
+    // A Host from before agent profiles, said in the guide (fix round 1)
+    expect(prose(guide).replace(/\s+/g, ' ')).toContain('ignores `agentProfileId` on `jobs.create`')
+  })
+
+  // Observe mode design §10: a Run's and a Task's tokens, in the guide, the CLI guide and the CHANGELOG's 0.5.0 entry
+  it('names the token totals in the guide, the CLI guide and the CHANGELOG’s 0.5.0 entry', () => {
+    const changelog = read('packages/client/CHANGELOG.md')
+    const v050 = changelog.slice(changelog.indexOf('## 0.5.0'), changelog.indexOf('## 0.4.0'))
+    for (const doc of [guide, v050, read('docs/cli.md')]) {
+      expect(doc).toContain('`tokens`')
+      expect(doc).toContain('`coordinatorTokens`')
+    }
   })
 
   it('is reached from the CLI and MCP guides and from the package README', () => {

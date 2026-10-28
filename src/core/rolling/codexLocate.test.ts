@@ -4,6 +4,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { findRollout, ROLLOUT_SCAN_DAYS_MAX } from './codexLocate'
 import { absPath, foldsCaseHere } from '../testPaths'
+import { comparablePath } from '../files/tree'
 
 let home: string
 const NOW = Date.parse('2026-07-09T10:00:00Z') // 고정 '현재' — 오늘=2026/07/09, 어제=2026/07/08
@@ -538,6 +539,99 @@ describe('locateSince 로부터 며칠 뒤의 인계 (L5)', () => {
       now: () => since + 5 * DAY
     })
     expect(r).toBeNull()
+  })
+})
+
+// Task D (2026-10-28): two Hosts on one PC, each with a codex session in the same folder and Codex home. The second
+// Host's idle session had no rollout yet and mapped the first Host's session's file, the newest in the folder. Folder,
+// time and "newest" pick the candidates; `owner` says whether a candidate is held open by the session's own codex.
+describe('findRollout asks the owner of each candidate', () => {
+  const CWD = 'D:\\work\\p'
+  const OURS = '019f4524-e0ac-7571-a8af-5585504f0e01'
+  const THEIRS = '019f4524-e0ac-7571-a8af-5585504f0e02'
+  const two = async (): Promise<{ ours: string; theirs: string; since: number }> => {
+    const ours = await makeRollout({ y: '2026', m: '07', d: '09', uuid: OURS, cwd: CWD, mtimeMs: NOW - 3_000 })
+    await gap()
+    const theirs = await makeRollout({ y: '2026', m: '07', d: '09', uuid: THEIRS, cwd: CWD, mtimeMs: NOW - 1_000 })
+    return { ours, theirs, since: (await fs.stat(ours)).birthtimeMs - 1_000 }
+  }
+
+  it('skips a newer candidate another process holds and maps the one the session holds', async (ctx) => {
+    const { ours, theirs, since } = await two()
+    const [a, b] = [await fs.stat(ours), await fs.stat(theirs)]
+    if (!(a.birthtimeMs > 0 && b.birthtimeMs > a.birthtimeMs)) return ctx.skip('birth times not distinguishable here')
+    const asked: string[] = []
+    const r = await findRollout({
+      configDir: home, cwd: CWD, since, now: () => NOW,
+      owner: async (file) => {
+        asked.push(file)
+        return file === ours ? { verdict: 'own' } : { verdict: 'other', why: 'held by pid 4242 outside the session' }
+      }
+    })
+    expect(r).toEqual({ path: ours, sessionId: OURS })
+    expect(asked).toEqual([theirs, ours]) // newest first, and the search went on past the skipped one
+  })
+
+  it('maps nothing when every candidate belongs to another process', async () => {
+    const { since } = await two()
+    const r = await findRollout({ configDir: home, cwd: CWD, since, now: () => NOW, owner: async () => ({ verdict: 'other', why: 'held by no process' }) })
+    expect(r).toBeNull()
+  })
+
+  // The brief's fallback: where the evidence cannot be read on this machine, today's rule (the newest) stands.
+  it('keeps the newest candidate when its owner cannot be determined', async (ctx) => {
+    const { ours, theirs, since } = await two()
+    const [a, b] = [await fs.stat(ours), await fs.stat(theirs)]
+    if (!(a.birthtimeMs > 0 && b.birthtimeMs > a.birthtimeMs)) return ctx.skip('birth times not distinguishable here')
+    const r = await findRollout({ configDir: home, cwd: CWD, since, now: () => NOW, owner: async () => ({ verdict: 'unknown', why: 'lsof is missing' }) })
+    expect(r).toEqual({ path: theirs, sessionId: THEIRS })
+  })
+
+  it('remembers a candidate another process holds, so it is not read again', async () => {
+    const { theirs, since } = await two()
+    const rejected = new Set<string>()
+    let asks = 0
+    const owner = async (): Promise<{ verdict: 'other'; why: string }> => {
+      asks++
+      return { verdict: 'other', why: 'held by no process' }
+    }
+    await findRollout({ configDir: home, cwd: CWD, since, now: () => NOW, owner, rejected })
+    expect(rejected.has(comparablePath(theirs))).toBe(true)
+    const before = asks
+    await findRollout({ configDir: home, cwd: CWD, since, now: () => NOW, owner, rejected })
+    expect(asks).toBe(before)
+  })
+
+  // Review round 1, item 3: a session the start order puts behind another may still claim a file its own process
+  // holds, but not one its owner cannot tell about: that one is the newest starter's under the old rule.
+  it('with requireOwn, maps only a candidate the session holds, passing over one it cannot tell about', async (ctx) => {
+    const { ours, theirs, since } = await two()
+    const [a, b] = [await fs.stat(ours), await fs.stat(theirs)]
+    if (!(a.birthtimeMs > 0 && b.birthtimeMs > a.birthtimeMs)) return ctx.skip('birth times not distinguishable here')
+    const rejected = new Set<string>()
+    const r = await findRollout({
+      configDir: home, cwd: CWD, since, now: () => NOW, rejected, requireOwn: true,
+      owner: async (file) => (file === ours ? { verdict: 'own' } : { verdict: 'unknown', why: 'process 7 cannot be read (EACCES)' })
+    })
+    expect(r).toEqual({ path: ours, sessionId: OURS })
+    // Cannot tell is no verdict: not remembered, asked again next time
+    expect(rejected.has(comparablePath(theirs))).toBe(false)
+  })
+
+  it('with requireOwn, maps nothing when it cannot tell about any candidate', async () => {
+    const { since } = await two()
+    const r = await findRollout({ configDir: home, cwd: CWD, since, now: () => NOW, requireOwn: true, owner: async () => ({ verdict: 'unknown', why: 'lsof could not run' }) })
+    expect(r).toBeNull()
+  })
+
+  // The cheap filters come first: a child thread or an exec run is never worth a question about its owner.
+  it('asks only about candidates that pass the folder, time and kind filters', async () => {
+    await makeRollout({ y: '2026', m: '07', d: '09', uuid: '019f4524-e0ac-7571-a8af-5585504f0e03', cwd: 'D:\\work\\other', mtimeMs: NOW - 1_000 })
+    await makeRollout({ y: '2026', m: '07', d: '09', uuid: '019f4524-e0ac-7571-a8af-5585504f0e04', cwd: CWD, mtimeMs: NOW - 1_000, source: 'exec' })
+    const mine = await makeRollout({ y: '2026', m: '07', d: '09', uuid: '019f4524-e0ac-7571-a8af-5585504f0e05', cwd: CWD, mtimeMs: NOW - 1_000 })
+    const asked: string[] = []
+    await findRollout({ configDir: home, cwd: CWD, since: NOW - 5_000, now: () => NOW, owner: async (f) => (asked.push(f), { verdict: 'own' }) })
+    expect(asked).toEqual([mine])
   })
 })
 

@@ -3,6 +3,7 @@
 // built, and the answer "does this process outlive the app" is per process, so it is stamped on each
 // handle here where the choice is made.
 import type { ProcFactory } from '../../core/sessions/proc'
+import { withoutWorkloadToken } from './ptyRouter'
 
 export function createProcRouter(fallback: ProcFactory): {
   factory: ProcFactory
@@ -12,7 +13,7 @@ export function createProcRouter(fallback: ProcFactory): {
   return {
     factory: (file, args, opts) => {
       const outlivesApp = current !== null
-      const p = (current ?? fallback)(file, args, opts)
+      const p = current ? current(file, args, opts) : fallback(file, args, { ...opts, env: withoutWorkloadToken(opts.env) })
       p.outlivesApp = outlivesApp
       return p
     },

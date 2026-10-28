@@ -25,11 +25,14 @@ const agentReply = vi.hoisted(() => ({
    *  without re-deriving buildRecordPrompt's own logic. */
   lastPrompt: null as string | null,
   /** The folder the last call ran in. */
-  lastCwd: null as string | null
+  lastCwd: null as string | null,
+  /** The Credentials hiding the last call was given. */
+  lastHiding: undefined as unknown
 }))
 vi.mock('./agent', () => ({
-  runAgent: async (a: { prompt: string; cwd: string }): Promise<{ ok: boolean; value?: unknown; reason?: string }> => {
+  runAgent: async (a: { prompt: string; cwd: string; hiding?: unknown }): Promise<{ ok: boolean; value?: unknown; reason?: string }> => {
     agentReply.calls += 1
+    agentReply.lastHiding = a.hiding
     agentReply.lastPrompt = a.prompt
     agentReply.lastCwd = a.cwd
     if (agentReply.during) await agentReply.during()
@@ -120,6 +123,17 @@ beforeEach(async () => {
 })
 afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true })
+})
+
+// Credentials final review M12: the agent is started in the project, so it is given what a session there would lose
+describe('the Credentials list', () => {
+  it('gives the agent the hiding a session in the project gets', async () => {
+    const hiding = { get: () => ({ remove: ['GH_TOKEN'], set: {} }), damaged: () => false }
+    const { pipeline } = await make({ accountId: 'a1' }, { hiding })
+    agentReply.value = explanation()
+    await pipeline.onUnitClosed(projectRoot, unit())
+    expect(agentReply.lastHiding).toBe(hiding)
+  })
 })
 
 describe('onUnitClosed — 닫힌 작업이 기록이 된다', () => {

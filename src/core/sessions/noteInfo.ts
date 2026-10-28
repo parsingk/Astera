@@ -34,7 +34,9 @@ export function sessionInfoFromNote(a: { kind: string; id: string; restore: Reco
     ...(str('rollPrompt') ? { rollPrompt: str('rollPrompt') } : {}),
     ...(typeof r.slackNotify === 'boolean' ? { slackNotify: r.slackNotify } : {}),
     ...(typeof r.bypassPermissions === 'boolean' ? { bypassPermissions: r.bypassPermissions } : {}),
-    ...startedByOf(r)
+    ...startedByOf(r),
+    ...(agentProfileIdOf(r) ? { agentProfileId: agentProfileIdOf(r) } : {}),
+    ...sandboxedOf(r)
   }
 }
 
@@ -72,11 +74,29 @@ export function chatInfoFromNote(a: { kind: string; id: string; restore: Record<
       ? { rollAccountIds: [...(r.rollAccountIds as string[])] }
       : {}),
     ...(typeof r.rollPrompt === 'string' ? { rollPrompt: r.rollPrompt } : {}),
-    ...startedByOf(r)
+    ...startedByOf(r),
+    ...(agentProfileIdOf(r) ? { agentProfileId: agentProfileIdOf(r) } : {}),
+    ...sandboxedOf(r)
   }
 }
 
 /** Who started the session, as its note says (SessionInfo.startedBy): only the one value means anything. */
 function startedByOf(r: Record<string, unknown>): Pick<SessionInfo, 'startedBy'> {
   return r.startedBy === 'agent' ? { startedBy: 'agent' } : {}
+}
+
+/** Whether the session runs in its CLI's own sandbox, as its note says (SessionInfo.sandboxed): only `true` means it. A
+ *  roll reads it off the session it replaces, so its successor starts in the sandbox too. Beside it, what protection that
+ *  is (SessionInfo.sandboxKind), only a kind this build knows and only on a sandboxed note. Also how the Host's
+ *  `sessions list` says it (host/sessions.ts). */
+export function sandboxedOf(r: Record<string, unknown>): Pick<SessionInfo, 'sandboxed' | 'sandboxKind'> {
+  if (r.sandboxed !== true) return {}
+  return r.sandboxKind === 'sandbox' || r.sandboxKind === 'deny-only' ? { sandboxed: true, sandboxKind: r.sandboxKind } : { sandboxed: true }
+}
+
+/** The agent profile the session was started from, as its note's restore says (SessionInfo.agentProfileId): only a
+ *  non-empty string means anything. Also how the Host tells whether a live session holds a profile. */
+export function agentProfileIdOf(restore: Record<string, unknown> | undefined): string | undefined {
+  const v = restore?.agentProfileId
+  return typeof v === 'string' && v !== '' ? v : undefined
 }

@@ -81,8 +81,19 @@ export interface CoordinatorDeps {
      *  워커에게는 워커용 문구를 준다(startWorker 의 호출 자리). optional 인 이유는 넘기지 않아도
      *  롤링이 기본값으로 돌기 때문이다 — rollAccountIds 처럼 지우면 기능이 꺼지는 값이 아니다. */
     rollPrompt?: string
+    /** The agent profile the session is started from, by id or name (Agent Profiles design §5): the wiring resolves
+     *  it, and its permission decides the bypass when `bypassPermissions` is not given. A worker's start passes its
+     *  Dispatch's; a coordinator's and a reviewer's never do. */
+    agentProfileId?: string
+    /** Start in the CLI's sandbox whatever the profile says (final fix pass, C3): a worker of work a sandboxed session
+     *  made or asked for. The wiring refuses it where that CLI has none. */
+    sandbox?: true
   }): Promise<{ id: string }>
   writeToSession(sessionId: string, data: string): void
+  /** When that session's pty last printed anything (epoch ms), null for never. Given, a typed prompt's Enter waits for
+   *  the session to have drawn the prompt and gone quiet (ptyDriver): Codex swallows an Enter that comes right after a
+   *  long text (openai/codex#56982). Left out, Enter goes ENTER_DELAY_MS after the prompt. */
+  lastOutputAt?(sessionId: string): number | null
   /** Is that session working. **null = it cannot be decided for this provider** (codex — a
    *  decorative spinner keeps running in the window title and child processes overwrite the title,
    *  which makes the signal meaningless; measured directly). The coordinator does not need to know
@@ -116,9 +127,8 @@ export interface CoordinatorDeps {
 /** Characters that break quoting under win32's cmd.exe /c wrapping if they reach the launch prompt —
  *  the rule lives beside sanitizeResumePrompt now, and `sessions create` checks it too */
 import { LAUNCH_FORBIDDEN } from '../../sessions/commands'
+import { ptyDriver } from '../../sessions/sessionDriver'
 export { LAUNCH_FORBIDDEN }
-/** Gap between the prompt and Enter when injecting into a reused session. Same value as rolling and the scheduler */
-const ENTER_DELAY_MS = 150
 /** Polling interval while waiting for the busy -> idle transition. Same value as the server's check/ask polling (POLL_MS) */
 const IDLE_POLL_MS = 50
 /** Default limit for waitUntilIdle. BusyScanner.busy (core/terminal/busy.ts) is a sticky value that
@@ -884,6 +894,12 @@ export class OrchCoordinator {
      *  LAUNCH_FORBIDDEN 검사보다 먼저 끝나 있어야 한다: 그 검사는 실제로 보내는 문자열을 봐야
      *  한다. */
     launchPhrase?: string
+    /** The agent profile the worker starts as (Agent Profiles design §6), handed to `spawnSession`, which resolves it.
+     *  Not used by a reuse (`terminal`): that session was started already, as whatever it started as. */
+    agentProfileId?: string
+    /** Start the worker in its CLI's sandbox whatever its profile says (final fix pass, C3), handed to `spawnSession`.
+     *  Not used by a reuse, as `agentProfileId`. */
+    sandbox?: true
   }): Promise<{ sessionId: string; cwd: string; specPath: string }> {
     const actual = this.deps.accountProvider(a.accountId)
     if (actual === null) throw new Error(`unknown account: ${a.accountId}`)
@@ -1039,9 +1055,11 @@ export class OrchCoordinator {
       // says the same thing where it describes --terminal, so a coordinator is told not to mix the two.
       await this.waitUntilIdle(a.terminal)
       promptWrite('requested', 'typed')
-      this.deps.writeToSession(a.terminal, prompt)
-      await sleep(ENTER_DELAY_MS)
-      this.deps.writeToSession(a.terminal, '\r')
+      // The prompt and its Enter go the way `sessions send` types into a session (core/sessions/sessionDriver.ts)
+      await ptyDriver({
+        write: (id, data) => this.deps.writeToSession(id, data),
+        lastOutputAt: this.deps.lastOutputAt?.bind(this.deps)
+      }).deliver(a.terminal, prompt)
       promptWrite('confirmed', 'typed')
     } else {
       // bypassPermissions is not passed **from here** — it is decided now, but not by this module:
@@ -1077,7 +1095,9 @@ export class OrchCoordinator {
         // codex takes the resume phrase as its own argument after `resume <id>`; claude takes it as
         // the positional prompt after `--resume <id>` (core/sessions/commands.ts) — so claude gets it
         // as initialPrompt, same as an ordinary (non-resuming) start.
-        ...(resumeSessionId && a.provider === 'codex' ? { resumePrompt: prompt } : { initialPrompt: prompt })
+        ...(resumeSessionId && a.provider === 'codex' ? { resumePrompt: prompt } : { initialPrompt: prompt }),
+        ...(a.agentProfileId !== undefined ? { agentProfileId: a.agentProfileId } : {}),
+        ...(a.sandbox ? { sandbox: true as const } : {})
       })
       finalSessionId = spawned.id
       promptWrite('confirmed', 'argv')

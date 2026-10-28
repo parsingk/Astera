@@ -4,5 +4,5 @@
     "strict": true, "skipLibCheck": true, "types": ["node"], "outDir": "out/tsc-node",
     "paths": { "@astera-app/client": ["./packages/client/src/index.ts"] }
   },
-  "include": ["src/main/**/*", "src/preload/**/*", "src/core/**/*", "src/cli/**/*", "src/host/**/*", "src/pluginHost/**/*", "packages/client/src/**/*", "packages/client/test/**/*", "packages/plugin-sdk/src/**/*", "src/renderer/coreImportsInWebTsconfig.test.ts", "electron.vite.config.ts", "electron.vite.warnings.ts", "electron.vite.warnings.test.ts", "vitest.config.ts", "vitest.globalSetup.ts", "vitest.globalSetup.test.ts", "vitest.workers.ts", "vitest.config.test.ts"]
+  "include": ["src/main/**/*", "src/preload/**/*", "src/core/**/*", "src/cli/**/*", "src/host/**/*", "src/pluginHost/**/*", "packages/client/src/**/*", "packages/client/test/**/*", "packages/plugin-sdk/src/**/*", "src/renderer/coreImportsInWebTsconfig.test.ts", "electron.vite.config.ts", "electron.vite.warnings.ts", "electron.vite.enforceHook.ts", "electron.vite.warnings.test.ts", "vitest.config.ts", "vitest.globalSetup.ts", "vitest.globalSetup.test.ts", "vitest.workers.ts", "vitest.config.test.ts"]
 }

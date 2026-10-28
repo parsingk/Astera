@@ -9,6 +9,10 @@
 import { jobNameOf } from './jobName'
 import { diagnosticLine, findingsCountOf, oneLine } from './pluginChecks'
 import type { CheckResult, JobSourceRef } from './types'
+import type { AuditAction, CoverageNote, SandboxCoverageRow } from '../audit/types'
+import { ACTION_PHRASES, COVERAGE_NOTE_PHRASES } from '../audit/phrases'
+import { SANDBOX_TABLE_CAPTION, sandboxRowCaption } from '../sandbox/coverage'
+import { t } from '../i18n'
 
 /** 상태 한 낱말. **파생값과 플래그를 한 낱말로 접는다** — 사람이 목록에서 훑는 것이 이것이고,
  *  훑으려면 한 칸에 있어야 한다.
@@ -192,8 +196,215 @@ function pluginCheckLines(validation: unknown): { before: string[]; after: strin
   return { before, after }
 }
 
-export function humanFor(cmd: string, data: Record<string, unknown>): string | null {
+/** What each action is called on a person's screen (observe mode design §11): a plain phrase, never `git.remote.write`,
+ *  in the English of the table Settings › Security & Access says in the person's language (audit/phrases.ts). One this
+ *  build does not know (a newer Host's) as it was named. */
+const phraseOf = (action: unknown): string =>
+  Object.hasOwn(ACTION_PHRASES, str(action)) ? t('en', ACTION_PHRASES[str(action) as AuditAction]) : str(action)
+
+const two = (n: number): string => String(n).padStart(2, '0')
+
+/** An ISO time as the person's clock shows it, to the second: the records span days, so the date is kept. */
+function localTime(iso: unknown): string {
+  const d = new Date(str(iso))
+  if (!Number.isFinite(d.getTime())) return str(iso)
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`
+}
+
+/** Terse column heads, not the screen's labels (en.ts `settings.security.coverage.class.*`): the CLI prints words a script reads. */
+const COVERAGE_CLASSES = [
+  ['shell', 'shell'],
+  ['file-read', 'file read'],
+  ['file-write', 'file write'],
+  ['mcp', 'MCP'],
+  ['network', 'network']
+] as const
+
+/** What observe can see, a row per provider and kind of session, with why a class is only partly seen. */
+function coverageText(rows: Record<string, unknown>[]): string {
+  return columns([
+    ['', ...COVERAGE_CLASSES.map(([, name]) => name)],
+    ...rows.map((row) => {
+      const classes = (row.classes ?? {}) as Record<string, { level?: unknown; note?: unknown } | undefined>
+      return [
+        `${str(row.provider)} ${str(row.kind)}`,
+        ...COVERAGE_CLASSES.map(([key]) => {
+          const c = Object.hasOwn(classes, key) ? classes[key] : undefined
+          const note =
+            typeof c?.note === 'string' ? (Object.hasOwn(COVERAGE_NOTE_PHRASES, c.note) ? t('en', COVERAGE_NOTE_PHRASES[c.note as CoverageNote]) : c.note) : undefined
+          return note === undefined ? str(c?.level) : `${str(c?.level)} (${note})`
+        })
+      ]
+    })
+  ])
+}
+
+/** The observe switch and the rules, a row each in the order they are tried, its place first (what `--at` and `--to`
+ *  take); with `coverage`, as `policies show` answers, what observe can see under them, or in enforce what enforce
+ *  blocks (`enforceCoverage`). */
+function policyText(data: Record<string, unknown>): string {
+  const p = (data.policy ?? {}) as { rules?: unknown; otherwise?: unknown }
+  const rules = Array.isArray(p.rules) ? (p.rules as Record<string, unknown>[]) : []
+  const parts = [
+    columns([
+      ['mode', str(data.mode)],
+      ['otherwise', str(p.otherwise)]
+    ]),
+    rules.length === 0
+      ? '(no rules)'
+      : columns(rules.map((r, i) => [String(i), str(r.effect), str(r.action), r.scope === undefined ? 'anywhere' : str(r.scope), str(r.id)]))
+  ]
+  const coverage = data.mode === 'enforce' && Array.isArray(data.enforceCoverage) ? data.enforceCoverage : data.coverage
+  if (Array.isArray(coverage)) parts.push(coverageText(coverage as Record<string, unknown>[]))
+  if (Array.isArray(data.sandboxCoverage)) parts.push(sandboxCoverageText(data.sandboxCoverage as Record<string, unknown>[]))
+  return parts.join('\n\n')
+}
+
+/** The sandbox table's terse heads (the screen's are `settings.security.sandboxCoverage.class.*`), and the OS names. */
+const SANDBOX_CLASSES = [
+  ['write', 'write'],
+  ['sensitive', 'login folders'],
+  ['stores', 'OS secret store'],
+  ['network', 'network']
+] as const
+const OS_NAMES: Record<string, string> = { win32: 'Windows', darwin: 'macOS', linux: 'Linux' }
+
+/** What the sandbox blocks (sandbox design §6), a row per CLI and OS, headed `sandbox` so it is not read as the table
+ *  above it. A level is its own word but `seen`, which here is what the sandbox lets through: the network (E3). What a
+ *  cell cannot say is said as the screen says it: beside its row (Claude Code's shell on Windows), and under the table
+ *  (the home stays readable outside the login folders). */
+function sandboxCoverageText(rows: Record<string, unknown>[]): string {
+  const table = columns([
+    ['sandbox', ...SANDBOX_CLASSES.map(([, name]) => name)],
+    ...rows.map((row) => {
+      const classes = (row.classes ?? {}) as Record<string, { level?: unknown; note?: unknown } | undefined>
+      const os = str(row.os)
+      const caption = sandboxRowCaption({ provider: row.provider as SandboxCoverageRow['provider'], os: os as SandboxCoverageRow['os'] })
+      return [
+        `${str(row.provider)} ${Object.hasOwn(OS_NAMES, os) ? OS_NAMES[os] : os}`,
+        ...SANDBOX_CLASSES.map(([key]) => {
+          const c = Object.hasOwn(classes, key) ? classes[key] : undefined
+          const level = c?.level === 'seen' ? 'allowed' : str(c?.level)
+          const note =
+            typeof c?.note === 'string' ? (Object.hasOwn(COVERAGE_NOTE_PHRASES, c.note) ? t('en', COVERAGE_NOTE_PHRASES[c.note as CoverageNote]) : c.note) : undefined
+          return note === undefined ? level : `${level} (${note})`
+        }),
+        ...(caption === null ? [] : [t('en', caption)])
+      ]
+    })
+  ])
+  return `${table}\n${t('en', SANDBOX_TABLE_CAPTION)}`
+}
+
+/** `audit list`'s flags that the next page asks again, as the parser keys them and as they are typed: all but the cursor
+ *  (`--until`, `--before-id`), which the answer's `next` gives. */
+const AUDIT_LIST_REPEATED: ReadonlyArray<readonly [string, string]> = [
+  ['session', 'session'],
+  ['job', 'job'],
+  ['run', 'run'],
+  ['task', 'task'],
+  ['agentProfile', 'agent-profile'],
+  ['action', 'action'],
+  ['decision', 'decision'],
+  ['since', 'since'],
+  ['limit', 'limit']
+]
+
+export type ShellFamily = 'powershell' | 'posix'
+
+/** The shell a pasted line is read by: PowerShell on Windows, unless the environment names a POSIX one (Git Bash sets
+ *  MSYSTEM; a `SHELL` ending in sh, as bash, zsh or dash). Elsewhere always a POSIX shell. */
+export const shellOf = (platform: NodeJS.Platform = process.platform, env: Record<string, string | undefined> = process.env): ShellFamily => {
+  if (platform !== 'win32') return 'posix'
+  if ((env.MSYSTEM ?? '') !== '') return 'posix'
+  return /(^|[\\/])(ba|z|da|k|fi|a)?sh(\.exe)?$/i.test(env.SHELL ?? '') ? 'posix' : 'powershell'
+}
+
+/** A flag's value as the shell it is pasted into reads it back: bare when it is plain, else in single quotes, which no
+ *  shell expands (`$HOME` stays text). A quote inside is doubled in PowerShell (which counts the curly single quotes as
+ *  quotes too), and closed, escaped and reopened in a POSIX shell. A comma or a percent sign is not plain: PowerShell reads
+ *  the one as an array, cmd the other as a variable; a leading `@` is splatting there. */
+export const flagValue = (v: unknown, shell: ShellFamily = shellOf()): string => {
+  const s = String(v)
+  if (/^[A-Za-z0-9._:/=+][A-Za-z0-9._:/@=+-]*$/.test(s)) return s
+  return shell === 'powershell' ? `'${s.replace(/['‘’‚‛]/g, '$&$&')}'` : `'${s.replaceAll("'", "'\\''")}'`
+}
+
+/** A value the parser (cliArgs.ts) cannot take as a flag's value whatever the quoting: `-` is stdin, `--…` the next flag. */
+const unpassable = (s: string): boolean => s === '-' || s.startsWith('--')
+
+/** `args`: the flags the command was typed with, as the parser keys them, for an answer that names how to ask again;
+ *  `shell`, the family a hint is quoted for (this machine's). The CLI's words differ from the screen's (strings in
+ *  en.ts) for decisions, coverage classes and levels: they are the flag words and terse column heads a script reads back. */
+export function humanFor(
+  cmd: string,
+  data: Record<string, unknown>,
+  args: Record<string, unknown> = {},
+  shell: ShellFamily = shellOf()
+): string | null {
   switch (cmd) {
+    // Observe mode design §12: a row per call, its time on the person's clock and its action as a phrase. Under the table,
+    // the flags that ask for the next page: the filters that were used, then where it starts.
+    case 'audit-list': {
+      const records = asList(data, 'records')
+      const table =
+        records.length === 0
+          ? '(no records)'
+          : columns(
+              records.map((r) => [localTime(r.at), str(r.sessionId), phraseOf(r.action), str(r.target), str(r.decision), typeof r.ruleId === 'string' ? r.ruleId : '-'])
+            )
+      const next = data.next !== null && typeof data.next === 'object' ? (data.next as { until?: unknown; beforeId?: unknown }) : null
+      if (next === null) return table
+      const used = AUDIT_LIST_REPEATED.filter(([key]) => typeof args[key] === 'string' || typeof args[key] === 'number')
+      const left = used.filter(([key]) => unpassable(String(args[key])))
+      const again = used.filter((u) => !left.includes(u)).map(([key, flag]) => `--${flag} ${flagValue(args[key], shell)}`)
+      const note = left.length === 0 ? [] : [`(${left.map(([, flag]) => `--${flag}`).join(', ')} is not repeated below: its value cannot be given on the command line)`, '']
+      return [table, '', ...note, ['more:', ...again, `--until ${str(next.until)} --before-id ${str(next.beforeId)}`].join(' ')].join('\n')
+    }
+    // The totals, then a row per action, the most seen first
+    case 'audit-summary': {
+      // The calls Enforce stopped, once there are any: an observe-only summary reads as it did
+      const blocked = typeof data.blocked === 'number' && data.blocked > 0
+      const counts = (c: Record<string, unknown>): string[] => [
+        `allow ${str(c.allow)}`,
+        `would-deny ${str(c.wouldDeny)}`,
+        `unknown ${str(c.unknown)}`,
+        ...(blocked ? [`blocked ${str(c.blocked ?? 0)}`] : [])
+      ]
+      const total = (c: Record<string, unknown>): number => Number(c.allow ?? 0) + Number(c.wouldDeny ?? 0) + Number(c.unknown ?? 0) + Number(c.blocked ?? 0)
+      const byAction = data.byAction !== null && typeof data.byAction === 'object' ? Object.entries(data.byAction as Record<string, Record<string, unknown>>) : []
+      byAction.sort(([a, x], [b, y]) => total(y) - total(x) || a.localeCompare(b))
+      return [
+        counts(data).join(', '),
+        ...(byAction.length === 0 ? [] : ['', columns(byAction.map(([action, c]) => [phraseOf(action), action, ...counts(c)]))]),
+        ...(data.stoppedAtLimit === true ? ['', '(a day of this period stopped recording at the size limit, so it holds fewer calls than were made)'] : [])
+      ].join('\n')
+    }
+    // Credentials design §7: a row per entry (its name, kind, what it hides, where), never a value
+    case 'credentials-list': {
+      const entries = asList(data, 'entries')
+      if (entries.length === 0) return '(nothing listed)'
+      return columns(entries.map(credentialRow))
+    }
+    case 'credentials-show': {
+      const e = data.entry !== null && typeof data.entry === 'object' ? (data.entry as Record<string, unknown>) : null
+      if (e === null) return null
+      const uses = asList(data, 'uses')
+      return [columns([credentialRow(e)]), ...(uses.length === 0 ? [] : ['', columns(uses.map((u) => [localTime(u.at), str(u.sessionId ?? u.actor), str(u.resource), str(u.outcome)]))])].join('\n')
+    }
+    case 'credentials-doctor':
+      return asList(data, 'lines')
+        .map((l) => `${str(l.level).padEnd(6)}${str(l.text)}`)
+        .join('\n')
+    case 'policies-show':
+    case 'policies-set-mode':
+    case 'policies-set-otherwise':
+    case 'policies-rules-add':
+    case 'policies-rules-edit':
+    case 'policies-rules-remove':
+    case 'policies-rules-move':
+    case 'policies-rules-reset':
+      return policyText(data)
     case 'plugins-logs': {
       const lines = Array.isArray(data.lines) ? (data.lines as unknown[]).map(str) : []
       return lines.length > 0 ? lines.join('\n') : 'no log yet'
@@ -225,6 +436,22 @@ export function humanFor(cmd: string, data: Record<string, unknown>): string | n
     case 'plugins-doctor':
       return columns(
         (Array.isArray(data.checks) ? (data.checks as Record<string, unknown>[]) : []).map((c) => [c.ok !== true ? 'FAIL' : c.warn === true ? 'warn' : 'ok', str(c.name), str(c.detail)])
+      )
+    // Agent Profiles design §6: its state first, as plugins list puts it, then what a person picks it by. The sandbox
+    // switch (sandbox design §6) as `on`/`off`; a Host from before it sends none, which is off
+    case 'agent-profiles-list':
+      return columns(
+        asList(data, 'profiles').map((p) => {
+          const accounts = Array.isArray(p.accountIds) ? (p.accountIds as unknown[]).map(str) : []
+          return [
+            str(p.status).toUpperCase(),
+            str(p.id),
+            str(p.name),
+            str(p.permission),
+            p.sandbox === true ? 'on' : 'off',
+            accounts.length > 0 ? accounts.join(',') : '-'
+          ]
+        })
       )
     case 'plugins-list':
       return columns(
@@ -345,6 +572,8 @@ export function humanFor(cmd: string, data: Record<string, unknown>): string | n
       return columns(
         asList(data, 'runConfigs').map((c) => [str(c.id), str(c.type), str(c.name)])
       )
+    // The protection a session has: its CLI's own sandbox (`sandbox`), Claude Code's deny rules on Windows (`deny-only`),
+    // `sandboxed` for a kind this build does not name, `-` outside the sandbox
     case 'sessions-list':
       return columns(
         asList(data, 'sessions').map((x) => [
@@ -352,6 +581,7 @@ export function humanFor(cmd: string, data: Record<string, unknown>): string | n
           str(x.state),
           str(x.id),
           str(x.kind),
+          x.sandboxed === true ? (typeof x.sandboxKind === 'string' ? x.sandboxKind : 'sandboxed') : '-',
           str(x.title)
         ])
       )
@@ -445,6 +675,12 @@ export function humanFor(cmd: string, data: Record<string, unknown>): string | n
     case 'runs-wait':
     case 'projects-get':
     case 'plugins-get':
+    case 'agent-profiles-show':
+    case 'agent-profiles-create':
+    case 'agent-profiles-update':
+    case 'agent-profiles-archive':
+    case 'agent-profiles-restore':
+    case 'agent-profiles-delete':
     case 'plugins-install':
     case 'plugins-enable':
     case 'plugins-disable':
@@ -485,4 +721,18 @@ export function quietFor(data: Record<string, unknown>): string {
   }
   if (ids.length === 0) take(data)
   return ids.join('\n')
+}
+
+/** One Credentials list entry as a row: its name, its kind, what it hides, and whether and where. */
+function credentialRow(e: Record<string, unknown>): string[] {
+  const names = Array.isArray(e.envNames) ? (e.envNames as unknown[]).map(String) : []
+  const presets = Array.isArray(e.presets) ? (e.presets as unknown[]).map((p) => `preset ${String(p)}`) : []
+  const hide = e.hide !== null && typeof e.hide === 'object' ? (e.hide as { on?: unknown; projects?: unknown }) : {}
+  const where = Array.isArray(hide.projects) ? `hidden in ${(hide.projects as unknown[]).map(String).join(', ')}` : 'hidden in every agent session'
+  return [
+    str(e.kind === 'mcp-secret' ? e.serverName : e.alias),
+    e.kind === 'mcp-secret' ? 'MCP server' : 'registered',
+    [...names, ...presets].join(', ') || '-',
+    hide.on === true ? where : 'not hidden'
+  ]
 }

@@ -11,7 +11,7 @@ import path from 'node:path'
 import type { DeskHandle, DeskPointer } from '../../core/workspace/helpers'
 import { START_TIME_TOLERANCE_MS } from '../../core/workspace/lifecycle'
 import { DESK_CLOSE_MS, DESK_READY_MS, type DeskLaunched, type DeskShot, type DeskWindow } from '../../core/workspace/protocol'
-import { execText, killGroup, linuxStartTimes, realLinuxProcFs, runTool, spawnDetached, type RunTool, type SpawnDetached, type SpawnedProc } from './posixProc'
+import { execText, killProcessTree, linuxStartTimes, realLinuxProcFs, runTool, spawnDetached, type RunTool, type SpawnDetached, type SpawnedProc } from './posixProc'
 
 export const FIRST_DISPLAY = 90
 export const LAST_DISPLAY = 189
@@ -91,7 +91,9 @@ export interface LinuxDeskDeps {
   writeFile(p: string, text: string): Promise<void>
   /** A live pid's start time in epoch ms from /proc, or null when it is gone. */
   startTime(pid: number): Promise<number | null>
-  killGroup(pid: number): Promise<void>
+  /** Ends a launched app and everything it started, a child it started detached included
+   *  (killProcessTree, posixProc.ts). Never Xvfb, which the desk ends itself. */
+  killTree(pid: number): Promise<void>
   /** Resolves after ms, or at once when `signal` aborts (its timer cleared). */
   sleep(ms: number, signal?: AbortSignal): Promise<void>
   now(): number
@@ -490,7 +492,7 @@ export function createLinuxDesks(d: LinuxDeskDeps): { start(name: string): Promi
         d.log(`desktop ${name}: start time mismatch: pid ${p} started at ${liveAt}, not ${at}; left alone`)
         return
       }
-      await d.killGroup(p)
+      await d.killTree(p)
       launched.delete(p)
     }
 
@@ -515,7 +517,7 @@ export function createLinuxDesks(d: LinuxDeskDeps): { start(name: string): Promi
         // which no live process matches, so a later kill or sweep never reaches a reused pid. When the
         // read itself fails the fresh group is ended here, since nothing else will know to (fix round 1).
         const at = await d.startTime(cpid).catch(async (err: unknown) => {
-          await d.killGroup(cpid).catch((again: unknown) => d.log(`desktop ${name}: pid ${cpid} could not be ended: ${messageOf(again)}`))
+          await d.killTree(cpid).catch((again: unknown) => d.log(`desktop ${name}: pid ${cpid} could not be ended: ${messageOf(again)}`))
           throw err
         })
         if (at === null) {
@@ -603,7 +605,7 @@ export function realLinuxDeskDeps(a: { hostEnv: Record<string, string | undefine
     removeDir: (p) => fs.rm(p, { recursive: true, force: true }),
     writeFile: (p, text) => fs.writeFile(p, text, 'utf8'),
     startTime: async (pid) => (await linuxStartTimes([pid], procFs)).get(pid) ?? null,
-    killGroup: (pid) => killGroup(pid),
+    killTree: (pid) => killProcessTree(pid),
     sleep: (ms, signal) =>
       new Promise((r) => {
         if (signal?.aborted) return r()

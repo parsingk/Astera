@@ -45,7 +45,7 @@ import { normalizeIssues, type ReviewIssueInput } from './review'
 import { failedChecksSummary } from './completion'
 import { oneLine, pluginCheckText, skippedResult } from './pluginChecks'
 import { nextGitHubState, type RunGitHubPatch } from '../github/runState'
-import { isLifecycleTask, latestLifecycleTaskOf, lifecycleTaskFor, mergeReadyOf, withLifecycleTask } from './lifecycleTask'
+import { isLifecycleTask, latestLifecycleTaskOf, lifecycleTaskFor, mergeReadyOf, withLifecycleTask, workerProfileOf } from './lifecycleTask'
 
 export interface OrchState {
   /** 계획. 설계 §4 — 여기 있는 것이 "무엇을 시킬 것인가" 이고, 아래 runs 가 "실제로 돈 것" 이다. */
@@ -263,6 +263,10 @@ export function createJob(
     source?: JobSourceRef
     /** The GitHub lifecycle policy (design 2026-10-17 L10); the caller (run-create) has already run the preflight. */
     github?: GitHubLifecyclePolicy
+    /** The agent profile's real id (Agent Profiles design §6); the caller (run-create) has resolved and checked it. */
+    agentProfileId?: string
+    /** Made by a sandboxed session (Job.sandboxed); the caller (run-create) asked. */
+    sandboxed?: boolean
   },
   now: string
 ): Res<Job> {
@@ -279,6 +283,8 @@ export function createJob(
     // 빈 문자열은 싣지 않는다 — "지정 없음" 과 값이 갈라지고, 그 구분으로 코디네이터를 띄울지
     // 정하기 때문이다
     ...(a.coordinatorAccountId ? { coordinatorAccountId: a.coordinatorAccountId } : {}),
+    ...(a.agentProfileId ? { agentProfileId: a.agentProfileId } : {}),
+    ...(a.sandboxed ? { sandboxed: true as const } : {}),
     ...(a.autoDispatch ? { autoDispatch: true } : {}),
     ...(a.schedule ? { schedule: a.schedule } : {}),
     ...(a.pendingStart ? { pendingStart: true } : {}),
@@ -329,6 +335,14 @@ export function releaseJob(s: OrchState, jobId: string): Res<Job> {
  * status 는 createTask 와 **같은 방식**으로 정한다 — 전부 pending 으로 만든 뒤 recomputeReady 에
  * 맡긴다. 그래야 "deps 없는 Task 가 ready" 라는 규칙이 한 곳에만 있다.
  */
+/** Whether a worker of this Task starts in its CLI's sandbox whatever profile it names (final fix pass, C3): the Task
+ *  was added by a sandboxed session, or its Job, the one it defines or the one whose run holds it, was made by one. */
+export function workSandboxed(s: OrchState, task: Task): boolean {
+  if (task.sandboxed === true) return true
+  const jobId = task.jobId ?? s.runs.find((r) => r.id === task.runId)?.jobId
+  return jobId !== undefined && s.jobs.some((j) => j.id === jobId && j.sandboxed === true)
+}
+
 export function startJobRun(s: OrchState, jobId: string, now: string): Res<JobRun> {
   const job = s.jobs.find((j) => j.id === jobId)
   if (!job) return gone(`unknown job: ${jobId}`)
@@ -374,6 +388,8 @@ export function startJobRun(s: OrchState, jobId: string, now: string): Res<JobRu
       ? { parentId: idMap.get(t.parentId)! }
       : {}),
     ...(t.accountIds !== undefined ? { accountIds: [...t.accountIds] } : {}),
+    ...(t.agentProfileId !== undefined ? { agentProfileId: t.agentProfileId } : {}),
+    ...(t.sandboxed ? { sandboxed: true as const } : {}),
     ...(t.validateConfigId !== undefined ? { validateConfigId: t.validateConfigId } : {}),
     ...(t.validateConfigIds?.length ? { validateConfigIds: [...t.validateConfigIds] } : {}),
     ...(t.reviewRequested ? { reviewRequested: true } : {}),
@@ -620,6 +636,10 @@ export function createTask(
      *  core 는 계정 목록을 못 보므로 "하나 이상" 만 확인해도 그 하나가 실재하는지는 알 수 없고,
      *  반쪽 검사는 어느 쪽이 정본인지 흐린다. */
     accountIds?: string[]
+    /** The agent profile's real id (Agent Profiles design §6); the caller (task-create) has resolved it. */
+    agentProfileId?: string
+    /** Added by a sandboxed session (Task.sandboxed); the caller (task-create) asked. */
+    sandboxed?: boolean
     validateConfigId?: string
     validateConfigIds?: string[]
     reviewRequested?: boolean
@@ -651,6 +671,8 @@ export function createTask(
     // 빈 배열은 **지정 없음**이다 — 그것도 실으면 Task 를 값으로 비교하는 자리에서 지정이 없는
     // Task 와 갈라진다(조건부 전개를 쓰는 이유 그대로).
     ...(a.accountIds?.length ? { accountIds: a.accountIds } : {}),
+    ...(a.agentProfileId ? { agentProfileId: a.agentProfileId } : {}),
+    ...(a.sandboxed ? { sandboxed: true as const } : {}),
     ...(a.validateConfigId ? { validateConfigId: a.validateConfigId } : {}),
     ...(a.validateConfigIds?.length ? { validateConfigIds: a.validateConfigIds } : {}),
     ...(a.reviewRequested ? { reviewRequested: a.reviewRequested } : {}),
@@ -677,6 +699,9 @@ export function openDispatch(
     /** 소진 Gate 의 retry-once 만 쓴다 — 사람이 "한 번 더" 라고 말한 자리이고, 그 한 번은
      *  예산 밖이다(설계 §5.2). 그 밖의 모든 호출은 회로를 그대로 본다. */
     ignoreCircuit?: boolean
+    /** The Dispatch types into a session already running (worker-start `--terminal`): that session runs as whatever it
+     *  was started as, so no agent profile is recorded for this attempt. */
+    reusesSession?: boolean
   },
   now: string
 ): Res<Dispatch> {
@@ -720,6 +745,7 @@ export function openDispatch(
   if (sessionOpen) return err(`sessionId already in use by an open dispatch: ${sessionOpen.id}`)
   const moved = moveTask(task, 'dispatched', now)
   if (!moved) return err(`cannot dispatch from status: ${task.status}`)
+  const profile = a.reusesSession ? undefined : workerProfileOf(s, task)
   const dispatch: Dispatch = {
     id: newId('dsp'),
     taskId: a.taskId,
@@ -735,7 +761,9 @@ export function openDispatch(
     ...(a.repair ? { repair: a.repair } : {}),
     // 열 때 한 번만 적는다 — 나중에 카운트로 되짚지 않는다(Dispatch.grantedExtra 의 주석, 전체 브랜치
     // 리뷰 Finding 3).
-    ...(a.ignoreCircuit ? { grantedExtra: true } : {})
+    ...(a.ignoreCircuit ? { grantedExtra: true } : {}),
+    // The worker's spawn reads it from here (worker-start, recovery): what the Task runs as when it is opened
+    ...(profile !== undefined ? { agentProfileId: profile } : {})
   }
   return ok(
     { ...s, tasks: replace(s.tasks, moved), dispatches: [...s.dispatches, dispatch] },
@@ -1141,6 +1169,8 @@ export function openRepairDispatch(
   if (sessionOpen) return err(`sessionId already in use by an open dispatch: ${sessionOpen.id}`)
   const moved = moveTask(task, 'dispatched', now)
   if (!moved) return err(`cannot dispatch from status: ${task.status}`)
+  // A same-session repair types into a session already running as whatever it was started as
+  const profile = a.target.kind === 'same-session' ? undefined : workerProfileOf(s, task)
   const dispatch: Dispatch = {
     id: newId('dsp'),
     taskId: a.taskId,
@@ -1153,7 +1183,9 @@ export function openRepairDispatch(
     startedAt: now,
     workerState: 'ready',
     retained: false,
-    repair: a.reason
+    repair: a.reason,
+    // performRepair's spawn reads it from here, borrowed with the accounts for a lifecycle Task (workerProfileOf)
+    ...(profile !== undefined ? { agentProfileId: profile } : {})
   }
   return ok({ ...s, tasks: replace(s.tasks, moved), dispatches: [...s.dispatches, dispatch] }, dispatch)
 }

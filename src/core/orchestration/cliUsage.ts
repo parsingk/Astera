@@ -37,6 +37,7 @@
 // The text is plain, not JSON, and no part of it needs a Host. `--help` is for a person, and a
 // person asking what the commands are must get an answer with nothing running.
 import { APP_VERBS, BROWSER_VERBS, NOUNS, camel, leadingGlobals, renamedTo, verbsOf } from './cliArgs'
+import { AUDIT_ACTIONS } from '../audit/policy'
 
 /** `jobs-wait`, `host-start`, … — every noun/verb pair `NOUNS` declares. */
 type NounCommand = {
@@ -109,6 +110,43 @@ const JOB_MAKING_FLAGS: readonly UsageFlag[] = [
   { name: 'github-checks', value: '<name,...>', about: 'CI checks that decide beside the ones the repository requires; needs --github-lifecycle' }
 ]
 
+/** `agent-profiles create`'s flags, and `update`'s, where none is required. */
+const AGENT_PROFILE_FLAGS = (creating: boolean): UsageFlag[] => [
+  { name: 'name', value: '<text>', ...(creating ? { required: true as const } : {}), about: 'what to call it, unique, at most 60 characters' },
+  {
+    name: 'account',
+    value: '<id,…>',
+    ...(creating ? { required: true as const } : {}),
+    about: "its accounts, one provider's, in the order they are tried (from `accounts list`)"
+  },
+  { name: 'exclude-mcp', value: '<name,…>', about: 'the shared MCP servers its sessions do not get (from `ext list`)' },
+  { name: 'permission', value: '<inherit|bypass|ask>', about: "permission prompts: Astera's setting (inherit), none (bypass) or shown (ask)" },
+  { name: 'sandbox', value: '<on|off>', about: "start its sessions, terminal and chat, in their CLI's own sandbox; Claude Code on Windows gets deny rules only (default: off)" },
+  { name: 'description', value: '<text>', about: 'a line saying what it is for' }
+]
+
+/** `audit list`'s and `audit summary`'s filters (observe mode design §12). */
+const AUDIT_FILTERS: readonly UsageFlag[] = [
+  { name: 'session', value: '<sessionId>', about: "only this session's calls (from `sessions list`)" },
+  { name: 'job', value: '<jobId>', about: "only the calls of this Job's workers and coordinator" },
+  { name: 'run', value: '<runId>', about: "only the calls of this run's workers and coordinator" },
+  { name: 'task', value: '<taskId>', about: "only the calls of this task's workers" },
+  { name: 'agent-profile', value: '<id|name>', about: 'only the calls of sessions started from this agent profile (from `agent-profiles list`)' },
+  { name: 'action', value: '<action>', about: 'only this action, or the actions a start ending in * names (git.*)' },
+  { name: 'decision', value: '<allow|would-deny|unknown|blocked>', about: 'only the calls the rules in force decide so, or Enforce blocked' },
+  { name: 'since', value: '<time>', about: 'only calls at or after this time (2026-10-23T09:00:00Z)' },
+  { name: 'until', value: '<time>', about: 'only calls before this time' }
+]
+
+/** What a rule's `--action` takes, said once for `rules-add` and `rules-edit`. */
+const RULE_ACTION = `An action is one of ${AUDIT_ACTIONS.join(', ')}, or the start of one ending in * (git.* matches every git action).`
+const RULE_ID: UsageFlag = ID('<ruleId>', 'the rule (from `policies show`)')
+const RULE_SCOPE: UsageFlag = {
+  name: 'scope',
+  value: '<inside-project|outside-project>',
+  about: "match only calls inside, or outside, the session's project folder"
+}
+
 /** The job-source commands' flags (plugin Phase 4 J21). */
 const SOURCE: UsageFlag = { name: 'source', value: '<sourceId>', required: true, about: 'the source (from `sources list`)' }
 const ITEM: UsageFlag = { name: 'item', value: '<itemId>', required: true, about: 'the item (from `sources items`)' }
@@ -158,7 +196,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'mcp-serve': {
     summary: 'serve Astera to an MCP client over stdio',
     detail:
-      'For an MCP client to launch, not for a person to type: stdout carries the MCP protocol. It connects to the Host of this profile, starting one when none answers, and serves forty-one tools that create, plan, run, observe, answer, stop and resume Jobs, read and use sessions when Settings allows it, read pull requests, CI and issues on GitHub and, when Settings allows it, act on them, read the job sources and make a Job from an item, read the How It Works records of a project and regenerate one, and list the Runtimes this machine is paired with. What it may do is set by MCP access in Settings (CLI tab). See docs/mcp.md.'
+      'For an MCP client to launch, not for a person to type: stdout carries the MCP protocol. It connects to the Host of this profile, starting one when none answers, and serves forty-two tools that create, plan, run, observe, answer, stop and resume Jobs, read and use sessions when Settings allows it, read pull requests, CI and issues on GitHub and, when Settings allows it, act on them, read the job sources and make a Job from an item, read the How It Works records of a project and regenerate one, list the agent profiles, and list the Runtimes this machine is paired with. What it may do is set by MCP access in Settings (CLI tab). See docs/mcp.md.'
   },
   'runtime-start': {
     summary: 'turn Remote Runtime on: other machines may pair with this one',
@@ -320,17 +358,22 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'jobs-run': {
     summary: 'start a run of this Job now',
     detail:
-      'Returns the run it started, which is the id to pass to `runs wait`. Refused while a run of this Job is already going.',
+      'Returns the run it started, which is the id to pass to `runs wait`. Refused while a run of this Job is already going. From inside an agent session, a Job made as a bypass agent profile, or whose tasks the run would copy name one, is refused with 5 unless Astera\'s "Run agents without permission checks" is on. From inside a sandboxed session, a Job no sandboxed session made is refused with 5 (SANDBOX_UNAVAILABLE: outside-sandbox job <jobId>).',
     flags: [ID('<jobId>', 'the Job to run')]
   },
   'jobs-create': {
     summary: 'create a Job with no run yet',
     detail:
-      'Returns the Job. Nothing runs until `jobs run`: add its tasks first with `tasks add --job`. Without --cwd the Job belongs to the directory this command was run from. With --coordinator-account a coordinator session starts on that account when the Job runs; without it the workers are placed for you. A Host that announces dispatch places them whether Astera is open or closed, and otherwise Astera does.',
+      'Returns the Job. Nothing runs until `jobs run`: add its tasks first with `tasks add --job`. Without --cwd the Job belongs to the directory this command was run from. With --coordinator-account a coordinator session starts on that account when the Job runs; without it the workers are placed for you. A Host that announces dispatch places them whether Astera is open or closed, and otherwise Astera does. From inside an agent session, a bypass agent profile is refused with 5 unless the setting "Run agents without permission checks" is on.',
     flags: [
       { name: 'objective', value: '<text>', required: true, about: 'what this Job is for' },
       { name: 'cwd', value: '<path>', about: 'the repository root this Job belongs to (default: here)' },
-      ...JOB_MAKING_FLAGS
+      ...JOB_MAKING_FLAGS,
+      {
+        name: 'agent-profile',
+        value: '<id|name>',
+        about: 'the agent profile its tasks run as unless a task names its own (from `agent-profiles list`); it does not pick the coordinator'
+      }
     ]
   },
   'jobs-create-from-source': {
@@ -376,12 +419,14 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   },
   'runs-resume': {
     summary: 'let a paused run go again',
+    detail:
+      'From inside an agent session, a run of a Job made as a bypass agent profile, or with an unfinished task that names one, is refused with 5 unless Astera\'s "Run agents without permission checks" is on. From inside a sandboxed session, a run of a Job no sandboxed session made is refused with 5 (SANDBOX_UNAVAILABLE: outside-sandbox job <jobId>).',
     flags: [ID('<runId>', 'the run to resume')]
   },
   'runs-reconverge': {
     summary: 'carry a finished GitHub lifecycle run through GitHub again',
     detail:
-      'Adds a new lifecycle task to the run, with a fresh repair and rerun budget, once its latest one completed or failed, and drops the old merge-ready evidence. Refused (409) for a run whose job is not carried through GitHub, a run with no branch of its own (or whose branch was removed), a run not carried through GitHub yet, a run whose lifecycle task still works, and a pull request that is merged or closed (the Host reads it from GitHub first). A worker session Astera started is refused (5). MCP clients need the "Let MCP clients act on GitHub" setting.',
+      'Adds a new lifecycle task to the run, with a fresh repair and rerun budget, once its latest one completed or failed, and drops the old merge-ready evidence. Refused (409) for a run whose job is not carried through GitHub, a run with no branch of its own (or whose branch was removed), a run not carried through GitHub yet, a run whose lifecycle task still works, and a pull request that is merged or closed (the Host reads it from GitHub first). A worker session Astera started is refused (5). MCP clients need the "Let MCP clients act on GitHub" setting. From inside an agent session, a run of a Job made as a bypass agent profile, or with a task that names one, is refused with 5 unless Astera\'s "Run agents without permission checks" is on.',
     flags: [ID('<runId>', 'the run to carry again')]
   },
   'runs-checks': {
@@ -406,7 +451,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'tasks-add': {
     summary: 'add a task to a Job, or to one run of it',
     detail:
-      'Exactly one of --job or --run. A task added to a Job is copied into every run `jobs run` starts from then on; a task added to a run belongs to that run only. An id of the other kind is not found (4), never quietly the other thing. Returns the task.',
+      "Exactly one of --job or --run. A task added to a Job is copied into every run `jobs run` starts from then on; a task added to a run belongs to that run only. An id of the other kind is not found (4), never quietly the other thing. Returns the task. With --agent-profile, or in a Job made with one, the task runs as that agent profile: without --account it runs on the profile's accounts, copied now, and with --account on those, the profile still deciding its MCP servers and permission prompts. A profile named here must not be archived (2); a task that only inherits its Job's archived profile still gets that profile's accounts. From inside an agent session, a task that would run as a bypass profile, named or its Job's, is refused with 5 unless Astera's \"Run agents without permission checks\" is on. The coordinator Astera started for a run is not asked about its Job's profile when adding tasks to that run, only about one it names; a session driving the run from outside is asked.",
     flags: [
       { name: 'job', value: '<jobId>', about: 'the Job to add it to (exactly one of --job or --run)' },
       { name: 'run', value: '<runId>', about: 'the run to add it to (exactly one of --job or --run)' },
@@ -419,8 +464,12 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
       {
         name: 'account',
         value: '<id,…>',
-        required: true,
-        about: 'the accounts a worker may run on, in failover order (from `accounts list`)'
+        about: 'the accounts a worker may run on, in failover order (from `accounts list`); required unless an agent profile gives them'
+      },
+      {
+        name: 'agent-profile',
+        value: '<id|name>',
+        about: "the agent profile it runs as (from `agent-profiles list`); default: its Job's"
       },
       { name: 'title', value: '<text>', about: "a short name (default: the spec's first line)" },
       { name: 'deps', value: '<json array>', about: 'the task ids this one waits for' },
@@ -438,7 +487,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'tasks-dispatch': {
     summary: 'place one ready task now, the way the loop places one',
     detail:
-      'The Host places it through the same path its loop uses: the account the task names, the run worktree, the placement, then worker-start, so the answer is the worker it started (dispatchId, sessionId). Refused with 6 when the task is not ready, the run is paused or not running, the run is at its concurrency limit, the run is driven by a coordinator (tell the coordinator instead, or stop the run first), or the Host does not drive Jobs right now. What would open a question in the loop (no usable account, a worktree that cannot be made) is a 6 with the reason instead, and nothing is opened. It is for a person or a script, so a worker session is refused with 5. With --request-id a retry is not placed twice.',
+      'The Host places it through the same path its loop uses: the account the task names, the run worktree, the placement, then worker-start, so the answer is the worker it started (dispatchId, sessionId). Refused with 6 when the task is not ready, the run is paused or not running, the run is at its concurrency limit, the run is driven by a coordinator (tell the coordinator instead, or stop the run first), or the Host does not drive Jobs right now. What would open a question in the loop (no usable account, a worktree that cannot be made) is a 6 with the reason instead, and nothing is opened. It is for a person or a script, so a worker session is refused with 5. From inside an agent session, a task that names a bypass agent profile is refused with 5 unless Astera\'s "Run agents without permission checks" is on. From inside a sandboxed session, a task whose worker would not start in the sandbox (neither it nor its Job was made by a sandboxed session) is refused with 5 (SANDBOX_UNAVAILABLE: outside-sandbox task <taskId>). With --request-id a retry is not placed twice.',
     flags: [ID('<taskId>', 'the task to place (from `tasks list --ready`)')]
   },
 
@@ -456,6 +505,8 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   },
   'questions-answer': {
     summary: 'answer an open question',
+    detail:
+      'From inside an agent session, an answer that starts a task that runs as a bypass agent profile again (any answer but `mark-failed` on a question whose repair budget is used up, or `continue` or `retry` on a GitHub question, which start its round afresh) is refused with 5 unless Astera\'s "Run agents without permission checks" is on; any other answer is not. From inside a sandboxed session, any answer but `mark-failed` to a question of a task that does not run in the sandbox is refused with 5 (SANDBOX_UNAVAILABLE: outside-sandbox task <taskId>).',
     flags: [
       ID('<questionId>', 'the question to answer'),
       {
@@ -512,11 +563,144 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
       "The sync the Host runs whenever the shared extensions change. Each item comes back per account as written, unchanged, adopted, restored (an edited copy put back; the edit is kept in extension-state/backups), conflict (the account has its own different copy, left alone), removed, forgotten, not-applicable or failed, and any failed makes it exit 1. Running it twice changes nothing the second time. It needs no Host and no app."
   },
 
+  // Answered by the Host (Agent Profiles design §6), like the sessions below; the CLI resolves a name to the id first.
+  'agent-profiles-list': {
+    summary: 'the agent profiles: named sets of accounts, MCP servers and a permission choice',
+    detail:
+      'Each with its id, name, status (active or archived), accounts in order (an account removed from Astera is left out), `mcpExclude` (the ids of the shared MCP servers it leaves out, as `ext list` names them), `permission` and `sandbox` (whether its sessions, terminal and chat, start in the sandbox of their CLI). Answered by the Host, so it works with Astera closed.'
+  },
+  'agent-profiles-show': {
+    summary: 'one agent profile, by its id or its name',
+    flags: [ID('<profileId|name>', 'the profile (a name is matched without regard to case)')]
+  },
+  'agent-profiles-create': {
+    summary: 'make an agent profile',
+    detail:
+      "Returns the profile. Its accounts must be one provider's, in the order they are tried. --exclude-mcp names shared MCP servers its sessions do not get, as `ext list` names them; a name no shared server has is 2, naming it. Skills and commands are shared by every profile. --permission is inherit (Astera's setting, the default), bypass (run without permission checks) or ask (run with permission checks). --sandbox on starts its sessions, terminal and chat, in their CLI's own sandbox (Codex's, or Claude Code's on macOS and Linux; on Windows Claude Code has none, and gets only deny rules that keep its file tools out of the folders holding logins), and a session the sandbox cannot be applied to does not start, saying why; off, the default, starts them as before. On Windows each Codex account's home needs the sandbox set up once, which the app offers when a start is refused for it. A name another profile has is 2. Changing profiles is for a person: from inside an agent session it is refused with 5.",
+    flags: AGENT_PROFILE_FLAGS(true)
+  },
+  'agent-profiles-update': {
+    summary: 'change an agent profile: only the flags given',
+    detail:
+      'Returns the profile. --account and --exclude-mcp replace the lists; `--exclude-mcp ""` leaves no server out. Work already holding the profile reads the change when it next starts a session, except that a session rolling onto its next account keeps the sandbox state it started with, whatever --sandbox says by then. From inside an agent session it is refused with 5.',
+    flags: [ID('<profileId|name>', 'the profile to change'), ...AGENT_PROFILE_FLAGS(false)]
+  },
+  'agent-profiles-archive': {
+    summary: 'keep a profile but start no new work as it',
+    detail: 'Work that already holds it goes on. `agent-profiles restore` takes it back. From inside an agent session it is refused with 5.',
+    flags: [ID('<profileId|name>', 'the profile to archive')]
+  },
+  'agent-profiles-restore': {
+    summary: 'let an archived profile start work again',
+    detail: 'From inside an agent session it is refused with 5.',
+    flags: [ID('<profileId|name>', 'the profile to restore')]
+  },
+  'agent-profiles-delete': {
+    summary: 'delete an agent profile',
+    detail:
+      'Refused with 6 while unfinished work holds it (a live session, a queued or running task, an unfinished Job): archive it instead. From inside an agent session it is refused with 5.',
+    flags: [ID('<profileId|name>', 'the profile to delete')]
+  },
+
+  // Answered by the Host (observe mode design §12): the records are read back with the decision the rules give them now.
+  'audit-list': {
+    summary: 'the tool calls observe mode recorded, newest first, each with what the rules would do with it',
+    detail:
+      'Each call with its session, action, short target (never the full command, output or file contents) and the decision the rules in force give it now: allow, would-deny or unknown (the rules cannot tell), with `ruleId`, the rule that decided, when one did. The decision is never stored, so editing a rule changes what past calls show. The filters combine. `truncated` says --limit cut the list, and `next` holds the --until and --before-id that ask for the next page. Answered by the Host, so it works with Astera closed. The log of what agents did is for a person: from inside an agent session it is refused with 5.',
+    flags: [
+      ...AUDIT_FILTERS,
+      { name: 'before-id', value: '<recordId>', about: 'with --until, the page after this record (both from the last page’s `next`)' },
+      { name: 'limit', value: '<n>', about: 'how many, from 1 to 2000 (default 200)' }
+    ]
+  },
+  'audit-summary': {
+    summary: 'how many recorded calls the rules allow, would deny or cannot tell, in all and per action',
+    detail:
+      'The counts for the calls the filters keep, decided by the rules in force now. `stoppedAtLimit` is true when a day of the period stopped recording at the size limit, so it holds fewer calls than were made. From inside an agent session it is refused with 5.',
+    flags: AUDIT_FILTERS
+  },
+  // Answered by the Host (credentials design §7): what Astera keeps out of agent sessions, read here, changed in the app.
+  'credentials-list': {
+    summary: 'what the Credentials list keeps out of agent sessions: shared MCP servers\' secrets and the entries you registered',
+    detail:
+      'Each entry with the variable names and CLI login presets it hides, whether hiding is on, and the projects it is narrowed to (none: every agent session). Shared MCP servers that hold a stored secret appear on their own, hidden by default; the entries you registered hold no value, only names. Nothing is a value. The list is changed only in the Astera app (Settings › Security & Access › Credentials), so an agent cannot switch off its own hiding. A change counts for sessions started afterwards. An agent session may read it.'
+  },
+  'credentials-show': {
+    summary: 'one entry of the Credentials list, by its id or its name, with its last uses',
+    detail:
+      'A shared MCP server is named by its server name or `mcp:<id>`; its last 20 uses through the Gateway come with it, except to an agent session, which may read the entry but not its uses. A name two entries share answers with their ids; use one.',
+    flags: [ID('<id|name>', 'the entry')]
+  },
+  'credentials-doctor': {
+    summary: 'what hiding reaches and what it cannot, on this machine',
+    detail:
+      'Each entry\'s hiding, the presets and the platforms they were measured on, the names that are never hidden (what the CLIs and Astera need, and what the OS gives every program, such as PATH and TEMP), where a login made inside a session goes (that session\'s own empty location), and the limits: a program running as you can still read your files and OS stores, git and Docker hand their stored logins to any program that asks, and a variable your shell startup files set can come back in the commands an agent runs through a shell. Then what the sandbox of an agent profile does for each CLI on each OS, and its limits. An agent session may read it.'
+  },
+  'policies-show': {
+    summary: 'whether observe mode is on, the rules in order, and what it can see',
+    detail:
+      '`mode` is compatibility (nothing is observed), observe or enforce. The first rule whose action matches a call decides it; `otherwise` decides a call no rule matches. Until observe is first turned on these are the starter rules, and nothing is written. `coverage` says, per provider and kind of session, what observe can see of shell commands, file reads and writes, MCP calls and network requests, and `enforceCoverage` what enforce blocks of them. `sandboxCoverage` says, per CLI and OS, what the sandbox of an agent profile blocks of writes, the folders holding logins and the OS secret store, and that it allows the network; a note says where only the file tools are kept out, or where the runtime the sandbox of a CLI runs on was measured rather than the CLI itself. An agent session may read it.'
+  },
+  'policies-set-mode': {
+    summary: 'turn observe or enforce mode on, or both off',
+    detail:
+      'Sessions started afterwards follow it; a running session keeps what it started with. The first time observe or enforce is turned on the starter rules are written. In enforce every session Astera starts runs a blocking hook before each tool call: a call the rules deny does not run, and is recorded as blocked. Turning it off keeps the records and the rules. From inside an agent session it is refused with 5.',
+    flags: [
+      {
+        name: 'mode',
+        value: '<compatibility|observe|enforce>',
+        required: true,
+        about: 'compatibility observes nothing; observe records every tool call; enforce also stops the calls the rules deny'
+      }
+    ]
+  },
+  'policies-set-otherwise': {
+    summary: 'what a call no rule matches gets',
+    detail: 'From inside an agent session it is refused with 5.',
+    flags: [{ name: 'effect', value: '<allow|deny>', required: true, about: 'allow, or deny (shown as would-deny)' }]
+  },
+  'policies-rules-add': {
+    summary: 'add a rule, at the end or at a place in the list',
+    detail: `Returns the rule with its id, and the rules. ${RULE_ACTION} A rule with --scope matches only calls known to be inside, or outside, the session's project folder. From inside an agent session it is refused with 5.`,
+    flags: [
+      { name: 'effect', value: '<allow|deny>', required: true, about: 'what a call it matches gets' },
+      { name: 'action', value: '<action>', required: true, about: 'the action it matches, or the start of one ending in * (git.*)' },
+      RULE_SCOPE,
+      { name: 'at', value: '<n>', about: 'its place in the list, from 0 (default: the end)' }
+    ]
+  },
+  'policies-rules-edit': {
+    summary: 'change a rule: only the flags given',
+    detail: `Returns the rule, and the rules. ${RULE_ACTION} --clear-scope makes it match wherever the call was. An edit that names none of --effect, --action, --scope and --clear-scope is refused with 2 (reason nothing-to-change). A rule that is not there is 4. From inside an agent session it is refused with 5.`,
+    flags: [
+      RULE_ID,
+      { name: 'effect', value: '<allow|deny>', about: 'what a call it matches gets' },
+      { name: 'action', value: '<action>', about: 'the action it matches, or the start of one ending in * (git.*)' },
+      RULE_SCOPE,
+      { name: 'clear-scope', about: 'match wherever the call was (not with --scope)' }
+    ]
+  },
+  'policies-rules-remove': {
+    summary: 'remove a rule',
+    detail: 'A rule that is not there is 4. From inside an agent session it is refused with 5.',
+    flags: [RULE_ID]
+  },
+  'policies-rules-move': {
+    summary: 'move a rule to another place in the list',
+    detail: 'The rules are tried in order, so a rule moved up decides before the ones it passed. A rule that is not there is 4. From inside an agent session it is refused with 5.',
+    flags: [RULE_ID, { name: 'to', value: '<n>', required: true, about: 'its new place in the list, from 0' }]
+  },
+  'policies-rules-reset': {
+    summary: 'put back the starter rules and their otherwise; the mode stays',
+    detail:
+      'It also repairs a damaged rules file, a copy of which was kept beside it, and writes compatibility then (the mode sessions were starting in while it was damaged). When that copy could not be kept it is refused with 6 and leaves the file as it is. From inside an agent session it is refused with 5.'
+  },
+
   // Answered by the Host out of its own registries, so the app may be closed; it needs a Host.
   'sessions-list': {
     summary: 'the agent sessions the Host holds, running and ended',
     detail:
-      'Each with its id, which is the id `sessions read` and `sessions send` take and the one `ASTERA_SESSION` holds inside that session. `kind` is terminal (an agent CLI in a terminal) or chat. `state` is working, waiting or unknown, from the hook events a Claude terminal session writes; Codex and chat sessions are always unknown, and so is a session typed into since its last event. Plain shell tabs and run configurations are not sessions and are not listed. Answered by the Host, so it works with Astera closed. --status alive or ended reads `alive`, and working, waiting or unknown reads `state`. --provider is the provider of the account the session runs on, as `accounts list` prints it; a session whose account is gone matches neither. Any other value is refused with 2. --project keeps the sessions whose folder is inside the project (found the way `projects find` finds it), and the workers and coordinators of its runs wherever their worktree is; a folder no project holds is 4.',
+      'Each with its id, which is the id `sessions read` and `sessions send` take and the one `ASTERA_SESSION` holds inside that session. `kind` is terminal (an agent CLI in a terminal) or chat. `state` is working, waiting or unknown, from the hook events a Claude terminal session writes; Codex and chat sessions are always unknown, and so is a session typed into since its last event. A session started from an agent profile carries `agentProfileId`, and one running in the sandbox of its agent CLI `sandboxed` and `sandboxKind` (sandbox, or deny-only for Claude Code on Windows). Plain shell tabs and run configurations are not sessions and are not listed. Answered by the Host, so it works with Astera closed. --status alive or ended reads `alive`, and working, waiting or unknown reads `state`. --provider is the provider of the account the session runs on, as `accounts list` prints it; a session whose account is gone matches neither. Any other value is refused with 2. --project keeps the sessions whose folder is inside the project (found the way `projects find` finds it), and the workers and coordinators of its runs wherever their worktree is; a folder no project holds is 4.',
     flags: [
       { name: 'status', value: '<alive|ended|working|waiting|unknown>', about: 'only sessions in this state' },
       { name: 'provider', value: '<claude|codex>', about: "only sessions on this vendor's accounts" },
@@ -540,7 +724,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'sessions-send': {
     summary: 'type into a terminal session and press Enter, or send a chat session one turn',
     detail:
-      'A terminal session: writes the text, then Enter 150ms later, the way the app delivers a scheduled message. It types into whatever the session shows, a permission prompt included, so read it first; from inside an agent session, a send into a terminal session at a permission prompt or a question is refused with 6 before anything is typed. A chat session: the text is one turn, delivered by whichever process is that session\'s writer. With Astera open and holding the session, the app delivers it, and a session waiting on a card (an approval or a question) is refused with 6 naming the card: answer it with `chats answer`, or in Astera. Just after Astera starts, a session it has not taken back yet is a 6 as well. Otherwise, once the Host holds an adapter for the session, the Host delivers it itself, Astera closed included, refusing the same way for an open card; for a Codex session it sends only the text, with no model, effort or plan mode, so the settings the thread has now apply. A session the Host holds no adapter for still takes a blind write that queues behind any card. A send refused for a card, for a session not taken back yet or for a Codex session with no thread sent nothing, so the same --request-id can be used again. --no-enter is for terminal sessions only. One send at a time per session either way. `--text -` drops one trailing newline. A session that has ended is refused with 6. Any process running as you can do this to any session, agent sessions included. With --request-id a retry is not sent twice. --wait then waits until the turn ends: for a terminal session when its hook events leave it waiting with no prompt, for a chat session when its adapter goes back to idle. It exits 0 when the turn ended, 8 when a permission prompt or a question opened first (`details.promptId` names a chat prompt for `chats answer`), 7 when the deadline passed, and 1 when the session ended first; `data.turn` says which. A Codex terminal session writes no hook events, a chat session nothing holds cannot be read, and a terminal session busy in a turn would end the wait on that turn, so all three are refused with 6 before anything is typed. --wait with --no-enter is 2.',
+      'A terminal session: writes the text, then Enter once the session has shown it and gone quiet (5 seconds at most), the way the app delivers a scheduled message. It types into whatever the session shows, a permission prompt included, so read it first; from inside an agent session, a send into a terminal session at a permission prompt or a question is refused with 6 before anything is typed. A chat session: the text is one turn, delivered by whichever process is that session\'s writer. With Astera open and holding the session, the app delivers it, and a session waiting on a card (an approval or a question) is refused with 6 naming the card: answer it with `chats answer`, or in Astera. Just after Astera starts, a session it has not taken back yet is a 6 as well. Otherwise, once the Host holds an adapter for the session, the Host delivers it itself, Astera closed included, refusing the same way for an open card; for a Codex session it sends only the text, with no model, effort or plan mode, so the settings the thread has now apply. A session the Host holds no adapter for still takes a blind write that queues behind any card. A send refused for a card, for a session not taken back yet or for a Codex session with no thread sent nothing, so the same --request-id can be used again. --no-enter is for terminal sessions only. One send at a time per session either way. `--text -` drops one trailing newline. A session that has ended is refused with 6. From inside a sandboxed session, a send to a session that is not sandboxed is refused with 5 before anything is typed (SANDBOX_UNAVAILABLE: outside-sandbox session <sessionId>). Any process running as you can do this to any session, agent sessions included. With --request-id a retry is not sent twice. --wait then waits until the turn ends: for a terminal session when its hook events leave it waiting with no prompt, for a chat session when its adapter goes back to idle. It exits 0 when the turn ended, 8 when a permission prompt or a question opened first (`details.promptId` names a chat prompt for `chats answer`), 7 when the deadline passed, and 1 when the session ended first; `data.turn` says which. A Codex terminal session writes no hook events, a chat session nothing holds cannot be read, and a terminal session busy in a turn would end the wait on that turn, so all three are refused with 6 before anything is typed. --wait with --no-enter is 2.',
     flags: [
       ID('<sessionId>', 'the session to type into (from `sessions list`)'),
       { name: 'text', value: '<text|->', required: true, about: 'what to type (a value of `-` reads it from stdin)' },
@@ -552,9 +736,10 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'sessions-create': {
     summary: 'start a terminal or chat session on an account, in a folder',
     detail:
-      "The Host starts it, so Astera may be open or closed: a terminal session the way it starts a worker (the agent CLI in a terminal, with Astera's hooks, the folder trusted, and its permission prompts on or off as Astera's setting says), a chat session the way it restarts one after a roll. With Astera open, it takes the session back and shows it as a tab. Answers the session as `sessions list` shows it; its id is what `sessions read` and `sessions send` take. --prompt is the first thing it is asked. --roll-accounts is the chain it rolls onto at a usage limit, --account first unless you place it; every account must be one vendor's. --unattended is for chat sessions: hold (the default) leaves a permission prompt open for someone to answer, deny-after-60s denies it after a minute when nobody has. A folder that does not exist is 2, an unknown account 4, and a Host started without the agent CLI paths is 6. A worker session (one with an open Dispatch) is refused with 5. With --request-id a retry does not start a second session.",
+      "The Host starts it, so Astera may be open or closed: a terminal session the way it starts a worker (the agent CLI in a terminal, with Astera's hooks, the folder trusted, and its permission prompts on or off as Astera's setting says), a chat session the way it restarts one after a roll. With Astera open, it takes the session back and shows it as a tab. Answers the session as `sessions list` shows it; its id is what `sessions read` and `sessions send` take. --prompt is the first thing it is asked. --roll-accounts is the chain it rolls onto at a usage limit, --account first unless you place it; every account must be one vendor's. --unattended is for chat sessions: hold (the default) leaves a permission prompt open for someone to answer, deny-after-60s denies it after a minute when nobody has. A folder that does not exist is 2, an unknown account 4, and a Host started without the agent CLI paths is 6. A worker session (one with an open Dispatch) is refused with 5. With --request-id a retry does not start a second session. With --agent-profile the session starts from that agent profile, which decides its shared MCP servers and its permission prompts; without --account it runs on the profile's first account and rolls onto the others in order. An unknown or archived profile, or one with no account left, is 2. From inside an agent session, a bypass profile is refused with 5 unless Astera's \"Run agents without permission checks\" is on. From inside a sandboxed session the new session starts in its CLI's sandbox whatever its profile says, and where that CLI has none (Claude Code on Windows) it is not started (SANDBOX_UNAVAILABLE: no-sandbox).",
     flags: [
-      { name: 'account', value: '<accountId>', required: true, about: 'the account it runs on (from `accounts list`)' },
+      { name: 'account', value: '<accountId>', about: 'the account it runs on (from `accounts list`); required unless --agent-profile gives it' },
+      { name: 'agent-profile', value: '<id|name>', about: 'the agent profile it starts from (from `agent-profiles list`)' },
       { name: 'cwd', value: '<path>', required: true, about: 'the folder it starts in (a relative path is from here)' },
       { name: 'kind', value: '<terminal|chat>', about: 'terminal (default) or chat' },
       { name: 'title', value: '<text>', about: "the tab's title (default: the folder's name)" },

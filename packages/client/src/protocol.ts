@@ -95,19 +95,30 @@ export interface ClientHelloMessage {
   remote?: string
 }
 
-/** One RPC call, routed by `cmd` (host control plane design §5). `call` is the caller's own
- *  correlation id — one socket can have several `orch-call`s outstanding at once, so the reply
- *  names which one it answers. `args`/`session` are today's HTTP body and `x-astera-session`
- *  header, carried unchanged. Answered only for a socket that has said hello — the Host's
- *  `greetedSockets` guard (design §9) — the same rule every other reply already follows. */
-/** `request` is the caller's own id for the *request*, as opposed to `call`, which is its id for
- *  this attempt on this socket (request receipts design §8). It rides the envelope rather than
- *  `args` because it is not an argument to any command: no `case` in `handleCommand` reads it, and
- *  the Host decides from it alone whether this call is a first attempt or a retry of one it has
- *  already answered. Additive, so HOST_PROTOCOL stays 3 — a Host from before it destructures
- *  `{cmd, args, session}` and runs the command unprotected, which is why the CLI must not send a
- *  *presented* id to a Host that has not announced the feature. */
-export interface OrchCallMessage { t: 'orch-call'; call: string; cmd: string; args: Record<string, unknown>; session?: string; request?: string }
+/** One RPC call, routed by `cmd` (host control plane design §5). Answered only for a socket that has said hello — the
+ *  Host's `greetedSockets` guard (design §9) — the same rule every other reply already follows. */
+export interface OrchCallMessage {
+  t: 'orch-call'
+  /** The caller's own correlation id: one socket can have several `orch-call`s outstanding at once, so the reply names
+   *  which one it answers. */
+  call: string
+  cmd: string
+  /** Today's HTTP body, carried unchanged. */
+  args: Record<string, unknown>
+  /** Today's `x-astera-session` header, carried unchanged. */
+  session?: string
+  /** The caller's own id for the *request*, as opposed to `call`, which is its id for this attempt on this socket
+   *  (request receipts design §8). It rides the envelope rather than `args` because it is not an argument to any command:
+   *  no `case` in `handleCommand` reads it, and the Host decides from it alone whether this call is a first attempt or a
+   *  retry of one it has already answered. Additive, so HOST_PROTOCOL stays 3 — a Host from before it destructures
+   *  `{cmd, args, session}` and runs the command unprotected, which is why the CLI must not send a *presented* id to a
+   *  Host that has not announced the feature. */
+  request?: string
+  /** The calling session's workload token (its `ASTERA_GATEWAY_TOKEN`). A Host that knows it reads the session from the
+   *  token and ignores `session`, and refuses a token it does not hold with status 401. An older Host does not know the
+   *  field and uses `session`, so the CLI sends both. */
+  token?: string
+}
 
 export interface HostHelloMessage {
   t: 'hello'
@@ -126,6 +137,11 @@ export interface HostHelloMessage {
   /** HMAC of the client's `nonce` under the profile's Host key (core/host/hostKey.ts). Sent only
    *  in answer to a nonce. */
   proof?: string
+  /** A random value this Host made for this connection alone, sent only in answer to a hello that named `role: 'app'`
+   *  (sandbox follow-ups, item 1). The socket is a CLI until it answers with `app-proof`, the HMAC of this under the
+   *  profile's app key (hostKey.ts `appProof`), which the Host checks once, on this connection only. Absent from an
+   *  older Host, which takes the role on its word. Additive, so HOST_PROTOCOL stays 4. */
+  challenge?: string
   /** A random 128-bit value this Host process made once at start (remote runtime design §3.2, N11): a client that
    *  sees it change knows every counter it holds came from a Host that is gone. Absent from an older Host. */
   bootId?: string

@@ -5,6 +5,38 @@ import { HOST_FEATURE_PTY_SEQ, type ClientMessage, type HostMessage } from '../c
 import type { PtyRegistry } from './registry'
 import { ENDED_WITHOUT_A_CODE } from './exits'
 
+/** Which connection a message came from, as host/index.ts passes it: the socket's number and its role as the server
+ *  holds it (server.ts `outwardRole`: `'app'` only once the socket proved it is the app, `'cli'` for a hello with no
+ *  role). */
+export interface HandlerFrom {
+  socket: number
+  role: 'app' | 'cli' | 'mcp'
+}
+
+/** What a spawn asked of anything but the app is answered with (final fix pass, C2). */
+export const PTY_SPAWN_APP_ONLY = 'pty-spawn is served to the Astera app only'
+
+/** Every message this handler owns. **Each is the proven app's alone** (sandbox follow-ups, round 2): each reads a
+ *  terminal (its list, its scrollback) or drives one (types into it, sizes, pauses, kills or notes it), and a write is
+ *  recorded as the person's. Only the app sends any of them (src/main); a CLI, an MCP client and the Remote's
+ *  controllers reach a session through the command layer (`sessions read`, `sessions send`, the gateway link), which
+ *  holds its own rules.
+ *
+ *  A record over every `pty-*` kind of the protocol, not a list: a new kind fails tsc until it is written here, and so
+ *  is the proven app's alone. */
+const PTY_REQUESTS: Record<Extract<ClientMessage['t'], `pty-${string}`>, true> = {
+  'pty-spawn': true,
+  'pty-write': true,
+  'pty-resize': true,
+  'pty-kill': true,
+  'pty-pause': true,
+  'pty-resume': true,
+  'pty-note': true,
+  'pty-list': true,
+  'pty-attach': true
+}
+const PTY_MESSAGES: ReadonlySet<string> = new Set(Object.keys(PTY_REQUESTS))
+
 /**
  * Returns a handler for one connection. It reports whether it owned the message, so the server can
  * fall through to its own handshake messages for anything else.
@@ -12,7 +44,7 @@ import { ENDED_WITHOUT_A_CODE } from './exits'
  * `send` reaches the client that asked; `broadcast` reaches every connected client. Output and exit
  * broadcast because the app that attaches after a restart is not the app that spawned.
  */
-export type PtyHandler = ((m: ClientMessage, send: (h: HostMessage) => void, from?: { socket: number }) => boolean) & {
+export type PtyHandler = ((m: ClientMessage, send: (h: HostMessage) => void, from?: HandlerFrom) => boolean) & {
   /** A socket closed: every pty it paused and did not resume is resumed, unless another socket still holds it paused
    *  (remote runtime design §3.7, N2). A dead app no longer leaves its terminals frozen. */
   socketGone(socket: number): void
@@ -44,9 +76,18 @@ export function attachPtyHost(a: {
   const pausedBy = new Map<string, Set<number>>()
   a.registry.onExit((id) => void pausedBy.delete(id))
 
-  const handler = (m: ClientMessage, send: (h: HostMessage) => void, from?: { socket: number }): boolean => {
+  const handler = (m: ClientMessage, send: (h: HostMessage) => void, from?: HandlerFrom): boolean => {
+    // Anything but the proven app (server.ts: a socket is the app only once it proved it) is refused every pty message,
+    // owned so nothing else reads it. A spawn is told why, as before (final fix pass, C2); the rest are answered nothing:
+    // a `pty-list` with no answer reads to the app as "not known", where an empty one would read as "holds nothing".
+    if (PTY_MESSAGES.has(m.t) && from?.role !== 'app') {
+      if (m.t === 'pty-spawn') send({ t: 'pty-failed', id: m.id, error: PTY_SPAWN_APP_ONLY })
+      return true
+    }
     switch (m.t) {
       case 'pty-spawn': {
+        // Any program, with any arguments, environment and folder, outside every sandbox: the app's own connection asks
+        // for it, and nothing else may (above).
         const res = a.registry.open({ id: m.id, file: m.file, args: m.args, opts: m.opts, meta: m.meta })
         send(res.ok ? { t: 'pty-spawned', id: m.id, pid: res.pid } : { t: 'pty-failed', id: m.id, error: res.error })
         return true
@@ -55,8 +96,13 @@ export function attachPtyHost(a: {
         // A person typing in a tab, as far as the Host can tell: the app's own few deliveries come this
         // way too, which only makes a finished Run's grace wait longer (registry.ts, lastPersonWriteAt).
         // The app's side for the size: a person typing in the tab takes it back from a controller (registry `sizeOwner`);
-        // the app's own writes do not (final review I4).
-        a.registry.write(m.id, m.data, m.typed === true ? { person: true, side: 'local' } : { person: true })
+        // the app's own writes do not (final review I4). Only what the app marks a person's, typed in the tab or sent from
+        // elsewhere (a Slack reply), is a person's prompt; its own deliveries are not (observe deferred fix round 2, I-a).
+        a.registry.write(
+          m.id,
+          m.data,
+          m.typed === true ? { person: true, side: 'local' } : m.person === true ? { person: true } : { person: true, delivery: true }
+        )
         return true
       case 'pty-resize': {
         // Kept, not applied, while a controller owns the size: the app is told the size the pty has instead.

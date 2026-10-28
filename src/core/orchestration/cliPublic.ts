@@ -15,8 +15,10 @@ import type { ChatPending, ChatPrompt, ChatTurn } from '../sessions/chatRead'
 import type { SkillInstalled, SkillListed, SkillNotEnabled, SkillsAccount } from './skills'
 import type { RunCompletion, TaskCompletion } from './runCompletion'
 import type { CompletionCheckDetail, CompletionDetail } from './completion'
+import type { AgentProfile } from '../agentProfiles/types'
 import type {
   ACCOUNT_FIELDS,
+  AGENT_PROFILE_FIELDS,
   CHAT_PENDING_FIELDS,
   CHAT_PROMPT_FIELDS,
   CHAT_TURN_FIELDS,
@@ -62,14 +64,20 @@ type NothingLeft<T extends never> = T
  *  external coordinator; publishing it would add to the SDK's contract, which nothing has asked for). What a script
  *  needs from the first, that the Run waits for a reset and until when, is the `limited` ending of `runs wait`. Also
  *  held back: the Run's raw GitHub record (`githubState`, GitHub lifecycle), whose public face is the derived `github`
- *  field. */
+ *  field, and the Host's stamp of when its outcome became final (`endedAt`), which bounds what its coordinator's work is
+ *  filed under and is not part of the SDK's contract. */
 const RUN_HIDDEN = [
   'coordinatorStop',
   'coordinatorStartingAt',
   'coordinatorStopPending',
   'externalCoordinatorSessionId',
-  'githubState'
+  'githubState',
+  'endedAt'
 ] as const
+
+/** A Job's mark that a sandboxed session made it (final fix pass, C3): the Host's own rule for what its work starts in,
+ *  not part of the SDK's contract. */
+const JOB_HIDDEN = ['sandboxed'] as const
 
 /**
  * A Task's fields kept back on purpose: all of them **the ledger the app keeps to drive convergence**. The guide
@@ -88,6 +96,8 @@ const TASK_HIDDEN = [
   'reviewRequested',
   // A skipped round's bookkeeping (plugin Phase 5 C9): its results are the Task's `checks` once it settles
   'checkResume',
+  // A sandboxed session added it (final fix pass, C3): the Host's own rule for what its workers start in
+  'sandboxed',
   // A lifecycle round handed to the Host (GitHub lifecycle G3a): its results are the Task's `checks` once CI settles it
   'ciWait',
   'ciUnknowns'
@@ -100,11 +110,12 @@ const FOLLOW_EVENT_HIDDEN = ['body', 'sessionId', 'github'] as const
 // A Job's and a Run's derived fields (the package's DERIVED_FIELDS: outcome, progress, questionsOpen) are not fields
 // of the objects, so they are on neither side of these checks.
 type _project = NothingLeft<Unlisted<Project, typeof PROJECT_FIELDS, []>>
-type _job = NothingLeft<Unlisted<Job, typeof JOB_FIELDS, []>>
+type _job = NothingLeft<Unlisted<Job, typeof JOB_FIELDS, typeof JOB_HIDDEN>>
 type _run = NothingLeft<Unlisted<JobRun, typeof RUN_FIELDS, typeof RUN_HIDDEN>>
 type _task = NothingLeft<Unlisted<Task, typeof TASK_FIELDS, typeof TASK_HIDDEN>>
 type _question = NothingLeft<Unlisted<Gate, typeof QUESTION_FIELDS, []>>
 type _account = NothingLeft<Unlisted<OrchAccount, typeof ACCOUNT_FIELDS, []>>
+type _agentProfile = NothingLeft<Unlisted<AgentProfile, typeof AGENT_PROFILE_FIELDS, []>>
 type _runConfig = NothingLeft<Unlisted<OrchRunConfig, typeof RUN_CONFIG_FIELDS, []>>
 /** The pty and process ids are the Host's own: a controller reads them from the raw reply to subscribe, and a
  *  printed list leaves them out. */

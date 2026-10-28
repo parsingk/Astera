@@ -11,8 +11,7 @@ import {
   otherProtocolHost,
   preparedRuntime,
   runHostCommand,
-  startHostNotice
-} from './host'
+  startHostNotice, workloadTokenFor } from './host'
 import { userDataDir } from '../core/orchestration/cliDiscovery'
 import { pendingReportsDirIn } from '../core/orchestration/pendingReports'
 import { hostAddress } from '../host/address'
@@ -422,6 +421,45 @@ describe('cliHostTarget', () => {
   it('ASTERA_HOST 는 계산한 주소를 이긴다', () => {
     const env = { APPDATA: path.join('C:', 'a'), ASTERA_HOST: '\\\\.\\pipe\\given' } as NodeJS.ProcessEnv
     expect(cliHostTarget({ env, platform: process.platform, home }).address).toBe('\\\\.\\pipe\\given')
+  })
+
+  // Final review I1: the session's workload token goes to the session's own Host only, the Host of the profile whose
+  // shuttle it runs (ASTERA_CLI, <profile>/orch/astera), else of its ASTERA_PROFILE_DIR; over the pipe at that profile's
+  // own address, over the loopback (no address: the profile's key is proven first). Any other Host refuses it (401)
+  it('hands the workload token to the session’s own Host only', () => {
+    const own = path.join(home, 'own-profile')
+    const other = path.join(home, 'other-profile')
+    const cli = path.join(own, 'orch', process.platform === 'win32' ? 'astera.cmd' : 'astera')
+    const token = 'T'.repeat(43)
+    const target = (env: Record<string, string>) => cliHostTarget({ env: env as NodeJS.ProcessEnv, platform: process.platform, home })
+    const tokenFor = (env: Record<string, string>, viaLoopback = false) => {
+      const t = target(env)
+      return workloadTokenFor({ env: env as NodeJS.ProcessEnv, platform: process.platform, home, profileDir: t.profileDir, ...(viaLoopback ? {} : { address: t.address }) })
+    }
+    const session = { ASTERA_PROFILE_DIR: own, ASTERA_CLI: cli, ASTERA_GATEWAY_TOKEN: token }
+    expect(tokenFor(session)).toBe(token)
+    expect(tokenFor(session, true)).toBe(token)
+    // Pointed at another profile's Host: none, over the pipe or the loopback
+    expect(tokenFor({ ...session, ASTERA_PROFILE_DIR: other })).toBeUndefined()
+    expect(tokenFor({ ...session, ASTERA_PROFILE_DIR: other }, true)).toBeUndefined()
+    // ASTERA_HOST naming another address: not on the pipe; the loopback still proves this profile's Host
+    expect(tokenFor({ ...session, ASTERA_HOST: '/elsewhere/sock' })).toBeUndefined()
+    expect(tokenFor({ ...session, ASTERA_HOST: '/elsewhere/sock' }, true)).toBe(token)
+    // ASTERA_HOST naming the profile's own address is no other Host
+    expect(tokenFor({ ...session, ASTERA_HOST: target(session).address })).toBe(token)
+    // A session with no shuttle path names its profile by ASTERA_PROFILE_DIR alone
+    expect(tokenFor({ ASTERA_PROFILE_DIR: own, ASTERA_GATEWAY_TOKEN: token })).toBe(token)
+    // No profile named at all (the default profile's Host), or no token: none
+    expect(tokenFor({ ASTERA_GATEWAY_TOKEN: token })).toBeUndefined()
+    expect(tokenFor({ ASTERA_PROFILE_DIR: own, ASTERA_CLI: cli })).toBeUndefined()
+  })
+
+  // Final fix pass (C2): the CLI reads no address but ASTERA_HOST's and the derived one; an ASTERA_SANDBOX_HOST an earlier
+  // build of this branch planted is ignored
+  it('ASTERA_SANDBOX_HOST 는 읽지 않는다', () => {
+    const base = { APPDATA: path.join('C:', 'a') }
+    const derived = cliHostTarget({ env: base as NodeJS.ProcessEnv, platform: process.platform, home }).address
+    expect(cliHostTarget({ env: { ...base, ASTERA_SANDBOX_HOST: '/granted/sock' } as NodeJS.ProcessEnv, platform: process.platform, home }).address).toBe(derived)
   })
 
   // 주소는 그 Host 가 어느 프로필을 쓰는지 말해 주지 않는다. 상태 파일과 보고 큐가 있는 곳은

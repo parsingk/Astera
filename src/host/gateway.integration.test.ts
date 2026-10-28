@@ -1,9 +1,10 @@
 // Agent Control Plane release 2, end to end on the Host (Gateway design §5): a stdio server imported once with a
 // secret reaches the sessions of three accounts through the Host's MCP Gateway. No session holds the value; sessions in
 // one folder share one process and another folder gets its own; a session that ended is refused; a profile that shares
-// nothing opens no port and adds no flag.
+// nothing adds no MCP flag (the listener itself is up for the Host's life, for the loopback route, and reaches no server).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
+import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -17,6 +18,9 @@ import { readAccountEntries } from '../core/accounts/accountsFile'
 import { extensionPaths } from '../core/profile/paths'
 import { emptyState } from '../core/orchestration/state'
 import type { Account } from '../core/types'
+import type { OrchCall } from '../core/host/orchProtocol'
+import type { HostMessage } from '../core/host/protocol'
+import type { OrchCaller } from '../core/host/orchProtocol'
 
 const FIXTURE = path.join(__dirname, 'gateway', '__fixtures__', 'echoServer.cjs')
 const NOW = '2026-10-22T00:00:00.000Z'
@@ -54,7 +58,8 @@ afterEach(async () => {
 })
 
 type Spawned = { id: string; args: string[] | string; env: Record<string, string | undefined>; exit: () => void }
-function rig() {
+const HELLO = { host: '9.9.9', pid: 1, startedAt: 'then', features: ['orch', 'requests'] }
+function rig(o: { call?: OrchCall['call']; cliCaller?: () => OrchCaller; hello?: (nonce: string) => typeof HELLO & { proof?: string } } = {}) {
   const spawned: Spawned[] = []
   const registry = new PtyRegistry({
     spawn: (_file, args, opts) => {
@@ -66,7 +71,12 @@ function rig() {
     log: () => {}
   })
   const procs = new ProcRegistry({ spawn: () => ({ pid: 1, onData: () => {}, onExit: () => {}, write() {}, kill() {} }) as unknown as RegistryProc, log: () => {} })
-  const hub = createGatewayHub({ profileDir: profile, ptys: registry, procs, log: () => {} })
+  // A pty's session is named after it, so a test can tell the session a token stands for
+  const hub = createGatewayHub({
+    cliCaller: () => ({ role: 'cli', toOthers: () => {} }),
+    profileDir: profile, ptys: registry, procs, sessionOfOwner: (id) => `session-of-${id}`, log: () => {},
+    ...(o.call ? { call: o.call } : {}), ...(o.cliCaller ? { cliCaller: o.cliCaller } : {}), ...(o.hello ? { hello: o.hello } : {})
+  })
   hubs.push(hub)
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH, ASTERA_HOST_PROFILE_DIR: profile, ASTERA_HOST_CLI_EXEC: path.join(dir, 'Astera.exe'),
@@ -96,6 +106,29 @@ function rig() {
   }
   return { hub, spawned, call, start, connect }
 }
+/** A raw POST, so a test controls every header (fetch would fill Host and Origin in its own way). */
+function post(port: number, p: string, headers: Record<string, string>, body: string): Promise<{ status: number; text: string; headers: http.IncomingHttpHeaders }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, path: p, method: 'POST', headers: { 'content-type': 'application/json', host: `127.0.0.1:${port}`, ...headers } }, (res) => {
+      let text = ''
+      res.setEncoding('utf8')
+      res.on('data', (c: string) => (text += c))
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, text, headers: res.headers }))
+    })
+    req.on('error', reject)
+    req.end(body)
+  })
+}
+async function until(check: () => void): Promise<void> {
+  for (let i = 0; ; i++) {
+    try {
+      return check()
+    } catch (err) {
+      if (i > 100) throw err
+      await new Promise((r) => setTimeout(r, 20))
+    }
+  }
+}
 const text = (r: unknown) => (r as { content: { text: string }[] }).content[0].text
 const line = (s: Spawned) => (Array.isArray(s.args) ? s.args.join(' ') : s.args)
 async function filesUnder(root: string): Promise<string[]> {
@@ -109,12 +142,153 @@ async function filesUnder(root: string): Promise<string[]> {
 }
 
 describe('the MCP Gateway on the Host, end to end', () => {
-  it('opens no port and adds nothing while nothing is shared (G-06)', async () => {
+  it('adds no MCP configuration while nothing is shared (G-06)', async () => {
     const h = rig()
     const s = await h.start('acc2')
     expect(line(s)).not.toContain('--mcp-config')
-    expect(s.env.ASTERA_GATEWAY_TOKEN).toBeUndefined()
-    expect(h.hub.port()).toBeNull()
+    // The token is the session's workload token now; with nothing shared its grant reaches no server.
+    expect(s.env.ASTERA_GATEWAY_GRANT).toBe('')
+  })
+
+  it('the Gateway listens with no shared server', async () => {
+    const h = rig()
+    const s = await h.start('acc2')
+    const port = h.hub.port()
+    expect(port).toBeGreaterThan(0)
+    // The session is told where, beside its token
+    expect(s.env.ASTERA_LOOPBACK).toBe(`http://127.0.0.1:${port}`)
+    // and no shared server is reachable through it
+    const gone = await post(port!, '/mcp/mcp-echo', { authorization: `Bearer ${s.env.ASTERA_GATEWAY_TOKEN}` }, '{}')
+    expect(gone.status).toBe(403)
+  })
+
+  it('the command route runs a command as the token’s session', async () => {
+    const calls: Parameters<OrchCall['call']>[0][] = []
+    const h = rig({ call: async (a) => (calls.push(a), { status: 200, body: { ran: a.cmd }, replayed: true }) })
+    const s = await h.start('acc2')
+    const r = await post(h.hub.port()!, '/astera/call', { authorization: `Bearer ${s.env.ASTERA_GATEWAY_TOKEN}` }, JSON.stringify({ cmd: 'status', args: { a: 1 }, request: 'r1', session: 'someone-else' }))
+    expect(r.status).toBe(200)
+    expect(JSON.parse(r.text)).toEqual({ status: 200, body: { ran: 'status' }, replayed: true })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({ cmd: 'status', args: { a: 1 }, request: 'r1', from: { role: 'cli' } })
+    expect(calls[0].sessionId).toMatch(/^session-of-/)
+    expect(calls[0].sessionId).not.toBe('someone-else')
+  })
+
+  it('the command route refuses an Origin, a wrong Host and no token', async () => {
+    const calls: unknown[] = []
+    const h = rig({ call: async (a) => (calls.push(a), { status: 200, body: {} }) })
+    const s = await h.start('acc2')
+    const port = h.hub.port()!
+    const auth = { authorization: `Bearer ${s.env.ASTERA_GATEWAY_TOKEN}` }
+    const body = JSON.stringify({ cmd: 'status', args: {} })
+    expect((await post(port, '/astera/call', { ...auth, origin: 'http://evil.example' }, body)).status).toBe(403)
+    expect((await post(port, '/astera/call', { ...auth, host: 'evil.example' }, body)).status).toBe(421)
+    const none = await post(port, '/astera/call', {}, body)
+    expect(none.status).toBe(401)
+    expect(JSON.parse(none.text)).toEqual({ error: 'workload token not recognised' })
+    expect((await post(port, '/astera/call', { authorization: `Bearer ${'x'.repeat(300)}` }, body)).status).toBe(401)
+    expect((await post(port, '/astera/call', { authorization: `Bearer ${'Z'.repeat(43)}` }, body)).status).toBe(401)
+    expect(calls).toEqual([])
+    // Only once it is the session’s own: a body that is no command is 400
+    expect((await post(port, '/astera/call', auth, 'not json')).status).toBe(400)
+    expect((await post(port, '/astera/call', auth, JSON.stringify({ args: {} }))).status).toBe(400)
+    expect(calls).toEqual([])
+  })
+
+  it('a body over 4 MB is refused', async () => {
+    const calls: unknown[] = []
+    const h = rig({ call: async (a) => (calls.push(a), { status: 200, body: {} }) })
+    const s = await h.start('acc2')
+    const big = JSON.stringify({ cmd: 'status', args: { pad: 'x'.repeat(4 * 1024 * 1024 + 10) } })
+    const r = await post(h.hub.port()!, '/astera/call', { authorization: `Bearer ${s.env.ASTERA_GATEWAY_TOKEN}` }, big)
+    expect(r.status).toBe(413)
+    expect(calls).toEqual([])
+  })
+
+  it('the hello route answers the Host’s hello for a live token, behind the same checks', async () => {
+    const h = rig({ hello: (nonce) => ({ ...HELLO, proof: `proof-of-${nonce}` }) })
+    const s = await h.start('acc2')
+    const port = h.hub.port()!
+    const auth = { authorization: `Bearer ${s.env.ASTERA_GATEWAY_TOKEN}` }
+    const ok = await post(port, '/astera/hello', auth, JSON.stringify({ nonce: 'n1' }))
+    expect(ok.status).toBe(200)
+    expect(JSON.parse(ok.text)).toEqual({ ...HELLO, proof: 'proof-of-n1' })
+    expect((await post(port, '/astera/hello', { ...auth, origin: 'http://evil.example' }, '{}')).status).toBe(403)
+    expect((await post(port, '/astera/hello', { ...auth, host: 'evil.example' }, '{}')).status).toBe(421)
+    expect((await post(port, '/astera/hello', {}, JSON.stringify({ nonce: 'n1' }))).status).toBe(401)
+    expect((await post(port, '/astera/hello', auth, JSON.stringify({ nonce: '' }))).status).toBe(400)
+    expect((await post(port, '/astera/hello', auth, JSON.stringify({ nonce: 'x'.repeat(257) }))).status).toBe(400)
+    expect((await post(port, '/astera/hello', auth, JSON.stringify({}))).status).toBe(400)
+  })
+
+  it('the command route refuses args that are no object and a request that is no string, instead of coercing them', async () => {
+    const calls: unknown[] = []
+    const h = rig({ call: async (a) => (calls.push(a), { status: 200, body: {} }) })
+    const s = await h.start('acc2')
+    const port = h.hub.port()!
+    const auth = { authorization: `Bearer ${s.env.ASTERA_GATEWAY_TOKEN}` }
+    for (const bad of [{ args: 'x' }, { args: [1] }, { args: null }, { request: 5 }, { request: null }])
+      expect((await post(port, '/astera/call', auth, JSON.stringify({ cmd: 'status', ...bad }))).status, JSON.stringify(bad)).toBe(400)
+    expect((await post(port, '/astera/call', auth, JSON.stringify([1]))).status).toBe(400)
+    expect(calls).toEqual([])
+    // and without args at all, the command runs with none
+    expect((await post(port, '/astera/call', auth, JSON.stringify({ cmd: 'status' }))).status).toBe(200)
+    expect(calls).toHaveLength(1)
+  })
+
+  it('every refusal on the command routes closes the connection', async () => {
+    const h = rig({ call: async () => ({ status: 200, body: {} }) })
+    const s = await h.start('acc2')
+    const port = h.hub.port()!
+    const r = await post(port, '/astera/call', { authorization: 'Bearer nope' }, '{}')
+    expect(r.status).toBe(401)
+    expect(r.headers.connection).toBe('close')
+    const bad = await post(port, '/astera/call', { authorization: `Bearer ${s.env.ASTERA_GATEWAY_TOKEN}` }, 'not json')
+    expect(bad.status).toBe(400)
+    expect(bad.headers.connection).toBe('close')
+  })
+
+  it('caps the command routes at 64 calls in flight with a 503, leaves the MCP routes alone, and frees a slot when a call answers', async () => {
+    const release: Array<() => void> = []
+    const h = rig({ call: () => new Promise((r) => release.push(() => r({ status: 200, body: {} }))) })
+    const s = await h.start('acc2')
+    const port = h.hub.port()!
+    const auth = { authorization: `Bearer ${s.env.ASTERA_GATEWAY_TOKEN}` }
+    const body = JSON.stringify({ cmd: 'status', args: {} })
+    const held = Array.from({ length: 64 }, () => post(port, '/astera/call', auth, body))
+    await until(() => expect(release).toHaveLength(64))
+    const over = await post(port, '/astera/call', auth, body)
+    expect(over.status).toBe(503)
+    expect(JSON.parse(over.text)).toEqual({ error: 'too many calls' })
+    expect(over.headers.connection).toBe('close')
+    // The hello route shares the cap; an MCP route still gets its usual answer at the same time
+    expect((await post(port, '/astera/hello', auth, JSON.stringify({ nonce: 'n' }))).status).toBe(503)
+    expect((await post(port, '/mcp/mcp-echo', { authorization: 'Bearer nope' }, '{}')).status).toBe(401)
+    // One call answers; its slot is free again
+    release[0]()
+    expect((await held[0]).status).toBe(200)
+    const again = post(port, '/astera/call', auth, body)
+    await until(() => expect(release).toHaveLength(65))
+    for (const r of release) r()
+    expect((await again).status).toBe(200)
+    for (const r of await Promise.all(held)) expect(r.status).toBe(200)
+  })
+
+  it('a command that takes a while still answers, and a command’s state change reaches the Host’s sockets', async () => {
+    const sent: HostMessage[] = []
+    const h = rig({
+      call: async (a) => {
+        await new Promise((r) => setTimeout(r, 1500))
+        a.from?.toOthers({ t: 'orch-state', state: emptyState(), version: 1 } as HostMessage)
+        return { status: 200, body: { waited: true } }
+      },
+      cliCaller: () => ({ role: 'cli', toOthers: (m) => void sent.push(m) })
+    })
+    const s = await h.start('acc2')
+    const r = await post(h.hub.port()!, '/astera/call', { authorization: `Bearer ${s.env.ASTERA_GATEWAY_TOKEN}` }, JSON.stringify({ cmd: 'ask', args: {} }))
+    expect(JSON.parse(r.text)).toEqual({ status: 200, body: { waited: true } })
+    expect(sent.map((m) => m.t)).toEqual(['orch-state'])
   })
 
   it('gives three accounts’ sessions the shared server with no value in hand, shares one process per folder, and refuses an ended session', async () => {

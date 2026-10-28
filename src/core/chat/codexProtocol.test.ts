@@ -40,6 +40,29 @@ describe('handshake params', () => {
     expect(threadStartParams({ cwd: 'D:/x', bypass: true })).toEqual({ cwd: 'D:/x', approvalPolicy: 'never', sandbox: 'danger-full-access' })
     expect(threadResumeParams({ threadId: 't1', cwd: 'D:/x', bypass: false })).toMatchObject({ threadId: 't1', excludeTurns: true, approvalPolicy: 'on-request' })
   })
+  // Sandbox design §6, measured in inventory §23 (thread/start answers activePermissionProfile astera): the profile the
+  // app-server's `-c` arguments define is named, and `sandbox` is left out, since the two "cannot be combined"
+  it('a sandboxed thread starts with the named profile and never asks', () => {
+    for (const bypass of [false, true]) {
+      const start = threadStartParams({ cwd: 'D:/x', bypass, sandbox: true })
+      expect(start).toEqual({ cwd: 'D:/x', approvalPolicy: 'never', permissions: 'astera' })
+      expect(start).not.toHaveProperty('sandbox')
+      const resume = threadResumeParams({ threadId: 't1', cwd: 'D:/x', bypass, sandbox: true })
+      expect(resume).toEqual({ cwd: 'D:/x', approvalPolicy: 'never', permissions: 'astera', threadId: 't1', excludeTurns: true })
+      expect(resume).not.toHaveProperty('sandbox')
+    }
+  })
+  it("an unsandboxed thread's parameters are byte-equal to today's", () => {
+    for (const sandbox of [undefined, false]) {
+      for (const bypass of [false, true]) {
+        const policy = bypass ? '"approvalPolicy":"never","sandbox":"danger-full-access"' : '"approvalPolicy":"on-request","sandbox":"workspace-write"'
+        expect(JSON.stringify(threadStartParams({ cwd: 'D:/x', bypass, ...(sandbox === undefined ? {} : { sandbox }) }))).toBe(`{"cwd":"D:/x",${policy}}`)
+        expect(JSON.stringify(threadResumeParams({ threadId: 't1', cwd: 'D:/x', bypass, ...(sandbox === undefined ? {} : { sandbox }) }))).toBe(
+          `{"cwd":"D:/x",${policy},"threadId":"t1","excludeTurns":true}`
+        )
+      }
+    }
+  })
   it('reads the thread id, the rollout path and the model out of thread/start and thread/resume results', () => {
     expect(threadOf(result(F.THREAD_START_RESULT))).toEqual({
       threadId: '01a0a6cb-43a2-7d71-994f-72e53764fbc1',

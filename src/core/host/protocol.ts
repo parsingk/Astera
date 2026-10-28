@@ -10,6 +10,7 @@ import type { HostDriverReport, RollStateEvent, SessionInfo, WorktreeInfo } from
 import type { SlackForwardedEvent } from '../slack/forwarded'
 import type { SessionSignal } from '../sessions/sessionSignal'
 import type { McpHttpUrl } from '../mcp/httpUrls'
+import type { ChatRollRefusedNotice } from '../chat/types'
 import {
   HOST_FEATURE_EVENTS,
   HOST_FEATURE_ORCH,
@@ -256,6 +257,10 @@ export const HOST_YIELD_ORCH_STATE_LATEST = 'orch-state-latest'
  *  (remote runtime design §2.6, DC-3). An older app sends none and keeps recovering, and the Host then recovers
  *  nothing while it is attached. */
 export const HOST_YIELD_RECOVERY = 'recovery'
+/** `hello.yields` value: this app marks a person's turn line in `proc-write` (`typed`), so the Host tells a chat's turns
+ *  by them. An older app sends none and marks nothing: the Host reads the turns of a chat it writes to as unknown, so
+ *  two minutes after a Run's or Dispatch's end stand in for them, as before the marks. */
+export const HOST_YIELD_PERSON_WRITES = 'person-writes'
 /** The shortest gap between two `orch-state` pushes to one client that reads the latest (above): about
  *  ten a second. The first push after a quiet spell goes out at once. */
 export const ORCH_STATE_PUSH_MS = 100
@@ -353,6 +358,10 @@ export type ClientMessage =
    *  `pong` carrying the same `seq`. What it asks is not "are you there" — the socket answers that —
    *  but "is your event loop still turning", which is the one thing a stuck pty spawn takes away. */
   | { t: 'ping'; seq: number }
+  /** The app's answer to its hello's `challenge` (sandbox follow-ups, item 1): `appProof(appKey, challenge)`
+   *  (core/host/hostKey.ts). Sent once, right after the Host's hello proved the Host, and before anything else, so the
+   *  socket is the app by the time its next message is read. Answered with `app-proven`. */
+  | { t: 'app-proof'; proof: string }
   | OrchCallMessage
   /** The app's answer to one `orch-act` (design §5), carrying back the `call` the Host asked with.
    *  `ok: false` is the action's own failure and `error` is what the command layer puts in its reply,
@@ -364,8 +373,10 @@ export type ClientMessage =
    *  and shellSpawn in core/run/shell.ts for the win32 case that produces a string). */
   | { t: 'pty-spawn'; id: string; file: string; args: string[] | string; opts: PtyOpenOptions; meta?: PtyMeta }
   /** `typed`: a person typed this in the tab (not the app's own write: a schedule, a Slack reply, a roll's prompt), which
-   *  gives this machine the pty's size when a controller had it (registry `sizeOwner`). An older app sends none. */
-  | { t: 'pty-write'; id: string; data: string; typed?: true }
+   *  gives this machine the pty's size when a controller had it (registry `sizeOwner`). `person`: a person's words sent
+   *  from elsewhere (a Slack reply), which do not take the size. Either makes an Enter in it a person's prompt (observe
+   *  deferred fix round 2, Important a); with neither it is the app's own delivery. An older app sends neither. */
+  | { t: 'pty-write'; id: string; data: string; typed?: true; person?: true }
   | { t: 'pty-resize'; id: string; cols: number; rows: number }
   | { t: 'pty-kill'; id: string }
   | { t: 'pty-pause'; id: string }
@@ -379,8 +390,11 @@ export type ClientMessage =
   /** A stdio child that speaks lines — a chat session's `codex app-server` or `claude` (chat-sessions
    *  design §6.5). `args` is always an array: nothing here goes through a shell. */
   | { t: 'proc-spawn'; id: string; file: string; args: string[]; opts: ProcOpenOptions; meta?: PtyMeta }
-  /** One line to the process's stdin; the Host appends the newline. */
-  | { t: 'proc-write'; id: string; line: string }
+  /** One line to the process's stdin; the Host appends the newline. `typed`: the turn a person sent (the chat composer,
+   *  a Slack reply), never a handshake, control or the app's own turn: the Host tells a person's prompt by it (observe
+   *  deferred fix round 2, Important a). An older app sends none and says so by leaving HOST_YIELD_PERSON_WRITES out of
+   *  its hello: the turns of a chat it writes to are then not known. */
+  | { t: 'proc-write'; id: string; line: string; typed?: true }
   | { t: 'proc-kill'; id: string }
   /** Same contract as pty-note, for a line process. */
   | { t: 'proc-note'; id: string; patch: Record<string, unknown> }
@@ -416,6 +430,9 @@ export type HostMessage =
       runs: number
     }
   | { t: 'pong'; seq: number }
+  /** Whether an `app-proof` held (sandbox follow-ups, item 1). `ok: false` keeps the socket open as a CLI, and
+   *  `reason` says why: the app is told rather than cut off, so it can say what is wrong. */
+  | { t: 'app-proven'; ok: boolean; reason?: string }
   | OrchResultMessage
   /** Asks the app to do one thing the Host cannot do itself — spawn a session, touch a worktree
    *  (design §5). Sent only to a client whose `hello` said `role: 'app'`, and answered with
@@ -502,6 +519,10 @@ export type HostMessage =
   /** A Host chain's banner state (S6 §3.4). An app forwards it to its renderer, scheduler, Slack and
    *  desktop notices, and keeps the last lasting one per session. Additive. */
   | { t: 'roll-state'; event: RollStateEvent }
+  /** A Host roll of a chat chain was refused before its kill (the sandbox, Task 6 fix round 1): its reason, for the chat's
+   *  pane, which the app shows as the chat's notice. Only to the apps that yield chat takeover. Additive: an older app
+   *  ignores it, and the reason stays in the Host's rolling log. */
+  | { t: 'chat-notice'; sessionId: string; notice: ChatRollRefusedNotice }
   /** A Host roll re-keyed a session (S6 §3.4). `ptyId` is the new session's pty, for the app to adopt
    *  before it forwards the rekey. `dest` is the codex copy the respawn appends to. Additive. */
   | {

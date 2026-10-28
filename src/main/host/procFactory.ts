@@ -10,7 +10,10 @@ import { SPAWN_DEADLINE_MS, type HostPtyTransport } from './ptyFactory'
 function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: number, startDead = false, startReplaying = false): ProcLike {
   let state: 'pending' | 'live' | 'exited' = startLive ? 'live' : 'pending'
   let pid = startPid
-  const queue: string[] = []
+  const queue: Array<{ line: string; by?: { person: true } }> = []
+  /** A line to the Host, marked `typed` when a person sent it (observe deferred fix round 2, Important a). */
+  const written = (line: string, by?: { person: true }): ClientMessage =>
+    ({ t: 'proc-write', id, line, ...(by?.person ? { typed: true as const } : {}) })
   let onLine: (line: string) => void = () => {}
   let onExit: (e: { exitCode: number; stderrTail?: string }) => void = () => {}
 
@@ -55,7 +58,7 @@ function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: n
       state = 'live'
       pid = m.pid
       clearDeadline()
-      for (const line of queue) t.send({ t: 'proc-write', id, line })
+      for (const q of queue) t.send(written(q.line, q.by))
       queue.length = 0
       return
     }
@@ -119,13 +122,13 @@ function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: n
     onExit: (cb) => {
       onExit = cb
     },
-    write: (line) => {
+    write: (line, by) => {
       if (state === 'exited') return
       if (state === 'pending') {
-        queue.push(line)
+        queue.push({ line, ...(by ? { by } : {}) })
         return
       }
-      t.send({ t: 'proc-write', id, line })
+      t.send(written(line, by))
     },
     // kill and remember go out at once, even while pending — ordered behind the proc-spawn on one
     // connection, carrying nothing the Host needs the process to already exist for.

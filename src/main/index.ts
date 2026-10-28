@@ -43,6 +43,7 @@ import { RollingCoordinator } from '../core/rolling/claudeCoordinator'
 import { SchedulerCoordinator } from './scheduler'
 import { chatDriver, ptyDriver, routedDriver } from '../core/sessions/sessionDriver'
 import { CodexRollingCoordinator } from '../core/rolling/codexCoordinator'
+import { ownerScriptDir, rolloutOwnerReader } from '../core/rolling/rolloutOwner'
 import { BlockRegistry } from '../core/rolling/blockRegistry'
 import type { RollSnapshot } from '../core/rolling/snapshot'
 import { chatSpawnOptsOf } from '../core/chat/respawn'
@@ -57,11 +58,12 @@ import { createSessionSignalForwarder } from './sessionSignals'
 import { hearForwarded } from '../core/slack/forwarded'
 import { HookEventWatcher } from '../core/hooks/eventWatcher'
 import { fanOutHookEvent } from './hookFanOut'
+import { extractStatusLineSession } from '../core/usage/statusline'
 import { DesktopNotifier } from './desktopNotifier'
 import { createAttentionState } from '../core/sessions/attention'
 import { createPendingPromptState } from '../core/sessions/pendingPrompt'
 import { CodexRolloutWatcher } from '../core/sessions/codexRolloutWatcher'
-import { t } from '../core/i18n'
+import { t, type Message } from '../core/i18n'
 import { loadPolicy, nextCheckDelayMs, parsePolicyUrl, shouldApplyCampaign } from './updatePolicy'
 import {
   NOTHING_STAGED,
@@ -597,9 +599,12 @@ app.whenReady().then(async () => {
       write: (sessionId, data) => {
         const alive = core!.sessions.list().some((s) => s.id === sessionId && s.status === 'running')
         if (!alive) return false
-        core!.sessions.write(sessionId, data)
+        // A person's reply: the Host reads its Enter as a person's prompt (observe deferred fix round 2, Important a)
+        core!.sessions.write(sessionId, data, { person: true })
         return true
       },
+      // The reply's Enter waits for the session to have drawn it and gone quiet (openai/codex#56982)
+      lastOutputAt: (sid) => core!.sessions.lastOutput(sid),
       postNote: (ts, text) => slack.postThreadNote(ts, text),
       isOwnMessage: (ts) => slack.isOwnMessage(ts),
       // On a choice prompt, turn the reply into a key sequence and carry it through Submit
@@ -608,7 +613,8 @@ app.whenReady().then(async () => {
       // out through the session driver or as the card's answer (slice 4 design §7.3).
       isChat: (sid) => core!.chat.has(sid),
       pendingRequest: (sid) => core!.chat.state(sid)?.request ?? null,
-      deliverChat: (sid, text) => sessionDriver.deliver(sid, text),
+      // A person's reply, written marked as a person's (observe deferred fix round 2, Important a)
+      deliverChat: (sid, text) => sessionDriver.deliver(sid, text, { person: true }),
       answerChat: (sid, requestId, answer) => core!.chat.answer(sid, requestId, answer),
       log: slackLog
     }),
@@ -673,8 +679,16 @@ app.whenReady().then(async () => {
       } catch {
         /* writing the mapping down must not disturb the poll that produced it */
       }
+      // The thread is the conversation a history resume names: the profile the session runs as is written down by it
+      void core!.profileConversations.learned(sessionId, note.codexSessionId)
     },
-    log: slackLog
+    log: slackLog,
+    // A rollout the scan finds is mapped only when this session's own codex holds it (rolloutOwner.ts); the Windows
+    // check's script goes in `<profile>/host`, which no sandboxed session may write (fix round 2)
+    rolloutOwner: {
+      pidOf: (sessionId) => core?.sessions.pidOf(sessionId) ?? null,
+      read: rolloutOwnerReader(process.platform, ownerScriptDir(app.getPath('userData')))
+    }
   })
   codexRolloutRef = codexRollout
   const hookWatcher = new HookEventWatcher(
@@ -686,7 +700,9 @@ app.whenReady().then(async () => {
     // instead (desktopNotifier.ts's constructor) — see hookFanOut.ts's own comment on why `attention`
     // still runs first regardless.
     // Slack hears the hooks only while this app owns it: a Slack-owning Host reads the same hook files.
-    (sessionId, payload) =>
+    // Every hook payload names the Claude conversation (`session_id`, as the statusLine payload does), which a history
+    // resume names too: the profile the session runs as is written down by it, after the taps, never waited on.
+    (sessionId, payload) => {
       fanOutHookEvent(
         {
           attention,
@@ -699,7 +715,9 @@ app.whenReady().then(async () => {
         },
         sessionId,
         payload
-      ),
+      )
+      void core!.profileConversations.learned(sessionId, extractStatusLineSession(payload).sessionId)
+    },
     slackLog
   )
   hookWatcher.start()
@@ -728,9 +746,12 @@ app.whenReady().then(async () => {
   const sessionDriver = routedDriver(
     (id) => core!.chat.has(id),
     ptyDriver({
-      write: (id, d) => {
-        core!.sessions.write(id, d) // a throw is the rejection the caller sees
-      }
+      write: (id, d, by) => {
+        core!.sessions.write(id, d, by) // a throw is the rejection the caller sees
+      },
+      // Enter waits for the session to have drawn the text and gone quiet: Codex swallows an Enter that comes right
+      // after a long text (openai/codex#56982)
+      lastOutputAt: (id) => core!.sessions.lastOutput(id)
     }),
     // The manager's `send` resolves for an id it does not know, and a silent resolve reads as "delivered"
     // to everything on the other side of this seam — the scheduler zeroes its refusal count on it, and
@@ -739,8 +760,8 @@ app.whenReady().then(async () => {
     // gone**, so the second half is kept here, at the seam, rather than left to the router's `isChat`
     // check a microsecond earlier.
     chatDriver({
-      send: (id, text) =>
-        core!.chat.has(id) ? core!.chat.send(id, text) : Promise.reject(new Error(`no chat session: ${id}`))
+      send: (id, text, by) =>
+        core!.chat.has(id) ? core!.chat.send(id, text, by) : Promise.reject(new Error(`no chat session: ${id}`))
     })
   )
   // Session scheduler: runs periodic commands automatically. Logs share rolling.log ([sched] prefix)
@@ -994,6 +1015,13 @@ app.whenReady().then(async () => {
       rememberChat: (x, p) => core!.chat.remember(x, p),
       rememberPty: (x, p) => core!.sessions.remember(x, p)
     })
+  /** Why a roll waits, when its respawn would start without the sandbox the chain runs in, for both coordinators: one line
+   *  in the terminal tab, as output, in the app's language (the Host's twin writes its pty's ring, host/rolling.ts); for a
+   *  chat, the chat's notice, which its pane words. */
+  const tellRollRefusal = (id: string, reason: Message): void => {
+    if (core!.chat.has(id)) core!.chat.notice(id, { key: 'rollRefused', reason })
+    else core!.sessions.say(id, `\r\n[Astera] ${t(core!.lang, reason.key, reason.params)}\r\n`)
+  }
   const rolling = new RollingCoordinator({
     // A chain's session may be a pty or a chat session (slice 4c); the coordinator says which through
     // `kind` and the rest is routed here, so neither coordinator imports a manager. A chat respawn
@@ -1015,10 +1043,13 @@ app.whenReady().then(async () => {
             })
           )
         : core!.sessions.spawn(opts),
-    // What the synchronous respawn above would otherwise look for on disk (the folder, and Git Bash on
-    // win32), looked for before the kill and without blocking this thread: an offline drive fails the
-    // roll here, where it is rescheduled, instead of freezing every window at the spawn.
-    prepareSpawn: (account, cwd) => core!.sessions.prepare({ account, cwd }),
+    // What the synchronous respawn above would otherwise look for on disk (the folder, Git Bash on win32,
+    // and for a chain in the sandbox its git layout), looked for before the kill and without blocking this
+    // thread: an offline drive fails the roll here, where it is rescheduled, instead of freezing every
+    // window at the spawn.
+    prepareSpawn: (account, cwd, agentProfileId, sandbox) => core!.sessions.prepare({ account, cwd, ...(agentProfileId ? { agentProfileId } : {}), ...(sandbox ? { sandbox: true } : {}) }),
+    // Why a roll waits when the sandbox refused its respawn (Task 7 fix round 1), as the codex coordinator's
+    tell: tellRollRefusal,
     // What the roll above carries: the model the person picked, read off the session being rolled
     // before it is killed. Terminal chains never reach this — the manager only knows chat sessions.
     chosenModelOf: (id) => core!.chat.chosenModelOf(id),
@@ -1114,10 +1145,12 @@ app.whenReady().then(async () => {
             })
           )
         : core!.sessions.spawn(opts),
-    // What the synchronous respawn above would otherwise look for on disk (the folder, and Git Bash on
-    // win32), looked for before the kill and without blocking this thread: an offline drive fails the
-    // roll here, where it is rescheduled, instead of freezing every window at the spawn.
-    prepareSpawn: (account, cwd) => core!.sessions.prepare({ account, cwd }),
+    // What the synchronous respawn above would otherwise look for on disk (the folder, Git Bash on win32,
+    // and for a chain in the sandbox its git layout), looked for before the kill and without blocking this
+    // thread: an offline drive fails the roll here, where it is rescheduled, instead of freezing every
+    // window at the spawn. A chat chain's respawn is an app-server, whose sandbox needs no --no-daemon (`chat`).
+    prepareSpawn: (account, cwd, agentProfileId, sandbox, kind) =>
+      core!.sessions.prepare({ account, cwd, ...(agentProfileId ? { agentProfileId } : {}), ...(sandbox ? { sandbox: true } : {}), ...(kind === 'chat' ? { chat: true } : {}) }),
     // design F5 fix round 1 (Important 3): claudeCoordinator.ts's own dep, same contract.
     bypassedOf: (id) => core!.chat.bypassedOf(id),
     kill: (id) => (core!.chat.has(id) ? core!.chat.kill(id) : core!.sessions.kill(id)),
@@ -1141,6 +1174,7 @@ app.whenReady().then(async () => {
         /* a write failure must not break the chain — the prompt just stays up */
       }
     },
+    tell: tellRollRefusal,
     getAccount: (id) => {
       try {
         return core!.accounts.get(id)
@@ -1171,7 +1205,13 @@ app.whenReady().then(async () => {
     resumeText: resumeTextDep,
     // 한도에 걸린 세션을 어떻게 이어갈지(Task 1 의 설정) — orchEnv 와 같은 이유로 getter 다: 값이
     // 설정 화면에서 앱 수명 중간에 바뀌고, 이 코디네이터는 그보다 먼저 만들어진다.
-    resumeStrategy: () => core!.appSettings.getResumeStrategy()
+    resumeStrategy: () => core!.appSettings.getResumeStrategy(),
+    // A rollout the locate finds is mapped only when this session's own codex holds it (rolloutOwner.ts), with the
+    // rollout watcher's reader (one per profile and platform)
+    rolloutOwner: {
+      pidOf: (sid) => core?.sessions.pidOf(sid) ?? null,
+      read: rolloutOwnerReader(process.platform, ownerScriptDir(app.getPath('userData')))
+    }
   })
   codexRollingRef = codexRolling
   // Agent orchestration: an HTTP server embedded in the app plus the astera CLI let an agent spawn
@@ -1213,7 +1253,7 @@ app.whenReady().then(async () => {
       onTabResumeReady: (fn) => {
         tabResumeTextRef = fn
       },
-      deliverChat: (sid, text) => sessionDriver.deliver(sid, text)
+      deliverChat: (sid, text, by) => sessionDriver.deliver(sid, text, by)
     },
     () => refreshTrayMenu(win), // rebuild Open/Quit in the new language after settings.setLang
     // 위 두 send 탭이 부를 자리를 받아 둔다. registerIpc 가 돌아오면서 바로 채워지고,

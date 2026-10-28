@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { Account } from '../types'
@@ -11,6 +11,16 @@ import { buildClaudeCommand, buildCodexCommand } from './commands'
 import { makeDescriptors } from '../providers/descriptor'
 import { absPath, foldsCaseHere } from '../testPaths'
 import type { RollSnapshot, RollSpawnExtra } from '../rolling/snapshot'
+import type { SessionCapabilities } from '../extensions/resolve'
+import { sessionInfoFromNote } from './noteInfo'
+import { gitLayoutOf } from '../sandbox/gitLayout'
+import { appKeyDenies, credentialStoreDenies, sensitiveLocations } from '../sandbox/locations'
+import { appKeyPath } from '../host/hostKey'
+import { codexSandboxArgs, codexSandboxEnv, npmCacheOf } from '../sandbox/codexProfile'
+import { claudeSandboxSettings } from '../sandbox/claudeSettings'
+import type { GitLayout } from '../sandbox/gitLayout'
+import { claudeSandboxStart, gitExcludesFileOf, gitExcludesText } from '../sandbox/claudeStart'
+import { StatusLineManager } from './statusline'
 
 class FakePty implements PtyLike {
   pid = 4242
@@ -175,6 +185,19 @@ describe('SessionManager', () => {
     })
   })
 
+  // Task D: whose codex holds a rollout is asked about the session's pty process. A pty the Host has not answered
+  // for yet reports pid 0 (main/host/ptyFactory.ts), which is no process.
+  describe('pidOf', () => {
+    it("answers the session's pty process id, and null for none", () => {
+      const { manager, spawned } = setup()
+      const info = manager.spawn({ account, cwd: process.cwd() })
+      expect(manager.pidOf(info.id)).toBe(4242)
+      spawned[0].pty.pid = 0
+      expect(manager.pidOf(info.id)).toBeNull()
+      expect(manager.pidOf('nope')).toBeNull()
+    })
+  })
+
   it('spawn은 CLAUDE_CONFIG_DIR를 주입하고 running 세션을 만든다', () => {
     const { manager, spawned } = setup()
     const info = manager.spawn({ account, cwd: process.cwd() })
@@ -242,6 +265,27 @@ describe('SessionManager', () => {
     manager.write(info.id, 'ls\r')
     expect(events).toEqual(['hello'])
     expect(spawned[0].pty.written).toEqual(['ls\r'])
+  })
+
+  // 스케줄러·롤링·Slack 의 Enter 는 에이전트가 글자를 다 그리고 조용해진 뒤에 간다(sessionDriver.ts)
+  it('pty 가 마지막으로 무언가 출력한 시각을 기억한다', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(5000)
+      const { manager, spawned } = setup()
+      const info = manager.spawn({ account, cwd: process.cwd() })
+      expect(manager.lastOutput(info.id)).toBeNull()
+      spawned[0].pty.dataCb('hello')
+      expect(manager.lastOutput(info.id)).toBe(5000)
+      vi.setSystemTime(7000)
+      manager.write(info.id, 'x')
+      expect(manager.lastOutput(info.id)).toBe(5000)
+      spawned[0].pty.dataCb('x')
+      expect(manager.lastOutput(info.id)).toBe(7000)
+      expect(manager.lastOutput('nope')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('미확인 바이트가 highWater를 넘으면 pause, ack로 lowWater 아래로 내려가면 resume', () => {
@@ -971,6 +1015,45 @@ describe('SessionManager', () => {
     expect(spawned[1].opts.meta?.restore).not.toHaveProperty('startedBy')
   })
 
+  // Agent Profiles (design §5, ledger Ruling P2): the profile a session was started from rides its info and its note
+  // the way startedBy does, and its capabilities are the ones resolved for that account and profile
+  it('writes agentProfileId into the info and the note, reads it back from the note, and nothing without one', () => {
+    const { manager, spawned } = setup()
+    const withProfile = manager.spawn({ account, cwd: process.cwd(), agentProfileId: 'ap_000000000001' })
+    expect(withProfile.agentProfileId).toBe('ap_000000000001')
+    const note = spawned[0].opts.meta!
+    expect(note.restore).toMatchObject({ agentProfileId: 'ap_000000000001' })
+    expect(sessionInfoFromNote(note)?.agentProfileId).toBe('ap_000000000001')
+    const without = manager.spawn({ account, cwd: process.cwd() })
+    expect(without).not.toHaveProperty('agentProfileId')
+    expect(spawned[1].opts.meta?.restore).not.toHaveProperty('agentProfileId')
+    expect(sessionInfoFromNote(spawned[1].opts.meta!)).not.toHaveProperty('agentProfileId')
+  })
+
+  it('prepares and spawns with the capabilities of the session’s account and profile', async () => {
+    const caps = (given: string[]): SessionCapabilities => ({
+      context: { kind: 'implicit', accounts: [account.id], policyMode: 'compatibility', executionMode: 'managed' },
+      args: [], env: { GIVEN: given.join(',') }, given, gatewayGrant: [], skipped: []
+    })
+    const refreshed: [string, string | undefined][] = []
+    const spawned: PtySpawnOptions[] = []
+    const checks: SpawnChecks = {
+      cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform: 'linux', now: Date.now, syncExists: () => true, log: () => {}
+    }
+    const manager = new SessionManager((_f, _a, o) => (spawned.push(o), new FakePty()), makeDescriptors('linux'), 100, 20, '/home/t', undefined, [], {}, checks)
+    manager.capabilities = {
+      get: (a, p) => (p === 'ap_000000000001' ? caps(['docs']) : caps(['docs', 'linear'])),
+      refresh: async (a, p) => void refreshed.push([a.id, p])
+    }
+    await manager.prepare({ account, cwd: '/work', agentProfileId: 'ap_000000000001' })
+    manager.spawn({ account, cwd: '/work', agentProfileId: 'ap_000000000001' })
+    await manager.prepare({ account, cwd: '/work' })
+    manager.spawn({ account, cwd: '/work' })
+    expect(refreshed).toEqual([[account.id, 'ap_000000000001'], [account.id, undefined]])
+    expect(spawned[0].env.GIVEN).toBe('docs')
+    expect(spawned[1].env.GIVEN).toBe('docs,linear')
+  })
+
   describe('adopt', () => {
     // After a restart the process is already running; adopt rebuilds only the app's own record of it.
     it('adopts a running pty and puts the session back in the list', () => {
@@ -1407,6 +1490,952 @@ describe('shared capabilities', () => {
     a.manager.spawn({ account, cwd: os.tmpdir() })
     b.manager.spawn({ account, cwd: os.tmpdir() })
     expect(b.spawned[0].args).toEqual(a.spawned[0].args)
-    expect(b.spawned[0].opts.env).toEqual(a.spawned[0].opts.env)
+    // Each spawn's workload token is its own; nothing else differs.
+    const bare = (env: Record<string, string | undefined> | undefined) => ({ ...env, ASTERA_GATEWAY_TOKEN: undefined })
+    expect(bare(b.spawned[0].opts.env)).toEqual(bare(a.spawned[0].opts.env))
+  })
+  it('gives a spawn with no capabilities a workload token and an empty grant', () => {
+    const { manager, spawned } = setup()
+    manager.spawn({ account, cwd: os.tmpdir() })
+    const env = spawned[0].opts.env ?? {}
+    expect(env.ASTERA_GATEWAY_TOKEN).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(env.ASTERA_GATEWAY_GRANT).toBe('')
+  })
+})
+
+// Observe mode (observe mode design §4, §5, Review Focus 1): the mode a prepare read is the session's for life. Observed,
+// a Claude session is pointed at the hook settings that add the PostToolUse capture, and the note says the session was
+// started observed, which is what the Host's recorder asks before it keeps a call. In compatibility nothing changes.
+describe('observe mode at spawn', () => {
+  const capsIn = (policyMode: 'compatibility' | 'observe' | 'enforce'): SessionCapabilities => ({
+    context: { kind: 'implicit', accounts: [account.id], policyMode, executionMode: 'managed' },
+    args: [], env: {}, given: [], gatewayGrant: [], skipped: []
+  })
+  const rig = (policyMode: 'compatibility' | 'observe' | 'enforce' | null, filesWritten = true) => {
+    const spawned: PtySpawnOptions[] = []
+    const argv: Array<string[] | string> = []
+    const asked: unknown[] = []
+    const checks: SpawnChecks = {
+      cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform: 'linux', now: Date.now, syncExists: () => true, log: () => {}
+    }
+    const manager = new SessionManager((_f, a, o) => (argv.push(a), spawned.push(o), new FakePty()), makeDescriptors('linux'), 100, 20, '/home/t', (id, _acc, o) => {
+      asked.push(o)
+      const observed = o?.observe === true && filesWritten
+      const enforced = observed && o?.enforce === true
+      return {
+        settingsFile: enforced ? 'enforce.json' : observed ? 'observe.json' : 's.json', outPath: 'o.json', originalCommand: null, hookOutPath: `/h/${id}.jsonl`,
+        ...(observed ? { observed: true } : {}),
+        ...(enforced ? { enforced: true } : {})
+      }
+    }, [], {}, checks)
+    if (policyMode !== null) manager.capabilities = { get: () => capsIn(policyMode), refresh: async () => {} }
+    const observeHooks = vi.fn(async () => {})
+    manager.observeHooks = observeHooks
+    const enforceHooks = vi.fn(async () => (filesWritten ? ('ok' as const) : ('no-interpreter' as const)))
+    manager.enforceHooks = enforceHooks
+    manager.enforce = { args: (provider) => (filesWritten && provider === 'codex' ? ['-c', 'hooks.PreToolUse=[x]', '-c', 'hooks.state={y}'] : null) }
+    return { manager, spawned, argv, asked, observeHooks, enforceHooks }
+  }
+
+  it('an Enforce start on an older CLI is refused with the reason before anything spawns', async () => {
+    for (const acc of [account, codexAccount]) {
+      const e = rig('enforce')
+      const warmed: string[] = []
+      e.manager.enforce = {
+        args: () => ['-c', 'x'],
+        warm: async (p) => void warmed.push(p),
+        blocker: (p) => `ENFORCE_UNAVAILABLE: cli-too-old ${p} 0.1.0 9.9.9`
+      }
+      const p = acc.provider ?? 'claude'
+      await expect(e.manager.prepare({ account: acc, cwd: '/work' })).rejects.toThrow(`ENFORCE_UNAVAILABLE: cli-too-old ${p} 0.1.0 9.9.9`)
+      expect(warmed).toEqual([p])
+      // Asked before the hook is written, and a spawn nobody prepared is refused the same way
+      expect(e.enforceHooks).not.toHaveBeenCalled()
+      expect(() => e.manager.spawn({ account: acc, cwd: '/work' })).toThrow(`ENFORCE_UNAVAILABLE: cli-too-old ${p} 0.1.0 9.9.9`)
+      expect(e.spawned).toHaveLength(0)
+    }
+    // Observe asks no version
+    const o = rig('observe')
+    const blocker = vi.fn(() => 'ENFORCE_UNAVAILABLE: cli-version-unknown claude')
+    o.manager.enforce = { args: () => null, blocker }
+    await o.manager.prepare({ account, cwd: '/work' })
+    o.manager.spawn({ account, cwd: '/work' })
+    expect(blocker).not.toHaveBeenCalled()
+    expect(o.spawned).toHaveLength(1)
+  })
+
+  it('a Codex session started in enforce carries the hook args, an observe one does not', async () => {
+    const e = rig('enforce')
+    await e.manager.prepare({ account: codexAccount, cwd: '/work' })
+    expect(e.enforceHooks).toHaveBeenCalledTimes(1)
+    e.manager.spawn({ account: codexAccount, cwd: '/work', initialPrompt: 'go' })
+    const a = e.argv[0] as string[]
+    // Root options, ahead of the prompt, so they reach `resume` too
+    expect(a.slice(a.indexOf('hooks.PreToolUse=[x]') - 1, a.indexOf('hooks.PreToolUse=[x]') + 3)).toEqual(['-c', 'hooks.PreToolUse=[x]', '-c', 'hooks.state={y}'])
+    expect(a.indexOf('hooks.PreToolUse=[x]')).toBeLessThan(a.indexOf('go'))
+    expect(e.spawned[0].meta?.restore).toMatchObject({ observed: true, enforced: true })
+    const o = rig('observe')
+    await o.manager.prepare({ account: codexAccount, cwd: '/work' })
+    o.manager.spawn({ account: codexAccount, cwd: '/work' })
+    expect(o.argv[0]).not.toContain('hooks.PreToolUse=[x]')
+    expect(o.spawned[0].meta?.restore).not.toHaveProperty('enforced')
+    // No hook: refused at the prepare, and at the spawn
+    const n = rig('enforce', false)
+    await expect(n.manager.prepare({ account: codexAccount, cwd: '/work' })).rejects.toThrow(/^ENFORCE_UNAVAILABLE: no-interpreter/)
+    expect(() => n.manager.spawn({ account: codexAccount, cwd: '/work' })).toThrow(/^ENFORCE_UNAVAILABLE: no-interpreter/)
+    expect(n.spawned).toHaveLength(0)
+  })
+
+  // Enforce (enforce design §5, E5): the blocking hook's settings, the note's mark, and no start without them
+  it('an enforce session is pointed at the enforce settings and marked enforced, an observe one is not', async () => {
+    const e = rig('enforce')
+    await e.manager.prepare({ account, cwd: '/work' })
+    expect(e.enforceHooks).toHaveBeenCalledTimes(1)
+    e.manager.spawn({ account, cwd: '/work' })
+    expect(e.asked[0]).toStrictEqual({ toolHooks: false, observe: true, enforce: true })
+    expect(argsText(e.argv[0])).toContain('enforce.json')
+    expect(e.spawned[0].meta?.restore).toMatchObject({ observed: true, enforced: true })
+    const o = rig('observe')
+    await o.manager.prepare({ account, cwd: '/work' })
+    expect(o.enforceHooks).not.toHaveBeenCalled()
+    o.manager.spawn({ account, cwd: '/work' })
+    expect(o.spawned[0].meta?.restore).not.toHaveProperty('enforced')
+  })
+
+  // Final review I5b: the hook names its file by ASTERA_SESSION, which a session without orchestration did not get
+  it('an enforce session gets its id whether or not orchestration is up', async () => {
+    const e = rig('enforce')
+    await e.manager.prepare({ account, cwd: '/work' })
+    e.manager.spawn({ account, cwd: '/work' })
+    const id = e.spawned[0].meta?.id
+    expect(e.spawned[0].env?.ASTERA_SESSION).toBe(id)
+    const o = rig('observe')
+    await o.manager.prepare({ account, cwd: '/work' })
+    o.manager.spawn({ account, cwd: '/work' })
+    expect(o.spawned[0].env?.ASTERA_SESSION).toBeUndefined()
+  })
+
+  it('says why the hook is not in place: no interpreter, or files it could not write', async () => {
+    const e = rig('enforce')
+    e.manager.enforceHooks = async () => 'hook-write-failed'
+    await expect(e.manager.prepare({ account, cwd: '/work' })).rejects.toThrow(/^ENFORCE_UNAVAILABLE: hook-write-failed/)
+  })
+
+  it('asks the version check which kind of session it is', async () => {
+    const e = rig('enforce')
+    const asked: unknown[] = []
+    e.manager.enforce = { args: () => ['-c', 'x'], blocker: (p, kind) => (asked.push([p, kind]), null) }
+    await e.manager.prepare({ account: codexAccount, cwd: '/work' })
+    e.manager.spawn({ account: codexAccount, cwd: '/work' })
+    expect(asked).toEqual([
+      ['codex', 'terminal'],
+      ['codex', 'terminal']
+    ])
+  })
+
+  it('an enforce start whose blocking hook cannot be written is refused before anything spawns', async () => {
+    const { manager, spawned } = rig('enforce', false)
+    await expect(manager.prepare({ account, cwd: '/work' })).rejects.toThrow(/^ENFORCE_UNAVAILABLE: no-interpreter/)
+    expect(() => manager.spawn({ account, cwd: '/work' })).toThrow(/^ENFORCE_UNAVAILABLE: no-interpreter/)
+    expect(spawned).toHaveLength(0)
+  })
+
+  it('in compatibility the hook settings are asked for as before and the note carries no mark', async () => {
+    for (const mode of ['compatibility', null] as const) {
+      const { manager, spawned, asked, observeHooks } = rig(mode)
+      await manager.prepare({ account, cwd: '/work' })
+      manager.spawn({ account, cwd: '/work' })
+      expect(asked[0]).toStrictEqual({ toolHooks: false })
+      expect(spawned[0].meta?.restore).not.toHaveProperty('observed')
+      expect(observeHooks).not.toHaveBeenCalled()
+    }
+  })
+
+  it('observed, the prepare puts the observe files in place and the spawn asks for them and marks the note', async () => {
+    const { manager, spawned, argv, asked, observeHooks } = rig('observe')
+    await manager.prepare({ account, cwd: '/work' })
+    expect(observeHooks).toHaveBeenCalledTimes(1)
+    manager.spawn({ account, cwd: '/work', slackNotify: true })
+    expect(asked[0]).toStrictEqual({ toolHooks: true, observe: true })
+    expect(argsText(argv[0])).toContain('observe.json')
+    expect(spawned[0].meta?.restore).toMatchObject({ observed: true })
+  })
+
+  it('a codex session observed is marked in its note, with no hook files to write', async () => {
+    const { manager, spawned, observeHooks } = rig('observe')
+    await manager.prepare({ account: codexAccount, cwd: '/work' })
+    manager.spawn({ account: codexAccount, cwd: '/work' })
+    expect(observeHooks).not.toHaveBeenCalled()
+    expect(spawned[0].meta?.restore).toMatchObject({ observed: true })
+  })
+
+  it('a prepare whose observe files failed does not fail the spawn', async () => {
+    const { manager, spawned } = rig('observe')
+    manager.observeHooks = async () => {
+      throw new Error('EACCES')
+    }
+    await expect(manager.prepare({ account, cwd: '/work' })).resolves.toBeUndefined()
+    manager.spawn({ account, cwd: '/work' })
+    expect(spawned).toHaveLength(1)
+  })
+
+  // Ruling (fix round 1): a Claude session is marked only when it was given the observe files; one left on the plain
+  // file (they could not be written) sends no observe lines and is not observed.
+  it('a Claude session left on the plain file is not marked observed', async () => {
+    const { manager, spawned, argv } = rig('observe', false)
+    await manager.prepare({ account, cwd: '/work' })
+    manager.spawn({ account, cwd: '/work' })
+    expect(argsText(argv[0])).toContain('s.json')
+    expect(spawned[0].meta?.restore).not.toHaveProperty('observed')
+  })
+})
+
+// The Credentials list (credentials design §5): the inherited environment loses what the list hides before Astera adds its
+// own variables, so an entry can never take away the session's identity, its Gateway token or a shared server's value.
+describe('credentials hiding', () => {
+  const caps = {
+    context: { kind: 'implicit' as const, accounts: ['acc-1'], policyMode: 'compatibility' as const, executionMode: 'managed' as const },
+    args: [],
+    env: { LINEAR_API_KEY: 'from-astera' },
+    given: ['linear'],
+    gatewayGrant: ['mcp-linear'],
+    skipped: []
+  }
+  const base = { PATH: process.env.PATH ?? '', GH_TOKEN: 'inherited', LINEAR_API_KEY: 'inherited-raw', KEEP: 'k' }
+  const made = () => {
+    const spawned: { opts: PtySpawnOptions }[] = []
+    const factory: PtyFactory = (_file, _args, opts) => {
+      spawned.push({ opts })
+      return new FakePty()
+    }
+    const manager = new SessionManager(factory, makeDescriptors(process.platform), 100, 20, undefined, undefined, undefined, base)
+    return { manager, spawned }
+  }
+
+  it('a session started after an entry is on has none of its variables', () => {
+    const { manager, spawned } = made()
+    manager.hiding = { get: () => ({ remove: ['GH_TOKEN'], set: { GH_CONFIG_DIR: 'C:/empty/gh' } }), damaged: () => false }
+    manager.spawn({ account, cwd: os.tmpdir() })
+    const env = spawned[0].opts.env ?? {}
+    expect(env.GH_TOKEN).toBeUndefined()
+    expect(env.GH_CONFIG_DIR).toBe('C:/empty/gh')
+    expect(env.KEEP).toBe('k')
+  })
+
+  it('never removes what Astera plants', () => {
+    const { manager, spawned } = made()
+    manager.capabilities = { get: () => caps, refresh: async () => {} }
+    manager.hiding = { get: () => ({ remove: ['LINEAR_API_KEY', 'ASTERA_SESSION', 'ASTERA_GATEWAY_TOKEN'], set: {} }), damaged: () => false }
+    const info = manager.spawn({ account, cwd: os.tmpdir(), orchEnv: { cliPath: 'C:/cli/astera.cmd', skillsPath: 'C:/u/skills', profileDir: 'C:/u' } })
+    const env = spawned[0].opts.env ?? {}
+    expect(env.LINEAR_API_KEY).toBe('from-astera')
+    expect(env.ASTERA_SESSION).toBe(info.id)
+    expect(env.ASTERA_GATEWAY_TOKEN).toMatch(/^[A-Za-z0-9_-]{43}$/)
+  })
+
+  // Final review I3: the session's id names its own empty locations
+  it('asks the hiding for the session\'s folder and its id', () => {
+    const { manager } = made()
+    const asked: [string, string | undefined][] = []
+    manager.hiding = { get: (cwd, sessionId) => (asked.push([cwd, sessionId]), { remove: [], set: {} }), damaged: () => false }
+    const info = manager.spawn({ account, cwd: os.tmpdir() })
+    expect(asked).toEqual([[os.tmpdir(), info.id]])
+  })
+})
+
+// The sandbox (sandbox design §6): a sandboxed Codex terminal session starts with `-a never` and the Astera permission
+// profile in place of the bypass flag, on its own server (`--no-daemon`), with npm's cache in TEMP and, on Windows, its
+// repository named safe for the sandbox's own account. A session without it starts with exactly today's arguments.
+describe('the sandbox at spawn', () => {
+  const dirs: string[] = []
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
+  /** A repository's top, its folder named `name` (a fresh temp folder by default). */
+  const repo = (name?: string): string => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'astera-sbx-'))
+    dirs.push(root)
+    const top = name === undefined ? root : path.join(root, name)
+    mkdirSync(path.join(top, '.git'), { recursive: true })
+    return top
+  }
+  const daemon = (takesNoDaemon: boolean) => Object.assign(() => takesNoDaemon, { warm: async () => {} })
+  const HOME = { linux: '/home/t', darwin: '/Users/t', win32: 'C:\\Users\\t' } as const
+  const BASE = {
+    linux: { PATH: '/usr/bin', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1000/bus' },
+    darwin: { PATH: '/usr/bin' },
+    win32: { Path: 'C:\\Windows', APPDATA: 'C:\\Users\\t\\AppData\\Roaming' }
+  } as const
+  type Ready = NonNullable<SpawnChecks['codexWindowsReady']>
+  /** Every Windows home reads set up unless a case says otherwise: the real question runs codex. */
+  const checksFor = (platform: NodeJS.Platform, ready: Ready = async () => 'ready', hostSocketDir: string | null = null, codexExcludes?: SpawnChecks['codexExcludes'], appKeyFile?: string): SpawnChecks => ({
+    cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform, now: Date.now, syncExists: () => true, log: () => {},
+    codexWindowsReady: ready, hostSocketDir, ...(codexExcludes ? { codexExcludes } : {}), ...(appKeyFile ? { appKeyFile } : {})
+  })
+  /** The codex version the probe answers: '0.160.0', the floor, unless a case says otherwise (null: unreadable,
+   *  undefined: no codex) */
+  const versionOf = (v: string | null | undefined) => Object.assign((_cli: 'claude' | 'codex') => v, { warm: async () => {} })
+  const rig = (platform: 'linux' | 'darwin' | 'win32', o: { noDaemon?: boolean; ready?: Ready; hostSocketDir?: string | null; codex?: string | null; noVersionProbe?: true; excludes?: SpawnChecks['codexExcludes']; appKeyFile?: string } = {}) => {
+    const argv: string[][] = []
+    const spawned: PtySpawnOptions[] = []
+    const manager = new SessionManager(
+      (_f, a, opts) => (argv.push(a as string[]), spawned.push(opts), new FakePty()),
+      makeDescriptors(platform, HOME[platform], undefined, daemon(o.noDaemon ?? true)),
+      100, 20, HOME[platform], undefined, [], { ...BASE[platform] }, checksFor(platform, o.ready, o.hostSocketDir ?? null, o.excludes, o.appKeyFile)
+    )
+    if (!o.noVersionProbe) manager.codexVersion = versionOf('codex' in o ? o.codex : '0.160.0')
+    return { manager, argv, spawned }
+  }
+  /** What the builders give for this folder, from the session's own environment and home. */
+  const expected = async (platform: 'linux' | 'darwin' | 'win32', cwd: string) => {
+    const layout = await gitLayoutOf(cwd)
+    const env: Record<string, string> = { ...BASE[platform] }
+    const denied = [...sensitiveLocations(platform, env, HOME[platform]), ...credentialStoreDenies(platform, env, HOME[platform])]
+    return { args: codexSandboxArgs({ platform, layout, denied }), env: codexSandboxEnv({ platform, layout, tmpDir: os.tmpdir() }), layout }
+  }
+  /** The codex arguments after cmd.exe's wrapper, when win32 found a shim. */
+  const codexArgs = (a: string[]): string[] => (a[0] === '/d' ? a.slice(4) : a)
+
+  it('a sandboxed Codex session starts with -a never and the profile, not the bypass flag', async () => {
+    for (const platform of ['linux', 'darwin', 'win32'] as const) {
+      const cwd = repo()
+      const { manager, argv, spawned } = rig(platform)
+      await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+      const info = manager.spawn({ account: codexAccount, cwd, sandbox: true, bypassPermissions: true, initialPrompt: 'go' })
+      const want = await expected(platform, cwd)
+      expect(codexArgs(argv[0]), platform).toEqual(['-c', 'check_for_update_on_startup=false', '--no-daemon', ...want.args, 'go'])
+      expect(argv[0]).not.toContain('--dangerously-bypass-approvals-and-sandbox')
+      // The E6 list and the OS credential store come from the session's own environment and home
+      const profile = want.args[3]
+      expect(profile).toContain(`"${HOME[platform].replace(/\\/g, '/')}/.ssh"="deny"`)
+      if (platform === 'linux') expect(profile).toContain('"/run/user/1000/bus"="deny"')
+      if (platform === 'darwin') expect(profile).toContain('"/Users/t/Library/Keychains"="deny"')
+      if (platform === 'win32') expect(profile).toContain('"C:/Users/t/AppData/Roaming/GitHub CLI"="deny"')
+      // Marked in the info and the note, which a Host handing the session back reads: Codex's own sandbox on every OS
+      expect(info.sandboxed).toBe(true)
+      expect(info.sandboxKind, platform).toBe('sandbox')
+      expect(spawned[0].meta?.restore).toMatchObject({ sandboxed: true, sandboxKind: 'sandbox' })
+      expect(sessionInfoFromNote({ kind: 'session', id: info.id, restore: spawned[0].meta!.restore! })).toMatchObject({ sandboxed: true, sandboxKind: 'sandbox' })
+    }
+  })
+
+  // Final fix pass (minor 4): on Windows the profile names every worktree's git files, and with enough of them the command
+  // line passes what cmd.exe (8191) or CreateProcess (32767) carries; the start is refused, at the prepare and at the
+  // spawn, rather than launched broken with a generic error
+  it('a sandboxed win32 Codex start whose command line would not fit is refused before the spawn', async () => {
+    const cwd = repo()
+    for (let i = 0; i < 400; i++) mkdirSync(path.join(cwd, '.git', 'worktrees', `worktree-with-a-long-name-${String(i).padStart(4, '0')}`), { recursive: true })
+    const { manager, spawned } = rig('win32')
+    await expect(manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: command-too-long$/)
+    expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: /)
+    expect(spawned).toHaveLength(0)
+    // A few worktrees fit
+    const small = repo()
+    for (let i = 0; i < 3; i++) mkdirSync(path.join(small, '.git', 'worktrees', `w${i}`), { recursive: true })
+    const ok = rig('win32')
+    await ok.manager.prepare({ account: codexAccount, cwd: small, sandbox: true })
+    expect(ok.manager.spawn({ account: codexAccount, cwd: small, sandbox: true }).sandboxed).toBe(true)
+  })
+
+  // Final review I2: the sandbox was measured on codex 0.160.0 (ENFORCE_MIN.codex); an older codex, one whose version
+  // cannot be read, or none, could ignore the profile and run under its own config, so the start is refused before
+  // anything is written, and again at the spawn if the codex changed in between
+  it('a sandboxed Codex start needs codex 0.160.0 or later, at the prepare and at the spawn', async () => {
+    const cases: Array<[string | null | undefined, RegExp]> = [
+      ['0.159.0', /^SANDBOX_UNAVAILABLE: cli-too-old codex 0\.159\.0 0\.160\.0$/],
+      [null, /^SANDBOX_UNAVAILABLE: cli-version-unknown codex$/],
+      [undefined, /^SANDBOX_UNAVAILABLE: cli-missing codex$/]
+    ]
+    for (const [codex, refusal] of cases) {
+      const cwd = repo()
+      const { manager, spawned } = rig('linux', { codex })
+      await expect(manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(refusal)
+      expect(existsSync(path.join(cwd, '.git', 'commondir')), String(codex)).toBe(false)
+      expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: /)
+      expect(spawned).toHaveLength(0)
+      // Unsandboxed, the same codex starts as before
+      await manager.prepare({ account: codexAccount, cwd })
+      manager.spawn({ account: codexAccount, cwd })
+      expect(spawned).toHaveLength(1)
+    }
+    // A process with no version probe cannot tell, and refuses
+    const none = rig('linux', { noVersionProbe: true })
+    await expect(none.manager.prepare({ account: codexAccount, cwd: repo(), sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: cli-version-unknown codex$/)
+    // The floor itself starts; a codex downgraded after the prepare is refused at the spawn
+    const cwd = repo()
+    const ok = rig('linux')
+    await ok.manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    ok.manager.codexVersion = versionOf('0.159.9')
+    expect(() => ok.manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: cli-too-old codex 0\.159\.9 0\.160\.0$/)
+    ok.manager.codexVersion = versionOf('0.161.2')
+    expect(ok.manager.spawn({ account: codexAccount, cwd, sandbox: true }).sandboxed).toBe(true)
+  })
+
+  // Final fix pass (C2): on macOS and Linux the folder the Host's socket is in is denied, so the session reaches the Host
+  // only through the loopback with its workload token; on Windows the Host's pipe is no file and nothing is added
+  it('denies the folder of the Host’s socket on macOS and Linux', async () => {
+    const dirs = { linux: '/tmp/astera-host-0123456789ab-v4', darwin: '/var/folders/x/T/astera-host-0123456789ab-v4', win32: null } as const
+    for (const platform of ['linux', 'darwin', 'win32'] as const) {
+      const cwd = repo()
+      const { manager, argv } = rig(platform, { hostSocketDir: dirs[platform] })
+      await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+      manager.spawn({ account: codexAccount, cwd, sandbox: true })
+      const profile = codexArgs(argv[0]).find((a) => a.startsWith('permissions='))!
+      if (platform === 'linux') expect(profile).toContain('"/tmp/astera-host-0123456789ab-v4"="deny"')
+      if (platform === 'darwin') {
+        expect(profile).toContain('"/var/folders/x/T/astera-host-0123456789ab-v4"="deny"')
+        expect(profile).toContain('"/private/var/folders/x/T/astera-host-0123456789ab-v4"="deny"')
+      }
+      if (platform === 'win32') expect(profile).not.toContain('astera-host-')
+    }
+  })
+
+  // Sandbox follow-ups, item 1: the app's key lets a process be the app to the Host (spawn anything, be the person in the
+  // records), so the profile denies it on every OS; the Host key beside it stays readable for the loopback's proof
+  it('denies the app key on every OS, and leaves the Host key readable', async () => {
+    const files = { linux: '/home/t/.config/astera/host/app.key', darwin: '/Users/t/Library/Application Support/astera/host/app.key', win32: 'C:\\Users\\t\\AppData\\Roaming\\astera\\host\\app.key' } as const
+    for (const platform of ['linux', 'darwin', 'win32'] as const) {
+      const cwd = repo()
+      const { manager, argv } = rig(platform, { appKeyFile: files[platform] })
+      await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+      manager.spawn({ account: codexAccount, cwd, sandbox: true })
+      const profile = codexArgs(argv[0]).find((a) => a.startsWith('permissions='))!
+      expect(profile, platform).toContain(`"${files[platform].replace(/\\/g, '/')}"="deny"`)
+      expect(profile, platform).not.toContain('host.key')
+    }
+  })
+
+  // Final fix pass, part 2 (B): every other Host's folder beside this profile's (another profile's Host, such as the dev
+  // app's) is denied too, as the prepare found them: the folder is read once, so a Host started after it is not
+  it('denies every Host folder beside this one that is there when the session starts', async () => {
+    const parent = mkdtempSync(path.join(os.tmpdir(), 'astera-hosts-'))
+    dirs.push(parent)
+    const slashed = (p: string): string => p.replace(/\\/g, '/')
+    const own = slashed(path.join(parent, 'astera-host-aaaaaaaaaaaa-v4'))
+    const dev = slashed(path.join(parent, 'astera-host-bbbbbbbbbbbb-v4'))
+    for (const d of [own, dev, path.join(parent, 'unrelated')]) mkdirSync(d)
+    const cwd = repo()
+    const { manager, argv } = rig('linux', { hostSocketDir: own })
+    await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    mkdirSync(path.join(parent, 'astera-host-cccccccccccc-v4'))
+    manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    const profile = codexArgs(argv[0]).find((a) => a.startsWith('permissions='))!
+    expect(profile).toContain(`"${own}"="deny"`)
+    expect(profile).toContain(`"${dev}"="deny"`)
+    expect(profile).not.toContain('unrelated')
+    expect(profile).not.toContain('astera-host-cccccccccccc')
+  })
+
+  it('its environment has the npm cache and, on win32, safe.directory', async () => {
+    for (const platform of ['linux', 'win32'] as const) {
+      const cwd = repo()
+      const { manager, spawned } = rig(platform)
+      await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+      manager.spawn({ account: codexAccount, cwd, sandbox: true })
+      const env = spawned[0].env ?? {}
+      const want = await expected(platform, cwd)
+      expect(env.npm_config_cache).toBe(`${os.tmpdir().replace(/\\/g, '/').replace(/\/+$/, '')}/astera-npm-cache`)
+      expect(env).toMatchObject(want.env)
+      // Final fix pass (C1): on every OS the git files a read entry keeps are made first, a commondir naming the git
+      // directory itself and an empty modules folder
+      expect(readFileSync(path.join(cwd, '.git', 'commondir'), 'utf8'), platform).toBe('.\n')
+      expect(existsSync(path.join(cwd, '.git', 'modules')), platform).toBe(true)
+      if (platform === 'win32') {
+        expect(env).toMatchObject({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'safe.directory', GIT_CONFIG_VALUE_0: want.layout!.top })
+        // win32 only: git may later read a config.worktree, and the Windows sandbox would create a missing one
+        expect(existsSync(path.join(cwd, '.git', 'config.worktree'))).toBe(true)
+      } else {
+        expect(env.GIT_CONFIG_COUNT).toBeUndefined()
+        expect(existsSync(path.join(cwd, '.git', 'config.worktree'))).toBe(false)
+      }
+    }
+  })
+
+  // The elevated sandbox runs the session as an account of its own, which cannot read the person's global excludes: the
+  // prepare has a copy written in TEMP once every check has passed, and the session's git is pointed at it after the
+  // safe directory. macOS and Linux sessions read the person's own, and nothing is written for them
+  it('a sandboxed win32 Codex session reads a copy of the person’s global excludes', async () => {
+    const file = 'C:/t/astera-git-excludes-0123456789ab'
+    let asked = 0
+    const excludes = async (): Promise<string | null> => (asked++, file)
+    for (const platform of ['win32', 'linux'] as const) {
+      const cwd = repo()
+      const { manager, spawned } = rig(platform, { excludes })
+      await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+      manager.spawn({ account: codexAccount, cwd, sandbox: true })
+      const env = spawned[0].env ?? {}
+      if (platform === 'win32')
+        expect(env).toMatchObject({
+          GIT_CONFIG_COUNT: '2',
+          GIT_CONFIG_KEY_0: 'safe.directory',
+          GIT_CONFIG_VALUE_0: (await gitLayoutOf(cwd))!.top,
+          GIT_CONFIG_KEY_1: 'core.excludesFile',
+          GIT_CONFIG_VALUE_1: file
+        })
+      else expect(env.GIT_CONFIG_COUNT).toBeUndefined()
+    }
+    expect(asked).toBe(1)
+    // A start refused (the account's Windows sandbox not set up) writes nothing
+    const unready = rig('win32', { excludes, ready: async () => 'not-set-up' })
+    await expect(unready.manager.prepare({ account: codexAccount, cwd: repo(), sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: windows-setup codex /)
+    expect(asked).toBe(1)
+    // No copy (no excludes, or it could not be written): the environment is as before
+    const cwd = repo()
+    const none = rig('win32', { excludes: async () => null })
+    await none.manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    none.manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    expect(none.spawned[0].env).toMatchObject({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'safe.directory' })
+    expect(none.spawned[0].env).not.toHaveProperty('GIT_CONFIG_KEY_1')
+    // An unsandboxed session asks for none
+    const plain = rig('win32', { excludes })
+    await plain.manager.prepare({ account: codexAccount, cwd })
+    plain.manager.spawn({ account: codexAccount, cwd })
+    expect(asked).toBe(1)
+    expect(plain.spawned[0].env?.GIT_CONFIG_COUNT).toBeUndefined()
+  })
+
+  // Task 5 fix round 1: the person's own GIT_CONFIG_* entries the session inherits stay, with the safe.directory after them
+  it('a win32 session keeps the GIT_CONFIG entries it inherits', async () => {
+    const cwd = repo()
+    const spawned: PtySpawnOptions[] = []
+    const manager = new SessionManager((_f, _a, o) => (spawned.push(o), new FakePty()), makeDescriptors('win32', HOME.win32, undefined, daemon(true)),
+      100, 20, HOME.win32, undefined, [], { ...BASE.win32, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.autocrlf', GIT_CONFIG_VALUE_0: 'false' }, checksFor('win32'))
+    manager.codexVersion = versionOf('0.160.0')
+    await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    expect(spawned[0].env).toMatchObject({
+      GIT_CONFIG_COUNT: '2',
+      GIT_CONFIG_KEY_0: 'core.autocrlf',
+      GIT_CONFIG_VALUE_0: 'false',
+      GIT_CONFIG_KEY_1: 'safe.directory',
+      GIT_CONFIG_VALUE_1: (await gitLayoutOf(cwd))!.top
+    })
+  })
+
+  it("an unsandboxed session's arguments are unchanged", async () => {
+    for (const sandbox of [undefined, false]) {
+      const cwd = repo()
+      const { manager, argv, spawned } = rig('win32')
+      await manager.prepare({ account: codexAccount, cwd, ...(sandbox === undefined ? {} : { sandbox }) })
+      const info = manager.spawn({ account: codexAccount, cwd, bypassPermissions: true, initialPrompt: 'go', ...(sandbox === undefined ? {} : { sandbox }) })
+      expect(codexArgs(argv[0])).toEqual(['-c', 'check_for_update_on_startup=false', '--no-daemon', '--dangerously-bypass-approvals-and-sandbox', 'go'])
+      const env = spawned[0].env ?? {}
+      expect(env.npm_config_cache).toBeUndefined()
+      expect(env.GIT_CONFIG_COUNT).toBeUndefined()
+      expect(info).not.toHaveProperty('sandboxed')
+      expect(info).not.toHaveProperty('sandboxKind')
+      expect(spawned[0].meta?.restore).not.toHaveProperty('sandboxed')
+      expect(spawned[0].meta?.restore).not.toHaveProperty('sandboxKind')
+      // Nothing is written into the repository for it
+      expect(existsSync(path.join(cwd, '.git', 'config.worktree'))).toBe(false)
+      expect(existsSync(path.join(cwd, '.git', 'commondir'))).toBe(false)
+      expect(existsSync(path.join(cwd, '.git', 'modules'))).toBe(false)
+    }
+    const { manager, argv } = rig('linux')
+    await manager.prepare({ account, cwd: os.tmpdir() })
+    manager.spawn({ account, cwd: os.tmpdir(), bypassPermissions: true, initialPrompt: 'go' })
+    expect(argv[0]).toEqual(['--dangerously-skip-permissions', '--', 'go'])
+  })
+
+  // Task 5 fix round 1: refused at the prepare, which a roll awaits before its kill, so a roll that would be refused
+  // leaves the session it would replace running
+  it('a codex without --no-daemon refuses a sandboxed start', async () => {
+    const cwd = repo()
+    const { manager, spawned } = rig('linux', { noDaemon: false })
+    await expect(manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: codex-daemon codex$/)
+    expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: /)
+    expect(spawned).toHaveLength(0)
+    // Unsandboxed, the same codex starts as before
+    await manager.prepare({ account: codexAccount, cwd })
+    manager.spawn({ account: codexAccount, cwd })
+    expect(spawned).toHaveLength(1)
+  })
+
+  it('refuses a sandboxed win32 start whose folder holds a cmd.exe character', async () => {
+    const cwd = repo('a&b')
+    const w = rig('win32')
+    await expect(w.manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: path-unsafe$/)
+    expect(() => w.manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: /)
+    expect(w.spawned).toHaveLength(0)
+    // Elsewhere nothing goes through cmd.exe
+    const l = rig('linux')
+    await l.manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    l.manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    expect(l.spawned).toHaveLength(1)
+  })
+
+  it('refuses a sandboxed win32 start whose denied locations hold a cmd.exe character', async () => {
+    const cwd = repo()
+    const argv: string[][] = []
+    const home = 'C:\\Users\\100%'
+    const manager = new SessionManager((_f, a) => (argv.push(a as string[]), new FakePty()), makeDescriptors('win32', home, undefined, daemon(true)),
+      100, 20, home, undefined, [], { Path: 'C:\\Windows' }, checksFor('win32'))
+    manager.codexVersion = versionOf('0.160.0')
+    await expect(manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: path-unsafe$/)
+    expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: /)
+    expect(argv).toHaveLength(0)
+  })
+
+  // The spawn asks again for itself: what it starts with is the environment it builds then, and the codex it finds now
+  it('the spawn keeps its own checks, for a codex and an environment that changed since the prepare', async () => {
+    const cwd = repo()
+    let takes = true
+    const flipping = Object.assign(() => takes, { warm: async () => {} })
+    let appData = 'C:\\Users\\t\\AppData\\Roaming'
+    const spawned: PtySpawnOptions[] = []
+    const manager = new SessionManager((_f, _a, o) => (spawned.push(o), new FakePty()), makeDescriptors('win32', HOME.win32, undefined, flipping),
+      100, 20, HOME.win32, undefined, [], () => ({ Path: 'C:\\Windows', APPDATA: appData }), checksFor('win32'))
+    manager.codexVersion = versionOf('0.160.0')
+    await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    takes = false
+    expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: codex-daemon codex$/)
+    takes = true
+    appData = 'C:\\Users\\t\\AppData\\R&D'
+    expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: path-unsafe$/)
+    expect(spawned).toHaveLength(0)
+    appData = 'C:\\Users\\t\\AppData\\Roaming'
+    manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    expect(spawned).toHaveLength(1)
+  })
+
+  it('Enforce and the sandbox together give both sets of -c', async () => {
+    const cwd = repo()
+    const { manager, argv, spawned } = rig('linux')
+    manager.capabilities = {
+      get: () => ({ context: { kind: 'implicit', accounts: [codexAccount.id], policyMode: 'enforce', executionMode: 'managed' }, args: [], env: {}, given: [], gatewayGrant: [], skipped: [] }),
+      refresh: async () => {}
+    }
+    manager.enforceHooks = async () => 'ok'
+    manager.enforce = { args: () => ['-c', 'hooks.PreToolUse=[x]', '-c', 'hooks.state={y}'] }
+    await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    manager.spawn({ account: codexAccount, cwd, sandbox: true, initialPrompt: 'go' })
+    const want = await expected('linux', cwd)
+    expect(argv[0]).toEqual(['-c', 'check_for_update_on_startup=false', '-c', 'hooks.PreToolUse=[x]', '-c', 'hooks.state={y}', '--no-daemon', ...want.args, 'go'])
+    expect(spawned[0].meta?.restore).toMatchObject({ enforced: true, sandboxed: true })
+  })
+
+  // The synchronous spawn cannot read git safely, so a sandboxed spawn whose folder `prepare` did not read refuses
+  it('a sandboxed spawn nobody prepared for the sandbox refuses with not-prepared', async () => {
+    const cwd = repo()
+    const { manager, spawned } = rig('linux')
+    expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
+    await manager.prepare({ account: codexAccount, cwd })
+    expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
+    expect(spawned).toHaveLength(0)
+    await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    expect(spawned).toHaveLength(1)
+  })
+
+  // Windows readiness (inventory §23.3): an account whose Codex home has no elevated setup would bring up Windows'
+  // administrator prompt at its first command, so the start is refused at the prepare, naming the account the person
+  // can set up (설정하기), and nothing is written into the repository for it
+  it('a sandboxed win32 Codex start on an account not set up refuses with windows-setup', async () => {
+    const cwd = repo()
+    const asked: Array<string | null> = []
+    const notSetUp: Ready = async ({ codexHome }) => (asked.push(codexHome), 'not-set-up')
+    const w = rig('win32', { ready: notSetUp })
+    await expect(w.manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: windows-setup codex acc-cx$/)
+    // The account's own home is the one asked
+    expect(asked).toEqual([codexAccount.configDir])
+    expect(existsSync(path.join(cwd, '.git', 'config.worktree'))).toBe(false)
+    expect(existsSync(path.join(cwd, '.git', 'commondir'))).toBe(false)
+    expect(() => w.manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
+    expect(w.spawned).toHaveLength(0)
+    // A process that cannot ask refuses the same way: a sandboxed start on a home nobody asked about is not risked
+    const none = new SessionManager((_f, _a, o) => (w.spawned.push(o), new FakePty()), makeDescriptors('win32', HOME.win32, undefined, daemon(true)),
+      100, 20, HOME.win32, undefined, [], { ...BASE.win32 }, { ...checksFor('win32'), codexWindowsReady: undefined })
+    none.codexVersion = versionOf('0.160.0')
+    await expect(none.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: windows-setup codex acc-cx$/)
+    // Unsandboxed, or elsewhere than Windows, nothing is asked
+    await w.manager.prepare({ account: codexAccount, cwd })
+    w.manager.spawn({ account: codexAccount, cwd })
+    const l = rig('linux', { ready: notSetUp })
+    await l.manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    l.manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    expect(asked).toHaveLength(1)
+    expect(w.spawned).toHaveLength(1)
+    expect(l.spawned).toHaveLength(1)
+  })
+
+  // Task 6 fix round 1: Codex could not be asked (missing, too old for doctor --json, timed out, a report that does not
+  // read): its own refusal, which offers no setup, and nothing written for it
+  it('a sandboxed win32 Codex start whose readiness could not be asked refuses with windows-check-failed', async () => {
+    const cwd = repo()
+    const w = rig('win32', { ready: async () => 'check-failed' })
+    await expect(w.manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: windows-check-failed codex acc-cx$/)
+    expect(existsSync(path.join(cwd, '.git', 'config.worktree'))).toBe(false)
+    expect(w.spawned).toHaveLength(0)
+  })
+
+  // Task 6 fix round 1: a chat chain's roll is prepared here too, and a chat's app-server needs no --no-daemon, so its
+  // sandbox is not refused for a codex without it; the layout it reads is the chat respawn's
+  it('a chat roll’s preparation does not ask for --no-daemon', async () => {
+    const cwd = repo()
+    const { manager } = rig('linux', { noDaemon: false })
+    await expect(manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: codex-daemon codex$/)
+    await manager.prepare({ account: codexAccount, cwd, sandbox: true, chat: true })
+    expect(manager.sandboxLayouts.layoutOf(codexAccount.id, cwd, Date.now())).toEqual(await gitLayoutOf(cwd))
+  })
+
+  // Readiness is per account, so what a prepare read is kept for the account it was asked for: another account's
+  // sandboxed spawn in the same folder is not let through on it
+  it('a prepared sandbox is kept for its own account', async () => {
+    const cwd = repo()
+    const other: Account = { ...codexAccount, id: 'acc-cx2', configDir: 'C:\\Users\\tester\\.codex-accounts\\other' }
+    const { manager, spawned } = rig('win32')
+    await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    expect(() => manager.spawn({ account: other, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
+    manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    expect(spawned).toHaveLength(1)
+  })
+
+  // The line a refused roll leaves in the app's own tab (main/index.ts's codex rolling `tell`): output, not input
+  it('say puts a line in a live session’s output, and nothing for one that exited or is not here', async () => {
+    const cwd = repo()
+    const ptys: FakePty[] = []
+    const manager = new SessionManager((_f, _a, _o) => { const p = new FakePty(); ptys.push(p); return p }, makeDescriptors('linux', HOME.linux, undefined, daemon(true)),
+      100, 20, HOME.linux, undefined, [], { ...BASE.linux }, checksFor('linux'))
+    const data: Array<{ sessionId: string; data: string }> = []
+    manager.onData = (e) => data.push(e)
+    await manager.prepare({ account: codexAccount, cwd })
+    const info = manager.spawn({ account: codexAccount, cwd })
+    manager.say(info.id, '\r\n[Astera] why\r\n')
+    expect(data).toEqual([{ sessionId: info.id, data: '\r\n[Astera] why\r\n' }])
+    expect(ptys[0].written).toEqual([])
+    manager.say('nobody', 'x')
+    ptys[0].emitExit(0)
+    manager.say(info.id, 'late')
+    expect(data).toHaveLength(1)
+  })
+
+  it('a folder outside any repository gets no git entries, and still starts', async () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), 'astera-sbx-'))
+    dirs.push(cwd)
+    const { manager, argv, spawned } = rig('win32')
+    await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    expect(codexArgs(argv[0])).toEqual(['-c', 'check_for_update_on_startup=false', '--no-daemon', ...(await expected('win32', cwd)).args])
+    expect(codexArgs(argv[0]).join(' ')).not.toMatch(/\.git"=|\.git\/|:workspace_roots/)
+    expect(spawned[0].env?.GIT_CONFIG_COUNT).toBeUndefined()
+  })
+})
+
+// The sandbox for Claude (sandbox design §6): Claude's sandbox is its settings file, so a sandboxed Claude session reads
+// the sandbox twin of the file it would read anyway (StatusLineManager.ensureSandboxFiles), with npm's cache in TEMP and,
+// on Linux, the git excludes srt's placeholders need (Task 2's ruling). On Windows the twin holds the deny rules only.
+describe('the sandbox at spawn, for Claude', () => {
+  const dirs: string[] = []
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
+  const temp = (): string => {
+    const d = mkdtempSync(path.join(os.tmpdir(), 'astera-claude-sbx-'))
+    dirs.push(d)
+    return d
+  }
+  const HOME = { linux: '/home/t', darwin: '/Users/t', win32: 'C:\\Users\\t' } as const
+  const BASE = {
+    linux: { PATH: '/usr/bin', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1000/bus' },
+    darwin: { PATH: '/usr/bin' },
+    win32: { Path: 'C:\\Windows', APPDATA: 'C:\\Users\\t\\AppData\\Roaming' }
+  } as const
+  const checksFor = (platform: NodeJS.Platform): SpawnChecks => ({
+    cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform, now: Date.now, syncExists: () => true, log: () => {}
+  })
+  const rig = async (platform: 'linux' | 'darwin' | 'win32', version: string | null | undefined = '2.1.310', extraEnv: Record<string, string> = {}) => {
+    const profileDir = temp()
+    const tmpDir = temp()
+    const gitHome = temp()
+    const statusLine = new StatusLineManager(profileDir, 'node', () => {}, {
+      platform,
+      execPath: platform === 'win32' ? 'C:/x/electron.exe' : '/opt/astera/astera',
+      homeDir: HOME[platform],
+      tmpDir
+    })
+    await statusLine.init()
+    const warmed: string[] = []
+    const versions = Object.assign(() => version, { warm: async (cli: 'claude' | 'codex') => void warmed.push(cli) })
+    const argv: string[][] = []
+    const spawned: PtySpawnOptions[] = []
+    const manager = new SessionManager(
+      (_f, a, opts) => (argv.push(a as string[]), spawned.push(opts), new FakePty()),
+      makeDescriptors(platform, HOME[platform]),
+      100, 20, HOME[platform],
+      (id, acc, o) => statusLine.spawnConfig(id, acc, o),
+      [], { ...BASE[platform], ...extraEnv }, checksFor(platform)
+    )
+    manager.claudeSandbox = claudeSandboxStart({
+      platform, profileDir, homeDir: gitHome, env: {}, tmpDir, files: statusLine, version: versions, uid: 1000,
+      runGit: async () => null, log: () => {}
+    })
+    return { manager, argv, spawned, statusLine, profileDir, tmpDir, gitHome, warmed }
+  }
+  /** The `--settings` file a session was started with. */
+  const settingsOf = (a: string[]): string => a[a.indexOf('--settings') + 1]
+  /** The builder's settings for a session of the rig's profile, with its app key denied (sandbox follow-ups, item 1). */
+  const builder = (platform: 'linux' | 'darwin' | 'win32', r: { tmpDir: string; profileDir: string }, layout: GitLayout | null = null) => {
+    const env = { ...BASE[platform] }
+    const denied = [...sensitiveLocations(platform, env, HOME[platform]), ...credentialStoreDenies(platform, env, HOME[platform]), ...appKeyDenies(appKeyPath(r.profileDir))]
+    const tmpDir = r.tmpDir
+    return claudeSandboxSettings({ platform, denied, npmCache: npmCacheOf(tmpDir), layout })
+  }
+  /** A repository's top in a fresh temp folder: a `.git` folder is all gitLayoutOf needs. */
+  const repoIn = (): string => {
+    const top = temp()
+    mkdirSync(path.join(top, '.git'))
+    return top
+  }
+
+  it('a sandboxed Claude session on linux gets the sandbox variant', async () => {
+    const r = await rig('linux')
+    mkdirSync(path.join(r.gitHome, '.config', 'git'), { recursive: true })
+    writeFileSync(path.join(r.gitHome, '.config', 'git', 'ignore'), '*.secret\n')
+    const cwd = temp()
+    await r.manager.prepare({ account, cwd, sandbox: true })
+    expect(r.warmed).toEqual(['claude'])
+    const info = r.manager.spawn({ account, cwd, sandbox: true, bypassPermissions: true })
+    const file = settingsOf(r.argv[0])
+    // Its scope's twin: outside a repository, and from the session's own environment
+    expect(file).toBe(r.statusLine.spawnConfig('x', account, { sandbox: { layout: null, env: { ...BASE.linux } } }).settingsFile)
+    expect(path.basename(file)).toBe(path.basename(r.statusLine.spawnConfig('x', account).settingsFile).replace(/\.json$/, '-sandbox.json'))
+    const settings = JSON.parse(readFileSync(file, 'utf8'))
+    expect(settings.sandbox).toEqual(builder('linux', r).sandbox)
+    expect(settings.permissions.deny).toContain('Read(//home/t/.ssh/**)')
+    expect(settings.permissions.deny).toContain('Read(//run/user/1000/bus)')
+    // Claude's own sandbox stands where Codex's -a never does: the bypass is the person's choice, as before
+    expect(r.argv[0]).toContain('--dangerously-skip-permissions')
+    // npm's cache is made first, and the session's git reads the excludes file Astera wrote
+    const env = r.spawned[0].env ?? {}
+    expect(env.npm_config_cache).toBe(npmCacheOf(r.tmpDir))
+    expect(existsSync(npmCacheOf(r.tmpDir))).toBe(true)
+    const excludes = gitExcludesFileOf(r.profileDir, 1000)
+    expect(env).toMatchObject({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.excludesFile', GIT_CONFIG_VALUE_0: excludes })
+    expect(readFileSync(excludes, 'utf8')).toBe(gitExcludesText('*.secret\n'))
+    // Marked in the info and the note, which a Host handing the session back and a roll read
+    expect(info.sandboxed).toBe(true)
+    expect(info.sandboxKind).toBe('sandbox')
+    expect(r.spawned[0].meta?.restore).toMatchObject({ sandboxed: true, sandboxKind: 'sandbox' })
+    expect(sessionInfoFromNote({ kind: 'session', id: info.id, restore: r.spawned[0].meta!.restore! })).toMatchObject({ sandboxed: true, sandboxKind: 'sandbox' })
+    // Unsandboxed, the same session reads today's file, with nothing of the sandbox's environment
+    await r.manager.prepare({ account, cwd })
+    const plain = r.manager.spawn({ account, cwd, bypassPermissions: true })
+    expect(settingsOf(r.argv[1])).toBe(r.statusLine.spawnConfig('x', account).settingsFile)
+    expect(r.spawned[1].env?.npm_config_cache).toBeUndefined()
+    expect(r.spawned[1].env?.GIT_CONFIG_COUNT).toBeUndefined()
+    expect(plain).not.toHaveProperty('sandboxed')
+  })
+
+  // Final fix pass (C2): the Host's socket is not granted to the sandbox and no address is planted; `astera` reaches the
+  // Host through excludedCommands, outside the sandbox, and a person's own ASTERA_HOST stays theirs
+  it('on macOS it gets the variant with the keychains denied, no socket granted and no git excludes', async () => {
+    const r = await rig('darwin')
+    const cwd = temp()
+    await r.manager.prepare({ account, cwd, sandbox: true })
+    r.manager.spawn({ account, cwd, sandbox: true })
+    const settings = JSON.parse(readFileSync(settingsOf(r.argv[0]), 'utf8'))
+    expect(settings.permissions.deny).toContain('Read(//Users/t/Library/Keychains/**)')
+    expect(settings.sandbox).toEqual(builder('darwin', r).sandbox)
+    expect(settings.sandbox).not.toHaveProperty('network')
+    expect(r.spawned[0].env?.npm_config_cache).toBe(npmCacheOf(r.tmpDir))
+    expect(r.spawned[0].env?.GIT_CONFIG_COUNT).toBeUndefined()
+    expect(Object.keys(r.spawned[0].env ?? {}).filter((k) => /^ASTERA_(SANDBOX_)?HOST$/.test(k))).toEqual([])
+    const own = await rig('darwin', '2.1.310', { ASTERA_HOST: '/Users/t/hosts/mine.sock' })
+    await own.manager.prepare({ account, cwd, sandbox: true })
+    own.manager.spawn({ account, cwd, sandbox: true })
+    expect(own.spawned[0].env?.ASTERA_HOST).toBe('/Users/t/hosts/mine.sock')
+    expect(JSON.parse(readFileSync(settingsOf(own.argv[0]), 'utf8')).sandbox).not.toHaveProperty('network')
+  })
+
+  // Final fix pass (C1): in a repository the twin keeps every git file that decides what git runs from being written, the
+  // missing ones made first, on macOS and Linux; a session in a folder nobody prepared for this account is refused
+  it('in a repository its twin keeps the git files from being written, made first, and a folder not prepared refuses', async () => {
+    for (const platform of ['linux', 'darwin'] as const) {
+      const r = await rig(platform)
+      const cwd = repoIn()
+      await r.manager.prepare({ account, cwd, sandbox: true })
+      r.manager.spawn({ account, cwd, sandbox: true })
+      const layout = await gitLayoutOf(cwd)
+      const settings = JSON.parse(readFileSync(settingsOf(r.argv[0]), 'utf8'))
+      expect(settings.sandbox).toEqual(builder(platform, r, layout).sandbox)
+      expect(settings.sandbox.filesystem.denyWrite).toEqual([...layout!.gitFiles, `${layout!.commonDir}/hooks`, `${layout!.commonDir}/config`, ...layout!.worktreeConfigs])
+      expect(readFileSync(path.join(cwd, '.git', 'commondir'), 'utf8')).toBe('.\n')
+      expect(existsSync(path.join(cwd, '.git', 'modules'))).toBe(true)
+      expect(existsSync(path.join(cwd, '.git', 'config.worktree'))).toBe(true)
+      expect(() => r.manager.spawn({ account, cwd: repoIn(), sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
+      expect(() => r.manager.spawn({ account: { ...account, id: 'acc-other' }, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
+    }
+    // Windows: deny rules only, whatever the folder, and nothing is made in its git directory
+    const win = await rig('win32')
+    const cwd = repoIn()
+    await win.manager.prepare({ account, cwd, sandbox: true })
+    win.manager.spawn({ account, cwd, sandbox: true })
+    expect(JSON.parse(readFileSync(settingsOf(win.argv[0]), 'utf8'))).not.toHaveProperty('sandbox')
+    expect(existsSync(path.join(cwd, '.git', 'commondir'))).toBe(false)
+  })
+
+  it('on win32 it gets the deny-only variant', async () => {
+    const r = await rig('win32')
+    const cwd = temp()
+    await r.manager.prepare({ account, cwd, sandbox: true })
+    const info = r.manager.spawn({ account, cwd, sandbox: true })
+    const settings = JSON.parse(readFileSync(settingsOf(r.argv[0]), 'utf8'))
+    expect(settings).not.toHaveProperty('sandbox')
+    expect(settings.permissions.deny).toEqual(builder('win32', r).permissions.deny)
+    expect(settings.permissions.deny).toContain('Read(//c/Users/t/.ssh/**)')
+    expect(r.spawned[0].env?.GIT_CONFIG_COUNT).toBeUndefined()
+    expect(existsSync(path.join(r.profileDir, 'sandbox'))).toBe(false)
+    expect(info.sandboxed).toBe(true)
+    // Task 8 fix round 1: deny rules only, and the info and the note say so, so the tab does not claim a sandbox
+    expect(info.sandboxKind).toBe('deny-only')
+    expect(r.spawned[0].meta?.restore).toMatchObject({ sandboxed: true, sandboxKind: 'deny-only' })
+    expect(sessionInfoFromNote({ kind: 'session', id: info.id, restore: r.spawned[0].meta!.restore! })).toMatchObject({ sandboxed: true, sandboxKind: 'deny-only' })
+    // Task 7 fix round 1: Claude has no shell sandbox on Windows, so npm keeps its own cache: nothing planted or made
+    expect(r.spawned[0].env).not.toHaveProperty('npm_config_cache')
+    expect(existsSync(npmCacheOf(r.tmpDir))).toBe(false)
+  })
+
+  it('a Claude older than 2.1.306 refuses a sandboxed start', async () => {
+    const r = await rig('linux', '2.1.305')
+    const cwd = temp()
+    await expect(r.manager.prepare({ account, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: cli-too-old claude 2\.1\.305 2\.1\.306$/)
+    // Refused before anything is written for it, and a spawn nobody prepared is refused the same way
+    expect(existsSync(r.statusLine.spawnConfig('x', account).settingsFile.replace(/\.json$/, '-sandbox.json'))).toBe(false)
+    expect(() => r.manager.spawn({ account, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: cli-too-old claude 2\.1\.305 2\.1\.306$/)
+    expect(r.spawned).toHaveLength(0)
+    // The same Claude starts outside the sandbox as before
+    await r.manager.prepare({ account, cwd })
+    r.manager.spawn({ account, cwd })
+    expect(r.spawned).toHaveLength(1)
+  })
+
+  it('a sandboxed Claude spawn whose sandbox settings were never written refuses with not-prepared', async () => {
+    const r = await rig('linux')
+    const cwd = temp()
+    expect(() => r.manager.spawn({ account, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
+    // A manager with no Claude sandbox to start refuses too, rather than start it outside the sandbox
+    r.manager.claudeSandbox = undefined
+    await expect(r.manager.prepare({ account, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
+    expect(() => r.manager.spawn({ account, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: not-prepared$/)
+    expect(r.spawned).toHaveLength(0)
+  })
+
+  it('Enforce and the sandbox together: one settings file with both', async () => {
+    const r = await rig('linux')
+    const cwd = temp()
+    r.manager.capabilities = {
+      get: () => ({ context: { kind: 'implicit', accounts: [account.id], policyMode: 'enforce', executionMode: 'managed' }, args: [], env: {}, given: [], gatewayGrant: [], skipped: [] }),
+      refresh: async () => {}
+    }
+    r.manager.enforceHooks = () => r.statusLine.ensureEnforceFiles()
+    r.manager.enforce = { args: () => null, blocker: () => null }
+    await r.manager.prepare({ account, cwd, sandbox: true })
+    const info = r.manager.spawn({ account, cwd, sandbox: true })
+    const settings = JSON.parse(readFileSync(settingsOf(r.argv[0]), 'utf8'))
+    expect(settings.hooks.PreToolUse.some((e: { matcher?: string }) => e.matcher === '*')).toBe(true)
+    expect(settings.disableAllHooks).toBe(false)
+    expect(settings.sandbox).toEqual(builder('linux', r).sandbox)
+    expect(r.spawned[0].meta?.restore).toMatchObject({ observed: true, enforced: true, sandboxed: true })
+    expect(info.sandboxed).toBe(true)
   })
 })

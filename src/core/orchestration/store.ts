@@ -237,7 +237,12 @@ export class OrchestrationStore {
   /** Serialization queue for disk writes (see save) */
   private queue: Promise<void> = Promise.resolve()
 
-  constructor(private filePath: string) {}
+  /** `nowMs` is the clock the TTL cleanup in `load` reads: the Host hands its own, so a profile written
+   *  at a fixed time is pruned against that time and not against the wall clock. */
+  constructor(
+    private filePath: string,
+    private nowMs: () => number = Date.now
+  ) {}
 
   async load(a?: {
     /** What the caller could learn about the sessions that outlived the app, in three answers — and
@@ -386,7 +391,7 @@ export class OrchestrationStore {
 
     // TTL cleanup: once a finished Run (every Task terminal) is 30 days old, every entry belonging
     // to that Run is discarded.
-    const cutoff = Date.now() - RUN_TTL_MS
+    const cutoff = this.nowMs() - RUN_TTL_MS
     const terminal = new Set(['completed', 'failed'])
     const doomed = new Set(
       st.runs

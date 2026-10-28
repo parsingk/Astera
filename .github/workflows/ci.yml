@@ -74,7 +74,7 @@ jobs:
       # tests above drive every desk with fakes; these two start Xvfb or a background app for real.
       # They are gated on ASTERA_DESKTOP_E2E=1, so `npm test` collects and skips them. A run that skips
       # them here still exits 0, so each step reads vitest's JSON report afterward and fails unless every
-      # test in the file passed (two on Linux, one on macOS): a gate that did not open is a red step.
+      # test in the file passed (three on Linux, one on macOS): a gate that did not open is a red step.
       # After the build (preflight ruling F6), so a failing or flaky e2e never skips the build step.
       # Ten minutes each: a hung Xvfb, xdotool or ps would otherwise hold the job for GitHub's 6 h.
       #
@@ -97,7 +97,7 @@ jobs:
         env:
           ASTERA_DESKTOP_E2E: '1'
           E2E_FILE: src/host/workspace/desktop.linux.e2e.test.ts
-          E2E_EXPECT: '2'
+          E2E_EXPECT: '3'
         run: |
           npx vitest run "$E2E_FILE" --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/e2e.json"
           node -e 'const r = require(process.argv[1]); const want = Number(process.argv[2]); if (r.numTotalTests !== want || r.numPassedTests !== want) { console.error(`expected ${want} of ${want} e2e tests to pass, got ${r.numPassedTests} passed of ${r.numTotalTests} (${r.numPendingTests} skipped)`); process.exit(1) }' "$RUNNER_TEMP/e2e.json" "$E2E_EXPECT"

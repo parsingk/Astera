@@ -5,14 +5,15 @@ import type { SpawnOptions } from 'node:child_process'
 import path from 'node:path'
 import { INHERITED_AGENT_ENV_KEYS } from '../sessions/cliEnv'
 
-/** Variables that belong to one agent session and must not reach the Host: it is not a worker, and
+/** Variables that belong to one agent session and must not reach the Host (the workload token among them: a Host that
+ *  held one would hand it to every worker it spawns): it is not a worker, and
  *  it spawns workers of its own that would inherit them in turn. The astera ones by prefix; the
  *  Claude Code ones are exactly the session-identity list cliEnvFor clears for an app worker
  *  (INHERITED_AGENT_ENV_KEYS), not the whole CLAUDE_CODE_ family: CLAUDE_CODE_USE_BEDROCK,
  *  CLAUDE_CODE_OAUTH_TOKEN and the like are settings a person chose, and a Host worker must keep
  *  them just as an app worker does. An inherited CLAUDE_CODE_CHILD_SESSION is what turns a worker's
  *  transcript off. */
-const NOT_INHERITED_ASTERA = /^(ASTERA_SESSION|ASTERA_CLI|ASTERA_SKILLS)/
+const NOT_INHERITED_ASTERA = /^(ASTERA_SESSION|ASTERA_CLI|ASTERA_SKILLS|ASTERA_GATEWAY_|ASTERA_LOOPBACK)/
 const NOT_INHERITED_AGENT: ReadonlySet<string> = new Set(INHERITED_AGENT_ENV_KEYS)
 const notInherited = (k: string): boolean => NOT_INHERITED_ASTERA.test(k) || NOT_INHERITED_AGENT.has(k)
 
@@ -180,4 +181,33 @@ export function hostStderr(file: string, fs: StderrFs): { stdio: ['ignore', 'ign
   } catch {
     return { stdio: ['ignore', 'ignore', 'ignore'], close: () => {} }
   }
+}
+
+/** The Windows exit codes no Host sets itself, by what each says about how it ended. */
+const HOST_EXIT_CAUSES: Record<number, string> = {
+  1: 'ended by another process: what taskkill /F leaves',
+  134: 'node.exe aborted: host-stderr.log says why',
+  0xffffffff: 'ended by another process: what Stop-Process and Process.Kill leave',
+  0xc0000005: 'a crash in native code: access violation',
+  0xc0000409: 'a crash in native code: fail-fast or abort',
+  0xc0000374: 'a crash in native code: heap corruption',
+  0xc00000fd: 'a crash in native code: stack overflow',
+  0xc000013a: 'a console Ctrl event'
+}
+
+/**
+ * How a Host ended, from what its 'exit' event carries, for the log of whoever started it.
+ *
+ * 2026-10-28: a Host died with every session a second time, again with nothing in host.log or host-stderr.log. A crash
+ * in native code and a kill from outside both end it before any JavaScript runs; only the exit code tells them apart.
+ * The Host's own codes (src/host/exitCodes.ts) are given as they are, since host.log already says why it left with them.
+ * Elsewhere a kill or a crash arrives as a signal, and a code is only ever the Host's own.
+ */
+export function hostExitReason(code: number | null, signal: NodeJS.Signals | null, platform: NodeJS.Platform): string {
+  if (code === null) return `signal ${signal ?? 'unknown'}`
+  // libuv hands Windows' DWORD over unsigned; a caller that read it as a 32-bit int has it negative.
+  const u = code < 0 ? code + 2 ** 32 : code
+  const cause = platform === 'win32' ? HOST_EXIT_CAUSES[u] : undefined
+  const shown = u > 0xffff ? `0x${u.toString(16).toUpperCase()}` : String(u)
+  return cause ? `exit code ${shown} (${cause})` : `exit code ${shown}`
 }

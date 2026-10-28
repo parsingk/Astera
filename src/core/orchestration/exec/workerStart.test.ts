@@ -55,6 +55,35 @@ describe('startWorkerWithChain', () => {
     expect(startWorker.mock.calls[0][0].rollAccountIds).toEqual(['a1', 'a2'])
   })
 
+  // Agent Profiles design §6: the profile the caller read off the Dispatch goes to the coordinator unchanged, with the
+  // borrowed accounts of a lifecycle repair as with a Task's own
+  it('hands the coordinator the agent profile it is given, beside the chain', async () => {
+    const { s, taskId } = stateWithTask()
+    const startWorker = vi.fn().mockResolvedValue({ sessionId: 'ses_1', cwd: 'D:/p', specPath: 'D:/s.md' })
+    await startWorkerWithChain({
+      getState: () => s, accounts: async () => [acct('a1'), acct('a2')], loginStatus: async () => true,
+      coordinator: { startWorker }, tails: new WorkerTails(), log: () => {}
+    }, { ...args(taskId), rollFrom: ['a1', 'a2'], agentProfileId: 'ap_1' })
+    expect(startWorker.mock.calls[0][0]).toMatchObject({ rollAccountIds: ['a1', 'a2'], agentProfileId: 'ap_1' })
+  })
+
+  // Final fix pass (C3): a worker of a Job or Task a sandboxed session made starts in the sandbox, and so does one a
+  // sandboxed session asked for; any other worker is asked exactly as before
+  it('asks for the sandbox for a worker of sandboxed work, or when its caller asked, and for no other', async () => {
+    const run = async (s: OrchState, taskId: string, extra: Record<string, unknown> = {}) => {
+      const startWorker = vi.fn().mockResolvedValue({ sessionId: 'ses_1', cwd: 'D:/p', specPath: 'D:/s.md' })
+      await startWorkerWithChain({ getState: () => s, accounts: async () => [acct('a1')], loginStatus: async () => true, coordinator: { startWorker }, tails: new WorkerTails(), log: () => {} }, { ...args(taskId), ...extra })
+      return startWorker.mock.calls[0][0] as Record<string, unknown>
+    }
+    const plain = stateWithTask()
+    expect(await run(plain.s, plain.taskId)).not.toHaveProperty('sandbox')
+    expect(await run(plain.s, plain.taskId, { sandbox: true })).toMatchObject({ sandbox: true })
+    const boxedJob = { ...plain.s, jobs: plain.s.jobs.map((j) => ({ ...j, sandboxed: true as const })) }
+    expect(await run(boxedJob, plain.taskId)).toMatchObject({ sandbox: true })
+    const boxedTask = { ...plain.s, tasks: plain.s.tasks.map((t) => ({ ...t, sandboxed: true as const })) }
+    expect(await run(boxedTask, plain.taskId)).toMatchObject({ sandbox: true })
+  })
+
   it('falls back to the one account and says so when the login lookup throws', async () => {
     const { s, taskId } = stateWithTask(['a1', 'a2'])
     const logs: string[] = []
@@ -88,6 +117,15 @@ describe('startCoordinatorSession', () => {
     expect(await fs.readFile(path.join(dir, 'coordinator-run_abcdefghijklmnop.md'), 'utf8')).toBe('BRIEF')
     expect(preTrust).toHaveBeenCalledWith('a1', 'D:/p')
     expect(spawn.mock.calls[0][0]).toMatchObject({ accountId: 'a1', cwd: 'D:/p', bypassPermissions: true, rollAccountIds: ['a1'], title: 'Coordinator · run_abcdefgh' })
+    expect(spawn.mock.calls[0][0]).not.toHaveProperty('sandbox')
+  })
+
+  // Final fix pass (C3): the coordinator of a Job a sandboxed session made starts in the sandbox
+  it('starts the coordinator of a sandboxed Job in the sandbox', async () => {
+    const spawn = vi.fn().mockResolvedValue({ id: 'ses_c' })
+    await startCoordinatorSession({ specsDir: dir, preTrust: async () => {}, bypassPermissions: async () => true, spawn, log: () => {} },
+      { runId: 'run_abcdefghijklmnop', cwd: 'D:/p', accountId: 'a1', brief: 'BRIEF', sandbox: true })
+    expect(spawn.mock.calls[0][0]).toMatchObject({ accountId: 'a1', sandbox: true })
   })
 })
 

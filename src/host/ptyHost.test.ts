@@ -29,8 +29,9 @@ const harness = (pty = fakePty(), platform: NodeJS.Platform = 'win32') => {
   const registry = new PtyRegistry({ spawn: () => pty, log: () => {} })
   // A client without `pty-seq`, as every client before Phase 8: frames filtered to others are not its.
   const handle = attachPtyHost({ registry, platform, broadcast: (m, to) => void (!to || to(new Set(), new Set()) ? broadcast.push(m) : 0) })
-  const send = (m: ClientMessage): boolean => handle(m, (h) => replies.push(h))
-  return { pty, registry, broadcast, replies, send }
+  // The app's own connection, as host/index.ts passes it: only the app may have the Host spawn a pty
+  const send = (m: ClientMessage, role: 'app' | 'cli' | 'mcp' = 'app'): boolean => handle(m, (h) => replies.push(h), { socket: 1, role })
+  return { pty, registry, broadcast, replies, send, handle }
 }
 
 const spawnMsg: ClientMessage = {
@@ -53,6 +54,30 @@ describe('attachPtyHost', () => {
     const h = harness()
     expect(h.send(spawnMsg)).toBe(true)
     expect(h.replies).toEqual([{ t: 'pty-spawned', id: 'p1', pid: 11 }])
+  })
+
+  // Final fix pass (C2): a pty-spawn starts any program with any arguments, environment and folder, outside every sandbox.
+  // Only the app's own connection is served it: a CLI's (a legacy hello with no role reads as one) and an MCP client's
+  // are refused, and nothing is opened
+  it('refuses a pty-spawn from anything but the app, and opens nothing', () => {
+    let spawned = 0
+    for (const role of ['cli', 'mcp'] as const) {
+      const h = harness()
+      const registry = h.registry as unknown as { open: (...a: unknown[]) => unknown }
+      const open = registry.open.bind(h.registry)
+      registry.open = (...a: unknown[]) => (spawned++, open(...a))
+      expect(h.send(spawnMsg, role)).toBe(true)
+      expect(h.replies).toEqual([{ t: 'pty-failed', id: 'p1', error: 'pty-spawn is served to the Astera app only' }])
+      expect(h.registry.list()).toEqual([])
+    }
+    expect(spawned).toBe(0)
+    const sent: HostMessage[] = []
+    const registry = new PtyRegistry({ spawn: () => fakePty(), log: () => {} })
+    const handle = attachPtyHost({ registry, platform: 'win32', broadcast: () => {} })
+    // With no sender named at all, too
+    expect(handle(spawnMsg, (m) => sent.push(m))).toBe(true)
+    expect(sent).toEqual([{ t: 'pty-failed', id: 'p1', error: 'pty-spawn is served to the Astera app only' }])
+    expect(registry.list()).toEqual([])
   })
 
   it('answers a refused spawn with the reason and nothing else', () => {
@@ -91,6 +116,24 @@ describe('attachPtyHost', () => {
     expect(h.registry.lastPersonWrite('p1')).toBe(null)
     h.send({ t: 'pty-write', id: 'p1', data: 'ls\r' })
     expect(h.registry.lastPersonWrite('p1')).not.toBe(null)
+  })
+
+  // Observe deferred fix round 2, Important a: a prompt is a person's only when the app says a person sent it, typed in
+  // the tab or sent from elsewhere (a Slack reply); its own deliveries (a schedule, a roll's prompt) are not
+  it('takes an app’s Enter as a person’s prompt only when the write is marked typed or a person’s', async () => {
+    const h = harness()
+    h.send(spawnMsg)
+    const until = (): number => Date.now() + 1
+    h.send({ t: 'pty-write', id: 'p1', data: 'status\r' })
+    expect(h.registry.submittedBetween('p1', 0, until())).toBe('host')
+    await new Promise((r) => setTimeout(r, 2))
+    h.send({ t: 'pty-write', id: 'p1', data: 'ls\r', typed: true })
+    expect(h.registry.submittedBetween('p1', 0, until())).toBe('person')
+    await new Promise((r) => setTimeout(r, 2))
+    h.send({ t: 'pty-write', id: 'p1', data: 'status\r' })
+    await new Promise((r) => setTimeout(r, 2))
+    h.send({ t: 'pty-write', id: 'p1', data: 'from slack\r', person: true })
+    expect(h.registry.submittedBetween('p1', 0, until())).toBe('person')
   })
 
   it('lists what it holds', () => {
@@ -273,7 +316,7 @@ describe('attachPtyHost pty-seq and pauses (Phase 8)', () => {
           if (!to || to(new Set(), features)) sent.push({ m, seq: features.size > 0 })
       }
     })
-    const send = (m: ClientMessage, socket = 1): boolean => handle(m, () => {}, { socket })
+    const send = (m: ClientMessage, socket = 1): boolean => handle(m, () => {}, { socket, role: 'app' })
     send(spawnMsg)
     return { pty, sent, send, handle, paused: () => paused, resumes: () => resumes }
   }
@@ -384,5 +427,59 @@ describe('attachPtyHost size', () => {
     h.replies.length = 0
     h.send({ t: 'pty-resize', id: 'p1', cols: 200, rows: 50 })
     expect(h.replies).toEqual([])
+  })
+})
+
+// Sandbox follow-ups, round 2: every pty message reads or drives a terminal, so each is the proven app's alone, as the
+// spawn is. A CLI, an MCP client and a sender not named are refused: nothing is typed, sized, paused, killed, noted,
+// listed or replayed, nothing is recorded as the person's, and nothing is answered (a `pty-list` the app's proof failed
+// for reads as no answer, which the app takes as "not known", never as "holds nothing").
+describe('attachPtyHost: every pty message is the app’s alone', () => {
+  const others: ClientMessage[] = [
+    { t: 'pty-write', id: 'p1', data: 'rm -rf ~\r', typed: true },
+    { t: 'pty-write', id: 'p1', data: 'from slack\r', person: true },
+    { t: 'pty-write', id: 'p1', data: 'plain\r' },
+    { t: 'pty-resize', id: 'p1', cols: 100, rows: 40 },
+    { t: 'pty-pause', id: 'p1' },
+    { t: 'pty-resume', id: 'p1' },
+    { t: 'pty-note', id: 'p1', patch: { title: 'taken' } },
+    { t: 'pty-list' },
+    { t: 'pty-attach', id: 'p1' },
+    { t: 'pty-kill', id: 'p1' }
+  ]
+
+  it('refuses each from anything but the app: nothing typed, read, recorded or answered', () => {
+    for (const role of ['cli', 'mcp', undefined] as const) {
+      const h = harness()
+      let killed = 0
+      h.pty.kill = () => void killed++
+      h.send(spawnMsg)
+      h.pty.emit('a secret on the screen')
+      h.replies.length = 0
+      const broadcasts = h.broadcast.length
+      for (const m of others) {
+        const owned = role === undefined ? h.handle(m, (r) => h.replies.push(r)) : h.send(m, role)
+        expect(owned, `${m.t} from ${String(role)}`).toBe(true)
+      }
+      expect(h.pty.sent, String(role)).toEqual([])
+      expect(h.pty.sizes, String(role)).toEqual([])
+      expect(killed, String(role)).toBe(0)
+      expect(h.replies, String(role)).toEqual([])
+      expect(h.broadcast.length, String(role)).toBe(broadcasts)
+      expect(h.handle.pausedHeld(), String(role)).toBe(0)
+      expect(h.registry.lastPersonWrite('p1'), String(role)).toBeNull()
+      expect(h.registry.submittedBetween('p1', 0, Date.now() + 1), String(role)).toBeNull()
+      expect(h.registry.metaOf('p1')?.restore, String(role)).toEqual({})
+      expect(h.registry.list()[0].alive, String(role)).toBe(true)
+      // The app on the same Host is served every one of them as before
+      h.send({ t: 'pty-write', id: 'p1', data: 'ls\r', typed: true })
+      expect(h.pty.sent).toEqual(['ls\r'])
+      expect(h.registry.lastPersonWrite('p1')).not.toBeNull()
+      h.send({ t: 'pty-list' })
+      h.send({ t: 'pty-attach', id: 'p1' })
+      expect(h.replies.map((r) => r.t)).toEqual(['pty-listed', 'pty-data'])
+      h.send({ t: 'pty-kill', id: 'p1' })
+      expect(killed).toBe(1)
+    }
   })
 })

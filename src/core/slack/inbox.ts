@@ -23,14 +23,12 @@ import { questionAnswerOf, approvalDecisionOf } from './chatRequest'
 import type { ChatRequest, ChatAnswer } from '../chat/types'
 import { botErrorReason } from './transport'
 import { t, type Lang } from '../i18n'
+import { untilEnter } from '../sessions/sessionDriver'
 
-// Gap between individual choice keys. Same value and same reasoning as ENTER_DELAY_MS. Written glued
-// together in one go, the TUI receives them as a clump and they no longer match its digit test
-// (`/^[0-9]$/`) — measured proof: sending "1,3" only ever checked item 1.
+// Gap between individual choice keys. Same value and same reasoning as the text -> Enter gap (ENTER_DELAY_MS,
+// core/sessions/sessionDriver.ts). Written glued together in one go, the TUI receives them as a clump and they
+// no longer match its digit test (`/^[0-9]$/`) — measured proof: sending "1,3" only ever checked item 1.
 const KEY_DELAY_MS = 150
-const ENTER_DELAY_MS = 150 // text -> Enter gap (same convention as scheduler.ts and claudeCoordinator.ts —
-// time for the TUI to digest the paste). Writing the text and Enter in one go can submit before the
-// TUI has finished digesting the paste, which can submit empty or truncated input.
 const PROCESSED_TS_LIMIT = 500 // suppresses redelivery from a failed ack — capped so it cannot grow forever
 
 /** The first reconnect waits this long, and each failure after it doubles the wait (final review C1). A
@@ -87,6 +85,10 @@ export interface SlackInboxDeps {
    *  not throw" must not be read as success. The caller checks liveness first and passes the result
    *  through. */
   write(sessionId: string, data: string): boolean
+  /** When the session's pty last printed anything (epoch ms), null for never. Given, a reply's Enter waits for the
+   *  session to have drawn the reply and gone quiet (untilEnter): Codex swallows an Enter that comes right after a
+   *  long text (openai/codex#56982). Left out, Enter goes ENTER_DELAY_MS after the reply. */
+  lastOutputAt?(sessionId: string): number | null
   /** Notice left in the thread when the input cannot be injected (SlackNotifier.postThreadNote) */
   postNote(threadTs: string, text: string): Promise<void>
   /** Taken as a getter rather than a value so the latest language is used even after setLang — the same
@@ -348,6 +350,7 @@ export class SlackInbox {
     }
     const input = toSessionInput(decision.text)
     let wrote = false
+    const wroteAt = Date.now()
     try {
       wrote = this.deps.write(sessionId, input.text)
     } catch (err) {
@@ -365,12 +368,23 @@ export class SlackInbox {
     }
     this.deps.log(`slack inbound -> injected into session=${sessionId} chars=${decision.text.length}`)
     if (input.submit) {
-      // The text and Enter are not written in one go — this follows the ENTER_DELAY_MS convention
-      // from scheduler.ts and claudeCoordinator.ts. If the session dies during the delay, deps.write returns
-      // false on its own and writes nothing — write()'s contract is to re-check liveness on every
-      // call, so there is no need for a separate disposed flag here (see the SlackInboxDeps.write
-      // contract above).
-      setTimeout(() => {
+      // The text and Enter are not written in one go: Enter waits the way every pty delivery does (untilEnter).
+      // Writing them together can submit before the TUI has digested the paste, and Codex swallows an Enter that
+      // comes right after one. If the session dies during the wait, deps.write returns false on its own and writes
+      // nothing — write()'s contract is to re-check liveness on every call, so there is no need for a separate
+      // disposed flag here (see the SlackInboxDeps.write contract above).
+      const lastOutputAt = this.deps.lastOutputAt?.bind(this.deps)
+      void untilEnter({
+        wroteAt,
+        ...(lastOutputAt
+          ? {
+              outputAfter: () => {
+                const last = lastOutputAt(sessionId)
+                return last !== null && last >= wroteAt ? last : null
+              }
+            }
+          : {})
+      }).then(() => {
         try {
           this.deps.write(sessionId, '\r')
         } catch (err) {
@@ -378,7 +392,7 @@ export class SlackInbox {
             `slack injection Enter failed(${err instanceof Error ? err.name : 'unknown'}) session=${sessionId}`
           )
         }
-      }, ENTER_DELAY_MS)
+      })
     }
   }
 

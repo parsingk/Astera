@@ -28,9 +28,14 @@ import { main } from './run'
 import { hostAddress } from '../host/address'
 import { encodeLine, createLineReader } from '../host/framing'
 import { startHostServer, ADDRESS_TAKEN, type HostServer } from '../host/server'
-import { ensureHostKey, hostProof } from '../core/host/hostKey'
+import { appProof, ensureAppKey, ensureHostKey, hostProof, readAppKeySync } from '../core/host/hostKey'
 import { createHostOrch, type HostOrch } from '../host/orch'
 import { createPluginManager } from '../host/plugins/manager'
+import { createHostAgentProfiles } from '../host/agentProfiles/commands'
+import { createHostPolicies } from '../host/audit/policyCommands'
+import { createHostAudit } from '../host/audit/auditCommands'
+import { appendRecords, type AuditRecord } from '../core/audit/store'
+import { STARTER_POLICY, type AuditPolicy } from '../core/audit/policy'
 import { createHostJournal } from '../host/hostJournal'
 import { JournalReader } from '../core/continuity/journalReader'
 import type { JournalEventRow } from '../core/continuity/journal'
@@ -40,6 +45,7 @@ import { createHostWorktrees } from '../host/worktrees'
 import { createHostProjectRoots } from '../host/projectRoots'
 import { hostFeatures } from '../host/features'
 import { PtyRegistry, type RegistryPty } from '../host/registry'
+import { createGatewayHub } from '../host/gateway/hub'
 import { ProcRegistry } from '../host/procRegistry'
 import type { HostLocal, HostSpawner } from '../host/spawner'
 import { registrySessions } from '../host/sessions'
@@ -142,7 +148,9 @@ interface CliRun {
 }
 
 /** The variables that pick a Host and a caller. Each call sets exactly the ones it is given. */
-const CLI_ENV = ['ASTERA_PROFILE_DIR', 'ASTERA_HOST', 'ASTERA_PROFILE', 'ASTERA_SESSION'] as const
+// ASTERA_CLI too: it names the profile a session's token is for (workloadTokenFor), and a test run inside an Astera
+// session would otherwise inherit that session's
+const CLI_ENV = ['ASTERA_PROFILE_DIR', 'ASTERA_HOST', 'ASTERA_PROFILE', 'ASTERA_SESSION', 'ASTERA_GATEWAY_TOKEN', 'ASTERA_LOOPBACK', 'ASTERA_CLI'] as const
 
 /** One `astera …` invocation, the way index.ts runs it. Calls are serial (the process globals are
  *  borrowed for the call), which is also how a script runs them. */
@@ -211,7 +219,9 @@ interface RawClient {
   close(): Promise<void>
 }
 
-async function rawClient(address: string, hello: ClientMessage, answer?: (act: string, args: unknown) => unknown): Promise<RawClient> {
+/** An app (`role: 'app'`) answers the Host's challenge under `appKey` and is greeted once the Host took the proof, as the
+ *  app's own client does (sandbox follow-ups, item 1). */
+async function rawClient(address: string, hello: ClientMessage, answer: ((act: string, args: unknown) => unknown) | undefined, appKey: string): Promise<RawClient> {
   const sock = net.connect(address)
   sock.setEncoding('utf8')
   const got: HostMessage[] = []
@@ -224,7 +234,8 @@ async function rawClient(address: string, hello: ClientMessage, answer?: (act: s
       onMessage: (v) => {
         const m = v as HostMessage
         got.push(m)
-        if (m.t === 'hello') greeted()
+        if (m.t === 'hello' && typeof m.challenge === 'string') sock.write(encodeLine({ t: 'app-proof', proof: appProof(appKey, m.challenge) } satisfies ClientMessage))
+        else if (m.t === 'hello' || m.t === 'app-proven') greeted()
         if (m.t === 'orch-result') waiting.get(m.call)?.({ status: m.status, body: m.body })
         if (m.t === 'orch-act') {
           try {
@@ -300,6 +311,10 @@ interface Spawn {
 interface Rig {
   profileDir: string
   address: string
+  /** The profile's app key, which a raw client proves it is the app with (sandbox follow-ups, item 1). */
+  appKey: string
+  /** The Host's loopback endpoint (`ASTERA_LOOPBACK`). */
+  loopback: string
   /** The CLI environment that finds this Host: its profile, as the app hands it to a session. */
   env: { ASTERA_PROFILE_DIR: string }
   accountId: string
@@ -312,7 +327,7 @@ interface Rig {
   exitWorker(s: Spawn, code: number): void
   /** Opens an agent session's pty in the Host's registry, as an app's `pty-open` does: a person's own
    *  terminal, with the note an app writes (`restore` holds its title, account and folder). */
-  openSession(id: string, restore?: Record<string, unknown>): void
+  openSession(id: string, restore?: Record<string, unknown>, env?: Record<string, string>): void
   /** The pty of an agent session (a worker's or an opened one), by its session id. */
   ptyOf(sessionId: string): FakePty
   /** The sessions `sessions create` started here, in order: what the spawner was asked to open. */
@@ -427,12 +442,25 @@ async function hostRig(
     const m = registry.metaOf(ptyId)
     if (m?.kind === 'session') tails.push(m.id, data)
   })
-  const openSession = (id: string, restore: Record<string, unknown> = {}): void => {
+  // The workload tokens, as the Host's Gateway hub keeps them: registered when a pty opens with one in its environment.
+  // The Gateway hub is what holds them and what listens on loopback for a call a sandboxed session makes.
+  const gateway = createGatewayHub({
+    profileDir,
+    ptys: registry,
+    procs,
+    sessionOfOwner: (ownerId) => registry.metaOf(ownerId)?.id,
+    log,
+    call: (a) => box.orch!.call(a),
+    cliCaller: () => box.server!.cliCaller(),
+    hello: (nonce) => box.server!.loopbackHello(nonce)
+  })
+  cleanups.push(() => gateway.close())
+  const openSession = (id: string, restore: Record<string, unknown> = {}, env: Record<string, string> = {}): void => {
     const opened = registry.open({
       id: `pty_${id}`,
       file: 'agent',
       args: [],
-      opts: { cwd: typeof restore.cwd === 'string' ? restore.cwd : profileDir, cols: 80, rows: 24, env: {} },
+      opts: { cwd: typeof restore.cwd === 'string' ? restore.cwd : profileDir, cols: 80, rows: 24, env },
       meta: { kind: 'session', id, restore }
     })
     if (!opened.ok) throw new Error(opened.error)
@@ -651,6 +679,16 @@ async function hostRig(
     profileDir,
     version: '9.9.9',
     plugins: createPluginManager({ profileDir, hostVersion: '9.9.9' }),
+    // Agent profiles as index.ts keeps them: the store under the profile, the accounts read for real
+    agentProfiles: createHostAgentProfiles({
+      profileDir,
+      readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
+      inUse: async () => false,
+      log
+    }),
+    // Observe mode's rules and records as index.ts keeps them: audit-policy.json and audit/ under the profile
+    policies: createHostPolicies({ profileDir }),
+    audit: createHostAudit({ profileDir }),
     now: () => new Date().toISOString(),
     hostStartedAt: () => serverOf().startedAt,
     runningSessions: () => registry.liveCount() + procs.liveCount(),
@@ -742,6 +780,7 @@ async function hostRig(
   await units.start()
 
   const addr = hostAddress({ profileDir, platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL })
+  const appKey = await ensureAppKey(profileDir)
   const server = await startHostServer({
     address: addr.address,
     dirToPrepare: addr.dirToPrepare,
@@ -749,6 +788,8 @@ async function hostRig(
     idleMs: 120_000,
     onIdle: () => {},
     hostKey: await ensureHostKey(profileDir),
+    // As index.ts: the app key is made when there is none, and read at each proof
+    appKey: () => readAppKeySync(profileDir),
     onMessage: () => false,
     onClientGone: (from) => {
       exits.appGone(from.socket)
@@ -757,6 +798,7 @@ async function hostRig(
     },
     liveCounts: () => ({ sessions: registry.liveCount() + procs.liveCount(), runs: orch.runningRuns() }),
     orch,
+    sessionOfToken: (t) => gateway.sessionOfToken(t),
     features: hostFeatures({ spawns: true, slack: false }),
     ...wiring.serverHooks,
     onAppsChanged: () => {
@@ -772,6 +814,7 @@ async function hostRig(
     log: { write: log, close: () => {} }
   })
   box.server = server
+  const loopbackPort = await gateway.sync()
   void hostUnderstanding.writerMayHaveChanged()
   void units.writerMayHaveChanged()
   void mcpHttp?.reload()
@@ -807,6 +850,8 @@ async function hostRig(
   return {
     profileDir,
     address: addr.address,
+    appKey,
+    loopback: `http://127.0.0.1:${loopbackPort}`,
     env: { ASTERA_PROFILE_DIR: profileDir },
     accountId,
     repo,
@@ -889,7 +934,7 @@ describe('the public CLI against a real Host (§48, §49)', { timeout: 60_000 },
   it('with the app gone, jobs list, jobs get and runs get answer the running Job from the Host', async () => {
     const h = await hostRig()
     // The app is open when the Job is started, then it quits.
-    const app = await rawClient(h.address, appHello, appAnswers(h.accountId))
+    const app = await rawClient(h.address, appHello, appAnswers(h.accountId), h.appKey)
     const { jobId, runId, taskId } = await runningJob(h)
     await app.close()
     await until(() => expect(h.server.hasApp()).toBe(false))
@@ -972,7 +1017,7 @@ describe('the public CLI against a real Host (§48, §49)', { timeout: 60_000 },
   // order they land in, one is refused with CONFLICT or both land — never a lost update.
   it('runs stop from the CLI and a state-put from the app at the same moment: no lost update', async () => {
     const h = await hostRig()
-    const app = await rawClient(h.address, appHello, appAnswers(h.accountId))
+    const app = await rawClient(h.address, appHello, appAnswers(h.accountId), h.appKey)
     cleanups.push(() => app.close())
     const { jobId, runId } = await runningJob(h)
 
@@ -1140,6 +1185,290 @@ describe('the public CLI against a real Host (§48, §49)', { timeout: 60_000 },
     expect(okData(await astera(['plugins', 'disable', '--id', 'astera-hello'], h.env), 'plugins disable')).toMatchObject({ status: 'disabled', changed: true })
     expect(okData(await astera(['plugins', 'remove', '--id', 'astera-hello'], h.env), 'plugins remove')).toEqual({ id: 'astera-hello', version: '1.0.0', removed: true })
     expect((await astera(['plugins', 'get', '--id', 'astera-hello'], h.env)).code).toBe(4)
+  })
+
+  // Sandbox design §7: a call that carries the session's workload token is that session, with no ASTERA_SESSION at all.
+  it('the CLI sends ASTERA_GATEWAY_TOKEN and the Host reads the session from it, not from ASTERA_SESSION', async () => {
+    const h = await hostRig()
+    const token = 'W'.repeat(43)
+    h.openSession('ses_tokened', { title: 'tokened', accountId: h.accountId, cwd: h.profileDir }, { ASTERA_GATEWAY_TOKEN: token, ASTERA_GATEWAY_GRANT: '' })
+    okData(await astera(['agent-profiles', 'create', '--name', 'Reviewer', '--account', h.accountId], h.env), 'agent-profiles create')
+    // From an agent's session the Host refuses a change to an agent profile (5); a read it allows.
+    const agent = await astera(['agent-profiles', 'archive', '--id', 'Reviewer'], { ...h.env, ASTERA_GATEWAY_TOKEN: token })
+    expect(agent.code, agent.stdout).toBe(5)
+    expect((await astera(['agent-profiles', 'list'], { ...h.env, ASTERA_GATEWAY_TOKEN: token })).code).toBe(0)
+    // With ASTERA_SESSION naming another session as well, the call is still refused. Any session id reads as an agent here,
+    // so this does not show which session the Host took; that the token's session wins over the claim is
+    // host/server.test.ts's 'a call with a live token is that token’s session, whatever it claims'.
+    const claimed = await astera(['agent-profiles', 'archive', '--id', 'Reviewer'], { ...h.env, ASTERA_GATEWAY_TOKEN: token, ASTERA_SESSION: 'ses_other' })
+    expect(claimed.code, claimed.stdout).toBe(5)
+    // A session that has ended is refused: its token went with its pty.
+    h.ptyOf('ses_tokened').exit(0)
+    await until(async () => expect((await astera(['agent-profiles', 'list'], { ...h.env, ASTERA_GATEWAY_TOKEN: token })).stdout).toContain('workload token not recognised'))
+    // A token the Host does not know is refused.
+    const dead = await astera(['agent-profiles', 'list'], { ...h.env, ASTERA_GATEWAY_TOKEN: 'D'.repeat(43) })
+    expect(dead.code, dead.stdout).not.toBe(0)
+    expect(dead.stdout).toContain('workload token not recognised')
+  })
+
+  // Sandbox design §6: inside a sandbox the pipe cannot be opened, the loopback address can.
+  it('with the pipe unreachable, the CLI reaches the Host through ASTERA_LOOPBACK', async () => {
+    const h = await hostRig()
+    const token = 'L'.repeat(43)
+    h.openSession('ses_boxed', { title: 'boxed', accountId: h.accountId, cwd: h.profileDir }, { ASTERA_GATEWAY_TOKEN: token, ASTERA_GATEWAY_GRANT: '' })
+    okData(await astera(['agent-profiles', 'create', '--name', 'Reviewer', '--account', h.accountId], h.env), 'agent-profiles create')
+    // An address that does not exist: the pipe is not reachable, so the call goes to the loopback endpoint with the token.
+    const nowhere = process.platform === 'win32' ? '\\\\.\\pipe\\astera-no-such-host' : path.join(h.profileDir, 'no-such-socket')
+    const env = { ...h.env, ASTERA_HOST: nowhere, ASTERA_GATEWAY_TOKEN: token, ASTERA_LOOPBACK: h.loopback }
+    expect((await astera(['agent-profiles', 'list'], env)).code).toBe(0)
+    // As the token's session, which an agent profile cannot be changed from (5), whatever ASTERA_SESSION says
+    const refused = await astera(['agent-profiles', 'archive', '--id', 'Reviewer'], { ...env, ASTERA_SESSION: 'ses_other' })
+    expect(refused.code, refused.stdout).toBe(5)
+    // A token the Host does not know is refused, not read from the file
+    const dead = await astera(['agent-profiles', 'list'], { ...env, ASTERA_GATEWAY_TOKEN: 'D'.repeat(43) })
+    expect(dead.code, dead.stdout).not.toBe(0)
+    expect(dead.stdout).toContain('workload token not recognised')
+  })
+
+  // Final review I1: inside a session, a CLI pointed at another profile's live Host (the dev app's, while developing Astera
+  // in a session) is answered as before: the session's token is for its own Host, which still gets it, and the other
+  // Host never sees it
+  it('a CLI pointed at another profile’s live Host is answered as before, and its own Host still gets the token', async () => {
+    const h = await hostRig()
+    const other = await hostRig()
+    const token = 'I'.repeat(43)
+    h.openSession('ses_mine', { title: 'mine', accountId: h.accountId, cwd: h.profileDir }, { ASTERA_GATEWAY_TOKEN: token, ASTERA_GATEWAY_GRANT: '' })
+    for (const r of [h, other]) okData(await astera(['agent-profiles', 'create', '--name', 'Reviewer', '--account', r.accountId], r.env), 'agent-profiles create')
+    const session = { ASTERA_CLI: path.join(h.profileDir, 'orch', process.platform === 'win32' ? 'astera.cmd' : 'astera'), ASTERA_GATEWAY_TOKEN: token }
+    // To the other profile's Host: answered as a shell's call, as before this branch
+    const toOther = await astera(['agent-profiles', 'list'], { ...session, ASTERA_PROFILE_DIR: other.profileDir })
+    expect(toOther.code, toOther.stdout).toBe(0)
+    expect(toOther.stdout).not.toContain('workload token not recognised')
+    expect(okData(toOther, 'agent-profiles list')).toMatchObject({ profiles: [expect.objectContaining({ name: 'Reviewer' })] })
+    // To its own Host the token goes, and the call is the session's: an agent profile cannot be changed from it (5)
+    const own = await astera(['agent-profiles', 'archive', '--id', 'Reviewer'], { ...session, ASTERA_PROFILE_DIR: h.profileDir })
+    expect(own.code, own.stdout).toBe(5)
+  })
+
+  it('without ASTERA_LOOPBACK it falls back to the state file as today', async () => {
+    const h = await hostRig({ seed: emptyState() })
+    const nowhere = process.platform === 'win32' ? '\\\\.\\pipe\\astera-no-such-host' : path.join(h.profileDir, 'no-such-socket')
+    const r = await astera(['status'], { ...h.env, ASTERA_HOST: nowhere, ASTERA_GATEWAY_TOKEN: 'L'.repeat(43) })
+    expect(r.code, r.stdout).toBe(0)
+    expect(r.envelope.data).toMatchObject({ running: false })
+  })
+
+  it('a CLI pointed at another profile never reaches the session’s Host through the loopback: it falls back to that profile’s state file', async () => {
+    const h = await hostRig()
+    const token = 'M'.repeat(43)
+    h.openSession('ses_boxed', { title: 'boxed', accountId: h.accountId, cwd: h.profileDir }, { ASTERA_GATEWAY_TOKEN: token, ASTERA_GATEWAY_GRANT: '' })
+    // Another profile with a Host key of its own, whose Host is down, and a state file to read
+    const other = await tempDir(PROFILE_PREFIX)
+    cleanups.push(() => rmrf(other))
+    await ensureHostKey(other)
+    await fs.writeFile(path.join(other, 'orchestration.json'), JSON.stringify(emptyState()))
+    const nowhere = process.platform === 'win32' ? '\\\\.\\pipe\\astera-no-such-host' : path.join(other, 'no-such-socket')
+    const env = { ASTERA_PROFILE_DIR: other, ASTERA_HOST: nowhere, ASTERA_GATEWAY_TOKEN: token, ASTERA_LOOPBACK: h.loopback }
+    const read = await astera(['status'], env)
+    expect(read.code, read.stdout).toBe(0)
+    expect(read.envelope.data).toMatchObject({ running: false })
+    // A change is not answerable from a file; and nothing was run on the session's Host
+    const write = await astera(['agent-profiles', 'create', '--name', 'Leak', '--account', h.accountId], env)
+    expect(write.code, write.stdout).not.toBe(0)
+    expect(okData(await astera(['agent-profiles', 'list'], h.env), 'agent-profiles list')).toMatchObject({ profiles: [] })
+  })
+
+  it('without the token, ASTERA_LOOPBACK alone reaches nothing', async () => {
+    const h = await hostRig({ seed: emptyState() })
+    const nowhere = process.platform === 'win32' ? '\\\\.\\pipe\\astera-no-such-host' : path.join(h.profileDir, 'no-such-socket')
+    const write = await astera(['agent-profiles', 'create', '--name', 'Leak', '--account', h.accountId], { ...h.env, ASTERA_HOST: nowhere, ASTERA_LOOPBACK: h.loopback })
+    expect(write.code, write.stdout).not.toBe(0)
+    expect(okData(await astera(['agent-profiles', 'list'], h.env), 'agent-profiles list')).toMatchObject({ profiles: [] })
+  })
+
+  // Agent Profiles design §6 (Task 7): the noun end to end, and a Job made as a profile by its name holds its id.
+  it('agent-profiles create, list, show, then jobs create --agent-profile <name> makes a Job that holds the id', async () => {
+    const h = await hostRig()
+    await fs.mkdir(path.join(h.profileDir, 'extensions'), { recursive: true })
+    await fs.writeFile(
+      path.join(h.profileDir, 'extensions', 'registry.json'),
+      JSON.stringify({ version: 1, entries: [{ id: 'mcp_gh', kind: 'mcp', name: 'github', transport: 'stdio', command: 'gh-mcp', env: {}, providers: ['claude'], importedFrom: h.accountId, enabled: true }] })
+    )
+    const created = okData(
+      await astera(['agent-profiles', 'create', '--name', 'Reviewer', '--account', h.accountId, '--exclude-mcp', 'github', '--permission', 'ask', '--description', 'reads code'], h.env),
+      'agent-profiles create'
+    )
+    expect(created).toMatchObject({ name: 'Reviewer', accountIds: [h.accountId], mcpExclude: ['mcp_gh'], permission: 'ask', status: 'active' })
+    const id = created.id as string
+    expect(id).toMatch(/^ap_/)
+    expect(okData(await astera(['agent-profiles', 'list'], h.env), 'agent-profiles list')).toMatchObject({ profiles: [{ id, name: 'Reviewer' }] })
+    expect(okData(await astera(['agent-profiles', 'show', '--id', 'reviewer'], h.env), 'agent-profiles show')).toMatchObject({ id })
+
+    const job = okData(await astera(['jobs', 'create', '--objective', 'review', '--cwd', h.repo, '--agent-profile', 'Reviewer'], h.env), 'jobs create')
+    expect(job.agentProfileId).toBe(id)
+    expect(h.state().jobs.find((j) => j.id === job.id)?.agentProfileId).toBe(id)
+    expect(okData(await astera(['jobs', 'get', '--id', job.id as string], h.env), 'jobs get')).toMatchObject({ agentProfileId: id })
+
+    // An unknown MCP server name is the caller's mistake (2), named; nothing is changed
+    const unknown = await astera(['agent-profiles', 'update', '--id', 'Reviewer', '--exclude-mcp', 'slack'], h.env)
+    expect(unknown.code, unknown.stdout).toBe(2)
+    expect(unknown.envelope.error?.message).toContain('slack')
+    // A change from an agent's shell is refused (5); a read is not
+    const agent = await astera(['agent-profiles', 'archive', '--id', 'Reviewer'], { ...h.env, ASTERA_SESSION: 'sess_agent' })
+    expect(agent.code, agent.stdout).toBe(5)
+    expect((await astera(['agent-profiles', 'list'], { ...h.env, ASTERA_SESSION: 'sess_agent' })).code).toBe(0)
+
+    expect(okData(await astera(['agent-profiles', 'update', '--id', 'Reviewer', '--name', 'Critic', '--exclude-mcp', ''], h.env), 'agent-profiles update')).toMatchObject({
+      id,
+      name: 'Critic',
+      mcpExclude: []
+    })
+    expect(okData(await astera(['agent-profiles', 'archive', '--id', 'Critic'], h.env), 'agent-profiles archive')).toMatchObject({ status: 'archived' })
+    // An archived profile starts no new work
+    expect((await astera(['jobs', 'create', '--objective', 'o', '--cwd', h.repo, '--agent-profile', 'Critic'], h.env)).code).toBe(2)
+    expect(okData(await astera(['agent-profiles', 'restore', '--id', id], h.env), 'agent-profiles restore')).toMatchObject({ status: 'active' })
+    expect(okData(await astera(['agent-profiles', 'delete', '--id', 'Critic'], h.env), 'agent-profiles delete')).toEqual({ id, name: 'Critic', deleted: true })
+    expect((await astera(['agent-profiles', 'show', '--id', id], h.env)).code).toBe(4)
+  })
+
+  // Observe mode design §12 (Task 7): the records read back with the decision the rules in force give them, page by page;
+  // an agent's shell may not read them.
+  it('audit list and summary read the records by decision, profile and page, and an agent shell is refused them', async () => {
+    const h = await hostRig({ repo: false })
+    const profile = okData(await astera(['agent-profiles', 'create', '--name', 'Reviewer', '--account', h.accountId], h.env), 'agent-profiles create')
+    const base = Date.now() - 60_000
+    const rec = (i: number, over: Partial<AuditRecord> = {}): AuditRecord => ({
+      id: `au_${String(i).padStart(4, '0')}`,
+      at: new Date(base + i * 1000).toISOString(),
+      sessionId: 'sess_a',
+      provider: 'claude',
+      kind: 'terminal',
+      accountId: h.accountId,
+      source: 'claude-hook',
+      providerTool: 'Bash',
+      action: 'git.remote.write',
+      target: 'git push',
+      confidence: 'high',
+      status: 'ok',
+      ...over
+    })
+    // Under the starter rules (no rules file yet): a push would be denied, a read inside allowed, an unread line unknown
+    await appendRecords(h.profileDir, [
+      rec(1),
+      rec(2, { action: 'filesystem.read', target: 'src/a.ts', insideProject: true, confidence: 'exact', providerTool: 'Read' }),
+      rec(3, { agentProfileId: profile.id as string }),
+      rec(4, { action: 'process.execute', target: 'foo', confidence: 'unknown' }),
+      rec(5, { sessionId: 'sess_b' })
+    ])
+    type Listed = { records: Array<{ id: string; decision: string; ruleId?: string }>; truncated: boolean; next: { until: string; beforeId: string } | null }
+    const list = async (argv: string[], what: string): Promise<Listed> => okData(await astera(['audit', 'list', ...argv], h.env), what) as unknown as Listed
+
+    const denied = await list(['--decision', 'would-deny'], 'audit list --decision would-deny')
+    expect(denied.records.map((r) => [r.id, r.decision, r.ruleId])).toEqual([
+      ['au_0005', 'would-deny', 'starter-git-remote-write'],
+      ['au_0003', 'would-deny', 'starter-git-remote-write'],
+      ['au_0001', 'would-deny', 'starter-git-remote-write']
+    ])
+    expect((await list(['--agent-profile', 'Reviewer'], 'audit list --agent-profile')).records.map((r) => r.id)).toEqual(['au_0003'])
+    expect((await list(['--session', 'sess_b'], 'audit list --session')).records.map((r) => r.id)).toEqual(['au_0005'])
+    expect((await astera(['audit', 'list', '--agent-profile', 'Nobody'], h.env)).code).toBe(4)
+
+    // Two at a time: each page's `next` is the --until and --before-id of the one after it, and the last has none
+    const pages: string[][] = []
+    let page = await list(['--limit', '2'], 'audit list page 1')
+    pages.push(page.records.map((r) => r.id))
+    while (page.next !== null) {
+      expect(page.truncated).toBe(true)
+      page = await list(['--limit', '2', '--until', page.next.until, '--before-id', page.next.beforeId], `audit list page ${pages.length + 1}`)
+      pages.push(page.records.map((r) => r.id))
+    }
+    expect(pages).toEqual([['au_0005', 'au_0004'], ['au_0003', 'au_0002'], ['au_0001']])
+    expect(page.truncated).toBe(false)
+
+    expect(okData(await astera(['audit', 'summary'], h.env), 'audit summary')).toEqual({
+      allow: 1,
+      wouldDeny: 3,
+      unknown: 1,
+      // Enforce's count, none in observe
+      blocked: 0,
+      byAction: {
+        'git.remote.write': { allow: 0, wouldDeny: 3, unknown: 0, blocked: 0 },
+        'filesystem.read': { allow: 1, wouldDeny: 0, unknown: 0, blocked: 0 },
+        'process.execute': { allow: 0, wouldDeny: 0, unknown: 1, blocked: 0 }
+      },
+      stoppedAtLimit: false
+    })
+
+    // A rule edit changes what the past would have been
+    okData(await astera(['policies', 'rules-add', '--effect', 'allow', '--action', 'git.remote.write', '--at', '0'], h.env), 'policies rules-add')
+    expect((await list(['--decision', 'would-deny'], 'audit list after the edit')).records).toEqual([])
+
+    // The log of an agent's calls stays away from agents: both reads are refused to an agent's shell
+    const agent = { ...h.env, ASTERA_SESSION: 'sess_agent' }
+    // and before any name is looked up: a profile that does not exist is 5 here, where a person's shell gets 4
+    for (const argv of [['audit', 'list'], ['audit', 'summary'], ['audit', 'list', '--agent-profile', 'Reviewer'], ['audit', 'list', '--agent-profile', 'Nobody'], ['audit', 'summary', '--agent-profile', 'Nobody']]) {
+      const refused = await astera(argv, agent)
+      expect(refused.code, `${argv.join(' ')} → ${refused.stdout}`).toBe(5)
+      expect(refused.envelope.error?.code).toBe('PERMISSION_DENIED')
+    }
+  })
+
+  // Observe mode design §7, §12 (Task 7): the switch and the rules from a person's CLI; never from an agent's shell.
+  it('policies set-mode observe writes the starter rules that policies show reads; the rules change from the CLI and not from an agent shell', async () => {
+    const h = await hostRig({ repo: false })
+    const file = path.join(h.profileDir, 'audit-policy.json')
+    type Shown = { mode: string; policy: AuditPolicy; rule?: { id: string }; coverage?: unknown[] }
+    const policies = async (argv: string[]): Promise<Shown> => okData(await astera(['policies', ...argv], h.env), `policies ${argv.join(' ')}`) as unknown as Shown
+    const starterIds = STARTER_POLICY.rules.map((r) => r.id)
+
+    // Before observe is first turned on, the starter rules are shown and nothing is written
+    expect(await policies(['show'])).toMatchObject({ mode: 'compatibility', policy: { rules: STARTER_POLICY.rules, otherwise: 'allow' } })
+    expect(existsSync(file)).toBe(false)
+
+    expect((await policies(['set-mode', '--mode', 'observe'])).mode).toBe('observe')
+    const shown = await policies(['show'])
+    expect(shown.mode).toBe('observe')
+    expect(shown.policy.rules.map((r) => r.id)).toEqual(starterIds)
+    expect(shown.coverage).toHaveLength(4)
+    expect(existsSync(file)).toBe(true)
+
+    // Added at the top, moved to the end, scoped, unscoped, and the otherwise turned to deny
+    const added = await policies(['rules-add', '--effect', 'allow', '--action', 'git.*', '--at', '0'])
+    const id = added.rule!.id
+    expect(added.policy.rules[0]).toEqual({ id, effect: 'allow', action: 'git.*' })
+    expect((await policies(['rules-move', '--id', id, '--to', String(starterIds.length)])).policy.rules.map((r) => r.id)).toEqual([...starterIds, id])
+    expect((await policies(['rules-edit', '--id', id, '--scope', 'inside-project'])).rule).toEqual({ id, effect: 'allow', action: 'git.*', scope: 'inside-project' })
+    expect((await policies(['rules-edit', '--id', id, '--clear-scope', '--effect', 'deny'])).rule).toEqual({ id, effect: 'deny', action: 'git.*' })
+    expect((await policies(['set-otherwise', '--effect', 'deny'])).policy.otherwise).toBe('deny')
+
+    // A rule that is not there is 4, pointing at the list; a mode Astera does not offer is 2
+    const missing = await astera(['policies', 'rules-remove', '--id', 'ar_nope'], h.env)
+    expect(missing.code, missing.stdout).toBe(4)
+    expect(missing.envelope.error?.nextSteps).toEqual(['astera policies show'])
+    expect((await astera(['policies', 'set-mode', '--mode', 'strict'], h.env)).code).toBe(2)
+
+    // From an agent's shell every change is refused with 5 and the file is left as it was; reading the rules is not refused
+    const agent = { ...h.env, ASTERA_SESSION: 'sess_agent' }
+    const kept = await fs.readFile(file, 'utf8')
+    for (const argv of [
+      ['set-mode', '--mode', 'compatibility'],
+      ['set-otherwise', '--effect', 'allow'],
+      ['rules-add', '--effect', 'allow', '--action', 'mcp.call'],
+      ['rules-edit', '--id', id, '--effect', 'allow'],
+      ['rules-remove', '--id', id],
+      ['rules-move', '--id', id, '--to', '0'],
+      ['rules-reset']
+    ]) {
+      const refused = await astera(['policies', ...argv], agent)
+      expect(refused.code, `policies ${argv.join(' ')} → ${refused.stdout}`).toBe(5)
+      expect(refused.envelope.error?.code).toBe('PERMISSION_DENIED')
+    }
+    expect(await fs.readFile(file, 'utf8')).toBe(kept)
+    expect((await astera(['policies', 'show'], agent)).code).toBe(0)
+
+    // Removed, then the starter rules and their otherwise back; the mode stays the person's
+    expect((await policies(['rules-remove', '--id', id])).policy.rules.map((r) => r.id)).toEqual(starterIds)
+    expect(await policies(['rules-reset'])).toMatchObject({ mode: 'observe', policy: { rules: STARTER_POLICY.rules, otherwise: 'allow' } })
   })
 
   // Plugins 2c (spec §23-§24): a setting set from the CLI, a secret one never shown back.
@@ -1376,7 +1705,8 @@ describe('the Job Journal with Astera closed (Host journal)', { timeout: 60_000 
     const older = await rawClient(
       h.address,
       { t: 'hello', protocol: HOST_PROTOCOL, app: '1.3.40', role: 'app', yields: [HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH] },
-      appAnswers(h.accountId)
+      appAnswers(h.accountId),
+      h.appKey
     )
     okData(await astera(['runs', 'stop', '--id', runId], h.env), 'runs stop')
     expect(h.journalRows(runId).some((e) => e.type === 'JOB_RUN_PAUSED')).toBe(false)
@@ -1508,7 +1838,7 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
   const cliBuilt = existsSync(cliBundle)
   if (!cliBuilt) console.warn(`skipping "over HTTP" (MCP against the Host): ${cliBundle} is missing; run npm run build first`)
   it.runIf(cliBuilt)(
-    'over HTTP: the Host runs the entrance, a client with the token lists 39 tools and acts, the journal names its address, and off stops it',
+    'over HTTP: the Host runs the entrance, a client with the token lists 40 tools and acts, the journal names its address, and off stops it',
     async () => {
       const cli: HostCliPaths = {
         exec: createRequire(import.meta.url)('electron') as string,
@@ -1536,8 +1866,10 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
       await client.connect(new StreamableHTTPClientTransport(url, { requestInit: { headers: { Authorization: `Bearer ${token}` } } }))
       cleanups.push(() => client.close())
       // 39 since G5c's reconverge_run (44371e05): this test runs only where out/main/cli.js is built, so a stale build
-      // kept the old count passing (found in G7a)
-      expect((await client.listTools()).tools).toHaveLength(39)
+      // kept the old count passing (found in G7a). 40 since list_agent_profiles (Agent Profiles Task 7, 22a03402)
+      const listed = (await client.listTools()).tools
+      expect(listed).toHaveLength(40)
+      expect(listed.map((t) => t.name)).toContain('list_agent_profiles')
       const projects = (await client.callTool({ name: 'list_projects', arguments: {} })) as ToolResult
       expect(projects.isError).toBeFalsy()
       expect(projects.structuredContent).toEqual({ projects: [expect.objectContaining({ id: projectId, path: projectPath })] })
@@ -1573,7 +1905,7 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
       const file = path.join(h.profileDir, 'app-settings.json')
       const settings = JSON.parse(await fs.readFile(file, 'utf8')) as Record<string, unknown>
       await fs.writeFile(file, JSON.stringify({ ...settings, mcpHttp: { enabled: false, port: status.port } }))
-      const app = await rawClient(h.address, appHello, appAnswers(h.accountId))
+      const app = await rawClient(h.address, appHello, appAnswers(h.accountId), h.appKey)
       cleanups.push(() => app.close())
       const reloaded = await app.call('mcp-http-reload', {})
       expect(reloaded).toEqual({ status: 200, body: { state: 'off', lan: false, port: status.port } })
@@ -1840,7 +2172,7 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
   it('astera mcp status is 0 with a Host that speaks mcp and 3 without one', async () => {
     const h = await hostRig({ repo: false })
     const up = okData(await astera(['mcp', 'status'], h.env), 'mcp status')
-    expect(up).toMatchObject({ transport: 'stdio', host: { running: true, version: '9.9.9', protocol: HOST_PROTOCOL, mcp: true }, access: 'control', tools: 41 })
+    expect(up).toMatchObject({ transport: 'stdio', host: { running: true, version: '9.9.9', protocol: HOST_PROTOCOL, mcp: true }, access: 'control', tools: 42 })
     await h.stop()
     const down = await astera(['mcp', 'status'], h.env)
     expect(down.code).toBe(3)
@@ -2540,7 +2872,8 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
         const app = await rawClient(
           h.address,
           { ...appHello, yields: [...(appHello as { yields: string[] }).yields, HOST_YIELD_WORK_UNITS, HOST_YIELD_UNDERSTANDING] } as ClientMessage,
-          appAnswers(h.accountId)
+          appAnswers(h.accountId),
+          h.appKey
         )
         await until(() => expect(h.server.hasApp()).toBe(true))
         const unitsFile = path.join(h.profileDir, 'workUnits.json')
@@ -2596,7 +2929,7 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
       await turnOn(h)
       // An older Astera: it yields every duty but this one, so it writes How It Works itself.
       expect(appHello.yields).not.toContain(HOST_YIELD_UNDERSTANDING)
-      await rawClient(h.address, appHello, appAnswers(h.accountId))
+      await rawClient(h.address, appHello, appAnswers(h.accountId), h.appKey)
       await until(() => expect(h.server.hasApp()).toBe(true))
       const mcp = await mcpClient(h)
 

@@ -14,18 +14,27 @@ import { writeThroughTmp } from '../accounts/fileQueue'
 import { LAUNCH_FORBIDDEN } from '../sessions/commands'
 import { ownMcpNames } from './discover'
 import { readExtensionRegistry } from './registry'
+import { findProfile, readAgentProfiles } from '../agentProfiles/store'
+import type { ProfilePermission } from '../agentProfiles/types'
 import type { Account } from '../types'
 import type { McpExtension, SkipReason } from './types'
 
 export type PolicyMode = 'compatibility' | 'observe' | 'enforce'
 
-/** Who a session runs as, for the Control Plane: release 1 only knows the implicit form, derived from the account. */
-export interface ResolvedAgentContext {
-  kind: 'implicit'
-  accounts: string[]
-  policyMode: PolicyMode
-  executionMode: 'managed'
-}
+/** Who a session runs as, for the Control Plane: the implicit form is derived from the account alone; the explicit one
+ *  is the agent profile it was started from (Agent Profiles design §5), whose exclusions and permission it keeps. */
+export type ResolvedAgentContext =
+  | { kind: 'implicit'; accounts: string[]; policyMode: PolicyMode; executionMode: 'managed' }
+  | {
+      kind: 'explicit'
+      id: string
+      displayName: string
+      accounts: string[]
+      mcpExclude: string[]
+      permission: ProfilePermission
+      policyMode: PolicyMode
+      executionMode: 'managed'
+    }
 
 export type { SkipReason }
 
@@ -49,6 +58,9 @@ const BARE_KEY = /^[A-Za-z0-9_-]+$/
 /** The names Host and sessions agree on (host/gateway/tokens.ts reads them). */
 export const GATEWAY_TOKEN_ENV = 'ASTERA_GATEWAY_TOKEN'
 export const GATEWAY_GRANT_ENV = 'ASTERA_GATEWAY_GRANT'
+/** Where the Host's loopback endpoint is (`http://127.0.0.1:<port>`): the CLI of a session whose sandbox cannot open the
+ *  Host's pipe sends its commands there with the session's workload token (sandbox design §6). */
+export const LOOPBACK_ENV = 'ASTERA_LOOPBACK'
 
 export async function resolveSessionCapabilities(a: {
   profileDir: string
@@ -60,12 +72,16 @@ export async function resolveSessionCapabilities(a: {
   gatewayPort: number | null
   /** Works out what a session would get without writing the generated file: for Settings › Extensions' status. */
   dryRun?: boolean
+  /** The agent profile the session is started from. One that no longer resolves (deleted, store damaged) is logged and
+   *  the session starts as it would without one (Agent Profiles design §5). */
+  agentProfileId?: string
   log?: (line: string) => void
 }): Promise<SessionCapabilities> {
   const out: SessionCapabilities = {
-    context: { kind: 'implicit', accounts: [a.account.id], policyMode: a.policyMode ?? 'compatibility', executionMode: 'managed' },
+    context: await resolveAgentContext(a),
     args: [],
-    env: {},
+    // Whenever there is a Host, shared server or not, so the early returns below carry it too
+    env: a.gatewayPort === null ? {} : { [LOOPBACK_ENV]: `http://127.0.0.1:${a.gatewayPort}` },
     given: [],
     gatewayGrant: [],
     skipped: []
@@ -76,6 +92,12 @@ export async function resolveSessionCapabilities(a: {
   } catch (e) {
     a.log?.(`extensions: the registry could not be read, no shared server is passed (${e instanceof Error ? e.message : String(e)})`)
     return out
+  }
+  // A profile's exclusions go first, before any other filter, so an excluded server is in neither the arguments nor
+  // the Gateway grant: the Gateway refuses it for this session's token too
+  if (out.context.kind === 'explicit') {
+    const excluded = new Set(out.context.mcpExclude)
+    servers = servers.filter((s) => !excluded.has(s.id))
   }
   if (servers.length === 0) return out
   const provider = providerOf(a.account)
@@ -167,11 +189,46 @@ export async function resolveSessionCapabilities(a: {
   return out
 }
 
-/** The variables one spawn adds for the Gateway (design §4.2): a token made for this spawn alone, and the servers it was
- *  given. The Host registers them when it opens the session (host/gateway/tokens.ts). Nothing when no server goes
- *  through the Gateway. */
+/** The session's context: explicit when its profile id resolves (an archived profile still does, for work already
+ *  holding it), else implicit with one log line, as the session ran before profiles. Never rejects. */
+async function resolveAgentContext(a: {
+  profileDir: string
+  account: Account
+  policyMode?: PolicyMode
+  agentProfileId?: string
+  log?: (line: string) => void
+}): Promise<ResolvedAgentContext> {
+  const policyMode = a.policyMode ?? 'compatibility'
+  const implicit: ResolvedAgentContext = { kind: 'implicit', accounts: [a.account.id], policyMode, executionMode: 'managed' }
+  if (a.agentProfileId === undefined) return implicit
+  // Built inside the try too: a hand-edited entry with no exclusion list falls back as a damaged store does, rather
+  // than rejecting the whole resolution and leaving the session no shared server
+  try {
+    const profile = findProfile(await readAgentProfiles(a.profileDir), a.agentProfileId)
+    if (profile)
+      return {
+        kind: 'explicit',
+        id: profile.id,
+        displayName: profile.name,
+        accounts: [a.account.id],
+        mcpExclude: [...profile.mcpExclude],
+        permission: profile.permission,
+        policyMode,
+        executionMode: 'managed'
+      }
+  } catch (e) {
+    a.log?.(`extensions: the agent profiles could not be read, so profile ${a.agentProfileId} is not applied (${e instanceof Error ? e.message : String(e)})`)
+    return implicit
+  }
+  a.log?.(`extensions: agent profile ${a.agentProfileId} was not found, so the session starts without one`)
+  return implicit
+}
+
+/** The variables one spawn adds for the Gateway (design §4.2) and for the Host's own commands: a token made for this
+ *  spawn alone, and the servers it was given. The Host registers them when it opens the session
+ *  (host/gateway/tokens.ts). Every session gets the token, the workload token a call to the Host is known by (sandbox
+ *  design §7); with no shared server the grant is empty and the Gateway lets that token reach none. */
 export function gatewayTokenEnv(caps: Pick<SessionCapabilities, 'gatewayGrant'>): Record<string, string> {
-  if (caps.gatewayGrant.length === 0) return {}
   return { [GATEWAY_TOKEN_ENV]: randomBytes(32).toString('base64url'), [GATEWAY_GRANT_ENV]: caps.gatewayGrant.join(',') }
 }
 

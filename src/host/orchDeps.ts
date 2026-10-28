@@ -447,12 +447,16 @@ const NOT_FORWARDED = [
   'coordinatorIdle',
   'dispatchTask',
   'createSession',
+  'sessionSandboxed',
   'journalTimeline',
   'github',
   'readUnderstanding',
+  'readAgentProfiles',
+  'appWideYolo',
   'changes',
   'jobSources',
-  'completionChecks'
+  'completionChecks',
+  'spentTokens'
 ] as const
 
 /** Every name the groups above classify between them. Nothing is unsupplied any more: the four
@@ -578,6 +582,9 @@ const EFFECTFUL: Record<Classified, boolean> = {
   // NOT_FORWARDED as well (CLI spec §14, `sessions create`): the Host's own spawner or chat manager,
   // never the app. It starts a session, so it acts; the wrapper marks it unless nothing started.
   createSession: true,
+  // NOT_FORWARDED as well (final fix pass, C3): a read of this Host's own registries, whose notes say which sessions run
+  // in the sandbox, never the app's. It leaves nothing outside the call.
+  sessionSandboxed: false,
   // NOT_FORWARDED as well (Host journal J7, P10): the Host's own journal read for `runs-follow`, never
   // the app's. A read of a file this Host holds; it leaves nothing outside the call.
   journalTimeline: false,
@@ -588,6 +595,12 @@ const EFFECTFUL: Record<Classified, boolean> = {
   // NOT_FORWARDED as well (MCP P2-C): a read of this Host's profile's understanding.json, never the
   // app's. It never writes the file and leaves nothing outside the call.
   readUnderstanding: false,
+  // NOT_FORWARDED as well (Agent Profiles design §6): a read of this Host's agent-profiles.json, which only this Host
+  // writes, never the app's. It leaves nothing outside the call.
+  readAgentProfiles: false,
+  // NOT_FORWARDED as well (Agent Profiles final review): a read of this Host's app-settings.json, the file its spawns
+  // read the bypass from, never the app's. It leaves nothing outside the call.
+  appWideYolo: false,
   // NOT_FORWARDED as well (remote runtime design Phase 10): git reads on this Host's machine, never the app's. It
   // runs `git diff` and leaves nothing outside the call.
   changes: false,
@@ -596,7 +609,10 @@ const EFFECTFUL: Record<Classified, boolean> = {
   jobSources: false,
   // NOT_FORWARDED as well (plugin Phase 5 C7, C8): this Host's completion check plugins, listed and asked to check,
   // never the app's. A check reads the work; its verdict is committed by the checks that asked.
-  completionChecks: false
+  completionChecks: false,
+  // NOT_FORWARDED as well (observe mode design §10): a read of this Host's token store, never the app's. It leaves
+  // nothing outside the call.
+  spentTokens: false
 }
 
 /** The names an action really travels under, narrowed to the effectful ones — the NESTED groups
@@ -703,6 +719,9 @@ export function hostOrchDeps(a: {
   /** The Host's own session starter (`sessions create`, sessionCreate.ts). Absent: the command
    *  answers 409, as a caller that is not the Host. */
   createSession?: OrchServerDeps['createSession']
+  /** Whether a session this Host holds runs in its CLI's sandbox (its note's `sandboxed`, final fix pass C3). Absent: no
+   *  caller reads as sandboxed. */
+  sessionSandboxed?: OrchServerDeps['sessionSandboxed']
   /** The Host journal's rows for one Run's timeline (J7, P10), `hostJournal.timeline`. Absent (a Host
    *  with no journal): `runs-follow` shows the state's events only. */
   journalTimeline?(runId: string, state: OrchState): JobEvent[]
@@ -712,11 +731,20 @@ export function hostOrchDeps(a: {
   /** How It Works records (MCP P2-C): this Host's profile's understanding.json, read per call. Absent:
    *  the `understanding-*` commands answer 409, as a caller that is not the Host. */
   readUnderstanding?: OrchServerDeps['readUnderstanding']
+  /** The agent profile store (Agent Profiles design §6): this Host's agent-profiles.json, read per call; the app's own
+   *  deps read the same file. Absent: a Job or Task named with a profile answers 409. */
+  readAgentProfiles?: OrchServerDeps['readAgentProfiles']
+  /** Whether this Host's app-settings.json skips permission checks, read per call when an agent starts work as a profile
+   *  that runs without them. Absent: such a caller is refused. */
+  appWideYolo?: OrchServerDeps['appWideYolo']
   /** A Run's changed files and diffs from this Host's git (Phase 10). Absent: the two commands answer 409. */
   changes?: OrchServerDeps['changes']
   /** This Host's job-source plugins (plugin Phase 4 J10). Absent: the sources are GitHub's alone. */
   jobSources?: OrchServerDeps['jobSources']
   completionChecks?: OrchServerDeps['completionChecks']
+  /** What this Host's sessions spent (observe mode design §10), its token store's. Absent: `runs-get` and `tasks-get`
+   *  leave their token fields out. */
+  spentTokens?: OrchServerDeps['spentTokens']
   /** The Host's own session work units (HOST_TRACKS, E2 §5), asked whether it is their writer at every
    *  call. Null or absent (no spawner): `trackingEnabled` and `sessionTasks.*` only forward, as before. */
   workUnits?: (Pick<HostWorkUnits, 'isWriter' | 'trackingEnabled'> & {
@@ -875,8 +903,9 @@ export function hostOrchDeps(a: {
     if (chats && chats.isWriter(id)) return Promise.resolve(chatPendingOf(chats.requests(id)[0] ?? null))
     return askPending(id)
   }
+  // `by.person`: a person's `sessions send`, carried to whichever writes the line (observe deferred fix round 2, Minor b)
   const hostWhenAbsent = (name: (typeof HOST_WHEN_ABSENT)[number]) =>
-    (id: string, text: string): Promise<unknown> =>
+    (id: string, text: string, by?: { person: true }): Promise<unknown> =>
       a.sessions.serial(id, async () => {
         // P10: a session the Host writes to goes through the Host adapter, so a turn never lands around
         // a card the adapter holds and the adapter's turn state moves with the write. An open card
@@ -889,9 +918,14 @@ export function hostOrchDeps(a: {
           const card = chats.requests(id)[0]
           if (card !== undefined) return { sent: false, pending: chatPendingOf(card) }
           try {
-            await chats.send(id, text, () => {
-              if (EFFECTFUL[name]) a.onEffect?.()
-            })
+            await chats.send(
+              id,
+              text,
+              () => {
+                if (EFFECTFUL[name]) a.onEffect?.()
+              },
+              by
+            )
           } catch (err) {
             const refused = new AppUnreachable(
               `APP_REQUIRED: ${name} could not be done by the Host: ${err instanceof Error ? err.message : String(err)}`
@@ -906,12 +940,17 @@ export function hostOrchDeps(a: {
           const pending = await askPending(id)
           if (pending === undefined) return { sent: false, reason: 'not-held' }
           if (pending !== null) return { sent: false, pending }
-          return forward(name, true)(id, text)
+          return by ? forward(name, true)(id, text, by) : forward(name, true)(id, text)
         }
         try {
-          await a.sessions.sendChat(id, text, () => {
-            if (EFFECTFUL[name]) a.onEffect?.()
-          })
+          await a.sessions.sendChat(
+            id,
+            text,
+            () => {
+              if (EFFECTFUL[name]) a.onEffect?.()
+            },
+            by
+          )
         } catch (err) {
           const refused = new AppUnreachable(
             `APP_REQUIRED: ${name} could not be done without the app: ${err instanceof Error ? err.message : String(err)}`
@@ -1289,12 +1328,16 @@ export function hostOrchDeps(a: {
     stopCoordinator,
     ...(a.dispatchTask ? { dispatchTask } : {}),
     ...(a.createSession ? { createSession } : {}),
+    ...(a.sessionSandboxed ? { sessionSandboxed: a.sessionSandboxed } : {}),
     ...(a.journalTimeline ? { journalTimeline: a.journalTimeline } : {}),
     ...(github ? { github } : {}),
     ...(a.readUnderstanding ? { readUnderstanding: a.readUnderstanding } : {}),
+    ...(a.readAgentProfiles ? { readAgentProfiles: a.readAgentProfiles } : {}),
+    ...(a.appWideYolo ? { appWideYolo: a.appWideYolo } : {}),
     ...(a.changes ? { changes: a.changes } : {}),
     ...(a.jobSources ? { jobSources: a.jobSources } : {}),
     ...(a.completionChecks ? { completionChecks: a.completionChecks } : {}),
+    ...(a.spentTokens ? { spentTokens: a.spentTokens } : {}),
     ...(a.checkWaits
       ? {
           enterCheckWait: (runId: string, sessionId: string) => a.checkWaits!.enter(runId, sessionId),

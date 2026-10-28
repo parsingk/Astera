@@ -754,6 +754,8 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .tab-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 /* The rolling-active session marker — a small, restrained, non-interactive mark; the account chain is exposed only through the title tooltip */
 .tab-roll { flex: none; opacity: 0.65; cursor: default; user-select: none; }
+/* A session in its CLI's sandbox (sandbox design §6): drawn like the rolling marker beside it */
+.tab-sandbox { flex: none; display: inline-flex; opacity: 0.65; cursor: default; user-select: none; }
 /* Session working: a spinner in the account colour. Larger than a dot (10px) with a bright semicircular
    arc turning, so it reads clearly. The colour is set inline (a faint track plus full colour on
    top/right = a bright 180° arc). */
@@ -865,6 +867,7 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .remote-session-list li + li { border-top: 1px solid var(--line-soft); }
 .remote-session-list button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; padding: 6px 10px; border: 0; border-radius: 0; background: transparent; text-align: left; }
 .remote-session-list button:hover { background: var(--elevated); }
+.remote-session-head { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; }
 .remote-session-name { color: var(--text); }
 .remote-session-meta { font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .remote-sessions-new { margin: 14px 0 6px; padding-top: 12px; border-top: 1px solid var(--line-soft); font-size: 13px; font-weight: 600; color: var(--text); }
@@ -1278,6 +1281,89 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .ext-row-head:hover { background: var(--elevated); }
 .ext-row-chevron { flex-shrink: 0; width: 12px; color: var(--text-dim); font-size: 11px; }
 .ext-row-body { display: flex; flex-direction: column; gap: 14px; padding: 16px 12px 18px 16px; border-top: 1px solid var(--line); }
+/* Settings › Agent profiles: a profile's editor is long, and its Save, Archive and Delete must not sit below the fold of
+   a small inner scroll, so this list grows with the page instead of keeping MCP & Skills' 360px box. A new profile's
+   editor is a box of its own above the list, with no row head over its body. */
+.ext-list.is-uncapped { max-height: none; }
+.agent-profile-new { border: 1px solid var(--line); border-radius: var(--radius); }
+.agent-profile-new > .ext-row-body { border-top: 0; }
+/* Settings › Security & Access (observe mode design §11): two sections under English headings, Policies (the switch, what
+   observe can see, the rules) and Audit Logs (the counts, the filters, the rows). Only the tokens the other settings use. */
+.security-section { display: flex; flex-direction: column; gap: 16px; }
+.security-title { margin: 0; font-size: 15px; font-weight: 600; color: var(--text); }
+.security-choices { display: flex; align-items: center; gap: 14px; }
+/* The coverage table and the rows: wide, so they scroll sideways inside the tab rather than widen it */
+.security-table-wrap { container-type: inline-size; overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+.security-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.security-table th, .security-table td { padding: 6px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line-soft); }
+.security-table tr:last-child > * { border-bottom: 0; }
+.security-table thead th { color: var(--text-dim); font-weight: 600; white-space: nowrap; }
+.security-table tbody th { color: var(--text); font-weight: 600; white-space: nowrap; }
+.security-table td.is-seen { color: var(--ok); }
+.security-table td.is-partial { color: var(--warn); }
+.security-table td.is-none { color: var(--text-faint); }
+.security-table td.is-enforced { color: var(--danger); font-weight: 600; }
+/* The sandbox table: what it lets through (the network) is neutral, not the green that reads as covered */
+.security-table td.is-allowed { color: var(--text); }
+.security-table th .security-row-note { display: block; font-weight: normal; font-size: 11px; color: var(--text-faint); }
+/* A rule: its place, its three fields, then up, down and remove, as an account row of an agent profile reads. The list's
+   own numbers are its places, so the <ol>'s markers and indent are taken off. */
+.security-rules { margin: 0; padding: 0; list-style: none; }
+.security-rule { display: flex; align-items: center; gap: 8px; padding: 6px 10px; }
+.security-rule > button { flex: none; background: none; border: 0; padding: 0 3px; color: var(--text-faint); font-size: 12px; line-height: 1; cursor: pointer; }
+.security-rule > button:hover:not(:disabled) { color: var(--accent); }
+.security-rule > button:disabled { opacity: .3; cursor: default; }
+.security-rule-fields { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.security-rule-action { min-width: 200px; }
+/* Enforce's built-ins: listed above the person's rules, greyed, with nothing to change */
+.security-rule.is-builtin { color: var(--text-faint); }
+.security-builtin-tag { flex: none; font-size: 11px; color: var(--text-faint); }
+.security-new-rule { flex-wrap: wrap; }
+.security-audit { display: flex; flex-direction: column; gap: 12px; }
+.security-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.security-counts { display: flex; flex-wrap: wrap; gap: 8px; }
+.security-decision { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: var(--radius-sm); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.security-decision.is-allow { color: var(--ok); background: var(--ok-bg); }
+.security-decision.is-would-deny { color: var(--danger); background: var(--danger-bg); }
+.security-decision.is-unknown { color: var(--text-dim); background: var(--elevated); }
+/* Stopped by Enforce before it ran: solid, apart from would-deny's tint */
+.security-decision.is-blocked { color: #fff; background: var(--danger); }
+/* A credential use's outcome, in the same badge (credentials design §7) */
+.security-decision.is-ok { color: var(--ok); background: var(--ok-bg); }
+.security-decision.is-failed { color: var(--danger); background: var(--danger-bg); }
+/* Settings › Security & Access › Credentials: the list's notes, its rows, a new entry's box; what a row hides may be long,
+   so its head wraps rather than widen the tab, and the projects an entry is narrowed to sit under their choice. */
+.security-credentials { display: flex; flex-direction: column; gap: 12px; }
+.credential-hides { overflow-wrap: anywhere; }
+.credential-projects { display: flex; flex-direction: column; gap: 4px; padding-left: 22px; }
+/* Audit Logs' rows fit the tab without a sideways scroll at the settings window's usual width (the screen finding, at a
+   1280 px window: the action wrapped over four lines and the rule column was cut off). The time is the time of day, with
+   the date heading each day's rows; the time, the action and the decision keep to one line; the session is cut short;
+   the target takes the room left over, cut short, the whole of it on hover; the rule that decided sits under the
+   decision and wraps there, never narrower than a few words. */
+.security-rows td { white-space: nowrap; }
+.security-time { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-dim); }
+.security-date { display: block; font-size: 11px; color: var(--text-faint); }
+.security-session-cell > span { display: block; max-width: 8em; overflow: hidden; text-overflow: ellipsis; }
+.security-session { color: var(--text); }
+.security-profile { font-size: 11.5px; color: var(--text-faint); }
+.security-rows td.security-target { width: 100%; max-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono); font-size: 11.5px; }
+.security-decided-by { display: block; min-width: 9em; margin-top: 3px; white-space: normal; font-size: 11.5px; color: var(--text-dim); }
+/* Where the tab is narrower than the table needs (measured: the table needs 491 px in ja, 507 in en and ko, 524 in es; the
+   minimum window's 455 px overflowed by 50 px; 595 px and up fit, and the break is 560) each row stacks in its own box:
+   the time (a column of one width, so the rows line up), the session and the action on a line, the target under them, and
+   the decision with the rule that decided it last. The column heads are kept for screen readers only; the table, rows and
+   cells carry their roles in the markup, since a block or grid display drops the table's own. */
+@container (max-width: 560px) {
+  .security-rows thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .security-rows, .security-rows tbody { display: block; }
+  .security-rows tr { display: grid; grid-template-columns: 5.75em minmax(0, 1fr) auto; gap: 2px 10px; padding: 6px 10px; border-bottom: 1px solid var(--line-soft); }
+  .security-rows tr:last-child { border-bottom: 0; }
+  .security-rows td { min-width: 0; padding: 0; border-bottom: 0; }
+  .security-rows td.security-target { grid-column: 1 / -1; width: auto; max-width: none; }
+  .security-rows tr > td:last-child { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; }
+  .security-rows .security-decided-by { flex: 1 1 9em; min-width: 0; margin-top: 0; }
+}
 .plugin-card .settings-hint { overflow-wrap: anywhere; }
 /* A fieldset, so a save holds every field at once; its own frame is taken off. */
 .plugin-form { display: flex; flex-direction: column; gap: 12px; min-width: 0; margin: 6px 0 0; padding: 10px 0 0; border: 0; border-top: 1px solid var(--line-soft); }
@@ -1716,6 +1802,13 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    같은 아이콘과 같은 숫자가 화면마다 다르게 생기면 "아이콘으로 읽는다"는 규칙이 무너진다 */
 .detail-head { flex: none; display: flex; align-items: center; gap: 9px; }
 .detail-head h2 { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Run detail's token totals and its would-deny line (observe mode design §10, §11), one quiet line under the head */
+.detail-observe { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; margin-top: 4px; font-size: 11.5px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.detail-observe-tokens { display: inline-flex; flex-wrap: wrap; gap: 4px 12px; }
+.detail-observe-note { color: var(--text-dim); }
+.detail-observe-deny { display: inline-flex; align-items: center; gap: 8px; }
+.detail-observe-link { background: none; border: 0; padding: 0; color: var(--accent); font-size: inherit; cursor: pointer; }
+.detail-observe-link:hover { text-decoration: underline; }
 /* 창을 닫는 ✕. 아래 .detail-clear 와 같은 모양을 쓰지만 margin-left: auto 가 아니다 — 제목이
    flex: 1 로 남는 자리를 다 가져가므로 개수 묶음과 이 버튼은 이미 오른쪽 끝에 붙어 있고, auto 를
    또 주면 개수 묶음과 이 버튼 사이가 벌어진다. 글자를 --text-faint 로 두지 않는 이유는 사이드바에서
@@ -2054,13 +2147,15 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .pane-tabbar .tabs { height: 100%; flex: 1; min-width: 0; }
 /* Drops the vertical padding and centres instead — the global tab bar (≈32px) is gone.
    Lets tabs shrink in a narrow group: the global bar was flex:none, so past six tabs it overflowed and got
-   cut. A minimum width keeps them from shrinking past recognition */
+   cut. How far each one may shrink is not here: WorkbenchTabs sets it inline per tab — the icon, close
+   button and padding at full width, and at least half the name (tabStrip.ts tabFloor). Past that the row
+   scrolls instead. A fixed 84px floor, the same for every tab, used to sit here */
 /* align-self: stretch is the crux — .tabs is align-items:center, so with zero vertical padding the tab
    element collapses to the text height and floats in the middle of the bar. The underline
    (inset 0 calc(-1 * var(--marker-w)) 0 <color>, set inline in WorkbenchTabs.tsx) would then be drawn
    just under the text rather than at the bottom of the tab, and the tab divider (border-right) would be
    cut short */
-.pane-tabbar .tab { padding: 0 12px; flex: 0 1 auto; min-width: 84px; align-self: stretch; }
+.pane-tabbar .tab { padding: 0 12px; flex: 0 1 auto; align-self: stretch; }
 .pane-tabbar .tab .tab-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* 이름 고치기. 라벨 자리를 그대로 차지해 탭 너비가 흔들리지 않게 한다 — 폭이 바뀌면 옆 탭들이
    밀려서, 고치는 동안 탭 줄 전체가 움직인다 */
@@ -2072,8 +2167,15 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
   outline: none;
 }
 /* Hides the horizontal scrollbar (10px globally) so it does not eat the vertical space of the tab row —
-   the same convention as the terminal's xterm-viewport. Wheel and trackpad scrolling still work */
+   the same convention as the terminal's xterm-viewport. A sideways trackpad swipe scrolls the row on its
+   own; a mouse wheel is turned sideways by WorkbenchTabs (tabStrip.ts wheelShift), and .tabs-thumb below
+   shows where the row is while it moves */
 .pane-tabbar .tabs::-webkit-scrollbar { height: 0; }
+/* WorkbenchTabs.tsx StripThumb. Drawn over the bar's bottom edge, so it moves nothing; pointer-events:none
+   so a click or a drag on the tab under it still lands on the tab. z-index 2 puts it over the sticky
+   .new-tab (1) below, so the thumb reaches the right end of the row */
+.pane-tabbar .tabs-thumb { position: absolute; bottom: 0; height: 3px; border-radius: 2px; background: var(--text-faint); opacity: 0; pointer-events: none; z-index: 2; transition: opacity var(--ease); }
+.pane-tabbar .tabs-thumb.shown { opacity: 0.6; }
 /* The + must not disappear when the tabs overflow — a group's + is the main entry point for a new session.
    It is sticky above the tabs, so its background has to be the same opaque colour as the bar or the tabs
    passing underneath show through */

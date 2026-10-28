@@ -138,9 +138,8 @@ function unescapeSlackText(text: string): string {
 }
 
 /** The result of converting reply text into the form to write to the PTY. Enter (submit) itself is not
- *  part of text — by the same convention as scheduler.ts and claudeCoordinator.ts, SlackInbox has to send it
- *  separately ENTER_DELAY_MS (150ms) after writing the text so the TUI has digested the whole paste
- *  before it submits. */
+ *  part of text — SlackInbox sends it separately, once the session has drawn the text and gone quiet
+ *  (untilEnter, core/sessions/sessionDriver.ts), so the TUI has digested the whole paste before it submits. */
 export interface SessionInput {
   /** The body to write to the PTY — newlines are already folded into Alt+Enter (ESC+CR). */
   text: string

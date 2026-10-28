@@ -10,6 +10,21 @@ const stub = (tag: string, calls: string[]): PtyFactory => (file) => {
 const opts = { cwd: 'D:/p', cols: 80, rows: 24, env: {} }
 
 describe('createPtyRouter', () => {
+  // A session on the app's own child is never opened in the Host's registry, so its workload token would never be live:
+  // it must not carry one, and then behaves as it did before tokens existed.
+  it('drops the workload token and grant from a spawn that falls back, and keeps them for the Host', () => {
+    const seen: Array<Record<string, string | undefined>> = []
+    const capture = (file: string, _a: string[], o: { env: Record<string, string | undefined> }): PtyLike => (seen.push(o.env), stub('x', [])(file, [], o as never))
+    const r = createPtyRouter(capture as PtyFactory)
+    const env = { PATH: 'x', ASTERA_SESSION: 's', ASTERA_GATEWAY_TOKEN: 'T', ASTERA_GATEWAY_GRANT: 'g', ASTERA_LOOPBACK: 'http://127.0.0.1:1' }
+    r.factory('a', [], { ...opts, env })
+    r.use(capture as PtyFactory)
+    r.factory('b', [], { ...opts, env })
+    expect(seen[0]).toEqual({ PATH: 'x', ASTERA_SESSION: 's' })
+    expect(seen[1]).toEqual(env)
+    expect(env.ASTERA_GATEWAY_TOKEN).toBe('T')
+  })
+
   // The three managers are built before the Host client exists, so the factory they are handed has
   // to be the same object for the app's whole life.
   it('uses the fallback until a factory is given, and the given one after', () => {

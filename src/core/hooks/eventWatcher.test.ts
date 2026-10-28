@@ -158,6 +158,21 @@ describe('HookEventWatcher', () => {
       expect(events).toEqual([])
     })
 
+    // 직접 띄우지 않는 Host 에는 hook-events 가 아예 없을 수 있다(관찰 모드 최종 리뷰). 그 동안 10초마다 같은 줄을
+    // 남기지 않고, 읽히다가 다시 못 읽게 될 때 한 번 더 남긴다.
+    it('폴더를 못 읽는 동안에는 한 번만 로그하고, 다시 읽혔다가 또 못 읽으면 다시 한 번 로그한다', async () => {
+      const failed = (): number => logs.filter((m) => m.startsWith('hook sweep failed')).length
+      await fs.rm(dir, { recursive: true, force: true })
+      for (let i = 0; i < 3; i++) await watcher.sweep()
+      expect(failed()).toBe(1)
+      await fs.mkdir(dir)
+      await watcher.sweep()
+      await fs.rm(dir, { recursive: true, force: true })
+      await watcher.sweep()
+      await watcher.sweep()
+      expect(failed()).toBe(2)
+    })
+
     // 아래 둘은 훑기가 *걸리고 풀리는지* 만 본다. 훑기가 실제로 줄을 올린다는 것은 위의 테스트들이
     // 이미 증명했다. 여기서 파일을 두고 기다리는 방식을 쓰지 않는 이유는 그것이 결정적이지 않기
     // 때문이다 — start() 직전에 만든 파일을 macOS 의 FSEvents 가 합쳐서 알려 주는 것을 측정했고,
@@ -322,5 +337,49 @@ describe('HookEventWatcher', () => {
     } finally {
       await fs.rm(dir, { recursive: true, force: true })
     }
+  })
+
+  // Observe mode's audit lines go to <session>.audit.jsonl beside the session's own file (statusline.ts
+  // ensureObserveFiles). Only the recorder's watcher reads them; every other reader of the folder never sees them.
+  describe('the audit files beside the session files', () => {
+    let dir: string
+    beforeEach(async () => {
+      dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-hookaudit-'))
+      await fs.writeFile(path.join(dir, 's1.jsonl'), '{"hook_event_name":"Stop"}\n')
+      await fs.writeFile(path.join(dir, 's1.audit.jsonl'), '{"hook_event_name":"PostToolUse","tool_name":"Read"}\n')
+    })
+    afterEach(async () => {
+      await fs.rm(dir, { recursive: true, force: true })
+    })
+
+    it('a watcher of the session files never reads an audit file', async () => {
+      const got: Array<[string, unknown]> = []
+      const w = new HookEventWatcher(dir, (sid, p) => got.push([sid, p]), () => {})
+      await w.sweep()
+      await w.drain(path.join(dir, 's1.audit.jsonl'))
+      expect(got).toEqual([['s1', { hook_event_name: 'Stop' }]])
+    })
+
+    it('an audit watcher reads only the audit files, named by their session', async () => {
+      const got: Array<[string, unknown]> = []
+      const w = new HookEventWatcher(dir, (sid, p) => got.push([sid, p]), () => {}, undefined, { audit: true })
+      await w.sweep()
+      await w.drain(path.join(dir, 's1.jsonl'))
+      expect(got).toEqual([['s1', { hook_event_name: 'PostToolUse', tool_name: 'Read' }]])
+    })
+
+    it('with startAtEnd, an audit watcher starts each audit file at its end', async () => {
+      const got: unknown[] = []
+      const w = new HookEventWatcher(dir, (_sid, p) => got.push(p), () => {}, 60_000, {
+        audit: true,
+        startAtEnd: true,
+        watch: (() => ({ on: () => {}, close: () => {} })) as never
+      })
+      w.start()
+      await fs.appendFile(path.join(dir, 's1.audit.jsonl'), '{"hook_event_name":"PostToolUseFailure","tool_name":"Bash"}\n')
+      await w.sweep()
+      w.stop()
+      expect(got).toEqual([{ hook_event_name: 'PostToolUseFailure', tool_name: 'Bash' }])
+    })
   })
 })

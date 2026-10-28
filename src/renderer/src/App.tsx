@@ -28,7 +28,7 @@ import { JobsView } from './components/JobsView'
 import { jobsStall, jobsStallRecheckInMs } from '../../core/orchestration/jobsView'
 import { UnderstandingView } from './components/UnderstandingView'
 import { RecordDetailHost } from './components/RecordDetail'
-import { RunDetail } from './components/RunDetail'
+import { KeyedRunDetail } from './components/RunDetail'
 import { NewRunModal } from './components/NewRunModal'
 import { SourceJobModal } from './components/SourceJobModal'
 import { NewSessionDialog } from './components/NewSessionDialog'
@@ -48,6 +48,11 @@ import { McpSettings } from './components/McpSettings'
 import { RemoteRuntimesSettings } from './components/RemoteRuntimesSettings'
 import { PluginsSettings } from './components/PluginsSettings'
 import { ExtensionsSettings } from './components/ExtensionsSettings'
+import { AgentProfilesSettings } from './components/AgentProfilesSettings'
+import { profileOfConversation, spawnPermission } from './components/agentProfilesText'
+import { SecuritySettings } from './components/SecuritySettings'
+import { SECURITY_TAB, type AuditFocus } from './components/securityText'
+import { jobName } from './lib/jobName'
 import { RuntimeSelector } from './components/RuntimeSelector'
 import { createReplyGate } from './lib/replyGate'
 import { LOCAL, controlReason, detailOffScreen, detailRunGone, isRemoteRuntime, offlineNote, remoteDetailKey, remoteNewJobFolder, remotePollReady } from './lib/remoteJobs'
@@ -109,7 +114,7 @@ import { toggleSidebarView, type SidebarView } from '../../core/ui/sidebar'
 import { terminalsWithCreated } from './lib/terminalTabs'
 import * as hiddenProjects from './lib/hiddenProjects'
 import { isCancelled as isWorktreeCancelled } from './lib/worktreeErrors'
-import { spawnErrorMessage } from './lib/spawnErrors'
+import { sandboxSetupAccountOf, sandboxSetupOutcome, spawnErrorMessage } from './lib/spawnErrors'
 import { notifyCreated as notifyWorktreeCreated } from './lib/worktreeBus'
 import { useI18n } from './i18n/I18nProvider'
 import {
@@ -147,7 +152,7 @@ import { AGENT_TAB_CLOSE_DELAY_MS, AGENT_TAB_LOST_SIGHT_CLOSE_MS, closesWhenEnde
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
 import { holdActivationFocus } from './lib/focusHold'
 import { displayHostOf, linkDestination, normalizeUrl, previewTargetOf } from '../../core/preview/url'
-import { isWaitingOnDialog, POST_PASTE_SUBMIT_DELAY_MS } from '../../core/preview/pick/send'
+import { isWaitingOnDialog } from '../../core/preview/pick/send'
 import { PaneGrid } from './components/PaneGrid'
 import { ContextMenu, type MenuItem } from './components/ContextMenu'
 import { onFileChanges } from './lib/fileChanges'
@@ -708,9 +713,17 @@ export default function App(): React.JSX.Element {
     | 'remote'
     | 'plugins'
     | 'extensions'
+    | 'agentProfiles'
+    | 'security'
     | 'worktree'
     | 'history'
   >('general') // the settings sidebar, with general and accounts added
+  /** The Run (or a Job row with no Run of its own) Run detail opened Settings › Security & Access for: Audit Logs shows
+   *  its calls only, until the filter is cleared or Settings closes. */
+  const [auditRun, setAuditRun] = useState<AuditFocus | null>(null)
+  useEffect(() => {
+    if (!showSettings) setAuditRun(null)
+  }, [showSettings])
   /** Settings fields changed since the modal opened (audit UI-7). */
   const settingsTouched = useRef(createTouched())
   const [wtRoot, setWtRoot] = useState('') // the worktree root in the settings modal
@@ -1712,6 +1725,8 @@ export default function App(): React.JSX.Element {
     rollPrompt?: string
     slackNotify?: boolean
     bypassPermissions?: boolean
+    /** The agent profile picked in the New Session dialog: sent instead of bypassPermissions (permissionFields). */
+    agentProfileId?: string
     /** chat takeover P8: the New Session dialog's pick for a chat session, forwarded to sessions.spawn
      *  unchanged. Absent for a terminal session, which has no such policy at all. */
     unattendedPermission?: UnattendedPermission
@@ -1759,7 +1774,9 @@ export default function App(): React.JSX.Element {
         rollAccountIds: rolling ? opts.accountIds : undefined,
         rollPrompt: rolling ? opts.rollPrompt : undefined,
         slackNotify: opts.slackNotify, // Slack progress notifications
-        bypassPermissions: opts.bypassPermissions, // start without permission prompts
+        // Start without permission prompts, or as the session's profile says: an explicit bypass wins, so the dialog
+        // sends none with a picked profile, and a restart sends the one the session already resolved
+        ...spawnPermission(opts),
         unattendedPermission: opts.unattendedPermission, // chat takeover P8: hold, or deny after 60 s
         schedule: opts.schedule
       })
@@ -1830,7 +1847,29 @@ export default function App(): React.JSX.Element {
         })
         return
       }
+      // A sandboxed Codex start on an account whose Windows sandbox is not set up: say so, and offer to set up that one
+      // account (Windows' administrator prompt, once). The person starts it again afterwards; the toast after says how
+      // the setup went, or what Codex said.
+      const setupAccount = sandboxSetupAccountOf(raw)
       const message = t(msg.key, msg.params)
+      if (setupAccount !== null && opts.agentProfileId !== undefined) {
+        const profileId = opts.agentProfileId
+        // A worktree made for the start stays, unrolled-back, and the toast still says so, as every other failure's does
+        const id = toast.error(createdWorktreeName ? t('session.spawn.failedWorktreeKept', { message, name: createdWorktreeName }) : message, {
+          action: {
+            label: t('session.spawn.sandbox.setUp'),
+            onClick: () => {
+              dismiss(id)
+              void window.api.agentProfiles.sandboxSetup(profileId, setupAccount).then((answer) => {
+                const outcome = sandboxSetupOutcome(answer)
+                if (outcome.ok) toast.success(t('session.spawn.sandbox.setUpDone'))
+                else toast.error(outcome.line ?? t('session.spawn.sandbox.setUpFailed'))
+              })
+            }
+          }
+        })
+        return
+      }
       // On a failure after the worktree was created, the user is also told that it remains, unrolled-back
       toast.error(
         createdWorktreeName
@@ -2467,6 +2506,8 @@ export default function App(): React.JSX.Element {
       saveDefault: false,
       slackNotify: old.slackNotify,
       bypassPermissions: old.bypassPermissions,
+      // The session's agent profile: its MCP servers again; the bypass above is what the profile resolved to and wins
+      ...(old.agentProfileId !== undefined ? { agentProfileId: old.agentProfileId } : {}),
       replacesSessionId: old.id,
       kind: old.kind,
       ...(sessionKindOf(old) === 'chat' && old.threadId !== undefined ? { resumeThreadId: old.threadId } : {})
@@ -2485,8 +2526,12 @@ export default function App(): React.JSX.Element {
       roll: boolean
       rollPrompt?: string
       slackNotify: boolean
-      bypassPermissions: boolean
+      /** Left out when the resume carries a profile, which then decides it (spawnPermission) */
+      bypassPermissions?: boolean
       schedule?: ScheduleConfig
+      /** The profile the resume carries, decided once by ResumeDialog (an open tab's, else the recorded one): its MCP
+       *  servers come back and its permission decides */
+      agentProfileId?: string
     }
   ): void => {
     void spawn({
@@ -2509,6 +2554,7 @@ export default function App(): React.JSX.Element {
       rollPrompt: opts.rollPrompt,
       slackNotify: opts.slackNotify,
       bypassPermissions: opts.bypassPermissions,
+      ...(opts.agentProfileId !== undefined ? { agentProfileId: opts.agentProfileId } : {}),
       schedule: opts.schedule
     })
   }
@@ -3420,11 +3466,9 @@ export default function App(): React.JSX.Element {
           // follows it, leaving no sign the batch was ever sent. Checked before anything is written.
           const screen = sessionBus.screenOf(sessionId)
           if (screen !== null && isWaitingOnDialog(screen)) return 'waiting'
-          // Through the terminal's own paste, never sessions.write — see sessionBus.registerPaste
-          if (!sessionBus.pasteInto(sessionId, text)) return 'no-terminal'
-          // The paste has to be through the terminal and into the agent's input box before the Enter
-          // lands, or the Enter submits an empty prompt.
-          window.setTimeout(() => sessionBus.submitInto(sessionId), POST_PASTE_SUBMIT_DELAY_MS)
+          // Through the terminal's own paste, never sessions.write — see sessionBus.registerPaste. The Enter waits
+          // for the session to have drawn the paste and gone quiet (sessionBus.pasteAndSubmit)
+          if (!sessionBus.pasteAndSubmit(sessionId, text)) return 'no-terminal'
           selectWorkbenchTab(sessionTab(sessionId))
           return 'sent'
         }}
@@ -4611,6 +4655,7 @@ export default function App(): React.JSX.Element {
                   accounts={accounts}
                   ghostAccounts={ghostAccounts}
                   defaultSessionKind={defaultSessionKind}
+                  tabProfileOf={(id) => profileOfConversation(sessionsRef.current, id)}
                   onResume={resumeFromHistory}
                 />
               </>
@@ -4989,6 +5034,12 @@ export default function App(): React.JSX.Element {
                     ['plugins', t('settings.tab.plugins')],
                     // Shared extensions (Agent Control Plane release 1): what every account gets, next to the plugins.
                     ['extensions', t('settings.tab.extensions')],
+                    // Agent profiles (Agent Profiles design §8): accounts, MCP servers and permission under one name,
+                    // right after the MCP servers they choose from.
+                    ['agentProfiles', t('settings.tab.agentProfiles')],
+                    // Security & Access (observe mode design §11): the rules agents' calls are judged by and the record of
+                    // those calls, after the profiles they are made as. Its name is English in every language.
+                    ['security', SECURITY_TAB],
                     ['hiw', t('hiw.title')],
                     ['shortcuts', t('settings.tab.shortcuts')],
                     ['slack', 'Slack'],
@@ -5425,6 +5476,18 @@ export default function App(): React.JSX.Element {
                 {settingsTab === 'remote' && <RemoteRuntimesSettings onChanged={() => setPairedChanged((n) => n + 1)} />}
                 {settingsTab === 'plugins' && <PluginsSettings />}
                 {settingsTab === 'extensions' && <ExtensionsSettings accounts={accounts} />}
+                {settingsTab === 'agentProfiles' && <AgentProfilesSettings accounts={accounts} />}
+                {settingsTab === 'security' && (
+                  <SecuritySettings
+                    {...(auditRun !== null ? { focus: auditRun } : {})}
+                    onClearFocus={() => setAuditRun(null)}
+                    sessionTitle={(id) => sessions.find((s) => s.id === id)?.title}
+                    runName={(id) => {
+                      const row = orchSnapshot ? findRun(orchSnapshot, id) : undefined
+                      return row ? jobName(row) : undefined
+                    }}
+                  />
+                )}
                 {settingsTab === 'worktree' && (
                   <div className="settings-worktree">
                     <label className="settings-field-label">{t('settings.worktree.createLocation')}</label>
@@ -5574,7 +5637,8 @@ export default function App(): React.JSX.Element {
         />
       )}
       {openRun && detailDoor && (
-        <RunDetail
+        <KeyedRunDetail
+          open={openRun}
           door={detailDoor}
           // 그래프의 노드는 제목·상태·세션을 스냅샷에서 읽는다(detail 의 layers 는 id 뿐이다).
           // 그 Run 이 스냅샷에서 사라졌으면(다른 프로젝트로 갔거나 지워졌다) undefined 다.
@@ -5605,6 +5669,17 @@ export default function App(): React.JSX.Element {
             }))
           }
           onClose={() => setOpenRun(null)}
+          // Audit Logs filtered to this Run (observe mode design §11): this computer's Runs only, whose records are here
+          {...(openRun.runtimeId === undefined
+            ? {
+                onOpenAuditLogs: (focus: AuditFocus) => {
+                  setOpenRun(null) // Settings opens in its place
+                  setAuditRun(focus)
+                  setSettingsTab('security')
+                  setShowSettings(true)
+                }
+              }
+            : {})}
         />
       )}
       {/* currentProject 가 있을 때만 그린다 — 없으면 run-create 에 넘길 cwd 가 없어 만들 자리가

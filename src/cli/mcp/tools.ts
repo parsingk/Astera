@@ -1,4 +1,4 @@
-// The forty MCP tools (MCP design §4, P1 design §4, P2-B design, P2-C, P2-D, E1, remote runtime §2.8, plugin Phase 4 J22). Each but the two Runtime tools is one Host command; `args` maps the
+// The forty-two MCP tools (MCP design §4, P1 design §4, P2-B design, P2-C, P2-D, E1, remote runtime §2.8, plugin Phase 4 J22, Agent Profiles §6). Each but the two Runtime tools is one Host command; `args` maps the
 // tool's input to the command's arguments exactly as the CLI's parser would produce them: flag names
 // camel-cased (cliArgs.ts `camel`), so `--coordinator-account` arrives as `coordinatorAccount`.
 import { z } from 'zod'
@@ -181,6 +181,13 @@ const convergence = z
   .boolean()
   .optional()
   .describe('Repair and recheck a Task whose checks or review fail, within the bounds below, instead of failing it.')
+/** The agent profile a Job, Task or session runs as (Agent Profiles design §6): sent as the CLI's `--agent-profile`,
+ *  which the Host resolves by id or name. */
+const agentProfileId = id
+  .optional()
+  .describe('An agent profile from list_agent_profiles, by its id or its name: it decides the shared MCP servers and the permission prompts.')
+const profileArg = (i: Record<string, unknown>): Record<string, unknown> => (i.agentProfileId !== undefined ? { agentProfile: i.agentProfileId } : {})
+
 /** The job-source tools' inputs (plugin Phase 4 J22). */
 const sourceId = id.describe('The source: "github", or a job-source plugin\'s id from list_job_sources.')
 const sourceProject = id.optional().describe('The project whose repository GitHub issues come from (from list_projects); a plugin source ignores it.')
@@ -231,6 +238,16 @@ const LISTED_TOOLS: ToolDef[] = [
     args: (i) => ({ id: i.projectId })
   },
   {
+    name: 'list_agent_profiles',
+    title: 'List agent profiles',
+    readOnly: true,
+    cmd: 'agent-profiles-list',
+    description:
+      'The agent profiles Astera holds: each a name for a set of accounts in failover order, the shared MCP servers its sessions leave out (mcpExclude, by their ids) and its permission choice (inherit, bypass or ask). Pass an id or a name as agentProfileId to create_job, create_task or create_session. An archived profile starts no new work. Read only: profiles are made and changed in Astera and with the astera agent-profiles commands. Needs MCP access "Read only" or "Read and control".',
+    inputSchema: {},
+    args: () => ({})
+  },
+  {
     name: 'list_accounts',
     title: 'List agent accounts',
     readOnly: true,
@@ -272,7 +289,7 @@ const LISTED_TOOLS: ToolDef[] = [
     readOnly: false,
     cmd: 'jobs-create',
     description:
-      "Create a durable Astera Job for a project. This does not start execution. Use run_job after reviewing the returned Job id. The coordinator account runs a coordinator that plans and places the work; without coordinatorAccountId it is coordinatorProvider's default account (claude unless given). With convergence: true, a Task whose checks or review fail gets bounded repair and recheck loops instead of failing at once; maxFixAttempts, maxReviewRounds, blockingSeverity and maxTotalMinutes set those bounds.",
+      "Create a durable Astera Job for a project. This does not start execution. Use run_job after reviewing the returned Job id. The coordinator account runs a coordinator that plans and places the work; without coordinatorAccountId it is coordinatorProvider's default account (claude unless given). With agentProfileId, the Job's Tasks run as that agent profile unless a Task names its own; the profile does not pick the coordinator. With convergence: true, a Task whose checks or review fail gets bounded repair and recheck loops instead of failing at once; maxFixAttempts, maxReviewRounds, blockingSeverity and maxTotalMinutes set those bounds.",
     inputSchema: {
       projectId: id,
       objective: z.string().min(1).max(MCP_LIMITS.objective),
@@ -281,10 +298,11 @@ const LISTED_TOOLS: ToolDef[] = [
       convergence,
       ...CONVERGENCE_KNOBS,
       ...GITHUB_LIFECYCLE_FIELDS,
+      agentProfileId,
       requestId
     },
     // coordinatorArgs: the knobs go only with convergence: true; without it server.ts refuses them (convergenceRefusal).
-    args: (i) => ({ objective: i.objective, cwd: i.projectPath, ...coordinatorArgs(i), ...lifecycleArgs(i) })
+    args: (i) => ({ objective: i.objective, cwd: i.projectPath, ...coordinatorArgs(i), ...lifecycleArgs(i), ...profileArg(i) })
   },
   {
     name: 'run_job',
@@ -417,7 +435,7 @@ const LISTED_TOOLS: ToolDef[] = [
     readOnly: false,
     cmd: 'tasks-add',
     description:
-      "Add a Task to a Job's plan (jobId: every Run started from then on copies it) or to one Run (runId). Give exactly one. Use this to lay out the work yourself; a Job run with no Tasks is planned by its coordinator instead. deps are the Task ids it waits for; validate names run configurations from list_run_configs, or plugin:<pluginId> completion checks a person installed, that must pass on the result; review asks for a review before it counts as done. Without accountId the Task runs on the Job's coordinator account.",
+      "Add a Task to a Job's plan (jobId: every Run started from then on copies it) or to one Run (runId). Give exactly one. Use this to lay out the work yourself; a Job run with no Tasks is planned by its coordinator instead. deps are the Task ids it waits for; validate names run configurations from list_run_configs, or plugin:<pluginId> completion checks a person installed, that must pass on the result; review asks for a review before it counts as done. Without accountId the Task runs on the accounts of its agent profile (agentProfileId, else its Job's), or else on the Job's coordinator account. With both, it runs on accountId and the profile still decides its MCP servers and permission prompts.",
     inputSchema: {
       jobId: id.optional(),
       runId: id.optional(),
@@ -431,19 +449,21 @@ const LISTED_TOOLS: ToolDef[] = [
         .optional()
         .describe('Run configuration ids from list_run_configs, or plugin:<pluginId> for a completion check plugin a person installed, that must pass.'),
       review: z.boolean().optional().describe('Have the result reviewed before the Task counts as done.'),
+      agentProfileId,
       requestId
     },
     // The CLI parser's shapes, which tasks-add reads: `--deps` a JSON array (cliArgs.ts JSON_ARRAY),
     // `--account` and `--validate` comma lists, `--review` a bare flag. server.ts fills accountId
-    // from the Job when it is not given.
+    // from the Job when it is not given and no agent profile gives the accounts.
     args: (i) => ({
       ...(i.jobId !== undefined ? { job: i.jobId } : { run: i.runId }),
       spec: i.spec,
       ...(i.title !== undefined ? { title: i.title } : {}),
       ...(Array.isArray(i.deps) && i.deps.length > 0 ? { deps: i.deps } : {}),
-      account: i.accountId,
+      ...(i.accountId !== undefined ? { account: i.accountId } : {}),
       ...(Array.isArray(i.validate) ? { validate: i.validate.join(',') } : {}),
-      ...(i.review === true ? { review: true } : {})
+      ...(i.review === true ? { review: true } : {}),
+      ...profileArg(i)
     })
   },
   {
@@ -462,7 +482,7 @@ const LISTED_TOOLS: ToolDef[] = [
     title: 'List sessions',
     readOnly: true,
     cmd: 'sessions-list',
-    description: `The terminal and chat sessions Astera holds, live ones first: the person's own terminals included, and every worker and coordinator. Filter by status (alive, ended, or a terminal's working, waiting or unknown), by the provider of the session's account, and by project. ${SESSIONS_READ}`,
+    description: `The terminal and chat sessions Astera holds, live ones first: the person's own terminals included, and every worker and coordinator. Each says whether it runs in its agent CLI's own sandbox (sandboxed, sandboxKind). Filter by status (alive, ended, or a terminal's working, waiting or unknown), by the provider of the session's account, and by project. ${SESSIONS_READ}`,
     inputSchema: {
       status: z.enum(['alive', 'ended', 'working', 'waiting', 'unknown']).optional(),
       provider: z.enum(['claude', 'codex']).optional(),
@@ -523,7 +543,7 @@ const LISTED_TOOLS: ToolDef[] = [
     title: 'Start a session',
     readOnly: false,
     cmd: 'sessions-create',
-    description: `Start a terminal or chat session in a registered project's folder (projectId from list_projects; never another folder). Without accountId it runs on provider's default account (claude unless given), the one list_accounts marks default: true. A terminal session's prompt is passed on the command line, so one holding " & | < > ^ % or a line break is refused with INVALID_ARGUMENTS; start a chat session for such text. ${SESSIONS_WRITE}`,
+    description: `Start a terminal or chat session in a registered project's folder (projectId from list_projects; never another folder). Without accountId it runs on the first account of its agent profile (agentProfileId) and rolls onto the others, or with no profile on provider's default account (claude unless given), the one list_accounts marks default: true. A terminal session's prompt is passed on the command line, so one holding " & | < > ^ % or a line break is refused with INVALID_ARGUMENTS; start a chat session for such text. ${SESSIONS_WRITE}`,
     inputSchema: {
       projectId: id,
       provider: z.enum(['claude', 'codex']).optional().describe("Without accountId, that provider's default account runs it (default claude)."),
@@ -531,15 +551,18 @@ const LISTED_TOOLS: ToolDef[] = [
       kind: z.enum(['terminal', 'chat']).optional().describe('default terminal'),
       title: z.string().min(1).max(MCP_LIMITS.title).optional(),
       prompt: z.string().min(1).max(MCP_LIMITS.text).optional().describe('The first thing the session is asked.'),
+      agentProfileId,
       requestId
     },
-    // server.ts reads the project's folder into `projectPath` and the default account into `accountId`.
+    // server.ts reads the project's folder into `projectPath` and, with no agent profile, the default account into
+    // `accountId`.
     args: (i) => ({
-      account: i.accountId,
+      ...(i.accountId !== undefined ? { account: i.accountId } : {}),
       cwd: i.projectPath,
       ...(i.kind !== undefined ? { kind: i.kind } : {}),
       ...(i.title !== undefined ? { title: i.title } : {}),
-      ...(i.prompt !== undefined ? { prompt: i.prompt } : {})
+      ...(i.prompt !== undefined ? { prompt: i.prompt } : {}),
+      ...profileArg(i)
     })
   },
   {

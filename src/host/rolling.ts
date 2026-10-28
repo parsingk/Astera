@@ -20,12 +20,14 @@ import { readResumeStrategy } from '../core/settings/resumeStrategy'
 import { RateLimitFetcher, USAGE_GATE_MAX_AGE_MS } from '../core/usage/rateLimitFetcher'
 import { findClaudeTranscript } from '../core/history/strategies/claude'
 import type { RollSnapshot, RollSpawnExtra } from '../core/rolling/snapshot'
-import type { Lang } from '../core/i18n'
+import { t, type Lang, type Message } from '../core/i18n'
+import type { ChatRollRefusedNotice } from '../core/chat/types'
 import type { Account, RateLimitPeak, ResumeStrategy, RollStateEvent, SessionInfo, SessionKind } from '../core/types'
 import type { PtyRegistry } from './registry'
 import type { HostChats } from './hostChats'
 import { createChatRollFeed } from './chatRollFeed'
 import { hostRollingLog } from './rollingLog'
+import { ownerScriptDir, rolloutOwnerReader } from '../core/rolling/rolloutOwner'
 
 export type HostRollEvent =
   | { t: 'roll-state'; event: RollStateEvent }
@@ -53,6 +55,10 @@ export interface RollSpawnOpts {
   startWithBypass?: boolean
   /** Who started the chain (SessionInfo.startedBy), kept by the roll. */
   startedBy?: 'agent'
+  /** The agent profile the chain was started from (SessionInfo.agentProfileId), kept by the roll. */
+  agentProfileId?: string
+  /** The chain started in the sandbox (SessionInfo.sandboxed), so its successor does too. */
+  sandbox?: boolean
 }
 
 /** What the rolling asks of the Host's chat sessions (chat takeover Task 6). `info` answers the session's
@@ -67,8 +73,10 @@ export type HostChatsForRolling = Pick<
 export interface HostRollSpawner {
   /** Everything a roll's respawn can wait on or be refused by, done while the old session still lives
    *  (R5). Rejects with HostRetiring, a RepairNeeded settings or accounts file, CWD_MISSING, or an
-   *  unknown account. */
-  prepareRollSpawn(account: Account, cwd: string): Promise<void>
+   *  unknown account. `agentProfileId` is the chain's own: the account's capabilities are resolved with it. `sandbox`:
+   *  the chain runs in the sandbox, so the folder is read for it (SessionManager.prepare). `kind: 'chat'`: the respawn
+   *  is a chat's app-server, whose sandbox needs no --no-daemon. */
+  prepareRollSpawn(account: Account, cwd: string, agentProfileId?: string, sandbox?: boolean, kind?: 'chat'): Promise<void>
   /** The respawn itself, synchronous (constraint 12). Throws until the first prepareRollSpawn has
    *  succeeded. */
   rollSpawn(opts: RollSpawnOpts): SessionInfo
@@ -79,7 +87,8 @@ export interface HostRollSpawner {
 export interface HostRollingDeps {
   profileDir: string
   platform: NodeJS.Platform
-  registry: Pick<PtyRegistry, 'onData' | 'onExit' | 'metaOf' | 'sessionPty' | 'write' | 'kill' | 'list' | 'note'>
+  /** `say` puts a refused roll's reason in the tab (CodexRollingDeps.tell); a registry without it leaves that to the log. */
+  registry: Pick<PtyRegistry, 'onData' | 'onExit' | 'metaOf' | 'sessionPty' | 'write' | 'kill' | 'list' | 'note'> & Partial<Pick<PtyRegistry, 'say' | 'sessionPid'>>
   spawner: HostRollSpawner
   /** R1 for the pty this session runs in (the wiring asks hostMayAct over exits and server). */
   mayAct(ptyId: string): boolean
@@ -91,6 +100,9 @@ export interface HostRollingDeps {
   /** What an attached app is told (Task 13 broadcasts it). */
   onEvent(e: HostRollEvent): void
   lang(): Lang
+  /** A refused roll's reason for a chat session, which has no tab output the Host can add a line to: the wiring hands it
+   *  to the apps, whose chat pane shows it as the chat's notice (Task 6 fix round 1). Absent: the reason is only logged. */
+  chatNotice?(sessionId: string, notice: ChatRollRefusedNotice): void
   /** Test seams. */
   readAccounts?(): Promise<Account[]>
   readStrategy?(): Promise<ResumeStrategy>
@@ -324,14 +336,29 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
         ...(o.model !== undefined ? { model: o.model } : {}),
         ...(o.startWithBypass !== undefined ? { startWithBypass: o.startWithBypass } : {}),
         ...(o.startedBy ? { startedBy: o.startedBy } : {}),
+        ...(o.agentProfileId ? { agentProfileId: o.agentProfileId } : {}),
+        // A chain started in the sandbox keeps it; prepareRollSpawn read its folder before the kill
+        ...(o.sandbox ? { sandbox: true } : {}),
         ...restoreExtra
       })
     }
     return d.spawner.rollSpawn({ ...o, ...restoreExtra })
   }
+  /** A refused roll's reason, in the live session's tab (CodexRollingDeps.tell): a terminal session's ring, as Enforce's
+   *  hook-missing line is put there (index.ts stopUnhooked), in the Host's language. A chat session has no tab output the
+   *  Host can add a line to without ending it, so its reason goes to the apps as the chat's notice, which the pane words. */
+  const tell = (sessionId: string, reason: Message): void => {
+    if (isChat(sessionId)) {
+      d.chatNotice?.(sessionId, { key: 'rollRefused', reason })
+      return
+    }
+    const p = ptyOf(sessionId)
+    if (p !== null) d.registry.say?.(p, `\r\n[Astera] ${t(d.lang(), reason.key, reason.params)}\r\n`)
+  }
   const common = {
     // Its async half is done first, while the old session lives (R5). Left rejecting (see `safe`).
-    prepareSpawn: (account: Account, cwd: string) => d.spawner.prepareRollSpawn(account, cwd),
+    prepareSpawn: (account: Account, cwd: string, agentProfileId?: string, sandbox?: boolean, kind?: 'chat') =>
+      d.spawner.prepareRollSpawn(account, cwd, agentProfileId, sandbox, kind),
     write,
     kill,
     getAccount: (id: string) => accounts.find((a) => a.id === id) ?? null,
@@ -373,6 +400,8 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
   const claude = new RollingCoordinator({
     ...common,
     spawn: rollSpawn,
+    // A refused sandboxed roll's reason, as the codex coordinator's (Task 7 fix round 1)
+    tell,
     chosenModelOf: (id) => (isChat(id) ? chats!.chosenModelOf(id) : null),
     // A chat session writes no statusline (as in the app): its facts come in through the feed.
     readStatusPayload: safe('statusline read', (id: string) => (isChat(id) ? Promise.resolve(null) : d.spawner.statusLinePayload(id)), null),
@@ -382,7 +411,14 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
   const codex = new CodexRollingCoordinator({
     ...common,
     spawn: rollSpawn,
-    log: logCodex
+    tell,
+    log: logCodex,
+    // A rollout the locate finds is mapped only when this session's own codex holds it (rolloutOwner.ts); the Windows
+    // check's script goes in `<profile>/host`, which no sandboxed session may write (fix round 2)
+    rolloutOwner: {
+      pidOf: (sid) => d.registry.sessionPid?.(sid) ?? null,
+      read: rolloutOwnerReader(d.platform, ownerScriptDir(d.profileDir))
+    }
   })
 
   // The chat twin of the pty feed below: the Host's chat adapters' events, as ipc.ts feeds the app's.

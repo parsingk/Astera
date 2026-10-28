@@ -22,7 +22,7 @@ function rig(failSpawn = false) {
       ({ pid: 2, onData: () => {}, onExit: (cb: (e: { exitCode: number }) => void) => procExit.push(cb), write() {}, kill() {} }) as unknown as RegistryProc,
     log: () => {}
   })
-  const table = createTokenTable()
+  const table = createTokenTable(() => undefined)
   const forgotten: string[][] = []
   watchGatewayTokens({ ptys, procs, table, onForget: (t) => forgotten.push(t) })
   const env = (token = TOKEN) => ({ PATH: 'x', ASTERA_GATEWAY_TOKEN: token, ASTERA_GATEWAY_GRANT: 'mcp-linear,mcp-files' })
@@ -64,5 +64,36 @@ describe('gateway session tokens', () => {
     expect(h.table.lookup(TOKEN.slice(1))).toBeNull()
     expect(h.table.lookup('B' + TOKEN.slice(1))).toBeNull()
     expect(h.table.lookup('')).toBeNull()
+  })
+
+  it('every session gets a token, with or without a shared server', () => {
+    const h = rig()
+    h.ptys.open({ id: 'p1', file: 'claude', args: [], opts: { cwd: 'D:/repo', cols: 80, rows: 24, env: { PATH: 'x', ASTERA_GATEWAY_TOKEN: TOKEN, ASTERA_GATEWAY_GRANT: '' } } })
+    expect(h.table.lookup(TOKEN)).toMatchObject({ ownerId: 'p1', folder: 'D:/repo' })
+    expect([...h.table.lookup(TOKEN)!.grant]).toEqual([])
+  })
+
+  it('the first registration of a live token wins; a second under another owner is ignored and logged without the token', () => {
+    const lines: string[] = []
+    const table = createTokenTable((o) => o, (m) => lines.push(m))
+    table.register(TOKEN, { ownerId: 'p1', folder: 'D:/a', grant: new Set() })
+    table.register(TOKEN, { ownerId: 'p2', folder: 'D:/b', grant: new Set(['mcp-x']) })
+    expect(table.lookup(TOKEN)).toMatchObject({ ownerId: 'p1', folder: 'D:/a' })
+    expect(table.sessionOf(TOKEN)).toBe('p1')
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).not.toContain(TOKEN)
+    table.register(TOKEN, { ownerId: 'p1', folder: 'D:/a', grant: new Set() })
+    expect(lines).toHaveLength(1)
+  })
+
+  it('answers the app session of a live token through the owner mapping, and null for a dead one', () => {
+    const table = createTokenTable((ownerId) => (ownerId === 'p1' ? 'sess-1' : undefined))
+    table.register(TOKEN, { ownerId: 'p1', folder: 'D:/repo', grant: new Set() })
+    table.register('B'.repeat(43), { ownerId: 'p2', folder: 'D:/repo', grant: new Set() })
+    expect(table.sessionOf(TOKEN)).toBe('sess-1')
+    expect(table.sessionOf('B'.repeat(43))).toBeNull()
+    expect(table.sessionOf('C'.repeat(43))).toBeNull()
+    table.forgetOwner('p1')
+    expect(table.sessionOf(TOKEN)).toBeNull()
   })
 })

@@ -90,8 +90,9 @@ function eventMessage(obj: Record<string, unknown>): { kind: 'user' | 'agent'; t
 }
 
 /** `response_item/message` 의 본문. 블록 배열에서 문자열 `text` 를 이어 붙인다. 빈 결과는 null —
- *  텍스트 없는 메시지(도구 호출만 실린 줄 등)를 대화로 세지 않는다. */
-function contentText(content: unknown): string | null {
+ *  텍스트 없는 메시지(도구 호출만 실린 줄 등)를 대화로 세지 않는다. The token sources read a person's prompt
+ *  with it too (host/tokens/sources.ts). */
+export function contentText(content: unknown): string | null {
   if (typeof content === 'string') return content.trim() === '' ? null : content
   if (!Array.isArray(content)) return null
   let out = ''
@@ -137,7 +138,9 @@ const CODEX_WRAPPER_PREFIXES = [
   '<codex_internal_context'
 ]
 
-function isRealCodexUserText(text: string): boolean {
+/** Whether a user_message's text is something typed into the session rather than one of the wrappers above. The token
+ *  sources tell a person's prompt by it too (host/tokens/sources.ts). */
+export function isRealCodexUserText(text: string): boolean {
   const t = text.trim()
   if (!t) return false
   return !CODEX_WRAPPER_PREFIXES.some((p) => t.startsWith(p))

@@ -123,6 +123,20 @@ describe('repairTargetFor — the lifecycle Task', () => {
     expect(deps.started[0]).toMatchObject({ worktree: 'D:/wt/run', provider: 'codex', accountId: 'accX', rollFrom: ['accX', 'accY'] })
   })
 
+  // Agent Profiles design §6: the profile is borrowed with the accounts, from the same latest ordinary Task
+  it('starts a fresh lifecycle repair as the latest ordinary Task’s agent profile', async () => {
+    const { s, lifecycleId } = lifecycleRun()
+    const validating = {
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === lifecycleId ? { ...t, status: 'validating' as const } : t.title === 'A' ? { ...t, agentProfileId: 'ap_1' } : t))
+    }
+    const opened = unwrap<Dispatch>(openRepairDispatch(validating, { taskId: lifecycleId, reason: 'check-failure', target: { kind: 'fresh', cwd: 'D:/wt/run', provider: 'codex', accountId: 'accX' } }, NOW) as never)
+    expect(opened.value.agentProfileId).toBe('ap_1')
+    const deps = makeDeps(opened.state)
+    await performRepair(deps, { dispatchId: opened.value.id })
+    expect(deps.started[0]).toMatchObject({ rollFrom: ['accX', 'accY'], agentProfileId: 'ap_1' })
+  })
+
   // G3c1 (design §4.8): the lifecycle repair's spec says what GitHub said, and a live session is typed the lifecycle words
   it('writes the GitHub block into a lifecycle repair’s spec and types the lifecycle words into a live session', async () => {
     const { s, lifecycleId } = lifecycleRun({ rootWork: true })
@@ -204,6 +218,18 @@ describe('performRepair', () => {
     expect(a.worktree).toBe('D:/wt')
     expect(a.launchPhrase).toBeUndefined()
     expect(deps.box.state.dispatches.find((d) => d.id === repair.id)?.sessionId).toBe('sess-new')
+  })
+  // Agent Profiles design §6: a repair worker runs as its Task's profile, and with none as before
+  it('a fresh repair worker gets its Task’s agent profile, and no such key without one', async () => {
+    const { s, taskId } = validating()
+    const profiled = { ...s, tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, agentProfileId: 'ap_1' } : t)) }
+    for (const [state, expected] of [[profiled, 'ap_1'], [s, undefined]] as const) {
+      const judged = unwrap<Task>(applyValidationResult(state, { taskId, results: failing, repair: repairTargetFor(state, taskId, () => false)! }, NOW) as never)
+      const deps = makeDeps(judged.state)
+      await performRepair(deps, { dispatchId: judged.state.dispatches.find((d) => d.repair)!.id })
+      if (expected) expect(deps.started[0].agentProfileId).toBe(expected)
+      else expect(deps.started[0]).not.toHaveProperty('agentProfileId')
+    }
   })
   it('워커를 못 띄우면 Dispatch 를 지우고 Gate 다', async () => {
     const { s, taskId } = validating()

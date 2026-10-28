@@ -18,6 +18,8 @@ export interface TaskAttempt {
   /** This attempt's worker shows a permission prompt a person has to answer in Astera. Only on an
    *  open attempt, and only where the caller can read its session (command.ts `waitingForApprovalIn`). */
   waitingForApproval?: true
+  /** The agent profile this attempt's worker ran as, by its id (Dispatch.agentProfileId). */
+  agentProfileId?: string
 }
 
 export type TaskDetail = Record<string, unknown> & { attempts: TaskAttempt[]; openQuestionId?: string }
@@ -41,7 +43,8 @@ export function taskDetailOf(s: OrchState, taskId: string, waiting: ReadonlySet<
         ...(d.outcome !== undefined ? { outcome: d.outcome } : {}),
         startedAt: d.startedAt,
         ...(d.endedAt !== undefined ? { endedAt: d.endedAt } : {}),
-        ...(waiting.has(d.id) ? { waitingForApproval: true as const } : {})
+        ...(waiting.has(d.id) ? { waitingForApproval: true as const } : {}),
+        ...(d.agentProfileId !== undefined ? { agentProfileId: d.agentProfileId } : {})
       })
     )
   const open = s.gates.find((g) => g.taskId === taskId && g.status === 'open')
