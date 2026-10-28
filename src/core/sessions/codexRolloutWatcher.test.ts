@@ -3,7 +3,7 @@ import { mkdtemp, rm, mkdir, writeFile, appendFile } from 'node:fs/promises'
 import { promises as fsPromises } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { CodexRolloutWatcher } from './codexRolloutWatcher'
+import { CodexRolloutWatcher, noteRolloutPath } from './codexRolloutWatcher'
 import type { Account, SessionInfo } from '../types'
 import type { RolloutOwnership } from '../rolling/rolloutOwner'
 
@@ -86,6 +86,28 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.useRealTimers()
   await rm(dir, { recursive: true, force: true })
+})
+
+// Task D review Minor 7: the limit probe of an ended worker reads the rollout its note names (the Host's pty list keeps
+// an ended session's entry and note for a while)
+describe('noteRolloutPath', () => {
+  const entry = (id: string, kind: 'session' | 'run', restore: Record<string, unknown>) => ({ meta: { kind, id, restore } })
+  it('answers the rollout the note of the session’s last-opened pty names', () => {
+    const entries = [
+      entry('s1', 'session', { rolloutPath: 'D:/r/old.jsonl' }),
+      entry('s2', 'session', { rolloutPath: 'D:/r/other.jsonl' }),
+      entry('s1', 'session', { rolloutPath: 'D:/r/new.jsonl' }),
+      { meta: null }
+    ]
+    expect(noteRolloutPath(entries, 's1')).toBe('D:/r/new.jsonl')
+    expect(noteRolloutPath(entries, 's2')).toBe('D:/r/other.jsonl')
+  })
+
+  it('answers null when that note names none, or the session has no pty, or the entry is not a session', () => {
+    expect(noteRolloutPath([entry('s1', 'session', { rolloutPath: 'D:/r/old.jsonl' }), entry('s1', 'session', {})], 's1')).toBeNull()
+    expect(noteRolloutPath([entry('s1', 'run', { rolloutPath: 'D:/r/x.jsonl' })], 's1')).toBeNull()
+    expect(noteRolloutPath([], 's1')).toBeNull()
+  })
 })
 
 // Second pass C2-9: a codex tab that never wrote a rollout was looked for every second for as long as it was open.

@@ -260,6 +260,31 @@ describe('makeLimitProbe — codex', () => {
     expect(result).toBeNull()
     expect(deps.logs).toHaveLength(1)
   })
+
+  // Task D 리뷰 Minor 7: 한 폴더에 Codex 워커가 여럿이면(오케스트레이션에선 흔하다) 폴더·시각 검색은 형제의 더 새
+  // rollout 을 집고, 코디네이터는 엉뚱한 해제 시각을 기다린다. Host 의 spawner 는 워커의 pty 노트에 제 rollout 을 이미
+  // 적어 두므로, 노트가 있으면 그 파일을 읽는다.
+  it('세션 노트가 적어 둔 rollout 을 폴더·시각 검색 대신 읽는다', async () => {
+    const cwd = 'D:/work/codexp-note'
+    const startedAt = new Date(Date.now() - 60_000).toISOString()
+    const own = await writeRollout(dir, cwd, 'uuid-own', [tokenCount({ primary: 95, primaryReset: 1_900_000_000, reached: 'primary' })])
+    await new Promise((r) => setTimeout(r, 30)) // 형제 파일이 확실히 더 늦게 태어나도록
+    await writeRollout(dir, cwd, 'uuid-sibling', [tokenCount({ primary: 10, reached: null })])
+    const asked: string[] = []
+    const deps = makeDeps({ configDirOf: () => dir, rolloutPathOf: async (sid) => (asked.push(sid), sid === 'sess1' ? own : null) })
+    const result = await makeLimitProbe(deps)(baseDispatch({ provider: 'codex', cwd, startedAt }))
+    expect(asked).toEqual(['sess1'])
+    expect(result).toBe(1_900_000_000_000)
+  })
+
+  it('노트가 rollout 을 적어 두지 않았으면 종전대로 폴더·시각으로 찾는다', async () => {
+    const cwd = 'D:/work/codexp-nonote'
+    const startedAt = new Date(Date.now() - 60_000).toISOString()
+    await writeRollout(dir, cwd, 'uuid-3', [tokenCount({ primary: 95, primaryReset: 1_999_999_999, reached: 'primary' })])
+    const deps = makeDeps({ configDirOf: () => dir, rolloutPathOf: () => null })
+    const result = await makeLimitProbe(deps)(baseDispatch({ provider: 'codex', cwd, startedAt }))
+    expect(result).toBe(1_999_999_999_000)
+  })
 })
 
 // tailLines는 limitProbe.ts 밖으로 내지 않는다(브리프 Step 2) — 공개 API(claude 경로)를 통해

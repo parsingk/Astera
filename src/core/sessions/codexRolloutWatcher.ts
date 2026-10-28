@@ -154,6 +154,23 @@ export function codexRolloutFromNote(
   return { rolloutPath, codexSessionId: typeof codexSessionId === 'string' ? codexSessionId : null }
 }
 
+/**
+ * The rollout the note of a session's last-opened pty names, or null: the mapping the Host's spawner and the app's watcher
+ * (through `remember`) wrote there. From the Host's pty list, its own (`PtyRegistry.list`) or the app's `pty-list`
+ * answer, which keeps an ended session's entry and note for a while. The limit probe of an ended worker reads it in place
+ * of a folder-and-time search that can take a sibling worker's newer file (Task D review Minor 7).
+ *
+ * Only the last-opened pty's note: of several (a roll that keeps the session id), that is the one that just ended.
+ */
+export function noteRolloutPath(
+  entries: Iterable<{ meta: { kind: string; id: string; restore: Record<string, unknown> } | null }>,
+  sessionId: string
+): string | null {
+  let last: Record<string, unknown> | null = null
+  for (const e of entries) if (e.meta?.kind === 'session' && e.meta.id === sessionId) last = e.meta.restore
+  return last ? (codexRolloutFromNote(last)?.rolloutPath ?? null) : null
+}
+
 /** Whether a line is a task_complete event */
 function isTaskComplete(line: string): boolean {
   let obj: unknown

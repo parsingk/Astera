@@ -66,6 +66,7 @@ import type { EnforceStart } from '../core/audit/enforce'
 import { cliVersionProbe, enforceBlocker, type CliVersionProbe } from '../core/sessions/cliVersion'
 import { createManagedHooksCheck } from '../core/sessions/managedHooks'
 import { codexNoDaemonProbe, type CodexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
+import { noteRolloutPath } from '../core/sessions/codexRolloutWatcher'
 import { findInstalledHostExe } from '../core/host/installedRuntime'
 import { hostRuntimeBase } from '../core/host/runtime'
 import { hidingLog } from '../core/extensions/secrets'
@@ -1024,6 +1025,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       return makeLimitProbe({
         statusLinePayload: (sid) => statusLine.read(sid),
         configDirOf: (id) => accounts.find((x) => x.id === id)?.configDir ?? null,
+        // The rollout locateRollout wrote into the worker's note, which the registry keeps after its pty ended
+        rolloutPathOf: (sid) => noteRolloutPath(registry.list(), sid),
         log
       })(disp)
     },

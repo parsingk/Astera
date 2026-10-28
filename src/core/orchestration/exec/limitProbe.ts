@@ -27,6 +27,11 @@ export interface LimitProbeDeps {
   statusLinePayload: (sessionId: string) => Promise<unknown | null>
   /** Account id → configDir. Needed to find the codex rollout */
   configDirOf: (accountId: string) => string | null
+  /** The codex rollout the session's pty note names (`rolloutPath`, sessions/codexRolloutWatcher.ts noteRolloutPath),
+   *  or null. Read first: the Host's spawner writes the worker's own file there when it maps it, while the folder-and-time
+   *  search can take a sibling worker's newer file in the same folder (Task D review Minor 7). Absent or null, the search
+   *  runs as before. */
+  rolloutPathOf?: (sessionId: string) => Promise<string | null> | string | null
   log: (msg: string) => void
   now?: () => number
 }
@@ -76,10 +81,10 @@ async function probeClaudeLimit(d: Dispatch, deps: LimitProbeDeps): Promise<numb
   return parsed.at
 }
 
-/** The codex path: finds this worker's rollout in the account's configDir, assembles the last rate_limits
- *  snapshot from the tail, and decides the limit was hit from the structured signal
- *  (usage_limit_exceeded first — reachedType has never been observed non-null). */
-async function probeCodexLimit(d: Dispatch, deps: LimitProbeDeps): Promise<number | null> {
+/** This worker's rollout: the one its note names, else the newest born after the Dispatch started in its folder. */
+async function codexRolloutOf(d: Dispatch, deps: LimitProbeDeps): Promise<string | null> {
+  const noted = (await deps.rolloutPathOf?.(d.sessionId)) ?? null
+  if (noted) return noted
   const configDir = deps.configDirOf(d.accountId)
   if (!configDir) {
     deps.log(`limit probe (codex): no configDir for account=${d.accountId}`)
@@ -90,10 +95,19 @@ async function probeCodexLimit(d: Dispatch, deps: LimitProbeDeps): Promise<numbe
     deps.log(`limit probe (codex): no rollout found dispatch=${d.id}`)
     return null
   }
-  const lines = await tailLines(found.path)
+  return found.path
+}
+
+/** The codex path: finds this worker's rollout (codexRolloutOf), assembles the last rate_limits
+ *  snapshot from the tail, and decides the limit was hit from the structured signal
+ *  (usage_limit_exceeded first — reachedType has never been observed non-null). */
+async function probeCodexLimit(d: Dispatch, deps: LimitProbeDeps): Promise<number | null> {
+  const rolloutPath = await codexRolloutOf(d, deps)
+  if (rolloutPath === null) return null
+  const lines = await tailLines(rolloutPath)
   if (lines === null) {
     // The read itself failed — different from "no hit".
-    deps.log(`limit probe (codex): failed to read rollout tail dispatch=${d.id} path=${found.path}`)
+    deps.log(`limit probe (codex): failed to read rollout tail dispatch=${d.id} path=${rolloutPath}`)
     return null
   }
   const since = Date.parse(d.startedAt)
