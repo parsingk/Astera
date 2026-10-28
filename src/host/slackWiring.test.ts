@@ -9,6 +9,21 @@ import { flushAllLogsSync } from '../core/log/logWriter'
 import type { HostSlackSdk } from './slackSdk'
 import type { SlackConfig } from '../core/slack/config'
 import type { Account } from '../core/types'
+import type { CodexRolloutDeps } from '../core/sessions/codexRolloutWatcher'
+import { rolloutOwnerReader } from '../core/rolling/rolloutOwner'
+
+// The deps composeHostSlack hands its codex rollout watcher; the class itself stays the real one
+const captured = vi.hoisted(() => ({ watcherDeps: [] as unknown[] }))
+vi.mock('../core/sessions/codexRolloutWatcher', async (orig) => {
+  const m = await orig<typeof import('../core/sessions/codexRolloutWatcher')>()
+  class Recording extends m.CodexRolloutWatcher {
+    constructor(d: ConstructorParameters<typeof m.CodexRolloutWatcher>[0]) {
+      super(d)
+      captured.watcherDeps.push(d)
+    }
+  }
+  return { ...m, CodexRolloutWatcher: Recording }
+})
 
 const CFG: SlackConfig = { webhookUrl: null, botToken: 'xoxb-fake', channelId: 'C1', appToken: 'xapp-fake', memberId: 'U1' }
 const account: Account = { id: 'a1', label: 'home', configDir: 'C:\\c1', color: '#fff', createdAt: '2026-09-26T00:00:00Z' }
@@ -93,6 +108,19 @@ async function rig(o: { keep?: boolean; sdk?: boolean; delay?: number; profileDi
 }
 
 describe('composeHostSlack (Slack in the Host Task 5, S1, S2, S4)', () => {
+  // Task D review Minor 5: the Host's codex watcher asks whose codex holds a rollout about the session's pty process.
+  // Lost, that wiring went back to folder and time without a word.
+  it('gives its codex rollout watcher the session’s pty pid and this platform’s owner reader', async () => {
+    const before = captured.watcherDeps.length
+    const h = await rig()
+    const deps = captured.watcherDeps[before] as CodexRolloutDeps
+    h.openSession('s1')
+    expect(deps.rolloutOwner?.pidOf('s1')).toBe(1)
+    expect(deps.rolloutOwner?.pidOf('s-none')).toBeNull()
+    expect(deps.rolloutOwner?.read).toBe(rolloutOwnerReader(process.platform))
+    await h.wiring.dispose()
+  })
+
   // Review Focus 1, the Host half.
   it('holds exactly one socket while no attached app keeps Slack, none while one does', async () => {
     const h = await rig()

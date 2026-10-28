@@ -8,6 +8,8 @@ import { PtyRegistry, type RegistryPty } from './registry'
 import { createHostRolling, type HostRollEvent, type RollSpawnOpts } from './rolling'
 import { hostRollConfigPath, readRollConfigKey } from '../core/rolling/config'
 import type { RollSnapshot } from '../core/rolling/snapshot'
+import type { CodexRollingDeps } from '../core/rolling/codexCoordinator'
+import { rolloutOwnerReader } from '../core/rolling/rolloutOwner'
 import type { Account, RateLimitPeak, SessionInfo } from '../core/types'
 import { t } from '../core/i18n'
 
@@ -142,6 +144,19 @@ const payload = (pct: number) => ({ session_id: 'cs', transcript_path: path.join
 beforeEach(() => vi.useFakeTimers())
 
 describe('createHostRolling (S6 Task 9)', () => {
+  // Task D review Minor 5: the codex coordinator asks whose codex holds a rollout about the session's pty process. Lost,
+  // that wiring went back to folder and time without a word.
+  it('gives the codex coordinator the session’s pty pid and this platform’s owner reader', async () => {
+    const before = captured.codexDeps.length
+    const r = await rig()
+    const deps = captured.codexDeps[before] as CodexRollingDeps
+    r.open('p1', 's1', { accountId: 'c1', cwd: os.tmpdir(), title: 't' })
+    expect(deps.rolloutOwner?.pidOf('s1')).toBe(1)
+    expect(deps.rolloutOwner?.pidOf('s-none')).toBeNull()
+    expect(deps.rolloutOwner?.read).toBe(rolloutOwnerReader(process.platform))
+    r.rolling.dispose()
+  })
+
   it('rolls a Host session at its limit: kills the old pty, respawns marked and with rolledFrom, taps and tells', async () => {
     const r = await rig()
     await r.rolling.refresh()

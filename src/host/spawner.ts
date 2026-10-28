@@ -44,7 +44,7 @@ import { RepairNeeded } from '../core/settings/repairNeeded'
 import { HostRetiring } from '../core/host/hostRetiring'
 import { refusedBeforeActing, undoneBeforeFailing } from '../core/host/orchProtocol'
 import { findRollout as findRolloutOnDisk } from '../core/rolling/codexLocate'
-import { ownerScriptDir, rolloutOwnerCheck, rolloutOwnerReader, type RolloutOwnerReader } from '../core/rolling/rolloutOwner'
+import { rolloutOwnerCheck, rolloutOwnerReader, type RolloutOwnerReader } from '../core/rolling/rolloutOwner'
 import { descriptorOf, makeDescriptors } from '../core/providers/descriptor'
 import { providerOf } from '../core/providers/meta'
 import { ensureOnWindowsPath } from '../core/sessions/windowsPath'
@@ -66,6 +66,7 @@ import type { EnforceStart } from '../core/audit/enforce'
 import { cliVersionProbe, enforceBlocker, type CliVersionProbe } from '../core/sessions/cliVersion'
 import { createManagedHooksCheck } from '../core/sessions/managedHooks'
 import { codexNoDaemonProbe, type CodexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
+import { noteRolloutPath } from '../core/sessions/codexRolloutWatcher'
 import { findInstalledHostExe } from '../core/host/installedRuntime'
 import { hostRuntimeBase } from '../core/host/runtime'
 import { hidingLog } from '../core/extensions/secrets'
@@ -397,8 +398,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   const locateForMs = d.locateForMs ?? LOCATE_FOR_MS
   /** Whose codex holds a candidate open, asked once per candidate (Task D): another Host's session in the same folder
    *  and Codex home is the newest file there too. */
-  // Its Windows script goes in `<profile>/host`, which no sandboxed session may write, as the desk helper's (fix round 2)
-  const rolloutOwner = rolloutOwnerCheck({ read: d.rolloutOwner ?? rolloutOwnerReader(platform, ownerScriptDir(profileDir)), log })
+  const rolloutOwner = rolloutOwnerCheck({ read: d.rolloutOwner ?? rolloutOwnerReader(platform), log })
   /** ptyId → the codex sessions still looking for their rollout, in start order (`seq`). */
   const looking = new Map<string, { accountId: string; cwd: string; seq: number }>()
   let lookSeq = 0
@@ -1025,6 +1025,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       return makeLimitProbe({
         statusLinePayload: (sid) => statusLine.read(sid),
         configDirOf: (id) => accounts.find((x) => x.id === id)?.configDir ?? null,
+        // The rollout locateRollout wrote into the worker's note, which the registry keeps after its pty ended
+        rolloutPathOf: (sid) => noteRolloutPath(registry.list(), sid),
         log
       })(disp)
     },

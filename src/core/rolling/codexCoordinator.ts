@@ -27,7 +27,7 @@ import { sessionKindOf } from '../sessions/kind'
 import { copyTranscript } from './transcript'
 import { codexHistoryStrategy } from '../history/strategies/codex'
 import { findRollout } from './codexLocate'
-import { rolloutOwnerCheck, type RolloutOwnerCheck, type RolloutOwnerSource, type RolloutOwnership } from './rolloutOwner'
+import { hasOwnerReader, rolloutOwnerCheck, type RolloutOwnerCheck, type RolloutOwnerSource, type RolloutOwnership } from './rolloutOwner'
 import {
   CodexLimitScanner,
   CodexModelChoiceScanner,
@@ -209,7 +209,7 @@ export interface CodexRollingDeps {
    *  resume; no typing; no recorded block). A roll already past its kill finishes. Absent: always true. */
   mayAct?(sessionId: string): boolean
   /** Whose codex holds a rollout open (rolloutOwner.ts, Task D): the session's pty process (`pidOf`, null for a chat
-   *  session) and the reader the wiring built for its profile. Given, the locate maps a rollout only when that process
+   *  session) and this platform's reader. Given, the locate maps a rollout only when that process
    *  or one under it holds it, as the rollout watcher does. Absent, or no pid, folder and time decide as before. */
   rolloutOwner?: RolloutOwnerSource
 }
@@ -373,6 +373,9 @@ export class CodexRollingCoordinator {
     this.now = deps.now ?? Date.now
     this.resumeStrategy = deps.resumeStrategy ?? (() => 'original')
     this.owner = deps.rolloutOwner ? rolloutOwnerCheck({ read: deps.rolloutOwner.read, log: deps.log, now: this.now }) : null
+    // Review Minor 5: a wiring that dropped its owner source went back to folder and time without a word
+    if (!deps.rolloutOwner && hasOwnerReader(process.platform))
+      deps.log('codex rollout owner is not wired: this coordinator locates a rollout by folder and time alone')
   }
 
   /** The owner question for a session, when its process is known; undefined keeps folder and time alone. */

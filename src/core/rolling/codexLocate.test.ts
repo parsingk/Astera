@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { findRollout, ROLLOUT_SCAN_DAYS_MAX } from './codexLocate'
 import { absPath, foldsCaseHere } from '../testPaths'
 import { comparablePath } from '../files/tree'
+import type { RolloutOwnership } from './rolloutOwner'
 
 let home: string
 const NOW = Date.parse('2026-07-09T10:00:00Z') // 고정 '현재' — 오늘=2026/07/09, 어제=2026/07/08
@@ -568,7 +569,7 @@ describe('findRollout asks the owner of each candidate', () => {
         return file === ours ? { verdict: 'own' } : { verdict: 'other', why: 'held by pid 4242 outside the session' }
       }
     })
-    expect(r).toEqual({ path: ours, sessionId: OURS })
+    expect(r).toEqual({ path: ours, sessionId: OURS, verdict: 'own' })
     expect(asked).toEqual([theirs, ours]) // newest first, and the search went on past the skipped one
   })
 
@@ -584,7 +585,7 @@ describe('findRollout asks the owner of each candidate', () => {
     const [a, b] = [await fs.stat(ours), await fs.stat(theirs)]
     if (!(a.birthtimeMs > 0 && b.birthtimeMs > a.birthtimeMs)) return ctx.skip('birth times not distinguishable here')
     const r = await findRollout({ configDir: home, cwd: CWD, since, now: () => NOW, owner: async () => ({ verdict: 'unknown', why: 'lsof is missing' }) })
-    expect(r).toEqual({ path: theirs, sessionId: THEIRS })
+    expect(r).toEqual({ path: theirs, sessionId: THEIRS, verdict: 'unknown' })
   })
 
   it('remembers a candidate another process holds, so it is not read again', async () => {
@@ -602,6 +603,19 @@ describe('findRollout asks the owner of each candidate', () => {
     expect(asks).toBe(before)
   })
 
+  // Review Minor 3: held by no process is what a session's own file says while its writer recovers from a failed write.
+  // Turned away for good, that session never mapped its file; it is passed over for now, and asked about again.
+  it('passes over a candidate no process holds yet without remembering it', async () => {
+    const { theirs, since } = await two()
+    const rejected = new Set<string>()
+    let holder: RolloutOwnership = { verdict: 'other', why: 'held open by no process', recheck: true }
+    const owner = async (file: string): Promise<RolloutOwnership> => (file === theirs ? holder : { verdict: 'other', why: 'held by pid 4242 outside the session' })
+    expect(await findRollout({ configDir: home, cwd: CWD, since, now: () => NOW, owner, rejected })).toBeNull()
+    expect(rejected.has(comparablePath(theirs))).toBe(false)
+    holder = { verdict: 'own' }
+    expect((await findRollout({ configDir: home, cwd: CWD, since, now: () => NOW, owner, rejected }))?.path).toBe(theirs)
+  })
+
   // Review round 1, item 3: a session the start order puts behind another may still claim a file its own process
   // holds, but not one its owner cannot tell about: that one is the newest starter's under the old rule.
   it('with requireOwn, maps only a candidate the session holds, passing over one it cannot tell about', async (ctx) => {
@@ -613,7 +627,7 @@ describe('findRollout asks the owner of each candidate', () => {
       configDir: home, cwd: CWD, since, now: () => NOW, rejected, requireOwn: true,
       owner: async (file) => (file === ours ? { verdict: 'own' } : { verdict: 'unknown', why: 'process 7 cannot be read (EACCES)' })
     })
-    expect(r).toEqual({ path: ours, sessionId: OURS })
+    expect(r).toEqual({ path: ours, sessionId: OURS, verdict: 'own' })
     // Cannot tell is no verdict: not remembered, asked again next time
     expect(rejected.has(comparablePath(theirs))).toBe(false)
   })

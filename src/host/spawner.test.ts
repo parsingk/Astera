@@ -434,6 +434,33 @@ describe('createHostSpawner', () => {
     expect(calls - at).toBeLessThanOrEqual(1)
   })
 
+  // Task D review Minor 7: with several codex workers in one folder, the limit probe's folder-and-time search took a
+  // sibling's newer rollout, and the coordinator waited on the wrong reset. The Host already wrote the worker's own file
+  // into its note, which outlives its pty.
+  it("reads an ended codex worker's limit from the rollout its note names, not a sibling's newer one", async () => {
+    const h = rigWith({ findRollout: async () => null, locatePollMs: 60_000 })
+    const d = new Date()
+    const pad = (n: number): string => String(n).padStart(2, '0')
+    const day = path.join(dir, 'cfg2', 'sessions', String(d.getFullYear()), pad(d.getMonth() + 1), pad(d.getDate()))
+    await fs.mkdir(day, { recursive: true })
+    const rollout = async (uuid: string, pct: number, reached: string | null): Promise<string> => {
+      const file = path.join(day, `rollout-x-${uuid}.jsonl`)
+      const meta = { type: 'session_meta', payload: { session_id: uuid, cwd: repo } }
+      const limits = { type: 'event_msg', payload: { type: 'token_count', info: null, rate_limits: { primary: { used_percent: pct, window_minutes: 300, resets_at: 1_900_000_000 }, secondary: null, rate_limit_reached_type: reached } } }
+      await fs.writeFile(file, `${JSON.stringify(meta)}\n${JSON.stringify(limits)}\n`, 'utf8')
+      return file
+    }
+    const own = await rollout('cx-own', 95, 'primary')
+    await new Promise((r) => setTimeout(r, 30))
+    await rollout('cx-sibling', 10, null)
+    h.registry.open({ id: 'pty_w', file: 'codex', args: [], opts: { cwd: repo, cols: 120, rows: 30, env: {} },
+      meta: { kind: 'session', id: 'ses_w', restore: { accountId: 'acc2', rolloutPath: own, codexSessionId: 'cx-own' } } })
+    h.spawned[h.spawned.length - 1].pty.exit(1)
+    const startedAt = new Date(Date.now() - 60_000).toISOString()
+    const reset = await h.spawner!.probeLimit!({ id: 'dsp_w', taskId: h.taskId, provider: 'codex', accountId: 'acc2', sessionId: 'ses_w', cwd: repo, specPath: '', startedAt, workerState: 'ready', retained: false })
+    expect(reset).toBe(1_900_000_000_000)
+  })
+
   // The watcher's claimed(): a rollout another live session's note holds is never a candidate.
   it('never claims a rollout another live session already holds', async () => {
     const excluded: string[][] = []

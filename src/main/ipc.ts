@@ -22,7 +22,7 @@ import { isForwardedChatEvent } from '../core/slack/forwarded'
 import type { SlackOwnership } from './slackOwnership'
 import type { SlackConfigStore } from './slackConfigStore'
 import type { SlackConfig } from '../core/slack/config'
-import { codexRolloutFromNote, type CodexRolloutWatcher } from '../core/sessions/codexRolloutWatcher'
+import { codexRolloutFromNote, noteRolloutPath, type CodexRolloutWatcher } from '../core/sessions/codexRolloutWatcher'
 import type { DesktopNotifier } from './desktopNotifier'
 import type { SessionSignalForwarder } from './sessionSignals'
 import type { DesktopNotifySettings } from '../core/notify/settings'
@@ -3507,6 +3507,12 @@ export function registerIpc(
           } catch {
             return null
           }
+        },
+        // The rollout the worker's pty note names (the Host's spawner or this app's watcher wrote it), from the Host's
+        // list, which keeps an ended session's note. No Host, or no answer: null, and the folder-and-time search runs.
+        rolloutPathOf: async (sessionId) => {
+          const entries = await hostPtyList?.()
+          return entries ? noteRolloutPath(entries, sessionId) : null
         },
         log: orchLog
       }),
