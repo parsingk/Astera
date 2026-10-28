@@ -27,6 +27,7 @@ import type { PtyRegistry } from './registry'
 import type { HostChats } from './hostChats'
 import { createChatRollFeed } from './chatRollFeed'
 import { hostRollingLog } from './rollingLog'
+import { ownerScriptDir, rolloutOwnerReader } from '../core/rolling/rolloutOwner'
 
 export type HostRollEvent =
   | { t: 'roll-state'; event: RollStateEvent }
@@ -412,8 +413,12 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
     spawn: rollSpawn,
     tell,
     log: logCodex,
-    // A rollout the locate finds is mapped only when this session's own codex holds it (rolloutOwner.ts)
-    pidOf: (sid) => d.registry.sessionPid?.(sid) ?? null
+    // A rollout the locate finds is mapped only when this session's own codex holds it (rolloutOwner.ts); the Windows
+    // check's script goes in `<profile>/host`, which no sandboxed session may write (fix round 2)
+    rolloutOwner: {
+      pidOf: (sid) => d.registry.sessionPid?.(sid) ?? null,
+      read: rolloutOwnerReader(d.platform, ownerScriptDir(d.profileDir))
+    }
   })
 
   // The chat twin of the pty feed below: the Host's chat adapters' events, as ipc.ts feeds the app's.

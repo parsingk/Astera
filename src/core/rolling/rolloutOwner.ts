@@ -19,7 +19,6 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { comparablePath } from '../files/tree'
 
@@ -354,9 +353,15 @@ async function writeOwnerScript(dir: string): Promise<string> {
 }
 
 /** Windows: one Windows PowerShell run per question (about half a second, measured on this machine 2026-10-28), its
- *  script a file run with `-File` as the desk helper's is, the file and the pid passed as plain arguments. The script
- *  goes in `dir`, the user's own temp folder unless a caller names another. */
-export function windowsOwnerReader(run: RunTool = runTool, dir: string = os.tmpdir()): RolloutOwnerReader {
+ *  script a file run with `-File` as the desk helper's is, the file and the pid passed as plain arguments.
+ *
+ *  The script goes in `dir`, which the caller names and must be a folder no sandboxed session may write
+ *  (`<profile>/host`, where the desk helper writes its own, host/workspace/platformDesk.ts): the Host and the app run
+ *  it outside any sandbox, so a session that could replace it between the content check and PowerShell reading it
+ *  would run its own code as the person (fix round 2). No default, and never the temp folder, which a sandboxed
+ *  session may write. */
+export function windowsOwnerReader(run: RunTool, dir: string): RolloutOwnerReader {
+  if (typeof dir !== 'string' || !path.isAbsolute(dir)) throw new Error(`the owner script folder must be an absolute path: ${String(dir)}`)
   return async (file, pid) => {
     if (!Number.isSafeInteger(pid) || pid <= 0) return unknown(`not a pid: ${pid}`)
     let script: string
@@ -383,23 +388,37 @@ export function windowsOwnerReader(run: RunTool = runTool, dir: string = os.tmpd
   }
 }
 
-const readers = new Map<NodeJS.Platform, RolloutOwnerReader>()
+const readers = new Map<string, RolloutOwnerReader>()
 
-/** This platform's reader, one per process, so the checks built over it share their answers (rolloutOwnerCheck). */
-export function rolloutOwnerReader(platform: NodeJS.Platform): RolloutOwnerReader {
-  let read = readers.get(platform)
+/** This platform's reader, one per process and script folder, so the checks built over it share their answers
+ *  (rolloutOwnerCheck). `scriptDir` is where the Windows reader writes the script it runs: `<profile>/host`, a folder no
+ *  sandboxed session may write (windowsOwnerReader); the other platforms run no script and ignore it. */
+export function rolloutOwnerReader(platform: NodeJS.Platform, scriptDir: string): RolloutOwnerReader {
+  const key = `${platform}\u0000${typeof scriptDir === 'string' ? path.resolve(scriptDir) : ''}`
+  let read = readers.get(key)
   if (!read) {
     read =
       platform === 'win32'
-        ? windowsOwnerReader()
+        ? windowsOwnerReader(runTool, scriptDir)
         : platform === 'darwin'
           ? macOwnerReader()
           : platform === 'linux'
             ? linuxOwnerReader()
             : async () => unknown(`no way to read open files on ${platform}`)
-    readers.set(platform, read)
+    readers.set(key, read)
   }
   return read
+}
+
+/** The folder a caller passes as `scriptDir`: the profile's Host folder, as the desk helper's script (`<profile>/host`). */
+export const ownerScriptDir = (profileDir: string): string => path.join(profileDir, 'host')
+
+/** What a rollout watcher or coordinator is given to ask whose codex holds a rollout: the session's pty process, and the
+ *  reader built for this profile. Both or neither, and no default reader (fix round 2: only the wiring knows the profile
+ *  folder the Windows script must sit in). */
+export interface RolloutOwnerSource {
+  pidOf(sessionId: string): number | null
+  read: RolloutOwnerReader
 }
 
 /** Asks a reader once per candidate and session process. */

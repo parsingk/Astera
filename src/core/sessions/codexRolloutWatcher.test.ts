@@ -775,10 +775,12 @@ describe('CodexRolloutWatcher maps only a rollout its session holds', () => {
       onTurnComplete: vi.fn(),
       log: (m) => logs.push(m),
       now: () => now,
-      pidOf: (id) => (id === 'live-1' ? 4100 : null),
-      ownerReader: async (file, pid) => {
-        asked.push([file, pid])
-        return file === ours ? { verdict: 'own' } : { verdict: 'other', why: 'held by pid 4242 outside the session' }
+      rolloutOwner: {
+        pidOf: (id) => (id === 'live-1' ? 4100 : null),
+        read: async (file, pid) => {
+          asked.push([file, pid])
+          return file === ours ? { verdict: 'own' } : { verdict: 'other', why: 'held by pid 4242 outside the session' }
+        }
       }
     })
     w.register(session('live-1', cwd))
@@ -799,10 +801,12 @@ describe('CodexRolloutWatcher maps only a rollout its session holds', () => {
       onTurnComplete: vi.fn(),
       log: () => {},
       now: () => now,
-      pidOf: () => 4100,
-      ownerReader: async () => {
-        asks++
-        return { verdict: 'other', why: 'held open by no process' }
+      rolloutOwner: {
+        pidOf: () => 4100,
+        read: async () => {
+          asks++
+          return { verdict: 'other', why: 'held open by no process' }
+        }
       }
     })
     w.register(session('live-1', cwd))
@@ -824,8 +828,10 @@ describe('CodexRolloutWatcher maps only a rollout its session holds', () => {
       onTurnComplete: vi.fn(),
       log: () => {},
       now: () => now,
-      pidOf: () => 4100,
-      ownerReader: async (file) => (file === ours ? { verdict: 'own' } : { verdict: 'other', why: 'held by pid 4242 outside the session' })
+      rolloutOwner: {
+        pidOf: () => 4100,
+        read: async (file) => (file === ours ? { verdict: 'own' } : { verdict: 'other', why: 'held by pid 4242 outside the session' })
+      }
     })
     w.register(session('live-1', cwd))
     await advance(TICK)
@@ -852,8 +858,10 @@ describe('CodexRolloutWatcher maps only a rollout its session holds', () => {
       onTurnComplete,
       log: () => {},
       now: () => now,
-      pidOf: (id) => (id === 'a' ? 4100 : 4200),
-      ownerReader: async (_file, pid) => (pid === 4100 ? pending : { verdict: 'own' })
+      rolloutOwner: {
+        pidOf: (id) => (id === 'a' ? 4100 : 4200),
+        read: async (_file, pid) => (pid === 4100 ? pending : { verdict: 'own' })
+      }
     })
     w.register(session('a', cwdA))
     w.register(session('b', cwdB), bFile) // mapped from the start, as a resumed session is
@@ -879,8 +887,10 @@ describe('CodexRolloutWatcher maps only a rollout its session holds', () => {
       log: (m) => logs.push(m),
       remember,
       now: () => now,
-      pidOf: () => 4100,
-      ownerReader: async () => pending
+      rolloutOwner: {
+        pidOf: () => 4100,
+        read: async () => pending
+      }
     })
     w.register(session('live-1', cwd))
     for (let i = 0; i < 3; i++) await advance(TICK)
@@ -902,8 +912,10 @@ describe('CodexRolloutWatcher maps only a rollout its session holds', () => {
       onTurnComplete: vi.fn(),
       log: () => {},
       now: () => now,
-      pidOf: (id) => (id === 'older' ? 4100 : 4200),
-      ownerReader: async (file, pid) => (pid === 4100 && file === ours ? { verdict: 'own' } : { verdict: 'other', why: 'held by pid 4100 outside the session' })
+      rolloutOwner: {
+        pidOf: (id) => (id === 'older' ? 4100 : 4200),
+        read: async (file, pid) => (pid === 4100 && file === ours ? { verdict: 'own' } : { verdict: 'other', why: 'held by pid 4100 outside the session' })
+      }
     })
     w.register(session('older', cwd))
     now += 1_000
@@ -922,7 +934,7 @@ describe('CodexRolloutWatcher maps only a rollout its session holds', () => {
     await realGap()
     const theirs = await makeRollout(dir, THEIRS, 'sess-theirs', cwd)
     const ownerReader = vi.fn()
-    const w = new CodexRolloutWatcher({ getAccount: () => account(dir), onTurnComplete: vi.fn(), log: () => {}, now: () => now, pidOf: () => null, ownerReader })
+    const w = new CodexRolloutWatcher({ getAccount: () => account(dir), onTurnComplete: vi.fn(), log: () => {}, now: () => now, rolloutOwner: { pidOf: () => null, read: ownerReader } })
     w.register(session('live-1', cwd))
     await advance(TICK)
     expect(w.rolloutPathFor('live-1')).toBe(theirs)

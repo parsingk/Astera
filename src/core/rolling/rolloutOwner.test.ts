@@ -218,6 +218,17 @@ describe('windowsOwnerReader', () => {
     expect((await fs.readdir(dir)).length).toBe(1)
   })
 
+  // Fix round 2 (security): the script runs outside any sandbox, so it must sit where no sandboxed session may write. The
+  // caller names that folder (`<profile>/host`, as the desk helper's); there is no default, since the temp folder, the
+  // old one, is a folder a sandboxed session writes.
+  it('cannot be built without an absolute folder from its caller', () => {
+    const run: RunTool = async () => ({ code: 0, stdout: '', stderr: '' })
+    // @ts-expect-error the folder is required
+    expect(() => windowsOwnerReader(run)).toThrow()
+    expect(() => windowsOwnerReader(run, '')).toThrow()
+    expect(() => windowsOwnerReader(run, 'host')).toThrow()
+  })
+
   // Windows PowerShell reads a script with no byte order mark in the ANSI code page
   it('keeps its script to ASCII', () => {
     expect(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(WINDOWS_OWNER_PS1)).toBe(true)
@@ -333,8 +344,17 @@ describe('rolloutOwnerCheck', () => {
     expect([a.length, b.length]).toEqual([1, 1])
   })
 
-  it('gives every caller on a platform the same reader', () => {
-    expect(rolloutOwnerReader('linux')).toBe(rolloutOwnerReader('linux'))
+  it('gives every caller on a platform with one script folder the same reader', () => {
+    const host = path.join(os.tmpdir(), 'profile', 'host')
+    expect(rolloutOwnerReader('linux', host)).toBe(rolloutOwnerReader('linux', host))
+    expect(rolloutOwnerReader('win32', host)).toBe(rolloutOwnerReader('win32', host))
+    expect(rolloutOwnerReader('win32', host)).not.toBe(rolloutOwnerReader('win32', path.join(os.tmpdir(), 'other', 'host')))
+  })
+
+  // Fix round 2: no reader falls back to the temp folder
+  it('cannot give a Windows reader without the folder its script goes in', () => {
+    // @ts-expect-error the folder is required
+    expect(() => rolloutOwnerReader('win32')).toThrow()
   })
 
   it('turns a reader that throws into cannot-tell', async () => {

@@ -317,10 +317,12 @@ describe('CodexRollingCoordinator maps only a rollout its session holds', () => 
     const asked: number[] = []
     const h = harness({
       onNativeSession: (_id, n) => native.push(n),
-      pidOf: (id) => (id === 's1' ? 5100 : null),
-      ownerReader: async (file, pid) => {
-        asked.push(pid)
-        return file.includes('cx-own') ? { verdict: 'own' } : { verdict: 'other', why: 'held by pid 4242 outside the session' }
+      rolloutOwner: {
+        pidOf: (id) => (id === 's1' ? 5100 : null),
+        read: async (file, pid) => {
+          asked.push(pid)
+          return file.includes('cx-own') ? { verdict: 'own' } : { verdict: 'other', why: 'held by pid 4242 outside the session' }
+        }
       }
     })
     h.coord.register(h.info1)

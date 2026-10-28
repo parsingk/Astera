@@ -18,7 +18,7 @@
 import type { Account, SessionInfo, SessionUsage } from '../types'
 import { JsonlTail } from '../rolling/jsonlTail'
 import { DAY_MS, findRollout } from '../rolling/codexLocate'
-import { rolloutOwnerCheck, rolloutOwnerReader, type RolloutOwnerCheck, type RolloutOwnerReader, type RolloutOwnership } from '../rolling/rolloutOwner'
+import { rolloutOwnerCheck, type RolloutOwnerCheck, type RolloutOwnerSource, type RolloutOwnership } from '../rolling/rolloutOwner'
 import { limitStateFromLines, type CodexLimitState } from '../rolling/codexSignal'
 import { tailLines } from '../rolling/tailLines'
 import { contextFromLines, sessionUsageOf } from '../usage/codex'
@@ -118,13 +118,11 @@ export interface CodexRolloutDeps {
    *  by spawn. */
   remember?(sessionId: string, note: { rolloutPath: string; codexSessionId?: string }): void
   now?: () => number
-  /** The process id of a session's pty, or null when it has none (a chat session, a pty the Host has not answered
-   *  for yet). Given, a rollout is mapped to the session only when that process or one under it holds the file open
-   *  (rolloutOwner.ts, Task D): folder, time and "newest" alone took another Host's session's file. Absent or null,
-   *  folder and time decide as before. */
-  pidOf?(sessionId: string): number | null
-  /** Who holds a rollout open; the platform's own reader when left out. Asked only with pidOf. */
-  ownerReader?: RolloutOwnerReader
+  /** Whose codex holds a rollout open (rolloutOwner.ts, Task D): the session's pty process (`pidOf`, null for a chat
+   *  session or a pty the Host has not answered for yet) and the reader the wiring built for its profile. Given, a
+   *  rollout is mapped to a session only when that process or one under it holds the file: folder, time and "newest"
+   *  alone took another Host's session's file. Absent, or no pid, folder and time decide as before. */
+  rolloutOwner?: RolloutOwnerSource
 }
 
 /**
@@ -185,13 +183,13 @@ export class CodexRolloutWatcher {
 
   constructor(private deps: CodexRolloutDeps) {
     this.now = deps.now ?? Date.now
-    this.owner = deps.pidOf ? rolloutOwnerCheck({ read: deps.ownerReader ?? rolloutOwnerReader(process.platform), log: deps.log }) : null
+    this.owner = deps.rolloutOwner ? rolloutOwnerCheck({ read: deps.rolloutOwner.read, log: deps.log }) : null
   }
 
   /** The owner question for this entry's session, when its process is known; undefined keeps folder and time alone. */
   private ownerFor(entry: Entry): ((file: string) => Promise<RolloutOwnership>) | undefined {
     const check = this.owner
-    const pid = check ? this.deps.pidOf?.(entry.sessionId) : null
+    const pid = check ? this.deps.rolloutOwner?.pidOf(entry.sessionId) : null
     return check && pid ? (file) => check(file, pid, entry.sessionId) : undefined
   }
 
