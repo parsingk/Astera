@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { hostAddress } from './address'
 import { encodeLine, createLineReader } from './framing'
-import { startHostServer, ADDRESS_TAKEN, UNSAFE_ADDRESS_DIR, type HostServer, type HostServerDeps } from './server'
+import { startHostServer, NOT_FOR_CLI, ADDRESS_TAKEN, UNSAFE_ADDRESS_DIR, type HostServer, type HostServerDeps } from './server'
 import { createHostOrch } from './orch'
 import { hostFeatures } from './features'
 import { HOST_PROTOCOL, HOST_YIELD_ORCH_STATE_LATEST, ORCH_STATE_PUSH_MS, type ClientMessage, type HostMessage } from '../core/host/protocol'
@@ -511,6 +511,48 @@ describe('startHostServer', () => {
     expect(app.got.map((m) => m.t)).toEqual(['hello', 'pty-data', 'pty-exit', 'proc-line'])
   })
 
+  // Task C: the kinds only the app reads (NOT_FOR_CLI) go to the proven app alone, whichever way they are sent: a CLI, a
+  // hello with no role, and a hello that names the app and never proves it hear none of them, and nor does a CLI hear one
+  // another caller's command pushes to the others.
+  it('sends the proven app alone every kind only the app reads, by broadcast and to the others', async () => {
+    const h = await server({
+      orch: {
+        call: async ({ from }) => {
+          for (const t of NOT_FOR_CLI) from?.toOthers({ t } as unknown as HostMessage)
+          return { status: 200, body: { ok: true } }
+        }
+      }
+    })
+    const connect = async (role: 'cli' | 'app' | undefined, prove: boolean) => {
+      const got: Array<{ t: string }> = []
+      const sock = net.connect(h.address)
+      const take = (v: unknown): void => void got.push(v as { t: string })
+      const proving = prove ? provingReader(sock, take) : (): boolean => false
+      const read = createLineReader({ onMessage: (v) => { if (!proving(v)) take(v) }, onBadLine: () => {}, onHandlerError: () => {} })
+      sock.setEncoding('utf8')
+      sock.on('data', read)
+      await new Promise<void>((resolve) => sock.on('connect', () => resolve()))
+      sock.write(encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', ...(role ? { role } : {}) }))
+      return { got, sock }
+    }
+    const cli = await connect('cli', false)
+    const roleless = await connect(undefined, false)
+    const unproven = await connect('app', false)
+    const app = await connect('app', true)
+    const caller = await connect('cli', false)
+    await new Promise((r) => setTimeout(r, 150))
+    expect(NOT_FOR_CLI.size).toBeGreaterThan(15)
+    for (const t of NOT_FOR_CLI) h.s.broadcast({ t } as unknown as HostMessage)
+    caller.sock.write(encodeLine({ t: 'orch-call', call: 'c1', cmd: 'version', args: {} }))
+    await new Promise((r) => setTimeout(r, 200))
+    for (const c of [cli, roleless, unproven, app, caller]) c.sock.destroy()
+    const kinds = [...NOT_FOR_CLI].sort()
+    for (const c of [cli, roleless, unproven]) expect(c.got.map((m) => m.t)).toEqual(['hello'])
+    expect(caller.got.map((m) => m.t)).toEqual(['hello', 'orch-result'])
+    // The app heard each once by broadcast and once from the command's push to the others
+    expect(app.got.map((m) => m.t).filter((t) => t !== 'hello').sort()).toEqual([...kinds, ...kinds].sort())
+  })
+
   // Performance audit H1: a client that stopped reading (paused, in a debugger) must not grow the Host's memory by
   // every byte of output; past its budget it is let go.
   it('closes a client whose unread output passes its budget', async () => {
@@ -521,8 +563,8 @@ describe('startHostServer', () => {
     await new Promise((r) => setTimeout(r, 100))
     sock.pause()
     const closed = new Promise<void>((resolve) => sock.on('close', () => resolve()))
-    // A push a CLI is sent: terminal output goes to the app alone
-    for (let i = 0; i < 200; i++) h.s.broadcast({ t: 'git-op', op: 'x'.repeat(16 * 1024), phase: 'begin', kind: 'job-merge', cwd: '/w' })
+    // A message a CLI is sent (an answer, not a push: what only the app reads goes to the app alone)
+    for (let i = 0; i < 200; i++) h.s.broadcast({ t: 'proc-attached', id: 'p1', lines: [{ seq: i, line: 'x'.repeat(16 * 1024) }] })
     await Promise.race([closed, new Promise((r) => setTimeout(r, 3000))])
     expect(h.s.clients()).toBe(0)
     sock.destroy()
@@ -739,7 +781,7 @@ describe('startHostServer', () => {
       const h = await start({
         orch: {
           call: async ({ from }) => {
-            from?.toOthers({ t: 'pty-data', id: 'p1', data: 'pushed to the others' })
+            from?.toOthers({ t: 'pong', seq: 5 })
             return { status: 200, body: { ok: true } }
           }
         }
@@ -751,7 +793,7 @@ describe('startHostServer', () => {
       expect(await mcp.next(150)).toBeUndefined()
       mcp.send({ t: 'orch-call', call: 'c2', cmd: 'version', args: {} })
       expect(await mcp.next()).toMatchObject({ t: 'orch-result', call: 'c2', status: 200 })
-      expect(await cli.next()).toEqual({ t: 'pty-data', id: 'p1', data: 'pushed to the others' })
+      expect(await cli.next()).toEqual({ t: 'pong', seq: 5 })
     })
   })
 

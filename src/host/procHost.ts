@@ -9,8 +9,17 @@ import type { HandlerFrom } from './ptyHost'
 export const PROC_SPAWN_APP_ONLY = 'proc-spawn is served to the Astera app only'
 
 /** Every message this handler owns, each the proven app's alone, as ptyHost.ts's are (sandbox follow-ups, round 2): each
- *  reads a process (its list, its buffered lines) or drives one (writes a line, a person's or not, kills or notes it). */
-const PROC_MESSAGES: ReadonlySet<ClientMessage['t']> = new Set(['proc-spawn', 'proc-write', 'proc-kill', 'proc-note', 'proc-list', 'proc-attach'])
+ *  reads a process (its list, its buffered lines) or drives one (writes a line, a person's or not, kills or notes it).
+ *  A record over every `proc-*` kind of the protocol, as ptyHost.ts's is: a new kind fails tsc until it is written here. */
+const PROC_REQUESTS: Record<Extract<ClientMessage['t'], `proc-${string}`>, true> = {
+  'proc-spawn': true,
+  'proc-write': true,
+  'proc-kill': true,
+  'proc-note': true,
+  'proc-list': true,
+  'proc-attach': true
+}
+const PROC_MESSAGES: ReadonlySet<string> = new Set(Object.keys(PROC_REQUESTS))
 
 /** Returns a handler for one connection that reports whether it owned the message, so the server can
  *  try the pty handler and its own handshake messages for anything else. Lines and exits broadcast,

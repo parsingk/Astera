@@ -218,10 +218,14 @@ describe('spawns over the Host server are the app’s alone', () => {
     await app.waitFor((m) => m.t === 'pty-spawned')
     app.send({ t: 'proc-spawn', id: 'q1', file: process.execPath, args: ['-e', ECHO], opts: { cwd: process.cwd(), env: process.env as Record<string, string | undefined> } })
     await app.waitFor((m) => m.t === 'proc-spawned')
+    // Both are connected before the output and the line are emitted: the push direction, not only the requests
+    const others = [await client(w.address, 'cli'), await client(w.address, 'app', null)]
+    for (const other of others) await other.waitFor((m) => m.t === 'hello')
     w.emit('a secret on the screen')
-    for (const other of [await client(w.address, 'cli'), await client(w.address, 'app', null)]) {
-      await other.waitFor((m) => m.t === 'hello')
-      const heard = other.got.length
+    app.send({ t: 'proc-write', id: 'q1', line: 'secret' })
+    expect(await app.waitFor((m) => m.t === 'proc-line' && m.line === 'echo:secret')).toBeTruthy()
+    expect(await app.waitFor((m) => m.t === 'pty-data' && m.data === 'a secret on the screen')).toBeTruthy()
+    for (const other of others) {
       for (const m of [
         { t: 'pty-write', id: 'p1', data: 'rm -rf ~\r', typed: true },
         { t: 'pty-resize', id: 'p1', cols: 100, rows: 40 },
@@ -236,7 +240,7 @@ describe('spawns over the Host server are the app’s alone', () => {
       ] as ClientMessage[])
         other.send(m)
       await new Promise((r) => setTimeout(r, 300))
-      expect(other.got.slice(heard), 'answered').toEqual([])
+      expect(other.got.map((m) => m.t), 'heard or answered').toEqual(['hello'])
       other.end()
     }
     expect(w.typed).toEqual([])
