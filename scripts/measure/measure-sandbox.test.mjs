@@ -5,8 +5,8 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { busSocket, codexS2Args, main, probeEnv, s2Denied, sh, srtArgv, srtS2Settings, workspaceFor } from './measure-sandbox.mjs'
-import { PROBES, verdict } from './probes.mjs'
+import { busSocket, codexS2Args, main, probeEnv, s2Denied, s4Sets, sh, srtArgv, srtS2Settings, workspaceFor } from './measure-sandbox.mjs'
+import { PROBES, failIfMeasuredNothing, verdict } from './probes.mjs'
 import {
   GLOBAL_EXCLUDE_PROBE,
   GLOBAL_IGNORED,
@@ -74,7 +74,8 @@ describe('measure-sandbox', () => {
     const yml = readFileSync(path.join(root, '.github/workflows/measure-sandbox.yml'), 'utf8')
     for (const want of [
       'macos-latest',
-      'ubuntu-latest',
+      // Task E (2026-10-28): ubuntu-latest became Ubuntu 26.04 (run 40761549024), where srt runs no command
+      'os: [macos-latest, ubuntu-24.04]',
       '@openai/codex@0.160.0',
       '@anthropic-ai/sandbox-runtime@0.0.79',
       'contents: read',
@@ -98,6 +99,27 @@ describe('measure-sandbox', () => {
       expect(yml, want).toContain(want)
     // Nothing that writes back to the repository
     expect(yml).not.toMatch(/contents: write|git push/)
+    expect(yml).not.toMatch(/os: \[[^\]]*ubuntu-latest|runs-on: ubuntu-latest/)
+  })
+
+  // Task E (2026-10-28): on Ubuntu 26.04 srt refused every command and the job still passed. A set whose every sandboxed
+  // probe was refused measured nothing, so the run fails at its end, naming the set (the worktree ones as such)
+  it('fails a run in which a set measured nothing, naming the set, after every part is written', () => {
+    const refused = [{ id: 'a', refused: true }, { id: 'b', refused: true }]
+    const ran = [{ id: 'a', ok: true }, { id: 'b', ok: false }]
+    expect(s4Sets({ codexS2: ran, srtS2: ran }, { codexS2: ran, srtS2: refused })).toEqual({
+      codexS2: ran,
+      srtS2: ran,
+      'codexS2 (worktree)': ran,
+      'srtS2 (worktree)': refused
+    })
+    expect(() => failIfMeasuredNothing(s4Sets({ codexS2: ran, srtS2: refused }, { srtS2: refused }))).toThrow(/srtS2, srtS2 \(worktree\)/)
+    expect(() => failIfMeasuredNothing(s4Sets({ codexS2: ran }, { codexS2: ran }))).not.toThrow()
+    // main judges the S4 sets once everything is measured and written, so a refused set costs no other part
+    const src = readFileSync(path.join(root, 'scripts/measure/measure-sandbox.mjs'), 'utf8')
+    const judged = src.indexOf('failIfMeasuredNothing(s4Sets(sets, worktreeSets))')
+    expect(judged).toBeGreaterThan(src.indexOf('process.stdout.write(summary)'))
+    expect(judged).toBeLessThan(src.indexOf('return result'))
   })
 
   // Found by the first run: both S2 sets reached a keychain item on macOS
@@ -178,6 +200,14 @@ describe('the S2 measurement', () => {
     expect(upload).toBeGreaterThan(s2)
     // One run answers both: S2 runs even when the S4 step failed
     expect(yml.slice(s4, upload)).toContain('if: ${{ !cancelled() }}')
+  })
+
+  // Task E (2026-10-28): each set is its own case, named for the set, and fails when its sandbox refused every probe
+  it('fails a set whose every sandboxed probe was refused, in the case named for it', () => {
+    const src = readFileSync(path.join(root, 'scripts/measure/s2.measure.test.mjs'), 'utf8')
+    const each = src.slice(src.indexOf('  for (const set of S2_SETS) {'), src.indexOf("  it.skipIf(!WIN)('windows readiness"))
+    expect(each).toMatch(/it\.skipIf\(!s2SetNames\(PLATFORM\)\.includes\(set\.name\)\)\(set\.name, /)
+    expect(each).toMatch(/expect\(refusedAll\(r\.sandboxed\), `\$\{set\.name\} measured nothing/)
   })
 
   it('skips every case unless its variable is set on a GitHub-hosted runner, or the local one on win32', () => {

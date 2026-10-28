@@ -21,7 +21,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        # Linux pinned to 24.04: ubuntu-latest became Ubuntu 26.04 (run 40761549024, image ubuntu26 20261023.163.3),
+        # where Claude's sandbox runtime ran no command ("apply-seccomp: write /proc/self/setgroups (nested userns is
+        # capability-restricted; caller must provide CAP_SYS_ADMIN)"): from Ubuntu 25.04 AppArmor's bwrap profile
+        # (bwrap-userns-restrict) denies capabilities to the processes inside bubblewrap, and the sysctl below does not
+        # lift that. GitHub documents no runner setting that does, so 26.04 is not measured
+        os: [macos-latest, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     # A run takes a few minutes. Probes that all hang would take longer than this; the results file is written after
     # each part, so a job stopped here keeps what it measured

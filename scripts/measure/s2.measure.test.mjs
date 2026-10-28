@@ -28,7 +28,7 @@ import { hostAddress } from '../../src/host/address'
 import { HOST_PROTOCOL } from '../../src/core/host/protocol'
 import { appKeyPath, ensureAppKey } from '../../src/core/host/hostKey'
 import { fixtures, loopbackServer, probeEnv, sh, srtArgv, workspaceFor } from './measure-sandbox.mjs'
-import { runProbes, runSet } from './probes.mjs'
+import { refusedAll, runProbes, runSet } from './probes.mjs'
 import { startAppServer } from './appServer.mjs'
 import {
   COMMON_CASE_PROBES,
@@ -477,6 +477,8 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
       result.sets[set.name] = r
       save()
       expect(brokenPlain(r.plain), 'probes that failed with no sandbox: the instrument is broken there, not the sandbox').toEqual([])
+      // A sandbox that started no command measured nothing (found on Ubuntu 26.04, run 40761549024): the set fails
+      expect(refusedAll(r.sandboxed), `${set.name} measured nothing: every sandboxed probe was refused (${r.sandboxed[0]?.out ?? ''})`).toBe(false)
     })
   }
 

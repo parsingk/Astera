@@ -17,7 +17,7 @@ import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { PROBES, probeTable, runProbes, runSet } from './probes.mjs'
+import { PROBES, failIfMeasuredNothing, probeTable, runProbes, runSet } from './probes.mjs'
 import { measurePresets } from './presets.mjs'
 import { measureShells } from './shells.mjs'
 import { extractHookSource, measureHook } from './latency.mjs'
@@ -170,6 +170,12 @@ function codexForm(profileArgs, env, cwd) {
   return { form: ['sandbox'], tried: sh(['codex', 'sandbox', ...profileArgs, '--', 'sh', '-c', 'true'], { env, cwd }).out.slice(0, 500) }
 }
 
+/** Every sandboxed set the run measured, by name, the worktree layout's named as such: what failIfMeasuredNothing judges. */
+export const s4Sets = (sets, worktreeSets) => ({
+  ...sets,
+  ...Object.fromEntries(Object.entries(worktreeSets).map(([name, results]) => [`${name} (worktree)`, results]))
+})
+
 /** The probes a session in a worktree can run: the ones that `cd wt` assume the session is in the repository. */
 const WORKTREE_PROBES = PROBES.filter((p) => !p.line.startsWith('cd wt ')).map((p) => p.id)
 
@@ -314,6 +320,8 @@ export async function main(o = {}) {
   ].join('\n')
   if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, summary)
   process.stdout.write(summary)
+  // Last, with every part measured and written: a sandbox that started no command measured nothing, and the run fails
+  failIfMeasuredNothing(s4Sets(sets, worktreeSets))
   return result
 }
 
