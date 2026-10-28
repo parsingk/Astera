@@ -206,11 +206,15 @@ export const NORMAL_WORK_PROBES = [
   { id: 'git-worktree-list', line: 'git worktree list' }
 ]
 /** The same for cmd.exe, which reads `%` as the start of a variable, so the log line names no format; none of them holds
- *  a double quote (WIN32_PROBES). */
+ *  a double quote (WIN32_PROBES). And the global ignore entry the fixture adds: the elevated sandbox's own account cannot
+ *  read the person's home, so the session's git reads the copy the start writes in TEMP (gitExcludes.ts), and `-v` says
+ *  which file the entry came from. The run's fake home is in TEMP itself, so this says the copy is read and applied, not
+ *  that the home could not be. */
 export const WIN32_NORMAL_WORK_PROBES = [
   { id: 'git-status', line: 'git status --porcelain' },
   { id: 'git-log', line: 'git log -1 --oneline' },
-  { id: 'git-worktree-list', line: 'git worktree list' }
+  { id: 'git-worktree-list', line: 'git worktree list' },
+  { id: GLOBAL_EXCLUDE_PROBE.id, line: `git check-ignore -v ${GLOBAL_IGNORED}` }
 ]
 
 /** What the common-case set runs (and its sanity line first): a commit, the config.worktree writes and normal work. */

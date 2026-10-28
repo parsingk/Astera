@@ -21,6 +21,7 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { claudeSandboxSettings } from '../../src/core/sandbox/claudeSettings'
 import { codexSandboxEnv, npmCacheOf } from '../../src/core/sandbox/codexProfile'
+import { codexExcludesWriter } from '../../src/core/sandbox/gitExcludes'
 import { ensureGitFiles, ensureWorktreeConfigFiles, gitLayoutOf } from '../../src/core/sandbox/gitLayout'
 import { initializeParams } from '../../src/core/chat/codexProtocol'
 import { hostAddress } from '../../src/host/address'
@@ -133,7 +134,7 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
     image: { os: process.env.ImageOS ?? null, version: process.env.ImageVersion ?? null },
     notes: [
       'Each set: probes with no sandbox in a fresh workspace of the same layout (plain), then in the sandbox in another fresh one (sandboxed); verdicts read one against the other (probes.mjs verdict).',
-      "Codex sets: codexSandboxArgs for gitLayoutOf(cwd) without its leading -a never, denied = sensitiveLocations + credentialStoreDenies, environment codexSandboxEnv with a temp folder of the set's own.",
+      "Codex sets: codexSandboxArgs for gitLayoutOf(cwd) without its leading -a never, denied = sensitiveLocations + credentialStoreDenies, environment codexSandboxEnv with a temp folder of the set's own (on win32 with the copy of the fake home's global excludes codexExcludesWriter writes there, as the start does).",
       'srt sets: claudeSandboxSettings as Claude Code hands them to srt (s2.mjs srtSettingsOf); the network list names the probes’ hosts. Claude Code’s own use of these settings is not measured (no login): runtime-measured.',
       'The config.worktree probes write the one git names for the session, the main checkout’s and a second worktree’s (each set adds one). On the shipped path the repository has extensions.worktreeConfig on and every config.worktree made first by ensureWorktreeConfigFiles (worktreeConfig in each set), as the start does; codex-worktree-common has the extension off and none made (filesBefore, filesAfter). In the srt sets they are informational: how Claude Code itself treats a worktree’s git data is not srt’s.',
       'Every set makes the missing git files first, as every sandboxed start does (ensureGitFiles: a commondir holding `.` and an empty modules folder; gitFiles in each set), and both profiles keep them read-only with a worktree’s `.git` pointer; the normal-work probes (git-status, git-log, git-worktree-list, and the commits) say whether everyday git still runs.',
@@ -287,12 +288,16 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
     const worktreeConfig = shipped ? await ensureWorktreeConfigFiles(gitLayout) : { created: [], commonCase: 'extension off, none made first' }
     // Every sandboxed start makes the missing commondir files and modules folder, on every OS (final fix pass, C1)
     const gitFiles = await ensureGitFiles(gitLayout)
-    return { cwd, gitLayout, tmpDir, sibling, vars, worktreeConfig, gitFiles }
+    // A Windows Codex start copies the global excludes into TEMP, for the sandbox's own account (gitExcludes.ts)
+    const excludesFile = WIN
+      ? await codexExcludesWriter({ profileDir: path.join(ctx.scratch, `profile-${name}`), tmpDir, homeDir: ctx.home, env: ctx.homeEnv, log: (m) => console.log(m) })()
+      : null
+    return { cwd, gitLayout, tmpDir, sibling, vars, worktreeConfig, gitFiles, excludesFile }
   }
 
   /** The builder's environment for a Codex session, and where the probes find the git directories. */
   function codexEnvOf(p) {
-    const own = codexSandboxEnv({ platform: PLATFORM, layout: p.gitLayout, tmpDir: p.tmpDir })
+    const own = codexSandboxEnv({ platform: PLATFORM, layout: p.gitLayout, tmpDir: p.tmpDir, excludesFile: p.excludesFile })
     return { own, env: { ...ctx.base, ...own, ...p.vars } }
   }
 

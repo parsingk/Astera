@@ -9,6 +9,7 @@ import { busSocket, codexS2Args, main, probeEnv, s2Denied, sh, srtArgv, srtS2Set
 import { PROBES, verdict } from './probes.mjs'
 import {
   GLOBAL_EXCLUDE_PROBE,
+  GLOBAL_IGNORED,
   READY_MARKER,
   S2_SETS,
   SOCKET_PROBE,
@@ -345,9 +346,13 @@ describe('the S2 probes', () => {
   // still runs; normal-work probes only, on every OS, in cmd.exe's form on Windows (no double quotes, as WIN32_PROBES)
   it('ends with the normal-work probes on every OS', () => {
     expect(NORMAL_WORK_PROBES.map((p) => p.id)).toEqual(['git-status', 'git-log', 'git-worktree-list'])
-    expect(WIN32_NORMAL_WORK_PROBES.map((p) => p.id)).toEqual(['git-status', 'git-log', 'git-worktree-list'])
+    // On Windows also the global ignore entry the fixture adds: the elevated sandbox's own account cannot read the
+    // person's home, so the session's git reads the copy the start writes in TEMP; `-v` names the file the entry came from
+    expect(WIN32_NORMAL_WORK_PROBES.map((p) => p.id)).toEqual(['git-status', 'git-log', 'git-worktree-list', GLOBAL_EXCLUDE_PROBE.id])
+    expect(WIN32_NORMAL_WORK_PROBES.at(-1).line).toBe(`git check-ignore -v ${GLOBAL_IGNORED}`)
     for (const p of WIN32_NORMAL_WORK_PROBES) expect(p.line).not.toContain('"')
-    expect(probesFor('win32', 'worktree').slice(-3)).toEqual(WIN32_NORMAL_WORK_PROBES)
+    for (const p of WIN32_NORMAL_WORK_PROBES) expect(p.line).not.toContain('%')
+    expect(probesFor('win32', 'worktree').slice(-4)).toEqual(WIN32_NORMAL_WORK_PROBES)
     expect(probesFor('darwin', 'worktree').slice(-3)).toEqual(NORMAL_WORK_PROBES)
     // The common case runs them too, beside its commit
     expect(COMMON_CASE_PROBES).toEqual(expect.arrayContaining(['git-commit', 'git-status', 'git-log', 'git-worktree-list']))
