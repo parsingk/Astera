@@ -181,8 +181,8 @@ export interface ProcRow {
 
 /** The whole process table, run through `env`, one row per process and no header. Under LC_ALL=C as
  *  every ps here is. -A and the pid, ppid and pgid keywords are in both procps's ps(1) and the BSD one
- *  macOS ships. One `-o` per column: both say an empty `=` header in its own -o leaves the header line
- *  out, while what follows `=` inside a comma list is header text under POSIX. */
+ *  macOS ships, and both take one -o per keyword and print no header line when every header is empty
+ *  (`=`); one -o each, so no `=` is ever read as the start of a header that runs on to the next. */
 export const PS_TREE_ARGS = ['LC_ALL=C', 'ps', '-A', '-o', 'pid=', '-o', 'ppid=', '-o', 'pgid=']
 
 /** `ps -o pid= -o ppid= -o pgid=` lines; anything else (a header, noise) is skipped. */
