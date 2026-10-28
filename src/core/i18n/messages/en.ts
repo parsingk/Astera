@@ -841,6 +841,7 @@ export const en: Record<keyof typeof ko, string> = {
   'session.spawn.sandbox.profileNotActive': "Codex did not confirm that the chat runs under the sandbox's profile, so it was stopped. Update Codex.",
   'session.spawn.sandbox.commandTooLong': "With this many worktrees the sandbox's profile does not fit on the Windows command line, so it cannot start in the sandbox. Remove the worktrees you no longer need.",
   'session.spawn.sandbox.noSandbox': '{cli} has no sandbox here, and what a sandboxed session starts must run in one, so it did not start.',
+  'session.spawn.sandbox.outsideSandbox': '{id} runs outside the sandbox, and a sandboxed session cannot hand work outside it, so nothing was sent or started.',
   'session.spawn.sandbox.settingsWriteFailed': 'The sandbox settings file could not be written, so it cannot start. Check that the profile folder can be written.',
   'session.roll.sandbox.windowsSetup': 'Could not move to the {account} account: its Windows sandbox is not set up. Press Set up for it in Settings › Agent profiles.',
   'session.roll.sandbox.windowsCheckFailed': 'Could not move to the {account} account: Codex could not be asked about its Windows sandbox. Update Codex or start it again.',

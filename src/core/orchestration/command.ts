@@ -57,6 +57,7 @@ import {
   recordDispatchGit,
   placedByApp,
   coordinatorStarting,
+  workSandboxed,
   type OrchState,
   type RepairTarget,
   type Res
@@ -138,6 +139,7 @@ import { parseRunGitHubPatch, type RunGitHubPatch } from '../github/runState'
 import { sanitize } from './checkpoint'
 import type { SessionCheck } from '../workUnit/types'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
+import { SANDBOX_UNAVAILABLE } from '../sandbox/unavailable'
 import { LAUNCH_FORBIDDEN } from '../sessions/commands'
 import { parseHandoffBody } from '../handoff/parse'
 import type { HandoffBody } from '../handoff/types'
@@ -1326,6 +1328,13 @@ const agentCaller = (caller: { sessionId: string; role?: string }): boolean =>
  *  (its coordinator and workers), a Task (its workers), a worker. `tasks add` is `task-create` under another name. */
 const STARTS_WORK: ReadonlySet<string> = new Set(['sessions-create', 'run-create', 'task-create', 'worker-start'])
 
+/** Whether a session the Host holds runs in its CLI's sandbox (OrchServerDeps.sessionSandboxed), answered in the same
+ *  turn when the dep answers so; a session it does not hold, or a caller with no such dep, reads as outside it. */
+function sessionInSandbox(deps: OrchServerDeps, sessionId: string): boolean | Promise<boolean> {
+  const r = deps.sessionSandboxed?.(sessionId)
+  return r === undefined ? false : typeof r === 'boolean' ? r : r.then((v) => v === true)
+}
+
 /** Whether the caller is a session running in its CLI's sandbox (OrchServerDeps.sessionSandboxed): what it starts, a
  *  session, a Job's coordinator, a worker, starts in the sandbox too (final fix pass, C3, the person's decision). The app
  *  and the Host's own loops are no session; a shell has none. */
@@ -1333,8 +1342,99 @@ function sandboxedCaller(deps: OrchServerDeps, caller: { sessionId: string }): b
   if (caller.sessionId === '' || caller.sessionId === APP_CALLER || caller.sessionId === HOST_CALLER) return false
   // Answered in the same turn when the answer is (the Host's is a read of its registries): a command that commits before
   // its first await keeps doing so
-  const r = deps.sessionSandboxed?.(caller.sessionId)
-  return r === undefined ? false : typeof r === 'boolean' ? r : r.then((v) => v === true)
+  return sessionInSandbox(deps, caller.sessionId)
+}
+
+/** The commands that hand work on to something that may run outside the caller's sandbox, read before the state
+ *  (outsideSandboxTarget): a Job's work started or set going again, a Task placed, re-armed or let go on by a question's
+ *  answer, a worker typed into another session, a reply a worker reads. `sessions send` asks in its own case, once its
+ *  session is found. `send` and `ask` are not here: they are the structured channel a worker reports and asks through
+ *  toward its coordinator (final fix pass, part 2, A). */
+const HANDS_WORK: ReadonlySet<string> = new Set([
+  'run-start',
+  'jobs-run',
+  'run-spawn',
+  'run-resume',
+  'runs-resume',
+  'runs-reconverge',
+  'tasks-dispatch',
+  'task-update',
+  'gate-resolve',
+  'worker-start',
+  'reply'
+])
+
+/** The statuses `task-update` may set on work outside the sandbox from inside it: the two that only stop the Task. Any
+ *  other sets it going again (ready, pending), lets the Tasks after it go on (completed) or skips a verdict. */
+const STOPS_TASK: ReadonlySet<string> = new Set(['failed', 'blocked'])
+
+/** A sandboxed session's refusal for handing work outside its sandbox (final fix pass, part 2, A, the person's strict
+ *  decision): 403 (exit 5), nothing sent, typed, placed or started. `target` is `session <id>`, `job <id>` or
+ *  `task <id>`; the app's and the CLI's words for it are core/sandbox/unavailable.ts's. */
+const outsideSandbox = (target: string): Reply => denied(`${SANDBOX_UNAVAILABLE}: outside-sandbox ${target}`)
+
+/** What a command a sandboxed session sends (HANDS_WORK) would hand to something outside its sandbox, named for the
+ *  refusal, or null when everything it sets going runs in the sandbox (final fix pass, part 2, A). Read from a state of
+ *  its own before handleCommand reads the one it commits, as startingProfileIds is:
+ *  - a Job's coordinator and plan (`run-start`, `jobs-run`, `run-spawn`, `run-resume`, `runs-resume`,
+ *    `runs-reconverge`): the Job must be one a sandboxed session made (Job.sandboxed, part 1 §3);
+ *  - one Task's worker, reviewer or repair (`tasks-dispatch`, a `task-update` that does more than stop it, a question's
+ *    answer but mark-failed): the Task must run in the sandbox (workSandboxed: its own mark or its Job's);
+ *  - another session (`worker-start --terminal` types the Task into it, `reply` is read by the asking worker): it must run
+ *    in the sandbox. `worker-start` without `--terminal` starts its worker in the sandbox (part 1 §3).
+ *  An id that names nothing is null here, and the command answers it as before. */
+function outsideSandboxTarget(deps: OrchServerDeps, cmd: string, args: Record<string, unknown>): string | null | Promise<string | null> {
+  const s = deps.getState()
+  const ofJob = (job: Job | undefined): string | null => (job !== undefined && job.sandboxed !== true ? `job ${job.id}` : null)
+  const ofTask = (task: Task | undefined): string | null => (task !== undefined && !workSandboxed(s, task) ? `task ${task.id}` : null)
+  const ofSession = (id: string | null | undefined): string | null | Promise<string | null> => {
+    if (id === null || id === undefined) return null
+    const inside = sessionInSandbox(deps, id)
+    return typeof inside === 'boolean' ? (inside ? null : `session ${id}`) : inside.then((v) => (v ? null : `session ${id}`))
+  }
+  const runOf = (id: string | null) => (id === null ? undefined : s.runs.find((r) => r.id === id))
+  const jobNamed = (id: string | null) => (id === null ? undefined : s.jobs.find((j) => j.id === id))
+  switch (cmd) {
+    case 'run-start': {
+      // A Run id, its Job's coordinator again; any other id, the Job
+      const run = runOf(str(args.run))
+      return ofJob(run ? jobOf(s, run) : jobNamed(str(args.run)))
+    }
+    case 'jobs-run':
+      return ofJob(jobNamed(str(args.id)))
+    case 'run-spawn':
+    case 'run-resume':
+      return ofJob(jobNamed(str(args.run)))
+    case 'runs-resume':
+    case 'runs-reconverge': {
+      const run = runOf(str(args.id))
+      return ofJob(run ? jobOf(s, run) : undefined)
+    }
+    case 'tasks-dispatch':
+      return ofTask(s.tasks.find((t) => t.id === str(args.id)))
+    case 'task-update': {
+      // `--convergence off` stops the Task's repairs, and the two stopping statuses stop the Task
+      const status = str(args.status)
+      if (args.convergence !== undefined || status === null || STOPS_TASK.has(status)) return null
+      return ofTask(s.tasks.find((t) => t.id === str(args.id)))
+    }
+    case 'gate-resolve': {
+      // Every answer but mark-failed lets the Task go on: a fresh round, a repair, back to ready where it is placed again
+      if (str(args.resolution) === 'mark-failed') return null
+      const gate = s.gates.find((g) => g.id === str(args.id))
+      return ofTask(gate === undefined ? undefined : s.tasks.find((t) => t.id === gate.taskId))
+    }
+    case 'worker-start':
+      return ofSession(str(args.terminal))
+    case 'reply': {
+      // The worker that asked reads the answer: the session its Dispatch is on now (a roll moves it)
+      const q = s.messages.find((m) => m.id === str(args.id))
+      if (!q || q.type !== 'question' || q.answered) return null
+      return ofSession(s.dispatches.find((d) => d.id === q.dispatchId)?.sessionId)
+    }
+    default:
+      return null
+  }
 }
 
 /** The person's decision on the final review (2026-10-22): an agent (`agentCaller`) may start work as a profile that
@@ -1663,8 +1763,16 @@ export async function handleCommand(
   }
   // **Whether the caller runs in the sandbox, before the state too** (final fix pass, C3): what it starts then starts in
   // the sandbox, and the Host answers it by a read of its registries. Asked only by the commands that start or add work.
-  const boxed = STARTS_WORK.has(cmd) ? sandboxedCaller(deps, caller) : false
+  const boxed = STARTS_WORK.has(cmd) || HANDS_WORK.has(cmd) || cmd === 'sessions-send' ? sandboxedCaller(deps, caller) : false
   const callerBoxed = typeof boxed === 'boolean' ? boxed : await boxed
+  // **What a sandboxed caller would hand outside its sandbox, before the state too** (final fix pass, part 2, A): a Job's
+  // work, a Task's, another session that is not sandboxed. Refused before anything moves; answered in the same turn as
+  // the Host's registries answer, so a command that commits before its first await still does.
+  if (callerBoxed && HANDS_WORK.has(cmd)) {
+    const outside = outsideSandboxTarget(deps, cmd, args)
+    const named = outside instanceof Promise ? await outside : outside
+    if (named !== null) return outsideSandbox(named)
+  }
   const now = deps.now?.() ?? new Date().toISOString()
   const s = deps.getState()
 
@@ -4937,6 +5045,9 @@ export async function handleCommand(
       if (session.kind === 'chat' && args.noEnter !== undefined)
         return bad(`--no-enter is for terminal sessions; ${id} is a chat session, where a send is one turn`)
       if (!session.alive) return conflict(`session ${id} has ended; there is nothing to type into`)
+      // **A sandboxed session types only into a sandboxed one** (final fix pass, part 2, A, the person's strict decision):
+      // text sent to a session outside the sandbox is work handed outside it. Before anything is typed or waited on
+      if (callerBoxed && !(await sessionInSandbox(deps, id))) return outsideSandbox(`session ${id}`)
       /**
        * **The wait is judged before anything is typed.** A turn nobody can see the end of would only time
        * out after the text was delivered, so it is refused while refusing still costs nothing:

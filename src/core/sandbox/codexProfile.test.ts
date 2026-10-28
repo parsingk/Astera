@@ -158,4 +158,13 @@ describe('sandboxUnavailable', () => {
     for (const [provider, platform] of [['claude', 'linux'], ['claude', 'darwin'], ['codex', 'win32'], ['codex', 'linux']] as const)
       expect(forcedSandboxBlocker(provider, platform), `${provider} ${platform}`).toBeNull()
   })
+
+  // Final fix pass, part 2 (A): a sandboxed caller handing work to a session, Job or Task outside its sandbox is refused
+  // (`outside-sandbox <session|job|task> <id>`, the command layer's), in words the app has, naming what it is
+  it('words a refusal of work outside the sandbox, with what it names', () => {
+    for (const [target, id] of [['session', 'sess_1-a'], ['job', 'job_0123'], ['task', 'tsk_0123']] as const)
+      expect(sandboxRefusalMessage(`SANDBOX_UNAVAILABLE: outside-sandbox ${target} ${id}`)).toEqual({ key: 'session.spawn.sandbox.outsideSandbox', params: { id } })
+    // As the CLI's error carries it, and as the app's IPC wraps it
+    expect(sandboxRefusalMessage('Error: SANDBOX_UNAVAILABLE: outside-sandbox job job_9.')).toEqual({ key: 'session.spawn.sandbox.outsideSandbox', params: { id: 'job_9' } })
+  })
 })

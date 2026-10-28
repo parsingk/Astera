@@ -671,6 +671,7 @@ export const ja: Catalog = {
   'session.spawn.sandbox.profileNotActive': 'このチャットがサンドボックスのプロファイルで動くことを Codex が確認しなかったため、停止しました。Codex を更新してください。',
   'session.spawn.sandbox.commandTooLong': 'ワークツリーが多すぎてサンドボックスのプロファイルが Windows のコマンドラインに収まらないため、サンドボックスで起動できません。使わないワークツリーを削除してください。',
   'session.spawn.sandbox.noSandbox': '{cli} にはこのシステムでサンドボックスがありません。サンドボックス内のセッションが始めるものはサンドボックスで動く必要があるため、起動しませんでした。',
+  'session.spawn.sandbox.outsideSandbox': '{id} はサンドボックスの外で動いています。サンドボックス内のセッションはサンドボックスの外に作業を渡せないため、何も送信も起動もしませんでした。',
   'session.spawn.sandbox.settingsWriteFailed': 'サンドボックスの設定ファイルを書き込めないため、起動できません。プロファイルフォルダーに書き込めるか確認してください。',
   'session.roll.sandbox.windowsSetup': '{account} アカウントは Windows サンドボックスが設定されていないため、切り替えられませんでした。設定 › エージェントプロファイルで、このアカウントの「設定する」を押してください。',
   'session.roll.sandbox.windowsCheckFailed': '{account} アカウントの Windows サンドボックスの状態を Codex に確認できなかったため、切り替えられませんでした。Codex を更新するか、もう一度起動してください。',

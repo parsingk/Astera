@@ -678,6 +678,7 @@ export const es: Catalog = {
   'session.spawn.sandbox.profileNotActive': 'Codex no confirmó que el chat se ejecuta con el perfil del sandbox, así que se detuvo. Actualice Codex.',
   'session.spawn.sandbox.commandTooLong': 'Con tantos worktrees el perfil del sandbox no cabe en la línea de comandos de Windows, así que no puede iniciarse en el sandbox. Elimine los worktrees que ya no necesite.',
   'session.spawn.sandbox.noSandbox': '{cli} no tiene sandbox aquí, y lo que inicia una sesión en el sandbox debe ejecutarse en uno, así que no se inició.',
+  'session.spawn.sandbox.outsideSandbox': '{id} se ejecuta fuera del sandbox, y una sesión en el sandbox no puede pasar trabajo fuera de él, así que no se envió ni se inició nada.',
   'session.spawn.sandbox.settingsWriteFailed': 'No se pudo escribir el archivo de configuración del sandbox, así que no puede iniciarse. Compruebe que se puede escribir en la carpeta del perfil.',
   'session.roll.sandbox.windowsSetup': 'No se pudo pasar a la cuenta {account}: su sandbox de Windows no está configurado. Pulse Configurar para ella en Configuración › Perfiles de agente.',
   'session.roll.sandbox.windowsCheckFailed': 'No se pudo pasar a la cuenta {account}: no se pudo consultar a Codex el estado de su sandbox de Windows. Actualice Codex o vuelva a iniciar la sesión.',

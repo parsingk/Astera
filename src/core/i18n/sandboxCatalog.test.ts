@@ -76,6 +76,13 @@ const GIVEN = {
     '次のアカウントに切り替えられませんでした: {reason}',
     'No se pudo pasar a la siguiente cuenta: {reason}'
   ],
+  // Final fix pass, part 2 (A): a sandboxed session handing work outside its sandbox, named by its id
+  'session.spawn.sandbox.outsideSandbox': [
+    '{id}는 sandbox 밖에서 돌아갑니다. sandbox 안의 세션은 sandbox 밖으로 일을 넘길 수 없어서 아무것도 보내거나 시작하지 않았습니다.',
+    '{id} runs outside the sandbox, and a sandboxed session cannot hand work outside it, so nothing was sent or started.',
+    '{id} はサンドボックスの外で動いています。サンドボックス内のセッションはサンドボックスの外に作業を渡せないため、何も送信も起動もしませんでした。',
+    '{id} se ejecuta fuera del sandbox, y una sesión en el sandbox no puede pasar trabajo fuera de él, así que no se envió ni se inició nada.'
+  ],
   'session.spawn.sandbox.notPrepared': [
     'sandbox 준비가 끝나기 전에 시작하려 했습니다. 다시 시작해 주세요.',
     'The session tried to start before its sandbox was prepared. Start it again.',

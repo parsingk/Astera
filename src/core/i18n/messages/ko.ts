@@ -867,6 +867,7 @@ export const ko = {
   'session.spawn.sandbox.profileNotActive': 'Codex가 이 대화를 sandbox 프로필로 돌린다고 확인해 주지 않아 멈췄습니다. Codex를 업데이트해 주세요.',
   'session.spawn.sandbox.commandTooLong': '워크트리가 너무 많아 sandbox 프로필이 Windows 명령줄에 들어가지 않아 sandbox로 시작할 수 없습니다. 쓰지 않는 워크트리를 지워 주세요.',
   'session.spawn.sandbox.noSandbox': '{cli}는 이 시스템에 sandbox가 없습니다. sandbox 안의 세션이 시작하는 것은 sandbox에서 돌아야 해서 시작하지 않았습니다.',
+  'session.spawn.sandbox.outsideSandbox': '{id}는 sandbox 밖에서 돌아갑니다. sandbox 안의 세션은 sandbox 밖으로 일을 넘길 수 없어서 아무것도 보내거나 시작하지 않았습니다.',
   'session.spawn.sandbox.settingsWriteFailed': 'sandbox 설정 파일을 쓰지 못해 시작할 수 없습니다. 프로필 폴더에 쓸 수 있는지 확인해 주세요.',
   // A roll refused for the sandbox (core/rolling/codexCoordinator.ts): the line in the tab, or the chat's notice
   'session.roll.sandbox.windowsSetup': '{account} 계정은 Windows sandbox가 설정되지 않아 넘어가지 못했습니다. 설정 › 에이전트 프로필에서 이 계정의 설정하기를 눌러 주세요.',
