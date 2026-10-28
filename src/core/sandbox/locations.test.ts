@@ -84,4 +84,27 @@ describe('the other Hosts beside this one', () => {
     // A folder that cannot be listed names none
     expect(await otherHostFolders('linux', path.join(parent, 'gone', 'astera-host-cccccccccccc-v4'))).toEqual([])
   })
+
+  // Final fix pass, part 3: only this user's Hosts. Linux's /tmp is everyone's: another user's Host folder (mode 0700,
+  // closed to this user anyway) is neither named nor lets anyone lengthen the command line. A folder that cannot be
+  // looked at (gone since the listing) is left out
+  it("lists only the folders this user owns, by each folder's own owner", async () => {
+    const parent = mkdtempSync(path.join(os.tmpdir(), 'astera-hosts-'))
+    dirs.push(parent)
+    const own = path.join(parent, 'astera-host-aaaaaaaaaaaa-v4')
+    const names = { mine: 'astera-host-bbbbbbbbbbbb-v4', theirs: 'astera-host-cccccccccccc-v4', gone: 'astera-host-dddddddddddd-v4', root: 'astera-host-eeeeeeeeeeee' }
+    for (const d of [own, ...Object.values(names).map((n) => path.join(parent, n)), path.join(parent, 'unrelated')]) mkdirSync(d)
+    const owners: Record<string, number> = { [names.mine]: 501, [names.theirs]: 502, [names.root]: 0 }
+    const looked: string[] = []
+    const lstat = async (p: string): Promise<{ uid: number }> => {
+      looked.push(p)
+      const owner = owners[path.posix.basename(p)]
+      if (owner === undefined) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+      return { uid: owner }
+    }
+    expect(await otherHostFolders('linux', own, { uid: 501, lstat })).toEqual([slashed(path.join(parent, names.mine))])
+    expect(await otherHostFolders('darwin', own, { uid: 502, lstat })).toEqual([slashed(path.join(parent, names.theirs))])
+    // Each Host-shaped folder but this one is looked at by its own path; the unrelated one is not
+    expect(looked.map((p) => path.posix.basename(p)).sort()).toEqual([...Object.values(names), ...Object.values(names)].sort())
+  })
 })

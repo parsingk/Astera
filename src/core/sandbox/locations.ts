@@ -1,7 +1,7 @@
 // The places a sandboxed session may not read (sandbox design §6): the sensitive locations of the credentials design's E6
 // list, plus the OS credential stores a CLI's own sandbox does not close by itself. All paths come out absolute with forward
 // slashes, the one form both CLIs' settings and the Codex profile take on every OS.
-import { readdir } from 'node:fs/promises'
+import { lstat, readdir } from 'node:fs/promises'
 
 const slashed = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '')
 
@@ -62,27 +62,41 @@ export function hostSocketDenies(platform: NodeJS.Platform, dir: string | null, 
  *  `-v<protocol>` after it from protocol 2 on. */
 const HOST_FOLDER = /^astera-host-/
 
-/** Every other Host's socket folder in the folder this profile's (`dir`) is in: each `astera-host-*` folder there but
- *  `dir` itself, such as the dev app's Host beside the installed app's, or an older protocol's (final fix pass, part 2,
- *  B). A sandboxed Codex start reads it once, at its prepare, and its spawn denies what was there then
- *  (hostSocketDenies), so a Host started after that is not denied to the session. Absolute, forward slashes, sorted.
- *  None on Windows (named pipes), without `dir`, or when the folder cannot be listed. */
-export async function otherHostFolders(platform: NodeJS.Platform, dir: string | null): Promise<string[]> {
+/** Every other Host's socket folder in the folder this profile's (`dir`) is in that this user owns: each `astera-host-*`
+ *  folder there but `dir` itself, such as the dev app's Host beside the installed app's, or an older protocol's (final
+ *  fix pass, part 2, B). Only this user's (`lstat` uid equal to `uid`, part 3): Linux's `/tmp` is every user's, and
+ *  another user's Host folder (mode 0700) is closed to this user anyway, so it is neither named nor lets anyone lengthen
+ *  the command line; a folder that cannot be looked at (gone since the listing) is left out. With no uid to compare
+ *  (a process without `getuid`), every Host folder is kept. A sandboxed Codex start reads this once, at its prepare, and
+ *  its spawn denies what was there then (hostSocketDenies), so a Host started after that is not denied to the session.
+ *  Absolute, forward slashes, sorted. None on Windows (named pipes), without `dir`, or when the folder cannot be listed.
+ *  `uid` and `lstat` are test seams. */
+export async function otherHostFolders(
+  platform: NodeJS.Platform,
+  dir: string | null,
+  o: { uid?: number; lstat?: (p: string) => Promise<{ uid: number }> } = {}
+): Promise<string[]> {
   if (platform === 'win32' || !dir) return []
   const own = slashed(dir)
   const cut = own.lastIndexOf('/')
   if (cut < 0) return []
   const parent = own.slice(0, cut)
   const name = own.slice(cut + 1)
+  let folders: string[]
   try {
     const entries = await readdir(parent === '' ? '/' : parent, { withFileTypes: true })
-    return entries
+    folders = entries
       .filter((e) => e.isDirectory() && HOST_FOLDER.test(e.name) && e.name !== name)
       .map((e) => `${parent}/${e.name}`)
       .sort()
   } catch {
     return []
   }
+  const uid = 'uid' in o ? o.uid : process.getuid?.()
+  if (uid === undefined) return folders
+  const look = o.lstat ?? lstat
+  const owners = await Promise.all(folders.map((f) => look(f).then((st) => st.uid, () => null)))
+  return folders.filter((_, i) => owners[i] === uid)
 }
 
 /** What a sandbox cannot be trusted to keep closed: the macOS keychain folder and the Linux session bus socket (a process

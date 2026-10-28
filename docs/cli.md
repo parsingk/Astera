@@ -1144,9 +1144,9 @@ git directories, and a worktree's `.git` file; a start makes a missing `commondi
 `modules`, so they can be kept read-only) and the temp folder, where npm's cache goes; it cannot read `~/.ssh`, `~/.aws`, the GitHub CLI's
 and gcloud's settings, `~/.docker`, `~/.npmrc`, `~/.git-credentials` or `~/.kube`; and the network works. On macOS
 `~/Library/Keychains` is closed too, and on Linux the session bus a secret service answers on. On macOS and Linux it
-cannot open the folder the Host's socket is in either, nor any other Host's folder beside it (`astera-host-*`, such as
-the dev app's Host beside the installed app's) that is there when the session starts (a Host started later is not
-closed to it), so its `astera` reaches the Host only through the loopback
+cannot open the folder the Host's socket is in either, nor any other Host's folder of yours beside it (`astera-host-*`
+that you own, such as the dev app's Host beside the installed app's) that is there when the session starts (a Host
+started later is not closed to it), so its `astera` reaches the Host only through the loopback
 endpoint with the session's own token (`ASTERA_LOOPBACK`, above). A Claude Code session,
 terminal or chat, gets Claude Code's own sandbox on macOS and Linux through its settings file, with the same limits: its
 commands cannot run outside it, and a Claude Code whose sandbox cannot start exits at once and says why in its tab;
