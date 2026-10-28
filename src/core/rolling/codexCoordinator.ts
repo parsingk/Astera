@@ -209,7 +209,7 @@ export interface CodexRollingDeps {
    *  resume; no typing; no recorded block). A roll already past its kill finishes. Absent: always true. */
   mayAct?(sessionId: string): boolean
   /** Whose codex holds a rollout open (rolloutOwner.ts, Task D): the session's pty process (`pidOf`, null for a chat
-   *  session) and the reader the wiring built for its profile. Given, the locate maps a rollout only when that process
+   *  session) and this platform's reader. Given, the locate maps a rollout only when that process
    *  or one under it holds it, as the rollout watcher does. Absent, or no pid, folder and time decide as before. */
   rolloutOwner?: RolloutOwnerSource
 }

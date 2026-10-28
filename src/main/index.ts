@@ -43,7 +43,7 @@ import { RollingCoordinator } from '../core/rolling/claudeCoordinator'
 import { SchedulerCoordinator } from './scheduler'
 import { chatDriver, ptyDriver, routedDriver } from '../core/sessions/sessionDriver'
 import { CodexRollingCoordinator } from '../core/rolling/codexCoordinator'
-import { ownerScriptDir, rolloutOwnerReader } from '../core/rolling/rolloutOwner'
+import { rolloutOwnerReader } from '../core/rolling/rolloutOwner'
 import { BlockRegistry } from '../core/rolling/blockRegistry'
 import type { RollSnapshot } from '../core/rolling/snapshot'
 import { chatSpawnOptsOf } from '../core/chat/respawn'
@@ -683,11 +683,10 @@ app.whenReady().then(async () => {
       void core!.profileConversations.learned(sessionId, note.codexSessionId)
     },
     log: slackLog,
-    // A rollout the scan finds is mapped only when this session's own codex holds it (rolloutOwner.ts); the Windows
-    // check's script goes in `<profile>/host`, which no sandboxed session may write (fix round 2)
+    // A rollout the scan finds is mapped only when this session's own codex holds it (rolloutOwner.ts)
     rolloutOwner: {
       pidOf: (sessionId) => core?.sessions.pidOf(sessionId) ?? null,
-      read: rolloutOwnerReader(process.platform, ownerScriptDir(app.getPath('userData')))
+      read: rolloutOwnerReader(process.platform)
     }
   })
   codexRolloutRef = codexRollout
@@ -1207,10 +1206,10 @@ app.whenReady().then(async () => {
     // 설정 화면에서 앱 수명 중간에 바뀌고, 이 코디네이터는 그보다 먼저 만들어진다.
     resumeStrategy: () => core!.appSettings.getResumeStrategy(),
     // A rollout the locate finds is mapped only when this session's own codex holds it (rolloutOwner.ts), with the
-    // rollout watcher's reader (one per profile and platform)
+    // rollout watcher's reader (one per platform, so one PowerShell helper for both on Windows)
     rolloutOwner: {
       pidOf: (sid) => core?.sessions.pidOf(sid) ?? null,
-      read: rolloutOwnerReader(process.platform, ownerScriptDir(app.getPath('userData')))
+      read: rolloutOwnerReader(process.platform)
     }
   })
   codexRollingRef = codexRolling

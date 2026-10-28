@@ -44,7 +44,7 @@ import { RepairNeeded } from '../core/settings/repairNeeded'
 import { HostRetiring } from '../core/host/hostRetiring'
 import { refusedBeforeActing, undoneBeforeFailing } from '../core/host/orchProtocol'
 import { findRollout as findRolloutOnDisk } from '../core/rolling/codexLocate'
-import { ownerScriptDir, rolloutOwnerCheck, rolloutOwnerReader, type RolloutOwnerReader } from '../core/rolling/rolloutOwner'
+import { rolloutOwnerCheck, rolloutOwnerReader, type RolloutOwnerReader } from '../core/rolling/rolloutOwner'
 import { descriptorOf, makeDescriptors } from '../core/providers/descriptor'
 import { providerOf } from '../core/providers/meta'
 import { ensureOnWindowsPath } from '../core/sessions/windowsPath'
@@ -397,8 +397,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   const locateForMs = d.locateForMs ?? LOCATE_FOR_MS
   /** Whose codex holds a candidate open, asked once per candidate (Task D): another Host's session in the same folder
    *  and Codex home is the newest file there too. */
-  // Its Windows script goes in `<profile>/host`, which no sandboxed session may write, as the desk helper's (fix round 2)
-  const rolloutOwner = rolloutOwnerCheck({ read: d.rolloutOwner ?? rolloutOwnerReader(platform, ownerScriptDir(profileDir)), log })
+  const rolloutOwner = rolloutOwnerCheck({ read: d.rolloutOwner ?? rolloutOwnerReader(platform), log })
   /** ptyId → the codex sessions still looking for their rollout, in start order (`seq`). */
   const looking = new Map<string, { accountId: string; cwd: string; seq: number }>()
   let lookSeq = 0

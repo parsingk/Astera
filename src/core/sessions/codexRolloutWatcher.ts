@@ -119,7 +119,7 @@ export interface CodexRolloutDeps {
   remember?(sessionId: string, note: { rolloutPath: string; codexSessionId?: string }): void
   now?: () => number
   /** Whose codex holds a rollout open (rolloutOwner.ts, Task D): the session's pty process (`pidOf`, null for a chat
-   *  session or a pty the Host has not answered for yet) and the reader the wiring built for its profile. Given, a
+   *  session or a pty the Host has not answered for yet) and this platform's reader. Given, a
    *  rollout is mapped to a session only when that process or one under it holds the file: folder, time and "newest"
    *  alone took another Host's session's file. Absent, or no pid, folder and time decide as before. */
   rolloutOwner?: RolloutOwnerSource

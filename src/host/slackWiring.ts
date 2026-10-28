@@ -42,7 +42,7 @@ import { ROLLING_TICK_MS } from './rollingWiring'
 import { createHostSlackSessions } from './slackSessions'
 import { createHostSlackSources } from './slackSources'
 import { hostInboxRoutes } from './slackRoutes'
-import { ownerScriptDir, rolloutOwnerReader } from '../core/rolling/rolloutOwner'
+import { rolloutOwnerReader } from '../core/rolling/rolloutOwner'
 
 /** How long a fresh Host with no app attached waits before it takes Slack (final review I1). An app that
  *  spawned the Host connects and says hello within milliseconds of the spawn; ten seconds is far beyond
@@ -206,11 +206,10 @@ export function composeHostSlack(a: {
       }
     },
     log,
-    // A rollout it scans for is mapped only when this session's own codex holds it (rolloutOwner.ts); the Windows check's
-    // script goes in `<profile>/host`, which no sandboxed session may write (fix round 2)
+    // A rollout it scans for is mapped only when this session's own codex holds it (rolloutOwner.ts)
     rolloutOwner: {
       pidOf: (sid) => a.registry.sessionPid(sid),
-      read: rolloutOwnerReader(process.platform, ownerScriptDir(a.profileDir))
+      read: rolloutOwnerReader(process.platform)
     }
   })
   const sources = createHostSlackSources({

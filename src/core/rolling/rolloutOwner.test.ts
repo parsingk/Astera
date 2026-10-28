@@ -1,15 +1,15 @@
 import { promises as fs } from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import {
   UNKNOWN_KEEP_MS,
-  WINDOWS_OWNER_PS1,
+  WINDOWS_OWNER_SETUP,
   linuxOwnerReader,
   macOwnerReader,
+  powerShellHelperCommand,
   rolloutOwnerCheck,
   rolloutOwnerReader,
   windowsOwnerReader,
+  type OwnerHelper,
   type ProcFs,
   type RolloutOwnership,
   type RunTool
@@ -187,103 +187,185 @@ describe('macOwnerReader', () => {
   })
 })
 
+/** A PowerShell helper that answers each question with `answer(file, pid)` (a verdict line without its number), or
+ *  leaves it unanswered for null. `setup` is what it prints once it has read its setup: `ready` or `unready|<why>`. */
+class FakeHelper implements OwnerHelper {
+  written: string[] = []
+  ended = false
+  killed = false
+  private lines: Array<(line: string) => void> = []
+  private ends: Array<(why: string) => void> = []
+  constructor(
+    private answer: (file: string, pid: number) => string | null,
+    private setup = 'ready'
+  ) {}
+  write(text: string): void {
+    this.written.push(text)
+    if (this.written.length === 1) return queueMicrotask(() => this.say(this.setup))
+    const m = /^try \{ '(\d+)\|' \+ \[AsteraRolloutOwner\]::Ask\('([A-Za-z0-9+/=]*)', (\d+)\) \}/.exec(text)
+    if (!m) throw new Error(`not a question: ${text}`)
+    const verdict = this.answer(Buffer.from(m[2], 'base64').toString('utf8'), Number(m[3]))
+    if (verdict !== null) queueMicrotask(() => this.say(`${m[1]}|${verdict}`))
+  }
+  end(): void {
+    this.ended = true
+  }
+  kill(): void {
+    this.killed = true
+    this.die('killed')
+  }
+  onLine(cb: (line: string) => void): void {
+    this.lines.push(cb)
+  }
+  onEnd(cb: (why: string) => void): void {
+    this.ends.push(cb)
+  }
+  say(line: string): void {
+    for (const cb of this.lines) cb(line)
+  }
+  die(why: string): void {
+    for (const cb of this.ends.splice(0)) cb(why)
+  }
+}
+
+const helpers = (make: () => FakeHelper): { start: () => FakeHelper; started: FakeHelper[] } => {
+  const started: FakeHelper[] = []
+  return { started, start: () => (started.push(make()), started[started.length - 1]) }
+}
+
 describe('windowsOwnerReader', () => {
-  let dir: string
-  beforeEach(async () => {
-    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-rowner-'))
-  })
-  afterEach(async () => {
-    await fs.rm(dir, { recursive: true, force: true })
-  })
-
-  // Review Minor 6: no -EncodedCommand, a pattern security tools flag. The script is a file, written once under a
-  // content name, run with -File as the desk helper is; the file and the pid are its arguments.
-  it('runs its script file with -File, the file and the pid as arguments', async () => {
-    const calls: string[][] = []
-    const read = windowsOwnerReader(async (file, args) => {
-      calls.push([file, ...args])
-      return { code: 0, stdout: 'own|1234\r\n', stderr: '' }
-    }, dir)
-    const file = "C:\\Users\\o'neil\\.codex\\sessions\\2026\\10\\28\\rollout-x.jsonl"
-    expect(await read(file, 1234)).toEqual({ verdict: 'own' })
-    expect(await read(file, 1234)).toEqual({ verdict: 'own' })
-    expect(calls).toHaveLength(2)
-    const [exe, ...args] = calls[0]
-    expect(exe).toBe('powershell.exe')
-    expect(args.slice(0, 5)).toEqual(['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File'])
-    expect(args.slice(6)).toEqual([file, '1234'])
-    expect(calls[0].join(' ')).not.toMatch(/-Enc/i)
-    const script = args[5]
-    expect(path.dirname(script)).toBe(dir)
-    expect(await fs.readFile(script, 'utf8')).toBe(WINDOWS_OWNER_PS1)
-    expect((await fs.readdir(dir)).length).toBe(1)
+  // Review Minor 6 and re-review Minor 2: Windows PowerShell by its absolute path (a bare name is looked up in the working
+  // directory first), reading its commands from stdin. No script file, so no -File for a Group Policy execution policy to
+  // refuse, and no -ExecutionPolicy or -EncodedCommand, patterns security tools flag.
+  it('starts Windows PowerShell by its absolute System32 path, reading commands from stdin', () => {
+    const { file, args } = powerShellHelperCommand('C:\\Windows')
+    expect(file).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
+    expect(args).toEqual(['-NoProfile', '-NonInteractive', '-Command', '-'])
   })
 
-  // Fix round 2 (security): the script runs outside any sandbox, so it must sit where no sandboxed session may write. The
-  // caller names that folder (`<profile>/host`, as the desk helper's); there is no default, since the temp folder, the
-  // old one, is a folder a sandboxed session writes.
-  it('cannot be built without an absolute folder from its caller', () => {
-    const run: RunTool = async () => ({ code: 0, stdout: '', stderr: '' })
-    // @ts-expect-error the folder is required
-    expect(() => windowsOwnerReader(run)).toThrow()
-    expect(() => windowsOwnerReader(run, '')).toThrow()
-    expect(() => windowsOwnerReader(run, 'host')).toThrow()
+  // Review Minor 6: the C# was compiled again for every question, a PowerShell and a csc run each time
+  it('compiles the helper once and asks every question of the same PowerShell', async () => {
+    const h = helpers(() => new FakeHelper((file) => (file === 'C:\\a.jsonl' ? 'own|1234' : 'other|held by pid 97252 outside the session')))
+    const read = windowsOwnerReader(h.start)
+    expect(await read('C:\\a.jsonl', 1234)).toEqual({ verdict: 'own' })
+    expect(await read('C:\\b.jsonl', 1234)).toEqual({ verdict: 'other', why: 'held by pid 97252 outside the session' })
+    expect(h.started).toHaveLength(1)
+    const [setup, ...questions] = h.started[0].written
+    expect(setup).toBe(WINDOWS_OWNER_SETUP)
+    expect(setup).toContain('Add-Type')
+    expect(questions).toHaveLength(2)
+    read.close()
   })
 
-  // Windows PowerShell reads a script with no byte order mark in the ANSI code page
-  it('keeps its script to ASCII', () => {
-    expect(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(WINDOWS_OWNER_PS1)).toBe(true)
-    expect(WINDOWS_OWNER_PS1).toContain('RmGetList')
+  // Each question is one line of PowerShell Astera writes: a number, the path as base64 and the pid as a number. Nothing
+  // of the path reaches PowerShell as code, and a name in any script survives the console code page.
+  it('passes the file as base64 of its UTF-8 and the pid as a number', async () => {
+    const h = helpers(() => new FakeHelper(() => 'own|1'))
+    const read = windowsOwnerReader(h.start)
+    const file = "C:\\Users\\o'neil $(calc)\\한글\\.codex\\sessions\\rollout-x.jsonl"
+    await read(file, 4100)
+    const q = h.started[0].written[1]
+    expect(q).toBe(
+      `try { '0|' + [AsteraRolloutOwner]::Ask('${Buffer.from(file, 'utf8').toString('base64')}', 4100) } catch { '0|unknown|' + ($_.Exception.Message -replace '[\\r\\n|]', ' ') }\n`
+    )
+    read.close()
   })
 
-  it('writes the script again when it was changed', async () => {
-    const calls: string[][] = []
-    const read = windowsOwnerReader(async (file, args) => {
-      calls.push([file, ...args])
-      return { code: 0, stdout: 'own|1\r\n', stderr: '' }
-    }, dir)
+  // Re-review Minor 2 and fix round 2: no script file anywhere, so nothing for a sandboxed session to replace either
+  it('writes no file', async () => {
+    const writes = vi.spyOn(fs, 'writeFile')
+    const mkdirs = vi.spyOn(fs, 'mkdir')
+    onTestFinished(() => {
+      writes.mockRestore()
+      mkdirs.mockRestore()
+    })
+    const read = windowsOwnerReader(helpers(() => new FakeHelper(() => 'own|1')).start)
     await read('C:\\x.jsonl', 1)
-    await fs.writeFile(calls[0][6], 'tampered', 'utf8')
+    expect(writes).not.toHaveBeenCalled()
+    expect(mkdirs).not.toHaveBeenCalled()
+    read.close()
+  })
+
+  // PowerShell reads its stdin in the console's code page
+  it('keeps what it writes to ASCII', () => {
+    expect(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(WINDOWS_OWNER_SETUP)).toBe(true)
+    expect(WINDOWS_OWNER_SETUP).toContain('RmGetList')
+  })
+
+  // Read from stdin as typed at the prompt, the setup's statement over several lines runs only once an empty line
+  // follows it: without one, Windows PowerShell 5.1 ran nothing and said nothing
+  it('ends its setup with an empty line', () => {
+    expect(WINDOWS_OWNER_SETUP.endsWith("' ') }\n\n")).toBe(true)
+  })
+
+  // Constrained Language Mode refuses Add-Type: said once, as unknown, and the next question tries a new PowerShell
+  it('cannot tell when the helper cannot be compiled, and tries a new PowerShell for the next question', async () => {
+    const h = helpers(() => new FakeHelper(() => null, 'unready|Cannot add type. Definition of new types is not supported in this language mode.'))
+    const read = windowsOwnerReader(h.start)
+    const r = await read('C:\\x.jsonl', 10)
+    expect(r.verdict).toBe('unknown')
+    expect(r.verdict === 'unknown' && r.why).toMatch(/language mode/)
+    expect(h.started[0].killed).toBe(true)
+    await read('C:\\x.jsonl', 10)
+    expect(h.started).toHaveLength(2)
+    read.close()
+  })
+
+  it('cannot tell when the helper ends or cannot start, for every question waiting on it', async () => {
+    const h = helpers(() => new FakeHelper(() => null))
+    const read = windowsOwnerReader(h.start)
+    const a = read('C:\\a.jsonl', 10)
+    const b = read('C:\\b.jsonl', 10)
+    h.started[0].die('spawn powershell.exe ENOENT')
+    expect((await a).verdict).toBe('unknown')
+    expect((await b).verdict).toBe('unknown')
+    read.close()
+  })
+
+  it('cannot tell when the helper does not answer in time, and ends it', async () => {
+    vi.useFakeTimers()
+    onTestFinished(() => void vi.useRealTimers())
+    const h = helpers(() => new FakeHelper(() => null))
+    const read = windowsOwnerReader(h.start, { answerMs: 20_000 })
+    const r = read('C:\\x.jsonl', 10)
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect((await r).verdict).toBe('unknown')
+    expect(h.started[0].killed).toBe(true)
+    read.close()
+  })
+
+  // Kept only while questions come (a session's first minute): no PowerShell left running for the app's whole life
+  it('ends the helper once it has been idle, and starts another for a later question', async () => {
+    vi.useFakeTimers()
+    onTestFinished(() => void vi.useRealTimers())
+    const h = helpers(() => new FakeHelper(() => 'own|1'))
+    const read = windowsOwnerReader(h.start, { idleMs: 120_000 })
     await read('C:\\x.jsonl', 1)
-    expect(await fs.readFile(calls[0][6], 'utf8')).toBe(WINDOWS_OWNER_PS1)
-  })
-
-  it('passes on an other verdict with its reason', async () => {
-    const read = windowsOwnerReader(async () => ({ code: 0, stdout: 'other|held by pid 97252 outside the session\r\n', stderr: '' }), dir)
-    expect(await read('C:\\x.jsonl', 10)).toEqual({ verdict: 'other', why: 'held by pid 97252 outside the session' })
-  })
-
-  it('cannot tell when PowerShell cannot run, times out, or cannot compile the helper', async () => {
-    const missing = windowsOwnerReader(async () => {
-      throw Object.assign(new Error('spawn powershell.exe ENOENT'), { code: 'ENOENT' })
-    }, dir)
-    expect((await missing('C:\\x.jsonl', 10)).verdict).toBe('unknown')
-    const slow = windowsOwnerReader(async () => {
-      throw Object.assign(new Error('Command failed'), { killed: true, signal: 'SIGTERM', code: null })
-    }, dir)
-    expect((await slow('C:\\x.jsonl', 10)).verdict).toBe('unknown')
-    // Constrained Language Mode refuses Add-Type: the script's own catch says unknown
-    const refused = windowsOwnerReader(async () => ({ code: 0, stdout: 'unknown|Cannot add type.\r\n', stderr: '' }), dir)
-    expect((await refused('C:\\x.jsonl', 10)).verdict).toBe('unknown')
-    const silent = windowsOwnerReader(async () => ({ code: 1, stdout: '', stderr: '' }), dir)
-    expect((await silent('C:\\x.jsonl', 10)).verdict).toBe('unknown')
+    await vi.advanceTimersByTimeAsync(119_999)
+    expect(h.started[0].ended).toBe(false)
+    await read('C:\\y.jsonl', 1) // a question in time keeps it
+    await vi.advanceTimersByTimeAsync(119_999)
+    expect(h.started[0].ended).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(h.started[0].ended).toBe(true)
+    await read('C:\\z.jsonl', 1)
+    expect(h.started).toHaveLength(2)
+    read.close()
   })
 
   // Review Important 1, the Windows half, is in the script: a process OpenProcess cannot open is "cannot tell" unless
   // it is gone (ERROR_INVALID_PARAMETER), and a walk that stops on one answers unknown when nothing resolved to own.
   it('says in the script that a process it cannot open is cannot-tell, and only error 87 is gone', () => {
-    expect(WINDOWS_OWNER_PS1).toContain('87')
-    expect(WINDOWS_OWNER_PS1).toMatch(/unknown\|/)
+    expect(WINDOWS_OWNER_SETUP).toContain('87')
+    expect(WINDOWS_OWNER_SETUP).toMatch(/unknown\|/)
   })
 
-  it('never runs for a pid that is not a whole number', async () => {
-    let ran = false
-    const read = windowsOwnerReader(async () => {
-      ran = true
-      return { code: 0, stdout: 'own|1\r\n', stderr: '' }
-    }, dir)
+  it('never asks about a pid that is not a whole number a process can have', async () => {
+    const h = helpers(() => new FakeHelper(() => 'own|1'))
+    const read = windowsOwnerReader(h.start)
     expect((await read('C:\\x.jsonl', 1.5)).verdict).toBe('unknown')
-    expect(ran).toBe(false)
+    expect((await read('C:\\x.jsonl', 2 ** 31)).verdict).toBe('unknown')
+    expect(h.started).toHaveLength(0)
   })
 })
 
@@ -355,17 +437,11 @@ describe('rolloutOwnerCheck', () => {
     expect([a.length, b.length]).toEqual([1, 1])
   })
 
-  it('gives every caller on a platform with one script folder the same reader', () => {
-    const host = path.join(os.tmpdir(), 'profile', 'host')
-    expect(rolloutOwnerReader('linux', host)).toBe(rolloutOwnerReader('linux', host))
-    expect(rolloutOwnerReader('win32', host)).toBe(rolloutOwnerReader('win32', host))
-    expect(rolloutOwnerReader('win32', host)).not.toBe(rolloutOwnerReader('win32', path.join(os.tmpdir(), 'other', 'host')))
-  })
-
-  // Fix round 2: no reader falls back to the temp folder
-  it('cannot give a Windows reader without the folder its script goes in', () => {
-    // @ts-expect-error the folder is required
-    expect(() => rolloutOwnerReader('win32')).toThrow()
+  // One reader per platform in a process, so one Windows PowerShell helper for the app and one for the Host
+  it('gives every caller on a platform the same reader', () => {
+    expect(rolloutOwnerReader('linux')).toBe(rolloutOwnerReader('linux'))
+    expect(rolloutOwnerReader('win32')).toBe(rolloutOwnerReader('win32'))
+    expect(rolloutOwnerReader('win32')).not.toBe(rolloutOwnerReader('linux'))
   })
 
   it('turns a reader that throws into cannot-tell', async () => {
