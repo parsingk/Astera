@@ -99,6 +99,9 @@ const createdAt = (st: { birthtimeMs: number; mtimeMs: number }): number =>
  * and whose session_meta.cwd matches cwd. If there are several, the most recently created one (given `owner`, the most
  * recent one the session's own codex holds open). null if there is none.
  *
+ * Given `owner`, the hit carries what it said about that file: 'own', or 'unknown' where the newest was kept without an
+ * answer. A caller that keeps the file records it (the rollout watcher's `/new` re-scan, re-review Minor 3).
+ *
  * Why we filter on creation time rather than mtime: if another codex session that was already running
  * under the same account and the same cwd emits even one turn after since, its mtime is refreshed and
  * it becomes a candidate — and being newer than our freshly created, quiet rollout, the chain would
@@ -141,7 +144,7 @@ export async function findRollout(opts: {
    *  about. For a session the start order puts behind another looking in the same folder: its own file is still its
    *  own, while "the newest" is the other session's to take. */
   requireOwn?: boolean
-}): Promise<{ path: string; sessionId: string } | null> {
+}): Promise<{ path: string; sessionId: string; verdict?: 'own' | 'unknown' } | null> {
   const now = (opts.now ?? Date.now)()
   const root = path.join(opts.configDir, 'sessions')
   const files: string[] = []
@@ -200,14 +203,14 @@ export async function findRollout(opts: {
   candidates.sort((a, b) => b.bornAt - a.bornAt)
   for (const c of candidates) {
     const answer = opts.owner ? await opts.owner(c.path) : null
-    const verdict = answer?.verdict ?? null
     if (answer?.verdict === 'other') {
       // Held by no process may be the session's own file while its writer recovers: passed over for now, not remembered
       if (!answer.recheck) turnAway(c.path)
       continue
     }
+    const verdict = answer?.verdict
     if (opts.requireOwn && verdict !== 'own') continue
-    return { path: c.path, sessionId: c.sessionId }
+    return { path: c.path, sessionId: c.sessionId, ...(verdict ? { verdict } : {}) }
   }
   return null
 }

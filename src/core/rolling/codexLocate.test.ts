@@ -569,7 +569,7 @@ describe('findRollout asks the owner of each candidate', () => {
         return file === ours ? { verdict: 'own' } : { verdict: 'other', why: 'held by pid 4242 outside the session' }
       }
     })
-    expect(r).toEqual({ path: ours, sessionId: OURS })
+    expect(r).toEqual({ path: ours, sessionId: OURS, verdict: 'own' })
     expect(asked).toEqual([theirs, ours]) // newest first, and the search went on past the skipped one
   })
 
@@ -585,7 +585,7 @@ describe('findRollout asks the owner of each candidate', () => {
     const [a, b] = [await fs.stat(ours), await fs.stat(theirs)]
     if (!(a.birthtimeMs > 0 && b.birthtimeMs > a.birthtimeMs)) return ctx.skip('birth times not distinguishable here')
     const r = await findRollout({ configDir: home, cwd: CWD, since, now: () => NOW, owner: async () => ({ verdict: 'unknown', why: 'lsof is missing' }) })
-    expect(r).toEqual({ path: theirs, sessionId: THEIRS })
+    expect(r).toEqual({ path: theirs, sessionId: THEIRS, verdict: 'unknown' })
   })
 
   it('remembers a candidate another process holds, so it is not read again', async () => {
@@ -627,7 +627,7 @@ describe('findRollout asks the owner of each candidate', () => {
       configDir: home, cwd: CWD, since, now: () => NOW, rejected, requireOwn: true,
       owner: async (file) => (file === ours ? { verdict: 'own' } : { verdict: 'unknown', why: 'process 7 cannot be read (EACCES)' })
     })
-    expect(r).toEqual({ path: ours, sessionId: OURS })
+    expect(r).toEqual({ path: ours, sessionId: OURS, verdict: 'own' })
     // Cannot tell is no verdict: not remembered, asked again next time
     expect(rejected.has(comparablePath(theirs))).toBe(false)
   })

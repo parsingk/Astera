@@ -876,6 +876,86 @@ describe('CodexRolloutWatcher maps only a rollout its session holds', () => {
     w.stop()
   })
 
+  // Re-review Minor 3: a newer file whose owner cannot be told (a setuid child in its tree on Linux, an unreadable
+  // ancestor on Windows, a timeout) is "the newest" to the re-scan, which moved a tab off its own conversation onto
+  // another Codex's. Where its own file was told apart, a /new file must be its own too.
+  it('keeps a tab on its own file when a newer one is a file it cannot tell about', async () => {
+    const cwd = path.join(dir, 'proj')
+    const ours = await makeRollout(dir, OURS, 'sess-ours', cwd)
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete: vi.fn(),
+      log: () => {},
+      now: () => now,
+      rolloutOwner: {
+        pidOf: () => 4100,
+        read: async (file) => (file === ours ? { verdict: 'own' } : { verdict: 'unknown', why: 'process 7 cannot be read (EACCES)' })
+      }
+    })
+    w.register(session('live-1', cwd))
+    await advance(TICK)
+    expect(w.rolloutPathFor('live-1')).toBe(ours)
+    now += 30_000 // past the re-scan throttle
+    await makeRollout(dir, THEIRS, 'sess-theirs', cwd)
+    await advance(TICK)
+    expect(w.rolloutPathFor('live-1')).toBe(ours)
+    w.stop()
+  })
+
+  // Where its own file could not be told apart either, the re-scan keeps the rule it had: the newest is its /new
+  it('still follows the newest file where its own file could not be told apart', async () => {
+    const cwd = path.join(dir, 'proj')
+    const ours = await makeRollout(dir, OURS, 'sess-ours', cwd)
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete: vi.fn(),
+      log: () => {},
+      now: () => now,
+      rolloutOwner: { pidOf: () => 4100, read: async () => ({ verdict: 'unknown', why: 'Cannot add type.' }) }
+    })
+    w.register(session('live-1', cwd))
+    await advance(TICK)
+    expect(w.rolloutPathFor('live-1')).toBe(ours)
+    now += 30_000
+    const next = await makeRollout(dir, THEIRS, 'sess-next', cwd)
+    await advance(TICK)
+    expect(w.rolloutPathFor('live-1')).toBe(next)
+    w.stop()
+  })
+
+  // A path handed over at registration (a resume, an adoption) was never asked about. It is asked about when a newer
+  // file it cannot tell about turns up, and only then: an own file keeps the tab where it is.
+  it('asks about a handed-over file only when a newer one cannot be told about, and stays when it is its own', async () => {
+    const cwd = path.join(dir, 'proj')
+    const ours = await makeRollout(dir, OURS, 'sess-ours', cwd)
+    const asked: string[] = []
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete: vi.fn(),
+      log: () => {},
+      now: () => now,
+      rolloutOwner: {
+        pidOf: () => 4100,
+        read: async (file) => {
+          asked.push(file)
+          return file === ours ? { verdict: 'own' } : { verdict: 'unknown', why: 'process 7 cannot be read (EACCES)' }
+        }
+      }
+    })
+    w.register(session('live-1', cwd), ours)
+    for (let i = 0; i < 2; i++) {
+      now += 5_000
+      await advance(5_000)
+    }
+    expect(asked).toEqual([]) // nothing newer: nothing asked
+    const theirs = await makeRollout(dir, THEIRS, 'sess-theirs', cwd)
+    now += 5_000
+    await advance(5_000)
+    expect(asked).toEqual([theirs, ours])
+    expect(w.rolloutPathFor('live-1')).toBe(ours)
+    w.stop()
+  })
+
   // Review round 1, item 2: an owner question can be a PowerShell run of half a second or more. The watcher's one tick
   // waited on it, so every other session's tail read (usage chips, turn notices) waited too.
   it('does not hold up another session while one waits for its owner answer', async () => {
