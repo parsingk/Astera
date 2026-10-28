@@ -183,7 +183,7 @@ export class CodexRolloutWatcher {
 
   constructor(private deps: CodexRolloutDeps) {
     this.now = deps.now ?? Date.now
-    this.owner = deps.rolloutOwner ? rolloutOwnerCheck({ read: deps.rolloutOwner.read, log: deps.log }) : null
+    this.owner = deps.rolloutOwner ? rolloutOwnerCheck({ read: deps.rolloutOwner.read, log: deps.log, now: this.now }) : null
   }
 
   /** The owner question for this entry's session, when its process is known; undefined keeps folder and time alone. */
@@ -370,15 +370,16 @@ export class CodexRolloutWatcher {
     const found = await findRollout({
       configDir: account.configDir,
       cwd: entry.cwd,
-      // The clock-skew margin findRollout allows means the file we are already on can come back here;
-      // the path comparison below is what settles it, so no separate guard is needed.
+      // The clock-skew margin findRollout allows means the file we are already on could come back here. It is left
+      // out (fix round 3): it can never be the `/new` file, and asking whose it is costs a process where the answer
+      // is "cannot tell", every re-scan for the tab's whole life.
       // Bounded to the last day: the date folders read run from the day before `since`, and a tab mapped
       // weeks ago would otherwise walk up to ROLLOUT_SCAN_DAYS_MAX folders on every rescan. The file
       // `/new` opens is seconds newer than the previous rescan, so today's and yesterday's folders (the
       // search before limit L5) are all it can be in.
       since: Math.max(entry.mappedAt, this.now() - DAY_MS),
       now: this.now,
-      excludePaths: this.claimed(entry),
+      excludePaths: entry.rolloutPath ? [...this.claimed(entry), entry.rolloutPath] : this.claimed(entry),
       // A codex outside Astera opening a file in this folder is "newer" too: only one this session holds is its /new
       owner: this.ownerFor(entry)
     })

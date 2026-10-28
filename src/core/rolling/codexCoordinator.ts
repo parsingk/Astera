@@ -372,7 +372,7 @@ export class CodexRollingCoordinator {
     this.rolloutSize = deps.rolloutSize ?? rolloutSize
     this.now = deps.now ?? Date.now
     this.resumeStrategy = deps.resumeStrategy ?? (() => 'original')
-    this.owner = deps.rolloutOwner ? rolloutOwnerCheck({ read: deps.rolloutOwner.read, log: deps.log }) : null
+    this.owner = deps.rolloutOwner ? rolloutOwnerCheck({ read: deps.rolloutOwner.read, log: deps.log, now: this.now }) : null
   }
 
   /** The owner question for a session, when its process is known; undefined keeps folder and time alone. */

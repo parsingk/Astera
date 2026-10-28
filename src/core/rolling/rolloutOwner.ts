@@ -431,7 +431,12 @@ const MEMO_MAX = 256
 /** Each reader's answers, by session process and candidate: shared by every check over that reader, since the
  *  Host's spawner, its Slack watcher and its rolling coordinator can be looking for one session's file at once, and
  *  a Windows answer is a PowerShell run. */
-const answers = new WeakMap<RolloutOwnerReader, Map<string, Promise<RolloutOwnership>>>()
+const answers = new WeakMap<RolloutOwnerReader, Map<string, { answer: Promise<RolloutOwnership>; unknownAt?: number }>>()
+
+/** How long a "cannot tell" is kept before the same question (session process and file) is asked again (fix round 3).
+ *  Not kept at all, every look and re-scan of a tab asked again on the machines that answer it, a PowerShell run every
+ *  few seconds for each open tab; kept for good, a passing failure (a timeout under load) would never be asked again. */
+export const UNKNOWN_KEEP_MS = 60_000
 
 /** Drops the oldest entry once there are more than MEMO_MAX. */
 const trim = (m: { size: number; keys(): IterableIterator<string>; delete(k: string): boolean }): void => {
@@ -439,27 +444,31 @@ const trim = (m: { size: number; keys(): IterableIterator<string>; delete(k: str
 }
 
 /** A caller's check: the reader asked once per (candidate, session process) and a positive answer kept, since neither
- *  who writes a file nor the session's process changes. "Cannot tell" is not kept (review Important 1: a failed read
- *  is no verdict), so the next look asks again. Logs to the caller's log why a candidate is skipped (its path, never
- *  its contents), and once per session that it cannot tell. */
-export function rolloutOwnerCheck(o: { read: RolloutOwnerReader; log: (m: string) => void }): RolloutOwnerCheck {
+ *  who writes a file nor the session's process changes. "Cannot tell" (review Important 1: a failed read is no
+ *  verdict) is kept only UNKNOWN_KEEP_MS by `now`, then asked again. Logs to the caller's log why a candidate is skipped
+ *  (its path, never its contents), and once per session that it cannot tell. */
+export function rolloutOwnerCheck(o: { read: RolloutOwnerReader; log: (m: string) => void; now?: () => number }): RolloutOwnerCheck {
   let memo = answers.get(o.read)
   if (!memo) answers.set(o.read, (memo = new Map()))
   const shared = memo
+  const now = o.now ?? Date.now
   const told = new Set<string>()
   return async (file, pid, sessionId) => {
     const key = `${pid}\u0000${comparablePath(file)}`
-    let answer = shared.get(key)
-    if (!answer) {
-      const asked = o.read(file, pid).catch((err): RolloutOwnership => unknown(messageOf(err)))
-      answer = asked
-      shared.set(key, asked)
+    let kept = shared.get(key)
+    if (kept?.unknownAt !== undefined && now() - kept.unknownAt >= UNKNOWN_KEEP_MS) kept = undefined
+    if (!kept) {
+      const entry: { answer: Promise<RolloutOwnership>; unknownAt?: number } = {
+        answer: o.read(file, pid).catch((err): RolloutOwnership => unknown(messageOf(err)))
+      }
+      shared.set(key, entry)
       trim(shared)
-      void asked.then((r) => {
-        if (r.verdict === 'unknown' && shared.get(key) === asked) shared.delete(key)
+      void entry.answer.then((r) => {
+        if (r.verdict === 'unknown') entry.unknownAt = now()
       })
+      kept = entry
     }
-    const r = await answer
+    const r = await kept.answer
     if (r.verdict === 'other' && !told.has(key)) {
       told.add(key)
       trim(told)

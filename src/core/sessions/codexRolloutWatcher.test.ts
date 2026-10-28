@@ -927,6 +927,70 @@ describe('CodexRolloutWatcher maps only a rollout its session holds', () => {
     w.stop()
   })
 
+  // Fix round 3 (re-review Important 1): where the owner cannot be told (Add-Type refused, /proc unreadable), the /new
+  // re-scan asked about the tab's own file every 5 s for as long as the tab was open, a PowerShell run each time.
+  it('asks about a mapped tab at most twice a minute when its owner cannot be told', async () => {
+    const cwd = path.join(dir, 'proj')
+    const ours = await makeRollout(dir, OURS, 'sess-ours', cwd)
+    let reads = 0
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete: vi.fn(),
+      log: () => {},
+      now: () => now,
+      rolloutOwner: {
+        pidOf: () => 4100,
+        read: async () => {
+          reads++
+          return { verdict: 'unknown', why: 'Cannot add type.' }
+        }
+      }
+    })
+    w.register(session('live-1', cwd))
+    await advance(TICK)
+    expect(w.rolloutPathFor('live-1')).toBe(ours) // the fallback: folder and time
+    // A minute, one re-scan period at a time
+    for (let i = 0; i < 12; i++) {
+      now += 5_000
+      await advance(5_000)
+    }
+    expect(reads).toBeLessThanOrEqual(2)
+    w.stop()
+  })
+
+  it('never asks about the file a tab is on in its /new re-scan', async () => {
+    const cwd = path.join(dir, 'proj')
+    const ours = await makeRollout(dir, OURS, 'sess-ours', cwd)
+    const asked: string[] = []
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete: vi.fn(),
+      log: () => {},
+      now: () => now,
+      rolloutOwner: {
+        pidOf: () => 4100,
+        read: async (file) => {
+          asked.push(file)
+          return file === ours ? { verdict: 'unknown', why: 'Cannot add type.' } : { verdict: 'other', why: 'held by pid 4242 outside the session' }
+        }
+      }
+    })
+    w.register(session('live-1', cwd))
+    await advance(TICK)
+    expect(w.rolloutPathFor('live-1')).toBe(ours)
+    asked.length = 0
+    const theirs = await makeRollout(dir, THEIRS, 'sess-theirs', cwd)
+    // Past the time a cannot-tell is kept, so a re-scan that still saw the current file would ask about it again
+    for (let i = 0; i < 14; i++) {
+      now += 5_000
+      await advance(5_000)
+    }
+    expect(asked).toContain(theirs) // the re-scans ran
+    expect(asked).not.toContain(ours)
+    expect(w.rolloutPathFor('live-1')).toBe(ours)
+    w.stop()
+  })
+
   // A session with no process to ask about (a chat session, a wiring that gives none) keeps the rule it had.
   it('maps the newest by folder and time when the session has no process id', async () => {
     const cwd = path.join(dir, 'proj')

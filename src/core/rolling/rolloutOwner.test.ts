@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  UNKNOWN_KEEP_MS,
   WINDOWS_OWNER_PS1,
   linuxOwnerReader,
   macOwnerReader,
@@ -307,18 +308,28 @@ describe('rolloutOwnerCheck', () => {
   })
 
   // Review Important 1: "cannot tell" is not remembered, and is said once per session
-  it('asks again after a cannot-tell, and says so once per session', async () => {
+  // Fix round 3 (re-review Important 1): asked again at once, a cannot-tell made every open tab run the check on every
+  // re-scan for its whole life on the machines that answer it. It is kept UNKNOWN_KEEP_MS, then asked again.
+  it('keeps a cannot-tell for a minute, then asks again, and says so once per session', async () => {
     let reads = 0
+    let t = 1_000_000
     const logs: string[] = []
     const check = rolloutOwnerCheck({
       read: async (): Promise<RolloutOwnership> => {
         reads++
         return { verdict: 'unknown', why: 'process 101 cannot be read (EACCES)' }
       },
-      log: (m) => logs.push(m)
+      log: (m) => logs.push(m),
+      now: () => t
     })
     expect((await check('/a.jsonl', 10, 'ses_1')).verdict).toBe('unknown')
+    t += UNKNOWN_KEEP_MS - 1
     expect((await check('/a.jsonl', 10, 'ses_1')).verdict).toBe('unknown')
+    expect(reads).toBe(1)
+    t += 1
+    expect((await check('/a.jsonl', 10, 'ses_1')).verdict).toBe('unknown')
+    expect(reads).toBe(2)
+    // Another file is another question
     expect((await check('/b.jsonl', 10, 'ses_1')).verdict).toBe('unknown')
     expect(reads).toBe(3)
     expect(logs).toHaveLength(1)
