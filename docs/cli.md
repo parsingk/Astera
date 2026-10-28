@@ -172,11 +172,11 @@ Astera can release it. A damaged `app-settings.json` parks the Host too, until A
 repairs the file. Astera's Jobs sidebar says so too, once it has read a Host's first report, with one
 line naming why: the settings file cannot be read, or the settings migration has not finished yet.
 `data.appAttached` says whether Astera is connected. A Host that does not announce `dispatch` leaves
-both fields out. An Astera 1.3.25 or older counts as attached too, even though its `hello` names no
-role: `data.driver` reads `app` and `data.appAttached` is `true` while one runs. `astera host status`
-says the same thing on its own: `data.legacyApp` is `true` once such an Astera has said hello, and
-`data.warning` carries the notice, "Astera 1.3.25 or older is attached; update it", which `--human`
-prints. The Host also writes it to its own log, once for each attach.
+both fields out. Astera counts as connected only once it has proved it is the app (see "Security"
+below): a connection that names no role, or names the app without that proof, is a CLI to the Host.
+An Astera 1.3.25 or older speaks an older protocol at another address and never reaches this Host.
+`astera host status` shows `data.legacyApp` and `data.warning` ("Astera 1.3.25 or older is attached;
+update it") only for an older Host that still counted such an app as attached.
 
 `skills list` and `skills install` are outside both lists: they never contact a Host and never need
 one. So are `ext list` and `ext sync`, which read the profile's shared extensions the same way. They read the profile's `accounts.json` and `app-settings.json` and work on files in each
@@ -265,13 +265,9 @@ over Astera's sessions once Astera has quit (see below). A Host started by an ol
 could not name the files a worker needs. With such a Host, these commands need the app as they did
 before.
 
-**An Astera 1.3.25 or older attached answers the same commands with an update notice, not a race.**
-Such an app says nothing about its own role, so the Host counts it as attached and holding its own
-worktree work exactly as it counts a current one, but it can never be handed the call these commands
-need. Each is refused at once, exit 6, with a message that starts `APP_REQUIRED` and names the update:
-"needs a newer Astera app: Astera 1.3.25 or older is attached; update it." `astera host status` carries
-the same word beforehand, through `data.legacyApp` and `data.warning` (see above), so a script can tell
-before it tries.
+**With no app that proved itself attached, a command that needs the app is refused at once**, exit 6,
+with a message that starts `APP_REQUIRED`: "needs the Astera app running". A connection that only says
+it is the app is not asked.
 
 The Host reads the permission setting, **Run agents without permission checks**, from the profile's
 `app-settings.json` at every start. With no such file it uses the app's default, which is on. A
@@ -2147,6 +2143,13 @@ The boundary is your machine and your operating system account.
   it. The key itself never crosses the pipe. Something at the address that cannot answer is not
   talked to: the app shows why on the Settings Info tab and runs its sessions itself, and `astera`
   ends with `PERMISSION_DENIED` (exit 5).
+- The app proves it is the app. Only the app's own connection may have the Host start a program, is
+  asked to do what only the app can, and counts as you in a Job's records. So the app keeps a second
+  random key, `host/app.key`, beside the Host key, and answers a challenge the Host makes for each of
+  its connections with a proof made from it, once. Until that proof holds, and after a wrong one, the
+  Host serves the connection as a CLI and keeps it open, and both sides write why in their logs. A
+  sandboxed session may not read `app.key`; it may read `host.key`, which the `astera` inside it
+  checks the Host's proof with.
 - There is no bearer token and no connection file. What used to be a bearer token on a loopback
   HTTP port was removed with the server it protected. The Host key above is not a token: nothing
   presents it, and a process that can read it is already running as you.

@@ -12,10 +12,13 @@ import { HOST_PROTOCOL, HOST_YIELD_ORCH_STATE_LATEST, ORCH_STATE_PUSH_MS, type C
 import { emptyState } from '../core/orchestration/state'
 import { versionOnlyOrchCall, AppUnreachable } from '../core/host/orchProtocol'
 import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
-import { hostProof } from '../core/host/hostKey'
+import { appProof, ensureAppKey, hostProof } from '../core/host/hostKey'
+import { actorOf } from '../core/continuity/actor'
 
 let dir: string
 let open: HostServer[] = []
+/** The app key every server here checks an app's proof against, unless a test gives it another (`appKey`). */
+const TEST_APP_KEY = 'e'.repeat(64)
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-host-'))
   open = []
@@ -43,6 +46,7 @@ const server = async (
     pidLives?: HostServerDeps['pidLives']
     stateClock?: HostServerDeps['stateClock']
     hostKey?: HostServerDeps['hostKey']
+    appKey?: HostServerDeps['appKey']
     maxLine?: HostServerDeps['maxLine']
     bootId?: HostServerDeps['bootId']
     maxQueuedBytes?: HostServerDeps['maxQueuedBytes']
@@ -82,6 +86,7 @@ const server = async (
     pidLives: over.pidLives ?? ((): boolean => true),
     stateClock: over.stateClock,
     hostKey: over.hostKey,
+    appKey: over.appKey ?? ((): string => TEST_APP_KEY),
     maxLine: over.maxLine,
     ...(over.maxQueuedBytes !== undefined ? { maxQueuedBytes: over.maxQueuedBytes } : {}),
     ...(over.maxAppQueuedBytes !== undefined ? { maxAppQueuedBytes: over.maxAppQueuedBytes } : {}),
@@ -92,12 +97,41 @@ const server = async (
   return { s, address: addr.address, logs, version }
 }
 
-/** Connects, sends the given lines, and resolves with everything the server said back. */
+/**
+ * The app's side of the proof (main/host/client.ts), for the helpers below: a hello that carries a `challenge` is
+ * answered with the proof under TEST_APP_KEY and held back until the Host's `app-proven`, so a caller that reads the
+ * hello finds the socket already the app, as the app's own code does. A refusal is handed on after the hello. Returns
+ * whether it took the message.
+ */
+const provingReader = (sock: net.Socket, deliver: (v: unknown) => void): ((v: unknown) => boolean) => {
+  let held: unknown = null
+  return (v) => {
+    const m = v as { t?: string; challenge?: unknown; ok?: unknown }
+    if (m?.t === 'hello' && typeof m.challenge === 'string') {
+      held = v
+      sock.write(encodeLine({ t: 'app-proof', proof: appProof(TEST_APP_KEY, m.challenge) }))
+      return true
+    }
+    if (held !== null && m?.t === 'app-proven') {
+      const hello = held
+      held = null
+      deliver(hello)
+      if (m.ok !== true) deliver(v)
+      return true
+    }
+    return false
+  }
+}
+
+/** Connects, sends the given lines, and resolves with everything the server said back. An app's hello is proved
+ *  (provingReader). */
 const talk = (address: string, lines: unknown[], waitFor = 1): Promise<unknown[]> =>
   new Promise((resolve, reject) => {
     const got: unknown[] = []
     const sock = net.connect(address)
-    const read = createLineReader({ onMessage: (v) => { got.push(v); if (got.length >= waitFor) { sock.end(); resolve(got) } }, onBadLine: () => {}, onHandlerError: () => {} })
+    const take = (v: unknown): void => { got.push(v); if (got.length >= waitFor) { sock.end(); resolve(got) } }
+    const proving = provingReader(sock, take)
+    const read = createLineReader({ onMessage: (v) => { if (!proving(v)) take(v) }, onBadLine: () => {}, onHandlerError: () => {} })
     sock.setEncoding('utf8')
     sock.on('data', read)
     sock.on('error', reject)
@@ -106,15 +140,20 @@ const talk = (address: string, lines: unknown[], waitFor = 1): Promise<unknown[]
   })
 
 /** One socket's messages, queued for `next()` so a reply that arrives before anyone asked for it is
- *  not lost — the same reason `talk()`'s `got` array exists, just not tied to a fixed message count. */
-const messageChannel = (sock: net.Socket): { send(m: ClientMessage): void; next(waitMs?: number): Promise<unknown> } => {
+ *  not lost — the same reason `talk()`'s `got` array exists, just not tied to a fixed message count. An app's hello
+ *  is proved (provingReader) unless `prove: false`, which the tests of the proof itself take. */
+const messageChannel = (sock: net.Socket, o: { prove?: boolean } = {}): { send(m: ClientMessage): void; next(waitMs?: number): Promise<unknown> } => {
   const queue: unknown[] = []
   const waiters: Array<(v: unknown) => void> = []
+  const deliver = (v: unknown): void => {
+    const w = waiters.shift()
+    if (w) w(v)
+    else queue.push(v)
+  }
+  const proving = o.prove === false ? (): boolean => false : provingReader(sock, deliver)
   const read = createLineReader({
     onMessage: (v) => {
-      const w = waiters.shift()
-      if (w) w(v)
-      else queue.push(v)
+      if (!proving(v)) deliver(v)
     },
     onBadLine: () => {},
     onHandlerError: () => {}
@@ -419,11 +458,14 @@ describe('startHostServer', () => {
     const h = await server()
     const got: unknown[] = []
     const sock = net.connect(h.address)
-    const read = createLineReader({ onMessage: (v) => got.push(v), onBadLine: () => {}, onHandlerError: () => {} })
+    const take = (v: unknown): void => void got.push(v)
+    const proving = provingReader(sock, take)
+    const read = createLineReader({ onMessage: (v) => { if (!proving(v)) take(v) }, onBadLine: () => {}, onHandlerError: () => {} })
     sock.setEncoding('utf8')
     sock.on('data', read)
     await new Promise<void>((resolve) => sock.on('connect', () => resolve()))
-    sock.write(encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }))
+    // As the app: terminal output goes to no CLI (below)
+    sock.write(encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'app' }))
     // The handshake has to be answered before the broadcast goes out, or a pass here proves nothing.
     await new Promise((r) => setTimeout(r, 100))
     expect(got).toHaveLength(1)
@@ -437,10 +479,12 @@ describe('startHostServer', () => {
   // state pushes of every session are not sent to it (a worker's `astera ask` waiting ten minutes parsed all of them).
   it('sends a CLI none of the broadcasts it never reads, and an app all of them', async () => {
     const h = await server()
-    const connect = async (role?: 'cli') => {
+    const connect = async (role?: 'cli' | 'app') => {
       const got: Array<{ t: string }> = []
       const sock = net.connect(h.address)
-      const read = createLineReader({ onMessage: (v) => got.push(v as { t: string }), onBadLine: () => {}, onHandlerError: () => {} })
+      const take = (v: unknown): void => void got.push(v as { t: string })
+      const proving = provingReader(sock, take)
+      const read = createLineReader({ onMessage: (v) => { if (!proving(v)) take(v) }, onBadLine: () => {}, onHandlerError: () => {} })
       sock.setEncoding('utf8')
       sock.on('data', read)
       await new Promise<void>((resolve) => sock.on('connect', () => resolve()))
@@ -448,7 +492,9 @@ describe('startHostServer', () => {
       return { got, sock }
     }
     const cli = await connect('cli')
-    const legacy = await connect()
+    // A hello with no role is a CLI as well (sandbox follow-ups, item 1)
+    const roleless = await connect()
+    const app = await connect('app')
     await new Promise((r) => setTimeout(r, 100))
     for (const m of [
       { t: 'pty-data', id: 'p1', data: 'output' },
@@ -458,9 +504,11 @@ describe('startHostServer', () => {
       h.s.broadcast(m)
     await new Promise((r) => setTimeout(r, 100))
     cli.sock.destroy()
-    legacy.sock.destroy()
+    roleless.sock.destroy()
+    app.sock.destroy()
     expect(cli.got.map((m) => m.t)).toEqual(['hello'])
-    expect(legacy.got.map((m) => m.t)).toEqual(['hello', 'pty-data', 'pty-exit', 'proc-line'])
+    expect(roleless.got.map((m) => m.t)).toEqual(['hello'])
+    expect(app.got.map((m) => m.t)).toEqual(['hello', 'pty-data', 'pty-exit', 'proc-line'])
   })
 
   // Performance audit H1: a client that stopped reading (paused, in a debugger) must not grow the Host's memory by
@@ -469,11 +517,12 @@ describe('startHostServer', () => {
     const h = await server({ maxQueuedBytes: 64 * 1024 })
     const sock = net.connect(h.address)
     await new Promise<void>((resolve) => sock.on('connect', () => resolve()))
-    sock.write(encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }))
+    sock.write(encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'cli' }))
     await new Promise((r) => setTimeout(r, 100))
     sock.pause()
     const closed = new Promise<void>((resolve) => sock.on('close', () => resolve()))
-    for (let i = 0; i < 200; i++) h.s.broadcast({ t: 'pty-data', id: 'p1', data: 'x'.repeat(16 * 1024) })
+    // A push a CLI is sent: terminal output goes to the app alone
+    for (let i = 0; i < 200; i++) h.s.broadcast({ t: 'git-op', op: 'x'.repeat(16 * 1024), phase: 'begin', kind: 'job-merge', cwd: '/w' })
     await Promise.race([closed, new Promise((r) => setTimeout(r, 3000))])
     expect(h.s.clients()).toBe(0)
     sock.destroy()
@@ -485,6 +534,9 @@ describe('startHostServer', () => {
     const h = await server({ maxQueuedBytes: 64 * 1024, maxAppQueuedBytes: 64 * 1024 })
     const sock = net.connect(h.address)
     await new Promise<void>((resolve) => sock.on('connect', () => resolve()))
+    // Proved as the app proves itself (provingReader), so it is the app whose budget this is
+    sock.setEncoding('utf8')
+    sock.on('data', createLineReader({ onMessage: provingReader(sock, () => {}), onBadLine: () => {}, onHandlerError: () => {} }))
     sock.write(encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'app' }))
     await new Promise((r) => setTimeout(r, 100))
     sock.pause()
@@ -503,12 +555,20 @@ describe('startHostServer', () => {
     const h = await server({ maxQueuedBytes: 64 * 1024, maxAppQueuedBytes: 64 * 1024 * 1024 })
     const sock = net.connect(h.address)
     await new Promise<void>((resolve) => sock.on('connect', () => resolve()))
+    // Proved as the app proves itself (provingReader), so it is the app whose budget this is
+    sock.setEncoding('utf8')
+    let output = 0
+    const proving = provingReader(sock, () => {})
+    sock.on('data', createLineReader({ onMessage: (v) => { if (!proving(v) && (v as { t?: string }).t === 'pty-data') output += 1 }, onBadLine: () => {}, onHandlerError: () => {} }))
     sock.write(encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'app' }))
     await new Promise((r) => setTimeout(r, 100))
     sock.pause()
     for (let i = 0; i < 200; i++) h.s.broadcast({ t: 'pty-data', id: 'p1', data: 'x'.repeat(16 * 1024) })
     await new Promise((r) => setTimeout(r, 300))
     expect(h.s.clients()).toBe(1)
+    // And it was sent all of it, which only the app is
+    sock.resume()
+    await vi.waitFor(() => expect(output).toBe(200), { timeout: 5000 })
     sock.destroy()
   })
 
@@ -1065,47 +1125,12 @@ describe('startHostServer', () => {
       await expect(answer).rejects.toThrow(/no account/)
     })
 
-    // 남은 한계 Task 5: role 없는 hello 는 옛 앱(1.3.25 이하)이다. 출시된 앱은 모두 role 도 yields 도
-    // 보내지 않고, Host 에 말을 거는 CLI 는 그 뒤에 나왔다. 그 앱은 제 일을 모두 제가 하므로 hasApp 과
-    // appsKeep 에 들어간다(S6-6, SL-11). 그러나 orch-act 는 답할 줄 모르니 보내지 않고 APP_REQUIRED 로
-    // 거절한다(F12) — 부른 쪽이 영영 기다리지 않게.
-    it('role 을 안 밝힌 클라이언트는 옛 앱이다: 앱으로 세되 orch-act 는 보내지 않는다', async () => {
-      const changed: boolean[] = []
-      const roles: string[] = []
-      const h = await server({
-        onAppsChanged: () => changed.push(h.s.hasApp()),
-        // 옛 앱의 메시지는 cli 로 간다: 앱만 보낼 수 있는 문(state-put 등)은 그 앱에게 닫혀 있다.
-        onMessage: (m, _send, from) => {
-          if (m.t === 'pty-list') roles.push(from.role)
-          return m.t === 'pty-list'
-        }
-      })
-      const sock = net.connect(h.address)
-      await new Promise((r) => sock.once('connect', r))
-      const old = messageChannel(sock)
-      old.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.3.25' })
-      expect(await old.next()).toMatchObject({ t: 'hello' })
-      expect(h.s.hasApp()).toBe(true)
-      expect(h.s.appsKeep('slack')).toBe(true)
-      expect(h.s.appsKeep('dispatch')).toBe(true)
-      expect(h.s.appKeeps('worktrees')).toBe(true)
-      expect(h.s.hasCurrentApp()).toBe(false)
-      const err = await h.s.act('startWorker', {}).catch((e: Error) => e)
-      expect(err).toBeInstanceOf(AppUnreachable)
-      expect(String(err)).toMatch(/APP_REQUIRED/)
-      expect(String(err)).toMatch(/1\.3\.25 or older/)
-      expect(await old.next(200), '옛 앱에게 orch-act 가 나갔다').toBeUndefined()
-      expect(h.logs.filter((l) => l.includes('Astera 1.3.25 or older is attached; update it'))).toHaveLength(1)
-      old.send({ t: 'pty-list' })
-      await vi.waitFor(() => expect(roles).toEqual(['cli']))
-      sock.end()
-      await vi.waitFor(() => expect(h.s.hasApp()).toBe(false))
-      expect(changed).toEqual([true, false])
-    })
-
-    it('옛 앱과 새 앱이 함께 붙으면 orch-act 는 새 앱에게 가고, 옛 앱은 여전히 모든 일을 쥔다', async () => {
+    // Sandbox follow-ups, item 1: a hello with no role is a CLI, not an app 1.3.25 or older (such an app speaks protocol
+    // 3 at another address). Beside a proved app it changes nothing: orch-act goes to the app.
+    it('role 을 안 밝힌 클라이언트가 곁에 있어도 orch-act 는 증명한 앱에게 간다', async () => {
       const h = await start({})
-      await h.connect() // role 없이: 옛 앱
+      await h.connect() // role 없이: CLI
+      expect(h.s.hasApp()).toBe(false)
       const app = await h.connect('app')
       expect(h.s.hasCurrentApp()).toBe(true)
       expect(h.s.appKeeps('worktrees')).toBe(true)
@@ -1114,17 +1139,6 @@ describe('startHostServer', () => {
       expect(asked.t).toBe('orch-act')
       app.send({ t: 'orch-acted', call: asked.call, ok: true, value: 1 })
       expect(await answer).toBe(1)
-    })
-
-    it('옛 앱이 붙어 있는 동안 hello 답이 그것을 말한다 (astera host status)', async () => {
-      const h = await start({})
-      const before = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'cli' }])
-      expect(before[0]).not.toHaveProperty('legacyApp')
-      const old = await h.connect()
-      const during = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'cli' }])
-      expect(during[0]).toMatchObject({ t: 'hello', legacyApp: true })
-      old.socket.end()
-      await vi.waitFor(() => expect(h.s.hasApp()).toBe(false))
     })
 
     it('CLI 는 옛 앱이 아니다', async () => {
@@ -1481,6 +1495,208 @@ describe('startHostServer', () => {
 
 // posix only: on win32 a pipe name disappears with the process that made it, so there is nothing
 // stale to find.
+// Sandbox follow-ups, item 1: `role: 'app'` is what lets a client have the Host spawn any program, counts as the person in
+// the records and is asked `orch-act`, so a socket is the app only once it proves it holds this profile's app key for
+// this connection. Until then it is a CLI to every door, and a wrong proof leaves it one, open and told.
+describe('the app proves it is the app', () => {
+  /** A hello as the app with its challenge left for the test to answer, or not. */
+  const appHello = async (address: string, extra: Record<string, unknown> = {}) => {
+    const sock = net.connect(address)
+    await new Promise((r) => sock.once('connect', r))
+    const ch = messageChannel(sock, { prove: false })
+    ch.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'app', ...extra } as ClientMessage)
+    const hello = (await ch.next()) as { t: string; challenge?: string }
+    return { sock, ch, hello }
+  }
+  const prove = (a: { ch: ReturnType<typeof messageChannel>; hello: { challenge?: string } }, key = TEST_APP_KEY): void =>
+    a.ch.send({ t: 'app-proof', proof: appProof(key, a.hello.challenge ?? '') })
+
+  it('answers an app hello with a challenge of its own connection, and keeps the socket a CLI until it proves', async () => {
+    const roles: string[] = []
+    const greeted: number[] = []
+    const changed: boolean[] = []
+    const h = await server({
+      onMessage: (m, _send, from) => {
+        if (m.t === 'pty-list') roles.push(from.role)
+        return m.t === 'pty-list'
+      },
+      onAppGreeted: () => greeted.push(1),
+      onAppsChanged: () => changed.push(h.s.hasApp())
+    })
+    const a = await appHello(h.address, { pid: 4242, yields: ['dispatch'] })
+    const b = await appHello(h.address)
+    expect(a.hello).toMatchObject({ t: 'hello', protocol: HOST_PROTOCOL })
+    expect(a.hello.challenge).toMatch(/^[0-9a-f]{32}$/)
+    expect(b.hello.challenge).toMatch(/^[0-9a-f]{32}$/)
+    expect(b.hello.challenge).not.toBe(a.hello.challenge)
+    expect(h.s.hasApp()).toBe(false)
+    expect(h.s.hasCurrentApp()).toBe(false)
+    expect(h.s.appsKeep('slack')).toBe(false)
+    expect(h.s.appsYield('dispatch')).toBe(false)
+    expect(h.s.lastAppPid()).toBeNull()
+    a.ch.send({ t: 'pty-list' })
+    await vi.waitFor(() => expect(roles).toEqual(['cli']))
+    expect(greeted).toEqual([])
+    expect(changed).toEqual([])
+    // A CLI's hello, and an MCP client's, carry none
+    const [cli] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'cli' }])
+    const [mcp] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'mcp' }])
+    expect(cli).not.toHaveProperty('challenge')
+    expect(mcp).not.toHaveProperty('challenge')
+    a.sock.end()
+    b.sock.end()
+  })
+
+  it("makes a socket the app once it answers its challenge under this profile's app key", async () => {
+    const roles: string[] = []
+    const greeted: number[] = []
+    const changed: boolean[] = []
+    const h = await server({
+      onMessage: (m, _send, from) => {
+        if (m.t === 'pty-list') roles.push(from.role)
+        return m.t === 'pty-list'
+      },
+      onAppGreeted: (send) => {
+        greeted.push(1)
+        send({ t: 'pty-data', id: 'greet', data: 'after the proof' })
+      },
+      onAppsChanged: () => changed.push(h.s.hasApp())
+    })
+    const a = await appHello(h.address, { pid: 4242, yields: ['dispatch'] })
+    prove(a)
+    expect(await a.ch.next()).toEqual({ t: 'app-proven', ok: true })
+    expect(await a.ch.next()).toEqual({ t: 'pty-data', id: 'greet', data: 'after the proof' })
+    expect(h.s.hasApp()).toBe(true)
+    expect(h.s.hasCurrentApp()).toBe(true)
+    expect(h.s.appsYield('dispatch')).toBe(true)
+    expect(h.s.lastAppPid()).toBe(4242)
+    expect(greeted).toEqual([1])
+    expect(changed).toEqual([true])
+    a.ch.send({ t: 'pty-list' })
+    await vi.waitFor(() => expect(roles).toEqual(['app']))
+    // And it is the one `orch-act` asks
+    const answer = h.s.act('startWorker', {})
+    const asked = (await a.ch.next()) as { t: string; call: string }
+    expect(asked.t).toBe('orch-act')
+    a.ch.send({ t: 'orch-acted', call: asked.call, ok: true, value: 1 })
+    expect(await answer).toBe(1)
+    a.sock.end()
+    await vi.waitFor(() => expect(changed).toEqual([true, false]))
+  })
+
+  it("refuses a proof made with another profile's key: logged, told, and the socket stays an open CLI", async () => {
+    const h = await server()
+    const other = await ensureAppKey(path.join(dir, 'other-profile'))
+    const a = await appHello(h.address, { pid: 4242 })
+    prove(a, other)
+    expect(await a.ch.next()).toMatchObject({ t: 'app-proven', ok: false, reason: expect.stringMatching(/app key/) })
+    expect(h.s.hasApp()).toBe(false)
+    expect(h.s.lastAppPid()).toBeNull()
+    expect(h.logs.some((l) => /did not prove it is the app/.test(l))).toBe(true)
+    expect(a.sock.destroyed).toBe(false)
+    a.ch.send({ t: 'ping', seq: 1 })
+    expect(await a.ch.next()).toEqual({ t: 'pong', seq: 1 })
+    // Not asked `orch-act`: the call is refused as with no app at all
+    await expect(h.s.act('startWorker', {})).rejects.toThrow(/APP_REQUIRED: startWorker needs the Astera app running/)
+    expect(await a.ch.next(200)).toBeUndefined()
+    a.sock.end()
+  })
+
+  it('leaves a socket that never answers a CLI, and asks it no orch-act', async () => {
+    const h = await server()
+    const a = await appHello(h.address)
+    await new Promise((r) => setTimeout(r, 100))
+    expect(h.s.hasApp()).toBe(false)
+    await expect(h.s.act('startWorker', {})).rejects.toThrow(/APP_REQUIRED/)
+    expect(await a.ch.next(200)).toBeUndefined()
+    a.sock.end()
+  })
+
+  it('takes each challenge once, and on its own connection only', async () => {
+    const h = await server()
+    const a = await appHello(h.address)
+    const b = await appHello(h.address)
+    // a's answer on b's connection, then b's own after that try spent b's challenge
+    prove({ ch: b.ch, hello: a.hello })
+    expect(await b.ch.next()).toMatchObject({ t: 'app-proven', ok: false })
+    prove(b)
+    expect(await b.ch.next()).toMatchObject({ t: 'app-proven', ok: false })
+    expect(h.s.hasApp()).toBe(false)
+    // a's own answer holds once; sent again it finds no challenge open, and a stays the app
+    prove(a)
+    expect(await a.ch.next()).toEqual({ t: 'app-proven', ok: true })
+    prove(a)
+    expect(await a.ch.next()).toMatchObject({ t: 'app-proven', ok: false })
+    expect(h.s.hasCurrentApp()).toBe(true)
+    a.sock.end()
+    b.sock.end()
+  })
+
+  it('proves no app on a Host that has no app key', async () => {
+    const h = await server({ appKey: () => null })
+    const a = await appHello(h.address)
+    prove(a)
+    expect(await a.ch.next()).toMatchObject({ t: 'app-proven', ok: false, reason: expect.stringMatching(/no app key/) })
+    expect(h.s.hasApp()).toBe(false)
+    a.sock.end()
+  })
+
+  it('gives a CLI that sends a proof nothing for it, and takes none from an MCP socket', async () => {
+    const roles: string[] = []
+    const h = await start({ onMessage: (m, _send, from) => { if (m.t === 'pty-list') roles.push(from.role); return m.t === 'pty-list' } })
+    const cli = await h.connect('cli')
+    cli.send({ t: 'app-proof', proof: appProof(TEST_APP_KEY, 'x') })
+    expect(await cli.next()).toMatchObject({ t: 'app-proven', ok: false })
+    cli.send({ t: 'pty-list' } as never)
+    await vi.waitFor(() => expect(roles).toEqual(['cli']))
+    const mcp = await h.connect('mcp')
+    mcp.send({ t: 'app-proof', proof: appProof(TEST_APP_KEY, 'x') })
+    expect(await mcp.next(200)).toBeUndefined()
+    expect(h.s.hasApp()).toBe(false)
+  })
+
+  // The no-role path (an app 1.3.25 or older): such an app speaks protocol 3 at another address and never reaches this
+  // Host, and presence is trust like any other, so a hello with no role is a CLI.
+  it('reads a hello with no role as a CLI, not as an app of any age', async () => {
+    const roles: string[] = []
+    const h = await server({ onMessage: (m, _send, from) => { if (m.t === 'pty-list') roles.push(from.role); return m.t === 'pty-list' } })
+    const sock = net.connect(h.address)
+    await new Promise((r) => sock.once('connect', r))
+    const old = messageChannel(sock)
+    old.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.3.25' })
+    const hello = await old.next()
+    expect(hello).toMatchObject({ t: 'hello' })
+    expect(hello).not.toHaveProperty('challenge')
+    expect(hello).not.toHaveProperty('legacyApp')
+    expect(h.s.hasApp()).toBe(false)
+    expect(h.s.appsKeep('slack')).toBe(false)
+    expect(h.s.appKeeps('worktrees')).toBe(false)
+    await expect(h.s.act('startWorker', {})).rejects.toThrow(/APP_REQUIRED: startWorker needs the Astera app running/)
+    old.send({ t: 'pty-list' })
+    await vi.waitFor(() => expect(roles).toEqual(['cli']))
+    const [other] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'cli' }])
+    expect(other).not.toHaveProperty('legacyApp')
+    sock.end()
+  })
+
+  // The records (core/continuity/actor.ts): the command layer judges who made a call by the role the server gives it.
+  it('is the person in the records only once proved', async () => {
+    const actors: unknown[] = []
+    const h = await server({
+      orch: { call: async (a) => { actors.push(actorOf({ sessionId: a.sessionId, role: a.from?.role, state: null })); return { status: 200, body: {} } } }
+    })
+    const a = await appHello(h.address)
+    a.ch.send({ t: 'orch-call', call: 'c1', cmd: 'jobs-list', args: {} })
+    expect(await a.ch.next()).toMatchObject({ t: 'orch-result', call: 'c1' })
+    prove(a)
+    expect(await a.ch.next()).toEqual({ t: 'app-proven', ok: true })
+    a.ch.send({ t: 'orch-call', call: 'c2', cmd: 'jobs-list', args: {} })
+    expect(await a.ch.next()).toMatchObject({ t: 'orch-result', call: 'c2' })
+    expect(actors).toEqual([{ surface: 'cli' }, { surface: 'desktop' }])
+    a.sock.end()
+  })
+})
+
 describe.runIf(process.platform !== 'win32')('a socket file left behind', () => {
   it('is replaced when nobody is listening on it', async () => {
     const addr = hostAddress({ profileDir: path.join(dir, 'stale'), platform: process.platform, tmpDir: dir, protocol: HOST_PROTOCOL })

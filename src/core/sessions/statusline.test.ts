@@ -12,7 +12,8 @@ import { createAttentionState } from './attention'
 import { hookEventState, latestEventLine } from '../hooks/sessionState'
 import { resolveAction } from '../audit/resolve'
 import { claudeSandboxSettings } from '../sandbox/claudeSettings'
-import { credentialStoreDenies, sensitiveLocations } from '../sandbox/locations'
+import { appKeyDenies, credentialStoreDenies, sensitiveLocations } from '../sandbox/locations'
+import { appKeyPath } from '../host/hostKey'
 import { npmCacheOf } from '../sandbox/codexProfile'
 import type { GitLayout } from '../sandbox/gitLayout'
 
@@ -924,9 +925,10 @@ describe('StatusLineManager sandbox', () => {
       homeDir: HOME[platform],
       tmpDir: TMP[platform]
     })
-  /** What the builder gives for this OS and scope, under the manager's home. */
+  /** What the builder gives for this OS and scope, under the manager's home, with the app key of its profile (sandbox
+   *  follow-ups, item 1). */
   const builder = (platform: 'linux' | 'darwin' | 'win32', scope: SandboxScope = scopeOn(platform)) => {
-    const denied = [...sensitiveLocations(platform, scope.env, HOME[platform]), ...credentialStoreDenies(platform, scope.env, HOME[platform])]
+    const denied = [...sensitiveLocations(platform, scope.env, HOME[platform]), ...credentialStoreDenies(platform, scope.env, HOME[platform]), ...appKeyDenies(appKeyPath(dir))]
     return claudeSandboxSettings({ platform, denied, npmCache: npmCacheOf(TMP[platform]), layout: scope.layout })
   }
   /** The scope's twins folder a twin is in: sandbox-settings/<hash>. */
@@ -972,6 +974,24 @@ describe('StatusLineManager sandbox', () => {
     expect(path.basename(chat![1])).toBe('astera-sandbox-chat-settings.json')
     expect(folderOf(chat![1])).toBe(folderOf([...twins][0]))
     expect(JSON.parse(await read(chat![1]))).toEqual({ sandbox: want.sandbox, permissions: { deny: want.permissions.deny } })
+  })
+
+  // Sandbox follow-ups, item 1: the app's key lets a process be the app to the Host, so a twin denies it, Claude's sandbox
+  // reads and its Read rules alike (on Windows the rules alone); the Host key beside it stays readable
+  it('denies the app key of its profile, and not the Host key', async () => {
+    for (const platform of ['linux', 'win32'] as const) {
+      const mgr = managerOn(platform)
+      await mgr.init()
+      const scope = scopeOn(platform)
+      expect(await mgr.ensureSandboxFiles(scope)).toBe('ok')
+      const twin = JSON.parse(await read(mgr.spawnConfig('s1', account, { sandbox: scope }).settingsFile))
+      const key = appKeyPath(dir).replace(/\\/g, '/')
+      const drive = /^([A-Za-z]):(\/.*)$/.exec(key)
+      const rule = drive ? `/${drive[1].toLowerCase()}${drive[2]}` : key
+      expect(twin.permissions.deny, platform).toContain(`Read(/${rule})`)
+      expect(JSON.stringify(twin), platform).not.toContain('host.key')
+      if (platform === 'linux') expect(twin.sandbox.filesystem.denyRead).toContain(key)
+    }
   })
 
   // Final fix pass (C1, minor 2): a twin keeps its own repository's git files from being written and denies the places

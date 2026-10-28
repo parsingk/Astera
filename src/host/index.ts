@@ -47,7 +47,7 @@ import { HOST_EXIT, listenExitCode } from './exitCodes'
 import { controllerRecordsFile, createControllerRegistry } from './controllers'
 import { openSecretStore } from '../core/secrets/secretStore'
 import { randomBytes } from 'node:crypto'
-import { ensureHostKey } from '../core/host/hostKey'
+import { ensureAppKey, ensureHostKey, readAppKeySync } from '../core/host/hostKey'
 import { completeWindowsPath } from '../core/sessions/windowsPath'
 import { PtyRegistry } from './registry'
 import { createConhostReaper, reapWindowsConsoleHosts } from './conhostReaper'
@@ -1216,11 +1216,18 @@ async function main(): Promise<void> {
     log.write(`could not make the Host key: ${String(err)} — not serving`)
     process.exit(HOST_EXIT.keyFailure)
   }
+  // Sandbox follow-ups, item 1: the key the app proves it is the app with. The app makes it before it first talks to a
+  // Host; made here too when there is none, before any session this Host starts, so a sandboxed session is denied a
+  // file that is there (a deny of a path that does not exist yet holds for nothing on Windows). Not fatal: without it
+  // no socket can be the app, and each is told so.
+  await ensureAppKey(profileDir).catch((err) => log.write(`could not make the app key: ${String(err)} — no app can prove it is the app`))
   try {
     server = await startHostServer({
       sessionOfToken: (t) => mcpGateway.sessionOfToken(t),
       address: addr.address,
       hostKey,
+      // Read at each proof, so a key made after this Host started is the one checked
+      appKey: () => readAppKeySync(profileDir),
       bootId,
       dirToPrepare: addr.dirToPrepare,
       version: hostVersion,

@@ -26,6 +26,7 @@ import { ensureGitFiles, ensureWorktreeConfigFiles, gitLayoutOf } from '../../sr
 import { initializeParams } from '../../src/core/chat/codexProtocol'
 import { hostAddress } from '../../src/host/address'
 import { HOST_PROTOCOL } from '../../src/core/host/protocol'
+import { appKeyPath, ensureAppKey } from '../../src/core/host/hostKey'
 import { fixtures, loopbackServer, probeEnv, sh, srtArgv, workspaceFor } from './measure-sandbox.mjs'
 import { runProbes, runSet } from './probes.mjs'
 import { startAppServer } from './appServer.mjs'
@@ -185,9 +186,14 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
 
     ctx.server = await loopbackServer()
     ctx.base = envFor(ctx.server.port)
+    // A profile's app key, there as the app makes it, which the Codex sets deny on every OS as a session's start does
+    // (sandbox follow-ups, item 1)
+    const hostProfile = path.join(ctx.scratch, 'codex-host-profile')
+    await ensureAppKey(hostProfile)
+    ctx.appKeyFile = appKeyPath(hostProfile)
     if (!WIN) {
       // A Host-shaped socket folder, there as a running Host's is, which the Codex sets deny as a session's start does
-      ctx.hostDir = hostAddress({ profileDir: path.join(ctx.scratch, 'codex-host-profile'), platform: PLATFORM, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL }).dirToPrepare
+      ctx.hostDir = hostAddress({ profileDir: hostProfile, platform: PLATFORM, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL }).dirToPrepare
       mkdirSync(ctx.hostDir, { recursive: true, mode: 0o700 })
       // srt hands its command TMPDIR=/tmp/claude and leaves making it to Claude Code (inventory §22.9 item 8)
       mkdirSync('/tmp/claude', { recursive: true })
@@ -318,7 +324,7 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
     const pp = await prepare(`${set.name}-plain`, set.layout, {}, { shipped })
     const plain = runProbes(plainWrap, { cwd: pp.cwd, env: codexEnvOf(pp).env, probes, timeoutMs: PROBE_MS })
     const p = await prepare(set.name, set.layout, {}, { shipped })
-    const denied = codexDenied(PLATFORM, ctx.base, ctx.home, ctx.hostDir)
+    const denied = codexDenied(PLATFORM, ctx.base, ctx.home, ctx.hostDir, ctx.appKeyFile)
     const args = codexSetArgs({ platform: PLATFORM, layout: p.gitLayout, denied, variant: set.variant })
     const { own, env } = codexEnvOf(p)
     const wrap = (line) => ({ file: 'codex', args: ['sandbox', ...args, '--', ...shellArgv(PLATFORM, line)] })
@@ -337,7 +343,7 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
     const pp = await prepare(`${set.name}-plain`, set.layout)
     const plain = runProbes(plainWrap, { cwd: pp.cwd, env: codexEnvOf(pp).env, probes, timeoutMs: PROBE_MS })
     const p = await prepare(set.name, set.layout)
-    const denied = codexDenied(PLATFORM, ctx.base, ctx.home, ctx.hostDir)
+    const denied = codexDenied(PLATFORM, ctx.base, ctx.home, ctx.hostDir, ctx.appKeyFile)
     const args = codexSetArgs({ platform: PLATFORM, layout: p.gitLayout, denied })
     const profile = profileNameOf(args)
     const { own, env } = codexEnvOf(p)

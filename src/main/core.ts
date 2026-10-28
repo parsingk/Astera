@@ -52,6 +52,7 @@ import { cliVersionProbe, enforceBlocker } from '../core/sessions/cliVersion'
 import { claudeSandboxStart } from '../core/sandbox/claudeStart'
 import { codexExcludesWriter } from '../core/sandbox/gitExcludes'
 import { hostAddress } from '../core/publicContract'
+import { appKeyPath } from '../core/host/hostKey'
 import { HOST_PROTOCOL } from '../core/host/protocol'
 import { createManagedHooksCheck } from '../core/sessions/managedHooks'
 import { codexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
@@ -283,6 +284,9 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   // The folder this profile's Host listens in (macOS and Linux), which a sandboxed Codex session may not open: it reaches
   // the Host through the loopback with its workload token instead (final fix pass, C2)
   const hostSocketDir = hostAddress({ profileDir: userDataDir, platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL }).dirToPrepare
+  // The key that lets a process be the app to the Host, which a sandboxed session's profile denies (sandbox follow-ups,
+  // item 1)
+  const appKeyFile = appKeyPath(userDataDir)
   // The copy of the person's git excludes a sandboxed Codex session on Windows reads, in TEMP, for either manager's
   // prepare: the elevated sandbox's own account cannot read theirs
   const codexExcludes = codexExcludesWriter({ profileDir: userDataDir, tmpDir: os.tmpdir(), homeDir: os.homedir(), env: process.env, log: sessionsLog })
@@ -299,7 +303,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     // Mode writes the crops whose paths it sends. previewShotsDir is the same path capture.ts writes.
     [previewShotsDir(userDataDir)],
     process.env,
-    { ...defaultSpawnChecks(sessionsLog), hostSocketDir, codexExcludes }
+    { ...defaultSpawnChecks(sessionsLog), hostSocketDir, appKeyFile, codexExcludes }
   )
   // Shared extensions (Agent Control Plane release 1 design §4.5). The two managers read the same cache:
   // a chat roll's respawn is prepared through `sessions.prepare`, which refreshes the target account
@@ -380,6 +384,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     codexWindowsReady: askCodexWindowsReady,
     claudeSandbox,
     hostSocketDir,
+    appKeyFile,
     codexVersion: cliVersions,
     codexExcludes
   })

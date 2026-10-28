@@ -14,8 +14,11 @@ import { PtyRegistry } from './registry'
 import { ProcRegistry } from './procRegistry'
 import { nodeProcSpawn } from './nodeProc'
 import { HOST_PROTOCOL, type ClientMessage, type HostMessage } from '../core/host/protocol'
+import { appProof, ensureAppKey } from '../core/host/hostKey'
 
 const ECHO = 'process.stdin.setEncoding("utf8"); process.stdin.on("data", (d) => process.stdout.write("echo:" + d))'
+/** The app key the servers here check an app's proof against (sandbox follow-ups, item 1). */
+const APP_KEY = 'a'.repeat(64)
 
 let dir: string
 let open: HostServer[] = []
@@ -28,8 +31,10 @@ afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true })
 })
 
-/** A client that says hello and collects everything the Host says: as the app, unless `role` names another. */
-function client(address: string, role: 'app' | 'cli' = 'app'): Promise<{ send(m: ClientMessage): void; got: HostMessage[]; waitFor(p: (m: HostMessage) => boolean, ms?: number): Promise<HostMessage>; end(): void }> {
+/** A client that says hello and collects everything the Host says: as the app, unless `role` names another. An app
+ *  answers the Host's challenge under `proveWith` (APP_KEY unless given; null answers nothing) before anything the test
+ *  sends after the hello, as the app's own client does (main/host/client.ts). */
+function client(address: string, role: 'app' | 'cli' = 'app', proveWith: string | null = APP_KEY): Promise<{ send(m: ClientMessage): void; got: HostMessage[]; waitFor(p: (m: HostMessage) => boolean, ms?: number): Promise<HostMessage>; end(): void }> {
   return new Promise((resolve, reject) => {
     const got: HostMessage[] = []
     const waiters: Array<{ p: (m: HostMessage) => boolean; res: (m: HostMessage) => void }> = []
@@ -38,6 +43,7 @@ function client(address: string, role: 'app' | 'cli' = 'app'): Promise<{ send(m:
     const read = createLineReader({
       onMessage: (v) => {
         const m = v as HostMessage
+        if (m.t === 'hello' && typeof m.challenge === 'string' && proveWith !== null) sock.write(encodeLine({ t: 'app-proof', proof: appProof(proveWith, m.challenge) }))
         got.push(m)
         for (const w of [...waiters]) if (w.p(m)) { waiters.splice(waiters.indexOf(w), 1); w.res(m) }
       },
@@ -85,6 +91,7 @@ describe('proc-* over the Host server', () => {
       onIdle: () => {},
       onMessage: (m, send, from) => handle?.(m, send, { socket: from.socket, role: from.role }) ?? false,
       liveCounts: () => ({ sessions: procs.liveCount(), runs: 0 }),
+      appKey: () => APP_KEY,
       log: { write: (m) => logs.push(m), close: () => {} }
     })
     open.push(s)
@@ -126,7 +133,8 @@ describe('proc-* over the Host server', () => {
 // as host/index.ts wires it, only a socket whose hello said `role: 'app'` is served them. A CLI's hello asking for one is
 // refused and nothing starts; the app on another socket is served as before.
 describe('spawns over the Host server are the app’s alone', () => {
-  it('a cli greeting asking for pty-spawn or proc-spawn is refused, and the app’s is served', async () => {
+  /** The server wired as host/index.ts wires it, with a pty registry that records what it was asked to start. */
+  const wired = async (): Promise<{ address: string; spawned: string[]; procs: ProcRegistry }> => {
     const addr = hostAddress({ profileDir: path.join(dir, 'profile'), platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL })
     const spawned: string[] = []
     const ptys = new PtyRegistry({
@@ -148,27 +156,52 @@ describe('spawns over the Host server are the app’s alone', () => {
       onMessage: (m, send, from) =>
         (handlePty?.(m, send, { socket: from.socket, role: from.role }) ?? false) || (handleProc?.(m, send, { socket: from.socket, role: from.role }) ?? false),
       liveCounts: () => ({ sessions: ptys.liveCount() + procs.liveCount(), runs: 0 }),
+      appKey: () => APP_KEY,
       log: { write: () => {}, close: () => {} }
     })
     open.push(s)
     handlePty = attachPtyHost({ registry: ptys, broadcast: (m, to) => s.broadcast(m, to) })
     handleProc = attachProcHost({ registry: procs, broadcast: (m) => s.broadcast(m) })
+    return { address: addr.address, spawned, procs }
+  }
+  /** Asks for a pty and a line process and answers whether each was refused. */
+  const refusedBoth = async (c: Awaited<ReturnType<typeof client>>, n: number): Promise<void> => {
+    c.send({ t: 'pty-spawn', id: `p${n}`, file: 'calc.exe', args: [], opts: { cwd: process.cwd(), cols: 80, rows: 24, env: {} } })
+    expect(await c.waitFor((m) => (m.t === 'pty-failed' || m.t === 'pty-spawned') && m.id === `p${n}`)).toEqual({ t: 'pty-failed', id: `p${n}`, error: 'pty-spawn is served to the Astera app only' })
+    c.send({ t: 'proc-spawn', id: `q${n}`, file: process.execPath, args: ['-e', ECHO], opts: { cwd: process.cwd(), env: process.env as Record<string, string | undefined> } })
+    expect(await c.waitFor((m) => (m.t === 'proc-failed' || m.t === 'proc-spawned') && m.id === `q${n}`)).toEqual({ t: 'proc-failed', id: `q${n}`, error: 'proc-spawn is served to the Astera app only' })
+  }
 
-    const cli = await client(addr.address, 'cli')
+  it('a cli greeting asking for pty-spawn or proc-spawn is refused, and the app’s is served', async () => {
+    const w = await wired()
+    const cli = await client(w.address, 'cli')
     await cli.waitFor((m) => m.t === 'hello')
-    cli.send({ t: 'pty-spawn', id: 'p1', file: 'calc.exe', args: [], opts: { cwd: process.cwd(), cols: 80, rows: 24, env: {} } })
-    expect(await cli.waitFor((m) => m.t === 'pty-failed' || m.t === 'pty-spawned')).toEqual({ t: 'pty-failed', id: 'p1', error: 'pty-spawn is served to the Astera app only' })
-    cli.send({ t: 'proc-spawn', id: 'q1', file: process.execPath, args: ['-e', ECHO], opts: { cwd: process.cwd(), env: process.env as Record<string, string | undefined> } })
-    expect(await cli.waitFor((m) => m.t === 'proc-failed' || m.t === 'proc-spawned')).toEqual({ t: 'proc-failed', id: 'q1', error: 'proc-spawn is served to the Astera app only' })
-    expect(spawned).toEqual([])
-    expect(procs.liveCount()).toBe(0)
+    await refusedBoth(cli, 1)
+    expect(w.spawned).toEqual([])
+    expect(w.procs.liveCount()).toBe(0)
 
-    const app = await client(addr.address)
+    const app = await client(w.address)
     await app.waitFor((m) => m.t === 'hello')
     app.send({ t: 'pty-spawn', id: 'p2', file: 'shell', args: [], opts: { cwd: process.cwd(), cols: 80, rows: 24, env: {} } })
     expect(await app.waitFor((m) => m.t === 'pty-spawned' || m.t === 'pty-failed')).toEqual({ t: 'pty-spawned', id: 'p2', pid: 7 })
-    expect(spawned).toEqual(['pty shell'])
+    expect(w.spawned).toEqual(['pty shell'])
     cli.end()
     app.end()
+  })
+
+  // Sandbox follow-ups, item 1: saying `role: 'app'` is not enough. A socket that never answers its challenge, or answers
+  // it with another profile's app key, is refused both spawns as a CLI is.
+  it('an app greeting that does not prove it, or proves it with another profile’s key, is refused both spawns', async () => {
+    const w = await wired()
+    const silent = await client(w.address, 'app', null)
+    await silent.waitFor((m) => m.t === 'hello')
+    await refusedBoth(silent, 1)
+    const other = await client(w.address, 'app', await ensureAppKey(path.join(dir, 'other-profile')))
+    await other.waitFor((m) => m.t === 'app-proven')
+    await refusedBoth(other, 2)
+    expect(w.spawned).toEqual([])
+    expect(w.procs.liveCount()).toBe(0)
+    silent.end()
+    other.end()
   })
 })

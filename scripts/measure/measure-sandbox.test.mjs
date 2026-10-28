@@ -51,6 +51,7 @@ import { codexSandboxArgs } from '../../src/core/sandbox/codexProfile'
 import { claudeSandboxSettings } from '../../src/core/sandbox/claudeSettings'
 import { credentialStoreDenies, hostSocketDenies, sensitiveLocations } from '../../src/core/sandbox/locations'
 import { gitLayoutOf } from '../../src/core/sandbox/gitLayout'
+import { sessionSandboxArgs } from '../../src/core/sandbox/prepared'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -264,6 +265,22 @@ describe('the S2 sets’ arguments come from the builders', () => {
     ])
     expect(codexDenied('linux', e, '/h', '/tmp/astera-host-0123456789ab-v4')).toContain('/tmp/astera-host-0123456789ab-v4')
     expect(codexDenied('win32', e, '/h', 'C:/t/astera-host-x')).toEqual(codexDenied('win32', e, '/h'))
+  })
+
+  // Sandbox follow-ups, item 1: the measurement must hand Codex exactly what a session's start hands it, so its list
+  // comes from the start's own builder, the app key included (on Windows too, where no socket folder is named)
+  it("hands Codex exactly what a session's start does (sessionSandboxArgs), the app key included", () => {
+    const e = { ...env, APPDATA: 'C:/h/AppData/Roaming' }
+    for (const platform of ['darwin', 'linux', 'win32']) {
+      const home = platform === 'win32' ? 'C:/h' : '/h'
+      const dir = platform === 'win32' ? null : '/tmp/astera-host-0123456789ab-v4'
+      const appKey = platform === 'win32' ? 'C:/h/AppData/Roaming/astera/host/app.key' : '/h/.config/astera/host/app.key'
+      for (const layout of [repo, sub, wt]) {
+        const started = codexSandboxCommandArgs(sessionSandboxArgs({ platform, homeDir: home, layout, env: e, hostSocketDir: dir, appKeyFile: appKey }))
+        expect(codexSetArgs({ platform, layout, denied: codexDenied(platform, e, home, dir, appKey) }), platform).toEqual(started)
+      }
+      expect(codexDenied(platform, e, home, dir, appKey), platform).toContain(appKey)
+    }
   })
 
   // `-a never` is an option of the session command; `codex sandbox` and `app-server` take only the -c values

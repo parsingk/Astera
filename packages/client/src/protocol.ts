@@ -137,6 +137,11 @@ export interface HostHelloMessage {
   /** HMAC of the client's `nonce` under the profile's Host key (core/host/hostKey.ts). Sent only
    *  in answer to a nonce. */
   proof?: string
+  /** A random value this Host made for this connection alone, sent only in answer to a hello that named `role: 'app'`
+   *  (sandbox follow-ups, item 1). The socket is a CLI until it answers with `app-proof`, the HMAC of this under the
+   *  profile's app key (hostKey.ts `appProof`), which the Host checks once, on this connection only. Absent from an
+   *  older Host, which takes the role on its word. Additive, so HOST_PROTOCOL stays 4. */
+  challenge?: string
   /** A random 128-bit value this Host process made once at start (remote runtime design §3.2, N11): a client that
    *  sees it change knows every counter it holds came from a Host that is gone. Absent from an older Host. */
   bootId?: string

@@ -4,7 +4,7 @@
 // for the spawn. A roll prepares a chat chain's respawn through the terminal manager's prepare, as it refreshes the
 // capability cache both managers read, so the two managers of a process hold one PreparedLayouts.
 import { ensureGitFiles, ensureWorktreeConfigFiles, gitLayoutOf, type GitLayout } from './gitLayout'
-import { credentialStoreDenies, hostSocketDenies, otherHostFolders, sensitiveLocations } from './locations'
+import { appKeyDenies, credentialStoreDenies, hostSocketDenies, otherHostFolders, sensitiveLocations } from './locations'
 import { codexSandboxArgs } from './codexProfile'
 import type { CodexExcludes } from './gitExcludes'
 import { SANDBOX_UNAVAILABLE, sandboxUnavailable } from './unavailable'
@@ -80,10 +80,31 @@ export class PreparedLayouts {
 
 const keyOf = (accountId: string, cwd: string): string => `${accountId}\u0000${cwd}`
 
-/** A sandboxed Codex session's `-a never` and permission profile: its repository's git directories writable, the E6
- *  list and the OS credential store denied, read from the session's own environment and home, and on macOS and Linux
- *  the folder the Host's socket is in (`hostSocketDir`, hostSocketDenies) and every other Host's folder its prepare found
- *  beside it (`otherHostDirs`, otherHostFolders). On Windows the launch goes through cmd.exe,
+/** What a sandboxed Codex session may not read: the E6 list and the OS credential store, read from the session's own
+ *  environment and home, on macOS and Linux the folder the Host's socket is in (`hostSocketDir`, hostSocketDenies) and
+ *  every other Host's folder its prepare found beside it (`otherHostDirs`, otherHostFolders), and on every OS the app's
+ *  key (`appKeyFile`, appKeyDenies; sandbox follow-ups, item 1). One list for a session's start (sessionSandboxArgs) and
+ *  the S2 measurement (scripts/measure/s2.mjs codexDenied), so what is measured is what a start hands Codex. */
+export function codexSessionDenied(o: {
+  platform: NodeJS.Platform
+  homeDir: string
+  env: Record<string, string | undefined>
+  hostSocketDir?: string | null
+  /** The other Hosts' socket folders beside `hostSocketDir`, as the prepare found them (PreparedLayouts.otherHostsOf). */
+  otherHostDirs?: readonly string[]
+  /** `<profile>/host/app.key` (core/host/hostKey.ts appKeyPath). */
+  appKeyFile?: string | null
+}): string[] {
+  return [
+    ...sensitiveLocations(o.platform, o.env, o.homeDir),
+    ...credentialStoreDenies(o.platform, o.env, o.homeDir),
+    ...hostSocketDenies(o.platform, o.hostSocketDir ?? null, o.otherHostDirs ?? []),
+    ...appKeyDenies(o.appKeyFile ?? null)
+  ]
+}
+
+/** A sandboxed Codex session's `-a never` and permission profile: its repository's git directories writable, and what
+ *  codexSessionDenied lists denied. On Windows the launch goes through cmd.exe,
  *  which would break on a path holding one of its characters, so such a start is refused instead of launched broken
  *  (Review Focus 2). */
 export function sessionSandboxArgs(o: {
@@ -94,13 +115,11 @@ export function sessionSandboxArgs(o: {
   hostSocketDir?: string | null
   /** The other Hosts' socket folders beside `hostSocketDir`, as the prepare found them (PreparedLayouts.otherHostsOf). */
   otherHostDirs?: readonly string[]
+  /** The profile's app key file, denied on every OS (codexSessionDenied). */
+  appKeyFile?: string | null
 }): string[] {
-  const { platform, homeDir, layout, env } = o
-  const denied = [
-    ...sensitiveLocations(platform, env, homeDir),
-    ...credentialStoreDenies(platform, env, homeDir),
-    ...hostSocketDenies(platform, o.hostSocketDir ?? null, o.otherHostDirs ?? [])
-  ]
+  const { platform, layout } = o
+  const denied = codexSessionDenied(o)
   if (platform === 'win32') {
     const named = [...(layout ? [layout.top, layout.gitDir, layout.commonDir, ...layout.worktreeConfigs] : []), ...denied]
     if (named.some((p) => LAUNCH_FORBIDDEN.test(p))) throw sandboxUnavailable('path-unsafe')
@@ -146,6 +165,8 @@ export async function prepareCodexSandbox(o: {
   /** The folder the Host's socket is in, denied on macOS and Linux with every other Host's folder beside it
    *  (sessionSandboxArgs). */
   hostSocketDir?: string | null
+  /** The profile's app key file, denied on every OS (sessionSandboxArgs). */
+  appKeyFile?: string | null
   /** The codex version question (final review I2): asked first, so an old codex is refused before anything is read or
    *  written. Absent, the start is refused as for a version not known. */
   version?: CodexVersionProbe
@@ -171,7 +192,7 @@ export async function prepareCodexSandbox(o: {
     throw fail(err)
   }
   const otherHosts = await otherHostFolders(o.platform, o.hostSocketDir ?? null)
-  const args = sessionSandboxArgs({ platform: o.platform, homeDir: o.homeDir, layout, env: o.env, hostSocketDir: o.hostSocketDir ?? null, otherHostDirs: otherHosts })
+  const args = sessionSandboxArgs({ platform: o.platform, homeDir: o.homeDir, layout, env: o.env, hostSocketDir: o.hostSocketDir ?? null, otherHostDirs: otherHosts, appKeyFile: o.appKeyFile ?? null })
   o.check?.(args)
   if (o.platform === 'win32') {
     const verdict: Readiness = o.ready ? await o.ready({ codexHome: o.env.CODEX_HOME ?? null, env: o.env, log: o.log }) : 'not-set-up'

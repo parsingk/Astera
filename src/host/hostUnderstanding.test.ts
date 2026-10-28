@@ -8,6 +8,7 @@ import path from 'node:path'
 import { createHostUnderstanding, NOT_WRITER, type HostUnderstandingDeps } from './hostUnderstanding'
 import { hostAddress } from './address'
 import { encodeLine, createLineReader } from './framing'
+import { appProof } from '../core/host/hostKey'
 import { startHostServer, type HostServer } from './server'
 import { HOST_PROTOCOL, HOST_YIELD_UNDERSTANDING } from '../core/host/protocol'
 import { versionOnlyOrchCall } from '../core/host/orchProtocol'
@@ -17,6 +18,8 @@ import type { SessionWorkUnit } from '../core/workUnit/types'
 import type { RunRecordInput } from '../core/understanding/pipeline'
 import type { WorktreeInfo } from '../core/types'
 
+/** The app key the Host server here checks an app's proof against (sandbox follow-ups, item 1). */
+const APP_KEY = 'a'.repeat(64)
 let dir: string
 let project: string
 let worktree: string
@@ -737,8 +740,17 @@ describe('createHostUnderstanding', () => {
       const sock = net.connect(address)
       sockets.push(sock)
       await new Promise((r) => sock.once('connect', r))
+      // Answered once the Host said hello, and for an app once it took the app's proof (sandbox follow-ups, item 1)
       const answered = new Promise<void>((resolve) => {
-        const read = createLineReader({ onMessage: () => resolve(), onBadLine: () => {}, onHandlerError: () => {} })
+        const read = createLineReader({
+          onMessage: (v) => {
+            const m = v as { t?: string; challenge?: unknown }
+            if (m.t === 'hello' && typeof m.challenge === 'string') sock.write(encodeLine({ t: 'app-proof', proof: appProof(APP_KEY, m.challenge) }))
+            else resolve()
+          },
+          onBadLine: () => {},
+          onHandlerError: () => {}
+        })
         sock.setEncoding('utf8')
         sock.on('data', read)
       })
@@ -758,6 +770,7 @@ describe('createHostUnderstanding', () => {
         onIdle: () => {},
         orch: versionOnlyOrchCall({ version: '9.9.9' }),
         pidLives: () => true,
+        appKey: () => APP_KEY,
         log: { write: () => {}, close: () => {} }
       })
       server = s
