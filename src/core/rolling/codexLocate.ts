@@ -136,6 +136,10 @@ export async function findRollout(opts: {
    *  'own' maps it; 'other' turns it away (into `rejected` too) and the search goes on to the next older one; 'unknown'
    *  (this machine cannot tell) keeps the rule without it, the newest. Absent, the newest wins as before. */
   owner?: (file: string) => Promise<RolloutOwnership>
+  /** With `owner`: map only a candidate it says is the session's own, passing over (not remembering) one it cannot tell
+   *  about. For a session the start order puts behind another looking in the same folder: its own file is still its
+   *  own, while "the newest" is the other session's to take. */
+  requireOwn?: boolean
 }): Promise<{ path: string; sessionId: string } | null> {
   const now = (opts.now ?? Date.now)()
   const root = path.join(opts.configDir, 'sessions')
@@ -194,10 +198,12 @@ export async function findRollout(opts: {
   // Newest first; a stable sort keeps the first one read among equal times, as the strict `>` it replaces did.
   candidates.sort((a, b) => b.bornAt - a.bornAt)
   for (const c of candidates) {
-    if (opts.owner && (await opts.owner(c.path)).verdict === 'other') {
+    const verdict = opts.owner ? (await opts.owner(c.path)).verdict : null
+    if (verdict === 'other') {
       turnAway(c.path)
       continue
     }
+    if (opts.requireOwn && verdict !== 'own') continue
     return { path: c.path, sessionId: c.sessionId }
   }
   return null

@@ -478,10 +478,12 @@ describe('createHostSpawner', () => {
 
   // The watcher's mayClaim(): of two sessions looking in one account and folder, the newest file is the
   // newest starter's. Without it the earlier worker's poll takes the later worker's rollout.
+  // Where the owner cannot tell: this fake, as findRollout does, maps nothing for a look that needs the session's own
+  // file (`requireOwn`), the look a worker the start order puts behind another makes.
   it('lets only the later of two workers looking in one folder claim the next rollout', async () => {
     let ready = false
     const h = rigWith({ locatePollMs: 5, findRollout: async (o) =>
-      !ready || (o.excludePaths ?? []).includes('C:/cx/second.jsonl') ? null : { path: 'C:/cx/second.jsonl', sessionId: 'cx-2' } })
+      !ready || o.requireOwn || (o.excludePaths ?? []).includes('C:/cx/second.jsonl') ? null : { path: 'C:/cx/second.jsonl', sessionId: 'cx-2' } })
     await h.spawner!.startWorker({ ...startArgs(h.taskId, h.dispatchId), provider: 'codex', accountId: 'acc2' })
     const again = seeded('acc2', 'codex')
     h.box.state = again.s
@@ -490,6 +492,29 @@ describe('createHostSpawner', () => {
     await vi.waitFor(() => expect(h.registry.list()[1].meta!.restore).toMatchObject({ rolloutPath: 'C:/cx/second.jsonl' }))
     await new Promise((r) => setTimeout(r, 30))
     expect(h.registry.list()[0].meta!.restore.rolloutPath).toBeUndefined()
+  })
+
+  // Review round 1, item 3: with several workers in one repo, the earlier one's own file is its own whatever the start
+  // order; under the order alone it waited for the later, idle one.
+  it('lets the earlier of two workers in one folder map the file its own process holds', async () => {
+    let ready = false
+    const h = rigWith({
+      locatePollMs: 5,
+      rolloutOwner: async (file, pid) =>
+        pid === 1000 && file === 'C:/cx/first.jsonl' ? { verdict: 'own' } : { verdict: 'other', why: 'held by pid 1000 outside the session' },
+      findRollout: async (o) => {
+        if (!ready || !o.owner || (o.excludePaths ?? []).includes('C:/cx/first.jsonl')) return null
+        return (await o.owner('C:/cx/first.jsonl')).verdict === 'own' ? { path: 'C:/cx/first.jsonl', sessionId: 'cx-1' } : null
+      }
+    })
+    await h.spawner!.startWorker({ ...startArgs(h.taskId, h.dispatchId), provider: 'codex', accountId: 'acc2' })
+    const again = seeded('acc2', 'codex')
+    h.box.state = again.s
+    await h.spawner!.startWorker({ ...startArgs(again.taskId, again.dispatchId), provider: 'codex', accountId: 'acc2' })
+    expect(h.spawned[0].pty.pid).toBe(1000)
+    ready = true
+    await vi.waitFor(() => expect(h.registry.list()[0].meta!.restore).toMatchObject({ rolloutPath: 'C:/cx/first.jsonl' }))
+    expect(h.registry.list()[1].meta!.restore.rolloutPath).toBeUndefined()
   })
 
   it('stops looking, and says so, when no rollout turns up in time', async () => {

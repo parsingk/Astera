@@ -545,7 +545,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   }
   /** The watcher's mayClaim(): of the sessions still looking in one account and folder, only the one
    *  that started last may claim, because "newest file created after I started" is only its answer. By
-   *  start order rather than by `since`, since two Host spawns can share a millisecond. */
+   *  start order rather than by `since`, since two Host spawns can share a millisecond. A session it puts
+   *  behind may still take a file its own process holds (`requireOwn`, review round 1). */
   const mayClaim = (ptyId: string): boolean => {
     const self = looking.get(ptyId)!
     for (const [id, e] of looking)
@@ -570,10 +571,20 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
         log(`no codex rollout found for session=${sessionId} in ${locateForMs}ms — its note carries no rollout`)
         return stop()
       }
-      if (mayClaim(ptyId)) {
-        const pid = registry.list().find((e) => e.id === ptyId)?.pid
-        const owner = pid ? (file: string) => rolloutOwner(file, pid, sessionId) : undefined
-        const found = await findRollout({ configDir: account.configDir, cwd, since, excludePaths: claimed(ptyId), ...(owner ? { owner } : {}) })
+      const pid = registry.list().find((e) => e.id === ptyId)?.pid
+      const owner = pid ? (file: string) => rolloutOwner(file, pid, sessionId) : undefined
+      // A later session looking in the same folder takes "the newest"; this one may still take a file its own process
+      // holds (review round 1, item 3), and without an owner answer it waits its turn.
+      const ordered = mayClaim(ptyId)
+      if (ordered || owner) {
+        const found = await findRollout({
+          configDir: account.configDir,
+          cwd,
+          since,
+          excludePaths: claimed(ptyId),
+          ...(owner ? { owner } : {}),
+          ...(ordered ? {} : { requireOwn: true })
+        })
         if (!alive(ptyId)) return stop()
         // Another session can claim it across the await: re-checked, as the watcher does.
         if (found && !claimed(ptyId).includes(found.path)) {

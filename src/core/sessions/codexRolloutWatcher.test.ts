@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { CodexRolloutWatcher } from './codexRolloutWatcher'
 import type { Account, SessionInfo } from '../types'
+import type { RolloutOwnership } from '../rolling/rolloutOwner'
 
 const TICK = 1_000
 
@@ -833,6 +834,84 @@ describe('CodexRolloutWatcher maps only a rollout its session holds', () => {
     await makeRollout(dir, THEIRS, 'sess-theirs', cwd)
     await advance(TICK)
     expect(w.rolloutPathFor('live-1')).toBe(ours)
+    w.stop()
+  })
+
+  // Review round 1, item 2: an owner question can be a PowerShell run of half a second or more. The watcher's one tick
+  // waited on it, so every other session's tail read (usage chips, turn notices) waited too.
+  it('does not hold up another session while one waits for its owner answer', async () => {
+    const cwdA = path.join(dir, 'a')
+    const cwdB = path.join(dir, 'b')
+    await makeRollout(dir, OURS, 'sess-a', cwdA)
+    const bFile = await makeRollout(dir, THEIRS, 'sess-b', cwdB)
+    let release!: () => void
+    const pending = new Promise<RolloutOwnership>((r) => (release = () => r({ verdict: 'own' })))
+    const onTurnComplete = vi.fn()
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete,
+      log: () => {},
+      now: () => now,
+      pidOf: (id) => (id === 'a' ? 4100 : 4200),
+      ownerReader: async (_file, pid) => (pid === 4100 ? pending : { verdict: 'own' })
+    })
+    w.register(session('a', cwdA))
+    w.register(session('b', cwdB), bFile) // mapped from the start, as a resumed session is
+    await advance(TICK)
+    await appendFile(bFile, JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete' } }) + '\n')
+    await advance(TICK)
+    expect(onTurnComplete).toHaveBeenCalledWith('b', bFile)
+    release()
+    await advance(TICK)
+    w.stop()
+  })
+
+  it('looks once for a session however many ticks pass while it waits, and maps it once', async () => {
+    const cwd = path.join(dir, 'proj')
+    const ours = await makeRollout(dir, OURS, 'sess-ours', cwd)
+    let release!: () => void
+    const pending = new Promise<RolloutOwnership>((r) => (release = () => r({ verdict: 'own' })))
+    const remember = vi.fn()
+    const logs: string[] = []
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete: vi.fn(),
+      log: (m) => logs.push(m),
+      remember,
+      now: () => now,
+      pidOf: () => 4100,
+      ownerReader: async () => pending
+    })
+    w.register(session('live-1', cwd))
+    for (let i = 0; i < 3; i++) await advance(TICK)
+    release()
+    await advance(TICK)
+    expect(w.rolloutPathFor('live-1')).toBe(ours)
+    expect(remember).toHaveBeenCalledTimes(1)
+    expect(logs.filter((l) => l.startsWith('codex rollout watch mapped'))).toHaveLength(1)
+    w.stop()
+  })
+
+  // Review round 1, item 3: several codex tabs in one repo is common. The newest starter claims first under the old
+  // rule, so an older tab the person typed in waited for a newer idle one; its own file is its own whatever the order.
+  it('lets an older session map the file its own process holds while a newer one in the folder is idle', async () => {
+    const cwd = path.join(dir, 'proj')
+    let ours = ''
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete: vi.fn(),
+      log: () => {},
+      now: () => now,
+      pidOf: (id) => (id === 'older' ? 4100 : 4200),
+      ownerReader: async (file, pid) => (pid === 4100 && file === ours ? { verdict: 'own' } : { verdict: 'other', why: 'held by pid 4100 outside the session' })
+    })
+    w.register(session('older', cwd))
+    now += 1_000
+    w.register(session('newer', cwd))
+    ours = await makeRollout(dir, OURS, 'sess-older', cwd)
+    await advance(TICK)
+    expect(w.rolloutPathFor('older')).toBe(ours)
+    expect(w.rolloutPathFor('newer')).toBeNull()
     w.stop()
   })
 

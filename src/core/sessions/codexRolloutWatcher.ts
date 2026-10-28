@@ -34,6 +34,9 @@ const POLL_MS = 1_000 // Same value as LOCATE_POLL_MS in codexCoordinator.ts (wh
  *  folder rather than reading forward from an offset. */
 const RESCAN_MS = 5_000
 
+/** How many times one look tries again when the file it found was claimed by another session meanwhile. */
+const CLAIM_TRIES = 3
+
 interface Entry {
   sessionId: string
   accountId: string
@@ -63,6 +66,9 @@ interface Entry {
   /** While nothing is mapped: the next tick the locate may run on, and the files it turned away (second pass C2-9). */
   locateAt: number
   rejected: Set<string>
+  /** The locate or the `/new` re-scan in flight, off the tick (review round 1, item 2): one at a time per entry. */
+  looking: Promise<void> | null
+  rescanning: Promise<void> | null
   disposed: boolean
   /** Whether turn completion is reported. Every codex session is watched (the usage chips need it);
    *  only the ones that asked for Slack notifications get the callback. */
@@ -229,6 +235,8 @@ export class CodexRolloutWatcher {
       rescanAt: this.now() + RESCAN_MS,
       locateAt: 0,
       rejected: new Set(),
+      looking: null,
+      rescanning: null,
       disposed: false,
       notifyTurns: opts?.notifyTurns ?? info.slackNotify === true,
       limits: null,
@@ -321,6 +329,9 @@ export class CodexRolloutWatcher {
    * one that started last may claim. A freshly spawned session's `since` is milliseconds before its
    * own file; an adopted one's is minutes or hours earlier, and it waits until it is alone again,
    * which is exactly when the next file to appear really is its own.
+   *
+   * With an owner answer (ownerFor) the order matters only to "the newest": a session it puts behind may
+   * still take a file its own process holds (startLocate, review round 1).
    */
   private mayClaim(self: Entry): boolean {
     for (const e of this.entries.values()) {
@@ -351,8 +362,7 @@ export class CodexRolloutWatcher {
    * it holds open (ownerFor).
    */
   private async rescan(entry: Entry): Promise<void> {
-    if (entry.mappedAt === null || this.now() < entry.rescanAt) return
-    entry.rescanAt = this.now() + RESCAN_MS
+    if (entry.mappedAt === null) return
     for (const e of this.entries.values()) {
       if (e === entry || e.disposed) continue
       if (e.accountId === entry.accountId && comparablePath(e.cwd) === comparablePath(entry.cwd)) return
@@ -387,6 +397,83 @@ export class CodexRolloutWatcher {
     this.deps.log(`codex rollout watch remapped session=${entry.sessionId} path=${found.path}`)
   }
 
+  /** A look run off the tick, its failure logged as a step's is. */
+  private detached(entry: Entry, work: Promise<void>): Promise<void> {
+    return work.catch((err) =>
+      this.deps.log(`codex rollout watch error session=${entry.sessionId}: ${err instanceof Error ? err.message : String(err)}`)
+    )
+  }
+
+  /**
+   * Starts looking for an unmapped entry's rollout, off the tick (review round 1, item 2): an owner question can be a
+   * PowerShell run of half a second or more, and the other sessions' reads (usage chips, turn notices) must not wait
+   * on it. One look per entry at a time, so overlapping ticks neither ask twice nor map twice.
+   */
+  private startLocate(entry: Entry): void {
+    if (entry.looking || this.now() < entry.locateAt) return
+    const account = this.deps.getAccount(entry.accountId)
+    if (!account) return
+    const owner = this.ownerFor(entry)
+    // A session that started more recently is waiting for the newest file. With an owner answer this one may still
+    // take a file its own process holds (review round 1, item 3); without one it waits its turn.
+    const ordered = this.mayClaim(entry)
+    if (!ordered && !owner) return
+    entry.looking = this.detached(entry, this.locate(entry, account, owner, ordered)).finally(() => {
+      entry.looking = null
+    })
+  }
+
+  private async locate(
+    entry: Entry,
+    account: Account,
+    owner: ((file: string) => Promise<RolloutOwnership>) | undefined,
+    ordered: boolean
+  ): Promise<void> {
+    let found: { path: string; sessionId: string } | null = null
+    // Another session can claim it first across the await — re-check so one rollout ends up owned by exactly one
+    // session (mirroring codexRolling's re-check for the same reason). Both paths were built by findRollout, so the
+    // strings match. The looks of several sessions now run side by side rather than one after another in the tick, so
+    // the one that lost looks again at once without that file, as the next in the tick used to.
+    for (let tries = 0; tries < CLAIM_TRIES; tries++) {
+      found = await findRollout({
+        configDir: account.configDir,
+        cwd: entry.cwd,
+        since: entry.since,
+        now: this.now,
+        excludePaths: this.claimed(entry),
+        sessionId: entry.codexSessionId ?? undefined,
+        rejected: entry.rejected,
+        owner,
+        ...(ordered ? {} : { requireOwn: true })
+      })
+      if (entry.disposed || entry.tail) return
+      if (!found) {
+        entry.locateAt = this.now() + locateGap(this.now() - entry.since)
+        return
+      }
+      if (!this.claimed(entry).includes(found.path)) break
+      found = null
+    }
+    if (!found) return
+    entry.rolloutPath = found.path
+    entry.codexSessionId = found.sessionId
+    entry.tail = new JsonlTail(found.path)
+    entry.mappedAt = this.now()
+    // Told once, here, because this is the one moment the scan makes a mapping and the only moment it
+    // can be told: after a restart the scan that produced it cannot be run again for this session.
+    this.rememberMapping(entry.sessionId, found.path, found.sessionId)
+    this.deps.log(`codex rollout watch mapped session=${entry.sessionId} path=${found.path}`)
+  }
+
+  /** Starts the `/new` re-scan when it is due, off the tick for the reason startLocate gives; one at a time per entry. */
+  private startRescan(entry: Entry): void {
+    if (entry.rescanning || entry.mappedAt === null || this.now() < entry.rescanAt) return
+    entry.rescanAt = this.now() + RESCAN_MS
+    entry.rescanning = this.detached(entry, this.rescan(entry)).finally(() => {
+      entry.rescanning = null
+    })
+  }
+
   private ensureTicker(): void {
     if (this.ticker) return
     this.ticker = setInterval(() => void this.tick(), POLL_MS)
@@ -415,41 +502,13 @@ export class CodexRolloutWatcher {
       if (entry.context === null) entry.context = seeded
     }
     if (!entry.tail) {
-      const account = this.deps.getAccount(entry.accountId)
-      if (!account) return
-      if (!this.mayClaim(entry)) return // a session that started more recently is waiting for this file
-      if (this.now() < entry.locateAt) return
-      const found = await findRollout({
-        configDir: account.configDir,
-        cwd: entry.cwd,
-        since: entry.since,
-        now: this.now,
-        excludePaths: this.claimed(entry),
-        sessionId: entry.codexSessionId ?? undefined,
-        rejected: entry.rejected,
-        owner: this.ownerFor(entry)
-      })
-      if (entry.disposed) return
-      if (!found) {
-        entry.locateAt = this.now() + locateGap(this.now() - entry.since)
-        return
-      }
-      // Another session can claim it first across the await — re-check so one rollout ends up owned by exactly one
-      // session (mirroring codexRolling's re-check for the same reason). Both paths were built by findRollout, so the strings match.
-      if (this.claimed(entry).includes(found.path)) return
-      entry.rolloutPath = found.path
-      entry.codexSessionId = found.sessionId
-      entry.tail = new JsonlTail(found.path)
-      entry.mappedAt = this.now()
-      // Told once, here, because this is the one moment the scan makes a mapping and the only moment it
-      // can be told: after a restart the scan that produced it cannot be run again for this session.
-      this.rememberMapping(entry.sessionId, found.path, found.sessionId)
-      this.deps.log(`codex rollout watch mapped session=${entry.sessionId} path=${found.path}`)
-      return // End this step() having only mapped, without reading — the next tick's read() is still that JsonlTail's
+      // Ends this step() having at most started the look, without reading — the next tick's read() is that JsonlTail's
       // first call, so it reads the whole file from offset 0. Deferring does not narrow the range read, so it does not
       // filter out past turns — this delay has no practical effect.
+      this.startLocate(entry)
+      return
     }
-    await this.rescan(entry)
+    this.startRescan(entry)
     if (entry.disposed || !entry.tail) return
     const r = await entry.tail.read()
     if (!r || entry.disposed) return

@@ -602,6 +602,28 @@ describe('findRollout asks the owner of each candidate', () => {
     expect(asks).toBe(before)
   })
 
+  // Review round 1, item 3: a session the start order puts behind another may still claim a file its own process
+  // holds, but not one its owner cannot tell about: that one is the newest starter's under the old rule.
+  it('with requireOwn, maps only a candidate the session holds, passing over one it cannot tell about', async (ctx) => {
+    const { ours, theirs, since } = await two()
+    const [a, b] = [await fs.stat(ours), await fs.stat(theirs)]
+    if (!(a.birthtimeMs > 0 && b.birthtimeMs > a.birthtimeMs)) return ctx.skip('birth times not distinguishable here')
+    const rejected = new Set<string>()
+    const r = await findRollout({
+      configDir: home, cwd: CWD, since, now: () => NOW, rejected, requireOwn: true,
+      owner: async (file) => (file === ours ? { verdict: 'own' } : { verdict: 'unknown', why: 'process 7 cannot be read (EACCES)' })
+    })
+    expect(r).toEqual({ path: ours, sessionId: OURS })
+    // Cannot tell is no verdict: not remembered, asked again next time
+    expect(rejected.has(comparablePath(theirs))).toBe(false)
+  })
+
+  it('with requireOwn, maps nothing when it cannot tell about any candidate', async () => {
+    const { since } = await two()
+    const r = await findRollout({ configDir: home, cwd: CWD, since, now: () => NOW, requireOwn: true, owner: async () => ({ verdict: 'unknown', why: 'lsof could not run' }) })
+    expect(r).toBeNull()
+  })
+
   // The cheap filters come first: a child thread or an exec run is never worth a question about its owner.
   it('asks only about candidates that pass the folder, time and kind filters', async () => {
     await makeRollout({ y: '2026', m: '07', d: '09', uuid: '019f4524-e0ac-7571-a8af-5585504f0e03', cwd: 'D:\\work\\other', mtimeMs: NOW - 1_000 })
