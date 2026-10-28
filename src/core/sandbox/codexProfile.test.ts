@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { codexSandboxArgs, codexSandboxEnv, npmCacheOf } from './codexProfile'
-import { sandboxUnavailable } from './unavailable'
+import { forcedSandboxBlocker, sandboxRefusalMessage, sandboxUnavailable } from './unavailable'
 
 // worktreeConfigs as gitLayoutOf lists them: the checkout's own config.worktree, the main checkout's, the other worktrees';
 // gitFiles: the checkout's commondir, the common directory's, its modules, the other worktrees' commondir
@@ -149,5 +149,13 @@ describe('codexSandboxEnv', () => {
 describe('sandboxUnavailable', () => {
   it('carries its code after a fixed prefix', () => {
     expect(sandboxUnavailable('bwrap').message).toBe('SANDBOX_UNAVAILABLE: bwrap')
+  })
+
+  // Final fix pass (C3): what a sandboxed session starts must run in a sandbox, so where the CLI has none it is refused
+  it('refuses a forced sandbox where the CLI has none, in words the app has', () => {
+    expect(forcedSandboxBlocker('claude', 'win32')?.message).toBe('SANDBOX_UNAVAILABLE: no-sandbox claude')
+    expect(sandboxRefusalMessage('SANDBOX_UNAVAILABLE: no-sandbox claude')).toEqual({ key: 'session.spawn.sandbox.noSandbox', params: { cli: 'Claude Code' } })
+    for (const [provider, platform] of [['claude', 'linux'], ['claude', 'darwin'], ['codex', 'win32'], ['codex', 'linux']] as const)
+      expect(forcedSandboxBlocker(provider, platform), `${provider} ${platform}`).toBeNull()
   })
 })

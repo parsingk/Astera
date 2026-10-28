@@ -306,6 +306,9 @@ export interface OrchServerDeps {
      *  forwarded to the session spawn, which resolves it and falls back to implicit, logged, when it is gone. A reviewer's
      *  start never sets it. */
     agentProfileId?: string
+    /** Start the worker in its CLI's sandbox whatever profile it names (final fix pass, C3): a sandboxed session asked
+     *  for it (`worker-start`). The wiring adds a Task's or Job's own mark (workSandboxed, exec/workerStart.ts). */
+    sandbox?: true
   }): Promise<{ sessionId: string; cwd: string; specPath: string }>
   releaseWorker(a: { dispatchId: string }): Promise<void>
   /** 그 세션의 롤링 체인을 버린다 — **세션은 죽이지 않는다**(releaseWorker 와 그 점이 다르다).
@@ -396,6 +399,9 @@ export interface OrchServerDeps {
     /** 인계 브리핑의 **본문**. 배선이 이것을 파일로 쓰고, 세션에는 그 파일을 가리키는 한 줄만
      *  넣는다(handover.ts 의 coordinatorLaunchPrompt) — 여러 줄은 argv 를 지나갈 수 없다. */
     brief: string
+    /** The Job was made by a sandboxed session (Job.sandboxed): its coordinator starts in its CLI's sandbox (final fix
+     *  pass, C3). */
+    sandbox?: true
   }): Promise<{ sessionId: string }>
   /** Stops a coordinator session `startCoordinator` opened, when the hand-over finds another one
    *  already in the Run's slot (Task 1 fix round 1, I2). Optional: without it that session is left
@@ -637,6 +643,10 @@ export interface OrchServerDeps {
    *  take). **Only the Host injects it.** Rejects with the reason when the start fails; answers the new
    *  session's row as `sessions list` shows it. */
   createSession?(o: SessionCreate): Promise<HostSession>
+  /** Whether the session that made a call runs in its CLI's sandbox (its note's `sandboxed`, by the id the call's token
+   *  names): what it starts then starts in the sandbox too (final fix pass, C3). Only the Host injects it; absent, no
+   *  caller reads as sandboxed. */
+  sessionSandboxed?(sessionId: string): boolean | Promise<boolean>
   /** A terminal session's turn, for `sessions send --wait` (CLI spec §15): the hook-event state
    *  `sessions list` reads, with the prompt a `waiting` is. `since` is when the send began; an event
    *  stamped before it reads `unknown`. null for a session the Host does not hold. Host-injected, beside
@@ -752,6 +762,9 @@ export interface SessionCreate {
   /** The agent profile the session is started from (Agent Profiles design §5), by its id: `sessions create
    *  --agent-profile` resolves a name first. */
   agentProfileId?: string
+  /** A sandboxed session asked for it (final fix pass, C3): it starts in its CLI's sandbox whatever its profile says,
+   *  or is refused (`SANDBOX_UNAVAILABLE`) where that CLI has no sandbox. */
+  sandbox?: true
 }
 
 type Reply = { status: number; body: unknown }
@@ -1309,6 +1322,21 @@ const profileRefused = (reason: 'agent-profile-unavailable' | 'agent-profile-no-
 const agentCaller = (caller: { sessionId: string; role?: string }): boolean =>
   caller.role === 'mcp' || caller.role === 'plugin' || (caller.role === 'cli' && caller.sessionId !== '')
 
+/** The commands whose work starts in the sandbox when a sandboxed session asks (final fix pass, C3): a session, a Job
+ *  (its coordinator and workers), a Task (its workers), a worker. `tasks add` is `task-create` under another name. */
+const STARTS_WORK: ReadonlySet<string> = new Set(['sessions-create', 'run-create', 'task-create', 'worker-start'])
+
+/** Whether the caller is a session running in its CLI's sandbox (OrchServerDeps.sessionSandboxed): what it starts, a
+ *  session, a Job's coordinator, a worker, starts in the sandbox too (final fix pass, C3, the person's decision). The app
+ *  and the Host's own loops are no session; a shell has none. */
+function sandboxedCaller(deps: OrchServerDeps, caller: { sessionId: string }): boolean | Promise<boolean> {
+  if (caller.sessionId === '' || caller.sessionId === APP_CALLER || caller.sessionId === HOST_CALLER) return false
+  // Answered in the same turn when the answer is (the Host's is a read of its registries): a command that commits before
+  // its first await keeps doing so
+  const r = deps.sessionSandboxed?.(caller.sessionId)
+  return r === undefined ? false : typeof r === 'boolean' ? r : r.then((v) => v === true)
+}
+
 /** The person's decision on the final review (2026-10-22): an agent (`agentCaller`) may start work as a profile that
  *  runs without permission checks only while the app-wide mode already skips them, so a profile is never an agent's way
  *  around the app's own setting. A person is not asked, and neither is a profile that checks or follows the app. A
@@ -1633,6 +1661,10 @@ export async function handleCommand(
       if (refused) return refused
     }
   }
+  // **Whether the caller runs in the sandbox, before the state too** (final fix pass, C3): what it starts then starts in
+  // the sandbox, and the Host answers it by a read of its registries. Asked only by the commands that start or add work.
+  const boxed = STARTS_WORK.has(cmd) ? sandboxedCaller(deps, caller) : false
+  const callerBoxed = typeof boxed === 'boolean' ? boxed : await boxed
   const now = deps.now?.() ?? new Date().toISOString()
   const s = deps.getState()
 
@@ -1887,6 +1919,8 @@ export async function handleCommand(
         runId: target.id,
         cwd: job.cwd,
         accountId,
+        // A Job a sandboxed session made: its coordinator starts in the sandbox too (final fix pass, C3)
+        ...(job.sandboxed === true ? { sandbox: true as const } : {}),
         brief: buildHandoverPrompt({
           runId: target.id,
           objective: job.objective,
@@ -2195,6 +2229,8 @@ export async function handleCommand(
             ...(concurrency !== null ? { concurrency } : {}),
             ...(coordinatorAccountId ? { coordinatorAccountId } : {}),
             ...(agentProfileId ? { agentProfileId } : {}),
+            // Made by a sandboxed session: its coordinator and workers start in the sandbox (final fix pass, C3)
+            ...(callerBoxed ? { sandboxed: true } : {}),
             // `--auto` 는 값이 없는 플래그다(task-create --review 와 같은 모양). **예약이면 켜지
             // 않는다** — 템플릿 자신은 돌지 않기 때문이다.
             //
@@ -3517,6 +3553,8 @@ export async function handleCommand(
             parentId: str(args.parent) ?? undefined,
             ...(accountIds ? { accountIds } : {}),
             ...(agentProfileId !== undefined ? { agentProfileId } : {}),
+            // Added by a sandboxed session: its workers start in the sandbox, in whichever Job (final fix pass, C3)
+            ...(callerBoxed ? { sandboxed: true } : {}),
             ...(validateIds ? { validateConfigIds: validateIds } : {}),
             // `--review` 는 값이 없는 플래그다(task-list --ready 와 같은 모양). 어느 provider 가
             // 읽을지는 앱이 고른다 — 계정 풀을 아는 것은 앱이다.
@@ -3969,7 +4007,10 @@ export async function handleCommand(
           terminalAccountId,
           // What the Task runs as, read off the Dispatch openDispatch just opened (workerProfileOf); not resolved here, so
           // a profile deleted since starts the worker implicit at the spawn, logged, rather than refusing it
-          ...(opened.value.agentProfileId !== undefined ? { agentProfileId: opened.value.agentProfileId } : {})
+          ...(opened.value.agentProfileId !== undefined ? { agentProfileId: opened.value.agentProfileId } : {}),
+          // A sandboxed caller's worker starts in the sandbox (final fix pass, C3); the Task's or Job's own mark is the
+          // wiring's (startWorkerWithChain)
+          ...(callerBoxed ? { sandbox: true as const } : {})
         })
       } catch (e) {
         // Failure rollback — this is the server's transaction handling, not a pure-layer transition
@@ -5105,12 +5146,15 @@ export async function handleCommand(
         if (odd !== undefined)
           return bad(`--roll-accounts must not mix providers: ${account} is ${mine.provider}, ${odd} is not`)
       }
+      // A sandboxed caller's session starts in the sandbox, whatever its profile (final fix pass, C3)
+      const sandbox = callerBoxed
       try {
         return okBody(
           await deps.createSession({
             kind: sessionKind,
             accountId: account,
             cwd,
+            ...(sandbox ? { sandbox: true as const } : {}),
             ...(args.title !== undefined ? { title: str(args.title)! } : {}),
             ...(args.prompt !== undefined ? { prompt: str(args.prompt)! } : {}),
             rollAccountIds: chain,

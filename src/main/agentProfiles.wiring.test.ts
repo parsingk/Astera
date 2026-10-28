@@ -153,3 +153,25 @@ describe('the app records the conversation a profiled session is on, and reads i
     expect(defaults).toMatch(/agentProfileId: await core\.profileConversations\.profileOf\(sessionId\)/)
   })
 })
+
+// Final fix pass (minor 1, C3): the sandbox comes from the profile, never from the options a caller passes (a `sandbox`
+// the renderer sends is dropped), and the app's own start of a sandboxed session's work asks for it apart
+// (`forceSandbox`), refused where the CLI has no sandbox. registerIpc cannot run without Electron: guarded by its text
+describe('ipc.ts takes the sandbox from the profile, or from a sandboxed session’s work', () => {
+  const body = between('  async function spawnSession(opts: any)', "ipcMain.handle('sessions.spawn'")
+  it('drops a caller’s sandbox before the profile is read, and refuses a forced one where the CLI has none', () => {
+    expect(body).toMatch(/const \{ sandbox: _callerSandbox, forceSandbox: _forced, \.\.\.withoutSandbox \} = opts/)
+    expect(before(body, 'withoutSandbox', 'appProfileSpawn(')).toBe(true)
+    expect(body).toMatch(/forcedSandboxBlocker\(providerOf\(account\), process\.platform\)/)
+    expect(body).toMatch(/if \(forceSandbox\) opts = \{ \.\.\.opts, sandbox: true \}/)
+  })
+  it('the renderer cannot ask for a forced one', () => {
+    expect(src).toMatch(/ipcMain\.handle\('sessions\.spawn', async \(_e, opts\) => spawnSession\(\{ \.\.\.opts, forceSandbox: undefined \}\)\)/)
+  })
+  it('a worker and a coordinator of a sandboxed session’s work are started with forceSandbox', () => {
+    const worker = between('      spawnSession: async (o) => {', "send('session:created', info)")
+    expect(worker).toMatch(/\.\.\.\(o\.sandbox \? \{ forceSandbox: true \} : \{\}\)/)
+    const coord = between('      startCoordinator: (a) =>', '      stopCoordinator:')
+    expect(coord).toMatch(/\.\.\.\(sandbox \? \{ forceSandbox: true \} : \{\}\)/)
+  })
+})

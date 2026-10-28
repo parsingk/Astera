@@ -181,6 +181,9 @@ export interface Job {
   /** The agent profile this Job runs as (Agent Profiles design §6), its real id: only the default of its Tasks. It never
    *  picks the coordinator account, and the coordinator starts without it (Astera's own role). */
   agentProfileId?: string
+  /** Made by a session that runs in its CLI's sandbox (final fix pass, C3): its coordinator and every worker of its
+   *  Tasks start in the sandbox too, whatever profile they name (state.ts workSandboxed). */
+  sandboxed?: true
   /** 앱이 이 Job 을 스스로 돌리는가. **UI 가 만든 Job 에만 참이다** — 코디네이터가 만든 Job 을
    *  앱이 함께 돌리면 둘이 같은 ready Task 를 두고 경합하고, 진 쪽(대개 코디네이터)의
    *  worker-start 가 `dispatch already open` 을 받는다. 코디네이터 LLM 에게는 자기 명령이 이유
@@ -396,6 +399,9 @@ export interface Task {
    *  it alone, `accountIds` were copied from it then and stay fixed; the profile decides MCP and permission at each
    *  spawn, and one deleted since falls back to implicit there. */
   agentProfileId?: string
+  /** Added by a session that runs in its CLI's sandbox (final fix pass, C3): its workers start in the sandbox too,
+   *  whatever profile they name, in whichever Job it is (state.ts workSandboxed). Kept by a run's copy. */
+  sandboxed?: true
   /** 이 Task 를 완료로 판정할 실행 구성의 id. 없으면 worker_done 을 그대로 믿는다 —
    *  "문서를 고친다" 같은 Task 에 빌드를 거는 것은 틀린 판정이므로 검증 없음이 기본이다. */
   validateConfigId?: string

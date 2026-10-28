@@ -1427,4 +1427,14 @@ describe('OrchCoordinator.startWorker: an agent profile', () => {
     expect(deps.spawned[0]).toMatchObject({ agentProfileId: 'ap_1' })
     expect(deps.spawned[1]).not.toHaveProperty('agentProfileId')
   })
+
+  // Final fix pass (C3): a worker of sandboxed work starts in the sandbox, whatever profile it names
+  it('hands the spawn the sandbox when it is asked for, and no such key when it is not', async () => {
+    const deps = makeDeps()
+    const co = new OrchCoordinator(deps)
+    await co.startWorker({ ...baseArgs('dsp_1'), runCwd: dir, agentProfileId: 'ap_open', sandbox: true })
+    await co.startWorker({ ...baseArgs('dsp_2'), runCwd: dir })
+    expect(deps.spawned[0]).toMatchObject({ agentProfileId: 'ap_open', sandbox: true })
+    expect(deps.spawned[1]).not.toHaveProperty('sandbox')
+  })
 })

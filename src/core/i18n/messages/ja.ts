@@ -668,6 +668,7 @@ export const ja: Catalog = {
   'session.spawn.sandbox.cliTooOld': 'サンドボックスを使えるのは {cli} {min} 以降だけです。いまは {found} です。CLI を更新してください。',
   'session.spawn.sandbox.cliVersionUnknown': '{cli} のバージョンを読み取れないため、サンドボックスで起動できません。',
   'session.spawn.sandbox.cliMissing': '{cli} が見つからないため、サンドボックスで起動できません。',
+  'session.spawn.sandbox.noSandbox': '{cli} にはこのシステムでサンドボックスがありません。サンドボックス内のセッションが始めるものはサンドボックスで動く必要があるため、起動しませんでした。',
   'session.spawn.sandbox.settingsWriteFailed': 'サンドボックスの設定ファイルを書き込めないため、起動できません。プロファイルフォルダーに書き込めるか確認してください。',
   'session.roll.sandbox.windowsSetup': '{account} アカウントは Windows サンドボックスが設定されていないため、切り替えられませんでした。設定 › エージェントプロファイルで、このアカウントの「設定する」を押してください。',
   'session.roll.sandbox.refused': '次のアカウントに切り替えられませんでした: {reason}',

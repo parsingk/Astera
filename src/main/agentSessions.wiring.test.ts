@@ -23,7 +23,8 @@ describe('ipc.ts marks the sessions an agent starts', () => {
 
   it('a Job’s coordinator (startCoordinator’s spawn)', () => {
     const coordinator = between('      startCoordinator: (a) =>', "send('session:created', info)")
-    expect(coordinator).toMatch(/spawnSession\(\{ \.\.\.o, startedBy: 'agent' \}\)/)
+    // Final fix pass (C3): and in the sandbox when its Job was made by a sandboxed session
+    expect(coordinator).toMatch(/spawnSession\(\{ \.\.\.o, startedBy: 'agent', \.\.\.\(sandbox \? \{ forceSandbox: true \} : \{\}\) \}\)/)
   })
 
   // Review M2: the shared body both paths go through, not only the handler's line

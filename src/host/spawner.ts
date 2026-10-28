@@ -27,6 +27,7 @@ import { ensureShuttle, sessionCmdLink } from '../core/orchestration/exec/shuttl
 import type { ChatManagerDeps, ChatOrchEnv } from '../core/chat/manager'
 import type { CodexWindowsReady, PreparedLayouts } from '../core/sandbox/prepared'
 import { claudeSandboxStart, type ClaudeSandboxStart, type RunGit } from '../core/sandbox/claudeStart'
+import { forcedSandboxBlocker } from '../core/sandbox/unavailable'
 import { binDirFor } from '../core/orchestration/cliInstall'
 import {
   preTrustWorkspace,
@@ -204,7 +205,18 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
    *  and the bypass read from the settings at this spawn. Announced with `pty-opened`, so an attached app
    *  takes it back as a tab, and heard by `onSpawned`, so the rolling registers its chain. A missing
    *  folder or an unknown account starts nothing and is tagged `refusedBeforeActing`. */
-  createSession(o: { accountId: string; cwd: string; title?: string; initialPrompt?: string; rollAccountIds: string[]; startedBy?: 'agent'; agentProfileId?: string }): Promise<SessionInfo>
+  /** `sandbox`: a sandboxed session asked for it (final fix pass, C3), and it starts in the sandbox whatever its profile
+   *  says, or is refused where its CLI has none. */
+  createSession(o: {
+    accountId: string
+    cwd: string
+    title?: string
+    initialPrompt?: string
+    rollAccountIds: string[]
+    startedBy?: 'agent'
+    agentProfileId?: string
+    sandbox?: true
+  }): Promise<SessionInfo>
 }
 
 type SpawnOpts = Parameters<CoordinatorDeps['spawnSession']>[0]
@@ -605,8 +617,18 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     // Before prepare, which keys what it finds by the PATH it sees.
     await ensureOnWindowsPath([providerOf(account)])
     await ensureInstallDirOnPath([providerOf(account)]) // macOS and Linux: Claude Code installed since this process started (installDirPath.ts)
-    // The profile's sandbox switch (sandbox design §6): the prepare reads the folder for it, and the spawn starts in it
-    const sandbox = profile?.sandbox === true
+    // The profile's sandbox switch (sandbox design §6): the prepare reads the folder for it, and the spawn starts in it.
+    // What a sandboxed session asked for, or the work it made, starts in it whatever the profile says (final fix pass,
+    // C3), and where its CLI has no sandbox it is refused before anything starts rather than run without one
+    if (o.sandbox === true) {
+      const refused = forcedSandboxBlocker(providerOf(account), platform)
+      if (refused) {
+        log(`spawn refused: ${refused.message} (a sandboxed session's work)`)
+        if (trace) trace.settingsRefused = true
+        throw refused
+      }
+    }
+    const sandbox = profile?.sandbox === true || o.sandbox === true
     await sessions.prepare({ account, cwd: o.cwd, ...(profile ? { agentProfileId: profile.agentProfileId } : {}), ...(sandbox ? { sandbox: true } : {}) })
     const rollProviders = o.rollAccountIds.map((rid) => providerOf(accounts.find((x) => x.id === rid) ?? account))
     const opensBefore = opens
@@ -896,7 +918,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
             ...(o.initialPrompt !== undefined ? { initialPrompt: o.initialPrompt } : {}),
             rollAccountIds: o.rollAccountIds,
             ...(o.startedBy ? { startedBy: o.startedBy } : {}),
-            ...(o.agentProfileId !== undefined ? { agentProfileId: o.agentProfileId } : {})
+            ...(o.agentProfileId !== undefined ? { agentProfileId: o.agentProfileId } : {}),
+            ...(o.sandbox ? { sandbox: true as const } : {})
           },
           accounts,
           trace

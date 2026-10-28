@@ -312,6 +312,25 @@ describe('createHostOrch', () => {
       expect(JSON.stringify((await create('cli')).body)).not.toContain('registered project')
       expect(createSession).not.toHaveBeenCalled()
     })
+    // Final fix pass (C3): the Host's lookup of whether a caller's session runs in the sandbox reaches the command layer,
+    // and a sandboxed caller's session is asked for in the sandbox; another caller's is not
+    it('a sandboxed caller’s sessions-create asks for a sandboxed session, through the Host’s lookup', async () => {
+      const createSession = vi.fn(async () => ({ id: 'ses_new', kind: 'terminal' as const, title: 't', accountId: 'acc1', cwd: 'D:/p', alive: true, state: 'unknown' as const }))
+      await fs.writeFile(
+        path.join(dir, 'accounts.json'),
+        JSON.stringify({ accounts: [{ id: 'acc1', label: '일', configDir: path.join(dir, 'cfg', 'acc1'), color: '#fff', createdAt: 'T', provider: 'claude' }] }),
+        'utf8'
+      )
+      const orch = orchOver({ createSession, hasApp: () => false, sessionSandboxed: (id) => id === 'ses_box' })
+      await orch.ready()
+      const create = (sessionId: string): ReturnType<typeof orch.call> =>
+        orch.call({ cmd: 'sessions-create', args: { account: 'acc1', cwd: 'D:/p' }, sessionId, from: caller('cli') })
+      const boxed = await create('ses_box')
+      expect(boxed.status, JSON.stringify(boxed.body)).toBe(200)
+      expect((await create('ses_open')).status).toBe(200)
+      expect((createSession.mock.calls[0] as unknown as [Record<string, unknown>])[0]).toMatchObject({ sandbox: true })
+      expect((createSession.mock.calls[1] as unknown as [Record<string, unknown>])[0]).not.toHaveProperty('sandbox')
+    })
     it('an unreadable settings file refuses', async () => {
       await settings('{not json')
       const r = await orchOver().call({ cmd: 'jobs-list', args: {}, sessionId: '', from: caller('mcp') })

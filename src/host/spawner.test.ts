@@ -1071,6 +1071,50 @@ describe('createHostSpawner — createSession', () => {
       expect(await h.spawner!.codexWindowsReady!({ codexHome: 'x', env: {} })).toBe('not-set-up')
     })
 
+    // Final fix pass (C3, the person's decision): a session a sandboxed session asks for starts in the sandbox whatever
+    // profile it names, or none; where its CLI has no sandbox (Claude Code on Windows) it is refused rather than started
+    // without one. A caller that is not sandboxed is unchanged (the tests above)
+    it('a sandboxed caller’s session starts sandboxed whatever its profile, or is refused where its CLI has none', async () => {
+      await fs.writeFile(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
+        { id: 'acc1', label: 'one', configDir: path.join(dir, 'cfg1'), color: '#888', createdAt: NOW, provider: 'claude' },
+        { id: 'acc2', label: 'two', configDir: path.join(dir, 'cfg2'), color: '#888', createdAt: NOW, provider: 'codex' }
+      ] }))
+      await writeAgentProfiles(profile, { version: 1, profiles: [P({ id: 'ap_open', name: 'Open', accountIds: ['acc2'], permission: 'bypass' })] })
+      const h = rig({ codexNoDaemon: Object.assign(() => true, { warm: async () => {} }), findRollout: async () => null, claudeVersion: Object.assign(() => '2.1.310', { warm: async () => {} }) })
+      for (const [i, agentProfileId] of [[0, 'ap_open'], [1, undefined]] as const) {
+        const info = await h.spawner!.createSession({ accountId: 'acc2', cwd: repo, rollAccountIds: [], sandbox: true, ...(agentProfileId ? { agentProfileId } : {}) })
+        const args = h.spawned[i].args as string[]
+        expect(args).toContain('default_permissions="astera"')
+        expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox')
+        expect(info.sandboxed).toBe(true)
+        expect(h.registry.list()[i].meta!.restore).toMatchObject({ sandboxed: true })
+      }
+      if (process.platform === 'win32') {
+        await expect(h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: no-sandbox claude$/)
+        expect(h.spawned).toHaveLength(2)
+      } else {
+        const claude = await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], sandbox: true })
+        expect(claude.sandboxed).toBe(true)
+      }
+    })
+
+    // C3: every worker of a Job a sandboxed session made starts in the sandbox whatever profile its Task names; the worker
+    // of a Task a sandboxed session added does too; any other worker is unchanged
+    it('a worker of a Job or Task a sandboxed session made starts sandboxed', async () => {
+      const h = rigWith({ findRollout: async () => null })
+      const st = h.box.state
+      const jobId = st.runs.find((r) => r.id === st.tasks.find((t) => t.id === h.taskId)!.runId)!.jobId
+      h.box.state = { ...st, jobs: st.jobs.map((j) => (j.id === jobId ? { ...j, sandboxed: true as const } : j)) }
+      await h.spawner!.startWorker({ ...startArgs(h.taskId, h.dispatchId), provider: 'codex', accountId: 'acc2' })
+      expect(h.spawned[0].args).toContain('default_permissions="astera"')
+      expect(h.registry.list()[0].meta!.restore).toMatchObject({ sandboxed: true })
+      // The same Job unmarked: a worker as today
+      const plain = rigWith({ findRollout: async () => null })
+      await plain.spawner!.startWorker({ ...startArgs(plain.taskId, plain.dispatchId), provider: 'codex', accountId: 'acc2' })
+      expect(plain.spawned[0].args).not.toContain('default_permissions="astera"')
+      expect(plain.registry.list()[0].meta!.restore).not.toHaveProperty('sandboxed')
+    })
+
     it('a bypass profile starts unattended while the app-wide mode is manual, and its id rides the note', async () => {
       await fs.writeFile(path.join(profile, 'app-settings.json'), JSON.stringify({ agentPermissionMode: 'manual' }))
       await writeAgentProfiles(profile, { version: 1, profiles: [P({ id: 'ap_b', permission: 'bypass' })] })

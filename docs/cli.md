@@ -1150,6 +1150,10 @@ Linux. On Linux its git reads an excludes file Astera writes
 (`<profile>/sandbox/excludes-<uid>`: the person's own `core.excludesFile`, or git's default one, then the names the
 sandbox keeps placeholders for, such as `.bashrc` and `.vscode`), so `git add -A` works. Claude Code has no sandbox on
 Windows: there the switch only keeps its file tools, not its shell, out of those folders, and npm keeps its own cache.
+What a sandboxed session starts runs in the sandbox too, whatever profile it names: a session it makes with `sessions
+create`, a Job it makes (its coordinator and every worker), a Task it adds to any Job and a worker it starts with
+`worker-start`. Where that CLI has no sandbox (Claude Code on Windows) such a start is refused with
+`SANDBOX_UNAVAILABLE: no-sandbox claude` rather than run without one.
 On Windows the Codex sandbox is Codex's elevated one, which keeps Credential Manager out, and the repository is named a
 safe directory for the account it runs as; a repository or home folder whose path holds a character cmd.exe reads as
 syntax (`" & | < > ^ %`) cannot be carried to it. Each Codex account's home must have the elevated sandbox set up once

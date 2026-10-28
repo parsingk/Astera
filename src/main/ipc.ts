@@ -69,6 +69,7 @@ import { createPluginsRoute } from './host/pluginsRoute'
 import { createExtensionsRoute } from './host/extensionsRoute'
 import { createAgentProfilesRoute } from './host/agentProfilesRoute'
 import { forgetReadiness } from '../core/sandbox/windowsReadiness'
+import { forcedSandboxBlocker } from '../core/sandbox/unavailable'
 import { createAuditRoute } from './host/auditRoute'
 import { createCredentialsRoute } from './host/credentialsRoute'
 import { createAppPullRequests } from './host/appPullRequests'
@@ -2095,6 +2096,19 @@ export function registerIpc(
       void core.schedulerConfig.set(resumeId, opts.schedule).catch(() => {})
     }
     const account = core.accounts.get(opts.accountId)
+    // **The sandbox comes from the profile only** (final fix pass, minor 1; permission.ts: "never a caller's"): a
+    // `sandbox` in the options is dropped, whoever sent it. The app's own start of a sandboxed session's work, a Job's
+    // worker or coordinator, asks for it apart (`forceSandbox`, C3), and where the CLI has no sandbox it is refused
+    // rather than started without one; the renderer's handler clears that one.
+    const forceSandbox = opts.forceSandbox === true
+    {
+      const { sandbox: _callerSandbox, forceSandbox: _forced, ...withoutSandbox } = opts
+      opts = withoutSandbox
+    }
+    if (forceSandbox) {
+      const refused = forcedSandboxBlocker(providerOf(account), process.platform)
+      if (refused) throw refused
+    }
     // The agent profile it names, by id or name (Agent Profiles design §5): the session keeps the profile's real id, and
     // the profile's permission decides the bypass when the caller gave none. One that is not found is logged and
     // dropped, and the session starts with the app-wide mode as a dialog spawn without a profile does (the dialog sent
@@ -2113,6 +2127,7 @@ export function registerIpc(
       })
       opts = { ...rest, ...resolved }
     }
+    if (forceSandbox) opts = { ...opts, sandbox: true }
     // A resume names its conversation now: the profile it resumes as is written down by it, as the schedule is above
     if (resumeId && opts.agentProfileId !== undefined) void core.profileConversations.record(resumeId, opts.agentProfileId)
     // win32: a CLI installed since this app started is not on its PATH yet; the Path Windows keeps is
@@ -2389,7 +2404,8 @@ export function registerIpc(
     }
     return info
   }
-  ipcMain.handle('sessions.spawn', async (_e, opts) => spawnSession(opts))
+  // The renderer's options never force the sandbox: only the app's own start of a sandboxed session's work does
+  ipcMain.handle('sessions.spawn', async (_e, opts) => spawnSession({ ...opts, forceSandbox: undefined }))
 
   // ---- agent browser (spec: docs/superpowers/specs/2026-09-06-agent-browser-design.md) ----
   // It sits here, above the orchestration startup, because `agentRuns` is read from the server deps
@@ -3041,6 +3057,8 @@ export function registerIpc(
           // A Job's worker, reviewer or repair worker is an agent's session: its tab closes when it ends (2026-10-20).
           // Outside the satisfies below, whose shape is the coordinator's options and has no such field.
           startedBy: 'agent',
+          // A worker of a sandboxed session's work starts in the sandbox whatever its profile says (final fix pass, C3)
+          ...(o.sandbox ? { forceSandbox: true } : {}),
           ...({
             accountId: o.accountId,
             cwd: o.cwd,
@@ -3352,9 +3370,10 @@ export function registerIpc(
             specsDir,
             preTrust: preTrustWorkspace,
             bypassPermissions: async () => core.appSettings.getAgentPermissionMode() === 'yolo',
-            spawn: async (o) => {
-              // A coordinator is an agent's session too: its tab closes when it ends (2026-10-20)
-              const info = await spawnSession({ ...o, startedBy: 'agent' })
+            spawn: async ({ sandbox, ...o }) => {
+              // A coordinator is an agent's session too: its tab closes when it ends (2026-10-20). One of a Job a sandboxed
+              // session made starts in the sandbox (final fix pass, C3)
+              const info = await spawnSession({ ...o, startedBy: 'agent', ...(sandbox ? { forceSandbox: true } : {}) })
               // **탭을 띄우는 것이 이 한 줄이다.** 공용 spawnSession 은 이 이벤트를 내지 않는다 — 사용자
               // 경로에서는 반환값이 렌더러로 가서 App.tsx 가 탭을 만들기 때문이다(그 함수 위의 주석).
               // main 안에서 직접 부르는 이 자리는 반환값이 렌더러에 닿지 않으므로, 워커 세션이 그랬던
