@@ -79,10 +79,18 @@ describe('the sandbox marker on a session tab', () => {
     for (const lang of LANGS) expect(translate(lang, 'session.tab.denyOnly'), lang).toBe(denyOnly[lang])
   })
 
+  // Sandbox follow-ups, round 2: a remote session's tab is marked the same way, from what its Runtime says of it
+  it('marks a remote session’s tab as a local one', () => {
+    expect(render([session({ sandboxKind: 'sandbox', remote: true })])).toMatch(/<span class="tab-sandbox" title="session\.tab\.sandboxed"><svg/)
+    expect(render([session({ sandboxKind: 'deny-only', remote: true })])).toMatch(/<span class="tab-sandbox is-deny-only" title="session\.tab\.denyOnly"><svg/)
+  })
+
   // The kind comes from the session (its manager knows the OS and the CLI), never from the renderer's own platform
   it('the pane grid hands the session’s own kind to its tab', () => {
     const grid = readFileSync(path.join(here, 'PaneGrid.tsx'), 'utf8')
     expect(grid).toContain("sandboxKind: s.sandboxed === true ? s.sandboxKind : undefined")
+    // and a remote session's, from its ref (its Runtime's row, refOf)
+    expect(grid).toContain("sandboxKind: r.sandboxed === true ? r.sandboxKind : undefined")
     const tabs = readFileSync(path.join(here, 'WorkbenchTabs.tsx'), 'utf8')
     expect(tabs).not.toContain('window.api.platform')
   })

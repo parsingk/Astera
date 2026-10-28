@@ -28,7 +28,7 @@ import { main } from './run'
 import { hostAddress } from '../host/address'
 import { encodeLine, createLineReader } from '../host/framing'
 import { startHostServer, ADDRESS_TAKEN, type HostServer } from '../host/server'
-import { ensureHostKey, hostProof } from '../core/host/hostKey'
+import { appProof, ensureAppKey, ensureHostKey, hostProof, readAppKeySync } from '../core/host/hostKey'
 import { createHostOrch, type HostOrch } from '../host/orch'
 import { createPluginManager } from '../host/plugins/manager'
 import { createHostAgentProfiles } from '../host/agentProfiles/commands'
@@ -219,7 +219,9 @@ interface RawClient {
   close(): Promise<void>
 }
 
-async function rawClient(address: string, hello: ClientMessage, answer?: (act: string, args: unknown) => unknown): Promise<RawClient> {
+/** An app (`role: 'app'`) answers the Host's challenge under `appKey` and is greeted once the Host took the proof, as the
+ *  app's own client does (sandbox follow-ups, item 1). */
+async function rawClient(address: string, hello: ClientMessage, answer: ((act: string, args: unknown) => unknown) | undefined, appKey: string): Promise<RawClient> {
   const sock = net.connect(address)
   sock.setEncoding('utf8')
   const got: HostMessage[] = []
@@ -232,7 +234,8 @@ async function rawClient(address: string, hello: ClientMessage, answer?: (act: s
       onMessage: (v) => {
         const m = v as HostMessage
         got.push(m)
-        if (m.t === 'hello') greeted()
+        if (m.t === 'hello' && typeof m.challenge === 'string') sock.write(encodeLine({ t: 'app-proof', proof: appProof(appKey, m.challenge) } satisfies ClientMessage))
+        else if (m.t === 'hello' || m.t === 'app-proven') greeted()
         if (m.t === 'orch-result') waiting.get(m.call)?.({ status: m.status, body: m.body })
         if (m.t === 'orch-act') {
           try {
@@ -308,6 +311,8 @@ interface Spawn {
 interface Rig {
   profileDir: string
   address: string
+  /** The profile's app key, which a raw client proves it is the app with (sandbox follow-ups, item 1). */
+  appKey: string
   /** The Host's loopback endpoint (`ASTERA_LOOPBACK`). */
   loopback: string
   /** The CLI environment that finds this Host: its profile, as the app hands it to a session. */
@@ -775,6 +780,7 @@ async function hostRig(
   await units.start()
 
   const addr = hostAddress({ profileDir, platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL })
+  const appKey = await ensureAppKey(profileDir)
   const server = await startHostServer({
     address: addr.address,
     dirToPrepare: addr.dirToPrepare,
@@ -782,6 +788,8 @@ async function hostRig(
     idleMs: 120_000,
     onIdle: () => {},
     hostKey: await ensureHostKey(profileDir),
+    // As index.ts: the app key is made when there is none, and read at each proof
+    appKey: () => readAppKeySync(profileDir),
     onMessage: () => false,
     onClientGone: (from) => {
       exits.appGone(from.socket)
@@ -842,6 +850,7 @@ async function hostRig(
   return {
     profileDir,
     address: addr.address,
+    appKey,
     loopback: `http://127.0.0.1:${loopbackPort}`,
     env: { ASTERA_PROFILE_DIR: profileDir },
     accountId,
@@ -925,7 +934,7 @@ describe('the public CLI against a real Host (§48, §49)', { timeout: 60_000 },
   it('with the app gone, jobs list, jobs get and runs get answer the running Job from the Host', async () => {
     const h = await hostRig()
     // The app is open when the Job is started, then it quits.
-    const app = await rawClient(h.address, appHello, appAnswers(h.accountId))
+    const app = await rawClient(h.address, appHello, appAnswers(h.accountId), h.appKey)
     const { jobId, runId, taskId } = await runningJob(h)
     await app.close()
     await until(() => expect(h.server.hasApp()).toBe(false))
@@ -1008,7 +1017,7 @@ describe('the public CLI against a real Host (§48, §49)', { timeout: 60_000 },
   // order they land in, one is refused with CONFLICT or both land — never a lost update.
   it('runs stop from the CLI and a state-put from the app at the same moment: no lost update', async () => {
     const h = await hostRig()
-    const app = await rawClient(h.address, appHello, appAnswers(h.accountId))
+    const app = await rawClient(h.address, appHello, appAnswers(h.accountId), h.appKey)
     cleanups.push(() => app.close())
     const { jobId, runId } = await runningJob(h)
 
@@ -1696,7 +1705,8 @@ describe('the Job Journal with Astera closed (Host journal)', { timeout: 60_000 
     const older = await rawClient(
       h.address,
       { t: 'hello', protocol: HOST_PROTOCOL, app: '1.3.40', role: 'app', yields: [HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH] },
-      appAnswers(h.accountId)
+      appAnswers(h.accountId),
+      h.appKey
     )
     okData(await astera(['runs', 'stop', '--id', runId], h.env), 'runs stop')
     expect(h.journalRows(runId).some((e) => e.type === 'JOB_RUN_PAUSED')).toBe(false)
@@ -1895,7 +1905,7 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
       const file = path.join(h.profileDir, 'app-settings.json')
       const settings = JSON.parse(await fs.readFile(file, 'utf8')) as Record<string, unknown>
       await fs.writeFile(file, JSON.stringify({ ...settings, mcpHttp: { enabled: false, port: status.port } }))
-      const app = await rawClient(h.address, appHello, appAnswers(h.accountId))
+      const app = await rawClient(h.address, appHello, appAnswers(h.accountId), h.appKey)
       cleanups.push(() => app.close())
       const reloaded = await app.call('mcp-http-reload', {})
       expect(reloaded).toEqual({ status: 200, body: { state: 'off', lan: false, port: status.port } })
@@ -2862,7 +2872,8 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
         const app = await rawClient(
           h.address,
           { ...appHello, yields: [...(appHello as { yields: string[] }).yields, HOST_YIELD_WORK_UNITS, HOST_YIELD_UNDERSTANDING] } as ClientMessage,
-          appAnswers(h.accountId)
+          appAnswers(h.accountId),
+          h.appKey
         )
         await until(() => expect(h.server.hasApp()).toBe(true))
         const unitsFile = path.join(h.profileDir, 'workUnits.json')
@@ -2918,7 +2929,7 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
       await turnOn(h)
       // An older Astera: it yields every duty but this one, so it writes How It Works itself.
       expect(appHello.yields).not.toContain(HOST_YIELD_UNDERSTANDING)
-      await rawClient(h.address, appHello, appAnswers(h.accountId))
+      await rawClient(h.address, appHello, appAnswers(h.accountId), h.appKey)
       await until(() => expect(h.server.hasApp()).toBe(true))
       const mcp = await mcpClient(h)
 

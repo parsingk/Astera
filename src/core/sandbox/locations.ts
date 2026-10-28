@@ -14,6 +14,14 @@ export function sensitiveLocations(platform: NodeJS.Platform, env: Record<string
   return [`${h}/.ssh`, `${h}/.aws`, gh, gcloud, `${h}/.docker`, `${h}/.npmrc`, `${h}/.git-credentials`, `${h}/.kube`]
 }
 
+/** The app's key (`<profile>/host/app.key`, core/host/hostKey.ts appKeyPath): what lets a process be the app to the
+ *  Host, which spawns any program for it and counts it as the person (sandbox follow-ups, item 1). The one file of the
+ *  profile a sandboxed session may not read, on every OS. The Host key beside it is not named: the `astera` inside the
+ *  session checks the loopback's proof with it. None when the file is not known. */
+export function appKeyDenies(appKeyFile: string | null): string[] {
+  return appKeyFile ? [slashed(appKeyFile)] : []
+}
+
 /** A D-Bus address value with its `%xx` escapes decoded (the D-Bus specification, "Server Addresses": any byte may be
  *  escaped so, and a path holding a space or a non-ASCII letter is), so the path denied is the file's own (final fix pass,
  *  minor 8). Bytes, decoded as UTF-8. */

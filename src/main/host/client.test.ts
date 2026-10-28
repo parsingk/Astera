@@ -9,12 +9,18 @@ import { encodeLine, createLineReader } from '../../host/framing'
 import { HOST_PROTOCOL, HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, HOST_YIELD_JOURNAL, HOST_YIELD_UNDERSTANDING, HOST_YIELD_WORKSPACE, HOST_YIELD_ORCH_STATE_LATEST, HOST_YIELD_WORK_UNITS, HOST_YIELD_SLACK, HOST_YIELD_RECOVERY, HOST_YIELD_PERSON_WRITES, type HostMessage } from '../../core/host/protocol'
 import { HostClient } from './client'
 import { hostSpeaksDispatch } from './outdated'
-import { hostProof } from '../../core/host/hostKey'
+import { appProof, hostProof } from '../../core/host/hostKey'
+import { PtyRegistry } from '../../host/registry'
+import { attachPtyHost } from '../../host/ptyHost'
 
 /** The profile's Host key every test Host holds (protocol 4, core/host/hostKey.ts), and the read the
  *  client makes of it. */
 const KEY = 'e'.repeat(64)
 const hostKey = async (): Promise<string | null> => KEY
+/** The profile's app key (sandbox follow-ups, item 1): what a test Host checks an app's proof against, and the read the
+ *  client makes of it. A client given none is a CLI to such a Host, sent no terminal output. */
+const APP_KEY = 'a'.repeat(64)
+const appKey = async (): Promise<string | null> => APP_KEY
 
 let dir: string
 let servers: HostServer[] = []
@@ -57,6 +63,7 @@ const serveAt = async (
     idleMs: 60_000,
     onIdle: over.onIdle ?? ((): void => {}),
     hostKey: KEY,
+    appKey: () => APP_KEY,
     log: { write: () => {}, close: () => {} }
   })
   servers.push(s)
@@ -222,6 +229,123 @@ describe('HostClient — the Host proves itself (protocol 4)', () => {
     c.start()
     await settled(c, (s) => s.connected)
     expect(c.status().problem).toBeNull()
+    await c.stop()
+  })
+})
+
+// Sandbox follow-ups, item 1: a Host takes `role: 'app'` only from a socket that answers its hello's challenge under the
+// profile's app key. This client answers it before anything else it sends, so the Host reads its next message as the
+// app's.
+describe('HostClient — the app proves it is the app', () => {
+  /** A real Host server checking app proofs against APP_KEY, with the pty handler wired as host/index.ts wires it. */
+  const provingHost = async (name: string): Promise<{ s: HostServer; address: string; spawned: string[]; logs: string[] }> => {
+    const addr = addressFor(name)
+    const spawned: string[] = []
+    const logs: string[] = []
+    const ptys = new PtyRegistry({
+      spawn: (file) => {
+        spawned.push(file)
+        return { pid: 7, onData: () => {}, onExit: () => {}, write: () => {}, resize: () => {}, kill: () => {}, pause: () => {}, resume: () => {} }
+      },
+      log: () => {}
+    })
+    let handle: ReturnType<typeof attachPtyHost> | null = null
+    const s = await startHostServer({
+      address: addr.address,
+      dirToPrepare: addr.dirToPrepare,
+      version: '9.9.9',
+      idleMs: 60_000,
+      onIdle: () => {},
+      hostKey: KEY,
+      appKey: () => APP_KEY,
+      onMessage: (m, send, from) => handle?.(m, send, { socket: from.socket, role: from.role }) ?? false,
+      log: { write: (m) => logs.push(m), close: () => {} }
+    })
+    servers.push(s)
+    handle = attachPtyHost({ registry: ptys, broadcast: (m, to) => s.broadcast(m, to) })
+    return { s, address: addr.address, spawned, logs }
+  }
+
+  it('proves it is the app on a real Host, and its first spawn is served', async () => {
+    const h = await provingHost('app-proof')
+    const c = new HostClient({ hostKey, appKey, address: h.address, appVersion: '9.0.0', spawnHost: () => {}, log: () => {} })
+    const got: HostMessage[] = []
+    c.onMessage((m) => got.push(m))
+    // The first thing a subscriber sends once connected, as the pty factory does: it must already be the app's
+    c.onConnect(() => void c.send({ t: 'pty-spawn', id: 'p1', file: 'shell', args: [], opts: { cwd: process.cwd(), cols: 80, rows: 24, env: {} } }))
+    c.start()
+    await settled(c, (s) => s.connected)
+    await waitFor(() => got.some((m) => m.t === 'pty-spawned' || m.t === 'pty-failed'))
+    expect(got.find((m) => m.t === 'pty-spawned' || m.t === 'pty-failed')).toEqual({ t: 'pty-spawned', id: 'p1', pid: 7 })
+    expect(h.spawned).toEqual(['shell'])
+    expect(h.s.hasApp()).toBe(true)
+    expect(c.status().problem).toBeNull()
+    await c.stop()
+  })
+
+  it("is a CLI to a Host whose app key is another profile's: told, logged, and still connected", async () => {
+    const h = await provingHost('app-proof-other')
+    const logs: string[] = []
+    const c = new HostClient({ hostKey, appKey: async () => 'b'.repeat(64), address: h.address, appVersion: '9.0.0', spawnHost: () => {}, log: (m) => logs.push(m) })
+    c.start()
+    await settled(c, (s) => s.connected)
+    await waitFor(() => logs.some((l) => l.includes('did not take this app')))
+    expect(h.s.hasApp()).toBe(false)
+    expect(c.status().connected).toBe(true)
+    await c.stop()
+  })
+
+  it('answers the challenge first, with the proof of its own app key', async () => {
+    const addr = addressFor('app-proof-raw')
+    if (addr.dirToPrepare) await fs.mkdir(addr.dirToPrepare, { recursive: true, mode: 0o700 })
+    const got: Array<{ t: string; proof?: string }> = []
+    const sockets: net.Socket[] = []
+    const server = net.createServer((sock) => {
+      sockets.push(sock)
+      sock.setEncoding('utf8')
+      sock.on('data', createLineReader({
+        onMessage: (v) => {
+          const m = v as { t: string; nonce?: string }
+          got.push(m)
+          if (m.t === 'hello')
+            sock.write(encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, host: '9.9.9', pid: 4242, startedAt: 't', features: [], proof: hostProof(KEY, m.nonce ?? ''), challenge: 'c0ffee' }))
+        },
+        onBadLine: () => {},
+        onHandlerError: () => {}
+      }))
+    })
+    await new Promise<void>((r) => server.listen(addr.address, r))
+    const c = new HostClient({ hostKey, appKey, address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: () => {} })
+    c.onConnect(() => void c.send({ t: 'pty-list' }))
+    c.start()
+    await waitFor(() => got.some((m) => m.t === 'pty-list'))
+    expect(got.map((m) => m.t)).toEqual(['hello', 'app-proof', 'pty-list'])
+    expect(got[1].proof).toBe(appProof(APP_KEY, 'c0ffee'))
+    await c.stop()
+    for (const s of sockets) s.destroy()
+    await new Promise<void>((r) => server.close(() => r()))
+  })
+
+  it('answers no challenge a Host did not send (an older Host takes the role on its word)', async () => {
+    const addr = addressFor('app-proof-older')
+    const host = await rawHost(addr, [])
+    const c = new HostClient({ hostKey, appKey, address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: () => {} })
+    c.start()
+    await settled(c, (s) => s.connected)
+    await new Promise((r) => setTimeout(r, 100))
+    expect(host.got.map((m) => m.t)).not.toContain('app-proof')
+    await c.stop()
+    await host.close()
+  })
+
+  it('says so when this profile has no app key to answer with', async () => {
+    const h = await provingHost('app-proof-nokey')
+    const logs: string[] = []
+    const c = new HostClient({ hostKey, appKey: async () => null, address: h.address, appVersion: '9.0.0', spawnHost: () => {}, log: (m) => logs.push(m) })
+    c.start()
+    await settled(c, (s) => s.connected)
+    await waitFor(() => logs.some((l) => l.includes('no app key')))
+    expect(h.s.hasApp()).toBe(false)
     await c.stop()
   })
 })
@@ -682,7 +806,8 @@ describe('HostClient', () => {
   it('can be told the Host is unresponsive, and recovers on the next message from it', async () => {
     const addr = addressFor('told')
     const s = await serveAt(addr)
-    const c = new HostClient({ hostKey, address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: () => {} })
+    // The app: terminal output goes to it alone
+    const c = new HostClient({ hostKey, appKey, address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: () => {} })
     c.start()
     await settled(c, (st) => st.connected)
     c.markUnresponsive('the Host did not answer a pty-list within 5s')
@@ -838,7 +963,8 @@ describe('HostClient', () => {
     const addr = addressFor('fan-out')
     const server = await serveAt(addr)
     const logs: string[] = []
-    const c = new HostClient({ hostKey, address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: (m) => logs.push(m) })
+    // The app: terminal output goes to it alone
+    const c = new HostClient({ hostKey, appKey, address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: (m) => logs.push(m) })
     c.start()
     await settled(c, (s) => s.connected)
 

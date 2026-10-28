@@ -10,7 +10,7 @@ import { encodeLine, createLineReader } from '../../host/framing'
 // from src/main.
 import type { HostStatus } from '../../core/types'
 import { unsafeSocketDir } from '../../core/host/socketDir'
-import { newHostNonce, proofMatches } from '../../core/host/hostKey'
+import { appProof, newHostNonce, proofMatches } from '../../core/host/hostKey'
 
 /** What `spawnHost` is handed: whether the spawn it is about to make is still wanted. */
 export interface SpawnContext {
@@ -38,6 +38,11 @@ export interface HostClientDeps {
    *  Host's hello has to carry the proof of it, or this client treats what answered as somebody
    *  else's and sends it nothing more: on Windows another account can create the pipe first. */
   hostKey(): Promise<string | null>
+  /** The profile's app key (core/host/hostKey.ts `ensureAppKey`), read beside the Host key before each connection
+   *  (sandbox follow-ups, item 1). A Host that names a `challenge` in its hello takes this client as the app only once
+   *  it answers with the proof of this key; without one, that Host serves it as a CLI, which spawns nothing. Absent, no
+   *  challenge is answered. */
+  appKey?(): Promise<string | null>
   /** The protocol this app speaks. Injected only so a test can be the odd one out. */
   protocol?: number
   /** How many times to try the address before giving up on this cycle. */
@@ -170,7 +175,7 @@ export class HostClient {
   private peerSeen = false
   /** The socket whose Host proved itself (protocol 4), and what its proof is checked against. */
   private proven: net.Socket | null = null
-  private expecting: { key: string | null; nonce: string } | null = null
+  private expecting: { key: string | null; nonce: string; appKey: string | null } | null = null
   private state: HostStatus = {
     connected: false,
     protocol: null,
@@ -478,6 +483,12 @@ export class HostClient {
         } catch (err) {
           this.deps.log(`the Host key could not be read: ${String(err)}`)
         }
+        let appKey: string | null = null
+        try {
+          appKey = (await this.deps.appKey?.()) ?? null
+        } catch (err) {
+          this.deps.log(`the app key could not be read: ${String(err)}`)
+        }
         // `stop()` may have landed while this connect was in flight. Attaching now would report a
         // connection the caller has already given up on, and the socket's own 'close' handler returns
         // early once stopped — so the status would never be corrected again.
@@ -485,7 +496,7 @@ export class HostClient {
           socket.destroy()
           return
         }
-        this.attach(socket, key)
+        this.attach(socket, key, appKey)
         return
       } catch {
         // Nothing is listening. Ask for a Host once, then keep trying the address — the Host binds
@@ -513,12 +524,12 @@ export class HostClient {
     if (!this.stopped) this.fail('no Host answered at the address')
   }
 
-  private attach(socket: net.Socket, key: string | null): void {
+  private attach(socket: net.Socket, key: string | null, appKey: string | null): void {
     this.socket = socket
     // A new nonce per connection, so an answer seen on one proves nothing on the next.
     const nonce = newHostNonce()
     this.proven = null
-    this.expecting = { key, nonce }
+    this.expecting = { key, nonce, appKey }
     // The connection was accepted, so something is listening at the address. Recorded before the
     // handshake, not after it: a peer that never says hello is exactly the case `sawPeer` exists to
     // tell apart from an address nothing answers.
@@ -653,6 +664,14 @@ export class HostClient {
         return
       }
       this.proven = this.socket
+      // **The app proves it is the app** (sandbox follow-ups, item 1): this Host takes the connection as the app's only
+      // once the challenge it named is answered under the profile's app key. Sent here, to the Host just proved and
+      // before anything a subscriber sends once connected, so the Host reads every later message as the app's. A Host
+      // that names none is older and takes the role on its word.
+      if (typeof m.challenge === 'string') {
+        if (expecting.appKey !== null) this.send({ t: 'app-proof', proof: appProof(expecting.appKey, m.challenge) })
+        else this.deps.log('the Host asked this app to prove it is the app, and this profile has no app key to answer with — that Host serves it as a CLI and spawns nothing for it')
+      }
       this.clearHandshake()
       this.drops = 0
       // Judged here, from the two versions this handshake already carries, so the status the Info tab
@@ -709,6 +728,12 @@ export class HostClient {
     // already taken that. Returning here keeps it out of the subscribers, who would have to know to
     // ignore it.
     if (m?.t === 'pong') return
+    // The Host's word on this app's proof. A refusal keeps the connection, as a CLI's: said in the log, which is where
+    // the Host's own line about it is too, and the spawns it refuses say so on each terminal.
+    if (m?.t === 'app-proven') {
+      if (m.ok !== true) this.deps.log(`the Host did not take this app as the app (${m.reason ?? 'no reason given'}) — it is a CLI to that Host, which spawns nothing for it`)
+      return
+    }
     for (const cb of [...this.subscribers]) {
       try {
         cb(m)

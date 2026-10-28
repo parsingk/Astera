@@ -153,6 +153,7 @@ export function composeHostRolling(a: {
     codexWindowsReady: a.spawner.codexWindowsReady,
     claudeSandbox: a.spawner.claudeSandbox,
     hostSocketDir: a.spawner.hostSocketDir ?? null,
+    appKeyFile: a.spawner.appKeyFile ?? null,
     ...(a.spawner.codexVersion ? { codexVersion: a.spawner.codexVersion } : {}),
     ...(a.spawner.codexExcludes ? { codexExcludes: a.spawner.codexExcludes } : {}),
     log,
@@ -234,8 +235,8 @@ export function composeHostRolling(a: {
       if (m.t === 'session-rolled' && m.procId !== undefined) a.server().broadcast(m, (y) => y.has(HOST_YIELD_CHAT_TAKEOVER))
       else a.server().broadcast(m)
       try {
-        // Leftovers Task 5: an app 1.3.25 or older counts as attached but reads no `session-rolled`, so
-        // only an app that said `role: 'app'` hearing it spares the journal.
+        // Leftovers Task 5: only an app that reads `session-rolled` hearing it spares the journal: one that proved
+        // it is the app (sandbox follow-ups, item 1; a hello with no role is a CLI to the server now).
         const heard = a.server().hasCurrentApp?.() ?? a.server().hasApp()
         if (!heard) journal.append(e)
       } catch (err) {

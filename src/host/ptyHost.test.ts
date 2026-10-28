@@ -31,7 +31,7 @@ const harness = (pty = fakePty(), platform: NodeJS.Platform = 'win32') => {
   const handle = attachPtyHost({ registry, platform, broadcast: (m, to) => void (!to || to(new Set(), new Set()) ? broadcast.push(m) : 0) })
   // The app's own connection, as host/index.ts passes it: only the app may have the Host spawn a pty
   const send = (m: ClientMessage, role: 'app' | 'cli' | 'mcp' = 'app'): boolean => handle(m, (h) => replies.push(h), { socket: 1, role })
-  return { pty, registry, broadcast, replies, send }
+  return { pty, registry, broadcast, replies, send, handle }
 }
 
 const spawnMsg: ClientMessage = {
@@ -427,5 +427,59 @@ describe('attachPtyHost size', () => {
     h.replies.length = 0
     h.send({ t: 'pty-resize', id: 'p1', cols: 200, rows: 50 })
     expect(h.replies).toEqual([])
+  })
+})
+
+// Sandbox follow-ups, round 2: every pty message reads or drives a terminal, so each is the proven app's alone, as the
+// spawn is. A CLI, an MCP client and a sender not named are refused: nothing is typed, sized, paused, killed, noted,
+// listed or replayed, nothing is recorded as the person's, and nothing is answered (a `pty-list` the app's proof failed
+// for reads as no answer, which the app takes as "not known", never as "holds nothing").
+describe('attachPtyHost: every pty message is the app’s alone', () => {
+  const others: ClientMessage[] = [
+    { t: 'pty-write', id: 'p1', data: 'rm -rf ~\r', typed: true },
+    { t: 'pty-write', id: 'p1', data: 'from slack\r', person: true },
+    { t: 'pty-write', id: 'p1', data: 'plain\r' },
+    { t: 'pty-resize', id: 'p1', cols: 100, rows: 40 },
+    { t: 'pty-pause', id: 'p1' },
+    { t: 'pty-resume', id: 'p1' },
+    { t: 'pty-note', id: 'p1', patch: { title: 'taken' } },
+    { t: 'pty-list' },
+    { t: 'pty-attach', id: 'p1' },
+    { t: 'pty-kill', id: 'p1' }
+  ]
+
+  it('refuses each from anything but the app: nothing typed, read, recorded or answered', () => {
+    for (const role of ['cli', 'mcp', undefined] as const) {
+      const h = harness()
+      let killed = 0
+      h.pty.kill = () => void killed++
+      h.send(spawnMsg)
+      h.pty.emit('a secret on the screen')
+      h.replies.length = 0
+      const broadcasts = h.broadcast.length
+      for (const m of others) {
+        const owned = role === undefined ? h.handle(m, (r) => h.replies.push(r)) : h.send(m, role)
+        expect(owned, `${m.t} from ${String(role)}`).toBe(true)
+      }
+      expect(h.pty.sent, String(role)).toEqual([])
+      expect(h.pty.sizes, String(role)).toEqual([])
+      expect(killed, String(role)).toBe(0)
+      expect(h.replies, String(role)).toEqual([])
+      expect(h.broadcast.length, String(role)).toBe(broadcasts)
+      expect(h.handle.pausedHeld(), String(role)).toBe(0)
+      expect(h.registry.lastPersonWrite('p1'), String(role)).toBeNull()
+      expect(h.registry.submittedBetween('p1', 0, Date.now() + 1), String(role)).toBeNull()
+      expect(h.registry.metaOf('p1')?.restore, String(role)).toEqual({})
+      expect(h.registry.list()[0].alive, String(role)).toBe(true)
+      // The app on the same Host is served every one of them as before
+      h.send({ t: 'pty-write', id: 'p1', data: 'ls\r', typed: true })
+      expect(h.pty.sent).toEqual(['ls\r'])
+      expect(h.registry.lastPersonWrite('p1')).not.toBeNull()
+      h.send({ t: 'pty-list' })
+      h.send({ t: 'pty-attach', id: 'p1' })
+      expect(h.replies.map((r) => r.t)).toEqual(['pty-listed', 'pty-data'])
+      h.send({ t: 'pty-kill', id: 'p1' })
+      expect(killed).toBe(1)
+    }
   })
 })

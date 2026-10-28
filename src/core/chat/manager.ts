@@ -92,6 +92,9 @@ export interface ChatManagerDeps {
   /** The folder the Host's socket is in, which a sandboxed Codex chat's profile denies on macOS and Linux (SpawnChecks'
    *  twin). Absent, nothing is denied for it. */
   hostSocketDir?: string | null
+  /** The profile's app key file, which a sandboxed Codex chat's profile denies on every OS (SpawnChecks' twin). Absent,
+   *  nothing is denied for it. */
+  appKeyFile?: string | null
   /** The codex version question a sandboxed Codex chat asks at its prepare and spawn (final review I2), the terminal
    *  manager's. Absent, a sandboxed Codex chat is refused as for a version not known. */
   codexVersion?: CodexVersionProbe
@@ -283,6 +286,7 @@ export class ChatSessionManager {
       env: this.inheritedEnv(opts.account),
       ready: this.deps.codexWindowsReady,
       hostSocketDir: this.deps.hostSocketDir ?? null,
+      appKeyFile: this.deps.appKeyFile ?? null,
       version: this.deps.codexVersion,
       check: (args) => fitsOnTheLine(this.deps.platform, buildCodexAppServerCommand(this.deps.platform, undefined, [], appServerSandboxArgs(args))),
       ...(this.deps.codexExcludes ? { excludes: this.deps.codexExcludes } : {}),
@@ -397,7 +401,8 @@ export class ChatSessionManager {
             layout,
             env: inherited,
             hostSocketDir: this.deps.hostSocketDir ?? null,
-            otherHostDirs: this.sandboxLayouts.otherHostsOf(opts.account.id, opts.cwd, Date.now())
+            otherHostDirs: this.sandboxLayouts.otherHostsOf(opts.account.id, opts.cwd, Date.now()),
+            appKeyFile: this.deps.appKeyFile ?? null
           })
         )
       : []

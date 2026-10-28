@@ -17,6 +17,10 @@ import { HOST_FEATURE_WORKSPACE, HOST_PROTOCOL, HOST_YIELD_WORKSPACE, type HostM
 import type { Cdp } from '../../core/workspace/helpers'
 import type { DesktopHelper } from './desktopHelper'
 import { createWorkspaceManager } from './manager'
+import { appProof } from '../../core/host/hostKey'
+
+/** The app key the Host server here checks an app's proof against (sandbox follow-ups, item 1). */
+const APP_KEY = 'a'.repeat(64)
 
 const cleanups: Array<() => Promise<void> | void> = []
 afterEach(async () => {
@@ -44,16 +48,26 @@ const fakeCdp = (): Cdp => ({
   close: () => {}
 })
 
-/** One socket, its greeting, and every message the Host sends it afterwards. */
+/** One socket, its greeting, and every message the Host sends it afterwards. An app proves it is the app (sandbox
+ *  follow-ups, item 1) before the greeting counts as done. */
 const client = async (address: string, hello: Record<string, unknown>) => {
   const sock = net.connect(address)
   await new Promise((r) => sock.once('connect', r))
   const got: HostMessage[] = []
-  const read = createLineReader({ onMessage: (v) => got.push(v as HostMessage), onBadLine: () => {}, onHandlerError: () => {} })
+  const read = createLineReader({
+    onMessage: (v) => {
+      const m = v as HostMessage
+      if (m.t === 'hello' && typeof m.challenge === 'string') sock.write(encodeLine({ t: 'app-proof', proof: appProof(APP_KEY, m.challenge) }))
+      got.push(m)
+    },
+    onBadLine: () => {},
+    onHandlerError: () => {}
+  })
   sock.setEncoding('utf8')
   sock.on('data', (c: string) => read(c))
   sock.write(encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, app: '9.9.9', ...hello }))
   await vi.waitFor(() => expect(got.some((m) => m.t === 'hello')).toBe(true))
+  if (hello.role === 'app') await vi.waitFor(() => expect(got.some((m) => m.t === 'app-proven')).toBe(true))
   cleanups.push(() => void sock.destroy())
   let call = 0
   const orchCall = async (cmd: string, args: Record<string, unknown>, session = '', request?: string) => {
@@ -114,6 +128,7 @@ const host = async () => {
     orch,
     features: hostFeatures({ spawns: false, workspace: true }),
     pidLives: () => true,
+    appKey: () => APP_KEY,
     log: { write: () => {}, close: () => {} }
   })
   cleanups.push(() => server.close())

@@ -16,6 +16,7 @@ import { comparablePath } from '../core/files/tree'
 import { randomUUID } from 'node:crypto'
 import { HOST_PROTOCOL, type HostMessage, type PtyEntry } from '../core/host/protocol'
 import { hostAddress } from '../core/publicContract'
+import { appKeyPath } from '../core/host/hostKey'
 import { hostCliPaths, hostWorkerBaseEnv } from '../core/host/spawn'
 import { keptBecause, keptPhrase, type OrchServerDeps } from '../core/orchestration/command'
 import type { OrchState } from '../core/orchestration/state'
@@ -178,6 +179,9 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
   /** The folder this Host's socket is in (macOS and Linux; null on Windows), which a sandboxed Codex session's profile
    *  denies, terminal or chat (final fix pass, C2). */
   hostSocketDir?: string | null
+  /** The profile's app key file, which a sandboxed Codex session's profile denies on every OS, terminal or chat (sandbox
+   *  follow-ups, item 1). */
+  appKeyFile?: string | null
   /** The codex version question a sandboxed Codex start asks, shared with the Host's chat sessions (final review I2). */
   codexVersion?: ChatManagerDeps['codexVersion']
   /** The copy of the person's git excludes a sandboxed win32 Codex start writes in this Host's temp folder (one for its
@@ -327,6 +331,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   // The folder this Host listens in (index.ts derives its address the same way), which a sandboxed Codex session's
   // profile denies on macOS and Linux, so the loopback with its workload token is its way in (final fix pass, C2)
   const hostSocketDir = hostAddress({ profileDir, platform, tmpDir, protocol: HOST_PROTOCOL }).dirToPrepare
+  // The key that lets a process be the app to this Host, which a sandboxed session's profile denies (sandbox follow-ups,
+  // item 1)
+  const appKeyFile = appKeyPath(profileDir)
   // The copy of the person's git excludes a sandboxed Codex session on Windows reads, in the temp folder, asked by this
   // spawner's prepares and the Host's chat sessions alike; the elevated sandbox's own account cannot read theirs
   const codexExcludes = codexExcludesWriter({ profileDir, tmpDir, homeDir, env: d.env, ...(d.runGit ? { runGit: d.runGit } : {}), log })
@@ -433,7 +440,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     // Read at each spawn, not once: the Host completes its PATH when a CLI is missing (windowsPath.ts)
     () => hostWorkerBaseEnv(d.env),
     // The Host's own log: a spawn that had to fall back to a sync check says so in host.log.
-    { ...defaultSpawnChecks(log), codexWindowsReady, hostSocketDir, codexExcludes }
+    { ...defaultSpawnChecks(log), codexWindowsReady, hostSocketDir, appKeyFile, codexExcludes }
   )
   // Shared extensions (Agent Control Plane release 1 design §4.5): `sessions.prepare` refreshes the account before
   // every spawn and roll, and the Host's chat sessions read the same cache
@@ -872,6 +879,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     codexWindowsReady,
     claudeSandbox,
     hostSocketDir,
+    appKeyFile,
     codexVersion,
     codexExcludes,
     orchEnvNow: () => orchEnvReady,

@@ -25,7 +25,7 @@ import { AppUnreachable, type OrchCall, type OrchCaller } from '../core/host/orc
 import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
 import { pidLives } from '../core/host/pidFile'
 import { privateDirProblem } from '../core/host/socketDir'
-import { hostProof } from '../core/host/hostKey'
+import { appProofMatches, hostProof, newHostNonce } from '../core/host/hostKey'
 import { mcpClientOf, mcpRemoteOf, type McpClient } from '../core/continuity/actor'
 
 /** Thrown by `startHostServer` when another Host already answers at this address. The entry point
@@ -74,10 +74,10 @@ export interface HostServerDeps {
    *  new state already in place. A throw is caught and logged; the handshake or close it rode in on
    *  is not affected. */
   onAppsChanged?(): void
-  /** A socket that called itself the app has just been answered its `hello` (S6 D4). `send` reaches
-   *  that socket alone, after the hello reply, so what it sends is read with the features already
-   *  known. Not called for a CLI, nor for a hello with no role (an app that old reads no new push). A
-   *  throw is caught and logged, as `onAppsChanged`'s is. */
+  /** A socket has just proved it is the app (`app-proof`, sandbox follow-ups item 1), or a proved app said hello
+   *  again (S6 D4). `send` reaches that socket alone, after the hello reply and the `app-proven` one, so what it sends is
+   *  read with the features already known. Never called for a socket that has not proved it, a CLI, or a hello with
+   *  no role. A throw is caught and logged, as `onAppsChanged`'s is. */
   onAppGreeted?(send: (h: HostMessage) => void): void
   /** Feature names announced in `hello` after the built-in ones. Given only by a caller that serves
    *  them: advertising a feature and being able to serve it are the same fact, as the `orch`
@@ -119,6 +119,11 @@ export interface HostServerDeps {
   /** The profile's Host key (core/host/hostKey.ts), made before this binds. A hello that carries a
    *  `nonce` is answered with its proof; without a key (tests that do not ask) no proof is sent. */
   hostKey?: string
+  /** The profile's app key (core/host/hostKey.ts `readAppKeySync`), read when a socket answers its challenge, so a key
+   *  the app made after this Host started is the one checked (sandbox follow-ups, item 1). At once, not awaited: the
+   *  app's next messages are read right after its proof, and must find it the app. Absent or null, no socket can prove
+   *  it is the app, and each is told so. */
+  appKey?(): string | null
   /** The longest line a client may send, in characters; INBOUND_LINE_CAP when left out. A test passes a
    *  small one rather than writing 64 MiB. */
   maxLine?: number
@@ -184,26 +189,24 @@ export interface HostServer {
    *  the app that attaches after a restart is not the app that spawned. With `to`, only to the greeted
    *  sockets whose hello yields pass it (final review M4: a push only a newer app can read). */
   broadcast(m: HostMessage, to?: (yields: ReadonlySet<string>, features: ReadonlySet<string>) => boolean): void
-  /** Whether an app is connected right now (design §5): one that announced `role: 'app'`, or an app
-   *  1.3.25 or older, whose hello carries no role (LEGACY_APP_NOTICE). Both do their own work, so the
-   *  Host does not drive, roll or open Slack beside either (S6-6, SL-11). The command layer asks this
-   *  before it forwards an action; `act` then refuses at once for an old app, which cannot answer. */
+  /** Whether an app is connected right now (design §5): a socket that said `role: 'app'` and proved it (`app-proof`,
+   *  sandbox follow-ups item 1). It does its own work, so the Host does not drive, roll or open Slack beside it (S6-6,
+   *  SL-11). A hello with no role is a CLI here: an app 1.3.25 or older speaks protocol 3 at another address and never
+   *  reaches this Host, and presence is trusted like the rest of the role. */
   hasApp(): boolean
-  /** Whether an app that announced `role: 'app'` is connected: the one `act` asks and the one that
-   *  reads the pushes newer than 1.3.25 (`session-rolled`, `blocks`, `orch-state`). An app 1.3.25 or
-   *  older counts for `hasApp` and not here (leftovers Task 5). */
+  /** The same question as `hasApp` since the no-role path became a CLI (sandbox follow-ups, item 1); kept, as callers
+   *  ask it for the pushes only a current app reads (`session-rolled`, `blocks`, `orch-state`). */
   hasCurrentApp(): boolean
   /** Asks the app to do one thing the Host cannot (design §5) — one `orch-act` out, one `orch-acted`
-   *  back, matched by call id. Only an app that said `role: 'app'` is asked: an app 1.3.25 or older has
-   *  never heard of `orch-act`, and the call is refused at once with APP_REQUIRED, naming the update.
+   *  back, matched by call id. Only a socket that proved it is the app is asked; with none the call is refused at
+   *  once with APP_REQUIRED.
    *  Rejects when no app is attached, when the app answers `ok: false`,
    *  when the app disconnects with the question still open, and when it stays connected and says
    *  nothing for HOST_UNRESPONSIVE_MS: a caller waiting on an answer that cannot arrive is the one
    *  outcome worse than a refusal. */
   act(name: string, args: unknown): Promise<unknown>
   /** An app is attached and its hello did not yield `duty`: that app still does it itself (ruling R4).
-   *  The first app `act` asks, and any app 1.3.25 or older besides: it yields nothing, and it writes
-   *  worktrees.json whole, so an entry the Host made behind it would be erased. */
+   *  The first app `act` asks. */
   appKeeps(duty: string): boolean
   /** Any attached app — not just the first — has not yielded `duty` (ruling R1): one S3 app among
    *  several is enough to keep the Host from driving that duty. */
@@ -213,13 +216,12 @@ export interface HostServer {
   appsYield(duty: string): boolean
   /** The yields a greeted socket declared in its hello, or null once it is gone or never greeted (S6
    *  R1). By the socket number `onMessage` and `onClientGone` hand out, which is what `exits.holdersOf`
-   *  names. Whatever role the socket gave: an app 1.3.25 or older sends no role and still holds ptys,
-   *  and it yielded nothing, so it keeps every duty. */
+   *  names. Whatever role the socket has. */
   yieldsOf(socketNo: number): ReadonlySet<string> | null
   /** The pid the last app to say hello gave (`hello.pid`, leftovers Task 1), or null when none did. Kept
    *  after that socket closes: it is what `liveAppPid` asks about when `app.pid` names no live app, and
-   *  the question matters most once the app's socket is down. Only from a hello that said `role: 'app'`
-   *  on this protocol, and only a positive integer.
+   *  the question matters most once the app's socket is down. Only from the hello of a socket that proved it is the
+   *  app on this protocol, kept once it proved, and only a positive integer.
    *
    *  **Latched, so pid reuse cannot keep a gone app alive** (final review I1). Every call probes the pid,
    *  and the first probe that finds it dead forgets it: a process Windows later hands the same number is
@@ -235,12 +237,10 @@ export interface HostServer {
   knownSockets(): number
 }
 
-/** What the Host says, once per attach, when an app 1.3.25 or older says hello, and what `astera host
- *  status` shows while one is attached (leftovers Task 5). Every released app up to 1.3.25 sends a
- *  `hello` with no `role` and no `yields`, and no released CLI talks to the Host at all (the CLI's
- *  `core/host/connect.ts` came later and always says `role: 'cli'`), so a hello with no role is always
- *  such an app. **It is never answered with `protocol-mismatch`**: the address and the number are the
- *  same, and a 1.3.25 app told so would retire this Host and take every terminal in it along. */
+/** What `astera host status` shows when a Host's hello says `legacyApp` (leftovers Task 5): an older Host of this
+ *  protocol counted a hello with no role as an app 1.3.25 or older. **This Host never says it** (sandbox follow-ups,
+ *  item 1): such an app speaks protocol 3 at another address and cannot reach a protocol-4 Host, and a hello with no
+ *  role is a CLI here, so nothing unproven counts as an attached app. */
 export const LEGACY_APP_NOTICE = 'Astera 1.3.25 or older is attached; update it'
 
 /** How long a peer that has connected but said nothing gets before the Host hangs up on it. */
@@ -307,18 +307,24 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
    * because `close()` has to destroy every connection, greeted or not.
    */
   const greetedSockets = new Set<net.Socket>()
-  /** What each greeted socket called itself. Kept beside `greetedSockets` rather than inside the
+  /** What each greeted socket is. Kept beside `greetedSockets` rather than inside the
    *  set's element because the set is what `broadcast` walks and that must not change shape.
    *  A socket that is in `greetedSockets` is always in here too — both are written in one place.
-   *  `'legacy-app'` is a hello with no role: an app 1.3.25 or older (LEGACY_APP_NOTICE). It counts
-   *  for `hasApp`, `appKeeps` and `appsKeep`, is never sent `orch-act`, and reaches `onMessage`,
-   *  `onClientGone` and `orch-call` as `'cli'`, so no door that only an app may use opens for it. */
-  const roles = new Map<net.Socket, 'app' | 'legacy-app' | 'cli' | 'mcp'>()
-  /** The role the hooks and the command layer hear: a legacy app is a `'cli'` to them (see `roles`). */
-  const outwardRole = (s: net.Socket): 'app' | 'cli' | 'mcp' => {
-    const r = roles.get(s)
-    return r === 'app' ? 'app' : r === 'mcp' ? 'mcp' : 'cli'
-  }
+   *  **`'app'` only once proved** (sandbox follow-ups, item 1): a hello naming the app makes the socket a `'cli'` with
+   *  a challenge open (`challenges`), and its `app-proof` makes it the app. Every door only the app may use reads this:
+   *  the spawns (`onMessage`'s role), `orch-act`, `orch-call`'s caller (who is the person in the records), presence,
+   *  the yields that count, the state pushes and `onAppGreeted`. A hello with no role is a `'cli'`. */
+  const roles = new Map<net.Socket, 'app' | 'cli' | 'mcp'>()
+  /** What each greeted socket's first hello named, which a second hello may not change (N12): a socket that named the
+   *  app is a `'cli'` in `roles` until it proves, and is still one that named the app. Written and deleted beside
+   *  `roles`. */
+  const named = new Map<net.Socket, 'app' | 'cli' | 'mcp'>()
+  /** The challenge open on each socket that named the app and has not proved it, with the pid its hello gave
+   *  (`lastAppPid` keeps it once proved). Random per connection and taken by the first `app-proof`, whatever it holds,
+   *  so an answer is good on the connection it was asked on, once. */
+  const challenges = new Map<net.Socket, { challenge: string; pid: number | null }>()
+  /** The role the hooks and the command layer hear. */
+  const outwardRole = (s: net.Socket): 'app' | 'cli' | 'mcp' => roles.get(s) ?? 'cli'
   /** `lastAppPid`: the pid of the last app hello that carried one, until a probe finds it dead (see
    *  `HostServer.lastAppPid`). */
   let lastAppPid: number | null = null
@@ -464,16 +470,8 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
     for (const s of greetedSockets) if (roles.get(s) === 'app' && !s.destroyed) return s
     return null
   }
-  /** Whether an app 1.3.25 or older is attached (`roles`). */
-  const legacyAttached = (): boolean => {
-    for (const s of greetedSockets) if (roles.get(s) === 'legacy-app' && !s.destroyed) return true
-    return false
-  }
-  /** An app of either kind: both do their own work (`hasApp`). */
-  const isApp = (s: net.Socket): boolean => {
-    const r = roles.get(s)
-    return (r === 'app' || r === 'legacy-app') && !s.destroyed
-  }
+  /** A socket that proved it is the app, still open. */
+  const isApp = (s: net.Socket): boolean => roles.get(s) === 'app' && !s.destroyed
   /** An MCP client reads only the answers to its own calls (MCP design §2), so no fan-out writes to
    *  it: an MCP link lives for hours, and every terminal's output and every state push would reach it. */
   const isMcp = (s: net.Socket): boolean => roles.get(s) === 'mcp'
@@ -503,8 +501,6 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
       ...(deps.orch ? [HOST_FEATURE_ORCH, HOST_FEATURE_REQUESTS, HOST_FEATURE_MCP] : []),
       ...(deps.features ?? [])
     ],
-    // Only while one is attached, so `astera host status` can say so (LEGACY_APP_NOTICE).
-    ...(legacyAttached() ? { legacyApp: true as const } : {}),
     // Protocol 4: the answer that tells this account's Host from a squatter (core/host/hostKey.ts).
     // A nonce longer than any client sends is not worth hashing.
     ...(deps.hostKey && typeof nonce === 'string' && nonce.length > 0 && nonce.length <= 256
@@ -586,6 +582,36 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
       helloTimer = null
     }
     const send = (m: HostMessage): void => writeTo(socket, m, lazyLine(m))
+    /** An `app-proof` (sandbox follow-ups, item 1): the HMAC of this connection's challenge under the profile's app key
+     *  makes the socket the app. The challenge is taken by this try whatever it holds. A wrong or missing proof is
+     *  logged and answered, and the socket stays what it was, open: the app is told rather than cut off. */
+    const proveApp = (proof: unknown): void => {
+      const open = challenges.get(socket)
+      challenges.delete(socket)
+      const refuse = (reason: string): void => {
+        deps.log.write(`a socket did not prove it is the app (${reason}) — it stays ${isApp(socket) ? 'the app it proved to be before' : 'a CLI'}`)
+        send({ t: 'app-proven', ok: false, reason })
+      }
+      if (!open) return refuse('no challenge is open on this connection')
+      let key: string | null = null
+      try {
+        key = deps.appKey?.() ?? null
+      } catch (err) {
+        deps.log.write(`the app key could not be read: ${String(err)}`)
+      }
+      if (key === null) return refuse('this Host has no app key to check it against')
+      if (!appProofMatches(key, open.challenge, proof)) return refuse("the proof does not match this profile's app key")
+      roles.set(socket, 'app')
+      if (open.pid !== null) lastAppPid = open.pid
+      deps.log.write('the app proved it is the app')
+      tellAppsChanged()
+      send({ t: 'app-proven', ok: true })
+      try {
+        deps.onAppGreeted?.(send)
+      } catch (err) {
+        deps.log.write(`onAppGreeted failed: ${String(err)}`)
+      }
+    }
     const read = createLineReader({
       onMessage: (v) => {
         const m = v as ClientMessage
@@ -601,10 +627,11 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           // naming another one is refused, unanswered: an MCP socket that turned itself into the app would
           // be sent `orch-act`, count as attached and reach the pty messages its role keeps it from. One
           // naming the same role is answered as it always was.
-          const named = m.role === 'app' ? 'app' : m.role === 'mcp' ? 'mcp' : m.role === undefined ? 'legacy-app' : 'cli'
-          const had = greetedSockets.has(socket) ? roles.get(socket) : undefined
-          if (had !== undefined && had !== named) {
-            deps.log.write(`a second hello asked to change this socket's role from ${had} to ${named} — refused`)
+          // A hello with no role is a CLI (`roles`): the careful default protocol.ts names for an absent role.
+          const asked = m.role === 'app' ? 'app' : m.role === 'mcp' ? 'mcp' : 'cli'
+          const had = greetedSockets.has(socket) ? named.get(socket) : undefined
+          if (had !== undefined && had !== asked) {
+            deps.log.write(`a second hello asked to change this socket's role from ${had} to ${asked} — refused`)
             return
           }
           deps.log.write(`client ${String(m.app)} connected`)
@@ -613,15 +640,12 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           // away from an app that cannot read them (core/host/protocol.ts), and broadcasting to one
           // that just announced a different number would walk around that.
           greetedSockets.add(socket)
-          // **No role means an app 1.3.25 or older** (LEGACY_APP_NOTICE), not a CLI: no CLI that talks
-          // to a Host sends a hello without one. It counts as attached, so the Host does not drive or
-          // open Slack beside it (S6-6, SL-11), and it is still never sent an `orch-act` it cannot
-          // answer: `act` refuses with APP_REQUIRED, which would otherwise leave the caller waiting
-          // forever (protocol.ts's `hello` has the whole reason). A role that is neither is a CLI.
+          named.set(socket, asked)
+          // **The app is a CLI until it proves it** (sandbox follow-ups, item 1): a socket that names the app is
+          // answered with a challenge of this connection, and becomes the app at its `app-proof`. One that proved
+          // already stays the app through a second hello.
           const wasApp = isApp(socket)
-          const wasLegacy = roles.get(socket) === 'legacy-app'
-          roles.set(socket, named)
-          if (roles.get(socket) === 'legacy-app' && !wasLegacy) deps.log.write(LEGACY_APP_NOTICE)
+          roles.set(socket, asked === 'app' ? (wasApp ? 'app' : 'cli') : asked)
           // Junk entries are dropped rather than refused: a hello is not the place to turn a client
           // away over a field that only ever narrows what it keeps.
           yields.set(socket, new Set(Array.isArray(m.yields) ? m.yields.filter((x): x is string => typeof x === 'string') : []))
@@ -633,10 +657,15 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           const remote = roles.get(socket) === 'mcp' ? mcpRemoteOf(m.remote) : undefined
           if (remote) mcpRemotes.set(socket, remote)
           else mcpRemotes.delete(socket)
-          if (roles.get(socket) === 'app' && typeof m.pid === 'number' && Number.isSafeInteger(m.pid) && m.pid > 0) lastAppPid = m.pid
+          const pid = typeof m.pid === 'number' && Number.isSafeInteger(m.pid) && m.pid > 0 ? m.pid : null
+          if (isApp(socket) && pid !== null) lastAppPid = pid
+          // A fresh one for each hello of an app not yet proved: whatever was open before is taken back.
+          const challenge = asked === 'app' && !isApp(socket) ? newHostNonce() : null
+          if (challenge !== null) challenges.set(socket, { challenge, pid })
+          else challenges.delete(socket)
           if (isApp(socket) || wasApp) tellAppsChanged()
-          send({ t: 'hello', ...helloBody(m.nonce) })
-          if (roles.get(socket) === 'app') {
+          send({ t: 'hello', ...helloBody(m.nonce), ...(challenge !== null ? { challenge } : {}) })
+          if (isApp(socket)) {
             try {
               deps.onAppGreeted?.(send)
             } catch (err) {
@@ -739,6 +768,10 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           deps.log.write(`a socket that has not said hello sent ${String(m?.t)} — dropped`)
           return
         }
+        if (m?.t === 'app-proof') {
+          proveApp(m.proof)
+          return
+        }
         if (deps.onMessage?.(m, send, { role: outwardRole(socket), socket: socketNo, greeted: true }) === true) return
         deps.log.write(`unknown message: ${JSON.stringify(v).slice(0, 200)}`)
       },
@@ -761,9 +794,11 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
       // Read before the two deletes below: they are what says who this was.
       const wasGreeted = greetedSockets.delete(socket)
       // `isApp` checks `destroyed`, which is true by now: read the role itself.
-      const wasApp = roles.get(socket) === 'app' || roles.get(socket) === 'legacy-app'
+      const wasApp = roles.get(socket) === 'app'
       const role = outwardRole(socket)
       roles.delete(socket)
+      named.delete(socket)
+      challenges.delete(socket)
       yields.delete(socket)
       features.delete(socket)
       mcpClients.delete(socket)
@@ -829,12 +864,11 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
     cliCaller: () => orchCaller({ role: 'cli' }),
     loopbackHello: (nonce) => helloBody(nonce),
     clients: () => live,
-    hasApp: () => appSocket() !== null || legacyAttached(),
+    hasApp: () => appSocket() !== null,
     hasCurrentApp: () => appSocket() !== null,
     // The same "first app socket" `act` sends to: the app that keeps a duty is the one that would be
-    // asked to do it. And an app 1.3.25 or older keeps every duty, whoever else is attached.
+    // asked to do it.
     appKeeps: (duty) => {
-      if (legacyAttached()) return true
       const s = appSocket()
       return s !== null && !(yields.get(s)?.has(duty) ?? false)
     },
@@ -855,14 +889,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
         const sock = appSocket()
         // The same sentence `orchDeps.ts` refuses with, so the reason reads the same however the
         // caller got here — the app can go away between that check and this one.
-        if (!sock)
-          return reject(
-            new AppUnreachable(
-              legacyAttached()
-                ? `APP_REQUIRED: ${name} needs a newer Astera app: ${LEGACY_APP_NOTICE}`
-                : `APP_REQUIRED: ${name} needs the Astera app running`
-            )
-          )
+        if (!sock) return reject(new AppUnreachable(`APP_REQUIRED: ${name} needs the Astera app running`))
         const call = `act_${++actSeq}`
         // **The fourth way a caller can be left waiting, and the one the other three do not cover:**
         // an app that stays connected and wedged. Its socket never closes, so nothing calls back, and
@@ -925,6 +952,8 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
         sockets.clear()
         greetedSockets.clear()
         roles.clear()
+        named.clear()
+        challenges.clear()
         yields.clear()
         mcpClients.clear()
         mcpRemotes.clear()

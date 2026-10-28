@@ -6,6 +6,7 @@ import path from 'node:path'
 import { createHostJournal, type HostJournal, type HostJournalDeps } from './hostJournal'
 import { hostAddress } from './address'
 import { encodeLine, createLineReader } from './framing'
+import { appProof } from '../core/host/hostKey'
 import { startHostServer, type HostServer } from './server'
 import { HOST_PROTOCOL, HOST_YIELD_JOURNAL } from '../core/host/protocol'
 import { versionOnlyOrchCall } from '../core/host/orchProtocol'
@@ -16,6 +17,8 @@ import { stateFromLegacy } from '../core/orchestration/legacyState'
 import type { OrchState } from '../core/orchestration/state'
 import type { Dispatch } from '../core/orchestration/types'
 
+/** The app key the Host server here checks an app's proof against (sandbox follow-ups, item 1). */
+const APP_KEY = 'a'.repeat(64)
 const NOW = '2026-09-26T10:00:00.000Z'
 const STARTED = '2026-09-26T09:00:00.000Z'
 let dir: string
@@ -567,17 +570,28 @@ describe('createHostJournal', () => {
         onIdle: () => {},
         orch: versionOnlyOrchCall({ version: '9.9.9' }),
         pidLives: () => true,
+        appKey: () => APP_KEY,
         log: { write: () => {}, close: () => {} }
       })
       return { s: server, address: addr.address }
     }
-    /** Greets with `hello` (one with no `role` is an app 1.3.25 or older) and resolves once the Host answered. */
+    /** Greets with `hello` and resolves once the Host answered, proving an app as the app does. One with no `role` is a
+     *  CLI (sandbox follow-ups, item 1). */
     const attach = async (address: string, hello: Record<string, unknown>): Promise<net.Socket> => {
       const sock = net.connect(address)
       sockets.push(sock)
       await new Promise((r) => sock.once('connect', r))
+      // Answered once the Host said hello, and for an app once it took the app's proof (sandbox follow-ups, item 1)
       const answered = new Promise<void>((resolve) => {
-        const read = createLineReader({ onMessage: () => resolve(), onBadLine: () => {}, onHandlerError: () => {} })
+        const read = createLineReader({
+          onMessage: (v) => {
+            const m = v as { t?: string; challenge?: unknown }
+            if (m.t === 'hello' && typeof m.challenge === 'string') sock.write(encodeLine({ t: 'app-proof', proof: appProof(APP_KEY, m.challenge) }))
+            else resolve()
+          },
+          onBadLine: () => {},
+          onHandlerError: () => {}
+        })
         sock.setEncoding('utf8')
         sock.on('data', read)
       })
@@ -587,10 +601,10 @@ describe('createHostJournal', () => {
     }
     const newApp = { role: 'app', yields: ['worktrees', 'dispatch', HOST_YIELD_JOURNAL] }
     const olderApp = { role: 'app', yields: ['worktrees', 'dispatch'] }
-    const legacyApp = { app: '1.3.25' }
+    const roleless = { app: '1.3.25' }
     const types = (): string[] => (existsSync(journalFile()) ? rows().map((e) => e.type) : [])
 
-    it('writes with no app and a yielding app, holds off for an older or legacy app, alone or beside a new one, and writes again once it leaves', async () => {
+    it('writes with no app and a yielding app, holds off for an older app, alone or beside a new one, and writes again once it leaves', async () => {
       await settings({ jobContinuityEnabled: true })
       const { s, address } = await start()
       const { j } = make({ writer: () => !s.appsKeep(HOST_YIELD_JOURNAL), hostStartedAt: () => s.startedAt })
@@ -628,11 +642,8 @@ describe('createHostJournal', () => {
       alone.end()
       await vi.waitFor(() => expect(s.hasApp()).toBe(false))
       writes()
-      const legacy = await attach(address, legacyApp)
-      holdsOff() // a role-less app 1.3.25 or older
-      legacy.end()
-      await vi.waitFor(() => expect(s.hasApp()).toBe(false))
-      writes()
+      await attach(address, roleless)
+      writes() // a hello with no role is a CLI, not an app 1.3.25 or older (sandbox follow-ups, item 1)
       await attach(address, { role: 'cli' })
       writes() // a CLI is not an app and keeps nothing
     })

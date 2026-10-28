@@ -3,7 +3,8 @@ import type { SandboxKind, SessionKind } from '../../../core/types'
 import { resolveFileIcon } from '../../../core/files/icons'
 import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
-import { Film, Globe, Image as ImageIcon, MessageSquare, Monitor, Repeat, Shield, ShieldOff, Terminal } from 'lucide-react'
+import { Film, Globe, Image as ImageIcon, MessageSquare, Monitor, Repeat, Terminal } from 'lucide-react'
+import { SandboxMarker } from './SandboxMarker'
 import { endRenameOnce } from '../lib/renameOnce'
 import { scrollThumb, tabFloor, wheelShift } from './tabStrip'
 
@@ -419,17 +420,7 @@ ${tab.profileTooltip}`
           {tab.kind === 'file' && tab.dirty && (
             <span className="tab-dirty" title={t('explorer.tab.unsaved')} />
           )}
-          {tab.kind === 'session' && tab.sandboxKind === 'sandbox' && (
-            <span className="tab-sandbox" title={t('session.tab.sandboxed')}>
-              <Shield size={11} />
-            </span>
-          )}
-          {/* Claude Code on Windows: deny rules for its file tools only, and the marker says so rather than "in the sandbox" */}
-          {tab.kind === 'session' && tab.sandboxKind === 'deny-only' && (
-            <span className="tab-sandbox is-deny-only" title={t('session.tab.denyOnly')}>
-              <ShieldOff size={11} />
-            </span>
-          )}
+          {tab.kind === 'session' && <SandboxMarker kind={tab.sandboxKind} />}
           {tab.kind === 'session' && tab.rollTooltip && (
             <span className="tab-roll" title={tab.rollTooltip}>
               <Repeat size={11} />

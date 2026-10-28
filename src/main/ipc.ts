@@ -41,7 +41,7 @@ import { hostRuntimeBase } from '../core/host/runtime'
 import { createRuntimeInstaller, installHostRuntime, spawnableRuntime, spawnWhenInstalled, type InstalledRuntime } from './host/runtimeInstall'
 import { executableProbe, parseExecutablePath, hostKillPlan, killHostCommand } from './host/hostProcess'
 import { hostPidFilePath, parseHostPidFile } from '../core/host/pidFile'
-import { readHostKey } from '../core/host/hostKey'
+import { ensureAppKey, readHostKey } from '../core/host/hostKey'
 import { hostAddress, retireOlderHosts } from '../host/address'
 import { createHostPtyFactory } from './host/ptyFactory'
 import { createHostProcFactory } from './host/procFactory'
@@ -6320,6 +6320,9 @@ export function registerIpc(
       settleSessionsTakenBack(null)
       return
     }
+    // Sandbox follow-ups, item 1: the key this app proves it is the app with, made before it first talks to a Host and
+    // before any session it starts is denied it. Not fatal: without it a Host serves this app as a CLI, and says so.
+    await ensureAppKey(profileDir).catch((err) => hostLog(`the app key could not be made: ${String(err)}`))
     // What the Host is actually started with. Null means `process.execPath` and the asar's host.js —
     // the arrangement every version before this one used, and the one a win32 installer has to fight.
     //
@@ -6390,6 +6393,9 @@ export function registerIpc(
       log: hostLog,
       // Protocol 4: the Host's hello must carry the proof of this key (core/host/hostKey.ts)
       hostKey: () => readHostKey(profileDir),
+      // And this app answers the Host's challenge under the app key (sandbox follow-ups, item 1): made again if it went
+      // missing since, so a Host never meets an app that cannot prove itself
+      appKey: () => ensureAppKey(profileDir),
       // Read at every handshake, so the notice belongs to the Host that just answered rather than to
       // whatever the runtime looked like when the app started.
       runtimeIncomplete: () => runtime?.incomplete ?? false,

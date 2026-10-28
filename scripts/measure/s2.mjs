@@ -5,7 +5,8 @@
 // TypeScript, so it loads under vitest only.
 import path from 'node:path'
 import { codexSandboxArgs } from '../../src/core/sandbox/codexProfile'
-import { credentialStoreDenies, hostSocketDenies, sensitiveLocations } from '../../src/core/sandbox/locations'
+import { claudeSessionDenied } from '../../src/core/sandbox/claudeSettings'
+import { codexSessionDenied } from '../../src/core/sandbox/prepared'
 import { PROBES, verdict } from './probes.mjs'
 import { probeEnv } from './measure-sandbox.mjs'
 
@@ -48,17 +49,17 @@ export const S2_SETS = [
 export const s2SetNames = (platform) => S2_SETS.filter((s) => s.platforms === undefined || s.platforms.includes(platform)).map((s) => s.name)
 
 /** What a sandboxed Codex session may not read: E6, the OS credential store its sandbox leaves open (the macOS
- *  keychains, the Linux session bus), and on macOS and Linux the folder a Host's socket is in (`hostDir`), as a
- *  session's start passes them (prepared.ts sessionSandboxArgs). */
-export const codexDenied = (platform, env, home, hostDir = null) => [
-  ...sensitiveLocations(platform, env, home),
-  ...credentialStoreDenies(platform, env, home),
-  ...hostSocketDenies(platform, hostDir)
-]
+ *  keychains, the Linux session bus), on macOS and Linux the folder a Host's socket is in (`hostDir`), and on every OS
+ *  the profile's app key (`appKeyFile`). The list a session's start builds (prepared.ts codexSessionDenied, which
+ *  sessionSandboxArgs denies), so what is measured is what a start hands Codex. */
+export const codexDenied = (platform, env, home, hostDir = null, appKeyFile = null) =>
+  codexSessionDenied({ platform, env, homeDir: home, hostSocketDir: hostDir, appKeyFile })
 
-/** What a sandboxed Claude session may not read: E6, and on macOS the keychains (Global Constraints). Linux Claude gets
- *  no bus entry: srt blocks every Unix socket there by itself (inventory §22.3). */
-export const claudeDenied = (platform, env, home) => [...sensitiveLocations(platform, env, home), ...(platform === 'darwin' ? credentialStoreDenies(platform, env, home) : [])]
+/** What a sandboxed Claude session may not read: E6, the OS credential store (the macOS keychains; the Linux session
+ *  bus, which srt blocks with every Unix socket anyway, inventory §22.3) and the profile's app key (`appKeyFile`). The
+ *  list a Claude start builds (claudeSettings.ts claudeSessionDenied, which StatusLineManager's twins deny), so what is
+ *  measured is what a start hands Claude. */
+export const claudeDenied = (platform, env, home, appKeyFile = null) => claudeSessionDenied({ platform, env, homeDir: home, appKeyFile })
 
 /** `codex sandbox` and `codex app-server` take the profile's `-c` values; `-a never` is an option of the session command,
  *  which the builder puts first. */

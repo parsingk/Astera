@@ -47,7 +47,8 @@ import { HOST_EXIT, listenExitCode } from './exitCodes'
 import { controllerRecordsFile, createControllerRegistry } from './controllers'
 import { openSecretStore } from '../core/secrets/secretStore'
 import { randomBytes } from 'node:crypto'
-import { ensureHostKey } from '../core/host/hostKey'
+import { ensureAppKey, ensureHostKey, readAppKeySync } from '../core/host/hostKey'
+import { pruneSandboxTwins } from '../core/sessions/statusline'
 import { completeWindowsPath } from '../core/sessions/windowsPath'
 import { PtyRegistry } from './registry'
 import { createConhostReaper, reapWindowsConsoleHosts } from './conhostReaper'
@@ -1216,22 +1217,34 @@ async function main(): Promise<void> {
     log.write(`could not make the Host key: ${String(err)} — not serving`)
     process.exit(HOST_EXIT.keyFailure)
   }
+  // Sandbox follow-ups, item 3: the sandbox twins folders not written for 30 days are removed, before any session this
+  // Host starts. None of this Host's sessions is live yet, and none of an earlier Host's outlived it; the app's own (its
+  // fallback while no Host answers) are what the 30 days keep, since every sandboxed start stamps its folder first.
+  const prunedTwins = await pruneSandboxTwins({ profileDir, now: Date.now(), inUse: new Set<string>(), log: (m) => log.write(m) })
+  if (prunedTwins.length > 0) log.write(`sandbox twins not written for 30 days removed: ${prunedTwins.join(', ')}`)
+  // Sandbox follow-ups, item 1: the key the app proves it is the app with. The app makes it before it first talks to a
+  // Host; made here too when there is none, before any session this Host starts, so a sandboxed session is denied a
+  // file that is there (a deny of a path that does not exist yet holds for nothing on Windows). Not fatal: without it
+  // no socket can be the app, and each is told so.
+  await ensureAppKey(profileDir).catch((err) => log.write(`could not make the app key: ${String(err)} — no app can prove it is the app`))
   try {
     server = await startHostServer({
       sessionOfToken: (t) => mcpGateway.sessionOfToken(t),
       address: addr.address,
       hostKey,
+      // Read at each proof, so a key made after this Host started is the one checked
+      appKey: () => readAppKeySync(profileDir),
       bootId,
       dirToPrepare: addr.dirToPrepare,
       version: hostVersion,
       idleMs: IDLE_MS,
       onIdle: () => leave(),
       onMessage: (m, send, from) => {
-        // Before the pty handler, so the mark is in place before a spawn can exit. Any role: see
-        // `ptyHeldBy` for the apps that declare none. Only a greeted socket, which close releases.
+        // Before the pty handler, so the mark is in place before a spawn can exit. Only the proven app's,
+        // the one socket its pty messages are served to (`ptyHeldBy`), which close releases.
         const held = ptyHeldBy(m, from)
         if (exits && held !== null) exits.heldBy(held, from.socket)
-        // The chat twin (chat takeover Task 5): a greeted socket's proc-spawn or proc-attach makes it the
+        // The chat twin (chat takeover Task 5): the proven app's proc-spawn or proc-attach makes it the
         // proc's writer, before the proc handler can answer.
         const heldProc = procHeldBy(m, from)
         if (heldProc !== null) procHolders.heldBy(heldProc, from.socket)
@@ -1257,9 +1270,9 @@ async function main(): Promise<void> {
         // The role rides along: a pty-spawn or proc-spawn is served to the app's own connection only (final fix pass, C2)
         return (handlePty?.(m, send, { socket: from.socket, role: from.role }) ?? false) || (handleProc?.(m, send, { socket: from.socket, role: from.role }) ?? false)
       },
-      // Released by the socket number whatever role the socket gave last: a second `hello` can change
-      // it, and marks made as an app must still go when that socket closes. A socket that never held a
-      // pty, which is every CLI call, runs no sweep (exits.ts).
+      // Released by the socket number, whatever role the socket has when it closes: one that named the
+      // app is a CLI until its proof holds, and marks made as the app must still go when that socket
+      // closes. A socket that never held a pty, which is every CLI call, runs no sweep (exits.ts).
       onClientGone: (from) => {
         exits?.appGone(from.socket)
         // Phase 8 (N2): what this socket paused is resumed, so a dead app does not leave a pty frozen.

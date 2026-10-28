@@ -867,6 +867,7 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .remote-session-list li + li { border-top: 1px solid var(--line-soft); }
 .remote-session-list button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; padding: 6px 10px; border: 0; border-radius: 0; background: transparent; text-align: left; }
 .remote-session-list button:hover { background: var(--elevated); }
+.remote-session-head { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; }
 .remote-session-name { color: var(--text); }
 .remote-session-meta { font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .remote-sessions-new { margin: 14px 0 6px; padding-top: 12px; border-top: 1px solid var(--line-soft); font-size: 13px; font-weight: 600; color: var(--text); }

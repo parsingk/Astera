@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { credentialStoreDenies, hostSocketDenies, otherHostFolders, sensitiveLocations } from './locations'
+import { appKeyDenies, credentialStoreDenies, hostSocketDenies, otherHostFolders, sensitiveLocations } from './locations'
 
 describe('sandbox locations', () => {
   it('lists E6 on every OS, with gh and gcloud where each OS keeps them', () => {
@@ -15,6 +15,14 @@ describe('sandbox locations', () => {
 
   it('falls back to the default Roaming folder when APPDATA is unset', () => {
     expect(sensitiveLocations('win32', {}, 'C:\\Users\\a')).toContain('C:/Users/a/AppData/Roaming/gcloud')
+  })
+
+  // Sandbox follow-ups, item 1: the app's key lets a process be the app to the Host, so it is named on every OS; the Host
+  // key beside it is not (the loopback's proof needs it)
+  it('names the app key on every OS, with forward slashes, and nothing without one', () => {
+    expect(appKeyDenies('C:\\Users\\a\\AppData\\Roaming\\astera\\host\\app.key')).toEqual(['C:/Users/a/AppData/Roaming/astera/host/app.key'])
+    expect(appKeyDenies('/home/a/.config/astera/host/app.key')).toEqual(['/home/a/.config/astera/host/app.key'])
+    expect(appKeyDenies(null)).toEqual([])
   })
 
   it('adds the OS credential store a sandbox does not close by itself', () => {

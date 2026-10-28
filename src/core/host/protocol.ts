@@ -358,6 +358,10 @@ export type ClientMessage =
    *  `pong` carrying the same `seq`. What it asks is not "are you there" — the socket answers that —
    *  but "is your event loop still turning", which is the one thing a stuck pty spawn takes away. */
   | { t: 'ping'; seq: number }
+  /** The app's answer to its hello's `challenge` (sandbox follow-ups, item 1): `appProof(appKey, challenge)`
+   *  (core/host/hostKey.ts). Sent once, right after the Host's hello proved the Host, and before anything else, so the
+   *  socket is the app by the time its next message is read. Answered with `app-proven`. */
+  | { t: 'app-proof'; proof: string }
   | OrchCallMessage
   /** The app's answer to one `orch-act` (design §5), carrying back the `call` the Host asked with.
    *  `ok: false` is the action's own failure and `error` is what the command layer puts in its reply,
@@ -426,6 +430,9 @@ export type HostMessage =
       runs: number
     }
   | { t: 'pong'; seq: number }
+  /** Whether an `app-proof` held (sandbox follow-ups, item 1). `ok: false` keeps the socket open as a CLI, and
+   *  `reason` says why: the app is told rather than cut off, so it can say what is wrong. */
+  | { t: 'app-proven'; ok: boolean; reason?: string }
   | OrchResultMessage
   /** Asks the app to do one thing the Host cannot do itself — spawn a session, touch a worktree
    *  (design §5). Sent only to a client whose `hello` said `role: 'app'`, and answered with

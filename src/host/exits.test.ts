@@ -171,22 +171,23 @@ describe('createHostExits', () => {
     expect(asked).toEqual([1])
   })
 
-  // Review of Task 12, I1: apps v1.3.17 to v1.3.25 send `hello` with no role, and the server calls
-  // such a socket 'cli'. Their ptys are still theirs, and a Host that handled their exits would load
-  // and write orchestration.json behind an app that writes the file itself.
-  it('lets a socket with no role that attached a pty keep its exits', async () => {
+  // Sandbox follow-ups, round 2: a pty message from anything but the proven app is refused (ptyHost.ts), so it holds
+  // nothing either: a CLI that attached would otherwise keep the Host from a pty's exit and its rolling. (A hello with no
+  // role, an app 1.3.25 or older, speaks protocol 3 elsewhere and never reaches this Host.)
+  it('lets no socket but the app hold a pty, so the Host keeps the exit of one a CLI attached', async () => {
     const exited: unknown[] = []
     const h = rig({ sessionExited: async (e) => { exited.push(e) } })
     h.open('p1', { kind: 'session', id: 'ses_old', restore: {} })
-    const held = ptyHeldBy({ t: 'pty-attach', id: 'p1' }, { greeted: true })
-    if (held) h.exits.heldBy(held, 5)
+    for (const role of ['cli', 'mcp'] as const) expect(ptyHeldBy({ t: 'pty-attach', id: 'p1' }, { greeted: true, role })).toBeNull()
+    expect(ptyHeldBy({ t: 'pty-spawn', id: 'p2', file: 'cmd.exe', args: [], opts }, { greeted: true, role: 'cli' })).toBeNull()
+    expect(h.exits.holdersOf('p1')).toEqual([])
     h.exit('p1', 1)
     await vi.advanceTimersByTimeAsync(EXIT_DEFER_MS * 2)
-    expect(exited).toEqual([])
+    expect(exited).toEqual([{ sessionId: 'ses_old', exitCode: 1 }])
   })
 
   it('holds a pty for a pty-spawn or a pty-attach and for nothing the CLI sends', () => {
-    const greeted = { greeted: true }
+    const greeted = { greeted: true, role: 'app' as const }
     const spawn: ClientMessage = { t: 'pty-spawn', id: 'p1', file: 'cmd.exe', args: [], opts }
     expect(ptyHeldBy(spawn, greeted)).toBe('p1')
     expect(ptyHeldBy({ t: 'pty-attach', id: 'p2' }, greeted)).toBe('p2')
@@ -208,10 +209,10 @@ describe('createHostExits', () => {
   it('does not make a never-greeted socket a holder of the pty it attaches (review of Task 1)', () => {
     const h = rig()
     h.open('p1', { kind: 'session', id: 'ses_1', restore: {} })
-    const held = ptyHeldBy({ t: 'pty-attach', id: 'p1' }, { greeted: false })
+    const held = ptyHeldBy({ t: 'pty-attach', id: 'p1' }, { greeted: false, role: 'app' })
     if (held) h.exits.heldBy(held, 7)
     expect(h.exits.holdersOf('p1')).toEqual([])
-    expect(ptyHeldBy({ t: 'pty-spawn', id: 'p2', file: 'cmd.exe', args: [], opts }, { greeted: false })).toBeNull()
+    expect(ptyHeldBy({ t: 'pty-spawn', id: 'p2', file: 'cmd.exe', args: [], opts }, { greeted: false, role: 'app' })).toBeNull()
   })
 
   // Review of Task 12, M8: the app reconnects on a new socket inside the handover's defer.

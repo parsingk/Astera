@@ -3,11 +3,20 @@ import { createProcHolders, procHeldBy } from './procHolders'
 
 describe('procHeldBy', () => {
   it('is the proc of a greeted proc-spawn or proc-attach, and nothing else', () => {
-    const g = { greeted: true }
+    const g = { greeted: true, role: 'app' as const }
     expect(procHeldBy({ t: 'proc-attach', id: 'p1' }, g)).toBe('p1')
     expect(procHeldBy({ t: 'proc-spawn', id: 'p2', file: 'x', args: [], opts: { cwd: 'D:/p', env: {} } }, g)).toBe('p2')
     expect(procHeldBy({ t: 'proc-write', id: 'p1', line: 'x' }, g)).toBeNull()
-    expect(procHeldBy({ t: 'proc-attach', id: 'p1' }, { greeted: false })).toBeNull()
+    expect(procHeldBy({ t: 'proc-attach', id: 'p1' }, { greeted: false, role: 'app' })).toBeNull()
+  })
+
+  // Sandbox follow-ups, round 2: a proc message from anything but the proven app is refused (procHost.ts), so it holds
+  // nothing: a CLI that attached would otherwise make itself a chat's writer in the app's place
+  it('is nothing for a socket that is not the app', () => {
+    for (const role of ['cli', 'mcp'] as const) {
+      expect(procHeldBy({ t: 'proc-attach', id: 'p1' }, { greeted: true, role })).toBeNull()
+      expect(procHeldBy({ t: 'proc-spawn', id: 'p2', file: 'x', args: [], opts: { cwd: 'D:/p', env: {} } }, { greeted: true, role })).toBeNull()
+    }
   })
 })
 

@@ -110,6 +110,10 @@ export interface SpawnChecks {
    *  sandboxed Codex session's profile denies, so its way to the Host is the loopback with its workload token (final
    *  fix pass, C2). Absent, nothing is denied for it. */
   hostSocketDir?: string | null
+  /** The profile's app key (`<profile>/host/app.key`, core/host/hostKey.ts appKeyPath), which a sandboxed Codex session's
+   *  profile denies on every OS: it lets a process be the app to the Host (sandbox follow-ups, item 1). Absent, nothing is
+   *  denied for it. */
+  appKeyFile?: string | null
   /** Writes the copy of the person's global git excludes a sandboxed win32 Codex session reads, since the elevated
    *  sandbox's own account cannot read theirs (core/sandbox/gitExcludes.ts codexExcludesWriter), asked by its prepare.
    *  Absent, none is written and the session's git looks where it would. */
@@ -299,6 +303,7 @@ export class SessionManager {
       env: this.envFor(account),
       ready: this.checks.codexWindowsReady,
       hostSocketDir: this.checks.hostSocketDir ?? null,
+      appKeyFile: this.checks.appKeyFile ?? null,
       version: this.codexVersion,
       // A codex without --no-daemon (warmed above) is refused now too, for a terminal session: a chat's app-server needs
       // no such flag. The spawn still asks for itself, since its environment is built after the hiding and the codex may
@@ -623,7 +628,8 @@ export class SessionManager {
       layout,
       env,
       hostSocketDir: this.checks.hostSocketDir ?? null,
-      otherHostDirs: otherHosts
+      otherHostDirs: otherHosts,
+      appKeyFile: this.checks.appKeyFile ?? null
     })
   }
 

@@ -61,7 +61,7 @@ describe('the app uses the package transport', () => {
     const protocol = await import('./host/protocol')
     expect(framing.encodeLine).toBe(internal.encodeLine)
     expect(framing.createLineReader).toBe(internal.createLineReader)
-    for (const k of ['hostKeyPath', 'readHostKey', 'ensureHostKey', 'newHostNonce', 'hostProof', 'proofMatches'] as const)
+    for (const k of ['hostKeyPath', 'readHostKey', 'ensureHostKey', 'newHostNonce', 'hostProof', 'proofMatches', 'appKeyPath', 'readAppKey', 'readAppKeySync', 'ensureAppKey', 'appProof', 'appProofMatches'] as const)
       expect(hostKey[k], k).toBe(internal[k])
     expect(socketDir.unsafeSocketDir).toBe(internal.unsafeSocketDir)
     expect(socketDir.privateDirProblem).toBe(internal.privateDirProblem)

@@ -1,6 +1,7 @@
 // The Claude side of a sandboxed session (sandbox design §6): the `sandbox` and `permissions` parts of the settings handed to
 // the session. Claude's own sandbox runs on macOS and Linux only; on Windows the deny rules are all it can enforce.
 import type { GitLayout } from './gitLayout'
+import { appKeyDenies, credentialStoreDenies, sensitiveLocations } from './locations'
 
 export interface ClaudeSandboxSettings {
   sandbox?: {
@@ -35,6 +36,18 @@ function gitDenyWrite(layout: GitLayout | null): string[] {
     `${layout.commonDir}/hooks`,
     `${layout.commonDir}/config`,
     ...layout.worktreeConfigs
+  ]
+}
+
+/** What a sandboxed Claude session may not read: the E6 list and the OS credential store, from the session's own
+ *  environment under the person's home, and the profile's app key (`appKeyFile`, appKeyDenies; sandbox follow-ups, item
+ *  1). One list for a Claude start (StatusLineManager's twins) and the S2 measurement (scripts/measure/s2.mjs
+ *  claudeDenied), so what is measured is what a start hands Claude. */
+export function claudeSessionDenied(o: { platform: NodeJS.Platform; env: Record<string, string | undefined>; homeDir: string; appKeyFile?: string | null }): string[] {
+  return [
+    ...sensitiveLocations(o.platform, o.env, o.homeDir),
+    ...credentialStoreDenies(o.platform, o.env, o.homeDir),
+    ...appKeyDenies(o.appKeyFile ?? null)
   ]
 }
 
