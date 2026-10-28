@@ -12,8 +12,7 @@ import { SESSION_CONTEXT_SCRIPT } from './sessionContext'
 import { CLAUDE_INPUT_FIELDS } from '../audit/resolve'
 import ENFORCE_HOOK_SOURCE from 'virtual:astera-enforce-hook'
 import { codexEnforceArgs } from './codexEnforce'
-import { claudeSandboxSettings, type ClaudeSandboxSettings } from '../sandbox/claudeSettings'
-import { appKeyDenies, credentialStoreDenies, sensitiveLocations } from '../sandbox/locations'
+import { claudeSandboxSettings, claudeSessionDenied, type ClaudeSandboxSettings } from '../sandbox/claudeSettings'
 import { appKeyPath } from '../host/hostKey'
 import { npmCacheOf } from '../sandbox/codexProfile'
 import type { GitLayout } from '../sandbox/gitLayout'
@@ -784,12 +783,8 @@ export class StatusLineManager {
   /** What a sandbox twin adds: the builder's settings, for the scope's layout and from the scope's environment, under the
    *  person's home. */
   private sandboxPart(scope: SandboxScope): SandboxPart {
-    // And the app key of this profile (sandbox follow-ups, item 1), as a Codex session's profile denies it
-    const denied = [
-      ...sensitiveLocations(this.platform, scope.env, this.homeDir),
-      ...credentialStoreDenies(this.platform, scope.env, this.homeDir),
-      ...appKeyDenies(appKeyPath(this.userDataDir))
-    ]
+    // With the app key of this profile (sandbox follow-ups, item 1), as a Codex session's profile denies it
+    const denied = claudeSessionDenied({ platform: this.platform, env: scope.env, homeDir: this.homeDir, appKeyFile: appKeyPath(this.userDataDir) })
     return claudeSandboxSettings({ platform: this.platform, denied, npmCache: npmCacheOf(this.tmpDir), layout: scope.layout })
   }
 

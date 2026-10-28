@@ -52,6 +52,8 @@ import { claudeSandboxSettings } from '../../src/core/sandbox/claudeSettings'
 import { credentialStoreDenies, hostSocketDenies, sensitiveLocations } from '../../src/core/sandbox/locations'
 import { gitLayoutOf } from '../../src/core/sandbox/gitLayout'
 import { sessionSandboxArgs } from '../../src/core/sandbox/prepared'
+import { StatusLineManager } from '../../src/core/sessions/statusline'
+import { npmCacheOf } from '../../src/core/sandbox/codexProfile'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -242,15 +244,41 @@ describe('the S2 sets’ arguments come from the builders', () => {
     gitFiles: ['/m/.git/worktrees/wt/commondir', '/m/.git/commondir', '/m/.git/modules', '/m/.git/worktrees/wt2/commondir']
   }
 
-  it('denies Codex E6 and the credential stores, and Claude E6 with the macOS keychains only', () => {
+  it('denies Codex and Claude E6 and the credential stores', () => {
     for (const platform of ['darwin', 'linux', 'win32']) {
       const e = { ...env, APPDATA: 'C:/h/AppData/Roaming' }
       expect(codexDenied(platform, e, '/h')).toEqual([...sensitiveLocations(platform, e, '/h'), ...credentialStoreDenies(platform, e, '/h')])
+      // As a Claude start denies them (claudeSessionDenied): the Linux bus too, which srt blocks by itself anyway
+      expect(claudeDenied(platform, e, '/h')).toEqual([...sensitiveLocations(platform, e, '/h'), ...credentialStoreDenies(platform, e, '/h')])
     }
     expect(codexDenied('linux', env, '/h')).toContain('/run/user/1001/bus')
-    // Global Constraints: the bus socket for Linux Codex; srt blocks Unix sockets on Linux by itself
-    expect(claudeDenied('linux', env, '/h')).toEqual(sensitiveLocations('linux', env, '/h'))
     expect(claudeDenied('darwin', env, '/h')).toEqual([...sensitiveLocations('darwin', env, '/h'), '/h/Library/Keychains'])
+  })
+
+  // Sandbox follow-ups, round 2: the measurement hands Claude's sandbox exactly the settings a Claude start writes, so
+  // its list comes from the start's own builder, the app key included. Pinned against a real StatusLineManager's twin
+  it("hands Claude exactly the settings a Claude start writes (StatusLineManager's twin), the app key included", async () => {
+    const profile = mkdtempSync(path.join(os.tmpdir(), 'astera-measure-claude-'))
+    try {
+      for (const platform of ['darwin', 'linux', 'win32']) {
+        const home = platform === 'win32' ? 'C:/h' : '/h'
+        const tmp = platform === 'win32' ? 'C:/h/AppData/Local/Temp' : '/tmp'
+        const e = { ...env, APPDATA: 'C:/h/AppData/Roaming' }
+        const mgr = new StatusLineManager(path.join(profile, platform), 'node', () => {}, { platform, execPath: platform === 'win32' ? 'C:/x/electron.exe' : '/opt/astera/astera', homeDir: home, tmpDir: tmp })
+        await mgr.init()
+        for (const layout of [repo, wt]) {
+          const scope = { layout, env: e }
+          expect(await mgr.ensureSandboxFiles(scope)).toBe('ok')
+          const twin = JSON.parse(readFileSync(mgr.sandboxChatArgs(false, scope)[1], 'utf8'))
+          const appKey = path.join(profile, platform, 'host', 'app.key')
+          const measured = claudeSandboxSettings({ platform, denied: claudeDenied(platform, e, home, appKey), npmCache: npmCacheOf(tmp), layout })
+          expect(twin, platform).toEqual({ ...(measured.sandbox ? { sandbox: measured.sandbox } : {}), permissions: measured.permissions })
+          expect(claudeDenied(platform, e, home, appKey), platform).toContain(appKey.replace(/\\/g, '/'))
+        }
+      }
+    } finally {
+      rmSync(profile, { recursive: true, force: true })
+    }
   })
 
   it("denies Codex the Host's socket folder as a session's start does (sessionSandboxArgs), in both macOS spellings", () => {

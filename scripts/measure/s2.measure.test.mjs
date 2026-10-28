@@ -433,7 +433,7 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
       record.plain = runProbes(plainWrap, { cwd: pp.cwd, env: envOf(pp), probes, timeoutMs: PROBE_MS })
       const p = await prepare(set.name, set.layout, files)
       const npmCache = npmCacheOf(p.tmpDir)
-      const claude = claudeSandboxSettings({ platform: PLATFORM, denied: claudeDenied(PLATFORM, ctx.base, ctx.home), npmCache, layout: p.gitLayout })
+      const claude = claudeSandboxSettings({ platform: PLATFORM, denied: claudeDenied(PLATFORM, ctx.base, ctx.home, ctx.appKeyFile), npmCache, layout: p.gitLayout })
       const commonDir = p.gitLayout?.worktree ? p.gitLayout.commonDir : null
       const settings = srtSettingsOf(claude, { commonDir, ...(socket ? { allowUnixSockets: [socket.path] } : {}) })
       const settingsFile = path.join(ctx.scratch, `srt-settings-${set.name}.json`)
