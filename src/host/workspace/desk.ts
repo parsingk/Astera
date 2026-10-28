@@ -196,9 +196,14 @@ public static class AsteraDesk {
   }
 
   // Started suspended and put in a job of its own before its first instruction, so nothing it starts,
-  // a detached child included, can be outside the job (libuv's detached spawn on Windows asks for no
-  // CREATE_BREAKAWAY_FROM_JOB, and its own job for children it does not detach allows only a silent
-  // breakaway, which stops at this job: github.com/libuv/libuv/blob/v1.x/src/win/process.c). Ending
+  // a detached child included, can be outside the job. libuv's detached spawn on Windows asks for no
+  // CREATE_BREAKAWAY_FROM_JOB, and its own job for the children it does not detach sets
+  // JOB_OBJECT_LIMIT_BREAKAWAY_OK | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK |
+  // JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+  // (github.com/libuv/libuv/blob/v1.x/src/win/process.c): a process started in that job leaves it,
+  // silently or when it asks to, but a breakaway of either kind stops at the first job up the chain
+  // that does not allow one, and this one does not (learn.microsoft.com/windows/win32/procthread/nested-jobs;
+  // learn.microsoft.com/windows/win32/api/jobapi2/nf-jobapi2-assignprocesstojobobject). Ending
   // the job ends the whole tree, and KILL_ON_JOB_CLOSE ends it too when this helper exits (a close,
   // the Host's death, a helper crash): what the manager already does when its helper dies and what the
   // next Host's leftover sweep would do, only complete and at once. A job that cannot be made does not

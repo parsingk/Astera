@@ -71,8 +71,11 @@ describe('DESK_PS1', () => {
   it('makes a job that ends the whole tree when its last handle closes, and lets nothing break away from it', () => {
     expect(DESK_PS1).toContain('JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000')
     expect(DESK_PS1).toContain('JobObjectExtendedLimitInformation = 9')
+    // The job's one limit assignment, and no breakaway limit defined to add to it. (A comment may still
+    // name the flags libuv's own job sets.)
+    expect(DESK_PS1.match(/LimitFlags\s*\|?=[^;]*;/g)).toEqual(['LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;'])
     expect(DESK_PS1).toContain('info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;')
-    expect(DESK_PS1).not.toMatch(/BREAKAWAY_OK/)
+    expect(DESK_PS1).not.toMatch(/const uint JOB_OBJECT_LIMIT_\w*BREAKAWAY/)
   })
 
   it('still launches when the job cannot be made, and the reply says so with the reason', () => {
