@@ -75,7 +75,9 @@ const rig = (over: {
     appKeepsWorktrees: over.appKeepsWorktrees ?? (() => false),
     onPromptWrite: over.onPromptWrite,
     touchAgentProfile: over.touchAgentProfile,
-    ...(over.codexNoDaemon ? { codexNoDaemon: over.codexNoDaemon } : {}),
+    // A codex without --no-daemon unless a case says otherwise: the real probe runs the codex on this machine, so a case
+    // that leaned on it passed only where a new enough codex is installed
+    codexNoDaemon: over.codexNoDaemon ?? Object.assign(() => false, { warm: async () => {} }),
     // Every Windows home reads set up unless a case says otherwise: the real question runs the codex on this machine
     codexWindowsReady: over.codexWindowsReady ?? (async () => 'ready'),
     ...(over.claudeVersion ? { claudeVersion: over.claudeVersion } : {}),
@@ -104,7 +106,7 @@ const startArgs = (taskId: string, dispatchId: string, worktree = 'current') =>
 
 /** rig, plus a codex account acc2 whose configDir is under `dir`, a Task and Dispatch seeded on it, and
  *  the locate hooks. `state` is settable so a second Dispatch can be seeded on the same spawner. */
-const rigWith = (hooks: LocateHooks) => {
+const rigWith = (hooks: LocateHooks & { codexNoDaemon?: HostSpawnerDeps['codexNoDaemon'] }) => {
   writeFileSync(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
     { id: 'acc1', label: 'one', configDir: path.join(dir, 'cfg1'), color: '#888', createdAt: NOW, provider: 'claude' },
     { id: 'acc2', label: 'two', configDir: path.join(dir, 'cfg2'), color: '#888', createdAt: NOW, provider: 'codex' }
@@ -1173,7 +1175,8 @@ describe('createHostSpawner — createSession', () => {
     // C3: every worker of a Job a sandboxed session made starts in the sandbox whatever profile its Task names; the worker
     // of a Task a sandboxed session added does too; any other worker is unchanged
     it('a worker of a Job or Task a sandboxed session made starts sandboxed', async () => {
-      const h = rigWith({ findRollout: async () => null })
+      const daemonless = Object.assign(() => true, { warm: async () => {} })
+      const h = rigWith({ findRollout: async () => null, codexNoDaemon: daemonless })
       const st = h.box.state
       const jobId = st.runs.find((r) => r.id === st.tasks.find((t) => t.id === h.taskId)!.runId)!.jobId
       h.box.state = { ...st, jobs: st.jobs.map((j) => (j.id === jobId ? { ...j, sandboxed: true as const } : j)) }
@@ -1181,7 +1184,7 @@ describe('createHostSpawner — createSession', () => {
       expect(h.spawned[0].args).toContain('default_permissions="astera"')
       expect(h.registry.list()[0].meta!.restore).toMatchObject({ sandboxed: true })
       // The same Job unmarked: a worker as today
-      const plain = rigWith({ findRollout: async () => null })
+      const plain = rigWith({ findRollout: async () => null, codexNoDaemon: daemonless })
       await plain.spawner!.startWorker({ ...startArgs(plain.taskId, plain.dispatchId), provider: 'codex', accountId: 'acc2' })
       expect(plain.spawned[0].args).not.toContain('default_permissions="astera"')
       expect(plain.registry.list()[0].meta!.restore).not.toHaveProperty('sandboxed')

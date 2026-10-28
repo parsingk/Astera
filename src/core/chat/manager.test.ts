@@ -1499,6 +1499,14 @@ describe('ChatSessionManager.send — a person’s turn is written marked', () =
 // The Credentials list (credentials design §5): a chat session loses what the list hides, as a terminal one does, before
 // Astera adds its own variables.
 describe('credentials hiding', () => {
+  // The hiding makes the empty locations it hands a session, so they go in a temp folder of the test's own, not at the
+  // root of the drive (or, off Windows, a root nobody may write)
+  let empty = ''
+  beforeEach(() => {
+    empty = path.join(mkdtempSync(path.join(os.tmpdir(), 'astera-chat-hiding-')), 'gh')
+  })
+  afterEach(() => rmSync(path.dirname(empty), { recursive: true, force: true }))
+
   it('a chat session started after an entry is on has none of its variables, and keeps what Astera plants', () => {
     const asked: [string, string | undefined][] = []
     const factory = vi.fn((_f: string, _a: string[], _o: ProcSpawnOptions) => new FakeProc())
@@ -1512,7 +1520,7 @@ describe('credentials hiding', () => {
       createAdapter: makeAdapterFactory().createAdapter,
       baseEnv: { PATH: '/bin', GH_TOKEN: 'inherited', KEEP: 'k' },
       hiding: {
-        get: (cwd: string, sessionId?: string) => (asked.push([cwd, sessionId]), { remove: ['GH_TOKEN', 'ASTERA_SESSION'], set: { GH_CONFIG_DIR: '/empty/gh' } }),
+        get: (cwd: string, sessionId?: string) => (asked.push([cwd, sessionId]), { remove: ['GH_TOKEN', 'ASTERA_SESSION'], set: { GH_CONFIG_DIR: empty } }),
         damaged: () => false
       }
     }
@@ -1521,7 +1529,7 @@ describe('credentials hiding', () => {
     expect(asked).toEqual([['/p', info.id]])
     const env = factory.mock.calls[0][2].env
     expect(env.GH_TOKEN).toBeUndefined()
-    expect(env.GH_CONFIG_DIR).toBe('/empty/gh')
+    expect(env.GH_CONFIG_DIR).toBe(empty)
     expect(env.KEEP).toBe('k')
     expect(env.ASTERA_SESSION).toBe(info.id)
   })
