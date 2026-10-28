@@ -209,8 +209,36 @@ export function parsePsTree(text: string): ProcRow[] {
  *  would reach the kernel, init, or the Host and every session it holds. The Host's pid is never
  *  walked through either, so a root above the Host never reaches what the Host started. */
 export function treeKillTargets(rows: readonly ProcRow[], root: number, hostPid: number): { groups: number[]; pids: number[] } {
+  if (root <= 1 || root === hostPid) return { groups: [], pids: [] }
+  const { groups, pids } = walkTree(rows, [root], hostPid)
+  return { groups, pids }
+}
+
+/** What a second listing, taken once the grace has passed and before SIGKILL, adds to the first
+ *  (`before`): what a process of the first tree that is still alive started since, by parent or by a
+ *  group it leads (a dev app that outlived its SIGTERM and started its Host again), and the group of
+ *  one that has left its group since. Nothing the first listing already targets, and the same guards
+ *  as treeKillTargets. What a process of the tree started and then left behind by exiting is an
+ *  orphan by now and cannot be found, as in the first listing. */
+export function lateTreeTargets(before: readonly ProcRow[], after: readonly ProcRow[], root: number, hostPid: number): { groups: number[]; pids: number[] } {
+  if (root <= 1 || root === hostPid) return { groups: [], pids: [] }
+  const first = walkTree(before, [root], hostPid)
+  const now = new Set(after.map((r) => r.pid))
+  // A group the first listing targets still covers its members when its leader has gone since.
+  const late = walkTree(after, [...first.tree].filter((p) => now.has(p)), hostPid, first.groups)
+  const had = new Set([...first.groups.map((g) => -g), ...first.pids])
+  return { groups: late.groups.filter((g) => !had.has(-g)), pids: late.pids.filter((p) => !had.has(p)) }
+}
+
+/** The tree from `seeds` in one listing, and its targets (treeKillTargets). A process in one of
+ *  `ended` (groups already being ended) is not a pid target of its own. */
+function walkTree(
+  rows: readonly ProcRow[],
+  seeds: readonly number[],
+  hostPid: number,
+  ended: readonly number[] = []
+): { tree: Set<number>; groups: number[]; pids: number[] } {
   const wall = (pid: number): boolean => pid <= 1 || pid === hostPid
-  if (wall(root)) return { groups: [], pids: [] }
   const hostPgid = rows.find((r) => r.pid === hostPid)?.pgid ?? hostPid
   const children = new Map<number, number[]>()
   const members = new Map<number, number[]>()
@@ -222,8 +250,8 @@ export function treeKillTargets(rows: readonly ProcRow[], root: number, hostPid:
     members.get(r.pgid)!.push(r.pid)
     pgidOf.set(r.pid, r.pgid)
   }
-  const tree = new Set<number>([root])
-  for (const queue = [root]; queue.length > 0; ) {
+  const tree = new Set<number>(seeds.filter((p) => !wall(p)))
+  for (const queue = [...tree]; queue.length > 0; ) {
     const p = queue.pop()!
     for (const next of [...(children.get(p) ?? []), ...(members.get(p) ?? [])]) {
       if (wall(next) || tree.has(next)) continue
@@ -232,21 +260,23 @@ export function treeKillTargets(rows: readonly ProcRow[], root: number, hostPid:
     }
   }
   const groups = [...tree].filter((p) => members.has(p) && p !== hostPgid).sort((a, b) => a - b)
-  const led = new Set(groups)
-  // A pid missing from the snapshot (only the root can be) is gone: signalling it could only reach
+  const led = new Set([...groups, ...ended])
+  // A pid missing from the listing (only the root can be) is gone: signalling it could only reach
   // whoever got the number since.
   const pids = [...tree].filter((p) => pgidOf.has(p) && !led.has(pgidOf.get(p)!)).sort((a, b) => a - b)
-  return { groups, pids }
+  return { tree, groups, pids }
 }
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
-/** Ends `pid` and everything it started (treeKillTargets), from one ps snapshot taken before any
+/** Ends `pid` and everything it started (treeKillTargets), from a ps listing taken before any
  *  signal: SIGTERM to each target, a poll every 100 ms, and SIGKILL to what is left once `graceMs`
- *  has passed, as killGroup does for one group. A detached child started after the snapshot is not
- *  in it. A target already gone is not a failure; one that may not be signalled does not stop the
- *  rest, and its error is thrown once the others are done. When ps itself fails, the root's own group
- *  is still ended (killGroup), and then the failure is thrown. */
+ *  has passed, as killGroup does for one group. When something outlives the grace, the table is listed
+ *  once more before SIGKILL, and what a process of the tree still alive started meanwhile is killed
+ *  with it (lateTreeTargets); a detached child whose parent exited during the grace is an orphan by
+ *  then and is missed. A target already gone is not a failure; one that may not be signalled does not
+ *  stop the rest, and its error is thrown once the others are done. When the first listing fails, the
+ *  root's own group is still ended (killGroup), and then the failure is thrown. */
 export async function killProcessTree(
   pid: number,
   o: { exec?: ExecText; signals?: Signals; graceMs?: number; hostPid?: number } = {}
@@ -256,9 +286,10 @@ export async function killProcessTree(
   const hostPid = o.hostPid ?? process.pid
   if (!Number.isSafeInteger(pid) || pid <= 1) throw new Error(`not a pid: ${pid}`)
   if (pid === hostPid) throw new Error(`not a pid to end: ${pid} is this Host's own`)
+  const exec = o.exec ?? execText
   let rows: ProcRow[]
   try {
-    rows = parsePsTree(await (o.exec ?? execText)('env', PS_TREE_ARGS))
+    rows = parsePsTree(await exec('env', PS_TREE_ARGS))
   } catch (err) {
     await killGroup(pid, s, graceMs)
     throw new Error(`pid ${pid}: its process group was ended, but the rest of its tree could not be listed: ${messageOf(err)}`)
@@ -279,6 +310,15 @@ export async function killProcessTree(
   for (let waited = 0; live.length > 0 && waited < graceMs; waited += GROUP_POLL_MS) {
     await s.sleep(GROUP_POLL_MS)
     live = live.filter((target) => send(target, 0))
+  }
+  if (live.length > 0) {
+    // The grace is over, so what turns up now gets SIGKILL with the rest, no SIGTERM first.
+    try {
+      const late = lateTreeTargets(rows, parsePsTree(await exec('env', PS_TREE_ARGS)), pid, hostPid)
+      live.push(...late.groups.map((g) => -g), ...late.pids)
+    } catch (err) {
+      failures.push(new Error(`pid ${pid}: its tree could not be listed again before SIGKILL: ${messageOf(err)}`))
+    }
   }
   for (const target of live) send(target, 'SIGKILL')
   if (failures.length > 0) throw failures[0]

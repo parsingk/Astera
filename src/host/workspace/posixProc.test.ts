@@ -8,6 +8,7 @@ import {
   execText,
   killGroup,
   killProcessTree,
+  lateTreeTargets,
   linuxStartTimes,
   macStartTimes,
   parseLstart,
@@ -219,15 +220,55 @@ describe('treeKillTargets', () => {
   })
 })
 
+describe('lateTreeTargets', () => {
+  // The first listing: the launch, and the Host Electron (1001) started detached (1003).
+  const BEFORE = [...BASE, row(1003, 1001, 1003)]
+
+  it('adds what a tree process still alive started during the grace: a setsid child, its own child, and nothing it had already', () => {
+    // Electron outlived its SIGTERM and started a new Host (1010, setsid) with a child of its own (1011);
+    // the helper (1002) and the first Host (1003) are gone.
+    const after = [row(1, 0, 1), row(400, 1, 400), row(500, 400, 500), row(1000, 500, 1000), row(1001, 1000, 1000), row(1010, 1001, 1010), row(1011, 1010, 1010)]
+    expect(lateTreeTargets(BEFORE, after, 1000, 500)).toEqual({ groups: [1010], pids: [] })
+  })
+
+  it('leaves alone a new process whose parent is not in the tree, and an orphan whose parent in it is gone', () => {
+    // The Host (500) and the app (400) started processes of their own; 1030 was started by the first
+    // Host (1003), which is gone, so nothing in the tree leads to it any more.
+    const after = [row(1, 0, 1), row(400, 1, 400), row(500, 400, 500), row(1000, 500, 1000), row(1001, 1000, 1000), row(1020, 500, 1020), row(1021, 400, 1021), row(1030, 1, 1030)]
+    expect(lateTreeTargets(BEFORE, after, 1000, 500)).toEqual({ groups: [], pids: [] })
+  })
+
+  it('adds no pid target for a member of a group the first listing already ends, once that group leader is gone', () => {
+    // sh (1000) is gone; Electron (1001) is still in its group, which the first listing ends as a whole.
+    const after = [row(1, 0, 1), row(500, 400, 500), row(1001, 1000, 1000)]
+    expect(lateTreeTargets(BEFORE, after, 1000, 500)).toEqual({ groups: [], pids: [] })
+  })
+
+  it('adds the group of a tree process that left its group for one of its own after the first listing', () => {
+    const after = [row(1, 0, 1), row(500, 400, 500), row(1000, 500, 1000), row(1001, 1000, 1001), row(1002, 1001, 1001)]
+    expect(lateTreeTargets(BEFORE, after, 1000, 500)).toEqual({ groups: [1001], pids: [] })
+  })
+
+  it("keeps the guards: never pid 0 or 1, the Host's pid or its group, and nothing for a root that is one of them", () => {
+    // A new child in group 1 or 0 is ended by its pid alone; a row claiming pid 1 or the Host as a new
+    // child of Electron is never taken.
+    const after = [row(0, 0, 0), row(1, 1001, 1), row(500, 1001, 500), row(1000, 500, 1000), row(1001, 1000, 1000), row(1012, 1001, 1), row(1013, 1001, 0)]
+    expect(lateTreeTargets(BEFORE, after, 1000, 500)).toEqual({ groups: [], pids: [1012, 1013] })
+    for (const root of [0, 1, 500]) expect(lateTreeTargets(BEFORE, after, root, 500)).toEqual({ groups: [], pids: [] })
+  })
+})
+
 describe('killProcessTree', () => {
-  /** A process table: `ps` answers it, and signals end its processes. A group signal reaches every
-   *  member; EPERM only when it reaches no process it may signal, as kill(2) says. */
-  const table = (rows: ProcRow[], o: { stubborn?: number[]; eperm?: number[]; gone?: number[] } = {}) => {
+  /** A process table: `ps` answers it (the first listing with `rows`, any later one with what is still
+   *  alive), and signals end its processes. A group signal reaches every member; EPERM only when it
+   *  reaches no process it may signal, as kill(2) says. `later` start at the first wait of the grace. */
+  const table = (rows: ProcRow[], o: { stubborn?: number[]; eperm?: number[]; gone?: number[]; later?: ProcRow[] } = {}) => {
     const live = new Map(rows.filter((r) => !o.gone?.includes(r.pid)).map((r) => [r.pid, r]))
     const sent: Array<[number, NodeJS.Signals | 0]> = []
     const fail = (code: string): never => {
       throw Object.assign(new Error(`kill ${code}`), { code })
     }
+    let started = false
     const s: Signals = {
       kill: (target, sig) => {
         sent.push([target, sig])
@@ -239,16 +280,25 @@ describe('killProcessTree', () => {
           if (sig === 'SIGKILL' || (sig === 'SIGTERM' && !o.stubborn?.includes(r.pid))) live.delete(r.pid)
         }
       },
-      sleep: async () => {}
+      sleep: async () => {
+        if (started) return
+        started = true
+        for (const r of o.later ?? []) live.set(r.pid, r)
+      }
     }
-    const exec = vi.fn(async (_file: string, _args: string[]) => rows.map((r) => `${String(r.pid).padStart(5)} ${String(r.ppid).padStart(5)} ${String(r.pgid).padStart(5)}`).join('\n') + '\n')
+    const text = (list: ProcRow[]): string => list.map((r) => `${String(r.pid).padStart(5)} ${String(r.ppid).padStart(5)} ${String(r.pgid).padStart(5)}`).join('\n') + '\n'
+    const exec = vi.fn(async (_file: string, _args: string[]) => text(exec.mock.calls.length === 1 ? rows : [...live.values()]))
     return { s, sent, exec, live }
   }
 
-  it('lists the table once with ps under LC_ALL=C, ends every target with SIGTERM, and SIGKILLs what is left after the grace', async () => {
+  it('lists the table with ps under LC_ALL=C, ends every target with SIGTERM, and SIGKILLs what is left after the grace', async () => {
     const t = table([...BASE, row(1003, 1001, 1003), row(1004, 1003, 1003)], { stubborn: [1004] })
     await killProcessTree(1000, { exec: t.exec, signals: t.s, hostPid: 500, graceMs: 200 })
-    expect(t.exec.mock.calls).toEqual([['env', PS_TREE_ARGS]])
+    // Once before any signal, and once more before SIGKILL, since something outlived the grace.
+    expect(t.exec.mock.calls).toEqual([
+      ['env', PS_TREE_ARGS],
+      ['env', PS_TREE_ARGS]
+    ])
     expect(PS_TREE_ARGS).toEqual(['LC_ALL=C', 'ps', '-A', '-o', 'pid=', '-o', 'ppid=', '-o', 'pgid='])
     expect(t.sent).toEqual([
       [-1000, 'SIGTERM'],
@@ -268,6 +318,32 @@ describe('killProcessTree', () => {
     const raced = table([...BASE, row(1003, 1001, 1003)], { gone: [1003] })
     await expect(killProcessTree(1000, { exec: raced.exec, signals: raced.s, hostPid: 500 })).resolves.toBeUndefined()
     expect(raced.sent).toEqual([[-1000, 'SIGTERM'], [-1003, 'SIGTERM'], [-1000, 0]])
+    // Nothing outlived the grace, so there is no second listing.
+    expect(raced.exec).toHaveBeenCalledTimes(1)
+  })
+
+  it('lists again before SIGKILL and ends what a process still alive started during the grace (a dev app starting its Host again)', async () => {
+    // Electron (1001) outlives its SIGTERM and starts a new Host (1010) in a session of its own.
+    const t = table(BASE, { stubborn: [1001, 1010], later: [row(1010, 1001, 1010), row(1020, 500, 1020)] })
+    await killProcessTree(1000, { exec: t.exec, signals: t.s, hostPid: 500, graceMs: 200 })
+    expect(t.exec).toHaveBeenCalledTimes(2)
+    expect(t.sent).toEqual([
+      [-1000, 'SIGTERM'],
+      [-1000, 0],
+      [-1000, 0],
+      [-1000, 'SIGKILL'],
+      [-1010, 'SIGKILL']
+    ])
+    // What the Host itself started meanwhile (1020) is not the tree's, and is left alone.
+    expect([...t.live.keys()]).toEqual([1, 400, 500, 1020])
+  })
+
+  it('a second listing that fails still SIGKILLs what is left, then says the tree could not be listed again', async () => {
+    const t = table(BASE, { stubborn: [1001] })
+    t.exec.mockImplementationOnce(t.exec.getMockImplementation()!).mockRejectedValueOnce(new Error('ps timed out'))
+    await expect(killProcessTree(1000, { exec: t.exec, signals: t.s, hostPid: 500, graceMs: 100 })).rejects.toThrow('could not be listed again before SIGKILL: ps timed out')
+    expect(t.sent.at(-1)).toEqual([-1000, 'SIGKILL'])
+    expect([...t.live.keys()]).toEqual([1, 400, 500])
   })
 
   it('a ps that fails still ends the root group, as before, and then says the rest could not be listed', async () => {
@@ -333,6 +409,51 @@ describe.runIf(process.platform !== 'win32')('killProcessTree on this machine', 
       await fs.rm(dir, { recursive: true, force: true })
     }
   })
+
+  it(
+    'ends a detached child the root starts during the grace, after its SIGTERM, as a dev app starting its Host again would',
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-tree-late-'))
+      const readyFile = path.join(dir, 'ready')
+      const pidFile = path.join(dir, 'child.pid')
+      // The root outlives SIGTERM and starts the child 500 ms after it, inside the 2 s grace.
+      const script =
+        "const fs = require('node:fs'); process.on('SIGTERM', () => setTimeout(() => { " +
+        "const c = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' }); " +
+        'fs.writeFileSync(process.argv[2], String(c.pid)); c.unref() }, 500)); ' +
+        "fs.writeFileSync(process.argv[1], 'ready'); setInterval(() => {}, 1000)"
+      const p = spawnDetached(process.execPath, ['-e', script, '--', readyFile, pidFile], { env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } })
+      let child = 0
+      try {
+        for (let i = 0; i < 100 && !(await fs.readFile(readyFile, 'utf8').catch(() => '')); i++) await new Promise((r) => setTimeout(r, 100))
+        const exited = new Promise<string>((r) => p.onExit(r))
+        await killProcessTree(p.pid!)
+        expect(await exited).toBe('exited SIGKILL')
+        child = Number(await fs.readFile(pidFile, 'utf8').catch(() => '')) || 0
+        expect(child).toBeGreaterThan(1)
+        const gone = (): boolean => {
+          try {
+            process.kill(child, 0)
+            return false
+          } catch {
+            return true
+          }
+        }
+        for (let i = 0; i < 50 && !gone(); i++) await new Promise((r) => setTimeout(r, 100))
+        expect(gone()).toBe(true)
+      } finally {
+        for (const pid of [child, p.pid ?? 0]) {
+          try {
+            if (pid > 1) process.kill(pid, 'SIGKILL')
+          } catch {
+            /* gone */
+          }
+        }
+        await fs.rm(dir, { recursive: true, force: true })
+      }
+    },
+    20_000
+  )
 })
 
 describe.runIf(process.platform !== 'win32')('spawnDetached, killGroup and the start times on this machine', () => {
