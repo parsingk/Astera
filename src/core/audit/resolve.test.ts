@@ -1893,6 +1893,10 @@ describe('PowerShell: the builder calls of a script are expressions', () => {
 })
 
 // The Host feeds this from files and streams it does not control.
+// Each limit is this machine's, several times over; a shared CI runner under the whole suite measured up to four times
+// slower (2131 ms against 539 ms here), so it gets three times each. The blowups these guard against cost far more: the
+// find case below took 3.7 s and 2.5 GB before its fix.
+const CI_SLACK = process.env.CI ? 3 : 1
 describe('malformed and hostile input', () => {
   it('reads a long bundle of flags in linear time, for tar, a shell, unzip and sed', () => {
     const n = 100_000
@@ -1905,7 +1909,7 @@ describe('malformed and hostile input', () => {
     bash(`sed -${'n'.repeat(n)}1 x`)
     codex('exec', `await tools.exec_command({cmd:"tar -${'x'.repeat(n)}9"});`)
     ps(`$x.${'a'.repeat(n)}-b()`)
-    expect(Date.now() - started).toBeLessThan(500)
+    expect(Date.now() - started).toBeLessThan(500 * CI_SLACK)
   })
 
   it('never throws, and says other and unknown when it cannot read the call', () => {
@@ -1932,7 +1936,7 @@ describe('malformed and hostile input', () => {
     bash(`echo "${'x'.repeat(500_000)}`)
     bash(`${'token'.repeat(100_000)}`)
     expect(redactTarget('a'.repeat(1_000_000)).length).toBeLessThanOrEqual(1000)
-    expect(Date.now() - started).toBeLessThan(5000)
+    expect(Date.now() - started).toBeLessThan(5000 * CI_SLACK)
   })
 
   it('stays fast on many -exec clauses, xargs options, nested xargs, watch options, backticks and trap lines', () => {
@@ -1943,7 +1947,7 @@ describe('malformed and hostile input', () => {
     bash(`watch ${'-n 5 '.repeat(50_000)}git push`)
     bash(`echo ${'`a`'.repeat(50_000)}`)
     bash(`trap '${'a;'.repeat(50_000)}' EXIT`)
-    expect(Date.now() - started).toBeLessThan(2000)
+    expect(Date.now() - started).toBeLessThan(2000 * CI_SLACK)
   })
 
   // Distinct starts, so nothing collapses them: a {} must not be one copy of every start (6000 by 6000 took 3.7 s and 2.5 GB)
@@ -1956,7 +1960,7 @@ describe('malformed and hostile input', () => {
     bash(`find ${few} -exec rm ${'{} '.repeat(20_000)}\\;`)
     bash(`find ${few} ${'-exec rm {} \\; '.repeat(3000)}`)
     expect(bash(`find ../${starts} -exec rm ${'{} '.repeat(6000)}\\;`).commands).toContainEqual({ action: 'filesystem.delete', insideProject: false })
-    expect(Date.now() - started).toBeLessThan(1000)
+    expect(Date.now() - started).toBeLessThan(1000 * CI_SLACK)
   })
 
   it('stays fast on substitutions in double quotes: many, unterminated and nested', () => {
@@ -1974,7 +1978,7 @@ describe('malformed and hostile input', () => {
     bash(`echo "${'$(( 1 + '.repeat(10_000)}${')) '.repeat(10_000)}"`)
     ps(`Write-Output "${'$(('.repeat(25_000)}`)
     ps(`Write-Output @"\n${'$(a) '.repeat(10_000)}\n"@`)
-    expect(Date.now() - started).toBeLessThan(1000)
+    expect(Date.now() - started).toBeLessThan(1000 * CI_SLACK)
   })
 
   it('stays fast on arithmetic that never closes, quoted or not, at 200k characters', () => {
@@ -1985,7 +1989,7 @@ describe('malformed and hostile input', () => {
     bash(`echo "${'$(( '.repeat(50_000)}"`)
     bash(`echo ${'"$(( " '.repeat(25_000)}`)
     bash(`${'$(( "a" '.repeat(30_000)}`)
-    expect(Date.now() - started).toBeLessThan(2000)
+    expect(Date.now() - started).toBeLessThan(2000 * CI_SLACK)
     // a failed reading of one does not hide a later one that closes
     const after = bash('echo $((git push) ) $((1+2)); npm test')
     expect(acts(after)).toContain('git.remote.write')
@@ -1996,7 +2000,7 @@ describe('malformed and hostile input', () => {
     const started = Date.now()
     codex('apply_patch', patch)
     codex('exec', `await tools.apply_patch(${JSON.stringify(patch)})`)
-    expect(Date.now() - started).toBeLessThan(400)
+    expect(Date.now() - started).toBeLessThan(400 * CI_SLACK)
   })
 
   it('names a path with a long run of separators inside it in linear time', () => {
@@ -2007,7 +2011,7 @@ describe('malformed and hostile input', () => {
     expect(bash(`cat ~${run}x`)).toMatchObject({ target: 'outside project: x', insideProject: false })
     expect(bash(`rm $HOME${run}x`)).toMatchObject({ action: 'filesystem.delete', insideProject: false })
     codex('exec', `await tools.exec_command({cmd:"cat ~${run}x"});`)
-    expect(Date.now() - started).toBeLessThan(500)
+    expect(Date.now() - started).toBeLessThan(500 * CI_SLACK)
   })
 
   it('reads apply_patch headers that end in spaces or CRLF', () => {
@@ -2020,7 +2024,7 @@ describe('malformed and hostile input', () => {
     bash(Array(50).fill('key.'.repeat(250)).join(';'))
     bash(Array(50).fill(`cat a${'-key'.repeat(250)}`).join(';'))
     bash(Array(2000).fill('key.'.repeat(50)).join(';'))
-    expect(Date.now() - started).toBeLessThan(500)
+    expect(Date.now() - started).toBeLessThan(500 * CI_SLACK)
   })
 
   it('cuts shell text before redacting, so a secret late in a long word is not what is stored', () => {
