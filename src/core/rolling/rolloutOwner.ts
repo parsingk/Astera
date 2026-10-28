@@ -515,6 +515,9 @@ export function windowsOwnerReader(
   })
 }
 
+/** Whether rolloutOwnerReader has a way to read open files on `platform`. */
+export const hasOwnerReader = (platform: NodeJS.Platform): boolean => platform === 'win32' || platform === 'darwin' || platform === 'linux'
+
 const readers = new Map<NodeJS.Platform, RolloutOwnerReader>()
 
 /** This platform's reader, one per process, so the checks built over it share their answers (rolloutOwnerCheck) and, on

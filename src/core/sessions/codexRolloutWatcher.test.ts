@@ -88,6 +88,23 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true })
 })
 
+// Task D review Minor 5: a wiring that lost its owner source went back to folder and time without a word
+describe('CodexRolloutWatcher built without an owner source', () => {
+  it('says so once, and nothing when it has one', () => {
+    const logs: string[] = []
+    new CodexRolloutWatcher({ getAccount: () => null, onTurnComplete: vi.fn(), log: (m) => logs.push(m) })
+    expect(logs).toEqual(['codex rollout owner is not wired: this watcher maps a rollout by folder and time alone'])
+    const quiet: string[] = []
+    new CodexRolloutWatcher({
+      getAccount: () => null,
+      onTurnComplete: vi.fn(),
+      log: (m) => quiet.push(m),
+      rolloutOwner: { pidOf: () => null, read: async () => ({ verdict: 'own' }) }
+    })
+    expect(quiet).toEqual([])
+  })
+})
+
 // Task D review Minor 7: the limit probe of an ended worker reads the rollout its note names (the Host's pty list keeps
 // an ended session's entry and note for a while)
 describe('noteRolloutPath', () => {

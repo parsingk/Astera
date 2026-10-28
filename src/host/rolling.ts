@@ -87,8 +87,10 @@ export interface HostRollSpawner {
 export interface HostRollingDeps {
   profileDir: string
   platform: NodeJS.Platform
-  /** `say` puts a refused roll's reason in the tab (CodexRollingDeps.tell); a registry without it leaves that to the log. */
-  registry: Pick<PtyRegistry, 'onData' | 'onExit' | 'metaOf' | 'sessionPty' | 'write' | 'kill' | 'list' | 'note'> & Partial<Pick<PtyRegistry, 'say' | 'sessionPid'>>
+  /** `say` puts a refused roll's reason in the tab (CodexRollingDeps.tell); a registry without it leaves that to the log.
+   *  `sessionPid` is required: without it the codex coordinator's owner check had no pid and went back to folder and time
+   *  without a word (Task D review Minor 5). */
+  registry: Pick<PtyRegistry, 'onData' | 'onExit' | 'metaOf' | 'sessionPty' | 'sessionPid' | 'write' | 'kill' | 'list' | 'note'> & Partial<Pick<PtyRegistry, 'say'>>
   spawner: HostRollSpawner
   /** R1 for the pty this session runs in (the wiring asks hostMayAct over exits and server). */
   mayAct(ptyId: string): boolean
@@ -415,7 +417,7 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
     log: logCodex,
     // A rollout the locate finds is mapped only when this session's own codex holds it (rolloutOwner.ts)
     rolloutOwner: {
-      pidOf: (sid) => d.registry.sessionPid?.(sid) ?? null,
+      pidOf: (sid) => d.registry.sessionPid(sid),
       read: rolloutOwnerReader(d.platform)
     }
   })

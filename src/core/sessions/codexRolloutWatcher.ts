@@ -18,7 +18,7 @@
 import type { Account, SessionInfo, SessionUsage } from '../types'
 import { JsonlTail } from '../rolling/jsonlTail'
 import { DAY_MS, findRollout } from '../rolling/codexLocate'
-import { rolloutOwnerCheck, type RolloutOwnerCheck, type RolloutOwnerSource, type RolloutOwnership } from '../rolling/rolloutOwner'
+import { hasOwnerReader, rolloutOwnerCheck, type RolloutOwnerCheck, type RolloutOwnerSource, type RolloutOwnership } from '../rolling/rolloutOwner'
 import { limitStateFromLines, type CodexLimitState } from '../rolling/codexSignal'
 import { tailLines } from '../rolling/tailLines'
 import { contextFromLines, sessionUsageOf } from '../usage/codex'
@@ -205,6 +205,9 @@ export class CodexRolloutWatcher {
   constructor(private deps: CodexRolloutDeps) {
     this.now = deps.now ?? Date.now
     this.owner = deps.rolloutOwner ? rolloutOwnerCheck({ read: deps.rolloutOwner.read, log: deps.log, now: this.now }) : null
+    // Review Minor 5: a wiring that dropped its owner source went back to folder and time without a word
+    if (!deps.rolloutOwner && hasOwnerReader(process.platform))
+      deps.log('codex rollout owner is not wired: this watcher maps a rollout by folder and time alone')
   }
 
   /** The owner question for this entry's session, when its process is known; undefined keeps folder and time alone. */
