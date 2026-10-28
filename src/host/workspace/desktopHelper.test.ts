@@ -321,11 +321,14 @@ describe('writeDeskScript', () => {
 
 // The one place the C# is compiled before Task 10: a helper that compiles says ready. Creating a
 // desktop object takes nothing from anyone (nobody switches to it), and a CI session that is not
-// interactive answers NOT_INTERACTIVE, which is a pass here: what must not happen is an Add-Type failure.
+// interactive answers NOT_INTERACTIVE, which skips the test here with its reason: what must not happen is
+// an Add-Type failure.
+const NO_DESKTOP = 'no interactive desktop in this session, so the helper cannot make a desktop'
+
 describe('the real helper', () => {
   it.runIf(process.platform === 'win32')(
     'compiles, says ready, and creates and closes a desktop',
-    async () => {
+    async (ctx) => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-desk-live-'))
       try {
         const file = await writeDeskScript(dir)
@@ -334,7 +337,7 @@ describe('the real helper', () => {
           h = await startDesktopHelper({ name: `astera-test-${process.pid}`, spawn: () => spawnPowerShell(file), readyMs: 30_000, log: () => {} })
         } catch (err) {
           expect(String(err)).toContain('no interactive desktop')
-          return
+          return ctx.skip(NO_DESKTOP)
         }
         expect(Array.isArray(await h.windows())).toBe(true)
         // The kill guard, for real: a start time that does not match leaves the process alone.
@@ -407,13 +410,13 @@ describe('the real helper', () => {
 
   it.runIf(process.platform === 'win32')(
     'kill ends the launch through its job: a detached child whose parent already exited goes too',
-    async () => {
+    async (ctx) => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-desk-job-'))
       const logs: string[] = []
       const left: number[] = []
       try {
         const h = await liveHelper(dir, logs)
-        if (!h) return
+        if (!h) return ctx.skip(NO_DESKTOP)
         const tree = await orphanTree(dir)
         const l = await h.launch({ command: tree.command, cwd: dir, env: env() })
         left.push(l.pid)
@@ -434,14 +437,44 @@ describe('the real helper', () => {
   )
 
   it.runIf(process.platform === 'win32')(
+    'kill ends the job after the launched command exited at once, leaving a detached child behind',
+    async (ctx) => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-desk-jobgone-'))
+      const logs: string[] = []
+      const left: number[] = []
+      try {
+        const h = await liveHelper(dir, logs)
+        if (!h) return ctx.skip(NO_DESKTOP)
+        // No ping after the parent: the launched process is gone and only the job still holds the child.
+        const tree = await orphanTree(dir)
+        const l = await h.launch({ command: tree.command.replace(' & ping -n 60 127.0.0.1', ''), cwd: dir, env: env() })
+        left.push(l.pid)
+        const orphan = await tree.orphan()
+        left.push(orphan)
+        expect(orphan).toBeGreaterThan(0)
+        expect(await until(() => !isAlive(l.pid), 10_000)).toBe(true)
+        expect(isAlive(orphan)).toBe(true)
+        await h.kill(l.pid, l.startedAt)
+        expect(await until(() => !isAlive(orphan), 5_000)).toBe(true)
+        expect(logs.filter((m) => m.includes('without a job object'))).toEqual([])
+        await h.close()
+      } finally {
+        for (const pid of left) if (isAlive(pid)) await killTree(pid)
+        await fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      }
+    },
+    60_000
+  )
+
+  it.runIf(process.platform === 'win32')(
     'a helper that exits takes its launch with it, the detached orphan included (KILL_ON_JOB_CLOSE)',
-    async () => {
+    async (ctx) => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-desk-jobclose-'))
       const logs: string[] = []
       const left: number[] = []
       try {
         const h = await liveHelper(dir, logs)
-        if (!h) return
+        if (!h) return ctx.skip(NO_DESKTOP)
         const tree = await orphanTree(dir)
         const l = await h.launch({ command: tree.command, cwd: dir, env: env() })
         left.push(l.pid)

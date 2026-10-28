@@ -221,11 +221,12 @@ public static class AsteraDesk {
       if (!CreateProcess(null, cmd, IntPtr.Zero, IntPtr.Zero, false, CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | CREATE_SUSPENDED, env, cwd, ref si, out pi))
         throw new Exception("CreateProcess failed: " + Marshal.GetLastWin32Error());
     } finally { Marshal.FreeHGlobal(env); }
-    AsteraLaunch r = new AsteraLaunch();
-    r.Pid = pi.dwProcessId;
     IntPtr job = IntPtr.Zero;
     bool resumed = false;
+    AsteraLaunch r = null;
     try {
+      r = new AsteraLaunch();
+      r.Pid = pi.dwProcessId;
       try { job = JobFor(pi.hProcess); } catch (Exception e) { r.JobError = e.Message; }
       if (ResumeThread(pi.hThread) == uint.MaxValue)
         throw new Exception("ResumeThread failed: " + Marshal.GetLastWin32Error() + "; the process was ended before it ran");
@@ -251,20 +252,27 @@ public static class AsteraDesk {
     return r;
   }
 
-  // Ends the job of the launch with this pid and start time, and closes its handle; false when this
+  // Ends the job of the launch with this pid and start time (nearest within the tolerance), and closes its handle; false when this
   // helper holds none for it. A job holds only what that launch started, so unlike a pid it is never
   // someone else's: it is ended even when the launched process itself has already exited. Should
   // TerminateJobObject fail, closing the last handle still ends every process in it (KILL_ON_JOB_CLOSE).
   public static bool EndJob(int pid, long startedAt, long tolerance) {
+    // The record whose start time matches exactly, else the nearest one within the tolerance.
+    int best = -1;
+    long bestGap = long.MaxValue;
     for (int i = 0; i < Jobs.Count; i++) {
       AsteraJob j = Jobs[i];
-      if (j.Pid != pid || Math.Abs(j.StartedAt - startedAt) > tolerance) continue;
-      Jobs.RemoveAt(i);
-      TerminateJobObject(j.Handle, 1);
-      CloseHandle(j.Handle);
-      return true;
+      long gap = Math.Abs(j.StartedAt - startedAt);
+      if (j.Pid != pid || gap > tolerance || gap >= bestGap) continue;
+      best = i;
+      bestGap = gap;
     }
-    return false;
+    if (best < 0) return false;
+    AsteraJob found = Jobs[best];
+    Jobs.RemoveAt(best);
+    TerminateJobObject(found.Handle, 1);
+    CloseHandle(found.Handle);
+    return true;
   }
 
   public static List<AsteraWindow> Windows(IntPtr desk) {
