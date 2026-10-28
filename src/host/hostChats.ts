@@ -57,6 +57,8 @@ export interface HostChatsDeps {
   hostSocketDir?: ChatManagerDeps['hostSocketDir']
   /** The codex version question, the spawner's: a sandboxed Codex chat's floor (final review I2). */
   codexVersion?: ChatManagerDeps['codexVersion']
+  /** The copy of the person's git excludes a sandboxed win32 Codex chat reads: the spawner's (HostSpawner.codexExcludes). */
+  codexExcludes?: ChatManagerDeps['codexExcludes']
   log(m: string): void
   /** Test seams. */
   createAdapter?: ChatManagerDeps['createAdapter']
@@ -198,6 +200,7 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     ...(d.claudeSandbox ? { claudeSandbox: d.claudeSandbox } : {}),
     ...(d.hostSocketDir !== undefined ? { hostSocketDir: d.hostSocketDir } : {}),
     ...(d.codexVersion ? { codexVersion: d.codexVersion } : {}),
+    ...(d.codexExcludes ? { codexExcludes: d.codexExcludes } : {}),
     ...(d.createAdapter ? { createAdapter: d.createAdapter } : {})
   })
 

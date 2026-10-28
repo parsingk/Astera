@@ -6,6 +6,7 @@
 import { ensureGitFiles, ensureWorktreeConfigFiles, gitLayoutOf, type GitLayout } from './gitLayout'
 import { credentialStoreDenies, hostSocketDenies, otherHostFolders, sensitiveLocations } from './locations'
 import { codexSandboxArgs } from './codexProfile'
+import type { CodexExcludes } from './gitExcludes'
 import { SANDBOX_UNAVAILABLE, sandboxUnavailable } from './unavailable'
 import type { Readiness } from './windowsReadiness'
 import { LAUNCH_FORBIDDEN } from '../sessions/commands'
@@ -46,13 +47,21 @@ export type CodexWindowsReady = (a: { codexHome: string | null; env: Record<stri
 
 /** The layouts sandboxed prepares read, by account and folder: readiness is the account's, so one account's prepare never
  *  lets another account's spawn through in the same folder. A Codex prepare keeps beside its layout the other Hosts'
- *  folders it found (otherHostFolders), so its spawn denies what was there at the start (final fix pass, part 2, B). */
+ *  folders it found (otherHostFolders), so its spawn denies what was there at the start (final fix pass, part 2, B), and
+ *  on Windows the copy of the person's git excludes it wrote (prepareCodexSandbox), which its spawn points git at. */
 export class PreparedLayouts {
-  private entries = new Map<string, { layout: GitLayout | null; otherHosts: readonly string[]; at: number }>()
+  private entries = new Map<string, { layout: GitLayout | null; otherHosts: readonly string[]; excludesFile: string | null; at: number }>()
 
-  keep(accountId: string, cwd: string, layout: GitLayout | null, now: number, otherHosts: readonly string[] = []): void {
+  keep(accountId: string, cwd: string, layout: GitLayout | null, now: number, otherHosts: readonly string[] = [], excludesFile: string | null = null): void {
     for (const [k, v] of this.entries) if (now - v.at >= PREPARED_MS) this.entries.delete(k)
-    this.entries.set(keyOf(accountId, cwd), { layout, otherHosts, at: now })
+    this.entries.set(keyOf(accountId, cwd), { layout, otherHosts, excludesFile, at: now })
+  }
+
+  /** The copy of the person's git excludes the prepare kept for this account and folder within PREPARED_MS; null when it
+   *  kept none (none written, or not Windows). */
+  excludesFileOf(accountId: string, cwd: string, now: number): string | null {
+    const e = this.entries.get(keyOf(accountId, cwd))
+    return e && now - e.at < PREPARED_MS ? e.excludesFile : null
   }
 
   /** The other Hosts' folders the prepare kept for this account and folder within PREPARED_MS; none when it kept none. */
@@ -100,10 +109,12 @@ export function sessionSandboxArgs(o: {
 }
 
 /** What a sandboxed Codex prepare hands its caller to keep for the spawn (PreparedLayouts.keep): the folder's git layout
- *  (null outside a repository) and the other Hosts' socket folders found beside this profile's. */
+ *  (null outside a repository), the other Hosts' socket folders found beside this profile's, and on Windows the copy of
+ *  the person's git excludes it wrote (null when none was). */
 export interface PreparedCodex {
   layout: GitLayout | null
   otherHosts: string[]
+  excludesFile: string | null
 }
 
 /**
@@ -120,7 +131,9 @@ export interface PreparedCodex {
  * refuses the start (`git-layout`), since the profile could not name what it must (E5). On macOS and Linux the folder the
  * Host's socket is in is listed once here for the other Hosts' folders beside it (otherHostFolders), which the caller
  * keeps with the layout for the spawn: a Host started after this is not denied to the session (final fix pass, part 2,
- * B).
+ * B). Last, on Windows, the person's global git excludes are copied where the sandbox's own account can read them
+ * (`excludes`, gitExcludes.ts): it cannot read their home, so its git would warn at every call and leave their ignore
+ * rules out. No copy (none to make, none could be made, or no `excludes`) refuses nothing: git looks where it would.
  */
 export async function prepareCodexSandbox(o: {
   accountId: string
@@ -137,6 +150,8 @@ export async function prepareCodexSandbox(o: {
    *  written. Absent, the start is refused as for a version not known. */
   version?: CodexVersionProbe
   check?: (sandboxArgs: string[]) => void
+  /** Windows: writes the copy of the person's git excludes (codexExcludesWriter). Absent, none is written. */
+  excludes?: CodexExcludes
   log: (m: string) => void
 }): Promise<PreparedCodex> {
   const fail = (err: unknown): Error => {
@@ -175,5 +190,6 @@ export async function prepareCodexSandbox(o: {
       throw fail(err)
     }
   }
-  return { layout, otherHosts }
+  const excludesFile = o.platform === 'win32' && o.excludes ? await o.excludes().catch(() => null) : null
+  return { layout, otherHosts, excludesFile }
 }

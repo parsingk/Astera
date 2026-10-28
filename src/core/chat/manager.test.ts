@@ -1551,7 +1551,7 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
     win32: { Path: 'C:\\Windows', APPDATA: 'C:\\Users\\t\\AppData\\Roaming' }
   } as const
   type Ready = NonNullable<ChatManagerDeps['codexWindowsReady']>
-  const rig = (platform: 'linux' | 'win32', o: { ready?: Ready; layouts?: PreparedLayouts; noDaemon?: boolean; hostSocketDir?: string | null; codex?: string | null } = {}) => {
+  const rig = (platform: 'linux' | 'win32', o: { ready?: Ready; layouts?: PreparedLayouts; noDaemon?: boolean; hostSocketDir?: string | null; codex?: string | null; excludes?: ChatManagerDeps['codexExcludes'] } = {}) => {
     const spawned: Array<{ file: string; args: string[]; opts: ProcSpawnOptions; proc: FakeProc }> = []
     const { createAdapter, handles } = makeAdapterFactory()
     const manager = new ChatSessionManager({
@@ -1571,6 +1571,7 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
       codexWindowsReady: o.ready ?? (async () => 'ready'),
       ...(o.layouts ? { sandboxLayouts: o.layouts } : {}),
       ...(o.hostSocketDir !== undefined ? { hostSocketDir: o.hostSocketDir } : {}),
+      ...(o.excludes ? { codexExcludes: o.excludes } : {}),
       // codex 0.160.0, the floor, unless a case says otherwise
       codexVersion: Object.assign(() => ('codex' in o ? o.codex : '0.160.0'), { warm: async () => {} })
     })
@@ -1763,6 +1764,51 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
     await sessions.prepare({ account: codexAccount, cwd, sandbox: true })
     manager.spawn({ account: codexAccount, cwd, sandbox: true })
     expect(spawned[0].args).toEqual(['app-server', ...(await expected('linux', cwd)).args])
+  })
+
+  // As a terminal session's: on Windows the chat's git reads the copy of the person's global excludes its prepare had
+  // written in TEMP, after the safe directory, and so does a roll's respawn prepared through the terminal manager; on
+  // Linux nothing is asked for
+  it("a sandboxed win32 chat's git reads a copy of the person's global excludes, after a roll's prepare too", async () => {
+    const file = 'C:/t/astera-git-excludes-0123456789ab'
+    let asked = 0
+    const excludes = async (): Promise<string | null> => (asked++, file)
+    const cwd = repo()
+    const top = (await gitLayoutOf(cwd))!.top
+    const want = { GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'safe.directory', GIT_CONFIG_VALUE_0: top, GIT_CONFIG_KEY_1: 'core.excludesFile', GIT_CONFIG_VALUE_1: file }
+    const own = rig('win32', { excludes })
+    await own.manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    own.manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    expect(own.spawned[0].opts.env).toMatchObject(want)
+    const linux = rig('linux', { excludes })
+    await linux.manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    linux.manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    expect(linux.spawned[0].opts.env.GIT_CONFIG_COUNT).toBeUndefined()
+    expect(asked).toBe(1)
+    const layouts = new PreparedLayouts()
+    const sessions = new SessionManager(
+      () => {
+        throw new Error('no pty here')
+      },
+      makeDescriptors('win32', HOME.win32, undefined, Object.assign(() => true, { warm: async () => {} })),
+      100,
+      20,
+      HOME.win32,
+      undefined,
+      [],
+      { ...BASE.win32 },
+      {
+        cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform: 'win32', now: Date.now, syncExists: () => true, log: () => {},
+        codexWindowsReady: async () => 'ready', codexExcludes: excludes
+      }
+    )
+    sessions.sandboxLayouts = layouts
+    sessions.codexVersion = Object.assign(() => '0.160.0', { warm: async () => {} })
+    const rolled = rig('win32', { layouts })
+    await sessions.prepare({ account: codexAccount, cwd, sandbox: true, chat: true })
+    rolled.manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    expect(rolled.spawned[0].opts.env).toMatchObject(want)
+    expect(asked).toBe(2)
   })
 
   // The bypass retry respawns from what the first attempt was spawned with, so a sandboxed chat stays sandboxed: the same

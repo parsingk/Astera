@@ -50,6 +50,7 @@ import { readPolicyMode } from '../core/audit/policy'
 import type { EnforceStart } from '../core/audit/enforce'
 import { cliVersionProbe, enforceBlocker } from '../core/sessions/cliVersion'
 import { claudeSandboxStart } from '../core/sandbox/claudeStart'
+import { codexExcludesWriter } from '../core/sandbox/gitExcludes'
 import { hostAddress } from '../core/publicContract'
 import { HOST_PROTOCOL } from '../core/host/protocol'
 import { createManagedHooksCheck } from '../core/sessions/managedHooks'
@@ -282,6 +283,9 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   // The folder this profile's Host listens in (macOS and Linux), which a sandboxed Codex session may not open: it reaches
   // the Host through the loopback with its workload token instead (final fix pass, C2)
   const hostSocketDir = hostAddress({ profileDir: userDataDir, platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL }).dirToPrepare
+  // The copy of the person's git excludes a sandboxed Codex session on Windows reads, in TEMP, for either manager's
+  // prepare: the elevated sandbox's own account cannot read theirs
+  const codexExcludes = codexExcludesWriter({ profileDir: userDataDir, tmpDir: os.tmpdir(), homeDir: os.homedir(), env: process.env, log: sessionsLog })
   // descriptors is injected explicitly — left unspecified, each of them calls makeDescriptors(process.platform)
   // again, so every instance gets its own table (plus two command builders SessionManager never uses).
   const sessions = new SessionManager(
@@ -295,7 +299,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     // Mode writes the crops whose paths it sends. previewShotsDir is the same path capture.ts writes.
     [previewShotsDir(userDataDir)],
     process.env,
-    { ...defaultSpawnChecks(sessionsLog), hostSocketDir }
+    { ...defaultSpawnChecks(sessionsLog), hostSocketDir, codexExcludes }
   )
   // Shared extensions (Agent Control Plane release 1 design §4.5). The two managers read the same cache:
   // a chat roll's respawn is prepared through `sessions.prepare`, which refreshes the target account
@@ -376,7 +380,8 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     codexWindowsReady: askCodexWindowsReady,
     claudeSandbox,
     hostSocketDir,
-    codexVersion: cliVersions
+    codexVersion: cliVersions,
+    codexExcludes
   })
   // Lazy history: nothing is scanned at startup. The project list comes from a directory listing; sessions are
   // parsed when expanded. index.ts starts the file watcher with startBackground() after the window is up, so window creation never blocks on a scan.

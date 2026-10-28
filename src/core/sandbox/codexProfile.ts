@@ -85,17 +85,25 @@ export function appendGitConfig(env: Record<string, string | undefined> | undefi
 }
 
 /** On Windows git refuses a repository owned by another account, and the elevated sandbox runs as one, so the checkout and
- *  (for a linked worktree) the main checkout are named safe, after the person's own GIT_CONFIG entries (appendGitConfig). */
+ *  (for a linked worktree) the main checkout are named safe, after the person's own GIT_CONFIG entries (appendGitConfig).
+ *  That account cannot read the person's global excludes either, so after them `core.excludesFile` names the copy the
+ *  prepare wrote in TEMP (`excludesFile`, gitExcludes.ts codexExcludesWriter), in a repository or not; null or absent: no
+ *  copy, and git keeps looking where it would. macOS and Linux sessions run as the person, and read their own. */
 export function codexSandboxEnv(o: {
   platform: NodeJS.Platform
   layout: GitLayout | null
   tmpDir: string
   env?: Record<string, string | undefined>
+  excludesFile?: string | null
 }): Record<string, string> {
   const env: Record<string, string> = { npm_config_cache: npmCacheOf(o.tmpDir) }
-  if (o.platform !== 'win32' || !o.layout) return env
-  const safe = [o.layout.top]
-  const main = o.layout.commonDir.replace(/\/[^/]*$/, '')
-  if (main && main !== o.layout.top) safe.push(main)
-  return { ...env, ...appendGitConfig(o.env, safe.map((p): [string, string] => ['safe.directory', p])) }
+  if (o.platform !== 'win32') return env
+  const entries: Array<[key: string, value: string]> = []
+  if (o.layout) {
+    entries.push(['safe.directory', o.layout.top])
+    const main = o.layout.commonDir.replace(/\/[^/]*$/, '')
+    if (main && main !== o.layout.top) entries.push(['safe.directory', main])
+  }
+  if (o.excludesFile) entries.push(['core.excludesFile', o.excludesFile])
+  return entries.length === 0 ? env : { ...env, ...appendGitConfig(o.env, entries) }
 }

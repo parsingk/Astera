@@ -26,7 +26,8 @@ import { makeLimitProbe } from '../core/orchestration/exec/limitProbe'
 import { ensureShuttle, sessionCmdLink } from '../core/orchestration/exec/shuttle'
 import type { ChatManagerDeps, ChatOrchEnv } from '../core/chat/manager'
 import type { CodexWindowsReady, PreparedLayouts } from '../core/sandbox/prepared'
-import { claudeSandboxStart, type ClaudeSandboxStart, type RunGit } from '../core/sandbox/claudeStart'
+import { claudeSandboxStart, type ClaudeSandboxStart } from '../core/sandbox/claudeStart'
+import { codexExcludesWriter, type CodexExcludes, type RunGit } from '../core/sandbox/gitExcludes'
 import { forcedSandboxBlocker } from '../core/sandbox/unavailable'
 import { binDirFor } from '../core/orchestration/cliInstall'
 import {
@@ -151,8 +152,8 @@ export interface HostSpawnerDeps {
   /** Test injection; defaults to os.tmpdir(): where a sandboxed Claude session's npm cache and the Host's socket are. A
    *  test gives its own folder, so nothing is made in the real one. */
   tmpDir?: string
-  /** Test injection; defaults to running git, which a sandboxed Claude start on Linux asks for the person's excludes file
-   *  (core/sandbox/claudeStart.ts). */
+  /** Test injection; defaults to running git, which a sandboxed Claude start on Linux and a sandboxed Codex start on
+   *  Windows ask for the person's excludes file (core/sandbox/gitExcludes.ts). */
   runGit?: RunGit
 }
 
@@ -179,6 +180,9 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
   hostSocketDir?: string | null
   /** The codex version question a sandboxed Codex start asks, shared with the Host's chat sessions (final review I2). */
   codexVersion?: ChatManagerDeps['codexVersion']
+  /** The copy of the person's git excludes a sandboxed win32 Codex start writes in this Host's temp folder (one for its
+   *  profile, core/sandbox/gitExcludes.ts), shared with the Host's chat sessions. */
+  codexExcludes?: CodexExcludes
   /** The session shuttle's values once the Host wrote it (kicked at creation); undefined until then. */
   orchEnvNow(): ChatOrchEnv | undefined
   /** How many worker and coordinator starts are under way right now. */
@@ -323,6 +327,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   // The folder this Host listens in (index.ts derives its address the same way), which a sandboxed Codex session's
   // profile denies on macOS and Linux, so the loopback with its workload token is its way in (final fix pass, C2)
   const hostSocketDir = hostAddress({ profileDir, platform, tmpDir, protocol: HOST_PROTOCOL }).dirToPrepare
+  // The copy of the person's git excludes a sandboxed Codex session on Windows reads, in the temp folder, asked by this
+  // spawner's prepares and the Host's chat sessions alike; the elevated sandbox's own account cannot read theirs
+  const codexExcludes = codexExcludesWriter({ profileDir, tmpDir, homeDir, env: d.env, ...(d.runGit ? { runGit: d.runGit } : {}), log })
   // The rule core.ts uses for the app's StatusLineManager, so the two write the same settings files. On
   // win32 the app names the Host runtime's node.exe, which is what this Host runs from, so its own
   // executable is the same file — and one that is certain to be there while its sessions run, since a
@@ -426,7 +433,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     // Read at each spawn, not once: the Host completes its PATH when a CLI is missing (windowsPath.ts)
     () => hostWorkerBaseEnv(d.env),
     // The Host's own log: a spawn that had to fall back to a sync check says so in host.log.
-    { ...defaultSpawnChecks(log), codexWindowsReady, hostSocketDir }
+    { ...defaultSpawnChecks(log), codexWindowsReady, hostSocketDir, codexExcludes }
   )
   // Shared extensions (Agent Control Plane release 1 design §4.5): `sessions.prepare` refreshes the account before
   // every spawn and roll, and the Host's chat sessions read the same cache
@@ -866,6 +873,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     claudeSandbox,
     hostSocketDir,
     codexVersion,
+    codexExcludes,
     orchEnvNow: () => orchEnvReady,
     inFlight: () => spawnsInFlight,
     closeAndSettle: (ms) => {

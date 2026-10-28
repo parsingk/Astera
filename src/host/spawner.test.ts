@@ -20,6 +20,7 @@ import { previewShotsDir } from '../core/preview/shotsDir'
 import type { PromptWriteEvent } from '../core/orchestration/exec/coordinator'
 import { ENTER_QUIET_MS } from '../core/sessions/sessionDriver'
 import { gitLayoutOf } from '../core/sandbox/gitLayout'
+import { codexExcludesFileOf } from '../core/sandbox/gitExcludes'
 
 const NOW = '2026-09-24T00:00:00.000Z'
 let dir: string
@@ -1072,6 +1073,24 @@ describe('createHostSpawner — createSession', () => {
       // The Host's chat sessions are handed the same question
       expect(h.spawner!.codexWindowsReady).toBeDefined()
       expect(await h.spawner!.codexWindowsReady!({ codexHome: 'x', env: {} })).toBe('not-set-up')
+    })
+
+    // The elevated sandbox's own account cannot read the person's global excludes: the Host's prepare copies them into its
+    // temp folder, one file for this profile, and the session's git reads the copy; the chat sessions get the same writer
+    it.runIf(process.platform === 'win32')('a sandboxed win32 Codex session from the Host reads a copy of the person’s global excludes', async () => {
+      await fs.writeFile(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
+        { id: 'acc2', label: 'two', configDir: path.join(dir, 'cfg2'), color: '#888', createdAt: NOW, provider: 'codex' }
+      ] }))
+      await writeAgentProfiles(profile, { version: 1, profiles: [P({ id: 'ap_box', name: 'Boxed', accountIds: ['acc2'], sandbox: true })] })
+      await fs.mkdir(path.join(dir, 'home', '.config', 'git'), { recursive: true })
+      await fs.writeFile(path.join(dir, 'home', '.config', 'git', 'ignore'), '*.secret\n')
+      const h = rig({ codexNoDaemon: Object.assign(() => true, { warm: async () => {} }), findRollout: async () => null })
+      await h.spawner!.createSession({ accountId: 'acc2', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_box' })
+      const file = codexExcludesFileOf(path.join(dir, 'tmp'), profile)
+      expect(await fs.readFile(file, 'utf8')).toBe('*.secret\n')
+      // Not a repository, so no safe directory before it
+      expect(h.spawned[0].opts.env).toMatchObject({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.excludesFile', GIT_CONFIG_VALUE_0: file })
+      expect(await h.spawner!.codexExcludes!()).toBe(file)
     })
 
     // Final fix pass (C3, the person's decision): a session a sandboxed session asks for starts in the sandbox whatever

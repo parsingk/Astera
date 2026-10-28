@@ -144,6 +144,33 @@ describe('codexSandboxEnv', () => {
     expect(codexSandboxEnv({ platform: 'linux', layout, tmpDir: '/t', env: inherited })).toEqual({ npm_config_cache: '/t/astera-npm-cache' })
     expect(codexSandboxEnv({ platform: 'win32', layout: null, tmpDir: 'C:/t', env: inherited })).toEqual({ npm_config_cache: 'C:/t/astera-npm-cache' })
   })
+
+  // The elevated sandbox runs as an account of its own, which cannot read the person's global excludes where they are:
+  // its git is pointed at the copy the prepare wrote in TEMP (gitExcludes.ts), after the person's own GIT_CONFIG entries
+  // and the safe directories. No copy, and macOS and Linux, where the session reads the person's own: as before
+  it('points git at the copy of the person’s excludes on Windows, after the safe directories', () => {
+    const layout = { cwd: 'C:/r', top: 'C:/r', gitDir: 'C:/r/.git', commonDir: 'C:/r/.git', worktree: false, worktreeConfigs: [], gitFiles: [] }
+    const inherited = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.autocrlf', GIT_CONFIG_VALUE_0: 'false' }
+    const excludesFile = 'C:/t/astera-git-excludes-0123456789ab'
+    expect(codexSandboxEnv({ platform: 'win32', layout, tmpDir: 'C:/t', env: inherited, excludesFile })).toEqual({
+      npm_config_cache: 'C:/t/astera-npm-cache',
+      GIT_CONFIG_COUNT: '3',
+      GIT_CONFIG_KEY_1: 'safe.directory',
+      GIT_CONFIG_VALUE_1: 'C:/r',
+      GIT_CONFIG_KEY_2: 'core.excludesFile',
+      GIT_CONFIG_VALUE_2: excludesFile
+    })
+    // Outside a repository too: the session may make one, and its git reads the excludes
+    expect(codexSandboxEnv({ platform: 'win32', layout: null, tmpDir: 'C:/t', excludesFile })).toEqual({
+      npm_config_cache: 'C:/t/astera-npm-cache',
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'core.excludesFile',
+      GIT_CONFIG_VALUE_0: excludesFile
+    })
+    expect(codexSandboxEnv({ platform: 'win32', layout, tmpDir: 'C:/t', excludesFile: null })).toEqual(codexSandboxEnv({ platform: 'win32', layout, tmpDir: 'C:/t' }))
+    for (const platform of ['linux', 'darwin'] as const)
+      expect(codexSandboxEnv({ platform, layout, tmpDir: '/t', env: inherited, excludesFile: '/t/x' }), platform).toEqual({ npm_config_cache: '/t/astera-npm-cache' })
+  })
 })
 
 describe('sandboxUnavailable', () => {

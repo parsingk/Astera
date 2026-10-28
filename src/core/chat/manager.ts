@@ -30,6 +30,7 @@ import { appServerSandboxArgs, codexSandboxEnv } from '../sandbox/codexProfile'
 import { sandboxUnavailable } from '../sandbox/unavailable'
 import { sandboxKindOf } from '../sandbox/coverage'
 import type { ClaudeSandboxStart } from '../sandbox/claudeStart'
+import type { CodexExcludes } from '../sandbox/gitExcludes'
 import type { SandboxScope } from '../sessions/statusline'
 
 export { EXITED_SESSIONS_KEPT }
@@ -94,6 +95,9 @@ export interface ChatManagerDeps {
   /** The codex version question a sandboxed Codex chat asks at its prepare and spawn (final review I2), the terminal
    *  manager's. Absent, a sandboxed Codex chat is refused as for a version not known. */
   codexVersion?: CodexVersionProbe
+  /** Writes the copy of the person's global git excludes a sandboxed win32 Codex chat reads (SpawnChecks' twin). Absent,
+   *  none is written. */
+  codexExcludes?: CodexExcludes
 }
 
 /** What `spawn` takes, for a caller that builds it elsewhere (./respawn.ts). */
@@ -281,10 +285,12 @@ export class ChatSessionManager {
       hostSocketDir: this.deps.hostSocketDir ?? null,
       version: this.deps.codexVersion,
       check: (args) => fitsOnTheLine(this.deps.platform, buildCodexAppServerCommand(this.deps.platform, undefined, [], appServerSandboxArgs(args))),
+      ...(this.deps.codexExcludes ? { excludes: this.deps.codexExcludes } : {}),
       log: this.deps.log
     })
-    // The other Hosts' folders beside this one's, as they were now, kept for the spawn's profile (final fix pass, part 2, B)
-    this.sandboxLayouts.keep(opts.account.id, opts.cwd, prepared.layout, Date.now(), prepared.otherHosts)
+    // The other Hosts' folders beside this one's, as they were now, kept for the spawn's profile (final fix pass, part 2, B),
+    // and the copy of the person's git excludes for its environment
+    this.sandboxLayouts.keep(opts.account.id, opts.cwd, prepared.layout, Date.now(), prepared.otherHosts, prepared.excludesFile)
   }
 
   /** Picks the process command and the adapter by the account's provider. Returns at once; the
@@ -417,10 +423,13 @@ export class ChatSessionManager {
       env.ASTERA_SKILLS = orchEnv.skillsPath
       prependToPath(env, path.dirname(orchEnv.cliPath))
     }
-    // npm's cache in TEMP, and on Windows the repository named safe for the sandbox's own account; after the shared
-    // extensions' values, so none of them can undo it (a terminal session's order). Claude's: the same cache, and on Linux
-    // the git excludes srt's placeholders need
-    if (sandboxedCodex) Object.assign(env, codexSandboxEnv({ platform: this.deps.platform, layout, tmpDir: os.tmpdir(), env }))
+    // npm's cache in TEMP, and on Windows the repository named safe for the sandbox's own account and the copy of the
+    // person's git excludes it can read; after the shared extensions' values, so none of them can undo it (a terminal
+    // session's order). Claude's: the same cache, and on Linux the git excludes srt's placeholders need
+    if (sandboxedCodex) {
+      const excludesFile = this.sandboxLayouts.excludesFileOf(opts.account.id, opts.cwd, Date.now())
+      Object.assign(env, codexSandboxEnv({ platform: this.deps.platform, layout, tmpDir: os.tmpdir(), env, excludesFile }))
+    }
     if (sandboxedClaude && this.deps.claudeSandbox) Object.assign(env, this.deps.claudeSandbox.env(env))
     // Codex resumes over the app-server protocol (thread/resume, sent by the adapter once the process is
     // up); Claude has no such call, so its resume id is argv (--resume=<id>) instead — buildClaudeChatCommand

@@ -5,12 +5,12 @@
 // npm's cache folder (macOS and Linux) and, on Linux, the git excludes Task 2 measured (inventory §23.4).
 // Both spawns are synchronous, so everything here that touches the disk or runs a process is done in `prepare`, which
 // every caller awaits first (a roll before its kill).
-import { execFile } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { ENFORCE_MIN, atLeast, type CliVersionProbe } from '../sessions/cliVersion'
 import { writeScript, type SandboxFilesResult, type SandboxScope } from '../sessions/statusline'
 import { appendGitConfig, npmCacheOf } from './codexProfile'
+import { globalExcludesText, runGitFile, type RunGit } from './gitExcludes'
 import { ensureGitFiles, ensureWorktreeConfigFiles, gitLayoutOf, type GitLayout } from './gitLayout'
 import { PreparedLayouts } from './prepared'
 import { SANDBOX_UNAVAILABLE, sandboxUnavailable } from './unavailable'
@@ -31,15 +31,6 @@ export function gitExcludesText(globalText: string): string {
   const own = globalText.replace(/\s+$/, '')
   const lines = [...SRT_DANGEROUS_FILES, ...SRT_DANGEROUS_DIRECTORIES.map((d) => (d.includes('/') ? `**/${d}` : d))]
   return `${own ? `${own}\n` : ''}${lines.join('\n')}\n`
-}
-
-/** Where git reads the person's excludes: `core.excludesFile` when it is set (`configured`, git's effective value,
- *  GIT_EXCLUDES_ARGS), else `$XDG_CONFIG_HOME/git/ignore`, else `~/.config/git/ignore` (git-config(1)). */
-export function globalExcludesPath(configured: string | null, env: Record<string, string | undefined>, home: string): string {
-  const h = slashed(home).replace(/\/+$/, '')
-  if (configured) return configured.startsWith('~/') ? `${h}/${configured.slice(2)}` : configured
-  const xdg = env.XDG_CONFIG_HOME ? slashed(env.XDG_CONFIG_HOME).replace(/\/+$/, '') : ''
-  return xdg ? `${xdg}/git/ignore` : `${h}/.config/git/ignore`
 }
 
 /** The exclude file, in the profile folder, which the sandbox lets a session read (it denies only the E6 list), named for
@@ -95,22 +86,6 @@ export interface ClaudeSandboxStart {
   env(inherited: Record<string, string | undefined>): Record<string, string>
 }
 
-/** Runs git and answers what it printed, trimmed; null when it failed or printed nothing (`config --get` exits 1 for a key
- *  that is not set). */
-export type RunGit = (args: string[], o: { cwd: string; env: Record<string, string | undefined> }) => Promise<string | null>
-
-const runGitFile: RunGit = (args, o) =>
-  new Promise((resolve) => {
-    execFile('git', args, { env: o.env as NodeJS.ProcessEnv, cwd: o.cwd, timeout: 5_000, windowsHide: true, encoding: 'utf8' }, (err, stdout) =>
-      resolve(err ? null : stdout.trim() || null)
-    )
-  })
-
-/** The person's effective `core.excludesFile`, with `~` expanded (`--path`): asked with no scope, so a GIT_CONFIG_GLOBAL or
- *  GIT_CONFIG_* entry of theirs counts as it would for git, but outside any repository (the temp folder), since the file
- *  is shared by every session whatever its folder. */
-export const GIT_EXCLUDES_ARGS = ['config', '--path', '--get', 'core.excludesFile']
-
 export function claudeSandboxStart(o: {
   platform: NodeJS.Platform
   /** Astera's profile folder, where the exclude file goes. */
@@ -144,9 +119,7 @@ export function claudeSandboxStart(o: {
   const blocker = (): string | null => claudeSandboxBlocker(o.version('claude'))
 
   const writeExcludes = async (): Promise<boolean> => {
-    const configured = await runGit(GIT_EXCLUDES_ARGS, { cwd: o.tmpDir, env: o.env }).catch(() => null)
-    const global = globalExcludesPath(configured, o.env, o.homeDir)
-    const text = gitExcludesText(await fs.readFile(global, 'utf8').catch(() => ''))
+    const text = gitExcludesText(await globalExcludesText({ env: o.env, homeDir: o.homeDir, tmpDir: o.tmpDir, runGit }))
     try {
       await fs.mkdir(path.dirname(excludesFile), { recursive: true })
     } catch (err) {

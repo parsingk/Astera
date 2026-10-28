@@ -1754,20 +1754,20 @@ describe('the sandbox at spawn', () => {
   } as const
   type Ready = NonNullable<SpawnChecks['codexWindowsReady']>
   /** Every Windows home reads set up unless a case says otherwise: the real question runs codex. */
-  const checksFor = (platform: NodeJS.Platform, ready: Ready = async () => 'ready', hostSocketDir: string | null = null): SpawnChecks => ({
+  const checksFor = (platform: NodeJS.Platform, ready: Ready = async () => 'ready', hostSocketDir: string | null = null, codexExcludes?: SpawnChecks['codexExcludes']): SpawnChecks => ({
     cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform, now: Date.now, syncExists: () => true, log: () => {},
-    codexWindowsReady: ready, hostSocketDir
+    codexWindowsReady: ready, hostSocketDir, ...(codexExcludes ? { codexExcludes } : {})
   })
   /** The codex version the probe answers: '0.160.0', the floor, unless a case says otherwise (null: unreadable,
    *  undefined: no codex) */
   const versionOf = (v: string | null | undefined) => Object.assign((_cli: 'claude' | 'codex') => v, { warm: async () => {} })
-  const rig = (platform: 'linux' | 'darwin' | 'win32', o: { noDaemon?: boolean; ready?: Ready; hostSocketDir?: string | null; codex?: string | null; noVersionProbe?: true } = {}) => {
+  const rig = (platform: 'linux' | 'darwin' | 'win32', o: { noDaemon?: boolean; ready?: Ready; hostSocketDir?: string | null; codex?: string | null; noVersionProbe?: true; excludes?: SpawnChecks['codexExcludes'] } = {}) => {
     const argv: string[][] = []
     const spawned: PtySpawnOptions[] = []
     const manager = new SessionManager(
       (_f, a, opts) => (argv.push(a as string[]), spawned.push(opts), new FakePty()),
       makeDescriptors(platform, HOME[platform], undefined, daemon(o.noDaemon ?? true)),
-      100, 20, HOME[platform], undefined, [], { ...BASE[platform] }, checksFor(platform, o.ready, o.hostSocketDir ?? null)
+      100, 20, HOME[platform], undefined, [], { ...BASE[platform] }, checksFor(platform, o.ready, o.hostSocketDir ?? null, o.excludes)
     )
     if (!o.noVersionProbe) manager.codexVersion = versionOf('codex' in o ? o.codex : '0.160.0')
     return { manager, argv, spawned }
@@ -1920,6 +1920,49 @@ describe('the sandbox at spawn', () => {
         expect(existsSync(path.join(cwd, '.git', 'config.worktree'))).toBe(false)
       }
     }
+  })
+
+  // The elevated sandbox runs the session as an account of its own, which cannot read the person's global excludes: the
+  // prepare has a copy written in TEMP once every check has passed, and the session's git is pointed at it after the
+  // safe directory. macOS and Linux sessions read the person's own, and nothing is written for them
+  it('a sandboxed win32 Codex session reads a copy of the person’s global excludes', async () => {
+    const file = 'C:/t/astera-git-excludes-0123456789ab'
+    let asked = 0
+    const excludes = async (): Promise<string | null> => (asked++, file)
+    for (const platform of ['win32', 'linux'] as const) {
+      const cwd = repo()
+      const { manager, spawned } = rig(platform, { excludes })
+      await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+      manager.spawn({ account: codexAccount, cwd, sandbox: true })
+      const env = spawned[0].env ?? {}
+      if (platform === 'win32')
+        expect(env).toMatchObject({
+          GIT_CONFIG_COUNT: '2',
+          GIT_CONFIG_KEY_0: 'safe.directory',
+          GIT_CONFIG_VALUE_0: (await gitLayoutOf(cwd))!.top,
+          GIT_CONFIG_KEY_1: 'core.excludesFile',
+          GIT_CONFIG_VALUE_1: file
+        })
+      else expect(env.GIT_CONFIG_COUNT).toBeUndefined()
+    }
+    expect(asked).toBe(1)
+    // A start refused (the account's Windows sandbox not set up) writes nothing
+    const unready = rig('win32', { excludes, ready: async () => 'not-set-up' })
+    await expect(unready.manager.prepare({ account: codexAccount, cwd: repo(), sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: windows-setup codex /)
+    expect(asked).toBe(1)
+    // No copy (no excludes, or it could not be written): the environment is as before
+    const cwd = repo()
+    const none = rig('win32', { excludes: async () => null })
+    await none.manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    none.manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    expect(none.spawned[0].env).toMatchObject({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'safe.directory' })
+    expect(none.spawned[0].env).not.toHaveProperty('GIT_CONFIG_KEY_1')
+    // An unsandboxed session asks for none
+    const plain = rig('win32', { excludes })
+    await plain.manager.prepare({ account: codexAccount, cwd })
+    plain.manager.spawn({ account: codexAccount, cwd })
+    expect(asked).toBe(1)
+    expect(plain.spawned[0].env?.GIT_CONFIG_COUNT).toBeUndefined()
   })
 
   // Task 5 fix round 1: the person's own GIT_CONFIG_* entries the session inherits stay, with the safe.directory after them

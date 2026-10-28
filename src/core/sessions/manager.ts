@@ -32,6 +32,7 @@ import { sandboxKindOf } from '../sandbox/coverage'
 import { PreparedLayouts, codexVersionBlocker, prepareCodexSandbox, sessionSandboxArgs, type CodexVersionProbe, type CodexWindowsReady } from '../sandbox/prepared'
 import { codexWindowsReadiness, runCodex } from '../sandbox/windowsReadiness'
 import type { ClaudeSandboxStart } from '../sandbox/claudeStart'
+import type { CodexExcludes } from '../sandbox/gitExcludes'
 import type { SandboxScope } from './statusline'
 
 /** statusLine info injected when a session spawns (provided by main's StatusLineManager,
@@ -109,6 +110,10 @@ export interface SpawnChecks {
    *  sandboxed Codex session's profile denies, so its way to the Host is the loopback with its workload token (final
    *  fix pass, C2). Absent, nothing is denied for it. */
   hostSocketDir?: string | null
+  /** Writes the copy of the person's global git excludes a sandboxed win32 Codex session reads, since the elevated
+   *  sandbox's own account cannot read theirs (core/sandbox/gitExcludes.ts codexExcludesWriter), asked by its prepare.
+   *  Absent, none is written and the session's git looks where it would. */
+  codexExcludes?: CodexExcludes
 }
 
 /** The real readiness question (windowsReadiness.ts), asked with the session's own environment: its PATH finds the codex
@@ -302,10 +307,12 @@ export class SessionManager {
       ...(chat
         ? { check: (sandboxArgs: string[]) => fitsOnTheLine(this.checks.platform, buildCodexAppServerCommand(this.checks.platform, undefined, [], appServerSandboxArgs(sandboxArgs))) }
         : { check: (sandboxArgs: string[]) => fitsOnTheLine(this.checks.platform, descriptorOf(this.descriptors, account).buildCommand({ sandboxArgs })) }),
+      ...(this.checks.codexExcludes ? { excludes: this.checks.codexExcludes } : {}),
       log: this.checks.log
     })
-    // The other Hosts' folders beside this one's, as they were now, kept for the spawn's profile (final fix pass, part 2, B)
-    this.sandboxLayouts.keep(account.id, cwd, prepared.layout, this.checks.now(), prepared.otherHosts)
+    // The other Hosts' folders beside this one's, as they were now, kept for the spawn's profile (final fix pass, part 2, B),
+    // and the copy of the person's git excludes for its environment
+    this.sandboxLayouts.keep(account.id, cwd, prepared.layout, this.checks.now(), prepared.otherHosts, prepared.excludesFile)
   }
 
   private cwdConfirmed(cwd: string): boolean {
@@ -487,10 +494,13 @@ export class SessionManager {
     })
     // On Windows the profile names every worktree's git files: a line too long to launch is refused, not launched broken
     if (sandboxedCodex) fitsOnTheLine(this.checks.platform, { file, args })
-    // npm's cache in TEMP, and on Windows the repository named safe for the sandbox's own account; after the shared
-    // extensions' values, so none of them can undo it. Claude's: the same cache, and on Linux the git excludes srt's
-    // placeholders need (core/sandbox/claudeStart.ts)
-    if (sandboxedCodex) Object.assign(env, codexSandboxEnv({ platform: this.checks.platform, layout, tmpDir: os.tmpdir(), env }))
+    // npm's cache in TEMP, and on Windows the repository named safe for the sandbox's own account and the copy of the
+    // person's git excludes it can read; after the shared extensions' values, so none of them can undo it. Claude's: the
+    // same cache, and on Linux the git excludes srt's placeholders need (core/sandbox/claudeStart.ts)
+    if (sandboxedCodex) {
+      const excludesFile = this.sandboxLayouts.excludesFileOf(opts.account.id, opts.cwd, this.checks.now())
+      Object.assign(env, codexSandboxEnv({ platform: this.checks.platform, layout, tmpDir: os.tmpdir(), env, excludesFile }))
+    }
     if (sandboxedClaude && this.claudeSandbox) Object.assign(env, this.claudeSandbox.env(env))
     // Windows only: CLAUDE_CODE_GIT_BASH_PATH exists for Git for Windows, and on other platforms the
     // agent's bash is the system one. The agent's hooks and statusLine need a real Git Bash when

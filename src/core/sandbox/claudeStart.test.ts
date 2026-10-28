@@ -10,8 +10,7 @@ import {
   claudeSandboxEnv,
   claudeSandboxStart,
   gitExcludesFileOf,
-  gitExcludesText,
-  globalExcludesPath
+  gitExcludesText
 } from './claudeStart'
 import { npmCacheOf } from './codexProfile'
 import { gitLayoutOf } from './gitLayout'
@@ -30,13 +29,6 @@ describe('the git excludes a sandboxed Claude session on Linux gets', () => {
     expect(SRT_DANGEROUS_DIRECTORIES).toEqual(['.vscode', '.idea', '.claude/commands', '.claude/agents'])
     expect(gitExcludesText('*.log\nbuild/\n\n')).toBe(`*.log\nbuild/\n${SRT_LINES.join('\n')}\n`)
     expect(gitExcludesText('')).toBe(`${SRT_LINES.join('\n')}\n`)
-  })
-
-  it('finds the person’s global excludes where git does', () => {
-    expect(globalExcludesPath('~/my-ignore', {}, '/home/t')).toBe('/home/t/my-ignore')
-    expect(globalExcludesPath('/etc/ignore', { XDG_CONFIG_HOME: '/x' }, '/home/t')).toBe('/etc/ignore')
-    expect(globalExcludesPath(null, { XDG_CONFIG_HOME: '/x/' }, '/home/t')).toBe('/x/git/ignore')
-    expect(globalExcludesPath(null, {}, '/home/t')).toBe('/home/t/.config/git/ignore')
   })
 
   it('is kept in the profile folder, one per user', () => {
