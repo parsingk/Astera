@@ -311,6 +311,22 @@ describe('Remote Runtime Phase 9b acceptance (remote session tabs from the app)'
     await eventually(() => expect(a.shown('rt_p9b:new')).toContain('rolled in'))
   })
 
+  // Sandbox follow-ups, item 2: the remote sessions screen shows the sandbox as the tab does, from the row the Runtime's
+  // Host answers: each session's `sandboxed` and `sandboxKind`, as its note says
+  it("a sandboxed session's row says so, and how; another's says nothing", async () => {
+    const rt = await runtime()
+    const a = await app(rt)
+    rt.open('boxed', 'cl', { sandboxed: true, sandboxKind: 'sandbox' })
+    rt.open('rules', 'cl', { sandboxed: true, sandboxKind: 'deny-only' })
+    rt.open('plain', 'cl')
+    const rows = (await a.client.command('sessions-list', {})).body as RemoteSessionRow[]
+    const row = (id: string): RemoteSessionRow => rows.find((r) => r.id === id)!
+    expect(row('boxed')).toMatchObject({ sandboxed: true, sandboxKind: 'sandbox' })
+    expect(row('rules')).toMatchObject({ sandboxed: true, sandboxKind: 'deny-only' })
+    expect(row('plain')).not.toHaveProperty('sandboxed')
+    expect(row('plain')).not.toHaveProperty('sandboxKind')
+  })
+
   it('a read-only pairing watches a session and cannot type into it, resize it or end it', async () => {
     const rt = await runtime()
     const a = await app(rt, 'read-only')

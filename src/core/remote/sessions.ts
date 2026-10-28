@@ -3,6 +3,7 @@
 // ref to a session there with the roll it follows (Phase 9b).
 // node: import 없음 — 렌더러가 import한다.
 import { remoteSessionKey } from '../panes/tabId'
+import type { SandboxKind } from '../types'
 
 /** The most one `sessions-input` carries: a paste, never a file. */
 export const SESSION_INPUT_MAX = 64 * 1024
@@ -23,6 +24,12 @@ export interface RemoteSessionRow {
   provider?: 'claude' | 'codex'
   rolledFrom?: string
   sources?: { status: string; prompt: string; usage: string; conversation: string }
+  /** It runs in its agent CLI's own sandbox (HostSession.sandboxed); absent outside it. The remote sessions dialog marks
+   *  it as a session tab is marked (sandbox follow-ups, item 2). */
+  sandboxed?: true
+  /** What protection that is (HostSession.sandboxKind): `sandbox`, the CLI's own, or `deny-only`, Claude Code on Windows,
+   *  whose shell is not restricted. Absent when not sandboxed, or for a kind the Runtime's build does not know. */
+  sandboxKind?: SandboxKind
 }
 
 export interface RemoteSessionRef {

@@ -7,6 +7,7 @@ import { createSessionArgs, refOf, remoteCall, type RemoteSessionRef, type Remot
 import { useI18n } from '../i18n/I18nProvider'
 import { Select } from './Select'
 import { backdropProps } from '../lib/backdrop'
+import { SandboxMarker } from './SandboxMarker'
 
 interface RemoteAccount {
   id: string
@@ -18,6 +19,38 @@ interface RemoteAccount {
 
 const errorOf = (r: { status: number; body: unknown }): string =>
   String((r.body as { error?: unknown } | null)?.error ?? r.status)
+
+/** The sessions running on the Runtime, one button each: its name with the sandbox marker its tab would show (sandbox
+ *  follow-ups, item 2: only for a session its Host says is sandboxed, as PaneGrid hands a local tab its kind), and what
+ *  it is, its provider and its folder, the folder as text. */
+export function RemoteSessionList({
+  rows,
+  runtimeId,
+  onOpen
+}: {
+  rows: RemoteSessionRow[]
+  runtimeId: string
+  onOpen: (ref: RemoteSessionRef) => void
+}): React.JSX.Element {
+  const { t } = useI18n()
+  return (
+    <ul className="remote-session-list">
+      {rows.map((r) => (
+        <li key={r.id}>
+          <button type="button" onClick={() => onOpen(refOf(runtimeId, r))}>
+            <span className="remote-session-head">
+              <span className="remote-session-name">{r.title ?? r.id}</span>
+              <SandboxMarker kind={r.sandboxed === true ? r.sandboxKind : undefined} />
+            </span>
+            <span className="remote-session-meta">
+              {[t(r.kind === 'chat' ? 'session.kind.chat' : 'session.kind.terminal'), r.provider, r.cwd].filter(Boolean).join(' · ')}
+            </span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  )
+}
 
 export function RemoteSessionsDialog({
   runtimes,
@@ -136,20 +169,7 @@ export function RemoteSessionsDialog({
           ) : live.length === 0 ? (
             <p className="modal-hint">{t('remote.sessions.none')}</p>
           ) : (
-            <ul className="remote-session-list">
-              {live.map((r) => (
-                <li key={r.id}>
-                  <button type="button" onClick={() => onOpen(refOf(runtimeId, r))}>
-                    <span className="remote-session-name">{r.title ?? r.id}</span>
-                    <span className="remote-session-meta">
-                      {[t(r.kind === 'chat' ? 'session.kind.chat' : 'session.kind.terminal'), r.provider, r.cwd]
-                        .filter(Boolean)
-                        .join(' · ')}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <RemoteSessionList rows={live} runtimeId={runtimeId} onOpen={onOpen} />
           )}
         </div>
 
