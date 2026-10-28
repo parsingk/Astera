@@ -52,11 +52,22 @@ export type AuditDecision = 'allow' | 'would-deny' | 'unknown' | 'blocked'
 
 export type CoverageClass = 'shell' | 'file-read' | 'file-write' | 'mcp' | 'network'
 
-/** Why a class is only partly seen, as a key the screens and the CLI put in words. */
-export type CoverageNote = 'web-tools-only' | 'shell-text-only' | 'web-search-and-shell-text' | 'interactive-input'
+/** Why a class is only partly seen, as a key the screens and the CLI put in words. The sandbox's table adds two:
+ *  `runtime-measured`, blocked by the runtime Claude Code's sandbox runs on (srt), which was measured, while Claude Code's
+ *  own use of it was not; `file-tools-only`, Claude Code on Windows, whose file tools alone are kept out; `bus-path-only`,
+ *  Codex on Linux, whose deny names the session bus by its file path (an abstract-socket bus is not denied). */
+export type CoverageNote =
+  | 'web-tools-only'
+  | 'shell-text-only'
+  | 'web-search-and-shell-text'
+  | 'interactive-input'
+  | 'runtime-measured'
+  | 'file-tools-only'
+  | 'bus-path-only'
 
 export interface CoverageCell {
-  /** `enforced`: Enforce's hook decides every call of the class before it runs (COVERAGE_ENFORCE only). */
+  /** `enforced`: Enforce's hook decides every call of the class before it runs (COVERAGE_ENFORCE), or the sandbox
+   *  stops it (SANDBOX_COVERAGE). In the sandbox's table `seen` is what it lets through: the network (E3). */
   level: 'seen' | 'partial' | 'none' | 'enforced'
   note?: CoverageNote
 }
@@ -65,6 +76,17 @@ export interface CoverageRow {
   provider: 'claude' | 'codex'
   kind: 'terminal' | 'chat'
   classes: Record<CoverageClass, CoverageCell>
+}
+
+/** What the sandbox keeps a session from (sandbox design §6): writing outside its folders, reading the folders holding
+ *  logins (E6), the OS's credential store, and the network, which it allows. */
+export type SandboxCoverageClass = 'write' | 'sensitive' | 'stores' | 'network'
+
+/** One CLI's sandbox on one OS, terminal and chat alike (core/sandbox/coverage.ts SANDBOX_COVERAGE). */
+export interface SandboxCoverageRow {
+  provider: 'claude' | 'codex'
+  os: 'win32' | 'darwin' | 'linux'
+  classes: Record<SandboxCoverageClass, CoverageCell>
 }
 
 /** Where a record came from (design §5). The provider is the first word. */

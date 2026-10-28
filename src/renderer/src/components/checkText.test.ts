@@ -1,10 +1,10 @@
 // The check words (plugin Phase 5c, C13): a chip's tooltip in the run's graph and a check's verdict in its completion
 // block, in all four languages.
 import { describe, it, expect } from 'vitest'
-import { CATALOGS, LANGS } from '../../../core/i18n'
+import { CATALOGS, LANGS, type MessageParams } from '../../../core/i18n'
 import { GLYPH, checkChoicesOf, checkTooltip, checkVerdict, nodeMetaText, taskTitleOf, eventTitleOf } from './checkText'
 
-const t = (key: string, p?: Record<string, string | number>): string => (p ? `${key} ${JSON.stringify(p)}` : key)
+const t = (key: string, p?: MessageParams): string => (p ? `${key} ${JSON.stringify(p)}` : key)
 
 describe('checkVerdict', () => {
   it('says a command check’s exit code, a plugin’s failure without one, a check that could not be made, and a skipped one', () => {

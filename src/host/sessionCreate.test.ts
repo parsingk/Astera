@@ -9,6 +9,8 @@ import type { Account, SessionInfo } from '../core/types'
 import { removeFixture } from '../core/testFixtures'
 import { writeAgentProfiles } from '../core/agentProfiles/store'
 import type { AgentProfile } from '../core/agentProfiles/types'
+import { profilePaths } from '../core/profile/paths'
+import { RepairNeeded } from '../core/settings/repairNeeded'
 
 const ACCOUNT: Account = { id: 'acc_c', label: 'C', configDir: '/cfg/c', color: '#000', createdAt: 'T', provider: 'claude' }
 
@@ -186,7 +188,7 @@ describe('createHostSessionStarter — with an agent profile', () => {
     for (const d of dirs.splice(0)) await removeFixture(d)
   })
   const P = (over: Partial<AgentProfile>): AgentProfile => ({
-    id: 'ap_000000000001', name: 'Reviewer', status: 'active', accountIds: ['acc_c'], mcpExclude: [], permission: 'inherit',
+    id: 'ap_000000000001', name: 'Reviewer', status: 'active', accountIds: ['acc_c'], mcpExclude: [], permission: 'inherit', sandbox: false,
     createdAt: 'T', updatedAt: 'T', ...over
   })
   const withProfiles = async (profiles: AgentProfile[]): Promise<string> => {
@@ -229,6 +231,72 @@ describe('createHostSessionStarter — with an agent profile', () => {
     expect(h.chats.spawn).toHaveBeenCalledWith(expect.objectContaining({ bypassPermissions: true }))
     expect(logs.filter((l) => l.includes('ap_gone'))).toHaveLength(1)
     expect(touched).toEqual([])
+  })
+
+  // Task 5 fix round 1: a store that cannot be read may hold the profile's sandbox or its `ask`, so the chat does not start
+  // without it: refused before anything started, with the repair the store needs
+  it('a damaged profile store refuses a chat that names a profile, and starts nothing', async () => {
+    const profileDir = await withProfiles([P({})])
+    await fs.writeFile(profilePaths(profileDir).agentProfiles, '{ damaged')
+    const h = rig({ profileDir, bypass: async () => true })
+    const refused = await h.start({ kind: 'chat', accountId: 'acc_c', cwd: '/repo', rollAccountIds: [], agentProfileId: 'ap_000000000001' }).then(
+      () => null,
+      (e: unknown) => e
+    )
+    expect(refused).toBeInstanceOf(RepairNeeded)
+    expect((refused as RepairNeeded).file).toBe('agent-profiles.json')
+    expect(wasRefusedBeforeActing(refused as Error)).toBe(true)
+    expect(h.chats.spawn).not.toHaveBeenCalled()
+  })
+
+  // Sandbox design §6: a sandboxed profile's chat has its folder read (and on Windows its account asked) before the spawn,
+  // and a refusal there starts nothing, tagged so no receipt is kept
+  it('a sandboxed profile’s chat is prepared for the sandbox first, and started in it', async () => {
+    const profileDir = await withProfiles([P({ id: 'ap_box', sandbox: true })])
+    const order: string[] = []
+    const h = rig({ profileDir })
+    const prepare = vi.fn(async (o: { account: Account; cwd: string; sandbox?: boolean }) => {
+      order.push(`prepare ${o.account.id} ${o.cwd} ${String(o.sandbox)}`)
+    })
+    Object.assign(h.chats, { prepare })
+    h.chats.spawn.mockImplementationOnce((o: { cwd: string }) => {
+      order.push('spawn')
+      return { id: 'chat_1', accountId: 'acc_c', cwd: o.cwd, title: 'p', status: 'running' } as SessionInfo
+    })
+    await h.start({ kind: 'chat', accountId: 'acc_c', cwd: '/repo', rollAccountIds: [], agentProfileId: 'ap_box' })
+    expect(order).toEqual(['prepare acc_c /repo true', 'spawn'])
+    expect(h.chats.spawn).toHaveBeenCalledWith(expect.objectContaining({ sandbox: true, agentProfileId: 'ap_box' }))
+    // Unsandboxed, nothing is prepared and the spawn is asked as before
+    const open = rig({ profileDir: await withProfiles([P({ id: 'ap_open' })]) })
+    const noPrepare = vi.fn(async () => {})
+    Object.assign(open.chats, { prepare: noPrepare })
+    await open.start({ kind: 'chat', accountId: 'acc_c', cwd: '/repo', rollAccountIds: [], agentProfileId: 'ap_open' })
+    expect(noPrepare).not.toHaveBeenCalled()
+    expect(open.chats.spawn.mock.calls[0][0]).not.toHaveProperty('sandbox')
+    // A refusal: nothing is spawned, and it is tagged as refused before acting
+    const refusing = rig({ profileDir })
+    Object.assign(refusing.chats, { prepare: async () => Promise.reject(new Error('SANDBOX_UNAVAILABLE: windows-setup codex acc_c')) })
+    const err = await refusing.start({ kind: 'chat', accountId: 'acc_c', cwd: '/repo', rollAccountIds: [], agentProfileId: 'ap_box' }).catch((e: unknown) => e)
+    expect((err as Error).message).toBe('SANDBOX_UNAVAILABLE: windows-setup codex acc_c')
+    expect(wasRefusedBeforeActing(err as Error)).toBe(true)
+    expect(refusing.chats.spawn).not.toHaveBeenCalled()
+  })
+
+  // The answer is the row `sessions list` will show, the mark of the sandbox and its kind with it, before it is listed
+  it('a sandboxed session’s answer says it is sandboxed and how, before it is listed', async () => {
+    const h = rig({ list: async () => [] })
+    h.spawner.createSession.mockImplementationOnce(
+      async (o: { accountId: string; cwd: string }) =>
+        ({ id: 'term_s', accountId: o.accountId, cwd: o.cwd, title: 'p', status: 'running', sandboxed: true, sandboxKind: 'sandbox' }) as SessionInfo
+    )
+    expect(await h.start({ kind: 'terminal', accountId: 'acc_c', cwd: '/repo', rollAccountIds: [], sandbox: true })).toMatchObject({
+      id: 'term_s',
+      sandboxed: true,
+      sandboxKind: 'sandbox'
+    })
+    const plain = await h.start({ kind: 'terminal', accountId: 'acc_c', cwd: '/repo', rollAccountIds: [] })
+    expect(plain).not.toHaveProperty('sandboxed')
+    expect(plain).not.toHaveProperty('sandboxKind')
   })
 
   it('a terminal session hands the profile to the spawner, which resolves it', async () => {

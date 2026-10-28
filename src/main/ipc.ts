@@ -68,6 +68,8 @@ import { createWorktreeRoute, NO_HOST_CONNECTION, hostDeadlineMessage } from './
 import { createPluginsRoute } from './host/pluginsRoute'
 import { createExtensionsRoute } from './host/extensionsRoute'
 import { createAgentProfilesRoute } from './host/agentProfilesRoute'
+import { forgetReadiness } from '../core/sandbox/windowsReadiness'
+import { forcedSandboxBlocker } from '../core/sandbox/unavailable'
 import { createAuditRoute } from './host/auditRoute'
 import { createCredentialsRoute } from './host/credentialsRoute'
 import { createAppPullRequests } from './host/appPullRequests'
@@ -1217,6 +1219,8 @@ export function registerIpc(
       if (n) adoptedNative.set(n.sessionId, n.native)
     },
     log: (m) => hostWiring?.log(`host: ${m}`),
+    // A Host roll of a chat chain the sandbox refused: its reason, as the chat's notice in its pane (Task 6 fix round 1)
+    chatNotice: (sessionId, notice) => core.chat.notice(sessionId, notice),
     // Fix round 1, I2: the old session's exit waits until the mirror no longer names it.
     orchHolds: (id) => orchHoldsSession(orchMirror.loaded() ? orchMirror.getState() : null, id),
     // Fix round 1, 3: a rekey whose new session was not adopted leaves its forkSeen for the adopter.
@@ -2092,10 +2096,26 @@ export function registerIpc(
       void core.schedulerConfig.set(resumeId, opts.schedule).catch(() => {})
     }
     const account = core.accounts.get(opts.accountId)
+    // **The sandbox comes from the profile only** (final fix pass, minor 1; permission.ts: "never a caller's"): a
+    // `sandbox` in the options is dropped, whoever sent it. The app's own start of a sandboxed session's work, a Job's
+    // worker or coordinator, asks for it apart (`forceSandbox`, C3), and where the CLI has no sandbox it is refused
+    // rather than started without one; the renderer's handler clears that one.
+    const forceSandbox = opts.forceSandbox === true
+    {
+      const { sandbox: _callerSandbox, forceSandbox: _forced, ...withoutSandbox } = opts
+      opts = withoutSandbox
+    }
+    if (forceSandbox) {
+      const refused = forcedSandboxBlocker(providerOf(account), process.platform)
+      if (refused) throw refused
+    }
     // The agent profile it names, by id or name (Agent Profiles design §5): the session keeps the profile's real id, and
-    // the profile's permission decides the bypass when the caller gave none. One that does not resolve is logged and
+    // the profile's permission decides the bypass when the caller gave none. One that is not found is logged and
     // dropped, and the session starts with the app-wide mode as a dialog spawn without a profile does (the dialog sent
-    // no bypass, so dropping only the id would have left it asking). With none named, nothing here changes the options.
+    // no bypass, so dropping only the id would have left it asking); a profile store that cannot be read refuses the
+    // spawn with its repair, since the profile in it may ask or sandbox. With none named, nothing here changes the options.
+    // A profile that resolves also gives its sandbox switch (sandbox design §6), which the prepares and spawns below, a
+    // terminal's or a chat's, read from the options.
     if (opts.agentProfileId !== undefined) {
       const { agentProfileId, ...rest } = opts
       const resolved = await appProfileSpawn({
@@ -2107,6 +2127,7 @@ export function registerIpc(
       })
       opts = { ...rest, ...resolved }
     }
+    if (forceSandbox) opts = { ...opts, sandbox: true }
     // A resume names its conversation now: the profile it resumes as is written down by it, as the schedule is above
     if (resumeId && opts.agentProfileId !== undefined) void core.profileConversations.record(resumeId, opts.agentProfileId)
     // win32: a CLI installed since this app started is not on its PATH yet; the Path Windows keeps is
@@ -2253,6 +2274,9 @@ export function registerIpc(
       // round 1's own Critical finding.
       const bypassSignal = core.bypassSignalFor(providerOf(account))
       await core.capabilities.refresh(account, opts.agentProfileId)
+      // The profile's sandbox: the folder's git layout read for the synchronous spawn, and on Windows the account's Codex
+      // home asked whether it is set up; a refusal reaches the toast like any failed spawn (설정하기 for an account not set up)
+      await core.chat.prepare({ account, cwd: opts.cwd, ...(opts.sandbox === true ? { sandbox: true } : {}) })
       const chatInfo = core.chat.spawn({
         account,
         cwd: opts.cwd,
@@ -2265,7 +2289,8 @@ export function registerIpc(
         // Chat takeover: what a Host does with a prompt nobody is there to answer. Hold unless asked.
         unattendedPermission: isUnattendedPermission(opts.unattendedPermission) ? opts.unattendedPermission : 'hold',
         bypassSignal,
-        ...(opts.agentProfileId !== undefined ? { agentProfileId: opts.agentProfileId } : {})
+        ...(opts.agentProfileId !== undefined ? { agentProfileId: opts.agentProfileId } : {}),
+        ...(opts.sandbox === true ? { sandbox: true } : {})
       })
       if (opts.agentProfileId !== undefined) touchAgentProfile(opts.agentProfileId)
       // A claude chat resume's transcript already exists, so it is found now rather than at `ready`:
@@ -2311,7 +2336,7 @@ export function registerIpc(
     // The folder and, on win32, Git Bash are looked for first, off this thread and within the probe
     // limit (core/sessions/pathProbe.ts): an offline drive refuses the spawn in about 1.5 s instead of
     // freezing every window for as long as the SMB redirector takes to give up.
-    await core.sessions.prepare({ account, cwd: opts.cwd, ...(opts.agentProfileId !== undefined ? { agentProfileId: opts.agentProfileId } : {}) })
+    await core.sessions.prepare({ account, cwd: opts.cwd, ...(opts.agentProfileId !== undefined ? { agentProfileId: opts.agentProfileId } : {}), ...(opts.sandbox === true ? { sandbox: true } : {}) })
     const info = core.sessions.spawn({
       ...opts,
       account,
@@ -2379,7 +2404,8 @@ export function registerIpc(
     }
     return info
   }
-  ipcMain.handle('sessions.spawn', async (_e, opts) => spawnSession(opts))
+  // The renderer's options never force the sandbox: only the app's own start of a sandboxed session's work does
+  ipcMain.handle('sessions.spawn', async (_e, opts) => spawnSession({ ...opts, forceSandbox: undefined }))
 
   // ---- agent browser (spec: docs/superpowers/specs/2026-09-06-agent-browser-design.md) ----
   // It sits here, above the orchestration startup, because `agentRuns` is read from the server deps
@@ -3013,7 +3039,8 @@ export function registerIpc(
         // 워커는 방금 만들어진 워크트리에서 뜬다 — 사람이 승인한 적 없는 폴더다(위 주석).
         await preTrustWorkspace(o.accountId, o.cwd)
         // The profile is resolved here, before the bypass below is filled in: once filled, spawnSession would take it
-        // as the caller's own and the profile's permission would never be asked (Agent Profiles design §5).
+        // as the caller's own and the profile's permission would never be asked (Agent Profiles design §5). A profile
+        // store that cannot be read throws its repair here, and the worker does not start.
         const profile = await profileSpawn({
           profileDir: app.getPath('userData'),
           agentProfileId: o.agentProfileId,
@@ -3030,6 +3057,8 @@ export function registerIpc(
           // A Job's worker, reviewer or repair worker is an agent's session: its tab closes when it ends (2026-10-20).
           // Outside the satisfies below, whose shape is the coordinator's options and has no such field.
           startedBy: 'agent',
+          // A worker of a sandboxed session's work starts in the sandbox whatever its profile says (final fix pass, C3)
+          ...(o.sandbox ? { forceSandbox: true } : {}),
           ...({
             accountId: o.accountId,
             cwd: o.cwd,
@@ -3341,9 +3370,10 @@ export function registerIpc(
             specsDir,
             preTrust: preTrustWorkspace,
             bypassPermissions: async () => core.appSettings.getAgentPermissionMode() === 'yolo',
-            spawn: async (o) => {
-              // A coordinator is an agent's session too: its tab closes when it ends (2026-10-20)
-              const info = await spawnSession({ ...o, startedBy: 'agent' })
+            spawn: async ({ sandbox, ...o }) => {
+              // A coordinator is an agent's session too: its tab closes when it ends (2026-10-20). One of a Job a sandboxed
+              // session made starts in the sandbox (final fix pass, C3)
+              const info = await spawnSession({ ...o, startedBy: 'agent', ...(sandbox ? { forceSandbox: true } : {}) })
               // **탭을 띄우는 것이 이 한 줄이다.** 공용 spawnSession 은 이 이벤트를 내지 않는다 — 사용자
               // 경로에서는 반환값이 렌더러로 가서 App.tsx 가 탭을 만들기 때문이다(그 함수 위의 주석).
               // main 안에서 직접 부르는 이 자리는 반환값이 렌더러에 닿지 않으므로, 워커 세션이 그랬던
@@ -4769,7 +4799,8 @@ export function registerIpc(
   ipcMain.handle('extensions.remove', (_e, id: unknown) => extensions.remove(id as string))
   ipcMain.handle('extensions.replace', (_e, accountId: unknown, id: unknown) => extensions.replace(accountId as string, id as string))
   // Settings › Agent profiles (Agent Profiles design §8): the Host checks every argument; this only passes them on
-  const agentProfiles = createAgentProfilesRoute({ call: (m) => orchCall(m) })
+  // A setup gives the machine's sandbox users new passwords, so this process's own readiness answers go after one too
+  const agentProfiles = createAgentProfilesRoute({ call: (m) => orchCall(m), afterSetup: () => forgetReadiness() })
   ipcMain.handle('agentProfiles.list', () => agentProfiles.list())
   ipcMain.handle('agentProfiles.create', (_e, fields: unknown) => agentProfiles.create(fields as Parameters<typeof agentProfiles.create>[0]))
   ipcMain.handle('agentProfiles.update', (_e, id: unknown, changes: unknown) =>
@@ -4778,6 +4809,8 @@ export function registerIpc(
   ipcMain.handle('agentProfiles.archive', (_e, id: unknown) => agentProfiles.archive(id as string))
   ipcMain.handle('agentProfiles.restore', (_e, id: unknown) => agentProfiles.restore(id as string))
   ipcMain.handle('agentProfiles.remove', (_e, id: unknown) => agentProfiles.remove(id as string))
+  ipcMain.handle('agentProfiles.sandboxSetup', (_e, profileId: unknown, accountId: unknown) => agentProfiles.sandboxSetup(profileId as string, accountId as string))
+  ipcMain.handle('agentProfiles.sandboxReadiness', (_e, profileId: unknown) => agentProfiles.sandboxReadiness(profileId as string))
   // Settings › Security & Access and Run detail's token totals (observe mode design §11): the Host checks every
   // argument; this only passes them on
   const audit = createAuditRoute({ call: (m) => orchCall(m) })

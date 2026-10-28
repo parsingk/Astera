@@ -85,7 +85,7 @@ describe('sessions create — what reaches the Host starter', () => {
 // chain when none is given (the New Session dialog's way), and the session is started from the profile's real id
 describe('sessions create — from an agent profile', () => {
   const profile = (over: Partial<AgentProfile> = {}): AgentProfile => ({
-    id: 'ap_1', name: 'Reviewer', status: 'active', accountIds: ['acc_c2', 'acc_gone', 'acc_c'], mcpExclude: [], permission: 'inherit',
+    id: 'ap_1', name: 'Reviewer', status: 'active', accountIds: ['acc_c2', 'acc_gone', 'acc_c'], mcpExclude: [], permission: 'inherit', sandbox: false,
     createdAt: NOW, updatedAt: NOW, ...over
   })
   const withProfiles = (profiles: AgentProfile[], createSession = vi.fn(async () => row())) => ({
@@ -141,7 +141,7 @@ describe('sessions create — from an agent profile', () => {
 // the app or at their own shell is not asked
 describe('sessions create — a profile that runs without permission checks, by who asks', () => {
   const profile = (over: Partial<AgentProfile>): AgentProfile => ({
-    id: 'ap_b', name: 'Unattended', status: 'active', accountIds: ['acc_c'], mcpExclude: [], permission: 'bypass', createdAt: NOW, updatedAt: NOW, ...over
+    id: 'ap_b', name: 'Unattended', status: 'active', accountIds: ['acc_c'], mcpExclude: [], permission: 'bypass', sandbox: false, createdAt: NOW, updatedAt: NOW, ...over
   })
   const profiles = [profile({}), profile({ id: 'ap_ask', name: 'Asks', permission: 'ask' }), profile({ id: 'ap_in', name: 'Follows', permission: 'inherit' })]
   type Caller = { sessionId: string; role?: 'app' | 'cli' | 'mcp' | 'controller' | 'plugin' }

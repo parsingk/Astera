@@ -43,7 +43,8 @@ import { BlockRegistry } from './blockRegistry'
 import { copyTranscript } from './transcript'
 import { claudeHistoryStrategy } from '../history/strategies/claude'
 import { parseStatusLinePayload, extractStatusLineSession } from '../usage/statusline'
-import { t, type Lang } from '../i18n'
+import { t, type Lang, type Message } from '../i18n'
+import { sandboxRefusalMessage } from '../sandbox/unavailable'
 import { ClaudeTranscriptTail } from './claudeSignal'
 import { ROLL_SNAPSHOT_VERSION, MAX_SNAPSHOT_PROMPT_CHARS, snapshotKey, type RollSnapshot, type RollRespawnExtra } from './snapshot'
 import { parseResetTime } from './resetTime'
@@ -131,6 +132,9 @@ export interface RollingDeps {
     /** The agent profile the chain was started from (SessionInfo.agentProfileId), kept by every roll like startedBy:
      *  the respawned session gets that profile's MCP servers on its new account (Agent Profiles design §7). */
     agentProfileId?: string
+    /** The chain runs in its CLI's sandbox (SessionInfo.sandboxed, sandbox design §6), kept by every roll: the
+     *  successor of a sandboxed session starts in the sandbox too. */
+    sandbox?: boolean
     /** Extra keys for the new pty's note (S6 R6) — `rolledFrom` and the chain's snapshot on its new
      *  account. The manager merges them into `meta.restore` under its own keys. */
     restoreExtra?: RollRespawnExtra
@@ -138,8 +142,9 @@ export interface RollingDeps {
   /** Everything a respawn needs that can wait or refuse, done while the old session still lives (S6 R5).
    *  A rejection aborts the roll before the kill and reschedules it. Absent: nothing to prepare.
    *  `agentProfileId` is the chain's own (the spawn's field above): the target account's capabilities are resolved
-   *  with that profile, so the synchronous respawn finds them ready. */
-  prepareSpawn?(account: Account, cwd: string, agentProfileId?: string): Promise<void>
+   *  with that profile, so the synchronous respawn finds them ready. `sandbox` is the chain's too: the folder is read for
+   *  the sandbox here, since the synchronous respawn cannot. */
+  prepareSpawn?(account: Account, cwd: string, agentProfileId?: string, sandbox?: boolean): Promise<void>
   /** The model the person picked in this session, or null when they picked none.
    *
    *  A roll has to carry it because Claude's model is argv and nothing about it survives the process —
@@ -162,6 +167,11 @@ export interface RollingDeps {
   bypassedOf?(sessionId: string): boolean
   write(sessionId: string, data: string): void
   kill(sessionId: string): void
+  /** Tells the person, in the live session's tab, why a roll is waiting when its respawn would start without the sandbox
+   *  the chain runs in (sandbox design §6, E5), as the codex coordinator's `tell` does: `reason` is the catalog message
+   *  (session.roll.sandbox.refused, with the refusal's own sentence in it), and the wiring words it for the session's kind
+   *  (a terminal's `[Astera]` line as output, a chat's notice). Absent: the reason is only logged. */
+  tell?(sessionId: string, reason: Message): void
   getAccount(id: string): Account | null
   readStatusPayload(sessionId: string): Promise<unknown | null>
   send(channel: 'session:rolled' | 'session:rollState', payload: unknown): void
@@ -323,6 +333,8 @@ interface Chain {
   // The last lasting rollState payload pushState published — null once it was 'none' (or nothing has
   // published yet). Read back by stateOf for a renderer that mounts after the push already happened.
   lastState: RollStateEvent | null
+  /** The sandbox refusal last written into the tab (tellSandboxRefusal), cleared once a roll gets through. */
+  sandboxRefusalTold?: string
   // When the last roll finished — the reference point of the PTY replay grace. null on the first session (no grace).
   rolledAt: number | null
   // Throttles the "ignored by replay grace" log to once per roll — the same convention as limitTailReadFailWarned
@@ -1571,6 +1583,21 @@ export class RollingCoordinator {
    *  ordinary wait path has always had, so none of it is new behaviour — and it is still better than
    *  silence, because the log is the only thing that can tell someone to re-add the account or close
    *  the session. */
+  /** A respawn the sandbox refused (sandbox design §6), told as the codex coordinator tells its own: the session it would
+   *  replace is still running, so the reason goes into its tab, where the person will look, as "could not move to the next
+   *  account" with the refusal's own sentence; the roll waits as any refused one does. Said once per reason for as long as
+   *  the chain keeps being refused for it, since the wait retries every round. Any other refusal is only logged. */
+  private tellSandboxRefusal(chain: Chain, why: string): void {
+    const refusal = sandboxRefusalMessage(why)
+    if (!refusal || !this.deps.tell || chain.sandboxRefusalTold === why) return
+    chain.sandboxRefusalTold = why
+    try {
+      this.deps.tell(chain.liveId, { key: 'session.roll.sandbox.refused', params: { reason: refusal } })
+    } catch (err) {
+      this.deps.log(`roll: the refusal could not be written into the tab: ${String(err)} session=${chain.liveId}`)
+    }
+  }
+
   private rescheduleAbortedRoll(chain: Chain, why: string): void {
     // Defensive. No caller can actually reach here with a wait already armed — onLimit's wait branch
     // does not call roll() — but it is checked because being wrong once costs a second timer on the
@@ -1689,10 +1716,11 @@ export class RollingCoordinator {
       // the kill below starts the await-free stretch (constraint 12).
       if (this.deps.prepareSpawn) {
         try {
-          await this.deps.prepareSpawn(target, chain.cwd, chain.liveInfo.agentProfileId)
+          await this.deps.prepareSpawn(target, chain.cwd, chain.liveInfo.agentProfileId, chain.liveInfo.sandboxed === true)
         } catch (err) {
           const why = err instanceof Error ? err.message : String(err)
           this.deps.log(`roll aborted — the respawn would be refused: ${why} session=${chain.liveId}`)
+          this.tellSandboxRefusal(chain, why)
           this.rescheduleAbortedRoll(chain, `spawn refused: ${why}`)
           return
         }
@@ -1756,6 +1784,10 @@ export class RollingCoordinator {
         startWithBypass: wasBypassed,
         ...(chain.liveInfo.startedBy ? { startedBy: chain.liveInfo.startedBy } : {}),
         ...(chain.liveInfo.agentProfileId ? { agentProfileId: chain.liveInfo.agentProfileId } : {}),
+        // The sandbox rides the chain as the bypass does, read off the session it replaces rather than off the profile
+        // again: a profile store that cannot be read at the roll, or another chain's roll at the same moment, can then
+        // never start the successor outside the sandbox its chain started in (sandbox design §6)
+        ...(chain.liveInfo.sandboxed ? { sandbox: true } : {}),
         // S6 R6: the new pty is born with what a takeover needs if this process dies before the
         // rekey commits: where it came from, and the chain on its new account awaiting its prompt.
         restoreExtra: {
@@ -1781,6 +1813,7 @@ export class RollingCoordinator {
       chain.killing = false
       chain.liveId = info.id
       chain.liveInfo = info
+      chain.sandboxRefusalTold = undefined
       chain.scanner = new OutputScanner()
       if (dest !== undefined) {
         chain.transcriptPath = dest // the live transcript now lives on the target account's side

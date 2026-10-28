@@ -10,10 +10,12 @@
 // worktrees (the Host's own registry, Host S3 §3.1) — the fork behind `--worktree new` and the three
 // `OrchServerDeps` this file no longer answers by refusing.
 import { existsSync, promises as fs } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { comparablePath } from '../core/files/tree'
 import { randomUUID } from 'node:crypto'
-import type { HostMessage, PtyEntry } from '../core/host/protocol'
+import { HOST_PROTOCOL, type HostMessage, type PtyEntry } from '../core/host/protocol'
+import { hostAddress } from '../core/publicContract'
 import { hostCliPaths, hostWorkerBaseEnv } from '../core/host/spawn'
 import { keptBecause, keptPhrase, type OrchServerDeps } from '../core/orchestration/command'
 import type { OrchState } from '../core/orchestration/state'
@@ -23,6 +25,10 @@ import { releaseArgsFor } from '../core/orchestration/exec/release'
 import { makeLimitProbe } from '../core/orchestration/exec/limitProbe'
 import { ensureShuttle, sessionCmdLink } from '../core/orchestration/exec/shuttle'
 import type { ChatManagerDeps, ChatOrchEnv } from '../core/chat/manager'
+import type { CodexWindowsReady, PreparedLayouts } from '../core/sandbox/prepared'
+import { claudeSandboxStart, type ClaudeSandboxStart } from '../core/sandbox/claudeStart'
+import { codexExcludesWriter, type CodexExcludes, type RunGit } from '../core/sandbox/gitExcludes'
+import { forcedSandboxBlocker } from '../core/sandbox/unavailable'
 import { binDirFor } from '../core/orchestration/cliInstall'
 import {
   preTrustWorkspace,
@@ -41,7 +47,7 @@ import { descriptorOf, makeDescriptors } from '../core/providers/descriptor'
 import { providerOf } from '../core/providers/meta'
 import { ensureOnWindowsPath } from '../core/sessions/windowsPath'
 import { ensureInstallDirOnPath } from '../core/sessions/installDirPath'
-import { SessionManager, defaultSpawnChecks } from '../core/sessions/manager'
+import { SessionManager, askCodexWindowsReady, defaultSpawnChecks } from '../core/sessions/manager'
 import { defaultSessionTitle } from '../core/sessions/title'
 import type { PtyFactory, PtyLike } from '../core/sessions/pty'
 import { StatusLineManager, resolveNodePath } from '../core/sessions/statusline'
@@ -55,9 +61,9 @@ import { createCapabilityCache, type CapabilityCache } from '../core/extensions/
 import { createHidingSource, projectOfWorktrees, type HidingSource } from '../core/credentials/hiding'
 import { readPolicyMode } from '../core/audit/policy'
 import type { EnforceStart } from '../core/audit/enforce'
-import { cliVersionProbe, enforceBlocker } from '../core/sessions/cliVersion'
+import { cliVersionProbe, enforceBlocker, type CliVersionProbe } from '../core/sessions/cliVersion'
 import { createManagedHooksCheck } from '../core/sessions/managedHooks'
-import { codexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
+import { codexNoDaemonProbe, type CodexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
 import { findInstalledHostExe } from '../core/host/installedRuntime'
 import { hostRuntimeBase } from '../core/host/runtime'
 import { hidingLog } from '../core/extensions/secrets'
@@ -131,6 +137,24 @@ export interface HostSpawnerDeps {
   /** Stamps a profile's use after a spawn started from it (`agent-profiles-touch`). Not awaited, and a throw is logged:
    *  it never fails or delays the spawn. */
   touchAgentProfile?(id: string): void
+  /** Test injection; defaults to asking the codex on this machine's PATH whether it takes `--no-daemon`, which a
+   *  sandboxed Codex session needs (sessions/codexNoDaemon.ts). */
+  codexNoDaemon?: CodexNoDaemonProbe
+  /** Test injection; defaults to asking the codex on this machine's PATH whether an account's Windows sandbox is set up
+   *  (askCodexWindowsReady), which a sandboxed win32 Codex start needs. A test never runs the real one. */
+  codexWindowsReady?: CodexWindowsReady
+  /** Test injection; defaults to asking the claude on this machine's PATH its version (cliVersionProbe), which a sandboxed
+   *  Claude start needs. A test never runs the real one. */
+  claudeVersion?: CliVersionProbe
+  /** Test injection; defaults to asking the codex on this machine's PATH its version (cliVersionProbe), which a sandboxed
+   *  Codex start needs (final review I2). A test never runs the real one. */
+  codexVersion?: CliVersionProbe
+  /** Test injection; defaults to os.tmpdir(): where a sandboxed Claude session's npm cache and the Host's socket are. A
+   *  test gives its own folder, so nothing is made in the real one. */
+  tmpDir?: string
+  /** Test injection; defaults to running git, which a sandboxed Claude start on Linux and a sandboxed Codex start on
+   *  Windows ask for the person's excludes file (core/sandbox/gitExcludes.ts). */
+  runGit?: RunGit
 }
 
 /** HostRollSpawner's three (prepareRollSpawn, rollSpawn, statusLinePayload) are the S6 roll's respawn
@@ -144,6 +168,21 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
   /** Enforce (enforce design §5): the arguments that make a Host chat run the blocking hook, from this spawner's
    *  StatusLineManager. */
   enforce?: ChatManagerDeps['enforce']
+  /** The sandbox (sandbox design §6): the layouts this spawner's prepares read, and the Windows readiness question they
+   *  ask, shared with the Host's chat sessions: a roll prepares a chat chain's respawn through prepareRollSpawn. */
+  sandboxLayouts?: PreparedLayouts
+  codexWindowsReady?: CodexWindowsReady
+  /** The sandbox for Claude (core/sandbox/claudeStart.ts), this spawner's, shared with the Host's chat sessions: a roll
+   *  prepares a Claude chat chain's respawn through prepareRollSpawn, and its settings come from this StatusLineManager. */
+  claudeSandbox?: ClaudeSandboxStart
+  /** The folder this Host's socket is in (macOS and Linux; null on Windows), which a sandboxed Codex session's profile
+   *  denies, terminal or chat (final fix pass, C2). */
+  hostSocketDir?: string | null
+  /** The codex version question a sandboxed Codex start asks, shared with the Host's chat sessions (final review I2). */
+  codexVersion?: ChatManagerDeps['codexVersion']
+  /** The copy of the person's git excludes a sandboxed win32 Codex start writes in this Host's temp folder (one for its
+   *  profile, core/sandbox/gitExcludes.ts), shared with the Host's chat sessions. */
+  codexExcludes?: CodexExcludes
   /** The session shuttle's values once the Host wrote it (kicked at creation); undefined until then. */
   orchEnvNow(): ChatOrchEnv | undefined
   /** How many worker and coordinator starts are under way right now. */
@@ -175,7 +214,18 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
    *  and the bypass read from the settings at this spawn. Announced with `pty-opened`, so an attached app
    *  takes it back as a tab, and heard by `onSpawned`, so the rolling registers its chain. A missing
    *  folder or an unknown account starts nothing and is tagged `refusedBeforeActing`. */
-  createSession(o: { accountId: string; cwd: string; title?: string; initialPrompt?: string; rollAccountIds: string[]; startedBy?: 'agent'; agentProfileId?: string }): Promise<SessionInfo>
+  /** `sandbox`: a sandboxed session asked for it (final fix pass, C3), and it starts in the sandbox whatever its profile
+   *  says, or is refused where its CLI has none. */
+  createSession(o: {
+    accountId: string
+    cwd: string
+    title?: string
+    initialPrompt?: string
+    rollAccountIds: string[]
+    startedBy?: 'agent'
+    agentProfileId?: string
+    sandbox?: true
+  }): Promise<SessionInfo>
 }
 
 type SpawnOpts = Parameters<CoordinatorDeps['spawnSession']>[0]
@@ -268,7 +318,18 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   }
   const { profileDir, platform, homeDir, registry, log } = d
   const readAccounts = d.readAccounts ?? readAccountEntries
-  const descriptors = makeDescriptors(platform)
+  const descriptors = d.codexNoDaemon ? makeDescriptors(platform, undefined, undefined, d.codexNoDaemon) : makeDescriptors(platform)
+  // Windows readiness for a sandboxed Codex start (sandbox design §6), asked by this spawner's prepares and the Host's chat
+  // sessions alike
+  const codexWindowsReady = d.codexWindowsReady ?? askCodexWindowsReady
+  // The temp folder a sandboxed Claude session's npm cache and the Host's socket are in
+  const tmpDir = d.tmpDir ?? os.tmpdir()
+  // The folder this Host listens in (index.ts derives its address the same way), which a sandboxed Codex session's
+  // profile denies on macOS and Linux, so the loopback with its workload token is its way in (final fix pass, C2)
+  const hostSocketDir = hostAddress({ profileDir, platform, tmpDir, protocol: HOST_PROTOCOL }).dirToPrepare
+  // The copy of the person's git excludes a sandboxed Codex session on Windows reads, in the temp folder, asked by this
+  // spawner's prepares and the Host's chat sessions alike; the elevated sandbox's own account cannot read theirs
+  const codexExcludes = codexExcludesWriter({ profileDir, tmpDir, homeDir, env: d.env, ...(d.runGit ? { runGit: d.runGit } : {}), log })
   // The rule core.ts uses for the app's StatusLineManager, so the two write the same settings files. On
   // win32 the app names the Host runtime's node.exe, which is what this Host runs from, so its own
   // executable is the same file — and one that is certain to be there while its sessions run, since a
@@ -286,7 +347,10 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       findRuntime: () =>
         findInstalledHostExe(
           hostRuntimeBase({ platform, localAppData: d.env.LOCALAPPDATA, userData: profileDir, appName: path.win32.basename(profileDir) })
-        )
+        ),
+      // The sandbox's denied places are read under the person's home, from each session's own environment (its scope)
+      homeDir,
+      tmpDir
     }
   )
   const ensured = once(() => statusLine.ensureFiles())
@@ -369,7 +433,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     // Read at each spawn, not once: the Host completes its PATH when a CLI is missing (windowsPath.ts)
     () => hostWorkerBaseEnv(d.env),
     // The Host's own log: a spawn that had to fall back to a sync check says so in host.log.
-    defaultSpawnChecks(log)
+    { ...defaultSpawnChecks(log), codexWindowsReady, hostSocketDir, codexExcludes }
   )
   // Shared extensions (Agent Control Plane release 1 design §4.5): `sessions.prepare` refreshes the account before
   // every spawn and roll, and the Host's chat sessions read the same cache
@@ -412,6 +476,23 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     }
   }
   sessions.enforce = enforce
+  // The sandbox for Claude (sandbox design §6): its settings twins, the version floor Enforce asks (one probe for both),
+  // npm's cache folder and on Linux the git excludes, prepared by a sandboxed start here or in the Host's chat sessions
+  const claudeSandbox = claudeSandboxStart({
+    platform,
+    profileDir,
+    homeDir,
+    env: d.env,
+    tmpDir,
+    files: statusLine,
+    version: d.claudeVersion ?? cliVersions,
+    ...(d.runGit ? { runGit: d.runGit } : {}),
+    log
+  })
+  sessions.claudeSandbox = claudeSandbox
+  // The codex floor a sandboxed Codex start asks, here and in the Host's chat sessions (final review I2)
+  const codexVersion = d.codexVersion ?? cliVersions
+  sessions.codexVersion = codexVersion
   sessions.onExit = (e) => {
     sessions.forget(e.sessionId)
   }
@@ -529,8 +610,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     await preTrustWorkspace({ account, cwd: o.cwd, homeDir, descriptors, log })
     await ensured()
     const cliPath = await shuttlePath()
-    // The profile it names, by id or name; one that does not resolve is logged and the session starts without it
-    // (Agent Profiles design §5). Its explicit permission decides the bypass when the caller gave none.
+    // The profile it names, by id or name; one that is not found is logged and the session starts without it (Agent
+    // Profiles design §5), while a store that cannot be read refuses the start with its repair (it may hold the profile's
+    // `ask` or sandbox). Its explicit permission decides the bypass when the caller gave none.
     let profile: Awaited<ReturnType<typeof profileSpawn>>
     let bypass = o.bypassPermissions
     try {
@@ -550,7 +632,19 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     // Before prepare, which keys what it finds by the PATH it sees.
     await ensureOnWindowsPath([providerOf(account)])
     await ensureInstallDirOnPath([providerOf(account)]) // macOS and Linux: Claude Code installed since this process started (installDirPath.ts)
-    await sessions.prepare({ account, cwd: o.cwd, ...(profile ? { agentProfileId: profile.agentProfileId } : {}) })
+    // The profile's sandbox switch (sandbox design §6): the prepare reads the folder for it, and the spawn starts in it.
+    // What a sandboxed session asked for, or the work it made, starts in it whatever the profile says (final fix pass,
+    // C3), and where its CLI has no sandbox it is refused before anything starts rather than run without one
+    if (o.sandbox === true) {
+      const refused = forcedSandboxBlocker(providerOf(account), platform)
+      if (refused) {
+        log(`spawn refused: ${refused.message} (a sandboxed session's work)`)
+        if (trace) trace.settingsRefused = true
+        throw refused
+      }
+    }
+    const sandbox = profile?.sandbox === true || o.sandbox === true
+    await sessions.prepare({ account, cwd: o.cwd, ...(profile ? { agentProfileId: profile.agentProfileId } : {}), ...(sandbox ? { sandbox: true } : {}) })
     const rollProviders = o.rollAccountIds.map((rid) => providerOf(accounts.find((x) => x.id === rid) ?? account))
     const opensBefore = opens
     let info: ReturnType<SessionManager['spawn']>
@@ -572,7 +666,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       // A Job's worker or coordinator is an agent's, and so is a session the CLI, MCP or a plugin made; one a person opened
       // from a remote controller is not (review M1). An agent's tab closes when it ends (2026-10-20).
       ...(o.startedBy ? { startedBy: o.startedBy } : {}),
-      ...(profile ? { agentProfileId: profile.agentProfileId } : {})
+      ...(profile ? { agentProfileId: profile.agentProfileId } : {}),
+      ...(sandbox ? { sandbox: true } : {})
       })
     } finally {
       // Whether it returned or threw, a moved count means a process is running (A36). A throw before
@@ -600,7 +695,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   let preparedShuttle: string | null = null
   let preparedBypass: boolean | null = null
   let preparedAccounts: Account[] = []
-  const prepareRollSpawn = async (account: Account, cwd: string, agentProfileId?: string): Promise<void> => {
+  const prepareRollSpawn = async (account: Account, cwd: string, agentProfileId?: string, sandbox?: boolean, kind?: 'chat'): Promise<void> => {
     if (retiring) throw new HostRetiring()
     const accounts = await readAccounts(accountsPath) // RepairNeeded on a damaged file (A10)
     accountIn(accounts, account.id)
@@ -609,8 +704,10 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     // the synchronous rollSpawn below will use, so that spawn looks at nothing on disk.
     await ensureOnWindowsPath([providerOf(account)]) // before prepare, which keys what it finds by PATH
     await ensureInstallDirOnPath([providerOf(account)]) // macOS and Linux: Claude Code installed since this process started (installDirPath.ts)
-    // The chain's profile id as the session holds it (already resolved when it was started): its capabilities, as at a spawn
-    await sessions.prepare({ account, cwd, ...(agentProfileId ? { agentProfileId } : {}) })
+    // The chain's profile id as the session holds it (already resolved when it was started): its capabilities, as at a spawn.
+    // A chain started in the sandbox keeps it (the coordinator carries the flag): its folder is read for it before the kill,
+    // into the layouts the Host's chat sessions read too; a chat's respawn is an app-server, which needs no --no-daemon
+    await sessions.prepare({ account, cwd, ...(agentProfileId ? { agentProfileId } : {}), ...(sandbox ? { sandbox: true } : {}), ...(kind === 'chat' ? { chat: true } : {}) })
     preparedBypass = await bypassFromSettings() // RepairNeeded on a damaged settings file (A10)
     await preTrustWorkspace({ account, cwd, homeDir, descriptors, log })
     await ensured()
@@ -639,7 +736,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       orchEnv: { cliPath: preparedShuttle, skillsPath: cli.skills, profileDir },
       restoreExtra: o.restoreExtra,
       ...(o.startedBy ? { startedBy: o.startedBy } : {}),
-      ...(o.agentProfileId ? { agentProfileId: o.agentProfileId } : {})
+      ...(o.agentProfileId ? { agentProfileId: o.agentProfileId } : {}),
+      ...(o.sandbox ? { sandbox: true } : {})
     })
   }
 
@@ -770,6 +868,12 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     capabilities,
     hiding,
     enforce,
+    sandboxLayouts: sessions.sandboxLayouts,
+    codexWindowsReady,
+    claudeSandbox,
+    hostSocketDir,
+    codexVersion,
+    codexExcludes,
     orchEnvNow: () => orchEnvReady,
     inFlight: () => spawnsInFlight,
     closeAndSettle: (ms) => {
@@ -831,7 +935,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
             ...(o.initialPrompt !== undefined ? { initialPrompt: o.initialPrompt } : {}),
             rollAccountIds: o.rollAccountIds,
             ...(o.startedBy ? { startedBy: o.startedBy } : {}),
-            ...(o.agentProfileId !== undefined ? { agentProfileId: o.agentProfileId } : {})
+            ...(o.agentProfileId !== undefined ? { agentProfileId: o.agentProfileId } : {}),
+            ...(o.sandbox ? { sandbox: true as const } : {})
           },
           accounts,
           trace

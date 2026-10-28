@@ -54,6 +54,7 @@ import { createConhostReaper, reapWindowsConsoleHosts } from './conhostReaper'
 import { createRemoteSessions, type RemoteSessions } from './remoteSessions'
 import { attachPtyHost } from './ptyHost'
 import { attachProcHost } from './procHost'
+import { sessionSandboxedIn } from './sandboxedSession'
 import { ProcRegistry } from './procRegistry'
 import { createProcHolders, procHeldBy } from './procHolders'
 import { nodeProcSpawn } from './nodeProc'
@@ -77,6 +78,7 @@ import { hostFeatures } from './features'
 import { loadSlackSdk } from './slackSdk'
 import { composeHostSlack, type HostSlackWiring } from './slackWiring'
 import { createHostSpawner } from './spawner'
+import { hostSandboxReadiness, hostSandboxSetup } from './sandboxSetup'
 import { createHostWorktrees, loadWorktreesIfSpawning } from './worktrees'
 import { createHostProjectRoots } from './projectRoots'
 import { createHostExits, ptyHeldBy, type HostExits } from './exits'
@@ -240,7 +242,8 @@ async function main(): Promise<void> {
   const procHolders = createProcHolders({ log: (m) => log.write(m) })
   procs.onExit((id) => procHolders.ended(id))
   // The MCP Gateway (Agent Control Plane release 2): shared stdio servers run here once per folder, and each session the
-  // two registries open with a Gateway token reaches them over 127.0.0.1. Listens only while a stdio server is shared.
+  // two registries open with a Gateway token reaches them over 127.0.0.1. Listens for the Host's whole life: the same
+  // listener is where a sandboxed session's commands come in.
   // Credential-use records (credentials design §6): the Gateway's tool calls, and the GitHub operations the command layer
   // and the lifecycle run, each for whoever asked. `orch` is read inside the calls, long after it is made below.
   const useRecorder = createUseRecorder({ profileDir, log: (m) => log.write(m) })
@@ -252,6 +255,12 @@ async function main(): Promise<void> {
     profileDir,
     ptys: registry,
     procs,
+    sessionOfOwner,
+    // The loopback route a sandboxed session's `astera` calls come in by (sandbox design §6): `orch` and `server` are
+    // read when a call arrives, long after both are made
+    call: (a) => orch.call(a),
+    cliCaller: () => server.cliCaller(),
+    hello: (nonce) => server.loopbackHello(nonce),
     log: hidingLog(profileDir, (m) => log.write(m)),
     onToolCall: (c) => {
       const sessionId = sessionOfOwner(c.ownerId)
@@ -875,11 +884,28 @@ async function main(): Promise<void> {
   // Agent Profiles (design §4): the store this Host owns. A profile cannot be deleted while a live session holds it
   // (the session's note carries `agentProfileId`) or unfinished orchestration work does (a Job, a Task, an open
   // Dispatch). `orch` is made below; the guard reads it only when a delete is asked.
+  // 설정하기 (sandbox design §6): Codex's Windows sandbox setup for one account, run here, where the sessions start
+  const sandboxSetup = hostSandboxSetup({
+    platform: process.platform,
+    homeDir: os.homedir(),
+    baseEnv: () => hostWorkerBaseEnv(process.env),
+    descriptors: makeDescriptors(process.platform)
+  })
+  // And the readiness Settings › Agent profiles shows beside it, asked as the Host's own sandboxed starts ask it
+  const sandboxReadiness = hostSandboxReadiness({
+    platform: process.platform,
+    homeDir: os.homedir(),
+    baseEnv: () => hostWorkerBaseEnv(process.env),
+    descriptors: makeDescriptors(process.platform),
+    log: (m) => log.write(m)
+  })
   const agentProfiles = createHostAgentProfiles({
     profileDir,
     readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
     inUse: agentProfileInUse({ sessions: () => [...registry.list(), ...procs.list()], orch: () => orch }),
-    log: (m) => log.write(m)
+    log: (m) => log.write(m),
+    ...(sandboxSetup ? { sandboxSetup } : {}),
+    ...(sandboxReadiness ? { sandboxReadiness } : {})
   })
   /** `agent-profiles-touch` as the app would send it, not awaited by the spawn that asks: the command logs its own
    *  failures and answers success, so a stamp never fails or delays a spawn. */
@@ -968,6 +994,9 @@ async function main(): Promise<void> {
       accounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
       chats: rollingWiring?.chats ?? null
     })),
+    // Whether a caller's session runs in the sandbox, from its pty's or chat proc's note: what it starts then starts in
+    // the sandbox too (final fix pass, C3)
+    sessionSandboxed: (sessionId) => sessionSandboxedIn({ ptys: registry, procs }, sessionId),
     // `sessions create` (CLI spec §14): the spawner's path for a terminal session, the chat manager's for
     // a chat one (sessionCreate.ts). Without a spawner both refuse with 6.
     createSession: createHostSessionStarter({
@@ -1189,6 +1218,7 @@ async function main(): Promise<void> {
   }
   try {
     server = await startHostServer({
+      sessionOfToken: (t) => mcpGateway.sessionOfToken(t),
       address: addr.address,
       hostKey,
       bootId,
@@ -1224,7 +1254,8 @@ async function main(): Promise<void> {
           if (sessionEvents && from.greeted && from.role === 'app') sessionEvents.forwarded(m.signal)
           return true
         }
-        return (handlePty?.(m, send, { socket: from.socket }) ?? false) || (handleProc?.(m, send, { socket: from.socket }) ?? false)
+        // The role rides along: a pty-spawn or proc-spawn is served to the app's own connection only (final fix pass, C2)
+        return (handlePty?.(m, send, { socket: from.socket, role: from.role }) ?? false) || (handleProc?.(m, send, { socket: from.socket, role: from.role }) ?? false)
       },
       // Released by the socket number whatever role the socket gave last: a second `hello` can change
       // it, and marks made as an app must still go when that socket closes. A socket that never held a

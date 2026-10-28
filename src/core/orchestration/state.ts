@@ -265,6 +265,8 @@ export function createJob(
     github?: GitHubLifecyclePolicy
     /** The agent profile's real id (Agent Profiles design §6); the caller (run-create) has resolved and checked it. */
     agentProfileId?: string
+    /** Made by a sandboxed session (Job.sandboxed); the caller (run-create) asked. */
+    sandboxed?: boolean
   },
   now: string
 ): Res<Job> {
@@ -282,6 +284,7 @@ export function createJob(
     // 정하기 때문이다
     ...(a.coordinatorAccountId ? { coordinatorAccountId: a.coordinatorAccountId } : {}),
     ...(a.agentProfileId ? { agentProfileId: a.agentProfileId } : {}),
+    ...(a.sandboxed ? { sandboxed: true as const } : {}),
     ...(a.autoDispatch ? { autoDispatch: true } : {}),
     ...(a.schedule ? { schedule: a.schedule } : {}),
     ...(a.pendingStart ? { pendingStart: true } : {}),
@@ -332,6 +335,14 @@ export function releaseJob(s: OrchState, jobId: string): Res<Job> {
  * status 는 createTask 와 **같은 방식**으로 정한다 — 전부 pending 으로 만든 뒤 recomputeReady 에
  * 맡긴다. 그래야 "deps 없는 Task 가 ready" 라는 규칙이 한 곳에만 있다.
  */
+/** Whether a worker of this Task starts in its CLI's sandbox whatever profile it names (final fix pass, C3): the Task
+ *  was added by a sandboxed session, or its Job, the one it defines or the one whose run holds it, was made by one. */
+export function workSandboxed(s: OrchState, task: Task): boolean {
+  if (task.sandboxed === true) return true
+  const jobId = task.jobId ?? s.runs.find((r) => r.id === task.runId)?.jobId
+  return jobId !== undefined && s.jobs.some((j) => j.id === jobId && j.sandboxed === true)
+}
+
 export function startJobRun(s: OrchState, jobId: string, now: string): Res<JobRun> {
   const job = s.jobs.find((j) => j.id === jobId)
   if (!job) return gone(`unknown job: ${jobId}`)
@@ -378,6 +389,7 @@ export function startJobRun(s: OrchState, jobId: string, now: string): Res<JobRu
       : {}),
     ...(t.accountIds !== undefined ? { accountIds: [...t.accountIds] } : {}),
     ...(t.agentProfileId !== undefined ? { agentProfileId: t.agentProfileId } : {}),
+    ...(t.sandboxed ? { sandboxed: true as const } : {}),
     ...(t.validateConfigId !== undefined ? { validateConfigId: t.validateConfigId } : {}),
     ...(t.validateConfigIds?.length ? { validateConfigIds: [...t.validateConfigIds] } : {}),
     ...(t.reviewRequested ? { reviewRequested: true } : {}),
@@ -626,6 +638,8 @@ export function createTask(
     accountIds?: string[]
     /** The agent profile's real id (Agent Profiles design §6); the caller (task-create) has resolved it. */
     agentProfileId?: string
+    /** Added by a sandboxed session (Task.sandboxed); the caller (task-create) asked. */
+    sandboxed?: boolean
     validateConfigId?: string
     validateConfigIds?: string[]
     reviewRequested?: boolean
@@ -658,6 +672,7 @@ export function createTask(
     // Task 와 갈라진다(조건부 전개를 쓰는 이유 그대로).
     ...(a.accountIds?.length ? { accountIds: a.accountIds } : {}),
     ...(a.agentProfileId ? { agentProfileId: a.agentProfileId } : {}),
+    ...(a.sandboxed ? { sandboxed: true as const } : {}),
     ...(a.validateConfigId ? { validateConfigId: a.validateConfigId } : {}),
     ...(a.validateConfigIds?.length ? { validateConfigIds: a.validateConfigIds } : {}),
     ...(a.reviewRequested ? { reviewRequested: a.reviewRequested } : {}),

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { spawnErrorMessage } from './spawnErrors'
+import { sandboxSetupAccountOf, sandboxSetupOutcome, spawnErrorMessage } from './spawnErrors'
 
 describe('spawnErrorMessage', () => {
   // 2026-09-28 화면 검증: 고른 폴더가 시작 전에 사라지면 IPC 원문이 그대로 토스트에 떴다.
@@ -33,6 +33,62 @@ describe('spawnErrorMessage', () => {
     expect(spawnErrorMessage(raw('codex-daemon'))).toEqual({ key: 'session.spawn.enforce.codexDaemon' })
     // The Host's own error, through `astera`
     expect(spawnErrorMessage('ENFORCE_UNAVAILABLE: cli-too-old codex 0.159.0 0.160.0')).toMatchObject({ params: { cli: 'Codex' } })
+  })
+
+  // Sandbox design §6 (E5): a profile's sandbox that cannot be applied refuses the start, and says why in words
+  it('SANDBOX_UNAVAILABLE codes become words', () => {
+    const raw = (code: string): string => `Error invoking remote method 'sessions.spawn': Error: SANDBOX_UNAVAILABLE: ${code}`
+    expect(spawnErrorMessage(raw('windows-setup codex acc_7f3'))).toEqual({ key: 'session.spawn.sandbox.windowsSetup', params: { accountId: 'acc_7f3' } })
+    expect(spawnErrorMessage(raw('codex-daemon codex'))).toEqual({ key: 'session.spawn.sandbox.codexDaemon' })
+    expect(spawnErrorMessage(raw('path-unsafe'))).toEqual({ key: 'session.spawn.sandbox.pathUnsafe' })
+    expect(spawnErrorMessage(raw('git-layout'))).toEqual({ key: 'session.spawn.sandbox.gitLayout' })
+    expect(spawnErrorMessage(raw('not-prepared'))).toEqual({ key: 'session.spawn.sandbox.notPrepared' })
+    expect(spawnErrorMessage(raw('cli-too-old claude 2.1.300 2.1.306'))).toEqual({
+      key: 'session.spawn.sandbox.cliTooOld',
+      params: { cli: 'Claude Code', found: '2.1.300', min: '2.1.306' }
+    })
+    // The Host's own error, through `astera` or a Host-made session, and a code this build has no words for
+    expect(spawnErrorMessage('SANDBOX_UNAVAILABLE: windows-setup codex acc_1')).toMatchObject({ key: 'session.spawn.sandbox.windowsSetup' })
+    expect(spawnErrorMessage(raw('something-new'))).toEqual({ key: 'worktree.error.raw', params: { detail: raw('something-new') } })
+    // Only a refusal that names an account offers the setup, for that account
+    expect(sandboxSetupAccountOf(raw('windows-setup codex acc_7f3'))).toBe('acc_7f3')
+    expect(sandboxSetupAccountOf(raw('path-unsafe'))).toBeNull()
+    expect(sandboxSetupAccountOf('ENFORCE_UNAVAILABLE: codex-daemon')).toBeNull()
+    // Task 6 fix round 1: Codex could not be asked. Its own words, and no setup offered: setting up would not help
+    expect(spawnErrorMessage(raw('windows-check-failed codex acc_7f3'))).toEqual({ key: 'session.spawn.sandbox.windowsCheckFailed' })
+    expect(sandboxSetupAccountOf(raw('windows-check-failed codex acc_7f3'))).toBeNull()
+    // Task 7 fix round 1: a Claude whose version cannot be read or that is not there, and settings that could not be
+    // written, each in its own words
+    expect(spawnErrorMessage(raw('cli-version-unknown claude'))).toEqual({ key: 'session.spawn.sandbox.cliVersionUnknown', params: { cli: 'Claude Code' } })
+    expect(spawnErrorMessage(raw('cli-missing claude'))).toEqual({ key: 'session.spawn.sandbox.cliMissing', params: { cli: 'Claude Code' } })
+    expect(spawnErrorMessage(raw('settings-write-failed'))).toEqual({ key: 'session.spawn.sandbox.settingsWriteFailed' })
+    expect(sandboxSetupAccountOf(raw('cli-missing claude'))).toBeNull()
+  })
+
+  // Task 6 fix round 1: the account id is an id's characters only, whatever quoting or JSON the error was carried in
+  it('reads the account id out of quotes and JSON around the refusal', () => {
+    expect(sandboxSetupAccountOf('{"error":"SANDBOX_UNAVAILABLE: windows-setup codex acc_7f3-x"}')).toBe('acc_7f3-x')
+    expect(sandboxSetupAccountOf("Error: 'SANDBOX_UNAVAILABLE: windows-setup codex acc_1'.")).toBe('acc_1')
+    expect(spawnErrorMessage('{"error":"SANDBOX_UNAVAILABLE: windows-setup codex acc_2"}')).toEqual({
+      key: 'session.spawn.sandbox.windowsSetup',
+      params: { accountId: 'acc_2' }
+    })
+  })
+
+  // After 설정하기: the toast says it was set up, or shows what Codex said, on one line
+  it('a setup that worked says so, and one that did not shows Codex’s output in one line', () => {
+    expect(sandboxSetupOutcome({ ok: true, body: { ok: true, out: 'done' } })).toEqual({ ok: true })
+    expect(sandboxSetupOutcome({ ok: true, body: { ok: false, out: 'Error: the elevation\r\n  was cancelled\n' } })).toEqual({
+      ok: false,
+      line: 'Error: the elevation was cancelled'
+    })
+    // The Host could not be asked, or refused: its sentence
+    expect(sandboxSetupOutcome({ ok: false, code: 'HOST_NOT_RUNNING', message: 'the Host is not running' })).toEqual({ ok: false, line: 'the Host is not running' })
+    const long = sandboxSetupOutcome({ ok: true, body: { ok: false, out: 'x'.repeat(1000) } })
+    expect(long.ok === false && long.line?.length).toBe(300)
+    // Codex said nothing: no line of its own, so the toast says it in the app's words (session.spawn.sandbox.setUpFailed)
+    expect(sandboxSetupOutcome({ ok: true, body: { ok: false, out: '' } })).toEqual({ ok: false, line: null })
+    expect(sandboxSetupOutcome({ ok: true, body: { ok: false, out: ' \n ' } })).toEqual({ ok: false, line: null })
   })
 
   it('응답하지 않는 폴더(CWD_UNREACHABLE)도 경로와 함께 말한다', () => {

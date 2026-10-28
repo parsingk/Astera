@@ -447,6 +447,7 @@ const NOT_FORWARDED = [
   'coordinatorIdle',
   'dispatchTask',
   'createSession',
+  'sessionSandboxed',
   'journalTimeline',
   'github',
   'readUnderstanding',
@@ -581,6 +582,9 @@ const EFFECTFUL: Record<Classified, boolean> = {
   // NOT_FORWARDED as well (CLI spec §14, `sessions create`): the Host's own spawner or chat manager,
   // never the app. It starts a session, so it acts; the wrapper marks it unless nothing started.
   createSession: true,
+  // NOT_FORWARDED as well (final fix pass, C3): a read of this Host's own registries, whose notes say which sessions run
+  // in the sandbox, never the app's. It leaves nothing outside the call.
+  sessionSandboxed: false,
   // NOT_FORWARDED as well (Host journal J7, P10): the Host's own journal read for `runs-follow`, never
   // the app's. A read of a file this Host holds; it leaves nothing outside the call.
   journalTimeline: false,
@@ -715,6 +719,9 @@ export function hostOrchDeps(a: {
   /** The Host's own session starter (`sessions create`, sessionCreate.ts). Absent: the command
    *  answers 409, as a caller that is not the Host. */
   createSession?: OrchServerDeps['createSession']
+  /** Whether a session this Host holds runs in its CLI's sandbox (its note's `sandboxed`, final fix pass C3). Absent: no
+   *  caller reads as sandboxed. */
+  sessionSandboxed?: OrchServerDeps['sessionSandboxed']
   /** The Host journal's rows for one Run's timeline (J7, P10), `hostJournal.timeline`. Absent (a Host
    *  with no journal): `runs-follow` shows the state's events only. */
   journalTimeline?(runId: string, state: OrchState): JobEvent[]
@@ -1321,6 +1328,7 @@ export function hostOrchDeps(a: {
     stopCoordinator,
     ...(a.dispatchTask ? { dispatchTask } : {}),
     ...(a.createSession ? { createSession } : {}),
+    ...(a.sessionSandboxed ? { sessionSandboxed: a.sessionSandboxed } : {}),
     ...(a.journalTimeline ? { journalTimeline: a.journalTimeline } : {}),
     ...(github ? { github } : {}),
     ...(a.readUnderstanding ? { readUnderstanding: a.readUnderstanding } : {}),

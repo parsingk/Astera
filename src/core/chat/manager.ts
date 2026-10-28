@@ -11,6 +11,7 @@
 // watching (main/ipc.ts's chat:event bridge, in Task 6).
 // Lives in core/chat since the chat takeover (Task 1), so the Host runs the same adapters the app does.
 import { randomUUID } from 'node:crypto'
+import os from 'node:os'
 import path from 'node:path'
 import type { Account, ScheduleConfig, SessionInfo } from '../types'
 import type { Provider } from '../providers/meta'
@@ -24,6 +25,13 @@ import { gatewayTokenEnv } from '../extensions/resolve'
 import { applyHiding, type HidingSource } from '../credentials/hiding'
 import { isObserving } from '../audit/policy'
 import { enforceUnavailable, type EnforceStart } from '../audit/enforce'
+import { PreparedLayouts, codexVersionBlocker, fitsOnTheLine, prepareCodexSandbox, sessionSandboxArgs, type CodexVersionProbe, type CodexWindowsReady } from '../sandbox/prepared'
+import { appServerSandboxArgs, codexSandboxEnv } from '../sandbox/codexProfile'
+import { sandboxUnavailable } from '../sandbox/unavailable'
+import { sandboxKindOf } from '../sandbox/coverage'
+import type { ClaudeSandboxStart } from '../sandbox/claudeStart'
+import type { CodexExcludes } from '../sandbox/gitExcludes'
+import type { SandboxScope } from '../sessions/statusline'
 
 export { EXITED_SESSIONS_KEPT }
 
@@ -31,7 +39,7 @@ export { EXITED_SESSIONS_KEPT }
 export const DROPPED_STATES_KEPT = 1024
 import { buildCodexAppServerCommand, buildClaudeChatCommand } from '../sessions/commands'
 import type { PtyMeta } from '../host/protocol'
-import type { ChatAdapter, ChatAnswer, ChatEvent, ChatRequest, ChatState, PermissionMode, PermissionModeChoice, UnattendedPermission } from './types'
+import type { ChatAdapter, ChatAnswer, ChatEvent, ChatRequest, ChatRollRefusedNotice, ChatState, PermissionMode, PermissionModeChoice, UnattendedPermission } from './types'
 import { isUnattendedPermission } from './types'
 import { MAX_SNAPSHOT_PROMPT_CHARS, type RollSpawnExtra } from '../rolling/snapshot'
 import { chatInfoFromNote } from '../sessions/noteInfo'
@@ -72,6 +80,24 @@ export interface ChatManagerDeps {
    *  blocking hook, or null when it cannot (E5). Asked at each spawn the mode is enforce; unset, such a spawn is
    *  refused. The capability refresh the caller awaits first warms the version. */
   enforce?: EnforceStart
+  /** The sandbox (sandbox design §6): the layouts sandboxed prepares read, shared with the process's terminal manager
+   *  (SessionManager.sandboxLayouts), whose prepare a roll's chat respawn goes through. Default: this manager's own. */
+  sandboxLayouts?: PreparedLayouts
+  /** Whether an account's Codex home has its Windows sandbox set up (SpawnChecks.codexWindowsReady's twin). Absent, a
+   *  sandboxed win32 Codex chat is refused. */
+  codexWindowsReady?: CodexWindowsReady
+  /** The sandbox for Claude (core/sandbox/claudeStart.ts), the terminal manager's (SessionManager.claudeSandbox), whose
+   *  prepare a roll's chat respawn goes through. Absent, a sandboxed Claude chat is refused. */
+  claudeSandbox?: ClaudeSandboxStart
+  /** The folder the Host's socket is in, which a sandboxed Codex chat's profile denies on macOS and Linux (SpawnChecks'
+   *  twin). Absent, nothing is denied for it. */
+  hostSocketDir?: string | null
+  /** The codex version question a sandboxed Codex chat asks at its prepare and spawn (final review I2), the terminal
+   *  manager's. Absent, a sandboxed Codex chat is refused as for a version not known. */
+  codexVersion?: CodexVersionProbe
+  /** Writes the copy of the person's global git excludes a sandboxed win32 Codex chat reads (SpawnChecks' twin). Absent,
+   *  none is written. */
+  codexExcludes?: CodexExcludes
 }
 
 /** What `spawn` takes, for a caller that builds it elsewhere (./respawn.ts). */
@@ -88,7 +114,9 @@ interface RetryMaterials {
   env: Record<string, string | undefined>
   meta: PtyMeta
   provider: Provider
-  startArgs: { cwd: string; resumeThreadId?: string; bypass: boolean }
+  /** `sandbox` rides here with the `-c` arguments in `args` and the sandbox's variables in `env`, so a bypass retry of a
+   *  sandboxed chat starts in the sandbox too. */
+  startArgs: { cwd: string; resumeThreadId?: string; bypass: boolean; sandbox?: true }
   /** The handover briefing a rolling respawn carries — for a chat chain it is the *only* delivery
    *  channel (claudeCoordinator.ts / codexCoordinator.ts both skip their own auto-prompt for chat, saying the spawn
    *  carries it). The original `spawn()` continuation only sends this once its `adapter.start`
@@ -154,7 +182,7 @@ interface LiveChatSession {
    *  announced). Cleared on the next `send()`, mirroring the adapters' own `patch({ error: null })` on
    *  a fresh turn — and on the `notice` event itself (useChatState.ts's fold), which is the one this
    *  session actually gets since `respawnWithBypass` calls `adapter.send` directly, never `send()`. */
-  notice: 'bypassed' | null
+  notice: 'bypassed' | ChatRollRefusedNotice | null
   /** design F5: whether this session's exit may be offered the "skip the toolchain and retry" button
    *  — set once, when the exit happens, from `looksLikeRefusal` and `managerDetected` together (never
    *  from either alone: see `handleEvent`'s own comment). `state()` overlays this the same way it
@@ -211,10 +239,58 @@ export class ChatSessionManager {
   private listeners: Array<(sessionId: string, e: ChatEvent) => void> = []
   onExit?: (e: { sessionId: string; exitCode: number }) => void
 
-  constructor(private deps: ChatManagerDeps) {}
+  /** See ChatManagerDeps.sandboxLayouts. */
+  private sandboxLayouts: PreparedLayouts
+
+  constructor(private deps: ChatManagerDeps) {
+    this.sandboxLayouts = deps.sandboxLayouts ?? new PreparedLayouts()
+  }
 
   setOrchEnv(fn: () => ChatOrchEnv | undefined): void {
     this.deps.orchEnv = fn
+  }
+
+  /** The environment a chat child inherits, before the Credentials list and Astera's own variables. */
+  private inheritedEnv(account: Account): Record<string, string | undefined> {
+    return cliEnvFor({
+      base: typeof this.deps.baseEnv === 'function' ? this.deps.baseEnv() : (this.deps.baseEnv ?? process.env),
+      account,
+      descriptor: descriptorOf(this.deps.descriptors, account),
+      homeDir: this.deps.homeDir
+    })
+  }
+
+  /**
+   * What a sandboxed Codex chat's synchronous spawn cannot do itself (sandbox design §6), done first and off the thread:
+   * the folder's git layout read, a path cmd.exe cannot carry refused, on Windows the account's Codex home asked whether
+   * it is set up (`SANDBOX_UNAVAILABLE: windows-setup codex <account>`) and the missing `config.worktree` files made
+   * (prepareCodexSandbox, core/sandbox/prepared.ts). Every caller awaits it before `spawn`, beside the capability refresh;
+   * a roll's respawn is prepared through the terminal manager's prepare instead, into the same store. A sandboxed Claude
+   * chat's sandbox is its settings: its version is asked and the file it takes as its `--settings` written
+   * (claudeStart.ts). Nothing to do for a chat that is not sandboxed.
+   */
+  async prepare(opts: { account: Account; cwd: string; sandbox?: boolean }): Promise<void> {
+    if (opts.sandbox !== true) return
+    if (providerOf(opts.account) === 'claude') {
+      if (!this.deps.claudeSandbox) throw sandboxUnavailable('not-prepared')
+      return this.deps.claudeSandbox.prepare({ accountId: opts.account.id, cwd: opts.cwd, env: this.inheritedEnv(opts.account) })
+    }
+    const prepared = await prepareCodexSandbox({
+      accountId: opts.account.id,
+      cwd: opts.cwd,
+      platform: this.deps.platform,
+      homeDir: this.deps.homeDir,
+      env: this.inheritedEnv(opts.account),
+      ready: this.deps.codexWindowsReady,
+      hostSocketDir: this.deps.hostSocketDir ?? null,
+      version: this.deps.codexVersion,
+      check: (args) => fitsOnTheLine(this.deps.platform, buildCodexAppServerCommand(this.deps.platform, undefined, [], appServerSandboxArgs(args))),
+      ...(this.deps.codexExcludes ? { excludes: this.deps.codexExcludes } : {}),
+      log: this.deps.log
+    })
+    // The other Hosts' folders beside this one's, as they were now, kept for the spawn's profile (final fix pass, part 2, B),
+    // and the copy of the person's git excludes for its environment
+    this.sandboxLayouts.keep(opts.account.id, opts.cwd, prepared.layout, Date.now(), prepared.otherHosts, prepared.excludesFile)
   }
 
   /** Picks the process command and the adapter by the account's provider. Returns at once; the
@@ -262,9 +338,12 @@ export class ChatSessionManager {
     /** The agent profile the session is started from (SessionInfo.agentProfileId): its capabilities are the ones read,
      *  and it is written into the info and the note, as a terminal session's is. The caller refreshes it first. */
     agentProfileId?: string
+    /** Start the chat in its CLI's sandbox (sandbox design §6), as the profile's switch says; `prepare` (or, for a roll,
+     *  the terminal manager's prepare) must have run first. Marked in the info and the note (SessionInfo.sandboxed).
+     *  Codex takes it as the app-server's `-c` and the thread's parameters, Claude as its one `--settings` file. */
+    sandbox?: boolean
   }): SessionInfo {
     const provider = providerOf(opts.account)
-    const descriptor = descriptorOf(this.deps.descriptors, opts.account)
 
     const id = randomUUID()
     const title = opts.title ?? path.basename(opts.cwd)
@@ -275,19 +354,53 @@ export class ChatSessionManager {
     const initialPrompt = opts.initialPrompt
     const unattended: UnattendedPermission = opts.unattendedPermission ?? 'hold'
 
+    // The sandbox (sandbox design §6): the git layout the prepare read. This spawn is synchronous and cannot read git
+    // safely itself, and a profile that does not name the repository's git directories would leave the session unable to
+    // commit, so a sandboxed chat nobody prepared for it is refused rather than started without them (E5)
+    const sandboxed = opts.sandbox === true
+    // What protection it is, said in the info and the note (SessionInfo.sandboxKind): Claude on Windows has deny rules only
+    const sandboxKind = sandboxed ? sandboxKindOf(provider, this.deps.platform) : undefined
+    const sandboxedCodex = sandboxed && provider === 'codex'
+    // The codex floor the prepare asked, asked again: the CLI may have changed since (final review I2)
+    const tooOld = sandboxedCodex ? codexVersionBlocker(this.deps.codexVersion) : null
+    if (tooOld !== null) throw new Error(tooOld)
+    const layout = sandboxedCodex ? this.sandboxLayouts.layoutOf(opts.account.id, opts.cwd, Date.now()) : null
+    if (layout === undefined) throw sandboxUnavailable('not-prepared')
+    // A Claude chat's sandbox is its settings file: the version the prepare asked is asked again (the CLI may have been
+    // updated since); the file itself is looked for below, once the mode is known
+    const sandboxedClaude = sandboxed && provider === 'claude'
+    // Its file is its scope's: the folder's git layout the prepare read, and the environment the chat is built from,
+    // before the hiding (a terminal session's rule)
+    let claudeScope: SandboxScope | undefined
+    if (sandboxedClaude) {
+      const refused = this.deps.claudeSandbox ? this.deps.claudeSandbox.blocker() : sandboxUnavailable('not-prepared').message
+      if (refused !== null) throw new Error(refused)
+      claudeScope = this.deps.claudeSandbox?.scopeOf(opts.account.id, opts.cwd, this.inheritedEnv(opts.account))
+      if (claudeScope === undefined) throw sandboxUnavailable('not-prepared')
+    }
+
     // design F5 fix round 1: BYPASS_ENV rides here, not just on a manual retry's respawn — a rolling
     // respawn whose chain was already granted the bypass has to keep it (opts.startWithBypass, set by
     // index.ts's roll callbacks from `bypassedOf(oldId)`). Still never on a fresh, first spawn: that
     // path never passes `startWithBypass` at all, so S7's default holds exactly as before.
-    const inherited = cliEnvFor({
-      base: typeof this.deps.baseEnv === 'function' ? this.deps.baseEnv() : (this.deps.baseEnv ?? process.env),
-      account: opts.account,
-      descriptor,
-      homeDir: this.deps.homeDir
-    })
+    const inherited = this.inheritedEnv(opts.account)
     // The Credentials list's hidden keys and logins go from what the session inherits, before Astera adds its own
     // (credentials design §5), as a terminal session's do
     if (this.deps.hiding) applyHiding(inherited, this.deps.hiding.get(opts.cwd, id), this.deps.platform)
+    // The profile's places it may not read come from the environment the chat actually starts with, after the hiding;
+    // the app-server takes them without the TUI's `-a never`, which the thread's approvalPolicy carries instead
+    const sandboxArgs = sandboxedCodex
+      ? appServerSandboxArgs(
+          sessionSandboxArgs({
+            platform: this.deps.platform,
+            homeDir: this.deps.homeDir,
+            layout,
+            env: inherited,
+            hostSocketDir: this.deps.hostSocketDir ?? null,
+            otherHostDirs: this.sandboxLayouts.otherHostsOf(opts.account.id, opts.cwd, Date.now())
+          })
+        )
+      : []
     const env: Record<string, string | undefined> = {
       ...inherited,
       ...(opts.startWithBypass ? BYPASS_ENV : {}),
@@ -301,7 +414,8 @@ export class ChatSessionManager {
     }
     // Shared extensions: their environment values only in this process's environment (design D5)
     const caps = this.deps.capabilities?.get(opts.account, opts.agentProfileId) ?? null
-    if (caps) Object.assign(env, caps.env, gatewayTokenEnv(caps))
+    // The workload token goes to every session, shared servers or not.
+    Object.assign(env, caps?.env ?? {}, gatewayTokenEnv(caps ?? { gatewayGrant: [] }))
     const orchEnv = this.deps.orchEnv?.()
     if (orchEnv) {
       env.ASTERA_CLI = orchEnv.cliPath
@@ -309,6 +423,14 @@ export class ChatSessionManager {
       env.ASTERA_SKILLS = orchEnv.skillsPath
       prependToPath(env, path.dirname(orchEnv.cliPath))
     }
+    // npm's cache in TEMP, and on Windows the repository named safe for the sandbox's own account and the copy of the
+    // person's git excludes it can read; after the shared extensions' values, so none of them can undo it (a terminal
+    // session's order). Claude's: the same cache, and on Linux the git excludes srt's placeholders need
+    if (sandboxedCodex) {
+      const excludesFile = this.sandboxLayouts.excludesFileOf(opts.account.id, opts.cwd, Date.now())
+      Object.assign(env, codexSandboxEnv({ platform: this.deps.platform, layout, tmpDir: os.tmpdir(), env, excludesFile }))
+    }
+    if (sandboxedClaude && this.deps.claudeSandbox) Object.assign(env, this.deps.claudeSandbox.env(env))
     // Codex resumes over the app-server protocol (thread/resume, sent by the adapter once the process is
     // up); Claude has no such call, so its resume id is argv (--resume=<id>) instead — buildClaudeChatCommand
     // takes it directly.
@@ -319,11 +441,17 @@ export class ChatSessionManager {
     if (blocked !== null) throw new Error(blocked)
     const enforceArgs = enforced ? (this.deps.enforce?.args(provider) ?? null) : []
     if (enforceArgs === null) throw enforceUnavailable('no-interpreter')
-    const extraArgs = [...(caps?.args ?? []), ...enforceArgs]
+    // A sandboxed Claude chat takes one --settings with the sandbox, and in Enforce the blocking hook with it, in the place
+    // of Enforce's own; a file not written for it refuses the start rather than drop either (E5)
+    const settingsArgs = claudeScope ? (this.deps.claudeSandbox?.chatArgs(enforced, claudeScope) ?? null) : enforceArgs
+    if (settingsArgs === null) throw sandboxUnavailable('not-prepared')
+    const extraArgs = [...(caps?.args ?? []), ...settingsArgs]
     const { file, args } =
       provider === 'claude'
         ? buildClaudeChatCommand(this.deps.platform, { resumeSessionId: resumeThreadId, bypass, model: opts.model, extraArgs })
-        : buildCodexAppServerCommand(this.deps.platform, undefined, extraArgs)
+        : buildCodexAppServerCommand(this.deps.platform, undefined, extraArgs, sandboxArgs)
+    // On Windows a sandboxed app-server whose line would not fit is refused, not launched broken (final fix pass, minor 4)
+    if (sandboxedCodex) fitsOnTheLine(this.deps.platform, { file, args })
     const meta: PtyMeta = {
       kind: 'chat',
       id,
@@ -347,6 +475,8 @@ export class ChatSessionManager {
         // keeps one of this session's calls. The mode the caller's refresh read, as a terminal session's is.
         ...(isObserving(caps?.context.policyMode ?? 'compatibility') ? { observed: true } : {}),
         ...(enforced ? { enforced: true } : {}),
+        // The sandbox, as a terminal session's note has it: a Host handing the session back and a roll's successor read it
+        ...(sandboxed ? { sandboxed: true, sandboxKind } : {}),
         // design F5 fix round 1 (Critical 2): the durable mark, written into the note itself so an
         // app restart's `adopt()` can restore it too, not only `state()`'s in-memory overlay.
         ...(opts.startWithBypass ? { bypassedToolchain: true } : {}),
@@ -385,11 +515,14 @@ export class ChatSessionManager {
       ...(rollAccountIds === undefined ? {} : { rollAccountIds }),
       ...(rollPrompt === undefined ? {} : { rollPrompt }),
       ...(opts.startedBy ? { startedBy: opts.startedBy } : {}),
-      ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {})
+      ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {}),
+      ...(sandboxed ? { sandboxed: true as const, sandboxKind } : {})
     }
 
     const adapter = this.makeAdapter(proc, { mode: 'fresh' }, provider)
-    const startArgs = { cwd: opts.cwd, resumeThreadId, bypass }
+    // A sandboxed thread names the profile and never asks (codexProtocol.ts threadStartParams); unsandboxed, the start
+    // is asked exactly as before. Claude's adapter has nothing to name: its sandbox is the --settings file
+    const startArgs = { cwd: opts.cwd, resumeThreadId, bypass, ...(sandboxedCodex ? { sandbox: true as const } : {}) }
     this.track(id, info, proc, adapter, opts.model ?? null, {
       spawnAt,
       sawLine: watched.sawLine,
@@ -563,6 +696,16 @@ export class ChatSessionManager {
 
   /** Set only during a person's send's synchronous part (`send`). */
   private forPerson = false
+
+  /** A refused roll's reason, for the chat's pane (sandbox design §6, Task 6 fix round 1): kept in `notice`, which
+   *  `state()` overlays for a pane that mounts later, and told as the event an open pane hears, the way the bypass
+   *  notice is. Cleared by the next turn. Unknown id: no-op. */
+  notice(id: string, notice: ChatRollRefusedNotice): void {
+    const live = this.sessions.get(id)
+    if (!live) return
+    live.notice = notice
+    this.handleEvent(id, { type: 'notice', ...notice })
+  }
 
   interrupt(id: string): Promise<void> {
     const live = this.sessions.get(id)
@@ -933,7 +1076,8 @@ export class ChatSessionManager {
     live.proc.onExit(() => {})
     live.proc.onLine(() => {})
 
-    const env = { ...materials.env, ...BYPASS_ENV }
+    // A new token for the new process, the session id the same: the old process's went when it exited (Host registry).
+    const env = { ...materials.env, ...gatewayTokenEnv({ gatewayGrant: materials.env.ASTERA_GATEWAY_GRANT?.split(',').filter((s) => s !== '') ?? [] }), ...BYPASS_ENV }
     // design F5 fix round 1 (Critical 2): the durable mark goes into the note itself, not only the
     // in-memory `bypassed` flag `track()` sets below — the same reasoning `spawn()`'s own
     // `startWithBypass` branch gives. `materials.meta` is the *original* attempt's meta, built before

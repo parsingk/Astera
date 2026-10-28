@@ -5,6 +5,16 @@ import { HOST_FEATURE_PTY_SEQ, type ClientMessage, type HostMessage } from '../c
 import type { PtyRegistry } from './registry'
 import { ENDED_WITHOUT_A_CODE } from './exits'
 
+/** Which connection a message came from, as host/index.ts passes it: the socket's number and the role its hello named
+ *  (server.ts `outwardRole`: a hello with no role reads as `'cli'`). */
+export interface HandlerFrom {
+  socket: number
+  role: 'app' | 'cli' | 'mcp'
+}
+
+/** What a spawn asked of anything but the app is answered with (final fix pass, C2). */
+export const PTY_SPAWN_APP_ONLY = 'pty-spawn is served to the Astera app only'
+
 /**
  * Returns a handler for one connection. It reports whether it owned the message, so the server can
  * fall through to its own handshake messages for anything else.
@@ -12,7 +22,7 @@ import { ENDED_WITHOUT_A_CODE } from './exits'
  * `send` reaches the client that asked; `broadcast` reaches every connected client. Output and exit
  * broadcast because the app that attaches after a restart is not the app that spawned.
  */
-export type PtyHandler = ((m: ClientMessage, send: (h: HostMessage) => void, from?: { socket: number }) => boolean) & {
+export type PtyHandler = ((m: ClientMessage, send: (h: HostMessage) => void, from?: HandlerFrom) => boolean) & {
   /** A socket closed: every pty it paused and did not resume is resumed, unless another socket still holds it paused
    *  (remote runtime design §3.7, N2). A dead app no longer leaves its terminals frozen. */
   socketGone(socket: number): void
@@ -44,9 +54,17 @@ export function attachPtyHost(a: {
   const pausedBy = new Map<string, Set<number>>()
   a.registry.onExit((id) => void pausedBy.delete(id))
 
-  const handler = (m: ClientMessage, send: (h: HostMessage) => void, from?: { socket: number }): boolean => {
+  const handler = (m: ClientMessage, send: (h: HostMessage) => void, from?: HandlerFrom): boolean => {
     switch (m.t) {
       case 'pty-spawn': {
+        // Any program, with any arguments, environment and folder, outside every sandbox: the app's own connection asks
+        // for it, and nothing else may (final fix pass, C2). A CLI, an MCP client and a sender not named are refused
+        // before anything opens. The role is the one the socket's hello named, so this keeps a client that says what it
+        // is out; the sandboxes keep a session away from the socket itself.
+        if (from?.role !== 'app') {
+          send({ t: 'pty-failed', id: m.id, error: PTY_SPAWN_APP_ONLY })
+          return true
+        }
         const res = a.registry.open({ id: m.id, file: m.file, args: m.args, opts: m.opts, meta: m.meta })
         send(res.ok ? { t: 'pty-spawned', id: m.id, pid: res.pid } : { t: 'pty-failed', id: m.id, error: res.error })
         return true

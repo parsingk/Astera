@@ -312,6 +312,25 @@ describe('createHostOrch', () => {
       expect(JSON.stringify((await create('cli')).body)).not.toContain('registered project')
       expect(createSession).not.toHaveBeenCalled()
     })
+    // Final fix pass (C3): the Host's lookup of whether a caller's session runs in the sandbox reaches the command layer,
+    // and a sandboxed caller's session is asked for in the sandbox; another caller's is not
+    it('a sandboxed caller’s sessions-create asks for a sandboxed session, through the Host’s lookup', async () => {
+      const createSession = vi.fn(async () => ({ id: 'ses_new', kind: 'terminal' as const, title: 't', accountId: 'acc1', cwd: 'D:/p', alive: true, state: 'unknown' as const }))
+      await fs.writeFile(
+        path.join(dir, 'accounts.json'),
+        JSON.stringify({ accounts: [{ id: 'acc1', label: '일', configDir: path.join(dir, 'cfg', 'acc1'), color: '#fff', createdAt: 'T', provider: 'claude' }] }),
+        'utf8'
+      )
+      const orch = orchOver({ createSession, hasApp: () => false, sessionSandboxed: (id) => id === 'ses_box' })
+      await orch.ready()
+      const create = (sessionId: string): ReturnType<typeof orch.call> =>
+        orch.call({ cmd: 'sessions-create', args: { account: 'acc1', cwd: 'D:/p' }, sessionId, from: caller('cli') })
+      const boxed = await create('ses_box')
+      expect(boxed.status, JSON.stringify(boxed.body)).toBe(200)
+      expect((await create('ses_open')).status).toBe(200)
+      expect((createSession.mock.calls[0] as unknown as [Record<string, unknown>])[0]).toMatchObject({ sandbox: true })
+      expect((createSession.mock.calls[1] as unknown as [Record<string, unknown>])[0]).not.toHaveProperty('sandbox')
+    })
     it('an unreadable settings file refuses', async () => {
       await settings('{not json')
       const r = await orchOver().call({ cmd: 'jobs-list', args: {}, sessionId: '', from: caller('mcp') })
@@ -1108,7 +1127,7 @@ describe('agent profiles', () => {
   // The person's decision on the final review (2026-10-22): an agent session's shell, an MCP client and a plugin make
   // work as a profile that runs without permission checks only while app-settings.json already skips them, read per call
   it('refuses a profile that runs without permission checks to an agent, MCP and a plugin while the app-wide mode asks', async () => {
-    await writeAgentProfiles(dir, { version: 1, profiles: [{ id: 'ap_b', name: 'Unattended', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'bypass', createdAt: NOW, updatedAt: NOW }] })
+    await writeAgentProfiles(dir, { version: 1, profiles: [{ id: 'ap_b', name: 'Unattended', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'bypass', sandbox: false, createdAt: NOW, updatedAt: NOW }] })
     const settings = (extra: object): Promise<void> => fs.writeFile(path.join(dir, 'app-settings.json'), JSON.stringify({ mcpAccess: 'control', ...extra }))
     const orch = orchOver()
     const create = (from: OrchCaller, sessionId = ''): ReturnType<typeof orch.call> =>
@@ -1135,7 +1154,7 @@ describe('agent profiles', () => {
   // Third follow-up, the person's decision: running a person's Job made as such a profile (jobs run, MCP run_job) starts
   // work as it, so an agent's shell and an MCP client are refused while the app-wide mode asks; the person is not asked
   it('refuses an agent’s jobs run and MCP run_job of a person’s Job made as such a profile while the app-wide mode asks', async () => {
-    await writeAgentProfiles(dir, { version: 1, profiles: [{ id: 'ap_b', name: 'Unattended', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'bypass', createdAt: NOW, updatedAt: NOW }] })
+    await writeAgentProfiles(dir, { version: 1, profiles: [{ id: 'ap_b', name: 'Unattended', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'bypass', sandbox: false, createdAt: NOW, updatedAt: NOW }] })
     const settings = (extra: object): Promise<void> => fs.writeFile(path.join(dir, 'app-settings.json'), JSON.stringify({ mcpAccess: 'control', ...extra }))
     const orch = orchOver()
     const app: OrchCaller = { role: 'app', toOthers: () => {} }

@@ -482,7 +482,7 @@ const LISTED_TOOLS: ToolDef[] = [
     title: 'List sessions',
     readOnly: true,
     cmd: 'sessions-list',
-    description: `The terminal and chat sessions Astera holds, live ones first: the person's own terminals included, and every worker and coordinator. Filter by status (alive, ended, or a terminal's working, waiting or unknown), by the provider of the session's account, and by project. ${SESSIONS_READ}`,
+    description: `The terminal and chat sessions Astera holds, live ones first: the person's own terminals included, and every worker and coordinator. Each says whether it runs in its agent CLI's own sandbox (sandboxed, sandboxKind). Filter by status (alive, ended, or a terminal's working, waiting or unknown), by the provider of the session's account, and by project. ${SESSIONS_READ}`,
     inputSchema: {
       status: z.enum(['alive', 'ended', 'working', 'waiting', 'unknown']).optional(),
       provider: z.enum(['claude', 'codex']).optional(),

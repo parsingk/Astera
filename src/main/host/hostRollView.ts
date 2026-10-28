@@ -12,6 +12,7 @@
 import type { HostMessage } from '../../core/host/protocol'
 import type { OrchState } from '../../core/orchestration/state'
 import type { RollStateEvent, SessionInfo } from '../../core/types'
+import type { ChatRollRefusedNotice } from '../../core/chat/types'
 import { onceBounded } from '../../core/bounded'
 
 type Exit = { sessionId: string; exitCode: number }
@@ -64,6 +65,9 @@ export function createHostRollView(d: {
     opts: { orchestration: false; renderer?: false }
   ): void
   log(m: string): void
+  /** A Host roll of a chat chain was refused (the `chat-notice` push, Task 6 fix round 1): its reason, for the chat
+   *  manager to show as the chat's notice. Absent: ignored. */
+  chatNotice?(sessionId: string, notice: ChatRollRefusedNotice): void
   /** Whether the app's orchestration mirror still names this session (orchHoldsSession). Absent: never. */
   orchHolds?(sessionId: string): boolean
   /** Whether this session is one the app holds now. Absent: always, and a push's adoption then counts
@@ -135,6 +139,10 @@ export function createHostRollView(d: {
         // The mirror took this push in the listener startHostClient subscribed first; the poll covers
         // any order in which it has not yet.
         for (const check of [...settling.values()]) safe('checking the mirror', check)
+        return
+      }
+      if (m.t === 'chat-notice') {
+        safe('handing on a chat notice', () => d.chatNotice?.(m.sessionId, m.notice))
         return
       }
       if (m.t === 'roll-state') {

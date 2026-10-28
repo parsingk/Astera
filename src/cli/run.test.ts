@@ -27,6 +27,7 @@ import {
   callHost,
   timedCall,
   connectFailureEnd,
+  loopbackToTry,
   SILENT_HOST_CODE,
   resolveGuidePath,
   readGuide,
@@ -722,6 +723,23 @@ describe('닿지 못했을 때의 코드', () => {
 
 // F44: 파일로 답하는 길이 서 있는 전제는 "아무도 이 파일을 쓰고 있지 않다" 하나다. 접속 실패
 // 세 가지 중 그것을 뜻하는 것은 하나뿐인데, 셋 다 파일로 떨어지고 있었다.
+describe('loopbackToTry — only a pipe nobody could reach turns to the loopback', () => {
+  const url = 'http://127.0.0.1:4711'
+  const token = 'T'.repeat(43)
+  it('switches for an unreachable pipe with a well-formed address and a token', () => {
+    expect(loopbackToTry({ error: 'unreachable' }, url, token)).toEqual({ url, token })
+  })
+  it('never switches for a Host that answered wrongly: timeout, protocol, impostor', () => {
+    for (const error of ['timeout', 'protocol', 'impostor'] as const) expect(loopbackToTry({ error }, url, token), error).toBeNull()
+  })
+  it('never switches without the token, without the address, or for an address that is not http://127.0.0.1:<port>', () => {
+    expect(loopbackToTry({ error: 'unreachable' }, url, undefined)).toBeNull()
+    expect(loopbackToTry({ error: 'unreachable' }, undefined, token)).toBeNull()
+    for (const bad of ['', 'http://evil.example:80', 'https://127.0.0.1:80', 'http://127.0.0.1:99999', 'http://127.0.0.1:80/x'])
+      expect(loopbackToTry({ error: 'unreachable' }, bad, token), bad).toBeNull()
+  })
+})
+
 describe('connectFailureEnd — 접속 실패 셋을 가른다', () => {
   const addr = '\\\\.\\pipe\\astera-host-x'
 
@@ -1270,6 +1288,25 @@ describe('callHost — 명령 하나를 Host 에 묻는다', () => {
     const call = (f.sent[0] as { call: string }).call
     f.answer({ t: 'orch-result', call, status: 200, body: { jobs: [] } })
     expect(await p).toEqual({ status: 200, body: { jobs: [] } })
+  })
+
+  // Final review I1: callHost sends the token it is handed (workloadTokenFor decides, for the Host this call goes to), never
+  // one it reads from the environment itself
+  it('sends the workload token it is handed, and omits the field when it is handed none', () => {
+    const saved = process.env.ASTERA_GATEWAY_TOKEN
+    try {
+      process.env.ASTERA_GATEWAY_TOKEN = 'E'.repeat(43)
+      const sentWith = (token: string | undefined): ClientMessage => {
+        const f = fakeConn()
+        void callHost({ conn: f.conn, cmd: 'status', args: {}, sessionId: 's', timeoutMs: 1000, ...(token === undefined ? {} : { token }) })
+        return f.sent[0]
+      }
+      expect(sentWith('T'.repeat(43))).toMatchObject({ token: 'T'.repeat(43) })
+      expect('token' in sentWith(undefined)).toBe(false)
+    } finally {
+      if (saved === undefined) delete process.env.ASTERA_GATEWAY_TOKEN
+      else process.env.ASTERA_GATEWAY_TOKEN = saved
+    }
   })
 
   // 답은 자기 call 을 이름으로 부른다 — 남의 것을 자기 답으로 읽으면 안 된다.

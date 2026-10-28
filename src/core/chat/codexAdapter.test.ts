@@ -31,6 +31,12 @@ const replyWith = (p: { written: string[] }, method: string, resultLine: string)
   return JSON.stringify({ id: r.id, result: body.result })
 }
 const tick = () => new Promise<void>((r) => setTimeout(r, 0))
+/** A thread answer with `activePermissionProfile` set to `profile`, or left out when it is undefined. */
+const withProfile = (line: string, profile: unknown): string => {
+  const m = JSON.parse(line) as { result: Record<string, unknown> }
+  const { activePermissionProfile: _, ...rest } = m.result
+  return JSON.stringify({ ...m, result: profile === undefined ? rest : { ...rest, activePermissionProfile: profile } })
+}
 
 async function started(): Promise<{ p: ReturnType<typeof fakeProc>; a: ReturnType<typeof createCodexAdapter>; events: ChatEvent[] }> {
   const p = fakeProc()
@@ -93,6 +99,48 @@ describe('createCodexAdapter — handshake', () => {
     expect(lastReq(p)).toMatchObject({ method: 'thread/resume', params: { threadId: '01a0a6cd-7f52-7690-a1ae-d7c9cb688c35', excludeTurns: true, approvalPolicy: 'never', sandbox: 'danger-full-access' } })
     p.feed(replyWith(p, 'thread/resume', F.THREAD_RESUME_RESULT))
     await starting
+    expect(a.state().status).toBe('idle')
+  })
+  // Sandbox design §6: a chat whose app-server has the Astera permission profile names it on its thread, start or resume
+  it('a sandboxed start names the profile on thread/start and thread/resume, and never asks', async () => {
+    for (const resumeThreadId of [undefined, '01a0a6cd-7f52-7690-a1ae-d7c9cb688c35']) {
+      const p = fakeProc()
+      const a = createCodexAdapter({ proc: p, mode: { mode: 'fresh' }, version: '1', log: () => {}, requestTimeoutMs: 30_000 })
+      const starting = a.start({ cwd: 'D:/x', bypass: false, sandbox: true, ...(resumeThreadId ? { resumeThreadId } : {}) })
+      await tick(); p.feed(replyWith(p, 'initialize', F.INITIALIZE_RESULT)); await tick()
+      p.feed(replyWith(p, 'collaborationMode/list', F.COLLAB_MODES_RESULT)); p.feed(replyWith(p, 'model/list', F.MODEL_LIST_RESULT)); await tick()
+      const req = lastReq(p)
+      expect(req.method).toBe(resumeThreadId ? 'thread/resume' : 'thread/start')
+      expect(req.params).toMatchObject({ cwd: 'D:/x', approvalPolicy: 'never', permissions: 'astera' })
+      expect(req.params).not.toHaveProperty('sandbox')
+      p.feed(withProfile(replyWith(p, req.method, resumeThreadId ? F.THREAD_RESUME_RESULT : F.THREAD_START_RESULT), { id: 'astera', extends: ':workspace' }))
+      await starting
+    }
+  })
+
+  // Final review I2: a sandboxed chat is not taken on faith: the answer to thread/start and thread/resume must say the
+  // thread runs under the Astera profile (`activePermissionProfile.id`, measured present, inventory §23.3). Anything else,
+  // another profile or none, stops the chat with SANDBOX_UNAVAILABLE and kills its app-server
+  it('a sandboxed start whose thread does not run under the Astera profile is stopped', async () => {
+    for (const resumeThreadId of [undefined, '01a0a6cd-7f52-7690-a1ae-d7c9cb688c35'])
+      for (const profile of [undefined, { id: 'other' }, 'astera']) {
+        const p = fakeProc()
+        const a = createCodexAdapter({ proc: p, mode: { mode: 'fresh' }, version: '1', log: () => {}, requestTimeoutMs: 30_000 })
+        const events: ChatEvent[] = []
+        a.on((e) => events.push(e))
+        const starting = a.start({ cwd: 'D:/x', bypass: false, sandbox: true, ...(resumeThreadId ? { resumeThreadId } : {}) })
+        await tick(); p.feed(replyWith(p, 'initialize', F.INITIALIZE_RESULT)); await tick()
+        p.feed(replyWith(p, 'collaborationMode/list', F.COLLAB_MODES_RESULT)); p.feed(replyWith(p, 'model/list', F.MODEL_LIST_RESULT)); await tick()
+        const req = lastReq(p)
+        p.feed(withProfile(replyWith(p, req.method, resumeThreadId ? F.THREAD_RESUME_RESULT : F.THREAD_START_RESULT), profile))
+        await expect(starting, JSON.stringify(profile)).rejects.toThrow(/^SANDBOX_UNAVAILABLE: profile-not-active codex$/)
+        expect(p.kill).toHaveBeenCalled()
+        expect(events.some((e) => e.type === 'ready')).toBe(false)
+      }
+  })
+
+  it('an unsandboxed start does not ask the thread for a profile', async () => {
+    const { a } = await started()
     expect(a.state().status).toBe('idle')
   })
   it('a refused collaborationMode/list is not fatal — start still resolves, and plan mode sends without an effort', async () => {

@@ -34,6 +34,6 @@ describe('cliEnvFor', () => {
 // Gateway token on to every session it starts
 describe('cliEnvFor, the Gateway variables', () => {
   it('drops an inherited Gateway token and grant', () => {
-    expect(MANAGED_ENV_KEYS).toEqual(expect.arrayContaining(['ASTERA_GATEWAY_TOKEN', 'ASTERA_GATEWAY_GRANT']))
+    expect(MANAGED_ENV_KEYS).toEqual(expect.arrayContaining(['ASTERA_GATEWAY_TOKEN', 'ASTERA_GATEWAY_GRANT', 'ASTERA_LOOPBACK']))
   })
 })

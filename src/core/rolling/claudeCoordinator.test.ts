@@ -558,7 +558,7 @@ describe('RollingCoordinator', () => {
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await flush()
     await flush()
-    expect(prepared).toEqual([[expect.objectContaining({ id: 'a2' }), h.info1.cwd, 'ap_x']])
+    expect(prepared).toEqual([[expect.objectContaining({ id: 'a2' }), h.info1.cwd, 'ap_x', false]])
     expect(h.spawnedOpts[0].agentProfileId).toBe('ap_x')
     const pPrepared: unknown[][] = []
     const p = harness({ prepareSpawn: async (...a) => { pPrepared.push(a) } })
@@ -569,6 +569,29 @@ describe('RollingCoordinator', () => {
     await flush()
     expect(pPrepared[0][2]).toBeUndefined()
     expect(p.spawnedOpts[0]).not.toHaveProperty('agentProfileId')
+  })
+
+  // Sandbox design §6: the successor of a session started in the sandbox starts in it too (codexCoordinator.test.ts's own
+  // test, same contract): the flag rides the chain, and the preparation is told so it reads the folder before the kill
+  it('a roll keeps the session’s sandbox, for the respawn and its preparation', async () => {
+    const prepared: unknown[][] = []
+    const h = harness({ prepareSpawn: async (...a) => { prepared.push(a) } })
+    h.payloads.set('s1', payload(97))
+    h.coord.register({ ...h.info1, sandboxed: true })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    await flush()
+    expect(prepared).toEqual([[expect.objectContaining({ id: 'a2' }), h.info1.cwd, undefined, true]])
+    expect(h.spawnedOpts[0]).toMatchObject({ sandbox: true })
+    const pPrepared: unknown[][] = []
+    const p = harness({ prepareSpawn: async (...a) => { pPrepared.push(a) } })
+    p.payloads.set('s1', payload(97))
+    p.coord.register(p.info1)
+    p.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    await flush()
+    expect(pPrepared[0][3]).toBe(false)
+    expect(p.spawnedOpts[0]).not.toHaveProperty('sandbox')
   })
 
   it('활성 체인의 claude 세션 ID로 live 세션을 찾는다 (resume 가드)', async () => {
@@ -3715,6 +3738,50 @@ describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
     expect(h.events).toEqual(['copy'])
     expect(h.sent.at(-1)?.payload).toMatchObject({ sessionId: 's1', state: 'waiting' })
     expect(logs.join('\n')).toMatch(/spawn refused: app-settings\.json cannot be read/)
+  })
+
+  // Task 7 fix round 1: a refused sandboxed respawn says why in the tab that is still running, as a Codex roll does
+  // (codexCoordinator.test.ts, which also pins the once-per-reason the two share): the refusal's own words after "could
+  // not move to the next account", and the roll waits as any refused one does. A refusal that is not the sandbox's is only
+  // logged, as before
+  it('a sandbox refusal is written into the live tab, and the roll waits', async () => {
+    const told: [string, unknown][] = []
+    const h = harness({
+      prepareSpawn: async () => {
+        throw new Error('SANDBOX_UNAVAILABLE: cli-too-old claude 2.1.305 2.1.306')
+      },
+      tell: (id, reason) => told.push([id, reason])
+    })
+    h.payloads.set('s1', payload(100))
+    h.coord.register({ ...h.info1, sandboxed: true })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    await flush()
+    expect(h.events).toEqual(['copy'])
+    expect(h.sent.at(-1)?.payload).toMatchObject({ sessionId: 's1', state: 'waiting' })
+    expect(told).toEqual([
+      [
+        's1',
+        {
+          key: 'session.roll.sandbox.refused',
+          params: { reason: { key: 'session.spawn.sandbox.cliTooOld', params: { cli: 'Claude Code', found: '2.1.305', min: '2.1.306' } } }
+        }
+      ]
+    ])
+    expect(h.spawned).toEqual([])
+    const other: unknown[] = []
+    const o = harness({
+      prepareSpawn: async () => {
+        throw new Error('app-settings.json cannot be read')
+      },
+      tell: (...a) => other.push(a)
+    })
+    o.payloads.set('s1', payload(100))
+    o.coord.register(o.info1)
+    o.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    await flush()
+    expect(other).toEqual([])
   })
 
   it('the respawn carries rolledFrom and a snapshot on the new index awaiting its prompt', async () => {

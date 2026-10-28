@@ -67,6 +67,16 @@ describe('hostTarget', () => {
   it('an empty variable counts as unset', () => {
     expect(hostTarget({ ...base, env: { ...ROAMING, ASTERA_PROFILE_DIR: '', ASTERA_HOST: '' } })).toEqual(hostTarget({ ...base, env: ROAMING }))
   })
+
+  // Final fix pass (C2): no variable but ASTERA_HOST overrides the derived address; an ASTERA_SANDBOX_HOST an earlier
+  // build of this branch planted is not read
+  it('takes ASTERA_HOST, else the derived address, and reads no ASTERA_SANDBOX_HOST', () => {
+    const mac = { platform: 'darwin' as const, home: '/Users/me', tmpDir: '/private/tmp/claude' }
+    const derived = hostTarget({ ...mac, env: { ASTERA_PROFILE_DIR: '/Users/me/p' } })
+    expect(derived.address).toMatch(/^\/private\/tmp\/claude\/astera-host-[0-9a-f]{12}-v\d+\/sock$/)
+    expect(hostTarget({ ...mac, env: { ASTERA_PROFILE_DIR: '/Users/me/p', ASTERA_SANDBOX_HOST: '/var/f/T/astera-host-k-v4/sock' } })).toEqual(derived)
+    expect(hostTarget({ ...mac, env: { ASTERA_PROFILE_DIR: '/Users/me/p', ASTERA_HOST: '/mine/sock' } })).toEqual({ address: '/mine/sock', profileDir: '/Users/me/p' })
+  })
 })
 
 describe('profilePath', () => {

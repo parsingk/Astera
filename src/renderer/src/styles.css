@@ -754,6 +754,8 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .tab-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 /* The rolling-active session marker — a small, restrained, non-interactive mark; the account chain is exposed only through the title tooltip */
 .tab-roll { flex: none; opacity: 0.65; cursor: default; user-select: none; }
+/* A session in its CLI's sandbox (sandbox design §6): drawn like the rolling marker beside it */
+.tab-sandbox { flex: none; display: inline-flex; opacity: 0.65; cursor: default; user-select: none; }
 /* Session working: a spinner in the account colour. Larger than a dot (10px) with a bright semicircular
    arc turning, so it reads clearly. The colour is set inline (a faint track plus full colour on
    top/right = a bright 180° arc). */
@@ -1300,6 +1302,9 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .security-table td.is-partial { color: var(--warn); }
 .security-table td.is-none { color: var(--text-faint); }
 .security-table td.is-enforced { color: var(--danger); font-weight: 600; }
+/* The sandbox table: what it lets through (the network) is neutral, not the green that reads as covered */
+.security-table td.is-allowed { color: var(--text); }
+.security-table th .security-row-note { display: block; font-weight: normal; font-size: 11px; color: var(--text-faint); }
 /* A rule: its place, its three fields, then up, down and remove, as an account row of an agent profile reads. The list's
    own numbers are its places, so the <ol>'s markers and indent are taken off. */
 .security-rules { margin: 0; padding: 0; list-style: none; }

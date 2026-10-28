@@ -41,6 +41,16 @@ describe('chatBannerFor', () => {
     expect(chatBannerFor({ ...base, notice: 'bypassed', outlivesApp: false })).toEqual({ kind: 'notice', key: 'bypassed' })
   })
 
+  // Task 6 fix round 1: a refused roll's reason. Over the turn's error (the usage limit that made the roll try), since
+  // it says what the person has to do for the session to go on; under a request, which needs an answer now
+  it('a refused roll’s notice shows its reason over the turn’s error, under a request', () => {
+    const notice = { key: 'rollRefused' as const, reason: { key: 'session.roll.sandbox.windowsSetup' as const, params: { account: 'Codex B' } } }
+    const banner = { kind: 'notice', key: 'rollRefused', reason: notice.reason }
+    expect(chatBannerFor({ ...base, notice })).toEqual(banner)
+    expect(chatBannerFor({ ...base, notice, error: 'rate limited' })).toEqual(banner)
+    expect(chatBannerFor({ ...base, notice, request: approval })).toEqual({ kind: 'request', request: approval })
+  })
+
   // codex writes a failed turn into its rollout, and the thread now draws it (convTypes' failure part):
   // the same sentence above the composer said it twice. A failure the thread does not show (Claude's)
   // keeps its notice.

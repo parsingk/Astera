@@ -5,7 +5,9 @@ import { es } from './messages/es'
 import { isPseudoLocalization, pseudoize } from './pseudo'
 
 export type MessageKey = keyof typeof ko
-export type MessageParams = Record<string, string | number>
+/** A value may itself be a Message, worded in the same language where it is put in: a refused roll's line carries the
+ *  refusal's own sentence (session.roll.sandbox.refused). */
+export type MessageParams = Record<string, string | number | Message>
 
 /** A catalog is read as partial everywhere except where ko and en are declared. Two of the four are
  *  complete and two are not, so the lookup has to cope with a miss — typing it as partial here is what
@@ -52,14 +54,20 @@ export interface Message {
 }
 
 export function t(lang: Lang, key: MessageKey, params?: MessageParams): string {
+  const out = wordsOf(lang, key, params)
+  return isPseudoLocalization() ? pseudoize(out) : out
+}
+
+/** The sentence, before pseudo-localisation, which `t` applies once to the whole line, a Message inside included. */
+function wordsOf(lang: Lang, key: MessageKey, params?: MessageParams): string {
   // requested → en → ko. Korean is last because it is the source catalog and therefore cannot be
   // missing a key; English sits in front of it so a gap in ja or es shows English rather than Korean.
   const template: string = CATALOGS[lang].messages[key] ?? en[key] ?? ko[key]
-  // A placeholder with no value is left as it is rather than erased (m is returned)
-  const out = !params
-    ? template
-    : template.replace(/\{(\w+)\}/g, (m, name: string) =>
-        name in params ? String(params[name]) : m
-      )
-  return isPseudoLocalization() ? pseudoize(out) : out
+  if (!params) return template
+  // A placeholder with no value is left as it is rather than erased (m is returned); a Message is worded in this language
+  return template.replace(/\{(\w+)\}/g, (m, name: string) => {
+    if (!(name in params)) return m
+    const v = params[name]
+    return typeof v === 'object' ? wordsOf(lang, v.key, v.params) : String(v)
+  })
 }

@@ -136,7 +136,18 @@ export interface SessionInfo {
    *  Written into the pty's note at spawn like startedBy, so it survives a Host handing the session back; absent on a
    *  session started without one and on every note written before profiles. */
   agentProfileId?: string
+  /** The session runs in its CLI's own sandbox (sandbox design §6), because its agent profile's switch is on. Written
+   *  into the pty's or chat proc's note at spawn like Enforce's `enforced`, so it survives a Host handing the session
+   *  back and a roll's successor starts in the sandbox too; absent on every session started outside it. */
+  sandboxed?: true
+  /** What protection `sandboxed` gives, set beside it by the session manager that knows the OS and the CLI: `sandbox`, the
+   *  CLI's own sandbox; `deny-only`, Claude Code on Windows, which has none and gets only deny rules for its file tools
+   *  (its shell is not restricted). In the note too, so a session taken back says the same. Absent when not sandboxed. */
+  sandboxKind?: SandboxKind
 }
+
+/** SessionInfo.sandboxKind (core/sandbox/coverage.ts sandboxKindOf decides it). */
+export type SandboxKind = 'sandbox' | 'deny-only'
 
 /** The stored settings the resume modal reads to seed its checkboxes.
  *  A read-only snapshot — what actually gets enabled is settled by the modal and passed down as
@@ -1984,6 +1995,8 @@ export interface AgentProfileFields {
   /** Shared MCP entry ids the profile does not get. */
   mcpExclude?: string[]
   permission?: ProfilePermission
+  /** Its sessions start in their CLI's own sandbox (sandbox design §6). Off when a new profile leaves it out. */
+  sandbox?: boolean
 }
 
 /** Settings › Agent profiles and the profile pickers (Agent Profiles design §8): the Host's `agent-profiles-*` commands,
@@ -1996,6 +2009,14 @@ export interface AgentProfilesApi {
   restore(id: string): Promise<PluginsCallAnswer>
   /** Refused with reason `in-use` while unfinished work or a live session holds the profile. */
   remove(id: string): Promise<PluginsCallAnswer>
+  /** 설정하기 (sandbox design §6): sets up the Windows sandbox of the one Codex account of the profile a sandboxed start
+   *  was refused for (`SANDBOX_UNAVAILABLE: windows-setup codex <accountId>`), bringing up Windows' administrator
+   *  prompt once. The body is `{ ok, out }`: whether Codex's setup succeeded, and what it said. */
+  sandboxSetup(profileId: string, accountId: string): Promise<PluginsCallAnswer>
+  /** Whether each Codex account of the profile has its Windows sandbox set up, for Settings › Agent profiles (Task 8):
+   *  `{ accounts: [{ accountId, state }] }`, `state` ready, not-set-up or check-failed, in the profile's order. Codex is
+   *  asked the way a sandboxed start asks it, which never brings up the administrator prompt. 501 off Windows. */
+  sandboxReadiness(profileId: string): Promise<PluginsCallAnswer>
 }
 
 /** What Audit Logs asks for (observe mode design §8, §11): audit-list's and audit-summary's filters, the period's start,

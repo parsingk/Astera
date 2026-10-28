@@ -19,6 +19,8 @@ import { makeDescriptors } from '../core/providers/descriptor'
 import { previewShotsDir } from '../core/preview/shotsDir'
 import type { PromptWriteEvent } from '../core/orchestration/exec/coordinator'
 import { ENTER_QUIET_MS } from '../core/sessions/sessionDriver'
+import { gitLayoutOf } from '../core/sandbox/gitLayout'
+import { codexExcludesFileOf } from '../core/sandbox/gitExcludes'
 
 const NOW = '2026-09-24T00:00:00.000Z'
 let dir: string
@@ -46,6 +48,10 @@ const rig = (over: {
   worktrees?: HostSpawnerDeps['worktrees']
   onPromptWrite?: HostSpawnerDeps['onPromptWrite']
   touchAgentProfile?: HostSpawnerDeps['touchAgentProfile']
+  codexNoDaemon?: HostSpawnerDeps['codexNoDaemon']
+  codexWindowsReady?: HostSpawnerDeps['codexWindowsReady']
+  claudeVersion?: HostSpawnerDeps['claudeVersion']
+  codexVersion?: HostSpawnerDeps['codexVersion']
 } & LocateHooks = {}) => {
   const spawned: Spawned[] = []
   const logs: string[] = []
@@ -68,6 +74,16 @@ const rig = (over: {
     appKeepsWorktrees: over.appKeepsWorktrees ?? (() => false),
     onPromptWrite: over.onPromptWrite,
     touchAgentProfile: over.touchAgentProfile,
+    ...(over.codexNoDaemon ? { codexNoDaemon: over.codexNoDaemon } : {}),
+    // Every Windows home reads set up unless a case says otherwise: the real question runs the codex on this machine
+    codexWindowsReady: over.codexWindowsReady ?? (async () => 'ready'),
+    ...(over.claudeVersion ? { claudeVersion: over.claudeVersion } : {}),
+    // codex at the sandbox's floor unless a case says otherwise: the real probe runs the codex on this machine
+    codexVersion: over.codexVersion ?? Object.assign(() => '0.160.0', { warm: async () => {} }),
+    // A sandboxed Claude start makes npm's cache in the temp folder and asks git for the excludes file: the fixture's
+    // folder and no git at all, so a test leaves nothing in the real temp folder and runs no real git
+    tmpDir: path.join(dir, 'tmp'),
+    runGit: async () => null,
     worktrees: over.worktrees ?? { fork: () => Promise.reject(new Error('not in this test')), makeRunWorktree: vi.fn(), mergeWorktrees: vi.fn(), removeWorktrees: vi.fn() } })
   return { spawner, registry, spawned, logs, sent }
 }
@@ -269,8 +285,11 @@ describe('createHostSpawner', () => {
     expect(norm(h.spawned[0].file, r.sessionId)).toEqual(norm(app[0].file, info.id))
     expect(norm(h.spawned[0].args, r.sessionId)).toEqual(norm(app[0].args, info.id))
     expect(norm(h.registry.list()[0].meta, r.sessionId)).toEqual(norm(app[0].meta, info.id))
-    const appEnv = Object.fromEntries(Object.entries(app[0].env).filter(([k]) => !HOST_ONLY_ENV.test(k)))
-    expect(norm(h.spawned[0].opts.env, r.sessionId)).toEqual(norm(appEnv, info.id))
+    // Each spawn's workload token is its own, so it is the one value that differs.
+    const appEnv = Object.fromEntries(Object.entries(app[0].env).filter(([k]) => !HOST_ONLY_ENV.test(k) && k !== 'ASTERA_GATEWAY_TOKEN'))
+    const workerEnv = Object.fromEntries(Object.entries(h.spawned[0].opts.env).filter(([k]) => k !== 'ASTERA_GATEWAY_TOKEN'))
+    expect(norm(workerEnv, r.sessionId)).toEqual(norm(appEnv, info.id))
+    expect(h.spawned[0].opts.env.ASTERA_GATEWAY_TOKEN).toMatch(/^[A-Za-z0-9_-]{43}$/)
   })
 
   it('answers worker-read from the output the registry saw, and owns only the tails it holds', async () => {
@@ -787,7 +806,7 @@ describe('the roll spawn (S6 R5, R6)', () => {
       env: {}, providers: ['claude' as const, 'codex' as const], importedFrom: 'acc0', enabled: true })
     await writeExtensionRegistry(h.profileDir, { version: 1, entries: [mcp('mcp-docs', 'docs'), mcp('mcp-linear', 'linear')] })
     await writeAgentProfiles(h.profileDir, { version: 1, profiles: [{ id: 'ap_x', name: 'X', status: 'active', accountIds: [account.id],
-      mcpExclude: ['mcp-linear'], permission: 'inherit', createdAt: NOW, updatedAt: NOW }] })
+      mcpExclude: ['mcp-linear'], permission: 'inherit', sandbox: false, createdAt: NOW, updatedAt: NOW }] })
     await h.spawner.prepareRollSpawn(account, h.cwd, 'ap_x')
     const info = h.spawner.rollSpawn({ account, cwd: h.cwd, rollAccountIds: [account.id], agentProfileId: 'ap_x', restoreExtra: { rolledBy: 'host', rolledFrom: 's0' } })
     expect(info.agentProfileId).toBe('ap_x')
@@ -811,7 +830,7 @@ describe('the roll spawn (S6 R5, R6)', () => {
     const account = h.accounts[0]
     await fs.writeFile(path.join(h.profileDir, 'app-settings.json'), JSON.stringify({ agentPermissionMode: 'manual' }))
     const P = (id: string, permission: AgentProfile['permission']): AgentProfile => ({
-      id, name: id, status: 'active', accountIds: [account.id], mcpExclude: [], permission, createdAt: NOW, updatedAt: NOW
+      id, name: id, status: 'active', accountIds: [account.id], mcpExclude: [], permission, sandbox: false, createdAt: NOW, updatedAt: NOW
     })
     await writeAgentProfiles(h.profileDir, { version: 1, profiles: [P('ap_ask', 'ask'), P('ap_bypass', 'bypass')] })
     const SKIP = /--dangerously-skip-permissions/
@@ -822,6 +841,45 @@ describe('the roll spawn (S6 R5, R6)', () => {
     await h.spawner.prepareRollSpawn(account, h.cwd, 'ap_bypass')
     h.spawner.rollSpawn({ account, cwd: h.cwd, rollAccountIds: [account.id], agentProfileId: 'ap_bypass', bypassPermissions: false })
     expect(last()).not.toMatch(SKIP)
+  })
+  // Sandbox design §6: a roll's successor stays in the sandbox its chain started in. The coordinator carries the flag
+  // (codexCoordinator.test.ts); the prepare reads the folder for it before the kill, and the respawn starts in it
+  it('a roll respawn of a sandboxed session is prepared for the sandbox and starts in it', async () => {
+    await fs.writeFile(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
+      { id: 'acc2', label: 'two', configDir: path.join(dir, 'cfg2'), color: '#888', createdAt: NOW, provider: 'codex' }
+    ] }))
+    const h = rig({ codexNoDaemon: Object.assign(() => true, { warm: async () => {} }) })
+    const account = JSON.parse(await fs.readFile(path.join(profile, 'accounts.json'), 'utf8')).accounts[0]
+    await h.spawner!.prepareRollSpawn(account, repo, 'ap_box', true)
+    const info = h.spawner!.rollSpawn({ account, cwd: repo, rollAccountIds: [account.id], agentProfileId: 'ap_box', sandbox: true, bypassPermissions: true })
+    const args = h.spawned[0].args as string[]
+    expect(args).toContain('default_permissions="astera"')
+    expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox')
+    expect(info.sandboxed).toBe(true)
+    expect(h.registry.metaOf(h.registry.sessionPty(info.id)!)?.restore).toMatchObject({ sandboxed: true })
+    // A chain that is not sandboxed rolls as today
+    const plain = h.spawner!.rollSpawn({ account, cwd: repo, rollAccountIds: [account.id], bypassPermissions: true })
+    expect(h.spawned[1].args).toContain('--dangerously-bypass-approvals-and-sandbox')
+    expect(plain).not.toHaveProperty('sandboxed')
+  })
+  // Task 5 fix round 1: what would refuse the sandboxed respawn is asked in its prepare, which the roll awaits before it
+  // kills the session it replaces
+  it('a sandboxed roll whose codex does not take --no-daemon is refused in its prepare, before the kill', async () => {
+    await fs.writeFile(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
+      { id: 'acc2', label: 'two', configDir: path.join(dir, 'cfg2'), color: '#888', createdAt: NOW, provider: 'codex' }
+    ] }))
+    const h = rig({ codexNoDaemon: Object.assign(() => false, { warm: async () => {} }) })
+    const account = JSON.parse(await fs.readFile(path.join(profile, 'accounts.json'), 'utf8')).accounts[0]
+    await expect(h.spawner!.prepareRollSpawn(account, repo, undefined, true)).rejects.toThrow(/^SANDBOX_UNAVAILABLE: codex-daemon codex$/)
+    expect(h.spawned).toHaveLength(0)
+    // The same codex rolls a chain outside the sandbox as before
+    await h.spawner!.prepareRollSpawn(account, repo)
+    h.spawner!.rollSpawn({ account, cwd: repo, rollAccountIds: [account.id] })
+    expect(h.spawned).toHaveLength(1)
+    // Task 6 fix round 1: a chat chain's respawn is an app-server, which takes no --no-daemon, so its sandbox is not
+    // refused for it, and the layout is read for the Host's chat sessions
+    await h.spawner!.prepareRollSpawn(account, repo, undefined, true, 'chat')
+    expect(h.spawner!.sandboxLayouts!.layoutOf(account.id, repo, Date.now())).not.toBeUndefined()
   })
   it('prepareRollSpawn refuses a retiring Host and a damaged settings file, before anything is spawned', async () => {
     const h = await spawnerRig()
@@ -926,10 +984,158 @@ describe('createHostSpawner — createSession', () => {
   // Agent Profiles design §5 and AC 3: the profile's explicit choice overrides the app-wide mode, both ways
   describe('with an agent profile', () => {
     const P = (over: Partial<AgentProfile>): AgentProfile => ({
-      id: 'ap_000000000001', name: 'Reviewer', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'inherit',
+      id: 'ap_000000000001', name: 'Reviewer', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'inherit', sandbox: false,
       createdAt: NOW, updatedAt: NOW, ...over
     })
     const SKIP = /--dangerously-skip-permissions/
+
+    // Sandbox design §6: the Host's spawn reads the switch from the profile, prepares the folder for it, and starts the
+    // Codex session in Codex's sandbox; the same codex from a profile with the switch off starts as today
+    it('a sandboxed profile starts its Codex session in the sandbox, and an unsandboxed one as today', async () => {
+      await fs.writeFile(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
+        { id: 'acc2', label: 'two', configDir: path.join(dir, 'cfg2'), color: '#888', createdAt: NOW, provider: 'codex' }
+      ] }))
+      await writeAgentProfiles(profile, { version: 1, profiles: [
+        P({ id: 'ap_box', name: 'Boxed', accountIds: ['acc2'], permission: 'bypass', sandbox: true }),
+        P({ id: 'ap_open', name: 'Open', accountIds: ['acc2'], permission: 'bypass' })
+      ] })
+      const h = rig({ codexNoDaemon: Object.assign(() => true, { warm: async () => {} }), findRollout: async () => null })
+      const boxed = await h.spawner!.createSession({ accountId: 'acc2', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_box' })
+      const args = h.spawned[0].args as string[]
+      expect(args.slice(args.indexOf('-a'), args.indexOf('-a') + 2)).toEqual(['-a', 'never'])
+      expect(args).toContain('default_permissions="astera"')
+      expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox')
+      expect(boxed.sandboxed).toBe(true)
+      expect(h.registry.list()[0].meta!.restore).toMatchObject({ agentProfileId: 'ap_box', sandboxed: true })
+      const open = await h.spawner!.createSession({ accountId: 'acc2', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_open' })
+      expect(h.spawned[1].args).toContain('--dangerously-bypass-approvals-and-sandbox')
+      expect(h.spawned[1].args).not.toContain('-a')
+      expect(open).not.toHaveProperty('sandboxed')
+    })
+
+    // Sandbox design §6 (Task 7): a sandboxed profile's Claude session reads the sandbox twin of its settings file, from the
+    // Host's own StatusLineManager, and an old Claude starts nothing; the Host's chat sessions are handed the same start
+    it('a sandboxed profile starts its Claude session in Claude’s sandbox, and an unsandboxed one as today', async () => {
+      await writeAgentProfiles(profile, { version: 1, profiles: [P({ id: 'ap_box', name: 'Boxed', sandbox: true }), P({ id: 'ap_open', name: 'Open' })] })
+      const version = (v: string) => Object.assign(() => v, { warm: async () => {} })
+      const h = rig({ claudeVersion: version('2.1.310') })
+      const settingsOf = (i: number): string => {
+        const args = h.spawned[i].args as string[]
+        return args[args.indexOf('--settings') + 1]
+      }
+      const boxed = await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_box' })
+      // Its scope's twin, in a folder of its own (final fix pass, C1)
+      expect(settingsOf(0)).toMatch(/sandbox-settings[\\/][0-9a-f]{16}[\\/]astera-statusline-settings-sandbox\.json$/)
+      // The denied places are the Host's home's
+      const deny: string[] = JSON.parse(await fs.readFile(settingsOf(0), 'utf8')).permissions.deny
+      expect(deny.some((r) => r.startsWith('Read(//') && r.endsWith('/home/.ssh/**)'))).toBe(true)
+      expect(boxed.sandboxed).toBe(true)
+      expect(h.registry.list()[0].meta!.restore).toMatchObject({ agentProfileId: 'ap_box', sandboxed: true })
+      const open = await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_open' })
+      expect(settingsOf(1)).toMatch(/astera-statusline-settings\.json$/)
+      expect(open).not.toHaveProperty('sandboxed')
+      // A chat of the same scope (the folder's layout, and the session's environment, which names the same denied places)
+      // takes the chat file from the same folder
+      const chat = h.spawner!.claudeSandbox!.chatArgs(false, { layout: process.platform === 'win32' ? null : await gitLayoutOf(repo), env: h.spawned[0].opts.env })
+      expect(chat?.[1]).toMatch(/sandbox-settings[\\/][0-9a-f]{16}[\\/]astera-sandbox-chat-settings\.json$/)
+      expect(path.dirname(chat![1].replace(/\//g, path.sep))).toBe(path.dirname(settingsOf(0).replace(/\//g, path.sep)))
+      // Task 7 fix round 1: npm's cache goes in the temp folder the spawner was given (none for Claude on Windows, which has
+      // no shell sandbox), never the real one in a test
+      const cache = path.join(dir, 'tmp', 'astera-npm-cache')
+      expect(await fs.stat(cache).then(() => true, () => false)).toBe(process.platform !== 'win32')
+      if (process.platform !== 'win32') expect(h.spawned[0].opts.env.npm_config_cache).toBe(cache.replace(/\\/g, '/'))
+      else expect(h.spawned[0].opts.env).not.toHaveProperty('npm_config_cache')
+      const old = rig({ claudeVersion: version('2.1.305') })
+      await expect(old.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_box' })).rejects.toThrow(
+        /^SANDBOX_UNAVAILABLE: cli-too-old claude 2\.1\.305 2\.1\.306$/
+      )
+      expect(old.spawned).toHaveLength(0)
+    })
+
+    // Windows readiness (sandbox design §6): the spawner's own question is the one its prepares ask, and an account whose
+    // Codex home is not set up starts nothing, naming the account the app offers to set up
+    it.runIf(process.platform === 'win32')('a sandboxed win32 Codex start on an account not set up opens nothing', async () => {
+      await fs.writeFile(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
+        { id: 'acc2', label: 'two', configDir: path.join(dir, 'cfg2'), color: '#888', createdAt: NOW, provider: 'codex' }
+      ] }))
+      await writeAgentProfiles(profile, { version: 1, profiles: [P({ id: 'ap_box', name: 'Boxed', accountIds: ['acc2'], sandbox: true })] })
+      const asked: Array<string | null> = []
+      const h = rig({
+        codexNoDaemon: Object.assign(() => true, { warm: async () => {} }),
+        findRollout: async () => null,
+        codexWindowsReady: async ({ codexHome }) => (asked.push(codexHome), 'not-set-up')
+      })
+      await expect(h.spawner!.createSession({ accountId: 'acc2', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_box' })).rejects.toThrow(
+        /^SANDBOX_UNAVAILABLE: windows-setup codex acc2$/
+      )
+      expect(asked).toEqual([path.join(dir, 'cfg2')])
+      expect(h.spawned).toHaveLength(0)
+      // The Host's chat sessions are handed the same question
+      expect(h.spawner!.codexWindowsReady).toBeDefined()
+      expect(await h.spawner!.codexWindowsReady!({ codexHome: 'x', env: {} })).toBe('not-set-up')
+    })
+
+    // The elevated sandbox's own account cannot read the person's global excludes: the Host's prepare copies them into its
+    // temp folder, one file for this profile, and the session's git reads the copy; the chat sessions get the same writer
+    it.runIf(process.platform === 'win32')('a sandboxed win32 Codex session from the Host reads a copy of the person’s global excludes', async () => {
+      await fs.writeFile(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
+        { id: 'acc2', label: 'two', configDir: path.join(dir, 'cfg2'), color: '#888', createdAt: NOW, provider: 'codex' }
+      ] }))
+      await writeAgentProfiles(profile, { version: 1, profiles: [P({ id: 'ap_box', name: 'Boxed', accountIds: ['acc2'], sandbox: true })] })
+      await fs.mkdir(path.join(dir, 'home', '.config', 'git'), { recursive: true })
+      await fs.writeFile(path.join(dir, 'home', '.config', 'git', 'ignore'), '*.secret\n')
+      const h = rig({ codexNoDaemon: Object.assign(() => true, { warm: async () => {} }), findRollout: async () => null })
+      await h.spawner!.createSession({ accountId: 'acc2', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_box' })
+      const file = codexExcludesFileOf(path.join(dir, 'tmp'), profile)
+      expect(await fs.readFile(file, 'utf8')).toBe('*.secret\n')
+      // Not a repository, so no safe directory before it
+      expect(h.spawned[0].opts.env).toMatchObject({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.excludesFile', GIT_CONFIG_VALUE_0: file })
+      expect(await h.spawner!.codexExcludes!()).toBe(file)
+    })
+
+    // Final fix pass (C3, the person's decision): a session a sandboxed session asks for starts in the sandbox whatever
+    // profile it names, or none; where its CLI has no sandbox (Claude Code on Windows) it is refused rather than started
+    // without one. A caller that is not sandboxed is unchanged (the tests above)
+    it('a sandboxed caller’s session starts sandboxed whatever its profile, or is refused where its CLI has none', async () => {
+      await fs.writeFile(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
+        { id: 'acc1', label: 'one', configDir: path.join(dir, 'cfg1'), color: '#888', createdAt: NOW, provider: 'claude' },
+        { id: 'acc2', label: 'two', configDir: path.join(dir, 'cfg2'), color: '#888', createdAt: NOW, provider: 'codex' }
+      ] }))
+      await writeAgentProfiles(profile, { version: 1, profiles: [P({ id: 'ap_open', name: 'Open', accountIds: ['acc2'], permission: 'bypass' })] })
+      const h = rig({ codexNoDaemon: Object.assign(() => true, { warm: async () => {} }), findRollout: async () => null, claudeVersion: Object.assign(() => '2.1.310', { warm: async () => {} }) })
+      for (const [i, agentProfileId] of [[0, 'ap_open'], [1, undefined]] as const) {
+        const info = await h.spawner!.createSession({ accountId: 'acc2', cwd: repo, rollAccountIds: [], sandbox: true, ...(agentProfileId ? { agentProfileId } : {}) })
+        const args = h.spawned[i].args as string[]
+        expect(args).toContain('default_permissions="astera"')
+        expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox')
+        expect(info.sandboxed).toBe(true)
+        expect(h.registry.list()[i].meta!.restore).toMatchObject({ sandboxed: true })
+      }
+      if (process.platform === 'win32') {
+        await expect(h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: no-sandbox claude$/)
+        expect(h.spawned).toHaveLength(2)
+      } else {
+        const claude = await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], sandbox: true })
+        expect(claude.sandboxed).toBe(true)
+      }
+    })
+
+    // C3: every worker of a Job a sandboxed session made starts in the sandbox whatever profile its Task names; the worker
+    // of a Task a sandboxed session added does too; any other worker is unchanged
+    it('a worker of a Job or Task a sandboxed session made starts sandboxed', async () => {
+      const h = rigWith({ findRollout: async () => null })
+      const st = h.box.state
+      const jobId = st.runs.find((r) => r.id === st.tasks.find((t) => t.id === h.taskId)!.runId)!.jobId
+      h.box.state = { ...st, jobs: st.jobs.map((j) => (j.id === jobId ? { ...j, sandboxed: true as const } : j)) }
+      await h.spawner!.startWorker({ ...startArgs(h.taskId, h.dispatchId), provider: 'codex', accountId: 'acc2' })
+      expect(h.spawned[0].args).toContain('default_permissions="astera"')
+      expect(h.registry.list()[0].meta!.restore).toMatchObject({ sandboxed: true })
+      // The same Job unmarked: a worker as today
+      const plain = rigWith({ findRollout: async () => null })
+      await plain.spawner!.startWorker({ ...startArgs(plain.taskId, plain.dispatchId), provider: 'codex', accountId: 'acc2' })
+      expect(plain.spawned[0].args).not.toContain('default_permissions="astera"')
+      expect(plain.registry.list()[0].meta!.restore).not.toHaveProperty('sandboxed')
+    })
 
     it('a bypass profile starts unattended while the app-wide mode is manual, and its id rides the note', async () => {
       await fs.writeFile(path.join(profile, 'app-settings.json'), JSON.stringify({ agentPermissionMode: 'manual' }))
@@ -974,6 +1180,20 @@ describe('createHostSpawner — createSession', () => {
       // Falls back to the app-wide mode, as before profiles
       expect(JSON.stringify(h.spawned[1].args)).not.toMatch(SKIP)
       expect(h.logs.filter((l) => l.includes('ap_gone'))).toHaveLength(1)
+    })
+
+    // Task 5 fix round 1: a store that cannot be read may hold the profile's sandbox or its `ask`, so a session that names
+    // a profile is refused with the store's repair, before any process; one that names none still starts
+    it('a damaged profile store refuses a session that names a profile, and starts nothing', async () => {
+      await fs.writeFile(path.join(profile, 'agent-profiles.json'), '{ damaged')
+      const h = rig()
+      const refused = await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_b' }).catch((e: unknown) => e)
+      expect(refused).toBeInstanceOf(RepairNeeded)
+      expect((refused as RepairNeeded).file).toBe('agent-profiles.json')
+      expect(wasRefusedBeforeActing(refused)).toBe(true)
+      expect(h.spawned).toHaveLength(0)
+      await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [] })
+      expect(h.spawned).toHaveLength(1)
     })
 
     // Agent Profiles design §6: a Job's worker runs as its Task's profile; a Task whose profile was deleted after it was

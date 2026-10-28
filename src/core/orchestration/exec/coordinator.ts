@@ -85,6 +85,9 @@ export interface CoordinatorDeps {
      *  it, and its permission decides the bypass when `bypassPermissions` is not given. A worker's start passes its
      *  Dispatch's; a coordinator's and a reviewer's never do. */
     agentProfileId?: string
+    /** Start in the CLI's sandbox whatever the profile says (final fix pass, C3): a worker of work a sandboxed session
+     *  made or asked for. The wiring refuses it where that CLI has none. */
+    sandbox?: true
   }): Promise<{ id: string }>
   writeToSession(sessionId: string, data: string): void
   /** When that session's pty last printed anything (epoch ms), null for never. Given, a typed prompt's Enter waits for
@@ -894,6 +897,9 @@ export class OrchCoordinator {
     /** The agent profile the worker starts as (Agent Profiles design §6), handed to `spawnSession`, which resolves it.
      *  Not used by a reuse (`terminal`): that session was started already, as whatever it started as. */
     agentProfileId?: string
+    /** Start the worker in its CLI's sandbox whatever its profile says (final fix pass, C3), handed to `spawnSession`.
+     *  Not used by a reuse, as `agentProfileId`. */
+    sandbox?: true
   }): Promise<{ sessionId: string; cwd: string; specPath: string }> {
     const actual = this.deps.accountProvider(a.accountId)
     if (actual === null) throw new Error(`unknown account: ${a.accountId}`)
@@ -1090,7 +1096,8 @@ export class OrchCoordinator {
         // the positional prompt after `--resume <id>` (core/sessions/commands.ts) — so claude gets it
         // as initialPrompt, same as an ordinary (non-resuming) start.
         ...(resumeSessionId && a.provider === 'codex' ? { resumePrompt: prompt } : { initialPrompt: prompt }),
-        ...(a.agentProfileId !== undefined ? { agentProfileId: a.agentProfileId } : {})
+        ...(a.agentProfileId !== undefined ? { agentProfileId: a.agentProfileId } : {}),
+        ...(a.sandbox ? { sandbox: true as const } : {})
       })
       finalSessionId = spawned.id
       promptWrite('confirmed', 'argv')

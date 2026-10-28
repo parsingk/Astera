@@ -7,7 +7,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { OrchServerDeps } from '../command'
-import type { OrchState } from '../state'
+import { workSandboxed, type OrchState } from '../state'
 import type { Account, Provider } from '../../types'
 import { descriptorOf, isAmbientDir, type ProviderDescriptor } from '../../providers/descriptor'
 import { providerOf } from '../../providers/meta'
@@ -113,7 +113,10 @@ export async function startWorkerWithChain(
       )
     }
   }
-  const started = await ctx.coordinator.startWorker({ ...a, rollAccountIds })
+  // What a sandboxed session made or asked for starts in the sandbox, whatever profile it names (final fix pass, C3): the
+  // caller's ask, or the Task's or its Job's own mark. Every worker start comes through here, the review and repair ones too
+  const sandbox = a.sandbox === true || (found !== undefined && workSandboxed(stateHere, found))
+  const started = await ctx.coordinator.startWorker({ ...a, rollAccountIds, ...(sandbox ? { sandbox: true as const } : {}) })
   // From this point on, that session's output belongs to this dispatch. On reuse (--terminal) the
   // previous dispatch's tail freezes where it is. Only a dispatch that has reached a terminal
   // state is eligible for eviction — a live worker's tail is not dropped even past the cap (see
@@ -143,6 +146,8 @@ export interface CoordinatorStartContext {
     initialPrompt: string
     title: string
     rollAccountIds: string[]
+    /** The Job was made by a sandboxed session: its coordinator starts in the sandbox (final fix pass, C3). */
+    sandbox?: true
   }): Promise<{ id: string }>
   log(m: string): void
 }
@@ -201,9 +206,10 @@ export async function startCoordinatorSession(
     title: `Coordinator · ${a.runId.slice(0, 12)}`,
     // **한 원소다.** 그래서 롤링은 계정을 갈아타지 않고 리셋까지 기다린 뒤 같은 세션에서
     // 이어간다 — 관리 중이던 Run 의 맥락을 잃지 않는 쪽을 골랐다(Run.coordinatorAccountId).
-    rollAccountIds: [a.accountId]
+    rollAccountIds: [a.accountId],
+    ...(a.sandbox ? { sandbox: true as const } : {})
   })
-  ctx.log(`coordinator started run=${a.runId} session=${info.id} account=${a.accountId}`)
+  ctx.log(`coordinator started run=${a.runId} session=${info.id} account=${a.accountId}${a.sandbox ? ' in the sandbox' : ''}`)
   return { sessionId: info.id }
 }
 

@@ -33,7 +33,7 @@ describe('createCapabilityCache', () => {
     await writeAgentProfiles(profileDir, {
       version: 1,
       profiles: [{
-        id: 'ap_000000000001', name: 'P', status: 'active', accountIds: ['acc_3'], mcpExclude: ['mcp-docs'], permission: 'inherit',
+        id: 'ap_000000000001', name: 'P', status: 'active', accountIds: ['acc_3'], mcpExclude: ['mcp-docs'], permission: 'inherit', sandbox: false,
         createdAt: '2026-10-22T00:00:00.000Z', updatedAt: '2026-10-22T00:00:00.000Z'
       }]
     })

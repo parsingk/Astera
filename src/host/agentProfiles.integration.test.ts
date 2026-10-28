@@ -135,7 +135,7 @@ async function hostRig() {
   const procs = new ProcRegistry({ spawn: () => ({ pid: 1, onData: () => {}, onExit: () => {}, write() {}, kill() {} }) as unknown as RegistryProc, log: () => {} })
   const logs: string[] = []
   const log = (m: string): void => void logs.push(m)
-  const hub: GatewayHub = createGatewayHub({ profileDir: profile, ptys: registry, procs, log })
+  const hub: GatewayHub = createGatewayHub({ profileDir: profile, ptys: registry, procs, sessionOfOwner: () => undefined, log })
   const readAccounts = () => readAccountEntries(path.join(profile, 'accounts.json'))
   const box: { orch: ReturnType<typeof createHostOrch> | null; server: HostServer | null } = { orch: null, server: null }
   const agentProfiles = createHostAgentProfiles({

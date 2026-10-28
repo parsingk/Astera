@@ -1,7 +1,8 @@
 import { promises as fs } from 'node:fs'
 import { readFileSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { Account } from '../types'
 import { AUDIT_HOOK_EVENTS, hookEventsDirIn, hookEventsFileIn } from '../hooks/sessionState'
 import { dirIdentity } from '../files/watchedDir'
@@ -11,6 +12,10 @@ import { SESSION_CONTEXT_SCRIPT } from './sessionContext'
 import { CLAUDE_INPUT_FIELDS } from '../audit/resolve'
 import ENFORCE_HOOK_SOURCE from 'virtual:astera-enforce-hook'
 import { codexEnforceArgs } from './codexEnforce'
+import { claudeSandboxSettings, type ClaudeSandboxSettings } from '../sandbox/claudeSettings'
+import { credentialStoreDenies, sensitiveLocations } from '../sandbox/locations'
+import { npmCacheOf } from '../sandbox/codexProfile'
+import type { GitLayout } from '../sandbox/gitLayout'
 
 /** The statusLine injection info handed to SessionManager when a session is spawned. */
 export interface StatusLineSpawn {
@@ -20,7 +25,27 @@ export interface StatusLineSpawn {
   hookOutPath?: string // the file the hook capture appends events to (one per session) — always set
   observed?: true // the settings file is an observe variant (ensureObserveFiles): the session sends its tool calls to its audit file
   enforced?: true // the settings file is an enforce variant (ensureEnforceFiles): every tool call waits on the blocking hook first
+  sandboxed?: true // the settings file is a sandbox twin (ensureSandboxFiles): Claude's sandbox and the deny rules are in it
 }
+
+/** Whether every sandbox twin is in place (ensureSandboxFiles). */
+export type SandboxFilesResult = 'ok' | 'write-failed'
+
+/** What a sandboxed Claude session's twins are built for (ensureSandboxFiles, spawnConfig, sandboxChatArgs): its folder's
+ *  git layout, whose git files the sandbox keeps from being written, and the environment the session is built from (its
+ *  account's, before the Credentials list's hiding), which the places it may not read are read from: its APPDATA, its
+ *  session bus (final fix pass, C1 and minor 2). Null layout: outside a repository. */
+export interface SandboxScope {
+  layout: GitLayout | null
+  env: Record<string, string | undefined>
+}
+
+/** How many scopes a StatusLineManager keeps the twins of up to date: every settings rewrite rewrites them all. A scope
+ *  prepared before the last this many is written again by its next sandboxed start's prepare. */
+export const SANDBOX_SCOPES_KEPT = 32
+
+/** The folder the twins go in, one folder per scope under it, named by a hash of what the scope's sandbox holds. */
+export const SANDBOX_TWINS_DIR = 'sandbox-settings'
 
 /** Enforce's hook (enforce design §5), written beside the Rules it reads: the bundle of core/audit/hook/enforceMain.ts. */
 export const ENFORCE_HOOK_FILE = 'astera-enforce-hook.cjs'
@@ -194,9 +219,9 @@ process.stdin.on('error', finish)
  * (the same path core/scheduler/config.ts's load() documents for a rename EPERM). createCore has no
  * logger, so a failure goes to the console. The temp file is removed on every path. Resolves to
  * whether the file holds `content` now, for a caller that must not point a session at a file that is
- * not there (the observe files).
+ * not there (the observe files). The sandbox's git excludes go through it too (core/sandbox/claudeStart.ts).
  */
-async function writeScript(file: string, content: string): Promise<boolean> {
+export async function writeScript(file: string, content: string): Promise<boolean> {
   try {
     if ((await fs.readFile(file, 'utf8')) === content) return true
   } catch {
@@ -318,6 +343,19 @@ function withObserveHooks(s: BuiltSettings['settings'], command: string): string
   return JSON.stringify({ ...s, hooks: { ...s.hooks, PostToolUse: [...s.hooks.PostToolUse, audit], PostToolUseFailure: [audit] } }, null, 2)
 }
 
+/** What a sandbox twin adds (ensureSandboxFiles): the builder's settings. */
+type SandboxPart = ClaudeSandboxSettings
+
+/** The name of a scope's twins folder: a hash of what its sandbox holds. */
+const sandboxKeyOf = (part: SandboxPart): string => createHash('sha256').update(JSON.stringify(part)).digest('hex').slice(0, 16)
+
+/** A settings file's sandbox twin: the same JSON with Claude's sandbox added and the deny rules after any it already has. */
+function withSandbox(content: string, part: SandboxPart): string {
+  const s = JSON.parse(content) as Record<string, unknown> & { permissions?: Record<string, unknown> & { deny?: string[] } }
+  const permissions = { ...(s.permissions ?? {}), deny: [...(s.permissions?.deny ?? []), ...part.permissions.deny] }
+  return JSON.stringify({ ...s, ...(part.sandbox ? { sandbox: part.sandbox } : {}), permissions }, null, 2)
+}
+
 export class StatusLineManager {
   private readonly capturePath: string
   private readonly settingsFile: string
@@ -332,6 +370,8 @@ export class StatusLineManager {
   private readonly enforceSettingsFile: string
   private readonly enforceHooksSettingsFile: string
   private readonly enforceChatSettingsFile: string
+  private readonly sandboxChatSettingsFile: string
+  private readonly enforceSandboxChatSettingsFile: string
   readonly hookEventsDir: string // Watched by index.ts's HookEventWatcher
   private built: BuiltSettings | null = null
   /** Both observe files hold what the last ensureObserveFiles built; until then an observed session gets the plain file. */
@@ -339,12 +379,28 @@ export class StatusLineManager {
   /** The hook and the three enforce files hold what the last ensureEnforceFiles built; until then a session is not
    *  marked enforced. */
   private enforceReady = false
+  /** Every settings file a session can be pointed at, with what it was last built to hold: a sandbox twin is built from it. */
+  private variants = new Map<string, string>()
+  /** The twins in place, by scope key and the file each is a twin of, with what that file held when the twin was written:
+   *  a twin of a file that has changed since is not handed out (spawnConfig). */
+  private twins = new Map<string, string>()
+  /** The scopes whose sandboxed chat file (no hooks) holds what their last write built. */
+  private sandboxChatReady = new Set<string>()
+  /** The sandbox each prepared scope's twins hold, by key, the latest prepared last (SANDBOX_SCOPES_KEPT of them). From
+   *  a scope's first ensureSandboxFiles on, each file rewritten gets its twins rewritten with it, so the order in which a
+   *  start's preparations run does not matter (a Host chat prepares its sandbox before the capability refresh writes
+   *  Enforce's files). */
+  private scopes = new Map<string, SandboxPart>()
   private readonly platform: NodeJS.Platform
   private readonly execPath: string
   private readonly appImage: string | undefined
   private readonly findRuntime: (() => Promise<string | null>) | undefined
   /** A Host runtime found installed, for the Enforce hook only, when the capture scripts have no node of Astera's. */
   private runtimeExe: string | null = null
+  /** The person's home, which the sandbox's denied places are read under (the environment is the session's, its
+   *  SandboxScope), and the temp folder npm's cache is in. */
+  private readonly homeDir: string
+  private readonly tmpDir: string
 
   constructor(
     private userDataDir: string,
@@ -361,11 +417,16 @@ export class StatusLineManager {
       /** Windows: a Host runtime an Astera installed (core/host/installedRuntime.ts), asked when the capture node is a
        *  bare `node`, so the hook still runs with Astera's own node there. */
       findRuntime?: () => Promise<string | null>
+      /** The sandbox's (ensureSandboxFiles): the process's own home and temp folder, unless a test says. */
+      homeDir?: string
+      tmpDir?: string
     } = {}
   ) {
     this.findRuntime = host.findRuntime
     this.platform = host.platform ?? process.platform
     this.execPath = host.execPath ?? process.execPath
+    this.homeDir = host.homeDir ?? os.homedir()
+    this.tmpDir = host.tmpDir ?? os.tmpdir()
     // A test that names the executable names the AppImage too, or there is none
     this.appImage = host.execPath === undefined ? process.env.APPIMAGE : host.appImage
     this.capturePath = path.join(userDataDir, 'astera-statusline-capture.cjs')
@@ -381,6 +442,8 @@ export class StatusLineManager {
     this.enforceSettingsFile = path.join(userDataDir, 'astera-enforce-settings.json')
     this.enforceHooksSettingsFile = path.join(userDataDir, 'astera-enforce-hooks-settings.json')
     this.enforceChatSettingsFile = path.join(userDataDir, 'astera-enforce-chat-settings.json')
+    this.sandboxChatSettingsFile = path.join(userDataDir, 'astera-sandbox-chat-settings.json')
+    this.enforceSandboxChatSettingsFile = path.join(userDataDir, 'astera-enforce-sandbox-chat-settings.json')
     // The Host reads these files back for `sessions list` (host/sessions.ts), so where they are is one
     // rule in core rather than a path spelled out twice.
     this.hookEventsDir = hookEventsDirIn(userDataDir)
@@ -486,7 +549,9 @@ export class StatusLineManager {
     }
     // Through writeScript like the scripts: the app and the Host both write these files, and a
     // session starting mid-write would read half a settings file.
-    await writeScript(this.settingsFile, JSON.stringify(settings, null, 2))
+    const settingsJson = JSON.stringify(settings, null, 2)
+    this.variants.set(this.settingsFile, settingsJson)
+    await writeScript(this.settingsFile, settingsJson)
     // What only a Slack-notifying or rolling session pays for, on top: the write/execute family in the
     // tool pair, which fires per tool call and is therefore matcher-limited. The pair itself is already
     // in everySessionHooks for AskUserQuestion; this widens its matcher.
@@ -522,7 +587,9 @@ export class StatusLineManager {
         PostToolUse: [{ matcher: TOOL_MATCHER, hooks: [{ type: 'command', command: hookCmd }] }]
       }
     }
-    await writeScript(this.hooksSettingsFile, JSON.stringify(hooksSettings, null, 2))
+    const hooksJson = JSON.stringify(hooksSettings, null, 2)
+    this.variants.set(this.hooksSettingsFile, hooksJson)
+    await writeScript(this.hooksSettingsFile, hooksJson)
     this.built = { settings, hooksSettings }
     // The folders the capture scripts write into. Both scripts swallow a write error, so a session
     // spawned before these exist (the Host's first spawn on a fresh profile, where the app's
@@ -530,6 +597,7 @@ export class StatusLineManager {
     // that is already there touches nothing in it.
     await fs.mkdir(this.hookEventsDir, { recursive: true })
     await fs.mkdir(this.outDir, { recursive: true })
+    if (this.scopes.size > 0) await this.writeSandboxTwins()
   }
 
   /**
@@ -553,9 +621,14 @@ export class StatusLineManager {
     if (!b) return
     const script = await writeScript(this.hookAuditCapturePath, HOOK_AUDIT_CAPTURE_SCRIPT)
     const command = captureCommand(this.nodePath, this.hookAuditCapturePath)
-    const plain = await writeScript(this.observeSettingsFile, withObserveHooks(b.settings, command))
-    const wider = await writeScript(this.observeHooksSettingsFile, withObserveHooks(b.hooksSettings, command))
+    const plainJson = withObserveHooks(b.settings, command)
+    const widerJson = withObserveHooks(b.hooksSettings, command)
+    this.variants.set(this.observeSettingsFile, plainJson)
+    this.variants.set(this.observeHooksSettingsFile, widerJson)
+    const plain = await writeScript(this.observeSettingsFile, plainJson)
+    const wider = await writeScript(this.observeHooksSettingsFile, widerJson)
     this.observeReady = script && plain && wider
+    if (this.scopes.size > 0) await this.writeSandboxTwins()
   }
 
   /** The Enforce hook's command line for `provider`, or null where there is no Astera node to run it (enforceInterpreter). */
@@ -604,16 +677,119 @@ export class StatusLineManager {
         2
       )
     }
-    const plain = await writeScript(this.enforceSettingsFile, withEnforce(b.settings))
-    const wider = await writeScript(this.enforceHooksSettingsFile, withEnforce(b.hooksSettings))
-    const chat = await writeScript(this.enforceChatSettingsFile, JSON.stringify({ disableAllHooks: false, hooks: { PreToolUse: [pre] } }, null, 2))
+    const plainJson = withEnforce(b.settings)
+    const widerJson = withEnforce(b.hooksSettings)
+    const chatJson = JSON.stringify({ disableAllHooks: false, hooks: { PreToolUse: [pre] } }, null, 2)
+    this.variants.set(this.enforceSettingsFile, plainJson)
+    this.variants.set(this.enforceHooksSettingsFile, widerJson)
+    this.variants.set(this.enforceChatSettingsFile, chatJson)
+    const plain = await writeScript(this.enforceSettingsFile, plainJson)
+    const wider = await writeScript(this.enforceHooksSettingsFile, widerJson)
+    const chat = await writeScript(this.enforceChatSettingsFile, chatJson)
     this.enforceReady = script && plain && wider && chat
+    if (this.scopes.size > 0) await this.writeSandboxTwins()
     return this.enforceReady ? 'ok' : 'hook-write-failed'
   }
 
   /** A Claude chat session's arguments for Enforce, once ensureEnforceFiles has written them, else null. */
   enforceChatArgs(): string[] | null {
     return this.enforceReady ? ['--settings', this.enforceChatSettingsFile.replace(/\\/g, '/')] : null
+  }
+
+  /**
+   * The sandbox (sandbox design §6): writes, for the scope of a sandboxed Claude start (SandboxScope: its folder's git
+   * layout and the environment its session is built from), a twin of each settings file a session can be pointed at
+   * (plain, hooks, observe, observe hooks, enforce, enforce hooks, as far as each has been built), the same JSON with
+   * Claude's sandbox added and the deny rules for the E6 list and the OS credential store (claudeSandboxSettings), and
+   * the files a sandboxed chat takes as its one `--settings`: the sandbox alone, and with Enforce's hook. The twins of one
+   * scope are in a folder of their own, `sandbox-settings/<hash>`, named by what its sandbox holds, so sessions in
+   * different repositories, or of accounts whose environment names another bus, never read each other's, and two starts
+   * in the same folder share them. No Unix socket is granted, the Host's included: a sandboxed session reaches the Host
+   * through `astera` in `excludedCommands` or the loopback with its workload token, so a line `excludedCommands` does not
+   * take out (`cd x && astera …`) cannot reach it, on macOS as on Linux. Windows gets the deny rules only (Claude has no
+   * sandbox there). Written only once a sandboxed Claude is about to start (core/sandbox/claudeStart.ts), so a session
+   * without it reads exactly the bytes it always did, at the same path. From then on every file rewritten gets the twins
+   * of the last SANDBOX_SCOPES_KEPT scopes rewritten too. Resolves to 'write-failed' when one of this scope's twins is not
+   * in place: a session asked to be sandboxed is then not marked so (spawnConfig), and its manager refuses it (E5).
+   * Never throws.
+   *
+   * The app and the Host each write these paths in the profile folder, each from its own home and temp folder, as they
+   * already do the files the twins are made from; a scope names the same folder in both only when what its sandbox holds
+   * is the same.
+   */
+  async ensureSandboxFiles(scope: SandboxScope): Promise<SandboxFilesResult> {
+    if (!this.built) await this.ensureFiles()
+    const part = this.sandboxPart(scope)
+    const key = sandboxKeyOf(part)
+    this.scopes.delete(key)
+    this.scopes.set(key, part)
+    for (const old of [...this.scopes.keys()].slice(0, Math.max(0, this.scopes.size - SANDBOX_SCOPES_KEPT))) this.forgetScope(old)
+    return this.writeTwinsOf(key, part)
+  }
+
+  /** What a sandbox twin adds: the builder's settings, for the scope's layout and from the scope's environment, under the
+   *  person's home. */
+  private sandboxPart(scope: SandboxScope): SandboxPart {
+    const denied = [...sensitiveLocations(this.platform, scope.env, this.homeDir), ...credentialStoreDenies(this.platform, scope.env, this.homeDir)]
+    return claudeSandboxSettings({ platform: this.platform, denied, npmCache: npmCacheOf(this.tmpDir), layout: scope.layout })
+  }
+
+  private twinsDirOf(key: string): string {
+    return path.join(this.userDataDir, SANDBOX_TWINS_DIR, key)
+  }
+
+  private twinOf(file: string, key: string): string {
+    const name = file === this.enforceChatSettingsFile ? path.basename(this.enforceSandboxChatSettingsFile) : path.basename(file).replace(/\.json$/, '-sandbox.json')
+    return path.join(this.twinsDirOf(key), name)
+  }
+
+  private chatTwinOf(key: string): string {
+    return path.join(this.twinsDirOf(key), path.basename(this.sandboxChatSettingsFile))
+  }
+
+  /** Whether `file`'s twin for the scope `key` holds the sandbox over what `file` holds now. */
+  private twinReady(file: string, key: string): boolean {
+    const from = this.twins.get(`${key}\u0000${file}`)
+    return from !== undefined && from === this.variants.get(file)
+  }
+
+  /** Stops keeping a scope's twins up to date; its files stay on disk, and none is handed out again until a prepare writes
+   *  them anew. */
+  private forgetScope(key: string): void {
+    this.scopes.delete(key)
+    this.sandboxChatReady.delete(key)
+    for (const k of [...this.twins.keys()]) if (k.startsWith(`${key}\u0000`)) this.twins.delete(k)
+  }
+
+  private async writeSandboxTwins(): Promise<void> {
+    for (const [key, part] of [...this.scopes]) await this.writeTwinsOf(key, part)
+  }
+
+  private async writeTwinsOf(key: string, part: SandboxPart): Promise<SandboxFilesResult> {
+    // A folder that cannot be made fails each write below, which says so
+    await fs.mkdir(this.twinsDirOf(key), { recursive: true }).catch(() => {})
+    let ok = true
+    for (const [file, content] of [...this.variants]) {
+      const k = `${key}\u0000${file}`
+      if (await writeScript(this.twinOf(file, key), withSandbox(content, part))) this.twins.set(k, content)
+      else {
+        this.twins.delete(k)
+        ok = false
+      }
+    }
+    const chat = await writeScript(this.chatTwinOf(key), withSandbox('{}', part))
+    if (chat) this.sandboxChatReady.add(key)
+    else this.sandboxChatReady.delete(key)
+    return ok && chat ? 'ok' : 'write-failed'
+  }
+
+  /** A sandboxed Claude chat's one `--settings` (sandbox design §6): the sandbox of its scope, and in Enforce the blocking
+   *  hook with it, once ensureSandboxFiles for that scope (and for Enforce ensureEnforceFiles) has written it, else null. */
+  sandboxChatArgs(enforce: boolean, scope: SandboxScope): string[] | null {
+    const key = sandboxKeyOf(this.sandboxPart(scope))
+    if (enforce)
+      return this.enforceReady && this.twinReady(this.enforceChatSettingsFile, key) ? ['--settings', this.twinOf(this.enforceChatSettingsFile, key).replace(/\\/g, '/')] : null
+    return this.sandboxChatReady.has(key) ? ['--settings', this.chatTwinOf(key).replace(/\\/g, '/')] : null
   }
 
   /** A Codex session's arguments for Enforce (terminal and app-server), once ensureEnforceFiles has written the hook,
@@ -692,12 +868,14 @@ export class StatusLineManager {
    *  capture pair. `opts.observe` (a session started while the mode is observe) points it at the
    *  observe variant of that file, once ensureObserveFiles has written them, and says so (`observed`).
    *  `opts.enforce` (with observe, a session started in Enforce) points it at the enforce variant, once
-   *  ensureEnforceFiles has written them, and says so (`enforced`). */
-  spawnConfig(sessionId: string, account: Account, opts?: { toolHooks?: boolean; observe?: boolean; enforce?: boolean }): StatusLineSpawn {
+   *  ensureEnforceFiles has written them, and says so (`enforced`). `opts.sandbox` (a sandboxed Claude session's scope)
+   *  points it at that scope's sandbox twin of whichever of these it would read, once ensureSandboxFiles has written that
+   *  twin over what the file holds now, and says so (`sandboxed`); without that mark its manager refuses the start. */
+  spawnConfig(sessionId: string, account: Account, opts?: { toolHooks?: boolean; observe?: boolean; enforce?: boolean; sandbox?: SandboxScope }): StatusLineSpawn {
     const toolHooks = opts?.toolHooks === true
     const observe = opts?.observe === true && this.observeReady
     const enforce = observe && opts?.enforce === true && this.enforceReady
-    const file = enforce
+    const variant = enforce
       ? toolHooks
         ? this.enforceHooksSettingsFile
         : this.enforceSettingsFile
@@ -708,6 +886,9 @@ export class StatusLineManager {
       : toolHooks
         ? this.hooksSettingsFile
         : this.settingsFile
+    const key = opts?.sandbox ? sandboxKeyOf(this.sandboxPart(opts.sandbox)) : null
+    const sandboxed = key !== null && this.twinReady(variant, key)
+    const file = sandboxed && key !== null ? this.twinOf(variant, key) : variant
     return {
       // Normalised to forward slashes — this is the --settings argument path passed to the shell/cmd (a verified format). node fs handles it as-is too.
       settingsFile: file.replace(/\\/g, '/'),
@@ -717,7 +898,8 @@ export class StatusLineManager {
       // installed but has nowhere to write is the same as no hook at all.
       hookOutPath: hookEventsFileIn(this.hookEventsDir, sessionId),
       ...(observe ? { observed: true as const } : {}),
-      ...(enforce ? { enforced: true as const } : {})
+      ...(enforce ? { enforced: true as const } : {}),
+      ...(sandboxed ? { sandboxed: true as const } : {})
     }
   }
 

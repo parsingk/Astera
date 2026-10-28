@@ -169,6 +169,31 @@ describe('registrySessions — list', () => {
     expect(rows.find((r) => r.id === 'ses-n')).not.toHaveProperty('agentProfileId')
   })
 
+  // A session in its CLI's sandbox says so, and what protection that is (SessionInfo.sandboxed and sandboxKind, which the
+  // spawn writes into the note): only `true` marks it, and only a kind this build knows is named, as the app reads them
+  it('a sandboxed session carries the mark and its kind; one outside the sandbox carries neither', async () => {
+    const ptys = new PtyRegistry({ spawn: fakePty, log: () => {} })
+    const procs = new ProcRegistry({ spawn: fakeProc, log: () => {} })
+    const restore = { accountId: 'cx', cwd: 'D:/repo' }
+    ptys.open({ id: 'pty-s', file: 'codex', args: [], opts, meta: { kind: 'session', id: 'ses-s', restore: { ...restore, sandboxed: true, sandboxKind: 'sandbox' } } })
+    ptys.open({ id: 'pty-d', file: 'claude', args: [], opts, meta: { kind: 'session', id: 'ses-d', restore: { ...restore, sandboxed: true, sandboxKind: 'deny-only' } } })
+    ptys.open({ id: 'pty-u', file: 'claude', args: [], opts, meta: { kind: 'session', id: 'ses-u', restore: { ...restore, sandboxed: true, sandboxKind: 'jail' } } })
+    ptys.open({ id: 'pty-n', file: 'claude', args: [], opts, meta: { kind: 'session', id: 'ses-n', restore } })
+    ptys.open({ id: 'pty-x', file: 'claude', args: [], opts, meta: { kind: 'session', id: 'ses-x', restore: { ...restore, sandboxed: 'yes', sandboxKind: 'sandbox' } } })
+    procs.open({ id: 'proc-s', file: 'codex', args: [], opts: { cwd: 'D:/repo', env: {} }, meta: { kind: 'chat', id: 'chat-s', restore: { ...restore, sandboxed: true, sandboxKind: 'sandbox' } } })
+    const rows = await registrySessions({ ptys, procs, hookEventsDir: NO_HOOK_DIR, accounts: async () => [] }).listSessions()
+    const row = (id: string) => rows.find((r) => r.id === id)
+    expect(row('ses-s')).toMatchObject({ sandboxed: true, sandboxKind: 'sandbox' })
+    expect(row('ses-d')).toMatchObject({ sandboxed: true, sandboxKind: 'deny-only' })
+    expect(row('chat-s')).toMatchObject({ kind: 'chat', sandboxed: true, sandboxKind: 'sandbox' })
+    expect(row('ses-u')).toMatchObject({ sandboxed: true })
+    expect(row('ses-u')).not.toHaveProperty('sandboxKind')
+    for (const id of ['ses-n', 'ses-x']) {
+      expect(row(id), id).not.toHaveProperty('sandboxed')
+      expect(row(id), id).not.toHaveProperty('sandboxKind')
+    }
+  })
+
   // The entry stays after the exit so `list` can say it ended (registry.ts) — and so does this one.
   it('an ended session stays listed, as not alive', async () => {
     const { sessions, agent } = harness()

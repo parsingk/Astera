@@ -37,7 +37,7 @@ async function rig(o: { mode?: string; options?: McpExtension['options']; pool?:
   }
   const other: McpExtension = { ...echo, id: 'mcp-other', name: 'other' }
   const registry: ExtensionRegistry = { version: 1, entries: [echo, other] }
-  const tokens = createTokenTable()
+  const tokens = createTokenTable(() => undefined)
   tokens.register(TOKEN, { ownerId: 'p1', folder, grant: new Set(['mcp-echo']) })
   tokens.register(OTHER, { ownerId: 'p2', folder, grant: new Set(['mcp-echo']) })
   const pool = createUpstreamPool({ profileDir: path.join(root, 'profile'), baseEnv: process.env, log: () => {}, ...o.pool })
@@ -104,6 +104,12 @@ describe('the MCP Gateway', () => {
     expect(await h.raw(bearer, '/mcp/mcp-other')).toBe(403)
     expect(await h.raw(bearer, '/mcp/mcp-missing')).toBe(403)
     expect(await h.raw(bearer, '/elsewhere')).toBe(404)
+  })
+
+  it('the Gateway still refuses a token whose grant lacks the server', async () => {
+    const h = await rig()
+    h.tokens.register('E'.repeat(43), { ownerId: 'p3', folder: h.folder, grant: new Set() })
+    expect(await h.raw({ authorization: `Bearer ${'E'.repeat(43)}` })).toBe(403)
   })
 
   it('shares one upstream between two sessions of one folder, and passes its notifications to both', async () => {

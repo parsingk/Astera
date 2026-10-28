@@ -664,3 +664,19 @@ describe('policies show', () => {
     expect(USAGE['policies-show'].detail).toContain('`mode` is compatibility (nothing is observed), observe or enforce')
   })
 })
+
+// Sandbox design §6, Task 5 fix round 1: the switch starts every session of the profile in its CLI's sandbox, terminal and
+// chat since Task 6 and Claude's since Task 7 (deny rules only on Windows), and a chain keeps the sandbox state it started
+// with whatever the switch says later
+describe('agent-profiles --sandbox', () => {
+  it('says which sessions the switch starts in the sandbox, and that a chain keeps the state it started with', () => {
+    const flag = (cmd: 'agent-profiles-create' | 'agent-profiles-update') => USAGE[cmd].flags?.find((f) => f.name === 'sandbox')
+    for (const cmd of ['agent-profiles-create', 'agent-profiles-update'] as const) {
+      expect(flag(cmd)?.about, cmd).toContain("its sessions, terminal and chat, in their CLI's own sandbox")
+      expect(flag(cmd)?.about, cmd).toContain('Claude Code on Windows gets deny rules only')
+    }
+    expect(USAGE['agent-profiles-create'].detail).toContain("--sandbox on starts its sessions, terminal and chat, in their CLI's own sandbox (Codex's, or Claude Code's on macOS and Linux")
+    expect(USAGE['agent-profiles-create'].detail).toContain('Windows')
+    expect(USAGE['agent-profiles-update'].detail).toContain('keeps the sandbox state it started with')
+  })
+})

@@ -39,7 +39,8 @@ import {
   worstResetAt,
   type CodexLimitState
 } from './codexSignal'
-import { t, type Lang } from '../i18n'
+import { t, type Lang, type Message } from '../i18n'
+import { rollRefusalMessage } from '../sandbox/unavailable'
 import { ROLL_SNAPSHOT_VERSION, snapshotKey, type RollSnapshot, type RollRespawnExtra } from './snapshot'
 import { untilEnter } from '../sessions/sessionDriver'
 
@@ -106,17 +107,26 @@ export interface CodexRollingDeps {
     /** The agent profile the chain was started from (SessionInfo.agentProfileId), kept by every roll
      *  (claudeCoordinator.ts's own field, same contract). */
     agentProfileId?: string
+    /** The chain runs in its CLI's sandbox (SessionInfo.sandboxed), kept by every roll (claudeCoordinator.ts's own field,
+     *  same contract). */
+    sandbox?: boolean
     /** Extra keys for the new pty's note (S6 R6) — `rolledFrom` and the chain's snapshot on its new
      *  account. The manager merges them into `meta.restore` under its own keys. */
     restoreExtra?: RollRespawnExtra
   }): SessionInfo
   /** Everything a respawn needs that can wait or refuse, done while the old session still lives (S6 R5).
    *  A rejection aborts the roll before the kill and reschedules it. Absent: nothing to prepare.
-   *  `agentProfileId` is the chain's own (claudeCoordinator.ts's own dep, same contract). */
-  prepareSpawn?(account: Account, cwd: string, agentProfileId?: string): Promise<void>
+   *  `agentProfileId` and `sandbox` are the chain's own (claudeCoordinator.ts's own dep, same contract). `kind` is
+   *  `'chat'` for a chat chain, whose respawn is an app-server (its sandbox needs no `--no-daemon`), and absent otherwise. */
+  prepareSpawn?(account: Account, cwd: string, agentProfileId?: string, sandbox?: boolean, kind?: 'chat'): Promise<void>
   kill(sessionId: string): void
   /** Writes into a live session's PTY. Used only to dismiss the model-switch prompt (answerModelChoice). */
   write(sessionId: string, data: string): void
+  /** Tells the person, in the live session's tab, why a roll is waiting when its respawn would start without the sandbox
+   *  the chain runs in (sandbox design §6, E5), such as an account whose Windows sandbox is not set up: `reason` is the
+   *  catalog message, and the wiring words it for the session's kind (a terminal's `[Astera]` line as output, never as
+   *  the person's input; a chat's notice). Absent: the reason is only logged. */
+  tell?(sessionId: string, reason: Message): void
   getAccount(id: string): Account | null
   send(channel: 'session:rolled' | 'session:rollState', payload: unknown): void
   log(message: string): void
@@ -236,6 +246,8 @@ interface Chain {
   textHit: boolean // whether the limit phrase was seen in this window — read only by judgedByPriorBlock and the ignored-phrase log now that the phrase-only verdict is retired
   unmappedWarned: boolean // whether the rollout-unmapped skip has already been logged (suppresses repeats of the same line)
   preemptWarned: boolean // whether the preemption has already been logged — keeps it from piling up on every 1-second poll
+  /** The sandbox refusal last written into the tab (tellSandboxRefusal), cleared once a roll gets through. */
+  sandboxRefusalTold?: string
   lastOutputAt: number
   rolling: boolean
   /** Between the roll's own kill and the re-key: an exit then is the roll's (audit RL-1). */
@@ -1584,6 +1596,22 @@ export class CodexRollingCoordinator {
     this.armWait(chain, plan)
   }
 
+  /** A respawn the sandbox refused (sandbox design §6, the person's decision in Task 6): the session it would replace is
+   *  still running, so the reason goes into its tab, where the person will look; the roll waits as any refused one does.
+   *  An account that is not set up is named by its display name, with where to set it up (Settings › Agent profiles).
+   *  Said once per reason for as long as the chain keeps being refused for it: the wait retries every round, and a night
+   *  of rounds would otherwise fill the tab with the same line. Any other refusal is only logged, as before. */
+  private tellSandboxRefusal(chain: Chain, why: string): void {
+    const reason = rollRefusalMessage(why, (id) => this.deps.getAccount(id)?.label ?? null)
+    if (!reason || !this.deps.tell || chain.sandboxRefusalTold === why) return
+    chain.sandboxRefusalTold = why
+    try {
+      this.deps.tell(chain.liveId, reason)
+    } catch (err) {
+      this.deps.log(`codex roll: the refusal could not be written into the tab: ${String(err)} session=${chain.liveId}`)
+    }
+  }
+
   /** Runs the roll: copy the rollout → kill → respawn in the same slot with codex resume. When Smart
    *  Resume is on and a briefing was built, the copy and the `--resume` are skipped instead — the new
    *  session starts blank, carrying only the briefing (see the `smart` branch below). */
@@ -1699,10 +1727,14 @@ export class CodexRollingCoordinator {
       // the kill below starts the await-free stretch (the claude side's roll() has the same block).
       if (this.deps.prepareSpawn) {
         try {
-          await this.deps.prepareSpawn(target, chain.cwd, chain.liveInfo.agentProfileId)
+          // A chat chain's respawn is prepared as a chat (its app-server needs no --no-daemon); a terminal one's is asked as
+          // it always was
+          const asChat: ['chat'] | [] = chain.kind === 'chat' ? ['chat'] : []
+          await this.deps.prepareSpawn(target, chain.cwd, chain.liveInfo.agentProfileId, chain.liveInfo.sandboxed === true, ...asChat)
         } catch (err) {
           const why = err instanceof Error ? err.message : String(err)
           this.deps.log(`codex roll aborted — the respawn would be refused: ${why} session=${chain.liveId}`)
+          this.tellSandboxRefusal(chain, why)
           this.rescheduleAbortedRoll(chain, `spawn refused: ${why}`)
           return
         }
@@ -1787,6 +1819,8 @@ export class CodexRollingCoordinator {
         startWithBypass: wasBypassed,
         ...(chain.liveInfo.startedBy ? { startedBy: chain.liveInfo.startedBy } : {}),
         ...(chain.liveInfo.agentProfileId ? { agentProfileId: chain.liveInfo.agentProfileId } : {}),
+        // The sandbox rides the chain as the bypass does (claudeCoordinator.ts's own comment says why)
+        ...(chain.liveInfo.sandboxed ? { sandbox: true } : {}),
         // S6 R6: the new pty is born with what a takeover needs if this process dies before the rekey
         // commits — the claude side's field, same contract. awaitingPrompt is false: the carry-on
         // prompt rides this spawn (argv or first chat turn), so nothing is left to type. The tail starts
@@ -1813,6 +1847,7 @@ export class CodexRollingCoordinator {
       chain.killing = false
       chain.liveId = info.id
       chain.liveInfo = info
+      chain.sandboxRefusalTold = undefined
       chain.lastOutputAt = this.now()
       chain.state = null
       chain.textHit = false

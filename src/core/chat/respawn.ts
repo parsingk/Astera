@@ -31,6 +31,9 @@ export interface ChatRollSpawn {
   startedBy?: 'agent'
   /** The agent profile the session is started from (SessionInfo.agentProfileId). */
   agentProfileId?: string
+  /** The chain runs in Codex's sandbox (SessionInfo.sandboxed), kept by the roll; its folder was read for it by the
+   *  roll's preparation, before the kill. */
+  sandbox?: boolean
   /** The session's own policy, when the request names one: a fresh session (`sessions create --kind
    *  chat --unattended`) has no old session to ask. Absent, the policy is asked of the old session. */
   unattendedPermission?: UnattendedPermission
@@ -59,6 +62,7 @@ export function chatSpawnOptsOf(
     ...(o.restoreExtra !== undefined ? { restoreExtra: o.restoreExtra } : {}),
     ...(o.startedBy ? { startedBy: o.startedBy } : {}),
     ...(o.agentProfileId ? { agentProfileId: o.agentProfileId } : {}),
+    ...(o.sandbox ? { sandbox: true } : {}),
     bypassSignal: d.bypassSignal,
     unattendedPermission: o.unattendedPermission ?? d.unattendedOf(o.restoreExtra?.rolledFrom),
     ...(d.hostStarting ? { hostStarting: true } : {})

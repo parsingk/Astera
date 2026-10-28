@@ -3,6 +3,7 @@
 // this side only says it.
 import type { MessageKey, MessageParams } from '../../../core/i18n'
 import type { AgentProfile, ProfilePermission } from '../../../core/agentProfiles/types'
+import type { PluginsCallAnswer } from '../../../core/types'
 import { metaOf, providerOf, type Provider } from '../../../core/providers/meta'
 import { failureLine } from './extensionsText'
 
@@ -118,3 +119,58 @@ export function addableAccounts<A extends { id: string; provider?: Provider }>(a
 
 /** An account's provider by name, after its label in the add list. */
 export const providerSuffix = (a: { provider?: Provider }): string => ` (${metaOf(a).displayName})`
+
+/** What the sandbox switch's lines say (sandbox design §6): what it does for the profile's CLI on each OS, then its
+ *  limits. Before an account is picked the profile has no CLI yet, and both are said. */
+export function sandboxHintKeys(provider: Provider | undefined): MessageKey[] {
+  const codex: MessageKey = 'settings.agentProfiles.sandboxHint.codex'
+  const claude: MessageKey = 'settings.agentProfiles.sandboxHint.claude'
+  const lines = provider === 'codex' ? [codex] : provider === 'claude' ? [claude] : [codex, claude]
+  return [...lines, 'settings.agentProfiles.sandboxHint.limits']
+}
+
+/** Whether a Codex home's Windows sandbox is set up, as the Host answers it (core/sandbox/windowsReadiness.ts). */
+export type SandboxState = 'ready' | 'not-set-up' | 'check-failed'
+const SANDBOX_STATES: Record<SandboxState, MessageKey> = {
+  ready: 'settings.agentProfiles.sandboxState.ready',
+  'not-set-up': 'settings.agentProfiles.sandboxState.not-set-up',
+  'check-failed': 'settings.agentProfiles.sandboxState.check-failed'
+}
+const isState = (s: unknown): s is SandboxState => typeof s === 'string' && Object.hasOwn(SANDBOX_STATES, s)
+
+/** A readiness in words; one a newer Host gives, as it was named. */
+export const sandboxStateLine = (s: string, t: T): string => (isState(s) ? t(SANDBOX_STATES[s]) : s)
+
+/** 설정하기 is offered for an account that is not set up, and only then: one that could not be asked about would not be
+ *  helped by it (windowsReadiness.ts). */
+export const offersSetUp = (s: SandboxState | null): boolean => s === 'not-set-up'
+
+/** The profile's Codex accounts that are still registered, in its order. */
+const codexAccountsOf = <A extends { id: string; provider?: Provider }>(p: AgentProfile, accounts: readonly A[]): A[] =>
+  p.accountIds.map((id) => accounts.find((a) => a.id === id)).filter((a): a is A => a !== undefined && providerOf(a) === 'codex')
+
+/** Whether the editor shows each Codex account's readiness (Task 8): a stored profile with the sandbox on, on Windows,
+ *  where Codex's elevated sandbox is set up per account, with a Codex account. */
+export function sandboxReadinessShown(p: AgentProfile, platform: string, accounts: readonly { id: string; provider?: Provider }[]): boolean {
+  return p.sandbox && platform === 'win32' && codexAccountsOf(p, accounts).length > 0
+}
+
+/** The readiness lines, one per Codex account of the profile in its order, with what the Host answered (null while it is
+ *  still being asked). An account the Host left out, or an answer that did not come, could not be asked about. */
+export function readinessRows(
+  p: AgentProfile,
+  accounts: readonly { id: string; label: string; provider?: Provider }[],
+  answer: PluginsCallAnswer | null
+): { accountId: string; label: string; state: SandboxState | null }[] {
+  const said = new Map<string, SandboxState>()
+  if (answer?.ok && Array.isArray(answer.body.accounts))
+    for (const e of answer.body.accounts as unknown[]) {
+      const o = typeof e === 'object' && e !== null ? (e as Record<string, unknown>) : {}
+      if (typeof o.accountId === 'string' && isState(o.state)) said.set(o.accountId, o.state)
+    }
+  return codexAccountsOf(p, accounts).map((a) => ({
+    accountId: a.id,
+    label: a.label,
+    state: answer === null ? null : (said.get(a.id) ?? 'check-failed')
+  }))
+}

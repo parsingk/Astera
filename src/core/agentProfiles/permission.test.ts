@@ -23,7 +23,7 @@ const profileDir = async (profiles: AgentProfile[] = []): Promise<string> => {
   return d
 }
 const P = (over: Partial<AgentProfile> = {}): AgentProfile => ({
-  id: 'ap_000000000001', name: 'Reviewer', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'inherit',
+  id: 'ap_000000000001', name: 'Reviewer', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'inherit', sandbox: false,
   createdAt: '2026-10-22T00:00:00.000Z', updatedAt: '2026-10-22T00:00:00.000Z', ...over
 })
 const reader = (yolo: boolean) => {
@@ -73,20 +73,28 @@ describe('profileSpawn', () => {
 
   it('gives the profile\'s real id and its permission', async () => {
     const dir = await profileDir([P({ id: 'ap_b', name: 'Bypasser', permission: 'bypass' }), P({ id: 'ap_a', name: 'Asker', permission: 'ask' })])
-    expect((await call(dir, { agentProfileId: 'ap_b', yolo: false })).r).toEqual({ agentProfileId: 'ap_b', bypassPermissions: true })
-    expect((await call(dir, { agentProfileId: 'ap_a', yolo: true })).r).toEqual({ agentProfileId: 'ap_a', bypassPermissions: false })
+    expect((await call(dir, { agentProfileId: 'ap_b', yolo: false })).r).toEqual({ agentProfileId: 'ap_b', bypassPermissions: true, sandbox: false })
+    expect((await call(dir, { agentProfileId: 'ap_a', yolo: true })).r).toEqual({ agentProfileId: 'ap_a', bypassPermissions: false, sandbox: false })
   })
 
   // Ruling (b): the Host's delete guard compares ids, so a name the caller passed must not be what the session keeps
   it('resolves a name to the profile\'s id', async () => {
     const dir = await profileDir([P({ id: 'ap_r', name: 'Reviewer', permission: 'inherit' })])
-    expect((await call(dir, { agentProfileId: 'reviewer', yolo: true })).r).toEqual({ agentProfileId: 'ap_r', bypassPermissions: true })
+    expect((await call(dir, { agentProfileId: 'reviewer', yolo: true })).r).toEqual({ agentProfileId: 'ap_r', bypassPermissions: true, sandbox: false })
   })
 
   it('an explicit bypassPermissions from the caller still wins', async () => {
     const dir = await profileDir([P({ id: 'ap_b', permission: 'bypass' }), P({ id: 'ap_a', name: 'Asker', permission: 'ask' })])
-    expect((await call(dir, { agentProfileId: 'ap_b', bypassPermissions: false })).r).toEqual({ agentProfileId: 'ap_b', bypassPermissions: false })
-    expect((await call(dir, { agentProfileId: 'ap_a', bypassPermissions: true })).r).toEqual({ agentProfileId: 'ap_a', bypassPermissions: true })
+    expect((await call(dir, { agentProfileId: 'ap_b', bypassPermissions: false })).r).toEqual({ agentProfileId: 'ap_b', bypassPermissions: false, sandbox: false })
+    expect((await call(dir, { agentProfileId: 'ap_a', bypassPermissions: true })).r).toEqual({ agentProfileId: 'ap_a', bypassPermissions: true, sandbox: false })
+  })
+
+  // Sandbox design §6: the switch travels with the profile to every spawn path, whatever the caller's own bypass
+  it("gives the profile's sandbox switch", async () => {
+    const dir = await profileDir([P({ id: 'ap_s', name: 'Boxed', sandbox: true }), P({ id: 'ap_o', name: 'Open' })])
+    expect((await call(dir, { agentProfileId: 'ap_s', bypassPermissions: true })).r).toEqual({ agentProfileId: 'ap_s', bypassPermissions: true, sandbox: true })
+    expect((await call(dir, { agentProfileId: 'boxed' })).r).toMatchObject({ sandbox: true })
+    expect((await call(dir, { agentProfileId: 'ap_o' })).r).toMatchObject({ sandbox: false })
   })
 
   it('a profile that is not found is null, with one log line', async () => {
@@ -97,11 +105,19 @@ describe('profileSpawn', () => {
     expect(logs[0]).toContain('ap_gone')
   })
 
-  it('a store that cannot be read is null, with one log line', async () => {
+  // Task 5 fix round 1: a store that cannot be read may hold this profile's sandbox or its `ask`, so the spawn is refused
+  // with the store's repair reason instead of starting with less than the person set; not found still starts without one
+  it('a store that cannot be read refuses the spawn, naming the file to repair, with one log line', async () => {
     const dir = await profileDir()
     await fs.writeFile(profilePaths(dir).agentProfiles, '{ damaged')
-    const { r, logs } = await call(dir, { agentProfileId: 'ap_000000000001' })
-    expect(r).toBeNull()
+    const logs: string[] = []
+    const refused = await profileSpawn({ profileDir: dir, agentProfileId: 'ap_000000000001', appWideYolo: async () => true, log: (l) => logs.push(l) }).then(
+      () => null,
+      (e: unknown) => e
+    )
+    expect(refused).toBeInstanceOf(RepairNeeded)
+    expect((refused as RepairNeeded).file).toBe('agent-profiles.json')
+    expect((refused as RepairNeeded).message).toMatch(/ap_000000000001/)
     expect(logs).toHaveLength(1)
   })
 
@@ -130,7 +146,12 @@ describe('appProfileSpawn', () => {
 
   it('a profile that resolves gives its id and permission', async () => {
     const dir = await profileDir([P({ id: 'ap_a', permission: 'ask' })])
-    expect(await call(dir, { agentProfileId: 'ap_a', yolo: true })).toEqual({ agentProfileId: 'ap_a', bypassPermissions: false })
+    expect(await call(dir, { agentProfileId: 'ap_a', yolo: true })).toEqual({ agentProfileId: 'ap_a', bypassPermissions: false, sandbox: false })
+  })
+
+  it('a sandboxed profile that resolves gives its sandbox', async () => {
+    const dir = await profileDir([P({ id: 'ap_s', sandbox: true })])
+    expect(await call(dir, { agentProfileId: 'ap_s', yolo: false })).toEqual({ agentProfileId: 'ap_s', bypassPermissions: false, sandbox: true })
   })
 
   it('a profile that does not resolve falls back to the app-wide mode, with no id', async () => {
@@ -139,10 +160,11 @@ describe('appProfileSpawn', () => {
     expect(await call(dir, { agentProfileId: 'ap_gone', yolo: false })).toEqual({ bypassPermissions: false })
   })
 
-  it('a damaged store falls back to the app-wide mode too', async () => {
+  // Task 5 fix round 1: the app's spawn is refused too; only a profile that is not there falls back
+  it('a damaged store refuses the spawn instead of falling back', async () => {
     const dir = await profileDir()
     await fs.writeFile(profilePaths(dir).agentProfiles, '{ damaged')
-    expect(await call(dir, { agentProfileId: 'ap_000000000001', yolo: true })).toEqual({ bypassPermissions: true })
+    await expect(call(dir, { agentProfileId: 'ap_000000000001', yolo: true })).rejects.toBeInstanceOf(RepairNeeded)
   })
 
   it('an explicit value from the caller still wins when the profile does not resolve', async () => {

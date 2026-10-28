@@ -23,7 +23,7 @@ const profileDir = async (): Promise<string> => {
 }
 
 const P = (over: Partial<AgentProfile> = {}): AgentProfile => ({
-  id: 'ap_1', name: 'Reviewer', status: 'active', accountIds: ['acc_1'], mcpExclude: [], permission: 'inherit',
+  id: 'ap_1', name: 'Reviewer', status: 'active', accountIds: ['acc_1'], mcpExclude: [], permission: 'inherit', sandbox: false,
   createdAt: '2026-10-22T00:00:00.000Z', updatedAt: '2026-10-22T00:00:00.000Z', ...over
 })
 

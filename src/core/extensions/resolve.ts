@@ -58,6 +58,9 @@ const BARE_KEY = /^[A-Za-z0-9_-]+$/
 /** The names Host and sessions agree on (host/gateway/tokens.ts reads them). */
 export const GATEWAY_TOKEN_ENV = 'ASTERA_GATEWAY_TOKEN'
 export const GATEWAY_GRANT_ENV = 'ASTERA_GATEWAY_GRANT'
+/** Where the Host's loopback endpoint is (`http://127.0.0.1:<port>`): the CLI of a session whose sandbox cannot open the
+ *  Host's pipe sends its commands there with the session's workload token (sandbox design §6). */
+export const LOOPBACK_ENV = 'ASTERA_LOOPBACK'
 
 export async function resolveSessionCapabilities(a: {
   profileDir: string
@@ -77,7 +80,8 @@ export async function resolveSessionCapabilities(a: {
   const out: SessionCapabilities = {
     context: await resolveAgentContext(a),
     args: [],
-    env: {},
+    // Whenever there is a Host, shared server or not, so the early returns below carry it too
+    env: a.gatewayPort === null ? {} : { [LOOPBACK_ENV]: `http://127.0.0.1:${a.gatewayPort}` },
     given: [],
     gatewayGrant: [],
     skipped: []
@@ -220,11 +224,11 @@ async function resolveAgentContext(a: {
   return implicit
 }
 
-/** The variables one spawn adds for the Gateway (design §4.2): a token made for this spawn alone, and the servers it was
- *  given. The Host registers them when it opens the session (host/gateway/tokens.ts). Nothing when no server goes
- *  through the Gateway. */
+/** The variables one spawn adds for the Gateway (design §4.2) and for the Host's own commands: a token made for this
+ *  spawn alone, and the servers it was given. The Host registers them when it opens the session
+ *  (host/gateway/tokens.ts). Every session gets the token, the workload token a call to the Host is known by (sandbox
+ *  design §7); with no shared server the grant is empty and the Gateway lets that token reach none. */
 export function gatewayTokenEnv(caps: Pick<SessionCapabilities, 'gatewayGrant'>): Record<string, string> {
-  if (caps.gatewayGrant.length === 0) return {}
   return { [GATEWAY_TOKEN_ENV]: randomBytes(32).toString('base64url'), [GATEWAY_GRANT_ENV]: caps.gatewayGrant.join(',') }
 }
 

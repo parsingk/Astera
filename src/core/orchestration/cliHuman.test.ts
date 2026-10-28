@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { columns, displayWidth, humanFor, quietFor, shellOf, stateWord } from './cliHuman'
 import { ACTION_PHRASES, COVERAGE_NOTE_PHRASES } from '../audit/phrases'
 import type { AuditAction, CoverageNote } from '../audit/types'
+import { SANDBOX_COVERAGE } from '../sandbox/coverage'
 import type { MessageKey } from '../i18n'
 import { en } from '../i18n/messages/en'
 
@@ -141,17 +142,24 @@ describe('humanFor', () => {
     )
   })
 
-  // Agent Profiles design §6: a row per profile, its state first as plugins list does, then its id, name, permission
-  // and accounts in order
+  // Agent Profiles design §6: a row per profile, its state first as plugins list does, then its id, name, permission,
+  // sandbox switch (sandbox design §6; a profile from a Host before it reads as off) and accounts in order
   it('agent-profiles list is a row per profile, and one profile is its fields', () => {
     expect(
       humanFor('agent-profiles-list', {
         profiles: [
-          { id: 'ap_1', name: 'Reviewer', status: 'active', accountIds: ['acc_a', 'acc_b'], mcpExclude: [], permission: 'ask' },
-          { id: 'ap_2', name: 'Night', status: 'archived', accountIds: [], mcpExclude: ['m'], permission: 'inherit' }
+          { id: 'ap_1', name: 'Reviewer', status: 'active', accountIds: ['acc_a', 'acc_b'], mcpExclude: [], permission: 'ask', sandbox: true },
+          { id: 'ap_2', name: 'Night', status: 'archived', accountIds: [], mcpExclude: ['m'], permission: 'inherit', sandbox: false },
+          { id: 'ap_3', name: 'Old', status: 'active', accountIds: ['acc_a'], mcpExclude: [], permission: 'bypass' }
         ]
       })
-    ).toBe(['ACTIVE    ap_1  Reviewer  ask      acc_a,acc_b', 'ARCHIVED  ap_2  Night     inherit  -'].join(String.fromCharCode(10)))
+    ).toBe(
+      [
+        'ACTIVE    ap_1  Reviewer  ask      on   acc_a,acc_b',
+        'ARCHIVED  ap_2  Night     inherit  off  -',
+        'ACTIVE    ap_3  Old       bypass   off  acc_a'
+      ].join(String.fromCharCode(10))
+    )
     expect(humanFor('agent-profiles-show', { id: 'ap_1', name: 'Reviewer' })).toContain('Reviewer')
     expect(humanFor('agent-profiles-delete', { id: 'ap_1', name: 'Reviewer', deleted: true })).toContain('ap_1')
   })
@@ -534,15 +542,28 @@ describe('humanFor', () => {
     )
   })
 
-  it('sessions list 는 살았는지·하는 일·id·종류·제목이다', () => {
+  // The protection column: `sandbox` (the CLI's own sandbox), `deny-only` (Claude Code on Windows), `sandboxed` for a kind
+  // this build does not name, and `-` for a session outside the sandbox
+  it('sessions list 는 살았는지·하는 일·id·종류·보호·제목이다', () => {
     expect(
       humanFor('sessions-list', {
         sessions: [
           { id: 's1', kind: 'terminal', title: 'repo', alive: true, state: 'working' },
-          { id: 's2', kind: 'chat', title: '대화', alive: false, state: 'unknown' }
+          { id: 's2', kind: 'chat', title: '대화', alive: false, state: 'unknown' },
+          { id: 's3', kind: 'terminal', title: 'box', alive: true, state: 'unknown', sandboxed: true, sandboxKind: 'sandbox' },
+          { id: 's4', kind: 'chat', title: 'deny', alive: true, state: 'unknown', sandboxed: true, sandboxKind: 'deny-only' },
+          { id: 's5', kind: 'chat', title: 'old', alive: true, state: 'unknown', sandboxed: true }
         ]
       })
-    ).toBe(['ALIVE  working  s1  terminal  repo', 'ENDED  unknown  s2  chat      대화'].join('\n'))
+    ).toBe(
+      [
+        'ALIVE  working  s1  terminal  -          repo',
+        'ENDED  unknown  s2  chat      -          대화',
+        'ALIVE  unknown  s3  terminal  sandbox    box',
+        'ALIVE  unknown  s4  chat      deny-only  deny',
+        'ALIVE  unknown  s5  chat      sandboxed  old'
+      ].join('\n')
+    )
   })
 
   // 읽으라고 부른 것이므로 화면 그대로다 — 표로 싸면 사람이 읽으려던 것을 가린다.
@@ -885,6 +906,32 @@ describe('humanFor — audit and policies', () => {
     const out = humanFor('policies-show', { mode: 'enforce', policy: { ...policy, mode: 'enforce' }, coverage, enforceCoverage })
     expect(out?.split('\n').at(-1)).toBe('codex chat  enforced  partial (shell text only)  enforced    enforced  partial')
     expect(humanFor('policies-show', { mode: 'observe', policy, coverage, enforceCoverage })).not.toContain('enforced')
+  })
+
+  // Sandbox design §6: what the sandbox blocks, a row per CLI and OS, under what observe or enforce covers; the network
+  // reads allowed (E3), and a note is its screen phrase
+  it('policies show prints what the sandbox blocks, one row per provider and OS', () => {
+    const out = humanFor('policies-show', { mode: 'observe', policy, coverage: [], sandboxCoverage: SANDBOX_COVERAGE }) ?? ''
+    const block = out.split('\n\n').at(-1)?.split('\n') ?? []
+    const table = block.slice(0, 7)
+    expect(table[0].trim().split(/\s{2,}/)).toEqual(['sandbox', 'write', 'login folders', 'OS secret store', 'network'])
+    expect(table.slice(1).map((l) => l.split(/\s{2,}/)[0])).toEqual([
+      'claude Windows',
+      'claude macOS',
+      'claude Linux',
+      'codex Windows',
+      'codex macOS',
+      'codex Linux'
+    ])
+    // Task 8 fix round 1: beside the Claude Windows row, that its shell is not restricted
+    expect(table[1].split(/\s{2,}/).slice(1)).toEqual(['none', 'partial (file tools only)', 'none', 'allowed', 'Windows: the shell is not restricted'])
+    // Final fix pass (minor 5): every cell Claude's sandbox enforces on macOS and Linux says it was measured on the runtime
+    expect(table[2].split(/\s{2,}/).slice(1)).toEqual(['enforced (measured on the runtime)', 'enforced (measured on the runtime)', 'enforced (measured on the runtime)', 'allowed'])
+    expect(table[6].split(/\s{2,}/).slice(1)).toEqual(['enforced', 'enforced', 'enforced (when the session bus is a file path)', 'allowed'])
+    // And under it, that the home stays readable outside the login folders
+    expect(block.slice(7)).toEqual(['Outside the login folders, the home folder stays readable inside the sandbox.'])
+    // A Host that does not answer it prints the rules and the coverage as before
+    expect(humanFor('policies-show', { mode: 'observe', policy })).toBe(rules.join('\n'))
   })
 
   it('a change answers the rules as they are now', () => {

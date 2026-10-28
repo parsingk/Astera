@@ -7,6 +7,7 @@ import { findProfile, liveAccounts, readAgentProfiles, validateProfile, writeAge
 import type { AgentProfile, ProfilePermission } from '../../core/agentProfiles/types'
 import type { OrchCaller } from '../../core/host/orchProtocol'
 import type { Account } from '../../core/types'
+import type { Readiness } from '../../core/sandbox/windowsReadiness'
 import { agentProfileIdOf } from '../../core/sessions/noteInfo'
 import { holdsAgentProfile } from '../../core/orchestration/running'
 import type { OrchState } from '../../core/orchestration/state'
@@ -19,8 +20,15 @@ export const AGENT_PROFILE_COMMANDS: ReadonlySet<string> = new Set([
   'agent-profiles-archive',
   'agent-profiles-restore',
   'agent-profiles-delete',
-  'agent-profiles-touch'
+  'agent-profiles-touch',
+  'agent-profiles-sandbox-setup',
+  'agent-profiles-sandbox-readiness'
 ])
+
+/** What only the app may send: Codex's Windows sandbox setup brings up the administrator prompt on the person's screen,
+ *  so it follows a press of 설정하기 and nothing else, not the person's CLI and never an agent's shell. The readiness
+ *  Settings › Agent profiles shows beside it is the app's too: it runs codex for each account, which no shell needs. */
+const APP_ONLY_AGENT_PROFILE_COMMANDS: ReadonlySet<string> = new Set(['agent-profiles-sandbox-setup', 'agent-profiles-sandbox-readiness'])
 
 /** The ones that change the store: all but the two reads and the use stamp, which is not a person's change. */
 export const AGENT_PROFILE_CHANGES: ReadonlySet<string> = new Set([
@@ -53,6 +61,10 @@ const MCP_AGENT_PROFILE_COMMANDS: ReadonlySet<string> = new Set(['agent-profiles
 /** `lastUsedAt` is stamped at most this often per profile. */
 const TOUCH_EVERY_MS = 60_000
 const PERMISSIONS: readonly ProfilePermission[] = ['inherit', 'bypass', 'ask']
+/** The sandbox switch (sandbox design §6) is a boolean only: a value that merely looks like one is refused rather than
+ *  read as on or off. Like every change here it is refused to an agent's shell, so an agent cannot switch off the
+ *  sandbox it runs in (Review Focus 5). */
+const SANDBOX_BOOLEAN = 'sandbox must be true or false'
 
 const bad = (error: string): AgentProfilesAnswer => ({ status: 400, body: { error } })
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e))
@@ -65,6 +77,13 @@ export function createHostAgentProfiles(d: {
   inUse: (id: string) => Promise<boolean>
   now?: () => number
   log: (line: string) => void
+  /** Sets up the Windows sandbox of one Codex account's home (core/sandbox/windowsReadiness.ts codexWindowsSetup) and
+   *  forgets the readiness answers kept. Absent on a Host with no Windows sandbox to set up. Never rejects. */
+  sandboxSetup?: (account: Account) => Promise<{ ok: boolean; out: string }>
+  /** Whether one Codex account's home has its Windows sandbox set up, asked as a sandboxed start asks it
+   *  (core/sandbox/windowsReadiness.ts codexWindowsReadiness: doctor first, the echo only on a home doctor calls
+   *  complete, so asking never brings up the administrator prompt). Absent on a Host with no Windows sandbox. */
+  sandboxReadiness?: (account: Account) => Promise<Readiness>
 }): HostAgentProfiles {
   const now = d.now ?? Date.now
   // One change at a time: two updates must each read what the other wrote
@@ -72,6 +91,19 @@ export function createHostAgentProfiles(d: {
   const queued = <T>(f: () => Promise<T>): Promise<T> => {
     const run = chain.then(f, f)
     chain = run.catch(() => {})
+    return run
+  }
+  // One setup at a time, apart from the store's changes, which must not wait on a person at the administrator prompt:
+  // two prompts at once would leave the person unsure which account each one is for. A second press for an account whose
+  // setup is queued or running shares it, so the person sees one prompt for it.
+  let setups: Promise<unknown> = Promise.resolve()
+  const settingUp = new Map<string, Promise<{ ok: boolean; out: string }>>()
+  const setUpOnce = (accountId: string, f: () => Promise<{ ok: boolean; out: string }>): Promise<{ ok: boolean; out: string }> => {
+    const shared = settingUp.get(accountId)
+    if (shared) return shared
+    const run = setups.then(f, f).finally(() => settingUp.delete(accountId))
+    setups = run.catch(() => {})
+    settingUp.set(accountId, run)
     return run
   }
 
@@ -98,12 +130,14 @@ export function createHostAgentProfiles(d: {
         if (args.description !== undefined && typeof args.description !== 'string') return bad('description must be text')
         if (args.mcpExclude !== undefined && !strings(args.mcpExclude)) return bad('mcpExclude must be a list of ids')
         if (args.permission !== undefined && !PERMISSIONS.includes(args.permission as ProfilePermission)) return bad('permission must be inherit, bypass or ask')
+        if (args.sandbox !== undefined && typeof args.sandbox !== 'boolean') return bad(SANDBOX_BOOLEAN)
         const input: ProfileInput = {
           name: args.name,
           accountIds: args.accountIds,
           ...(args.description !== undefined ? { description: args.description as string } : {}),
           ...(args.mcpExclude !== undefined ? { mcpExclude: args.mcpExclude as string[] } : {}),
-          ...(args.permission !== undefined ? { permission: args.permission as ProfilePermission } : {})
+          ...(args.permission !== undefined ? { permission: args.permission as ProfilePermission } : {}),
+          ...(args.sandbox !== undefined ? { sandbox: args.sandbox as boolean } : {})
         }
         return queued(async () => {
           const s = await readAgentProfiles(d.profileDir)
@@ -122,6 +156,7 @@ export function createHostAgentProfiles(d: {
         if (args.accountIds !== undefined && !strings(args.accountIds)) return bad('accountIds must be a list of ids')
         if (args.mcpExclude !== undefined && !strings(args.mcpExclude)) return bad('mcpExclude must be a list of ids')
         if (args.permission !== undefined && !PERMISSIONS.includes(args.permission as ProfilePermission)) return bad('permission must be inherit, bypass or ask')
+        if (args.sandbox !== undefined && typeof args.sandbox !== 'boolean') return bad(SANDBOX_BOOLEAN)
         const { id } = args
         return queued(async () => {
           const s = await readAgentProfiles(d.profileDir)
@@ -138,6 +173,7 @@ export function createHostAgentProfiles(d: {
               accountIds: args.accountIds !== undefined ? (args.accountIds as string[]) : liveAccounts(old, accounts),
               ...(args.mcpExclude !== undefined ? { mcpExclude: args.mcpExclude as string[] } : {}),
               ...(args.permission !== undefined ? { permission: args.permission as ProfilePermission } : {}),
+              ...(args.sandbox !== undefined ? { sandbox: args.sandbox as boolean } : {}),
               updatedAt: new Date(now()).toISOString()
             },
             accounts,
@@ -191,6 +227,50 @@ export function createHostAgentProfiles(d: {
           return { status: 200, body: {} }
         })
       }
+      case 'agent-profiles-sandbox-setup': {
+        // Sandbox design §6, as the person decided (Task 6): the one Codex account being started, not every Codex account
+        // of the profile. Each elevated setup gives the machine's sandbox users new passwords that only the home set up
+        // keeps, so the others would go stale; Codex's own files are never copied between homes either.
+        if (typeof args.id !== 'string' || typeof args.accountId !== 'string') return bad('agent-profiles-sandbox-setup needs id and accountId')
+        const { id, accountId } = args
+        const setUp = d.sandboxSetup
+        if (!setUp) return { status: 501, body: { error: 'this Host has no Windows sandbox to set up' } }
+        const p = findProfile(await readAgentProfiles(d.profileDir), id)
+        if (!p) return { status: 404, body: { error: `no agent profile ${id}` } }
+        const accounts = await d.readAccounts()
+        const account = liveAccounts(p, accounts).includes(accountId) ? accounts.find((a) => a.id === accountId) : undefined
+        if (!account) return bad(`${accountId} is not an account of the profile ${p.name}`)
+        if (account.provider !== 'codex') return bad(`${accountId} is not a Codex account`)
+        const r = await setUpOnce(account.id, async () => {
+          d.log(`agent profiles: setting up the Windows sandbox of ${account.id} (profile ${p.id})`)
+          const done = await setUp(account)
+          d.log(`agent profiles: the Windows sandbox setup of ${account.id} ${done.ok ? 'finished' : `failed: ${done.out || 'codex said nothing'}`}`)
+          return done
+        })
+        return { status: 200, body: { ok: r.ok, out: r.out } }
+      }
+      case 'agent-profiles-sandbox-readiness': {
+        // Task 8: Settings › Agent profiles shows each Codex account of a sandboxed profile as ready, not set up (with
+        // 설정하기) or could not ask, in the profile's order. The accounts are asked at once: each is its own home
+        if (typeof args.id !== 'string' || args.id === '') return bad('agent-profiles-sandbox-readiness needs id')
+        const ask = d.sandboxReadiness
+        if (!ask) return { status: 501, body: { error: 'this Host has no Windows sandbox to ask about' } }
+        const p = findProfile(await readAgentProfiles(d.profileDir), args.id)
+        if (!p) return { status: 404, body: { error: `no agent profile ${args.id}` } }
+        const all = await d.readAccounts()
+        const codex = liveAccounts(p, all)
+          .map((id) => all.find((a) => a.id === id))
+          .filter((a): a is Account => a?.provider === 'codex')
+        const accounts = await Promise.all(
+          codex.map(async (a) => ({
+            accountId: a.id,
+            state: await Promise.resolve()
+              .then(() => ask(a))
+              .catch((): Readiness => 'check-failed')
+          }))
+        )
+        return { status: 200, body: { accounts } }
+      }
       default:
         return { status: 501, body: { error: `${cmd} is not answered by this Host` } }
     }
@@ -200,6 +280,7 @@ export function createHostAgentProfiles(d: {
     command: async (a) => {
       const reader = a.role === 'mcp' && MCP_AGENT_PROFILE_COMMANDS.has(a.cmd)
       if (a.role !== 'app' && a.role !== 'cli' && !reader) return { status: 403, body: { error: `${a.cmd} is for this machine's app and CLI only` } }
+      if (APP_ONLY_AGENT_PROFILE_COMMANDS.has(a.cmd) && a.role !== 'app') return { status: 403, body: { error: `${a.cmd} is for this machine's app only` } }
       if (AGENT_PROFILE_CHANGES.has(a.cmd) && a.agentRefusal !== undefined) return { status: 403, body: { error: a.agentRefusal } }
       let r: AgentProfilesAnswer
       try {

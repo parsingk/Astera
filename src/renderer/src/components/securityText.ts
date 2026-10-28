@@ -11,9 +11,12 @@ import type {
   AuditRule,
   CoverageCell,
   CoverageClass,
-  CoverageRow
+  CoverageRow,
+  SandboxCoverageClass,
+  SandboxCoverageRow
 } from '../../../core/audit/types'
 import { ACTION_PHRASES, COVERAGE_NOTE_PHRASES } from '../../../core/audit/phrases'
+import { SANDBOX_TABLE_CAPTION, sandboxRowCaption } from '../../../core/sandbox/coverage'
 import { failureLine } from './extensionsText'
 
 type T = (key: MessageKey, params?: MessageParams) => string
@@ -122,6 +125,54 @@ export const coverageRowLabel = (r: Pick<CoverageRow, 'provider' | 'kind'>, t: T
 export function coverageCellText(cell: CoverageCell | undefined, t: T): string {
   if (cell === undefined) return ''
   const level = Object.hasOwn(LEVELS, cell.level) ? t(LEVELS[cell.level]) : String(cell.level)
+  if (cell.note === undefined) return level
+  const note = Object.hasOwn(COVERAGE_NOTE_PHRASES, cell.note) ? t(COVERAGE_NOTE_PHRASES[cell.note]) : String(cell.note)
+  return t('settings.security.coverage.withNote', { level, note })
+}
+
+/** The sandbox table's classes (sandbox design §6), in the order its columns show them. */
+export const SANDBOX_CLASSES: SandboxCoverageClass[] = ['write', 'sensitive', 'stores', 'network']
+const SANDBOX_CLASS_WORDS: Record<SandboxCoverageClass, MessageKey> = {
+  write: 'settings.security.sandboxCoverage.class.write',
+  sensitive: 'settings.security.sandboxCoverage.class.sensitive',
+  stores: 'settings.security.sandboxCoverage.class.stores',
+  network: 'settings.security.sandboxCoverage.class.network'
+}
+/** Its own words for the levels: the sandbox blocks or does not, and `seen` is what it lets through, the network (E3). */
+const SANDBOX_LEVELS: Record<CoverageCell['level'], MessageKey> = {
+  enforced: 'settings.security.sandboxCoverage.level.enforced',
+  partial: 'settings.security.sandboxCoverage.level.partial',
+  none: 'settings.security.sandboxCoverage.level.none',
+  seen: 'settings.security.sandboxCoverage.level.seen'
+}
+/** The OS by its own name, in every language. */
+const OS_NAMES: Record<SandboxCoverageRow['os'], string> = { win32: 'Windows', darwin: 'macOS', linux: 'Linux' }
+
+export const sandboxCoverageTitle = (t: T): string => t('settings.security.sandboxCoverage.title')
+export const sandboxClassLabel = (c: SandboxCoverageClass, t: T): string => t(SANDBOX_CLASS_WORDS[c])
+
+/** A CLI on an OS, as the table's rows are named. One this side does not know (a newer Host's) as it was named. */
+export const sandboxRowLabel = (r: Pick<SandboxCoverageRow, 'provider' | 'os'>, t: T): string =>
+  t('settings.security.coverage.row', { provider: PROVIDERS[r.provider] ?? r.provider, kind: Object.hasOwn(OS_NAMES, r.os) ? OS_NAMES[r.os] : r.os })
+
+/** Said under the table: the home stays readable outside the login folders (core/sandbox/coverage.ts). */
+export const sandboxTableCaption = (t: T): string => t(SANDBOX_TABLE_CAPTION)
+
+/** Said beside a row its cells cannot say it for (Claude Code's shell on Windows), or null. */
+export function sandboxRowNote(r: Pick<SandboxCoverageRow, 'provider' | 'os'>, t: T): string | null {
+  const key = sandboxRowCaption(r)
+  return key === null ? null : t(key)
+}
+
+/** A cell's class: by its level, but what the sandbox lets through (the network) is neutral, not the green that reads as
+ *  covered in the other table. */
+export const sandboxCellClass = (cell: CoverageCell | undefined): string => (cell?.level === 'seen' ? 'is-allowed' : `is-${cell?.level ?? 'none'}`)
+
+/** What the sandbox does to a class, with why when only partly or how it was measured. A level or note this side does
+ *  not know is shown as it was named. */
+export function sandboxCellText(cell: CoverageCell | undefined, t: T): string {
+  if (cell === undefined) return ''
+  const level = Object.hasOwn(SANDBOX_LEVELS, cell.level) ? t(SANDBOX_LEVELS[cell.level]) : String(cell.level)
   if (cell.note === undefined) return level
   const note = Object.hasOwn(COVERAGE_NOTE_PHRASES, cell.note) ? t(COVERAGE_NOTE_PHRASES[cell.note]) : String(cell.note)
   return t('settings.security.coverage.withNote', { level, note })
@@ -522,5 +573,10 @@ export const SECURITY_KEYS: MessageKey[] = [
   ...Object.values(PERIODS),
   ...Object.values(COVERAGE_TITLES),
   ...Object.values(BUILT_IN_WORDS),
-  ...ENFORCE_KEYS
+  ...ENFORCE_KEYS,
+  'settings.security.sandboxCoverage.title',
+  SANDBOX_TABLE_CAPTION,
+  'settings.security.sandboxCoverage.windowsClaude',
+  ...Object.values(SANDBOX_CLASS_WORDS),
+  ...Object.values(SANDBOX_LEVELS)
 ]

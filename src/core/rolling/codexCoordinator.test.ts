@@ -8,6 +8,7 @@ import { BlockRegistry } from './blockRegistry'
 import { CodexRollingCoordinator, type CodexRollingDeps } from './codexCoordinator'
 import { parseRollSnapshot, type RollSnapshot } from './snapshot'
 import { ENTER_MAX_WAIT_MS, ENTER_QUIET_MS } from '../sessions/sessionDriver'
+import { t } from '../i18n'
 
 let tmp: string
 
@@ -2096,6 +2097,29 @@ describe('chat chains', () => {
     h.coord.stop()
   })
 
+  // Task 6 fix round 1: a chat's respawn is prepared as a chat (its app-server needs no --no-daemon), and its refusal's
+  // reason goes to the same `tell`, which the wiring turns into the chat's notice
+  it('prepares a chat respawn as a chat, and tells a refusal the same way a terminal one is told', async () => {
+    const prepared: unknown[][] = []
+    const told: Array<[string, unknown]> = []
+    const h = harness({
+      prepareSpawn: async (...a) => {
+        prepared.push(a)
+        throw new Error('SANDBOX_UNAVAILABLE: windows-setup codex c2')
+      },
+      tell: (id, reason) => told.push([id, reason])
+    })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-chat-sbx', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register({ ...chatInfo(h.info1), sandboxed: true })
+    h.coord.attachChat('s1', 'cx-chat-sbx', file)
+    await appendLimitError(file)
+    await advance(15_000)
+    expect(prepared[0]).toEqual([expect.objectContaining({ id: 'c2' }), h.info1.cwd, undefined, true, 'chat'])
+    expect(h.spawned).toEqual([])
+    expect(told).toEqual([['s1', { key: 'session.roll.sandbox.windowsSetup', params: { account: 'Codex B' } }]])
+    h.coord.stop()
+  })
+
   it('does not invent the bypass for a chain that was never granted it', async () => {
     const h = harness({ bypassedOf: () => false })
     const file = await writeRollout({ accountId: 'c1', uuid: 'cx-chat-nobp', cwd: h.info1.cwd, primary: 95 })
@@ -2820,7 +2844,7 @@ describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
     await appendLimitError(src)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
-    expect(prepared).toEqual([[expect.objectContaining({ id: 'c2' }), h.info1.cwd, 'ap_x']])
+    expect(prepared).toEqual([[expect.objectContaining({ id: 'c2' }), h.info1.cwd, 'ap_x', false]])
     expect(h.spawnedOpts[0].agentProfileId).toBe('ap_x')
     h.coord.stop()
     const pPrepared: unknown[][] = []
@@ -2828,6 +2852,29 @@ describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
     await rollNow(p)
     expect(pPrepared[0][2]).toBeUndefined()
     expect(p.spawnedOpts[0]).not.toHaveProperty('agentProfileId')
+    p.coord.stop()
+  })
+
+  // Sandbox design §6: the successor of a session started in the sandbox starts in it too. The flag rides the chain like
+  // the bypass does, so a profile store that cannot be read at the roll, or another chain rolling at the same moment,
+  // can never start it outside; its preparation is told, so the sandbox's folder is read before the kill.
+  it('a roll keeps the session’s sandbox, for the respawn and its preparation', async () => {
+    const prepared: unknown[][] = []
+    const h = harness({ prepareSpawn: async (...a) => { prepared.push(a) } })
+    const src = await writeRollout({ accountId: 'c1', uuid: 'cx-sb', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register({ ...h.info1, agentProfileId: 'ap_box', sandboxed: true })
+    await advance(1_500) // 매핑 폴링
+    await appendLimitError(src)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(prepared).toEqual([[expect.objectContaining({ id: 'c2' }), h.info1.cwd, 'ap_box', true]])
+    expect(h.spawnedOpts[0]).toMatchObject({ sandbox: true, agentProfileId: 'ap_box' })
+    h.coord.stop()
+    const pPrepared: unknown[][] = []
+    const p = harness({ prepareSpawn: async (...a) => { pPrepared.push(a) } })
+    await rollNow(p)
+    expect(pPrepared[0][3]).toBe(false)
+    expect(p.spawnedOpts[0]).not.toHaveProperty('sandbox')
     p.coord.stop()
   })
 
@@ -2854,6 +2901,108 @@ describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
     expect(h.events).toEqual(['copy'])
     expect(h.sent.at(-1)?.payload).toMatchObject({ sessionId: 's1', state: 'waiting' })
     expect(logs.join('\n')).toMatch(/spawn refused: app-settings\.json cannot be read/)
+    h.coord.stop()
+  })
+
+  // Sandbox design §6, as the person decided (Task 6): a roll onto a Codex account whose Windows sandbox is not set up
+  // (or has gone stale) is refused before the kill, like any refused respawn, and the person is told why in the tab that
+  // is still running, once. Fix round 1: the reason names the account by its name and says where to set it up; the
+  // wiring words it for the tab (a terminal's line, a chat's notice).
+  //
+  // Task 7 fix round 2: driven by the coordinator's own milestones (its log lines), never by a wall-clock window. Each step
+  // advances fake time only as far as the next timer this flow needs (the locate poll, the wait's retry) and then awaits
+  // what that timer starts, however long the real file I/O under it takes on a loaded machine; a step that never comes
+  // fails by the test's own timeout, never by a guess about how long I/O lasts.
+  it('a roll onto an account not set up writes the reason into the live tab and waits', async () => {
+    const told: [string, unknown][] = []
+    const logs: string[] = []
+    const waiting: Array<{ reached: () => boolean; resolve: () => void }> = []
+    /** Resolves once the log holds what `reached` asks for. */
+    const when = (reached: () => boolean): Promise<void> =>
+      reached() ? Promise.resolve() : new Promise((resolve) => waiting.push({ reached, resolve }))
+    const count = (prefix: string): number => logs.filter((l) => l.startsWith(prefix)).length
+    let asked = 0
+    const h = harness({
+      prepareSpawn: async () => {
+        asked++
+        throw new Error('SANDBOX_UNAVAILABLE: windows-setup codex c2')
+      },
+      tell: (id, reason) => told.push([id, reason]),
+      log: (m) => {
+        logs.push(m)
+        for (const w of [...waiting])
+          if (w.reached()) {
+            waiting.splice(waiting.indexOf(w), 1)
+            w.resolve()
+          }
+      }
+    })
+    const src = await writeRollout({ accountId: 'c1', uuid: 'cx-ws', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register({ ...h.info1, sandboxed: true })
+    // The locate poll fires at its first second and maps the rollout written above
+    const located = when(() => count('codex rollout located') >= 1)
+    await vi.advanceTimersByTimeAsync(1_500)
+    await located
+    await appendLimitError(src)
+    // The limit is read off the rollout (real I/O, no timer), the roll is refused before its kill, and the wait is armed
+    const firstRefusal = when(() => count('codex roll retry scheduled after abort') >= 1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await firstRefusal
+    // No successor: nothing killed, nothing spawned, and the wait is the one any refused respawn gets
+    expect(h.events).toEqual(['copy'])
+    expect(h.spawned).toEqual([])
+    expect(h.sent.at(-1)?.payload).toMatchObject({ sessionId: 's1', state: 'waiting' })
+    expect(told).toEqual([['s1', { key: 'session.roll.sandbox.windowsSetup', params: { account: 'Codex B' } }]])
+    expect(t('en', 'session.roll.sandbox.windowsSetup', { account: 'Codex B' })).toBe(
+      'Could not move to the Codex B account: its Windows sandbox is not set up. Press Set up for it in Settings › Agent profiles.'
+    )
+    expect(logs.join('\n')).toMatch(/spawn refused: SANDBOX_UNAVAILABLE: windows-setup codex c2/)
+    // The wait's next round is refused for the same reason: the tab is not told again. That round is several timers with
+    // real I/O between them (the wait, a resume in place on the first account and its Enter, the verdict that it produced
+    // no turn, then the respawn's preparation), so fake time is moved from timer to timer until the coordinator schedules
+    // its next retry
+    const secondRefusal = when(() => count('codex roll retry scheduled after abort') >= 2)
+    let refusedAgain = false
+    void secondRefusal.then(() => {
+      refusedAgain = true
+    })
+    // Each step fires the next timer due and yields a turn of the real event loop (fake-timers' async tick), so the file
+    // I/O a step starts completes in its own time
+    while (!refusedAgain) await vi.advanceTimersToNextTimerAsync()
+    expect(asked).toBeGreaterThanOrEqual(2)
+    expect(told).toHaveLength(1)
+    expect(h.spawned).toEqual([])
+    h.coord.stop()
+  })
+
+  it('a refused respawn that is not the sandbox is not written into the tab', async () => {
+    const told: [string, unknown][] = []
+    const h = harness({
+      prepareSpawn: async () => {
+        throw new Error('CWD_MISSING: /gone')
+      },
+      tell: (id, reason) => told.push([id, reason])
+    })
+    await rollNow(h)
+    expect(h.spawned).toEqual([])
+    expect(told).toEqual([])
+    h.coord.stop()
+  })
+
+  // Task 6 fix round 1: when Codex could not be asked about the account, setting it up would not help: the reason is the
+  // start's own sentence for it
+  it('a roll whose readiness could not be asked says so, with no setup to press', async () => {
+    const told: [string, unknown][] = []
+    const h = harness({
+      prepareSpawn: async () => {
+        throw new Error('SANDBOX_UNAVAILABLE: windows-check-failed codex c2')
+      },
+      tell: (id, reason) => told.push([id, reason])
+    })
+    await rollNow(h)
+    expect(h.spawned).toEqual([])
+    // Final fix pass (minor 14): which account it could not ask about, by its name, as a windows-setup refusal says
+    expect(told).toEqual([['s1', { key: 'session.roll.sandbox.windowsCheckFailed', params: { account: 'Codex B' } }]])
     h.coord.stop()
   })
 

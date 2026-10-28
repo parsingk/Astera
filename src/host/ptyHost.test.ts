@@ -29,7 +29,8 @@ const harness = (pty = fakePty(), platform: NodeJS.Platform = 'win32') => {
   const registry = new PtyRegistry({ spawn: () => pty, log: () => {} })
   // A client without `pty-seq`, as every client before Phase 8: frames filtered to others are not its.
   const handle = attachPtyHost({ registry, platform, broadcast: (m, to) => void (!to || to(new Set(), new Set()) ? broadcast.push(m) : 0) })
-  const send = (m: ClientMessage): boolean => handle(m, (h) => replies.push(h))
+  // The app's own connection, as host/index.ts passes it: only the app may have the Host spawn a pty
+  const send = (m: ClientMessage, role: 'app' | 'cli' | 'mcp' = 'app'): boolean => handle(m, (h) => replies.push(h), { socket: 1, role })
   return { pty, registry, broadcast, replies, send }
 }
 
@@ -53,6 +54,30 @@ describe('attachPtyHost', () => {
     const h = harness()
     expect(h.send(spawnMsg)).toBe(true)
     expect(h.replies).toEqual([{ t: 'pty-spawned', id: 'p1', pid: 11 }])
+  })
+
+  // Final fix pass (C2): a pty-spawn starts any program with any arguments, environment and folder, outside every sandbox.
+  // Only the app's own connection is served it: a CLI's (a legacy hello with no role reads as one) and an MCP client's
+  // are refused, and nothing is opened
+  it('refuses a pty-spawn from anything but the app, and opens nothing', () => {
+    let spawned = 0
+    for (const role of ['cli', 'mcp'] as const) {
+      const h = harness()
+      const registry = h.registry as unknown as { open: (...a: unknown[]) => unknown }
+      const open = registry.open.bind(h.registry)
+      registry.open = (...a: unknown[]) => (spawned++, open(...a))
+      expect(h.send(spawnMsg, role)).toBe(true)
+      expect(h.replies).toEqual([{ t: 'pty-failed', id: 'p1', error: 'pty-spawn is served to the Astera app only' }])
+      expect(h.registry.list()).toEqual([])
+    }
+    expect(spawned).toBe(0)
+    const sent: HostMessage[] = []
+    const registry = new PtyRegistry({ spawn: () => fakePty(), log: () => {} })
+    const handle = attachPtyHost({ registry, platform: 'win32', broadcast: () => {} })
+    // With no sender named at all, too
+    expect(handle(spawnMsg, (m) => sent.push(m))).toBe(true)
+    expect(sent).toEqual([{ t: 'pty-failed', id: 'p1', error: 'pty-spawn is served to the Astera app only' }])
+    expect(registry.list()).toEqual([])
   })
 
   it('answers a refused spawn with the reason and nothing else', () => {
@@ -291,7 +316,7 @@ describe('attachPtyHost pty-seq and pauses (Phase 8)', () => {
           if (!to || to(new Set(), features)) sent.push({ m, seq: features.size > 0 })
       }
     })
-    const send = (m: ClientMessage, socket = 1): boolean => handle(m, () => {}, { socket })
+    const send = (m: ClientMessage, socket = 1): boolean => handle(m, () => {}, { socket, role: 'app' })
     send(spawnMsg)
     return { pty, sent, send, handle, paused: () => paused, resumes: () => resumes }
   }

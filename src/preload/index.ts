@@ -385,7 +385,9 @@ const api = {
     update: invoke('agentProfiles.update'),
     archive: invoke('agentProfiles.archive'),
     restore: invoke('agentProfiles.restore'),
-    remove: invoke('agentProfiles.remove')
+    remove: invoke('agentProfiles.remove'),
+    sandboxSetup: invoke('agentProfiles.sandboxSetup'),
+    sandboxReadiness: invoke('agentProfiles.sandboxReadiness')
   },
   // Settings › Security & Access and Run detail's token totals (observe mode design §11): the Host's observe rules,
   // records and tokens, through main's route

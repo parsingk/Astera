@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { agentProfilesCommand } from './agentProfiles'
 import type { ExtensionEntry } from '../core/extensions/types'
 
-const PROFILE = { id: 'ap_000000000001', name: 'Reviewer', status: 'active', accountIds: ['acc_1'], mcpExclude: [], permission: 'inherit', createdAt: 'T', updatedAt: 'T' }
+const PROFILE = { id: 'ap_000000000001', name: 'Reviewer', status: 'active', accountIds: ['acc_1'], mcpExclude: [], permission: 'inherit', sandbox: false, createdAt: 'T', updatedAt: 'T' }
 
 const mcp = (id: string, name: string): ExtensionEntry => ({ id, kind: 'mcp', name, transport: 'stdio', env: {}, providers: ['claude'], importedFrom: 'acc_1', enabled: true })
 const ENTRIES: ExtensionEntry[] = [
@@ -85,6 +85,28 @@ describe('agentProfilesCommand', () => {
       { cmd: 'agent-profiles-get', args: { idOrName: 'Reviewer' }, request: undefined },
       { cmd: 'agent-profiles-update', args: { id: PROFILE.id, name: 'Critic', mcpExclude: [] }, request: 'req-2' }
     ])
+  })
+
+  // Sandbox design §6: `--sandbox on|off` is the switch, sent as a boolean; anything else is refused before the Host is asked
+  it('--sandbox on|off sends the switch on create and update', async () => {
+    const h = host()
+    await run(h, 'agent-profiles-create', { name: 'Boxed', account: 'acc_1', sandbox: 'on' })
+    await run(h, 'agent-profiles-update', { id: 'Reviewer', sandbox: 'off' })
+    expect(h.calls.filter((c) => c.cmd !== 'agent-profiles-get').map((c) => c.args)).toEqual([
+      { name: 'Boxed', accountIds: ['acc_1'], sandbox: true },
+      { id: PROFILE.id, sandbox: false }
+    ])
+  })
+
+  it('refuses a --sandbox that is not on or off, and sends nothing', async () => {
+    const h = host()
+    for (const sandbox of [true, 'yes', 'ON ', ''])
+      expect(await run(h, 'agent-profiles-create', { name: 'R', account: 'acc_1', sandbox }), JSON.stringify(sandbox)).toEqual({
+        status: 400,
+        body: { error: '--sandbox is on or off' }
+      })
+    expect(await run(h, 'agent-profiles-update', { id: 'Reviewer', sandbox: 'true' })).toMatchObject({ status: 400 })
+    expect(h.calls.filter((c) => c.cmd !== 'agent-profiles-get')).toEqual([])
   })
 
   it('archive, restore and delete resolve a name to the id; delete answers which profile went', async () => {

@@ -8,7 +8,9 @@
 // - the Credentials list's login presets against their own tools (presets.mjs);
 // - which shell startup files each shell mode reads (shells.mjs);
 // - what starting the Enforce hook costs with node and with Electron as node (latency.mjs).
-// It writes measure-results/<platform>.json after each part, and a summary for the job page.
+// It writes measure-results/<platform>.json after each part, and a summary for the job page. The fixtures, the
+// workspaces and the loopback server are exported for the S2 run (s2.measure.test.mjs), which measures the sandbox
+// builders' own output with them.
 import { spawn, spawnSync } from 'node:child_process'
 import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -83,7 +85,7 @@ export function busSocket(env) {
   return m ? m[1] : null
 }
 
-const sh = (argv, o = {}) => {
+export const sh = (argv, o = {}) => {
   const r = spawnSync(argv[0], argv.slice(1), { encoding: 'utf8', timeout: 120_000, ...o })
   return {
     missing: r.error?.code === 'ENOENT',
@@ -94,32 +96,37 @@ const sh = (argv, o = {}) => {
 }
 const firstLine = (argv) => sh(argv).out.split('\n')[0].trim()
 
-/** A fresh git repository at `dir` with one commit. */
-function repo(dir, env) {
-  mkdirSync(dir, { recursive: true })
+/** A fresh git repository at `dir` with one commit of a readme and `files` (relative path to text). The files are
+ *  written by node rather than `sh`, so the S2 run on Windows needs no POSIX shell on PATH. */
+function repo(dir, env, files = {}) {
+  const all = { 'readme.txt': 'hi\n', ...files }
+  for (const [rel, text] of Object.entries(all)) {
+    mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true })
+    writeFileSync(path.join(dir, rel), text)
+  }
   for (const argv of [
     ['git', 'init', '-q', '-b', 'main'],
-    ['sh', '-c', 'echo hi > readme.txt'],
-    ['git', 'add', 'readme.txt'],
+    ['git', 'add', ...Object.keys(all)],
     ['git', '-c', 'user.name=p', '-c', 'user.email=p@p', 'commit', '-qm', 'init']
   ])
     if (sh(argv, { cwd: dir, env }).code !== 0) throw new Error(`could not make the repository ${dir}: ${argv.join(' ')}`)
 }
 
 /** A workspace repository of its own for one probe set, with a worktree `wt` of a repository outside it: a set never
- *  sees what the one before it committed or wrote into `.git`. */
-function workspaceFor(home, name, env) {
+ *  sees what the one before it committed or wrote into `.git`. `files` are committed in both repositories, so the
+ *  worktree has them too. */
+export function workspaceFor(home, name, env, files = {}) {
   const workspace = path.join(home, `astera-probe-ws-${name}`)
   const main = path.join(home, `astera-probe-main-${name}`)
-  repo(workspace, env)
-  repo(main, env)
+  repo(workspace, env, files)
+  repo(main, env, files)
   if (sh(['git', 'worktree', 'add', '-q', path.join(workspace, 'wt'), '-b', 'probe'], { cwd: main, env }).code !== 0) throw new Error('could not add the worktree')
   appendFileSync(path.join(workspace, '.git', 'info', 'exclude'), 'wt/\n')
   return { name, workspace, worktree: path.join(workspace, 'wt'), commonDir: path.join(main, '.git') }
 }
 
 /** The fake home files and git's stored login, in `env`'s home. */
-function fixtures(home, env) {
+export function fixtures(home, env) {
   const write = (rel, text) => {
     const file = path.join(home, rel)
     mkdirSync(path.dirname(file), { recursive: true })
@@ -144,7 +151,7 @@ function fixtures(home, env) {
 }
 
 /** A loopback HTTP server in a process of its own (the probes block this one), and its port. */
-function loopbackServer() {
+export function loopbackServer() {
   const child = spawn(process.execPath, ['-e', "require('http').createServer((q, s) => s.end('ok')).listen(0, '127.0.0.1', function () { console.log(this.address().port) })"], {
     stdio: ['ignore', 'pipe', 'inherit']
   })

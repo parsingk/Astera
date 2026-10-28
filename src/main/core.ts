@@ -7,7 +7,7 @@ import { app, net } from 'electron'
 import { AccountRegistry } from '../core/accounts/registry'
 import { PROVIDERS, providerOf } from '../core/providers/meta'
 import { makeDescriptors, descriptorOf, isAmbientDir, type ProviderDescriptor } from '../core/providers/descriptor'
-import { SessionManager, defaultSpawnChecks } from '../core/sessions/manager'
+import { SessionManager, askCodexWindowsReady, defaultSpawnChecks } from '../core/sessions/manager'
 import { setProbeLog } from '../core/sessions/pathProbe'
 import { nodePtyFactory } from '../core/sessions/nodePtyFactory'
 import { createPtyRouter } from './host/ptyRouter'
@@ -49,6 +49,10 @@ import { createCapabilityCache, type CapabilityCache } from '../core/extensions/
 import { readPolicyMode } from '../core/audit/policy'
 import type { EnforceStart } from '../core/audit/enforce'
 import { cliVersionProbe, enforceBlocker } from '../core/sessions/cliVersion'
+import { claudeSandboxStart } from '../core/sandbox/claudeStart'
+import { codexExcludesWriter } from '../core/sandbox/gitExcludes'
+import { hostAddress } from '../core/publicContract'
+import { HOST_PROTOCOL } from '../core/host/protocol'
 import { createManagedHooksCheck } from '../core/sessions/managedHooks'
 import { codexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
 import { findInstalledHostExe } from '../core/host/installedRuntime'
@@ -276,6 +280,12 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   // here. Set as the probe log too, so the terminal's shell lookup writes to the same place.
   const sessionsLog = lineLog(path.join(userDataDir, 'sessions.log'))
   setProbeLog(sessionsLog)
+  // The folder this profile's Host listens in (macOS and Linux), which a sandboxed Codex session may not open: it reaches
+  // the Host through the loopback with its workload token instead (final fix pass, C2)
+  const hostSocketDir = hostAddress({ profileDir: userDataDir, platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL }).dirToPrepare
+  // The copy of the person's git excludes a sandboxed Codex session on Windows reads, in TEMP, for either manager's
+  // prepare: the elevated sandbox's own account cannot read theirs
+  const codexExcludes = codexExcludesWriter({ profileDir: userDataDir, tmpDir: os.tmpdir(), homeDir: os.homedir(), env: process.env, log: sessionsLog })
   // descriptors is injected explicitly — left unspecified, each of them calls makeDescriptors(process.platform)
   // again, so every instance gets its own table (plus two command builders SessionManager never uses).
   const sessions = new SessionManager(
@@ -289,7 +299,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     // Mode writes the crops whose paths it sends. previewShotsDir is the same path capture.ts writes.
     [previewShotsDir(userDataDir)],
     process.env,
-    defaultSpawnChecks(sessionsLog)
+    { ...defaultSpawnChecks(sessionsLog), hostSocketDir, codexExcludes }
   )
   // Shared extensions (Agent Control Plane release 1 design §4.5). The two managers read the same cache:
   // a chat roll's respawn is prepared through `sessions.prepare`, which refreshes the target account
@@ -334,6 +344,21 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     }
   }
   sessions.enforce = enforce
+  // The sandbox for Claude (sandbox design §6): its settings twins, the version floor Enforce asks (one probe for both),
+  // npm's cache folder and on Linux the git excludes, prepared by a sandboxed start of either manager
+  const claudeSandbox = claudeSandboxStart({
+    platform: process.platform,
+    profileDir: userDataDir,
+    homeDir: os.homedir(),
+    env: process.env,
+    tmpDir: os.tmpdir(),
+    files: statusLine,
+    version: cliVersions,
+    log: sessionsLog
+  })
+  sessions.claudeSandbox = claudeSandbox
+  // The codex floor a sandboxed Codex start asks, the version Enforce asks (final review I2)
+  sessions.codexVersion = cliVersions
   // The chat sessions. It is handed `procRouter.factory` rather than a factory chosen now, for exactly
   // the reason SessionManager is handed `ptyRouter.factory`: which one a spawn reaches is decided at
   // spawn time, once registerIpc has learned whether this Host speaks procs. `version` is the app's
@@ -348,7 +373,15 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     log: chatLog,
     capabilities,
     hiding,
-    enforce
+    enforce,
+    // The sandbox (sandbox design §6): what the terminal manager's prepares read is the chat respawn's too, since a chat
+    // chain's roll is prepared through `sessions.prepare`; Windows readiness is asked the same way by both
+    sandboxLayouts: sessions.sandboxLayouts,
+    codexWindowsReady: askCodexWindowsReady,
+    claudeSandbox,
+    hostSocketDir,
+    codexVersion: cliVersions,
+    codexExcludes
   })
   // Lazy history: nothing is scanned at startup. The project list comes from a directory listing; sessions are
   // parsed when expanded. index.ts starts the file watcher with startBackground() after the window is up, so window creation never blocks on a scan.

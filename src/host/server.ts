@@ -20,6 +20,7 @@ import {
 } from '../core/host/protocol'
 import { encodeLine, createLineReader } from './framing'
 import type { HostLog } from './log'
+import { sessionOfPresentedToken } from './gateway/tokens'
 import { AppUnreachable, type OrchCall, type OrchCaller } from '../core/host/orchProtocol'
 import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
 import { pidLives } from '../core/host/pidFile'
@@ -104,6 +105,9 @@ export interface HostServerDeps {
    *  does not have to supply one; `host/index.ts` always does, because it always advertises
    *  HOST_FEATURE_ORCH below. */
   orch?: OrchCall
+  /** The app session id of a live workload token (sandbox design §7), or null. An `orch-call` that carries a token is
+   *  that session; one whose token this does not know is refused. */
+  sessionOfToken?(token: string): string | null
   /** Whether a pid names a live process; defaults to `pidLives` (core/host/pidFile.ts). What
    *  `lastAppPid` probes with, injectable so a test's made-up pid is not judged by this machine. */
   pidLives?(pid: number): boolean
@@ -172,6 +176,10 @@ export interface HostServer {
    *  (docs/2026-09-22-host-unresponsive-recovery-design.md F3) — one Host, one answer to "which one
    *  is this", whether it is answering or not. */
   startedAt: string
+  /** The caller of a `cli` command that did not come over a socket: the Gateway's loopback route (sandbox design §6). */
+  cliCaller(): OrchCaller
+  /** The Host's hello for a client on the loopback route, with the proof of `nonce` (see `helloBody`). */
+  loopbackHello(nonce: string): { host: string; pid: number; startedAt: string; features: string[]; proof?: string }
   /** Sends to every connected client. Slice 2's pty output takes this rather than a reply, because
    *  the app that attaches after a restart is not the app that spawned. With `to`, only to the greeted
    *  sockets whose hello yields pass it (final review M4: a push only a newer app can read). */
@@ -469,6 +477,56 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
   /** An MCP client reads only the answers to its own calls (MCP design §2), so no fan-out writes to
    *  it: an MCP link lives for hours, and every terminal's output and every state push would reach it. */
   const isMcp = (s: net.Socket): boolean => roles.get(s) === 'mcp'
+  /** What a `hello` answers, for the pipe and for the loopback route's hello (`loopbackHello`): the same facts and the same
+   *  proof, so a client checks one Host in both places. */
+  const helloBody = (nonce: unknown) => ({
+    protocol: HOST_PROTOCOL,
+    host: deps.version,
+    pid: process.pid,
+    startedAt,
+    // HOST_FEATURE_ORCH is conditional on `deps.orch` — unlike the two features beside it —
+    // because advertising it and being able to serve it must be the same fact. Without this,
+    // a caller that supplies no `orch` (several test call sites do not) would claim a
+    // capability it cannot answer, and an `orch-call` sent to it would fall through to the
+    // "unknown message" log below and never get a reply at all.
+    //
+    // **HOST_FEATURE_REQUESTS rides the same condition**, because it is the same fact:
+    // receipts live inside the thing that answers `orch-call` (`createHostOrch`), so a Host
+    // with no `orch` can neither run a command nor remember having run it. Announcing it
+    // unconditionally would tell a caller that its presented `--request-id` protects a call
+    // that is never answered at all.
+    // HOST_FEATURE_MCP too: the MCP gate lives in `createHostOrch`, so it rides the same condition.
+    features: [
+      HOST_FEATURE_PROC,
+      HOST_FEATURE_PING,
+      HOST_FEATURE_PTY_SEQ,
+      ...(deps.orch ? [HOST_FEATURE_ORCH, HOST_FEATURE_REQUESTS, HOST_FEATURE_MCP] : []),
+      ...(deps.features ?? [])
+    ],
+    // Only while one is attached, so `astera host status` can say so (LEGACY_APP_NOTICE).
+    ...(legacyAttached() ? { legacyApp: true as const } : {}),
+    // Protocol 4: the answer that tells this account's Host from a squatter (core/host/hostKey.ts).
+    // A nonce longer than any client sends is not worth hashing.
+    ...(deps.hostKey && typeof nonce === 'string' && nonce.length > 0 && nonce.length <= 256
+      ? { proof: hostProof(deps.hostKey, nonce) }
+      : {}),
+    ...(deps.bootId ? { bootId: deps.bootId } : {})
+  })
+  /** The `OrchCaller` of a command's sender, whichever way it came: a pipe socket, or the Gateway's loopback route (which
+   *  has no socket). `toOthers` reaches every greeted socket except the sender's own, so a loopback caller's reaches all of
+   *  them: the state it changed came from no socket that already holds it. */
+  const orchCaller = (a: { role: 'app' | 'cli' | 'mcp'; socket?: net.Socket; socketNo?: number; client?: { name: string; version?: string }; remote?: string }): OrchCaller => ({
+    role: a.role,
+    ...(a.socketNo !== undefined ? { socket: a.socketNo } : {}),
+    ...(a.client ? { client: a.client } : {}),
+    ...(a.remote ? { remote: a.remote } : {}),
+    toOthers: (msg) => {
+      const line = lazyLine(msg)
+      // The sender holds this state already; anything older held for it would put it back.
+      if (a.socket && msg.t === 'orch-state') dropState(a.socket)
+      for (const s of greetedSockets) if (s !== a.socket && !s.destroyed && !isMcp(s)) writeTo(s, msg, line)
+    }
+  })
   /** Wraps `deps.onAppsChanged` so a caller's throw costs the handshake or close it rode in on
    *  nothing — logged instead, the same as `onClientGone`'s own guard below. */
   const tellAppsChanged = (): void => {
@@ -577,40 +635,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           else mcpRemotes.delete(socket)
           if (roles.get(socket) === 'app' && typeof m.pid === 'number' && Number.isSafeInteger(m.pid) && m.pid > 0) lastAppPid = m.pid
           if (isApp(socket) || wasApp) tellAppsChanged()
-          send({
-            t: 'hello',
-            protocol: HOST_PROTOCOL,
-            host: deps.version,
-            pid: process.pid,
-            startedAt,
-            // HOST_FEATURE_ORCH is conditional on `deps.orch` — unlike the two features beside it —
-            // because advertising it and being able to serve it must be the same fact. Without this,
-            // a caller that supplies no `orch` (several test call sites do not) would claim a
-            // capability it cannot answer, and an `orch-call` sent to it would fall through to the
-            // "unknown message" log below and never get a reply at all.
-            //
-            // **HOST_FEATURE_REQUESTS rides the same condition**, because it is the same fact:
-            // receipts live inside the thing that answers `orch-call` (`createHostOrch`), so a Host
-            // with no `orch` can neither run a command nor remember having run it. Announcing it
-            // unconditionally would tell a caller that its presented `--request-id` protects a call
-            // that is never answered at all.
-            // HOST_FEATURE_MCP too: the MCP gate lives in `createHostOrch`, so it rides the same condition.
-            features: [
-              HOST_FEATURE_PROC,
-              HOST_FEATURE_PING,
-              HOST_FEATURE_PTY_SEQ,
-              ...(deps.orch ? [HOST_FEATURE_ORCH, HOST_FEATURE_REQUESTS, HOST_FEATURE_MCP] : []),
-              ...(deps.features ?? [])
-            ],
-            // Only while one is attached, so `astera host status` can say so (LEGACY_APP_NOTICE).
-            ...(legacyAttached() ? { legacyApp: true as const } : {}),
-            // Protocol 4: the answer that tells this account's Host from a squatter (core/host/hostKey.ts).
-            // A nonce longer than any client sends is not worth hashing.
-            ...(deps.hostKey && typeof m.nonce === 'string' && m.nonce.length > 0 && m.nonce.length <= 256
-              ? { proof: hostProof(deps.hostKey, m.nonce) }
-              : {}),
-            ...(deps.bootId ? { bootId: deps.bootId } : {})
-          })
+          send({ t: 'hello', ...helloBody(m.nonce) })
           if (roles.get(socket) === 'app') {
             try {
               deps.onAppGreeted?.(send)
@@ -660,20 +685,21 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           if (!greetedSockets.has(socket)) return
           const client = mcpClients.get(socket)
           const remote = mcpRemotes.get(socket)
-          const from: OrchCaller = {
-            role: outwardRole(socket),
-            socket: socketNo,
-            ...(client ? { client } : {}),
-            ...(remote ? { remote } : {}),
-            toOthers: (msg) => {
-              const line = lazyLine(msg)
-              // The sender holds this state already; anything older held for it would put it back.
-              if (msg.t === 'orch-state') dropState(socket)
-              for (const s of greetedSockets) if (s !== socket && !s.destroyed && !isMcp(s)) writeTo(s, msg, line)
+          const from = orchCaller({ role: outwardRole(socket), socket, socketNo, client, remote })
+          // A token names the session, not the `session` field, which any process on the pipe can write. A Host with no
+          // token table cannot vouch for one, so it refuses it too.
+          let sessionId = m.session ?? ''
+          if (m.token !== undefined) {
+            // A token that is no string, or longer than any this Host made, is refused outright (sessionOfPresentedToken).
+            const owner = sessionOfPresentedToken(deps.sessionOfToken, m.token)
+            if (owner === null) {
+              send({ t: 'orch-result', call: m.call, status: 401, body: { error: 'workload token not recognised' } })
+              return
             }
+            sessionId = owner
           }
           void deps.orch
-            .call({ cmd: m.cmd, args: m.args, sessionId: m.session ?? '', from, request: m.request })
+            .call({ cmd: m.cmd, args: m.args, sessionId, from, request: m.request })
             .then((r) =>
               send({
                 t: 'orch-result',
@@ -800,6 +826,8 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
 
   return {
     startedAt,
+    cliCaller: () => orchCaller({ role: 'cli' }),
+    loopbackHello: (nonce) => helloBody(nonce),
     clients: () => live,
     hasApp: () => appSocket() !== null || legacyAttached(),
     hasCurrentApp: () => appSocket() !== null,

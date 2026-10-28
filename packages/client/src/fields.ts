@@ -97,7 +97,8 @@ export const QUESTION_FIELDS = Object.freeze([
 export const ACCOUNT_FIELDS = Object.freeze(['id', 'label', 'provider', 'default', 'signedIn'] as const)
 
 /** An agent profile (Agent Profiles design §4): a named set of accounts, the shared MCP servers it leaves out (their
- *  registry ids) and its permission choice. Every field is the person's own setting, so all of them are public. */
+ *  registry ids), its permission choice and its sandbox switch. Every field is the person's own setting, so all of them
+ *  are public. */
 export const AGENT_PROFILE_FIELDS = Object.freeze([
   'id',
   'name',
@@ -106,6 +107,7 @@ export const AGENT_PROFILE_FIELDS = Object.freeze([
   'accountIds',
   'mcpExclude',
   'permission',
+  'sandbox',
   'createdAt',
   'updatedAt',
   'lastUsedAt'
@@ -115,8 +117,23 @@ export const AGENT_PROFILE_FIELDS = Object.freeze([
 export const RUN_CONFIG_FIELDS = Object.freeze(['id', 'name', 'type'] as const)
 
 /** A session's fields come from the note the app left on its pty, which can hold anything (resume ids, rolling
- *  accounts, permission bypass); only these are public. */
-export const SESSION_FIELDS = Object.freeze(['id', 'kind', 'title', 'accountId', 'cwd', 'alive', 'state', 'provider', 'rolledFrom', 'agentProfileId', 'sources'] as const)
+ *  accounts, permission bypass); only these are public. `sandboxed` and `sandboxKind`: it runs in its agent CLI's own
+ *  sandbox, and what protection that is (`sandbox`, or `deny-only` for Claude Code on Windows). */
+export const SESSION_FIELDS = Object.freeze([
+  'id',
+  'kind',
+  'title',
+  'accountId',
+  'cwd',
+  'alive',
+  'state',
+  'provider',
+  'rolledFrom',
+  'agentProfileId',
+  'sandboxed',
+  'sandboxKind',
+  'sources'
+] as const)
 
 export const CHAT_TURN_FIELDS = Object.freeze(['role', 'text', 'tools'] as const)
 export const CHAT_PENDING_FIELDS = Object.freeze(['kind', 'summary'] as const)

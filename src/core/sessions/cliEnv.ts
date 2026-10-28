@@ -24,9 +24,12 @@ export const MANAGED_ENV_KEYS = [
   'ASTERA_PROFILE_DIR',
   'ASTERA_SKILLS',
   'ASTERA_SESSION',
-  // A session's own MCP Gateway token and grant (Agent Control Plane release 2): never handed on to another session
+  // A session's own workload token and the grant of shared MCP servers it opens (Agent Control Plane release 2; sandbox
+  // design §7): never handed on to another session
   'ASTERA_GATEWAY_TOKEN',
-  'ASTERA_GATEWAY_GRANT'
+  'ASTERA_GATEWAY_GRANT',
+  // Where the Host's loopback endpoint is, for a session whose sandbox cannot open the Host's pipe (sandbox design §6)
+  'ASTERA_LOOPBACK'
 ] as const
 
 /**

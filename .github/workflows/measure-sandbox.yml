@@ -77,6 +77,13 @@ jobs:
           # The gh preset is measured against the job's own token as well as a fake config; the probes run without it
           GH_TOKEN: ${{ github.token }}
 
+      # S2: the sandbox builders' own output (src/core/sandbox) against the same probes: Codex's profile in a repository,
+      # a subfolder and a worktree (and the worktree fallback), app-server's command/exec, srt with the Linux exclude
+      # file and with the macOS Host socket. A vitest file, since it imports the app's TypeScript; it writes
+      # measure-results/<platform>-s2.json. It runs when the step above failed too, so one run answers both.
+      - run: ASTERA_MEASURE_S2=1 npx vitest run scripts/measure/s2.measure.test.mjs
+        if: ${{ !cancelled() }}
+
       - uses: actions/upload-artifact@v7
         if: always()
         with:

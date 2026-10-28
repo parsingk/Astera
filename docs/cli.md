@@ -517,6 +517,16 @@ command, and `ASTERA_SKILLS` is the folder `astera help` reads its guide from. O
 `astera help`, `astera browser help` and `astera app help` read the guides that ship with the
 installed Astera instead.
 
+A session can also carry `ASTERA_GATEWAY_TOKEN`, its own token, and `ASTERA_LOOPBACK`, the address of
+the Host's endpoint on this machine (`http://127.0.0.1:<port>`). Inside a sandbox that cannot open the
+Host's pipe or socket but can reach `127.0.0.1`, the command tries the pipe first, and when nothing can
+be reached there it sends the same command to that address with the token. The Host knows the session
+from the token, not from anything the call says. The token goes only to the session's own Host, the
+Host of the profile whose `astera` the session runs (`ASTERA_CLI`), else of its `ASTERA_PROFILE_DIR`:
+a call pointed at another profile's Host, or at another address with `ASTERA_HOST`, carries none and
+is answered as a shell's call is. Outside a session neither variable is set and nothing changes. The
+endpoint accepts only the token of a session the Host is running, and only from the machine itself.
+
 ### Remote Runtime
 
 Another machine can run Jobs on this one through Remote Runtime ([remote-runtime.md](remote-runtime.md) covers both
@@ -743,8 +753,8 @@ astera ext     sync
 
 astera agent-profiles list
 astera agent-profiles show    --id <profileId|name>
-astera agent-profiles create  --name <text> --account <id,…> [--exclude-mcp <name,…>] [--permission <inherit|bypass|ask>] [--description <text>]
-astera agent-profiles update  --id <profileId|name> [--name <text>] [--account <id,…>] [--exclude-mcp <name,…>] [--permission <inherit|bypass|ask>] [--description <text>]
+astera agent-profiles create  --name <text> --account <id,…> [--exclude-mcp <name,…>] [--permission <inherit|bypass|ask>] [--sandbox <on|off>] [--description <text>]
+astera agent-profiles update  --id <profileId|name> [--name <text>] [--account <id,…>] [--exclude-mcp <name,…>] [--permission <inherit|bypass|ask>] [--sandbox <on|off>] [--description <text>]
 astera agent-profiles archive --id <profileId|name>
 astera agent-profiles restore --id <profileId|name>
 astera agent-profiles delete  --id <profileId|name>
@@ -1122,6 +1132,76 @@ unfinished work holds the profile. Changing profiles is for a person: from insid
 refused with 5, and the reads are not. A profile the Host refuses says why in `error.details.reason`: `name-empty`,
 `name-too-long`, `name-taken`, `no-account`, `unknown-account` or `mixed-provider` with 2, and `in-use` with 6.
 
+**`--sandbox on` starts the profile's sessions, terminal and chat, in their CLI's own sandbox**; `off`, the default,
+starts them as before, and a profile made before the switch existed reads as `off` (`agent-profiles list` shows it as
+`sandbox`). In Codex's sandbox a session never stops to ask (`-a never` takes the place of the permission bypass; a
+chat's thread names the profile and its approval policy is `never`) and a terminal session runs on its own server
+(`--no-daemon`). It needs codex 0.160.0 or later: an older codex, or one whose version cannot be read, is not started
+(`SANDBOX_UNAVAILABLE: cli-too-old codex …`), and a chat whose thread Codex does not confirm runs under the profile is
+stopped (`SANDBOX_UNAVAILABLE: profile-not-active codex`). On every OS it writes only in its folder, the git directories of the folder's repository (never their
+`hooks` or `config`, nor what decides where git finds them: each `commondir` file, the `modules` folder of submodules'
+git directories, and a worktree's `.git` file; a start makes a missing `commondir`, holding `.`, and an empty
+`modules`, so they can be kept read-only) and the temp folder, where npm's cache goes; it cannot read `~/.ssh`, `~/.aws`, the GitHub CLI's
+and gcloud's settings, `~/.docker`, `~/.npmrc`, `~/.git-credentials` or `~/.kube`; and the network works. On macOS
+`~/Library/Keychains` is closed too, and on Linux the session bus a secret service answers on. On macOS and Linux it
+cannot open the folder the Host's socket is in either, nor any other Host's folder of yours beside it (`astera-host-*`
+that you own, such as the dev app's Host beside the installed app's) that is there when the session starts (a Host
+started later is not closed to it), so its `astera` reaches the Host only through the loopback
+endpoint with the session's own token (`ASTERA_LOOPBACK`, above). A Claude Code session,
+terminal or chat, gets Claude Code's own sandbox on macOS and Linux through its settings file, with the same limits: its
+commands cannot run outside it, and a Claude Code whose sandbox cannot start exits at once and says why in its tab;
+`astera` runs outside it, as a command line of its own: a line that starts with something else (`cd x && astera …`)
+runs inside the sandbox, which reaches no Unix socket, the Host's included, so `astera` fails there on macOS as on
+Linux. On Linux its git reads an excludes file Astera writes
+(`<profile>/sandbox/excludes-<uid>`: the person's own `core.excludesFile`, or git's default one, then the names the
+sandbox keeps placeholders for, such as `.bashrc` and `.vscode`), so `git add -A` works. A sandboxed Codex session on Windows runs as the
+sandbox's own account, which cannot read the person's home, so its git reads a copy of the person's global excludes
+that Astera writes in the temp folder. Claude Code has no sandbox on
+Windows: there the switch only keeps its file tools, not its shell, out of those folders, and npm keeps its own cache.
+What a sandboxed session starts runs in the sandbox too, whatever profile it names: a session it makes with `sessions
+create`, a Job it makes (its coordinator and every worker), a Task it adds to any Job and a worker it starts with
+`worker-start`. Where that CLI has no sandbox (Claude Code on Windows) such a start is refused with
+`SANDBOX_UNAVAILABLE: no-sandbox claude` rather than run without one. Nor does a sandboxed session hand work to what
+runs outside the sandbox: from inside one, typing into a session that is not sandboxed (`sessions send`, a
+`worker-start --terminal` into it, a `reply` its worker reads) is refused with 5 and
+`SANDBOX_UNAVAILABLE: outside-sandbox session <id>`, running a Job no sandboxed session made (`run-start`, `jobs run`,
+`run-spawn`, `run-resume`, `runs resume`, `runs reconverge`) with `outside-sandbox job <id>`, and placing, starting
+or setting going again a Task that neither it nor its Job was made by a sandboxed session, or answering its question
+(`tasks dispatch`, `worker-start` with or without `--terminal`, a `task-update` to any status but `failed` or `blocked`,
+`questions answer` with anything but `mark-failed`) with `outside-sandbox task <id>`, before anything is typed, placed
+or started. A message or a question in a run (`send`, `ask`) is open to a worker of that run and to the coordinator
+Astera started for it; from any other sandboxed session it is refused with `outside-sandbox job <id>` unless the
+run's Job is a sandboxed session's. A sandboxed target is not refused, and a worker's `send` and `ask` in its own run
+stay open whoever its coordinator is.
+On Windows the Codex sandbox is Codex's elevated one, which keeps Credential Manager out, and the repository is named a
+safe directory for the account it runs as; a repository or home folder whose path holds a character cmd.exe reads as
+syntax (`" & | < > ^ %`) cannot be carried to it. Each Codex account's home must have the elevated sandbox set up once
+(Codex's `codex sandbox setup --elevated --current-user`, which brings up Windows' administrator prompt): Astera asks
+before a sandboxed start, Codex's `doctor --json` first and then, only on a home doctor calls complete, an echo through
+the sandbox (on a home with no setup the echo would start the setup and its prompt), and the app offers to set up the
+one account a start was refused for. A ready answer is kept until Astera restarts or a setup runs through it, so a home
+made stale by a setup outside Astera keeps reading ready until then. Settings › Agent profiles also shows, under a
+sandboxed profile on Windows, whether each of its Codex accounts is set up, asked of Codex's doctor alone (no sandboxed
+echo runs from Settings, so a stale home can read ready there and be refused at its start), with Set up for one that
+is not. A session the sandbox
+cannot be applied to does not start, and says why with `SANDBOX_UNAVAILABLE: <code>`: `codex-daemon codex` for a codex
+that does not take `--no-daemon`, `cli-too-old claude <found> 2.1.306` for an older Claude Code (`cli-version-unknown
+claude` when its version cannot be read, `cli-missing claude` when it is not there), `path-unsafe` for such a path,
+`git-layout` when the folder's git data could not be read, `windows-setup codex <accountId>` for an account whose
+Windows sandbox is not set up (or no longer works: setting up one account's home can leave another's stale),
+`windows-check-failed codex <accountId>` when Codex could not be asked about it (not there, too old for `doctor --json`,
+timed out), `settings-write-failed` when Claude Code's sandbox settings could not be written into the profile folder,
+`command-too-long` when on Windows the profile, which names every worktree's git files, would not fit on the command
+line (remove the worktrees you no longer need), and `not-prepared` for a start that skipped the reading Astera does
+first. A chain keeps the sandbox state it started
+with: the session a roll starts next is in the sandbox exactly when the first one was, whatever the switch says by then,
+and only a session started afresh reads the switch again. A roll onto an account the sandbox refuses waits, as a roll
+does for any refusal, and says why: a terminal session in its tab, a chat in its pane, naming the Codex account and
+where to set it up (Settings › Agent profiles) when its Windows sandbox is not set up, and otherwise in the refusal's
+own words (a Claude Code chain's after "Could not move to the next account"). Like every profile change, switching it
+from inside an agent session is refused with 5. A profile store that cannot be read refuses a session that names a
+profile, with 6 and the file to repair, rather than starting it without the profile.
+
 `jobs create`, `tasks add` and `sessions create` take `--agent-profile <id|name>`. A Job's tasks run as its profile
 unless a task names its own, and the profile never picks the coordinator. A task with a profile and no `--account`
 runs on the profile's accounts, copied when it is added. A session with a profile and no `--account` starts on the
@@ -1165,7 +1245,15 @@ changed only in the app, so an agent cannot switch off its own hiding; an agent 
 `credentials show` lists. `credentials doctor` says what hiding reaches and what it cannot: a program running as you can
 still read your files and OS stores, git and Docker hand their stored logins to any program that asks, and a variable
 your shell startup files set can come back in the commands an agent runs through a shell. Astera does not search the
-machine for credentials.
+machine for credentials. Doctor then says, one line each and for every OS whatever this machine is, what an agent
+profile's sandbox does for Codex and for Claude Code (`Sandbox, Codex on Windows: …`; Claude Code on Windows is a
+warning, since its shell is not restricted there), that a sandboxed Claude Code session's git on Linux reads an excludes
+file of Astera's so `git add -A` works, and the sandbox's limits: `curl` fails TLS inside a sandboxed Codex session on
+Windows, `gh` inside cannot use your login (GitHub work goes through Astera), pushes from inside stay with the Host on
+Windows, a chain keeps the sandbox state it started with, a worktree a sandboxed Codex session adds itself has a
+`config.worktree` its sandbox profile does not name, setting up one Codex account's Windows sandbox can leave another
+account's setup stale (from Codex's source, not measured), and Claude Code's use of its sandbox settings was measured on
+the runtime it uses (srt), not with Claude Code itself.
 
 **`audit` and `policies` are observe mode**, the same as **Settings › Security & Access** in the app. After
 `policies set-mode --mode observe`, every session Astera starts records the tool calls it makes once each has run
@@ -1196,6 +1284,19 @@ to 0.13 on macOS and 0.07 to 0.11 on Linux (20 starts a run; macOS and Linux in 
 says what is blocked for each provider and kind of session: what is typed into a Codex shell that is already running is
 not checked. Like observe, the mode counts for sessions started afterwards, and a session started in enforce keeps
 blocking until it ends: its blocked calls are recorded even after the mode is turned off.
+
+`sandboxCoverage` in `policies show`, whatever the mode, says what an agent profile's sandbox (`--sandbox on`) blocks
+for each CLI on each OS (`provider`, `os` as `win32`, `darwin` or `linux`), claiming only what was measured: `write`
+(outside the session's folders), `sensitive` (the folders holding logins), `stores` (the OS secret store) and `network`.
+Codex's sandbox blocks the first three on every OS and allows the network (`seen`, printed `allowed`). Claude Code's
+blocks them on macOS and Linux, with `stores` noted `runtime-measured`: the runtime its sandbox runs on was measured,
+not Claude Code's own use of it. On Windows Claude Code has no sandbox: `write` and `stores` are `none`, and `sensitive`
+is `partial` with the note `file-tools-only`. Codex's `stores` on Linux is noted `bus-path-only`: the deny names the
+session bus by its file path, and a bus on an abstract socket is not denied. `--human` prints it as a table of its own,
+headed `sandbox`, under the other, with "Windows: the shell is not restricted" beside the Claude Code Windows row and,
+under the table, that outside the login folders the home folder stays readable inside the sandbox. Settings › Security
+& Access shows the same two lines. The tab of a sandboxed session shows a marker; for Claude Code on Windows it says
+there is no sandbox, only deny rules for the file tools (the session's `sandboxKind` is `deny-only`, else `sandbox`).
 
 The rules say what each call would get if Astera enforced them. They are tried in order: the first rule whose action
 matches a call decides it, `allow` or `would-deny`, and `otherwise` decides a call no rule matches. A rule's action is
@@ -1290,6 +1391,11 @@ or Codex, and each chat session. A session's id is the one `ASTERA_SESSION` hold
 - `provider`, `claude` or `codex`, the session's account's agent. It is left out when the account is gone.
 - `rolledFrom`, the id of the session this one replaced when its account was rolled over. Follow it to
   find the conversation that came before.
+- `sandboxed: true` and `sandboxKind`, when the session runs in its agent CLI's own sandbox (its agent
+  profile's sandbox switch, or a sandboxed session asked for it). `sandboxKind` is `sandbox`, the CLI's
+  own sandbox, or `deny-only`: Claude Code on Windows has none, so only its file tools are kept from the
+  denied places and its shell is not restricted. Both are left out for a session outside the sandbox.
+  `--human` prints them as a column before the title: `sandbox`, `deny-only`, or `-`.
 - `sources`, where the Host reads each fact of the session: `status`, `prompt`, `usage` and
   `conversation`. Each is `hooks`, `statusline`, `rollout`, `transcript` or `chat`, or `none` when that
   agent and kind give the Host no way to read it. A fact with no source is reported unknown, never idle.
@@ -2059,9 +2165,10 @@ The boundary is your machine and your operating system account.
   a CI job for example, therefore hands that shell's variables, secrets included, to every agent it
   starts, exactly as Astera does when you start Astera from that shell. Start the Host from an
   environment that holds only what the agents may see. What is removed is a fixed list:
-  - When the Host starts: every variable whose name begins with `ASTERA_SESSION`, `ASTERA_CLI` or
-    `ASTERA_SKILLS`; the variables a Claude Code session sets about itself (`CLAUDECODE`,
-    `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_CHILD_SESSION`,
+  - When the Host starts: every variable whose name begins with `ASTERA_SESSION`, `ASTERA_CLI`,
+    `ASTERA_SKILLS`, `ASTERA_GATEWAY_` or `ASTERA_LOOPBACK`; the variables a Claude
+    Code session sets about itself (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ID`,
+    `CLAUDE_CODE_CHILD_SESSION`,
     `CLAUDE_CODE_SESSION_ATTENDED`, `CLAUDE_CODE_BRIDGE_SESSION_ID`, `CLAUDE_CODE_MESSAGING_SOCKET`,
     `CLAUDE_CODE_MESSAGING_TOKEN`, `CLAUDE_PID`, `CLAUDE_EFFORT`); and `ELECTRON_RUN_AS_NODE` and every
     `ASTERA_HOST_` variable, which the Host's start then sets for itself.
@@ -2069,7 +2176,8 @@ The boundary is your machine and your operating system account.
     the Host's own settings never reach an agent. Then the same steps as for a worker Astera starts:
     the Claude Code list above is cleared once more, the Astera variables a session is given
     (`ASTERA_STATUSLINE_OUT`, `ASTERA_STATUSLINE_ORIGINAL`, `ASTERA_HOOK_OUT`, `ASTERA_CLI`,
-    `ASTERA_PROFILE_DIR`, `ASTERA_SKILLS`, `ASTERA_SESSION`) are cleared and set afresh, and
+    `ASTERA_PROFILE_DIR`, `ASTERA_SKILLS`, `ASTERA_SESSION`, `ASTERA_GATEWAY_TOKEN`, `ASTERA_GATEWAY_GRANT`,
+    `ASTERA_LOOPBACK`) are cleared and set afresh, and
     `CLAUDE_CONFIG_DIR` or `CODEX_HOME` is set to the account's folder, or removed for the default
     account.
 

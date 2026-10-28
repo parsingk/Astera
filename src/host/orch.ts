@@ -548,6 +548,9 @@ export function createHostOrch(a: {
   /** `sessions create` (sessionCreate.ts), passed through to `hostOrchDeps`. Absent: the command
    *  answers 409. */
   createSession?: OrchServerDeps['createSession']
+  /** Whether a session this Host holds runs in its CLI's sandbox (sandboxedSession.ts), passed through to `hostOrchDeps`:
+   *  what such a session starts starts in the sandbox too (final fix pass, C3). Absent: no caller reads as sandboxed. */
+  sessionSandboxed?: OrchServerDeps['sessionSandboxed']
   /** GitHub through the Host's gh (MCP P2-B), passed through to `hostOrchDeps`. Absent: the `github-*`
    *  commands answer 409. */
   github?: OrchServerDeps['github']
@@ -874,6 +877,7 @@ export function createHostOrch(a: {
       chatAppAnswers: a.chatAppAnswers,
       ...(a.dispatchTask ? { dispatchTask: a.dispatchTask } : {}),
       ...(a.createSession ? { createSession: a.createSession } : {}),
+      ...(a.sessionSandboxed ? { sessionSandboxed: a.sessionSandboxed } : {}),
       ...(a.github ? { github: githubFor(use) } : {}),
       ...(a.readUnderstanding ? { readUnderstanding: a.readUnderstanding } : {}),
       // The agent profiles this Host owns (Agent Profiles design §6), read when a Job or Task is made from one

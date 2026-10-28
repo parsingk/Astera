@@ -1,3 +1,4 @@
+import { WIN32_CMD_LINE_MAX, WIN32_PROCESS_LINE_MAX, fitsWindowsCommandLine, windowsCommandLineLength } from './windowsExecutable'
 import { describe, it, expect } from 'vitest'
 import { findOnWindowsPath, findOnWindowsPathAsync, makeWindowsResolver, windowsSpawn } from './windowsExecutable'
 
@@ -125,5 +126,33 @@ describe('windowsSpawn', () => {
   // directory. Spawned bare it either resolves from the parent's own folders or fails outright.
   it('spawns a name PATH does not know bare, never through cmd.exe', () => {
     expect(windowsSpawn('claude', ['--version'], () => null)).toEqual({ file: 'claude', args: ['--version'] })
+  })
+})
+
+// Final fix pass (minor 4): how long a command line Windows is handed, quotes and spaces counted, against what cmd.exe and
+// CreateProcess carry
+describe('windowsCommandLineLength', () => {
+  it('counts every argument with a space before it, a quoted one with its quotes and escapes', () => {
+    expect(windowsCommandLineLength('codex.exe', ['-a', 'never'])).toBe('codex.exe -a never'.length)
+    expect(windowsCommandLineLength('cmd.exe', ['/d', '/c', 'a b'])).toBe('cmd.exe /d /c "a b"'.length)
+    expect(windowsCommandLineLength('x', ['say "hi"'])).toBe('x "say \\"hi\\""'.length)
+    expect(windowsCommandLineLength('x', [''])).toBe('x ""'.length)
+    expect(WIN32_CMD_LINE_MAX).toBe(8191)
+    expect(WIN32_PROCESS_LINE_MAX).toBe(32767)
+  })
+})
+
+describe('fitsWindowsCommandLine', () => {
+  const longArgs = (n: number): string[] => ['x'.repeat(n)]
+  it('holds a line run through cmd.exe, or a .cmd or .bat shim cmd.exe runs, to 8191', () => {
+    for (const file of ['C:\\Windows\\System32\\cmd.exe', 'C:\\npm\\codex.cmd', 'C:\\tools\\CODEX.BAT']) {
+      const room = WIN32_CMD_LINE_MAX - windowsCommandLineLength(file, ['']) + 2
+      expect(fitsWindowsCommandLine(file, longArgs(room))).toBe(true)
+      expect(fitsWindowsCommandLine(file, longArgs(room + 1))).toBe(false)
+    }
+  })
+  it('gives an executable the 32767 of CreateProcess', () => {
+    expect(fitsWindowsCommandLine('C:\\bin\\codex.exe', longArgs(9000))).toBe(true)
+    expect(fitsWindowsCommandLine('C:\\bin\\codex.exe', longArgs(WIN32_PROCESS_LINE_MAX))).toBe(false)
   })
 })

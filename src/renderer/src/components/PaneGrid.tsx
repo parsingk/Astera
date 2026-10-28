@@ -616,6 +616,7 @@ export function PaneGrid({
                 busy: busy[s.id] === true,
                 exited: s.status === 'exited',
                 profileTooltip: s.agentProfileId !== undefined ? t('agentProfiles.shown', { name: profileNameOf(profiles, s.agentProfileId) }) : null,
+                sandboxKind: s.sandboxed === true ? s.sandboxKind : undefined,
                 rollTooltip:
                   s.rollAccountIds && s.rollAccountIds.length > 0
                     ? t('session.tab.rollTooltip', {

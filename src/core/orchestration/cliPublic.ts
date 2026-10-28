@@ -75,6 +75,10 @@ const RUN_HIDDEN = [
   'endedAt'
 ] as const
 
+/** A Job's mark that a sandboxed session made it (final fix pass, C3): the Host's own rule for what its work starts in,
+ *  not part of the SDK's contract. */
+const JOB_HIDDEN = ['sandboxed'] as const
+
 /**
  * A Task's fields kept back on purpose: all of them **the ledger the app keeps to drive convergence**. The guide
  * tells a coordinator to read `checks`, `consecutiveFailures` and `parentId` (resources/skills/orchestration-guide.md)
@@ -92,6 +96,8 @@ const TASK_HIDDEN = [
   'reviewRequested',
   // A skipped round's bookkeeping (plugin Phase 5 C9): its results are the Task's `checks` once it settles
   'checkResume',
+  // A sandboxed session added it (final fix pass, C3): the Host's own rule for what its workers start in
+  'sandboxed',
   // A lifecycle round handed to the Host (GitHub lifecycle G3a): its results are the Task's `checks` once CI settles it
   'ciWait',
   'ciUnknowns'
@@ -104,7 +110,7 @@ const FOLLOW_EVENT_HIDDEN = ['body', 'sessionId', 'github'] as const
 // A Job's and a Run's derived fields (the package's DERIVED_FIELDS: outcome, progress, questionsOpen) are not fields
 // of the objects, so they are on neither side of these checks.
 type _project = NothingLeft<Unlisted<Project, typeof PROJECT_FIELDS, []>>
-type _job = NothingLeft<Unlisted<Job, typeof JOB_FIELDS, []>>
+type _job = NothingLeft<Unlisted<Job, typeof JOB_FIELDS, typeof JOB_HIDDEN>>
 type _run = NothingLeft<Unlisted<JobRun, typeof RUN_FIELDS, typeof RUN_HIDDEN>>
 type _task = NothingLeft<Unlisted<Task, typeof TASK_FIELDS, typeof TASK_HIDDEN>>
 type _question = NothingLeft<Unlisted<Gate, typeof QUESTION_FIELDS, []>>
