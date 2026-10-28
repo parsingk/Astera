@@ -6,9 +6,26 @@
 import { ensureGitFiles, ensureWorktreeConfigFiles, gitLayoutOf, type GitLayout } from './gitLayout'
 import { credentialStoreDenies, hostSocketDenies, sensitiveLocations } from './locations'
 import { codexSandboxArgs } from './codexProfile'
-import { sandboxUnavailable } from './unavailable'
+import { SANDBOX_UNAVAILABLE, sandboxUnavailable } from './unavailable'
 import type { Readiness } from './windowsReadiness'
 import { LAUNCH_FORBIDDEN } from '../sessions/commands'
+import { ENFORCE_MIN, atLeast, type CliVersionProbe } from '../sessions/cliVersion'
+
+/** The codex version question a sandboxed Codex start asks (cliVersion.ts's probe, shared with Enforce's check). */
+export type CodexVersionProbe = Pick<CliVersionProbe, 'warm'> & ((cli: 'codex') => string | null | undefined)
+
+/** Why a sandboxed Codex cannot start, or null (final review I2): older than the codex its sandbox was measured on
+ *  (ENFORCE_MIN.codex, the plan's floor), or a codex whose version is not known or that is not there, either of which
+ *  could ignore the permission profile and run under whatever its own config.toml says (E5). The CLI's words for each
+ *  are the version check's codes, as a sandboxed Claude start's are (claudeStart.ts claudeSandboxBlocker). */
+export function codexSandboxBlocker(version: string | null | undefined): string | null {
+  if (version === undefined) return `${SANDBOX_UNAVAILABLE}: cli-missing codex`
+  if (version === null) return `${SANDBOX_UNAVAILABLE}: cli-version-unknown codex`
+  return atLeast(version, ENFORCE_MIN.codex) ? null : `${SANDBOX_UNAVAILABLE}: cli-too-old codex ${version} ${ENFORCE_MIN.codex}`
+}
+
+/** codexSandboxBlocker over a probe; a process with none cannot tell, and refuses as for a version not known. */
+export const codexVersionBlocker = (probe: CodexVersionProbe | undefined): string | null => codexSandboxBlocker(probe ? probe('codex') : null)
 
 /** How long a prepared layout is trusted by the spawn after it: a roll prepares before its kill and spawns right after,
  *  so a minute is plenty (the confirmed folder's own bound, core/sessions/manager.ts). */
@@ -61,7 +78,7 @@ export function sessionSandboxArgs(o: {
 
 /**
  * Reads the folder's git layout for a sandboxed spawn and checks what the spawn would refuse, before anything is written:
- * a path cmd.exe cannot carry, whatever `check` asks of the arguments (the terminal's codex without `--no-daemon`), and on
+ * a codex older than the sandbox's floor or of a version not known (codexSandboxBlocker), a path cmd.exe cannot carry, whatever `check` asks of the arguments (the terminal's codex without `--no-daemon`), and on
  * Windows whether the account's Codex home is set up (`windows-setup codex <account>`, which the app offers to set up, or
  * `windows-check-failed codex <account>` when Codex could not be asked).
  * A roll awaits this before it kills the session it replaces, and the spawn after the kill can only throw. Then, on
@@ -82,12 +99,21 @@ export async function prepareCodexSandbox(o: {
   ready: CodexWindowsReady | undefined
   /** The folder the Host's socket is in, denied on macOS and Linux (sessionSandboxArgs). */
   hostSocketDir?: string | null
+  /** The codex version question (final review I2): asked first, so an old codex is refused before anything is read or
+   *  written. Absent, the start is refused as for a version not known. */
+  version?: CodexVersionProbe
   check?: (sandboxArgs: string[]) => void
   log: (m: string) => void
 }): Promise<GitLayout | null> {
   const fail = (err: unknown): Error => {
     o.log(`sandbox: the git layout of ${o.cwd} could not be read or prepared: ${String(err)}`)
     return sandboxUnavailable('git-layout')
+  }
+  await o.version?.warm('codex')
+  const tooOld = codexVersionBlocker(o.version)
+  if (tooOld !== null) {
+    o.log(`sandbox: ${tooOld}, so the sandboxed start is refused`)
+    throw new Error(tooOld)
   }
   let layout: GitLayout | null
   try {

@@ -675,6 +675,7 @@ export const es: Catalog = {
   'session.spawn.sandbox.cliTooOld': 'El sandbox solo funciona con {cli} {min} o posterior. Ahora es {found}. Actualice la CLI.',
   'session.spawn.sandbox.cliVersionUnknown': 'No se pudo leer la versión de {cli}, así que no puede iniciarse en el sandbox.',
   'session.spawn.sandbox.cliMissing': 'No se encontró {cli}, así que no puede iniciarse en el sandbox.',
+  'session.spawn.sandbox.profileNotActive': 'Codex no confirmó que el chat se ejecuta con el perfil del sandbox, así que se detuvo. Actualice Codex.',
   'session.spawn.sandbox.noSandbox': '{cli} no tiene sandbox aquí, y lo que inicia una sesión en el sandbox debe ejecutarse en uno, así que no se inició.',
   'session.spawn.sandbox.settingsWriteFailed': 'No se pudo escribir el archivo de configuración del sandbox, así que no puede iniciarse. Compruebe que se puede escribir en la carpeta del perfil.',
   'session.roll.sandbox.windowsSetup': 'No se pudo pasar a la cuenta {account}: su sandbox de Windows no está configurado. Pulse Configurar para ella en Configuración › Perfiles de agente.',

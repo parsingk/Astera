@@ -1290,18 +1290,18 @@ describe('callHost — 명령 하나를 Host 에 묻는다', () => {
     expect(await p).toEqual({ status: 200, body: { jobs: [] } })
   })
 
-  it('sends the workload token from ASTERA_GATEWAY_TOKEN, and omits the field when it is empty or unset', () => {
+  // Final review I1: callHost sends the token it is handed (workloadTokenFor decides, for the Host this call goes to), never
+  // one it reads from the environment itself
+  it('sends the workload token it is handed, and omits the field when it is handed none', () => {
     const saved = process.env.ASTERA_GATEWAY_TOKEN
     try {
-      const sentWith = (value: string | undefined): ClientMessage => {
-        if (value === undefined) delete process.env.ASTERA_GATEWAY_TOKEN
-        else process.env.ASTERA_GATEWAY_TOKEN = value
+      process.env.ASTERA_GATEWAY_TOKEN = 'E'.repeat(43)
+      const sentWith = (token: string | undefined): ClientMessage => {
         const f = fakeConn()
-        void callHost({ conn: f.conn, cmd: 'status', args: {}, sessionId: 's', timeoutMs: 1000 })
+        void callHost({ conn: f.conn, cmd: 'status', args: {}, sessionId: 's', timeoutMs: 1000, ...(token === undefined ? {} : { token }) })
         return f.sent[0]
       }
       expect(sentWith('T'.repeat(43))).toMatchObject({ token: 'T'.repeat(43) })
-      expect('token' in sentWith('')).toBe(false)
       expect('token' in sentWith(undefined)).toBe(false)
     } finally {
       if (saved === undefined) delete process.env.ASTERA_GATEWAY_TOKEN

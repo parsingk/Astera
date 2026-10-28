@@ -145,8 +145,11 @@ export interface HostSpawnerDeps {
   /** Test injection; defaults to asking the claude on this machine's PATH its version (cliVersionProbe), which a sandboxed
    *  Claude start needs. A test never runs the real one. */
   claudeVersion?: CliVersionProbe
-  /** Test injection; defaults to os.tmpdir(): where a sandboxed Claude session's npm cache is made, and on macOS where the
-   *  Host's socket is derived from. A test gives its own folder, so nothing is made in the real one. */
+  /** Test injection; defaults to asking the codex on this machine's PATH its version (cliVersionProbe), which a sandboxed
+   *  Codex start needs (final review I2). A test never runs the real one. */
+  codexVersion?: CliVersionProbe
+  /** Test injection; defaults to os.tmpdir(): where a sandboxed Claude session's npm cache and the Host's socket are. A
+   *  test gives its own folder, so nothing is made in the real one. */
   tmpDir?: string
   /** Test injection; defaults to running git, which a sandboxed Claude start on Linux asks for the person's excludes file
    *  (core/sandbox/claudeStart.ts). */
@@ -174,6 +177,8 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
   /** The folder this Host's socket is in (macOS and Linux; null on Windows), which a sandboxed Codex session's profile
    *  denies, terminal or chat (final fix pass, C2). */
   hostSocketDir?: string | null
+  /** The codex version question a sandboxed Codex start asks, shared with the Host's chat sessions (final review I2). */
+  codexVersion?: ChatManagerDeps['codexVersion']
   /** The session shuttle's values once the Host wrote it (kicked at creation); undefined until then. */
   orchEnvNow(): ChatOrchEnv | undefined
   /** How many worker and coordinator starts are under way right now. */
@@ -478,6 +483,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     log
   })
   sessions.claudeSandbox = claudeSandbox
+  // The codex floor a sandboxed Codex start asks, here and in the Host's chat sessions (final review I2)
+  const codexVersion = d.codexVersion ?? cliVersions
+  sessions.codexVersion = codexVersion
   sessions.onExit = (e) => {
     sessions.forget(e.sessionId)
   }
@@ -857,6 +865,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     codexWindowsReady,
     claudeSandbox,
     hostSocketDir,
+    codexVersion,
     orchEnvNow: () => orchEnvReady,
     inFlight: () => spawnsInFlight,
     closeAndSettle: (ms) => {

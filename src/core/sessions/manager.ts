@@ -27,7 +27,7 @@ import type { GitLayout } from '../sandbox/gitLayout'
 import { codexSandboxEnv } from '../sandbox/codexProfile'
 import { sandboxUnavailable } from '../sandbox/unavailable'
 import { sandboxKindOf } from '../sandbox/coverage'
-import { PreparedLayouts, prepareCodexSandbox, sessionSandboxArgs, type CodexWindowsReady } from '../sandbox/prepared'
+import { PreparedLayouts, codexVersionBlocker, prepareCodexSandbox, sessionSandboxArgs, type CodexVersionProbe, type CodexWindowsReady } from '../sandbox/prepared'
 import { codexWindowsReadiness, runCodex } from '../sandbox/windowsReadiness'
 import type { ClaudeSandboxStart } from '../sandbox/claudeStart'
 import type { SandboxScope } from './statusline'
@@ -216,6 +216,9 @@ export class SessionManager {
    *  gets (core/sandbox/claudeStart.ts), shared with the chat manager. Unset, a sandboxed Claude start is refused, never
    *  started outside the sandbox. */
   claudeSandbox?: ClaudeSandboxStart
+  /** The codex version question a sandboxed Codex start asks at its prepare and again at its spawn (final review I2), the
+   *  one Enforce asks. Unset, a sandboxed Codex start is refused as for a version not known. */
+  codexVersion?: CodexVersionProbe
 
   /**
    * Everything `spawn` would look for on disk, looked for without blocking: the folder, and on win32
@@ -289,6 +292,7 @@ export class SessionManager {
       env: this.envFor(account),
       ready: this.checks.codexWindowsReady,
       hostSocketDir: this.checks.hostSocketDir ?? null,
+      version: this.codexVersion,
       // A codex without --no-daemon (warmed above) is refused now too, for a terminal session: a chat's app-server needs
       // no such flag. The spawn still asks for itself, since its environment is built after the hiding and the codex may
       // change meanwhile. The command is built and dropped: the builder is the one place that knows whether this codex
@@ -416,6 +420,9 @@ export class SessionManager {
     const sandboxedClaude = sandboxed && providerOf(opts.account) === 'claude'
     let layout: GitLayout | null = null
     if (sandboxedCodex) {
+      // The codex floor the prepare asked, asked again: the CLI may have changed since (final review I2)
+      const tooOld = codexVersionBlocker(this.codexVersion)
+      if (tooOld !== null) throw new Error(tooOld)
       const prepared = this.sandboxLayouts.layoutOf(opts.account.id, opts.cwd, this.checks.now())
       if (prepared === undefined) throw sandboxUnavailable('not-prepared')
       layout = prepared

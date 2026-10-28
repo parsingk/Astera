@@ -1551,7 +1551,7 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
     win32: { Path: 'C:\\Windows', APPDATA: 'C:\\Users\\t\\AppData\\Roaming' }
   } as const
   type Ready = NonNullable<ChatManagerDeps['codexWindowsReady']>
-  const rig = (platform: 'linux' | 'win32', o: { ready?: Ready; layouts?: PreparedLayouts; noDaemon?: boolean; hostSocketDir?: string | null } = {}) => {
+  const rig = (platform: 'linux' | 'win32', o: { ready?: Ready; layouts?: PreparedLayouts; noDaemon?: boolean; hostSocketDir?: string | null; codex?: string | null } = {}) => {
     const spawned: Array<{ file: string; args: string[]; opts: ProcSpawnOptions; proc: FakeProc }> = []
     const { createAdapter, handles } = makeAdapterFactory()
     const manager = new ChatSessionManager({
@@ -1570,7 +1570,9 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
       baseEnv: { ...BASE[platform] },
       codexWindowsReady: o.ready ?? (async () => 'ready'),
       ...(o.layouts ? { sandboxLayouts: o.layouts } : {}),
-      ...(o.hostSocketDir !== undefined ? { hostSocketDir: o.hostSocketDir } : {})
+      ...(o.hostSocketDir !== undefined ? { hostSocketDir: o.hostSocketDir } : {}),
+      // codex 0.160.0, the floor, unless a case says otherwise
+      codexVersion: Object.assign(() => ('codex' in o ? o.codex : '0.160.0'), { warm: async () => {} })
     })
     return { manager, spawned, handles }
   }
@@ -1609,6 +1611,17 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
       expect(readFileSync(path.join(cwd, '.git', 'commondir'), 'utf8'), platform).toBe('.\n')
       expect(existsSync(path.join(cwd, '.git', 'modules')), platform).toBe(true)
     }
+  })
+
+  // Final review I2: a chat's app-server is held to the same codex floor as a terminal session, at the prepare and the spawn
+  it('a sandboxed chat needs codex 0.160.0 or later', async () => {
+    const cwd = repo()
+    const old = rig('linux', { codex: '0.159.0' })
+    await expect(old.manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: cli-too-old codex 0\.159\.0 0\.160\.0$/)
+    expect(() => old.manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: /)
+    expect(old.spawned).toHaveLength(0)
+    const unknown = rig('linux', { codex: null })
+    await expect(unknown.manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: cli-version-unknown codex$/)
   })
 
   // Final fix pass (C2): as a terminal session's, the profile denies the folder the Host's socket is in on Linux
@@ -1725,6 +1738,7 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
       { cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform: 'linux', now: Date.now, syncExists: () => true, log: () => {} }
     )
     sessions.sandboxLayouts = layouts
+    sessions.codexVersion = Object.assign(() => '0.160.0', { warm: async () => {} })
     const { manager, spawned } = rig('linux', { layouts })
     await sessions.prepare({ account: codexAccount, cwd, sandbox: true })
     manager.spawn({ account: codexAccount, cwd, sandbox: true })

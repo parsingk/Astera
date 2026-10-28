@@ -521,9 +521,11 @@ A session can also carry `ASTERA_GATEWAY_TOKEN`, its own token, and `ASTERA_LOOP
 the Host's endpoint on this machine (`http://127.0.0.1:<port>`). Inside a sandbox that cannot open the
 Host's pipe or socket but can reach `127.0.0.1`, the command tries the pipe first, and when nothing can
 be reached there it sends the same command to that address with the token. The Host knows the session
-from the token, not from anything the call says. Outside a session neither variable is set and
-nothing changes. The endpoint accepts only the token of a session the Host is running, and only from
-the machine itself.
+from the token, not from anything the call says. The token goes only to the session's own Host, the
+Host of the profile whose `astera` the session runs (`ASTERA_CLI`), else of its `ASTERA_PROFILE_DIR`:
+a call pointed at another profile's Host, or at another address with `ASTERA_HOST`, carries none and
+is answered as a shell's call is. Outside a session neither variable is set and nothing changes. The
+endpoint accepts only the token of a session the Host is running, and only from the machine itself.
 
 ### Remote Runtime
 
@@ -1134,7 +1136,9 @@ refused with 5, and the reads are not. A profile the Host refuses says why in `e
 starts them as before, and a profile made before the switch existed reads as `off` (`agent-profiles list` shows it as
 `sandbox`). In Codex's sandbox a session never stops to ask (`-a never` takes the place of the permission bypass; a
 chat's thread names the profile and its approval policy is `never`) and a terminal session runs on its own server
-(`--no-daemon`). On every OS it writes only in its folder, the git directories of the folder's repository (never their
+(`--no-daemon`). It needs codex 0.160.0 or later: an older codex, or one whose version cannot be read, is not started
+(`SANDBOX_UNAVAILABLE: cli-too-old codex …`), and a chat whose thread Codex does not confirm runs under the profile is
+stopped (`SANDBOX_UNAVAILABLE: profile-not-active codex`). On every OS it writes only in its folder, the git directories of the folder's repository (never their
 `hooks` or `config`, nor what decides where git finds them: each `commondir` file, the `modules` folder of submodules'
 git directories, and a worktree's `.git` file; a start makes a missing `commondir`, holding `.`, and an empty
 `modules`, so they can be kept read-only) and the temp folder, where npm's cache goes; it cannot read `~/.ssh`, `~/.aws`, the GitHub CLI's

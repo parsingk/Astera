@@ -20,12 +20,13 @@ export function forcedSandboxBlocker(provider: 'claude' | 'codex', platform: str
 // it, JSON may close it): `windows-setup codex <account>` (that account's Windows sandbox is not set up,
 // windowsReadiness.ts), `windows-check-failed codex <account>` (Codex could not be asked about it), `codex-daemon codex`,
 // `path-unsafe`, `git-layout`, `not-prepared`, `settings-write-failed` (Claude's sandbox settings, claudeStart.ts),
-// `no-sandbox <cli>` (forcedSandboxBlocker), and the
+// `no-sandbox <cli>` (forcedSandboxBlocker), `profile-not-active codex` (a sandboxed chat's thread that does not run
+// under the Astera profile, codexAdapter.ts), and the
 // version floor's `cli-too-old <cli> <found> <min>`, `cli-version-unknown <cli>` and `cli-missing <cli>` (the Enforce
 // check's shape, core/sessions/cliVersion.ts). Versions take dots; an account id is `[\w-]+` only, so a quote, a brace or
 // a full stop after it is not read as part of it.
 const REFUSAL =
-  /SANDBOX_UNAVAILABLE:\s*(windows-setup|windows-check-failed|codex-daemon|path-unsafe|git-layout|not-prepared|settings-write-failed|no-sandbox|cli-too-old|cli-version-unknown|cli-missing)(?:\s+(claude|codex))?(?:\s+([\w.-]+)(?:\s+([\w.-]+))?)?/
+  /SANDBOX_UNAVAILABLE:\s*(windows-setup|windows-check-failed|codex-daemon|path-unsafe|git-layout|not-prepared|settings-write-failed|no-sandbox|profile-not-active|cli-too-old|cli-version-unknown|cli-missing)(?:\s+(claude|codex))?(?:\s+([\w.-]+)(?:\s+([\w.-]+))?)?/
 const CLI_NAMES = { claude: 'Claude Code', codex: 'Codex' } as const
 const accountIdIn = (s: string | undefined): string | null => (s ? (/^[\w-]+/.exec(s)?.[0] ?? null) : null)
 
@@ -61,6 +62,8 @@ export function sandboxRefusalMessage(raw: string): Message | null {
       return { key: 'session.spawn.sandbox.cliVersionUnknown', params: { cli: CLI_NAMES[(m[2] ?? 'claude') as keyof typeof CLI_NAMES] } }
     case 'cli-missing':
       return { key: 'session.spawn.sandbox.cliMissing', params: { cli: CLI_NAMES[(m[2] ?? 'claude') as keyof typeof CLI_NAMES] } }
+    case 'profile-not-active':
+      return { key: 'session.spawn.sandbox.profileNotActive' }
     case 'no-sandbox':
       return { key: 'session.spawn.sandbox.noSandbox', params: { cli: CLI_NAMES[(m[2] ?? 'claude') as keyof typeof CLI_NAMES] } }
     default:

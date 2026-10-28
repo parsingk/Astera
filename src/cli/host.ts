@@ -17,7 +17,7 @@ import { answers, LEGACY_APP_NOTICE } from '../host/server'
 import { encodeLine } from '../host/framing'
 import net from 'node:net'
 import { resolveSkillsDir } from './skills'
-import { hostTarget } from '../core/publicContract'
+import { hostTarget, profilePath } from '../core/publicContract'
 import type { CliError } from '../core/orchestration/cliOutput'
 import { HOST_WAIT_EVERY_MS, HOST_WAIT_NOTICE_MS, hostWaitLine } from '../core/orchestration/cliKeepalive'
 
@@ -291,6 +291,40 @@ export function cliHostTarget(a: {
   home: string
 }): { address: string; profileDir: string } {
   return hostTarget({ env: a.env, platform: a.platform, home: a.home, tmpDir: os.tmpdir() })
+}
+
+/** The profile of the Host this session's workload token belongs to (final review I1): the one whose session shuttle the
+ *  session's `astera` is (`ASTERA_CLI`, `<profile>/orch/astera…`, which the session's own Host or app plants beside the
+ *  token and a person pointing a call elsewhere does not change), else the session's `ASTERA_PROFILE_DIR`. Null when
+ *  neither says one. */
+export function tokenProfileOf(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string | null {
+  const p = platform === 'win32' ? path.win32 : path.posix
+  const cli = env.ASTERA_CLI
+  if (cli) {
+    const orch = p.dirname(cli)
+    if (p.basename(orch) === 'orch') return profilePath(p.dirname(orch), platform)
+  }
+  const given = env.ASTERA_PROFILE_DIR
+  return given ? profilePath(given, platform) : null
+}
+
+/**
+ * The session's workload token (`ASTERA_GATEWAY_TOKEN`) for a call to the Host of `profileDir`, or undefined (final
+ * review I1). Only the session's own Host is handed it: any other answers every call that carries it with 401, and has
+ * no business holding it, so a CLI a person points at another profile's Host (the dev app's, while developing Astera in a
+ * session) is answered as before. Its own Host is the one of `tokenProfileOf`'s profile: over the pipe, at that
+ * profile's own address (`address`; an `ASTERA_HOST` naming another is another Host's), and over the loopback (no
+ * `address`), whose Host proves that profile's key before anything is sent.
+ */
+export function workloadTokenFor(a: { env: NodeJS.ProcessEnv; platform: NodeJS.Platform; home: string; profileDir: string; address?: string }): string | undefined {
+  const token = a.env.ASTERA_GATEWAY_TOKEN
+  if (!token) return undefined
+  const own = tokenProfileOf(a.env, a.platform)
+  const same = (x: string, y: string): boolean => (a.platform === 'win32' ? x.toLowerCase() === y.toLowerCase() : x === y)
+  if (own === null || !same(own, profilePath(a.profileDir, a.platform))) return undefined
+  if (a.address === undefined) return token
+  const ownAddress = cliHostTarget({ env: { ...a.env, ASTERA_HOST: undefined, ASTERA_PROFILE_DIR: own }, platform: a.platform, home: a.home }).address
+  return a.address === ownAddress ? token : undefined
 }
 
 /** The answer when something at the address could not prove it is this profile's Host

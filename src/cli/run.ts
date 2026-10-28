@@ -19,7 +19,7 @@ import { connectLoopback, loopbackUrl } from '../core/publicContract'
 import { HOST_FEATURE_ORCH, HOST_FEATURE_PING, HOST_FEATURE_REQUESTS, HOST_PROTOCOL } from '../core/host/protocol'
 import { hostStderr } from '../core/host/spawn'
 import { privateIPv4s } from '../core/remote/addresses'
-import { cliHostTarget, hostSpawnPlanFor, impostorError, logToStderr, otherProtocolHost, runHostCommand, siblingHostError } from './host'
+import { cliHostTarget, hostSpawnPlanFor, impostorError, logToStderr, otherProtocolHost, runHostCommand, siblingHostError, workloadTokenFor } from './host'
 import { higgsfieldCommand } from './higgsfield'
 import { installFailureOf, resolveSkillsDir, skillsCommand } from './skills'
 import { extensionsCommand } from './extensions'
@@ -605,12 +605,6 @@ export function lostAnswerDetails(a: {
 export const markOf = (r: Pick<HostAnswer, 'replayed' | 'observed'>): ReplayMark =>
   r.replayed === true ? 'replayed' : r.observed === true ? 'observed' : null
 
-/** This session's workload token (`ASTERA_GATEWAY_TOKEN`), or undefined outside a session that has one. */
-const workloadToken = (): string | undefined => {
-  const t = process.env.ASTERA_GATEWAY_TOKEN
-  return t === undefined || t === '' ? undefined : t
-}
-
 /** Whether, and where, a call that could not open the pipe goes to the loopback endpoint instead: only for a pipe nobody
  *  could reach (`unreachable`; a Host that answered wrongly, `timeout`, `protocol` and `impostor`, is an error that stays
  *  one), and only with both a well-formed `ASTERA_LOOPBACK` and the session's token. */
@@ -629,8 +623,11 @@ export function callHost(a: {
    *  named no id from one that named an empty one. */
   request?: string
   timeoutMs: number
+  /** The session's workload token, when this Host may be handed it (workloadTokenFor: the session's own Host only,
+   *  final review I1). Absent, the call carries none. */
+  token?: string
 }): Promise<HostAnswer | { unreachable: string } | { stuck: string }> {
-  const token = workloadToken()
+  const token = a.token
   return new Promise((resolve) => {
     // 이 프로세스는 명령 하나를 묻고 끝난다 — 한 번에 하나뿐이라 상관 id 는 하나면 된다.
     const call = 'cli_1'
@@ -757,7 +754,8 @@ const runtimeDeps = (a: { env: NodeJS.ProcessEnv; platform: NodeJS.Platform; hom
       }
       try {
         // The session it runs in, so the Host sees an agent behind it too (security audit SEC-10).
-        const r = await callHost({ conn, cmd, args, sessionId: a.env.ASTERA_SESSION ?? '', timeoutMs: 30_000 })
+        const token = workloadTokenFor({ env: a.env, platform: a.platform, home: a.home, profileDir, address })
+        const r = await callHost({ conn, cmd, args, sessionId: a.env.ASTERA_SESSION ?? '', timeoutMs: 30_000, ...(token === undefined ? {} : { token }) })
         if ('unreachable' in r) return { down: true }
         if ('stuck' in r) return { error: { code: 'TIMEOUT', message: r.stuck } }
         return { status: r.status, body: r.body }
@@ -1510,13 +1508,21 @@ export async function main(): Promise<void> {
     // `connectFailureEnd` keeps as errors) turns to them. Outside a session neither is set and nothing changes. The
     // loopback Host proves itself against this profile's key as the pipe's does; when it cannot (another profile's Host, a
     // port something else holds) it is no way to the Host this call means, and the pipe's `unreachable` stands.
-    const loopback = loopbackToTry(piped, process.env.ASTERA_LOOPBACK, workloadToken())
+    // The session's workload token goes to its own Host only (final review I1): over the pipe at its own profile's address,
+    // over the loopback once that profile's key is proven. A call pointed at another Host carries none, as before
+    const tokenArgs = { env: process.env, platform: process.platform, home: homedir(), profileDir }
+    const loopback = loopbackToTry(piped, process.env.ASTERA_LOOPBACK, workloadTokenFor(tokenArgs))
     let conn: HostConnection | ConnectFailure = piped
+    let callToken = workloadTokenFor({ ...tokenArgs, address })
     if (loopback !== null) {
       const viaLoopback = await connectLoopback({ url: loopback.url, token: loopback.token, profileDir })
       if ('error' in viaLoopback) verbose.say(`the loopback endpoint ${loopback.url} did not answer as this profile's Host: ${viaLoopback.error}`)
-      else conn = viaLoopback as unknown as HostConnection
+      else {
+        conn = viaLoopback as unknown as HostConnection
+        callToken = loopback.token
+      }
     }
+    const withToken = callToken === undefined ? {} : { token: callToken }
     verbose.say(
       'error' in conn
         ? `connecting to ${address} failed after ${Date.now() - connectStarted}ms: ${conn.error}`
@@ -1578,7 +1584,7 @@ export async function main(): Promise<void> {
           timeoutMs: typeof args.timeoutMs === 'number' ? args.timeoutMs : DEFAULT_WAIT_TIMEOUT_MS,
           write: out,
           call: (callArgs, timeoutMs) =>
-            timedCall(verbose, { conn, cmd: parsed.cmd, args: callArgs, sessionId, timeoutMs })
+            timedCall(verbose, { conn, ...withToken, cmd: parsed.cmd, args: callArgs, sessionId, timeoutMs })
         })
       )
       conn.close()
@@ -1597,7 +1603,7 @@ export async function main(): Promise<void> {
           cwd: process.cwd(),
           request: carried.send,
           call: (cmd, callArgs, request) =>
-            timedCall(verbose, { conn, cmd, args: callArgs, sessionId, request, timeoutMs: clientTimeoutMs({ cmd, args: callArgs }) })
+            timedCall(verbose, { conn, ...withToken, cmd, args: callArgs, sessionId, request, timeoutMs: clientTimeoutMs({ cmd, args: callArgs }) })
         })
       )
       conn.close()
@@ -1622,7 +1628,7 @@ export async function main(): Promise<void> {
           args,
           request: carried.send,
           call: (cmd, callArgs, request) =>
-            timedCall(verbose, { conn, cmd, args: callArgs, sessionId, request, timeoutMs: clientTimeoutMs({ cmd, args: callArgs }) }),
+            timedCall(verbose, { conn, ...withToken, cmd, args: callArgs, sessionId, request, timeoutMs: clientTimeoutMs({ cmd, args: callArgs }) }),
           mcpEntries: async () => (await readExtensionRegistry(profileDir)).entries
         })
       )
@@ -1641,7 +1647,7 @@ export async function main(): Promise<void> {
           args,
           request: carried.send,
           call: (cmd: string, callArgs: Record<string, unknown>, request: string | undefined) =>
-            timedCall(verbose, { conn, cmd, args: callArgs, sessionId, request, timeoutMs: clientTimeoutMs({ cmd, args: callArgs }) })
+            timedCall(verbose, { conn, ...withToken, cmd, args: callArgs, sessionId, request, timeoutMs: clientTimeoutMs({ cmd, args: callArgs }) })
         }
         return parsed.cmd.startsWith('audit-') ? auditCommand({ ...line, agentSession: sessionId !== '' }) : policiesCommand(line)
       })
@@ -1657,6 +1663,7 @@ export async function main(): Promise<void> {
     const r = await keepaliveDuring(keepalive, () =>
       timedCall(verbose, {
         conn,
+        ...withToken,
         cmd: parsed.cmd,
         args: sentArgs,
         sessionId,

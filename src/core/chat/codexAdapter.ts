@@ -12,10 +12,12 @@ import type { CodexFrame, FileChange, ProtocolEffect } from './codexProtocol'
 import {
   decodeFrame, encodeRequest, encodeNotification, encodeError, encodeAnswer, UNSUPPORTED_REQUEST,
   initializeParams, threadStartParams, threadResumeParams, threadOf, planEffortOf, modelsOf,
-  permissionModesOf,
+  permissionModesOf, activePermissionProfileOf,
   turnStartParams, decodeServerRequest, effectsOf
 } from './codexProtocol'
 import { createAdapterCore, safe, type AdapterMode } from './adapterCore'
+import { CODEX_PROFILE } from '../sandbox/codexProfile'
+import { sandboxUnavailable } from '../sandbox/unavailable'
 
 export type { AdapterMode }
 
@@ -201,6 +203,12 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
         : await request('thread/start', threadStartParams({ cwd: a.cwd, bypass: a.bypass, sandbox: a.sandbox === true }))
       const info = threadOf(threadResult)
       if (!info) throw new Error('thread/start: malformed result')
+      // A sandboxed chat is not taken on faith (final review I2): the thread must say it runs under the Astera profile,
+      // or a codex that ignored the profile would run the chat under its own config. Anything else stops it
+      if (a.sandbox === true && activePermissionProfileOf(threadResult) !== CODEX_PROFILE) {
+        log(`thread ${info.threadId} did not start under the ${CODEX_PROFILE} permission profile (${JSON.stringify(activePermissionProfileOf(threadResult))}): the sandboxed chat is stopped`)
+        throw sandboxUnavailable('profile-not-active codex')
+      }
       threadId = info.threadId
       rolloutPath = info.rolloutPath
       threadModel = info.model

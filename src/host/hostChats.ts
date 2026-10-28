@@ -55,6 +55,8 @@ export interface HostChatsDeps {
   claudeSandbox?: ChatManagerDeps['claudeSandbox']
   /** The folder the Host's socket is in, the spawner's: a sandboxed Codex chat's profile denies it on macOS and Linux. */
   hostSocketDir?: ChatManagerDeps['hostSocketDir']
+  /** The codex version question, the spawner's: a sandboxed Codex chat's floor (final review I2). */
+  codexVersion?: ChatManagerDeps['codexVersion']
   log(m: string): void
   /** Test seams. */
   createAdapter?: ChatManagerDeps['createAdapter']
@@ -195,6 +197,7 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     ...(d.codexWindowsReady ? { codexWindowsReady: d.codexWindowsReady } : {}),
     ...(d.claudeSandbox ? { claudeSandbox: d.claudeSandbox } : {}),
     ...(d.hostSocketDir !== undefined ? { hostSocketDir: d.hostSocketDir } : {}),
+    ...(d.codexVersion ? { codexVersion: d.codexVersion } : {}),
     ...(d.createAdapter ? { createAdapter: d.createAdapter } : {})
   })
 

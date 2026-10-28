@@ -78,6 +78,14 @@ export type ThreadStartParams =
   | { cwd: string; approvalPolicy: 'on-request' | 'never'; sandbox: 'workspace-write' | 'danger-full-access' }
   | { cwd: string; approvalPolicy: 'never'; permissions: typeof CODEX_PROFILE }
 
+/** The permission profile a `thread/start` or `thread/resume` answer says the thread runs under
+ *  (`activePermissionProfile.id`, measured present, inventory §23.3), or null when it names none. */
+export function activePermissionProfileOf(result: unknown): string | null {
+  const p = (result as { activePermissionProfile?: unknown } | null)?.activePermissionProfile
+  const id = typeof p === 'object' && p !== null ? (p as { id?: unknown }).id : undefined
+  return typeof id === 'string' ? id : null
+}
+
 /** `sandbox`: the app-server was started with the Astera permission profile's `-c` arguments (sandbox design §6), so the
  *  thread names that profile and never asks, as a sandboxed terminal session's `-a never` does: every command still runs
  *  inside the profile, which the bypass pair would have turned off. The `sandbox` key is left out, since Codex refuses it

@@ -864,6 +864,7 @@ export const ko = {
   'session.spawn.sandbox.cliTooOld': 'sandbox는 {cli} {min} 이상에서만 쓸 수 있습니다. 지금은 {found} 입니다. CLI를 업데이트해 주세요.',
   'session.spawn.sandbox.cliVersionUnknown': '{cli} 버전을 읽지 못해 sandbox로 시작할 수 없습니다.',
   'session.spawn.sandbox.cliMissing': '{cli}를 찾지 못해 sandbox로 시작할 수 없습니다.',
+  'session.spawn.sandbox.profileNotActive': 'Codex가 이 대화를 sandbox 프로필로 돌린다고 확인해 주지 않아 멈췄습니다. Codex를 업데이트해 주세요.',
   'session.spawn.sandbox.noSandbox': '{cli}는 이 시스템에 sandbox가 없습니다. sandbox 안의 세션이 시작하는 것은 sandbox에서 돌아야 해서 시작하지 않았습니다.',
   'session.spawn.sandbox.settingsWriteFailed': 'sandbox 설정 파일을 쓰지 못해 시작할 수 없습니다. 프로필 폴더에 쓸 수 있는지 확인해 주세요.',
   // A roll refused for the sandbox (core/rolling/codexCoordinator.ts): the line in the tab, or the chat's notice

@@ -353,6 +353,8 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     log: sessionsLog
   })
   sessions.claudeSandbox = claudeSandbox
+  // The codex floor a sandboxed Codex start asks, the version Enforce asks (final review I2)
+  sessions.codexVersion = cliVersions
   // The chat sessions. It is handed `procRouter.factory` rather than a factory chosen now, for exactly
   // the reason SessionManager is handed `ptyRouter.factory`: which one a spawn reaches is decided at
   // spawn time, once registerIpc has learned whether this Host speaks procs. `version` is the app's
@@ -373,7 +375,8 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     sandboxLayouts: sessions.sandboxLayouts,
     codexWindowsReady: askCodexWindowsReady,
     claudeSandbox,
-    hostSocketDir
+    hostSocketDir,
+    codexVersion: cliVersions
   })
   // Lazy history: nothing is scanned at startup. The project list comes from a directory listing; sessions are
   // parsed when expanded. index.ts starts the file watcher with startBackground() after the window is up, so window creation never blocks on a scan.

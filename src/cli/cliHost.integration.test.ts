@@ -148,7 +148,9 @@ interface CliRun {
 }
 
 /** The variables that pick a Host and a caller. Each call sets exactly the ones it is given. */
-const CLI_ENV = ['ASTERA_PROFILE_DIR', 'ASTERA_HOST', 'ASTERA_PROFILE', 'ASTERA_SESSION', 'ASTERA_GATEWAY_TOKEN', 'ASTERA_LOOPBACK'] as const
+// ASTERA_CLI too: it names the profile a session's token is for (workloadTokenFor), and a test run inside an Astera
+// session would otherwise inherit that session's
+const CLI_ENV = ['ASTERA_PROFILE_DIR', 'ASTERA_HOST', 'ASTERA_PROFILE', 'ASTERA_SESSION', 'ASTERA_GATEWAY_TOKEN', 'ASTERA_LOOPBACK', 'ASTERA_CLI'] as const
 
 /** One `astera …` invocation, the way index.ts runs it. Calls are serial (the process globals are
  *  borrowed for the call), which is also how a script runs them. */
@@ -1216,6 +1218,26 @@ describe('the public CLI against a real Host (§48, §49)', { timeout: 60_000 },
     const dead = await astera(['agent-profiles', 'list'], { ...env, ASTERA_GATEWAY_TOKEN: 'D'.repeat(43) })
     expect(dead.code, dead.stdout).not.toBe(0)
     expect(dead.stdout).toContain('workload token not recognised')
+  })
+
+  // Final review I1: inside a session, a CLI pointed at another profile's live Host (the dev app's, while developing Astera
+  // in a session) is answered as before: the session's token is for its own Host, which still gets it, and the other
+  // Host never sees it
+  it('a CLI pointed at another profile’s live Host is answered as before, and its own Host still gets the token', async () => {
+    const h = await hostRig()
+    const other = await hostRig()
+    const token = 'I'.repeat(43)
+    h.openSession('ses_mine', { title: 'mine', accountId: h.accountId, cwd: h.profileDir }, { ASTERA_GATEWAY_TOKEN: token, ASTERA_GATEWAY_GRANT: '' })
+    for (const r of [h, other]) okData(await astera(['agent-profiles', 'create', '--name', 'Reviewer', '--account', r.accountId], r.env), 'agent-profiles create')
+    const session = { ASTERA_CLI: path.join(h.profileDir, 'orch', process.platform === 'win32' ? 'astera.cmd' : 'astera'), ASTERA_GATEWAY_TOKEN: token }
+    // To the other profile's Host: answered as a shell's call, as before this branch
+    const toOther = await astera(['agent-profiles', 'list'], { ...session, ASTERA_PROFILE_DIR: other.profileDir })
+    expect(toOther.code, toOther.stdout).toBe(0)
+    expect(toOther.stdout).not.toContain('workload token not recognised')
+    expect(okData(toOther, 'agent-profiles list')).toMatchObject({ profiles: [expect.objectContaining({ name: 'Reviewer' })] })
+    // To its own Host the token goes, and the call is the session's: an agent profile cannot be changed from it (5)
+    const own = await astera(['agent-profiles', 'archive', '--id', 'Reviewer'], { ...session, ASTERA_PROFILE_DIR: h.profileDir })
+    expect(own.code, own.stdout).toBe(5)
   })
 
   it('without ASTERA_LOOPBACK it falls back to the state file as today', async () => {

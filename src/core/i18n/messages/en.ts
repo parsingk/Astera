@@ -838,6 +838,7 @@ export const en: Record<keyof typeof ko, string> = {
   'session.spawn.sandbox.cliTooOld': 'The sandbox works only on {cli} {min} or later. This one is {found}. Update the CLI.',
   'session.spawn.sandbox.cliVersionUnknown': 'The {cli} version could not be read, so it cannot start in the sandbox.',
   'session.spawn.sandbox.cliMissing': '{cli} was not found, so it cannot start in the sandbox.',
+  'session.spawn.sandbox.profileNotActive': "Codex did not confirm that the chat runs under the sandbox's profile, so it was stopped. Update Codex.",
   'session.spawn.sandbox.noSandbox': '{cli} has no sandbox here, and what a sandboxed session starts must run in one, so it did not start.',
   'session.spawn.sandbox.settingsWriteFailed': 'The sandbox settings file could not be written, so it cannot start. Check that the profile folder can be written.',
   'session.roll.sandbox.windowsSetup': 'Could not move to the {account} account: its Windows sandbox is not set up. Press Set up for it in Settings › Agent profiles.',

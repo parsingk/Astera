@@ -1758,7 +1758,10 @@ describe('the sandbox at spawn', () => {
     cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform, now: Date.now, syncExists: () => true, log: () => {},
     codexWindowsReady: ready, hostSocketDir
   })
-  const rig = (platform: 'linux' | 'darwin' | 'win32', o: { noDaemon?: boolean; ready?: Ready; hostSocketDir?: string | null } = {}) => {
+  /** The codex version the probe answers: '0.160.0', the floor, unless a case says otherwise (null: unreadable,
+   *  undefined: no codex) */
+  const versionOf = (v: string | null | undefined) => Object.assign((_cli: 'claude' | 'codex') => v, { warm: async () => {} })
+  const rig = (platform: 'linux' | 'darwin' | 'win32', o: { noDaemon?: boolean; ready?: Ready; hostSocketDir?: string | null; codex?: string | null; noVersionProbe?: true } = {}) => {
     const argv: string[][] = []
     const spawned: PtySpawnOptions[] = []
     const manager = new SessionManager(
@@ -1766,6 +1769,7 @@ describe('the sandbox at spawn', () => {
       makeDescriptors(platform, HOME[platform], undefined, daemon(o.noDaemon ?? true)),
       100, 20, HOME[platform], undefined, [], { ...BASE[platform] }, checksFor(platform, o.ready, o.hostSocketDir ?? null)
     )
+    if (!o.noVersionProbe) manager.codexVersion = versionOf('codex' in o ? o.codex : '0.160.0')
     return { manager, argv, spawned }
   }
   /** What the builders give for this folder, from the session's own environment and home. */
@@ -1799,6 +1803,40 @@ describe('the sandbox at spawn', () => {
       expect(spawned[0].meta?.restore).toMatchObject({ sandboxed: true, sandboxKind: 'sandbox' })
       expect(sessionInfoFromNote({ kind: 'session', id: info.id, restore: spawned[0].meta!.restore! })).toMatchObject({ sandboxed: true, sandboxKind: 'sandbox' })
     }
+  })
+
+  // Final review I2: the sandbox was measured on codex 0.160.0 (ENFORCE_MIN.codex); an older codex, one whose version
+  // cannot be read, or none, could ignore the profile and run under its own config, so the start is refused before
+  // anything is written, and again at the spawn if the codex changed in between
+  it('a sandboxed Codex start needs codex 0.160.0 or later, at the prepare and at the spawn', async () => {
+    const cases: Array<[string | null | undefined, RegExp]> = [
+      ['0.159.0', /^SANDBOX_UNAVAILABLE: cli-too-old codex 0\.159\.0 0\.160\.0$/],
+      [null, /^SANDBOX_UNAVAILABLE: cli-version-unknown codex$/],
+      [undefined, /^SANDBOX_UNAVAILABLE: cli-missing codex$/]
+    ]
+    for (const [codex, refusal] of cases) {
+      const cwd = repo()
+      const { manager, spawned } = rig('linux', { codex })
+      await expect(manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(refusal)
+      expect(existsSync(path.join(cwd, '.git', 'commondir')), String(codex)).toBe(false)
+      expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: /)
+      expect(spawned).toHaveLength(0)
+      // Unsandboxed, the same codex starts as before
+      await manager.prepare({ account: codexAccount, cwd })
+      manager.spawn({ account: codexAccount, cwd })
+      expect(spawned).toHaveLength(1)
+    }
+    // A process with no version probe cannot tell, and refuses
+    const none = rig('linux', { noVersionProbe: true })
+    await expect(none.manager.prepare({ account: codexAccount, cwd: repo(), sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: cli-version-unknown codex$/)
+    // The floor itself starts; a codex downgraded after the prepare is refused at the spawn
+    const cwd = repo()
+    const ok = rig('linux')
+    await ok.manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    ok.manager.codexVersion = versionOf('0.159.9')
+    expect(() => ok.manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: cli-too-old codex 0\.159\.9 0\.160\.0$/)
+    ok.manager.codexVersion = versionOf('0.161.2')
+    expect(ok.manager.spawn({ account: codexAccount, cwd, sandbox: true }).sandboxed).toBe(true)
   })
 
   // Final fix pass (C2): on macOS and Linux the folder the Host's socket is in is denied, so the session reaches the Host
@@ -1851,6 +1889,7 @@ describe('the sandbox at spawn', () => {
     const spawned: PtySpawnOptions[] = []
     const manager = new SessionManager((_f, _a, o) => (spawned.push(o), new FakePty()), makeDescriptors('win32', HOME.win32, undefined, daemon(true)),
       100, 20, HOME.win32, undefined, [], { ...BASE.win32, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.autocrlf', GIT_CONFIG_VALUE_0: 'false' }, checksFor('win32'))
+    manager.codexVersion = versionOf('0.160.0')
     await manager.prepare({ account: codexAccount, cwd, sandbox: true })
     manager.spawn({ account: codexAccount, cwd, sandbox: true })
     expect(spawned[0].env).toMatchObject({
@@ -1920,6 +1959,7 @@ describe('the sandbox at spawn', () => {
     const home = 'C:\\Users\\100%'
     const manager = new SessionManager((_f, a) => (argv.push(a as string[]), new FakePty()), makeDescriptors('win32', home, undefined, daemon(true)),
       100, 20, home, undefined, [], { Path: 'C:\\Windows' }, checksFor('win32'))
+    manager.codexVersion = versionOf('0.160.0')
     await expect(manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: path-unsafe$/)
     expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: /)
     expect(argv).toHaveLength(0)
@@ -1934,6 +1974,7 @@ describe('the sandbox at spawn', () => {
     const spawned: PtySpawnOptions[] = []
     const manager = new SessionManager((_f, _a, o) => (spawned.push(o), new FakePty()), makeDescriptors('win32', HOME.win32, undefined, flipping),
       100, 20, HOME.win32, undefined, [], () => ({ Path: 'C:\\Windows', APPDATA: appData }), checksFor('win32'))
+    manager.codexVersion = versionOf('0.160.0')
     await manager.prepare({ account: codexAccount, cwd, sandbox: true })
     takes = false
     expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: codex-daemon codex$/)
@@ -1993,6 +2034,7 @@ describe('the sandbox at spawn', () => {
     // A process that cannot ask refuses the same way: a sandboxed start on a home nobody asked about is not risked
     const none = new SessionManager((_f, _a, o) => (w.spawned.push(o), new FakePty()), makeDescriptors('win32', HOME.win32, undefined, daemon(true)),
       100, 20, HOME.win32, undefined, [], { ...BASE.win32 }, { ...checksFor('win32'), codexWindowsReady: undefined })
+    none.codexVersion = versionOf('0.160.0')
     await expect(none.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: windows-setup codex acc-cx$/)
     // Unsandboxed, or elsewhere than Windows, nothing is asked
     await w.manager.prepare({ account: codexAccount, cwd })

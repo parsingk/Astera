@@ -25,7 +25,7 @@ import { gatewayTokenEnv } from '../extensions/resolve'
 import { applyHiding, type HidingSource } from '../credentials/hiding'
 import { isObserving } from '../audit/policy'
 import { enforceUnavailable, type EnforceStart } from '../audit/enforce'
-import { PreparedLayouts, prepareCodexSandbox, sessionSandboxArgs, type CodexWindowsReady } from '../sandbox/prepared'
+import { PreparedLayouts, codexVersionBlocker, prepareCodexSandbox, sessionSandboxArgs, type CodexVersionProbe, type CodexWindowsReady } from '../sandbox/prepared'
 import { appServerSandboxArgs, codexSandboxEnv } from '../sandbox/codexProfile'
 import { sandboxUnavailable } from '../sandbox/unavailable'
 import { sandboxKindOf } from '../sandbox/coverage'
@@ -91,6 +91,9 @@ export interface ChatManagerDeps {
   /** The folder the Host's socket is in, which a sandboxed Codex chat's profile denies on macOS and Linux (SpawnChecks'
    *  twin). Absent, nothing is denied for it. */
   hostSocketDir?: string | null
+  /** The codex version question a sandboxed Codex chat asks at its prepare and spawn (final review I2), the terminal
+   *  manager's. Absent, a sandboxed Codex chat is refused as for a version not known. */
+  codexVersion?: CodexVersionProbe
 }
 
 /** What `spawn` takes, for a caller that builds it elsewhere (./respawn.ts). */
@@ -276,6 +279,7 @@ export class ChatSessionManager {
       env: this.inheritedEnv(opts.account),
       ready: this.deps.codexWindowsReady,
       hostSocketDir: this.deps.hostSocketDir ?? null,
+      version: this.deps.codexVersion,
       log: this.deps.log
     })
     this.sandboxLayouts.keep(opts.account.id, opts.cwd, layout, Date.now())
@@ -349,6 +353,9 @@ export class ChatSessionManager {
     // What protection it is, said in the info and the note (SessionInfo.sandboxKind): Claude on Windows has deny rules only
     const sandboxKind = sandboxed ? sandboxKindOf(provider, this.deps.platform) : undefined
     const sandboxedCodex = sandboxed && provider === 'codex'
+    // The codex floor the prepare asked, asked again: the CLI may have changed since (final review I2)
+    const tooOld = sandboxedCodex ? codexVersionBlocker(this.deps.codexVersion) : null
+    if (tooOld !== null) throw new Error(tooOld)
     const layout = sandboxedCodex ? this.sandboxLayouts.layoutOf(opts.account.id, opts.cwd, Date.now()) : null
     if (layout === undefined) throw sandboxUnavailable('not-prepared')
     // A Claude chat's sandbox is its settings file: the version the prepare asked is asked again (the CLI may have been

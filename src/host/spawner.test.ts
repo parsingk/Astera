@@ -50,6 +50,7 @@ const rig = (over: {
   codexNoDaemon?: HostSpawnerDeps['codexNoDaemon']
   codexWindowsReady?: HostSpawnerDeps['codexWindowsReady']
   claudeVersion?: HostSpawnerDeps['claudeVersion']
+  codexVersion?: HostSpawnerDeps['codexVersion']
 } & LocateHooks = {}) => {
   const spawned: Spawned[] = []
   const logs: string[] = []
@@ -76,6 +77,8 @@ const rig = (over: {
     // Every Windows home reads set up unless a case says otherwise: the real question runs the codex on this machine
     codexWindowsReady: over.codexWindowsReady ?? (async () => 'ready'),
     ...(over.claudeVersion ? { claudeVersion: over.claudeVersion } : {}),
+    // codex at the sandbox's floor unless a case says otherwise: the real probe runs the codex on this machine
+    codexVersion: over.codexVersion ?? Object.assign(() => '0.160.0', { warm: async () => {} }),
     // A sandboxed Claude start makes npm's cache in the temp folder and asks git for the excludes file: the fixture's
     // folder and no git at all, so a test leaves nothing in the real temp folder and runs no real git
     tmpDir: path.join(dir, 'tmp'),
