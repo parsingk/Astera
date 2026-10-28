@@ -39,7 +39,7 @@ beforeEach(async () => {
 afterEach(async () => { await fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }) })
 
 type Spawned = { file: string; args: string[] | string; opts: { cwd: string; env: Record<string, string | undefined> }; pty: RegistryPty & { emit(d: string): void; exit(c: number): void; killed: boolean } }
-type LocateHooks = Pick<HostSpawnerDeps, 'findRollout' | 'locatePollMs' | 'locateForMs' | 'readAccounts'>
+type LocateHooks = Pick<HostSpawnerDeps, 'findRollout' | 'locatePollMs' | 'locateForMs' | 'readAccounts' | 'rolloutOwner'>
 const rig = (over: {
   env?: NodeJS.ProcessEnv
   state?: () => OrchState
@@ -71,6 +71,7 @@ const rig = (over: {
   const spawner = createHostSpawner({ profileDir: profile, env, platform: process.platform, homeDir: path.join(dir, 'home'), registry,
     broadcast: (m) => sent.push(m), getState: over.state ?? (() => emptyState()), log: (m) => logs.push(m),
     findRollout: over.findRollout, locatePollMs: over.locatePollMs, locateForMs: over.locateForMs, readAccounts: over.readAccounts,
+    ...(over.rolloutOwner ? { rolloutOwner: over.rolloutOwner } : {}),
     appKeepsWorktrees: over.appKeepsWorktrees ?? (() => false),
     onPromptWrite: over.onPromptWrite,
     touchAgentProfile: over.touchAgentProfile,
@@ -442,6 +443,30 @@ describe('createHostSpawner', () => {
     expect(excluded[0]).toEqual(['C:/cx/theirs.jsonl'])
   })
 
+  // Task D (2026-10-28): another Host's idle session in the same folder took this Host's session's rollout. The locate
+  // asks whose codex holds a candidate, about this worker's own pty process.
+  it("asks whose codex holds a candidate, about the worker's own process", async () => {
+    const asked: Array<[string, number]> = []
+    let verdict: string | undefined
+    const h = rigWith({
+      locatePollMs: 5,
+      rolloutOwner: async (file, pid) => {
+        asked.push([file, pid])
+        return { verdict: 'other', why: 'held by pid 4242 outside the session' }
+      },
+      findRollout: async (o) => {
+        verdict = (await o.owner?.('C:/cx/theirs.jsonl'))?.verdict
+        return null
+      }
+    })
+    await h.spawner!.startWorker({ ...startArgs(h.taskId, h.dispatchId), provider: 'codex', accountId: 'acc2' })
+    await vi.waitFor(() => expect(verdict).toBe('other'))
+    // Asked once however many ticks pass
+    await new Promise((r) => setTimeout(r, 30))
+    expect(asked).toEqual([['C:/cx/theirs.jsonl', h.spawned[0].pty.pid]])
+    expect(h.logs.join('\n')).toMatch(/codex rollout skipped for session=\S+: C:\/cx\/theirs\.jsonl \(held by pid 4242 outside the session\)/)
+  })
+
   it('does nothing for a claude worker', async () => {
     let calls = 0
     const { s, taskId, dispatchId } = seeded()
@@ -453,10 +478,12 @@ describe('createHostSpawner', () => {
 
   // The watcher's mayClaim(): of two sessions looking in one account and folder, the newest file is the
   // newest starter's. Without it the earlier worker's poll takes the later worker's rollout.
+  // Where the owner cannot tell: this fake, as findRollout does, maps nothing for a look that needs the session's own
+  // file (`requireOwn`), the look a worker the start order puts behind another makes.
   it('lets only the later of two workers looking in one folder claim the next rollout', async () => {
     let ready = false
     const h = rigWith({ locatePollMs: 5, findRollout: async (o) =>
-      !ready || (o.excludePaths ?? []).includes('C:/cx/second.jsonl') ? null : { path: 'C:/cx/second.jsonl', sessionId: 'cx-2' } })
+      !ready || o.requireOwn || (o.excludePaths ?? []).includes('C:/cx/second.jsonl') ? null : { path: 'C:/cx/second.jsonl', sessionId: 'cx-2' } })
     await h.spawner!.startWorker({ ...startArgs(h.taskId, h.dispatchId), provider: 'codex', accountId: 'acc2' })
     const again = seeded('acc2', 'codex')
     h.box.state = again.s
@@ -465,6 +492,29 @@ describe('createHostSpawner', () => {
     await vi.waitFor(() => expect(h.registry.list()[1].meta!.restore).toMatchObject({ rolloutPath: 'C:/cx/second.jsonl' }))
     await new Promise((r) => setTimeout(r, 30))
     expect(h.registry.list()[0].meta!.restore.rolloutPath).toBeUndefined()
+  })
+
+  // Review round 1, item 3: with several workers in one repo, the earlier one's own file is its own whatever the start
+  // order; under the order alone it waited for the later, idle one.
+  it('lets the earlier of two workers in one folder map the file its own process holds', async () => {
+    let ready = false
+    const h = rigWith({
+      locatePollMs: 5,
+      rolloutOwner: async (file, pid) =>
+        pid === 1000 && file === 'C:/cx/first.jsonl' ? { verdict: 'own' } : { verdict: 'other', why: 'held by pid 1000 outside the session' },
+      findRollout: async (o) => {
+        if (!ready || !o.owner || (o.excludePaths ?? []).includes('C:/cx/first.jsonl')) return null
+        return (await o.owner('C:/cx/first.jsonl')).verdict === 'own' ? { path: 'C:/cx/first.jsonl', sessionId: 'cx-1' } : null
+      }
+    })
+    await h.spawner!.startWorker({ ...startArgs(h.taskId, h.dispatchId), provider: 'codex', accountId: 'acc2' })
+    const again = seeded('acc2', 'codex')
+    h.box.state = again.s
+    await h.spawner!.startWorker({ ...startArgs(again.taskId, again.dispatchId), provider: 'codex', accountId: 'acc2' })
+    expect(h.spawned[0].pty.pid).toBe(1000)
+    ready = true
+    await vi.waitFor(() => expect(h.registry.list()[0].meta!.restore).toMatchObject({ rolloutPath: 'C:/cx/first.jsonl' }))
+    expect(h.registry.list()[1].meta!.restore.rolloutPath).toBeUndefined()
   })
 
   it('stops looking, and says so, when no rollout turns up in time', async () => {

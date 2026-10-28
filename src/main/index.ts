@@ -43,6 +43,7 @@ import { RollingCoordinator } from '../core/rolling/claudeCoordinator'
 import { SchedulerCoordinator } from './scheduler'
 import { chatDriver, ptyDriver, routedDriver } from '../core/sessions/sessionDriver'
 import { CodexRollingCoordinator } from '../core/rolling/codexCoordinator'
+import { ownerScriptDir, rolloutOwnerReader } from '../core/rolling/rolloutOwner'
 import { BlockRegistry } from '../core/rolling/blockRegistry'
 import type { RollSnapshot } from '../core/rolling/snapshot'
 import { chatSpawnOptsOf } from '../core/chat/respawn'
@@ -681,7 +682,13 @@ app.whenReady().then(async () => {
       // The thread is the conversation a history resume names: the profile the session runs as is written down by it
       void core!.profileConversations.learned(sessionId, note.codexSessionId)
     },
-    log: slackLog
+    log: slackLog,
+    // A rollout the scan finds is mapped only when this session's own codex holds it (rolloutOwner.ts); the Windows
+    // check's script goes in `<profile>/host`, which no sandboxed session may write (fix round 2)
+    rolloutOwner: {
+      pidOf: (sessionId) => core?.sessions.pidOf(sessionId) ?? null,
+      read: rolloutOwnerReader(process.platform, ownerScriptDir(app.getPath('userData')))
+    }
   })
   codexRolloutRef = codexRollout
   const hookWatcher = new HookEventWatcher(
@@ -1198,7 +1205,13 @@ app.whenReady().then(async () => {
     resumeText: resumeTextDep,
     // 한도에 걸린 세션을 어떻게 이어갈지(Task 1 의 설정) — orchEnv 와 같은 이유로 getter 다: 값이
     // 설정 화면에서 앱 수명 중간에 바뀌고, 이 코디네이터는 그보다 먼저 만들어진다.
-    resumeStrategy: () => core!.appSettings.getResumeStrategy()
+    resumeStrategy: () => core!.appSettings.getResumeStrategy(),
+    // A rollout the locate finds is mapped only when this session's own codex holds it (rolloutOwner.ts), with the
+    // rollout watcher's reader (one per profile and platform)
+    rolloutOwner: {
+      pidOf: (sid) => core?.sessions.pidOf(sid) ?? null,
+      read: rolloutOwnerReader(process.platform, ownerScriptDir(app.getPath('userData')))
+    }
   })
   codexRollingRef = codexRolling
   // Agent orchestration: an HTTP server embedded in the app plus the astera CLI let an agent spawn

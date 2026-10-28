@@ -185,6 +185,19 @@ describe('SessionManager', () => {
     })
   })
 
+  // Task D: whose codex holds a rollout is asked about the session's pty process. A pty the Host has not answered
+  // for yet reports pid 0 (main/host/ptyFactory.ts), which is no process.
+  describe('pidOf', () => {
+    it("answers the session's pty process id, and null for none", () => {
+      const { manager, spawned } = setup()
+      const info = manager.spawn({ account, cwd: process.cwd() })
+      expect(manager.pidOf(info.id)).toBe(4242)
+      spawned[0].pty.pid = 0
+      expect(manager.pidOf(info.id)).toBeNull()
+      expect(manager.pidOf('nope')).toBeNull()
+    })
+  })
+
   it('spawn은 CLAUDE_CONFIG_DIR를 주입하고 running 세션을 만든다', () => {
     const { manager, spawned } = setup()
     const info = manager.spawn({ account, cwd: process.cwd() })

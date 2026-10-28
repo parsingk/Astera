@@ -685,6 +685,20 @@ describe('the last screen of a session that ended badly', () => {
     made[1].exit(0)
     expect(r.sessionPty('ses_1')).toBe('p1')
   })
+  // Task D: whose codex holds a rollout is asked about the session's live pty process, the one sessionPty names.
+  it("answers a session's process id with its last-opened live pty's", () => {
+    const made = [fakePty(101), fakePty(102)]
+    let i = 0
+    const r = new PtyRegistry({ spawn: () => made[i++], log: () => {} })
+    r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta({ kind: 'session', id: 'ses_1', restore: {} }) })
+    r.open({ id: 'p2', file: 'cmd.exe', args: [], opts, meta: meta({ kind: 'session', id: 'ses_1', restore: {} }) })
+    expect(r.sessionPid('ses_1')).toBe(102)
+    made[1].exit(0)
+    expect(r.sessionPid('ses_1')).toBe(101)
+    made[0].exit(0)
+    expect(r.sessionPid('ses_1')).toBeNull()
+    expect(r.sessionPid('nope')).toBeNull()
+  })
   // M1: node-pty can deliver an exit with no code (the `exited undefined` lines). That session has
   // ended, and the answer must say so: the Host's handover closes an ended session and skips one it
   // never held (R3), so "ended with no code" cannot read like "never here".
