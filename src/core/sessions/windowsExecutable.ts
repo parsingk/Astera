@@ -183,10 +183,11 @@ export function windowsCommandLineLength(file: string, args: string[]): number {
   return [file, ...args].reduce((n, a, i) => n + (i > 0 ? 1 : 0) + quoted(a), 0)
 }
 
-/** Whether `file args…` fits what Windows will carry: through cmd.exe (a shim wrapped by windowsSpawn) its 8191, else
- *  CreateProcess's 32767. */
+/** Whether `file args…` fits what Windows will carry: through cmd.exe (a shim wrapped by windowsSpawn, or a `.cmd` or
+ *  `.bat` handed over as it is, which cmd.exe runs too) its 8191, else CreateProcess's 32767. */
 export function fitsWindowsCommandLine(file: string, args: string[]): boolean {
-  const max = path.win32.basename(file).toLowerCase() === 'cmd.exe' ? WIN32_CMD_LINE_MAX : WIN32_PROCESS_LINE_MAX
+  const viaCmd = /^(cmd\.exe|.*\.(cmd|bat))$/.test(path.win32.basename(file).toLowerCase())
+  const max = viaCmd ? WIN32_CMD_LINE_MAX : WIN32_PROCESS_LINE_MAX
   return windowsCommandLineLength(file, args) <= max
 }
 
