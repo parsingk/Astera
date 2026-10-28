@@ -14,7 +14,8 @@
 // Read once per candidate and session process, never per poll tick (rolloutOwnerCheck). Each platform reads it its
 // own way: Linux from /proc, macOS with lsof and ps, Windows with Restart Manager through a PowerShell helper kept while
 // questions come. Only a positive answer rejects a candidate: held by a process outside the session's tree, or held by
-// none. Where the evidence cannot be read (a tool missing or failing, a process or an fd this user may not read, a
+// none (asked again a few times first: the session's own file is unheld for a moment while its writer recovers from a
+// failed write). Where the evidence cannot be read (a tool missing or failing, a process or an fd this user may not read, a
 // timeout), the answer is 'unknown': the locate keeps the rule it had before, nothing is remembered, and it is logged
 // once per session.
 import { execFile, spawn } from 'node:child_process'
@@ -22,13 +23,18 @@ import { promises as fs } from 'node:fs'
 import { comparablePath } from '../files/tree'
 import { windowsPowerShellExe } from '../sessions/windowsPath'
 
-export type RolloutOwnership = { verdict: 'own' } | { verdict: 'other'; why: string } | { verdict: 'unknown'; why: string }
+/** `recheck` on an `other`: no process holds the file, or none the reader can see in the session. A session's own file
+ *  answers that too while its writer recovers from a failed write (recorder.rs 1848-1861), until the next write opens it
+ *  again, so the check asks again a few times before it is final (review Minor 3). */
+export type RolloutOwnership = { verdict: 'own' } | { verdict: 'other'; why: string; recheck?: true } | { verdict: 'unknown'; why: string }
 
 /** Whether `file` is held open by the process `pid` or a process started under it. */
 export type RolloutOwnerReader = (file: string, pid: number) => Promise<RolloutOwnership>
 
 const OWN: RolloutOwnership = { verdict: 'own' }
 const other = (why: string): RolloutOwnership => ({ verdict: 'other', why })
+/** An `other` that is asked again: see RolloutOwnership. */
+const otherForNow = (why: string): RolloutOwnership => ({ verdict: 'other', why, recheck: true })
 const unknown = (why: string): RolloutOwnership => ({ verdict: 'unknown', why })
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
@@ -161,7 +167,8 @@ export function linuxOwnerReader(d: ProcFs = realProcFs): RolloutOwnerReader {
         }
       }
     }
-    return blind ? unknown(blind) : other(`not open in process ${pid} or any process under it`)
+    // The fds of the processes outside the session are not read, so held by another and held by none look the same here
+    return blind ? unknown(blind) : otherForNow(`not open in process ${pid} or any process under it`)
   }
 }
 
@@ -184,7 +191,7 @@ export function macOwnerReader(run: RunTool = runTool): RolloutOwnerReader {
       .filter((n) => Number.isSafeInteger(n) && n > 0)
     if (holders.includes(pid)) return OWN
     const failed = lsof.stderr.trim() !== '' || (lsof.code !== 0 && lsof.code !== 1) ? `lsof exited ${lsof.code}: ${firstLine(lsof.stderr)}` : null
-    if (holders.length === 0) return failed ? unknown(failed) : other('held open by no process')
+    if (holders.length === 0) return failed ? unknown(failed) : otherForNow('held open by no process')
     let ps: RunResult
     try {
       ps = await run('/bin/ps', ['-A', '-o', 'pid=,ppid='])
@@ -296,7 +303,8 @@ public static class AsteraRolloutOwner {
     if (rootStart == -2) return "unknown|the session's process " + root + " is gone";
     if (rootStart < 0) return "unknown|the session's process " + root + " cannot be read (error " + error + ")";
     var holders = Holders(path);
-    if (holders.Count == 0) return "other|held open by no process";
+    // Said apart from held by another: the session's own file says this while its writer recovers from a failed write
+    if (holders.Count == 0) return "none|held open by no process";
     if (holders.ContainsKey(root)) return "own|" + root;
     var parent = Parents();
     string blind = null;
@@ -347,8 +355,8 @@ export const WINDOWS_OWNER_SETUP = [
   ''
 ].join('\n')
 
-/** One question, one line of PowerShell, answered with one line: `<n>|own|<pid>`, `<n>|other|<why>` or
- *  `<n>|unknown|<why>`. Only a number, base64 and a pid go into it. */
+/** One question, one line of PowerShell, answered with one line: `<n>|own|<pid>`, `<n>|other|<why>`,
+ *  `<n>|none|<why>` (held by no process) or `<n>|unknown|<why>`. Only a number, base64 and a pid go into it. */
 const ownerQuestion = (n: number, file: string, pid: number): string =>
   `try { '${n}|' + [AsteraRolloutOwner]::Ask('${Buffer.from(file, 'utf8').toString('base64')}', ${pid}) } catch { '${n}|unknown|' + ($_.Exception.Message -replace '[\\r\\n|]', ' ') }\n`
 
@@ -457,13 +465,13 @@ export function windowsOwnerReader(
         h.proc.kill()
         return
       }
-      const m = /^(\d+)\|(own|other|unknown)\|(.*)$/.exec(line)
+      const m = /^(\d+)\|(own|other|none|unknown)\|(.*)$/.exec(line)
       const w = m ? h.waiting.get(Number(m[1])) : undefined
       if (!m || !w) return
       h.waiting.delete(Number(m[1]))
       clearTimeout(w.timer)
       const why = m[3].trim()
-      w.resolve(m[2] === 'own' ? OWN : m[2] === 'other' ? other(why) : unknown(why))
+      w.resolve(m[2] === 'own' ? OWN : m[2] === 'other' ? other(why) : m[2] === 'none' ? otherForNow(why) : unknown(why))
       if (h.waiting.size === 0 && helper === h) {
         h.idle = setTimeout(() => {
           if (helper !== h || h.waiting.size > 0) return
@@ -544,12 +552,21 @@ const MEMO_MAX = 256
 /** Each reader's answers, by session process and candidate: shared by every check over that reader, since the
  *  Host's spawner, its Slack watcher and its rolling coordinator can be looking for one session's file at once, and
  *  a Windows answer is a PowerShell run. */
-const answers = new WeakMap<RolloutOwnerReader, Map<string, { answer: Promise<RolloutOwnership>; unknownAt?: number }>>()
+const answers = new WeakMap<RolloutOwnerReader, Map<string, Kept>>()
+
+/** A kept answer: when it was a "cannot tell" or a "held by no process" for now, and how many of the latter came. */
+type Kept = { answer: Promise<RolloutOwnership>; unheld: number; unknownAt?: number; recheckAt?: number }
 
 /** How long a "cannot tell" is kept before the same question (session process and file) is asked again (fix round 3).
  *  Not kept at all, every look and re-scan of a tab asked again on the machines that answer it, a PowerShell run every
  *  few seconds for each open tab; kept for good, a passing failure (a timeout under load) would never be asked again. */
 export const UNKNOWN_KEEP_MS = 60_000
+
+/** How long a "held by no process" is kept before it is asked again, and how many answers it takes to be final (review
+ *  Minor 3): three in its first 40 s. A session's own file is unheld only while its writer recovers from a failed write,
+ *  until the next write; an ended session's file stays unheld, and is asked about no more than that. */
+export const UNHELD_RECHECK_MS = 20_000
+export const UNHELD_ASKS = 3
 
 /** Drops the oldest entry once there are more than MEMO_MAX. */
 const trim = (m: { size: number; keys(): IterableIterator<string>; delete(k: string): boolean }): void => {
@@ -558,8 +575,10 @@ const trim = (m: { size: number; keys(): IterableIterator<string>; delete(k: str
 
 /** A caller's check: the reader asked once per (candidate, session process) and a positive answer kept, since neither
  *  who writes a file nor the session's process changes. "Cannot tell" (review Important 1: a failed read is no
- *  verdict) is kept only UNKNOWN_KEEP_MS by `now`, then asked again. Logs to the caller's log why a candidate is skipped
- *  (its path, never its contents), and once per session that it cannot tell. */
+ *  verdict) is kept only UNKNOWN_KEEP_MS by `now`, then asked again. "Held by no process" is kept UNHELD_RECHECK_MS and
+ *  asked again until the UNHELD_ASKS-th such answer, which is final: until then it comes back with `recheck`, which the
+ *  locate passes over without remembering. Logs to the caller's log why a candidate is skipped (its path, never its
+ *  contents), and once per session that it cannot tell. */
 export function rolloutOwnerCheck(o: { read: RolloutOwnerReader; log: (m: string) => void; now?: () => number }): RolloutOwnerCheck {
   let memo = answers.get(o.read)
   if (!memo) answers.set(o.read, (memo = new Map()))
@@ -569,15 +588,28 @@ export function rolloutOwnerCheck(o: { read: RolloutOwnerReader; log: (m: string
   return async (file, pid, sessionId) => {
     const key = `${pid}\u0000${comparablePath(file)}`
     let kept = shared.get(key)
-    if (kept?.unknownAt !== undefined && now() - kept.unknownAt >= UNKNOWN_KEEP_MS) kept = undefined
-    if (!kept) {
-      const entry: { answer: Promise<RolloutOwnership>; unknownAt?: number } = {
-        answer: o.read(file, pid).catch((err): RolloutOwnership => unknown(messageOf(err)))
+    const due =
+      kept !== undefined &&
+      ((kept.unknownAt !== undefined && now() - kept.unknownAt >= UNKNOWN_KEEP_MS) ||
+        (kept.recheckAt !== undefined && now() - kept.recheckAt >= UNHELD_RECHECK_MS))
+    if (!kept || due) {
+      const unheld = kept?.unheld ?? 0
+      const entry: Kept = {
+        unheld,
+        answer: o
+          .read(file, pid)
+          .catch((err): RolloutOwnership => unknown(messageOf(err)))
+          // The last of the answers it is asked again for is final, as any other `other`
+          .then((r) => (r.verdict === 'other' && r.recheck && unheld + 1 >= UNHELD_ASKS ? other(r.why) : r))
       }
       shared.set(key, entry)
       trim(shared)
       void entry.answer.then((r) => {
         if (r.verdict === 'unknown') entry.unknownAt = now()
+        if (r.verdict === 'other' && r.recheck) {
+          entry.unheld = unheld + 1
+          entry.recheckAt = now()
+        }
       })
       kept = entry
     }

@@ -819,6 +819,39 @@ describe('CodexRolloutWatcher maps only a rollout its session holds', () => {
     w.stop()
   })
 
+  // Review Minor 3: the first look can land while the session's codex is recovering from a failed write, its file held by
+  // no process for that moment. Taken as final, the tab had no chips, notices or rolling for its whole life.
+  it('maps its own file when the first look met it held by no process', async () => {
+    const cwd = path.join(dir, 'proj')
+    const ours = await makeRollout(dir, OURS, 'sess-ours', cwd)
+    let recovering = true
+    let reads = 0
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete: vi.fn(),
+      log: () => {},
+      now: () => now,
+      rolloutOwner: {
+        pidOf: () => 4100,
+        read: async () => {
+          reads++
+          return recovering ? { verdict: 'other', why: 'held open by no process', recheck: true } : { verdict: 'own' }
+        }
+      }
+    })
+    w.register(session('live-1', cwd))
+    await advance(TICK)
+    expect(w.rolloutPathFor('live-1')).toBeNull()
+    recovering = false
+    for (let i = 0; i < 25; i++) {
+      now += TICK
+      await advance(TICK)
+    }
+    expect(w.rolloutPathFor('live-1')).toBe(ours)
+    expect(reads).toBe(2) // asked again after the back-off, not on every look
+    w.stop()
+  }, 30_000)
+
   // The `/new` re-scan picks "a newer file in my folder" too, so a codex outside Astera opening one there moved the tab.
   it('does not move onto a newer rollout another process holds', async () => {
     const cwd = path.join(dir, 'proj')

@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import {
+  UNHELD_RECHECK_MS,
   UNKNOWN_KEEP_MS,
   WINDOWS_OWNER_SETUP,
   linuxOwnerReader,
@@ -72,6 +73,13 @@ describe('linuxOwnerReader', () => {
   it('says other when no process of the session holds it', async () => {
     const read = linuxOwnerReader(procFs({ 1: { ppid: 0 }, 100: { ppid: 1, fds: ['/dev/pts/3'] }, 200: { ppid: 1, fds: [FILE] } }))
     expect((await read(FILE, 100)).verdict).toBe('other')
+  })
+
+  // Review Minor 3: the fds of processes outside the session are not read, so "not held by the session" here is also
+  // what its own file says while its writer recovers from a failed write: asked again a few times before it is final
+  it('says its other is one to ask again', async () => {
+    const read = linuxOwnerReader(procFs({ 1: { ppid: 0 }, 100: { ppid: 1, fds: ['/dev/pts/3'] } }))
+    expect(await read(FILE, 100)).toEqual({ verdict: 'other', why: 'not open in process 100 or any process under it', recheck: true })
   })
 
   // A process that ended between the listing and the read is gone, not unreadable
@@ -162,14 +170,16 @@ describe('macOwnerReader', () => {
     expect(t.calls[0]).toEqual(['/usr/sbin/lsof', '-w', '-t', '--', FILE])
   })
 
+  // Held by another process is final: a writer's file is not taken over by another process
   it('says other when lsof names only processes outside the session', async () => {
     const r = await macOwnerReader(tools({ lsof: { code: 0, stdout: '400\n' }, ps }).run)(FILE, 300)
     expect(r).toEqual({ verdict: 'other', why: 'held by pid 400 outside the session' })
   })
 
-  it('says other when no process holds it (lsof exits 1 and prints nothing)', async () => {
+  // Review Minor 3: held by no process is what a session's own file says while its writer recovers, so it is asked again
+  it('says other, to ask again, when no process holds it (lsof exits 1 and prints nothing)', async () => {
     const r = await macOwnerReader(tools({ lsof: { code: 1, stdout: '' }, ps }).run)(FILE, 300)
-    expect(r.verdict).toBe('other')
+    expect(r).toEqual({ verdict: 'other', why: 'held open by no process', recheck: true })
   })
 
   // Review Important 1: lsof exits 1 on an error too, and says why on stderr
@@ -247,15 +257,19 @@ describe('windowsOwnerReader', () => {
 
   // Review Minor 6: the C# was compiled again for every question, a PowerShell and a csc run each time
   it('compiles the helper once and asks every question of the same PowerShell', async () => {
-    const h = helpers(() => new FakeHelper((file) => (file === 'C:\\a.jsonl' ? 'own|1234' : 'other|held by pid 97252 outside the session')))
+    const h = helpers(() =>
+      new FakeHelper((file) => (file === 'C:\\a.jsonl' ? 'own|1234' : file === 'C:\\b.jsonl' ? 'other|held by pid 97252 outside the session' : 'none|held open by no process'))
+    )
     const read = windowsOwnerReader(h.start)
     expect(await read('C:\\a.jsonl', 1234)).toEqual({ verdict: 'own' })
     expect(await read('C:\\b.jsonl', 1234)).toEqual({ verdict: 'other', why: 'held by pid 97252 outside the session' })
+    // Review Minor 3: held by no process is asked again, so the script says it apart from held by another
+    expect(await read('C:\\c.jsonl', 1234)).toEqual({ verdict: 'other', why: 'held open by no process', recheck: true })
     expect(h.started).toHaveLength(1)
     const [setup, ...questions] = h.started[0].written
     expect(setup).toBe(WINDOWS_OWNER_SETUP)
     expect(setup).toContain('Add-Type')
-    expect(questions).toHaveLength(2)
+    expect(questions).toHaveLength(3)
     read.close()
   })
 
@@ -384,7 +398,7 @@ describe.runIf(process.platform === 'win32')('windowsOwnerReader in the real Win
     const handle = await fs.open(held, 'a')
     try {
       expect(await read(held, process.pid)).toEqual({ verdict: 'own' })
-      expect(await read(loose, process.pid)).toEqual({ verdict: 'other', why: 'held open by no process' })
+      expect(await read(loose, process.pid)).toEqual({ verdict: 'other', why: 'held open by no process', recheck: true })
       // A pid no process can have: OpenProcess says ERROR_INVALID_PARAMETER, the one error that means gone
       const gone = await read(held, 2_147_483_644)
       expect(gone).toEqual({ verdict: 'unknown', why: "the session's process 2147483644 is gone" })
@@ -469,6 +483,46 @@ describe('rolloutOwnerCheck', () => {
     expect(rolloutOwnerReader('linux')).toBe(rolloutOwnerReader('linux'))
     expect(rolloutOwnerReader('win32')).toBe(rolloutOwnerReader('win32'))
     expect(rolloutOwnerReader('win32')).not.toBe(rolloutOwnerReader('linux'))
+  })
+
+  // Review Minor 3: a session's own file is held by no process while its writer recovers from a failed write (codex
+  // rollout/src/recorder.rs 1848-1861), and the next write opens it again. Kept for good, a first question in that moment
+  // left the session unmapped for its whole life.
+  it('asks again about a file no process holds, 20 s apart and three times, then keeps the answer', async () => {
+    let reads = 0
+    let t = 1_000_000
+    const check = rolloutOwnerCheck({
+      read: async (): Promise<RolloutOwnership> => {
+        reads++
+        return { verdict: 'other', why: 'held open by no process', recheck: true }
+      },
+      log: () => {},
+      now: () => t
+    })
+    expect(await check('C:\\a.jsonl', 10, 'ses_1')).toEqual({ verdict: 'other', why: 'held open by no process', recheck: true })
+    t += UNHELD_RECHECK_MS - 1
+    await check('C:\\a.jsonl', 10, 'ses_1')
+    expect(reads).toBe(1)
+    t += 1
+    expect(await check('C:\\a.jsonl', 10, 'ses_1')).toEqual({ verdict: 'other', why: 'held open by no process', recheck: true })
+    expect(reads).toBe(2)
+    t += UNHELD_RECHECK_MS
+    // The third is final: no longer asked again, and the locate turns the file away for good
+    expect(await check('C:\\a.jsonl', 10, 'ses_1')).toEqual({ verdict: 'other', why: 'held open by no process' })
+    expect(reads).toBe(3)
+    t += 10 * UNHELD_RECHECK_MS
+    await check('C:\\a.jsonl', 10, 'ses_1')
+    expect(reads).toBe(3)
+  })
+
+  it('maps a file no process held a moment ago once its own process holds it again', async () => {
+    let t = 1_000_000
+    let holder: RolloutOwnership = { verdict: 'other', why: 'held open by no process', recheck: true }
+    const check = rolloutOwnerCheck({ read: async () => holder, log: () => {}, now: () => t })
+    expect((await check('C:\\a.jsonl', 10, 'ses_1')).verdict).toBe('other')
+    holder = { verdict: 'own' }
+    t += UNHELD_RECHECK_MS
+    expect(await check('C:\\a.jsonl', 10, 'ses_1')).toEqual({ verdict: 'own' })
   })
 
   it('turns a reader that throws into cannot-tell', async () => {

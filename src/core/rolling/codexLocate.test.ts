@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { findRollout, ROLLOUT_SCAN_DAYS_MAX } from './codexLocate'
 import { absPath, foldsCaseHere } from '../testPaths'
 import { comparablePath } from '../files/tree'
+import type { RolloutOwnership } from './rolloutOwner'
 
 let home: string
 const NOW = Date.parse('2026-07-09T10:00:00Z') // 고정 '현재' — 오늘=2026/07/09, 어제=2026/07/08
@@ -600,6 +601,19 @@ describe('findRollout asks the owner of each candidate', () => {
     const before = asks
     await findRollout({ configDir: home, cwd: CWD, since, now: () => NOW, owner, rejected })
     expect(asks).toBe(before)
+  })
+
+  // Review Minor 3: held by no process is what a session's own file says while its writer recovers from a failed write.
+  // Turned away for good, that session never mapped its file; it is passed over for now, and asked about again.
+  it('passes over a candidate no process holds yet without remembering it', async () => {
+    const { theirs, since } = await two()
+    const rejected = new Set<string>()
+    let holder: RolloutOwnership = { verdict: 'other', why: 'held open by no process', recheck: true }
+    const owner = async (file: string): Promise<RolloutOwnership> => (file === theirs ? holder : { verdict: 'other', why: 'held by pid 4242 outside the session' })
+    expect(await findRollout({ configDir: home, cwd: CWD, since, now: () => NOW, owner, rejected })).toBeNull()
+    expect(rejected.has(comparablePath(theirs))).toBe(false)
+    holder = { verdict: 'own' }
+    expect((await findRollout({ configDir: home, cwd: CWD, since, now: () => NOW, owner, rejected }))?.path).toBe(theirs)
   })
 
   // Review round 1, item 3: a session the start order puts behind another may still claim a file its own process
