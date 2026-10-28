@@ -94,7 +94,22 @@ describe('DESK_PS1', () => {
     const endJob = kill.indexOf('[AsteraDesk]::EndJob([int]$req.pid, [int64]$req.startedAt, $tolerance)')
     expect(endJob).toBeGreaterThan(0)
     expect(endJob).toBeLessThan(kill.indexOf('taskkill /T /F /PID'))
-    expect(DESK_PS1).toMatch(/TerminateJobObject\(j\.Handle, 1\);\s*CloseHandle\(j\.Handle\);/)
+    expect(DESK_PS1).toMatch(/TerminateJobObject\(found\.Handle, 1\);\s*CloseHandle\(found\.Handle\);/)
+  })
+
+  it('starts the try right after CreateProcess: nothing is allocated between them that could fail with the process suspended', () => {
+    const launch = DESK_PS1.slice(DESK_PS1.indexOf('public static AsteraLaunch Launch('))
+    const after = launch.slice(launch.indexOf('finally { Marshal.FreeHGlobal(env); }'))
+    expect(after.indexOf('try {')).toBeGreaterThan(0)
+    expect(after.indexOf('try {')).toBeLessThan(after.indexOf('new AsteraLaunch()'))
+  })
+
+  it('EndJob takes the record whose start time matches exactly and falls back to the nearest within the tolerance', () => {
+    const endJob = DESK_PS1.slice(DESK_PS1.indexOf('public static bool EndJob('))
+    const body = endJob.slice(0, endJob.indexOf('public static List<AsteraWindow> Windows'))
+    expect(body).toContain('gap >= bestGap')
+    expect(body).toContain('gap > tolerance')
+    expect(body).not.toMatch(/Jobs\.RemoveAt\(i\)/)
   })
 
   it('keeps its escapes as text: no CR byte, and the regex still says \\r\\n', () => {

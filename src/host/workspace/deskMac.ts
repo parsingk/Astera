@@ -13,7 +13,7 @@ import path from 'node:path'
 import type { DeskHandle } from '../../core/workspace/helpers'
 import { START_TIME_TOLERANCE_MS } from '../../core/workspace/lifecycle'
 import { DESK_READY_MS, type DeskLaunched } from '../../core/workspace/protocol'
-import { execText, execTextWithin, killProcessTree, macStartTimes, parseLstart, spawnDetached, type ExecText, type SpawnDetached } from './posixProc'
+import { execText, execTextWithin, killPosixTree, macStartTimes, parseLstart, spawnDetached, type ExecText, type SpawnDetached } from './posixProc'
 
 export const MAC_BACKGROUND_FLAGS =
   '--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-background-timer-throttling'
@@ -91,7 +91,7 @@ export interface MacDeskDeps {
   /** A live pid's start time in epoch ms from ps, or null when it is gone. */
   startTime(pid: number): Promise<number | null>
   /** Ends a launched app and everything it started, a child it started detached included
-   *  (killProcessTree, posixProc.ts). */
+   *  (killPosixTree, posixProc.ts). */
   killTree(pid: number): Promise<void>
   /** Resolves after ms, or at once when `signal` aborts (its timer cleared). */
   sleep(ms: number, signal?: AbortSignal): Promise<void>
@@ -287,7 +287,7 @@ export function realMacDeskDeps(a: { log(m: string): void }): MacDeskDeps {
     spawn: spawnDetached,
     exec: execTextWithin(MAC_PS_TIMEOUT_MS),
     startTime: async (pid) => (await macStartTimes([pid], execText)).get(pid) ?? null,
-    killTree: (pid) => killProcessTree(pid),
+    killTree: (pid) => killPosixTree(pid),
     sleep: (ms, signal) =>
       new Promise((r) => {
         if (signal?.aborted) return r()
