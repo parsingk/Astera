@@ -313,7 +313,7 @@ const SESSION = {
   ask: {
     summary: 'ask the coordinator a question and wait for the answer',
     detail:
-      'Either a new question (--question, with --task-id and --dispatch-id) or waiting again on one already asked (--resume). A timeout is success (exit 0) with `timedOut` in the body.',
+      'Either a new question (--question, with --task-id and --dispatch-id) or waiting again on one already asked (--resume). A timeout is success (exit 0) with `timedOut` in the body. From inside a sandboxed session that is neither a worker of the run nor its coordinator, a question in the run of a Job no sandboxed session made is refused with 5 (SANDBOX_UNAVAILABLE: outside-sandbox job <jobId>).',
     flags: [
       { name: 'question', value: '<text|->', about: 'the question (a value of `-` reads it from stdin)' },
       { name: 'task-id', value: '<taskId>', about: 'the Task it is about' },

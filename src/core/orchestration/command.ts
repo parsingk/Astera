@@ -1347,9 +1347,9 @@ function sandboxedCaller(deps: OrchServerDeps, caller: { sessionId: string }): b
 
 /** The commands that hand work on to something that may run outside the caller's sandbox, read before the state
  *  (outsideSandboxTarget): a Job's work started or set going again, a Task placed, re-armed or let go on by a question's
- *  answer, a worker started on a Task or typed into another session, a reply a worker reads, a message a run's
- *  coordinator reads. `sessions send` asks in its own case, once its session is found. `ask` is not here: it is the
- *  question a worker puts to its coordinator (final fix pass, parts 2 and 3). */
+ *  answer, a worker started on a Task or typed into another session, a reply a worker reads, a message or a question a
+ *  run's coordinator reads. `sessions send` asks in its own case, once its session is found (final fix pass, parts 2 and
+ *  3). */
 const HANDS_WORK: ReadonlySet<string> = new Set([
   'run-start',
   'jobs-run',
@@ -1362,7 +1362,8 @@ const HANDS_WORK: ReadonlySet<string> = new Set([
   'gate-resolve',
   'worker-start',
   'reply',
-  'send'
+  'send',
+  'ask'
 ])
 
 /** The statuses `task-update` may set on work outside the sandbox from inside it: the two that only stop the Task. Any
@@ -1385,9 +1386,9 @@ const outsideSandbox = (target: string): Reply => denied(`${SANDBOX_UNAVAILABLE}
  *    reviewer, validation and repair follow the Task's own mark, so a Task without one is refused (part 3);
  *  - another session (`worker-start --terminal` types the Task into it, `reply` is read by the asking worker): it must run
  *    in the sandbox;
- *  - a message into a run (`send`, which its coordinator reads with `check`): open to a worker of that run (a session
- *    that holds one of its Dispatches) and to the coordinator Astera started for it, else the run's Job must be
- *    sandboxed (part 3). Driving a run from outside (`check --run`) makes no session its coordinator here.
+ *  - a message or a question in a run (`send`, `ask`, which its coordinator reads with `check`): open to a worker of
+ *    that run (a session that holds one of its Dispatches) and to the coordinator Astera started for it, else the run's
+ *    Job must be sandboxed (part 3). Driving a run from outside (`check --run`) makes no session its coordinator here.
  *  An id that names nothing is null here, and the command answers it as before. */
 function outsideSandboxTarget(
   deps: OrchServerDeps,
@@ -1404,6 +1405,12 @@ function outsideSandboxTarget(
     return typeof inside === 'boolean' ? (inside ? null : `session ${id}`) : inside.then((v) => (v ? null : `session ${id}`))
   }
   const runOf = (id: string | null) => (id === null ? undefined : s.runs.find((r) => r.id === id))
+  /** A run the caller posts into: its worker's, its coordinator's, or a sandboxed Job's */
+  const ofRun = (run: JobRun | undefined): string | null => {
+    if (!run || run.coordinatorSessionId === caller.sessionId) return null
+    const worksHere = s.dispatches.some((d) => d.sessionId === caller.sessionId && s.tasks.find((t) => t.id === d.taskId)?.runId === run.id)
+    return worksHere ? null : ofJob(jobOf(s, run))
+  }
   const jobNamed = (id: string | null) => (id === null ? undefined : s.jobs.find((j) => j.id === id))
   switch (cmd) {
     case 'run-start': {
@@ -1444,12 +1451,14 @@ function outsideSandboxTarget(
       if (!q || q.type !== 'question' || q.answered) return null
       return ofSession(s.dispatches.find((d) => d.id === q.dispatchId)?.sessionId)
     }
-    case 'send': {
-      // The run the case posts into: its Task's, or the latest run
-      const run = runOf(s.tasks.find((t) => t.id === str(args.taskId))?.runId ?? latestRun(s)?.id ?? null)
-      if (!run || run.coordinatorSessionId === caller.sessionId) return null
-      const worksHere = s.dispatches.some((d) => d.sessionId === caller.sessionId && s.tasks.find((t) => t.id === d.taskId)?.runId === run.id)
-      return worksHere ? null : ofJob(jobOf(s, run))
+    // The run the case posts into: its Task's, or the latest run
+    case 'send':
+      return ofRun(runOf(s.tasks.find((t) => t.id === str(args.taskId))?.runId ?? latestRun(s)?.id ?? null))
+    // The run of the question waited on again, or of the Task a new one is about
+    case 'ask': {
+      const resumed = str(args.resume)
+      const runId = resumed !== null ? s.messages.find((m) => m.id === resumed)?.runId : s.tasks.find((t) => t.id === str(args.taskId))?.runId
+      return ofRun(runOf(runId ?? null))
     }
     default:
       return null

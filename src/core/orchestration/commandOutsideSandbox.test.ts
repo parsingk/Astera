@@ -128,6 +128,8 @@ const ROUTES: Array<{ name: string; cmd: string; args: (w: World) => Record<stri
   // Part 3: a message into the run of a Job that is not sandboxed, from a session that is neither its worker nor its
   // coordinator
   { name: 'send', cmd: 'send', args: (w) => ({ type: 'status', taskId: w.b.id, subject: 'note', body: 'do this' }), target: (w) => `job ${w.jobId}`, kind: 'job' },
+  // Part 3: a question follows the send rule, a new one and a wait on one already asked alike
+  { name: 'ask --resume', cmd: 'ask', args: (w) => ({ resume: w.questionId, timeoutMs: 0 }), target: (w) => `job ${w.jobId}`, kind: 'job' },
   { name: 'reply', cmd: 'reply', args: (w) => ({ id: w.questionId, body: 'this one' }), target: (w) => `session ${w.worker}`, kind: 'session' }
 ]
 
@@ -247,6 +249,35 @@ describe('what stays open to a sandboxed caller', () => {
 })
 
 describe('what part 3 closes besides', () => {
+  // A new question, as `send` is: open to a worker of the run (a sandboxed worker of a person's Job asks on its own run),
+  // refused from a sandboxed session that is neither its worker nor its coordinator
+  it('a new question from a sandboxed caller follows the send rule', async () => {
+    for (const worker of [BOXED, W_OPEN]) {
+      const w = world({ worker })
+      const { deps, box } = makeDeps(w.s)
+      // The world's question answered first (by an unsandboxed caller), so the Dispatch may ask again
+      expect((await call(deps, OPEN, 'reply', { id: w.questionId, body: 'that one' })).status).toBe(200)
+      const answered = box.state
+      const r = await call(deps, BOXED, 'ask', { taskId: w.a.id, dispatchId: w.dispatchId, question: 'and then?', timeoutMs: 0 })
+      if (worker === BOXED) {
+        expect(r.status).toBe(200)
+        expect(box.state.messages.filter((m) => m.type === 'question')).toHaveLength(2)
+      } else {
+        expect(errorOf(r)).toBe(`SANDBOX_UNAVAILABLE: outside-sandbox job ${w.jobId}`)
+        expect(box.state).toBe(answered)
+      }
+    }
+    // Into a sandboxed Job's run, and from the coordinator Astera started for the run, it is open
+    const boxedJob = world({ jobBoxed: true })
+    const open = makeDeps(boxedJob.s)
+    await call(open.deps, OPEN, 'reply', { id: boxedJob.questionId, body: 'that one' })
+    expect((await call(open.deps, BOXED, 'ask', { taskId: boxedJob.a.id, dispatchId: boxedJob.dispatchId, question: 'q', timeoutMs: 0 })).status).toBe(200)
+    const led = world()
+    const coordinated = makeDeps({ ...led.s, runs: led.s.runs.map((r) => (r.id === led.runId ? { ...r, coordinatorSessionId: BOXED } : r)) })
+    await call(coordinated.deps, OPEN, 'reply', { id: led.questionId, body: 'that one' })
+    expect((await call(coordinated.deps, BOXED, 'ask', { taskId: led.a.id, dispatchId: led.dispatchId, question: 'q', timeoutMs: 0 })).status).toBe(200)
+  })
+
   // A sandboxed Task typed into a session outside the sandbox is refused for the session
   it('worker-start --terminal of a sandboxed Task into a session outside the sandbox', async () => {
     const w = world({ taskBoxed: true })

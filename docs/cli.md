@@ -1167,10 +1167,10 @@ runs outside the sandbox: from inside one, typing into a session that is not san
 or setting going again a Task that neither it nor its Job was made by a sandboxed session, or answering its question
 (`tasks dispatch`, `worker-start` with or without `--terminal`, a `task-update` to any status but `failed` or `blocked`,
 `questions answer` with anything but `mark-failed`) with `outside-sandbox task <id>`, before anything is typed, placed
-or started. A message into a run (`send`) is open to a worker of that run and to the coordinator Astera started for
-it; from any other sandboxed session it is refused with `outside-sandbox job <id>` unless the run's Job is a sandboxed
-session's. A sandboxed target is not refused, and a worker's `send` to its own run and its `ask` stay open whoever
-its coordinator is.
+or started. A message or a question in a run (`send`, `ask`) is open to a worker of that run and to the coordinator
+Astera started for it; from any other sandboxed session it is refused with `outside-sandbox job <id>` unless the
+run's Job is a sandboxed session's. A sandboxed target is not refused, and a worker's `send` and `ask` in its own run
+stay open whoever its coordinator is.
 On Windows the Codex sandbox is Codex's elevated one, which keeps Credential Manager out, and the repository is named a
 safe directory for the account it runs as; a repository or home folder whose path holds a character cmd.exe reads as
 syntax (`" & | < > ^ %`) cannot be carried to it. Each Codex account's home must have the elevated sandbox set up once
