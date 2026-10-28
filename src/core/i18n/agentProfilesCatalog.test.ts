@@ -21,11 +21,12 @@ const SANDBOX_GIVEN = {
     'Claude: macOS と Linux では Codex と同じです。Windows: シェルは制限なし。ファイルツールだけがログイン情報のあるフォルダーを読めません。',
     'Claude: en macOS y Linux, igual que Codex. Windows: el shell no tiene límites; solo las herramientas de archivos no pueden leer las carpetas con inicios de sesión.'
   ],
+  // Final fix pass (minor 6): spec §6's third limit, which doctor already says
   'settings.agentProfiles.sandboxHint.limits': [
-    'sandbox 안에서는 gh가 PC의 로그인을 쓰지 못해 GitHub 작업은 Astera를 거칩니다. Windows에서 sandbox 안의 curl은 TLS에 실패합니다.',
-    "Inside the sandbox gh cannot use the PC's login, so GitHub work goes through Astera. On Windows, curl inside the sandbox fails TLS.",
-    'サンドボックスの中では gh が PC のログインを使えないため、GitHub の作業は Astera を通ります。Windows ではサンドボックス内の curl が TLS に失敗します。',
-    'Dentro del sandbox gh no puede usar el inicio de sesión del PC, así que el trabajo en GitHub pasa por Astera. En Windows, curl dentro del sandbox falla en TLS.'
+    'sandbox 안에서는 gh가 PC의 로그인을 쓰지 못해 GitHub 작업은 Astera를 거칩니다. Windows에서 sandbox 안의 curl은 TLS에 실패하고, push는 Host가 합니다.',
+    "Inside the sandbox gh cannot use the PC's login, so GitHub work goes through Astera. On Windows, curl inside the sandbox fails TLS, and pushes stay with the Host.",
+    'サンドボックスの中では gh が PC のログインを使えないため、GitHub の作業は Astera を通ります。Windows ではサンドボックス内の curl が TLS に失敗し、push は Host が行います。',
+    'Dentro del sandbox gh no puede usar el inicio de sesión del PC, así que el trabajo en GitHub pasa por Astera. En Windows, curl dentro del sandbox falla en TLS, y los push los hace el Host.'
   ],
   'settings.agentProfiles.sandboxState.ready': ['sandbox 준비됨', 'Sandbox ready', 'サンドボックス準備完了', 'Sandbox listo'],
   'settings.agentProfiles.sandboxState.not-set-up': ['sandbox 설정 안 됨', 'Sandbox not set up', 'サンドボックス未設定', 'Sandbox sin configurar'],

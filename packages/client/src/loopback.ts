@@ -11,6 +11,12 @@
 import http from 'node:http'
 import type { ConnectFailure, ConnectionClientMessage, ConnectionHostMessage, HostConnection } from './connect.js'
 import { newHostNonce, proofMatches, readHostKey } from './hostKey.js'
+import { HOST_FEATURE_ORCH, HOST_FEATURE_REQUESTS } from './protocol.js'
+
+/** What a loopback connection serves of the Host's features: it carries `orch-call` and nothing else, so it offers the
+ *  commands and their receipts, and never `ping` (a keepalive's would go unanswered and read as a silent Host) nor the
+ *  pty or proc messages (final fix pass, minor 3). */
+const LOOPBACK_FEATURES: readonly string[] = [HOST_FEATURE_ORCH, HOST_FEATURE_REQUESTS]
 
 /** How long the TCP connect may take, and then how long the hello may. The answer to a command has no limit here: a `wait`
  *  runs for as long as the caller's own deadline allows. */
@@ -152,7 +158,7 @@ export async function connectLoopback(a: { url: string; token: string; profileDi
       host: typeof h?.host === 'string' ? h.host : 'loopback',
       pid: typeof h?.pid === 'number' ? h.pid : 0,
       startedAt: typeof h?.startedAt === 'string' ? h.startedAt : '',
-      features: Array.isArray(h?.features) ? (h.features as string[]) : ['orch', 'requests']
+      features: Array.isArray(h?.features) ? (h.features as string[]).filter((f) => LOOPBACK_FEATURES.includes(f)) : [...LOOPBACK_FEATURES]
     },
     call: (m) => {
       if (m.t === 'orch-call' && !closed) send(m)

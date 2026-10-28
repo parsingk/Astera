@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { Account } from '../core/types'
 import { makeDescriptors } from '../core/providers/descriptor'
-import { SETUP_ARGV } from '../core/sandbox/windowsReadiness'
+import { DOCTOR_ARGV, SETUP_ARGV } from '../core/sandbox/windowsReadiness'
 import { hostSandboxReadiness, hostSandboxSetup } from './sandboxSetup'
 
 const account = (configDir: string): Account => ({ id: 'acc_x', label: 'x', configDir, color: '#888', createdAt: '2026-10-27T00:00:00.000Z', provider: 'codex' })
@@ -64,6 +64,26 @@ describe('hostSandboxReadiness', () => {
     // The ambient account asks without CODEX_HOME
     await readiness!(account(path.join(home, '.codex')))
     expect(asked[1].codexHome).toBeNull()
+  })
+
+  // Final fix pass (minor 7): opening a sandboxed profile's row in Settings asks Codex's doctor only, never the sandboxed
+  // echo, whose effect on a stale home is not measured (it might bring up the administrator prompt); a start still asks both
+  it('asks Codex’s doctor only, never the echo', async () => {
+    const home = path.join(os.tmpdir(), 'astera-readiness-doctor')
+    const argvs: string[][] = []
+    const report = (provisioning: string): string => JSON.stringify({ checks: { 'sandbox.helpers': { details: { 'sandbox provisioning': provisioning } } } })
+    for (const [provisioning, want] of [['complete', 'ready'], ['incomplete', 'not-set-up']] as const) {
+      const readiness = hostSandboxReadiness({
+        platform: 'win32',
+        homeDir: home,
+        baseEnv: () => ({ Path: 'C:\\Windows' }),
+        descriptors: makeDescriptors('win32', home),
+        run: () => async (argv) => (argvs.push(argv), { code: 0, out: report(provisioning) })
+      })
+      expect(await readiness!(account(path.join(home, '.codex-accounts', provisioning)))).toBe(want)
+    }
+    expect(argvs).toEqual([DOCTOR_ARGV, DOCTOR_ARGV])
+    expect(argvs.some((a) => a.includes('echo'))).toBe(false)
   })
 
   it('there is nothing to ask about off Windows', () => {

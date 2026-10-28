@@ -30,10 +30,11 @@ describe('SANDBOX_COVERAGE', () => {
     // Task 8 fix round 1: on Linux the deny names the session bus's file path; an abstract-socket bus is not a path, and
     // is not denied (locations.ts busSocketOf)
     expect(cell('codex', 'linux', 'stores')).toEqual({ level: 'enforced', note: 'bus-path-only' })
-    // Claude on macOS and Linux: the runtime (srt) was measured, not Claude Code's own use of it, and the stores say so
+    // Claude on macOS and Linux: the runtime (srt) was measured, not Claude Code's own use of it, and every cell the sandbox
+    // enforces says so (final fix pass, minor 5: writes and the login folders as well as the stores)
     for (const os of ['darwin', 'linux'] as const) {
-      expect(cell('claude', os, 'write'), os).toEqual({ level: 'enforced' })
-      expect(cell('claude', os, 'sensitive'), os).toEqual({ level: 'enforced' })
+      expect(cell('claude', os, 'write'), os).toEqual({ level: 'enforced', note: 'runtime-measured' })
+      expect(cell('claude', os, 'sensitive'), os).toEqual({ level: 'enforced', note: 'runtime-measured' })
       expect(cell('claude', os, 'stores'), os).toEqual({ level: 'enforced', note: 'runtime-measured' })
     }
     // Claude on Windows has no sandbox: only its file tools are kept out of the folders holding logins

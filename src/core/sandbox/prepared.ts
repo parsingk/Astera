@@ -9,7 +9,16 @@ import { codexSandboxArgs } from './codexProfile'
 import { SANDBOX_UNAVAILABLE, sandboxUnavailable } from './unavailable'
 import type { Readiness } from './windowsReadiness'
 import { LAUNCH_FORBIDDEN } from '../sessions/commands'
+import { fitsWindowsCommandLine } from '../sessions/windowsExecutable'
 import { ENFORCE_MIN, atLeast, type CliVersionProbe } from '../sessions/cliVersion'
+
+/** A sandboxed Codex start's command on Windows must fit what Windows carries (final fix pass, minor 4): its profile names
+ *  every worktree's git files, and with enough worktrees the line passes cmd.exe's 8191 characters (CreateProcess's 32767
+ *  for codex.exe). Refused (`command-too-long`) rather than launched broken. Nothing to check elsewhere. */
+export function fitsOnTheLine(platform: NodeJS.Platform, cmd: { file: string; args: string[] | string }): void {
+  if (platform !== 'win32' || typeof cmd.args === 'string') return
+  if (!fitsWindowsCommandLine(cmd.file, cmd.args)) throw sandboxUnavailable('command-too-long')
+}
 
 /** The codex version question a sandboxed Codex start asks (cliVersion.ts's probe, shared with Enforce's check). */
 export type CodexVersionProbe = Pick<CliVersionProbe, 'warm'> & ((cli: 'codex') => string | null | undefined)

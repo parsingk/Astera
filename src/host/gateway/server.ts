@@ -400,7 +400,9 @@ export function createGateway(d: {
           })
         })
         // A command can legitimately take an hour (`wait`, `ask`, `check`, `follow`; the CLI's own deadline governs), so no
-        // socket idle timeout may end one.
+        // socket idle timeout may end one. The trade-off: the listener is open for the Host's whole life and only the
+        // command routes' calls are capped (MAX_COMMANDS), so the MCP routes' connections are bounded neither in number
+        // nor in how long one may sit idle; a local process may hold as many open, for as long, as the OS lets it.
         s.timeout = 0
         s.once('error', reject)
         s.listen(0, '127.0.0.1', () => {

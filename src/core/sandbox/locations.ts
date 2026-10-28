@@ -12,13 +12,29 @@ export function sensitiveLocations(platform: NodeJS.Platform, env: Record<string
   return [`${h}/.ssh`, `${h}/.aws`, gh, gcloud, `${h}/.docker`, `${h}/.npmrc`, `${h}/.git-credentials`, `${h}/.kube`]
 }
 
+/** A D-Bus address value with its `%xx` escapes decoded (the D-Bus specification, "Server Addresses": any byte may be
+ *  escaped so, and a path holding a space or a non-ASCII letter is), so the path denied is the file's own (final fix pass,
+ *  minor 8). Bytes, decoded as UTF-8. */
+function dbusUnescape(value: string): string {
+  if (!value.includes('%')) return value
+  const bytes: number[] = []
+  for (let i = 0; i < value.length; i++) {
+    const hex = value[i] === '%' ? /^[0-9A-Fa-f]{2}$/.exec(value.slice(i + 1, i + 3)) : null
+    if (hex) {
+      bytes.push(parseInt(hex[0], 16))
+      i += 2
+    } else bytes.push(...Buffer.from(value[i], 'utf8'))
+  }
+  return Buffer.from(bytes).toString('utf8')
+}
+
 /** The session bus socket a Linux desktop's secret service listens on, or null when the environment names none. Only a
  *  filesystem socket can be denied; an abstract one (`unix:abstract=`) is not a path. */
 export function busSocketOf(env: Record<string, string | undefined>): string | null {
   const address = env.DBUS_SESSION_BUS_ADDRESS
   if (address) {
     const m = /(?:^|;)unix:(?:[^;]*,)?path=([^,;]+)/.exec(address)
-    return m ? m[1] : null
+    return m ? dbusUnescape(m[1]) : null
   }
   const runtime = env.XDG_RUNTIME_DIR
   return runtime ? `${slashed(runtime)}/bus` : null

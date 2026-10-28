@@ -216,7 +216,8 @@ describe('securityText', () => {
     expect(sandboxRowLabel(row('claude', 'linux'), en)).toBe('Claude Linux')
     const cells = (r: SandboxCoverageRow, t: typeof en) => SANDBOX_CLASSES.map((c) => sandboxCellText(r.classes[c], t))
     expect(cells(row('claude', 'win32'), en)).toEqual(['Not blocked', 'Partly (file tools only)', 'Not blocked', 'Allowed'])
-    expect(cells(row('claude', 'darwin'), en)).toEqual(['Blocked', 'Blocked', 'Blocked (measured on the runtime)', 'Allowed'])
+    // Final fix pass (minor 5): every cell Claude's sandbox enforces says it was measured on the runtime
+    expect(cells(row('claude', 'darwin'), en)).toEqual(['Blocked (measured on the runtime)', 'Blocked (measured on the runtime)', 'Blocked (measured on the runtime)', 'Allowed'])
     expect(cells(row('codex', 'linux'), ko)).toEqual(['막음', '막음', '막음 (세션 bus가 파일 경로일 때)', '허용'])
     expect(cells(row('codex', 'darwin'), ko)).toEqual(['막음', '막음', '막음', '허용'])
     expect(cells(row('claude', 'win32'), ko)).toEqual(['안 막음', '일부 (파일 도구만)', '안 막음', '허용'])

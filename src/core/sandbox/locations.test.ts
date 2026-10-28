@@ -20,6 +20,10 @@ describe('sandbox locations', () => {
     expect(credentialStoreDenies('linux', { XDG_RUNTIME_DIR: '/run/user/7' }, '/h')).toEqual(['/run/user/7/bus'])
     expect(credentialStoreDenies('linux', { DBUS_SESSION_BUS_ADDRESS: 'unix:abstract=/tmp/x' }, '/h')).toEqual([])
     expect(credentialStoreDenies('linux', {}, '/h')).toEqual([])
+    // Final fix pass (minor 8): a D-Bus address escapes bytes in a value as %xx, so the path is decoded before it is denied
+    expect(credentialStoreDenies('linux', { DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1000/my%20bus,guid=x' }, '/h')).toEqual(['/run/user/1000/my bus'])
+    expect(credentialStoreDenies('linux', { DBUS_SESSION_BUS_ADDRESS: 'unix:path=/tmp/%ED%95%9C/bus' }, '/h')).toEqual(['/tmp/한/bus'])
+    expect(credentialStoreDenies('linux', { DBUS_SESSION_BUS_ADDRESS: 'unix:path=/tmp/100%25' }, '/h')).toEqual(['/tmp/100%'])
     expect(credentialStoreDenies('win32', {}, 'C:\\Users\\a')).toEqual([])
   })
 

@@ -69,7 +69,9 @@ describe('connectLoopback', () => {
     })
     const c = await opened(connectLoopback({ url, token: 'T'.repeat(43), profileDir: dir }))
     // The hello is the Host's own
-    expect(c.hello).toEqual({ host: '9.9.9', pid: 4242, startedAt: 'then', features: ['orch', 'requests', 'mcp'] })
+    // Final fix pass (minor 3): it serves orch-call only, so it offers orch and requests and nothing else the Host's
+    // hello lists (no ping a keepalive would wait on, no pty)
+    expect(c.hello).toEqual({ host: '9.9.9', pid: 4242, startedAt: 'then', features: ['orch', 'requests'] })
     const got = next(c)
     c.call({ t: 'orch-call', call: 'cli_1', cmd: 'status', args: { a: 1 }, session: 'ignored', request: 'r1', token: 'T'.repeat(43) })
     expect(await got).toEqual({ t: 'orch-result', call: 'cli_1', status: 200, body: { ok: 1 }, replayed: true })

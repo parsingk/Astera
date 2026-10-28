@@ -8,9 +8,8 @@ import type { Account } from '../core/types'
 import type { Provider } from '../core/providers/meta'
 import { descriptorOf, type ProviderDescriptor } from '../core/providers/descriptor'
 import { cliEnvFor } from '../core/sessions/cliEnv'
-import { SETUP_RUN_MS, codexWindowsSetup, runCodex, type CodexRun, type Readiness } from '../core/sandbox/windowsReadiness'
+import { SETUP_RUN_MS, codexWindowsDoctor, codexWindowsSetup, runCodex, type CodexRun, type Readiness } from '../core/sandbox/windowsReadiness'
 import type { CodexWindowsReady } from '../core/sandbox/prepared'
-import { askCodexWindowsReady } from '../core/sessions/manager'
 
 /** The setup for `agent-profiles-sandbox-setup`, or undefined off Windows, where there is none to run. */
 export function hostSandboxSetup(d: {
@@ -33,10 +32,10 @@ export function hostSandboxSetup(d: {
 }
 
 /** The readiness Settings › Agent profiles shows for each Codex account of a sandboxed profile (Task 8), or undefined off
- *  Windows. The same question a sandboxed start asks, in the same home and environment (askCodexWindowsReady: doctor
- *  first, the echo only on a home doctor calls complete, so no administrator prompt can come from asking), with the
- *  answers this process keeps shared with the Host's own starts. `log` says why Codex could not be asked, when it could
- *  not. `ready` is a test seam. */
+ *  Windows: Codex's doctor alone (codexWindowsDoctor, final fix pass minor 7), in the home and environment a sandboxed
+ *  start asks in. Opening a row runs no sandboxed echo, so the administrator prompt cannot come from it on any home; a
+ *  sandboxed start still asks doctor and then the echo. `log` says why Codex could not be asked, when it could not.
+ *  `ready` and `run` are test seams. */
 export function hostSandboxReadiness(d: {
   platform: NodeJS.Platform
   homeDir: string
@@ -44,9 +43,11 @@ export function hostSandboxReadiness(d: {
   descriptors: Record<Provider, ProviderDescriptor>
   log?: (m: string) => void
   ready?: CodexWindowsReady
+  run?: (env: Record<string, string | undefined>) => CodexRun
 }): ((account: Account) => Promise<Readiness>) | undefined {
   if (d.platform !== 'win32') return undefined
-  const ready = d.ready ?? askCodexWindowsReady
+  const runIn = d.run ?? ((env: Record<string, string | undefined>) => runCodex(env))
+  const ready: CodexWindowsReady = d.ready ?? (({ codexHome, env, log }) => codexWindowsDoctor({ codexHome, run: runIn(env), ...(log ? { log } : {}) }))
   return (account) => {
     const env = cliEnvFor({ base: d.baseEnv(), account, descriptor: descriptorOf(d.descriptors, account), homeDir: d.homeDir })
     return ready({ codexHome: env.CODEX_HOME ?? null, env, ...(d.log ? { log: d.log } : {}) })

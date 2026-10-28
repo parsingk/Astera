@@ -1166,8 +1166,9 @@ before a sandboxed start, Codex's `doctor --json` first and then, only on a home
 the sandbox (on a home with no setup the echo would start the setup and its prompt), and the app offers to set up the
 one account a start was refused for. A ready answer is kept until Astera restarts or a setup runs through it, so a home
 made stale by a setup outside Astera keeps reading ready until then. Settings › Agent profiles also shows, under a
-sandboxed profile on Windows, whether each of its Codex accounts is set up, asked the same way (no prompt comes from
-asking), with Set up for one that is not. A session the sandbox
+sandboxed profile on Windows, whether each of its Codex accounts is set up, asked of Codex's doctor alone (no sandboxed
+echo runs from Settings, so a stale home can read ready there and be refused at its start), with Set up for one that
+is not. A session the sandbox
 cannot be applied to does not start, and says why with `SANDBOX_UNAVAILABLE: <code>`: `codex-daemon codex` for a codex
 that does not take `--no-daemon`, `cli-too-old claude <found> 2.1.306` for an older Claude Code (`cli-version-unknown
 claude` when its version cannot be read, `cli-missing claude` when it is not there), `path-unsafe` for such a path,
@@ -1175,7 +1176,9 @@ claude` when its version cannot be read, `cli-missing claude` when it is not the
 Windows sandbox is not set up (or no longer works: setting up one account's home can leave another's stale),
 `windows-check-failed codex <accountId>` when Codex could not be asked about it (not there, too old for `doctor --json`,
 timed out), `settings-write-failed` when Claude Code's sandbox settings could not be written into the profile folder,
-and `not-prepared` for a start that skipped the reading Astera does first. A chain keeps the sandbox state it started
+`command-too-long` when on Windows the profile, which names every worktree's git files, would not fit on the command
+line (remove the worktrees you no longer need), and `not-prepared` for a start that skipped the reading Astera does
+first. A chain keeps the sandbox state it started
 with: the session a roll starts next is in the sandbox exactly when the first one was, whatever the switch says by then,
 and only a session started afresh reads the switch again. A roll onto an account the sandbox refuses waits, as a roll
 does for any refusal, and says why: a terminal session in its tab, a chat in its pane, naming the Codex account and

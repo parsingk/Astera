@@ -20,8 +20,10 @@ const CODEX = { write: ENFORCED, sensitive: ENFORCED, stores: ENFORCED, network:
 const CODEX_LINUX = { ...CODEX, stores: { level: 'enforced', note: 'bus-path-only' } } as const
 
 /** Claude Code's sandbox on macOS and Linux. Writes and E6 were measured on the runtime it runs (srt 0.0.79, §23.4), as
- *  were the stores; the stores carry the note, since Claude Code's own use of the keys was not exercised. */
-const CLAUDE_POSIX = { write: ENFORCED, sensitive: ENFORCED, stores: { level: 'enforced', note: 'runtime-measured' }, network: ALLOWED } as const
+ *  were the stores; every one of them carries the note, since Claude Code's own use of the keys was not exercised (spec
+ *  goal 4: never claim more than was measured; final fix pass, minor 5). */
+const RUNTIME_MEASURED: CoverageCell = { level: 'enforced', note: 'runtime-measured' }
+const CLAUDE_POSIX = { write: RUNTIME_MEASURED, sensitive: RUNTIME_MEASURED, stores: RUNTIME_MEASURED, network: ALLOWED } as const
 
 /** Claude Code on Windows has no sandbox: deny rules keep its file tools out of E6's locations, its shell is not
  *  restricted ("Windows: 셸은 제한 없음"). */

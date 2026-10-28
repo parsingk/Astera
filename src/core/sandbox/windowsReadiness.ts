@@ -67,8 +67,9 @@ function parseReport(out: string): unknown {
 /** A few words of what codex printed, for the log line of a report that did not read. */
 const gist = (r: { out: string; err?: string }): string => `${r.out} ${r.err ?? ''}`.replace(/\s+/g, ' ').trim().slice(0, 200)
 
-/** One question: doctor, then (only on a complete report) the echo. Each way it could not be asked is logged once. */
-async function ask(a: { codexHome: string | null; run: CodexRun; log: (m: string) => void }): Promise<Readiness> {
+/** Codex's doctor alone: its report's provisioning, 'ready' for complete, 'not-set-up' for incomplete, 'check-failed'
+ *  otherwise; or 'complete' when `confirm` asks for the echo next. Each way it could not be asked is logged once. */
+async function askDoctor(a: { codexHome: string | null; run: CodexRun; log: (m: string) => void }): Promise<Readiness | 'complete'> {
   const env = homeEnv(a.codexHome)
   const home = a.codexHome ?? 'the default Codex home'
   const failed = (why: string): Readiness => {
@@ -90,6 +91,30 @@ async function ask(a: { codexHome: string | null; run: CodexRun; log: (m: string
   if (provisioning === null) return failed("codex doctor's report names no sandbox provisioning")
   if (provisioning === 'incomplete') return 'not-set-up'
   if (provisioning !== 'complete') return failed(`codex doctor reported sandbox provisioning "${provisioning}"`)
+  return 'complete'
+}
+
+/**
+ * Doctor's answer alone, for Settings › Agent profiles (final fix pass, minor 7): opening a sandboxed profile's row asks
+ * no sandboxed echo, whose effect on a stale home is not measured (it might bring up the administrator prompt). A home
+ * doctor calls complete reads ready here though its setup may be stale; a sandboxed start still asks the echo
+ * (codexWindowsReadiness) and refuses a stale one. Not kept: each row asks again. Never rejects.
+ */
+export async function codexWindowsDoctor(a: { codexHome: string | null; run: CodexRun; log?: (m: string) => void }): Promise<Readiness> {
+  const r = await askDoctor({ ...a, log: a.log ?? (() => {}) })
+  return r === 'complete' ? 'ready' : r
+}
+
+/** One question: doctor, then (only on a complete report) the echo. Each way it could not be asked is logged once. */
+async function ask(a: { codexHome: string | null; run: CodexRun; log: (m: string) => void }): Promise<Readiness> {
+  const doctor = await askDoctor(a)
+  if (doctor !== 'complete') return doctor
+  const env = homeEnv(a.codexHome)
+  const home = a.codexHome ?? 'the default Codex home'
+  const failed = (why: string): Readiness => {
+    a.log(`sandbox: the Windows sandbox of ${home} could not be asked about: ${why}`)
+    return 'check-failed'
+  }
   let echo: Awaited<ReturnType<CodexRun>>
   try {
     echo = await a.run(READY_ARGV, env)

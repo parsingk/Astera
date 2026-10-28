@@ -9,7 +9,7 @@ const GIVEN = {
   'session.spawn.sandbox.windowsSetup': [
     '이 Codex 계정은 Windows sandbox가 설정되지 않았습니다. 설정하기를 누르면 관리자 확인 창이 한 번 뜹니다. Codex가 이 계정의 기본 sandbox를 elevated로 기록합니다.',
     "This Codex account has no Windows sandbox set up yet. Set up shows Windows' administrator prompt once. Codex records the elevated sandbox as this account's default.",
-    'この Codex アカウントには Windows サンドボックスがまだ設定されていません。「設定する」を押すと管理者の確認が一度表示されます。 Codex はこのアカウントの既定のサンドボックスを elevated として記録します。',
+    'この Codex アカウントには Windows サンドボックスがまだ設定されていません。「設定する」を押すと管理者の確認が一度表示されます。Codex はこのアカウントの既定のサンドボックスを elevated として記録します。',
     'Esta cuenta de Codex aún no tiene el sandbox de Windows configurado. Configurar muestra una vez el aviso de administrador de Windows. Codex guarda el sandbox elevado como predeterminado de esta cuenta.'
   ],
   'session.spawn.sandbox.setUp': ['설정하기', 'Set up', '設定する', 'Configurar'],
@@ -23,8 +23,8 @@ const GIVEN = {
   'session.spawn.sandbox.windowsCheckFailed': [
     'Codex에게 이 계정의 Windows sandbox 상태를 묻지 못했습니다. Codex를 업데이트하거나 다시 시작해 주세요.',
     "Codex could not be asked about this account's Windows sandbox. Update Codex or start it again.",
-    'この アカウントの Windows サンドボックスの状態を Codex に確認できませんでした。Codex を更新するか、もう一度起動してください。',
-    'No se pudo consultar a Codex el estado del sandbox de Windows de esta cuenta. Actualice Codex o vuelva a iniciarla.'
+    'このアカウントの Windows サンドボックスの状態を Codex に確認できませんでした。Codex を更新するか、もう一度起動してください。',
+    'No se pudo consultar a Codex el estado del sandbox de Windows de esta cuenta. Actualice Codex o vuelva a iniciar la sesión.'
   ],
   'session.roll.sandbox.windowsSetup': [
     '{account} 계정은 Windows sandbox가 설정되지 않아 넘어가지 못했습니다. 설정 › 에이전트 프로필에서 이 계정의 설정하기를 눌러 주세요.',

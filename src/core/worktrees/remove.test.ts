@@ -91,10 +91,13 @@ describe('removeWorktree', () => {
         await fs.rm(info.path, { recursive: true, force: true })
         return okResult
       }
+      const cleared: string[] = []
       const r = await removeWorktree({
-        id: info.id, registry: reg, isPathInUse: noUse, removeGit, clear: async () => 3
+        id: info.id, registry: reg, isPathInUse: noUse, removeGit, clear: async (dir) => (cleared.push(dir), 3)
       })
       expect(r.removed).toBe(true)
+      // Final fix pass (minor 16): what was cleared is the worktree removed, and nothing else
+      expect(cleared).toEqual([info.path])
       expect(calls).toHaveLength(2)
       expect(calls[1]).toEqual(calls[0])
       expect(calls[0]).not.toContain('--force')
@@ -107,10 +110,12 @@ describe('removeWorktree', () => {
         n++
         return denied
       }
+      const cleared: string[] = []
       await expect(
-        removeWorktree({ id: info.id, registry: reg, isPathInUse: noUse, removeGit, clear: async () => 0 })
+        removeWorktree({ id: info.id, registry: reg, isPathInUse: noUse, removeGit, clear: async (dir) => (cleared.push(dir), 0) })
       ).rejects.toThrow(/GIT_REMOVE_FAILED: .*Permission denied/)
       expect(n).toBe(1)
+      expect(cleared).toEqual([info.path])
     })
 
     it.runIf(process.platform === 'win32')('the orphan fs.rm failing with EPERM once is cleared and retried once', async () => {
@@ -122,10 +127,12 @@ describe('removeWorktree', () => {
         if (n === 1) throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' })
         await fs.rm(p, { recursive: true, force: true })
       }
+      const cleared: string[] = []
       const r = await removeWorktree({
-        id: info.id, force: true, registry: reg, isPathInUse: noUse, rmDir, clear: async () => 1
+        id: info.id, force: true, registry: reg, isPathInUse: noUse, rmDir, clear: async (dir) => (cleared.push(dir), 1)
       })
       expect(r.removed).toBe(true)
+      expect(cleared).toEqual([info.path])
       expect(n).toBe(2)
       expect(existsSync(info.path)).toBe(false)
     })

@@ -3001,7 +3001,8 @@ describe('the respawn’s preparation and its note (S6 R5, R6)', () => {
     })
     await rollNow(h)
     expect(h.spawned).toEqual([])
-    expect(told).toEqual([['s1', { key: 'session.spawn.sandbox.windowsCheckFailed' }]])
+    // Final fix pass (minor 14): which account it could not ask about, by its name, as a windows-setup refusal says
+    expect(told).toEqual([['s1', { key: 'session.roll.sandbox.windowsCheckFailed', params: { account: 'Codex B' } }]])
     h.coord.stop()
   })
 

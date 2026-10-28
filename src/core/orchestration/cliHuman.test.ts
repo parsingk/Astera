@@ -912,7 +912,8 @@ describe('humanFor — audit and policies', () => {
     ])
     // Task 8 fix round 1: beside the Claude Windows row, that its shell is not restricted
     expect(table[1].split(/\s{2,}/).slice(1)).toEqual(['none', 'partial (file tools only)', 'none', 'allowed', 'Windows: the shell is not restricted'])
-    expect(table[2].split(/\s{2,}/).slice(1)).toEqual(['enforced', 'enforced', 'enforced (measured on the runtime)', 'allowed'])
+    // Final fix pass (minor 5): every cell Claude's sandbox enforces on macOS and Linux says it was measured on the runtime
+    expect(table[2].split(/\s{2,}/).slice(1)).toEqual(['enforced (measured on the runtime)', 'enforced (measured on the runtime)', 'enforced (measured on the runtime)', 'allowed'])
     expect(table[6].split(/\s{2,}/).slice(1)).toEqual(['enforced', 'enforced', 'enforced (when the session bus is a file path)', 'allowed'])
     // And under it, that the home stays readable outside the login folders
     expect(block.slice(7)).toEqual(['Outside the login folders, the home folder stays readable inside the sandbox.'])

@@ -174,7 +174,7 @@ export const ko = {
   'settings.agentProfiles.sandbox': 'Sandbox에서 실행',
   'settings.agentProfiles.sandboxHint.codex': 'Codex: 작업 폴더와 임시 폴더 밖에는 쓰지 못하고, 로그인 정보가 있는 폴더와 OS 비밀 저장소를 읽지 못합니다. 네트워크는 됩니다.',
   'settings.agentProfiles.sandboxHint.claude': 'Claude: macOS와 Linux에서는 Codex와 같습니다. Windows: 셸은 제한 없음, 파일 도구만 로그인 정보가 있는 폴더를 읽지 못합니다.',
-  'settings.agentProfiles.sandboxHint.limits': 'sandbox 안에서는 gh가 PC의 로그인을 쓰지 못해 GitHub 작업은 Astera를 거칩니다. Windows에서 sandbox 안의 curl은 TLS에 실패합니다.',
+  'settings.agentProfiles.sandboxHint.limits': 'sandbox 안에서는 gh가 PC의 로그인을 쓰지 못해 GitHub 작업은 Astera를 거칩니다. Windows에서 sandbox 안의 curl은 TLS에 실패하고, push는 Host가 합니다.',
   'settings.agentProfiles.sandboxState.ready': 'sandbox 준비됨',
   'settings.agentProfiles.sandboxState.not-set-up': 'sandbox 설정 안 됨',
   'settings.agentProfiles.sandboxState.check-failed': '상태를 묻지 못함',
@@ -865,11 +865,13 @@ export const ko = {
   'session.spawn.sandbox.cliVersionUnknown': '{cli} 버전을 읽지 못해 sandbox로 시작할 수 없습니다.',
   'session.spawn.sandbox.cliMissing': '{cli}를 찾지 못해 sandbox로 시작할 수 없습니다.',
   'session.spawn.sandbox.profileNotActive': 'Codex가 이 대화를 sandbox 프로필로 돌린다고 확인해 주지 않아 멈췄습니다. Codex를 업데이트해 주세요.',
+  'session.spawn.sandbox.commandTooLong': '워크트리가 너무 많아 sandbox 프로필이 Windows 명령줄에 들어가지 않아 sandbox로 시작할 수 없습니다. 쓰지 않는 워크트리를 지워 주세요.',
   'session.spawn.sandbox.noSandbox': '{cli}는 이 시스템에 sandbox가 없습니다. sandbox 안의 세션이 시작하는 것은 sandbox에서 돌아야 해서 시작하지 않았습니다.',
   'session.spawn.sandbox.settingsWriteFailed': 'sandbox 설정 파일을 쓰지 못해 시작할 수 없습니다. 프로필 폴더에 쓸 수 있는지 확인해 주세요.',
   // A roll refused for the sandbox (core/rolling/codexCoordinator.ts): the line in the tab, or the chat's notice
   'session.roll.sandbox.windowsSetup': '{account} 계정은 Windows sandbox가 설정되지 않아 넘어가지 못했습니다. 설정 › 에이전트 프로필에서 이 계정의 설정하기를 눌러 주세요.',
   // A Claude roll refused for the sandbox (core/rolling/claudeCoordinator.ts): {reason} is the refusal's own sentence
+  'session.roll.sandbox.windowsCheckFailed': '{account} 계정은 Codex에게 Windows sandbox 상태를 묻지 못해 넘어가지 못했습니다. Codex를 업데이트하거나 다시 시작해 주세요.',
   'session.roll.sandbox.refused': '다음 계정으로 넘어가지 못했습니다: {reason}',
   'session.spawn.failedWorktreeKept':
     '세션 시작 실패: {message} (worktree "{name}"는 남아 있으니 Worktrees 패널에서 삭제하세요)',

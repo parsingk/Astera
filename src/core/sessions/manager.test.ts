@@ -1805,6 +1805,24 @@ describe('the sandbox at spawn', () => {
     }
   })
 
+  // Final fix pass (minor 4): on Windows the profile names every worktree's git files, and with enough of them the command
+  // line passes what cmd.exe (8191) or CreateProcess (32767) carries; the start is refused, at the prepare and at the
+  // spawn, rather than launched broken with a generic error
+  it('a sandboxed win32 Codex start whose command line would not fit is refused before the spawn', async () => {
+    const cwd = repo()
+    for (let i = 0; i < 400; i++) mkdirSync(path.join(cwd, '.git', 'worktrees', `worktree-with-a-long-name-${String(i).padStart(4, '0')}`), { recursive: true })
+    const { manager, spawned } = rig('win32')
+    await expect(manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: command-too-long$/)
+    expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: /)
+    expect(spawned).toHaveLength(0)
+    // A few worktrees fit
+    const small = repo()
+    for (let i = 0; i < 3; i++) mkdirSync(path.join(small, '.git', 'worktrees', `w${i}`), { recursive: true })
+    const ok = rig('win32')
+    await ok.manager.prepare({ account: codexAccount, cwd: small, sandbox: true })
+    expect(ok.manager.spawn({ account: codexAccount, cwd: small, sandbox: true }).sandboxed).toBe(true)
+  })
+
   // Final review I2: the sandbox was measured on codex 0.160.0 (ENFORCE_MIN.codex); an older codex, one whose version
   // cannot be read, or none, could ignore the profile and run under its own config, so the start is refused before
   // anything is written, and again at the spawn if the codex changed in between

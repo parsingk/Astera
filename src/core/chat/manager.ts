@@ -25,7 +25,7 @@ import { gatewayTokenEnv } from '../extensions/resolve'
 import { applyHiding, type HidingSource } from '../credentials/hiding'
 import { isObserving } from '../audit/policy'
 import { enforceUnavailable, type EnforceStart } from '../audit/enforce'
-import { PreparedLayouts, codexVersionBlocker, prepareCodexSandbox, sessionSandboxArgs, type CodexVersionProbe, type CodexWindowsReady } from '../sandbox/prepared'
+import { PreparedLayouts, codexVersionBlocker, fitsOnTheLine, prepareCodexSandbox, sessionSandboxArgs, type CodexVersionProbe, type CodexWindowsReady } from '../sandbox/prepared'
 import { appServerSandboxArgs, codexSandboxEnv } from '../sandbox/codexProfile'
 import { sandboxUnavailable } from '../sandbox/unavailable'
 import { sandboxKindOf } from '../sandbox/coverage'
@@ -280,6 +280,7 @@ export class ChatSessionManager {
       ready: this.deps.codexWindowsReady,
       hostSocketDir: this.deps.hostSocketDir ?? null,
       version: this.deps.codexVersion,
+      check: (args) => fitsOnTheLine(this.deps.platform, buildCodexAppServerCommand(this.deps.platform, undefined, [], appServerSandboxArgs(args))),
       log: this.deps.log
     })
     this.sandboxLayouts.keep(opts.account.id, opts.cwd, layout, Date.now())
@@ -432,6 +433,8 @@ export class ChatSessionManager {
       provider === 'claude'
         ? buildClaudeChatCommand(this.deps.platform, { resumeSessionId: resumeThreadId, bypass, model: opts.model, extraArgs })
         : buildCodexAppServerCommand(this.deps.platform, undefined, extraArgs, sandboxArgs)
+    // On Windows a sandboxed app-server whose line would not fit is refused, not launched broken (final fix pass, minor 4)
+    if (sandboxedCodex) fitsOnTheLine(this.deps.platform, { file, args })
     const meta: PtyMeta = {
       kind: 'chat',
       id,

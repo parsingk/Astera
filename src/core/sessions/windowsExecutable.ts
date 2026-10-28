@@ -167,6 +167,29 @@ export function windowsExecutable(name: string): string {
 }
 const executableCache = new Map<string, { path: string; file: string }>()
 
+/** The longest command line cmd.exe runs, and the longest CreateProcess takes (in characters). */
+export const WIN32_CMD_LINE_MAX = 8191
+export const WIN32_PROCESS_LINE_MAX = 32767
+
+/** How long the command line Windows is handed for `file args…` is: every argument after a space, one with a space, a
+ *  quote or nothing in it quoted, its quotes and the backslashes before them escaped, as Node quotes it. */
+export function windowsCommandLineLength(file: string, args: string[]): number {
+  const quoted = (a: string): number => {
+    if (a !== '' && !/[\s"]/.test(a)) return a.length
+    // A quote escaped with a backslash, and every backslash before a quote or the closing quote doubled
+    const escapes = (a.match(/"/g)?.length ?? 0) + (a.match(/\\+(?="|$)/g)?.join('').length ?? 0)
+    return a.length + 2 + escapes
+  }
+  return [file, ...args].reduce((n, a, i) => n + (i > 0 ? 1 : 0) + quoted(a), 0)
+}
+
+/** Whether `file args…` fits what Windows will carry: through cmd.exe (a shim wrapped by windowsSpawn) its 8191, else
+ *  CreateProcess's 32767. */
+export function fitsWindowsCommandLine(file: string, args: string[]): boolean {
+  const max = path.win32.basename(file).toLowerCase() === 'cmd.exe' ? WIN32_CMD_LINE_MAX : WIN32_PROCESS_LINE_MAX
+  return windowsCommandLineLength(file, args) <= max
+}
+
 /** How to spawn `name args…` on win32 without the working directory taking part in the lookup. */
 export function windowsSpawn(
   name: string,

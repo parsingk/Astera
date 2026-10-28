@@ -20,13 +20,14 @@ export function forcedSandboxBlocker(provider: 'claude' | 'codex', platform: str
 // it, JSON may close it): `windows-setup codex <account>` (that account's Windows sandbox is not set up,
 // windowsReadiness.ts), `windows-check-failed codex <account>` (Codex could not be asked about it), `codex-daemon codex`,
 // `path-unsafe`, `git-layout`, `not-prepared`, `settings-write-failed` (Claude's sandbox settings, claudeStart.ts),
-// `no-sandbox <cli>` (forcedSandboxBlocker), `profile-not-active codex` (a sandboxed chat's thread that does not run
+// `no-sandbox <cli>` (forcedSandboxBlocker), `command-too-long` (a Windows command line the profile overflows,
+// prepared.ts fitsOnTheLine), `profile-not-active codex` (a sandboxed chat's thread that does not run
 // under the Astera profile, codexAdapter.ts), and the
 // version floor's `cli-too-old <cli> <found> <min>`, `cli-version-unknown <cli>` and `cli-missing <cli>` (the Enforce
 // check's shape, core/sessions/cliVersion.ts). Versions take dots; an account id is `[\w-]+` only, so a quote, a brace or
 // a full stop after it is not read as part of it.
 const REFUSAL =
-  /SANDBOX_UNAVAILABLE:\s*(windows-setup|windows-check-failed|codex-daemon|path-unsafe|git-layout|not-prepared|settings-write-failed|no-sandbox|profile-not-active|cli-too-old|cli-version-unknown|cli-missing)(?:\s+(claude|codex))?(?:\s+([\w.-]+)(?:\s+([\w.-]+))?)?/
+  /SANDBOX_UNAVAILABLE:\s*(windows-setup|windows-check-failed|codex-daemon|path-unsafe|git-layout|not-prepared|settings-write-failed|no-sandbox|profile-not-active|command-too-long|cli-too-old|cli-version-unknown|cli-missing)(?:\s+(claude|codex))?(?:\s+([\w.-]+)(?:\s+([\w.-]+))?)?/
 const CLI_NAMES = { claude: 'Claude Code', codex: 'Codex' } as const
 const accountIdIn = (s: string | undefined): string | null => (s ? (/^[\w-]+/.exec(s)?.[0] ?? null) : null)
 
@@ -62,6 +63,8 @@ export function sandboxRefusalMessage(raw: string): Message | null {
       return { key: 'session.spawn.sandbox.cliVersionUnknown', params: { cli: CLI_NAMES[(m[2] ?? 'claude') as keyof typeof CLI_NAMES] } }
     case 'cli-missing':
       return { key: 'session.spawn.sandbox.cliMissing', params: { cli: CLI_NAMES[(m[2] ?? 'claude') as keyof typeof CLI_NAMES] } }
+    case 'command-too-long':
+      return { key: 'session.spawn.sandbox.commandTooLong' }
     case 'profile-not-active':
       return { key: 'session.spawn.sandbox.profileNotActive' }
     case 'no-sandbox':
@@ -75,10 +78,16 @@ export function sandboxRefusalMessage(raw: string): Message | null {
 }
 
 /** What a refused roll says in the session's tab (Task 6 fix round 1): for an account whose Windows sandbox is not set
- *  up, which account it is, by `nameOf` its display name (the refusal carries its id), and where to set it up; for any
- *  other sandbox refusal, the start's own sentence. Null when `raw` is not a sandbox refusal. */
+ *  up, which account it is, by `nameOf` its display name (the refusal carries its id), and where to set it up; for one
+ *  Codex could not be asked about, which account it is; for any other sandbox refusal, the start's own sentence. Null
+ *  when `raw` is not a sandbox refusal. */
 export function rollRefusalMessage(raw: string, nameOf: (accountId: string) => string | null): Message | null {
   const accountId = sandboxSetupAccountOf(raw)
   if (accountId !== null) return { key: 'session.roll.sandbox.windowsSetup', params: { account: nameOf(accountId) ?? accountId } }
+  // An account Codex could not be asked about is named too, as above, since "this account" is ambiguous in a roll's tab
+  // (final fix pass, minor 14); no setup is offered for it
+  const m = REFUSAL.exec(raw)
+  const unasked = m && m[1] === 'windows-check-failed' ? accountIdIn(m[3]) : null
+  if (unasked !== null) return { key: 'session.roll.sandbox.windowsCheckFailed', params: { account: nameOf(unasked) ?? unasked } }
   return sandboxRefusalMessage(raw)
 }

@@ -24,7 +24,9 @@ import { isObserving } from '../audit/policy'
 import { enforceUnavailable, type EnforceStart } from '../audit/enforce'
 import type { EnforceFilesResult } from './statusline'
 import type { GitLayout } from '../sandbox/gitLayout'
-import { codexSandboxEnv } from '../sandbox/codexProfile'
+import { appServerSandboxArgs, codexSandboxEnv } from '../sandbox/codexProfile'
+import { buildCodexAppServerCommand } from './commands'
+import { fitsOnTheLine } from '../sandbox/prepared'
 import { sandboxUnavailable } from '../sandbox/unavailable'
 import { sandboxKindOf } from '../sandbox/coverage'
 import { PreparedLayouts, codexVersionBlocker, prepareCodexSandbox, sessionSandboxArgs, type CodexVersionProbe, type CodexWindowsReady } from '../sandbox/prepared'
@@ -297,7 +299,9 @@ export class SessionManager {
       // no such flag. The spawn still asks for itself, since its environment is built after the hiding and the codex may
       // change meanwhile. The command is built and dropped: the builder is the one place that knows whether this codex
       // takes the flag.
-      ...(chat ? {} : { check: (sandboxArgs: string[]) => void descriptorOf(this.descriptors, account).buildCommand({ sandboxArgs }) }),
+      ...(chat
+        ? { check: (sandboxArgs: string[]) => fitsOnTheLine(this.checks.platform, buildCodexAppServerCommand(this.checks.platform, undefined, [], appServerSandboxArgs(sandboxArgs))) }
+        : { check: (sandboxArgs: string[]) => fitsOnTheLine(this.checks.platform, descriptorOf(this.descriptors, account).buildCommand({ sandboxArgs })) }),
       log: this.checks.log
     })
     this.sandboxLayouts.keep(account.id, cwd, layout, this.checks.now())
@@ -478,6 +482,8 @@ export class SessionManager {
       ...(extraArgs.length > 0 ? { extraArgs } : {}),
       ...(sandboxArgs ? { sandboxArgs } : {})
     })
+    // On Windows the profile names every worktree's git files: a line too long to launch is refused, not launched broken
+    if (sandboxedCodex) fitsOnTheLine(this.checks.platform, { file, args })
     // npm's cache in TEMP, and on Windows the repository named safe for the sandbox's own account; after the shared
     // extensions' values, so none of them can undo it. Claude's: the same cache, and on Linux the git excludes srt's
     // placeholders need (core/sandbox/claudeStart.ts)
