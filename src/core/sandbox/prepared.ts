@@ -4,7 +4,7 @@
 // for the spawn. A roll prepares a chat chain's respawn through the terminal manager's prepare, as it refreshes the
 // capability cache both managers read, so the two managers of a process hold one PreparedLayouts.
 import { ensureGitFiles, ensureWorktreeConfigFiles, gitLayoutOf, type GitLayout } from './gitLayout'
-import { appKeyDenies, credentialStoreDenies, hostSocketDenies, otherHostFolders, profileReadOnly, sensitiveLocations } from './locations'
+import { appKeyDenies, credentialStoreDenies, hostSocketDenies, otherHostFolders, sensitiveLocations } from './locations'
 import { codexSandboxArgs } from './codexProfile'
 import type { CodexExcludes } from './gitExcludes'
 import { SANDBOX_UNAVAILABLE, sandboxUnavailable } from './unavailable'
@@ -104,9 +104,10 @@ export function codexSessionDenied(o: {
 }
 
 /** A sandboxed Codex session's `-a never` and permission profile: its repository's git directories writable, what
- *  codexSessionDenied lists denied, and Astera's profile folder read-only (profileReadOnly, Task E). On Windows the launch
- *  goes through cmd.exe, which would break on a path holding one of its characters, so such a start is refused instead
- *  of launched broken (Review Focus 2). */
+ *  codexSessionDenied lists denied, and what `readOnly` keeps read-only (the profile and every folder Astera itself
+ *  writes code or an installer to and runs unsandboxed, locations.ts sandboxReadOnly; Task E and its fix round 1). On
+ *  Windows the launch goes through cmd.exe, which would break on a path holding one of its characters, so such a start
+ *  is refused instead of launched broken (Review Focus 2). */
 export function sessionSandboxArgs(o: {
   platform: NodeJS.Platform
   homeDir: string
@@ -117,12 +118,12 @@ export function sessionSandboxArgs(o: {
   otherHostDirs?: readonly string[]
   /** The profile's app key file, denied on every OS (codexSessionDenied). */
   appKeyFile?: string | null
-  /** Astera's profile folder, read-only on every OS (profileReadOnly). Absent, nothing is kept read-only for it. */
-  profileDir?: string | null
+  /** The read-only folders, built by the start's wiring (sandboxReadOnly). Absent, nothing is kept read-only. */
+  readOnly?: readonly string[]
 }): string[] {
   const { platform, layout } = o
   const denied = codexSessionDenied(o)
-  const readOnly = profileReadOnly(o.profileDir ?? null)
+  const readOnly = o.readOnly ?? []
   if (platform === 'win32') {
     const named = [...(layout ? [layout.top, layout.gitDir, layout.commonDir, ...layout.worktreeConfigs] : []), ...readOnly, ...denied]
     if (named.some((p) => LAUNCH_FORBIDDEN.test(p))) throw sandboxUnavailable('path-unsafe')
@@ -170,8 +171,8 @@ export async function prepareCodexSandbox(o: {
   hostSocketDir?: string | null
   /** The profile's app key file, denied on every OS (sessionSandboxArgs). */
   appKeyFile?: string | null
-  /** Astera's profile folder, read-only on every OS (sessionSandboxArgs). */
-  profileDir?: string | null
+  /** The read-only folders, built by the start's wiring (sessionSandboxArgs). */
+  readOnly?: readonly string[]
   /** The codex version question (final review I2): asked first, so an old codex is refused before anything is read or
    *  written. Absent, the start is refused as for a version not known. */
   version?: CodexVersionProbe
@@ -205,7 +206,7 @@ export async function prepareCodexSandbox(o: {
     hostSocketDir: o.hostSocketDir ?? null,
     otherHostDirs: otherHosts,
     appKeyFile: o.appKeyFile ?? null,
-    profileDir: o.profileDir ?? null
+    readOnly: o.readOnly ?? []
   })
   o.check?.(args)
   if (o.platform === 'win32') {

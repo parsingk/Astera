@@ -443,14 +443,15 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
       record.plain = runProbes(plainWrap, { cwd: pp.cwd, env: envOf(pp), probes, timeoutMs: PROBE_MS })
       const p = await prepare(set.name, set.layout, files)
       const npmCache = npmCacheOf(p.tmpDir)
-      const claude = claudeSandboxSettings({ platform: PLATFORM, denied: claudeDenied(PLATFORM, ctx.base, ctx.home, ctx.appKeyFile), readOnly: sessionReadOnly(ctx.profileDir), npmCache, layout: p.gitLayout })
+      const readOnly = sessionReadOnly(ctx.profileDir)
+      const claude = claudeSandboxSettings({ platform: PLATFORM, denied: claudeDenied(PLATFORM, ctx.base, ctx.home, ctx.appKeyFile), readOnly, npmCache, layout: p.gitLayout })
       const commonDir = p.gitLayout?.worktree ? p.gitLayout.commonDir : null
       const settings = srtSettingsOf(claude, { commonDir, ...(socket ? { allowUnixSockets: [socket.path] } : {}) })
       const settingsFile = path.join(ctx.scratch, `srt-settings-${set.name}.json`)
       writeFileSync(settingsFile, JSON.stringify(settings, null, 2))
       const wrap = (file) => (line) => ({ file: 'srt', args: srtArgv(file, line) })
       const env = envOf(p)
-      Object.assign(record, { cwd: p.cwd, gitLayout: p.gitLayout, worktreeConfig: p.worktreeConfig, gitFiles: p.gitFiles, claude: claude.sandbox, settings, env: { npm_config_cache: npmCache, ...extra } })
+      Object.assign(record, { cwd: p.cwd, gitLayout: p.gitLayout, worktreeConfig: p.worktreeConfig, gitFiles: p.gitFiles, readOnly, claude: claude.sandbox, settings, env: { npm_config_cache: npmCache, ...extra } })
       record.sandboxed = runSet(wrap(settingsFile), { cwd: p.cwd, env, probes, timeoutMs: PROBE_MS })
       // srt on Linux skips a write path that does not exist (dist/sandbox/linux-sandbox-utils.js): when the install
       // failed, it runs again with the folder made first, as the Host could make it

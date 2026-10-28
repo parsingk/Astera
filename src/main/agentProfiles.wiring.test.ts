@@ -176,15 +176,39 @@ describe('ipc.ts takes the sandbox from the profile, or from a sandboxed session
   })
 })
 
-// Task E (2026-10-28): a sandboxed session keeps Astera's profile folder read-only, so both of the app's managers are
-// handed that folder, as they are its app key; Claude's twins take it from the StatusLineManager's own folder.
-// createCore cannot run without Electron: guarded by its text
-describe('core.ts hands both managers the profile folder a sandboxed session keeps read-only', () => {
+// Task E (2026-10-28, fix round 1): a sandboxed session keeps read-only the profile folder and every place Astera writes
+// code or an installer to and runs unsandboxed. core.ts builds that list once (sandboxReadOnly) and hands it to the
+// Claude twins and both managers. createCore cannot run without Electron: guarded by its text
+describe('core.ts builds the read-only list once and hands it to the twins and both managers', () => {
   const core = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'core.ts'), 'utf8')
-  it('the terminal manager’s checks and the chat manager’s deps name the app’s own profile folder', () => {
-    expect(core).toMatch(/\{ \.\.\.defaultSpawnChecks\(sessionsLog\), hostSocketDir, appKeyFile, profileDir: userDataDir, codexExcludes \}/)
+  it('builds the list with sandboxReadOnly from the profile, runtime, updater cache, install root and junction', () => {
+    const built = core.slice(core.indexOf('const readOnly = sandboxReadOnly({'), core.indexOf('})', core.indexOf('const readOnly = sandboxReadOnly({')))
+    expect(built).toMatch(/profileDir: userDataDir/)
+    expect(built).toMatch(/hostRuntimeBase: runtimeBase/)
+    expect(built).toMatch(/updaterCache: updaterCacheDir\(process\.platform, process\.env, os\.homedir\(\)\)/)
+    expect(built).toMatch(/installRoot: installRootOf\(app\.getPath\('exe'\), process\.platform\)/)
+    expect(built).toMatch(/appJunction: appJunctionDir\(process\.platform, process\.env, os\.homedir\(\)\)/)
+  })
+  it('the StatusLineManager, the terminal checks and the chat deps all take that one list', () => {
+    expect(core).toMatch(/const statusLine = new StatusLineManager\(\n    userDataDir,[\s\S]*\{ findRuntime, readOnly \}\n  \)/)
+    expect(core).toMatch(/\{ \.\.\.defaultSpawnChecks\(sessionsLog\), hostSocketDir, appKeyFile, readOnly, codexExcludes \}/)
     const chat = core.slice(core.indexOf('const chat = new ChatSessionManager({'), core.indexOf('// Lazy history'))
-    expect(chat).toMatch(/\n    appKeyFile,\n    profileDir: userDataDir,\n/)
-    expect(core).toMatch(/const statusLine = new StatusLineManager\(\n    userDataDir,/)
+    expect(chat).toMatch(/\n    appKeyFile,\n    readOnly,\n/)
+  })
+})
+
+// Task E fix round 1 (review Minor 2): the Host hands its sandboxed chat sessions the same read-only list and app key it
+// gives its terminal sessions. rollingWiring builds the chat deps from the spawner; hostChats passes them to the chat
+// manager. Dropping either line would leave a Host-started sandboxed Codex chat without the entries, and nothing else
+// would fail — so these are guarded by their text, as the wiring above is
+describe('the Host hands its chat sessions the spawner’s read-only list and app key', () => {
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const rollingWiring = readFileSync(path.join(here, '..', 'host', 'rollingWiring.ts'), 'utf8')
+  const hostChats = readFileSync(path.join(here, '..', 'host', 'hostChats.ts'), 'utf8')
+  it('rollingWiring reads them off the spawner for the chat deps', () => {
+    expect(rollingWiring).toMatch(/appKeyFile: a\.spawner\.appKeyFile \?\? null,\n    readOnly: a\.spawner\.readOnly \?\? \[\],/)
+  })
+  it('hostChats passes both on to the chat manager', () => {
+    expect(hostChats).toMatch(/\.\.\.\(d\.appKeyFile !== undefined \? \{ appKeyFile: d\.appKeyFile \} : \{\}\),\n    \.\.\.\(d\.readOnly !== undefined \? \{ readOnly: d\.readOnly \} : \{\}\),/)
   })
 })

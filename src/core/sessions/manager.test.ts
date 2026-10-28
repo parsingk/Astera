@@ -1768,20 +1768,20 @@ describe('the sandbox at spawn', () => {
   } as const
   type Ready = NonNullable<SpawnChecks['codexWindowsReady']>
   /** Every Windows home reads set up unless a case says otherwise: the real question runs codex. */
-  const checksFor = (platform: NodeJS.Platform, ready: Ready = async () => 'ready', hostSocketDir: string | null = null, codexExcludes?: SpawnChecks['codexExcludes'], appKeyFile?: string, profileDir?: string): SpawnChecks => ({
+  const checksFor = (platform: NodeJS.Platform, ready: Ready = async () => 'ready', hostSocketDir: string | null = null, codexExcludes?: SpawnChecks['codexExcludes'], appKeyFile?: string, readOnly?: readonly string[]): SpawnChecks => ({
     cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform, now: Date.now, syncExists: () => true, log: () => {},
-    codexWindowsReady: ready, hostSocketDir, ...(codexExcludes ? { codexExcludes } : {}), ...(appKeyFile ? { appKeyFile } : {}), ...(profileDir ? { profileDir } : {})
+    codexWindowsReady: ready, hostSocketDir, ...(codexExcludes ? { codexExcludes } : {}), ...(appKeyFile ? { appKeyFile } : {}), ...(readOnly ? { readOnly } : {})
   })
   /** The codex version the probe answers: '0.160.0', the floor, unless a case says otherwise (null: unreadable,
    *  undefined: no codex) */
   const versionOf = (v: string | null | undefined) => Object.assign((_cli: 'claude' | 'codex') => v, { warm: async () => {} })
-  const rig = (platform: 'linux' | 'darwin' | 'win32', o: { noDaemon?: boolean; ready?: Ready; hostSocketDir?: string | null; codex?: string | null; noVersionProbe?: true; excludes?: SpawnChecks['codexExcludes']; appKeyFile?: string; profileDir?: string } = {}) => {
+  const rig = (platform: 'linux' | 'darwin' | 'win32', o: { noDaemon?: boolean; ready?: Ready; hostSocketDir?: string | null; codex?: string | null; noVersionProbe?: true; excludes?: SpawnChecks['codexExcludes']; appKeyFile?: string; readOnly?: readonly string[] } = {}) => {
     const argv: string[][] = []
     const spawned: PtySpawnOptions[] = []
     const manager = new SessionManager(
       (_f, a, opts) => (argv.push(a as string[]), spawned.push(opts), new FakePty()),
       makeDescriptors(platform, HOME[platform], undefined, daemon(o.noDaemon ?? true)),
-      100, 20, HOME[platform], undefined, [], { ...BASE[platform] }, checksFor(platform, o.ready, o.hostSocketDir ?? null, o.excludes, o.appKeyFile, o.profileDir)
+      100, 20, HOME[platform], undefined, [], { ...BASE[platform] }, checksFor(platform, o.ready, o.hostSocketDir ?? null, o.excludes, o.appKeyFile, o.readOnly)
     )
     if (!o.noVersionProbe) manager.codexVersion = versionOf('codex' in o ? o.codex : '0.160.0')
     return { manager, argv, spawned }
@@ -1913,24 +1913,32 @@ describe('the sandbox at spawn', () => {
     for (const platform of ['linux', 'darwin', 'win32'] as const) {
       const cwd = repo()
       const sep = platform === 'win32' ? '\\' : '/'
-      const { manager, argv } = rig(platform, { profileDir: dirs[platform], appKeyFile: [dirs[platform], 'host', 'app.key'].join(sep) })
+      const dir = dirs[platform].replace(/\\/g, '/')
+      const { manager, argv } = rig(platform, { readOnly: [dir], appKeyFile: [dirs[platform], 'host', 'app.key'].join(sep) })
       await manager.prepare({ account: codexAccount, cwd, sandbox: true })
       manager.spawn({ account: codexAccount, cwd, sandbox: true })
       const profile = codexArgs(argv[0]).find((a) => a.startsWith('permissions='))!
-      const dir = dirs[platform].replace(/\\/g, '/')
       expect(profile, platform).toContain(`"${dir}"="read"`)
       expect(profile, platform).toContain(`"${dir}/host/app.key"="deny"`)
       expect(profile, platform).not.toContain('host.key')
     }
   })
 
-  // The profile folder is on the command line too, so a win32 one cmd.exe could not carry refuses the start
-  it('refuses a sandboxed win32 start whose profile folder holds a cmd.exe character', async () => {
+  // Task E fix round 1: every read-only folder the wiring names (the profile and the places Astera writes code or an
+  // installer to and runs unsandboxed) is a `read` entry; the win32 session goes through cmd.exe, so one with a forbidden
+  // character refuses the start
+  it("keeps every read-only folder the wiring names read, and refuses a win32 one cmd.exe cannot carry", async () => {
+    const roots = ['C:/Users/t/AppData/Roaming/astera', 'C:/Users/t/AppData/Local/astera/host-runtime', 'C:/Users/t/AppData/Local/astera-updater', 'C:/Users/t/AppData/Local/astera/app']
     const cwd = repo()
-    const { manager, argv } = rig('win32', { profileDir: 'C:\\Users\\t\\AppData\\Roaming\\astera 100%' })
-    await expect(manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: path-unsafe$/)
-    expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: /)
-    expect(argv).toHaveLength(0)
+    const { manager, argv } = rig('win32', { readOnly: roots })
+    await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    const profile = codexArgs(argv[0]).find((a) => a.startsWith('permissions='))!
+    for (const r of roots) expect(profile).toContain(`"${r}"="read"`)
+    const bad = rig('win32', { readOnly: ['C:/Users/t/AppData/Local/astera 100%/host-runtime'] })
+    await expect(bad.manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: path-unsafe$/)
+    expect(() => bad.manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: /)
+    expect(bad.argv).toHaveLength(0)
   })
 
   // Final fix pass, part 2 (B): every other Host's folder beside this profile's (another profile's Host, such as the dev

@@ -7,7 +7,7 @@ import path from 'node:path'
 import { codexSandboxArgs } from '../../src/core/sandbox/codexProfile'
 import { claudeSessionDenied } from '../../src/core/sandbox/claudeSettings'
 import { codexSessionDenied } from '../../src/core/sandbox/prepared'
-import { profileReadOnly } from '../../src/core/sandbox/locations'
+import { sandboxReadOnly } from '../../src/core/sandbox/locations'
 import { PROBES, verdict } from './probes.mjs'
 import { probeEnv } from './measure-sandbox.mjs'
 
@@ -67,10 +67,11 @@ export const codexDenied = (platform, env, home, hostDir = null, appKeyFile = nu
  *  measured is what a start hands Claude. */
 export const claudeDenied = (platform, env, home, appKeyFile = null) => claudeSessionDenied({ platform, env, homeDir: home, appKeyFile })
 
-/** What a sandboxed session of either CLI may not write: Astera's profile folder (`profileDir`, Task E). The list every
- *  start builds (locations.ts profileReadOnly, which sessionSandboxArgs keeps read and StatusLineManager's twins keep
- *  from being written), so what is measured is what a start hands either sandbox. */
-export const sessionReadOnly = (profileDir = null) => profileReadOnly(profileDir)
+/** What a sandboxed session of either CLI may not write (locations.ts sandboxReadOnly), the one builder every start and
+ *  the measurement share. The measurement passes only the profile: the runner has no real install, Host runtime or
+ *  updater cache to place, so those are covered by unit tests (locations.test.ts) and the start-path guards, not here
+ *  (Task E fix round 1 report). */
+export const sessionReadOnly = (profileDir = null) => sandboxReadOnly({ profileDir })
 
 /** `codex sandbox` and `codex app-server` take the profile's `-c` values; `-a never` is an option of the session command,
  *  which the builder puts first. */

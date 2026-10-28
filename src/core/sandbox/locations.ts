@@ -34,6 +34,66 @@ export function profileReadOnly(profileDir: string | null): string[] {
   return profileDir ? [slashed(profileDir)] : []
 }
 
+/** electron-updater's download cache base (its `getAppCacheDir`, `dist/AppAdapter.js` at 6.8.9):
+ *  `%LOCALAPPDATA%` on Windows, `~/Library/Caches` on macOS, `$XDG_CACHE_HOME` or `~/.cache` on Linux. */
+function appCacheBase(platform: NodeJS.Platform, env: Record<string, string | undefined>, home: string): string {
+  const h = slashed(home)
+  if (platform === 'win32') return slashed(env.LOCALAPPDATA ?? '') || `${h}/AppData/Local`
+  if (platform === 'darwin') return `${h}/Library/Caches`
+  return slashed(env.XDG_CACHE_HOME ?? '') || `${h}/.cache`
+}
+
+/** electron-updater's download cache folder (Task E fix round 1): `<appCacheBase>/astera-updater`. The name is the
+ *  app's sanitized name lowercased plus `-updater` (app-builder-lib `appInfo.ts` `updaterCacheDirName`), `astera` here.
+ *  The installer run on update is its `pending` subfolder, and Astera unpacks a manual copy into `manual/<version>`
+ *  (src/main/manualInstall.ts), so the whole folder is what a sandboxed session must not write. */
+export const UPDATER_CACHE_DIR = 'astera-updater'
+export function updaterCacheDir(platform: NodeJS.Platform, env: Record<string, string | undefined>, home: string): string {
+  return `${appCacheBase(platform, env, home)}/${UPDATER_CACHE_DIR}`
+}
+
+/** The installed app's own folder, from its executable (`process.execPath`, the Host's `ASTERA_HOST_CLI_EXEC`): on
+ *  Windows the executable's folder (a per-user install under `%LOCALAPPDATA%\Programs`; a machine-wide one is not the
+ *  session's to write anyway), on macOS the enclosing `.app` bundle. On Linux the AppImage's own folder is the person's
+ *  download folder, and the update is staged in the updater cache, not there, so none. None without an executable. */
+export function installRootOf(appExe: string | null | undefined, platform: NodeJS.Platform): string | null {
+  if (!appExe) return null
+  const p = slashed(appExe)
+  if (platform === 'win32') return p.replace(/\/[^/]*$/, '')
+  if (platform === 'darwin') {
+    const bundle = /^(.*\.app)(\/|$)/.exec(p)
+    return bundle ? bundle[1] : p.replace(/\/[^/]*$/, '')
+  }
+  return null
+}
+
+/** The Windows junction a session's `astera` `.cmd` goes through (final fix pass; Task E fix round 1):
+ *  `%LOCALAPPDATA%\astera\app`, literal `astera` (cliInstall.ts `binDirFor`, exec/shuttle.ts `cmdLinkPath`), which
+ *  points at the install root. None off Windows, where no such junction is made. */
+export function appJunctionDir(platform: NodeJS.Platform, env: Record<string, string | undefined>, home: string): string | null {
+  if (platform !== 'win32') return null
+  const local = slashed(env.LOCALAPPDATA ?? '') || `${slashed(home)}/AppData/Local`
+  return `${local}/astera/app`
+}
+
+/** The whole list of folders a sandboxed session keeps read-only (Task E and its fix round 1): Astera's profile folder
+ *  and every place Astera itself writes executable code or an installer to and later runs outside any sandbox — the
+ *  Windows Host runtime (core/host/runtime.ts hostRuntimeBase), electron-updater's download cache, the installed app's
+ *  own folder and the Windows session-`.cmd` junction. The one function every start path and the measurement build from,
+ *  as for the profile; each caller passes what it knows (nulls dropped). Forward slashes, each once. A path that does
+ *  not exist at the start is named all the same: the sandbox never fails a start for a missing read-only path (it carves
+ *  one out of a writable root only where it is, and blocks its creation; Codex/srt, Task E report). */
+export function sandboxReadOnly(o: {
+  profileDir?: string | null
+  hostRuntimeBase?: string | null
+  updaterCache?: string | null
+  installRoot?: string | null
+  appJunction?: string | null
+}): string[] {
+  const all = [o.profileDir, o.hostRuntimeBase, o.updaterCache, o.installRoot, o.appJunction].filter((p): p is string => Boolean(p)).map(slashed)
+  return [...new Set(all)]
+}
+
 /** A D-Bus address value with its `%xx` escapes decoded (the D-Bus specification, "Server Addresses": any byte may be
  *  escaped so, and a path holding a space or a non-ASCII letter is), so the path denied is the file's own (final fix pass,
  *  minor 8). Bytes, decoded as UTF-8. */

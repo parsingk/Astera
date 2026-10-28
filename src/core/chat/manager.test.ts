@@ -1559,7 +1559,7 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
     win32: { Path: 'C:\\Windows', APPDATA: 'C:\\Users\\t\\AppData\\Roaming' }
   } as const
   type Ready = NonNullable<ChatManagerDeps['codexWindowsReady']>
-  const rig = (platform: 'linux' | 'win32', o: { ready?: Ready; layouts?: PreparedLayouts; noDaemon?: boolean; hostSocketDir?: string | null; codex?: string | null; excludes?: ChatManagerDeps['codexExcludes']; appKeyFile?: string; profileDir?: string } = {}) => {
+  const rig = (platform: 'linux' | 'win32', o: { ready?: Ready; layouts?: PreparedLayouts; noDaemon?: boolean; hostSocketDir?: string | null; codex?: string | null; excludes?: ChatManagerDeps['codexExcludes']; appKeyFile?: string; readOnly?: readonly string[] } = {}) => {
     const spawned: Array<{ file: string; args: string[]; opts: ProcSpawnOptions; proc: FakeProc }> = []
     const { createAdapter, handles } = makeAdapterFactory()
     const manager = new ChatSessionManager({
@@ -1581,7 +1581,7 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
       ...(o.hostSocketDir !== undefined ? { hostSocketDir: o.hostSocketDir } : {}),
       ...(o.excludes ? { codexExcludes: o.excludes } : {}),
       ...(o.appKeyFile ? { appKeyFile: o.appKeyFile } : {}),
-      ...(o.profileDir ? { profileDir: o.profileDir } : {}),
+      ...(o.readOnly ? { readOnly: o.readOnly } : {}),
       // codex 0.160.0, the floor, unless a case says otherwise
       codexVersion: Object.assign(() => ('codex' in o ? o.codex : '0.160.0'), { warm: async () => {} })
     })
@@ -1664,11 +1664,11 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
     const dirs = { linux: '/home/t/.config/astera', win32: 'C:\\Users\\t\\AppData\\Roaming\\astera' } as const
     for (const platform of ['linux', 'win32'] as const) {
       const cwd = repo()
-      const { manager, spawned } = rig(platform, { profileDir: dirs[platform], appKeyFile: `${dirs[platform]}${platform === 'win32' ? '\\host\\app.key' : '/host/app.key'}` })
+      const dir = dirs[platform].replace(/\\/g, '/')
+      const { manager, spawned } = rig(platform, { readOnly: [dir], appKeyFile: `${dirs[platform]}${platform === 'win32' ? '\\host\\app.key' : '/host/app.key'}` })
       await manager.prepare({ account: codexAccount, cwd, sandbox: true })
       manager.spawn({ account: codexAccount, cwd, sandbox: true })
       const profile = spawned[0].args.find((a) => a.startsWith('permissions='))!
-      const dir = dirs[platform].replace(/\\/g, '/')
       expect(profile, platform).toContain(`"${dir}"="read"`)
       expect(profile, platform).toContain(`"${dir}/host/app.key"="deny"`)
       expect(profile, platform).not.toContain('host.key')

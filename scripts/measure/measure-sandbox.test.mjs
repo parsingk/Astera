@@ -342,9 +342,10 @@ describe('the S2 sets’ arguments come from the builders', () => {
       const dir = platform === 'win32' ? null : '/tmp/astera-host-0123456789ab-v4'
       const profileDir = platform === 'win32' ? 'C:\\h\\AppData\\Roaming\\astera' : '/h/.config/astera'
       const appKey = platform === 'win32' ? 'C:/h/AppData/Roaming/astera/host/app.key' : '/h/.config/astera/host/app.key'
+      const readOnly = sessionReadOnly(profileDir)
       for (const layout of [repo, sub, wt]) {
-        const started = codexSandboxCommandArgs(sessionSandboxArgs({ platform, homeDir: home, layout, env: e, hostSocketDir: dir, appKeyFile: appKey, profileDir }))
-        expect(codexSetArgs({ platform, layout, denied: codexDenied(platform, e, home, dir, appKey), readOnly: sessionReadOnly(profileDir) }), platform).toEqual(started)
+        const started = codexSandboxCommandArgs(sessionSandboxArgs({ platform, homeDir: home, layout, env: e, hostSocketDir: dir, appKeyFile: appKey, readOnly }))
+        expect(codexSetArgs({ platform, layout, denied: codexDenied(platform, e, home, dir, appKey), readOnly }), platform).toEqual(started)
         expect(started.join(' '), platform).toContain(`"${profileDir.replace(/\\/g, '/')}"="read"`)
       }
       expect(codexDenied(platform, e, home, dir, appKey), platform).toContain(appKey)

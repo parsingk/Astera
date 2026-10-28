@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { appKeyDenies, credentialStoreDenies, hostSocketDenies, otherHostFolders, profileReadOnly, sensitiveLocations } from './locations'
+import { appJunctionDir, appKeyDenies, credentialStoreDenies, hostSocketDenies, installRootOf, otherHostFolders, profileReadOnly, sandboxReadOnly, sensitiveLocations, updaterCacheDir } from './locations'
 
 describe('sandbox locations', () => {
   it('lists E6 on every OS, with gh and gcloud where each OS keeps them', () => {
@@ -31,6 +31,62 @@ describe('sandbox locations', () => {
     expect(profileReadOnly('C:\\Users\\a\\AppData\\Roaming\\astera')).toEqual(['C:/Users/a/AppData/Roaming/astera'])
     expect(profileReadOnly('/home/a/.config/astera/')).toEqual(['/home/a/.config/astera'])
     expect(profileReadOnly(null)).toEqual([])
+  })
+
+  // Task E fix round 1: the folders Astera itself writes executable code or an installer to and later runs outside any
+  // sandbox, beside the profile. electron-updater's download cache is <appCacheBase>/astera-updater on every OS (its
+  // AppAdapter.getAppCacheDir at 6.8.9: LOCALAPPDATA, ~/Library/Caches, $XDG_CACHE_HOME|~/.cache).
+  it('names the updater download cache where electron-updater keeps it, per OS', () => {
+    expect(updaterCacheDir('win32', { LOCALAPPDATA: 'C:\\Users\\a\\AppData\\Local' }, 'C:\\Users\\a')).toBe('C:/Users/a/AppData/Local/astera-updater')
+    expect(updaterCacheDir('win32', {}, 'C:\\Users\\a')).toBe('C:/Users/a/AppData/Local/astera-updater')
+    expect(updaterCacheDir('darwin', {}, '/Users/a')).toBe('/Users/a/Library/Caches/astera-updater')
+    expect(updaterCacheDir('linux', { XDG_CACHE_HOME: '/x/cache' }, '/h')).toBe('/x/cache/astera-updater')
+    expect(updaterCacheDir('linux', {}, '/h')).toBe('/h/.cache/astera-updater')
+  })
+
+  // The installed app's own folder: on win32 the executable's folder (a per-user install under %LOCALAPPDATA%\Programs);
+  // on macOS the enclosing .app bundle; on Linux the AppImage's own folder is the person's (a download dir), so none
+  it('names the installed app’s folder on win32 and the .app bundle on macOS, and nothing on Linux', () => {
+    expect(installRootOf('C:\\Users\\a\\AppData\\Local\\Programs\\Astera\\Astera.exe', 'win32')).toBe('C:/Users/a/AppData/Local/Programs/Astera')
+    expect(installRootOf('/Applications/Astera.app/Contents/MacOS/Astera', 'darwin')).toBe('/Applications/Astera.app')
+    expect(installRootOf('/Users/a/Applications/Astera.app/Contents/MacOS/Astera', 'darwin')).toBe('/Users/a/Applications/Astera.app')
+    expect(installRootOf('/opt/Astera/astera', 'linux')).toBeNull()
+    expect(installRootOf(null, 'win32')).toBeNull()
+  })
+
+  // One function builds the whole read-only list for a start: the profile, the Windows Host runtime base, the updater
+  // cache, the install root, and the win32 junction the session .cmd goes through (%LOCALAPPDATA%\astera\app). Nulls
+  // dropped, forward slashes, each once; a path that does not exist at start is still named (the sandbox handles it)
+  it('builds the whole read-only list for a sandboxed start, dropping what is not known', () => {
+    expect(
+      sandboxReadOnly({
+        profileDir: 'C:\\Users\\a\\AppData\\Roaming\\astera',
+        hostRuntimeBase: 'C:\\Users\\a\\AppData\\Local\\astera\\host-runtime',
+        updaterCache: 'C:/Users/a/AppData/Local/astera-updater',
+        installRoot: 'C:/Users/a/AppData/Local/Programs/Astera',
+        appJunction: 'C:/Users/a/AppData/Local/astera/app'
+      })
+    ).toEqual([
+      'C:/Users/a/AppData/Roaming/astera',
+      'C:/Users/a/AppData/Local/astera/host-runtime',
+      'C:/Users/a/AppData/Local/astera-updater',
+      'C:/Users/a/AppData/Local/Programs/Astera',
+      'C:/Users/a/AppData/Local/astera/app'
+    ])
+    // The profile alone, as the measurement passes it (the runner has no real install, Host runtime or updater cache)
+    expect(sandboxReadOnly({ profileDir: '/home/a/.config/astera' })).toEqual(['/home/a/.config/astera'])
+    expect(sandboxReadOnly({})).toEqual([])
+    // Deduped and slashed: the same path twice, and a trailing slash, collapse to one
+    expect(sandboxReadOnly({ profileDir: '/p/', updaterCache: '/p' })).toEqual(['/p'])
+  })
+
+  // The win32 junction the session .cmd goes through is %LOCALAPPDATA%\astera\app (literal `astera`, cliInstall.ts
+  // binDirFor and exec/shuttle.ts cmdLinkPath); none off win32
+  it('names the win32 session .cmd junction, and nothing off win32', () => {
+    expect(appJunctionDir('win32', { LOCALAPPDATA: 'C:\\Users\\a\\AppData\\Local' }, 'C:\\Users\\a')).toBe('C:/Users/a/AppData/Local/astera/app')
+    expect(appJunctionDir('win32', {}, 'C:\\Users\\a')).toBe('C:/Users/a/AppData/Local/astera/app')
+    expect(appJunctionDir('darwin', {}, '/Users/a')).toBeNull()
+    expect(appJunctionDir('linux', {}, '/h')).toBeNull()
   })
 
   it('adds the OS credential store a sandbox does not close by itself', () => {

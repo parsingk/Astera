@@ -95,9 +95,9 @@ export interface ChatManagerDeps {
   /** The profile's app key file, which a sandboxed Codex chat's profile denies on every OS (SpawnChecks' twin). Absent,
    *  nothing is denied for it. */
   appKeyFile?: string | null
-  /** Astera's profile folder, which a sandboxed Codex chat's profile keeps read-only on every OS (SpawnChecks' twin).
-   *  Absent, nothing is kept read-only for it. */
-  profileDir?: string | null
+  /** The read-only folders a sandboxed Codex chat's profile keeps on every OS (SpawnChecks' twin). Absent, nothing is
+   *  kept read-only. */
+  readOnly?: readonly string[]
   /** The codex version question a sandboxed Codex chat asks at its prepare and spawn (final review I2), the terminal
    *  manager's. Absent, a sandboxed Codex chat is refused as for a version not known. */
   codexVersion?: CodexVersionProbe
@@ -290,7 +290,7 @@ export class ChatSessionManager {
       ready: this.deps.codexWindowsReady,
       hostSocketDir: this.deps.hostSocketDir ?? null,
       appKeyFile: this.deps.appKeyFile ?? null,
-      profileDir: this.deps.profileDir ?? null,
+      readOnly: this.deps.readOnly ?? [],
       version: this.deps.codexVersion,
       check: (args) => fitsOnTheLine(this.deps.platform, buildCodexAppServerCommand(this.deps.platform, undefined, [], appServerSandboxArgs(args))),
       ...(this.deps.codexExcludes ? { excludes: this.deps.codexExcludes } : {}),
@@ -407,7 +407,7 @@ export class ChatSessionManager {
             hostSocketDir: this.deps.hostSocketDir ?? null,
             otherHostDirs: this.sandboxLayouts.otherHostsOf(opts.account.id, opts.cwd, Date.now()),
             appKeyFile: this.deps.appKeyFile ?? null,
-            profileDir: this.deps.profileDir ?? null
+            readOnly: this.deps.readOnly ?? []
           })
         )
       : []

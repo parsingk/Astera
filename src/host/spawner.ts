@@ -68,6 +68,7 @@ import { createManagedHooksCheck } from '../core/sessions/managedHooks'
 import { codexNoDaemonProbe, type CodexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
 import { findInstalledHostExe } from '../core/host/installedRuntime'
 import { hostRuntimeBase } from '../core/host/runtime'
+import { appJunctionDir, installRootOf, sandboxReadOnly, updaterCacheDir } from '../core/sandbox/locations'
 import { hidingLog } from '../core/extensions/secrets'
 import { setBounded } from '../core/bounded'
 import { dispatchLookup } from '../core/orchestration/dispatchIndex'
@@ -185,9 +186,9 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
   /** The profile's app key file, which a sandboxed Codex session's profile denies on every OS, terminal or chat (sandbox
    *  follow-ups, item 1). */
   appKeyFile?: string | null
-  /** This Host's profile folder, which a sandboxed Codex session's profile keeps read-only on every OS, terminal or chat
-   *  (Task E). */
-  profileDir?: string | null
+  /** The read-only folders a sandboxed Codex session's profile keeps on every OS, terminal or chat (Task E and its fix
+   *  round 1): the profile and every place Astera writes code or an installer to and runs unsandboxed. */
+  readOnly?: readonly string[]
   /** The codex version question a sandboxed Codex start asks, shared with the Host's chat sessions (final review I2). */
   codexVersion?: ChatManagerDeps['codexVersion']
   /** The copy of the person's git excludes a sandboxed win32 Codex start writes in this Host's temp folder (one for its
@@ -340,6 +341,19 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   // The key that lets a process be the app to this Host, which a sandboxed session's profile denies (sandbox follow-ups,
   // item 1)
   const appKeyFile = appKeyPath(profileDir)
+  // What a sandboxed session keeps read-only on every OS (Task E and its fix round 1): the profile folder and every place
+  // Astera itself writes code or an installer to and runs unsandboxed — the Windows Host runtime it was handed from
+  // (hostRuntimeBase, the same `cli/host.ts` rule this StatusLineManager's findRuntime uses), electron-updater's download
+  // cache, the installed app's own folder (from `cli.exec`, the app's executable) and the Windows session-`.cmd`
+  // junction. One list, built once for both managers and the Claude twins.
+  const hostRuntimeDir = hostRuntimeBase({ platform, localAppData: d.env.LOCALAPPDATA, userData: profileDir, appName: path.win32.basename(profileDir) })
+  const readOnly = sandboxReadOnly({
+    profileDir,
+    hostRuntimeBase: hostRuntimeDir,
+    updaterCache: updaterCacheDir(platform, d.env, homeDir),
+    installRoot: installRootOf(cli.exec, platform),
+    appJunction: appJunctionDir(platform, d.env, homeDir)
+  })
   // The copy of the person's git excludes a sandboxed Codex session on Windows reads, in the temp folder, asked by this
   // spawner's prepares and the Host's chat sessions alike; the elevated sandbox's own account cannot read theirs
   const codexExcludes = codexExcludesWriter({ profileDir, tmpDir, homeDir, env: d.env, ...(d.runGit ? { runGit: d.runGit } : {}), log })
@@ -357,13 +371,11 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       platform,
       // Enforce's hook when this Host runs from the app's Electron (development, or no runtime put in place): a runtime
       // an Astera installed, under the profile folder's name as the app's own (`astera`), the CLI's rule (cli/host.ts)
-      findRuntime: () =>
-        findInstalledHostExe(
-          hostRuntimeBase({ platform, localAppData: d.env.LOCALAPPDATA, userData: profileDir, appName: path.win32.basename(profileDir) })
-        ),
+      findRuntime: () => findInstalledHostExe(hostRuntimeDir),
       // The sandbox's denied places are read under the person's home, from each session's own environment (its scope)
       homeDir,
-      tmpDir
+      tmpDir,
+      readOnly
     }
   )
   const ensured = once(() => statusLine.ensureFiles())
@@ -450,7 +462,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     // Read at each spawn, not once: the Host completes its PATH when a CLI is missing (windowsPath.ts)
     () => hostWorkerBaseEnv(d.env),
     // The Host's own log: a spawn that had to fall back to a sync check says so in host.log.
-    { ...defaultSpawnChecks(log), codexWindowsReady, hostSocketDir, appKeyFile, profileDir, codexExcludes }
+    { ...defaultSpawnChecks(log), codexWindowsReady, hostSocketDir, appKeyFile, readOnly, codexExcludes }
   )
   // Shared extensions (Agent Control Plane release 1 design §4.5): `sessions.prepare` refreshes the account before
   // every spawn and roll, and the Host's chat sessions read the same cache
@@ -903,7 +915,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     claudeSandbox,
     hostSocketDir,
     appKeyFile,
-    profileDir,
+    readOnly,
     codexVersion,
     codexExcludes,
     orchEnvNow: () => orchEnvReady,

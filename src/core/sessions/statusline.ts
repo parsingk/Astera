@@ -455,6 +455,8 @@ export class StatusLineManager {
    *  SandboxScope), and the temp folder npm's cache is in. */
   private readonly homeDir: string
   private readonly tmpDir: string
+  /** The read-only folders a sandbox twin keeps from being written (Task E and its fix round 1). */
+  private readonly readOnly: readonly string[]
 
   constructor(
     private userDataDir: string,
@@ -474,6 +476,10 @@ export class StatusLineManager {
       /** The sandbox's (ensureSandboxFiles): the process's own home and temp folder, unless a test says. */
       homeDir?: string
       tmpDir?: string
+      /** The folders a sandboxed Claude twin keeps read-only (Task E and its fix round 1): the profile and every place
+       *  Astera writes code or an installer to and runs unsandboxed, built by the app and Host wiring (sandboxReadOnly).
+       *  Default: this profile folder alone (profileReadOnly), so a start that names no more still protects the profile. */
+      readOnly?: readonly string[]
     } = {}
   ) {
     this.findRuntime = host.findRuntime
@@ -481,6 +487,7 @@ export class StatusLineManager {
     this.execPath = host.execPath ?? process.execPath
     this.homeDir = host.homeDir ?? os.homedir()
     this.tmpDir = host.tmpDir ?? os.tmpdir()
+    this.readOnly = host.readOnly ?? profileReadOnly(userDataDir)
     // A test that names the executable names the AppImage too, or there is none
     this.appImage = host.execPath === undefined ? process.env.APPIMAGE : host.appImage
     this.capturePath = path.join(userDataDir, 'astera-statusline-capture.cjs')
@@ -784,11 +791,10 @@ export class StatusLineManager {
   /** What a sandbox twin adds: the builder's settings, for the scope's layout and from the scope's environment, under the
    *  person's home. */
   private sandboxPart(scope: SandboxScope): SandboxPart {
-    // With the app key of this profile (sandbox follow-ups, item 1), as a Codex session's profile denies it, and the profile
-    // folder itself kept from being written (Task E), as a Codex session's profile keeps it read
+    // With the app key of this profile (sandbox follow-ups, item 1), as a Codex session's profile denies it, and the
+    // read-only folders the start's wiring named (Task E and its fix round 1), as a Codex session's profile keeps them read
     const denied = claudeSessionDenied({ platform: this.platform, env: scope.env, homeDir: this.homeDir, appKeyFile: appKeyPath(this.userDataDir) })
-    const readOnly = profileReadOnly(this.userDataDir)
-    return claudeSandboxSettings({ platform: this.platform, denied, readOnly, npmCache: npmCacheOf(this.tmpDir), layout: scope.layout })
+    return claudeSandboxSettings({ platform: this.platform, denied, readOnly: this.readOnly, npmCache: npmCacheOf(this.tmpDir), layout: scope.layout })
   }
 
   private twinsDirOf(key: string): string {

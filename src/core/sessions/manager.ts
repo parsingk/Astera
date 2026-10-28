@@ -114,10 +114,10 @@ export interface SpawnChecks {
    *  profile denies on every OS: it lets a process be the app to the Host (sandbox follow-ups, item 1). Absent, nothing is
    *  denied for it. */
   appKeyFile?: string | null
-  /** Astera's profile folder, which a sandboxed Codex session's profile keeps read-only on every OS: what the app and the
-   *  Host run outside any sandbox is kept there (core/sandbox/locations.ts profileReadOnly, Task E). Absent, nothing is
-   *  kept read-only for it. */
-  profileDir?: string | null
+  /** The folders a sandboxed Codex session's profile keeps read-only on every OS: Astera's profile folder and every
+   *  place Astera itself writes code or an installer to and runs unsandboxed (core/sandbox/locations.ts sandboxReadOnly,
+   *  Task E and its fix round 1), built by the app and Host wiring. Absent, nothing is kept read-only. */
+  readOnly?: readonly string[]
   /** Writes the copy of the person's global git excludes a sandboxed win32 Codex session reads, since the elevated
    *  sandbox's own account cannot read theirs (core/sandbox/gitExcludes.ts codexExcludesWriter), asked by its prepare.
    *  Absent, none is written and the session's git looks where it would. */
@@ -308,7 +308,7 @@ export class SessionManager {
       ready: this.checks.codexWindowsReady,
       hostSocketDir: this.checks.hostSocketDir ?? null,
       appKeyFile: this.checks.appKeyFile ?? null,
-      profileDir: this.checks.profileDir ?? null,
+      readOnly: this.checks.readOnly ?? [],
       version: this.codexVersion,
       // A codex without --no-daemon (warmed above) is refused now too, for a terminal session: a chat's app-server needs
       // no such flag. The spawn still asks for itself, since its environment is built after the hiding and the codex may
@@ -635,7 +635,7 @@ export class SessionManager {
       hostSocketDir: this.checks.hostSocketDir ?? null,
       otherHostDirs: otherHosts,
       appKeyFile: this.checks.appKeyFile ?? null,
-      profileDir: this.checks.profileDir ?? null
+      readOnly: this.checks.readOnly ?? []
     })
   }
 

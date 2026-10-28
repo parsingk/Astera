@@ -53,6 +53,7 @@ import { claudeSandboxStart } from '../core/sandbox/claudeStart'
 import { codexExcludesWriter } from '../core/sandbox/gitExcludes'
 import { hostAddress } from '../core/publicContract'
 import { appKeyPath } from '../core/host/hostKey'
+import { appJunctionDir, installRootOf, sandboxReadOnly, updaterCacheDir } from '../core/sandbox/locations'
 import { HOST_PROTOCOL } from '../core/host/protocol'
 import { createManagedHooksCheck } from '../core/sessions/managedHooks'
 import { codexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
@@ -251,6 +252,17 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   // Enforce's hook on Windows when the capture scripts are left a bare node (development, or no runtime put in place):
   // a runtime an Astera installed here
   const findRuntime = (): Promise<string | null> => findInstalledHostExe(runtimeBase)
+  // What a sandboxed session keeps read-only on every OS (Task E and its fix round 1): the profile folder and every place
+  // the app itself writes code or an installer to and runs unsandboxed — the Windows Host runtime it lays down
+  // (runtimeBase), electron-updater's download cache, the installed app's own folder (from its executable) and the
+  // Windows session-`.cmd` junction. One list, for the Claude twins and both managers.
+  const readOnly = sandboxReadOnly({
+    profileDir: userDataDir,
+    hostRuntimeBase: runtimeBase,
+    updaterCache: updaterCacheDir(process.platform, process.env, os.homedir()),
+    installRoot: installRootOf(app.getPath('exe'), process.platform),
+    appJunction: appJunctionDir(process.platform, process.env, os.homedir())
+  })
   const statusLine = new StatusLineManager(
     userDataDir,
     process.platform !== 'win32'
@@ -264,7 +276,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
           })) ?? 'node')
         : 'node',
     undefined,
-    { findRuntime }
+    { findRuntime, readOnly }
   )
   await statusLine.init()
   // One factory for the app's life. Slice 2's Host-backed one is attached to it by registerIpc once
@@ -303,8 +315,8 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     // Mode writes the crops whose paths it sends. previewShotsDir is the same path capture.ts writes.
     [previewShotsDir(userDataDir)],
     process.env,
-    // The profile folder itself, which a sandboxed Codex session keeps read-only (Task E)
-    { ...defaultSpawnChecks(sessionsLog), hostSocketDir, appKeyFile, profileDir: userDataDir, codexExcludes }
+    // The folders a sandboxed Codex session keeps read-only (Task E and its fix round 1)
+    { ...defaultSpawnChecks(sessionsLog), hostSocketDir, appKeyFile, readOnly, codexExcludes }
   )
   // Shared extensions (Agent Control Plane release 1 design §4.5). The two managers read the same cache:
   // a chat roll's respawn is prepared through `sessions.prepare`, which refreshes the target account
@@ -386,7 +398,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     claudeSandbox,
     hostSocketDir,
     appKeyFile,
-    profileDir: userDataDir,
+    readOnly,
     codexVersion: cliVersions,
     codexExcludes
   })
