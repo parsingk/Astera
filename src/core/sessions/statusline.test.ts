@@ -2,9 +2,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { existsSync, promises as fs, watch } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import type { Account } from '../types'
-import { SANDBOX_SCOPES_KEPT, StatusLineManager, captureCommand, enforceCommand, enforceInterpreter, ENFORCE_HOOK_FILE, type SandboxScope } from './statusline'
+import { SANDBOX_SCOPES_KEPT, SANDBOX_TWINS_DIR, StatusLineManager, captureCommand, enforceCommand, enforceInterpreter, ENFORCE_HOOK_FILE, pruneSandboxTwins, type SandboxScope } from './statusline'
 import enforceHookSource from 'virtual:astera-enforce-hook'
 import { codexEnforceArgs } from './codexEnforce'
 import { dirIdentity } from '../files/watchedDir'
@@ -1147,5 +1148,107 @@ describe('StatusLineManager sandbox', () => {
     const c = mgr.spawnConfig('s1', account, { sandbox: scope })
     expect(c.sandboxed).toBe(true)
     expect(await read(c.settingsFile)).toContain('/usr/local/bin/node')
+  })
+})
+
+// Sandbox follow-ups, item 3: `<profile>/sandbox-settings/<hash>/` folders were never removed. A Host's start removes the
+// ones not written for 30 days that no live session uses, and nothing else: each sandboxed start stamps its folder, so a
+// folder still started from is never old.
+describe('pruneSandboxTwins', () => {
+  let profile: string
+  let outside: string
+  beforeEach(async () => {
+    profile = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-sl-prune-'))
+    outside = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-sl-prune-outside-'))
+  })
+  afterEach(async () => {
+    await fs.rm(profile, { recursive: true, force: true })
+    await fs.rm(outside, { recursive: true, force: true })
+  })
+  const DAY = 24 * 60 * 60 * 1000
+  const NOW = Date.now()
+  const twins = (): string => path.join(profile, SANDBOX_TWINS_DIR)
+  /** A twins folder as the manager writes one, its folder and files last written `age` ago. */
+  const folder = async (name: string, age: number, files: Record<string, string> = { 'astera-settings-sandbox.json': '{}', 'astera-sandbox-chat-settings.json': '{}' }): Promise<string> => {
+    const dir = path.join(twins(), name)
+    await fs.mkdir(dir, { recursive: true })
+    const at = new Date(NOW - age)
+    for (const [f, text] of Object.entries(files)) {
+      await fs.writeFile(path.join(dir, f), text)
+      await fs.utimes(path.join(dir, f), at, at)
+    }
+    await fs.utimes(dir, at, at)
+    return dir
+  }
+  const present = async (p: string): Promise<boolean> => fs.lstat(p).then(() => true, () => false)
+
+  it('removes the folders not written for 30 days, and keeps a fresher one and one a live session uses', async () => {
+    const old = await folder('0123456789abcdef', 31 * DAY)
+    const fresh = await folder('fedcba9876543210', 29 * DAY)
+    const used = await folder('00000000aaaaaaaa', 40 * DAY)
+    expect(await pruneSandboxTwins({ profileDir: profile, now: NOW, inUse: new Set(['00000000aaaaaaaa']) })).toEqual(['0123456789abcdef'])
+    expect(await present(old)).toBe(false)
+    expect(await present(fresh)).toBe(true)
+    expect(await present(used)).toBe(true)
+    expect(await present(twins())).toBe(true)
+  })
+
+  it('counts the newest write in a folder, its own stamp or any twin’s', async () => {
+    const dir = await folder('0123456789abcdef', 45 * DAY)
+    const recent = new Date(NOW - DAY)
+    await fs.utimes(path.join(dir, 'astera-settings-sandbox.json'), recent, recent)
+    expect(await pruneSandboxTwins({ profileDir: profile, now: NOW, inUse: new Set() })).toEqual([])
+    expect(await present(dir)).toBe(true)
+  })
+
+  it('never touches anything else: other names, files, a folder holding anything but twins, a link, the profile', async () => {
+    const odd = await folder('notes', 60 * DAY)
+    const mixed = await folder('1111111111111111', 60 * DAY, { 'astera-settings-sandbox.json': '{}', 'keep.txt': 'mine' })
+    const nested = await folder('2222222222222222', 60 * DAY)
+    await fs.mkdir(path.join(nested, 'inner'))
+    const aFile = path.join(twins(), '3333333333333333')
+    await fs.writeFile(aFile, 'not a folder')
+    const old = new Date(NOW - 60 * DAY)
+    await fs.utimes(aFile, old, old)
+    // A link named as a twins folder, to a folder elsewhere holding a twin-looking file: neither is followed nor removed
+    await fs.writeFile(path.join(outside, 'astera-settings-sandbox.json'), '{}')
+    await fs.utimes(path.join(outside, 'astera-settings-sandbox.json'), old, old)
+    await fs.utimes(outside, old, old)
+    const link = path.join(twins(), '4444444444444444')
+    await fs.symlink(outside, link, process.platform === 'win32' ? 'junction' : 'dir')
+    const beside = path.join(profile, 'astera-settings.json')
+    await fs.writeFile(beside, '{}')
+    expect(await pruneSandboxTwins({ profileDir: profile, now: NOW, inUse: new Set() })).toEqual([])
+    for (const p of [odd, mixed, path.join(mixed, 'keep.txt'), nested, path.join(nested, 'inner'), aFile, link, beside, path.join(outside, 'astera-settings-sandbox.json')])
+      expect(await present(p), p).toBe(true)
+  })
+
+  it('does nothing, and says nothing, with no twins folder at all', async () => {
+    expect(await pruneSandboxTwins({ profileDir: path.join(profile, 'none'), now: NOW, inUse: new Set() })).toEqual([])
+  })
+
+  // What keeps a folder still started from: ensureSandboxFiles stamps it even when every twin already held what it would
+  // write (writeScript writes nothing then)
+  it('a sandboxed start stamps its folder, so a folder still in use is never old', async () => {
+    const mgr = new StatusLineManager(profile, 'node', () => {}, { platform: 'linux', execPath: '/opt/astera/astera', homeDir: '/home/t', tmpDir: '/tmp' })
+    await mgr.init()
+    const scope: SandboxScope = { layout: null, env: {} }
+    expect(await mgr.ensureSandboxFiles(scope)).toBe('ok')
+    const dir = path.dirname(mgr.spawnConfig('s1', account, { sandbox: scope }).settingsFile.replace(/\//g, path.sep))
+    const old = new Date(NOW - 40 * DAY)
+    await fs.utimes(dir, old, old)
+    for (const f of await fs.readdir(dir)) await fs.utimes(path.join(dir, f), old, old)
+    expect(await mgr.ensureSandboxFiles(scope)).toBe('ok')
+    expect((await fs.stat(dir)).mtimeMs).toBeGreaterThan(NOW - DAY)
+    expect(await pruneSandboxTwins({ profileDir: profile, now: NOW, inUse: new Set() })).toEqual([])
+    expect(await present(dir)).toBe(true)
+  })
+
+  // At the Host's start (host/index.ts), before it binds, so no session it starts can have its folder pruned under it
+  it('runs at the Host’s start, before any session can open', async () => {
+    const src = await fs.readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'host', 'index.ts'), 'utf8')
+    expect(src).toMatch(/await pruneSandboxTwins\(\{ profileDir, now: Date\.now\(\), inUse: /)
+    expect(src.indexOf('await pruneSandboxTwins(')).toBeGreaterThan(-1)
+    expect(src.indexOf('await pruneSandboxTwins(')).toBeLessThan(src.indexOf('server = await startHostServer({'))
   })
 })

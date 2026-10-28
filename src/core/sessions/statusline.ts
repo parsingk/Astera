@@ -48,6 +48,59 @@ export const SANDBOX_SCOPES_KEPT = 32
 /** The folder the twins go in, one folder per scope under it, named by a hash of what the scope's sandbox holds. */
 export const SANDBOX_TWINS_DIR = 'sandbox-settings'
 
+/** How long a scope's twins folder may go unwritten before a Host's start removes it (pruneSandboxTwins). */
+export const SANDBOX_TWINS_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
+
+/** A scope's twins folder's name: sandboxKeyOf's 16 hex. */
+const TWINS_FOLDER = /^[0-9a-f]{16}$/
+
+/**
+ * Removes the scopes' twins folders (`<profile>/sandbox-settings/<hash>/`) not written for `maxAgeMs` that no live
+ * session uses (`inUse`, by folder name), and returns the names removed (sandbox follow-ups, item 3). Written means the
+ * newest of the folder's own time, which every sandboxed start stamps (writeTwinsOf), and its twins'. **Nothing else is
+ * touched**: only a real folder (not a link) whose name is a scope's hash, holding nothing but twins (`.json` files),
+ * each removed by name and then the empty folder; any other entry keeps the whole folder. Never throws.
+ */
+export async function pruneSandboxTwins(o: {
+  profileDir: string
+  now: number
+  inUse: ReadonlySet<string>
+  maxAgeMs?: number
+  log?: (m: string) => void
+}): Promise<string[]> {
+  const root = path.join(o.profileDir, SANDBOX_TWINS_DIR)
+  const maxAge = o.maxAgeMs ?? SANDBOX_TWINS_MAX_AGE_MS
+  let names: string[]
+  try {
+    names = await fs.readdir(root)
+  } catch {
+    return []
+  }
+  const removed: string[] = []
+  for (const name of names.sort()) {
+    if (!TWINS_FOLDER.test(name) || o.inUse.has(name)) continue
+    const dir = path.join(root, name)
+    try {
+      const st = await fs.lstat(dir)
+      if (!st.isDirectory() || st.isSymbolicLink()) continue
+      const entries = await fs.readdir(dir, { withFileTypes: true })
+      if (entries.some((e) => !e.isFile() || !e.name.endsWith('.json'))) {
+        o.log?.(`sandbox twins: ${name} holds more than twins — left as it is`)
+        continue
+      }
+      const files = entries.map((e) => path.join(dir, e.name))
+      const written = Math.max(st.mtimeMs, ...(await Promise.all(files.map(async (f) => (await fs.lstat(f)).mtimeMs))))
+      if (o.now - written < maxAge) continue
+      for (const f of files) await fs.unlink(f)
+      await fs.rmdir(dir)
+      removed.push(name)
+    } catch (err) {
+      o.log?.(`sandbox twins: ${name} could not be removed: ${String(err)}`)
+    }
+  }
+  return removed
+}
+
 /** Enforce's hook (enforce design §5), written beside the Rules it reads: the bundle of core/audit/hook/enforceMain.ts. */
 export const ENFORCE_HOOK_FILE = 'astera-enforce-hook.cjs'
 
@@ -774,6 +827,10 @@ export class StatusLineManager {
   private async writeTwinsOf(key: string, part: SandboxPart): Promise<SandboxFilesResult> {
     // A folder that cannot be made fails each write below, which says so
     await fs.mkdir(this.twinsDirOf(key), { recursive: true }).catch(() => {})
+    // Stamped at every prepare, which writes nothing when every twin already holds what it would: a Host's start removes
+    // a folder not written for 30 days (pruneSandboxTwins), and a folder still started from must never read as old
+    const now = new Date()
+    await fs.utimes(this.twinsDirOf(key), now, now).catch(() => {})
     let ok = true
     for (const [file, content] of [...this.variants]) {
       const k = `${key}\u0000${file}`

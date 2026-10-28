@@ -48,6 +48,7 @@ import { controllerRecordsFile, createControllerRegistry } from './controllers'
 import { openSecretStore } from '../core/secrets/secretStore'
 import { randomBytes } from 'node:crypto'
 import { ensureAppKey, ensureHostKey, readAppKeySync } from '../core/host/hostKey'
+import { pruneSandboxTwins } from '../core/sessions/statusline'
 import { completeWindowsPath } from '../core/sessions/windowsPath'
 import { PtyRegistry } from './registry'
 import { createConhostReaper, reapWindowsConsoleHosts } from './conhostReaper'
@@ -1216,6 +1217,11 @@ async function main(): Promise<void> {
     log.write(`could not make the Host key: ${String(err)} — not serving`)
     process.exit(HOST_EXIT.keyFailure)
   }
+  // Sandbox follow-ups, item 3: the sandbox twins folders not written for 30 days are removed, before any session this
+  // Host starts. None of this Host's sessions is live yet, and none of an earlier Host's outlived it; the app's own (its
+  // fallback while no Host answers) are what the 30 days keep, since every sandboxed start stamps its folder first.
+  const prunedTwins = await pruneSandboxTwins({ profileDir, now: Date.now(), inUse: new Set<string>(), log: (m) => log.write(m) })
+  if (prunedTwins.length > 0) log.write(`sandbox twins not written for 30 days removed: ${prunedTwins.join(', ')}`)
   // Sandbox follow-ups, item 1: the key the app proves it is the app with. The app makes it before it first talks to a
   // Host; made here too when there is none, before any session this Host starts, so a sandboxed session is denied a
   // file that is there (a deny of a path that does not exist yet holds for nothing on Windows). Not fatal: without it
