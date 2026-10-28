@@ -11,9 +11,9 @@
 // whose session its registry holds as ended. A session the registry never held is skipped (R3): its
 // exit code is unknown here, and the next `store.load` is the conservative place for it.
 //
-// **Keyed by socket number, not by role.** A socket's role comes from its `hello`, and a second
-// `hello` can change it (review M3 of Tasks 6 to 8), so the marks are released by the socket that
-// made them whatever it calls itself now. **Placed by the proven app only** (`ptyHeldBy`): its pty messages are refused
+// **Keyed by socket number, not by role.** A socket's role is not fixed at its `hello`: one that
+// named the app is a CLI until its proof holds (server.ts), so the marks are released by the socket
+// that made them, whatever role it has when it goes. **Placed by the proven app only** (`ptyHeldBy`): its pty messages are refused
 // to every other socket (ptyHost.ts, sandbox follow-ups round 2).
 import { EXIT_DEFER_MS, hostOwnsExit } from '../core/orchestration/exec/exitOwner'
 import type { ClientMessage } from '../core/host/protocol'

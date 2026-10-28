@@ -1270,9 +1270,9 @@ async function main(): Promise<void> {
         // The role rides along: a pty-spawn or proc-spawn is served to the app's own connection only (final fix pass, C2)
         return (handlePty?.(m, send, { socket: from.socket, role: from.role }) ?? false) || (handleProc?.(m, send, { socket: from.socket, role: from.role }) ?? false)
       },
-      // Released by the socket number whatever role the socket gave last: a second `hello` can change
-      // it, and marks made as an app must still go when that socket closes. A socket that never held a
-      // pty, which is every CLI call, runs no sweep (exits.ts).
+      // Released by the socket number, whatever role the socket has when it closes: one that named the
+      // app is a CLI until its proof holds, and marks made as the app must still go when that socket
+      // closes. A socket that never held a pty, which is every CLI call, runs no sweep (exits.ts).
       onClientGone: (from) => {
         exits?.appGone(from.socket)
         // Phase 8 (N2): what this socket paused is resumed, so a dead app does not leave a pty frozen.

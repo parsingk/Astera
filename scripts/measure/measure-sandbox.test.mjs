@@ -47,13 +47,12 @@ import {
   whoamiArgv,
   withoutNpmRunEnv
 } from './s2.mjs'
-import { codexSandboxArgs } from '../../src/core/sandbox/codexProfile'
+import { codexSandboxArgs, npmCacheOf } from '../../src/core/sandbox/codexProfile'
 import { claudeSandboxSettings } from '../../src/core/sandbox/claudeSettings'
 import { credentialStoreDenies, hostSocketDenies, sensitiveLocations } from '../../src/core/sandbox/locations'
 import { gitLayoutOf } from '../../src/core/sandbox/gitLayout'
 import { sessionSandboxArgs } from '../../src/core/sandbox/prepared'
 import { StatusLineManager } from '../../src/core/sessions/statusline'
-import { npmCacheOf } from '../../src/core/sandbox/codexProfile'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 

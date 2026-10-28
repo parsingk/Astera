@@ -5,8 +5,9 @@ import { HOST_FEATURE_PTY_SEQ, type ClientMessage, type HostMessage } from '../c
 import type { PtyRegistry } from './registry'
 import { ENDED_WITHOUT_A_CODE } from './exits'
 
-/** Which connection a message came from, as host/index.ts passes it: the socket's number and the role its hello named
- *  (server.ts `outwardRole`: a hello with no role reads as `'cli'`). */
+/** Which connection a message came from, as host/index.ts passes it: the socket's number and its role as the server
+ *  holds it (server.ts `outwardRole`: `'app'` only once the socket proved it is the app, `'cli'` for a hello with no
+ *  role). */
 export interface HandlerFrom {
   socket: number
   role: 'app' | 'cli' | 'mcp'

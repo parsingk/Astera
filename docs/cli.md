@@ -2145,13 +2145,13 @@ The boundary is your machine and your operating system account.
   ends with `PERMISSION_DENIED` (exit 5).
 - The app proves it is the app. Only the app's own connection may have the Host start a program, list,
   read back, type into, resize, pause or end a terminal or a chat process directly, is asked to do what
-  only the app can, and counts as you in a Job's records. `astera sessions` reads and types through
-  the commands instead, under their own rules. So the app keeps a second
-  random key, `host/app.key`, beside the Host key, and answers a challenge the Host makes for each of
-  its connections with a proof made from it, once. Until that proof holds, and after a wrong one, the
+  only the app can, and counts as you in a Job's records. So the app keeps a second random key,
+  `host/app.key`, beside the Host key, and answers a challenge the Host makes for each of its
+  connections with a proof made from it, once. Until that proof holds, and after a wrong one, the
   Host serves the connection as a CLI and keeps it open, and both sides write why in their logs. A
   sandboxed session may not read `app.key`; it may read `host.key`, which the `astera` inside it
-  checks the Host's proof with.
+  checks the Host's proof with. `astera sessions` reads and types through the commands instead,
+  under their own rules.
 - There is no bearer token and no connection file. What used to be a bearer token on a loopback
   HTTP port was removed with the server it protected. The Host key above is not a token: nothing
   presents it, and a process that can read it is already running as you.

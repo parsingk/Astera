@@ -186,9 +186,9 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
 
     ctx.server = await loopbackServer()
     ctx.base = envFor(ctx.server.port)
-    // A profile's app key, there as the app makes it, which the Codex sets deny on every OS as a session's start does
-    // (sandbox follow-ups, item 1)
-    const hostProfile = path.join(ctx.scratch, 'codex-host-profile')
+    // A profile's app key, there as the app makes it, which the Codex and Claude sets deny on every OS as a session's
+    // start does (sandbox follow-ups, item 1 and round 2)
+    const hostProfile = path.join(ctx.scratch, 'host-profile')
     await ensureAppKey(hostProfile)
     ctx.appKeyFile = appKeyPath(hostProfile)
     if (!WIN) {
