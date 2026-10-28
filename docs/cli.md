@@ -1389,6 +1389,11 @@ or Codex, and each chat session. A session's id is the one `ASTERA_SESSION` hold
 - `provider`, `claude` or `codex`, the session's account's agent. It is left out when the account is gone.
 - `rolledFrom`, the id of the session this one replaced when its account was rolled over. Follow it to
   find the conversation that came before.
+- `sandboxed: true` and `sandboxKind`, when the session runs in its agent CLI's own sandbox (its agent
+  profile's sandbox switch, or a sandboxed session asked for it). `sandboxKind` is `sandbox`, the CLI's
+  own sandbox, or `deny-only`: Claude Code on Windows has none, so only its file tools are kept from the
+  denied places and its shell is not restricted. Both are left out for a session outside the sandbox.
+  `--human` prints them as a column before the title: `sandbox`, `deny-only`, or `-`.
 - `sources`, where the Host reads each fact of the session: `status`, `prompt`, `usage` and
   `conversation`. Each is `hooks`, `statusline`, `rollout`, `transcript` or `chat`, or `none` when that
   agent and kind give the Host no way to read it. A fact with no source is reported unknown, never idle.

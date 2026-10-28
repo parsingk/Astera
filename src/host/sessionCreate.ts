@@ -85,6 +85,7 @@ export function createHostSessionStarter(d: {
       ...(procId ? { procId } : {}),
       ...(provider ? { provider } : {}),
       ...(info.agentProfileId !== undefined ? { agentProfileId: info.agentProfileId } : {}),
+      ...(info.sandboxed ? { sandboxed: true as const, ...(info.sandboxKind ? { sandboxKind: info.sandboxKind } : {}) } : {}),
       sources: sourcesOf(kind, provider)
     }
   }

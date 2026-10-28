@@ -542,15 +542,28 @@ describe('humanFor', () => {
     )
   })
 
-  it('sessions list 는 살았는지·하는 일·id·종류·제목이다', () => {
+  // The protection column: `sandbox` (the CLI's own sandbox), `deny-only` (Claude Code on Windows), `sandboxed` for a kind
+  // this build does not name, and `-` for a session outside the sandbox
+  it('sessions list 는 살았는지·하는 일·id·종류·보호·제목이다', () => {
     expect(
       humanFor('sessions-list', {
         sessions: [
           { id: 's1', kind: 'terminal', title: 'repo', alive: true, state: 'working' },
-          { id: 's2', kind: 'chat', title: '대화', alive: false, state: 'unknown' }
+          { id: 's2', kind: 'chat', title: '대화', alive: false, state: 'unknown' },
+          { id: 's3', kind: 'terminal', title: 'box', alive: true, state: 'unknown', sandboxed: true, sandboxKind: 'sandbox' },
+          { id: 's4', kind: 'chat', title: 'deny', alive: true, state: 'unknown', sandboxed: true, sandboxKind: 'deny-only' },
+          { id: 's5', kind: 'chat', title: 'old', alive: true, state: 'unknown', sandboxed: true }
         ]
       })
-    ).toBe(['ALIVE  working  s1  terminal  repo', 'ENDED  unknown  s2  chat      대화'].join('\n'))
+    ).toBe(
+      [
+        'ALIVE  working  s1  terminal  -          repo',
+        'ENDED  unknown  s2  chat      -          대화',
+        'ALIVE  unknown  s3  terminal  sandbox    box',
+        'ALIVE  unknown  s4  chat      deny-only  deny',
+        'ALIVE  unknown  s5  chat      sandboxed  old'
+      ].join('\n')
+    )
   })
 
   // 읽으라고 부른 것이므로 화면 그대로다 — 표로 싸면 사람이 읽으려던 것을 가린다.

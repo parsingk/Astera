@@ -414,6 +414,16 @@ describe('publicFor', () => {
     expect(publicFor('sessions-create', row)).toMatchObject({ agentProfileId: 'ap_1' })
   })
 
+  // A session in its agent CLI's sandbox says so, and what protection it is: `sandbox`, or `deny-only` for Claude Code on
+  // Windows, whose shell is not restricted
+  it('keeps whether a session is sandboxed, and how', () => {
+    const row = { id: 's1', kind: 'chat', title: 't', accountId: 'a', cwd: 'D:/p', alive: true, state: 'unknown', sandboxed: true, sandboxKind: 'deny-only', procId: 'p' }
+    expect(publicFor('sessions-list', [row])).toEqual([
+      { id: 's1', kind: 'chat', title: 't', accountId: 'a', cwd: 'D:/p', alive: true, state: 'unknown', sandboxed: true, sandboxKind: 'deny-only' }
+    ])
+    expect(publicFor('sessions-create', row)).toMatchObject({ sandboxed: true, sandboxKind: 'deny-only' })
+  })
+
   it('객체가 아닌 것은 그대로 둔다', () => {
     expect(publicFor('jobs-list', [])).toEqual([])
     expect(publicFor('questions-get', null)).toBe(null)

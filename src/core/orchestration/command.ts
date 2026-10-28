@@ -119,7 +119,7 @@ import { isTerminal as taskFinished, outcomeOf, progressOf } from './view'
 import { runningRunCount, withoutSupersededLifecycle } from './running'
 import { FINISHED_RUN_GRACE_MS } from './exec/dispatchLoop'
 import { appDriven } from './schedule'
-import type { JobEvent, WorktreeInfo } from '../types'
+import type { JobEvent, SandboxKind, WorktreeInfo } from '../types'
 import { ghFailureSentence, type GhFailed, type GhRunner } from '../github/gh'
 import { ciRunHead, failedLogTail, readPrChecks, rerunFailed } from '../github/checks'
 import { ghRepoArg, repoOfBinding, type GitHubRepo } from '../github/remote'
@@ -205,6 +205,11 @@ export interface HostSession {
   rolledFrom?: string
   /** The agent profile it was started from, by its id (the note's `restore.agentProfileId`, Agent Profiles design §6). */
   agentProfileId?: string
+  /** It runs in its agent CLI's own sandbox (the note's `restore.sandboxed`, SessionInfo.sandboxed); absent outside it. */
+  sandboxed?: true
+  /** What protection that is (SessionInfo.sandboxKind): `sandbox`, the CLI's own, or `deny-only`, Claude Code on Windows,
+   *  whose shell is not restricted. Absent when not sandboxed, or for a kind this build does not know. */
+  sandboxKind?: SandboxKind
   /** Where the Host reads each fact of this session from (X1-06); `none` means the Host cannot say, and the fact is
    *  shown as unknown, never as idle. */
   sources?: SessionSources

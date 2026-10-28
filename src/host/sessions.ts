@@ -34,7 +34,7 @@ import { hookEventAt } from '../core/hooks/eventTime'
 import type { PtyEntry } from '../core/host/protocol'
 import type { Account } from '../core/types'
 import { ptyDriver } from '../core/sessions/sessionDriver'
-import { agentProfileIdOf } from '../core/sessions/noteInfo'
+import { agentProfileIdOf, sandboxedOf } from '../core/sessions/noteInfo'
 import { readChatTurns, type ChatTurn } from '../core/sessions/chatRead'
 import { findClaudeTranscript } from '../core/history/strategies/claude'
 import { encodeUserTurn } from '../core/chat/claudeProtocol'
@@ -111,6 +111,8 @@ const rowOf = (e: PtyEntry, kind: HostSession['kind'], state: SessionState, prov
     ...(provider ? { provider } : {}),
     ...(rolledFrom !== null ? { rolledFrom } : {}),
     ...(agentProfileId !== undefined ? { agentProfileId } : {}),
+    // In its CLI's sandbox, and what protection that is, read by the rule the app reads the note by
+    ...sandboxedOf(restore),
     sources: sourcesOf(kind, provider)
   }
 }

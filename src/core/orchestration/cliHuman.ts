@@ -572,6 +572,8 @@ export function humanFor(
       return columns(
         asList(data, 'runConfigs').map((c) => [str(c.id), str(c.type), str(c.name)])
       )
+    // The protection a session has: its CLI's own sandbox (`sandbox`), Claude Code's deny rules on Windows (`deny-only`),
+    // `sandboxed` for a kind this build does not name, `-` outside the sandbox
     case 'sessions-list':
       return columns(
         asList(data, 'sessions').map((x) => [
@@ -579,6 +581,7 @@ export function humanFor(
           str(x.state),
           str(x.id),
           str(x.kind),
+          x.sandboxed === true ? (typeof x.sandboxKind === 'string' ? x.sandboxKind : 'sandboxed') : '-',
           str(x.title)
         ])
       )

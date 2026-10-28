@@ -282,6 +282,23 @@ describe('createHostSessionStarter — with an agent profile', () => {
     expect(refusing.chats.spawn).not.toHaveBeenCalled()
   })
 
+  // The answer is the row `sessions list` will show, the mark of the sandbox and its kind with it, before it is listed
+  it('a sandboxed session’s answer says it is sandboxed and how, before it is listed', async () => {
+    const h = rig({ list: async () => [] })
+    h.spawner.createSession.mockImplementationOnce(
+      async (o: { accountId: string; cwd: string }) =>
+        ({ id: 'term_s', accountId: o.accountId, cwd: o.cwd, title: 'p', status: 'running', sandboxed: true, sandboxKind: 'sandbox' }) as SessionInfo
+    )
+    expect(await h.start({ kind: 'terminal', accountId: 'acc_c', cwd: '/repo', rollAccountIds: [], sandbox: true })).toMatchObject({
+      id: 'term_s',
+      sandboxed: true,
+      sandboxKind: 'sandbox'
+    })
+    const plain = await h.start({ kind: 'terminal', accountId: 'acc_c', cwd: '/repo', rollAccountIds: [] })
+    expect(plain).not.toHaveProperty('sandboxed')
+    expect(plain).not.toHaveProperty('sandboxKind')
+  })
+
   it('a terminal session hands the profile to the spawner, which resolves it', async () => {
     const h = rig()
     await h.start({ kind: 'terminal', accountId: 'acc_c', cwd: '/repo', rollAccountIds: [], agentProfileId: 'ap_b' })
