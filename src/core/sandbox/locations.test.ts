@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest'
-import { credentialStoreDenies, hostSocketDenies, sensitiveLocations } from './locations'
+import { afterEach, describe, expect, it } from 'vitest'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { credentialStoreDenies, hostSocketDenies, otherHostFolders, sensitiveLocations } from './locations'
 
 describe('sandbox locations', () => {
   it('lists E6 on every OS, with gh and gcloud where each OS keeps them', () => {
@@ -40,5 +43,45 @@ describe('sandbox locations', () => {
     expect(hostSocketDenies('darwin', '/Users/a/tmp/astera-host-k-v4')).toEqual(['/Users/a/tmp/astera-host-k-v4'])
     expect(hostSocketDenies('win32', null)).toEqual([])
     expect(hostSocketDenies('linux', null)).toEqual([])
+  })
+  // Final fix pass, part 2 (B): the other Hosts' folders found beside this one are named too, each in both macOS
+  // spellings, once each
+  it('names every other Host folder it is given beside this one', () => {
+    expect(hostSocketDenies('linux', '/tmp/astera-host-aaaaaaaaaaaa-v4', ['/tmp/astera-host-bbbbbbbbbbbb-v4', '/tmp/astera-host-aaaaaaaaaaaa-v4'])).toEqual([
+      '/tmp/astera-host-aaaaaaaaaaaa-v4',
+      '/tmp/astera-host-bbbbbbbbbbbb-v4'
+    ])
+    expect(hostSocketDenies('darwin', '/var/folders/x/T/astera-host-a-v4', ['/var/folders/x/T/astera-host-b-v4'])).toEqual([
+      '/var/folders/x/T/astera-host-a-v4',
+      '/private/var/folders/x/T/astera-host-a-v4',
+      '/var/folders/x/T/astera-host-b-v4',
+      '/private/var/folders/x/T/astera-host-b-v4'
+    ])
+    expect(hostSocketDenies('win32', null, [])).toEqual([])
+  })
+})
+
+// Final fix pass, part 2 (B): every Host's socket folder in the folder this profile's is in, another profile's Host such
+// as the dev app's beside the installed app's, read once when a sandboxed Codex session starts
+describe('the other Hosts beside this one', () => {
+  const dirs: string[] = []
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
+  const slashed = (p: string): string => p.replace(/\\/g, '/')
+
+  it('lists every other astera-host- folder there, and no other folder', async () => {
+    const parent = mkdtempSync(path.join(os.tmpdir(), 'astera-hosts-'))
+    dirs.push(parent)
+    const own = path.join(parent, 'astera-host-aaaaaaaaaaaa-v4')
+    const dev = path.join(parent, 'astera-host-bbbbbbbbbbbb-v4')
+    for (const d of [own, dev, path.join(parent, 'unrelated')]) mkdirSync(d)
+    expect(await otherHostFolders('linux', own)).toEqual([slashed(dev)])
+    expect(await otherHostFolders('darwin', `${slashed(own)}/`)).toEqual([slashed(dev)])
+    // No folder on Windows (the Host listens on a named pipe), nor without this Host's own
+    expect(await otherHostFolders('win32', own)).toEqual([])
+    expect(await otherHostFolders('linux', null)).toEqual([])
+    // A folder that cannot be listed names none
+    expect(await otherHostFolders('linux', path.join(parent, 'gone', 'astera-host-cccccccccccc-v4'))).toEqual([])
   })
 })

@@ -286,7 +286,7 @@ export class SessionManager {
    *  keeps the layout beside the confirmed folders (prepareCodexSandbox, core/sandbox/prepared.ts, says what is checked
    *  and written, and in which order). */
   private async prepareSandbox(account: Account, cwd: string, chat: boolean): Promise<void> {
-    const layout = await prepareCodexSandbox({
+    const prepared = await prepareCodexSandbox({
       accountId: account.id,
       cwd,
       platform: this.checks.platform,
@@ -304,7 +304,8 @@ export class SessionManager {
         : { check: (sandboxArgs: string[]) => fitsOnTheLine(this.checks.platform, descriptorOf(this.descriptors, account).buildCommand({ sandboxArgs })) }),
       log: this.checks.log
     })
-    this.sandboxLayouts.keep(account.id, cwd, layout, this.checks.now())
+    // The other Hosts' folders beside this one's, as they were now, kept for the spawn's profile (final fix pass, part 2, B)
+    this.sandboxLayouts.keep(account.id, cwd, prepared.layout, this.checks.now(), prepared.otherHosts)
   }
 
   private cwdConfirmed(cwd: string): boolean {
@@ -455,7 +456,9 @@ export class SessionManager {
     if (this.hiding) applyHiding(env, this.hiding.get(opts.cwd, id), this.checks.platform)
     // The sandbox's profile: the places it may not read come from the environment the session actually starts with (its
     // APPDATA, its session bus), so they are read after the hiding above
-    const sandboxArgs = sandboxedCodex ? this.codexSandboxArgsFor(layout, env) : undefined
+    const sandboxArgs = sandboxedCodex
+      ? this.codexSandboxArgsFor(layout, env, this.sandboxLayouts.otherHostsOf(opts.account.id, opts.cwd, this.checks.now()))
+      : undefined
     // Shared extensions: their environment values only here, in this process's environment (design D5). The workload
     // token goes to every session, shared servers or not.
     Object.assign(env, caps?.env ?? {}, gatewayTokenEnv(caps ?? { gatewayGrant: [] }))
@@ -602,9 +605,16 @@ export class SessionManager {
   }
 
   /** A sandboxed Codex session's `-a never` and permission profile (sessionSandboxArgs, core/sandbox/prepared.ts), with a
-   *  win32 path cmd.exe cannot carry refused. */
-  private codexSandboxArgsFor(layout: GitLayout | null, env: Record<string, string | undefined>): string[] {
-    return sessionSandboxArgs({ platform: this.checks.platform, homeDir: this.homeDir, layout, env, hostSocketDir: this.checks.hostSocketDir ?? null })
+   *  win32 path cmd.exe cannot carry refused; `otherHosts` are the other Hosts' folders its prepare found. */
+  private codexSandboxArgsFor(layout: GitLayout | null, env: Record<string, string | undefined>, otherHosts: readonly string[]): string[] {
+    return sessionSandboxArgs({
+      platform: this.checks.platform,
+      homeDir: this.homeDir,
+      layout,
+      env,
+      hostSocketDir: this.checks.hostSocketDir ?? null,
+      otherHostDirs: otherHosts
+    })
   }
 
   /** The bookkeeping half of a spawn: the live record, the two callbacks and the backpressure

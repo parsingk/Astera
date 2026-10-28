@@ -4,7 +4,7 @@
 // for the spawn. A roll prepares a chat chain's respawn through the terminal manager's prepare, as it refreshes the
 // capability cache both managers read, so the two managers of a process hold one PreparedLayouts.
 import { ensureGitFiles, ensureWorktreeConfigFiles, gitLayoutOf, type GitLayout } from './gitLayout'
-import { credentialStoreDenies, hostSocketDenies, sensitiveLocations } from './locations'
+import { credentialStoreDenies, hostSocketDenies, otherHostFolders, sensitiveLocations } from './locations'
 import { codexSandboxArgs } from './codexProfile'
 import { SANDBOX_UNAVAILABLE, sandboxUnavailable } from './unavailable'
 import type { Readiness } from './windowsReadiness'
@@ -45,13 +45,20 @@ export const PREPARED_MS = 60_000
 export type CodexWindowsReady = (a: { codexHome: string | null; env: Record<string, string | undefined>; log?: (m: string) => void }) => Promise<Readiness>
 
 /** The layouts sandboxed prepares read, by account and folder: readiness is the account's, so one account's prepare never
- *  lets another account's spawn through in the same folder. */
+ *  lets another account's spawn through in the same folder. A Codex prepare keeps beside its layout the other Hosts'
+ *  folders it found (otherHostFolders), so its spawn denies what was there at the start (final fix pass, part 2, B). */
 export class PreparedLayouts {
-  private entries = new Map<string, { layout: GitLayout | null; at: number }>()
+  private entries = new Map<string, { layout: GitLayout | null; otherHosts: readonly string[]; at: number }>()
 
-  keep(accountId: string, cwd: string, layout: GitLayout | null, now: number): void {
+  keep(accountId: string, cwd: string, layout: GitLayout | null, now: number, otherHosts: readonly string[] = []): void {
     for (const [k, v] of this.entries) if (now - v.at >= PREPARED_MS) this.entries.delete(k)
-    this.entries.set(keyOf(accountId, cwd), { layout, at: now })
+    this.entries.set(keyOf(accountId, cwd), { layout, otherHosts, at: now })
+  }
+
+  /** The other Hosts' folders the prepare kept for this account and folder within PREPARED_MS; none when it kept none. */
+  otherHostsOf(accountId: string, cwd: string, now: number): readonly string[] {
+    const e = this.entries.get(keyOf(accountId, cwd))
+    return e && now - e.at < PREPARED_MS ? e.otherHosts : []
   }
 
   /** The layout a prepare kept for this account and folder within PREPARED_MS (null outside a repository), or undefined
@@ -66,7 +73,8 @@ const keyOf = (accountId: string, cwd: string): string => `${accountId}\u0000${c
 
 /** A sandboxed Codex session's `-a never` and permission profile: its repository's git directories writable, the E6
  *  list and the OS credential store denied, read from the session's own environment and home, and on macOS and Linux
- *  the folder the Host's socket is in (`hostSocketDir`, hostSocketDenies). On Windows the launch goes through cmd.exe,
+ *  the folder the Host's socket is in (`hostSocketDir`, hostSocketDenies) and every other Host's folder its prepare found
+ *  beside it (`otherHostDirs`, otherHostFolders). On Windows the launch goes through cmd.exe,
  *  which would break on a path holding one of its characters, so such a start is refused instead of launched broken
  *  (Review Focus 2). */
 export function sessionSandboxArgs(o: {
@@ -75,14 +83,27 @@ export function sessionSandboxArgs(o: {
   layout: GitLayout | null
   env: Record<string, string | undefined>
   hostSocketDir?: string | null
+  /** The other Hosts' socket folders beside `hostSocketDir`, as the prepare found them (PreparedLayouts.otherHostsOf). */
+  otherHostDirs?: readonly string[]
 }): string[] {
   const { platform, homeDir, layout, env } = o
-  const denied = [...sensitiveLocations(platform, env, homeDir), ...credentialStoreDenies(platform, env, homeDir), ...hostSocketDenies(platform, o.hostSocketDir ?? null)]
+  const denied = [
+    ...sensitiveLocations(platform, env, homeDir),
+    ...credentialStoreDenies(platform, env, homeDir),
+    ...hostSocketDenies(platform, o.hostSocketDir ?? null, o.otherHostDirs ?? [])
+  ]
   if (platform === 'win32') {
     const named = [...(layout ? [layout.top, layout.gitDir, layout.commonDir, ...layout.worktreeConfigs] : []), ...denied]
     if (named.some((p) => LAUNCH_FORBIDDEN.test(p))) throw sandboxUnavailable('path-unsafe')
   }
   return codexSandboxArgs({ platform, layout, denied })
+}
+
+/** What a sandboxed Codex prepare hands its caller to keep for the spawn (PreparedLayouts.keep): the folder's git layout
+ *  (null outside a repository) and the other Hosts' socket folders found beside this profile's. */
+export interface PreparedCodex {
+  layout: GitLayout | null
+  otherHosts: string[]
 }
 
 /**
@@ -96,7 +117,10 @@ export function sessionSandboxArgs(o: {
  * C1); and on Windows only, every `config.worktree` git may read is made first: the profile keeps them read-only, but
  * Codex's Windows sandbox creates one that is missing, and git would read a `core.hooksPath` from it (gitLayout.ts); on
  * macOS and Linux a read entry already keeps a missing one from being created. A layout that cannot be read or prepared
- * refuses the start (`git-layout`), since the profile could not name what it must (E5).
+ * refuses the start (`git-layout`), since the profile could not name what it must (E5). On macOS and Linux the folder the
+ * Host's socket is in is listed once here for the other Hosts' folders beside it (otherHostFolders), which the caller
+ * keeps with the layout for the spawn: a Host started after this is not denied to the session (final fix pass, part 2,
+ * B).
  */
 export async function prepareCodexSandbox(o: {
   accountId: string
@@ -106,14 +130,15 @@ export async function prepareCodexSandbox(o: {
   env: Record<string, string | undefined>
   /** Absent, a Windows start is refused: a home nobody asked about would bring up the administrator prompt. */
   ready: CodexWindowsReady | undefined
-  /** The folder the Host's socket is in, denied on macOS and Linux (sessionSandboxArgs). */
+  /** The folder the Host's socket is in, denied on macOS and Linux with every other Host's folder beside it
+   *  (sessionSandboxArgs). */
   hostSocketDir?: string | null
   /** The codex version question (final review I2): asked first, so an old codex is refused before anything is read or
    *  written. Absent, the start is refused as for a version not known. */
   version?: CodexVersionProbe
   check?: (sandboxArgs: string[]) => void
   log: (m: string) => void
-}): Promise<GitLayout | null> {
+}): Promise<PreparedCodex> {
   const fail = (err: unknown): Error => {
     o.log(`sandbox: the git layout of ${o.cwd} could not be read or prepared: ${String(err)}`)
     return sandboxUnavailable('git-layout')
@@ -130,7 +155,8 @@ export async function prepareCodexSandbox(o: {
   } catch (err) {
     throw fail(err)
   }
-  const args = sessionSandboxArgs({ platform: o.platform, homeDir: o.homeDir, layout, env: o.env, hostSocketDir: o.hostSocketDir ?? null })
+  const otherHosts = await otherHostFolders(o.platform, o.hostSocketDir ?? null)
+  const args = sessionSandboxArgs({ platform: o.platform, homeDir: o.homeDir, layout, env: o.env, hostSocketDir: o.hostSocketDir ?? null, otherHostDirs: otherHosts })
   o.check?.(args)
   if (o.platform === 'win32') {
     const verdict: Readiness = o.ready ? await o.ready({ codexHome: o.env.CODEX_HOME ?? null, env: o.env, log: o.log }) : 'not-set-up'
@@ -149,5 +175,5 @@ export async function prepareCodexSandbox(o: {
       throw fail(err)
     }
   }
-  return layout
+  return { layout, otherHosts }
 }

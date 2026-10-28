@@ -1,6 +1,8 @@
 // The places a sandboxed session may not read (sandbox design §6): the sensitive locations of the credentials design's E6
 // list, plus the OS credential stores a CLI's own sandbox does not close by itself. All paths come out absolute with forward
 // slashes, the one form both CLIs' settings and the Codex profile take on every OS.
+import { readdir } from 'node:fs/promises'
+
 const slashed = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '')
 
 /** The E6 list. Windows keeps the GitHub CLI and gcloud under `APPDATA`; the other systems keep them under `~/.config`. */
@@ -41,15 +43,46 @@ export function busSocketOf(env: Record<string, string | undefined>): string | n
 }
 
 /** The folder the Host's socket is in (`hostAddress`'s `dirToPrepare`, macOS and Linux), which a sandboxed Codex session
- *  may not open, so it reaches the Host only through the loopback with its workload token (final fix pass, C2). The
- *  whole folder, not the socket file: the Host key the loopback's proof needs is kept in the profile folder
- *  (`<profile>/host/host.key`), not here, and the folder holds nothing else a session needs. macOS keeps `/var` and `/tmp`
- *  as links into `/private`, so a folder under either is named in both spellings. None on Windows, where the Host
- *  listens on a named pipe, or when `dir` is not known. */
-export function hostSocketDenies(platform: NodeJS.Platform, dir: string | null): string[] {
+ *  may not open, so it reaches the Host only through the loopback with its workload token (final fix pass, C2), and
+ *  every other Host's folder found beside it (`others`, otherHostFolders: another profile's Host, such as the dev app's;
+ *  final fix pass, part 2, B). Whole folders, not the socket files: the Host key the loopback's proof needs is kept in
+ *  the profile folder (`<profile>/host/host.key`), not here, and the folder holds nothing else a session needs. macOS
+ *  keeps `/var` and `/tmp` as links into `/private`, so a folder under either is named in both spellings. Each once.
+ *  None on Windows, where the Host listens on a named pipe, or when `dir` is not known. */
+export function hostSocketDenies(platform: NodeJS.Platform, dir: string | null, others: readonly string[] = []): string[] {
   if (platform === 'win32' || !dir) return []
-  const d = slashed(dir)
-  return platform === 'darwin' && /^\/(?:var|tmp)\//.test(d) ? [d, `/private${d}`] : [d]
+  const spellings = (folder: string): string[] => {
+    const d = slashed(folder)
+    return platform === 'darwin' && /^\/(?:var|tmp)\//.test(d) ? [d, `/private${d}`] : [d]
+  }
+  return [...new Set([dir, ...others].flatMap(spellings))]
+}
+
+/** How every Host's socket folder is named (packages/client/src/address.ts hostAddress): `astera-host-<key>`, with
+ *  `-v<protocol>` after it from protocol 2 on. */
+const HOST_FOLDER = /^astera-host-/
+
+/** Every other Host's socket folder in the folder this profile's (`dir`) is in: each `astera-host-*` folder there but
+ *  `dir` itself, such as the dev app's Host beside the installed app's, or an older protocol's (final fix pass, part 2,
+ *  B). A sandboxed Codex start reads it once, at its prepare, and its spawn denies what was there then
+ *  (hostSocketDenies), so a Host started after that is not denied to the session. Absolute, forward slashes, sorted.
+ *  None on Windows (named pipes), without `dir`, or when the folder cannot be listed. */
+export async function otherHostFolders(platform: NodeJS.Platform, dir: string | null): Promise<string[]> {
+  if (platform === 'win32' || !dir) return []
+  const own = slashed(dir)
+  const cut = own.lastIndexOf('/')
+  if (cut < 0) return []
+  const parent = own.slice(0, cut)
+  const name = own.slice(cut + 1)
+  try {
+    const entries = await readdir(parent === '' ? '/' : parent, { withFileTypes: true })
+    return entries
+      .filter((e) => e.isDirectory() && HOST_FOLDER.test(e.name) && e.name !== name)
+      .map((e) => `${parent}/${e.name}`)
+      .sort()
+  } catch {
+    return []
+  }
 }
 
 /** What a sandbox cannot be trusted to keep closed: the macOS keychain folder and the Linux session bus socket (a process

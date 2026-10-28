@@ -271,7 +271,7 @@ export class ChatSessionManager {
       if (!this.deps.claudeSandbox) throw sandboxUnavailable('not-prepared')
       return this.deps.claudeSandbox.prepare({ accountId: opts.account.id, cwd: opts.cwd, env: this.inheritedEnv(opts.account) })
     }
-    const layout = await prepareCodexSandbox({
+    const prepared = await prepareCodexSandbox({
       accountId: opts.account.id,
       cwd: opts.cwd,
       platform: this.deps.platform,
@@ -283,7 +283,8 @@ export class ChatSessionManager {
       check: (args) => fitsOnTheLine(this.deps.platform, buildCodexAppServerCommand(this.deps.platform, undefined, [], appServerSandboxArgs(args))),
       log: this.deps.log
     })
-    this.sandboxLayouts.keep(opts.account.id, opts.cwd, layout, Date.now())
+    // The other Hosts' folders beside this one's, as they were now, kept for the spawn's profile (final fix pass, part 2, B)
+    this.sandboxLayouts.keep(opts.account.id, opts.cwd, prepared.layout, Date.now(), prepared.otherHosts)
   }
 
   /** Picks the process command and the adapter by the account's provider. Returns at once; the
@@ -384,7 +385,14 @@ export class ChatSessionManager {
     // the app-server takes them without the TUI's `-a never`, which the thread's approvalPolicy carries instead
     const sandboxArgs = sandboxedCodex
       ? appServerSandboxArgs(
-          sessionSandboxArgs({ platform: this.deps.platform, homeDir: this.deps.homeDir, layout, env: inherited, hostSocketDir: this.deps.hostSocketDir ?? null })
+          sessionSandboxArgs({
+            platform: this.deps.platform,
+            homeDir: this.deps.homeDir,
+            layout,
+            env: inherited,
+            hostSocketDir: this.deps.hostSocketDir ?? null,
+            otherHostDirs: this.sandboxLayouts.otherHostsOf(opts.account.id, opts.cwd, Date.now())
+          })
         )
       : []
     const env: Record<string, string | undefined> = {

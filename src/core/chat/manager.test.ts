@@ -1633,6 +1633,26 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
     expect(spawned[0].args.find((a) => a.startsWith('permissions='))).toContain('"/tmp/astera-host-0123456789ab-v4"="deny"')
   })
 
+  // Final fix pass, part 2 (B): as a terminal session's, every Host folder beside this profile's that the prepare found
+  it("a sandboxed chat's profile denies every Host folder beside this one that is there when it starts", async () => {
+    const parent = mkdtempSync(path.join(os.tmpdir(), 'astera-hosts-'))
+    dirs.push(parent)
+    const slashed = (p: string): string => p.replace(/\\/g, '/')
+    const own = slashed(path.join(parent, 'astera-host-aaaaaaaaaaaa-v4'))
+    const dev = slashed(path.join(parent, 'astera-host-bbbbbbbbbbbb-v4'))
+    for (const d of [own, dev, path.join(parent, 'unrelated')]) mkdirSync(d)
+    const cwd = repo()
+    const { manager, spawned } = rig('linux', { hostSocketDir: own })
+    await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    mkdirSync(path.join(parent, 'astera-host-cccccccccccc-v4'))
+    manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    const profile = spawned[0].args.find((a) => a.startsWith('permissions='))!
+    expect(profile).toContain(`"${own}"="deny"`)
+    expect(profile).toContain(`"${dev}"="deny"`)
+    expect(profile).not.toContain('unrelated')
+    expect(profile).not.toContain('astera-host-cccccccccccc')
+  })
+
   it("an unsandboxed chat's arguments and thread parameters are unchanged", async () => {
     for (const sandbox of [undefined, false]) {
       const cwd = repo()
