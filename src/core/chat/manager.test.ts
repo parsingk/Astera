@@ -1660,6 +1660,28 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
 
   // Task E (2026-10-28): as a terminal session's, the profile keeps Astera's profile folder read-only on every OS, the app
   // key in it still denied, in the prepare's check and at the spawn alike
+  // Task E fix round 2: a sandboxed Codex chat whose work folder holds the home folder starts as today and its sink is
+  // told once; never the Claude-only warning; a project folder inside the home folder is not told
+  it('tells a sandboxed Codex chat whose work folder holds the home folder, once', async () => {
+    const cwd = repo()
+    const { manager, spawned } = rig('linux')
+    const told: Array<[string, string[]]> = []
+    manager.sandboxWarn = { claudeUsernsRestricted: () => true, warn: (id, ws) => void told.push([id, [...ws]]) }
+    // The rig's home is /home/t; a chat in its parent folder holds it
+    const above = path.dirname(HOME.linux)
+    await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    expect(told).toEqual([])
+    const layouts = new PreparedLayouts()
+    layouts.keep(codexAccount.id, above, null, Date.now())
+    const r2 = rig('linux', { layouts })
+    r2.manager.sandboxWarn = { claudeUsernsRestricted: () => true, warn: (id, ws) => void told.push([id, [...ws]]) }
+    const info = r2.manager.spawn({ account: codexAccount, cwd: above, sandbox: true })
+    expect(r2.spawned).toHaveLength(1)
+    expect(told).toEqual([[info.id, ['homeInWorkFolder']]])
+    expect(spawned).toHaveLength(1)
+  })
+
   it("a sandboxed chat's profile keeps Astera's profile folder read, with the app key in it denied", async () => {
     const dirs = { linux: '/home/t/.config/astera', win32: 'C:\\Users\\t\\AppData\\Roaming\\astera' } as const
     for (const platform of ['linux', 'win32'] as const) {
@@ -1914,6 +1936,20 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
       return { manager, spawned, handles, statusLine, profileDir, tmpDir }
     }
     const read = (file: string): Record<string, unknown> => JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+
+    // Task E fix round 2: a sandboxed Claude chat on Linux where bubblewrap is confined starts as today and its sink is
+    // told once; the same chat outside the sandbox is not
+    it('tells a sandboxed Claude chat on Linux where bubblewrap is confined, once', async () => {
+      const cwd = repo()
+      const r = await claudeRig()
+      const told: Array<[string, string[]]> = []
+      r.manager.sandboxWarn = { claudeUsernsRestricted: () => true, warn: (id, ws) => void told.push([id, [...ws]]) }
+      await r.manager.prepare({ account: claudeAccount, cwd, sandbox: true })
+      const info = r.manager.spawn({ account: claudeAccount, cwd, sandbox: true })
+      r.manager.spawn({ account: claudeAccount, cwd })
+      expect(r.spawned).toHaveLength(2)
+      expect(told).toEqual([[info.id, ['claudeUserns']]])
+    })
 
     it('a sandboxed Claude chat gets --settings with the sandbox', async () => {
       const cwd = repo()

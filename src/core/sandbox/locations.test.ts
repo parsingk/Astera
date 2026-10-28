@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { appJunctionDir, appKeyDenies, credentialStoreDenies, hostSocketDenies, installRootOf, otherHostFolders, profileReadOnly, sandboxReadOnly, sensitiveLocations, updaterCacheDir } from './locations'
+import { appKeyDenies, credentialStoreDenies, hostSocketDenies, installRootOf, localAsteraDir, otherHostFolders, profileReadOnly, publicShuttleFiles, sandboxReadOnly, sensitiveLocations, updaterCacheDir } from './locations'
 
 describe('sandbox locations', () => {
   it('lists E6 on every OS, with gh and gcloud where each OS keeps them', () => {
@@ -55,8 +55,9 @@ describe('sandbox locations', () => {
   })
 
   // One function builds the whole read-only list for a start: the profile, the Windows Host runtime base, the updater
-  // cache, the install root, and the win32 junction the session .cmd goes through (%LOCALAPPDATA%\astera\app). Nulls
-  // dropped, forward slashes, each once; a path that does not exist at start is still named (the sandbox handles it)
+  // cache, the install root, Astera's own %LOCALAPPDATA%\astera on Windows (the public CLI's bin, the session .cmd's
+  // junction, the installed app's Host runtime) and on macOS and Linux the public CLI's own files. Nulls dropped,
+  // forward slashes, each once
   it('builds the whole read-only list for a sandboxed start, dropping what is not known', () => {
     expect(
       sandboxReadOnly({
@@ -64,15 +65,16 @@ describe('sandbox locations', () => {
         hostRuntimeBase: 'C:\\Users\\a\\AppData\\Local\\astera\\host-runtime',
         updaterCache: 'C:/Users/a/AppData/Local/astera-updater',
         installRoot: 'C:/Users/a/AppData/Local/Programs/Astera',
-        appJunction: 'C:/Users/a/AppData/Local/astera/app'
+        localAstera: 'C:/Users/a/AppData/Local/astera'
       })
     ).toEqual([
       'C:/Users/a/AppData/Roaming/astera',
       'C:/Users/a/AppData/Local/astera/host-runtime',
       'C:/Users/a/AppData/Local/astera-updater',
       'C:/Users/a/AppData/Local/Programs/Astera',
-      'C:/Users/a/AppData/Local/astera/app'
+      'C:/Users/a/AppData/Local/astera'
     ])
+    expect(sandboxReadOnly({ profileDir: '/h/.config/astera', publicShuttle: ['/h/.local/bin/astera'] })).toEqual(['/h/.config/astera', '/h/.local/bin/astera'])
     // The profile alone, as the measurement passes it (the runner has no real install, Host runtime or updater cache)
     expect(sandboxReadOnly({ profileDir: '/home/a/.config/astera' })).toEqual(['/home/a/.config/astera'])
     expect(sandboxReadOnly({})).toEqual([])
@@ -80,13 +82,26 @@ describe('sandbox locations', () => {
     expect(sandboxReadOnly({ profileDir: '/p/', updaterCache: '/p' })).toEqual(['/p'])
   })
 
-  // The win32 junction the session .cmd goes through is %LOCALAPPDATA%\astera\app (literal `astera`, cliInstall.ts
-  // binDirFor and exec/shuttle.ts cmdLinkPath); none off win32
-  it('names the win32 session .cmd junction, and nothing off win32', () => {
-    expect(appJunctionDir('win32', { LOCALAPPDATA: 'C:\\Users\\a\\AppData\\Local' }, 'C:\\Users\\a')).toBe('C:/Users/a/AppData/Local/astera/app')
-    expect(appJunctionDir('win32', {}, 'C:\\Users\\a')).toBe('C:/Users/a/AppData/Local/astera/app')
-    expect(appJunctionDir('darwin', {}, '/Users/a')).toBeNull()
-    expect(appJunctionDir('linux', {}, '/h')).toBeNull()
+  // Task E fix round 2: on Windows %LOCALAPPDATA%\astera is Astera's own folder — the public CLI's `bin`
+  // (cliInstall.ts binDirFor), the session .cmd's `app` junction (exec/shuttle.ts cmdLinkPath) and the installed app's
+  // `host-runtime` — and nothing a sandboxed session writes lives there, so it is read-only whole; none off Windows
+  it('names Astera’s own %LOCALAPPDATA%\\astera on Windows, and nothing off Windows', () => {
+    expect(localAsteraDir('win32', { LOCALAPPDATA: 'C:\\Users\\a\\AppData\\Local' }, 'C:\\Users\\a')).toBe('C:/Users/a/AppData/Local/astera')
+    expect(localAsteraDir('win32', {}, 'C:\\Users\\a')).toBe('C:/Users/a/AppData/Local/astera')
+    expect(localAsteraDir('darwin', {}, '/Users/a')).toBeNull()
+    expect(localAsteraDir('linux', {}, '/h')).toBeNull()
+  })
+
+  // Task E fix round 2: on macOS and Linux the public CLI's folder (~/.local/bin) is the person's, so only the files
+  // Astera itself writes there are named, and only those that exist: a missing read-only path would have the sandbox
+  // put a placeholder at it. None on Windows, where the whole folder is named instead
+  it('names only the public CLI’s own files on macOS and Linux, where they exist', () => {
+    const at = (present: string[]) => (p: string) => present.includes(p)
+    expect(publicShuttleFiles({ platform: 'linux', binDir: '/h/.local/bin', names: ['astera'], exists: at(['/h/.local/bin/astera']) })).toEqual(['/h/.local/bin/astera'])
+    expect(publicShuttleFiles({ platform: 'darwin', binDir: '/Users/a/.local/bin', names: ['astera'], exists: at([]) })).toEqual([])
+    expect(publicShuttleFiles({ platform: 'win32', binDir: 'C:\\Users\\a\\AppData\\Local\\astera\\bin', names: ['astera.cmd', 'astera'], exists: () => true })).toEqual([])
+    // A throwing look counts as not there
+    expect(publicShuttleFiles({ platform: 'linux', binDir: '/h/.local/bin', names: ['astera'], exists: () => { throw new Error('EACCES') } })).toEqual([])
   })
 
   it('adds the OS credential store a sandbox does not close by itself', () => {

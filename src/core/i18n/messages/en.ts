@@ -214,6 +214,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.security.sandboxCoverage.level.seen': 'Allowed',
   'settings.security.sandboxCoverage.homeReadable': 'Outside the login folders, the home folder stays readable inside the sandbox.',
   'settings.security.sandboxCoverage.windowsClaude': 'Windows: the shell is not restricted',
+  'settings.security.sandboxCoverage.linuxClaudeUbuntu': "Ubuntu 25.04 and later: the shell needs userns granted to bubblewrap in AppArmor",
   'settings.security.builtin.profileWrite': "Writing Astera's settings folder",
   'settings.security.builtin.settingsCommand': "Commands that change Astera's settings",
   'settings.security.builtin.failClosed': 'Rules unreadable, only reads allowed',
@@ -844,6 +845,9 @@ export const en: Record<keyof typeof ko, string> = {
   'session.spawn.sandbox.outsideSandbox': '{id} runs outside the sandbox, and a sandboxed session cannot hand work outside it, so nothing was sent or started.',
   'session.spawn.sandbox.settingsWriteFailed': 'The sandbox settings file could not be written, so it cannot start. Check that the profile folder can be written.',
   'session.roll.sandbox.windowsSetup': 'Could not move to the {account} account: its Windows sandbox is not set up. Press Set up for it in Settings › Agent profiles.',
+  'session.sandbox.warn.homeInWorkFolder': "This sandboxed session's work folder contains your home folder, so programs and settings in your home folder can be changed from inside the sandbox. Start it in a project folder to keep them out of reach.",
+  'session.sandbox.warn.claudeUserns': "Claude Code's sandbox cannot run shell commands on this system: Ubuntu's AppArmor profile for bubblewrap (bwrap-userns-restrict) takes away the capabilities its namespace needs, so every shell command in this session will fail. File tools still work. Granting userns to bubblewrap in an AppArmor profile fixes it; the sysctl kernel.apparmor_restrict_unprivileged_userns=0 alone does not lift this profile.",
+  'session.sandbox.warn.claudeUsernsAndHome': "Claude Code's sandbox cannot run shell commands on this system: Ubuntu's AppArmor profile for bubblewrap (bwrap-userns-restrict) takes away the capabilities its namespace needs, so every shell command in this session will fail. File tools still work. Granting userns to bubblewrap in an AppArmor profile fixes it; the sysctl kernel.apparmor_restrict_unprivileged_userns=0 alone does not lift this profile. This sandboxed session's work folder contains your home folder, so programs and settings in your home folder can be changed from inside the sandbox. Start it in a project folder to keep them out of reach.",
   'session.roll.sandbox.windowsCheckFailed': 'Could not move to the {account} account: Codex could not be asked about its Windows sandbox. Update Codex or start it again.',
   'session.roll.sandbox.refused': 'Could not move to the next account: {reason}',
   'session.spawn.failedWorktreeKept':

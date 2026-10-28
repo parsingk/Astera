@@ -32,6 +32,7 @@ import { sandboxKindOf } from '../sandbox/coverage'
 import { PreparedLayouts, codexVersionBlocker, prepareCodexSandbox, sessionSandboxArgs, type CodexVersionProbe, type CodexWindowsReady } from '../sandbox/prepared'
 import { codexWindowsReadiness, runCodex } from '../sandbox/windowsReadiness'
 import type { ClaudeSandboxStart } from '../sandbox/claudeStart'
+import { tellSandboxStart, type SandboxWarnSink } from '../sandbox/startWarnings'
 import type { CodexExcludes } from '../sandbox/gitExcludes'
 import type { SandboxScope } from './statusline'
 
@@ -234,6 +235,10 @@ export class SessionManager {
   /** The codex version question a sandboxed Codex start asks at its prepare and again at its spawn (final review I2), the
    *  one Enforce asks. Unset, a sandboxed Codex start is refused as for a version not known. */
   codexVersion?: CodexVersionProbe
+  /** Where a sandboxed start's warnings are told (Task E fix round 2, core/sandbox/startWarnings.ts): the app's and the
+   *  Host's wiring each give one, which words them into the tab and the log. Unset, nothing is told; the start is the
+   *  same either way. */
+  sandboxWarn?: SandboxWarnSink
 
   /**
    * Everything `spawn` would look for on disk, looked for without blocking: the folder, and on win32
@@ -621,7 +626,11 @@ export class SessionManager {
       ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {}),
       ...(sandboxed ? { sandboxed: true as const, sandboxKind } : {})
     }
-    return this.track(info, pty)
+    const tracked = this.track(info, pty)
+    // Task E fix round 2: started as it would be anyway, and told once what the sandbox will not do here
+    if (sandboxed)
+      tellSandboxStart(this.sandboxWarn, { sessionId: info.id, provider: providerOf(opts.account), platform: this.checks.platform, cwd: opts.cwd, homeDir: this.homeDir }, this.checks.log)
+    return tracked
   }
 
   /** A sandboxed Codex session's `-a never` and permission profile (sessionSandboxArgs, core/sandbox/prepared.ts), with a

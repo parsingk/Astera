@@ -24,7 +24,7 @@ import { OrchCoordinator, type CoordinatorDeps, type PromptWriteEvent } from '..
 import { WorkerTails } from '../core/orchestration/exec/tail'
 import { releaseArgsFor } from '../core/orchestration/exec/release'
 import { makeLimitProbe } from '../core/orchestration/exec/limitProbe'
-import { ensureShuttle, sessionCmdLink } from '../core/orchestration/exec/shuttle'
+import { ensureShuttle, sessionCmdLink, shuttleNames } from '../core/orchestration/exec/shuttle'
 import type { ChatManagerDeps, ChatOrchEnv } from '../core/chat/manager'
 import type { CodexWindowsReady, PreparedLayouts } from '../core/sandbox/prepared'
 import { claudeSandboxStart, type ClaudeSandboxStart } from '../core/sandbox/claudeStart'
@@ -68,7 +68,9 @@ import { createManagedHooksCheck } from '../core/sessions/managedHooks'
 import { codexNoDaemonProbe, type CodexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
 import { findInstalledHostExe } from '../core/host/installedRuntime'
 import { hostRuntimeBase } from '../core/host/runtime'
-import { appJunctionDir, installRootOf, sandboxReadOnly, updaterCacheDir } from '../core/sandbox/locations'
+import { installRootOf, localAsteraDir, publicShuttleFiles, sandboxReadOnly, updaterCacheDir } from '../core/sandbox/locations'
+import { claudeUsernsCheck, sandboxWarningMessages, type SandboxWarnSink } from '../core/sandbox/startWarnings'
+import { t, type Lang } from '../core/i18n'
 import { hidingLog } from '../core/extensions/secrets'
 import { setBounded } from '../core/bounded'
 import { dispatchLookup } from '../core/orchestration/dispatchIndex'
@@ -107,6 +109,8 @@ export interface HostLocal {
 export interface HostSpawnerDeps {
   /** Where the Host's MCP Gateway listens (Agent Control Plane release 2), asked before each spawn; absent means none. */
   gatewayPort?: () => Promise<number | null>
+  /** The language the Host words a line in a session's tab in (the app's setting, read at each line). Absent, English. */
+  lang?: () => Lang
   profileDir: string
   env: NodeJS.ProcessEnv
   platform: NodeJS.Platform
@@ -189,6 +193,9 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
   /** The read-only folders a sandboxed Codex session's profile keeps on every OS, terminal or chat (Task E and its fix
    *  round 1): the profile and every place Astera writes code or an installer to and runs unsandboxed. */
   readOnly?: readonly string[]
+  /** Where this Host's terminal sessions tell a sandboxed start's warnings (Task E fix round 2); its Ubuntu check, asked
+   *  once for this Host process, is the one its chat sessions ask too (rollingWiring). */
+  sandboxWarn?: SandboxWarnSink
   /** The codex version question a sandboxed Codex start asks, shared with the Host's chat sessions (final review I2). */
   codexVersion?: ChatManagerDeps['codexVersion']
   /** The copy of the person's git excludes a sandboxed win32 Codex start writes in this Host's temp folder (one for its
@@ -344,15 +351,17 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   // What a sandboxed session keeps read-only on every OS (Task E and its fix round 1): the profile folder and every place
   // Astera itself writes code or an installer to and runs unsandboxed — the Windows Host runtime it was handed from
   // (hostRuntimeBase, the same `cli/host.ts` rule this StatusLineManager's findRuntime uses), electron-updater's download
-  // cache, the installed app's own folder (from `cli.exec`, the app's executable) and the Windows session-`.cmd`
-  // junction. One list, built once for both managers and the Claude twins.
+  // cache, the installed app's own folder (from `cli.exec`, the app's executable), on Windows Astera's own
+  // %LOCALAPPDATA%\astera whole (the public CLI's bin, the session-`.cmd` junction; fix round 2), and on macOS and Linux
+  // the public CLI's own files in ~/.local/bin, where they are now. One list, built once for both managers and the twins.
   const hostRuntimeDir = hostRuntimeBase({ platform, localAppData: d.env.LOCALAPPDATA, userData: profileDir, appName: path.win32.basename(profileDir) })
   const readOnly = sandboxReadOnly({
     profileDir,
     hostRuntimeBase: hostRuntimeDir,
     updaterCache: updaterCacheDir(platform, d.env, homeDir),
     installRoot: installRootOf(cli.exec, platform),
-    appJunction: appJunctionDir(platform, d.env, homeDir)
+    localAstera: localAsteraDir(platform, d.env, homeDir),
+    publicShuttle: publicShuttleFiles({ platform, binDir: binDirFor({ platform, env: d.env, home: homeDir }), names: shuttleNames(platform), exists })
   })
   // The copy of the person's git excludes a sandboxed Codex session on Windows reads, in the temp folder, asked by this
   // spawner's prepares and the Host's chat sessions alike; the elevated sandbox's own account cannot read theirs
@@ -522,6 +531,20 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   // The codex floor a sandboxed Codex start asks, here and in the Host's chat sessions (final review I2)
   const codexVersion = d.codexVersion ?? cliVersions
   sessions.codexVersion = codexVersion
+  // Task E fix round 2: a sandboxed start that will not be as safe, or will not work, as the person may expect starts as
+  // today and says why once, in its pty's ring (replayed to an app that attaches later), the way a refused roll's line is
+  // put there, in the app's language, and in the Host log. The Ubuntu check is asked once for this Host process
+  const lang = d.lang ?? ((): Lang => 'en')
+  const claudeUsernsRestricted = claudeUsernsCheck(platform)
+  const sandboxWarn: SandboxWarnSink = {
+    claudeUsernsRestricted,
+    warn: (id, ws) => {
+      const p = registry.sessionPty(id)
+      if (p !== null) for (const m of sandboxWarningMessages(ws)) registry.say(p, `\r\n[Astera] ${t(lang(), m.key)}\r\n`)
+      log(`sandbox: session=${id} starts with a warning: ${ws.join(', ')}`)
+    }
+  }
+  sessions.sandboxWarn = sandboxWarn
   sessions.onExit = (e) => {
     sessions.forget(e.sessionId)
   }
@@ -916,6 +939,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     hostSocketDir,
     appKeyFile,
     readOnly,
+    sandboxWarn,
     codexVersion,
     codexExcludes,
     orchEnvNow: () => orchEnvReady,

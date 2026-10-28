@@ -26,6 +26,7 @@ import { applyHiding, type HidingSource } from '../credentials/hiding'
 import { isObserving } from '../audit/policy'
 import { enforceUnavailable, type EnforceStart } from '../audit/enforce'
 import { PreparedLayouts, codexVersionBlocker, fitsOnTheLine, prepareCodexSandbox, sessionSandboxArgs, type CodexVersionProbe, type CodexWindowsReady } from '../sandbox/prepared'
+import { tellSandboxStart, type SandboxWarnSink } from '../sandbox/startWarnings'
 import { appServerSandboxArgs, codexSandboxEnv } from '../sandbox/codexProfile'
 import { sandboxUnavailable } from '../sandbox/unavailable'
 import { sandboxKindOf } from '../sandbox/coverage'
@@ -104,6 +105,9 @@ export interface ChatManagerDeps {
   /** Writes the copy of the person's global git excludes a sandboxed win32 Codex chat reads (SpawnChecks' twin). Absent,
    *  none is written. */
   codexExcludes?: CodexExcludes
+  /** Where a sandboxed chat start's warnings are told (Task E fix round 2; SessionManager.sandboxWarn's twin). The Host's
+   *  chats get it here; the app sets ChatSessionManager.sandboxWarn once it has the language and the Host log. */
+  sandboxWarn?: SandboxWarnSink
 }
 
 /** What `spawn` takes, for a caller that builds it elsewhere (./respawn.ts). */
@@ -247,9 +251,12 @@ export class ChatSessionManager {
 
   /** See ChatManagerDeps.sandboxLayouts. */
   private sandboxLayouts: PreparedLayouts
+  /** See ChatManagerDeps.sandboxWarn: settable, for the app's wiring that gives it after construction. */
+  sandboxWarn?: SandboxWarnSink
 
   constructor(private deps: ChatManagerDeps) {
     this.sandboxLayouts = deps.sandboxLayouts ?? new PreparedLayouts()
+    this.sandboxWarn = deps.sandboxWarn
   }
 
   setOrchEnv(fn: () => ChatOrchEnv | undefined): void {
@@ -570,6 +577,8 @@ export class ChatSessionManager {
       )
     const live = this.sessions.get(id)
     if (live) live.started = started
+    // Task E fix round 2: started as it would be anyway, and told once what the sandbox will not do here
+    if (sandboxed) tellSandboxStart(this.sandboxWarn, { sessionId: id, provider, platform: this.deps.platform, cwd: opts.cwd, homeDir: this.deps.homeDir }, this.deps.log)
     return { ...info }
   }
 

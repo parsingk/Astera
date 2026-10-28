@@ -67,30 +67,55 @@ export function installRootOf(appExe: string | null | undefined, platform: NodeJ
   return null
 }
 
-/** The Windows junction a session's `astera` `.cmd` goes through (final fix pass; Task E fix round 1):
- *  `%LOCALAPPDATA%\astera\app`, literal `astera` (cliInstall.ts `binDirFor`, exec/shuttle.ts `cmdLinkPath`), which
- *  points at the install root. None off Windows, where no such junction is made. */
-export function appJunctionDir(platform: NodeJS.Platform, env: Record<string, string | undefined>, home: string): string | null {
+/** Astera's own folder under `%LOCALAPPDATA%` on Windows (Task E fix round 2): `%LOCALAPPDATA%\astera`, literal
+ *  `astera` (cliInstall.ts `binDirFor`). It holds the public CLI's `bin`, the `app` junction the session `.cmd` goes
+ *  through (exec/shuttle.ts `cmdLinkPath`) and the installed app's `host-runtime` (core/host/runtime.ts), and nothing a
+ *  sandboxed session writes, so it is read-only whole rather than child by child. None off Windows. */
+export function localAsteraDir(platform: NodeJS.Platform, env: Record<string, string | undefined>, home: string): string | null {
   if (platform !== 'win32') return null
   const local = slashed(env.LOCALAPPDATA ?? '') || `${slashed(home)}/AppData/Local`
-  return `${local}/astera/app`
+  return `${local}/astera`
 }
 
-/** The whole list of folders a sandboxed session keeps read-only (Task E and its fix round 1): Astera's profile folder
- *  and every place Astera itself writes executable code or an installer to and later runs outside any sandbox — the
- *  Windows Host runtime (core/host/runtime.ts hostRuntimeBase), electron-updater's download cache, the installed app's
- *  own folder and the Windows session-`.cmd` junction. The one function every start path and the measurement build from,
- *  as for the profile; each caller passes what it knows (nulls dropped). Forward slashes, each once. A path that does
+/** The public CLI's own files on macOS and Linux (Task E fix round 2): the folder (`binDir`, cliInstall.ts `binDirFor`,
+ *  `~/.local/bin`) is the person's PATH folder and keeps their own programs, so only the files Astera writes into it
+ *  (`names`, exec/shuttle.ts `shuttleNames`) are named, and only those that `exists` says are there: a read-only path
+ *  that is missing would have bubblewrap put a placeholder file at it, which an interrupted sandbox could leave on the
+ *  person's PATH. None on Windows, where localAsteraDir names the whole folder. A look that throws counts as missing. */
+export function publicShuttleFiles(o: { platform: NodeJS.Platform; binDir: string; names: readonly string[]; exists: (p: string) => boolean }): string[] {
+  if (o.platform === 'win32') return []
+  const dir = slashed(o.binDir)
+  return o.names
+    .map((n) => `${dir}/${n}`)
+    .filter((p) => {
+      try {
+        return o.exists(p)
+      } catch {
+        return false
+      }
+    })
+}
+
+/** The whole list of paths a sandboxed session keeps read-only (Task E and its fix rounds 1 and 2): Astera's profile
+ *  folder and every place Astera itself writes executable code or an installer to and later runs outside any sandbox —
+ *  the Windows Host runtime (core/host/runtime.ts hostRuntimeBase), electron-updater's download cache, the installed
+ *  app's own folder, Astera's own `%LOCALAPPDATA%\astera` on Windows (the public CLI and the session-`.cmd` junction),
+ *  and on macOS and Linux the public CLI's own files. The one function every start path and the measurement build from,
+ *  as for the profile; each caller passes what it knows (nulls dropped). Forward slashes, each once. A folder that does
  *  not exist at the start is named all the same: the sandbox never fails a start for a missing read-only path (it carves
- *  one out of a writable root only where it is, and blocks its creation; Codex/srt, Task E report). */
+ *  one out of a writable root only where it is, and blocks its creation; Codex/srt, Task E report); the public CLI's
+ *  files are named only where they exist (publicShuttleFiles). */
 export function sandboxReadOnly(o: {
   profileDir?: string | null
   hostRuntimeBase?: string | null
   updaterCache?: string | null
   installRoot?: string | null
-  appJunction?: string | null
+  localAstera?: string | null
+  publicShuttle?: readonly string[]
 }): string[] {
-  const all = [o.profileDir, o.hostRuntimeBase, o.updaterCache, o.installRoot, o.appJunction].filter((p): p is string => Boolean(p)).map(slashed)
+  const all = [o.profileDir, o.hostRuntimeBase, o.updaterCache, o.installRoot, o.localAstera, ...(o.publicShuttle ?? [])]
+    .filter((p): p is string => Boolean(p))
+    .map(slashed)
   return [...new Set(all)]
 }
 

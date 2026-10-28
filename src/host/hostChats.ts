@@ -60,6 +60,8 @@ export interface HostChatsDeps {
   /** The read-only folders, the spawner's: a sandboxed Codex chat's profile keeps them read on every OS (Task E and its
    *  fix round 1). */
   readOnly?: ChatManagerDeps['readOnly']
+  /** Where a sandboxed chat start's warnings are told (Task E fix round 2), rollingWiring's: the chat notice to the apps. */
+  sandboxWarn?: ChatManagerDeps['sandboxWarn']
   /** The codex version question, the spawner's: a sandboxed Codex chat's floor (final review I2). */
   codexVersion?: ChatManagerDeps['codexVersion']
   /** The copy of the person's git excludes a sandboxed win32 Codex chat reads: the spawner's (HostSpawner.codexExcludes). */
@@ -206,6 +208,7 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     ...(d.hostSocketDir !== undefined ? { hostSocketDir: d.hostSocketDir } : {}),
     ...(d.appKeyFile !== undefined ? { appKeyFile: d.appKeyFile } : {}),
     ...(d.readOnly !== undefined ? { readOnly: d.readOnly } : {}),
+    ...(d.sandboxWarn ? { sandboxWarn: d.sandboxWarn } : {}),
     ...(d.codexVersion ? { codexVersion: d.codexVersion } : {}),
     ...(d.codexExcludes ? { codexExcludes: d.codexExcludes } : {}),
     ...(d.createAdapter ? { createAdapter: d.createAdapter } : {})

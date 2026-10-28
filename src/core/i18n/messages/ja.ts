@@ -178,6 +178,7 @@ export const ja: Catalog = {
   'settings.security.sandboxCoverage.level.seen': '許可',
   'settings.security.sandboxCoverage.homeReadable': 'ログイン情報のフォルダー以外のホームフォルダーは、サンドボックス内でも読めます。',
   'settings.security.sandboxCoverage.windowsClaude': 'Windows: シェルは制限なし',
+  'settings.security.sandboxCoverage.linuxClaudeUbuntu': "Ubuntu 25.04 以降: シェルには AppArmor で bubblewrap に userns を許可する必要があります",
   'settings.security.builtin.profileWrite': 'Astera の設定フォルダーへの書き込み',
   'settings.security.builtin.settingsCommand': 'Astera の設定を変えるコマンド',
   'settings.security.builtin.failClosed': 'Rules を読めないため読み取りのみ許可',
@@ -674,6 +675,9 @@ export const ja: Catalog = {
   'session.spawn.sandbox.outsideSandbox': '{id} はサンドボックスの外で動いています。サンドボックス内のセッションはサンドボックスの外に作業を渡せないため、何も送信も起動もしませんでした。',
   'session.spawn.sandbox.settingsWriteFailed': 'サンドボックスの設定ファイルを書き込めないため、起動できません。プロファイルフォルダーに書き込めるか確認してください。',
   'session.roll.sandbox.windowsSetup': '{account} アカウントは Windows サンドボックスが設定されていないため、切り替えられませんでした。設定 › エージェントプロファイルで、このアカウントの「設定する」を押してください。',
+  'session.sandbox.warn.homeInWorkFolder': "このサンドボックスのセッションの作業フォルダーはホームフォルダーを含んでいるため、サンドボックスの中からホームフォルダーのプログラムや設定を変更できます。それらを守るには、プロジェクトのフォルダーで起動してください。",
+  'session.sandbox.warn.claudeUserns': "このシステムでは Claude Code のサンドボックスがシェルコマンドを実行できません。Ubuntu の bubblewrap 用 AppArmor プロファイル(bwrap-userns-restrict)が名前空間に必要な権限を外すため、このセッションのシェルコマンドはすべて失敗します。ファイルツールはそのまま使えます。AppArmor プロファイルで bubblewrap に userns を許可すると解決します。sysctl kernel.apparmor_restrict_unprivileged_userns=0 だけではこのプロファイルは解除されません。",
+  'session.sandbox.warn.claudeUsernsAndHome': "このシステムでは Claude Code のサンドボックスがシェルコマンドを実行できません。Ubuntu の bubblewrap 用 AppArmor プロファイル(bwrap-userns-restrict)が名前空間に必要な権限を外すため、このセッションのシェルコマンドはすべて失敗します。ファイルツールはそのまま使えます。AppArmor プロファイルで bubblewrap に userns を許可すると解決します。sysctl kernel.apparmor_restrict_unprivileged_userns=0 だけではこのプロファイルは解除されません。 このサンドボックスのセッションの作業フォルダーはホームフォルダーを含んでいるため、サンドボックスの中からホームフォルダーのプログラムや設定を変更できます。それらを守るには、プロジェクトのフォルダーで起動してください。",
   'session.roll.sandbox.windowsCheckFailed': '{account} アカウントの Windows サンドボックスの状態を Codex に確認できなかったため、切り替えられませんでした。Codex を更新するか、もう一度起動してください。',
   'session.roll.sandbox.refused': '次のアカウントに切り替えられませんでした: {reason}',
   'session.spawn.failedWorktreeKept':

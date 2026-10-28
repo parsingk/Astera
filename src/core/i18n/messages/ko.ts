@@ -219,6 +219,7 @@ export const ko = {
   'settings.security.sandboxCoverage.level.seen': '허용',
   'settings.security.sandboxCoverage.homeReadable': '로그인 정보 폴더 밖의 홈 폴더는 sandbox 안에서도 읽을 수 있습니다.',
   'settings.security.sandboxCoverage.windowsClaude': 'Windows: 셸은 제한 없음',
+  'settings.security.sandboxCoverage.linuxClaudeUbuntu': "Ubuntu 25.04 이상: AppArmor에서 bubblewrap에 userns를 허용해야 셸이 동작합니다",
   'settings.security.builtin.profileWrite': 'Astera 설정 폴더 쓰기',
   'settings.security.builtin.settingsCommand': 'Astera 설정 변경 명령',
   'settings.security.builtin.failClosed': 'Rules 를 못 읽어 읽기만 허용',
@@ -871,6 +872,9 @@ export const ko = {
   'session.spawn.sandbox.settingsWriteFailed': 'sandbox 설정 파일을 쓰지 못해 시작할 수 없습니다. 프로필 폴더에 쓸 수 있는지 확인해 주세요.',
   // A roll refused for the sandbox (core/rolling/codexCoordinator.ts): the line in the tab, or the chat's notice
   'session.roll.sandbox.windowsSetup': '{account} 계정은 Windows sandbox가 설정되지 않아 넘어가지 못했습니다. 설정 › 에이전트 프로필에서 이 계정의 설정하기를 눌러 주세요.',
+  'session.sandbox.warn.homeInWorkFolder': "이 sandbox 세션의 작업 폴더가 홈 폴더를 포함하고 있어서, sandbox 안에서 홈 폴더의 프로그램과 설정을 바꿀 수 있습니다. 이것들을 지키려면 프로젝트 폴더에서 시작해 주세요.",
+  'session.sandbox.warn.claudeUserns': "이 시스템에서는 Claude Code의 sandbox가 셸 명령을 실행할 수 없습니다. Ubuntu의 bubblewrap용 AppArmor 프로필(bwrap-userns-restrict)이 namespace에 필요한 권한을 빼앗아, 이 세션의 셸 명령은 모두 실패합니다. 파일 도구는 그대로 쓸 수 있습니다. AppArmor 프로필로 bubblewrap에 userns를 허용하면 해결되며, sysctl kernel.apparmor_restrict_unprivileged_userns=0만으로는 이 프로필이 풀리지 않습니다.",
+  'session.sandbox.warn.claudeUsernsAndHome': "이 시스템에서는 Claude Code의 sandbox가 셸 명령을 실행할 수 없습니다. Ubuntu의 bubblewrap용 AppArmor 프로필(bwrap-userns-restrict)이 namespace에 필요한 권한을 빼앗아, 이 세션의 셸 명령은 모두 실패합니다. 파일 도구는 그대로 쓸 수 있습니다. AppArmor 프로필로 bubblewrap에 userns를 허용하면 해결되며, sysctl kernel.apparmor_restrict_unprivileged_userns=0만으로는 이 프로필이 풀리지 않습니다. 이 sandbox 세션의 작업 폴더가 홈 폴더를 포함하고 있어서, sandbox 안에서 홈 폴더의 프로그램과 설정을 바꿀 수 있습니다. 이것들을 지키려면 프로젝트 폴더에서 시작해 주세요.",
   // A Claude roll refused for the sandbox (core/rolling/claudeCoordinator.ts): {reason} is the refusal's own sentence
   'session.roll.sandbox.windowsCheckFailed': '{account} 계정은 Codex에게 Windows sandbox 상태를 묻지 못해 넘어가지 못했습니다. Codex를 업데이트하거나 다시 시작해 주세요.',
   'session.roll.sandbox.refused': '다음 계정으로 넘어가지 못했습니다: {reason}',

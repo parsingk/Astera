@@ -1924,6 +1924,34 @@ describe('the sandbox at spawn', () => {
     }
   })
 
+  // Task E fix round 2 (the person's decision): a sandboxed start whose work folder holds the home folder starts as it
+  // does today, and its sink is told once; a project folder inside the home folder, and a start outside the sandbox, are
+  // not told
+  it('tells a sandboxed start whose work folder holds the home folder, once, and starts it as today', async () => {
+    const cwd = repo()
+    const home = path.join(cwd, 'home')
+    mkdirSync(home)
+    const argv: string[][] = []
+    const manager = new SessionManager((_f, a) => (argv.push(a as string[]), new FakePty()), makeDescriptors('linux', home, undefined, daemon(true)),
+      100, 20, home, undefined, [], { ...BASE.linux }, checksFor('linux'))
+    manager.codexVersion = versionOf('0.160.0')
+    const told: Array<[string, string[]]> = []
+    manager.sandboxWarn = { claudeUsernsRestricted: () => true, warn: (id, ws) => void told.push([id, [...ws]]) }
+    await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    const info = manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    expect(argv).toHaveLength(1)
+    // Codex: the home folder only, never the Claude-only Ubuntu warning
+    expect(told).toEqual([[info.id, ['homeInWorkFolder']]])
+    const project = path.join(home, 'p')
+    mkdirSync(path.join(project, '.git'), { recursive: true })
+    await manager.prepare({ account: codexAccount, cwd: project, sandbox: true })
+    manager.spawn({ account: codexAccount, cwd: project, sandbox: true })
+    await manager.prepare({ account: codexAccount, cwd })
+    manager.spawn({ account: codexAccount, cwd })
+    expect(argv).toHaveLength(3)
+    expect(told).toHaveLength(1)
+  })
+
   // Task E fix round 1: every read-only folder the wiring names (the profile and the places Astera writes code or an
   // installer to and runs unsandboxed) is a `read` entry; the win32 session goes through cmd.exe, so one with a forbidden
   // character refuses the start
@@ -2323,6 +2351,28 @@ describe('the sandbox at spawn, for Claude', () => {
     mkdirSync(path.join(top, '.git'))
     return top
   }
+
+  // Task E fix round 2: where Ubuntu's AppArmor profile confines bubblewrap (asked once per process by the wiring), a
+  // sandboxed Claude session on Linux starts as today and its sink is told why its shell will fail; not when the check
+  // says no, not on another OS, and not for a session outside the sandbox
+  it('tells a sandboxed Claude start on Linux where bubblewrap is confined, and no other', async () => {
+    for (const platform of ['linux', 'darwin'] as const) {
+      for (const restricted of [true, false]) {
+        const r = await rig(platform)
+        const told: string[][] = []
+        let asked = 0
+        r.manager.sandboxWarn = { claudeUsernsRestricted: () => (asked++, restricted), warn: (_id, ws) => void told.push([...ws]) }
+        const cwd = temp()
+        await r.manager.prepare({ account, cwd, sandbox: true })
+        r.manager.spawn({ account, cwd, sandbox: true })
+        await r.manager.prepare({ account, cwd })
+        r.manager.spawn({ account, cwd })
+        expect(r.argv, `${platform} ${restricted}`).toHaveLength(2)
+        expect(told, `${platform} ${restricted}`).toEqual(platform === 'linux' && restricted ? [['claudeUserns']] : [])
+        expect(asked, `${platform} ${restricted}`).toBeLessThanOrEqual(1)
+      }
+    }
+  })
 
   it('a sandboxed Claude session on linux gets the sandbox variant', async () => {
     const r = await rig('linux')

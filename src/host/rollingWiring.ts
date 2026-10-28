@@ -40,6 +40,7 @@ import type { HostServer } from './server'
 import type { HostSpawner } from './spawner'
 import { takeOverChats, takeOverSessions } from './takeover'
 import { onceBounded } from '../core/bounded'
+import { sandboxWarningMessage } from '../core/sandbox/startWarnings'
 
 /** How often the accounts and the resume strategy are read again, and the app-gone watch ticks (R13). */
 export const ROLLING_TICK_MS = 15_000
@@ -157,6 +158,22 @@ export function composeHostRolling(a: {
     readOnly: a.spawner.readOnly ?? [],
     ...(a.spawner.codexVersion ? { codexVersion: a.spawner.codexVersion } : {}),
     ...(a.spawner.codexExcludes ? { codexExcludes: a.spawner.codexExcludes } : {}),
+    // Task E fix round 2: a sandboxed chat's start warnings, as the chat's notice to the apps that take chats back (the
+    // way a refused roll's reason goes, below), worded by the pane; the same fact to the Host log. The spawner's
+    // once-per-process Ubuntu check. Not journaled: an app that attaches after the start does not hear it
+    sandboxWarn: {
+      claudeUsernsRestricted: a.spawner.sandboxWarn?.claudeUsernsRestricted ?? (() => false),
+      warn: (id, ws) => {
+        const m = sandboxWarningMessage(ws)
+        if (m)
+          try {
+            a.server().broadcast({ t: 'chat-notice', sessionId: id, notice: { key: 'rollRefused', reason: m } }, (y) => y.has(HOST_YIELD_CHAT_TAKEOVER))
+          } catch (err) {
+            log(`the chat notice could not be sent session=${id}: ${String(err)}`)
+          }
+        log(`sandbox: chat session=${id} starts with a warning: ${ws.join(', ')}`)
+      }
+    },
     log,
     ...a.chatsDeps
   })

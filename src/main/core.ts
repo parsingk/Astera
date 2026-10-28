@@ -53,7 +53,9 @@ import { claudeSandboxStart } from '../core/sandbox/claudeStart'
 import { codexExcludesWriter } from '../core/sandbox/gitExcludes'
 import { hostAddress } from '../core/publicContract'
 import { appKeyPath } from '../core/host/hostKey'
-import { appJunctionDir, installRootOf, sandboxReadOnly, updaterCacheDir } from '../core/sandbox/locations'
+import { installRootOf, localAsteraDir, publicShuttleFiles, sandboxReadOnly, updaterCacheDir } from '../core/sandbox/locations'
+import { binDirFor } from '../core/orchestration/cliInstall'
+import { shuttleNames } from '../core/orchestration/exec/shuttle'
 import { HOST_PROTOCOL } from '../core/host/protocol'
 import { createManagedHooksCheck } from '../core/sessions/managedHooks'
 import { codexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
@@ -252,16 +254,18 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   // Enforce's hook on Windows when the capture scripts are left a bare node (development, or no runtime put in place):
   // a runtime an Astera installed here
   const findRuntime = (): Promise<string | null> => findInstalledHostExe(runtimeBase)
-  // What a sandboxed session keeps read-only on every OS (Task E and its fix round 1): the profile folder and every place
-  // the app itself writes code or an installer to and runs unsandboxed — the Windows Host runtime it lays down
-  // (runtimeBase), electron-updater's download cache, the installed app's own folder (from its executable) and the
-  // Windows session-`.cmd` junction. One list, for the Claude twins and both managers.
+  // What a sandboxed session keeps read-only on every OS (Task E and its fix rounds 1 and 2): the profile folder and every
+  // place the app itself writes code or an installer to and runs unsandboxed — the Windows Host runtime it lays down
+  // (runtimeBase), electron-updater's download cache, the installed app's own folder (from its executable), on Windows
+  // Astera's own %LOCALAPPDATA%\astera whole (the public CLI's bin, the session-`.cmd` junction), and on macOS and Linux
+  // the public CLI's own files in the person's ~/.local/bin, where they are now. One list, for the twins and both managers.
   const readOnly = sandboxReadOnly({
     profileDir: userDataDir,
     hostRuntimeBase: runtimeBase,
     updaterCache: updaterCacheDir(process.platform, process.env, os.homedir()),
     installRoot: installRootOf(app.getPath('exe'), process.platform),
-    appJunction: appJunctionDir(process.platform, process.env, os.homedir())
+    localAstera: localAsteraDir(process.platform, process.env, os.homedir()),
+    publicShuttle: publicShuttleFiles({ platform: process.platform, binDir: binDirFor({ platform: process.platform, env: process.env, home: os.homedir() }), names: shuttleNames(process.platform), exists: existsSync })
   })
   const statusLine = new StatusLineManager(
     userDataDir,

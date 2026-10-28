@@ -936,7 +936,9 @@ describe('the roll spawn (S6 R5, R6)', () => {
     expect(readOnly.some((p) => p.endsWith('/astera-updater'))).toBe(true)
     if (process.platform === 'win32') {
       expect(readOnly.some((p) => p.endsWith('/host-runtime'))).toBe(true)
-      expect(readOnly.some((p) => p.endsWith('/astera/app'))).toBe(true)
+      // Task E fix round 2: Astera's own %LOCALAPPDATA%\astera whole (its bin, the session .cmd's junction)
+      expect(readOnly.some((p) => /\/AppData\/Local\/astera$/i.test(p))).toBe(true)
+      expect(readOnly.some((p) => p.endsWith('/astera/app'))).toBe(false)
     }
     for (const r of readOnly) expect(permissions, r).toContain(`${JSON.stringify(r)}="read"`)
   })

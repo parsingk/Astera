@@ -91,6 +91,29 @@ const GIVEN = {
   ]
 } as const
 
+// Task E fix round 2, in the order ko, en, ja, es: the session starts as today and its tab says this once
+const WARNINGS = {
+  'session.sandbox.warn.homeInWorkFolder': [
+    '이 sandbox 세션의 작업 폴더가 홈 폴더를 포함하고 있어서, sandbox 안에서 홈 폴더의 프로그램과 설정을 바꿀 수 있습니다. 이것들을 지키려면 프로젝트 폴더에서 시작해 주세요.',
+    "This sandboxed session's work folder contains your home folder, so programs and settings in your home folder can be changed from inside the sandbox. Start it in a project folder to keep them out of reach.",
+    'このサンドボックスのセッションの作業フォルダーはホームフォルダーを含んでいるため、サンドボックスの中からホームフォルダーのプログラムや設定を変更できます。それらを守るには、プロジェクトのフォルダーで起動してください。',
+    'La carpeta de trabajo de esta sesión del sandbox contiene su carpeta personal, así que los programas y la configuración de su carpeta personal se pueden cambiar desde dentro del sandbox. Iníciela en una carpeta de proyecto para mantenerlos fuera de su alcance.'
+  ],
+  'session.sandbox.warn.claudeUserns': [
+    '이 시스템에서는 Claude Code의 sandbox가 셸 명령을 실행할 수 없습니다. Ubuntu의 bubblewrap용 AppArmor 프로필(bwrap-userns-restrict)이 namespace에 필요한 권한을 빼앗아, 이 세션의 셸 명령은 모두 실패합니다. 파일 도구는 그대로 쓸 수 있습니다. AppArmor 프로필로 bubblewrap에 userns를 허용하면 해결되며, sysctl kernel.apparmor_restrict_unprivileged_userns=0만으로는 이 프로필이 풀리지 않습니다.',
+    "Claude Code's sandbox cannot run shell commands on this system: Ubuntu's AppArmor profile for bubblewrap (bwrap-userns-restrict) takes away the capabilities its namespace needs, so every shell command in this session will fail. File tools still work. Granting userns to bubblewrap in an AppArmor profile fixes it; the sysctl kernel.apparmor_restrict_unprivileged_userns=0 alone does not lift this profile.",
+    'このシステムでは Claude Code のサンドボックスがシェルコマンドを実行できません。Ubuntu の bubblewrap 用 AppArmor プロファイル(bwrap-userns-restrict)が名前空間に必要な権限を外すため、このセッションのシェルコマンドはすべて失敗します。ファイルツールはそのまま使えます。AppArmor プロファイルで bubblewrap に userns を許可すると解決します。sysctl kernel.apparmor_restrict_unprivileged_userns=0 だけではこのプロファイルは解除されません。',
+    'En este sistema, el sandbox de Claude Code no puede ejecutar comandos de shell: el perfil de AppArmor de Ubuntu para bubblewrap (bwrap-userns-restrict) le quita los permisos que su espacio de nombres necesita, así que todos los comandos de shell de esta sesión fallarán. Las herramientas de archivos siguen funcionando. Se soluciona concediendo userns a bubblewrap en un perfil de AppArmor; el sysctl kernel.apparmor_restrict_unprivileged_userns=0 por sí solo no levanta este perfil.'
+  ]
+} as const
+/** The Linux Claude row's caption in What the sandbox blocks (coverage.ts sandboxRowCaption). */
+const CAPTION = [
+  'Ubuntu 25.04 이상: AppArmor에서 bubblewrap에 userns를 허용해야 셸이 동작합니다',
+  'Ubuntu 25.04 and later: the shell needs userns granted to bubblewrap in AppArmor',
+  'Ubuntu 25.04 以降: シェルには AppArmor で bubblewrap に userns を許可する必要があります',
+  'Ubuntu 25.04 y posteriores: el shell necesita que AppArmor conceda userns a bubblewrap'
+] as const
+
 describe('the sandbox refusals', () => {
   it('says each one in every language, in the words given', () => {
     const order = ['ko', 'en', 'ja', 'es'] as const
@@ -112,6 +135,21 @@ describe('the sandbox refusals', () => {
     }
     // Spanish in usted, as the screen's other strings are
     expect((CATALOGS.es.messages as Record<string, string>)['session.spawn.sandbox.cliTooOld']).toContain('Actualice la CLI.')
+  })
+
+  // Task E fix round 2: the two start warnings, in every language, in the words given; the pair is both sentences
+  it('says the start warnings in every language, in the words given', () => {
+    const order = ['ko', 'en', 'ja', 'es'] as const
+    for (const [key, lines] of Object.entries(WARNINGS)) {
+      order.forEach((lang, i) => {
+        expect((CATALOGS[lang].messages as Record<string, string | undefined>)[key], `${lang} ${key}`).toBe(lines[i])
+      })
+    }
+    order.forEach((lang, i) => {
+      const m = CATALOGS[lang].messages as Record<string, string | undefined>
+      expect(m['session.sandbox.warn.claudeUsernsAndHome'], lang).toBe(`${WARNINGS['session.sandbox.warn.claudeUserns'][i]} ${WARNINGS['session.sandbox.warn.homeInWorkFolder'][i]}`)
+      expect(m['settings.security.sandboxCoverage.linuxClaudeUbuntu'], lang).toBe(CAPTION[i])
+    })
   })
 
   // Task 7 fix round 1: a refused Claude roll's line carries the refusal's own sentence, worded in the same language
