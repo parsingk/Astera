@@ -16,6 +16,9 @@ is the guide.
   `accountIds` runs on the profile's accounts, so `tasks.create` no longer needs the Job's coordinator account for it.
 - `Job.agentProfileId` and `Task.agentProfileId`: the profile they run as, by its id. A `Run`'s worker attempts
   (`TaskAttempt.agentProfileId`) carry it too.
+- A session's `sandboxed` and `sandboxKind` (the Astera that ships the sandbox or later; an older one leaves them out):
+  whether it runs in its agent CLI's own sandbox, and what protection that is, `sandbox`, or `deny-only` for Claude
+  Code on Windows, where only its deny rules hold.
 - Token totals (the Astera that ships observe mode or later; an older one leaves them out): `runs.get` carries `tokens`,
   what the Run's Tasks' sessions spent, and `coordinatorTokens`, what its coordinator spent, apart; `tasks.get` carries
   the Task's `tokens`. Each is a `TokenTotals` (`input`, `output`, `total`), absent when the Host read none. No cost in
