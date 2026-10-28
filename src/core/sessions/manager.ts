@@ -102,6 +102,10 @@ export interface SpawnChecks {
    *  such a start is refused: the real question runs codex, and a home nobody asked about would bring up Windows'
    *  administrator prompt at the session's first command. */
   codexWindowsReady?: CodexWindowsReady
+  /** The folder the Host's socket is in (`hostAddress`'s `dirToPrepare`: macOS and Linux; null on Windows), which a
+   *  sandboxed Codex session's profile denies, so its way to the Host is the loopback with its workload token (final
+   *  fix pass, C2). Absent, nothing is denied for it. */
+  hostSocketDir?: string | null
 }
 
 /** The real readiness question (windowsReadiness.ts), asked with the session's own environment: its PATH finds the codex
@@ -283,6 +287,7 @@ export class SessionManager {
       homeDir: this.homeDir,
       env: this.envFor(account),
       ready: this.checks.codexWindowsReady,
+      hostSocketDir: this.checks.hostSocketDir ?? null,
       // A codex without --no-daemon (warmed above) is refused now too, for a terminal session: a chat's app-server needs
       // no such flag. The spawn still asks for itself, since its environment is built after the hiding and the codex may
       // change meanwhile. The command is built and dropped: the builder is the one place that knows whether this codex
@@ -513,8 +518,7 @@ export class SessionManager {
       // report queue and for the state file it falls back to, and an address does not say which
       // profile the Host behind it uses. So the folder travels, and the CLI derives the address from
       // it exactly as this app does (`hostAddress`). `ASTERA_HOST` stays what it was — an override for
-      // pointing at one specific Host. A sandboxed Claude session on macOS is told the socket its sandbox lets
-      // it reach in its own variable, ASTERA_SANDBOX_HOST (core/sandbox/claudeStart.ts, above).
+      // pointing at one specific Host.
       env.ASTERA_PROFILE_DIR = opts.orchEnv.profileDir
       env.ASTERA_SKILLS = opts.orchEnv.skillsPath
       env.ASTERA_SESSION = id
@@ -581,7 +585,7 @@ export class SessionManager {
   /** A sandboxed Codex session's `-a never` and permission profile (sessionSandboxArgs, core/sandbox/prepared.ts), with a
    *  win32 path cmd.exe cannot carry refused. */
   private codexSandboxArgsFor(layout: GitLayout | null, env: Record<string, string | undefined>): string[] {
-    return sessionSandboxArgs({ platform: this.checks.platform, homeDir: this.homeDir, layout, env })
+    return sessionSandboxArgs({ platform: this.checks.platform, homeDir: this.homeDir, layout, env, hostSocketDir: this.checks.hostSocketDir ?? null })
   }
 
   /** The bookkeeping half of a spawn: the live record, the two callbacks and the backpressure

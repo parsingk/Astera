@@ -14,7 +14,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { comparablePath } from '../core/files/tree'
 import { randomUUID } from 'node:crypto'
-import type { HostMessage, PtyEntry } from '../core/host/protocol'
+import { HOST_PROTOCOL, type HostMessage, type PtyEntry } from '../core/host/protocol'
+import { hostAddress } from '../core/publicContract'
 import { hostCliPaths, hostWorkerBaseEnv } from '../core/host/spawn'
 import { keptBecause, keptPhrase, type OrchServerDeps } from '../core/orchestration/command'
 import type { OrchState } from '../core/orchestration/state'
@@ -169,6 +170,9 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
   /** The sandbox for Claude (core/sandbox/claudeStart.ts), this spawner's, shared with the Host's chat sessions: a roll
    *  prepares a Claude chat chain's respawn through prepareRollSpawn, and its settings come from this StatusLineManager. */
   claudeSandbox?: ClaudeSandboxStart
+  /** The folder this Host's socket is in (macOS and Linux; null on Windows), which a sandboxed Codex session's profile
+   *  denies, terminal or chat (final fix pass, C2). */
+  hostSocketDir?: string | null
   /** The session shuttle's values once the Host wrote it (kicked at creation); undefined until then. */
   orchEnvNow(): ChatOrchEnv | undefined
   /** How many worker and coordinator starts are under way right now. */
@@ -297,8 +301,11 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   // Windows readiness for a sandboxed Codex start (sandbox design §6), asked by this spawner's prepares and the Host's chat
   // sessions alike
   const codexWindowsReady = d.codexWindowsReady ?? askCodexWindowsReady
-  // The temp folder a sandboxed Claude session's npm cache and (macOS) the Host's socket are in
+  // The temp folder a sandboxed Claude session's npm cache and the Host's socket are in
   const tmpDir = d.tmpDir ?? os.tmpdir()
+  // The folder this Host listens in (index.ts derives its address the same way), which a sandboxed Codex session's
+  // profile denies on macOS and Linux, so the loopback with its workload token is its way in (final fix pass, C2)
+  const hostSocketDir = hostAddress({ profileDir, platform, tmpDir, protocol: HOST_PROTOCOL }).dirToPrepare
   // The rule core.ts uses for the app's StatusLineManager, so the two write the same settings files. On
   // win32 the app names the Host runtime's node.exe, which is what this Host runs from, so its own
   // executable is the same file — and one that is certain to be there while its sessions run, since a
@@ -403,7 +410,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     // Read at each spawn, not once: the Host completes its PATH when a CLI is missing (windowsPath.ts)
     () => hostWorkerBaseEnv(d.env),
     // The Host's own log: a spawn that had to fall back to a sync check says so in host.log.
-    { ...defaultSpawnChecks(log), codexWindowsReady }
+    { ...defaultSpawnChecks(log), codexWindowsReady, hostSocketDir }
   )
   // Shared extensions (Agent Control Plane release 1 design §4.5): `sessions.prepare` refreshes the account before
   // every spawn and roll, and the Host's chat sessions read the same cache
@@ -828,6 +835,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     sandboxLayouts: sessions.sandboxLayouts,
     codexWindowsReady,
     claudeSandbox,
+    hostSocketDir,
     orchEnvNow: () => orchEnvReady,
     inFlight: () => spawnsInFlight,
     closeAndSettle: (ms) => {

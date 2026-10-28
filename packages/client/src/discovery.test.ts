@@ -66,20 +66,16 @@ describe('hostTarget', () => {
 
   it('an empty variable counts as unset', () => {
     expect(hostTarget({ ...base, env: { ...ROAMING, ASTERA_PROFILE_DIR: '', ASTERA_HOST: '' } })).toEqual(hostTarget({ ...base, env: ROAMING }))
-    expect(hostTarget({ ...base, env: { ...ROAMING, ASTERA_SANDBOX_HOST: '' } })).toEqual(hostTarget({ ...base, env: ROAMING }))
   })
 
-  // Inside Claude's sandbox on macOS `$TMPDIR` is not the app's, so the address derived from it is not the socket the
-  // sandbox lets the session reach; Astera names that socket in ASTERA_SANDBOX_HOST. A person's ASTERA_HOST still wins,
-  // and the profile is never changed by either
-  it('takes ASTERA_HOST first, then ASTERA_SANDBOX_HOST, then the derived address', () => {
+  // Final fix pass (C2): no variable but ASTERA_HOST overrides the derived address; an ASTERA_SANDBOX_HOST an earlier
+  // build of this branch planted is not read
+  it('takes ASTERA_HOST, else the derived address, and reads no ASTERA_SANDBOX_HOST', () => {
     const mac = { platform: 'darwin' as const, home: '/Users/me', tmpDir: '/private/tmp/claude' }
     const derived = hostTarget({ ...mac, env: { ASTERA_PROFILE_DIR: '/Users/me/p' } })
     expect(derived.address).toMatch(/^\/private\/tmp\/claude\/astera-host-[0-9a-f]{12}-v\d+\/sock$/)
-    const boxed = hostTarget({ ...mac, env: { ASTERA_PROFILE_DIR: '/Users/me/p', ASTERA_SANDBOX_HOST: '/var/f/T/astera-host-k-v4/sock' } })
-    expect(boxed).toEqual({ address: '/var/f/T/astera-host-k-v4/sock', profileDir: '/Users/me/p' })
-    const own = hostTarget({ ...mac, env: { ASTERA_PROFILE_DIR: '/Users/me/p', ASTERA_SANDBOX_HOST: '/var/f/T/astera-host-k-v4/sock', ASTERA_HOST: '/mine/sock' } })
-    expect(own).toEqual({ address: '/mine/sock', profileDir: '/Users/me/p' })
+    expect(hostTarget({ ...mac, env: { ASTERA_PROFILE_DIR: '/Users/me/p', ASTERA_SANDBOX_HOST: '/var/f/T/astera-host-k-v4/sock' } })).toEqual(derived)
+    expect(hostTarget({ ...mac, env: { ASTERA_PROFILE_DIR: '/Users/me/p', ASTERA_HOST: '/mine/sock' } })).toEqual({ address: '/mine/sock', profileDir: '/Users/me/p' })
   })
 })
 

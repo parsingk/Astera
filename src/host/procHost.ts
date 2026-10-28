@@ -3,6 +3,10 @@
 // wire is the two functions it is handed. Nothing here touches `net`.
 import type { ClientMessage, HostMessage } from '../core/host/protocol'
 import type { ProcRegistry } from './procRegistry'
+import type { HandlerFrom } from './ptyHost'
+
+/** What a proc-spawn asked of anything but the app is answered with (final fix pass, C2). */
+export const PROC_SPAWN_APP_ONLY = 'proc-spawn is served to the Astera app only'
 
 /** Returns a handler for one connection that reports whether it owned the message, so the server can
  *  try the pty handler and its own handshake messages for anything else. Lines and exits broadcast,
@@ -13,7 +17,7 @@ export function attachProcHost(a: {
   /** Whether the client on this socket marks a person's lines (its hello yields HOST_YIELD_PERSON_WRITES). Absent, or for
    *  a message with no socket: every sender does. */
   marksWrites?(socket: number): boolean
-}): (m: ClientMessage, send: (h: HostMessage) => void, from?: { socket: number }) => boolean {
+}): (m: ClientMessage, send: (h: HostMessage) => void, from?: HandlerFrom) => boolean {
   a.registry.onLine((id, seq, line) => a.broadcast({ t: 'proc-line', id, seq, line }))
   a.registry.onExit((id, exitCode, stderrTail) =>
     a.broadcast({ t: 'proc-exit', id, exitCode, ...(stderrTail !== undefined ? { stderrTail } : {}) })
@@ -22,6 +26,11 @@ export function attachProcHost(a: {
   return (m, send, from) => {
     switch (m.t) {
       case 'proc-spawn': {
+        // pty-spawn's rule (ptyHost.ts): any program, so the app's own connection only
+        if (from?.role !== 'app') {
+          send({ t: 'proc-failed', id: m.id, error: PROC_SPAWN_APP_ONLY })
+          return true
+        }
         const res = a.registry.open({ id: m.id, file: m.file, args: m.args, opts: m.opts, meta: m.meta })
         send(res.ok ? { t: 'proc-spawned', id: m.id, pid: res.pid } : { t: 'proc-failed', id: m.id, error: res.error })
         return true

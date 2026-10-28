@@ -152,6 +152,7 @@ export function composeHostRolling(a: {
     sandboxLayouts: a.spawner.sandboxLayouts,
     codexWindowsReady: a.spawner.codexWindowsReady,
     claudeSandbox: a.spawner.claudeSandbox,
+    hostSocketDir: a.spawner.hostSocketDir ?? null,
     log,
     ...a.chatsDeps
   })

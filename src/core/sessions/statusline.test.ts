@@ -14,8 +14,6 @@ import { resolveAction } from '../audit/resolve'
 import { claudeSandboxSettings } from '../sandbox/claudeSettings'
 import { credentialStoreDenies, sensitiveLocations } from '../sandbox/locations'
 import { npmCacheOf } from '../sandbox/codexProfile'
-import { hostAddress } from '../publicContract'
-import { HOST_PROTOCOL } from '../host/protocol'
 
 const account: Account = {
   id: 'a1', label: 't', configDir: path.join(os.tmpdir(), 'astera-none-config'), color: '#fff',
@@ -1012,58 +1010,25 @@ describe('StatusLineManager sandbox', () => {
     expect(JSON.parse(await read(chat![1]))).toEqual({ disableAllHooks: false, hooks: { PreToolUse: [pre] }, sandbox: want.sandbox, permissions: { deny: want.permissions.deny } })
   })
 
-  // Task 2's ruling (inventory §23.4): srt on macOS lets a sandboxed command connect to a Unix socket it names, so `astera`
-  // reaches the Host even in a line excludedCommands does not take out (`cd x && astera …`); Linux ignores the list
-  it('on macOS the sandbox names the Host’s socket, and on Linux it does not', async () => {
-    const mac = managerOn('darwin')
-    await mac.init()
-    await mac.ensureSandboxFiles()
-    const boxed = JSON.parse(await read(mac.spawnConfig('s1', account, { sandbox: true }).settingsFile))
-    const socket = hostAddress({ profileDir: dir, platform: 'darwin', tmpDir: TMP.darwin, protocol: HOST_PROTOCOL }).address
-    expect(socket).toMatch(/^\/var\/folders\/x\/T\/astera-host-[0-9a-f]{12}-v\d+\/sock$/)
-    // Task 7 fix round 1: one address, which the session is told too (ASTERA_SANDBOX_HOST, claudeStart.ts), since `$TMPDIR`
-    // inside the sandbox is not the app's; and Seatbelt sees `/var` as the real `/private/var`, so both spellings are granted
-    expect(mac.hostSocket()).toBe(socket)
-    expect(boxed.sandbox).toEqual({ ...builder('darwin').sandbox, network: { allowUnixSockets: [socket, `/private${socket}`] } })
-    expect(boxed.permissions.deny).toContain('Read(//Users/t/Library/Keychains/**)')
-    await fs.rm(dir, { recursive: true, force: true })
-    await fs.mkdir(dir)
+  // Final fix pass (C2): a sandboxed session reaches the Host only through the loopback and its workload token, so no twin
+  // lets a sandboxed command connect to the Host's socket, on macOS or anywhere, whatever ASTERA_HOST says
+  it('grants no Unix socket on any OS, the Host’s included', async () => {
+    for (const env of [{}, { ASTERA_HOST: '/Users/t/hosts/mine.sock' }]) {
+      await fs.rm(dir, { recursive: true, force: true })
+      await fs.mkdir(dir)
+      const mac = new StatusLineManager(dir, 'node', () => {}, { platform: 'darwin', execPath: '/opt/astera/astera', homeDir: HOME.darwin, env, tmpDir: TMP.darwin })
+      await mac.init()
+      await mac.ensureSandboxFiles()
+      const boxed = JSON.parse(await read(mac.spawnConfig('s1', account, { sandbox: true }).settingsFile))
+      expect(boxed.sandbox).toEqual(builder('darwin').sandbox)
+      expect(boxed.sandbox).not.toHaveProperty('network')
+      expect(boxed.permissions.deny).toContain('Read(//Users/t/Library/Keychains/**)')
+      expect('hostSocket' in mac).toBe(false)
+    }
     const linux = managerOn('linux')
     await linux.init()
     await linux.ensureSandboxFiles()
     expect(JSON.parse(await read(linux.spawnConfig('s1', account, { sandbox: true }).settingsFile)).sandbox).not.toHaveProperty('network')
-    expect(linux.hostSocket()).toBeNull()
-    expect(managerOn('win32').hostSocket()).toBeNull()
-  })
-
-  // Task 7 fix round 1: a person who points Astera at a Host by hand (ASTERA_HOST) keeps it, and it is that address that is
-  // granted; one outside `/var` and `/tmp` has no other spelling
-  it('on macOS the person’s own ASTERA_HOST is the socket granted', async () => {
-    const mac = new StatusLineManager(dir, 'node', () => {}, {
-      platform: 'darwin', execPath: '/opt/astera/astera', homeDir: HOME.darwin, env: { ASTERA_HOST: '/Users/t/hosts/mine.sock' }, tmpDir: TMP.darwin
-    })
-    await mac.init()
-    await mac.ensureSandboxFiles()
-    expect(mac.hostSocket()).toBe('/Users/t/hosts/mine.sock')
-    const boxed = JSON.parse(await read(mac.spawnConfig('s1', account, { sandbox: true }).settingsFile))
-    expect(boxed.sandbox.network).toEqual({ allowUnixSockets: ['/Users/t/hosts/mine.sock'] })
-    const tmp = new StatusLineManager(dir, 'node', () => {}, {
-      platform: 'darwin', execPath: '/opt/astera/astera', homeDir: HOME.darwin, env: { ASTERA_HOST: '/tmp/h/sock' }, tmpDir: TMP.darwin
-    })
-    await tmp.init()
-    await tmp.ensureSandboxFiles()
-    expect(JSON.parse(await read(tmp.spawnConfig('s1', account, { sandbox: true }).settingsFile)).sandbox.network).toEqual({
-      allowUnixSockets: ['/tmp/h/sock', '/private/tmp/h/sock']
-    })
-  })
-
-  // Task 7 fix round 2: ASTERA_SANDBOX_HOST is what a sandboxed session is told, never what a process grants: an app started
-  // inside such a session inherits it, and granting it would let its sessions reach the first Host
-  it('on macOS an inherited ASTERA_SANDBOX_HOST is not the socket granted', async () => {
-    const mac = new StatusLineManager(dir, 'node', () => {}, {
-      platform: 'darwin', execPath: '/opt/astera/astera', homeDir: HOME.darwin, env: { ASTERA_SANDBOX_HOST: '/var/f/T/astera-host-000000000000-v4/sock' }, tmpDir: TMP.darwin
-    })
-    expect(mac.hostSocket()).toBe(hostAddress({ profileDir: dir, platform: 'darwin', tmpDir: TMP.darwin, protocol: HOST_PROTOCOL }).address)
   })
 
   it('on Windows the twin holds the deny rules only, in Claude’s POSIX form', async () => {

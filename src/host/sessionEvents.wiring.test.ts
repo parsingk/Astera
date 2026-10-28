@@ -34,7 +34,7 @@ describe('the Host wires its session events', () => {
     expect(intake).toBeGreaterThan(0)
     expect(src.slice(intake, intake + 300)).toMatch(/sessionEvents && from\.greeted && from\.role === 'app'/)
     expect(src.slice(intake, intake + 300)).toMatch(/sessionEvents\.forwarded\(m\.signal\)/)
-    expect(intake).toBeLessThan(src.indexOf('handlePty?.(m, send, { socket: from.socket })'))
+    expect(intake).toBeLessThan(src.indexOf('handlePty?.(m, send, { socket: from.socket, role: from.role })'))
   })
 
   it('stops it with the Host, beside the rolling that feeds it', () => {

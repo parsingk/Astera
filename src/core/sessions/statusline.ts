@@ -15,8 +15,6 @@ import { codexEnforceArgs } from './codexEnforce'
 import { claudeSandboxSettings, type ClaudeSandboxSettings } from '../sandbox/claudeSettings'
 import { credentialStoreDenies, sensitiveLocations } from '../sandbox/locations'
 import { npmCacheOf } from '../sandbox/codexProfile'
-import { hostAddress } from '../publicContract'
-import { HOST_PROTOCOL } from '../host/protocol'
 
 /** The statusLine injection info handed to SessionManager when a session is spawned. */
 export interface StatusLineSpawn {
@@ -328,10 +326,8 @@ function withObserveHooks(s: BuiltSettings['settings'], command: string): string
   return JSON.stringify({ ...s, hooks: { ...s.hooks, PostToolUse: [...s.hooks.PostToolUse, audit], PostToolUseFailure: [audit] } }, null, 2)
 }
 
-/** What a sandbox twin adds (ensureSandboxFiles): the builder's settings, with the Host's socket on macOS. */
-type SandboxPart = Omit<ClaudeSandboxSettings, 'sandbox'> & {
-  sandbox?: NonNullable<ClaudeSandboxSettings['sandbox']> & { network?: { allowUnixSockets: string[] } }
-}
+/** What a sandbox twin adds (ensureSandboxFiles): the builder's settings. */
+type SandboxPart = ClaudeSandboxSettings
 
 /** A settings file's sandbox twin: the same JSON with Claude's sandbox added and the deny rules after any it already has. */
 function withSandbox(content: string, part: SandboxPart): string {
@@ -686,18 +682,19 @@ export class StatusLineManager {
    * The sandbox (sandbox design §6): writes, beside each settings file a session can be pointed at (plain, hooks, observe,
    * observe hooks, enforce, enforce hooks, as far as each has been built), its twin `…-sandbox.json`, the same JSON with
    * Claude's sandbox added and the deny rules for the E6 list and the OS credential store (claudeSandboxSettings), and
-   * the files a sandboxed chat takes as its one `--settings`: the sandbox alone, and with Enforce's hook. On macOS the
-   * sandbox also lets a command reach the Host's socket, so `astera` works where `excludedCommands` does not take the line
-   * out (`cd x && astera …`), as Task 2 measured (inventory §23.4); Linux ignores such a list, and Windows gets the deny
-   * rules only (Claude has no sandbox there). Written only once a sandboxed Claude is about to start
+   * the files a sandboxed chat takes as its one `--settings`: the sandbox alone, and with Enforce's hook. No Unix socket
+   * is granted, the Host's included: a sandboxed session reaches the Host through `astera` in `excludedCommands` or the
+   * loopback with its workload token, so a line `excludedCommands` does not take out (`cd x && astera …`) cannot reach it,
+   * on macOS as on Linux. Windows gets the deny rules only (Claude has no sandbox there). Written only once a sandboxed
+   * Claude is about to start
    * (core/sandbox/claudeStart.ts), so a session without it reads exactly the bytes it always did, at the same path. From
    * then on every file rewritten gets its twin rewritten too. Resolves to 'write-failed' when a twin is not in place: a
    * session asked to be sandboxed is then not marked so (spawnConfig), and its manager refuses it (E5). Never throws.
    *
    * The app and the Host each write these same paths in the profile folder, each from its own home, environment and
    * temp folder, as they already do the files the twins are made from. The Host is started with the app's environment,
-   * so the two write the same bytes; if they ever differ, a session reads the last one written, and the deny list, npm's
-   * cache and the macOS socket in it are still the same person's.
+   * so the two write the same bytes; if they ever differ, a session reads the last one written, and the deny list and npm's
+   * cache in it are still the same person's.
    */
   async ensureSandboxFiles(): Promise<SandboxFilesResult> {
     this.sandboxWanted = true
@@ -705,32 +702,10 @@ export class StatusLineManager {
     return this.writeSandboxTwins()
   }
 
-  /**
-   * macOS: the one address a sandboxed Claude session reaches the Host at, granted in its twin (`allowUnixSockets`) and
-   * put in its environment as ASTERA_SANDBOX_HOST (core/sandbox/claudeStart.ts), since inside Claude's sandbox `$TMPDIR` is
-   * not the app's and the socket `astera` would derive from it is not the one granted. The person's own ASTERA_HOST when
-   * they set one (the address `astera` takes first), else where the Host listens for this profile (hostAddress, from this
-   * process's temp folder, as the app and the Host derive it). Never an ASTERA_SANDBOX_HOST this process inherited: that
-   * is another session's grant, and an app started inside that session must grant its own Host's socket. Null elsewhere:
-   * Linux's sandbox ignores per-path sockets, and Windows has no sandbox for Claude.
-   */
-  hostSocket(): string | null {
-    if (this.platform !== 'darwin') return null
-    const own = this.env.ASTERA_HOST
-    if (own) return own
-    return hostAddress({ profileDir: this.userDataDir, platform: this.platform, tmpDir: this.tmpDir, protocol: HOST_PROTOCOL }).address
-  }
-
-  /** What a sandbox twin adds: the builder's settings, read from this process's home and environment, and on macOS the
-   *  Host's socket (hostSocket). Seatbelt matches the real path, and macOS keeps `/var` and `/tmp` as links into
-   *  `/private`, so a socket under either is granted in both spellings. */
+  /** What a sandbox twin adds: the builder's settings, read from this process's home and environment. */
   private sandboxPart(): SandboxPart {
     const denied = [...sensitiveLocations(this.platform, this.env, this.homeDir), ...credentialStoreDenies(this.platform, this.env, this.homeDir)]
-    const s = claudeSandboxSettings({ platform: this.platform, denied, npmCache: npmCacheOf(this.tmpDir) })
-    const socket = this.hostSocket()
-    if (socket === null || !s.sandbox) return s
-    const real = /^\/(?:var|tmp)\//.test(socket) ? [`/private${socket}`] : []
-    return { ...s, sandbox: { ...s.sandbox, network: { allowUnixSockets: [socket, ...real] } } }
+    return claudeSandboxSettings({ platform: this.platform, denied, npmCache: npmCacheOf(this.tmpDir) })
   }
 
   private twinOf(file: string): string {

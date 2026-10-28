@@ -48,24 +48,17 @@ export const gitExcludesFileOf = (profileDir: string, uid: number): string => `$
  *  - npm's cache in TEMP, since srt leaves out a write path that does not exist and the default cache is under the home
  *    folder;
  *  - on Linux the exclude file, numbered after the GIT_CONFIG_* entries the session inherits (`env`), as codexSandboxEnv
- *    numbers its own; `excludesFile` null: it could not be written, and git keeps the person's own excludes;
- *  - on macOS the Host's address, `hostSocket`, as ASTERA_SANDBOX_HOST: inside Claude's sandbox `$TMPDIR` is not the
- *    app's, so the socket `astera` would derive from it is not the one the sandbox lets it reach
- *    (StatusLineManager.hostSocket); `astera` reads it after a person's ASTERA_HOST (packages/client/src/discovery.ts).
- *    ASTERA_HOST itself is never planted: it is the person's, and every session and Host keeps it, so a planted one
- *    would outlive the session in an app started inside it. ASTERA_SANDBOX_HOST is cleared from every session and Host
- *    Astera starts (MANAGED_ENV_KEYS, core/host/spawn.ts). Linux's sandbox ignores per-path sockets, so `astera`
- *    reaches the Host there through excludedCommands only and nothing is planted. */
+ *    numbers its own; `excludesFile` null: it could not be written, and git keeps the person's own excludes.
+ *  No Host address is planted: the sandbox grants no socket, so `astera` reaches the Host through `excludedCommands`,
+ *  outside the sandbox, where it derives the address as any session does. */
 export function claudeSandboxEnv(o: {
   platform: NodeJS.Platform
   tmpDir: string
   excludesFile: string | null
-  hostSocket: string | null
   env?: Record<string, string | undefined>
 }): Record<string, string> {
   if (o.platform === 'win32') return {}
   const env: Record<string, string> = { npm_config_cache: npmCacheOf(o.tmpDir) }
-  if (o.platform === 'darwin' && o.hostSocket !== null) env.ASTERA_SANDBOX_HOST = o.hostSocket
   if (o.platform !== 'linux' || o.excludesFile === null) return env
   return { ...env, ...appendGitConfig(o.env, [['core.excludesFile', o.excludesFile]]) }
 }
@@ -121,8 +114,6 @@ export function claudeSandboxStart(o: {
   files: {
     ensureSandboxFiles(): Promise<SandboxFilesResult>
     sandboxChatArgs(enforce: boolean): string[] | null
-    /** macOS: the Host's address the twins grant; null elsewhere. */
-    hostSocket(): string | null
   }
   /** The version check Enforce asks (cliVersion.ts), shared with it. */
   version: Pick<CliVersionProbe, 'warm'> & ((cli: 'claude') => string | null | undefined)
@@ -177,7 +168,6 @@ export function claudeSandboxStart(o: {
         platform: o.platform,
         tmpDir: o.tmpDir,
         excludesFile: excludesWritten ? excludesFile : null,
-        hostSocket: o.files.hostSocket(),
         env: inherited
       })
   }

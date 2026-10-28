@@ -4,7 +4,7 @@
 // for the spawn. A roll prepares a chat chain's respawn through the terminal manager's prepare, as it refreshes the
 // capability cache both managers read, so the two managers of a process hold one PreparedLayouts.
 import { ensureWorktreeConfigFiles, gitLayoutOf, type GitLayout } from './gitLayout'
-import { credentialStoreDenies, sensitiveLocations } from './locations'
+import { credentialStoreDenies, hostSocketDenies, sensitiveLocations } from './locations'
 import { codexSandboxArgs } from './codexProfile'
 import { sandboxUnavailable } from './unavailable'
 import type { Readiness } from './windowsReadiness'
@@ -39,12 +39,19 @@ export class PreparedLayouts {
 const keyOf = (accountId: string, cwd: string): string => `${accountId}\u0000${cwd}`
 
 /** A sandboxed Codex session's `-a never` and permission profile: its repository's git directories writable, the E6
- *  list and the OS credential store denied, read from the session's own environment and home. On Windows the launch
- *  goes through cmd.exe, which would break on a path holding one of its characters, so such a start is refused
- *  instead of launched broken (Review Focus 2). */
-export function sessionSandboxArgs(o: { platform: NodeJS.Platform; homeDir: string; layout: GitLayout | null; env: Record<string, string | undefined> }): string[] {
+ *  list and the OS credential store denied, read from the session's own environment and home, and on macOS and Linux
+ *  the folder the Host's socket is in (`hostSocketDir`, hostSocketDenies). On Windows the launch goes through cmd.exe,
+ *  which would break on a path holding one of its characters, so such a start is refused instead of launched broken
+ *  (Review Focus 2). */
+export function sessionSandboxArgs(o: {
+  platform: NodeJS.Platform
+  homeDir: string
+  layout: GitLayout | null
+  env: Record<string, string | undefined>
+  hostSocketDir?: string | null
+}): string[] {
   const { platform, homeDir, layout, env } = o
-  const denied = [...sensitiveLocations(platform, env, homeDir), ...credentialStoreDenies(platform, env, homeDir)]
+  const denied = [...sensitiveLocations(platform, env, homeDir), ...credentialStoreDenies(platform, env, homeDir), ...hostSocketDenies(platform, o.hostSocketDir ?? null)]
   if (platform === 'win32') {
     const named = [...(layout ? [layout.top, layout.gitDir, layout.commonDir, ...layout.worktreeConfigs] : []), ...denied]
     if (named.some((p) => LAUNCH_FORBIDDEN.test(p))) throw sandboxUnavailable('path-unsafe')
@@ -71,6 +78,8 @@ export async function prepareCodexSandbox(o: {
   env: Record<string, string | undefined>
   /** Absent, a Windows start is refused: a home nobody asked about would bring up the administrator prompt. */
   ready: CodexWindowsReady | undefined
+  /** The folder the Host's socket is in, denied on macOS and Linux (sessionSandboxArgs). */
+  hostSocketDir?: string | null
   check?: (sandboxArgs: string[]) => void
   log: (m: string) => void
 }): Promise<GitLayout | null> {
@@ -84,7 +93,7 @@ export async function prepareCodexSandbox(o: {
   } catch (err) {
     throw fail(err)
   }
-  const args = sessionSandboxArgs({ platform: o.platform, homeDir: o.homeDir, layout, env: o.env })
+  const args = sessionSandboxArgs({ platform: o.platform, homeDir: o.homeDir, layout, env: o.env, hostSocketDir: o.hostSocketDir ?? null })
   o.check?.(args)
   if (o.platform === 'win32') {
     const verdict: Readiness = o.ready ? await o.ready({ codexHome: o.env.CODEX_HOME ?? null, env: o.env, log: o.log }) : 'not-set-up'

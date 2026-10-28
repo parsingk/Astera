@@ -37,21 +37,3 @@ describe('cliEnvFor, the Gateway variables', () => {
     expect(MANAGED_ENV_KEYS).toEqual(expect.arrayContaining(['ASTERA_GATEWAY_TOKEN', 'ASTERA_GATEWAY_GRANT', 'ASTERA_LOOPBACK']))
   })
 })
-
-// Task 7 fix round 2: the socket a sandboxed Claude session on macOS is granted is its own variable, which an app started
-// inside such a session (a developer's `npm run dev`) must not hand to its sessions, or their `astera` reaches the first
-// Host; the person's own ASTERA_HOST stays theirs and passes through
-describe('cliEnvFor, the sandbox Host address', () => {
-  it('drops an inherited ASTERA_SANDBOX_HOST and keeps ASTERA_HOST', () => {
-    expect(MANAGED_ENV_KEYS).toContain('ASTERA_SANDBOX_HOST')
-    expect(MANAGED_ENV_KEYS).not.toContain('ASTERA_HOST')
-    const env = cliEnvFor({
-      base: { PATH: '/usr/bin', ASTERA_SANDBOX_HOST: '/var/f/T/astera-host-x-v4/sock', ASTERA_HOST: '/mine/sock' },
-      account: account('C:/Users/me/.codex'),
-      descriptor: descriptors.codex,
-      homeDir: 'C:/Users/me'
-    })
-    expect('ASTERA_SANDBOX_HOST' in env).toBe(false)
-    expect(env.ASTERA_HOST).toBe('/mine/sock')
-  })
-})

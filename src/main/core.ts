@@ -50,6 +50,8 @@ import { readPolicyMode } from '../core/audit/policy'
 import type { EnforceStart } from '../core/audit/enforce'
 import { cliVersionProbe, enforceBlocker } from '../core/sessions/cliVersion'
 import { claudeSandboxStart } from '../core/sandbox/claudeStart'
+import { hostAddress } from '../core/publicContract'
+import { HOST_PROTOCOL } from '../core/host/protocol'
 import { createManagedHooksCheck } from '../core/sessions/managedHooks'
 import { codexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
 import { findInstalledHostExe } from '../core/host/installedRuntime'
@@ -277,6 +279,9 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   // here. Set as the probe log too, so the terminal's shell lookup writes to the same place.
   const sessionsLog = lineLog(path.join(userDataDir, 'sessions.log'))
   setProbeLog(sessionsLog)
+  // The folder this profile's Host listens in (macOS and Linux), which a sandboxed Codex session may not open: it reaches
+  // the Host through the loopback with its workload token instead (final fix pass, C2)
+  const hostSocketDir = hostAddress({ profileDir: userDataDir, platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL }).dirToPrepare
   // descriptors is injected explicitly — left unspecified, each of them calls makeDescriptors(process.platform)
   // again, so every instance gets its own table (plus two command builders SessionManager never uses).
   const sessions = new SessionManager(
@@ -290,7 +295,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     // Mode writes the crops whose paths it sends. previewShotsDir is the same path capture.ts writes.
     [previewShotsDir(userDataDir)],
     process.env,
-    defaultSpawnChecks(sessionsLog)
+    { ...defaultSpawnChecks(sessionsLog), hostSocketDir }
   )
   // Shared extensions (Agent Control Plane release 1 design §4.5). The two managers read the same cache:
   // a chat roll's respawn is prepared through `sessions.prepare`, which refreshes the target account
@@ -367,7 +372,8 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     // chain's roll is prepared through `sessions.prepare`; Windows readiness is asked the same way by both
     sandboxLayouts: sessions.sandboxLayouts,
     codexWindowsReady: askCodexWindowsReady,
-    claudeSandbox
+    claudeSandbox,
+    hostSocketDir
   })
   // Lazy history: nothing is scanned at startup. The project list comes from a directory listing; sessions are
   // parsed when expanded. index.ts starts the file watcher with startBackground() after the window is up, so window creation never blocks on a scan.

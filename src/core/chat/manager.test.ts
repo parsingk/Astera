@@ -1551,7 +1551,7 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
     win32: { Path: 'C:\\Windows', APPDATA: 'C:\\Users\\t\\AppData\\Roaming' }
   } as const
   type Ready = NonNullable<ChatManagerDeps['codexWindowsReady']>
-  const rig = (platform: 'linux' | 'win32', o: { ready?: Ready; layouts?: PreparedLayouts; noDaemon?: boolean } = {}) => {
+  const rig = (platform: 'linux' | 'win32', o: { ready?: Ready; layouts?: PreparedLayouts; noDaemon?: boolean; hostSocketDir?: string | null } = {}) => {
     const spawned: Array<{ file: string; args: string[]; opts: ProcSpawnOptions; proc: FakeProc }> = []
     const { createAdapter, handles } = makeAdapterFactory()
     const manager = new ChatSessionManager({
@@ -1569,7 +1569,8 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
       createAdapter,
       baseEnv: { ...BASE[platform] },
       codexWindowsReady: o.ready ?? (async () => 'ready'),
-      ...(o.layouts ? { sandboxLayouts: o.layouts } : {})
+      ...(o.layouts ? { sandboxLayouts: o.layouts } : {}),
+      ...(o.hostSocketDir !== undefined ? { hostSocketDir: o.hostSocketDir } : {})
     })
     return { manager, spawned, handles }
   }
@@ -1606,6 +1607,15 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
       // win32: a missing config.worktree is made first, as for a terminal session
       expect(existsSync(path.join(cwd, '.git', 'config.worktree'))).toBe(platform === 'win32')
     }
+  })
+
+  // Final fix pass (C2): as a terminal session's, the profile denies the folder the Host's socket is in on Linux
+  it("a sandboxed chat's profile denies the folder of the Host's socket", async () => {
+    const cwd = repo()
+    const { manager, spawned } = rig('linux', { hostSocketDir: '/tmp/astera-host-0123456789ab-v4' })
+    await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    expect(spawned[0].args.find((a) => a.startsWith('permissions='))).toContain('"/tmp/astera-host-0123456789ab-v4"="deny"')
   })
 
   it("an unsandboxed chat's arguments and thread parameters are unchanged", async () => {

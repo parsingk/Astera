@@ -1250,7 +1250,8 @@ async function main(): Promise<void> {
           if (sessionEvents && from.greeted && from.role === 'app') sessionEvents.forwarded(m.signal)
           return true
         }
-        return (handlePty?.(m, send, { socket: from.socket }) ?? false) || (handleProc?.(m, send, { socket: from.socket }) ?? false)
+        // The role rides along: a pty-spawn or proc-spawn is served to the app's own connection only (final fix pass, C2)
+        return (handlePty?.(m, send, { socket: from.socket, role: from.role }) ?? false) || (handleProc?.(m, send, { socket: from.socket, role: from.role }) ?? false)
       },
       // Released by the socket number whatever role the socket gave last: a second `hello` can change
       // it, and marks made as an app must still go when that socket closes. A socket that never held a

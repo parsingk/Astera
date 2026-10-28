@@ -32,9 +32,8 @@ export interface AsteraClientOptions {
   /** The profile folder whose Host to talk to. Default: `ASTERA_PROFILE_DIR`, else the installed app's, else the
    *  dev app's with `ASTERA_PROFILE=dev`. */
   readonly profileDir?: string
-  /** The Host's address. Default: `ASTERA_HOST` for the discovered profile, else `ASTERA_SANDBOX_HOST` (set inside a
-   *  sandboxed Claude Code session on macOS), else the address `profileDir`'s Host listens on. An explicit `profileDir`
-   *  without an `address` is always that profile's own Host. */
+  /** The Host's address. Default: `ASTERA_HOST` for the discovered profile, else the address `profileDir`'s Host
+   *  listens on. An explicit `profileDir` without an `address` is always that profile's own Host. */
   readonly address?: string
   /** How long the handshake may take, in ms. Default 5000. */
   readonly connectTimeoutMs?: number

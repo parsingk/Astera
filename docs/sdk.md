@@ -76,9 +76,7 @@ try {
 - `ASTERA_PROFILE_DIR` names a profile folder, and its Host is the one used.
 - `ASTERA_PROFILE=dev` picks the development app's profile when `ASTERA_PROFILE_DIR` is not set.
 - `ASTERA_HOST` overrides the address of the profile found that way.
-- `ASTERA_SANDBOX_HOST`, which Astera sets inside a sandboxed Claude Code session on macOS, names the socket that
-  session's sandbox lets it reach; it comes after `ASTERA_HOST` and before the derived address.
-- The options `profileDir` and `address` override all of these. An explicit `profileDir` without `address` is always
+- The options `profileDir` and `address` override all three. An explicit `profileDir` without `address` is always
   that profile's own Host.
 
 A script started inside a session Astera runs inherits that session's `ASTERA_PROFILE_DIR`, so it reaches the Host

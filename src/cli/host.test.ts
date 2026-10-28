@@ -424,16 +424,12 @@ describe('cliHostTarget', () => {
     expect(cliHostTarget({ env, platform: process.platform, home }).address).toBe('\\\\.\\pipe\\given')
   })
 
-  // Task 7 fix round 2: a sandboxed Claude session on macOS is told the socket its sandbox lets it reach, since `$TMPDIR`
-  // there is not the app's; the person's ASTERA_HOST still wins over it
-  it('ASTERA_SANDBOX_HOST comes after ASTERA_HOST and before the derived address', () => {
+  // Final fix pass (C2): the CLI reads no address but ASTERA_HOST's and the derived one; an ASTERA_SANDBOX_HOST an earlier
+  // build of this branch planted is ignored
+  it('ASTERA_SANDBOX_HOST 는 읽지 않는다', () => {
     const base = { APPDATA: path.join('C:', 'a') }
     const derived = cliHostTarget({ env: base as NodeJS.ProcessEnv, platform: process.platform, home }).address
-    expect(cliHostTarget({ env: { ...base, ASTERA_SANDBOX_HOST: '/granted/sock' } as NodeJS.ProcessEnv, platform: process.platform, home }).address).toBe('/granted/sock')
-    expect(
-      cliHostTarget({ env: { ...base, ASTERA_SANDBOX_HOST: '/granted/sock', ASTERA_HOST: '/mine/sock' } as NodeJS.ProcessEnv, platform: process.platform, home }).address
-    ).toBe('/mine/sock')
-    expect(cliHostTarget({ env: { ...base, ASTERA_SANDBOX_HOST: '' } as NodeJS.ProcessEnv, platform: process.platform, home }).address).toBe(derived)
+    expect(cliHostTarget({ env: { ...base, ASTERA_SANDBOX_HOST: '/granted/sock' } as NodeJS.ProcessEnv, platform: process.platform, home }).address).toBe(derived)
   })
 
   // 주소는 그 Host 가 어느 프로필을 쓰는지 말해 주지 않는다. 상태 파일과 보고 큐가 있는 곳은

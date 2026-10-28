@@ -87,6 +87,9 @@ export interface ChatManagerDeps {
   /** The sandbox for Claude (core/sandbox/claudeStart.ts), the terminal manager's (SessionManager.claudeSandbox), whose
    *  prepare a roll's chat respawn goes through. Absent, a sandboxed Claude chat is refused. */
   claudeSandbox?: ClaudeSandboxStart
+  /** The folder the Host's socket is in, which a sandboxed Codex chat's profile denies on macOS and Linux (SpawnChecks'
+   *  twin). Absent, nothing is denied for it. */
+  hostSocketDir?: string | null
 }
 
 /** What `spawn` takes, for a caller that builds it elsewhere (./respawn.ts). */
@@ -271,6 +274,7 @@ export class ChatSessionManager {
       homeDir: this.deps.homeDir,
       env: this.inheritedEnv(opts.account),
       ready: this.deps.codexWindowsReady,
+      hostSocketDir: this.deps.hostSocketDir ?? null,
       log: this.deps.log
     })
     this.sandboxLayouts.keep(opts.account.id, opts.cwd, layout, Date.now())
@@ -365,7 +369,9 @@ export class ChatSessionManager {
     // The profile's places it may not read come from the environment the chat actually starts with, after the hiding;
     // the app-server takes them without the TUI's `-a never`, which the thread's approvalPolicy carries instead
     const sandboxArgs = sandboxedCodex
-      ? appServerSandboxArgs(sessionSandboxArgs({ platform: this.deps.platform, homeDir: this.deps.homeDir, layout, env: inherited }))
+      ? appServerSandboxArgs(
+          sessionSandboxArgs({ platform: this.deps.platform, homeDir: this.deps.homeDir, layout, env: inherited, hostSocketDir: this.deps.hostSocketDir ?? null })
+        )
       : []
     const env: Record<string, string | undefined> = {
       ...inherited,

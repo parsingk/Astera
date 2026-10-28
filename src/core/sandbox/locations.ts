@@ -24,6 +24,18 @@ export function busSocketOf(env: Record<string, string | undefined>): string | n
   return runtime ? `${slashed(runtime)}/bus` : null
 }
 
+/** The folder the Host's socket is in (`hostAddress`'s `dirToPrepare`, macOS and Linux), which a sandboxed Codex session
+ *  may not open, so it reaches the Host only through the loopback with its workload token (final fix pass, C2). The
+ *  whole folder, not the socket file: the Host key the loopback's proof needs is kept in the profile folder
+ *  (`<profile>/host/host.key`), not here, and the folder holds nothing else a session needs. macOS keeps `/var` and `/tmp`
+ *  as links into `/private`, so a folder under either is named in both spellings. None on Windows, where the Host
+ *  listens on a named pipe, or when `dir` is not known. */
+export function hostSocketDenies(platform: NodeJS.Platform, dir: string | null): string[] {
+  if (platform === 'win32' || !dir) return []
+  const d = slashed(dir)
+  return platform === 'darwin' && /^\/(?:var|tmp)\//.test(d) ? [d, `/private${d}`] : [d]
+}
+
 /** What a sandbox cannot be trusted to keep closed: the macOS keychain folder and the Linux session bus socket (a process
  *  that reaches it can ask the secret service for any stored login). Windows has no file to name. */
 export function credentialStoreDenies(platform: NodeJS.Platform, env: Record<string, string | undefined>, home: string): string[] {

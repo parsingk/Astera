@@ -25,7 +25,9 @@ const harness = (proc = fakeProc(), over: { marksWrites?: (socket: number) => bo
   const replies: HostMessage[] = []
   const registry = new ProcRegistry({ spawn: () => proc, log: (m) => logs.push(m) })
   const handle = attachProcHost({ registry, broadcast: (m) => broadcast.push(m), ...over })
-  const send = (m: ClientMessage, from?: { socket: number }): boolean => handle(m, (h) => replies.push(h), from)
+  // The app's own connection unless a test names another: only the app may have the Host spawn a process
+  const send = (m: ClientMessage, from: { socket: number; role: 'app' | 'cli' | 'mcp' } = { socket: 1, role: 'app' }): boolean =>
+    handle(m, (h) => replies.push(h), from)
   const spawn = (id = 'p1'): boolean =>
     send({ t: 'proc-spawn', id, file: 'codex', args: ['app-server'], opts: { cwd: 'D:/p', env: {} }, meta: { kind: 'chat', id: 'chat_1', restore: {} } })
   return { proc, logs, broadcast, replies, registry, send, spawn }
@@ -36,6 +38,17 @@ describe('attachProcHost', () => {
     const h = harness()
     expect(h.spawn()).toBe(true)
     expect(h.replies).toEqual([{ t: 'proc-spawned', id: 'p1', pid: 11 }])
+  })
+
+  // Final fix pass (C2): proc-spawn starts any program, as pty-spawn does, so it is the app's alone too
+  it('refuses a proc-spawn from anything but the app, and opens nothing', () => {
+    for (const role of ['cli', 'mcp'] as const) {
+      const h = harness()
+      const spawn: ClientMessage = { t: 'proc-spawn', id: 'p1', file: 'codex', args: ['app-server'], opts: { cwd: 'D:/p', env: {} } }
+      expect(h.send(spawn, { socket: 3, role })).toBe(true)
+      expect(h.replies).toEqual([{ t: 'proc-failed', id: 'p1', error: 'proc-spawn is served to the Astera app only' }])
+      expect(h.registry.list()).toEqual([])
+    }
   })
   it('answers proc-failed when the registry refuses', () => {
     const h = harness()
@@ -81,10 +94,10 @@ describe('attachProcHost', () => {
     ])
     const h = harness(fakeProc(), { marksWrites: (socket) => marks.get(socket) === true })
     h.spawn()
-    h.send({ t: 'proc-write', id: 'p1', line: '{"type":"user"}', typed: true }, { socket: 1 })
+    h.send({ t: 'proc-write', id: 'p1', line: '{"type":"user"}', typed: true }, { socket: 1, role: 'app' })
     expect(h.registry.submittedBetween('p1', 0, Date.now() + 1)).toBe('person')
     expect(h.registry.writesUnmarked('p1')).toBe(false)
-    h.send({ t: 'proc-write', id: 'p1', line: '{"type":"user"}' }, { socket: 2 })
+    h.send({ t: 'proc-write', id: 'p1', line: '{"type":"user"}' }, { socket: 2, role: 'app' })
     expect(h.proc.sent).toEqual(['{"type":"user"}\n', '{"type":"user"}\n'])
     expect(h.registry.writesUnmarked('p1')).toBe(true)
   })

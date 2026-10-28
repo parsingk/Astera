@@ -64,10 +64,6 @@ export function profilePath(given: string, platform: NodeJS.Platform): string {
  *
  * **`ASTERA_HOST` wins the address only**: it points at one particular Host by hand, and still says nothing about
  * which profile that Host uses. An empty variable counts as unset.
- *
- * **`ASTERA_SANDBOX_HOST` comes next**: Astera sets it in a sandboxed Claude Code session on macOS, whose sandbox lets it
- * reach that one socket while giving it a `$TMPDIR` the derived address would not match. Astera clears it from every
- * session and Host it starts, so it never outlives the session it was set for, and a person's `ASTERA_HOST` still wins.
  */
 export function hostTarget(a: {
   env: Record<string, string | undefined>
@@ -82,7 +78,5 @@ export function hostTarget(a: {
       : userDataDir({ platform: a.platform, env: a.env, home: a.home, dev: a.env.ASTERA_PROFILE === 'dev' })
   const explicit = a.env.ASTERA_HOST
   if (explicit !== undefined && explicit.length > 0) return { address: explicit, profileDir }
-  const sandboxed = a.env.ASTERA_SANDBOX_HOST
-  if (sandboxed !== undefined && sandboxed.length > 0) return { address: sandboxed, profileDir }
   return { address: hostAddress({ profileDir, platform: a.platform, tmpDir: a.tmpDir, protocol: HOST_PROTOCOL }).address, profileDir }
 }

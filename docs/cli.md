@@ -496,10 +496,8 @@ and you should leave all three alone.
 | `ASTERA_PROFILE` | Set it to `dev` to select the development profile when neither of the other two is set. |
 
 The order is: the profile is `ASTERA_PROFILE_DIR` when set, otherwise the platform's folder for the
-app name `ASTERA_PROFILE` selects. The address is `ASTERA_HOST` when set, otherwise
-`ASTERA_SANDBOX_HOST` when set, otherwise the address derived from that profile. Astera sets
-`ASTERA_SANDBOX_HOST` only inside a sandboxed Claude Code session on macOS (see `--sandbox` under
-`agent-profiles`), and clears it from every session and Host it starts.
+app name `ASTERA_PROFILE` selects. The address is `ASTERA_HOST` when set, otherwise the address
+derived from that profile.
 
 The profile travels rather than the address alone, because an address does not say which profile the
 Host behind it uses, and the report queue and the state file are both properties of the profile.
@@ -1139,13 +1137,14 @@ chat's thread names the profile and its approval policy is `never`) and a termin
 (`--no-daemon`). On every OS it writes only in its folder, the git directories of the folder's repository (never their
 `hooks` or `config`) and the temp folder, where npm's cache goes; it cannot read `~/.ssh`, `~/.aws`, the GitHub CLI's
 and gcloud's settings, `~/.docker`, `~/.npmrc`, `~/.git-credentials` or `~/.kube`; and the network works. On macOS
-`~/Library/Keychains` is closed too, and on Linux the session bus a secret service answers on. A Claude Code session,
+`~/Library/Keychains` is closed too, and on Linux the session bus a secret service answers on. On macOS and Linux it
+cannot open the folder the Host's socket is in either, so its `astera` reaches the Host only through the loopback
+endpoint with the session's own token (`ASTERA_LOOPBACK`, above). A Claude Code session,
 terminal or chat, gets Claude Code's own sandbox on macOS and Linux through its settings file, with the same limits: its
 commands cannot run outside it, and a Claude Code whose sandbox cannot start exits at once and says why in its tab;
-`astera` runs outside it. On macOS a command can also reach the Host's socket from inside: the sandbox lets it reach
-that one socket, and the session's `ASTERA_SANDBOX_HOST` names it, since inside the sandbox `$TMPDIR` is not the one
-`astera` would derive the address from (an `ASTERA_HOST` the person set still wins, and it is the socket allowed; Astera
-never sets `ASTERA_HOST` itself). On Linux its git reads an excludes file Astera writes
+`astera` runs outside it, as a command line of its own: a line that starts with something else (`cd x && astera …`)
+runs inside the sandbox, which reaches no Unix socket, the Host's included, so `astera` fails there on macOS as on
+Linux. On Linux its git reads an excludes file Astera writes
 (`<profile>/sandbox/excludes-<uid>`: the person's own `core.excludesFile`, or git's default one, then the names the
 sandbox keeps placeholders for, such as `.bashrc` and `.vscode`), so `git add -A` works. Claude Code has no sandbox on
 Windows: there the switch only keeps its file tools, not its shell, out of those folders, and npm keeps its own cache.
@@ -2134,7 +2133,7 @@ The boundary is your machine and your operating system account.
   starts, exactly as Astera does when you start Astera from that shell. Start the Host from an
   environment that holds only what the agents may see. What is removed is a fixed list:
   - When the Host starts: every variable whose name begins with `ASTERA_SESSION`, `ASTERA_CLI`,
-    `ASTERA_SKILLS`, `ASTERA_GATEWAY_`, `ASTERA_LOOPBACK` or `ASTERA_SANDBOX_HOST`; the variables a Claude
+    `ASTERA_SKILLS`, `ASTERA_GATEWAY_` or `ASTERA_LOOPBACK`; the variables a Claude
     Code session sets about itself (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ID`,
     `CLAUDE_CODE_CHILD_SESSION`,
     `CLAUDE_CODE_SESSION_ATTENDED`, `CLAUDE_CODE_BRIDGE_SESSION_ID`, `CLAUDE_CODE_MESSAGING_SOCKET`,
@@ -2145,7 +2144,7 @@ The boundary is your machine and your operating system account.
     the Claude Code list above is cleared once more, the Astera variables a session is given
     (`ASTERA_STATUSLINE_OUT`, `ASTERA_STATUSLINE_ORIGINAL`, `ASTERA_HOOK_OUT`, `ASTERA_CLI`,
     `ASTERA_PROFILE_DIR`, `ASTERA_SKILLS`, `ASTERA_SESSION`, `ASTERA_GATEWAY_TOKEN`, `ASTERA_GATEWAY_GRANT`,
-    `ASTERA_LOOPBACK`, `ASTERA_SANDBOX_HOST`) are cleared and set afresh, and
+    `ASTERA_LOOPBACK`) are cleared and set afresh, and
     `CLAUDE_CONFIG_DIR` or `CODEX_HOME` is set to the account's folder, or removed for the default
     account.
 
