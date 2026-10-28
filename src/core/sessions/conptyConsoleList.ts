@@ -1,7 +1,7 @@
 /** 목록 에이전트(node-pty 의 conpty_console_list_agent)의 모양 중 여기서 쓰는 것만 — child_process.fork 의 결과. */
 export interface ConsoleListAgent {
   on(event: 'message', cb: (message: { consoleProcessList?: unknown } | undefined) => void): unknown
-  on(event: 'exit' | 'error', cb: (...args: unknown[]) => void): unknown
+  on(event: 'disconnect' | 'error', cb: (...args: unknown[]) => void): unknown
   kill(): unknown
 }
 
@@ -57,7 +57,13 @@ export function replaceConsoleProcessList(term: unknown, platform: string, fork:
         const l = message?.consoleProcessList
         settle(Array.isArray(l) ? (l as number[]) : [])
       })
-      child.on('exit', () => settle([]))
+      // 'exit' 가 아니라 'disconnect': 에이전트는 process.send 하고 process.exit 하는데, 'exit'(프로세스 핸들)과
+      // 'message'(IPC 채널)의 도착 순서는 보장되지 않아 'exit' 가 먼저 오면 오는 중인 목록을 버리게 된다.
+      // 'disconnect' 는 채널이 EOF 에 닿을 때 나오고, 그 전에 읽힌 메시지는 이미 nextTick 으로 예약돼 있어
+      // 항상 그 뒤다(Node lib/internal/child_process.js 의 setupChannel: EOF 분기가 target.disconnect() →
+      // process.nextTick(finish) 로 'disconnect' 를 낸다). 채널이 안 닫히는 에이전트는 timeout 이 맡는다.
+      // https://nodejs.org/docs/latest-v24.x/api/child_process.html#event-disconnect
+      child.on('disconnect', () => settle([]))
       child.on('error', () => settle([]))
       timer = setTimeout(() => {
         const wasSettled = settled

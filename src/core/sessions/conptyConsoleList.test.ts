@@ -57,14 +57,39 @@ describe('replaceConsoleProcessList', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it('resolves [] when the agent exits without answering (AttachConsole failed), not the shell pid', async () => {
+  it('resolves [] when the channel closes without an answer (AttachConsole failed), not the shell pid', async () => {
     const term = fakeTerm()
     const agents: FakeAgent[] = []
     install(term, agents)
     const p = list(term)
     agents[0].emit('exit', 1, null)
+    agents[0].emit('disconnect')
     await expect(p).resolves.toEqual([])
     expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it("keeps a list the agent wrote even when 'exit' is seen before its 'message'", async () => {
+    const term = fakeTerm()
+    const agents: FakeAgent[] = []
+    install(term, agents)
+    const p = list(term)
+    agents[0].emit('exit', 0, null)
+    agents[0].emit('message', { consoleProcessList: [4321, 88] })
+    agents[0].emit('disconnect')
+    await expect(p).resolves.toEqual([4321, 88])
+  })
+
+  it("an exit alone settles nothing: the timeout covers an agent whose channel never closes", async () => {
+    const term = fakeTerm()
+    const agents: FakeAgent[] = []
+    install(term, agents)
+    const p = list(term)
+    agents[0].emit('exit', 0, null)
+    await vi.advanceTimersByTimeAsync(4999)
+    expect(vi.getTimerCount()).toBe(1)
+    await vi.advanceTimersByTimeAsync(1)
+    await expect(p).resolves.toEqual([])
+    expect(agents[0].killed).toBe(1)
   })
 
   it('resolves [] on a fork error', async () => {
@@ -96,20 +121,20 @@ describe('replaceConsoleProcessList', () => {
     expect(agents[0].killed).toBe(1)
   })
 
-  it('settles once: an exit after the answer, or a late answer after the exit, changes nothing', async () => {
+  it('settles once: a disconnect after the answer, or a late answer after the disconnect, changes nothing', async () => {
     const term = fakeTerm()
     const agents: FakeAgent[] = []
     install(term, agents)
     const p = list(term)
     agents[0].emit('message', { consoleProcessList: [9] })
-    agents[0].emit('exit', 0, null)
+    agents[0].emit('disconnect')
     agents[0].emit('message', { consoleProcessList: [1] })
     await vi.advanceTimersByTimeAsync(10_000)
     await expect(p).resolves.toEqual([9])
     expect(agents[0].killed).toBe(0)
 
     const q = list(term)
-    agents[1].emit('exit', 1, null)
+    agents[1].emit('disconnect')
     agents[1].emit('message', { consoleProcessList: [5] })
     await vi.advanceTimersByTimeAsync(10_000)
     await expect(q).resolves.toEqual([])
