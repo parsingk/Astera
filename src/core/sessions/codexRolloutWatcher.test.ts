@@ -995,6 +995,40 @@ describe('CodexRolloutWatcher maps only a rollout its session holds', () => {
     w.stop()
   })
 
+  // Fix round 1, review M3: the answer about the handed-over file was not kept, so while the newer file it cannot tell
+  // about stayed, every re-scan walked the folder twice (the newest, then again with requireOwn)
+  it('keeps the own answer about a handed-over file, so later re-scans walk the folder once', async () => {
+    const cwd = path.join(dir, 'proj')
+    const ours = await makeRollout(dir, OURS, 'sess-ours', cwd)
+    const readdir = vi.spyOn(fsPromises, 'readdir')
+    onTestFinished(() => readdir.mockRestore())
+    const walks = (): number => readdir.mock.calls.filter((c) => String(c[0]).includes(path.join(dir, 'sessions'))).length
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete: vi.fn(),
+      log: () => {},
+      now: () => now,
+      rolloutOwner: {
+        pidOf: () => 4100,
+        read: async (file) => (file === ours ? { verdict: 'own' } : { verdict: 'unknown', why: 'process 7 cannot be read (EACCES)' })
+      }
+    })
+    w.register(session('live-1', cwd), ours)
+    const period = async (): Promise<number> => {
+      const before = walks()
+      now += 5_000
+      await advance(5_000)
+      return walks() - before
+    }
+    const one = await period() // nothing newer: one walk
+    expect(one).toBeGreaterThan(0)
+    await makeRollout(dir, THEIRS, 'sess-theirs', cwd)
+    expect(await period()).toBe(2 * one) // the newest, then again with requireOwn once its own file says own
+    expect(await period()).toBe(one)
+    expect(w.rolloutPathFor('live-1')).toBe(ours)
+    w.stop()
+  })
+
   // Review round 1, item 2: an owner question can be a PowerShell run of half a second or more. The watcher's one tick
   // waited on it, so every other session's tail read (usage chips, turn notices) waited too.
   it('does not hold up another session while one waits for its owner answer', async () => {

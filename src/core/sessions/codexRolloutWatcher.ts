@@ -416,8 +416,13 @@ export class CodexRolloutWatcher {
     let found = await look(owner !== undefined && entry.rolloutVerdict === 'own')
     // A file handed over at registration was never asked about: asked now, only when a newer one cannot be told about.
     // Its own (or another's) means this machine can see the session's processes, so that newer file is not its /new.
-    if (found?.verdict === 'unknown' && owner && entry.rolloutVerdict === null && entry.rolloutPath) {
-      if ((await owner(entry.rolloutPath)).verdict !== 'unknown') found = await look(true)
+    // An own answer is kept (fix round 1, review M3), so the next re-scan looks with requireOwn at once rather than walking
+    // the folder twice.
+    const current = entry.rolloutPath
+    if (found?.verdict === 'unknown' && owner && entry.rolloutVerdict === null && current) {
+      const said = (await owner(current)).verdict
+      if (said === 'own' && entry.rolloutPath === current) entry.rolloutVerdict = 'own'
+      if (said !== 'unknown') found = await look(true)
     }
     if (entry.disposed || !found || found.path === entry.rolloutPath) return
     entry.rolloutPath = found.path
