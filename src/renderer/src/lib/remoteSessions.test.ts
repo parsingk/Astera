@@ -21,6 +21,16 @@ describe('refOf', () => {
   it('keys a Runtime row by runtime and session', () => {
     expect(refOf('rt_1', row())).toMatchObject({ runtimeId: 'rt_1', sessionId: 's1', key: 'rt_1:s1', kind: 'terminal', ptyId: 'pty-1', provider: 'claude', alive: true })
   })
+
+  // Sandbox follow-ups, round 2: the remote session's own tab carries the sandbox marker, so its ref carries what the
+  // row says, and nothing for a session outside the sandbox
+  it('carries the row’s sandbox, and none for a session outside it', () => {
+    expect(refOf('rt_1', row({ sandboxed: true, sandboxKind: 'sandbox' }))).toMatchObject({ sandboxed: true, sandboxKind: 'sandbox' })
+    expect(refOf('rt_1', row({ sandboxed: true, sandboxKind: 'deny-only' }))).toMatchObject({ sandboxed: true, sandboxKind: 'deny-only' })
+    const plain = refOf('rt_1', row())
+    expect(plain).not.toHaveProperty('sandboxed')
+    expect(plain).not.toHaveProperty('sandboxKind')
+  })
 })
 
 describe('followRolls', () => {

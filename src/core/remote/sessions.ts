@@ -46,6 +46,10 @@ export interface RemoteSessionRef {
   procId?: string
   provider?: 'claude' | 'codex'
   sources?: RemoteSessionRow['sources']
+  /** The row's `sandboxed` and `sandboxKind`, so the session's own tab carries the marker a local tab does (sandbox
+   *  follow-ups, round 2). Absent outside the sandbox. */
+  sandboxed?: true
+  sandboxKind?: SandboxKind
 }
 
 export function refOf(runtimeId: string, row: RemoteSessionRow): RemoteSessionRef {
@@ -61,7 +65,8 @@ export function refOf(runtimeId: string, row: RemoteSessionRow): RemoteSessionRe
     ...(row.ptyId ? { ptyId: row.ptyId } : {}),
     ...(row.procId ? { procId: row.procId } : {}),
     ...(row.provider ? { provider: row.provider } : {}),
-    ...(row.sources ? { sources: row.sources } : {})
+    ...(row.sources ? { sources: row.sources } : {}),
+    ...(row.sandboxed === true ? { sandboxed: true as const, ...(row.sandboxKind ? { sandboxKind: row.sandboxKind } : {}) } : {})
   }
 }
 

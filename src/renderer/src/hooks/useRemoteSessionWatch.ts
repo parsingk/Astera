@@ -8,8 +8,16 @@ import { factsStatus, factsTransition, followRolls, pollEvery, pruneBaseline, re
 
 export const REMOTE_WATCH_MS = 3_000
 
-const sameRef = (a: RemoteSessionRef, b: RemoteSessionRef): boolean =>
-  a.alive === b.alive && a.title === b.title && a.ptyId === b.ptyId && a.procId === b.procId && a.cwd === b.cwd
+/** Whether a fresh ref says nothing the tab's does not: then the tab keeps its own. The sandbox too (sandbox follow-ups,
+ *  round 2), so a tab opened from a ref that did not carry it yet takes the marker at the next look. */
+export const sameRef = (a: RemoteSessionRef, b: RemoteSessionRef): boolean =>
+  a.alive === b.alive &&
+  a.title === b.title &&
+  a.ptyId === b.ptyId &&
+  a.procId === b.procId &&
+  a.cwd === b.cwd &&
+  a.sandboxed === b.sandboxed &&
+  a.sandboxKind === b.sandboxKind
 
 export function useRemoteSessionWatch(o: {
   refs: RemoteSessionRef[]

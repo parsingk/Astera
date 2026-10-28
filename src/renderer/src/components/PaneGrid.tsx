@@ -603,6 +603,8 @@ export function PaneGrid({
                   busy: remoteStatus[r.key] === 'working',
                   exited: !r.alive,
                   profileTooltip: null,
+                  // The marker a local tab draws, from what the session's Runtime says of it (its row, refOf)
+                  sandboxKind: r.sandboxed === true ? r.sandboxKind : undefined,
                   rollTooltip: null,
                   remote: true
                 }
