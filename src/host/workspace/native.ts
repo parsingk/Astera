@@ -1,10 +1,11 @@
 // The process tools the workspace needs outside a desk: creation times for the leftover rule, a tree
 // kill, and a free loopback port. On Windows, PowerShell and taskkill (the conhost reaper's route,
-// src/host/conhostReaper.ts); on Linux and macOS, /proc or ps and a process group kill (posixProc.ts).
+// src/host/conhostReaper.ts); on Linux and macOS, /proc or ps and a tree kill by process groups
+// (posixProc.ts).
 import { execFile } from 'node:child_process'
 import net from 'node:net'
 import { treeKillCommand } from '../../core/run/kill'
-import { killGroup, linuxStartTimes, macStartTimes, realLinuxProcFs, realSignals, type LinuxProcFs, type Signals } from './posixProc'
+import { killProcessTree, linuxStartTimes, macStartTimes, realLinuxProcFs, realSignals, type LinuxProcFs, type Signals } from './posixProc'
 
 export type Exec = (file: string, args: string[]) => Promise<string>
 
@@ -55,10 +56,11 @@ async function windowsKillTree(pid: number, exec: Exec): Promise<void> {
 }
 
 /** Ends `pid` and every process it started. On Windows through taskkill, which answers 128 for a
- *  process already gone; elsewhere its process group (R10). Gone is not a failure: the result the
- *  caller wanted is already true. */
+ *  process already gone; elsewhere every process group it or a process it started leads, from one ps
+ *  listing (killProcessTree, R10), so a child started detached goes too. Gone is not a failure: the
+ *  result the caller wanted is already true. */
 export async function killTree(pid: number, exec: Exec = defaultExec, platform: string = process.platform, signals: Signals = realSignals): Promise<void> {
-  return platform === 'win32' ? windowsKillTree(pid, exec) : killGroup(pid, signals)
+  return platform === 'win32' ? windowsKillTree(pid, exec) : killProcessTree(pid, { exec, signals })
 }
 
 export function freePort(): Promise<number> {
