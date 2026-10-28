@@ -1,6 +1,8 @@
+import { EventEmitter } from 'node:events'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { PassThrough } from 'node:stream'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import {
   UNHELD_RECHECK_MS,
@@ -11,6 +13,7 @@ import {
   powerShellHelperCommand,
   rolloutOwnerCheck,
   rolloutOwnerReader,
+  startPowerShellHelper,
   windowsOwnerReader,
   type OwnerHelper,
   type ProcFs,
@@ -347,6 +350,65 @@ describe('windowsOwnerReader', () => {
     await vi.advanceTimersByTimeAsync(20_000)
     expect((await r).verdict).toBe('unknown')
     expect(h.started[0].killed).toBe(true)
+    read.close()
+  })
+
+  // Fix round 1, review M1: each question's clock ran from when it was queued, so a burst of questions answered one at
+  // a time (a held file is most of a second of Restart Manager) timed out the tail of the queue and ended the helper for
+  // everyone. The limit is on the helper making no progress, not on a question's place in the line.
+  it('times out only a helper that stops answering, not questions waiting their turn', async () => {
+    vi.useFakeTimers()
+    onTestFinished(() => void vi.useRealTimers())
+    const h = helpers(() => new FakeHelper(() => null))
+    const read = windowsOwnerReader(h.start, { answerMs: 20_000 })
+    const answers = [read('C:\\a.jsonl', 10), read('C:\\b.jsonl', 10), read('C:\\c.jsonl', 10)]
+    for (const n of [0, 1, 2]) {
+      await vi.advanceTimersByTimeAsync(15_000)
+      h.started[0].say(`${n}|own|10`)
+    }
+    expect(await Promise.all(answers)).toEqual([{ verdict: 'own' }, { verdict: 'own' }, { verdict: 'own' }])
+    expect(h.started[0].killed).toBe(false)
+    // A helper that then stops answering is still ended after the limit
+    const stuck = read('C:\\d.jsonl', 10)
+    await vi.advanceTimersByTimeAsync(19_999)
+    expect(h.started[0].killed).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect((await stuck).verdict).toBe('unknown')
+    expect(h.started[0].killed).toBe(true)
+    read.close()
+  })
+
+  // The bound on a question that never gets an answer: PowerShell runs its statements in order, so once a later question
+  // is answered an earlier one never will be
+  it('answers cannot-tell at once for a question passed over by a later answer', async () => {
+    const h = helpers(() => new FakeHelper(() => null))
+    const read = windowsOwnerReader(h.start)
+    let first: RolloutOwnership | null = null
+    void read('C:\\a.jsonl', 10).then((r) => (first = r))
+    const second = read('C:\\b.jsonl', 10)
+    h.started[0].say('1|own|10')
+    expect(await second).toEqual({ verdict: 'own' })
+    expect(first).toMatchObject({ verdict: 'unknown' })
+    expect(h.started[0].killed).toBe(false)
+    read.close()
+  })
+
+  // Fix round 1, review M2: Node can emit 'exit' before the child's stdout has given its last chunk; ended on 'exit', an
+  // answer the helper printed just before it died was turned into cannot-tell. 'close' comes after stdio has ended.
+  it('reads the answers a helper printed before it ended, however late they arrive', async () => {
+    const child = Object.assign(new EventEmitter(), {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      unref: () => {},
+      kill: () => true
+    })
+    const read = windowsOwnerReader(() => startPowerShellHelper(() => child as never))
+    const r = read('C:\\a.jsonl', 10)
+    child.emit('exit', 1, null)
+    child.stdout.end('ready\r\n0|own|10\r\n')
+    await new Promise((done) => child.stdout.once('end', done))
+    child.emit('close', 1, null)
+    expect(await r).toEqual({ verdict: 'own' })
     read.close()
   })
 

@@ -18,8 +18,9 @@
 // failed write). Where the evidence cannot be read (a tool missing or failing, a process or an fd this user may not read, a
 // timeout), the answer is 'unknown': the locate keeps the rule it had before, nothing is remembered, and it is logged
 // once per session.
-import { execFile, spawn } from 'node:child_process'
+import { execFile, spawn, type ChildProcessByStdio, type SpawnOptions } from 'node:child_process'
 import { promises as fs } from 'node:fs'
+import type { Readable, Writable } from 'node:stream'
 import { comparablePath } from '../files/tree'
 import { windowsPowerShellExe } from '../sessions/windowsPath'
 
@@ -388,10 +389,13 @@ export function powerShellHelperCommand(systemRoot: string | undefined = process
 }
 
 /** Starts the helper. It holds nothing open that keeps this process alive, and it ends by itself when this process
- *  does, at the end of its stdin. */
-function startPowerShellHelper(): OwnerHelper {
+ *  does, at the end of its stdin. `spawnChild` is for tests. */
+export function startPowerShellHelper(
+  spawnChild: (file: string, args: string[], opts: SpawnOptions) => ChildProcessByStdio<Writable, Readable, null> = (f, a, o) =>
+    spawn(f, a, o) as ChildProcessByStdio<Writable, Readable, null>
+): OwnerHelper {
   const { file, args } = powerShellHelperCommand()
-  const child = spawn(file, args, { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] })
+  const child = spawnChild(file, args, { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] })
   child.unref()
   for (const s of [child.stdin, child.stdout] as Array<{ unref?: () => void } | null>) s?.unref?.()
   // A write after it ended fails here rather than as an uncaught error; its end says why
@@ -405,7 +409,10 @@ function startPowerShellHelper(): OwnerHelper {
     for (const cb of ends) cb(why)
   }
   child.on('error', (err) => end(messageOf(err)))
-  child.on('exit', (code, signal) => end(`exit ${code ?? signal}`))
+  // 'close', not 'exit': 'exit' can come before stdout has given its last chunk, and an answer printed just before the
+  // end would be lost (fix round 1, review M2). 'close' comes once the child's stdio has ended.
+  // https://nodejs.org/api/child_process.html#event-close
+  child.on('close', (code, signal) => end(`exit ${code ?? signal}`))
   let rest = ''
   child.stdout.setEncoding('utf8')
   child.stdout.on('data', (chunk: string) => {
@@ -434,30 +441,45 @@ export const HELPER_IDLE_MS = 2 * 60_000
  *  (review Minor 6: compiled again for every question it was a PowerShell and a csc run each time, about half a
  *  second, measured on this machine 2026-10-28). The helper reads its commands from stdin (powerShellHelperCommand), so
  *  no script file is written anywhere, and nothing a sandboxed session could replace runs as the person (fix round 2).
- *  Questions are answered in the order they are written; one that is not answered within `answerMs` ends the helper,
- *  and every question waiting on it is "cannot tell". `close` ends it at once. */
+ *  Questions are answered one at a time, in the order they are written. The limit `answerMs` is on the helper making
+ *  no progress, not on a question's wait in the line (fix round 1, review M1: a burst of questions, most of a second
+ *  each with a live holder, timed out the tail of the queue and ended the helper for all of them): with a question
+ *  waiting, no answer for `answerMs` ends the helper, and every question waiting on it is "cannot tell". A question
+ *  passed over by a later answer is "cannot tell" at once, since PowerShell runs its statements in order and will not
+ *  come back to it. `close` ends the helper at once. */
 export function windowsOwnerReader(
   start: () => OwnerHelper = startPowerShellHelper,
   o: { answerMs?: number; idleMs?: number } = {}
 ): RolloutOwnerReader & { close(): void } {
   const answerMs = o.answerMs ?? RUN_TIMEOUT_MS
   const idleMs = o.idleMs ?? HELPER_IDLE_MS
-  type Waiting = { resolve(r: RolloutOwnership): void; timer: ReturnType<typeof setTimeout> }
-  type Helper = { proc: OwnerHelper; waiting: Map<number, Waiting>; idle: ReturnType<typeof setTimeout> | null }
+  type Timer = ReturnType<typeof setTimeout>
+  type Helper = { proc: OwnerHelper; waiting: Map<number, (r: RolloutOwnership) => void>; idle: Timer | null; stalled: Timer | null }
   let helper: Helper | null = null
   let next = 0
   /** This helper is done: every question waiting on it is "cannot tell", and the next question starts another. */
   const finish = (h: Helper, why: string): void => {
     if (helper === h) helper = null
     if (h.idle) clearTimeout(h.idle)
-    for (const w of h.waiting.values()) {
-      clearTimeout(w.timer)
-      w.resolve(unknown(why))
-    }
+    if (h.stalled) clearTimeout(h.stalled)
+    h.stalled = null
+    for (const resolve of h.waiting.values()) resolve(unknown(why))
     h.waiting.clear()
   }
+  /** The clock on progress, started again on each sign of it: armed while a question waits, off when none does. Not
+   *  unref'd, unlike the helper: a question waiting keeps this process up until it is answered or the helper is ended. */
+  const watch = (h: Helper): void => {
+    if (h.stalled) clearTimeout(h.stalled)
+    h.stalled =
+      h.waiting.size === 0
+        ? null
+        : setTimeout(() => {
+            finish(h, `PowerShell gave no answer in ${answerMs} ms`)
+            h.proc.kill()
+          }, answerMs)
+  }
   const open = (): Helper => {
-    const h: Helper = { proc: start(), waiting: new Map(), idle: null }
+    const h: Helper = { proc: start(), waiting: new Map(), idle: null, stalled: null }
     h.proc.onEnd((why) => finish(h, `the PowerShell helper ended (${why})`))
     h.proc.onLine((line) => {
       if (line.startsWith('unready|')) {
@@ -465,13 +487,21 @@ export function windowsOwnerReader(
         h.proc.kill()
         return
       }
+      // The compile is done: its time does not count against the first question
+      if (line === 'ready') return watch(h)
       const m = /^(\d+)\|(own|other|none|unknown)\|(.*)$/.exec(line)
-      const w = m ? h.waiting.get(Number(m[1])) : undefined
-      if (!m || !w) return
-      h.waiting.delete(Number(m[1]))
-      clearTimeout(w.timer)
+      const resolve = m ? h.waiting.get(Number(m[1])) : undefined
+      if (!m || !resolve) return
+      const n = Number(m[1])
+      h.waiting.delete(n)
       const why = m[3].trim()
-      w.resolve(m[2] === 'own' ? OWN : m[2] === 'other' ? other(why) : m[2] === 'none' ? otherForNow(why) : unknown(why))
+      resolve(m[2] === 'own' ? OWN : m[2] === 'other' ? other(why) : m[2] === 'none' ? otherForNow(why) : unknown(why))
+      for (const [k, passed] of h.waiting)
+        if (k < n) {
+          h.waiting.delete(k)
+          passed(unknown('PowerShell gave no answer to it'))
+        }
+      watch(h)
       if (h.waiting.size === 0 && helper === h) {
         h.idle = setTimeout(() => {
           if (helper !== h || h.waiting.size > 0) return
@@ -496,12 +526,9 @@ export function windowsOwnerReader(
     h.idle = null
     const n = next++
     return new Promise((resolve) => {
-      // Not unref'd, unlike the helper: a question waiting keeps this process up until it is answered or times out
-      const timer = setTimeout(() => {
-        finish(h, `PowerShell gave no answer in ${answerMs} ms`)
-        h.proc.kill()
-      }, answerMs)
-      h.waiting.set(n, { resolve, timer })
+      h.waiting.set(n, resolve)
+      // A question joining a line already waiting is no progress: the clock runs on from the last answer
+      if (!h.stalled) watch(h)
       h.proc.write(ownerQuestion(n, file, pid))
     })
   }
