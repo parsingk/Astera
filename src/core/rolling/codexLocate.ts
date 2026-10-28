@@ -6,6 +6,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { comparablePath } from '../files/tree'
 import { isChildThreadRollout, isExecRollout, parseCodexMeta, ROLLOUT_UUID_RE } from '../history/codexParser'
+import type { RolloutOwnership } from './rolloutOwner'
 
 // Paths compare through comparablePath (core/files/tree.ts): case folded on win32 and darwin, exact on linux.
 
@@ -95,8 +96,8 @@ const createdAt = (st: { birthtimeMs: number; mtimeMs: number }): number =>
 
 /**
  * The one `<configDir>/sessions/<y>/<m>/<d>/rollout-*.jsonl` (the days scanDays names) that was 'created' after since
- * and whose session_meta.cwd matches cwd. If there are several, the most recently created one. null if
- * there is none.
+ * and whose session_meta.cwd matches cwd. If there are several, the most recently created one (given `owner`, the most
+ * recent one the session's own codex holds open). null if there is none.
  *
  * Why we filter on creation time rather than mtime: if another codex session that was already running
  * under the same account and the same cwd emits even one turn after since, its mtime is refreshed and
@@ -127,9 +128,14 @@ export async function findRollout(opts: {
   // folder is not taken for it. Absent keeps every file born after since, which is every live locate.
   bornBefore?: number
   /** Files this caller turned away for what their first line says (another folder, an exec run, a child thread, another
-   *  session's id), by comparable path: not parsed again (second pass C2-9). The first line of a rollout does not
-   *  change once written; one not written yet is not remembered. Only for a caller whose cwd and sessionId stay. */
+   *  session's id), or because `owner` said another process writes them, by comparable path: not parsed again (second
+   *  pass C2-9). The first line of a rollout does not change once written, nor does its writer; one not written yet is
+   *  not remembered. Only for a caller whose cwd, sessionId and session process stay. */
   rejected?: Set<string>
+  /** Whose codex holds a candidate open (rolloutOwner.ts), asked newest first once the filters above have passed it.
+   *  'own' maps it; 'other' turns it away (into `rejected` too) and the search goes on to the next older one; 'unknown'
+   *  (this machine cannot tell) keeps the rule without it, the newest. Absent, the newest wins as before. */
+  owner?: (file: string) => Promise<RolloutOwnership>
 }): Promise<{ path: string; sessionId: string } | null> {
   const now = (opts.now ?? Date.now)()
   const root = path.join(opts.configDir, 'sessions')
@@ -138,7 +144,7 @@ export async function findRollout(opts: {
     files.push(...(await jsonlIn(path.join(root, y, m, d))))
   }
   const excluded = new Set((opts.excludePaths ?? []).map((p) => comparablePath(p)))
-  let best: { path: string; sessionId: string; bornAt: number } | null = null
+  const candidates: Array<{ path: string; sessionId: string; bornAt: number }> = []
   const turnAway = (file: string): void => void opts.rejected?.add(comparablePath(file))
   for (const file of files) {
     if (excluded.has(comparablePath(file))) continue
@@ -183,7 +189,16 @@ export async function findRollout(opts: {
       turnAway(file)
       continue
     }
-    if (!best || bornAt > best.bornAt) best = { path: file, sessionId, bornAt }
+    candidates.push({ path: file, sessionId, bornAt })
   }
-  return best ? { path: best.path, sessionId: best.sessionId } : null
+  // Newest first; a stable sort keeps the first one read among equal times, as the strict `>` it replaces did.
+  candidates.sort((a, b) => b.bornAt - a.bornAt)
+  for (const c of candidates) {
+    if (opts.owner && (await opts.owner(c.path)).verdict === 'other') {
+      turnAway(c.path)
+      continue
+    }
+    return { path: c.path, sessionId: c.sessionId }
+  }
+  return null
 }

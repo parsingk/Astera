@@ -774,6 +774,13 @@ export class PtyRegistry {
     return last
   }
 
+  /** The process id of the pty `sessionPty` names, or null. Whose codex holds a rollout open is asked about it
+   *  (core/rolling/rolloutOwner.ts). */
+  sessionPid(sessionId: string): number | null {
+    const id = this.sessionPty(sessionId)
+    return id === null ? null : (this.entries.get(id)?.pid ?? null)
+  }
+
   /** How the pty for this session ended, or null when it is alive or was never here. A scan, asked
    *  once per exit. A session with a live pty has not ended, whatever an earlier pty of it did; of
    *  several ended ones, the one opened last is the answer.

@@ -310,6 +310,29 @@ afterEach(async () => {
   await fs.rm(tmp, { recursive: true, force: true }) // 실행마다 임시 디렉터리가 쌓이지 않게
 })
 
+// Task D (2026-10-28): the newest rollout in the folder can be another Host's session's, or a codex outside Astera's.
+describe('CodexRollingCoordinator maps only a rollout its session holds', () => {
+  it('skips a newer rollout another process holds and locates its own', async () => {
+    const native: string[] = []
+    const asked: number[] = []
+    const h = harness({
+      onNativeSession: (_id, n) => native.push(n),
+      pidOf: (id) => (id === 's1' ? 5100 : null),
+      ownerReader: async (file, pid) => {
+        asked.push(pid)
+        return file.includes('cx-own') ? { verdict: 'own' } : { verdict: 'other', why: 'held by pid 4242 outside the session' }
+      }
+    })
+    h.coord.register(h.info1)
+    await writeRollout({ accountId: 'c1', uuid: 'cx-own', cwd: h.info1.cwd })
+    await new Promise((r) => realSetTimeout(r, 30)) // a later birth time for the other one
+    await writeRollout({ accountId: 'c1', uuid: 'cx-theirs', cwd: h.info1.cwd })
+    await advance(1_500)
+    expect(native).toEqual(['cx-own'])
+    expect(asked).toEqual([5100, 5100])
+  })
+})
+
 describe('CodexRollingCoordinator', () => {
   // Audit RL-1 (the codex side): an exit during the rollout copy was ignored, and the closed tab came back on the next
   // account.

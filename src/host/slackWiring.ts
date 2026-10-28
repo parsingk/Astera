@@ -204,7 +204,9 @@ export function composeHostSlack(a: {
         log(`slack: a codex turn end of ${sid} could not be told: ${String(err)}`)
       }
     },
-    log
+    log,
+    // A rollout it scans for is mapped only when this session's own codex holds it (rolloutOwner.ts)
+    pidOf: (sid) => a.registry.sessionPid(sid)
   })
   const sources = createHostSlackSources({
     notifier,

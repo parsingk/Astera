@@ -18,6 +18,7 @@
 import type { Account, SessionInfo, SessionUsage } from '../types'
 import { JsonlTail } from '../rolling/jsonlTail'
 import { DAY_MS, findRollout } from '../rolling/codexLocate'
+import { rolloutOwnerCheck, rolloutOwnerReader, type RolloutOwnerCheck, type RolloutOwnerReader, type RolloutOwnership } from '../rolling/rolloutOwner'
 import { limitStateFromLines, type CodexLimitState } from '../rolling/codexSignal'
 import { tailLines } from '../rolling/tailLines'
 import { contextFromLines, sessionUsageOf } from '../usage/codex'
@@ -111,6 +112,13 @@ export interface CodexRolloutDeps {
    *  by spawn. */
   remember?(sessionId: string, note: { rolloutPath: string; codexSessionId?: string }): void
   now?: () => number
+  /** The process id of a session's pty, or null when it has none (a chat session, a pty the Host has not answered
+   *  for yet). Given, a rollout is mapped to the session only when that process or one under it holds the file open
+   *  (rolloutOwner.ts, Task D): folder, time and "newest" alone took another Host's session's file. Absent or null,
+   *  folder and time decide as before. */
+  pidOf?(sessionId: string): number | null
+  /** Who holds a rollout open; the platform's own reader when left out. Asked only with pidOf. */
+  ownerReader?: RolloutOwnerReader
 }
 
 /**
@@ -167,9 +175,18 @@ export class CodexRolloutWatcher {
   private entries = new Map<string, Entry>()
   private ticker: ReturnType<typeof setInterval> | null = null
   private readonly now: () => number
+  private readonly owner: RolloutOwnerCheck | null
 
   constructor(private deps: CodexRolloutDeps) {
     this.now = deps.now ?? Date.now
+    this.owner = deps.pidOf ? rolloutOwnerCheck({ read: deps.ownerReader ?? rolloutOwnerReader(process.platform), log: deps.log }) : null
+  }
+
+  /** The owner question for this entry's session, when its process is known; undefined keeps folder and time alone. */
+  private ownerFor(entry: Entry): ((file: string) => Promise<RolloutOwnership>) | undefined {
+    const check = this.owner
+    const pid = check ? this.deps.pidOf?.(entry.sessionId) : null
+    return check && pid ? (file) => check(file, pid, entry.sessionId) : undefined
   }
 
   /** Registers a codex session. The caller determines the provider and passes it in; every codex
@@ -329,7 +346,9 @@ export class CodexRolloutWatcher {
    * `source` and `originator`). With two codex sessions in the same folder, handing the file to the
    * wrong one would drag a session out of its own live conversation, which is far worse than leaving a
    * cleared one showing. So this narrows to the case where the answer cannot be wrong, and the rest keep
-   * today's behaviour.
+   * today's behaviour. Alone among this watcher's sessions is not alone in the folder (a codex outside
+   * Astera, another Host's session), so with the session's process known the newer file must also be one
+   * it holds open (ownerFor).
    */
   private async rescan(entry: Entry): Promise<void> {
     if (entry.mappedAt === null || this.now() < entry.rescanAt) return
@@ -351,7 +370,9 @@ export class CodexRolloutWatcher {
       // search before limit L5) are all it can be in.
       since: Math.max(entry.mappedAt, this.now() - DAY_MS),
       now: this.now,
-      excludePaths: this.claimed(entry)
+      excludePaths: this.claimed(entry),
+      // A codex outside Astera opening a file in this folder is "newer" too: only one this session holds is its /new
+      owner: this.ownerFor(entry)
     })
     if (entry.disposed || !found || found.path === entry.rolloutPath) return
     entry.rolloutPath = found.path
@@ -405,7 +426,8 @@ export class CodexRolloutWatcher {
         now: this.now,
         excludePaths: this.claimed(entry),
         sessionId: entry.codexSessionId ?? undefined,
-        rejected: entry.rejected
+        rejected: entry.rejected,
+        owner: this.ownerFor(entry)
       })
       if (entry.disposed) return
       if (!found) {

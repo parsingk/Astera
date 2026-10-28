@@ -155,6 +155,9 @@ async function hostRig() {
     appKeepsWorktrees: () => false,
     // A Codex session's rollout is looked for on its account's folder as index.ts looks, only more often
     locatePollMs: 20,
+    // No codex runs here to hold its rollout open: the file this test writes is taken as the session's own, as a real
+    // codex's would be (core/rolling/rolloutOwner.ts)
+    rolloutOwner: async () => ({ verdict: 'own' }),
     worktrees: { fork: () => Promise.reject(new Error('not in this test')), makeRunWorktree: async () => { throw new Error('no') }, mergeWorktrees: async () => { throw new Error('no') }, removeWorktrees: async () => { throw new Error('no') } }
   })!
 

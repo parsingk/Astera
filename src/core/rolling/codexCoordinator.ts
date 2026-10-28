@@ -27,6 +27,7 @@ import { sessionKindOf } from '../sessions/kind'
 import { copyTranscript } from './transcript'
 import { codexHistoryStrategy } from '../history/strategies/codex'
 import { findRollout } from './codexLocate'
+import { rolloutOwnerCheck, rolloutOwnerReader, type RolloutOwnerCheck, type RolloutOwnerReader, type RolloutOwnership } from './rolloutOwner'
 import {
   CodexLimitScanner,
   CodexModelChoiceScanner,
@@ -207,6 +208,12 @@ export interface CodexRollingDeps {
    *  takes no action (no roll, gated inside roll() at entry and right before the kill, R26; no wait
    *  resume; no typing; no recorded block). A roll already past its kill finishes. Absent: always true. */
   mayAct?(sessionId: string): boolean
+  /** The process id of a session's pty, or null when it has none (a chat session). Given, the locate maps a rollout
+   *  only when that process or one under it holds it open (rolloutOwner.ts, Task D), as the rollout watcher does.
+   *  Absent or null, folder and time decide as before. */
+  pidOf?(sessionId: string): number | null
+  /** Who holds a rollout open; the platform's own reader when left out. Asked only with pidOf. */
+  ownerReader?: RolloutOwnerReader
 }
 
 interface Chain {
@@ -360,12 +367,21 @@ export class CodexRollingCoordinator {
   private readonly rolloutSize: (filePath: string) => Promise<number | null>
   private readonly now: () => number
   private readonly resumeStrategy: () => ResumeStrategy
+  private readonly owner: RolloutOwnerCheck | null
 
   constructor(private deps: CodexRollingDeps) {
     this.copy = deps.copy ?? copyTranscript
     this.rolloutSize = deps.rolloutSize ?? rolloutSize
     this.now = deps.now ?? Date.now
     this.resumeStrategy = deps.resumeStrategy ?? (() => 'original')
+    this.owner = deps.pidOf ? rolloutOwnerCheck({ read: deps.ownerReader ?? rolloutOwnerReader(process.platform), log: deps.log }) : null
+  }
+
+  /** The owner question for a session, when its process is known; undefined keeps folder and time alone. */
+  private ownerFor(sessionId: string): ((file: string) => Promise<RolloutOwnership>) | undefined {
+    const check = this.owner
+    const pid = check ? this.deps.pidOf?.(sessionId) : null
+    return check && pid ? (file) => check(file, pid, sessionId) : undefined
   }
 
   /** Called by ipc right after spawning a codex session that has rollAccountIds. One id means single-account auto-resume.
@@ -941,7 +957,8 @@ export class CodexRollingCoordinator {
         ...(bornBefore !== undefined ? { bornBefore } : {}),
         now: this.now,
         excludePaths: this.claimedRollouts(chain),
-        sessionId: chain.codexSessionId ?? undefined
+        sessionId: chain.codexSessionId ?? undefined,
+        owner: this.ownerFor(liveId)
       })
       // `rolloutPath` joins the guard here and not above: an `attachChat` that lands while findRollout is
       // in flight clears the locate timer, and clearing a timer cannot stop a tick already running. Left

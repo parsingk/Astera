@@ -681,7 +681,9 @@ app.whenReady().then(async () => {
       // The thread is the conversation a history resume names: the profile the session runs as is written down by it
       void core!.profileConversations.learned(sessionId, note.codexSessionId)
     },
-    log: slackLog
+    log: slackLog,
+    // A rollout the scan finds is mapped only when this session's own codex holds it (rolloutOwner.ts)
+    pidOf: (sessionId) => core?.sessions.pidOf(sessionId) ?? null
   })
   codexRolloutRef = codexRollout
   const hookWatcher = new HookEventWatcher(
@@ -1198,7 +1200,9 @@ app.whenReady().then(async () => {
     resumeText: resumeTextDep,
     // 한도에 걸린 세션을 어떻게 이어갈지(Task 1 의 설정) — orchEnv 와 같은 이유로 getter 다: 값이
     // 설정 화면에서 앱 수명 중간에 바뀌고, 이 코디네이터는 그보다 먼저 만들어진다.
-    resumeStrategy: () => core!.appSettings.getResumeStrategy()
+    resumeStrategy: () => core!.appSettings.getResumeStrategy(),
+    // A rollout the locate finds is mapped only when this session's own codex holds it (rolloutOwner.ts)
+    pidOf: (sid) => core?.sessions.pidOf(sid) ?? null
   })
   codexRollingRef = codexRolling
   // Agent orchestration: an HTTP server embedded in the app plus the astera CLI let an agent spawn

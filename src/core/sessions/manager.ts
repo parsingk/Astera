@@ -853,6 +853,13 @@ export class SessionManager {
     this.sessions.get(id)?.pty.remember?.(patch)
   }
 
+  /** The process id of a session's pty, or null for a session it does not have or a Host pty not answered for yet
+   *  (pid 0). Whose codex holds a rollout open is asked about it (core/rolling/rolloutOwner.ts). */
+  pidOf(id: string): number | null {
+    const pid = this.sessions.get(id)?.pty.pid
+    return pid !== undefined && pid > 0 ? pid : null
+  }
+
   list(): SessionInfo[] {
     return [...this.sessions.values()].map((s) => ({ ...s.info }))
   }

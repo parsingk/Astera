@@ -754,3 +754,100 @@ describe('CodexRolloutWatcher', () => {
     w.stop()
   })
 })
+
+// Task D (2026-10-28): a second Host's idle codex session mapped the first Host's session's rollout, the newest file in
+// the shared folder. With the session's process known, a rollout is mapped only when that process holds it open.
+describe('CodexRolloutWatcher maps only a rollout its session holds', () => {
+  const realGap = (): Promise<void> => new Promise((r) => realSetTimeout(r, 30))
+  const OURS = '019f3f12-9c11-7cc1-9198-aeeaa6463e01'
+  const THEIRS = '019f3f12-9c11-7cc1-9198-aeeaa6463e02'
+
+  it('skips a newer rollout another process holds and maps its own', async () => {
+    const cwd = path.join(dir, 'proj')
+    const ours = await makeRollout(dir, OURS, 'sess-ours', cwd)
+    await realGap()
+    const theirs = await makeRollout(dir, THEIRS, 'sess-theirs', cwd)
+    const asked: Array<[string, number]> = []
+    const logs: string[] = []
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete: vi.fn(),
+      log: (m) => logs.push(m),
+      now: () => now,
+      pidOf: (id) => (id === 'live-1' ? 4100 : null),
+      ownerReader: async (file, pid) => {
+        asked.push([file, pid])
+        return file === ours ? { verdict: 'own' } : { verdict: 'other', why: 'held by pid 4242 outside the session' }
+      }
+    })
+    w.register(session('live-1', cwd))
+    await advance(TICK)
+    expect(w.rolloutPathFor('live-1')).toBe(ours)
+    expect(w.codexSessionIdFor('live-1')).toBe('sess-ours')
+    expect(asked).toEqual([[theirs, 4100], [ours, 4100]])
+    expect(logs.join('\n')).toContain(`codex rollout skipped for session=live-1: ${theirs} (held by pid 4242 outside the session)`)
+    w.stop()
+  })
+
+  it('waits while the only candidate is another process’s, and asks about it once', async () => {
+    const cwd = path.join(dir, 'proj')
+    await makeRollout(dir, THEIRS, 'sess-theirs', cwd)
+    let asks = 0
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete: vi.fn(),
+      log: () => {},
+      now: () => now,
+      pidOf: () => 4100,
+      ownerReader: async () => {
+        asks++
+        return { verdict: 'other', why: 'held open by no process' }
+      }
+    })
+    w.register(session('live-1', cwd))
+    for (let i = 0; i < 3; i++) {
+      now += TICK
+      await advance(TICK)
+    }
+    expect(w.rolloutPathFor('live-1')).toBeNull()
+    expect(asks).toBe(1)
+    w.stop()
+  })
+
+  // The `/new` re-scan picks "a newer file in my folder" too, so a codex outside Astera opening one there moved the tab.
+  it('does not move onto a newer rollout another process holds', async () => {
+    const cwd = path.join(dir, 'proj')
+    const ours = await makeRollout(dir, OURS, 'sess-ours', cwd)
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete: vi.fn(),
+      log: () => {},
+      now: () => now,
+      pidOf: () => 4100,
+      ownerReader: async (file) => (file === ours ? { verdict: 'own' } : { verdict: 'other', why: 'held by pid 4242 outside the session' })
+    })
+    w.register(session('live-1', cwd))
+    await advance(TICK)
+    expect(w.rolloutPathFor('live-1')).toBe(ours)
+    now += 30_000 // past the re-scan throttle
+    await makeRollout(dir, THEIRS, 'sess-theirs', cwd)
+    await advance(TICK)
+    expect(w.rolloutPathFor('live-1')).toBe(ours)
+    w.stop()
+  })
+
+  // A session with no process to ask about (a chat session, a wiring that gives none) keeps the rule it had.
+  it('maps the newest by folder and time when the session has no process id', async () => {
+    const cwd = path.join(dir, 'proj')
+    await makeRollout(dir, OURS, 'sess-ours', cwd)
+    await realGap()
+    const theirs = await makeRollout(dir, THEIRS, 'sess-theirs', cwd)
+    const ownerReader = vi.fn()
+    const w = new CodexRolloutWatcher({ getAccount: () => account(dir), onTurnComplete: vi.fn(), log: () => {}, now: () => now, pidOf: () => null, ownerReader })
+    w.register(session('live-1', cwd))
+    await advance(TICK)
+    expect(w.rolloutPathFor('live-1')).toBe(theirs)
+    expect(ownerReader).not.toHaveBeenCalled()
+    w.stop()
+  })
+})

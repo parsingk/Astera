@@ -44,6 +44,7 @@ import { RepairNeeded } from '../core/settings/repairNeeded'
 import { HostRetiring } from '../core/host/hostRetiring'
 import { refusedBeforeActing, undoneBeforeFailing } from '../core/host/orchProtocol'
 import { findRollout as findRolloutOnDisk } from '../core/rolling/codexLocate'
+import { rolloutOwnerCheck, rolloutOwnerReader, type RolloutOwnerReader } from '../core/rolling/rolloutOwner'
 import { descriptorOf, makeDescriptors } from '../core/providers/descriptor'
 import { providerOf } from '../core/providers/meta'
 import { ensureOnWindowsPath } from '../core/sessions/windowsPath'
@@ -130,6 +131,8 @@ export interface HostSpawnerDeps {
   locatePollMs?: number
   /** How long a codex session's rollout is looked for before the Host gives up. */
   locateForMs?: number
+  /** Test injection; defaults to this platform's reader of who holds a rollout open (rolloutOwner.ts). */
+  rolloutOwner?: RolloutOwnerReader
   /** Test injection; defaults to readAccountEntries. */
   readAccounts?: (file: string) => Promise<Account[]>
   /** Each prompt write of a worker this Host's coordinator starts (Host journal, A19 lifted). Isolated: a
@@ -392,6 +395,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   const findRollout = d.findRollout ?? findRolloutOnDisk
   const locatePollMs = d.locatePollMs ?? LOCATE_POLL_MS
   const locateForMs = d.locateForMs ?? LOCATE_FOR_MS
+  /** Whose codex holds a candidate open, asked once per candidate (Task D): another Host's session in the same folder
+   *  and Codex home is the newest file there too. */
+  const rolloutOwner = rolloutOwnerCheck({ read: d.rolloutOwner ?? rolloutOwnerReader(platform), log })
   /** ptyId → the codex sessions still looking for their rollout, in start order (`seq`). */
   const looking = new Map<string, { accountId: string; cwd: string; seq: number }>()
   let lookSeq = 0
@@ -565,7 +571,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
         return stop()
       }
       if (mayClaim(ptyId)) {
-        const found = await findRollout({ configDir: account.configDir, cwd, since, excludePaths: claimed(ptyId) })
+        const pid = registry.list().find((e) => e.id === ptyId)?.pid
+        const owner = pid ? (file: string) => rolloutOwner(file, pid, sessionId) : undefined
+        const found = await findRollout({ configDir: account.configDir, cwd, since, excludePaths: claimed(ptyId), ...(owner ? { owner } : {}) })
         if (!alive(ptyId)) return stop()
         // Another session can claim it across the await: re-checked, as the watcher does.
         if (found && !claimed(ptyId).includes(found.path)) {
