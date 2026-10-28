@@ -102,6 +102,8 @@ describe('a Job and a Task made by a sandboxed session', () => {
     expect(started[1]).not.toHaveProperty('sandbox')
   })
 
+  // Final fix pass, part 3: a sandboxed session starts a worker only on sandboxed work (a Task it added here); on a Task
+  // that is not, it is refused (commandOutsideSandbox.test.ts)
   it('asks for a sandboxed worker when a sandboxed session starts one', async () => {
     const startWorker = vi.fn(async () => ({ sessionId: 'w1', cwd: 'D:/p', specPath: 'S' }))
     const deps = makeDeps({ startWorker })
@@ -109,7 +111,7 @@ describe('a Job and a Task made by a sandboxed session', () => {
     await callAs(deps, APP_CALLER, 'run-start', { run: job.id })
     const run = deps.getState().runs.find((r) => r.jobId === job.id)!
     for (const [sessionId, spec] of [[BOXED, 'a'], [OPEN, 'b']]) {
-      const t = (await callAs(deps, OPEN, 'task-create', { run: run.id, spec, account: 'acc_c' })).body as { id: string }
+      const t = (await callAs(deps, sessionId, 'task-create', { run: run.id, spec, account: 'acc_c' })).body as { id: string }
       expect((await callAs(deps, sessionId, 'worker-start', { taskId: t.id, agent: 'claude', account: 'acc_c', worktree: 'current' })).status, sessionId).toBe(200)
     }
     expect((startWorker.mock.calls[0] as unknown as [Record<string, unknown>])[0].sandbox).toBe(true)

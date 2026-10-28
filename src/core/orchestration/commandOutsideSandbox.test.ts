@@ -2,9 +2,11 @@
 // decision). Typing into or messaging a session that is not sandboxed (`sessions send`, a worker started into another
 // session with `worker-start --terminal`, a `reply` to a worker's question) is refused, and so is running a Job, or work
 // of one, that is not sandboxed (`run start`, `jobs run`, `run spawn`, `run resume`, `runs resume`, `runs reconverge`,
-// `tasks dispatch`, a `task-update` that re-arms a Task, a question's answer). A sandboxed target is allowed, and so are
-// the structured channel a worker reports and asks through (`send`, `ask`) and the answers that only stop work. A caller
-// that is not sandboxed is answered exactly as before.
+// `tasks dispatch`, `worker-start`, a `task-update` that re-arms a Task, a question's answer; part 3 adds `worker-start`
+// with or without `--terminal`), and a message posted into such a Job's run by a session that is neither a worker of that
+// run nor its coordinator (`send`, part 3). A sandboxed target is allowed, and so are a worker's reports and questions to
+// its own run (`send`, `ask`) and the answers that only stop work. A caller that is not sandboxed is answered exactly as
+// before.
 import { describe, it, expect, vi } from 'vitest'
 import { handleCommand, type HostSession, type OrchServerDeps } from './command'
 import { closeDispatch, createGate, createJob, createQuestion, createTask, emptyState, openDispatch, startJobRun, type OrchState } from './state'
@@ -93,7 +95,8 @@ const call = (deps: OrchServerDeps, sessionId: string, cmd: string, args: Record
 const errorOf = (r: { body: unknown }): string | undefined => (r.body as { error?: string } | null)?.error
 
 /** Each route that hands work on, the arguments for it in a world, and what its refusal names. */
-const ROUTES: Array<{ name: string; cmd: string; args: (w: World) => Record<string, unknown>; target: (w: World) => string; kind: 'job' | 'task' | 'session' }> = [
+type Kind = 'job' | 'task' | 'session' | 'task-and-session'
+const ROUTES: Array<{ name: string; cmd: string; args: (w: World) => Record<string, unknown>; target: (w: World) => string; kind: Kind }> = [
   { name: 'run start of a Job', cmd: 'run-start', args: (w) => ({ run: w.jobId }), target: (w) => `job ${w.jobId}`, kind: 'job' },
   { name: 'run start of a run', cmd: 'run-start', args: (w) => ({ run: w.runId }), target: (w) => `job ${w.jobId}`, kind: 'job' },
   { name: 'jobs run', cmd: 'jobs-run', args: (w) => ({ id: w.jobId }), target: (w) => `job ${w.jobId}`, kind: 'job' },
@@ -107,20 +110,37 @@ const ROUTES: Array<{ name: string; cmd: string; args: (w: World) => Record<stri
   { name: 'gate-resolve', cmd: 'gate-resolve', args: (w) => ({ id: w.gateId, resolution: 'yes' }), target: (w) => `task ${w.c.id}`, kind: 'task' },
   { name: 'questions answer', cmd: 'questions-answer', args: (w) => ({ id: w.gateId, answer: 'yes' }), target: (w) => `task ${w.c.id}`, kind: 'task' },
   { name: 'sessions send', cmd: 'sessions-send', args: (w) => ({ id: w.worker, text: 'do this' }), target: (w) => `session ${w.worker}`, kind: 'session' },
+  // Part 3: a worker of a Task that is not sandboxed is refused whether it starts afresh or into another session
+  {
+    name: 'worker-start',
+    cmd: 'worker-start',
+    args: (w) => ({ taskId: w.b.id, agent: 'claude', account: 'acc_c', worktree: 'current' }),
+    target: (w) => `task ${w.b.id}`,
+    kind: 'task'
+  },
   {
     name: 'worker-start --terminal',
     cmd: 'worker-start',
     args: (w) => ({ taskId: w.b.id, agent: 'claude', account: 'acc_c', worktree: 'current', terminal: idleOf(w.worker) }),
-    target: (w) => `session ${idleOf(w.worker)}`,
-    kind: 'session'
+    target: (w) => `task ${w.b.id}`,
+    kind: 'task-and-session'
   },
+  // Part 3: a message into the run of a Job that is not sandboxed, from a session that is neither its worker nor its
+  // coordinator
+  { name: 'send', cmd: 'send', args: (w) => ({ type: 'status', taskId: w.b.id, subject: 'note', body: 'do this' }), target: (w) => `job ${w.jobId}`, kind: 'job' },
   { name: 'reply', cmd: 'reply', args: (w) => ({ id: w.questionId, body: 'this one' }), target: (w) => `session ${w.worker}`, kind: 'session' }
 ]
 
 /** The world in which a route's target runs in the sandbox: a sandboxed session's Job, a sandboxed Task in a Job that is
- *  not, a worker session in the sandbox. */
-const boxedWorlds = (kind: 'job' | 'task' | 'session'): World[] =>
-  kind === 'job' ? [world({ jobBoxed: true })] : kind === 'task' ? [world({ jobBoxed: true }), world({ taskBoxed: true })] : [world({ worker: W_BOX })]
+ *  not, a worker session in the sandbox, or both of the last two. */
+const boxedWorlds = (kind: Kind): World[] =>
+  kind === 'job'
+    ? [world({ jobBoxed: true })]
+    : kind === 'task'
+      ? [world({ jobBoxed: true }), world({ taskBoxed: true })]
+      : kind === 'session'
+        ? [world({ worker: W_BOX })]
+        : [world({ jobBoxed: true, worker: W_BOX }), world({ taskBoxed: true, worker: W_BOX })]
 
 describe('a sandboxed caller hands nothing outside its sandbox', () => {
   it.each(ROUTES)('$name is refused for unsandboxed work, before anything moves', async (route) => {
@@ -191,12 +211,15 @@ describe('what stays open to a sandboxed caller', () => {
   })
 
   // `astera report` and `ask` are the structured channel a worker uses toward its coordinator: a sandboxed worker of a
-  // Job that is not sandboxed reports and asks as any worker does
+  // person's Job that is not sandboxed reports to its own run and asks as any worker does (part 3 keeps this open)
   it('a sandboxed worker reports and asks toward a coordinator outside the sandbox', async () => {
     const w = world({ worker: BOXED })
     const { deps } = makeDeps(w.s)
     const status = await call(deps, BOXED, 'send', { type: 'status', taskId: w.a.id, subject: 'half way', body: 'b' })
     expect(status.status).toBe(200)
+    // Without --task-id the message goes to the latest run, its own here
+    const heartbeat = await call(deps, BOXED, 'send', { type: 'heartbeat', subject: 'alive', body: '' })
+    expect(heartbeat.status).toBe(200)
     // Its question is open already (the world's): it waits on it again
     const asked = await call(deps, BOXED, 'ask', { resume: w.questionId, timeoutMs: 0 })
     expect(asked.status).toBe(200)
@@ -205,12 +228,57 @@ describe('what stays open to a sandboxed caller', () => {
     expect(errorOf(done)).toBeUndefined()
   })
 
-  // Part 1 (§3): a worker a sandboxed caller starts itself starts in the sandbox, so it hands nothing outside
-  it('a worker it starts itself, which starts in the sandbox', async () => {
+  // Part 3: the coordinator Astera started for the run posts into it too
+  it("a sandboxed run's coordinator, posting into its own run", async () => {
     const w = world()
+    const s = { ...w.s, runs: w.s.runs.map((r) => (r.id === w.runId ? { ...r, coordinatorSessionId: BOXED } : r)) }
+    const r = await call(makeDeps(s).deps, BOXED, 'send', { type: 'status', taskId: w.b.id, subject: 'note', body: 'b' })
+    expect(r.status).toBe(200)
+  })
+
+  // Part 1 (§3): a worker a sandboxed caller starts on sandboxed work starts in the sandbox
+  it('a worker it starts on a sandboxed Task, which starts in the sandbox', async () => {
+    const w = world({ taskBoxed: true })
     const { deps, effects } = makeDeps(w.s)
     const r = await call(deps, BOXED, 'worker-start', { taskId: w.b.id, agent: 'claude', account: 'acc_c', worktree: 'current' })
     expect(r.status).toBe(200)
     expect((effects.startWorker.mock.calls[0] as unknown as [Record<string, unknown>])[0].sandbox).toBe(true)
+  })
+})
+
+describe('what part 3 closes besides', () => {
+  // A sandboxed Task typed into a session outside the sandbox is refused for the session
+  it('worker-start --terminal of a sandboxed Task into a session outside the sandbox', async () => {
+    const w = world({ taskBoxed: true })
+    const { deps, effects, box } = makeDeps(w.s)
+    const r = await call(deps, BOXED, 'worker-start', { taskId: w.b.id, agent: 'claude', account: 'acc_c', worktree: 'current', terminal: idleOf(w.worker) })
+    expect(errorOf(r)).toBe(`SANDBOX_UNAVAILABLE: outside-sandbox session ${idleOf(w.worker)}`)
+    expect(box.state).toBe(w.s)
+    expect(effects.startWorker).not.toHaveBeenCalled()
+  })
+
+  // Driving a run from outside (`check --run`) makes no session its coordinator, and a worker of another run is no
+  // worker of this one
+  it('a send from a session that only drives the run from outside, or works in another run', async () => {
+    const w = world()
+    const driven = { ...w.s, runs: w.s.runs.map((r) => (r.id === w.runId ? { ...r, externalCoordinatorSessionId: BOXED } : r)) }
+    const fromOutside = await call(makeDeps(driven).deps, BOXED, 'send', { type: 'escalation', taskId: w.b.id, subject: 'x', body: 'y' })
+    expect(errorOf(fromOutside)).toBe(`SANDBOX_UNAVAILABLE: outside-sandbox job ${w.jobId}`)
+    // BOXED works in a sandboxed Job's run, and posts into the person's run
+    const mine = world({ jobBoxed: true, worker: BOXED })
+    const theirs = world()
+    const both: OrchState = {
+      ...mine.s,
+      jobs: [...mine.s.jobs, ...theirs.s.jobs],
+      runs: [...mine.s.runs, ...theirs.s.runs],
+      tasks: [...mine.s.tasks, ...theirs.s.tasks],
+      dispatches: [...mine.s.dispatches, ...theirs.s.dispatches],
+      messages: [...mine.s.messages, ...theirs.s.messages],
+      gates: [...mine.s.gates, ...theirs.s.gates]
+    }
+    const elsewhere = await call(makeDeps(both).deps, BOXED, 'send', { type: 'status', taskId: theirs.b.id, subject: 'x', body: 'y' })
+    expect(errorOf(elsewhere)).toBe(`SANDBOX_UNAVAILABLE: outside-sandbox job ${theirs.jobId}`)
+    const own = await call(makeDeps(both).deps, BOXED, 'send', { type: 'status', taskId: mine.a.id, subject: 'x', body: 'y' })
+    expect(own.status).toBe(200)
   })
 })

@@ -1163,11 +1163,14 @@ create`, a Job it makes (its coordinator and every worker), a Task it adds to an
 runs outside the sandbox: from inside one, typing into a session that is not sandboxed (`sessions send`, a
 `worker-start --terminal` into it, a `reply` its worker reads) is refused with 5 and
 `SANDBOX_UNAVAILABLE: outside-sandbox session <id>`, running a Job no sandboxed session made (`run-start`, `jobs run`,
-`run-spawn`, `run-resume`, `runs resume`, `runs reconverge`) with `outside-sandbox job <id>`, and placing a Task whose
-worker would not start in the sandbox, setting it going again or answering its question (`tasks dispatch`, a
-`task-update` to any status but `failed` or `blocked`, `questions answer` with anything but `mark-failed`) with
-`outside-sandbox task <id>`, before anything is typed, placed or started. A sandboxed target is not refused, and a
-worker's `send` and `ask` toward its coordinator stay open whoever that coordinator is.
+`run-spawn`, `run-resume`, `runs resume`, `runs reconverge`) with `outside-sandbox job <id>`, and placing, starting
+or setting going again a Task that neither it nor its Job was made by a sandboxed session, or answering its question
+(`tasks dispatch`, `worker-start` with or without `--terminal`, a `task-update` to any status but `failed` or `blocked`,
+`questions answer` with anything but `mark-failed`) with `outside-sandbox task <id>`, before anything is typed, placed
+or started. A message into a run (`send`) is open to a worker of that run and to the coordinator Astera started for
+it; from any other sandboxed session it is refused with `outside-sandbox job <id>` unless the run's Job is a sandboxed
+session's. A sandboxed target is not refused, and a worker's `send` to its own run and its `ask` stay open whoever
+its coordinator is.
 On Windows the Codex sandbox is Codex's elevated one, which keeps Credential Manager out, and the repository is named a
 safe directory for the account it runs as; a repository or home folder whose path holds a character cmd.exe reads as
 syntax (`" & | < > ^ %`) cannot be carried to it. Each Codex account's home must have the elevated sandbox set up once

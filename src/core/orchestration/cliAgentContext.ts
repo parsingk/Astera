@@ -272,7 +272,7 @@ const SESSION = {
   send: {
     summary: "post a message into the run's inbox",
     detail:
-      '--type worker_done is how a worker reports, and it is the one type whose --task-id, --dispatch-id and --outcome are always required. The others take the dispatch of the calling session.',
+      '--type worker_done is how a worker reports, and it is the one type whose --task-id, --dispatch-id and --outcome are always required. The others take the dispatch of the calling session. From inside a sandboxed session that is neither a worker of the run nor its coordinator, a message into the run of a Job no sandboxed session made is refused with 5 (SANDBOX_UNAVAILABLE: outside-sandbox job <jobId>).',
     flags: [
       req('type', '<status|worker_done|question|escalation|heartbeat|decision_gate>', 'what kind of message'),
       { name: 'task-id', value: '<taskId>', about: 'the Task it is about (required for worker_done)' },
@@ -453,7 +453,7 @@ const SESSION = {
   },
   'worker-start': {
     summary: 'start a worker session for a Task',
-    detail: `${BYPASS_START} The coordinator Astera started for the Task's run is not asked.`,
+    detail: `${BYPASS_START} The coordinator Astera started for the Task's run is not asked. From inside a sandboxed session, a Task that neither it nor its Job was made by a sandboxed session is refused with 5 (SANDBOX_UNAVAILABLE: outside-sandbox task <taskId>), and so is --terminal into a session that is not sandboxed (outside-sandbox session <sessionId>).`,
     flags: [
       req('task', '<taskId>', 'the Task to work on'),
       req('agent', '<claude|codex>', 'which CLI the worker runs'),
