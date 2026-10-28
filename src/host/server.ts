@@ -137,9 +137,57 @@ export interface HostServerDeps {
   maxAppQueuedBytes?: number
 }
 
-/** Broadcasts a CLI never reads (it reads the answers to its own calls only, cli/run.ts): every session's output, its
- *  exits and chat lines, and the whole state. Sent to one, they cost a parse of each in every waiting `astera` call. */
-const NOT_FOR_CLI: ReadonlySet<string> = new Set(['pty-data', 'pty-exit', 'pty-size', 'pty-opened', 'proc-line', 'proc-opened', 'proc-exit', 'orch-state'])
+/** Who a message the Host sends is for. **'app'**: only the Astera app reads it (src/main), so `broadcast` and
+ *  `toOthers` send it to a proven app alone. A CLI reads the answers to its own calls only (cli/run.ts), an MCP client
+ *  and the Gateway's link read `orch-result` and `pong`, and a hello that named the app and never proved it is a CLI
+ *  still. Sent to one, terminal output and the whole state cost a parse of each in every waiting `astera` call, and the
+ *  rest carry session ids, rolls and paths that only the app has a use for. **'any'**: a handshake message or the answer
+ *  to a request, which goes to whoever asked.
+ *
+ *  Every kind of the protocol is placed here, so a new one fails tsc until someone decides which it is. Each 'app' kind
+ *  was checked against src/cli (with src/cli/mcp), packages/client, src/pluginHost and the Gateway: none of them reads
+ *  it; they read `orch-result`, `pong` and `retire-refused` only. */
+const HOST_MESSAGE_AUDIENCE: Record<HostMessage['t'], 'app' | 'any'> = {
+  'orch-state': 'app',
+  'orch-act': 'app',
+  'pty-data': 'app',
+  'pty-exit': 'app',
+  'pty-size': 'app',
+  'pty-opened': 'app',
+  'proc-line': 'app',
+  'proc-opened': 'app',
+  'proc-exit': 'app',
+  'git-op': 'app',
+  'worktrees-state': 'app',
+  'understanding-state': 'app',
+  'work-units-state': 'app',
+  'mcp-http-state': 'app',
+  'gateway-state': 'app',
+  'work-units-goal-ignored': 'app',
+  'roll-state': 'app',
+  'chat-notice': 'app',
+  'session-rolled': 'app',
+  'blocks': 'app',
+  'driver': 'app',
+  'workspace': 'app',
+  'hello': 'any',
+  'protocol-mismatch': 'any',
+  'retire-refused': 'any',
+  'pong': 'any',
+  'app-proven': 'any',
+  'orch-result': 'any',
+  'pty-spawned': 'any',
+  'pty-failed': 'any',
+  'pty-listed': 'any',
+  'proc-spawned': 'any',
+  'proc-failed': 'any',
+  'proc-attached': 'any',
+  'proc-listed': 'any'
+}
+/** The kinds `broadcast` and `toOthers` keep from every socket but the proven app (above). */
+export const NOT_FOR_CLI: ReadonlySet<string> = new Set(
+  (Object.keys(HOST_MESSAGE_AUDIENCE) as Array<HostMessage['t']>).filter((t) => HOST_MESSAGE_AUDIENCE[t] === 'app')
+)
 const MAX_QUEUED_BYTES = 64 * 1024 * 1024
 const MAX_APP_QUEUED_BYTES = 512 * 1024 * 1024
 
@@ -366,7 +414,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
    */
   const clock = deps.stateClock ?? monotonicClock
   const stateLanes = new Map<net.Socket, { held: (() => string) | null; lastAt: number; cancel: (() => void) | null }>()
-  // A CLI is not here: it is sent no `orch-state` at all (NOT_FOR_CLI, audit H1)
+  // A CLI, or an app that has not proved itself, is not here: it is sent no `orch-state` at all (NOT_FOR_CLI)
   const readsLatest = (s: net.Socket): boolean =>
     roles.get(s) === 'app' && (yields.get(s)?.has(HOST_YIELD_ORCH_STATE_LATEST) ?? false)
   const laneOf = (s: net.Socket): { held: (() => string) | null; lastAt: number; cancel: (() => void) | null } => {
@@ -520,7 +568,13 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
       const line = lazyLine(msg)
       // The sender holds this state already; anything older held for it would put it back.
       if (a.socket && msg.t === 'orch-state') dropState(a.socket)
-      for (const s of greetedSockets) if (s !== a.socket && !s.destroyed && !isMcp(s)) writeTo(s, msg, line)
+      const appOnly = NOT_FOR_CLI.has(msg.t)
+      for (const s of greetedSockets) {
+        if (s === a.socket || s.destroyed || isMcp(s)) continue
+        // broadcast's rule: what only the app reads goes to a proven app alone
+        if (appOnly && roles.get(s) !== 'app') continue
+        writeTo(s, msg, line)
+      }
     }
   })
   /** Wraps `deps.onAppsChanged` so a caller's throw costs the handshake or close it rode in on
@@ -926,7 +980,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
       const notForCli = NOT_FOR_CLI.has(m.t)
       for (const s of greetedSockets) {
         if (s.destroyed || isMcp(s)) continue
-        if (notForCli && roles.get(s) === 'cli') continue
+        if (notForCli && roles.get(s) !== 'app') continue
         if (to && !to(yields.get(s) ?? new Set<string>(), features.get(s) ?? new Set<string>())) continue
         writeTo(s, m, line)
       }

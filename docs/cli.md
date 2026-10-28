@@ -2148,8 +2148,9 @@ The boundary is your machine and your operating system account.
   only the app can, and counts as you in a Job's records. So the app keeps a second random key,
   `host/app.key`, beside the Host key, and answers a challenge the Host makes for each of its
   connections with a proof made from it, once. Until that proof holds, and after a wrong one, the
-  Host serves the connection as a CLI and keeps it open, and both sides write why in their logs. A
-  sandboxed session may not read `app.key`; it may read `host.key`, which the `astera` inside it
+  Host serves the connection as a CLI and keeps it open, and both sides write why in their logs. What
+  only the app reads (terminal output, and the Host's pushes of state, rolls and worktrees) is sent to the
+  proven app alone. A sandboxed session may not read `app.key`; it may read `host.key`, which the `astera` inside it
   checks the Host's proof with. `astera sessions` reads and types through the commands instead,
   under their own rules.
 - There is no bearer token and no connection file. What used to be a bearer token on a loopback
