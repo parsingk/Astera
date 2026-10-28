@@ -994,6 +994,11 @@ describe('CodexRolloutWatcher maps only a rollout its session holds', () => {
     const pending = new Promise<RolloutOwnership>((r) => (release = () => r({ verdict: 'own' })))
     const remember = vi.fn()
     const logs: string[] = []
+    // Re-review Minor 5: the answers are shared, so a second look in flight asks nothing more and maps nothing more;
+    // what it does is walk the rollout folders again, and that is what is counted
+    const readdir = vi.spyOn(fsPromises, 'readdir')
+    onTestFinished(() => readdir.mockRestore())
+    const walks = (): number => readdir.mock.calls.filter((c) => String(c[0]).includes(path.join(dir, 'sessions'))).length
     const w = new CodexRolloutWatcher({
       getAccount: () => account(dir),
       onTurnComplete: vi.fn(),
@@ -1006,12 +1011,37 @@ describe('CodexRolloutWatcher maps only a rollout its session holds', () => {
       }
     })
     w.register(session('live-1', cwd))
+    await advance(TICK)
+    const first = walks()
+    expect(first).toBeGreaterThan(0)
     for (let i = 0; i < 3; i++) await advance(TICK)
+    expect(walks()).toBe(first)
     release()
     await advance(TICK)
     expect(w.rolloutPathFor('live-1')).toBe(ours)
     expect(remember).toHaveBeenCalledTimes(1)
     expect(logs.filter((l) => l.startsWith('codex rollout watch mapped'))).toHaveLength(1)
+    w.stop()
+  })
+
+  // Re-review Minor 5: where the owner cannot be told, the start order is still the rule. An older tab's look is behind
+  // a newer tab's in the same folder, so it takes only a file its own process holds; "the newest" is the newer tab's.
+  it('leaves a newer tab’s file to it when the owner cannot be told, though the older tab looks too', async () => {
+    const cwd = path.join(dir, 'proj')
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete: vi.fn(),
+      log: () => {},
+      now: () => now,
+      rolloutOwner: { pidOf: (id) => (id === 'older' ? 4100 : 4200), read: async () => ({ verdict: 'unknown', why: 'Cannot add type.' }) }
+    })
+    w.register(session('older', cwd))
+    now += 1_000
+    w.register(session('newer', cwd))
+    const theirs = await makeRollout(dir, THEIRS, 'sess-newer', cwd)
+    await advance(TICK)
+    expect(w.rolloutPathFor('older')).toBeNull()
+    expect(w.rolloutPathFor('newer')).toBe(theirs)
     w.stop()
   })
 
