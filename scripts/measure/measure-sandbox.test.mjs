@@ -49,7 +49,7 @@ import {
 } from './s2.mjs'
 import { codexSandboxArgs } from '../../src/core/sandbox/codexProfile'
 import { claudeSandboxSettings } from '../../src/core/sandbox/claudeSettings'
-import { credentialStoreDenies, sensitiveLocations } from '../../src/core/sandbox/locations'
+import { credentialStoreDenies, hostSocketDenies, sensitiveLocations } from '../../src/core/sandbox/locations'
 import { gitLayoutOf } from '../../src/core/sandbox/gitLayout'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -250,6 +250,20 @@ describe('the S2 sets’ arguments come from the builders', () => {
     // Global Constraints: the bus socket for Linux Codex; srt blocks Unix sockets on Linux by itself
     expect(claudeDenied('linux', env, '/h')).toEqual(sensitiveLocations('linux', env, '/h'))
     expect(claudeDenied('darwin', env, '/h')).toEqual([...sensitiveLocations('darwin', env, '/h'), '/h/Library/Keychains'])
+  })
+
+  it("denies Codex the Host's socket folder as a session's start does (sessionSandboxArgs), in both macOS spellings", () => {
+    const e = { ...env, APPDATA: 'C:/h/AppData/Roaming' }
+    for (const platform of ['darwin', 'linux', 'win32']) {
+      const dir = platform === 'darwin' ? '/var/folders/x/T/astera-host-0123456789ab-v4' : '/tmp/astera-host-0123456789ab-v4'
+      expect(codexDenied(platform, e, '/h', dir)).toEqual([...codexDenied(platform, e, '/h'), ...hostSocketDenies(platform, dir)])
+    }
+    expect(codexDenied('darwin', e, '/h', '/var/folders/x/T/astera-host-0123456789ab-v4').slice(-2)).toEqual([
+      '/var/folders/x/T/astera-host-0123456789ab-v4',
+      '/private/var/folders/x/T/astera-host-0123456789ab-v4'
+    ])
+    expect(codexDenied('linux', e, '/h', '/tmp/astera-host-0123456789ab-v4')).toContain('/tmp/astera-host-0123456789ab-v4')
+    expect(codexDenied('win32', e, '/h', 'C:/t/astera-host-x')).toEqual(codexDenied('win32', e, '/h'))
   })
 
   // `-a never` is an option of the session command; `codex sandbox` and `app-server` take only the -c values
