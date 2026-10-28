@@ -26,7 +26,7 @@ import { ensureGitFiles, ensureWorktreeConfigFiles, gitLayoutOf } from '../../sr
 import { initializeParams } from '../../src/core/chat/codexProtocol'
 import { hostAddress } from '../../src/host/address'
 import { HOST_PROTOCOL } from '../../src/core/host/protocol'
-import { appKeyPath, ensureAppKey } from '../../src/core/host/hostKey'
+import { appKeyPath, ensureAppKey, ensureHostKey } from '../../src/core/host/hostKey'
 import { fixtures, loopbackServer, probeEnv, sh, srtArgv, workspaceFor } from './measure-sandbox.mjs'
 import { refusedAll, runProbes, runSet } from './probes.mjs'
 import { startAppServer } from './appServer.mjs'
@@ -51,8 +51,10 @@ import {
   execResult,
   globalExcludesPath,
   localWin32Env,
+  PROFILE_FOLDER,
   probesFor,
   profileNameOf,
+  profileProbesFor,
   sessionReadOnly,
   readinessArgv,
   s2Enabled,
@@ -140,6 +142,7 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
       'srt sets: claudeSandboxSettings as Claude Code hands them to srt (s2.mjs srtSettingsOf); the network list names the probes’ hosts. Claude Code’s own use of these settings is not measured (no login): runtime-measured.',
       'The config.worktree probes write the one git names for the session, the main checkout’s and a second worktree’s (each set adds one). On the shipped path the repository has extensions.worktreeConfig on and every config.worktree made first by ensureWorktreeConfigFiles (worktreeConfig in each set), as the start does; codex-worktree-common has the extension off and none made (filesBefore, filesAfter). In the srt sets they are informational: how Claude Code itself treats a worktree’s git data is not srt’s.',
       'Every set makes the missing git files first, as every sandboxed start does (ensureGitFiles: a commondir holding `.` and an empty modules folder; gitFiles in each set), and both profiles keep them read-only with a worktree’s `.git` pointer; the normal-work probes (git-status, git-log, git-worktree-list, and the commits) say whether everyday git still runs.',
+      'Every set keeps a profile folder read-only as a start does (readOnly = sessionReadOnly, locations.ts profileReadOnly; Task E): the run’s own scratch profile, outside every set’s folder as a profile is in normal work, so these sets’ results are not meant to change. codex-profile and srt-profile put a profile folder inside the session’s folder (no repository) and run exactly two probes: one file written into it (expected denied) and its Host key read (expected allowed).',
       ...(WIN
         ? [
             'win32: the fake home is in TEMP, which the sandbox may write, so write-home writes ASTERA_PROBE_OUTSIDE (a folder in the checkout, outside TEMP and the workspace); git-credential uses the store helper and the fake .git-credentials, with Git’s system config (Credential Manager) left out.',
@@ -470,9 +473,55 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
     return record
   }
 
+  /** A fresh folder outside any repository holding a profile folder (PROFILE_FOLDER), as a session started in the home
+   *  folder holds Astera's: its Host key and app key made as the Host and the app make them (Task E). */
+  async function profileWorkspace(name) {
+    const cwd = path.join(ctx.home, `astera-probe-ws-s2-${name}`)
+    mkdirSync(cwd, { recursive: true })
+    const profileDir = path.join(cwd, PROFILE_FOLDER)
+    await ensureHostKey(profileDir)
+    await ensureAppKey(profileDir)
+    const tmpDir = path.join(ctx.scratch, `tmp-${name}`)
+    mkdirSync(tmpDir, { recursive: true })
+    return { cwd, profileDir, appKeyFile: appKeyPath(profileDir), tmpDir, gitLayout: await gitLayoutOf(cwd) }
+  }
+
+  /** The profile inside the session's folder (Task E), under Codex or srt with what a start would hand either for that
+   *  profile (its own folder read-only, its own app key denied): the two plain probes, with no sandbox and then in it. */
+  async function profileSet(set) {
+    const probes = profileProbesFor(PLATFORM)
+    const envOf = (w, own) => ({ ...ctx.base, ...own, ASTERA_PROBE_PROFILE: WIN ? path.win32.normalize(w.profileDir) : w.profileDir })
+    const pw = await profileWorkspace(`${set.name}-plain`)
+    const plain = runProbes(plainWrap, { cwd: pw.cwd, env: envOf(pw, {}), probes, timeoutMs: PROBE_MS })
+    const w = await profileWorkspace(set.name)
+    const readOnly = sessionReadOnly(w.profileDir)
+    const record = { layout: set.layout, cwd: w.cwd, profileDir: w.profileDir, gitLayout: w.gitLayout, readOnly }
+    let wrap
+    let env
+    if (set.kind === 'codex') {
+      const denied = codexDenied(PLATFORM, ctx.base, ctx.home, ctx.hostDir, w.appKeyFile)
+      const args = codexSetArgs({ platform: PLATFORM, layout: w.gitLayout, denied, readOnly })
+      const own = codexSandboxEnv({ platform: PLATFORM, layout: w.gitLayout, tmpDir: w.tmpDir })
+      wrap = (line) => ({ file: 'codex', args: ['sandbox', ...args, '--', ...shellArgv(PLATFORM, line)] })
+      env = envOf(w, own)
+      Object.assign(record, { args, env: own, denied })
+    } else {
+      const npmCache = npmCacheOf(w.tmpDir)
+      const claude = claudeSandboxSettings({ platform: PLATFORM, denied: claudeDenied(PLATFORM, ctx.base, ctx.home, w.appKeyFile), readOnly, npmCache, layout: w.gitLayout })
+      const settings = srtSettingsOf(claude, { commonDir: w.gitLayout?.worktree ? w.gitLayout.commonDir : null })
+      const settingsFile = path.join(ctx.scratch, `srt-settings-${set.name}.json`)
+      writeFileSync(settingsFile, JSON.stringify(settings, null, 2))
+      wrap = (line) => ({ file: 'srt', args: srtArgv(settingsFile, line) })
+      env = envOf(w, { npm_config_cache: npmCache })
+      Object.assign(record, { claude: claude.sandbox, settings, env: { npm_config_cache: npmCache } })
+    }
+    const sandboxed = runSet(wrap, { cwd: w.cwd, env, probes, timeoutMs: PROBE_MS, sanity: sanityLine(PLATFORM) })
+    return { ...record, plain, sandboxed, verdicts: verdicts(plain, sandboxed) }
+  }
+
   for (const set of S2_SETS) {
     it.skipIf(!s2SetNames(PLATFORM).includes(set.name))(set.name, async () => {
-      const run = set.kind === 'codex' ? codexSet : set.kind === 'app-server' ? appServerSet : srtSet
+      const run = set.profileInside ? profileSet : set.kind === 'codex' ? codexSet : set.kind === 'app-server' ? appServerSet : srtSet
       const r = await run(set)
       result.sets[set.name] = r
       save()

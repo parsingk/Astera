@@ -44,7 +44,12 @@ export const S2_SETS = [
   { name: 'srt-linux-exclude-dirs', kind: 'srt', layout: 'worktree', platforms: ['linux'], exclude: 'directories' },
   // srt on macOS with a socket where the Host listens, granted and not: the shipped settings grant none (final fix pass,
   // C2), so the ungranted control (socketWithoutGrant) is what a sandboxed Claude session gets
-  { name: 'srt-mac-socket', kind: 'srt', layout: 'worktree', platforms: ['darwin'], socket: true }
+  { name: 'srt-mac-socket', kind: 'srt', layout: 'worktree', platforms: ['darwin'], socket: true },
+  // Task E (2026-10-28): Astera's profile folder inside the session's folder (no repository), as a session started in
+  // the home folder holds it: its sandbox keeps it read-only and the Host key in it readable. Sets of their own, so a
+  // profile folder never sits in another set's repository, where git would see it
+  { name: 'codex-profile', kind: 'codex', layout: 'folder', profileInside: true },
+  { name: 'srt-profile', kind: 'srt', layout: 'folder', platforms: ['linux', 'darwin'], profileInside: true }
 ]
 
 export const s2SetNames = (platform) => S2_SETS.filter((s) => s.platforms === undefined || s.platforms.includes(platform)).map((s) => s.name)
@@ -228,6 +233,23 @@ export const WIN32_NORMAL_WORK_PROBES = [
   { id: 'git-worktree-list', line: 'git worktree list' },
   { id: GLOBAL_EXCLUDE_PROBE.id, line: `git check-ignore -v ${GLOBAL_IGNORED}` }
 ]
+
+/** Where a profile set keeps its profile folder, inside the session's folder. */
+export const PROFILE_FOLDER = 'astera-profile'
+
+/** The two checks of a profile folder inside the session's folder (ASTERA_PROBE_PROFILE), and nothing else (Task E): a
+ *  single file written into it, which the sandbox must refuse, and the Host key read, which it must allow, since the
+ *  `astera` inside a session checks the loopback's proof with it. Plain normal use only. */
+export const PROFILE_PROBES = [
+  { id: 'profile-write', line: 'echo x > "$ASTERA_PROBE_PROFILE/astera-probe-write.txt"' },
+  { id: 'profile-host-key-read', line: 'cat "$ASTERA_PROBE_PROFILE/host/host.key" > /dev/null' }
+]
+/** The same for cmd.exe, with no double quote (WIN32_PROBES). */
+export const WIN32_PROFILE_PROBES = [
+  { id: 'profile-write', line: 'echo x> %ASTERA_PROBE_PROFILE%\\astera-probe-write.txt' },
+  { id: 'profile-host-key-read', line: 'type %ASTERA_PROBE_PROFILE%\\host\\host.key > nul' }
+]
+export const profileProbesFor = (platform) => (platform === 'win32' ? WIN32_PROFILE_PROBES : PROFILE_PROBES)
 
 /** What the common-case set runs (and its sanity line first): a commit, the config.worktree writes and normal work. */
 export const COMMON_CASE_PROBES = ['git-commit', ...CONFIG_WORKTREE_PROBES.map((p) => p.id), ...NORMAL_WORK_PROBES.map((p) => p.id)]

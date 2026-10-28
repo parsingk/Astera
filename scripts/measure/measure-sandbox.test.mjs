@@ -46,7 +46,11 @@ import {
   srtSettingsOf,
   whoamiArgv,
   withoutNpmRunEnv,
-  sessionReadOnly
+  sessionReadOnly,
+  PROFILE_FOLDER,
+  PROFILE_PROBES,
+  WIN32_PROFILE_PROBES,
+  profileProbesFor
 } from './s2.mjs'
 import { codexSandboxArgs, npmCacheOf } from '../../src/core/sandbox/codexProfile'
 import { claudeSandboxSettings } from '../../src/core/sandbox/claudeSettings'
@@ -243,9 +247,9 @@ describe('the S2 measurement', () => {
 
   it('names the sets each platform runs', () => {
     const codex = ['codex-repo', 'codex-subfolder', 'codex-worktree', 'codex-worktree-alt', 'codex-worktree-common', 'app-server', 'app-server-profile']
-    expect(s2SetNames('linux')).toEqual([...codex, 'srt-linux-exclude', 'srt-linux-exclude-dirs'])
-    expect(s2SetNames('darwin')).toEqual([...codex, 'srt-mac-socket'])
-    expect(s2SetNames('win32')).toEqual(codex)
+    expect(s2SetNames('linux')).toEqual([...codex, 'srt-linux-exclude', 'srt-linux-exclude-dirs', 'codex-profile', 'srt-profile'])
+    expect(s2SetNames('darwin')).toEqual([...codex, 'srt-mac-socket', 'codex-profile', 'srt-profile'])
+    expect(s2SetNames('win32')).toEqual([...codex, 'codex-profile'])
     expect(Object.fromEntries(S2_SETS.map((s) => [s.name, s.layout]))).toMatchObject({
       'codex-repo': 'repo',
       'codex-subfolder': 'subfolder',
@@ -452,6 +456,31 @@ describe('the S2 probes', () => {
     expect(probesFor('darwin', 'worktree').slice(-3)).toEqual(NORMAL_WORK_PROBES)
     // The common case runs them too, beside its commit
     expect(COMMON_CASE_PROBES).toEqual(expect.arrayContaining(['git-commit', 'git-status', 'git-log', 'git-worktree-list']))
+  })
+
+  // Task E (2026-10-28): a profile folder inside the session's folder, in sets of their own (a profile in another set's
+  // repository would show up to git), checked by exactly two plain probes: one file written into it, which the sandbox
+  // must refuse, and the Host key read, which it must allow. Nothing else
+  it('checks a profile inside the session’s folder with one write and one Host key read, in sets of their own', () => {
+    for (const name of ['codex-profile', 'srt-profile']) expect(S2_SETS.find((s) => s.name === name), name).toMatchObject({ layout: 'folder', profileInside: true })
+    expect(S2_SETS.find((s) => s.name === 'codex-profile')).toMatchObject({ kind: 'codex' })
+    expect(S2_SETS.find((s) => s.name === 'codex-profile').platforms).toBeUndefined()
+    expect(S2_SETS.find((s) => s.name === 'srt-profile')).toMatchObject({ kind: 'srt', platforms: ['linux', 'darwin'] })
+    expect(S2_SETS.filter((s) => s.profileInside).map((s) => s.name)).toEqual(['codex-profile', 'srt-profile'])
+    expect(PROFILE_FOLDER).toBe('astera-profile')
+    expect(profileProbesFor('linux')).toEqual(PROFILE_PROBES)
+    expect(profileProbesFor('darwin')).toEqual(PROFILE_PROBES)
+    expect(profileProbesFor('win32')).toEqual(WIN32_PROFILE_PROBES)
+    for (const list of [PROFILE_PROBES, WIN32_PROFILE_PROBES]) expect(list.map((p) => p.id)).toEqual(['profile-write', 'profile-host-key-read'])
+    expect(PROFILE_PROBES).toEqual([
+      { id: 'profile-write', line: 'echo x > "$ASTERA_PROBE_PROFILE/astera-probe-write.txt"' },
+      { id: 'profile-host-key-read', line: 'cat "$ASTERA_PROBE_PROFILE/host/host.key" > /dev/null' }
+    ])
+    expect(WIN32_PROFILE_PROBES).toEqual([
+      { id: 'profile-write', line: 'echo x> %ASTERA_PROBE_PROFILE%\\astera-probe-write.txt' },
+      { id: 'profile-host-key-read', line: 'type %ASTERA_PROBE_PROFILE%\\host\\host.key > nul' }
+    ])
+    for (const p of WIN32_PROFILE_PROBES) expect(p.line, p.id).not.toContain('"')
   })
 
   it('has the cmd.exe probes the plan lists for Windows, with no double quote (cmd.exe would see it escaped)', () => {
