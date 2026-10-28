@@ -5,7 +5,16 @@ import path from 'node:path'
 import type { Account } from '../types'
 import { makeDescriptors } from '../providers/descriptor'
 import { cliEnvFor } from '../sessions/cliEnv'
-import { HOST_ONLY_ENV, HOST_STDERR_MAX, hostCliPaths, hostSpawnPlan, hostStderr, hostWorkerBaseEnv, resolveHostEntry } from './spawn'
+import {
+  HOST_ONLY_ENV,
+  HOST_STDERR_MAX,
+  hostCliPaths,
+  hostExitReason,
+  hostSpawnPlan,
+  hostStderr,
+  hostWorkerBaseEnv,
+  resolveHostEntry
+} from './spawn'
 
 describe('resolveHostEntry', () => {
   it('takes the first candidate that exists', () => {
@@ -292,5 +301,62 @@ describe('hostStderr', () => {
       expect(text, f).toMatch(/hostStderr\(/)
       expect(text, f).toMatch(/try \{[\s\S]{0,200}spawn\([\s\S]{0,200}\} finally \{\s*stderr\.close\(\)/)
     }
+  })
+})
+
+// 2026-10-28: the person's Host died a second time with every session, again with nothing in host.log or its stderr and
+// no Application Error event, and a reproduction on a scratch Host never killed it. A crash in native code and a kill
+// from outside leave the same silence; only the exit code tells them apart, and the app that started the Host is alive
+// to read it.
+describe('hostExitReason', () => {
+  it('names an access violation as a crash in native code, whichever sign the code arrives with', () => {
+    for (const code of [0xc0000005, 0xc0000005 - 2 ** 32]) {
+      const r = hostExitReason(code, null, 'win32')
+      expect(r).toContain('0xC0000005')
+      expect(r).toContain('native code')
+    }
+  })
+
+  it('names the other native failures', () => {
+    expect(hostExitReason(0xc0000409, null, 'win32')).toContain('0xC0000409')
+    expect(hostExitReason(0xc0000409, null, 'win32')).toContain('native code')
+    expect(hostExitReason(0xc0000374, null, 'win32')).toContain('heap corruption')
+    expect(hostExitReason(0xc00000fd, null, 'win32')).toContain('stack overflow')
+  })
+
+  // What process.abort() and a V8 fatal error leave on Windows, checked against a real child.
+  it("names node.exe's own abort and points at its stderr", () => {
+    expect(hostExitReason(134, null, 'win32')).toBe('exit code 134 (node.exe aborted: host-stderr.log says why)')
+  })
+
+  it('names a console Ctrl event', () => {
+    expect(hostExitReason(0xc000013a, null, 'win32')).toContain('0xC000013A')
+    expect(hostExitReason(0xc000013a, null, 'win32')).toContain('console Ctrl event')
+  })
+
+  it('names the codes another process leaves when it ends the Host', () => {
+    expect(hostExitReason(1, null, 'win32')).toContain('taskkill /F')
+    expect(hostExitReason(0xffffffff, null, 'win32')).toContain('0xFFFFFFFF')
+    expect(hostExitReason(-1, null, 'win32')).toContain('Stop-Process')
+  })
+
+  it("gives the Host's own codes as they are, since host.log already says why", () => {
+    expect(hostExitReason(70, null, 'win32')).toBe('exit code 70')
+    expect(hostExitReason(0, null, 'win32')).toBe('exit code 0')
+  })
+
+  // On macOS and Linux a kill or a crash comes as a signal; a 1 there is not taskkill.
+  it('guesses no cause for a code outside Windows', () => {
+    expect(hostExitReason(1, null, 'linux')).toBe('exit code 1')
+    expect(hostExitReason(1, null, 'darwin')).toBe('exit code 1')
+  })
+
+  it('gives a signal by name', () => {
+    expect(hostExitReason(null, 'SIGKILL', 'linux')).toBe('signal SIGKILL')
+  })
+
+  it('is what the app records when a Host it started ends', () => {
+    const text = readFileSync(path.join(process.cwd(), 'src/main/ipc.ts'), 'utf8')
+    expect(text).toMatch(/child\.on\('exit', \(code, signal\) =>[\s\S]{0,200}hostExitReason\(code, signal, process\.platform\)/)
   })
 })

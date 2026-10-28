@@ -182,3 +182,32 @@ export function hostStderr(file: string, fs: StderrFs): { stdio: ['ignore', 'ign
     return { stdio: ['ignore', 'ignore', 'ignore'], close: () => {} }
   }
 }
+
+/** The Windows exit codes no Host sets itself, by what each says about how it ended. */
+const HOST_EXIT_CAUSES: Record<number, string> = {
+  1: 'ended by another process: what taskkill /F leaves',
+  134: 'node.exe aborted: host-stderr.log says why',
+  0xffffffff: 'ended by another process: what Stop-Process and Process.Kill leave',
+  0xc0000005: 'a crash in native code: access violation',
+  0xc0000409: 'a crash in native code: fail-fast or abort',
+  0xc0000374: 'a crash in native code: heap corruption',
+  0xc00000fd: 'a crash in native code: stack overflow',
+  0xc000013a: 'a console Ctrl event'
+}
+
+/**
+ * How a Host ended, from what its 'exit' event carries, for the log of whoever started it.
+ *
+ * 2026-10-28: a Host died with every session a second time, again with nothing in host.log or host-stderr.log. A crash
+ * in native code and a kill from outside both end it before any JavaScript runs; only the exit code tells them apart.
+ * The Host's own codes (src/host/exitCodes.ts) are given as they are, since host.log already says why it left with them.
+ * Elsewhere a kill or a crash arrives as a signal, and a code is only ever the Host's own.
+ */
+export function hostExitReason(code: number | null, signal: NodeJS.Signals | null, platform: NodeJS.Platform): string {
+  if (code === null) return `signal ${signal ?? 'unknown'}`
+  // libuv hands Windows' DWORD over unsigned; a caller that read it as a 32-bit int has it negative.
+  const u = code < 0 ? code + 2 ** 32 : code
+  const cause = platform === 'win32' ? HOST_EXIT_CAUSES[u] : undefined
+  const shown = u > 0xffff ? `0x${u.toString(16).toUpperCase()}` : String(u)
+  return cause ? `exit code ${shown} (${cause})` : `exit code ${shown}`
+}

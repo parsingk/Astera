@@ -36,7 +36,7 @@ import {
   type ConversationSessions
 } from './conversation'
 import { HostClient, READY_TIMEOUT_MS } from './host/client'
-import { hostSpawnPlan, hostStderr, resolveHostEntry } from '../core/host/spawn'
+import { hostExitReason, hostSpawnPlan, hostStderr, resolveHostEntry } from '../core/host/spawn'
 import { hostRuntimeBase } from '../core/host/runtime'
 import { createRuntimeInstaller, installHostRuntime, spawnableRuntime, spawnWhenInstalled, type InstalledRuntime } from './host/runtimeInstall'
 import { executableProbe, parseExecutablePath, hostKillPlan, killHostCommand } from './host/hostProcess'
@@ -6432,6 +6432,10 @@ export function registerIpc(
         // an uncaught exception in the main process. The client's own retry loop reports the outcome
         // to the person; this only has to keep the failure from being fatal.
         child.on('error', (err) => hostLog(`the Host could not be started: ${String(err)}`))
+        // A Host that crashes in native code or is ended from outside writes nothing itself; this app outlives it and
+        // can still say which of the two it was (core/host/spawn.ts hostExitReason).
+        const pid = child.pid
+        child.on('exit', (code, signal) => hostLog(`the Host (pid ${pid}) ended: ${hostExitReason(code, signal, process.platform)}`))
         child.unref()
       })
     })
