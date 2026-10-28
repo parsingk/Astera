@@ -1154,7 +1154,9 @@ commands cannot run outside it, and a Claude Code whose sandbox cannot start exi
 runs inside the sandbox, which reaches no Unix socket, the Host's included, so `astera` fails there on macOS as on
 Linux. On Linux its git reads an excludes file Astera writes
 (`<profile>/sandbox/excludes-<uid>`: the person's own `core.excludesFile`, or git's default one, then the names the
-sandbox keeps placeholders for, such as `.bashrc` and `.vscode`), so `git add -A` works. Claude Code has no sandbox on
+sandbox keeps placeholders for, such as `.bashrc` and `.vscode`), so `git add -A` works. A sandboxed Codex session on Windows runs as the
+sandbox's own account, which cannot read the person's home, so its git reads a copy of the person's global excludes
+that Astera writes in the temp folder. Claude Code has no sandbox on
 Windows: there the switch only keeps its file tools, not its shell, out of those folders, and npm keeps its own cache.
 What a sandboxed session starts runs in the sandbox too, whatever profile it names: a session it makes with `sessions
 create`, a Job it makes (its coordinator and every worker), a Task it adds to any Job and a worker it starts with
