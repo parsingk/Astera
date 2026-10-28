@@ -8,6 +8,10 @@ import type { HandlerFrom } from './ptyHost'
 /** What a proc-spawn asked of anything but the app is answered with (final fix pass, C2). */
 export const PROC_SPAWN_APP_ONLY = 'proc-spawn is served to the Astera app only'
 
+/** Every message this handler owns, each the proven app's alone, as ptyHost.ts's are (sandbox follow-ups, round 2): each
+ *  reads a process (its list, its buffered lines) or drives one (writes a line, a person's or not, kills or notes it). */
+const PROC_MESSAGES: ReadonlySet<ClientMessage['t']> = new Set(['proc-spawn', 'proc-write', 'proc-kill', 'proc-note', 'proc-list', 'proc-attach'])
+
 /** Returns a handler for one connection that reports whether it owned the message, so the server can
  *  try the pty handler and its own handshake messages for anything else. Lines and exits broadcast,
  *  because the app that attaches after a restart is not the app that spawned. */
@@ -24,13 +28,15 @@ export function attachProcHost(a: {
   )
 
   return (m, send, from) => {
+    // ptyHost.ts's rule: anything but the proven app is refused every proc message, a spawn told why and the rest
+    // answered nothing. Whatever its hello yields, a socket that is not the app marks no person's line.
+    if (PROC_MESSAGES.has(m.t) && from?.role !== 'app') {
+      if (m.t === 'proc-spawn') send({ t: 'proc-failed', id: m.id, error: PROC_SPAWN_APP_ONLY })
+      return true
+    }
     switch (m.t) {
       case 'proc-spawn': {
-        // pty-spawn's rule (ptyHost.ts): any program, so the app's own connection only
-        if (from?.role !== 'app') {
-          send({ t: 'proc-failed', id: m.id, error: PROC_SPAWN_APP_ONLY })
-          return true
-        }
+        // pty-spawn's rule (ptyHost.ts): any program, so the app's own connection only (above)
         const res = a.registry.open({ id: m.id, file: m.file, args: m.args, opts: m.opts, meta: m.meta })
         send(res.ok ? { t: 'proc-spawned', id: m.id, pid: res.pid } : { t: 'proc-failed', id: m.id, error: res.error })
         return true

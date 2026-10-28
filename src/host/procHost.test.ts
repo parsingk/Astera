@@ -30,7 +30,7 @@ const harness = (proc = fakeProc(), over: { marksWrites?: (socket: number) => bo
     handle(m, (h) => replies.push(h), from)
   const spawn = (id = 'p1'): boolean =>
     send({ t: 'proc-spawn', id, file: 'codex', args: ['app-server'], opts: { cwd: 'D:/p', env: {} }, meta: { kind: 'chat', id: 'chat_1', restore: {} } })
-  return { proc, logs, broadcast, replies, registry, send, spawn }
+  return { proc, logs, broadcast, replies, registry, send, spawn, handle }
 }
 
 describe('attachProcHost', () => {
@@ -140,5 +140,48 @@ describe('attachProcHost', () => {
     const h = harness()
     expect(h.send({ t: 'pty-list' })).toBe(false)
     expect(h.send({ t: 'hello', protocol: 3, app: '1' })).toBe(false)
+  })
+})
+
+// Sandbox follow-ups, round 2: every proc message reads or drives a process, so each is the proven app's alone, as the
+// spawn is. A CLI, an MCP client and a sender not named are refused: nothing written, killed, noted, listed or replayed,
+// nothing recorded as the person's (whatever yields the socket declared), and nothing answered.
+describe('attachProcHost: every proc message is the app’s alone', () => {
+  const others: ClientMessage[] = [
+    { t: 'proc-write', id: 'p1', line: '{"type":"user","text":"leak"}', typed: true },
+    { t: 'proc-write', id: 'p1', line: '{"id":9}' },
+    { t: 'proc-note', id: 'p1', patch: { threadId: 'taken' } },
+    { t: 'proc-list' },
+    { t: 'proc-attach', id: 'p1' },
+    { t: 'proc-kill', id: 'p1' }
+  ]
+
+  it('refuses each from anything but the app: nothing written, read, recorded or answered', () => {
+    for (const role of ['cli', 'mcp', undefined] as const) {
+      // The socket says it marks a person's lines: a yield is no proof of being the app
+      const h = harness(fakeProc(), { marksWrites: () => true })
+      h.spawn()
+      h.proc.emit('a secret line\n')
+      h.replies.length = 0
+      const broadcasts = h.broadcast.length
+      for (const m of others) {
+        const owned = role === undefined ? h.handle(m, (r) => h.replies.push(r)) : h.send(m, { socket: 3, role })
+        expect(owned, `${m.t} from ${String(role)}`).toBe(true)
+      }
+      expect(h.proc.sent, String(role)).toEqual([])
+      expect(h.proc.killed, String(role)).toBe(false)
+      expect(h.replies, String(role)).toEqual([])
+      expect(h.broadcast.length, String(role)).toBe(broadcasts)
+      expect(h.registry.submittedBetween('p1', 0, Date.now() + 1), String(role)).toBeNull()
+      expect(h.registry.writesUnmarked('p1'), String(role)).toBe(false)
+      expect(h.registry.list()[0].meta?.restore, String(role)).toEqual({})
+      // The app is served as before
+      h.send({ t: 'proc-write', id: 'p1', line: '{"type":"user"}', typed: true })
+      expect(h.proc.sent).toEqual(['{"type":"user"}\n'])
+      expect(h.registry.submittedBetween('p1', 0, Date.now() + 1)).toBe('person')
+      h.send({ t: 'proc-list' })
+      h.send({ t: 'proc-attach', id: 'p1' })
+      expect(h.replies.map((r) => r.t)).toEqual(['proc-listed', 'proc-attached'])
+    }
   })
 })

@@ -6,9 +6,10 @@
 // Imports only core types, so the Host bundle can carry it.
 import type { ClientMessage } from '../core/host/protocol'
 
-/** The proc a client message makes its socket hold: a greeted socket's proc-spawn or proc-attach. */
-export function procHeldBy(m: ClientMessage, from: { greeted: boolean }): string | null {
-  if (!from.greeted) return null
+/** The proc a client message makes its socket hold: the proven app's proc-spawn or proc-attach. Every other socket's
+ *  proc messages are refused (procHost.ts, sandbox follow-ups round 2), so it holds nothing and is no chat's writer. */
+export function procHeldBy(m: ClientMessage, from: { greeted: boolean; role: 'app' | 'cli' | 'mcp' }): string | null {
+  if (!from.greeted || from.role !== 'app') return null
   return m.t === 'proc-spawn' || m.t === 'proc-attach' ? m.id : null
 }
 

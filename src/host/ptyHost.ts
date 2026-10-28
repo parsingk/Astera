@@ -15,6 +15,13 @@ export interface HandlerFrom {
 /** What a spawn asked of anything but the app is answered with (final fix pass, C2). */
 export const PTY_SPAWN_APP_ONLY = 'pty-spawn is served to the Astera app only'
 
+/** Every message this handler owns. **Each is the proven app's alone** (sandbox follow-ups, round 2): each reads a
+ *  terminal (its list, its scrollback) or drives one (types into it, sizes, pauses, kills or notes it), and a write is
+ *  recorded as the person's. Only the app sends any of them (src/main); a CLI, an MCP client and the Remote's
+ *  controllers reach a session through the command layer (`sessions read`, `sessions send`, the gateway link), which
+ *  holds its own rules. */
+const PTY_MESSAGES: ReadonlySet<ClientMessage['t']> = new Set(['pty-spawn', 'pty-write', 'pty-resize', 'pty-kill', 'pty-pause', 'pty-resume', 'pty-note', 'pty-list', 'pty-attach'])
+
 /**
  * Returns a handler for one connection. It reports whether it owned the message, so the server can
  * fall through to its own handshake messages for anything else.
@@ -55,16 +62,17 @@ export function attachPtyHost(a: {
   a.registry.onExit((id) => void pausedBy.delete(id))
 
   const handler = (m: ClientMessage, send: (h: HostMessage) => void, from?: HandlerFrom): boolean => {
+    // Anything but the proven app (server.ts: a socket is the app only once it proved it) is refused every pty message,
+    // owned so nothing else reads it. A spawn is told why, as before (final fix pass, C2); the rest are answered nothing:
+    // a `pty-list` with no answer reads to the app as "not known", where an empty one would read as "holds nothing".
+    if (PTY_MESSAGES.has(m.t) && from?.role !== 'app') {
+      if (m.t === 'pty-spawn') send({ t: 'pty-failed', id: m.id, error: PTY_SPAWN_APP_ONLY })
+      return true
+    }
     switch (m.t) {
       case 'pty-spawn': {
         // Any program, with any arguments, environment and folder, outside every sandbox: the app's own connection asks
-        // for it, and nothing else may (final fix pass, C2). A CLI, an MCP client and a sender not named are refused
-        // before anything opens. The role is the one the socket's hello named, so this keeps a client that says what it
-        // is out; the sandboxes keep a session away from the socket itself.
-        if (from?.role !== 'app') {
-          send({ t: 'pty-failed', id: m.id, error: PTY_SPAWN_APP_ONLY })
-          return true
-        }
+        // for it, and nothing else may (above).
         const res = a.registry.open({ id: m.id, file: m.file, args: m.args, opts: m.opts, meta: m.meta })
         send(res.ok ? { t: 'pty-spawned', id: m.id, pid: res.pid } : { t: 'pty-failed', id: m.id, error: res.error })
         return true

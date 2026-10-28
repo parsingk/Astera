@@ -13,7 +13,8 @@
 //
 // **Keyed by socket number, not by role.** A socket's role comes from its `hello`, and a second
 // `hello` can change it (review M3 of Tasks 6 to 8), so the marks are released by the socket that
-// made them whatever it calls itself now. **And placed whatever the role, too** (`ptyHeldBy`).
+// made them whatever it calls itself now. **Placed by the proven app only** (`ptyHeldBy`): its pty messages are refused
+// to every other socket (ptyHost.ts, sandbox follow-ups round 2).
 import { EXIT_DEFER_MS, hostOwnsExit } from '../core/orchestration/exec/exitOwner'
 import type { ClientMessage } from '../core/host/protocol'
 import type { PtyRegistry } from './registry'
@@ -24,18 +25,17 @@ import type { PtyRegistry } from './registry'
  *  the Dispatch open over. */
 export const ENDED_WITHOUT_A_CODE = -2
 
-/** The pty a client message makes its socket hold, or null. A `pty-spawn` or a `pty-attach` from any
- *  socket, **whatever role it declared**: apps v1.3.17 to v1.3.25 send `hello` with no role and the
- *  server calls them 'cli', yet their ptys are theirs, and a Host that handled those exits would load
- *  and write orchestration.json behind an app that writes the file itself (review of Task 12, I1). The
- *  CLI never sends either message, so the role check excluded no one else.
+/** The pty a client message makes its socket hold, or null. A `pty-spawn` or a `pty-attach` from **the proven app
+ *  only** (sandbox follow-ups, round 2): every other socket's pty messages are refused (ptyHost.ts), so a CLI that
+ *  attached would hold a pty it was never served, and keep the Host from its exit and its rolling. The apps that sent
+ *  `hello` with no role (v1.3.17 to v1.3.25, review of Task 12, I1) speak protocol 3 and never reach this Host.
  *
  *  **But only from a greeted socket** (review of Task 1): close releases the marks through
  *  `onClientGone`, which the server runs only for a socket that said hello, so a mark made for a silent
  *  one would outlive it, and `hostMayAct` (every holder must yield rolling) would keep the Host's
  *  rolling quiet on that pty for good. */
-export function ptyHeldBy(m: ClientMessage, from: { greeted: boolean }): string | null {
-  return from.greeted && (m.t === 'pty-spawn' || m.t === 'pty-attach') ? m.id : null
+export function ptyHeldBy(m: ClientMessage, from: { greeted: boolean; role: 'app' | 'cli' | 'mcp' }): string | null {
+  return from.greeted && from.role === 'app' && (m.t === 'pty-spawn' || m.t === 'pty-attach') ? m.id : null
 }
 
 export interface HostExitsDeps {

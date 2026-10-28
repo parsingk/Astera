@@ -1240,11 +1240,11 @@ async function main(): Promise<void> {
       idleMs: IDLE_MS,
       onIdle: () => leave(),
       onMessage: (m, send, from) => {
-        // Before the pty handler, so the mark is in place before a spawn can exit. Any role: see
-        // `ptyHeldBy` for the apps that declare none. Only a greeted socket, which close releases.
+        // Before the pty handler, so the mark is in place before a spawn can exit. Only the proven app's,
+        // the one socket its pty messages are served to (`ptyHeldBy`), which close releases.
         const held = ptyHeldBy(m, from)
         if (exits && held !== null) exits.heldBy(held, from.socket)
-        // The chat twin (chat takeover Task 5): a greeted socket's proc-spawn or proc-attach makes it the
+        // The chat twin (chat takeover Task 5): the proven app's proc-spawn or proc-attach makes it the
         // proc's writer, before the proc handler can answer.
         const heldProc = procHeldBy(m, from)
         if (heldProc !== null) procHolders.heldBy(heldProc, from.socket)

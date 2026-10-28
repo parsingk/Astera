@@ -2143,8 +2143,10 @@ The boundary is your machine and your operating system account.
   it. The key itself never crosses the pipe. Something at the address that cannot answer is not
   talked to: the app shows why on the Settings Info tab and runs its sessions itself, and `astera`
   ends with `PERMISSION_DENIED` (exit 5).
-- The app proves it is the app. Only the app's own connection may have the Host start a program, is
-  asked to do what only the app can, and counts as you in a Job's records. So the app keeps a second
+- The app proves it is the app. Only the app's own connection may have the Host start a program, list,
+  read back, type into, resize, pause or end a terminal or a chat process directly, is asked to do what
+  only the app can, and counts as you in a Job's records. `astera sessions` reads and types through
+  the commands instead, under their own rules. So the app keeps a second
   random key, `host/app.key`, beside the Host key, and answers a challenge the Host makes for each of
   its connections with a proof made from it, once. Until that proof holds, and after a wrong one, the
   Host serves the connection as a CLI and keeps it open, and both sides write why in their logs. A

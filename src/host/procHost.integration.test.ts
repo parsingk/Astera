@@ -134,13 +134,15 @@ describe('proc-* over the Host server', () => {
 // refused and nothing starts; the app on another socket is served as before.
 describe('spawns over the Host server are the app’s alone', () => {
   /** The server wired as host/index.ts wires it, with a pty registry that records what it was asked to start. */
-  const wired = async (): Promise<{ address: string; spawned: string[]; procs: ProcRegistry }> => {
+  const wired = async (): Promise<{ address: string; spawned: string[]; typed: string[]; emit(data: string): void; ptys: PtyRegistry; procs: ProcRegistry }> => {
     const addr = hostAddress({ profileDir: path.join(dir, 'profile'), platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL })
     const spawned: string[] = []
+    const typed: string[] = []
+    let onData: (d: string) => void = () => {}
     const ptys = new PtyRegistry({
       spawn: (file) => {
         spawned.push(`pty ${file}`)
-        return { pid: 7, onData: () => {}, onExit: () => {}, write: () => {}, resize: () => {}, kill: () => {}, pause: () => {}, resume: () => {} }
+        return { pid: 7, onData: (cb) => void (onData = cb), onExit: () => {}, write: (d) => void typed.push(d), resize: () => {}, kill: () => {}, pause: () => {}, resume: () => {} }
       },
       log: () => {}
     })
@@ -162,7 +164,7 @@ describe('spawns over the Host server are the app’s alone', () => {
     open.push(s)
     handlePty = attachPtyHost({ registry: ptys, broadcast: (m, to) => s.broadcast(m, to) })
     handleProc = attachProcHost({ registry: procs, broadcast: (m) => s.broadcast(m) })
-    return { address: addr.address, spawned, procs }
+    return { address: addr.address, spawned, typed, emit: (d) => onData(d), ptys, procs }
   }
   /** Asks for a pty and a line process and answers whether each was refused. */
   const refusedBoth = async (c: Awaited<ReturnType<typeof client>>, n: number): Promise<void> => {
@@ -203,5 +205,55 @@ describe('spawns over the Host server are the app’s alone', () => {
     expect(w.procs.liveCount()).toBe(0)
     silent.end()
     other.end()
+  })
+
+  // Sandbox follow-ups, round 2: past the spawn, every pty and proc message is the proven app's too. A CLI's socket and
+  // one that said it is the app and never proved it reach a terminal and a chat process the app started: nothing they
+  // send is typed, read back, listed or answered, and the app is served all of it as before.
+  it('a socket that is not the proven app reads and drives no terminal or process', async () => {
+    const w = await wired()
+    const app = await client(w.address)
+    await app.waitFor((m) => m.t === 'app-proven')
+    app.send({ t: 'pty-spawn', id: 'p1', file: 'shell', args: [], opts: { cwd: process.cwd(), cols: 80, rows: 24, env: {} } })
+    await app.waitFor((m) => m.t === 'pty-spawned')
+    app.send({ t: 'proc-spawn', id: 'q1', file: process.execPath, args: ['-e', ECHO], opts: { cwd: process.cwd(), env: process.env as Record<string, string | undefined> } })
+    await app.waitFor((m) => m.t === 'proc-spawned')
+    w.emit('a secret on the screen')
+    for (const other of [await client(w.address, 'cli'), await client(w.address, 'app', null)]) {
+      await other.waitFor((m) => m.t === 'hello')
+      const heard = other.got.length
+      for (const m of [
+        { t: 'pty-write', id: 'p1', data: 'rm -rf ~\r', typed: true },
+        { t: 'pty-resize', id: 'p1', cols: 100, rows: 40 },
+        { t: 'pty-note', id: 'p1', patch: { title: 'taken' } },
+        { t: 'pty-list' },
+        { t: 'pty-attach', id: 'p1' },
+        { t: 'pty-kill', id: 'p1' },
+        { t: 'proc-write', id: 'q1', line: 'leak', typed: true },
+        { t: 'proc-list' },
+        { t: 'proc-attach', id: 'q1' },
+        { t: 'proc-kill', id: 'q1' }
+      ] as ClientMessage[])
+        other.send(m)
+      await new Promise((r) => setTimeout(r, 300))
+      expect(other.got.slice(heard), 'answered').toEqual([])
+      other.end()
+    }
+    expect(w.typed).toEqual([])
+    expect(w.ptys.lastPersonWrite('p1')).toBeNull()
+    expect(w.ptys.metaOf('p1')?.restore ?? {}).not.toHaveProperty('title')
+    expect(w.ptys.list().find((e) => e.id === 'p1')?.alive).toBe(true)
+    expect(w.procs.list().find((e) => e.id === 'q1')?.alive).toBe(true)
+    expect(app.got.some((m) => m.t === 'proc-line' && m.line === 'echo:leak')).toBe(false)
+    // The app is served as before
+    app.send({ t: 'pty-write', id: 'p1', data: 'ls\r', typed: true })
+    app.send({ t: 'pty-attach', id: 'p1' })
+    expect(await app.waitFor((m) => m.t === 'pty-data' && m.data === 'a secret on the screen')).toBeTruthy()
+    app.send({ t: 'proc-write', id: 'q1', line: 'ok' })
+    expect(await app.waitFor((m) => m.t === 'proc-line' && m.line === 'echo:ok')).toBeTruthy()
+    expect(w.typed).toEqual(['ls\r'])
+    app.send({ t: 'proc-kill', id: 'q1' })
+    await app.waitFor((m) => m.t === 'proc-exit')
+    app.end()
   })
 })
