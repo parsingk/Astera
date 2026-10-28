@@ -12,11 +12,15 @@
 // its embedded server (tui/src/daemon_startup.rs 26-89, startup_orchestration.rs 176-183).
 //
 // Read once per candidate and session process, never per poll tick (rolloutOwnerCheck). Each platform reads it its
-// own way: Linux from /proc, macOS with lsof and ps, Windows with Restart Manager through one PowerShell run. Where a
-// machine cannot tell (a tool missing, PowerShell refusing to compile the helper), the answer is 'unknown' and the
-// locate keeps the rule it had before, logged once.
+// own way: Linux from /proc, macOS with lsof and ps, Windows with Restart Manager through one PowerShell run. Only a
+// positive answer rejects a candidate: held by a process outside the session's tree, or held by none. Where the
+// evidence cannot be read (a tool missing or failing, a process or an fd this user may not read, a timeout), the answer
+// is 'unknown': the locate keeps the rule it had before, nothing is remembered, and it is logged once per session.
 import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { comparablePath } from '../files/tree'
 
 export type RolloutOwnership = { verdict: 'own' } | { verdict: 'other'; why: string } | { verdict: 'unknown'; why: string }
@@ -32,21 +36,29 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
 /** How far up from a holder the walk to the session's process goes: a session's tree is a shell, a shim and codex. */
 const MAX_DEPTH = 64
 
-/** A program run to its end: its exit code and stdout. Rejects only when it could not run or was stopped (missing,
- *  timed out). */
-export type RunTool = (file: string, args: string[]) => Promise<{ code: number; stdout: string }>
+export interface RunResult {
+  code: number
+  stdout: string
+  stderr: string
+}
+
+/** A program run to its end: its exit code, stdout and stderr. Rejects only when it could not run or was stopped
+ *  (missing, timed out). */
+export type RunTool = (file: string, args: string[]) => Promise<RunResult>
 
 const RUN_TIMEOUT_MS = 20_000
 
 const runTool: RunTool = (file, args) =>
   new Promise((resolve, reject) => {
-    execFile(file, args, { windowsHide: true, timeout: RUN_TIMEOUT_MS, encoding: 'utf8', maxBuffer: 1024 * 1024 }, (err, stdout) => {
-      if (!err) return resolve({ code: 0, stdout })
+    execFile(file, args, { windowsHide: true, timeout: RUN_TIMEOUT_MS, encoding: 'utf8', maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+      if (!err) return resolve({ code: 0, stdout, stderr })
       const code = (err as { code?: unknown }).code
-      if (typeof code === 'number') return resolve({ code, stdout: String(stdout ?? '') })
+      if (typeof code === 'number') return resolve({ code, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') })
       reject(err)
     })
   })
+
+const firstLine = (s: string): string => s.trim().split(/\r?\n/)[0] ?? ''
 
 /** Whether `from` reaches `root` going up `parent`, within MAX_DEPTH steps. */
 function under(from: number, root: number, parent: Map<number, number>): boolean {
@@ -85,9 +97,21 @@ function ppidOf(stat: string): number | null {
   return Number.isSafeInteger(n) ? n : null
 }
 
+/** How many /proc stat files are read at once: one open file each, and a busy machine runs hundreds of processes. */
+const PROC_BATCH = 32
+
+const codeOf = (err: unknown): string => String((err as { code?: unknown } | null)?.code ?? messageOf(err))
+
+/** A process that ended between the listing and the read: ENOENT, or ESRCH from a /proc entry going away. */
+const isGone = (err: unknown): boolean => {
+  const code = (err as { code?: unknown } | null)?.code
+  return code === 'ENOENT' || code === 'ESRCH'
+}
+
 /** Linux: every process's parent from /proc/<pid>/stat, then the fds of the session's process and those under it. An
  *  orphan is re-parented to init (or a subreaper), so a parent link never names a process that reused a dead one's
- *  pid. */
+ *  pid. A read that fails for any reason but the process being gone (EACCES on a non-dumpable process, EMFILE) leaves
+ *  the answer at "cannot tell" unless the file was found: that process may be the session's, holding it. */
 export function linuxOwnerReader(d: ProcFs = realProcFs): RolloutOwnerReader {
   return async (file, pid) => {
     let names: string[]
@@ -99,36 +123,57 @@ export function linuxOwnerReader(d: ProcFs = realProcFs): RolloutOwnerReader {
     let target: string
     try {
       target = await d.realpath(file)
-    } catch {
-      return other('the file is gone')
+    } catch (err) {
+      return isGone(err) ? other('the file is gone') : unknown(`the file cannot be resolved (${codeOf(err)})`)
+    }
+    let blind: string | null = null
+    const cannotRead = (what: string, err: unknown): void => {
+      blind ??= `${what} cannot be read (${codeOf(err)})`
     }
     const parent = new Map<number, number>()
-    await Promise.all(
-      names
-        .filter((n) => /^\d+$/.test(n))
-        .map(async (n) => {
-          const ppid = ppidOf(await d.readFile(`/proc/${n}/stat`).catch(() => ''))
-          if (ppid !== null) parent.set(Number(n), ppid)
+    const pids = names.filter((n) => /^\d+$/.test(n))
+    for (let i = 0; i < pids.length; i += PROC_BATCH) {
+      await Promise.all(
+        pids.slice(i, i + PROC_BATCH).map(async (n) => {
+          try {
+            const ppid = ppidOf(await d.readFile(`/proc/${n}/stat`))
+            if (ppid !== null) parent.set(Number(n), ppid)
+          } catch (err) {
+            if (!isGone(err)) cannotRead(`process ${n}`, err)
+          }
         })
-    )
-    if (!parent.has(pid)) return other(`the session's process ${pid} is gone`)
+      )
+    }
+    if (!parent.has(pid)) return unknown(blind ?? `the session's process ${pid} is gone`)
     const tree = [...parent.keys()].filter((p) => under(p, pid, parent))
     for (const p of tree) {
-      // A process gone since, or one this user may not read, holds nothing we can see
-      const fds = await d.readdir(`/proc/${p}/fd`).catch(() => [] as string[])
-      for (const fd of fds) if ((await d.readlink(`/proc/${p}/fd/${fd}`).catch(() => null)) === target) return OWN
+      let fds: string[]
+      try {
+        fds = await d.readdir(`/proc/${p}/fd`)
+      } catch (err) {
+        if (!isGone(err)) cannotRead(`the open files of process ${p}`, err)
+        continue
+      }
+      for (const fd of fds) {
+        try {
+          if ((await d.readlink(`/proc/${p}/fd/${fd}`)) === target) return OWN
+        } catch (err) {
+          if (!isGone(err)) cannotRead(`an open file of process ${p}`, err)
+        }
+      }
     }
-    return other(`not open in process ${pid} or any process under it`)
+    return blind ? unknown(blind) : other(`not open in process ${pid} or any process under it`)
   }
 }
 
 // ---- macOS ----
 
 /** macOS: the holders from lsof (in /usr/sbin on every macOS), then each one's parents from one ps, walked up to the
- *  session's process. Orphans are re-parented to launchd, as on Linux. */
+ *  session's process. Orphans are re-parented to launchd, as on Linux. lsof exits 1 both when no process has the file
+ *  open and on an error; only the error says anything on stderr (`-w` keeps the warnings off it). */
 export function macOwnerReader(run: RunTool = runTool): RolloutOwnerReader {
   return async (file, pid) => {
-    let lsof: { code: number; stdout: string }
+    let lsof: RunResult
     try {
       lsof = await run('/usr/sbin/lsof', ['-w', '-t', '--', file])
     } catch (err) {
@@ -138,10 +183,10 @@ export function macOwnerReader(run: RunTool = runTool): RolloutOwnerReader {
       .split(/\s+/)
       .map(Number)
       .filter((n) => Number.isSafeInteger(n) && n > 0)
-    // lsof exits 1, printing nothing, when no process has the file open
-    if (holders.length === 0) return lsof.code === 0 || lsof.code === 1 ? other('held open by no process') : unknown(`lsof exited ${lsof.code}`)
     if (holders.includes(pid)) return OWN
-    let ps: { code: number; stdout: string }
+    const failed = lsof.stderr.trim() !== '' || (lsof.code !== 0 && lsof.code !== 1) ? `lsof exited ${lsof.code}: ${firstLine(lsof.stderr)}` : null
+    if (holders.length === 0) return failed ? unknown(failed) : other('held open by no process')
+    let ps: RunResult
     try {
       ps = await run('/bin/ps', ['-A', '-o', 'pid=,ppid='])
     } catch (err) {
@@ -154,7 +199,8 @@ export function macOwnerReader(run: RunTool = runTool): RolloutOwnerReader {
       if (m) parent.set(Number(m[1]), Number(m[2]))
     }
     if (holders.some((h) => under(h, pid, parent))) return OWN
-    return other(`held by pid ${holders.join(', ')} outside the session`)
+    // lsof that failed somewhere may have missed the session's own holder
+    return failed ? unknown(failed) : other(`held by pid ${holders.join(', ')} outside the session`)
   }
 }
 
@@ -197,10 +243,18 @@ public static class AsteraRolloutOwner {
   [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetProcessTimes(IntPtr h, out long created, out long exited, out long kernel, out long user);
   [DllImport("kernel32.dll", SetLastError = true)] static extern bool CloseHandle(IntPtr h);
 
-  static long StartOf(int pid) {
+  // The start time; -2 when no such process (OpenProcess fails with ERROR_INVALID_PARAMETER, 87); -1 when it cannot be
+  // read (access denied, or anything else), with the error.
+  static long StartOf(int pid, out int error) {
+    error = 0;
     IntPtr h = OpenProcess(0x1000, false, pid);
-    if (h == IntPtr.Zero) return -1;
-    try { long c, e, k, u; return GetProcessTimes(h, out c, out e, out k, out u) ? c : -1; } finally { CloseHandle(h); }
+    if (h == IntPtr.Zero) { error = Marshal.GetLastWin32Error(); return error == 87 ? -2 : -1; }
+    try {
+      long c, e, k, u;
+      if (GetProcessTimes(h, out c, out e, out k, out u)) return c;
+      error = Marshal.GetLastWin32Error();
+      return -1;
+    } finally { CloseHandle(h); }
   }
 
   static Dictionary<int, long> Holders(string path) {
@@ -238,51 +292,82 @@ public static class AsteraRolloutOwner {
   }
 
   public static string Verdict(string path, int root) {
-    if (StartOf(root) < 0) return "other|the session's process " + root + " is gone";
+    int error;
+    long rootStart = StartOf(root, out error);
+    if (rootStart == -2) return "unknown|the session's process " + root + " is gone";
+    if (rootStart < 0) return "unknown|the session's process " + root + " cannot be read (error " + error + ")";
     var holders = Holders(path);
     if (holders.Count == 0) return "other|held open by no process";
     if (holders.ContainsKey(root)) return "own|" + root;
     var parent = Parents();
+    string blind = null;
     foreach (var holder in holders) {
       int p = holder.Key; long start = holder.Value;
       for (int depth = 0; depth < ${MAX_DEPTH}; depth++) {
         if (p == root) return "own|" + holder.Key;
+        // Every process under the session's started after it: one that started earlier is not under it
+        if (start < rootStart) break;
         int pp;
         if (!parent.TryGetValue(p, out pp) || pp <= 0 || pp == p) break;
-        long ppStart = StartOf(pp);
+        long ppStart = StartOf(pp, out error);
+        // A parent that cannot be read may be the session's process or one under it
+        if (ppStart == -1) { if (blind == null) blind = "process " + pp + " cannot be read (error " + error + ")"; break; }
+        // Gone, or a later process that reused a dead parent's id: the walk ends there
         if (ppStart < 0 || ppStart > start) break;
         p = pp; start = ppStart;
       }
     }
+    if (blind != null) return "unknown|" + blind;
     return "other|held by pid " + string.Join(", ", new List<int>(holders.Keys).ConvertAll(x => x.ToString()).ToArray()) + " outside the session";
   }
 }
 `
 
-/** `s` as a PowerShell single-quoted literal: PowerShell reads the typographic single quotes as quotes too. */
-const psLiteral = (s: string): string => `'${s.replace(/['‘’‚‛]/g, '$&$&')}'`
+/** The script a PowerShell run executes, with the file and the session's pid as its arguments: compile the helper and
+ *  print one verdict line, `own|<pid>`, `other|<why>` or `unknown|<why>`. Add-Type refused (Constrained Language
+ *  Mode) is caught here and said as unknown. ASCII only: Windows PowerShell reads a script with no byte order mark in
+ *  the ANSI code page. */
+export const WINDOWS_OWNER_PS1 = [
+  '# Whether a process under the session holds a codex rollout open, for Astera (core/rolling/rolloutOwner.ts).',
+  '# Arguments: the file, the pid of the session process. Prints own|<pid>, other|<why> or unknown|<why>.',
+  'param([string]$Path, [int]$Root)',
+  "$ErrorActionPreference = 'Stop'",
+  'try {',
+  `  Add-Type -TypeDefinition @'${WINDOWS_HELPER}'@`,
+  '  [AsteraRolloutOwner]::Verdict($Path, $Root)',
+  "} catch { 'unknown|' + ($_.Exception.Message -replace '[\\r\\n|]', ' ') }",
+  ''
+].join('\n')
 
-/** The script one PowerShell run executes: compile the helper and print one verdict line, `own|<pid>`,
- *  `other|<why>` or `unknown|<why>`. Add-Type refused (Constrained Language Mode) is caught here and said as unknown. */
-export function windowsOwnerScript(file: string, pid: number): string {
-  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error(`not a pid: ${pid}`)
-  return [
-    "$ErrorActionPreference = 'Stop'",
-    'try {',
-    `  Add-Type -TypeDefinition @'${WINDOWS_HELPER}'@`,
-    `  [AsteraRolloutOwner]::Verdict(${psLiteral(file)}, ${pid})`,
-    "} catch { 'unknown|' + ($_.Exception.Message -replace '[\\r\\n|]', ' ') }"
-  ].join('\n')
+/** Writes the script under a content name in `dir` unless it is already there as it should be, and answers its path:
+ *  the desk helper's way (host/workspace/desktopHelper.ts writeDeskScript). Checked before every run, so a changed
+ *  copy is never run. */
+async function writeOwnerScript(dir: string): Promise<string> {
+  const hash = createHash('sha256').update(WINDOWS_OWNER_PS1).digest('hex').slice(0, 8)
+  const file = path.join(dir, `astera-rollout-owner-${hash}.ps1`)
+  const current = await fs.readFile(file, 'utf8').catch(() => null)
+  if (current !== WINDOWS_OWNER_PS1) {
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(file, WINDOWS_OWNER_PS1, 'utf8')
+  }
+  return file
 }
 
-/** Windows: one Windows PowerShell run per question (about half a second, measured on this machine 2026-10-28),
- *  the script passed encoded so no quoting of the path or the C# can break it. */
-export function windowsOwnerReader(run: RunTool = runTool): RolloutOwnerReader {
+/** Windows: one Windows PowerShell run per question (about half a second, measured on this machine 2026-10-28), its
+ *  script a file run with `-File` as the desk helper's is, the file and the pid passed as plain arguments. The script
+ *  goes in `dir`, the user's own temp folder unless a caller names another. */
+export function windowsOwnerReader(run: RunTool = runTool, dir: string = os.tmpdir()): RolloutOwnerReader {
   return async (file, pid) => {
-    const encoded = Buffer.from(windowsOwnerScript(file, pid), 'utf16le').toString('base64')
-    let r: { code: number; stdout: string }
+    if (!Number.isSafeInteger(pid) || pid <= 0) return unknown(`not a pid: ${pid}`)
+    let script: string
     try {
-      r = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded])
+      script = await writeOwnerScript(dir)
+    } catch (err) {
+      return unknown(`the PowerShell script cannot be written: ${messageOf(err)}`)
+    }
+    let r: RunResult
+    try {
+      r = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, file, String(pid)])
     } catch (err) {
       return unknown(`PowerShell could not run: ${messageOf(err)}`)
     }
@@ -334,31 +419,36 @@ const trim = (m: { size: number; keys(): IterableIterator<string>; delete(k: str
   if (m.size > MEMO_MAX) m.delete(m.keys().next().value as string)
 }
 
-/** A caller's check: the reader asked once per (candidate, session process) and its answer kept, since neither who
- *  writes a file nor the session's process changes. Logs to the caller's log why a candidate is skipped (its path,
- *  never its contents), and once that this machine cannot tell. */
+/** A caller's check: the reader asked once per (candidate, session process) and a positive answer kept, since neither
+ *  who writes a file nor the session's process changes. "Cannot tell" is not kept (review Important 1: a failed read
+ *  is no verdict), so the next look asks again. Logs to the caller's log why a candidate is skipped (its path, never
+ *  its contents), and once per session that it cannot tell. */
 export function rolloutOwnerCheck(o: { read: RolloutOwnerReader; log: (m: string) => void }): RolloutOwnerCheck {
   let memo = answers.get(o.read)
   if (!memo) answers.set(o.read, (memo = new Map()))
   const shared = memo
   const told = new Set<string>()
-  let toldUnknown = false
   return async (file, pid, sessionId) => {
     const key = `${pid}\u0000${comparablePath(file)}`
     let answer = shared.get(key)
     if (!answer) {
-      answer = o.read(file, pid).catch((err): RolloutOwnership => unknown(messageOf(err)))
-      shared.set(key, answer)
+      const asked = o.read(file, pid).catch((err): RolloutOwnership => unknown(messageOf(err)))
+      answer = asked
+      shared.set(key, asked)
       trim(shared)
+      void asked.then((r) => {
+        if (r.verdict === 'unknown' && shared.get(key) === asked) shared.delete(key)
+      })
     }
     const r = await answer
     if (r.verdict === 'other' && !told.has(key)) {
       told.add(key)
       trim(told)
       o.log(`codex rollout skipped for session=${sessionId}: ${file} (${r.why})`)
-    } else if (r.verdict === 'unknown' && !toldUnknown) {
-      toldUnknown = true
-      o.log(`codex rollout owner cannot be read here (${r.why}); a rollout is mapped by folder and time alone`)
+    } else if (r.verdict === 'unknown' && !told.has(`?${sessionId}`)) {
+      told.add(`?${sessionId}`)
+      trim(told)
+      o.log(`codex rollout owner cannot be told for session=${sessionId} (${r.why}); its rollout is mapped by folder and time alone`)
     }
     return r
   }
