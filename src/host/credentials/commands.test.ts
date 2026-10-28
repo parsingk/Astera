@@ -286,6 +286,10 @@ describe('credentials commands', () => {
     expect(line('Claude Code on Windows')).toMatchObject({ level: 'warn' })
     expect(line('Claude Code on Windows').text).toMatch(/shell is not restricted/)
     for (const l of sandbox) expect(l.text, l.text).toMatch(/network works|not restricted/)
+    // Task E (2026-10-28): every line says Astera's profile folder is not the session's to write (on Windows Claude Code,
+    // only its file tools are kept from it)
+    for (const l of sandbox) expect(l.text, l.text).toMatch(/Astera’s profile folder/)
+    expect(line('Claude Code on Windows').text).toMatch(/keep its file tools out of [^\n]* and from changing Astera’s profile folder/)
     const text = lines.map((l) => l.text).join('\n')
     // The three known limits of the design
     expect(text).toMatch(/curl[^\n]*TLS/)

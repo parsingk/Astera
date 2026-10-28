@@ -914,6 +914,22 @@ describe('the roll spawn (S6 R5, R6)', () => {
     expect(h.spawned[1].args).toContain('--dangerously-bypass-approvals-and-sandbox')
     expect(plain).not.toHaveProperty('sandboxed')
   })
+  // Task E (2026-10-28): a sandboxed Codex session the Host starts keeps the Host's profile folder read-only, with the app
+  // key in it denied, and the Host's chat sessions are handed the same folder
+  it("a sandboxed Codex session from the Host keeps the Host's profile folder read, with the app key in it denied", async () => {
+    await fs.writeFile(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
+      { id: 'acc2', label: 'two', configDir: path.join(dir, 'cfg2'), color: '#888', createdAt: NOW, provider: 'codex' }
+    ] }))
+    const h = rig({ codexNoDaemon: Object.assign(() => true, { warm: async () => {} }) })
+    const account = JSON.parse(await fs.readFile(path.join(profile, 'accounts.json'), 'utf8')).accounts[0]
+    await h.spawner!.prepareRollSpawn(account, repo, undefined, true)
+    h.spawner!.rollSpawn({ account, cwd: repo, rollAccountIds: [account.id], sandbox: true, bypassPermissions: true })
+    const permissions = (h.spawned[0].args as string[]).find((a) => a.startsWith('permissions='))!
+    const folder = profile.replace(/\\/g, '/')
+    expect(permissions).toContain(`${JSON.stringify(folder)}="read"`)
+    expect(permissions).toContain(`${JSON.stringify(`${folder}/host/app.key`)}="deny"`)
+    expect(h.spawner!.profileDir).toBe(profile)
+  })
   // Task 5 fix round 1: what would refuse the sandboxed respawn is asked in its prepare, which the roll awaits before it
   // kills the session it replaces
   it('a sandboxed roll whose codex does not take --no-daemon is refused in its prepare, before the kill', async () => {

@@ -45,7 +45,8 @@ import {
   nodeVersionArgv,
   srtSettingsOf,
   whoamiArgv,
-  withoutNpmRunEnv
+  withoutNpmRunEnv,
+  sessionReadOnly
 } from './s2.mjs'
 import { codexSandboxArgs, npmCacheOf } from '../../src/core/sandbox/codexProfile'
 import { claudeSandboxSettings } from '../../src/core/sandbox/claudeSettings'
@@ -255,8 +256,9 @@ describe('the S2 sets’ arguments come from the builders', () => {
   })
 
   // Sandbox follow-ups, round 2: the measurement hands Claude's sandbox exactly the settings a Claude start writes, so
-  // its list comes from the start's own builder, the app key included. Pinned against a real StatusLineManager's twin
-  it("hands Claude exactly the settings a Claude start writes (StatusLineManager's twin), the app key included", async () => {
+  // its list comes from the start's own builder, the app key included, and the profile folder kept from being written
+  // (Task E). Pinned against a real StatusLineManager's twin
+  it("hands Claude exactly the settings a Claude start writes (StatusLineManager's twin), the app key and the profile folder included", async () => {
     const profile = mkdtempSync(path.join(os.tmpdir(), 'astera-measure-claude-'))
     try {
       for (const platform of ['darwin', 'linux', 'win32']) {
@@ -270,9 +272,11 @@ describe('the S2 sets’ arguments come from the builders', () => {
           expect(await mgr.ensureSandboxFiles(scope)).toBe('ok')
           const twin = JSON.parse(readFileSync(mgr.sandboxChatArgs(false, scope)[1], 'utf8'))
           const appKey = path.join(profile, platform, 'host', 'app.key')
-          const measured = claudeSandboxSettings({ platform, denied: claudeDenied(platform, e, home, appKey), npmCache: npmCacheOf(tmp), layout })
+          const readOnly = sessionReadOnly(path.join(profile, platform))
+          const measured = claudeSandboxSettings({ platform, denied: claudeDenied(platform, e, home, appKey), readOnly, npmCache: npmCacheOf(tmp), layout })
           expect(twin, platform).toEqual({ ...(measured.sandbox ? { sandbox: measured.sandbox } : {}), permissions: measured.permissions })
           expect(claudeDenied(platform, e, home, appKey), platform).toContain(appKey.replace(/\\/g, '/'))
+          expect(readOnly, platform).toEqual([path.join(profile, platform).replace(/\\/g, '/')])
         }
       }
     } finally {
@@ -295,16 +299,19 @@ describe('the S2 sets’ arguments come from the builders', () => {
   })
 
   // Sandbox follow-ups, item 1: the measurement must hand Codex exactly what a session's start hands it, so its list
-  // comes from the start's own builder, the app key included (on Windows too, where no socket folder is named)
-  it("hands Codex exactly what a session's start does (sessionSandboxArgs), the app key included", () => {
+  // comes from the start's own builder, the app key included (on Windows too, where no socket folder is named), and so
+  // does the profile folder it keeps read (Task E)
+  it("hands Codex exactly what a session's start does (sessionSandboxArgs), the app key and the profile folder included", () => {
     const e = { ...env, APPDATA: 'C:/h/AppData/Roaming' }
     for (const platform of ['darwin', 'linux', 'win32']) {
       const home = platform === 'win32' ? 'C:/h' : '/h'
       const dir = platform === 'win32' ? null : '/tmp/astera-host-0123456789ab-v4'
+      const profileDir = platform === 'win32' ? 'C:\\h\\AppData\\Roaming\\astera' : '/h/.config/astera'
       const appKey = platform === 'win32' ? 'C:/h/AppData/Roaming/astera/host/app.key' : '/h/.config/astera/host/app.key'
       for (const layout of [repo, sub, wt]) {
-        const started = codexSandboxCommandArgs(sessionSandboxArgs({ platform, homeDir: home, layout, env: e, hostSocketDir: dir, appKeyFile: appKey }))
-        expect(codexSetArgs({ platform, layout, denied: codexDenied(platform, e, home, dir, appKey) }), platform).toEqual(started)
+        const started = codexSandboxCommandArgs(sessionSandboxArgs({ platform, homeDir: home, layout, env: e, hostSocketDir: dir, appKeyFile: appKey, profileDir }))
+        expect(codexSetArgs({ platform, layout, denied: codexDenied(platform, e, home, dir, appKey), readOnly: sessionReadOnly(profileDir) }), platform).toEqual(started)
+        expect(started.join(' '), platform).toContain(`"${profileDir.replace(/\\/g, '/')}"="read"`)
       }
       expect(codexDenied(platform, e, home, dir, appKey), platform).toContain(appKey)
     }
@@ -313,31 +320,31 @@ describe('the S2 sets’ arguments come from the builders', () => {
   // `-a never` is an option of the session command; `codex sandbox` and `app-server` take only the -c values
   it('drops exactly `-a never` from the builder’s arguments', () => {
     for (const platform of ['linux', 'win32']) {
-      const built = codexSandboxArgs({ platform, layout: wt, denied: ['/h/.ssh'] })
+      const built = codexSandboxArgs({ platform, layout: wt, denied: ['/h/.ssh'], readOnly: ['/h/.config/astera'] })
       expect(built.slice(0, 2)).toEqual(['-a', 'never'])
       expect(codexSandboxCommandArgs(built)).toEqual(built.slice(2))
-      expect(codexSetArgs({ platform, layout: wt, denied: ['/h/.ssh'] })).toEqual(built.slice(2))
+      expect(codexSetArgs({ platform, layout: wt, denied: ['/h/.ssh'], readOnly: ['/h/.config/astera'] })).toEqual(built.slice(2))
     }
     expect(() => codexSandboxCommandArgs(['-c', 'x'])).toThrow(/-a never/)
-    expect(profileNameOf(codexSandboxArgs({ platform: 'linux', layout: repo, denied: [] }))).toBe('astera')
+    expect(profileNameOf(codexSandboxArgs({ platform: 'linux', layout: repo, denied: [], readOnly: [] }))).toBe('astera')
   })
 
   it('keeps every layout’s builder profile as it is, and only swaps the worktree’s git directory for the fallback', () => {
     for (const layout of [repo, sub, wt, null])
-      expect(codexSetArgs({ platform: 'darwin', layout, denied: [] })).toEqual(codexSandboxArgs({ platform: 'darwin', layout, denied: [] }).slice(2))
-    const shipped = codexSetArgs({ platform: 'linux', layout: wt, denied: ['/h/.ssh'] }).join(' ')
-    const alt = codexSetArgs({ platform: 'linux', layout: wt, denied: ['/h/.ssh'], variant: 'alt' }).join(' ')
+      expect(codexSetArgs({ platform: 'darwin', layout, denied: [], readOnly: ['/h/p'] })).toEqual(codexSandboxArgs({ platform: 'darwin', layout, denied: [], readOnly: ['/h/p'] }).slice(2))
+    const shipped = codexSetArgs({ platform: 'linux', layout: wt, denied: ['/h/.ssh'], readOnly: ['/h/p'] }).join(' ')
+    const alt = codexSetArgs({ platform: 'linux', layout: wt, denied: ['/h/.ssh'], readOnly: ['/h/p'], variant: 'alt' }).join(' ')
     expect(shipped).toContain('"/m/.git/worktrees/wt"="write"')
     expect(alt).not.toContain('"/m/.git/worktrees/wt"="write"')
     expect(alt).toBe(shipped.replace('"/m/.git/worktrees/wt"="write"', '"/m/.git/worktrees"="write"'))
-    expect(() => codexSetArgs({ platform: 'linux', layout: repo, denied: [], variant: 'alt' })).toThrow(/linked worktree/)
+    expect(() => codexSetArgs({ platform: 'linux', layout: repo, denied: [], readOnly: [], variant: 'alt' })).toThrow(/linked worktree/)
   })
 
   // How Claude Code hands its settings to the runtime, for srt run on its own: the folder and the builder's paths
   // writable, a worktree's common directory with its hooks and config read-only (Claude does that itself), and the
   // builder's own denyWrite, the git files that decide what git runs (final fix pass, C1)
   it('turns Claude’s sandbox settings into srt’s, with the builder’s git denies and the socket only when asked', () => {
-    const claude = claudeSandboxSettings({ platform: 'linux', denied: ['/h/.ssh'], npmCache: '/t/astera-npm-cache', layout: wt })
+    const claude = claudeSandboxSettings({ platform: 'linux', denied: ['/h/.ssh'], readOnly: ['/h/.config/astera'], npmCache: '/t/astera-npm-cache', layout: wt })
     const s = srtSettingsOf(claude, { commonDir: '/m/.git' })
     expect(s.filesystem).toEqual({
       denyRead: ['/h/.ssh'],
@@ -345,10 +352,11 @@ describe('the S2 sets’ arguments come from the builders', () => {
       allowWrite: ['.', '/t/astera-npm-cache', '/m/.git'],
       denyWrite: claude.sandbox.filesystem.denyWrite
     })
-    expect(s.filesystem.denyWrite).toEqual([...wt.gitFiles, '/w/wt/.git', '/m/.git/hooks', '/m/.git/config', ...wt.worktreeConfigs])
+    // The profile folder after them (Task E), kept from being written whatever srt's write paths are
+    expect(s.filesystem.denyWrite).toEqual([...wt.gitFiles, '/w/wt/.git', '/m/.git/hooks', '/m/.git/config', ...wt.worktreeConfigs, '/h/.config/astera'])
     expect(s.network.allowedDomains).toEqual(['example.com', 'registry.npmjs.org'])
     expect(s.network).not.toHaveProperty('allowUnixSockets')
-    const outside = claudeSandboxSettings({ platform: 'linux', denied: [], npmCache: '/t/astera-npm-cache', layout: null })
+    const outside = claudeSandboxSettings({ platform: 'linux', denied: [], readOnly: [], npmCache: '/t/astera-npm-cache', layout: null })
     expect(srtSettingsOf(outside, { commonDir: null }).filesystem).toMatchObject({ allowWrite: ['.', '/t/astera-npm-cache'], denyWrite: [] })
     expect(srtSettingsOf(claude, { commonDir: '/m/.git', allowUnixSockets: ['/t/s/sock'] }).network.allowUnixSockets).toEqual(['/t/s/sock'])
   })

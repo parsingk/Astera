@@ -57,6 +57,8 @@ export interface HostChatsDeps {
   hostSocketDir?: ChatManagerDeps['hostSocketDir']
   /** The profile's app key file, the spawner's: a sandboxed Codex chat's profile denies it on every OS. */
   appKeyFile?: ChatManagerDeps['appKeyFile']
+  /** The Host's profile folder, the spawner's: a sandboxed Codex chat's profile keeps it read-only on every OS. */
+  profileDir?: ChatManagerDeps['profileDir']
   /** The codex version question, the spawner's: a sandboxed Codex chat's floor (final review I2). */
   codexVersion?: ChatManagerDeps['codexVersion']
   /** The copy of the person's git excludes a sandboxed win32 Codex chat reads: the spawner's (HostSpawner.codexExcludes). */
@@ -202,6 +204,7 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     ...(d.claudeSandbox ? { claudeSandbox: d.claudeSandbox } : {}),
     ...(d.hostSocketDir !== undefined ? { hostSocketDir: d.hostSocketDir } : {}),
     ...(d.appKeyFile !== undefined ? { appKeyFile: d.appKeyFile } : {}),
+    ...(d.profileDir !== undefined ? { profileDir: d.profileDir } : {}),
     ...(d.codexVersion ? { codexVersion: d.codexVersion } : {}),
     ...(d.codexExcludes ? { codexExcludes: d.codexExcludes } : {}),
     ...(d.createAdapter ? { createAdapter: d.createAdapter } : {})

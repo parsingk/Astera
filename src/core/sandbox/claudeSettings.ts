@@ -17,12 +17,18 @@ export interface ClaudeSandboxSettings {
 /** Claude's permission paths, as two rules because the gitignore-style match of `p/**` covers a folder's contents but not a
  *  file named `p` (`.npmrc`, `.git-credentials`): `//` marks an absolute path, and on Windows `C:/x` is matched in its
  *  POSIX form `/c/x`. */
-function readRules(p: string): string[] {
+function pathRules(tool: 'Read' | 'Edit', p: string): string[] {
   const f = p.replace(/\\/g, '/').replace(/\/+$/, '')
   const drive = /^([A-Za-z]):(\/.*)?$/.exec(f)
   const posix = drive ? `/${drive[1].toLowerCase()}${drive[2] ?? ''}` : f
-  return [`Read(/${posix})`, `Read(/${posix}/**)`]
+  return [`${tool}(/${posix})`, `${tool}(/${posix}/**)`]
 }
+
+const readRules = (p: string): string[] => pathRules('Read', p)
+/** "`Edit` rules apply to all built-in tools that edit files" (code.claude.com/docs/en/permissions, "What `Read` and
+ *  `Edit` rules cover"), the creation of a new file included; they do not reach a program the shell runs, which only the
+ *  sandbox stops. */
+const editRules = (p: string): string[] => pathRules('Edit', p)
 
 /** The git files a sandboxed Claude session may not write (final fix pass, C1), absolute: everything that decides where git
  *  reads its config and hooks from (`layout.gitFiles`: every `commondir`, and `modules`), a linked worktree's `.git`
@@ -51,8 +57,14 @@ export function claudeSessionDenied(o: { platform: NodeJS.Platform; env: Record<
   ]
 }
 
-export function claudeSandboxSettings(o: { platform: NodeJS.Platform; denied: string[]; npmCache: string; layout: GitLayout | null }): ClaudeSandboxSettings {
-  const permissions = { deny: o.denied.flatMap(readRules) }
+/** `readOnly` (the profile folder, locations.ts profileReadOnly) is kept from being written on every OS: by Edit rules
+ *  for Claude's own file tools (on Windows all there is, as for E6's reads), and on macOS and Linux in the sandbox's
+ *  denyWrite, which covers the folder and everything in it on both (srt 0.0.79: Seatbelt's `(deny file-write* (subpath
+ *  …))` after the allows, dist/sandbox/macos-sandbox-utils.js generateWriteRules; bubblewrap's `--ro-bind` after the
+ *  write binds, with a read-denied file inside put back over it, dist/sandbox/linux-sandbox-utils.js). Reads are not
+ *  touched. */
+export function claudeSandboxSettings(o: { platform: NodeJS.Platform; denied: string[]; readOnly: readonly string[]; npmCache: string; layout: GitLayout | null }): ClaudeSandboxSettings {
+  const permissions = { deny: [...o.denied.flatMap(readRules), ...o.readOnly.flatMap(editRules)] }
   if (o.platform === 'win32') return { permissions }
   return {
     sandbox: {
@@ -62,7 +74,7 @@ export function claudeSandboxSettings(o: { platform: NodeJS.Platform; denied: st
       failIfUnavailable: true,
       // The astera command talks to the Host over a socket the sandbox would block.
       excludedCommands: ['astera *'],
-      filesystem: { allowWrite: [o.npmCache], denyWrite: [...new Set(gitDenyWrite(o.layout))], denyRead: o.denied }
+      filesystem: { allowWrite: [o.npmCache], denyWrite: [...new Set([...gitDenyWrite(o.layout), ...o.readOnly])], denyRead: o.denied }
     },
     permissions
   }

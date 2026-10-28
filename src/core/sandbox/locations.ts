@@ -22,6 +22,18 @@ export function appKeyDenies(appKeyFile: string | null): string[] {
   return appKeyFile ? [slashed(appKeyFile)] : []
 }
 
+/** Astera's profile folder (`profileDir`: the app's userData, the Host's ASTERA_HOST_PROFILE_DIR), read-only in every
+ *  sandboxed session, for both CLIs on every OS (Task E, 2026-10-28): what the app and the Host run outside any sandbox
+ *  is kept there (the Host's scripts under `host`, the capture and Enforce hooks, the sessions' `.cmd` files,
+ *  `audit-policy.json`, the settings files), so a session that wrote it could have its code run outside the sandbox. It
+ *  matters where the session's folder holds the profile (a session started in the home folder or above it); anywhere
+ *  else the profile is already outside what the sandbox lets a session write. Reads are not touched: the Host key in it
+ *  stays readable, and the app key stays denied (appKeyDenies). The one list for every start and the S2 measurement
+ *  (scripts/measure/s2.mjs). None when the folder is not known. */
+export function profileReadOnly(profileDir: string | null): string[] {
+  return profileDir ? [slashed(profileDir)] : []
+}
+
 /** A D-Bus address value with its `%xx` escapes decoded (the D-Bus specification, "Server Addresses": any byte may be
  *  escaped so, and a path holding a space or a non-ASCII letter is), so the path denied is the file's own (final fix pass,
  *  minor 8). Bytes, decoded as UTF-8. */

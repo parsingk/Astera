@@ -13,7 +13,7 @@ import { createAttentionState } from './attention'
 import { hookEventState, latestEventLine } from '../hooks/sessionState'
 import { resolveAction } from '../audit/resolve'
 import { claudeSandboxSettings } from '../sandbox/claudeSettings'
-import { appKeyDenies, credentialStoreDenies, sensitiveLocations } from '../sandbox/locations'
+import { appKeyDenies, credentialStoreDenies, profileReadOnly, sensitiveLocations } from '../sandbox/locations'
 import { appKeyPath } from '../host/hostKey'
 import { npmCacheOf } from '../sandbox/codexProfile'
 import type { GitLayout } from '../sandbox/gitLayout'
@@ -931,10 +931,10 @@ describe('StatusLineManager sandbox', () => {
       tmpDir: TMP[platform]
     })
   /** What the builder gives for this OS and scope, under the manager's home, with the app key of its profile (sandbox
-   *  follow-ups, item 1). */
+   *  follow-ups, item 1), and the profile folder itself kept read-only (Task E). */
   const builder = (platform: 'linux' | 'darwin' | 'win32', scope: SandboxScope = scopeOn(platform)) => {
     const denied = [...sensitiveLocations(platform, scope.env, HOME[platform]), ...credentialStoreDenies(platform, scope.env, HOME[platform]), ...appKeyDenies(appKeyPath(dir))]
-    return claudeSandboxSettings({ platform, denied, npmCache: npmCacheOf(TMP[platform]), layout: scope.layout })
+    return claudeSandboxSettings({ platform, denied, readOnly: profileReadOnly(dir), npmCache: npmCacheOf(TMP[platform]), layout: scope.layout })
   }
   /** The scope's twins folder a twin is in: sandbox-settings/<hash>. */
   const folderOf = (file: string): string => path.dirname(file.replace(/\//g, path.sep))
@@ -999,6 +999,31 @@ describe('StatusLineManager sandbox', () => {
     }
   })
 
+  // Task E (2026-10-28): what the app and the Host run outside any sandbox is in the profile folder, so a twin keeps that
+  // folder from being written, terminal and chat alike: the sandbox's denyWrite on macOS and Linux, and Edit rules for
+  // Claude's file tools on every OS (on Windows all there is); reads of it are as before
+  it('keeps its own profile folder from being written, by the sandbox and by the file tools', async () => {
+    for (const platform of ['linux', 'darwin', 'win32'] as const) {
+      const mgr = managerOn(platform)
+      await mgr.init()
+      const scope = scopeOn(platform)
+      expect(await mgr.ensureSandboxFiles(scope)).toBe('ok')
+      const folder = dir.replace(/\\/g, '/')
+      const drive = /^([A-Za-z]):(\/.*)$/.exec(folder)
+      const rule = drive ? `/${drive[1].toLowerCase()}${drive[2]}` : folder
+      for (const file of [mgr.spawnConfig('s1', account, { sandbox: scope }).settingsFile, mgr.sandboxChatArgs(false, scope)![1]]) {
+        const twin = JSON.parse(await read(file))
+        expect(twin.permissions.deny, `${platform} ${file}`).toEqual(expect.arrayContaining([`Edit(/${rule})`, `Edit(/${rule}/**)`]))
+        expect(twin.permissions.deny, `${platform} ${file}`).not.toContain(`Read(/${rule})`)
+        if (platform === 'win32') expect(twin.sandbox, file).toBeUndefined()
+        else {
+          expect(twin.sandbox.filesystem.denyWrite, `${platform} ${file}`).toContain(folder)
+          expect(twin.sandbox.filesystem.denyRead, `${platform} ${file}`).not.toContain(folder)
+        }
+      }
+    }
+  })
+
   // Final fix pass (C1, minor 2): a twin keeps its own repository's git files from being written and denies the places
   // its own environment names, so two scopes never share a file, and one prepared scope is no other's
   it('gives each scope its own twins, from its own layout and environment, and none to a scope not prepared', async () => {
@@ -1018,7 +1043,8 @@ describe('StatusLineManager sandbox', () => {
     const [a, b, c] = await Promise.all(files.map(async (f) => JSON.parse(await read(f))))
     expect(a.sandbox.filesystem.denyWrite).toEqual(builder('linux', wt).sandbox?.filesystem.denyWrite)
     expect(a.sandbox.filesystem.denyWrite).toContain('/w/wt/.git')
-    expect(b.sandbox.filesystem.denyWrite).toEqual(['/r/.git/commondir', '/r/.git/modules', '/r/.git/hooks', '/r/.git/config', '/r/.git/config.worktree'])
+    // Each scope's own git files, and the profile folder every scope keeps (Task E)
+    expect(b.sandbox.filesystem.denyWrite).toEqual(['/r/.git/commondir', '/r/.git/modules', '/r/.git/hooks', '/r/.git/config', '/r/.git/config.worktree', dir.replace(/\\/g, '/')])
     expect(a.permissions.deny).toContain('Read(//run/user/1000/bus)')
     expect(c.permissions.deny).toContain('Read(//run/user/2000/bus)')
     expect(c.permissions.deny).not.toContain('Read(//run/user/1000/bus)')

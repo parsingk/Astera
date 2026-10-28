@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { appKeyDenies, credentialStoreDenies, hostSocketDenies, otherHostFolders, sensitiveLocations } from './locations'
+import { appKeyDenies, credentialStoreDenies, hostSocketDenies, otherHostFolders, profileReadOnly, sensitiveLocations } from './locations'
 
 describe('sandbox locations', () => {
   it('lists E6 on every OS, with gh and gcloud where each OS keeps them', () => {
@@ -23,6 +23,14 @@ describe('sandbox locations', () => {
     expect(appKeyDenies('C:\\Users\\a\\AppData\\Roaming\\astera\\host\\app.key')).toEqual(['C:/Users/a/AppData/Roaming/astera/host/app.key'])
     expect(appKeyDenies('/home/a/.config/astera/host/app.key')).toEqual(['/home/a/.config/astera/host/app.key'])
     expect(appKeyDenies(null)).toEqual([])
+  })
+
+  // Task E (2026-10-28): what the app and the Host run outside any sandbox is in the profile folder, so a sandboxed session
+  // may not write it, on every OS; named whole, with forward slashes
+  it('names the profile folder read-only on every OS, with forward slashes, and nothing without one', () => {
+    expect(profileReadOnly('C:\\Users\\a\\AppData\\Roaming\\astera')).toEqual(['C:/Users/a/AppData/Roaming/astera'])
+    expect(profileReadOnly('/home/a/.config/astera/')).toEqual(['/home/a/.config/astera'])
+    expect(profileReadOnly(null)).toEqual([])
   })
 
   it('adds the OS credential store a sandbox does not close by itself', () => {

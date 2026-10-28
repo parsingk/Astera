@@ -7,6 +7,7 @@ import path from 'node:path'
 import { codexSandboxArgs } from '../../src/core/sandbox/codexProfile'
 import { claudeSessionDenied } from '../../src/core/sandbox/claudeSettings'
 import { codexSessionDenied } from '../../src/core/sandbox/prepared'
+import { profileReadOnly } from '../../src/core/sandbox/locations'
 import { PROBES, verdict } from './probes.mjs'
 import { probeEnv } from './measure-sandbox.mjs'
 
@@ -61,6 +62,11 @@ export const codexDenied = (platform, env, home, hostDir = null, appKeyFile = nu
  *  measured is what a start hands Claude. */
 export const claudeDenied = (platform, env, home, appKeyFile = null) => claudeSessionDenied({ platform, env, homeDir: home, appKeyFile })
 
+/** What a sandboxed session of either CLI may not write: Astera's profile folder (`profileDir`, Task E). The list every
+ *  start builds (locations.ts profileReadOnly, which sessionSandboxArgs keeps read and StatusLineManager's twins keep
+ *  from being written), so what is measured is what a start hands either sandbox. */
+export const sessionReadOnly = (profileDir = null) => profileReadOnly(profileDir)
+
 /** `codex sandbox` and `codex app-server` take the profile's `-c` values; `-a never` is an option of the session command,
  *  which the builder puts first. */
 export function codexSandboxCommandArgs(args) {
@@ -79,8 +85,8 @@ const tomlEntry = (p, access) => `${JSON.stringify(p)}=${JSON.stringify(access)}
 
 /** A set's Codex arguments: the builder's, with `-a never` dropped. The fallback (`variant: 'alt'`) names the common
  *  directory's `worktrees` folder where the builder names the worktree's own git directory, and nothing else changes. */
-export function codexSetArgs({ platform, layout, denied, variant = 'shipped' }) {
-  const args = codexSandboxCommandArgs(codexSandboxArgs({ platform, layout, denied }))
+export function codexSetArgs({ platform, layout, denied, readOnly, variant = 'shipped' }) {
+  const args = codexSandboxCommandArgs(codexSandboxArgs({ platform, layout, denied, readOnly }))
   if (variant !== 'alt') return args
   if (!layout?.worktree || layout.gitDir === layout.commonDir) throw new Error('the fallback grant is for a session in a linked worktree')
   const from = tomlEntry(layout.gitDir, 'write')

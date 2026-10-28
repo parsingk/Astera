@@ -154,6 +154,7 @@ export function composeHostRolling(a: {
     claudeSandbox: a.spawner.claudeSandbox,
     hostSocketDir: a.spawner.hostSocketDir ?? null,
     appKeyFile: a.spawner.appKeyFile ?? null,
+    profileDir: a.spawner.profileDir ?? null,
     ...(a.spawner.codexVersion ? { codexVersion: a.spawner.codexVersion } : {}),
     ...(a.spawner.codexExcludes ? { codexExcludes: a.spawner.codexExcludes } : {}),
     log,

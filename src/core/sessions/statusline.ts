@@ -16,6 +16,7 @@ import { claudeSandboxSettings, claudeSessionDenied, type ClaudeSandboxSettings 
 import { appKeyPath } from '../host/hostKey'
 import { npmCacheOf } from '../sandbox/codexProfile'
 import type { GitLayout } from '../sandbox/gitLayout'
+import { profileReadOnly } from '../sandbox/locations'
 
 /** The statusLine injection info handed to SessionManager when a session is spawned. */
 export interface StatusLineSpawn {
@@ -753,8 +754,8 @@ export class StatusLineManager {
    * The sandbox (sandbox design §6): writes, for the scope of a sandboxed Claude start (SandboxScope: its folder's git
    * layout and the environment its session is built from), a twin of each settings file a session can be pointed at
    * (plain, hooks, observe, observe hooks, enforce, enforce hooks, as far as each has been built), the same JSON with
-   * Claude's sandbox added and the deny rules for the E6 list and the OS credential store (claudeSandboxSettings), and
-   * the files a sandboxed chat takes as its one `--settings`: the sandbox alone, and with Enforce's hook. The twins of one
+   * Claude's sandbox added and the deny rules for the E6 list and the OS credential store, with this profile folder kept
+   * from being written (claudeSandboxSettings), and the files a sandboxed chat takes as its one `--settings`: the sandbox alone, and with Enforce's hook. The twins of one
    * scope are in a folder of their own, `sandbox-settings/<hash>`, named by what its sandbox holds, so sessions in
    * different repositories, or of accounts whose environment names another bus, never read each other's, and two starts
    * in the same folder share them. No Unix socket is granted, the Host's included: a sandboxed session reaches the Host
@@ -783,9 +784,11 @@ export class StatusLineManager {
   /** What a sandbox twin adds: the builder's settings, for the scope's layout and from the scope's environment, under the
    *  person's home. */
   private sandboxPart(scope: SandboxScope): SandboxPart {
-    // With the app key of this profile (sandbox follow-ups, item 1), as a Codex session's profile denies it
+    // With the app key of this profile (sandbox follow-ups, item 1), as a Codex session's profile denies it, and the profile
+    // folder itself kept from being written (Task E), as a Codex session's profile keeps it read
     const denied = claudeSessionDenied({ platform: this.platform, env: scope.env, homeDir: this.homeDir, appKeyFile: appKeyPath(this.userDataDir) })
-    return claudeSandboxSettings({ platform: this.platform, denied, npmCache: npmCacheOf(this.tmpDir), layout: scope.layout })
+    const readOnly = profileReadOnly(this.userDataDir)
+    return claudeSandboxSettings({ platform: this.platform, denied, readOnly, npmCache: npmCacheOf(this.tmpDir), layout: scope.layout })
   }
 
   private twinsDirOf(key: string): string {

@@ -185,6 +185,9 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
   /** The profile's app key file, which a sandboxed Codex session's profile denies on every OS, terminal or chat (sandbox
    *  follow-ups, item 1). */
   appKeyFile?: string | null
+  /** This Host's profile folder, which a sandboxed Codex session's profile keeps read-only on every OS, terminal or chat
+   *  (Task E). */
+  profileDir?: string | null
   /** The codex version question a sandboxed Codex start asks, shared with the Host's chat sessions (final review I2). */
   codexVersion?: ChatManagerDeps['codexVersion']
   /** The copy of the person's git excludes a sandboxed win32 Codex start writes in this Host's temp folder (one for its
@@ -447,7 +450,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     // Read at each spawn, not once: the Host completes its PATH when a CLI is missing (windowsPath.ts)
     () => hostWorkerBaseEnv(d.env),
     // The Host's own log: a spawn that had to fall back to a sync check says so in host.log.
-    { ...defaultSpawnChecks(log), codexWindowsReady, hostSocketDir, appKeyFile, codexExcludes }
+    { ...defaultSpawnChecks(log), codexWindowsReady, hostSocketDir, appKeyFile, profileDir, codexExcludes }
   )
   // Shared extensions (Agent Control Plane release 1 design §4.5): `sessions.prepare` refreshes the account before
   // every spawn and roll, and the Host's chat sessions read the same cache
@@ -900,6 +903,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     claudeSandbox,
     hostSocketDir,
     appKeyFile,
+    profileDir,
     codexVersion,
     codexExcludes,
     orchEnvNow: () => orchEnvReady,

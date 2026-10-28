@@ -175,3 +175,16 @@ describe('ipc.ts takes the sandbox from the profile, or from a sandboxed session
     expect(coord).toMatch(/\.\.\.\(sandbox \? \{ forceSandbox: true \} : \{\}\)/)
   })
 })
+
+// Task E (2026-10-28): a sandboxed session keeps Astera's profile folder read-only, so both of the app's managers are
+// handed that folder, as they are its app key; Claude's twins take it from the StatusLineManager's own folder.
+// createCore cannot run without Electron: guarded by its text
+describe('core.ts hands both managers the profile folder a sandboxed session keeps read-only', () => {
+  const core = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'core.ts'), 'utf8')
+  it('the terminal manager’s checks and the chat manager’s deps name the app’s own profile folder', () => {
+    expect(core).toMatch(/\{ \.\.\.defaultSpawnChecks\(sessionsLog\), hostSocketDir, appKeyFile, profileDir: userDataDir, codexExcludes \}/)
+    const chat = core.slice(core.indexOf('const chat = new ChatSessionManager({'), core.indexOf('// Lazy history'))
+    expect(chat).toMatch(/\n    appKeyFile,\n    profileDir: userDataDir,\n/)
+    expect(core).toMatch(/const statusLine = new StatusLineManager\(\n    userDataDir,/)
+  })
+})

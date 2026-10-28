@@ -1137,7 +1137,9 @@ chat's thread names the profile and its approval policy is `never`) and a termin
 stopped (`SANDBOX_UNAVAILABLE: profile-not-active codex`). On every OS it writes only in its folder, the git directories of the folder's repository (never their
 `hooks` or `config`, nor what decides where git finds them: each `commondir` file, the `modules` folder of submodules'
 git directories, and a worktree's `.git` file; a start makes a missing `commondir`, holding `.`, and an empty
-`modules`, so they can be kept read-only) and the temp folder, where npm's cache goes; it cannot read `~/.ssh`, `~/.aws`, the GitHub CLI's
+`modules`, so they can be kept read-only) and the temp folder, where npm's cache goes, and never in Astera's own profile
+folder, even where its folder holds it (a session started in the home folder), though it still reads the Host key
+there; it cannot read `~/.ssh`, `~/.aws`, the GitHub CLI's
 and gcloud's settings, `~/.docker`, `~/.npmrc`, `~/.git-credentials` or `~/.kube`; and the network works. On macOS
 `~/Library/Keychains` is closed too, and on Linux the session bus a secret service answers on. On macOS and Linux it
 cannot open the folder the Host's socket is in either, nor any other Host's folder of yours beside it (`astera-host-*`
@@ -1153,7 +1155,8 @@ Linux. On Linux its git reads an excludes file Astera writes
 sandbox keeps placeholders for, such as `.bashrc` and `.vscode`), so `git add -A` works. A sandboxed Codex session on Windows runs as the
 sandbox's own account, which cannot read the person's home, so its git reads a copy of the person's global excludes
 that Astera writes in the temp folder. Claude Code has no sandbox on
-Windows: there the switch only keeps its file tools, not its shell, out of those folders, and npm keeps its own cache.
+Windows: there the switch only keeps its file tools, not its shell, out of those folders and from changing the profile
+folder, and npm keeps its own cache.
 What a sandboxed session starts runs in the sandbox too, whatever profile it names: a session it makes with `sessions
 create`, a Job it makes (its coordinator and every worker), a Task it adds to any Job and a worker it starts with
 `worker-start`. Where that CLI has no sandbox (Claude Code on Windows) such a start is refused with

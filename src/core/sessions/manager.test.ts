@@ -14,7 +14,7 @@ import type { RollSnapshot, RollSpawnExtra } from '../rolling/snapshot'
 import type { SessionCapabilities } from '../extensions/resolve'
 import { sessionInfoFromNote } from './noteInfo'
 import { gitLayoutOf } from '../sandbox/gitLayout'
-import { appKeyDenies, credentialStoreDenies, sensitiveLocations } from '../sandbox/locations'
+import { appKeyDenies, credentialStoreDenies, profileReadOnly, sensitiveLocations } from '../sandbox/locations'
 import { appKeyPath } from '../host/hostKey'
 import { codexSandboxArgs, codexSandboxEnv, npmCacheOf } from '../sandbox/codexProfile'
 import { claudeSandboxSettings } from '../sandbox/claudeSettings'
@@ -1768,20 +1768,20 @@ describe('the sandbox at spawn', () => {
   } as const
   type Ready = NonNullable<SpawnChecks['codexWindowsReady']>
   /** Every Windows home reads set up unless a case says otherwise: the real question runs codex. */
-  const checksFor = (platform: NodeJS.Platform, ready: Ready = async () => 'ready', hostSocketDir: string | null = null, codexExcludes?: SpawnChecks['codexExcludes'], appKeyFile?: string): SpawnChecks => ({
+  const checksFor = (platform: NodeJS.Platform, ready: Ready = async () => 'ready', hostSocketDir: string | null = null, codexExcludes?: SpawnChecks['codexExcludes'], appKeyFile?: string, profileDir?: string): SpawnChecks => ({
     cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform, now: Date.now, syncExists: () => true, log: () => {},
-    codexWindowsReady: ready, hostSocketDir, ...(codexExcludes ? { codexExcludes } : {}), ...(appKeyFile ? { appKeyFile } : {})
+    codexWindowsReady: ready, hostSocketDir, ...(codexExcludes ? { codexExcludes } : {}), ...(appKeyFile ? { appKeyFile } : {}), ...(profileDir ? { profileDir } : {})
   })
   /** The codex version the probe answers: '0.160.0', the floor, unless a case says otherwise (null: unreadable,
    *  undefined: no codex) */
   const versionOf = (v: string | null | undefined) => Object.assign((_cli: 'claude' | 'codex') => v, { warm: async () => {} })
-  const rig = (platform: 'linux' | 'darwin' | 'win32', o: { noDaemon?: boolean; ready?: Ready; hostSocketDir?: string | null; codex?: string | null; noVersionProbe?: true; excludes?: SpawnChecks['codexExcludes']; appKeyFile?: string } = {}) => {
+  const rig = (platform: 'linux' | 'darwin' | 'win32', o: { noDaemon?: boolean; ready?: Ready; hostSocketDir?: string | null; codex?: string | null; noVersionProbe?: true; excludes?: SpawnChecks['codexExcludes']; appKeyFile?: string; profileDir?: string } = {}) => {
     const argv: string[][] = []
     const spawned: PtySpawnOptions[] = []
     const manager = new SessionManager(
       (_f, a, opts) => (argv.push(a as string[]), spawned.push(opts), new FakePty()),
       makeDescriptors(platform, HOME[platform], undefined, daemon(o.noDaemon ?? true)),
-      100, 20, HOME[platform], undefined, [], { ...BASE[platform] }, checksFor(platform, o.ready, o.hostSocketDir ?? null, o.excludes, o.appKeyFile)
+      100, 20, HOME[platform], undefined, [], { ...BASE[platform] }, checksFor(platform, o.ready, o.hostSocketDir ?? null, o.excludes, o.appKeyFile, o.profileDir)
     )
     if (!o.noVersionProbe) manager.codexVersion = versionOf('codex' in o ? o.codex : '0.160.0')
     return { manager, argv, spawned }
@@ -1791,7 +1791,7 @@ describe('the sandbox at spawn', () => {
     const layout = await gitLayoutOf(cwd)
     const env: Record<string, string> = { ...BASE[platform] }
     const denied = [...sensitiveLocations(platform, env, HOME[platform]), ...credentialStoreDenies(platform, env, HOME[platform])]
-    return { args: codexSandboxArgs({ platform, layout, denied }), env: codexSandboxEnv({ platform, layout, tmpDir: os.tmpdir() }), layout }
+    return { args: codexSandboxArgs({ platform, layout, denied, readOnly: [] }), env: codexSandboxEnv({ platform, layout, tmpDir: os.tmpdir() }), layout }
   }
   /** The codex arguments after cmd.exe's wrapper, when win32 found a shim. */
   const codexArgs = (a: string[]): string[] => (a[0] === '/d' ? a.slice(4) : a)
@@ -1903,6 +1903,34 @@ describe('the sandbox at spawn', () => {
       expect(profile, platform).toContain(`"${files[platform].replace(/\\/g, '/')}"="deny"`)
       expect(profile, platform).not.toContain('host.key')
     }
+  })
+
+  // Task E (2026-10-28): what the app and the Host run outside any sandbox is in the profile folder, so a sandboxed
+  // session's profile keeps that folder read-only on every OS, wherever the session's folder is; the app key in it stays
+  // denied and the Host key readable
+  it("keeps Astera's profile folder read on every OS, with the app key in it denied", async () => {
+    const dirs = { linux: '/home/t/.config/astera', darwin: '/Users/t/Library/Application Support/astera', win32: 'C:\\Users\\t\\AppData\\Roaming\\astera' } as const
+    for (const platform of ['linux', 'darwin', 'win32'] as const) {
+      const cwd = repo()
+      const sep = platform === 'win32' ? '\\' : '/'
+      const { manager, argv } = rig(platform, { profileDir: dirs[platform], appKeyFile: [dirs[platform], 'host', 'app.key'].join(sep) })
+      await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+      manager.spawn({ account: codexAccount, cwd, sandbox: true })
+      const profile = codexArgs(argv[0]).find((a) => a.startsWith('permissions='))!
+      const dir = dirs[platform].replace(/\\/g, '/')
+      expect(profile, platform).toContain(`"${dir}"="read"`)
+      expect(profile, platform).toContain(`"${dir}/host/app.key"="deny"`)
+      expect(profile, platform).not.toContain('host.key')
+    }
+  })
+
+  // The profile folder is on the command line too, so a win32 one cmd.exe could not carry refuses the start
+  it('refuses a sandboxed win32 start whose profile folder holds a cmd.exe character', async () => {
+    const cwd = repo()
+    const { manager, argv } = rig('win32', { profileDir: 'C:\\Users\\t\\AppData\\Roaming\\astera 100%' })
+    await expect(manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: path-unsafe$/)
+    expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: /)
+    expect(argv).toHaveLength(0)
   })
 
   // Final fix pass, part 2 (B): every other Host's folder beside this profile's (another profile's Host, such as the dev
@@ -2273,12 +2301,13 @@ describe('the sandbox at spawn, for Claude', () => {
   }
   /** The `--settings` file a session was started with. */
   const settingsOf = (a: string[]): string => a[a.indexOf('--settings') + 1]
-  /** The builder's settings for a session of the rig's profile, with its app key denied (sandbox follow-ups, item 1). */
+  /** The builder's settings for a session of the rig's profile, with its app key denied (sandbox follow-ups, item 1) and the
+   *  profile folder itself kept read-only (Task E). */
   const builder = (platform: 'linux' | 'darwin' | 'win32', r: { tmpDir: string; profileDir: string }, layout: GitLayout | null = null) => {
     const env = { ...BASE[platform] }
     const denied = [...sensitiveLocations(platform, env, HOME[platform]), ...credentialStoreDenies(platform, env, HOME[platform]), ...appKeyDenies(appKeyPath(r.profileDir))]
     const tmpDir = r.tmpDir
-    return claudeSandboxSettings({ platform, denied, npmCache: npmCacheOf(tmpDir), layout })
+    return claudeSandboxSettings({ platform, denied, readOnly: profileReadOnly(r.profileDir), npmCache: npmCacheOf(tmpDir), layout })
   }
   /** A repository's top in a fresh temp folder: a `.git` folder is all gitLayoutOf needs. */
   const repoIn = (): string => {
@@ -2358,7 +2387,10 @@ describe('the sandbox at spawn, for Claude', () => {
       const layout = await gitLayoutOf(cwd)
       const settings = JSON.parse(readFileSync(settingsOf(r.argv[0]), 'utf8'))
       expect(settings.sandbox).toEqual(builder(platform, r, layout).sandbox)
-      expect(settings.sandbox.filesystem.denyWrite).toEqual([...layout!.gitFiles, `${layout!.commonDir}/hooks`, `${layout!.commonDir}/config`, ...layout!.worktreeConfigs])
+      // The git files, and the profile folder after them (Task E)
+      expect(settings.sandbox.filesystem.denyWrite).toEqual([
+        ...layout!.gitFiles, `${layout!.commonDir}/hooks`, `${layout!.commonDir}/config`, ...layout!.worktreeConfigs, r.profileDir.replace(/\\/g, '/')
+      ])
       expect(readFileSync(path.join(cwd, '.git', 'commondir'), 'utf8')).toBe('.\n')
       expect(existsSync(path.join(cwd, '.git', 'modules'))).toBe(true)
       expect(existsSync(path.join(cwd, '.git', 'config.worktree'))).toBe(true)

@@ -303,7 +303,8 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     // Mode writes the crops whose paths it sends. previewShotsDir is the same path capture.ts writes.
     [previewShotsDir(userDataDir)],
     process.env,
-    { ...defaultSpawnChecks(sessionsLog), hostSocketDir, appKeyFile, codexExcludes }
+    // The profile folder itself, which a sandboxed Codex session keeps read-only (Task E)
+    { ...defaultSpawnChecks(sessionsLog), hostSocketDir, appKeyFile, profileDir: userDataDir, codexExcludes }
   )
   // Shared extensions (Agent Control Plane release 1 design §4.5). The two managers read the same cache:
   // a chat roll's respawn is prepared through `sessions.prepare`, which refreshes the target account
@@ -385,6 +386,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     claudeSandbox,
     hostSocketDir,
     appKeyFile,
+    profileDir: userDataDir,
     codexVersion: cliVersions,
     codexExcludes
   })

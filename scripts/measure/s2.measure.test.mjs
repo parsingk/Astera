@@ -53,6 +53,7 @@ import {
   localWin32Env,
   probesFor,
   profileNameOf,
+  sessionReadOnly,
   readinessArgv,
   s2Enabled,
   s2SetNames,
@@ -191,6 +192,9 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
     const hostProfile = path.join(ctx.scratch, 'host-profile')
     await ensureAppKey(hostProfile)
     ctx.appKeyFile = appKeyPath(hostProfile)
+    // The profile folder itself, which every set keeps read-only as a session's start does (Task E); here it is outside
+    // the sets' folders, as a profile is in normal work, so no set's results change for it
+    ctx.profileDir = hostProfile
     if (!WIN) {
       // A Host-shaped socket folder, there as a running Host's is, which the Codex sets deny as a session's start does
       ctx.hostDir = hostAddress({ profileDir: hostProfile, platform: PLATFORM, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL }).dirToPrepare
@@ -325,10 +329,11 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
     const plain = runProbes(plainWrap, { cwd: pp.cwd, env: codexEnvOf(pp).env, probes, timeoutMs: PROBE_MS })
     const p = await prepare(set.name, set.layout, {}, { shipped })
     const denied = codexDenied(PLATFORM, ctx.base, ctx.home, ctx.hostDir, ctx.appKeyFile)
-    const args = codexSetArgs({ platform: PLATFORM, layout: p.gitLayout, denied, variant: set.variant })
+    const readOnly = sessionReadOnly(ctx.profileDir)
+    const args = codexSetArgs({ platform: PLATFORM, layout: p.gitLayout, denied, readOnly, variant: set.variant })
     const { own, env } = codexEnvOf(p)
     const wrap = (line) => ({ file: 'codex', args: ['sandbox', ...args, '--', ...shellArgv(PLATFORM, line)] })
-    const record = { layout: set.layout, cwd: p.cwd, gitLayout: p.gitLayout, sibling: p.sibling, worktreeConfig: p.worktreeConfig, gitFiles: p.gitFiles, args, env: own, denied }
+    const record = { layout: set.layout, cwd: p.cwd, gitLayout: p.gitLayout, sibling: p.sibling, worktreeConfig: p.worktreeConfig, gitFiles: p.gitFiles, args, env: own, denied, readOnly }
     if (set.common) {
       record.filesBefore = worktreeConfigFiles(p.gitLayout)
       record.sanity = runProbes(wrap, { cwd: p.cwd, env, probes: [{ id: 'sanity', line: sanityLine(PLATFORM) }], timeoutMs: PROBE_MS })[0]
@@ -344,7 +349,8 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
     const plain = runProbes(plainWrap, { cwd: pp.cwd, env: codexEnvOf(pp).env, probes, timeoutMs: PROBE_MS })
     const p = await prepare(set.name, set.layout)
     const denied = codexDenied(PLATFORM, ctx.base, ctx.home, ctx.hostDir, ctx.appKeyFile)
-    const args = codexSetArgs({ platform: PLATFORM, layout: p.gitLayout, denied })
+    const readOnly = sessionReadOnly(ctx.profileDir)
+    const args = codexSetArgs({ platform: PLATFORM, layout: p.gitLayout, denied, readOnly })
     const profile = profileNameOf(args)
     const { own, env } = codexEnvOf(p)
     const record = {
@@ -357,6 +363,7 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
       args: ['app-server', ...args],
       env: own,
       denied,
+      readOnly,
       profile,
       permissionProfileParam: Boolean(set.profileParam)
     }
@@ -433,7 +440,7 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
       record.plain = runProbes(plainWrap, { cwd: pp.cwd, env: envOf(pp), probes, timeoutMs: PROBE_MS })
       const p = await prepare(set.name, set.layout, files)
       const npmCache = npmCacheOf(p.tmpDir)
-      const claude = claudeSandboxSettings({ platform: PLATFORM, denied: claudeDenied(PLATFORM, ctx.base, ctx.home, ctx.appKeyFile), npmCache, layout: p.gitLayout })
+      const claude = claudeSandboxSettings({ platform: PLATFORM, denied: claudeDenied(PLATFORM, ctx.base, ctx.home, ctx.appKeyFile), readOnly: sessionReadOnly(ctx.profileDir), npmCache, layout: p.gitLayout })
       const commonDir = p.gitLayout?.worktree ? p.gitLayout.commonDir : null
       const settings = srtSettingsOf(claude, { commonDir, ...(socket ? { allowUnixSockets: [socket.path] } : {}) })
       const settingsFile = path.join(ctx.scratch, `srt-settings-${set.name}.json`)
