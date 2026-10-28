@@ -20,8 +20,22 @@ export const PTY_SPAWN_APP_ONLY = 'pty-spawn is served to the Astera app only'
  *  terminal (its list, its scrollback) or drives one (types into it, sizes, pauses, kills or notes it), and a write is
  *  recorded as the person's. Only the app sends any of them (src/main); a CLI, an MCP client and the Remote's
  *  controllers reach a session through the command layer (`sessions read`, `sessions send`, the gateway link), which
- *  holds its own rules. */
-const PTY_MESSAGES: ReadonlySet<ClientMessage['t']> = new Set(['pty-spawn', 'pty-write', 'pty-resize', 'pty-kill', 'pty-pause', 'pty-resume', 'pty-note', 'pty-list', 'pty-attach'])
+ *  holds its own rules.
+ *
+ *  A record over every `pty-*` kind of the protocol, not a list: a new kind fails tsc until it is written here, and so
+ *  is the proven app's alone. */
+const PTY_REQUESTS: Record<Extract<ClientMessage['t'], `pty-${string}`>, true> = {
+  'pty-spawn': true,
+  'pty-write': true,
+  'pty-resize': true,
+  'pty-kill': true,
+  'pty-pause': true,
+  'pty-resume': true,
+  'pty-note': true,
+  'pty-list': true,
+  'pty-attach': true
+}
+const PTY_MESSAGES: ReadonlySet<string> = new Set(Object.keys(PTY_REQUESTS))
 
 /**
  * Returns a handler for one connection. It reports whether it owned the message, so the server can
