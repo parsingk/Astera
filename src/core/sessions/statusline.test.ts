@@ -879,7 +879,11 @@ describe('StatusLineManager enforce mode', () => {
     const mgr = new StatusLineManager(dir, 'node', () => {}, { platform: 'win32', execPath: 'C:/x/electron.exe', findRuntime: async () => 'C:\\rt\\astera-host.exe' })
     await mgr.init()
     expect(await mgr.ensureEnforceFiles()).toBe('ok')
-    expect(mgr.enforceHookCommand('claude')).toBe(`C:'/rt/astera-host.exe' '${path.join(dir, ENFORCE_HOOK_FILE).replace(/\\/g, '/')}' claude`)
+    const script = path.join(dir, ENFORCE_HOOK_FILE).replace(/\\/g, '/')
+    // The form both shells read (captureCommand) is for a script at a Windows path, which the temp folder is only on Windows
+    expect(mgr.enforceHookCommand('claude')).toBe(
+      process.platform === 'win32' ? `C:'/rt/astera-host.exe' '${script}' claude` : `"C:/rt/astera-host.exe" "${script}" claude`
+    )
     // The capture scripts keep their own node, so an Off or Observe session's settings are as they were
     const plain = JSON.parse(await read(mgr.spawnConfig('s', account).settingsFile))
     expect(JSON.stringify(plain)).not.toContain('astera-host.exe')

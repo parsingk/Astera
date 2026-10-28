@@ -9,6 +9,9 @@ import type { ResolveCall } from './resolve'
 const WIN_PROFILE = 'C:/Users/u/AppData/Roaming/astera'
 const LINUX_PROFILE = '/home/u/.config/astera'
 
+// A write outside the project: inside or outside is read with this machine's own path rules (resolve.ts), so the
+// path is absolute here, where 'C:/elsewhere' on Linux or macOS would be a folder inside the project
+const OUTSIDE = process.platform === 'win32' ? 'C:/elsewhere/x.txt' : '/elsewhere/x.txt'
 const claude = (tool: string, input: Record<string, unknown>, over: Partial<ResolveCall> = {}): ResolveCall => ({ provider: 'claude', tool, input, cwd: 'D:/proj', ...over })
 const WIN_ENV = { USERPROFILE: 'C:\\Users\\u', APPDATA: 'C:\\Users\\u\\AppData\\Roaming', LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local' }
 const LINUX_ENV = { HOME: '/home/u' }
@@ -31,7 +34,7 @@ describe('enforceVerdict', () => {
       ruleId: 'starter-git-remote-write',
       reason: 'Blocked by Astera Rules: git.remote.write is denied.'
     })
-    expect(verdict(claude('Write', { file_path: 'C:/elsewhere/x.txt' }))).toEqual({
+    expect(verdict(claude('Write', { file_path: OUTSIDE }))).toEqual({
       deny: true,
       ruleId: 'starter-write-outside',
       reason: 'Blocked by Astera Rules: filesystem.write outside the project is denied.'
