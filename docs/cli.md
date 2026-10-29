@@ -1183,7 +1183,13 @@ Windows sandbox not set up, the runtime missing a tool, Ubuntu's AppArmor profil
 and is not the code's failure: the Task asks a person (retry, skip the check, or mark the Task failed), saying why in a
 check's words and what can be done there (for an account whose Windows sandbox is not set up, Set up beside it under a
 sandboxed profile in Settings › Agent profiles, then retry; for a path no sandbox can carry, that retrying will not
-help). A Docker check
+help). A sandbox that stops before the check starts is such a question too, not the code's failure: Astera's check
+runner says so with its own exit code, 125, and its own last line, `Astera could not put the check in the sandbox:
+<reason>`, and the question gives the reason. A Claude Code check under the sandbox runtime runs through that runner,
+and so does a Codex check on Windows, whose shell first prints a line of its own so the runner knows the check started
+(`codex sandbox` there exits 1 for its own failure as for a check's). A Codex check on macOS and Linux runs straight in
+its terminal as before, so a sandbox that stops there still reads as the check's failure. A check that ran and failed
+is a failure. A Docker check
 (`compose`, `dockerfile`) of a sandboxed Task is refused that way too, since Docker reaches past any of these sandboxes.
 Claude Code on Windows has no sandbox, so its checks run as before and say `validated outside the sandbox`. Every check,
 sandboxed or not, starts without the variables the Credentials list hides from a session in its folder, and its result
@@ -1206,6 +1212,12 @@ before a sandboxed start, Codex's `doctor --json` first and then, only on a home
 the sandbox (on a home with no setup the echo would start the setup and its prompt). The echo runs under the same
 permission profile and deny list the account's sandboxed sessions get: Codex keeps a home's read denials across runs and
 sets them to each run's list, so an echo under another list would lift what the account's running sessions are denied.
+Astera cannot hold that for a launch it does not make: the setup records the elevated sandbox as the home's default
+(`windows.sandbox = "elevated"` in its `config.toml`), so a Codex session of that home that is not one of Astera's
+sandboxed sessions yet still runs its commands in Codex's sandbox (an Astera tab with YOLO off, your own `codex`, with no
+bypass flag and no config turning the sandbox off) runs each command in the elevated sandbox under its own profile's
+deny list, usually empty, and so lifts the read denials Codex keeps for the sandbox's machine-wide group on that home's
+paths, the same paths other homes' sandboxed sessions are denied, until those sessions' next command sets them again.
 The app offers to set up the
 one account a start was refused for. A ready answer is kept until Astera restarts or a setup runs through it, so a home
 made stale by a setup outside Astera keeps reading ready until then. Settings › Agent profiles also shows, under a
