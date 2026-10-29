@@ -4,6 +4,7 @@
 import type { Provider } from '../providers/meta'
 import type { ScheduleRule } from '../scheduler/rule'
 import type { GitHubLifecyclePolicy, RunGitHubState } from '../github/lifecycle'
+import type { SandboxKind } from '../types'
 
 export type TaskStatus = 'pending' | 'ready' | 'dispatched' | 'validating' | 'reviewing' | 'completed' | 'failed' | 'blocked'
 export type Outcome = 'succeeded' | 'failed'
@@ -84,6 +85,10 @@ export interface CheckResult {
   externalUrl?: string
   /** A person let this round go on without this check (C9 `skip-check`); its status is `not-run` */
   skipped?: true
+  /** The check ran outside any sandbox although the Task's workers were sandboxed: Claude Code on Windows has no sandbox,
+   *  only deny rules for its file tools, so its workers' shells, and with them this check, run as the person (Task K,
+   *  the person's Q1). Shown beside the verdict. */
+  outsideSandbox?: true
 }
 
 export type ReviewSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info'
@@ -531,6 +536,10 @@ export interface Dispatch {
   /** The agent profile this worker was started as (Agent Profiles design §6): its Task's, or for a lifecycle Task the
    *  one borrowed with the accounts (`workerProfileOf`). A reviewer's Dispatch has none. */
   agentProfileId?: string
+  /** The protection the session this Dispatch started actually ran in (SessionInfo.sandboxKind), recorded when it
+   *  starts: `sandbox` its CLI's own, `deny-only` Claude Code on Windows. Absent when it ran unsandboxed, or for a
+   *  Dispatch from before Task K. A Task's checks run in the same kind (exec/checkSandbox.ts checkSandboxOf). */
+  sandboxKind?: SandboxKind
   /**
    * The reset time (epoch ms) for when this Dispatch was judged to have ended at a usage limit.
    * The app derives it from transcript/rollout signals and fills it in — the orchestrator does not

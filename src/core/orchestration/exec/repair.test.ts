@@ -231,6 +231,21 @@ describe('performRepair', () => {
       else expect(deps.started[0]).not.toHaveProperty('agentProfileId')
     }
   })
+  // Task K: a repair records the protection its worker ran in, as every attempt does: a fresh one its spawn's, one typed
+  // into the session that did the work that session's
+  it('records the protection the repair worker ran in, fresh or in the same session', async () => {
+    const { s, taskId, implId } = validating()
+    const boxed = { ...s, dispatches: s.dispatches.map((d) => (d.id === implId ? { ...d, sandboxKind: 'sandbox' as const } : d)) }
+    for (const alive of [false, true]) {
+      const judged = unwrap<Task>(applyValidationResult(boxed, { taskId, results: failing, repair: repairTargetFor(boxed, taskId, () => alive)! }, NOW) as never)
+      const deps = makeDeps(judged.state, {
+        startWorker: async (a) => ({ sessionId: a.terminal ?? 'sess-new', cwd: 'D:/wt', specPath: 'C:/specs/r.md', ...(a.terminal ? {} : { sandboxKind: 'sandbox' as const }) })
+      })
+      const repair = judged.state.dispatches.find((d) => d.repair)!
+      await performRepair(deps, { dispatchId: repair.id })
+      expect(deps.box.state.dispatches.find((d) => d.id === repair.id), String(alive)).toMatchObject({ sandboxKind: 'sandbox' })
+    }
+  })
   it('워커를 못 띄우면 Dispatch 를 지우고 Gate 다', async () => {
     const { s, taskId } = validating()
     const judged = unwrap<Task>(applyValidationResult(s, { taskId, results: failing, repair: repairTargetFor(s, taskId, () => true)! }, NOW) as never)

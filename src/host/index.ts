@@ -518,7 +518,10 @@ async function main(): Promise<void> {
     // Host journal (A19 lifted): the prompt rows of the workers this Host starts, read against its state.
     onPromptWrite: (e) => hostJournal.promptWrite(e, orch.state()),
     // Agent Profiles design §5: a spawn from a profile stamps its use through the Host's own command
-    touchAgentProfile: (id) => touchAgentProfile(id)
+    touchAgentProfile: (id) => touchAgentProfile(id),
+    // Task K: a sandboxed Claude Task's check runs under srt through the runner bundled beside this Host (out/main), on
+    // macOS and Linux, where the Host runs as the app's Electron
+    checkRunnerPath: path.join(__dirname, 'sandbox-check.js')
   })
 
   // R10: the one read that may heal a damaged worktrees.json, done once — and only when the Host

@@ -36,6 +36,8 @@ export function CompletionChecks({
             <span className="detail-completion-verdict">
               {checkVerdict(c, t)}
               {c.unstable === true && ` · ${t('jobs.convergence.check.unstable')}`}
+              {/* Claude Code on Windows has no sandbox: its checks ran outside one (Task K, the person's Q1) */}
+              {c.outsideSandbox === true && ` · ${t('jobs.checks.outsideSandbox')}`}
             </span>
             {link !== undefined && (
               <button className="detail-completion-more" title={link} onClick={() => onOpenLink(link)}>

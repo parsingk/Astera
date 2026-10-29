@@ -201,6 +201,13 @@ describe('sandboxUnavailable', () => {
       expect(forcedSandboxBlocker(provider, platform), `${provider} ${platform}`).toBeNull()
   })
 
+  // Task K: a sandboxed Claude Task's check is refused where srt cannot run a command, and where Ubuntu's AppArmor profile
+  // confines bubblewrap; each in words the app has (the check-unavailable question carries them)
+  it('says why a Claude check could not be put in its sandbox', () => {
+    expect(sandboxRefusalMessage('SANDBOX_UNAVAILABLE: runtime-missing claude')).toEqual({ key: 'session.spawn.sandbox.runtimeMissing', params: { cli: 'Claude Code' } })
+    expect(sandboxRefusalMessage('Error: SANDBOX_UNAVAILABLE: userns-restricted claude')).toEqual({ key: 'session.spawn.sandbox.usernsRestricted', params: { cli: 'Claude Code' } })
+  })
+
   // Final fix pass, part 2 (A): a sandboxed caller handing work to a session, Job or Task outside its sandbox is refused
   // (`outside-sandbox <session|job|task> <id>`, the command layer's), in words the app has, naming what it is
   it('words a refusal of work outside the sandbox, with what it names', () => {

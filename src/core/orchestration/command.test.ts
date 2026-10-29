@@ -2319,6 +2319,23 @@ describe('handleCommand — worker-start × OrchCoordinator 통합 배선', () =
     expect(writes).toContain(sessionId)
   })
 
+  // Task K: the protection the worker's session started in is on its Dispatch, and a reuse of that session (--terminal)
+  // records the same; a Task's checks follow it (exec/checkSandbox.ts)
+  it('records on the Dispatch the protection its session started in, and a reused session keeps it', async () => {
+    const deps = makeWiredDeps({ spawnSession: async () => ({ id: 'sess1', sandboxKind: 'sandbox' as const }) })
+    const first = await seedTask(deps)
+    const sessionId = await finishOnce(deps, first)
+    expect(deps.getState().dispatches[0]).toMatchObject({ sessionId, sandboxKind: 'sandbox' })
+    const next = await call(deps, 'task-create', { account: 'acc1', runId: runOf(deps, first), title: 'n', spec: 's' })
+    const r = await call(deps, 'worker-start', { taskId: (next.body as { id: string }).id, agent: 'codex', account: 'acc1', worktree: 'current', terminal: sessionId })
+    expect(r.status).toBe(200)
+    expect(deps.getState().dispatches[1]).toMatchObject({ sessionId, sandboxKind: 'sandbox' })
+    // An unsandboxed start records nothing
+    const plain = makeWiredDeps()
+    await finishOnce(plain, await seedTask(plain))
+    expect(plain.getState().dispatches[0]).not.toHaveProperty('sandboxKind')
+  })
+
   it('다른 회차의 세션은 --terminal 로 다시 쓸 수 없다 — 403, 아무것도 타이핑하지 않는다', async () => {
     const writes: string[] = []
     const deps = makeWiredDeps({ writeToSession: (id) => void writes.push(id) })

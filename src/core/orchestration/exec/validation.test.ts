@@ -12,6 +12,7 @@ import { createTaskValidation, type ValidationContext } from './validation'
 import { applyWorkerDone, createJob, createTask, emptyState, openDispatch, startJobRun, type OrchState } from '../state'
 import { CHECK_TIMEOUT_MS, type CheckResult } from '../types'
 import type { StartOpts } from '../../run/runManager'
+import type { RunConfig } from '../../run/config'
 import type { CompletionCheckInput, PluginCheckAnswer } from '../pluginChecks'
 
 const NOW = '2026-09-24T00:00:00.000Z'
@@ -44,6 +45,14 @@ interface RigOpts {
   pluginCheck?: (plugin: string, input: CompletionCheckInput) => Promise<PluginCheckAnswer>
   /** The Host command a round reaching github:ci calls (GitHub lifecycle G3a); absent when left out. */
   lifecycleCiBegin?: ValidationContext['lifecycleCiBegin']
+  /** The kind the rig's attempt ran in (Task K), and its CLI ('claude' when left out) */
+  sandboxKind?: 'sandbox' | 'deny-only'
+  provider?: 'claude' | 'codex'
+  /** The saved configurations of the project; none when left out */
+  stored?: RunConfig[]
+  /** ValidationContext's checkEnv and sandboxedCheck (Task K); absent when left out */
+  checkEnv?: ValidationContext['checkEnv']
+  sandboxedCheck?: ValidationContext['sandboxedCheck']
 }
 
 function rig(o: RigOpts = {}) {
@@ -99,6 +108,10 @@ function rig(o: RigOpts = {}) {
   ).state
   const taskId = t.value.id
   if (state.tasks.find((x) => x.id === taskId)?.status !== 'validating') throw new Error('rig: not validating')
+  if (o.sandboxKind || o.provider) {
+    const kind = o.sandboxKind ? { sandboxKind: o.sandboxKind } : {}
+    state = { ...state, dispatches: state.dispatches.map((x) => (x.id === d.value.id ? { ...x, ...kind, provider: o.provider ?? x.provider } : x)) }
+  }
   if (o.checkResume) {
     const checkResume = { ...o.checkResume, dispatchId: o.checkResume.dispatchId ?? d.value.id }
     state = { ...state, tasks: state.tasks.map((x) => (x.id === taskId ? { ...x, checkResume } : x)) }
@@ -121,7 +134,7 @@ function rig(o: RigOpts = {}) {
     lang: () => 'en',
     log: (m) => logs.push(m),
     assertAllowedPath: o.guard ?? (async (p) => p),
-    storedConfigs: () => [],
+    storedConfigs: () => o.stored ?? [],
     runs: {
       start: (opts) => {
         startedOpts.push(opts)
@@ -145,7 +158,9 @@ function rig(o: RigOpts = {}) {
       pluginAsks.push({ plugin, input })
       return o.pluginCheck ? o.pluginCheck(plugin, input) : { name: plugin.toUpperCase(), status: 'passed', summary: 'passed' }
     },
-    ...(o.lifecycleCiBegin ? { lifecycleCiBegin: o.lifecycleCiBegin } : {})
+    ...(o.lifecycleCiBegin ? { lifecycleCiBegin: o.lifecycleCiBegin } : {}),
+    ...(o.checkEnv ? { checkEnv: o.checkEnv } : {}),
+    ...(o.sandboxedCheck ? { sandboxedCheck: o.sandboxedCheck } : {})
   }
   const validation = createTaskValidation(ctx)
 
@@ -681,5 +696,107 @@ describe('createTaskValidation — a lifecycle round that is no longer needed', 
     expect(w.begun).toEqual([])
     expect(w.state().gates).toEqual([])
     expect(w.validation.validator.holds('tsk_l')).toBe(false)
+  })
+})
+
+// Task K: the checks of a Task whose workers ran sandboxed run inside the same kind of sandbox, under the worker's CLI and
+// account (the wiring builds the launch from the session manager's own builders); every check starts from the environment
+// the Credentials list's hiding leaves (Q5); a sandbox that cannot be put around a check is a question to a person, never a
+// silent run outside it nor the code's failure (E5); a Docker check of a sandboxed Task is refused (Q4); and Claude Code
+// on Windows, which has no sandbox, runs its checks as today and says so (Q1).
+describe('createTaskValidation — the sandbox of a sandboxed Task (Task K)', () => {
+  const hidden = (cwd: string): NodeJS.ProcessEnv => ({ PATH: '/bin', HIDDEN_FOR: cwd })
+
+  it('starts the check of a sandboxed attempt in its sandbox, as its CLI and account, from the hidden environment', async () => {
+    const asked: Parameters<NonNullable<ValidationContext['sandboxedCheck']>>[0][] = []
+    const h = rig({
+      sandboxKind: 'sandbox',
+      provider: 'codex',
+      checkEnv: hidden,
+      sandboxedCheck: async (a) => (asked.push(a), { launch: { file: 'codex', args: ['sandbox', '--', 'sh', '-c', a.command] }, env: { ...a.env, BOXED: '1' } })
+    })
+    h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    const opts = await h.started()
+    expect(asked).toEqual([{ provider: 'codex', accountId: 'accA', cwd: h.cwd, command: opts.command, env: hidden(h.cwd) }])
+    expect(opts.launch).toEqual({ file: 'codex', args: ['sandbox', '--', 'sh', '-c', opts.command] })
+    expect(opts.env).toEqual({ ...hidden(h.cwd), BOXED: '1' })
+    expect(opts.validation).toBe(true)
+    await h.finish(0)
+    expect(h.task().status).toBe('completed')
+    expect(h.task().checks?.[0]).not.toHaveProperty('outsideSandbox')
+  })
+
+  it('a sandbox that cannot be put around the check asks a person and runs nothing (E5)', async () => {
+    const why = 'the Windows sandbox of account accA is not set up'
+    const answers: NonNullable<ValidationContext['sandboxedCheck']>[] = [async () => ({ unavailable: why }), async () => Promise.reject(new Error(why))]
+    for (const sandboxedCheck of answers) {
+      const h = rig({ sandboxKind: 'sandbox', provider: 'codex', checkEnv: hidden, sandboxedCheck })
+      h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
+      await vi.waitFor(() => expect(h.task().status).toBe('blocked'))
+      expect(h.runsStarted()).toBe(0)
+      const gate = h.state().gates.find((g) => g.taskId === h.taskId && g.status === 'open')
+      expect(gate?.kind).toBe('check-unavailable')
+      expect(gate?.question).toContain(why)
+      expect(h.task().checks?.[0]).toMatchObject({ status: 'error', summary: why })
+    }
+  })
+
+  it("a sandbox refusal reads in the app's words, and points the person at the setup", async () => {
+    const h = rig({ sandboxKind: 'sandbox', provider: 'codex', sandboxedCheck: async () => Promise.reject(new Error('SANDBOX_UNAVAILABLE: windows-setup codex accA')) })
+    h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    await vi.waitFor(() => expect(h.task().status).toBe('blocked'))
+    expect(h.task().checks?.[0]?.summary).toBe("This Codex account has no Windows sandbox set up yet. Set up shows Windows' administrator prompt once. Codex records the elevated sandbox as this account's default.")
+  })
+
+  it('a process that cannot put checks in a sandbox does not run a sandboxed Task check outside it', async () => {
+    const h = rig({ sandboxKind: 'sandbox', provider: 'codex' })
+    h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    await vi.waitFor(() => expect(h.task().status).toBe('blocked'))
+    expect(h.runsStarted()).toBe(0)
+    expect(h.task().checks?.[0]?.status).toBe('error')
+  })
+
+  it('refuses a Docker check of a sandboxed Task with a plain reason (Q4)', async () => {
+    const docker = [
+      { id: 'up', name: 'compose up', type: 'compose', action: 'up' },
+      { id: 'img', name: 'image', type: 'dockerfile', imageTag: 'x' }
+    ] as unknown as RunConfig[]
+    for (const id of ['up', 'img']) {
+      const sandboxedCheck = vi.fn(async () => ({ launch: { file: 'codex', args: [] as string[] }, env: {} }))
+      const h = rig({ sandboxKind: 'sandbox', provider: 'codex', stored: docker, checks: [id], sandboxedCheck })
+      h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
+      await vi.waitFor(() => expect(h.task().status).toBe('blocked'))
+      expect(h.runsStarted()).toBe(0)
+      expect(sandboxedCheck).not.toHaveBeenCalled()
+      expect(h.task().checks?.[0]?.summary).toMatch(/Docker/)
+    }
+    // An unsandboxed Task runs it as before
+    const plain = rig({ stored: docker, checks: ['up'] })
+    plain.validation.startValidation({ taskId: plain.taskId, cwd: plain.cwd })
+    expect((await plain.started()).command).toContain('docker compose')
+    await plain.finish(0)
+  })
+
+  it('Claude Code on Windows: runs the check as today, from the hidden environment, and says it ran outside the sandbox (Q1)', async () => {
+    const sandboxedCheck = vi.fn(async () => ({ unavailable: 'never asked' }))
+    const h = rig({ sandboxKind: 'deny-only', checkEnv: hidden, sandboxedCheck })
+    h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    const opts = await h.started()
+    expect(opts.launch).toBeUndefined()
+    expect(opts.env).toEqual(hidden(h.cwd))
+    await h.finish(0)
+    expect(sandboxedCheck).not.toHaveBeenCalled()
+    expect(h.task().status).toBe('completed')
+    expect(h.task().checks?.[0]).toMatchObject({ status: 'passed', outsideSandbox: true })
+  })
+
+  it('an unsandboxed Task check starts from the hidden environment too (Q5), and is not marked', async () => {
+    const h = rig({ checkEnv: hidden })
+    h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    const opts = await h.started()
+    expect(opts.launch).toBeUndefined()
+    expect(opts.env).toEqual(hidden(h.cwd))
+    await h.finish(0)
+    expect(h.task().checks?.[0]).not.toHaveProperty('outsideSandbox')
   })
 })

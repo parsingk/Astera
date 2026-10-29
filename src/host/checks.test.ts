@@ -46,6 +46,10 @@ interface RigOpts {
   killsHang?: boolean
   /** HostChecksDeps.foreignKillWaitMs. */
   foreignKillWaitMs?: number
+  /** Task K: the kind the implementation attempt ran in, and HostChecksDeps.checkEnv and checkLaunch */
+  sandboxKind?: 'sandbox' | 'deny-only'
+  checkEnv?: (base: NodeJS.ProcessEnv, cwd: string) => NodeJS.ProcessEnv
+  checkLaunch?: (a: { accountId: string; cwd: string; command: string }) => Promise<{ file: string; args: string[] | string; env: Record<string, string> }>
 }
 
 async function rig(o: RigOpts = {}) {
@@ -78,6 +82,10 @@ async function rig(o: RigOpts = {}) {
   let state = unwrap(applyWorkerDone(d.state, { taskId: t.value.id, dispatchId: d.value.id, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never).state
   const taskId = t.value.id
   if (state.tasks.find((x) => x.id === taskId)?.status !== 'validating') throw new Error('rig: not validating')
+  if (o.sandboxKind) {
+    const sandboxKind = o.sandboxKind
+    state = { ...state, dispatches: state.dispatches.map((x) => (x.id === d.value.id ? { ...x, sandboxKind } : x)) }
+  }
   if (o.openRepair)
     state = {
       ...state,
@@ -89,7 +97,7 @@ async function rig(o: RigOpts = {}) {
 
   const logs: string[] = []
   const sent: HostMessage[] = []
-  const spawned: Array<{ opts: { env: Record<string, string | undefined> }; pty: FakePty }> = []
+  const spawned: Array<{ file: string; args: string[] | string; opts: { env: Record<string, string | undefined> }; pty: FakePty }> = []
   /** The pids a stop reached, by either of RunManager's routes: the tree kill (win32) or pty.kill(). */
   const killed: number[] = []
   /** A killed pty ends as a killed process would, with a non-zero code — a failure unless marked. */
@@ -101,7 +109,7 @@ async function rig(o: RigOpts = {}) {
     if (p) setTimeout(() => p.exit(1), 5)
   }
   const registry = new PtyRegistry({
-    spawn: (_file, _args, opts) => {
+    spawn: (file, args, opts) => {
       let onExit: (e: { exitCode: number }) => void = () => {}
       const pty: FakePty = {
         pid: 2000 + spawned.length,
@@ -110,7 +118,7 @@ async function rig(o: RigOpts = {}) {
         write() {}, resize() {}, kill: () => endKilled(pty.pid), pause() {}, resume() {},
         exit: (c) => onExit({ exitCode: c })
       }
-      spawned.push({ opts, pty })
+      spawned.push({ file, args, opts, pty })
       if (o.exitEarly !== undefined) {
         const code = o.exitEarly
         queueMicrotask(() => pty.exit(code))
@@ -144,7 +152,9 @@ async function rig(o: RigOpts = {}) {
     now: () => NOW,
     // Never a real taskkill: the fake pids are numbers some real process may hold.
     killRunner: (cmd) => endKilled(Number(cmd.args[cmd.args.indexOf('/pid') + 1])),
-    ...(o.foreignKillWaitMs !== undefined ? { foreignKillWaitMs: o.foreignKillWaitMs } : {})
+    ...(o.foreignKillWaitMs !== undefined ? { foreignKillWaitMs: o.foreignKillWaitMs } : {}),
+    ...(o.checkEnv ? { checkEnv: o.checkEnv } : {}),
+    ...(o.checkLaunch ? { checkLaunch: o.checkLaunch } : {})
   })
   if (o.onRunExitThrows)
     vi.spyOn(checks._validator, 'onRunExit').mockImplementation(() => {
@@ -183,7 +193,11 @@ async function rig(o: RigOpts = {}) {
     },
     killed: () => killed,
     lastPid: () => ours().at(-1)!.pty.pid,
-    spawnedEnv: () => ours().at(-1)?.opts.env as Record<string, string | undefined>
+    spawnedEnv: () => ours().at(-1)?.opts.env as Record<string, string | undefined>,
+    spawnedLaunch: () => {
+      const last = ours().at(-1)
+      return last ? { file: last.file, args: last.args } : undefined
+    }
   }
 }
 
@@ -210,6 +224,42 @@ describe('createHostChecks', () => {
     expect(h.spawnedEnv()).toMatchObject({ KEEP_ME: 'y' })
     expect(h.spawnedEnv().ELECTRON_RUN_AS_NODE).toBeUndefined()
     expect(h.spawnedEnv().ASTERA_HOST_PROFILE_DIR).toBeUndefined()
+  })
+
+  // Task K (the person's Q5): every check starts without what the Credentials list hides there, from the Host's own
+  // environment as before
+  it('starts every validation from the Host’s env with the Credentials list’s hiding for its folder', async () => {
+    const h = await rig({
+      env: { PATH: process.env.PATH, ELECTRON_RUN_AS_NODE: '1', SECRET_TOKEN: 's' },
+      checkEnv: (base, cwd) => {
+        const { SECRET_TOKEN: _hidden, ...rest } = base
+        return { ...rest, HIDDEN_IN: cwd }
+      }
+    })
+    h.checks.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    await vi.waitFor(() => expect(h.spawnedEnv()).toBeDefined())
+    expect(h.spawnedEnv()).toMatchObject({ HIDDEN_IN: h.cwd })
+    expect(h.spawnedEnv().SECRET_TOKEN).toBeUndefined()
+    expect(h.spawnedEnv().ELECTRON_RUN_AS_NODE).toBeUndefined()
+  })
+
+  // Task K: a check of a Task whose worker ran sandboxed starts as the spawner's session manager builds it, for the
+  // attempt's account in its folder; one that cannot be built is a question, and nothing opens
+  it('starts a sandboxed Task’s check as the session manager launches it, as the attempt’s account', async () => {
+    const asked: Array<{ accountId: string; cwd: string; command: string }> = []
+    const h = await rig({
+      sandboxKind: 'sandbox',
+      checkLaunch: async (a) => (asked.push(a), { file: 'codex', args: ['sandbox', '--', 'sh', '-c', a.command], env: { BOXED: '1' } })
+    })
+    h.checks.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    await vi.waitFor(() => expect(h.opened()).toHaveLength(1))
+    expect(asked).toEqual([{ accountId: 'acc_fake', cwd: h.cwd, command: expect.stringContaining('run test') }])
+    expect(h.spawnedLaunch()).toEqual({ file: 'codex', args: ['sandbox', '--', 'sh', '-c', asked[0].command] })
+    expect(h.spawnedEnv()).toMatchObject({ BOXED: '1' })
+    const refused = await rig({ sandboxKind: 'sandbox', checkLaunch: async () => Promise.reject(new Error('SANDBOX_UNAVAILABLE: runtime-missing claude')) })
+    refused.checks.startValidation({ taskId: refused.taskId, cwd: refused.cwd })
+    await vi.waitFor(() => expect(refused.task().status).toBe('blocked'))
+    expect(refused.opened()).toHaveLength(0)
   })
 
   it('a cwd outside the Host’s guard is a Gate, and no pty opens (R10)', async () => {

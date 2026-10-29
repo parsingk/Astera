@@ -532,6 +532,15 @@ describe('knowledgeIn', () => {
 })
 
 describe('OrchCoordinator.startWorker', () => {
+  // Task K: what the session actually ran in comes back with it, for its Dispatch to record (a Task's checks follow it)
+  it('hands back the protection the started session runs in, and none for an unsandboxed one', async () => {
+    const deps = makeDeps()
+    deps.spawnSession = async (o) => (deps.spawned.push(o), { id: 'boxed', sandboxKind: 'sandbox' as const })
+    expect(await new OrchCoordinator(deps).startWorker({ ...baseArgs(), runCwd: dir })).toMatchObject({ sessionId: 'boxed', sandboxKind: 'sandbox' })
+    const plain = await new OrchCoordinator(makeDeps()).startWorker({ ...baseArgs('dsp_2'), runCwd: dir })
+    expect(plain).not.toHaveProperty('sandboxKind')
+  })
+
   it('세션을 띄우고 spec 파일을 쓴다', async () => {
     const deps = makeDeps()
     const co = new OrchCoordinator(deps)

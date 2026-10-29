@@ -1172,6 +1172,17 @@ or started. A message or a question in a run (`send`, `ask`) is open to a worker
 Astera started for it; from any other sandboxed session it is refused with `outside-sandbox job <id>` unless the
 run's Job is a sandboxed session's. A sandboxed target is not refused, and a worker's `send` and `ask` in its own run
 stay open whoever its coordinator is.
+A Task's checks (`--validate`) run in the same kind of sandbox its workers ran in, since they run the files the workers
+edited (a package script, a test, a build file). The kind is the one each attempt's session actually started with, kept
+on its Dispatch; a lifecycle Task's merged check follows the latest sandboxed Dispatch of its Run. A Codex worker's check
+runs as `codex sandbox` with the session's own permission profile, as that account; a Claude Code worker's, on macOS and
+Linux, under the sandbox runtime Claude Code builds its sandbox on (`@anthropic-ai/sandbox-runtime` 0.0.79, through
+Astera's own runner, network allowed as in the session). A check whose sandbox cannot be put around it (the account's
+Windows sandbox not set up, the runtime missing a tool, Ubuntu's AppArmor profile for bubblewrap) is not run outside it
+and is not the code's failure: the Task asks a person (retry, skip the check, or mark the Task failed). A Docker check
+(`compose`, `dockerfile`) of a sandboxed Task is refused that way too, since Docker reaches past any of these sandboxes.
+Claude Code on Windows has no sandbox, so its checks run as before and say `validated outside the sandbox`. Every check,
+sandboxed or not, starts without the variables the Credentials list hides from a session in its folder.
 On Windows the Codex sandbox is Codex's elevated one, which keeps Credential Manager out, and the repository is named a
 safe directory for the account it runs as; a repository, a home folder or one of Astera's own folders whose path holds
 a character cmd.exe reads as syntax (`" & | < > ^ %`) cannot be carried to it. Each Codex account's home must have the

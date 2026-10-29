@@ -734,3 +734,48 @@ describe('TaskValidator — github:ci', () => {
     expect(failing.holds('tsk_l')).toBe(false)
   })
 })
+
+// Task K: a check of a sandboxed Task that its sandbox cannot be put around is not run outside it, and is not the code's
+// fault either (rule E5): the runner says so, and the round settles with that check as one that could not be made, which
+// the verdict puts to a person (retry, skip, mark failed). A check that ran outside any sandbox although its workers were
+// sandboxed (Claude Code on Windows, the person's Q1) says so in its result.
+describe('TaskValidator — the sandbox of a sandboxed Task (Task K)', () => {
+  it('a check that cannot be put in the sandbox settles the round as could-not-be-made, the rest not run, nothing started', async () => {
+    const { onSettled, calls } = settledCalls()
+    const cannot = vi.fn(async () => {})
+    const runner: ValidatorRunner = {
+      start: async (a) => ({ unavailable: 'the Windows sandbox of account acc1 is not set up', name: a.configId.toUpperCase() }),
+      output: () => '',
+      stop: () => {}
+    }
+    const v = new TaskValidator({ runner, onSettled, onCannotRun: cannot })
+    v.enqueue({ taskId: 'tsk_1', cwd: absPath('w1'), configIds: ['cfg1', 'cfg2'] })
+    await vi.waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].results).toEqual([
+      expect.objectContaining({ configId: 'cfg1', name: 'CFG1', status: 'error', summary: 'the Windows sandbox of account acc1 is not set up' }),
+      { configId: 'cfg2', name: 'cfg2', status: 'not-run' }
+    ])
+    expect(cannot).not.toHaveBeenCalled()
+    expect(v.holds('tsk_1')).toBe(false)
+  })
+
+  it('a check that ran outside any sandbox for sandboxed workers says so in its result, and the next one only if it did too', async () => {
+    const { onSettled, calls } = settledCalls()
+    let n = 0
+    const runner: ValidatorRunner = {
+      start: async (a) => ({ runId: `run_${++n}`, name: a.configId, ...(n === 1 ? { outsideSandbox: true as const } : {}) }),
+      output: () => '',
+      stop: () => {}
+    }
+    const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
+    v.enqueue({ taskId: 'tsk_1', cwd: absPath('w1'), configIds: ['cfg1', 'cfg2'] })
+    await vi.waitFor(() => expect(n).toBe(1))
+    v.onRunExit({ runId: 'run_1', exitCode: 0 })
+    await vi.waitFor(() => expect(n).toBe(2))
+    v.onRunExit({ runId: 'run_2', exitCode: 1 })
+    await vi.waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].results[0]).toMatchObject({ configId: 'cfg1', status: 'passed', outsideSandbox: true })
+    expect(calls[0].results[1]).toMatchObject({ configId: 'cfg2', status: 'failed' })
+    expect(calls[0].results[1]).not.toHaveProperty('outsideSandbox')
+  })
+})

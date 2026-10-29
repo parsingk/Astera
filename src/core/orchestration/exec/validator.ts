@@ -39,8 +39,14 @@ export interface ValidatorRunner {
    *  longer a place for the result. Throwing would open a Gate and undo the person's decision
    *  (ready/failed -> blocked is allowed by the transition table), so a quiet exit from the queue has
    *  to exist. The judgement sits on this interface because the runner is a closure in ipc.ts that tests
-   *  do not reach — it reports the fact, and this class decides what to do with it. */
-  start(a: { cwd: string; taskId: string; configId: string }): Promise<{ runId: string; name: string } | 'skip'>
+   *  do not reach — it reports the fact, and this class decides what to do with it.
+   *
+   *  **`unavailable` is not a failure either** (Task K, rule E5): the Task's workers ran in a sandbox this check cannot
+   *  be put in (the account's Windows sandbox not set up, the sandbox runtime missing, a Docker check), and it was not
+   *  run outside it. The round settles with it as a check that could not be made, which the verdict puts to a person.
+   *  `outsideSandbox`: it runs outside any sandbox though its workers were sandboxed (Claude Code on Windows, which has
+   *  none), recorded on its result. */
+  start(a: { cwd: string; taskId: string; configId: string }): Promise<{ runId: string; name: string; outsideSandbox?: true } | { unavailable: string; name: string } | 'skip'>
   /** That run's recent output */
   output(runId: string): string
   /** timeout 이 부른다. 이어 오는 exit 는 timed-out 으로 읽힌다 */
@@ -59,6 +65,8 @@ interface Pending {
   runId: string | null
   /** 지금 도는 check 의 RunConfig.name — 결과와 사유 문구에 쓴다 */
   name: string | null
+  /** The check running now runs outside any sandbox though its workers were sandboxed (Task K); set at each start */
+  outsideSandbox: boolean
   startedAt: string | null
   /** Whether this entry's exit is already being settled. The same head's exit can arrive twice —
    *  settling is an await, and a second exit landing inside it still finds the head at the front. This
@@ -131,7 +139,7 @@ export class TaskValidator {
     const configIds = [...new Set(a.configIds)]
     const entry: Pending = {
       taskId: a.taskId, cwd: a.cwd, configIds, index: 0, results: [...(a.done ?? [])],
-      runId: null, name: null, startedAt: null, settling: false, stopped: false,
+      runId: null, name: null, outsideSandbox: false, startedAt: null, settling: false, stopped: false,
       timedOut: false, timedOutOnce: new Set(), erroredOnce: new Set(), timer: null
     }
     const q = this.queues.get(a.cwd)
@@ -228,7 +236,8 @@ export class TaskValidator {
     const passed = a.exitCode === 0
     head.results.push({
       configId, name, status: passed ? 'passed' : 'failed', exitCode: a.exitCode, outputTail: output,
-      startedAt: head.startedAt ?? undefined, endedAt: now
+      startedAt: head.startedAt ?? undefined, endedAt: now,
+      ...(head.outsideSandbox ? { outsideSandbox: true as const } : {})
     })
     if (passed && head.index + 1 < head.configIds.length) {
       // 같은 이유로 runId·name 을 먼저 지운다(위 첫 timeout 자리와 같은 창) — 지우지 않으면 다음
@@ -323,12 +332,15 @@ export class TaskValidator {
     // Carried out of the try so advance is called after it, not inside
     let brokenReason: string | null = null
     let skipped = false
+    /** The sandbox could not be put around this check (Task K): settled as a check that could not be made */
+    let unavailable: { reason: string; name: string } | null = null
     /** This run's exit, if it arrived before the runId below was recorded (earlyExits). */
     let early: { runId: string; exitCode: number } | null = null
     this.startsInFlight++
     try {
       const outcome = await this.deps.runner.start({ cwd, taskId: head.taskId, configId })
       if (outcome === 'skip') skipped = true
+      else if ('unavailable' in outcome) unavailable = { reason: outcome.unavailable, name: outcome.name }
       // **The exit can beat this assignment.** node-pty delivers its exit from the event loop, after this
       // continuation — but a runner may queue it as a microtask inside start (the app's Host pty factory
       // does, for a spawn that never reached the Host), and that microtask runs before this continuation.
@@ -337,6 +349,7 @@ export class TaskValidator {
       else {
         head.runId = outcome.runId
         head.name = outcome.name
+        head.outsideSandbox = outcome.outsideSandbox === true
         head.startedAt = new Date().toISOString()
         head.timer = setTimeout(() => {
           if (head.runId !== outcome.runId || head.settling) return
@@ -375,6 +388,17 @@ export class TaskValidator {
     if (skipped) {
       this.deps.log?.(`validation no longer needed task=${head.taskId} cwd=${cwd}`)
       this.advance(cwd, head)
+      return
+    }
+    if (unavailable !== null) {
+      // As a plugin check that could not be made settles (askPlugin): recorded with its reason, the checks after it not
+      // run, and the verdict (applyValidationResult) asks a person. Not asked again at once: nothing a moment changes
+      // would put the sandbox around it
+      this.deps.log?.(`check "${unavailable.name}" could not be put in the sandbox task=${head.taskId}: ${unavailable.reason}`)
+      const now = new Date().toISOString()
+      head.results.push({ configId, name: unavailable.name, status: 'error', summary: unavailable.reason, startedAt: now, endedAt: now })
+      for (const rest of head.configIds.slice(head.index + 1)) head.results.push({ configId: rest, name: rest, status: 'not-run' })
+      this.settle(cwd, head)
       return
     }
     if (brokenReason !== null) {

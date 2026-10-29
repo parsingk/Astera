@@ -152,6 +152,7 @@ import { JOB_SOURCE, SOURCE_COMMANDS, capturedIssue, createFromContext, sourcesC
 export { JOB_SOURCE } from './commandSources'
 import { pluginIdOfCheck, type CompletionCheckInput, type PluginCheckAnswer } from './pluginChecks'
 import { checkIdsOf, pluginCheckRefusal, tasksOfNextRun } from './commandChecks'
+import { startedSandboxKind } from './exec/checkSandbox'
 
 /** One row of `listAccounts`. Named only because the declaration below is a union and repeating the
  *  shape on both sides invites the two halves to drift. */
@@ -267,6 +268,15 @@ export function keptPhrase(why: 'dirty' | 'unchecked'): string {
     : 'could not be checked (its folder did not answer, or git could not read its status)'
 }
 
+/** What a worker start hands back: its session, its folder and its spec file, and the protection its session runs in
+ *  (Task K), which its Dispatch records (exec/checkSandbox.ts startedSandboxKind). */
+export interface StartedWorker {
+  sessionId: string
+  cwd: string
+  specPath: string
+  sandboxKind?: SandboxKind
+}
+
 export interface OrchServerDeps {
   getState(): OrchState
   /** `rollsBack`: this commit undoes an earlier commit of **the same command**, and the command left
@@ -316,7 +326,7 @@ export interface OrchServerDeps {
     /** Start the worker in its CLI's sandbox whatever profile it names (final fix pass, C3): a sandboxed session asked
      *  for it (`worker-start`). The wiring adds a Task's or Job's own mark (workSandboxed, exec/workerStart.ts). */
     sandbox?: true
-  }): Promise<{ sessionId: string; cwd: string; specPath: string }>
+  }): Promise<StartedWorker>
   releaseWorker(a: { dispatchId: string }): Promise<void>
   /** 그 세션의 롤링 체인을 버린다 — **세션은 죽이지 않는다**(releaseWorker 와 그 점이 다르다).
    *
@@ -4132,7 +4142,7 @@ export async function handleCommand(
       const dispatchId = opened.value.id
       const previousStatus = task.status // value to restore on rollback — the status before openDispatch moved it
 
-      let started: { sessionId: string; cwd: string; specPath: string }
+      let started: StartedWorker
       try {
         started = await deps.startWorker({
           dispatchId,
@@ -4209,7 +4219,7 @@ export async function handleCommand(
         ...latest,
         dispatches: latest.dispatches.map((d) =>
           d.id === dispatchId
-            ? { ...d, sessionId: started.sessionId, cwd: started.cwd, specPath: started.specPath }
+            ? { ...d, sessionId: started.sessionId, cwd: started.cwd, specPath: started.specPath, ...startedSandboxKind(latest, started) }
             : d
         )
       })

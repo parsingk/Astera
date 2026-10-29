@@ -947,6 +947,24 @@ describe('the roll spawn (S6 R5, R6)', () => {
   // and the places Astera writes code or an installer to and runs unsandboxed — the updater cache on every OS, and on
   // Windows the Host runtime and the session-`.cmd` junction — with the app key in the profile still denied. The list is
   // exposed so the Host's chat sessions get the same (rollingWiring), checked by the wiring guard below
+  // Task K: a sandboxed Task's check runs as this spawner's session manager builds it, for the attempt's registered account,
+  // and every check starts without what the Credentials list hides in its folder (Q5)
+  it("launches a sandboxed Codex Task's check as `codex sandbox` for a registered account, and refuses an unknown one", async () => {
+    await fs.writeFile(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
+      { id: 'acc2', label: 'two', configDir: path.join(dir, 'cfg2'), color: '#888', createdAt: NOW, provider: 'codex' }
+    ] }))
+    const h = rig()
+    const launch = await h.spawner!.checkLaunch!({ accountId: 'acc2', cwd: repo, command: 'npm test' })
+    const args = launch.args as string[]
+    expect(args).toContain('sandbox')
+    expect(args.some((a) => a.startsWith('permissions='))).toBe(true)
+    expect(args.slice(args.indexOf('--') + 1)).toEqual(process.platform === 'win32' ? ['cmd.exe', '/d', '/s', '/c', 'npm test'] : ['sh', '-c', 'npm test'])
+    expect(launch.env.npm_config_cache).toBeDefined()
+    expect(launch.env.ELECTRON_RUN_AS_NODE).toBeUndefined()
+    await expect(h.spawner!.checkLaunch!({ accountId: 'gone', cwd: repo, command: 'npm test' })).rejects.toThrow(/gone/)
+    expect(h.spawner!.checkEnv!({ PATH: '/x' }, repo)).toEqual({ PATH: '/x' })
+  })
+
   it("a sandboxed Codex session from the Host keeps read-only the profile and Astera's own run locations", async () => {
     await fs.writeFile(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
       { id: 'acc2', label: 'two', configDir: path.join(dir, 'cfg2'), color: '#888', createdAt: NOW, provider: 'codex' }

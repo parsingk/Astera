@@ -266,6 +266,8 @@ export interface CheckResult {
   readonly externalUrl?: string
   /** A person let the round go on without this check; its status is `not-run`. */
   readonly skipped?: true
+  /** The check ran outside any sandbox though the Task's workers were sandboxed: Claude Code on Windows has none. */
+  readonly outsideSandbox?: true
 }
 
 export interface ReviewIssue {
@@ -401,6 +403,7 @@ export interface CompletionCheckDetail {
   readonly diagnosticsTotal?: number
   readonly externalUrl?: string
   readonly skipped?: true
+  readonly outsideSandbox?: true
 }
 
 export interface CompletionDetail {

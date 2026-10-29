@@ -33,6 +33,9 @@ import { GITHUB_CI_CHECK } from '../../github/lifecycle'
 import { checkInputOf, pluginIdOfCheck, type CompletionCheckInput, type PluginCheckAnswer } from '../pluginChecks'
 import { repairTargetFor } from './repair'
 import { TaskValidator } from './validator'
+import { checkSandboxOf } from './checkSandbox'
+import type { Provider } from '../../providers/meta'
+import { sandboxRefusalMessage } from '../../sandbox/unavailable'
 
 export interface ValidationContext {
   getState(): OrchState
@@ -66,7 +69,24 @@ export interface ValidationContext {
   /** The Host command `lifecycle-ci-begin` (GitHub lifecycle §4): `orch.handle` in the Host, the Host socket from the
    *  app. A round reaching `github:ci` hands its results so far through it. Absent: that entry cannot be run here. */
   lifecycleCiBegin?(a: { taskId: string; done: CheckResult[] }): Promise<{ status: number; body: unknown }>
+  /** The OS: the kind of work a sandboxed session made before Dispatches recorded theirs (checkSandbox.ts). Default
+   *  this process's. */
+  platform?: NodeJS.Platform
+  /** The environment every check starts from (Task K, the person's Q5): this process's, without what the Credentials list
+   *  hides from a session in `cwd`. Absent: the runs' own base. */
+  checkEnv?(cwd: string): NodeJS.ProcessEnv
+  /** How the check of a Task whose workers ran in their CLI's sandbox starts inside that sandbox, as that CLI and account
+   *  in `cwd` (Task K): what to launch in place of `command` through the shell, and the environment it starts from, built
+   *  by the session manager's own sandbox builders from `env`. `unavailable` (or a rejection) when the sandbox cannot be
+   *  put around it here, in words a person reads. Absent: no check of a sandboxed Task can run in this process, and none
+   *  runs outside the sandbox either (rule E5). */
+  sandboxedCheck?(a: { provider: Provider; accountId: string; cwd: string; command: string; env: NodeJS.ProcessEnv | undefined }): Promise<SandboxedCheck>
 }
+/** A sandboxed Task's check as ValidationContext.sandboxedCheck builds it. */
+export type SandboxedCheck = { launch: { file: string; args: string[] | string }; env: NodeJS.ProcessEnv } | { unavailable: string }
+/** Run configuration kinds that reach Docker, which no sandbox here can hold: refused for a sandboxed Task (the person's
+ *  Q4), with a reason rather than a failure. */
+const DOCKER_TYPES: ReadonlySet<string> = new Set(['compose', 'dockerfile'])
 /** A git head, null when there is no baseline, 'unknown' when there may be one the journal could not give. */
 export type CheckpointHead = string | null | 'unknown'
 export interface TaskValidation {
@@ -151,11 +171,39 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
           assertAllowedPath: (p) => c.assertAllowedPath(p),
           t: (key, params) => t(c.lang(), key as MessageKey, params)
         })
+        // Task K: the sandbox the Task's workers ran in (checkSandbox.ts), and the environment every check starts from:
+        // without what the Credentials list hides there (Q5)
+        const sandbox = checkSandboxOf(st, task, c.platform ?? process.platform)
+        const env = c.checkEnv?.(cwd)
         // validation: marks this run as not the user's. The run list and the global badge label it,
         // and run.stop routes markStopped by it (RunStatus.validation). Nothing waits for the user's
         // own runs any more — a validation starts beside them; same-tree validations are serialised
         // by TaskValidator's own queue.
-        const started = c.runs.start({ projectPath: cwd, projectName, config, command, validation: true })
+        if (sandbox?.kind !== 'sandbox') {
+          const started = c.runs.start({ projectPath: cwd, projectName, config, command, validation: true, ...(env ? { env } : {}) })
+          // Claude Code on Windows has no sandbox: its workers' shells ran as the person, and so does this check, said on
+          // its result (the person's Q1)
+          return { runId: started.runId, name: config.name, ...(sandbox?.kind === 'deny-only' ? { outsideSandbox: true as const } : {}) }
+        }
+        // Inside the sandbox the workers ran in, as their CLI and account, or not at all: a check that cannot be put in it
+        // is a question to a person (rule E5), never a run outside it nor the code's failure
+        const lang = c.lang()
+        if (DOCKER_TYPES.has(config.type)) return { unavailable: t(lang, 'jobs.checks.sandbox.docker'), name: config.name }
+        if (!c.sandboxedCheck) return { unavailable: t(lang, 'jobs.checks.sandbox.cannot'), name: config.name }
+        let boxed: SandboxedCheck
+        try {
+          boxed = await c.sandboxedCheck({ provider: sandbox.provider, accountId: sandbox.accountId, cwd, command, env })
+        } catch (e) {
+          // A session manager's refusal (`SANDBOX_UNAVAILABLE: <code>`, unavailable.ts) in the words a start's refusal has
+          const raw = e instanceof Error ? e.message : String(e)
+          const said = sandboxRefusalMessage(raw)
+          boxed = { unavailable: said ? t(lang, said.key, said.params) : raw }
+        }
+        if ('unavailable' in boxed) return { unavailable: boxed.unavailable, name: config.name }
+        // Its preparation reads git and may ask Codex: the Task may have left validating meanwhile (as at the top)
+        const now = c.getState().tasks.find((x) => x.id === taskId)
+        if (!now || now.status !== 'validating' || now.ciWait !== undefined) return 'skip'
+        const started = c.runs.start({ projectPath: cwd, projectName, config, command, validation: true, env: boxed.env, launch: boxed.launch })
         return { runId: started.runId, name: config.name }
       },
       output: (runId) => cutTail(c.runs.recentOutput(runId), 4000),

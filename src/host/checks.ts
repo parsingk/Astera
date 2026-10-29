@@ -118,6 +118,12 @@ export interface HostChecksDeps {
   /** `lifecycle-ci-begin` through the Host's own door (GitHub lifecycle §4): a round reaching `github:ci` hands its
    *  results so far to it. */
   lifecycleCiBegin?(a: { taskId: string; done: CheckResult[] }): Promise<{ status: number; body: unknown }>
+  /** The environment a check in `cwd` starts from (Task K, the person's Q5): `base` without what the Credentials list
+   *  hides there; the spawner's session manager (SessionManager.checkEnv). Absent: `base` as is. */
+  checkEnv?(base: NodeJS.ProcessEnv, cwd: string): NodeJS.ProcessEnv
+  /** A sandboxed Task's check inside its workers' sandbox, as the attempt's account (Task K); the spawner's session manager
+   *  (SessionManager.checkLaunch). Rejects with a sandbox refusal. Absent: such a check is not run (E5). */
+  checkLaunch?(a: { accountId: string; cwd: string; command: string }): Promise<{ file: string; args: string[] | string; env: Record<string, string> }>
 }
 
 /** The OS locale as node reports it — what the app's `app.getLocale()` stands in for (R13). */
@@ -283,7 +289,19 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
     pluginCheck: (plugin, input) =>
       d.deps().completionChecks?.run(plugin, input) ?? Promise.resolve({ name: plugin, ...unavailable('this Host runs no plugin checks') }),
     // GitHub CI (GitHub lifecycle §4): this Host's own command, under its own caller
-    ...(d.lifecycleCiBegin ? { lifecycleCiBegin: d.lifecycleCiBegin } : {})
+    ...(d.lifecycleCiBegin ? { lifecycleCiBegin: d.lifecycleCiBegin } : {}),
+    // Task K: a check starts from the Host's environment (D4, R11) without what the Credentials list hides there (Q5), and
+    // a sandboxed Task's inside its workers' sandbox, as the session manager builds it
+    platform: d.platform,
+    ...(d.checkEnv ? { checkEnv: (cwd: string) => d.checkEnv!(hostWorkerBaseEnv(d.env), cwd) } : {}),
+    ...(d.checkLaunch
+      ? {
+          sandboxedCheck: async (a: { accountId: string; cwd: string; command: string }) => {
+            const l = await d.checkLaunch!({ accountId: a.accountId, cwd: a.cwd, command: a.command })
+            return { launch: { file: l.file, args: l.args }, env: l.env }
+          }
+        }
+      : {})
   })
 
   // The Host's twin of the app's `core.run.onStatus` hook (ipc.ts): a run pty this manager started has

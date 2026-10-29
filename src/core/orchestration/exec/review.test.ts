@@ -46,6 +46,9 @@ interface RigOpts {
   startFails?: string
   /** The Task runs as this agent profile */
   agentProfileId?: string
+  /** The protection the implementer's session ran in, and the one the reviewer's starts in (Task K) */
+  implSandboxKind?: 'sandbox' | 'deny-only'
+  reviewerSandboxKind?: 'sandbox' | 'deny-only'
 }
 
 type StartArgs = Parameters<ReviewContext['startWorker']>[0]
@@ -89,6 +92,10 @@ function rig(o: RigOpts) {
   // 사람이 세운 회차(runs stop) — runGatedForTask 가 읽는 칸이다.
   if (o.convergenceNull) state = { ...state, jobs: state.jobs.map((j) => ({ ...j, convergence: null as never })) }
   if (o.runPaused) state = { ...state, runs: state.runs.map((r) => ({ ...r, paused: true })) }
+  if (o.implSandboxKind) {
+    const sandboxKind = o.implSandboxKind
+    state = { ...state, dispatches: state.dispatches.map((x) => (x.id === d.value.id ? { ...x, sandboxKind } : x)) }
+  }
 
   const history: OrchState[] = []
   const logs: string[] = []
@@ -98,7 +105,7 @@ function rig(o: RigOpts) {
     committed = state.dispatches.some((x) => x.id === a.dispatchId)
     specFileContent = a.specFileContent
     if (o.startFails !== undefined) throw new Error(o.startFails)
-    return { sessionId: 's-review', cwd: a.runCwd, specPath: path.join(specsDir, 'x.md') }
+    return { sessionId: 's-review', cwd: a.runCwd, specPath: path.join(specsDir, 'x.md'), ...(o.reviewerSandboxKind ? { sandboxKind: o.reviewerSandboxKind } : {}) }
   })
 
   const ctx: ReviewContext = {
@@ -262,6 +269,14 @@ describe('createReviewStarter', () => {
     // Committed before the spawn: the Dispatch named in the call already existed.
     expect(h.committedBeforeSpawn()).toBe(true)
     expect(h.state().dispatches.find((d) => d.id === a.dispatchId)?.sessionId).toBe('s-review')
+  })
+
+  // Task K: the reviewer's Dispatch records the protection its session started in, as every attempt's does
+  it("records on the reviewer's Dispatch the protection its session started in", async () => {
+    const h = rig({ accounts: [claude('c1'), codex('x1')], loggedIn: ['c1', 'x1'], reviewerSandboxKind: 'sandbox' })
+    await h.start({ taskId: h.taskId })
+    const a = h.startWorker.mock.calls[0][0]
+    expect(h.state().dispatches.find((d) => d.id === a.dispatchId)).toMatchObject({ sessionId: 's-review', sandboxKind: 'sandbox' })
   })
 
   // Agent Profiles design §6: a reviewer is Astera's own role, not the person's agent

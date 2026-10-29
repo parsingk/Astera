@@ -27,6 +27,8 @@ export interface CompletionCheckDetail {
   diagnosticsTotal?: number
   externalUrl?: string
   skipped?: true
+  /** Ran outside any sandbox though the Task's workers were sandboxed (CheckResult.outsideSandbox, Task K) */
+  outsideSandbox?: true
 }
 
 export interface CompletionDetail {
@@ -60,7 +62,8 @@ export function completionDetailOf(task: Task): CompletionDetail | null {
     ...(c.diagnostics !== undefined ? { diagnostics: c.diagnostics } : {}),
     ...(c.diagnosticsTotal !== undefined ? { diagnosticsTotal: c.diagnosticsTotal } : {}),
     ...(c.externalUrl !== undefined ? { externalUrl: c.externalUrl } : {}),
-    ...(c.skipped ? { skipped: true as const } : {})
+    ...(c.skipped ? { skipped: true as const } : {}),
+    ...(c.outsideSandbox ? { outsideSandbox: true as const } : {})
   }))
   const issues = task.reviewIssues ?? []
   const blockingIssues = issues.filter((i) => i.blocking)

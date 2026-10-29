@@ -112,6 +112,10 @@ export function composeHostDriving(a: {
     now: () => a.now(),
     retiring: () => disposed,
     lifecycleCiBegin: (args) => a.orch().handle('lifecycle-ci-begin', args),
+    // Task K: a check starts without what the Credentials list hides (Q5), and a sandboxed Task's inside its workers'
+    // sandbox, as the spawner's session manager builds them
+    ...(a.spawner.checkEnv ? { checkEnv: a.spawner.checkEnv } : {}),
+    ...(a.spawner.checkLaunch ? { checkLaunch: a.spawner.checkLaunch } : {}),
     ...(a.killRunner ? { killRunner: a.killRunner } : {})
   })
 

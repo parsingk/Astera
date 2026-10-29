@@ -26,7 +26,10 @@ export default defineConfig({
           index: 'src/main/index.ts',
           cli: 'src/cli/index.ts',
           host: 'src/host/index.ts',
-          'plugin-host': 'src/pluginHost/index.ts'
+          'plugin-host': 'src/pluginHost/index.ts',
+          // A sandboxed Claude Task's check under srt (Task K, core/sandbox/srtCheck.ts), run by the app's or the Host's
+          // own executable as node
+          'sandbox-check': 'src/sandboxCheck/index.ts'
         }
       }
     }

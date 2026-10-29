@@ -505,6 +505,8 @@ export interface JobCheck {
   unstable?: true
   /** A person let the round go on without it (plugin Phase 5 C9 skip-check); its status is not-run */
   skipped?: true
+  /** It ran outside any sandbox though the Task's workers were sandboxed (CheckResult.outsideSandbox, Task K) */
+  outsideSandbox?: true
 }
 /** JobTask.convergence — 자동 수정의 예산과 지금 자리. 정책 있는 Run 의 Task 만 갖는다(UI 설계 U3) */
 export interface JobConvergence {

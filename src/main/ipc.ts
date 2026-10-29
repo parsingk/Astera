@@ -3198,7 +3198,17 @@ export function registerIpc(
       pluginCheck: (plugin, input) =>
         deps.completionChecks?.run(plugin, input) ?? Promise.resolve({ name: plugin, ...unavailable('plugin checks cannot run here') }),
       // GitHub CI is the Host's (GitHub lifecycle §4): a round this app runs hands it over through the socket
-      lifecycleCiBegin: (args) => orchCall({ cmd: 'lifecycle-ci-begin', args, sessionId: '' })
+      lifecycleCiBegin: (args) => orchCall({ cmd: 'lifecycle-ci-begin', args, sessionId: '' }),
+      // Task K: every check starts from the app's environment without what the Credentials list hides there (Q5), and a
+      // sandboxed Task's inside its workers' sandbox, as the app's session manager builds it for the attempt's account
+      platform: process.platform,
+      checkEnv: (cwd) => core.sessions.checkEnv(process.env, cwd),
+      sandboxedCheck: async (a) => {
+        const account = core.accounts.list().find((x) => x.id === a.accountId)
+        if (!account) throw new Error(`account ${a.accountId} is no longer registered, so the check cannot run in the sandbox its worker ran in`)
+        const l = await core.sessions.checkLaunch({ account, cwd: a.cwd, command: a.command })
+        return { launch: { file: l.file, args: l.args }, env: l.env }
+      }
     })
     orchValidator = validation.validator
 

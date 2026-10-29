@@ -39,6 +39,12 @@ describe('a plugin check in the completion read model (plugin Phase 5 C12, C13)'
     ])
   })
 
+  // Task K (the person's Q1)
+  it('carries that a check ran outside the sandbox its workers had', () => {
+    const d = completionDetailOf(task({ checks: [check({ configId: 'c', name: 'Tests', status: 'passed', outsideSandbox: true })] }))!
+    expect(d.checks).toEqual([{ configId: 'c', name: 'Tests', status: 'passed', outsideSandbox: true }])
+  })
+
   it('names a failed plugin check by its summary in the failure summary, and leaves a check that could not be made out', () => {
     expect(failedChecksSummary([check({ configId: 'plugin:d', name: 'D', status: 'failed', summary: '2 leftovers' })])).toBe('D failed: 2 leftovers')
     expect(failedChecksSummary([check({ configId: 'plugin:d', name: 'D', status: 'error', summary: 'down' })])).toBeNull()

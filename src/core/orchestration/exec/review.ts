@@ -23,6 +23,8 @@ import { buildReviewSpecFile, knowledgeIn, specFileName } from './coordinator'
 import { promptText, weakeningFindings } from '../../github/weakening'
 import type { RunGitHubState } from '../../github/lifecycle'
 import { createReviewGate } from './reviewGate'
+import { startedSandboxKind } from './checkSandbox'
+import type { StartedWorker } from '../command'
 
 export interface ReviewContext {
   getState(): OrchState
@@ -204,7 +206,7 @@ export function createReviewStarter(c: ReviewContext): (a: { taskId: string }) =
           ? { resultPath: path.join(c.specsDir, `${specFileName(taskId, opened.value.id)}.review.json`) }
           : {})
       })
-      let started: { sessionId: string; cwd: string; specPath: string }
+      let started: StartedWorker
       try {
         // 검토자는 구현자가 일한 트리에서 돈다 — worktree 'current' + runCwd = 그 cwd.
         //
@@ -245,7 +247,7 @@ export function createReviewStarter(c: ReviewContext): (a: { taskId: string }) =
         ...latest,
         dispatches: latest.dispatches.map((d) =>
           d.id === opened.value.id
-            ? { ...d, sessionId: started.sessionId, cwd: started.cwd, specPath: started.specPath }
+            ? { ...d, sessionId: started.sessionId, cwd: started.cwd, specPath: started.specPath, ...startedSandboxKind(latest, started) }
             : d
         )
       })
