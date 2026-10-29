@@ -1137,7 +1137,9 @@ chat's thread names the profile and its approval policy is `never`) and a termin
 stopped (`SANDBOX_UNAVAILABLE: profile-not-active codex`). On every OS it writes only in its folder, the git directories of the folder's repository (never their
 `hooks` or `config`, nor what decides where git finds them: each `commondir` file, the `modules` folder of submodules'
 git directories, and a worktree's `.git` file; a start makes a missing `commondir`, holding `.`, and an empty
-`modules`, so they can be kept read-only) and the temp folder, where npm's cache goes; it cannot read `~/.ssh`, `~/.aws`, the GitHub CLI's
+`modules`, so they can be kept read-only) and the temp folder, where npm's cache goes, and never in Astera's own profile
+folder, even where its folder holds it (a session started in the home folder), though it still reads the Host key
+there; it cannot read `~/.ssh`, `~/.aws`, the GitHub CLI's
 and gcloud's settings, `~/.docker`, `~/.npmrc`, `~/.git-credentials` or `~/.kube`; and the network works. On macOS
 `~/Library/Keychains` is closed too, and on Linux the session bus a secret service answers on. On macOS and Linux it
 cannot open the folder the Host's socket is in either, nor any other Host's folder of yours beside it (`astera-host-*`
@@ -1153,7 +1155,8 @@ Linux. On Linux its git reads an excludes file Astera writes
 sandbox keeps placeholders for, such as `.bashrc` and `.vscode`), so `git add -A` works. A sandboxed Codex session on Windows runs as the
 sandbox's own account, which cannot read the person's home, so its git reads a copy of the person's global excludes
 that Astera writes in the temp folder. Claude Code has no sandbox on
-Windows: there the switch only keeps its file tools, not its shell, out of those folders, and npm keeps its own cache.
+Windows: there the switch only keeps its file tools, not its shell, out of those folders and from changing the profile
+folder, and npm keeps its own cache.
 What a sandboxed session starts runs in the sandbox too, whatever profile it names: a session it makes with `sessions
 create`, a Job it makes (its coordinator and every worker), a Task it adds to any Job and a worker it starts with
 `worker-start`. Where that CLI has no sandbox (Claude Code on Windows) such a start is refused with
@@ -1170,9 +1173,10 @@ Astera started for it; from any other sandboxed session it is refused with `outs
 run's Job is a sandboxed session's. A sandboxed target is not refused, and a worker's `send` and `ask` in its own run
 stay open whoever its coordinator is.
 On Windows the Codex sandbox is Codex's elevated one, which keeps Credential Manager out, and the repository is named a
-safe directory for the account it runs as; a repository or home folder whose path holds a character cmd.exe reads as
-syntax (`" & | < > ^ %`) cannot be carried to it. Each Codex account's home must have the elevated sandbox set up once
-(Codex's `codex sandbox setup --elevated --current-user`, which brings up Windows' administrator prompt): Astera asks
+safe directory for the account it runs as; a repository, a home folder or one of Astera's own folders whose path holds
+a character cmd.exe reads as syntax (`" & | < > ^ %`) cannot be carried to it. Each Codex account's home must have the
+elevated sandbox set up once (Codex's `codex sandbox setup --elevated --current-user`, which brings up Windows'
+administrator prompt): Astera asks
 before a sandboxed start, Codex's `doctor --json` first and then, only on a home doctor calls complete, an echo through
 the sandbox (on a home with no setup the echo would start the setup and its prompt), and the app offers to set up the
 one account a start was refused for. A ready answer is kept until Astera restarts or a setup runs through it, so a home
@@ -1182,7 +1186,11 @@ echo runs from Settings, so a stale home can read ready there and be refused at 
 is not. A session the sandbox
 cannot be applied to does not start, and says why with `SANDBOX_UNAVAILABLE: <code>`: `codex-daemon codex` for a codex
 that does not take `--no-daemon`, `cli-too-old claude <found> 2.1.306` for an older Claude Code (`cli-version-unknown
-claude` when its version cannot be read, `cli-missing claude` when it is not there), `path-unsafe` for such a path,
+claude` when its version cannot be read, `cli-missing claude` when it is not there), `path-unsafe` for such a path in
+the repository, `named-path-unsafe` for one elsewhere (a login folder, one of Astera's own; the log names it),
+`linked-path` when such a folder is reached through a link inside the session's own folders, which it could repoint
+(macOS and Windows Codex, macOS and Linux Claude; on Linux Codex starts and refuses every command there, and the tab
+says so; the log names the link),
 `git-layout` when the folder's git data could not be read, `windows-setup codex <accountId>` for an account whose
 Windows sandbox is not set up (or no longer works: setting up one account's home can leave another's stale),
 `windows-check-failed codex <accountId>` when Codex could not be asked about it (not there, too old for `doctor --json`,

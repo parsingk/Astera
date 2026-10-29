@@ -12,10 +12,11 @@ import { SESSION_CONTEXT_SCRIPT } from './sessionContext'
 import { CLAUDE_INPUT_FIELDS } from '../audit/resolve'
 import ENFORCE_HOOK_SOURCE from 'virtual:astera-enforce-hook'
 import { codexEnforceArgs } from './codexEnforce'
-import { claudeSandboxSettings, claudeSessionDenied, type ClaudeSandboxSettings } from '../sandbox/claudeSettings'
+import { claudeSandboxSettings, claudeSessionDenied, claudeWritableFolders, type ClaudeSandboxSettings } from '../sandbox/claudeSettings'
 import { appKeyPath } from '../host/hostKey'
 import { npmCacheOf } from '../sandbox/codexProfile'
 import type { GitLayout } from '../sandbox/gitLayout'
+import { namedPaths, profileReadOnly, type LinkLook } from '../sandbox/locations'
 
 /** The statusLine injection info handed to SessionManager when a session is spawned. */
 export interface StatusLineSpawn {
@@ -28,8 +29,9 @@ export interface StatusLineSpawn {
   sandboxed?: true // the settings file is a sandbox twin (ensureSandboxFiles): Claude's sandbox and the deny rules are in it
 }
 
-/** Whether every sandbox twin is in place (ensureSandboxFiles). */
-export type SandboxFilesResult = 'ok' | 'write-failed'
+/** Whether every sandbox twin is in place (ensureSandboxFiles), or, on macOS and Linux, the links inside the session's
+ *  writable folders a named path goes through, for which no twin is written (Task E fix round 5). */
+export type SandboxFilesResult = 'ok' | 'write-failed' | { linked: string[] }
 
 /** What a sandboxed Claude session's twins are built for (ensureSandboxFiles, spawnConfig, sandboxChatArgs): its folder's
  *  git layout, whose git files the sandbox keeps from being written, and the environment the session is built from (its
@@ -38,6 +40,11 @@ export type SandboxFilesResult = 'ok' | 'write-failed'
 export interface SandboxScope {
   layout: GitLayout | null
   env: Record<string, string | undefined>
+  /** The session's work folder, which the named paths' links are judged by (Task E fix round 5, namedPathFor). Absent
+   *  (the measurement), every path is named as given. */
+  cwd?: string
+  /** How the disk is read for those links (claudeSandboxStart's `linkLook`); null or absent, every path as given. */
+  look?: LinkLook | null
 }
 
 /** How many scopes a StatusLineManager keeps the twins of up to date: every settings rewrite rewrites them all. A scope
@@ -454,6 +461,8 @@ export class StatusLineManager {
    *  SandboxScope), and the temp folder npm's cache is in. */
   private readonly homeDir: string
   private readonly tmpDir: string
+  /** The read-only folders a sandbox twin keeps from being written (Task E and its fix round 1). */
+  private readonly readOnly: readonly string[]
 
   constructor(
     private userDataDir: string,
@@ -473,6 +482,10 @@ export class StatusLineManager {
       /** The sandbox's (ensureSandboxFiles): the process's own home and temp folder, unless a test says. */
       homeDir?: string
       tmpDir?: string
+      /** The folders a sandboxed Claude twin keeps read-only (Task E and its fix round 1): the profile and every place
+       *  Astera writes code or an installer to and runs unsandboxed, built by the app and Host wiring (sandboxReadOnly).
+       *  Default: this profile folder alone (profileReadOnly), so a start that names no more still protects the profile. */
+      readOnly?: readonly string[]
     } = {}
   ) {
     this.findRuntime = host.findRuntime
@@ -480,6 +493,7 @@ export class StatusLineManager {
     this.execPath = host.execPath ?? process.execPath
     this.homeDir = host.homeDir ?? os.homedir()
     this.tmpDir = host.tmpDir ?? os.tmpdir()
+    this.readOnly = host.readOnly ?? profileReadOnly(userDataDir)
     // A test that names the executable names the AppImage too, or there is none
     this.appImage = host.execPath === undefined ? process.env.APPIMAGE : host.appImage
     this.capturePath = path.join(userDataDir, 'astera-statusline-capture.cjs')
@@ -753,8 +767,8 @@ export class StatusLineManager {
    * The sandbox (sandbox design §6): writes, for the scope of a sandboxed Claude start (SandboxScope: its folder's git
    * layout and the environment its session is built from), a twin of each settings file a session can be pointed at
    * (plain, hooks, observe, observe hooks, enforce, enforce hooks, as far as each has been built), the same JSON with
-   * Claude's sandbox added and the deny rules for the E6 list and the OS credential store (claudeSandboxSettings), and
-   * the files a sandboxed chat takes as its one `--settings`: the sandbox alone, and with Enforce's hook. The twins of one
+   * Claude's sandbox added and the deny rules for the E6 list and the OS credential store, with this profile folder kept
+   * from being written (claudeSandboxSettings), and the files a sandboxed chat takes as its one `--settings`: the sandbox alone, and with Enforce's hook. The twins of one
    * scope are in a folder of their own, `sandbox-settings/<hash>`, named by what its sandbox holds, so sessions in
    * different repositories, or of accounts whose environment names another bus, never read each other's, and two starts
    * in the same folder share them. No Unix socket is granted, the Host's included: a sandboxed session reaches the Host
@@ -772,7 +786,8 @@ export class StatusLineManager {
    */
   async ensureSandboxFiles(scope: SandboxScope): Promise<SandboxFilesResult> {
     if (!this.built) await this.ensureFiles()
-    const part = this.sandboxPart(scope)
+    const { part, links } = this.sandboxNamed(scope)
+    if (this.refusesLinks(links)) return { linked: links }
     const key = sandboxKeyOf(part)
     this.scopes.delete(key)
     this.scopes.set(key, part)
@@ -782,10 +797,36 @@ export class StatusLineManager {
 
   /** What a sandbox twin adds: the builder's settings, for the scope's layout and from the scope's environment, under the
    *  person's home. */
-  private sandboxPart(scope: SandboxScope): SandboxPart {
-    // With the app key of this profile (sandbox follow-ups, item 1), as a Codex session's profile denies it
+  /** The twin's part, and the links inside the session's writable folders its named paths go through (Task E fix
+   *  round 5). With the app key of this profile (sandbox follow-ups, item 1), as a Codex session's profile denies it, and
+   *  the read-only folders the start's wiring named (Task E and its fix round 1), as a Codex session's profile keeps them
+   *  read; each where namedPathFor puts it for this scope's folder, when the wiring gave a way to look. */
+  private sandboxNamed(scope: SandboxScope): { part: SandboxPart; links: string[] } {
     const denied = claudeSessionDenied({ platform: this.platform, env: scope.env, homeDir: this.homeDir, appKeyFile: appKeyPath(this.userDataDir) })
-    return claudeSandboxSettings({ platform: this.platform, denied, npmCache: npmCacheOf(this.tmpDir), layout: scope.layout })
+    const npmCache = npmCacheOf(this.tmpDir)
+    const look = scope.look
+    if (!look || scope.cwd === undefined)
+      return { part: claudeSandboxSettings({ platform: this.platform, denied, readOnly: this.readOnly, npmCache, layout: scope.layout }), links: [] }
+    const writable = claudeWritableFolders({ platform: this.platform, cwd: scope.cwd, npmCache, tmpDir: this.tmpDir, homeDir: this.homeDir })
+    const d = namedPaths(denied, writable, this.platform, look)
+    const r = namedPaths(this.readOnly, writable, this.platform, look)
+    return {
+      part: claudeSandboxSettings({ platform: this.platform, denied: d.paths, readOnly: r.paths, npmCache, layout: scope.layout }),
+      links: [...new Set([...d.links, ...r.links])]
+    }
+  }
+
+  /** Whether a scope with these links gets no twin: on macOS and Linux, where srt 0.0.79 cannot keep the deny in force
+   *  through a link the session could change (rule E5; Task E fix rounds 5 and 6). On Linux it follows the path at its
+   *  start and pins only where it lands (dist/sandbox/linux-sandbox-utils.js:48-116 resolveSymlinkedDenyPath, the symlink
+   *  check on the resolved path at :2077, the ancestor pins seeded by landings at :2390-2408), so the link can be
+   *  repointed afterwards. On macOS it keeps a dotfile link's spelling (sandbox-utils.js:466-479 with
+   *  isSymlinkOutsideBoundary, :216-282) and pins the link itself among the ancestors (macos-sandbox-utils.js:539-557),
+   *  but the deny then names only the link's spelling, and the target stays reachable by its own path inside the
+   *  writable folder, which no rule names. Windows has no sandbox for Claude: its file tools' deny rules match a link and
+   *  its target alike, and its shell is not restricted anyway. */
+  private refusesLinks(links: readonly string[]): boolean {
+    return links.length > 0 && this.platform !== 'win32'
   }
 
   private twinsDirOf(key: string): string {
@@ -844,7 +885,9 @@ export class StatusLineManager {
   /** A sandboxed Claude chat's one `--settings` (sandbox design §6): the sandbox of its scope, and in Enforce the blocking
    *  hook with it, once ensureSandboxFiles for that scope (and for Enforce ensureEnforceFiles) has written it, else null. */
   sandboxChatArgs(enforce: boolean, scope: SandboxScope): string[] | null {
-    const key = sandboxKeyOf(this.sandboxPart(scope))
+    const { part, links } = this.sandboxNamed(scope)
+    if (this.refusesLinks(links)) return null
+    const key = sandboxKeyOf(part)
     if (enforce)
       return this.enforceReady && this.twinReady(this.enforceChatSettingsFile, key) ? ['--settings', this.twinOf(this.enforceChatSettingsFile, key).replace(/\\/g, '/')] : null
     return this.sandboxChatReady.has(key) ? ['--settings', this.chatTwinOf(key).replace(/\\/g, '/')] : null
@@ -944,7 +987,9 @@ export class StatusLineManager {
       : toolHooks
         ? this.hooksSettingsFile
         : this.settingsFile
-    const key = opts?.sandbox ? sandboxKeyOf(this.sandboxPart(opts.sandbox)) : null
+    // A scope whose named path goes through a link it could change has no twin (Task E fix round 5): not marked sandboxed
+    const named = opts?.sandbox ? this.sandboxNamed(opts.sandbox) : null
+    const key = named && !this.refusesLinks(named.links) ? sandboxKeyOf(named.part) : null
     const sandboxed = key !== null && this.twinReady(variant, key)
     const file = sandboxed && key !== null ? this.twinOf(variant, key) : variant
     return {

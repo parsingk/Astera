@@ -53,6 +53,9 @@ import { claudeSandboxStart } from '../core/sandbox/claudeStart'
 import { codexExcludesWriter } from '../core/sandbox/gitExcludes'
 import { hostAddress } from '../core/publicContract'
 import { appKeyPath } from '../core/host/hostKey'
+import { ensureOwnFolders, installRootOf, localAsteraDir, nodeLinkLook, presentOrNull, publicShuttleFiles, sandboxReadOnly, updaterCacheDir } from '../core/sandbox/locations'
+import { binDirFor } from '../core/orchestration/cliInstall'
+import { shuttleNames } from '../core/orchestration/exec/shuttle'
 import { HOST_PROTOCOL } from '../core/host/protocol'
 import { createManagedHooksCheck } from '../core/sessions/managedHooks'
 import { codexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
@@ -251,6 +254,26 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   // Enforce's hook on Windows when the capture scripts are left a bare node (development, or no runtime put in place):
   // a runtime an Astera installed here
   const findRuntime = (): Promise<string | null> => findInstalledHostExe(runtimeBase)
+  // What a sandboxed session keeps read-only on every OS (Task E and its fix rounds 1 and 2): the profile folder and every
+  // place the app itself writes code or an installer to and runs unsandboxed — the Windows Host runtime it lays down
+  // (runtimeBase), electron-updater's download cache, the installed app's own folder (from its executable), on Windows
+  // Astera's own %LOCALAPPDATA%\astera whole (the public CLI's bin, the session-`.cmd` junction), and on macOS and Linux
+  // the public CLI's own files in the person's ~/.local/bin, where they are now. One list, for the twins and both managers,
+  // naming only what is there when the app starts (fix round 3: no placeholder file at a missing one), as spelled: each
+  // start names it where namedPathFor puts it for that session's folders (fix round 5). The updater cache and the Host runtime folder are made
+  // first, empty if missing (fix round 4), so they are always named: a download that first made the cache while the app
+  // runs would otherwise leave it writable until the next start
+  const updaterCache = updaterCacheDir(process.platform, process.env, os.homedir())
+  ensureOwnFolders([updaterCache, runtimeBase])
+  const readOnly = sandboxReadOnly({
+    profileDir: userDataDir,
+    hostRuntimeBase: runtimeBase,
+    updaterCache,
+    installRoot: installRootOf(app.getPath('exe'), process.platform),
+    localAstera: localAsteraDir(process.platform, process.env, os.homedir()),
+    publicShuttle: publicShuttleFiles({ platform: process.platform, binDir: binDirFor({ platform: process.platform, env: process.env, home: os.homedir() }), names: shuttleNames(process.platform), exists: existsSync }),
+    resolve: presentOrNull
+  })
   const statusLine = new StatusLineManager(
     userDataDir,
     process.platform !== 'win32'
@@ -264,7 +287,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
           })) ?? 'node')
         : 'node',
     undefined,
-    { findRuntime }
+    { findRuntime, readOnly }
   )
   await statusLine.init()
   // One factory for the app's life. Slice 2's Host-backed one is attached to it by registerIpc once
@@ -303,7 +326,8 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     // Mode writes the crops whose paths it sends. previewShotsDir is the same path capture.ts writes.
     [previewShotsDir(userDataDir)],
     process.env,
-    { ...defaultSpawnChecks(sessionsLog), hostSocketDir, appKeyFile, codexExcludes }
+    // The folders a sandboxed Codex session keeps read-only (Task E and its fix round 1)
+    { ...defaultSpawnChecks(sessionsLog), hostSocketDir, appKeyFile, readOnly, linkLook: nodeLinkLook, codexExcludes }
   )
   // Shared extensions (Agent Control Plane release 1 design §4.5). The two managers read the same cache:
   // a chat roll's respawn is prepared through `sessions.prepare`, which refreshes the target account
@@ -358,6 +382,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     tmpDir: os.tmpdir(),
     files: statusLine,
     version: cliVersions,
+    linkLook: nodeLinkLook,
     log: sessionsLog
   })
   sessions.claudeSandbox = claudeSandbox
@@ -385,6 +410,8 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     claudeSandbox,
     hostSocketDir,
     appKeyFile,
+    readOnly,
+    linkLook: nodeLinkLook,
     codexVersion: cliVersions,
     codexExcludes
   })

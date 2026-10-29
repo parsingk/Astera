@@ -41,7 +41,7 @@ const rig = (restore: Record<string, unknown> = {}, createAdapter?: CreateAdapte
   const holders = createProcHolders()
   const askApp = vi.fn(async () => ({ sent: true }))
   const logs: string[] = []
-  const chats = createHostChats({ procs: registry, holders, platform: 'win32', homeDir: 'C:\\Users\\t', version: '0.0.0', baseEnv: {}, askApp, log: (m) => logs.push(m), ...(createAdapter ? { createAdapter } : {}) })
+  const chats = createHostChats({ linkLook: null, procs: registry, holders, platform: 'win32', homeDir: 'C:\\Users\\t', version: '0.0.0', baseEnv: {}, askApp, log: (m) => logs.push(m), ...(createAdapter ? { createAdapter } : {}) })
   return { registry, procs, holders, chats, askApp, logs, entry: () => registry.list()[0] }
 }
 
@@ -275,7 +275,7 @@ describe('createHostChats — the Host spawn path (final review I3)', () => {
   it('a chat CLI the Host spawns for a roll carries ASTERA_SESSION, its own session id', () => {
     const envs: Array<Record<string, string | undefined>> = []
     const registry = new ProcRegistry({ spawn: (_f, _a, o) => { envs.push(o.env); return fake() }, log: () => {} })
-    const chats = createHostChats({ procs: registry, holders: createProcHolders(), platform: 'win32', homeDir: 'home', version: '0.0.0', baseEnv: {}, askApp: async () => ({ sent: true }), log: () => {} })
+    const chats = createHostChats({ linkLook: null, procs: registry, holders: createProcHolders(), platform: 'win32', homeDir: 'home', version: '0.0.0', baseEnv: {}, askApp: async () => ({ sent: true }), log: () => {} })
     const info = chats.spawn({ account, cwd: 'D:/p', restoreExtra: { rolledFrom: 'c1' } })
     expect(envs.at(-1)?.ASTERA_SESSION).toBe(info.id)
   })
@@ -304,7 +304,7 @@ describe('createHostChats — a dropped session hears nothing (Task 2 review car
         kill: () => {}
       }
     }
-    const chats = createHostChats({ procs: registry, holders: createProcHolders(), platform: 'win32', homeDir: 'C:\\Users\\t', version: '0.0.0', baseEnv: {}, askApp: async () => ({ sent: true }), log: () => {}, createAdapter })
+    const chats = createHostChats({ linkLook: null, procs: registry, holders: createProcHolders(), platform: 'win32', homeDir: 'C:\\Users\\t', version: '0.0.0', baseEnv: {}, askApp: async () => ({ sent: true }), log: () => {}, createAdapter })
     chats.adopt(registry.list()[0])
     return { procs, chats, heard }
   }
@@ -435,7 +435,7 @@ describe('createHostChats — the carry-on on adopt, fix round 1', () => {
   it('a second adopt of the same proc makes no second adapter', () => {
     const r = rig()
     let made = 0
-    const chats = createHostChats({
+    const chats = createHostChats({ linkLook: null,
       procs: r.registry, holders: r.holders, platform: 'win32', homeDir: 'C:\\Users\\t', version: '0.0.0', baseEnv: {},
       askApp: async () => ({ sent: true }), log: () => {},
       createAdapter: () => {
@@ -487,7 +487,7 @@ describe('createHostChats — the handles it keeps (Task 3 review)', () => {
         kill: () => {}
       }
     }
-    const chats = createHostChats({ procs: registry, holders: createProcHolders(), platform: 'win32', homeDir: 'C:\\Users\\t', version: '0.0.0', baseEnv: {}, askApp: async () => ({ sent: true }), log: () => {}, createAdapter })
+    const chats = createHostChats({ linkLook: null, procs: registry, holders: createProcHolders(), platform: 'win32', homeDir: 'C:\\Users\\t', version: '0.0.0', baseEnv: {}, askApp: async () => ({ sent: true }), log: () => {}, createAdapter })
     return { registry, procs, chats, heard }
   }
 

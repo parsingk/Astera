@@ -53,8 +53,16 @@ function gitEntries(layout: GitLayout | null): string[] {
   return [...out, ...read(layout.worktreeConfigs, new Set()), ...read(layout.gitFiles, new Set())]
 }
 
-export function codexSandboxArgs(o: { platform: NodeJS.Platform; layout: GitLayout | null; denied: string[] }): string[] {
-  const entries = [...gitEntries(o.layout), ...o.denied.map((p) => entry(p, 'deny'))]
+/** `readOnly` (the profile folder and the places Astera writes code or an installer to and runs unsandboxed, locations.ts
+ *  sandboxReadOnly) is "read": where the session's folder holds one, Codex carves it out of that writable root read-only
+ *  on every OS (protocol/src/permissions.rs get_writable_roots_with_cwd_impl at rust-v0.160.0: "Narrower explicit
+ *  non-write entries carve out broader writable roots"), and a "deny" inside it (the app key) still holds, since the most
+ *  specific entry decides (resolve_access). A "read" entry is not quite neutral for reads on Windows: Codex's setup adds
+ *  every readable entry as a read root for the sandbox account (windows-sandbox-rs/src/setup.rs
+ *  gather_full_read_roots_for_permissions), which adds nothing for the profile under %APPDATA% (already a read root
+ *  through profile_read_roots(USERPROFILE)) but opens read on a profile placed elsewhere; the app key stays deny-read. */
+export function codexSandboxArgs(o: { platform: NodeJS.Platform; layout: GitLayout | null; denied: string[]; readOnly: readonly string[] }): string[] {
+  const entries = [...gitEntries(o.layout), ...o.readOnly.map((p) => entry(p, 'read')), ...o.denied.map((p) => entry(p, 'deny'))]
   const profile = `permissions={${CODEX_PROFILE}={extends=":workspace", filesystem={${entries.join(', ')}}, network={enabled=true}}}`
   const args = ['-a', 'never', '-c', profile, '-c', `default_permissions=${toml(CODEX_PROFILE)}`]
   // The unelevated Windows sandbox is not pinned by default, so a session would otherwise run with whichever one Codex picks.

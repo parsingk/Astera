@@ -144,10 +144,19 @@ export interface SessionInfo {
    *  CLI's own sandbox; `deny-only`, Claude Code on Windows, which has none and gets only deny rules for its file tools
    *  (its shell is not restricted). In the note too, so a session taken back says the same. Absent when not sandboxed. */
   sandboxKind?: SandboxKind
+  /** What a sandboxed start warned about (Task E fix rounds 2 and 3, core/sandbox/startWarnings.ts decides it): the work
+   *  folder holds the home folder, Claude's shell cannot run under Ubuntu's AppArmor bubblewrap profile, or (Codex on
+   *  Linux, fix round 5) a named path goes through a link in the work folder, so Codex refuses every command. Beside
+   *  `sandboxKind` in the info and the note, so a Host worker's tab and a tab taken back after a restart show it too; the
+   *  tab shows it as a line above the terminal or the chat. Absent when there is nothing to say. */
+  sandboxWarnings?: SandboxStartWarning[]
 }
 
 /** SessionInfo.sandboxKind (core/sandbox/coverage.ts sandboxKindOf decides it). */
 export type SandboxKind = 'sandbox' | 'deny-only'
+
+/** SessionInfo.sandboxWarnings, one each (core/sandbox/startWarnings.ts sandboxStartWarnings). */
+export type SandboxStartWarning = 'claudeUserns' | 'linkInWorkFolder' | 'homeInWorkFolder'
 
 /** The stored settings the resume modal reads to seed its checkboxes.
  *  A read-only snapshot — what actually gets enabled is settled by the modal and passed down as

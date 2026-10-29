@@ -243,7 +243,16 @@ describe('securityText', () => {
   it('says under the table that the home stays readable, and beside the Claude Windows row that its shell is not restricted', () => {
     expect(sandboxTableCaption(en)).toBe('Outside the login folders, the home folder stays readable inside the sandbox.')
     expect(sandboxTableCaption(ko)).toBe('로그인 정보 폴더 밖의 홈 폴더는 sandbox 안에서도 읽을 수 있습니다.')
-    expect(SANDBOX_COVERAGE.map((r) => sandboxRowNote(r, en))).toEqual(['Windows: the shell is not restricted', null, null, null, null, null])
+    // Task E fix rounds 2 and 3: beside the Claude Linux row, that on Ubuntu 25.04 and later its shell commands fail
+    // under AppArmor's bubblewrap profile
+    expect(SANDBOX_COVERAGE.map((r) => sandboxRowNote(r, en))).toEqual([
+      'Windows: the shell is not restricted',
+      null,
+      "Ubuntu 25.04 and later: shell commands fail under AppArmor's bubblewrap profile",
+      null,
+      null,
+      null
+    ])
     expect(sandboxRowNote({ provider: 'claude', os: 'win32' }, ko)).toBe('Windows: 셸은 제한 없음')
   })
 

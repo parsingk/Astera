@@ -267,7 +267,8 @@ async function rig(o: RigOpts) {
     retarget: () => {},
     createSession: async () => {
       throw new Error('not in this rig')
-    }
+    },
+    linkLook: null
   } satisfies HostSpawner
 
   const wiring = composeHostDriving({

@@ -6,6 +6,31 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import type { SpawnChecks } from '../core/sessions/manager'
+import type { ChatManagerDeps } from '../core/chat/manager'
+import type { claudeSandboxStart } from '../core/sandbox/claudeStart'
+import type { HostChatsDeps } from '../host/hostChats'
+import type { HostSpawner } from '../host/spawner'
+
+// Task E fix round 6 (re-review 2, Minor 3): every place a sandboxed start is wired must say how links on the paths it
+// names are looked at (nodeLinkLook, or null where paths are named as given on purpose). Left optional, a new wiring that
+// forgot it would drop E5's link refusals and the Linux warning without a word; required, it does not compile. Checked
+// by tsc: each line below is an error only while the field is required
+describe('a start cannot be wired without saying how links are looked at', () => {
+  it('the terminal checks, the chat deps, a Claude start, the Host chats and the Host spawner all require it', () => {
+    // @ts-expect-error linkLook is required
+    const checks: Pick<SpawnChecks, 'linkLook'> = {}
+    // @ts-expect-error linkLook is required
+    const chat: Pick<ChatManagerDeps, 'linkLook'> = {}
+    // @ts-expect-error linkLook is required
+    const claude: Pick<Parameters<typeof claudeSandboxStart>[0], 'linkLook'> = {}
+    // @ts-expect-error linkLook is required
+    const hostChats: Pick<HostChatsDeps, 'linkLook'> = {}
+    // @ts-expect-error linkLook is required
+    const spawner: Pick<HostSpawner, 'linkLook'> = {}
+    expect([checks, chat, claude, hostChats, spawner]).toHaveLength(5)
+  })
+})
 
 const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'ipc.ts'), 'utf8')
 const between = (from: string, to: string): string => {
@@ -173,5 +198,125 @@ describe('ipc.ts takes the sandbox from the profile, or from a sandboxed session
     expect(worker).toMatch(/\.\.\.\(o\.sandbox \? \{ forceSandbox: true \} : \{\}\)/)
     const coord = between('      startCoordinator: (a) =>', '      stopCoordinator:')
     expect(coord).toMatch(/\.\.\.\(sandbox \? \{ forceSandbox: true \} : \{\}\)/)
+  })
+})
+
+// Task E (2026-10-28, fix round 1): a sandboxed session keeps read-only the profile folder and every place Astera writes
+// code or an installer to and runs unsandboxed. core.ts builds that list once (sandboxReadOnly) and hands it to the
+// Claude twins and both managers. createCore cannot run without Electron: guarded by its text
+describe('core.ts builds the read-only list once and hands it to the twins and both managers', () => {
+  const core = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'core.ts'), 'utf8')
+  it('builds the list with sandboxReadOnly from the profile, runtime, updater cache, install root and junction', () => {
+    const built = core.slice(core.indexOf('const readOnly = sandboxReadOnly({'), core.indexOf('\n  })', core.indexOf('const readOnly = sandboxReadOnly({')))
+    expect(built).toMatch(/profileDir: userDataDir/)
+    expect(built).toMatch(/hostRuntimeBase: runtimeBase/)
+    // The updater cache is the one made just before (fix round 4), named by its variable
+    expect(built).toMatch(/\n    updaterCache,\n/)
+    expect(built).toMatch(/installRoot: installRootOf\(app\.getPath\('exe'\), process\.platform\)/)
+    // Task E fix round 2: Astera's own %LOCALAPPDATA%\astera whole on Windows, and the public CLI's own files elsewhere
+    expect(built).toMatch(/localAstera: localAsteraDir\(process\.platform, process\.env, os\.homedir\(\)\)/)
+    expect(built).toMatch(/publicShuttle: publicShuttleFiles\(\{ platform: process\.platform, binDir: binDirFor\(\{ platform: process\.platform, env: process\.env, home: os\.homedir\(\) \}\), names: shuttleNames\(process\.platform\), exists: existsSync \}\)/)
+    // Task E fix rounds 3 and 5: only what is there when the app starts, as spelled; where each really is is each
+    // start's to decide (namedPathFor)
+    expect(built).toMatch(/resolve: presentOrNull/)
+  })
+  it('makes the updater cache and the Host runtime folder before it builds the list, and names that same cache (fix round 4)', () => {
+    const at = core.indexOf('const readOnly = sandboxReadOnly({')
+    const before = core.slice(core.lastIndexOf('\n\n', at), at)
+    expect(before).toMatch(/const updaterCache = updaterCacheDir\(process\.platform, process\.env, os\.homedir\(\)\)\n\s*ensureOwnFolders\(\[updaterCache, runtimeBase\]\)\n/)
+    expect(core.slice(at, core.indexOf('\n  })', at))).toMatch(/\n    updaterCache,\n/)
+  })
+  // Fix round 5: and each looks at the links on the paths it names (nodeLinkLook)
+  it('the StatusLineManager, the terminal checks and the chat deps all take that one list, and look at its links', () => {
+    expect(core).toMatch(/const statusLine = new StatusLineManager\(\n    userDataDir,[\s\S]*\{ findRuntime, readOnly \}\n  \)/)
+    // Fix round 6: Claude's twins take the way to look from the scope each start hands them (claudeSandboxStart)
+    expect(core).toMatch(/const claudeSandbox = claudeSandboxStart\(\{[\s\S]*?\n    linkLook: nodeLinkLook,\n    log: sessionsLog\n  \}\)/)
+    expect(core).toMatch(/\{ \.\.\.defaultSpawnChecks\(sessionsLog\), hostSocketDir, appKeyFile, readOnly, linkLook: nodeLinkLook, codexExcludes \}/)
+    const chat = core.slice(core.indexOf('const chat = new ChatSessionManager({'), core.indexOf('// Lazy history'))
+    expect(chat).toMatch(/\n    appKeyFile,\n    readOnly,\n    linkLook: nodeLinkLook,\n/)
+  })
+})
+
+// Task E fix round 1 (review Minor 2): the Host hands its sandboxed chat sessions the same read-only list and app key it
+// gives its terminal sessions. rollingWiring builds the chat deps from the spawner; hostChats passes them to the chat
+// manager. Dropping either line would leave a Host-started sandboxed Codex chat without the entries, and nothing else
+// would fail — so these are guarded by their text, as the wiring above is
+describe('the Host hands its chat sessions the spawner’s read-only list and app key', () => {
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const rollingWiring = readFileSync(path.join(here, '..', 'host', 'rollingWiring.ts'), 'utf8')
+  const hostChats = readFileSync(path.join(here, '..', 'host', 'hostChats.ts'), 'utf8')
+  it('the spawner builds its list from what is there, as spelled (fix rounds 3 and 5)', () => {
+    const spawner = readFileSync(path.join(here, '..', 'host', 'spawner.ts'), 'utf8')
+    const built = spawner.slice(spawner.indexOf('const readOnly = sandboxReadOnly({'), spawner.indexOf('\n  })', spawner.indexOf('const readOnly = sandboxReadOnly({')))
+    expect(built).toMatch(/resolve: presentOrNull/)
+  })
+  // Fix round 5: the Host's terminal checks and twins look at the links on the paths they name, and so do its chats
+  it('the spawner, rollingWiring and hostChats hand the way to look at links to every start', () => {
+    const spawner = readFileSync(path.join(here, '..', 'host', 'spawner.ts'), 'utf8')
+    expect(spawner).toMatch(/\{ \.\.\.defaultSpawnChecks\(log\), codexWindowsReady, hostSocketDir, appKeyFile, readOnly, linkLook: nodeLinkLook, codexExcludes \}/)
+    expect(spawner).toMatch(/const claudeSandbox = claudeSandboxStart\(\{[\s\S]*?\n    linkLook: nodeLinkLook,\n    log\n  \}\)/)
+    expect(spawner).toMatch(/\n    sandboxWarn,\n    linkLook: nodeLinkLook,\n/)
+    expect(rollingWiring).toMatch(/readOnly: a\.spawner\.readOnly \?\? \[\],\n    linkLook: a\.spawner\.linkLook,\n/)
+    expect(hostChats).toMatch(/\n    linkLook: d\.linkLook,\n/)
+  })
+  it('the spawner makes the updater cache and its runtime folder before it builds the list (fix round 4)', () => {
+    const spawner = readFileSync(path.join(here, '..', 'host', 'spawner.ts'), 'utf8')
+    const at = spawner.indexOf('const readOnly = sandboxReadOnly({')
+    expect(spawner.slice(spawner.lastIndexOf('\n\n', at), at)).toMatch(/const updaterCache = updaterCacheDir\(platform, d\.env, homeDir\)\n\s*ensureOwnFolders\(\[updaterCache, hostRuntimeDir\]\)\n/)
+    expect(spawner.slice(at, spawner.indexOf('\n  })', at))).toMatch(/\n    updaterCache,\n/)
+  })
+  it('rollingWiring reads them off the spawner for the chat deps', () => {
+    expect(rollingWiring).toMatch(/appKeyFile: a\.spawner\.appKeyFile \?\? null,\n    readOnly: a\.spawner\.readOnly \?\? \[\],/)
+  })
+  it('hostChats passes both on to the chat manager', () => {
+    expect(hostChats).toMatch(/\.\.\.\(d\.appKeyFile !== undefined \? \{ appKeyFile: d\.appKeyFile \} : \{\}\),\n    \.\.\.\(d\.readOnly !== undefined \? \{ readOnly: d\.readOnly \} : \{\}\),/)
+  })
+})
+
+// Task E fix rounds 2 and 3: every start path tells a sandboxed start's warnings (the managers decide, startWarningsFor,
+// and put them on the session's info and note, which the tab shows as a line above the terminal or the chat). The
+// app's two managers are given the sink in ipc.ts; the Host's terminal manager in spawner.ts; the Host's chats through
+// rollingWiring and hostChats (the chat notice to the apps). Every sink logs to the Host log; nothing is written into a
+// terminal's pty stream any more (round 3: Codex and Claude Code's fullscreen draw on the alternate screen, which hides a
+// line written at the start until the CLI exits). Each asks the once-per-process Ubuntu check. registerIpc and the
+// Host's compose cannot run here: guarded by their text
+describe('every start path carries the sandbox start warnings', () => {
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const read = (rel: string): string => readFileSync(path.join(here, rel), 'utf8')
+  /** The object a `<lhs> = {` or `const <lhs>: … = {` assignment gives, up to its closing brace at the same indent. */
+  const sinkOf = (text: string, opening: string): string => {
+    const at = text.indexOf(opening)
+    expect(at, opening).toBeGreaterThan(-1)
+    const indent = /[ ]*$/.exec(text.slice(0, at))![0]
+    return text.slice(at, text.indexOf(`\n${indent}}`, at))
+  }
+  it('the app gives both managers the sink: the Host log for a terminal, and a chat its notice too', () => {
+    const ipc = read('ipc.ts')
+    const terminal = sinkOf(ipc, 'core.sessions.sandboxWarn = {')
+    expect(terminal).toMatch(/claudeUsernsRestricted,\n\s*warn: \(id, ws\) => hostWiring\?\.log\(`sandbox: session=\$\{id\} starts with a warning: \$\{ws\.join\(', '\)\}`\)/)
+    expect(terminal).not.toMatch(/\.say\(|\[Astera\]/)
+    expect(ipc).toMatch(/core\.chat\.sandboxWarn = \{[\s\S]*?claudeUsernsRestricted,[\s\S]*?core\.chat\.notice\(id, \{ key: 'rollRefused', reason: m \}\)/)
+    expect(ipc).toMatch(/const claudeUsernsRestricted = claudeUsernsCheck\(process\.platform\)/)
+  })
+  it('the Host gives its terminal manager the sink: the Host log, and nothing into the pty ring', () => {
+    const spawner = read('../host/spawner.ts')
+    expect(spawner).toMatch(/const claudeUsernsRestricted = claudeUsernsCheck\(platform\)/)
+    const sink = sinkOf(spawner, 'const sandboxWarn: SandboxWarnSink = {')
+    expect(sink).toMatch(/claudeUsernsRestricted,\n\s*warn: \(id, ws\) => log\(`sandbox: session=\$\{id\} starts with a warning: \$\{ws\.join\(', '\)\}`\)/)
+    expect(sink).not.toMatch(/registry\.say|\[Astera\]/)
+    expect(spawner).toMatch(/sessions\.sandboxWarn = sandboxWarn\n/)
+    // Exposed, so the Host's chats ask the same once-per-process check (rollingWiring)
+    expect(spawner).toMatch(/\n    readOnly,\n    sandboxWarn,\n/)
+    // No language to word a line in: the Host's index no longer hands the spawner one
+    const index = read('../host/index.ts')
+    const call = index.slice(index.indexOf('const spawner = createHostSpawner({'), index.indexOf('\n  })', index.indexOf('const spawner = createHostSpawner({')))
+    expect(call).toMatch(/profileDir,/)
+    expect(call).not.toMatch(/\blang:/)
+  })
+  it('the Host hands its chats the sink through rollingWiring and hostChats: the chat notice to the apps, and the log', () => {
+    const rollingWiring = read('../host/rollingWiring.ts')
+    const hostChats = read('../host/hostChats.ts')
+    expect(rollingWiring).toMatch(/sandboxWarn: \{[\s\S]*?claudeUsernsRestricted: a\.spawner\.sandboxWarn\?\.claudeUsernsRestricted \?\? \(\(\) => false\),[\s\S]*?\{ t: 'chat-notice', sessionId: id, notice: \{ key: 'rollRefused', reason: m \} \}/)
+    expect(hostChats).toMatch(/\.\.\.\(d\.sandboxWarn \? \{ sandboxWarn: d\.sandboxWarn \} : \{\}\),/)
   })
 })

@@ -26,6 +26,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { useAgentProfilesNaming } from '../lib/agentProfiles'
 import { profileNameOf } from './agentProfilesText'
 import { TerminalView } from './TerminalView'
+import { SandboxWarningLine } from './SandboxWarningLine'
 import { ConversationPane } from './conversation/ConversationPane'
 import { RemoteTerminalView } from './RemoteTerminalView'
 import { RemoteConversationPane } from './conversation/RemoteConversationPane'
@@ -320,6 +321,7 @@ export function PaneGrid({
               <div className="session-slot-view" style={{ display: 'flex' }}>
                 <ConversationPane
                   sessionId={s.id}
+                  sandboxWarnings={s.sandboxed === true ? s.sandboxWarnings : undefined}
                   visible={visible}
                   exited={s.status === 'exited'}
                   active={visible && pane != null && pane.id === activePaneId}
@@ -331,6 +333,7 @@ export function PaneGrid({
               </div>
             ) : (
               <div className="session-slot-view" style={{ display: 'flex' }}>
+                <SandboxWarningLine sessionId={s.id} warnings={s.sandboxed === true ? s.sandboxWarnings : undefined} />
                 <TerminalView
                   session={s}
                   onRestart={onRestart}

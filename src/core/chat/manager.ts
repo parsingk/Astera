@@ -25,7 +25,9 @@ import { gatewayTokenEnv } from '../extensions/resolve'
 import { applyHiding, type HidingSource } from '../credentials/hiding'
 import { isObserving } from '../audit/policy'
 import { enforceUnavailable, type EnforceStart } from '../audit/enforce'
-import { PreparedLayouts, codexVersionBlocker, fitsOnTheLine, prepareCodexSandbox, sessionSandboxArgs, type CodexVersionProbe, type CodexWindowsReady } from '../sandbox/prepared'
+import { PreparedLayouts, codexSessionLinks, codexVersionBlocker, fitsOnTheLine, prepareCodexSandbox, sessionSandboxArgs, type CodexVersionProbe, type CodexWindowsReady } from '../sandbox/prepared'
+import type { LinkLook } from '../sandbox/locations'
+import { startWarningsFor, tellSandboxStart, type SandboxWarnSink } from '../sandbox/startWarnings'
 import { appServerSandboxArgs, codexSandboxEnv } from '../sandbox/codexProfile'
 import { sandboxUnavailable } from '../sandbox/unavailable'
 import { sandboxKindOf } from '../sandbox/coverage'
@@ -95,12 +97,22 @@ export interface ChatManagerDeps {
   /** The profile's app key file, which a sandboxed Codex chat's profile denies on every OS (SpawnChecks' twin). Absent,
    *  nothing is denied for it. */
   appKeyFile?: string | null
+  /** The read-only folders a sandboxed Codex chat's profile keeps on every OS (SpawnChecks' twin). Absent, nothing is
+   *  kept read-only. */
+  readOnly?: readonly string[]
+  /** How the disk is read for links on the paths a sandboxed Codex chat names (SpawnChecks' twin, Task E fix round 5);
+   *  null names every path as given. Required (fix round 6), so a wiring that forgets it does not compile. */
+  linkLook: LinkLook | null
   /** The codex version question a sandboxed Codex chat asks at its prepare and spawn (final review I2), the terminal
    *  manager's. Absent, a sandboxed Codex chat is refused as for a version not known. */
   codexVersion?: CodexVersionProbe
   /** Writes the copy of the person's global git excludes a sandboxed win32 Codex chat reads (SpawnChecks' twin). Absent,
    *  none is written. */
   codexExcludes?: CodexExcludes
+  /** Where a sandboxed chat start's warnings are told (Task E fix rounds 2 and 3; SessionManager.sandboxWarn's twin): the
+   *  chat's notice and the Host log. The Host's chats get it here; the app sets ChatSessionManager.sandboxWarn once it
+   *  has the Host log. */
+  sandboxWarn?: SandboxWarnSink
 }
 
 /** What `spawn` takes, for a caller that builds it elsewhere (./respawn.ts). */
@@ -244,9 +256,12 @@ export class ChatSessionManager {
 
   /** See ChatManagerDeps.sandboxLayouts. */
   private sandboxLayouts: PreparedLayouts
+  /** See ChatManagerDeps.sandboxWarn: settable, for the app's wiring that gives it after construction. */
+  sandboxWarn?: SandboxWarnSink
 
   constructor(private deps: ChatManagerDeps) {
     this.sandboxLayouts = deps.sandboxLayouts ?? new PreparedLayouts()
+    this.sandboxWarn = deps.sandboxWarn
   }
 
   setOrchEnv(fn: () => ChatOrchEnv | undefined): void {
@@ -287,9 +302,11 @@ export class ChatSessionManager {
       ready: this.deps.codexWindowsReady,
       hostSocketDir: this.deps.hostSocketDir ?? null,
       appKeyFile: this.deps.appKeyFile ?? null,
+      readOnly: this.deps.readOnly ?? [],
       version: this.deps.codexVersion,
       check: (args) => fitsOnTheLine(this.deps.platform, buildCodexAppServerCommand(this.deps.platform, undefined, [], appServerSandboxArgs(args))),
       ...(this.deps.codexExcludes ? { excludes: this.deps.codexExcludes } : {}),
+      look: this.deps.linkLook,
       log: this.deps.log
     })
     // The other Hosts' folders beside this one's, as they were now, kept for the spawn's profile (final fix pass, part 2, B),
@@ -402,10 +419,33 @@ export class ChatSessionManager {
             env: inherited,
             hostSocketDir: this.deps.hostSocketDir ?? null,
             otherHostDirs: this.sandboxLayouts.otherHostsOf(opts.account.id, opts.cwd, Date.now()),
-            appKeyFile: this.deps.appKeyFile ?? null
+            appKeyFile: this.deps.appKeyFile ?? null,
+            readOnly: this.deps.readOnly ?? [],
+            log: this.deps.log,
+            links: this.deps.linkLook ? { cwd: opts.cwd, look: this.deps.linkLook } : null
           })
         )
       : []
+    // Task E fix rounds 2, 3 and 5: what the sandbox will not do here, in the info and the note beside the kind, so a pane
+    // mounted later or an app that attaches after the start can still show it (the notice says it at the start). On Linux
+    // a named path through a link in the work folder makes Codex refuse every command (sessionSandboxArgs)
+    const linkInWorkFolder =
+      sandboxedCodex &&
+      this.deps.platform === 'linux' &&
+      this.deps.linkLook !== null &&
+      codexSessionLinks({
+        platform: this.deps.platform,
+        homeDir: this.deps.homeDir,
+        layout,
+        env: inherited,
+        appKeyFile: this.deps.appKeyFile ?? null,
+        readOnly: this.deps.readOnly ?? [],
+        links: { cwd: opts.cwd, look: this.deps.linkLook }
+      }).length > 0
+    const sandboxWarnings = sandboxed
+      ? startWarningsFor(this.sandboxWarn, { provider, platform: this.deps.platform, cwd: opts.cwd, homeDir: this.deps.homeDir, linkInWorkFolder })
+      : []
+    const warned = sandboxWarnings.length > 0 ? { sandboxWarnings } : {}
     const env: Record<string, string | undefined> = {
       ...inherited,
       ...(opts.startWithBypass ? BYPASS_ENV : {}),
@@ -481,7 +521,7 @@ export class ChatSessionManager {
         ...(isObserving(caps?.context.policyMode ?? 'compatibility') ? { observed: true } : {}),
         ...(enforced ? { enforced: true } : {}),
         // The sandbox, as a terminal session's note has it: a Host handing the session back and a roll's successor read it
-        ...(sandboxed ? { sandboxed: true, sandboxKind } : {}),
+        ...(sandboxed ? { sandboxed: true, sandboxKind, ...warned } : {}),
         // design F5 fix round 1 (Critical 2): the durable mark, written into the note itself so an
         // app restart's `adopt()` can restore it too, not only `state()`'s in-memory overlay.
         ...(opts.startWithBypass ? { bypassedToolchain: true } : {}),
@@ -521,7 +561,7 @@ export class ChatSessionManager {
       ...(rollPrompt === undefined ? {} : { rollPrompt }),
       ...(opts.startedBy ? { startedBy: opts.startedBy } : {}),
       ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {}),
-      ...(sandboxed ? { sandboxed: true as const, sandboxKind } : {})
+      ...(sandboxed ? { sandboxed: true as const, sandboxKind, ...warned } : {})
     }
 
     const adapter = this.makeAdapter(proc, { mode: 'fresh' }, provider)
@@ -565,6 +605,8 @@ export class ChatSessionManager {
       )
     const live = this.sessions.get(id)
     if (live) live.started = started
+    // Task E fix round 2: started as it would be anyway, and told once what the sandbox will not do here
+    if (sandboxed) tellSandboxStart(this.sandboxWarn, id, sandboxWarnings, this.deps.log)
     return { ...info }
   }
 

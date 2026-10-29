@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { Account } from '../types'
@@ -14,7 +14,7 @@ import type { RollSnapshot, RollSpawnExtra } from '../rolling/snapshot'
 import type { SessionCapabilities } from '../extensions/resolve'
 import { sessionInfoFromNote } from './noteInfo'
 import { gitLayoutOf } from '../sandbox/gitLayout'
-import { appKeyDenies, credentialStoreDenies, sensitiveLocations } from '../sandbox/locations'
+import { appKeyDenies, credentialStoreDenies, nodeLinkLook, profileReadOnly, sensitiveLocations } from '../sandbox/locations'
 import { appKeyPath } from '../host/hostKey'
 import { codexSandboxArgs, codexSandboxEnv, npmCacheOf } from '../sandbox/codexProfile'
 import { claudeSandboxSettings } from '../sandbox/claudeSettings'
@@ -1038,6 +1038,7 @@ describe('SessionManager', () => {
     const refreshed: [string, string | undefined][] = []
     const spawned: PtySpawnOptions[] = []
     const checks: SpawnChecks = {
+      linkLook: null,
       cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform: 'linux', now: Date.now, syncExists: () => true, log: () => {}
     }
     const manager = new SessionManager((_f, _a, o) => (spawned.push(o), new FakePty()), makeDescriptors('linux'), 100, 20, '/home/t', undefined, [], {}, checks)
@@ -1270,6 +1271,7 @@ describe('SessionManager.prepare — the spawn path never waits on a sync probe'
     const syncExists = vi.fn(() => true)
     const log = vi.fn()
     const full: SpawnChecks = {
+      linkLook: null,
       cwd: async () => 'present',
       gitBash: createGitBashResolver(async () => 'absent'),
       platform: process.platform,
@@ -1325,6 +1327,7 @@ describe('SessionManager.prepare — the spawn path never waits on a sync probe'
     const d = makeDescriptors('win32')
     const descriptors = { ...d, claude: { ...d.claude, prepare: async () => void prepared++ }, codex: { ...d.codex, prepare: async () => void prepared++ } }
     const full: SpawnChecks = {
+      linkLook: null,
       cwd: async () => 'present',
       gitBash: createGitBashResolver(async () => 'absent'),
       platform: 'linux',
@@ -1516,6 +1519,7 @@ describe('observe mode at spawn', () => {
     const argv: Array<string[] | string> = []
     const asked: unknown[] = []
     const checks: SpawnChecks = {
+      linkLook: null,
       cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform: 'linux', now: Date.now, syncExists: () => true, log: () => {}
     }
     const manager = new SessionManager((_f, a, o) => (argv.push(a), spawned.push(o), new FakePty()), makeDescriptors('linux'), 100, 20, '/home/t', (id, _acc, o) => {
@@ -1768,20 +1772,20 @@ describe('the sandbox at spawn', () => {
   } as const
   type Ready = NonNullable<SpawnChecks['codexWindowsReady']>
   /** Every Windows home reads set up unless a case says otherwise: the real question runs codex. */
-  const checksFor = (platform: NodeJS.Platform, ready: Ready = async () => 'ready', hostSocketDir: string | null = null, codexExcludes?: SpawnChecks['codexExcludes'], appKeyFile?: string): SpawnChecks => ({
+  const checksFor = (platform: NodeJS.Platform, ready: Ready = async () => 'ready', hostSocketDir: string | null = null, codexExcludes?: SpawnChecks['codexExcludes'], appKeyFile?: string, readOnly?: readonly string[]): SpawnChecks => ({ linkLook: null,
     cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform, now: Date.now, syncExists: () => true, log: () => {},
-    codexWindowsReady: ready, hostSocketDir, ...(codexExcludes ? { codexExcludes } : {}), ...(appKeyFile ? { appKeyFile } : {})
+    codexWindowsReady: ready, hostSocketDir, ...(codexExcludes ? { codexExcludes } : {}), ...(appKeyFile ? { appKeyFile } : {}), ...(readOnly ? { readOnly } : {})
   })
   /** The codex version the probe answers: '0.160.0', the floor, unless a case says otherwise (null: unreadable,
    *  undefined: no codex) */
   const versionOf = (v: string | null | undefined) => Object.assign((_cli: 'claude' | 'codex') => v, { warm: async () => {} })
-  const rig = (platform: 'linux' | 'darwin' | 'win32', o: { noDaemon?: boolean; ready?: Ready; hostSocketDir?: string | null; codex?: string | null; noVersionProbe?: true; excludes?: SpawnChecks['codexExcludes']; appKeyFile?: string } = {}) => {
+  const rig = (platform: 'linux' | 'darwin' | 'win32', o: { noDaemon?: boolean; ready?: Ready; hostSocketDir?: string | null; codex?: string | null; noVersionProbe?: true; excludes?: SpawnChecks['codexExcludes']; appKeyFile?: string; readOnly?: readonly string[] } = {}) => {
     const argv: string[][] = []
     const spawned: PtySpawnOptions[] = []
     const manager = new SessionManager(
       (_f, a, opts) => (argv.push(a as string[]), spawned.push(opts), new FakePty()),
       makeDescriptors(platform, HOME[platform], undefined, daemon(o.noDaemon ?? true)),
-      100, 20, HOME[platform], undefined, [], { ...BASE[platform] }, checksFor(platform, o.ready, o.hostSocketDir ?? null, o.excludes, o.appKeyFile)
+      100, 20, HOME[platform], undefined, [], { ...BASE[platform] }, checksFor(platform, o.ready, o.hostSocketDir ?? null, o.excludes, o.appKeyFile, o.readOnly)
     )
     if (!o.noVersionProbe) manager.codexVersion = versionOf('codex' in o ? o.codex : '0.160.0')
     return { manager, argv, spawned }
@@ -1791,7 +1795,7 @@ describe('the sandbox at spawn', () => {
     const layout = await gitLayoutOf(cwd)
     const env: Record<string, string> = { ...BASE[platform] }
     const denied = [...sensitiveLocations(platform, env, HOME[platform]), ...credentialStoreDenies(platform, env, HOME[platform])]
-    return { args: codexSandboxArgs({ platform, layout, denied }), env: codexSandboxEnv({ platform, layout, tmpDir: os.tmpdir() }), layout }
+    return { args: codexSandboxArgs({ platform, layout, denied, readOnly: [] }), env: codexSandboxEnv({ platform, layout, tmpDir: os.tmpdir() }), layout }
   }
   /** The codex arguments after cmd.exe's wrapper, when win32 found a shim. */
   const codexArgs = (a: string[]): string[] => (a[0] === '/d' ? a.slice(4) : a)
@@ -1903,6 +1907,184 @@ describe('the sandbox at spawn', () => {
       expect(profile, platform).toContain(`"${files[platform].replace(/\\/g, '/')}"="deny"`)
       expect(profile, platform).not.toContain('host.key')
     }
+  })
+
+  // Task E (2026-10-28): what the app and the Host run outside any sandbox is in the profile folder, so a sandboxed
+  // session's profile keeps that folder read-only on every OS, wherever the session's folder is; the app key in it stays
+  // denied and the Host key readable
+  it("keeps Astera's profile folder read on every OS, with the app key in it denied", async () => {
+    const dirs = { linux: '/home/t/.config/astera', darwin: '/Users/t/Library/Application Support/astera', win32: 'C:\\Users\\t\\AppData\\Roaming\\astera' } as const
+    for (const platform of ['linux', 'darwin', 'win32'] as const) {
+      const cwd = repo()
+      const sep = platform === 'win32' ? '\\' : '/'
+      const dir = dirs[platform].replace(/\\/g, '/')
+      const { manager, argv } = rig(platform, { readOnly: [dir], appKeyFile: [dirs[platform], 'host', 'app.key'].join(sep) })
+      await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+      manager.spawn({ account: codexAccount, cwd, sandbox: true })
+      const profile = codexArgs(argv[0]).find((a) => a.startsWith('permissions='))!
+      expect(profile, platform).toContain(`"${dir}"="read"`)
+      expect(profile, platform).toContain(`"${dir}/host/app.key"="deny"`)
+      expect(profile, platform).not.toContain('host.key')
+    }
+  })
+
+  // Task E fix round 2 (the person's decision): a sandboxed start whose work folder holds the home folder starts as it
+  // does today, and its sink is told once; a project folder inside the home folder, and a start outside the sandbox, are
+  // not told
+  it('tells a sandboxed start whose work folder holds the home folder, once, and starts it as today', async () => {
+    const cwd = repo()
+    const home = path.join(cwd, 'home')
+    mkdirSync(home)
+    const argv: string[][] = []
+    const opened: PtySpawnOptions[] = []
+    const manager = new SessionManager((_f, a, o) => (argv.push(a as string[]), opened.push(o), new FakePty()), makeDescriptors('linux', home, undefined, daemon(true)),
+      100, 20, home, undefined, [], { ...BASE.linux }, checksFor('linux'))
+    manager.codexVersion = versionOf('0.160.0')
+    const told: Array<[string, string[]]> = []
+    manager.sandboxWarn = { claudeUsernsRestricted: () => true, warn: (id, ws) => void told.push([id, [...ws]]) }
+    const said: string[] = []
+    manager.onData = (e) => void said.push(e.data)
+    await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    const info = manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    expect(argv).toHaveLength(1)
+    // Codex: the home folder only, never the Claude-only Ubuntu warning
+    expect(told).toEqual([[info.id, ['homeInWorkFolder']]])
+    // Task E fix round 3 (re-review Important 1): the warnings ride the info and the note, as sandboxKind does, for the tab
+    // to show above the terminal; nothing is written into the pty's stream, which a CLI's alternate screen hides
+    expect(info.sandboxWarnings).toEqual(['homeInWorkFolder'])
+    expect(opened[0].meta?.restore).toMatchObject({ sandboxed: true, sandboxWarnings: ['homeInWorkFolder'] })
+    expect(said.join('')).not.toContain('[Astera]')
+    expect(manager.list().find((s) => s.id === info.id)?.sandboxWarnings).toEqual(['homeInWorkFolder'])
+    const project = path.join(home, 'p')
+    mkdirSync(path.join(project, '.git'), { recursive: true })
+    await manager.prepare({ account: codexAccount, cwd: project, sandbox: true })
+    manager.spawn({ account: codexAccount, cwd: project, sandbox: true })
+    await manager.prepare({ account: codexAccount, cwd })
+    manager.spawn({ account: codexAccount, cwd })
+    expect(argv).toHaveLength(3)
+    expect(told).toHaveLength(1)
+  })
+
+  // Task E fix round 5 (rule E5): every path Astera names for a sandboxed Codex start is looked at against the session's
+  // writable folders. A link the session cannot change (a dotfile manager's ~/.config, with a project work folder) is
+  // followed, a missing entry under it too; a link it could change (the work folder holds it) leaves the entry as given:
+  // on Linux Codex then refuses every command, and the session is told so; elsewhere nothing refuses it, so the start is
+  // refused (`linked-path`), its log naming the link
+  describe('a link on a path the sandbox names', () => {
+    const linkedHome = (): { home: string; proj: string } => {
+      // Outside /tmp, which a sandboxed session may write (so a link there is one it could change): Linux's temp folder is
+      // /tmp, so the fixture goes in /dev/shm there
+      const root = mkdtempSync(path.join(process.platform === 'linux' && existsSync('/dev/shm') ? '/dev/shm' : os.tmpdir(), 'astera-links-'))
+      dirs.push(root)
+      const base = realpathSync.native(root).replace(/\\/g, '/')
+      const home = `${base}/home`
+      mkdirSync(`${home}/dots/config/gh`, { recursive: true })
+      mkdirSync(`${home}/proj/.git`, { recursive: true })
+      symlinkSync(`${home}/dots/config`, `${home}/.config`, process.platform === 'win32' ? 'junction' : 'dir')
+      return { home, proj: `${home}/proj` }
+    }
+    const linkRig = (platform: 'linux' | 'darwin' | 'win32', home: string) => {
+      const argv: string[][] = []
+      const logs: string[] = []
+      const manager = new SessionManager((_f, a) => (argv.push(a as string[]), new FakePty()), makeDescriptors(platform, home, undefined, daemon(true)),
+        100, 20, home, undefined, [], { ...BASE[platform] }, { ...checksFor(platform), log: (m) => void logs.push(m), linkLook: nodeLinkLook, readOnly: [`${home}/.config/astera`] })
+      manager.codexVersion = versionOf('0.160.0')
+      const told: Array<[string, string[]]> = []
+      manager.sandboxWarn = { claudeUsernsRestricted: () => false, warn: (id, ws) => void told.push([id, [...ws]]) }
+      return { manager, argv, logs, told }
+    }
+
+    it('follows a link the session cannot change, on every entry, a missing one included', async () => {
+      for (const platform of ['linux', 'darwin'] as const) {
+        const { home, proj } = linkedHome()
+        const r = linkRig(platform, home)
+        await r.manager.prepare({ account: codexAccount, cwd: proj, sandbox: true })
+        const info = r.manager.spawn({ account: codexAccount, cwd: proj, sandbox: true })
+        const profile = codexArgs(r.argv[0]).find((a) => a.startsWith('permissions='))!
+        expect(profile, platform).toContain(`"${home}/dots/config/gh"="deny"`)
+        expect(profile, platform).toContain(`"${home}/dots/config/gcloud"="deny"`)
+        expect(profile, platform).toContain(`"${home}/dots/config/astera"="read"`)
+        expect(profile, platform).not.toContain(`${home}/.config/`)
+        expect(info.sandboxWarnings, platform).toBeUndefined()
+      }
+    })
+
+    it('on Linux leaves an entry through a link in the work folder as given, and tells the session Codex will refuse its commands', async () => {
+      const { home } = linkedHome()
+      const r = linkRig('linux', home)
+      await r.manager.prepare({ account: codexAccount, cwd: home, sandbox: true })
+      const info = r.manager.spawn({ account: codexAccount, cwd: home, sandbox: true })
+      const profile = codexArgs(r.argv[0]).find((a) => a.startsWith('permissions='))!
+      expect(profile).toContain(`"${home}/.config/gh"="deny"`)
+      expect(profile).toContain(`"${home}/.config/gcloud"="deny"`)
+      expect(profile).toContain(`"${home}/.config/astera"="read"`)
+      expect(info.sandboxWarnings).toEqual(['linkInWorkFolder', 'homeInWorkFolder'])
+      expect(r.told).toEqual([[info.id, ['linkInWorkFolder', 'homeInWorkFolder']]])
+    })
+
+    it('elsewhere refuses a start whose entry goes through a link in the work folder, naming the link in the log', async () => {
+      // macOS and (fix round 6, re-review 2) Windows, whose sandbox resolves every path it protects and pins no link
+      for (const platform of ['darwin', 'win32'] as const) {
+        const { home } = linkedHome()
+        const r = linkRig(platform, home)
+        await expect(r.manager.prepare({ account: codexAccount, cwd: home, sandbox: true }), platform).rejects.toThrow(/^SANDBOX_UNAVAILABLE: linked-path$/)
+        expect(r.logs.some((l) => l.includes(`${home}/.config`)), platform).toBe(true)
+        expect(r.argv, platform).toHaveLength(0)
+      }
+    })
+  })
+
+  // Task E fix round 6 (Important): Codex's Windows sandbox makes a missing deny-read path a folder before it denies it
+  // (windows-sandbox-rs/src/deny_read_acl.rs:58-76 at rust-v0.160.0), so a missing ~/.git-credentials became an empty
+  // folder where git's credential store wants a file. On Windows a file entry that is not there at the start is left out;
+  // a missing folder stays named (an empty folder there is harmless); nothing changes off Windows
+  it('on Windows leaves out a deny entry for a file that is not there, and keeps one for a missing folder', async () => {
+    const base = realpathSync.native(repo()).replace(/\\/g, '/')
+    const home = `${base}/home`
+    const profile = `${base}/profile`
+    mkdirSync(home)
+    mkdirSync(`${profile}/host`, { recursive: true })
+    writeFileSync(`${home}/.git-credentials`, '')
+    const cwd = repo()
+    const start = async (platform: 'win32' | 'linux'): Promise<string> => {
+      const argv: string[][] = []
+      const env = platform === 'win32' ? { Path: 'C:\\Windows', APPDATA: `${home}/AppData/Roaming` } : { ...BASE.linux }
+      const manager = new SessionManager((_f, a) => (argv.push(a as string[]), new FakePty()), makeDescriptors(platform, home, undefined, daemon(true)),
+        100, 20, home, undefined, [], env, { ...checksFor(platform), linkLook: nodeLinkLook, appKeyFile: `${profile}/host/app.key` })
+      manager.codexVersion = versionOf('0.160.0')
+      await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+      manager.spawn({ account: codexAccount, cwd, sandbox: true })
+      return codexArgs(argv[0]).find((a) => a.startsWith('permissions='))!
+    }
+    const win = await start('win32')
+    expect(win).toContain(`"${home}/.git-credentials"="deny"`)
+    expect(win).not.toContain(`${home}/.npmrc`)
+    expect(win).toContain(`"${home}/.ssh"="deny"`)
+    expect(win).toContain(`"${home}/AppData/Roaming/gcloud"="deny"`)
+    // The app key is a file too: left out while it is not there, named once it is
+    expect(win).not.toContain('app.key')
+    writeFileSync(`${profile}/host/app.key`, 'k')
+    expect(await start('win32')).toContain(`"${profile}/host/app.key"="deny"`)
+    // Off Windows a missing file stays named: nothing there makes it a folder
+    expect(await start('linux')).toContain(`"${home}/.npmrc"="deny"`)
+  })
+
+  // Task E fix round 1: every read-only folder the wiring names (the profile and the places Astera writes code or an
+  // installer to and runs unsandboxed) is a `read` entry; the win32 session goes through cmd.exe, so one with a forbidden
+  // character refuses the start
+  it("keeps every read-only folder the wiring names read, and refuses a win32 one cmd.exe cannot carry", async () => {
+    const roots = ['C:/Users/t/AppData/Roaming/astera', 'C:/Users/t/AppData/Local/astera/host-runtime', 'C:/Users/t/AppData/Local/astera-updater', 'C:/Users/t/AppData/Local/astera/app']
+    const cwd = repo()
+    const { manager, argv } = rig('win32', { readOnly: roots })
+    await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    const profile = codexArgs(argv[0]).find((a) => a.startsWith('permissions='))!
+    for (const r of roots) expect(profile).toContain(`"${r}"="read"`)
+    const bad = rig('win32', { readOnly: ['C:/Users/t/AppData/Local/astera 100%/host-runtime'] })
+    // Task E fix round 3: not the work folder, so its own code, whose words do not name the work folder (re-review Minor 6)
+    await expect(bad.manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: named-path-unsafe$/)
+    expect(() => bad.manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: /)
+    expect(bad.argv).toHaveLength(0)
   })
 
   // Final fix pass, part 2 (B): every other Host's folder beside this profile's (another profile's Host, such as the dev
@@ -2068,10 +2250,14 @@ describe('the sandbox at spawn', () => {
     const cwd = repo()
     const argv: string[][] = []
     const home = 'C:\\Users\\100%'
+    const logs: string[] = []
     const manager = new SessionManager((_f, a) => (argv.push(a as string[]), new FakePty()), makeDescriptors('win32', home, undefined, daemon(true)),
-      100, 20, home, undefined, [], { Path: 'C:\\Windows' }, checksFor('win32'))
+      100, 20, home, undefined, [], { Path: 'C:\\Windows' }, { ...checksFor('win32'), log: (m) => void logs.push(m) })
     manager.codexVersion = versionOf('0.160.0')
-    await expect(manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: path-unsafe$/)
+    // A login folder in the home, not the work folder: its own code, and the log names the path (Task E fix round 3,
+    // re-review Minor 6), at the prepare and again at the spawn
+    await expect(manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: named-path-unsafe$/)
+    expect(logs.filter((l) => l.includes('C:/Users/100%/.ssh'))).toHaveLength(1)
     expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: /)
     expect(argv).toHaveLength(0)
   })
@@ -2083,15 +2269,18 @@ describe('the sandbox at spawn', () => {
     const flipping = Object.assign(() => takes, { warm: async () => {} })
     let appData = 'C:\\Users\\t\\AppData\\Roaming'
     const spawned: PtySpawnOptions[] = []
+    const logs: string[] = []
     const manager = new SessionManager((_f, _a, o) => (spawned.push(o), new FakePty()), makeDescriptors('win32', HOME.win32, undefined, flipping),
-      100, 20, HOME.win32, undefined, [], () => ({ Path: 'C:\\Windows', APPDATA: appData }), checksFor('win32'))
+      100, 20, HOME.win32, undefined, [], () => ({ Path: 'C:\\Windows', APPDATA: appData }), { ...checksFor('win32'), log: (m) => void logs.push(m) })
     manager.codexVersion = versionOf('0.160.0')
     await manager.prepare({ account: codexAccount, cwd, sandbox: true })
     takes = false
     expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: codex-daemon codex$/)
     takes = true
     appData = 'C:\\Users\\t\\AppData\\R&D'
-    expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: path-unsafe$/)
+    expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: named-path-unsafe$/)
+    // The log names the path the spawn refused for (Task E fix round 3, re-review Minor 6)
+    expect(logs.some((l) => l.includes('C:/Users/t/AppData/R&D/GitHub CLI'))).toBe(true)
     expect(spawned).toHaveLength(0)
     appData = 'C:\\Users\\t\\AppData\\Roaming'
     manager.spawn({ account: codexAccount, cwd, sandbox: true })
@@ -2240,7 +2429,7 @@ describe('the sandbox at spawn, for Claude', () => {
     darwin: { PATH: '/usr/bin' },
     win32: { Path: 'C:\\Windows', APPDATA: 'C:\\Users\\t\\AppData\\Roaming' }
   } as const
-  const checksFor = (platform: NodeJS.Platform): SpawnChecks => ({
+  const checksFor = (platform: NodeJS.Platform): SpawnChecks => ({ linkLook: null,
     cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform, now: Date.now, syncExists: () => true, log: () => {}
   })
   const rig = async (platform: 'linux' | 'darwin' | 'win32', version: string | null | undefined = '2.1.310', extraEnv: Record<string, string> = {}) => {
@@ -2265,7 +2454,7 @@ describe('the sandbox at spawn, for Claude', () => {
       (id, acc, o) => statusLine.spawnConfig(id, acc, o),
       [], { ...BASE[platform], ...extraEnv }, checksFor(platform)
     )
-    manager.claudeSandbox = claudeSandboxStart({
+    manager.claudeSandbox = claudeSandboxStart({ linkLook: null,
       platform, profileDir, homeDir: gitHome, env: {}, tmpDir, files: statusLine, version: versions, uid: 1000,
       runGit: async () => null, log: () => {}
     })
@@ -2273,12 +2462,13 @@ describe('the sandbox at spawn, for Claude', () => {
   }
   /** The `--settings` file a session was started with. */
   const settingsOf = (a: string[]): string => a[a.indexOf('--settings') + 1]
-  /** The builder's settings for a session of the rig's profile, with its app key denied (sandbox follow-ups, item 1). */
+  /** The builder's settings for a session of the rig's profile, with its app key denied (sandbox follow-ups, item 1) and the
+   *  profile folder itself kept read-only (Task E). */
   const builder = (platform: 'linux' | 'darwin' | 'win32', r: { tmpDir: string; profileDir: string }, layout: GitLayout | null = null) => {
     const env = { ...BASE[platform] }
     const denied = [...sensitiveLocations(platform, env, HOME[platform]), ...credentialStoreDenies(platform, env, HOME[platform]), ...appKeyDenies(appKeyPath(r.profileDir))]
     const tmpDir = r.tmpDir
-    return claudeSandboxSettings({ platform, denied, npmCache: npmCacheOf(tmpDir), layout })
+    return claudeSandboxSettings({ platform, denied, readOnly: profileReadOnly(r.profileDir), npmCache: npmCacheOf(tmpDir), layout })
   }
   /** A repository's top in a fresh temp folder: a `.git` folder is all gitLayoutOf needs. */
   const repoIn = (): string => {
@@ -2286,6 +2476,28 @@ describe('the sandbox at spawn, for Claude', () => {
     mkdirSync(path.join(top, '.git'))
     return top
   }
+
+  // Task E fix round 2: where Ubuntu's AppArmor profile confines bubblewrap (asked once per process by the wiring), a
+  // sandboxed Claude session on Linux starts as today and its sink is told why its shell will fail; not when the check
+  // says no, not on another OS, and not for a session outside the sandbox
+  it('tells a sandboxed Claude start on Linux where bubblewrap is confined, and no other', async () => {
+    for (const platform of ['linux', 'darwin'] as const) {
+      for (const restricted of [true, false]) {
+        const r = await rig(platform)
+        const told: string[][] = []
+        let asked = 0
+        r.manager.sandboxWarn = { claudeUsernsRestricted: () => (asked++, restricted), warn: (_id, ws) => void told.push([...ws]) }
+        const cwd = temp()
+        await r.manager.prepare({ account, cwd, sandbox: true })
+        r.manager.spawn({ account, cwd, sandbox: true })
+        await r.manager.prepare({ account, cwd })
+        r.manager.spawn({ account, cwd })
+        expect(r.argv, `${platform} ${restricted}`).toHaveLength(2)
+        expect(told, `${platform} ${restricted}`).toEqual(platform === 'linux' && restricted ? [['claudeUserns']] : [])
+        expect(asked, `${platform} ${restricted}`).toBeLessThanOrEqual(1)
+      }
+    }
+  })
 
   it('a sandboxed Claude session on linux gets the sandbox variant', async () => {
     const r = await rig('linux')
@@ -2358,7 +2570,10 @@ describe('the sandbox at spawn, for Claude', () => {
       const layout = await gitLayoutOf(cwd)
       const settings = JSON.parse(readFileSync(settingsOf(r.argv[0]), 'utf8'))
       expect(settings.sandbox).toEqual(builder(platform, r, layout).sandbox)
-      expect(settings.sandbox.filesystem.denyWrite).toEqual([...layout!.gitFiles, `${layout!.commonDir}/hooks`, `${layout!.commonDir}/config`, ...layout!.worktreeConfigs])
+      // The git files, and the profile folder after them (Task E)
+      expect(settings.sandbox.filesystem.denyWrite).toEqual([
+        ...layout!.gitFiles, `${layout!.commonDir}/hooks`, `${layout!.commonDir}/config`, ...layout!.worktreeConfigs, r.profileDir.replace(/\\/g, '/')
+      ])
       expect(readFileSync(path.join(cwd, '.git', 'commondir'), 'utf8')).toBe('.\n')
       expect(existsSync(path.join(cwd, '.git', 'modules'))).toBe(true)
       expect(existsSync(path.join(cwd, '.git', 'config.worktree'))).toBe(true)

@@ -582,7 +582,8 @@ async function hostRig(
       openSession(id, { title, accountId: o.accountId, cwd: o.cwd })
       created.push({ id, cwd: o.cwd, ...(o.initialPrompt !== undefined ? { prompt: o.initialPrompt } : {}) })
       return { id, accountId: o.accountId, cwd: o.cwd, status: 'running', title }
-    }
+    },
+    linkLook: null
   } satisfies HostSpawner
 
   const wiring = composeHostDriving({

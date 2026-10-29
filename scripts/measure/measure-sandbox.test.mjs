@@ -5,8 +5,8 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { busSocket, codexS2Args, main, probeEnv, s2Denied, sh, srtArgv, srtS2Settings, workspaceFor } from './measure-sandbox.mjs'
-import { PROBES, verdict } from './probes.mjs'
+import { busSocket, codexS2Args, main, probeEnv, s2Denied, s4Sets, sh, srtArgv, srtS2Settings, workspaceFor } from './measure-sandbox.mjs'
+import { PROBES, failIfMeasuredNothing, verdict } from './probes.mjs'
 import {
   GLOBAL_EXCLUDE_PROBE,
   GLOBAL_IGNORED,
@@ -45,7 +45,12 @@ import {
   nodeVersionArgv,
   srtSettingsOf,
   whoamiArgv,
-  withoutNpmRunEnv
+  withoutNpmRunEnv,
+  sessionReadOnly,
+  PROFILE_FOLDER,
+  PROFILE_PROBES,
+  WIN32_PROFILE_PROBES,
+  profileProbesFor
 } from './s2.mjs'
 import { codexSandboxArgs, npmCacheOf } from '../../src/core/sandbox/codexProfile'
 import { claudeSandboxSettings } from '../../src/core/sandbox/claudeSettings'
@@ -73,7 +78,8 @@ describe('measure-sandbox', () => {
     const yml = readFileSync(path.join(root, '.github/workflows/measure-sandbox.yml'), 'utf8')
     for (const want of [
       'macos-latest',
-      'ubuntu-latest',
+      // Task E (2026-10-28): ubuntu-latest became Ubuntu 26.04 (run 40761549024), where srt runs no command
+      'os: [macos-latest, ubuntu-24.04]',
       '@openai/codex@0.160.0',
       '@anthropic-ai/sandbox-runtime@0.0.79',
       'contents: read',
@@ -97,6 +103,27 @@ describe('measure-sandbox', () => {
       expect(yml, want).toContain(want)
     // Nothing that writes back to the repository
     expect(yml).not.toMatch(/contents: write|git push/)
+    expect(yml).not.toMatch(/os: \[[^\]]*ubuntu-latest|runs-on: ubuntu-latest/)
+  })
+
+  // Task E (2026-10-28): on Ubuntu 26.04 srt refused every command and the job still passed. A set whose every sandboxed
+  // probe was refused measured nothing, so the run fails at its end, naming the set (the worktree ones as such)
+  it('fails a run in which a set measured nothing, naming the set, after every part is written', () => {
+    const refused = [{ id: 'a', refused: true }, { id: 'b', refused: true }]
+    const ran = [{ id: 'a', ok: true }, { id: 'b', ok: false }]
+    expect(s4Sets({ codexS2: ran, srtS2: ran }, { codexS2: ran, srtS2: refused })).toEqual({
+      codexS2: ran,
+      srtS2: ran,
+      'codexS2 (worktree)': ran,
+      'srtS2 (worktree)': refused
+    })
+    expect(() => failIfMeasuredNothing(s4Sets({ codexS2: ran, srtS2: refused }, { srtS2: refused }))).toThrow(/srtS2, srtS2 \(worktree\)/)
+    expect(() => failIfMeasuredNothing(s4Sets({ codexS2: ran }, { codexS2: ran }))).not.toThrow()
+    // main judges the S4 sets once everything is measured and written, so a refused set costs no other part
+    const src = readFileSync(path.join(root, 'scripts/measure/measure-sandbox.mjs'), 'utf8')
+    const judged = src.indexOf('failIfMeasuredNothing(s4Sets(sets, worktreeSets))')
+    expect(judged).toBeGreaterThan(src.indexOf('process.stdout.write(summary)'))
+    expect(judged).toBeLessThan(src.indexOf('return result'))
   })
 
   // Found by the first run: both S2 sets reached a keychain item on macOS
@@ -179,6 +206,14 @@ describe('the S2 measurement', () => {
     expect(yml.slice(s4, upload)).toContain('if: ${{ !cancelled() }}')
   })
 
+  // Task E (2026-10-28): each set is its own case, named for the set, and fails when its sandbox refused every probe
+  it('fails a set whose every sandboxed probe was refused, in the case named for it', () => {
+    const src = readFileSync(path.join(root, 'scripts/measure/s2.measure.test.mjs'), 'utf8')
+    const each = src.slice(src.indexOf('  for (const set of S2_SETS) {'), src.indexOf("  it.skipIf(!WIN)('windows readiness"))
+    expect(each).toMatch(/it\.skipIf\(!s2SetNames\(PLATFORM\)\.includes\(set\.name\)\)\(set\.name, /)
+    expect(each).toMatch(/expect\(refusedAll\(r\.sandboxed\), `\$\{set\.name\} measured nothing/)
+  })
+
   it('skips every case unless its variable is set on a GitHub-hosted runner, or the local one on win32', () => {
     const hosted = { GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted' }
     expect(s2Enabled({ ASTERA_MEASURE_S2: '1', ...hosted }, 'linux')).toBe(true)
@@ -212,9 +247,9 @@ describe('the S2 measurement', () => {
 
   it('names the sets each platform runs', () => {
     const codex = ['codex-repo', 'codex-subfolder', 'codex-worktree', 'codex-worktree-alt', 'codex-worktree-common', 'app-server', 'app-server-profile']
-    expect(s2SetNames('linux')).toEqual([...codex, 'srt-linux-exclude', 'srt-linux-exclude-dirs'])
-    expect(s2SetNames('darwin')).toEqual([...codex, 'srt-mac-socket'])
-    expect(s2SetNames('win32')).toEqual(codex)
+    expect(s2SetNames('linux')).toEqual([...codex, 'srt-linux-exclude', 'srt-linux-exclude-dirs', 'codex-profile', 'srt-profile'])
+    expect(s2SetNames('darwin')).toEqual([...codex, 'srt-mac-socket', 'codex-profile', 'srt-profile'])
+    expect(s2SetNames('win32')).toEqual([...codex, 'codex-profile'])
     expect(Object.fromEntries(S2_SETS.map((s) => [s.name, s.layout]))).toMatchObject({
       'codex-repo': 'repo',
       'codex-subfolder': 'subfolder',
@@ -255,8 +290,9 @@ describe('the S2 sets’ arguments come from the builders', () => {
   })
 
   // Sandbox follow-ups, round 2: the measurement hands Claude's sandbox exactly the settings a Claude start writes, so
-  // its list comes from the start's own builder, the app key included. Pinned against a real StatusLineManager's twin
-  it("hands Claude exactly the settings a Claude start writes (StatusLineManager's twin), the app key included", async () => {
+  // its list comes from the start's own builder, the app key included, and the profile folder kept from being written
+  // (Task E). Pinned against a real StatusLineManager's twin
+  it("hands Claude exactly the settings a Claude start writes (StatusLineManager's twin), the app key and the profile folder included", async () => {
     const profile = mkdtempSync(path.join(os.tmpdir(), 'astera-measure-claude-'))
     try {
       for (const platform of ['darwin', 'linux', 'win32']) {
@@ -270,9 +306,11 @@ describe('the S2 sets’ arguments come from the builders', () => {
           expect(await mgr.ensureSandboxFiles(scope)).toBe('ok')
           const twin = JSON.parse(readFileSync(mgr.sandboxChatArgs(false, scope)[1], 'utf8'))
           const appKey = path.join(profile, platform, 'host', 'app.key')
-          const measured = claudeSandboxSettings({ platform, denied: claudeDenied(platform, e, home, appKey), npmCache: npmCacheOf(tmp), layout })
+          const readOnly = sessionReadOnly(path.join(profile, platform))
+          const measured = claudeSandboxSettings({ platform, denied: claudeDenied(platform, e, home, appKey), readOnly, npmCache: npmCacheOf(tmp), layout })
           expect(twin, platform).toEqual({ ...(measured.sandbox ? { sandbox: measured.sandbox } : {}), permissions: measured.permissions })
           expect(claudeDenied(platform, e, home, appKey), platform).toContain(appKey.replace(/\\/g, '/'))
+          expect(readOnly, platform).toEqual([path.join(profile, platform).replace(/\\/g, '/')])
         }
       }
     } finally {
@@ -295,16 +333,21 @@ describe('the S2 sets’ arguments come from the builders', () => {
   })
 
   // Sandbox follow-ups, item 1: the measurement must hand Codex exactly what a session's start hands it, so its list
-  // comes from the start's own builder, the app key included (on Windows too, where no socket folder is named)
-  it("hands Codex exactly what a session's start does (sessionSandboxArgs), the app key included", () => {
+  // comes from the start's own builder, the app key included (on Windows too, where no socket folder is named), and so
+  // does the profile folder it keeps read (Task E)
+  it("hands Codex exactly what a session's start does (sessionSandboxArgs), the app key and the profile folder included", () => {
     const e = { ...env, APPDATA: 'C:/h/AppData/Roaming' }
     for (const platform of ['darwin', 'linux', 'win32']) {
       const home = platform === 'win32' ? 'C:/h' : '/h'
       const dir = platform === 'win32' ? null : '/tmp/astera-host-0123456789ab-v4'
+      const profileDir = platform === 'win32' ? 'C:\\h\\AppData\\Roaming\\astera' : '/h/.config/astera'
       const appKey = platform === 'win32' ? 'C:/h/AppData/Roaming/astera/host/app.key' : '/h/.config/astera/host/app.key'
+      const readOnly = sessionReadOnly(profileDir)
       for (const layout of [repo, sub, wt]) {
-        const started = codexSandboxCommandArgs(sessionSandboxArgs({ platform, homeDir: home, layout, env: e, hostSocketDir: dir, appKeyFile: appKey }))
-        expect(codexSetArgs({ platform, layout, denied: codexDenied(platform, e, home, dir, appKey) }), platform).toEqual(started)
+        // links: null, as the measurement names every path as given (no way to look at links; Task E fix round 6)
+        const started = codexSandboxCommandArgs(sessionSandboxArgs({ platform, homeDir: home, layout, env: e, hostSocketDir: dir, appKeyFile: appKey, readOnly, links: null }))
+        expect(codexSetArgs({ platform, layout, denied: codexDenied(platform, e, home, dir, appKey), readOnly }), platform).toEqual(started)
+        expect(started.join(' '), platform).toContain(`"${profileDir.replace(/\\/g, '/')}"="read"`)
       }
       expect(codexDenied(platform, e, home, dir, appKey), platform).toContain(appKey)
     }
@@ -313,31 +356,31 @@ describe('the S2 sets’ arguments come from the builders', () => {
   // `-a never` is an option of the session command; `codex sandbox` and `app-server` take only the -c values
   it('drops exactly `-a never` from the builder’s arguments', () => {
     for (const platform of ['linux', 'win32']) {
-      const built = codexSandboxArgs({ platform, layout: wt, denied: ['/h/.ssh'] })
+      const built = codexSandboxArgs({ platform, layout: wt, denied: ['/h/.ssh'], readOnly: ['/h/.config/astera'] })
       expect(built.slice(0, 2)).toEqual(['-a', 'never'])
       expect(codexSandboxCommandArgs(built)).toEqual(built.slice(2))
-      expect(codexSetArgs({ platform, layout: wt, denied: ['/h/.ssh'] })).toEqual(built.slice(2))
+      expect(codexSetArgs({ platform, layout: wt, denied: ['/h/.ssh'], readOnly: ['/h/.config/astera'] })).toEqual(built.slice(2))
     }
     expect(() => codexSandboxCommandArgs(['-c', 'x'])).toThrow(/-a never/)
-    expect(profileNameOf(codexSandboxArgs({ platform: 'linux', layout: repo, denied: [] }))).toBe('astera')
+    expect(profileNameOf(codexSandboxArgs({ platform: 'linux', layout: repo, denied: [], readOnly: [] }))).toBe('astera')
   })
 
   it('keeps every layout’s builder profile as it is, and only swaps the worktree’s git directory for the fallback', () => {
     for (const layout of [repo, sub, wt, null])
-      expect(codexSetArgs({ platform: 'darwin', layout, denied: [] })).toEqual(codexSandboxArgs({ platform: 'darwin', layout, denied: [] }).slice(2))
-    const shipped = codexSetArgs({ platform: 'linux', layout: wt, denied: ['/h/.ssh'] }).join(' ')
-    const alt = codexSetArgs({ platform: 'linux', layout: wt, denied: ['/h/.ssh'], variant: 'alt' }).join(' ')
+      expect(codexSetArgs({ platform: 'darwin', layout, denied: [], readOnly: ['/h/p'] })).toEqual(codexSandboxArgs({ platform: 'darwin', layout, denied: [], readOnly: ['/h/p'] }).slice(2))
+    const shipped = codexSetArgs({ platform: 'linux', layout: wt, denied: ['/h/.ssh'], readOnly: ['/h/p'] }).join(' ')
+    const alt = codexSetArgs({ platform: 'linux', layout: wt, denied: ['/h/.ssh'], readOnly: ['/h/p'], variant: 'alt' }).join(' ')
     expect(shipped).toContain('"/m/.git/worktrees/wt"="write"')
     expect(alt).not.toContain('"/m/.git/worktrees/wt"="write"')
     expect(alt).toBe(shipped.replace('"/m/.git/worktrees/wt"="write"', '"/m/.git/worktrees"="write"'))
-    expect(() => codexSetArgs({ platform: 'linux', layout: repo, denied: [], variant: 'alt' })).toThrow(/linked worktree/)
+    expect(() => codexSetArgs({ platform: 'linux', layout: repo, denied: [], readOnly: [], variant: 'alt' })).toThrow(/linked worktree/)
   })
 
   // How Claude Code hands its settings to the runtime, for srt run on its own: the folder and the builder's paths
   // writable, a worktree's common directory with its hooks and config read-only (Claude does that itself), and the
   // builder's own denyWrite, the git files that decide what git runs (final fix pass, C1)
   it('turns Claude’s sandbox settings into srt’s, with the builder’s git denies and the socket only when asked', () => {
-    const claude = claudeSandboxSettings({ platform: 'linux', denied: ['/h/.ssh'], npmCache: '/t/astera-npm-cache', layout: wt })
+    const claude = claudeSandboxSettings({ platform: 'linux', denied: ['/h/.ssh'], readOnly: ['/h/.config/astera'], npmCache: '/t/astera-npm-cache', layout: wt })
     const s = srtSettingsOf(claude, { commonDir: '/m/.git' })
     expect(s.filesystem).toEqual({
       denyRead: ['/h/.ssh'],
@@ -345,10 +388,11 @@ describe('the S2 sets’ arguments come from the builders', () => {
       allowWrite: ['.', '/t/astera-npm-cache', '/m/.git'],
       denyWrite: claude.sandbox.filesystem.denyWrite
     })
-    expect(s.filesystem.denyWrite).toEqual([...wt.gitFiles, '/w/wt/.git', '/m/.git/hooks', '/m/.git/config', ...wt.worktreeConfigs])
+    // The profile folder after them (Task E), kept from being written whatever srt's write paths are
+    expect(s.filesystem.denyWrite).toEqual([...wt.gitFiles, '/w/wt/.git', '/m/.git/hooks', '/m/.git/config', ...wt.worktreeConfigs, '/h/.config/astera'])
     expect(s.network.allowedDomains).toEqual(['example.com', 'registry.npmjs.org'])
     expect(s.network).not.toHaveProperty('allowUnixSockets')
-    const outside = claudeSandboxSettings({ platform: 'linux', denied: [], npmCache: '/t/astera-npm-cache', layout: null })
+    const outside = claudeSandboxSettings({ platform: 'linux', denied: [], readOnly: [], npmCache: '/t/astera-npm-cache', layout: null })
     expect(srtSettingsOf(outside, { commonDir: null }).filesystem).toMatchObject({ allowWrite: ['.', '/t/astera-npm-cache'], denyWrite: [] })
     expect(srtSettingsOf(claude, { commonDir: '/m/.git', allowUnixSockets: ['/t/s/sock'] }).network.allowUnixSockets).toEqual(['/t/s/sock'])
   })
@@ -414,6 +458,31 @@ describe('the S2 probes', () => {
     expect(probesFor('darwin', 'worktree').slice(-3)).toEqual(NORMAL_WORK_PROBES)
     // The common case runs them too, beside its commit
     expect(COMMON_CASE_PROBES).toEqual(expect.arrayContaining(['git-commit', 'git-status', 'git-log', 'git-worktree-list']))
+  })
+
+  // Task E (2026-10-28): a profile folder inside the session's folder, in sets of their own (a profile in another set's
+  // repository would show up to git), checked by exactly two plain probes: one file written into it, which the sandbox
+  // must refuse, and the Host key read, which it must allow. Nothing else
+  it('checks a profile inside the session’s folder with one write and one Host key read, in sets of their own', () => {
+    for (const name of ['codex-profile', 'srt-profile']) expect(S2_SETS.find((s) => s.name === name), name).toMatchObject({ layout: 'folder', profileInside: true })
+    expect(S2_SETS.find((s) => s.name === 'codex-profile')).toMatchObject({ kind: 'codex' })
+    expect(S2_SETS.find((s) => s.name === 'codex-profile').platforms).toBeUndefined()
+    expect(S2_SETS.find((s) => s.name === 'srt-profile')).toMatchObject({ kind: 'srt', platforms: ['linux', 'darwin'] })
+    expect(S2_SETS.filter((s) => s.profileInside).map((s) => s.name)).toEqual(['codex-profile', 'srt-profile'])
+    expect(PROFILE_FOLDER).toBe('astera-profile')
+    expect(profileProbesFor('linux')).toEqual(PROFILE_PROBES)
+    expect(profileProbesFor('darwin')).toEqual(PROFILE_PROBES)
+    expect(profileProbesFor('win32')).toEqual(WIN32_PROFILE_PROBES)
+    for (const list of [PROFILE_PROBES, WIN32_PROFILE_PROBES]) expect(list.map((p) => p.id)).toEqual(['profile-write', 'profile-host-key-read'])
+    expect(PROFILE_PROBES).toEqual([
+      { id: 'profile-write', line: 'echo x > "$ASTERA_PROBE_PROFILE/astera-probe-write.txt"' },
+      { id: 'profile-host-key-read', line: 'cat "$ASTERA_PROBE_PROFILE/host/host.key" > /dev/null' }
+    ])
+    expect(WIN32_PROFILE_PROBES).toEqual([
+      { id: 'profile-write', line: 'echo x> %ASTERA_PROBE_PROFILE%\\astera-probe-write.txt' },
+      { id: 'profile-host-key-read', line: 'type %ASTERA_PROBE_PROFILE%\\host\\host.key > nul' }
+    ])
+    for (const p of WIN32_PROFILE_PROBES) expect(p.line, p.id).not.toContain('"')
   })
 
   it('has the cmd.exe probes the plan lists for Windows, with no double quote (cmd.exe would see it escaped)', () => {

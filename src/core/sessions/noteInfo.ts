@@ -4,6 +4,7 @@
 // which note is a session and what it says. The chat twin, chatInfoFromNote, does the same for
 // ChatSessionManager.adopt and the Host's chat takeover. Imports only core types.
 import type { SessionInfo } from '../types'
+import { knownSandboxWarnings } from '../sandbox/warningKeys'
 
 /** The SessionInfo a pty note describes, or null for a note of another kind or missing fields — the
  *  rule SessionManager.adopt reads by, shared with the Host's takeover. */
@@ -89,9 +90,13 @@ function startedByOf(r: Record<string, unknown>): Pick<SessionInfo, 'startedBy'>
  *  roll reads it off the session it replaces, so its successor starts in the sandbox too. Beside it, what protection that
  *  is (SessionInfo.sandboxKind), only a kind this build knows and only on a sandboxed note. Also how the Host's
  *  `sessions list` says it (host/sessions.ts). */
-export function sandboxedOf(r: Record<string, unknown>): Pick<SessionInfo, 'sandboxed' | 'sandboxKind'> {
+export function sandboxedOf(r: Record<string, unknown>): Pick<SessionInfo, 'sandboxed' | 'sandboxKind' | 'sandboxWarnings'> {
   if (r.sandboxed !== true) return {}
-  return r.sandboxKind === 'sandbox' || r.sandboxKind === 'deny-only' ? { sandboxed: true, sandboxKind: r.sandboxKind } : { sandboxed: true }
+  // Task E fix round 3: the start's warnings beside the kind, only those this build knows, so a Host worker's tab and one
+  // taken back after a restart show them above the terminal or the chat
+  const ws = knownSandboxWarnings(r.sandboxWarnings)
+  const warnings = ws.length > 0 ? { sandboxWarnings: ws } : {}
+  return r.sandboxKind === 'sandbox' || r.sandboxKind === 'deny-only' ? { sandboxed: true, sandboxKind: r.sandboxKind, ...warnings } : { sandboxed: true, ...warnings }
 }
 
 /** The agent profile the session was started from, as its note's restore says (SessionInfo.agentProfileId): only a

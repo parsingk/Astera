@@ -44,6 +44,20 @@ const GIVEN = {
     'フォルダーのパスに Windows のコマンドラインで扱えない文字（" & | < > ^ %）が含まれているため、サンドボックスで起動できません。',
     'La ruta de la carpeta tiene un carácter que la línea de comandos de Windows no admite (" & | < > ^ %), así que no puede iniciarse en el sandbox.'
   ],
+  // Task E fix round 3 (re-review Minor 6): a path the sandbox names besides the work folder, which the log names
+  'session.spawn.sandbox.namedPathUnsafe': [
+    '작업 폴더 말고 sandbox가 지정해야 하는 폴더(Astera 자체 폴더나 홈의 로그인 정보 폴더)의 경로에 Windows 명령줄이 다룰 수 없는 문자(" & | < > ^ %)가 있어 sandbox로 시작할 수 없습니다. 어느 폴더인지는 Astera 로그에 있습니다.',
+    "A folder the sandbox has to name besides the work folder (one of Astera's own, or a login folder in your home) holds a character the Windows command line cannot carry (\" & | < > ^ %), so it cannot start in the sandbox. Astera's log names the folder.",
+    '作業フォルダー以外にサンドボックスが指定するフォルダー（Astera 自身のフォルダー、またはホームのログイン情報のフォルダー）のパスに Windows のコマンドラインで扱えない文字（" & | < > ^ %）が含まれているため、サンドボックスで起動できません。どのフォルダーかは Astera のログに記録されています。',
+    'Una carpeta que el sandbox debe indicar además de la carpeta de trabajo (una de Astera o una carpeta de inicio de sesión de su carpeta personal) tiene un carácter que la línea de comandos de Windows no admite (" & | < > ^ %), así que no puede iniciarse en el sandbox. El registro de Astera indica cuál es.'
+  ],
+  // Task E fix round 5 (rule E5): a named path through a link inside the work folder, where nothing else refuses it
+  'session.spawn.sandbox.linkedPath': [
+    '로그인 정보나 Astera 자체 파일이 든 폴더가 작업 폴더 안의 링크를 거쳐 있고 세션이 그 링크를 바꿀 수 있어서, sandbox가 그 폴더를 지킬 수 없어 sandbox로 시작할 수 없습니다. 프로젝트 폴더에서 시작해 주세요. 어느 링크인지는 Astera 로그에 있습니다.',
+    "A folder that holds logins or Astera's own files is reached through a link inside the work folder, which the session could change, so the sandbox cannot keep it protected and the session cannot start in the sandbox. Start it in a project folder. Astera's log names the link.",
+    'ログイン情報や Astera 自身のファイルを含むフォルダーが作業フォルダー内のリンクの先にあり、セッションがそのリンクを変えられるため、サンドボックスがそのフォルダーを守れず、サンドボックスで起動できません。プロジェクトのフォルダーで起動してください。どのリンクかは Astera のログに記録されています。',
+    'Una carpeta con datos de inicio de sesión o con archivos propios de Astera se alcanza a través de un enlace dentro de la carpeta de trabajo, que la sesión podría cambiar, así que el sandbox no puede protegerla y la sesión no puede iniciarse en el sandbox. Iníciela en una carpeta de proyecto. El registro de Astera indica cuál es el enlace.'
+  ],
   'session.spawn.sandbox.gitLayout': [
     '작업 폴더의 git 정보를 읽지 못해 sandbox로 시작할 수 없습니다.',
     "The work folder's git details could not be read, so it cannot start in the sandbox.",
@@ -91,6 +105,38 @@ const GIVEN = {
   ]
 } as const
 
+// Task E fix rounds 2 and 3, in the order ko, en, ja, es: the session starts as today and its tab says this. Round 3:
+// the Ubuntu line says what Ubuntu's profile does and points to srt's README for the fix, in its words. Round 4:
+// only the AppArmor route (our run 40761549024 had the sysctl set and srt still failed under the bwrap profile)
+const WARNINGS = {
+  'session.sandbox.warn.homeInWorkFolder': [
+    '이 sandbox 세션의 작업 폴더가 홈 폴더를 포함하고 있어서, sandbox 안에서 홈 폴더의 프로그램과 설정을 바꿀 수 있습니다. 이것들을 지키려면 프로젝트 폴더에서 시작해 주세요.',
+    "This sandboxed session's work folder contains your home folder, so programs and settings in your home folder can be changed from inside the sandbox. Start it in a project folder to keep them out of reach.",
+    'このサンドボックスのセッションの作業フォルダーはホームフォルダーを含んでいるため、サンドボックスの中からホームフォルダーのプログラムや設定を変更できます。それらを守るには、プロジェクトのフォルダーで起動してください。',
+    'La carpeta de trabajo de esta sesión del sandbox contiene su carpeta personal, así que los programas y la configuración de su carpeta personal se pueden cambiar desde dentro del sandbox. Iníciela en una carpeta de proyecto para mantenerlos fuera de su alcance.'
+  ],
+  'session.sandbox.warn.claudeUserns': [
+    '이 시스템에서는 Claude Code의 sandbox가 셸 명령을 실행할 수 없습니다. Ubuntu의 bubblewrap용 AppArmor 프로필(bwrap-userns-restrict)이 bubblewrap 안에서 도는 프로그램의 권한을 빼앗아, 이 세션의 셸 명령은 모두 실패합니다. 파일 도구는 그대로 쓸 수 있습니다. 해결하려면 관련 바이너리에 userns를 허용하는 AppArmor 프로필을 추가해야 합니다. 자세한 내용은 Claude Code의 sandbox 런타임(@anthropic-ai/sandbox-runtime) README의 Ubuntu 안내를 보세요.',
+    "Claude Code's sandbox cannot run shell commands on this system: Ubuntu's AppArmor profile for bubblewrap (bwrap-userns-restrict) takes capabilities away from the programs running inside bubblewrap, so every shell command in this session will fail. File tools still work. The fix is an AppArmor profile that grants userns to the relevant binaries; see the Ubuntu note in the README of Claude Code's sandbox runtime (@anthropic-ai/sandbox-runtime) for the details.",
+    'このシステムでは Claude Code のサンドボックスがシェルコマンドを実行できません。Ubuntu の bubblewrap 用 AppArmor プロファイル(bwrap-userns-restrict)が bubblewrap の中で動くプログラムから権限を外すため、このセッションのシェルコマンドはすべて失敗します。ファイルツールはそのまま使えます。解決するには、関連するバイナリに userns を許可する AppArmor プロファイルを追加します。詳しくは Claude Code のサンドボックスランタイム(@anthropic-ai/sandbox-runtime)の README の Ubuntu の項を参照してください。',
+    'En este sistema, el sandbox de Claude Code no puede ejecutar comandos de shell: el perfil de AppArmor de Ubuntu para bubblewrap (bwrap-userns-restrict) quita los permisos a los programas que se ejecutan dentro de bubblewrap, así que todos los comandos de shell de esta sesión fallarán. Las herramientas de archivos siguen funcionando. La solución es un perfil de AppArmor que conceda userns a los binarios correspondientes; consulte los detalles en la nota sobre Ubuntu del README del entorno de sandbox de Claude Code (@anthropic-ai/sandbox-runtime).'
+  ],
+  // Fix round 5: a Codex session on Linux whose named path goes through a link inside the work folder
+  'session.sandbox.warn.linkInWorkFolder': [
+    '이 세션에서 Codex는 모든 명령을 거부합니다. 로그인 정보나 Astera 자체 파일이 든 폴더가 작업 폴더 안의 링크를 거쳐 있어, 세션이 그 링크를 바꿀 수 있기 때문입니다. 프로젝트 폴더에서 시작하면 이 문제가 없습니다.',
+    "Codex will refuse every command in this session: a folder that holds logins or Astera's own files is reached through a link inside the work folder, which the session could change. Starting it in a project folder avoids this.",
+    'このセッションでは Codex がすべてのコマンドを拒否します。ログイン情報や Astera 自身のファイルを含むフォルダーが作業フォルダー内のリンクの先にあり、セッションがそのリンクを変えられるためです。プロジェクトのフォルダーで起動すれば避けられます。',
+    'Codex rechazará todos los comandos de esta sesión: una carpeta con datos de inicio de sesión o con archivos propios de Astera se alcanza a través de un enlace dentro de la carpeta de trabajo, que la sesión podría cambiar. Iniciarla en una carpeta de proyecto lo evita.'
+  ]
+} as const
+/** The Linux Claude row's caption in What the sandbox blocks (coverage.ts sandboxRowCaption). */
+const CAPTION = [
+  'Ubuntu 25.04 이상: AppArmor의 bubblewrap 프로필 때문에 셸 명령이 실패합니다',
+  "Ubuntu 25.04 and later: shell commands fail under AppArmor's bubblewrap profile",
+  'Ubuntu 25.04 以降: AppArmor の bubblewrap 用プロファイルによりシェルコマンドが失敗します',
+  'Ubuntu 25.04 y posteriores: los comandos de shell fallan por el perfil de AppArmor para bubblewrap'
+] as const
+
 describe('the sandbox refusals', () => {
   it('says each one in every language, in the words given', () => {
     const order = ['ko', 'en', 'ja', 'es'] as const
@@ -112,6 +158,26 @@ describe('the sandbox refusals', () => {
     }
     // Spanish in usted, as the screen's other strings are
     expect((CATALOGS.es.messages as Record<string, string>)['session.spawn.sandbox.cliTooOld']).toContain('Actualice la CLI.')
+  })
+
+  // Task E fix round 2: the two start warnings, in every language, in the words given; the pair is both sentences,
+  // with no space between them in Japanese (fix round 3, re-review Minor 4)
+  it('says the start warnings in every language, in the words given', () => {
+    const order = ['ko', 'en', 'ja', 'es'] as const
+    for (const [key, lines] of Object.entries(WARNINGS)) {
+      order.forEach((lang, i) => {
+        expect((CATALOGS[lang].messages as Record<string, string | undefined>)[key], `${lang} ${key}`).toBe(lines[i])
+      })
+    }
+    order.forEach((lang, i) => {
+      const m = CATALOGS[lang].messages as Record<string, string | undefined>
+      // No sysctl is offered any more, in either message (fix round 4)
+      for (const key of ['session.sandbox.warn.claudeUserns', 'session.sandbox.warn.claudeUsernsAndHome']) expect(m[key], `${lang} ${key}`).not.toMatch(/sysctl/)
+      expect(m['session.sandbox.warn.claudeUsernsAndHome'], lang).toBe(`${WARNINGS['session.sandbox.warn.claudeUserns'][i]}${lang === 'ja' ? '' : ' '}${WARNINGS['session.sandbox.warn.homeInWorkFolder'][i]}`)
+      // Fix round 5: the link warning and the home warning, the same way
+      expect(m['session.sandbox.warn.linkAndHome'], lang).toBe(`${WARNINGS['session.sandbox.warn.linkInWorkFolder'][i]}${lang === 'ja' ? '' : ' '}${WARNINGS['session.sandbox.warn.homeInWorkFolder'][i]}`)
+      expect(m['settings.security.sandboxCoverage.linuxClaudeUbuntu'], lang).toBe(CAPTION[i])
+    })
   })
 
   // Task 7 fix round 1: a refused Claude roll's line carries the refusal's own sentence, worded in the same language

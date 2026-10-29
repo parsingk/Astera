@@ -13,7 +13,7 @@ import { createAttentionState } from './attention'
 import { hookEventState, latestEventLine } from '../hooks/sessionState'
 import { resolveAction } from '../audit/resolve'
 import { claudeSandboxSettings } from '../sandbox/claudeSettings'
-import { appKeyDenies, credentialStoreDenies, sensitiveLocations } from '../sandbox/locations'
+import { appKeyDenies, credentialStoreDenies, nodeLinkLook, profileReadOnly, sensitiveLocations } from '../sandbox/locations'
 import { appKeyPath } from '../host/hostKey'
 import { npmCacheOf } from '../sandbox/codexProfile'
 import type { GitLayout } from '../sandbox/gitLayout'
@@ -931,10 +931,10 @@ describe('StatusLineManager sandbox', () => {
       tmpDir: TMP[platform]
     })
   /** What the builder gives for this OS and scope, under the manager's home, with the app key of its profile (sandbox
-   *  follow-ups, item 1). */
+   *  follow-ups, item 1), and the profile folder itself kept read-only (Task E). */
   const builder = (platform: 'linux' | 'darwin' | 'win32', scope: SandboxScope = scopeOn(platform)) => {
     const denied = [...sensitiveLocations(platform, scope.env, HOME[platform]), ...credentialStoreDenies(platform, scope.env, HOME[platform]), ...appKeyDenies(appKeyPath(dir))]
-    return claudeSandboxSettings({ platform, denied, npmCache: npmCacheOf(TMP[platform]), layout: scope.layout })
+    return claudeSandboxSettings({ platform, denied, readOnly: profileReadOnly(dir), npmCache: npmCacheOf(TMP[platform]), layout: scope.layout })
   }
   /** The scope's twins folder a twin is in: sandbox-settings/<hash>. */
   const folderOf = (file: string): string => path.dirname(file.replace(/\//g, path.sep))
@@ -999,6 +999,83 @@ describe('StatusLineManager sandbox', () => {
     }
   })
 
+  // Task E (2026-10-28): what the app and the Host run outside any sandbox is in the profile folder, so a twin keeps that
+  // folder from being written, terminal and chat alike: the sandbox's denyWrite on macOS and Linux, and Edit rules for
+  // Claude's file tools on every OS (on Windows all there is); reads of it are as before
+  it('keeps its own profile folder from being written, by the sandbox and by the file tools', async () => {
+    for (const platform of ['linux', 'darwin', 'win32'] as const) {
+      const mgr = managerOn(platform)
+      await mgr.init()
+      const scope = scopeOn(platform)
+      expect(await mgr.ensureSandboxFiles(scope)).toBe('ok')
+      const folder = dir.replace(/\\/g, '/')
+      const drive = /^([A-Za-z]):(\/.*)$/.exec(folder)
+      const rule = drive ? `/${drive[1].toLowerCase()}${drive[2]}` : folder
+      for (const file of [mgr.spawnConfig('s1', account, { sandbox: scope }).settingsFile, mgr.sandboxChatArgs(false, scope)![1]]) {
+        const twin = JSON.parse(await read(file))
+        expect(twin.permissions.deny, `${platform} ${file}`).toEqual(expect.arrayContaining([`Edit(/${rule})`, `Edit(/${rule}/**)`]))
+        expect(twin.permissions.deny, `${platform} ${file}`).not.toContain(`Read(/${rule})`)
+        if (platform === 'win32') expect(twin.sandbox, file).toBeUndefined()
+        else {
+          expect(twin.sandbox.filesystem.denyWrite, `${platform} ${file}`).toContain(folder)
+          expect(twin.sandbox.filesystem.denyRead, `${platform} ${file}`).not.toContain(folder)
+        }
+      }
+    }
+  })
+
+  // Task E fix rounds 5 and 6 (rule E5). srt cannot keep the deny in force through a link the session could change (on
+  // Linux it follows the path at its start and pins only where it lands; on macOS it keeps a dotfile link's spelling and
+  // pins the link, but the target stays reachable by its own path): a scope whose named path goes through such a link
+  // gets no twin on macOS and Linux, and its start is refused (claudeStart.ts `linked-path`). A link it cannot change is
+  // followed, a missing entry under it too. Windows has no sandbox for Claude, only the file tools' rules, which match a
+  // link and its target alike
+  it('names a path through a link the session cannot change where it lands, and writes no twin for one it could change', async () => {
+    // Outside /tmp, which a sandboxed session may write (so a link there is one it could change): Linux's temp folder is
+    // /tmp, so the fixture goes in /dev/shm there
+    const base = (await fs.realpath(await fs.mkdtemp(path.join(process.platform === 'linux' && existsSync('/dev/shm') ? '/dev/shm' : os.tmpdir(), 'astera-sl-links-')))).replace(/\\/g, '/')
+    try {
+      const home = `${base}/home`
+      await fs.mkdir(`${home}/dots/config/gh`, { recursive: true })
+      await fs.mkdir(`${home}/dots/ssh`, { recursive: true })
+      await fs.mkdir(`${home}/proj`, { recursive: true })
+      const kind = process.platform === 'win32' ? 'junction' : 'dir'
+      await fs.symlink(`${home}/dots/config`, `${home}/.config`, kind)
+      await fs.symlink(`${home}/dots/ssh`, `${home}/.ssh`, kind)
+      for (const platform of ['linux', 'darwin', 'win32'] as const) {
+        const mgr = new StatusLineManager(dir, 'node', () => {}, {
+          platform,
+          execPath: platform === 'win32' ? 'C:/x/electron.exe' : '/opt/astera/astera',
+          ...(platform === 'win32' ? { findRuntime: async () => 'C:\\rt\\astera-host.exe' } : {}),
+          homeDir: home,
+          tmpDir: TMP[platform]
+        })
+        await mgr.init()
+        const inProject: SandboxScope = { layout: null, env: { ...ENV[platform] }, cwd: `${home}/proj`, look: nodeLinkLook }
+        expect(await mgr.ensureSandboxFiles(inProject), platform).toBe('ok')
+        const twin = JSON.parse(await read(mgr.spawnConfig('s1', account, { sandbox: inProject }).settingsFile))
+        const sshRule = (p: string): string => (/^[A-Za-z]:/.test(p) ? `/${p[0].toLowerCase()}${p.slice(2)}` : p)
+        expect(twin.permissions.deny, platform).toContain(`Read(/${sshRule(`${home}/dots/ssh`)})`)
+        expect(twin.permissions.deny, platform).not.toContain(`Read(/${sshRule(`${home}/.ssh`)})`)
+        if (platform !== 'win32') {
+          expect(twin.sandbox.filesystem.denyRead, platform).toEqual(expect.arrayContaining([`${home}/dots/ssh`, `${home}/dots/config/gh`, `${home}/dots/config/gcloud`]))
+          // Neither link's own spelling is named; the entries no link is on (~/.aws and the like) stay as they are
+          expect(twin.sandbox.filesystem.denyRead.some((p: string) => p.startsWith(`${home}/.config/`) || p === `${home}/.ssh`), platform).toBe(false)
+          expect(twin.sandbox.filesystem.denyRead, platform).toContain(`${home}/.aws`)
+        }
+        const inHome: SandboxScope = { layout: null, env: { ...ENV[platform] }, cwd: home, look: nodeLinkLook }
+        if (platform === 'win32') expect(await mgr.ensureSandboxFiles(inHome)).toBe('ok')
+        else {
+          expect(await mgr.ensureSandboxFiles(inHome), platform).toEqual({ linked: expect.arrayContaining([`${home}/.ssh`]) })
+          expect(mgr.spawnConfig('s2', account, { sandbox: inHome }), platform).not.toHaveProperty('sandboxed')
+          expect(mgr.sandboxChatArgs(false, inHome), platform).toBeNull()
+        }
+      }
+    } finally {
+      await fs.rm(base, { recursive: true, force: true })
+    }
+  })
+
   // Final fix pass (C1, minor 2): a twin keeps its own repository's git files from being written and denies the places
   // its own environment names, so two scopes never share a file, and one prepared scope is no other's
   it('gives each scope its own twins, from its own layout and environment, and none to a scope not prepared', async () => {
@@ -1018,7 +1095,8 @@ describe('StatusLineManager sandbox', () => {
     const [a, b, c] = await Promise.all(files.map(async (f) => JSON.parse(await read(f))))
     expect(a.sandbox.filesystem.denyWrite).toEqual(builder('linux', wt).sandbox?.filesystem.denyWrite)
     expect(a.sandbox.filesystem.denyWrite).toContain('/w/wt/.git')
-    expect(b.sandbox.filesystem.denyWrite).toEqual(['/r/.git/commondir', '/r/.git/modules', '/r/.git/hooks', '/r/.git/config', '/r/.git/config.worktree'])
+    // Each scope's own git files, and the profile folder every scope keeps (Task E)
+    expect(b.sandbox.filesystem.denyWrite).toEqual(['/r/.git/commondir', '/r/.git/modules', '/r/.git/hooks', '/r/.git/config', '/r/.git/config.worktree', dir.replace(/\\/g, '/')])
     expect(a.permissions.deny).toContain('Read(//run/user/1000/bus)')
     expect(c.permissions.deny).toContain('Read(//run/user/2000/bus)')
     expect(c.permissions.deny).not.toContain('Read(//run/user/1000/bus)')

@@ -41,9 +41,11 @@ export const SANDBOX_COVERAGE: readonly SandboxCoverageRow[] = [
 /** Said under the table: E6 is the list, so the rest of the home stays readable inside the sandbox (spec §6). */
 export const SANDBOX_TABLE_CAPTION: MessageKey = 'settings.security.sandboxCoverage.homeReadable'
 
-/** Said beside a row the cells cannot say it for: Claude Code's shell on Windows is not restricted. Null for the others. */
+/** Said beside a row the cells cannot say it for: Claude Code's shell on Windows is not restricted; on Linux, from
+ *  Ubuntu 25.04 its shell commands fail under AppArmor's profile for bubblewrap (bwrap-userns-restrict), which takes
+ *  capabilities away from the programs inside bubblewrap (Task E fix rounds 2 and 3). Null for the others. */
 export const sandboxRowCaption = (r: Pick<SandboxCoverageRow, 'provider' | 'os'>): MessageKey | null =>
-  r.provider === 'claude' && r.os === 'win32' ? 'settings.security.sandboxCoverage.windowsClaude' : null
+  r.provider !== 'claude' ? null : r.os === 'win32' ? 'settings.security.sandboxCoverage.windowsClaude' : r.os === 'linux' ? 'settings.security.sandboxCoverage.linuxClaudeUbuntu' : null
 
 /** The protection a sandboxed session of `provider` gets on `platform` (SessionInfo.sandboxKind), decided by the session
  *  managers, which know both: Claude Code on Windows has no sandbox, only deny rules for its file tools; everything else
