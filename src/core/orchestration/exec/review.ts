@@ -23,7 +23,7 @@ import { buildReviewSpecFile, knowledgeIn, specFileName } from './coordinator'
 import { promptText, weakeningFindings } from '../../github/weakening'
 import type { RunGitHubState } from '../../github/lifecycle'
 import { createReviewGate } from './reviewGate'
-import { startedSandboxKind } from './checkSandbox'
+import { startedSandboxKind, workRanSandboxed } from './checkSandbox'
 import type { StartedWorker } from '../command'
 
 export interface ReviewContext {
@@ -230,7 +230,12 @@ export function createReviewStarter(c: ReviewContext): (a: { taskId: string }) =
           provider: picked.provider,
           accountId: picked.accountId,
           runCwd: cwd,
-          worktree: 'current'
+          worktree: 'current',
+          // Task K part 3: the reviewer works in the implementer's tree and commonly runs its tests, so a reviewer of work
+          // done in a sandbox (or under Claude Code's deny rules on Windows) starts in its own CLI's sandbox, recorded on
+          // its Dispatch; where that CLI has none (Claude Code on Windows) the wiring refuses the start
+          // (forcedSandboxBlocker), and the review asks a person, rather than run it outside one
+          ...(workRanSandboxed(c.getState(), task) ? { sandbox: true as const } : {})
         })
       } catch (e) {
         // 검토 Dispatch 의 롤백은 gate() 안에 있다 — 커밋 뒤에 던지는 경로가 이 자리 하나가 아니기

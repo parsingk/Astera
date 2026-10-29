@@ -1182,7 +1182,9 @@ Windows sandbox not set up, the runtime missing a tool, Ubuntu's AppArmor profil
 and is not the code's failure: the Task asks a person (retry, skip the check, or mark the Task failed). A Docker check
 (`compose`, `dockerfile`) of a sandboxed Task is refused that way too, since Docker reaches past any of these sandboxes.
 Claude Code on Windows has no sandbox, so its checks run as before and say `validated outside the sandbox`. Every check,
-sandboxed or not, starts without the variables the Credentials list hides from a session in its folder.
+sandboxed or not, starts without the variables the Credentials list hides from a session in its folder. A reviewer of
+such a Task works in the implementer's tree and starts in its own CLI's sandbox too; where that CLI has none (a Claude
+Code reviewer on Windows) the review is not started and the Task asks a person.
 On Windows the Codex sandbox is Codex's elevated one, which keeps Credential Manager out, and the repository is named a
 safe directory for the account it runs as; a repository, a home folder or one of Astera's own folders whose path holds
 a character cmd.exe reads as syntax (`" & | < > ^ %`) cannot be carried to it. Each Codex account's home must have the

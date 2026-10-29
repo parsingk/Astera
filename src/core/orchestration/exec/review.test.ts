@@ -271,6 +271,19 @@ describe('createReviewStarter', () => {
     expect(h.state().dispatches.find((d) => d.id === a.dispatchId)?.sessionId).toBe('s-review')
   })
 
+  // Task K part 3: a reviewer of work done in a sandbox (or, Claude Code on Windows, under its deny rules) starts in its own
+  // CLI's sandbox: it works in the implementer's tree and commonly runs its tests. Where that CLI has none the start is
+  // refused by the wiring (forcedSandboxBlocker), never run outside it
+  it('starts the reviewer of sandboxed work in its own CLI’s sandbox, and of unsandboxed work as before', async () => {
+    for (const [kind, boxed] of [['sandbox', true], ['deny-only', true], [undefined, false]] as const) {
+      const h = rig({ accounts: [claude('c1'), codex('x1')], loggedIn: ['c1', 'x1'], ...(kind ? { implSandboxKind: kind } : {}) })
+      await h.start({ taskId: h.taskId })
+      const a = h.startWorker.mock.calls[0][0]
+      if (boxed) expect(a, String(kind)).toMatchObject({ provider: 'codex', sandbox: true })
+      else expect(a, String(kind)).not.toHaveProperty('sandbox')
+    }
+  })
+
   // Task K: the reviewer's Dispatch records the protection its session started in, as every attempt's does
   it("records on the reviewer's Dispatch the protection its session started in", async () => {
     const h = rig({ accounts: [claude('c1'), codex('x1')], loggedIn: ['c1', 'x1'], reviewerSandboxKind: 'sandbox' })
