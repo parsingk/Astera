@@ -209,7 +209,10 @@ class FakeElement {
     const i = this.listeners.findIndex((l) => l.type === type && l.fn === fn)
     if (i >= 0) this.listeners.splice(i, 1)
   }
-  /** Capture down the ancestors, then the target, then bubble up — what the code under test relies on. */
+  /** The DOM Standard's dispatch (https://dom.spec.whatwg.org/#concept-event-dispatch, whatwg/dom#686), which Chromium
+   *  follows (blink-dev, "Fire capture event listeners before bubble event listeners at event target", 2020): capture
+   *  listeners down the ancestors, then the target's capture listeners, then its others, then — for an event that
+   *  bubbles — the ancestors' others back up. */
   dispatchEvent(ev: FakeEvent): boolean {
     ev.target = this
     const path: FakeElement[] = []
@@ -221,8 +224,9 @@ class FakeElement {
       }
     }
     for (const n of path) run(n, (l) => l.capture)
-    run(this, () => true)
-    for (const n of [...path].reverse()) run(n, (l) => !l.capture)
+    run(this, (l) => l.capture)
+    run(this, (l) => !l.capture)
+    if (ev.bubbles) for (const n of [...path].reverse()) run(n, (l) => !l.capture)
     return !ev.defaultPrevented
   }
   getBoundingClientRect(): typeof RECT {
@@ -368,8 +372,10 @@ export type Xterm = {
   hangul(keys: string[]): (() => void)[]
   /** Space after a composition: keydown 229, the commit, then the space itself */
   imeSpace(opts?: { eaten?: boolean }): void
-  /** Enter after a composition: keydown 229, the commit, then Enter */
-  imeEnter(): void
+  /** Enter after a composition: keydown 229, the commit, then Enter (with Ctrl when `ctrlKey`) */
+  imeEnter(mods?: { ctrlKey?: boolean }): void
+  /** The textarea loses focus: blur, which does not bubble */
+  blur(): void
   dispose(): void
 }
 
@@ -459,11 +465,12 @@ export function openXterm(): Xterm {
         x.imeKeyUp('Space')
       } else x.key(' ', 32, { code: 'Space' })
     },
-    imeEnter: () => {
+    imeEnter: (mods = {}) => {
       x.imeKeyDown('Enter')
       if (composing) x.compositionEnd(composed)
-      x.key('Enter', 13, { code: 'Enter' })
+      x.key('Enter', 13, { code: 'Enter', ...mods })
     },
+    blur: () => void fire('blur', { bubbles: false, cancelable: false, composed: true }),
     dispose: () => {
       data.dispose()
       term.dispose()

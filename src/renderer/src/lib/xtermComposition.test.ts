@@ -49,6 +49,28 @@ const 안녕 = (): Key[] => x.hangul(['ㅇ', '아', '안', '안|ㄴ', '녀', '�
 const 하세요 = (): Key[] => x.hangul(['ㅎ', '하', '핫', '하|세', '셍', '세|요'])
 const space: Key = () => x.imeSpace()
 const enter: Key = () => x.imeEnter()
+/** A key an IME reports as 229 and answers with its character and no composition — what xterm's 229 check is for */
+const typed = (c: string): Key => () => {
+  x.imeKeyDown('KeyX')
+  x.imeInsert(c)
+  x.imeKeyUp('KeyX')
+}
+/** TerminalView's key handler, as far as these keys go (TerminalView.tsx:144-191): Ctrl+Enter writes ESC CR to the
+ *  session itself — the same place onData's writes go — and Ctrl+V pastes the clipboard; xterm never sees either. */
+const terminalViewKeys = (clipboard: string): void =>
+  x.term.attachCustomKeyEventHandler((e) => {
+    if (e.type !== 'keydown' || !e.ctrlKey || e.altKey || e.metaKey) return true
+    if (e.key === 'Enter' && !e.shiftKey) {
+      x.sent.push('\x1b\r')
+      return false
+    }
+    if (e.key === 'v' || e.key === 'V') {
+      e.preventDefault()
+      x.term.paste(clipboard)
+      return false
+    }
+    return true
+  })
 
 describe('Korean typed while the renderer is busy', () => {
   it('reaches the pty once: the line is not sent again', () => {
@@ -122,11 +144,6 @@ describe('input that has to keep working', () => {
   // composition (xterm's comment: "numbers and punctuation ... when the IME was active"). Not the Windows Korean IME,
   // whose 229 keys outside a composition always start one; Linux and macOS IMEs.
   it('characters an IME inserts with keyCode 229 and no composition, idle and busy', () => {
-    const typed = (c: string): Key => () => {
-      x.imeKeyDown('KeyX')
-      x.imeInsert(c)
-      x.imeKeyUp('KeyX')
-    }
     idle([typed('1'), typed('2')])
     busy([typed('3'), typed('4')])
     expect(x.sent.join('')).toBe('1234')
@@ -153,16 +170,8 @@ describe('input that has to keep working', () => {
     expect(x.sent).toEqual(['가', ' ', '붙여넣기', '나', ' ', 'paste'])
   })
 
-  // TerminalView's Ctrl+V: its key handler reads the clipboard and calls term.paste, and blocks the browser's own paste
   it('Ctrl+V the way TerminalView handles it, between Korean words, busy', () => {
-    x.term.attachCustomKeyEventHandler((e) => {
-      if (e.type === 'keydown' && (e.key === 'v' || e.key === 'V') && e.ctrlKey) {
-        e.preventDefault()
-        x.term.paste('clip')
-        return false
-      }
-      return true
-    })
+    terminalViewKeys('clip')
     const ctrlV: Key = () => x.key('v', 86, { ctrlKey: true })
     busy([...x.hangul(['ㄱ', '가']), space, ctrlV, ...x.hangul(['ㄴ', '나']), space])
     expect(x.sent.join('')).toBe('가 clip나 ')
@@ -178,5 +187,33 @@ describe('input that has to keep working', () => {
     } finally {
       unregister()
     }
+  })
+})
+
+// What an earlier key left for a 0 ms timer has to go out before anything that does not wait for one: a key the
+// embedder's handler takes before xterm sees it, a paste, and blur, which empties the textarea.
+describe('input left waiting goes out before what comes next', () => {
+  it('Ctrl+Enter the way TerminalView handles it: the syllable, then the newline, idle and busy', () => {
+    terminalViewKeys('')
+    const ctrlEnter: Key = () => x.imeEnter({ ctrlKey: true })
+    idle([...x.hangul(['ㄱ', '가']), ctrlEnter])
+    busy([...x.hangul(['ㄴ', '나']), ctrlEnter])
+    expect(shown(x.sent).join('')).toBe('가\x1b<CR>나\x1b<CR>')
+  })
+
+  // A macOS or Linux IME's 229 key waits for its check; a paste empties the textarea once it has sent its text
+  it('a paste while a 229 key waits: that key, then the paste, and no DEL — term.paste and Ctrl+V, busy', () => {
+    terminalViewKeys('clip')
+    idle([typed('a'), typed('b')])
+    busy([typed('1'), () => x.term.paste('p')])
+    busy([typed('2'), () => x.key('v', 86, { ctrlKey: true })])
+    expect(shown(x.sent).join('')).toBe('ab1p2clip')
+  })
+
+  it('blur while a 229 key or a finished composition waits: both go out before the textarea is emptied, busy', () => {
+    idle([typed('a'), typed('b')])
+    busy([typed('1'), () => x.blur()])
+    busy([...x.hangul(['ㄱ', '가']), () => x.imeSpace({ eaten: true }), () => x.blur()])
+    expect(shown(x.sent).join('')).toBe('ab1가 ')
   })
 })
