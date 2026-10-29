@@ -44,8 +44,8 @@ CI 의 macOS 러너에는 로그인된 Claude Code 와 Codex 가 없습니다. �
 - macOS. 로그인된 데스크톱 화면 앞에서 합니다. SSH 로 접속해서 하면 앱 작업 공간이 거절됩니다.
 - Xcode Command Line Tools. git 과, 테스트 하나가 작은 앱을 컴파일하는 cc 가 여기서 옵니다. 없으면
   `xcode-select --install`.
-- Node 22. CI 가 Node 22 를 씁니다. `package.json` 은 22.13.0 이상을 요구하지만, Node 24(24.16 에서 봤습니다)의
-  `npm ci` 는 Electron 을 다 풀지 못한 채 오류 없이 끝납니다. 22 를 쓰세요.
+- Node 22 이상. `package.json` 은 22.13.0 이상을 요구합니다. CI 는 Node 22 를 쓰고, 이 점검은 Node 24 에서도
+  돌려 봤습니다.
 - 이 저장소의 develop 을 받은 폴더, 그리고 그 폴더에서 한 `npm ci`.
 - Claude Code 2.1.306 이상, Codex 0.160.0 이상. 둘 다 이 Mac 에서 이미 로그인되어 있어야 합니다. 터미널의 `claude`,
   `codex` 로 로그인했거나(`~/.claude`, `~/.codex`), 설치된 Astera 에서 추가한 계정이면(`~/.claude-accounts/<이름>`,
@@ -150,8 +150,7 @@ rm -rf ~/astera-mac-check-<날짜> ~/astera-worktrees/mac-check-repo
 
 - `run.sh: 이 점검은 macOS 전용입니다`: Mac 에서 돌려야 합니다.
 - node 가 FAIL: Node 22 의 최신판을 설치하고 `npm ci` 부터 다시 합니다.
-- `npm ci` 가 FAIL: 먼저 `node -v` 가 22 인지 봅니다. Node 24 에서는 `npm ci` 도 `npm rebuild electron` 도 Electron 을
-  다 풀지 못한 채 오류 없이 끝납니다. Node 22 로 바꾼 뒤 저장소 폴더에서 `npm ci` 를 다시 합니다.
+- `npm ci` 가 FAIL: 저장소 폴더에서 `npm ci` 를 다시 합니다. 그래도 Electron 이 없다고 하면 `npm rebuild electron`.
 - `tools` 가 FAIL: `xcode-select --install` 로 Command Line Tools 를 설치하고 `run.sh` 를 다시 돌립니다.
 - claude 나 codex 가 FAIL: 업데이트한 뒤 `run.sh` 를 다시 돌립니다. 버전이 낮으면 개발용 앱이 sandbox 세션의 시작을
   거절합니다.
