@@ -6,6 +6,31 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import type { SpawnChecks } from '../core/sessions/manager'
+import type { ChatManagerDeps } from '../core/chat/manager'
+import type { claudeSandboxStart } from '../core/sandbox/claudeStart'
+import type { HostChatsDeps } from '../host/hostChats'
+import type { HostSpawner } from '../host/spawner'
+
+// Task E fix round 6 (re-review 2, Minor 3): every place a sandboxed start is wired must say how links on the paths it
+// names are looked at (nodeLinkLook, or null where paths are named as given on purpose). Left optional, a new wiring that
+// forgot it would drop E5's link refusals and the Linux warning without a word; required, it does not compile. Checked
+// by tsc: each line below is an error only while the field is required
+describe('a start cannot be wired without saying how links are looked at', () => {
+  it('the terminal checks, the chat deps, a Claude start, the Host chats and the Host spawner all require it', () => {
+    // @ts-expect-error linkLook is required
+    const checks: Pick<SpawnChecks, 'linkLook'> = {}
+    // @ts-expect-error linkLook is required
+    const chat: Pick<ChatManagerDeps, 'linkLook'> = {}
+    // @ts-expect-error linkLook is required
+    const claude: Pick<Parameters<typeof claudeSandboxStart>[0], 'linkLook'> = {}
+    // @ts-expect-error linkLook is required
+    const hostChats: Pick<HostChatsDeps, 'linkLook'> = {}
+    // @ts-expect-error linkLook is required
+    const spawner: Pick<HostSpawner, 'linkLook'> = {}
+    expect([checks, chat, claude, hostChats, spawner]).toHaveLength(5)
+  })
+})
 
 const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'ipc.ts'), 'utf8')
 const between = (from: string, to: string): string => {
@@ -203,7 +228,9 @@ describe('core.ts builds the read-only list once and hands it to the twins and b
   })
   // Fix round 5: and each looks at the links on the paths it names (nodeLinkLook)
   it('the StatusLineManager, the terminal checks and the chat deps all take that one list, and look at its links', () => {
-    expect(core).toMatch(/const statusLine = new StatusLineManager\(\n    userDataDir,[\s\S]*\{ findRuntime, readOnly, linkLook: nodeLinkLook \}\n  \)/)
+    expect(core).toMatch(/const statusLine = new StatusLineManager\(\n    userDataDir,[\s\S]*\{ findRuntime, readOnly \}\n  \)/)
+    // Fix round 6: Claude's twins take the way to look from the scope each start hands them (claudeSandboxStart)
+    expect(core).toMatch(/const claudeSandbox = claudeSandboxStart\(\{[\s\S]*?\n    linkLook: nodeLinkLook,\n    log: sessionsLog\n  \}\)/)
     expect(core).toMatch(/\{ \.\.\.defaultSpawnChecks\(sessionsLog\), hostSocketDir, appKeyFile, readOnly, linkLook: nodeLinkLook, codexExcludes \}/)
     const chat = core.slice(core.indexOf('const chat = new ChatSessionManager({'), core.indexOf('// Lazy history'))
     expect(chat).toMatch(/\n    appKeyFile,\n    readOnly,\n    linkLook: nodeLinkLook,\n/)
@@ -227,10 +254,10 @@ describe('the Host hands its chat sessions the spawner’s read-only list and ap
   it('the spawner, rollingWiring and hostChats hand the way to look at links to every start', () => {
     const spawner = readFileSync(path.join(here, '..', 'host', 'spawner.ts'), 'utf8')
     expect(spawner).toMatch(/\{ \.\.\.defaultSpawnChecks\(log\), codexWindowsReady, hostSocketDir, appKeyFile, readOnly, linkLook: nodeLinkLook, codexExcludes \}/)
-    expect(spawner).toMatch(/\n      readOnly,\n      linkLook: nodeLinkLook\n    }/)
+    expect(spawner).toMatch(/const claudeSandbox = claudeSandboxStart\(\{[\s\S]*?\n    linkLook: nodeLinkLook,\n    log\n  \}\)/)
     expect(spawner).toMatch(/\n    sandboxWarn,\n    linkLook: nodeLinkLook,\n/)
-    expect(rollingWiring).toMatch(/readOnly: a\.spawner\.readOnly \?\? \[\],\n    \.\.\.\(a\.spawner\.linkLook \? \{ linkLook: a\.spawner\.linkLook \} : \{\}\),\n/)
-    expect(hostChats).toMatch(/\.\.\.\(d\.linkLook \? \{ linkLook: d\.linkLook \} : \{\}\),\n/)
+    expect(rollingWiring).toMatch(/readOnly: a\.spawner\.readOnly \?\? \[\],\n    linkLook: a\.spawner\.linkLook,\n/)
+    expect(hostChats).toMatch(/\n    linkLook: d\.linkLook,\n/)
   })
   it('the spawner makes the updater cache and its runtime folder before it builds the list (fix round 4)', () => {
     const spawner = readFileSync(path.join(here, '..', 'host', 'spawner.ts'), 'utf8')

@@ -193,7 +193,7 @@ function setup(
   const { createAdapter, handles } = makeAdapterFactory(startRejects, sendRejects, startRejectsOnce, throwOnAdapterCall)
   const descriptors = makeDescriptors(platform)
   const logged: string[] = []
-  const manager = new ChatSessionManager({
+  const manager = new ChatSessionManager({ linkLook: null,
     factory,
     descriptors,
     homeDir: 'C:\\Users\\tester',
@@ -1176,7 +1176,7 @@ describe('ChatSessionManager — what a takeover reads (chat takeover Task 2)', 
         listModels: () => Promise.resolve([]), state: () => ({}) as ChatState, on: () => () => {}, kill: () => {}
       }
     }
-    const manager = new ChatSessionManager({ factory, descriptors: makeDescriptors('win32'), homeDir: 'C:\\Users\\tester', platform: 'win32', version: '1.0.0', log: () => {}, createAdapter })
+    const manager = new ChatSessionManager({ linkLook: null, factory, descriptors: makeDescriptors('win32'), homeDir: 'C:\\Users\\tester', platform: 'win32', version: '1.0.0', log: () => {}, createAdapter })
     const info = manager.spawn({ account: claudeAccount, cwd: 'D:/p', initialPrompt: 'carry on' })
     await manager.started(info.id)
     expect(order).toEqual(['note {"carrySent":true}', 'send carry on'])
@@ -1203,7 +1203,7 @@ describe('ChatSessionManager — what a takeover reads (chat takeover Task 2)', 
       }
     }
     const logs: string[] = []
-    const manager = new ChatSessionManager({ factory, descriptors: makeDescriptors('win32'), homeDir: 'C:\\Users\\tester', platform: 'win32', version: '1.0.0', log: (m) => logs.push(m), createAdapter })
+    const manager = new ChatSessionManager({ linkLook: null, factory, descriptors: makeDescriptors('win32'), homeDir: 'C:\\Users\\tester', platform: 'win32', version: '1.0.0', log: (m) => logs.push(m), createAdapter })
     const info = manager.spawn({ account: claudeAccount, cwd: 'D:/p', initialPrompt: 'carry on' })
     await manager.started(info.id)
     expect(order).toEqual([])
@@ -1255,7 +1255,7 @@ describe('ChatSessionManager — what a takeover reads (chat takeover Task 2)', 
 
   it('builds the child env from baseEnv when one is given', () => {
     const factory = vi.fn((_f: string, _a: string[], _o: ProcSpawnOptions) => new FakeProc())
-    const manager = new ChatSessionManager({ factory, descriptors: makeDescriptors('win32'), homeDir: 'C:\\Users\\tester', platform: 'win32', version: '1', log: () => {}, baseEnv: { ONLY_HERE: '1' }, createAdapter: makeAdapterFactory().createAdapter })
+    const manager = new ChatSessionManager({ linkLook: null, factory, descriptors: makeDescriptors('win32'), homeDir: 'C:\\Users\\tester', platform: 'win32', version: '1', log: () => {}, baseEnv: { ONLY_HERE: '1' }, createAdapter: makeAdapterFactory().createAdapter })
     manager.spawn({ account: claudeAccount, cwd: 'D:/p' })
     expect(factory.mock.calls[0][2].env.ONLY_HERE).toBe('1')
   })
@@ -1271,7 +1271,7 @@ describe('ChatSessionManager — what a takeover reads (chat takeover Task 2)', 
       skipped: []
     }
     const factory = vi.fn((_f: string, _a: string[], _o: ProcSpawnOptions) => new FakeProc())
-    const deps = { factory, descriptors: makeDescriptors('linux'), homeDir: '/home/t', platform: 'linux' as const, version: '1', log: () => {}, createAdapter: makeAdapterFactory().createAdapter }
+    const deps = { factory, descriptors: makeDescriptors('linux'), homeDir: '/home/t', platform: 'linux' as const, version: '1', log: () => {}, createAdapter: makeAdapterFactory().createAdapter, linkLook: null }
     new ChatSessionManager({ ...deps, capabilities: { get: () => caps, refresh: async () => {} } }).spawn({ account: claudeAccount, cwd: '/p' })
     new ChatSessionManager(deps).spawn({ account: claudeAccount, cwd: '/p' })
     expect(factory.mock.calls[0][1].slice(-2)).toEqual(['--mcp-config', 'C:/p/claude-1.json'])
@@ -1288,7 +1288,7 @@ describe('ChatSessionManager — what a takeover reads (chat takeover Task 2)', 
   it('reads the capabilities resolved for the session’s agent profile', () => {
     const seen: Array<string | undefined> = []
     const factory = vi.fn((_f: string, _a: string[], _o: ProcSpawnOptions) => new FakeProc())
-    const deps = { factory, descriptors: makeDescriptors('linux'), homeDir: '/home/t', platform: 'linux' as const, version: '1', log: () => {}, createAdapter: makeAdapterFactory().createAdapter }
+    const deps = { factory, descriptors: makeDescriptors('linux'), homeDir: '/home/t', platform: 'linux' as const, version: '1', log: () => {}, createAdapter: makeAdapterFactory().createAdapter, linkLook: null }
     const manager = new ChatSessionManager({ ...deps, capabilities: { get: (_a, id) => { seen.push(id); return null }, refresh: async () => {} } })
     manager.spawn({ account: claudeAccount, cwd: '/p', agentProfileId: 'ap_1' })
     manager.spawn({ account: claudeAccount, cwd: '/p' })
@@ -1303,7 +1303,7 @@ describe('ChatSessionManager — what a takeover reads (chat takeover Task 2)', 
       args: [], env: {}, given: [], gatewayGrant: [], skipped: []
     })
     const factory = vi.fn((_f: string, _a: string[], _o: ProcSpawnOptions) => new FakeProc())
-    const deps = { factory, descriptors: makeDescriptors('linux'), homeDir: '/home/t', platform: 'linux' as const, version: '1', log: () => {}, createAdapter: makeAdapterFactory().createAdapter }
+    const deps = { factory, descriptors: makeDescriptors('linux'), homeDir: '/home/t', platform: 'linux' as const, version: '1', log: () => {}, createAdapter: makeAdapterFactory().createAdapter, linkLook: null }
     new ChatSessionManager({ ...deps, capabilities: { get: () => caps('observe'), refresh: async () => {} } }).spawn({ account: claudeAccount, cwd: '/p' })
     new ChatSessionManager({ ...deps, capabilities: { get: () => caps('compatibility'), refresh: async () => {} } }).spawn({ account: claudeAccount, cwd: '/p' })
     new ChatSessionManager(deps).spawn({ account: claudeAccount, cwd: '/p' })
@@ -1324,7 +1324,7 @@ describe('Enforce in chat sessions', () => {
     const factory = vi.fn((_f: string, _a: string[], _o: ProcSpawnOptions) => new FakeProc())
     const adapters = makeAdapterFactory()
     const deps = {
-      factory, descriptors: makeDescriptors('linux'), homeDir: '/home/t', platform: 'linux' as const, version: '1', log: () => {},
+      factory, descriptors: makeDescriptors('linux'), homeDir: '/home/t', platform: 'linux' as const, version: '1', log: () => {}, linkLook: null,
       createAdapter: adapters.createAdapter,
       capabilities: { get: () => caps(policyMode), refresh: async () => {} },
       enforce: { args: () => args, blocker: (p: 'claude' | 'codex', kind: 'terminal' | 'chat') => (kinds.push([p, kind]), blocker) }
@@ -1393,7 +1393,7 @@ describe('ChatSessionManager.sendCarryOn — the app sends a carry-on the Host l
     const realWrite = proc.write.bind(proc)
     proc.write = (line) => { order.push(`write ${line}`); realWrite(line) }
     const logs: string[] = []
-    const manager = new ChatSessionManager({ factory: () => new FakeProc(), descriptors: makeDescriptors('win32'), homeDir: path.join('home', 'tester'), platform: 'win32', version: '1.0.0', log: (m) => logs.push(m), createAdapter: writingAdapter(order, refuse) })
+    const manager = new ChatSessionManager({ linkLook: null, factory: () => new FakeProc(), descriptors: makeDescriptors('win32'), homeDir: path.join('home', 'tester'), platform: 'win32', version: '1.0.0', log: (m) => logs.push(m), createAdapter: writingAdapter(order, refuse) })
     return { proc, manager, logs }
   }
 
@@ -1446,7 +1446,7 @@ describe('ChatSessionManager.spawn — the session id in the CLI env (final revi
   // did not get: a pty session gets it (core/sessions/manager.ts), and cliEnvFor strips an inherited one.
   it('sets ASTERA_SESSION to the new session id, over an inherited one', () => {
     const factory = vi.fn((_f: string, _a: string[], _o: ProcSpawnOptions) => new FakeProc())
-    const manager = new ChatSessionManager({ factory, descriptors: makeDescriptors('win32'), homeDir: path.join('home', 'tester'), platform: 'win32', version: '1', log: () => {}, baseEnv: { ASTERA_SESSION: 'someone-else' }, createAdapter: makeAdapterFactory().createAdapter })
+    const manager = new ChatSessionManager({ linkLook: null, factory, descriptors: makeDescriptors('win32'), homeDir: path.join('home', 'tester'), platform: 'win32', version: '1', log: () => {}, baseEnv: { ASTERA_SESSION: 'someone-else' }, createAdapter: makeAdapterFactory().createAdapter })
     const claude = manager.spawn({ account: claudeAccount, cwd: 'D:/p' })
     const codex = manager.spawn({ account: codexAccount, cwd: 'D:/p' })
     expect(factory.mock.calls[0][2].env.ASTERA_SESSION).toBe(claude.id)
@@ -1483,7 +1483,7 @@ describe('ChatSessionManager.send — a person’s turn is written marked', () =
     const proc = new FakeProc()
     const by: Array<[string, unknown]> = []
     proc.write = (line: string, mark?: { person: true }) => void by.push([line, mark])
-    const manager = new ChatSessionManager({ factory: () => new FakeProc(), descriptors: makeDescriptors('win32'), homeDir: path.join('home', 'tester'), platform: 'win32', version: '1.0.0', log: () => {}, createAdapter: marking() })
+    const manager = new ChatSessionManager({ linkLook: null, factory: () => new FakeProc(), descriptors: makeDescriptors('win32'), homeDir: path.join('home', 'tester'), platform: 'win32', version: '1.0.0', log: () => {}, createAdapter: marking() })
     manager.adopt({ id: 'c1', proc, restore: { accountId: 'acc-cl', cwd: 'D:/p', title: 't', provider: 'claude', threadId: 'th' }, truncated: false })
     await manager.send('c1', 'from a person', { person: true })
     await manager.send('c1', 'from a schedule')
@@ -1512,6 +1512,7 @@ describe('credentials hiding', () => {
     const factory = vi.fn((_f: string, _a: string[], _o: ProcSpawnOptions) => new FakeProc())
     const deps = {
       factory,
+      linkLook: null,
       descriptors: makeDescriptors('linux'),
       homeDir: '/home/t',
       platform: 'linux' as const,
@@ -1562,7 +1563,7 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
   const rig = (platform: 'linux' | 'win32', o: { ready?: Ready; layouts?: PreparedLayouts; noDaemon?: boolean; hostSocketDir?: string | null; codex?: string | null; excludes?: ChatManagerDeps['codexExcludes']; appKeyFile?: string; readOnly?: readonly string[] } = {}) => {
     const spawned: Array<{ file: string; args: string[]; opts: ProcSpawnOptions; proc: FakeProc }> = []
     const { createAdapter, handles } = makeAdapterFactory()
-    const manager = new ChatSessionManager({
+    const manager = new ChatSessionManager({ linkLook: null,
       factory: (file, args, opts) => {
         const proc = new FakeProc()
         spawned.push({ file, args, opts, proc })
@@ -1867,7 +1868,7 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
       undefined,
       [],
       { ...BASE.linux },
-      { cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform: 'linux', now: Date.now, syncExists: () => true, log: () => {} }
+      { linkLook: null, cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform: 'linux', now: Date.now, syncExists: () => true, log: () => {} }
     )
     sessions.sandboxLayouts = layouts
     sessions.codexVersion = Object.assign(() => '0.160.0', { warm: async () => {} })
@@ -1908,7 +1909,7 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
       undefined,
       [],
       { ...BASE.win32 },
-      {
+      { linkLook: null,
         cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform: 'win32', now: Date.now, syncExists: () => true, log: () => {},
         codexWindowsReady: async () => 'ready', codexExcludes: excludes
       }
@@ -1955,13 +1956,13 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
       await statusLine.init()
       if (o.mode === 'enforce') expect(await statusLine.ensureEnforceFiles()).toBe('ok')
       const versions = Object.assign(() => o.version ?? '2.1.310', { warm: async () => {} })
-      const claudeSandbox = claudeSandboxStart({
+      const claudeSandbox = claudeSandboxStart({ linkLook: null,
         platform, profileDir, homeDir: profileDir, env: {}, tmpDir, files: statusLine, version: versions, uid: 1000,
         runGit: async () => null, log: () => {}
       })
       const spawned: Array<{ file: string; args: string[]; opts: ProcSpawnOptions }> = []
       const { createAdapter, handles } = makeAdapterFactory()
-      const manager = new ChatSessionManager({
+      const manager = new ChatSessionManager({ linkLook: null,
         factory: (file, args, opts) => (spawned.push({ file, args, opts }), new FakeProc()),
         descriptors: makeDescriptors(platform, HOME[platform]),
         homeDir: HOME[platform],

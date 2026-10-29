@@ -287,7 +287,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
           })) ?? 'node')
         : 'node',
     undefined,
-    { findRuntime, readOnly, linkLook: nodeLinkLook }
+    { findRuntime, readOnly }
   )
   await statusLine.init()
   // One factory for the app's life. Slice 2's Host-backed one is attached to it by registerIpc once
@@ -382,6 +382,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     tmpDir: os.tmpdir(),
     files: statusLine,
     version: cliVersions,
+    linkLook: nodeLinkLook,
     log: sessionsLog
   })
   sessions.claudeSandbox = claudeSandbox

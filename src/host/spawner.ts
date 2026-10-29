@@ -191,8 +191,8 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
    *  round 1): the profile and every place Astera writes code or an installer to and runs unsandboxed. */
   readOnly?: readonly string[]
   /** How the disk is read for links on the paths a sandboxed start names (Task E fix round 5), handed to the Host's chat
-   *  sessions too (rollingWiring). */
-  linkLook?: LinkLook
+   *  sessions too (rollingWiring). Required (fix round 6). */
+  linkLook: LinkLook | null
   /** Where this Host's terminal sessions tell a sandboxed start's warnings (Task E fix round 2); its Ubuntu check, asked
    *  once for this Host process, is the one its chat sessions ask too (rollingWiring). */
   sandboxWarn?: SandboxWarnSink
@@ -390,8 +390,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       // The sandbox's denied places are read under the person's home, from each session's own environment (its scope)
       homeDir,
       tmpDir,
-      readOnly,
-      linkLook: nodeLinkLook
+      readOnly
     }
   )
   const ensured = once(() => statusLine.ensureFiles())
@@ -532,6 +531,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     files: statusLine,
     version: d.claudeVersion ?? cliVersions,
     ...(d.runGit ? { runGit: d.runGit } : {}),
+    linkLook: nodeLinkLook,
     log
   })
   sessions.claudeSandbox = claudeSandbox

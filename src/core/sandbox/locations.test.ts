@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { appKeyDenies, credentialStoreDenies, ensureOwnFolders, hostSocketDenies, installRootOf, localAsteraDir, namedPathFor, namedPaths, otherHostFolders, presentOrNull, profileReadOnly, publicShuttleFiles, sandboxReadOnly, sensitiveLocations, updaterCacheDir } from './locations'
+import { appKeyDenies, appKeyEntries, credentialStoreDenies, credentialStoreEntries, ensureOwnFolders, hostSocketDenies, installRootOf, localAsteraDir, namedPathFor, namedPaths, otherHostFolders, presentOrNull, profileReadOnly, publicShuttleFiles, sandboxReadOnly, sensitiveEntries, sensitiveLocations, updaterCacheDir } from './locations'
 
 describe('sandbox locations', () => {
   it('lists E6 on every OS, with gh and gcloud where each OS keeps them', () => {
@@ -11,6 +11,22 @@ describe('sandbox locations', () => {
     expect(win).toContain('C:/Users/a/AppData/Roaming/GitHub CLI')
     expect(win).toContain('C:/Users/a/AppData/Roaming/gcloud')
     expect(win).toContain('C:/Users/a/.ssh')
+  })
+
+  // Task E fix round 6: each entry says whether it names a file or a folder, where the list is built, so a start can
+  // treat a missing file apart from a missing folder (Codex's Windows sandbox makes a missing deny-read path a folder)
+  it('says which entries are files and which are folders', () => {
+    const files = (es: ReadonlyArray<{ path: string; kind: 'file' | 'folder' }>) => es.filter((e) => e.kind === 'file').map((e) => e.path)
+    for (const platform of ['linux', 'darwin', 'win32'] as const) {
+      const e6 = sensitiveEntries(platform, { APPDATA: 'C:\\Users\\a\\AppData\\Roaming' }, platform === 'win32' ? 'C:\\Users\\a' : '/h')
+      expect(e6.map((e) => e.path), platform).toEqual(sensitiveLocations(platform, { APPDATA: 'C:\\Users\\a\\AppData\\Roaming' }, platform === 'win32' ? 'C:\\Users\\a' : '/h'))
+      expect(files(e6).map((p) => p.replace(/^.*\//, '')), platform).toEqual(['.npmrc', '.git-credentials'])
+    }
+    expect(credentialStoreEntries('darwin', {}, '/h')).toEqual([{ path: '/h/Library/Keychains', kind: 'folder' }])
+    expect(credentialStoreEntries('linux', { XDG_RUNTIME_DIR: '/run/user/1' }, '/h')).toEqual([{ path: '/run/user/1/bus', kind: 'file' }])
+    expect(credentialStoreEntries('win32', {}, 'C:\\Users\\a')).toEqual([])
+    expect(appKeyEntries('C:\\p\\host\\app.key')).toEqual([{ path: 'C:/p/host/app.key', kind: 'file' }])
+    expect(appKeyEntries(null)).toEqual([])
   })
 
   it('falls back to the default Roaming folder when APPDATA is unset', () => {
@@ -187,6 +203,34 @@ describe('sandbox locations', () => {
       symlinkSync(path.join(d, 'home'), path.join(d, 'home-link'), kind)
       expect(namedPathFor(`${d}/home/.config/gh`, [`${d}/home-link`], process.platform).link).toBe(`${d}/home/.config`)
       if (process.platform === 'win32') expect(namedPathFor(`${d}/home/.config/gh`, [`${d}/HOME`], 'win32').link).toBe(`${d}/home/.config`)
+    })
+
+    // Fix round 6 (re-review 2, Minor 1): replacing a link needs write access to the folder that holds it, so a link that
+    // is a writable folder itself (a home-folder session whose home is a symlink) is one the session cannot change
+    it('follows a link that is a writable folder itself, judging every link by the folder that holds it', () => {
+      tree()
+      symlinkSync(path.join(d, 'home'), path.join(d, 'home-link'), kind)
+      expect(namedPathFor(`${d}/home-link/dots/config/gh`, [`${d}/home-link`], process.platform)).toEqual({ path: `${d}/home/dots/config/gh`, link: null })
+      // A link inside it is still one the session could change, by either spelling of the folder
+      expect(namedPathFor(`${d}/home-link/.config/gh`, [`${d}/home-link`], process.platform)).toEqual({ path: `${d}/home-link/.config/gh`, link: `${d}/home/.config` })
+    })
+
+    // Fix round 6 (re-review 2, Minor 4): a link to a network share (`\\server\share`, or `\\?\UNC\server\share`) is not
+    // a relative one; its path is named as given
+    it('names a path through a link to a network share as given', () => {
+      for (const target of ['\\\\srv\\share\\gcloud', '\\\\?\\UNC\\srv\\share\\gcloud', '//srv/share/gcloud']) {
+        const look = {
+          lstat: (p: string) => (p === '/a' ? { isSymbolicLink: () => false } : p === '/a/gcloud' ? { isSymbolicLink: () => true } : null),
+          readlink: () => target
+        }
+        expect(namedPathFor('/a/gcloud/creds', [], 'win32', look), target).toEqual({ path: '/a/gcloud/creds', link: null })
+      }
+      // A drive path behind the long-path prefix is followed as before
+      const drive = {
+        lstat: (p: string) => (p === '/a' || p === 'D:/' || p === 'D:/real' ? { isSymbolicLink: () => false } : p === '/a/gcloud' ? { isSymbolicLink: () => true } : null),
+        readlink: () => '\\\\?\\D:\\real'
+      }
+      expect(namedPathFor('/a/gcloud/creds', [], 'win32', drive)).toEqual({ path: 'D:/real/creds', link: null })
     })
 
     it('collects a list: each entry where it is named, once, and the links that left one as given', () => {

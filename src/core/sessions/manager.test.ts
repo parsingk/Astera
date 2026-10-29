@@ -1038,6 +1038,7 @@ describe('SessionManager', () => {
     const refreshed: [string, string | undefined][] = []
     const spawned: PtySpawnOptions[] = []
     const checks: SpawnChecks = {
+      linkLook: null,
       cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform: 'linux', now: Date.now, syncExists: () => true, log: () => {}
     }
     const manager = new SessionManager((_f, _a, o) => (spawned.push(o), new FakePty()), makeDescriptors('linux'), 100, 20, '/home/t', undefined, [], {}, checks)
@@ -1270,6 +1271,7 @@ describe('SessionManager.prepare — the spawn path never waits on a sync probe'
     const syncExists = vi.fn(() => true)
     const log = vi.fn()
     const full: SpawnChecks = {
+      linkLook: null,
       cwd: async () => 'present',
       gitBash: createGitBashResolver(async () => 'absent'),
       platform: process.platform,
@@ -1325,6 +1327,7 @@ describe('SessionManager.prepare — the spawn path never waits on a sync probe'
     const d = makeDescriptors('win32')
     const descriptors = { ...d, claude: { ...d.claude, prepare: async () => void prepared++ }, codex: { ...d.codex, prepare: async () => void prepared++ } }
     const full: SpawnChecks = {
+      linkLook: null,
       cwd: async () => 'present',
       gitBash: createGitBashResolver(async () => 'absent'),
       platform: 'linux',
@@ -1516,6 +1519,7 @@ describe('observe mode at spawn', () => {
     const argv: Array<string[] | string> = []
     const asked: unknown[] = []
     const checks: SpawnChecks = {
+      linkLook: null,
       cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform: 'linux', now: Date.now, syncExists: () => true, log: () => {}
     }
     const manager = new SessionManager((_f, a, o) => (argv.push(a), spawned.push(o), new FakePty()), makeDescriptors('linux'), 100, 20, '/home/t', (id, _acc, o) => {
@@ -1768,7 +1772,7 @@ describe('the sandbox at spawn', () => {
   } as const
   type Ready = NonNullable<SpawnChecks['codexWindowsReady']>
   /** Every Windows home reads set up unless a case says otherwise: the real question runs codex. */
-  const checksFor = (platform: NodeJS.Platform, ready: Ready = async () => 'ready', hostSocketDir: string | null = null, codexExcludes?: SpawnChecks['codexExcludes'], appKeyFile?: string, readOnly?: readonly string[]): SpawnChecks => ({
+  const checksFor = (platform: NodeJS.Platform, ready: Ready = async () => 'ready', hostSocketDir: string | null = null, codexExcludes?: SpawnChecks['codexExcludes'], appKeyFile?: string, readOnly?: readonly string[]): SpawnChecks => ({ linkLook: null,
     cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform, now: Date.now, syncExists: () => true, log: () => {},
     codexWindowsReady: ready, hostSocketDir, ...(codexExcludes ? { codexExcludes } : {}), ...(appKeyFile ? { appKeyFile } : {}), ...(readOnly ? { readOnly } : {})
   })
@@ -1979,7 +1983,7 @@ describe('the sandbox at spawn', () => {
       symlinkSync(`${home}/dots/config`, `${home}/.config`, process.platform === 'win32' ? 'junction' : 'dir')
       return { home, proj: `${home}/proj` }
     }
-    const linkRig = (platform: 'linux' | 'darwin', home: string) => {
+    const linkRig = (platform: 'linux' | 'darwin' | 'win32', home: string) => {
       const argv: string[][] = []
       const logs: string[] = []
       const manager = new SessionManager((_f, a) => (argv.push(a as string[]), new FakePty()), makeDescriptors(platform, home, undefined, daemon(true)),
@@ -2019,12 +2023,50 @@ describe('the sandbox at spawn', () => {
     })
 
     it('elsewhere refuses a start whose entry goes through a link in the work folder, naming the link in the log', async () => {
-      const { home } = linkedHome()
-      const r = linkRig('darwin', home)
-      await expect(r.manager.prepare({ account: codexAccount, cwd: home, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: linked-path$/)
-      expect(r.logs.some((l) => l.includes(`${home}/.config`))).toBe(true)
-      expect(r.argv).toHaveLength(0)
+      // macOS and (fix round 6, re-review 2) Windows, whose sandbox resolves every path it protects and pins no link
+      for (const platform of ['darwin', 'win32'] as const) {
+        const { home } = linkedHome()
+        const r = linkRig(platform, home)
+        await expect(r.manager.prepare({ account: codexAccount, cwd: home, sandbox: true }), platform).rejects.toThrow(/^SANDBOX_UNAVAILABLE: linked-path$/)
+        expect(r.logs.some((l) => l.includes(`${home}/.config`)), platform).toBe(true)
+        expect(r.argv, platform).toHaveLength(0)
+      }
     })
+  })
+
+  // Task E fix round 6 (Important): Codex's Windows sandbox makes a missing deny-read path a folder before it denies it
+  // (windows-sandbox-rs/src/deny_read_acl.rs:58-76 at rust-v0.160.0), so a missing ~/.git-credentials became an empty
+  // folder where git's credential store wants a file. On Windows a file entry that is not there at the start is left out;
+  // a missing folder stays named (an empty folder there is harmless); nothing changes off Windows
+  it('on Windows leaves out a deny entry for a file that is not there, and keeps one for a missing folder', async () => {
+    const base = realpathSync.native(repo()).replace(/\\/g, '/')
+    const home = `${base}/home`
+    const profile = `${base}/profile`
+    mkdirSync(home)
+    mkdirSync(`${profile}/host`, { recursive: true })
+    writeFileSync(`${home}/.git-credentials`, '')
+    const cwd = repo()
+    const start = async (platform: 'win32' | 'linux'): Promise<string> => {
+      const argv: string[][] = []
+      const env = platform === 'win32' ? { Path: 'C:\\Windows', APPDATA: `${home}/AppData/Roaming` } : { ...BASE.linux }
+      const manager = new SessionManager((_f, a) => (argv.push(a as string[]), new FakePty()), makeDescriptors(platform, home, undefined, daemon(true)),
+        100, 20, home, undefined, [], env, { ...checksFor(platform), linkLook: nodeLinkLook, appKeyFile: `${profile}/host/app.key` })
+      manager.codexVersion = versionOf('0.160.0')
+      await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+      manager.spawn({ account: codexAccount, cwd, sandbox: true })
+      return codexArgs(argv[0]).find((a) => a.startsWith('permissions='))!
+    }
+    const win = await start('win32')
+    expect(win).toContain(`"${home}/.git-credentials"="deny"`)
+    expect(win).not.toContain(`${home}/.npmrc`)
+    expect(win).toContain(`"${home}/.ssh"="deny"`)
+    expect(win).toContain(`"${home}/AppData/Roaming/gcloud"="deny"`)
+    // The app key is a file too: left out while it is not there, named once it is
+    expect(win).not.toContain('app.key')
+    writeFileSync(`${profile}/host/app.key`, 'k')
+    expect(await start('win32')).toContain(`"${profile}/host/app.key"="deny"`)
+    // Off Windows a missing file stays named: nothing there makes it a folder
+    expect(await start('linux')).toContain(`"${home}/.npmrc"="deny"`)
   })
 
   // Task E fix round 1: every read-only folder the wiring names (the profile and the places Astera writes code or an
@@ -2387,7 +2429,7 @@ describe('the sandbox at spawn, for Claude', () => {
     darwin: { PATH: '/usr/bin' },
     win32: { Path: 'C:\\Windows', APPDATA: 'C:\\Users\\t\\AppData\\Roaming' }
   } as const
-  const checksFor = (platform: NodeJS.Platform): SpawnChecks => ({
+  const checksFor = (platform: NodeJS.Platform): SpawnChecks => ({ linkLook: null,
     cwd: async () => 'present', gitBash: createGitBashResolver(async () => 'absent'), platform, now: Date.now, syncExists: () => true, log: () => {}
   })
   const rig = async (platform: 'linux' | 'darwin' | 'win32', version: string | null | undefined = '2.1.310', extraEnv: Record<string, string> = {}) => {
@@ -2412,7 +2454,7 @@ describe('the sandbox at spawn, for Claude', () => {
       (id, acc, o) => statusLine.spawnConfig(id, acc, o),
       [], { ...BASE[platform], ...extraEnv }, checksFor(platform)
     )
-    manager.claudeSandbox = claudeSandboxStart({
+    manager.claudeSandbox = claudeSandboxStart({ linkLook: null,
       platform, profileDir, homeDir: gitHome, env: {}, tmpDir, files: statusLine, version: versions, uid: 1000,
       runGit: async () => null, log: () => {}
     })

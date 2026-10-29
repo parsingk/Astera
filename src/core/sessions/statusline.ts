@@ -43,6 +43,8 @@ export interface SandboxScope {
   /** The session's work folder, which the named paths' links are judged by (Task E fix round 5, namedPathFor). Absent
    *  (the measurement), every path is named as given. */
   cwd?: string
+  /** How the disk is read for those links (claudeSandboxStart's `linkLook`); null or absent, every path as given. */
+  look?: LinkLook | null
 }
 
 /** How many scopes a StatusLineManager keeps the twins of up to date: every settings rewrite rewrites them all. A scope
@@ -461,8 +463,6 @@ export class StatusLineManager {
   private readonly tmpDir: string
   /** The read-only folders a sandbox twin keeps from being written (Task E and its fix round 1). */
   private readonly readOnly: readonly string[]
-  /** How the disk is read for links on the named paths (Task E fix round 5). */
-  private readonly linkLook: LinkLook | undefined
 
   constructor(
     private userDataDir: string,
@@ -486,9 +486,6 @@ export class StatusLineManager {
        *  Astera writes code or an installer to and runs unsandboxed, built by the app and Host wiring (sandboxReadOnly).
        *  Default: this profile folder alone (profileReadOnly), so a start that names no more still protects the profile. */
       readOnly?: readonly string[]
-      /** How the disk is read for links on the named paths (Task E fix round 5, core/sandbox/locations.ts namedPathFor):
-       *  the app's and the Host's wiring give nodeLinkLook. Absent, every path is named as given. */
-      linkLook?: LinkLook
     } = {}
   ) {
     this.findRuntime = host.findRuntime
@@ -497,7 +494,6 @@ export class StatusLineManager {
     this.homeDir = host.homeDir ?? os.homedir()
     this.tmpDir = host.tmpDir ?? os.tmpdir()
     this.readOnly = host.readOnly ?? profileReadOnly(userDataDir)
-    this.linkLook = host.linkLook
     // A test that names the executable names the AppImage too, or there is none
     this.appImage = host.execPath === undefined ? process.env.APPIMAGE : host.appImage
     this.capturePath = path.join(userDataDir, 'astera-statusline-capture.cjs')
@@ -808,20 +804,27 @@ export class StatusLineManager {
   private sandboxNamed(scope: SandboxScope): { part: SandboxPart; links: string[] } {
     const denied = claudeSessionDenied({ platform: this.platform, env: scope.env, homeDir: this.homeDir, appKeyFile: appKeyPath(this.userDataDir) })
     const npmCache = npmCacheOf(this.tmpDir)
-    if (!this.linkLook || scope.cwd === undefined)
+    const look = scope.look
+    if (!look || scope.cwd === undefined)
       return { part: claudeSandboxSettings({ platform: this.platform, denied, readOnly: this.readOnly, npmCache, layout: scope.layout }), links: [] }
     const writable = claudeWritableFolders({ platform: this.platform, cwd: scope.cwd, npmCache, tmpDir: this.tmpDir, homeDir: this.homeDir })
-    const d = namedPaths(denied, writable, this.platform, this.linkLook)
-    const r = namedPaths(this.readOnly, writable, this.platform, this.linkLook)
+    const d = namedPaths(denied, writable, this.platform, look)
+    const r = namedPaths(this.readOnly, writable, this.platform, look)
     return {
       part: claudeSandboxSettings({ platform: this.platform, denied: d.paths, readOnly: r.paths, npmCache, layout: scope.layout }),
       links: [...new Set([...d.links, ...r.links])]
     }
   }
 
-  /** Whether a scope with these links gets no twin: on macOS and Linux, where srt would follow each one at its start and
-   *  not keep it from being repointed (rule E5). Windows has no sandbox for Claude: its file tools' deny rules match a
-   *  link and its target alike, and its shell is not restricted anyway. */
+  /** Whether a scope with these links gets no twin: on macOS and Linux, where srt 0.0.79 cannot keep the deny in force
+   *  through a link the session could change (rule E5; Task E fix rounds 5 and 6). On Linux it follows the path at its
+   *  start and pins only where it lands (dist/sandbox/linux-sandbox-utils.js:48-116 resolveSymlinkedDenyPath, the symlink
+   *  check on the resolved path at :2077, the ancestor pins seeded by landings at :2390-2408), so the link can be
+   *  repointed afterwards. On macOS it keeps a dotfile link's spelling (sandbox-utils.js:466-479 with
+   *  isSymlinkOutsideBoundary, :216-282) and pins the link itself among the ancestors (macos-sandbox-utils.js:539-557),
+   *  but the deny then names only the link's spelling, and the target stays reachable by its own path inside the
+   *  writable folder, which no rule names. Windows has no sandbox for Claude: its file tools' deny rules match a link and
+   *  its target alike, and its shell is not restricted anyway. */
   private refusesLinks(links: readonly string[]): boolean {
     return links.length > 0 && this.platform !== 'win32'
   }

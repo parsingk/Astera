@@ -6,13 +6,30 @@ import { lstat, readdir } from 'node:fs/promises'
 
 const slashed = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '')
 
-/** The E6 list. Windows keeps the GitHub CLI and gcloud under `APPDATA`; the other systems keep them under `~/.config`. */
-export function sensitiveLocations(platform: NodeJS.Platform, env: Record<string, string | undefined>, home: string): string[] {
+/** One place a sandboxed session may not read, and whether it names a file or a folder (Task E fix round 6): Codex's
+ *  Windows sandbox makes a missing deny-read path a folder, which is harmless for a folder and breaks the program that
+ *  later wants a file there (core/sandbox/prepared.ts leaves a missing file out on Windows). Said where each list is
+ *  built, so a new entry is classed too. */
+export interface DenyEntry {
+  path: string
+  kind: 'file' | 'folder'
+}
+
+/** The E6 list. Windows keeps the GitHub CLI and gcloud under `APPDATA`; the other systems keep them under `~/.config`.
+ *  `.npmrc` and `.git-credentials` are files (npm's config, git's credential store); the rest are folders. */
+export function sensitiveEntries(platform: NodeJS.Platform, env: Record<string, string | undefined>, home: string): DenyEntry[] {
   const h = slashed(home)
   const roaming = slashed(env.APPDATA ?? '') || `${h}/AppData/Roaming`
   const gh = platform === 'win32' ? `${roaming}/GitHub CLI` : `${h}/.config/gh`
   const gcloud = platform === 'win32' ? `${roaming}/gcloud` : `${h}/.config/gcloud`
-  return [`${h}/.ssh`, `${h}/.aws`, gh, gcloud, `${h}/.docker`, `${h}/.npmrc`, `${h}/.git-credentials`, `${h}/.kube`]
+  const folder = (path: string): DenyEntry => ({ path, kind: 'folder' })
+  const file = (path: string): DenyEntry => ({ path, kind: 'file' })
+  return [folder(`${h}/.ssh`), folder(`${h}/.aws`), folder(gh), folder(gcloud), folder(`${h}/.docker`), file(`${h}/.npmrc`), file(`${h}/.git-credentials`), folder(`${h}/.kube`)]
+}
+
+/** The E6 list's paths (sensitiveEntries). */
+export function sensitiveLocations(platform: NodeJS.Platform, env: Record<string, string | undefined>, home: string): string[] {
+  return sensitiveEntries(platform, env, home).map((e) => e.path)
 }
 
 /** The app's key (`<profile>/host/app.key`, core/host/hostKey.ts appKeyPath): what lets a process be the app to the
@@ -20,7 +37,12 @@ export function sensitiveLocations(platform: NodeJS.Platform, env: Record<string
  *  profile a sandboxed session may not read, on every OS. The Host key beside it is not named: the `astera` inside the
  *  session checks the loopback's proof with it. None when the file is not known. */
 export function appKeyDenies(appKeyFile: string | null): string[] {
-  return appKeyFile ? [slashed(appKeyFile)] : []
+  return appKeyEntries(appKeyFile).map((e) => e.path)
+}
+
+/** The app key as a deny entry: a file. */
+export function appKeyEntries(appKeyFile: string | null): DenyEntry[] {
+  return appKeyFile ? [{ path: slashed(appKeyFile), kind: 'file' }] : []
 }
 
 /** Astera's profile folder (`profileDir`: the app's userData, the Host's ASTERA_HOST_PROFILE_DIR), read-only in every
@@ -200,6 +222,12 @@ function splitAbsolute(p: string): { root: string; parts: string[] } | null {
   return { root, parts: s.slice(drive ? drive[0].length : 1).split('/').filter((c) => c !== '' && c !== '.') }
 }
 
+/** Whether a link's target is a network path: `//server/share`, or `//?/UNC/…` once slashed (not `//?/D:/…`). */
+const isNetworkPath = (target: string): boolean => {
+  const t = target.replace(/\\/g, '/')
+  return /^\/\/[?.]\/UNC\//i.test(t) || (t.startsWith('//') && !/^\/\/[?.]\/[A-Za-z]:/.test(t))
+}
+
 const fold = (p: string, platform: NodeJS.Platform): string => (platform === 'win32' || platform === 'darwin' ? p.toLowerCase() : p)
 
 /** Whether `p` is a writable folder or lies inside one, each folder by both its spellings (as given, and where it really
@@ -271,7 +299,9 @@ export function namedPathFor(p: string, writable: readonly string[], platform: N
       done.push(part)
       continue
     }
-    if (inWritable(next, roots, platform)) return { path: given, link: next }
+    // Judged by the folder that holds the link, which is what replacing it needs to write: a link that is a writable
+    // folder itself (a home-folder session whose home is a symlink) lies in that folder's parent (re-review 2, Minor 1)
+    if (inWritable(join(root, done), roots, platform)) return { path: given, link: next }
     if (++hops > MAX_LINKS) return { path: given, link: null }
     let target: string
     try {
@@ -279,6 +309,9 @@ export function namedPathFor(p: string, writable: readonly string[], platform: N
     } catch {
       return { path: given, link: null }
     }
+    // A network share (`\\server\share`, `\\?\UNC\server\share`) is no folder the walk can follow: as given (re-review 2,
+    // Minor 4). A drive behind the long-path prefix (`\\?\D:\x`) is followed as a drive path
+    if (isNetworkPath(target)) return { path: given, link: null }
     const absolute = splitAbsolute(target)
     if (absolute !== null) {
       root = absolute.root
@@ -386,10 +419,15 @@ export async function otherHostFolders(
 /** What a sandbox cannot be trusted to keep closed: the macOS keychain folder and the Linux session bus socket (a process
  *  that reaches it can ask the secret service for any stored login). Windows has no file to name. */
 export function credentialStoreDenies(platform: NodeJS.Platform, env: Record<string, string | undefined>, home: string): string[] {
-  if (platform === 'darwin') return [`${slashed(home)}/Library/Keychains`]
+  return credentialStoreEntries(platform, env, home).map((e) => e.path)
+}
+
+/** The OS credential store as deny entries: the macOS keychains folder, the Linux session bus socket (not a folder). */
+export function credentialStoreEntries(platform: NodeJS.Platform, env: Record<string, string | undefined>, home: string): DenyEntry[] {
+  if (platform === 'darwin') return [{ path: `${slashed(home)}/Library/Keychains`, kind: 'folder' }]
   if (platform === 'linux') {
     const bus = busSocketOf(env)
-    return bus ? [bus] : []
+    return bus ? [{ path: bus, kind: 'file' }] : []
   }
   return []
 }

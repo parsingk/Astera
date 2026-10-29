@@ -4,7 +4,7 @@
 // for the spawn. A roll prepares a chat chain's respawn through the terminal manager's prepare, as it refreshes the
 // capability cache both managers read, so the two managers of a process hold one PreparedLayouts.
 import { ensureGitFiles, ensureWorktreeConfigFiles, gitLayoutOf, type GitLayout } from './gitLayout'
-import { appKeyDenies, credentialStoreDenies, hostSocketDenies, namedPaths, otherHostFolders, sensitiveLocations, type LinkLook } from './locations'
+import { appKeyDenies, appKeyEntries, credentialStoreDenies, credentialStoreEntries, hostSocketDenies, namedPaths, otherHostFolders, sensitiveEntries, sensitiveLocations, type DenyEntry, type LinkLook } from './locations'
 import { codexSandboxArgs } from './codexProfile'
 import type { CodexExcludes } from './gitExcludes'
 import { SANDBOX_UNAVAILABLE, sandboxUnavailable } from './unavailable'
@@ -133,13 +133,31 @@ function codexNamedEntries(o: {
   otherHostDirs?: readonly string[]
   appKeyFile?: string | null
   readOnly?: readonly string[]
-  links?: SessionLinks
+  links: SessionLinks | null
 }): { denied: string[]; readOnly: string[]; links: string[] } {
-  const logins = [...sensitiveLocations(o.platform, o.env, o.homeDir), ...credentialStoreDenies(o.platform, o.env, o.homeDir)]
   const sockets = hostSocketDenies(o.platform, o.hostSocketDir ?? null, o.otherHostDirs ?? [])
-  const key = appKeyDenies(o.appKeyFile ?? null)
   const readOnly = [...(o.readOnly ?? [])]
-  if (!o.links) return { denied: [...logins, ...sockets, ...key], readOnly, links: [] }
+  const loginEntries = [...sensitiveEntries(o.platform, o.env, o.homeDir), ...credentialStoreEntries(o.platform, o.env, o.homeDir)]
+  const keyEntries = appKeyEntries(o.appKeyFile ?? null)
+  if (!o.links) return { denied: [...loginEntries, ...sockets.map((path) => ({ path })), ...keyEntries].map((e) => e.path), readOnly, links: [] }
+  const look = o.links.look
+  // Task E fix round 6: Codex's Windows sandbox makes every missing deny-read path a folder before it denies it
+  // (windows-sandbox-rs/src/deny_read_acl.rs:58-76 `create_dir_all`, reached through deny_read_state.rs:32-46 from
+  // spawn_prep.rs:306-325 and setup_provisioning.rs:929-939 at rust-v0.160.0). A folder where a program wants a file
+  // breaks it (a missing ~/.git-credentials became one, and git's credential store wants a file there), so on Windows a
+  // file entry that is not there at the start is left out, and nothing is made in the person's home. A missing folder
+  // stays named: an empty folder there is harmless. A file made while the session runs is not denied to it until the
+  // next start. A look that fails keeps the entry, as before
+  const present = (e: DenyEntry): boolean => {
+    if (o.platform !== 'win32' || e.kind === 'folder') return true
+    try {
+      return look.lstat(e.path) !== null
+    } catch {
+      return true
+    }
+  }
+  const logins = loginEntries.filter(present).map((e) => e.path)
+  const key = keyEntries.filter(present).map((e) => e.path)
   const writable = codexWritableFolders({ platform: o.platform, cwd: o.links.cwd, layout: o.layout, env: o.env })
   const named = (paths: readonly string[]) => namedPaths(paths, writable, o.platform, o.links!.look)
   const l = named(logins)
@@ -169,8 +187,11 @@ export function codexSessionLinks(o: Parameters<typeof codexNamedEntries>[0]): s
  *  follows such a path at its start and does not keep the link from being replaced (sandboxing/src/seatbelt.rs at the
  *  tag: the write exclusions name the logical and the resolved path, :552-562, and the protected ancestors are denied
  *  unlinking only as directories, `(vnode-type DIRECTORY)`, :1074-1080, which a symlink is not). On Windows Codex has
- *  no such refusal, and whether its sandbox keeps a junction from being replaced was not checked. So on both the start is
- *  refused (`linked-path`), the log naming the link. */
+ *  no such refusal either, and its sandbox resolves every path it protects and pins no link (windows-sandbox-rs/src at
+ *  the tag: allow.rs:14-41 turns read-only subpaths into deny paths, setup.rs:1319-1332 canonicalizes the deny-write
+ *  paths, deny_read_acl.rs:10-43 plans deny-read ACEs on the path and its canonical target, acl.rs:1005 sets them with
+ *  SetNamedSecurityInfoW, which acts on the target), while a junction inside a writable folder inherits that folder's
+ *  grant and can be replaced. So on both the start is refused (`linked-path`), the log naming the link. */
 export function sessionSandboxArgs(o: {
   platform: NodeJS.Platform
   homeDir: string
@@ -185,8 +206,9 @@ export function sessionSandboxArgs(o: {
   readOnly?: readonly string[]
   /** Where a refused path is named (the manager's log). */
   log?: (m: string) => void
-  /** The session's work folder and how the disk is read, for links on the named paths (SessionLinks). */
-  links?: SessionLinks
+  /** The session's work folder and how the disk is read, for links on the named paths (SessionLinks); null names every
+   *  path as given (the measurement). Required, as the managers' linkLook is (fix round 6). */
+  links: SessionLinks | null
 }): string[] {
   const { platform, layout } = o
   const { denied, readOnly, links } = codexNamedEntries(o)
@@ -254,8 +276,8 @@ export async function prepareCodexSandbox(o: {
   check?: (sandboxArgs: string[]) => void
   /** Windows: writes the copy of the person's git excludes (codexExcludesWriter). Absent, none is written. */
   excludes?: CodexExcludes
-  /** How the disk is read for links on the named paths (sessionSandboxArgs `links`, with `cwd`). Absent, as given. */
-  look?: LinkLook
+  /** How the disk is read for links on the named paths (sessionSandboxArgs `links`, with `cwd`); null, as given. */
+  look: LinkLook | null
   log: (m: string) => void
 }): Promise<PreparedCodex> {
   const fail = (err: unknown): Error => {
@@ -285,7 +307,7 @@ export async function prepareCodexSandbox(o: {
     appKeyFile: o.appKeyFile ?? null,
     readOnly: o.readOnly ?? [],
     log: o.log,
-    ...(o.look ? { links: { cwd: o.cwd, look: o.look } } : {})
+    links: o.look ? { cwd: o.cwd, look: o.look } : null
   })
   o.check?.(args)
   if (o.platform === 'win32') {

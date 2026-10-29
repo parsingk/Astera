@@ -156,7 +156,7 @@ export function composeHostRolling(a: {
     hostSocketDir: a.spawner.hostSocketDir ?? null,
     appKeyFile: a.spawner.appKeyFile ?? null,
     readOnly: a.spawner.readOnly ?? [],
-    ...(a.spawner.linkLook ? { linkLook: a.spawner.linkLook } : {}),
+    linkLook: a.spawner.linkLook,
     ...(a.spawner.codexVersion ? { codexVersion: a.spawner.codexVersion } : {}),
     ...(a.spawner.codexExcludes ? { codexExcludes: a.spawner.codexExcludes } : {}),
     // Task E fix round 2: a sandboxed chat's start warnings, as the chat's notice to the apps that take chats back (the

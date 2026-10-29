@@ -1024,11 +1024,12 @@ describe('StatusLineManager sandbox', () => {
     }
   })
 
-  // Task E fix round 5 (rule E5). srt resolves every named path at its own start and pins only where it lands
-  // (linux-sandbox-utils.js, macos-sandbox-utils.js), so nothing it is given keeps a link the session could change from
-  // being repointed: a scope whose named path goes through a link inside its writable folders gets no twin on macOS and
-  // Linux, and its start is refused (claudeStart.ts `linked-path`). A link it cannot change is followed, a missing entry
-  // under it too. Windows has no sandbox for Claude, only the file tools' rules, which match a link and its target alike
+  // Task E fix rounds 5 and 6 (rule E5). srt cannot keep the deny in force through a link the session could change (on
+  // Linux it follows the path at its start and pins only where it lands; on macOS it keeps a dotfile link's spelling and
+  // pins the link, but the target stays reachable by its own path): a scope whose named path goes through such a link
+  // gets no twin on macOS and Linux, and its start is refused (claudeStart.ts `linked-path`). A link it cannot change is
+  // followed, a missing entry under it too. Windows has no sandbox for Claude, only the file tools' rules, which match a
+  // link and its target alike
   it('names a path through a link the session cannot change where it lands, and writes no twin for one it could change', async () => {
     // Outside /tmp, which a sandboxed session may write (so a link there is one it could change): Linux's temp folder is
     // /tmp, so the fixture goes in /dev/shm there
@@ -1047,11 +1048,10 @@ describe('StatusLineManager sandbox', () => {
           execPath: platform === 'win32' ? 'C:/x/electron.exe' : '/opt/astera/astera',
           ...(platform === 'win32' ? { findRuntime: async () => 'C:\\rt\\astera-host.exe' } : {}),
           homeDir: home,
-          tmpDir: TMP[platform],
-          linkLook: nodeLinkLook
+          tmpDir: TMP[platform]
         })
         await mgr.init()
-        const inProject: SandboxScope = { layout: null, env: { ...ENV[platform] }, cwd: `${home}/proj` }
+        const inProject: SandboxScope = { layout: null, env: { ...ENV[platform] }, cwd: `${home}/proj`, look: nodeLinkLook }
         expect(await mgr.ensureSandboxFiles(inProject), platform).toBe('ok')
         const twin = JSON.parse(await read(mgr.spawnConfig('s1', account, { sandbox: inProject }).settingsFile))
         const sshRule = (p: string): string => (/^[A-Za-z]:/.test(p) ? `/${p[0].toLowerCase()}${p.slice(2)}` : p)
@@ -1063,7 +1063,7 @@ describe('StatusLineManager sandbox', () => {
           expect(twin.sandbox.filesystem.denyRead.some((p: string) => p.startsWith(`${home}/.config/`) || p === `${home}/.ssh`), platform).toBe(false)
           expect(twin.sandbox.filesystem.denyRead, platform).toContain(`${home}/.aws`)
         }
-        const inHome: SandboxScope = { layout: null, env: { ...ENV[platform] }, cwd: home }
+        const inHome: SandboxScope = { layout: null, env: { ...ENV[platform] }, cwd: home, look: nodeLinkLook }
         if (platform === 'win32') expect(await mgr.ensureSandboxFiles(inHome)).toBe('ok')
         else {
           expect(await mgr.ensureSandboxFiles(inHome), platform).toEqual({ linked: expect.arrayContaining([`${home}/.ssh`]) })

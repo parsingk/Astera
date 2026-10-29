@@ -124,7 +124,7 @@ describe('claudeSandboxStart', () => {
     }
     const env = { HOME: home, GIT_CONFIG_GLOBAL: '/somewhere/.gitconfig' }
     const logged: string[] = []
-    const start = claudeSandboxStart({
+    const start = claudeSandboxStart({ linkLook: null,
       platform: o.platform ?? 'linux',
       profileDir,
       homeDir: home,
@@ -204,8 +204,8 @@ describe('claudeSandboxStart', () => {
     expect(r.logged.join('\n')).toMatch(/settings/)
   })
 
-  // Task E fix round 5 (rule E5): srt follows a named path at its own start and does not keep a link the session could
-  // change from being repointed, so a scope whose named path goes through one gets no twin, and the start is refused in
+  // Task E fix rounds 5 and 6 (rule E5): srt cannot keep the deny in force through a link the session could change
+  // (StatusLineManager.refusesLinks), so a scope whose named path goes through one gets no twin, and the start is refused in
   // words that say why, the log naming the link
   it('refuses a start whose named path goes through a link the session could change, naming the link', async () => {
     const r = rig({ files: { linked: ['/h/.config'] } })
@@ -232,11 +232,11 @@ describe('claudeSandboxStart', () => {
       const layout = await gitLayoutOf(r.cwd)
       expect(layout).not.toBeNull()
       // Task E fix round 5: with the session's folder, which the twin's named paths are looked at against
-      expect(r.scopes).toEqual([{ layout, env: r.sessionEnv, cwd: r.cwd }])
+      expect(r.scopes).toEqual([{ layout, env: r.sessionEnv, cwd: r.cwd, look: null }])
       expect(readFileSync(path.join(r.cwd, '.git', 'commondir'), 'utf8')).toBe('.\n')
       expect(existsSync(path.join(r.cwd, '.git', 'modules'))).toBe(true)
       expect(existsSync(path.join(r.cwd, '.git', 'config.worktree'))).toBe(true)
-      expect(r.start.scopeOf('acc-1', r.cwd, r.sessionEnv)).toEqual({ layout, env: r.sessionEnv, cwd: r.cwd })
+      expect(r.start.scopeOf('acc-1', r.cwd, r.sessionEnv)).toEqual({ layout, env: r.sessionEnv, cwd: r.cwd, look: null })
       // Another account, or another folder, was not prepared
       expect(r.start.scopeOf('acc-2', r.cwd, r.sessionEnv)).toBeUndefined()
       expect(r.start.scopeOf('acc-1', temp(), r.sessionEnv)).toBeUndefined()
@@ -244,9 +244,9 @@ describe('claudeSandboxStart', () => {
     // Windows: Claude has no sandbox there, its twin is the deny rules whatever the folder, and nothing is made in it
     const win = rig({ platform: 'win32' })
     await win.prepare()
-    expect(win.scopes).toEqual([{ layout: null, env: win.sessionEnv, cwd: win.cwd }])
+    expect(win.scopes).toEqual([{ layout: null, env: win.sessionEnv, cwd: win.cwd, look: null }])
     expect(existsSync(path.join(win.cwd, '.git', 'commondir'))).toBe(false)
-    expect(win.start.scopeOf('acc-1', win.cwd, {})).toEqual({ layout: null, env: {}, cwd: win.cwd })
+    expect(win.start.scopeOf('acc-1', win.cwd, {})).toEqual({ layout: null, env: {}, cwd: win.cwd, look: null })
   })
 
   it('refuses a folder whose git layout cannot be prepared, before the twins', async () => {

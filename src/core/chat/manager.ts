@@ -100,9 +100,9 @@ export interface ChatManagerDeps {
   /** The read-only folders a sandboxed Codex chat's profile keeps on every OS (SpawnChecks' twin). Absent, nothing is
    *  kept read-only. */
   readOnly?: readonly string[]
-  /** How the disk is read for links on the paths a sandboxed Codex chat names (SpawnChecks' twin, Task E fix round 5).
-   *  Absent, every path is named as given. */
-  linkLook?: LinkLook
+  /** How the disk is read for links on the paths a sandboxed Codex chat names (SpawnChecks' twin, Task E fix round 5);
+   *  null names every path as given. Required (fix round 6), so a wiring that forgets it does not compile. */
+  linkLook: LinkLook | null
   /** The codex version question a sandboxed Codex chat asks at its prepare and spawn (final review I2), the terminal
    *  manager's. Absent, a sandboxed Codex chat is refused as for a version not known. */
   codexVersion?: CodexVersionProbe
@@ -306,7 +306,7 @@ export class ChatSessionManager {
       version: this.deps.codexVersion,
       check: (args) => fitsOnTheLine(this.deps.platform, buildCodexAppServerCommand(this.deps.platform, undefined, [], appServerSandboxArgs(args))),
       ...(this.deps.codexExcludes ? { excludes: this.deps.codexExcludes } : {}),
-      ...(this.deps.linkLook ? { look: this.deps.linkLook } : {}),
+      look: this.deps.linkLook,
       log: this.deps.log
     })
     // The other Hosts' folders beside this one's, as they were now, kept for the spawn's profile (final fix pass, part 2, B),
@@ -422,7 +422,7 @@ export class ChatSessionManager {
             appKeyFile: this.deps.appKeyFile ?? null,
             readOnly: this.deps.readOnly ?? [],
             log: this.deps.log,
-            ...(this.deps.linkLook ? { links: { cwd: opts.cwd, look: this.deps.linkLook } } : {})
+            links: this.deps.linkLook ? { cwd: opts.cwd, look: this.deps.linkLook } : null
           })
         )
       : []
@@ -432,7 +432,7 @@ export class ChatSessionManager {
     const linkInWorkFolder =
       sandboxedCodex &&
       this.deps.platform === 'linux' &&
-      this.deps.linkLook !== undefined &&
+      this.deps.linkLook !== null &&
       codexSessionLinks({
         platform: this.deps.platform,
         homeDir: this.deps.homeDir,

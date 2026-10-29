@@ -13,6 +13,7 @@ import { appendGitConfig, npmCacheOf } from './codexProfile'
 import { globalExcludesText, runGitFile, type RunGit } from './gitExcludes'
 import { ensureGitFiles, ensureWorktreeConfigFiles, gitLayoutOf, type GitLayout } from './gitLayout'
 import { PreparedLayouts } from './prepared'
+import type { LinkLook } from './locations'
 import { SANDBOX_UNAVAILABLE, sandboxUnavailable } from './unavailable'
 
 const slashed = (p: string): string => p.replace(/\\/g, '/')
@@ -107,6 +108,10 @@ export function claudeSandboxStart(o: {
   runGit?: RunGit
   /** Test injection; default Date.now. */
   now?: () => number
+  /** How the disk is read for links on the paths the twins name (Task E fix round 5, core/sandbox/locations.ts
+   *  namedPathFor), carried on each scope: the app's and the Host's wiring give nodeLinkLook; null names every path as
+   *  given. Required (fix round 6), so a wiring that forgets it does not compile. */
+  linkLook: LinkLook | null
   log: (m: string) => void
 }): ClaudeSandboxStart {
   const excludesFile = gitExcludesFileOf(o.profileDir, o.uid ?? process.getuid?.() ?? 0)
@@ -155,11 +160,11 @@ export function claudeSandboxStart(o: {
       const blocked = blocker()
       if (blocked !== null) throw new Error(blocked)
       const layout = await layoutFor(p.cwd)
-      const written = await o.files.ensureSandboxFiles({ layout, env: p.env, cwd: p.cwd })
-      // Task E fix round 5 (rule E5): a named path through a link the session could change, which srt would follow at its
-      // start and not keep from being repointed (StatusLineManager.ensureSandboxFiles writes no twin for it)
+      const written = await o.files.ensureSandboxFiles({ layout, env: p.env, cwd: p.cwd, look: o.linkLook })
+      // Task E fix rounds 5 and 6 (rule E5): a named path through a link the session could change, through which srt
+      // cannot keep the deny in force (StatusLineManager.refusesLinks says how, per OS; ensureSandboxFiles writes no twin)
       if (typeof written === 'object') {
-        o.log(`sandbox: ${written.linked.join(', ')} is a link inside the session's writable folders, which it could repoint, and Claude's sandbox would not keep it, so the sandboxed start is refused`)
+        o.log(`sandbox: ${written.linked.join(', ')} is a link inside the session's writable folders, which it could repoint, and Claude's sandbox cannot keep the path closed through it, so the sandboxed start is refused`)
         throw sandboxUnavailable('linked-path')
       }
       if (written !== 'ok') {
@@ -179,7 +184,7 @@ export function claudeSandboxStart(o: {
     blocker,
     scopeOf: (accountId, cwd, env) => {
       const layout = layouts.layoutOf(accountId, cwd, now())
-      return layout === undefined ? undefined : { layout, env, cwd }
+      return layout === undefined ? undefined : { layout, env, cwd, look: o.linkLook }
     },
     chatArgs: (enforce, scope) => o.files.sandboxChatArgs(enforce, scope),
     env: (inherited) =>

@@ -941,6 +941,10 @@ describe('the roll spawn (S6 R5, R6)', () => {
       await fs.mkdir(path.join(profile, 'host-runtime'), { recursive: true })
       await fs.mkdir(path.join(home, 'AppData', 'Local', 'astera'), { recursive: true })
     }
+    // The app key, as the Host makes it before any session starts (index.ts ensureAppKey): on Windows a file entry that is
+    // not there is left out (fix round 6), so the fixture makes it
+    await fs.mkdir(path.join(profile, 'host'), { recursive: true })
+    await fs.writeFile(path.join(profile, 'host', 'app.key'), 'k')
     const real = (p: string): string => realpathSync.native(p).replace(/\\/g, '/')
     const spelled = (p: string): string => p.replace(/\\/g, '/')
     const h = rig({ env, codexNoDaemon: Object.assign(() => true, { warm: async () => {} }) })
