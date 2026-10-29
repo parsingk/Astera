@@ -1,6 +1,9 @@
 // Astera's runner for one sandboxed Task's check (Task K): run by the app's or the Host's own executable as node, outside
-// the sandbox it puts the check in, as srt's own CLI is. It reads nothing but its arguments, and lives in the installed app,
-// which a sandboxed session cannot write (core/sandbox/locations.ts sandboxReadOnly).
+// the sandbox it puts the check in, as srt's own CLI is. It reads its arguments and, from its environment, the name of the
+// file to keep its reason in (CHECK_REASON_ENV), which it writes only when it could not put the check in the sandbox and
+// takes out of the check's environment (fix rounds 3 and 4). It lives in the installed app, which a sandboxed session
+// cannot write (core/sandbox/locations.ts sandboxReadOnly); the Windows Host runs the copy its runtime keeps beside
+// host.js (scripts/host-runtime.mjs).
 // - A Claude check on macOS and Linux (core/sandbox/srtCheck.ts): its one argument is the check (SrtCheckPayload as JSON).
 // - A Codex check on Windows (fix round 2, core/sandbox/checkRunner.ts): `--codex` and then `codex sandbox`'s command as it
 //   is; the runner learns from the check's shell that the check started.
