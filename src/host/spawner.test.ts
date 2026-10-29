@@ -960,14 +960,26 @@ describe('the roll spawn (S6 R5, R6)', () => {
     }
     for (const r of readOnly) expect(permissions, r).toContain(`${JSON.stringify(r)}="read"`)
   })
-  it('a Host start names no run location that is not there, so no sandbox puts a placeholder file at one', () => {
-    const h = rig()
+  // Task E fix round 4: the Host makes the folders Astera owns and writes into (electron-updater's cache; on Windows the
+  // Host runtime) before it builds the list, so they are always named, each a real folder (no placeholder); it names no
+  // other location that is not there, and makes nothing else
+  it('a Host start makes the updater cache and its runtime folder, names them, and names nothing else that is not there', async () => {
+    const home = path.join(dir, 'home')
+    const env = hostEnv()
+    const cache = updaterCacheDir(process.platform, env, home)
+    const h = rig({ env })
     const readOnly = h.spawner!.readOnly!
-    // Only the profile and the install folder (the executable's, Windows and macOS) are there in this fixture
-    expect(readOnly.some((p) => p.endsWith('/astera-updater'))).toBe(false)
-    expect(readOnly.some((p) => p.endsWith('/host-runtime'))).toBe(false)
+    const real = (p: string): string => realpathSync.native(p).replace(/\\/g, '/')
+    expect((await fs.readdir(cache))).toEqual([])
+    expect(readOnly).toContain(real(cache))
+    if (process.platform === 'win32') {
+      // No LOCALAPPDATA in this environment: the runtime goes under the profile (core/host/runtime.ts hostRuntimeBase)
+      expect((await fs.readdir(path.join(profile, 'host-runtime')))).toEqual([])
+      expect(readOnly).toContain(real(path.join(profile, 'host-runtime')))
+    } else expect(await fs.stat(path.join(profile, 'host-runtime')).catch(() => null)).toBeNull()
+    // Astera's own %LOCALAPPDATA%\astera is not made, so not named here
     expect(readOnly.some((p) => /\/AppData\/Local\/astera$/i.test(p))).toBe(false)
-    expect(readOnly).toContain(realpathSync.native(profile).replace(/\\/g, '/'))
+    expect(readOnly).toContain(real(profile))
   })
   // Task 5 fix round 1: what would refuse the sandboxed respawn is asked in its prepare, which the roll awaits before it
   // kills the session it replaces

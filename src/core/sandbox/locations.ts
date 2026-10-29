@@ -1,7 +1,7 @@
 // The places a sandboxed session may not read (sandbox design §6): the sensitive locations of the credentials design's E6
 // list, plus the OS credential stores a CLI's own sandbox does not close by itself. All paths come out absolute with forward
 // slashes, the one form both CLIs' settings and the Codex profile take on every OS.
-import { realpathSync } from 'node:fs'
+import { mkdirSync, realpathSync } from 'node:fs'
 import { lstat, readdir } from 'node:fs/promises'
 
 const slashed = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '')
@@ -139,6 +139,30 @@ export function sandboxReadOnly(o: {
         .filter((p): p is string => p !== null)
     : named
   return [...new Set(all)]
+}
+
+/** Makes, empty, each of the folders Astera owns and later writes code or an installer into, if it is missing, before a
+ *  wiring builds the read-only list (Task E fix round 4): electron-updater's download cache and, on Windows, the Host
+ *  runtime folder. A folder that is there when the list is built is always named (sandboxReadOnly keeps only what is
+ *  there), so one a download first makes while the app runs is never left writable until the next start, and as a real
+ *  folder it gets no placeholder. An empty one reads as nothing there to everything that reads it: electron-updater
+ *  6.8.9 makes its `pending` subfolder with `mkdir(…, { recursive: true })` (`out/AppUpdater.js:587`), reads
+ *  `pending/update-info.json` and `current.blockmap` only after `pathExists` (`out/DownloadedUpdateHelper.js:89-93`,
+ *  `out/AppUpdater.js:682-692`); the Host runtime is found by listing it (core/host/installedRuntime.ts). Folders only:
+ *  never a file, and nothing on the person's PATH. One that cannot be made is left out by the resolver; never throws.
+ *  `mkdir` is a test seam. */
+export function ensureOwnFolders(
+  folders: readonly (string | null | undefined)[],
+  mkdir: (p: string) => void = (p) => void mkdirSync(p, { recursive: true })
+): void {
+  for (const folder of folders) {
+    if (!folder) continue
+    try {
+      mkdir(folder)
+    } catch {
+      // Not made: realPathOrNull finds nothing there and the list leaves it out, as before
+    }
+  }
 }
 
 /** A path's real location (every link on it followed, `realpathSync.native`), forward slashes; null when it is not there

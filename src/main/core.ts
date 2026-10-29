@@ -53,7 +53,7 @@ import { claudeSandboxStart } from '../core/sandbox/claudeStart'
 import { codexExcludesWriter } from '../core/sandbox/gitExcludes'
 import { hostAddress } from '../core/publicContract'
 import { appKeyPath } from '../core/host/hostKey'
-import { installRootOf, localAsteraDir, publicShuttleFiles, realPathOrNull, sandboxReadOnly, updaterCacheDir } from '../core/sandbox/locations'
+import { ensureOwnFolders, installRootOf, localAsteraDir, publicShuttleFiles, realPathOrNull, sandboxReadOnly, updaterCacheDir } from '../core/sandbox/locations'
 import { binDirFor } from '../core/orchestration/cliInstall'
 import { shuttleNames } from '../core/orchestration/exec/shuttle'
 import { HOST_PROTOCOL } from '../core/host/protocol'
@@ -260,11 +260,15 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   // Astera's own %LOCALAPPDATA%\astera whole (the public CLI's bin, the session-`.cmd` junction), and on macOS and Linux
   // the public CLI's own files in the person's ~/.local/bin, where they are now. One list, for the twins and both managers,
   // naming only what is there when the app starts, each where it really is (fix round 3: no placeholder file at a missing
-  // one, no read-only path through a linked ~/.cache or ~/.local)
+  // one, no read-only path through a linked ~/.cache or ~/.local). The updater cache and the Host runtime folder are made
+  // first, empty if missing (fix round 4), so they are always named: a download that first made the cache while the app
+  // runs would otherwise leave it writable until the next start
+  const updaterCache = updaterCacheDir(process.platform, process.env, os.homedir())
+  ensureOwnFolders([updaterCache, runtimeBase])
   const readOnly = sandboxReadOnly({
     profileDir: userDataDir,
     hostRuntimeBase: runtimeBase,
-    updaterCache: updaterCacheDir(process.platform, process.env, os.homedir()),
+    updaterCache,
     installRoot: installRootOf(app.getPath('exe'), process.platform),
     localAstera: localAsteraDir(process.platform, process.env, os.homedir()),
     publicShuttle: publicShuttleFiles({ platform: process.platform, binDir: binDirFor({ platform: process.platform, env: process.env, home: os.homedir() }), names: shuttleNames(process.platform), exists: existsSync }),

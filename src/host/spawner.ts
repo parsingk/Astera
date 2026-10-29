@@ -68,7 +68,7 @@ import { createManagedHooksCheck } from '../core/sessions/managedHooks'
 import { codexNoDaemonProbe, type CodexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
 import { findInstalledHostExe } from '../core/host/installedRuntime'
 import { hostRuntimeBase } from '../core/host/runtime'
-import { installRootOf, localAsteraDir, publicShuttleFiles, realPathOrNull, sandboxReadOnly, updaterCacheDir } from '../core/sandbox/locations'
+import { ensureOwnFolders, installRootOf, localAsteraDir, publicShuttleFiles, realPathOrNull, sandboxReadOnly, updaterCacheDir } from '../core/sandbox/locations'
 import { claudeUsernsCheck, type SandboxWarnSink } from '../core/sandbox/startWarnings'
 import { hidingLog } from '../core/extensions/secrets'
 import { setBounded } from '../core/bounded'
@@ -352,12 +352,15 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   // %LOCALAPPDATA%\astera whole (the public CLI's bin, the session-`.cmd` junction; fix round 2), and on macOS and Linux
   // the public CLI's own files in ~/.local/bin, where they are now. One list, built once for both managers and the twins,
   // naming only what is there when this Host starts, each where it really is (fix round 3: no placeholder file at a
-  // missing one, no read-only path through a linked ~/.cache or ~/.local)
+  // missing one, no read-only path through a linked ~/.cache or ~/.local). The updater cache and the Host runtime folder
+  // are made first, empty if missing (fix round 4), so they are always named, however long this Host then runs
   const hostRuntimeDir = hostRuntimeBase({ platform, localAppData: d.env.LOCALAPPDATA, userData: profileDir, appName: path.win32.basename(profileDir) })
+  const updaterCache = updaterCacheDir(platform, d.env, homeDir)
+  ensureOwnFolders([updaterCache, hostRuntimeDir])
   const readOnly = sandboxReadOnly({
     profileDir,
     hostRuntimeBase: hostRuntimeDir,
-    updaterCache: updaterCacheDir(platform, d.env, homeDir),
+    updaterCache,
     installRoot: installRootOf(cli.exec, platform),
     localAstera: localAsteraDir(platform, d.env, homeDir),
     publicShuttle: publicShuttleFiles({ platform, binDir: binDirFor({ platform, env: d.env, home: homeDir }), names: shuttleNames(platform), exists }),

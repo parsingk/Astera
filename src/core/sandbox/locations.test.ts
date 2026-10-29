@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { appKeyDenies, credentialStoreDenies, hostSocketDenies, installRootOf, localAsteraDir, otherHostFolders, profileReadOnly, publicShuttleFiles, realPathOrNull, sandboxReadOnly, sensitiveLocations, updaterCacheDir } from './locations'
+import { appKeyDenies, credentialStoreDenies, ensureOwnFolders, hostSocketDenies, installRootOf, localAsteraDir, otherHostFolders, profileReadOnly, publicShuttleFiles, realPathOrNull, sandboxReadOnly, sensitiveLocations, updaterCacheDir } from './locations'
 
 describe('sandbox locations', () => {
   it('lists E6 on every OS, with gh and gcloud where each OS keeps them', () => {
@@ -102,6 +102,34 @@ describe('sandbox locations', () => {
       mkdirSync(path.join(dir, 'dots', 'cache', 'astera-updater'), { recursive: true })
       symlinkSync(path.join(dir, 'dots', 'cache'), path.join(dir, '.cache'), process.platform === 'win32' ? 'junction' : 'dir')
       expect(realPathOrNull(path.join(dir, '.cache', 'astera-updater'))).toBe(`${realpathSync.native(dir).replace(/\\/g, '/')}/dots/cache/astera-updater`)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // Task E fix round 4: the folders Astera owns and writes an installer or a runtime into (electron-updater's cache, the
+  // Windows Host runtime) are made, empty, before the list is built, so the list always names them: one first made by a
+  // download while the app runs would otherwise stay writable until the next start. Never a file, and nothing else
+  it('makes the folders it is given that are missing, leaves the others, and never throws', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'astera-own-'))
+    try {
+      const cache = path.join(dir, 'cache', 'astera-updater')
+      const runtime = path.join(dir, 'local', 'astera', 'host-runtime')
+      mkdirSync(runtime, { recursive: true })
+      writeFileSync(path.join(runtime, 'kept'), 'x')
+      ensureOwnFolders([cache, runtime, null, undefined])
+      expect(statSync(cache).isDirectory()).toBe(true)
+      expect(readdirSync(cache)).toEqual([])
+      expect(readdirSync(runtime)).toEqual(['kept'])
+      // One that cannot be made is left to the resolver, which then leaves it out; the start goes on
+      const made: string[] = []
+      expect(() =>
+        ensureOwnFolders(['/a', '/b'], (p) => {
+          made.push(p)
+          if (p === '/a') throw new Error('EACCES')
+        })
+      ).not.toThrow()
+      expect(made).toEqual(['/a', '/b'])
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
