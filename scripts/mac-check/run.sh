@@ -135,12 +135,7 @@ if [ -x "$root/node_modules/.bin/vitest" ] && [ -f "$root/node_modules/electron/
   electron="$root/node_modules/electron/dist/$(cat "$root/node_modules/electron/path.txt")"
 fi
 if [ -z "$electron" ] || [ ! -f "$electron" ]; then
-  if [ "${node_v%%.*}" != 22 ]; then
-    # Seen on Node 24.16: Electron's install unpacks one file of its zip and exits 0, so npm ci says nothing.
-    result FAIL "npm ci" "node_modules 가 없거나 Electron 이 빠졌습니다. Node $node_v 에서는 npm ci 가 Electron 을 다 풀지 못하고 조용히 끝날 수 있습니다. Node 22 로 바꾸고 npm ci 를 하세요."
-  else
-    result FAIL "npm ci" "node_modules 가 없거나 Electron 이 빠졌습니다. 저장소 폴더에서 npm ci 를 먼저 하세요."
-  fi
+  result FAIL "npm ci" "node_modules 가 없거나 Electron 이 빠졌습니다. 저장소 폴더에서 npm ci 를 먼저 하세요."
   exit 1
 fi
 # Every package the lock names, at the version it names (the optional ones are for other systems): a checkout pulled

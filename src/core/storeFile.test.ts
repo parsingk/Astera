@@ -44,4 +44,15 @@ describe('keepDamaged', () => {
     const texts = await Promise.all(kept.map((n) => fs.readFile(path.join(dir, n), 'utf8')))
     expect(texts.sort()).toEqual(['first damage', 'second damage'])
   })
+
+  // Node 24 (the Mac check): a second and a third damage in one millisecond took the same stamped name, and `wx` dropped
+  // the third copy without a word, so the policy's repair would not start over the file it could not keep
+  it('keeps every damage that lands in the same millisecond', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1_793_000_000_000)
+    const f = path.join(dir, 'a.json')
+    for (const t of ['first', 'second', 'third', 'fourth']) await keepDamaged(f, t)
+    const kept = (await fs.readdir(dir)).filter((n) => n.endsWith('.bak'))
+    const texts = await Promise.all(kept.map((n) => fs.readFile(path.join(dir, n), 'utf8')))
+    expect(texts.sort()).toEqual(['first', 'fourth', 'second', 'third'])
+  })
 })
