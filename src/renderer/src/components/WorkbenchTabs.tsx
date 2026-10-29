@@ -3,7 +3,7 @@ import type { SandboxKind, SessionKind } from '../../../core/types'
 import { resolveFileIcon } from '../../../core/files/icons'
 import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
-import { Film, Globe, Image as ImageIcon, MessageSquare, Monitor, Repeat, Terminal } from 'lucide-react'
+import { Film, Globe, Image as ImageIcon, MessageSquare, Monitor, Repeat, Shield, Terminal } from 'lucide-react'
 import { SandboxMarker } from './SandboxMarker'
 import { endRenameOnce } from '../lib/renameOnce'
 import { scrollThumb, tabFloor, wheelShift } from './tabStrip'
@@ -49,6 +49,9 @@ export interface BrowserTab {
   /** Set when this tab is a session's agent browser. Absent on every tab the user opened. The tab is
    *  found by this, never by URL: an agent's second `open` moves this tab rather than making one. */
   agentSessionId?: string
+  /** The partition this agent tab was opened in (main chooses it by the session's sandbox, core/preview/guards.ts). Absent: the
+   *  person's preview partition. */
+  partition?: string
 }
 
 /** The tabs shown on one pane's tab bar. Draws file tabs, session tabs and record tabs in one row.
@@ -99,6 +102,8 @@ export type WorkbenchTab =
       agentRunning: boolean
       /** Set when this tab is a session's agent browser — draws the "agent" tag. */
       agentSessionId?: string
+      /** The tab is in a sandboxed session's own partition: draws the shield beside the agent tag. */
+      agentSandboxed?: boolean
     }
   | {
       tabId: string
@@ -414,6 +419,11 @@ ${tab.profileTooltip}`
           )}
           {tab.kind === 'browser' && tab.agentSessionId !== undefined && (
             <span className="run-tag" title={t('preview.agent.tab')}>{t('preview.agent.tab')}</span>
+          )}
+          {tab.kind === 'browser' && tab.agentSandboxed === true && (
+            <span className="tab-sandbox" title={t('preview.agent.sandboxed')}>
+              <Shield size={11} />
+            </span>
           )}
           {tab.kind === 'app' && <span className="run-tag" title={t('workspace.tab.tag')}>{t('workspace.tab.tag')}</span>}
           {tab.kind === 'file' && tab.hint && <span className="tab-hint">{tab.hint}</span>}

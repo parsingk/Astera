@@ -95,3 +95,28 @@ describe('the sandbox marker on a session tab', () => {
     expect(tabs).not.toContain('window.api.platform')
   })
 })
+
+// Task J: an agent browser tab in a sandboxed session's own partition carries a shield beside its agent tag
+describe('the shield on a sandboxed agent browser tab', () => {
+  const browser = (over: Partial<Extract<WorkbenchTab, { kind: 'browser' }>> = {}): WorkbenchTab => ({
+    tabId: 'browser:b1',
+    kind: 'browser',
+    url: 'http://localhost:5173/',
+    title: 'App',
+    loading: false,
+    agentRunning: false,
+    agentSessionId: 's1',
+    ...over
+  })
+
+  it('shows for a sandboxed page, titled with its own words', () => {
+    expect(render([browser({ agentSandboxed: true })])).toMatch(/<span class="tab-sandbox" title="preview\.agent\.sandboxed"><svg/)
+  })
+  it('does not show for an unsandboxed one', () => {
+    expect(render([browser({ agentSandboxed: false })])).not.toContain('tab-sandbox')
+    expect(render([browser()])).not.toContain('tab-sandbox')
+  })
+  it('its label is in every language file', () => {
+    for (const lang of LANGS) expect(translate(lang, 'preview.agent.sandboxed'), lang).not.toBe('preview.agent.sandboxed')
+  })
+})

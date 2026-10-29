@@ -3198,10 +3198,10 @@ export default function App(): React.JSX.Element {
   /** Main asks for a session's agent tab on its first open(). One per session, found by session; a
    *  request for a session that already has one is a no-op. Placed in the background: the agent
    *  appearing must not take the tab or the focus the user is on. */
-  const openAgentTab = (sessionId: string, cwd: string, url: string): void => {
+  const openAgentTab = (sessionId: string, cwd: string, url: string, partition: string): void => {
     if (browserTabsRef.current.some((b) => b.agentSessionId === sessionId)) return
     const id = browserTab(crypto.randomUUID())
-    setBrowserTabs((prev) => [...prev, { id, url, title: '', projectRoot: cwd, agentSessionId: sessionId }])
+    setBrowserTabs((prev) => [...prev, { id, url, title: '', projectRoot: cwd, agentSessionId: sessionId, partition }])
     const placed = placeTab(layoutRef.current, id, { activePaneId: activePaneIdRef.current, background: true })
     setLayout(placed.root)
   }
@@ -3905,7 +3905,7 @@ export default function App(): React.JSX.Element {
 
   // The agent browser: main asks for a session's tab, asks it closed, and reports whether a script is
   // running in it — see CoreEvents' preview:agentTab / preview:agentTabClose / preview:agentBusy.
-  useEffect(() => window.api.on('preview:agentTab', ({ sessionId, cwd, url }) => openAgentTabRef.current(sessionId, cwd, url)), [])
+  useEffect(() => window.api.on('preview:agentTab', ({ sessionId, cwd, url, partition }) => openAgentTabRef.current(sessionId, cwd, url, partition)), [])
   // The agent app workspaces (agent workspace design): the live ones once at mount, then every change.
   useEffect(() => {
     void window.api.workspace.list().then((list) => {

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   PREVIEW_PARTITION,
+  agentPartitionFor,
   agentNavigationAllowed,
   certificateAllowed,
   guestAttachAllowed,
@@ -21,6 +22,31 @@ describe('guestAttachAllowed', () => {
     expect(guestAttachAllowed({ src: 'http://localhost:5173/' })).toBe(false)
     expect(guestAttachAllowed({ src: 'file:///C:/secrets.txt', partition: PREVIEW_PARTITION })).toBe(false)
     expect(guestAttachAllowed({ src: 'javascript:alert(1)', partition: PREVIEW_PARTITION })).toBe(false)
+  })
+})
+
+describe('agentPartitionFor', () => {
+  it('an unsandboxed session shares the person\'s preview partition', () => {
+    expect(agentPartitionFor('s1', false)).toBe(PREVIEW_PARTITION)
+  })
+  it('a sandboxed session gets a partition of its own, in memory, different per session', () => {
+    const a = agentPartitionFor('s1', true)
+    expect(a).not.toBe(PREVIEW_PARTITION)
+    expect(a.startsWith('persist:')).toBe(false)
+    expect(agentPartitionFor('s2', true)).not.toBe(a)
+    expect(agentPartitionFor('s1', true)).toBe(a)
+  })
+  it('a session id with odd characters still maps to a partition the guard accepts, and ids stay apart', () => {
+    const odd = agentPartitionFor('a/b:c d', true)
+    expect(guestAttachAllowed({ src: 'http://localhost:5173/', partition: odd })).toBe(true)
+    expect(agentPartitionFor('a/b:c d', true)).not.toBe(agentPartitionFor('a/b:c_d', true))
+  })
+  it('the guard lets a sandbox partition attach but not a made-up or persistent one', () => {
+    const p = agentPartitionFor('s1', true)
+    expect(guestAttachAllowed({ src: 'about:blank', partition: p })).toBe(true)
+    expect(guestAttachAllowed({ src: 'file:///C:/x', partition: p })).toBe(false)
+    expect(guestAttachAllowed({ partition: 'persist:' + p })).toBe(false)
+    expect(guestAttachAllowed({ partition: 'agent-sandbox-' })).toBe(false)
   })
 })
 

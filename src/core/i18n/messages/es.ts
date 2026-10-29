@@ -1559,6 +1559,7 @@ export const es: Catalog = {
   'preview.design.copied': 'Copiado',
   'preview.design.shotFailed': 'No se pudo capturar la imagen',
   'preview.agent.tab': 'agente',
+  'preview.agent.sandboxed': 'Página de una sesión en el sandbox: almacenamiento de navegador propio y vacío, sin tus inicios de sesión',
   'preview.agent.running': 'El agente está manejando esta página',
   'preview.agent.stop': 'Detener el script del agente',
   'preview.agent.stopped': 'Script del agente detenido',

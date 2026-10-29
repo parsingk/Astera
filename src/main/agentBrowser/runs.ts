@@ -5,6 +5,7 @@ import { createLog, WAIT_TIMEOUT_MS, type RunResult } from '../../core/agentBrow
 import { runScript, type RunContext } from '../../core/agentBrowser/scriptRunner'
 import { gateHelpers } from '../../core/agentBrowser/scriptGate'
 import type { AgentBuffers } from './buffers'
+import { agentPartitionFor } from '../../core/preview/guards'
 import path from 'node:path'
 import { agentOpenTarget } from '../../core/agentBrowser/urls'
 import type { RunStatus } from '../../core/run/config'
@@ -22,7 +23,7 @@ export interface RunsDeps {
   /** The session's cwd, which is its project root — or null when main knows no such session. */
   cwdOf(sessionId: string): string | null
   /** Ask the renderer for the session's tab, first address `url`. */
-  requestTab(sessionId: string, cwd: string, url: string): void
+  requestTab(sessionId: string, cwd: string, url: string, partition: string): void
   closeTab(sessionId: string): void
   setBusy(sessionId: string, busy: boolean): void
   /** Forwards a helper's `pointer` call to the renderer with the session it belongs to. */
@@ -116,7 +117,8 @@ export class AgentBrowserRuns {
 
   constructor(private readonly deps: RunsDeps) {}
 
-  async run(sessionId: string, script: string): Promise<RunOutcome> {
+  /** `sandboxed`: the caller runs in its CLI's sandbox, so a tab made for it goes to a partition of its own. */
+  async run(sessionId: string, script: string, sandboxed = false): Promise<RunOutcome> {
     const cwd = this.deps.cwdOf(sessionId)
     if (cwd === null) return { ok: false, status: 404, error: 'no such session' }
     if (this.inFlight.has(sessionId)) return { ok: false, status: 409, error: 'a script is already running' }
@@ -130,7 +132,7 @@ export class AgentBrowserRuns {
       ensureGuest: async (url) => {
         const now = this.deps.registry.guestOf(sessionId)
         if (now) return now
-        this.deps.requestTab(sessionId, cwd, url)
+        this.deps.requestTab(sessionId, cwd, url, agentPartitionFor(sessionId, sandboxed))
         const g = await this.deps.registry.waitFor(sessionId, this.deps.tabWaitMs ?? WAIT_TIMEOUT_MS)
         if (!g) throw new Error('open: the browser tab did not appear')
         return g

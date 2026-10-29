@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterAll } from 'vitest'
 import { AgentBrowserRuns, devServersFor, type RunsDeps } from './runs'
 import { AgentGuestRegistry } from './registry'
 import { Ring } from '../../core/agentBrowser/ring'
+import { PREVIEW_PARTITION, agentPartitionFor } from '../../core/preview/guards'
 import { promises as fsp } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -55,6 +56,7 @@ const harness = (opts: { devServers?: { name: string; url: string; preview: bool
   const registry = new AgentGuestRegistry<typeof g>(() => g)
   const calls = {
     requestTab: [] as string[],
+    partitions: [] as string[],
     busy: [] as boolean[],
     closed: 0,
     points: [] as { sid: string; x: number; y: number; w: number; h: number; kind: string }[]
@@ -63,8 +65,9 @@ const harness = (opts: { devServers?: { name: string; url: string; preview: bool
     registry: registry as never,
     buffersOf: () => ({ console: new Ring(), network: new Ring(), detach() {} }),
     cwdOf: () => (opts.hasSession === false ? null : 'D:/p'),
-    requestTab: (sid, _cwd, url) => {
+    requestTab: (sid, _cwd, url, partition) => {
       calls.requestTab.push(url)
+      calls.partitions.push(partition)
       if (opts.tabAppears !== false) setTimeout(() => registry.register(sid, 7, 'D:/p'), 5)
     },
     closeTab: () => { calls.closed += 1 },
@@ -102,6 +105,17 @@ describe('AgentBrowserRuns', () => {
     expect(r).toEqual({ ok: true, result: { log: ['http://localhost:5173/'] } })
     expect(calls.requestTab).toEqual(['http://localhost:5173/'])
     expect(calls.busy).toEqual([true, false])
+  })
+
+  it('a sandboxed caller\'s tab opens in a partition of its own, an unsandboxed one in the person\'s preview partition', async () => {
+    const script = `await open('http://localhost:5173/')`
+    const plain = harness()
+    await plain.runs.run('s1', script)
+    expect(plain.calls.partitions).toEqual([PREVIEW_PARTITION])
+    const boxed = harness()
+    await boxed.runs.run('s1', script, true)
+    expect(boxed.calls.partitions).toEqual([agentPartitionFor('s1', true)])
+    expect(boxed.calls.partitions[0]).not.toBe(PREVIEW_PARTITION)
   })
 
   it('a tab that never appears is a script error at open, not a failed run', async () => {

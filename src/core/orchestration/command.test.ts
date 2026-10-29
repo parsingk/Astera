@@ -5150,6 +5150,18 @@ describe('browser-js', () => {
     expect(await call(deps, 'browser-js', { script: "log('hi')" }, 'sess-9')).toEqual({ status: 200, body: { log: ['hi'] } })
     expect(seen).toEqual(['sess-9', "log('hi')"])
   })
+  it('tells the run whether the calling session is sandboxed, so its page gets a partition of its own', async () => {
+    const seen: boolean[] = []
+    const deps = {
+      ...makeDeps(),
+      browserEnabled: () => true,
+      sessionSandboxed: (id: string) => id === 'boxed',
+      browserRun: async (_s: string, _script: string, sandboxed: boolean) => { seen.push(sandboxed); return { ok: true as const, result: { log: [] } } }
+    }
+    await call(deps, 'browser-js', { script: 'log(1)' }, 'boxed')
+    await call(deps, 'browser-js', { script: 'log(1)' }, 'plain')
+    expect(seen).toEqual([true, false])
+  })
   it('passes a failed outcome through with its status', async () => {
     const deps = { ...makeDeps(), browserEnabled: () => true, browserRun: async () => ({ ok: false as const, status: 409 as const, error: 'a script is already running' }) }
     expect(await call(deps, 'browser-js', { script: 'log(1)' }, 's1')).toEqual({ status: 409, body: { error: 'a script is already running' } })

@@ -797,6 +797,12 @@ astera browser help                      the agent browser guide
 
 `astera help` is the reference agents read.
 
+**`browser js` from a sandboxed session opens its page in a browser storage of its own.** A session that is not
+sandboxed drives a tab in the same storage as the person's own preview tabs (`persist:preview`), so a page there may
+be logged in as the person. A sandboxed session's tab is in an in-memory partition made for that session: no cookies,
+storage or logins of the person's, empty each time the app starts, and not shared with another sandboxed session. The
+project's own localhost pages open as before. The tab shows a small shield beside its agent tag.
+
 **`astera agent-context` prints the command surface as JSON**, for a caller that is a program rather
 than a person. It covers every command this binary can route, not only the public ones above: the
 commands a coordinator or worker session uses are in it too, marked `"public": false`, with their
