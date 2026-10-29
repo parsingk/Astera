@@ -258,7 +258,7 @@ export function sessionSandboxArgs(o: {
  *  deny list and read-only folders, named for the session's folder exactly as sessionSandboxArgs names them, and without
  *  its repository's git entries. The echo runs in the temp folder (windowsReadiness.ts runCodex), and grants that
  *  repository nothing. Codex asks to revoke the deny-read ACEs a launch's list lacks (identity.rs:267-311,
- *  deny_read_state.rs:22-68 at rust-v0.160.0); Windows keeps them today (acl.rs:956-1030 `revoke_ace` uses REVOKE_ACCESS,
+ *  deny_read_state.rs:22-68 at rust-v0.160.0); Windows keeps them today (acl.rs:956-1023 `revoke_ace` uses REVOKE_ACCESS,
  *  windowsReadiness.ts), but a list that differed would lift the sessions' denials the day it does not. Called after
  *  sessionSandboxArgs, whose refusals it does not repeat. */
 export function codexEchoArgs(o: Omit<Parameters<typeof sessionSandboxArgs>[0], 'log'>): string[] {

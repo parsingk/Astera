@@ -1229,11 +1229,15 @@ the sandbox (on a home with no setup the echo would start the setup and its prom
 permission profile and deny list the account's sandboxed sessions get. Each elevated run applies its list's read
 denials to the sandbox's users group, one for the whole machine, and asks Windows to revoke those its home's last run
 applied that the new list lacks. That revoke never takes a denial away: Codex's `revoke_ace` uses `REVOKE_ACCESS`
-(codex-rs/windows-sandbox-rs/src/acl.rs at rust-v0.160.0, the same on Codex's main branch on 2026-10-29), which
-"Indicates that all existing ACCESS_ALLOWED_ACE or SYSTEM_AUDIT_ACE structures for the specified trustee are removed"
-(Microsoft Learn, ACCESS_MODE) and leaves the deny entries, as measured on Windows 11. So a denial stays on its folder
-once any sandboxed run of any account has applied it, and no other run lifts it. Astera still runs the echo under the
-sessions' own list, so nothing changes the day Codex's revoke starts working. Codex's setup records the elevated sandbox
+(codex-rs/windows-sandbox-rs/src/acl.rs at rust-v0.160.0, the same in rust-v0.166.0 and on Codex's main branch on
+2026-10-29), which "Indicates that all existing ACCESS_ALLOWED_ACE or SYSTEM_AUDIT_ACE structures for the specified
+trustee are removed" (Microsoft Learn, ACCESS_MODE) and leaves the deny entries, as measured on Windows 11 (Codex
+tracks it as [openai/codex#43363](https://github.com/openai/codex/issues/43363)). So a denial stays on its folder once
+any sandboxed run of any account has applied it. A read grant does not lift it either: `GRANT_ACCESS` adds an allow
+entry beside it. Only a run that makes that very folder writable to the sandbox does, since Codex's write grant uses
+`SET_ACCESS`, which "discards any existing access control information for the trustee" (the same page; measured too),
+and Astera's sessions never make a login folder itself writable. Astera still runs the echo under the sessions' own
+list, so nothing changes the day Codex's revoke starts working. Codex's setup records the elevated sandbox
 as the home's default (`windows.sandbox = "elevated"` in its `config.toml`). Astera's sandboxed launches do not need it:
 each names the elevated sandbox itself (`-c windows.sandbox="elevated"`, which Codex takes over the file), and so does
 the doctor it asks. So after a setup Astera runs, it takes that line back out of the account's `config.toml` and leaves

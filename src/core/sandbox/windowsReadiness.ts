@@ -17,11 +17,13 @@
 // setup with that launch's deny paths (windows-sandbox-rs/src/identity.rs:267-311), which applies them to the machine's
 // one sandbox users group and asks to revoke every path the home's last launch applied that the new list lacks
 // (setup_provisioning.rs:929-939, deny_read_state.rs:22-68, all at rust-v0.160.0). The revoke takes no denial away:
-// `revoke_ace` (acl.rs:956-1030) uses REVOKE_ACCESS, which "Indicates that all existing ACCESS_ALLOWED_ACE or
+// `revoke_ace` (acl.rs:956-1023) uses REVOKE_ACCESS, which "Indicates that all existing ACCESS_ALLOWED_ACE or
 // SYSTEM_AUDIT_ACE structures for the specified trustee are removed" (Microsoft Learn, ACCESS_MODE,
 // learn.microsoft.com/windows/win32/api/accctrl/ne-accctrl-access_mode); measured on Windows 11 (Task P), the deny
 // entries stayed and the entry count did not change, so `revoke_ace` wrote nothing. A denial stays once any account's
-// sandboxed launch applied it. So an echo under the read-only profile a `codex sandbox` with no profile falls back to
+// sandboxed launch applied it, until a launch makes that very folder writable (Codex's write grant uses SET_ACCESS,
+// which replaces the group's entries there; Astera never makes a login folder writable). Upstream: openai/codex#43363.
+// So an echo under the read-only profile a `codex sandbox` with no profile falls back to
 // (cli/src/debug_sandbox.rs:713-731), which denies nothing, lifts nothing today; it would the day Codex's revoke works.
 // The prepare hands the sessions' own `-c` values (core/sandbox/prepared.ts); without them no echo runs. Doctor and the
 // setup are not launches: doctor reads (cli/src/doctor/sandbox.rs), and `sandbox setup` provisions only
