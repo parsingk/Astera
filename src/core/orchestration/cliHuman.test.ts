@@ -929,7 +929,7 @@ describe('humanFor — audit and policies', () => {
     expect(table[2].split(/\s{2,}/).slice(1)).toEqual(['enforced (measured on the runtime)', 'enforced (measured on the runtime)', 'enforced (measured on the runtime)', 'allowed'])
     expect(table[6].split(/\s{2,}/).slice(1)).toEqual(['enforced', 'enforced', 'enforced (when the session bus is a file path)', 'allowed'])
     // And under it, that the home stays readable outside the login folders
-    expect(block.slice(7)).toEqual(['Outside the login folders, the home folder stays readable inside the sandbox.'])
+    expect(block.slice(7)).toEqual(["Outside the login folders, the home folder stays readable inside the sandbox. In a Claude session, commands the person types with `!` run outside the sandbox; the agent's own commands do not."])
     // A Host that does not answer it prints the rules and the coverage as before
     expect(humanFor('policies-show', { mode: 'observe', policy })).toBe(rules.join('\n'))
   })

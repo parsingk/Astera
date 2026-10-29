@@ -176,7 +176,7 @@ export const ja: Catalog = {
   'settings.security.sandboxCoverage.level.partial': '一部',
   'settings.security.sandboxCoverage.level.none': 'ブロックしない',
   'settings.security.sandboxCoverage.level.seen': '許可',
-  'settings.security.sandboxCoverage.homeReadable': 'ログイン情報のフォルダー以外のホームフォルダーは、サンドボックス内でも読めます。',
+  'settings.security.sandboxCoverage.homeReadable': 'ログイン情報のフォルダー以外のホームフォルダーは、サンドボックス内でも読めます。 Claude のセッションで人が `!` を付けて直接入力したコマンドはサンドボックスの外で実行され、エージェント自身のコマンドは内で実行されます。',
   'settings.security.sandboxCoverage.windowsClaude': 'Windows: シェルは制限なし',
   'settings.security.sandboxCoverage.linuxClaudeUbuntu': "Ubuntu 25.04 以降: AppArmor の bubblewrap 用プロファイルによりシェルコマンドが失敗します",
   'settings.security.builtin.profileWrite': 'Astera の設定フォルダーへの書き込み',

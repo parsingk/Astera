@@ -241,8 +241,8 @@ describe('securityText', () => {
   // Task 8 fix round 1: what the table cannot say in a cell. Outside the login folders the home stays readable (spec §6),
   // and Claude Code's shell on Windows is not restricted, said beside its row
   it('says under the table that the home stays readable, and beside the Claude Windows row that its shell is not restricted', () => {
-    expect(sandboxTableCaption(en)).toBe('Outside the login folders, the home folder stays readable inside the sandbox.')
-    expect(sandboxTableCaption(ko)).toBe('로그인 정보 폴더 밖의 홈 폴더는 sandbox 안에서도 읽을 수 있습니다.')
+    expect(sandboxTableCaption(en)).toBe("Outside the login folders, the home folder stays readable inside the sandbox. In a Claude session, commands the person types with `!` run outside the sandbox; the agent's own commands do not.")
+    expect(sandboxTableCaption(ko)).toBe('로그인 정보 폴더 밖의 홈 폴더는 sandbox 안에서도 읽을 수 있습니다. Claude 세션에서 사람이 `!` 로 직접 입력한 명령은 sandbox 밖에서 실행되고, 에이전트가 낸 명령은 sandbox 안에서 실행됩니다.')
     // Task E fix rounds 2 and 3: beside the Claude Linux row, that on Ubuntu 25.04 and later its shell commands fail
     // under AppArmor's bubblewrap profile
     expect(SANDBOX_COVERAGE.map((r) => sandboxRowNote(r, en))).toEqual([

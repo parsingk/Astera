@@ -217,7 +217,7 @@ export const ko = {
   'settings.security.sandboxCoverage.level.partial': '일부',
   'settings.security.sandboxCoverage.level.none': '안 막음',
   'settings.security.sandboxCoverage.level.seen': '허용',
-  'settings.security.sandboxCoverage.homeReadable': '로그인 정보 폴더 밖의 홈 폴더는 sandbox 안에서도 읽을 수 있습니다.',
+  'settings.security.sandboxCoverage.homeReadable': '로그인 정보 폴더 밖의 홈 폴더는 sandbox 안에서도 읽을 수 있습니다. Claude 세션에서 사람이 `!` 로 직접 입력한 명령은 sandbox 밖에서 실행되고, 에이전트가 낸 명령은 sandbox 안에서 실행됩니다.',
   'settings.security.sandboxCoverage.windowsClaude': 'Windows: 셸은 제한 없음',
   'settings.security.sandboxCoverage.linuxClaudeUbuntu': "Ubuntu 25.04 이상: AppArmor의 bubblewrap 프로필 때문에 셸 명령이 실패합니다",
   'settings.security.builtin.profileWrite': 'Astera 설정 폴더 쓰기',
