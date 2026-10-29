@@ -56,4 +56,18 @@ describe('app-guide.md', () => {
     expect(stub).not.toContain('on a Windows desktop the person never sees')
     expect(stub).toContain('$ASTERA_APP_CDP_PORT')
   })
+
+  // The 2026-10-29 Mac check: the agent drove the dev app's main process over --inspect, and app.quit()
+  // left the process up, deaf to one SIGTERM, until SIGKILL. Node's exit waits for every inspector
+  // client to leave (inspector_agent.cc, Agent::WaitForDisconnect); close() ends the app regardless.
+  it('says that an open inspector connection keeps the app running after a quit, and that close() ends it', () => {
+    const rule = read('app-guide.md')
+      .split('\n- ')
+      .find((b) => b.startsWith('**Ending the app.**'))
+    expect(rule).toBeDefined()
+    expect(rule).toContain('`--inspect`')
+    expect(rule).toContain('`Waiting for the debugger to disconnect...`')
+    expect(rule).toContain('one SIGTERM')
+    expect(rule).toContain('`close()`')
+  })
 })

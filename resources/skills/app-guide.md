@@ -52,6 +52,12 @@ stop your script or close the desktop from there. It works the same when the Ast
 - **One script at a time** per session. A second `astera app js` while one runs is refused.
 - **Cleanup.** Call `close()` when you are done. The desktop is also cleaned up when your session ends
   and after 10 minutes without a script.
+- **Ending the app.** `close()` and `relaunch()` end the app whatever it is doing, even when it does
+  not answer a quit. An Electron app you started with `--inspect` and drove through its main process
+  inspector does not end at `app.quit()` or Cmd+Q while your inspector connection is open: Node
+  prints `Waiting for the debugger to disconnect...` and keeps the process until every inspector
+  client has gone, and one SIGTERM does not change that. Close your inspector connection before you
+  quit the app, or end the app with `close()`.
 - Every helper is `async` except `log` and `help`; `await` them.
 - **A script that never finishes is cut off at 60 s.** A busy loop such as `while (!ready) {}` is ended
   there, or when the person presses Stop, and reports `at: "timeout"` or `at: "stopped"`. Wait with
