@@ -1238,9 +1238,11 @@ as the home's default (`windows.sandbox = "elevated"` in its `config.toml`). Ast
 each names the elevated sandbox itself (`-c windows.sandbox="elevated"`, which Codex takes over the file), and so does
 the doctor it asks. So after a setup Astera runs, it takes that line back out of the account's `config.toml` and leaves
 the rest of the file as it was (it keeps the old file as `config.toml.bak`), and the home's other Codex sessions run as
-they did before the setup. A line that was already there before the setup, yours or another value, is left, and so
-is a home that Codex's older `[features] elevated_windows_sandbox = true` already made elevated: Codex still honours
-that key when no `windows.sandbox` is set, and its setup command does not clear it. For a home whose `config.toml` still
+they did before the setup. If your line named another sandbox (say `"unelevated"`), Codex's setup writes `"elevated"`
+over it, and Astera puts your line back exactly as it was (unless it was in an inline `windows = { … }` table, which is
+left and said in the log). A line that already said `"elevated"` before the setup is left, since whose it is cannot be
+told, and so is a home that Codex's older `[features] elevated_windows_sandbox = true` already made elevated: Codex
+still honours that key when no `windows.sandbox` is set, and its setup command does not clear it. For a home whose `config.toml` still
 makes the elevated sandbox its default, through the line or that key, Settings › Agent profiles says so in one sentence
 under that Codex account of a sandboxed profile, with Remove, which takes them out only when you press it, and a
 sandboxed Codex session or chat started on that home starts as today and says so in the line above its terminal or

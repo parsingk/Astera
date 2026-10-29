@@ -278,13 +278,59 @@ const whyNot = (outcome: 'other-value' | 'cannot-edit', unknown: boolean): strin
       ? 'it names another sandbox now, which is left as it is'
       : 'it is not on a line of its own (an inline table), so it is left; Settings › Agent profiles names it'
 
+/** What putBack did: wrote the person's line back, found their value still there, found the line gone, or could not
+ *  write it back exactly (`why`). */
+type PutBack = { outcome: 'restored' } | { outcome: 'unchanged' } | { outcome: 'absent' } | { outcome: 'cannot-edit'; why: string }
+
 /**
- * Codex's setup of one home (`setUp`, windowsReadiness.ts codexWindowsSetup) for Astera's sandboxed sessions only: the
- * file is read first, and after a setup that worked, the `windows.sandbox = "elevated"` line Codex added is taken back
- * out (removeElevatedDefault; a `[windows]` table Codex made for it goes too). A file that already set
- * `windows.sandbox` before, to this value or another, is the person's and is left; so is one that could not be read
- * before, since who set the line then cannot be told (Settings › Agent profiles asks). Each way is logged. The setup's
- * own answer is returned as it was: nothing here fails it. Never rejects.
+ * Puts the person's own `windows.sandbox` line back after a setup (fix round 1, review I1). Codex's setup overwrites
+ * the key's value with "elevated" in place, keeping the line's decoration (core/src/config/edit.rs SetPath and
+ * preserve_decor at rust-v0.160.0), so the located line, in the same form (the `[windows]` table, or dotted at the
+ * root), gets the before-snapshot's line text back whole: value, quotes, spacing and comment. Only when that line now
+ * reads "elevated": any other value is someone's later change, and is left. Written as removeFrom writes.
+ */
+async function putBack(file: string, before: { text: string; form: Found['form']; value: string }): Promise<PutBack> {
+  let result: PutBack = { outcome: 'absent' }
+  await oneAtATime(file, async () => {
+    const read = await readStoreFile(file)
+    if (read.kind === 'unreadable') throw read.error
+    if (read.kind === 'missing') return
+    const lines = linesOf(read.text)
+    const at = locate(lines)
+    if (at.unknown) {
+      result = { outcome: 'cannot-edit', why: 'the file cannot be read with confidence (a multi-line string runs to its end as this reads it)' }
+      return
+    }
+    const now = at.sandbox
+    if (now === null) return
+    if (now.value === before.value) {
+      result = { outcome: 'unchanged' }
+      return
+    }
+    if (now.form !== before.form || !now.editable || now.value !== 'elevated') {
+      result = { outcome: 'cannot-edit', why: `the line is not where it was, or reads "${now.value}" now` }
+      return
+    }
+    lines[now.line] = { text: (now.line === 0 && lines[0].text.startsWith(BOM) ? BOM : '') + before.text, end: lines[now.line].end }
+    await fs.copyFile(file, file + '.bak').catch(() => {})
+    await writeThroughTmp(file, lines.map((l) => l.text + l.end).join(''))
+    result = { outcome: 'restored' }
+  })
+  return result
+}
+
+/**
+ * Codex's setup of one home (`setUp`, windowsReadiness.ts codexWindowsSetup) for Astera's sandboxed sessions only. The
+ * file is read first, and after a setup that worked:
+ * - a home with no default before: the `windows.sandbox = "elevated"` line Codex added is taken back out
+ *   (removeElevatedDefault; a `[windows]` table Codex made for it goes too);
+ * - a home whose own line named another sandbox (say "unelevated"): Codex's setup overwrote it with "elevated", so the
+ *   person's line is put back exactly as it was (putBack, fix round 1, review I1); one in an inline table cannot be, and
+ *   is left and said;
+ * - a home that already made the elevated sandbox its default, through the line or Codex's older feature key, is left:
+ *   whose it is cannot be told (Settings › Agent profiles asks);
+ * - and so is one that could not be read, or read with confidence, before.
+ * Each way is logged. The setup's own answer is returned as it was: nothing here fails it. Never rejects.
  */
 export async function setUpForSandboxedSessionsOnly(a: {
   configFile: string
@@ -300,7 +346,9 @@ export async function setUpForSandboxedSessionsOnly(a: {
     )
     return r
   }
-  const was = before.kind === 'text' ? windowsSandboxDefaultOf(before.text) : ({ kind: 'none', table: false } as const)
+  const beforeLines = before.kind === 'text' ? linesOf(before.text) : []
+  const beforeAt = locate(beforeLines)
+  const was = before.kind === 'text' ? settingOf(beforeAt) : ({ kind: 'none', table: false } as const)
   if (was.kind === 'unknown') {
     a.log(
       `sandbox: ${a.configFile} cannot be read with confidence before the setup (a multi-line string runs to its end as this reads it), so the line Codex added is left for Settings › Agent profiles`
@@ -313,8 +361,32 @@ export async function setUpForSandboxedSessionsOnly(a: {
     )
     return r
   }
+  if (was.kind === 'set' && was.value === 'elevated') {
+    a.log(`sandbox: ${a.configFile} already set windows.sandbox = "elevated" before the setup, so the line is left as it is`)
+    return r
+  }
   if (was.kind === 'set') {
-    a.log(`sandbox: ${a.configFile} already set windows.sandbox before the setup ("${was.value}"), so the line is left as it is`)
+    const own = beforeAt.sandbox as Found
+    if (own.form === 'inline' || !own.editable) {
+      a.log(
+        `sandbox: could not put back windows.sandbox = "${was.value}" in ${a.configFile}: it was in an inline table or not a plain string, which this does not write back, so what Codex's setup left there stays; Settings › Agent profiles names it if it reads "elevated"`
+      )
+      return r
+    }
+    try {
+      const done = await putBack(a.configFile, { text: bare(beforeLines, own.line), form: own.form, value: was.value })
+      a.log(
+        done.outcome === 'restored'
+          ? `sandbox: put back windows.sandbox = "${was.value}" in ${a.configFile}, the line as it was before the setup, which had written "elevated" over it`
+          : done.outcome === 'unchanged'
+            ? `sandbox: ${a.configFile} still says windows.sandbox = "${was.value}" after the setup, so there is nothing to put back`
+            : done.outcome === 'absent'
+              ? `sandbox: could not put back windows.sandbox = "${was.value}" in ${a.configFile}: no top-level windows.sandbox line was found there after the setup`
+              : `sandbox: could not put back windows.sandbox = "${was.value}" in ${a.configFile}: ${done.why}, so nothing is written`
+      )
+    } catch (e) {
+      a.log(`sandbox: could not put back windows.sandbox = "${was.value}" in ${a.configFile}: ${String(e)}`)
+    }
     return r
   }
   try {
@@ -323,7 +395,7 @@ export async function setUpForSandboxedSessionsOnly(a: {
       outcome === 'removed'
         ? `sandbox: took the windows.sandbox = "elevated" line Codex's setup added out of ${a.configFile}, so only sandboxed sessions run in the elevated sandbox`
         : outcome === 'absent'
-          ? `sandbox: the setup left no windows.sandbox line in ${a.configFile}`
+          ? `sandbox: no top-level windows.sandbox line was found in ${a.configFile} after the setup, so nothing was taken out`
           : `sandbox: could not take windows.sandbox out of ${a.configFile}: ${whyNot(outcome, unknown)}`
     )
   } catch (e) {

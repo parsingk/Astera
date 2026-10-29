@@ -300,14 +300,54 @@ describe('on disk', () => {
       }
     })
 
-    it("leaves a default the person had set, the same or another, and says so", async () => {
-      for (const before of ['[windows]\nsandbox = "elevated"\n', '[windows]\nsandbox = "unelevated"\n']) {
+    it('leaves an elevated default that was there before the setup, since whose it is cannot be told, and says so', async () => {
+      await fs.writeFile(file, '[windows]\nsandbox = "elevated"\n')
+      const logs: string[] = []
+      await setUpForSandboxedSessionsOnly({ configFile: file, setUp: codexSetup(true), log: (m) => logs.push(m) })
+      expect(await fs.readFile(file, 'utf8')).toBe('[windows]\nsandbox = "elevated"\n')
+      expect(logs).toEqual([expect.stringMatching(/already set windows\.sandbox = "elevated" before the setup.*left/)])
+    })
+
+    // Fix round 1 (review I1): Codex's setup overwrites the person's own value with "elevated"
+    // (core/src/config/edit.rs set_windows_sandbox_mode, keeping the line's decoration). Astera puts their line back,
+    // byte for byte, where it was: nothing of Astera's reads the file's value
+    it('puts back a value the person had set, exactly as it was, in the table or the dotted form', async () => {
+      for (const [before, codexWrote] of [
+        ['model = "x"\n\n[windows]\nsandbox = "unelevated" # mine\nother = 1\n', 'model = "x"\n\n[windows]\nsandbox = "elevated" # mine\nother = 1\n'],
+        ["windows.sandbox = 'unelevated'\r\nmodel = \"x\"\r\n", 'windows.sandbox = "elevated"\r\nmodel = "x"\r\n']
+      ]) {
         await fs.writeFile(file, before)
         const logs: string[] = []
-        await setUpForSandboxedSessionsOnly({ configFile: file, setUp: codexSetup(true), log: (m) => logs.push(m) })
-        expect(await fs.readFile(file, 'utf8')).toBe('[windows]\nsandbox = "elevated"\n')
-        expect(logs).toEqual([expect.stringMatching(/already set .*windows\.sandbox.*left/)])
+        const setUp = async () => (await fs.writeFile(file, codexWrote), { ok: true, out: 'done' })
+        await setUpForSandboxedSessionsOnly({ configFile: file, setUp, log: (m) => logs.push(m) })
+        expect(await fs.readFile(file, 'utf8'), before).toBe(before)
+        expect(await fs.readFile(`${file}.bak`, 'utf8'), before).toBe(codexWrote)
+        expect(logs, before).toEqual([expect.stringMatching(/put back windows\.sandbox = "unelevated" in .*config\.toml/)])
       }
+    })
+
+    it('says what it could not put back, and writes nothing then', async () => {
+      // An inline table it cannot write back exactly
+      await fs.writeFile(file, 'windows = { sandbox = "unelevated" }\n')
+      const logs: string[] = []
+      const inline = async () => (await fs.writeFile(file, 'windows = { sandbox = "elevated" }\n'), { ok: true, out: 'done' })
+      await setUpForSandboxedSessionsOnly({ configFile: file, setUp: inline, log: (m) => logs.push(m) })
+      expect(await fs.readFile(file, 'utf8')).toBe('windows = { sandbox = "elevated" }\n')
+      expect(logs).toEqual([expect.stringMatching(/could not put back windows\.sandbox = "unelevated".*inline table/)])
+      // Codex left the person's value: nothing to put back
+      await fs.writeFile(file, '[windows]\nsandbox = "unelevated"\n')
+      const kept: string[] = []
+      await setUpForSandboxedSessionsOnly({ configFile: file, setUp: async () => ({ ok: true, out: 'done' }), log: (m) => kept.push(m) })
+      expect(await fs.readFile(file, 'utf8')).toBe('[windows]\nsandbox = "unelevated"\n')
+      expect(kept).toEqual([expect.stringMatching(/still says windows\.sandbox = "unelevated"/)])
+    })
+
+    // Fix round 1 (review M4): what was checked, when nothing was found to take out
+    it('says what it looked for when the setup left no line it could find', async () => {
+      await fs.writeFile(file, 'model = "x"\n')
+      const logs: string[] = []
+      await setUpForSandboxedSessionsOnly({ configFile: file, setUp: async () => ({ ok: true, out: 'done' }), log: (m) => logs.push(m) })
+      expect(logs).toEqual([expect.stringMatching(/no top-level windows\.sandbox line was found in .*config\.toml after the setup/)])
     })
 
     it('touches nothing after a setup that failed', async () => {
