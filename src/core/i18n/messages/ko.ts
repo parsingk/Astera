@@ -1875,6 +1875,7 @@ export const ko = {
   'preview.design.copied': '복사했습니다',
   'preview.design.shotFailed': '스크린샷을 찍지 못했습니다',
   'preview.agent.tab': '에이전트',
+  'preview.agent.sandboxed': '샌드박스 세션의 페이지입니다: 따로 만든 빈 브라우저 저장소를 쓰며 내 로그인은 없습니다',
   'preview.agent.running': '에이전트가 이 페이지를 조작하고 있습니다',
   'preview.agent.stop': '에이전트 스크립트 중단',
   'preview.agent.stopped': '에이전트 스크립트를 중단했습니다',

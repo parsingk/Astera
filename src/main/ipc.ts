@@ -229,6 +229,7 @@ import type { GuestDriver } from './agentBrowser/helpers'
 import { AgentBrowserRuns, devServersFor } from './agentBrowser/runs'
 import { previewShotsDir } from './preview/shots'
 import { PREVIEW_PARTITION } from '../core/preview/guards'
+import { guardPartition } from './preview/guest'
 import { buildResumeNote, buildResumePacket, buildTabResumeText } from '../core/orchestration/exec/resumePacket'
 import { extractStatusLineModel, extractStatusLineSession } from '../core/usage/statusline'
 import { listSlashCommands, listCodexMentions } from './slashCommands'
@@ -2434,6 +2435,15 @@ export function registerIpc(
   // Installed once, for every agent tab: Electron's webRequest keeps one listener per event, so a
   // per-tab registration would let the newest tab steal every other tab's network events.
   installNetworkCapture(session.fromPartition(PREVIEW_PARTITION).webRequest, (id) => agentBuffers.byWebContents(id))
+  // A sandboxed session's partition (core/preview/guards.ts) is a session of its own that exists once something asks
+  // for it, so it gets the same two hooks the person's preview partition got above, before its tab is requested.
+  const preparedPartitions = new Set<string>([PREVIEW_PARTITION])
+  const preparePartition = (partition: string): void => {
+    if (preparedPartitions.has(partition)) return
+    preparedPartitions.add(partition)
+    guardPartition(partition)
+    installNetworkCapture(session.fromPartition(partition).webRequest, (id) => agentBuffers.byWebContents(id))
+  }
   ipcMain.handle('preview.registerAgentGuest', (_e, sessionId: unknown, webContentsId: unknown) => {
     if (typeof sessionId !== 'string' || typeof webContentsId !== 'number') return
     const info = core.sessions.list().find((s) => s.id === sessionId)
@@ -2501,7 +2511,10 @@ export function registerIpc(
     registry: agentGuests as unknown as AgentGuestRegistry<GuestDriver & GuestLike>,
     buffersOf: (sid) => agentBuffers.bySession(sid),
     cwdOf: (sid) => core.sessions.list().find((s) => s.id === sid)?.cwd ?? null,
-    requestTab: (sessionId, cwd, url) => send('preview:agentTab', { sessionId, cwd, url }),
+    requestTab: (sessionId, cwd, url, partition) => {
+      preparePartition(partition)
+      send('preview:agentTab', { sessionId, cwd, url, partition })
+    },
     closeTab: (sessionId) => {
       // The registration goes as the event goes out, not when the renderer answers. The renderer only
       // calls preview.unregisterAgentGuest once its pane has unmounted, and until then the registry
@@ -3481,7 +3494,7 @@ export function registerIpc(
       // Same reasoning again, for browser-js — and `agentRuns` is built above this function so the
       // deps can name it here.
       browserEnabled: () => core.appSettings.getAgentBrowserEnabled(),
-      browserRun: (sessionId, script) => agentRuns.run(sessionId, script),
+      browserRun: (sessionId, script, sandboxed) => agentRuns.run(sessionId, script, sandboxed),
       // Same reasoning again, for `handoff` — read on every request so switching Smart Resume off
       // rejects the command from then on.
       handoffEnabled: () => core.appSettings.getResumeStrategy() === 'smart',

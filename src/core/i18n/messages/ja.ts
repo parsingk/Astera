@@ -1541,6 +1541,7 @@ export const ja: Catalog = {
   'preview.design.copied': 'コピーしました',
   'preview.design.shotFailed': 'スクリーンショットを撮れませんでした',
   'preview.agent.tab': 'エージェント',
+  'preview.agent.sandboxed': 'サンドボックス内セッションのページです。専用の空のブラウザ保存領域を使い、あなたのログインはありません',
   'preview.agent.running': 'エージェントがこのページを操作しています',
   'preview.agent.stop': 'エージェントのスクリプトを中断',
   'preview.agent.stopped': 'エージェントのスクリプトを中断しました',

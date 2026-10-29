@@ -463,7 +463,7 @@ export interface OrchServerDeps {
   browserEnabled?(): boolean | Promise<boolean>
   /** Runs one script in the calling session's agent browser (main/agentBrowser/runs.ts). Optional:
    *  not injected, `browser-js` answers "agent browser is off". */
-  browserRun?(sessionId: string, script: string): Promise<
+  browserRun?(sessionId: string, script: string, sandboxed: boolean): Promise<
     | { ok: true; result: { log: string[]; error?: { message: string; at: string } } }
     | { ok: false; status: 404 | 409; error: string }
   >
@@ -1755,7 +1755,8 @@ export async function handleCommand(
     if (!(await deps.browserEnabled?.()) || !deps.browserRun) return conflict('agent browser is off')
     const script = args.script
     if (typeof script !== 'string' || script.trim() === '') return bad('script is required')
-    const outcome = await deps.browserRun(caller.sessionId, script)
+    // A sandboxed session's page lives in a partition of its own, empty of the person's logins
+    const outcome = await deps.browserRun(caller.sessionId, script, await sandboxedCaller(deps, caller))
     return outcome.ok ? okBody(outcome.result) : { status: outcome.status, body: { error: outcome.error } }
   }
   if (cmd === 'handoff') {

@@ -1700,6 +1700,7 @@ export const en: Record<keyof typeof ko, string> = {
   'preview.design.copied': 'Copied',
   'preview.design.shotFailed': 'Could not take the screenshot',
   'preview.agent.tab': 'agent',
+  'preview.agent.sandboxed': 'Page of a sandboxed session: its own empty browser storage, none of your logins',
   'preview.agent.running': 'The agent is driving this page',
   'preview.agent.stop': 'Stop the agent\'s script',
   'preview.agent.stopped': 'Stopped the agent\'s script',

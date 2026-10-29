@@ -15,6 +15,7 @@ import {
   type Rect
 } from '../../../core/panes/tree'
 import { parseTab, sessionTab } from '../../../core/panes/tabId'
+import { isSandboxPartition } from '../../../core/preview/guards'
 import { mediaKindOf } from '../../../core/files/media'
 import { MediaViewer } from './MediaViewer'
 import { tabLabels } from '../../../core/files/tabLabel'
@@ -676,7 +677,8 @@ export function PaneGrid({
                 title: b.title || displayHostOf(b.url) || t('preview.tab.untitled'),
                 loading: browserLoading[tabId] === true || agentRunning,
                 agentRunning,
-                agentSessionId: b.agentSessionId
+                agentSessionId: b.agentSessionId,
+                agentSandboxed: isSandboxPartition(b.partition)
               }
             }
             const f = ref?.kind === 'file' ? fileTabOf.get(tabId) : undefined

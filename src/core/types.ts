@@ -929,7 +929,7 @@ export interface CoreEvents {
   'preview:popup': { url: string }
   /** Main asks the renderer to give a session its agent browser tab — sent on the session's first
    *  `open(url)`, with that URL as the tab's first address. A no-op when the tab already exists. */
-  'preview:agentTab': { sessionId: string; cwd: string; url: string }
+  'preview:agentTab': { sessionId: string; cwd: string; url: string; partition: string }
   /** The agent's script called `close()`. */
   'preview:agentTabClose': { sessionId: string }
   /** A script is running (true) or has finished (false) in this session's tab — the chip's ring. */
