@@ -191,9 +191,9 @@ describe('sandbox locations', () => {
 
     it('names a path as given when a look fails or the links go round', () => {
       tree()
-      const failing = { lstat: (): never => { throw new Error('EACCES') }, readlink: (): string => '' }
+      const failing = { lstat: (): never => { throw new Error('EACCES') }, readlink: (): string => '', realpath: (p: string): string => { throw new Error(`EACCES ${p}`) } }
       expect(namedPathFor(`${d}/home/.config/gh`, [], process.platform, failing)).toEqual({ path: `${d}/home/.config/gh`, link: null })
-      const looping = { lstat: () => ({ isSymbolicLink: () => true }), readlink: (p: string) => p }
+      const looping = { lstat: () => ({ isSymbolicLink: () => true }), readlink: (p: string) => p, realpath: (p: string): string => { throw new Error(`ELOOP ${p}`) } }
       expect(namedPathFor('/a/b', [], 'linux', looping)).toEqual({ path: '/a/b', link: null })
     })
 
@@ -215,20 +215,71 @@ describe('sandbox locations', () => {
       expect(namedPathFor(`${d}/home-link/.config/gh`, [`${d}/home-link`], process.platform)).toEqual({ path: `${d}/home-link/.config/gh`, link: `${d}/home/.config` })
     })
 
+    // CI fix (run 40809399938, Windows): a folder can be spelled by its 8.3 short name (GitHub's Windows runner gives
+    // TEMP as C:\Users\RUNNER~1\...), which is no link, so the walk kept it. The path is named by its canonical spelling,
+    // the one every sandbox resolves to (Codex's Windows sandbox canonicalizes each path it protects), and a link is
+    // judged by its folder's canonical spelling, so a short-spelled path cannot slip past a long-spelled work folder
+    describe('the canonical spelling', () => {
+      const SHORT = 'C:/Users/RUNNER~1'
+      const LONG = 'C:\\Users\\runneradmin'
+      const existing = new Set(['C:/Users', SHORT, `${SHORT}/AppData`, `${SHORT}/AppData/Temp`, `${SHORT}/AppData/Temp/profile`])
+      const look = {
+        lstat: (p: string) => (p === `${SHORT}/.ssh` ? { isSymbolicLink: () => true } : existing.has(p) ? { isSymbolicLink: () => false } : null),
+        readlink: () => `${LONG}\\dots\\ssh`,
+        realpath: (p: string) => {
+          if (!existing.has(p) && p !== 'C:/') throw new Error(`ENOENT ${p}`)
+          return p.startsWith(SHORT) ? LONG + p.slice(SHORT.length).replace(/\//g, '\\') : p.replace(/\//g, '\\')
+        }
+      }
+
+      it('names an existing path, and the folders above a missing one, by their long names', () => {
+        expect(namedPathFor(`${SHORT}/AppData/Temp/profile`, [], 'win32', look)).toEqual({ path: 'C:/Users/runneradmin/AppData/Temp/profile', link: null })
+        expect(namedPathFor(`${SHORT}/AppData/Temp/profile/host/app.key`, [], 'win32', look)).toEqual({ path: 'C:/Users/runneradmin/AppData/Temp/profile/host/app.key', link: null })
+        expect(namedPathFor(`${SHORT}/.npmrc`, [], 'win32', look)).toEqual({ path: 'C:/Users/runneradmin/.npmrc', link: null })
+      })
+
+      it('judges a link by its folder’s long name, so a short spelling is still inside a long-spelled work folder', () => {
+        expect(namedPathFor(`${SHORT}/.ssh/id`, ['C:/Users/runneradmin'], 'win32', look)).toEqual({ path: `${SHORT}/.ssh/id`, link: `${SHORT}/.ssh` })
+      })
+    })
+
+    // CI fix (run 40809399938, macOS): the system's own links (/var, /tmp and /etc into /private) lie in /, which no
+    // session can write, so they are followed, never taken for a link the session could change, even when /tmp itself
+    // is a writable folder. Under round 5's rule (a link judged by itself) /tmp counted as one, refusing every sandboxed
+    // start whose paths go through it
+    it('follows the macOS system links into /private, whatever the session may write', () => {
+      const dirs = new Set(['/private', '/private/var', '/private/var/folders', '/private/var/folders/x', '/private/tmp', '/private/etc', '/Users', '/Users/u'])
+      const links: Record<string, string> = { '/var': 'private/var', '/tmp': 'private/tmp', '/etc': 'private/etc' }
+      const look = {
+        lstat: (p: string) => (p in links ? { isSymbolicLink: () => true } : dirs.has(p) ? { isSymbolicLink: () => false } : null),
+        readlink: (p: string) => links[p],
+        realpath: (p: string): string => {
+          if (!dirs.has(p) && p !== '/') throw new Error(`ENOENT ${p}`)
+          return p
+        }
+      }
+      const writable = ['/tmp', '/var/folders/x/T', '/Users/u/proj']
+      expect(namedPathFor('/var/folders/x/T/astera/host/app.key', writable, 'darwin', look)).toEqual({ path: '/private/var/folders/x/T/astera/host/app.key', link: null })
+      expect(namedPathFor('/tmp/astera-host-1', writable, 'darwin', look)).toEqual({ path: '/private/tmp/astera-host-1', link: null })
+      expect(namedPathFor('/etc/ssh/ssh_config.d', writable, 'darwin', look)).toEqual({ path: '/private/etc/ssh/ssh_config.d', link: null })
+    })
+
     // Fix round 6 (re-review 2, Minor 4): a link to a network share (`\\server\share`, or `\\?\UNC\server\share`) is not
     // a relative one; its path is named as given
     it('names a path through a link to a network share as given', () => {
       for (const target of ['\\\\srv\\share\\gcloud', '\\\\?\\UNC\\srv\\share\\gcloud', '//srv/share/gcloud']) {
         const look = {
           lstat: (p: string) => (p === '/a' ? { isSymbolicLink: () => false } : p === '/a/gcloud' ? { isSymbolicLink: () => true } : null),
-          readlink: () => target
+          readlink: () => target,
+          realpath: (p: string): string => { throw new Error(`ENOENT ${p}`) }
         }
         expect(namedPathFor('/a/gcloud/creds', [], 'win32', look), target).toEqual({ path: '/a/gcloud/creds', link: null })
       }
       // A drive path behind the long-path prefix is followed as before
       const drive = {
         lstat: (p: string) => (p === '/a' || p === 'D:/' || p === 'D:/real' ? { isSymbolicLink: () => false } : p === '/a/gcloud' ? { isSymbolicLink: () => true } : null),
-        readlink: () => '\\\\?\\D:\\real'
+        readlink: () => '\\\\?\\D:\\real',
+        realpath: (p: string): string => { throw new Error(`ENOENT ${p}`) }
       }
       expect(namedPathFor('/a/gcloud/creds', [], 'win32', drive)).toEqual({ path: 'D:/real/creds', link: null })
     })

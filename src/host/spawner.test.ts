@@ -1196,7 +1196,11 @@ describe('createHostSpawner — createSession', () => {
       expect(open).not.toHaveProperty('sandboxed')
       // A chat of the same scope (the folder's layout, and the session's environment, which names the same denied places)
       // takes the chat file from the same folder
-      const chat = h.spawner!.claudeSandbox!.chatArgs(false, { layout: process.platform === 'win32' ? null : await gitLayoutOf(repo), env: h.spawned[0].opts.env })
+      // The scope as a start makes it (scopeOf: with the folder and the way to look at links, Task E fix round 5); one built
+      // by hand names its paths as given, which on macOS (/var into /private/var) is another scope with no twin (CI fix)
+      const scope = h.spawner!.claudeSandbox!.scopeOf('acc1', repo, h.spawned[0].opts.env)!
+      expect(scope).toMatchObject({ layout: process.platform === 'win32' ? null : await gitLayoutOf(repo), cwd: repo })
+      const chat = h.spawner!.claudeSandbox!.chatArgs(false, scope)
       expect(chat?.[1]).toMatch(/sandbox-settings[\\/][0-9a-f]{16}[\\/]astera-sandbox-chat-settings\.json$/)
       expect(path.dirname(chat![1].replace(/\//g, path.sep))).toBe(path.dirname(settingsOf(0).replace(/\//g, path.sep)))
       // Task 7 fix round 1: npm's cache goes in the temp folder the spawner was given (none for Claude on Windows, which has
