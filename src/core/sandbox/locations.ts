@@ -196,12 +196,16 @@ export function presentOrNull(p: string): string | null {
 export interface LinkLook {
   lstat(p: string): { isSymbolicLink(): boolean } | null
   readlink(p: string): string
+  /** A path that is there by its canonical spelling (throws when it is not): on Windows its 8.3 short names written out
+   *  long, on macOS its own case (CI fix, run 40809399938). namedPathFor asks it only of a path with no link left on it. */
+  realpath(p: string): string
 }
 
 /** The disk, as namedPathFor looks at it. On Windows a junction is a link too (`lstat` reports it so). */
 export const nodeLinkLook: LinkLook = {
   lstat: (p) => lstatSync(p, { throwIfNoEntry: false }) ?? null,
-  readlink: (p) => readlinkSync(p)
+  readlink: (p) => readlinkSync(p),
+  realpath: (p) => realpathSync.native(p)
 }
 
 /** Where one path Astera names for a sandboxed start lands (namedPathFor): `link` is the link that left it as given. */
@@ -241,13 +245,13 @@ function inWritable(p: string, writable: readonly string[], platform: NodeJS.Pla
 }
 
 /** A session's writable folders by every spelling they have: as given, and where each really is. */
-function writableSpellings(writable: readonly string[]): string[] {
+function writableSpellings(writable: readonly string[], look: LinkLook): string[] {
   return [
     ...new Set(
       writable.flatMap((w) => {
         const given = slashed(w)
         try {
-          return [given, slashed(realpathSync.native(w))]
+          return [given, slashed(look.realpath(w))]
         } catch {
           return [given]
         }
@@ -268,15 +272,29 @@ function writableSpellings(writable: readonly string[]): string[] {
  *   sandbox was built: the path is named as given and the link is returned. Codex on Linux then refuses every command
  *   for that path, as it does by design ("Resolving and masking the symlink's current target is a TOCTTOU snapshot",
  *   linux-sandbox/src/bwrap.rs:1328-1334 at rust-v0.160.0); where nothing refuses it, the start is refused instead.
- * Every link a chain goes through is judged by where that link lies. A path that cannot be looked at, or whose links go
+ * Every link a chain goes through is judged by the folder that holds it, by that folder's canonical spelling. A path
+ * that is named where it really is takes its canonical spelling (`look.realpath` of its deepest existing folder: a
+ * Windows 8.3 short name written out long, a macOS case; CI fix). A path that cannot be looked at, or whose links go
  * round, is named as given, as before this round. Forward slashes.
  */
 export function namedPathFor(p: string, writable: readonly string[], platform: NodeJS.Platform, look: LinkLook = nodeLinkLook): NamedPath {
   const given = slashed(p)
   const start = splitAbsolute(given)
   if (start === null) return { path: given, link: null }
-  const roots = writableSpellings(writable)
+  const roots = writableSpellings(writable, look)
   const join = (root: string, parts: readonly string[]): string => root + parts.join('/')
+  // A folder with no link left on it, by its canonical spelling (CI fix, run 40809399938): a Windows 8.3 short name is no
+  // link, so the walk alone kept GitHub's runner's C:/Users/RUNNER~1, while every sandbox resolves the path and a writable
+  // folder may be spelled long. A root, or a folder that cannot be looked at, keeps its spelling
+  const canonical = (root: string, parts: readonly string[]): string => {
+    if (parts.length === 0) return root
+    try {
+      return slashed(look.realpath(join(root, parts)))
+    } catch {
+      return join(root, parts)
+    }
+  }
+  const withRest = (folder: string, rest: readonly string[]): string => (rest.length === 0 ? folder : `${folder.endsWith('/') ? folder : `${folder}/`}${rest.join('/')}`)
   let root = start.root
   let done: string[] = []
   const queue = [...start.parts]
@@ -294,14 +312,14 @@ export function namedPathFor(p: string, writable: readonly string[], platform: N
     } catch {
       return { path: given, link: null }
     }
-    if (stat === null) return { path: join(root, [...done, part, ...queue]), link: null }
+    if (stat === null) return { path: withRest(canonical(root, done), [part, ...queue]), link: null }
     if (!stat.isSymbolicLink()) {
       done.push(part)
       continue
     }
     // Judged by the folder that holds the link, which is what replacing it needs to write: a link that is a writable
     // folder itself (a home-folder session whose home is a symlink) lies in that folder's parent (re-review 2, Minor 1)
-    if (inWritable(join(root, done), roots, platform)) return { path: given, link: next }
+    if (inWritable(canonical(root, done), roots, platform)) return { path: given, link: next }
     if (++hops > MAX_LINKS) return { path: given, link: null }
     let target: string
     try {
@@ -319,7 +337,7 @@ export function namedPathFor(p: string, writable: readonly string[], platform: N
       queue.unshift(...absolute.parts)
     } else queue.unshift(...target.replace(/\\/g, '/').split('/').filter((c) => c !== '' && c !== '.'))
   }
-  return { path: join(root, done), link: null }
+  return { path: canonical(root, done), link: null }
 }
 
 /** namedPathFor over a list: each entry where it is named, once, and the links that left an entry as given, once. */
