@@ -42,15 +42,18 @@ CI 의 macOS 러너에는 로그인된 Claude Code 와 Codex 가 없습니다. �
 ## 준비물
 
 - macOS. 로그인된 데스크톱 화면 앞에서 합니다. SSH 로 접속해서 하면 앱 작업 공간이 거절됩니다.
-- git (Xcode Command Line Tools. 없으면 `xcode-select --install`).
-- Node 22. CI 가 Node 22 를 씁니다. `package.json` 은 22.13.0 이상을 요구합니다.
+- Xcode Command Line Tools. git 과, 테스트 하나가 작은 앱을 컴파일하는 cc 가 여기서 옵니다. 없으면
+  `xcode-select --install`.
+- Node 22. CI 가 Node 22 를 씁니다. `package.json` 은 22.13.0 이상을 요구하지만, Node 24(24.16 에서 봤습니다)의
+  `npm ci` 는 Electron 을 다 풀지 못한 채 오류 없이 끝납니다. 22 를 쓰세요.
 - 이 저장소의 develop 을 받은 폴더, 그리고 그 폴더에서 한 `npm ci`.
-- Claude Code 2.1.306 이상, Codex 0.160.0 이상. 둘 다 이 Mac 에서 이미 로그인되어 있어야 합니다(터미널에서 `claude`,
-  `codex` 가 바로 일할 수 있는 상태).
+- Claude Code 2.1.306 이상, Codex 0.160.0 이상. 둘 다 이 Mac 에서 이미 로그인되어 있어야 합니다. 터미널의 `claude`,
+  `codex` 로 로그인했거나(`~/.claude`, `~/.codex`), 설치된 Astera 에서 추가한 계정이면(`~/.claude-accounts/<이름>`,
+  `~/.codex-accounts/<이름>`) 됩니다.
 
 ## 걸리는 시간
 
-- `run.sh`: 5~15분. 대부분 테스트입니다. 그동안 다른 일을 해도 됩니다.
+- `run.sh`: 1~5분. 대부분 빌드와 테스트입니다.
 - 손 점검: 30~45분.
 
 ## 무엇을 건드리나요
@@ -60,7 +63,7 @@ CI 의 macOS 러너에는 로그인된 Claude Code 와 Codex 가 없습니다. �
 - 이 저장소 폴더 안: 빌드 결과(`out/`)와 vitest 의 캐시.
 - `~/astera-mac-check-<날짜>/` 폴더 하나: 로그, 요약, 점검표 사본, 손 점검에 쓸 작업 폴더(`work/`). 테스트가 만드는 임시
   파일도 이 안의 `tmp/` 에 만들고, 끝나면 지웁니다.
-- 테스트 몇 개는 창을 띄우지 않는 작은 앱(Electron 으로 된 것 하나, 셸 스크립트로 된 앱 묶음 하나)을 잠깐 실행합니다.
+- 테스트 몇 개는 창을 띄우지 않는 작은 앱(Electron 으로 된 것 하나, cc 로 컴파일한 앱 묶음 하나)을 잠깐 실행합니다.
   Dock 에 아이콘이 잠깐 보일 수 있습니다. 그런 앱이 실행되었다는 기록을 macOS 가 스스로 남길 수는 있습니다. 그것은
   `run.sh` 가 쓰는 것이 아닙니다.
 
@@ -72,7 +75,9 @@ CI 의 macOS 러너에는 로그인된 Claude Code 와 Codex 가 없습니다. �
   세션, 설정, Job 은 건드리지 않습니다. 둘을 함께 켜 두어도 됩니다.
 - **계정은 새로 로그인하지 않습니다.** 이미 로그인된 `~/.claude` 와 `~/.codex` 를 **자동 감지** (Auto-detect) 로
   등록합니다. 터미널의 `claude`, `codex` 가 쓰는 바로 그 폴더이고, 세션은 그 로그인으로 돕니다. 새 로그인이 없으니
-  키체인에 새 항목도 생기지 않습니다. 진짜 계정으로 짧은 세션을 몇 번 돌립니다.
+  키체인에 새 항목도 생기지 않습니다. 진짜 계정으로 짧은 세션을 몇 번 돌립니다. 로그인이 설치된 Astera 의 계정 폴더에
+  있으면 자동 감지에 나오지 않으니, 그 폴더를 **가져오기** (Import) 로 등록합니다(점검표 준비 3). 이것도 새 로그인이
+  아닙니다.
   - 계정 칸 위쪽의 + 버튼, **추가** (Add) 로 계정을 새로 만들지 마세요. 새 계정 폴더를 만들고 새로 로그인하게 하며,
     Claude 는 그때 키체인에 새 항목을 씁니다.
   - 개발용 앱에서 계정의 로그아웃도 하지 마세요. 진짜 로그인이 지워집니다.
@@ -86,6 +91,7 @@ CI 의 macOS 러너에는 로그인된 Claude Code 와 Codex 가 없습니다. �
   - Astera 의 스킬 파일: `~/.claude/skills/astera-orchestration`, `~/.codex/skills/astera-orchestration`. 설치된
     Astera 도 같은 파일을 둡니다. 점검 9에서 **에이전트 앱 작업 공간** (Agent app workspace) 을 켜면 `astera-app` 스킬도
     같은 자리에 생깁니다. 설정을 다시 꺼도 지워지지 않으니, 필요 없으면 아래 '정리' 에서 지웁니다.
+  - 가져온 계정이면 위의 `~/.claude`, `~/.codex` 대신 그 계정 폴더 안에 같은 것이 생깁니다.
   - 점검 4의 Job 워커가 일하는 worktree: `~/astera-worktrees/mac-check-repo/`.
   - sandbox 세션의 npm 캐시(임시 폴더의 `astera-npm-cache`)와 개발용 Host 의 소켓 폴더(임시 폴더의 `astera-host-…`).
 
@@ -125,7 +131,8 @@ CI 의 macOS 러너에는 로그인된 Claude Code 와 Codex 가 없습니다. �
 않도록 짜여 있습니다(키 파일은 크기만 봅니다).
 
 `run.sh` 를 다시 돌리면 같은 사본의 맨 위 요약만 새로 채우고, 적어 둔 답은 그대로 둡니다. 날짜가 바뀐 뒤에 다시
-돌리면 새 폴더가 생기니, 그날 쓰던 폴더의 사본을 계속 채우세요.
+돌리면 그날 날짜로 새 폴더와 새 사본이 생기고, 점검표 '준비 1' 의 `R` 도 새 폴더를 가리킵니다. 그때는 이전 사본에
+적어 둔 답을 새 사본으로 옮겨 이어 채우세요.
 
 ## 다 보낸 뒤 정리 (원하면)
 
@@ -134,7 +141,8 @@ rm -rf ~/astera-mac-check-<날짜> ~/astera-worktrees/mac-check-repo
 ```
 
 - 개발용 앱의 프로필 폴더 `~/Library/Application Support/astera-dev` 도 지워도 됩니다.
-- `astera-app` 스킬을 쓰지 않는다면 `~/.claude/skills/astera-app` 과 `~/.codex/skills/astera-app` 을 지웁니다.
+- `astera-app` 스킬을 쓰지 않는다면 `~/.claude/skills/astera-app` 과 `~/.codex/skills/astera-app` 을 지웁니다(가져온
+  계정이면 그 계정 폴더의 `skills/astera-app`).
   설치된 Astera 에서 **에이전트 앱 작업 공간** (Agent app workspace) 을 켜 두었다면 그대로 두세요.
 - 작업 폴더의 대화 기록과 믿음 표시는 지운 폴더를 가리킬 뿐이라 그대로 두어도 됩니다.
 
@@ -142,7 +150,9 @@ rm -rf ~/astera-mac-check-<날짜> ~/astera-worktrees/mac-check-repo
 
 - `run.sh: 이 점검은 macOS 전용입니다`: Mac 에서 돌려야 합니다.
 - node 가 FAIL: Node 22 의 최신판을 설치하고 `npm ci` 부터 다시 합니다.
-- `npm ci` 가 FAIL: 저장소 폴더에서 `npm ci` 를 다시 합니다. 그래도 Electron 이 없다고 하면 `npm rebuild electron`.
+- `npm ci` 가 FAIL: 먼저 `node -v` 가 22 인지 봅니다. Node 24 에서는 `npm ci` 도 `npm rebuild electron` 도 Electron 을
+  다 풀지 못한 채 오류 없이 끝납니다. Node 22 로 바꾼 뒤 저장소 폴더에서 `npm ci` 를 다시 합니다.
+- `tools` 가 FAIL: `xcode-select --install` 로 Command Line Tools 를 설치하고 `run.sh` 를 다시 돌립니다.
 - claude 나 codex 가 FAIL: 업데이트한 뒤 `run.sh` 를 다시 돌립니다. 버전이 낮으면 개발용 앱이 sandbox 세션의 시작을
   거절합니다.
 - 개발용 앱이 뜨지 않음: `npm run dev` 를 띄운 터미널의 마지막 몇 줄을 점검표의 '준비' 메모에 붙여 넣어 주세요.
