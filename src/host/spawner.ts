@@ -29,6 +29,7 @@ import type { ChatManagerDeps, ChatOrchEnv } from '../core/chat/manager'
 import type { CodexWindowsReady, PreparedLayouts } from '../core/sandbox/prepared'
 import { claudeSandboxStart, type ClaudeSandboxStart } from '../core/sandbox/claudeStart'
 import { srtCheckRunner } from '../core/sandbox/srtCheck'
+import { codexCheckRunner } from '../core/sandbox/checkRunner'
 import { codexExcludesWriter, type CodexExcludes, type RunGit } from '../core/sandbox/gitExcludes'
 import { forcedSandboxBlocker } from '../core/sandbox/unavailable'
 import { binDirFor } from '../core/orchestration/cliInstall'
@@ -548,7 +549,12 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   })
   sessions.claudeSandbox = claudeSandbox
   // A sandboxed Claude Task's check under srt (Task K), on the systems Claude's sandbox runs on
-  if (platform !== 'win32' && d.checkRunnerPath) sessions.checkRunner = srtCheckRunner({ execPath: process.execPath, runnerPath: d.checkRunnerPath })
+  // Only where the runner was built (fix round 2): one that is not there would end each check as if the check had failed.
+  // On Windows it is copied beside host.js into the Host's runtime (scripts/host-runtime.mjs)
+  const checkRunnerPath = d.checkRunnerPath !== undefined && exists(d.checkRunnerPath) ? d.checkRunnerPath : null
+  if (platform !== 'win32' && checkRunnerPath) sessions.checkRunner = srtCheckRunner({ execPath: process.execPath, runnerPath: checkRunnerPath })
+  // The same runner for a Windows Codex check (fix round 2, checkRunner.ts); the session manager asks for it on Windows only
+  if (checkRunnerPath) sessions.codexCheckRunner = codexCheckRunner({ execPath: process.execPath, runnerPath: checkRunnerPath })
   // The codex floor a sandboxed Codex start asks, here and in the Host's chat sessions (final review I2)
   const codexVersion = d.codexVersion ?? cliVersions
   sessions.codexVersion = codexVersion

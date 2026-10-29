@@ -51,6 +51,7 @@ import type { EnforceStart } from '../core/audit/enforce'
 import { cliVersionProbe, enforceBlocker } from '../core/sessions/cliVersion'
 import { claudeSandboxStart } from '../core/sandbox/claudeStart'
 import { srtCheckRunner } from '../core/sandbox/srtCheck'
+import { codexCheckRunner } from '../core/sandbox/checkRunner'
 import { codexExcludesWriter } from '../core/sandbox/gitExcludes'
 import { hostAddress } from '../core/publicContract'
 import { appKeyPath } from '../core/host/hostKey'
@@ -390,7 +391,12 @@ export async function createCore(userDataDir: string, osLocale: string, paths?: 
   })
   sessions.claudeSandbox = claudeSandbox
   // A sandboxed Claude Task's check under srt (Task K), on the systems Claude's sandbox runs on
-  if (process.platform !== 'win32' && paths?.sandboxCheck) sessions.checkRunner = srtCheckRunner({ execPath: process.execPath, runnerPath: paths.sandboxCheck })
+  // Only where the runner was built (fix round 2): one that is not there would end each check as if the check had failed
+  const checkRunnerPath = paths?.sandboxCheck !== undefined && existsSync(paths.sandboxCheck) ? paths.sandboxCheck : null
+  if (process.platform !== 'win32' && checkRunnerPath) sessions.checkRunner = srtCheckRunner({ execPath: process.execPath, runnerPath: checkRunnerPath })
+  // The same runner for a Windows Codex check (fix round 2): it tells a sandbox that stopped before the check from a check
+  // that failed. Given on every system; the session manager asks for it on Windows only
+  if (checkRunnerPath) sessions.codexCheckRunner = codexCheckRunner({ execPath: process.execPath, runnerPath: checkRunnerPath })
   // The codex floor a sandboxed Codex start asks, the version Enforce asks (final review I2)
   sessions.codexVersion = cliVersions
   // The chat sessions. It is handed `procRouter.factory` rather than a factory chosen now, for exactly

@@ -116,7 +116,9 @@ const SIGNALS: Partial<Record<NodeJS.Signals, number>> = { SIGHUP: 1, SIGINT: 2,
  * leaves making it to Claude Code, dist/sandbox/sandbox-utils.js:643-654), the configuration installed with every host
  * allowed, the command wrapped and run in the check's folder through the shell srt wraps it for, as srt's CLI does
  * (dist/cli.js:430-486), and srt's leftovers cleared. A command ended by a signal is never a pass. Astera's node flag is
- * left out of the command's environment. Rejects when srt itself fails, which the runner says.
+ * left out of the command's environment. Rejects when srt cannot put the command in its sandbox (its setup or wrap
+ * throws, the shell cannot be started), which the runner says with its own exit code (checkRunner.ts, fix round 2); once
+ * the command ran, its exit code stands, and a clean-up that throws is only told to `warn`.
  */
 export async function runInSrt(o: {
   payload: SrtCheckPayload
@@ -126,6 +128,8 @@ export async function runInSrt(o: {
   spawn: (command: string, opts: { cwd: string; env: NodeJS.ProcessEnv }) => CheckChild
   mkdir: (dir: string) => void
   env: NodeJS.ProcessEnv
+  /** Told when srt's clean-up throws after the command ran */
+  warn?: (message: string) => void
 }): Promise<number> {
   o.mkdir(o.env.CLAUDE_CODE_TMPDIR || o.env.CLAUDE_TMPDIR || '/tmp/claude')
   const { SandboxManager } = await o.load()
@@ -139,8 +143,12 @@ export async function runInSrt(o: {
       child.on('exit', (code, signal) => resolve(signal ? 128 + (SIGNALS[signal] ?? 0) : (code ?? 1)))
     })
   } finally {
-    SandboxManager.cleanupAfterCommand?.()
-    await SandboxManager.reset()
+    try {
+      SandboxManager.cleanupAfterCommand?.()
+      await SandboxManager.reset()
+    } catch (e) {
+      o.warn?.(`the sandbox runtime could not clean up after the check: ${e instanceof Error ? e.message : String(e)}`)
+    }
   }
 }
 

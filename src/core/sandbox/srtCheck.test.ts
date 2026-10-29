@@ -43,15 +43,22 @@ describe('srtConfigOf', () => {
 })
 
 /** A fake srt: records what it was asked, wraps a command as `wrapped:<command>`. */
-function fakeSrt(o: { errors?: string[] } = {}) {
+function fakeSrt(o: { errors?: string[]; initializeFails?: string; resetFails?: string } = {}) {
   const calls: Array<{ op: string; arg?: unknown }> = []
   let ask: ((p: { host: string; port: number }) => Promise<boolean>) | undefined
   const srt: SrtModule = {
     SandboxManager: {
-      initialize: async (config, cb) => void (calls.push({ op: 'initialize', arg: config }), (ask = cb)),
+      initialize: async (config, cb) => {
+        calls.push({ op: 'initialize', arg: config })
+        ask = cb
+        if (o.initializeFails) throw new Error(o.initializeFails)
+      },
       wrapWithSandbox: async (command) => (calls.push({ op: 'wrap', arg: command }), `wrapped:${command}`),
       cleanupAfterCommand: () => void calls.push({ op: 'cleanup' }),
-      reset: async () => void calls.push({ op: 'reset' }),
+      reset: async () => {
+        calls.push({ op: 'reset' })
+        if (o.resetFails) throw new Error(o.resetFails)
+      },
       checkDependencies: () => ({ errors: o.errors ?? [], warnings: [] })
     }
   }
@@ -107,6 +114,21 @@ describe('runInSrt', () => {
     kid.emit('exit', null, 'SIGTERM')
     expect(await done).toBe(143)
     expect(made).toEqual(['/var/tmp/c'])
+  })
+
+  // Fix round 2 (M1): only a failure before the check ran is srt's (the runner then says so with its own exit code); once
+  // the check ran, its exit code stands whatever srt's clean-up does, which the runner only reports
+  it('rejects when srt cannot put the check in its sandbox, and keeps a check’s code when only the clean-up fails', async () => {
+    const setup = fakeSrt({ initializeFails: 'bwrap: setting up uid map: Permission denied' })
+    await expect(runInSrt({ payload, load: async () => setup.srt, spawn: () => child(), mkdir: () => {}, env: {} })).rejects.toThrow('bwrap: setting up uid map')
+    const after = fakeSrt({ resetFails: 'proxy already stopped' })
+    const kid = child()
+    const warned: string[] = []
+    const done = runInSrt({ payload, load: async () => after.srt, spawn: () => kid, mkdir: () => {}, env: {}, warn: (m) => void warned.push(m) })
+    await new Promise((r) => setTimeout(r, 0))
+    kid.emit('exit', 2, null)
+    expect(await done).toBe(2)
+    expect(warned).toEqual([expect.stringContaining('proxy already stopped')])
   })
 })
 

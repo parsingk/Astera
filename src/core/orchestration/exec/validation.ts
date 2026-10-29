@@ -213,7 +213,10 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
         const now = c.getState().tasks.find((x) => x.id === taskId)
         if (!now || now.status !== 'validating' || now.ciWait !== undefined) return 'skip'
         const started = c.runs.start({ projectPath: cwd, projectName, config, command, validation: true, env: boxed.env, launch: boxed.launch })
-        return { runId: started.runId, name: config.name, ...hidden }
+        // A Claude check under srt and a Windows Codex check run through Astera's check runner (fix round 2, M1): when the
+        // sandbox stops before the check starts, its own exit code and last line say so, and the round asks a person in
+        // these words
+        return { runId: started.runId, name: config.name, ...hidden, sandboxFailed: (detail: string) => t(c.lang(), 'jobs.checks.sandbox.failed', { detail }) }
       },
       output: (runId) => cutTail(c.runs.recentOutput(runId), 4000),
       // 타임아웃이 이 PTY 를 두 번째로 멈춘다(validator.ts 의 startCheck 타이머). **c.runs.stop 을

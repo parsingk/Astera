@@ -45,7 +45,16 @@ describe("the app's checks of a sandboxed Task", () => {
   })
 
   it("gives the app's session manager the srt runner bundled beside the main bundle, off Windows", () => {
-    expect(read('src/main/core.ts')).toMatch(/process\.platform !== 'win32' && paths\?\.sandboxCheck\) sessions\.checkRunner = srtCheckRunner\(/)
+    // Fix round 2: only where the runner was built (a runner that is not there would fail as the check's own failure), and
+    // the same runner for a Windows Codex check, which tells a sandbox that failed from a check that did
+    const core = read('src/main/core.ts')
+    expect(core).toMatch(/const checkRunnerPath = paths\?\.sandboxCheck !== undefined && existsSync\(paths\.sandboxCheck\) \? paths\.sandboxCheck : null/)
+    expect(core).toMatch(/process\.platform !== 'win32' && checkRunnerPath\) sessions\.checkRunner = srtCheckRunner\(\{ execPath: process\.execPath, runnerPath: checkRunnerPath \}\)/)
+    expect(core).toMatch(/if \(checkRunnerPath\) sessions\.codexCheckRunner = codexCheckRunner\(\{ execPath: process\.execPath, runnerPath: checkRunnerPath \}\)/)
+    const spawner = read('src/host/spawner.ts')
+    expect(spawner).toMatch(/const checkRunnerPath = d\.checkRunnerPath !== undefined && exists\(d\.checkRunnerPath\) \? d\.checkRunnerPath : null/)
+    expect(spawner).toMatch(/platform !== 'win32' && checkRunnerPath\) sessions\.checkRunner = srtCheckRunner\(\{ execPath: process\.execPath, runnerPath: checkRunnerPath \}\)/)
+    expect(spawner).toMatch(/if \(checkRunnerPath\) sessions\.codexCheckRunner = codexCheckRunner\(\{ execPath: process\.execPath, runnerPath: checkRunnerPath \}\)/)
     expect(read('src/main/index.ts')).toMatch(/createCore\(app\.getPath\('userData'\), app\.getLocale\(\), \{ sandboxCheck: path\.join\(__dirname, 'sandbox-check\.js'\) \}\)/)
     expect(read('electron.vite.config.ts')).toContain("'sandbox-check': 'src/sandboxCheck/index.ts'")
   })

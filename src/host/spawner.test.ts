@@ -23,6 +23,7 @@ import { gitLayoutOf } from '../core/sandbox/gitLayout'
 import { codexExcludesFileOf } from '../core/sandbox/gitExcludes'
 import { namedPathFor, updaterCacheDir } from '../core/sandbox/locations'
 import { codexWritableFolders } from '../core/sandbox/prepared'
+import { CHECK_STARTED_MARK, CODEX_CHECK_FLAG } from '../core/sandbox/checkRunner'
 
 const NOW = '2026-09-24T00:00:00.000Z'
 let dir: string
@@ -54,6 +55,7 @@ const rig = (over: {
   codexWindowsReady?: HostSpawnerDeps['codexWindowsReady']
   claudeVersion?: HostSpawnerDeps['claudeVersion']
   codexVersion?: HostSpawnerDeps['codexVersion']
+  checkRunnerPath?: string
 } & LocateHooks = {}) => {
   const spawned: Spawned[] = []
   const logs: string[] = []
@@ -83,6 +85,7 @@ const rig = (over: {
     // Every Windows home reads set up unless a case says otherwise: the real question runs the codex on this machine
     codexWindowsReady: over.codexWindowsReady ?? (async () => 'ready'),
     ...(over.claudeVersion ? { claudeVersion: over.claudeVersion } : {}),
+    ...(over.checkRunnerPath ? { checkRunnerPath: over.checkRunnerPath } : {}),
     // codex at the sandbox's floor unless a case says otherwise: the real probe runs the codex on this machine
     codexVersion: over.codexVersion ?? Object.assign(() => '0.160.0', { warm: async () => {} }),
     // A sandboxed Claude start makes npm's cache in the temp folder and asks git for the excludes file: the fixture's
@@ -953,19 +956,32 @@ describe('the roll spawn (S6 R5, R6)', () => {
     await fs.writeFile(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
       { id: 'acc2', label: 'two', configDir: path.join(dir, 'cfg2'), color: '#888', createdAt: NOW, provider: 'codex' }
     ] }))
-    const h = rig()
+    const runnerPath = path.join(dir, 'sandbox-check.js')
+    await fs.writeFile(runnerPath, '')
+    const h = rig({ checkRunnerPath: runnerPath })
     const launch = await h.spawner!.checkLaunch!({ accountId: 'acc2', cwd: repo, command: 'npm test' })
     const args = launch.args as string[]
     expect(args).toContain('sandbox')
     expect(args.some((a) => a.startsWith('permissions='))).toBe(true)
-    expect(args.slice(args.indexOf('--') + 1)).toEqual(process.platform === 'win32' ? ['cmd.exe', '/d', '/s', '/c', 'npm test'] : ['sh', '-c', 'npm test'])
     expect(launch.env.npm_config_cache).toBeDefined()
-    expect(launch.env.ELECTRON_RUN_AS_NODE).toBeUndefined()
+    // Fix round 2: on Windows through the Host's runner, the check's shell saying it started first; elsewhere as before
+    if (process.platform === 'win32') {
+      expect(args.slice(args.indexOf('--') + 1)).toEqual(['cmd.exe', '/d', '/s', '/c', `echo ${CHECK_STARTED_MARK}& npm test`])
+      expect([launch.file, ...args.slice(0, 2)]).toEqual([process.execPath, runnerPath, CODEX_CHECK_FLAG])
+      expect(launch.env.ELECTRON_RUN_AS_NODE).toBe('1')
+    } else {
+      expect(args.slice(args.indexOf('--') + 1)).toEqual(['sh', '-c', 'npm test'])
+      expect(launch.env.ELECTRON_RUN_AS_NODE).toBeUndefined()
+    }
     await expect(h.spawner!.checkLaunch!({ accountId: 'gone', cwd: repo, command: 'npm test' })).rejects.toThrow(/gone/)
     expect(h.spawner!.checkEnv!({ PATH: '/x' }, repo)).toEqual({ env: { PATH: '/x' }, hidden: [] })
     // Fix round 2: a check's words name the account by its name
     expect(await h.spawner!.accountName!('acc2')).toBe('two')
     expect(await h.spawner!.accountName!('gone')).toBeNull()
+    // A runner that was not built is no runner: a Windows Codex check is then refused, not run to fail as the code's fault
+    const unbuilt = rig({ checkRunnerPath: path.join(dir, 'not-built', 'sandbox-check.js') })
+    if (process.platform === 'win32')
+      await expect(unbuilt.spawner!.checkLaunch!({ accountId: 'acc2', cwd: repo, command: 'npm test' })).rejects.toThrow('SANDBOX_UNAVAILABLE: no-check-runner')
   })
 
   it("a sandboxed Codex session from the Host keeps read-only the profile and Astera's own run locations", async () => {

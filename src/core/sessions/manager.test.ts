@@ -22,6 +22,7 @@ import type { GitLayout } from '../sandbox/gitLayout'
 import { claudeSandboxStart, gitExcludesFileOf, gitExcludesText } from '../sandbox/claudeStart'
 import { StatusLineManager } from './statusline'
 import { srtConfigOf, type SrtCheckPayload } from '../sandbox/srtCheck'
+import { CHECK_STARTED_MARK, CODEX_CHECK_FLAG, codexCheckRunner } from '../sandbox/checkRunner'
 
 class FakePty implements PtyLike {
   pid = 4242
@@ -1798,8 +1799,13 @@ describe('the sandbox at spawn', () => {
     const denied = [...sensitiveLocations(platform, env, HOME[platform]), ...credentialStoreDenies(platform, env, HOME[platform])]
     return { args: codexSandboxArgs({ platform, layout, denied, readOnly: [] }), env: codexSandboxEnv({ platform, layout, tmpDir: os.tmpdir() }), layout }
   }
-  /** The codex arguments after cmd.exe's wrapper, when win32 found a shim. */
-  const codexArgs = (a: string[]): string[] => (a[0] === '/d' ? a.slice(4) : a)
+  /** The codex arguments after Astera's runner (Windows, fix round 2) and cmd.exe's wrapper, when win32 found a shim. */
+  const codexArgs = (a: string[]): string[] => {
+    const cmd = a[1] === CODEX_CHECK_FLAG ? a.slice(3) : a
+    return cmd[0] === '/d' ? cmd.slice(4) : cmd
+  }
+  /** The runner a Windows Codex check goes through (checkRunner.ts) */
+  const RUNNER = { execPath: 'C:\\Astera\\Astera.exe', runnerPath: 'C:\\Astera\\sandbox-check.js' }
 
   // Task K: a Task's check of a sandboxed Codex worker runs inside the same sandbox, as `codex sandbox` with the session's own
   // profile (sessionSandboxArgs without `-a never`: the S2 measurement's shape, scripts/measure/s2.mjs) and the session's
@@ -1810,13 +1816,33 @@ describe('the sandbox at spawn', () => {
       const cwd = repo()
       const { manager } = rig(platform, { base: { SECRET_TOKEN: 's', KEEP: 'k' } })
       manager.hiding = { get: () => ({ remove: ['SECRET_TOKEN'], set: {} }), damaged: () => false }
+      manager.codexCheckRunner = codexCheckRunner(RUNNER)
       const launch = await manager.checkLaunch({ account: codexAccount, cwd, command: 'npm run test' })
       const want = await expected(platform, cwd)
-      const shell = platform === 'win32' ? ['cmd.exe', '/d', '/s', '/c', 'npm run test'] : ['sh', '-c', 'npm run test']
+      // Fix round 2: on Windows the check's shell says it started before it runs, through Astera's runner (checkRunner.ts)
+      const shell = platform === 'win32' ? ['cmd.exe', '/d', '/s', '/c', `echo ${CHECK_STARTED_MARK}& npm run test`] : ['sh', '-c', 'npm run test']
       expect(codexArgs(launch.args as string[]), platform).toEqual(['sandbox', ...want.args.slice(2), '--', ...shell])
       expect(launch.env, platform).toMatchObject({ ...want.env, KEEP: 'k' })
       expect(launch.env, platform).not.toHaveProperty('SECRET_TOKEN')
+      if (platform === 'win32') {
+        expect(launch.file).toBe(RUNNER.execPath)
+        expect((launch.args as string[]).slice(0, 2)).toEqual([RUNNER.runnerPath, CODEX_CHECK_FLAG])
+        expect(launch.env).toMatchObject({ ELECTRON_RUN_AS_NODE: '1' })
+      } else {
+        // macOS and Linux: straight in its pty, as before
+        expect(launch.file).not.toBe(RUNNER.execPath)
+        expect(launch.env).not.toHaveProperty('ELECTRON_RUN_AS_NODE')
+      }
     }
+  })
+
+  // Fix round 2: a process without the runner cannot tell a Windows sandbox that failed from a check that failed, so it
+  // does not start one, before asking Codex anything
+  it('refuses a Windows Codex check where the process has no runner for it', async () => {
+    let asked = 0
+    const { manager } = rig('win32', { ready: async () => (asked++, 'ready') })
+    await expect(manager.checkLaunch({ account: codexAccount, cwd: repo(), command: 'npm test' })).rejects.toThrow('SANDBOX_UNAVAILABLE: no-check-runner')
+    expect(asked).toBe(0)
   })
 
   // codex hands the command to cmd.exe quoted with backslash escapes (windows-sandbox-rs/src/winutil.rs:72-112 at
@@ -1824,6 +1850,7 @@ describe('the sandbox at spawn', () => {
   // through a script file the sandbox may read, in the temp folder
   it('a Windows check line holding a double quote reaches cmd.exe through a script file', async () => {
     const { manager } = rig('win32')
+    manager.codexCheckRunner = codexCheckRunner(RUNNER)
     const line = 'python "my script.py" --flag'
     const launch = await manager.checkLaunch({ account: codexAccount, cwd: repo(), command: line })
     const args = codexArgs(launch.args as string[])
@@ -1836,6 +1863,7 @@ describe('the sandbox at spawn', () => {
 
   it("refuses a Windows check where the account's sandbox is not set up, naming the account (E5)", async () => {
     const { manager } = rig('win32', { ready: async () => 'not-set-up' })
+    manager.codexCheckRunner = codexCheckRunner(RUNNER)
     await expect(manager.checkLaunch({ account: codexAccount, cwd: repo(), command: 'npm test' })).rejects.toThrow(`SANDBOX_UNAVAILABLE: windows-setup codex ${codexAccount.id}`)
   })
 

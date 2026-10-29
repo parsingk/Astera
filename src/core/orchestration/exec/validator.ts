@@ -2,6 +2,7 @@ import { stripAnsi } from '../../rolling/detect'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../../sessions/pty'
 import { CHECK_TIMEOUT_MS, type CheckResult } from '../types'
 import { pluginIdOfCheck, unavailable, type PluginCheckAnswer } from '../pluginChecks'
+import { sandboxFailureOf } from '../../sandbox/checkRunner'
 import { GITHUB_CI_CHECK } from '../../github/lifecycle'
 
 // Validation run sequencing. Knows neither RunManager nor OrchState — only a runner and two callbacks,
@@ -46,12 +47,18 @@ export interface ValidatorRunner {
    *  run outside it. The round settles with it as a check that could not be made, which the verdict puts to a person.
    *  `outsideSandbox`: it runs outside any sandbox though its workers were sandboxed (Claude Code on Windows, which has
    *  none), recorded on its result. `hiddenEnv`: the variables the Credentials list kept from it, by name, recorded on
-   *  its result too (fix round 2). */
+   *  its result too (fix round 2). `sandboxFailed`: it runs through Astera's check runner (core/sandbox/checkRunner.ts),
+   *  whose own exit code and last line say the sandbox stopped before the check started; that exit is then a check that
+   *  could not be made, in these words for the runner's reason, not a failure (fix round 2, M1). */
   start(a: {
     cwd: string
     taskId: string
     configId: string
-  }): Promise<{ runId: string; name: string; outsideSandbox?: true; hiddenEnv?: string[] } | { unavailable: string; name: string } | 'skip'>
+  }): Promise<
+    | { runId: string; name: string; outsideSandbox?: true; hiddenEnv?: string[]; sandboxFailed?: (detail: string) => string }
+    | { unavailable: string; name: string }
+    | 'skip'
+  >
   /** That run's recent output */
   output(runId: string): string
   /** timeout 이 부른다. 이어 오는 exit 는 timed-out 으로 읽힌다 */
@@ -74,6 +81,9 @@ interface Pending {
   outsideSandbox: boolean
   /** The variables the Credentials list kept from the check running now, by name (fix round 2); set at each start */
   hiddenEnv: string[]
+  /** The check running now runs through Astera's check runner: the words for its reason when it says the sandbox stopped
+   *  before the check started (fix round 2, M1); null for a run outside it. Set at each start */
+  sandboxFailed: ((detail: string) => string) | null
   startedAt: string | null
   /** Whether this entry's exit is already being settled. The same head's exit can arrive twice —
    *  settling is an await, and a second exit landing inside it still finds the head at the front. This
@@ -146,7 +156,7 @@ export class TaskValidator {
     const configIds = [...new Set(a.configIds)]
     const entry: Pending = {
       taskId: a.taskId, cwd: a.cwd, configIds, index: 0, results: [...(a.done ?? [])],
-      runId: null, name: null, outsideSandbox: false, hiddenEnv: [], startedAt: null, settling: false, stopped: false,
+      runId: null, name: null, outsideSandbox: false, hiddenEnv: [], sandboxFailed: null, startedAt: null, settling: false, stopped: false,
       timedOut: false, timedOutOnce: new Set(), erroredOnce: new Set(), timer: null
     }
     const q = this.queues.get(a.cwd)
@@ -240,6 +250,18 @@ export class TaskValidator {
     // retry. Stripping only on screen leaves the deciding side reading control characters. RunPanel's
     // xterm is untouched — that is a terminal and escapes do their job there.
     const output = stripAnsi(this.deps.runner.output(a.runId))
+    // The sandbox stopped before the check started, as Astera's runner says by its own exit code and last line (fix round
+    // 2, M1): settled as a check that could not be made, which asks a person, as a sandbox that could not be put around it
+    // before the start does (rule E5). Only a sandboxed check's run, which the runner may carry, is read so: a check outside
+    // any sandbox never goes through it
+    const stoppedBefore = head.sandboxFailed !== null ? sandboxFailureOf(a.exitCode, output) : null
+    if (stoppedBefore !== null) {
+      this.deps.log?.(`check "${name}" task=${head.taskId}: the sandbox stopped before the check started: ${stoppedBefore}`)
+      head.results.push({ configId, name, status: 'error', summary: head.sandboxFailed!(stoppedBefore), startedAt: head.startedAt ?? undefined, endedAt: now })
+      for (const rest of head.configIds.slice(head.index + 1)) head.results.push({ configId: rest, name: rest, status: 'not-run' })
+      this.settle(cwd, head)
+      return
+    }
     const passed = a.exitCode === 0
     head.results.push({
       configId, name, status: passed ? 'passed' : 'failed', exitCode: a.exitCode, outputTail: output,
@@ -359,6 +381,7 @@ export class TaskValidator {
         head.name = outcome.name
         head.outsideSandbox = outcome.outsideSandbox === true
         head.hiddenEnv = outcome.hiddenEnv ?? []
+        head.sandboxFailed = outcome.sandboxFailed ?? null
         head.startedAt = new Date().toISOString()
         head.timer = setTimeout(() => {
           if (head.runId !== outcome.runId || head.settling) return

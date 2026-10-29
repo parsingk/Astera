@@ -28,6 +28,7 @@ import { appServerSandboxArgs, codexSandboxEnv } from '../sandbox/codexProfile'
 import { buildCodexAppServerCommand, buildCodexSandboxCommand } from './commands'
 import { checkShell } from '../sandbox/checkShell'
 import { srtConfigOf, type SrtCheckRunner } from '../sandbox/srtCheck'
+import { CHECK_STARTED_MARK, type CodexCheckRunner } from '../sandbox/checkRunner'
 import { fitsOnTheLine } from '../sandbox/prepared'
 import { sandboxUnavailable } from '../sandbox/unavailable'
 import { sandboxKindOf } from '../sandbox/coverage'
@@ -242,6 +243,9 @@ export class SessionManager {
   /** How a Task's check of a sandboxed Claude worker runs under srt on macOS and Linux (Task K, core/sandbox/srtCheck.ts):
    *  the app's and the Host's wiring give it there. Unset, such a check is refused, never run outside the sandbox. */
   checkRunner?: SrtCheckRunner
+  /** How a Windows Codex check runs through Astera's runner, which tells a sandbox that stopped before the check started
+   *  from a check that failed (Task K fix round 2, checkRunner.ts); the wiring gives it. Without it no such check starts. */
+  codexCheckRunner?: CodexCheckRunner
   /** The codex version question a sandboxed Codex start asks at its prepare and again at its spawn (final review I2), the
    *  one Enforce asks. Unset, a sandboxed Codex start is refused as for a version not known. */
   codexVersion?: CodexVersionProbe
@@ -364,7 +368,9 @@ export class SessionManager {
    *   prepared as its start is (prepareCodexSandbox: the version floor, the git layout, on Windows the account's
    *   readiness), and the session's sandbox environment (codexSandboxEnv). On Windows the very deny list matters: Codex
    *   resyncs a home's deny-read ACEs to each launch's list (Task K part 1). On Linux a named path through a link in the
-   *   folder makes Codex refuse every command, so the check is refused rather than failed.
+   *   folder makes Codex refuse every command, so the check is refused rather than failed. On Windows it runs through
+   *   Astera's runner (`codexCheckRunner`), and the check's shell says it started first (checkShell's mark): Codex's
+   *   sandbox exits 1 for its own failure as for a check's, and the runner tells them apart (fix round 2).
    * - Claude, macOS and Linux: srt with the settings the session's twin holds (srtCheck.ts), through the runner the wiring
    *   gives (`checkRunner`), prepared as its start is (claudeSandboxStart.prepare). Refused where srt cannot run a
    *   command here, and where Ubuntu's AppArmor profile confines bubblewrap (every command would fail there).
@@ -377,6 +383,7 @@ export class SessionManager {
     const defined = (env: Record<string, string | undefined>): Record<string, string> =>
       Object.fromEntries(Object.entries(env).filter((e): e is [string, string] => e[1] !== undefined))
     if (providerOf(a.account) === 'codex') {
+      if (platform === 'win32' && !this.codexCheckRunner) throw sandboxUnavailable('no-check-runner')
       await this.prepareSandbox(a.account, a.cwd, 'check')
       const now = this.checks.now()
       const layout = this.sandboxLayouts.layoutOf(a.account.id, a.cwd, now)
@@ -388,10 +395,14 @@ export class SessionManager {
         throw sandboxUnavailable('linked-path')
       }
       const profile = appServerSandboxArgs(this.codexSandboxArgsFor(layout, env, this.sandboxLayouts.otherHostsOf(a.account.id, a.cwd, now), a.cwd))
-      const cmd = buildCodexSandboxCommand(platform, profile, checkShell(platform, a.command, os.tmpdir()))
+      const mark = platform === 'win32' ? CHECK_STARTED_MARK : undefined
+      const cmd = buildCodexSandboxCommand(platform, profile, checkShell(platform, a.command, os.tmpdir(), mark))
       fitsOnTheLine(platform, cmd)
       Object.assign(env, codexSandboxEnv({ platform, layout, tmpDir: os.tmpdir(), env, excludesFile: this.sandboxLayouts.excludesFileOf(a.account.id, a.cwd, now) }))
-      return { file: cmd.file, args: cmd.args, env: defined(env) }
+      if (platform !== 'win32' || !this.codexCheckRunner) return { file: cmd.file, args: cmd.args, env: defined(env) }
+      const runner = this.codexCheckRunner.launch(cmd)
+      fitsOnTheLine(platform, runner)
+      return { file: runner.file, args: runner.args, env: { ...defined(env), ...runner.env } }
     }
     if (sandboxKindOf('claude', platform) !== 'sandbox') throw sandboxUnavailable('no-sandbox claude')
     // A process without the runner, or without Claude's sandbox settings, cannot put a check in it; running again will not

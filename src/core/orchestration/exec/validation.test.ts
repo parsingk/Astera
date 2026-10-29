@@ -15,6 +15,7 @@ import type { StartOpts } from '../../run/runManager'
 import type { RunConfig } from '../../run/config'
 import type { CompletionCheckInput, PluginCheckAnswer } from '../pluginChecks'
 import { t } from '../../i18n'
+import { SANDBOX_FAILED_EXIT_CODE, sandboxFailedLine } from '../../sandbox/checkRunner'
 
 const NOW = '2026-09-24T00:00:00.000Z'
 const unwrap = <T>(r: { ok: boolean } & Record<string, unknown>): { state: OrchState; value: T } => {
@@ -55,6 +56,8 @@ interface RigOpts {
   checkEnv?: ValidationContext['checkEnv']
   accountName?: ValidationContext['accountName']
   sandboxedCheck?: ValidationContext['sandboxedCheck']
+  /** What every run printed; nothing when left out */
+  output?: string
 }
 
 function rig(o: RigOpts = {}) {
@@ -145,7 +148,7 @@ function rig(o: RigOpts = {}) {
         if (code !== undefined) queueMicrotask(() => validation.validator.onRunExit({ runId, exitCode: code }))
         return { runId }
       },
-      recentOutput: () => '',
+      recentOutput: () => o.output ?? '',
       stop: () => {
         stops++
         if (o.stopThrows) throw new Error('pty already gone')
@@ -781,6 +784,34 @@ describe('createTaskValidation — the sandbox of a sandboxed Task (Task K)', ()
     await none.started()
     await none.finish(1)
     expect(none.task().checks?.[0]).not.toHaveProperty('hiddenEnv')
+  })
+
+  // Fix round 2 (M1): a sandbox that stopped before the check started, which Astera's runner says with its own exit code
+  // and its own last line (checkRunner.ts), is a question to a person, never the code's failure and no repair; a check that
+  // ran and failed stays a failure, and only a run that went through the runner is read that way
+  it('a sandbox that stopped before the check started asks a person; a check that ran and failed stays a failure', async () => {
+    const detail = 'codex sandbox stopped with exit code 1 before the check started: windows sandbox failed: 1314'
+    const boxed = async () => ({ launch: { file: 'Astera.exe', args: ['sandbox-check.js', '--codex', 'codex.exe'] }, env: {} })
+    const stopped = rig({ sandboxKind: 'sandbox', provider: 'codex', sandboxedCheck: boxed, output: `windows sandbox failed: 1314\r\n${sandboxFailedLine(detail)}` })
+    stopped.validation.startValidation({ taskId: stopped.taskId, cwd: stopped.cwd })
+    await stopped.started()
+    await stopped.finish(SANDBOX_FAILED_EXIT_CODE)
+    expect(stopped.task().status).toBe('blocked')
+    expect(stopped.task().checks?.[0]).toMatchObject({ status: 'error', summary: t('en', 'jobs.checks.sandbox.failed', { detail }) })
+    expect(stopped.state().gates.find((g) => g.taskId === stopped.taskId && g.status === 'open')?.kind).toBe('check-unavailable')
+    expect(stopped.startRepair).not.toHaveBeenCalled()
+    // The check's own exit code without the runner's line: the check's failure
+    const own = rig({ sandboxKind: 'sandbox', provider: 'codex', sandboxedCheck: boxed, output: 'FAIL src/a.test.ts\r\n' })
+    own.validation.startValidation({ taskId: own.taskId, cwd: own.cwd })
+    await own.started()
+    await own.finish(SANDBOX_FAILED_EXIT_CODE)
+    expect(own.task().checks?.[0]).toMatchObject({ status: 'failed', exitCode: SANDBOX_FAILED_EXIT_CODE })
+    // A run outside any sandbox never went through the runner: whatever it printed, its exit is its own
+    const plain = rig({ output: sandboxFailedLine(detail) })
+    plain.validation.startValidation({ taskId: plain.taskId, cwd: plain.cwd })
+    await plain.started()
+    await plain.finish(SANDBOX_FAILED_EXIT_CODE)
+    expect(plain.task().checks?.[0]).toMatchObject({ status: 'failed' })
   })
 
   it('a process that cannot put checks in a sandbox does not run a sandboxed Task check outside it', async () => {
