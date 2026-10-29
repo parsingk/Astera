@@ -27,6 +27,7 @@ export default defineConfig({
       'src/renderer/**/*.test.ts',
       'src/cli/**/*.test.ts',
       'src/pluginHost/**/*.test.ts',
+      'src/sandboxCheck/**/*.test.ts',
       'packages/*/src/**/*.test.ts',
       'examples/**/*.test.ts',
       'scripts/**/*.test.mjs',

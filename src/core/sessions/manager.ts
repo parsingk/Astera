@@ -19,13 +19,16 @@ import { providerOf } from '../providers/meta'
 import { codexDeveloperInstructions } from './sessionContext'
 import type { CapabilitySource } from '../extensions/capabilityCache'
 import { gatewayTokenEnv } from '../extensions/resolve'
-import { applyHiding, type HidingSource } from '../credentials/hiding'
+import { applyHiding, hiddenNames, type HidingSource } from '../credentials/hiding'
 import { isObserving } from '../audit/policy'
 import { enforceUnavailable, type EnforceStart } from '../audit/enforce'
 import type { EnforceFilesResult } from './statusline'
 import type { GitLayout } from '../sandbox/gitLayout'
 import { appServerSandboxArgs, codexSandboxEnv } from '../sandbox/codexProfile'
-import { buildCodexAppServerCommand } from './commands'
+import { buildCodexAppServerCommand, buildCodexSandboxCommand } from './commands'
+import { checkShell } from '../sandbox/checkShell'
+import { srtConfigOf, type SrtCheckRunner } from '../sandbox/srtCheck'
+import { CHECK_STARTED_MARK, type CodexCheckRunner } from '../sandbox/checkRunner'
 import { fitsOnTheLine } from '../sandbox/prepared'
 import { sandboxUnavailable } from '../sandbox/unavailable'
 import { sandboxKindOf } from '../sandbox/coverage'
@@ -132,8 +135,8 @@ export interface SpawnChecks {
 
 /** The real readiness question (windowsReadiness.ts), asked with the session's own environment: its PATH finds the codex
  *  it would start, and its CODEX_HOME (none for the ambient account) is the home asked about. Answers kept per process. */
-export const askCodexWindowsReady: CodexWindowsReady = ({ codexHome, env, log }) =>
-  codexWindowsReadiness({ codexHome, run: runCodex(env), ...(log ? { log } : {}) })
+export const askCodexWindowsReady: CodexWindowsReady = ({ codexHome, env, profile, log }) =>
+  codexWindowsReadiness({ codexHome, run: runCodex(env), ...(profile ? { profile } : {}), ...(log ? { log } : {}) })
 
 /** One resolver per process, so its cache is shared by every SessionManager in it. */
 let processGitBash: GitBashResolver | null = null
@@ -237,6 +240,12 @@ export class SessionManager {
    *  gets (core/sandbox/claudeStart.ts), shared with the chat manager. Unset, a sandboxed Claude start is refused, never
    *  started outside the sandbox. */
   claudeSandbox?: ClaudeSandboxStart
+  /** How a Task's check of a sandboxed Claude worker runs under srt on macOS and Linux (Task K, core/sandbox/srtCheck.ts):
+   *  the app's and the Host's wiring give it there. Unset, such a check is refused, never run outside the sandbox. */
+  checkRunner?: SrtCheckRunner
+  /** How a Windows Codex check runs through Astera's runner, which tells a sandbox that stopped before the check started
+   *  from a check that failed (Task K fix round 2, checkRunner.ts); the wiring gives it. Without it no such check starts. */
+  codexCheckRunner?: CodexCheckRunner
   /** The codex version question a sandboxed Codex start asks at its prepare and again at its spawn (final review I2), the
    *  one Enforce asks. Unset, a sandboxed Codex start is refused as for a version not known. */
   codexVersion?: CodexVersionProbe
@@ -299,7 +308,7 @@ export class SessionManager {
     // session's sandbox is its settings file, written now beside the one it would read anyway (after Enforce's, so the
     // twin holds both), with its version asked first; a chat chain's roll is prepared here too, and its file with them
     if (opts.sandbox === true) {
-      if (providerOf(opts.account) === 'codex') await this.prepareSandbox(opts.account, opts.cwd, opts.chat === true)
+      if (providerOf(opts.account) === 'codex') await this.prepareSandbox(opts.account, opts.cwd, opts.chat === true ? 'chat' : 'terminal')
       else if (this.claudeSandbox) await this.claudeSandbox.prepare({ accountId: opts.account.id, cwd: opts.cwd, env: this.envFor(opts.account) })
       else throw sandboxUnavailable('not-prepared')
     }
@@ -308,7 +317,7 @@ export class SessionManager {
   /** Reads the folder's git layout for a sandboxed spawn, asks on Windows whether the account's Codex home is set up, and
    *  keeps the layout beside the confirmed folders (prepareCodexSandbox, core/sandbox/prepared.ts, says what is checked
    *  and written, and in which order). */
-  private async prepareSandbox(account: Account, cwd: string, chat: boolean): Promise<void> {
+  private async prepareSandbox(account: Account, cwd: string, kind: 'terminal' | 'chat' | 'check'): Promise<void> {
     const prepared = await prepareCodexSandbox({
       accountId: account.id,
       cwd,
@@ -323,10 +332,12 @@ export class SessionManager {
       // A codex without --no-daemon (warmed above) is refused now too, for a terminal session: a chat's app-server needs
       // no such flag. The spawn still asks for itself, since its environment is built after the hiding and the codex may
       // change meanwhile. The command is built and dropped: the builder is the one place that knows whether this codex
-      // takes the flag.
-      ...(chat
+      // takes the flag. A Task's check (Task K) runs no daemon and is measured against its own command line when built.
+      ...(kind === 'chat'
         ? { check: (sandboxArgs: string[]) => fitsOnTheLine(this.checks.platform, buildCodexAppServerCommand(this.checks.platform, undefined, [], appServerSandboxArgs(sandboxArgs))) }
-        : { check: (sandboxArgs: string[]) => fitsOnTheLine(this.checks.platform, descriptorOf(this.descriptors, account).buildCommand({ sandboxArgs })) }),
+        : kind === 'terminal'
+          ? { check: (sandboxArgs: string[]) => fitsOnTheLine(this.checks.platform, descriptorOf(this.descriptors, account).buildCommand({ sandboxArgs })) }
+          : {}),
       ...(this.checks.codexExcludes ? { excludes: this.checks.codexExcludes } : {}),
       look: this.checks.linkLook,
       log: this.checks.log
@@ -334,6 +345,89 @@ export class SessionManager {
     // The other Hosts' folders beside this one's, as they were now, kept for the spawn's profile (final fix pass, part 2, B),
     // and the copy of the person's git excludes for its environment
     this.sandboxLayouts.keep(account.id, cwd, prepared.layout, this.checks.now(), prepared.otherHosts, prepared.excludesFile)
+  }
+
+  /** The environment a Task's check in `cwd` starts from (Task K, the person's Q5): `base` without what the Credentials list
+   *  hides from a session started there, as a session's own (spawn), sandboxed or not; and the names it took (hiddenNames,
+   *  fix round 2), which the check's result shows. */
+  checkEnv(base: NodeJS.ProcessEnv, cwd: string): { env: NodeJS.ProcessEnv; hidden: string[] } {
+    const env: Record<string, string | undefined> = { ...base }
+    if (!this.hiding) return { env, hidden: [] }
+    const change = this.hiding.get(cwd)
+    const hidden = hiddenNames(env, change, this.checks.platform)
+    applyHiding(env, change, this.checks.platform)
+    return { env, hidden }
+  }
+
+  /**
+   * How a Task's check `command` runs in `cwd` inside the sandbox a worker of `account` ran in (Task K): the person decided
+   * that the validation of a sandboxed Job runs inside the same kind of sandbox its workers ran in. Built from what a
+   * sandboxed session of that account in that folder gets, by the same builders, from the same environment after the
+   * Credentials list's hiding:
+   * - Codex, every OS: `codex sandbox` with the session's permission profile (sessionSandboxArgs without `-a never`),
+   *   prepared as its start is (prepareCodexSandbox: the version floor, the git layout, on Windows the account's
+   *   readiness), and the session's sandbox environment (codexSandboxEnv). On Windows the very deny list matters: Codex
+   *   resyncs a home's deny-read ACEs to each launch's list (Task K part 1). On Linux a named path through a link in the
+   *   folder makes Codex refuse every command, so the check is refused rather than failed. On Windows it runs through
+   *   Astera's runner (`codexCheckRunner`), and the check's shell says it started first (checkShell's mark): Codex's
+   *   sandbox exits 1 for its own failure as for a check's, and the runner tells them apart (fix round 2).
+   * - Claude, macOS and Linux: srt with the settings the session's twin holds (srtCheck.ts), through the runner the wiring
+   *   gives (`checkRunner`), prepared as its start is (claudeSandboxStart.prepare). Refused where srt cannot run a
+   *   command here, and where Ubuntu's AppArmor profile confines bubblewrap (every command would fail there).
+   * - Claude, Windows: no sandbox; never asked (the check runs as today, said on its result).
+   * Rejects with `SANDBOX_UNAVAILABLE: <code>` (unavailable.ts) when the sandbox cannot be put around the check (rule E5):
+   * the check is then not run. `runner`: the launch goes through Astera's check runner (srt, and Codex on Windows), which
+   * says when it could not put the check in the sandbox and takes its reason file's name out of the check's environment
+   * (fix round 4).
+   */
+  async checkLaunch(a: { account: Account; cwd: string; command: string }): Promise<{ file: string; args: string[] | string; env: Record<string, string>; runner?: true }> {
+    const platform = this.checks.platform
+    const defined = (env: Record<string, string | undefined>): Record<string, string> =>
+      Object.fromEntries(Object.entries(env).filter((e): e is [string, string] => e[1] !== undefined))
+    if (providerOf(a.account) === 'codex') {
+      if (platform === 'win32' && !this.codexCheckRunner) throw sandboxUnavailable('no-check-runner')
+      await this.prepareSandbox(a.account, a.cwd, 'check')
+      const now = this.checks.now()
+      const layout = this.sandboxLayouts.layoutOf(a.account.id, a.cwd, now)
+      if (layout === undefined) throw sandboxUnavailable('not-prepared')
+      const env = this.envFor(a.account)
+      if (this.hiding) applyHiding(env, this.hiding.get(a.cwd), platform)
+      if (platform === 'linux' && this.checks.linkLook !== null && this.codexLinksFor(layout, env, a.cwd).length > 0) {
+        this.checks.log(`sandbox: a path the check's sandbox names goes through a link in ${a.cwd}, so Codex would refuse every command; the check is refused`)
+        throw sandboxUnavailable('linked-path')
+      }
+      const profile = appServerSandboxArgs(this.codexSandboxArgsFor(layout, env, this.sandboxLayouts.otherHostsOf(a.account.id, a.cwd, now), a.cwd))
+      const mark = platform === 'win32' ? CHECK_STARTED_MARK : undefined
+      const cmd = buildCodexSandboxCommand(platform, profile, checkShell(platform, a.command, os.tmpdir(), mark))
+      fitsOnTheLine(platform, cmd)
+      Object.assign(env, codexSandboxEnv({ platform, layout, tmpDir: os.tmpdir(), env, excludesFile: this.sandboxLayouts.excludesFileOf(a.account.id, a.cwd, now) }))
+      if (platform !== 'win32' || !this.codexCheckRunner) return { file: cmd.file, args: cmd.args, env: defined(env) }
+      const runner = this.codexCheckRunner.launch(cmd)
+      fitsOnTheLine(platform, runner)
+      return { file: runner.file, args: runner.args, env: { ...defined(env), ...runner.env }, runner: true }
+    }
+    if (sandboxKindOf('claude', platform) !== 'sandbox') throw sandboxUnavailable('no-sandbox claude')
+    // A process without the runner, or without Claude's sandbox settings, cannot put a check in it; running again will not
+    // change that (fix round 2), unlike a sandbox not yet ready
+    if (!this.claudeSandbox || !this.checkRunner) throw sandboxUnavailable('no-check-runner')
+    if (platform === 'linux' && this.sandboxWarn?.claudeUsernsRestricted() === true) throw sandboxUnavailable('userns-restricted claude')
+    const missing = await this.checkRunner.missing()
+    if (missing !== null) {
+      this.checks.log(`sandbox: the sandbox runtime cannot run a check here: ${missing}`)
+      throw sandboxUnavailable('runtime-missing claude')
+    }
+    const inherited = this.envFor(a.account)
+    await this.claudeSandbox.prepare({ accountId: a.account.id, cwd: a.cwd, env: inherited })
+    const scope = this.claudeSandbox.scopeOf(a.account.id, a.cwd, inherited)
+    if (scope === undefined) throw sandboxUnavailable('not-prepared')
+    const { part, links } = this.claudeSandbox.settingsOf(scope)
+    if (links.length > 0) throw sandboxUnavailable('linked-path')
+    if (!part.sandbox) throw sandboxUnavailable('no-sandbox claude')
+    const env = { ...inherited }
+    if (this.hiding) applyHiding(env, this.hiding.get(a.cwd), platform)
+    Object.assign(env, this.claudeSandbox.env(env))
+    const runner = this.checkRunner.launch({ config: srtConfigOf(part.sandbox, { cwd: a.cwd, layout: scope.layout }), cwd: a.cwd, command: a.command })
+    return { file: runner.file, args: runner.args, env: { ...defined(env), ...runner.env }, runner: true }
   }
 
   private cwdConfirmed(cwd: string): boolean {

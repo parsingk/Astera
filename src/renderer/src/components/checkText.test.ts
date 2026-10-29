@@ -70,6 +70,11 @@ describe('checkTooltip', () => {
     expect(checkTooltip({ configId: 'c', name: 'Tests', status: 'failed' }, 'retrying', t)).toBe('Tests — jobs.convergence.check.retrying')
     expect(GLYPH.error).toBe('!')
   })
+
+  // Task K (the person's Q1): Claude Code on Windows has no sandbox, so its checks ran outside one, and the chip says so
+  it('says a check ran outside the sandbox', () => {
+    expect(checkTooltip({ configId: 'c', name: 'Tests', status: 'passed', outsideSandbox: true }, 'passed', t)).toBe('Tests — jobs.convergence.check.passed, jobs.checks.outsideSandbox')
+  })
 })
 
 describe('checkChoicesOf', () => {

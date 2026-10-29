@@ -266,6 +266,10 @@ export interface CheckResult {
   readonly externalUrl?: string
   /** A person let the round go on without this check; its status is `not-run`. */
   readonly skipped?: true
+  /** The check ran outside any sandbox though the Task's workers were sandboxed: Claude Code on Windows has none. */
+  readonly outsideSandbox?: true
+  /** The variables Astera's Credentials list kept from the check's environment, by name, never a value. */
+  readonly hiddenEnv?: readonly string[]
 }
 
 export interface ReviewIssue {
@@ -296,6 +300,9 @@ export interface Task {
   readonly validateConfigIds?: readonly string[]
   readonly checks?: readonly CheckResult[]
   readonly reviewIssues?: readonly ReviewIssue[]
+  /** Its last review ran with Claude Code's file-tool protection only: the work was sandboxed, and Claude Code has no
+   *  sandbox on Windows, so the reviewer's shell ran outside one. */
+  readonly reviewFileToolsOnly?: true
   /** A person's decision to pass the Task over its checks. */
   readonly completionOverride?: { readonly reason: string; readonly at: string }
   readonly consecutiveFailures: number
@@ -401,6 +408,8 @@ export interface CompletionCheckDetail {
   readonly diagnosticsTotal?: number
   readonly externalUrl?: string
   readonly skipped?: true
+  readonly outsideSandbox?: true
+  readonly hiddenEnv?: readonly string[]
 }
 
 export interface CompletionDetail {
@@ -410,6 +419,7 @@ export interface CompletionDetail {
   readonly otherIssueCount: number
   readonly suspiciousFiles: readonly string[]
   readonly policyChanged: boolean
+  readonly reviewFileToolsOnly?: true
 }
 
 export interface TaskCompletion {

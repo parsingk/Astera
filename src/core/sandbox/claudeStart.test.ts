@@ -120,7 +120,8 @@ describe('claudeSandboxStart', () => {
     )
     const files = {
       ensureSandboxFiles: async (scope: SandboxScope) => (order.push('files'), scopes.push(scope), o.files ?? ('ok' as const)),
-      sandboxChatArgs: (enforce: boolean, scope: SandboxScope) => (chatAsked.push({ enforce, scope }), ['--settings', enforce ? 'E.json' : 'S.json'])
+      sandboxChatArgs: (enforce: boolean, scope: SandboxScope) => (chatAsked.push({ enforce, scope }), ['--settings', enforce ? 'E.json' : 'S.json']),
+      sandboxPartOf: () => ({ part: { permissions: { deny: [] } }, links: [] })
     }
     const env = { HOME: home, GIT_CONFIG_GLOBAL: '/somewhere/.gitconfig' }
     const logged: string[] = []

@@ -5,7 +5,7 @@
 // capability cache both managers read, so the two managers of a process hold one PreparedLayouts.
 import { ensureGitFiles, ensureWorktreeConfigFiles, gitLayoutOf, type GitLayout } from './gitLayout'
 import { appKeyDenies, appKeyEntries, credentialStoreDenies, credentialStoreEntries, hostSocketDenies, namedPaths, otherHostFolders, sensitiveEntries, sensitiveLocations, type DenyEntry, type LinkLook } from './locations'
-import { codexSandboxArgs } from './codexProfile'
+import { appServerSandboxArgs, codexSandboxArgs } from './codexProfile'
 import type { CodexExcludes } from './gitExcludes'
 import { SANDBOX_UNAVAILABLE, sandboxUnavailable } from './unavailable'
 import type { Readiness } from './windowsReadiness'
@@ -42,8 +42,16 @@ export const codexVersionBlocker = (probe: CodexVersionProbe | undefined): strin
 export const PREPARED_MS = 60_000
 
 /** Whether an account's Codex home has its Windows sandbox set up (windowsReadiness.ts), asked with the environment the
- *  session would start with; `log` says which way Codex could not be asked, when it could not. */
-export type CodexWindowsReady = (a: { codexHome: string | null; env: Record<string, string | undefined>; log?: (m: string) => void }) => Promise<Readiness>
+ *  session would start with; `log` says which way Codex could not be asked, when it could not. `profile` is what the
+ *  sandboxed echo runs under (Task K part 1): the `-c` values of the permission profile the account's sessions get, with
+ *  their very deny list (prepareCodexSandbox). Codex resyncs a home's deny-read ACEs to each launch's list, so an echo
+ *  under another one would lift the running sessions' denials; without it the echo is not run. */
+export type CodexWindowsReady = (a: {
+  codexHome: string | null
+  env: Record<string, string | undefined>
+  profile?: readonly string[]
+  log?: (m: string) => void
+}) => Promise<Readiness>
 
 /** The layouts sandboxed prepares read, by account and folder: readiness is the account's, so one account's prepare never
  *  lets another account's spawn through in the same folder. A Codex prepare keeps beside its layout the other Hosts'
@@ -228,6 +236,17 @@ export function sessionSandboxArgs(o: {
   return codexSandboxArgs({ platform, layout, denied, readOnly })
 }
 
+/** The `-c` values the Windows readiness echo runs under (Task K part 1): the session's permission profile with the same
+ *  deny list and read-only folders, named for the session's folder exactly as sessionSandboxArgs names them, and without
+ *  its repository's git entries. The echo runs in the temp folder (windowsReadiness.ts runCodex), and grants that
+ *  repository nothing. Codex resyncs a home's deny-read ACEs to each launch's list (identity.rs:267-311,
+ *  deny_read_state.rs:22-68 at rust-v0.160.0), so a list that differed would lift the sessions' denials. Called after
+ *  sessionSandboxArgs, whose refusals it does not repeat. */
+export function codexEchoArgs(o: Omit<Parameters<typeof sessionSandboxArgs>[0], 'log'>): string[] {
+  const { denied, readOnly } = codexNamedEntries(o)
+  return appServerSandboxArgs(codexSandboxArgs({ platform: o.platform, layout: null, denied, readOnly }))
+}
+
 /** What a sandboxed Codex prepare hands its caller to keep for the spawn (PreparedLayouts.keep): the folder's git layout
  *  (null outside a repository), the other Hosts' socket folders found beside this profile's, and on Windows the copy of
  *  the person's git excludes it wrote (null when none was). */
@@ -311,7 +330,19 @@ export async function prepareCodexSandbox(o: {
   })
   o.check?.(args)
   if (o.platform === 'win32') {
-    const verdict: Readiness = o.ready ? await o.ready({ codexHome: o.env.CODEX_HOME ?? null, env: o.env, log: o.log }) : 'not-set-up'
+    // The echo's profile (Task K part 1): the session's deny list and read-only folders, named exactly as for the session
+    const profile = codexEchoArgs({
+      platform: o.platform,
+      homeDir: o.homeDir,
+      layout,
+      env: o.env,
+      hostSocketDir: o.hostSocketDir ?? null,
+      otherHostDirs: otherHosts,
+      appKeyFile: o.appKeyFile ?? null,
+      readOnly: o.readOnly ?? [],
+      links: o.look ? { cwd: o.cwd, look: o.look } : null
+    })
+    const verdict: Readiness = o.ready ? await o.ready({ codexHome: o.env.CODEX_HOME ?? null, env: o.env, profile, log: o.log }) : 'not-set-up'
     // Codex could not be asked: setting the account up would not help, so no setup is offered for it
     if (verdict === 'check-failed') throw sandboxUnavailable(`windows-check-failed codex ${o.accountId}`)
     if (verdict !== 'ready') {

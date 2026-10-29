@@ -27,7 +27,11 @@ export default defineConfig({
           index: 'src/main/index.ts',
           cli: 'src/cli/index.ts',
           host: 'src/host/index.ts',
-          'plugin-host': 'src/pluginHost/index.ts'
+          'plugin-host': 'src/pluginHost/index.ts',
+          // Astera's check runner (Task K), run by the app's or the Host's own executable as node: a sandboxed Claude Task's
+          // check under srt on macOS and Linux (core/sandbox/srtCheck.ts), and a sandboxed Codex Task's check on Windows
+          // (core/sandbox/checkRunner.ts), which the Windows Host runs from its runtime's copy (scripts/host-runtime.mjs)
+          'sandbox-check': 'src/sandboxCheck/index.ts'
         }
       }
     }

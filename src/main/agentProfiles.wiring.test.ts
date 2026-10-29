@@ -185,13 +185,14 @@ describe('the app records the conversation a profiled session is on, and reads i
 describe('ipc.ts takes the sandbox from the profile, or from a sandboxed session’s work', () => {
   const body = between('  async function spawnSession(opts: any)', "ipcMain.handle('sessions.spawn'")
   it('drops a caller’s sandbox before the profile is read, and refuses a forced one where the CLI has none', () => {
-    expect(body).toMatch(/const \{ sandbox: _callerSandbox, forceSandbox: _forced, \.\.\.withoutSandbox \} = opts/)
+    // Task K fix round 1: a reviewer's allowance of deny rules only is dropped with them, never taken from the caller
+    expect(body).toMatch(/const \{ sandbox: _callerSandbox, forceSandbox: _forced, forceSandboxDenyOnly: _denyOnly, \.\.\.withoutSandbox \} = opts/)
     expect(before(body, 'withoutSandbox', 'appProfileSpawn(')).toBe(true)
     expect(body).toMatch(/forcedSandboxBlocker\(providerOf\(account\), process\.platform\)/)
     expect(body).toMatch(/if \(forceSandbox\) opts = \{ \.\.\.opts, sandbox: true \}/)
   })
   it('the renderer cannot ask for a forced one', () => {
-    expect(src).toMatch(/ipcMain\.handle\('sessions\.spawn', async \(_e, opts\) => spawnSession\(\{ \.\.\.opts, forceSandbox: undefined \}\)\)/)
+    expect(src).toMatch(/ipcMain\.handle\('sessions\.spawn', async \(_e, opts\) => spawnSession\(\{ \.\.\.opts, forceSandbox: undefined, forceSandboxDenyOnly: undefined \}\)\)/)
   })
   it('a worker and a coordinator of a sandboxed session’s work are started with forceSandbox', () => {
     const worker = between('      spawnSession: async (o) => {', "send('session:created', info)")

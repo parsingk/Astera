@@ -12,7 +12,10 @@ import { createTaskValidation, type ValidationContext } from './validation'
 import { applyWorkerDone, createJob, createTask, emptyState, openDispatch, startJobRun, type OrchState } from '../state'
 import { CHECK_TIMEOUT_MS, type CheckResult } from '../types'
 import type { StartOpts } from '../../run/runManager'
+import type { RunConfig } from '../../run/config'
 import type { CompletionCheckInput, PluginCheckAnswer } from '../pluginChecks'
+import { t } from '../../i18n'
+import { CHECK_REASON_ENV, SANDBOX_FAILED_EXIT_CODE, sandboxFailedOutput } from '../../sandbox/checkRunner'
 
 const NOW = '2026-09-24T00:00:00.000Z'
 const unwrap = <T>(r: { ok: boolean } & Record<string, unknown>): { state: OrchState; value: T } => {
@@ -44,6 +47,17 @@ interface RigOpts {
   pluginCheck?: (plugin: string, input: CompletionCheckInput) => Promise<PluginCheckAnswer>
   /** The Host command a round reaching github:ci calls (GitHub lifecycle G3a); absent when left out. */
   lifecycleCiBegin?: ValidationContext['lifecycleCiBegin']
+  /** The kind the rig's attempt ran in (Task K), and its CLI ('claude' when left out) */
+  sandboxKind?: 'sandbox' | 'deny-only'
+  provider?: 'claude' | 'codex'
+  /** The saved configurations of the project; none when left out */
+  stored?: RunConfig[]
+  /** ValidationContext's checkEnv and sandboxedCheck (Task K); absent when left out */
+  checkEnv?: ValidationContext['checkEnv']
+  accountName?: ValidationContext['accountName']
+  sandboxedCheck?: ValidationContext['sandboxedCheck']
+  /** What every run printed; nothing when left out */
+  output?: string
 }
 
 function rig(o: RigOpts = {}) {
@@ -99,6 +113,10 @@ function rig(o: RigOpts = {}) {
   ).state
   const taskId = t.value.id
   if (state.tasks.find((x) => x.id === taskId)?.status !== 'validating') throw new Error('rig: not validating')
+  if (o.sandboxKind || o.provider) {
+    const kind = o.sandboxKind ? { sandboxKind: o.sandboxKind } : {}
+    state = { ...state, dispatches: state.dispatches.map((x) => (x.id === d.value.id ? { ...x, ...kind, provider: o.provider ?? x.provider } : x)) }
+  }
   if (o.checkResume) {
     const checkResume = { ...o.checkResume, dispatchId: o.checkResume.dispatchId ?? d.value.id }
     state = { ...state, tasks: state.tasks.map((x) => (x.id === taskId ? { ...x, checkResume } : x)) }
@@ -121,7 +139,7 @@ function rig(o: RigOpts = {}) {
     lang: () => 'en',
     log: (m) => logs.push(m),
     assertAllowedPath: o.guard ?? (async (p) => p),
-    storedConfigs: () => [],
+    storedConfigs: () => o.stored ?? [],
     runs: {
       start: (opts) => {
         startedOpts.push(opts)
@@ -130,7 +148,7 @@ function rig(o: RigOpts = {}) {
         if (code !== undefined) queueMicrotask(() => validation.validator.onRunExit({ runId, exitCode: code }))
         return { runId }
       },
-      recentOutput: () => '',
+      recentOutput: () => o.output ?? '',
       stop: () => {
         stops++
         if (o.stopThrows) throw new Error('pty already gone')
@@ -145,7 +163,10 @@ function rig(o: RigOpts = {}) {
       pluginAsks.push({ plugin, input })
       return o.pluginCheck ? o.pluginCheck(plugin, input) : { name: plugin.toUpperCase(), status: 'passed', summary: 'passed' }
     },
-    ...(o.lifecycleCiBegin ? { lifecycleCiBegin: o.lifecycleCiBegin } : {})
+    ...(o.lifecycleCiBegin ? { lifecycleCiBegin: o.lifecycleCiBegin } : {}),
+    ...(o.checkEnv ? { checkEnv: o.checkEnv } : {}),
+    ...(o.accountName ? { accountName: o.accountName } : {}),
+    ...(o.sandboxedCheck ? { sandboxedCheck: o.sandboxedCheck } : {})
   }
   const validation = createTaskValidation(ctx)
 
@@ -681,5 +702,206 @@ describe('createTaskValidation — a lifecycle round that is no longer needed', 
     expect(w.begun).toEqual([])
     expect(w.state().gates).toEqual([])
     expect(w.validation.validator.holds('tsk_l')).toBe(false)
+  })
+})
+
+// Task K: the checks of a Task whose workers ran sandboxed run inside the same kind of sandbox, under the worker's CLI and
+// account (the wiring builds the launch from the session manager's own builders); every check starts from the environment
+// the Credentials list's hiding leaves (Q5); a sandbox that cannot be put around a check is a question to a person, never a
+// silent run outside it nor the code's failure (E5); a Docker check of a sandboxed Task is refused (Q4); and Claude Code
+// on Windows, which has no sandbox, runs its checks as today and says so (Q1).
+describe('createTaskValidation — the sandbox of a sandboxed Task (Task K)', () => {
+  const hidden = (cwd: string): NodeJS.ProcessEnv => ({ PATH: '/bin', HIDDEN_FOR: cwd })
+  /** ValidationContext.checkEnv: the hidden environment, and the names the hiding took from it (fix round 2) */
+  const hiding = (cwd: string): { env: NodeJS.ProcessEnv; hidden: string[] } => ({ env: hidden(cwd), hidden: ['NPM_TOKEN', 'KUBECONFIG'] })
+
+  it('starts the check of a sandboxed attempt in its sandbox, as its CLI and account, from the hidden environment', async () => {
+    const asked: Parameters<NonNullable<ValidationContext['sandboxedCheck']>>[0][] = []
+    const h = rig({
+      sandboxKind: 'sandbox',
+      provider: 'codex',
+      checkEnv: hiding,
+      sandboxedCheck: async (a) => (asked.push(a), { launch: { file: 'codex', args: ['sandbox', '--', 'sh', '-c', a.command] }, env: { ...a.env, BOXED: '1' } })
+    })
+    h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    const opts = await h.started()
+    expect(asked).toEqual([{ provider: 'codex', accountId: 'accA', cwd: h.cwd, command: opts.command, env: hidden(h.cwd) }])
+    expect(opts.launch).toEqual({ file: 'codex', args: ['sandbox', '--', 'sh', '-c', opts.command] })
+    // Fix round 4 (R1): `codex sandbox` straight in its pty (macOS and Linux) hands its environment to the check, so the
+    // runner's reason file is not named there
+    expect(opts.env).toEqual({ ...hidden(h.cwd), BOXED: '1' })
+    expect(opts.validation).toBe(true)
+    await h.finish(0)
+    expect(h.task().status).toBe('completed')
+    expect(h.task().checks?.[0]).not.toHaveProperty('outsideSandbox')
+    // Fix round 2: the result says which names the check started without, never their values
+    expect(h.task().checks?.[0]).toMatchObject({ hiddenEnv: ['NPM_TOKEN', 'KUBECONFIG'] })
+  })
+
+  // Fix rounds 3 and 4: a launch through Astera's check runner is named the file it keeps its reason in, should it not put
+  // the check in the sandbox; the runner takes the name out of the check's environment (src/sandboxCheck/index.ts)
+  it('names the reason file only to a launch through the runner', async () => {
+    const h = rig({
+      sandboxKind: 'sandbox',
+      provider: 'codex',
+      checkEnv: hiding,
+      sandboxedCheck: async (a) => ({ launch: { file: 'Astera.exe', args: ['sandbox-check.js', '--codex', 'codex.exe'] }, env: { ...a.env }, runner: true })
+    })
+    h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    const opts = await h.started()
+    expect(opts.env).toEqual({ ...hidden(h.cwd), [CHECK_REASON_ENV]: expect.stringMatching(/astera-checks[\\/]failed-[\w-]+\.txt$/) })
+    await h.finish(0)
+  })
+
+  it('a sandbox that cannot be put around the check asks a person and runs nothing (E5)', async () => {
+    const why = 'the Windows sandbox of account accA is not set up'
+    const answers: NonNullable<ValidationContext['sandboxedCheck']>[] = [async () => ({ unavailable: why }), async () => Promise.reject(new Error(why))]
+    for (const sandboxedCheck of answers) {
+      const h = rig({ sandboxKind: 'sandbox', provider: 'codex', checkEnv: hiding, sandboxedCheck })
+      h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
+      await vi.waitFor(() => expect(h.task().status).toBe('blocked'))
+      expect(h.runsStarted()).toBe(0)
+      const gate = h.state().gates.find((g) => g.taskId === h.taskId && g.status === 'open')
+      expect(gate?.kind).toBe('check-unavailable')
+      expect(gate?.question).toContain(why)
+      expect(h.task().checks?.[0]).toMatchObject({ status: 'error', summary: why })
+    }
+  })
+
+  // Fix round 2: in a check's words, for the question it opens (run the checks again, go on without it, mark the Task
+  // failed), naming the account and where its sandbox is set up, rather than a start's words with a Set up it lacks
+  it("a sandbox refusal reads in a check's words, naming the account and where to set it up", async () => {
+    const named = rig({
+      sandboxKind: 'sandbox',
+      provider: 'codex',
+      accountName: async (id) => (id === 'accA' ? 'Work' : null),
+      sandboxedCheck: async () => Promise.reject(new Error('SANDBOX_UNAVAILABLE: windows-setup codex accA'))
+    })
+    named.validation.startValidation({ taskId: named.taskId, cwd: named.cwd })
+    await vi.waitFor(() => expect(named.task().status).toBe('blocked'))
+    expect(named.task().checks?.[0]?.summary).toBe(t('en', 'jobs.checks.sandbox.windowsSetup', { account: 'Work' }))
+    expect(named.task().checks?.[0]?.summary).toContain('Settings › Agent profiles')
+    // A process that cannot name it says its id
+    const bare = rig({ sandboxKind: 'sandbox', provider: 'codex', sandboxedCheck: async () => Promise.reject(new Error('SANDBOX_UNAVAILABLE: windows-setup codex accA')) })
+    bare.validation.startValidation({ taskId: bare.taskId, cwd: bare.cwd })
+    await vi.waitFor(() => expect(bare.task().status).toBe('blocked'))
+    expect(bare.task().checks?.[0]?.summary).toBe(t('en', 'jobs.checks.sandbox.windowsSetup', { account: 'accA' }))
+  })
+
+  // Fix round 2: a failed check names what it started without, so a failure for a hidden token reads as that; a check the
+  // hiding took nothing from says nothing
+  it('a failed check names the variables the Credentials list kept from it, and one it took nothing from says none', async () => {
+    const failed = rig({ checkEnv: hiding })
+    failed.validation.startValidation({ taskId: failed.taskId, cwd: failed.cwd })
+    await failed.started()
+    await failed.finish(1)
+    expect(failed.task().checks?.[0]).toMatchObject({ status: 'failed', hiddenEnv: ['NPM_TOKEN', 'KUBECONFIG'] })
+    const none = rig({ checkEnv: (cwd) => ({ env: hidden(cwd), hidden: [] }) })
+    none.validation.startValidation({ taskId: none.taskId, cwd: none.cwd })
+    await none.started()
+    await none.finish(1)
+    expect(none.task().checks?.[0]).not.toHaveProperty('hiddenEnv')
+  })
+
+  // Fix round 2 (M1): a sandbox that stopped before the check started, which Astera's runner says with its own exit code
+  // and its own last line (checkRunner.ts), is a question to a person, never the code's failure and no repair; a check that
+  // ran and failed stays a failure, and only a run that went through the runner is read that way
+  it('a sandbox that stopped before the check started asks a person; a check that ran and failed stays a failure', async () => {
+    const detail = 'codex sandbox stopped with exit code 1 before the check started: windows sandbox failed: 1314'
+    const boxed = async () => ({ launch: { file: 'Astera.exe', args: ['sandbox-check.js', '--codex', 'codex.exe'] }, env: {}, runner: true as const })
+    // Fix round 3 (N1): the reason comes from the file the runner was named, not from the output ConPTY may glue or
+    // break; the output only has to end with the runner's mark
+    const printed = `windows sandbox failed: 1314${sandboxFailedOutput(detail)}`
+    const stopped = rig({ sandboxKind: 'sandbox', provider: 'codex', sandboxedCheck: boxed, output: printed })
+    stopped.validation.startValidation({ taskId: stopped.taskId, cwd: stopped.cwd })
+    const file = (await stopped.started()).env?.[CHECK_REASON_ENV]
+    expect(file).toBeTruthy()
+    fs.mkdirSync(path.dirname(file!), { recursive: true })
+    fs.writeFileSync(file!, detail)
+    await stopped.finish(SANDBOX_FAILED_EXIT_CODE)
+    expect(stopped.task().status).toBe('blocked')
+    expect(stopped.task().checks?.[0]).toMatchObject({ status: 'error', summary: t('en', 'jobs.checks.sandbox.failed', { detail }) })
+    // N4: the words send the person to the output kept with the check, so it is kept
+    expect(stopped.task().checks?.[0]?.outputTail).toBe(printed)
+    expect(fs.existsSync(file!)).toBe(false)
+    expect(stopped.state().gates.find((g) => g.taskId === stopped.taskId && g.status === 'open')?.kind).toBe('check-unavailable')
+    expect(stopped.startRepair).not.toHaveBeenCalled()
+    // A reason the runner could not keep: the mark still reads the case, in words that name no reason
+    const unsaid = rig({ sandboxKind: 'sandbox', provider: 'codex', sandboxedCheck: boxed, output: printed })
+    unsaid.validation.startValidation({ taskId: unsaid.taskId, cwd: unsaid.cwd })
+    await unsaid.started()
+    await unsaid.finish(SANDBOX_FAILED_EXIT_CODE)
+    expect(unsaid.task().checks?.[0]).toMatchObject({ status: 'error', summary: t('en', 'jobs.checks.sandbox.failedNoReason') })
+    // The check's own exit code without the runner's line: the check's failure
+    const own = rig({ sandboxKind: 'sandbox', provider: 'codex', sandboxedCheck: boxed, output: 'FAIL src/a.test.ts\r\n' })
+    own.validation.startValidation({ taskId: own.taskId, cwd: own.cwd })
+    await own.started()
+    await own.finish(SANDBOX_FAILED_EXIT_CODE)
+    expect(own.task().checks?.[0]).toMatchObject({ status: 'failed', exitCode: SANDBOX_FAILED_EXIT_CODE })
+    // A `codex sandbox` straight in its pty (macOS and Linux) never went through the runner either (fix round 4, R1)
+    const direct = rig({ sandboxKind: 'sandbox', provider: 'codex', sandboxedCheck: async () => ({ launch: { file: 'codex', args: ['sandbox'] }, env: {} }), output: printed })
+    direct.validation.startValidation({ taskId: direct.taskId, cwd: direct.cwd })
+    await direct.started()
+    await direct.finish(SANDBOX_FAILED_EXIT_CODE)
+    expect(direct.task().checks?.[0]).toMatchObject({ status: 'failed' })
+    // A run outside any sandbox never went through the runner: whatever it printed, its exit is its own
+    const plain = rig({ output: sandboxFailedOutput(detail) })
+    plain.validation.startValidation({ taskId: plain.taskId, cwd: plain.cwd })
+    await plain.started()
+    await plain.finish(SANDBOX_FAILED_EXIT_CODE)
+    expect(plain.task().checks?.[0]).toMatchObject({ status: 'failed' })
+  })
+
+  it('a process that cannot put checks in a sandbox does not run a sandboxed Task check outside it', async () => {
+    const h = rig({ sandboxKind: 'sandbox', provider: 'codex' })
+    h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    await vi.waitFor(() => expect(h.task().status).toBe('blocked'))
+    expect(h.runsStarted()).toBe(0)
+    expect(h.task().checks?.[0]?.status).toBe('error')
+  })
+
+  it('refuses a Docker check of a sandboxed Task with a plain reason (Q4)', async () => {
+    const docker = [
+      { id: 'up', name: 'compose up', type: 'compose', action: 'up' },
+      { id: 'img', name: 'image', type: 'dockerfile', imageTag: 'x' }
+    ] as unknown as RunConfig[]
+    for (const id of ['up', 'img']) {
+      const sandboxedCheck = vi.fn(async () => ({ launch: { file: 'codex', args: [] as string[] }, env: {} }))
+      const h = rig({ sandboxKind: 'sandbox', provider: 'codex', stored: docker, checks: [id], sandboxedCheck })
+      h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
+      await vi.waitFor(() => expect(h.task().status).toBe('blocked'))
+      expect(h.runsStarted()).toBe(0)
+      expect(sandboxedCheck).not.toHaveBeenCalled()
+      expect(h.task().checks?.[0]?.summary).toMatch(/Docker/)
+    }
+    // An unsandboxed Task runs it as before
+    const plain = rig({ stored: docker, checks: ['up'] })
+    plain.validation.startValidation({ taskId: plain.taskId, cwd: plain.cwd })
+    expect((await plain.started()).command).toContain('docker compose')
+    await plain.finish(0)
+  })
+
+  it('Claude Code on Windows: runs the check as today, from the hidden environment, and says it ran outside the sandbox (Q1)', async () => {
+    const sandboxedCheck = vi.fn(async () => ({ unavailable: 'never asked' }))
+    const h = rig({ sandboxKind: 'deny-only', checkEnv: hiding, sandboxedCheck })
+    h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    const opts = await h.started()
+    expect(opts.launch).toBeUndefined()
+    expect(opts.env).toEqual(hidden(h.cwd))
+    await h.finish(0)
+    expect(sandboxedCheck).not.toHaveBeenCalled()
+    expect(h.task().status).toBe('completed')
+    expect(h.task().checks?.[0]).toMatchObject({ status: 'passed', outsideSandbox: true })
+  })
+
+  it('an unsandboxed Task check starts from the hidden environment too (Q5), and is not marked', async () => {
+    const h = rig({ checkEnv: hiding })
+    h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    const opts = await h.started()
+    expect(opts.launch).toBeUndefined()
+    expect(opts.env).toEqual(hidden(h.cwd))
+    await h.finish(0)
+    expect(h.task().checks?.[0]).not.toHaveProperty('outsideSandbox')
+    expect(h.task().checks?.[0]).toMatchObject({ hiddenEnv: ['NPM_TOKEN', 'KUBECONFIG'] })
   })
 })

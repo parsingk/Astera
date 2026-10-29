@@ -19,6 +19,14 @@ is the guide.
 - A session's `sandboxed` and `sandboxKind` (the Astera that ships the sandbox or later; an older one leaves them out):
   whether it runs in its agent CLI's own sandbox, and what protection that is, `sandbox`, or `deny-only` for Claude
   Code on Windows, where only its deny rules hold.
+- A check's `outsideSandbox` (the Astera that runs a sandboxed Task's checks in its sandbox or later; an older one leaves
+  it out): the check ran outside any sandbox though the Task's workers were sandboxed, as Claude Code on Windows has
+  none. A sandboxed Task's other checks run inside its workers' sandbox, and one that cannot be put there is `error`.
+- A Task's `reviewFileToolsOnly`, and the same on its completion detail (the same Astera; an older one leaves it out):
+  its last review ran with Claude Code's file-tool protection only, since an agent profile's switch sandboxed the work
+  and Claude Code has no sandbox on Windows.
+- A check's `hiddenEnv` (the same Astera; an older one leaves it out): the variables Astera's Credentials list kept from
+  the check's environment, by name, never a value.
 - Token totals (the Astera that ships observe mode or later; an older one leaves them out): `runs.get` carries `tokens`,
   what the Run's Tasks' sessions spent, and `coordinatorTokens`, what its coordinator spent, apart; `tasks.get` carries
   the Task's `tokens`. Each is a `TokenTotals` (`input`, `output`, `total`), absent when the Host read none. No cost in

@@ -1163,6 +1163,12 @@ sandbox's own account, which cannot read the person's home, so its git reads a c
 that Astera writes in the temp folder. Claude Code has no sandbox on
 Windows: there the switch only keeps its file tools, not its shell, out of those folders and from changing the profile
 folder, and npm keeps its own cache.
+A command the person types in a Claude session with the `!` prefix usually runs outside Claude Code's sandbox; the agent's own
+commands run inside it. Claude Code's sandboxing docs (https://code.claude.com/docs/en/sandboxing, "What runs outside the
+sandbox" and "Turn off the retry with strict sandbox mode") say a command you enter at the `!` shell-mode prompt "runs
+unsandboxed in most sessions", and name the sessions where it is sandboxed: "A background session: strict sandbox mode covers
+shell-mode commands too" and "A Linux session with `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` set: every command runs sandboxed,
+shell-mode commands included". Seen on a Mac, 2026-10-29: a profile folder write typed with `!` succeeded.
 What a sandboxed session starts runs in the sandbox too, whatever profile it names: a session it makes with `sessions
 create`, a Job it makes (its coordinator and every worker), a Task it adds to any Job and a worker it starts with
 `worker-start`. Where that CLI has no sandbox (Claude Code on Windows) such a start is refused with
@@ -1178,13 +1184,57 @@ or started. A message or a question in a run (`send`, `ask`) is open to a worker
 Astera started for it; from any other sandboxed session it is refused with `outside-sandbox job <id>` unless the
 run's Job is a sandboxed session's. A sandboxed target is not refused, and a worker's `send` and `ask` in its own run
 stay open whoever its coordinator is.
+A Task's checks (`--validate`) run in the same kind of sandbox its workers ran in, since they run the files the workers
+edited (a package script, a test, a build file). The kind is the one each attempt's session actually started with, kept
+on its Dispatch; a lifecycle Task's merged check follows the latest sandboxed worker Dispatch of its Run (a reviewer's
+never counts). A Codex worker's check
+runs as `codex sandbox` with the session's own permission profile, as that account; a Claude Code worker's, on macOS and
+Linux, under the sandbox runtime Claude Code builds its sandbox on (`@anthropic-ai/sandbox-runtime` 0.0.79, through
+Astera's own runner, network allowed as in the session). A check whose sandbox cannot be put around it (the account's
+Windows sandbox not set up, the runtime missing a tool, Ubuntu's AppArmor profile for bubblewrap) is not run outside it
+and is not the code's failure: the Task asks a person (retry, skip the check, or mark the Task failed), saying why in a
+check's words and what can be done there (for an account whose Windows sandbox is not set up, Set up beside it under a
+sandboxed profile in Settings › Agent profiles, then retry; for a path no sandbox can carry, that retrying will not
+help). A sandbox that stops before the check starts is such a question too, not the code's failure: Astera's check
+runner says so with its own exit code, 125, and its own short mark, `astera-sandbox-failed`, as the very last thing it
+prints, after a line with its reason for whoever reads the run. It also writes the reason to a file Astera named for the
+run, which the question quotes; on Windows the run's output passes through the console, which can glue a long line to
+the one before it or break it where it wraps, so only the mark is read from the output. The check's output is kept with
+its result. A Claude Code check under the sandbox runtime runs through that runner,
+and so does a Codex check on Windows, whose shell first prints a line of its own so the runner knows the check started
+(`codex sandbox` there exits 1 for its own failure as for a check's). A Codex check on macOS and Linux runs straight in
+its terminal as before, so a sandbox that stops there still reads as the check's failure. A check that ran and failed
+is a failure. A Docker check
+(`compose`, `dockerfile`) of a sandboxed Task is refused that way too, since Docker reaches past any of these sandboxes.
+Claude Code on Windows has no sandbox, so its checks run as before and say `validated outside the sandbox`. Every check,
+sandboxed or not, starts without the variables the Credentials list hides from a session in its folder, and its result
+names them (`hiddenEnv`: names only, never a value), which the completion block shows under a failed check; a check that
+timed out twice opens a question whose words name them. A value a check needs can be given on purpose in its run
+configuration's `env`, which is laid over that environment; inside `codex sandbox` the account's
+`shell_environment_policy` still decides what reaches the command, as it does for a session's commands. A reviewer of
+such a Task works in the implementer's tree and starts in its own CLI's sandbox too. A Claude Code reviewer on Windows,
+which has none, depends on what put the work in the sandbox. For work a profile's sandbox switch sandboxed, it starts
+as a sandboxed profile's Claude Code session does there, with its file tools kept out of the login folders and its
+shell unrestricted, and the Task's `reviewFileToolsOnly` (and its completion block) says the review ran with file-tool
+protection only. For a Job or Task a sandboxed session made, it is refused with `SANDBOX_UNAVAILABLE: no-sandbox
+claude`, as every start of such work is there, and the review asks a person. The packaged app keeps the sandbox runtime's helpers (its Linux seccomp
+loader, its JVM proxy agent) out of `app.asar`, and Astera hands srt their unpacked paths.
 On Windows the Codex sandbox is Codex's elevated one, which keeps Credential Manager out, and the repository is named a
 safe directory for the account it runs as; a repository, a home folder or one of Astera's own folders whose path holds
 a character cmd.exe reads as syntax (`" & | < > ^ %`) cannot be carried to it. Each Codex account's home must have the
 elevated sandbox set up once (Codex's `codex sandbox setup --elevated --current-user`, which brings up Windows'
 administrator prompt): Astera asks
 before a sandboxed start, Codex's `doctor --json` first and then, only on a home doctor calls complete, an echo through
-the sandbox (on a home with no setup the echo would start the setup and its prompt), and the app offers to set up the
+the sandbox (on a home with no setup the echo would start the setup and its prompt). The echo runs under the same
+permission profile and deny list the account's sandboxed sessions get: Codex keeps a home's read denials across runs and
+sets them to each run's list, so an echo under another list would lift what the account's running sessions are denied.
+Astera cannot hold that for a launch it does not make: the setup records the elevated sandbox as the home's default
+(`windows.sandbox = "elevated"` in its `config.toml`), so a Codex session of that home that is not one of Astera's
+sandboxed sessions yet still runs its commands in Codex's sandbox (an Astera tab with YOLO off, your own `codex`, with no
+bypass flag and no config turning the sandbox off) runs each command in the elevated sandbox under its own profile's
+deny list, usually empty, and so lifts the read denials Codex keeps for the sandbox's machine-wide group on that home's
+paths, the same paths other homes' sandboxed sessions are denied, until those sessions' next command sets them again.
+The app offers to set up the
 one account a start was refused for. A ready answer is kept until Astera restarts or a setup runs through it, so a home
 made stale by a setup outside Astera keeps reading ready until then. Settings › Agent profiles also shows, under a
 sandboxed profile on Windows, whether each of its Codex accounts is set up, asked of Codex's doctor alone (no sandboxed

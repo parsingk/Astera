@@ -226,7 +226,8 @@ function jobTaskOf(
             ...(c.exitCode !== undefined ? { exitCode: c.exitCode } : {}),
             ...(c.startedAt && c.endedAt ? { durationMs: Date.parse(c.endedAt) - Date.parse(c.startedAt) } : {}),
             ...(c.unstable ? { unstable: true as const } : {}),
-            ...(c.skipped ? { skipped: true as const } : {})
+            ...(c.skipped ? { skipped: true as const } : {}),
+            ...(c.outsideSandbox ? { outsideSandbox: true as const } : {})
           }))
         }
       : {}),

@@ -1982,6 +1982,20 @@ describe('applyReviewResult', () => {
     return { s: opened.state, taskId, reviewDispatchId: opened.value.id }
   }
 
+  // Task K fix round 1: a reviewer of sandboxed work that ran as Claude Code on Windows had its file tools kept out of the
+  // login folders and nothing more (E2): the Task's record says so, as a check's "validated outside the sandbox" does; a
+  // later review that ran in a sandbox, or none at all, clears it
+  it('records on the Task that its review ran with file-tool protection only, and a later review clears it', () => {
+    for (const [kind, marked] of [['deny-only', true], ['sandbox', false], [undefined, false]] as const) {
+      const { s, taskId, reviewDispatchId } = reviewDispatched({ reviewFileToolsOnly: true })
+      const ran = { ...s, dispatches: s.dispatches.map((d) => (d.id === reviewDispatchId && kind ? { ...d, sandboxKind: kind } : d)) }
+      const r = unwrap(applyReviewResult(ran, { taskId, dispatchId: reviewDispatchId, outcome: 'succeeded', subject: 's', body: 'ok' }, NOW) as never)
+      const t = r.state.tasks.find((x) => x.id === taskId)!
+      if (marked) expect(t.reviewFileToolsOnly, String(kind)).toBe(true)
+      else expect(t, String(kind)).not.toHaveProperty('reviewFileToolsOnly')
+    }
+  })
+
   it('통과하면 completed 로 가고 카운터가 0 이 된다', () => {
     const { s, taskId, reviewDispatchId } = reviewDispatched({ consecutiveFailures: 2 })
     const r = unwrap(

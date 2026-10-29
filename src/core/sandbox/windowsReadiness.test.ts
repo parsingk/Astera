@@ -5,7 +5,6 @@ import { describe, expect, it } from 'vitest'
 import os from 'node:os'
 import {
   DOCTOR_ARGV,
-  READY_ARGV,
   READY_MARKER,
   SETUP_ARGV,
   codexWindowsReadiness,
@@ -41,6 +40,20 @@ const doctorOut = (provisioning: 'complete' | 'incomplete'): string =>
 
 type Call = { argv: string[]; env: Record<string, string | undefined> }
 
+/** The account's permission profile as its sandboxed sessions get it (core/sandbox/prepared.ts hands the readiness the
+ *  sessions' own `-c` values): the echo must run under it. Codex's elevated sandbox keeps the deny-read ACEs of a home
+ *  across launches and resyncs them to each launch's list (windows-sandbox-rs/src/identity.rs:267-311,
+ *  deny_read_state.rs:22-68 at rust-v0.160.0), so an echo under any other list lifts what the running sessions deny. */
+const PROFILE = [
+  '-c',
+  'permissions={astera={extends=":workspace", filesystem={"C:/Users/t/.ssh"="deny", "C:/Users/t/.npmrc"="deny"}, network={enabled=true}}}',
+  '-c',
+  'default_permissions="astera"',
+  '-c',
+  'windows.sandbox="elevated"'
+]
+const ECHO = ['sandbox', ...PROFILE, '--', 'cmd.exe', '/d', '/c', 'echo', 'ASTERA_SANDBOX_OK']
+
 /** A run that answers doctor with `provisioning` and the echo with `echo`, and records every call. */
 function fakeRun(provisioning: 'complete' | 'incomplete', echo: { code: number | null; out: string } = { code: 0, out: `${READY_MARKER}\r\n` }) {
   const calls: Call[] = []
@@ -61,18 +74,32 @@ describe('codexWindowsReadiness', () => {
   it('ready on the marker and exit 0', async () => {
     const h = home()
     const { run, calls } = fakeRun('complete')
-    expect(await codexWindowsReadiness({ codexHome: h, run })).toBe('ready')
+    expect(await codexWindowsReadiness({ codexHome: h, profile: PROFILE, run })).toBe('ready')
     // doctor first, then (only then) the echo, both against the account's own home
-    expect(calls.map((c) => c.argv)).toEqual([DOCTOR_ARGV, READY_ARGV])
+    expect(calls.map((c) => c.argv)).toEqual([DOCTOR_ARGV, ECHO])
     expect(calls.every((c) => c.env.CODEX_HOME === h)).toBe(true)
     expect(DOCTOR_ARGV).toEqual(['-c', 'windows.sandbox="elevated"', 'doctor', '--json'])
-    expect(READY_ARGV).toEqual(['sandbox', '-c', 'windows.sandbox="elevated"', '--', 'cmd.exe', '/d', '/c', 'echo', 'ASTERA_SANDBOX_OK'])
+  })
+
+  // Task K part 1: an echo under another list (the legacy read-only profile `codex sandbox` falls back to has none)
+  // would revoke the account's deny-read ACEs, and with them the E6 denials of its running sandboxed sessions, until
+  // their next command. With no profile, or one that names no `default_permissions` (codex would then fall back to that
+  // read-only profile, cli/src/debug_sandbox.rs:713-731), the echo is not run and the home cannot be told ready.
+  it("runs no echo without the account's own profile, and says so", async () => {
+    for (const profile of [undefined, [], ['-c', 'windows.sandbox="elevated"']]) {
+      const { run, calls } = fakeRun('complete')
+      const logs: string[] = []
+      const r = await codexWindowsReadiness({ codexHome: home(), run, log: (m) => logs.push(m), ...(profile ? { profile } : {}) })
+      expect(r, JSON.stringify(profile)).toBe('check-failed')
+      expect(calls.map((c) => c.argv), JSON.stringify(profile)).toEqual([DOCTOR_ARGV])
+      expect(logs, JSON.stringify(profile)).toEqual([expect.stringMatching(/echo was not run.*profile/)])
+    }
   })
 
   it('not set up when the echo fails or does not print the marker (a stale home)', async () => {
     for (const echo of [{ code: 1, out: 'sandbox error: logon failed' }, { code: 0, out: '' }]) {
       const { run } = fakeRun('complete', echo)
-      expect(await codexWindowsReadiness({ codexHome: home(), run }), JSON.stringify(echo)).toBe('not-set-up')
+      expect(await codexWindowsReadiness({ codexHome: home(), profile: PROFILE, run }), JSON.stringify(echo)).toBe('not-set-up')
     }
   })
 
@@ -80,7 +107,7 @@ describe('codexWindowsReadiness', () => {
   // on such a home it starts the setup and the administrator prompt.
   it("not set up on Task 2's text", async () => {
     const { run, calls } = fakeRun('incomplete')
-    expect(await codexWindowsReadiness({ codexHome: home(), run })).toBe('not-set-up')
+    expect(await codexWindowsReadiness({ codexHome: home(), profile: PROFILE, run })).toBe('not-set-up')
     expect(calls.map((c) => c.argv)).toEqual([DOCTOR_ARGV])
   })
 
@@ -106,11 +133,11 @@ describe('codexWindowsReadiness', () => {
     for (const c of cases) {
       const argvs: string[][] = []
       const logs: string[] = []
-      const r = await codexWindowsReadiness({ codexHome: home(), run: async (argv, env) => (argvs.push(argv), c.run(argv, env)), log: (m) => logs.push(m) })
+      const r = await codexWindowsReadiness({ codexHome: home(), profile: PROFILE, run: async (argv, env) => (argvs.push(argv), c.run(argv, env)), log: (m) => logs.push(m) })
       expect(r, c.name).toBe('check-failed')
       expect(logs, c.name).toHaveLength(1)
       expect(logs[0], c.name).toMatch(c.log)
-      expect(argvs, c.name).toEqual(c.echoed ? [DOCTOR_ARGV, READY_ARGV] : [DOCTOR_ARGV])
+      expect(argvs, c.name).toEqual(c.echoed ? [DOCTOR_ARGV, ECHO] : [DOCTOR_ARGV])
     }
   })
 
@@ -129,7 +156,7 @@ describe('codexWindowsReadiness', () => {
       }
       return { code: 1, out: doctorOut('incomplete') }
     }
-    const asking = codexWindowsReadiness({ codexHome: h, run })
+    const asking = codexWindowsReadiness({ codexHome: h, profile: PROFILE, run })
     await Promise.resolve()
     forgetReadiness()
     release()
@@ -137,7 +164,7 @@ describe('codexWindowsReadiness', () => {
     expect(doctors).toBe(2)
     // Nothing ready was kept from the first round
     const again = fakeRun('incomplete')
-    expect(await codexWindowsReadiness({ codexHome: h, run: again.run })).toBe('not-set-up')
+    expect(await codexWindowsReadiness({ codexHome: h, profile: PROFILE, run: again.run })).toBe('not-set-up')
     expect(again.calls).toHaveLength(1)
   })
 
@@ -145,12 +172,12 @@ describe('codexWindowsReadiness', () => {
     const a = home()
     const b = home()
     const { run, calls } = fakeRun('complete')
-    const both = await Promise.all([codexWindowsReadiness({ codexHome: a, run }), codexWindowsReadiness({ codexHome: a, run })])
+    const both = await Promise.all([codexWindowsReadiness({ codexHome: a, profile: PROFILE, run }), codexWindowsReadiness({ codexHome: a, profile: PROFILE, run })])
     expect(both).toEqual(['ready', 'ready'])
-    expect(await codexWindowsReadiness({ codexHome: a, run })).toBe('ready')
+    expect(await codexWindowsReadiness({ codexHome: a, profile: PROFILE, run })).toBe('ready')
     expect(calls).toHaveLength(2)
     // Another home is its own question
-    expect(await codexWindowsReadiness({ codexHome: b, run })).toBe('ready')
+    expect(await codexWindowsReadiness({ codexHome: b, profile: PROFILE, run })).toBe('ready')
     expect(calls.filter((c) => c.env.CODEX_HOME === b)).toHaveLength(2)
   })
 
@@ -159,22 +186,22 @@ describe('codexWindowsReadiness', () => {
   it('asks a home that is not set up again, and asks again after a setup is forgotten', async () => {
     const h = home()
     const unset = fakeRun('incomplete')
-    expect(await codexWindowsReadiness({ codexHome: h, run: unset.run })).toBe('not-set-up')
+    expect(await codexWindowsReadiness({ codexHome: h, profile: PROFILE, run: unset.run })).toBe('not-set-up')
     const set = fakeRun('complete')
-    expect(await codexWindowsReadiness({ codexHome: h, run: set.run })).toBe('ready')
+    expect(await codexWindowsReadiness({ codexHome: h, profile: PROFILE, run: set.run })).toBe('ready')
     // A setup of any home gives the machine's sandbox users new passwords, so a home kept as ready is asked again
     const other = home()
-    expect(await codexWindowsReadiness({ codexHome: other, run: set.run })).toBe('ready')
+    expect(await codexWindowsReadiness({ codexHome: other, profile: PROFILE, run: set.run })).toBe('ready')
     forgetReadiness()
     const stale = fakeRun('complete', { code: 1, out: 'logon failure' })
-    expect(await codexWindowsReadiness({ codexHome: other, run: stale.run })).toBe('not-set-up')
-    expect(await codexWindowsReadiness({ codexHome: h, run: set.run })).toBe('ready')
+    expect(await codexWindowsReadiness({ codexHome: other, profile: PROFILE, run: stale.run })).toBe('not-set-up')
+    expect(await codexWindowsReadiness({ codexHome: h, profile: PROFILE, run: set.run })).toBe('ready')
   })
 
   it('the ambient account asks without CODEX_HOME', async () => {
     forgetReadiness()
     const { run, calls } = fakeRun('complete')
-    expect(await codexWindowsReadiness({ codexHome: null, run })).toBe('ready')
+    expect(await codexWindowsReadiness({ codexHome: null, profile: PROFILE, run })).toBe('ready')
     expect(calls.every((c) => !('CODEX_HOME' in c.env))).toBe(true)
     forgetReadiness()
   })
@@ -215,7 +242,7 @@ describe('codexWindowsSetup', () => {
   it("runs Task 2's setup command for the one home, says what Codex said, and forgets the answers kept", async () => {
     const h = home()
     const ready = fakeRun('complete')
-    expect(await codexWindowsReadiness({ codexHome: h, run: ready.run })).toBe('ready')
+    expect(await codexWindowsReadiness({ codexHome: h, profile: PROFILE, run: ready.run })).toBe('ready')
     const calls: Call[] = []
     const r = await codexWindowsSetup({ codexHome: h, run: async (argv, env) => (calls.push({ argv, env }), { code: 0, out: 'setup complete\n', err: '' }) })
     expect(SETUP_ARGV).toEqual(['sandbox', 'setup', '--elevated', '--current-user'])
@@ -223,7 +250,7 @@ describe('codexWindowsSetup', () => {
     expect(r).toEqual({ ok: true, out: 'setup complete' })
     // The home is asked again at its next start
     const after = fakeRun('complete')
-    await codexWindowsReadiness({ codexHome: h, run: after.run })
+    await codexWindowsReadiness({ codexHome: h, profile: PROFILE, run: after.run })
     expect(after.calls).toHaveLength(2)
   })
 
