@@ -1178,7 +1178,10 @@ a character cmd.exe reads as syntax (`" & | < > ^ %`) cannot be carried to it. E
 elevated sandbox set up once (Codex's `codex sandbox setup --elevated --current-user`, which brings up Windows'
 administrator prompt): Astera asks
 before a sandboxed start, Codex's `doctor --json` first and then, only on a home doctor calls complete, an echo through
-the sandbox (on a home with no setup the echo would start the setup and its prompt), and the app offers to set up the
+the sandbox (on a home with no setup the echo would start the setup and its prompt). The echo runs under the same
+permission profile and deny list the account's sandboxed sessions get: Codex keeps a home's read denials across runs and
+sets them to each run's list, so an echo under another list would lift what the account's running sessions are denied.
+The app offers to set up the
 one account a start was refused for. A ready answer is kept until Astera restarts or a setup runs through it, so a home
 made stale by a setup outside Astera keeps reading ready until then. Settings › Agent profiles also shows, under a
 sandboxed profile on Windows, whether each of its Codex accounts is set up, asked of Codex's doctor alone (no sandboxed

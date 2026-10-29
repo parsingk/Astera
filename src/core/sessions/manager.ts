@@ -132,8 +132,8 @@ export interface SpawnChecks {
 
 /** The real readiness question (windowsReadiness.ts), asked with the session's own environment: its PATH finds the codex
  *  it would start, and its CODEX_HOME (none for the ambient account) is the home asked about. Answers kept per process. */
-export const askCodexWindowsReady: CodexWindowsReady = ({ codexHome, env, log }) =>
-  codexWindowsReadiness({ codexHome, run: runCodex(env), ...(log ? { log } : {}) })
+export const askCodexWindowsReady: CodexWindowsReady = ({ codexHome, env, profile, log }) =>
+  codexWindowsReadiness({ codexHome, run: runCodex(env), ...(profile ? { profile } : {}), ...(log ? { log } : {}) })
 
 /** One resolver per process, so its cache is shared by every SessionManager in it. */
 let processGitBash: GitBashResolver | null = null

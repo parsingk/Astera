@@ -72,7 +72,8 @@ export function codexSandboxArgs(o: { platform: NodeJS.Platform; layout: GitLayo
 
 /** What `codex app-server` takes of codexSandboxArgs: the profile's `-c` values without the leading `-a never`, which is
  *  an option of the session command only; a chat's thread carries it as `approvalPolicy: "never"` instead. The shape Task 2
- *  measured the app-server with (inventory §23.1). */
+ *  measured the app-server with (inventory §23.1). `codex sandbox` takes the same values (the Windows readiness echo, a
+ *  sandboxed check; scripts/measure/s2.mjs codexSandboxCommandArgs measured it). */
 export function appServerSandboxArgs(args: string[]): string[] {
   if (args[0] !== '-a' || args[1] !== 'never') throw new Error(`the sandbox arguments no longer start with -a never: ${args.slice(0, 2).join(' ')}`)
   return args.slice(2)
