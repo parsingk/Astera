@@ -15,6 +15,7 @@
 // meet it.
 //
 // One process per check: SandboxManager keeps one configuration per process, and checks of two Tasks run at once.
+import path from 'node:path'
 import type { ClaudeSandboxSettings } from './claudeSettings'
 import type { GitLayout } from './gitLayout'
 
@@ -22,6 +23,37 @@ import type { GitLayout } from './gitLayout'
 export interface SrtConfig {
   network: { allowedDomains: string[]; deniedDomains: string[] }
   filesystem: { denyRead: string[]; allowRead: string[]; allowWrite: string[]; denyWrite: string[] }
+  /** Linux: srt's seccomp loader, by a path bubblewrap can run (srtHelpersOf) */
+  seccomp?: { applyPath: string }
+  /** macOS and Linux: the JVM proxy agent, by a path a JVM can read (srtHelpersOf) */
+  javaAgentJarPath?: string
+}
+
+/** srt's seccomp loader for a CPU, and its JVM proxy agent, relative to its package folder (vendor/ of 0.0.79): the files
+ *  srt hands other programs to run or read. Its Windows helper (vendor/srt-win) is never used here. */
+export const srtSeccompLoader = (arch: 'x64' | 'arm64'): string => `vendor/seccomp/${arch}/apply-seccomp`
+export const SRT_JAVA_AGENT = 'vendor/java-proxy-agent/srt-proxy-agent.jar'
+/** Every file srtHelpersOf names, which the package must keep out of app.asar (electron-builder.yml `asarUnpack`). */
+export const SRT_RUNTIME_FILES: readonly string[] = [srtSeccompLoader('x64'), srtSeccompLoader('arm64'), SRT_JAVA_AGENT]
+
+/** A path inside a packaged app's archive, as its unpacked file is on disk: Electron's `app.asar.unpacked` beside
+ *  `app.asar` ("contains the unpacked files", electronjs.org/docs/latest/tutorial/asar-archives), as node-pty finds its
+ *  spawn-helper (lib/unixTerminal.js:31). Any other path is as it is. */
+export const unpackedPath = (p: string): string => p.replace(/([\\/])app\.asar(?=[\\/]|$)/, '$1app.asar.unpacked')
+
+/**
+ * The helpers srt hands other programs, by paths those programs can open (fix round 1). srt finds them beside its own
+ * module (dist/sandbox/generate-seccomp-filter.js:114-124, java-proxy-agent.js:59-64) and checks them with `existsSync`,
+ * which Electron answers inside app.asar; but its seccomp loader runs inside bubblewrap (linux-sandbox-utils.js:1209-1220,
+ * 2632) and a JVM reads its agent through `-javaagent:` (java-proxy-agent.js), and neither sees into an archive. srt takes
+ * them explicitly ("For consumers that bundle sandbox-runtime and ship the jar separately", sandbox-config.js:914,
+ * 1010-1014). `packageRoot` is where the package resolves from (inside app.asar in a packaged app). The loader only on
+ * Linux, and for the two CPUs srt ships one for.
+ */
+export function srtHelpersOf(packageRoot: string, arch: string, platform: NodeJS.Platform): Pick<SrtConfig, 'seccomp' | 'javaAgentJarPath'> {
+  const root = unpackedPath(packageRoot)
+  const loader = platform === 'linux' && (arch === 'x64' || arch === 'arm64') ? { seccomp: { applyPath: path.posix.join(root, srtSeccompLoader(arch)) } } : {}
+  return { ...loader, javaAgentJarPath: path.posix.join(root, SRT_JAVA_AGENT) }
 }
 
 /** What the runner is handed for one check. */
@@ -88,6 +120,8 @@ const SIGNALS: Partial<Record<NodeJS.Signals, number>> = { SIGHUP: 1, SIGINT: 2,
  */
 export async function runInSrt(o: {
   payload: SrtCheckPayload
+  /** srt's helpers by paths the programs it hands them to can open (srtHelpersOf), over the check's configuration */
+  helpers?: Pick<SrtConfig, 'seccomp' | 'javaAgentJarPath'>
   load: () => Promise<SrtModule>
   spawn: (command: string, opts: { cwd: string; env: NodeJS.ProcessEnv }) => CheckChild
   mkdir: (dir: string) => void
@@ -95,7 +129,7 @@ export async function runInSrt(o: {
 }): Promise<number> {
   o.mkdir(o.env.CLAUDE_CODE_TMPDIR || o.env.CLAUDE_TMPDIR || '/tmp/claude')
   const { SandboxManager } = await o.load()
-  await SandboxManager.initialize(o.payload.config, async () => true)
+  await SandboxManager.initialize({ ...o.payload.config, ...(o.helpers ?? {}) }, async () => true)
   try {
     const wrapped = await SandboxManager.wrapWithSandbox(o.payload.command)
     const { ELECTRON_RUN_AS_NODE: _flag, ...env } = o.env

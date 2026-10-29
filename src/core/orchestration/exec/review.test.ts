@@ -279,8 +279,13 @@ describe('createReviewStarter', () => {
       const h = rig({ accounts: [claude('c1'), codex('x1')], loggedIn: ['c1', 'x1'], ...(kind ? { implSandboxKind: kind } : {}) })
       await h.start({ taskId: h.taskId })
       const a = h.startWorker.mock.calls[0][0]
-      if (boxed) expect(a, String(kind)).toMatchObject({ provider: 'codex', sandbox: true })
-      else expect(a, String(kind)).not.toHaveProperty('sandbox')
+      // Fix round 1 (the controller's ruling, after E2): where the reviewer's CLI has no sandbox (Claude Code on Windows)
+      // it starts with its deny rules only, as a sandboxed profile's session does there, rather than being refused
+      if (boxed) expect(a, String(kind)).toMatchObject({ provider: 'codex', sandbox: true, sandboxDenyOnly: true })
+      else {
+        expect(a, String(kind)).not.toHaveProperty('sandbox')
+        expect(a, String(kind)).not.toHaveProperty('sandboxDenyOnly')
+      }
     }
   })
 

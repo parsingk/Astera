@@ -1302,6 +1302,18 @@ describe('createHostSpawner — createSession', () => {
       }
     })
 
+    // Task K fix round 1 (the controller's ruling, after E2): a reviewer of sandboxed work asks for its CLI's sandbox and
+    // allows deny rules only where that CLI has none: a Claude reviewer on Windows starts as a sandboxed profile's Claude
+    // session does there (deny-only), not refused; without that allowance a forced sandbox there is still refused (C3)
+    it('a reviewer’s forced sandbox starts a Claude session on Windows with its deny rules only, not refused', async () => {
+      const { s, taskId, dispatchId } = seeded('acc1', 'claude')
+      const h = rig({ state: () => s, claudeVersion: Object.assign(() => '2.1.310', { warm: async () => {} }) })
+      const started = await h.spawner!.startWorker({ ...startArgs(taskId, dispatchId), sandbox: true, sandboxDenyOnly: true })
+      expect(started.sandboxKind).toBe(process.platform === 'win32' ? 'deny-only' : 'sandbox')
+      if (process.platform === 'win32')
+        await expect(h.spawner!.startWorker({ ...startArgs(taskId, dispatchId), sandbox: true })).rejects.toThrow(/SANDBOX_UNAVAILABLE: no-sandbox claude/)
+    })
+
     // C3: every worker of a Job a sandboxed session made starts in the sandbox whatever profile its Task names; the worker
     // of a Task a sandboxed session added does too; any other worker is unchanged
     it('a worker of a Job or Task a sandboxed session made starts sandboxed', async () => {

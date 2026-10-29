@@ -2316,6 +2316,7 @@ export const ko = {
   // 막지 않는 이슈는 개수만 말한다 — 없는 것과 다르다는 사실까지가 필요한 전부다.
   'jobs.completion.other': '그 밖의 지적 {n}',
   'jobs.completion.suspicious': '검사 설정이 바뀐 파일',
+  'jobs.completion.reviewFileToolsOnly': '파일 도구 보호만으로 검토했습니다: Windows 의 Claude Code 에는 sandbox 가 없어 리뷰어의 셸은 sandbox 밖에서 돌았습니다.',
   'jobs.completion.policyChanged': '이 Task 가 도는 동안 완료 검사 설정 자체가 달라졌습니다. 리뷰어에게도 알렸습니다.',
   'jobs.event.status': '소식',
   'jobs.event.workerDone': '워커 보고',

@@ -326,6 +326,10 @@ export interface OrchServerDeps {
     /** Start the worker in its CLI's sandbox whatever profile it names (final fix pass, C3): a sandboxed session asked
      *  for it (`worker-start`). The wiring adds a Task's or Job's own mark (workSandboxed, exec/workerStart.ts). */
     sandbox?: true
+    /** With `sandbox`: where the CLI has no sandbox (Claude Code on Windows), start with its deny rules only, as a
+     *  sandboxed profile's session does there, rather than be refused. A reviewer of sandboxed work asks for it (Task K
+     *  fix round 1, the controller's ruling after E2); a worker never does (C3 refuses). */
+    sandboxDenyOnly?: true
   }): Promise<StartedWorker>
   releaseWorker(a: { dispatchId: string }): Promise<void>
   /** 그 세션의 롤링 체인을 버린다 — **세션은 죽이지 않는다**(releaseWorker 와 그 점이 다르다).

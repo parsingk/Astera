@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events'
 import { describe, expect, it } from 'vitest'
 import { claudeSandboxSettings } from './claudeSettings'
 import type { GitLayout } from './gitLayout'
-import { runInSrt, srtCheckRunner, srtConfigOf, type SrtModule } from './srtCheck'
+import { SRT_RUNTIME_FILES, runInSrt, srtCheckRunner, srtConfigOf, srtHelpersOf, type SrtModule } from './srtCheck'
 
 const part = claudeSandboxSettings({
   platform: 'linux',
@@ -87,6 +87,17 @@ describe('runInSrt', () => {
     expect(f.calls[0].arg).toEqual(payload.config)
   })
 
+  it("hands srt the helpers' real paths with the check's configuration", async () => {
+    const f = fakeSrt()
+    const kid = child()
+    const helpers = { seccomp: { applyPath: '/u/apply-seccomp' }, javaAgentJarPath: '/u/agent.jar' }
+    const done = runInSrt({ payload, helpers, load: async () => f.srt, spawn: () => kid, mkdir: () => {}, env: {} })
+    await new Promise((r) => setTimeout(r, 0))
+    kid.emit('exit', 0, null)
+    expect(await done).toBe(0)
+    expect(f.calls[0].arg).toEqual({ ...payload.config, ...helpers })
+  })
+
   it('a command ended by a signal is never a pass; srt’s own temp folder follows CLAUDE_CODE_TMPDIR', async () => {
     const f = fakeSrt()
     const made: string[] = []
@@ -96,6 +107,40 @@ describe('runInSrt', () => {
     kid.emit('exit', null, 'SIGTERM')
     expect(await done).toBe(143)
     expect(made).toEqual(['/var/tmp/c'])
+  })
+})
+
+// Fix round 1: srt finds the helpers it hands other programs (Linux's seccomp loader, run inside bubblewrap; the JVM's
+// proxy agent jar, read by a JVM) beside its own module (dist/sandbox/generate-seccomp-filter.js:114-124,
+// java-proxy-agent.js:59-64). In a packaged app that module's path is inside app.asar, which bubblewrap and a JVM cannot
+// open: the files are real only under app.asar.unpacked, the folder Electron documents for unpacked files. So the runner
+// names them there explicitly, as srt allows (`seccomp.applyPath`, `javaAgentJarPath`, sandbox-config.js:914, 1010-1014),
+// the way node-pty points at its spawn-helper (lib/unixTerminal.js:31).
+describe('srtHelpersOf', () => {
+  const packed = '/opt/Astera/resources/app.asar/node_modules/@anthropic-ai/sandbox-runtime'
+  const unpacked = '/opt/Astera/resources/app.asar.unpacked/node_modules/@anthropic-ai/sandbox-runtime'
+  it("names srt's seccomp loader (Linux) and the JVM agent where a packaged app keeps them unpacked", () => {
+    expect(srtHelpersOf(packed, 'x64', 'linux')).toEqual({
+      seccomp: { applyPath: `${unpacked}/vendor/seccomp/x64/apply-seccomp` },
+      javaAgentJarPath: `${unpacked}/vendor/java-proxy-agent/srt-proxy-agent.jar`
+    })
+    expect(srtHelpersOf(packed, 'arm64', 'linux').seccomp).toEqual({ applyPath: `${unpacked}/vendor/seccomp/arm64/apply-seccomp` })
+    const mac = '/Applications/Astera.app/Contents/Resources/app.asar/node_modules/@anthropic-ai/sandbox-runtime'
+    expect(srtHelpersOf(mac, 'arm64', 'darwin')).toEqual({
+      javaAgentJarPath: '/Applications/Astera.app/Contents/Resources/app.asar.unpacked/node_modules/@anthropic-ai/sandbox-runtime/vendor/java-proxy-agent/srt-proxy-agent.jar'
+    })
+  })
+
+  it('leaves a path outside an archive, or already unpacked, as it is; names no seccomp loader srt has none for', () => {
+    expect(srtHelpersOf('/src/astera/node_modules/@anthropic-ai/sandbox-runtime', 'x64', 'linux').seccomp).toEqual({
+      applyPath: '/src/astera/node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp/x64/apply-seccomp'
+    })
+    expect(srtHelpersOf(unpacked, 'x64', 'linux').javaAgentJarPath).toBe(`${unpacked}/vendor/java-proxy-agent/srt-proxy-agent.jar`)
+    expect(srtHelpersOf(packed, 'ia32', 'linux')).not.toHaveProperty('seccomp')
+  })
+
+  it('lists exactly the files it names, for the packaging check', () => {
+    expect([...SRT_RUNTIME_FILES].sort()).toEqual(['vendor/java-proxy-agent/srt-proxy-agent.jar', 'vendor/seccomp/arm64/apply-seccomp', 'vendor/seccomp/x64/apply-seccomp'])
   })
 })
 

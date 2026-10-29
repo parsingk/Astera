@@ -298,6 +298,9 @@ export interface Task {
   readonly validateConfigIds?: readonly string[]
   readonly checks?: readonly CheckResult[]
   readonly reviewIssues?: readonly ReviewIssue[]
+  /** Its last review ran with Claude Code's file-tool protection only: the work was sandboxed, and Claude Code has no
+   *  sandbox on Windows, so the reviewer's shell ran outside one. */
+  readonly reviewFileToolsOnly?: true
   /** A person's decision to pass the Task over its checks. */
   readonly completionOverride?: { readonly reason: string; readonly at: string }
   readonly consecutiveFailures: number
@@ -413,6 +416,7 @@ export interface CompletionDetail {
   readonly otherIssueCount: number
   readonly suspiciousFiles: readonly string[]
   readonly policyChanged: boolean
+  readonly reviewFileToolsOnly?: true
 }
 
 export interface TaskCompletion {

@@ -715,7 +715,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     // The profile's sandbox switch (sandbox design §6): the prepare reads the folder for it, and the spawn starts in it.
     // What a sandboxed session asked for, or the work it made, starts in it whatever the profile says (final fix pass,
     // C3), and where its CLI has no sandbox it is refused before anything starts rather than run without one
-    if (o.sandbox === true) {
+    // A reviewer of sandboxed work allows the deny rules only there (`sandboxDenyOnly`, Task K fix round 1): it starts as a
+    // sandboxed profile's session does on that system, and its Dispatch records `deny-only`
+    if (o.sandbox === true && o.sandboxDenyOnly !== true) {
       const refused = forcedSandboxBlocker(providerOf(account), platform)
       if (refused) {
         log(`spawn refused: ${refused.message} (a sandboxed session's work)`)

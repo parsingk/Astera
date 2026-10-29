@@ -427,6 +427,10 @@ export interface Task {
   lastFailure?: string
   /** 마지막 검토의 이슈 전부, blocking 여부 포함 */
   reviewIssues?: ReviewIssue[]
+  /** The last review that gave a verdict ran with Claude Code's file-tool protection only (Task K fix round 1): its work was
+   *  sandboxed, and Claude Code has no sandbox on Windows, so its reviewer started with the deny rules only (E2), its shell
+   *  unrestricted. Shown beside the review, as a check's `outsideSandbox` is. */
+  reviewFileToolsOnly?: true
   /** 이 Task 가 처음 validating 이 될 때 찍은 완료 정책의 지문(설계 G3, 명세 §37).
    *  `completionPolicyHash` 의 값이다 — 해시가 아니라 읽을 수 있는 정규 문자열이다. */
   policySnapshot?: { key: string; capturedAt: string }

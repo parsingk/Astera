@@ -39,6 +39,12 @@ describe('a plugin check in the completion read model (plugin Phase 5 C12, C13)'
     ])
   })
 
+  // Task K fix round 1: and that its review ran with Claude Code's file-tool protection only
+  it('carries that the review ran with file-tool protection only, which alone is something to show', () => {
+    expect(completionDetailOf(task({ reviewFileToolsOnly: true }))).toMatchObject({ reviewFileToolsOnly: true })
+    expect(completionDetailOf(task({ checks: [check({ configId: 'c', name: 'T', status: 'passed' })] }))).not.toHaveProperty('reviewFileToolsOnly')
+  })
+
   // Task K (the person's Q1)
   it('carries that a check ran outside the sandbox its workers had', () => {
     const d = completionDetailOf(task({ checks: [check({ configId: 'c', name: 'Tests', status: 'passed', outsideSandbox: true })] }))!

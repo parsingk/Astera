@@ -2088,6 +2088,7 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.completion.blocking': '{n} blocking review findings',
   'jobs.completion.other': '{n} other findings',
   'jobs.completion.suspicious': 'Files that changed check configuration',
+  'jobs.completion.reviewFileToolsOnly': 'Reviewed with file-tool protection only: Claude Code has no sandbox on Windows, so the reviewer’s shell ran outside one.',
   'jobs.completion.policyChanged': "The completion checks themselves changed while this task was running. The reviewer was told as well.",
   'jobs.event.status': 'status',
   'jobs.event.workerDone': 'worker report',

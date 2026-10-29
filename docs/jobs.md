@@ -102,8 +102,9 @@ Task를 다 짠 뒤 상세 창의 `실행`을 눌러야 시작합니다.
 - Windows의 Claude Code에는 sandbox가 없습니다. 그 워커의 검사는 예전처럼 돌고, 결과 옆에
   `sandbox 밖에서 검증함`이라고 적힙니다.
 - 검사는 sandbox 여부와 상관없이 Credentials 목록이 그 폴더의 세션에 숨기는 변수 없이 시작합니다.
-- 그런 Task의 검토자도 구현자의 워크트리에서 일하므로 자기 CLI의 sandbox 안에서 시작합니다. 그 CLI에
-  sandbox가 없으면(Windows의 Claude Code 검토자) 검토를 시작하지 않고 사람에게 묻습니다.
+- 그런 Task의 검토자도 구현자의 워크트리에서 일하므로 자기 CLI의 sandbox 안에서 시작합니다. Windows의 Claude
+  Code 검토자는 sandbox가 없으므로, sandbox 프로필의 Claude Code 세션처럼 파일 도구만 로그인 폴더에서 막힌 채
+  시작합니다(셸은 제한 없음). 완료 블록에 `파일 도구 보호만으로 검토했습니다`라고 적힙니다.
 
 ## 4. 끝난 뒤 — 병합은 사람이 누릅니다
 

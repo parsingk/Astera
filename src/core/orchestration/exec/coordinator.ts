@@ -88,10 +88,13 @@ export interface CoordinatorDeps {
      *  Dispatch's; a coordinator's and a reviewer's never do. */
     agentProfileId?: string
     /** Start in the CLI's sandbox whatever the profile says (final fix pass, C3): a worker of work a sandboxed session
-     *  made or asked for. The wiring refuses it where that CLI has none. */
+     *  made or asked for. The wiring refuses it where that CLI has none, unless `sandboxDenyOnly`. */
     sandbox?: true
-    /** The protection the session started in (SessionInfo.sandboxKind), absent when none: its Dispatch records it, and a
-     *  Task's checks run in the same kind (Task K). */
+    /** With `sandbox`: where the CLI has no sandbox, start with its deny rules only rather than be refused (a reviewer of
+     *  sandboxed work, Task K fix round 1). */
+    sandboxDenyOnly?: true
+    /** Resolves with the protection the session started in (SessionInfo.sandboxKind), absent when none: its Dispatch
+     *  records it, and a Task's checks run in the same kind (Task K). */
   }): Promise<{ id: string; sandboxKind?: SandboxKind }>
   writeToSession(sessionId: string, data: string): void
   /** When that session's pty last printed anything (epoch ms), null for never. Given, a typed prompt's Enter waits for
@@ -904,6 +907,9 @@ export class OrchCoordinator {
     /** Start the worker in its CLI's sandbox whatever its profile says (final fix pass, C3), handed to `spawnSession`.
      *  Not used by a reuse, as `agentProfileId`. */
     sandbox?: true
+    /** With `sandbox`, handed to `spawnSession`: deny rules only where the CLI has no sandbox (a reviewer, Task K fix
+     *  round 1). */
+    sandboxDenyOnly?: true
   }): Promise<StartedWorker> {
     const actual = this.deps.accountProvider(a.accountId)
     if (actual === null) throw new Error(`unknown account: ${a.accountId}`)
@@ -1103,7 +1109,8 @@ export class OrchCoordinator {
         // as initialPrompt, same as an ordinary (non-resuming) start.
         ...(resumeSessionId && a.provider === 'codex' ? { resumePrompt: prompt } : { initialPrompt: prompt }),
         ...(a.agentProfileId !== undefined ? { agentProfileId: a.agentProfileId } : {}),
-        ...(a.sandbox ? { sandbox: true as const } : {})
+        ...(a.sandbox ? { sandbox: true as const } : {}),
+        ...(a.sandbox && a.sandboxDenyOnly ? { sandboxDenyOnly: true as const } : {})
       })
       finalSessionId = spawned.id
       sandboxKind = spawned.sandboxKind

@@ -75,6 +75,8 @@ export const TASK_FIELDS = Object.freeze([
   'kind',
   // The agent profile the Task runs as, by its id (Agent Profiles design §6)
   'agentProfileId',
+  // Its last review ran with Claude Code's file-tool protection only (no sandbox on Windows)
+  'reviewFileToolsOnly',
   'createdAt',
   'updatedAt'
 ] as const)
@@ -193,7 +195,7 @@ export const FOLLOW_EVENT_FIELDS = Object.freeze([
  *  Task's last failure, suspicious files and policy change on purpose: those explain the state. */
 export const COMPLETION_FIELDS = Object.freeze(['runId', 'jobId', 'state', 'tasks'] as const)
 export const TASK_COMPLETION_FIELDS = Object.freeze(['taskId', 'title', 'state', 'attempt', 'maxAttempts', 'detail', 'failureSummary', 'lastFailure'] as const)
-export const COMPLETION_DETAIL_FIELDS = Object.freeze(['taskId', 'checks', 'blockingIssues', 'otherIssueCount', 'suspiciousFiles', 'policyChanged'] as const)
+export const COMPLETION_DETAIL_FIELDS = Object.freeze(['taskId', 'checks', 'blockingIssues', 'otherIssueCount', 'suspiciousFiles', 'policyChanged', 'reviewFileToolsOnly'] as const)
 export const COMPLETION_CHECK_FIELDS = Object.freeze([
   'configId',
   'name',

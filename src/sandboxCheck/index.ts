@@ -4,13 +4,18 @@
 // sandboxed session cannot write (core/sandbox/locations.ts sandboxReadOnly).
 import { spawn } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
-import { loadSrt, runInSrt, type SrtCheckPayload } from '../core/sandbox/srtCheck'
+import { createRequire } from 'node:module'
+import path from 'node:path'
+import { loadSrt, runInSrt, srtHelpersOf, type SrtCheckPayload } from '../core/sandbox/srtCheck'
 
 async function main(): Promise<number> {
   const payload = JSON.parse(process.argv[2] ?? 'null') as SrtCheckPayload | null
   if (!payload || typeof payload.command !== 'string' || typeof payload.cwd !== 'string') throw new Error('the check to run was not given')
+  // Where the package resolves from (inside app.asar in a packaged app): its helpers are named by their unpacked paths
+  const packageRoot = path.dirname(createRequire(__filename).resolve('@anthropic-ai/sandbox-runtime/package.json'))
   return runInSrt({
     payload,
+    helpers: srtHelpersOf(packageRoot, process.arch, process.platform),
     load: loadSrt,
     spawn: (command, opts) => {
       const child = spawn(command, { shell: true, stdio: 'inherit', cwd: opts.cwd, env: opts.env })

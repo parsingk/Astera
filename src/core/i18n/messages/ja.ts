@@ -1925,6 +1925,7 @@ export const ja: Catalog = {
   'jobs.completion.blocking': 'ブロックするレビュー指摘 {n}',
   'jobs.completion.other': 'その他の指摘 {n}',
   'jobs.completion.suspicious': '検査設定を変更したファイル',
+  'jobs.completion.reviewFileToolsOnly': 'ファイルツールの保護だけでレビューしました: Windows の Claude Code にはサンドボックスがないため、レビュアーのシェルはサンドボックスの外で動きました。',
   'jobs.completion.policyChanged': 'このタスクの実行中に完了検査の設定自体が変わりました。レビュアーにも伝えています。',
   'jobs.event.status': '状況',
   'jobs.event.workerDone': 'ワーカー報告',
