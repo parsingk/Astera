@@ -210,6 +210,29 @@ describe('input left waiting goes out before what comes next', () => {
     expect(shown(x.sent).join('')).toBe('ab1p2clip')
   })
 
+  // Keys a Korean IME commits a syllable on and lets through, besides space and Enter (review Minor 2): punctuation goes
+  // out at its own keydown, Ctrl+V is taken by TerminalView's handler on the very key that commits, then Backspace
+  it('punctuation, Ctrl+V and Backspace right after a syllable, busy', () => {
+    terminalViewKeys('clip')
+    busy([
+      ...x.hangul(['ㄱ', '가']),
+      () => {
+        x.imeKeyDown('Period')
+        x.compositionEnd('가')
+        x.key('.', 190)
+      },
+      ...x.hangul(['ㄴ', '나']),
+      () => {
+        x.imeKeyDown('KeyV')
+        x.compositionEnd('나')
+        x.key('v', 86, { ctrlKey: true })
+      },
+      space,
+      () => x.key('Backspace', 8, { code: 'Backspace' })
+    ])
+    expect(shown(x.sent).join('')).toBe('가.나clip <DEL>')
+  })
+
   it('blur while a 229 key or a finished composition waits: both go out before the textarea is emptied, busy', () => {
     idle([typed('a'), typed('b')])
     busy([typed('1'), () => x.blur()])
