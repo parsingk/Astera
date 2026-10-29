@@ -27,13 +27,18 @@ describe('CompletionChecks', () => {
 
   // Task K fix round 2: which variables the Credentials list kept from the check, by name, so a failure for a hidden token
   // reads as that
-  it('names the variables the Credentials list kept from a check, and nothing for one it took none from', () => {
+  // Fix round 3 (N3): only under a check that did not pass, where it can explain the result; a passing check carries the
+  // same names (a preset's redirects are always named) and would repeat them under every check of every Task
+  it('names the variables the Credentials list kept from a check that did not pass, and says nothing under a passing one', () => {
     const html = render([
       { configId: 'c1', name: 'Tests', status: 'failed', exitCode: 1, hiddenEnv: ['NPM_TOKEN', 'KUBECONFIG'] },
-      { configId: 'c2', name: 'Lint', status: 'passed' }
+      { configId: 'c2', name: 'Lint', status: 'passed', hiddenEnv: ['NPM_TOKEN', 'KUBECONFIG'] },
+      { configId: 'c3', name: 'Build', status: 'timed-out', hiddenEnv: ['NPM_TOKEN'] },
+      { configId: 'c4', name: 'Types', status: 'failed', exitCode: 2 }
     ])
     expect(html).toContain('jobs.checks.hiddenEnv {&quot;names&quot;:&quot;NPM_TOKEN, KUBECONFIG&quot;}')
-    expect(html.match(/jobs\.checks\.hiddenEnv/g)).toHaveLength(1)
+    expect(html).toContain('jobs.checks.hiddenEnv {&quot;names&quot;:&quot;NPM_TOKEN&quot;}')
+    expect(html.match(/jobs\.checks\.hiddenEnv/g)).toHaveLength(2)
   })
 
   it('a failed plugin check: its summary, each finding at its place, a warning said as one, and its report link', () => {
