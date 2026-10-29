@@ -43,6 +43,8 @@ describe('spawnErrorMessage', () => {
     expect(spawnErrorMessage(raw('path-unsafe'))).toEqual({ key: 'session.spawn.sandbox.pathUnsafe' })
     // Task E fix round 3: a path the sandbox names other than the work folder (Astera's own, a login folder) has its own words
     expect(spawnErrorMessage(raw('named-path-unsafe'))).toEqual({ key: 'session.spawn.sandbox.namedPathUnsafe' })
+    // Task E fix round 5: a named path through a link inside the work folder, where nothing else refuses it
+    expect(spawnErrorMessage(raw('linked-path'))).toEqual({ key: 'session.spawn.sandbox.linkedPath' })
     expect(spawnErrorMessage(raw('git-layout'))).toEqual({ key: 'session.spawn.sandbox.gitLayout' })
     expect(spawnErrorMessage(raw('not-prepared'))).toEqual({ key: 'session.spawn.sandbox.notPrepared' })
     expect(spawnErrorMessage(raw('cli-too-old claude 2.1.300 2.1.306'))).toEqual({

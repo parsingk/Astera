@@ -1188,6 +1188,9 @@ cannot be applied to does not start, and says why with `SANDBOX_UNAVAILABLE: <co
 that does not take `--no-daemon`, `cli-too-old claude <found> 2.1.306` for an older Claude Code (`cli-version-unknown
 claude` when its version cannot be read, `cli-missing claude` when it is not there), `path-unsafe` for such a path in
 the repository, `named-path-unsafe` for one elsewhere (a login folder, one of Astera's own; the log names it),
+`linked-path` when such a folder is reached through a link inside the session's own folders, which it could repoint
+(macOS and Windows Codex, macOS and Linux Claude; on Linux Codex starts and refuses every command there, and the tab
+says so; the log names the link),
 `git-layout` when the folder's git data could not be read, `windows-setup codex <accountId>` for an account whose
 Windows sandbox is not set up (or no longer works: setting up one account's home can leave another's stale),
 `windows-check-failed codex <accountId>` when Codex could not be asked about it (not there, too old for `doctor --json`,

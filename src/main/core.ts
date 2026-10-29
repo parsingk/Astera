@@ -53,7 +53,7 @@ import { claudeSandboxStart } from '../core/sandbox/claudeStart'
 import { codexExcludesWriter } from '../core/sandbox/gitExcludes'
 import { hostAddress } from '../core/publicContract'
 import { appKeyPath } from '../core/host/hostKey'
-import { ensureOwnFolders, installRootOf, localAsteraDir, publicShuttleFiles, realPathOrNull, sandboxReadOnly, updaterCacheDir } from '../core/sandbox/locations'
+import { ensureOwnFolders, installRootOf, localAsteraDir, nodeLinkLook, presentOrNull, publicShuttleFiles, sandboxReadOnly, updaterCacheDir } from '../core/sandbox/locations'
 import { binDirFor } from '../core/orchestration/cliInstall'
 import { shuttleNames } from '../core/orchestration/exec/shuttle'
 import { HOST_PROTOCOL } from '../core/host/protocol'
@@ -259,8 +259,8 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   // (runtimeBase), electron-updater's download cache, the installed app's own folder (from its executable), on Windows
   // Astera's own %LOCALAPPDATA%\astera whole (the public CLI's bin, the session-`.cmd` junction), and on macOS and Linux
   // the public CLI's own files in the person's ~/.local/bin, where they are now. One list, for the twins and both managers,
-  // naming only what is there when the app starts, each where it really is (fix round 3: no placeholder file at a missing
-  // one, no read-only path through a linked ~/.cache or ~/.local). The updater cache and the Host runtime folder are made
+  // naming only what is there when the app starts (fix round 3: no placeholder file at a missing one), as spelled: each
+  // start names it where namedPathFor puts it for that session's folders (fix round 5). The updater cache and the Host runtime folder are made
   // first, empty if missing (fix round 4), so they are always named: a download that first made the cache while the app
   // runs would otherwise leave it writable until the next start
   const updaterCache = updaterCacheDir(process.platform, process.env, os.homedir())
@@ -272,7 +272,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     installRoot: installRootOf(app.getPath('exe'), process.platform),
     localAstera: localAsteraDir(process.platform, process.env, os.homedir()),
     publicShuttle: publicShuttleFiles({ platform: process.platform, binDir: binDirFor({ platform: process.platform, env: process.env, home: os.homedir() }), names: shuttleNames(process.platform), exists: existsSync }),
-    resolve: realPathOrNull
+    resolve: presentOrNull
   })
   const statusLine = new StatusLineManager(
     userDataDir,
@@ -287,7 +287,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
           })) ?? 'node')
         : 'node',
     undefined,
-    { findRuntime, readOnly }
+    { findRuntime, readOnly, linkLook: nodeLinkLook }
   )
   await statusLine.init()
   // One factory for the app's life. Slice 2's Host-backed one is attached to it by registerIpc once
@@ -327,7 +327,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     [previewShotsDir(userDataDir)],
     process.env,
     // The folders a sandboxed Codex session keeps read-only (Task E and its fix round 1)
-    { ...defaultSpawnChecks(sessionsLog), hostSocketDir, appKeyFile, readOnly, codexExcludes }
+    { ...defaultSpawnChecks(sessionsLog), hostSocketDir, appKeyFile, readOnly, linkLook: nodeLinkLook, codexExcludes }
   )
   // Shared extensions (Agent Control Plane release 1 design §4.5). The two managers read the same cache:
   // a chat roll's respawn is prepared through `sessions.prepare`, which refreshes the target account
@@ -410,6 +410,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     hostSocketDir,
     appKeyFile,
     readOnly,
+    linkLook: nodeLinkLook,
     codexVersion: cliVersions,
     codexExcludes
   })

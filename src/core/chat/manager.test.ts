@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { gitLayoutOf } from '../sandbox/gitLayout'
 import { claudeSandboxStart, gitExcludesFileOf } from '../sandbox/claudeStart'
 import { StatusLineManager } from '../sessions/statusline'
-import { credentialStoreDenies, sensitiveLocations } from '../sandbox/locations'
+import { credentialStoreDenies, nodeLinkLook, sensitiveLocations } from '../sandbox/locations'
 import { codexSandboxArgs, codexSandboxEnv, npmCacheOf } from '../sandbox/codexProfile'
 import { PreparedLayouts } from '../sandbox/prepared'
 import { chatInfoFromNote } from '../sessions/noteInfo'
@@ -1684,6 +1684,50 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
     expect(info.sandboxWarnings).toEqual(['homeInWorkFolder'])
     expect(r2.spawned[0].opts.meta?.restore).toMatchObject({ sandboxed: true, sandboxWarnings: ['homeInWorkFolder'] })
     expect(spawned).toHaveLength(1)
+  })
+
+  // Task E fix round 5 (rule E5): a Codex chat's named paths are looked at against its writable folders as a terminal
+  // session's are. In a work folder that holds a dotfile manager's linked ~/.config the entries stay as given: on Linux
+  // Codex refuses every command and the chat is told so; elsewhere the start is refused
+  it('a sandboxed Codex chat in a folder holding a linked ~/.config is told Codex will refuse its commands on Linux, and refused elsewhere', async () => {
+    // Outside /tmp, which a sandboxed session may write (so a link there is one it could change): Linux's temp folder is
+    // /tmp, so the fixture goes in /dev/shm there
+    const root = mkdtempSync(path.join(process.platform === 'linux' && existsSync('/dev/shm') ? '/dev/shm' : os.tmpdir(), 'astera-links-'))
+    dirs.push(root)
+    const base = realpathSync.native(root).replace(/\\/g, '/')
+    const home = `${base}/home`
+    mkdirSync(`${home}/dots/config/gh`, { recursive: true })
+    symlinkSync(`${home}/dots/config`, `${home}/.config`, process.platform === 'win32' ? 'junction' : 'dir')
+    const make = (platform: 'linux' | 'darwin') => {
+      const spawned: Array<{ args: string[] }> = []
+      const logs: string[] = []
+      const { createAdapter } = makeAdapterFactory()
+      const manager = new ChatSessionManager({
+        factory: (_file, args) => (spawned.push({ args }), new FakeProc()),
+        descriptors: makeDescriptors(platform, home, undefined, Object.assign(() => true, { warm: async () => {} })),
+        homeDir: home,
+        platform,
+        version: '1.0.0',
+        log: (m) => void logs.push(m),
+        createAdapter,
+        baseEnv: { PATH: '/usr/bin' },
+        codexWindowsReady: async () => 'ready',
+        linkLook: nodeLinkLook,
+        codexVersion: Object.assign(() => '0.160.0', { warm: async () => {} })
+      })
+      const told: Array<[string, string[]]> = []
+      manager.sandboxWarn = { claudeUsernsRestricted: () => false, warn: (id, ws) => void told.push([id, [...ws]]) }
+      return { manager, spawned, logs, told }
+    }
+    const linux = make('linux')
+    await linux.manager.prepare({ account: codexAccount, cwd: home, sandbox: true })
+    const info = linux.manager.spawn({ account: codexAccount, cwd: home, sandbox: true })
+    expect(info.sandboxWarnings).toEqual(['linkInWorkFolder', 'homeInWorkFolder'])
+    expect(linux.told).toEqual([[info.id, ['linkInWorkFolder', 'homeInWorkFolder']]])
+    expect(linux.spawned[0].args.some((a) => a.includes(`"${home}/.config/gh"="deny"`))).toBe(true)
+    const darwin = make('darwin')
+    await expect(darwin.manager.prepare({ account: codexAccount, cwd: home, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: linked-path$/)
+    expect(darwin.logs.some((l) => l.includes(`${home}/.config`))).toBe(true)
   })
 
   it("a sandboxed chat's profile keeps Astera's profile folder read, with the app key in it denied", async () => {

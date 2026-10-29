@@ -861,6 +861,7 @@ export const ko = {
   'session.spawn.sandbox.codexDaemon': '이 Codex는 --no-daemon을 지원하지 않아 sandbox로 시작할 수 없습니다. Codex를 업데이트해 주세요.',
   'session.spawn.sandbox.pathUnsafe': '폴더 경로에 Windows 명령줄이 다룰 수 없는 문자(" & | < > ^ %)가 있어 sandbox로 시작할 수 없습니다.',
   'session.spawn.sandbox.namedPathUnsafe': '작업 폴더 말고 sandbox가 지정해야 하는 폴더(Astera 자체 폴더나 홈의 로그인 정보 폴더)의 경로에 Windows 명령줄이 다룰 수 없는 문자(" & | < > ^ %)가 있어 sandbox로 시작할 수 없습니다. 어느 폴더인지는 Astera 로그에 있습니다.',
+  'session.spawn.sandbox.linkedPath': "로그인 정보나 Astera 자체 파일이 든 폴더가 작업 폴더 안의 링크를 거쳐 있고 세션이 그 링크를 바꿀 수 있어서, sandbox가 그 폴더를 지킬 수 없어 sandbox로 시작할 수 없습니다. 프로젝트 폴더에서 시작해 주세요. 어느 링크인지는 Astera 로그에 있습니다.",
   'session.spawn.sandbox.gitLayout': '작업 폴더의 git 정보를 읽지 못해 sandbox로 시작할 수 없습니다.',
   'session.spawn.sandbox.notPrepared': 'sandbox 준비가 끝나기 전에 시작하려 했습니다. 다시 시작해 주세요.',
   'session.spawn.sandbox.cliTooOld': 'sandbox는 {cli} {min} 이상에서만 쓸 수 있습니다. 지금은 {found} 입니다. CLI를 업데이트해 주세요.',
@@ -876,6 +877,8 @@ export const ko = {
   'session.sandbox.warn.homeInWorkFolder': "이 sandbox 세션의 작업 폴더가 홈 폴더를 포함하고 있어서, sandbox 안에서 홈 폴더의 프로그램과 설정을 바꿀 수 있습니다. 이것들을 지키려면 프로젝트 폴더에서 시작해 주세요.",
   'session.sandbox.warn.claudeUserns': "이 시스템에서는 Claude Code의 sandbox가 셸 명령을 실행할 수 없습니다. Ubuntu의 bubblewrap용 AppArmor 프로필(bwrap-userns-restrict)이 bubblewrap 안에서 도는 프로그램의 권한을 빼앗아, 이 세션의 셸 명령은 모두 실패합니다. 파일 도구는 그대로 쓸 수 있습니다. 해결하려면 관련 바이너리에 userns를 허용하는 AppArmor 프로필을 추가해야 합니다. 자세한 내용은 Claude Code의 sandbox 런타임(@anthropic-ai/sandbox-runtime) README의 Ubuntu 안내를 보세요.",
   'session.sandbox.warn.claudeUsernsAndHome': "이 시스템에서는 Claude Code의 sandbox가 셸 명령을 실행할 수 없습니다. Ubuntu의 bubblewrap용 AppArmor 프로필(bwrap-userns-restrict)이 bubblewrap 안에서 도는 프로그램의 권한을 빼앗아, 이 세션의 셸 명령은 모두 실패합니다. 파일 도구는 그대로 쓸 수 있습니다. 해결하려면 관련 바이너리에 userns를 허용하는 AppArmor 프로필을 추가해야 합니다. 자세한 내용은 Claude Code의 sandbox 런타임(@anthropic-ai/sandbox-runtime) README의 Ubuntu 안내를 보세요. 이 sandbox 세션의 작업 폴더가 홈 폴더를 포함하고 있어서, sandbox 안에서 홈 폴더의 프로그램과 설정을 바꿀 수 있습니다. 이것들을 지키려면 프로젝트 폴더에서 시작해 주세요.",
+  'session.sandbox.warn.linkInWorkFolder': "이 세션에서 Codex는 모든 명령을 거부합니다. 로그인 정보나 Astera 자체 파일이 든 폴더가 작업 폴더 안의 링크를 거쳐 있어, 세션이 그 링크를 바꿀 수 있기 때문입니다. 프로젝트 폴더에서 시작하면 이 문제가 없습니다.",
+  'session.sandbox.warn.linkAndHome': "이 세션에서 Codex는 모든 명령을 거부합니다. 로그인 정보나 Astera 자체 파일이 든 폴더가 작업 폴더 안의 링크를 거쳐 있어, 세션이 그 링크를 바꿀 수 있기 때문입니다. 프로젝트 폴더에서 시작하면 이 문제가 없습니다. 이 sandbox 세션의 작업 폴더가 홈 폴더를 포함하고 있어서, sandbox 안에서 홈 폴더의 프로그램과 설정을 바꿀 수 있습니다. 이것들을 지키려면 프로젝트 폴더에서 시작해 주세요.",
   // A Claude roll refused for the sandbox (core/rolling/claudeCoordinator.ts): {reason} is the refusal's own sentence
   'session.roll.sandbox.windowsCheckFailed': '{account} 계정은 Codex에게 Windows sandbox 상태를 묻지 못해 넘어가지 못했습니다. Codex를 업데이트하거나 다시 시작해 주세요.',
   'session.roll.sandbox.refused': '다음 계정으로 넘어가지 못했습니다: {reason}',

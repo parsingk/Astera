@@ -95,6 +95,25 @@ describe('sandboxWarningMessage', () => {
     expect(sandboxWarningMessage(['claudeUserns'])).toEqual({ key: 'session.sandbox.warn.claudeUserns' })
     expect(sandboxWarningMessage(['claudeUserns', 'homeInWorkFolder'])).toEqual({ key: 'session.sandbox.warn.claudeUsernsAndHome' })
     expect(sandboxWarningMessage([])).toBeNull()
+    // Task E fix round 5: the link warning alone, and with the home warning it nearly always comes with
+    expect(sandboxWarningMessage(['linkInWorkFolder'])).toEqual({ key: 'session.sandbox.warn.linkInWorkFolder' })
+    expect(sandboxWarningMessage(['linkInWorkFolder', 'homeInWorkFolder'])).toEqual({ key: 'session.sandbox.warn.linkAndHome' })
+  })
+})
+
+// Task E fix round 5 (rule E5): a named path through a link inside the work folder makes Codex on Linux refuse every
+// command (core/sandbox/prepared.ts sessionSandboxArgs), and the session is told so; elsewhere such a start is refused,
+// and Claude's never gets this warning
+describe('the link in the work folder', () => {
+  it('warns a Codex session on Linux only, before the home warning', () => {
+    const at = (provider: 'claude' | 'codex', platform: NodeJS.Platform) =>
+      sandboxStartWarnings({ provider, platform, cwd: home, homeDir: home, claudeUsernsRestricted: false, linkInWorkFolder: true })
+    expect(at('codex', 'linux')).toEqual(['linkInWorkFolder', 'homeInWorkFolder'])
+    expect(at('codex', 'darwin')).toEqual(['homeInWorkFolder'])
+    expect(at('codex', 'win32')).toEqual(['homeInWorkFolder'])
+    expect(at('claude', 'linux')).toEqual(['homeInWorkFolder'])
+    expect(sandboxStartWarnings({ provider: 'codex', platform: 'linux', cwd: path.join(home, 'p'), homeDir: home, claudeUsernsRestricted: false, linkInWorkFolder: true })).toEqual(['linkInWorkFolder'])
+    expect(startWarningsFor(undefined, { provider: 'codex', platform: 'linux', cwd: home, homeDir: home, linkInWorkFolder: true })).toEqual(['linkInWorkFolder', 'homeInWorkFolder'])
   })
 })
 

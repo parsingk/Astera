@@ -68,7 +68,7 @@ import { createManagedHooksCheck } from '../core/sessions/managedHooks'
 import { codexNoDaemonProbe, type CodexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
 import { findInstalledHostExe } from '../core/host/installedRuntime'
 import { hostRuntimeBase } from '../core/host/runtime'
-import { ensureOwnFolders, installRootOf, localAsteraDir, publicShuttleFiles, realPathOrNull, sandboxReadOnly, updaterCacheDir } from '../core/sandbox/locations'
+import { ensureOwnFolders, installRootOf, localAsteraDir, nodeLinkLook, presentOrNull, publicShuttleFiles, sandboxReadOnly, updaterCacheDir, type LinkLook } from '../core/sandbox/locations'
 import { claudeUsernsCheck, type SandboxWarnSink } from '../core/sandbox/startWarnings'
 import { hidingLog } from '../core/extensions/secrets'
 import { setBounded } from '../core/bounded'
@@ -190,6 +190,9 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
   /** The read-only folders a sandboxed Codex session's profile keeps on every OS, terminal or chat (Task E and its fix
    *  round 1): the profile and every place Astera writes code or an installer to and runs unsandboxed. */
   readOnly?: readonly string[]
+  /** How the disk is read for links on the paths a sandboxed start names (Task E fix round 5), handed to the Host's chat
+   *  sessions too (rollingWiring). */
+  linkLook?: LinkLook
   /** Where this Host's terminal sessions tell a sandboxed start's warnings (Task E fix round 2); its Ubuntu check, asked
    *  once for this Host process, is the one its chat sessions ask too (rollingWiring). */
   sandboxWarn?: SandboxWarnSink
@@ -351,8 +354,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   // cache, the installed app's own folder (from `cli.exec`, the app's executable), on Windows Astera's own
   // %LOCALAPPDATA%\astera whole (the public CLI's bin, the session-`.cmd` junction; fix round 2), and on macOS and Linux
   // the public CLI's own files in ~/.local/bin, where they are now. One list, built once for both managers and the twins,
-  // naming only what is there when this Host starts, each where it really is (fix round 3: no placeholder file at a
-  // missing one, no read-only path through a linked ~/.cache or ~/.local). The updater cache and the Host runtime folder
+  // naming only what is there when this Host starts (fix round 3: no placeholder file at a missing one), as spelled:
+  // each start names it where namedPathFor puts it for that session's folders (fix round 5). The updater cache and the Host runtime folder
   // are made first, empty if missing (fix round 4), so they are always named, however long this Host then runs
   const hostRuntimeDir = hostRuntimeBase({ platform, localAppData: d.env.LOCALAPPDATA, userData: profileDir, appName: path.win32.basename(profileDir) })
   const updaterCache = updaterCacheDir(platform, d.env, homeDir)
@@ -364,7 +367,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     installRoot: installRootOf(cli.exec, platform),
     localAstera: localAsteraDir(platform, d.env, homeDir),
     publicShuttle: publicShuttleFiles({ platform, binDir: binDirFor({ platform, env: d.env, home: homeDir }), names: shuttleNames(platform), exists }),
-    resolve: realPathOrNull
+    resolve: presentOrNull
   })
   // The copy of the person's git excludes a sandboxed Codex session on Windows reads, in the temp folder, asked by this
   // spawner's prepares and the Host's chat sessions alike; the elevated sandbox's own account cannot read theirs
@@ -387,7 +390,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       // The sandbox's denied places are read under the person's home, from each session's own environment (its scope)
       homeDir,
       tmpDir,
-      readOnly
+      readOnly,
+      linkLook: nodeLinkLook
     }
   )
   const ensured = once(() => statusLine.ensureFiles())
@@ -474,7 +478,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     // Read at each spawn, not once: the Host completes its PATH when a CLI is missing (windowsPath.ts)
     () => hostWorkerBaseEnv(d.env),
     // The Host's own log: a spawn that had to fall back to a sync check says so in host.log.
-    { ...defaultSpawnChecks(log), codexWindowsReady, hostSocketDir, appKeyFile, readOnly, codexExcludes }
+    { ...defaultSpawnChecks(log), codexWindowsReady, hostSocketDir, appKeyFile, readOnly, linkLook: nodeLinkLook, codexExcludes }
   )
   // Shared extensions (Agent Control Plane release 1 design §4.5): `sessions.prepare` refreshes the account before
   // every spawn and roll, and the Host's chat sessions read the same cache
@@ -939,6 +943,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     appKeyFile,
     readOnly,
     sandboxWarn,
+    linkLook: nodeLinkLook,
     codexVersion,
     codexExcludes,
     orchEnvNow: () => orchEnvReady,

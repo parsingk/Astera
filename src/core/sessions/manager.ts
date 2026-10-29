@@ -29,11 +29,12 @@ import { buildCodexAppServerCommand } from './commands'
 import { fitsOnTheLine } from '../sandbox/prepared'
 import { sandboxUnavailable } from '../sandbox/unavailable'
 import { sandboxKindOf } from '../sandbox/coverage'
-import { PreparedLayouts, codexVersionBlocker, prepareCodexSandbox, sessionSandboxArgs, type CodexVersionProbe, type CodexWindowsReady } from '../sandbox/prepared'
+import { PreparedLayouts, codexSessionLinks, codexVersionBlocker, prepareCodexSandbox, sessionSandboxArgs, type CodexVersionProbe, type CodexWindowsReady } from '../sandbox/prepared'
 import { codexWindowsReadiness, runCodex } from '../sandbox/windowsReadiness'
 import type { ClaudeSandboxStart } from '../sandbox/claudeStart'
 import { startWarningsFor, tellSandboxStart, type SandboxWarnSink } from '../sandbox/startWarnings'
 import type { CodexExcludes } from '../sandbox/gitExcludes'
+import type { LinkLook } from '../sandbox/locations'
 import type { SandboxScope } from './statusline'
 
 /** statusLine info injected when a session spawns (provided by main's StatusLineManager,
@@ -119,6 +120,9 @@ export interface SpawnChecks {
    *  place Astera itself writes code or an installer to and runs unsandboxed (core/sandbox/locations.ts sandboxReadOnly,
    *  Task E and its fix round 1), built by the app and Host wiring. Absent, nothing is kept read-only. */
   readOnly?: readonly string[]
+  /** How the disk is read for links on the paths a sandboxed start names (Task E fix round 5, core/sandbox/locations.ts
+   *  namedPathFor): the app's and the Host's wiring give nodeLinkLook. Absent, every path is named as given. */
+  linkLook?: LinkLook
   /** Writes the copy of the person's global git excludes a sandboxed win32 Codex session reads, since the elevated
    *  sandbox's own account cannot read theirs (core/sandbox/gitExcludes.ts codexExcludesWriter), asked by its prepare.
    *  Absent, none is written and the session's git looks where it would. */
@@ -323,6 +327,7 @@ export class SessionManager {
         ? { check: (sandboxArgs: string[]) => fitsOnTheLine(this.checks.platform, buildCodexAppServerCommand(this.checks.platform, undefined, [], appServerSandboxArgs(sandboxArgs))) }
         : { check: (sandboxArgs: string[]) => fitsOnTheLine(this.checks.platform, descriptorOf(this.descriptors, account).buildCommand({ sandboxArgs })) }),
       ...(this.checks.codexExcludes ? { excludes: this.checks.codexExcludes } : {}),
+      ...(this.checks.linkLook ? { look: this.checks.linkLook } : {}),
       log: this.checks.log
     })
     // The other Hosts' folders beside this one's, as they were now, kept for the spawn's profile (final fix pass, part 2, B),
@@ -441,10 +446,6 @@ export class SessionManager {
     const sandboxed = opts.sandbox === true
     // What protection it is, said in the info and the note (SessionInfo.sandboxKind): Claude on Windows has deny rules only
     const sandboxKind = sandboxed ? sandboxKindOf(providerOf(opts.account), this.checks.platform) : undefined
-    // Task E fix rounds 2 and 3: what the sandbox will not do here, in the info and the note beside the kind, for the tab to
-    // show above the terminal (a line in the pty's stream would sit behind the CLI's alternate screen)
-    const sandboxWarnings = sandboxed ? startWarningsFor(this.sandboxWarn, { provider: providerOf(opts.account), platform: this.checks.platform, cwd: opts.cwd, homeDir: this.homeDir }) : []
-    const warned = sandboxWarnings.length > 0 ? { sandboxWarnings } : {}
     const sandboxedCodex = sandboxed && providerOf(opts.account) === 'codex'
     // Claude's sandbox is its settings file: the version the prepare asked is asked again here (the CLI may have been
     // updated since), and a session the twin was not written for is refused below rather than started outside it
@@ -483,8 +484,17 @@ export class SessionManager {
     // The sandbox's profile: the places it may not read come from the environment the session actually starts with (its
     // APPDATA, its session bus), so they are read after the hiding above
     const sandboxArgs = sandboxedCodex
-      ? this.codexSandboxArgsFor(layout, env, this.sandboxLayouts.otherHostsOf(opts.account.id, opts.cwd, this.checks.now()))
+      ? this.codexSandboxArgsFor(layout, env, this.sandboxLayouts.otherHostsOf(opts.account.id, opts.cwd, this.checks.now()), opts.cwd)
       : undefined
+    // Task E fix rounds 2, 3 and 5: what the sandbox will not do here, in the info and the note beside the kind, for the tab
+    // to show above the terminal (a line in the pty's stream would sit behind the CLI's alternate screen). On Linux a
+    // named path through a link in the work folder makes Codex refuse every command (sessionSandboxArgs)
+    const linkInWorkFolder =
+      sandboxedCodex && this.checks.platform === 'linux' && this.checks.linkLook !== undefined && this.codexLinksFor(layout, env, opts.cwd).length > 0
+    const sandboxWarnings = sandboxed
+      ? startWarningsFor(this.sandboxWarn, { provider: providerOf(opts.account), platform: this.checks.platform, cwd: opts.cwd, homeDir: this.homeDir, linkInWorkFolder })
+      : []
+    const warned = sandboxWarnings.length > 0 ? { sandboxWarnings } : {}
     // Shared extensions: their environment values only here, in this process's environment (design D5). The workload
     // token goes to every session, shared servers or not.
     Object.assign(env, caps?.env ?? {}, gatewayTokenEnv(caps ?? { gatewayGrant: [] }))
@@ -639,7 +649,7 @@ export class SessionManager {
 
   /** A sandboxed Codex session's `-a never` and permission profile (sessionSandboxArgs, core/sandbox/prepared.ts), with a
    *  win32 path cmd.exe cannot carry refused; `otherHosts` are the other Hosts' folders its prepare found. */
-  private codexSandboxArgsFor(layout: GitLayout | null, env: Record<string, string | undefined>, otherHosts: readonly string[]): string[] {
+  private codexSandboxArgsFor(layout: GitLayout | null, env: Record<string, string | undefined>, otherHosts: readonly string[], cwd: string): string[] {
     return sessionSandboxArgs({
       platform: this.checks.platform,
       homeDir: this.homeDir,
@@ -649,7 +659,22 @@ export class SessionManager {
       otherHostDirs: otherHosts,
       appKeyFile: this.checks.appKeyFile ?? null,
       readOnly: this.checks.readOnly ?? [],
-      log: this.checks.log
+      log: this.checks.log,
+      ...(this.checks.linkLook ? { links: { cwd, look: this.checks.linkLook } } : {})
+    })
+  }
+
+  /** The links in a sandboxed Codex session's writable folders its named paths go through (Task E fix round 5). */
+  private codexLinksFor(layout: GitLayout | null, env: Record<string, string | undefined>, cwd: string): string[] {
+    if (!this.checks.linkLook) return []
+    return codexSessionLinks({
+      platform: this.checks.platform,
+      homeDir: this.homeDir,
+      layout,
+      env,
+      appKeyFile: this.checks.appKeyFile ?? null,
+      readOnly: this.checks.readOnly ?? [],
+      links: { cwd, look: this.checks.linkLook }
     })
   }
 

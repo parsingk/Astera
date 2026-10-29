@@ -37,6 +37,8 @@ describe('the sandbox warning line', () => {
   it('says both warnings in one line', () => {
     expect(line('s1', ['claudeUserns', 'homeInWorkFolder'])).toContain('>session.sandbox.warn.claudeUsernsAndHome</span>')
     expect(line('s1', ['claudeUserns'])).toContain('>session.sandbox.warn.claudeUserns</span>')
+    // Task E fix round 5: Codex on Linux, a named path through a link in the work folder, with the home warning
+    expect(line('s1', ['linkInWorkFolder', 'homeInWorkFolder'])).toContain('>session.sandbox.warn.linkAndHome</span>')
   })
 
   it('stays closed for the session it was closed for, and only that one', () => {

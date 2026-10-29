@@ -1,7 +1,7 @@
 // The places a sandboxed session may not read (sandbox design §6): the sensitive locations of the credentials design's E6
 // list, plus the OS credential stores a CLI's own sandbox does not close by itself. All paths come out absolute with forward
 // slashes, the one form both CLIs' settings and the Codex profile take on every OS.
-import { mkdirSync, realpathSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readlinkSync, realpathSync } from 'node:fs'
 import { lstat, readdir } from 'node:fs/promises'
 
 const slashed = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '')
@@ -104,15 +104,12 @@ export function publicShuttleFiles(o: { platform: NodeJS.Platform; binDir: strin
  *  and on macOS and Linux the public CLI's own files. The one function every start path and the measurement build from,
  *  as for the profile; each caller passes what it knows (nulls dropped). Forward slashes, each once.
  *
- *  `resolve` (realPathOrNull at both wirings; fix round 3, re-review Minor 5) names each path where it really is, and
- *  drops one that is not there or cannot be looked at, on every OS. A missing read-only path is not harmless: while a
- *  sandboxed command runs, Codex and srt put an empty read-only file at it on the host to block its creation, so a
- *  missing `~/.cache/astera-updater` would make an update download fail then, and an interrupted sandbox could leave the
- *  file behind. A path through a linked folder (a dotfile manager's `~/.cache` or `~/.local`) is named at its target:
- *  Codex on Linux refuses every command when a read-only path crosses a writable symlink (linux-sandbox `bwrap.rs`
- *  at rust-v0.160.0), and Claude Code's deny rules match "either the requested path or the file it resolves to"
- *  (code.claude.com/docs/en/permissions, Symlinks), so the target keeps both. Without it (the measurement, whose
- *  profile is there), each path is named as given. */
+ *  `resolve` (presentOrNull at both wirings; fix rounds 3 and 5, re-review Minor 5) drops a path that is not there or
+ *  cannot be looked at, on every OS. A missing read-only path is not harmless: while a sandboxed command runs, Codex and
+ *  srt put an empty read-only file at it on the host to block its creation, so a missing `~/.cache/astera-updater` would
+ *  make an update download fail then, and an interrupted sandbox could leave the file behind. Where a path that is there
+ *  really is depends on the session (a link it could change is not followed), so each start decides that
+ *  (namedPathFor). Without it (the measurement, whose profile is there), each path is named as given. */
 export function sandboxReadOnly(o: {
   profileDir?: string | null
   hostRuntimeBase?: string | null
@@ -160,18 +157,144 @@ export function ensureOwnFolders(
     try {
       mkdir(folder)
     } catch {
-      // Not made: realPathOrNull finds nothing there and the list leaves it out, as before
+      // Not made: presentOrNull finds nothing there and the list leaves it out, as before
     }
   }
 }
 
-/** A path's real location (every link on it followed, `realpathSync.native`), forward slashes; null when it is not there
- *  or cannot be looked at. What both wirings hand sandboxReadOnly, once, when the app or the Host starts. */
-export function realPathOrNull(p: string): string | null {
-  try {
-    return slashed(realpathSync.native(p))
-  } catch {
-    return null
+/** A path as spelled, forward slashes, when it is there (a link on it followed to see that); null when it is not or
+ *  cannot be looked at. What both wirings hand sandboxReadOnly, once, when the app or the Host starts: where the path
+ *  really is is each start's to decide (namedPathFor). */
+export function presentOrNull(p: string): string | null {
+  return existsSync(p) ? slashed(p) : null
+}
+
+/** How namedPathFor looks at the disk: `lstat` gives null for a path that is not there and throws when it cannot look;
+ *  `readlink` gives a link's target as stored. */
+export interface LinkLook {
+  lstat(p: string): { isSymbolicLink(): boolean } | null
+  readlink(p: string): string
+}
+
+/** The disk, as namedPathFor looks at it. On Windows a junction is a link too (`lstat` reports it so). */
+export const nodeLinkLook: LinkLook = {
+  lstat: (p) => lstatSync(p, { throwIfNoEntry: false }) ?? null,
+  readlink: (p) => readlinkSync(p)
+}
+
+/** Where one path Astera names for a sandboxed start lands (namedPathFor): `link` is the link that left it as given. */
+export interface NamedPath {
+  path: string
+  link: string | null
+}
+
+/** How many links one path may go through before it is named as given, the kernel's own bound (ELOOP, 40). */
+const MAX_LINKS = 40
+
+/** An absolute path's root (`/`, or a drive's `C:/`) and its components; null for one that is relative or a UNC path. */
+function splitAbsolute(p: string): { root: string; parts: string[] } | null {
+  const s = p.replace(/\\/g, '/').replace(/^\/\/[?.]\//, '').replace(/^\/\?\?\//, '')
+  const drive = /^([A-Za-z]:)(\/|$)/.exec(s)
+  const root = drive ? `${drive[1]}/` : s.startsWith('/') && !s.startsWith('//') ? '/' : null
+  if (root === null) return null
+  return { root, parts: s.slice(drive ? drive[0].length : 1).split('/').filter((c) => c !== '' && c !== '.') }
+}
+
+const fold = (p: string, platform: NodeJS.Platform): string => (platform === 'win32' || platform === 'darwin' ? p.toLowerCase() : p)
+
+/** Whether `p` is a writable folder or lies inside one, each folder by both its spellings (as given, and where it really
+ *  is), case folded where the OS ignores case. */
+function inWritable(p: string, writable: readonly string[], platform: NodeJS.Platform): boolean {
+  const target = fold(p, platform)
+  return writable.some((w) => {
+    const root = fold(w, platform)
+    return target === root || target.startsWith(root.endsWith('/') ? root : `${root}/`)
+  })
+}
+
+/** A session's writable folders by every spelling they have: as given, and where each really is. */
+function writableSpellings(writable: readonly string[]): string[] {
+  return [
+    ...new Set(
+      writable.flatMap((w) => {
+        const given = slashed(w)
+        try {
+          return [given, slashed(realpathSync.native(w))]
+        } catch {
+          return [given]
+        }
+      })
+    )
+  ]
+}
+
+/**
+ * Where one path Astera names for a sandboxed start (a read-only folder, the app key, an E6 location, an OS credential
+ * store) is named, for a session whose writable folders are `writable` (its work folder, its temp folders, npm's cache,
+ * the repository's git folders): Task E fix round 5, under the person's rule E5 (a session whose protection cannot be
+ * put in place does not start).
+ * - A link on the path that lies outside every writable folder is one the session cannot change: it is followed, so the
+ *   entry names where the path really is. A missing rest is joined onto the nearest existing folder, so a missing
+ *   `~/.config/gcloud` under a linked `~/.config` lands in the link's target, where a write through it would land.
+ * - A link that lies inside a writable folder (at the folder itself or below) is one the session could repoint after the
+ *   sandbox was built: the path is named as given and the link is returned. Codex on Linux then refuses every command
+ *   for that path, as it does by design ("Resolving and masking the symlink's current target is a TOCTTOU snapshot",
+ *   linux-sandbox/src/bwrap.rs:1328-1334 at rust-v0.160.0); where nothing refuses it, the start is refused instead.
+ * Every link a chain goes through is judged by where that link lies. A path that cannot be looked at, or whose links go
+ * round, is named as given, as before this round. Forward slashes.
+ */
+export function namedPathFor(p: string, writable: readonly string[], platform: NodeJS.Platform, look: LinkLook = nodeLinkLook): NamedPath {
+  const given = slashed(p)
+  const start = splitAbsolute(given)
+  if (start === null) return { path: given, link: null }
+  const roots = writableSpellings(writable)
+  const join = (root: string, parts: readonly string[]): string => root + parts.join('/')
+  let root = start.root
+  let done: string[] = []
+  const queue = [...start.parts]
+  let hops = 0
+  while (queue.length > 0) {
+    const part = queue.shift()!
+    if (part === '..') {
+      done.pop()
+      continue
+    }
+    const next = join(root, [...done, part])
+    let stat: { isSymbolicLink(): boolean } | null
+    try {
+      stat = look.lstat(next)
+    } catch {
+      return { path: given, link: null }
+    }
+    if (stat === null) return { path: join(root, [...done, part, ...queue]), link: null }
+    if (!stat.isSymbolicLink()) {
+      done.push(part)
+      continue
+    }
+    if (inWritable(next, roots, platform)) return { path: given, link: next }
+    if (++hops > MAX_LINKS) return { path: given, link: null }
+    let target: string
+    try {
+      target = look.readlink(next)
+    } catch {
+      return { path: given, link: null }
+    }
+    const absolute = splitAbsolute(target)
+    if (absolute !== null) {
+      root = absolute.root
+      done = []
+      queue.unshift(...absolute.parts)
+    } else queue.unshift(...target.replace(/\\/g, '/').split('/').filter((c) => c !== '' && c !== '.'))
+  }
+  return { path: join(root, done), link: null }
+}
+
+/** namedPathFor over a list: each entry where it is named, once, and the links that left an entry as given, once. */
+export function namedPaths(paths: readonly string[], writable: readonly string[], platform: NodeJS.Platform, look: LinkLook = nodeLinkLook): { paths: string[]; links: string[] } {
+  const named = paths.map((p) => namedPathFor(p, writable, platform, look))
+  return {
+    paths: [...new Set(named.map((n) => n.path))],
+    links: [...new Set(named.flatMap((n) => (n.link === null ? [] : [n.link])))]
   }
 }
 

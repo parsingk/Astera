@@ -191,8 +191,9 @@ describe('core.ts builds the read-only list once and hands it to the twins and b
     // Task E fix round 2: Astera's own %LOCALAPPDATA%\astera whole on Windows, and the public CLI's own files elsewhere
     expect(built).toMatch(/localAstera: localAsteraDir\(process\.platform, process\.env, os\.homedir\(\)\)/)
     expect(built).toMatch(/publicShuttle: publicShuttleFiles\(\{ platform: process\.platform, binDir: binDirFor\(\{ platform: process\.platform, env: process\.env, home: os\.homedir\(\) \}\), names: shuttleNames\(process\.platform\), exists: existsSync \}\)/)
-    // Task E fix round 3 (re-review Minor 5): only what is there when the app starts, each where it really is
-    expect(built).toMatch(/resolve: realPathOrNull/)
+    // Task E fix rounds 3 and 5: only what is there when the app starts, as spelled; where each really is is each
+    // start's to decide (namedPathFor)
+    expect(built).toMatch(/resolve: presentOrNull/)
   })
   it('makes the updater cache and the Host runtime folder before it builds the list, and names that same cache (fix round 4)', () => {
     const at = core.indexOf('const readOnly = sandboxReadOnly({')
@@ -200,11 +201,12 @@ describe('core.ts builds the read-only list once and hands it to the twins and b
     expect(before).toMatch(/const updaterCache = updaterCacheDir\(process\.platform, process\.env, os\.homedir\(\)\)\n\s*ensureOwnFolders\(\[updaterCache, runtimeBase\]\)\n/)
     expect(core.slice(at, core.indexOf('\n  })', at))).toMatch(/\n    updaterCache,\n/)
   })
-  it('the StatusLineManager, the terminal checks and the chat deps all take that one list', () => {
-    expect(core).toMatch(/const statusLine = new StatusLineManager\(\n    userDataDir,[\s\S]*\{ findRuntime, readOnly \}\n  \)/)
-    expect(core).toMatch(/\{ \.\.\.defaultSpawnChecks\(sessionsLog\), hostSocketDir, appKeyFile, readOnly, codexExcludes \}/)
+  // Fix round 5: and each looks at the links on the paths it names (nodeLinkLook)
+  it('the StatusLineManager, the terminal checks and the chat deps all take that one list, and look at its links', () => {
+    expect(core).toMatch(/const statusLine = new StatusLineManager\(\n    userDataDir,[\s\S]*\{ findRuntime, readOnly, linkLook: nodeLinkLook \}\n  \)/)
+    expect(core).toMatch(/\{ \.\.\.defaultSpawnChecks\(sessionsLog\), hostSocketDir, appKeyFile, readOnly, linkLook: nodeLinkLook, codexExcludes \}/)
     const chat = core.slice(core.indexOf('const chat = new ChatSessionManager({'), core.indexOf('// Lazy history'))
-    expect(chat).toMatch(/\n    appKeyFile,\n    readOnly,\n/)
+    expect(chat).toMatch(/\n    appKeyFile,\n    readOnly,\n    linkLook: nodeLinkLook,\n/)
   })
 })
 
@@ -216,10 +218,19 @@ describe('the Host hands its chat sessions the spawner’s read-only list and ap
   const here = path.dirname(fileURLToPath(import.meta.url))
   const rollingWiring = readFileSync(path.join(here, '..', 'host', 'rollingWiring.ts'), 'utf8')
   const hostChats = readFileSync(path.join(here, '..', 'host', 'hostChats.ts'), 'utf8')
-  it('the spawner builds its list from what is there, each where it really is (fix round 3)', () => {
+  it('the spawner builds its list from what is there, as spelled (fix rounds 3 and 5)', () => {
     const spawner = readFileSync(path.join(here, '..', 'host', 'spawner.ts'), 'utf8')
     const built = spawner.slice(spawner.indexOf('const readOnly = sandboxReadOnly({'), spawner.indexOf('\n  })', spawner.indexOf('const readOnly = sandboxReadOnly({')))
-    expect(built).toMatch(/resolve: realPathOrNull/)
+    expect(built).toMatch(/resolve: presentOrNull/)
+  })
+  // Fix round 5: the Host's terminal checks and twins look at the links on the paths they name, and so do its chats
+  it('the spawner, rollingWiring and hostChats hand the way to look at links to every start', () => {
+    const spawner = readFileSync(path.join(here, '..', 'host', 'spawner.ts'), 'utf8')
+    expect(spawner).toMatch(/\{ \.\.\.defaultSpawnChecks\(log\), codexWindowsReady, hostSocketDir, appKeyFile, readOnly, linkLook: nodeLinkLook, codexExcludes \}/)
+    expect(spawner).toMatch(/\n      readOnly,\n      linkLook: nodeLinkLook\n    }/)
+    expect(spawner).toMatch(/\n    sandboxWarn,\n    linkLook: nodeLinkLook,\n/)
+    expect(rollingWiring).toMatch(/readOnly: a\.spawner\.readOnly \?\? \[\],\n    \.\.\.\(a\.spawner\.linkLook \? \{ linkLook: a\.spawner\.linkLook \} : \{\}\),\n/)
+    expect(hostChats).toMatch(/\.\.\.\(d\.linkLook \? \{ linkLook: d\.linkLook \} : \{\}\),\n/)
   })
   it('the spawner makes the updater cache and its runtime folder before it builds the list (fix round 4)', () => {
     const spawner = readFileSync(path.join(here, '..', 'host', 'spawner.ts'), 'utf8')

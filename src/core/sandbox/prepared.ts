@@ -4,7 +4,7 @@
 // for the spawn. A roll prepares a chat chain's respawn through the terminal manager's prepare, as it refreshes the
 // capability cache both managers read, so the two managers of a process hold one PreparedLayouts.
 import { ensureGitFiles, ensureWorktreeConfigFiles, gitLayoutOf, type GitLayout } from './gitLayout'
-import { appKeyDenies, credentialStoreDenies, hostSocketDenies, otherHostFolders, sensitiveLocations } from './locations'
+import { appKeyDenies, credentialStoreDenies, hostSocketDenies, namedPaths, otherHostFolders, sensitiveLocations, type LinkLook } from './locations'
 import { codexSandboxArgs } from './codexProfile'
 import type { CodexExcludes } from './gitExcludes'
 import { SANDBOX_UNAVAILABLE, sandboxUnavailable } from './unavailable'
@@ -103,13 +103,74 @@ export function codexSessionDenied(o: {
   ]
 }
 
+/** The folders a sandboxed Codex session may write, by which a link on a named path is judged (namedPathFor): its work
+ *  folder (the `:workspace_roots`, with a top-level `.git` in it), a worktree's own git folders, which Astera's profile
+ *  makes writable (codexProfile.ts gitEntries), and its temp folders (`$TMPDIR`, and `/tmp` off Windows: the `:workspace`
+ *  profile's; TMP and TEMP on Windows). Each as given; namedPathFor adds where each really is. */
+export function codexWritableFolders(o: { platform: NodeJS.Platform; cwd: string; layout: GitLayout | null; env: Record<string, string | undefined> }): string[] {
+  const temp = [o.env.TMPDIR, o.env.TMP, o.env.TEMP].filter((p): p is string => Boolean(p))
+  return [o.cwd, ...(o.layout ? [o.layout.gitDir, o.layout.commonDir] : []), ...temp, ...(o.platform === 'win32' ? [] : ['/tmp'])]
+}
+
+/** How a sandboxed start's named paths are looked at for links (Task E fix round 5): the session's work folder and how
+ *  the disk is read. Given by the managers, from the app's and the Host's wiring; absent (the measurement), every path
+ *  is named as given. */
+export interface SessionLinks {
+  cwd: string
+  look: LinkLook
+}
+
+/** What a sandboxed Codex start names, and the links that left an entry as given (Task E fix round 5): the E6 list, the
+ *  OS credential store, the app key and the read-only folders each where namedPathFor puts it for this session; the
+ *  Host socket folders as they are (already named in both macOS spellings). Without `links`, codexSessionDenied's list
+ *  and the read-only folders as given. */
+function codexNamedEntries(o: {
+  platform: NodeJS.Platform
+  homeDir: string
+  layout: GitLayout | null
+  env: Record<string, string | undefined>
+  hostSocketDir?: string | null
+  otherHostDirs?: readonly string[]
+  appKeyFile?: string | null
+  readOnly?: readonly string[]
+  links?: SessionLinks
+}): { denied: string[]; readOnly: string[]; links: string[] } {
+  const logins = [...sensitiveLocations(o.platform, o.env, o.homeDir), ...credentialStoreDenies(o.platform, o.env, o.homeDir)]
+  const sockets = hostSocketDenies(o.platform, o.hostSocketDir ?? null, o.otherHostDirs ?? [])
+  const key = appKeyDenies(o.appKeyFile ?? null)
+  const readOnly = [...(o.readOnly ?? [])]
+  if (!o.links) return { denied: [...logins, ...sockets, ...key], readOnly, links: [] }
+  const writable = codexWritableFolders({ platform: o.platform, cwd: o.links.cwd, layout: o.layout, env: o.env })
+  const named = (paths: readonly string[]) => namedPaths(paths, writable, o.platform, o.links!.look)
+  const l = named(logins)
+  const k = named(key)
+  const r = named(readOnly)
+  return { denied: [...l.paths, ...sockets, ...k.paths], readOnly: r.paths, links: [...new Set([...l.links, ...k.links, ...r.links])] }
+}
+
+/** The links inside a sandboxed Codex session's writable folders that its named paths go through (Task E fix round 5):
+ *  on Linux Codex refuses every command for such a path, which the session is told (startWarnings.ts
+ *  `linkInWorkFolder`); elsewhere sessionSandboxArgs refuses the start. Empty without `links`. */
+export function codexSessionLinks(o: Parameters<typeof codexNamedEntries>[0]): string[] {
+  return codexNamedEntries(o).links
+}
+
 /** A sandboxed Codex session's `-a never` and permission profile: its repository's git directories writable, what
  *  codexSessionDenied lists denied, and what `readOnly` keeps read-only (the profile and every folder Astera itself
  *  writes code or an installer to and runs unsandboxed, locations.ts sandboxReadOnly; Task E and its fix round 1). On
  *  Windows the launch goes through cmd.exe, which would break on a path holding one of its characters, so such a start
  *  is refused instead of launched broken (Review Focus 2): `path-unsafe` for the work folder's repository, whose words
  *  say "the folder", and `named-path-unsafe` for any other path it names (Astera's own folders, a login folder in the
- *  home), whose words send the person to the log, which `log` names it in (Task E fix round 3, re-review Minor 6). */
+ *  home), whose words send the person to the log, which `log` names it in (Task E fix round 3, re-review Minor 6).
+ *
+ *  With `links` (Task E fix round 5, rule E5), each named path is where namedPathFor puts it for this session. One that
+ *  goes through a link inside the session's writable folders stays as given: on Linux Codex then refuses every command
+ *  for it, as it does by design (linux-sandbox/src/bwrap.rs:716-729 and 1320-1340 at rust-v0.160.0). On macOS Codex
+ *  follows such a path at its start and does not keep the link from being replaced (sandboxing/src/seatbelt.rs at the
+ *  tag: the write exclusions name the logical and the resolved path, :552-562, and the protected ancestors are denied
+ *  unlinking only as directories, `(vnode-type DIRECTORY)`, :1074-1080, which a symlink is not). On Windows Codex has
+ *  no such refusal, and whether its sandbox keeps a junction from being replaced was not checked. So on both the start is
+ *  refused (`linked-path`), the log naming the link. */
 export function sessionSandboxArgs(o: {
   platform: NodeJS.Platform
   homeDir: string
@@ -124,10 +185,15 @@ export function sessionSandboxArgs(o: {
   readOnly?: readonly string[]
   /** Where a refused path is named (the manager's log). */
   log?: (m: string) => void
+  /** The session's work folder and how the disk is read, for links on the named paths (SessionLinks). */
+  links?: SessionLinks
 }): string[] {
   const { platform, layout } = o
-  const denied = codexSessionDenied(o)
-  const readOnly = o.readOnly ?? []
+  const { denied, readOnly, links } = codexNamedEntries(o)
+  if (links.length > 0 && platform !== 'linux') {
+    o.log?.(`sandbox: ${links.join(', ')} is a link inside the session's writable folders, which it could repoint, and Codex's sandbox here would not refuse it, so the sandboxed start is refused`)
+    throw sandboxUnavailable('linked-path')
+  }
   if (platform === 'win32') {
     const repository = layout ? [layout.top, layout.gitDir, layout.commonDir, ...layout.worktreeConfigs] : []
     if (repository.some((p) => LAUNCH_FORBIDDEN.test(p))) throw sandboxUnavailable('path-unsafe')
@@ -188,6 +254,8 @@ export async function prepareCodexSandbox(o: {
   check?: (sandboxArgs: string[]) => void
   /** Windows: writes the copy of the person's git excludes (codexExcludesWriter). Absent, none is written. */
   excludes?: CodexExcludes
+  /** How the disk is read for links on the named paths (sessionSandboxArgs `links`, with `cwd`). Absent, as given. */
+  look?: LinkLook
   log: (m: string) => void
 }): Promise<PreparedCodex> {
   const fail = (err: unknown): Error => {
@@ -216,7 +284,8 @@ export async function prepareCodexSandbox(o: {
     otherHostDirs: otherHosts,
     appKeyFile: o.appKeyFile ?? null,
     readOnly: o.readOnly ?? [],
-    log: o.log
+    log: o.log,
+    ...(o.look ? { links: { cwd: o.cwd, look: o.look } } : {})
   })
   o.check?.(args)
   if (o.platform === 'win32') {

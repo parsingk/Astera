@@ -155,7 +155,14 @@ export function claudeSandboxStart(o: {
       const blocked = blocker()
       if (blocked !== null) throw new Error(blocked)
       const layout = await layoutFor(p.cwd)
-      if ((await o.files.ensureSandboxFiles({ layout, env: p.env })) !== 'ok') {
+      const written = await o.files.ensureSandboxFiles({ layout, env: p.env, cwd: p.cwd })
+      // Task E fix round 5 (rule E5): a named path through a link the session could change, which srt would follow at its
+      // start and not keep from being repointed (StatusLineManager.ensureSandboxFiles writes no twin for it)
+      if (typeof written === 'object') {
+        o.log(`sandbox: ${written.linked.join(', ')} is a link inside the session's writable folders, which it could repoint, and Claude's sandbox would not keep it, so the sandboxed start is refused`)
+        throw sandboxUnavailable('linked-path')
+      }
+      if (written !== 'ok') {
         o.log("sandbox: Claude's sandbox settings could not be written, so the sandboxed start is refused")
         throw sandboxUnavailable('settings-write-failed')
       }
@@ -172,7 +179,7 @@ export function claudeSandboxStart(o: {
     blocker,
     scopeOf: (accountId, cwd, env) => {
       const layout = layouts.layoutOf(accountId, cwd, now())
-      return layout === undefined ? undefined : { layout, env }
+      return layout === undefined ? undefined : { layout, env, cwd }
     },
     chatArgs: (enforce, scope) => o.files.sandboxChatArgs(enforce, scope),
     env: (inherited) =>

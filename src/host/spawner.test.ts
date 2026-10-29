@@ -21,7 +21,8 @@ import type { PromptWriteEvent } from '../core/orchestration/exec/coordinator'
 import { ENTER_QUIET_MS } from '../core/sessions/sessionDriver'
 import { gitLayoutOf } from '../core/sandbox/gitLayout'
 import { codexExcludesFileOf } from '../core/sandbox/gitExcludes'
-import { updaterCacheDir } from '../core/sandbox/locations'
+import { namedPathFor, updaterCacheDir } from '../core/sandbox/locations'
+import { codexWritableFolders } from '../core/sandbox/prepared'
 
 const NOW = '2026-09-24T00:00:00.000Z'
 let dir: string
@@ -923,10 +924,12 @@ describe('the roll spawn (S6 R5, R6)', () => {
     await fs.writeFile(path.join(profile, 'accounts.json'), JSON.stringify({ accounts: [
       { id: 'acc2', label: 'two', configDir: path.join(dir, 'cfg2'), color: '#888', createdAt: NOW, provider: 'codex' }
     ] }))
-    // Task E fix round 3 (re-review Minor 5): the run locations are named only where they are, each at its real path. The
-    // updater cache is reached through a linked folder, as a dotfile manager's ~/.cache is (a junction on Windows, which
-    // needs no privilege); on Windows the Host runtime (in the profile, with no LOCALAPPDATA) and Astera's own
-    // %LOCALAPPDATA%\astera are there
+    // Task E fix rounds 3 and 5: the run locations are named only where they are, as spelled in the Host's list, and each
+    // start names them where namedPathFor puts them for its folders. The updater cache is reached through a linked folder,
+    // as a dotfile manager's ~/.cache is (a junction on Windows, which needs no privilege): outside the session's writable
+    // folders the start follows it; under /tmp (Linux's temp folder, which this fixture is in there) the session could
+    // repoint it, so it stays as given and Codex refuses its commands. On Windows the Host runtime (in the profile, with
+    // no LOCALAPPDATA) and Astera's own %LOCALAPPDATA%\astera are there
     const home = path.join(dir, 'home')
     const env = hostEnv()
     const cache = path.join(dir, 'dots', 'astera-updater')
@@ -939,26 +942,33 @@ describe('the roll spawn (S6 R5, R6)', () => {
       await fs.mkdir(path.join(home, 'AppData', 'Local', 'astera'), { recursive: true })
     }
     const real = (p: string): string => realpathSync.native(p).replace(/\\/g, '/')
+    const spelled = (p: string): string => p.replace(/\\/g, '/')
     const h = rig({ env, codexNoDaemon: Object.assign(() => true, { warm: async () => {} }) })
     const account = JSON.parse(await fs.readFile(path.join(profile, 'accounts.json'), 'utf8')).accounts[0]
     await h.spawner!.prepareRollSpawn(account, repo, undefined, true)
     h.spawner!.rollSpawn({ account, cwd: repo, rollAccountIds: [account.id], sandbox: true, bypassPermissions: true })
     const permissions = (h.spawned[0].args as string[]).find((a) => a.startsWith('permissions='))!
-    const folder = real(profile)
-    expect(permissions).toContain(`${JSON.stringify(folder)}="read"`)
-    expect(permissions).toContain(`${JSON.stringify(`${profile.replace(/\\/g, '/')}/host/app.key`)}="deny"`)
-    // The spawner exposes the whole read-only list (rollingWiring hands it to the chat manager); every entry is a read
+    expect(permissions).toContain(`${JSON.stringify(real(profile))}="read"`)
+    expect(permissions).toContain(`${JSON.stringify(`${real(profile)}/host/app.key`)}="deny"`)
+    const linkInTemp = process.platform !== 'win32' && /^(\/private)?\/tmp\//.test(spelled(linked))
+    if (linkInTemp) expect(permissions).toContain(`${JSON.stringify(spelled(linked))}="read"`)
+    else {
+      expect(permissions).toContain(`${JSON.stringify(real(cache))}="read"`)
+      expect(permissions).not.toContain(spelled(linked))
+    }
+    // The spawner exposes the whole read-only list as spelled (rollingWiring hands it to the chat manager); every entry
+    // is a read, named for this session
     const readOnly = h.spawner!.readOnly!
-    expect(readOnly).toContain(folder)
-    expect(readOnly).toContain(real(cache))
-    expect(readOnly).not.toContain(linked.replace(/\\/g, '/'))
+    expect(readOnly).toContain(spelled(profile))
+    expect(readOnly).toContain(spelled(linked))
     if (process.platform === 'win32') {
-      expect(readOnly).toContain(real(path.join(profile, 'host-runtime')))
+      expect(readOnly).toContain(spelled(path.join(profile, 'host-runtime')))
       // Task E fix round 2: Astera's own %LOCALAPPDATA%\astera whole (its bin, the session .cmd's junction)
-      expect(readOnly).toContain(real(path.join(home, 'AppData', 'Local', 'astera')))
+      expect(readOnly).toContain(spelled(path.join(home, 'AppData', 'Local', 'astera')))
       expect(readOnly.some((p) => p.endsWith('/astera/app'))).toBe(false)
     }
-    for (const r of readOnly) expect(permissions, r).toContain(`${JSON.stringify(r)}="read"`)
+    const writable = codexWritableFolders({ platform: process.platform, cwd: repo, layout: await gitLayoutOf(repo), env })
+    for (const r of readOnly) expect(permissions, r).toContain(`${JSON.stringify(namedPathFor(r, writable, process.platform).path)}="read"`)
   })
   // Task E fix round 4: the Host makes the folders Astera owns and writes into (electron-updater's cache; on Windows the
   // Host runtime) before it builds the list, so they are always named, each a real folder (no placeholder); it names no
@@ -969,17 +979,17 @@ describe('the roll spawn (S6 R5, R6)', () => {
     const cache = updaterCacheDir(process.platform, env, home)
     const h = rig({ env })
     const readOnly = h.spawner!.readOnly!
-    const real = (p: string): string => realpathSync.native(p).replace(/\\/g, '/')
+    const spelled = (p: string): string => p.replace(/\\/g, '/')
     expect((await fs.readdir(cache))).toEqual([])
-    expect(readOnly).toContain(real(cache))
+    expect(readOnly).toContain(spelled(cache))
     if (process.platform === 'win32') {
       // No LOCALAPPDATA in this environment: the runtime goes under the profile (core/host/runtime.ts hostRuntimeBase)
       expect((await fs.readdir(path.join(profile, 'host-runtime')))).toEqual([])
-      expect(readOnly).toContain(real(path.join(profile, 'host-runtime')))
+      expect(readOnly).toContain(spelled(path.join(profile, 'host-runtime')))
     } else expect(await fs.stat(path.join(profile, 'host-runtime')).catch(() => null)).toBeNull()
     // Astera's own %LOCALAPPDATA%\astera is not made, so not named here
     expect(readOnly.some((p) => /\/AppData\/Local\/astera$/i.test(p))).toBe(false)
-    expect(readOnly).toContain(real(profile))
+    expect(readOnly).toContain(spelled(profile))
   })
   // Task 5 fix round 1: what would refuse the sandboxed respawn is asked in its prepare, which the roll awaits before it
   // kills the session it replaces

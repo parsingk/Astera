@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { appKeyDenies, credentialStoreDenies, ensureOwnFolders, hostSocketDenies, installRootOf, localAsteraDir, otherHostFolders, profileReadOnly, publicShuttleFiles, realPathOrNull, sandboxReadOnly, sensitiveLocations, updaterCacheDir } from './locations'
+import { appKeyDenies, credentialStoreDenies, ensureOwnFolders, hostSocketDenies, installRootOf, localAsteraDir, namedPathFor, namedPaths, otherHostFolders, presentOrNull, profileReadOnly, publicShuttleFiles, sandboxReadOnly, sensitiveLocations, updaterCacheDir } from './locations'
 
 describe('sandbox locations', () => {
   it('lists E6 on every OS, with gh and gcloud where each OS keeps them', () => {
@@ -93,18 +93,109 @@ describe('sandbox locations', () => {
     ).toEqual(['/h/.config/astera', '/dots/cache/astera-updater'])
     // A resolver that throws drops the path
     expect(sandboxReadOnly({ profileDir: '/p', resolve: () => { throw new Error('EACCES') } })).toEqual([])
-    // The real-path resolver itself: an existing folder at its real path with forward slashes, a missing one null, and
-    // one reached through a linked folder (a junction on Windows, which needs no privilege) at the link's target
+    // Fix round 5: what the wirings pass keeps a path that is there as it is spelled, a link on it included; where it
+    // really is is decided at each start, by the session's own writable folders (namedPathFor)
     const dir = mkdtempSync(path.join(os.tmpdir(), 'astera-real-'))
     try {
-      expect(realPathOrNull(dir)).toBe(realpathSync.native(dir).replace(/\\/g, '/'))
-      expect(realPathOrNull(path.join(dir, 'missing'))).toBeNull()
+      const d = dir.replace(/\\/g, '/')
+      expect(presentOrNull(dir)).toBe(d)
+      expect(presentOrNull(path.join(dir, 'missing'))).toBeNull()
       mkdirSync(path.join(dir, 'dots', 'cache', 'astera-updater'), { recursive: true })
       symlinkSync(path.join(dir, 'dots', 'cache'), path.join(dir, '.cache'), process.platform === 'win32' ? 'junction' : 'dir')
-      expect(realPathOrNull(path.join(dir, '.cache', 'astera-updater'))).toBe(`${realpathSync.native(dir).replace(/\\/g, '/')}/dots/cache/astera-updater`)
+      expect(presentOrNull(path.join(dir, '.cache', 'astera-updater'))).toBe(`${d}/.cache/astera-updater`)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+
+  // Task E fix round 5 (rule E5: a session whose protection cannot be put in place does not start). Every path Astera
+  // names for a sandboxed start is looked at against that session's writable folders: a link on it the session cannot
+  // change is followed, so the entry names where the path really is (through its nearest existing folder when the rest
+  // is missing); a link it could change (one inside a writable folder) leaves the entry as given and is reported, since
+  // a session could repoint it after the sandbox was built (Codex's bwrap.rs refuses such a path for that reason)
+  describe('namedPathFor', () => {
+    let dir: string
+    let d: string
+    const kind = process.platform === 'win32' ? 'junction' : 'dir'
+    afterEach(() => rmSync(dir, { recursive: true, force: true }))
+    const tree = (): void => {
+      dir = mkdtempSync(path.join(os.tmpdir(), 'astera-named-'))
+      d = realpathSync.native(dir).replace(/\\/g, '/')
+      mkdirSync(path.join(d, 'home'))
+      mkdirSync(path.join(d, 'home', 'dots', 'config', 'gh'), { recursive: true })
+      mkdirSync(path.join(d, 'home', 'proj'))
+      // ~/.config is a dotfile manager's link into ~/dots/config
+      symlinkSync(path.join(d, 'home', 'dots', 'config'), path.join(d, 'home', '.config'), kind)
+    }
+
+    it('names a path with no link on it as given', () => {
+      tree()
+      expect(namedPathFor(`${d}/home/dots/config/gh`, [`${d}/home/proj`], process.platform)).toEqual({ path: `${d}/home/dots/config/gh`, link: null })
+      expect(namedPathFor(`${d}/home/nothing/here`, [`${d}/home/proj`], process.platform)).toEqual({ path: `${d}/home/nothing/here`, link: null })
+    })
+
+    it('follows a link the session cannot change, through the nearest existing folder when the rest is missing', () => {
+      tree()
+      const roots = [`${d}/home/proj`, `${d}/tmp`]
+      expect(namedPathFor(`${d}/home/.config/gh`, roots, process.platform)).toEqual({ path: `${d}/home/dots/config/gh`, link: null })
+      expect(namedPathFor(`${d}/home/.config/gcloud`, roots, process.platform)).toEqual({ path: `${d}/home/dots/config/gcloud`, link: null })
+      expect(namedPathFor(`${d}/home/.config/astera/host/app.key`, roots, process.platform)).toEqual({ path: `${d}/home/dots/config/astera/host/app.key`, link: null })
+    })
+
+    it('leaves a path through a link inside a writable folder as given, and names the link', () => {
+      tree()
+      // The work folder is the home: the session could repoint ~/.config
+      expect(namedPathFor(`${d}/home/.config/gh`, [`${d}/home`], process.platform)).toEqual({ path: `${d}/home/.config/gh`, link: `${d}/home/.config` })
+      expect(namedPathFor(`${d}/home/.config/gcloud`, [`${d}/home`], process.platform)).toEqual({ path: `${d}/home/.config/gcloud`, link: `${d}/home/.config` })
+      // A writable folder above it holds it too
+      expect(namedPathFor(`${d}/home/.config/gh`, [d], process.platform).link).toBe(`${d}/home/.config`)
+    })
+
+    it('looks at every link a chain goes through, by where each one lies', () => {
+      tree()
+      // ~/.config -> ~/dots/config (outside the work folder ~/proj), and ~/dots/config/gh -> ~/proj/gh-real (inside it)
+      mkdirSync(path.join(d, 'home', 'proj', 'gh-real'))
+      rmSync(path.join(d, 'home', 'dots', 'config', 'gh'), { recursive: true })
+      symlinkSync(path.join(d, 'home', 'proj', 'gh-real'), path.join(d, 'home', 'dots', 'config', 'gh'), kind)
+      // Neither link lies in ~/proj: both are followed, to a target that happens to be inside the work folder
+      expect(namedPathFor(`${d}/home/.config/gh`, [`${d}/home/proj`], process.platform)).toEqual({ path: `${d}/home/proj/gh-real`, link: null })
+      // The second link lies in ~/dots/config: inside the writable folder when that is ~/dots, outside when it is ~/proj
+      expect(namedPathFor(`${d}/home/.config/gh`, [`${d}/home/dots`], process.platform)).toEqual({ path: `${d}/home/.config/gh`, link: `${d}/home/dots/config/gh` })
+    })
+
+    it.runIf(process.platform !== 'win32')('follows a relative link and a link to a file', () => {
+      tree()
+      symlinkSync('dots/config', path.join(d, 'home', '.config2'))
+      writeFileSync(path.join(d, 'home', 'dots', 'npmrc'), '')
+      symlinkSync(path.join(d, 'home', 'dots', 'npmrc'), path.join(d, 'home', '.npmrc'))
+      expect(namedPathFor(`${d}/home/.config2/gh`, [`${d}/home/proj`], process.platform).path).toBe(`${d}/home/dots/config/gh`)
+      expect(namedPathFor(`${d}/home/.npmrc`, [`${d}/home/proj`], process.platform)).toEqual({ path: `${d}/home/dots/npmrc`, link: null })
+      expect(namedPathFor(`${d}/home/.npmrc`, [`${d}/home`], process.platform)).toEqual({ path: `${d}/home/.npmrc`, link: `${d}/home/.npmrc` })
+    })
+
+    it('names a path as given when a look fails or the links go round', () => {
+      tree()
+      const failing = { lstat: (): never => { throw new Error('EACCES') }, readlink: (): string => '' }
+      expect(namedPathFor(`${d}/home/.config/gh`, [], process.platform, failing)).toEqual({ path: `${d}/home/.config/gh`, link: null })
+      const looping = { lstat: () => ({ isSymbolicLink: () => true }), readlink: (p: string) => p }
+      expect(namedPathFor('/a/b', [], 'linux', looping)).toEqual({ path: '/a/b', link: null })
+    })
+
+    it('compares the writable folders by both their spellings, case folded where the OS ignores case', () => {
+      tree()
+      // A work folder named through a link of its own still holds the link it is reached by
+      symlinkSync(path.join(d, 'home'), path.join(d, 'home-link'), kind)
+      expect(namedPathFor(`${d}/home/.config/gh`, [`${d}/home-link`], process.platform).link).toBe(`${d}/home/.config`)
+      if (process.platform === 'win32') expect(namedPathFor(`${d}/home/.config/gh`, [`${d}/HOME`], 'win32').link).toBe(`${d}/home/.config`)
+    })
+
+    it('collects a list: each entry where it is named, once, and the links that left one as given', () => {
+      tree()
+      const r = namedPaths([`${d}/home/.config/gh`, `${d}/home/dots/config/gh`, `${d}/home/.config/gcloud`], [`${d}/home/proj`], process.platform)
+      expect(r).toEqual({ paths: [`${d}/home/dots/config/gh`, `${d}/home/dots/config/gcloud`], links: [] })
+      const inHome = namedPaths([`${d}/home/.config/gh`, `${d}/home/.config/gcloud`], [`${d}/home`], process.platform)
+      expect(inHome).toEqual({ paths: [`${d}/home/.config/gh`, `${d}/home/.config/gcloud`], links: [`${d}/home/.config`] })
+    })
   })
 
   // Task E fix round 4: the folders Astera owns and writes an installer or a runtime into (electron-updater's cache, the

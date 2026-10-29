@@ -25,7 +25,8 @@ import { gatewayTokenEnv } from '../extensions/resolve'
 import { applyHiding, type HidingSource } from '../credentials/hiding'
 import { isObserving } from '../audit/policy'
 import { enforceUnavailable, type EnforceStart } from '../audit/enforce'
-import { PreparedLayouts, codexVersionBlocker, fitsOnTheLine, prepareCodexSandbox, sessionSandboxArgs, type CodexVersionProbe, type CodexWindowsReady } from '../sandbox/prepared'
+import { PreparedLayouts, codexSessionLinks, codexVersionBlocker, fitsOnTheLine, prepareCodexSandbox, sessionSandboxArgs, type CodexVersionProbe, type CodexWindowsReady } from '../sandbox/prepared'
+import type { LinkLook } from '../sandbox/locations'
 import { startWarningsFor, tellSandboxStart, type SandboxWarnSink } from '../sandbox/startWarnings'
 import { appServerSandboxArgs, codexSandboxEnv } from '../sandbox/codexProfile'
 import { sandboxUnavailable } from '../sandbox/unavailable'
@@ -99,6 +100,9 @@ export interface ChatManagerDeps {
   /** The read-only folders a sandboxed Codex chat's profile keeps on every OS (SpawnChecks' twin). Absent, nothing is
    *  kept read-only. */
   readOnly?: readonly string[]
+  /** How the disk is read for links on the paths a sandboxed Codex chat names (SpawnChecks' twin, Task E fix round 5).
+   *  Absent, every path is named as given. */
+  linkLook?: LinkLook
   /** The codex version question a sandboxed Codex chat asks at its prepare and spawn (final review I2), the terminal
    *  manager's. Absent, a sandboxed Codex chat is refused as for a version not known. */
   codexVersion?: CodexVersionProbe
@@ -302,6 +306,7 @@ export class ChatSessionManager {
       version: this.deps.codexVersion,
       check: (args) => fitsOnTheLine(this.deps.platform, buildCodexAppServerCommand(this.deps.platform, undefined, [], appServerSandboxArgs(args))),
       ...(this.deps.codexExcludes ? { excludes: this.deps.codexExcludes } : {}),
+      ...(this.deps.linkLook ? { look: this.deps.linkLook } : {}),
       log: this.deps.log
     })
     // The other Hosts' folders beside this one's, as they were now, kept for the spawn's profile (final fix pass, part 2, B),
@@ -376,10 +381,6 @@ export class ChatSessionManager {
     const sandboxed = opts.sandbox === true
     // What protection it is, said in the info and the note (SessionInfo.sandboxKind): Claude on Windows has deny rules only
     const sandboxKind = sandboxed ? sandboxKindOf(provider, this.deps.platform) : undefined
-    // Task E fix rounds 2 and 3: what the sandbox will not do here, in the info and the note beside the kind, so a pane
-    // mounted later or an app that attaches after the start can still show it (the notice says it at the start)
-    const sandboxWarnings = sandboxed ? startWarningsFor(this.sandboxWarn, { provider, platform: this.deps.platform, cwd: opts.cwd, homeDir: this.deps.homeDir }) : []
-    const warned = sandboxWarnings.length > 0 ? { sandboxWarnings } : {}
     const sandboxedCodex = sandboxed && provider === 'codex'
     // The codex floor the prepare asked, asked again: the CLI may have changed since (final review I2)
     const tooOld = sandboxedCodex ? codexVersionBlocker(this.deps.codexVersion) : null
@@ -420,10 +421,31 @@ export class ChatSessionManager {
             otherHostDirs: this.sandboxLayouts.otherHostsOf(opts.account.id, opts.cwd, Date.now()),
             appKeyFile: this.deps.appKeyFile ?? null,
             readOnly: this.deps.readOnly ?? [],
-            log: this.deps.log
+            log: this.deps.log,
+            ...(this.deps.linkLook ? { links: { cwd: opts.cwd, look: this.deps.linkLook } } : {})
           })
         )
       : []
+    // Task E fix rounds 2, 3 and 5: what the sandbox will not do here, in the info and the note beside the kind, so a pane
+    // mounted later or an app that attaches after the start can still show it (the notice says it at the start). On Linux
+    // a named path through a link in the work folder makes Codex refuse every command (sessionSandboxArgs)
+    const linkInWorkFolder =
+      sandboxedCodex &&
+      this.deps.platform === 'linux' &&
+      this.deps.linkLook !== undefined &&
+      codexSessionLinks({
+        platform: this.deps.platform,
+        homeDir: this.deps.homeDir,
+        layout,
+        env: inherited,
+        appKeyFile: this.deps.appKeyFile ?? null,
+        readOnly: this.deps.readOnly ?? [],
+        links: { cwd: opts.cwd, look: this.deps.linkLook }
+      }).length > 0
+    const sandboxWarnings = sandboxed
+      ? startWarningsFor(this.sandboxWarn, { provider, platform: this.deps.platform, cwd: opts.cwd, homeDir: this.deps.homeDir, linkInWorkFolder })
+      : []
+    const warned = sandboxWarnings.length > 0 ? { sandboxWarnings } : {}
     const env: Record<string, string | undefined> = {
       ...inherited,
       ...(opts.startWithBypass ? BYPASS_ENV : {}),

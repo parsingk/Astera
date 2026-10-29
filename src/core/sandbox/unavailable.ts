@@ -20,7 +20,8 @@ export function forcedSandboxBlocker(provider: 'claude' | 'codex', platform: str
 // it, JSON may close it): `windows-setup codex <account>` (that account's Windows sandbox is not set up,
 // windowsReadiness.ts), `windows-check-failed codex <account>` (Codex could not be asked about it), `codex-daemon codex`,
 // `path-unsafe` (the work folder's repository), `named-path-unsafe` (another path the sandbox names: Astera's own
-// folders, a login folder; Task E fix round 3), `git-layout`, `not-prepared`, `settings-write-failed` (Claude's sandbox
+// folders, a login folder; Task E fix round 3), `linked-path` (a named path through a link the session could change,
+// where nothing else refuses it; fix round 5), `git-layout`, `not-prepared`, `settings-write-failed` (Claude's sandbox
 // settings, claudeStart.ts), `no-sandbox <cli>` (forcedSandboxBlocker), `command-too-long` (a Windows command line the
 // profile overflows,
 // prepared.ts fitsOnTheLine), `profile-not-active codex` (a sandboxed chat's thread that does not run
@@ -30,7 +31,7 @@ export function forcedSandboxBlocker(provider: 'claude' | 'codex', platform: str
 // check's shape, core/sessions/cliVersion.ts). Versions take dots; an account id is `[\w-]+` only, so a quote, a brace or
 // a full stop after it is not read as part of it.
 const REFUSAL =
-  /SANDBOX_UNAVAILABLE:\s*(windows-setup|windows-check-failed|codex-daemon|path-unsafe|named-path-unsafe|git-layout|not-prepared|settings-write-failed|no-sandbox|profile-not-active|command-too-long|outside-sandbox|cli-too-old|cli-version-unknown|cli-missing)(?:\s+(claude|codex))?(?:\s+([\w.-]+)(?:\s+([\w.-]+))?)?/
+  /SANDBOX_UNAVAILABLE:\s*(windows-setup|windows-check-failed|codex-daemon|path-unsafe|named-path-unsafe|linked-path|git-layout|not-prepared|settings-write-failed|no-sandbox|profile-not-active|command-too-long|outside-sandbox|cli-too-old|cli-version-unknown|cli-missing)(?:\s+(claude|codex))?(?:\s+([\w.-]+)(?:\s+([\w.-]+))?)?/
 const CLI_NAMES = { claude: 'Claude Code', codex: 'Codex' } as const
 const accountIdIn = (s: string | undefined): string | null => (s ? (/^[\w-]+/.exec(s)?.[0] ?? null) : null)
 
@@ -58,6 +59,8 @@ export function sandboxRefusalMessage(raw: string): Message | null {
       return { key: 'session.spawn.sandbox.pathUnsafe' }
     case 'named-path-unsafe':
       return { key: 'session.spawn.sandbox.namedPathUnsafe' }
+    case 'linked-path':
+      return { key: 'session.spawn.sandbox.linkedPath' }
     case 'git-layout':
       return { key: 'session.spawn.sandbox.gitLayout' }
     case 'not-prepared':

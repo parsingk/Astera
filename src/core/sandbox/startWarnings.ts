@@ -23,7 +23,7 @@ export interface SandboxWarnSink {
  *  for a Claude session on Linux, and a check that throws counts as no (a hint, not a gate). */
 export function startWarningsFor(
   sink: SandboxWarnSink | undefined,
-  o: { provider: 'claude' | 'codex'; platform: NodeJS.Platform; cwd: string; homeDir: string }
+  o: { provider: 'claude' | 'codex'; platform: NodeJS.Platform; cwd: string; homeDir: string; linkInWorkFolder?: boolean }
 ): SandboxStartWarning[] {
   let restricted = false
   if (sink && o.provider === 'claude' && o.platform === 'linux') {
@@ -33,7 +33,7 @@ export function startWarningsFor(
       restricted = false
     }
   }
-  return sandboxStartWarnings({ ...o, claudeUsernsRestricted: restricted })
+  return sandboxStartWarnings({ ...o, claudeUsernsRestricted: restricted, linkInWorkFolder: o.linkInWorkFolder === true })
 }
 
 /** What a manager does once the session is tracked: tells the sink its warnings, if any. Never throws: a sink that fails
@@ -62,6 +62,9 @@ function holdsHome(cwd: string, homeDir: string, platform: NodeJS.Platform): boo
  * - `claudeUserns`: a Claude session on Linux where Ubuntu's AppArmor profile confines bubblewrap
  *   (`claudeUsernsRestricted`, ubuntuBwrapRestricted below), so srt's apply-seccomp cannot run there and every shell
  *   command fails. Codex is not affected (its own sandbox ran normally on Ubuntu 26, run 40761549024).
+ * - `linkInWorkFolder` (fix round 5): a Codex session on Linux one of whose named paths goes through a link inside its
+ *   writable folders (`linkInWorkFolder`, core/sandbox/prepared.ts codexSessionLinks), so Codex refuses every command
+ *   there by design. Elsewhere such a start is refused instead, so nothing else is told this.
  * - `homeInWorkFolder`: the work folder is the home folder, holds it, or is the root of the filesystem or drive the home
  *   folder is on, so the sandbox lets the session write anything in the home folder. Both CLIs on every OS but Claude Code on Windows, whose shell has no
  *   sandbox at all (deny rules for its file tools only, coverage.ts), so "start it in a project folder" would be untrue.
@@ -72,9 +75,11 @@ export function sandboxStartWarnings(o: {
   cwd: string
   homeDir: string
   claudeUsernsRestricted: boolean
+  linkInWorkFolder?: boolean
 }): SandboxStartWarning[] {
   const out: SandboxStartWarning[] = []
   if (o.provider === 'claude' && o.platform === 'linux' && o.claudeUsernsRestricted) out.push('claudeUserns')
+  if (o.provider === 'codex' && o.platform === 'linux' && o.linkInWorkFolder === true) out.push('linkInWorkFolder')
   const denyOnly = o.provider === 'claude' && o.platform === 'win32'
   if (!denyOnly && holdsHome(o.cwd, o.homeDir, o.platform)) out.push('homeInWorkFolder')
   return out

@@ -665,6 +665,7 @@ export const ja: Catalog = {
   'session.spawn.sandbox.codexDaemon': 'この Codex は --no-daemon に対応していないため、サンドボックスで起動できません。Codex を更新してください。',
   'session.spawn.sandbox.pathUnsafe': 'フォルダーのパスに Windows のコマンドラインで扱えない文字（" & | < > ^ %）が含まれているため、サンドボックスで起動できません。',
   'session.spawn.sandbox.namedPathUnsafe': '作業フォルダー以外にサンドボックスが指定するフォルダー（Astera 自身のフォルダー、またはホームのログイン情報のフォルダー）のパスに Windows のコマンドラインで扱えない文字（" & | < > ^ %）が含まれているため、サンドボックスで起動できません。どのフォルダーかは Astera のログに記録されています。',
+  'session.spawn.sandbox.linkedPath': "ログイン情報や Astera 自身のファイルを含むフォルダーが作業フォルダー内のリンクの先にあり、セッションがそのリンクを変えられるため、サンドボックスがそのフォルダーを守れず、サンドボックスで起動できません。プロジェクトのフォルダーで起動してください。どのリンクかは Astera のログに記録されています。",
   'session.spawn.sandbox.gitLayout': '作業フォルダーの git 情報を読めないため、サンドボックスで起動できません。',
   'session.spawn.sandbox.notPrepared': 'サンドボックスの準備が終わる前に起動しようとしました。もう一度起動してください。',
   'session.spawn.sandbox.cliTooOld': 'サンドボックスを使えるのは {cli} {min} 以降だけです。いまは {found} です。CLI を更新してください。',
@@ -679,6 +680,8 @@ export const ja: Catalog = {
   'session.sandbox.warn.homeInWorkFolder': "このサンドボックスのセッションの作業フォルダーはホームフォルダーを含んでいるため、サンドボックスの中からホームフォルダーのプログラムや設定を変更できます。それらを守るには、プロジェクトのフォルダーで起動してください。",
   'session.sandbox.warn.claudeUserns': "このシステムでは Claude Code のサンドボックスがシェルコマンドを実行できません。Ubuntu の bubblewrap 用 AppArmor プロファイル(bwrap-userns-restrict)が bubblewrap の中で動くプログラムから権限を外すため、このセッションのシェルコマンドはすべて失敗します。ファイルツールはそのまま使えます。解決するには、関連するバイナリに userns を許可する AppArmor プロファイルを追加します。詳しくは Claude Code のサンドボックスランタイム(@anthropic-ai/sandbox-runtime)の README の Ubuntu の項を参照してください。",
   'session.sandbox.warn.claudeUsernsAndHome': "このシステムでは Claude Code のサンドボックスがシェルコマンドを実行できません。Ubuntu の bubblewrap 用 AppArmor プロファイル(bwrap-userns-restrict)が bubblewrap の中で動くプログラムから権限を外すため、このセッションのシェルコマンドはすべて失敗します。ファイルツールはそのまま使えます。解決するには、関連するバイナリに userns を許可する AppArmor プロファイルを追加します。詳しくは Claude Code のサンドボックスランタイム(@anthropic-ai/sandbox-runtime)の README の Ubuntu の項を参照してください。このサンドボックスのセッションの作業フォルダーはホームフォルダーを含んでいるため、サンドボックスの中からホームフォルダーのプログラムや設定を変更できます。それらを守るには、プロジェクトのフォルダーで起動してください。",
+  'session.sandbox.warn.linkInWorkFolder': "このセッションでは Codex がすべてのコマンドを拒否します。ログイン情報や Astera 自身のファイルを含むフォルダーが作業フォルダー内のリンクの先にあり、セッションがそのリンクを変えられるためです。プロジェクトのフォルダーで起動すれば避けられます。",
+  'session.sandbox.warn.linkAndHome': "このセッションでは Codex がすべてのコマンドを拒否します。ログイン情報や Astera 自身のファイルを含むフォルダーが作業フォルダー内のリンクの先にあり、セッションがそのリンクを変えられるためです。プロジェクトのフォルダーで起動すれば避けられます。このサンドボックスのセッションの作業フォルダーはホームフォルダーを含んでいるため、サンドボックスの中からホームフォルダーのプログラムや設定を変更できます。それらを守るには、プロジェクトのフォルダーで起動してください。",
   'session.roll.sandbox.windowsCheckFailed': '{account} アカウントの Windows サンドボックスの状態を Codex に確認できなかったため、切り替えられませんでした。Codex を更新するか、もう一度起動してください。',
   'session.roll.sandbox.refused': '次のアカウントに切り替えられませんでした: {reason}',
   'session.spawn.failedWorktreeKept':

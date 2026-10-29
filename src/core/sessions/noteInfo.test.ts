@@ -105,6 +105,9 @@ describe('whether a session runs in the sandbox, read from its note', () => {
     expect(chatInfoFromNote({ kind: 'chat', id: 'c1', restore })).toMatchObject({ sandboxWarnings: ['claudeUserns', 'homeInWorkFolder'] })
     const mixed = { ...base, sandboxed: true, sandboxWarnings: ['homeInWorkFolder', 'other', 7, 'homeInWorkFolder'] }
     expect(sessionInfoFromNote({ kind: 'session', id: 's1', restore: mixed })).toMatchObject({ sandboxWarnings: ['homeInWorkFolder'] })
+    // Task E fix round 5: the link warning too, in its place before the home warning
+    const linked = { ...base, sandboxed: true, sandboxWarnings: ['homeInWorkFolder', 'linkInWorkFolder'] }
+    expect(sessionInfoFromNote({ kind: 'session', id: 's1', restore: linked })).toMatchObject({ sandboxWarnings: ['linkInWorkFolder', 'homeInWorkFolder'] })
     for (const r of [{ ...base, sandboxWarnings: ['homeInWorkFolder'] }, { ...base, sandboxed: true, sandboxWarnings: [] }, { ...base, sandboxed: true, sandboxWarnings: 'homeInWorkFolder' }]) {
       expect(sessionInfoFromNote({ kind: 'session', id: 's1', restore: r })).not.toHaveProperty('sandboxWarnings')
       expect(chatInfoFromNote({ kind: 'chat', id: 'c1', restore: r })).not.toHaveProperty('sandboxWarnings')

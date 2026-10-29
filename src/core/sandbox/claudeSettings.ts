@@ -57,6 +57,16 @@ export function claudeSessionDenied(o: { platform: NodeJS.Platform; env: Record<
   ]
 }
 
+/** The folders a sandboxed Claude session may write, by which a link on a named path is judged (Task E fix round 5,
+ *  namedPathFor): its work folder, npm's cache (the twin's `allowWrite`), its temp folder and `/tmp`, and what srt makes
+ *  writable by itself (srt 0.0.79 dist/sandbox/sandbox-utils.js:486 SANDBOX_OWN_WRITE_PATHS, `/tmp/claude`, and :501
+ *  HOME_CONVENIENCE_WRITE_DIRS, `~/.npm/_logs` and `~/.claude/debug`). Each as given; namedPathFor adds where each
+ *  really is. */
+export function claudeWritableFolders(o: { platform: NodeJS.Platform; cwd: string; npmCache: string; tmpDir: string; homeDir: string }): string[] {
+  const home = o.homeDir.replace(/\\/g, '/').replace(/\/+$/, '')
+  return [o.cwd, o.npmCache, o.tmpDir, ...(o.platform === 'win32' ? [] : ['/tmp']), `${home}/.npm/_logs`, `${home}/.claude/debug`]
+}
+
 /** `readOnly` (the profile folder, locations.ts profileReadOnly) is kept from being written on every OS: by Edit rules
  *  for Claude's own file tools (on Windows all there is, as for E6's reads), and on macOS and Linux in the sandbox's
  *  denyWrite, which covers the folder and everything in it on both (srt 0.0.79: Seatbelt's `(deny file-write* (subpath

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { Account } from '../types'
@@ -14,7 +14,7 @@ import type { RollSnapshot, RollSpawnExtra } from '../rolling/snapshot'
 import type { SessionCapabilities } from '../extensions/resolve'
 import { sessionInfoFromNote } from './noteInfo'
 import { gitLayoutOf } from '../sandbox/gitLayout'
-import { appKeyDenies, credentialStoreDenies, profileReadOnly, sensitiveLocations } from '../sandbox/locations'
+import { appKeyDenies, credentialStoreDenies, nodeLinkLook, profileReadOnly, sensitiveLocations } from '../sandbox/locations'
 import { appKeyPath } from '../host/hostKey'
 import { codexSandboxArgs, codexSandboxEnv, npmCacheOf } from '../sandbox/codexProfile'
 import { claudeSandboxSettings } from '../sandbox/claudeSettings'
@@ -1959,6 +1959,72 @@ describe('the sandbox at spawn', () => {
     manager.spawn({ account: codexAccount, cwd })
     expect(argv).toHaveLength(3)
     expect(told).toHaveLength(1)
+  })
+
+  // Task E fix round 5 (rule E5): every path Astera names for a sandboxed Codex start is looked at against the session's
+  // writable folders. A link the session cannot change (a dotfile manager's ~/.config, with a project work folder) is
+  // followed, a missing entry under it too; a link it could change (the work folder holds it) leaves the entry as given:
+  // on Linux Codex then refuses every command, and the session is told so; elsewhere nothing refuses it, so the start is
+  // refused (`linked-path`), its log naming the link
+  describe('a link on a path the sandbox names', () => {
+    const linkedHome = (): { home: string; proj: string } => {
+      // Outside /tmp, which a sandboxed session may write (so a link there is one it could change): Linux's temp folder is
+      // /tmp, so the fixture goes in /dev/shm there
+      const root = mkdtempSync(path.join(process.platform === 'linux' && existsSync('/dev/shm') ? '/dev/shm' : os.tmpdir(), 'astera-links-'))
+      dirs.push(root)
+      const base = realpathSync.native(root).replace(/\\/g, '/')
+      const home = `${base}/home`
+      mkdirSync(`${home}/dots/config/gh`, { recursive: true })
+      mkdirSync(`${home}/proj/.git`, { recursive: true })
+      symlinkSync(`${home}/dots/config`, `${home}/.config`, process.platform === 'win32' ? 'junction' : 'dir')
+      return { home, proj: `${home}/proj` }
+    }
+    const linkRig = (platform: 'linux' | 'darwin', home: string) => {
+      const argv: string[][] = []
+      const logs: string[] = []
+      const manager = new SessionManager((_f, a) => (argv.push(a as string[]), new FakePty()), makeDescriptors(platform, home, undefined, daemon(true)),
+        100, 20, home, undefined, [], { ...BASE[platform] }, { ...checksFor(platform), log: (m) => void logs.push(m), linkLook: nodeLinkLook, readOnly: [`${home}/.config/astera`] })
+      manager.codexVersion = versionOf('0.160.0')
+      const told: Array<[string, string[]]> = []
+      manager.sandboxWarn = { claudeUsernsRestricted: () => false, warn: (id, ws) => void told.push([id, [...ws]]) }
+      return { manager, argv, logs, told }
+    }
+
+    it('follows a link the session cannot change, on every entry, a missing one included', async () => {
+      for (const platform of ['linux', 'darwin'] as const) {
+        const { home, proj } = linkedHome()
+        const r = linkRig(platform, home)
+        await r.manager.prepare({ account: codexAccount, cwd: proj, sandbox: true })
+        const info = r.manager.spawn({ account: codexAccount, cwd: proj, sandbox: true })
+        const profile = codexArgs(r.argv[0]).find((a) => a.startsWith('permissions='))!
+        expect(profile, platform).toContain(`"${home}/dots/config/gh"="deny"`)
+        expect(profile, platform).toContain(`"${home}/dots/config/gcloud"="deny"`)
+        expect(profile, platform).toContain(`"${home}/dots/config/astera"="read"`)
+        expect(profile, platform).not.toContain(`${home}/.config/`)
+        expect(info.sandboxWarnings, platform).toBeUndefined()
+      }
+    })
+
+    it('on Linux leaves an entry through a link in the work folder as given, and tells the session Codex will refuse its commands', async () => {
+      const { home } = linkedHome()
+      const r = linkRig('linux', home)
+      await r.manager.prepare({ account: codexAccount, cwd: home, sandbox: true })
+      const info = r.manager.spawn({ account: codexAccount, cwd: home, sandbox: true })
+      const profile = codexArgs(r.argv[0]).find((a) => a.startsWith('permissions='))!
+      expect(profile).toContain(`"${home}/.config/gh"="deny"`)
+      expect(profile).toContain(`"${home}/.config/gcloud"="deny"`)
+      expect(profile).toContain(`"${home}/.config/astera"="read"`)
+      expect(info.sandboxWarnings).toEqual(['linkInWorkFolder', 'homeInWorkFolder'])
+      expect(r.told).toEqual([[info.id, ['linkInWorkFolder', 'homeInWorkFolder']]])
+    })
+
+    it('elsewhere refuses a start whose entry goes through a link in the work folder, naming the link in the log', async () => {
+      const { home } = linkedHome()
+      const r = linkRig('darwin', home)
+      await expect(r.manager.prepare({ account: codexAccount, cwd: home, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: linked-path$/)
+      expect(r.logs.some((l) => l.includes(`${home}/.config`))).toBe(true)
+      expect(r.argv).toHaveLength(0)
+    })
   })
 
   // Task E fix round 1: every read-only folder the wiring names (the profile and the places Astera writes code or an
