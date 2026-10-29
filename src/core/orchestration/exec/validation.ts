@@ -9,6 +9,8 @@
 // ValidationContext 로 주입받는다: 경로 가드(앱의 assertAllowedPath, Host 의 hostPathGuard), 저장된
 // 실행 구성(앱의 RunConfigStore, Host 의 run-configs.json), 실행 관리자, 세션 생존 여부, 검토·수리의
 // 시작, continuity journal 의 첫 체크포인트 head(Host 에서는 언제나 null, R12), git diff.
+import { readFileSync, rmSync } from 'node:fs'
+import os from 'node:os'
 import { t, type Lang, type MessageKey } from '../../i18n'
 import type { RunConfig } from '../../run/config'
 import { seedKeyOf } from '../../run/config'
@@ -36,6 +38,8 @@ import { TaskValidator } from './validator'
 import { checkSandboxOf } from './checkSandbox'
 import type { Provider } from '../../providers/meta'
 import { checkRefusalMessage } from '../../sandbox/unavailable'
+import { CHECK_REASON_ENV, checkReasonFileIn, sandboxStoppedBefore } from '../../sandbox/checkRunner'
+import { checkScriptDir } from '../../sandbox/checkShell'
 
 export interface ValidationContext {
   getState(): OrchState
@@ -91,6 +95,19 @@ export type SandboxedCheck = { launch: { file: string; args: string[] | string }
 /** Run configuration kinds that reach Docker, which no sandbox here can hold: refused for a sandboxed Task (the person's
  *  Q4), with a reason rather than a failure. */
 const DOCKER_TYPES: ReadonlySet<string> = new Set(['compose', 'dockerfile'])
+/** A sandboxed check's run read at its exit: the question's words when Astera's check runner said the sandbox stopped
+ *  before the check started (sandboxStoppedBefore), with the reason it kept in `reasonFile`; null for the check's own
+ *  result. The file goes either way. */
+function sandboxFailedWords(lang: Lang, reasonFile: string, exitCode: number, output: string): string | null {
+  let reason = ''
+  try {
+    reason = readFileSync(reasonFile, 'utf8').trim()
+    rmSync(reasonFile, { force: true })
+  } catch {}
+  if (!sandboxStoppedBefore(exitCode, output)) return null
+  return reason !== '' ? t(lang, 'jobs.checks.sandbox.failed', { detail: reason }) : t(lang, 'jobs.checks.sandbox.failedNoReason')
+}
+
 /** A git head, null when there is no baseline, 'unknown' when there may be one the journal could not give. */
 export type CheckpointHead = string | null | 'unknown'
 export interface TaskValidation {
@@ -212,11 +229,20 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
         // Its preparation reads git and may ask Codex: the Task may have left validating meanwhile (as at the top)
         const now = c.getState().tasks.find((x) => x.id === taskId)
         if (!now || now.status !== 'validating' || now.ciWait !== undefined) return 'skip'
-        const started = c.runs.start({ projectPath: cwd, projectName, config, command, validation: true, env: boxed.env, launch: boxed.launch })
-        // A Claude check under srt and a Windows Codex check run through Astera's check runner (fix round 2, M1): when the
-        // sandbox stops before the check starts, its own exit code and last line say so, and the round asks a person in
-        // these words
-        return { runId: started.runId, name: config.name, ...hidden, sandboxFailed: (detail: string) => t(c.lang(), 'jobs.checks.sandbox.failed', { detail }) }
+        // A Claude check under srt and a Windows Codex check run through Astera's check runner (fix rounds 2 and 3, M1 and
+        // N1): when the sandbox stops before the check starts, its own exit code and mark at the end of the output say so,
+        // and it writes its reason to this file, which ConPTY cannot glue or break as it can a long line
+        const reasonFile = checkReasonFileIn(checkScriptDir(os.tmpdir()))
+        const started = c.runs.start({
+          projectPath: cwd,
+          projectName,
+          config,
+          command,
+          validation: true,
+          env: { ...boxed.env, [CHECK_REASON_ENV]: reasonFile },
+          launch: boxed.launch
+        })
+        return { runId: started.runId, name: config.name, ...hidden, sandboxFailed: (exitCode: number, output: string) => sandboxFailedWords(c.lang(), reasonFile, exitCode, output) }
       },
       output: (runId) => cutTail(c.runs.recentOutput(runId), 4000),
       // 타임아웃이 이 PTY 를 두 번째로 멈춘다(validator.ts 의 startCheck 타이머). **c.runs.stop 을

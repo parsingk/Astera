@@ -5,17 +5,18 @@
 // - A Codex check on Windows (fix round 2, core/sandbox/checkRunner.ts): `--codex` and then `codex sandbox`'s command as it
 //   is; the runner learns from the check's shell that the check started.
 // Its exit code is the check's; when it could not put the check in the sandbox, its own (checkRunner.ts
-// SANDBOX_FAILED_EXIT_CODE) with its line last, which the validator reads as a check that could not be made, not a failure.
+// SANDBOX_FAILED_EXIT_CODE) with its mark last, which the validator reads as a check that could not be made, not a failure.
+// Its reason then goes to the file CHECK_REASON_ENV names (fix round 3), out of ConPTY's reach.
 import { spawn } from 'node:child_process'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
-import { checkRunnerExit, runCodexCheck } from '../core/sandbox/checkRunner'
+import { CHECK_REASON_ENV, checkRunnerExit, runCodexCheck } from '../core/sandbox/checkRunner'
 import { loadSrt, runInSrt, srtHelpersOf, type SrtCheckPayload } from '../core/sandbox/srtCheck'
 
 const SIGNALS = ['SIGHUP', 'SIGINT', 'SIGTERM'] as const
-/** The environment a check's process gets: this runner's without Astera's node flag. */
-const { ELECTRON_RUN_AS_NODE: _flag, ...childEnv } = process.env
+/** The environment a check's process gets: this runner's without Astera's node flag and its reason file. */
+const { ELECTRON_RUN_AS_NODE: _flag, [CHECK_REASON_ENV]: reasonFile, ...childEnv } = process.env
 
 async function srtCheck(raw: string): Promise<number> {
   const payload = JSON.parse(raw || 'null') as SrtCheckPayload | null
@@ -33,7 +34,7 @@ async function srtCheck(raw: string): Promise<number> {
       return child
     },
     mkdir: (dir) => mkdirSync(dir, { recursive: true }),
-    env: process.env,
+    env: childEnv,
     warn: (m) => process.stderr.write(`${m}\n`)
   })
 }
@@ -55,7 +56,14 @@ function codexCheck(file: string, args: string[]): Promise<number> {
   })
 }
 
-void checkRunnerExit({ argv: process.argv.slice(2), srt: srtCheck, codex: codexCheck, print: (s) => void process.stdout.write(s) }).then((code) =>
+/** Keeps the reason where the launcher reads it at the exit, when it named a file. */
+function record(reason: string): void {
+  if (!reasonFile) return
+  mkdirSync(path.dirname(reasonFile), { recursive: true })
+  writeFileSync(reasonFile, reason)
+}
+
+void checkRunnerExit({ argv: process.argv.slice(2), srt: srtCheck, codex: codexCheck, print: (s) => void process.stdout.write(s), record }).then((code) =>
   // A console's writes are asynchronous on Windows: exit once what was written has gone out
   process.stdout.write('', () => process.stderr.write('', () => process.exit(code)))
 )

@@ -3,30 +3,46 @@
 // asks a person (rule E5), where a failure would start a repair round that spends a model on code nobody broke. The two are
 // told apart by markers the runner sets itself, never by reading what the sandbox printed:
 // - the runner's own failure (srt's setup threw, `codex sandbox` stopped before the check started, a spawn failed) ends
-//   with its own exit code and its own line as the last thing it prints (sandboxFailedLine);
+//   with its own exit code and its own short mark as the last thing it prints (sandboxFailedOutput). The reason goes to a
+//   file the launcher named (CHECK_REASON_ENV), since on Windows the output reaches the validator through ConPTY, which
+//   glues and breaks long lines (fix round 3);
 // - `codex sandbox` on Windows exits 1 both for its own failure ("windows sandbox failed: …", debug_sandbox.rs:568-573,
 //   599-604 at rust-v0.160.0) and for a check that exited 1, so the check's shell prints CHECK_STARTED_MARK as a line of its
 //   own before it runs the check (checkShell.ts); the runner takes that line out of the output and knows the check started.
 // Codex's Windows sandbox gives the command pipes, not a console (`tty: false` in run_command_under_windows_session), so the
 // runner reading codex's output through a pipe changes nothing the check sees. On macOS and Linux a Codex check runs as
 // before, straight in its pty: a pipe there would take the check's terminal away.
+import { randomUUID } from 'node:crypto'
+import path from 'node:path'
 
 /** The runner's exit code when it could not put the check in the sandbox: under 126 and 127, which POSIX gives a command
  *  that is not executable or not found, and under the 128 + n of a signal (Shell Command Language, "Exit Status for
- *  Commands"). A check may end with it too; only with the runner's own line last is it read as the runner's. */
+ *  Commands"). A check may end with it too; only with the runner's own mark last is it read as the runner's. */
 export const SANDBOX_FAILED_EXIT_CODE = 125
-const FAILED_PREFIX = 'Astera could not put the check in the sandbox: '
+/** What the runner prints last when it could not put the check in the sandbox: short enough that no terminal wraps it,
+ *  letters and dashes only. */
+export const SANDBOX_FAILED_MARK = 'astera-sandbox-failed'
+/** The variable naming the file the runner writes its reason to (validation.ts names a fresh one for each run). */
+export const CHECK_REASON_ENV = 'ASTERA_CHECK_REASON_FILE'
 
-/** The line the runner prints last when it could not put the check in the sandbox, its reason on one line. */
-export const sandboxFailedLine = (detail: string): string => `\r\n${FAILED_PREFIX}${detail.replace(/\s+/g, ' ').trim()}\r\n`
+/** What the runner prints when it could not put the check in the sandbox: its reason for a person reading the run, then
+ *  its mark as the very last thing. */
+export const sandboxFailedOutput = (detail: string): string =>
+  `\r\nAstera could not put the check in the sandbox: ${detail.replace(/\s+/g, ' ').trim()}\r\n${SANDBOX_FAILED_MARK}\r\n`
 
-/** The reason the runner gave when a check's run ended with its exit code and its line last; null for a check's own result
- *  (any other code, or that code without the runner's line as the last thing printed). */
-export function sandboxFailureOf(exitCode: number, output: string): string | null {
-  if (exitCode !== SANDBOX_FAILED_EXIT_CODE) return null
-  const last = output.split(/\r?\n/).filter((l) => l.trim() !== '').at(-1) ?? ''
-  return last.startsWith(FAILED_PREFIX) ? last.slice(FAILED_PREFIX.length).trim() : null
+/**
+ * Whether a check's run ended as the runner's own failure: its exit code, and its mark at the very end of the output (with
+ * the escapes stripped). Read by `endsWith` on the whole tail, not by a line's start: through ConPTY a line can arrive glued
+ * to the one before it (a jump between rows is a cursor move, which stripping leaves as nothing) or broken where it wraps,
+ * and the mark, short and printed last, still ends the output either way (fix round 3, measured with node-pty). Any other
+ * code, or that code without the mark last, is the check's own result.
+ */
+export function sandboxStoppedBefore(exitCode: number, output: string): boolean {
+  return exitCode === SANDBOX_FAILED_EXIT_CODE && output.trimEnd().endsWith(SANDBOX_FAILED_MARK)
 }
+
+/** A fresh file for one run's reason, in `dir`. */
+export const checkReasonFileIn = (dir: string): string => path.join(dir, `failed-${randomUUID()}.txt`)
 
 /** What a Windows check's shell prints as its own line before it runs the check (checkShell.ts): letters and dashes only,
  *  so cmd.exe's `echo` prints it as it is. */
@@ -108,13 +124,15 @@ export function runCodexCheck(o: {
 /**
  * The runner's exit code for its arguments (src/sandboxCheck/index.ts): an srt check from its one argument, a Codex check
  * from the command after CODEX_CHECK_FLAG, each with the check's own exit code; and when it could not put the check in the
- * sandbox (`srt` or `codex` rejects), SANDBOX_FAILED_EXIT_CODE with its line printed last.
+ * sandbox (`srt` or `codex` rejects), SANDBOX_FAILED_EXIT_CODE, its reason handed to `record` first (the file the launcher
+ * named), then sandboxFailedOutput printed, its mark last.
  */
 export async function checkRunnerExit(o: {
   argv: string[]
   srt(payload: string): Promise<number>
   codex(file: string, args: string[]): Promise<number>
   print(text: string): void
+  record(reason: string): void
 }): Promise<number> {
   try {
     if (o.argv[0] !== CODEX_CHECK_FLAG) return await o.srt(o.argv[0] ?? '')
@@ -122,7 +140,12 @@ export async function checkRunnerExit(o: {
     if (file === undefined) throw new Error('the codex command to run was not given')
     return await o.codex(file, args)
   } catch (e) {
-    o.print(sandboxFailedLine(e instanceof Error ? e.message : String(e)))
+    const reason = (e instanceof Error ? e.message : String(e)).replace(/\s+/g, ' ').trim()
+    // The mark is enough to read the case; a reason that could not be kept costs only the person's words
+    try {
+      o.record(reason)
+    } catch {}
+    o.print(sandboxFailedOutput(reason))
     return SANDBOX_FAILED_EXIT_CODE
   }
 }

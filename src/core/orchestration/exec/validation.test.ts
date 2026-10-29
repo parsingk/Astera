@@ -15,7 +15,7 @@ import type { StartOpts } from '../../run/runManager'
 import type { RunConfig } from '../../run/config'
 import type { CompletionCheckInput, PluginCheckAnswer } from '../pluginChecks'
 import { t } from '../../i18n'
-import { SANDBOX_FAILED_EXIT_CODE, sandboxFailedLine } from '../../sandbox/checkRunner'
+import { CHECK_REASON_ENV, SANDBOX_FAILED_EXIT_CODE, sandboxFailedOutput } from '../../sandbox/checkRunner'
 
 const NOW = '2026-09-24T00:00:00.000Z'
 const unwrap = <T>(r: { ok: boolean } & Record<string, unknown>): { state: OrchState; value: T } => {
@@ -727,7 +727,8 @@ describe('createTaskValidation — the sandbox of a sandboxed Task (Task K)', ()
     const opts = await h.started()
     expect(asked).toEqual([{ provider: 'codex', accountId: 'accA', cwd: h.cwd, command: opts.command, env: hidden(h.cwd) }])
     expect(opts.launch).toEqual({ file: 'codex', args: ['sandbox', '--', 'sh', '-c', opts.command] })
-    expect(opts.env).toEqual({ ...hidden(h.cwd), BOXED: '1' })
+    // With the file the runner keeps its reason in, should it not put the check in the sandbox (fix round 3)
+    expect(opts.env).toEqual({ ...hidden(h.cwd), BOXED: '1', [CHECK_REASON_ENV]: expect.stringMatching(/astera-checks[\\/]failed-[\w-]+\.txt$/) })
     expect(opts.validation).toBe(true)
     await h.finish(0)
     expect(h.task().status).toBe('completed')
@@ -792,14 +793,29 @@ describe('createTaskValidation — the sandbox of a sandboxed Task (Task K)', ()
   it('a sandbox that stopped before the check started asks a person; a check that ran and failed stays a failure', async () => {
     const detail = 'codex sandbox stopped with exit code 1 before the check started: windows sandbox failed: 1314'
     const boxed = async () => ({ launch: { file: 'Astera.exe', args: ['sandbox-check.js', '--codex', 'codex.exe'] }, env: {} })
-    const stopped = rig({ sandboxKind: 'sandbox', provider: 'codex', sandboxedCheck: boxed, output: `windows sandbox failed: 1314\r\n${sandboxFailedLine(detail)}` })
+    // Fix round 3 (N1): the reason comes from the file the runner was named, not from the output ConPTY may glue or
+    // break; the output only has to end with the runner's mark
+    const printed = `windows sandbox failed: 1314${sandboxFailedOutput(detail)}`
+    const stopped = rig({ sandboxKind: 'sandbox', provider: 'codex', sandboxedCheck: boxed, output: printed })
     stopped.validation.startValidation({ taskId: stopped.taskId, cwd: stopped.cwd })
-    await stopped.started()
+    const file = (await stopped.started()).env?.[CHECK_REASON_ENV]
+    expect(file).toBeTruthy()
+    fs.mkdirSync(path.dirname(file!), { recursive: true })
+    fs.writeFileSync(file!, detail)
     await stopped.finish(SANDBOX_FAILED_EXIT_CODE)
     expect(stopped.task().status).toBe('blocked')
     expect(stopped.task().checks?.[0]).toMatchObject({ status: 'error', summary: t('en', 'jobs.checks.sandbox.failed', { detail }) })
+    // N4: the words send the person to the output kept with the check, so it is kept
+    expect(stopped.task().checks?.[0]?.outputTail).toBe(printed)
+    expect(fs.existsSync(file!)).toBe(false)
     expect(stopped.state().gates.find((g) => g.taskId === stopped.taskId && g.status === 'open')?.kind).toBe('check-unavailable')
     expect(stopped.startRepair).not.toHaveBeenCalled()
+    // A reason the runner could not keep: the mark still reads the case, in words that name no reason
+    const unsaid = rig({ sandboxKind: 'sandbox', provider: 'codex', sandboxedCheck: boxed, output: printed })
+    unsaid.validation.startValidation({ taskId: unsaid.taskId, cwd: unsaid.cwd })
+    await unsaid.started()
+    await unsaid.finish(SANDBOX_FAILED_EXIT_CODE)
+    expect(unsaid.task().checks?.[0]).toMatchObject({ status: 'error', summary: t('en', 'jobs.checks.sandbox.failedNoReason') })
     // The check's own exit code without the runner's line: the check's failure
     const own = rig({ sandboxKind: 'sandbox', provider: 'codex', sandboxedCheck: boxed, output: 'FAIL src/a.test.ts\r\n' })
     own.validation.startValidation({ taskId: own.taskId, cwd: own.cwd })
@@ -807,7 +823,7 @@ describe('createTaskValidation — the sandbox of a sandboxed Task (Task K)', ()
     await own.finish(SANDBOX_FAILED_EXIT_CODE)
     expect(own.task().checks?.[0]).toMatchObject({ status: 'failed', exitCode: SANDBOX_FAILED_EXIT_CODE })
     // A run outside any sandbox never went through the runner: whatever it printed, its exit is its own
-    const plain = rig({ output: sandboxFailedLine(detail) })
+    const plain = rig({ output: sandboxFailedOutput(detail) })
     plain.validation.startValidation({ taskId: plain.taskId, cwd: plain.cwd })
     await plain.started()
     await plain.finish(SANDBOX_FAILED_EXIT_CODE)

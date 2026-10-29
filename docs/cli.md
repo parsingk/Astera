@@ -1184,8 +1184,11 @@ and is not the code's failure: the Task asks a person (retry, skip the check, or
 check's words and what can be done there (for an account whose Windows sandbox is not set up, Set up beside it under a
 sandboxed profile in Settings › Agent profiles, then retry; for a path no sandbox can carry, that retrying will not
 help). A sandbox that stops before the check starts is such a question too, not the code's failure: Astera's check
-runner says so with its own exit code, 125, and its own last line, `Astera could not put the check in the sandbox:
-<reason>`, and the question gives the reason. A Claude Code check under the sandbox runtime runs through that runner,
+runner says so with its own exit code, 125, and its own short mark, `astera-sandbox-failed`, as the very last thing it
+prints, after a line with its reason for whoever reads the run. It also writes the reason to a file Astera named for the
+run, which the question quotes; on Windows the run's output passes through the console, which can glue a long line to
+the one before it or break it where it wraps, so only the mark is read from the output. The check's output is kept with
+its result. A Claude Code check under the sandbox runtime runs through that runner,
 and so does a Codex check on Windows, whose shell first prints a line of its own so the runner knows the check started
 (`codex sandbox` there exits 1 for its own failure as for a check's). A Codex check on macOS and Linux runs straight in
 its terminal as before, so a sandbox that stops there still reads as the check's failure. A check that ran and failed

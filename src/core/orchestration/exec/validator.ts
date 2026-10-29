@@ -2,7 +2,6 @@ import { stripAnsi } from '../../rolling/detect'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../../sessions/pty'
 import { CHECK_TIMEOUT_MS, type CheckResult } from '../types'
 import { pluginIdOfCheck, unavailable, type PluginCheckAnswer } from '../pluginChecks'
-import { sandboxFailureOf } from '../../sandbox/checkRunner'
 import { GITHUB_CI_CHECK } from '../../github/lifecycle'
 
 // Validation run sequencing. Knows neither RunManager nor OrchState — only a runner and two callbacks,
@@ -47,15 +46,16 @@ export interface ValidatorRunner {
    *  run outside it. The round settles with it as a check that could not be made, which the verdict puts to a person.
    *  `outsideSandbox`: it runs outside any sandbox though its workers were sandboxed (Claude Code on Windows, which has
    *  none), recorded on its result. `hiddenEnv`: the variables the Credentials list kept from it, by name, recorded on
-   *  its result too (fix round 2). `sandboxFailed`: it runs through Astera's check runner (core/sandbox/checkRunner.ts),
-   *  whose own exit code and last line say the sandbox stopped before the check started; that exit is then a check that
-   *  could not be made, in these words for the runner's reason, not a failure (fix round 2, M1). */
+   *  its result too (fix round 2). `sandboxFailed`: it may run through Astera's check runner (core/sandbox/checkRunner.ts):
+   *  asked with its exit code and output, it gives the words for a sandbox that stopped before the check started, as the
+   *  runner says by its own exit code and mark, or null for the check's own result. Such an exit is a check that could not
+   *  be made, not a failure (fix rounds 2 and 3, M1 and N1). */
   start(a: {
     cwd: string
     taskId: string
     configId: string
   }): Promise<
-    | { runId: string; name: string; outsideSandbox?: true; hiddenEnv?: string[]; sandboxFailed?: (detail: string) => string }
+    | { runId: string; name: string; outsideSandbox?: true; hiddenEnv?: string[]; sandboxFailed?: (exitCode: number, output: string) => string | null }
     | { unavailable: string; name: string }
     | 'skip'
   >
@@ -81,9 +81,9 @@ interface Pending {
   outsideSandbox: boolean
   /** The variables the Credentials list kept from the check running now, by name (fix round 2); set at each start */
   hiddenEnv: string[]
-  /** The check running now runs through Astera's check runner: the words for its reason when it says the sandbox stopped
-   *  before the check started (fix round 2, M1); null for a run outside it. Set at each start */
-  sandboxFailed: ((detail: string) => string) | null
+  /** The check running now may run through Astera's check runner: its exit read for a sandbox that stopped before the check
+   *  started (fix rounds 2 and 3, M1 and N1); null for a run outside any sandbox. Set at each start */
+  sandboxFailed: ((exitCode: number, output: string) => string | null) | null
   startedAt: string | null
   /** Whether this entry's exit is already being settled. The same head's exit can arrive twice —
    *  settling is an await, and a second exit landing inside it still finds the head at the front. This
@@ -254,10 +254,11 @@ export class TaskValidator {
     // 2, M1): settled as a check that could not be made, which asks a person, as a sandbox that could not be put around it
     // before the start does (rule E5). Only a sandboxed check's run, which the runner may carry, is read so: a check outside
     // any sandbox never goes through it
-    const stoppedBefore = head.sandboxFailed !== null ? sandboxFailureOf(a.exitCode, output) : null
+    const stoppedBefore = head.sandboxFailed?.(a.exitCode, output) ?? null
     if (stoppedBefore !== null) {
       this.deps.log?.(`check "${name}" task=${head.taskId}: the sandbox stopped before the check started: ${stoppedBefore}`)
-      head.results.push({ configId, name, status: 'error', summary: head.sandboxFailed!(stoppedBefore), startedAt: head.startedAt ?? undefined, endedAt: now })
+      // Its output kept, which the words point the person to (fix round 3, N4)
+      head.results.push({ configId, name, status: 'error', summary: stoppedBefore, outputTail: output, startedAt: head.startedAt ?? undefined, endedAt: now })
       for (const rest of head.configIds.slice(head.index + 1)) head.results.push({ configId: rest, name: rest, status: 'not-run' })
       this.settle(cwd, head)
       return

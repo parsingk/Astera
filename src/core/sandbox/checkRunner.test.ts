@@ -3,37 +3,47 @@
 // line, and, for `codex sandbox` on Windows, which exits 1 both for its own failure and for a check that failed with 1, a
 // line the check's shell prints before the check runs. No codex runs here: the child is a fake.
 import { EventEmitter } from 'node:events'
+import { createRequire } from 'node:module'
+import os from 'node:os'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { stripAnsi } from '../rolling/detect'
 import {
   CHECK_STARTED_MARK,
   CODEX_CHECK_FLAG,
   SANDBOX_FAILED_EXIT_CODE,
+  SANDBOX_FAILED_MARK,
+  checkReasonFileIn,
   checkRunnerExit,
   codexCheckRunner,
   runCodexCheck,
-  sandboxFailedLine,
-  sandboxFailureOf,
+  sandboxFailedOutput,
+  sandboxStoppedBefore,
   type CodexCheckChild
 } from './checkRunner'
 
-describe('sandboxFailureOf', () => {
-  const line = sandboxFailedLine('the sandbox runtime could not start: bwrap: setting up uid map: Permission denied')
+describe('sandboxStoppedBefore', () => {
+  const out = sandboxFailedOutput('the sandbox runtime could not start: bwrap: setting up uid map: Permission denied')
 
-  it("reads the runner's own line at the end of its own exit code", () => {
-    expect(sandboxFailureOf(SANDBOX_FAILED_EXIT_CODE, `npm warn something\r\n${line}`)).toBe(
-      'the sandbox runtime could not start: bwrap: setting up uid map: Permission denied'
-    )
-    expect(sandboxFailureOf(SANDBOX_FAILED_EXIT_CODE, `${line}\r\n\r\n`)).not.toBeNull()
+  it("reads the runner's own mark at the very end with its own exit code, the reason line before it or not", () => {
+    expect(out.trimEnd().endsWith(`\r\n${SANDBOX_FAILED_MARK}`)).toBe(true)
+    expect(sandboxStoppedBefore(SANDBOX_FAILED_EXIT_CODE, `npm warn something\r\n${out}`)).toBe(true)
+    expect(sandboxStoppedBefore(SANDBOX_FAILED_EXIT_CODE, `${out}\r\n\r\n  `)).toBe(true)
+    // Glued to the line before it, as ConPTY's repaint leaves it once the escapes are stripped
+    expect(sandboxStoppedBefore(SANDBOX_FAILED_EXIT_CODE, `…failed: 1314Astera could not put…1314${SANDBOX_FAILED_MARK}`)).toBe(true)
   })
 
-  it('a check that ended with that code itself, or printed that line itself, or said more after it, is its own result', () => {
-    expect(sandboxFailureOf(SANDBOX_FAILED_EXIT_CODE, 'FAIL src/a.test.ts\r\n')).toBeNull()
-    expect(sandboxFailureOf(1, line)).toBeNull()
-    expect(sandboxFailureOf(SANDBOX_FAILED_EXIT_CODE, `${line}\r\nFAIL src/a.test.ts\r\n`)).toBeNull()
+  it('a check that ended with that code itself, or printed the mark itself, or said more after it, is its own result', () => {
+    expect(sandboxStoppedBefore(SANDBOX_FAILED_EXIT_CODE, 'FAIL src/a.test.ts\r\n')).toBe(false)
+    expect(sandboxStoppedBefore(1, out)).toBe(false)
+    expect(sandboxStoppedBefore(SANDBOX_FAILED_EXIT_CODE, `${out}FAIL src/a.test.ts\r\n`)).toBe(false)
   })
 
-  it('keeps the reason to one line', () => {
-    expect(sandboxFailedLine('a\nb')).toBe(sandboxFailedLine('a b'))
+  it('keeps the reason to one line, and names a fresh reason file each time', () => {
+    expect(sandboxFailedOutput('a\nb')).toBe(sandboxFailedOutput('a b'))
+    const dir = path.join(os.tmpdir(), 'astera-checks')
+    expect(checkReasonFileIn(dir)).not.toBe(checkReasonFileIn(dir))
+    expect(path.dirname(checkReasonFileIn(dir))).toBe(dir)
   })
 })
 
@@ -117,18 +127,24 @@ describe('runCodexCheck', () => {
 })
 
 describe('checkRunnerExit', () => {
-  const rig = (o: { srt?: () => Promise<number>; codex?: () => Promise<number> } = {}) => {
+  const rig = (o: { srt?: () => Promise<number>; codex?: () => Promise<number>; recordFails?: true } = {}) => {
     const printed: string[] = []
     const asked: unknown[] = []
+    const recorded: string[] = []
     return {
       printed: () => printed.join(''),
       asked,
+      recorded,
       exit: (argv: string[]) =>
         checkRunnerExit({
           argv,
           srt: (payload) => (asked.push({ srt: payload }), (o.srt ?? (async () => 0))()),
           codex: (file, args) => (asked.push({ codex: [file, ...args] }), (o.codex ?? (async () => 0))()),
-          print: (s) => void printed.push(s)
+          print: (s) => void printed.push(s),
+          record: (reason) => {
+            if (o.recordFails) throw new Error('EACCES')
+            recorded.push(reason)
+          }
         })
     }
   }
@@ -139,19 +155,86 @@ describe('checkRunnerExit', () => {
     expect(await r.exit([CODEX_CHECK_FLAG, 'cmd.exe', '/d', '/c', 'call', 'codex.cmd'])).toBe(1)
     expect(r.asked).toEqual([{ srt: '{"cwd":"/w"}' }, { codex: ['cmd.exe', '/d', '/c', 'call', 'codex.cmd'] }])
     expect(r.printed()).toBe('')
+    expect(r.recorded).toEqual([])
   })
 
-  it('says it could not put the check in the sandbox, last, with its own exit code', async () => {
-    const srt = rig({ srt: async () => Promise.reject(new Error('bwrap: Permission denied')) })
+  it('says it could not put the check in the sandbox with its own exit code and its mark last, its reason kept apart', async () => {
+    const srt = rig({ srt: async () => Promise.reject(new Error('bwrap: Permission\ndenied')) })
     const srtCode = await srt.exit(['{}'])
     expect(srtCode).toBe(SANDBOX_FAILED_EXIT_CODE)
-    expect(sandboxFailureOf(srtCode, `out\r\n${srt.printed()}`)).toBe('bwrap: Permission denied')
+    expect(sandboxStoppedBefore(srtCode, `out\r\n${srt.printed()}`)).toBe(true)
+    expect(srt.recorded).toEqual(['bwrap: Permission denied'])
+    expect(srt.printed()).toContain('Astera could not put the check in the sandbox: bwrap: Permission denied')
     const codex = rig({ codex: async () => Promise.reject(new Error('codex sandbox stopped with exit code 1 before the check started')) })
     const codexCode = await codex.exit([CODEX_CHECK_FLAG, 'codex.exe'])
-    expect(sandboxFailureOf(codexCode, codex.printed())).toBe('codex sandbox stopped with exit code 1 before the check started')
+    expect(sandboxStoppedBefore(codexCode, codex.printed())).toBe(true)
+    expect(codex.recorded).toEqual(['codex sandbox stopped with exit code 1 before the check started'])
     // No codex command given: the runner itself could not run it
     expect(await rig().exit([CODEX_CHECK_FLAG])).toBe(SANDBOX_FAILED_EXIT_CODE)
+    // A reason that could not be written still leaves the mark, which is what reads the case
+    const unwritten = rig({ srt: async () => Promise.reject(new Error('x')), recordFails: true })
+    expect(sandboxStoppedBefore(await unwritten.exit(['{}']), unwritten.printed())).toBe(true)
   })
+})
+
+// Fix round 3 (N1): on Windows the runner's output reaches the validator through ConPTY, which repaints rather than
+// replays. Where earlier output and the runner's last lines land in one frame it jumps rows with cursor moves (stripped,
+// they glue two lines into one), and on a screen that has scrolled it breaks a long line where it wraps. The re-review
+// measured both with node-pty. So the runner's own failure is read from the output as the validator gets it: a real
+// ConPTY, the repository's stripAnsi
+describe.runIf(process.platform === 'win32')('the runner’s failure through a real ConPTY', () => {
+  type Pty = { onData(cb: (d: string) => void): void; onExit(cb: (e: { exitCode: number }) => void): void }
+  const pty = createRequire(import.meta.url)('node-pty') as { spawn(file: string, args: string[], o: object): Pty }
+  /** A child that prints earlier lines, codex's own line, then exactly what the runner prints when codex stopped before
+   *  the check, and exits as the runner does: from the write callbacks, with the runner's code. */
+  const CHILD = [
+    'for (let i = 0; i < Number(process.env.PRE); i++) process.stdout.write(`earlier output ${i}\r\n`)',
+    "process.stderr.write('windows sandbox failed: CreateProcessAsUserW failed: 1314\\r\\n')",
+    'process.stdout.write(process.env.RUNNER_OUT)',
+    'process.stdout.write("", () => process.stderr.write("", () => process.exit(Number(process.env.CODE))))'
+  ].join('\n')
+  const reason = 'codex sandbox stopped with exit code 1 before the check started: windows sandbox failed: CreateProcessAsUserW failed: 1314'
+
+  async function runnerOutput(): Promise<{ code: number; out: string }> {
+    let out = ''
+    const code = await checkRunnerExit({
+      argv: [CODEX_CHECK_FLAG, 'codex.exe'],
+      srt: async () => 0,
+      codex: async () => Promise.reject(new Error(reason)),
+      print: (s) => void (out += s),
+      record: () => {}
+    })
+    return { code, out }
+  }
+
+  /** The run's output as the validator reads it: everything ConPTY gave by the exit, without escapes. */
+  const through = (o: { cols: number; rows: number; pre: number; code: number; out: string }): Promise<{ exitCode: number; output: string }> =>
+    new Promise((resolve) => {
+      let raw = ''
+      const p = pty.spawn(process.execPath, ['-e', CHILD], {
+        cols: o.cols,
+        rows: o.rows,
+        cwd: process.cwd(),
+        env: { ...process.env, PRE: String(o.pre), RUNNER_OUT: o.out, CODE: String(o.code) }
+      })
+      p.onData((d) => void (raw += d))
+      p.onExit(({ exitCode }) => resolve({ exitCode, output: stripAnsi(raw) }))
+    })
+
+  it('is read when ConPTY merges it with the lines before it, and on a screen that has scrolled', async () => {
+    const runner = await runnerOutput()
+    for (const shape of [
+      { cols: 120, rows: 30, pre: 3 },
+      { cols: 80, rows: 30, pre: 3 },
+      { cols: 120, rows: 10, pre: 40 },
+      { cols: 80, rows: 8, pre: 40 }
+    ])
+      for (let i = 0; i < 3; i++) {
+        const r = await through({ ...shape, ...runner })
+        expect(r.exitCode).toBe(SANDBOX_FAILED_EXIT_CODE)
+        expect(sandboxStoppedBefore(r.exitCode, r.output), `${JSON.stringify(shape)} ${JSON.stringify(r.output.slice(-200))}`).toBe(true)
+      }
+  }, 120_000)
 })
 
 describe('codexCheckRunner', () => {
