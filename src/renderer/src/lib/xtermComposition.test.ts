@@ -8,10 +8,11 @@
 // read the hidden textarea, and that textarea keeps everything typed since the last Enter. A busy renderer runs the
 // input events queued behind its work before those timers (xtermjs/xterm.js#6089 and #6250 measured it), so a timer
 // reads a textarea later keys have changed:
-// - the check a keyCode 229 key outside a composition starts (_handleAnyTextareaChanges, :186-205) diffs against a
-//   snapshot from before every syllable since: the line goes out again, and after Enter clears the textarea a DEL does;
-// - a key that ends a composition sends its slice with an end the composition's own timer has not set yet (:135);
-// - one flag guards every pending composition send (:153-157), so a later key cancels them all (#6089).
+// - the check a keyCode 229 key outside a composition starts (_handleAnyTextareaChanges) diffs against a snapshot from
+//   before every syllable since: the line goes out again, and after Enter clears the textarea a DEL does;
+// - a key that ends a composition sends its slice with an end the composition's own timer has not set yet
+//   (_finalizeComposition called with waitForPropagation false);
+// - one flag guards every pending composition send (_isSendingComposition), so a later key cancels them all (#6089).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as sessionBus from './sessionBus'
 import { openXterm, shown, type Xterm } from './xtermFixtures'
@@ -55,7 +56,7 @@ const typed = (c: string): Key => () => {
   x.imeInsert(c)
   x.imeKeyUp('KeyX')
 }
-/** TerminalView's key handler, as far as these keys go (TerminalView.tsx:144-191): Ctrl+Enter writes ESC CR to the
+/** TerminalView's key handler, as far as these keys go (its attachCustomKeyEventHandler): Ctrl+Enter writes ESC CR to the
  *  session itself — the same place onData's writes go — and Ctrl+V pastes the clipboard; xterm never sees either. */
 const terminalViewKeys = (clipboard: string): void =>
   x.term.attachCustomKeyEventHandler((e) => {
