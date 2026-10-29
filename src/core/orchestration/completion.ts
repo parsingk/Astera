@@ -29,6 +29,8 @@ export interface CompletionCheckDetail {
   skipped?: true
   /** Ran outside any sandbox though the Task's workers were sandboxed (CheckResult.outsideSandbox, Task K) */
   outsideSandbox?: true
+  /** The variables the Credentials list kept from it, by name (CheckResult.hiddenEnv, Task K fix round 2) */
+  hiddenEnv?: string[]
 }
 
 export interface CompletionDetail {
@@ -65,7 +67,8 @@ export function completionDetailOf(task: Task): CompletionDetail | null {
     ...(c.diagnosticsTotal !== undefined ? { diagnosticsTotal: c.diagnosticsTotal } : {}),
     ...(c.externalUrl !== undefined ? { externalUrl: c.externalUrl } : {}),
     ...(c.skipped ? { skipped: true as const } : {}),
-    ...(c.outsideSandbox ? { outsideSandbox: true as const } : {})
+    ...(c.outsideSandbox ? { outsideSandbox: true as const } : {}),
+    ...(c.hiddenEnv !== undefined && c.hiddenEnv.length > 0 ? { hiddenEnv: c.hiddenEnv } : {})
   }))
   const issues = task.reviewIssues ?? []
   const blockingIssues = issues.filter((i) => i.blocking)

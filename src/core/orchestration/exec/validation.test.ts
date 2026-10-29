@@ -706,13 +706,15 @@ describe('createTaskValidation — a lifecycle round that is no longer needed', 
 // on Windows, which has no sandbox, runs its checks as today and says so (Q1).
 describe('createTaskValidation — the sandbox of a sandboxed Task (Task K)', () => {
   const hidden = (cwd: string): NodeJS.ProcessEnv => ({ PATH: '/bin', HIDDEN_FOR: cwd })
+  /** ValidationContext.checkEnv: the hidden environment, and the names the hiding took from it (fix round 2) */
+  const hiding = (cwd: string): { env: NodeJS.ProcessEnv; hidden: string[] } => ({ env: hidden(cwd), hidden: ['NPM_TOKEN', 'KUBECONFIG'] })
 
   it('starts the check of a sandboxed attempt in its sandbox, as its CLI and account, from the hidden environment', async () => {
     const asked: Parameters<NonNullable<ValidationContext['sandboxedCheck']>>[0][] = []
     const h = rig({
       sandboxKind: 'sandbox',
       provider: 'codex',
-      checkEnv: hidden,
+      checkEnv: hiding,
       sandboxedCheck: async (a) => (asked.push(a), { launch: { file: 'codex', args: ['sandbox', '--', 'sh', '-c', a.command] }, env: { ...a.env, BOXED: '1' } })
     })
     h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
@@ -724,13 +726,15 @@ describe('createTaskValidation — the sandbox of a sandboxed Task (Task K)', ()
     await h.finish(0)
     expect(h.task().status).toBe('completed')
     expect(h.task().checks?.[0]).not.toHaveProperty('outsideSandbox')
+    // Fix round 2: the result says which names the check started without, never their values
+    expect(h.task().checks?.[0]).toMatchObject({ hiddenEnv: ['NPM_TOKEN', 'KUBECONFIG'] })
   })
 
   it('a sandbox that cannot be put around the check asks a person and runs nothing (E5)', async () => {
     const why = 'the Windows sandbox of account accA is not set up'
     const answers: NonNullable<ValidationContext['sandboxedCheck']>[] = [async () => ({ unavailable: why }), async () => Promise.reject(new Error(why))]
     for (const sandboxedCheck of answers) {
-      const h = rig({ sandboxKind: 'sandbox', provider: 'codex', checkEnv: hidden, sandboxedCheck })
+      const h = rig({ sandboxKind: 'sandbox', provider: 'codex', checkEnv: hiding, sandboxedCheck })
       h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
       await vi.waitFor(() => expect(h.task().status).toBe('blocked'))
       expect(h.runsStarted()).toBe(0)
@@ -746,6 +750,21 @@ describe('createTaskValidation — the sandbox of a sandboxed Task (Task K)', ()
     h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
     await vi.waitFor(() => expect(h.task().status).toBe('blocked'))
     expect(h.task().checks?.[0]?.summary).toBe("This Codex account has no Windows sandbox set up yet. Set up shows Windows' administrator prompt once. Codex records the elevated sandbox as this account's default.")
+  })
+
+  // Fix round 2: a failed check names what it started without, so a failure for a hidden token reads as that; a check the
+  // hiding took nothing from says nothing
+  it('a failed check names the variables the Credentials list kept from it, and one it took nothing from says none', async () => {
+    const failed = rig({ checkEnv: hiding })
+    failed.validation.startValidation({ taskId: failed.taskId, cwd: failed.cwd })
+    await failed.started()
+    await failed.finish(1)
+    expect(failed.task().checks?.[0]).toMatchObject({ status: 'failed', hiddenEnv: ['NPM_TOKEN', 'KUBECONFIG'] })
+    const none = rig({ checkEnv: (cwd) => ({ env: hidden(cwd), hidden: [] }) })
+    none.validation.startValidation({ taskId: none.taskId, cwd: none.cwd })
+    await none.started()
+    await none.finish(1)
+    expect(none.task().checks?.[0]).not.toHaveProperty('hiddenEnv')
   })
 
   it('a process that cannot put checks in a sandbox does not run a sandboxed Task check outside it', async () => {
@@ -779,7 +798,7 @@ describe('createTaskValidation — the sandbox of a sandboxed Task (Task K)', ()
 
   it('Claude Code on Windows: runs the check as today, from the hidden environment, and says it ran outside the sandbox (Q1)', async () => {
     const sandboxedCheck = vi.fn(async () => ({ unavailable: 'never asked' }))
-    const h = rig({ sandboxKind: 'deny-only', checkEnv: hidden, sandboxedCheck })
+    const h = rig({ sandboxKind: 'deny-only', checkEnv: hiding, sandboxedCheck })
     h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
     const opts = await h.started()
     expect(opts.launch).toBeUndefined()
@@ -791,12 +810,13 @@ describe('createTaskValidation — the sandbox of a sandboxed Task (Task K)', ()
   })
 
   it('an unsandboxed Task check starts from the hidden environment too (Q5), and is not marked', async () => {
-    const h = rig({ checkEnv: hidden })
+    const h = rig({ checkEnv: hiding })
     h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
     const opts = await h.started()
     expect(opts.launch).toBeUndefined()
     expect(opts.env).toEqual(hidden(h.cwd))
     await h.finish(0)
     expect(h.task().checks?.[0]).not.toHaveProperty('outsideSandbox')
+    expect(h.task().checks?.[0]).toMatchObject({ hiddenEnv: ['NPM_TOKEN', 'KUBECONFIG'] })
   })
 })

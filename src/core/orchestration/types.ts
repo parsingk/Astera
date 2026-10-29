@@ -89,6 +89,10 @@ export interface CheckResult {
    *  only deny rules for its file tools, so its workers' shells, and with them this check, run as the person (Task K,
    *  the person's Q1). Shown beside the verdict. */
   outsideSandbox?: true
+  /** The variables the Credentials list kept from the check's environment, by name, never a value (Task K fix round 2):
+   *  the names it took from the environment the check started from, and those it pointed at an empty location. A
+   *  failure for one of them (a registry token, a login) reads as that. Absent when it took none. */
+  hiddenEnv?: string[]
 }
 
 export type ReviewSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info'

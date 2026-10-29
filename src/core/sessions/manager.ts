@@ -19,7 +19,7 @@ import { providerOf } from '../providers/meta'
 import { codexDeveloperInstructions } from './sessionContext'
 import type { CapabilitySource } from '../extensions/capabilityCache'
 import { gatewayTokenEnv } from '../extensions/resolve'
-import { applyHiding, type HidingSource } from '../credentials/hiding'
+import { applyHiding, hiddenNames, type HidingSource } from '../credentials/hiding'
 import { isObserving } from '../audit/policy'
 import { enforceUnavailable, type EnforceStart } from '../audit/enforce'
 import type { EnforceFilesResult } from './statusline'
@@ -344,11 +344,15 @@ export class SessionManager {
   }
 
   /** The environment a Task's check in `cwd` starts from (Task K, the person's Q5): `base` without what the Credentials list
-   *  hides from a session started there, as a session's own (spawn), sandboxed or not. */
-  checkEnv(base: NodeJS.ProcessEnv, cwd: string): NodeJS.ProcessEnv {
+   *  hides from a session started there, as a session's own (spawn), sandboxed or not; and the names it took (hiddenNames,
+   *  fix round 2), which the check's result shows. */
+  checkEnv(base: NodeJS.ProcessEnv, cwd: string): { env: NodeJS.ProcessEnv; hidden: string[] } {
     const env: Record<string, string | undefined> = { ...base }
-    if (this.hiding) applyHiding(env, this.hiding.get(cwd), this.checks.platform)
-    return env
+    if (!this.hiding) return { env, hidden: [] }
+    const change = this.hiding.get(cwd)
+    const hidden = hiddenNames(env, change, this.checks.platform)
+    applyHiding(env, change, this.checks.platform)
+    return { env, hidden }
   }
 
   /**

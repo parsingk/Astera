@@ -1841,11 +1841,12 @@ describe('the sandbox at spawn', () => {
 
   // Task K (the person's Q5): every check, sandboxed or not, starts without what the Credentials list hides from a session
   // in its folder
-  it('a check environment is the base without what the Credentials list hides for its folder', () => {
+  // Fix round 2: with the names it took, never the values, which the check's result shows
+  it('a check environment is the base without what the Credentials list hides for its folder, and names what it took', () => {
     const { manager } = rig('linux')
     manager.hiding = { get: (cwd) => ({ remove: cwd === '/w' ? ['SECRET_TOKEN'] : [], set: {} }), damaged: () => false }
-    expect(manager.checkEnv({ PATH: '/bin', SECRET_TOKEN: 's' }, '/w')).toEqual({ PATH: '/bin' })
-    expect(manager.checkEnv({ PATH: '/bin', SECRET_TOKEN: 's' }, '/x')).toEqual({ PATH: '/bin', SECRET_TOKEN: 's' })
+    expect(manager.checkEnv({ PATH: '/bin', SECRET_TOKEN: 's' }, '/w')).toEqual({ env: { PATH: '/bin' }, hidden: ['SECRET_TOKEN'] })
+    expect(manager.checkEnv({ PATH: '/bin', SECRET_TOKEN: 's' }, '/x')).toEqual({ env: { PATH: '/bin', SECRET_TOKEN: 's' }, hidden: [] })
   })
 
   it('a sandboxed Codex session starts with -a never and the profile, not the bypass flag', async () => {

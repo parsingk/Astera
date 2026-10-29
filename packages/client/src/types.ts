@@ -268,6 +268,8 @@ export interface CheckResult {
   readonly skipped?: true
   /** The check ran outside any sandbox though the Task's workers were sandboxed: Claude Code on Windows has none. */
   readonly outsideSandbox?: true
+  /** The variables Astera's Credentials list kept from the check's environment, by name, never a value. */
+  readonly hiddenEnv?: readonly string[]
 }
 
 export interface ReviewIssue {
@@ -407,6 +409,7 @@ export interface CompletionCheckDetail {
   readonly externalUrl?: string
   readonly skipped?: true
   readonly outsideSandbox?: true
+  readonly hiddenEnv?: readonly string[]
 }
 
 export interface CompletionDetail {

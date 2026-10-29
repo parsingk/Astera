@@ -55,6 +55,11 @@ export function CompletionChecks({
             {said !== undefined && said.trim() !== '' && (
               <p className={`detail-completion-summary${c.status === 'error' ? ' detail-completion-summary--error' : ''}`}>{said}</p>
             )}
+            {/* What the Credentials list kept from the check, by name (Task K fix round 2): a failure for a hidden token
+                or login reads as that */}
+            {c.hiddenEnv !== undefined && c.hiddenEnv.length > 0 && (
+              <p className="detail-completion-summary">{t('jobs.checks.hiddenEnv', { names: c.hiddenEnv.join(', ') })}</p>
+            )}
             {c.diagnostics !== undefined && c.diagnostics.length > 0 && (
               <ul className="detail-completion-diags">
                 {c.diagnostics.map((d, i) => (

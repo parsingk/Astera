@@ -73,8 +73,9 @@ export interface ValidationContext {
    *  this process's. */
   platform?: NodeJS.Platform
   /** The environment every check starts from (Task K, the person's Q5): this process's, without what the Credentials list
-   *  hides from a session in `cwd`. Absent: the runs' own base. */
-  checkEnv?(cwd: string): NodeJS.ProcessEnv
+   *  hides from a session in `cwd`, and the names it took, which the check's result shows (fix round 2). Absent: the
+   *  runs' own base, nothing taken. */
+  checkEnv?(cwd: string): { env: NodeJS.ProcessEnv; hidden: string[] }
   /** How the check of a Task whose workers ran in their CLI's sandbox starts inside that sandbox, as that CLI and account
    *  in `cwd` (Task K): what to launch in place of `command` through the shell, and the environment it starts from, built
    *  by the session manager's own sandbox builders from `env`. `unavailable` (or a rejection) when the sandbox cannot be
@@ -174,7 +175,10 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
         // Task K: the sandbox the Task's workers ran in (checkSandbox.ts), and the environment every check starts from:
         // without what the Credentials list hides there (Q5)
         const sandbox = checkSandboxOf(st, task, c.platform ?? process.platform)
-        const env = c.checkEnv?.(cwd)
+        const base = c.checkEnv?.(cwd)
+        const env = base?.env
+        // Its result names what the hiding took (fix round 2), never a value
+        const hidden = base !== undefined && base.hidden.length > 0 ? { hiddenEnv: base.hidden } : {}
         // validation: marks this run as not the user's. The run list and the global badge label it,
         // and run.stop routes markStopped by it (RunStatus.validation). Nothing waits for the user's
         // own runs any more — a validation starts beside them; same-tree validations are serialised
@@ -183,7 +187,7 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
           const started = c.runs.start({ projectPath: cwd, projectName, config, command, validation: true, ...(env ? { env } : {}) })
           // Claude Code on Windows has no sandbox: its workers' shells ran as the person, and so does this check, said on
           // its result (the person's Q1)
-          return { runId: started.runId, name: config.name, ...(sandbox?.kind === 'deny-only' ? { outsideSandbox: true as const } : {}) }
+          return { runId: started.runId, name: config.name, ...(sandbox?.kind === 'deny-only' ? { outsideSandbox: true as const } : {}), ...hidden }
         }
         // Inside the sandbox the workers ran in, as their CLI and account, or not at all: a check that cannot be put in it
         // is a question to a person (rule E5), never a run outside it nor the code's failure
@@ -204,7 +208,7 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
         const now = c.getState().tasks.find((x) => x.id === taskId)
         if (!now || now.status !== 'validating' || now.ciWait !== undefined) return 'skip'
         const started = c.runs.start({ projectPath: cwd, projectName, config, command, validation: true, env: boxed.env, launch: boxed.launch })
-        return { runId: started.runId, name: config.name }
+        return { runId: started.runId, name: config.name, ...hidden }
       },
       output: (runId) => cutTail(c.runs.recentOutput(runId), 4000),
       // 타임아웃이 이 PTY 를 두 번째로 멈춘다(validator.ts 의 startCheck 타이머). **c.runs.stop 을

@@ -1989,6 +1989,7 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.checks.sandbox.docker': "A Docker check cannot run in the sandbox this Task's workers ran in: Docker reaches outside it. Skip this check or mark the Task failed.",
   'jobs.checks.sandbox.cannot': "This process cannot put checks in the sandbox this Task's workers ran in, so the check was not run outside it.",
   'jobs.checks.outsideSandbox': 'validated outside the sandbox',
+  'jobs.checks.hiddenEnv': 'Started without what Credentials hides here: {names}',
   'jobs.gate.checkUnavailable.retry': 'Run the checks again',
   'jobs.gate.checkUnavailable.retryHint': "Runs this Task's checks again from the first.",
   'jobs.gate.checkUnavailable.skip': 'Go on without this check',

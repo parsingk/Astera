@@ -1802,6 +1802,7 @@ export const ja: Catalog = {
   'jobs.checks.sandbox.docker': 'このタスクのワーカーが動いたサンドボックスの中では Docker のチェックを実行できません: Docker はサンドボックスの外に届きます。このチェックをスキップするか、タスクを失敗にしてください。',
   'jobs.checks.sandbox.cannot': 'このプロセスはこのタスクのワーカーが動いたサンドボックスにチェックを入れられないため、チェックをサンドボックスの外では実行しませんでした。',
   'jobs.checks.outsideSandbox': 'サンドボックスの外で検証',
+  'jobs.checks.hiddenEnv': 'Credentials がここで隠す変数なしで開始しました: {names}',
   'jobs.gate.checkUnavailable.retry': 'チェックを再実行',
   'jobs.gate.checkUnavailable.retryHint': 'この Task のチェックを最初からもう一度実行します。',
   'jobs.gate.checkUnavailable.skip': 'このチェックなしで続行',

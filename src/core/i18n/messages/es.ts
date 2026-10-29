@@ -1825,6 +1825,7 @@ export const es: Catalog = {
   'jobs.checks.sandbox.docker': 'Una comprobación de Docker no puede ejecutarse en el sandbox en el que trabajaron los workers de esta tarea: Docker llega fuera de él. Omite esta comprobación o marca la tarea como fallida.',
   'jobs.checks.sandbox.cannot': 'Este proceso no puede poner comprobaciones en el sandbox en el que trabajaron los workers de esta tarea, así que la comprobación no se ejecutó fuera de él.',
   'jobs.checks.outsideSandbox': 'validado fuera del sandbox',
+  'jobs.checks.hiddenEnv': 'Empezó sin lo que Credentials oculta aquí: {names}',
   'jobs.gate.checkUnavailable.retry': 'Volver a comprobar',
   'jobs.gate.checkUnavailable.retryHint': 'Vuelve a ejecutar las comprobaciones de esta tarea desde la primera.',
   'jobs.gate.checkUnavailable.skip': 'Seguir sin esta comprobación',

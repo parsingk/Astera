@@ -103,7 +103,9 @@ Task를 다 짠 뒤 상세 창의 `실행`을 눌러야 시작합니다.
   닿기 때문입니다.
 - Windows의 Claude Code에는 sandbox가 없습니다. 그 워커의 검사는 예전처럼 돌고, 결과 옆에
   `sandbox 밖에서 검증함`이라고 적힙니다.
-- 검사는 sandbox 여부와 상관없이 Credentials 목록이 그 폴더의 세션에 숨기는 변수 없이 시작합니다.
+- 검사는 sandbox 여부와 상관없이 Credentials 목록이 그 폴더의 세션에 숨기는 변수 없이 시작합니다. 결과에는 빠진
+  변수의 이름이 적힙니다(값은 적지 않습니다). 검사에 꼭 필요한 값(사설 레지스트리의 토큰 같은 것)은 실행 구성의
+  `env`에 일부러 넣을 수 있습니다. 그 값은 숨긴 뒤의 환경 위에 얹힙니다.
 - 그런 Task의 검토자도 구현자의 워크트리에서 일하므로 자기 CLI의 sandbox 안에서 시작합니다. Windows의 Claude
   Code에는 sandbox가 없어서, 그 검토자는 무엇이 작업을 sandbox에 넣었는지에 따라 갈립니다.
   - 프로필의 `sandbox 에서 실행`으로 sandbox 안에서 한 작업: 검토자는 sandbox 프로필의 Claude Code 세션처럼

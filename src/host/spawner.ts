@@ -206,9 +206,9 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
   /** The copy of the person's git excludes a sandboxed win32 Codex start writes in this Host's temp folder (one for its
    *  profile, core/sandbox/gitExcludes.ts), shared with the Host's chat sessions. */
   codexExcludes?: CodexExcludes
-  /** The environment a Task's check in `cwd` starts from, `base` without what the Credentials list hides there (Task K,
-   *  Q5; SessionManager.checkEnv). */
-  checkEnv?(base: NodeJS.ProcessEnv, cwd: string): NodeJS.ProcessEnv
+  /** The environment a Task's check in `cwd` starts from, `base` without what the Credentials list hides there, and the
+   *  names it took (Task K, Q5 and fix round 2; SessionManager.checkEnv). */
+  checkEnv?(base: NodeJS.ProcessEnv, cwd: string): { env: NodeJS.ProcessEnv; hidden: string[] }
   /** How a sandboxed Task's check runs inside its workers' sandbox, as the attempt's registered account (Task K;
    *  SessionManager.checkLaunch). Rejects for an account no longer registered, and with a sandbox refusal. */
   checkLaunch?(a: { accountId: string; cwd: string; command: string }): Promise<{ file: string; args: string[] | string; env: Record<string, string> }>

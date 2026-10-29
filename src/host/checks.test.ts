@@ -48,7 +48,7 @@ interface RigOpts {
   foreignKillWaitMs?: number
   /** Task K: the kind the implementation attempt ran in, and HostChecksDeps.checkEnv and checkLaunch */
   sandboxKind?: 'sandbox' | 'deny-only'
-  checkEnv?: (base: NodeJS.ProcessEnv, cwd: string) => NodeJS.ProcessEnv
+  checkEnv?: (base: NodeJS.ProcessEnv, cwd: string) => { env: NodeJS.ProcessEnv; hidden: string[] }
   checkLaunch?: (a: { accountId: string; cwd: string; command: string }) => Promise<{ file: string; args: string[] | string; env: Record<string, string> }>
 }
 
@@ -233,7 +233,7 @@ describe('createHostChecks', () => {
       env: { PATH: process.env.PATH, ELECTRON_RUN_AS_NODE: '1', SECRET_TOKEN: 's' },
       checkEnv: (base, cwd) => {
         const { SECRET_TOKEN: _hidden, ...rest } = base
-        return { ...rest, HIDDEN_IN: cwd }
+        return { env: { ...rest, HIDDEN_IN: cwd }, hidden: ['SECRET_TOKEN'] }
       }
     })
     h.checks.startValidation({ taskId: h.taskId, cwd: h.cwd })

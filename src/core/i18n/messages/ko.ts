@@ -2204,6 +2204,7 @@ export const ko = {
   'jobs.checks.sandbox.docker': '이 Task 의 워커가 돈 sandbox 안에서는 Docker 검사를 돌릴 수 없습니다: Docker 는 sandbox 밖에 닿습니다. 이 검사를 건너뛰거나 Task 를 실패로 표시하세요.',
   'jobs.checks.sandbox.cannot': '이 프로세스는 이 Task 의 워커가 돈 sandbox 에 검사를 넣을 수 없어서, 검사를 sandbox 밖에서 돌리지 않았습니다.',
   'jobs.checks.outsideSandbox': 'sandbox 밖에서 검증함',
+  'jobs.checks.hiddenEnv': 'Credentials 가 여기서 숨기는 변수 없이 시작했습니다: {names}',
   'jobs.gate.checkUnavailable.retry': '검사 다시 돌리기',
   'jobs.gate.checkUnavailable.retryHint': '이 Task 의 검사를 처음부터 다시 돌립니다.',
   'jobs.gate.checkUnavailable.skip': '이 검사 없이 계속',

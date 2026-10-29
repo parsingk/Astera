@@ -45,8 +45,13 @@ export interface ValidatorRunner {
    *  be put in (the account's Windows sandbox not set up, the sandbox runtime missing, a Docker check), and it was not
    *  run outside it. The round settles with it as a check that could not be made, which the verdict puts to a person.
    *  `outsideSandbox`: it runs outside any sandbox though its workers were sandboxed (Claude Code on Windows, which has
-   *  none), recorded on its result. */
-  start(a: { cwd: string; taskId: string; configId: string }): Promise<{ runId: string; name: string; outsideSandbox?: true } | { unavailable: string; name: string } | 'skip'>
+   *  none), recorded on its result. `hiddenEnv`: the variables the Credentials list kept from it, by name, recorded on
+   *  its result too (fix round 2). */
+  start(a: {
+    cwd: string
+    taskId: string
+    configId: string
+  }): Promise<{ runId: string; name: string; outsideSandbox?: true; hiddenEnv?: string[] } | { unavailable: string; name: string } | 'skip'>
   /** That run's recent output */
   output(runId: string): string
   /** timeout 이 부른다. 이어 오는 exit 는 timed-out 으로 읽힌다 */
@@ -67,6 +72,8 @@ interface Pending {
   name: string | null
   /** The check running now runs outside any sandbox though its workers were sandboxed (Task K); set at each start */
   outsideSandbox: boolean
+  /** The variables the Credentials list kept from the check running now, by name (fix round 2); set at each start */
+  hiddenEnv: string[]
   startedAt: string | null
   /** Whether this entry's exit is already being settled. The same head's exit can arrive twice —
    *  settling is an await, and a second exit landing inside it still finds the head at the front. This
@@ -139,7 +146,7 @@ export class TaskValidator {
     const configIds = [...new Set(a.configIds)]
     const entry: Pending = {
       taskId: a.taskId, cwd: a.cwd, configIds, index: 0, results: [...(a.done ?? [])],
-      runId: null, name: null, outsideSandbox: false, startedAt: null, settling: false, stopped: false,
+      runId: null, name: null, outsideSandbox: false, hiddenEnv: [], startedAt: null, settling: false, stopped: false,
       timedOut: false, timedOutOnce: new Set(), erroredOnce: new Set(), timer: null
     }
     const q = this.queues.get(a.cwd)
@@ -237,7 +244,8 @@ export class TaskValidator {
     head.results.push({
       configId, name, status: passed ? 'passed' : 'failed', exitCode: a.exitCode, outputTail: output,
       startedAt: head.startedAt ?? undefined, endedAt: now,
-      ...(head.outsideSandbox ? { outsideSandbox: true as const } : {})
+      ...(head.outsideSandbox ? { outsideSandbox: true as const } : {}),
+      ...(head.hiddenEnv.length > 0 ? { hiddenEnv: [...head.hiddenEnv] } : {})
     })
     if (passed && head.index + 1 < head.configIds.length) {
       // 같은 이유로 runId·name 을 먼저 지운다(위 첫 timeout 자리와 같은 창) — 지우지 않으면 다음
@@ -350,6 +358,7 @@ export class TaskValidator {
         head.runId = outcome.runId
         head.name = outcome.name
         head.outsideSandbox = outcome.outsideSandbox === true
+        head.hiddenEnv = outcome.hiddenEnv ?? []
         head.startedAt = new Date().toISOString()
         head.timer = setTimeout(() => {
           if (head.runId !== outcome.runId || head.settling) return

@@ -170,7 +170,8 @@ export const CHECK_FIELDS = Object.freeze([
   'diagnosticsTotal',
   'externalUrl',
   'skipped',
-  'outsideSandbox'
+  'outsideSandbox',
+  'hiddenEnv'
 ] as const)
 export const REVIEW_ISSUE_FIELDS = Object.freeze(['id', 'severity', 'blocking', 'title', 'description', 'file', 'line', 'suggestedFix'] as const)
 
@@ -208,7 +209,8 @@ export const COMPLETION_CHECK_FIELDS = Object.freeze([
   'diagnosticsTotal',
   'externalUrl',
   'skipped',
-  'outsideSandbox'
+  'outsideSandbox',
+  'hiddenEnv'
 ] as const)
 
 /** One public event's envelope (SDK spec §6); its payload is shaped by its type (shape.ts shapeEvent). */

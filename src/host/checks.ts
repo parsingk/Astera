@@ -119,8 +119,9 @@ export interface HostChecksDeps {
    *  results so far to it. */
   lifecycleCiBegin?(a: { taskId: string; done: CheckResult[] }): Promise<{ status: number; body: unknown }>
   /** The environment a check in `cwd` starts from (Task K, the person's Q5): `base` without what the Credentials list
-   *  hides there; the spawner's session manager (SessionManager.checkEnv). Absent: `base` as is. */
-  checkEnv?(base: NodeJS.ProcessEnv, cwd: string): NodeJS.ProcessEnv
+   *  hides there, and the names it took (fix round 2); the spawner's session manager (SessionManager.checkEnv). Absent:
+   *  `base` as is. */
+  checkEnv?(base: NodeJS.ProcessEnv, cwd: string): { env: NodeJS.ProcessEnv; hidden: string[] }
   /** A sandboxed Task's check inside its workers' sandbox, as the attempt's account (Task K); the spawner's session manager
    *  (SessionManager.checkLaunch). Rejects with a sandbox refusal. Absent: such a check is not run (E5). */
   checkLaunch?(a: { accountId: string; cwd: string; command: string }): Promise<{ file: string; args: string[] | string; env: Record<string, string> }>
