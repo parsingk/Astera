@@ -212,7 +212,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.security.sandboxCoverage.level.partial': 'Partly',
   'settings.security.sandboxCoverage.level.none': 'Not blocked',
   'settings.security.sandboxCoverage.level.seen': 'Allowed',
-  'settings.security.sandboxCoverage.homeReadable': 'Outside the login folders, the home folder stays readable inside the sandbox. In a Claude session, commands the person types with `!` run outside the sandbox; the agent\'s own commands do not.',
+  'settings.security.sandboxCoverage.homeReadable': 'Outside the login folders, the home folder stays readable inside the sandbox. In a Claude session, commands the person types with `!` usually run outside the sandbox (see Claude Code\'s sandboxing docs); the agent\'s own commands run inside it.',
   'settings.security.sandboxCoverage.windowsClaude': 'Windows: the shell is not restricted',
   'settings.security.sandboxCoverage.linuxClaudeUbuntu': "Ubuntu 25.04 and later: shell commands fail under AppArmor's bubblewrap profile",
   'settings.security.builtin.profileWrite': "Writing Astera's settings folder",

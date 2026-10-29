@@ -48,10 +48,10 @@ const SANDBOX_GIVEN = {
     'Sin sandbox: solo las herramientas de archivos no pueden leer las carpetas de inicio de sesión (el shell no tiene límites)'
   ],
   'settings.security.sandboxCoverage.homeReadable': [
-    '로그인 정보 폴더 밖의 홈 폴더는 sandbox 안에서도 읽을 수 있습니다. Claude 세션에서 사람이 `!` 로 직접 입력한 명령은 sandbox 밖에서 실행되고, 에이전트가 낸 명령은 sandbox 안에서 실행됩니다.',
-    'Outside the login folders, the home folder stays readable inside the sandbox. In a Claude session, commands the person types with `!` run outside the sandbox; the agent\'s own commands do not.',
-    'ログイン情報のフォルダー以外のホームフォルダーは、サンドボックス内でも読めます。 Claude のセッションで人が `!` を付けて直接入力したコマンドはサンドボックスの外で実行され、エージェント自身のコマンドは内で実行されます。',
-    'Fuera de las carpetas de inicio de sesión, la carpeta personal sigue siendo legible dentro del sandbox. En una sesión de Claude, los comandos que la persona escribe con `!` se ejecutan fuera del sandbox; los del propio agente, no.'
+    '로그인 정보 폴더 밖의 홈 폴더는 sandbox 안에서도 읽을 수 있습니다. Claude 세션에서 사람이 `!` 로 직접 입력한 명령은 보통 sandbox 밖에서 실행됩니다(Claude Code의 sandbox 문서 참고). 에이전트가 낸 명령은 sandbox 안에서 실행됩니다.',
+    'Outside the login folders, the home folder stays readable inside the sandbox. In a Claude session, commands the person types with `!` usually run outside the sandbox (see Claude Code\'s sandboxing docs); the agent\'s own commands run inside it.',
+    'ログイン情報のフォルダー以外のホームフォルダーは、サンドボックス内でも読めます。 Claude のセッションで人が `!` を付けて直接入力したコマンドは、通常サンドボックスの外で実行されます（Claude Code のサンドボックスのドキュメントを参照）。エージェント自身のコマンドは内側で実行されます。',
+    'Fuera de las carpetas de inicio de sesión, la carpeta personal sigue siendo legible dentro del sandbox. En una sesión de Claude, los comandos que la persona escribe con `!` suelen ejecutarse fuera del sandbox (véase la documentación de sandbox de Claude Code); los del propio agente se ejecutan dentro.'
   ],
   'settings.security.sandboxCoverage.windowsClaude': ['Windows: 셸은 제한 없음', 'Windows: the shell is not restricted', 'Windows: シェルは制限なし', 'Windows: el shell no tiene límites'],
   'audit.coverageNote.bus-path-only': [

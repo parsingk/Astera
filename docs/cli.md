@@ -1163,9 +1163,12 @@ sandbox's own account, which cannot read the person's home, so its git reads a c
 that Astera writes in the temp folder. Claude Code has no sandbox on
 Windows: there the switch only keeps its file tools, not its shell, out of those folders and from changing the profile
 folder, and npm keeps its own cache.
-A command the person types in a Claude session with the `!` prefix runs outside Claude Code's sandbox, as it does without
-Astera; the agent's own commands do not (Claude Code's sandboxing docs, "What runs outside the sandbox"; seen on a Mac,
-2026-10-29).
+A command the person types in a Claude session with the `!` prefix usually runs outside Claude Code's sandbox; the agent's own
+commands run inside it. Claude Code's sandboxing docs (https://code.claude.com/docs/en/sandboxing, "What runs outside the
+sandbox" and "Turn off the retry with strict sandbox mode") say a command you enter at the `!` shell-mode prompt "runs
+unsandboxed in most sessions", and name the sessions where it is sandboxed: "A background session: strict sandbox mode covers
+shell-mode commands too" and "A Linux session with `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` set: every command runs sandboxed,
+shell-mode commands included". Seen on a Mac, 2026-10-29: a profile folder write typed with `!` succeeded.
 What a sandboxed session starts runs in the sandbox too, whatever profile it names: a session it makes with `sessions
 create`, a Job it makes (its coordinator and every worker), a Task it adds to any Job and a worker it starts with
 `worker-start`. Where that CLI has no sandbox (Claude Code on Windows) such a start is refused with
