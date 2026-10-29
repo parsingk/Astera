@@ -4,13 +4,13 @@ import { describe, it, expect } from 'vitest'
 import { CATALOGS, LANGS, t } from './index'
 
 // As the brief gave them, with the Task 6 fix round's changes: the setup's sentence says Codex records the elevated
-// sandbox as the account's default, the done line's English, and Spanish in usted like the screen's other strings
+// sandbox as the account's default (and, since Task P, that Astera takes that line back out), the done line's English, and Spanish in usted like the screen's other strings
 const GIVEN = {
   'session.spawn.sandbox.windowsSetup': [
-    '이 Codex 계정은 Windows sandbox가 설정되지 않았습니다. 설정하기를 누르면 관리자 확인 창이 한 번 뜹니다. Codex가 이 계정의 기본 sandbox를 elevated로 기록합니다.',
-    "This Codex account has no Windows sandbox set up yet. Set up shows Windows' administrator prompt once. Codex records the elevated sandbox as this account's default.",
-    'この Codex アカウントには Windows サンドボックスがまだ設定されていません。「設定する」を押すと管理者の確認が一度表示されます。Codex はこのアカウントの既定のサンドボックスを elevated として記録します。',
-    'Esta cuenta de Codex aún no tiene el sandbox de Windows configurado. Configurar muestra una vez el aviso de administrador de Windows. Codex guarda el sandbox elevado como predeterminado de esta cuenta.'
+    '이 Codex 계정은 Windows sandbox가 설정되지 않았습니다. 설정하기를 누르면 관리자 확인 창이 한 번 뜹니다. Codex가 이 계정의 기본 sandbox를 elevated로 기록하지만 Astera가 그 줄을 다시 지우므로, sandbox 세션만 이것을 씁니다.',
+    "This Codex account has no Windows sandbox set up yet. Set up shows Windows' administrator prompt once. Codex records the elevated sandbox as this account's default, and Astera takes that line back out, so only sandboxed sessions use it.",
+    'この Codex アカウントには Windows サンドボックスがまだ設定されていません。「設定する」を押すと管理者の確認が一度表示されます。Codex はこのアカウントの既定のサンドボックスを elevated として記録しますが、Astera がその行を削除するため、これを使うのはサンドボックスのセッションだけです。',
+    'Esta cuenta de Codex aún no tiene el sandbox de Windows configurado. Configurar muestra una vez el aviso de administrador de Windows. Codex guarda el sandbox elevado como predeterminado de esta cuenta y Astera quita esa línea, así que solo lo usan las sesiones en el sandbox.'
   ],
   'session.spawn.sandbox.setUp': ['설정하기', 'Set up', '設定する', 'Configurar'],
   'session.spawn.sandbox.setUpDone': [

@@ -664,7 +664,7 @@ export const es: Catalog = {
   'session.spawn.enforce.hookWriteFailed': 'No se pudieron escribir los archivos del hook de Enforce, así que la sesión no se inició. Compruebe que se puede escribir en la carpeta de ajustes de Astera o cambie Policies a Observe.',
   'session.spawn.enforce.cliMissing': 'No se encontró {cli}, así que la sesión no se inició en Enforce. Instale {cli}.',
   'session.spawn.enforce.codexDaemon': 'Este Codex no acepta --no-daemon, así que la sesión no se inició en Enforce. Actualice Codex o cambie Policies a Observe.',
-  'session.spawn.sandbox.windowsSetup': 'Esta cuenta de Codex aún no tiene el sandbox de Windows configurado. Configurar muestra una vez el aviso de administrador de Windows. Codex guarda el sandbox elevado como predeterminado de esta cuenta.',
+  'session.spawn.sandbox.windowsSetup': 'Esta cuenta de Codex aún no tiene el sandbox de Windows configurado. Configurar muestra una vez el aviso de administrador de Windows. Codex guarda el sandbox elevado como predeterminado de esta cuenta y Astera quita esa línea, así que solo lo usan las sesiones en el sandbox.',
   'session.spawn.sandbox.windowsCheckFailed': 'No se pudo consultar a Codex el estado del sandbox de Windows de esta cuenta. Actualice Codex o vuelva a iniciar la sesión.',
   'session.spawn.sandbox.setUp': 'Configurar',
   'session.spawn.sandbox.setUpDone': 'Configurado. Inicie la sesión de nuevo.',

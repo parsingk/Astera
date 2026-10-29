@@ -657,7 +657,7 @@ export const ja: Catalog = {
   'session.spawn.enforce.hookWriteFailed': 'Enforce の hook ファイルを書けなかったため、開始しませんでした。Astera の設定フォルダーに書き込めるか確認するか、Policies を Observe に切り替えてください。',
   'session.spawn.enforce.cliMissing': '{cli} が見つからないため、Enforce で開始しませんでした。{cli} をインストールしてください。',
   'session.spawn.enforce.codexDaemon': 'この Codex は --no-daemon を受け付けないため、Enforce で開始しませんでした。Codex を更新するか、Policies を Observe に切り替えてください。',
-  'session.spawn.sandbox.windowsSetup': 'この Codex アカウントには Windows サンドボックスがまだ設定されていません。「設定する」を押すと管理者の確認が一度表示されます。Codex はこのアカウントの既定のサンドボックスを elevated として記録します。',
+  'session.spawn.sandbox.windowsSetup': 'この Codex アカウントには Windows サンドボックスがまだ設定されていません。「設定する」を押すと管理者の確認が一度表示されます。Codex はこのアカウントの既定のサンドボックスを elevated として記録しますが、Astera がその行を削除するため、これを使うのはサンドボックスのセッションだけです。',
   'session.spawn.sandbox.windowsCheckFailed': 'このアカウントの Windows サンドボックスの状態を Codex に確認できませんでした。Codex を更新するか、もう一度起動してください。',
   'session.spawn.sandbox.setUp': '設定する',
   'session.spawn.sandbox.setUpDone': '設定しました。もう一度起動してください。',

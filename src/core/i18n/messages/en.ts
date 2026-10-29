@@ -827,7 +827,7 @@ export const en: Record<keyof typeof ko, string> = {
   'session.spawn.enforce.hookWriteFailed': "The Enforce hook's files could not be written, so the session did not start. Check that Astera's settings folder can be written, or switch Policies to Observe.",
   'session.spawn.enforce.cliMissing': '{cli} was not found, so the session did not start in Enforce. Install {cli}.',
   'session.spawn.enforce.codexDaemon': 'This Codex does not take --no-daemon, so the session did not start in Enforce. Update Codex, or switch Policies to Observe.',
-  'session.spawn.sandbox.windowsSetup': "This Codex account has no Windows sandbox set up yet. Set up shows Windows' administrator prompt once. Codex records the elevated sandbox as this account's default.",
+  'session.spawn.sandbox.windowsSetup': "This Codex account has no Windows sandbox set up yet. Set up shows Windows' administrator prompt once. Codex records the elevated sandbox as this account's default, and Astera takes that line back out, so only sandboxed sessions use it.",
   'session.spawn.sandbox.windowsCheckFailed': "Codex could not be asked about this account's Windows sandbox. Update Codex or start it again.",
   'session.spawn.sandbox.setUp': 'Set up',
   'session.spawn.sandbox.setUpDone': "It's set up. Start the session again.",

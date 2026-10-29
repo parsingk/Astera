@@ -10,14 +10,18 @@ import { descriptorOf, type ProviderDescriptor } from '../core/providers/descrip
 import { cliEnvFor } from '../core/sessions/cliEnv'
 import { SETUP_RUN_MS, codexWindowsDoctor, codexWindowsSetup, runCodex, type CodexRun, type Readiness } from '../core/sandbox/windowsReadiness'
 import type { CodexWindowsReady } from '../core/sandbox/prepared'
+import { codexConfigFile, setUpForSandboxedSessionsOnly } from '../core/sandbox/codexDefaultSandbox'
 
-/** The setup for `agent-profiles-sandbox-setup`, or undefined off Windows, where there is none to run. */
+/** The setup for `agent-profiles-sandbox-setup`, or undefined off Windows, where there is none to run. It is for
+ *  Astera's sandboxed sessions only (Task P): the `windows.sandbox = "elevated"` line Codex's setup writes into the
+ *  home's config.toml is taken back out afterwards (setUpForSandboxedSessionsOnly), and `log` says what became of it. */
 export function hostSandboxSetup(d: {
   platform: NodeJS.Platform
   homeDir: string
   /** Read at each setup: the Host completes its PATH when a CLI is missing (windowsPath.ts). */
   baseEnv: () => NodeJS.ProcessEnv
   descriptors: Record<Provider, ProviderDescriptor>
+  log?: (m: string) => void
   /** Test injection; default the codex on this machine's PATH, waiting up to SETUP_RUN_MS for the administrator prompt. */
   run?: (env: Record<string, string | undefined>) => CodexRun
 }): ((account: Account) => Promise<{ ok: boolean; out: string }>) | undefined {
@@ -25,9 +29,13 @@ export function hostSandboxSetup(d: {
   const runIn = d.run ?? ((env: Record<string, string | undefined>) => runCodex(env, SETUP_RUN_MS))
   return (account) => {
     // The account's CODEX_HOME as its sessions get it (none for the ambient account), so the home set up is the one a
-    // sandboxed start of it asks about
+    // sandboxed start of it asks about, and the config.toml put back is the one Codex wrote into
     const env = cliEnvFor({ base: d.baseEnv(), account, descriptor: descriptorOf(d.descriptors, account), homeDir: d.homeDir })
-    return codexWindowsSetup({ codexHome: env.CODEX_HOME ?? null, run: runIn(env) })
+    return setUpForSandboxedSessionsOnly({
+      configFile: codexConfigFile(env, d.homeDir),
+      setUp: () => codexWindowsSetup({ codexHome: env.CODEX_HOME ?? null, run: runIn(env) }),
+      log: d.log ?? (() => {})
+    })
   }
 }
 

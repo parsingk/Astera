@@ -889,12 +889,14 @@ async function main(): Promise<void> {
   // Agent Profiles (design §4): the store this Host owns. A profile cannot be deleted while a live session holds it
   // (the session's note carries `agentProfileId`) or unfinished orchestration work does (a Job, a Task, an open
   // Dispatch). `orch` is made below; the guard reads it only when a delete is asked.
-  // 설정하기 (sandbox design §6): Codex's Windows sandbox setup for one account, run here, where the sessions start
+  // 설정하기 (sandbox design §6): Codex's Windows sandbox setup for one account, run here, where the sessions start, for
+  // the sandboxed sessions only (Task P: the default Codex writes is taken back out, and the log says so)
   const sandboxSetup = hostSandboxSetup({
     platform: process.platform,
     homeDir: os.homedir(),
     baseEnv: () => hostWorkerBaseEnv(process.env),
-    descriptors: makeDescriptors(process.platform)
+    descriptors: makeDescriptors(process.platform),
+    log: (m) => log.write(m)
   })
   // And the readiness Settings › Agent profiles shows beside it, asked as the Host's own sandboxed starts ask it
   const sandboxReadiness = hostSandboxReadiness({

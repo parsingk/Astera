@@ -853,7 +853,7 @@ export const ko = {
   'session.spawn.enforce.cliMissing': '{cli} 를 찾지 못해 Enforce 로 시작하지 않았습니다. {cli} 를 설치하세요.',
   'session.spawn.enforce.codexDaemon': '이 Codex 는 --no-daemon 을 받지 않아 Enforce 로 시작하지 않았습니다. Codex 를 업데이트하거나 Policies 를 Observe 로 바꾸세요.',
   // The sandbox's refusals (sandbox design §6, E5): `SANDBOX_UNAVAILABLE: <code>` (core/sandbox/unavailable.ts)
-  'session.spawn.sandbox.windowsSetup': '이 Codex 계정은 Windows sandbox가 설정되지 않았습니다. 설정하기를 누르면 관리자 확인 창이 한 번 뜹니다. Codex가 이 계정의 기본 sandbox를 elevated로 기록합니다.',
+  'session.spawn.sandbox.windowsSetup': '이 Codex 계정은 Windows sandbox가 설정되지 않았습니다. 설정하기를 누르면 관리자 확인 창이 한 번 뜹니다. Codex가 이 계정의 기본 sandbox를 elevated로 기록하지만 Astera가 그 줄을 다시 지우므로, sandbox 세션만 이것을 씁니다.',
   'session.spawn.sandbox.windowsCheckFailed': 'Codex에게 이 계정의 Windows sandbox 상태를 묻지 못했습니다. Codex를 업데이트하거나 다시 시작해 주세요.',
   'session.spawn.sandbox.setUp': '설정하기',
   'session.spawn.sandbox.setUpDone': '설정했습니다. 다시 시작해 주세요.',

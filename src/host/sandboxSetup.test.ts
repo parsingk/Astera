@@ -1,9 +1,11 @@
 // 설정하기 on the Host: the setup runs for the one account, in its own Codex home. The run is a fake: the real one brings
 // up Windows' administrator prompt.
 import { describe, expect, it } from 'vitest'
+import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { Account } from '../core/types'
+import { removeFixture } from '../core/testFixtures'
 import { makeDescriptors } from '../core/providers/descriptor'
 import { DOCTOR_ARGV, SETUP_ARGV } from '../core/sandbox/windowsReadiness'
 import { hostSandboxReadiness, hostSandboxSetup } from './sandboxSetup'
@@ -32,6 +34,42 @@ describe('hostSandboxSetup', () => {
     await setUp!(account(path.join(home, '.codex')))
     expect(calls[1].extra).toEqual({})
     expect(calls[1].base.CODEX_HOME).toBeUndefined()
+  })
+
+  // Task P: Codex's setup writes `windows.sandbox = "elevated"` into the home's config.toml, which would put every other
+  // Codex session of the home in the elevated sandbox too; Astera's sandboxed sessions name it themselves, so the line
+  // the setup added is taken back out of the home that was set up, the ambient account's ~/.codex included
+  it("takes the default Codex's setup wrote back out of the account's own config.toml, and says so", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-setup-default-'))
+    try {
+      const work = path.join(home, '.codex-accounts', 'work')
+      const ambient = path.join(home, '.codex')
+      for (const dir of [work, ambient]) {
+        await fs.mkdir(dir, { recursive: true })
+        await fs.writeFile(path.join(dir, 'config.toml'), 'model = "gpt-5"\n')
+      }
+      const logs: string[] = []
+      const setUp = hostSandboxSetup({
+        platform: 'win32',
+        homeDir: home,
+        baseEnv: () => ({ Path: 'C:\\Windows' }),
+        descriptors: makeDescriptors('win32', home),
+        log: (m) => logs.push(m),
+        // As Codex does on success: the setup's home is CODEX_HOME, or ~/.codex without one
+        run: () => async (_argv, extra) => {
+          const file = path.join(extra.CODEX_HOME ?? ambient, 'config.toml')
+          await fs.writeFile(file, `${await fs.readFile(file, 'utf8')}\n[windows]\nsandbox = "elevated"\n`)
+          return { code: 0, out: 'done' }
+        }
+      })
+      for (const dir of [work, ambient]) {
+        expect(await setUp!(account(dir))).toEqual({ ok: true, out: 'done' })
+        expect(await fs.readFile(path.join(dir, 'config.toml'), 'utf8'), dir).toBe('model = "gpt-5"\n')
+      }
+      expect(logs).toEqual([expect.stringContaining(path.join(work, 'config.toml')), expect.stringContaining(path.join(ambient, 'config.toml'))])
+    } finally {
+      await removeFixture(home)
+    }
   })
 
   it('there is nothing to set up off Windows', () => {

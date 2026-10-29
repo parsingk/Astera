@@ -58,8 +58,9 @@ function projectHeaderPath(line: string): string | null {
 
 /** Whether the scanner is outside a multi-line string, i.e. whether this line's text is structure.
  *  Without this a `[projects."…"]` sitting inside someone's `"""…"""` block reads as a table header
- *  and the edit lands in the middle of their prose. */
-function togglesMultiline(line: string, open: '"""' | "'''" | null): '"""' | "'''" | null {
+ *  and the edit lands in the middle of their prose. The sandbox's default reader scans the same file the same way
+ *  (core/sandbox/codexDefaultSandbox.ts). */
+export function togglesMultiline(line: string, open: '"""' | "'''" | null): '"""' | "'''" | null {
   let state = open
   for (let i = 0; i < line.length; i++) {
     const three = line.slice(i, i + 3)
