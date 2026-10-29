@@ -1174,7 +1174,8 @@ run's Job is a sandboxed session's. A sandboxed target is not refused, and a wor
 stay open whoever its coordinator is.
 A Task's checks (`--validate`) run in the same kind of sandbox its workers ran in, since they run the files the workers
 edited (a package script, a test, a build file). The kind is the one each attempt's session actually started with, kept
-on its Dispatch; a lifecycle Task's merged check follows the latest sandboxed Dispatch of its Run. A Codex worker's check
+on its Dispatch; a lifecycle Task's merged check follows the latest sandboxed worker Dispatch of its Run (a reviewer's
+never counts). A Codex worker's check
 runs as `codex sandbox` with the session's own permission profile, as that account; a Claude Code worker's, on macOS and
 Linux, under the sandbox runtime Claude Code builds its sandbox on (`@anthropic-ai/sandbox-runtime` 0.0.79, through
 Astera's own runner, network allowed as in the session). A check whose sandbox cannot be put around it (the account's
@@ -1184,9 +1185,11 @@ and is not the code's failure: the Task asks a person (retry, skip the check, or
 Claude Code on Windows has no sandbox, so its checks run as before and say `validated outside the sandbox`. Every check,
 sandboxed or not, starts without the variables the Credentials list hides from a session in its folder. A reviewer of
 such a Task works in the implementer's tree and starts in its own CLI's sandbox too. A Claude Code reviewer on Windows,
-which has none, starts as a sandboxed profile's Claude Code session does there, with its file tools kept out of the
-login folders and its shell unrestricted, and the Task's `reviewFileToolsOnly` (and its completion block) says the
-review ran with file-tool protection only. The packaged app keeps the sandbox runtime's helpers (its Linux seccomp
+which has none, depends on what put the work in the sandbox. For work a profile's sandbox switch sandboxed, it starts
+as a sandboxed profile's Claude Code session does there, with its file tools kept out of the login folders and its
+shell unrestricted, and the Task's `reviewFileToolsOnly` (and its completion block) says the review ran with file-tool
+protection only. For a Job or Task a sandboxed session made, it is refused with `SANDBOX_UNAVAILABLE: no-sandbox
+claude`, as every start of such work is there, and the review asks a person. The packaged app keeps the sandbox runtime's helpers (its Linux seccomp
 loader, its JVM proxy agent) out of `app.asar`, and Astera hands srt their unpacked paths.
 On Windows the Codex sandbox is Codex's elevated one, which keeps Credential Manager out, and the repository is named a
 safe directory for the account it runs as; a repository, a home folder or one of Astera's own folders whose path holds

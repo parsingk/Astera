@@ -28,8 +28,9 @@ describe("the app's checks of a sandboxed Task", () => {
     expect(wiring).toMatch(/sandboxedCheck: async \(a\) => \{[\s\S]*core\.sessions\.checkLaunch\(/)
   })
 
-  // Fix round 1: a reviewer's forced sandbox allows deny rules only where the CLI has none (Claude Code on Windows), as
-  // the Host's spawn does; any other forced sandbox there is still refused (C3)
+  // Fix rounds 1 and 2: the forced sandbox of a reviewer of work a profile's switch sandboxed allows deny rules only where
+  // the CLI has none (Claude Code on Windows), as the Host's spawn does; any other forced sandbox there, a reviewer's of a
+  // sandboxed session's work included, is still refused (C3)
   it("lets a reviewer's forced sandbox start with deny rules only where the CLI has none", () => {
     const src = read('src/main/ipc.ts')
     expect(src).toMatch(/\.\.\.\(o\.sandboxDenyOnly \? \{ forceSandboxDenyOnly: true \} : \{\}\)/)

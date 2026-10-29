@@ -91,7 +91,7 @@ export interface CoordinatorDeps {
      *  made or asked for. The wiring refuses it where that CLI has none, unless `sandboxDenyOnly`. */
     sandbox?: true
     /** With `sandbox`: where the CLI has no sandbox, start with its deny rules only rather than be refused (a reviewer of
-     *  sandboxed work, Task K fix round 1). */
+     *  work a profile's switch sandboxed, Task K fix rounds 1 and 2). */
     sandboxDenyOnly?: true
     /** Resolves with the protection the session started in (SessionInfo.sandboxKind), absent when none: its Dispatch
      *  records it, and a Task's checks run in the same kind (Task K). */

@@ -1302,9 +1302,10 @@ describe('createHostSpawner — createSession', () => {
       }
     })
 
-    // Task K fix round 1 (the controller's ruling, after E2): a reviewer of sandboxed work asks for its CLI's sandbox and
-    // allows deny rules only where that CLI has none: a Claude reviewer on Windows starts as a sandboxed profile's Claude
-    // session does there (deny-only), not refused; without that allowance a forced sandbox there is still refused (C3)
+    // Task K fix rounds 1 and 2 (the controller's rulings, after E2): a reviewer of work a profile's switch sandboxed asks
+    // for its CLI's sandbox and allows deny rules only where that CLI has none: a Claude reviewer on Windows starts as a
+    // sandboxed profile's Claude session does there (deny-only), not refused. Without that allowance, which a reviewer of
+    // a sandboxed session's work never gets (review.ts), a forced sandbox there is still refused (C3)
     it('a reviewer’s forced sandbox starts a Claude session on Windows with its deny rules only, not refused', async () => {
       const { s, taskId, dispatchId } = seeded('acc1', 'claude')
       const h = rig({ state: () => s, claudeVersion: Object.assign(() => '2.1.310', { warm: async () => {} }) })

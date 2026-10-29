@@ -327,8 +327,9 @@ export interface OrchServerDeps {
      *  for it (`worker-start`). The wiring adds a Task's or Job's own mark (workSandboxed, exec/workerStart.ts). */
     sandbox?: true
     /** With `sandbox`: where the CLI has no sandbox (Claude Code on Windows), start with its deny rules only, as a
-     *  sandboxed profile's session does there, rather than be refused. A reviewer of sandboxed work asks for it (Task K
-     *  fix round 1, the controller's ruling after E2); a worker never does (C3 refuses). */
+     *  sandboxed profile's session does there, rather than be refused. A reviewer of work a profile's switch sandboxed
+     *  asks for it (Task K fix rounds 1 and 2, the controller's rulings after E2); a worker, and a reviewer of a
+     *  sandboxed session's work, never do (C3 refuses). */
     sandboxDenyOnly?: true
   }): Promise<StartedWorker>
   releaseWorker(a: { dispatchId: string }): Promise<void>

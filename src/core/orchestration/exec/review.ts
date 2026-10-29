@@ -17,7 +17,7 @@ import type { Account } from '../../types'
 import type { OrchServerDeps } from '../command'
 import { checkConfigIdsOf, policyOf } from '../convergence'
 import { pickReviewer } from '../reviewer'
-import { openReviewDispatch, type OrchState } from '../state'
+import { openReviewDispatch, workSandboxed, type OrchState } from '../state'
 import { isLifecycleTask, latestOrdinaryWork, lifecycleBriefOf } from '../lifecycleTask'
 import { buildReviewSpecFile, knowledgeIn, specFileName } from './coordinator'
 import { promptText, weakeningFindings } from '../../github/weakening'
@@ -237,7 +237,12 @@ export function createReviewStarter(c: ReviewContext): (a: { taskId: string }) =
           // Fix round 1 (the controller's ruling, after E2): where the reviewer's CLI has no sandbox (Claude Code on
           // Windows) it starts with the deny rules only, as a sandboxed profile's session does there, and the Task's
           // record says so (Task.reviewFileToolsOnly), rather than being refused
-          ...(workRanSandboxed(c.getState(), task) ? { sandbox: true as const, sandboxDenyOnly: true as const } : {})
+          // Fix round 2 (the controller's ruling, correcting that one): only for work a profile's switch sandboxed (E2).
+          // Work a sandboxed session made (C3) keeps the person's strict rule: the worker start forces the sandbox
+          // (workerStart.ts) and, without the allowance, a Claude reviewer on Windows is refused as before
+          ...(workRanSandboxed(c.getState(), task)
+            ? { sandbox: true as const, ...(workSandboxed(c.getState(), task) ? {} : { sandboxDenyOnly: true as const }) }
+            : {})
         })
       } catch (e) {
         // 검토 Dispatch 의 롤백은 gate() 안에 있다 — 커밋 뒤에 던지는 경로가 이 자리 하나가 아니기

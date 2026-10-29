@@ -2121,8 +2121,9 @@ export function registerIpc(
     // worker or coordinator, asks for it apart (`forceSandbox`, C3), and where the CLI has no sandbox it is refused
     // rather than started without one; the renderer's handler clears that one.
     const forceSandbox = opts.forceSandbox === true
-    // A reviewer of sandboxed work allows the deny rules only where the CLI has no sandbox (Task K fix round 1): it then
-    // starts as a sandboxed profile's session does there, rather than being refused
+    // A reviewer of work a profile's switch sandboxed allows the deny rules only where the CLI has no sandbox (Task K fix
+    // rounds 1 and 2): it then starts as a sandboxed profile's session does there, rather than being refused. A reviewer
+    // of a sandboxed session's work never asks (review.ts), so C3's refusal holds for it
     const forceSandboxDenyOnly = opts.forceSandboxDenyOnly === true
     {
       const { sandbox: _callerSandbox, forceSandbox: _forced, forceSandboxDenyOnly: _denyOnly, ...withoutSandbox } = opts

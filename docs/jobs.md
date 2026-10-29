@@ -89,8 +89,10 @@ Task를 다 짠 뒤 상세 창의 `실행`을 눌러야 시작합니다.
 
 ### sandbox 안의 워커와 검사
 
-에이전트 프로필의 `sandbox 에서 실행`이 켜진 워커가 일한 Task는 검사(`--validate`)도 같은 종류의 sandbox
-안에서 돕니다. 검사는 워커가 고친 파일(패키지 스크립트, 테스트, 빌드 파일)을 실행하기 때문입니다.
+워커가 sandbox 안에서 일한 Task는 검사(`--validate`)도 같은 종류의 sandbox 안에서 돕니다. 검사는 워커가 고친
+파일(패키지 스크립트, 테스트, 빌드 파일)을 실행하기 때문입니다. 워커가 sandbox 안에서 일하는 경우는 둘입니다.
+에이전트 프로필의 `sandbox 에서 실행`이 켜져 있었거나, sandbox 안의 세션이 그 Job이나 Task를 만들었습니다. 뒤의
+경우 워커는 어느 프로필을 쓰든 sandbox 안에서 시작합니다.
 
 - Codex 워커의 검사는 그 세션과 같은 권한 프로필로 `codex sandbox` 안에서, 같은 계정으로 돕니다.
 - Claude Code 워커의 검사는 macOS와 Linux에서 Claude Code의 sandbox가 쓰는 런타임 안에서 돕니다. 네트워크는
@@ -103,8 +105,12 @@ Task를 다 짠 뒤 상세 창의 `실행`을 눌러야 시작합니다.
   `sandbox 밖에서 검증함`이라고 적힙니다.
 - 검사는 sandbox 여부와 상관없이 Credentials 목록이 그 폴더의 세션에 숨기는 변수 없이 시작합니다.
 - 그런 Task의 검토자도 구현자의 워크트리에서 일하므로 자기 CLI의 sandbox 안에서 시작합니다. Windows의 Claude
-  Code 검토자는 sandbox가 없으므로, sandbox 프로필의 Claude Code 세션처럼 파일 도구만 로그인 폴더에서 막힌 채
-  시작합니다(셸은 제한 없음). 완료 블록에 `파일 도구 보호만으로 검토했습니다`라고 적힙니다.
+  Code에는 sandbox가 없어서, 그 검토자는 무엇이 작업을 sandbox에 넣었는지에 따라 갈립니다.
+  - 프로필의 `sandbox 에서 실행`으로 sandbox 안에서 한 작업: 검토자는 sandbox 프로필의 Claude Code 세션처럼
+    파일 도구만 로그인 폴더에서 막힌 채 시작합니다(셸은 제한 없음). 완료 블록에 `파일 도구 보호만으로
+    검토했습니다`라고 적힙니다.
+  - sandbox 안의 세션이 만든 Job이나 Task: 그런 작업의 다른 시작처럼 검토자도 시작하지 않고
+    (`SANDBOX_UNAVAILABLE: no-sandbox claude`), 검토가 사람에게 묻습니다.
 
 ## 4. 끝난 뒤 — 병합은 사람이 누릅니다
 
