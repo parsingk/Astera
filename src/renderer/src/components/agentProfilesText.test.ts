@@ -344,6 +344,11 @@ describe('the sandbox switch', () => {
     expect(editor).toContain('sandboxReadinessShown(p, window.api.platform, accounts)')
     // Task P: an elevated default is said in one sentence beside the row, and taken out only on the person's press
     expect(editor).toContain("t('settings.agentProfiles.sandboxDefault.hint')")
+    // Fix round 1, seen on the hidden desktop: as a settings row the sentence took the label's weight and squeezed the
+    // button to one letter a line. It is a dim hint that grows, beside a button that keeps its width
+    expect(editor).toContain('<div className="remote-actions sandbox-default-row">')
+    expect(editor).toContain('<span className="settings-hint remote-actions-grow">{t(\'settings.agentProfiles.sandboxDefault.hint\')}</span>')
+    expect(source('../styles.css')).toContain('.sandbox-default-row .settings-gen-refresh { flex: none; white-space: nowrap; }')
     expect(editor).toContain("t('settings.agentProfiles.sandboxDefault.remove')")
     expect(editor).toContain('window.api.agentProfiles.sandboxDefaultRemove(profile.id, accountId)')
     expect(editor).toMatch(/onClick=\{\(\) => void removeDefault\(r\.accountId\)\}/)

@@ -393,13 +393,13 @@ function SandboxReadiness({ profile, accounts }: { profile: AgentProfile; accoun
             </div>
           </div>
           {r.elevatedDefault && (
-            <div className="settings-row">
-              <span className="settings-hint">{t('settings.agentProfiles.sandboxDefault.hint')}</span>
-              <div className="remote-actions">
-                <button type="button" className="settings-gen-refresh" disabled={settingUp} onClick={() => void removeDefault(r.accountId)}>
-                  {t('settings.agentProfiles.sandboxDefault.remove')}
-                </button>
-              </div>
+            // A dim sentence that takes the width, beside a button that keeps its own (seen on the hidden desktop: as a
+            // settings row the sentence took the label's weight and squeezed the button)
+            <div className="remote-actions sandbox-default-row">
+              <span className="settings-hint remote-actions-grow">{t('settings.agentProfiles.sandboxDefault.hint')}</span>
+              <button type="button" className="settings-gen-refresh" disabled={settingUp} onClick={() => void removeDefault(r.accountId)}>
+                {t('settings.agentProfiles.sandboxDefault.remove')}
+              </button>
             </div>
           )}
         </Fragment>

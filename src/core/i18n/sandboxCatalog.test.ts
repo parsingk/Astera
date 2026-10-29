@@ -99,12 +99,12 @@ const GIVEN = {
   ],
   // Task P: Settings › Agent profiles offers to remove a home's elevated default, in one sentence
   'settings.agentProfiles.sandboxDefault.hint': [
-    '이 계정의 config.toml이 elevated sandbox를 모든 Codex 세션의 기본값으로 정해 두어 일반 세션도 로그인 정보가 든 폴더를 읽지 못하며, 삭제를 누르면 그 줄을 지워 sandbox 세션만 이것을 쓰게 됩니다.',
+    '이 계정의 config.toml이 elevated sandbox를 모든 Codex 세션의 기본값으로 정해 두어 일반 세션도 로그인 정보가 든 폴더를 읽지 못하며, 줄 삭제를 누르면 그 줄을 지워 sandbox 세션만 이것을 쓰게 됩니다.',
     "This account's config.toml makes the elevated sandbox the default for all its Codex sessions, so its ordinary sessions cannot read the folders holding logins either; Remove takes that line out and leaves the sandbox to sandboxed sessions.",
-    'このアカウントの config.toml が elevated サンドボックスをすべての Codex セッションの既定にしているため通常のセッションもログイン情報を含むフォルダーを読めず、「削除」でその行を消すとサンドボックスのセッションだけがこれを使います。',
+    'このアカウントの config.toml が elevated サンドボックスをすべての Codex セッションの既定にしているため通常のセッションもログイン情報を含むフォルダーを読めず、「行を削除」でその行を消すとサンドボックスのセッションだけがこれを使います。',
     'El config.toml de esta cuenta hace que el sandbox elevado sea el predeterminado de todas sus sesiones de Codex, así que sus sesiones normales tampoco pueden leer las carpetas con datos de inicio de sesión; Quitar borra esa línea y deja el sandbox solo para las sesiones en el sandbox.'
   ],
-  'settings.agentProfiles.sandboxDefault.remove': ['삭제', 'Remove', '削除', 'Quitar'],
+  'settings.agentProfiles.sandboxDefault.remove': ['줄 삭제', 'Remove', '行を削除', 'Quitar'],
   'settings.agentProfiles.sandboxDefault.removeFailed': [
     '그 줄을 지우지 못했습니다. {file}을(를) 직접 고쳐 주세요.',
     'The line could not be removed. Edit {file} yourself.',
