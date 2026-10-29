@@ -238,9 +238,16 @@ export class TaskValidator {
       // 앞에 이미 통과한 check 들의 결과는 지금 onCannotRun 을 처리하는 쪽(Gate)에는 닿지 않는다.
       // CheckResult.status 의 주석이 말하는 "화면과 Journal" 은 아직 이 값을 읽는 자리가 없다 —
       // Gate 가 열릴 때 head.results 를 함께 넘기는 자리가 생기면 그때 쓴다.
-      head.results.push({ configId, name, status: 'timed-out', startedAt: head.startedAt ?? undefined, endedAt: now })
+      head.results.push({
+        configId, name, status: 'timed-out', startedAt: head.startedAt ?? undefined, endedAt: now,
+        ...(head.hiddenEnv.length > 0 ? { hiddenEnv: [...head.hiddenEnv] } : {})
+      })
+      // That round is not committed (onCannotRun carries the reason alone), so its question is where a person meets a check
+      // that hung, perhaps for a login or a token the Credentials list kept from it: the words name those, by name, as a
+      // failed result's line does (Task K fix round 4, R3)
+      const without = head.hiddenEnv.length > 0 ? `; it started without ${head.hiddenEnv.join(', ')}, which the Credentials list hides there` : ''
       void this.deps
-        .onCannotRun({ taskId: head.taskId, reason: `check "${name}" timed out twice (${this.timeoutMs}ms each)` })
+        .onCannotRun({ taskId: head.taskId, reason: `check "${name}" timed out twice (${this.timeoutMs}ms each)${without}` })
         .catch((e) => this.deps.log?.(`onCannotRun failed task=${head.taskId}: ${String(e)}`))
         .finally(() => this.advance(cwd, head))
       return

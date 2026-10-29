@@ -1196,8 +1196,8 @@ is a failure. A Docker check
 (`compose`, `dockerfile`) of a sandboxed Task is refused that way too, since Docker reaches past any of these sandboxes.
 Claude Code on Windows has no sandbox, so its checks run as before and say `validated outside the sandbox`. Every check,
 sandboxed or not, starts without the variables the Credentials list hides from a session in its folder, and its result
-names them (`hiddenEnv`: names only, never a value), which the completion block shows under a check that did not pass.
-A value a check needs can be given on purpose in its run
+names them (`hiddenEnv`: names only, never a value), which the completion block shows under a failed check; a check that
+timed out twice opens a question whose words name them. A value a check needs can be given on purpose in its run
 configuration's `env`, which is laid over that environment; inside `codex sandbox` the account's
 `shell_environment_policy` still decides what reaches the command, as it does for a session's commands. A reviewer of
 such a Task works in the implementer's tree and starts in its own CLI's sandbox too. A Claude Code reviewer on Windows,
