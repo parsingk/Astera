@@ -91,7 +91,9 @@ export interface ValidationContext {
   accountName?(accountId: string): string | null | Promise<string | null>
 }
 /** A sandboxed Task's check as ValidationContext.sandboxedCheck builds it. */
-export type SandboxedCheck = { launch: { file: string; args: string[] | string }; env: NodeJS.ProcessEnv } | { unavailable: string }
+/** `runner`: the launch goes through Astera's check runner (core/sandbox/checkRunner.ts), which says when it could not put
+ *  the check in the sandbox; a `codex sandbox` straight in its pty (macOS and Linux) does not. */
+export type SandboxedCheck = { launch: { file: string; args: string[] | string }; env: NodeJS.ProcessEnv; runner?: true } | { unavailable: string }
 /** Run configuration kinds that reach Docker, which no sandbox here can hold: refused for a sandboxed Task (the person's
  *  Q4), with a reason rather than a failure. */
 const DOCKER_TYPES: ReadonlySet<string> = new Set(['compose', 'dockerfile'])
@@ -231,18 +233,25 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
         if (!now || now.status !== 'validating' || now.ciWait !== undefined) return 'skip'
         // A Claude check under srt and a Windows Codex check run through Astera's check runner (fix rounds 2 and 3, M1 and
         // N1): when the sandbox stops before the check starts, its own exit code and mark at the end of the output say so,
-        // and it writes its reason to this file, which ConPTY cannot glue or break as it can a long line
-        const reasonFile = checkReasonFileIn(checkScriptDir(os.tmpdir()))
+        // and it writes its reason to this file, which ConPTY cannot glue or break as it can a long line. Only such a
+        // launch is named the file, and the runner takes the name out of the check's environment; a `codex sandbox`
+        // straight in its pty would hand it to the check, and is never read so (fix round 4, R1)
+        const reasonFile = boxed.runner ? checkReasonFileIn(checkScriptDir(os.tmpdir())) : null
         const started = c.runs.start({
           projectPath: cwd,
           projectName,
           config,
           command,
           validation: true,
-          env: { ...boxed.env, [CHECK_REASON_ENV]: reasonFile },
+          env: reasonFile !== null ? { ...boxed.env, [CHECK_REASON_ENV]: reasonFile } : boxed.env,
           launch: boxed.launch
         })
-        return { runId: started.runId, name: config.name, ...hidden, sandboxFailed: (exitCode: number, output: string) => sandboxFailedWords(c.lang(), reasonFile, exitCode, output) }
+        return {
+          runId: started.runId,
+          name: config.name,
+          ...hidden,
+          ...(reasonFile !== null ? { sandboxFailed: (exitCode: number, output: string) => sandboxFailedWords(c.lang(), reasonFile, exitCode, output) } : {})
+        }
       },
       output: (runId) => cutTail(c.runs.recentOutput(runId), 4000),
       // 타임아웃이 이 PTY 를 두 번째로 멈춘다(validator.ts 의 startCheck 타이머). **c.runs.stop 을

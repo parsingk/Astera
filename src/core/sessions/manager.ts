@@ -376,9 +376,11 @@ export class SessionManager {
    *   command here, and where Ubuntu's AppArmor profile confines bubblewrap (every command would fail there).
    * - Claude, Windows: no sandbox; never asked (the check runs as today, said on its result).
    * Rejects with `SANDBOX_UNAVAILABLE: <code>` (unavailable.ts) when the sandbox cannot be put around the check (rule E5):
-   * the check is then not run.
+   * the check is then not run. `runner`: the launch goes through Astera's check runner (srt, and Codex on Windows), which
+   * says when it could not put the check in the sandbox and takes its reason file's name out of the check's environment
+   * (fix round 4).
    */
-  async checkLaunch(a: { account: Account; cwd: string; command: string }): Promise<{ file: string; args: string[] | string; env: Record<string, string> }> {
+  async checkLaunch(a: { account: Account; cwd: string; command: string }): Promise<{ file: string; args: string[] | string; env: Record<string, string>; runner?: true }> {
     const platform = this.checks.platform
     const defined = (env: Record<string, string | undefined>): Record<string, string> =>
       Object.fromEntries(Object.entries(env).filter((e): e is [string, string] => e[1] !== undefined))
@@ -402,7 +404,7 @@ export class SessionManager {
       if (platform !== 'win32' || !this.codexCheckRunner) return { file: cmd.file, args: cmd.args, env: defined(env) }
       const runner = this.codexCheckRunner.launch(cmd)
       fitsOnTheLine(platform, runner)
-      return { file: runner.file, args: runner.args, env: { ...defined(env), ...runner.env } }
+      return { file: runner.file, args: runner.args, env: { ...defined(env), ...runner.env }, runner: true }
     }
     if (sandboxKindOf('claude', platform) !== 'sandbox') throw sandboxUnavailable('no-sandbox claude')
     // A process without the runner, or without Claude's sandbox settings, cannot put a check in it; running again will not
@@ -425,7 +427,7 @@ export class SessionManager {
     if (this.hiding) applyHiding(env, this.hiding.get(a.cwd), platform)
     Object.assign(env, this.claudeSandbox.env(env))
     const runner = this.checkRunner.launch({ config: srtConfigOf(part.sandbox, { cwd: a.cwd, layout: scope.layout }), cwd: a.cwd, command: a.command })
-    return { file: runner.file, args: runner.args, env: { ...defined(env), ...runner.env } }
+    return { file: runner.file, args: runner.args, env: { ...defined(env), ...runner.env }, runner: true }
   }
 
   private cwdConfirmed(cwd: string): boolean {

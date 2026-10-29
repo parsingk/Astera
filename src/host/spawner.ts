@@ -213,7 +213,7 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
   checkEnv?(base: NodeJS.ProcessEnv, cwd: string): { env: NodeJS.ProcessEnv; hidden: string[] }
   /** How a sandboxed Task's check runs inside its workers' sandbox, as the attempt's registered account (Task K;
    *  SessionManager.checkLaunch). Rejects for an account no longer registered, and with a sandbox refusal. */
-  checkLaunch?(a: { accountId: string; cwd: string; command: string }): Promise<{ file: string; args: string[] | string; env: Record<string, string> }>
+  checkLaunch?(a: { accountId: string; cwd: string; command: string }): Promise<{ file: string; args: string[] | string; env: Record<string, string>; runner?: true }>
   /** A registered account's display name, null for one not registered (Task K fix round 2: a check's words name it). */
   accountName?(accountId: string): Promise<string | null>
   /** The session shuttle's values once the Host wrote it (kicked at creation); undefined until then. */

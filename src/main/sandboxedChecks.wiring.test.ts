@@ -26,6 +26,8 @@ describe("the app's checks of a sandboxed Task", () => {
     expect(wiring).toContain('platform: process.platform')
     expect(wiring).toMatch(/checkEnv: \(cwd\) => core\.sessions\.checkEnv\(process\.env, cwd\)/)
     expect(wiring).toMatch(/sandboxedCheck: async \(a\) => \{[\s\S]*core\.sessions\.checkLaunch\(/)
+    // Fix round 4 (R1): whether the launch goes through the runner travels with it
+    expect(wiring).toMatch(/return \{ launch: \{ file: l\.file, args: l\.args \}, env: l\.env, \.\.\.\(l\.runner \? \{ runner: true as const \} : \{\}\) \}/)
     // Fix round 2: a check's words name the account by its name
     expect(wiring).toMatch(/accountName: \(id\) => core\.accounts\.list\(\)\.find\(\(x\) => x\.id === id\)\?\.label \?\? null/)
   })

@@ -124,7 +124,7 @@ export interface HostChecksDeps {
   checkEnv?(base: NodeJS.ProcessEnv, cwd: string): { env: NodeJS.ProcessEnv; hidden: string[] }
   /** A sandboxed Task's check inside its workers' sandbox, as the attempt's account (Task K); the spawner's session manager
    *  (SessionManager.checkLaunch). Rejects with a sandbox refusal. Absent: such a check is not run (E5). */
-  checkLaunch?(a: { accountId: string; cwd: string; command: string }): Promise<{ file: string; args: string[] | string; env: Record<string, string> }>
+  checkLaunch?(a: { accountId: string; cwd: string; command: string }): Promise<{ file: string; args: string[] | string; env: Record<string, string>; runner?: true }>
   /** A registered account's display name, null for one not registered (fix round 2): a check's words name it. */
   accountName?(accountId: string): Promise<string | null>
 }
@@ -301,7 +301,7 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
       ? {
           sandboxedCheck: async (a: { accountId: string; cwd: string; command: string }) => {
             const l = await d.checkLaunch!({ accountId: a.accountId, cwd: a.cwd, command: a.command })
-            return { launch: { file: l.file, args: l.args }, env: l.env }
+            return { launch: { file: l.file, args: l.args }, env: l.env, ...(l.runner ? { runner: true as const } : {}) }
           }
         }
       : {}),

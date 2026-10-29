@@ -46,7 +46,7 @@ export interface ValidatorRunner {
    *  run outside it. The round settles with it as a check that could not be made, which the verdict puts to a person.
    *  `outsideSandbox`: it runs outside any sandbox though its workers were sandboxed (Claude Code on Windows, which has
    *  none), recorded on its result. `hiddenEnv`: the variables the Credentials list kept from it, by name, recorded on
-   *  its result too (fix round 2). `sandboxFailed`: it may run through Astera's check runner (core/sandbox/checkRunner.ts):
+   *  its result too (fix round 2). `sandboxFailed`: it runs through Astera's check runner (core/sandbox/checkRunner.ts):
    *  asked with its exit code and output, it gives the words for a sandbox that stopped before the check started, as the
    *  runner says by its own exit code and mark, or null for the check's own result. Such an exit is a check that could not
    *  be made, not a failure (fix rounds 2 and 3, M1 and N1). */
@@ -81,8 +81,8 @@ interface Pending {
   outsideSandbox: boolean
   /** The variables the Credentials list kept from the check running now, by name (fix round 2); set at each start */
   hiddenEnv: string[]
-  /** The check running now may run through Astera's check runner: its exit read for a sandbox that stopped before the check
-   *  started (fix rounds 2 and 3, M1 and N1); null for a run outside any sandbox. Set at each start */
+  /** The check running now runs through Astera's check runner: its exit read for a sandbox that stopped before the check
+   *  started (fix rounds 2 to 4, M1, N1 and R1); null for any other run. Set at each start */
   sandboxFailed: ((exitCode: number, output: string) => string | null) | null
   startedAt: string | null
   /** Whether this entry's exit is already being settled. The same head's exit can arrive twice —
@@ -252,8 +252,8 @@ export class TaskValidator {
     const output = stripAnsi(this.deps.runner.output(a.runId))
     // The sandbox stopped before the check started, as Astera's runner says by its own exit code and last line (fix round
     // 2, M1): settled as a check that could not be made, which asks a person, as a sandbox that could not be put around it
-    // before the start does (rule E5). Only a sandboxed check's run, which the runner may carry, is read so: a check outside
-    // any sandbox never goes through it
+    // before the start does (rule E5). Only a run through the runner is read so: a check outside any sandbox, or a
+    // `codex sandbox` straight in its pty, never goes through it
     const stoppedBefore = head.sandboxFailed?.(a.exitCode, output) ?? null
     if (stoppedBefore !== null) {
       this.deps.log?.(`check "${name}" task=${head.taskId}: the sandbox stopped before the check started: ${stoppedBefore}`)

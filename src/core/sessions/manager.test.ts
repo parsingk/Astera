@@ -1828,10 +1828,13 @@ describe('the sandbox at spawn', () => {
         expect(launch.file).toBe(RUNNER.execPath)
         expect((launch.args as string[]).slice(0, 2)).toEqual([RUNNER.runnerPath, CODEX_CHECK_FLAG])
         expect(launch.env).toMatchObject({ ELECTRON_RUN_AS_NODE: '1' })
+        // Fix round 4 (R1): it says it goes through the runner, which takes the reason file's name out of the check's env
+        expect(launch.runner).toBe(true)
       } else {
         // macOS and Linux: straight in its pty, as before
         expect(launch.file).not.toBe(RUNNER.execPath)
         expect(launch.env).not.toHaveProperty('ELECTRON_RUN_AS_NODE')
+        expect(launch).not.toHaveProperty('runner')
       }
     }
   })
@@ -2571,6 +2574,7 @@ describe('the sandbox at spawn, for Claude', () => {
       const layout = await gitLayoutOf(cwd)
       expect(payloads, platform).toEqual([{ config: srtConfigOf(builder(platform, r, layout).sandbox!, { cwd, layout }), cwd, command: 'npm run test' }])
       expect(launch.file).toBe('/opt/astera/astera')
+      expect(launch.runner).toBe(true)
       expect(launch.env, platform).toMatchObject({ ELECTRON_RUN_AS_NODE: '1', npm_config_cache: npmCacheOf(r.tmpDir) })
       expect(launch.env, platform).not.toHaveProperty('SECRET_TOKEN')
     }

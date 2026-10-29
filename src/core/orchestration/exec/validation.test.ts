@@ -727,14 +727,30 @@ describe('createTaskValidation — the sandbox of a sandboxed Task (Task K)', ()
     const opts = await h.started()
     expect(asked).toEqual([{ provider: 'codex', accountId: 'accA', cwd: h.cwd, command: opts.command, env: hidden(h.cwd) }])
     expect(opts.launch).toEqual({ file: 'codex', args: ['sandbox', '--', 'sh', '-c', opts.command] })
-    // With the file the runner keeps its reason in, should it not put the check in the sandbox (fix round 3)
-    expect(opts.env).toEqual({ ...hidden(h.cwd), BOXED: '1', [CHECK_REASON_ENV]: expect.stringMatching(/astera-checks[\\/]failed-[\w-]+\.txt$/) })
+    // Fix round 4 (R1): `codex sandbox` straight in its pty (macOS and Linux) hands its environment to the check, so the
+    // runner's reason file is not named there
+    expect(opts.env).toEqual({ ...hidden(h.cwd), BOXED: '1' })
     expect(opts.validation).toBe(true)
     await h.finish(0)
     expect(h.task().status).toBe('completed')
     expect(h.task().checks?.[0]).not.toHaveProperty('outsideSandbox')
     // Fix round 2: the result says which names the check started without, never their values
     expect(h.task().checks?.[0]).toMatchObject({ hiddenEnv: ['NPM_TOKEN', 'KUBECONFIG'] })
+  })
+
+  // Fix rounds 3 and 4: a launch through Astera's check runner is named the file it keeps its reason in, should it not put
+  // the check in the sandbox; the runner takes the name out of the check's environment (src/sandboxCheck/index.ts)
+  it('names the reason file only to a launch through the runner', async () => {
+    const h = rig({
+      sandboxKind: 'sandbox',
+      provider: 'codex',
+      checkEnv: hiding,
+      sandboxedCheck: async (a) => ({ launch: { file: 'Astera.exe', args: ['sandbox-check.js', '--codex', 'codex.exe'] }, env: { ...a.env }, runner: true })
+    })
+    h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    const opts = await h.started()
+    expect(opts.env).toEqual({ ...hidden(h.cwd), [CHECK_REASON_ENV]: expect.stringMatching(/astera-checks[\\/]failed-[\w-]+\.txt$/) })
+    await h.finish(0)
   })
 
   it('a sandbox that cannot be put around the check asks a person and runs nothing (E5)', async () => {
@@ -792,7 +808,7 @@ describe('createTaskValidation — the sandbox of a sandboxed Task (Task K)', ()
   // ran and failed stays a failure, and only a run that went through the runner is read that way
   it('a sandbox that stopped before the check started asks a person; a check that ran and failed stays a failure', async () => {
     const detail = 'codex sandbox stopped with exit code 1 before the check started: windows sandbox failed: 1314'
-    const boxed = async () => ({ launch: { file: 'Astera.exe', args: ['sandbox-check.js', '--codex', 'codex.exe'] }, env: {} })
+    const boxed = async () => ({ launch: { file: 'Astera.exe', args: ['sandbox-check.js', '--codex', 'codex.exe'] }, env: {}, runner: true as const })
     // Fix round 3 (N1): the reason comes from the file the runner was named, not from the output ConPTY may glue or
     // break; the output only has to end with the runner's mark
     const printed = `windows sandbox failed: 1314${sandboxFailedOutput(detail)}`
@@ -822,6 +838,12 @@ describe('createTaskValidation — the sandbox of a sandboxed Task (Task K)', ()
     await own.started()
     await own.finish(SANDBOX_FAILED_EXIT_CODE)
     expect(own.task().checks?.[0]).toMatchObject({ status: 'failed', exitCode: SANDBOX_FAILED_EXIT_CODE })
+    // A `codex sandbox` straight in its pty (macOS and Linux) never went through the runner either (fix round 4, R1)
+    const direct = rig({ sandboxKind: 'sandbox', provider: 'codex', sandboxedCheck: async () => ({ launch: { file: 'codex', args: ['sandbox'] }, env: {} }), output: printed })
+    direct.validation.startValidation({ taskId: direct.taskId, cwd: direct.cwd })
+    await direct.started()
+    await direct.finish(SANDBOX_FAILED_EXIT_CODE)
+    expect(direct.task().checks?.[0]).toMatchObject({ status: 'failed' })
     // A run outside any sandbox never went through the runner: whatever it printed, its exit is its own
     const plain = rig({ output: sandboxFailedOutput(detail) })
     plain.validation.startValidation({ taskId: plain.taskId, cwd: plain.cwd })

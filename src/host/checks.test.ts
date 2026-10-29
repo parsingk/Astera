@@ -12,6 +12,7 @@ import type { OrchServerDeps } from '../core/orchestration/command'
 import { applyWorkerDone, createJob, createTask, emptyState, openDispatch, startJobRun, type OrchState } from '../core/orchestration/state'
 import { pickInitialLang } from '../core/i18n/locale'
 import { t, type Lang } from '../core/i18n'
+import { CHECK_REASON_ENV } from '../core/sandbox/checkRunner'
 
 const NOW = '2026-09-24T00:00:00.000Z'
 const unwrap = <T>(r: { ok: boolean } & Record<string, unknown>): { state: OrchState; value: T } => {
@@ -50,7 +51,7 @@ interface RigOpts {
   /** Task K: the kind the implementation attempt ran in, and HostChecksDeps.checkEnv and checkLaunch */
   sandboxKind?: 'sandbox' | 'deny-only'
   checkEnv?: (base: NodeJS.ProcessEnv, cwd: string) => { env: NodeJS.ProcessEnv; hidden: string[] }
-  checkLaunch?: (a: { accountId: string; cwd: string; command: string }) => Promise<{ file: string; args: string[] | string; env: Record<string, string> }>
+  checkLaunch?: (a: { accountId: string; cwd: string; command: string }) => Promise<{ file: string; args: string[] | string; env: Record<string, string>; runner?: true }>
   /** HostChecksDeps.accountName (fix round 2) */
   accountName?: (accountId: string) => Promise<string | null>
 }
@@ -260,6 +261,13 @@ describe('createHostChecks', () => {
     expect(asked).toEqual([{ accountId: 'acc_fake', cwd: h.cwd, command: expect.stringContaining('run test') }])
     expect(h.spawnedLaunch()).toEqual({ file: 'codex', args: ['sandbox', '--', 'sh', '-c', asked[0].command] })
     expect(h.spawnedEnv()).toMatchObject({ BOXED: '1' })
+    // Fix round 4 (R1): `codex sandbox` straight in its pty is not named the runner's reason file; a launch through the
+    // runner is
+    expect(h.spawnedEnv()).not.toHaveProperty(CHECK_REASON_ENV)
+    const viaRunner = await rig({ sandboxKind: 'sandbox', checkLaunch: async () => ({ file: 'astera-host.exe', args: ['sandbox-check.js', '--codex', 'codex.exe'], env: {}, runner: true }) })
+    viaRunner.checks.startValidation({ taskId: viaRunner.taskId, cwd: viaRunner.cwd })
+    await vi.waitFor(() => expect(viaRunner.opened()).toHaveLength(1))
+    expect(viaRunner.spawnedEnv()[CHECK_REASON_ENV]).toMatch(/failed-[\w-]+\.txt$/)
     const refused = await rig({ sandboxKind: 'sandbox', checkLaunch: async () => Promise.reject(new Error('SANDBOX_UNAVAILABLE: runtime-missing claude')) })
     refused.checks.startValidation({ taskId: refused.taskId, cwd: refused.cwd })
     await vi.waitFor(() => expect(refused.task().status).toBe('blocked'))
