@@ -8,7 +8,7 @@ import type { Account } from '../core/types'
 import { removeFixture } from '../core/testFixtures'
 import { makeDescriptors } from '../core/providers/descriptor'
 import { DOCTOR_ARGV, SETUP_ARGV } from '../core/sandbox/windowsReadiness'
-import { hostSandboxReadiness, hostSandboxSetup } from './sandboxSetup'
+import { hostSandboxDefault, hostSandboxReadiness, hostSandboxSetup } from './sandboxSetup'
 
 const account = (configDir: string): Account => ({ id: 'acc_x', label: 'x', configDir, color: '#888', createdAt: '2026-10-27T00:00:00.000Z', provider: 'codex' })
 
@@ -127,5 +127,35 @@ describe('hostSandboxReadiness', () => {
   it('there is nothing to ask about off Windows', () => {
     for (const platform of ['darwin', 'linux'] as const)
       expect(hostSandboxReadiness({ platform, homeDir: '/h', baseEnv: () => ({}), descriptors: makeDescriptors(platform, '/h') })).toBeUndefined()
+  })
+})
+
+// Task P: Settings › Agent profiles names an account whose config.toml still makes the elevated sandbox its default, and
+// Remove takes that line out of the file its sessions read, the ambient account's ~/.codex included
+describe('hostSandboxDefault', () => {
+  it("reads and takes out the elevated default of the account's own config.toml", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-host-default-'))
+    try {
+      const work = path.join(home, '.codex-accounts', 'work')
+      const ambient = path.join(home, '.codex')
+      const defaults = hostSandboxDefault({ platform: 'win32', homeDir: home, baseEnv: () => ({ CODEX_HOME: 'C:\\inherited' }), descriptors: makeDescriptors('win32', home) })!
+      expect(defaults.fileOf(account(work))).toBe(path.join(work, 'config.toml'))
+      expect(defaults.fileOf(account(ambient))).toBe(path.join(ambient, 'config.toml'))
+      const file = path.join(work, 'config.toml')
+      await fs.mkdir(work, { recursive: true })
+      await fs.writeFile(file, '# mine\nmodel = "gpt-5"\n\n[windows]\nsandbox = "elevated"\n')
+      expect(await defaults.elevated(file)).toBe(true)
+      expect(await defaults.remove(file)).toBe('removed')
+      expect(await fs.readFile(file, 'utf8')).toBe('# mine\nmodel = "gpt-5"\n')
+      expect(await defaults.elevated(file)).toBe(false)
+      expect(await defaults.remove(file)).toBe('absent')
+    } finally {
+      await removeFixture(home)
+    }
+  })
+
+  it('there is nothing to read or remove off Windows', () => {
+    for (const platform of ['darwin', 'linux'] as const)
+      expect(hostSandboxDefault({ platform, homeDir: '/h', baseEnv: () => ({}), descriptors: makeDescriptors(platform, '/h') })).toBeUndefined()
   })
 })

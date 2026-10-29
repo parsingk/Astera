@@ -146,7 +146,9 @@ export interface SessionInfo {
   sandboxKind?: SandboxKind
   /** What a sandboxed start warned about (Task E fix rounds 2 and 3, core/sandbox/startWarnings.ts decides it): the work
    *  folder holds the home folder, Claude's shell cannot run under Ubuntu's AppArmor bubblewrap profile, or (Codex on
-   *  Linux, fix round 5) a named path goes through a link in the work folder, so Codex refuses every command. Beside
+   *  Linux, fix round 5) a named path goes through a link in the work folder, so Codex refuses every command, or (Codex
+   *  on Windows, Task P) the account's config.toml makes the elevated sandbox its default, so its ordinary Codex sessions
+   *  run in it too and cannot read the login folders. Beside
    *  `sandboxKind` in the info and the note, so a Host worker's tab and a tab taken back after a restart show it too; the
    *  tab shows it as a line above the terminal or the chat. Absent when there is nothing to say. */
   sandboxWarnings?: SandboxStartWarning[]
@@ -156,7 +158,7 @@ export interface SessionInfo {
 export type SandboxKind = 'sandbox' | 'deny-only'
 
 /** SessionInfo.sandboxWarnings, one each (core/sandbox/startWarnings.ts sandboxStartWarnings). */
-export type SandboxStartWarning = 'claudeUserns' | 'linkInWorkFolder' | 'homeInWorkFolder'
+export type SandboxStartWarning = 'claudeUserns' | 'linkInWorkFolder' | 'elevatedDefault' | 'homeInWorkFolder'
 
 /** The stored settings the resume modal reads to seed its checkboxes.
  *  A read-only snapshot — what actually gets enabled is settled by the modal and passed down as
@@ -2025,9 +2027,15 @@ export interface AgentProfilesApi {
    *  prompt once. The body is `{ ok, out }`: whether Codex's setup succeeded, and what it said. */
   sandboxSetup(profileId: string, accountId: string): Promise<PluginsCallAnswer>
   /** Whether each Codex account of the profile has its Windows sandbox set up, for Settings › Agent profiles (Task 8):
-   *  `{ accounts: [{ accountId, state }] }`, `state` ready, not-set-up or check-failed, in the profile's order. Codex is
+   *  `{ accounts: [{ accountId, state, elevatedDefault? }] }`, `state` ready, not-set-up or check-failed, in the profile's
+   *  order, and `elevatedDefault: true` where the account's config.toml still makes the elevated sandbox its default
+   *  (Task P). Codex is
    *  asked the way a sandboxed start asks it, which never brings up the administrator prompt. 501 off Windows. */
   sandboxReadiness(profileId: string): Promise<PluginsCallAnswer>
+  /** Remove beside a Codex account whose readiness says `elevatedDefault` (Task P): takes the `windows.sandbox =
+   *  "elevated"` line out of that account's config.toml, the rest of the file as it was, on the person's press only. The
+   *  body is `{ outcome, file }`: removed, absent, other-value, cannot-edit or failed, and the file. 501 off Windows. */
+  sandboxDefaultRemove(profileId: string, accountId: string): Promise<PluginsCallAnswer>
 }
 
 /** What Audit Logs asks for (observe mode design §8, §11): audit-list's and audit-summary's filters, the period's start,

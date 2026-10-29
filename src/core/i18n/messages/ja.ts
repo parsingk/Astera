@@ -139,6 +139,9 @@ export const ja: Catalog = {
   'settings.agentProfiles.sandboxState.ready': 'サンドボックス準備完了',
   'settings.agentProfiles.sandboxState.not-set-up': 'サンドボックス未設定',
   'settings.agentProfiles.sandboxState.check-failed': '状態を確認できません',
+  'settings.agentProfiles.sandboxDefault.hint': 'このアカウントの config.toml が elevated サンドボックスをすべての Codex セッションの既定にしているため通常のセッションもログイン情報を含むフォルダーを読めず、「削除」でその行を消すとサンドボックスのセッションだけがこれを使います。',
+  'settings.agentProfiles.sandboxDefault.remove': '削除',
+  'settings.agentProfiles.sandboxDefault.removeFailed': 'その行を削除できませんでした。{file} を直接編集してください。',
   'agentProfiles.pick.label': 'エージェントプロファイル',
   'agentProfiles.pick.none': 'なし',
   'agentProfiles.pick.permission': '権限の確認はこのプロファイルの設定に従います。',
@@ -684,6 +687,8 @@ export const ja: Catalog = {
   'session.sandbox.warn.claudeUsernsAndHome': "このシステムでは Claude Code のサンドボックスがシェルコマンドを実行できません。Ubuntu の bubblewrap 用 AppArmor プロファイル(bwrap-userns-restrict)が bubblewrap の中で動くプログラムから権限を外すため、このセッションのシェルコマンドはすべて失敗します。ファイルツールはそのまま使えます。解決するには、関連するバイナリに userns を許可する AppArmor プロファイルを追加します。詳しくは Claude Code のサンドボックスランタイム(@anthropic-ai/sandbox-runtime)の README の Ubuntu の項を参照してください。このサンドボックスのセッションの作業フォルダーはホームフォルダーを含んでいるため、サンドボックスの中からホームフォルダーのプログラムや設定を変更できます。それらを守るには、プロジェクトのフォルダーで起動してください。",
   'session.sandbox.warn.linkInWorkFolder': "このセッションでは Codex がすべてのコマンドを拒否します。ログイン情報や Astera 自身のファイルを含むフォルダーが作業フォルダー内のリンクの先にあり、セッションがそのリンクを変えられるためです。プロジェクトのフォルダーで起動すれば避けられます。",
   'session.sandbox.warn.linkAndHome': "このセッションでは Codex がすべてのコマンドを拒否します。ログイン情報や Astera 自身のファイルを含むフォルダーが作業フォルダー内のリンクの先にあり、セッションがそのリンクを変えられるためです。プロジェクトのフォルダーで起動すれば避けられます。このサンドボックスのセッションの作業フォルダーはホームフォルダーを含んでいるため、サンドボックスの中からホームフォルダーのプログラムや設定を変更できます。それらを守るには、プロジェクトのフォルダーで起動してください。",
+  'session.sandbox.warn.elevatedDefault': 'このアカウントの config.toml が Codex の elevated サンドボックスを既定にしているため、このアカウントの通常の Codex セッションもコマンドをその中で実行し、ログイン情報を含むフォルダーを読めません。設定 › エージェントプロファイルでその行を削除できます。',
+  'session.sandbox.warn.elevatedDefaultAndHome': 'このアカウントの config.toml が Codex の elevated サンドボックスを既定にしているため、このアカウントの通常の Codex セッションもコマンドをその中で実行し、ログイン情報を含むフォルダーを読めません。設定 › エージェントプロファイルでその行を削除できます。このサンドボックスのセッションの作業フォルダーはホームフォルダーを含んでいるため、サンドボックスの中からホームフォルダーのプログラムや設定を変更できます。それらを守るには、プロジェクトのフォルダーで起動してください。',
   'session.roll.sandbox.windowsCheckFailed': '{account} アカウントの Windows サンドボックスの状態を Codex に確認できなかったため、切り替えられませんでした。Codex を更新するか、もう一度起動してください。',
   'session.roll.sandbox.refused': '次のアカウントに切り替えられませんでした: {reason}',
   'session.spawn.failedWorktreeKept':

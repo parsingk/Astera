@@ -2008,6 +2008,29 @@ describe('the sandbox at spawn', () => {
     }
   })
 
+  // Task P (the person's decision, 2026-10-29): a sandboxed Codex start on Windows whose home's config.toml still makes the
+  // elevated sandbox its default (set up before Astera took the line back out, or by the person) starts as today, and its
+  // sink and its tab are told; a start outside the sandbox asks nothing
+  it("tells a sandboxed Windows Codex start whose home makes the elevated sandbox its default, and starts it as today", async () => {
+    const cwd = repo()
+    const argv: string[][] = []
+    const asked: string[] = []
+    const manager = new SessionManager((_f, a) => (argv.push(a as string[]), new FakePty()), makeDescriptors('win32', HOME.win32, undefined, daemon(true)),
+      100, 20, HOME.win32, undefined, [], { ...BASE.win32 }, { ...checksFor('win32'), codexElevatedDefault: async (file) => (asked.push(file), true) })
+    manager.codexVersion = versionOf('0.160.0')
+    const told: Array<[string, string[]]> = []
+    manager.sandboxWarn = { claudeUsernsRestricted: () => false, warn: (id, ws) => void told.push([id, [...ws]]) }
+    await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    const info = manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    expect(argv).toHaveLength(1)
+    expect(asked).toEqual([path.join(codexAccount.configDir, 'config.toml')])
+    expect(info.sandboxWarnings).toEqual(['elevatedDefault'])
+    expect(told).toEqual([[info.id, ['elevatedDefault']]])
+    await manager.prepare({ account: codexAccount, cwd })
+    expect(manager.spawn({ account: codexAccount, cwd })).not.toHaveProperty('sandboxWarnings')
+    expect(asked).toHaveLength(1)
+  })
+
   // Task E fix round 2 (the person's decision): a sandboxed start whose work folder holds the home folder starts as it
   // does today, and its sink is told once; a project folder inside the home folder, and a start outside the sandbox, are
   // not told

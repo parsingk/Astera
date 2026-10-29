@@ -6,6 +6,7 @@
 import { ensureGitFiles, ensureWorktreeConfigFiles, gitLayoutOf, type GitLayout } from './gitLayout'
 import { appKeyDenies, appKeyEntries, credentialStoreDenies, credentialStoreEntries, hostSocketDenies, namedPaths, otherHostFolders, sensitiveEntries, sensitiveLocations, type DenyEntry, type LinkLook } from './locations'
 import { appServerSandboxArgs, codexSandboxArgs } from './codexProfile'
+import { codexConfigFile, elevatedDefaultIn } from './codexDefaultSandbox'
 import type { CodexExcludes } from './gitExcludes'
 import { SANDBOX_UNAVAILABLE, sandboxUnavailable } from './unavailable'
 import type { Readiness } from './windowsReadiness'
@@ -57,13 +58,29 @@ export type CodexWindowsReady = (a: {
 /** The layouts sandboxed prepares read, by account and folder: readiness is the account's, so one account's prepare never
  *  lets another account's spawn through in the same folder. A Codex prepare keeps beside its layout the other Hosts'
  *  folders it found (otherHostFolders), so its spawn denies what was there at the start (final fix pass, part 2, B), and
- *  on Windows the copy of the person's git excludes it wrote (prepareCodexSandbox), which its spawn points git at. */
+ *  on Windows the copy of the person's git excludes it wrote (prepareCodexSandbox), which its spawn points git at, and
+ *  whether the account's home makes the elevated sandbox its default (Task P), which the start warns about. */
 export class PreparedLayouts {
-  private entries = new Map<string, { layout: GitLayout | null; otherHosts: readonly string[]; excludesFile: string | null; at: number }>()
+  private entries = new Map<string, { layout: GitLayout | null; otherHosts: readonly string[]; excludesFile: string | null; elevatedDefault: boolean; at: number }>()
 
-  keep(accountId: string, cwd: string, layout: GitLayout | null, now: number, otherHosts: readonly string[] = [], excludesFile: string | null = null): void {
+  keep(
+    accountId: string,
+    cwd: string,
+    layout: GitLayout | null,
+    now: number,
+    otherHosts: readonly string[] = [],
+    excludesFile: string | null = null,
+    elevatedDefault = false
+  ): void {
     for (const [k, v] of this.entries) if (now - v.at >= PREPARED_MS) this.entries.delete(k)
-    this.entries.set(keyOf(accountId, cwd), { layout, otherHosts, excludesFile, at: now })
+    this.entries.set(keyOf(accountId, cwd), { layout, otherHosts, excludesFile, elevatedDefault, at: now })
+  }
+
+  /** Whether the prepare kept for this account and folder within PREPARED_MS found the account's Codex home making the
+   *  elevated sandbox its default (Windows only); false when it kept none. */
+  elevatedDefaultOf(accountId: string, cwd: string, now: number): boolean {
+    const e = this.entries.get(keyOf(accountId, cwd))
+    return e !== undefined && now - e.at < PREPARED_MS && e.elevatedDefault
   }
 
   /** The copy of the person's git excludes the prepare kept for this account and folder within PREPARED_MS; null when it
@@ -251,11 +268,13 @@ export function codexEchoArgs(o: Omit<Parameters<typeof sessionSandboxArgs>[0], 
 
 /** What a sandboxed Codex prepare hands its caller to keep for the spawn (PreparedLayouts.keep): the folder's git layout
  *  (null outside a repository), the other Hosts' socket folders found beside this profile's, and on Windows the copy of
- *  the person's git excludes it wrote (null when none was). */
+ *  the person's git excludes it wrote (null when none was) and whether the account's Codex home makes the elevated
+ *  sandbox its default (Task P; false elsewhere). */
 export interface PreparedCodex {
   layout: GitLayout | null
   otherHosts: string[]
   excludesFile: string | null
+  elevatedDefault: boolean
 }
 
 /**
@@ -275,6 +294,9 @@ export interface PreparedCodex {
  * B). Last, on Windows, the person's global git excludes are copied where the sandbox's own account can read them
  * (`excludes`, gitExcludes.ts): it cannot read their home, so its git would warn at every call and leave their ignore
  * rules out. No copy (none to make, none could be made, or no `excludes`) refuses nothing: git looks where it would.
+ * And on Windows the config.toml Codex reads for the session (codexConfigFile) is asked whether it makes the elevated
+ * sandbox the home's default (Task P, codexDefaultSandbox.ts): the start goes on as today and warns. A file that cannot
+ * be read reads as no.
  */
 export async function prepareCodexSandbox(o: {
   accountId: string
@@ -300,6 +322,9 @@ export async function prepareCodexSandbox(o: {
   /** How the disk is read for links on the named paths (sessionSandboxArgs `links`, with `cwd`); null, as given. */
   look: LinkLook | null
   log: (m: string) => void
+  /** Windows: whether the config.toml at the path given makes the elevated sandbox its default. Test seam; default
+   *  codexDefaultSandbox.ts elevatedDefaultIn. */
+  elevatedDefault?: (configFile: string) => Promise<boolean>
 }): Promise<PreparedCodex> {
   const fail = (err: unknown): Error => {
     o.log(`sandbox: the git layout of ${o.cwd} could not be read or prepared: ${String(err)}`)
@@ -361,5 +386,6 @@ export async function prepareCodexSandbox(o: {
     }
   }
   const excludesFile = o.platform === 'win32' && o.excludes ? await o.excludes().catch(() => null) : null
-  return { layout, otherHosts, excludesFile }
+  const elevatedDefault = o.platform === 'win32' ? await (o.elevatedDefault ?? elevatedDefaultIn)(codexConfigFile(o.env, o.homeDir)).catch(() => false) : false
+  return { layout, otherHosts, excludesFile, elevatedDefault }
 }

@@ -175,6 +175,9 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.agentProfiles.sandboxState.ready': 'Sandbox ready',
   'settings.agentProfiles.sandboxState.not-set-up': 'Sandbox not set up',
   'settings.agentProfiles.sandboxState.check-failed': 'Could not check',
+  'settings.agentProfiles.sandboxDefault.hint': "This account's config.toml makes the elevated sandbox the default for all its Codex sessions, so its ordinary sessions cannot read the folders holding logins either; Remove takes that line out and leaves the sandbox to sandboxed sessions.",
+  'settings.agentProfiles.sandboxDefault.remove': 'Remove',
+  'settings.agentProfiles.sandboxDefault.removeFailed': 'The line could not be removed. Edit {file} yourself.',
   'agentProfiles.pick.label': 'Agent profile',
   'agentProfiles.pick.none': 'None',
   'agentProfiles.pick.permission': 'Permission checks follow this profile.',
@@ -854,6 +857,8 @@ export const en: Record<keyof typeof ko, string> = {
   'session.sandbox.warn.claudeUsernsAndHome': "Claude Code's sandbox cannot run shell commands on this system: Ubuntu's AppArmor profile for bubblewrap (bwrap-userns-restrict) takes capabilities away from the programs running inside bubblewrap, so every shell command in this session will fail. File tools still work. The fix is an AppArmor profile that grants userns to the relevant binaries; see the Ubuntu note in the README of Claude Code's sandbox runtime (@anthropic-ai/sandbox-runtime) for the details. This sandboxed session's work folder contains your home folder, so programs and settings in your home folder can be changed from inside the sandbox. Start it in a project folder to keep them out of reach.",
   'session.sandbox.warn.linkInWorkFolder': "Codex will refuse every command in this session: a folder that holds logins or Astera's own files is reached through a link inside the work folder, which the session could change. Starting it in a project folder avoids this.",
   'session.sandbox.warn.linkAndHome': "Codex will refuse every command in this session: a folder that holds logins or Astera's own files is reached through a link inside the work folder, which the session could change. Starting it in a project folder avoids this. This sandboxed session's work folder contains your home folder, so programs and settings in your home folder can be changed from inside the sandbox. Start it in a project folder to keep them out of reach.",
+  'session.sandbox.warn.elevatedDefault': "This account's config.toml makes Codex's elevated sandbox the default, so its ordinary Codex sessions also run their commands in it and cannot read the folders holding logins. Settings › Agent profiles can remove that line.",
+  'session.sandbox.warn.elevatedDefaultAndHome': "This account's config.toml makes Codex's elevated sandbox the default, so its ordinary Codex sessions also run their commands in it and cannot read the folders holding logins. Settings › Agent profiles can remove that line. This sandboxed session's work folder contains your home folder, so programs and settings in your home folder can be changed from inside the sandbox. Start it in a project folder to keep them out of reach.",
   'session.roll.sandbox.windowsCheckFailed': 'Could not move to the {account} account: Codex could not be asked about its Windows sandbox. Update Codex or start it again.',
   'session.roll.sandbox.refused': 'Could not move to the next account: {reason}',
   'session.spawn.failedWorktreeKept':

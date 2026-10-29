@@ -33,6 +33,8 @@ export function createAgentProfilesRoute(d: { call: Call; afterSetup?: () => voi
       d.afterSetup?.()
       return r
     },
-    sandboxReadiness: (profileId) => send('agent-profiles-sandbox-readiness', { id: profileId }, { timeoutMs: SANDBOX_READINESS_DEADLINE_MS })
+    sandboxReadiness: (profileId) => send('agent-profiles-sandbox-readiness', { id: profileId }, { timeoutMs: SANDBOX_READINESS_DEADLINE_MS }),
+    // Task P: one file of the account's, read and written at once, so the usual wait
+    sandboxDefaultRemove: (profileId, accountId) => send('agent-profiles-sandbox-default-remove', { id: profileId, accountId })
   }
 }

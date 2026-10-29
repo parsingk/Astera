@@ -178,6 +178,9 @@ export const ko = {
   'settings.agentProfiles.sandboxState.ready': 'sandbox 준비됨',
   'settings.agentProfiles.sandboxState.not-set-up': 'sandbox 설정 안 됨',
   'settings.agentProfiles.sandboxState.check-failed': '상태를 묻지 못함',
+  'settings.agentProfiles.sandboxDefault.hint': '이 계정의 config.toml이 elevated sandbox를 모든 Codex 세션의 기본값으로 정해 두어 일반 세션도 로그인 정보가 든 폴더를 읽지 못하며, 삭제를 누르면 그 줄을 지워 sandbox 세션만 이것을 쓰게 됩니다.',
+  'settings.agentProfiles.sandboxDefault.remove': '삭제',
+  'settings.agentProfiles.sandboxDefault.removeFailed': '그 줄을 지우지 못했습니다. {file}을(를) 직접 고쳐 주세요.',
   'agentProfiles.pick.label': '에이전트 프로필',
   'agentProfiles.pick.none': '없음',
   'agentProfiles.pick.permission': '권한 확인은 이 프로필의 설정을 따릅니다.',
@@ -881,6 +884,8 @@ export const ko = {
   'session.sandbox.warn.claudeUsernsAndHome': "이 시스템에서는 Claude Code의 sandbox가 셸 명령을 실행할 수 없습니다. Ubuntu의 bubblewrap용 AppArmor 프로필(bwrap-userns-restrict)이 bubblewrap 안에서 도는 프로그램의 권한을 빼앗아, 이 세션의 셸 명령은 모두 실패합니다. 파일 도구는 그대로 쓸 수 있습니다. 해결하려면 관련 바이너리에 userns를 허용하는 AppArmor 프로필을 추가해야 합니다. 자세한 내용은 Claude Code의 sandbox 런타임(@anthropic-ai/sandbox-runtime) README의 Ubuntu 안내를 보세요. 이 sandbox 세션의 작업 폴더가 홈 폴더를 포함하고 있어서, sandbox 안에서 홈 폴더의 프로그램과 설정을 바꿀 수 있습니다. 이것들을 지키려면 프로젝트 폴더에서 시작해 주세요.",
   'session.sandbox.warn.linkInWorkFolder': "이 세션에서 Codex는 모든 명령을 거부합니다. 로그인 정보나 Astera 자체 파일이 든 폴더가 작업 폴더 안의 링크를 거쳐 있어, 세션이 그 링크를 바꿀 수 있기 때문입니다. 프로젝트 폴더에서 시작하면 이 문제가 없습니다.",
   'session.sandbox.warn.linkAndHome': "이 세션에서 Codex는 모든 명령을 거부합니다. 로그인 정보나 Astera 자체 파일이 든 폴더가 작업 폴더 안의 링크를 거쳐 있어, 세션이 그 링크를 바꿀 수 있기 때문입니다. 프로젝트 폴더에서 시작하면 이 문제가 없습니다. 이 sandbox 세션의 작업 폴더가 홈 폴더를 포함하고 있어서, sandbox 안에서 홈 폴더의 프로그램과 설정을 바꿀 수 있습니다. 이것들을 지키려면 프로젝트 폴더에서 시작해 주세요.",
+  'session.sandbox.warn.elevatedDefault': '이 계정의 config.toml이 Codex의 elevated sandbox를 기본값으로 정해 두어, 이 계정의 일반 Codex 세션도 명령을 그 안에서 실행하고 로그인 정보가 든 폴더를 읽지 못합니다. 설정 › 에이전트 프로필에서 그 줄을 지울 수 있습니다.',
+  'session.sandbox.warn.elevatedDefaultAndHome': '이 계정의 config.toml이 Codex의 elevated sandbox를 기본값으로 정해 두어, 이 계정의 일반 Codex 세션도 명령을 그 안에서 실행하고 로그인 정보가 든 폴더를 읽지 못합니다. 설정 › 에이전트 프로필에서 그 줄을 지울 수 있습니다. 이 sandbox 세션의 작업 폴더가 홈 폴더를 포함하고 있어서, sandbox 안에서 홈 폴더의 프로그램과 설정을 바꿀 수 있습니다. 이것들을 지키려면 프로젝트 폴더에서 시작해 주세요.',
   // A Claude roll refused for the sandbox (core/rolling/claudeCoordinator.ts): {reason} is the refusal's own sentence
   'session.roll.sandbox.windowsCheckFailed': '{account} 계정은 Codex에게 Windows sandbox 상태를 묻지 못해 넘어가지 못했습니다. Codex를 업데이트하거나 다시 시작해 주세요.',
   'session.roll.sandbox.refused': '다음 계정으로 넘어가지 못했습니다: {reason}',

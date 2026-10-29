@@ -8,6 +8,7 @@ import type { AgentProfile, ProfilePermission } from '../../core/agentProfiles/t
 import type { OrchCaller } from '../../core/host/orchProtocol'
 import type { Account } from '../../core/types'
 import type { Readiness } from '../../core/sandbox/windowsReadiness'
+import type { RemoveOutcome } from '../../core/sandbox/codexDefaultSandbox'
 import { agentProfileIdOf } from '../../core/sessions/noteInfo'
 import { holdsAgentProfile } from '../../core/orchestration/running'
 import type { OrchState } from '../../core/orchestration/state'
@@ -22,13 +23,19 @@ export const AGENT_PROFILE_COMMANDS: ReadonlySet<string> = new Set([
   'agent-profiles-delete',
   'agent-profiles-touch',
   'agent-profiles-sandbox-setup',
-  'agent-profiles-sandbox-readiness'
+  'agent-profiles-sandbox-readiness',
+  'agent-profiles-sandbox-default-remove'
 ])
 
 /** What only the app may send: Codex's Windows sandbox setup brings up the administrator prompt on the person's screen,
  *  so it follows a press of 설정하기 and nothing else, not the person's CLI and never an agent's shell. The readiness
- *  Settings › Agent profiles shows beside it is the app's too: it runs codex for each account, which no shell needs. */
-const APP_ONLY_AGENT_PROFILE_COMMANDS: ReadonlySet<string> = new Set(['agent-profiles-sandbox-setup', 'agent-profiles-sandbox-readiness'])
+ *  Settings › Agent profiles shows beside it is the app's too: it runs codex for each account, which no shell needs. So
+ *  is Remove beside it (Task P): it changes the account's own Codex config.toml, on the person's press only. */
+const APP_ONLY_AGENT_PROFILE_COMMANDS: ReadonlySet<string> = new Set([
+  'agent-profiles-sandbox-setup',
+  'agent-profiles-sandbox-readiness',
+  'agent-profiles-sandbox-default-remove'
+])
 
 /** The ones that change the store: all but the two reads and the use stamp, which is not a person's change. */
 export const AGENT_PROFILE_CHANGES: ReadonlySet<string> = new Set([
@@ -84,6 +91,14 @@ export function createHostAgentProfiles(d: {
    *  (core/sandbox/windowsReadiness.ts codexWindowsReadiness: doctor first, the echo only on a home doctor calls
    *  complete, so asking never brings up the administrator prompt). Absent on a Host with no Windows sandbox. */
   sandboxReadiness?: (account: Account) => Promise<Readiness>
+  /** The elevated sandbox as a Codex account's default (Task P, core/sandbox/codexDefaultSandbox.ts): the config.toml its
+   *  sessions read, whether that file makes the elevated sandbox their default, and taking the line out. Absent on a Host
+   *  with no Windows sandbox. */
+  sandboxDefault?: {
+    fileOf(account: Account): string
+    elevated(file: string): Promise<boolean>
+    remove(file: string): Promise<RemoveOutcome>
+  }
 }): HostAgentProfiles {
   const now = d.now ?? Date.now
   // One change at a time: two updates must each read what the other wrote
@@ -261,15 +276,49 @@ export function createHostAgentProfiles(d: {
         const codex = liveAccounts(p, all)
           .map((id) => all.find((a) => a.id === id))
           .filter((a): a is Account => a?.provider === 'codex')
+        // Task P: and whether its config.toml still makes the elevated sandbox its default, for Remove beside the row; one
+        // that cannot be read is said as none (a hint, never a gate)
+        const defaults = d.sandboxDefault
+        const elevatedDefault = (a: Account): Promise<boolean> =>
+          defaults
+            ? Promise.resolve()
+                .then(() => defaults.elevated(defaults.fileOf(a)))
+                .catch(() => false)
+            : Promise.resolve(false)
         const accounts = await Promise.all(
-          codex.map(async (a) => ({
-            accountId: a.id,
-            state: await Promise.resolve()
-              .then(() => ask(a))
-              .catch((): Readiness => 'check-failed')
-          }))
+          codex.map(async (a) => {
+            const [state, shared] = await Promise.all([
+              Promise.resolve()
+                .then(() => ask(a))
+                .catch((): Readiness => 'check-failed'),
+              elevatedDefault(a)
+            ])
+            return { accountId: a.id, state, ...(shared ? { elevatedDefault: true } : {}) }
+          })
         )
         return { status: 200, body: { accounts } }
+      }
+      case 'agent-profiles-sandbox-default-remove': {
+        // Task P (the person's decision, 2026-10-29): the `windows.sandbox = "elevated"` line of one Codex account's
+        // config.toml, taken out only when the person presses Remove beside its row; the rest of the file stays as it was
+        if (typeof args.id !== 'string' || typeof args.accountId !== 'string') return bad('agent-profiles-sandbox-default-remove needs id and accountId')
+        const defaults = d.sandboxDefault
+        if (!defaults) return { status: 501, body: { error: 'this Host has no Windows sandbox default to remove' } }
+        const p = findProfile(await readAgentProfiles(d.profileDir), args.id)
+        if (!p) return { status: 404, body: { error: `no agent profile ${args.id}` } }
+        const accounts = await d.readAccounts()
+        const account = liveAccounts(p, accounts).includes(args.accountId) ? accounts.find((a) => a.id === args.accountId) : undefined
+        if (!account) return bad(`${args.accountId} is not an account of the profile ${p.name}`)
+        if (account.provider !== 'codex') return bad(`${args.accountId} is not a Codex account`)
+        const file = defaults.fileOf(account)
+        try {
+          const outcome = await defaults.remove(file)
+          d.log(`agent profiles: the elevated default of ${account.id} in ${file}: ${outcome}`)
+          return { status: 200, body: { outcome, file } }
+        } catch (e) {
+          d.log(`agent profiles: could not take the elevated default of ${account.id} out of ${file} (${message(e)})`)
+          return { status: 200, body: { outcome: 'failed', file, error: message(e) } }
+        }
       }
       default:
         return { status: 501, body: { error: `${cmd} is not answered by this Host` } }

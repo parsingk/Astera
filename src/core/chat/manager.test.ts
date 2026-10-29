@@ -1560,7 +1560,7 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
     win32: { Path: 'C:\\Windows', APPDATA: 'C:\\Users\\t\\AppData\\Roaming' }
   } as const
   type Ready = NonNullable<ChatManagerDeps['codexWindowsReady']>
-  const rig = (platform: 'linux' | 'win32', o: { ready?: Ready; layouts?: PreparedLayouts; noDaemon?: boolean; hostSocketDir?: string | null; codex?: string | null; excludes?: ChatManagerDeps['codexExcludes']; appKeyFile?: string; readOnly?: readonly string[] } = {}) => {
+  const rig = (platform: 'linux' | 'win32', o: { ready?: Ready; layouts?: PreparedLayouts; noDaemon?: boolean; hostSocketDir?: string | null; codex?: string | null; excludes?: ChatManagerDeps['codexExcludes']; appKeyFile?: string; readOnly?: readonly string[]; elevatedDefault?: ChatManagerDeps['codexElevatedDefault'] } = {}) => {
     const spawned: Array<{ file: string; args: string[]; opts: ProcSpawnOptions; proc: FakeProc }> = []
     const { createAdapter, handles } = makeAdapterFactory()
     const manager = new ChatSessionManager({ linkLook: null,
@@ -1583,6 +1583,7 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
       ...(o.excludes ? { codexExcludes: o.excludes } : {}),
       ...(o.appKeyFile ? { appKeyFile: o.appKeyFile } : {}),
       ...(o.readOnly ? { readOnly: o.readOnly } : {}),
+      ...(o.elevatedDefault ? { codexElevatedDefault: o.elevatedDefault } : {}),
       // codex 0.160.0, the floor, unless a case says otherwise
       codexVersion: Object.assign(() => ('codex' in o ? o.codex : '0.160.0'), { warm: async () => {} })
     })
@@ -1685,6 +1686,23 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
     expect(info.sandboxWarnings).toEqual(['homeInWorkFolder'])
     expect(r2.spawned[0].opts.meta?.restore).toMatchObject({ sandboxed: true, sandboxWarnings: ['homeInWorkFolder'] })
     expect(spawned).toHaveLength(1)
+  })
+
+  // Task P (the person's decision, 2026-10-29): a sandboxed Codex chat on Windows whose home's config.toml still makes the
+  // elevated sandbox its default starts as today, and says so, as a terminal session does
+  it("tells a sandboxed Windows Codex chat whose home makes the elevated sandbox its default, and starts it", async () => {
+    const cwd = repo()
+    const asked: string[] = []
+    const { manager, spawned } = rig('win32', { elevatedDefault: async (file) => (asked.push(file), true) })
+    const told: Array<[string, string[]]> = []
+    manager.sandboxWarn = { claudeUsernsRestricted: () => false, warn: (id, ws) => void told.push([id, [...ws]]) }
+    await manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    const info = manager.spawn({ account: codexAccount, cwd, sandbox: true })
+    expect(spawned).toHaveLength(1)
+    expect(asked).toEqual([path.join(codexAccount.configDir, 'config.toml')])
+    expect(info.sandboxWarnings).toEqual(['elevatedDefault'])
+    expect(told).toEqual([[info.id, ['elevatedDefault']]])
+    expect(spawned[0].opts.meta?.restore).toMatchObject({ sandboxed: true, sandboxWarnings: ['elevatedDefault'] })
   })
 
   // Task E fix round 5 (rule E5): a Codex chat's named paths are looked at against its writable folders as a terminal

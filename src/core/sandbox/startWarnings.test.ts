@@ -43,6 +43,23 @@ describe('sandboxStartWarnings', () => {
     expect(sandboxStartWarnings({ provider: 'codex', platform: 'win32', cwd: home, homeDir: home, claudeUsernsRestricted: false })).toEqual(['homeInWorkFolder'])
   })
 
+  // Task P (the person's decision, 2026-10-29): a Codex home whose config.toml still makes the elevated sandbox its default
+  // (set up before Astera took the line back out, or by the person) runs its ordinary sessions in it too, kept out of the
+  // login folders; a sandboxed start there starts as today and says so. Windows only: nowhere else has that default
+  it('warns a Windows Codex start whose home makes the elevated sandbox its default, and only there', () => {
+    const project = path.join(home, 'project')
+    const at = (provider: 'claude' | 'codex', platform: NodeJS.Platform, cwd: string, elevatedDefault: boolean) =>
+      sandboxStartWarnings({ provider, platform, cwd, homeDir: home, claudeUsernsRestricted: false, elevatedDefault })
+    expect(at('codex', 'win32', project, true)).toEqual(['elevatedDefault'])
+    expect(at('codex', 'win32', home, true)).toEqual(['elevatedDefault', 'homeInWorkFolder'])
+    expect(at('codex', 'win32', project, false)).toEqual([])
+    expect(at('claude', 'win32', project, true)).toEqual([])
+    for (const platform of ['linux', 'darwin'] as const) expect(at('codex', platform, project, true), platform).toEqual([])
+    // The managers ask through startWarningsFor, which passes it on
+    expect(startWarningsFor(undefined, { provider: 'codex', platform: 'win32', cwd: project, homeDir: home, elevatedDefault: true })).toEqual(['elevatedDefault'])
+    expect(startWarningsFor(undefined, { provider: 'codex', platform: 'win32', cwd: project, homeDir: home })).toEqual([])
+  })
+
   it('does not warn for a project folder inside the home folder, or beside it', () => {
     for (const provider of ['claude', 'codex'] as const) {
       const at = (cwd: string) => sandboxStartWarnings({ provider, platform: 'linux', cwd, homeDir: home, claudeUsernsRestricted: false })
@@ -98,6 +115,9 @@ describe('sandboxWarningMessage', () => {
     // Task E fix round 5: the link warning alone, and with the home warning it nearly always comes with
     expect(sandboxWarningMessage(['linkInWorkFolder'])).toEqual({ key: 'session.sandbox.warn.linkInWorkFolder' })
     expect(sandboxWarningMessage(['linkInWorkFolder', 'homeInWorkFolder'])).toEqual({ key: 'session.sandbox.warn.linkAndHome' })
+    // Task P: a Windows Codex home whose config.toml makes the elevated sandbox its default, alone and with the home one
+    expect(sandboxWarningMessage(['elevatedDefault'])).toEqual({ key: 'session.sandbox.warn.elevatedDefault' })
+    expect(sandboxWarningMessage(['elevatedDefault', 'homeInWorkFolder'])).toEqual({ key: 'session.sandbox.warn.elevatedDefaultAndHome' })
   })
 })
 

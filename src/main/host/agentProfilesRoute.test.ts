@@ -40,7 +40,14 @@ describe('the agent profiles route (Agent Profiles design §8)', () => {
   })
 
   it('offers exactly the commands the tab, the pickers and the start toast use', () => {
-    expect(Object.keys(host().route).sort()).toEqual(['archive', 'create', 'list', 'remove', 'restore', 'sandboxReadiness', 'sandboxSetup', 'update'])
+    expect(Object.keys(host().route).sort()).toEqual(['archive', 'create', 'list', 'remove', 'restore', 'sandboxDefaultRemove', 'sandboxReadiness', 'sandboxSetup', 'update'])
+  })
+
+  // Task P: Remove under a Codex account whose config.toml makes the elevated sandbox its default, sent as the app
+  it('asks the Host to take an account’s elevated default out, on the person’s press', async () => {
+    const { route, sent } = host(async () => ({ status: 200, body: { outcome: 'removed', file: 'C:/h/config.toml' } }))
+    expect(await route.sandboxDefaultRemove('ap_1', 'acc_x')).toEqual({ ok: true, body: { outcome: 'removed', file: 'C:/h/config.toml' } })
+    expect(sent.map(({ cmd, args, sessionId }) => ({ cmd, args, sessionId }))).toEqual([{ cmd: 'agent-profiles-sandbox-default-remove', args: { id: 'ap_1', accountId: 'acc_x' }, sessionId: '' }])
   })
 
   // Task 8: each Codex account's readiness under a sandboxed profile, asked of the Host, which runs Codex's doctor for

@@ -79,7 +79,7 @@ import { hostFeatures } from './features'
 import { loadSlackSdk } from './slackSdk'
 import { composeHostSlack, type HostSlackWiring } from './slackWiring'
 import { createHostSpawner } from './spawner'
-import { hostSandboxReadiness, hostSandboxSetup } from './sandboxSetup'
+import { hostSandboxDefault, hostSandboxReadiness, hostSandboxSetup } from './sandboxSetup'
 import { createHostWorktrees, loadWorktreesIfSpawning } from './worktrees'
 import { createHostProjectRoots } from './projectRoots'
 import { createHostExits, ptyHeldBy, type HostExits } from './exits'
@@ -906,13 +906,21 @@ async function main(): Promise<void> {
     descriptors: makeDescriptors(process.platform),
     log: (m) => log.write(m)
   })
+  // And whether each account's config.toml still makes the elevated sandbox its default, with Remove beside it (Task P)
+  const sandboxDefault = hostSandboxDefault({
+    platform: process.platform,
+    homeDir: os.homedir(),
+    baseEnv: () => hostWorkerBaseEnv(process.env),
+    descriptors: makeDescriptors(process.platform)
+  })
   const agentProfiles = createHostAgentProfiles({
     profileDir,
     readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
     inUse: agentProfileInUse({ sessions: () => [...registry.list(), ...procs.list()], orch: () => orch }),
     log: (m) => log.write(m),
     ...(sandboxSetup ? { sandboxSetup } : {}),
-    ...(sandboxReadiness ? { sandboxReadiness } : {})
+    ...(sandboxReadiness ? { sandboxReadiness } : {}),
+    ...(sandboxDefault ? { sandboxDefault } : {})
   })
   /** `agent-profiles-touch` as the app would send it, not awaited by the spawn that asks: the command logs its own
    *  failures and answers success, so a stamp never fails or delays a spawn. */
