@@ -501,9 +501,6 @@ async function main(): Promise<void> {
     profileDir,
     // Synced first, so a spawn right after an import finds the listener open
     gatewayPort: () => mcpGateway.sync(),
-    // The app's language for a line in a session's tab (Task E fix round 2's start warnings), read at each line; `wiring`
-    // is assigned below, long before any session starts
-    lang: () => (wiring ? wiring.checks.langNow() : 'en'),
     env: process.env,
     platform: process.platform,
     homeDir: os.homedir(),

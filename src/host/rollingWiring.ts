@@ -160,7 +160,8 @@ export function composeHostRolling(a: {
     ...(a.spawner.codexExcludes ? { codexExcludes: a.spawner.codexExcludes } : {}),
     // Task E fix round 2: a sandboxed chat's start warnings, as the chat's notice to the apps that take chats back (the
     // way a refused roll's reason goes, below), worded by the pane; the same fact to the Host log. The spawner's
-    // once-per-process Ubuntu check. Not journaled: an app that attaches after the start does not hear it
+    // once-per-process Ubuntu check. Not journaled: an app that attaches after the start does not hear the notice, but
+    // the chat's info and note carry the warnings (fix round 3), and its pane says them in the line above the thread
     sandboxWarn: {
       claudeUsernsRestricted: a.spawner.sandboxWarn?.claudeUsernsRestricted ?? (() => false),
       warn: (id, ws) => {

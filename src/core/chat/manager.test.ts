@@ -1679,6 +1679,10 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
     const info = r2.manager.spawn({ account: codexAccount, cwd: above, sandbox: true })
     expect(r2.spawned).toHaveLength(1)
     expect(told).toEqual([[info.id, ['homeInWorkFolder']]])
+    // Task E fix round 3: on the info and in the chat proc's note too, so a pane mounted later, an app that attaches
+    // after the start and one taken back after a restart can show it
+    expect(info.sandboxWarnings).toEqual(['homeInWorkFolder'])
+    expect(r2.spawned[0].opts.meta?.restore).toMatchObject({ sandboxed: true, sandboxWarnings: ['homeInWorkFolder'] })
     expect(spawned).toHaveLength(1)
   })
 

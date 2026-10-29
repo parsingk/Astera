@@ -96,4 +96,18 @@ describe('whether a session runs in the sandbox, read from its note', () => {
       expect(chatInfoFromNote({ kind: 'chat', id: 'c1', restore })).not.toHaveProperty('sandboxKind')
     }
   })
+
+  // Task E fix round 3: a sandboxed start's warnings ride the note beside the kind, so a Host worker's tab and a tab taken
+  // back after a restart show them; only the warnings this build knows, only on a sandboxed note, each once
+  it('keeps the start warnings beside it, and only known ones on a sandboxed note', () => {
+    const restore = { ...base, sandboxed: true, sandboxKind: 'sandbox', sandboxWarnings: ['claudeUserns', 'homeInWorkFolder'] }
+    expect(sessionInfoFromNote({ kind: 'session', id: 's1', restore })).toMatchObject({ sandboxWarnings: ['claudeUserns', 'homeInWorkFolder'] })
+    expect(chatInfoFromNote({ kind: 'chat', id: 'c1', restore })).toMatchObject({ sandboxWarnings: ['claudeUserns', 'homeInWorkFolder'] })
+    const mixed = { ...base, sandboxed: true, sandboxWarnings: ['homeInWorkFolder', 'other', 7, 'homeInWorkFolder'] }
+    expect(sessionInfoFromNote({ kind: 'session', id: 's1', restore: mixed })).toMatchObject({ sandboxWarnings: ['homeInWorkFolder'] })
+    for (const r of [{ ...base, sandboxWarnings: ['homeInWorkFolder'] }, { ...base, sandboxed: true, sandboxWarnings: [] }, { ...base, sandboxed: true, sandboxWarnings: 'homeInWorkFolder' }]) {
+      expect(sessionInfoFromNote({ kind: 'session', id: 's1', restore: r })).not.toHaveProperty('sandboxWarnings')
+      expect(chatInfoFromNote({ kind: 'chat', id: 'c1', restore: r })).not.toHaveProperty('sandboxWarnings')
+    }
+  })
 })

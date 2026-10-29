@@ -190,6 +190,8 @@ describe('core.ts builds the read-only list once and hands it to the twins and b
     // Task E fix round 2: Astera's own %LOCALAPPDATA%\astera whole on Windows, and the public CLI's own files elsewhere
     expect(built).toMatch(/localAstera: localAsteraDir\(process\.platform, process\.env, os\.homedir\(\)\)/)
     expect(built).toMatch(/publicShuttle: publicShuttleFiles\(\{ platform: process\.platform, binDir: binDirFor\(\{ platform: process\.platform, env: process\.env, home: os\.homedir\(\) \}\), names: shuttleNames\(process\.platform\), exists: existsSync \}\)/)
+    // Task E fix round 3 (re-review Minor 5): only what is there when the app starts, each where it really is
+    expect(built).toMatch(/resolve: realPathOrNull/)
   })
   it('the StatusLineManager, the terminal checks and the chat deps all take that one list', () => {
     expect(core).toMatch(/const statusLine = new StatusLineManager\(\n    userDataDir,[\s\S]*\{ findRuntime, readOnly \}\n  \)/)
@@ -207,6 +209,11 @@ describe('the Host hands its chat sessions the spawner’s read-only list and ap
   const here = path.dirname(fileURLToPath(import.meta.url))
   const rollingWiring = readFileSync(path.join(here, '..', 'host', 'rollingWiring.ts'), 'utf8')
   const hostChats = readFileSync(path.join(here, '..', 'host', 'hostChats.ts'), 'utf8')
+  it('the spawner builds its list from what is there, each where it really is (fix round 3)', () => {
+    const spawner = readFileSync(path.join(here, '..', 'host', 'spawner.ts'), 'utf8')
+    const built = spawner.slice(spawner.indexOf('const readOnly = sandboxReadOnly({'), spawner.indexOf('\n  })', spawner.indexOf('const readOnly = sandboxReadOnly({')))
+    expect(built).toMatch(/resolve: realPathOrNull/)
+  })
   it('rollingWiring reads them off the spawner for the chat deps', () => {
     expect(rollingWiring).toMatch(/appKeyFile: a\.spawner\.appKeyFile \?\? null,\n    readOnly: a\.spawner\.readOnly \?\? \[\],/)
   })
@@ -215,29 +222,45 @@ describe('the Host hands its chat sessions the spawner’s read-only list and ap
   })
 })
 
-// Task E fix round 2: every start path tells a sandboxed start's warnings (the managers decide, sandboxStartWarnings;
-// the wiring words and delivers). The app's two managers are given the sink in ipc.ts, where the language and the Host
-// log are; the Host's terminal manager in spawner.ts (its pty's ring, the Host log); the Host's chats through
-// rollingWiring and hostChats (the chat notice to the apps, the Host log). Each asks the once-per-process Ubuntu check.
-// registerIpc and the Host's compose cannot run here: guarded by their text
+// Task E fix rounds 2 and 3: every start path tells a sandboxed start's warnings (the managers decide, startWarningsFor,
+// and put them on the session's info and note, which the tab shows as a line above the terminal or the chat). The
+// app's two managers are given the sink in ipc.ts; the Host's terminal manager in spawner.ts; the Host's chats through
+// rollingWiring and hostChats (the chat notice to the apps). Every sink logs to the Host log; nothing is written into a
+// terminal's pty stream any more (round 3: Codex and Claude Code's fullscreen draw on the alternate screen, which hides a
+// line written at the start until the CLI exits). Each asks the once-per-process Ubuntu check. registerIpc and the
+// Host's compose cannot run here: guarded by their text
 describe('every start path carries the sandbox start warnings', () => {
   const here = path.dirname(fileURLToPath(import.meta.url))
   const read = (rel: string): string => readFileSync(path.join(here, rel), 'utf8')
-  it('the app gives both managers the sink: a terminal line and a chat notice, each in the app language, and the Host log', () => {
+  /** The object a `<lhs> = {` or `const <lhs>: … = {` assignment gives, up to its closing brace at the same indent. */
+  const sinkOf = (text: string, opening: string): string => {
+    const at = text.indexOf(opening)
+    expect(at, opening).toBeGreaterThan(-1)
+    const indent = /[ ]*$/.exec(text.slice(0, at))![0]
+    return text.slice(at, text.indexOf(`\n${indent}}`, at))
+  }
+  it('the app gives both managers the sink: the Host log for a terminal, and a chat its notice too', () => {
     const ipc = read('ipc.ts')
-    expect(ipc).toMatch(/core\.sessions\.sandboxWarn = \{[\s\S]*?claudeUsernsRestricted,[\s\S]*?core\.sessions\.say\(id, `\\r\\n\[Astera\] \$\{t\(core\.lang, m\.key\)\}\\r\\n`\)/)
+    const terminal = sinkOf(ipc, 'core.sessions.sandboxWarn = {')
+    expect(terminal).toMatch(/claudeUsernsRestricted,\n\s*warn: \(id, ws\) => hostWiring\?\.log\(`sandbox: session=\$\{id\} starts with a warning: \$\{ws\.join\(', '\)\}`\)/)
+    expect(terminal).not.toMatch(/\.say\(|\[Astera\]/)
     expect(ipc).toMatch(/core\.chat\.sandboxWarn = \{[\s\S]*?claudeUsernsRestricted,[\s\S]*?core\.chat\.notice\(id, \{ key: 'rollRefused', reason: m \}\)/)
     expect(ipc).toMatch(/const claudeUsernsRestricted = claudeUsernsCheck\(process\.platform\)/)
   })
-  it('the Host gives its terminal manager the sink: a line in the pty ring, and the Host log', () => {
+  it('the Host gives its terminal manager the sink: the Host log, and nothing into the pty ring', () => {
     const spawner = read('../host/spawner.ts')
     expect(spawner).toMatch(/const claudeUsernsRestricted = claudeUsernsCheck\(platform\)/)
-    expect(spawner).toMatch(/const sandboxWarn: SandboxWarnSink = \{[\s\S]*?claudeUsernsRestricted,[\s\S]*?registry\.say\(p, `\\r\\n\[Astera\] \$\{t\(lang\(\), m\.key\)\}\\r\\n`\)/)
+    const sink = sinkOf(spawner, 'const sandboxWarn: SandboxWarnSink = {')
+    expect(sink).toMatch(/claudeUsernsRestricted,\n\s*warn: \(id, ws\) => log\(`sandbox: session=\$\{id\} starts with a warning: \$\{ws\.join\(', '\)\}`\)/)
+    expect(sink).not.toMatch(/registry\.say|\[Astera\]/)
     expect(spawner).toMatch(/sessions\.sandboxWarn = sandboxWarn\n/)
     // Exposed, so the Host's chats ask the same once-per-process check (rollingWiring)
     expect(spawner).toMatch(/\n    readOnly,\n    sandboxWarn,\n/)
-    // The Host's index hands the spawner the app's language
-    expect(read('../host/index.ts')).toMatch(/createHostSpawner\(\{[\s\S]*?lang: \(\) => \(wiring \? wiring\.checks\.langNow\(\) : 'en'\),/)
+    // No language to word a line in: the Host's index no longer hands the spawner one
+    const index = read('../host/index.ts')
+    const call = index.slice(index.indexOf('const spawner = createHostSpawner({'), index.indexOf('\n  })', index.indexOf('const spawner = createHostSpawner({')))
+    expect(call).toMatch(/profileDir,/)
+    expect(call).not.toMatch(/\blang:/)
   })
   it('the Host hands its chats the sink through rollingWiring and hostChats: the chat notice to the apps, and the log', () => {
     const rollingWiring = read('../host/rollingWiring.ts')

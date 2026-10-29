@@ -50,10 +50,11 @@ import { useChatState } from "../../hooks/useChatState";
 import { toast } from "../../lib/toast";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { ConvPart, ConvTurn } from "../../../../core/history/convTypes";
-import type { RollStateEvent, SchedStateEvent } from "../../../../core/types";
+import type { RollStateEvent, SandboxStartWarning, SchedStateEvent } from "../../../../core/types";
 import { chatBannerFor, composerLockedFor } from "./paneTransport";
 import { pollFileIndex } from "../../lib/fileIndexPoll";
 import { SessionStateBanners, stateBannerHeight } from "../SessionStateBanners";
+import { SandboxWarningLine } from "../SandboxWarningLine";
 
 export interface ConversationPaneProps {
   sessionId: string;
@@ -79,6 +80,9 @@ export interface ConversationPaneProps {
   /** Opens a file a SendUserFile row names, once main has resolved it (App: media in the viewer,
    *  anything else as a file tab). Absent, the row's file names are plain text. */
   onOpenPath?: (path: string) => void;
+  /** What the session's sandboxed start warned about (SessionInfo.sandboxWarnings, Task E fix round 3), said in the line
+   *  above the thread. Absent for a session outside the sandbox or with nothing to say. */
+  sandboxWarnings?: readonly SandboxStartWarning[];
 }
 
 // ---- pure functions ------------------------------------------------------------------------
@@ -439,7 +443,8 @@ export function ConversationPane({
   rollState = null,
   schedState = null,
   cwd,
-  onOpenPath
+  onOpenPath,
+  sandboxWarnings
 }: ConversationPaneProps): ReactNode {
   const { t } = useI18n();
   // A SendUserFile row's file button (ToolRow.tsx). The path goes through files.resolveLink first even
@@ -1535,6 +1540,11 @@ export function ConversationPane({
           <SessionStateBanners sessionId={sessionId} rollState={rollState} schedState={schedState} />
         </div>
       )}
+      {/* Task E fix round 3: what the sandboxed start warned about, from the session's info, outside the priority slot
+          as the bypass mark below is: a carry-on prompt's first turn does not retire it, an app that attaches later
+          still has it, and it pushes no error or endsWithApp notice aside (paneTransport.ts chatBannerFor leaves its
+          notice out of the slot). Closed by the person, it stays closed for this session */}
+      <SandboxWarningLine sessionId={sessionId} warnings={sandboxWarnings} />
       {/* design F5 fix round 1 (Critical 2): the durable mark. Deliberately outside the single
           priority banner slot (paneTransport.ts's chatBannerFor) — `notice` already lives there and
           is meant to retire itself, but this fact must not compete with (or lose to) a request, an

@@ -32,7 +32,7 @@ import { sandboxKindOf } from '../sandbox/coverage'
 import { PreparedLayouts, codexVersionBlocker, prepareCodexSandbox, sessionSandboxArgs, type CodexVersionProbe, type CodexWindowsReady } from '../sandbox/prepared'
 import { codexWindowsReadiness, runCodex } from '../sandbox/windowsReadiness'
 import type { ClaudeSandboxStart } from '../sandbox/claudeStart'
-import { tellSandboxStart, type SandboxWarnSink } from '../sandbox/startWarnings'
+import { startWarningsFor, tellSandboxStart, type SandboxWarnSink } from '../sandbox/startWarnings'
 import type { CodexExcludes } from '../sandbox/gitExcludes'
 import type { SandboxScope } from './statusline'
 
@@ -235,9 +235,9 @@ export class SessionManager {
   /** The codex version question a sandboxed Codex start asks at its prepare and again at its spawn (final review I2), the
    *  one Enforce asks. Unset, a sandboxed Codex start is refused as for a version not known. */
   codexVersion?: CodexVersionProbe
-  /** Where a sandboxed start's warnings are told (Task E fix round 2, core/sandbox/startWarnings.ts): the app's and the
-   *  Host's wiring each give one, which words them into the tab and the log. Unset, nothing is told; the start is the
-   *  same either way. */
+  /** Where a sandboxed start's warnings are told (Task E fix rounds 2 and 3, core/sandbox/startWarnings.ts): the app's
+   *  and the Host's wiring each give one, which logs them; the tab reads them off the session's info. Also asked the
+   *  Ubuntu check. Unset, nothing is logged and no Ubuntu warning is given; the start is the same either way. */
   sandboxWarn?: SandboxWarnSink
 
   /**
@@ -441,6 +441,10 @@ export class SessionManager {
     const sandboxed = opts.sandbox === true
     // What protection it is, said in the info and the note (SessionInfo.sandboxKind): Claude on Windows has deny rules only
     const sandboxKind = sandboxed ? sandboxKindOf(providerOf(opts.account), this.checks.platform) : undefined
+    // Task E fix rounds 2 and 3: what the sandbox will not do here, in the info and the note beside the kind, for the tab to
+    // show above the terminal (a line in the pty's stream would sit behind the CLI's alternate screen)
+    const sandboxWarnings = sandboxed ? startWarningsFor(this.sandboxWarn, { provider: providerOf(opts.account), platform: this.checks.platform, cwd: opts.cwd, homeDir: this.homeDir }) : []
+    const warned = sandboxWarnings.length > 0 ? { sandboxWarnings } : {}
     const sandboxedCodex = sandboxed && providerOf(opts.account) === 'codex'
     // Claude's sandbox is its settings file: the version the prepare asked is asked again here (the CLI may have been
     // updated since), and a session the twin was not written for is refused below rather than started outside it
@@ -603,7 +607,7 @@ export class SessionManager {
           ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {}),
           ...(observed ? { observed: true } : {}),
           ...(enforced ? { enforced: true } : {}),
-          ...(sandboxed ? { sandboxed: true, sandboxKind } : {})
+          ...(sandboxed ? { sandboxed: true, sandboxKind, ...warned } : {})
         }
       }
     })
@@ -624,12 +628,12 @@ export class SessionManager {
       schedule: opts.schedule,
       ...(opts.startedBy ? { startedBy: opts.startedBy } : {}),
       ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {}),
-      ...(sandboxed ? { sandboxed: true as const, sandboxKind } : {})
+      ...(sandboxed ? { sandboxed: true as const, sandboxKind, ...warned } : {})
     }
     const tracked = this.track(info, pty)
     // Task E fix round 2: started as it would be anyway, and told once what the sandbox will not do here
     if (sandboxed)
-      tellSandboxStart(this.sandboxWarn, { sessionId: info.id, provider: providerOf(opts.account), platform: this.checks.platform, cwd: opts.cwd, homeDir: this.homeDir }, this.checks.log)
+      tellSandboxStart(this.sandboxWarn, info.id, sandboxWarnings, this.checks.log)
     return tracked
   }
 
@@ -644,7 +648,8 @@ export class SessionManager {
       hostSocketDir: this.checks.hostSocketDir ?? null,
       otherHostDirs: otherHosts,
       appKeyFile: this.checks.appKeyFile ?? null,
-      readOnly: this.checks.readOnly ?? []
+      readOnly: this.checks.readOnly ?? [],
+      log: this.checks.log
     })
   }
 

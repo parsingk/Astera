@@ -70,7 +70,7 @@ import { createExtensionsRoute } from './host/extensionsRoute'
 import { createAgentProfilesRoute } from './host/agentProfilesRoute'
 import { forgetReadiness } from '../core/sandbox/windowsReadiness'
 import { forcedSandboxBlocker } from '../core/sandbox/unavailable'
-import { claudeUsernsCheck, sandboxWarningMessage, sandboxWarningMessages } from '../core/sandbox/startWarnings'
+import { claudeUsernsCheck, sandboxWarningMessage } from '../core/sandbox/startWarnings'
 import { createAuditRoute } from './host/auditRoute'
 import { createCredentialsRoute } from './host/credentialsRoute'
 import { createAppPullRequests } from './host/appPullRequests'
@@ -1559,17 +1559,15 @@ export function registerIpc(
     }
   }
 
-  // Task E fix round 2 (the person's decision): a sandboxed start that will not be as safe, or will not work, as the person
-  // may expect starts as it does today, and says why once: a terminal tab as a line of its output, the way a refused
-  // roll's line is put there, and a chat as its notice, which its pane words; the same fact goes to the Host log. The
-  // managers decide (core/sandbox/startWarnings.ts); the Ubuntu check is asked once for this app process
+  // Task E fix rounds 2 and 3 (the person's decision): a sandboxed start that will not be as safe, or will not work, as
+  // the person may expect starts as it does today, and says why. The managers decide (core/sandbox/startWarnings.ts) and
+  // put the warnings on the session's info and note, which the tab shows as a line above the terminal or the chat (a line
+  // in a terminal's output would sit behind the CLI's alternate screen); a chat also gets its notice at the start, which
+  // its pane words; the same fact goes to the Host log. The Ubuntu check is asked once for this app process
   const claudeUsernsRestricted = claudeUsernsCheck(process.platform)
   core.sessions.sandboxWarn = {
     claudeUsernsRestricted,
-    warn: (id, ws) => {
-      for (const m of sandboxWarningMessages(ws)) core.sessions.say(id, `\r\n[Astera] ${t(core.lang, m.key)}\r\n`)
-      hostWiring?.log(`sandbox: session=${id} starts with a warning: ${ws.join(', ')}`)
-    }
+    warn: (id, ws) => hostWiring?.log(`sandbox: session=${id} starts with a warning: ${ws.join(', ')}`)
   }
   core.chat.sandboxWarn = {
     claudeUsernsRestricted,

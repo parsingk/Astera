@@ -1932,16 +1932,25 @@ describe('the sandbox at spawn', () => {
     const home = path.join(cwd, 'home')
     mkdirSync(home)
     const argv: string[][] = []
-    const manager = new SessionManager((_f, a) => (argv.push(a as string[]), new FakePty()), makeDescriptors('linux', home, undefined, daemon(true)),
+    const opened: PtySpawnOptions[] = []
+    const manager = new SessionManager((_f, a, o) => (argv.push(a as string[]), opened.push(o), new FakePty()), makeDescriptors('linux', home, undefined, daemon(true)),
       100, 20, home, undefined, [], { ...BASE.linux }, checksFor('linux'))
     manager.codexVersion = versionOf('0.160.0')
     const told: Array<[string, string[]]> = []
     manager.sandboxWarn = { claudeUsernsRestricted: () => true, warn: (id, ws) => void told.push([id, [...ws]]) }
+    const said: string[] = []
+    manager.onData = (e) => void said.push(e.data)
     await manager.prepare({ account: codexAccount, cwd, sandbox: true })
     const info = manager.spawn({ account: codexAccount, cwd, sandbox: true })
     expect(argv).toHaveLength(1)
     // Codex: the home folder only, never the Claude-only Ubuntu warning
     expect(told).toEqual([[info.id, ['homeInWorkFolder']]])
+    // Task E fix round 3 (re-review Important 1): the warnings ride the info and the note, as sandboxKind does, for the tab
+    // to show above the terminal; nothing is written into the pty's stream, which a CLI's alternate screen hides
+    expect(info.sandboxWarnings).toEqual(['homeInWorkFolder'])
+    expect(opened[0].meta?.restore).toMatchObject({ sandboxed: true, sandboxWarnings: ['homeInWorkFolder'] })
+    expect(said.join('')).not.toContain('[Astera]')
+    expect(manager.list().find((s) => s.id === info.id)?.sandboxWarnings).toEqual(['homeInWorkFolder'])
     const project = path.join(home, 'p')
     mkdirSync(path.join(project, '.git'), { recursive: true })
     await manager.prepare({ account: codexAccount, cwd: project, sandbox: true })
@@ -1964,7 +1973,8 @@ describe('the sandbox at spawn', () => {
     const profile = codexArgs(argv[0]).find((a) => a.startsWith('permissions='))!
     for (const r of roots) expect(profile).toContain(`"${r}"="read"`)
     const bad = rig('win32', { readOnly: ['C:/Users/t/AppData/Local/astera 100%/host-runtime'] })
-    await expect(bad.manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: path-unsafe$/)
+    // Task E fix round 3: not the work folder, so its own code, whose words do not name the work folder (re-review Minor 6)
+    await expect(bad.manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: named-path-unsafe$/)
     expect(() => bad.manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: /)
     expect(bad.argv).toHaveLength(0)
   })
@@ -2132,10 +2142,14 @@ describe('the sandbox at spawn', () => {
     const cwd = repo()
     const argv: string[][] = []
     const home = 'C:\\Users\\100%'
+    const logs: string[] = []
     const manager = new SessionManager((_f, a) => (argv.push(a as string[]), new FakePty()), makeDescriptors('win32', home, undefined, daemon(true)),
-      100, 20, home, undefined, [], { Path: 'C:\\Windows' }, checksFor('win32'))
+      100, 20, home, undefined, [], { Path: 'C:\\Windows' }, { ...checksFor('win32'), log: (m) => void logs.push(m) })
     manager.codexVersion = versionOf('0.160.0')
-    await expect(manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: path-unsafe$/)
+    // A login folder in the home, not the work folder: its own code, and the log names the path (Task E fix round 3,
+    // re-review Minor 6), at the prepare and again at the spawn
+    await expect(manager.prepare({ account: codexAccount, cwd, sandbox: true })).rejects.toThrow(/^SANDBOX_UNAVAILABLE: named-path-unsafe$/)
+    expect(logs.filter((l) => l.includes('C:/Users/100%/.ssh'))).toHaveLength(1)
     expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: /)
     expect(argv).toHaveLength(0)
   })
@@ -2147,15 +2161,18 @@ describe('the sandbox at spawn', () => {
     const flipping = Object.assign(() => takes, { warm: async () => {} })
     let appData = 'C:\\Users\\t\\AppData\\Roaming'
     const spawned: PtySpawnOptions[] = []
+    const logs: string[] = []
     const manager = new SessionManager((_f, _a, o) => (spawned.push(o), new FakePty()), makeDescriptors('win32', HOME.win32, undefined, flipping),
-      100, 20, HOME.win32, undefined, [], () => ({ Path: 'C:\\Windows', APPDATA: appData }), checksFor('win32'))
+      100, 20, HOME.win32, undefined, [], () => ({ Path: 'C:\\Windows', APPDATA: appData }), { ...checksFor('win32'), log: (m) => void logs.push(m) })
     manager.codexVersion = versionOf('0.160.0')
     await manager.prepare({ account: codexAccount, cwd, sandbox: true })
     takes = false
     expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: codex-daemon codex$/)
     takes = true
     appData = 'C:\\Users\\t\\AppData\\R&D'
-    expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: path-unsafe$/)
+    expect(() => manager.spawn({ account: codexAccount, cwd, sandbox: true })).toThrow(/^SANDBOX_UNAVAILABLE: named-path-unsafe$/)
+    // The log names the path the spawn refused for (Task E fix round 3, re-review Minor 6)
+    expect(logs.some((l) => l.includes('C:/Users/t/AppData/R&D/GitHub CLI'))).toBe(true)
     expect(spawned).toHaveLength(0)
     appData = 'C:\\Users\\t\\AppData\\Roaming'
     manager.spawn({ account: codexAccount, cwd, sandbox: true })

@@ -46,7 +46,7 @@ describe('SANDBOX_COVERAGE', () => {
   // Task 8 fix round 1: said with the table, under it and beside the Claude Windows row
   it('says that the home stays readable outside the login folders, and that Claude Code’s shell on Windows is not restricted', () => {
     expect(SANDBOX_TABLE_CAPTION).toBe('settings.security.sandboxCoverage.homeReadable')
-    // Task E fix round 2: the Linux Claude row says Ubuntu 25.04 and later needs bubblewrap granted userns in AppArmor
+    // Task E fix rounds 2 and 3: the Linux Claude row says its shell commands fail on Ubuntu 25.04 and later
     expect(SANDBOX_COVERAGE.map((r) => sandboxRowCaption(r))).toEqual([
       'settings.security.sandboxCoverage.windowsClaude',
       null,

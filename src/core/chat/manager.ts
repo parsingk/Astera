@@ -26,7 +26,7 @@ import { applyHiding, type HidingSource } from '../credentials/hiding'
 import { isObserving } from '../audit/policy'
 import { enforceUnavailable, type EnforceStart } from '../audit/enforce'
 import { PreparedLayouts, codexVersionBlocker, fitsOnTheLine, prepareCodexSandbox, sessionSandboxArgs, type CodexVersionProbe, type CodexWindowsReady } from '../sandbox/prepared'
-import { tellSandboxStart, type SandboxWarnSink } from '../sandbox/startWarnings'
+import { startWarningsFor, tellSandboxStart, type SandboxWarnSink } from '../sandbox/startWarnings'
 import { appServerSandboxArgs, codexSandboxEnv } from '../sandbox/codexProfile'
 import { sandboxUnavailable } from '../sandbox/unavailable'
 import { sandboxKindOf } from '../sandbox/coverage'
@@ -105,8 +105,9 @@ export interface ChatManagerDeps {
   /** Writes the copy of the person's global git excludes a sandboxed win32 Codex chat reads (SpawnChecks' twin). Absent,
    *  none is written. */
   codexExcludes?: CodexExcludes
-  /** Where a sandboxed chat start's warnings are told (Task E fix round 2; SessionManager.sandboxWarn's twin). The Host's
-   *  chats get it here; the app sets ChatSessionManager.sandboxWarn once it has the language and the Host log. */
+  /** Where a sandboxed chat start's warnings are told (Task E fix rounds 2 and 3; SessionManager.sandboxWarn's twin): the
+   *  chat's notice and the Host log. The Host's chats get it here; the app sets ChatSessionManager.sandboxWarn once it
+   *  has the Host log. */
   sandboxWarn?: SandboxWarnSink
 }
 
@@ -375,6 +376,10 @@ export class ChatSessionManager {
     const sandboxed = opts.sandbox === true
     // What protection it is, said in the info and the note (SessionInfo.sandboxKind): Claude on Windows has deny rules only
     const sandboxKind = sandboxed ? sandboxKindOf(provider, this.deps.platform) : undefined
+    // Task E fix rounds 2 and 3: what the sandbox will not do here, in the info and the note beside the kind, so a pane
+    // mounted later or an app that attaches after the start can still show it (the notice says it at the start)
+    const sandboxWarnings = sandboxed ? startWarningsFor(this.sandboxWarn, { provider, platform: this.deps.platform, cwd: opts.cwd, homeDir: this.deps.homeDir }) : []
+    const warned = sandboxWarnings.length > 0 ? { sandboxWarnings } : {}
     const sandboxedCodex = sandboxed && provider === 'codex'
     // The codex floor the prepare asked, asked again: the CLI may have changed since (final review I2)
     const tooOld = sandboxedCodex ? codexVersionBlocker(this.deps.codexVersion) : null
@@ -414,7 +419,8 @@ export class ChatSessionManager {
             hostSocketDir: this.deps.hostSocketDir ?? null,
             otherHostDirs: this.sandboxLayouts.otherHostsOf(opts.account.id, opts.cwd, Date.now()),
             appKeyFile: this.deps.appKeyFile ?? null,
-            readOnly: this.deps.readOnly ?? []
+            readOnly: this.deps.readOnly ?? [],
+            log: this.deps.log
           })
         )
       : []
@@ -493,7 +499,7 @@ export class ChatSessionManager {
         ...(isObserving(caps?.context.policyMode ?? 'compatibility') ? { observed: true } : {}),
         ...(enforced ? { enforced: true } : {}),
         // The sandbox, as a terminal session's note has it: a Host handing the session back and a roll's successor read it
-        ...(sandboxed ? { sandboxed: true, sandboxKind } : {}),
+        ...(sandboxed ? { sandboxed: true, sandboxKind, ...warned } : {}),
         // design F5 fix round 1 (Critical 2): the durable mark, written into the note itself so an
         // app restart's `adopt()` can restore it too, not only `state()`'s in-memory overlay.
         ...(opts.startWithBypass ? { bypassedToolchain: true } : {}),
@@ -533,7 +539,7 @@ export class ChatSessionManager {
       ...(rollPrompt === undefined ? {} : { rollPrompt }),
       ...(opts.startedBy ? { startedBy: opts.startedBy } : {}),
       ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {}),
-      ...(sandboxed ? { sandboxed: true as const, sandboxKind } : {})
+      ...(sandboxed ? { sandboxed: true as const, sandboxKind, ...warned } : {})
     }
 
     const adapter = this.makeAdapter(proc, { mode: 'fresh' }, provider)
@@ -578,7 +584,7 @@ export class ChatSessionManager {
     const live = this.sessions.get(id)
     if (live) live.started = started
     // Task E fix round 2: started as it would be anyway, and told once what the sandbox will not do here
-    if (sandboxed) tellSandboxStart(this.sandboxWarn, { sessionId: id, provider, platform: this.deps.platform, cwd: opts.cwd, homeDir: this.deps.homeDir }, this.deps.log)
+    if (sandboxed) tellSandboxStart(this.sandboxWarn, id, sandboxWarnings, this.deps.log)
     return { ...info }
   }
 

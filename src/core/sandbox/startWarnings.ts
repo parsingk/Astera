@@ -1,45 +1,70 @@
-// What a sandboxed start warns about (Task E fix round 2; the person's decision, 2026-10-29): the session starts as it
-// does today, and its tab says why the sandbox will not keep out what the person may expect it to, or why its shell will
-// not work. Nothing here refuses a start. Pure: the managers decide, the app and Host wiring word and deliver.
+// What a sandboxed start warns about (Task E fix rounds 2 and 3; the person's decision, 2026-10-29): the session starts
+// as it does today, and its tab says why the sandbox will not keep out what the person may expect it to, or why its shell
+// will not work. Nothing here refuses a start. The managers decide before they build the session's info, where the
+// warnings travel (SessionInfo.sandboxWarnings, in the note too); the tab shows them above the terminal or the chat, a
+// chat's notice says them at the start, and the wiring logs them. Main and the Host only: the check reads files.
 import { readFileSync } from 'node:fs'
-import { isPathWithin } from '../files/tree'
-import type { Message, MessageKey } from '../i18n'
+import path from 'node:path'
+import { comparablePath, isPathWithin } from '../files/tree'
+import type { SandboxStartWarning } from '../types'
 
-export type SandboxStartWarning = 'claudeUserns' | 'homeInWorkFolder'
+export type { SandboxStartWarning } from '../types'
+export { sandboxWarningMessage } from './warningKeys'
 
 /** Where a session manager tells a sandboxed start's warnings (SessionManager.sandboxWarn, ChatSessionManager's twin):
- *  the app and the Host each give one, which words them in the person's language into the session's tab and its log.
- *  `claudeUsernsRestricted` is the Ubuntu check, run once per process by whoever gives the sink. */
+ *  the app and the Host each give one, which logs them and, for a chat, raises its notice. `claudeUsernsRestricted` is
+ *  the Ubuntu check, run once per process by whoever gives the sink. */
 export interface SandboxWarnSink {
   claudeUsernsRestricted(): boolean
   warn(sessionId: string, warnings: readonly SandboxStartWarning[]): void
 }
 
-/** What a manager does after a sandboxed start: decides the warnings and tells the sink, once. Never throws: a sink that
- *  fails costs the warning, not the session. */
-export function tellSandboxStart(
+/** The warnings of one sandboxed start, asked before the session's info is built: the sink's Ubuntu check is asked only
+ *  for a Claude session on Linux, and a check that throws counts as no (a hint, not a gate). */
+export function startWarningsFor(
   sink: SandboxWarnSink | undefined,
-  o: { sessionId: string; provider: 'claude' | 'codex'; platform: NodeJS.Platform; cwd: string; homeDir: string },
-  log: (m: string) => void
-): void {
-  if (!sink) return
-  try {
-    const restricted = o.provider === 'claude' && o.platform === 'linux' ? sink.claudeUsernsRestricted() : false
-    const ws = sandboxStartWarnings({ provider: o.provider, platform: o.platform, cwd: o.cwd, homeDir: o.homeDir, claudeUsernsRestricted: restricted })
-    if (ws.length > 0) sink.warn(o.sessionId, ws)
-  } catch (err) {
-    log(`sandbox: the start warnings of session=${o.sessionId} could not be told: ${String(err)}`)
+  o: { provider: 'claude' | 'codex'; platform: NodeJS.Platform; cwd: string; homeDir: string }
+): SandboxStartWarning[] {
+  let restricted = false
+  if (sink && o.provider === 'claude' && o.platform === 'linux') {
+    try {
+      restricted = sink.claudeUsernsRestricted()
+    } catch {
+      restricted = false
+    }
   }
+  return sandboxStartWarnings({ ...o, claudeUsernsRestricted: restricted })
+}
+
+/** What a manager does once the session is tracked: tells the sink its warnings, if any. Never throws: a sink that fails
+ *  costs the log line or the chat's notice, not the session. */
+export function tellSandboxStart(sink: SandboxWarnSink | undefined, sessionId: string, ws: readonly SandboxStartWarning[], log: (m: string) => void): void {
+  if (!sink || ws.length === 0) return
+  try {
+    sink.warn(sessionId, ws)
+  } catch (err) {
+    log(`sandbox: the start warnings of session=${sessionId} could not be told: ${String(err)}`)
+  }
+}
+
+/** Whether `cwd` holds `homeDir`: isPathWithin (core/files/tree.ts: case folded on Windows and macOS only), and a
+ *  filesystem or drive root, which isPathWithin misses because a resolved root already ends in a separator (re-review
+ *  Minor 1): `/` holds every home, `C:\` the one on drive C and not another drive's. isPathWithin itself is left as it
+ *  is: the files IPC guard relies on it. */
+function holdsHome(cwd: string, homeDir: string, platform: NodeJS.Platform): boolean {
+  const base = comparablePath(cwd, platform)
+  if (path.parse(base).root === base) return comparablePath(homeDir, platform).startsWith(base)
+  return isPathWithin(cwd, homeDir, platform)
 }
 
 /**
  * The warnings for one sandboxed start, in a fixed order:
  * - `claudeUserns`: a Claude session on Linux where Ubuntu's AppArmor profile confines bubblewrap
- *   (`claudeUsernsRestricted`, ubuntuBwrapRestricted below), so srt's apply-seccomp cannot make its namespace and every
- *   shell command fails. Codex is not affected (its own sandbox ran normally on Ubuntu 26, run 40761549024).
- * - `homeInWorkFolder`: the work folder is the home folder or holds it, so the sandbox lets the session write anything
- *   in the home folder. Containment is the sandbox code's own path rule (core/files/tree.ts isPathWithin: case folded
- *   on Windows and macOS only). Both CLIs, every OS.
+ *   (`claudeUsernsRestricted`, ubuntuBwrapRestricted below), so srt's apply-seccomp cannot run there and every shell
+ *   command fails. Codex is not affected (its own sandbox ran normally on Ubuntu 26, run 40761549024).
+ * - `homeInWorkFolder`: the work folder is the home folder, holds it, or is the root of the filesystem or drive the home
+ *   folder is on, so the sandbox lets the session write anything in the home folder. Both CLIs on every OS but Claude Code on Windows, whose shell has no
+ *   sandbox at all (deny rules for its file tools only, coverage.ts), so "start it in a project folder" would be untrue.
  */
 export function sandboxStartWarnings(o: {
   provider: 'claude' | 'codex'
@@ -50,25 +75,10 @@ export function sandboxStartWarnings(o: {
 }): SandboxStartWarning[] {
   const out: SandboxStartWarning[] = []
   if (o.provider === 'claude' && o.platform === 'linux' && o.claudeUsernsRestricted) out.push('claudeUserns')
-  if (isPathWithin(o.cwd, o.homeDir, o.platform)) out.push('homeInWorkFolder')
+  const denyOnly = o.provider === 'claude' && o.platform === 'win32'
+  if (!denyOnly && holdsHome(o.cwd, o.homeDir, o.platform)) out.push('homeInWorkFolder')
   return out
 }
-
-const KEYS: Record<SandboxStartWarning, MessageKey> = {
-  claudeUserns: 'session.sandbox.warn.claudeUserns',
-  homeInWorkFolder: 'session.sandbox.warn.homeInWorkFolder'
-}
-
-/** The one message a chat's notice carries for its warnings (a chat shows one notice): each alone, or both in one
- *  sentence pair; null for none. A terminal tab gets a line per warning instead (sandboxWarningLines). */
-export function sandboxWarningMessage(ws: readonly SandboxStartWarning[]): Message | null {
-  if (ws.length === 0) return null
-  if (ws.length > 1) return { key: 'session.sandbox.warn.claudeUsernsAndHome' }
-  return { key: KEYS[ws[0]] }
-}
-
-/** The messages a terminal tab gets, one line each. */
-export const sandboxWarningMessages = (ws: readonly SandboxStartWarning[]): Message[] => ws.map((w) => ({ key: KEYS[w] }))
 
 /** The files the bubblewrap check reads, none of them root-only. */
 export const UBUNTU_BWRAP = {

@@ -1173,9 +1173,10 @@ Astera started for it; from any other sandboxed session it is refused with `outs
 run's Job is a sandboxed session's. A sandboxed target is not refused, and a worker's `send` and `ask` in its own run
 stay open whoever its coordinator is.
 On Windows the Codex sandbox is Codex's elevated one, which keeps Credential Manager out, and the repository is named a
-safe directory for the account it runs as; a repository or home folder whose path holds a character cmd.exe reads as
-syntax (`" & | < > ^ %`) cannot be carried to it. Each Codex account's home must have the elevated sandbox set up once
-(Codex's `codex sandbox setup --elevated --current-user`, which brings up Windows' administrator prompt): Astera asks
+safe directory for the account it runs as; a repository, a home folder or one of Astera's own folders whose path holds
+a character cmd.exe reads as syntax (`" & | < > ^ %`) cannot be carried to it. Each Codex account's home must have the
+elevated sandbox set up once (Codex's `codex sandbox setup --elevated --current-user`, which brings up Windows'
+administrator prompt): Astera asks
 before a sandboxed start, Codex's `doctor --json` first and then, only on a home doctor calls complete, an echo through
 the sandbox (on a home with no setup the echo would start the setup and its prompt), and the app offers to set up the
 one account a start was refused for. A ready answer is kept until Astera restarts or a setup runs through it, so a home
@@ -1185,7 +1186,8 @@ echo runs from Settings, so a stale home can read ready there and be refused at 
 is not. A session the sandbox
 cannot be applied to does not start, and says why with `SANDBOX_UNAVAILABLE: <code>`: `codex-daemon codex` for a codex
 that does not take `--no-daemon`, `cli-too-old claude <found> 2.1.306` for an older Claude Code (`cli-version-unknown
-claude` when its version cannot be read, `cli-missing claude` when it is not there), `path-unsafe` for such a path,
+claude` when its version cannot be read, `cli-missing claude` when it is not there), `path-unsafe` for such a path in
+the repository, `named-path-unsafe` for one elsewhere (a login folder, one of Astera's own; the log names it),
 `git-layout` when the folder's git data could not be read, `windows-setup codex <accountId>` for an account whose
 Windows sandbox is not set up (or no longer works: setting up one account's home can leave another's stale),
 `windows-check-failed codex <accountId>` when Codex could not be asked about it (not there, too old for `doctor --json`,

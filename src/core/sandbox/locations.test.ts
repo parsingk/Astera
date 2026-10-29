@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { appKeyDenies, credentialStoreDenies, hostSocketDenies, installRootOf, localAsteraDir, otherHostFolders, profileReadOnly, publicShuttleFiles, sandboxReadOnly, sensitiveLocations, updaterCacheDir } from './locations'
+import { appKeyDenies, credentialStoreDenies, hostSocketDenies, installRootOf, localAsteraDir, otherHostFolders, profileReadOnly, publicShuttleFiles, realPathOrNull, sandboxReadOnly, sensitiveLocations, updaterCacheDir } from './locations'
 
 describe('sandbox locations', () => {
   it('lists E6 on every OS, with gh and gcloud where each OS keeps them', () => {
@@ -80,6 +80,31 @@ describe('sandbox locations', () => {
     expect(sandboxReadOnly({})).toEqual([])
     // Deduped and slashed: the same path twice, and a trailing slash, collapse to one
     expect(sandboxReadOnly({ profileDir: '/p/', updaterCache: '/p' })).toEqual(['/p'])
+  })
+
+  // Task E fix round 3 (re-review Minor 5): the start names only paths that exist, each at its real path, on every OS — a
+  // missing read-only path would have the sandbox put a placeholder file at it (the missing ~/.cache/astera-updater), and a
+  // path through a symlinked ~/.cache or ~/.local would make Codex refuse every command on Linux
+  it('names only paths that exist, each at its real path, when given a resolver', () => {
+    const real: Record<string, string> = { '/h/.config/astera': '/h/.config/astera', '/h/.cache/astera-updater': '/dots/cache/astera-updater' }
+    const resolve = (p: string): string | null => real[p] ?? null
+    expect(
+      sandboxReadOnly({ profileDir: '/h/.config/astera', updaterCache: '/h/.cache/astera-updater', installRoot: '/gone', publicShuttle: ['/h/.local/bin/astera'], resolve })
+    ).toEqual(['/h/.config/astera', '/dots/cache/astera-updater'])
+    // A resolver that throws drops the path
+    expect(sandboxReadOnly({ profileDir: '/p', resolve: () => { throw new Error('EACCES') } })).toEqual([])
+    // The real-path resolver itself: an existing folder at its real path with forward slashes, a missing one null, and
+    // one reached through a linked folder (a junction on Windows, which needs no privilege) at the link's target
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'astera-real-'))
+    try {
+      expect(realPathOrNull(dir)).toBe(realpathSync.native(dir).replace(/\\/g, '/'))
+      expect(realPathOrNull(path.join(dir, 'missing'))).toBeNull()
+      mkdirSync(path.join(dir, 'dots', 'cache', 'astera-updater'), { recursive: true })
+      symlinkSync(path.join(dir, 'dots', 'cache'), path.join(dir, '.cache'), process.platform === 'win32' ? 'junction' : 'dir')
+      expect(realPathOrNull(path.join(dir, '.cache', 'astera-updater'))).toBe(`${realpathSync.native(dir).replace(/\\/g, '/')}/dots/cache/astera-updater`)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   // Task E fix round 2: on Windows %LOCALAPPDATA%\astera is Astera's own folder — the public CLI's `bin`

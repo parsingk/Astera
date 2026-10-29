@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import os from 'node:os'
 import path from 'node:path'
-import { claudeUsernsCheck, sandboxStartWarnings, sandboxWarningMessage, ubuntuBwrapRestricted, UBUNTU_BWRAP } from './startWarnings'
+import { claudeUsernsCheck, sandboxStartWarnings, sandboxWarningMessage, startWarningsFor, ubuntuBwrapRestricted, UBUNTU_BWRAP } from './startWarnings'
 
 const home = path.join(os.tmpdir(), 'astera-home-t')
 
@@ -12,10 +12,35 @@ describe('sandboxStartWarnings', () => {
   it('warns when the work folder is the home folder or holds it, for both CLIs on every OS', () => {
     for (const provider of ['claude', 'codex'] as const)
       for (const platform of ['linux', 'darwin', 'win32'] as const) {
+        // Claude Code on Windows has no sandbox (deny rules for its file tools only), so the advice would be untrue there
+        if (provider === 'claude' && platform === 'win32') continue
         const at = (cwd: string) => sandboxStartWarnings({ provider, platform, cwd, homeDir: home, claudeUsernsRestricted: false })
         expect(at(home), `${provider} ${platform} home`).toEqual(['homeInWorkFolder'])
         expect(at(path.dirname(home)), `${provider} ${platform} above`).toEqual(['homeInWorkFolder'])
       }
+  })
+
+  // Task E fix round 3 (re-review Minor 1): a work folder at the filesystem or drive root holds the home folder too;
+  // isPathWithin adds a separator to a root that already ends in one, so the warning's own check treats a root as holding it
+  it('warns a session at the filesystem or drive root', () => {
+    const root = path.parse(home).root
+    for (const provider of ['claude', 'codex'] as const)
+      expect(sandboxStartWarnings({ provider, platform: 'linux', cwd: root, homeDir: home, claudeUsernsRestricted: false }), provider).toEqual(['homeInWorkFolder'])
+    expect(sandboxStartWarnings({ provider: 'codex', platform: 'win32', cwd: root, homeDir: home, claudeUsernsRestricted: false })).toEqual(['homeInWorkFolder'])
+    // Another drive's root does not hold a home folder on this one (Windows has a root per drive)
+    if (process.platform === 'win32') {
+      const other = /^z/i.test(root) ? 'Y:\\' : 'Z:\\'
+      expect(sandboxStartWarnings({ provider: 'codex', platform: 'win32', cwd: other, homeDir: home, claudeUsernsRestricted: false })).toEqual([])
+      expect(sandboxStartWarnings({ provider: 'codex', platform: 'win32', cwd: root.toLowerCase(), homeDir: home.toUpperCase(), claudeUsernsRestricted: false })).toEqual(['homeInWorkFolder'])
+    }
+  })
+
+  // Task E fix round 3 (re-review Minor 3): Claude Code on Windows is deny-only, its shell is not restricted anywhere, so
+  // "start it in a project folder to keep them out of reach" would be untrue: no home warning there (the coverage table
+  // says its shell is not restricted)
+  it('does not warn Claude Code on Windows about the home folder', () => {
+    expect(sandboxStartWarnings({ provider: 'claude', platform: 'win32', cwd: home, homeDir: home, claudeUsernsRestricted: false })).toEqual([])
+    expect(sandboxStartWarnings({ provider: 'codex', platform: 'win32', cwd: home, homeDir: home, claudeUsernsRestricted: false })).toEqual(['homeInWorkFolder'])
   })
 
   it('does not warn for a project folder inside the home folder, or beside it', () => {
@@ -43,6 +68,24 @@ describe('sandboxStartWarnings', () => {
     expect(sandboxStartWarnings({ provider: 'claude', platform: 'linux', cwd: project, homeDir: home, claudeUsernsRestricted: false })).toEqual([])
     // Both at once, in a fixed order
     expect(sandboxStartWarnings({ provider: 'claude', platform: 'linux', cwd: home, homeDir: home, claudeUsernsRestricted: true })).toEqual(['claudeUserns', 'homeInWorkFolder'])
+  })
+})
+
+// Task E fix round 3: the managers ask the warnings before they build the session's info (they travel on it, as
+// sandboxKind does), asking the sink's Ubuntu check only for a Claude session on Linux; a sink whose check throws gives
+// no Ubuntu warning, and no sink gives the home warning alone
+describe('startWarningsFor', () => {
+  it('asks the sink’s check only for Claude on Linux, and leans to no warning when it throws', () => {
+    let asked = 0
+    const sink = { claudeUsernsRestricted: () => (asked++, true), warn: () => {} }
+    const o = { cwd: path.join(home, 'p'), homeDir: home }
+    expect(startWarningsFor(sink, { ...o, provider: 'claude', platform: 'linux' })).toEqual(['claudeUserns'])
+    expect(startWarningsFor(sink, { ...o, provider: 'codex', platform: 'linux' })).toEqual([])
+    expect(startWarningsFor(sink, { ...o, provider: 'claude', platform: 'darwin' })).toEqual([])
+    expect(asked).toBe(1)
+    const throwing = { claudeUsernsRestricted: () => { throw new Error('x') }, warn: () => {} }
+    expect(startWarningsFor(throwing, { ...o, provider: 'claude', platform: 'linux' })).toEqual([])
+    expect(startWarningsFor(undefined, { cwd: home, homeDir: home, provider: 'codex', platform: 'linux' })).toEqual(['homeInWorkFolder'])
   })
 })
 

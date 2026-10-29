@@ -68,9 +68,8 @@ import { createManagedHooksCheck } from '../core/sessions/managedHooks'
 import { codexNoDaemonProbe, type CodexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
 import { findInstalledHostExe } from '../core/host/installedRuntime'
 import { hostRuntimeBase } from '../core/host/runtime'
-import { installRootOf, localAsteraDir, publicShuttleFiles, sandboxReadOnly, updaterCacheDir } from '../core/sandbox/locations'
-import { claudeUsernsCheck, sandboxWarningMessages, type SandboxWarnSink } from '../core/sandbox/startWarnings'
-import { t, type Lang } from '../core/i18n'
+import { installRootOf, localAsteraDir, publicShuttleFiles, realPathOrNull, sandboxReadOnly, updaterCacheDir } from '../core/sandbox/locations'
+import { claudeUsernsCheck, type SandboxWarnSink } from '../core/sandbox/startWarnings'
 import { hidingLog } from '../core/extensions/secrets'
 import { setBounded } from '../core/bounded'
 import { dispatchLookup } from '../core/orchestration/dispatchIndex'
@@ -109,8 +108,6 @@ export interface HostLocal {
 export interface HostSpawnerDeps {
   /** Where the Host's MCP Gateway listens (Agent Control Plane release 2), asked before each spawn; absent means none. */
   gatewayPort?: () => Promise<number | null>
-  /** The language the Host words a line in a session's tab in (the app's setting, read at each line). Absent, English. */
-  lang?: () => Lang
   profileDir: string
   env: NodeJS.ProcessEnv
   platform: NodeJS.Platform
@@ -353,7 +350,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   // (hostRuntimeBase, the same `cli/host.ts` rule this StatusLineManager's findRuntime uses), electron-updater's download
   // cache, the installed app's own folder (from `cli.exec`, the app's executable), on Windows Astera's own
   // %LOCALAPPDATA%\astera whole (the public CLI's bin, the session-`.cmd` junction; fix round 2), and on macOS and Linux
-  // the public CLI's own files in ~/.local/bin, where they are now. One list, built once for both managers and the twins.
+  // the public CLI's own files in ~/.local/bin, where they are now. One list, built once for both managers and the twins,
+  // naming only what is there when this Host starts, each where it really is (fix round 3: no placeholder file at a
+  // missing one, no read-only path through a linked ~/.cache or ~/.local)
   const hostRuntimeDir = hostRuntimeBase({ platform, localAppData: d.env.LOCALAPPDATA, userData: profileDir, appName: path.win32.basename(profileDir) })
   const readOnly = sandboxReadOnly({
     profileDir,
@@ -361,7 +360,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     updaterCache: updaterCacheDir(platform, d.env, homeDir),
     installRoot: installRootOf(cli.exec, platform),
     localAstera: localAsteraDir(platform, d.env, homeDir),
-    publicShuttle: publicShuttleFiles({ platform, binDir: binDirFor({ platform, env: d.env, home: homeDir }), names: shuttleNames(platform), exists })
+    publicShuttle: publicShuttleFiles({ platform, binDir: binDirFor({ platform, env: d.env, home: homeDir }), names: shuttleNames(platform), exists }),
+    resolve: realPathOrNull
   })
   // The copy of the person's git excludes a sandboxed Codex session on Windows reads, in the temp folder, asked by this
   // spawner's prepares and the Host's chat sessions alike; the elevated sandbox's own account cannot read theirs
@@ -531,18 +531,14 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   // The codex floor a sandboxed Codex start asks, here and in the Host's chat sessions (final review I2)
   const codexVersion = d.codexVersion ?? cliVersions
   sessions.codexVersion = codexVersion
-  // Task E fix round 2: a sandboxed start that will not be as safe, or will not work, as the person may expect starts as
-  // today and says why once, in its pty's ring (replayed to an app that attaches later), the way a refused roll's line is
-  // put there, in the app's language, and in the Host log. The Ubuntu check is asked once for this Host process
-  const lang = d.lang ?? ((): Lang => 'en')
+  // Task E fix rounds 2 and 3: a sandboxed start that will not be as safe, or will not work, as the person may expect
+  // starts as today. Its warnings ride the session's info and note (the manager puts them there), which an app's tab shows
+  // as a line above the terminal, a Job or Task worker's included; the Host log keeps them. Nothing is written into the
+  // pty's ring: the CLI's alternate screen would hide it. The Ubuntu check is asked once for this Host process
   const claudeUsernsRestricted = claudeUsernsCheck(platform)
   const sandboxWarn: SandboxWarnSink = {
     claudeUsernsRestricted,
-    warn: (id, ws) => {
-      const p = registry.sessionPty(id)
-      if (p !== null) for (const m of sandboxWarningMessages(ws)) registry.say(p, `\r\n[Astera] ${t(lang(), m.key)}\r\n`)
-      log(`sandbox: session=${id} starts with a warning: ${ws.join(', ')}`)
-    }
+    warn: (id, ws) => log(`sandbox: session=${id} starts with a warning: ${ws.join(', ')}`)
   }
   sessions.sandboxWarn = sandboxWarn
   sessions.onExit = (e) => {

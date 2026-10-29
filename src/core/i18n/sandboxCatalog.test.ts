@@ -44,6 +44,13 @@ const GIVEN = {
     'フォルダーのパスに Windows のコマンドラインで扱えない文字（" & | < > ^ %）が含まれているため、サンドボックスで起動できません。',
     'La ruta de la carpeta tiene un carácter que la línea de comandos de Windows no admite (" & | < > ^ %), así que no puede iniciarse en el sandbox.'
   ],
+  // Task E fix round 3 (re-review Minor 6): a path the sandbox names besides the work folder, which the log names
+  'session.spawn.sandbox.namedPathUnsafe': [
+    '작업 폴더 말고 sandbox가 지정해야 하는 폴더(Astera 자체 폴더나 홈의 로그인 정보 폴더)의 경로에 Windows 명령줄이 다룰 수 없는 문자(" & | < > ^ %)가 있어 sandbox로 시작할 수 없습니다. 어느 폴더인지는 Astera 로그에 있습니다.',
+    "A folder the sandbox has to name besides the work folder (one of Astera's own, or a login folder in your home) holds a character the Windows command line cannot carry (\" & | < > ^ %), so it cannot start in the sandbox. Astera's log names the folder.",
+    '作業フォルダー以外にサンドボックスが指定するフォルダー（Astera 自身のフォルダー、またはホームのログイン情報のフォルダー）のパスに Windows のコマンドラインで扱えない文字（" & | < > ^ %）が含まれているため、サンドボックスで起動できません。どのフォルダーかは Astera のログに記録されています。',
+    'Una carpeta que el sandbox debe indicar además de la carpeta de trabajo (una de Astera o una carpeta de inicio de sesión de su carpeta personal) tiene un carácter que la línea de comandos de Windows no admite (" & | < > ^ %), así que no puede iniciarse en el sandbox. El registro de Astera indica cuál es.'
+  ],
   'session.spawn.sandbox.gitLayout': [
     '작업 폴더의 git 정보를 읽지 못해 sandbox로 시작할 수 없습니다.',
     "The work folder's git details could not be read, so it cannot start in the sandbox.",
@@ -91,7 +98,8 @@ const GIVEN = {
   ]
 } as const
 
-// Task E fix round 2, in the order ko, en, ja, es: the session starts as today and its tab says this once
+// Task E fix rounds 2 and 3, in the order ko, en, ja, es: the session starts as today and its tab says this. Round 3:
+// the Ubuntu line says what Ubuntu's profile does and points to srt's README for the fix, in its words
 const WARNINGS = {
   'session.sandbox.warn.homeInWorkFolder': [
     '이 sandbox 세션의 작업 폴더가 홈 폴더를 포함하고 있어서, sandbox 안에서 홈 폴더의 프로그램과 설정을 바꿀 수 있습니다. 이것들을 지키려면 프로젝트 폴더에서 시작해 주세요.',
@@ -100,18 +108,18 @@ const WARNINGS = {
     'La carpeta de trabajo de esta sesión del sandbox contiene su carpeta personal, así que los programas y la configuración de su carpeta personal se pueden cambiar desde dentro del sandbox. Iníciela en una carpeta de proyecto para mantenerlos fuera de su alcance.'
   ],
   'session.sandbox.warn.claudeUserns': [
-    '이 시스템에서는 Claude Code의 sandbox가 셸 명령을 실행할 수 없습니다. Ubuntu의 bubblewrap용 AppArmor 프로필(bwrap-userns-restrict)이 namespace에 필요한 권한을 빼앗아, 이 세션의 셸 명령은 모두 실패합니다. 파일 도구는 그대로 쓸 수 있습니다. AppArmor 프로필로 bubblewrap에 userns를 허용하면 해결되며, sysctl kernel.apparmor_restrict_unprivileged_userns=0만으로는 이 프로필이 풀리지 않습니다.',
-    "Claude Code's sandbox cannot run shell commands on this system: Ubuntu's AppArmor profile for bubblewrap (bwrap-userns-restrict) takes away the capabilities its namespace needs, so every shell command in this session will fail. File tools still work. Granting userns to bubblewrap in an AppArmor profile fixes it; the sysctl kernel.apparmor_restrict_unprivileged_userns=0 alone does not lift this profile.",
-    'このシステムでは Claude Code のサンドボックスがシェルコマンドを実行できません。Ubuntu の bubblewrap 用 AppArmor プロファイル(bwrap-userns-restrict)が名前空間に必要な権限を外すため、このセッションのシェルコマンドはすべて失敗します。ファイルツールはそのまま使えます。AppArmor プロファイルで bubblewrap に userns を許可すると解決します。sysctl kernel.apparmor_restrict_unprivileged_userns=0 だけではこのプロファイルは解除されません。',
-    'En este sistema, el sandbox de Claude Code no puede ejecutar comandos de shell: el perfil de AppArmor de Ubuntu para bubblewrap (bwrap-userns-restrict) le quita los permisos que su espacio de nombres necesita, así que todos los comandos de shell de esta sesión fallarán. Las herramientas de archivos siguen funcionando. Se soluciona concediendo userns a bubblewrap en un perfil de AppArmor; el sysctl kernel.apparmor_restrict_unprivileged_userns=0 por sí solo no levanta este perfil.'
+    '이 시스템에서는 Claude Code의 sandbox가 셸 명령을 실행할 수 없습니다. Ubuntu의 bubblewrap용 AppArmor 프로필(bwrap-userns-restrict)이 bubblewrap 안에서 도는 프로그램의 권한을 빼앗아, 이 세션의 셸 명령은 모두 실패합니다. 파일 도구는 그대로 쓸 수 있습니다. Claude Code의 sandbox 런타임(@anthropic-ai/sandbox-runtime) README는 Ubuntu에서 sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0으로 이 제한을 끄거나, 관련 바이너리에 userns를 허용하는 AppArmor 프로필을 추가하라고 안내합니다.',
+    "Claude Code's sandbox cannot run shell commands on this system: Ubuntu's AppArmor profile for bubblewrap (bwrap-userns-restrict) takes capabilities away from the programs running inside bubblewrap, so every shell command in this session will fail. File tools still work. For Ubuntu, the README of Claude Code's sandbox runtime (@anthropic-ai/sandbox-runtime) says to disable the restriction with sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0, or to add an AppArmor profile that grants userns to the relevant binaries.",
+    'このシステムでは Claude Code のサンドボックスがシェルコマンドを実行できません。Ubuntu の bubblewrap 用 AppArmor プロファイル(bwrap-userns-restrict)が bubblewrap の中で動くプログラムから権限を外すため、このセッションのシェルコマンドはすべて失敗します。ファイルツールはそのまま使えます。Claude Code のサンドボックスランタイム(@anthropic-ai/sandbox-runtime)の README は、Ubuntu では sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 でこの制限を無効にするか、関連するバイナリに userns を許可する AppArmor プロファイルを追加するよう案内しています。',
+    'En este sistema, el sandbox de Claude Code no puede ejecutar comandos de shell: el perfil de AppArmor de Ubuntu para bubblewrap (bwrap-userns-restrict) quita los permisos a los programas que se ejecutan dentro de bubblewrap, así que todos los comandos de shell de esta sesión fallarán. Las herramientas de archivos siguen funcionando. Para Ubuntu, el README del entorno de sandbox de Claude Code (@anthropic-ai/sandbox-runtime) indica desactivar la restricción con sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0, o añadir un perfil de AppArmor que conceda userns a los binarios correspondientes.'
   ]
 } as const
 /** The Linux Claude row's caption in What the sandbox blocks (coverage.ts sandboxRowCaption). */
 const CAPTION = [
-  'Ubuntu 25.04 이상: AppArmor에서 bubblewrap에 userns를 허용해야 셸이 동작합니다',
-  'Ubuntu 25.04 and later: the shell needs userns granted to bubblewrap in AppArmor',
-  'Ubuntu 25.04 以降: シェルには AppArmor で bubblewrap に userns を許可する必要があります',
-  'Ubuntu 25.04 y posteriores: el shell necesita que AppArmor conceda userns a bubblewrap'
+  'Ubuntu 25.04 이상: AppArmor의 bubblewrap 프로필 때문에 셸 명령이 실패합니다',
+  "Ubuntu 25.04 and later: shell commands fail under AppArmor's bubblewrap profile",
+  'Ubuntu 25.04 以降: AppArmor の bubblewrap 用プロファイルによりシェルコマンドが失敗します',
+  'Ubuntu 25.04 y posteriores: los comandos de shell fallan por el perfil de AppArmor para bubblewrap'
 ] as const
 
 describe('the sandbox refusals', () => {
@@ -137,7 +145,8 @@ describe('the sandbox refusals', () => {
     expect((CATALOGS.es.messages as Record<string, string>)['session.spawn.sandbox.cliTooOld']).toContain('Actualice la CLI.')
   })
 
-  // Task E fix round 2: the two start warnings, in every language, in the words given; the pair is both sentences
+  // Task E fix round 2: the two start warnings, in every language, in the words given; the pair is both sentences,
+  // with no space between them in Japanese (fix round 3, re-review Minor 4)
   it('says the start warnings in every language, in the words given', () => {
     const order = ['ko', 'en', 'ja', 'es'] as const
     for (const [key, lines] of Object.entries(WARNINGS)) {
@@ -147,7 +156,7 @@ describe('the sandbox refusals', () => {
     }
     order.forEach((lang, i) => {
       const m = CATALOGS[lang].messages as Record<string, string | undefined>
-      expect(m['session.sandbox.warn.claudeUsernsAndHome'], lang).toBe(`${WARNINGS['session.sandbox.warn.claudeUserns'][i]} ${WARNINGS['session.sandbox.warn.homeInWorkFolder'][i]}`)
+      expect(m['session.sandbox.warn.claudeUsernsAndHome'], lang).toBe(`${WARNINGS['session.sandbox.warn.claudeUserns'][i]}${lang === 'ja' ? '' : ' '}${WARNINGS['session.sandbox.warn.homeInWorkFolder'][i]}`)
       expect(m['settings.security.sandboxCoverage.linuxClaudeUbuntu'], lang).toBe(CAPTION[i])
     })
   })

@@ -1,6 +1,7 @@
 // The places a sandboxed session may not read (sandbox design §6): the sensitive locations of the credentials design's E6
 // list, plus the OS credential stores a CLI's own sandbox does not close by itself. All paths come out absolute with forward
 // slashes, the one form both CLIs' settings and the Codex profile take on every OS.
+import { realpathSync } from 'node:fs'
 import { lstat, readdir } from 'node:fs/promises'
 
 const slashed = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '')
@@ -96,15 +97,22 @@ export function publicShuttleFiles(o: { platform: NodeJS.Platform; binDir: strin
     })
 }
 
-/** The whole list of paths a sandboxed session keeps read-only (Task E and its fix rounds 1 and 2): Astera's profile
+/** The whole list of paths a sandboxed session keeps read-only (Task E and its fix rounds 1 to 3): Astera's profile
  *  folder and every place Astera itself writes executable code or an installer to and later runs outside any sandbox —
  *  the Windows Host runtime (core/host/runtime.ts hostRuntimeBase), electron-updater's download cache, the installed
  *  app's own folder, Astera's own `%LOCALAPPDATA%\astera` on Windows (the public CLI and the session-`.cmd` junction),
  *  and on macOS and Linux the public CLI's own files. The one function every start path and the measurement build from,
- *  as for the profile; each caller passes what it knows (nulls dropped). Forward slashes, each once. A folder that does
- *  not exist at the start is named all the same: the sandbox never fails a start for a missing read-only path (it carves
- *  one out of a writable root only where it is, and blocks its creation; Codex/srt, Task E report); the public CLI's
- *  files are named only where they exist (publicShuttleFiles). */
+ *  as for the profile; each caller passes what it knows (nulls dropped). Forward slashes, each once.
+ *
+ *  `resolve` (realPathOrNull at both wirings; fix round 3, re-review Minor 5) names each path where it really is, and
+ *  drops one that is not there or cannot be looked at, on every OS. A missing read-only path is not harmless: while a
+ *  sandboxed command runs, Codex and srt put an empty read-only file at it on the host to block its creation, so a
+ *  missing `~/.cache/astera-updater` would make an update download fail then, and an interrupted sandbox could leave the
+ *  file behind. A path through a linked folder (a dotfile manager's `~/.cache` or `~/.local`) is named at its target:
+ *  Codex on Linux refuses every command when a read-only path crosses a writable symlink (linux-sandbox `bwrap.rs`
+ *  at rust-v0.160.0), and Claude Code's deny rules match "either the requested path or the file it resolves to"
+ *  (code.claude.com/docs/en/permissions, Symlinks), so the target keeps both. Without it (the measurement, whose
+ *  profile is there), each path is named as given. */
 export function sandboxReadOnly(o: {
   profileDir?: string | null
   hostRuntimeBase?: string | null
@@ -112,11 +120,35 @@ export function sandboxReadOnly(o: {
   installRoot?: string | null
   localAstera?: string | null
   publicShuttle?: readonly string[]
+  resolve?: (p: string) => string | null
 }): string[] {
-  const all = [o.profileDir, o.hostRuntimeBase, o.updaterCache, o.installRoot, o.localAstera, ...(o.publicShuttle ?? [])]
+  const named = [o.profileDir, o.hostRuntimeBase, o.updaterCache, o.installRoot, o.localAstera, ...(o.publicShuttle ?? [])]
     .filter((p): p is string => Boolean(p))
     .map(slashed)
+  const resolve = o.resolve
+  const all = resolve
+    ? named
+        .map((p) => {
+          try {
+            const real = resolve(p)
+            return real ? slashed(real) : null
+          } catch {
+            return null
+          }
+        })
+        .filter((p): p is string => p !== null)
+    : named
   return [...new Set(all)]
+}
+
+/** A path's real location (every link on it followed, `realpathSync.native`), forward slashes; null when it is not there
+ *  or cannot be looked at. What both wirings hand sandboxReadOnly, once, when the app or the Host starts. */
+export function realPathOrNull(p: string): string | null {
+  try {
+    return slashed(realpathSync.native(p))
+  } catch {
+    return null
+  }
 }
 
 /** A D-Bus address value with its `%xx` escapes decoded (the D-Bus specification, "Server Addresses": any byte may be

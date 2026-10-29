@@ -107,7 +107,9 @@ export function codexSessionDenied(o: {
  *  codexSessionDenied lists denied, and what `readOnly` keeps read-only (the profile and every folder Astera itself
  *  writes code or an installer to and runs unsandboxed, locations.ts sandboxReadOnly; Task E and its fix round 1). On
  *  Windows the launch goes through cmd.exe, which would break on a path holding one of its characters, so such a start
- *  is refused instead of launched broken (Review Focus 2). */
+ *  is refused instead of launched broken (Review Focus 2): `path-unsafe` for the work folder's repository, whose words
+ *  say "the folder", and `named-path-unsafe` for any other path it names (Astera's own folders, a login folder in the
+ *  home), whose words send the person to the log, which `log` names it in (Task E fix round 3, re-review Minor 6). */
 export function sessionSandboxArgs(o: {
   platform: NodeJS.Platform
   homeDir: string
@@ -120,13 +122,20 @@ export function sessionSandboxArgs(o: {
   appKeyFile?: string | null
   /** The read-only folders, built by the start's wiring (sandboxReadOnly). Absent, nothing is kept read-only. */
   readOnly?: readonly string[]
+  /** Where a refused path is named (the manager's log). */
+  log?: (m: string) => void
 }): string[] {
   const { platform, layout } = o
   const denied = codexSessionDenied(o)
   const readOnly = o.readOnly ?? []
   if (platform === 'win32') {
-    const named = [...(layout ? [layout.top, layout.gitDir, layout.commonDir, ...layout.worktreeConfigs] : []), ...readOnly, ...denied]
-    if (named.some((p) => LAUNCH_FORBIDDEN.test(p))) throw sandboxUnavailable('path-unsafe')
+    const repository = layout ? [layout.top, layout.gitDir, layout.commonDir, ...layout.worktreeConfigs] : []
+    if (repository.some((p) => LAUNCH_FORBIDDEN.test(p))) throw sandboxUnavailable('path-unsafe')
+    const unsafe = [...readOnly, ...denied].find((p) => LAUNCH_FORBIDDEN.test(p))
+    if (unsafe !== undefined) {
+      o.log?.(`sandbox: ${unsafe} holds a character cmd.exe cannot carry, so the sandboxed start is refused`)
+      throw sandboxUnavailable('named-path-unsafe')
+    }
   }
   return codexSandboxArgs({ platform, layout, denied, readOnly })
 }
@@ -206,7 +215,8 @@ export async function prepareCodexSandbox(o: {
     hostSocketDir: o.hostSocketDir ?? null,
     otherHostDirs: otherHosts,
     appKeyFile: o.appKeyFile ?? null,
-    readOnly: o.readOnly ?? []
+    readOnly: o.readOnly ?? [],
+    log: o.log
   })
   o.check?.(args)
   if (o.platform === 'win32') {

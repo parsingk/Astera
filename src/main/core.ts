@@ -53,7 +53,7 @@ import { claudeSandboxStart } from '../core/sandbox/claudeStart'
 import { codexExcludesWriter } from '../core/sandbox/gitExcludes'
 import { hostAddress } from '../core/publicContract'
 import { appKeyPath } from '../core/host/hostKey'
-import { installRootOf, localAsteraDir, publicShuttleFiles, sandboxReadOnly, updaterCacheDir } from '../core/sandbox/locations'
+import { installRootOf, localAsteraDir, publicShuttleFiles, realPathOrNull, sandboxReadOnly, updaterCacheDir } from '../core/sandbox/locations'
 import { binDirFor } from '../core/orchestration/cliInstall'
 import { shuttleNames } from '../core/orchestration/exec/shuttle'
 import { HOST_PROTOCOL } from '../core/host/protocol'
@@ -258,14 +258,17 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   // place the app itself writes code or an installer to and runs unsandboxed — the Windows Host runtime it lays down
   // (runtimeBase), electron-updater's download cache, the installed app's own folder (from its executable), on Windows
   // Astera's own %LOCALAPPDATA%\astera whole (the public CLI's bin, the session-`.cmd` junction), and on macOS and Linux
-  // the public CLI's own files in the person's ~/.local/bin, where they are now. One list, for the twins and both managers.
+  // the public CLI's own files in the person's ~/.local/bin, where they are now. One list, for the twins and both managers,
+  // naming only what is there when the app starts, each where it really is (fix round 3: no placeholder file at a missing
+  // one, no read-only path through a linked ~/.cache or ~/.local)
   const readOnly = sandboxReadOnly({
     profileDir: userDataDir,
     hostRuntimeBase: runtimeBase,
     updaterCache: updaterCacheDir(process.platform, process.env, os.homedir()),
     installRoot: installRootOf(app.getPath('exe'), process.platform),
     localAstera: localAsteraDir(process.platform, process.env, os.homedir()),
-    publicShuttle: publicShuttleFiles({ platform: process.platform, binDir: binDirFor({ platform: process.platform, env: process.env, home: os.homedir() }), names: shuttleNames(process.platform), exists: existsSync })
+    publicShuttle: publicShuttleFiles({ platform: process.platform, binDir: binDirFor({ platform: process.platform, env: process.env, home: os.homedir() }), names: shuttleNames(process.platform), exists: existsSync }),
+    resolve: realPathOrNull
   })
   const statusLine = new StatusLineManager(
     userDataDir,
