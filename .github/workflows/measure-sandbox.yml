@@ -37,7 +37,7 @@ jobs:
         with:
           persist-credentials: false
 
-      # Must match ci.yml
+      # Node 22, as in release.yml; ci.yml also runs 24
       - uses: actions/setup-node@v7
         with:
           node-version: 22
