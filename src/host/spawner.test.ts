@@ -963,6 +963,9 @@ describe('the roll spawn (S6 R5, R6)', () => {
     expect(launch.env.ELECTRON_RUN_AS_NODE).toBeUndefined()
     await expect(h.spawner!.checkLaunch!({ accountId: 'gone', cwd: repo, command: 'npm test' })).rejects.toThrow(/gone/)
     expect(h.spawner!.checkEnv!({ PATH: '/x' }, repo)).toEqual({ env: { PATH: '/x' }, hidden: [] })
+    // Fix round 2: a check's words name the account by its name
+    expect(await h.spawner!.accountName!('acc2')).toBe('two')
+    expect(await h.spawner!.accountName!('gone')).toBeNull()
   })
 
   it("a sandboxed Codex session from the Host keeps read-only the profile and Astera's own run locations", async () => {

@@ -212,6 +212,8 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
   /** How a sandboxed Task's check runs inside its workers' sandbox, as the attempt's registered account (Task K;
    *  SessionManager.checkLaunch). Rejects for an account no longer registered, and with a sandbox refusal. */
   checkLaunch?(a: { accountId: string; cwd: string; command: string }): Promise<{ file: string; args: string[] | string; env: Record<string, string> }>
+  /** A registered account's display name, null for one not registered (Task K fix round 2: a check's words name it). */
+  accountName?(accountId: string): Promise<string | null>
   /** The session shuttle's values once the Host wrote it (kicked at creation); undefined until then. */
   orchEnvNow(): ChatOrchEnv | undefined
   /** How many worker and coordinator starts are under way right now. */
@@ -959,6 +961,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       await ensureInstallDirOnPath([providerOf(account)])
       return sessions.checkLaunch({ account, cwd: a.cwd, command: a.command })
     },
+    accountName: async (id) => (await readAccounts(accountsPath)).find((x) => x.id === id)?.label ?? null,
     enforce,
     sandboxLayouts: sessions.sandboxLayouts,
     codexWindowsReady,

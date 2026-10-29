@@ -3213,7 +3213,9 @@ export function registerIpc(
         if (!account) throw new Error(`account ${a.accountId} is no longer registered, so the check cannot run in the sandbox its worker ran in`)
         const l = await core.sessions.checkLaunch({ account, cwd: a.cwd, command: a.command })
         return { launch: { file: l.file, args: l.args }, env: l.env }
-      }
+      },
+      // A check's words name the account by its name (Task K fix round 2)
+      accountName: (id) => core.accounts.list().find((x) => x.id === id)?.label ?? null
     })
     orchValidator = validation.validator
 

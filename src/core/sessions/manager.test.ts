@@ -2560,8 +2560,9 @@ describe('the sandbox at spawn, for Claude', () => {
     await expect(r.manager.checkLaunch({ account, cwd: repoIn(), command: 'x' })).rejects.toThrow('SANDBOX_UNAVAILABLE: userns-restricted claude')
     const w = await rig('win32')
     await expect(w.manager.checkLaunch({ account, cwd: repoIn(), command: 'x' })).rejects.toThrow('SANDBOX_UNAVAILABLE: no-sandbox claude')
+    // Fix round 2: a process without the runner says so, which running the checks again will not change
     const none = await rig('darwin')
-    await expect(none.manager.checkLaunch({ account, cwd: repoIn(), command: 'x' })).rejects.toThrow('SANDBOX_UNAVAILABLE: not-prepared')
+    await expect(none.manager.checkLaunch({ account, cwd: repoIn(), command: 'x' })).rejects.toThrow('SANDBOX_UNAVAILABLE: no-check-runner')
   })
 
   // Task E fix round 2: where Ubuntu's AppArmor profile confines bubblewrap (asked once per process by the wiring), a

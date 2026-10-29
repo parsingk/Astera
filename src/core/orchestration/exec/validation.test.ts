@@ -14,6 +14,7 @@ import { CHECK_TIMEOUT_MS, type CheckResult } from '../types'
 import type { StartOpts } from '../../run/runManager'
 import type { RunConfig } from '../../run/config'
 import type { CompletionCheckInput, PluginCheckAnswer } from '../pluginChecks'
+import { t } from '../../i18n'
 
 const NOW = '2026-09-24T00:00:00.000Z'
 const unwrap = <T>(r: { ok: boolean } & Record<string, unknown>): { state: OrchState; value: T } => {
@@ -52,6 +53,7 @@ interface RigOpts {
   stored?: RunConfig[]
   /** ValidationContext's checkEnv and sandboxedCheck (Task K); absent when left out */
   checkEnv?: ValidationContext['checkEnv']
+  accountName?: ValidationContext['accountName']
   sandboxedCheck?: ValidationContext['sandboxedCheck']
 }
 
@@ -160,6 +162,7 @@ function rig(o: RigOpts = {}) {
     },
     ...(o.lifecycleCiBegin ? { lifecycleCiBegin: o.lifecycleCiBegin } : {}),
     ...(o.checkEnv ? { checkEnv: o.checkEnv } : {}),
+    ...(o.accountName ? { accountName: o.accountName } : {}),
     ...(o.sandboxedCheck ? { sandboxedCheck: o.sandboxedCheck } : {})
   }
   const validation = createTaskValidation(ctx)
@@ -745,11 +748,24 @@ describe('createTaskValidation — the sandbox of a sandboxed Task (Task K)', ()
     }
   })
 
-  it("a sandbox refusal reads in the app's words, and points the person at the setup", async () => {
-    const h = rig({ sandboxKind: 'sandbox', provider: 'codex', sandboxedCheck: async () => Promise.reject(new Error('SANDBOX_UNAVAILABLE: windows-setup codex accA')) })
-    h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
-    await vi.waitFor(() => expect(h.task().status).toBe('blocked'))
-    expect(h.task().checks?.[0]?.summary).toBe("This Codex account has no Windows sandbox set up yet. Set up shows Windows' administrator prompt once. Codex records the elevated sandbox as this account's default.")
+  // Fix round 2: in a check's words, for the question it opens (run the checks again, go on without it, mark the Task
+  // failed), naming the account and where its sandbox is set up, rather than a start's words with a Set up it lacks
+  it("a sandbox refusal reads in a check's words, naming the account and where to set it up", async () => {
+    const named = rig({
+      sandboxKind: 'sandbox',
+      provider: 'codex',
+      accountName: async (id) => (id === 'accA' ? 'Work' : null),
+      sandboxedCheck: async () => Promise.reject(new Error('SANDBOX_UNAVAILABLE: windows-setup codex accA'))
+    })
+    named.validation.startValidation({ taskId: named.taskId, cwd: named.cwd })
+    await vi.waitFor(() => expect(named.task().status).toBe('blocked'))
+    expect(named.task().checks?.[0]?.summary).toBe(t('en', 'jobs.checks.sandbox.windowsSetup', { account: 'Work' }))
+    expect(named.task().checks?.[0]?.summary).toContain('Settings › Agent profiles')
+    // A process that cannot name it says its id
+    const bare = rig({ sandboxKind: 'sandbox', provider: 'codex', sandboxedCheck: async () => Promise.reject(new Error('SANDBOX_UNAVAILABLE: windows-setup codex accA')) })
+    bare.validation.startValidation({ taskId: bare.taskId, cwd: bare.cwd })
+    await vi.waitFor(() => expect(bare.task().status).toBe('blocked'))
+    expect(bare.task().checks?.[0]?.summary).toBe(t('en', 'jobs.checks.sandbox.windowsSetup', { account: 'accA' }))
   })
 
   // Fix round 2: a failed check names what it started without, so a failure for a hidden token reads as that; a check the

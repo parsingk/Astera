@@ -116,6 +116,7 @@ export function composeHostDriving(a: {
     // sandbox, as the spawner's session manager builds them
     ...(a.spawner.checkEnv ? { checkEnv: a.spawner.checkEnv } : {}),
     ...(a.spawner.checkLaunch ? { checkLaunch: a.spawner.checkLaunch } : {}),
+    ...(a.spawner.accountName ? { accountName: a.spawner.accountName } : {}),
     ...(a.killRunner ? { killRunner: a.killRunner } : {})
   })
 

@@ -35,7 +35,7 @@ import { repairTargetFor } from './repair'
 import { TaskValidator } from './validator'
 import { checkSandboxOf } from './checkSandbox'
 import type { Provider } from '../../providers/meta'
-import { sandboxRefusalMessage } from '../../sandbox/unavailable'
+import { checkRefusalMessage } from '../../sandbox/unavailable'
 
 export interface ValidationContext {
   getState(): OrchState
@@ -82,6 +82,9 @@ export interface ValidationContext {
    *  put around it here, in words a person reads. Absent: no check of a sandboxed Task can run in this process, and none
    *  runs outside the sandbox either (rule E5). */
   sandboxedCheck?(a: { provider: Provider; accountId: string; cwd: string; command: string; env: NodeJS.ProcessEnv | undefined }): Promise<SandboxedCheck>
+  /** An account's display name, for a check's words that name it (a Windows sandbox not set up, fix round 2); null for one
+   *  not registered. Absent: the words name its id. */
+  accountName?(accountId: string): string | null | Promise<string | null>
 }
 /** A sandboxed Task's check as ValidationContext.sandboxedCheck builds it. */
 export type SandboxedCheck = { launch: { file: string; args: string[] | string }; env: NodeJS.ProcessEnv } | { unavailable: string }
@@ -198,9 +201,11 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
         try {
           boxed = await c.sandboxedCheck({ provider: sandbox.provider, accountId: sandbox.accountId, cwd, command, env })
         } catch (e) {
-          // A session manager's refusal (`SANDBOX_UNAVAILABLE: <code>`, unavailable.ts) in the words a start's refusal has
+          // A session manager's refusal (`SANDBOX_UNAVAILABLE: <code>`, unavailable.ts) in a check's words, for the question it
+          // opens, naming the account by its name (fix round 2)
           const raw = e instanceof Error ? e.message : String(e)
-          const said = sandboxRefusalMessage(raw)
+          const name = await (async () => (await c.accountName?.(sandbox.accountId)) ?? null)().catch(() => null)
+          const said = checkRefusalMessage(raw, (id) => (id === sandbox.accountId ? name : null))
           boxed = { unavailable: said ? t(lang, said.key, said.params) : raw }
         }
         if ('unavailable' in boxed) return { unavailable: boxed.unavailable, name: config.name }

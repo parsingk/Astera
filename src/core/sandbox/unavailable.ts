@@ -30,10 +30,11 @@ export function forcedSandboxBlocker(provider: 'claude' | 'codex', platform: str
 // version floor's `cli-too-old <cli> <found> <min>`, `cli-version-unknown <cli>` and `cli-missing <cli>` (the Enforce
 // check's shape, core/sessions/cliVersion.ts), and for a sandboxed Task's check under Claude's sandbox (Task K)
 // `runtime-missing claude` (srt cannot run a command here) and `userns-restricted claude` (Ubuntu's AppArmor profile
-// confines bubblewrap, so every command would fail). Versions take dots; an account id is `[\w-]+` only, so a quote, a brace or
-// a full stop after it is not read as part of it.
+// confines bubblewrap, so every command would fail), and `no-check-runner` (a process without the runner a sandboxed check
+// runs through, fix round 2). Versions take dots; an account id is `[\w-]+` only, so a quote, a brace or a full stop after
+// it is not read as part of it.
 const REFUSAL =
-  /SANDBOX_UNAVAILABLE:\s*(windows-setup|windows-check-failed|codex-daemon|path-unsafe|named-path-unsafe|linked-path|git-layout|not-prepared|settings-write-failed|no-sandbox|profile-not-active|command-too-long|outside-sandbox|cli-too-old|cli-version-unknown|cli-missing|runtime-missing|userns-restricted)(?:\s+(claude|codex))?(?:\s+([\w.-]+)(?:\s+([\w.-]+))?)?/
+  /SANDBOX_UNAVAILABLE:\s*(windows-setup|windows-check-failed|codex-daemon|path-unsafe|named-path-unsafe|linked-path|git-layout|not-prepared|settings-write-failed|no-sandbox|profile-not-active|command-too-long|outside-sandbox|cli-too-old|cli-version-unknown|cli-missing|runtime-missing|userns-restricted|no-check-runner)(?:\s+(claude|codex))?(?:\s+([\w.-]+)(?:\s+([\w.-]+))?)?/
 const CLI_NAMES = { claude: 'Claude Code', codex: 'Codex' } as const
 const accountIdIn = (s: string | undefined): string | null => (s ? (/^[\w-]+/.exec(s)?.[0] ?? null) : null)
 
@@ -83,6 +84,9 @@ export function sandboxRefusalMessage(raw: string): Message | null {
       return { key: 'session.spawn.sandbox.runtimeMissing', params: { cli: CLI_NAMES[(m[2] ?? 'claude') as keyof typeof CLI_NAMES] } }
     case 'userns-restricted':
       return { key: 'session.spawn.sandbox.usernsRestricted', params: { cli: CLI_NAMES[(m[2] ?? 'claude') as keyof typeof CLI_NAMES] } }
+    // Only a check meets it: its words are the check's (checkRefusalMessage)
+    case 'no-check-runner':
+      return { key: 'jobs.checks.sandbox.cannot' }
     // `outside-sandbox <session|job|task> <id>`: the words name it by its id
     case 'outside-sandbox':
       return { key: 'session.spawn.sandbox.outsideSandbox', params: { id: accountIdIn(m[4]) ?? '' } }
@@ -91,6 +95,61 @@ export function sandboxRefusalMessage(raw: string): Message | null {
         key: 'session.spawn.sandbox.cliTooOld',
         params: { cli: CLI_NAMES[(m[2] ?? 'claude') as keyof typeof CLI_NAMES], found: m[3] ?? '', min: m[4] ?? '' }
       }
+  }
+}
+
+/**
+ * What a refusal says on a Task check's question (Task K fix round 2): the check-unavailable question, whose answers are
+ * run the checks again, go on without this check, or mark the Task failed. A start's words name a Set up button and a
+ * session that question does not have, so each refusal a check can meet (SessionManager.checkLaunch and the prepares it
+ * runs) is said in a check's words, with what the person can do and where: the Set up beside the account under a
+ * sandboxed profile in Settings › Agent profiles, an update, an install, or that running again will not help. `nameOf`
+ * gives an account's display name (the refusal carries its id; the id when none). A refusal no check meets keeps a
+ * start's words; null when `raw` is not a refusal.
+ */
+export function checkRefusalMessage(raw: string, nameOf: (accountId: string) => string | null): Message | null {
+  const m = REFUSAL.exec(raw)
+  if (!m) return null
+  const cli = CLI_NAMES[(m[2] ?? 'claude') as keyof typeof CLI_NAMES]
+  const account = (): string => {
+    const id = accountIdIn(m[3]) ?? ''
+    return nameOf(id) ?? id
+  }
+  switch (m[1]) {
+    case 'windows-setup':
+      return { key: 'jobs.checks.sandbox.windowsSetup', params: { account: account() } }
+    case 'windows-check-failed':
+      return { key: 'jobs.checks.sandbox.windowsCheckFailed', params: { account: account() } }
+    case 'cli-too-old':
+      return { key: 'jobs.checks.sandbox.cliTooOld', params: { cli, found: m[3] ?? '', min: m[4] ?? '' } }
+    case 'cli-version-unknown':
+      return { key: 'jobs.checks.sandbox.cliVersionUnknown', params: { cli } }
+    case 'cli-missing':
+      return { key: 'jobs.checks.sandbox.cliMissing', params: { cli } }
+    case 'path-unsafe':
+      return { key: 'jobs.checks.sandbox.pathUnsafe' }
+    case 'named-path-unsafe':
+      return { key: 'jobs.checks.sandbox.namedPathUnsafe' }
+    case 'linked-path':
+      return { key: 'jobs.checks.sandbox.linkedPath' }
+    case 'git-layout':
+      return { key: 'jobs.checks.sandbox.gitLayout' }
+    case 'not-prepared':
+      return { key: 'jobs.checks.sandbox.notPrepared' }
+    case 'command-too-long':
+      return { key: 'jobs.checks.sandbox.commandTooLong' }
+    case 'settings-write-failed':
+      return { key: 'jobs.checks.sandbox.settingsWriteFailed' }
+    case 'no-sandbox':
+      return { key: 'jobs.checks.sandbox.noSandbox', params: { cli } }
+    case 'runtime-missing':
+      return { key: 'jobs.checks.sandbox.runtimeMissing', params: { cli } }
+    case 'userns-restricted':
+      return { key: 'jobs.checks.sandbox.usernsRestricted', params: { cli } }
+    case 'no-check-runner':
+      return { key: 'jobs.checks.sandbox.cannot' }
+    default:
+      return sandboxRefusalMessage(raw)
   }
 }
 

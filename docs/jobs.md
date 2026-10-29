@@ -99,7 +99,9 @@ Task를 다 짠 뒤 상세 창의 `실행`을 눌러야 시작합니다.
   세션처럼 열려 있습니다.
 - sandbox를 씌울 수 없으면(계정의 Windows sandbox가 아직 설정되지 않았다, 런타임에 필요한 도구가 없다)
   검사를 sandbox 밖에서 돌리지 않습니다. 코드의 실패로 치지도 않고 사람에게 묻습니다: 다시 시도, 이 검사
-  건너뛰기, 실패로 표시. Docker 검사(`compose`, `dockerfile`)도 같은 질문이 됩니다. Docker는 sandbox 밖에
+  건너뛰기, 실패로 표시. 질문은 이유와 할 수 있는 일을 함께 말합니다. 예를 들어 계정의 Windows sandbox가
+  설정되지 않았으면 설정 › 에이전트 프로필에서 sandbox 프로필 아래 그 계정의 설정하기를 누른 뒤 다시 시도하라고
+  합니다. Docker 검사(`compose`, `dockerfile`)도 같은 질문이 됩니다. Docker는 sandbox 밖에
   닿기 때문입니다.
 - Windows의 Claude Code에는 sandbox가 없습니다. 그 워커의 검사는 예전처럼 돌고, 결과 옆에
   `sandbox 밖에서 검증함`이라고 적힙니다.

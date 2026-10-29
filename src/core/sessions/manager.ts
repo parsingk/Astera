@@ -394,7 +394,9 @@ export class SessionManager {
       return { file: cmd.file, args: cmd.args, env: defined(env) }
     }
     if (sandboxKindOf('claude', platform) !== 'sandbox') throw sandboxUnavailable('no-sandbox claude')
-    if (!this.claudeSandbox || !this.checkRunner) throw sandboxUnavailable('not-prepared')
+    // A process without the runner, or without Claude's sandbox settings, cannot put a check in it; running again will not
+    // change that (fix round 2), unlike a sandbox not yet ready
+    if (!this.claudeSandbox || !this.checkRunner) throw sandboxUnavailable('no-check-runner')
     if (platform === 'linux' && this.sandboxWarn?.claudeUsernsRestricted() === true) throw sandboxUnavailable('userns-restricted claude')
     const missing = await this.checkRunner.missing()
     if (missing !== null) {

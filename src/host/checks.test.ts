@@ -11,6 +11,7 @@ import type { HostMessage, PtyEntry } from '../core/host/protocol'
 import type { OrchServerDeps } from '../core/orchestration/command'
 import { applyWorkerDone, createJob, createTask, emptyState, openDispatch, startJobRun, type OrchState } from '../core/orchestration/state'
 import { pickInitialLang } from '../core/i18n/locale'
+import { t, type Lang } from '../core/i18n'
 
 const NOW = '2026-09-24T00:00:00.000Z'
 const unwrap = <T>(r: { ok: boolean } & Record<string, unknown>): { state: OrchState; value: T } => {
@@ -50,6 +51,8 @@ interface RigOpts {
   sandboxKind?: 'sandbox' | 'deny-only'
   checkEnv?: (base: NodeJS.ProcessEnv, cwd: string) => { env: NodeJS.ProcessEnv; hidden: string[] }
   checkLaunch?: (a: { accountId: string; cwd: string; command: string }) => Promise<{ file: string; args: string[] | string; env: Record<string, string> }>
+  /** HostChecksDeps.accountName (fix round 2) */
+  accountName?: (accountId: string) => Promise<string | null>
 }
 
 async function rig(o: RigOpts = {}) {
@@ -154,7 +157,8 @@ async function rig(o: RigOpts = {}) {
     killRunner: (cmd) => endKilled(Number(cmd.args[cmd.args.indexOf('/pid') + 1])),
     ...(o.foreignKillWaitMs !== undefined ? { foreignKillWaitMs: o.foreignKillWaitMs } : {}),
     ...(o.checkEnv ? { checkEnv: o.checkEnv } : {}),
-    ...(o.checkLaunch ? { checkLaunch: o.checkLaunch } : {})
+    ...(o.checkLaunch ? { checkLaunch: o.checkLaunch } : {}),
+    ...(o.accountName ? { accountName: o.accountName } : {})
   })
   if (o.onRunExitThrows)
     vi.spyOn(checks._validator, 'onRunExit').mockImplementation(() => {
@@ -260,6 +264,18 @@ describe('createHostChecks', () => {
     refused.checks.startValidation({ taskId: refused.taskId, cwd: refused.cwd })
     await vi.waitFor(() => expect(refused.task().status).toBe('blocked'))
     expect(refused.opened()).toHaveLength(0)
+  })
+
+  // Fix round 2: the question a refusal opens says it in a check's words, naming the account by its name
+  it('words a sandbox refusal for the check’s question, naming the attempt’s account', async () => {
+    const h = await rig({
+      sandboxKind: 'sandbox',
+      checkLaunch: async () => Promise.reject(new Error('SANDBOX_UNAVAILABLE: windows-setup codex acc_fake')),
+      accountName: async (id) => (id === 'acc_fake' ? 'Work' : null)
+    })
+    h.checks.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    await vi.waitFor(() => expect(h.task().status).toBe('blocked'))
+    expect(h.task().checks?.[0]?.summary).toBe(t(osLang() as Lang, 'jobs.checks.sandbox.windowsSetup', { account: 'Work' }))
   })
 
   it('a cwd outside the Host’s guard is a Gate, and no pty opens (R10)', async () => {

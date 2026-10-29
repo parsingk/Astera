@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { codexSandboxArgs, codexSandboxEnv, npmCacheOf } from './codexProfile'
-import { forcedSandboxBlocker, sandboxRefusalMessage, sandboxUnavailable } from './unavailable'
+import { CATALOGS, LANGS } from '../i18n'
+import { checkRefusalMessage, forcedSandboxBlocker, sandboxRefusalMessage, sandboxUnavailable } from './unavailable'
 
 // worktreeConfigs as gitLayoutOf lists them: the checkout's own config.worktree, the main checkout's, the other worktrees';
 // gitFiles: the checkout's commondir, the common directory's, its modules, the other worktrees' commondir
@@ -215,5 +216,50 @@ describe('sandboxUnavailable', () => {
       expect(sandboxRefusalMessage(`SANDBOX_UNAVAILABLE: outside-sandbox ${target} ${id}`)).toEqual({ key: 'session.spawn.sandbox.outsideSandbox', params: { id } })
     // As the CLI's error carries it, and as the app's IPC wraps it
     expect(sandboxRefusalMessage('Error: SANDBOX_UNAVAILABLE: outside-sandbox job job_9.')).toEqual({ key: 'session.spawn.sandbox.outsideSandbox', params: { id: 'job_9' } })
+  })
+})
+
+// Task K fix round 2: a refusal on a Task check's question (check-unavailable: run the checks again, go on without it, or
+// mark the Task failed) is said in a check's words, with where the person can act; a start's words name buttons and
+// sessions that question does not have
+describe('checkRefusalMessage', () => {
+  const nameOf = (id: string): string | null => (id === 'acc1' ? 'Work' : null)
+  it('words every refusal a check can meet for that question, naming the account by its name', () => {
+    const cases: Array<[string, string, Record<string, string>?]> = [
+      ['windows-setup codex acc1', 'jobs.checks.sandbox.windowsSetup', { account: 'Work' }],
+      ['windows-setup codex acc2', 'jobs.checks.sandbox.windowsSetup', { account: 'acc2' }],
+      ['windows-check-failed codex acc1', 'jobs.checks.sandbox.windowsCheckFailed', { account: 'Work' }],
+      ['cli-too-old codex 0.150.0 0.160.0', 'jobs.checks.sandbox.cliTooOld', { cli: 'Codex', found: '0.150.0', min: '0.160.0' }],
+      ['cli-version-unknown claude', 'jobs.checks.sandbox.cliVersionUnknown', { cli: 'Claude Code' }],
+      ['cli-missing codex', 'jobs.checks.sandbox.cliMissing', { cli: 'Codex' }],
+      ['path-unsafe', 'jobs.checks.sandbox.pathUnsafe'],
+      ['named-path-unsafe', 'jobs.checks.sandbox.namedPathUnsafe'],
+      ['linked-path', 'jobs.checks.sandbox.linkedPath'],
+      ['git-layout', 'jobs.checks.sandbox.gitLayout'],
+      ['not-prepared', 'jobs.checks.sandbox.notPrepared'],
+      ['command-too-long', 'jobs.checks.sandbox.commandTooLong'],
+      ['settings-write-failed', 'jobs.checks.sandbox.settingsWriteFailed'],
+      ['no-sandbox claude', 'jobs.checks.sandbox.noSandbox', { cli: 'Claude Code' }],
+      ['runtime-missing claude', 'jobs.checks.sandbox.runtimeMissing', { cli: 'Claude Code' }],
+      ['userns-restricted claude', 'jobs.checks.sandbox.usernsRestricted', { cli: 'Claude Code' }],
+      ['no-check-runner', 'jobs.checks.sandbox.cannot']
+    ]
+    for (const [code, key, params] of cases)
+      expect(checkRefusalMessage(`Error: SANDBOX_UNAVAILABLE: ${code}`, nameOf), code).toEqual(params ? { key, params } : { key })
+  })
+
+  it('leaves a refusal no check meets in a start’s words, and what is not a refusal alone', () => {
+    expect(checkRefusalMessage('SANDBOX_UNAVAILABLE: codex-daemon codex', nameOf)).toEqual(sandboxRefusalMessage('SANDBOX_UNAVAILABLE: codex-daemon codex'))
+    expect(checkRefusalMessage('spawn codex ENOENT', nameOf)).toBeNull()
+  })
+
+  it('names no button the question lacks, and its words are in all four languages', () => {
+    const keys = Object.keys(CATALOGS.en.messages).filter((k) => k.startsWith('jobs.checks.sandbox.'))
+    expect(keys.length).toBeGreaterThan(15)
+    for (const key of keys) {
+      for (const lang of LANGS) expect((CATALOGS[lang].messages as Record<string, string>)[key], `${lang} ${key}`).toBeTruthy()
+      // A start's words: its Set up button and "Start it again" belong to a session's refusal, not to this question
+      expect(CATALOGS.en.messages[key as keyof typeof CATALOGS.en.messages], key).not.toMatch(/^Set up|\. Set up |Start it again|the session/)
+    }
   })
 })

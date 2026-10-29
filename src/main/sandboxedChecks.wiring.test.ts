@@ -26,6 +26,13 @@ describe("the app's checks of a sandboxed Task", () => {
     expect(wiring).toContain('platform: process.platform')
     expect(wiring).toMatch(/checkEnv: \(cwd\) => core\.sessions\.checkEnv\(process\.env, cwd\)/)
     expect(wiring).toMatch(/sandboxedCheck: async \(a\) => \{[\s\S]*core\.sessions\.checkLaunch\(/)
+    // Fix round 2: a check's words name the account by its name
+    expect(wiring).toMatch(/accountName: \(id\) => core\.accounts\.list\(\)\.find\(\(x\) => x\.id === id\)\?\.label \?\? null/)
+  })
+
+  it('hands the Host’s checks the spawner’s account names', () => {
+    expect(read('src/host/drivingWiring.ts')).toMatch(/\.\.\.\(a\.spawner\.accountName \? \{ accountName: a\.spawner\.accountName \} : \{\}\)/)
+    expect(read('src/host/checks.ts')).toMatch(/\.\.\.\(d\.accountName \? \{ accountName: d\.accountName \} : \{\}\)/)
   })
 
   // Fix rounds 1 and 2: the forced sandbox of a reviewer of work a profile's switch sandboxed allows deny rules only where
