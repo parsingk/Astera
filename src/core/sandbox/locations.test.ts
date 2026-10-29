@@ -402,6 +402,7 @@ describe('the other Hosts beside this one', () => {
     const own = path.join(parent, 'astera-host-aaaaaaaaaaaa-v4')
     const dev = path.join(parent, 'astera-host-bbbbbbbbbbbb-v4')
     for (const d of [own, dev, path.join(parent, 'unrelated')]) mkdirSync(d)
+    writeFileSync(path.join(dev, 'sock'), '')
     expect(await otherHostFolders('linux', own)).toEqual([slashed(dev)])
     expect(await otherHostFolders('darwin', `${slashed(own)}/`)).toEqual([slashed(dev)])
     // No folder on Windows (the Host listens on a named pipe), nor without this Host's own
@@ -420,6 +421,7 @@ describe('the other Hosts beside this one', () => {
     const own = path.join(parent, 'astera-host-aaaaaaaaaaaa-v4')
     const names = { mine: 'astera-host-bbbbbbbbbbbb-v4', theirs: 'astera-host-cccccccccccc-v4', gone: 'astera-host-dddddddddddd-v4', root: 'astera-host-eeeeeeeeeeee' }
     for (const d of [own, ...Object.values(names).map((n) => path.join(parent, n)), path.join(parent, 'unrelated')]) mkdirSync(d)
+    for (const n of Object.values(names)) writeFileSync(path.join(parent, n, 'sock'), '')
     const owners: Record<string, number> = { [names.mine]: 501, [names.theirs]: 502, [names.root]: 0 }
     const looked: string[] = []
     const lstat = async (p: string): Promise<{ uid: number }> => {
@@ -432,5 +434,28 @@ describe('the other Hosts beside this one', () => {
     expect(await otherHostFolders('darwin', own, { uid: 502, lstat })).toEqual([slashed(path.join(parent, names.theirs))])
     // Each Host-shaped folder but this one is looked at by its own path; the unrelated one is not
     expect(looked.map((p) => path.posix.basename(p)).sort()).toEqual([...Object.values(names), ...Object.values(names)].sort())
+  })
+
+  // Mac check: a Host that ended leaves its folder empty, and test runs left 504 of them on a developer's Mac. Named
+  // twice each, they grew Codex's seatbelt profile to 302 KB, and every sandboxed command spun minutes before it started.
+  // An empty folder holds no Host to reach, and the session could make any unused Host folder there anyway
+  it('leaves out a Host folder that holds nothing, and one it cannot list', async () => {
+    const parent = mkdtempSync(path.join(os.tmpdir(), 'astera-hosts-'))
+    dirs.push(parent)
+    const own = path.join(parent, 'astera-host-aaaaaaaaaaaa-v4')
+    const live = path.join(parent, 'astera-host-bbbbbbbbbbbb-v4')
+    const ended = path.join(parent, 'astera-host-cccccccccccc-v3')
+    const unlisted = path.join(parent, 'astera-host-dddddddddddd-v4')
+    for (const d of [own, live, ended, unlisted]) mkdirSync(d)
+    writeFileSync(path.join(live, 'sock'), '')
+    writeFileSync(path.join(unlisted, 'sock'), '')
+    const entries = async (p: string): Promise<string[]> => {
+      if (path.posix.basename(slashed(p)) === path.basename(unlisted)) throw Object.assign(new Error('EACCES'), { code: 'EACCES' })
+      return readdirSync(p)
+    }
+    expect(await otherHostFolders('darwin', own)).toEqual([slashed(live), slashed(unlisted)])
+    expect(await otherHostFolders('darwin', own, { entries })).toEqual([slashed(live)])
+    // Without a uid to compare, the empty one is left out all the same
+    expect(await otherHostFolders('linux', own, { uid: undefined, entries })).toEqual([slashed(live)])
   })
 })

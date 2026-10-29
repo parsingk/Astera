@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { gitLayoutOf } from '../sandbox/gitLayout'
@@ -1754,10 +1754,13 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
     const own = slashed(path.join(parent, 'astera-host-aaaaaaaaaaaa-v4'))
     const dev = slashed(path.join(parent, 'astera-host-bbbbbbbbbbbb-v4'))
     for (const d of [own, dev, path.join(parent, 'unrelated')]) mkdirSync(d)
+    // Each Host folder holds its socket: an empty one names no Host and is left out (mac check)
+    writeFileSync(path.join(dev, 'sock'), '')
     const cwd = repo()
     const { manager, spawned } = rig('linux', { hostSocketDir: own })
     await manager.prepare({ account: codexAccount, cwd, sandbox: true })
     mkdirSync(path.join(parent, 'astera-host-cccccccccccc-v4'))
+    writeFileSync(path.join(parent, 'astera-host-cccccccccccc-v4', 'sock'), '')
     manager.spawn({ account: codexAccount, cwd, sandbox: true })
     const profile = spawned[0].args.find((a) => a.startsWith('permissions='))!
     expect(profile).toContain(`"${own}"="deny"`)

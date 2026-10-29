@@ -2096,10 +2096,13 @@ describe('the sandbox at spawn', () => {
     const own = slashed(path.join(parent, 'astera-host-aaaaaaaaaaaa-v4'))
     const dev = slashed(path.join(parent, 'astera-host-bbbbbbbbbbbb-v4'))
     for (const d of [own, dev, path.join(parent, 'unrelated')]) mkdirSync(d)
+    // Each Host folder holds its socket: an empty one names no Host and is left out (mac check)
+    writeFileSync(path.join(dev, 'sock'), '')
     const cwd = repo()
     const { manager, argv } = rig('linux', { hostSocketDir: own })
     await manager.prepare({ account: codexAccount, cwd, sandbox: true })
     mkdirSync(path.join(parent, 'astera-host-cccccccccccc-v4'))
+    writeFileSync(path.join(parent, 'astera-host-cccccccccccc-v4', 'sock'), '')
     manager.spawn({ account: codexAccount, cwd, sandbox: true })
     const profile = codexArgs(argv[0]).find((a) => a.startsWith('permissions='))!
     expect(profile).toContain(`"${own}"="deny"`)
