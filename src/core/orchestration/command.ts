@@ -1335,7 +1335,7 @@ const STARTS_WORK: ReadonlySet<string> = new Set(['sessions-create', 'run-create
 
 /** Whether a session the Host holds runs in its CLI's sandbox (OrchServerDeps.sessionSandboxed), answered in the same
  *  turn when the dep answers so; a session it does not hold, or a caller with no such dep, reads as outside it. */
-function sessionInSandbox(deps: OrchServerDeps, sessionId: string): boolean | Promise<boolean> {
+function sessionInSandbox(deps: Pick<OrchServerDeps, 'sessionSandboxed'>, sessionId: string): boolean | Promise<boolean> {
   const r = deps.sessionSandboxed?.(sessionId)
   return r === undefined ? false : typeof r === 'boolean' ? r : r.then((v) => v === true)
 }
@@ -1343,7 +1343,7 @@ function sessionInSandbox(deps: OrchServerDeps, sessionId: string): boolean | Pr
 /** Whether the caller is a session running in its CLI's sandbox (OrchServerDeps.sessionSandboxed): what it starts, a
  *  session, a Job's coordinator, a worker, starts in the sandbox too (final fix pass, C3, the person's decision). The app
  *  and the Host's own loops are no session; a shell has none. */
-function sandboxedCaller(deps: OrchServerDeps, caller: { sessionId: string }): boolean | Promise<boolean> {
+export function sandboxedCaller(deps: Pick<OrchServerDeps, 'sessionSandboxed'>, caller: { sessionId: string }): boolean | Promise<boolean> {
   if (caller.sessionId === '' || caller.sessionId === APP_CALLER || caller.sessionId === HOST_CALLER) return false
   // Answered in the same turn when the answer is (the Host's is a read of its registries): a command that commits before
   // its first await keeps doing so
@@ -1376,9 +1376,11 @@ const HANDS_WORK: ReadonlySet<string> = new Set([
 const STOPS_TASK: ReadonlySet<string> = new Set(['failed', 'blocked'])
 
 /** A sandboxed session's refusal for handing work outside its sandbox (final fix pass, part 2, A, the person's strict
- *  decision): 403 (exit 5), nothing sent, typed, placed or started. `target` is `session <id>`, `job <id>` or
- *  `task <id>`; the app's and the CLI's words for it are core/sandbox/unavailable.ts's. */
-const outsideSandbox = (target: string): Reply => denied(`${SANDBOX_UNAVAILABLE}: outside-sandbox ${target}`)
+ *  decision): 403 (exit 5), nothing sent, typed, placed or started. `target` is `session <id>`, `job <id>`,
+ *  `task <id>` or, for a Host command that starts a program of its own, `command <name>`; the app's and the CLI's words
+ *  for it are core/sandbox/unavailable.ts's. `why` is a sentence after it for the person reading the CLI's line. */
+export const outsideSandbox = (target: string, why?: string): Reply =>
+  denied(`${SANDBOX_UNAVAILABLE}: outside-sandbox ${target}${why === undefined ? '' : `. ${why}`}`)
 
 /** What a command a sandboxed session sends (HANDS_WORK) would hand to something outside its sandbox, named for the
  *  refusal, or null when everything it sets going runs in the sandbox (final fix pass, part 2, A). Read from a state of

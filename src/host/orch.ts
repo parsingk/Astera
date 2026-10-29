@@ -16,7 +16,7 @@ import path from 'node:path'
 import { stat } from 'node:fs/promises'
 import { jobsViewOf, runsTimelineOf, type RuntimeFacts } from './remoteReads'
 import { createPresence } from './presence'
-import { handleCommand, handleExit, type OrchServerDeps } from '../core/orchestration/command'
+import { handleCommand, handleExit, outsideSandbox, sandboxedCaller, type OrchServerDeps } from '../core/orchestration/command'
 import type { CompletionCheckInput } from '../core/orchestration/pluginChecks'
 import { OrchestrationStore, isValidState, type OrchLoadResult } from '../core/orchestration/store'
 import { applyPendingReports, readPendingReports, type QueuedReport } from '../core/orchestration/pendingDrain'
@@ -1420,6 +1420,14 @@ export function createHostOrch(a: {
    *  request id replays this answer instead of launching the app twice (plan ruling P2); a refusal
    *  marks nothing and leaves no receipt. */
   const appJs = async (args: Record<string, unknown>, sessionId: string, marks: CallMarks): Promise<Reply> => {
+    // **A sandboxed session cannot ask for it**: `launch({ command })` starts a program as this Host, outside any sandbox,
+    // so the script is as good as a program the session ran there. The same check and words as `sessions send` and the
+    // Job commands (command.ts outsideSandbox); read before anything else, so nothing is started and no receipt is left.
+    if (await sandboxedCaller({ sessionSandboxed: a.sessionSandboxed }, { sessionId }))
+      return outsideSandbox(
+        'command app-js',
+        'app js starts programs as Astera, outside the sandbox, and a sandboxed session cannot hand work outside it, so nothing was started'
+      )
     if (!a.workspaces) return { status: 501, body: { error: 'this Host has no agent app workspace' } }
     const script = args.script
     if (typeof script !== 'string' || script.trim() === '') return { status: 400, body: { error: 'script is required' } }
