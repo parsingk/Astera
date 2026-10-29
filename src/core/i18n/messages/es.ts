@@ -179,7 +179,7 @@ export const es: Catalog = {
   'settings.security.sandboxCoverage.level.partial': 'En parte',
   'settings.security.sandboxCoverage.level.none': 'No bloqueado',
   'settings.security.sandboxCoverage.level.seen': 'Permitido',
-  'settings.security.sandboxCoverage.homeReadable': 'Fuera de las carpetas de inicio de sesión, la carpeta personal sigue siendo legible dentro del sandbox.',
+  'settings.security.sandboxCoverage.homeReadable': 'Fuera de las carpetas de inicio de sesión, la carpeta personal sigue siendo legible dentro del sandbox. En una sesión de Claude, los comandos que la persona escribe con `!` suelen ejecutarse fuera del sandbox (véase la documentación de sandbox de Claude Code); los del propio agente se ejecutan dentro.',
   'settings.security.sandboxCoverage.windowsClaude': 'Windows: el shell no tiene límites',
   'settings.security.sandboxCoverage.linuxClaudeUbuntu': "Ubuntu 25.04 y posteriores: los comandos de shell fallan por el perfil de AppArmor para bubblewrap",
   'settings.security.builtin.profileWrite': 'Escribir en la carpeta de ajustes de Astera',

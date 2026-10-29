@@ -212,7 +212,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.security.sandboxCoverage.level.partial': 'Partly',
   'settings.security.sandboxCoverage.level.none': 'Not blocked',
   'settings.security.sandboxCoverage.level.seen': 'Allowed',
-  'settings.security.sandboxCoverage.homeReadable': 'Outside the login folders, the home folder stays readable inside the sandbox.',
+  'settings.security.sandboxCoverage.homeReadable': 'Outside the login folders, the home folder stays readable inside the sandbox. In a Claude session, commands the person types with `!` usually run outside the sandbox (see Claude Code\'s sandboxing docs); the agent\'s own commands run inside it.',
   'settings.security.sandboxCoverage.windowsClaude': 'Windows: the shell is not restricted',
   'settings.security.sandboxCoverage.linuxClaudeUbuntu': "Ubuntu 25.04 and later: shell commands fail under AppArmor's bubblewrap profile",
   'settings.security.builtin.profileWrite': "Writing Astera's settings folder",
@@ -2354,7 +2354,7 @@ export const en: Record<keyof typeof ko, string> = {
   'conversation.exited.bypassConfirm.ifSkipped': 'Version resolution is skipped and the CLI on the default PATH runs as-is. The session comes up.',
   'conversation.exited.bypassConfirm.givesUpLabel': 'What you give up',
   'conversation.exited.bypassConfirm.givesUp':
-    "The tool version pinned for this project. Not just this session: every command it runs (the agent's own npm test, npm run build, node …) runs on the default version instead of the pinned one. The same command can behave differently than it does in your terminal. So does the session this one rolls into if a usage limit switches accounts.",
+    "The tool version pinned for this project. Not just this session: every command it runs (the agent\'s own npm test, npm run build, node …) runs on the default version instead of the pinned one. The same command can behave differently than it does in your terminal. So does the session this one rolls into if a usage limit switches accounts.",
   'conversation.exited.bypassConfirm.properFixLabel': 'The real fix',
   'conversation.exited.bypassConfirm.properFix': 'Fixing package.json means this dialog will not appear again.',
   'conversation.exited.bypassConfirm.confirm': 'Skip and retry',
