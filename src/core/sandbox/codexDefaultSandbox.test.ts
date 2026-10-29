@@ -86,6 +86,42 @@ describe('withoutElevatedDefault', () => {
   })
 })
 
+// Task P fix round 1 (review M1): the scanner reads triple quotes in a comment, in a one-line string or escaped inside a
+// multi-line basic string as text, and a file that ends inside a multi-line string as one it cannot read with
+// confidence: nothing is said to be set, and nothing is taken out
+describe('a scan the file could throw off', () => {
+  it('reads the reviewer’s desync inputs as TOML does', () => {
+    const tail = '[windows]\nsandbox = "elevated"\n'
+    // Triple quotes in a comment or a one-line string open nothing: the key is seen, and comes out
+    for (const lead of ['# use """ for long text\nmodel = "x"\n\n', "note = \"it'''s\"\n\n", 'x = """a""""\n\n']) {
+      expect(windowsSandboxDefaultOf(lead + tail), lead).toEqual({ kind: 'set', value: 'elevated', editable: true, table: true })
+      expect(withoutElevatedDefault(lead + tail, { dropEmptyTable: true }), lead).toBe(lead.replace(/\n\n$/, '\n'))
+    }
+    // A key inside a real multi-line string is text: after a comment that holds triple quotes, and past an escaped quote
+    for (const text of ['# """\nx = """\n[windows]\nsandbox = "elevated"\n"""\n', 'x = """a \\""" still inside\n[windows]\nsandbox = "elevated"\n"""\n']) {
+      expect(windowsSandboxDefaultOf(text), text).toEqual({ kind: 'none', table: false })
+      expect(withoutElevatedDefault(text, { dropEmptyTable: true }), text).toBeNull()
+    }
+  })
+
+  it('cannot tell from a file that ends inside a multi-line string, and takes nothing out of it', async () => {
+    const text = 'x = """\nnever closed\n[windows]\nsandbox = "elevated"\n'
+    expect(windowsSandboxDefaultOf(text)).toEqual({ kind: 'unknown' })
+    expect(withoutElevatedDefault(text, { dropEmptyTable: true })).toBeNull()
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-codex-default-unknown-'))
+    try {
+      const file = path.join(dir, 'config.toml')
+      await fs.writeFile(file, text)
+      expect(await removeElevatedDefault(file, { dropEmptyTable: true })).toBe('cannot-edit')
+      expect(await fs.readFile(file, 'utf8')).toBe(text)
+      expect(await fs.readdir(dir)).toEqual(['config.toml'])
+      expect(await elevatedDefaultIn(file)).toBe(false)
+    } finally {
+      await removeFixture(dir)
+    }
+  })
+})
+
 describe('codexConfigFile', () => {
   it("is the config.toml in the session's CODEX_HOME, or in ~/.codex for the ambient account", () => {
     expect(codexConfigFile({ CODEX_HOME: path.join('h', '.codex-accounts', 'w') }, 'h')).toBe(path.join('h', '.codex-accounts', 'w', 'config.toml'))
@@ -238,6 +274,24 @@ describe('on disk', () => {
       const r = await setUpForSandboxedSessionsOnly({ configFile: file, setUp: async () => ({ ok: true, out: '' }), log: (m) => logs.push(m) })
       expect(r.ok).toBe(true)
       expect(logs).toEqual([expect.stringMatching(/could not be read before the setup/)])
+    })
+
+    // Fix round 1 (review M1): a file this cannot read with confidence, before or after the setup, is left and said so
+    it('leaves a file it cannot read with confidence, before or after the setup, and says so', async () => {
+      const unclosed = 'x = """\nnever closed\n'
+      await fs.writeFile(file, unclosed)
+      const logs: string[] = []
+      const setUp = async () => (await fs.writeFile(file, `${unclosed}[windows]\nsandbox = "elevated"\n`), { ok: true, out: 'done' })
+      expect(await setUpForSandboxedSessionsOnly({ configFile: file, setUp, log: (m) => logs.push(m) })).toEqual({ ok: true, out: 'done' })
+      expect(await fs.readFile(file, 'utf8')).toBe(`${unclosed}[windows]\nsandbox = "elevated"\n`)
+      expect(logs).toEqual([expect.stringMatching(/cannot be read with confidence before the setup.*left/)])
+      // Readable before, not after: the line Codex added cannot be found with confidence, so nothing is written
+      await fs.writeFile(file, 'model = "x"\n')
+      const after: string[] = []
+      const breaks = async () => (await fs.writeFile(file, `model = "x"\n${unclosed}[windows]\nsandbox = "elevated"\n`), { ok: true, out: 'done' })
+      await setUpForSandboxedSessionsOnly({ configFile: file, setUp: breaks, log: (m) => after.push(m) })
+      expect(await fs.readFile(file, 'utf8')).toBe(`model = "x"\n${unclosed}[windows]\nsandbox = "elevated"\n`)
+      expect(after).toEqual([expect.stringMatching(/could not take .*windows\.sandbox.* out.*cannot be read with confidence/)])
     })
 
     it('says so when the line Codex left cannot be taken out exactly, and never fails the setup for it', async () => {

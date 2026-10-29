@@ -20,10 +20,13 @@ import { oneAtATime, writeThroughTmp } from '../accounts/fileQueue'
 import { readStoreFile } from '../storeFile'
 
 /** The top-level `windows.sandbox` of a config.toml: none (`table`: a `[windows]` table is there all the same), or its
- *  value, with whether this module can take it out exactly (`editable`: a string value on a line of its own). */
+ *  value, with whether this module can take it out exactly (`editable`: a string value on a line of its own); or
+ *  `unknown` when the file cannot be read with confidence: the scan ends inside a multi-line string (fix round 1, review
+ *  M1), so which lines are keys cannot be told, and nothing is said to be set or taken out. */
 export type WindowsSandboxDefault =
   | { kind: 'none'; table: boolean }
   | { kind: 'set'; value: string; editable: boolean; table: boolean }
+  | { kind: 'unknown' }
 
 /** A line and the line break after it, kept apart so the file goes back together byte for byte: Codex writes its own
  *  lines with \n into a file that may break them with \r\n. The last entry is what follows the last break. */
@@ -97,6 +100,7 @@ function locate(lines: Line[]): Located {
     multiline = togglesMultiline(text, multiline)
   }
   const table = header !== null
+  if (multiline !== null) return { setting: { kind: 'unknown' }, line: null, form: null, header: null, end: lines.length }
   return {
     setting: found ? { kind: 'set', value: found.value, editable: found.editable, table } : { kind: 'none', table },
     line: found?.line ?? null,
@@ -107,14 +111,16 @@ function locate(lines: Line[]): Located {
 }
 
 /** The top-level `windows.sandbox` a config.toml sets (WindowsSandboxDefault). Only the top-level key: a profile's, or
- *  a key of that name in another table, is not the home's default, and text inside a multi-line string is not a key. */
+ *  a key of that name in another table, is not the home's default, and text inside a multi-line string is not a key. A
+ *  file that ends inside a multi-line string reads as `unknown`. */
 export function windowsSandboxDefaultOf(text: string): WindowsSandboxDefault {
   return locate(linesOf(text)).setting
 }
 
 /**
  * `text` without its `windows.sandbox = "elevated"`, everything else as it was, or null when there is nothing this may
- * take out exactly: no such key, another value, an inline `windows = { … }` table. With `dropEmptyTable`, a `[windows]`
+ * take out exactly: no such key, another value, an inline `windows = { … }` table, a file it cannot read with
+ * confidence. With `dropEmptyTable`, a `[windows]`
  * header left with nothing under it goes too, with the blank line before it when nothing follows: what Codex appends to
  * a file that had no such table (a blank line, the header, the key) then comes back out whole. A header that carries a
  * comment stays.
@@ -147,8 +153,8 @@ export const codexConfigFile = (env: Record<string, string | undefined>, homeDir
   path.join(env.CODEX_HOME ?? path.join(homeDir, '.codex'), 'config.toml')
 
 /** Whether the config.toml at `file` makes the elevated sandbox its home's default, in any form (an inline table
- *  included, which removeElevatedDefault cannot take out). One that is not there or cannot be read does not: this is a
- *  hint, never a gate. */
+ *  included, which removeElevatedDefault cannot take out). One that is not there, cannot be read, or cannot be read with
+ *  confidence (`unknown`) does not: this is a hint, never a gate. */
 export async function elevatedDefaultIn(file: string): Promise<boolean> {
   const read = await readStoreFile(file)
   if (read.kind !== 'text') return false
@@ -157,7 +163,7 @@ export async function elevatedDefaultIn(file: string): Promise<boolean> {
 }
 
 /** What removeElevatedDefault did: took the line out, found none, found another value (left), or found one it cannot
- *  take out exactly (left: an inline table). */
+ *  take out exactly (left: an inline table, or a file it cannot read with confidence). */
 export type RemoveOutcome = 'removed' | 'absent' | 'other-value' | 'cannot-edit'
 
 /** Takes `windows.sandbox = "elevated"` out of the config.toml at `file` (withoutElevatedDefault), as
@@ -165,13 +171,24 @@ export type RemoveOutcome = 'removed' | 'absent' | 'other-value' | 'cannot-edit'
  *  a temp file and a rename. Writes nothing when there is nothing it may take out. Rejects when the file cannot be read
  *  or written. */
 export async function removeElevatedDefault(file: string, opts: { dropEmptyTable: boolean }): Promise<RemoveOutcome> {
+  return (await removeFrom(file, opts)).outcome
+}
+
+/** removeElevatedDefault's outcome, and for `cannot-edit` whether the file could not be read with confidence. */
+async function removeFrom(file: string, opts: { dropEmptyTable: boolean }): Promise<{ outcome: RemoveOutcome; unknown: boolean }> {
   let outcome: RemoveOutcome = 'absent'
+  let unknown = false
   await oneAtATime(file, async () => {
     const read = await readStoreFile(file)
     if (read.kind === 'unreadable') throw read.error
     if (read.kind === 'missing') return
     const d = windowsSandboxDefaultOf(read.text)
     if (d.kind === 'none') return
+    if (d.kind === 'unknown') {
+      outcome = 'cannot-edit'
+      unknown = true
+      return
+    }
     if (d.value !== 'elevated') {
       outcome = 'other-value'
       return
@@ -185,13 +202,16 @@ export async function removeElevatedDefault(file: string, opts: { dropEmptyTable
     await writeThroughTmp(file, next)
     outcome = 'removed'
   })
-  return outcome
+  return { outcome, unknown }
 }
 
-const WHY: Record<Exclude<RemoveOutcome, 'removed' | 'absent'>, string> = {
-  'other-value': 'it names another sandbox now, which is left as it is',
-  'cannot-edit': 'it is not on a line of its own (an inline table), so it is left; Settings › Agent profiles names it'
-}
+/** Why a removal after a setup took nothing out, for its log line. */
+const whyNot = (outcome: 'other-value' | 'cannot-edit', unknown: boolean): string =>
+  unknown
+    ? 'the file cannot be read with confidence (a multi-line string runs to its end as this reads it), so nothing is written'
+    : outcome === 'other-value'
+      ? 'it names another sandbox now, which is left as it is'
+      : 'it is not on a line of its own (an inline table), so it is left; Settings › Agent profiles names it'
 
 /**
  * Codex's setup of one home (`setUp`, windowsReadiness.ts codexWindowsSetup) for Astera's sandboxed sessions only: the
@@ -216,18 +236,24 @@ export async function setUpForSandboxedSessionsOnly(a: {
     return r
   }
   const was = before.kind === 'text' ? windowsSandboxDefaultOf(before.text) : ({ kind: 'none', table: false } as const)
+  if (was.kind === 'unknown') {
+    a.log(
+      `sandbox: ${a.configFile} cannot be read with confidence before the setup (a multi-line string runs to its end as this reads it), so the line Codex added is left for Settings › Agent profiles`
+    )
+    return r
+  }
   if (was.kind === 'set') {
     a.log(`sandbox: ${a.configFile} already set windows.sandbox before the setup ("${was.value}"), so the line is left as it is`)
     return r
   }
   try {
-    const outcome = await removeElevatedDefault(a.configFile, { dropEmptyTable: !was.table })
+    const { outcome, unknown } = await removeFrom(a.configFile, { dropEmptyTable: !was.table })
     a.log(
       outcome === 'removed'
         ? `sandbox: took the windows.sandbox = "elevated" line Codex's setup added out of ${a.configFile}, so only sandboxed sessions run in the elevated sandbox`
         : outcome === 'absent'
           ? `sandbox: the setup left no windows.sandbox line in ${a.configFile}`
-          : `sandbox: could not take windows.sandbox out of ${a.configFile}: ${WHY[outcome]}`
+          : `sandbox: could not take windows.sandbox out of ${a.configFile}: ${whyNot(outcome, unknown)}`
     )
   } catch (e) {
     a.log(`sandbox: could not take windows.sandbox out of ${a.configFile}: ${String(e)}`)
