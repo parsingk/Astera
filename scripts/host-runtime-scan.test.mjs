@@ -142,4 +142,13 @@ describe('the Windows Host runtime', () => {
     expect(src).toMatch(/cpSync\(join\(built, 'plugin-host\.js'\), join\(buildOut, 'plugin-host\.js'\)\)/)
     expect(src).toMatch(/plugin-host\.js is missing/)
   })
+
+  // Task K fix round 2: the Windows Host runs a sandboxed Codex check through Astera's check runner beside host.js
+  // (src/host/index.ts checkRunnerPath), so the runner is copied in with the Host too
+  it('ships the check runner beside host.js', async () => {
+    const { readFileSync } = await import('node:fs')
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'host-runtime.mjs'), 'utf8')
+    expect(src).toMatch(/cpSync\(join\(built, 'sandbox-check\.js'\), join\(buildOut, 'sandbox-check\.js'\)\)/)
+    expect(src).toMatch(/sandbox-check\.js is missing/)
+  })
 })

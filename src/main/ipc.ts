@@ -2122,11 +2122,15 @@ export function registerIpc(
     // worker or coordinator, asks for it apart (`forceSandbox`, C3), and where the CLI has no sandbox it is refused
     // rather than started without one; the renderer's handler clears that one.
     const forceSandbox = opts.forceSandbox === true
+    // A reviewer of work a profile's switch sandboxed allows the deny rules only where the CLI has no sandbox (Task K fix
+    // rounds 1 and 2): it then starts as a sandboxed profile's session does there, rather than being refused. A reviewer
+    // of a sandboxed session's work never asks (review.ts), so C3's refusal holds for it
+    const forceSandboxDenyOnly = opts.forceSandboxDenyOnly === true
     {
-      const { sandbox: _callerSandbox, forceSandbox: _forced, ...withoutSandbox } = opts
+      const { sandbox: _callerSandbox, forceSandbox: _forced, forceSandboxDenyOnly: _denyOnly, ...withoutSandbox } = opts
       opts = withoutSandbox
     }
-    if (forceSandbox) {
+    if (forceSandbox && !forceSandboxDenyOnly) {
       const refused = forcedSandboxBlocker(providerOf(account), process.platform)
       if (refused) throw refused
     }
@@ -2426,7 +2430,7 @@ export function registerIpc(
     return info
   }
   // The renderer's options never force the sandbox: only the app's own start of a sandboxed session's work does
-  ipcMain.handle('sessions.spawn', async (_e, opts) => spawnSession({ ...opts, forceSandbox: undefined }))
+  ipcMain.handle('sessions.spawn', async (_e, opts) => spawnSession({ ...opts, forceSandbox: undefined, forceSandboxDenyOnly: undefined }))
 
   // ---- agent browser (spec: docs/superpowers/specs/2026-09-06-agent-browser-design.md) ----
   // It sits here, above the orchestration startup, because `agentRuns` is read from the server deps
@@ -3092,6 +3096,7 @@ export function registerIpc(
           startedBy: 'agent',
           // A worker of a sandboxed session's work starts in the sandbox whatever its profile says (final fix pass, C3)
           ...(o.sandbox ? { forceSandbox: true } : {}),
+          ...(o.sandboxDenyOnly ? { forceSandboxDenyOnly: true } : {}),
           ...({
             accountId: o.accountId,
             cwd: o.cwd,
@@ -3211,7 +3216,19 @@ export function registerIpc(
       pluginCheck: (plugin, input) =>
         deps.completionChecks?.run(plugin, input) ?? Promise.resolve({ name: plugin, ...unavailable('plugin checks cannot run here') }),
       // GitHub CI is the Host's (GitHub lifecycle §4): a round this app runs hands it over through the socket
-      lifecycleCiBegin: (args) => orchCall({ cmd: 'lifecycle-ci-begin', args, sessionId: '' })
+      lifecycleCiBegin: (args) => orchCall({ cmd: 'lifecycle-ci-begin', args, sessionId: '' }),
+      // Task K: every check starts from the app's environment without what the Credentials list hides there (Q5), and a
+      // sandboxed Task's inside its workers' sandbox, as the app's session manager builds it for the attempt's account
+      platform: process.platform,
+      checkEnv: (cwd) => core.sessions.checkEnv(process.env, cwd),
+      sandboxedCheck: async (a) => {
+        const account = core.accounts.list().find((x) => x.id === a.accountId)
+        if (!account) throw new Error(`account ${a.accountId} is no longer registered, so the check cannot run in the sandbox its worker ran in`)
+        const l = await core.sessions.checkLaunch({ account, cwd: a.cwd, command: a.command })
+        return { launch: { file: l.file, args: l.args }, env: l.env, ...(l.runner ? { runner: true as const } : {}) }
+      },
+      // A check's words name the account by its name (Task K fix round 2)
+      accountName: (id) => core.accounts.list().find((x) => x.id === id)?.label ?? null
     })
     orchValidator = validation.validator
 

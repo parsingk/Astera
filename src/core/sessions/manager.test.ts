@@ -21,6 +21,8 @@ import { claudeSandboxSettings } from '../sandbox/claudeSettings'
 import type { GitLayout } from '../sandbox/gitLayout'
 import { claudeSandboxStart, gitExcludesFileOf, gitExcludesText } from '../sandbox/claudeStart'
 import { StatusLineManager } from './statusline'
+import { srtConfigOf, type SrtCheckPayload } from '../sandbox/srtCheck'
+import { CHECK_STARTED_MARK, CODEX_CHECK_FLAG, codexCheckRunner } from '../sandbox/checkRunner'
 
 class FakePty implements PtyLike {
   pid = 4242
@@ -1779,13 +1781,13 @@ describe('the sandbox at spawn', () => {
   /** The codex version the probe answers: '0.160.0', the floor, unless a case says otherwise (null: unreadable,
    *  undefined: no codex) */
   const versionOf = (v: string | null | undefined) => Object.assign((_cli: 'claude' | 'codex') => v, { warm: async () => {} })
-  const rig = (platform: 'linux' | 'darwin' | 'win32', o: { noDaemon?: boolean; ready?: Ready; hostSocketDir?: string | null; codex?: string | null; noVersionProbe?: true; excludes?: SpawnChecks['codexExcludes']; appKeyFile?: string; readOnly?: readonly string[] } = {}) => {
+  const rig = (platform: 'linux' | 'darwin' | 'win32', o: { noDaemon?: boolean; ready?: Ready; hostSocketDir?: string | null; codex?: string | null; noVersionProbe?: true; excludes?: SpawnChecks['codexExcludes']; appKeyFile?: string; readOnly?: readonly string[]; base?: Record<string, string> } = {}) => {
     const argv: string[][] = []
     const spawned: PtySpawnOptions[] = []
     const manager = new SessionManager(
       (_f, a, opts) => (argv.push(a as string[]), spawned.push(opts), new FakePty()),
       makeDescriptors(platform, HOME[platform], undefined, daemon(o.noDaemon ?? true)),
-      100, 20, HOME[platform], undefined, [], { ...BASE[platform] }, checksFor(platform, o.ready, o.hostSocketDir ?? null, o.excludes, o.appKeyFile, o.readOnly)
+      100, 20, HOME[platform], undefined, [], { ...BASE[platform], ...(o.base ?? {}) }, checksFor(platform, o.ready, o.hostSocketDir ?? null, o.excludes, o.appKeyFile, o.readOnly)
     )
     if (!o.noVersionProbe) manager.codexVersion = versionOf('codex' in o ? o.codex : '0.160.0')
     return { manager, argv, spawned }
@@ -1797,8 +1799,86 @@ describe('the sandbox at spawn', () => {
     const denied = [...sensitiveLocations(platform, env, HOME[platform]), ...credentialStoreDenies(platform, env, HOME[platform])]
     return { args: codexSandboxArgs({ platform, layout, denied, readOnly: [] }), env: codexSandboxEnv({ platform, layout, tmpDir: os.tmpdir() }), layout }
   }
-  /** The codex arguments after cmd.exe's wrapper, when win32 found a shim. */
-  const codexArgs = (a: string[]): string[] => (a[0] === '/d' ? a.slice(4) : a)
+  /** The codex arguments after Astera's runner (Windows, fix round 2) and cmd.exe's wrapper, when win32 found a shim. */
+  const codexArgs = (a: string[]): string[] => {
+    const cmd = a[1] === CODEX_CHECK_FLAG ? a.slice(3) : a
+    return cmd[0] === '/d' ? cmd.slice(4) : cmd
+  }
+  /** The runner a Windows Codex check goes through (checkRunner.ts) */
+  const RUNNER = { execPath: 'C:\\Astera\\Astera.exe', runnerPath: 'C:\\Astera\\sandbox-check.js' }
+
+  // Task K: a Task's check of a sandboxed Codex worker runs inside the same sandbox, as `codex sandbox` with the session's own
+  // profile (sessionSandboxArgs without `-a never`: the S2 measurement's shape, scripts/measure/s2.mjs) and the session's
+  // own environment, after the Credentials list's hiding. On Windows the very deny list matters: Codex resyncs a home's
+  // deny-read ACEs to each launch's list (Task K part 1)
+  it("starts a sandboxed Codex worker's check as `codex sandbox` with the session's own profile, environment and hiding", async () => {
+    for (const platform of ['linux', 'darwin', 'win32'] as const) {
+      const cwd = repo()
+      const { manager } = rig(platform, { base: { SECRET_TOKEN: 's', KEEP: 'k' } })
+      manager.hiding = { get: () => ({ remove: ['SECRET_TOKEN'], set: {} }), damaged: () => false }
+      manager.codexCheckRunner = codexCheckRunner(RUNNER)
+      const launch = await manager.checkLaunch({ account: codexAccount, cwd, command: 'npm run test' })
+      const want = await expected(platform, cwd)
+      // Fix round 2: on Windows the check's shell says it started before it runs, through Astera's runner (checkRunner.ts)
+      const shell = platform === 'win32' ? ['cmd.exe', '/d', '/s', '/c', `echo ${CHECK_STARTED_MARK}& npm run test`] : ['sh', '-c', 'npm run test']
+      expect(codexArgs(launch.args as string[]), platform).toEqual(['sandbox', ...want.args.slice(2), '--', ...shell])
+      expect(launch.env, platform).toMatchObject({ ...want.env, KEEP: 'k' })
+      expect(launch.env, platform).not.toHaveProperty('SECRET_TOKEN')
+      if (platform === 'win32') {
+        expect(launch.file).toBe(RUNNER.execPath)
+        expect((launch.args as string[]).slice(0, 2)).toEqual([RUNNER.runnerPath, CODEX_CHECK_FLAG])
+        expect(launch.env).toMatchObject({ ELECTRON_RUN_AS_NODE: '1' })
+        // Fix round 4 (R1): it says it goes through the runner, which takes the reason file's name out of the check's env
+        expect(launch.runner).toBe(true)
+      } else {
+        // macOS and Linux: straight in its pty, as before
+        expect(launch.file).not.toBe(RUNNER.execPath)
+        expect(launch.env).not.toHaveProperty('ELECTRON_RUN_AS_NODE')
+        expect(launch).not.toHaveProperty('runner')
+      }
+    }
+  })
+
+  // Fix round 2: a process without the runner cannot tell a Windows sandbox that failed from a check that failed, so it
+  // does not start one, before asking Codex anything
+  it('refuses a Windows Codex check where the process has no runner for it', async () => {
+    let asked = 0
+    const { manager } = rig('win32', { ready: async () => (asked++, 'ready') })
+    await expect(manager.checkLaunch({ account: codexAccount, cwd: repo(), command: 'npm test' })).rejects.toThrow('SANDBOX_UNAVAILABLE: no-check-runner')
+    expect(asked).toBe(0)
+  })
+
+  // codex hands the command to cmd.exe quoted with backslash escapes (windows-sandbox-rs/src/winutil.rs:72-112 at
+  // rust-v0.160.0), which cmd.exe does not read (S2 found it, s2.mjs WIN32_PROBES): a line holding a double quote goes
+  // through a script file the sandbox may read, in the temp folder
+  it('a Windows check line holding a double quote reaches cmd.exe through a script file', async () => {
+    const { manager } = rig('win32')
+    manager.codexCheckRunner = codexCheckRunner(RUNNER)
+    const line = 'python "my script.py" --flag'
+    const launch = await manager.checkLaunch({ account: codexAccount, cwd: repo(), command: line })
+    const args = codexArgs(launch.args as string[])
+    const tail = args.slice(args.indexOf('--') + 1)
+    expect(tail.slice(0, 3)).toEqual(['cmd.exe', '/d', '/c'])
+    expect(tail[3]).toMatch(/\.cmd$/)
+    expect(path.dirname(tail[3])).toBe(path.join(os.tmpdir(), 'astera-checks'))
+    expect(readFileSync(tail[3], 'utf8')).toContain(line)
+  })
+
+  it("refuses a Windows check where the account's sandbox is not set up, naming the account (E5)", async () => {
+    const { manager } = rig('win32', { ready: async () => 'not-set-up' })
+    manager.codexCheckRunner = codexCheckRunner(RUNNER)
+    await expect(manager.checkLaunch({ account: codexAccount, cwd: repo(), command: 'npm test' })).rejects.toThrow(`SANDBOX_UNAVAILABLE: windows-setup codex ${codexAccount.id}`)
+  })
+
+  // Task K (the person's Q5): every check, sandboxed or not, starts without what the Credentials list hides from a session
+  // in its folder
+  // Fix round 2: with the names it took, never the values, which the check's result shows
+  it('a check environment is the base without what the Credentials list hides for its folder, and names what it took', () => {
+    const { manager } = rig('linux')
+    manager.hiding = { get: (cwd) => ({ remove: cwd === '/w' ? ['SECRET_TOKEN'] : [], set: {} }), damaged: () => false }
+    expect(manager.checkEnv({ PATH: '/bin', SECRET_TOKEN: 's' }, '/w')).toEqual({ env: { PATH: '/bin' }, hidden: ['SECRET_TOKEN'] })
+    expect(manager.checkEnv({ PATH: '/bin', SECRET_TOKEN: 's' }, '/x')).toEqual({ env: { PATH: '/bin', SECRET_TOKEN: 's' }, hidden: [] })
+  })
 
   it('a sandboxed Codex session starts with -a never and the profile, not the bypass flag', async () => {
     for (const platform of ['linux', 'darwin', 'win32'] as const) {
@@ -2479,6 +2559,46 @@ describe('the sandbox at spawn, for Claude', () => {
     mkdirSync(path.join(top, '.git'))
     return top
   }
+
+  // Task K (the person's Q2): a Task's check of a sandboxed Claude worker on macOS and Linux runs under srt with the
+  // settings the session's twin holds (srtCheck.ts), through Astera's runner, from the session's environment after the
+  // hiding; where srt cannot run, or Ubuntu confines bubblewrap, or on Windows (no sandbox), it is refused (E5)
+  it("starts a sandboxed Claude worker's check under srt with its twin's settings, through Astera's runner", async () => {
+    for (const platform of ['linux', 'darwin'] as const) {
+      const r = await rig(platform, '2.1.310', { SECRET_TOKEN: 's' })
+      r.manager.hiding = { get: () => ({ remove: ['SECRET_TOKEN'], set: {} }), damaged: () => false }
+      const payloads: SrtCheckPayload[] = []
+      r.manager.checkRunner = {
+        missing: async () => null,
+        launch: (p) => (payloads.push(p), { file: '/opt/astera/astera', args: ['/opt/astera/sandbox-check.js', JSON.stringify(p)], env: { ELECTRON_RUN_AS_NODE: '1' } })
+      }
+      const cwd = repoIn()
+      const launch = await r.manager.checkLaunch({ account, cwd, command: 'npm run test' })
+      const layout = await gitLayoutOf(cwd)
+      expect(payloads, platform).toEqual([{ config: srtConfigOf(builder(platform, r, layout).sandbox!, { cwd, layout }), cwd, command: 'npm run test' }])
+      expect(launch.file).toBe('/opt/astera/astera')
+      expect(launch.runner).toBe(true)
+      expect(launch.env, platform).toMatchObject({ ELECTRON_RUN_AS_NODE: '1', npm_config_cache: npmCacheOf(r.tmpDir) })
+      expect(launch.env, platform).not.toHaveProperty('SECRET_TOKEN')
+    }
+  })
+
+  it('refuses a Claude check where srt cannot run, where Ubuntu confines bubblewrap, on Windows, and with no runner', async () => {
+    const never = (): never => {
+      throw new Error('not launched')
+    }
+    const r = await rig('linux')
+    r.manager.checkRunner = { missing: async () => 'ripgrep (rg) not found', launch: never }
+    await expect(r.manager.checkLaunch({ account, cwd: repoIn(), command: 'x' })).rejects.toThrow('SANDBOX_UNAVAILABLE: runtime-missing claude')
+    r.manager.checkRunner = { missing: async () => null, launch: never }
+    r.manager.sandboxWarn = { claudeUsernsRestricted: () => true, warn: () => {} }
+    await expect(r.manager.checkLaunch({ account, cwd: repoIn(), command: 'x' })).rejects.toThrow('SANDBOX_UNAVAILABLE: userns-restricted claude')
+    const w = await rig('win32')
+    await expect(w.manager.checkLaunch({ account, cwd: repoIn(), command: 'x' })).rejects.toThrow('SANDBOX_UNAVAILABLE: no-sandbox claude')
+    // Fix round 2: a process without the runner says so, which running the checks again will not change
+    const none = await rig('darwin')
+    await expect(none.manager.checkLaunch({ account, cwd: repoIn(), command: 'x' })).rejects.toThrow('SANDBOX_UNAVAILABLE: no-check-runner')
+  })
 
   // Task E fix round 2: where Ubuntu's AppArmor profile confines bubblewrap (asked once per process by the wiring), a
   // sandboxed Claude session on Linux starts as today and its sink is told why its shell will fail; not when the check

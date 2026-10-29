@@ -1610,9 +1610,13 @@ export function applyReviewResult(
   // applyWorkerDone 과 같은 판정 — outcome 만 보면 closeDispatch 가 닫아 둔(endedAt 만 있고
   // outcome 은 없는) Dispatch 가 걸러지지 않아, 늦게 도착한 보고가 Task 의 종료 상태를 가로챈다.
   if (dispatch.outcome || dispatch.endedAt) return ok(s, 'alreadyReported')
-  const task = s.tasks.find((t) => t.id === a.taskId)
-  if (!task) return gone(`unknown task: ${a.taskId}`)
-  if (task.status !== 'reviewing') return err(`task is not reviewing: ${task.status}`)
+  const reviewed = s.tasks.find((t) => t.id === a.taskId)
+  if (!reviewed) return gone(`unknown task: ${a.taskId}`)
+  if (reviewed.status !== 'reviewing') return err(`task is not reviewing: ${reviewed.status}`)
+  // Task K fix round 1: whether this review ran with Claude Code's file-tool protection only, on the Task's record from
+  // its verdict on, as the last review's issues are; a review in a sandbox, or with none, clears it
+  const { reviewFileToolsOnly: _was, ...unmarked } = reviewed
+  const task: Task = dispatch.sandboxKind === 'deny-only' ? { ...unmarked, reviewFileToolsOnly: true } : unmarked
   const lang: Lang = a.lang ?? 'en'
   const nextDispatch: Dispatch = {
     ...dispatch,

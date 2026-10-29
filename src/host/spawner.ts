@@ -28,6 +28,8 @@ import { ensureShuttle, sessionCmdLink, shuttleNames } from '../core/orchestrati
 import type { ChatManagerDeps, ChatOrchEnv } from '../core/chat/manager'
 import type { CodexWindowsReady, PreparedLayouts } from '../core/sandbox/prepared'
 import { claudeSandboxStart, type ClaudeSandboxStart } from '../core/sandbox/claudeStart'
+import { srtCheckRunner } from '../core/sandbox/srtCheck'
+import { codexCheckRunner } from '../core/sandbox/checkRunner'
 import { codexExcludesWriter, type CodexExcludes, type RunGit } from '../core/sandbox/gitExcludes'
 import { forcedSandboxBlocker } from '../core/sandbox/unavailable'
 import { binDirFor } from '../core/orchestration/cliInstall'
@@ -138,6 +140,10 @@ export interface HostSpawnerDeps {
   rolloutOwner?: RolloutOwnerReader
   /** Test injection; defaults to readAccountEntries. */
   readAccounts?: (file: string) => Promise<Account[]>
+  /** Astera's check runner beside the Host's own bundle (Task K), run by this Host's executable as node: a sandboxed Claude
+   *  Task's check runs under srt through it on macOS and Linux, and a sandboxed Codex Task's check on Windows (fix round
+   *  2), from the Host runtime's copy beside host.js. Absent or not built, such a check is refused (`no-check-runner`). */
+  checkRunnerPath?: string
   /** Each prompt write of a worker this Host's coordinator starts (Host journal, A19 lifted). Isolated: a
    *  throw is logged and the start goes on. */
   onPromptWrite?(e: PromptWriteEvent): void
@@ -202,6 +208,14 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
   /** The copy of the person's git excludes a sandboxed win32 Codex start writes in this Host's temp folder (one for its
    *  profile, core/sandbox/gitExcludes.ts), shared with the Host's chat sessions. */
   codexExcludes?: CodexExcludes
+  /** The environment a Task's check in `cwd` starts from, `base` without what the Credentials list hides there, and the
+   *  names it took (Task K, Q5 and fix round 2; SessionManager.checkEnv). */
+  checkEnv?(base: NodeJS.ProcessEnv, cwd: string): { env: NodeJS.ProcessEnv; hidden: string[] }
+  /** How a sandboxed Task's check runs inside its workers' sandbox, as the attempt's registered account (Task K;
+   *  SessionManager.checkLaunch). Rejects for an account no longer registered, and with a sandbox refusal. */
+  checkLaunch?(a: { accountId: string; cwd: string; command: string }): Promise<{ file: string; args: string[] | string; env: Record<string, string>; runner?: true }>
+  /** A registered account's display name, null for one not registered (Task K fix round 2: a check's words name it). */
+  accountName?(accountId: string): Promise<string | null>
   /** The session shuttle's values once the Host wrote it (kicked at creation); undefined until then. */
   orchEnvNow(): ChatOrchEnv | undefined
   /** How many worker and coordinator starts are under way right now. */
@@ -535,6 +549,13 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     log
   })
   sessions.claudeSandbox = claudeSandbox
+  // A sandboxed Claude Task's check under srt (Task K), on the systems Claude's sandbox runs on
+  // Only where the runner was built (fix round 2): one that is not there would end each check as if the check had failed.
+  // On Windows it is copied beside host.js into the Host's runtime (scripts/host-runtime.mjs)
+  const checkRunnerPath = d.checkRunnerPath !== undefined && exists(d.checkRunnerPath) ? d.checkRunnerPath : null
+  if (platform !== 'win32' && checkRunnerPath) sessions.checkRunner = srtCheckRunner({ execPath: process.execPath, runnerPath: checkRunnerPath })
+  // The same runner for a Windows Codex check (fix round 2, checkRunner.ts); the session manager asks for it on Windows only
+  if (checkRunnerPath) sessions.codexCheckRunner = codexCheckRunner({ execPath: process.execPath, runnerPath: checkRunnerPath })
   // The codex floor a sandboxed Codex start asks, here and in the Host's chat sessions (final review I2)
   const codexVersion = d.codexVersion ?? cliVersions
   sessions.codexVersion = codexVersion
@@ -703,7 +724,10 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     // The profile's sandbox switch (sandbox design §6): the prepare reads the folder for it, and the spawn starts in it.
     // What a sandboxed session asked for, or the work it made, starts in it whatever the profile says (final fix pass,
     // C3), and where its CLI has no sandbox it is refused before anything starts rather than run without one
-    if (o.sandbox === true) {
+    // A reviewer of work a profile's switch sandboxed allows the deny rules only there (`sandboxDenyOnly`, Task K fix
+    // rounds 1 and 2): it starts as a sandboxed profile's session does on that system, and its Dispatch records
+    // `deny-only`. A reviewer of a sandboxed session's work never asks, so C3's refusal holds for it
+    if (o.sandbox === true && o.sandboxDenyOnly !== true) {
       const refused = forcedSandboxBlocker(providerOf(account), platform)
       if (refused) {
         log(`spawn refused: ${refused.message} (a sandboxed session's work)`)
@@ -935,6 +959,16 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   return {
     capabilities,
     hiding,
+    checkEnv: (base, cwd) => sessions.checkEnv(base, cwd),
+    checkLaunch: async (a) => {
+      const account = (await readAccounts(accountsPath)).find((x) => x.id === a.accountId)
+      if (!account) throw new Error(`account ${a.accountId} is no longer registered, so the check cannot run in the sandbox its worker ran in`)
+      // As a spawn finds the CLI: one installed since this Host started
+      await ensureOnWindowsPath([providerOf(account)])
+      await ensureInstallDirOnPath([providerOf(account)])
+      return sessions.checkLaunch({ account, cwd: a.cwd, command: a.command })
+    },
+    accountName: async (id) => (await readAccounts(accountsPath)).find((x) => x.id === id)?.label ?? null,
     enforce,
     sandboxLayouts: sessions.sandboxLayouts,
     codexWindowsReady,

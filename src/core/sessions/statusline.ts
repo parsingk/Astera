@@ -795,6 +795,11 @@ export class StatusLineManager {
     return this.writeTwinsOf(key, part)
   }
 
+  /** The part a scope's twin holds and its links (sandboxNamed), for a Task's check of that scope (Task K). */
+  sandboxPartOf(scope: SandboxScope): { part: SandboxPart; links: string[] } {
+    return this.sandboxNamed(scope)
+  }
+
   /** What a sandbox twin adds: the builder's settings, for the scope's layout and from the scope's environment, under the
    *  person's home. */
   /** The twin's part, and the links inside the session's writable folders its named paths go through (Task E fix

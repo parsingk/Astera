@@ -51,7 +51,7 @@ export function hidingFor(a: { entries: CredentialEntry[]; cwd: string; projectO
 /** Takes the change into `env`: names removed case-insensitively on win32 (Windows variables are), exactly elsewhere; each
  *  redirect's empty folder or file made when it is not there yet. */
 export function applyHiding(env: Record<string, string | undefined>, h: HidingChange, platform: NodeJS.Platform): void {
-  const sameName = (a: string, b: string): boolean => (platform === 'win32' ? a.toUpperCase() === b.toUpperCase() : a === b)
+  const sameName = sameNameOn(platform)
   const drop = (name: string): void => {
     for (const k of Object.keys(env)) if (sameName(k, name)) delete env[k]
   }
@@ -64,6 +64,21 @@ export function applyHiding(env: Record<string, string | undefined>, h: HidingCh
     } else mkdirSync(target, { recursive: true })
     env[name] = target
   }
+}
+
+/** Whether two variable names are one: whatever their case on win32 (Windows variables are), exactly elsewhere. */
+const sameNameOn =
+  (platform: NodeJS.Platform) =>
+  (a: string, b: string): boolean =>
+    platform === 'win32' ? a.toUpperCase() === b.toUpperCase() : a === b
+
+/** What a process started from `env` goes without once `h` is applied (applyHiding), by the names the list gives: those
+ *  of `h.remove` that `env` holds, then every redirected one, whose value the person's own no longer is. Names only, never
+ *  values (Task K fix round 2: a check's result says them). */
+export function hiddenNames(env: Record<string, string | undefined>, h: HidingChange, platform: NodeJS.Platform): string[] {
+  const sameName = sameNameOn(platform)
+  const held = (name: string): boolean => Object.keys(env).some((k) => env[k] !== undefined && sameName(k, name))
+  return [...new Set([...h.remove.filter(held), ...Object.keys(h.set)])]
 }
 
 /** A worker's folder is a worktree outside its project: the worktree registry says which project it belongs to. */

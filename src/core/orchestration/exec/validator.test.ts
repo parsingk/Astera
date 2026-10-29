@@ -611,6 +611,40 @@ describe('TaskValidator — 여러 check', () => {
     expect(calls).toHaveLength(0)
   })
 
+  // Task K fix round 4 (R3): a check that hangs, for a login or a token the Credentials list kept from it, times out twice.
+  // That round is not committed (onCannotRun carries only the reason), so the question it opens is where a person meets it:
+  // its words name what the check started without, as a failed result's line does
+  it('a check that timed out twice names in its question the variables the Credentials list kept from it', async () => {
+    const runner = fakeRunner()
+    const start = runner.start
+    runner.start = async (a) => {
+      const r = await start(a)
+      return typeof r === 'object' && 'runId' in r ? { ...r, hiddenEnv: ['NPM_TOKEN', 'KUBECONFIG'] } : r
+    }
+    const { onSettled } = settledCalls()
+    const cannot: string[] = []
+    const v = new TaskValidator({ runner, onSettled, onCannotRun: async (a) => void cannot.push(a.reason), timeoutMs: 50 })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1', configIds: ['a'] })
+    await vi.waitFor(() => expect(runner.stopped).toEqual(['run_1']))
+    v.onRunExit({ runId: 'run_1', exitCode: 137 })
+    await vi.waitFor(() => expect(runner.stopped).toEqual(['run_1', 'run_2']))
+    v.onRunExit({ runId: 'run_2', exitCode: 137 })
+    await vi.waitFor(() => expect(cannot).toHaveLength(1))
+    expect(cannot[0]).toContain('timed out twice')
+    expect(cannot[0]).toContain('NPM_TOKEN, KUBECONFIG')
+    // A check the list took nothing from says nothing of it
+    const plain = fakeRunner()
+    const said: string[] = []
+    const w = new TaskValidator({ runner: plain, onSettled, onCannotRun: async (a) => void said.push(a.reason), timeoutMs: 50 })
+    w.enqueue({ taskId: 'tsk_2', cwd: 'D:/w2', configIds: ['a'] })
+    await vi.waitFor(() => expect(plain.stopped).toEqual(['run_1']))
+    w.onRunExit({ runId: 'run_1', exitCode: 137 })
+    await vi.waitFor(() => expect(plain.stopped).toEqual(['run_1', 'run_2']))
+    w.onRunExit({ runId: 'run_2', exitCode: 137 })
+    await vi.waitFor(() => expect(said).toHaveLength(1))
+    expect(said[0]).not.toContain('Credentials')
+  })
+
   it('timeout 뒤에는 그 cwd 의 다음 항목이 시작한다', async () => {
     const runner = fakeRunner()
     const { onSettled } = settledCalls()
@@ -732,5 +766,50 @@ describe('TaskValidator — github:ci', () => {
     await vi.waitFor(() => expect(cannot).toHaveLength(2))
     expect(cannot[1]).toContain('the Host refused: 409')
     expect(failing.holds('tsk_l')).toBe(false)
+  })
+})
+
+// Task K: a check of a sandboxed Task that its sandbox cannot be put around is not run outside it, and is not the code's
+// fault either (rule E5): the runner says so, and the round settles with that check as one that could not be made, which
+// the verdict puts to a person (retry, skip, mark failed). A check that ran outside any sandbox although its workers were
+// sandboxed (Claude Code on Windows, the person's Q1) says so in its result.
+describe('TaskValidator — the sandbox of a sandboxed Task (Task K)', () => {
+  it('a check that cannot be put in the sandbox settles the round as could-not-be-made, the rest not run, nothing started', async () => {
+    const { onSettled, calls } = settledCalls()
+    const cannot = vi.fn(async () => {})
+    const runner: ValidatorRunner = {
+      start: async (a) => ({ unavailable: 'the Windows sandbox of account acc1 is not set up', name: a.configId.toUpperCase() }),
+      output: () => '',
+      stop: () => {}
+    }
+    const v = new TaskValidator({ runner, onSettled, onCannotRun: cannot })
+    v.enqueue({ taskId: 'tsk_1', cwd: absPath('w1'), configIds: ['cfg1', 'cfg2'] })
+    await vi.waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].results).toEqual([
+      expect.objectContaining({ configId: 'cfg1', name: 'CFG1', status: 'error', summary: 'the Windows sandbox of account acc1 is not set up' }),
+      { configId: 'cfg2', name: 'cfg2', status: 'not-run' }
+    ])
+    expect(cannot).not.toHaveBeenCalled()
+    expect(v.holds('tsk_1')).toBe(false)
+  })
+
+  it('a check that ran outside any sandbox for sandboxed workers says so in its result, and the next one only if it did too', async () => {
+    const { onSettled, calls } = settledCalls()
+    let n = 0
+    const runner: ValidatorRunner = {
+      start: async (a) => ({ runId: `run_${++n}`, name: a.configId, ...(n === 1 ? { outsideSandbox: true as const } : {}) }),
+      output: () => '',
+      stop: () => {}
+    }
+    const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
+    v.enqueue({ taskId: 'tsk_1', cwd: absPath('w1'), configIds: ['cfg1', 'cfg2'] })
+    await vi.waitFor(() => expect(n).toBe(1))
+    v.onRunExit({ runId: 'run_1', exitCode: 0 })
+    await vi.waitFor(() => expect(n).toBe(2))
+    v.onRunExit({ runId: 'run_2', exitCode: 1 })
+    await vi.waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].results[0]).toMatchObject({ configId: 'cfg1', status: 'passed', outsideSandbox: true })
+    expect(calls[0].results[1]).toMatchObject({ configId: 'cfg2', status: 'failed' })
+    expect(calls[0].results[1]).not.toHaveProperty('outsideSandbox')
   })
 })

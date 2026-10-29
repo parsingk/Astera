@@ -166,6 +166,20 @@ export function buildCodexAppServerCommand(
   return platform === 'win32' ? windowsSpawn('codex', args, resolve) : { file: 'codex', args }
 }
 
+/** A sandboxed Task's check as Codex's own sandbox helper runs it (Task K): `codex sandbox <the profile's -c values> --
+ *  <command>`, "a command under the same policies Codex uses internally" (learn.chatgpt.com/docs/developer-commands,
+ *  `codex sandbox`), with the same win32 wrapping as the other codex commands. `sandboxArgs` are the session's profile
+ *  without `-a never` (appServerSandboxArgs), the shape the S2 measurement ran (scripts/measure/s2.mjs). */
+export function buildCodexSandboxCommand(
+  platform: NodeJS.Platform,
+  sandboxArgs: string[],
+  command: string[],
+  resolve: ResolveExecutable = resolveWindowsExecutable
+): { file: string; args: string[] } {
+  const args = ['sandbox', ...sandboxArgs, '--', ...command]
+  return platform === 'win32' ? windowsSpawn('codex', args, resolve) : { file: 'codex', args }
+}
+
 /** A chat session's line process for Claude: `claude --output-format stream-json …`, spoken over stdio
  *  (chat-sessions design §6.5's Claude sibling, core/chat/claudeProtocol.ts). Unlike Codex's app-server
  *  command, resume/bypass/model are argv here (Claude has no equivalent of thread/resume) — built by

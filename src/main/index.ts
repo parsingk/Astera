@@ -482,7 +482,7 @@ app.whenReady().then(async () => {
       mainWindow = w
       return w
     },
-    createCore: () => createCore(app.getPath('userData'), app.getLocale()),
+    createCore: () => createCore(app.getPath('userData'), app.getLocale(), { sandboxCheck: path.join(__dirname, 'sandbox-check.js') }),
     log: (m) => console.log(m)
   })
   core = started.core

@@ -14,6 +14,7 @@ import { globalExcludesText, runGitFile, type RunGit } from './gitExcludes'
 import { ensureGitFiles, ensureWorktreeConfigFiles, gitLayoutOf, type GitLayout } from './gitLayout'
 import { PreparedLayouts } from './prepared'
 import type { LinkLook } from './locations'
+import type { ClaudeSandboxSettings } from './claudeSettings'
 import { SANDBOX_UNAVAILABLE, sandboxUnavailable } from './unavailable'
 
 const slashed = (p: string): string => p.replace(/\\/g, '/')
@@ -83,6 +84,9 @@ export interface ClaudeSandboxStart {
   /** A chat's one `--settings`: the sandbox of its scope, with the Enforce hook when `enforce`; null when it was not
    *  written. */
   chatArgs(enforce: boolean, scope: SandboxScope): string[] | null
+  /** The settings the scope's twin holds, and the links its named paths go through (Task K: a Task's check runs under
+   *  them, srtCheck.ts). */
+  settingsOf(scope: SandboxScope): { part: ClaudeSandboxSettings; links: string[] }
   /** What the session's environment gets, after everything else Astera adds: `inherited` is that environment. */
   env(inherited: Record<string, string | undefined>): Record<string, string>
 }
@@ -99,6 +103,7 @@ export function claudeSandboxStart(o: {
   files: {
     ensureSandboxFiles(scope: SandboxScope): Promise<SandboxFilesResult>
     sandboxChatArgs(enforce: boolean, scope: SandboxScope): string[] | null
+    sandboxPartOf(scope: SandboxScope): { part: ClaudeSandboxSettings; links: string[] }
   }
   /** The version check Enforce asks (cliVersion.ts), shared with it. */
   version: Pick<CliVersionProbe, 'warm'> & ((cli: 'claude') => string | null | undefined)
@@ -187,6 +192,7 @@ export function claudeSandboxStart(o: {
       return layout === undefined ? undefined : { layout, env, cwd, look: o.linkLook }
     },
     chatArgs: (enforce, scope) => o.files.sandboxChatArgs(enforce, scope),
+    settingsOf: (scope) => o.files.sandboxPartOf(scope),
     env: (inherited) =>
       claudeSandboxEnv({
         platform: o.platform,

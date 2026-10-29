@@ -21,6 +21,8 @@ import { isSamePath } from '../../files/tree'
 import type { Provider } from '../../providers/meta'
 import { KNOWLEDGE_DIRS, knowledgeFilesFrom, type KnowledgeFiles } from '../../knowledge/detect'
 import type { CheckResult, RepairReason, ReviewIssue } from '../types'
+import type { SandboxKind } from '../../types'
+import type { StartedWorker } from '../command'
 import type { LifecycleRepairFacts } from '../lifecycleTask'
 import type { WeakeningFinding } from '../../github/weakening'
 import { REPAIR_DIAGNOSTICS, diagnosticLine, findingsCountOf } from '../pluginChecks'
@@ -86,9 +88,14 @@ export interface CoordinatorDeps {
      *  Dispatch's; a coordinator's and a reviewer's never do. */
     agentProfileId?: string
     /** Start in the CLI's sandbox whatever the profile says (final fix pass, C3): a worker of work a sandboxed session
-     *  made or asked for. The wiring refuses it where that CLI has none. */
+     *  made or asked for. The wiring refuses it where that CLI has none, unless `sandboxDenyOnly`. */
     sandbox?: true
-  }): Promise<{ id: string }>
+    /** With `sandbox`: where the CLI has no sandbox, start with its deny rules only rather than be refused (a reviewer of
+     *  work a profile's switch sandboxed, Task K fix rounds 1 and 2). */
+    sandboxDenyOnly?: true
+    /** Resolves with the protection the session started in (SessionInfo.sandboxKind), absent when none: its Dispatch
+     *  records it, and a Task's checks run in the same kind (Task K). */
+  }): Promise<{ id: string; sandboxKind?: SandboxKind }>
   writeToSession(sessionId: string, data: string): void
   /** When that session's pty last printed anything (epoch ms), null for never. Given, a typed prompt's Enter waits for
    *  the session to have drawn the prompt and gone quiet (ptyDriver): Codex swallows an Enter that comes right after a
@@ -900,7 +907,10 @@ export class OrchCoordinator {
     /** Start the worker in its CLI's sandbox whatever its profile says (final fix pass, C3), handed to `spawnSession`.
      *  Not used by a reuse, as `agentProfileId`. */
     sandbox?: true
-  }): Promise<{ sessionId: string; cwd: string; specPath: string }> {
+    /** With `sandbox`, handed to `spawnSession`: deny rules only where the CLI has no sandbox (a reviewer, Task K fix
+     *  round 1). */
+    sandboxDenyOnly?: true
+  }): Promise<StartedWorker> {
     const actual = this.deps.accountProvider(a.accountId)
     if (actual === null) throw new Error(`unknown account: ${a.accountId}`)
     if (actual !== a.provider)
@@ -1036,6 +1046,8 @@ export class OrchCoordinator {
       )
 
     let finalSessionId = a.terminal ?? ''
+    /** What the spawned session runs in (Task K); a reused one's is its earlier Dispatch's (checkSandbox.ts startedSandboxKind) */
+    let sandboxKind: SandboxKind | undefined
     if (a.terminal) {
       // **A reuse inherits the rolling chain of the session it lands in — a.rollAccountIds is not
       // applied here.** A chain is registered when a session is spawned (the rollAccountIds argument in
@@ -1097,13 +1109,15 @@ export class OrchCoordinator {
         // as initialPrompt, same as an ordinary (non-resuming) start.
         ...(resumeSessionId && a.provider === 'codex' ? { resumePrompt: prompt } : { initialPrompt: prompt }),
         ...(a.agentProfileId !== undefined ? { agentProfileId: a.agentProfileId } : {}),
-        ...(a.sandbox ? { sandbox: true as const } : {})
+        ...(a.sandbox ? { sandbox: true as const } : {}),
+        ...(a.sandbox && a.sandboxDenyOnly ? { sandboxDenyOnly: true as const } : {})
       })
       finalSessionId = spawned.id
+      sandboxKind = spawned.sandboxKind
       promptWrite('confirmed', 'argv')
     }
 
-    return { sessionId: finalSessionId, cwd, specPath }
+    return { sessionId: finalSessionId, cwd, specPath, ...(sandboxKind ? { sandboxKind } : {}) }
   }
 
   /** Deciding whether that session may be closed (whether it is retained, whether this is the latest

@@ -1039,6 +1039,19 @@ describe('snapshotFor — 검사 결과와 자동 수정 진행', () => {
     expect(taskOf(s).convergence).toBeUndefined()
   })
 
+  // Task K (the person's Q1): a check that ran outside any sandbox for sandboxed workers says so on the run's graph too
+  it('projects a check that ran outside the sandbox as such, and no other', () => {
+    const round: CheckResult[] = [
+      { configId: 'c1', name: 'Tests', status: 'passed', outsideSandbox: true },
+      { configId: 'c2', name: 'Lint', status: 'passed' }
+    ]
+    const s = withRuns([run('r1', absPath('p'))], [{ ...task('t1', 'r1', 'completed'), checks: round }])
+    expect(taskOf(s).checks).toEqual([
+      { configId: 'c1', name: 'Tests', status: 'passed', outsideSandbox: true },
+      { configId: 'c2', name: 'Lint', status: 'passed' }
+    ])
+  })
+
   // Plugin Phase 5c: a skipped check says so, and a round a person let go on without a check (C9 skip-check) shows what
   // it carries, and which check runs now
   it('a skipped check is projected as skipped, and a resumed round shows its skipped check and the check it runs now', () => {

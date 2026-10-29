@@ -61,6 +61,13 @@ describe('executeRecovery', () => {
     expect((h.started[0] as { resume?: unknown }).resume).toBeUndefined()
   })
 
+  // Task K: the re-dispatched attempt records the protection its new session runs in, as every attempt does
+  it("records the protection the recovered worker's session runs in", async () => {
+    const h = deps({ startWorker: async () => ({ sessionId: 'sess-2', cwd: 'D:/wt', specPath: 'D:/spec2.md', sandboxKind: 'sandbox' as const }) })
+    await executeRecovery({ attempt: attempt(), decision: decision(), state: h.state, now: NOW }, h.d as never)
+    expect(h.state.dispatches.find((d) => !d.endedAt)).toMatchObject({ sessionId: 'sess-2', sandboxKind: 'sandbox' })
+  })
+
   it('repair attempt 의 redispatch 는 repair 표시를 잇고 repair spec 을 넘긴다', async () => {
     const h = deps({}, task({ checks: [{ configId: 'c1', name: 'Tests', status: 'failed', exitCode: 1 }] }))
     const r = await executeRecovery(
