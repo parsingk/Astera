@@ -8,6 +8,7 @@
 - 통과하면 `- [ ] 통과` 를 `- [x] 통과` 로 바꿉니다. 실패하면 `- [x] 실패` 로 바꾸고, `메모` 에 무엇이 달랐는지 적습니다.
 - '출력' 칸에는 세션이나 터미널이 보여 준 것을 그대로 붙여 넣습니다. 길면 앞뒤 몇 줄만 남겨도 됩니다.
 - 비밀번호, 토큰, 키의 내용은 어디에도 붙여 넣지 마세요. 아래 명령은 그런 값을 출력하지 않습니다.
+- `Operation not permitted` 는 셸에 따라 `operation not permitted` 처럼 소문자로도 나옵니다. 같은 뜻입니다.
 - 점검 하나가 막혀 더 나갈 수 없으면, 본 것을 메모에 적고 다음 점검으로 넘어갑니다.
 
 ## 자동 점검 결과
@@ -58,6 +59,10 @@ R=$(ls -d ~/astera-mac-check-* | tail -n 1); echo "$R"
 3. 경로가 `/Users/<이름>/.claude` 인 Claude 항목과 `/Users/<이름>/.codex` 인 Codex 항목만 체크된 채로 두고, 다른 항목은
    체크를 끕니다. 두 항목 모두 **로그인됨** (Logged in) 이어야 합니다.
 4. **선택 등록** (Register selected) 을 누릅니다.
+5. 로그인이 `~/.claude`, `~/.codex` 가 아니라 설치된 Astera 에서 **추가** (Add) 로 만든 계정 폴더
+   (`~/.claude-accounts/<이름>`, `~/.codex-accounts/<이름>`)에 있으면, 감지된 계정 창에 나오지 않습니다. 그때는 계정 칸
+   위쪽의 **가져오기** (Import) 아이콘(폴더 모양)을 누르고 그 폴더를 고릅니다. 종류(Claude 나 Codex)와 라벨이 채워지면
+   아래의 **가져오기** (Import) 를 누릅니다. 이것도 새 로그인을 만들지 않습니다.
 
 하지 말 것: 계정 칸 위쪽의 + 버튼, **추가** (Add) 로 계정을 새로 만들지 않습니다(새 로그인을 만들고 키체인에 새 항목을
 씁니다). 계정의 로그아웃도 하지 않습니다. 혹시 macOS 가 키체인 접근을 묻는 창을 띄우면 거부를 누릅니다.
@@ -95,11 +100,11 @@ R=$(ls -d ~/astera-mac-check-* | tail -n 1); echo "$R"
 
 1. 탭 줄 오른쪽의 **+** 를 누릅니다. 마우스를 올리면 **새 세션** (New session) 이라고 나옵니다. 탭이 하나도 없으면 가운데의
    **+ 새 세션으로 시작하세요** (+ Start a new session) 를 누릅니다.
-2. **에이전트 프로필** (Agent profile) 에서 점검이 말하는 프로필을 고릅니다.
-3. **세션 방식** (Session type) 에서 **터미널** (Terminal) 이나 **대화** (Chat) 를 고릅니다.
-4. **프로젝트 폴더** (Project folder) 의 **선택…** (Select…) 을 누릅니다. 폴더 고르는 창에서 Cmd+Shift+G 를 누르고
+2. **세션 방식** (Session type) 에서 **터미널** (Terminal) 이나 **대화** (Chat) 를 고릅니다.
+3. **프로젝트 폴더** (Project folder) 의 **선택…** (Select…) 을 누릅니다. 폴더 고르는 창에서 Cmd+Shift+G 를 누르고
    점검이 말하는 경로를 붙여 넣은 뒤 열기를 누릅니다. `<날짜>` 는 준비 1의 `echo "$R"` 에 나온 날짜입니다.
-5. **worktree로 분리해서 시작** (Start in a separate worktree) 은 끈 채로 둡니다.
+4. 폴더를 고르면 나타나는 **worktree로 분리해서 시작** (Start in a separate worktree) 은 끈 채로 둡니다.
+5. **에이전트 프로필** (Agent profile) 에서 점검이 말하는 프로필을 고릅니다.
 6. **시작** (Start) 을 누릅니다.
 7. Claude 나 Codex 가 이 폴더를 믿을지 물으면 믿는다고 답합니다.
 
@@ -151,6 +156,12 @@ astera sessions list --status alive
 
 약 3분. 점검 1의 세션에 이어서 붙여 넣습니다.
 
+Claude 가 이 글에서 멈추고 Opus 4.8 로 바꿀지 물을 수 있습니다. 로그인 정보 폴더를 묻는 글을 Opus 5.5 의 safeguards 가
+막기 때문입니다. 처음 뜨는 `Model switch` 창에서 `Switch automatically` 를 고르면 Opus 4.8 로 이어집니다. 다만 앞으로도
+묻지 않고 바꾸는 설정이 남습니다(그 창의 말대로 `/config` 에서 되돌립니다). 설정을 남기기 싫으면 `Stay on Opus 5.5` 를
+고르고, 같은 글을 다시 붙여 넣은 뒤 다음에 뜨는 `Session paused` 창에서 `Switch to Opus 4.8` 을 고릅니다. 어느 쪽이든
+메모에 적어 주세요.
+
 ```text
 Astera mac-check 2번입니다. 규칙은 같습니다. 아래 명령을 적힌 순서대로, 한 줄씩, 한 번만 그대로 실행하고, 실패해도 다시 시도하거나 다른 방법을 찾지 마세요. 여기 있는 명령은 대부분 실패하는 것이 정상입니다. 끝나면 각 명령의 출력을 그대로 보여 주세요.
 
@@ -167,14 +178,16 @@ wc -c < "$HOME/Library/Application Support/astera-dev/host/app.key"; echo "exit=
 - `~/Library/Keychains` 는 `Operation not permitted` 와 `exit=1` 입니다.
 - 자동 점검 결과의 2절에서 '있음' 이었던 폴더와 파일은 모두 `Operation not permitted` 와 `exit=1` 입니다. '없음' 이었던
   것은 `No such file or directory` 여도 됩니다.
-- `security find-generic-password` 는 점검 8(sandbox 밖)과 다른 답을 냅니다. sandbox 밖에서는
-  `The specified item could not be found in the keychain.` 과 `exit=44` 가 나옵니다. 여기서도 똑같이 나오면 키체인을
-  열어 찾아볼 수 있었다는 뜻이니 실패로 적어 주세요.
 - `security list-keychains` 는 키체인 경로 목록을 보여 줄 수도 있습니다. 그것만으로는 실패가 아닙니다. 출력만 붙여
-  넣어 주세요.
-- 프로필 폴더에 쓰기(`mac-check-write.txt`)는 `Operation not permitted` 와 `exit=1` 입니다.
+  넣어 주세요. Claude 의 sandbox 안에서는 `/Library/Keychains/System.keychain` 만 나오고, 밖(점검 8)에서는
+  `login.keychain-db` 도 나옵니다.
+- `security find-generic-password` 는 여기서도 `The specified item could not be found in the keychain.` 과 `exit=44`
+  일 수 있습니다. 실패가 아닙니다. 안에서는 검색 목록에 시스템 키체인만 있어서, 그곳만 찾아보고 없다고 답한 것입니다.
+- 프로필 폴더에 쓰기(`mac-check-write.txt`)는 `Operation not permitted` 와 `exit=1` 이거나, Claude Code 가
+  `Permission to use Bash … has been denied` 라며 아예 실행하지 않습니다. 둘 다 막힌 것입니다.
 - `host.key` 는 `64` 와 `exit=0` 입니다. 세션 안의 `astera` 가 Host 를 확인하는 데 이 파일을 읽어야 합니다.
-- `app.key` 는 숫자 없이 `Operation not permitted`(또는 비슷한 거절)와 `exit=1` 입니다.
+- `app.key` 는 숫자 없이 `Operation not permitted`(또는 비슷한 거절)와 `exit=1` 이거나, 위처럼
+  `Permission to use Bash … has been denied` 입니다.
 
 - [ ] 통과
 - [ ] 실패
@@ -259,11 +272,15 @@ wc -c < "$HOME/Library/Application Support/astera-dev/host/app.key"; echo "exit=
 통과:
 
 - 워커 탭에 방패 아이콘이 있습니다.
-- 앞쪽(보통 일)은 점검 1과 같습니다. `ASTERA_LOOPBACK=` 뒤에 `http://127.0.0.1:` 로 시작하는 주소가 나옵니다. Codex 의
-  sandbox 는 Host 의 소켓 폴더를 막으므로, 이 세션의 `astera` 는 이 주소로 Host 에 닿습니다.
-- 뒤쪽(막혀야 하는 것)은 점검 2와 같습니다.
-- Job 상세 창에서 Task 의 상태가 **끝났다** (Done) 로 바뀝니다. 워커가 sandbox 안에서 `astera` 로 보고한 것이 Host 에
-  닿았다는 뜻입니다.
+- 앞쪽(보통 일)은 점검 1과 같습니다. 다만 이 sandbox 안의 `astera` 는 출력 맨 앞에
+  `task_name_for_pid: (os/kern) failure (5)` 가 든 `ERROR` 줄을 하나 붙일 수 있습니다. 그 줄은 빼고 봅니다.
+  `ASTERA_LOOPBACK=` 뒤에 `http://127.0.0.1:` 로 시작하는 주소가 나옵니다. Codex 의 sandbox 는 Host 의 소켓 폴더를
+  막으므로, 이 세션의 `astera` 는 이 주소로 Host 에 닿습니다.
+- 뒤쪽(막혀야 하는 것)은 점검 2와 같습니다. 워커가 로그인 정보 폴더, `security`, `app.key` 줄을 금지된 접근이라며
+  건너뛸 수 있습니다. Codex 의 모델이 스스로 그렇게 합니다. 그러면 건너뛴 줄을 메모에 적습니다.
+- Job 상세 창에 워커의 보고가 나타나고, Task 의 상태가 **끝났다** (Done) 로 바뀝니다. 워커가 줄을 건너뛰어 실패로
+  보고했다면 상태는 실패가 되지만, 보고가 나타난 것만으로 워커가 sandbox 안에서 `astera` 로 보낸 보고가 Host 에 닿았다는
+  뜻입니다. 코디네이터가 다시 할지 물으면 답하지 않고 두어도 됩니다.
 
 - [ ] 통과
 - [ ] 실패
@@ -290,7 +307,8 @@ wc -c < "$HOME/Library/Application Support/astera-dev/host/app.key"; echo "exit=
 2. 답이 오면 탭의 **닫기** (Close) 로 세션을 끝냅니다.
 3. **계정과 히스토리** (Accounts and history) 의 히스토리에서 `mac-check-repo` 를 펼치고, 방금 대화를 찾아 **세션 이어하기**
    (Resume session) 를 누릅니다.
-4. 열린 창에서 **세션 방식** (Session type) 은 **대화** (Chat) 로 두고, 창에
+4. 열린 창의 **세션 방식** (Session type) 에서 **대화** (Chat) 를 고르고(처음에는 준비 2 에서 고른 **터미널** (Terminal)
+   이 골라져 있습니다), 창에
    **에이전트 프로필 'mac-check-codex'(으)로 이어집니다.** (This conversation resumes as the agent profile “mac-check-codex”.)
    라는 줄이 있는지 본 뒤 **이어하기** (Resume) 를 누릅니다.
 5. 이어진 대화에 다음 글을 보냅니다.
@@ -372,7 +390,8 @@ Cmd+Shift+H).
 
    **이 sandbox 세션의 작업 폴더가 홈 폴더를 포함하고 있어서, sandbox 안에서 홈 폴더의 프로그램과 설정을 바꿀 수 있습니다. 이것들을 지키려면 프로젝트 폴더에서 시작해 주세요.** (This sandboxed session's work folder contains your home folder, so programs and settings in your home folder can be changed from inside the sandbox. Start it in a project folder to keep them out of reach.)
 
-   한 줄에 다 안 들어가면 끝이 잘립니다. 마우스를 올리면 전체 문장이 보입니다.
+   한 줄에 다 안 들어가면 끝이 잘립니다. 마우스를 올리면 전체 문장이 보입니다. Claude 가 홈 폴더를 믿을지 물으면 믿는다고
+   답합니다. 홈 폴더에 대한 이 답은 이 세션에만 쓰이고 `~/.claude.json` 에 남지 않습니다.
 2. 다음 글을 붙여 넣습니다. 홈 폴더 전체를 쓸 수 있는 세션이어도, 개발용 앱의 프로필 폴더에는 쓸 수 없어야 합니다.
 
    ```text
@@ -387,7 +406,8 @@ Cmd+Shift+H).
 4. 이 세션을 바로 닫습니다. 홈 폴더 전체를 쓸 수 있는 세션은 열어 두지 않습니다.
 
 통과: 경고 줄이 떴고, 닫은 뒤 탭을 오가도 다시 나타나지 않았습니다. `PWD=` 가 홈 폴더이고, 프로필 폴더 쓰기는
-`Operation not permitted` 와 `exit=1`, `host.key` 는 `64` 와 `exit=0` 입니다.
+`Operation not permitted` 와 `exit=1`(또는 점검 2처럼 `Permission to use Bash … has been denied`), `host.key` 는 `64` 와
+`exit=0` 입니다.
 
 자동 점검 결과의 2절에 링크인 폴더(예: `~/.config`)가 있으면, 이 세션은 시작되지 않고 다음 문장으로 거절될 수
 있습니다. 그것도 맞는 동작이니 그대로 적어 주세요.
@@ -410,7 +430,8 @@ Cmd+Shift+H).
 약 3분. 세션: 프로필 `mac-check-plain`, **터미널** (Terminal), 폴더 `~/astera-mac-check-<날짜>/work/mac-check-repo`.
 
 점검 2와 같은 명령을 sandbox 없이 돌립니다. 여기서는 되어야, 점검 2의 거절이 sandbox 때문이었다고 말할 수 있습니다.
-키 파일과 폴더는 크기와 종료 코드만 보고 내용은 출력하지 않습니다.
+키 파일과 폴더는 크기와 종료 코드만 보고 내용은 출력하지 않습니다. 점검 2처럼 Claude 가 Opus 4.8 로 바꿀지 물으면 같은
+방법으로 답합니다.
 
 ```text
 Astera mac-check 8번입니다. 아래 명령을 적힌 순서대로, 한 줄씩, 한 번만 그대로 실행하고, 실패해도 다시 시도하거나 다른 방법을 찾지 마세요. 명령을 고치거나 덧붙이지 마세요. 끝나면 각 명령의 출력을 그대로 보여 주세요.
