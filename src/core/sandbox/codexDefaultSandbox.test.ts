@@ -86,6 +86,57 @@ describe('withoutElevatedDefault', () => {
   })
 })
 
+// Task P fix round 1 (review I2): Codex 0.160 still takes its older feature key `[features] elevated_windows_sandbox =
+// true` as the elevated default when no `windows.sandbox` is set (core/src/windows_sandbox.rs:83-88, 97-106 at
+// rust-v0.160.0), and its CLI setup does not clear it. So it counts as the elevated default too, and Remove takes it out
+describe("Codex's older feature key", () => {
+  it('is the elevated default when no windows.sandbox is set, in the table, dotted and inline forms', () => {
+    expect(windowsSandboxDefaultOf('[features]\nelevated_windows_sandbox = true\n')).toEqual({ kind: 'legacy', editable: true, table: false })
+    expect(windowsSandboxDefaultOf('model = "x"\n[ features ]\n"elevated_windows_sandbox" = true # old\n')).toEqual({ kind: 'legacy', editable: true, table: false })
+    expect(windowsSandboxDefaultOf('features.elevated_windows_sandbox = true\n')).toEqual({ kind: 'legacy', editable: true, table: false })
+    expect(windowsSandboxDefaultOf('features = { elevated_windows_sandbox = true }\n')).toEqual({ kind: 'legacy', editable: false, table: false })
+    // windows.sandbox wins, as in Codex; false, the unelevated key and a profile's features are not it
+    expect(windowsSandboxDefaultOf('[features]\nelevated_windows_sandbox = true\n[windows]\nsandbox = "unelevated"\n')).toEqual({ kind: 'set', value: 'unelevated', editable: true, table: true })
+    for (const text of ['[features]\nelevated_windows_sandbox = false\n', '[features]\nexperimental_windows_sandbox = true\n', '[profiles.x.features]\nelevated_windows_sandbox = true\n', '[tui]\nelevated_windows_sandbox = true\n'])
+      expect(windowsSandboxDefaultOf(text), text).toEqual({ kind: 'none', table: false })
+  })
+
+  it('comes out with the windows.sandbox line, leaving the rest of its table', () => {
+    expect(withoutElevatedDefault('[features]\nother = true\nelevated_windows_sandbox = true\n', { dropEmptyTable: true })).toBe('[features]\nother = true\n')
+    expect(withoutElevatedDefault('a = 1\n\n[features]\nelevated_windows_sandbox = true\n', { dropEmptyTable: true })).toBe('a = 1\n')
+    expect(withoutElevatedDefault('features.elevated_windows_sandbox = true\na = 1\n', { dropEmptyTable: true })).toBe('a = 1\n')
+    // Both: the line alone would leave the feature key making it the default again
+    expect(withoutElevatedDefault('a = 1\n\n[features]\nelevated_windows_sandbox = true\n\n[windows]\nsandbox = "elevated"\n', { dropEmptyTable: true })).toBe('a = 1\n')
+    expect(withoutElevatedDefault('[features]\nx = 1\nelevated_windows_sandbox = true\n\n[windows]\nsandbox = "elevated"\n[tui]\ny = 2\n', { dropEmptyTable: true })).toBe('[features]\nx = 1\n\n[tui]\ny = 2\n')
+    // Not exactly: an inline features table, beside the line or alone
+    expect(withoutElevatedDefault('features = { elevated_windows_sandbox = true }\n[windows]\nsandbox = "elevated"\n', { dropEmptyTable: true })).toBeNull()
+    expect(withoutElevatedDefault('features = { elevated_windows_sandbox = true }\n', { dropEmptyTable: true })).toBeNull()
+  })
+
+  it('is read, taken out on disk, and left by a setup that found it there', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-codex-default-legacy-'))
+    try {
+      const file = path.join(dir, 'config.toml')
+      await fs.writeFile(file, 'model = "x"\n\n[features]\nelevated_windows_sandbox = true\n')
+      expect(await elevatedDefaultIn(file)).toBe(true)
+      expect(await removeElevatedDefault(file, { dropEmptyTable: true })).toBe('removed')
+      expect(await fs.readFile(file, 'utf8')).toBe('model = "x"\n')
+      // A home first set up by an older Codex: the CLI setup adds windows.sandbox and keeps the feature key. The home already
+      // made the elevated sandbox its default, so it is left, and the log does not say only sandboxed sessions use it
+      const legacy = '[features]\nelevated_windows_sandbox = true\n'
+      await fs.writeFile(file, legacy)
+      const logs: string[] = []
+      const setUp = async () => (await fs.writeFile(file, `${legacy}\n[windows]\nsandbox = "elevated"\n`), { ok: true, out: 'done' })
+      await setUpForSandboxedSessionsOnly({ configFile: file, setUp, log: (m) => logs.push(m) })
+      expect(await fs.readFile(file, 'utf8')).toBe(`${legacy}\n[windows]\nsandbox = "elevated"\n`)
+      expect(logs).toEqual([expect.stringMatching(/already made the elevated sandbox its default.*elevated_windows_sandbox.*left/)])
+      expect(logs.join('\n')).not.toMatch(/only sandboxed sessions/)
+    } finally {
+      await removeFixture(dir)
+    }
+  })
+})
+
 // Task P fix round 1 (review M1): the scanner reads triple quotes in a comment, in a one-line string or escaped inside a
 // multi-line basic string as text, and a file that ends inside a multi-line string as one it cannot read with
 // confidence: nothing is said to be set, and nothing is taken out

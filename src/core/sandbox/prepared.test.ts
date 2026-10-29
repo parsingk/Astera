@@ -86,6 +86,9 @@ describe('prepareCodexSandbox and the Windows readiness echo', () => {
     expect((await prepareCodexSandbox({ ...base, platform: 'win32', env: ambient })).elevatedDefault).toBe(false)
     fs.writeFileSync(path.join(home, '.codex', 'config.toml'), 'windows.sandbox = "elevated"\n')
     expect((await prepareCodexSandbox({ ...base, platform: 'win32', env: ambient })).elevatedDefault).toBe(true)
+    // Fix round 1 (review I2): Codex's older feature key, which Codex 0.160 still takes as the elevated default
+    fs.writeFileSync(path.join(codexHome, 'config.toml'), '[features]\nelevated_windows_sandbox = true\n')
+    expect((await prepareCodexSandbox({ ...base, platform: 'win32', env })).elevatedDefault).toBe(true)
     // Another value is not the elevated default; and nothing is asked off Windows
     fs.writeFileSync(path.join(codexHome, 'config.toml'), '[windows]\nsandbox = "unelevated"\n')
     expect((await prepareCodexSandbox({ ...base, platform: 'win32', env })).elevatedDefault).toBe(false)

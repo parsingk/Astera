@@ -1238,10 +1238,14 @@ as the home's default (`windows.sandbox = "elevated"` in its `config.toml`). Ast
 each names the elevated sandbox itself (`-c windows.sandbox="elevated"`, which Codex takes over the file), and so does
 the doctor it asks. So after a setup Astera runs, it takes that line back out of the account's `config.toml` and leaves
 the rest of the file as it was (it keeps the old file as `config.toml.bak`), and the home's other Codex sessions run as
-they did before the setup. A line that was already there before the setup, yours or another value, is left. For a
-home whose `config.toml` still has the line, Settings › Agent profiles says so in one sentence under that Codex account
-of a sandboxed profile, with Remove, which takes the line out only when you press it, and a sandboxed Codex session or
-chat started on that home starts as today and says so in the line above its terminal or chat. What
+they did before the setup. A line that was already there before the setup, yours or another value, is left, and so
+is a home that Codex's older `[features] elevated_windows_sandbox = true` already made elevated: Codex still honours
+that key when no `windows.sandbox` is set, and its setup command does not clear it. For a home whose `config.toml` still
+makes the elevated sandbox its default, through the line or that key, Settings › Agent profiles says so in one sentence
+under that Codex account of a sandboxed profile, with Remove, which takes them out only when you press it, and a
+sandboxed Codex session or chat started on that home starts as today and says so in the line above its terminal or
+chat. Astera reads only the account's own `config.toml` for this: a project's `.codex/config.toml` or a Codex profile
+that sets `windows.sandbox` is not seen. What
 stays otherwise reaches further than Astera's sessions: while a home's `config.toml` has the line (set up before this,
 or by you or Codex's own app), a Codex session of that home that is not one of Astera's sandboxed sessions yet still
 runs its commands in Codex's sandbox (an Astera tab with YOLO off, a How It Works write-up, your own `codex`, with no bypass flag

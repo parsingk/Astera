@@ -149,6 +149,11 @@ describe('hostSandboxDefault', () => {
       expect(await fs.readFile(file, 'utf8')).toBe('# mine\nmodel = "gpt-5"\n')
       expect(await defaults.elevated(file)).toBe(false)
       expect(await defaults.remove(file)).toBe('absent')
+      // Fix round 1 (review I2): Codex's older feature key is the elevated default too, and Remove takes it out
+      await fs.writeFile(file, '# mine\n\n[features]\nelevated_windows_sandbox = true\n')
+      expect(await defaults.elevated(file)).toBe(true)
+      expect(await defaults.remove(file)).toBe('removed')
+      expect(await fs.readFile(file, 'utf8')).toBe('# mine\n')
     } finally {
       await removeFixture(home)
     }
