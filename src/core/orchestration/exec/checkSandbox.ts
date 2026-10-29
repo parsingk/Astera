@@ -5,7 +5,8 @@
 // as a chain keeps the sandbox state it started with.
 //
 // - An ordinary Task: its own implementers (a reviewer only reads them, and has a sandbox of its own, review.ts).
-// - A lifecycle Task's merged check: every Dispatch of the Run, since the merged tree holds all their work (Q3).
+// - A lifecycle Task's merged check: every implementer Dispatch of the Run, since the merged tree holds all their work
+//   (Q3). A reviewer's Dispatch never counts: it reads that work in its own CLI's sandbox, which no worker ran in.
 // - The latest sandboxed attempt names the CLI and the account the check runs under; a real sandbox wins over deny rules.
 // - Claude Code on Windows has no sandbox, only deny rules for its file tools, so its workers' shells ran as the person;
 //   its checks run as today and say so (`deny-only`, the person's Q1).
@@ -20,12 +21,12 @@ import type { SandboxKind } from '../../types'
 
 export type CheckSandbox = { kind: 'sandbox'; provider: Provider; accountId: string } | { kind: 'deny-only' }
 
-/** The attempts whose kind a Task's checks follow: a lifecycle Task's every Dispatch of its Run, else its own
- *  implementers. */
+/** The attempts whose kind a Task's checks follow: the implementers of a lifecycle Task's whole Run, else of the Task
+ *  itself. Reviewers never count. */
 function attemptsOf(s: OrchState, task: Task): Dispatch[] {
   if (!isLifecycleTask(task)) return s.dispatches.filter((d) => d.taskId === task.id && !d.review)
   const ofRun = new Set(s.tasks.filter((t) => t.runId !== undefined && t.runId === task.runId).map((t) => t.id))
-  return s.dispatches.filter((d) => ofRun.has(d.taskId))
+  return s.dispatches.filter((d) => ofRun.has(d.taskId) && !d.review)
 }
 
 const latest = (ds: readonly Dispatch[]): Dispatch | undefined => [...ds].sort((a, b) => a.startedAt.localeCompare(b.startedAt)).at(-1)

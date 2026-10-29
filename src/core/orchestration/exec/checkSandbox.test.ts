@@ -1,6 +1,6 @@
 // Which sandbox a Task's checks run in (Task K): the kind its workers' sessions actually ran in, recorded on their
 // Dispatches. The person decided validation of a sandboxed Job runs inside the same kind of sandbox its workers ran in,
-// a lifecycle Task's merged check with the Run's latest sandboxed Dispatch (Q3), and Claude Code on Windows, which has
+// a lifecycle Task's merged check with the Run's latest sandboxed implementer (Q3), and Claude Code on Windows, which has
 // no sandbox, runs its checks as today, said so (Q1).
 import { describe, expect, it } from 'vitest'
 import { emptyState, type OrchState } from '../state'
@@ -69,6 +69,29 @@ describe('checkSandboxOf', () => {
     )
     expect(checkSandboxOf(s, life, 'darwin')).toEqual({ kind: 'sandbox', provider: 'claude', accountId: 'a2' })
     expect(checkSandboxOf(state([task('t1'), life], [dispatch('d1', 't1', 0)]), life, 'darwin')).toBeNull()
+  })
+
+  it("a lifecycle Task's merged check follows the workers' sandbox, never a later reviewer's", () => {
+    const life = task('L', { kind: 'lifecycle' })
+    const codexWorkerClaudeReviewer = state(
+      [task('t1'), life],
+      [
+        dispatch('d1', 't1', 0, { sandboxKind: 'sandbox', accountId: 'worker' }),
+        dispatch('r1', 't1', 5, { review: true, sandboxKind: 'sandbox', provider: 'claude', accountId: 'reviewer' })
+      ]
+    )
+    expect(checkSandboxOf(codexWorkerClaudeReviewer, life, 'darwin')).toEqual({ kind: 'sandbox', provider: 'codex', accountId: 'worker' })
+    const claudeWorkerCodexReviewer = state(
+      [task('t1'), life],
+      [
+        dispatch('d1', 't1', 0, { provider: 'claude', sandboxKind: 'deny-only' }),
+        dispatch('r1', 't1', 5, { review: true, sandboxKind: 'sandbox', accountId: 'reviewer' })
+      ]
+    )
+    expect(checkSandboxOf(claudeWorkerCodexReviewer, life, 'win32')).toEqual({ kind: 'deny-only' })
+    const onlyReviewerBoxed = state([task('t1'), life], [dispatch('d1', 't1', 0), dispatch('r1', 't1', 5, { review: true, sandboxKind: 'sandbox' })])
+    expect(checkSandboxOf(onlyReviewerBoxed, life, 'darwin')).toBeNull()
+    expect(workRanSandboxed(onlyReviewerBoxed, life)).toBe(false)
   })
 
   it('work a sandboxed session made, from before the kind was recorded: its latest attempt, by its CLI on this OS', () => {
