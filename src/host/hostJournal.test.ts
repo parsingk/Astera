@@ -24,7 +24,9 @@ const STARTED = '2026-09-26T09:00:00.000Z'
 let dir: string
 const opened: Array<{ close(): void }> = []
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-hostjournal-'))
+  // A short name: a Host's socket goes under this folder, and macOS caps a socket path at 104 bytes. Node 22 cut a
+  // longer one short without a word; Node 24 (the Electron the app ships) refuses it with EINVAL.
+  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-hj-'))
 })
 afterEach(async () => {
   for (const o of opened.splice(0)) o.close()

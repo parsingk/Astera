@@ -104,6 +104,12 @@ if ! command -v git > /dev/null 2>&1; then
   result FAIL git "git 이 없습니다 (Xcode Command Line Tools: xcode-select --install)"
   exit 1
 fi
+# /usr/bin/git and /usr/bin/cc are there without the tools too, and only ask to install them. A test compiles its probe
+# app with cc.
+if [ "$not_a_mac" != 1 ] && ! xcode-select -p > /dev/null 2>&1; then
+  result FAIL tools "Xcode Command Line Tools 가 없습니다 (xcode-select --install)"
+  exit 1
+fi
 result NOTE checkout "$root ($(git -C "$root" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?') $(git -C "$root" rev-parse --short HEAD 2>/dev/null || echo '?'))"
 if [ -n "$(git -C "$root" status --porcelain 2>/dev/null)" ]; then
   result NOTE checkout "고친 파일이 있습니다 (git status 로 확인)"
@@ -132,7 +138,24 @@ if [ -z "$electron" ] || [ ! -f "$electron" ]; then
   result FAIL "npm ci" "node_modules 가 없거나 Electron 이 빠졌습니다. 저장소 폴더에서 npm ci 를 먼저 하세요."
   exit 1
 fi
-result PASS "npm ci" "node_modules 와 Electron 이 있습니다"
+# Every package the lock names, at the version it names (the optional ones are for other systems): a checkout pulled
+# after its last npm ci would run the tests against old packages, or without new ones.
+stale=$(node -e '
+const fs = require("fs"), path = require("path"), root = process.argv[1]
+const off = []
+for (const [p, e] of Object.entries(require(path.join(root, "package-lock.json")).packages || {})) {
+  if (!p.startsWith("node_modules/") || e.optional || e.link) continue
+  let v = null
+  try { v = JSON.parse(fs.readFileSync(path.join(root, p, "package.json"), "utf8")).version } catch {}
+  if (v !== e.version) off.push(p.replace(/^.*node_modules\//, "") + (v ? " " + v : " 없음"))
+}
+if (off.length) console.log(off.length + "개, 예: " + off.slice(0, 3).join(", "))
+' "$root")
+if [ -n "$stale" ]; then
+  result FAIL "npm ci" "node_modules 가 package-lock.json 과 다릅니다 ($stale). 저장소 폴더에서 npm ci 를 다시 하세요."
+  exit 1
+fi
+result PASS "npm ci" "node_modules 가 package-lock.json 과 같고 Electron 이 있습니다"
 
 for cli in claude codex; do
   if [ "$cli" = claude ]; then min=$CLAUDE_MIN; else min=$CODEX_MIN; fi

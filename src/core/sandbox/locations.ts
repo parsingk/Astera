@@ -402,14 +402,18 @@ const HOST_FOLDER = /^astera-host-/
  *  fix pass, part 2, B). Only this user's (`lstat` uid equal to `uid`, part 3): Linux's `/tmp` is every user's, and
  *  another user's Host folder (mode 0700) is closed to this user anyway, so it is neither named nor lets anyone lengthen
  *  the command line; a folder that cannot be looked at (gone since the listing) is left out. With no uid to compare
- *  (a process without `getuid`), every Host folder is kept. A sandboxed Codex start reads this once, at its prepare, and
- *  its spawn denies what was there then (hostSocketDenies), so a Host started after that is not denied to the session.
- *  Absolute, forward slashes, sorted. None on Windows (named pipes), without `dir`, or when the folder cannot be listed.
- *  `uid` and `lstat` are test seams. */
+ *  (a process without `getuid`), every Host folder is kept. Only a folder that holds something (mac check): a Host that
+ *  ended leaves its folder empty, and test runs left 504 of them on a developer's Mac, which grew a sandboxed Codex's
+ *  seatbelt profile until each command spun for minutes before it started. An empty folder holds no Host to reach, and
+ *  the session could make any unused Host folder there anyway, so leaving it out opens nothing; one that cannot be listed
+ *  is left out as one that cannot be looked at is. A sandboxed Codex start reads this once, at its prepare, and its spawn
+ *  denies what was there then (hostSocketDenies), so a Host started after that is not denied to the session. Absolute,
+ *  forward slashes, sorted. None on Windows (named pipes), without `dir`, or when the folder cannot be listed. `uid`,
+ *  `lstat` and `entries` are test seams. */
 export async function otherHostFolders(
   platform: NodeJS.Platform,
   dir: string | null,
-  o: { uid?: number; lstat?: (p: string) => Promise<{ uid: number }> } = {}
+  o: { uid?: number; lstat?: (p: string) => Promise<{ uid: number }>; entries?: (p: string) => Promise<string[]> } = {}
 ): Promise<string[]> {
   if (platform === 'win32' || !dir) return []
   const own = slashed(dir)
@@ -428,10 +432,15 @@ export async function otherHostFolders(
     return []
   }
   const uid = 'uid' in o ? o.uid : process.getuid?.()
-  if (uid === undefined) return folders
-  const look = o.lstat ?? lstat
-  const owners = await Promise.all(folders.map((f) => look(f).then((st) => st.uid, () => null)))
-  return folders.filter((_, i) => owners[i] === uid)
+  let owned = folders
+  if (uid !== undefined) {
+    const look = o.lstat ?? lstat
+    const owners = await Promise.all(folders.map((f) => look(f).then((st) => st.uid, () => null)))
+    owned = folders.filter((_, i) => owners[i] === uid)
+  }
+  const list = o.entries ?? ((p: string) => readdir(p))
+  const held = await Promise.all(owned.map((f) => list(f).then((names) => names.length > 0, () => false)))
+  return owned.filter((_, i) => held[i])
 }
 
 /** What a sandbox cannot be trusted to keep closed: the macOS keychain folder and the Linux session bus socket (a process
