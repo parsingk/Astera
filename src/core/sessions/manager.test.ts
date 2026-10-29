@@ -1809,8 +1809,8 @@ describe('the sandbox at spawn', () => {
 
   // Task K: a Task's check of a sandboxed Codex worker runs inside the same sandbox, as `codex sandbox` with the session's own
   // profile (sessionSandboxArgs without `-a never`: the S2 measurement's shape, scripts/measure/s2.mjs) and the session's
-  // own environment, after the Credentials list's hiding. On Windows the very deny list matters: Codex resyncs a home's
-  // deny-read ACEs to each launch's list (Task K part 1)
+  // own environment, after the Credentials list's hiding. On Windows the very deny list matters: Codex asks to revoke the
+  // deny-read ACEs a launch's list lacks (Task K part 1), which Windows keeps today but not once Codex's revoke works
   it("starts a sandboxed Codex worker's check as `codex sandbox` with the session's own profile, environment and hiding", async () => {
     for (const platform of ['linux', 'darwin', 'win32'] as const) {
       const cwd = repo()

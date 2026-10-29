@@ -1226,15 +1226,23 @@ elevated sandbox set up once (Codex's `codex sandbox setup --elevated --current-
 administrator prompt): Astera asks
 before a sandboxed start, Codex's `doctor --json` first and then, only on a home doctor calls complete, an echo through
 the sandbox (on a home with no setup the echo would start the setup and its prompt). The echo runs under the same
-permission profile and deny list the account's sandboxed sessions get: Codex keeps a home's read denials across runs and
-sets them to each run's list, so an echo under another list would lift what the account's running sessions are denied.
-Astera cannot hold that for a launch it does not make: the setup records the elevated sandbox as the home's default
-(`windows.sandbox = "elevated"` in its `config.toml`), so a Codex session of that home that is not one of Astera's
-sandboxed sessions yet still runs its commands in Codex's sandbox (an Astera tab with YOLO off, your own `codex`, with no
-bypass flag and no config turning the sandbox off) runs each command in the elevated sandbox under its own profile's
-deny list, usually empty, and so lifts the read denials Codex keeps for the sandbox's machine-wide group on that home's
-paths, the same paths other homes' sandboxed sessions are denied, until those sessions' next command sets them again.
-The app offers to set up the
+permission profile and deny list the account's sandboxed sessions get. Each elevated run applies its list's read
+denials to the sandbox's users group, one for the whole machine, and asks Windows to revoke those its home's last run
+applied that the new list lacks. That revoke never takes a denial away: Codex's `revoke_ace` uses `REVOKE_ACCESS`
+(codex-rs/windows-sandbox-rs/src/acl.rs at rust-v0.160.0, the same on Codex's main branch on 2026-10-29), which
+"Indicates that all existing ACCESS_ALLOWED_ACE or SYSTEM_AUDIT_ACE structures for the specified trustee are removed"
+(Microsoft Learn, ACCESS_MODE) and leaves the deny entries, as measured on Windows 11. So a denial stays on its folder
+once any sandboxed run of any account has applied it, and no other run lifts it. Astera still runs the echo under the
+sessions' own list, so nothing changes the day Codex's revoke starts working. What stays reaches further than Astera's
+sessions: the setup records the elevated sandbox as the home's default (`windows.sandbox = "elevated"` in its
+`config.toml`), so a Codex session of that home that is not one of Astera's sandboxed sessions yet still runs its
+commands in Codex's sandbox (an Astera tab with YOLO off, a How It Works write-up, your own `codex`, with no bypass flag
+and no config turning the sandbox off) runs each command as the sandbox's own account, which those denials keep out of
+the login folders too (`~/.ssh`, `~/.aws`, the GitHub CLI's and gcloud's folders, `~/.docker`, `~/.kube`): an ssh `git
+push`, `gh` or `kubectl` fails inside its sandbox, and Codex asks to run it outside, or fails it where nothing can be
+asked. On a home made stale by another account's setup, such a command can bring up Windows' administrator prompt while
+Codex sets the home up again. `icacls <folder> /remove:d CodexSandboxUsers` takes a denial away by hand, until the next
+sandboxed run applies it again. The app offers to set up the
 one account a start was refused for. A ready answer is kept until Astera restarts or a setup runs through it, so a home
 made stale by a setup outside Astera keeps reading ready until then. Settings › Agent profiles also shows, under a
 sandboxed profile on Windows, whether each of its Codex accounts is set up, asked of Codex's doctor alone (no sandboxed

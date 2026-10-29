@@ -44,8 +44,9 @@ export const PREPARED_MS = 60_000
 /** Whether an account's Codex home has its Windows sandbox set up (windowsReadiness.ts), asked with the environment the
  *  session would start with; `log` says which way Codex could not be asked, when it could not. `profile` is what the
  *  sandboxed echo runs under (Task K part 1): the `-c` values of the permission profile the account's sessions get, with
- *  their very deny list (prepareCodexSandbox). Codex resyncs a home's deny-read ACEs to each launch's list, so an echo
- *  under another one would lift the running sessions' denials; without it the echo is not run. */
+ *  their very deny list (prepareCodexSandbox). Codex asks to revoke the deny-read ACEs a home's last launch applied that
+ *  a launch's list lacks, which Windows does not do today (windowsReadiness.ts says why); an echo under another list
+ *  would lift the running sessions' denials the day it does, so without the profile the echo is not run. */
 export type CodexWindowsReady = (a: {
   codexHome: string | null
   env: Record<string, string | undefined>
@@ -239,8 +240,9 @@ export function sessionSandboxArgs(o: {
 /** The `-c` values the Windows readiness echo runs under (Task K part 1): the session's permission profile with the same
  *  deny list and read-only folders, named for the session's folder exactly as sessionSandboxArgs names them, and without
  *  its repository's git entries. The echo runs in the temp folder (windowsReadiness.ts runCodex), and grants that
- *  repository nothing. Codex resyncs a home's deny-read ACEs to each launch's list (identity.rs:267-311,
- *  deny_read_state.rs:22-68 at rust-v0.160.0), so a list that differed would lift the sessions' denials. Called after
+ *  repository nothing. Codex asks to revoke the deny-read ACEs a launch's list lacks (identity.rs:267-311,
+ *  deny_read_state.rs:22-68 at rust-v0.160.0); Windows keeps them today (acl.rs:956-1030 `revoke_ace` uses REVOKE_ACCESS,
+ *  windowsReadiness.ts), but a list that differed would lift the sessions' denials the day it does not. Called after
  *  sessionSandboxArgs, whose refusals it does not repeat. */
 export function codexEchoArgs(o: Omit<Parameters<typeof sessionSandboxArgs>[0], 'log'>): string[] {
   const { denied, readOnly } = codexNamedEntries(o)

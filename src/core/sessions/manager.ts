@@ -367,7 +367,8 @@ export class SessionManager {
    * - Codex, every OS: `codex sandbox` with the session's permission profile (sessionSandboxArgs without `-a never`),
    *   prepared as its start is (prepareCodexSandbox: the version floor, the git layout, on Windows the account's
    *   readiness), and the session's sandbox environment (codexSandboxEnv). On Windows the very deny list matters: Codex
-   *   resyncs a home's deny-read ACEs to each launch's list (Task K part 1). On Linux a named path through a link in the
+   *   asks to revoke the deny-read ACEs a launch's list lacks (Task K part 1; Windows keeps them today, as
+   *   windowsReadiness.ts says, but not if Codex's revoke starts working). On Linux a named path through a link in the
    *   folder makes Codex refuse every command, so the check is refused rather than failed. On Windows it runs through
    *   Astera's runner (`codexCheckRunner`), and the check's shell says it started first (checkShell's mark): Codex's
    *   sandbox exits 1 for its own failure as for a check's, and the runner tells them apart (fix round 2).
