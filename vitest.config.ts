@@ -32,7 +32,8 @@ export default defineConfig({
       'scripts/**/*.test.mjs',
       'vitest.globalSetup.test.ts',
       'vitest.config.test.ts',
-      'electron.vite.warnings.test.ts'
+      'electron.vite.warnings.test.ts',
+      'electron.vite.xtermPatch.test.ts'
     ],
     environment: 'node',
     // 30 s, not 10: a test that spawns git, node or PowerShell takes up to 5 s alone here (integrateGit's merges: 4.6 s)
