@@ -795,17 +795,17 @@ export class StatusLineManager {
     return this.writeTwinsOf(key, part)
   }
 
+  /** The part a scope's twin holds and its links (sandboxNamed), for a Task's check of that scope (Task K). */
+  sandboxPartOf(scope: SandboxScope): { part: SandboxPart; links: string[] } {
+    return this.sandboxNamed(scope)
+  }
+
   /** What a sandbox twin adds: the builder's settings, for the scope's layout and from the scope's environment, under the
    *  person's home. */
   /** The twin's part, and the links inside the session's writable folders its named paths go through (Task E fix
    *  round 5). With the app key of this profile (sandbox follow-ups, item 1), as a Codex session's profile denies it, and
    *  the read-only folders the start's wiring named (Task E and its fix round 1), as a Codex session's profile keeps them
    *  read; each where namedPathFor puts it for this scope's folder, when the wiring gave a way to look. */
-  /** The part a scope's twin holds and its links (sandboxNamed), for a Task's check of that scope (Task K). */
-  sandboxPartOf(scope: SandboxScope): { part: SandboxPart; links: string[] } {
-    return this.sandboxNamed(scope)
-  }
-
   private sandboxNamed(scope: SandboxScope): { part: SandboxPart; links: string[] } {
     const denied = claudeSessionDenied({ platform: this.platform, env: scope.env, homeDir: this.homeDir, appKeyFile: appKeyPath(this.userDataDir) })
     const npmCache = npmCacheOf(this.tmpDir)
