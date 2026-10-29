@@ -99,7 +99,8 @@ const GIVEN = {
 } as const
 
 // Task E fix rounds 2 and 3, in the order ko, en, ja, es: the session starts as today and its tab says this. Round 3:
-// the Ubuntu line says what Ubuntu's profile does and points to srt's README for the fix, in its words
+// the Ubuntu line says what Ubuntu's profile does and points to srt's README for the fix, in its words. Round 4:
+// only the AppArmor route (our run 40761549024 had the sysctl set and srt still failed under the bwrap profile)
 const WARNINGS = {
   'session.sandbox.warn.homeInWorkFolder': [
     '이 sandbox 세션의 작업 폴더가 홈 폴더를 포함하고 있어서, sandbox 안에서 홈 폴더의 프로그램과 설정을 바꿀 수 있습니다. 이것들을 지키려면 프로젝트 폴더에서 시작해 주세요.',
@@ -108,10 +109,10 @@ const WARNINGS = {
     'La carpeta de trabajo de esta sesión del sandbox contiene su carpeta personal, así que los programas y la configuración de su carpeta personal se pueden cambiar desde dentro del sandbox. Iníciela en una carpeta de proyecto para mantenerlos fuera de su alcance.'
   ],
   'session.sandbox.warn.claudeUserns': [
-    '이 시스템에서는 Claude Code의 sandbox가 셸 명령을 실행할 수 없습니다. Ubuntu의 bubblewrap용 AppArmor 프로필(bwrap-userns-restrict)이 bubblewrap 안에서 도는 프로그램의 권한을 빼앗아, 이 세션의 셸 명령은 모두 실패합니다. 파일 도구는 그대로 쓸 수 있습니다. Claude Code의 sandbox 런타임(@anthropic-ai/sandbox-runtime) README는 Ubuntu에서 sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0으로 이 제한을 끄거나, 관련 바이너리에 userns를 허용하는 AppArmor 프로필을 추가하라고 안내합니다.',
-    "Claude Code's sandbox cannot run shell commands on this system: Ubuntu's AppArmor profile for bubblewrap (bwrap-userns-restrict) takes capabilities away from the programs running inside bubblewrap, so every shell command in this session will fail. File tools still work. For Ubuntu, the README of Claude Code's sandbox runtime (@anthropic-ai/sandbox-runtime) says to disable the restriction with sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0, or to add an AppArmor profile that grants userns to the relevant binaries.",
-    'このシステムでは Claude Code のサンドボックスがシェルコマンドを実行できません。Ubuntu の bubblewrap 用 AppArmor プロファイル(bwrap-userns-restrict)が bubblewrap の中で動くプログラムから権限を外すため、このセッションのシェルコマンドはすべて失敗します。ファイルツールはそのまま使えます。Claude Code のサンドボックスランタイム(@anthropic-ai/sandbox-runtime)の README は、Ubuntu では sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 でこの制限を無効にするか、関連するバイナリに userns を許可する AppArmor プロファイルを追加するよう案内しています。',
-    'En este sistema, el sandbox de Claude Code no puede ejecutar comandos de shell: el perfil de AppArmor de Ubuntu para bubblewrap (bwrap-userns-restrict) quita los permisos a los programas que se ejecutan dentro de bubblewrap, así que todos los comandos de shell de esta sesión fallarán. Las herramientas de archivos siguen funcionando. Para Ubuntu, el README del entorno de sandbox de Claude Code (@anthropic-ai/sandbox-runtime) indica desactivar la restricción con sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0, o añadir un perfil de AppArmor que conceda userns a los binarios correspondientes.'
+    '이 시스템에서는 Claude Code의 sandbox가 셸 명령을 실행할 수 없습니다. Ubuntu의 bubblewrap용 AppArmor 프로필(bwrap-userns-restrict)이 bubblewrap 안에서 도는 프로그램의 권한을 빼앗아, 이 세션의 셸 명령은 모두 실패합니다. 파일 도구는 그대로 쓸 수 있습니다. 해결하려면 관련 바이너리에 userns를 허용하는 AppArmor 프로필을 추가해야 합니다. 자세한 내용은 Claude Code의 sandbox 런타임(@anthropic-ai/sandbox-runtime) README의 Ubuntu 안내를 보세요.',
+    "Claude Code's sandbox cannot run shell commands on this system: Ubuntu's AppArmor profile for bubblewrap (bwrap-userns-restrict) takes capabilities away from the programs running inside bubblewrap, so every shell command in this session will fail. File tools still work. The fix is an AppArmor profile that grants userns to the relevant binaries; see the Ubuntu note in the README of Claude Code's sandbox runtime (@anthropic-ai/sandbox-runtime) for the details.",
+    'このシステムでは Claude Code のサンドボックスがシェルコマンドを実行できません。Ubuntu の bubblewrap 用 AppArmor プロファイル(bwrap-userns-restrict)が bubblewrap の中で動くプログラムから権限を外すため、このセッションのシェルコマンドはすべて失敗します。ファイルツールはそのまま使えます。解決するには、関連するバイナリに userns を許可する AppArmor プロファイルを追加します。詳しくは Claude Code のサンドボックスランタイム(@anthropic-ai/sandbox-runtime)の README の Ubuntu の項を参照してください。',
+    'En este sistema, el sandbox de Claude Code no puede ejecutar comandos de shell: el perfil de AppArmor de Ubuntu para bubblewrap (bwrap-userns-restrict) quita los permisos a los programas que se ejecutan dentro de bubblewrap, así que todos los comandos de shell de esta sesión fallarán. Las herramientas de archivos siguen funcionando. La solución es un perfil de AppArmor que conceda userns a los binarios correspondientes; consulte los detalles en la nota sobre Ubuntu del README del entorno de sandbox de Claude Code (@anthropic-ai/sandbox-runtime).'
   ]
 } as const
 /** The Linux Claude row's caption in What the sandbox blocks (coverage.ts sandboxRowCaption). */
@@ -156,6 +157,8 @@ describe('the sandbox refusals', () => {
     }
     order.forEach((lang, i) => {
       const m = CATALOGS[lang].messages as Record<string, string | undefined>
+      // No sysctl is offered any more, in either message (fix round 4)
+      for (const key of ['session.sandbox.warn.claudeUserns', 'session.sandbox.warn.claudeUsernsAndHome']) expect(m[key], `${lang} ${key}`).not.toMatch(/sysctl/)
       expect(m['session.sandbox.warn.claudeUsernsAndHome'], lang).toBe(`${WARNINGS['session.sandbox.warn.claudeUserns'][i]}${lang === 'ja' ? '' : ' '}${WARNINGS['session.sandbox.warn.homeInWorkFolder'][i]}`)
       expect(m['settings.security.sandboxCoverage.linuxClaudeUbuntu'], lang).toBe(CAPTION[i])
     })
