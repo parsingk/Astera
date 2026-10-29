@@ -131,6 +131,10 @@ export interface SpawnChecks {
    *  sandbox's own account cannot read theirs (core/sandbox/gitExcludes.ts codexExcludesWriter), asked by its prepare.
    *  Absent, none is written and the session's git looks where it would. */
   codexExcludes?: CodexExcludes
+  /** Whether the config.toml at the path given makes the elevated sandbox its Codex home's default (Task P), asked by a
+   *  sandboxed win32 Codex prepare for the start's warning. Absent, the file itself is read (codexDefaultSandbox.ts
+   *  elevatedDefaultIn); a test seam. */
+  codexElevatedDefault?: (configFile: string) => Promise<boolean>
 }
 
 /** The real readiness question (windowsReadiness.ts), asked with the session's own environment: its PATH finds the codex
@@ -339,12 +343,13 @@ export class SessionManager {
           ? { check: (sandboxArgs: string[]) => fitsOnTheLine(this.checks.platform, descriptorOf(this.descriptors, account).buildCommand({ sandboxArgs })) }
           : {}),
       ...(this.checks.codexExcludes ? { excludes: this.checks.codexExcludes } : {}),
+      ...(this.checks.codexElevatedDefault ? { elevatedDefault: this.checks.codexElevatedDefault } : {}),
       look: this.checks.linkLook,
       log: this.checks.log
     })
     // The other Hosts' folders beside this one's, as they were now, kept for the spawn's profile (final fix pass, part 2, B),
-    // and the copy of the person's git excludes for its environment
-    this.sandboxLayouts.keep(account.id, cwd, prepared.layout, this.checks.now(), prepared.otherHosts, prepared.excludesFile)
+    // the copy of the person's git excludes for its environment, and the home's elevated default for its warning (Task P)
+    this.sandboxLayouts.keep(account.id, cwd, prepared.layout, this.checks.now(), prepared.otherHosts, prepared.excludesFile, prepared.elevatedDefault)
   }
 
   /** The environment a Task's check in `cwd` starts from (Task K, the person's Q5): `base` without what the Credentials list
@@ -367,7 +372,8 @@ export class SessionManager {
    * - Codex, every OS: `codex sandbox` with the session's permission profile (sessionSandboxArgs without `-a never`),
    *   prepared as its start is (prepareCodexSandbox: the version floor, the git layout, on Windows the account's
    *   readiness), and the session's sandbox environment (codexSandboxEnv). On Windows the very deny list matters: Codex
-   *   resyncs a home's deny-read ACEs to each launch's list (Task K part 1). On Linux a named path through a link in the
+   *   asks to revoke the deny-read ACEs a launch's list lacks (Task K part 1; Windows keeps them today, as
+   *   windowsReadiness.ts says, but not if Codex's revoke starts working). On Linux a named path through a link in the
    *   folder makes Codex refuse every command, so the check is refused rather than failed. On Windows it runs through
    *   Astera's runner (`codexCheckRunner`), and the check's shell says it started first (checkShell's mark): Codex's
    *   sandbox exits 1 for its own failure as for a check's, and the runner tells them apart (fix round 2).
@@ -587,7 +593,15 @@ export class SessionManager {
     const linkInWorkFolder =
       sandboxedCodex && this.checks.platform === 'linux' && this.checks.linkLook !== null && this.codexLinksFor(layout, env, opts.cwd).length > 0
     const sandboxWarnings = sandboxed
-      ? startWarningsFor(this.sandboxWarn, { provider: providerOf(opts.account), platform: this.checks.platform, cwd: opts.cwd, homeDir: this.homeDir, linkInWorkFolder })
+      ? startWarningsFor(this.sandboxWarn, {
+          provider: providerOf(opts.account),
+          platform: this.checks.platform,
+          cwd: opts.cwd,
+          homeDir: this.homeDir,
+          linkInWorkFolder,
+          // Task P: the account's Codex home still makes the elevated sandbox its default, as the prepare found it
+          elevatedDefault: sandboxedCodex && this.sandboxLayouts.elevatedDefaultOf(opts.account.id, opts.cwd, this.checks.now())
+        })
       : []
     const warned = sandboxWarnings.length > 0 ? { sandboxWarnings } : {}
     // Shared extensions: their environment values only here, in this process's environment (design D5). The workload

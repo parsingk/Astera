@@ -4,13 +4,13 @@ import { describe, it, expect } from 'vitest'
 import { CATALOGS, LANGS, t } from './index'
 
 // As the brief gave them, with the Task 6 fix round's changes: the setup's sentence says Codex records the elevated
-// sandbox as the account's default, the done line's English, and Spanish in usted like the screen's other strings
+// sandbox as the account's default (and, since Task P, that Astera takes that line back out), the done line's English, and Spanish in usted like the screen's other strings
 const GIVEN = {
   'session.spawn.sandbox.windowsSetup': [
-    '이 Codex 계정은 Windows sandbox가 설정되지 않았습니다. 설정하기를 누르면 관리자 확인 창이 한 번 뜹니다. Codex가 이 계정의 기본 sandbox를 elevated로 기록합니다.',
-    "This Codex account has no Windows sandbox set up yet. Set up shows Windows' administrator prompt once. Codex records the elevated sandbox as this account's default.",
-    'この Codex アカウントには Windows サンドボックスがまだ設定されていません。「設定する」を押すと管理者の確認が一度表示されます。Codex はこのアカウントの既定のサンドボックスを elevated として記録します。',
-    'Esta cuenta de Codex aún no tiene el sandbox de Windows configurado. Configurar muestra una vez el aviso de administrador de Windows. Codex guarda el sandbox elevado como predeterminado de esta cuenta.'
+    '이 Codex 계정은 Windows sandbox가 설정되지 않았습니다. 설정하기를 누르면 관리자 확인 창이 한 번 뜹니다. Codex가 이 계정의 기본 sandbox를 elevated로 기록하지만 Astera가 그 줄을 다시 지우므로, sandbox 세션만 이것을 씁니다.',
+    "This Codex account has no Windows sandbox set up yet. Set up shows Windows' administrator prompt once. Codex records the elevated sandbox as this account's default, and Astera takes that line back out, so only sandboxed sessions use it.",
+    'この Codex アカウントには Windows サンドボックスがまだ設定されていません。「設定する」を押すと管理者の確認が一度表示されます。Codex はこのアカウントの既定のサンドボックスを elevated として記録しますが、Astera がその行を削除するため、これを使うのはサンドボックスのセッションだけです。',
+    'Esta cuenta de Codex aún no tiene el sandbox de Windows configurado. Configurar muestra una vez el aviso de administrador de Windows. Codex guarda el sandbox elevado como predeterminado de esta cuenta y Astera quita esa línea, así que solo lo usan las sesiones en el sandbox.'
   ],
   'session.spawn.sandbox.setUp': ['설정하기', 'Set up', '設定する', 'Configurar'],
   'session.spawn.sandbox.setUpDone': [
@@ -97,6 +97,20 @@ const GIVEN = {
     '{id} はサンドボックスの外で動いています。サンドボックス内のセッションはサンドボックスの外に作業を渡せないため、何も送信も起動もしませんでした。',
     '{id} se ejecuta fuera del sandbox, y una sesión en el sandbox no puede pasar trabajo fuera de él, así que no se envió ni se inició nada.'
   ],
+  // Task P: Settings › Agent profiles offers to remove a home's elevated default, in one sentence
+  'settings.agentProfiles.sandboxDefault.hint': [
+    '이 계정의 config.toml이 elevated sandbox를 모든 Codex 세션의 기본값으로 정해 두어 일반 세션도 로그인 정보가 든 폴더를 읽지 못하며, 줄 삭제를 누르면 그 줄을 지워 sandbox 세션만 이것을 쓰게 됩니다.',
+    "This account's config.toml makes the elevated sandbox the default for all its Codex sessions, so its ordinary sessions cannot read the folders holding logins either; Remove takes that line out and leaves the sandbox to sandboxed sessions.",
+    'このアカウントの config.toml が elevated サンドボックスをすべての Codex セッションの既定にしているため通常のセッションもログイン情報を含むフォルダーを読めず、「行を削除」でその行を消すとサンドボックスのセッションだけがこれを使います。',
+    'El config.toml de esta cuenta hace que el sandbox elevado sea el predeterminado de todas sus sesiones de Codex, así que sus sesiones normales tampoco pueden leer las carpetas con datos de inicio de sesión; Quitar borra esa línea y deja el sandbox solo para las sesiones en el sandbox.'
+  ],
+  'settings.agentProfiles.sandboxDefault.remove': ['줄 삭제', 'Remove', '行を削除', 'Quitar'],
+  'settings.agentProfiles.sandboxDefault.removeFailed': [
+    '그 줄을 지우지 못했습니다. {file}을(를) 직접 고쳐 주세요.',
+    'The line could not be removed. Edit {file} yourself.',
+    'その行を削除できませんでした。{file} を直接編集してください。',
+    'No se pudo quitar la línea. Edite {file} usted mismo.'
+  ],
   'session.spawn.sandbox.notPrepared': [
     'sandbox 준비가 끝나기 전에 시작하려 했습니다. 다시 시작해 주세요.',
     'The session tried to start before its sandbox was prepared. Start it again.',
@@ -127,6 +141,13 @@ const WARNINGS = {
     "Codex will refuse every command in this session: a folder that holds logins or Astera's own files is reached through a link inside the work folder, which the session could change. Starting it in a project folder avoids this.",
     'このセッションでは Codex がすべてのコマンドを拒否します。ログイン情報や Astera 自身のファイルを含むフォルダーが作業フォルダー内のリンクの先にあり、セッションがそのリンクを変えられるためです。プロジェクトのフォルダーで起動すれば避けられます。',
     'Codex rechazará todos los comandos de esta sesión: una carpeta con datos de inicio de sesión o con archivos propios de Astera se alcanza a través de un enlace dentro de la carpeta de trabajo, que la sesión podría cambiar. Iniciarla en una carpeta de proyecto lo evita.'
+  ],
+  // Task P: a Windows Codex home whose config.toml makes the elevated sandbox its default
+  'session.sandbox.warn.elevatedDefault': [
+    '이 계정의 config.toml이 Codex의 elevated sandbox를 기본값으로 정해 두어, 이 계정의 일반 Codex 세션도 명령을 그 안에서 실행하고 로그인 정보가 든 폴더를 읽지 못합니다. 설정 › 에이전트 프로필에서 그 줄을 지울 수 있습니다.',
+    "This account's config.toml makes Codex's elevated sandbox the default, so its ordinary Codex sessions also run their commands in it and cannot read the folders holding logins. Settings › Agent profiles can remove that line.",
+    'このアカウントの config.toml が Codex の elevated サンドボックスを既定にしているため、このアカウントの通常の Codex セッションもコマンドをその中で実行し、ログイン情報を含むフォルダーを読めません。設定 › エージェントプロファイルでその行を削除できます。',
+    'El config.toml de esta cuenta hace que el sandbox elevado de Codex sea el predeterminado, así que sus sesiones normales de Codex también ejecutan sus comandos en él y no pueden leer las carpetas con datos de inicio de sesión. Puede quitar esa línea en Configuración › Perfiles de agente.'
   ]
 } as const
 /** The Linux Claude row's caption in What the sandbox blocks (coverage.ts sandboxRowCaption). */
@@ -176,6 +197,8 @@ describe('the sandbox refusals', () => {
       expect(m['session.sandbox.warn.claudeUsernsAndHome'], lang).toBe(`${WARNINGS['session.sandbox.warn.claudeUserns'][i]}${lang === 'ja' ? '' : ' '}${WARNINGS['session.sandbox.warn.homeInWorkFolder'][i]}`)
       // Fix round 5: the link warning and the home warning, the same way
       expect(m['session.sandbox.warn.linkAndHome'], lang).toBe(`${WARNINGS['session.sandbox.warn.linkInWorkFolder'][i]}${lang === 'ja' ? '' : ' '}${WARNINGS['session.sandbox.warn.homeInWorkFolder'][i]}`)
+      // Task P: the elevated default warning and the home warning, the same way
+      expect(m['session.sandbox.warn.elevatedDefaultAndHome'], lang).toBe(`${WARNINGS['session.sandbox.warn.elevatedDefault'][i]}${lang === 'ja' ? '' : ' '}${WARNINGS['session.sandbox.warn.homeInWorkFolder'][i]}`)
       expect(m['settings.security.sandboxCoverage.linuxClaudeUbuntu'], lang).toBe(CAPTION[i])
     })
   })

@@ -13,15 +13,19 @@
 // there, too old for `doctor --json`, timed out, a report that does not read), setting up would not help: that is its
 // own answer, `check-failed` (`SANDBOX_UNAVAILABLE: windows-check-failed codex <account>`), with no setup offered.
 //
-// **The echo runs under the account's own permission profile** (Task K part 1). Codex's elevated sandbox keeps the
-// deny-read ACEs of a home across launches and resyncs them to each launch's list: every elevated launch refreshes the
-// setup with that launch's deny paths (windows-sandbox-rs/src/identity.rs:267-311), which applies them and revokes every
-// path the home's last launch applied that the new list lacks (setup_provisioning.rs:929-939, deny_read_state.rs:22-68,
-// all at rust-v0.160.0). A `codex sandbox` with no profile falls back to the read-only one (cli/src/debug_sandbox.rs:
-// 713-731), which denies nothing, so the old echo lifted the E6 denials of the account's running sandboxed sessions until
-// their next command. The prepare hands the sessions' own `-c` values (core/sandbox/prepared.ts); without them no echo
-// runs. Doctor and the setup are not launches: doctor reads (cli/src/doctor/sandbox.rs), and `sandbox setup` provisions
-// only (cli/src/sandbox_setup.rs:86-125, SetupMode::ProvisionOnly, setup_provisioning.rs:891-905).
+// **The echo runs under the account's own permission profile** (Task K part 1). Every elevated launch refreshes the
+// setup with that launch's deny paths (windows-sandbox-rs/src/identity.rs:267-311), which applies them to the machine's
+// one sandbox users group and asks to revoke every path the home's last launch applied that the new list lacks
+// (setup_provisioning.rs:929-939, deny_read_state.rs:22-68, all at rust-v0.160.0). The revoke takes no denial away:
+// `revoke_ace` (acl.rs:956-1030) uses REVOKE_ACCESS, which "Indicates that all existing ACCESS_ALLOWED_ACE or
+// SYSTEM_AUDIT_ACE structures for the specified trustee are removed" (Microsoft Learn, ACCESS_MODE,
+// learn.microsoft.com/windows/win32/api/accctrl/ne-accctrl-access_mode); measured on Windows 11 (Task P), the deny
+// entries stayed and the entry count did not change, so `revoke_ace` wrote nothing. A denial stays once any account's
+// sandboxed launch applied it. So an echo under the read-only profile a `codex sandbox` with no profile falls back to
+// (cli/src/debug_sandbox.rs:713-731), which denies nothing, lifts nothing today; it would the day Codex's revoke works.
+// The prepare hands the sessions' own `-c` values (core/sandbox/prepared.ts); without them no echo runs. Doctor and the
+// setup are not launches: doctor reads (cli/src/doctor/sandbox.rs), and `sandbox setup` provisions only
+// (cli/src/sandbox_setup.rs:86-125, SetupMode::ProvisionOnly, setup_provisioning.rs:891-905).
 import { execFile } from 'node:child_process'
 import os from 'node:os'
 import { windowsSpawn } from '../sessions/windowsExecutable'
@@ -37,11 +41,14 @@ export const READY_MARKER = 'ASTERA_SANDBOX_OK'
 /** The echo through the sandbox, under `profile`: the `-c` values of the account's sessions' permission profile. */
 export const readyArgv = (profile: readonly string[]): string[] => ['sandbox', ...profile, '--', 'cmd.exe', '/d', '/c', 'echo', READY_MARKER]
 /** Whether `profile` is one the echo may run under: it names the permission profile it defines, so codex runs it rather
- *  than its read-only fallback, whose empty deny list would lift the sessions' denials. */
+ *  than its read-only fallback, whose empty deny list asks Codex to revoke the sessions' denials (which Windows keeps
+ *  today, see above). */
 const runsAsProfile = (profile: readonly string[] | undefined): profile is readonly string[] =>
   profile !== undefined && profile.some((a) => a.startsWith('permissions=')) && profile.some((a) => /^default_permissions=/.test(a))
 /** The setup Task 2 measured, for the home in CODEX_HOME. It brings up Windows' administrator prompt, and writes
- *  `windows.sandbox = "elevated"` into that home's config.toml. */
+ *  `windows.sandbox = "elevated"` into that home's config.toml, which the Host's setup takes back out, or puts the
+ *  person's own line back where the setup wrote over it (Task P, codexDefaultSandbox.ts setUpForSandboxedSessionsOnly):
+ *  doctor above and every sandboxed launch name it themselves. */
 export const SETUP_ARGV = ['sandbox', 'setup', '--elevated', '--current-user']
 
 /** doctor answered in 0.5 to 12 s and the echo in about 1 s (Task 2); past this a home reads not set up. */
@@ -132,7 +139,7 @@ async function ask(a: { codexHome: string | null; profile?: readonly string[]; r
     return 'check-failed'
   }
   if (!runsAsProfile(a.profile))
-    return failed("the sandbox echo was not run: it was given no permission profile of the account's sessions, and an echo under another deny list would lift what they deny")
+    return failed("the sandbox echo was not run: it was given no permission profile of the account's sessions, and an echo under another deny list asks Codex to revoke what they deny")
   let echo: Awaited<ReturnType<CodexRun>>
   try {
     echo = await a.run(readyArgv(a.profile), env)

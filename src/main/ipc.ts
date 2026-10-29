@@ -4867,6 +4867,9 @@ export function registerIpc(
   ipcMain.handle('agentProfiles.remove', (_e, id: unknown) => agentProfiles.remove(id as string))
   ipcMain.handle('agentProfiles.sandboxSetup', (_e, profileId: unknown, accountId: unknown) => agentProfiles.sandboxSetup(profileId as string, accountId as string))
   ipcMain.handle('agentProfiles.sandboxReadiness', (_e, profileId: unknown) => agentProfiles.sandboxReadiness(profileId as string))
+  ipcMain.handle('agentProfiles.sandboxDefaultRemove', (_e, profileId: unknown, accountId: unknown) =>
+    agentProfiles.sandboxDefaultRemove(profileId as string, accountId as string)
+  )
   // Settings › Security & Access and Run detail's token totals (observe mode design §11): the Host checks every
   // argument; this only passes them on
   const audit = createAuditRoute({ call: (m) => orchCall(m) })

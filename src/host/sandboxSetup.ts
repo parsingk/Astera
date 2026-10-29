@@ -10,14 +10,21 @@ import { descriptorOf, type ProviderDescriptor } from '../core/providers/descrip
 import { cliEnvFor } from '../core/sessions/cliEnv'
 import { SETUP_RUN_MS, codexWindowsDoctor, codexWindowsSetup, runCodex, type CodexRun, type Readiness } from '../core/sandbox/windowsReadiness'
 import type { CodexWindowsReady } from '../core/sandbox/prepared'
+import { codexConfigFile, elevatedDefaultIn, removeElevatedDefault, setUpForSandboxedSessionsOnly, type RemoveOutcome } from '../core/sandbox/codexDefaultSandbox'
 
-/** The setup for `agent-profiles-sandbox-setup`, or undefined off Windows, where there is none to run. */
+/** The setup for `agent-profiles-sandbox-setup`, or undefined off Windows, where there is none to run. It is for
+ *  Astera's sandboxed sessions only (Task P): the `windows.sandbox = "elevated"` line Codex's setup writes into the
+ *  home's config.toml is taken back out afterwards, or, where the setup wrote "elevated" over the person's own value,
+ *  their line is put back as it was; a home that already made the elevated sandbox its default, through that line or
+ *  Codex's older `[features] elevated_windows_sandbox = true`, is left (setUpForSandboxedSessionsOnly), and `log` says
+ *  what became of it. */
 export function hostSandboxSetup(d: {
   platform: NodeJS.Platform
   homeDir: string
   /** Read at each setup: the Host completes its PATH when a CLI is missing (windowsPath.ts). */
   baseEnv: () => NodeJS.ProcessEnv
   descriptors: Record<Provider, ProviderDescriptor>
+  log?: (m: string) => void
   /** Test injection; default the codex on this machine's PATH, waiting up to SETUP_RUN_MS for the administrator prompt. */
   run?: (env: Record<string, string | undefined>) => CodexRun
 }): ((account: Account) => Promise<{ ok: boolean; out: string }>) | undefined {
@@ -25,9 +32,33 @@ export function hostSandboxSetup(d: {
   const runIn = d.run ?? ((env: Record<string, string | undefined>) => runCodex(env, SETUP_RUN_MS))
   return (account) => {
     // The account's CODEX_HOME as its sessions get it (none for the ambient account), so the home set up is the one a
-    // sandboxed start of it asks about
+    // sandboxed start of it asks about, and the config.toml put back is the one Codex wrote into
     const env = cliEnvFor({ base: d.baseEnv(), account, descriptor: descriptorOf(d.descriptors, account), homeDir: d.homeDir })
-    return codexWindowsSetup({ codexHome: env.CODEX_HOME ?? null, run: runIn(env) })
+    return setUpForSandboxedSessionsOnly({
+      configFile: codexConfigFile(env, d.homeDir),
+      setUp: () => codexWindowsSetup({ codexHome: env.CODEX_HOME ?? null, run: runIn(env) }),
+      log: d.log ?? (() => {})
+    })
+  }
+}
+
+/** The elevated sandbox as a Codex account's default, for Settings › Agent profiles (Task P), or undefined off Windows,
+ *  where Codex has no such default: the config.toml the account's sessions read (its CODEX_HOME's, or ~/.codex for the
+ *  ambient account, as cliEnvFor gives them), whether it makes the elevated sandbox the default (the
+ *  `windows.sandbox = "elevated"` line, or Codex's older `[features] elevated_windows_sandbox = true`), and Remove,
+ *  which takes the line and the key out, and leaves a `[windows]` or `[features]` table it empties behind only when
+ *  its header carries a comment (codexDefaultSandbox.ts). */
+export function hostSandboxDefault(d: {
+  platform: NodeJS.Platform
+  homeDir: string
+  baseEnv: () => NodeJS.ProcessEnv
+  descriptors: Record<Provider, ProviderDescriptor>
+}): { fileOf(account: Account): string; elevated(file: string): Promise<boolean>; remove(file: string): Promise<RemoveOutcome> } | undefined {
+  if (d.platform !== 'win32') return undefined
+  return {
+    fileOf: (account) => codexConfigFile(cliEnvFor({ base: d.baseEnv(), account, descriptor: descriptorOf(d.descriptors, account), homeDir: d.homeDir }), d.homeDir),
+    elevated: elevatedDefaultIn,
+    remove: (file) => removeElevatedDefault(file, { dropEmptyTable: true })
   }
 }
 

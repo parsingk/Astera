@@ -41,9 +41,10 @@ const doctorOut = (provisioning: 'complete' | 'incomplete'): string =>
 type Call = { argv: string[]; env: Record<string, string | undefined> }
 
 /** The account's permission profile as its sandboxed sessions get it (core/sandbox/prepared.ts hands the readiness the
- *  sessions' own `-c` values): the echo must run under it. Codex's elevated sandbox keeps the deny-read ACEs of a home
- *  across launches and resyncs them to each launch's list (windows-sandbox-rs/src/identity.rs:267-311,
- *  deny_read_state.rs:22-68 at rust-v0.160.0), so an echo under any other list lifts what the running sessions deny. */
+ *  sessions' own `-c` values): the echo must run under it. Each elevated launch asks Codex to revoke the deny-read ACEs
+ *  a home's last launch applied that its list lacks (windows-sandbox-rs/src/identity.rs:267-311, deny_read_state.rs:22-68
+ *  at rust-v0.160.0). Windows keeps them today (REVOKE_ACCESS, windowsReadiness.ts), but an echo under any other list
+ *  would lift what the running sessions deny the day Codex's revoke works. */
 const PROFILE = [
   '-c',
   'permissions={astera={extends=":workspace", filesystem={"C:/Users/t/.ssh"="deny", "C:/Users/t/.npmrc"="deny"}, network={enabled=true}}}',
@@ -82,8 +83,9 @@ describe('codexWindowsReadiness', () => {
   })
 
   // Task K part 1: an echo under another list (the legacy read-only profile `codex sandbox` falls back to has none)
-  // would revoke the account's deny-read ACEs, and with them the E6 denials of its running sandboxed sessions, until
-  // their next command. With no profile, or one that names no `default_permissions` (codex would then fall back to that
+  // asks Codex to revoke the account's deny-read ACEs, and with them the E6 denials of its running sandboxed sessions
+  // (which Windows keeps today, Task P, but not once Codex's revoke works). With no profile, or one that names no
+  // `default_permissions` (codex would then fall back to that
   // read-only profile, cli/src/debug_sandbox.rs:713-731), the echo is not run and the home cannot be told ready.
   it("runs no echo without the account's own profile, and says so", async () => {
     for (const profile of [undefined, [], ['-c', 'windows.sandbox="elevated"']]) {

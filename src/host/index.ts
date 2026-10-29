@@ -79,7 +79,7 @@ import { hostFeatures } from './features'
 import { loadSlackSdk } from './slackSdk'
 import { composeHostSlack, type HostSlackWiring } from './slackWiring'
 import { createHostSpawner } from './spawner'
-import { hostSandboxReadiness, hostSandboxSetup } from './sandboxSetup'
+import { hostSandboxDefault, hostSandboxReadiness, hostSandboxSetup } from './sandboxSetup'
 import { createHostWorktrees, loadWorktreesIfSpawning } from './worktrees'
 import { createHostProjectRoots } from './projectRoots'
 import { createHostExits, ptyHeldBy, type HostExits } from './exits'
@@ -889,12 +889,15 @@ async function main(): Promise<void> {
   // Agent Profiles (design §4): the store this Host owns. A profile cannot be deleted while a live session holds it
   // (the session's note carries `agentProfileId`) or unfinished orchestration work does (a Job, a Task, an open
   // Dispatch). `orch` is made below; the guard reads it only when a delete is asked.
-  // 설정하기 (sandbox design §6): Codex's Windows sandbox setup for one account, run here, where the sessions start
+  // 설정하기 (sandbox design §6): Codex's Windows sandbox setup for one account, run here, where the sessions start, for
+  // the sandboxed sessions only (Task P: the default Codex writes is taken back out, or the person's own value it wrote
+  // over is put back, and the log says so)
   const sandboxSetup = hostSandboxSetup({
     platform: process.platform,
     homeDir: os.homedir(),
     baseEnv: () => hostWorkerBaseEnv(process.env),
-    descriptors: makeDescriptors(process.platform)
+    descriptors: makeDescriptors(process.platform),
+    log: (m) => log.write(m)
   })
   // And the readiness Settings › Agent profiles shows beside it, asked as the Host's own sandboxed starts ask it
   const sandboxReadiness = hostSandboxReadiness({
@@ -904,13 +907,21 @@ async function main(): Promise<void> {
     descriptors: makeDescriptors(process.platform),
     log: (m) => log.write(m)
   })
+  // And whether each account's config.toml still makes the elevated sandbox its default, with Remove beside it (Task P)
+  const sandboxDefault = hostSandboxDefault({
+    platform: process.platform,
+    homeDir: os.homedir(),
+    baseEnv: () => hostWorkerBaseEnv(process.env),
+    descriptors: makeDescriptors(process.platform)
+  })
   const agentProfiles = createHostAgentProfiles({
     profileDir,
     readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
     inUse: agentProfileInUse({ sessions: () => [...registry.list(), ...procs.list()], orch: () => orch }),
     log: (m) => log.write(m),
     ...(sandboxSetup ? { sandboxSetup } : {}),
-    ...(sandboxReadiness ? { sandboxReadiness } : {})
+    ...(sandboxReadiness ? { sandboxReadiness } : {}),
+    ...(sandboxDefault ? { sandboxDefault } : {})
   })
   /** `agent-profiles-touch` as the app would send it, not awaited by the spawn that asks: the command logs its own
    *  failures and answers success, so a stamp never fails or delays a spawn. */

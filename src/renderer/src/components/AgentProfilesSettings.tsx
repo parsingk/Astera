@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import type { Account, AgentProfileFields, PluginsCallAnswer } from '../../../core/types'
 import type { AgentProfile, ProfilePermission } from '../../../core/agentProfiles/types'
@@ -17,6 +17,7 @@ import {
   profileFailureLine,
   providerSuffix,
   readinessRows,
+  sandboxDefaultRemoved,
   sandboxHintKeys,
   sandboxReadinessShown,
   sandboxStateLine
@@ -348,6 +349,21 @@ function SandboxReadiness({ profile, accounts }: { profile: AgentProfile; accoun
     void ask()
   }, [profile.id])
 
+  /** Task P: Remove under an account whose config.toml still makes the elevated sandbox its default, on the person's
+   *  press only; the readiness is asked again after it, which shows whether the default is gone (the line, or Codex's
+   *  older feature key) */
+  const removeDefault = async (accountId: string): Promise<void> => {
+    if (settingUp) return
+    setSettingUp(true)
+    try {
+      const removed = sandboxDefaultRemoved(await window.api.agentProfiles.sandboxDefaultRemove(profile.id, accountId).catch(failed))
+      if (!removed.ok) toast.error(t('settings.agentProfiles.sandboxDefault.removeFailed', { file: removed.file ?? 'config.toml' }))
+    } finally {
+      setSettingUp(false)
+      void ask()
+    }
+  }
+
   const setUp = async (accountId: string): Promise<void> => {
     if (settingUp) return
     setSettingUp(true)
@@ -365,17 +381,29 @@ function SandboxReadiness({ profile, accounts }: { profile: AgentProfile; accoun
   return (
     <>
       {readinessRows(profile, accounts, answer).map((r) => (
-        <div key={r.accountId} className="settings-row">
-          <span>{r.label}</span>
-          <div className="remote-actions">
-            {r.state !== null && <span className="settings-hint">{sandboxStateLine(r.state, t)}</span>}
-            {offersSetUp(r.state) && (
-              <button type="button" className="settings-gen-refresh" disabled={settingUp} onClick={() => void setUp(r.accountId)}>
-                {t('session.spawn.sandbox.setUp')}
-              </button>
-            )}
+        <Fragment key={r.accountId}>
+          <div className="settings-row">
+            <span>{r.label}</span>
+            <div className="remote-actions">
+              {r.state !== null && <span className="settings-hint">{sandboxStateLine(r.state, t)}</span>}
+              {offersSetUp(r.state) && (
+                <button type="button" className="settings-gen-refresh" disabled={settingUp} onClick={() => void setUp(r.accountId)}>
+                  {t('session.spawn.sandbox.setUp')}
+                </button>
+              )}
+            </div>
           </div>
-        </div>
+          {r.elevatedDefault && (
+            // A dim sentence that takes the width, beside a button that keeps its own (seen on the hidden desktop: as a
+            // settings row the sentence took the label's weight and squeezed the button)
+            <div className="remote-actions sandbox-default-row">
+              <span className="settings-hint remote-actions-grow">{t('settings.agentProfiles.sandboxDefault.hint')}</span>
+              <button type="button" className="settings-gen-refresh" disabled={settingUp} onClick={() => void removeDefault(r.accountId)}>
+                {t('settings.agentProfiles.sandboxDefault.remove')}
+              </button>
+            </div>
+          )}
+        </Fragment>
       ))}
     </>
   )

@@ -22,6 +22,7 @@ import {
   spawnPermission,
   offersSetUp,
   readinessRows,
+  sandboxDefaultRemoved,
   sandboxHintKeys,
   sandboxReadinessShown,
   sandboxStateLine
@@ -292,11 +293,15 @@ describe('the sandbox switch', () => {
   it('lists the profile’s Codex accounts in its order with what the Host answered for each', () => {
     const answer = { ok: true as const, body: { accounts: [{ accountId: 'x1', state: 'ready' }, { accountId: 'x2', state: 'not-set-up' }] } }
     expect(readinessRows(boxed, accounts, answer)).toEqual([
-      { accountId: 'x2', label: 'Home', state: 'not-set-up' },
-      { accountId: 'x1', label: 'Work', state: 'ready' }
+      { accountId: 'x2', label: 'Home', state: 'not-set-up', elevatedDefault: false },
+      { accountId: 'x1', label: 'Work', state: 'ready', elevatedDefault: false }
     ])
+    // Task P: an account whose config.toml makes the elevated sandbox its default, as the Host says it
+    const shared = { ok: true as const, body: { accounts: [{ accountId: 'x1', state: 'ready', elevatedDefault: true }, { accountId: 'x2', state: 'ready', elevatedDefault: 'yes' }] } }
+    expect(readinessRows(boxed, accounts, shared).map((r) => r.elevatedDefault)).toEqual([false, true])
     // Still asking: the accounts, with no state yet
     expect(readinessRows(boxed, accounts, null).map((r) => r.state)).toEqual([null, null])
+    expect(readinessRows(boxed, accounts, null).map((r) => r.elevatedDefault)).toEqual([false, false])
     // An account the Host left out, or a call that came back with nothing, could not be asked about
     expect(readinessRows(boxed, accounts, { ok: true, body: { accounts: [{ accountId: 'x1', state: 'ready' }] } }).map((r) => r.state)).toEqual(['check-failed', 'ready'])
     expect(readinessRows(boxed, accounts, { ok: false, code: 'HOST_NOT_RUNNING', message: 'no Host' }).map((r) => r.state)).toEqual(['check-failed', 'check-failed'])
@@ -309,6 +314,15 @@ describe('the sandbox switch', () => {
     expect(sandboxStateLine('pending', en)).toBe('pending')
     expect(offersSetUp('not-set-up')).toBe(true)
     for (const s of ['ready', 'check-failed', null]) expect(offersSetUp(s as 'ready' | null)).toBe(false)
+  })
+
+  // Task P: Remove says nothing when the default is gone (the readiness asked again shows it), and names the file to
+  // edit by hand when it could not be taken out
+  it('reads what the Host did with Remove', () => {
+    for (const outcome of ['removed', 'absent', 'other-value']) expect(sandboxDefaultRemoved({ ok: true, body: { outcome, file: 'C:/h/config.toml' } }), outcome).toEqual({ ok: true })
+    for (const outcome of ['cannot-edit', 'failed']) expect(sandboxDefaultRemoved({ ok: true, body: { outcome, file: 'C:/h/config.toml' } }), outcome).toEqual({ ok: false, file: 'C:/h/config.toml' })
+    expect(sandboxDefaultRemoved({ ok: false, code: 'HOST_NOT_RUNNING', message: 'no Host' })).toEqual({ ok: false, file: null })
+    expect(sandboxDefaultRemoved({ ok: true, body: {} })).toEqual({ ok: false, file: null })
   })
 
   it('the editor carries the switch and sends it, and asks readiness and sets up through the Host', () => {
@@ -328,5 +342,16 @@ describe('the sandbox switch', () => {
     expect(editor).toContain("toast.error(outcome.line ?? t('session.spawn.sandbox.setUpFailed'))")
     expect(editor).not.toContain('setUpDone')
     expect(editor).toContain('sandboxReadinessShown(p, window.api.platform, accounts)')
+    // Task P: an elevated default is said in one sentence beside the row, and taken out only on the person's press
+    expect(editor).toContain("t('settings.agentProfiles.sandboxDefault.hint')")
+    // Fix round 1, seen on the hidden desktop: as a settings row the sentence took the label's weight and squeezed the
+    // button to one letter a line. It is a dim hint that grows, beside a button that keeps its width
+    expect(editor).toContain('<div className="remote-actions sandbox-default-row">')
+    expect(editor).toContain('<span className="settings-hint remote-actions-grow">{t(\'settings.agentProfiles.sandboxDefault.hint\')}</span>')
+    expect(source('../styles.css')).toContain('.sandbox-default-row .settings-gen-refresh { flex: none; white-space: nowrap; }')
+    expect(editor).toContain("t('settings.agentProfiles.sandboxDefault.remove')")
+    expect(editor).toContain('window.api.agentProfiles.sandboxDefaultRemove(profile.id, accountId)')
+    expect(editor).toMatch(/onClick=\{\(\) => void removeDefault\(r\.accountId\)\}/)
+    expect(editor).toContain("t('settings.agentProfiles.sandboxDefault.removeFailed', { file: removed.file ?? 'config.toml' })")
   })
 })

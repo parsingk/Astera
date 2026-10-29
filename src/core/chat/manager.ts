@@ -109,6 +109,9 @@ export interface ChatManagerDeps {
   /** Writes the copy of the person's global git excludes a sandboxed win32 Codex chat reads (SpawnChecks' twin). Absent,
    *  none is written. */
   codexExcludes?: CodexExcludes
+  /** SpawnChecks.codexElevatedDefault's twin (Task P): whether the config.toml at the path given makes the elevated
+   *  sandbox its Codex home's default. Absent, the file itself is read; a test seam. */
+  codexElevatedDefault?: (configFile: string) => Promise<boolean>
   /** Where a sandboxed chat start's warnings are told (Task E fix rounds 2 and 3; SessionManager.sandboxWarn's twin): the
    *  chat's notice and the Host log. The Host's chats get it here; the app sets ChatSessionManager.sandboxWarn once it
    *  has the Host log. */
@@ -306,12 +309,13 @@ export class ChatSessionManager {
       version: this.deps.codexVersion,
       check: (args) => fitsOnTheLine(this.deps.platform, buildCodexAppServerCommand(this.deps.platform, undefined, [], appServerSandboxArgs(args))),
       ...(this.deps.codexExcludes ? { excludes: this.deps.codexExcludes } : {}),
+      ...(this.deps.codexElevatedDefault ? { elevatedDefault: this.deps.codexElevatedDefault } : {}),
       look: this.deps.linkLook,
       log: this.deps.log
     })
     // The other Hosts' folders beside this one's, as they were now, kept for the spawn's profile (final fix pass, part 2, B),
-    // and the copy of the person's git excludes for its environment
-    this.sandboxLayouts.keep(opts.account.id, opts.cwd, prepared.layout, Date.now(), prepared.otherHosts, prepared.excludesFile)
+    // the copy of the person's git excludes for its environment, and the home's elevated default for its warning (Task P)
+    this.sandboxLayouts.keep(opts.account.id, opts.cwd, prepared.layout, Date.now(), prepared.otherHosts, prepared.excludesFile, prepared.elevatedDefault)
   }
 
   /** Picks the process command and the adapter by the account's provider. Returns at once; the
@@ -443,7 +447,15 @@ export class ChatSessionManager {
         links: { cwd: opts.cwd, look: this.deps.linkLook }
       }).length > 0
     const sandboxWarnings = sandboxed
-      ? startWarningsFor(this.sandboxWarn, { provider, platform: this.deps.platform, cwd: opts.cwd, homeDir: this.deps.homeDir, linkInWorkFolder })
+      ? startWarningsFor(this.sandboxWarn, {
+          provider,
+          platform: this.deps.platform,
+          cwd: opts.cwd,
+          homeDir: this.deps.homeDir,
+          linkInWorkFolder,
+          // Task P: the account's Codex home still makes the elevated sandbox its default, as the prepare found it
+          elevatedDefault: sandboxedCodex && this.sandboxLayouts.elevatedDefaultOf(opts.account.id, opts.cwd, Date.now())
+        })
       : []
     const warned = sandboxWarnings.length > 0 ? { sandboxWarnings } : {}
     const env: Record<string, string | undefined> = {

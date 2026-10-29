@@ -1,9 +1,9 @@
-// What a sandboxed Codex prepare hands the Windows readiness question (Task K part 1). Codex's elevated sandbox keeps the
-// deny-read ACEs of a home across launches and resyncs them to each launch's list: every elevated launch refreshes the
-// setup with that launch's deny paths (windows-sandbox-rs/src/identity.rs:267-311), which applies them and revokes every
-// path the home's last launch applied that the new list lacks (setup_provisioning.rs:929-939, deny_read_state.rs:22-68,
-// all at rust-v0.160.0). So the readiness echo runs under the very deny list the account's sessions get, or it would lift
-// their E6 denials. No codex runs here: `ready` is a fake.
+// What a sandboxed Codex prepare hands the Windows readiness question (Task K part 1). Every elevated launch refreshes
+// the setup with that launch's deny paths (windows-sandbox-rs/src/identity.rs:267-311), which applies them and asks to
+// revoke every path the home's last launch applied that the new list lacks (setup_provisioning.rs:929-939,
+// deny_read_state.rs:22-68, all at rust-v0.160.0). Windows keeps the denials today (REVOKE_ACCESS, windowsReadiness.ts),
+// but the readiness echo runs under the very deny list the account's sessions get, so it would not lift their E6
+// denials the day Codex's revoke works. No codex runs here: `ready` is a fake.
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -66,5 +66,38 @@ describe('prepareCodexSandbox and the Windows readiness echo', () => {
     expect(entriesOf(session, 'write').length).toBeGreaterThan(0)
     expect(entriesOf(profile, 'write')).toEqual([])
     expect(profile.join(' ')).not.toContain(':workspace_roots')
+  })
+
+  // Task P: a home whose config.toml still makes the elevated sandbox its default (the line or Codex's older feature
+  // key, set up before Astera took the line back out, or by the person) starts as today, and the prepare says so for
+  // the start's warning. The file is the one Codex reads for the session: its CODEX_HOME's, or ~/.codex's for the
+  // ambient account. Nothing is read off Windows.
+  it("says whether the account's Codex home makes the elevated sandbox its default, on Windows only", async () => {
+    const ready: CodexWindowsReady = async () => 'ready'
+    const codexHome = path.join(home, '.codex-accounts', 'work')
+    fs.mkdirSync(codexHome, { recursive: true })
+    fs.mkdirSync(path.join(home, '.codex'))
+    const base = { accountId: 'acc', cwd: repo, homeDir: home, ready, version, look: null, log: () => {} }
+    const env = { APPDATA: path.join(home, 'AppData', 'Roaming'), TEMP: os.tmpdir(), TMP: os.tmpdir(), CODEX_HOME: codexHome }
+    expect((await prepareCodexSandbox({ ...base, platform: 'win32', env })).elevatedDefault).toBe(false)
+    fs.writeFileSync(path.join(codexHome, 'config.toml'), 'model = "gpt-5"\n\n[windows]\nsandbox = "elevated"\n')
+    expect((await prepareCodexSandbox({ ...base, platform: 'win32', env })).elevatedDefault).toBe(true)
+    // The ambient account's home, which its sessions find without CODEX_HOME
+    const { CODEX_HOME: _unset, ...ambient } = env
+    expect((await prepareCodexSandbox({ ...base, platform: 'win32', env: ambient })).elevatedDefault).toBe(false)
+    fs.writeFileSync(path.join(home, '.codex', 'config.toml'), 'windows.sandbox = "elevated"\n')
+    expect((await prepareCodexSandbox({ ...base, platform: 'win32', env: ambient })).elevatedDefault).toBe(true)
+    // Fix round 1 (review I2): Codex's older feature key, which Codex 0.160 still takes as the elevated default
+    fs.writeFileSync(path.join(codexHome, 'config.toml'), '[features]\nelevated_windows_sandbox = true\n')
+    expect((await prepareCodexSandbox({ ...base, platform: 'win32', env })).elevatedDefault).toBe(true)
+    // Another value is not the elevated default; and nothing is asked off Windows
+    fs.writeFileSync(path.join(codexHome, 'config.toml'), '[windows]\nsandbox = "unelevated"\n')
+    expect((await prepareCodexSandbox({ ...base, platform: 'win32', env })).elevatedDefault).toBe(false)
+    const asked: string[] = []
+    const reader = async (file: string) => (asked.push(file), true)
+    expect((await prepareCodexSandbox({ ...base, platform: 'linux', env, elevatedDefault: reader })).elevatedDefault).toBe(false)
+    expect(asked).toEqual([])
+    expect((await prepareCodexSandbox({ ...base, platform: 'win32', env, elevatedDefault: reader })).elevatedDefault).toBe(true)
+    expect(asked).toEqual([path.join(codexHome, 'config.toml')])
   })
 })

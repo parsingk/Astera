@@ -39,6 +39,9 @@ describe('the sandbox warning line', () => {
     expect(line('s1', ['claudeUserns'])).toContain('>session.sandbox.warn.claudeUserns</span>')
     // Task E fix round 5: Codex on Linux, a named path through a link in the work folder, with the home warning
     expect(line('s1', ['linkInWorkFolder', 'homeInWorkFolder'])).toContain('>session.sandbox.warn.linkAndHome</span>')
+    // Task P: Codex on Windows, a home whose config.toml makes the elevated sandbox its default, with the home warning
+    expect(line('s1', ['elevatedDefault'])).toContain('>session.sandbox.warn.elevatedDefault</span>')
+    expect(line('s1', ['elevatedDefault', 'homeInWorkFolder'])).toContain('>session.sandbox.warn.elevatedDefaultAndHome</span>')
   })
 
   it('stays closed for the session it was closed for, and only that one', () => {

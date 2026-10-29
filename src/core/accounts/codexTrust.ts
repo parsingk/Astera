@@ -27,7 +27,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { foldPathCase } from '../files/paths'
 import { readStoreFile } from '../storeFile'
-import { oneAtATime, writeThroughTmp } from './fileQueue'
+import { oneAtATime, writeTarget, writeThroughTmp } from './fileQueue'
 
 export type CodexTrustLevel = 'trusted' | 'untrusted'
 
@@ -58,18 +58,40 @@ function projectHeaderPath(line: string): string | null {
 
 /** Whether the scanner is outside a multi-line string, i.e. whether this line's text is structure.
  *  Without this a `[projects."…"]` sitting inside someone's `"""…"""` block reads as a table header
- *  and the edit lands in the middle of their prose. */
-function togglesMultiline(line: string, open: '"""' | "'''" | null): '"""' | "'''" | null {
+ *  and the edit lands in the middle of their prose. The sandbox's default reader scans the same file the same way
+ *  (core/sandbox/codexDefaultSandbox.ts).
+ *
+ *  As TOML reads the line (toml.io v1.0.0, Comment, String): outside a string a `#` starts a comment that runs to the
+ *  end of the line, and a one-line basic (`"…"`, with `\` escapes) or literal (`'…'`) string is skipped whole, so the
+ *  triple quotes in `# use """ here` or `"it'''s"` open nothing (Task P fix round 1, review M1). Inside a multi-line
+ *  basic string a `\` escapes the next character, so `\"""` does not close it. A closing delimiter may carry one or two
+ *  more quotes of the string's own (`""""` is a quote, then the close). */
+export function togglesMultiline(line: string, open: '"""' | "'''" | null): '"""' | "'''" | null {
   let state = open
-  for (let i = 0; i < line.length; i++) {
-    const three = line.slice(i, i + 3)
-    if (state === null && (three === '"""' || three === "'''")) {
-      state = three
-      i += 2
-    } else if (state !== null && three === state) {
+  let i = 0
+  while (i < line.length) {
+    if (state === null) {
+      const c = line[i]
+      if (c === '#') return null
+      if (line.startsWith('"""', i) || line.startsWith("'''", i)) {
+        state = line.startsWith('"""', i) ? '"""' : "'''"
+        i += 3
+      } else if (c === '"') {
+        i++
+        while (i < line.length && line[i] !== '"') i += line[i] === '\\' ? 2 : 1
+        i++
+      } else if (c === "'") {
+        const close = line.indexOf("'", i + 1)
+        i = close < 0 ? line.length : close + 1
+      } else i++
+    } else if (state === '"""' && line[i] === '\\') i += 2
+    else if (line.startsWith(state, i)) {
+      // The delimiter and up to two more of the same quote: those belong to the string
+      let j = i + 3
+      while (j < line.length && j < i + 5 && line[j] === state[0]) j++
       state = null
-      i += 2
-    }
+      i = j
+    } else i++
   }
   return state
 }
@@ -199,13 +221,17 @@ export async function markCodexProjectTrusted(
   const file = path.join(configDir, 'config.toml')
   // One at a time per file, and absent only on ENOENT (audit U-2), as markClaudeProjectTrusted.
   return oneAtATime(file, async () => {
-    const read = await readStoreFile(file)
+    // A config.toml that is a link is written through, so it stays a link (Task P fix round 1, review M3); one that
+    // points nowhere is not written at all
+    const target = await writeTarget(file)
+    if (target === null) throw new Error(`${file} is a link that points nowhere, or cannot be looked at, so it was not written`)
+    const read = await readStoreFile(target)
     if (read.kind === 'unreadable') throw read.error
     const existing = read.kind === 'text' ? read.text : ''
     const next = upsertProjectTrust(existing, root)
     if (next === existing) return
     await fs.mkdir(configDir, { recursive: true })
-    await fs.copyFile(file, file + '.bak').catch(() => {}) // ignored when the target is absent
-    await writeThroughTmp(file, next)
+    await fs.copyFile(target, file + '.bak').catch(() => {}) // ignored when the target is absent
+    await writeThroughTmp(target, next)
   })
 }

@@ -70,6 +70,16 @@ describe('upsertProjectTrust', () => {
     expect(after.indexOf('trust_level')).toBeGreaterThan(after.indexOf('"""\n', 10))
   })
 
+  // Task P fix round 1 (review M1): triple quotes in a comment, in a one-line string, or escaped inside a multi-line
+  // basic string open or close nothing. Read as a string's edge, they hid the person's block, and a second one was added
+  it('reads triple quotes in a comment, in a one-line string or escaped in a string as text', () => {
+    const block = '[projects."D:\\\\p\\\\a"]\ntrust_level = "untrusted"\n'
+    for (const lead of ['# use """ for long text\n', "note = \"it'''s\"\n", '# """\nx = """\n[projects."D:\\\\p\\\\a"]\n"""\n', 'x = """a \\""" still inside\n"""\n']) {
+      const after = upsertProjectTrust(lead + block, 'D:\\p\\a', 'trusted', 'linux')
+      expect(after, lead).toBe(lead + '[projects."D:\\\\p\\\\a"]\ntrust_level = "trusted"\n')
+    }
+  })
+
   // Codex 0.160 on Windows reads a project block only under backslashes (measured 2026-10-07: `C:/…`
   // and `c:/…` left the trust menu up, `C:\…` and `c:\…` took it down). `--cwd C:/…` reaches here as is.
   it('writes a win32 path with forward slashes in the backslash form codex reads', () => {
@@ -146,6 +156,32 @@ describe('markCodexProjectTrusted', () => {
     vi.restoreAllMocks()
     expect(await fs.readFile(file, 'utf8')).toBe('model = "gpt-5"\n')
   })
+  // Task P fix round 1 (review M3): a config.toml that is a link to the person's dotfiles stays a link, and the block
+  // lands in the file it points to, where Codex itself writes (utils/path-utils/src/lib.rs resolve_symlink_write_paths
+  // at rust-v0.160.0). A link that points nowhere is not written through, nor replaced
+  it('writes through a config.toml that is a link, and never through one that points nowhere', async (ctx) => {
+    const real = path.join(dir, 'dotfiles', 'codex.toml')
+    await fs.mkdir(path.dirname(real))
+    await fs.writeFile(real, 'model = "gpt-5"\n')
+    const home = path.join(dir, 'home')
+    await fs.mkdir(home)
+    const link = path.join(home, 'config.toml')
+    try {
+      await fs.symlink(real, link, 'file')
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'EPERM') return ctx.skip()
+      throw e
+    }
+    await markCodexProjectTrusted(home, 'D:\\p\\x')
+    expect((await fs.lstat(link)).isSymbolicLink()).toBe(true)
+    expect(await fs.readFile(real, 'utf8')).toContain('trust_level = "trusted"')
+    expect(await fs.readFile(real, 'utf8')).toMatch(/^model = "gpt-5"\n/)
+    await fs.rm(real)
+    await expect(markCodexProjectTrusted(home, 'D:\\p\\y')).rejects.toThrow(/link/)
+    expect((await fs.lstat(link)).isSymbolicLink()).toBe(true)
+    await expect(fs.stat(real)).rejects.toThrow()
+  })
+
   it('two marks at once both land', async () => {
     await Promise.all([markCodexProjectTrusted(dir, 'D:\\p\\a'), markCodexProjectTrusted(dir, 'D:\\p\\b')])
     const raw = await fs.readFile(path.join(dir, 'config.toml'), 'utf8')

@@ -1265,6 +1265,9 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .remote-actions { display: flex; align-items: center; gap: 8px; }
 .remote-actions.is-end { justify-content: flex-end; }
 .remote-actions-grow { flex: 1; min-width: 0; }
+/* Settings › Agent profiles, under a Codex account whose config.toml makes the elevated sandbox its default (Task P): the
+   sentence wraps beside Remove, which keeps its width rather than breaking a letter a line. */
+.sandbox-default-row .settings-gen-refresh { flex: none; white-space: nowrap; }
 /* Settings › Plugins (plugin runtime design slice 2d): a card a plugin with its status in a pill, and its settings form
    or its log below. Only the tokens the other settings use. */
 .plugin-card { padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); }
