@@ -92,8 +92,8 @@ export function createHostAgentProfiles(d: {
    *  complete, so asking never brings up the administrator prompt). Absent on a Host with no Windows sandbox. */
   sandboxReadiness?: (account: Account) => Promise<Readiness>
   /** The elevated sandbox as a Codex account's default (Task P, core/sandbox/codexDefaultSandbox.ts): the config.toml its
-   *  sessions read, whether that file makes the elevated sandbox their default, and taking the line out. Absent on a Host
-   *  with no Windows sandbox. */
+   *  sessions read, whether that file makes the elevated sandbox their default, and taking that default out (the line
+   *  and Codex's older feature key). Absent on a Host with no Windows sandbox. */
   sandboxDefault?: {
     fileOf(account: Account): string
     elevated(file: string): Promise<boolean>
@@ -299,8 +299,9 @@ export function createHostAgentProfiles(d: {
         return { status: 200, body: { accounts } }
       }
       case 'agent-profiles-sandbox-default-remove': {
-        // Task P (the person's decision, 2026-10-29): the `windows.sandbox = "elevated"` line of one Codex account's
-        // config.toml, taken out only when the person presses Remove beside its row; the rest of the file stays as it was
+        // Task P (the person's decision, 2026-10-29): the `windows.sandbox = "elevated"` line and Codex's older
+        // `[features] elevated_windows_sandbox = true` of one Codex account's config.toml, taken out only when the
+        // person presses Remove beside its row; the rest of the file stays as it was
         if (typeof args.id !== 'string' || typeof args.accountId !== 'string') return bad('agent-profiles-sandbox-default-remove needs id and accountId')
         const defaults = d.sandboxDefault
         if (!defaults) return { status: 501, body: { error: 'this Host has no Windows sandbox default to remove' } }

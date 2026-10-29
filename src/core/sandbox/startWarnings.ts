@@ -66,9 +66,10 @@ function holdsHome(cwd: string, homeDir: string, platform: NodeJS.Platform): boo
  *   writable folders (`linkInWorkFolder`, core/sandbox/prepared.ts codexSessionLinks), so Codex refuses every command
  *   there by design. Elsewhere such a start is refused instead, so nothing else is told this.
  * - `elevatedDefault` (Task P, the person's decision 2026-10-29): a Codex session on Windows whose home's config.toml
- *   still makes the elevated sandbox its default (`elevatedDefault`, the prepare read it: codexDefaultSandbox.ts), set up
- *   before Astera took that line back out or by the person. The session is sandboxed as always; the account's ordinary
- *   Codex sessions run in that sandbox too and cannot read the login folders, which Settings › Agent profiles can undo.
+ *   still makes the elevated sandbox its default (`elevatedDefault`, the prepare read it: codexDefaultSandbox.ts),
+ *   through the `windows.sandbox` line or Codex's older feature key, set up before Astera took that line back out or by
+ *   the person. The session is sandboxed as always; the account's ordinary Codex sessions run in that sandbox too and
+ *   cannot read the login folders, which Settings › Agent profiles can undo.
  * - `homeInWorkFolder`: the work folder is the home folder, holds it, or is the root of the filesystem or drive the home
  *   folder is on, so the sandbox lets the session write anything in the home folder. Both CLIs on every OS but Claude Code on Windows, whose shell has no
  *   sandbox at all (deny rules for its file tools only, coverage.ts), so "start it in a project folder" would be untrue.

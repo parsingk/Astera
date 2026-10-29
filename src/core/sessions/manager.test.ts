@@ -2008,9 +2008,9 @@ describe('the sandbox at spawn', () => {
     }
   })
 
-  // Task P (the person's decision, 2026-10-29): a sandboxed Codex start on Windows whose home's config.toml still makes the
-  // elevated sandbox its default (set up before Astera took the line back out, or by the person) starts as today, and its
-  // sink and its tab are told; a start outside the sandbox asks nothing
+  // Task P (the person's decision, 2026-10-29): a sandboxed Codex start on Windows whose home's config.toml still makes
+  // the elevated sandbox its default (the line or Codex's older feature key, set up before Astera took the line back
+  // out, or by the person) starts as today, and its sink and its tab are told; a start outside the sandbox asks nothing
   it("tells a sandboxed Windows Codex start whose home makes the elevated sandbox its default, and starts it as today", async () => {
     const cwd = repo()
     const argv: string[][] = []

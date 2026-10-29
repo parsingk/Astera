@@ -180,9 +180,10 @@ export function readinessRows(
   }))
 }
 
-/** What the Host did with Remove (Task P): the line is gone, was not there, or names another sandbox now, and the
- *  readiness asked again shows it, so nothing more is said; or it could not be taken out (an inline table, a file that
- *  could not be read or written, no Host), and the person is told which file to edit by hand when the Host named it. */
+/** What the Host did with Remove (Task P): the elevated default is gone (the line, or Codex's older feature key), was
+ *  not there, or names another sandbox now, and the readiness asked again shows it, so nothing more is said; or it
+ *  could not be taken out (an inline table, a file that could not be read or written, no Host), and the person is told
+ *  which file to edit by hand when the Host named it. */
 export function sandboxDefaultRemoved(answer: PluginsCallAnswer): { ok: true } | { ok: false; file: string | null } {
   const body = answer.ok ? answer.body : null
   if (body && (body.outcome === 'removed' || body.outcome === 'absent' || body.outcome === 'other-value')) return { ok: true }

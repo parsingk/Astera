@@ -316,8 +316,8 @@ describe('the sandbox switch', () => {
     for (const s of ['ready', 'check-failed', null]) expect(offersSetUp(s as 'ready' | null)).toBe(false)
   })
 
-  // Task P: Remove says nothing when the line is gone (the readiness asked again shows it), and names the file to edit by
-  // hand when it could not be taken out
+  // Task P: Remove says nothing when the default is gone (the readiness asked again shows it), and names the file to
+  // edit by hand when it could not be taken out
   it('reads what the Host did with Remove', () => {
     for (const outcome of ['removed', 'absent', 'other-value']) expect(sandboxDefaultRemoved({ ok: true, body: { outcome, file: 'C:/h/config.toml' } }), outcome).toEqual({ ok: true })
     for (const outcome of ['cannot-edit', 'failed']) expect(sandboxDefaultRemoved({ ok: true, body: { outcome, file: 'C:/h/config.toml' } }), outcome).toEqual({ ok: false, file: 'C:/h/config.toml' })

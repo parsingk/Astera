@@ -46,8 +46,9 @@ export const readyArgv = (profile: readonly string[]): string[] => ['sandbox', .
 const runsAsProfile = (profile: readonly string[] | undefined): profile is readonly string[] =>
   profile !== undefined && profile.some((a) => a.startsWith('permissions=')) && profile.some((a) => /^default_permissions=/.test(a))
 /** The setup Task 2 measured, for the home in CODEX_HOME. It brings up Windows' administrator prompt, and writes
- *  `windows.sandbox = "elevated"` into that home's config.toml, which the Host's setup takes back out (Task P,
- *  codexDefaultSandbox.ts setUpForSandboxedSessionsOnly): doctor above and every sandboxed launch name it themselves. */
+ *  `windows.sandbox = "elevated"` into that home's config.toml, which the Host's setup takes back out, or puts the
+ *  person's own line back where the setup wrote over it (Task P, codexDefaultSandbox.ts setUpForSandboxedSessionsOnly):
+ *  doctor above and every sandboxed launch name it themselves. */
 export const SETUP_ARGV = ['sandbox', 'setup', '--elevated', '--current-user']
 
 /** doctor answered in 0.5 to 12 s and the echo in about 1 s (Task 2); past this a home reads not set up. */

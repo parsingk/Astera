@@ -257,7 +257,8 @@ describe('createHostAgentProfiles', () => {
   })
 
   // Task P (the person's decision, 2026-10-29): Settings › Agent profiles says which Codex accounts' config.toml still makes
-  // the elevated sandbox their default, and takes that line out only when the person presses Remove, from the app only
+  // the elevated sandbox their default, and takes it out (the line or Codex's older feature key) only when the person
+  // presses Remove, from the app only
   it('the readiness names an elevated default, and agent-profiles-sandbox-default-remove takes it out on the app’s word', async () => {
     const elevated = new Set<string>()
     const removed: string[] = []

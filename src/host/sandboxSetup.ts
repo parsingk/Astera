@@ -14,7 +14,10 @@ import { codexConfigFile, elevatedDefaultIn, removeElevatedDefault, setUpForSand
 
 /** The setup for `agent-profiles-sandbox-setup`, or undefined off Windows, where there is none to run. It is for
  *  Astera's sandboxed sessions only (Task P): the `windows.sandbox = "elevated"` line Codex's setup writes into the
- *  home's config.toml is taken back out afterwards (setUpForSandboxedSessionsOnly), and `log` says what became of it. */
+ *  home's config.toml is taken back out afterwards, or, where the setup wrote "elevated" over the person's own value,
+ *  their line is put back as it was; a home that already made the elevated sandbox its default, through that line or
+ *  Codex's older `[features] elevated_windows_sandbox = true`, is left (setUpForSandboxedSessionsOnly), and `log` says
+ *  what became of it. */
 export function hostSandboxSetup(d: {
   platform: NodeJS.Platform
   homeDir: string
@@ -41,9 +44,10 @@ export function hostSandboxSetup(d: {
 
 /** The elevated sandbox as a Codex account's default, for Settings › Agent profiles (Task P), or undefined off Windows,
  *  where Codex has no such default: the config.toml the account's sessions read (its CODEX_HOME's, or ~/.codex for the
- *  ambient account, as cliEnvFor gives them), whether it makes the elevated sandbox the default, and Remove, which takes
- *  that line out and leaves a `[windows]` table it empties behind only when it carries a comment
- *  (codexDefaultSandbox.ts). */
+ *  ambient account, as cliEnvFor gives them), whether it makes the elevated sandbox the default (the
+ *  `windows.sandbox = "elevated"` line, or Codex's older `[features] elevated_windows_sandbox = true`), and Remove,
+ *  which takes the line and the key out, and leaves a `[windows]` or `[features]` table it empties behind only when
+ *  its header carries a comment (codexDefaultSandbox.ts). */
 export function hostSandboxDefault(d: {
   platform: NodeJS.Platform
   homeDir: string

@@ -2033,8 +2033,9 @@ export interface AgentProfilesApi {
    *  asked the way a sandboxed start asks it, which never brings up the administrator prompt. 501 off Windows. */
   sandboxReadiness(profileId: string): Promise<PluginsCallAnswer>
   /** Remove beside a Codex account whose readiness says `elevatedDefault` (Task P): takes the `windows.sandbox =
-   *  "elevated"` line out of that account's config.toml, the rest of the file as it was, on the person's press only. The
-   *  body is `{ outcome, file }`: removed, absent, other-value, cannot-edit or failed, and the file. 501 off Windows. */
+   *  "elevated"` line and Codex's older `[features] elevated_windows_sandbox = true` out of that account's config.toml,
+   *  the rest of the file as it was, on the person's press only. The body is `{ outcome, file }`: removed, absent,
+   *  other-value, cannot-edit or failed, and the file. 501 off Windows. */
   sandboxDefaultRemove(profileId: string, accountId: string): Promise<PluginsCallAnswer>
 }
 

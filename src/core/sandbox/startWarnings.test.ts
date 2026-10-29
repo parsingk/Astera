@@ -43,9 +43,10 @@ describe('sandboxStartWarnings', () => {
     expect(sandboxStartWarnings({ provider: 'codex', platform: 'win32', cwd: home, homeDir: home, claudeUsernsRestricted: false })).toEqual(['homeInWorkFolder'])
   })
 
-  // Task P (the person's decision, 2026-10-29): a Codex home whose config.toml still makes the elevated sandbox its default
-  // (set up before Astera took the line back out, or by the person) runs its ordinary sessions in it too, kept out of the
-  // login folders; a sandboxed start there starts as today and says so. Windows only: nowhere else has that default
+  // Task P (the person's decision, 2026-10-29): a Codex home whose config.toml still makes the elevated sandbox its
+  // default (the line or Codex's older feature key, set up before Astera took the line back out, or by the person) runs
+  // its ordinary sessions in it too, kept out of the login folders; a sandboxed start there starts as today and says
+  // so. Windows only: nowhere else has that default
   it('warns a Windows Codex start whose home makes the elevated sandbox its default, and only there', () => {
     const project = path.join(home, 'project')
     const at = (provider: 'claude' | 'codex', platform: NodeJS.Platform, cwd: string, elevatedDefault: boolean) =>

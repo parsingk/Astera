@@ -1,7 +1,9 @@
 // The elevated sandbox as a Codex home's default (Task P): Codex's own setup writes `windows.sandbox = "elevated"` into
 // the home's config.toml, and every Codex session of that home then runs its commands in the elevated sandbox. Astera's
-// sandboxed launches name it themselves, so after a setup Astera runs, the line is taken back out; one already there is
-// only removed when the person asks. No codex runs here: the setup is a fake that writes what Codex writes.
+// sandboxed launches name it themselves, so after a setup Astera runs, the line is taken back out, or the person's own
+// line the setup wrote "elevated" over is put back; an elevated default already there, the line or Codex's older
+// feature key, is only removed when the person asks. No codex runs here: the setup is a fake that writes what Codex
+// writes.
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -349,19 +351,39 @@ describe('on disk', () => {
     })
 
     it('says what it could not put back, and writes nothing then', async () => {
-      // An inline table it cannot write back exactly
+      // An inline table it cannot write back exactly. Codex's setup does not keep it: it rewrites an inline table as a
+      // regular one before setting the key (core/src/config/edit/document_helpers.rs ensure_table_for_write and
+      // table_from_inline, at rust-v0.160.0; fix round 2, re-review N1), so the person's value is gone and the
+      // `[windows]` table reads "elevated". That is left, and the log says the value is theirs to set again
       await fs.writeFile(file, 'windows = { sandbox = "unelevated" }\n')
       const logs: string[] = []
-      const inline = async () => (await fs.writeFile(file, 'windows = { sandbox = "elevated" }\n'), { ok: true, out: 'done' })
+      const inline = async () => (await fs.writeFile(file, '[windows]\nsandbox = "elevated"\n'), { ok: true, out: 'done' })
       await setUpForSandboxedSessionsOnly({ configFile: file, setUp: inline, log: (m) => logs.push(m) })
-      expect(await fs.readFile(file, 'utf8')).toBe('windows = { sandbox = "elevated" }\n')
-      expect(logs).toEqual([expect.stringMatching(/could not put back windows\.sandbox = "unelevated".*inline table/)])
+      expect(await fs.readFile(file, 'utf8')).toBe('[windows]\nsandbox = "elevated"\n')
+      expect(logs).toEqual([
+        expect.stringMatching(/could not put back windows\.sandbox = "unelevated".*inline table.*\[windows\] table.*left.*"unelevated" is then set again by hand/)
+      ])
       // Codex left the person's value: nothing to put back
       await fs.writeFile(file, '[windows]\nsandbox = "unelevated"\n')
       const kept: string[] = []
       await setUpForSandboxedSessionsOnly({ configFile: file, setUp: async () => ({ ok: true, out: 'done' }), log: (m) => kept.push(m) })
       expect(await fs.readFile(file, 'utf8')).toBe('[windows]\nsandbox = "unelevated"\n')
       expect(kept).toEqual([expect.stringMatching(/still says windows\.sandbox = "unelevated"/)])
+    })
+
+    // Fix round 2 (re-review N4): a line it does not put back says which check it failed, the form or the value
+    it('says whether the line changed form or reads another value when it does not put it back', async () => {
+      for (const [codexWrote, why] of [
+        ['windows.sandbox = "elevated"\n', /the line is now in another form \(a dotted windows\.sandbox, not a \[windows\] table\), so nothing is written/],
+        ['[windows]\nsandbox = "mxc"\n', /it reads "mxc" now, not the "elevated" Codex's setup writes, so nothing is written/],
+        ['[windows]\nsandbox = 1\n', /it reads 1 now, not the "elevated" Codex's setup writes, so nothing is written/]
+      ] as const) {
+        await fs.writeFile(file, '[windows]\nsandbox = "unelevated"\n')
+        const logs: string[] = []
+        await setUpForSandboxedSessionsOnly({ configFile: file, setUp: async () => (await fs.writeFile(file, codexWrote), { ok: true, out: 'done' }), log: (m) => logs.push(m) })
+        expect(await fs.readFile(file, 'utf8'), codexWrote).toBe(codexWrote)
+        expect(logs, codexWrote).toEqual([expect.stringMatching(why)])
+      }
     })
 
     // Fix round 1 (review M4): what was checked, when nothing was found to take out
@@ -386,7 +408,7 @@ describe('on disk', () => {
       const logs: string[] = []
       const r = await setUpForSandboxedSessionsOnly({ configFile: file, setUp: async () => ({ ok: true, out: '' }), log: (m) => logs.push(m) })
       expect(r.ok).toBe(true)
-      expect(logs).toEqual([expect.stringMatching(/could not be read before the setup/)])
+      expect(logs).toEqual([expect.stringMatching(/could not be read before the setup.*left as it is.*names it once it can read the file/)])
     })
 
     // Fix round 1 (review M1): a file this cannot read with confidence, before or after the setup, is left and said so
@@ -397,7 +419,10 @@ describe('on disk', () => {
       const setUp = async () => (await fs.writeFile(file, `${unclosed}[windows]\nsandbox = "elevated"\n`), { ok: true, out: 'done' })
       expect(await setUpForSandboxedSessionsOnly({ configFile: file, setUp, log: (m) => logs.push(m) })).toEqual({ ok: true, out: 'done' })
       expect(await fs.readFile(file, 'utf8')).toBe(`${unclosed}[windows]\nsandbox = "elevated"\n`)
-      expect(logs).toEqual([expect.stringMatching(/cannot be read with confidence before the setup.*left/)])
+      // Settings › Agent profiles reads the same file as `unknown`, so it shows no Remove either (fix round 2, re-review N4)
+      expect(logs).toEqual([
+        expect.stringMatching(/cannot be read with confidence before the setup.*left as it is.*Settings › Agent profiles cannot read it either.*by hand/)
+      ])
       // Readable before, not after: the line Codex added cannot be found with confidence, so nothing is written
       await fs.writeFile(file, 'model = "x"\n')
       const after: string[] = []

@@ -131,7 +131,8 @@ describe('hostSandboxReadiness', () => {
 })
 
 // Task P: Settings › Agent profiles names an account whose config.toml still makes the elevated sandbox its default, and
-// Remove takes that line out of the file its sessions read, the ambient account's ~/.codex included
+// Remove takes it out (the line or Codex's older feature key) of the file its sessions read, the ambient account's
+// ~/.codex included
 describe('hostSandboxDefault', () => {
   it("reads and takes out the elevated default of the account's own config.toml", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-host-default-'))

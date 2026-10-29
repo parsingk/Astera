@@ -7,7 +7,8 @@
 // (windowsReadiness.ts says why), and on a home another account's setup made stale such a command can bring up the
 // administrator prompt. Astera's own sandboxed launches do not need the line: each names the elevated sandbox itself
 // (codexProfile.ts codexSandboxArgs, windowsReadiness.ts DOCTOR_ARGV). So after a setup Astera runs, the line Codex added
-// is taken back out (setUpForSandboxedSessionsOnly). A line that was there before, the person's or an earlier setup's,
+// is taken back out, and a line of the person's own that the setup wrote "elevated" over is put back as it was
+// (setUpForSandboxedSessionsOnly). A line that already said "elevated" before, the person's or an earlier setup's,
 // stays until the person removes it in Settings › Agent profiles, and a sandboxed start on such a home says so
 // (startWarnings.ts). So does Codex's older feature key `[features] elevated_windows_sandbox = true`, which Codex 0.160
 // still takes as the elevated default when no line is set (fix round 1, review I2): it is read, said and removed with
@@ -228,8 +229,9 @@ export async function elevatedDefaultIn(file: string): Promise<boolean> {
   return isElevatedDefault(windowsSandboxDefaultOf(read.text))
 }
 
-/** What removeElevatedDefault did: took the line out, found none, found another value (left), or found one it cannot
- *  take out exactly (left: an inline table, or a file it cannot read with confidence). */
+/** What removeElevatedDefault did: took the elevated default out (the line, Codex's older feature key, or both),
+ *  found none, found another value (left), or found one it cannot take out exactly (left: an inline table, or a file
+ *  it cannot read with confidence). */
 export type RemoveOutcome = 'removed' | 'absent' | 'other-value' | 'cannot-edit'
 
 /** Takes the elevated default out of the config.toml at `file` (withoutElevatedDefault), as
@@ -293,6 +295,13 @@ const whyNot = (outcome: 'other-value' | 'cannot-edit', unknown: boolean, link: 
         ? 'it names another sandbox now, which is left as it is'
         : 'it is not on a line of its own (an inline table), so it is left; Settings › Agent profiles names it'
 
+/** A key's form, as a log line names it. */
+const FORM_NAME: Record<Found['form'], string> = {
+  table: 'a [windows] table',
+  dotted: 'a dotted windows.sandbox',
+  inline: 'an inline windows table'
+}
+
 /** What putBack did: wrote the person's line back, found their value still there, found the line gone, or could not
  *  write it back exactly (`why`). */
 type PutBack = { outcome: 'restored' } | { outcome: 'unchanged' } | { outcome: 'absent' } | { outcome: 'cannot-edit'; why: string }
@@ -327,8 +336,13 @@ async function putBack(file: string, before: { text: string; form: Found['form']
       result = { outcome: 'unchanged' }
       return
     }
-    if (now.form !== before.form || !now.editable || now.value !== 'elevated') {
-      result = { outcome: 'cannot-edit', why: `the line is not where it was, or reads "${now.value}" now` }
+    // Which check failed, for the log (fix round 2, re-review N4)
+    if (now.form !== before.form) {
+      result = { outcome: 'cannot-edit', why: `the line is now in another form (${FORM_NAME[now.form]}, not ${FORM_NAME[before.form]})` }
+      return
+    }
+    if (!now.editable || now.value !== 'elevated') {
+      result = { outcome: 'cannot-edit', why: `it reads ${now.editable ? `"${now.value}"` : now.value} now, not the "elevated" Codex's setup writes` }
       return
     }
     lines[now.line] = { text: (now.line === 0 && lines[0].text.startsWith(BOM) ? BOM : '') + before.text, end: lines[now.line].end }
@@ -345,8 +359,11 @@ async function putBack(file: string, before: { text: string; form: Found['form']
  * - a home with no default before: the `windows.sandbox = "elevated"` line Codex added is taken back out
  *   (removeElevatedDefault; a `[windows]` table Codex made for it goes too);
  * - a home whose own line named another sandbox (say "unelevated"): Codex's setup overwrote it with "elevated", so the
- *   person's line is put back exactly as it was (putBack, fix round 1, review I1); one in an inline table cannot be, and
- *   is left and said;
+ *   person's line is put back exactly as it was (putBack, fix round 1, review I1). One in an inline table cannot be:
+ *   Codex's setup rewrites that as a `[windows]` table reading "elevated" (core/src/config/edit/document_helpers.rs
+ *   ensure_table_for_write, at rust-v0.160.0), which is left and said, so the start warning shows, and Remove in
+ *   Settings › Agent profiles then leaves the home with no default, not the person's value, which they set again by
+ *   hand (fix round 2, re-review N1);
  * - a home that already made the elevated sandbox its default, through the line or Codex's older feature key, is left:
  *   whose it is cannot be told (Settings › Agent profiles asks);
  * - and so is one that could not be read, or read with confidence, before.
@@ -362,7 +379,7 @@ export async function setUpForSandboxedSessionsOnly(a: {
   if (!r.ok) return r
   if (before.kind === 'unreadable') {
     a.log(
-      `sandbox: ${a.configFile} could not be read before the setup, so whether its windows.sandbox line is Codex's cannot be told; it is left for Settings › Agent profiles (${String(before.error)})`
+      `sandbox: ${a.configFile} could not be read before the setup, so whether its windows.sandbox line is Codex's cannot be told; it is left as it is, and Settings › Agent profiles names it once it can read the file (${String(before.error)})`
     )
     return r
   }
@@ -371,7 +388,7 @@ export async function setUpForSandboxedSessionsOnly(a: {
   const was = before.kind === 'text' ? settingOf(beforeAt) : ({ kind: 'none', table: false } as const)
   if (was.kind === 'unknown') {
     a.log(
-      `sandbox: ${a.configFile} cannot be read with confidence before the setup (a multi-line string runs to its end as this reads it), so the line Codex added is left for Settings › Agent profiles`
+      `sandbox: ${a.configFile} cannot be read with confidence before the setup (a multi-line string runs to its end as this reads it), so it is left as it is, the line Codex's setup added included; Settings › Agent profiles cannot read it either, so that line has to be taken out by hand`
     )
     return r
   }
@@ -389,7 +406,7 @@ export async function setUpForSandboxedSessionsOnly(a: {
     const own = beforeAt.sandbox as Found
     if (own.form === 'inline' || !own.editable) {
       a.log(
-        `sandbox: could not put back windows.sandbox = "${was.value}" in ${a.configFile}: it was in an inline table or not a plain string, which this does not write back, so what Codex's setup left there stays; Settings › Agent profiles names it if it reads "elevated"`
+        `sandbox: could not put back windows.sandbox = "${was.value}" in ${a.configFile}: it was in an inline table or not a plain string, which this does not write back. The "elevated" Codex's setup wrote there (it rewrites an inline windows table as a [windows] table) is left; Settings › Agent profiles can remove it, and "${was.value}" is then set again by hand`
       )
       return r
     }

@@ -350,7 +350,8 @@ function SandboxReadiness({ profile, accounts }: { profile: AgentProfile; accoun
   }, [profile.id])
 
   /** Task P: Remove under an account whose config.toml still makes the elevated sandbox its default, on the person's
-   *  press only; the readiness is asked again after it, which shows whether the line is gone */
+   *  press only; the readiness is asked again after it, which shows whether the default is gone (the line, or Codex's
+   *  older feature key) */
   const removeDefault = async (accountId: string): Promise<void> => {
     if (settingUp) return
     setSettingUp(true)

@@ -68,9 +68,10 @@ describe('prepareCodexSandbox and the Windows readiness echo', () => {
     expect(profile.join(' ')).not.toContain(':workspace_roots')
   })
 
-  // Task P: a home whose config.toml still makes the elevated sandbox its default (set up before Astera took the line back
-  // out, or by the person) starts as today, and the prepare says so for the start's warning. The file is the one Codex
-  // reads for the session: its CODEX_HOME's, or ~/.codex's for the ambient account. Nothing is read off Windows.
+  // Task P: a home whose config.toml still makes the elevated sandbox its default (the line or Codex's older feature
+  // key, set up before Astera took the line back out, or by the person) starts as today, and the prepare says so for
+  // the start's warning. The file is the one Codex reads for the session: its CODEX_HOME's, or ~/.codex's for the
+  // ambient account. Nothing is read off Windows.
   it("says whether the account's Codex home makes the elevated sandbox its default, on Windows only", async () => {
     const ready: CodexWindowsReady = async () => 'ready'
     const codexHome = path.join(home, '.codex-accounts', 'work')
