@@ -519,8 +519,9 @@ async function main(): Promise<void> {
     onPromptWrite: (e) => hostJournal.promptWrite(e, orch.state()),
     // Agent Profiles design §5: a spawn from a profile stamps its use through the Host's own command
     touchAgentProfile: (id) => touchAgentProfile(id),
-    // Task K: a sandboxed Claude Task's check runs under srt through the runner bundled beside this Host (out/main), on
-    // macOS and Linux, where the Host runs as the app's Electron
+    // Task K: the runner bundled beside this Host's own bundle, run by this Host's executable as node: a sandboxed Claude
+    // Task's check under srt on macOS and Linux (the app's Electron), and a sandboxed Codex Task's check on Windows (fix
+    // round 2), from the copy the Host's runtime keeps beside host.js, under its own node (scripts/host-runtime.mjs)
     checkRunnerPath: path.join(__dirname, 'sandbox-check.js')
   })
 

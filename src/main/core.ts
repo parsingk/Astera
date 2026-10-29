@@ -221,8 +221,9 @@ export function runAccountLogout(
 }
 
 
-/** `paths.sandboxCheck`: the runner a sandboxed Claude Task's check runs under srt with (Task K), bundled beside the main
- *  bundle (out/main/sandbox-check.js); index.ts names it, since only the entry knows its own folder. */
+/** `paths.sandboxCheck`: Astera's check runner (Task K), bundled beside the main bundle (out/main/sandbox-check.js): a
+ *  sandboxed Claude Task's check runs under srt through it on macOS and Linux, and a sandboxed Codex Task's check on
+ *  Windows (fix round 2). index.ts names it, since only the entry knows its own folder. */
 export async function createCore(userDataDir: string, osLocale: string, paths?: { sandboxCheck?: string }): Promise<Core> {
   // Same switch on the main side, so banners and error sentences are padded too
   // Dev-only layout check: VITE_PSEUDO_LOCALE=1 ASTERA_PSEUDO_LOCALE=1 npm run dev

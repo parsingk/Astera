@@ -140,8 +140,9 @@ export interface HostSpawnerDeps {
   rolloutOwner?: RolloutOwnerReader
   /** Test injection; defaults to readAccountEntries. */
   readAccounts?: (file: string) => Promise<Account[]>
-  /** The runner a sandboxed Claude Task's check runs under srt with on macOS and Linux (Task K): out/main/sandbox-check.js
-   *  beside the Host's own bundle, run by this Host's executable as node. Absent, such a check is refused. */
+  /** Astera's check runner beside the Host's own bundle (Task K), run by this Host's executable as node: a sandboxed Claude
+   *  Task's check runs under srt through it on macOS and Linux, and a sandboxed Codex Task's check on Windows (fix round
+   *  2), from the Host runtime's copy beside host.js. Absent or not built, such a check is refused (`no-check-runner`). */
   checkRunnerPath?: string
   /** Each prompt write of a worker this Host's coordinator starts (Host journal, A19 lifted). Isolated: a
    *  throw is logged and the start goes on. */
