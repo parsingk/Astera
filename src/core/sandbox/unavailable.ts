@@ -25,7 +25,7 @@ export function forcedSandboxBlocker(provider: 'claude' | 'codex', platform: str
 // settings, claudeStart.ts), `no-sandbox <cli>` (forcedSandboxBlocker), `command-too-long` (a Windows command line the
 // profile overflows,
 // prepared.ts fitsOnTheLine), `profile-not-active codex` (a sandboxed chat's thread that does not run
-// under the Astera profile, codexAdapter.ts), `outside-sandbox <session|job|task> <id>` (a sandboxed session handing work
+// under the Astera profile, codexAdapter.ts), `outside-sandbox <session|job|task|command> <id>` (a sandboxed session handing work
 // to something outside its sandbox, the command layer's, final fix pass part 2), and the
 // version floor's `cli-too-old <cli> <found> <min>`, `cli-version-unknown <cli>` and `cli-missing <cli>` (the Enforce
 // check's shape, core/sessions/cliVersion.ts). Versions take dots; an account id is `[\w-]+` only, so a quote, a brace or

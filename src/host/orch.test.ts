@@ -3428,6 +3428,20 @@ describe('Host-local spawn (S2)', () => {
       expect((await orchOver().call({ cmd: 'app-js', args: { script: 'log(1)' }, sessionId: 's1', from: cli })).status).toBe(501)
     })
 
+    // `app js` launches programs as the Host, outside any sandbox, so a sandboxed session cannot ask for it
+    it('refuses app-js to a sandboxed session with outside-sandbox, and runs it for one that is not', async () => {
+      const workspaces = fakeWorkspaces()
+      const orch = orchOver({ workspaces, sessionSandboxed: (id) => id === 'ses_box' })
+      const refused = await orch.call({ cmd: 'app-js', args: { script: 'await launch({ command: "calc" })' }, sessionId: 'ses_box', from: cli, request: 'req-box-1' })
+      expect(refused.status).toBe(403)
+      expect((refused.body as { error: string }).error).toMatch(/^SANDBOX_UNAVAILABLE: outside-sandbox command app-js\b/)
+      expect((refused.body as { error: string }).error).toContain('nothing was started')
+      expect(workspaces.run).not.toHaveBeenCalled()
+      // a refusal leaves no receipt: the same id from a session that is not sandboxed would run
+      expect((await orch.call({ cmd: 'app-js', args: { script: "log('x')" }, sessionId: 'ses_open', from: cli })).status).toBe(200)
+      expect(workspaces.run).toHaveBeenCalledWith('ses_open', "log('x')")
+    })
+
     it('a retried request id replays the recorded answer instead of running the script again (ruling P2)', async () => {
       const workspaces = fakeWorkspaces()
       const orch = orchOver({ workspaces })

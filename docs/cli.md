@@ -1853,7 +1853,9 @@ launch, drive and photograph the project's own app on a Windows desktop the pers
 the person keeps their screen and pointer; `astera app help` documents them, and `astera agent-context`
 lists them with `"public": false`. The Host answers `app js` whether or not Astera is open. It needs
 **Agent app workspace** switched on in Settings and refuses, with the reason, on another platform or
-where there is no interactive desktop (an SSH session, a service). The clipboard is shared with the
+where there is no interactive desktop (an SSH session, a service). A sandboxed session is refused with 5 and
+`SANDBOX_UNAVAILABLE: outside-sandbox command app-js`, since `launch({ command })` starts a program as Astera, outside the
+sandbox. The clipboard is shared with the
 person.
 
 ## Output
