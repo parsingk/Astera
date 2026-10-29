@@ -252,6 +252,28 @@ describe('on disk', () => {
     expect((await fs.readdir(dir)).sort()).toEqual(['config.toml', 'config.toml.bak'])
   })
 
+  // Fix round 1 (review M3): a config.toml that is a link (a dotfile manager's) stays a link; the line comes out of the
+  // file it points to, where Codex writes it (utils/path-utils/src/lib.rs resolve_symlink_write_paths at
+  // rust-v0.160.0). A link that points nowhere is cannot-edit, and nothing is written
+  it('removeElevatedDefault writes through a config.toml that is a link, and never through one that points nowhere', async (ctx) => {
+    const real = path.join(dir, 'dotfiles', 'codex.toml')
+    await fs.mkdir(path.dirname(real))
+    await fs.writeFile(real, codexAdds('model = "gpt-5"\n'))
+    try {
+      await fs.symlink(real, file, 'file')
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'EPERM') return ctx.skip()
+      throw e
+    }
+    expect(await removeElevatedDefault(file, { dropEmptyTable: true })).toBe('removed')
+    expect((await fs.lstat(file)).isSymbolicLink()).toBe(true)
+    expect(await fs.readFile(real, 'utf8')).toBe('model = "gpt-5"\n')
+    await fs.rm(real)
+    expect(await removeElevatedDefault(file, { dropEmptyTable: true })).toBe('cannot-edit')
+    expect((await fs.lstat(file)).isSymbolicLink()).toBe(true)
+    await expect(fs.stat(real)).rejects.toThrow()
+  })
+
   it('removeElevatedDefault writes nothing when there is nothing it may take out', async () => {
     expect(await removeElevatedDefault(file, { dropEmptyTable: true })).toBe('absent')
     expect(await fs.readdir(dir)).toEqual([])

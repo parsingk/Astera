@@ -27,7 +27,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { foldPathCase } from '../files/paths'
 import { readStoreFile } from '../storeFile'
-import { oneAtATime, writeThroughTmp } from './fileQueue'
+import { oneAtATime, writeTarget, writeThroughTmp } from './fileQueue'
 
 export type CodexTrustLevel = 'trusted' | 'untrusted'
 
@@ -221,13 +221,17 @@ export async function markCodexProjectTrusted(
   const file = path.join(configDir, 'config.toml')
   // One at a time per file, and absent only on ENOENT (audit U-2), as markClaudeProjectTrusted.
   return oneAtATime(file, async () => {
-    const read = await readStoreFile(file)
+    // A config.toml that is a link is written through, so it stays a link (Task P fix round 1, review M3); one that
+    // points nowhere is not written at all
+    const target = await writeTarget(file)
+    if (target === null) throw new Error(`${file} is a link that points nowhere, or cannot be looked at, so it was not written`)
+    const read = await readStoreFile(target)
     if (read.kind === 'unreadable') throw read.error
     const existing = read.kind === 'text' ? read.text : ''
     const next = upsertProjectTrust(existing, root)
     if (next === existing) return
     await fs.mkdir(configDir, { recursive: true })
-    await fs.copyFile(file, file + '.bak').catch(() => {}) // ignored when the target is absent
-    await writeThroughTmp(file, next)
+    await fs.copyFile(target, file + '.bak').catch(() => {}) // ignored when the target is absent
+    await writeThroughTmp(target, next)
   })
 }

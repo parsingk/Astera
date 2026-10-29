@@ -14,11 +14,12 @@
 // the line. Only the account's own config.toml is read: a project's `.codex/config.toml` or a Codex profile is not.
 //
 // The file is the person's: it is edited as codexTrust.ts edits it, line by line with nothing parsed and re-serialised,
-// one change at a time per file, through a temp file, with a .bak beside it. Main and the Host only: this reads files.
+// one change at a time per file, through a temp file, with a .bak beside it, and through a link to the file it points
+// to (fileQueue.ts writeTarget). Main and the Host only: this reads files.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { togglesMultiline } from '../accounts/codexTrust'
-import { oneAtATime, writeThroughTmp } from '../accounts/fileQueue'
+import { oneAtATime, writeTarget, writeThroughTmp } from '../accounts/fileQueue'
 import { readStoreFile } from '../storeFile'
 
 /** The elevated default a config.toml sets, read with Codex's own precedence (core/src/windows_sandbox.rs:83-88 at
@@ -239,12 +240,21 @@ export async function removeElevatedDefault(file: string, opts: { dropEmptyTable
   return (await removeFrom(file, opts)).outcome
 }
 
-/** removeElevatedDefault's outcome, and for `cannot-edit` whether the file could not be read with confidence. */
-async function removeFrom(file: string, opts: { dropEmptyTable: boolean }): Promise<{ outcome: RemoveOutcome; unknown: boolean }> {
+/** removeElevatedDefault's outcome, and for `cannot-edit` why: the file could not be read with confidence (`unknown`),
+ *  or it is a link that points nowhere (`link`). A link that resolves is read and written through (fileQueue.ts
+ *  writeTarget, fix round 1, review M3), so it stays a link and the change lands where Codex writes. */
+async function removeFrom(file: string, opts: { dropEmptyTable: boolean }): Promise<{ outcome: RemoveOutcome; unknown: boolean; link: boolean }> {
   let outcome: RemoveOutcome = 'absent'
   let unknown = false
+  let link = false
   await oneAtATime(file, async () => {
-    const read = await readStoreFile(file)
+    const target = await writeTarget(file)
+    if (target === null) {
+      outcome = 'cannot-edit'
+      link = true
+      return
+    }
+    const read = await readStoreFile(target)
     if (read.kind === 'unreadable') throw read.error
     if (read.kind === 'missing') return
     const d = windowsSandboxDefaultOf(read.text)
@@ -263,20 +273,25 @@ async function removeFrom(file: string, opts: { dropEmptyTable: boolean }): Prom
       outcome = 'cannot-edit'
       return
     }
-    await fs.copyFile(file, file + '.bak').catch(() => {})
-    await writeThroughTmp(file, next)
+    await fs.copyFile(target, file + '.bak').catch(() => {})
+    await writeThroughTmp(target, next)
     outcome = 'removed'
   })
-  return { outcome, unknown }
+  return { outcome, unknown, link }
 }
 
+/** A config.toml that is a link pointing nowhere, or that cannot be looked at: written by nobody here. */
+const LINK_UNRESOLVED = 'it is a link that points nowhere, or cannot be looked at, so nothing is written'
+
 /** Why a removal after a setup took nothing out, for its log line. */
-const whyNot = (outcome: 'other-value' | 'cannot-edit', unknown: boolean): string =>
-  unknown
-    ? 'the file cannot be read with confidence (a multi-line string runs to its end as this reads it), so nothing is written'
-    : outcome === 'other-value'
-      ? 'it names another sandbox now, which is left as it is'
-      : 'it is not on a line of its own (an inline table), so it is left; Settings › Agent profiles names it'
+const whyNot = (outcome: 'other-value' | 'cannot-edit', unknown: boolean, link: boolean): string =>
+  link
+    ? LINK_UNRESOLVED
+    : unknown
+      ? 'the file cannot be read with confidence (a multi-line string runs to its end as this reads it), so nothing is written'
+      : outcome === 'other-value'
+        ? 'it names another sandbox now, which is left as it is'
+        : 'it is not on a line of its own (an inline table), so it is left; Settings › Agent profiles names it'
 
 /** What putBack did: wrote the person's line back, found their value still there, found the line gone, or could not
  *  write it back exactly (`why`). */
@@ -292,7 +307,12 @@ type PutBack = { outcome: 'restored' } | { outcome: 'unchanged' } | { outcome: '
 async function putBack(file: string, before: { text: string; form: Found['form']; value: string }): Promise<PutBack> {
   let result: PutBack = { outcome: 'absent' }
   await oneAtATime(file, async () => {
-    const read = await readStoreFile(file)
+    const target = await writeTarget(file)
+    if (target === null) {
+      result = { outcome: 'cannot-edit', why: LINK_UNRESOLVED }
+      return
+    }
+    const read = await readStoreFile(target)
     if (read.kind === 'unreadable') throw read.error
     if (read.kind === 'missing') return
     const lines = linesOf(read.text)
@@ -312,8 +332,8 @@ async function putBack(file: string, before: { text: string; form: Found['form']
       return
     }
     lines[now.line] = { text: (now.line === 0 && lines[0].text.startsWith(BOM) ? BOM : '') + before.text, end: lines[now.line].end }
-    await fs.copyFile(file, file + '.bak').catch(() => {})
-    await writeThroughTmp(file, lines.map((l) => l.text + l.end).join(''))
+    await fs.copyFile(target, file + '.bak').catch(() => {})
+    await writeThroughTmp(target, lines.map((l) => l.text + l.end).join(''))
     result = { outcome: 'restored' }
   })
   return result
@@ -390,13 +410,13 @@ export async function setUpForSandboxedSessionsOnly(a: {
     return r
   }
   try {
-    const { outcome, unknown } = await removeFrom(a.configFile, { dropEmptyTable: !was.table })
+    const { outcome, unknown, link } = await removeFrom(a.configFile, { dropEmptyTable: !was.table })
     a.log(
       outcome === 'removed'
         ? `sandbox: took the windows.sandbox = "elevated" line Codex's setup added out of ${a.configFile}, so only sandboxed sessions run in the elevated sandbox`
         : outcome === 'absent'
           ? `sandbox: no top-level windows.sandbox line was found in ${a.configFile} after the setup, so nothing was taken out`
-          : `sandbox: could not take windows.sandbox out of ${a.configFile}: ${whyNot(outcome, unknown)}`
+          : `sandbox: could not take windows.sandbox out of ${a.configFile}: ${whyNot(outcome, unknown, link)}`
     )
   } catch (e) {
     a.log(`sandbox: could not take windows.sandbox out of ${a.configFile}: ${String(e)}`)
