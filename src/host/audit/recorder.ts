@@ -335,12 +335,12 @@ export function createAuditRecorder(d: {
         usesPending = []
         if (!isObserving(m)) for (const u of uses) tell(u.done, false)
         else if (uses.length > 0) {
-          // A failed append costs these uses, never the calls taken with them
-          let written = true
+          // The store says whether every one landed (a day it stopped, a write that failed); one that throws costs these
+          // uses, never the calls taken with them
+          let written = false
           try {
-            await appendUses(d.profileDir, uses.map((u) => u.use), { log: d.log })
+            written = (await appendUses(d.profileDir, uses.map((u) => u.use), { log: d.log })) === true
           } catch (err) {
-            written = false
             d.log(`audit: ${uses.length} use(s) of skills, commands or agents could not be written: ${String(err)}`)
           }
           for (const u of uses) tell(u.done, written)

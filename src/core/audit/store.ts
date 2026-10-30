@@ -99,14 +99,22 @@ const queued = (dir: string, f: (s: FolderState) => Promise<void>): Promise<void
 /** Appends the records to their days' files. Never throws: a write that fails is logged and its records dropped, and so
  *  is a record whose time does not parse. */
 export function appendRecords(profileDir: string, recs: readonly AuditRecord[], o: AuditStoreOptions = {}): Promise<void> {
-  return appendDated(profilePaths(profileDir).auditRecords, recs, o, 'audit')
+  return appendDated(profilePaths(profileDir).auditRecords, recs, o, 'audit').then(() => {})
 }
 
 /** appendRecords over any folder of day files and any record with a time: the credential-use records share the same
- *  retention, size limit and torn-line handling (credentials design §6). `label` starts the log lines. */
-export function appendDated<T extends { at: string }>(dir: string, recs: readonly T[], o: AuditStoreOptions, label: string): Promise<void> {
+ *  retention, size limit and torn-line handling (credentials design §6). `label` starts the log lines. Resolves to whether
+ *  every record was written: false when one was dropped for its time, a day stopped at the size, or a write that failed,
+ *  for a caller that must know its line landed (the §4.12 use log's marks, lifecycle design); the others ignore it. */
+export function appendDated<T extends { at: string }>(dir: string, recs: readonly T[], o: AuditStoreOptions, label: string): Promise<boolean> {
+  /** Every record written; set by the step, which the queue's own catch keeps from rejecting. */
+  let all = false
   return queued(dir, async (s) => {
-    if (recs.length === 0) return
+    if (recs.length === 0) {
+      all = true
+      return
+    }
+    let written = true
     const now = (o.now ?? Date.now)()
     const maxBytes = o.maxBytes ?? AUDIT_MAX_BYTES
     if (s.prunedAt === null || now - s.prunedAt >= AUDIT_PRUNE_EVERY_MS) await prune(dir, s, o, 0)
@@ -122,9 +130,15 @@ export function appendDated<T extends { at: string }>(dir: string, recs: readonl
       if (list) list.push(r)
       else byDay.set(day, [r])
     }
-    if (untimed > 0) o.log?.(`${label}: ${untimed} record(s) with a time that does not parse were dropped`)
+    if (untimed > 0) {
+      written = false
+      o.log?.(`${label}: ${untimed} record(s) with a time that does not parse were dropped`)
+    }
     for (const [day, rs] of byDay) {
-      if (s.stopped.has(day)) continue
+      if (s.stopped.has(day)) {
+        written = false
+        continue
+      }
       const text = rs.map((r) => `${JSON.stringify(r)}\n`).join('')
       const textBytes = Buffer.byteLength(text)
       // With the line break a torn file may need first
@@ -132,6 +146,7 @@ export function appendDated<T extends { at: string }>(dir: string, recs: readonl
       const own = s.sizes.get(day) ?? 0
       // The day's own file is at the size: no prune can make room for it, and it must not grow without end
       if (own + bytes > maxBytes) {
+        written = false
         s.stopped.add(day)
         o.log?.(`${label}: the records of ${day} reached ${maxBytes} bytes; no more are kept for that day`)
         // The file stops short of the size (the record that did not fit was refused), so it cannot tell a Host that starts
@@ -151,10 +166,12 @@ export function appendDated<T extends { at: string }>(dir: string, recs: readonl
         await fs.appendFile(file, lead + text)
         s.sizes.set(day, (s.sizes.get(day) ?? 0) + lead.length + textBytes)
       } catch (err) {
+        written = false
         o.log?.(`${label}: could not write ${rs.length} record(s) to ${file}; they are dropped: ${String(err)}`)
       }
     }
-  })
+    all = written
+  }).then(() => all)
 }
 
 const total = (s: FolderState): number => {

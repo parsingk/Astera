@@ -1672,8 +1672,8 @@ describe('observe mode at spawn', () => {
     await manager.prepare({ account: codexAccount, cwd: '/work' })
     manager.spawn({ account: codexAccount, cwd: '/work' })
     expect(observeHooks).not.toHaveBeenCalled()
-    expect(spawned[0].meta?.restore).toMatchObject({ observed: true })
-    // No use hooks to have or lack
+    // No use hooks to have or lack, and its provider says so (ruling R6-10)
+    expect(spawned[0].meta?.restore).toMatchObject({ observed: true, provider: 'codex' })
     expect(spawned[0].meta?.restore).not.toHaveProperty('useHooks')
   })
 
@@ -1690,13 +1690,14 @@ describe('observe mode at spawn', () => {
       }
       await manager.prepare({ account, cwd: '/work' })
       manager.spawn({ account, cwd: '/work' })
-      expect(spawned[0].meta?.restore).toMatchObject({ observed: true, useHooks: want })
+      expect(spawned[0].meta?.restore).toMatchObject({ observed: true, useHooks: want, provider: 'claude' })
     }
-    // Not observed: no mark either way
+    // Not observed: no mark either way, and the note is as it was
     const off = rig('compatibility')
     await off.manager.prepare({ account, cwd: '/work' })
     off.manager.spawn({ account, cwd: '/work' })
     expect(off.spawned[0].meta?.restore).not.toHaveProperty('useHooks')
+    expect(off.spawned[0].meta?.restore).not.toHaveProperty('provider')
   })
 
   it('a prepare whose observe files failed does not fail the spawn', async () => {

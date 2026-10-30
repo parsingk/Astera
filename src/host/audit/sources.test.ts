@@ -6,7 +6,8 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { removeFixture } from '../../core/testFixtures'
-import { queryRecords, type AuditRecord } from '../../core/audit/store'
+import { auditDayOf, queryRecords, type AuditRecord } from '../../core/audit/store'
+import { profilePaths } from '../../core/profile/paths'
 import { decide, STARTER_POLICY } from '../../core/audit/policy'
 import type { PtyEntry, PtyMeta } from '../../core/host/protocol'
 import { createAuditRecorder, registrySessionFacts, type AuditEvent, type UseEvent } from './recorder'
@@ -528,13 +529,15 @@ describe('the unhooked Claude terminal sessions', () => {
     const { sources } = await sourcesFor({ recorder, ptys, claudeAccount })
     ptys.open('pty1', note('session', 'sess_hooked', { ...OBSERVED, useHooks: true }))
     ptys.open('pty2', note('session', 'sess_plain', { accountId: 'acc1', cwd, title: 't', useHooks: false }))
-    // Notes an app that did not write the mark wrote: a Codex session's account says it is not Claude's
+    // A note that says its provider (ruling R6-10): a Codex session's needs no account read
+    ptys.open('pty5', note('session', 'sess_codex_new', { ...OBSERVED, accountId: 'acc_codex_new', provider: 'codex' }))
+    // Notes an app that did not write either wrote: a Codex session's account says it is not Claude's
     ptys.open('pty3', note('session', 'sess_codex', { ...OBSERVED, accountId: 'acc_codex' }))
     ptys.open('pty4', note('session', 'sess_old', { ...OBSERVED, accountId: 'acc_claude' }))
     await sources.poll()
     await sources.poll()
     expect(uses.map((u) => u.sessionId)).toEqual(['sess_old'])
-    // Each account asked once per session
+    // Each account asked once per session, and only for a note that says neither
     expect(asked.sort()).toEqual(['acc_claude', 'acc_codex'])
     sources.dispose()
   })
@@ -717,6 +720,44 @@ describe('the Claude chat source', () => {
   // Fix round 2: a mark counts once the recorder says it was written. One let go (the mode, a full hold, an append that
   // failed) is handed again at a later line, and a chat that lives on is marked again each local day, so its mark never
   // ages out of the 30 days
+  // Fix round 3: the real recorder over the real store, which drops what it cannot write; a mark it could not write is
+  // handed again at a later line, and once written it is not
+  it('hands a chat mark again after the real store could not write it: a folder it cannot write, a stopped day', async () => {
+    for (const blockedBy of ['a file in its place', 'a stopped day'] as const) {
+      const r = await realRecorder({ procs: [entry('proc1', note('chat', 'sess_c', { ...OBSERVED, provider: 'claude' }))] })
+      const dir = profilePaths(r.profileDir).extensionUses
+      if (blockedBy === 'a file in its place') await fs.writeFile(dir, 'not a folder')
+      else {
+        const day = auditDayOf(new Date().toISOString())
+        await fs.mkdir(dir, { recursive: true })
+        await fs.writeFile(path.join(dir, `${day}.jsonl`), '\n')
+        await fs.writeFile(path.join(dir, `${day}.stopped`), '')
+      }
+      const handed: UseEvent[] = []
+      const recorder = { ...r.recorder, use: (e: UseEvent, done?: (written: boolean) => void) => (handed.push(e), r.recorder.use(e, done)) }
+      const procs = fakeRegistry()
+      const { sources } = await sourcesFor({ recorder, procs })
+      procs.open('proc1', note('chat', 'sess_c', { ...OBSERVED, provider: 'claude' }))
+      const say = async (text: string): Promise<void> => {
+        procs.line('proc1', assistant([{ type: 'text', text }]))
+        await r.recorder.flushed()
+      }
+      await say('a')
+      await say('b')
+      expect(handed.map((u) => u.via), blockedBy).toEqual(['chat-seen', 'chat-seen'])
+      if (blockedBy === 'a file in its place') {
+        // The way is clear again: the next line's mark is written, and the one after asks none
+        await fs.rm(dir, { force: true })
+        await say('c')
+        await say('d')
+        expect(handed).toHaveLength(3)
+        const written = (await fs.readFile(path.join(dir, (await fs.readdir(dir))[0]), 'utf8')).split('\n').filter((l) => l !== '')
+        expect(written.map((l) => JSON.parse(l).via)).toEqual(['chat-seen'])
+      }
+      sources.dispose()
+    }
+  })
+
   it('hands a chat mark again on a later line until it is written, and again on a new local day', async () => {
     const procs = fakeRegistry()
     let now = T0

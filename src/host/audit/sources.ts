@@ -19,7 +19,7 @@
 //   nothing.
 //
 // - Uses of shared skills, commands and agents (lifecycle design §4.12), handed to the recorder's `use`: from a Claude
-//   terminal's audit file, a Skill call that ran, a person's `/name` (UserPromptExpansion) and an agent's start
+//   terminal's audit file, a Skill or Agent call that ran, a person's `/name` (UserPromptExpansion) and an agent's start
 //   (SubagentStart, once per agent); from a Claude chat's stream, a Skill or Agent call that ran. Only the name each
 //   reported. And two marks, handed until the recorder says each was written, and again each local day the session runs,
 //   so neither ages out of the 30 days: a Claude chat ran, from the first line of its stream read while observing (ruling
@@ -871,7 +871,11 @@ export function createAuditSources(d: {
       if (!e.alive || meta?.kind !== 'session' || meta.restore.observed !== true || meta.restore.useHooks === true) continue
       const sessionId = meta.id
       live.add(sessionId)
-      if (meta.restore.useHooks !== false) {
+      // A note that says its provider and not `useHooks` is Codex's: a Claude one always says both (ruling R6-10)
+      if (meta.restore.useHooks !== false && meta.restore.provider !== undefined && meta.restore.provider !== 'claude') continue
+      // A note that says neither is from an app that wrote neither: its account says whether it is Claude's. One whose
+      // account is gone is left unmarked, an accepted limit for sessions of an older app
+      if (meta.restore.useHooks !== false && meta.restore.provider === undefined) {
         let claude = claudeOf.get(sessionId)
         if (claude === undefined) {
           const accountId = str(meta.restore.accountId)

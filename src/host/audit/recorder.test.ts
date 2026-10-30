@@ -791,6 +791,7 @@ describe('the recorder’s uses', () => {
       over: {
         appendUses: async () => {
           if (fails-- > 0) throw new Error('disk gone')
+          return true
         }
       }
     })
@@ -803,6 +804,11 @@ describe('the recorder’s uses', () => {
     const again = said(broken)
     await broken.recorder.flushed()
     expect(again).toEqual([true])
+    // Fix round 3: the store resolves without throwing, saying a line did not land (a day it stopped, a write that failed)
+    const dropped = await rig({ over: { appendUses: async () => false } })
+    const droppedAnswers = said(dropped)
+    await dropped.recorder.flushed()
+    expect(droppedAnswers).toEqual([false])
   })
 
   // Fix round 1: uses keep their own dedupe keys, so a session's many uses never push a call's key out, and the reverse
@@ -827,6 +833,7 @@ describe('the recorder’s uses', () => {
         appendUses: async (_dir, uses) => {
           written.push(uses.length)
           await stuck
+          return true
         }
       }
     })

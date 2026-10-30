@@ -96,17 +96,22 @@ export function makeCliVersionProbe(o: {
   const which = o.which ?? whichPosix
   const whichAsync = o.whichAsync ?? whichPosixAsync
   const now = o.now ?? Date.now
-  /** Kept by the binary's identity on every platform, so an update is asked again at once (final review M1). */
-  const known = new Map<Cli, { key: string; at: number; version: string }>()
+  /** Kept by the binary's identity on every platform, so an update is asked again at once (final review M1). `at`: when it
+   *  was asked, which the TTL counts from; `confirmed`: when a warm or a spawn last found the same binary (fix round 3),
+   *  which `cached` counts from, so a warm just before the TTL keeps the next spawn's answer. */
+  const known = new Map<Cli, { key: string; at: number; confirmed: number; version: string }>()
+  /** Whether what was learnt holds for the binary at `key`, and if so confirmed now. */
   const fresh = (cli: Cli, key: string): boolean => {
     const k = known.get(cli)
-    return k !== undefined && k.key === key && now() - k.at < TTL_MS
+    if (k === undefined || k.key !== key || now() - k.at >= TTL_MS) return false
+    k.confirmed = now()
+    return true
   }
   /** A failed answer is not kept: the next spawn asks again (final review M1). */
   const learn = (cli: Cli, key: string, out: string | null): string | null => {
     const version = out === null ? null : parseCliVersion(out)
     if (version === null) known.delete(cli)
-    else known.set(cli, { key, at: now(), version })
+    else known.set(cli, { key, at: now(), confirmed: now(), version })
     return version
   }
   const commandFor = (cli: Cli, found: string): SpawnCommand =>
@@ -132,10 +137,10 @@ export function makeCliVersionProbe(o: {
       /* the spawn's own sync answer stands */
     }
   }
-  /** What was learnt, within its TTL; the binary is not looked at again (the prepare's warm just did). */
+  /** What was learnt, confirmed within the TTL; the binary is not looked at again (the prepare's warm just did). */
   const cached = (cli: Cli): string | undefined => {
     const k = known.get(cli)
-    return k !== undefined && now() - k.at < TTL_MS ? k.version : undefined
+    return k !== undefined && now() - k.confirmed < TTL_MS ? k.version : undefined
   }
   return Object.assign(probe, { warm, cached })
 }

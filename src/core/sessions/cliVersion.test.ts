@@ -125,4 +125,43 @@ describe('makeCliVersionProbe', () => {
     expect(probe.cached('claude')).toBeUndefined()
     for (const f of Object.values(sync)) expect(f).not.toHaveBeenCalled()
   })
+
+  // Fix round 3: a warm that finds the binary unchanged confirms what was learnt, so a spawn just past the TTL of the
+  // first answer still reads it; the sync probe confirms it the same way
+  it('cached reads an answer a warm or the sync probe confirmed, however old its first asking', async () => {
+    let now = 0
+    const runAsync = vi.fn(async () => '2.1.312 (Claude Code)')
+    const run = vi.fn(() => '2.1.312 (Claude Code)')
+    const probe = makeCliVersionProbe({
+      platform: 'linux',
+      which: () => '/usr/bin/claude',
+      identity: () => 'claude-1',
+      run,
+      whichAsync: async () => '/usr/bin/claude',
+      identityAsync: async () => 'claude-1',
+      runAsync,
+      now: () => now
+    })
+    await probe.warm('claude')
+    // Just inside the TTL: still fresh, so the warm asks nothing and confirms it
+    now = 10 * 60 * 1000 - 1
+    await probe.warm('claude')
+    expect(runAsync).toHaveBeenCalledTimes(1)
+    // Just past the first answer's TTL: the confirmation holds
+    now = 10 * 60 * 1000 + 1
+    expect(probe.cached('claude')).toBe('2.1.312')
+    expect(run).not.toHaveBeenCalled()
+    // The sync probe, finding it fresh, confirms it as well
+    now = 0
+    const sync = makeCliVersionProbe({ platform: 'linux', which: () => '/usr/bin/claude', identity: () => 'claude-1', run, now: () => now })
+    expect(sync('claude')).toBe('2.1.312')
+    now = 9 * 60 * 1000
+    expect(sync('claude')).toBe('2.1.312')
+    now = 15 * 60 * 1000
+    expect(sync.cached('claude')).toBe('2.1.312')
+    expect(run).toHaveBeenCalledTimes(1)
+    // Unconfirmed past its TTL, a miss
+    now = 19 * 60 * 1000 + 1
+    expect(sync.cached('claude')).toBeUndefined()
+  })
 })

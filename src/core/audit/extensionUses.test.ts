@@ -94,6 +94,29 @@ describe('the extension use log', () => {
     expect([s.claudeUnhookedSeen, s.claudeChatSeen, s.skillOrCommand.size, s.agents.size]).toEqual([true, false, 0, 0])
   })
 
+  // Fix round 3: a mark counts only once written, so the append says whether every use reached its day's file
+  it('appendExtensionUses says whether every use was written: not into a folder it cannot write, a stopped day or a bad time', async () => {
+    const now = ms('2026-10-30')
+    const o = { now: () => now }
+    const p = await profile()
+    expect(await appendExtensionUses(p, [use('slash', 'ship', '2026-10-29')], o)).toBe(true)
+    expect(await appendExtensionUses(p, [], o)).toBe(true)
+    // The folder's place is a file: nothing can be written there
+    const blocked = await profile()
+    await fs.writeFile(profilePaths(blocked).extensionUses, 'not a folder')
+    expect(await appendExtensionUses(blocked, [use('slash', 'ship', '2026-10-29')], o)).toBe(false)
+    // A day stopped at the size, as a Host that starts over finds it
+    const stopped = await profile()
+    const dir = profilePaths(stopped).extensionUses
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(path.join(dir, '2026-10-29.jsonl'), '\n')
+    await fs.writeFile(path.join(dir, '2026-10-29.stopped'), '')
+    expect(await appendExtensionUses(stopped, [use('slash', 'ship', '2026-10-28'), use('slash', 'ship', '2026-10-29')], o)).toBe(false)
+    expect(await appendExtensionUses(stopped, [use('slash', 'ship', '2026-10-28')], o)).toBe(true)
+    // A time that does not parse
+    expect(await appendExtensionUses(p, [use('slash', 'ship', '2026-10-29', { at: 'garbled' })], o)).toBe(false)
+  })
+
   it('pruned with the same keep days as the records', async () => {
     const p = await profile()
     const dir = profilePaths(p).extensionUses

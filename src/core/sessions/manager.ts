@@ -730,6 +730,8 @@ export class SessionManager {
           ...(opts.startedBy ? { startedBy: opts.startedBy } : {}),
           ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {}),
           ...(observed ? { observed: true } : {}),
+          // Whose session it is, so the Host need not read the accounts to tell a Codex one (ruling R6-10)
+          ...(observed ? { provider: providerOf(opts.account) } : {}),
           ...(useHooks !== undefined ? { useHooks } : {}),
           ...(enforced ? { enforced: true } : {}),
           ...(sandboxed ? { sandboxed: true, sandboxKind, ...warned } : {})

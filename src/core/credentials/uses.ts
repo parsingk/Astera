@@ -25,7 +25,7 @@ function useOf(line: string): { r: CredentialUse; at: number } | null {
 
 /** Appends the uses to their days' files. Never throws. */
 export function appendCredentialUses(profileDir: string, uses: readonly CredentialUse[], o: AuditStoreOptions = {}): Promise<void> {
-  return appendDated(profilePaths(profileDir).credentialUses, uses, o, 'credential uses')
+  return appendDated(profilePaths(profileDir).credentialUses, uses, o, 'credential uses').then(() => {})
 }
 
 export interface CredentialUseFilter {
