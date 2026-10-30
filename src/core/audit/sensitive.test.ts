@@ -84,6 +84,15 @@ describe('sensitiveNameOf', () => {
     expect(sensitiveNameOf(under('.config').toUpperCase(), linux, 'linux')).toBeNull()
     expect(sensitiveNameOf(under('.CONFIG'), sensitiveEntries('darwin', {}, home), 'darwin')).toBe('gh')
   })
+
+  // Fix round 4 (the controller's rulings R2-4, R2-5): a listing, a printer or a passive command reads no file's contents,
+  // so for its paths only the entry a path is in or under counts
+  it('names no entry a path holds when holders are left out, and still the one it is in', () => {
+    expect(sensitiveNameOf(home, entries, process.platform, false)).toBeNull()
+    expect(sensitiveNameOf(path.parse(home).root, entries, process.platform, false)).toBeNull()
+    expect(sensitiveNameOf(under('.ssh'), entries, process.platform, false)).toBe('.ssh')
+    expect(sensitiveNameOf(under('.ssh', 'id_rsa'), entries, process.platform, false)).toBe('.ssh')
+  })
 })
 
 describe('homeSensitiveNameOf', () => {
@@ -121,6 +130,9 @@ describe('homeSensitiveNameOf', () => {
     // The home itself holds them all (fix round 3, O1)
     expect(homeSensitiveNameOf('~', entries, home)).toBe('.ssh')
     expect(homeSensitiveNameOf('$HOME', entries, home)).toBe('.ssh')
+    // Unless holders are left out (fix round 4): then only a folder the path is in counts
+    expect(homeSensitiveNameOf('~', entries, home, false, false)).toBeNull()
+    expect(homeSensitiveNameOf('~/.ssh/id_rsa', entries, home, false, false)).toBe('.ssh')
     // Someone else's home, another variable, a longer name, and an absolute path are not this home
     expect(homeSensitiveNameOf('~user/.ssh/id_rsa', entries, home)).toBeNull()
     expect(homeSensitiveNameOf('$HOMEDIR/.ssh/id_rsa', entries, home)).toBeNull()

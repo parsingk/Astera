@@ -2248,7 +2248,9 @@ describe('effect and the login folder a call touched', () => {
     expect(sh('rsync -a src/ host:/backup').sensitive).toBe('unknown')
     // A relative path after a cd this cannot follow; a cd into a login folder names it itself
     expect(sh('cd $DIR && cat a.txt').sensitive).toBe('unknown')
-    expect(sh('cd ~ && cat a.txt').sensitive).toBe('.ssh') // the home holds every login folder (fix round 3, O1)
+    // A cd names no folder its path holds (fix round 4, the controller's ruling R2-4), and what follows cannot be placed
+    expect(sh('cd ~ && cat a.txt').sensitive).toBe('unknown')
+    expect(sh('cd ~ && tar czf out.tgz .ssh').sensitive).toBe('unknown')
     expect(sh('cd ~/.ssh && cat id_rsa').sensitive).toBe('.ssh')
     // A folder's name outranks a path that could not be placed, wherever it sits in the line
     expect(sh('cat $X/y ~/.ssh/id_rsa').sensitive).toBe('.ssh')
@@ -2504,7 +2506,129 @@ describe('effect and the login folder a call touched', () => {
     sh(`docker run --mount ${'src=,'.repeat(20_000)} img`)
     sh(`make ${'K='.repeat(50_000)}/x`)
     sh(`${'while true; do '.repeat(5_000)}cat${'; done'.repeat(5_000)} < x`)
+    sh(`wc \${${'a:-$b'.repeat(50_000)}}/x`)
+    sh(`node \${${'K:-$'.repeat(50_000)}`)
+    sh(`${'K=/ '.repeat(20_000)}make`)
+    sh(`X='${'ssh -i ~/k '.repeat(20_000)}' git push`)
     expect(Date.now() - started).toBeLessThan(1500 * CI_SLACK)
+  })
+
+  // Fix round 4. The root is placed from a folder on the home's drive, so `/` is the root that holds the home on Windows too
+  const fromRoot = (command: string, at = path.join(path.parse(home).root, 'work', 'proj')) =>
+    resolveAction({ provider: 'claude', tool: 'Bash', input: { command }, cwd: at, ...e6 })
+
+  // The controller's ruling R2-4: a passive command, a printer and a listing read no file's contents, so the home or the root
+  // they name does not name the login folders it holds
+  it.each(['cd ~', 'echo "$HOME"', 'ls ~', 'pushd ~', 'test -d ~', '[ -d $HOME ]', 'printf %s ~', 'echo ~', 'dir ~', 'tree ~', 'ls /', 'cd /'])(
+    '%s names no login folder',
+    (line) => {
+      expect(fromRoot(line)).not.toHaveProperty('sensitive')
+    }
+  )
+
+  it.each(['Get-ChildItem ~', 'gci $HOME', 'Set-Location ~', 'sl $env:USERPROFILE', 'Write-Output $HOME', 'Write-Host $env:USERPROFILE'])(
+    'PowerShell %s names no login folder',
+    (line) => {
+      expect(pw(line)).not.toHaveProperty('sensitive')
+    }
+  )
+
+  it('names no login folder for a cd or a listing up from a project in the home, while a copy of it still does', () => {
+    const proj = path.join(home, 'proj')
+    expect(fromRoot('cd ../', proj)).not.toHaveProperty('sensitive')
+    expect(fromRoot('ls ..', proj)).not.toHaveProperty('sensitive')
+    expect(fromRoot('cp -r .. /backup', proj).sensitive).toBe('.ssh')
+  })
+
+  it.each([
+    ['ls ~/.ssh', '.ssh'],
+    ['echo ~/.ssh/id_rsa', '.ssh'],
+    ['cd ~/.ssh && cat id_rsa', '.ssh'],
+    ['find /', '.ssh'],
+    ['cp -r ~ /x', '.ssh']
+  ])('%s still reads %s: a path in a login folder, or one a walker or a copy reads whole', (line, sensitive) => {
+    expect(fromRoot(line).sensitive).toBe(sensitive)
+  })
+
+  // The controller's ruling R2-5: Claude's Glob and LS list names, as ls does; Grep reads what it finds
+  it('reads a Glob or LS over the home as a listing, and a Grep over it as reading the login folders in it', () => {
+    const atHome = (tool: string, input: unknown) => resolveAction({ provider: 'claude', tool, input, cwd: home, ...e6 })
+    expect(atHome('Glob', { pattern: '**/*.ts' })).not.toHaveProperty('sensitive')
+    expect(atHome('Glob', { pattern: '**/*.md', path: home })).not.toHaveProperty('sensitive')
+    expect(atHome('LS', {})).not.toHaveProperty('sensitive')
+    expect(atHome('LS', { path: home })).not.toHaveProperty('sensitive')
+    expect(atHome('Grep', { pattern: 'x' }).sensitive).toBe('.ssh')
+    expect(atHome('Grep', { pattern: 'x', path: home }).sensitive).toBe('.ssh')
+    // In a login folder they still name it
+    expect(atHome('LS', { path: path.join(home, '.ssh') }).sensitive).toBe('.ssh')
+    expect(atHome('Glob', { pattern: '*', path: path.join(home, '.aws') }).sensitive).toBe('.aws')
+  })
+
+  // A `${NAME:-…}` word with a variable in its braces could name any file
+  it.each([
+    'wc -l ${SSH_DIR:-$HOME}/id_rsa',
+    'wc -l ${HOME:-$X}/.ssh/id',
+    'wc -l ${A:-$B}/x',
+    'node app.js ${XDG_CONFIG_HOME:-$HOME/.config}/gh/hosts.yml',
+    'node app.js --config=${XDG_CONFIG_HOME:-$HOME/.config}/gh/hosts.yml',
+    'foo --dir=${SSH_DIR:-$HOME}/x',
+    'node app.js ${D:=$HOME}/x',
+    'node app.js ${KEY:-$HOME/.ssh/id_rsa}'
+  ])('%s says unknown, and nothing else of it changes', (line) => {
+    const plain = line.replace(/\$\{[^}]*\}/, 'd')
+    expect(sh(plain)).not.toHaveProperty('sensitive')
+    expect(sh(line)).toEqual({ ...sh(plain), sensitive: 'unknown' })
+  })
+
+  // The controller's ruling R2-6: a lone `/` is the root only for a program that walks the folders under it
+  it.each(['expr 10 / 2', 'echo a/b | cut -d / -f 2', 'tr / _', "awk -F / '{print $1}' f.txt", 'IFS=/ read -r a b', 'PREFIX=/ make install', 'test "$a" = /'])(
+    '%s names no login folder',
+    (line) => {
+      expect(fromRoot(line)).not.toHaveProperty('sensitive')
+    }
+  )
+
+  it.each(['find / -name x', 'du -sh /', 'rg foo /', 'grep -r foo /', 'chmod -R 700 /', 'chown -R me /', 'chgrp -R me /', 'rsync -a / /backup', 'docker run -v /:/host img'])(
+    '%s reads the root, which holds .ssh',
+    (line) => {
+      expect(fromRoot(line).sensitive).toBe('.ssh')
+    }
+  )
+
+  // The controller's ruling R2-7: a search path's value names no folder it holds and nothing it cannot place
+  it.each([
+    'PATH=/usr/local/bin:$PATH make',
+    'LD_LIBRARY_PATH=/opt/lib:$LD_LIBRARY_PATH ./a.out',
+    'PYTHONPATH=$PWD/src pytest',
+    'PATH=$HOME/bin:$PATH',
+    'export PATH=$HOME/bin:$PATH',
+    'NODE_PATH=~ node app.js'
+  ])('%s names no login folder', (line) => {
+    expect(sh(line)).not.toHaveProperty('sensitive')
+  })
+
+  it('still names the login folder a value named …PATH is in', () => {
+    expect(sh('SSH_KEY_PATH=~/.ssh/id_rsa ./deploy.sh')).toEqual({ ...sh('SSH_KEY_PATH=k ./deploy.sh'), sensitive: '.ssh' })
+  })
+
+  it('reads a group’s input written with no space before it as one written with a space', () => {
+    const inSsh = (command: string) => resolveAction({ provider: 'claude', tool: 'Bash', input: { command }, cwd, base: path.join(home, '.ssh'), ...e6 })
+    expect(inSsh('{ cd /opt; cat; }<id_rsa')).toEqual(inSsh('{ cd /opt; cat; } < id_rsa'))
+    expect(inSsh('{ cd /opt; cat; }<id_rsa').sensitive).toBe('.ssh')
+  })
+
+  it('reads the values of a command made only of assignments, and nothing else of the line changes', () => {
+    expect(sh('FOO=~/.aws/credentials; aws s3 ls')).toEqual({ ...sh('FOO=x; aws s3 ls'), sensitive: '.aws' })
+    expect(sh('FOO=~/.aws/credentials')).toEqual({ ...sh('FOO=x'), sensitive: '.aws' })
+    expect(sh('env FOO=~/.aws/credentials')).toEqual({ ...sh('env FOO=x'), sensitive: '.aws' })
+    expect(sh('FOO=$X/y').sensitive).toBe('unknown')
+    expect(sh('IFS=/')).not.toHaveProperty('sensitive')
+  })
+
+  it('reads each word of an assignment’s quoted value as a command’s', () => {
+    expect(sh("GIT_SSH_COMMAND='ssh -i ~/.ssh/k' git push")).toEqual({ ...sh("GIT_SSH_COMMAND='ssh -i k' git push"), sensitive: '.ssh' })
+    expect(sh('OPTS="-v ~/.aws:/root/.aws" ./run.sh')).toEqual({ ...sh('OPTS="-v k:/root/k" ./run.sh'), sensitive: '.aws' })
+    expect(sh('MSG="fix the build" git commit')).not.toHaveProperty('sensitive')
   })
 
   // Fix round 1, Minor 2: a home the call names lays the list out alone, with no APPDATA from this machine

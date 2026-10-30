@@ -49,15 +49,17 @@ function rootsOf(entries: readonly DenyEntry[], fold: boolean): Root[] {
 
 /** The short name of the E6 location an absolute path is (a file entry) or is in or under (a folder entry), else, for a
  *  path that holds some of them (the home, `/`), the first it holds in the list's order: what reads or copies the whole
- *  of it reads them too. Null for a path that is neither. Windows and macOS name files without regard to case; Linux
- *  does not. */
-export function sensitiveNameOf(absPath: string, entries: readonly DenyEntry[], platform: NodeJS.Platform): string | null {
+ *  of it reads them too. `holders` false leaves that second step out, for what reads no file's contents (a listing, a
+ *  printer, a `cd`: the controller's rulings R2-4 and R2-5). Null for a path that is neither. Windows and macOS name files
+ *  without regard to case; Linux does not. */
+export function sensitiveNameOf(absPath: string, entries: readonly DenyEntry[], platform: NodeJS.Platform, holders = true): string | null {
   const fold = platform === 'win32' || platform === 'darwin'
   const at = comparable(absPath, fold)
   const roots = rootsOf(entries, fold)
   for (const root of roots) {
     if (at === root.at || (root.folder && at.startsWith(`${root.at}/`))) return root.name
   }
+  if (!holders) return null
   const holder = at.endsWith('/') ? at : `${at}/` // `/` and a drive's root end in one already
   return roots.find((root) => root.at.startsWith(holder))?.name ?? null
 }
@@ -82,8 +84,9 @@ export function homePathOf(rawPath: string, home: string, ps = false): string | 
 }
 
 /** The short name of the E6 location a home spelling (`~/x`, `$HOME/x`, `${HOME}/x`, `%USERPROFILE%\x`,
- *  `$env:USERPROFILE\x`, in PowerShell also `$home\x`) is in, else null. Matched with this system's case rule. */
-export function homeSensitiveNameOf(rawPath: string, entries: readonly DenyEntry[], home: string, ps = false): string | null {
+ *  `$env:USERPROFILE\x`, in PowerShell also `$home\x`) is in, or holds (unless `holders` is false, as in sensitiveNameOf),
+ *  else null. Matched with this system's case rule. */
+export function homeSensitiveNameOf(rawPath: string, entries: readonly DenyEntry[], home: string, ps = false, holders = true): string | null {
   const abs = homePathOf(rawPath, home, ps)
-  return abs === null ? null : sensitiveNameOf(abs, entries, process.platform)
+  return abs === null ? null : sensitiveNameOf(abs, entries, process.platform, holders)
 }
