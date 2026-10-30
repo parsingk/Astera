@@ -2857,32 +2857,44 @@ describe('effect and the login folder a call touched', () => {
     expectNames('Bash', "bash -c 'echo ~' | head", undefined)
   })
 
-  // Final fix pass, c2: an unquoted `$( )` or pair of backticks is part of a word, as in double quotes, so the command goes
-  // on after it with the rest of its words
+  // Ruling R-F8: c2 is reverted. An unquoted `$( )` or pair of backticks ends the command it is in, so a login folder a
+  // word after it names is not that command's, and the word starts a command of its own that is not known. The line is
+  // unknown, which already holds back the sandbox line (ruling R-F1)
   it.each([
-    ['echo $(date) ~ | xargs rm', '.ssh'],
-    ['zip -r h.zip $(pwd) ~', '.ssh'],
-    ['tar czf h.tgz `cat list` ~/.ssh', '.ssh'],
-    ['tar czf h.tgz $(cat list) ~/.ssh', '.ssh'],
-    ['cat $(mktemp) ~/.aws/credentials', '.aws']
-  ])('%s names %s', (line, sensitive) => {
+    ['echo $(date) ~ | xargs rm', undefined],
+    ['zip -r h.zip $(pwd) ~', undefined],
+    ['tar czf h.tgz `cat list` ~/.ssh', undefined],
+    ['tar czf h.tgz $(cat list) ~/.ssh', 'unknown'],
+    ['cat $(mktemp) ~/.aws/credentials', 'unknown']
+  ])('%s names %s, and is unknown', (line, sensitive) => {
     expectNames('Bash', line, sensitive)
+    expect(sh(line).confidence).toBe('unknown')
   })
 })
 
-// Final fix pass, c2: the splitter reads an unquoted substitution as part of the word it is in, as one in double quotes
-describe('shell: an unquoted substitution is part of a word, and the command goes on after it', () => {
-  it('keeps the words after it in the command, and lists its commands after that command', () => {
-    // Its last word is not a program of its own
-    expect(bash('zip -r h.zip $(pwd) ../x')).toMatchObject({ action: 'process.execute', target: 'zip', confidence: 'heuristic' })
-    expect(bash('cp $(cat list) ../x')).toMatchObject({ action: 'filesystem.write', target: 'outside project: x', insideProject: false })
-    expect(acts(bash('cp $(cat list) ../x'))).toEqual(['filesystem.write', 'filesystem.read'])
-    expect(bash('cp `cat list` ../x')).toMatchObject({ action: 'filesystem.write', insideProject: false })
+// Ruling R-F8: c2 is reverted. In a POSIX line an unquoted `$( )` or pair of backticks ends the command it is in, as it did
+// at the base: its commands follow, and the word after it starts a command of its own
+describe('shell: an unquoted substitution ends the command it is in (ruling R-F8)', () => {
+  // Glued to another substitution, a variable or a word, or as an option's value, it hides no command after it
+  it.each(['$(true)$(true) git push', '`true``true` git push', '$X$(true) git push', 'env A$(echo =1) git push', 'git -C $(echo) git push'])(
+    '%s reads the git push after it',
+    (line) => {
+      expect(acts(bash(line))).toContain('git.remote.write')
+    }
+  )
+
+  it('reads a word after it as a program this does not know, so the line is unknown', () => {
+    expect(bash('zip -r h.zip $(pwd) ../x')).toMatchObject({ action: 'process.execute', target: 'zip', confidence: 'unknown' })
+    expect(bash('cp $(cat list) ../x')).toMatchObject({ action: 'filesystem.write', target: 'cp', confidence: 'unknown' })
+    expect(acts(bash('cp $(cat list) ../x'))).toEqual(['filesystem.write', 'filesystem.read', 'process.execute'])
+    expect(bash('git -C $(pwd) push')).toMatchObject({ action: 'process.execute', target: 'git', confidence: 'unknown' })
+    // The last word: nothing follows it
+    expect(bash('git push origin $(git rev-parse --abbrev-ref HEAD)')).toMatchObject({ action: 'git.remote.write', target: 'git push', confidence: 'heuristic' })
     expect(acts(bash('git push origin $(git rev-parse --abbrev-ref HEAD)'))).toEqual(['git.remote.write', 'git.read'])
-    expect(bash('git push origin $(git rev-parse --abbrev-ref HEAD)')).toMatchObject({ action: 'git.remote.write', target: 'git push' })
   })
 
-  it('reads a `$((` that no `))` closes as a substitution that starts with a subshell, as in double quotes', () => {
+  it('reads a `$((` that no `))` closes as a `$` and a group, which ends the command', () => {
+    expect(bash('echo $((git push) ) ok')).toMatchObject({ action: 'process.execute', target: 'echo', confidence: 'unknown' })
     expect(acts(bash('echo $((git push) ) ok'))).toEqual(['process.execute', 'git.remote.write'])
   })
 })
@@ -2922,9 +2934,9 @@ describe('git config --global and --system are outside the project', () => {
   })
 })
 
-// Follow-up R-F6: Enforce never gets weaker. A substitution or a variable right after a wrapper, or a substitution that
-// stands as the first word, is no program: the words after it are read as the command, as before c2, and the line is at
-// most heuristic
+// Follow-up R-F6: Enforce never gets weaker. A variable or a quoted substitution right after a wrapper, or a quoted
+// substitution that stands as the first word, is no program: the words after it are read as the command, and the line is
+// at most heuristic. An unquoted substitution ends the command it is in (ruling R-F8), so what follows it is read anyway
 describe('shell: a substitution or a variable after a wrapper does not hide the command behind it', () => {
   it.each([
     ['env $(cat .env | xargs) git push origin main', 'git.remote.write'],
@@ -2946,6 +2958,7 @@ describe('shell: a substitution or a variable after a wrapper does not hide the 
     ['command $(echo) rm -rf ../x', 'filesystem.delete'],
     ['doas $(echo) rm -rf ../x', 'filesystem.delete'],
     ['$(echo) rm -rf ../x', 'filesystem.delete'],
+    ['"$(echo)" rm -rf ../x', 'filesystem.delete'],
     ['`true` rm -rf ../x', 'filesystem.delete']
   ] satisfies Array<[string, AuditAction]>)('%s reads %s, and is not sure of it', (line, action) => {
     const r = bash(line)
@@ -3013,8 +3026,8 @@ describe('shell: the options of env, doas, command and nohup', () => {
   })
 })
 
-// Follow-up R-F6: a subcommand the shell fills in cannot be told, so what the program does is not known; before c2 the word
-// after the substitution made the line unknown by being read as a program
+// Follow-up R-F6: a subcommand the shell fills in cannot be told, so what the program does is not known. An unquoted
+// substitution also ends the command (ruling R-F8), and the word after it is read as a program of its own
 describe('shell: a subcommand the shell fills in is not known', () => {
   it.each(['gh $(echo pr) create', 'gh pr $(echo create)', 'npx $(echo prettier) --write .', 'git $(echo push)', 'npm $(echo install) x', 'git $CMD origin'])(
     '%s is unknown',
@@ -3023,9 +3036,9 @@ describe('shell: a subcommand the shell fills in is not known', () => {
     }
   )
 
+  // `git -C $(pwd) push` reads `push` as a program of its own since c2 is reverted (ruling R-F8)
   it('still reads a value the shell fills in after the subcommand', () => {
     expect(bash('git push $(git remote) main')).toMatchObject({ action: 'git.remote.write' })
-    expect(bash('git -C $(pwd) push')).toMatchObject({ action: 'git.remote.write' })
     expect(bash('gh pr create --title $(cat t)')).toMatchObject({ action: 'github.pr.create' })
   })
 

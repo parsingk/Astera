@@ -1088,8 +1088,8 @@ function afterTimeout(words: Words, from: number): number {
 /**
  * A command without what comes before its program: `NAME=value` and PowerShell `$name =` assignments (their values can
  * be secrets), sudo-like wrappers and `timeout N` with their options, the keyword of a conditional or loop body (`then`,
- * `do`, `while`), and in a POSIX line a substitution standing as a word of its own or, after a wrapper, any word the shell
- * fills in. `syntax` is whether a keyword, a word that runs nothing or a word the shell fills in was seen (a loop header, a
+ * `do`, `while`), and in a POSIX line a quoted substitution standing as a word of its own or, after a wrapper, any word
+ * the shell fills in. `syntax` is whether a keyword, a word that runs nothing or a word the shell fills in was seen (a loop header, a
  * PowerShell condition or `.Count`), which makes the line compound. A command of only assignments or only a header comes
  * back with no words. `filled`: that word the shell fills in, as a command of its own, since it may be the program.
  */
@@ -1105,10 +1105,10 @@ function stripPrefix(raw: Cmd, flavor: Flavor): { cmd: Cmd; syntax: boolean; fil
     if (ASSIGNMENT.test(words[i])) assigned.push(words[i++])
     else if (PS_ASSIGNED.test(words[i])) i++
     else if (flavor === 'posix' && i + 1 < words.length && (words[i] === '$' || (wrapped && words[i].startsWith('$')))) {
-      // A substitution standing as a word of its own (`$(echo) rm …`), or after a wrapper any word the shell fills in
-      // (`env $X rm …`, `env "$(cat .env)" rm …`), may be a value or the program. Both are read (follow-up R-F6): the
-      // words after it as the command, as before an unquoted substitution was part of its word, and the word itself as a
-      // program that is not known
+      // A quoted substitution standing as a word of its own (`"$(echo)" rm …`), or after a wrapper any word the shell fills
+      // in (`env $X rm …`, `env "$(cat .env)" rm …`), may be a value or the program. Both are read (follow-up R-F6): the
+      // words after it as the command, as they are after an unquoted substitution, which ends the command it is in (ruling
+      // R-F8), and the word itself as a program that is not known
       filled ??= words[i]
       i++
       syntax = true
@@ -1322,14 +1322,18 @@ const SINK = /^(?:\/dev\/(?:null|stdout|stderr|tty|fd\/\d+)|nul|\$null)$/i
 /**
  * A shell line as the commands it runs, each a list of words with the quotes taken off.
  *
- * Splits on `&&`, `||`, `;`, `|`, `&`, newlines and the brackets of `( )` outside quotes, so the commands in a group are
- * seen, and on PowerShell's `$( )` too. A POSIX `$( )` or pair of backticks outside quotes is read as one inside double
- * quotes is (below), so the command goes on after it with the rest of its words. A redirection's operator and target are
- * not words: a `>` target is kept apart as a file the command writes, a `<` target as one it reads (for the login folder
- * it is in alone); `2>&1`, a `<<<` string and heredoc bodies are left out. A `&` that starts a command is PowerShell's
- * call operator. Each flavour escapes its own way: in POSIX a backslash escapes only the characters a shell line needs it
- * for (it is a path separator on Windows) and joins a line it ends; in PowerShell a backslash is a letter, and the
- * backtick makes the next character one, or joins a line it ends.
+ * Splits on `&&`, `||`, `;`, `|`, `&`, newlines and the brackets of `( )` and `$( )` outside quotes, so the commands in a
+ * group or a substitution are seen, and in a POSIX line on the backticks of a substitution too. A redirection's operator
+ * and target are not words: a `>` target is kept apart as a file the command writes, a `<` target as one it reads (for
+ * the login folder it is in alone); `2>&1`, a `<<<` string and heredoc bodies are left out. A `&` that starts a command is
+ * PowerShell's call operator. Each flavour escapes its own way: in POSIX a backslash escapes only the characters a shell
+ * line needs it for (it is a path separator on Windows) and joins a line it ends; in PowerShell a backslash is a letter,
+ * and the backtick makes the next character one, or joins a line it ends.
+ *
+ * Outside quotes a substitution ends the command it is in, and the word after it starts another (ruling R-F8): read as
+ * part of its word, a substitution glued to another (`$(a)$(b) git push`) or to a word (`env A$(echo =1) git push`) hid
+ * the command after it from Enforce. A value after it is then read as a program this does not know, so the line is
+ * unknown.
  *
  * Inside double quotes a `$( )` (in a POSIX line also a pair of backticks) is a substitution the shell runs: its text is read
  * as a line of its own and its commands follow the command the quoted word is in, while the word keeps a `$` where it was,
@@ -1626,14 +1630,6 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
     } else if ((c === ')' && stop === 'paren' && parens === 0 && cases - (has && sink === null && cur === 'esac' && words.length === 0 ? 1 : 0) <= 0) || (c === '`' && stop === 'tick')) {
       end = i // what closes the substitution this was started for
       break
-    } else if (flavor === 'posix' && depth < 2 && (c === '`' || (c === '$' && line[i + 1] === '(' && line[i + 2] !== '('))) {
-      // Outside quotes as inside them, a substitution is part of the word it is in (final fix list c2): its commands follow
-      // the command, which goes on after it with the rest of its words (`zip -r h.zip $(pwd) ~`), and the word keeps a `$`,
-      // a value and no place. Past the depth substitutions are read to, a `$(` is read as a group and a backtick ends the
-      // command, as they were before
-      cur += '$'
-      has = true
-      i = substitute(i, c === '`')
     } else if (c === ';' || c === '|' || c === ')' || (c === '`' && flavor === 'posix')) {
       const ended = endCommand()
       // A lone `|` hands this command's output to the next; `||` runs the next only when this one fails
@@ -1736,14 +1732,11 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
       }
       sink = { write: c === '>', dup, text }
     } else if (flavor === 'posix' && c === '$' && line[i + 1] === '(' && line[i + 2] === '(') {
-      // arithmetic outside quotes runs nothing either: its substitutions are read, and the word keeps a `$`, a value. With no
-      // `))` to close it, it is a substitution that starts with a subshell, as in double quotes (c2); past the depth
-      // substitutions are read to, the `(` that follows is read as a group
+      // arithmetic outside quotes runs nothing either: its substitutions are read, and the word keeps a `$`, a value
       cur += c
       has = true
       const to = tryArithmetic(i)
-      if (to >= 0) i = to
-      else if (depth < 2) i = substitute(i, false)
+      if (to >= 0) i = to // else the `(` that follows is read as a group
     } else {
       cur += c
       has = true

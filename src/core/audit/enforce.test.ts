@@ -151,8 +151,8 @@ describe('enforceVerdict', () => {
   })
 
   // Follow-up R-F6: Enforce never gets weaker. What a wrapper runs behind a substitution or a variable, and behind the
-  // options of env, doas, command and nohup, is judged; a script piped into a shell sudo starts is not a read
-  it('denies the command behind a wrapper, whatever stands between them, under the starter rules', () => {
+  // options of env, doas, command, nohup and sudo, is judged; a script piped into a shell sudo starts is not a read
+  it('denies the command behind a wrapper, past a substitution or a variable after it or its own options, under the starter rules', () => {
     const work = path.resolve('/work/proj')
     const lines = [
       'env $(cat .env | xargs) git push origin main',
@@ -179,6 +179,15 @@ describe('enforceVerdict', () => {
       'sudo -hhost rm -rf /x'
     ]
     for (const command of lines) expect(verdict(claude('Bash', { command }, { cwd: work })), command).toMatchObject({ deny: true })
+  })
+
+  // Ruling R-F8: c2 is reverted, so an unquoted substitution glued to another, to a variable or to a word, or given as an
+  // option's value, ends the command it is in and hides no command after it
+  it('denies the git push after an unquoted substitution, whatever it is glued to, under the starter rules', () => {
+    const work = path.resolve('/work/proj')
+    const remoteWrite = { deny: true, ruleId: 'starter-git-remote-write' }
+    for (const command of ['$(true)$(true) git push', '`true``true` git push', '$X$(true) git push', 'env A$(echo =1) git push', 'git -C $(echo) git push'])
+      expect(verdict(claude('Bash', { command }, { cwd: work })), command).toMatchObject(remoteWrite)
   })
 
   it('fails closed on a script piped into a shell sudo starts', () => {
