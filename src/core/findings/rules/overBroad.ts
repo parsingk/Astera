@@ -1,8 +1,9 @@
 // over-broad-profile (lifecycle design §4.10, plan rulings 9 and 11): a profile has no list of granted actions; what it
 // allows is its permission choice, its sandbox switch and the shared MCP servers it does not exclude. An active profile
-// with at least 10 recorded calls in 30 days of Observe history gets a line for each of these its observed use never
-// needed, each its own finding with its own key so each is ignored apart: the bypass when every call read, the sandbox
-// switch when every write stayed in its folder and no call named a login folder, and each server it gets and never called.
+// whose settings are 30 days old, with at least 10 recorded calls in 30 days of Observe history, gets a line for each of
+// these its observed use never needed, each its own finding with its own key so each is ignored apart: the bypass when
+// every call read, the sandbox switch when every call said what it did and every write stayed in its folder and no call
+// named a login folder, and each server it gets and never called.
 // Each line is its own rule, reading only its own sources, so one source unread drops only the lines that need it (ruling
 // R5-2). The two flags are usage.ts's, where a record that cannot say what it did turns them false (never on missing data,
 // §4).
@@ -30,8 +31,12 @@ interface Judged {
 }
 
 /** The profiles every line judges, from the profiles, the accounts, the records and the Observe history: none before 30
- *  days of history (§4); then each active one with at least 10 recorded calls whose CLI is known, that of its first
- *  account still there. With none left it starts no session. */
+ *  days of history (§4); then each active one whose settings have held the whole window, with at least 10 recorded calls,
+ *  whose CLI is known, that of its first account still there. With none left it starts no session.
+ *
+ *  The settings' age is `updatedAt`'s (rulings R5-4, R-F2): a change of permission, sandbox or exclusions, and a restore
+ *  from the archive, stamp it, so a line never rests on days its current settings have not had. An item younger than the
+ *  window is not judged (§4). */
 function judged(i: FindingInputs): Judged[] {
   const { profiles, accounts, observed, observe } = i
   if (profiles === undefined || accounts === undefined || observed === undefined || observe === undefined) return []
@@ -39,7 +44,8 @@ function judged(i: FindingInputs): Judged[] {
   // An account stored before Codex existed has no provider, and is Claude's (providers/meta.ts)
   const providers = new Map(accounts.map((a) => [a.id, providerOf(a)]))
   return profiles.flatMap((p) => {
-    if (p.status !== 'active') return []
+    // NaN for a time that does not parse, which never reaches the window
+    if (p.status !== 'active' || !(ageDays(p.updatedAt, i.nowMs) >= OBSERVE_WINDOW_DAYS)) return []
     const use = observed.byProfile.get(p.id)
     if (use === undefined || use.calls < OVER_BROAD_MIN_CALLS) return []
     const provider = cliOf(p, providers)
@@ -74,10 +80,9 @@ export function overBroadSandboxFindings(i: FindingInputs): Finding[] {
  * shared with its CLI, and one Codex can take); and not one of its accounts defines a server of that name itself, since a
  * session of that account then gets the account's own and leaving the shared one out changes nothing (ruling R5-3).
  *
- * The window is the server's own (ruling R4-3), and the profile's settings' age too: an edit that stopped excluding a
- * server, and a restore from the archive, both stamp `updatedAt`, so a line never rests on days its current settings have
- * not had (ruling R5-4). A server shared with one more CLI is not tracked, which is rare. Only this profile's own calls
- * count, under the server's name or the one Claude Code writes it as.
+ * The window is the server's own too (ruling R4-3): a server added, or switched back on, within it is not judged. The
+ * profile's settings have held the window already (judged). A server shared with one more CLI is not tracked, which is
+ * rare. Only this profile's own calls count, under the server's name or the one Claude Code writes it as.
  */
 export function overBroadMcpFindings(i: FindingInputs): Finding[] {
   const { registry, accountMcpNames, observe } = i
@@ -88,11 +93,9 @@ export function overBroadMcpFindings(i: FindingInputs): Finding[] {
     const excluded = new Set(p.mcpExclude)
     const accountsOwn = (name: string): boolean => p.accountIds.some((id) => accountMcpNames.get(id)?.has(name) === true)
     const called = [...use.mcpServers]
-    // NaN for a time that does not parse, which never reaches the window
-    const days = Math.min(observe.days, ageDays(p.updatedAt, i.nowMs))
     for (const e of servers) {
       if (!e.enabled || excluded.has(e.id) || serverSkipReason(e, provider, i.platform) !== null || accountsOwn(e.name)) continue
-      if (!uncalledOverWindow(e, i, days, called)) continue
+      if (!uncalledOverWindow(e, i, observe.days, called)) continue
       out.push(
         line(
           p,

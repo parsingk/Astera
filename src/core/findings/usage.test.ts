@@ -63,12 +63,12 @@ describe('the Observe usage summary', () => {
     expect(u.byProfile.get('ap_a')).toMatchObject({ calls: 3, allRead: false, stayedInFolder: false })
   })
 
-  it('an unknown effect turns allRead false, and stayedInFolder too when it ran outside the folder (ruling R2-2)', () => {
+  it('an unknown effect turns allRead and stayedInFolder false, wherever it ran (rulings R2-2, R-F1)', () => {
+    // A `cargo build` or an `npm install` in the folder may write to the caches in the home, which the sandbox blocks
     const inside = useOf(rec({ action: 'process.execute', effect: 'unknown', insideProject: true }))
-    expect(inside.byProfile.get('ap_a')).toMatchObject({ allRead: false, stayedInFolder: true })
+    expect(inside.byProfile.get('ap_a')).toMatchObject({ allRead: false, stayedInFolder: false })
     const unplaced = useOf(rec({ action: 'mcp.call', target: 'github.x', effect: 'unknown', insideProject: undefined }))
-    expect(unplaced.byProfile.get('ap_a')).toMatchObject({ allRead: false, stayedInFolder: true })
-    // It may have written outside the folder
+    expect(unplaced.byProfile.get('ap_a')).toMatchObject({ allRead: false, stayedInFolder: false })
     const outside = useOf(rec({ action: 'process.execute', effect: 'unknown', insideProject: false }))
     expect(outside.byProfile.get('ap_a')).toMatchObject({ allRead: false, stayedInFolder: false })
     // The same for one command of a line

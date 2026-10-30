@@ -144,6 +144,32 @@ describe('token-spike (§4.11)', () => {
     expect(tokenSpikeFindings(inputs(coordinatorOnly)).map((f) => f.message.params?.total)).toEqual([4000])
   })
 
+  // Final fix pass, M-3: the tokens are grouped in one pass and each group sorted once, so the work grows with the state and
+  // not with its square. Counted, not timed
+  it('reads the Tasks, Dispatches and spent tokens a few times over however many Runs there are, and pins a large state’s spikes', () => {
+    const profileRun = (tokens: number): RunSpec => ({ tokens, dispatches: [{ agentProfileId: 'ap_a', accountId: 'acc_1' }] })
+    const accountRun = (tokens: number): RunSpec => ({ tokens, dispatches: [{ accountId: 'acc_2' }] })
+    const w = world(undefined, [
+      ...Array.from({ length: 598 }, () => profileRun(1000)),
+      profileRun(2999),
+      profileRun(3000),
+      // An even number of others for each: the median is the mean of the two middle ones
+      ...Array.from({ length: 300 }, () => accountRun(100)),
+      ...Array.from({ length: 300 }, () => accountRun(300)),
+      accountRun(900)
+    ])
+    let reads = 0
+    const counted = <T extends object>(list: T[]): T[] =>
+      new Proxy(list, { get: (t, k, r) => (typeof k === 'string' && /^\d+$/.test(k) && reads++, Reflect.get(t, k, r)) })
+    const orch = { ...w.orch, tasks: counted(w.orch.tasks), dispatches: counted(w.orch.dispatches) }
+    const found = tokenSpikeFindings(inputs({ orch, spent: counted(w.spent) }))
+    expect(found.map((f) => [f.key, f.message.params?.total, f.message.params?.median, f.message.params?.times])).toEqual([
+      ['token-spike:run_600', 3000, 1000, 3],
+      ['token-spike:run_1201', 900, 200, 4.5]
+    ])
+    expect(reads).toBeLessThanOrEqual(3 * (w.orch.tasks.length + w.orch.dispatches.length + w.spent.length))
+  })
+
   it('a Run with no tokens read is skipped', () => {
     // Counted as 0 it would make a group of 5 with the median still 1000, and raise the spike
     const w = world('ap_a', [{ tokens: 1000 }, { tokens: 1000 }, { tokens: 1000 }, { tokens: 3000 }, {}])

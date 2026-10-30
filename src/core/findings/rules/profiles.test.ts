@@ -291,6 +291,22 @@ describe('broken-reference (§4.3)', () => {
     expect(brokenWorkFindings(inputs({ profiles: [prof('ap_old', { status: 'archived' })], orch: done }))).toEqual([])
   })
 
+  // Final fix pass, M-2: a one-off Job that fired and whose Runs were pruned has ended, though no Run is left to say so
+  it('a one-off Job that fired and has no Run left has ended: its profile and its plan are not broken-reference', () => {
+    const s = orch({
+      jobs: [
+        job('job_fired', { agentProfileId: 'ap_old', fireCount: 2 }),
+        job('job_plan', { fireCount: 1 }),
+        // Never fired: not started yet, so it still names the profile
+        job('job_new', { agentProfileId: 'ap_old', fireCount: 0 }),
+        job('job_unset', { agentProfileId: 'ap_old' })
+      ],
+      tasks: [task('t_plan', { jobId: 'job_plan', agentProfileId: 'ap_old' })]
+    })
+    const found = brokenWorkFindings(inputs({ profiles: [prof('ap_old', { status: 'archived' })], orch: s }))
+    expect(found.map((f) => f.key)).toEqual(['broken-reference:job_new', 'broken-reference:job_unset'])
+  })
+
   it("a Run's Task of a scheduled Job naming an archived profile is broken-reference: §5 holds back only the plan", () => {
     const s = orch({
       jobs: [job('job_sched', { schedule: { kind: 'daily', time: '09:00' } })],

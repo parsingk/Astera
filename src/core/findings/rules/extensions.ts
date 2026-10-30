@@ -33,10 +33,10 @@ export const entryAgeDays = (e: Pick<ExtensionEntry, 'addedAt' | 'enabledAt'>, i
   return e.enabledAt === undefined ? shared : Math.min(shared, ageDays(e.enabledAt, i.nowMs))
 }
 
-/** Whether a server went uncalled over a full usage window (§4.5, §4.10): the shorter of `days` (the Observe history, and
- *  for a profile its own settings' age too) and the server's own age must be the full 30 days, and no server part in
- *  `called` may name it, under its name or under the name Claude Code writes it as (mcpNameMatches). NaN for a time that
- *  does not parse never reaches the window. */
+/** Whether a server went uncalled over a full usage window (§4.5, §4.10): the shorter of `days` (the Observe history; a
+ *  profile's own settings' age is judged before this, overBroad.ts) and the server's own age must be the full 30 days,
+ *  and no server part in `called` may name it, under its name or under the name Claude Code writes it as
+ *  (mcpNameMatches). NaN for a time that does not parse never reaches the window. */
 export function uncalledOverWindow(e: McpExtension, i: FindingInputs, days: number, called: readonly string[]): boolean {
   if (!(Math.min(days, entryAgeDays(e, i)) >= OBSERVE_WINDOW_DAYS)) return false
   return !called.some((part) => mcpNameMatches(e.name, part))

@@ -3,7 +3,9 @@
 // never needed, the sandbox switch its writes never needed, and each shared MCP server it gets but never called. The calls
 // go through usage.ts as the Host's records do, so the two flags are the ones its rulings fold in.
 import { describe, it, expect } from 'vitest'
+import path from 'node:path'
 import type { AgentProfile } from '../../agentProfiles/types'
+import { resolveAction } from '../../audit/resolve'
 import type { AuditRecord } from '../../audit/types'
 import type { McpExtension } from '../../extensions/types'
 import type { FindingInputs } from '../compute'
@@ -170,6 +172,19 @@ describe('over-broad-profile (§4.10): sandbox', () => {
     expect(overBroadFindings(inputs({ profiles: [prof('ap_a', { sandbox: true })], observed: inFolder('ap_a') }))).toEqual([])
   })
 
+  // Final fix pass, M-7 (ruling R-F1): a call whose effect is unknown may have written to the caches in the home that the
+  // sandbox blocks, and git's global config is outside the folder
+  it('a record whose effect is unknown, or a git config --global, gives no sandbox line', () => {
+    const profiles = [prof('ap_a', { sandbox: false })]
+    const unknown = used(...reads('ap_a', 11), rec('ap_a', { action: 'process.execute', target: 'cargo build', effect: 'unknown', insideProject: undefined }))
+    expect(overBroadFindings(inputs({ profiles, observed: unknown }))).toEqual([])
+    const resolved = resolveAction({ provider: 'codex', tool: 'shell', input: { command: ['git', 'config', '--global', 'user.name', 'x'] }, cwd: path.resolve('/work/proj') })
+    const { action, target, confidence, effect } = resolved
+    const config = rec('ap_a', { action, target, confidence, effect, insideProject: resolved.insideProject })
+    expect(config).toMatchObject({ action: 'git.local.write', insideProject: false })
+    expect(overBroadFindings(inputs({ profiles, observed: used(...reads('ap_a', 11), config) }))).toEqual([])
+  })
+
   it('a write outside its folder, or a call that names a login folder, gives no sandbox line', () => {
     const profiles = [prof('ap_a', { sandbox: false })]
     const outside = used(...reads('ap_a', 11), rec('ap_a', { action: 'filesystem.write', effect: 'write', insideProject: false }))
@@ -249,14 +264,20 @@ describe('over-broad-profile (§4.10): mcp', () => {
     }
   })
 
-  it('a profile updated 10 days ago is not judged for its servers, but its bypass line stands; updated 40 days ago, it is (ruling R5-4)', () => {
-    // An edit that stopped excluding a server, or a restore from the archive, stamps updatedAt: its current settings have
-    // had the server no longer than that. Every call it made still read
+  it('a profile updated 10 days ago is not judged for any line; updated 40 days ago, it is (rulings R5-4, R-F2)', () => {
+    // A change of permission, sandbox or exclusions, or a restore from the archive, stamps updatedAt: its current settings
+    // have held no longer than that, so none of its lines rests on the whole window. Every call it made still read
     const observed = used(...reads('ap_a', 12))
-    const recent = [prof('ap_a', { permission: 'bypass', createdAt: ago(100), updatedAt: ago(10) })]
-    expect(parts(overBroadFindings(inputs({ profiles: recent, registry: [mcp('mcp-github')], observed })))).toEqual(['bypass'])
-    const settled = [prof('ap_a', { permission: 'bypass', createdAt: ago(100), updatedAt: ago(40) })]
-    expect(parts(overBroadFindings(inputs({ profiles: settled, registry: [mcp('mcp-github')], observed })))).toEqual(['bypass', 'mcp:mcp-github'])
+    const recent = [prof('ap_a', { permission: 'bypass', sandbox: false, createdAt: ago(100), updatedAt: ago(10) })]
+    expect(parts(overBroadFindings(inputs({ profiles: recent, registry: [mcp('mcp-github')], observed })))).toEqual([])
+    // 29 days is still inside the window
+    const almost = [prof('ap_a', { permission: 'bypass', sandbox: false, createdAt: ago(100), updatedAt: ago(29) })]
+    expect(parts(overBroadFindings(inputs({ profiles: almost, registry: [mcp('mcp-github')], observed })))).toEqual([])
+    const settled = [prof('ap_a', { permission: 'bypass', sandbox: false, createdAt: ago(100), updatedAt: ago(40) })]
+    expect(parts(overBroadFindings(inputs({ profiles: settled, registry: [mcp('mcp-github')], observed })))).toEqual(['bypass', 'sandbox', 'mcp:mcp-github'])
+    // An updatedAt that does not read as a time is no age at all
+    const unreadable = [prof('ap_a', { permission: 'bypass', sandbox: false, createdAt: ago(100), updatedAt: 'never' })]
+    expect(parts(overBroadFindings(inputs({ profiles: unreadable, registry: [mcp('mcp-github')], observed })))).toEqual([])
   })
 
   it('a server one of its accounts defines itself under the same name gives no mcp line (ruling R5-3)', () => {

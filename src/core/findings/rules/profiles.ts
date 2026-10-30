@@ -120,7 +120,9 @@ export function brokenProfileFindings(i: FindingInputs): Finding[] {
  * §4.3 on a Job or a Task that has not ended and names a profile that is gone from the store or archived.
  *
  * Not ended is what holdsAgentProfile reads (running.ts): a Job with a schedule, with no Run yet, or with a Run still
- * running; a Run's Task until it is terminal; a plan Task while its Job has not ended. A scheduled Job's archived
+ * running; a Run's Task until it is terminal; a plan Task while its Job has not ended. Here, and only here, a one-off Job
+ * that fired (`fireCount` above 0) and has no Run left has ended: its Runs were pruned after they finished, so it is not
+ * waiting to start (final fix list M-2), though holdsAgentProfile keeps holding it. A scheduled Job's archived
  * profiles, its own and its plan Tasks' (archivedProfilesOfJob), are left to §5, which says why the Job waits; a profile
  * gone from the store is not §5's, since the fire falls back without it, so that one is said here.
  */
@@ -141,7 +143,8 @@ export function brokenWorkFindings(i: FindingInputs): Finding[] {
     let v = ended.get(job.id)
     if (v === undefined) {
       const runs = orch.runs.filter((r) => r.jobId === job.id)
-      v = job.schedule !== undefined || runs.length === 0 || runs.some((r) => outcomeOf(orch, r.id) === 'running')
+      const fired = (job.fireCount ?? 0) > 0
+      v = job.schedule !== undefined || (runs.length === 0 && !fired) || runs.some((r) => outcomeOf(orch, r.id) === 'running')
       ended.set(job.id, v)
     }
     return v
