@@ -181,11 +181,12 @@ async function endsWhole(file: string): Promise<boolean> {
   }
 }
 
-/** Checks the folders against both limits now, as the Host does at its start: the tool calls' and the credential uses',
- *  which share the retention (credentials design §6). Never throws. */
+/** Checks the folders against both limits now, as the Host does at its start: the tool calls', the credential uses' and
+ *  the shared skill, command and agent uses', which share the retention (credentials design §6, lifecycle design §4.12).
+ *  Never throws. */
 export async function pruneRecords(profileDir: string, o: AuditStoreOptions = {}): Promise<void> {
   const paths = profilePaths(profileDir)
-  await Promise.all([paths.auditRecords, paths.credentialUses].map((dir) => queued(dir, (s) => prune(dir, s, o, 0))))
+  await Promise.all([paths.auditRecords, paths.credentialUses, paths.extensionUses].map((dir) => queued(dir, (s) => prune(dir, s, o, 0))))
 }
 
 /** Checks the folder now and then every AUDIT_PRUNE_EVERY_MS, as the Host does from its start: a Host that writes

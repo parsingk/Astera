@@ -104,6 +104,9 @@ export interface ProfileUse {
 export interface ObservedUse {
   byProfile: Map<string, ProfileUse>
   mcpServers: Set<string>
+  /** A Claude chat session made a call in the window. A skill or command a person types into a chat (`-p`, stream-json)
+   *  is expanded before the model runs, with no Skill call and no hook, so §4.12 cannot tell it went unused (ruling R-P2). */
+  claudeChatSeen: boolean
 }
 
 /** The uses of shared skills, commands and agents the CLIs reported in the window (§4.12). */
@@ -112,4 +115,12 @@ export interface ExtensionUseSummary {
   skillOrCommand: Set<string>
   /** Agent names (subagent, agent-tool), as reported. */
   agents: Set<string>
+}
+
+/** What a shared skill or agent's canonical copy says of itself (§4.12), read from its frontmatter: the `name` Claude Code
+ *  also knows it by (an agent's only name, in hooks and calls), and for an agent the skills its `skills:` preloads, which
+ *  Claude Code injects with no event at all. */
+export interface ExtensionCopy {
+  name?: string
+  skills?: string[]
 }

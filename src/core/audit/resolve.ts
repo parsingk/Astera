@@ -33,9 +33,11 @@ export interface ResolveCall {
   home?: string
 }
 
-/** The fields of a Claude tool's input this reads. The audit capture keeps these and drops the rest (a Write's contents,
- *  an Edit's strings), so nothing more of a call waits on disk (statusline.ts). */
-export const CLAUDE_INPUT_FIELDS = ['command', 'cmd', 'workdir', 'file_path', 'notebook_path', 'path', 'pattern', 'url'] as const
+/** The fields of a Claude tool's input this reads, and the two that name a shared skill or agent used (`skill` of the
+ *  Skill tool, `subagent_type` of the Agent tool, lifecycle design §4.12), which this does not read. The audit capture
+ *  keeps these and drops the rest (a Write's contents, an Edit's strings, a Skill's `args`), so nothing more of a call
+ *  waits on disk (statusline.ts). */
+export const CLAUDE_INPUT_FIELDS = ['command', 'cmd', 'workdir', 'file_path', 'notebook_path', 'path', 'pattern', 'url', 'skill', 'subagent_type'] as const
 
 export interface ResolvedAction {
   action: AuditAction

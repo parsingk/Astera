@@ -160,6 +160,30 @@ describe('importItems', () => {
       vi.useRealTimers()
     }
   })
+
+  // Lifecycle design §4.12 (ruling R4-3 extended): a skill, command or agent that was off was not given to the CLIs, so it
+  // is aged from when it was switched back on
+  it('setEnabled stamps enabledAt when a skill, command or agent goes from off to on, and leaves it otherwise', async () => {
+    const s = await setup()
+    await importItems({ profileDir: s.profileDir, homeDir: s.home, account: s.account, picks: [{ kind: 'skill', name: 'review' }, { kind: 'command', name: 'ship' }] })
+    const entries = async () => (await readExtensionRegistry(s.profileDir)).entries
+    for (const e of await entries()) {
+      await setEnabled(s.profileDir, e.id, true)
+      await setEnabled(s.profileDir, e.id, false)
+    }
+    for (const e of await entries()) expect(e, e.name).not.toHaveProperty('enabledAt')
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-10-01T00:00:00.000Z'))
+      for (const e of await entries()) await setEnabled(s.profileDir, e.id, true)
+      for (const e of await entries()) expect(e, e.name).toMatchObject({ enabled: true, enabledAt: '2026-10-01T00:00:00.000Z' })
+      vi.setSystemTime(new Date('2026-10-05T00:00:00.000Z'))
+      for (const e of await entries()) await setEnabled(s.profileDir, e.id, true)
+      for (const e of await entries()) expect(e, e.name).toMatchObject({ enabledAt: '2026-10-01T00:00:00.000Z' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 // Final review M1, M4, M8

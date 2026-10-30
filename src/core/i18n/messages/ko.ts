@@ -2782,6 +2782,7 @@ export const ko = {
   'findings.reason.overBroadBypass': '권한 확인 없이 실행하지만, {days}일 동안 한 호출은 모두 읽기였습니다.',
   'findings.reason.overBroadSandbox': '샌드박스 밖에서 실행하지만, {days}일 동안 작업 폴더 안에만 썼고 로그인 정보 폴더는 건드리지 않았습니다.',
   'findings.reason.overBroadMcp': 'MCP 서버 {server}를 받지만 {days}일 동안 부르지 않았습니다.',
+  'findings.reason.unusedExtension': '{days}일 동안 쓴 기록이 없습니다.',
   'findings.group.profile': '에이전트 프로필 {name}',
   'findings.group.account': '계정 {id}',
   'findings.do.archiveProfile': '프로필을 보관하세요.',
@@ -2797,5 +2798,10 @@ export const ko = {
   'findings.do.removeSecret': '저장한 값이나 서버를 삭제하세요.',
   'findings.do.askPermission': '권한을 확인하며 실행하게 바꾸세요.',
   'findings.do.sandboxOn': '샌드박스를 켜세요.',
-  'findings.do.excludeMcp': '프로필에서 {server}를 빼세요.'
+  'findings.do.excludeMcp': '프로필에서 {server}를 빼세요.',
+  'findings.do.removeExtension': '공유 확장에서 삭제하세요.',
+  'findings.info.claudeOnlyNoUse': 'Claude에서 {days}일 동안 쓴 기록이 없습니다. Codex는 알 수 없습니다.',
+  'findings.info.claudeCannotTell': 'Claude는 알 수 없습니다. 사용을 알리려면 Claude Code {min} 이상이 필요합니다.',
+  'findings.info.claudeChatCannotTell':
+    'Claude는 알 수 없습니다. 최근 {days}일 동안 Claude 대화가 있었고, 대화에서 입력한 스킬이나 명령은 알려지지 않습니다.'
 } as const

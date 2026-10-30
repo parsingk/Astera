@@ -12,11 +12,13 @@ import type { CredentialsFile } from '../credentials/types'
 import type { RuntimeProfile } from '../runtimes/registry'
 import type { IgnoredFile } from './ignored'
 import type {
+  ExtensionCopy,
   ExtensionUseSummary,
   Finding,
   FindingRule,
   FindingSource,
   FindingsReport,
+  InfoLine,
   ObserveHistory,
   ObservedUse,
   SubjectKind
@@ -27,6 +29,7 @@ import { staleCredentialFindings, unmanagedReferenceFindings, unusedMcpFindings 
 import { coverageGapFindings } from './rules/coverage'
 import { staleRuntimeFindings } from './rules/runtimes'
 import { overBroadBypassFindings, overBroadMcpFindings, overBroadSandboxFindings } from './rules/overBroad'
+import { extensionUseFindings, extensionUseInfo } from './rules/extensionUse'
 
 /** Every source is optional, and `undefined` means unread. */
 export interface FindingInputs {
@@ -55,6 +58,9 @@ export interface FindingInputs {
   credentialLastUse?: ReadonlyMap<string, string>
   runtimes?: RuntimeProfile[]
   extensionUses?: ExtensionUseSummary
+  /** What each shared skill and agent's canonical copy says it is called, by entry id (audit/extensionUses.ts
+   *  readExtensionCopies): a use is matched by it (§4.12). An entry missing from it could not be read. */
+  extensionCopies?: ReadonlyMap<string, ExtensionCopy>
   /** The Claude Code on this machine, from the Host's version probe; null when it could not be read (Task 6). */
   claudeVersion?: string | null
 }
@@ -67,7 +73,8 @@ export type RuleSource = Exclude<FindingSource, 'ignored'>
  * The FindingInputs fields each source fills (ruling R-P1), in the order `unread` lists them. A source is unread when any
  * of its fields is `undefined`. `null` is a value: a policy of null is no file, which is compatibility, and a Claude
  * version of null is one the probe could not tell. The policy source holds the Observe history beside the rules, since
- * the Host reads the history from them.
+ * the Host reads the history from them; the extension-use source holds what the canonical copies are called beside the
+ * uses, since they are read only to place a use (§4.12).
  */
 const FIELDS: Record<RuleSource, ReadonlyArray<keyof FindingInputs>> = {
   profiles: ['profiles'],
@@ -81,18 +88,20 @@ const FIELDS: Record<RuleSource, ReadonlyArray<keyof FindingInputs>> = {
   credentials: ['credentials'],
   'credential-uses': ['credentialLastUse'],
   runtimes: ['runtimes'],
-  'extension-uses': ['extensionUses'],
+  'extension-uses': ['extensionUses', 'extensionCopies'],
   settings: ['appBypass'],
   'cli-version': ['claudeVersion']
 }
 
-/** One rule: what it needs read, and the findings it raises. `run` may take every source in `needs` as read. */
+/** One rule: what it needs read, and the findings it raises. `run` and `info` may take every source in `needs` as read.
+ *  `info`: the information lines it gives instead of a finding where a CLI cannot tell (§4.12). */
 export interface RuleRow {
   needs: RuleSource[]
   run: (i: FindingInputs) => Finding[]
+  info?: (i: FindingInputs) => InfoLine[]
 }
 
-/** Every rule (§4), each with the sources it needs. Tasks 4 to 6 add theirs. */
+/** Every rule (§4), each with the sources it needs. */
 export const RULES: RuleRow[] = [
   { needs: ['profiles', 'orchestration'], run: unusedProfileFindings },
   { needs: ['profiles'], run: duplicateProfileFindings },
@@ -108,7 +117,9 @@ export const RULES: RuleRow[] = [
   // §4.10's lines each need only their own sources, so one unread drops only the lines that read it (ruling R5-2)
   { needs: ['profiles', 'accounts', 'records', 'policy', 'settings'], run: overBroadBypassFindings },
   { needs: ['profiles', 'accounts', 'records', 'policy'], run: overBroadSandboxFindings },
-  { needs: ['profiles', 'accounts', 'records', 'policy', 'extensions', 'account-mcp'], run: overBroadMcpFindings }
+  { needs: ['profiles', 'accounts', 'records', 'policy', 'extensions', 'account-mcp'], run: overBroadMcpFindings },
+  // §4.12 reads the records too: a Claude chat in the window is a place a typed skill or command goes unreported
+  { needs: ['extensions', 'extension-uses', 'policy', 'cli-version', 'records'], run: extensionUseFindings, info: extensionUseInfo }
 ]
 
 /** The order the section groups subjects in (§7): profiles first, a CLI's coverage last. */
@@ -139,6 +150,10 @@ const byPlace = (a: Finding, b: Finding): number =>
   RULE_ORDER[a.rule] - RULE_ORDER[b.rule] ||
   (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
 
+/** Information lines by subject name, then id, as the findings are placed. */
+const byLine = (a: InfoLine, b: InfoLine): number =>
+  a.subject.name.localeCompare(b.subject.name, 'en') || (a.subject.id < b.subject.id ? -1 : a.subject.id > b.subject.id ? 1 : 0)
+
 /** The finding as ignored, with when and the note, when the ignore file holds its key (§6). */
 function withIgnore(f: Finding, file: IgnoredFile): Finding {
   if (!Object.hasOwn(file.ignored, f.key)) return f
@@ -154,6 +169,7 @@ export function computeFindings(i: FindingInputs, ignored: IgnoredFile): Finding
   // that could not be read must not read as "Observe is off" (Review Focus 1)
   if (isUnread(i, 'policy')) unread.add('policy')
   const found: Finding[] = []
+  const info: InfoLine[] = []
   for (const row of RULES) {
     const missing = row.needs.filter((s) => isUnread(i, s))
     if (missing.length > 0) {
@@ -161,10 +177,12 @@ export function computeFindings(i: FindingInputs, ignored: IgnoredFile): Finding
       continue
     }
     for (const f of row.run(i)) found.push(f)
+    for (const l of row.info?.(i) ?? []) info.push(l)
   }
   return {
     findings: found.map((f) => withIgnore(f, ignored)).sort(byPlace),
-    info: [],
+    // Never ignored: an information line has no key (§6)
+    info: info.sort(byLine),
     // Not known when the policy is unread, which `unread` then says (FindingsReport.observe)
     observe: i.observe ?? { on: false, days: 0 },
     unread: (Object.keys(FIELDS) as RuleSource[]).filter((s) => unread.has(s)),

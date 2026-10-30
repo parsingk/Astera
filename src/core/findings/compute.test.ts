@@ -57,7 +57,21 @@ describe('computeFindings', () => {
     expect(r.findings.map((f) => f.rule)).toEqual(['duplicate-profile'])
     // Four rows need the orchestration state; it is named once. The policy is unread too: the report's Observe history
     // comes from it
-    expect([...r.unread].sort()).toEqual(['account-mcp', 'accounts', 'credential-uses', 'credentials', 'extensions', 'orchestration', 'policy', 'records', 'runtimes', 'settings', 'tokens'])
+    expect([...r.unread].sort()).toEqual([
+      'account-mcp',
+      'accounts',
+      'cli-version',
+      'credential-uses',
+      'credentials',
+      'extension-uses',
+      'extensions',
+      'orchestration',
+      'policy',
+      'records',
+      'runtimes',
+      'settings',
+      'tokens'
+    ])
     expect(r).toMatchObject({ info: [], computedAt: new Date(NOW).toISOString() })
 
     // Read, the same profiles are also unused
@@ -76,7 +90,10 @@ describe('computeFindings', () => {
         observed: emptyUse(),
         credentials: { version: 1, entries: [], mcpHide: {} },
         credentialLastUse: new Map(),
-        runtimes: []
+        runtimes: [],
+        extensionUses: { skillOrCommand: new Set(), agents: new Set() },
+        extensionCopies: new Map(),
+        claudeVersion: null
       },
       NONE
     )
@@ -167,7 +184,7 @@ describe('computeFindings', () => {
       return { parts: r.findings.filter((f) => f.rule === 'over-broad-profile').map((f) => f.part), unread: r.unread }
     }
     // Unread are only sources no over-broad line reads
-    expect(lines(read)).toEqual({ parts: ['bypass', 'mcp:mcp-github', 'sandbox'], unread: ['orchestration', 'tokens', 'credentials', 'credential-uses', 'runtimes'] })
+    expect(lines(read)).toEqual({ parts: ['bypass', 'mcp:mcp-github', 'sandbox'], unread: ['orchestration', 'tokens', 'credentials', 'credential-uses', 'runtimes', 'extension-uses', 'cli-version'] })
     // Each field left unread: the source it names, and the lines left
     const cases: Array<[keyof FindingInputs, FindingSource, string[]]> = [
       ['profiles', 'profiles', []],
@@ -184,6 +201,63 @@ describe('computeFindings', () => {
       expect(r.parts, field).toEqual(left)
       expect(r.unread, field).toContain(source)
     }
+  })
+
+  // §4.12: one row raises the unused skills, commands and agents, and its "cannot tell" lines go to `info` under the same
+  // sources, so an unread one drops both
+  it('the extension use row raises its findings and puts its info lines in report.info, and an unread source drops both', () => {
+    const file = (kind: 'skill' | 'command' | 'agent', name: string, providers: Array<'claude' | 'codex'>) => ({
+      id: `${kind}-${name}`,
+      kind,
+      name,
+      hash: 'h',
+      providers,
+      importedFrom: 'acc_1',
+      enabled: true,
+      addedAt: ago(60)
+    })
+    const registry = [file('skill', 'zeta', ['claude', 'codex']), file('command', 'ship', ['claude']), file('skill', 'alpha', ['claude', 'codex']), file('agent', 'reviewer', ['claude'])]
+    const full: FindingInputs = {
+      ...BASE,
+      policy: { version: 1, mode: 'observe', rules: [], otherwise: 'allow' },
+      observe: { on: true, days: 30 },
+      observed: emptyUse(),
+      registry,
+      extensionUses: { skillOrCommand: new Set(), agents: new Set() },
+      extensionCopies: new Map([
+        ['skill-zeta', {}],
+        ['skill-alpha', {}],
+        ['agent-reviewer', {}]
+      ]),
+      claudeVersion: '2.1.312'
+    }
+    const r = computeFindings(full, NONE)
+    expect(r.findings.map((f) => f.key)).toEqual(['unused-agent:agent-reviewer', 'unused-command:command-ship'])
+    // By subject name, like the findings
+    expect(r.info.map((l) => [l.subject.name, l.reason])).toEqual([
+      ['alpha', 'No recorded use in Claude in 30 days. Codex cannot tell.'],
+      ['zeta', 'No recorded use in Claude in 30 days. Codex cannot tell.']
+    ])
+    // An ignore marks a finding; an info line is never ignored
+    const ignored = computeFindings(full, { version: 1, ignored: { 'unused-command:command-ship': { at: ago(1) } } })
+    expect(ignored.findings.find((f) => f.key === 'unused-command:command-ship')?.ignored).toBe(true)
+    expect(ignored.info).toHaveLength(2)
+    const cases: Array<[keyof FindingInputs, FindingSource]> = [
+      ['registry', 'extensions'],
+      ['extensionUses', 'extension-uses'],
+      ['extensionCopies', 'extension-uses'],
+      ['claudeVersion', 'cli-version'],
+      ['observe', 'policy'],
+      ['observed', 'records']
+    ]
+    for (const [field, source] of cases) {
+      const without = computeFindings({ ...full, [field]: undefined }, NONE)
+      expect(without.findings.filter((f) => f.rule.startsWith('unused-') && f.rule !== 'unused-mcp'), field).toEqual([])
+      expect(without.info, field).toEqual([])
+      expect(without.unread, field).toContain(source)
+    }
+    // An unknown version is a value: Claude cannot tell
+    expect(computeFindings({ ...full, claudeVersion: null }, NONE).info.map((l) => l.message.key)).toEqual(Array(4).fill('findings.info.claudeCannotTell'))
   })
 
   it('null is a value and undefined is unread (ruling R-P1)', () => {

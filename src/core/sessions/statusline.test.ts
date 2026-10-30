@@ -554,11 +554,66 @@ describe('StatusLineManager observe mode', () => {
       const expected = JSON.parse(was)
       expected.hooks.PostToolUse.push(audit)
       expected.hooks.PostToolUseFailure = [audit]
+      // And the two events a use of a skill, command or agent arrives by (lifecycle design §4.12)
+      expected.hooks.UserPromptExpansion = [{ hooks: audit.hooks }]
+      expected.hooks.SubagentStart = [audit]
       expect(JSON.parse(await read(c.settingsFile))).toEqual(expected)
       // The compatibility file is left as it was
       expect(await read(plain.settingsFile)).toBe(was)
       expect(c.hookOutPath).toBe(plain.hookOutPath)
     }
+  })
+
+  // Lifecycle design §4.12: a person's `/name` arrives as UserPromptExpansion and an agent's start as SubagentStart, never
+  // as a tool call (research cli-use-reporting.md §1), so both go through the audit capture, which no session waits on
+  it('the observe and enforce settings carry UserPromptExpansion and SubagentStart through the audit capture, async', async () => {
+    const mgr = new StatusLineManager(dir, 'node', () => {}, { platform: 'linux', execPath: '/opt/astera/astera' })
+    await mgr.init()
+    expect(await mgr.ensureEnforceFiles()).toBe('ok')
+    const capture = { type: 'command', command: auditCmd(), async: true }
+    for (const toolHooks of [false, true])
+      for (const mode of [{ observe: true }, { observe: true, enforce: true }]) {
+        const c = mgr.spawnConfig('s1', account, { toolHooks, ...mode })
+        const hooks = JSON.parse(await read(c.settingsFile)).hooks
+        expect(hooks.UserPromptExpansion, JSON.stringify(mode)).toEqual([{ hooks: [capture] }])
+        expect(hooks.SubagentStart, JSON.stringify(mode)).toEqual([{ matcher: '*', hooks: [capture] }])
+      }
+    // A session that is not observed hears neither
+    for (const toolHooks of [false, true]) {
+      const hooks = JSON.parse(await read(mgr.spawnConfig('s1', account, { toolHooks }).settingsFile)).hooks
+      expect(hooks).not.toHaveProperty('UserPromptExpansion')
+      expect(hooks).not.toHaveProperty('SubagentStart')
+    }
+  })
+
+  // The observe design's rule: what a person wrote is never kept. A typed command's arguments and its expanded prompt are
+  // theirs; the command's name, an agent's type and id, and the Skill tool's `skill` only name what was used
+  it('the capture keeps command_name, expansion_type, agent_type, agent_id and the Skill input’s skill, and drops command_args and prompt', async () => {
+    const mgr = new StatusLineManager(dir)
+    await mgr.init()
+    await mgr.ensureObserveFiles()
+    const out = path.join(mgr.hookEventsDir, 's3.jsonl')
+    const script = path.join(dir, 'astera-hook-audit-capture.cjs')
+    await runCapture(script, out, {
+      session_id: 'c', cwd: '/w', hook_event_name: 'UserPromptExpansion', expansion_type: 'slash_command', command_name: 'ship',
+      command_args: 'secret args', command_source: 'userSettings', prompt: 'secret prompt'
+    })
+    await runCapture(script, out, { session_id: 'c', cwd: '/w', hook_event_name: 'SubagentStart', agent_id: 'agent_1', agent_type: 'Code Reviewer' })
+    await runCapture(script, out, {
+      cwd: '/w', hook_event_name: 'PostToolUse', tool_name: 'Skill', tool_input: { skill: 'review', args: 'secret args' }, tool_use_id: 'toolu_1',
+      tool_response: { success: true, commandName: 'review' }
+    })
+    await runCapture(script, out, {
+      cwd: '/w', hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_input: { subagent_type: 'code-reviewer', description: 'd', prompt: 'secret task' }, tool_use_id: 'toolu_2'
+    })
+    const got = await lines(path.join(mgr.hookEventsDir, 's3.audit.jsonl'))
+    expect(got.map(({ astera_at, ...rest }) => (expect(typeof astera_at).toBe('number'), rest))).toEqual([
+      { hook_event_name: 'UserPromptExpansion', tool_input: {}, cwd: '/w', expansion_type: 'slash_command', command_name: 'ship' },
+      { hook_event_name: 'SubagentStart', tool_input: {}, cwd: '/w', agent_type: 'Code Reviewer', agent_id: 'agent_1' },
+      { hook_event_name: 'PostToolUse', tool_name: 'Skill', tool_input: { skill: 'review' }, tool_use_id: 'toolu_1', cwd: '/w' },
+      { hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_input: { subagent_type: 'code-reviewer' }, tool_use_id: 'toolu_2', cwd: '/w' }
+    ])
+    expect(await fs.readFile(path.join(mgr.hookEventsDir, 's3.audit.jsonl'), 'utf8')).not.toContain('secret')
   })
 
   it('a session asked to be observed before its files are written gets the plain file, and is not marked observed', () => {

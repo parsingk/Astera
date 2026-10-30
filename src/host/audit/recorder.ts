@@ -12,12 +12,16 @@
 // The mode is read from audit-policy.json once and kept until the policies' commands say they changed it
 // (`invalidate`); a read that failed is not kept. `record` returns at once and never throws: whatever goes wrong is
 // logged and costs that call.
+//
+// Beside the calls, `use` takes a use of a shared skill, command or agent a source heard (lifecycle design §4.12): only
+// its name, stamped with the session's account and profile, written to the use log under the same mode as a record.
 import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { profilePaths } from '../../core/profile/paths'
 import { redactTarget, resolveAction, type CallEffect, type ResolveCall, type ResolvedAction } from '../../core/audit/resolve'
 import { appendRecords, auditDayStopped, type AuditRecord, type AuditSource } from '../../core/audit/store'
+import { appendExtensionUses, type ExtensionUse } from '../../core/audit/extensionUses'
 import { isObserving, type AuditMode } from '../../core/audit/policy'
 import type { OrchState } from '../../core/orchestration/state'
 import type { Dispatch } from '../../core/orchestration/types'
@@ -41,6 +45,8 @@ const RETRY_MAX_MS = 30_000
 const KEYS_PER_SESSION = 1000
 const SESSIONS_KEPT = 200
 const TOOL_MAX = 100
+/** The most characters a use's name keeps: Claude Code's own limit on an agent's name. */
+const USE_NAME_MAX = 256
 
 /** Whose tool names a source's calls carry. */
 const PROVIDER: Record<AuditSource, AuditRecord['provider']> = {
@@ -101,12 +107,30 @@ export interface AuditEvent {
   resolved?: Pick<ResolvedAction, 'action' | 'target' | 'confidence' | 'insideProject' | 'sensitive'> & { effect?: CallEffect }
 }
 
+/** One use of a skill, command or agent as a source hands it over (lifecycle design §4.12): the name the CLI reported
+ *  (ExtensionUse.via says which field), never a prompt or an argument. */
+export interface UseEvent {
+  /** The app's id for the session (ASTERA_SESSION). */
+  sessionId: string
+  source: Extract<AuditSource, 'claude-hook' | 'claude-chat'>
+  via: ExtensionUse['via']
+  name: string
+  /** The provider's id for the call that used it (a Skill or Agent tool_use_id): a use heard twice in a session is kept
+   *  once. */
+  dedupeKey?: string
+  /** When it happened, when the source knows; else when it is recorded. */
+  at?: string
+}
+
 /** A call's action as its record takes it: the resolver's, or the Enforce hook's, which may have no effect. */
 type Heard = Omit<ResolvedAction, 'effect'> & { effect?: CallEffect }
 
 export interface AuditRecorder {
   /** Hands a finished call over. Returns at once and never throws. */
   record(ev: AuditEvent): void
+  /** Hands a use of a shared skill, command or agent over: written to the use log while observing, dropped in
+   *  compatibility as a call is. Returns at once and never throws. */
+  use(ev: UseEvent): void
   /** The mode may have changed: it is read again at once, and before the next record is written. `modeUnchanged` says the
    *  change cannot have turned it (a rule edited): what is known stays until the read, and nobody is told of a
    *  change that did not happen. */
@@ -150,6 +174,8 @@ export function createAuditRecorder(d: {
   resolve?: (call: ResolveCall) => ResolvedAction
   /** Test injection; defaults to the store's. */
   append?: typeof appendRecords
+  /** Test injection; defaults to the use log's. */
+  appendUses?: typeof appendExtensionUses
   /** Whether the Enforce hook ran in the session: its enforce file is there (the hook writes a line for every call it
    *  sees). Defaults to that file's existence under the profile. */
   hookRan?: (sessionId: string) => boolean
@@ -160,6 +186,7 @@ export function createAuditRecorder(d: {
   const now = d.now ?? Date.now
   const resolve = d.resolve ?? resolveAction
   const append = d.append ?? appendRecords
+  const appendUses = d.appendUses ?? appendExtensionUses
   /** The mode as last read cleanly; null before that and after `invalidate`. */
   let mode: AuditMode | null = null
   /** Bumped by `invalidate`, so a read that began before it is not kept after it. */
@@ -184,6 +211,8 @@ export function createAuditRecorder(d: {
   let retryWait = RETRY_FIRST_MS
   let retrying = false
   let pending: AuditRecord[] = []
+  /** Uses that wait for the disk, behind the same mode as the records. */
+  let usesPending: ExtensionUse[] = []
   /** Calls dropped while the hold was full, told when it empties. */
   let dropped = 0
   /** A flush is queued or running. */
@@ -264,11 +293,15 @@ export function createAuditRecorder(d: {
 
   const flush = async (): Promise<void> => {
     try {
-      while (pending.length > 0) {
+      while (pending.length > 0 || usesPending.length > 0) {
         const m = await currentMode()
-        // Off: only the blocks of sessions started in Enforce, which keep blocking until they end (final review I7)
+        // Off: only the blocks of sessions started in Enforce, which keep blocking until they end (final review I7). A use
+        // has no block: off, it is let go
         const batch = isObserving(m) ? pending : pending.filter((r) => r.status === 'blocked' && d.sessionInfo(r.sessionId)?.enforced === true)
+        const uses = isObserving(m) ? usesPending : []
         pending = []
+        usesPending = []
+        if (uses.length > 0) await appendUses(d.profileDir, uses, { log: d.log })
         if (batch.length === 0) continue
         // A record whose lookup had to wait takes what it found before it is written, the ones behind it waiting with it
         for (const r of batch) {
@@ -401,6 +434,39 @@ export function createAuditRecorder(d: {
         }
       } catch (err) {
         d.log(`audit: a ${String(ev?.source)} call of session ${String(ev?.sessionId)} was not recorded: ${String(err)}`)
+      }
+    },
+    use(ev) {
+      try {
+        if (mode === 'compatibility') return
+        // Claude's alone: Codex reports no use exactly (lifecycle plan ruling 14)
+        if (PROVIDER[ev.source] !== 'claude') return
+        const info = d.sessionInfo(ev.sessionId)
+        if (info === null) return
+        // Its own keys: the Skill call that used a skill is a call too, under the same id
+        if (ev.dedupeKey !== undefined && heard(ev.sessionId, `use:${ev.dedupeKey}`)) return
+        if (usesPending.length >= AUDIT_PENDING_MAX) {
+          if (dropped === 0) d.log(`audit: ${AUDIT_PENDING_MAX} uses wait for the disk; later ones are counted and not recorded until it takes them`)
+          dropped += 1
+          return
+        }
+        usesPending.push({
+          id: `eu_${randomBytes(8).toString('hex')}`,
+          at: timeOf(ev.at),
+          sessionId: ev.sessionId,
+          provider: 'claude',
+          kind: info.kind,
+          accountId: info.accountId,
+          ...(info.agentProfileId !== undefined ? { agentProfileId: info.agentProfileId } : {}),
+          via: ev.via,
+          name: ev.name.slice(0, USE_NAME_MAX)
+        })
+        if (!busy) {
+          busy = true
+          enqueue(flush)
+        }
+      } catch (err) {
+        d.log(`audit: a use of session ${String(ev?.sessionId)} was not recorded: ${String(err)}`)
       }
     },
     invalidate(o) {

@@ -20,7 +20,8 @@ import {
   dispatchOfSession,
   dispatchOfWithTurns,
   registrySessionFacts,
-  type SessionFacts
+  type SessionFacts,
+  type UseEvent
 } from './recorder'
 
 const dirs: string[] = []
@@ -700,6 +701,87 @@ describe('createAuditRecorder', () => {
     await h.recorder.flushed()
     expect(h.logs.join('\n')).toMatch(/registry gone/)
     expect(await h.records()).toHaveLength(1)
+  })
+})
+
+// Lifecycle design §4.12: a use of a skill, command or agent goes to its own log, under the same mode as a call
+describe('the recorder’s uses', () => {
+  /** Every use written so far, from the use log's day files. */
+  const usesIn = async (profileDir: string): Promise<Array<Record<string, unknown>>> => {
+    const dir = profilePaths(profileDir).extensionUses
+    const names = await fs.readdir(dir).catch(() => [] as string[])
+    const out: Array<Record<string, unknown>> = []
+    for (const n of names.sort()) for (const l of (await fs.readFile(path.join(dir, n), 'utf8')).split('\n')) if (l !== '') out.push(JSON.parse(l))
+    return out
+  }
+  const skillUse = (over: Partial<UseEvent> = {}): UseEvent => ({ sessionId: 'sess_a', source: 'claude-hook', via: 'skill-tool', name: 'review', ...over })
+
+  it('uses are written while observing and dropped in compatibility', async () => {
+    const h = await rig()
+    h.recorder.use(skillUse({ dedupeKey: 'toolu_1' }))
+    // Heard twice, kept once; the same id as a call is still a use
+    h.recorder.use(skillUse({ dedupeKey: 'toolu_1' }))
+    h.recorder.record(bash('ls', { dedupeKey: 'toolu_2' }))
+    h.recorder.use(skillUse({ via: 'slash', name: 'ship', dedupeKey: 'toolu_2' }))
+    await h.recorder.flushed()
+    expect((await usesIn(h.profileDir)).map((u) => [u.via, u.name])).toEqual([
+      ['skill-tool', 'review'],
+      ['slash', 'ship']
+    ])
+    // Enforce observes too
+    const e = await rig({ mode: 'enforce' })
+    e.recorder.use(skillUse())
+    await e.recorder.flushed()
+    expect(await usesIn(e.profileDir)).toHaveLength(1)
+    // Compatibility: nothing written, no folder, no session asked
+    const c = await rig({ mode: 'compatibility' })
+    await c.recorder.flushed()
+    c.recorder.use(skillUse())
+    await c.recorder.flushed()
+    expect(c.asked).toEqual([])
+    expect(await fs.stat(profilePaths(c.profileDir).extensionUses).then(() => true, () => false)).toBe(false)
+    // Heard before the mode was known to be compatibility: let go without the disk
+    const early = await rig({ mode: 'compatibility' })
+    early.recorder.use(skillUse())
+    await early.recorder.flushed()
+    expect(await usesIn(early.profileDir)).toEqual([])
+    // Turned off after it was heard: let go too
+    const late = await rig()
+    late.recorder.use(skillUse())
+    late.setMode('compatibility')
+    late.recorder.invalidate()
+    await late.recorder.flushed()
+    expect(await usesIn(late.profileDir)).toEqual([])
+  })
+
+  it('a use carries the session’s account and profile', async () => {
+    const h = await rig()
+    h.recorder.use(skillUse({ via: 'subagent', name: 'Code Reviewer', at: '2026-10-22T10:00:00.000Z' }))
+    await h.recorder.flushed()
+    expect(await usesIn(h.profileDir)).toEqual([
+      {
+        id: expect.stringMatching(/^eu_[0-9a-f]{16}$/),
+        at: '2026-10-22T10:00:00.000Z',
+        sessionId: 'sess_a',
+        provider: 'claude',
+        kind: 'terminal',
+        accountId: 'acc1',
+        agentProfileId: 'ap1',
+        via: 'subagent',
+        name: 'Code Reviewer'
+      }
+    ])
+    // A chat's use, with no profile; a session Astera did not start is not observed
+    const chat = await rig({ facts: { kind: 'chat', accountId: 'acc2', cwd } })
+    chat.recorder.use(skillUse({ source: 'claude-chat', via: 'agent-tool', name: 'code-reviewer' }))
+    await chat.recorder.flushed()
+    const [u] = await usesIn(chat.profileDir)
+    expect(u).toMatchObject({ kind: 'chat', accountId: 'acc2', via: 'agent-tool', name: 'code-reviewer', at: new Date(NOW).toISOString() })
+    expect(u).not.toHaveProperty('agentProfileId')
+    const none = await rig({ facts: null })
+    none.recorder.use(skillUse())
+    await none.recorder.flushed()
+    expect(await usesIn(none.profileDir)).toEqual([])
   })
 })
 

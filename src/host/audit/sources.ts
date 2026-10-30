@@ -18,6 +18,11 @@
 //   (Codex's /new, read once more first) or the Host ends, is handed over as unknown, and an output after that adds
 //   nothing.
 //
+// - Uses of shared skills, commands and agents (lifecycle design §4.12), handed to the recorder's `use`: from a Claude
+//   terminal's audit file, a Skill call that ran, a person's `/name` (UserPromptExpansion) and an agent's start
+//   (SubagentStart, once per agent); from a Claude chat's stream, a Skill or Agent call that ran. Only the name each
+//   reported. Codex reports none exactly, so none is read from it.
+//
 // - Enforce (enforce design §5): a call the blocking hook stopped never ran, so none of the above hears it. The hook
 //   writes every call it sees to enforce/<session>.jsonl, a stopped one with its rule and what it resolved the call to;
 //   that file is read for each session whose note says it was started in Enforce, at every poll and, synchronously,
@@ -49,7 +54,7 @@ import { HookEventWatcher } from '../../core/hooks/eventWatcher'
 import { JsonlTail } from '../../core/rolling/jsonlTail'
 import type { AuditSource } from '../../core/audit/store'
 import type { PtyMeta } from '../../core/host/protocol'
-import type { AuditEvent, AuditRecorder } from './recorder'
+import type { AuditEvent, AuditRecorder, UseEvent } from './recorder'
 
 /** One finished call as a source reads it, before it is told whose session it was. `stoppedByHook`: a Codex call whose
  *  output says a PreToolUse hook stopped its one command (`hookStopped`), which in a session started in Enforce is the
@@ -62,6 +67,12 @@ export const ROLLOUT_POLL_MS = 1_000
 const PENDING_MAX = 200
 /** Claude terminal sessions whose shell's place is kept, at most; past it the one heard least recently is let go. */
 const SHELLS_KEPT = 200
+/** Agent ids kept per session, and sessions kept, for SubagentStart: as the recorder keeps its dedupe keys. */
+const AGENTS_PER_SESSION = 1000
+const AGENT_SESSIONS_KEPT = 200
+
+/** A use as a source reads it, before it is told whose session it was (recorder.ts UseEvent). */
+export type HeardUse = Omit<UseEvent, 'sessionId' | 'source'>
 
 const obj = (v: unknown): Record<string, unknown> | null =>
   typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null
@@ -95,6 +106,63 @@ export function hookCall(payload: unknown, ranIn?: string): ObservedCall | null 
     ...(at !== undefined ? { at } : {}),
     ...(ranIn !== undefined ? { cwd: ranIn } : {})
   }
+}
+
+/**
+ * A reader of the uses in one Host's Claude audit lines (lifecycle design §4.12, research cli-use-reporting.md §1): a
+ * Skill call that ran (PostToolUse, by its `skill`; a failure is an unknown skill or a call that was stopped), a skill or
+ * command a person typed (UserPromptExpansion of a `slash_command`, by its `command_name`; an `mcp_prompt` is an MCP
+ * server's prompt), and an agent's start (SubagentStart, by its `agent_type`). Claude Code fires SubagentStart again when
+ * an agent is resumed and for each message a teammate takes up, so each `agent_id` is handed once per session, the ids
+ * kept as the recorder keeps its keys. A name is handed as reported, a plugin's `p:name` included: the findings match it.
+ */
+export function claudeHookUses(): (sessionId: string, payload: unknown) => HeardUse | null {
+  const agents = new Map<string, Set<string>>()
+  /** Whether the agent was handed before in its session; remembered if not. */
+  const handed = (sessionId: string, agentId: string): boolean => {
+    const ids = agents.get(sessionId) ?? new Set<string>()
+    // Moved to the end: the least recently heard session is the first to go
+    agents.delete(sessionId)
+    agents.set(sessionId, ids)
+    if (agents.size > AGENT_SESSIONS_KEPT) agents.delete(agents.keys().next().value as string)
+    if (ids.has(agentId)) return true
+    ids.add(agentId)
+    if (ids.size > AGENTS_PER_SESSION) ids.delete(ids.values().next().value as string)
+    return false
+  }
+  return (sessionId, payload) => {
+    const p = obj(payload)
+    if (!p) return null
+    const at = isoOf(p[HOOK_EVENT_AT])
+    const heard = (via: HeardUse['via'], name: string | null, dedupeKey?: string | null): HeardUse | null =>
+      name === null ? null : { via, name, ...(dedupeKey ? { dedupeKey } : {}), ...(at !== undefined ? { at } : {}) }
+    switch (p.hook_event_name) {
+      case 'PostToolUse':
+        return p.tool_name === 'Skill' ? heard('skill-tool', str(obj(p.tool_input)?.skill), str(p.tool_use_id)) : null
+      case 'UserPromptExpansion':
+        return p.expansion_type === 'slash_command' ? heard('slash', str(p.command_name)) : null
+      case 'SubagentStart': {
+        const agentId = str(p.agent_id)
+        if (agentId !== null && handed(sessionId, agentId)) return null
+        return heard('subagent', str(p.agent_type))
+      }
+      default:
+        return null
+    }
+  }
+}
+
+/** The use a Claude chat's call made (§4.12): a Skill call that ran, by its `skill`, or an Agent call (Task, by its older
+ *  name) that ran, by its `subagent_type`, which Claude Code matches to an agent's name whatever its case or separators.
+ *  The rest of the input (a Skill's `args`, an agent's prompt) is never handed. */
+export function claudeChatUse(c: ObservedCall): HeardUse | null {
+  if (c.status !== 'ok') return null
+  const input = obj(c.input)
+  const named = (via: HeardUse['via'], name: string | null): HeardUse | null =>
+    name === null ? null : { via, name, ...(c.dedupeKey !== undefined ? { dedupeKey: c.dedupeKey } : {}), ...(c.at !== undefined ? { at: c.at } : {}) }
+  if (c.tool === 'Skill') return named('skill-tool', str(input?.skill))
+  if (c.tool === 'Agent' || c.tool === 'Task') return named('agent-tool', str(input?.subagent_type))
+  return null
 }
 
 /** Where an audit line's call left Claude's shell: the hook's `cwd`, which Claude Code reads when the hook fires, after
@@ -543,7 +611,7 @@ export interface AuditSources {
 
 export function createAuditSources(d: {
   /** `retryMode` is asked at every tick of the timer: the recorder says when it is due. */
-  recorder: Pick<AuditRecorder, 'record' | 'observing' | 'onObservingChange'> & Partial<Pick<AuditRecorder, 'retryMode' | 'unhooked'>>
+  recorder: Pick<AuditRecorder, 'record' | 'use' | 'observing' | 'onObservingChange'> & Partial<Pick<AuditRecorder, 'retryMode' | 'unhooked'>>
   ptys: { onMeta: Listen<[string, PtyMeta, 'open' | 'note']>; onExit: Listen<[string, number]> }
   procs: { onMeta: Listen<[string, PtyMeta, 'open' | 'note']>; onLine: Listen<[string, number, string]>; onExit: Listen<[string, number]> }
   /** The profile's hook-events folder, where the observed sessions' audit files are. */
@@ -620,11 +688,14 @@ export function createAuditSources(d: {
   /** Where each observed Claude session's last call left its shell (hookShellAfter), so where its next call runs. Not
    *  known for a session's first call heard, which the resolver reads from the session's folder. */
   const shellAt = new Map<string, string>()
+  const hookUses = claudeHookUses()
   const hooks = new HookEventWatcher(
     d.hookEventsDir,
     (sessionId, payload) => {
       if (!d.recorder.observing()) return
       try {
+        const u = hookUses(sessionId, payload)
+        if (u) d.recorder.use({ sessionId, source: 'claude-hook', ...u })
         const c = hookCall(payload, shellAt.get(sessionId))
         if (!c) return
         hand(sessionId, 'claude-hook', [c])
@@ -682,7 +753,13 @@ export function createAuditSources(d: {
       const chat = chats.get(procId)
       if (!chat || !d.recorder.observing()) return
       try {
-        hand(chat.sessionId, chat.source, chat.read(line))
+        const calls = chat.read(line)
+        hand(chat.sessionId, chat.source, calls)
+        if (chat.source !== 'claude-chat') return
+        for (const c of calls) {
+          const u = claudeChatUse(c)
+          if (u) d.recorder.use({ sessionId: chat.sessionId, source: 'claude-chat', ...u })
+        }
       } catch (err) {
         d.log(`audit: a line of chat ${chat.sessionId} could not be read: ${String(err)}`)
       }

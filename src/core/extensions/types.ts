@@ -56,6 +56,9 @@ export interface FileExtension {
   enabled: boolean
   /** When it was shared (ISO), as McpExtension.addedAt (lifecycle design §4.12). */
   addedAt?: string
+  /** When it was last switched from off to on (ISO), as McpExtension.enabledAt: one that was off was not given to the CLIs,
+   *  so §4.12 ages it from the later of this and `addedAt` (ruling R4-3). */
+  enabledAt?: string
 }
 
 export type ExtensionEntry = McpExtension | FileExtension

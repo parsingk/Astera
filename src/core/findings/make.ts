@@ -5,7 +5,7 @@ import { t, type Message } from '../i18n'
 import { jobNameOf } from '../orchestration/jobName'
 import type { OrchState } from '../orchestration/state'
 import type { JobSourceRef } from '../orchestration/types'
-import type { Finding, FindingPlace, FindingRule, FindingSubject } from './types'
+import type { Finding, FindingPlace, FindingRule, FindingSubject, InfoLine } from './types'
 
 /** `rule:subject`, plus `:part` for over-broad-profile's lines (spec §6) and a coverage gap's Rule. An ignore is kept by
  *  this key. */
@@ -36,6 +36,11 @@ export function finding(a: {
     open: a.open,
     ignored: false
   }
+}
+
+/** Builds §4.12's information line: reason = t('en', message.key, message.params), as a finding's. */
+export function infoLine(subject: FindingSubject, message: Message): InfoLine {
+  return { subject, message, reason: t('en', message.key, message.params) }
 }
 
 /** The most characters a name in a finding keeps, as the run record keeps a Job's name (runRecord.ts). */

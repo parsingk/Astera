@@ -166,6 +166,13 @@ describe('the Observe usage summary', () => {
     const u = useOf(rec({ effect: undefined }), rec(), rec())
     expect(u.byProfile.get('ap_a')).toMatchObject({ allRead: false, stayedInFolder: false })
   })
+
+  // §4.12, Step 0: a skill or command typed into a Claude chat is not reported, so the summary says a chat ran
+  it('notes a Claude chat session’s call, with or without a profile, and no other kind', () => {
+    expect(emptyUse().claudeChatSeen).toBe(false)
+    expect(useOf(rec(), rec({ provider: 'codex', kind: 'chat', source: 'codex-chat' })).claudeChatSeen).toBe(false)
+    expect(useOf(rec(), rec({ kind: 'chat', source: 'claude-chat', agentProfileId: undefined })).claudeChatSeen).toBe(true)
+  })
 })
 
 describe('mcpNameMatches', () => {

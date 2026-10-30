@@ -225,18 +225,25 @@ process.stdin.on('end', finish)
 process.stdin.on('error', finish)
 `
 
-// Observe mode's capture (node): run by the observe-only hooks (PostToolUse and PostToolUseFailure for every tool,
-// ensureObserveFiles). It writes not to the session's own hook file, which attention, `sessions list`, pendingPrompt and
-// Slack read, but beside it, to <session>.audit.jsonl (AUDIT_HOOK_EVENTS), which only the Host's recorder reads; so an
-// observed session's own file holds exactly what a plain session's does. Of the payload it keeps what names the call
-// (the event, the tool, its id, whether it was interrupted, where it ran, and of its input only the fields the resolver
-// reads, CLAUDE_INPUT_FIELDS) with the stamp the other capture takes; the tool's output (`tool_response`, a failure's
-// `error`) and the rest of its input (a Write's contents, an Edit's strings) are never written. Parsed and written
-// again, unlike the other capture: nothing here needs a number past 2^53 kept as it was sent.
+/** The fields of a UserPromptExpansion or SubagentStart payload that name what was used (lifecycle design §4.12). Never
+ *  `command_args` or `prompt`: those are what the person wrote. */
+const USE_FIELDS = ['expansion_type', 'command_name', 'agent_type', 'agent_id'] as const
+
+// Observe mode's capture (node): run by the observe-only hooks (PostToolUse and PostToolUseFailure for every tool, and
+// UserPromptExpansion and SubagentStart, ensureObserveFiles). It writes not to the session's own hook file, which
+// attention, `sessions list`, pendingPrompt and Slack read, but beside it, to <session>.audit.jsonl (AUDIT_HOOK_EVENTS),
+// which only the Host's recorder reads; so an observed session's own file holds exactly what a plain session's does. Of
+// the payload it keeps what names the call (the event, the tool, its id, whether it was interrupted, where it ran, and of
+// its input only the fields the resolver reads and the names a use is recorded by, CLAUDE_INPUT_FIELDS) and what names a
+// skill, command or agent used (USE_FIELDS, lifecycle design §4.12), with the stamp the other capture takes; the tool's
+// output (`tool_response`, a failure's `error`), the rest of its input (a Write's contents, an Edit's strings, a Skill's
+// `args`), and what a person wrote (a command's `command_args`, its expanded `prompt`) are never written. Parsed and
+// written again, unlike the other capture: nothing here needs a number past 2^53 kept as it was sent.
 const HOOK_AUDIT_CAPTURE_SCRIPT = `const at = typeof performance === 'object' && Number.isFinite(performance.timeOrigin) ? performance.timeOrigin : Date.now()
 const fs = require('fs')
 const out = process.env.ASTERA_HOOK_OUT
 const FIELDS = ${JSON.stringify(CLAUDE_INPUT_FIELDS)}
+const USES = ${JSON.stringify(USE_FIELDS)}
 const chunks = []
 function finish() {
   if (out && out.endsWith('.jsonl')) {
@@ -249,6 +256,7 @@ function finish() {
         const kept = { ${HOOK_EVENT_AT}: at, hook_event_name: p.hook_event_name, tool_name: p.tool_name, tool_input: input, tool_use_id: p.tool_use_id }
         if (p.is_interrupt === true) kept.is_interrupt = true
         if (typeof p.cwd === 'string') kept.cwd = p.cwd
+        for (const k of USES) if (typeof p[k] === 'string') kept[k] = p[k]
         fs.appendFileSync(out.slice(0, -'.jsonl'.length) + '${AUDIT_HOOK_EVENTS}', JSON.stringify(kept) + '\\n')
       }
     } catch {}
@@ -397,10 +405,26 @@ interface BuiltSettings {
   hooksSettings: { hooks: { PostToolUse: unknown[] } }
 }
 
-/** A settings file's observe variant (ensureObserveFiles): the audit capture `command` after every tool call. */
+/** A settings file's observe variant (ensureObserveFiles): the audit capture `command` after every tool call, and at each
+ *  skill or command a person types (UserPromptExpansion, which has no matcher to give) and each agent's start
+ *  (SubagentStart), which never arrive as a tool call (lifecycle design §4.12, research cli-use-reporting.md §1). */
 function withObserveHooks(s: BuiltSettings['settings'], command: string): string {
-  const audit = { matcher: '*', hooks: [{ type: 'command', command, async: true }] }
-  return JSON.stringify({ ...s, hooks: { ...s.hooks, PostToolUse: [...s.hooks.PostToolUse, audit], PostToolUseFailure: [audit] } }, null, 2)
+  const capture = { type: 'command', command, async: true }
+  const audit = { matcher: '*', hooks: [capture] }
+  return JSON.stringify(
+    {
+      ...s,
+      hooks: {
+        ...s.hooks,
+        PostToolUse: [...s.hooks.PostToolUse, audit],
+        PostToolUseFailure: [audit],
+        UserPromptExpansion: [{ hooks: [capture] }],
+        SubagentStart: [audit]
+      }
+    },
+    null,
+    2
+  )
 }
 
 /** What a sandbox twin adds (ensureSandboxFiles): the builder's settings. */
@@ -671,10 +695,11 @@ export class StatusLineManager {
    * Observe mode (observe mode design §4, §5): writes the audit capture and the two settings files a session started
    * while the mode is observe reads instead of the ones above. Each is its plain file with two more entries, for every
    * tool (`*`): PostToolUse (a call that ran) and PostToolUseFailure (one that failed or was interrupted), both through
-   * the audit capture into the session's audit file, where the Host's recorder reads them (host/audit/sources.ts).
-   * `async`, so no tool call waits on the capture's node process. The entries already there stay as they are and still
-   * write the session's own file, so attention, `sessions list`, pendingPrompt and Slack read an observed session
-   * exactly as a plain one (the review's I2).
+   * the audit capture into the session's audit file, where the Host's recorder reads them (host/audit/sources.ts); and
+   * two more through it for the uses of shared skills, commands and agents (UserPromptExpansion, SubagentStart, lifecycle
+   * design §4.12). All `async`, so nothing waits on the capture's node process. The entries already there stay as they
+   * are and still write the session's own file, so attention, `sessions list`, pendingPrompt and Slack read an observed
+   * session exactly as a plain one (the review's I2).
    *
    * Separate files, written only when a session is about to start observed (`SessionManager.prepare`), so a
    * compatibility session reads exactly the bytes it always did, and nothing is written for observe until it is on. A

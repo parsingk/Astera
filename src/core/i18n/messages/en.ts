@@ -2528,6 +2528,7 @@ export const en: Record<keyof typeof ko, string> = {
   'findings.reason.overBroadBypass': 'Runs without permission checks, but every call it made in {days} days only read.',
   'findings.reason.overBroadSandbox': 'Runs outside the sandbox, but in {days} days it wrote only inside its folder and never touched a login folder.',
   'findings.reason.overBroadMcp': 'Gets MCP server {server} but did not call it in {days} days.',
+  'findings.reason.unusedExtension': 'No recorded use in {days} days.',
   'findings.group.profile': 'agent profile {name}',
   'findings.group.account': 'account {id}',
   'findings.do.archiveProfile': 'Archive the profile.',
@@ -2543,5 +2544,10 @@ export const en: Record<keyof typeof ko, string> = {
   'findings.do.removeSecret': 'Remove the stored value, or the server.',
   'findings.do.askPermission': 'Run it with permission checks.',
   'findings.do.sandboxOn': 'Turn its sandbox on.',
-  'findings.do.excludeMcp': 'Leave {server} out of the profile.'
+  'findings.do.excludeMcp': 'Leave {server} out of the profile.',
+  'findings.do.removeExtension': 'Remove it from the shared extensions.',
+  'findings.info.claudeOnlyNoUse': 'No recorded use in Claude in {days} days. Codex cannot tell.',
+  'findings.info.claudeCannotTell': 'Claude cannot tell: it needs Claude Code {min} or later to report uses.',
+  'findings.info.claudeChatCannotTell':
+    'Claude cannot tell: a Claude chat ran in these {days} days, and a skill or command typed in a chat is not reported.'
 }

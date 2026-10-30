@@ -2263,6 +2263,7 @@ export const ja: Catalog = {
   'findings.reason.overBroadBypass': '権限確認なしで実行していますが、{days} 日間の呼び出しはすべて読み取りでした。',
   'findings.reason.overBroadSandbox': 'サンドボックスの外で実行していますが、{days} 日間、書き込みは作業フォルダーの中だけで、ログイン情報のフォルダーには触れていません。',
   'findings.reason.overBroadMcp': 'MCP サーバー {server} を受け取っていますが、{days} 日間呼び出していません。',
+  'findings.reason.unusedExtension': '{days} 日間、使われた記録がありません。',
   'findings.group.profile': 'エージェントプロファイル {name}',
   'findings.group.account': 'アカウント {id}',
   'findings.do.archiveProfile': 'プロファイルをアーカイブしてください。',
@@ -2278,5 +2279,10 @@ export const ja: Catalog = {
   'findings.do.removeSecret': '保存した値かサーバーを削除してください。',
   'findings.do.askPermission': '権限を確認して実行するように変えてください。',
   'findings.do.sandboxOn': 'サンドボックスをオンにしてください。',
-  'findings.do.excludeMcp': 'プロファイルから {server} を外してください。'
+  'findings.do.excludeMcp': 'プロファイルから {server} を外してください。',
+  'findings.do.removeExtension': '共有の拡張機能から削除してください。',
+  'findings.info.claudeOnlyNoUse': 'Claude では {days} 日間、使われた記録がありません。Codex では判断できません。',
+  'findings.info.claudeCannotTell': 'Claude では判断できません。使用を報告するには Claude Code {min} 以降が必要です。',
+  'findings.info.claudeChatCannotTell':
+    'Claude では判断できません。この {days} 日間に Claude のチャットがあり、チャットで入力したスキルやコマンドは報告されません。'
 }

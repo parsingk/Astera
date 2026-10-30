@@ -117,4 +117,27 @@ describe('the findings catalog', () => {
       expect(ko[key], key).toBe(korean)
     }
   })
+
+  // §4.12: the copy the plan gives for an unused skill, command or agent, and its information lines
+  it('keeps the shared skill, command and agent copy', () => {
+    const en = CATALOGS.en.messages as Record<string, string>
+    const ko = CATALOGS.ko.messages as Record<string, string>
+    const copy: Record<string, [string, string]> = {
+      'findings.reason.unusedExtension': ['No recorded use in {days} days.', '{days}일 동안 쓴 기록이 없습니다.'],
+      'findings.do.removeExtension': ['Remove it from the shared extensions.', '공유 확장에서 삭제하세요.'],
+      'findings.info.claudeOnlyNoUse': ['No recorded use in Claude in {days} days. Codex cannot tell.', 'Claude에서 {days}일 동안 쓴 기록이 없습니다. Codex는 알 수 없습니다.'],
+      'findings.info.claudeCannotTell': [
+        'Claude cannot tell: it needs Claude Code {min} or later to report uses.',
+        'Claude는 알 수 없습니다. 사용을 알리려면 Claude Code {min} 이상이 필요합니다.'
+      ],
+      'findings.info.claudeChatCannotTell': [
+        'Claude cannot tell: a Claude chat ran in these {days} days, and a skill or command typed in a chat is not reported.',
+        'Claude는 알 수 없습니다. 최근 {days}일 동안 Claude 대화가 있었고, 대화에서 입력한 스킬이나 명령은 알려지지 않습니다.'
+      ]
+    }
+    for (const [key, [english, korean]] of Object.entries(copy)) {
+      expect(en[key], key).toBe(english)
+      expect(ko[key], key).toBe(korean)
+    }
+  })
 })

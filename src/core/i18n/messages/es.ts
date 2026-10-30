@@ -2293,6 +2293,7 @@ export const es: Catalog = {
   'findings.reason.overBroadBypass': 'Se ejecuta sin comprobar permisos, pero todas las llamadas que hizo en {days} días solo leyeron.',
   'findings.reason.overBroadSandbox': 'Se ejecuta fuera del sandbox, pero en {days} días solo escribió dentro de su carpeta y nunca tocó una carpeta de inicio de sesión.',
   'findings.reason.overBroadMcp': 'Recibe el servidor MCP {server}, pero no lo llamó en {days} días.',
+  'findings.reason.unusedExtension': 'No hay ningún uso registrado en {days} días.',
   'findings.group.profile': 'el perfil de agente {name}',
   'findings.group.account': 'la cuenta {id}',
   'findings.do.archiveProfile': 'Archive el perfil.',
@@ -2308,5 +2309,10 @@ export const es: Catalog = {
   'findings.do.removeSecret': 'Elimine el valor guardado o el servidor.',
   'findings.do.askPermission': 'Ejecútelo comprobando permisos.',
   'findings.do.sandboxOn': 'Active su sandbox.',
-  'findings.do.excludeMcp': 'Deje {server} fuera del perfil.'
+  'findings.do.excludeMcp': 'Deje {server} fuera del perfil.',
+  'findings.do.removeExtension': 'Elimínelo de las extensiones compartidas.',
+  'findings.info.claudeOnlyNoUse': 'No hay ningún uso registrado en Claude en {days} días. Codex no puede saberlo.',
+  'findings.info.claudeCannotTell': 'Claude no puede saberlo: necesita Claude Code {min} o posterior para informar de los usos.',
+  'findings.info.claudeChatCannotTell':
+    'Claude no puede saberlo: en estos {days} días hubo un chat de Claude, y no se informa de una habilidad o un comando escrito en un chat.'
 }
