@@ -2326,6 +2326,7 @@ export const es: Catalog = {
   'findings.observe.off': 'Los hallazgos de uso necesitan Observe activado durante 30 días. Observe está desactivado.',
   'findings.observe.days': 'Los hallazgos de uso necesitan Observe activado durante 30 días. Lleva {days} días activado.',
   'findings.unread': 'No se pudo leer: {sources}',
+  'findings.listSeparator': ', ',
   'findings.none': 'No hay hallazgos.',
   'findings.source.profiles': 'perfiles de agente',
   'findings.source.accounts': 'cuentas',

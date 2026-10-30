@@ -1393,7 +1393,8 @@ elsewhere may take a minute to show; an ignore shows at once.
 **`audit-ignore <key>` sets a finding aside**: `audit` leaves it out, and `audit --all` shows it with `"ignored":true`,
 `ignoredAt` and the `--note` given (one line of at most 200 characters; a longer one or one with a line break is 2).
 Ignoring it again replaces the note. It holds until `audit-unignore <key>`, whatever later happens to its subject. The
-key is the word after the command, as `audit` gives it; a key no current finding has is 4, and nothing is written.
+key is the word after the command, as `audit` gives it (`audit --quiet` prints only the keys, one per line); a key no
+current finding has is 4, and nothing is written.
 `audit-unignore` answers `"removed":false` for a key that was not ignored. The Host keeps the ignores in
 `findings-ignored.json` in the profile; a damaged one refuses both with 6, and a copy of it is kept beside it. **An agent
 session may read the findings**, which hold names and ids only, never a value, a command or a file's contents; the two

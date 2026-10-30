@@ -3,7 +3,11 @@
 // try of its own, so a source it cannot read leaves its field undefined, is logged once naming it, and drops only the
 // findings that need it (§8, Review Focus 1); the rules themselves are pure (core/findings/compute.ts). One report is
 // kept for a minute, so the section, the profile marks and the CLI asking together read the disk once (§8, Review Focus 5).
-// Nothing here acts on a finding (§1, §9): the only file these commands write is the ignore list.
+// Nothing here acts on a finding (§1, §9), and the ignore list is the one thing these commands change for the person. A
+// compute also writes what the readers it calls write as they read: the history stamp the first time
+// (`findings-history.json`, since.ts), the copy a store reader keeps beside a damaged file, and the orphaned token files
+// opening the Runtime registry removes (core/runtimes/registry.ts); the Host's wiring loads the orchestration state as
+// every command does (index.ts).
 //
 // The app and this machine's CLI may read and change the ignores. An agent's shell may read the findings, as it may read
 // the Credentials list: they hold names and ids only (§8). It is refused the ignores, so an agent cannot hide a finding
@@ -91,6 +95,12 @@ const stoppedInWindow = (days: readonly string[], sinceMs: number, nowMs: number
   return days.some((d) => d >= first && d <= last)
 }
 
+/** Throws when a day of the window in this use log's folder stopped at the size (rulings R4-4, R6-7): its uses are
+ *  missing data, so the log is read as unread rather than as complete. */
+const refuseStoppedWindow = (folder: string, sinceMs: number, nowMs: number): void => {
+  if (stoppedInWindow(stoppedDaysIn(folder), sinceMs, nowMs)) throw new Error('a day of the last 30 stopped recording at the size limit')
+}
+
 /**
  * Every input of the findings at `nowMs`, each source read in its own try (§8): one that throws is left undefined, which
  * computeFindings reads as unread, and is logged once naming it. `ignored` is null when the ignore file could not be read,
@@ -132,9 +142,8 @@ export async function gatherFindings(d: FindingsDeps, nowMs: number): Promise<{ 
       }),
       read('extensions', async () => (await readExtensionRegistry(dir)).entries),
       read('credentials', () => readCredentials(dir)),
-      // Ruling R4-4: a day that stopped at the size is missing uses, so the log is not read as complete
       read('credential-uses', async () => {
-        if (stoppedInWindow(stoppedDaysIn(profilePaths(dir).credentialUses), sinceMs, nowMs)) throw new Error('a day of the last 30 stopped recording at the size limit')
+        refuseStoppedWindow(profilePaths(dir).credentialUses, sinceMs, nowMs)
         return latestUsesSince(dir, sinceMs, nowMs)
       }),
       read('runtimes', () => d.openRuntimes()),
@@ -164,10 +173,10 @@ export async function gatherFindings(d: FindingsDeps, nowMs: number): Promise<{ 
           }
           return names
         })
-  // Ruling R6-7, as R4-4. The canonical copies are read only to place a use (§4.12): with no registry there is none, and
-  // the rule that reads them needs the registry too
+  // The canonical copies are read only to place a use (§4.12): with no registry there is none, and the rule that reads
+  // them needs the registry too
   const uses = await read('extension-uses', async () => {
-    if (stoppedInWindow(stoppedDaysIn(profilePaths(dir).extensionUses), sinceMs, nowMs)) throw new Error('a day of the last 30 stopped recording at the size limit')
+    refuseStoppedWindow(profilePaths(dir).extensionUses, sinceMs, nowMs)
     const summary = await summarizeExtensionUses(dir, sinceMs, nowMs)
     return { summary, copies: registry === undefined ? new Map() : await readExtensionCopies(dir, registry) }
   })
@@ -231,7 +240,8 @@ export function createHostFindings(d: FindingsDeps): HostFindings {
 
   const compute = async (atMs: number): Promise<FindingsReport> => {
     const { inputs, ignored } = await gatherFindings(d, atMs)
-    const report = computeFindings(inputs, ignored ?? { version: 1, ignored: {} })
+    // A rule that throws costs its own findings, logged here (ruling R7-1)
+    const report = computeFindings(inputs, ignored ?? { version: 1, ignored: {} }, d.log)
     // The ignore file is no rule's source (compute.ts RuleSource): named here, after the others, when it was unread
     return ignored === null ? { ...report, unread: [...report.unread, 'ignored'] } : report
   }

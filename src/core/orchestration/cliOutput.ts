@@ -260,7 +260,11 @@ const LISTING: Record<string, readonly string[]> = {
   'audit-summary': ['astera agent-profiles list'],
   'policies-rules-edit': ['astera policies show'],
   'policies-rules-remove': ['astera policies show'],
-  'policies-rules-move': ['astera policies show']
+  'policies-rules-move': ['astera policies show'],
+  // **The findings** (lifecycle design §7): an ignore's 404 is a key no current finding has, and `audit` gives the keys.
+  // The noun rule cuts at the first dash (`agent`), so it would offer the guide. `audit-unignore` has no entry: a key that
+  // was not ignored answers 200 with `removed: false`, never 404 (question 1 above)
+  'agent-profiles-audit-ignore': ['astera agent-profiles audit']
 }
 
 /** 없는 id 를 말한 명령에게 줄 목록 명령들. */

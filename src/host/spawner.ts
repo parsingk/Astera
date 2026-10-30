@@ -205,6 +205,9 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
   sandboxWarn?: SandboxWarnSink
   /** The codex version question a sandboxed Codex start asks, shared with the Host's chat sessions (final review I2). */
   codexVersion?: ChatManagerDeps['codexVersion']
+  /** The CLI version probe this spawner warms before its spawns (cliVersionProbe), which the findings read Claude's version
+   *  from (lifecycle design §4.12), so one cache and one `claude --version` serve both. */
+  claudeVersions?: Pick<CliVersionProbe, 'warm' | 'cached'>
   /** The copy of the person's git excludes a sandboxed win32 Codex start writes in this Host's temp folder (one for its
    *  profile, core/sandbox/gitExcludes.ts), shared with the Host's chat sessions. */
   codexExcludes?: CodexExcludes
@@ -985,6 +988,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     sandboxWarn,
     linkLook: nodeLinkLook,
     codexVersion,
+    claudeVersions: cliVersions,
     codexExcludes,
     orchEnvNow: () => orchEnvReady,
     inFlight: () => spawnsInFlight,

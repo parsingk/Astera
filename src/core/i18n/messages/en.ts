@@ -2561,6 +2561,7 @@ export const en: Record<keyof typeof ko, string> = {
   'findings.observe.off': 'Usage findings need Observe on for 30 days. Observe is off.',
   'findings.observe.days': 'Usage findings need Observe on for 30 days. It has been on for {days} days.',
   'findings.unread': 'Could not read: {sources}',
+  'findings.listSeparator': ', ',
   'findings.none': 'No findings.',
   'findings.source.profiles': 'agent profiles',
   'findings.source.accounts': 'accounts',

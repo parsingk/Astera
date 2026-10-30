@@ -3,10 +3,10 @@
 import { describe, it, expect } from 'vitest'
 import { emptyState } from '../orchestration/state'
 import type { AgentProfile } from '../agentProfiles/types'
-import { RULES, computeFindings, type FindingInputs } from './compute'
+import { RULES, computeFindings, type FindingInputs, type RuleSource } from './compute'
 import { finding } from './make'
 import { emptyUse } from './usage'
-import type { Finding, FindingRule, FindingSource, SubjectKind } from './types'
+import type { Finding, FindingRule, FindingSource, InfoLine, SubjectKind } from './types'
 import type { IgnoredFile } from './ignored'
 
 const NOW = Date.parse('2026-10-30T00:00:00.000Z')
@@ -268,7 +268,7 @@ describe('computeFindings', () => {
 
   it('null is a value and undefined is unread (ruling R-P1)', () => {
     const row = { needs: ['policy', 'cli-version'] as const, run: () => [made('cli', 'claude-terminal', 'coverage-gap')] }
-    withRow({ needs: [...row.needs], run: row.run }, () => {
+    withRow({ name: 'test', needs: [...row.needs], run: row.run }, () => {
       // No policy file and an unknown Claude version are values the row runs on
       const read = computeFindings({ ...BASE, policy: null, observe: { on: false, days: 0 }, claudeVersion: null }, NONE)
       expect(read.findings).toHaveLength(1)
@@ -318,7 +318,7 @@ describe('computeFindings', () => {
       made('profile', 'a', 'unused-profile', 'ap_a'),
       made('extension', 'Browser', 'unmanaged-credential-reference')
     ]
-    const r = withRow({ needs: [], run: () => shuffled }, () => computeFindings(BASE, NONE))
+    const r = withRow({ name: 'test', needs: [], run: () => shuffled }, () => computeFindings(BASE, NONE))
     expect(r.findings.map((f) => `${f.subject.kind} ${f.subject.name} ${f.rule}`)).toEqual([
       'profile a unused-profile',
       'profile a failing-profile',
@@ -333,5 +333,47 @@ describe('computeFindings', () => {
       'run Nightly #2 token-spike',
       'cli codex-chat coverage-gap'
     ])
+  })
+
+  // Ruling R7-1: a malformed entry a rule cannot read costs that rule's findings, never the report
+  it('a row that throws drops only its own findings and info, names its sources once and logs one line', () => {
+    const logs: string[] = []
+    const failing = {
+      name: 'failing-row',
+      needs: ['runtimes', 'runtimes'] as RuleSource[],
+      run: (): Finding[] => {
+        throw new TypeError("Cannot read properties of undefined (reading 'join')")
+      }
+    }
+    const kept = { name: 'kept-row', needs: [] as RuleSource[], run: () => [made('runtime', 'lab', 'stale-runtime')] }
+    const inputs: FindingInputs = { ...BASE, runtimes: [] }
+    const r = withRow(kept, () => withRow(failing, () => computeFindings(inputs, NONE, (l) => logs.push(l))))
+    expect(r.findings.map((f) => f.key)).toEqual(['stale-runtime:runtime_lab'])
+    expect(r.unread.filter((s) => s === 'runtimes')).toEqual(['runtimes'])
+    expect(logs).toEqual(["findings: the failing-row rule failed, so its findings are left out (Cannot read properties of undefined (reading 'join'))"])
+    // Without it the source was read
+    expect(withRow(kept, () => computeFindings(inputs, NONE)).unread).not.toContain('runtimes')
+  })
+
+  it('a row whose information lines throw drops its findings too, and a thrown value that is no error is not logged', () => {
+    const logs: string[] = []
+    const row = {
+      name: 'info-row',
+      needs: ['runtimes'] as RuleSource[],
+      run: () => [made('runtime', 'lab', 'stale-runtime')],
+      info: (): InfoLine[] => {
+        throw 'sk-live-secret'
+      }
+    }
+    const r = withRow(row, () => computeFindings({ ...BASE, runtimes: [] }, NONE, (l) => logs.push(l)))
+    expect(r.findings).toEqual([])
+    expect(r.info).toEqual([])
+    expect(r.unread).toContain('runtimes')
+    expect(logs).toEqual(['findings: the info-row rule failed, so its findings are left out (not an error)'])
+  })
+
+  it('names every row for the log', () => {
+    expect(RULES.map((row) => row.name).filter((n) => n === '')).toEqual([])
+    expect(new Set(RULES.map((row) => row.name)).size).toBe(RULES.length)
   })
 })

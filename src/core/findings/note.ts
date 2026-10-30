@@ -33,8 +33,13 @@ export function observeNote(r: Pick<FindingsReport, 'observe' | 'unread'>): Mess
   return r.observe.days < OBSERVE_WINDOW_DAYS ? { key: 'findings.observe.days', params: { days: r.observe.days } } : null
 }
 
-/** The line naming each source that could not be read (§8), in `lang`, or null when every one was. */
+/** A source's plain name in `lang`; one this reader does not know (a newer Host's) is shown as it was sent, never as
+ *  nothing. */
+const sourceName = (lang: Lang, s: FindingSource): string => (Object.hasOwn(SOURCE_KEYS, s) ? t(lang, SOURCE_KEYS[s]) : s)
+
+/** The line naming each source that could not be read (§8), in `lang` and listed as it lists, or null when every one
+ *  was. */
 export function unreadLine(lang: Lang, unread: readonly FindingSource[]): string | null {
   if (unread.length === 0) return null
-  return t(lang, 'findings.unread', { sources: unread.map((s) => t(lang, SOURCE_KEYS[s])).join(', ') })
+  return t(lang, 'findings.unread', { sources: unread.map((s) => sourceName(lang, s)).join(t(lang, 'findings.listSeparator')) })
 }

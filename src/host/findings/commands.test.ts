@@ -28,6 +28,8 @@ import { STARTER_POLICY } from '../../core/audit/policy'
 import { emptyState } from '../../core/orchestration/state'
 import type { RuntimeProfile } from '../../core/runtimes/registry'
 import type { Account } from '../../core/types'
+import { RULES, type RuleSource } from '../../core/findings/compute'
+import type { Finding } from '../../core/findings/types'
 import { FINDINGS_COMMANDS, createHostFindings, gatherFindings, type FindingsDeps } from './commands'
 
 const NOW = Date.parse('2026-10-30T12:00:00.000Z')
@@ -141,6 +143,38 @@ describe('the findings commands', () => {
       expect(logs.filter((l) => l.startsWith(`findings: ${source} could not be read`)), source).toHaveLength(1)
     expect(logs.find((l) => l.startsWith('findings: account-mcp'))).toMatch(/acc1/)
     expect(logs.join('\n')).not.toContain('sk-live')
+  })
+
+  // Ruling R7-1: a rule that cannot read an entry costs its own findings, and the report still answers
+  it('a rule that throws drops only its own findings: 200, the others kept, its sources named, one log line', async () => {
+    const failing = {
+      name: 'failing-row',
+      needs: ['profiles'] as RuleSource[],
+      run: (): Finding[] => {
+        throw new TypeError("Cannot read properties of undefined (reading 'join')")
+      }
+    }
+    RULES.push(failing)
+    try {
+      const r = await audit(createHostFindings(deps().d))
+      expect(r.status).toBe(200)
+      expect(keysOf(r)).toEqual([KEY])
+      expect(body(r).unread).toEqual(['profiles'])
+      expect(logs.filter((l) => l.includes('rule failed'))).toEqual([
+        "findings: the failing-row rule failed, so its findings are left out (Cannot read properties of undefined (reading 'join'))"
+      ])
+    } finally {
+      RULES.splice(RULES.indexOf(failing), 1)
+    }
+  })
+
+  it('a profile entry the store keeps but a rule cannot read still answers 200 with the rest', async () => {
+    await fs.writeFile(profilePaths(dir).agentProfiles, JSON.stringify({ version: 1, profiles: [{ id: 'ap_bad' }] }))
+    const r = await audit(createHostFindings(deps().d))
+    expect(r.status).toBe(200)
+    expect(keysOf(r)).toContain(KEY)
+    expect(body(r).unread).toContain('profiles')
+    expect(logs.some((l) => l.includes('rule failed'))).toBe(true)
   })
 
   it('logs a parse error without the text it quotes', async () => {

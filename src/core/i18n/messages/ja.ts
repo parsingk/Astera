@@ -2296,6 +2296,7 @@ export const ja: Catalog = {
   'findings.observe.off': '使用記録による項目は、Observe を 30 日間オンにしておく必要があります。いまは Observe がオフです。',
   'findings.observe.days': '使用記録による項目は、Observe を 30 日間オンにしておく必要があります。これまで {days} 日間オンでした。',
   'findings.unread': '読み取れなかったもの: {sources}',
+  'findings.listSeparator': '、',
   'findings.none': '見つかった項目はありません。',
   'findings.source.profiles': 'エージェントプロファイル',
   'findings.source.accounts': 'アカウント',

@@ -958,9 +958,10 @@ async function main(): Promise<void> {
   // The findings (lifecycle design §6, §7, §8): computed on request from what this Host holds, kept a minute, and the
   // ignore list. The history stamp is written at this start (plan ruling 2), so the usage findings count from the first
   // run of this release, not from the first time someone asks. The orchestration state is loaded as every command loads
-  // it; the Claude version is the probe's, warmed first so nothing waits on a synchronous ask
+  // it; the Claude version is the spawner's probe, warmed first so nothing waits on a synchronous ask (one cache and one
+  // `claude --version` for both; a Host with no spawner asks the process's one, which is the same per platform)
   void readFindingsSince(profileDir, Date.now(), { log: (m) => log.write(m) })
-  const claudeVersions = cliVersionProbe(process.platform)
+  const claudeVersions = spawner?.claudeVersions ?? cliVersionProbe(process.platform)
   const findings = createHostFindings({
     profileDir,
     homeDir: os.homedir(),

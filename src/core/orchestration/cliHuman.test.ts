@@ -1031,6 +1031,14 @@ describe('humanFor — agent-profiles audit', () => {
     expect(humanFor('agent-profiles-audit', report())).toBe('No findings.')
   })
 
+  // As other commands print ids under --quiet: the key each finding is ignored by, the ignored ones too under --all
+  it('--quiet prints each finding key, one per line', () => {
+    expect(quietFor(report({ findings: [unused, { ...stale, ignored: true }] }), 'agent-profiles-audit')).toBe(['unused-profile:ap_1', 'stale-runtime:rt_1'].join('\n'))
+    expect(quietFor(report(), 'agent-profiles-audit')).toBe('')
+    // Any other command reads ids as before
+    expect(quietFor({ findings: [unused] })).toBe('')
+  })
+
   it('an ignore and an unignore say what changed', () => {
     expect(humanFor('agent-profiles-audit-ignore', { key: 'stale-runtime:rt_1' })).toBe('ignored stale-runtime:rt_1')
     expect(humanFor('agent-profiles-audit-unignore', { key: 'stale-runtime:rt_1', removed: true })).toBe('brought back stale-runtime:rt_1')

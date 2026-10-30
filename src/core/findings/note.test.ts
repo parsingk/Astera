@@ -1,6 +1,7 @@
 // The lines a findings report says beside its findings (lifecycle design §4, §8), read the same by the CLI and the section.
 import { describe, it, expect } from 'vitest'
 import { observeNote, unreadLine } from './note'
+import type { FindingSource } from './types'
 
 describe('observeNote', () => {
   it('says Observe is off, or how many days it has been on, until it has had 30', () => {
@@ -21,5 +22,16 @@ describe('unreadLine', () => {
     expect(unreadLine('en', [])).toBeNull()
     expect(unreadLine('en', ['profiles', 'cli-version'])).toBe('Could not read: agent profiles, Claude Code version')
     expect(unreadLine('ko', ['profiles'])).toBe('읽지 못한 것: 에이전트 프로필')
+  })
+
+  it('lists them as each language does', () => {
+    expect(unreadLine('ko', ['profiles', 'accounts'])).toBe('읽지 못한 것: 에이전트 프로필, 계정')
+    expect(unreadLine('ja', ['profiles', 'accounts'])).toBe('読み取れなかったもの: エージェントプロファイル、アカウント')
+    expect(unreadLine('es', ['profiles', 'accounts'])).toBe('No se pudo leer: perfiles de agente, cuentas')
+  })
+
+  // A Host newer than this reader may name a source it does not know: it is shown as sent, never as nothing
+  it('names a source it does not know as it was sent', () => {
+    expect(unreadLine('en', ['brand-new' as FindingSource, 'profiles'])).toBe('Could not read: brand-new, agent profiles')
   })
 })

@@ -93,8 +93,10 @@ const FIELDS: Record<RuleSource, ReadonlyArray<keyof FindingInputs>> = {
 }
 
 /** One rule: what it needs read, and the findings it raises. `run` and `info` may take every source in `needs` as read.
- *  `info`: the information lines it gives instead of a finding where a CLI cannot tell (§4.12). */
+ *  `info`: the information lines it gives instead of a finding where a CLI cannot tell (§4.12). `name`: how the Host's log
+ *  names the row when it throws (ruling R7-1), the rule it raises, and which part for a rule split over rows. */
 export interface RuleRow {
+  name: string
   needs: RuleSource[]
   run: (i: FindingInputs) => Finding[]
   info?: (i: FindingInputs) => InfoLine[]
@@ -102,22 +104,27 @@ export interface RuleRow {
 
 /** Every rule (§4), each with the sources it needs. */
 export const RULES: RuleRow[] = [
-  { needs: ['profiles', 'orchestration'], run: unusedProfileFindings },
-  { needs: ['profiles'], run: duplicateProfileFindings },
-  { needs: ['profiles', 'accounts', 'extensions'], run: brokenProfileFindings },
-  { needs: ['profiles', 'orchestration'], run: brokenWorkFindings },
-  { needs: ['profiles', 'orchestration'], run: failingProfileFindings },
-  { needs: ['orchestration', 'tokens'], run: tokenSpikeFindings },
-  { needs: ['extensions', 'records', 'policy'], run: unusedMcpFindings },
-  { needs: ['policy', 'profiles', 'accounts'], run: coverageGapFindings },
-  { needs: ['runtimes'], run: staleRuntimeFindings },
-  { needs: ['extensions', 'credentials'], run: unmanagedReferenceFindings },
-  { needs: ['extensions', 'credentials', 'credential-uses'], run: staleCredentialFindings },
+  { name: 'unused-profile', needs: ['profiles', 'orchestration'], run: unusedProfileFindings },
+  { name: 'duplicate-profile', needs: ['profiles'], run: duplicateProfileFindings },
+  { name: 'broken-reference (profiles)', needs: ['profiles', 'accounts', 'extensions'], run: brokenProfileFindings },
+  { name: 'broken-reference (Jobs and Tasks)', needs: ['profiles', 'orchestration'], run: brokenWorkFindings },
+  { name: 'failing-profile', needs: ['profiles', 'orchestration'], run: failingProfileFindings },
+  { name: 'token-spike', needs: ['orchestration', 'tokens'], run: tokenSpikeFindings },
+  { name: 'unused-mcp', needs: ['extensions', 'records', 'policy'], run: unusedMcpFindings },
+  { name: 'coverage-gap', needs: ['policy', 'profiles', 'accounts'], run: coverageGapFindings },
+  { name: 'stale-runtime', needs: ['runtimes'], run: staleRuntimeFindings },
+  { name: 'unmanaged-credential-reference', needs: ['extensions', 'credentials'], run: unmanagedReferenceFindings },
+  { name: 'stale-credential', needs: ['extensions', 'credentials', 'credential-uses'], run: staleCredentialFindings },
   // §4.10's lines each need only their own sources, so one unread drops only the lines that read it (ruling R5-2)
-  { needs: ['profiles', 'accounts', 'records', 'policy', 'settings'], run: overBroadBypassFindings },
-  { needs: ['profiles', 'accounts', 'records', 'policy'], run: overBroadSandboxFindings },
-  { needs: ['profiles', 'accounts', 'records', 'policy', 'extensions', 'account-mcp'], run: overBroadMcpFindings },
-  { needs: ['extensions', 'extension-uses', 'policy', 'cli-version'], run: extensionUseFindings, info: extensionUseInfo }
+  { name: 'over-broad-profile (bypass)', needs: ['profiles', 'accounts', 'records', 'policy', 'settings'], run: overBroadBypassFindings },
+  { name: 'over-broad-profile (sandbox)', needs: ['profiles', 'accounts', 'records', 'policy'], run: overBroadSandboxFindings },
+  { name: 'over-broad-profile (mcp)', needs: ['profiles', 'accounts', 'records', 'policy', 'extensions', 'account-mcp'], run: overBroadMcpFindings },
+  {
+    name: 'unused-skill, unused-command, unused-agent',
+    needs: ['extensions', 'extension-uses', 'policy', 'cli-version'],
+    run: extensionUseFindings,
+    info: extensionUseInfo
+  }
 ]
 
 /** The order the section groups subjects in (§7): profiles first, a CLI's coverage last. */
@@ -161,7 +168,13 @@ function withIgnore(f: Finding, file: IgnoredFile): Finding {
 
 const isUnread = (i: FindingInputs, s: RuleSource): boolean => FIELDS[s].some((field) => i[field] === undefined)
 
-export function computeFindings(i: FindingInputs, ignored: IgnoredFile): FindingsReport {
+/**
+ * The report. `log` hears a row that threw (ruling R7-1): an entry a source holds that the rule cannot read (a profile with
+ * no accounts list, in a store that parses) costs that row's findings and information lines, whose sources `unread` then
+ * names as it names a source that could not be read, and every other row is kept. The line names the row and the error's
+ * own words, never the value thrown nor anything the row read.
+ */
+export function computeFindings(i: FindingInputs, ignored: IgnoredFile, log?: (line: string) => void): FindingsReport {
   const unread = new Set<RuleSource>()
   // The report carries the Observe history whatever the rules need, so an unread policy is always named: an `observe`
   // that could not be read must not read as "Observe is off" (Review Focus 1)
@@ -174,8 +187,18 @@ export function computeFindings(i: FindingInputs, ignored: IgnoredFile): Finding
       for (const s of missing) unread.add(s)
       continue
     }
-    for (const f of row.run(i)) found.push(f)
-    for (const l of row.info?.(i) ?? []) info.push(l)
+    let rowFound: Finding[]
+    let rowInfo: InfoLine[]
+    try {
+      rowFound = row.run(i)
+      rowInfo = row.info?.(i) ?? []
+    } catch (e) {
+      for (const s of row.needs) unread.add(s)
+      log?.(`findings: the ${row.name} rule failed, so its findings are left out (${e instanceof Error ? e.message : 'not an error'})`)
+      continue
+    }
+    for (const f of rowFound) found.push(f)
+    for (const l of rowInfo) info.push(l)
   }
   return {
     findings: found.map((f) => withIgnore(f, ignored)).sort(byPlace),

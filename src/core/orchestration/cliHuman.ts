@@ -742,8 +742,15 @@ export function humanFor(
 /** `--quiet` — id 만, 한 줄에 하나. `for j in $(astera jobs list --quiet)` 가 jq 없이 돌게 한다.
  *
  *  **id 가 없으면 아무것도 내지 않는다.** status 나 version 처럼 id 가 없는 답이 있고, 그때
- *  없는 것을 지어내는 것보다 빈 줄이 정직하다. */
-export function quietFor(data: Record<string, unknown>): string {
+ *  없는 것을 지어내는 것보다 빈 줄이 정직하다.
+ *
+ *  `cmd`: the findings (lifecycle design §7) are named by their `key`, the id `audit-ignore` takes, so `agent-profiles
+ *  audit` prints each finding's key, the ignored ones too under `--all`, as the Host left them in. */
+export function quietFor(data: Record<string, unknown>, cmd?: string): string {
+  if (cmd === 'agent-profiles-audit')
+    return asList(data, 'findings')
+      .flatMap((f) => (typeof f.key === 'string' ? [f.key] : []))
+      .join('\n')
   const ids: string[] = []
   const take = (v: unknown): void => {
     if (v === null || typeof v !== 'object') return

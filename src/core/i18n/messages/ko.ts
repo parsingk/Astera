@@ -2815,6 +2815,7 @@ export const ko = {
   'findings.observe.off': '사용 기록으로 찾는 항목은 Observe를 30일 켜 두어야 합니다. 지금 Observe가 꺼져 있습니다.',
   'findings.observe.days': '사용 기록으로 찾는 항목은 Observe를 30일 켜 두어야 합니다. 지금까지 {days}일 켜져 있었습니다.',
   'findings.unread': '읽지 못한 것: {sources}',
+  'findings.listSeparator': ', ',
   'findings.none': '찾은 것이 없습니다.',
   'findings.source.profiles': '에이전트 프로필',
   'findings.source.accounts': '계정',
