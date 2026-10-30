@@ -207,6 +207,20 @@ describe('enforceVerdict', () => {
     for (const command of lines) expect(verdict(claude('Bash', { command }, { cwd: work })), command).toMatchObject(githubWrite)
   })
 
+  // R-F8 list, A3: past the depth scripts are read to, the line env -S splits is not read, so the call is unknown and
+  // `otherwise: deny` holds it, as it holds bash -c there, even where a rule allows process.execute
+  it('holds an env -S too deep to read by otherwise, even with process.execute allowed', () => {
+    const work = path.resolve('/work/proj')
+    const policy: AuditPolicy = { ...STARTER_POLICY, otherwise: 'deny', rules: [...STARTER_POLICY.rules, { id: 'allow-exec', effect: 'allow', action: 'process.execute' }] }
+    const lines = [
+      `bash -c "bash -c \\"env -S 'git push'\\""`,
+      `bash -c "xargs env -S 'git push'"`,
+      `bash -c "watch \\"env -S 'git push'\\""`,
+      `bash -c "bash -c \\"bash -c 'git push'\\""`
+    ]
+    for (const command of lines) expect(verdict(claude('Bash', { command }, { cwd: work }), policy), command).toMatchObject({ deny: true, ruleId: 'otherwise' })
+  })
+
   it('fails closed on a script piped into a shell sudo starts', () => {
     const work = path.resolve('/work/proj')
     for (const command of ['cat script.sh | sudo -s', "echo 'git push' | sudo -u root -s", "echo 'rm -rf /x' | sudo -i"])

@@ -1286,7 +1286,13 @@ function expand(cmds: Cmd[], flavor: Flavor, depth = 0): { commands: Cmd[]; synt
   /** One command, or the commands it runs (a shell's script, what xargs runs), put in `out`. */
   function expandOne(cmd: Cmd): void {
     if (cmd.words.length === 0 && cmd.out.length === 0 && cmd.inputs === undefined && cmd.assigned === undefined && cmd.listed === undefined) return
-    const script = depth < 2 && cmd.words.length > 0 ? scriptOf(cmd.words) : null
+    const script = cmd.words.length > 0 ? scriptOf(cmd.words) : null
+    if (script !== null && depth >= 2) {
+      // Past the depth scripts are read to, the script is not read, so what the command runs is not known: a shell's -c,
+      // and the line `env -S` splits, which would else leave env a program it knows (R-F8 list, A3)
+      out.push({ ...cmd, unread: true })
+      return
+    }
     if (script === null) {
       const behind = cmd.words.length > 0 ? commandsBehind(cmd, flavor, depth) : []
       if (behind.length === 0) out.push(cmd)

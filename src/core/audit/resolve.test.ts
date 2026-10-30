@@ -3019,6 +3019,28 @@ describe('shell: the options of env, doas, command and nohup', () => {
     expect(bash("env -S'git push'")).toMatchObject({ action: 'git.remote.write' })
   })
 
+  // R-F8 list, A3: past the depth scripts are read to, the line env -S splits is not read, so the command is not known, as
+  // a shell's -c is not there; one level up it is read
+  it.each([
+    `bash -c "bash -c \\"env -S 'git push'\\""`,
+    `bash -c "bash -c \\"env -S 'rm -rf ../x'\\""`,
+    `bash -c "bash -c \\"env -iS 'git push'\\""`,
+    `bash -c "bash -c \\"env --split-string='git push'\\""`,
+    `bash -c "xargs env -S 'git push'"`,
+    `bash -c "find . -exec env -S 'git push' \\\\;"`,
+    `bash -c "watch \\"env -S 'git push'\\""`,
+    `echo "$(bash -c "bash -c \\"env -S 'git push'\\"")"`,
+    `bash -c "bash -c \\"bash -c 'git push'\\""`
+  ])('%s is unknown: the line it runs is too deep to read', (line) => {
+    expect(bash(line)).toMatchObject({ action: 'process.execute', confidence: 'unknown' })
+  })
+
+  it('reads env -S one script level down, and a command env runs at the next level', () => {
+    expect(bash(`bash -c "env -S 'git push'"`)).toMatchObject({ action: 'git.remote.write', confidence: 'high' })
+    expect(acts(bash(`xargs env -S 'git push'`))).toContain('git.remote.write')
+    expect(bash(`bash -c "bash -c \\"env -i git push\\""`)).toMatchObject({ action: 'git.remote.write' })
+  })
+
   it('takes command -v, command -V and doas -C for what they are: they run nothing', () => {
     expect(bash('command -v git push')).toMatchObject({ action: 'process.execute', target: 'command' })
     expect(bash('command -V rm')).toMatchObject({ action: 'process.execute', target: 'command' })
