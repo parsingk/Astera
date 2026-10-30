@@ -64,11 +64,25 @@ describe('sensitiveNameOf', () => {
     }
   })
 
-  it('returns null for a path outside every entry', () => {
+  it('returns null for a path outside every entry that holds none of them', () => {
     expect(nameOf(under('notes.txt'))).toBeNull()
-    expect(nameOf(home)).toBeNull()
+    expect(nameOf(under('proj'))).toBeNull()
+    expect(nameOf(under('.sshx'))).toBeNull()
     expect(nameOf(path.join(os.tmpdir(), 'other', '.ssh', 'id_rsa'))).toBeNull()
     expect(sensitiveNameOf(under('.ssh', 'id_rsa'), [], process.platform)).toBeNull()
+  })
+
+  // Fix round 3, O1: what reads or copies the whole of a folder that holds login folders reads them
+  it('names the first entry a path holds, in the list’s order: the home, a folder above it, the root', () => {
+    expect(nameOf(home)).toBe('.ssh')
+    expect(nameOf(home + path.sep)).toBe('.ssh')
+    expect(nameOf(os.tmpdir())).toBe('.ssh')
+    expect(nameOf(path.parse(home).root)).toBe('.ssh')
+    // Only the ones it holds: a folder holding gh's alone names gh
+    const linux = sensitiveEntries('linux', {}, home)
+    expect(sensitiveNameOf(under('.config'), linux, 'linux')).toBe('gh')
+    expect(sensitiveNameOf(under('.config').toUpperCase(), linux, 'linux')).toBeNull()
+    expect(sensitiveNameOf(under('.CONFIG'), sensitiveEntries('darwin', {}, home), 'darwin')).toBe('gh')
   })
 })
 
@@ -102,8 +116,11 @@ describe('homeSensitiveNameOf', () => {
 
   it('returns null for a home path outside every entry, and for what is no home spelling', () => {
     expect(homeSensitiveNameOf('~/notes.txt', entries, home)).toBeNull()
-    expect(homeSensitiveNameOf('~', entries, home)).toBeNull()
+    expect(homeSensitiveNameOf('~/proj', entries, home)).toBeNull()
     expect(homeSensitiveNameOf('~/.ssh/../notes.txt', entries, home)).toBeNull()
+    // The home itself holds them all (fix round 3, O1)
+    expect(homeSensitiveNameOf('~', entries, home)).toBe('.ssh')
+    expect(homeSensitiveNameOf('$HOME', entries, home)).toBe('.ssh')
     // Someone else's home, another variable, a longer name, and an absolute path are not this home
     expect(homeSensitiveNameOf('~user/.ssh/id_rsa', entries, home)).toBeNull()
     expect(homeSensitiveNameOf('$HOMEDIR/.ssh/id_rsa', entries, home)).toBeNull()

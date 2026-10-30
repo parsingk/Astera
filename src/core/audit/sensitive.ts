@@ -47,15 +47,19 @@ function rootsOf(entries: readonly DenyEntry[], fold: boolean): Root[] {
   return (kept[key] ??= entries.map((e) => ({ at: comparable(e.path, fold), folder: e.kind === 'folder', name: shortName(e.path) })))
 }
 
-/** The short name of the E6 location an absolute path is (a file entry) or is in or under (a folder entry), else null.
- *  Windows and macOS name files without regard to case; Linux does not. */
+/** The short name of the E6 location an absolute path is (a file entry) or is in or under (a folder entry), else, for a
+ *  path that holds some of them (the home, `/`), the first it holds in the list's order: what reads or copies the whole
+ *  of it reads them too. Null for a path that is neither. Windows and macOS name files without regard to case; Linux
+ *  does not. */
 export function sensitiveNameOf(absPath: string, entries: readonly DenyEntry[], platform: NodeJS.Platform): string | null {
   const fold = platform === 'win32' || platform === 'darwin'
   const at = comparable(absPath, fold)
-  for (const root of rootsOf(entries, fold)) {
+  const roots = rootsOf(entries, fold)
+  for (const root of roots) {
     if (at === root.at || (root.folder && at.startsWith(`${root.at}/`))) return root.name
   }
-  return null
+  const holder = at.endsWith('/') ? at : `${at}/` // `/` and a drive's root end in one already
+  return roots.find((root) => root.at.startsWith(holder))?.name ?? null
 }
 
 /** A POSIX shell's home (`~`, `$HOME`, `${HOME}`), case and all. */

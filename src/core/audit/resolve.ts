@@ -496,6 +496,15 @@ interface Cmd {
   out: string[]
   /** The files its input is redirected from (`<`), read for the login folder they are in (lifecycle design §4.10). */
   inputs?: string[]
+  /** Set by splitLine on a command of a POSIX line inside loops, conditionals or brace groups: their ids, outermost first,
+   *  up to MAX_GROUPS deep. A `cd` in one moves the commands after it, unlike a subshell's. */
+  within?: number[]
+  /** Set by splitLine on the redirection after a loop, conditional or brace group ends (`done < f`, `} < f`): the id of the
+   *  one it is the input of, which the shell opens where that began, before its commands run. */
+  inputsOf?: number
+  /** Set by stripPrefix: the values its leading assignments give (`KEY=~/.ssh/k make`), read for the login folder they name
+   *  alone (lifecycle design §4.10). */
+  assigned?: string[]
   /** It began with PowerShell's call operator `&`, so its first word is a program however it is spelled. */
   call: boolean
   /** For each word, whether it was quoted. A quoted word is a value, so it is never a program or a subcommand shown. */
@@ -541,6 +550,12 @@ interface Facts {
   also?: Facts[]
 }
 
+/** The words that open and close a POSIX loop or conditional, and those that may stand before a command's own first word,
+ *  so an opener after them is still one (`do if …`). */
+const OPENERS = new Set(['while', 'until', 'for', 'select', 'if', 'case'])
+const CLOSERS = new Set(['done', 'fi', 'esac'])
+const LEADERS = new Set(['do', 'then', 'else', 'elif', '!', 'time', 'while', 'until', 'if'])
+
 /** Commands that change nothing a rule cares about, so a line is not headlined by its leading `cd` or its `[ -f x ]`. */
 const PASSIVE = new Set(['cd', 'chdir', 'pushd', 'popd', 'set-location', 'sl', '[', '[[', 'test', 'true', 'false'])
 /** Commands after which a relative path is relative to somewhere else. */
@@ -551,37 +566,55 @@ const PRODUCERS = new Set(['echo', 'printf', 'cat', 'write-output', 'write-host'
  *  own row. */
 const PRINTERS = new Set(['echo', 'printf', 'write-output', 'write-host'])
 
+/** A variable as the shells spell it: `$X`, `$1`, `$@`, `${X}`, `$env:X`, `%X%`. A `${` reads to its `}` and no further
+ *  than the next `$`, so a run of them is read once. */
+const VARIABLE_SPELLING = String.raw`(?:\$(?:\w+|[@*]|\{[^}\s$]*\}|env:\w+)|%[^%\s]+%)`
 /** A word that starts as a path does: `~`, `./`, `../`, a separator, a drive, or a variable a separator follows (`$X/`,
  *  `${X}\`, `$env:X\`, `%X%\`), as the controller's ruling R2-3 has it. A bare variable (`$N`, `$BRANCH`, `$null`) is a
- *  value as often as a path, and a home spelling with nothing after it is the home, in no login folder. */
-const PATH_START = /^(?:~|\.{1,2}[\\/]|[\\/]|[A-Za-z]:[\\/]|\$[A-Za-z_]\w*[\\/]|\$\{[^}\s]*\}[\\/]|\$env:\w+[\\/]|%[^%\s]+%[\\/])/i
+ *  value as often as a path; a bare home spelling (`$HOME`) is the home, which homePathOf reads. */
+const PATH_START = new RegExp(String.raw`^(?:~|\.{1,2}[\\/]|[\\/]|[A-Za-z]:[\\/]|${VARIABLE_SPELLING}[\\/])`, 'i')
+/** A variable a separator follows, anywhere in a word (`src/$X/y`, `-i$HOME/.ssh/id`). */
+const VARIABLE_FOLDER = new RegExp(String.raw`${VARIABLE_SPELLING}[\\/]`, 'i')
 /** A flag with its value in the same word: `--key=v`, `-Path:v`. */
 const FLAG_VALUE = /^--?[A-Za-z][\w-]*[=:](.+)$/
+/** A `NAME=value` word with no dash (make's `KEY=v`, ssh's `-o IdentityFile=v`): its value. */
+const NAMED_VALUE = /^[A-Za-z_][\w.-]*=(.+)$/
 /** The flags whose value is a mount (docker's and podman's): `-v host:container[:mode]`, `--mount source=host,…`. */
 const MOUNT_FLAGS = new Set(['-v', '--volume', '--mount'])
 
-/** The host's side of a mount: the part of `-v` before its first colon that is not a drive's (`C:\x:/y`), or a
- *  `--mount` list's `source=`/`src=`. */
+/** The host's side of a mount: the part of `-v` before its first colon that is not a drive's (`C:\x:/y`) or PowerShell's
+ *  `$env:` (`$env:USERPROFILE\.ssh:/y`, `${env:X}\y:/z`), or a `--mount` list's `source=`/`src=`. */
 function hostSide(spec: string): string {
   const source = /(?:^|,)(?:source|src)=([^,]*)/.exec(spec)
-  return source !== null ? source[1] : (/^(?:[A-Za-z]:)?[^:]*/.exec(spec)?.[0] ?? spec)
+  return source !== null ? source[1] : (/^(?:\$\{env:[^}]*\}|\$env:|[A-Za-z]:)?[^:]*/i.exec(spec)?.[0] ?? spec)
+}
+
+/** Whether a word may name a file: it starts as a path does, is a home spelling, or holds a separator, no space and no
+ *  remote's `x:` (`main:src/x.ts`), and any variable in it has a separator after it (`date +%Y/%m/%d` names none). */
+function mayNameFile(w: string, ps: boolean): boolean {
+  if (PATH_START.test(w) || homePathOf(w, '/', ps) !== null) return true
+  return /[\\/]/.test(w) && !/\s/.test(w) && !REMOTE_PATH.test(w) && (!UNFOLLOWABLE.test(w) || VARIABLE_FOLDER.test(w))
+}
+
+/** The ways one word may name a file: as it is, a flag's or a `NAME=`'s value without its name, a `@file` (curl's, among
+ *  others) without its `@`; after a mount flag, also by the mount's host side. Each is placed, and the first folder found
+ *  is the word's. */
+function readingsOf(word: string, before: string): string[] {
+  const plain = (FLAG_VALUE.exec(word)?.[1] ?? NAMED_VALUE.exec(word)?.[1] ?? word).replace(/^@(?=\S)/, '')
+  const mount = MOUNT_FLAGS.has(before) ? word : /^--(?:volume|mount)=(.*)$/.exec(word)?.[1]
+  return mount === undefined ? [plain] : [plain, hostSide(mount)]
 }
 
 /**
- * The words of a command that may name a file, for a command whose facts placed none (lifecycle design §4.10): each that
- * starts as a path does (PATH_START), or holds a separator and no space, no variable and no remote's `x:` (a message, a
- * pattern, `main:src/x.ts`). A flag's value is read without its flag, a `@file` (curl's, among others) without its `@`, and
- * a mount by its host's side. They are placed for the login folder they name alone, so one taken wrongly can only mark a
- * call as touching one, which holds a suggestion back.
+ * The words of a command that may name a file, for a command whose facts placed none (lifecycle design §4.10), each in
+ * every reading of it (readingsOf, mayNameFile). They are placed for the login folder they name alone, so one taken
+ * wrongly can only mark a call as touching one, which holds a suggestion back.
  */
 function looseWords(cmd: Cmd): string[] {
+  const ps = cmd.ps === true
   const found: string[] = []
-  const words = cmd.words
-  for (let i = 1; i < words.length; i++) {
-    const word = words[i]
-    const mount = MOUNT_FLAGS.has(words[i - 1]) ? word : /^--(?:volume|mount)=(.*)$/.exec(word)?.[1]
-    const w = mount !== undefined ? hostSide(mount) : (FLAG_VALUE.exec(word)?.[1] ?? word).replace(/^@(?=\S)/, '')
-    if (PATH_START.test(w) || (/[\\/]/.test(w) && !/\s/.test(w) && !UNFOLLOWABLE.test(w) && !REMOTE_PATH.test(w))) found.push(w)
+  for (let i = 1; i < cmd.words.length; i++) {
+    for (const w of readingsOf(cmd.words[i], cmd.words[i - 1])) if (mayNameFile(w, ps)) found.push(w)
   }
   return found
 }
@@ -613,10 +646,12 @@ function resolveShell(rec: Record<string, unknown>, at: Ctx, flavor: Flavor): Re
   let lead: ResolvedAction | undefined
   const held: Array<{ id: number; base: string | null }> = [] // where the line was outside each subshell open now, which a cd in it leaves
   const groupInputs: Array<string | undefined> = [] // the login folders a loop's, a group's or a subshell's input names
+  const began = new Map<number, string | null>() // where each loop, conditional or brace group began, by its id
   for (const cmd of commands) {
     const chain = cmd.groups ?? []
     while (held.length > 0 && (held.length > chain.length || held[held.length - 1].id !== chain[held.length - 1])) base = held.pop()!.base
     for (let k = held.length; k < chain.length; k++) held.push({ id: chain[k], base })
+    for (const id of cmd.within ?? []) if (!began.has(id)) began.set(id, base)
     const ctx: Ctx = cmd.ps === true ? { cwd, base, e6: at.e6, ps: true } : { cwd, base, e6: at.e6 }
     const prog = cmd.words.length > 0 ? programName(cmd.words[0]).toLowerCase() : ''
     // `sl` is Set-Location in PowerShell only: elsewhere it is a program this does not know, which neither moves nor passes
@@ -629,14 +664,19 @@ function resolveShell(rec: Record<string, unknown>, at: Ctx, flavor: Flavor): Re
       // read (lifecycle design §4.10, the controller's ruling R2-1). Any other program stays unknown
       const quiet = (PASSIVE.has(prog) && !foreign) || (PRINTERS.has(prog) && cmd.out.length === 0)
       if (quiet && own.action === 'process.execute' && own.confidence !== 'unknown') own.effect = 'read'
-      // The words its facts did not place and the files it reads its input from may still be in a login folder: placed
-      // for that alone, its action, target and place staying what the table says
-      const loose = [...(f.inside === undefined ? looseWords(cmd) : []), ...(cmd.inputs ?? [])]
+      // The words its facts did not place, the values its leading assignments give and the files it reads its input from
+      // may still be in a login folder: placed for that alone, its action, target and place staying what the table says
+      const assigned = (cmd.assigned ?? []).filter((v) => mayNameFile(v, cmd.ps === true))
+      const loose = [...(f.inside === undefined ? looseWords(cmd) : []), ...assigned, ...(cmd.inputs ?? [])]
       const folder = loose.length === 0 ? own.sensitive : firstSensitive([own.sensitive, placesOf(loose, ctx, true).sensitive])
       if (folder !== undefined) own.sensitive = folder
       parts.push(own)
       for (const also of f.also ?? []) parts.push(partOf(also))
-    } else if (cmd.inputs !== undefined) groupInputs.push(placesOf(cmd.inputs, ctx, true).sensitive)
+    } else if (cmd.inputs !== undefined) {
+      // The shell opens a loop's or group's input where it began, before a `cd` in it runs
+      const from = cmd.inputsOf === undefined ? undefined : began.get(cmd.inputsOf)
+      groupInputs.push(placesOf(cmd.inputs, from === undefined ? ctx : { ...ctx, base: from }, true).sensitive)
+    }
     const writes: ResolvedAction[] = cmd.out.map((file) => {
       const { target, inside, sensitive } = placesOf([file], ctx, true)
       const write: ResolvedAction = { action: 'filesystem.write', target: clip(redactTarget(target), TARGET_MAX), insideProject: inside, confidence: 'high', effect: 'write' }
@@ -809,9 +849,11 @@ function stripPrefix(raw: Cmd, flavor: Flavor): { cmd: Cmd; syntax: boolean } {
   const words = raw.words
   let i = 0
   let syntax = false
+  const assigned: string[] = [] // read for the login folder a value names, never kept (lifecycle design §4.10)
   while (i < words.length) {
     const w = words[i].toLowerCase()
-    if (ASSIGNMENT.test(words[i]) || PS_ASSIGNED.test(words[i]) || WRAPPERS.has(programName(w))) i++
+    if (ASSIGNMENT.test(words[i])) assigned.push(words[i++].replace(ASSIGNMENT, ''))
+    else if (PS_ASSIGNED.test(words[i]) || WRAPPERS.has(programName(w))) i++
     else if (PS_VARIABLE.test(words[i]) && /^[+-]?=$/.test(words[i + 1] ?? '')) i += 2
     else if (KEYWORDS.has(w)) {
       i++
@@ -829,6 +871,9 @@ function stripPrefix(raw: Cmd, flavor: Flavor): { cmd: Cmd; syntax: boolean } {
   const cmd: Cmd = {
     words: rest, out: raw.out, call: raw.call, quoted: raw.quoted.slice(i), invoked: raw.invoked, cmdlet, unread: raw.unread, groups: raw.groups,
     ...(raw.inputs !== undefined ? { inputs: raw.inputs } : {}),
+    ...(raw.within !== undefined ? { within: raw.within } : {}),
+    ...(raw.inputsOf !== undefined ? { inputsOf: raw.inputsOf } : {}),
+    ...(assigned.length > 0 && rest.length > 0 ? { assigned } : {}),
     ...(raw.ps === true ? { ps: true as const } : {})
   }
   const dropped = { cmd: { ...cmd, words: [], quoted: [] }, syntax: true }
@@ -929,7 +974,8 @@ function expand(cmds: Cmd[], flavor: Flavor, depth = 0): { commands: Cmd[]; synt
       }
     } else {
       const inner = expand(splitLine(script.text, script.flavor, depth + 1), script.flavor, depth + 1)
-      const run = inSubshell(cmd, inner.commands)
+      const outer = cmd.within
+      const run = inSubshell(cmd, inner.commands).map((c) => (outer === undefined ? c : { ...c, within: [...outer, ...(c.within ?? [])].slice(-MAX_GROUPS) }))
       // What the shell reads from its input, its first command does (`bash -c "x" < f`)
       if (cmd.inputs !== undefined && run.length > 0) run[0] = { ...run[0], inputs: [...(run[0].inputs ?? []), ...cmd.inputs] }
       out.push(...run)
@@ -989,6 +1035,11 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
   let sink: { write: boolean; dup: boolean; text: boolean } | null = null // the next word is a redirection's target; `text`: a here-string's
   const chain: number[] = [] // the unquoted `(` open now, as subshells, up to MAX_GROUPS deep: beyond it they share the last
   let beyond = 0 // the `(` open past that
+  // POSIX loops, conditionals and brace groups open now, whose input a redirection after their end gives them; the one the
+  // command being read ends (`done < f`) or the brace just closed (`} < f`); whether its words so far only lead to one
+  const compounds: number[] = []
+  let closing: number | undefined
+  let atCommand = true
   const braces: Array<'block' | 'hash' | 'switch'> = [] // the PowerShell braces open now: a block, a hashtable or a switch's body
   let endedBy = '' // the character being read, which is what ended the command in endCommand
   let switchNext: { parens: number; braces: number } | null = null // a PowerShell `switch` was read: the first brace at this depth opens its body
@@ -1005,6 +1056,11 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
         }
         sink = null
       } else {
+        if (flavor === 'posix' && atCommand && !wordQuoted) {
+          if (OPENERS.has(cur)) compounds.push(nextGroup++)
+          else if (CLOSERS.has(cur) && compounds.length > 0) closing = compounds.pop()
+        }
+        atCommand &&= !wordQuoted && LEADERS.has(cur)
         quoted.push(wordQuoted)
         words.push(cur)
         if (cur === 'in' && words.length === 3 && words[0] === 'case') cases++
@@ -1072,6 +1128,8 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
       // Inside an unquoted ( ) or $( ) the command runs in a subshell, as the commands of a quoted substitution do
       const cmd: Cmd = { words, out, call, quoted, invoked }
       if (inputs.length > 0) cmd.inputs = inputs
+      if (compounds.length > 0) cmd.within = compounds.slice(-MAX_GROUPS)
+      if (closing !== undefined && inputs.length > 0) cmd.inputsOf = closing
       if (flavor === 'ps') cmd.ps = true
       if (unread) cmd.unread = true
       if (chain.length > 0) cmd.groups = [...chain]
@@ -1085,6 +1143,8 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
     call = false
     invoked = false
     quoted = []
+    closing = undefined
+    atCommand = true
   }
   /** Reads the substitution (a `$(` or a backtick) at `at` as a line of its own, whose commands follow the command in
    *  progress, and says where it ends. Past the depth substitutions are read to it is not read, and this says `at`. */
@@ -1288,6 +1348,8 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
       else endCommand() // closes a block (a stray one too)
     } else if ((c === '{' || c === '}') && !has && /^(?:\s|;|$)/.test(line.slice(i + 1, i + 2))) {
       endCommand() // a group or script block's brace, standing alone
+      if (flavor === 'posix' && c === '{') compounds.push(nextGroup++)
+      else if (flavor === 'posix' && compounds.length > 0) closing = compounds.pop() // the redirection that follows is the group's
     } else if (c === '<' && line[i + 1] === '<' && line[i + 2] !== '<') {
       endWord()
       let j = i + 2
