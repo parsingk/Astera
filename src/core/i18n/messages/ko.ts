@@ -2756,5 +2756,24 @@ export const ko = {
   'pluginNotify.limitWaitingAt': '사용 한도에 걸려 멈췄습니다. {time} 에 다시 시도합니다.',
   'pluginNotify.limitWaiting': '사용 한도에 걸려 멈췄습니다.',
   'pluginNotify.runCompleted': '{ordinal}번째 Run 이 끝났습니다.',
-  'pluginNotify.accountSwitched': '{label} 계정으로 이어 갑니다.'
+  'pluginNotify.accountSwitched': '{label} 계정으로 이어 갑니다.',
+  // Findings (lifecycle design §4): the reasons and the one action each finding names
+  'findings.reason.unusedProfile': '{days}일 동안 쓰지 않았습니다.',
+  'findings.reason.unusedProfileNever': '만든 지 {days}일이 지났지만 한 번도 쓰지 않았습니다.',
+  'findings.reason.duplicateProfile': '{others}와 계정, 제외한 MCP 서버, 권한, 샌드박스가 모두 같습니다.',
+  'findings.reason.removedAccount': '삭제된 계정을 씁니다: {ids}.',
+  'findings.reason.removedMcp': '삭제된 MCP 서버를 제외 목록에 두고 있습니다: {ids}.',
+  'findings.reason.profileGone': '에이전트 프로필 {id}로 실행하는데, 그 프로필이 없습니다.',
+  'findings.reason.profileArchived': '에이전트 프로필 {name}로 실행하는데, 그 프로필은 보관되어 있습니다.',
+  'findings.reason.failingProfile': '최근 30일 동안 작업 {total}번 가운데 {failed}번이 실패했습니다. 마지막 실패는 {run}에서 났습니다.',
+  'findings.reason.tokenSpike': '토큰을 {total}개 썼습니다. {group}의 중앙값 {median}의 {times}배입니다.',
+  'findings.reason.pair': '{first} {second}',
+  'findings.group.profile': '에이전트 프로필 {name}',
+  'findings.group.account': '계정 {id}',
+  'findings.do.archiveProfile': '프로필을 보관하세요.',
+  'findings.do.keepOne': '하나만 두고 나머지는 보관하세요.',
+  'findings.do.editProfile': '프로필을 고치세요.',
+  'findings.do.repointJob': 'Job이 다른 프로필을 쓰게 바꾸세요.',
+  'findings.do.openRuns': 'Run을 열어 보세요.',
+  'findings.do.openRun': 'Run을 열어 보세요.'
 } as const

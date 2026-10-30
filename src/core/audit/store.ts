@@ -17,7 +17,7 @@
 // lines, so a read of 50 MB never stalls the Host. A known limit (Task 4 ruling): a machine whose time zone moved west
 // between two writes files the later record under an earlier local day, so a page that stops at a newer day can miss it;
 // the summary, which reads every day of the period, still counts it.
-import { promises as fs } from 'node:fs'
+import { promises as fs, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { profilePaths } from '../profile/paths'
 import type { AuditRecord } from './types'
@@ -269,6 +269,22 @@ async function prune(dir: string, s: FolderState, o: AuditStoreOptions, room: nu
 /** Whether the local day `at` falls in was stopped at the size, so a record of that time would not be kept. */
 export function auditDayStopped(profileDir: string, at: string): boolean {
   return folders.get(profilePaths(profileDir).auditRecords)?.stopped.has(auditDayOf(at)) ?? false
+}
+
+/** The local days (`YYYY-MM-DD`, sorted) whose records stopped at the size, so a usage finding cannot judge them
+ *  (lifecycle design §4): those this process stopped, and those the marks on disk name, which an earlier process left
+ *  before this one has looked at the folder. A folder that cannot be listed adds none. Never throws. */
+export function auditStoppedDays(profileDir: string): string[] {
+  const dir = profilePaths(profileDir).auditRecords
+  const days = new Set(folders.get(dir)?.stopped ?? [])
+  let names: string[] = []
+  try {
+    names = readdirSync(dir)
+  } catch {
+    // No folder yet, or one that cannot be listed: the folder state alone
+  }
+  for (const n of names) if (STOP_MARK.test(n)) days.add(n.slice(0, 10))
+  return [...days].sort()
 }
 
 /** Whether a day in the period (by local day; the whole folder without one) was stopped at the size by this Host, so its

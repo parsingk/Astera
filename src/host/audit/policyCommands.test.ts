@@ -15,12 +15,16 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) await removeFixture(d)
 })
 
-async function rig() {
+/** The clock the Host reads when Observe or Enforce is turned on (lifecycle plan ruling 3). */
+const STAMP = '2026-10-30T09:00:00.000Z'
+const DAY = 24 * 60 * 60 * 1000
+
+async function rig(o: { now?: () => number } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-host-policies-'))
   dirs.push(root)
   const profileDir = path.join(root, 'profile')
   await fs.mkdir(profileDir)
-  const hub = createHostPolicies({ profileDir })
+  const hub = createHostPolicies({ profileDir, now: o.now ?? (() => Date.parse(STAMP)) })
   const call = (cmd: string, args: Record<string, unknown> = {}, extra: { role?: 'app' | 'cli' | 'mcp' | 'controller' | 'plugin'; agentRefusal?: string } = {}) => {
     const marks = { effects: 0 }
     return hub
@@ -52,7 +56,7 @@ describe('createHostPolicies', () => {
     const on = await h.call('policies-set-mode', { mode: 'observe' })
     expect(on.status).toBe(200)
     expect(on.marks.effects).toBe(1)
-    expect(await readAuditPolicy(h.profileDir)).toEqual({ ...STARTER_POLICY, mode: 'observe' })
+    expect(await readAuditPolicy(h.profileDir)).toEqual({ ...STARTER_POLICY, mode: 'observe', observingSince: STAMP })
 
     const added = ruleOf(await h.call('policies-rules-add', { effect: 'deny', action: 'package.install' }))
     expect((await h.call('policies-set-mode', { mode: 'compatibility' })).status).toBe(200)
@@ -82,7 +86,7 @@ describe('createHostPolicies', () => {
     const h = await rig()
     const on = await h.call('policies-set-mode', { mode: 'enforce' })
     expect(on.status).toBe(200)
-    expect(await readAuditPolicy(h.profileDir)).toEqual({ ...STARTER_POLICY, mode: 'enforce' })
+    expect(await readAuditPolicy(h.profileDir)).toEqual({ ...STARTER_POLICY, mode: 'enforce', observingSince: STAMP })
     expect((await h.call('policies-set-mode', { mode: 'observe' }, { role: 'cli' })).status).toBe(200)
     expect((await h.call('policies-set-mode', { mode: 'enforce' }, { role: 'cli' })).status).toBe(200)
     const agent = await h.call('policies-set-mode', { mode: 'compatibility' }, { role: 'cli', agentRefusal: 'not from an agent session' })
@@ -153,6 +157,51 @@ describe('createHostPolicies', () => {
     expect((await h.call('policies-set-otherwise', { otherwise: 'maybe' })).status).toBe(400)
   })
 
+  // When Observe was last turned on (lifecycle design §4, plan ruling 3): the start of the history usage findings judge
+  it('turning observe on stamps observingSince, enforce keeps it, compatibility drops it', async () => {
+    let now = Date.parse(STAMP)
+    const h = await rig({ now: () => now })
+    const since = async (): Promise<string | undefined> => (await readAuditPolicy(h.profileDir))?.observingSince
+    const on = await h.call('policies-set-mode', { mode: 'observe' })
+    expect(policyOf(on).observingSince).toBe(STAMP)
+    expect(await since()).toBe(STAMP)
+    // Between observe and enforce the history goes on, and so do the other changes
+    now += DAY
+    await h.call('policies-set-mode', { mode: 'enforce' })
+    await h.call('policies-set-mode', { mode: 'observe' })
+    await h.call('policies-set-otherwise', { otherwise: 'deny' })
+    await h.call('policies-rules-add', { effect: 'deny', action: 'package.install' })
+    expect(await since()).toBe(STAMP)
+    // Off drops it, from the file too
+    now += DAY
+    const off = await h.call('policies-set-mode', { mode: 'compatibility' })
+    expect(policyOf(off)).not.toHaveProperty('observingSince')
+    expect(JSON.parse(await fs.readFile(h.file, 'utf8'))).not.toHaveProperty('observingSince')
+    await h.call('policies-set-mode', { mode: 'compatibility' })
+    expect(await since()).toBeUndefined()
+    // And turning enforce on from off starts it again, now
+    now += DAY
+    await h.call('policies-set-mode', { mode: 'enforce' })
+    expect(await since()).toBe(new Date(Date.parse(STAMP) + 3 * DAY).toISOString())
+
+    // A file from before this release, observing with no stamp, is not given one by a switch to enforce: its history is
+    // counted from this release's first run (ruling 2), not from the switch
+    const old = await rig({ now: () => now })
+    await writeAuditPolicy(old.profileDir, { ...STARTER_POLICY, mode: 'observe' })
+    await old.call('policies-set-mode', { mode: 'enforce' })
+    expect(await readAuditPolicy(old.profileDir)).toEqual({ ...STARTER_POLICY, mode: 'enforce' })
+  })
+
+  it('rules-reset keeps observingSince', async () => {
+    const h = await rig()
+    await h.call('policies-set-mode', { mode: 'observe' })
+    await h.call('policies-rules-remove', { id: STARTER_POLICY.rules[0].id })
+    const r = await h.call('policies-rules-reset')
+    expect(r.status).toBe(200)
+    expect(policyOf(r).observingSince).toBe(STAMP)
+    expect(await readAuditPolicy(h.profileDir)).toEqual({ ...STARTER_POLICY, mode: 'observe', observingSince: STAMP })
+  })
+
   it('starts over with the starter rules, keeping the mode', async () => {
     const h = await rig()
     await h.call('policies-set-mode', { mode: 'observe' })
@@ -162,7 +211,7 @@ describe('createHostPolicies', () => {
     const r = await h.call('policies-rules-reset')
     expect(r.status).toBe(200)
     expect(r.marks.effects).toBe(1)
-    expect(await readAuditPolicy(h.profileDir)).toEqual({ ...STARTER_POLICY, mode: 'observe' })
+    expect(await readAuditPolicy(h.profileDir)).toEqual({ ...STARTER_POLICY, mode: 'observe', observingSince: STAMP })
   })
 
   it('refuses every change to an agent’s shell, and lets it read', async () => {

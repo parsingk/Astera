@@ -14,6 +14,7 @@ import {
   appendRecords,
   auditDayOf,
   auditStoppedAtLimit,
+  auditStoppedDays,
   keepPruning,
   pruneRecords,
   queryRecords as queryAt,
@@ -472,6 +473,28 @@ describe('a day that stopped at the size, across a restart', () => {
     await fresh.pruneRecords(p, later)
     expect(await files(p)).toEqual([])
     expect(fresh.auditStoppedAtLimit(p)).toBe(false)
+  })
+})
+
+// The days the findings' Observe history leaves out (lifecycle design §4): a day stopped for size holds fewer records
+// than its calls, so a usage finding cannot judge it
+describe('auditStoppedDays', () => {
+  it('auditStoppedDays lists the .stopped marks', async () => {
+    const p = await profile()
+    expect(auditStoppedDays(p)).toEqual([])
+    // Marks an earlier process left, read from the disk before this one has looked at the folder
+    await fs.mkdir(auditDir(p), { recursive: true })
+    for (const name of ['2026-10-21.jsonl', '2026-10-21.stopped', '2026-10-19.stopped', 'notes.stopped', '2026-10-20.jsonl'])
+      await fs.writeFile(path.join(auditDir(p), name), '')
+    expect(auditStoppedDays(p)).toEqual(['2026-10-19', '2026-10-21'])
+
+    // A day this process stopped is known from its folder state, though its mark is gone
+    const o = { now: () => ms('2026-10-23'), maxBytes: 1000 }
+    for (let i = 0; i < 20 && !auditStoppedAtLimit(p, { since: at('2026-10-23'), until: at('2026-10-24') }); i++)
+      await appendRecords(p, [rec({ at: at('2026-10-23', i) })], o)
+    await fs.rm(path.join(auditDir(p), '2026-10-23.stopped'), { force: true })
+    // The first write's prune let go of the mark whose day file is not there
+    expect(auditStoppedDays(p)).toEqual(['2026-10-21', '2026-10-23'])
   })
 })
 

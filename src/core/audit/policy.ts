@@ -153,12 +153,18 @@ function ruleOf(v: unknown): AuditRule | null {
   return { id, effect: effect as AuditRule['effect'], action, ...(scope !== undefined ? { scope: scope as AuditRule['scope'] } : {}) }
 }
 
+/** When Observe was last turned on, kept only when it reads as a time (lifecycle design §4). One that does not is left
+ *  out rather than taken for damage: the rules and the mode still hold, and the findings then count the history from
+ *  this release's first run, which never starts it earlier. */
+const observingSinceOf = (v: Record<string, unknown>): { observingSince?: string } =>
+  typeof v.observingSince === 'string' && !Number.isNaN(Date.parse(v.observingSince)) ? { observingSince: v.observingSince } : {}
+
 /** The policy a parsed file holds, or null when it is not one. */
 function policyOf(v: unknown): AuditPolicy | null {
   if (!isRecord(v) || v.version !== 1 || !Array.isArray(v.rules) || !EFFECTS.includes(v.otherwise as string)) return null
   const rules = v.rules.map(ruleOf)
   if (rules.some((r) => r === null)) return null
-  return { version: 1, mode: modeOf(v), rules: rules as AuditRule[], otherwise: v.otherwise as AuditPolicy['otherwise'] }
+  return { version: 1, mode: modeOf(v), rules: rules as AuditRule[], otherwise: v.otherwise as AuditPolicy['otherwise'], ...observingSinceOf(v) }
 }
 
 /** The policy a file's text holds, or null when it is none: what the Enforce hook reads, synchronously, at every call.

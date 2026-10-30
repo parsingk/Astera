@@ -51,6 +51,10 @@ export interface AuditPolicy {
   rules: AuditRule[]
   /** What a call no rule matches gets. */
   otherwise: 'allow' | 'deny'
+  /** When Observe or Enforce was last turned on from off (lifecycle design §4, plan ruling 3): the start of the history
+   *  the usage findings judge. Dropped when the mode goes back to compatibility; absent in a file from before it existed,
+   *  whose history counts from this release's first run instead. */
+  observingSince?: string
 }
 
 /** `blocked`: Enforce's hook stopped the call before it ran (enforce design §5), whatever the rules say at the read. */
