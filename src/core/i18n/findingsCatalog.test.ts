@@ -2,6 +2,8 @@
 // every language has, so a new string cannot fall back to English.
 import { describe, it, expect } from 'vitest'
 import { CATALOGS, LANGS } from './index'
+import { SOURCE_KEYS } from '../findings/note'
+import type { FindingSource } from '../findings/types'
 
 const keysOf = (): string[] => Object.keys(CATALOGS.ko.messages).filter((k) => k.startsWith('findings.'))
 
@@ -157,5 +159,38 @@ describe('the findings catalog', () => {
       expect(en[key], key).toBe(english)
       expect(ko[key], key).toBe(korean)
     }
+  })
+
+  // §4 and §8: the lines a report says beside its findings, which the CLI prints in English and the section shows
+  it('keeps the Observe note, the unread line and the empty line', () => {
+    const en = CATALOGS.en.messages as Record<string, string>
+    const ko = CATALOGS.ko.messages as Record<string, string>
+    const copy: Record<string, [string, string]> = {
+      'findings.observe.off': ['Usage findings need Observe on for 30 days. Observe is off.', '사용 기록으로 찾는 항목은 Observe를 30일 켜 두어야 합니다. 지금 Observe가 꺼져 있습니다.'],
+      'findings.observe.days': [
+        'Usage findings need Observe on for 30 days. It has been on for {days} days.',
+        '사용 기록으로 찾는 항목은 Observe를 30일 켜 두어야 합니다. 지금까지 {days}일 켜져 있었습니다.'
+      ],
+      'findings.unread': ['Could not read: {sources}', '읽지 못한 것: {sources}'],
+      'findings.none': ['No findings.', '찾은 것이 없습니다.']
+    }
+    for (const [key, [english, korean]] of Object.entries(copy)) {
+      expect(en[key], key).toBe(english)
+      expect(ko[key], key).toBe(korean)
+    }
+  })
+
+  // Every source a report can name has a plain name, in every language (Task 8 shows them on screen)
+  it('names every source a report can leave unread', () => {
+    const sources: FindingSource[] = [
+      'profiles', 'accounts', 'orchestration', 'tokens', 'policy', 'records', 'extensions', 'account-mcp', 'credentials',
+      'credential-uses', 'runtimes', 'extension-uses', 'ignored', 'settings', 'cli-version'
+    ]
+    expect(Object.keys(SOURCE_KEYS).sort()).toEqual([...sources].sort())
+    for (const lang of LANGS) {
+      const m = CATALOGS[lang].messages as Record<string, string | undefined>
+      expect(sources.filter((s) => !m[`findings.source.${s}`]), lang).toEqual([])
+    }
+    expect(sources.map((s) => SOURCE_KEYS[s])).toEqual(sources.map((s) => `findings.source.${s}`))
   })
 })

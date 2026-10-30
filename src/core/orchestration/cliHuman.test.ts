@@ -975,3 +975,65 @@ describe('humanFor — credentials', () => {
     expect(humanFor('credentials-doctor', { lines: [{ level: 'ok', text: 'fine' }, { level: 'warn', text: 'careful' }] })).toBe(['ok    fine', 'warn  careful'].join('\n'))
   })
 })
+
+// Lifecycle design §7: the findings as the CLI's --json carries them (cliOutput.ts), in the English the Host worded
+describe('humanFor — agent-profiles audit', () => {
+  const unused = { key: 'unused-profile:ap_1', rule: 'unused-profile', subject: { kind: 'profile', id: 'ap_1', name: 'Reviewer' }, reason: 'Not used in 120 days.', action: 'Archive the profile.', ignored: false }
+  const stale = { key: 'stale-runtime:rt_1', rule: 'stale-runtime', subject: { kind: 'runtime', id: 'rt_1', name: 'lab' }, reason: 'Not reached in 40 days.', action: 'Remove the pairing.', ignored: false }
+  const report = (over: Record<string, unknown> = {}) => ({ findings: [], info: [], observe: { on: true, days: 30 }, unread: [], ...over })
+
+  it('prints the Observe note, then a line per finding: rule, subject, reason and the action', () => {
+    expect(humanFor('agent-profiles-audit', report({ observe: { on: false, days: 0 }, findings: [unused, stale] }))).toBe(
+      [
+        'Usage findings need Observe on for 30 days. Observe is off.',
+        '',
+        'unused-profile  Reviewer  Not used in 120 days.    → Archive the profile.',
+        'stale-runtime   lab       Not reached in 40 days.  → Remove the pairing.'
+      ].join('\n')
+    )
+  })
+
+  it('says how many days Observe has been on while under 30, and nothing once it has had them', () => {
+    expect(humanFor('agent-profiles-audit', report({ observe: { on: true, days: 12 } }))).toBe(
+      ['Usage findings need Observe on for 30 days. It has been on for 12 days.', '', 'No findings.'].join('\n')
+    )
+    expect(humanFor('agent-profiles-audit', report())).toBe('No findings.')
+  })
+
+  it('--all marks the ignored ones, with the note when there is one', () => {
+    const out = humanFor('agent-profiles-audit', report({ findings: [unused, { ...stale, ignored: true, ignoredAt: '2026-10-30T12:00:00.000Z', note: 'the lab is shut' }] }), { all: true })
+    expect(out?.split('\n')).toEqual([
+      'unused-profile  Reviewer  Not used in 120 days.    → Archive the profile.',
+      'stale-runtime   lab       Not reached in 40 days.  → Remove the pairing.  (ignored: the lab is shut)'
+    ])
+    const bare = humanFor('agent-profiles-audit', report({ findings: [{ ...unused, ignored: true }] }), { all: true })
+    expect(bare).toBe('unused-profile  Reviewer  Not used in 120 days.  → Archive the profile.  (ignored)')
+  })
+
+  it('prints the information lines under the findings', () => {
+    const info = [{ subject: { kind: 'extension', id: 'skill_1', name: 'lint' }, reason: 'No recorded use in Claude in 30 days. Codex cannot tell.' }]
+    expect(humanFor('agent-profiles-audit', report({ findings: [unused], info }))).toBe(
+      ['unused-profile  Reviewer  Not used in 120 days.  → Archive the profile.', '', 'lint  No recorded use in Claude in 30 days. Codex cannot tell.'].join('\n')
+    )
+  })
+
+  it('closes with the sources it could not read, and leaves out the Observe note when the rules file is one', () => {
+    expect(humanFor('agent-profiles-audit', report({ findings: [stale], unread: ['profiles'] }))).toBe(
+      ['stale-runtime  lab  Not reached in 40 days.  → Remove the pairing.', '', 'Could not read: agent profiles'].join('\n')
+    )
+    // An unread policy reads { on: false }, which is not "Observe is off" (FindingsReport.observe)
+    expect(humanFor('agent-profiles-audit', report({ observe: { on: false, days: 0 }, unread: ['profiles', 'policy'] }))).toBe(
+      ['No findings.', '', 'Could not read: agent profiles, rules file'].join('\n')
+    )
+  })
+
+  it('nothing found reads no findings', () => {
+    expect(humanFor('agent-profiles-audit', report())).toBe('No findings.')
+  })
+
+  it('an ignore and an unignore say what changed', () => {
+    expect(humanFor('agent-profiles-audit-ignore', { key: 'stale-runtime:rt_1' })).toBe('ignored stale-runtime:rt_1')
+    expect(humanFor('agent-profiles-audit-unignore', { key: 'stale-runtime:rt_1', removed: true })).toBe('brought back stale-runtime:rt_1')
+    expect(humanFor('agent-profiles-audit-unignore', { key: 'x', removed: false })).toBe('x was not ignored')
+  })
+})

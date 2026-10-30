@@ -2322,5 +2322,24 @@ export const es: Catalog = {
   'findings.info.claudeUnhookedCannotTell':
     'Claude no puede saberlo: en los últimos {days} días una sesión de Claude se ejecutó sin los hooks que informan de los usos.',
   'findings.info.claudeUnhookedCannotTellCodexToo':
-    'Ni Claude ni Codex pueden saberlo: en los últimos {days} días una sesión de Claude se ejecutó sin los hooks que informan de los usos.'
+    'Ni Claude ni Codex pueden saberlo: en los últimos {days} días una sesión de Claude se ejecutó sin los hooks que informan de los usos.',
+  'findings.observe.off': 'Los hallazgos de uso necesitan Observe activado durante 30 días. Observe está desactivado.',
+  'findings.observe.days': 'Los hallazgos de uso necesitan Observe activado durante 30 días. Lleva {days} días activado.',
+  'findings.unread': 'No se pudo leer: {sources}',
+  'findings.none': 'No hay hallazgos.',
+  'findings.source.profiles': 'perfiles de agente',
+  'findings.source.accounts': 'cuentas',
+  'findings.source.orchestration': 'Jobs y Runs',
+  'findings.source.tokens': 'totales de tokens',
+  'findings.source.policy': 'archivo de reglas',
+  'findings.source.records': 'registros de Observe',
+  'findings.source.extensions': 'extensiones compartidas',
+  'findings.source.account-mcp': 'servidores MCP propios de las cuentas',
+  'findings.source.credentials': 'lista de Credentials',
+  'findings.source.credential-uses': 'usos de credenciales',
+  'findings.source.runtimes': 'Runtimes emparejados',
+  'findings.source.extension-uses': 'usos de habilidades, comandos y agentes',
+  'findings.source.ignored': 'hallazgos ignorados',
+  'findings.source.settings': 'ajustes de la app',
+  'findings.source.cli-version': 'versión de Claude Code'
 }

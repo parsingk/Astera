@@ -51,6 +51,27 @@ export function queryCredentialUses(
   return queryDatedIn(profilePaths(profileDir).credentialUses, useOf, test, f, o)
 }
 
+/** Each entry's latest use from `sinceMs` on (ISO), by entry id, read in one pass over every day of the period that keeps
+ *  only the latest time of each (lifecycle design §4.9): never a list of uses, and no limit that could stop short. A use
+ *  with no entry is not counted. `nowMs` is the read's clock, for the days kept. */
+export async function latestUsesSince(profileDir: string, sinceMs: number, nowMs: number): Promise<Map<string, string>> {
+  const latest = new Map<string, { at: string; ms: number }>()
+  await visitDaysIn(
+    profilePaths(profileDir).credentialUses,
+    useOf,
+    (u) => typeof u.entryId === 'string',
+    { since: new Date(sinceMs).toISOString() },
+    (u, at) => {
+      const id = u.entryId as string
+      const held = latest.get(id)
+      if (held === undefined || at > held.ms) latest.set(id, { at: u.at, ms: at })
+    },
+    () => false,
+    { now: () => nowMs }
+  )
+  return new Map([...latest].map(([id, l]) => [id, l.at]))
+}
+
 /** The newest use of each of these entries, in one newest-first pass that stops once each has one (final review M10): the
  *  list asks it for every shared server at every read, and an entry never used would otherwise read every kept day. */
 export async function lastUses(profileDir: string, entryIds: readonly string[], o: Pick<AuditStoreOptions, 'now' | 'keepDays'> = {}): Promise<Map<string, string>> {

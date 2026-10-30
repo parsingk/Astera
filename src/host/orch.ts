@@ -8,6 +8,7 @@ import { AGENT_PROFILE_COMMANDS, type HostAgentProfiles } from './agentProfiles/
 import { POLICY_COMMANDS, type HostPolicies } from './audit/policyCommands'
 import { CREDENTIAL_COMMANDS, type HostCredentials } from './credentials/commands'
 import { AUDIT_COMMANDS, type HostAudit } from './audit/auditCommands'
+import { FINDINGS_COMMANDS, type HostFindings } from './findings/commands'
 import { readAgentProfiles } from '../core/agentProfiles/store'
 import { readAgentPermissionMode } from '../core/settings/agentPermissionMode'
 import type { PluginManager } from './plugins/manager'
@@ -605,6 +606,10 @@ export function createHostOrch(a: {
   /** Observe mode's records (observe mode design §8, §12): `audit-list` and `audit-summary`, for this machine's app and
    *  CLI, routed like the policies; an agent's shell is refused even these reads. Absent: both answer 501. */
   audit?: Pick<HostAudit, 'command'>
+  /** The findings (lifecycle design §6, §7, §8): `agent-profiles-audit` and its two ignore commands, for this machine's
+   *  app and CLI, routed like the credentials and ahead of the agent profiles, whose names they share the start of; an
+   *  agent's shell may read them and changes no ignore. Absent: all three answer 501. */
+  findings?: Pick<HostFindings, 'command'>
   /** Session work units in the Host (E2 §5), asked per call: `index.ts` builds them after this orch (their
    *  in-Run test reads its state). Passed through to `hostOrchDeps` (HOST_TRACKS), and the app only
    *  `work-units-fork`, `-reload`, `-complete`, `-cancel` and `-git-op`. Absent, or null (no spawner, so no
@@ -2111,6 +2116,20 @@ export function createHostOrch(a: {
                 marks
               })
             : { status: 501, body: { error: 'this Host does not keep shared extensions' } }
+          return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
+        }
+        // **The findings** (lifecycle design §7, §8), the same way, before the agent profiles: the names are theirs to
+        // start with, and none of the three is theirs to answer. No gate lists them.
+        if (FINDINGS_COMMANDS.has(cmd)) {
+          const answered = a.findings
+            ? await a.findings.command({
+                cmd,
+                args,
+                role: from?.role,
+                ...(agentShell(from, sessionId) ? { agentRefusal: AGENT_REFUSAL(cmd) } : {}),
+                marks
+              })
+            : { status: 501, body: { error: 'this Host does not compute findings' } }
           return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
         }
         // **Agent profiles** (Agent Profiles design §4), the same way. The MCP gate admits only the list (design §6), and

@@ -2292,5 +2292,24 @@ export const ja: Catalog = {
   'findings.info.claudeUnhookedCannotTell':
     'Claude では判断できません。直近 {days} 日間に、使用を報告するフックなしで動いた Claude のセッションがありました。',
   'findings.info.claudeUnhookedCannotTellCodexToo':
-    'Claude でも Codex でも判断できません。直近 {days} 日間に、使用を報告するフックなしで動いた Claude のセッションがありました。'
+    'Claude でも Codex でも判断できません。直近 {days} 日間に、使用を報告するフックなしで動いた Claude のセッションがありました。',
+  'findings.observe.off': '使用記録による項目は、Observe を 30 日間オンにしておく必要があります。いまは Observe がオフです。',
+  'findings.observe.days': '使用記録による項目は、Observe を 30 日間オンにしておく必要があります。これまで {days} 日間オンでした。',
+  'findings.unread': '読み取れなかったもの: {sources}',
+  'findings.none': '見つかった項目はありません。',
+  'findings.source.profiles': 'エージェントプロファイル',
+  'findings.source.accounts': 'アカウント',
+  'findings.source.orchestration': 'Job と Run',
+  'findings.source.tokens': 'トークン使用量',
+  'findings.source.policy': 'ルールファイル',
+  'findings.source.records': 'Observe の記録',
+  'findings.source.extensions': '共有の拡張機能',
+  'findings.source.account-mcp': 'アカウント独自の MCP サーバー',
+  'findings.source.credentials': 'Credentials リスト',
+  'findings.source.credential-uses': '認証情報の使用記録',
+  'findings.source.runtimes': 'ペアリングした Runtime',
+  'findings.source.extension-uses': 'スキル、コマンド、エージェントの使用記録',
+  'findings.source.ignored': '無視した項目',
+  'findings.source.settings': 'アプリの設定',
+  'findings.source.cli-version': 'Claude Code のバージョン'
 }

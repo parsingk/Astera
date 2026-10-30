@@ -156,10 +156,11 @@ function touchesProfile(call: ResolveCall, r: ResolvedAction, profileDir: string
  *  guide teaches), behind a wrapper (`env`, `cmd /c`) or global flags (`--json`): any of them names `astera`. Final
  *  review C1: matching the command word alone let those through. */
 const ASTERA_REF = /astera/i
-/** The group, then a verb that changes Policies or agent profiles anywhere after it (flags may sit between). The CLI has
- *  no verb that changes the Credentials list (credentials design §7). */
+/** The group, then a verb that changes Policies or agent profiles anywhere after it (flags may sit between), the findings'
+ *  ignore list among them (lifecycle design §7: an agent cannot hide a finding about itself). The CLI has no verb that
+ *  changes the Credentials list (credentials design §7). */
 const SETTINGS_CHANGE =
-  /(?:^|[\s"'`;&|(])(?:policies|agent-profiles)(?=$|[\s"'`;&|)])[\s\S]*?(?:^|[\s"'`;&|(])(?:set-mode|set-otherwise|rules-(?:add|edit|remove|move|reset)|create|update|archive|restore|delete)(?=$|[\s"'`;&|)])/i
+  /(?:^|[\s"'`;&|(])(?:policies|agent-profiles)(?=$|[\s"'`;&|)])[\s\S]*?(?:^|[\s"'`;&|(])(?:set-mode|set-otherwise|rules-(?:add|edit|remove|move|reset)|create|update|archive|restore|delete|audit-(?:ignore|unignore))(?=$|[\s"'`;&|)])/i
 
 const changesSettings = (line: string): boolean => ASTERA_REF.test(line) && SETTINGS_CHANGE.test(line)
 

@@ -13,6 +13,8 @@ import type { AuditAction, CoverageNote, SandboxCoverageRow } from '../audit/typ
 import { ACTION_PHRASES, COVERAGE_NOTE_PHRASES } from '../audit/phrases'
 import { SANDBOX_TABLE_CAPTION, sandboxRowCaption } from '../sandbox/coverage'
 import { t } from '../i18n'
+import { observeNote, unreadLine } from '../findings/note'
+import type { FindingSource, ObserveHistory } from '../findings/types'
 
 /** 상태 한 낱말. **파생값과 플래그를 한 낱말로 접는다** — 사람이 목록에서 훑는 것이 이것이고,
  *  훑으려면 한 칸에 있어야 한다.
@@ -146,6 +148,12 @@ const indent = (text: string): string =>
 const asList = (data: Record<string, unknown>, key: string): Record<string, unknown>[] => {
   const v = data[key]
   return Array.isArray(v) ? (v as Record<string, unknown>[]) : []
+}
+
+/** A report's Observe history as sent; one that does not read as one is off with no days, as an unread one reads. */
+const observeOf = (v: unknown): ObserveHistory => {
+  const o = v !== null && typeof v === 'object' ? (v as { on?: unknown; days?: unknown }) : {}
+  return { on: o.on === true, days: typeof o.days === 'number' ? o.days : 0 }
 }
 
 /**
@@ -399,6 +407,29 @@ export function humanFor(
       return asList(data, 'lines')
         .map((l) => `${str(l.level).padEnd(6)}${str(l.text)}`)
         .join('\n')
+    // Lifecycle design §4, §7, §8: the Observe note while the usage findings wait for their history, a row per finding
+    // (its rule, what it is about, why and what would resolve it), the lines that are not findings, then what could not
+    // be read. The English the Host worded (Finding.reason, .action), and the catalog's for the two notes
+    case 'agent-profiles-audit': {
+      const report = { observe: observeOf(data.observe), unread: Array.isArray(data.unread) ? (data.unread as FindingSource[]) : [] }
+      const note = observeNote(report)
+      const findings = asList(data, 'findings')
+      const info = asList(data, 'info')
+      const nameOf = (s: unknown): string => str((s as { name?: unknown } | null)?.name)
+      const ignoredMark = (f: Record<string, unknown>): string[] =>
+        f.ignored !== true ? [] : [typeof f.note === 'string' && f.note !== '' ? `(ignored: ${f.note})` : '(ignored)']
+      const blocks = [
+        ...(note === null ? [] : [t('en', note.key, note.params)]),
+        findings.length === 0 ? t('en', 'findings.none') : columns(findings.map((f) => [str(f.rule), nameOf(f.subject), str(f.reason), `→ ${str(f.action)}`, ...ignoredMark(f)])),
+        ...(info.length === 0 ? [] : [columns(info.map((l) => [nameOf(l.subject), str(l.reason)]))]),
+        ...[unreadLine('en', report.unread)].filter((l): l is string => l !== null)
+      ]
+      return blocks.join('\n\n')
+    }
+    case 'agent-profiles-audit-ignore':
+      return `ignored ${str(data.key)}`
+    case 'agent-profiles-audit-unignore':
+      return data.removed === true ? `brought back ${str(data.key)}` : `${str(data.key)} was not ignored`
     case 'policies-show':
     case 'policies-set-mode':
     case 'policies-set-otherwise':

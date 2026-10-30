@@ -2811,5 +2811,24 @@ export const ko = {
   'findings.info.claudeUnhookedCannotTell':
     'Claude는 알 수 없습니다. 최근 {days}일 동안 사용을 알리는 훅 없이 실행된 Claude 세션이 있었습니다.',
   'findings.info.claudeUnhookedCannotTellCodexToo':
-    'Claude와 Codex 모두 알 수 없습니다. 최근 {days}일 동안 사용을 알리는 훅 없이 실행된 Claude 세션이 있었습니다.'
+    'Claude와 Codex 모두 알 수 없습니다. 최근 {days}일 동안 사용을 알리는 훅 없이 실행된 Claude 세션이 있었습니다.',
+  'findings.observe.off': '사용 기록으로 찾는 항목은 Observe를 30일 켜 두어야 합니다. 지금 Observe가 꺼져 있습니다.',
+  'findings.observe.days': '사용 기록으로 찾는 항목은 Observe를 30일 켜 두어야 합니다. 지금까지 {days}일 켜져 있었습니다.',
+  'findings.unread': '읽지 못한 것: {sources}',
+  'findings.none': '찾은 것이 없습니다.',
+  'findings.source.profiles': '에이전트 프로필',
+  'findings.source.accounts': '계정',
+  'findings.source.orchestration': 'Job과 Run',
+  'findings.source.tokens': '토큰 사용량',
+  'findings.source.policy': '규칙 파일',
+  'findings.source.records': 'Observe 기록',
+  'findings.source.extensions': '공유 확장',
+  'findings.source.account-mcp': '계정 자체의 MCP 서버',
+  'findings.source.credentials': 'Credentials 목록',
+  'findings.source.credential-uses': '자격 증명 사용 기록',
+  'findings.source.runtimes': '연결한 Runtime',
+  'findings.source.extension-uses': '스킬, 명령, 에이전트 사용 기록',
+  'findings.source.ignored': '무시한 항목',
+  'findings.source.settings': '앱 설정',
+  'findings.source.cli-version': 'Claude Code 버전'
 } as const

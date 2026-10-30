@@ -21,6 +21,10 @@ import { keepPruning } from '../core/audit/store'
 import { createGatewayHub } from './gateway/hub'
 import { createUseRecorder, recordPush, recordingGhRunner, workOfSession } from './credentials/recordUses'
 import { createHostCredentials } from './credentials/commands'
+import { createHostFindings } from './findings/commands'
+import { readFindingsSince } from '../core/findings/since'
+import { cliVersionProbe } from '../core/sessions/cliVersion'
+import { openRuntimeRegistry } from '../core/runtimes/registry'
 import { hidingLog } from '../core/extensions/secrets'
 import { createHidingSource, projectOfWorktrees } from '../core/credentials/hiding'
 import { sweepGeneratedMcp } from '../core/extensions/resolve'
@@ -951,6 +955,30 @@ async function main(): Promise<void> {
       return orch.state().projects
     }
   })
+  // The findings (lifecycle design §6, §7, §8): computed on request from what this Host holds, kept a minute, and the
+  // ignore list. The history stamp is written at this start (plan ruling 2), so the usage findings count from the first
+  // run of this release, not from the first time someone asks. The orchestration state is loaded as every command loads
+  // it; the Claude version is the probe's, warmed first so nothing waits on a synchronous ask
+  void readFindingsSince(profileDir, Date.now(), { log: (m) => log.write(m) })
+  const claudeVersions = cliVersionProbe(process.platform)
+  const findings = createHostFindings({
+    profileDir,
+    homeDir: os.homedir(),
+    orchState: async () => {
+      await orch.ready()
+      return orch.state()
+    },
+    spent: () => tokenStore.spent(),
+    appBypass: async () => (await readAgentPermissionMode(path.join(profileDir, 'app-settings.json'))) === 'yolo',
+    readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
+    openRuntimes: async () => (await openRuntimeRegistry(openSecretStore({ dir: path.join(profileDir, 'runtimes'), profileDir }))).list(),
+    claudeVersion: async () => {
+      await claudeVersions.warm('claude')
+      // What the warm learnt, never a synchronous ask: a CLI that is not there, or whose version could not be read, is unknown
+      return claudeVersions.cached('claude') ?? null
+    },
+    log: (m) => log.write(m)
+  })
   const orch = createHostOrch({
     profileDir,
     useRecorder,
@@ -962,6 +990,7 @@ async function main(): Promise<void> {
     policies,
     credentials,
     audit,
+    findings,
     // The job-source plugins a person makes Jobs from (plugin Phase 4 J10), asked through the runtime
     jobSources: hostJobSources({ manager: plugins, runtime: pluginRuntime }),
     // The completion check plugins a Task's checks ask (plugin Phase 5 C8), through the same runtime

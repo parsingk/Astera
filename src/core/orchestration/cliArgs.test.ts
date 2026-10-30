@@ -435,6 +435,33 @@ describe('parseArgs — audit and policies', () => {
   })
 })
 
+// The findings (lifecycle design §7, planning ruling 1): one verb each, the finding's key the one word that is not a flag
+describe('parseArgs — agent-profiles audit', () => {
+  it('agent-profiles audit, audit-ignore and audit-unignore parse, with the key positional and --note, --all, --json', () => {
+    expect(parseArgs(['agent-profiles', 'audit'])).toMatchObject({ cmd: 'agent-profiles-audit', args: {}, json: false })
+    expect(parseArgs(['agent-profiles', 'audit', '--all', '--json'])).toMatchObject({ cmd: 'agent-profiles-audit', args: { all: true }, json: true })
+    expect(parseArgs(['agent-profiles', 'audit-ignore', 'stale-runtime:rt_old', '--note', 'the lab is shut'])).toMatchObject({
+      cmd: 'agent-profiles-audit-ignore',
+      args: { key: 'stale-runtime:rt_old', note: 'the lab is shut' }
+    })
+    // The key may come after the flags too
+    expect(parseArgs(['agent-profiles', 'audit-ignore', '--note', 'n', 'unused-profile:ap_1'])).toMatchObject({ args: { key: 'unused-profile:ap_1', note: 'n' } })
+    expect(parseArgs(['agent-profiles', 'audit-unignore', 'over-broad-profile:ap_1:mcp:m1', '--json'])).toMatchObject({
+      cmd: 'agent-profiles-audit-unignore',
+      args: { key: 'over-broad-profile:ap_1:mcp:m1' },
+      json: true
+    })
+  })
+
+  it('takes one key, and none on the commands that have no key', () => {
+    expect(parseArgs(['agent-profiles', 'audit-ignore', 'a', 'b'])).toEqual({ error: 'unexpected argument: b' })
+    expect(parseArgs(['agent-profiles', 'audit', 'a'])).toEqual({ error: 'unexpected argument: a' })
+    expect(parseArgs(['agent-profiles', 'list', 'a'])).toEqual({ error: 'unexpected argument: a' })
+    // A key given as a flag besides the word is two keys
+    expect(parseArgs(['agent-profiles', 'audit-ignore', 'a', '--key', 'b'])).toEqual({ error: 'agent-profiles audit-ignore takes the key once: as the word after the command' })
+  })
+})
+
 // The Credentials list (credentials design §7): read from the CLI, changed in the app
 describe('parseArgs — credentials', () => {
   it('parses list, show and doctor into the Host command names', () => {

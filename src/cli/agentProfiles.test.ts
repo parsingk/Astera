@@ -144,3 +144,37 @@ describe('agentProfilesCommand', () => {
     expect(await run(h, 'agent-profiles-delete', { id: 'Reviewer' })).toEqual({ status: 409, body: { error: 'the profile is in use; archive it instead', reason: 'in-use' } })
   })
 })
+
+// Lifecycle design §7: the findings, and the ignore list, each one call that carries the request id
+describe('agentProfilesCommand — audit', () => {
+  it('audit passes all; ignore sends key and note', async () => {
+    const h = host()
+    await run(h, 'agent-profiles-audit', {}, 'req-1')
+    await run(h, 'agent-profiles-audit', { all: true }, 'req-2')
+    await run(h, 'agent-profiles-audit-ignore', { key: 'stale-runtime:rt_1', note: 'the lab is shut' }, 'req-3')
+    await run(h, 'agent-profiles-audit-ignore', { key: 'unused-profile:ap_1' }, 'req-4')
+    await run(h, 'agent-profiles-audit-unignore', { key: 'unused-profile:ap_1' }, 'req-5')
+    expect(h.calls).toEqual([
+      { cmd: 'agent-profiles-audit', args: {}, request: 'req-1' },
+      { cmd: 'agent-profiles-audit', args: { all: true }, request: 'req-2' },
+      { cmd: 'agent-profiles-audit-ignore', args: { key: 'stale-runtime:rt_1', note: 'the lab is shut' }, request: 'req-3' },
+      { cmd: 'agent-profiles-audit-ignore', args: { key: 'unused-profile:ap_1' }, request: 'req-4' },
+      { cmd: 'agent-profiles-audit-unignore', args: { key: 'unused-profile:ap_1' }, request: 'req-5' }
+    ])
+  })
+
+  it('answers what the Host answered, whatever it found', async () => {
+    const report = { findings: [], info: [], observe: { on: false, days: 0 }, unread: [], computedAt: 'T' }
+    const h = host({ 'agent-profiles-audit': { status: 200, body: report } })
+    expect(await run(h, 'agent-profiles-audit', {})).toEqual({ status: 200, body: report })
+  })
+
+  it('refuses a missing key, a bare --note and a valued --all before the Host is asked', async () => {
+    const h = host()
+    expect(await run(h, 'agent-profiles-audit-ignore', {})).toEqual({ status: 400, body: { error: 'the finding key is required: `astera agent-profiles audit-ignore <key>`, the key from `agent-profiles audit`' } })
+    expect(await run(h, 'agent-profiles-audit-unignore', {})).toEqual({ status: 400, body: { error: 'the finding key is required: `astera agent-profiles audit-unignore <key>`, the key from `agent-profiles audit --all`' } })
+    expect(await run(h, 'agent-profiles-audit-ignore', { key: 'k', note: true })).toEqual({ status: 400, body: { error: '--note needs a value' } })
+    expect(await run(h, 'agent-profiles-audit', { all: 'yes' })).toEqual({ status: 400, body: { error: '--all takes no value' } })
+    expect(h.calls).toEqual([])
+  })
+})

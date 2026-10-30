@@ -658,7 +658,12 @@ const NOT_SWITCHED = [
   // Answered by the Host's Credentials list (src/host/credentials/commands.ts): read here, changed in the app only
   'credentials-list',
   'credentials-show',
-  'credentials-doctor'
+  'credentials-doctor',
+  // Answered by the Host's findings (src/host/findings/commands.ts) through cli/agentProfiles.ts, beside the credentials:
+  // an agent's shell may read them and changes no ignore
+  'agent-profiles-audit',
+  'agent-profiles-audit-ignore',
+  'agent-profiles-audit-unignore'
 ] as const satisfies readonly AgentCommand[]
 
 /**
@@ -689,6 +694,9 @@ export interface AgentContextCommand {
   readonly summary: string
   /** Only where one line would mislead. */
   readonly detail?: string
+  /** The one word it takes that is not a flag, always required, sent as the argument `name` (`agent-profiles
+   *  audit-ignore <key>`). Absent for every command that takes flags only. */
+  readonly operand?: { readonly name: string; readonly about: string }
   readonly flags: readonly AgentContextFlag[]
 }
 
@@ -803,10 +811,11 @@ const flagsOf = (entry: CommandUsage): AgentContextFlag[] =>
 
 const entryFor = (name: string, entry: CommandUsage, isPublic: boolean): AgentContextCommand => ({
   name,
-  usage: invocationLine(name, entry.flags ?? []),
+  usage: invocationLine(name, entry.flags ?? [], entry.operand),
   public: isPublic,
   summary: entry.summary,
   ...(entry.detail === undefined ? {} : { detail: entry.detail }),
+  ...(entry.operand === undefined ? {} : { operand: { name: entry.operand.name, about: entry.operand.about } }),
   flags: flagsOf(entry)
 })
 

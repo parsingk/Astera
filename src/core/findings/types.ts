@@ -67,6 +67,10 @@ export type FindingSource =
   | 'profiles' | 'accounts' | 'orchestration' | 'tokens' | 'policy' | 'records' | 'extensions' | 'account-mcp'
   | 'credentials' | 'credential-uses' | 'runtimes' | 'extension-uses' | 'ignored' | 'settings' | 'cli-version'
 
+/** The usage window (plan thresholds): what a usage finding needs, and the most history counts, since records are kept 30
+ *  days (audit store). */
+export const OBSERVE_WINDOW_DAYS = 30
+
 /** `days`: whole days of Observe history counted, 0..30 (history.ts). */
 export interface ObserveHistory {
   on: boolean

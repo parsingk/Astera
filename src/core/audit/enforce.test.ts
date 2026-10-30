@@ -132,6 +132,15 @@ describe('enforceVerdict', () => {
       expect(verdict(claude('Bash', { command })), command).toEqual({ deny: false })
   })
 
+  // Lifecycle design §7: the findings' ignore list is the person's, so an agent cannot hide a finding about itself; reading
+  // the findings is not a change
+  it('blocks the findings ignore commands and lets the audit read through', () => {
+    for (const command of ['astera agent-profiles audit-ignore unused-profile:ap_1 --note n', 'ASTERA_SESSION= "$ASTERA_CLI" agent-profiles audit-unignore stale-runtime:rt_1'])
+      expect(verdict(claude('Bash', { command })), command).toMatchObject({ deny: true, ruleId: 'builtin-settings-command' })
+    for (const command of ['astera agent-profiles audit', 'astera agent-profiles audit --all --json'])
+      expect(verdict(claude('Bash', { command })), command).toEqual({ deny: false })
+  })
+
   it('fails closed to reads when the rules cannot be read', () => {
     const closed = { deny: true, ruleId: 'fail-closed', reason: 'Blocked by Astera: the Rules could not be read, so only reads are allowed.' }
     expect(verdict(claude('Read', { file_path: 'D:/proj/a.ts' }), null)).toEqual({ deny: false })

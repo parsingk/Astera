@@ -5,12 +5,12 @@
 import { isObserving } from '../audit/policy'
 import { auditDayOf } from '../audit/store'
 import type { AuditPolicy } from '../audit/types'
-import type { ObserveHistory } from './types'
+import { OBSERVE_WINDOW_DAYS, type ObserveHistory } from './types'
+
+// Declared with the shapes, which the renderer reads too (the Observe note, note.ts); kept importable from here
+export { OBSERVE_WINDOW_DAYS } from './types'
 
 export const DAY_MS = 24 * 60 * 60 * 1000
-/** The usage window (plan thresholds): what a usage finding needs, and the most history counts, since records are kept 30
- *  days (audit store). */
-export const OBSERVE_WINDOW_DAYS = 30
 
 /** Whole days from `sinceIso` to `nowMs`, never below 0. NaN for a time that does not parse, which no threshold passes,
  *  so nothing is judged old on a time that cannot be read. */

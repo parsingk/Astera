@@ -2557,5 +2557,24 @@ export const en: Record<keyof typeof ko, string> = {
   'findings.info.claudeUnhookedCannotTell':
     'Claude cannot tell: a Claude session in the last {days} days ran without the hooks that report uses.',
   'findings.info.claudeUnhookedCannotTellCodexToo':
-    'Neither Claude nor Codex can tell: a Claude session in the last {days} days ran without the hooks that report uses.'
+    'Neither Claude nor Codex can tell: a Claude session in the last {days} days ran without the hooks that report uses.',
+  'findings.observe.off': 'Usage findings need Observe on for 30 days. Observe is off.',
+  'findings.observe.days': 'Usage findings need Observe on for 30 days. It has been on for {days} days.',
+  'findings.unread': 'Could not read: {sources}',
+  'findings.none': 'No findings.',
+  'findings.source.profiles': 'agent profiles',
+  'findings.source.accounts': 'accounts',
+  'findings.source.orchestration': 'Jobs and Runs',
+  'findings.source.tokens': 'token totals',
+  'findings.source.policy': 'rules file',
+  'findings.source.records': 'Observe records',
+  'findings.source.extensions': 'shared extensions',
+  'findings.source.account-mcp': "accounts' own MCP servers",
+  'findings.source.credentials': 'Credentials list',
+  'findings.source.credential-uses': 'credential uses',
+  'findings.source.runtimes': 'paired Runtimes',
+  'findings.source.extension-uses': 'skill, command and agent uses',
+  'findings.source.ignored': 'ignored findings',
+  'findings.source.settings': 'app settings',
+  'findings.source.cli-version': 'Claude Code version'
 }

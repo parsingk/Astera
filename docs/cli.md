@@ -759,6 +759,9 @@ astera agent-profiles update  --id <profileId|name> [--name <text>] [--account <
 astera agent-profiles archive --id <profileId|name> [--reason <text>]
 astera agent-profiles restore --id <profileId|name>
 astera agent-profiles delete  --id <profileId|name>
+astera agent-profiles audit   [--all]
+astera agent-profiles audit-ignore   <key> [--note <text>]
+astera agent-profiles audit-unignore <key>
 
 astera audit   list    [--session <sessionId>] [--job <jobId>] [--run <runId>] [--task <taskId>] [--agent-profile <id|name>] [--action <action>] [--decision <allow|would-deny|unknown|blocked>] [--since <time>] [--until <time>] [--before-id <recordId>] [--limit <n>]
 astera audit   summary [--session <sessionId>] [--job <jobId>] [--run <runId>] [--task <taskId>] [--agent-profile <id|name>] [--action <action>] [--decision <allow|would-deny|unknown|blocked>] [--since <time>] [--until <time>]
@@ -1331,6 +1334,84 @@ say why in `error.details.reason` too: `agent-profile-unavailable` (unknown or a
   "accountIds":["acc_1","acc_2"],"mcpExclude":["mcp-github"],"permission":"ask", …}]}}
 ```
 
+**`agent-profiles audit` says what looks unused, duplicated, broken, failing, over-broad or costly**, and what the
+Rules cannot cover: the same findings **Settings › Security & Access › Findings** shows in the app. It covers every
+kind, not only profiles: agent profiles, the shared MCP servers, skills, commands and agents, paired Runtimes,
+credentials, Jobs and Runs, and the CLIs' coverage of a deny rule. Each finding has a `key`, its `rule`, its `subject`
+(`kind`, `id` and `name`), a `reason` and one `action`, the step that would resolve it. **Nothing is ever acted on**:
+no finding archives, removes, turns off, revokes or blocks anything, and the command changes nothing but the ignore
+list, which only `audit-ignore` and `audit-unignore` change. It exits 0 whatever it finds. The rules, with thresholds
+fixed in this version:
+
+- `unused-profile`: an active profile last used more than 90 days ago (or, never used, made more than 90 days ago)
+  that no scheduled Job holds.
+- `duplicate-profile`: active profiles with the same accounts in the same order, MCP exclusions, permission and
+  sandbox. One finding names the whole group.
+- `broken-reference`: a profile that names an account or a shared MCP server that was removed, or a Job or Task not
+  finished yet that runs as a profile that is gone or archived (a scheduled Job that waits on an archived profile says
+  so in `jobs list` instead).
+- `failing-profile`: a profile with at least 5 worker starts in 30 days, at least half of them failed.
+- `unused-mcp`: an enabled shared MCP server no session called in 30 days.
+- `coverage-gap`: a deny rule in force whose action the sessions of one CLI and session kind see (observe), or block
+  (enforce), only in part or not at all, while an active profile runs on that CLI. One finding per CLI, session kind
+  and rule, whose key ends with the rule's id, so each rule's gap is ignored apart.
+- `stale-runtime`: a paired Runtime not reached in more than 30 days.
+- `unmanaged-credential-reference`: a shared MCP server that passes a variable from the session that the Credentials
+  list does not name.
+- `stale-credential`: a shared MCP server's stored secret not used through Astera in 30 days.
+- `over-broad-profile`: a profile that runs without permission checks though every call it made in 30 days only read
+  (key ending `:bypass`), that runs outside the sandbox though it wrote only inside its folder and touched no login
+  folder (`:sandbox`), or that gets a shared MCP server it did not call (`:mcp:<id>`, one per server). It needs at
+  least 10 recorded calls.
+- `token-spike`: a Run that used at least 3 times the median tokens of its group's Runs in 30 days, with at least 5
+  Runs in the group (its Job's profile, else its first worker's, else its account).
+- `unused-skill`, `unused-command`, `unused-agent`: a shared skill, command or agent installed for Claude Code alone
+  with no recorded use in 30 days.
+
+**The findings from usage need Observe on for 30 days**: `unused-mcp`, `over-broad-profile` and the unused skill,
+command and agent findings. Their history counts from when observe or enforce was last turned on (`observingSince` in
+`policies show`), and never from before this version first ran on the profile, less each day whose records stopped at
+the size limit. Until it has 30 days, none of them is raised and `observe` says so: `{"on":false,"days":0}` while
+observe is off, or how many whole `days` it has had, which `--human` prints first as "Usage findings need Observe on for
+30 days. It has been on for 12 days." (or "Observe is off."). Something shared, turned on or made within the 30 days is
+not judged either. `failing-profile` and `token-spike` read Dispatch outcomes and token totals, which are kept
+whatever the mode, so they do not wait. A skill Codex can use too is never a finding, since Codex does not report
+which skills it used: when Claude reported no use of it, `info` says so and that Codex cannot tell. `info` also says
+when Claude cannot tell (a Claude Code older than 2.1.312 here, a Claude chat in the window, whose typed skills and
+commands are not reported, or a Claude session started without the hooks that report uses), and for an item Codex has
+too, that neither can. An `info` line is never a finding and has no key.
+
+**A source that cannot be read drops only its own findings.** `unread` names it, one of `profiles`, `accounts`,
+`orchestration`, `tokens`, `policy`, `records`, `extensions`, `account-mcp`, `credentials`, `credential-uses`,
+`runtimes`, `extension-uses`, `ignored`, `settings` and `cli-version`, the findings that need it are left out, the rest
+are given, and `--human` closes with "Could not read: …". A use log that stopped at the size limit on a day of the last
+30 counts as unread, since its uses are missing. With `policy` unread, how long Observe has been on is not known:
+`observe` reads `{"on":false,"days":0}` and `--human` prints the unread line instead of the Observe note. With `ignored`
+unread, every finding shows as open. The Host computes the findings when asked and keeps them for a minute, so a change
+elsewhere may take a minute to show; an ignore shows at once.
+
+**`audit-ignore <key>` sets a finding aside**: `audit` leaves it out, and `audit --all` shows it with `"ignored":true`,
+`ignoredAt` and the `--note` given (one line of at most 200 characters; a longer one or one with a line break is 2).
+Ignoring it again replaces the note. It holds until `audit-unignore <key>`, whatever later happens to its subject. The
+key is the word after the command, as `audit` gives it; a key no current finding has is 4, and nothing is written.
+`audit-unignore` answers `"removed":false` for a key that was not ignored. The Host keeps the ignores in
+`findings-ignored.json` in the profile; a damaged one refuses both with 6, and a copy of it is kept beside it. **An agent
+session may read the findings**, which hold names and ids only, never a value, a command or a file's contents; the two
+ignore commands are refused there with 5, so an agent cannot hide a finding about itself. MCP clients, plugins, the SDK
+and a paired controller (`--runtime`) have none of the three.
+
+```bash
+astera agent-profiles audit --human
+astera agent-profiles audit-ignore stale-runtime:rt_lab --note "the lab is shut until spring"
+astera agent-profiles audit --all --json
+```
+
+```json
+{"ok":true,"data":{"findings":[{"key":"unused-profile:ap_3f2a9c01b7de","rule":"unused-profile",
+  "subject":{"kind":"profile","id":"ap_3f2a9c01b7de","name":"Reviewer"},"reason":"Not used in 120 days.",
+  "action":"Archive the profile.","ignored":false}],"info":[],"observe":{"on":true,"days":12},"unread":[]}}
+```
+
 **`credentials` reads the Credentials list**, the same as **Settings › Security & Access › Credentials** in the app: what
 Astera keeps out of the sessions it starts. Shared MCP servers that hold a stored secret appear on their own, hidden by
 default (the Gateway gives the session the server, so the raw variables go); the entries you registered name environment
@@ -1359,18 +1440,22 @@ the runtime it uses (srt), not with Claude Code itself.
 session's folder or `outside project: <name>`, a host name, `server.tool`), never the full command, its output, a
 file's contents or a secret. Nothing is blocked and no session waits. A session already running keeps what it started
 with. `compatibility`, the default, observes nothing, and observe writes nothing new in it (the token totals `runs get`
-shows are kept in `token-totals.json` in every mode); turning observe off keeps the records and the rules. The Host
-keeps the records in the profile (`audit/`, a file a day, for 30 days or up to 50 MB) and the rules beside them
-(`audit-policy.json`), so these commands work with Astera closed.
+shows are kept in `token-totals.json` in every mode); turning observe off keeps the records and the rules. While
+observe or enforce is on, `policies show` and every policies change answer `observingSince` too: when it was last
+turned on from off, which a switch between observe and enforce keeps and turning it off drops. `agent-profiles audit`
+counts Observe history from it (a file from before it existed has none, and the count then starts when this version
+first ran on the profile). The Host keeps the records in the profile (`audit/`, a file a day, for 30 days or up to
+50 MB) and the rules beside them (`audit-policy.json`), so these commands work with Astera closed.
 
 **`policies set-mode --mode enforce` stops what the rules deny.** Every Claude Code or Codex session Astera starts
 afterwards runs a blocking hook before each tool call, with Astera's own executable (the Host runtime on Windows, the
 app run as node elsewhere). The hook reads the rules at that call and decides it there: a call the rules deny does not
 run, the agent is told `Blocked by Astera Rules: …`, and the call is recorded with the decision `blocked` and the rule
 (`ruleId`) that stopped it. Before any rule, an agent session cannot write Astera's profile folder or run an `astera
-policies`, `credentials` or `agent-profiles` command that changes them, and a rules file it cannot read lets only reads
-through. An agent running as you can still write those files from a script it runs. A session does not start in
-enforce when it cannot be protected: Claude Code older than 2.1.306, codex older than 0.160.0, a CLI that is not there
+policies`, `credentials` or `agent-profiles` command that changes them (the findings' ignore list among them), and a
+rules file it cannot read lets only reads through. An agent running as you can still write those files from a script it
+runs. A session does not start in enforce when it cannot be protected: Claude Code older than 2.1.306, codex older
+than 0.160.0, a CLI that is not there
 or whose version cannot be read, Claude Code hooks turned off by your organization's managed settings on this computer
 (a policy served from the claude.ai console cannot be seen), a codex that does not take `--no-daemon`, or no Astera
 executable to run the hook (Windows without the Host runtime). A project's own `disableAllHooks` does not turn the hook

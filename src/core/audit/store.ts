@@ -293,7 +293,12 @@ export function auditDayStopped(profileDir: string, at: string): boolean {
  *  (lifecycle design §4): those this process stopped, and those the marks on disk name, which an earlier process left
  *  before this one has looked at the folder. A folder that cannot be listed adds none. Never throws. */
 export function auditStoppedDays(profileDir: string): string[] {
-  const dir = profilePaths(profileDir).auditRecords
+  return stoppedDaysIn(profilePaths(profileDir).auditRecords)
+}
+
+/** auditStoppedDays over any folder of day files: the credential uses' and the shared extension uses', whose stopped days
+ *  make those logs missing data for the findings (lifecycle rulings R4-4, R6-7). */
+export function stoppedDaysIn(dir: string): string[] {
   const days = new Set(folders.get(dir)?.stopped ?? [])
   let names: string[] = []
   try {
