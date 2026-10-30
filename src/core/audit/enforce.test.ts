@@ -221,6 +221,16 @@ describe('enforceVerdict', () => {
     for (const command of lines) expect(verdict(claude('Bash', { command }, { cwd: work }), policy), command).toMatchObject({ deny: true, ruleId: 'otherwise' })
   })
 
+  // R-F8 list, N1: the time keyword times the group after it, so what the group does is judged: a read passes fail-closed,
+  // a delete outside is denied. nohup and sudo before a group are a syntax error and stay unknown
+  it('judges the group time times, and holds nohup or sudo before a group, under fail-closed and the starter rules', () => {
+    const work = path.resolve('/work/proj')
+    const closed = { deny: true, ruleId: 'fail-closed' }
+    for (const command of ['time (ls)', 'time { ls; }', 'time -p (ls)']) expect(verdict(claude('Bash', { command }, { cwd: work }), null), command).toEqual({ deny: false })
+    for (const command of ['nohup (ls)', 'sudo (ls)']) expect(verdict(claude('Bash', { command }, { cwd: work }), null), command).toMatchObject(closed)
+    expect(verdict(claude('Bash', { command: 'time (rm -rf ~/x)' }, { cwd: work }))).toMatchObject({ deny: true, ruleId: 'starter-delete-outside' })
+  })
+
   it('fails closed on a script piped into a shell sudo starts', () => {
     const work = path.resolve('/work/proj')
     for (const command of ['cat script.sh | sudo -s', "echo 'git push' | sudo -u root -s", "echo 'rm -rf /x' | sudo -i"])

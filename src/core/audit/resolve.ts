@@ -524,6 +524,9 @@ interface Cmd {
   /** Set by splitLine on a command whose output a `|` hands to another: the program that one is, as stripPrefix finds it
    *  past assignments and wrappers, in lower case. */
   pipes?: string
+  /** Set by splitLine on a command of a POSIX line that a group's opening bracket ended (`time (ls)`, `time { ls; }`), not a
+   *  `$(`: the group follows it. */
+  grouped?: true
   /** It began with PowerShell's call operator `&`, so its first word is a program however it is spelled. */
   call: boolean
   /** For each word, whether it was quoted. A quoted word is a value, so it is never a program or a subcommand shown. */
@@ -1123,7 +1126,13 @@ function stripPrefix(raw: Cmd, flavor: Flavor): { cmd: Cmd; syntax: boolean; fil
       wrapped = true
     } else if (WRAPPER_OPTIONS.has(programName(w))) {
       const next = afterWrapper(words, i, programName(w))
-      if (next === i) break // it runs no command: it is the program
+      if (next === i) {
+        // It runs no command: it is the program. But bash's time keyword, bare where a command starts, times the group that
+        // follows it (`time (ls)`, `time -p { ls; }`), which is the command, so nothing is left of it (R-F8 list, N1). Any
+        // other wrapper before a group is a syntax error, and stays the program
+        if (words[i] === 'time' && !wrapped && raw.grouped === true) i = words.length
+        break
+      }
       i = next
       wrapped = true
     }
@@ -1460,6 +1469,8 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
   }
   /** Ends the command being read, and gives it back if it was kept. */
   const endCommand = (): Cmd | undefined => {
+    // A group's opening bracket ends it, where a `$(` would have left its `$` in the word
+    const grouped = flavor === 'posix' && (endedBy === '{' || (endedBy === '(' && !(has && cur.endsWith('$'))))
     endWord()
     sink = null
     if (flavor === 'ps' && words[0]?.toLowerCase() === 'switch' && (endedBy === '(' || endedBy === '{')) switchNext = { parens, braces: braces.length }
@@ -1472,6 +1483,7 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
       if (compounds.length > 0) cmd.within = compounds.slice(-MAX_GROUPS)
       if (closing !== undefined && inputs.length > 0) cmd.inputsOf = closing
       if (flavor === 'ps') cmd.ps = true
+      if (grouped) cmd.grouped = true
       if (unread) cmd.unread = true
       if (chain.length > 0) cmd.groups = [...chain]
       commands.push(cmd)

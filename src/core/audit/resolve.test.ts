@@ -2977,6 +2977,30 @@ describe('shell: a wrapper with no command after its options is the program', ()
     }
   )
 
+  // R-F8 list, N1: bash's time keyword times the group after it, which is the command, as at the base; time alone is still
+  // a program
+  it.each([
+    ['time (ls)', '(ls)'],
+    ['time { ls; }', '{ ls; }'],
+    ['time(ls)', '(ls)'],
+    ['time -p (ls)', '(ls)'],
+    ['time -p { ls; }', '{ ls; }'],
+    ['time (rm -rf ../x)', '(rm -rf ../x)'],
+    ['time ( cat ../x )', '( cat ../x )']
+  ])('%s reads as the group it times', (line, group) => {
+    expect(bash(line)).toEqual(bash(group))
+  })
+
+  it('reads a time before a group in a conditional as the group it times', () => {
+    expect(bash('if true; then time (ls); fi')).toEqual(bash('if true; then (ls); fi'))
+  })
+
+  // nohup and sudo are no keywords, and a group after them is a syntax error, so nothing runs: each is the program it is,
+  // which this does not know (stricter than the base, which dropped it). So is a time a wrapper runs
+  it.each(['nohup (ls)', 'sudo (ls)', 'nohup { ls; }', 'env time (ls)', 'time'])('%s is unknown', (line) => {
+    expect(bash(line)).toMatchObject({ action: 'process.execute', confidence: 'unknown' })
+  })
+
   it('keeps exec with only redirections a write of the file it opens', () => {
     expect(bash('exec > log.txt 2>&1')).toMatchObject({ action: 'filesystem.write', target: 'log.txt', insideProject: true, confidence: 'high' })
   })
