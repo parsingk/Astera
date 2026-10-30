@@ -75,6 +75,8 @@ export interface ObserveHistory {
 export interface FindingsReport {
   findings: Finding[]
   info: InfoLine[]
+  /** How much Observe history the usage findings had. Not known when `policy` is in `unread`: it then reads
+   *  `{ on: false, days: 0 }`, and a reader shows the unread line instead of the Observe note, never "Observe is off". */
   observe: ObserveHistory
   unread: FindingSource[]
   computedAt: string

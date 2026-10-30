@@ -129,11 +129,16 @@ function withIgnore(f: Finding, file: IgnoredFile): Finding {
   return { ...f, ignored: true, ignoredAt: e.at, ...(e.note !== undefined ? { note: e.note } : {}) }
 }
 
+const isUnread = (i: FindingInputs, s: RuleSource): boolean => FIELDS[s].some((field) => i[field] === undefined)
+
 export function computeFindings(i: FindingInputs, ignored: IgnoredFile): FindingsReport {
   const unread = new Set<RuleSource>()
+  // The report carries the Observe history whatever the rules need, so an unread policy is always named: an `observe`
+  // that could not be read must not read as "Observe is off" (Review Focus 1)
+  if (isUnread(i, 'policy')) unread.add('policy')
   const found: Finding[] = []
   for (const row of RULES) {
-    const missing = row.needs.filter((s) => FIELDS[s].some((field) => i[field] === undefined))
+    const missing = row.needs.filter((s) => isUnread(i, s))
     if (missing.length > 0) {
       for (const s of missing) unread.add(s)
       continue
@@ -143,6 +148,7 @@ export function computeFindings(i: FindingInputs, ignored: IgnoredFile): Finding
   return {
     findings: found.map((f) => withIgnore(f, ignored)).sort(byPlace),
     info: [],
+    // Not known when the policy is unread, which `unread` then says (FindingsReport.observe)
     observe: i.observe ?? { on: false, days: 0 },
     unread: (Object.keys(FIELDS) as RuleSource[]).filter((s) => unread.has(s)),
     computedAt: new Date(i.nowMs).toISOString()

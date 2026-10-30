@@ -24,17 +24,21 @@ function sinceOf(text: string): string | null {
 /**
  * The stamp, written as `nowMs` when there is none. A damaged file is kept aside (`<file>.bak`) and stamped afresh: the
  * stamp only ever holds findings back, so starting it now loses nothing but time. A file that could not be read is not
- * written over (storeFile.ts: nothing read, nothing healed), and neither failure rejects: `nowMs` stands in, which ages
- * nothing, so no usage finding is raised until a stamp is kept. One read at a time per file, so two first reads in this
- * process do not stamp twice.
+ * written over (storeFile.ts: nothing read, nothing healed), and neither that nor a stamp that could not be written
+ * rejects: `nowMs` stands in, which ages nothing, so no usage finding is raised until a stamp is kept. Either is logged,
+ * naming the file and the error, so the Host's log says why the history counts no days. One read at a time per file, so
+ * two first reads in this process do not stamp twice.
  */
-export async function readFindingsSince(profileDir: string, nowMs: number): Promise<string> {
+export async function readFindingsSince(profileDir: string, nowMs: number, o: { log?: (message: string) => void } = {}): Promise<string> {
   const file = profilePaths(profileDir).findingsHistory
   const now = new Date(nowMs).toISOString()
   let since = now
   await oneAtATime(file, async () => {
     const read = await readStoreFile(file)
-    if (read.kind === 'unreadable') return
+    if (read.kind === 'unreadable') {
+      o.log?.(`findings: ${file} could not be read (${String(read.error)}); the history counts from now`)
+      return
+    }
     if (read.kind === 'text') {
       const kept = sinceOf(read.text)
       if (kept !== null) {
@@ -44,7 +48,7 @@ export async function readFindingsSince(profileDir: string, nowMs: number): Prom
       await keepDamaged(file, read.text)
     }
     await fs.mkdir(path.dirname(file), { recursive: true })
-    await writeThroughTmp(file, JSON.stringify({ version: 1, since: now }, null, 2) + '\n').catch(() => {})
-  }).catch(() => {})
+    await writeThroughTmp(file, JSON.stringify({ version: 1, since: now }, null, 2) + '\n')
+  }).catch((err: unknown) => o.log?.(`findings: ${file} could not be written (${String(err)}); the history counts from now`))
   return since
 }

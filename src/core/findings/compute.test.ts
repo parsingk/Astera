@@ -54,14 +54,34 @@ describe('computeFindings', () => {
     const profiles = [prof('ap_a', { lastUsedAt: ago(100) }), prof('ap_b', { lastUsedAt: ago(100) })]
     const r = computeFindings({ ...BASE, profiles }, NONE)
     expect(r.findings.map((f) => f.rule)).toEqual(['duplicate-profile'])
-    // Four rows need the orchestration state; it is named once
-    expect([...r.unread].sort()).toEqual(['accounts', 'extensions', 'orchestration', 'tokens'])
-    expect(r).toMatchObject({ info: [], observe: { on: false, days: 0 }, computedAt: new Date(NOW).toISOString() })
+    // Four rows need the orchestration state; it is named once. The policy is unread too: the report's Observe history
+    // comes from it
+    expect([...r.unread].sort()).toEqual(['accounts', 'extensions', 'orchestration', 'policy', 'tokens'])
+    expect(r).toMatchObject({ info: [], computedAt: new Date(NOW).toISOString() })
 
     // Read, the same profiles are also unused
-    const all = computeFindings({ ...BASE, profiles, accounts: [{ id: 'acc_1', provider: 'claude' }], registry: [], orch: emptyState(), spent: [] }, NONE)
+    const all = computeFindings(
+      { ...BASE, profiles, accounts: [{ id: 'acc_1', provider: 'claude' }], registry: [], orch: emptyState(), spent: [], policy: null, observe: { on: false, days: 0 } },
+      NONE
+    )
     expect(all.unread).toEqual([])
     expect(all.findings.map((f) => f.key)).toEqual(['unused-profile:ap_a', 'unused-profile:ap_b', expect.stringMatching(/^duplicate-profile:fp-/)])
+  })
+
+  // Review Focus 1: an Observe history that could not be read must not read as "Observe is off"
+  it('an unread policy is named in unread, though no rule needs it, since the report carries the Observe history', () => {
+    const r = computeFindings(BASE, NONE)
+    expect(r.unread).toContain('policy')
+    expect(r.observe).toEqual({ on: false, days: 0 })
+    // Read, it is not named, whether there is a policy file or not
+    for (const policy of [null, { version: 1 as const, mode: 'observe' as const, rules: [], otherwise: 'allow' as const }]) {
+      const read = computeFindings({ ...BASE, policy, observe: { on: true, days: 12 } }, NONE)
+      expect(read.unread).not.toContain('policy')
+      expect(read.observe).toEqual({ on: true, days: 12 })
+    }
+    // Half read is unread
+    expect(computeFindings({ ...BASE, policy: null }, NONE).unread).toContain('policy')
+    expect(computeFindings({ ...BASE, observe: { on: true, days: 3 } }, NONE).unread).toContain('policy')
   })
 
   it('null is a value and undefined is unread (ruling R-P1)', () => {

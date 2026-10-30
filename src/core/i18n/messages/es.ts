@@ -2271,7 +2271,7 @@ export const es: Catalog = {
   'pluginNotify.accountSwitched': 'Continuando con la cuenta {label}.',
   'findings.reason.unusedProfile': 'Sin usar desde hace {days} días.',
   'findings.reason.unusedProfileNever': 'No se ha usado nunca desde que se creó hace {days} días.',
-  'findings.reason.duplicateProfile': 'Tiene las mismas cuentas, exclusiones de MCP, permisos y sandbox que {others}.',
+  'findings.reason.duplicateProfile': 'Estos perfiles tienen las mismas cuentas, exclusiones de MCP, permisos y sandbox: {names}.',
   'findings.reason.removedAccount': 'Usa una cuenta que se eliminó: {ids}.',
   'findings.reason.removedMcp': 'Excluye un servidor MCP que se eliminó: {ids}.',
   'findings.reason.profileGone': 'Se ejecuta con el perfil de agente {id}, que ya no existe.',

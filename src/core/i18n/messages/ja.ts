@@ -2241,7 +2241,7 @@ export const ja: Catalog = {
   'pluginNotify.accountSwitched': '{label} アカウントで続けます。',
   'findings.reason.unusedProfile': '{days} 日間使われていません。',
   'findings.reason.unusedProfileNever': '作成から {days} 日たちましたが、一度も使われていません。',
-  'findings.reason.duplicateProfile': '{others} とアカウント、除外した MCP サーバー、権限、サンドボックスがすべて同じです。',
+  'findings.reason.duplicateProfile': '次のプロファイルは、アカウント、除外した MCP サーバー、権限、サンドボックスがすべて同じです: {names}。',
   'findings.reason.removedAccount': '削除されたアカウントを使っています: {ids}。',
   'findings.reason.removedMcp': '削除された MCP サーバーを除外リストに入れています: {ids}。',
   'findings.reason.profileGone': 'エージェントプロファイル {id} で実行しますが、そのプロファイルはもうありません。',

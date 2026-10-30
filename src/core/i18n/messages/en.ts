@@ -2506,7 +2506,7 @@ export const en: Record<keyof typeof ko, string> = {
   'pluginNotify.accountSwitched': 'Continuing on the {label} account.',
   'findings.reason.unusedProfile': 'Not used in {days} days.',
   'findings.reason.unusedProfileNever': 'Never used since it was made {days} days ago.',
-  'findings.reason.duplicateProfile': 'Same accounts, MCP exclusions, permission and sandbox as {others}.',
+  'findings.reason.duplicateProfile': 'These profiles have the same accounts, MCP exclusions, permission and sandbox: {names}.',
   'findings.reason.removedAccount': 'Uses an account that was removed: {ids}.',
   'findings.reason.removedMcp': 'Leaves out an MCP server that was removed: {ids}.',
   'findings.reason.profileGone': 'Runs as agent profile {id}, which no longer exists.',

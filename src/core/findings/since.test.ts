@@ -34,6 +34,19 @@ describe('readFindingsSince', () => {
     expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual({ version: 1, since: first })
   })
 
+  it('a file that cannot be read is not written over, reads as now, and the log says why', async () => {
+    const p = await profile()
+    const file = profilePaths(p).findingsHistory
+    // A folder where the file should be: reading it fails, and not as "missing"
+    await fs.mkdir(file)
+    const logged: string[] = []
+    expect(await readFindingsSince(p, NOW, { log: (m) => logged.push(m) })).toBe(new Date(NOW).toISOString())
+    expect((await fs.stat(file)).isDirectory()).toBe(true)
+    expect(logged).toHaveLength(1)
+    expect(logged[0]).toContain(file)
+    expect(logged[0]).toMatch(/EISDIR/)
+  })
+
   it('a damaged file is kept aside and restamped', async () => {
     for (const damage of ['{"version":1,', JSON.stringify({ version: 1, since: 'yesterday' }), JSON.stringify({ version: 2, since: '2026-01-01T00:00:00.000Z' })]) {
       const p = await profile()

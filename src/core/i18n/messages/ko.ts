@@ -2760,7 +2760,7 @@ export const ko = {
   // Findings (lifecycle design §4): the reasons and the one action each finding names
   'findings.reason.unusedProfile': '{days}일 동안 쓰지 않았습니다.',
   'findings.reason.unusedProfileNever': '만든 지 {days}일이 지났지만 한 번도 쓰지 않았습니다.',
-  'findings.reason.duplicateProfile': '{others}와 계정, 제외한 MCP 서버, 권한, 샌드박스가 모두 같습니다.',
+  'findings.reason.duplicateProfile': '다음 프로필은 계정, 제외한 MCP 서버, 권한, 샌드박스가 모두 같습니다: {names}.',
   'findings.reason.removedAccount': '삭제된 계정을 씁니다: {ids}.',
   'findings.reason.removedMcp': '삭제된 MCP 서버를 제외 목록에 두고 있습니다: {ids}.',
   'findings.reason.profileGone': '에이전트 프로필 {id}로 실행하는데, 그 프로필이 없습니다.',

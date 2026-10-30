@@ -58,4 +58,24 @@ describe('the ignore file', () => {
       expect(await fs.readFile(file, 'utf8')).toBe(damage)
     }
   })
+
+  it('says so when the damaged copy could not be kept, and tries again at the next read', async () => {
+    const p = await profile()
+    const file = profilePaths(p).findingsIgnored
+    await fs.writeFile(file, '{ not json')
+    const bak = async (): Promise<string[]> => (await fs.readdir(p)).filter((n) => n.endsWith('.bak'))
+    // A keep that leaves no copy behind, as one that fails does
+    const failed = await readIgnored(p, { keep: async () => {} }).catch((x: unknown) => x)
+    expect(failed).toBeInstanceOf(RepairNeeded)
+    expect((failed as RepairNeeded).message).toBe('findings-ignored.json is damaged, and a copy of it could not be kept')
+    expect(await bak()).toEqual([])
+    // The same damage is kept at the next read, and only then said to be
+    const kept = await readIgnored(p).catch((x: unknown) => x)
+    expect((kept as RepairNeeded).message).toBe('findings-ignored.json is damaged; a copy was kept beside it')
+    expect(await bak()).toEqual(['findings-ignored.json.bak'])
+    // And once kept, it is not copied again
+    await readIgnored(p).catch(() => {})
+    expect(await bak()).toEqual(['findings-ignored.json.bak'])
+    expect(await fs.readFile(file, 'utf8')).toBe('{ not json')
+  })
 })

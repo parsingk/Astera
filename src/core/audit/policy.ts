@@ -6,7 +6,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { profilePaths } from '../profile/paths'
-import { keepDamaged, readStoreFile } from '../storeFile'
+import { hasKeptCopy, keepDamaged, readStoreFile } from '../storeFile'
 import { writeThroughTmp } from '../accounts/fileQueue'
 import { RepairNeeded } from '../settings/repairNeeded'
 import type { ResolvedAction } from './resolve'
@@ -210,17 +210,9 @@ export async function damageIsKept(profileDir: string): Promise<boolean> {
   const file = profilePaths(profileDir).auditPolicy
   const read = await readStoreFile(file)
   if (read.kind !== 'text') return false
-  const dir = path.dirname(file)
-  const has = async (): Promise<boolean> => {
-    for (const n of await fs.readdir(dir).catch(() => [] as string[])) {
-      if (!n.startsWith(`${path.basename(file)}.`) || !n.endsWith('.bak')) continue
-      if ((await fs.readFile(path.join(dir, n), 'utf8').catch(() => null)) === read.text) return true
-    }
-    return false
-  }
-  if (await has()) return true
+  if (await hasKeptCopy(file, read.text)) return true
   await keepDamaged(file, read.text)
-  return has()
+  return hasKeptCopy(file, read.text)
 }
 
 /** Writes the rules and mode atomically. */

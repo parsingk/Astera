@@ -119,7 +119,15 @@ describe('unused-profile (§4.1)', () => {
   it('archived profiles are never judged', () => {
     const p = prof('ap_a', { status: 'archived', lastUsedAt: ago(200), archivedAt: ago(100) })
     expect(unusedProfileFindings(inputs({ profiles: [p] }))).toEqual([])
-    expect(failingProfileFindings(inputs({ profiles: [p] }))).toEqual([])
+    // Five failed starts in the window: raised while it is active, not once it is archived (§4.4 is about active profiles)
+    const failing = orch({
+      jobs: [job('job_1')],
+      runs: [run('run_1', 'job_1', 1)],
+      tasks: [task('t_1', { runId: 'run_1' })],
+      dispatches: [1, 2, 3, 4, 5].map((n) => dispatch(`d${n}`, 't_1', { agentProfileId: 'ap_a', startedAt: ago(n), outcome: 'failed' }))
+    })
+    expect(failingProfileFindings(inputs({ profiles: [{ ...p, status: 'active' }], orch: failing })).map((f) => f.key)).toEqual(['failing-profile:ap_a'])
+    expect(failingProfileFindings(inputs({ profiles: [p], orch: failing }))).toEqual([])
   })
 })
 
@@ -144,8 +152,8 @@ describe('duplicate-profile (§4.2)', () => {
         rule: 'duplicate-profile',
         subject: { kind: 'profiles', id: fp(same.accountIds, same.mcpExclude, 'ask', true), name: 'a, b' },
         profileIds: ['ap_a', 'ap_b'],
-        message: { key: 'findings.reason.duplicateProfile', params: { others: 'b' } },
-        reason: 'Same accounts, MCP exclusions, permission and sandbox as b.',
+        message: { key: 'findings.reason.duplicateProfile', params: { names: 'a, b' } },
+        reason: 'These profiles have the same accounts, MCP exclusions, permission and sandbox: a, b.',
         suggestion: { key: 'findings.do.keepOne' },
         action: 'Keep one and archive the others.',
         open: { kind: 'profiles', profileIds: ['ap_a', 'ap_b'] },
@@ -168,7 +176,7 @@ describe('duplicate-profile (§4.2)', () => {
     ]
     const found = duplicateProfileFindings(inputs({ profiles }))
     expect(found.map((f) => [f.subject.name, f.profileIds, f.reason])).toEqual([
-      ['a, b, c', ['ap_a', 'ap_b', 'ap_c'], 'Same accounts, MCP exclusions, permission and sandbox as b, c.']
+      ['a, b, c', ['ap_a', 'ap_b', 'ap_c'], 'These profiles have the same accounts, MCP exclusions, permission and sandbox: a, b, c.']
     ])
   })
 })
@@ -203,8 +211,19 @@ describe('broken-reference (§4.3)', () => {
     const both = brokenProfileFindings(inputs({ registry, profiles: [prof('ap_a', { accountIds: ['acc_9'], mcpExclude: ['ext_3'] })] }))
     expect(both).toHaveLength(1)
     expect(both[0].reason).toBe('Uses an account that was removed: acc_9. Leaves out an MCP server that was removed: ext_3.')
-    // An archived profile is not judged
-    expect(brokenProfileFindings(inputs({ registry, profiles: [prof('ap_a', { status: 'archived', accountIds: ['acc_9'] })] }))).toEqual([])
+  })
+
+  it('an archived profile with a removed account or MCP server is broken-reference too', () => {
+    // §4.3's subject is any profile: an archived one a held Job still runs as, or one restored, meets what was removed
+    const registry = [mcp('ext_1')]
+    const archived = { status: 'archived' as const, archivedAt: ago(10) }
+    const found = brokenProfileFindings(
+      inputs({ registry, profiles: [prof('ap_a', { ...archived, accountIds: ['acc_9'] }), prof('ap_b', { ...archived, mcpExclude: ['ext_3'] })] })
+    )
+    expect(found.map((f) => [f.key, f.reason])).toEqual([
+      ['broken-reference:ap_a', 'Uses an account that was removed: acc_9.'],
+      ['broken-reference:ap_b', 'Leaves out an MCP server that was removed: ext_3.']
+    ])
   })
 
   it('an unfinished Job naming a gone profile is broken-reference on the Job', () => {
@@ -252,6 +271,34 @@ describe('broken-reference (§4.3)', () => {
         { kind: 'run', runId: 'run_1' }
       ]
     ])
+  })
+
+  it("a plan Task of an unscheduled Job that has not run names a gone or archived profile: broken-reference, opening the Job", () => {
+    const s = orch({
+      jobs: [job('job_once')],
+      tasks: [
+        task('t_gone', { jobId: 'job_once', agentProfileId: 'ap_gone', title: 'Plan step one' }),
+        task('t_old', { jobId: 'job_once', agentProfileId: 'ap_old', title: 'Plan step two' })
+      ]
+    })
+    const found = brokenWorkFindings(inputs({ profiles: [prof('ap_old', { status: 'archived' })], orch: s }))
+    expect(found.map((f) => [f.key, f.subject, f.reason, f.open])).toEqual([
+      ['broken-reference:t_gone', { kind: 'task', id: 't_gone', name: 'Plan step one' }, 'Runs as agent profile ap_gone, which no longer exists.', { kind: 'job', jobId: 'job_once' }],
+      ['broken-reference:t_old', { kind: 'task', id: 't_old', name: 'Plan step two' }, 'Runs as agent profile old, which is archived.', { kind: 'job', jobId: 'job_once' }]
+    ])
+    // Once the Job's only Run has completed it has ended, and its plan holds nothing
+    const done = orch({ ...s, runs: [run('run_1', 'job_once', 1)], tasks: [...s.tasks, task('t_run', { runId: 'run_1', status: 'completed' })] })
+    expect(brokenWorkFindings(inputs({ profiles: [prof('ap_old', { status: 'archived' })], orch: done }))).toEqual([])
+  })
+
+  it("a Run's Task of a scheduled Job naming an archived profile is broken-reference: §5 holds back only the plan", () => {
+    const s = orch({
+      jobs: [job('job_sched', { schedule: { kind: 'daily', time: '09:00' } })],
+      runs: [run('run_1', 'job_sched', 1)],
+      tasks: [task('t_plan', { jobId: 'job_sched', agentProfileId: 'ap_old' }), task('t_run', { runId: 'run_1', agentProfileId: 'ap_old' })]
+    })
+    const found = brokenWorkFindings(inputs({ profiles: [prof('ap_old', { status: 'archived' })], orch: s }))
+    expect(found.map((f) => [f.key, f.open])).toEqual([['broken-reference:t_run', { kind: 'run', runId: 'run_1' }]])
   })
 
   it('a scheduled Job whose profile is archived is not broken-reference', () => {

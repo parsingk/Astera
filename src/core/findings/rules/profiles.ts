@@ -1,6 +1,8 @@
 // The profile findings (lifecycle design §4.1 to §4.4): a profile nobody has used for 90 days, profiles that duplicate
 // each other, a profile, Job or Task that points at something gone, and a profile whose workers keep failing. Each is
-// advice that names one action and takes none (§1). Archived profiles are not judged: the person already set them aside.
+// advice that names one action and takes none (§1). §4.1, §4.2 and §4.4 judge active profiles only, as the spec says,
+// since the person already set the archived ones aside. §4.3 judges every profile: an archived one still runs for the
+// work that holds it, and one restored meets what was removed.
 import { createHash } from 'node:crypto'
 import { archivedProfilesOfJob, profileIdsOfJob } from '../../orchestration/archivedProfiles'
 import { isTerminal, outcomeOf } from '../../orchestration/running'
@@ -57,12 +59,12 @@ export function unusedProfileFindings(i: FindingInputs): Finding[] {
 const fingerprint = (p: AgentProfile): string =>
   'fp-' + createHash('sha256').update(JSON.stringify([p.accountIds, [...p.mcpExclude].sort(), p.permission, p.sandbox])).digest('hex').slice(0, 12)
 
-/** Oldest first, so the reason names the later copies beside the first one made. */
+/** Oldest first: the order the group is named in. */
 const byCreated = (a: AgentProfile, b: AgentProfile): number =>
   Date.parse(a.createdAt) - Date.parse(b.createdAt) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
 
-/** §4.2: one finding per group of two or more active profiles with one fingerprint. Its subject is the group, named by its
- *  members, oldest first; the reason names the others beside the first. */
+/** §4.2: one finding per group of two or more active profiles with one fingerprint. Its subject is the group, and the
+ *  reason names every member, oldest first, so the same sentence is right on each member's mark (ruling R3-1). */
 export function duplicateProfileFindings(i: FindingInputs): Finding[] {
   if (i.profiles === undefined) return []
   const groups = new Map<string, AgentProfile[]>()
@@ -78,12 +80,13 @@ export function duplicateProfileFindings(i: FindingInputs): Finding[] {
     if (members.length < 2) continue
     const sorted = [...members].sort(byCreated)
     const ids = sorted.map((p) => p.id)
+    const names = sorted.map((p) => p.name).join(', ')
     out.push(
       finding({
         rule: 'duplicate-profile',
-        subject: { kind: 'profiles', id: fp, name: sorted.map((p) => p.name).join(', ') },
+        subject: { kind: 'profiles', id: fp, name: names },
         profileIds: ids,
-        message: { key: 'findings.reason.duplicateProfile', params: { others: sorted.slice(1).map((p) => p.name).join(', ') } },
+        message: { key: 'findings.reason.duplicateProfile', params: { names } },
         suggestion: { key: 'findings.do.keepOne' },
         open: { kind: 'profiles', profileIds: ids }
       })
@@ -92,8 +95,8 @@ export function duplicateProfileFindings(i: FindingInputs): Finding[] {
   return out
 }
 
-/** §4.3 on a profile: an account it names that is no longer an account, or an MCP exclusion that names no shared MCP
- *  server. Both at once are one finding that says both. */
+/** §4.3 on a profile, archived or not: an account it names that is no longer an account, or an MCP exclusion that names
+ *  no shared MCP server. Both at once are one finding that says both. */
 export function brokenProfileFindings(i: FindingInputs): Finding[] {
   const { profiles, accounts, registry } = i
   if (profiles === undefined || accounts === undefined || registry === undefined) return []
@@ -101,7 +104,6 @@ export function brokenProfileFindings(i: FindingInputs): Finding[] {
   const servers = new Set(registry.filter((e) => e.kind === 'mcp').map((e) => e.id))
   const out: Finding[] = []
   for (const p of profiles) {
-    if (p.status !== 'active') continue
     const gone = [...new Set(p.accountIds.filter((id) => !accountIds.has(id)))]
     const left = [...new Set(p.mcpExclude.filter((id) => !servers.has(id)))]
     if (gone.length === 0 && left.length === 0) continue
