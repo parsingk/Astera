@@ -16,6 +16,7 @@ const OUTSIDE = process.platform === 'win32' ? 'C:/elsewhere/x.txt' : '/elsewher
 const claude = (tool: string, input: Record<string, unknown>, over: Partial<ResolveCall> = {}): ResolveCall => ({ provider: 'claude', tool, input, cwd: 'D:/proj', ...over })
 const WIN_ENV = { USERPROFILE: 'C:\\Users\\u', APPDATA: 'C:\\Users\\u\\AppData\\Roaming', LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local' }
 const LINUX_ENV = { HOME: '/home/u' }
+const CI_SLACK = process.env.CI ? 3 : 1
 const verdict = (
   call: ResolveCall,
   policy: AuditPolicy | null = STARTER_POLICY,
@@ -306,6 +307,104 @@ describe('enforceVerdict', () => {
     for (const command of [`cat ${settings}/x`, 'GIT_TRACE=/tmp/t git status']) expect(closed(command), command).toEqual({ deny: false })
   })
 
+  // Ruling R-F13: the variables a line sets are read from its commands as the resolver reads them, with the quotes taken
+  // off, after a wrapper's options, inside the scripts it runs and in PowerShell's spellings
+  it('reads the variables a line sets from its commands, however they are quoted and wherever they stand', () => {
+    const s = '/home/u/.config/astera'
+    const at = (command: string, tool: string) => claude(tool, { command }, { cwd: '/work/proj' })
+    const lines: Array<[string, string]> = [
+      ...[
+        `env -i "GIT_TRACE=${s}/audit-policy.json" git status`,
+        `env -i 'GIT_TRACE=${s}/audit-policy.json' git status`,
+        `env -i "GIT_TRACE"=${s}/audit-policy.json git status`,
+        `env -i G"IT_TRACE"=${s}/audit-policy.json git status`,
+        `sudo -u u "GIT_TRACE=${s}/audit-policy.json" git status`,
+        `env -- "SSLKEYLOGFILE=${s}/audit-policy.json" cat a`,
+        `env -i "HOME=${s}" ls`,
+        `time -p "GIT_TRACE=${s}/x" git status`,
+        `doas -u root "GIT_TRACE=${s}/x" git status`,
+        `nohup -- "GIT_TRACE=${s}/x" git status`,
+        `bash -c 'GIT_TRACE=${s}/audit-policy.json git status'`,
+        `sh -c "GIT_TRACE=${s}/audit-policy.json git status"`,
+        `bash -c 'cd /work/proj; GIT_TRACE=${s}/x git status'`,
+        `GIT_TRACE=${s}/x bash -c 'git status'`,
+        `env -i GIT_TRACE=${s}/x sh -c 'git status'`,
+        `find . -exec sh -c 'GIT_TRACE=${s}/x git status' \\;`,
+        // A path to it as the file system reads it
+        'env -i GIT_TRACE=/home/u/.config//astera/x git status',
+        'GIT_TRACE=/home/u/.config/./astera/x git status',
+        'GIT_TRACE=/home/u/.config/foo/../astera/x git status',
+        // and as a POSIX shell reads it: a backslash outside quotes is dropped, `ast\era` is `astera`
+        'env -i GIT_TRACE=/home/u/.config/ast\\era/x git status',
+        'GIT_TRACE=/home/u/.config/ast\\era/x git status'
+      ].map((l): [string, string] => [l, 'Bash']),
+      ...[
+        `\${env:GIT_TRACE} = '${s}/x'; git status`,
+        `\${env:GIT_TRACE}='${s}/x'; git status`,
+        `$env:GIT_TRACE += '${s}/x'; git status`,
+        `$env:GIT_TRACE='${s}/x'; git status`,
+        `$Env:GIT_TRACE = "$HOME/.config/astera/x"; git status`,
+        `$env:GIT_TRACE = $HOME + '/.config/astera/x'; git status`
+      ].map((l): [string, string] => [l, 'PowerShell'])
+    ]
+    for (const [command, tool] of lines) {
+      expect(verdict(at(command, tool), STARTER_POLICY, 'linux', LINUX_PROFILE), command).toMatchObject({ deny: true, ruleId: 'builtin-profile-write' })
+      expect(verdict(at(command, tool), null, 'linux', LINUX_PROFILE), command).toMatchObject({ deny: true, ruleId: 'fail-closed' })
+    }
+    // Codex: a script handed over as an argv, and a shell command inside an exec script
+    const codexCalls: ResolveCall[] = [
+      { provider: 'codex', tool: 'shell', input: { command: ['bash', '-lc', `GIT_TRACE=${s}/x git status`] }, cwd: '/work/proj' },
+      { provider: 'codex', tool: 'shell', input: { command: ['env', '-i', `GIT_TRACE=${s}/x`, 'git', 'status'] }, cwd: '/work/proj' },
+      { provider: 'codex', tool: 'exec', input: `await tools.exec_command({cmd:"GIT_TRACE=${s}/x git status"});`, cwd: '/work/proj' }
+    ]
+    for (const call of codexCalls) expect(verdict(call, STARTER_POLICY, 'linux', LINUX_PROFILE), JSON.stringify(call.input)).toMatchObject({ deny: true, ruleId: 'builtin-profile-write' })
+    // Windows, from the folder's own variable
+    expect(verdict(claude('PowerShell', { command: '$env:GIT_TRACE = "$env:APPDATA\\astera\\audit-policy.json"; git status' }))).toMatchObject({ deny: true, ruleId: 'builtin-profile-write' })
+    expect(verdict(claude('PowerShell', { command: "${env:GIT_TRACE} = 'C:\\Users\\u\\AppData\\Roaming\\astera\\x'; git status" }), null)).toMatchObject({ deny: true, ruleId: 'fail-closed' })
+    // A value outside the folder, and another variable of PowerShell's, stay reads
+    for (const [command, tool] of [[`env -i "GIT_TRACE=/tmp/t" git status`, 'Bash'], [`bash -c 'GIT_TRACE=/tmp/t git status'`, 'Bash'], ["${env:GIT_TRACE} = '/tmp/t'; git status", 'PowerShell'], [`$x = '${s}'; Get-ChildItem $x`, 'PowerShell']])
+      expect(verdict(at(command, tool), null, 'linux', LINUX_PROFILE), command).toEqual({ deny: false })
+  })
+
+  // Ruling R-F13: a value counts as a path only when it looks like one, so a value that is none (`LC_ALL=C`) never names the
+  // folder, even with the shell in it, where a read stays a read as at the base
+  it('takes only a value that looks like a path for one, wherever the shell is', () => {
+    const shots = '/home/u/.config/astera/preview/shots'
+    const inFolder = (command: string, policy: AuditPolicy | null, tool = 'Bash') => verdict(claude(tool, { command }, { cwd: '/work/proj', base: shots }), policy, 'linux', LINUX_PROFILE)
+    for (const policy of [STARTER_POLICY, null]) {
+      for (const command of ['LC_ALL=C ls', 'PAGER=cat git log', 'TZ=UTC ls -l', 'FOO=1 ls', 'GIT_PAGER=cat git -C /work/proj log'])
+        expect(inFolder(command, policy), command).toEqual({ deny: false })
+      expect(inFolder("$env:FOO = 'bar'; Get-ChildItem", policy, 'PowerShell')).toEqual({ deny: false })
+      const win = verdict(claude('PowerShell', { command: "$env:FOO = 'bar'; Get-ChildItem" }, { base: 'C:/Users/u/AppData/Roaming/astera/preview/shots' }), policy)
+      expect(win).toEqual({ deny: false })
+      // A relative path is still one, from where the shell is
+      expect(inFolder('GIT_TRACE=./x git status', policy), 'GIT_TRACE=./x').toMatchObject({ deny: true })
+    }
+  })
+
+  it('reads the variables of a long line in linear time', () => {
+    const n = 20_000
+    const s = '/home/u/.config/astera'
+    const lines: Array<[string, string]> = [
+      [`${'A=1 '.repeat(n)}ls`, 'Bash'],
+      [`${'env -i "A=/tmp/x" '.repeat(n)}ls`, 'Bash'],
+      [`bash -c '${'A=1 '.repeat(n)}ls'`, 'Bash'],
+      [`${'X=~/a '.repeat(n)}git status`, 'Bash'],
+      [`ls ${' A="x'.repeat(n)}`, 'Bash'],
+      [`$env:A = ${'$env:B = '.repeat(n)}'x'; ls`, 'PowerShell'],
+      [`$env:A = x${' + y'.repeat(n)}; ls`, 'PowerShell'],
+      [`\${env:A} = ${'+ '.repeat(n)}x; ls`, 'PowerShell'],
+      [`$env:A${' '.repeat(4 * n)}x; ls`, 'PowerShell'],
+      [`$env:A = ${'$env:B + '.repeat(n)}x; ls`, 'PowerShell'],
+      [`${`X=${s} `.repeat(n)}ls`, 'Bash'],
+      [`export ${'A=/x '.repeat(n)}; ls`, 'Bash'],
+      [`bash -c "${'env -i A=/x '.repeat(n)}ls"`, 'Bash']
+    ]
+    const started = Date.now()
+    for (const [command, tool] of lines) verdict(claude(tool, { command }, { cwd: '/work/proj' }), STARTER_POLICY, 'linux', LINUX_PROFILE)
+    expect(Date.now() - started).toBeLessThan(3000 * CI_SLACK)
+  })
+
   // Ruling R-F11: only a read may name the settings folder. Anything else that names it, a git command that writes the
   // worktree, an install, an agent or a request, is taken for a write to it, bare or behind a wrapper's options (the base
   // held the wrapped forms only by taking the option for an unknown program)
@@ -323,6 +422,9 @@ describe('enforceVerdict', () => {
     ]
     for (const command of writes) expect(linux(command), command).toMatchObject({ deny: true, ruleId: 'builtin-profile-write' })
     for (const command of [`git -C ${settings} status`, `env -i git -C ${settings} log`, `ls ${settings}`, `grep -r x ${settings}`]) expect(linux(command), command).toEqual({ deny: false })
+    // A path to it as a POSIX shell reads it, a backslash outside quotes dropped, whatever the rules allow (ruling R-F13)
+    const open: AuditPolicy = { version: 1, mode: 'enforce', rules: [{ id: 'all', effect: 'allow', action: '*' }], otherwise: 'allow' }
+    expect(verdict(claude('Bash', { command: 'cp a /home/u/.config/ast\\era/audit-policy.json' }, { cwd: '/work/proj' }), open, 'linux', LINUX_PROFILE)).toMatchObject({ deny: true, ruleId: 'builtin-profile-write' })
   })
 
   // R-F11 list, M-1: a wrapper with only assignments after its options runs what it is fed (sudo with shell_noargs), so it

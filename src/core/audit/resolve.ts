@@ -59,6 +59,24 @@ export interface ResolvedAction {
   /** The login folder (E6) a path it names is in or under, by the location's short name, never the path; UNPLACED
    *  (`unknown`) for a path this cannot place. Left out when no path is either. */
   sensitive?: string
+  /** The variables the line sets, in order (ruling R-F13): before a command, after a wrapper's options or as env's
+   *  arguments, by export, declare, typeset, local, readonly or cmd's set, by PowerShell's `$env:X =`, `${env:X} =` and
+   *  `$env:X +=`, and in the scripts it runs that are read. Only Enforce reads them. A value may be a secret, so the
+   *  property is not enumerable (withAssignments): JSON and a spread leave it out, and no record, log or hook line can
+   *  carry it. Left out when there are none. */
+  readonly assignments?: readonly Assignment[]
+}
+
+/** A variable a line sets: its name, and its value with the quotes taken off. */
+export interface Assignment {
+  name: string
+  value: string
+}
+
+/** `r` with the variables a line sets, as a property that is not enumerable (ResolvedAction.assignments). */
+function withAssignments(r: ResolvedAction, assignments: readonly Assignment[] | undefined): ResolvedAction {
+  if (assignments === undefined || assignments.length === 0) return r
+  return Object.defineProperty(r, 'assignments', { value: assignments, enumerable: false })
 }
 
 const SHELL_TARGET_MAX = 60
@@ -108,7 +126,7 @@ const KINDS: Record<ResolveCall['provider'], ReadonlyMap<string, Kind>> = {
 export function resolveAction(call: ResolveCall): ResolvedAction {
   try {
     const r = resolve(call)
-    return { ...r, target: clip(redactTarget(r.target), TARGET_MAX) }
+    return withAssignments({ ...r, target: clip(redactTarget(r.target), TARGET_MAX) }, r.assignments)
   } catch {
     const target = typeof call.tool === 'string' ? clip(redactTarget(call.tool), TARGET_MAX) : 'unknown'
     return { action: 'other', target, confidence: 'unknown', effect: 'unknown' }
@@ -253,7 +271,7 @@ function combine(parts: ResolvedAction[], compound: boolean, lead: ResolvedActio
   if (lead.insideProject !== undefined) out.insideProject = lead.insideProject
   const sensitive = firstSensitive(parts.map((p) => p.sensitive))
   if (sensitive !== undefined) out.sensitive = sensitive
-  return out
+  return withAssignments(out, parts.flatMap((p) => p.assignments ?? []))
 }
 
 /** The login folder several places or parts name: the first location's name, else UNPLACED when one could not be placed,
@@ -518,6 +536,9 @@ interface Cmd {
   /** Set by stripPrefix: its leading assignments, name and value (`KEY=~/.ssh/k make`, or `KEY=~/.aws/x;` with no command),
    *  whose values are read for the login folder they name alone (lifecycle design §4.10, assignedReadings). */
   assigned?: string[]
+  /** Set by stripPrefix: the variables it sets (ResolvedAction.assignments), and by expand on the first command of a
+   *  script, also those its shell was started with. */
+  assignments?: Assignment[]
   /** Set by stripPrefix on the header of a POSIX `for` or `select` loop, which runs nothing: the words its variable takes in
    *  turn (`for k in ~/.ssh/id_*`), read for the login folder they name alone (lifecycle design §4.10). */
   listed?: string[]
@@ -880,7 +901,8 @@ function resolveShell(rec: Record<string, unknown>, at: Ctx, flavor: Flavor): Re
       ? one({ action: 'process.execute', target: 'shell', confidence: 'unknown' })
       : combine(parts, commands.filter((c) => c.runs !== true && (c.words.length > 0 || c.out.length > 0)).length > 1 || syntax, lead)
   const folder = firstSensitive([whole.sensitive, ...wordless])
-  return folder === whole.sensitive ? whole : { ...whole, sensitive: folder }
+  // The variables every command sets, for Enforce alone (ruling R-F13)
+  return withAssignments({ ...whole, ...(folder !== whole.sensitive ? { sensitive: folder } : {}) }, commands.flatMap((c) => c.assignments ?? []))
 }
 
 /** A command Codex gave as an argv array: its words are already split and none was quoted in the shell's sense. */
@@ -913,6 +935,45 @@ const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
 /** PowerShell `$env:X='y'` in one word, or `$x` with the `=` as the next word. */
 const PS_ASSIGNED = /^\$[\w:.]+[+-]?=/
 const PS_VARIABLE = /^\$[\w:.]+$/
+/** PowerShell's environment variable where an assignment starts, in any case: `$env:X` or `${env:X}`, then `=`, `+=` or
+ *  `-=` in the same word with what follows it (`$env:X='y'`), or in the next. Group 1 or 2 is the name, 3 the operator. */
+const PS_ENV_SET = /^\$(?:env:([\w.]+)|\{env:([^}]+)\})(?:([+-]?=)([\s\S]*))?$/i
+/** The builtins whose `NAME=value` arguments set variables, and cmd's `set` (a cmd script is read as a POSIX line). */
+const DECLARERS = new Set(['export', 'declare', 'typeset', 'local', 'readonly', 'set'])
+
+/** A `NAME=value` word as the variable it sets. */
+function assignmentOf(word: string): Assignment {
+  const eq = word.indexOf('=')
+  return { name: word.slice(0, eq), value: word.slice(eq + 1) }
+}
+
+/**
+ * The environment variable a PowerShell assignment at `i` sets (`$env:X = 'y'`, `${env:X}='y'`, `$env:X += 'y'`), or null.
+ * Its value is the word after the operator, and a value of terms joined by `+` (`$HOME + '/x'`) is the terms put
+ * together. Only a run of `+` terms is read past, so a line of them costs no more than its length.
+ */
+function psEnvAssignment(words: Words, i: number): Assignment | null {
+  const m = PS_ENV_SET.exec(words[i])
+  if (m === null) return null
+  let first: string | undefined
+  let k: number // the word after the value's first term
+  if (m[3] !== undefined && m[4] !== '') {
+    first = m[4]
+    k = i + 1
+  } else if (m[3] !== undefined) {
+    first = words[i + 1]
+    k = i + 2
+  } else {
+    const op = /^[+-]?=([\s\S]*)$/.exec(words[i + 1] ?? '')
+    if (op === null) return null
+    first = op[1] !== '' ? op[1] : words[i + 2]
+    k = op[1] !== '' ? i + 2 : i + 3
+  }
+  if (first === undefined) return null
+  let value = first
+  for (; words[k] === '+' && k + 1 < words.length; k += 2) value += words[k + 1]
+  return { name: m[1] ?? m[2], value }
+}
 /** What PowerShell writes where a command could be but is not: a variable, an array or hashtable (`@(`, `@{`), a member
  *  (`.Count`), an operator (`-not`), a type (`[int]`), a number, or an item of an argument list (`$p,`). */
 const PS_EXPRESSION = /^(?:[$@]|\.[A-Za-z]|-[A-Za-z]|\[[A-Za-z]|(?:\d|[.,]\d)[\d.,]*$)/ // a lone `.` is dot-sourcing, a command
@@ -1133,6 +1194,7 @@ function stripPrefix(raw: Cmd, flavor: Flavor, cli = false): { cmd: Cmd; syntax:
   let i = 0
   let syntax = false
   const assigned: string[] = [] // read for the login folder a value names, never kept (lifecycle design §4.10)
+  const assignments: Assignment[] = [] // for Enforce alone (ruling R-F13)
   let wrapped = false // a wrapper was read, so what follows its options is the command it runs
   let filled: string | undefined // the word the shell fills in that stood where the program would, kept apart below
   let opaque = false // a wrapper is the program, and what it runs is not known (afterWrapper)
@@ -1141,7 +1203,11 @@ function stripPrefix(raw: Cmd, flavor: Flavor, cli = false): { cmd: Cmd; syntax:
   const fills = (word: string): boolean => word === '$' || (wrapped && word.startsWith('$') && !(cli && ASTERA_CLI_WORD.test(word)))
   while (i < words.length) {
     const w = words[i].toLowerCase()
+    // An environment variable PowerShell sets, braced too (`${env:X} = 'y'`, which is still read as the expression it was)
+    const env = flavor === 'ps' ? psEnvAssignment(words, i) : null
+    if (env !== null) assignments.push(env)
     if (ASSIGNMENT.test(words[i])) {
+      assignments.push(assignmentOf(words[i]))
       assigned.push(words[i++])
       if (wrapped) tail++
     } else if (PS_ASSIGNED.test(words[i])) i++
@@ -1192,6 +1258,8 @@ function stripPrefix(raw: Cmd, flavor: Flavor, cli = false): { cmd: Cmd; syntax:
     opaque = true
   }
   const rest = words.slice(i)
+  // `export A=x`, `declare -x A=x`: the builtin's own arguments set the variables
+  if (rest.length > 0 && DECLARERS.has(rest[0])) for (const word of rest.slice(1)) if (ASSIGNMENT.test(word)) assignments.push(assignmentOf(word))
   const cmdlet = rest.length > 0 ? cmdletOf(rest[0], flavor) : undefined
   const unread = opaque || raw.unread === true ? (true as const) : undefined
   const cmd: Cmd = {
@@ -1200,6 +1268,7 @@ function stripPrefix(raw: Cmd, flavor: Flavor, cli = false): { cmd: Cmd; syntax:
     ...(raw.within !== undefined ? { within: raw.within } : {}),
     ...(raw.inputsOf !== undefined ? { inputsOf: raw.inputsOf } : {}),
     ...(assigned.length > 0 ? { assigned } : {}),
+    ...(assignments.length > 0 ? { assignments } : {}),
     ...(raw.pipes !== undefined ? { pipes: raw.pipes } : {}),
     ...(raw.ps === true ? { ps: true as const } : {})
   }
@@ -1317,7 +1386,8 @@ function expand(cmds: Cmd[], flavor: Flavor, depth = 0, cli = false): { commands
 
   /** One command, or the commands it runs (a shell's script, what xargs runs), put in `out`. */
   function expandOne(cmd: Cmd): void {
-    if (cmd.words.length === 0 && cmd.out.length === 0 && cmd.inputs === undefined && cmd.assigned === undefined && cmd.listed === undefined) return
+    const kept = cmd.inputs !== undefined || cmd.assigned !== undefined || cmd.listed !== undefined || cmd.assignments !== undefined
+    if (cmd.words.length === 0 && cmd.out.length === 0 && !kept) return
     const script = depth < 2 && cmd.words.length > 0 ? scriptOf(cmd.words) : null
     if (script === null) {
       const behind = cmd.words.length > 0 ? commandsBehind(cmd, flavor, depth) : []
@@ -1338,6 +1408,11 @@ function expand(cmds: Cmd[], flavor: Flavor, depth = 0, cli = false): { commands
       let last = run.length - 1
       while (last >= 0 && run[last].words.length === 0) last--
       if (cmd.pipes !== undefined && last >= 0) run[last] = { ...run[last], pipes: cmd.pipes }
+      // The variables the shell was started with (`A=x bash -c '…'`) are set for its script too (ruling R-F13)
+      if (cmd.assignments !== undefined) {
+        if (run.length > 0) run[0] = { ...run[0], assignments: [...cmd.assignments, ...(run[0].assignments ?? [])] }
+        else out.push({ words: [], out: [], call: false, quoted: [], invoked: false, assignments: cmd.assignments, ...(cmd.groups !== undefined ? { groups: cmd.groups } : {}) })
+      }
       out.push(...run)
       if (cmd.out.length > 0) out.push({ words: [], out: cmd.out, call: false, quoted: [], invoked: false, ...(cmd.ps === true ? { ps: true as const } : {}) }) // `bash -c "x" > f`
       syntax ||= inner.syntax

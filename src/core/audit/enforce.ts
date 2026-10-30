@@ -100,14 +100,12 @@ function expandHome(text: string, env: Env, platform: NodeJS.Platform): string {
   return t
 }
 
-/** A variable a line sets, wherever the assignment stands: before a command (`GIT_TRACE=x git status`), after a wrapper
- *  and its options (`env -i HOME=x …`, `sudo -u u X=x …`), as env's or make's argument, exported, and PowerShell's
- *  `$env:X = 'x'`. Group 1 or 2 is the value, quotes and all. */
-const ASSIGNED = /(?:^|[\s;&|(){}`!])[A-Za-z_][A-Za-z0-9_]*=((?:"[^"]*"|'[^']*'|[^\s;&|()<>"'`])*)|\$env:[A-Za-z_][A-Za-z0-9_]*\s*=\s*("[^"]*"|'[^']*'|[^\s;&|()<>]+)/gi
+/** A value that looks like a path (ruling R-F13): it holds a separator, or starts with `.`, `~` or a drive. Any other
+ *  (`LC_ALL=C`, `FOO=1`) names no place, wherever the shell is. */
+const PATH_LIKE = /[\\/]|^[.~]|^[A-Za-z]:/
 
-/** The values the variables a line sets are given, without their quotes; empty ones are left out. */
-const assignedValues = (text: string): string[] =>
-  [...text.matchAll(ASSIGNED)].map((m) => (m[1] ?? m[2] ?? '').replace(/["']/g, '')).filter((v) => v !== '')
+/** `s` as a POSIX shell reads it outside quotes: each backslash dropped, and what it escapes kept. */
+const dropEscapes = (s: string): string => s.replace(/\\([\s\S])/g, '$1')
 
 /** Every string an MCP tool's arguments hold, a few levels deep: its path argument may be any of them. */
 function stringsOf(v: unknown, depth = 0): string[] {
@@ -122,7 +120,8 @@ function stringsOf(v: unknown, depth = 0): string[] {
  * Whether a call writes Astera's settings folder, or may: only a read may name it (ruling R-F11). Anything else that names
  * it is taken for a write to it: a write or a delete, a program (an unknown one too), a git command that changes the
  * worktree (`git -C <folder> checkout -- …`), an install, an agent or a request. A variable the line sets to a path in it
- * makes it where a program writes, whatever the line's commands do. An MCP tool cannot be told to write or to read.
+ * makes it where a program writes, whatever the line's commands do (ruling R-F13: the variables the resolver read). An
+ * MCP tool cannot be told to write or to read.
  */
 function touchesProfile(call: ResolveCall, r: ResolvedAction, profileDir: string, platform: NodeJS.Platform, env: Env): boolean {
   const mcp = r.action === 'mcp.call'
@@ -134,15 +133,19 @@ function touchesProfile(call: ResolveCall, r: ResolvedAction, profileDir: string
   }
   const root = norm(profileDir).replace(/\/+$/, '')
   const p = platform === 'win32' ? path.win32 : path.posix
+  // Resolved from where the call runs, which also normalises an absolute path (`/home/u/.config//astera`, `…/./astera`,
+  // `…/x/../astera`), as the shell and the file system read it
   const within = (candidate: string): boolean => {
-    const from = call.base ?? call.cwd
-    const resolved = norm(p.isAbsolute(candidate) ? candidate : p.resolve(from, candidate)).replace(/\/+$/, '')
+    const resolved = norm(p.resolve(call.base ?? call.cwd, candidate)).replace(/\/+$/, '')
     return resolved === root || resolved.startsWith(`${root}/`)
   }
   const rec = inputRecord(call.input)
   // An MCP tool cannot be told to write or to read, so any of its arguments that names the folder is enough
   const raw = mcp ? stringsOf(rec).join('\n') : callText(call)
   const text = norm(expandHome(raw, env, platform))
+  // A POSIX shell drops a backslash outside quotes and keeps what follows it (`ast\era` is `astera`), where PowerShell and
+  // Windows take it for a separator: a path is placed in both readings
+  const bare = norm(dropEscapes(expandHome(raw, env, platform)))
   // Git Bash spells C:/x as /c/x
   const drive = /^([a-z]):\//i.exec(root)
   const needles = drive ? [root, `/${drive[1].toLowerCase()}/${root.slice(3)}`] : [root]
@@ -157,16 +160,23 @@ function touchesProfile(call: ResolveCall, r: ResolvedAction, profileDir: string
     return false
   }
   // Ruling R-F11: a variable the line sets to a path in the folder makes the folder where a program writes, whatever the
-  // line's own commands do (git's GIT_TRACE and GIT_INDEX_FILE, curl's SSLKEYLOGFILE, a HOME git writes its config in)
-  if (!mcp && assignedValues(text).some((v) => names(v) || within(v))) return true
+  // line's own commands do (git's GIT_TRACE and GIT_INDEX_FILE, curl's SSLKEYLOGFILE, a HOME git writes its config in).
+  // Ruling R-F13: the variables are those the resolver read, quoted or not, past wrappers and in the scripts it read; a
+  // script too deep to read is no read, so its text is searched below. Only a value that looks like a path is placed
+  const setsPath = (value: string): boolean => {
+    const v = expandHome(value, env, platform)
+    return [norm(v), norm(dropEscapes(v))].some((x) => PATH_LIKE.test(x) && (names(x) || within(x)))
+  }
+  if ((r.assignments ?? []).some((a) => setsPath(a.value))) return true
   if (!writes) return false
   for (const k of ['file_path', 'notebook_path', 'path']) {
     const v = rec[k]
     if (typeof v === 'string' && v !== '' && within(expandHome(v, env, platform))) return true
   }
-  if (names(text)) return true
+  const readings = bare === text ? [text] : [text, bare]
+  if (readings.some(names)) return true
   // Every word that is a path, from where the call runs: a relative one (`../../AppData/…`), a patch's own headers
-  for (const word of text.split(/[\s"'`;&|()<>=,]+/)) if ((word.includes('/') || word.startsWith('.')) && within(word)) return true
+  for (const t of readings) for (const word of t.split(/[\s"'`;&|()<>=,]+/)) if ((word.includes('/') || word.startsWith('.')) && within(word)) return true
   // The shell is already in the folder: the call before it left it there
   return call.base !== undefined && text !== '' && within(call.base)
 }

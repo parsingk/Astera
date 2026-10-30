@@ -3265,3 +3265,66 @@ describe('shell: a subcommand the shell fills in is not known', () => {
       expect(bash(line), line).toMatchObject({ action: 'process.execute', target: 'sudo', confidence: 'unknown' })
   })
 })
+
+// Ruling R-F13: Enforce reads the variables a line sets from the resolver, which has taken the quotes off and read past
+// wrappers and into scripts. No record keeps them (recorder.ts picks its fields): a value may be a secret
+describe('the variables a line sets', () => {
+  const set = (...pairs: Array<[string, string]>) => pairs.map(([name, value]) => ({ name, value }))
+
+  it.each([
+    ['GIT_TRACE=/x/y git status', set(['GIT_TRACE', '/x/y'])],
+    ['A=1; ls', set(['A', '1'])],
+    ['env -i "GIT_TRACE=/x/y" git status', set(['GIT_TRACE', '/x/y'])],
+    ["env -i 'GIT_TRACE'=/x/y git status", set(['GIT_TRACE', '/x/y'])],
+    ['sudo -u u A=1 B="c d" ls', set(['A', '1'], ['B', 'c d'])],
+    ['time -p "A=~/x" git status', set(['A', '~/x'])],
+    ['export A=/x B; declare -x C=3; readonly D=4; typeset E=5; local F=6', set(['A', '/x'], ['C', '3'], ['D', '4'], ['E', '5'], ['F', '6'])],
+    ["bash -c 'A=/x git status'", set(['A', '/x'])],
+    ["A=/x bash -c 'B=/y ls'", set(['A', '/x'], ['B', '/y'])],
+    ["find . -exec sh -c 'A=/x git status' \;", set(['A', '/x'])],
+    ['xargs env A=/x git status', set(['A', '/x'])]
+  ])('%s', (line, assignments) => {
+    expect(bash(line).assignments).toEqual(assignments)
+  })
+
+  it.each([
+    ["$env:A = 'x'; ls", set(['A', 'x'])],
+    ["$env:A='x'", set(['A', 'x'])],
+    ["$env:A= 'x'", set(['A', 'x'])],
+    ["${env:A} = 'x'; ls", set(['A', 'x'])],
+    ["${env:A}='x'", set(['A', 'x'])],
+    ["$env:A += 'x'", set(['A', 'x'])],
+    ["$Env:A = $HOME + '/x' + '/y'", set(['A', '$HOME/x/y'])],
+    ["if ($y) { $env:A = 'x' }", set(['A', 'x'])],
+    ["pwsh -Command \"$env:A = 'x'; git status\"", set(['A', 'x'])]
+  ])('PowerShell: %s', (line, assignments) => {
+    expect(ps(line).assignments).toEqual(assignments)
+  })
+
+  it('leaves them out of a line that sets none, and out of what a PowerShell variable that is not the environment takes', () => {
+    expect(bash('git status')).toEqual({ action: 'git.read', target: 'git status', confidence: 'high', effect: 'read' })
+    expect(ps("$x = '/y'; Get-ChildItem $x").assignments).toBeUndefined()
+    expect(bash('echo A=1').assignments).toBeUndefined()
+  })
+
+  // A value may be a secret: JSON and a spread, which is how a record or a log is made, leave the property out
+  it('never shows them to JSON or to a spread', () => {
+    const r = bash('TOKEN=/s3cr3t/v git status')
+    expect(r.assignments).toEqual(set(['TOKEN', '/s3cr3t/v']))
+    expect(JSON.stringify(r)).not.toContain('s3cr3t')
+    expect({ ...r }).not.toHaveProperty('assignments')
+  })
+
+  it('gives those of every shell command of a Codex exec script', () => {
+    expect(codex('exec', 'await tools.exec_command({cmd:"A=/x git status"}); await tools.exec_command({cmd:"env B=/y ls"});').assignments).toEqual(
+      set(['A', '/x'], ['B', '/y'])
+    )
+    expect(codex('shell', { command: ['bash', '-lc', 'A=/x git status'] }).assignments).toEqual(set(['A', '/x']))
+  })
+
+  it('reads them as it did before: what the line does is the same', () => {
+    expect(ps("${env:A} = 'x'; git status")).toMatchObject({ action: 'git.read' })
+    expect(ps("$env:A = 'x'")).toMatchObject({ action: 'process.execute', target: 'shell', confidence: 'unknown' })
+    expect(bash("A=/x bash -c 'git status'")).toMatchObject({ action: 'git.read', confidence: 'high', effect: 'read' })
+  })
+})
