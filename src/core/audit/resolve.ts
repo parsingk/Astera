@@ -955,39 +955,83 @@ function methodFacts(called: string): Facts | null {
     ? { action: 'process.execute', target: 'shell', known: false }
     : { action, target: member, known: true, heuristic: true }
 }
-const WRAPPERS = new Set(['doas', 'env', 'nohup', 'command'])
-/** Wrappers that run their arguments after options of their own: the options that take a value, how many plain words (a
- *  priority, a CPU mask) come before the command, and the short options that take one read as getopt reads a bundle
- *  (`letters`: `-Eu root`, `-uroot`). */
-const WRAPPER_OPTIONS = new Map<string, { valued: ReadonlySet<string>; positional: number; letters?: string }>([
+/** How a wrapper reads its own options before the command it runs. */
+interface WrapperSpec {
+  /** The options that take the next word as their value: the long ones, and short ones written alone. */
+  valued: ReadonlySet<string>
+  /** How many plain words (a priority, a CPU mask) come before the command. */
+  positional: number
+  /** The short options that take a value, read as getopt reads a bundle: the rest of the word, or the next word when the
+   *  letter is the last (`-Eu root`, `-uroot`). */
+  letters?: string
+  /** The short options whose value can only be the rest of their word (sudo's `-hhost`): the scan of a bundle ends there. */
+  attached?: string
+  /** The short options with which it runs no command (`chrt -p`, `command -v`, `doas -C`) or reads its command from the
+   *  option's own value (`env -S`): it is the program then. */
+  none?: string
+  /** The long options that do the same (`--pid`, `--split-string`), alone or with `=value`. */
+  noneLong?: readonly string[]
+}
+
+/** Wrappers that run their arguments after options of their own. With no word left after their options they are the
+ *  program (follow-up R-F6: `cat script.sh | sudo -s` runs what it is fed), but for exec, whose bare form only opens the
+ *  files its redirections name. */
+const WRAPPER_OPTIONS = new Map<string, WrapperSpec>([
   // GNU time's and bash's (`+af:o:pqvV`): -f FORMAT and -o FILE take a value (ruling R-F3)
   ['time', { valued: new Set(['--format', '--output']), positional: 0, letters: 'fo' }],
-  // sudo's, as its option string has them (`+Aa:BbC:c:D:Eeg:Hh::iKklNnPp:R:r:SsT:t:U:u:Vv`): `-h` takes its host only
-  // written with it (`-hhost`, `--host=host`), so a `-h` alone takes none (ruling R-F3)
+  // sudo's, as its option string has them (`+Aa:BbC:c:D:Eeg:Hh::iKklNnPp:R:r:SsT:t:U:u:Vv`), ruling R-F3. `-h` takes a
+  // host only written with it (`-hhost`, `--host=host`): the rest of its word is the host, never more options, so the scan
+  // of a bundle stops at the `h`, and a `-h` alone takes none. `-l` lists (with a command, says whether it may run), `-v`
+  // and `-K` touch the remembered login and `-V` prints the version: none of them runs a command
   [
     'sudo',
     {
       valued: new Set(['--auth-type', '--close-from', '--login-class', '--chdir', '--group', '--prompt', '--chroot', '--role', '--command-timeout', '--type', '--other-user', '--user']),
       positional: 0,
-      letters: 'aCcDgpRrTtUu'
+      letters: 'aCcDgpRrTtUu',
+      attached: 'h',
+      none: 'lvKV',
+      noneLong: ['--list', '--validate', '--remove-timestamp', '--version']
     }
   ],
+  // GNU env's (`+C:iS:u:v0`) and the BSDs' `-P altpath` (follow-up R-F6). `-S` splits its value into the command line it
+  // runs, which scriptOf reads
+  ['env', { valued: new Set(['--unset', '--chdir']), positional: 0, letters: 'uCP', none: 'S', noneLong: ['--split-string'] }],
+  // doas's (`a:C:Lnsu:`): `-C` checks a config and `-L` clears the remembered login, and neither runs a command
+  ['doas', { valued: new Set(), positional: 0, letters: 'au', none: 'CL' }],
+  // The shell's `command`: `-p` looks the command up on the default path; `-v` and `-V` only say what it is
+  ['command', { valued: new Set(), positional: 0, none: 'vV' }],
+  ['nohup', { valued: new Set(), positional: 0 }],
   ['exec', { valued: new Set(['-a']), positional: 0 }],
   ['builtin', { valued: new Set(), positional: 0 }],
   ['coproc', { valued: new Set(), positional: 0 }],
   ['setsid', { valued: new Set(), positional: 0 }],
   ['nice', { valued: new Set(['-n', '--adjustment']), positional: 0 }],
   ['stdbuf', { valued: new Set(['-i', '-o', '-e', '--input', '--output', '--error']), positional: 0 }],
-  ['ionice', { valued: new Set(['-c', '-n', '--class', '--classdata']), positional: 0 }],
-  ['chrt', { valued: new Set(), positional: 1 }],
-  ['taskset', { valued: new Set(['-c', '--cpu-list']), positional: 1 }]
+  // Programs that act on a running process with -p / --pid, and run no command then
+  ['ionice', { valued: new Set(['-c', '-n', '--class', '--classdata']), positional: 0, none: 'p', noneLong: ['--pid'] }],
+  ['chrt', { valued: new Set(), positional: 1, none: 'p', noneLong: ['--pid'] }],
+  ['taskset', { valued: new Set(['-c', '--cpu-list']), positional: 1, none: 'p', noneLong: ['--pid'] }]
 ])
 
-/** Programs that act on a running process with -p / --pid, and run no command then. */
-const PID_WRAPPERS = new Set(['chrt', 'taskset', 'ionice'])
+/** What one option word of a wrapper is, read as getopt reads it: `none` when the wrapper runs no command with it, `value`
+ *  when the next word is its value, else `self` (a flag, a bundle whose value is in the word, a long option with `=`). */
+function optionOf(w: string, spec: WrapperSpec): 'none' | 'value' | 'self' {
+  if (spec.noneLong?.some((n) => w === n || w.startsWith(`${n}=`))) return 'none'
+  if (spec.valued.has(w)) return 'value'
+  if (w.startsWith('--')) return 'self'
+  for (let j = 1; j < w.length; j++) {
+    const letter = w[j]
+    if (!/[A-Za-z0-9]/.test(letter)) return 'self'
+    if (spec.none?.includes(letter)) return 'none'
+    if (spec.attached?.includes(letter)) return 'self'
+    if (spec.letters?.includes(letter)) return j === w.length - 1 ? 'value' : 'self'
+  }
+  return 'self'
+}
 
 /** Where the command starts after the wrapper at `from` and its options, a `--` ending them; `from` itself when it runs none
- *  (`chrt -p PID`). */
+ *  (`chrt -p PID`, `command -v x`) or when no word is left after them (WRAPPER_OPTIONS). */
 function afterWrapper(words: Words, from: number, prog: string): number {
   const spec = WRAPPER_OPTIONS.get(prog)!
   let positional = spec.positional
@@ -998,18 +1042,17 @@ function afterWrapper(words: Words, from: number, prog: string): number {
       i++
       break
     }
-    if (PID_WRAPPERS.has(prog) && (w === '--pid' || /^-[A-Za-z]*p[A-Za-z]*$/.test(w))) return from
-    if (spec.valued.has(w)) {
+    const kind = optionOf(w, spec)
+    if (kind === 'none') return from
+    if (kind === 'value') {
       if (prog === 'taskset') positional = 0 // `-c LIST` stands for the mask
       i++
-    } else if (spec.letters !== undefined && /^-[A-Za-z]+$/.test(w)) {
-      // The first letter that takes a value takes the rest of the word, or the next word when it is the last
-      const at = [...w.slice(1)].findIndex((letter) => spec.letters!.includes(letter))
-      if (at === w.length - 2) i++
     }
     i++
   }
-  return Math.min(i + positional, words.length)
+  const at = i + positional
+  if (at < words.length) return at
+  return prog === 'exec' ? words.length : from
 }
 /** Words that lead a command, which is what follows them. */
 const KEYWORDS = new Set(['if', 'elif', 'elseif', 'while', 'until', 'then', 'else', 'do', '!'])
@@ -1044,28 +1087,45 @@ function afterTimeout(words: Words, from: number): number {
 
 /**
  * A command without what comes before its program: `NAME=value` and PowerShell `$name =` assignments (their values can
- * be secrets), sudo-like wrappers and `timeout N`, and the keyword of a conditional or loop body (`then`, `do`, `while`).
- * `syntax` is whether a keyword or a word that runs nothing was seen (a loop header, a PowerShell condition or `.Count`),
- * which makes the line compound. A command of only assignments or only a header comes back with no words.
+ * be secrets), sudo-like wrappers and `timeout N` with their options, the keyword of a conditional or loop body (`then`,
+ * `do`, `while`), and in a POSIX line a substitution standing as a word of its own or, after a wrapper, any word the shell
+ * fills in. `syntax` is whether a keyword, a word that runs nothing or a word the shell fills in was seen (a loop header, a
+ * PowerShell condition or `.Count`), which makes the line compound. A command of only assignments or only a header comes
+ * back with no words. `filled`: that word the shell fills in, as a command of its own, since it may be the program.
  */
-function stripPrefix(raw: Cmd, flavor: Flavor): { cmd: Cmd; syntax: boolean } {
+function stripPrefix(raw: Cmd, flavor: Flavor): { cmd: Cmd; syntax: boolean; filled?: Cmd } {
   const words = raw.words
   let i = 0
   let syntax = false
   const assigned: string[] = [] // read for the login folder a value names, never kept (lifecycle design §4.10)
+  let wrapped = false // a wrapper was read, so what follows its options is the command it runs
+  let filled: string | undefined // the word the shell fills in that stood where the program would, kept apart below
   while (i < words.length) {
     const w = words[i].toLowerCase()
     if (ASSIGNMENT.test(words[i])) assigned.push(words[i++])
-    else if (PS_ASSIGNED.test(words[i]) || WRAPPERS.has(programName(w))) i++
-    else if (PS_VARIABLE.test(words[i]) && /^[+-]?=$/.test(words[i + 1] ?? '')) i += 2
+    else if (PS_ASSIGNED.test(words[i])) i++
+    else if (flavor === 'posix' && i + 1 < words.length && (words[i] === '$' || (wrapped && words[i].startsWith('$')))) {
+      // A substitution standing as a word of its own (`$(echo) rm …`), or after a wrapper any word the shell fills in
+      // (`env $X rm …`, `env "$(cat .env)" rm …`), may be a value or the program. Both are read (follow-up R-F6): the
+      // words after it as the command, as before an unquoted substitution was part of its word, and the word itself as a
+      // program that is not known
+      filled ??= words[i]
+      i++
+      syntax = true
+    } else if (PS_VARIABLE.test(words[i]) && /^[+-]?=$/.test(words[i + 1] ?? '')) i += 2
     else if (KEYWORDS.has(w)) {
       i++
       syntax = true
-    } else if (programName(w) === 'timeout') i = afterTimeout(words, i + 1)
-    else if (WRAPPER_OPTIONS.has(programName(w))) {
+    } else if (programName(w) === 'timeout') {
+      const next = afterTimeout(words, i + 1)
+      if (next >= words.length) break // nothing to run: it is the program
+      i = next
+      wrapped = true
+    } else if (WRAPPER_OPTIONS.has(programName(w))) {
       const next = afterWrapper(words, i, programName(w))
       if (next === i) break // it runs no command: it is the program
       i = next
+      wrapped = true
     }
     else break
   }
@@ -1080,12 +1140,21 @@ function stripPrefix(raw: Cmd, flavor: Flavor): { cmd: Cmd; syntax: boolean } {
     ...(raw.pipes !== undefined ? { pipes: raw.pipes } : {}),
     ...(raw.ps === true ? { ps: true as const } : {})
   }
+  // The word the shell fills in, as a command of its own that may be the program (R-F6), in the place the command is
+  const alone: Cmd | undefined =
+    filled === undefined
+      ? undefined
+      : {
+          words: [filled], out: [], call: false, quoted: [false], invoked: false, groups: raw.groups,
+          ...(raw.within !== undefined ? { within: raw.within } : {})
+        }
+  const done = (r: { cmd: Cmd; syntax: boolean }): { cmd: Cmd; syntax: boolean; filled?: Cmd } => (alone === undefined ? r : { ...r, filled: alone })
   const dropped = { cmd: { ...cmd, words: [], quoted: [] }, syntax: true }
-  if (rest.length === 0) return { cmd, syntax }
+  if (rest.length === 0) return done({ cmd, syntax })
   if (NO_COMMAND.has(rest[0].toLowerCase())) {
     // A loop's header runs nothing, but its variable takes each word of its list in turn
     const listed = flavor === 'posix' ? loopList(rest) : []
-    return listed.length === 0 ? dropped : { cmd: { ...dropped.cmd, listed }, syntax: true }
+    return done(listed.length === 0 ? dropped : { cmd: { ...dropped.cmd, listed }, syntax: true })
   }
   if (flavor === 'ps' && !raw.call) {
     // PowerShell never runs a quoted word that is not called with `&`: it is data, whatever was stripped before it. A
@@ -1096,7 +1165,7 @@ function stripPrefix(raw: Cmd, flavor: Flavor): { cmd: Cmd; syntax: boolean } {
       return method === null ? dropped : { cmd: { ...cmd, method }, syntax }
     }
   }
-  return { cmd, syntax }
+  return done({ cmd, syntax })
 }
 
 /** The words a POSIX `for` or `select` header's variable takes in turn (`for k in ~/.ssh/id_*`): those after its `in`, up to a
@@ -1107,10 +1176,15 @@ function loopList(header: Words): string[] {
   return header.slice(3, end < 0 ? header.length : end)
 }
 
-/** The script a shell was handed with -c / -Command / /c, if it was handed one, and the shell it is written for. */
+/** The script a shell was handed with -c / -Command / /c, if it was handed one, and the shell it is written for; also the
+ *  command line `env -S` splits (follow-up R-F6). */
 function scriptOf(words: Words): { text: string; flavor: Flavor } | null {
   const prog = programName(words[0] ?? '').toLowerCase()
   const rest = words.slice(1)
+  if (prog === 'env') {
+    const line = envSplitString(rest)
+    return line === null ? null : { text: line, flavor: 'posix' }
+  }
   if (POSIX_SHELLS.has(prog)) {
     // A bundle of letters that has a c in it, tested as two simple things: one pattern with a quantifier on each side of the
     // c backtracks quadratically on a long run of letters.
@@ -1121,6 +1195,32 @@ function scriptOf(words: Words): { text: string; flavor: Flavor } | null {
   if (i < 0 || i + 1 >= rest.length) return null
   if (prog === 'cmd') return { text: rest.slice(i + 1).join(' '), flavor: 'posix' }
   return prog === 'powershell' || prog === 'pwsh' ? { text: rest.slice(i + 1).join(' '), flavor: 'ps' } : null
+}
+
+/** The command line `env -S STRING` (`-iS STRING`, `-SSTRING`, `--split-string[=]STRING`) runs: the string, then the words
+ *  after it, which env adds to it. Null when its options hold no `-S`. */
+function envSplitString(args: Words): string | null {
+  const spec = WRAPPER_OPTIONS.get('env')!
+  const line = (first: string | undefined, after: Words): string | null => (first === undefined ? null : [first, ...after].join(' '))
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]
+    if (a === '--' || !a.startsWith('-') || a.length < 2) return null
+    const long = /^--split-string(?:=([\s\S]*))?$/.exec(a)
+    if (long !== null) return long[1] !== undefined ? line(long[1], args.slice(i + 1)) : line(args[i + 1], args.slice(i + 2))
+    if (spec.valued.has(a)) {
+      i++
+      continue
+    }
+    if (a.startsWith('--')) continue
+    for (let j = 1; j < a.length; j++) {
+      if (a[j] === 'S') return j + 1 < a.length ? line(a.slice(j + 1), args.slice(i + 1)) : line(args[i + 1], args.slice(i + 2))
+      if (spec.letters!.includes(a[j])) {
+        if (j === a.length - 1) i++
+        break
+      }
+    }
+  }
+  return null
 }
 
 /** The words `from` up to `to` of a command as a command of their own, each as quoted as it was: what xargs, watch and
@@ -1177,7 +1277,15 @@ function expand(cmds: Cmd[], flavor: Flavor, depth = 0): { commands: Cmd[]; synt
     const stripped = stripPrefix(raw, flavor)
     const cmd = stripped.cmd
     syntax ||= stripped.syntax
-    if (cmd.words.length === 0 && cmd.out.length === 0 && cmd.inputs === undefined && cmd.assigned === undefined && cmd.listed === undefined) continue
+    expandOne(cmd)
+    // The word the shell fills in that may be the program (R-F6) follows the command it stood before, which headlines
+    if (stripped.filled !== undefined) out.push(stripped.filled)
+  }
+  return { commands: out, syntax }
+
+  /** One command, or the commands it runs (a shell's script, what xargs runs), put in `out`. */
+  function expandOne(cmd: Cmd): void {
+    if (cmd.words.length === 0 && cmd.out.length === 0 && cmd.inputs === undefined && cmd.assigned === undefined && cmd.listed === undefined) return
     const script = depth < 2 && cmd.words.length > 0 ? scriptOf(cmd.words) : null
     if (script === null) {
       const behind = cmd.words.length > 0 ? commandsBehind(cmd, flavor, depth) : []
@@ -1203,7 +1311,6 @@ function expand(cmds: Cmd[], flavor: Flavor, depth = 0): { commands: Cmd[]; synt
       syntax ||= inner.syntax
     }
   }
-  return { commands: out, syntax }
 }
 
 const ESCAPABLE = ' "\'&|;()<>$#`'
@@ -2419,6 +2526,10 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
   }
 
   const subAt = SUBCOMMAND_PROGRAMS.has(prog) ? subcommandAt(prog, args) : -1
+  // A subcommand the shell fills in (`git $(echo push)`, `gh $(echo pr) create`, `npm $X`) cannot be told, so what the
+  // program does is not known (follow-up R-F6)
+  const filledAt = prog === 'gh' ? positionals(prog, args, 2) : subAt < 0 ? [] : [args[subAt]]
+  if (filledAt.some((w) => w.startsWith('$'))) return { action: 'process.execute', target: name, known: false }
   const word = subAt < 0 ? undefined : plainSubcommand(args[subAt])
   // claude and codex take a prompt where other programs take a subcommand, so only their own subcommands are shown.
   const own = SUBCOMMAND_WORDS.get(prog)

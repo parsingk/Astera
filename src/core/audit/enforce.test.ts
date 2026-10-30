@@ -150,6 +150,43 @@ describe('enforceVerdict', () => {
       expect(verdict(claude('Bash', { command }, { cwd: work })), command).toEqual(deleteOutside)
   })
 
+  // Follow-up R-F6: Enforce never gets weaker. What a wrapper runs behind a substitution or a variable, and behind the
+  // options of env, doas, command and nohup, is judged; a script piped into a shell sudo starts is not a read
+  it('denies the command behind a wrapper, whatever stands between them, under the starter rules', () => {
+    const work = path.resolve('/work/proj')
+    const lines = [
+      'env $(cat .env | xargs) git push origin main',
+      'env $(cat .env) rm -rf ~/x',
+      'env `cat .env` rm -rf ~/x',
+      'env "$(cat .env)" rm -rf ~/x',
+      'env $X rm -rf ~/x',
+      'timeout 5 $(echo) rm -rf ~/x',
+      'nohup $(echo) rm -rf ~/x',
+      'sudo $(echo -E) rm -rf /x',
+      'nice $(echo) rm -rf ~/x',
+      'stdbuf -o0 $(echo) rm -rf ~/x',
+      'setsid $(echo) git push',
+      'env A=1 $(echo B=2) rm -rf ~/x',
+      'env -i git push',
+      'doas -u root git push',
+      'env -u X rm -rf ~/x',
+      'doas -u root rm -rf /x',
+      'env -- rm -rf ~/x',
+      'env -C /tmp rm -rf ~/x',
+      'command -p rm -rf ~/x',
+      'nohup -- rm -rf ~/x',
+      "env -S 'rm -rf ~/x'",
+      'sudo -hhost rm -rf /x'
+    ]
+    for (const command of lines) expect(verdict(claude('Bash', { command }, { cwd: work })), command).toMatchObject({ deny: true })
+  })
+
+  it('fails closed on a script piped into a shell sudo starts', () => {
+    const work = path.resolve('/work/proj')
+    for (const command of ['cat script.sh | sudo -s', "echo 'git push' | sudo -u root -s", "echo 'rm -rf /x' | sudo -i"])
+      expect(verdict(claude('Bash', { command }, { cwd: work }), null), command).toMatchObject({ deny: true, ruleId: 'fail-closed' })
+  })
+
   it('fails closed to reads when the rules cannot be read', () => {
     const closed = { deny: true, ruleId: 'fail-closed', reason: 'Blocked by Astera: the Rules could not be read, so only reads are allowed.' }
     expect(verdict(claude('Read', { file_path: 'D:/proj/a.ts' }), null)).toEqual({ deny: false })

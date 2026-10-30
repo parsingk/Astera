@@ -2921,3 +2921,116 @@ describe('git config --global and --system are outside the project', () => {
     expect(bash('git config user.name x')).not.toHaveProperty('insideProject')
   })
 })
+
+// Follow-up R-F6: Enforce never gets weaker. A substitution or a variable right after a wrapper, or a substitution that
+// stands as the first word, is no program: the words after it are read as the command, as before c2, and the line is at
+// most heuristic
+describe('shell: a substitution or a variable after a wrapper does not hide the command behind it', () => {
+  it.each([
+    ['env $(cat .env | xargs) git push origin main', 'git.remote.write'],
+    ['env $(cat .env) git push', 'git.remote.write'],
+    ['setsid $(echo) git push', 'git.remote.write'],
+    ['env $(cat .env) rm -rf ../x', 'filesystem.delete'],
+    ['env `cat .env` rm -rf ../x', 'filesystem.delete'],
+    ['env "$(cat .env)" rm -rf ../x', 'filesystem.delete'],
+    ['env $X rm -rf ../x', 'filesystem.delete'],
+    ['env A=1 $(echo B=2) rm -rf ../x', 'filesystem.delete'],
+    ['timeout 5 $(echo) rm -rf ../x', 'filesystem.delete'],
+    ['timeout $(echo 5) rm -rf ../x', 'filesystem.delete'],
+    ['nohup $(echo) rm -rf ../x', 'filesystem.delete'],
+    ['sudo $(echo -E) rm -rf ../x', 'filesystem.delete'],
+    ['sudo $FLAGS rm -rf ../x', 'filesystem.delete'],
+    ['nice $(echo) rm -rf ../x', 'filesystem.delete'],
+    ['stdbuf -o0 $(echo) rm -rf ../x', 'filesystem.delete'],
+    ['time $(echo) rm -rf ../x', 'filesystem.delete'],
+    ['command $(echo) rm -rf ../x', 'filesystem.delete'],
+    ['doas $(echo) rm -rf ../x', 'filesystem.delete'],
+    ['$(echo) rm -rf ../x', 'filesystem.delete'],
+    ['`true` rm -rf ../x', 'filesystem.delete']
+  ] satisfies Array<[string, AuditAction]>)('%s reads %s, and is not sure of it', (line, action) => {
+    const r = bash(line)
+    expect([r.action, ...(acts(r) ?? [])]).toContain(action)
+    expect(['heuristic', 'unknown']).toContain(r.confidence)
+    if (action === 'filesystem.delete') expect(r.commands ?? [r]).toContainEqual(expect.objectContaining({ action, insideProject: false }))
+  })
+})
+
+// Follow-up R-F6: a wrapper with nothing after its options is the program, so a script piped into `sudo -s` is not a read
+describe('shell: a wrapper with no command after its options is the program', () => {
+  it.each(['cat script.sh | sudo -s', "echo 'git push' | sudo -u root -s", "echo 'git push' | sudo -i", "echo 'git push' | nice -n 5", 'sudo -s', 'time -p'])(
+    '%s is unknown',
+    (line) => {
+      expect(bash(line).confidence).toBe('unknown')
+    }
+  )
+
+  it('keeps exec with only redirections a write of the file it opens', () => {
+    expect(bash('exec > log.txt 2>&1')).toMatchObject({ action: 'filesystem.write', target: 'log.txt', insideProject: true, confidence: 'high' })
+  })
+
+  it('reads sudo -h with its host in the same word, and nothing after it as an option', () => {
+    expect(bash('sudo -hhost rm -rf ../x')).toMatchObject({ action: 'filesystem.delete', target: 'rm', insideProject: false })
+    expect(bash('sudo -h rm -rf ../x')).toMatchObject({ action: 'filesystem.delete', target: 'rm', insideProject: false })
+  })
+})
+
+// Follow-up R-F6, item 4: the options of env, doas, command and nohup are theirs (the same class as R-F3)
+describe('shell: the options of env, doas, command and nohup', () => {
+  it.each([
+    ['env -i git push', 'git.remote.write'],
+    ['env -u X git push', 'git.remote.write'],
+    ['doas -u root git push', 'git.remote.write'],
+    ['env -u X rm -rf ../x', 'filesystem.delete'],
+    ['env --unset=X rm -rf ../x', 'filesystem.delete'],
+    ['env --unset X rm -rf ../x', 'filesystem.delete'],
+    ['env -C /tmp rm -rf ../x', 'filesystem.delete'],
+    ['env --chdir /tmp rm -rf ../x', 'filesystem.delete'],
+    ['env -P /bin rm -rf ../x', 'filesystem.delete'],
+    ['env -i0 rm -rf ../x', 'filesystem.delete'],
+    ['env -iu X rm -rf ../x', 'filesystem.delete'],
+    ['env -- rm -rf ../x', 'filesystem.delete'],
+    ['env -i PATH=/bin rm -rf ../x', 'filesystem.delete'],
+    ['doas -u root rm -rf ../x', 'filesystem.delete'],
+    ['doas -n rm -rf ../x', 'filesystem.delete'],
+    ['doas -a bsdauth rm -rf ../x', 'filesystem.delete'],
+    ['command -p rm -rf ../x', 'filesystem.delete'],
+    ['nohup -- rm -rf ../x', 'filesystem.delete']
+  ] satisfies Array<[string, AuditAction]>)('%s is %s', (line, action) => {
+    expect(bash(line)).toMatchObject({ action })
+  })
+
+  it('reads the command line env -S splits as a script', () => {
+    expect(bash("env -S 'rm -rf ../x'")).toMatchObject({ action: 'filesystem.delete', insideProject: false })
+    expect(bash("env -iS 'git push' origin")).toMatchObject({ action: 'git.remote.write' })
+    expect(bash("env --split-string='rm -rf' ../x")).toMatchObject({ action: 'filesystem.delete', insideProject: false })
+    expect(bash("env -S'git push'")).toMatchObject({ action: 'git.remote.write' })
+  })
+
+  it('takes command -v, command -V and doas -C for what they are: they run nothing', () => {
+    expect(bash('command -v git push')).toMatchObject({ action: 'process.execute', target: 'command' })
+    expect(bash('command -V rm')).toMatchObject({ action: 'process.execute', target: 'command' })
+    expect(bash('doas -C /etc/doas.conf rm -rf ../x')).toMatchObject({ action: 'process.execute', target: 'doas' })
+  })
+})
+
+// Follow-up R-F6: a subcommand the shell fills in cannot be told, so what the program does is not known; before c2 the word
+// after the substitution made the line unknown by being read as a program
+describe('shell: a subcommand the shell fills in is not known', () => {
+  it.each(['gh $(echo pr) create', 'gh pr $(echo create)', 'npx $(echo prettier) --write .', 'git $(echo push)', 'npm $(echo install) x', 'git $CMD origin'])(
+    '%s is unknown',
+    (line) => {
+      expect(bash(line).confidence).toBe('unknown')
+    }
+  )
+
+  it('still reads a value the shell fills in after the subcommand', () => {
+    expect(bash('git push $(git remote) main')).toMatchObject({ action: 'git.remote.write' })
+    expect(bash('git -C $(pwd) push')).toMatchObject({ action: 'git.remote.write' })
+    expect(bash('gh pr create --title $(cat t)')).toMatchObject({ action: 'github.pr.create' })
+  })
+
+  it('takes sudo -l, -v, -K and -V for what they are: they run nothing', () => {
+    for (const line of ['sudo -l rm -rf ../x', 'sudo -v', 'sudo -K', 'sudo -V', 'sudo -nl git push'])
+      expect(bash(line), line).toMatchObject({ action: 'process.execute', target: 'sudo', confidence: 'unknown' })
+  })
+})
