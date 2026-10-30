@@ -161,6 +161,8 @@ export const ko = {
   'settings.agentProfiles.create': '만들기',
   'settings.agentProfiles.archive': '보관',
   'settings.agentProfiles.restore': '복원',
+  'settings.agentProfiles.archiveReason': '이유 (선택)',
+  'settings.agentProfiles.archivedOn': '{date}에 보관함',
   'settings.agentProfiles.delete': '삭제',
   'settings.agentProfiles.deleteConfirm.title': '{name}을(를) 삭제할까요?',
   'settings.agentProfiles.deleteConfirm.body': '되돌릴 수 없습니다. 나중에 다시 쓸 수도 있다면 보관하세요.',
@@ -2071,6 +2073,7 @@ export const ko = {
   'jobs.run.sharedFolderHint': '다른 작업의 워커와 같은 폴더에서 돌고 있습니다 — 서로의 편집이 섞일 수 있고, 앱은 그것을 막지도 알아채지도 못합니다',
   'jobs.run.scheduled': '예약',
   'jobs.run.scheduleNext': '다음 {time}',
+  'jobs.run.waitingArchived': '대기 중: 보관된 에이전트 프로필 {names}',
   'jobs.run.scheduleRuns': '{count}회 실행',
   // 회차 줄의 번호. 발화 시점에 찍힌 서수라 기록을 지워도 남은 번호가 바뀌지 않는다
   'jobs.run.scheduleOrdinal': '{n}회차',

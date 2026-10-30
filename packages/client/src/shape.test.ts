@@ -407,6 +407,18 @@ describe('publicFor', () => {
       expect(publicFor(cmd, profile), cmd).toEqual(shaped)
   })
 
+  // Lifecycle design §5: when and why a profile was archived are the person's record, public like its other fields; and
+  // a scheduled Job that waits on an archived profile says which, in jobs list and jobs get
+  it('keeps when and why a profile was archived, and the archived profiles a scheduled Job waits on', () => {
+    const profile = { id: 'ap_1', name: 'Reviewer', status: 'archived', accountIds: ['a'], mcpExclude: [], permission: 'ask', createdAt: 'T', updatedAt: 'T', archivedAt: 'T2', archivedReason: 'replaced by p2' }
+    expect(publicFor('agent-profiles-show', profile)).toMatchObject({ archivedAt: 'T2', archivedReason: 'replaced by p2' })
+    expect(publicFor('agent-profiles-list', { profiles: [profile] })).toEqual({ profiles: [profile] })
+    expect(publicFor('agent-profiles-archive', { profile })).toEqual({ profile })
+    const job = { id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: 'T', schedule: { kind: 'daily', time: '09:00' }, archivedProfiles: ['Reviewer'] }
+    expect(publicFor('jobs-list', [job])).toEqual([job])
+    expect(publicFor('jobs-get', { ...job, run: { id: 'run_1', archivedProfiles: ['x'] } })).toEqual({ ...job, run: { id: 'run_1' } })
+  })
+
   // Task 7 fix round 1: a session started from an agent profile is listed with its id
   it('keeps the agent profile a session was started from', () => {
     const row = { id: 's1', kind: 'terminal', title: 't', accountId: 'a', cwd: 'D:/p', alive: true, state: 'unknown', agentProfileId: 'ap_1', ptyId: 'p' }

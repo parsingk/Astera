@@ -15,6 +15,7 @@ import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { stat } from 'node:fs/promises'
 import { jobsViewOf, runsTimelineOf, type RuntimeFacts } from './remoteReads'
+import { archivedProfilesOfJob, profileIdsOfJob } from '../core/orchestration/archivedProfiles'
 import { createPresence } from './presence'
 import { handleCommand, handleExit, outsideSandbox, sandboxedCaller, type OrchServerDeps } from '../core/orchestration/command'
 import type { CompletionCheckInput } from '../core/orchestration/pluginChecks'
@@ -1777,6 +1778,13 @@ export function createHostOrch(a: {
           // counts as present, and the next ask has its answer.
           // The registry's folders and every folder a Run worked in: a Job row counts only the worktrees still there.
           if (cmd === 'jobs-view') await folders.check([...worktrees.map((w) => w.path), ...store.get().dispatches.map((d) => d.cwd)])
+          // The archived profiles each schedule uses, for its row's "waiting" line (lifecycle design §5). Read only when a
+          // schedule names a profile; a store that cannot be read says none, since the row is a hint and the fire the gate
+          const st = store.get()
+          const profiles =
+            cmd === 'jobs-view' && st.jobs.some((j) => j.schedule !== undefined && profileIdsOfJob(st, j.id).length > 0)
+              ? await readAgentProfiles(a.profileDir).then((p) => p.profiles, () => [])
+              : []
           const facts: RuntimeFacts = {
             aliveSessionIds: a.aliveSessionIds(),
             worktrees,
@@ -1784,7 +1792,8 @@ export function createHostOrch(a: {
             exists: (p) => folders.peek(p) !== 'missing',
             journalTimeline: (id, st, lang) => a.journal?.timeline(id, st, lang) ?? [],
             journalBusy: () => a.journal?.busy?.() ?? false,
-            nowMs: Date.parse(a.now())
+            nowMs: Date.parse(a.now()),
+            archivedOf: (id) => archivedProfilesOfJob(store.get(), id, profiles).map((p) => p.name)
           }
           if (cmd === 'runs-timeline') return runsTimelineOf(store.get(), args, facts)
           const view = jobsViewOf(store.get(), args.project, facts)

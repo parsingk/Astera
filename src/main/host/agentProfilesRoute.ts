@@ -18,16 +18,18 @@ export const SANDBOX_READINESS_DEADLINE_MS = 2 * READINESS_RUN_MS + TIMEOUT_HEAD
 
 /** Nothing here copies files the way an extensions change does, so every call but the sandbox's setup and readiness
  *  waits the usual time. `afterSetup` runs once a setup has answered, whatever it said: this process asks the same readiness question
- *  for its own spawns, and must not keep an answer the setup made old. */
-export function createAgentProfilesRoute(d: { call: Call; afterSetup?: () => void }): AgentProfilesApi {
+ *  for its own spawns, and must not keep an answer the setup made old. `afterChange` runs once a change to the store has
+ *  answered, whatever it said: the Jobs view reads the archived profiles again (lifecycle design §5). */
+export function createAgentProfilesRoute(d: { call: Call; afterSetup?: () => void; afterChange?: () => void }): AgentProfilesApi {
   const send = hostSender(d)
+  const change = (cmd: string, args: Record<string, unknown>): ReturnType<typeof send> => send(cmd, args).finally(() => d.afterChange?.())
   return {
     list: () => send('agent-profiles-list', {}),
-    create: (fields) => send('agent-profiles-create', { ...fields }),
-    update: (id, changes) => send('agent-profiles-update', { id, ...changes }),
-    archive: (id) => send('agent-profiles-archive', { id }),
-    restore: (id) => send('agent-profiles-restore', { id }),
-    remove: (id) => send('agent-profiles-delete', { id }),
+    create: (fields) => change('agent-profiles-create', { ...fields }),
+    update: (id, changes) => change('agent-profiles-update', { id, ...changes }),
+    archive: (id, reason) => change('agent-profiles-archive', { id, ...(reason !== undefined ? { reason } : {}) }),
+    restore: (id) => change('agent-profiles-restore', { id }),
+    remove: (id) => change('agent-profiles-delete', { id }),
     sandboxSetup: async (profileId, accountId) => {
       const r = await send('agent-profiles-sandbox-setup', { id: profileId, accountId }, { timeoutMs: SANDBOX_SETUP_DEADLINE_MS })
       d.afterSetup?.()

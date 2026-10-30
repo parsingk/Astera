@@ -587,12 +587,13 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   },
   'agent-profiles-archive': {
     summary: 'keep a profile but start no new work as it',
-    detail: 'Work that already holds it goes on. `agent-profiles restore` takes it back. From inside an agent session it is refused with 5.',
-    flags: [ID('<profileId|name>', 'the profile to archive')]
+    detail:
+      'Records when it was archived (`archivedAt`) and, with --reason, why (`archivedReason`). Work that already holds it goes on, and a person\'s own `jobs run` of a Job that uses it still runs. A scheduled Job that uses it, as its own profile or a planned task\'s, waits instead of firing: each fire time is skipped and logged, and `jobs list` says which profile it waits on. `agent-profiles restore` takes it back, and the next fire time runs as usual. A reason with a line break or over 200 characters is 2. From inside an agent session it is refused with 5.',
+    flags: [ID('<profileId|name>', 'the profile to archive'), { name: 'reason', value: '<text>', about: 'why, in one line of at most 200 characters' }]
   },
   'agent-profiles-restore': {
     summary: 'let an archived profile start work again',
-    detail: 'From inside an agent session it is refused with 5.',
+    detail: 'Clears when and why it was archived. From inside an agent session it is refused with 5.',
     flags: [ID('<profileId|name>', 'the profile to restore')]
   },
   'agent-profiles-delete': {

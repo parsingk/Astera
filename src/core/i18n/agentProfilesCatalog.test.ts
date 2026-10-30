@@ -92,6 +92,24 @@ describe('the agent profiles catalog', () => {
     }
   })
 
+  // Lifecycle design §5: Archive's reason field, the archived row's date, and a schedule that waits on an archived
+  // profile, in the words the plan gave (ko, en), ja and es after the en meaning
+  it('says the archive reason, the date archived and a waiting schedule in the words given', () => {
+    const given = {
+      'settings.agentProfiles.archiveReason': ['이유 (선택)', 'Reason (optional)', '理由（任意）', 'Motivo (opcional)'],
+      'settings.agentProfiles.archivedOn': ['{date}에 보관함', 'Archived {date}', '{date} にアーカイブ', 'Archivado el {date}'],
+      'jobs.run.waitingArchived': [
+        '대기 중: 보관된 에이전트 프로필 {names}',
+        'Waiting: agent profile {names} is archived',
+        '待機中: エージェントプロファイル {names} はアーカイブ済みです',
+        'En espera: el perfil de agente {names} está archivado'
+      ]
+    }
+    const order = ['ko', 'en', 'ja', 'es'] as const
+    for (const [key, lines] of Object.entries(given))
+      order.forEach((lang, i) => expect((CATALOGS[lang].messages as Record<string, string | undefined>)[key], `${lang} ${key}`).toBe(lines[i]))
+  })
+
   it('names the tab as the person chose, and keeps the Agents tab’s own name', () => {
     const names = { ko: '에이전트 프로필', en: 'Agent profiles', es: 'Perfiles de agente', ja: 'エージェントプロファイル' }
     for (const lang of LANGS) {

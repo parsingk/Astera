@@ -3,7 +3,7 @@
 // things are done here first: a profile named by its name is resolved to its id with `agent-profiles-get`, since the
 // changes take the id, and the shared MCP servers `--exclude-mcp` names are turned into their registry ids, which is
 // what a profile keeps. A name no shared server has is refused here, naming it, before anything is sent. `--sandbox
-// on|off` is sent as the boolean the Host takes.
+// on|off` is sent as the boolean the Host takes, and `archive --reason` as the line the Host records (lifecycle §5).
 import type { ExtensionEntry } from '../core/extensions/types'
 
 type Answer = { status: number; body: unknown }
@@ -88,6 +88,10 @@ export async function agentProfilesCommand<R extends object>(a: {
     return unwrap(created)
   }
 
+  // The archive's reason (lifecycle design §5), refused before anything is sent when given bare; the Host checks the rest
+  const reason = cmd === 'agent-profiles-archive' && args.reason !== undefined ? text('reason', args.reason) : undefined
+  if (typeof reason === 'object') return bad(reason.error)
+
   // The rest name one profile, by its id or its name
   if (args.id === undefined) return bad('--id is required: the profile id or name (from `agent-profiles list`)')
   const idOrName = text('id', args.id)
@@ -106,7 +110,8 @@ export async function agentProfilesCommand<R extends object>(a: {
     if ('error' in f) return bad(f.error as string)
     return unwrap(await a.call('agent-profiles-update', { id, ...f }, a.request))
   }
-  if (cmd === 'agent-profiles-archive' || cmd === 'agent-profiles-restore') return unwrap(await a.call(cmd, { id }, a.request))
+  if (cmd === 'agent-profiles-archive') return unwrap(await a.call(cmd, { id, ...(reason !== undefined ? { reason } : {}) }, a.request))
+  if (cmd === 'agent-profiles-restore') return unwrap(await a.call(cmd, { id }, a.request))
   if (cmd === 'agent-profiles-delete') {
     const deleted = await a.call('agent-profiles-delete', { id }, a.request)
     if (!isAnswer(deleted) || deleted.status !== 200) return deleted

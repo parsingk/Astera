@@ -104,6 +104,17 @@ describe('humanFor', () => {
     expect(out).toBe('PENDING  job_1  Fix the login page on Safari  0/0')
   })
 
+  // Lifecycle design §5: a scheduled Job that uses an archived profile waits, and the list says why ahead of its progress
+  it('jobs list shows archived profile beside a scheduled Job', () => {
+    const out = humanFor('jobs-list', {
+      jobs: [
+        { id: 'job_1', objective: 'nightly', outcome: 'pending', schedule: { kind: 'daily', time: '09:00' }, progress: { done: 0, total: 1 }, archivedProfiles: ['p1'] },
+        { id: 'job_2', objective: 'weekly', outcome: 'pending', schedule: { kind: 'daily', time: '09:00' }, progress: { done: 0, total: 1 }, archivedProfiles: ['p1', 'p2'] }
+      ]
+    })
+    expect(out).toBe(['SCHEDULED  job_1  nightly  archived profile: p1', 'SCHEDULED  job_2  weekly   archived profile: p1, p2'].join('\n'))
+  })
+
   it('질문이 여럿이면 복수로 센다', () => {
     const out = humanFor('jobs-list', {
       jobs: [{ id: 'j', objective: 'o', outcome: 'running', questionsOpen: 3 }]

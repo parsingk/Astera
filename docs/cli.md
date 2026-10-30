@@ -320,7 +320,12 @@ is attached, so with Astera closed a schedule keeps firing as long as some Host 
 client and no work still leaves a minute after the last one, so an armed schedule by itself does not
 keep a Host running. A fire is skipped, and logged once, while the Job's latest run is still running,
 the same rule that makes `jobs run` refuse a Job that is already going (see "the still running rule"
-below).
+below). A fire is skipped the same way, logged once per fire time, while the Job uses an archived agent
+profile, as its own `--agent-profile` or a planned task's: the whole fire waits, not only the tasks that
+name the profile, and `jobs list` and `jobs get` name each archived profile in `archivedProfiles` (the list
+shows `archived profile: <name>`). Nothing about the schedule changes, so once the profile is restored the
+next fire time runs as usual. A person's own `jobs run` still runs the Job, since work that holds a profile
+keeps using it.
 
 **A finished run does not keep its sessions.** When a run finishes, which means every one of its tasks
 is done, the process that drives stops that run's coordinator and releases its idle workers (a worker
@@ -751,7 +756,7 @@ astera agent-profiles list
 astera agent-profiles show    --id <profileId|name>
 astera agent-profiles create  --name <text> --account <id,…> [--exclude-mcp <name,…>] [--permission <inherit|bypass|ask>] [--sandbox <on|off>] [--description <text>]
 astera agent-profiles update  --id <profileId|name> [--name <text>] [--account <id,…>] [--exclude-mcp <name,…>] [--permission <inherit|bypass|ask>] [--sandbox <on|off>] [--description <text>]
-astera agent-profiles archive --id <profileId|name>
+astera agent-profiles archive --id <profileId|name> [--reason <text>]
 astera agent-profiles restore --id <profileId|name>
 astera agent-profiles delete  --id <profileId|name>
 
@@ -1129,8 +1134,11 @@ answers these commands, so they work with Astera closed. `show`, `update`, `arch
 the profile's id or its name in `--id`. `--exclude-mcp` takes the names `ext list` shows; a name no shared MCP server
 has is refused with 2, naming it, and nothing is changed. `update` changes only the flags given, and its
 `--account` and `--exclude-mcp` replace the lists (`--exclude-mcp ""` leaves no server out). An archived profile
-starts no new work, while the work that holds it goes on; `restore` takes it back. `delete` is refused with 6 while
-unfinished work holds the profile. Changing profiles is for a person: from inside an agent session the changes are
+starts no new work, while the work that holds it goes on; `restore` takes it back. `archive` records when
+(`archivedAt`) and, with `--reason`, why (`archivedReason`, one line of at most 200 characters; a line break or a
+longer one is refused with 2), and `restore` clears both. A scheduled Job that uses an archived profile waits
+instead of firing until it is restored (see "A schedule's fire runs a Job exactly the way `jobs run` does",
+above). `delete` is refused with 6 while unfinished work holds the profile. Changing profiles is for a person: from inside an agent session the changes are
 refused with 5, and the reads are not. A profile the Host refuses says why in `error.details.reason`: `name-empty`,
 `name-too-long`, `name-taken`, `no-account`, `unknown-account` or `mixed-provider` with 2, and `in-use` with 6.
 

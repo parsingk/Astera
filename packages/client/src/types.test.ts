@@ -42,7 +42,8 @@ const job = {
   agentProfileId: 'ap_000000000001',
   outcome: 'pending',
   progress: { done: 0, total: 2 },
-  questionsOpen: 0
+  questionsOpen: 0,
+  archivedProfiles: ['Reviewer']
 } satisfies Job
 const run = {
   id: 'run_1',
@@ -117,7 +118,9 @@ const profile = {
   permission: 'bypass',
   createdAt: 'T',
   updatedAt: 'T',
-  lastUsedAt: 'T'
+  lastUsedAt: 'T',
+  archivedAt: 'T',
+  archivedReason: 'replaced'
 } satisfies AgentProfile
 const stopped = { runId: 'run_1', stopped: 2, paused: true, coordinatorStopped: true } satisfies StopResult
 const listed = { items: [project] } satisfies ListResult<Project>

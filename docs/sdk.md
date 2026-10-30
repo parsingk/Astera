@@ -321,8 +321,11 @@ matches without regard to case, and an unknown one is `NOT_FOUND`). Each is an `
 `description`, `status` (`active`, or `archived`, which starts no new work), `accountIds`, `mcpExclude` (the ids of the
 shared MCP servers it leaves out), `permission` (`inherit`, `bypass` or `ask`), `sandbox` (whether its sessions start
 in their agent CLI's own sandbox; absent from an Astera before the sandbox) and when it was made, changed and last
-used. A Job and a Task made as a profile carry its id as `agentProfileId`, and so does a worker attempt of such a
-Task. Profiles need `@astera-app/client` 0.5.0 and the Astera that ships them. A Host from before agent profiles
+used. An archived profile also carries `archivedAt`, when it was archived, and `archivedReason`, the one line a person
+gave as why, if any; a restore clears both. A Job and a Task made as a profile carry its id as `agentProfileId`, and so
+does a worker attempt of such a Task. A scheduled Job that uses an archived profile, as its own or a planned Task's,
+waits instead of firing until the profile is restored; `jobs.list` and `jobs.get` name those profiles in
+`archivedProfiles` while it is not paused. An Astera before these records leaves all three out. Profiles need `@astera-app/client` 0.5.0 and the Astera that ships them. A Host from before agent profiles
 answers `agentProfiles.list` and `agentProfiles.get` with `VERSION_MISMATCH`, ignores `agentProfileId` on
 `jobs.create`, and refuses a `tasks.create` that names a profile but no `accountIds`.
 

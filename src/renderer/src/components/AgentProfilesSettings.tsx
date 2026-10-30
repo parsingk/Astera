@@ -12,6 +12,7 @@ import { AccountSelect } from './AccountSelect'
 import { failureLine } from './extensionsText'
 import {
   addableAccounts,
+  archivedNote,
   offersSetUp,
   permissionLabel,
   profileFailureLine,
@@ -53,6 +54,8 @@ export function AgentProfilesSettings({ accounts }: { accounts: Account[] }): Re
   const [listFailure, setListFailure] = useState<Failure | null>(null)
   const [busy, setBusy] = useState(false)
   const [creating, setCreating] = useState(false)
+  /** The profile whose Archive asks for the reason first, and the reason typed so far (lifecycle design §5). */
+  const [archiving, setArchiving] = useState<{ id: string; reason: string } | null>(null)
   /** The rows opened, by profile id. */
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set())
   const toggleOpen = (id: string): void =>
@@ -142,6 +145,9 @@ export function AgentProfilesSettings({ accounts }: { accounts: Account[] }): Re
           {profiles.map((p) => {
             const first = accounts.find((a) => a.id === p.accountIds[0])
             const isOpen = open.has(p.id)
+            // When it was archived and why (lifecycle design §5): the date beside its status, the reason inside
+            const note = archivedNote(p, t, (iso) => new Date(iso).toLocaleDateString())
+            const reason = archiving?.id === p.id ? archiving.reason : null
             return (
               <div key={p.id} className={`ext-row${isOpen ? ' is-open' : ''}`}>
                 <button type="button" className="ext-row-head" aria-expanded={isOpen} onClick={() => toggleOpen(p.id)}>
@@ -152,6 +158,11 @@ export function AgentProfilesSettings({ accounts }: { accounts: Account[] }): Re
                   {first && <span className="settings-hint">{metaOf(first).displayName}</span>}
                   <span className="settings-hint">{t('settings.agentProfiles.accountCount', { count: p.accountIds.length })}</span>
                   {p.status === 'archived' && <span className="plugin-status">{t('settings.agentProfiles.archived')}</span>}
+                  {note && (
+                    <span className="settings-hint" title={note.reason}>
+                      {note.on}
+                    </span>
+                  )}
                 </button>
                 {isOpen && (
                   <ProfileEditor
@@ -164,19 +175,52 @@ export function AgentProfilesSettings({ accounts }: { accounts: Account[] }): Re
                     saveLabel={t('settings.agentProfiles.save')}
                     onSave={(d) => void change(() => window.api.agentProfiles.update(p.id, d))}
                     warning={p.status === 'active' && p.accountIds.length === 0 ? t('settings.agentProfiles.noAccounts') : undefined}
+                    note={note?.reason}
                     // Each Codex account's Windows sandbox, for a profile whose sessions start in it (Task 8)
                     sandboxReadiness={sandboxReadinessShown(p, window.api.platform, accounts) ? <SandboxReadiness profile={p} accounts={accounts} /> : undefined}
                   >
-                    <button
-                      className="settings-gen-refresh"
-                      disabled={busy}
-                      onClick={() => void change(() => (p.status === 'archived' ? window.api.agentProfiles.restore(p.id) : window.api.agentProfiles.archive(p.id)))}
-                    >
-                      {p.status === 'archived' ? t('settings.agentProfiles.restore') : t('settings.agentProfiles.archive')}
-                    </button>
-                    <button className="ghost danger" disabled={busy} onClick={() => void remove(p)}>
-                      {t('settings.agentProfiles.delete')}
-                    </button>
+                    {reason !== null ? (
+                      // Archive asks for the reason in one line first, then archives or cancels (lifecycle design §5)
+                      <>
+                        <input
+                          type="text"
+                          className="settings-gen-input remote-actions-grow"
+                          aria-label={t('settings.agentProfiles.archiveReason')}
+                          placeholder={t('settings.agentProfiles.archiveReason')}
+                          value={reason}
+                          maxLength={200}
+                          autoFocus
+                          onChange={(e) => setArchiving({ id: p.id, reason: e.target.value })}
+                        />
+                        <button
+                          className="settings-gen-refresh"
+                          disabled={busy}
+                          onClick={() =>
+                            void change(() => window.api.agentProfiles.archive(p.id, reason.trim() === '' ? undefined : reason)).then((ok) => {
+                              if (ok) setArchiving(null)
+                            })
+                          }
+                        >
+                          {t('settings.agentProfiles.archive')}
+                        </button>
+                        <button className="settings-gen-refresh" disabled={busy} onClick={() => setArchiving(null)}>
+                          {t('common.cancel')}
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          className="settings-gen-refresh"
+                          disabled={busy}
+                          onClick={() => (p.status === 'archived' ? void change(() => window.api.agentProfiles.restore(p.id)) : setArchiving({ id: p.id, reason: '' }))}
+                        >
+                          {p.status === 'archived' ? t('settings.agentProfiles.restore') : t('settings.agentProfiles.archive')}
+                        </button>
+                        <button className="ghost danger" disabled={busy} onClick={() => void remove(p)}>
+                          {t('settings.agentProfiles.delete')}
+                        </button>
+                      </>
+                    )}
                   </ProfileEditor>
                 )}
               </div>
@@ -199,6 +243,7 @@ function ProfileEditor({
   onSave,
   onCancel,
   warning,
+  note,
   sandboxReadiness,
   children
 }: {
@@ -210,6 +255,8 @@ function ProfileEditor({
   onSave: (d: Draft) => void
   onCancel?: () => void
   warning?: string
+  /** A line shown first, as a hint: why an archived profile was archived (lifecycle design §5). */
+  note?: string
   /** Shown under the sandbox switch while it is on: the readiness of a stored profile's Codex accounts on Windows. */
   sandboxReadiness?: React.ReactNode
   children?: React.ReactNode
@@ -230,6 +277,7 @@ function ProfileEditor({
   return (
     <div className="ext-row-body">
       {warning !== undefined && <span className="settings-hint is-warning">{warning}</span>}
+      {note !== undefined && <span className="settings-hint">{note}</span>}
       <label className="plugin-field">
         <span className="plugin-field-label">{t('settings.agentProfiles.name')}</span>
         <input type="text" className="settings-gen-input" value={d.name} maxLength={60} onChange={(e) => set('name', e.target.value)} />

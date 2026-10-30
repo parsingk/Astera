@@ -121,6 +121,18 @@ describe('agentProfilesCommand', () => {
     ])
   })
 
+  // Lifecycle design §5: the archive records why, in the person's own line; the Host checks it
+  it('archive passes --reason; a bare --reason is refused before anything is sent', async () => {
+    const h = host()
+    await run(h, 'agent-profiles-archive', { id: 'Reviewer', reason: 'replaced by p2' })
+    expect(h.calls.filter((c) => c.cmd !== 'agent-profiles-get').map((c) => [c.cmd, c.args])).toEqual([
+      ['agent-profiles-archive', { id: PROFILE.id, reason: 'replaced by p2' }]
+    ])
+    const bare = host()
+    expect(await run(bare, 'agent-profiles-archive', { id: 'Reviewer', reason: true })).toEqual({ status: 400, body: { error: '--reason needs a value' } })
+    expect(bare.calls).toEqual([])
+  })
+
   it('an unknown profile is the Host’s 404, and nothing is changed', async () => {
     const h = host()
     expect(await run(h, 'agent-profiles-delete', { id: 'nope' })).toMatchObject({ status: 404 })

@@ -112,7 +112,10 @@ export const AGENT_PROFILE_FIELDS = Object.freeze([
   'sandbox',
   'createdAt',
   'updatedAt',
-  'lastUsedAt'
+  'lastUsedAt',
+  // When it was last archived and the line the person gave as why (lifecycle design §5); restore drops both
+  'archivedAt',
+  'archivedReason'
 ] as const)
 
 /** A run configuration's command, env and cwd stay in the app: an env value can be a secret. */

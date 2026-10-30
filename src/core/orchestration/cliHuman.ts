@@ -40,10 +40,13 @@ export function stateWord(o: {
   return '-'
 }
 
-/** 마지막 칸. 사람을 기다리는 중이면 그 수가 진행률보다 급한 소식이다(설계 §6 의 예시). */
-function progressWord(o: { questionsOpen?: number; progress?: { done: number; total: number } }): string {
+/** 마지막 칸. 사람을 기다리는 중이면 그 수가 진행률보다 급한 소식이다(설계 §6 의 예시).
+ *  A schedule that waits on an archived agent profile says which ahead of its progress (lifecycle design §5): its fires
+ *  make no Run until the profile is restored. */
+function progressWord(o: { questionsOpen?: number; progress?: { done: number; total: number }; archivedProfiles?: unknown }): string {
   const open = o.questionsOpen ?? 0
   if (open > 0) return open === 1 ? '1 question' : `${open} questions`
+  if (Array.isArray(o.archivedProfiles) && o.archivedProfiles.length > 0) return `archived profile: ${o.archivedProfiles.map(String).join(', ')}`
   const p = o.progress
   return p ? `${p.done}/${p.total}` : ''
 }

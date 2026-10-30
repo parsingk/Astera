@@ -7,6 +7,7 @@ import type { AgentProfile } from '../../../core/agentProfiles/types'
 import {
   PROFILE_REASONS,
   addableAccounts,
+  archivedNote,
   chatHoldsPrompts,
   permissionFields,
   permissionLabel,
@@ -353,5 +354,34 @@ describe('the sandbox switch', () => {
     expect(editor).toContain('window.api.agentProfiles.sandboxDefaultRemove(profile.id, accountId)')
     expect(editor).toMatch(/onClick=\{\(\) => void removeDefault\(r\.accountId\)\}/)
     expect(editor).toContain("t('settings.agentProfiles.sandboxDefault.removeFailed', { file: removed.file ?? 'config.toml' })")
+  })
+})
+
+// Lifecycle design §5: an archived profile records when and why, and its row says both; Archive asks for the reason in a
+// one-line field first, then archives or cancels
+describe('an archived profile', () => {
+  const day = (iso: string): string => iso.slice(0, 10)
+
+  it('says when it was archived, in the reader’s date, and the reason given', () => {
+    expect(archivedNote(profile({ status: 'archived', archivedAt: '2026-10-30T01:00:00.000Z', archivedReason: 'replaced by p2' }), en, day)).toEqual({
+      on: 'Archived 2026-10-30',
+      reason: 'replaced by p2'
+    })
+    expect(archivedNote(profile({ status: 'archived', archivedAt: '2026-10-30T01:00:00.000Z' }), en, day)).toEqual({ on: 'Archived 2026-10-30' })
+    expect(archivedNote(profile({ status: 'archived', archivedAt: '2026-10-30T01:00:00.000Z' }), (k, p) => translate('ko', k, p), day)).toEqual({ on: '2026-10-30에 보관함' })
+  })
+
+  it('says nothing for an active profile, or one archived before the date was kept', () => {
+    expect(archivedNote(profile(), en, day)).toBeNull()
+    expect(archivedNote(profile({ status: 'archived' }), en, day)).toBeNull()
+  })
+
+  it('the row shows the note, and Archive opens a one-line reason field with Archive and Cancel', () => {
+    const editor = source('AgentProfilesSettings.tsx')
+    expect(editor).toContain('archivedNote(p, t, (iso) => new Date(iso).toLocaleDateString())')
+    expect(editor).toContain("t('settings.agentProfiles.archiveReason')")
+    expect(editor).toMatch(/<input[^>]*type="text"[^>]*maxLength=\{200\}/)
+    expect(editor).toContain("window.api.agentProfiles.archive(p.id, reason.trim() === '' ? undefined : reason)")
+    expect(editor).toContain("t('common.cancel')")
   })
 })

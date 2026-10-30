@@ -20,6 +20,7 @@ import { APP_CALLER } from '../../host/driver'
 import { COORDINATOR_START_WINDOW_MS, emptyState, type OrchState } from '../state'
 import type { Dispatch, Job, Message, Task } from '../types'
 import type { Account } from '../../types'
+import type { AgentProfile } from '../../agentProfiles/types'
 import { ENTER_QUIET_MS } from '../../sessions/sessionDriver'
 
 const NOW = '2026-09-24T00:00:00.000Z'
@@ -83,6 +84,10 @@ interface RigOpts {
   reapFails?: boolean
   /** Every session is gone (a month of finished Runs whose workers ended long ago). */
   deadSessions?: boolean
+  /** The template runs as this agent profile (lifecycle design §5). */
+  scheduleProfile?: string
+  /** The agent profile store the command layer reads. */
+  profiles?: AgentProfile[]
 }
 
 const TEMPLATE_ID = 'job_sched'
@@ -107,7 +112,8 @@ function fixture(o: RigOpts): OrchState {
       cwd: '/p',
       createdAt: NOW,
       schedule: { kind: 'interval', minutes: 1 },
-      ...(o.scheduleCoordinator ? { coordinatorAccountId: o.scheduleCoordinator } : {})
+      ...(o.scheduleCoordinator ? { coordinatorAccountId: o.scheduleCoordinator } : {}),
+      ...(o.scheduleProfile ? { agentProfileId: o.scheduleProfile } : {})
     })
   const tasks = [task({ id: 'tsk_1' }), task({ id: 'tsk_2' })]
   // 정의 Task — runId 가 없고 jobId 만 있다(task-create 가 Job 을 지목받았을 때의 모양).
@@ -209,7 +215,8 @@ function rig(o: RigOpts = {}) {
     listAccounts: async () => [{ id: 'accA', label: 'accA', provider: 'claude' as const }],
     log: () => {},
     runningSessions: () => 0,
-    appVersion: () => '1.0.0'
+    appVersion: () => '1.0.0',
+    ...(o.profiles ? { readAgentProfiles: async () => ({ version: 1 as const, profiles: o.profiles! }) } : {})
   } as unknown as OrchServerDeps
 
   /** 진짜 command layer — 테스트가 ctx.handle 을 갈아 끼워도 그 안에서 부를 수 있게 따로 둔다. */
@@ -748,6 +755,36 @@ describe('a fire while the Job’s latest Run still runs', () => {
     await h.settle()
     expect(runsOf(h)).toHaveLength(2)
     expect(skips(h)).toHaveLength(1)
+  })
+})
+
+// Lifecycle design §5: a fire of a Job that uses an archived agent profile waits. Its arming already moved on, so the
+// skip is logged once per fire time and never retried; a restore lets the next fire time through.
+describe('a fire of a Job whose agent profile is archived', () => {
+  const profile = (status: AgentProfile['status']): AgentProfile => ({
+    id: 'ap_1', name: 'p1', status, accountIds: ['accA'], mcpExclude: [], permission: 'inherit', sandbox: false, createdAt: NOW, updatedAt: NOW
+  })
+  const runsOf = (h: ReturnType<typeof rig>) => h.state().runs.filter((r) => r.jobId === TEMPLATE_ID)
+
+  it('a fire skipped for an archived profile logs once and is not retried', async () => {
+    const profiles = [profile('archived')]
+    const h = rig({ schedule: { every: 'minute' }, scheduleTask: true, scheduleProfile: 'ap_1', profiles })
+    await h.loop.fireTick() // arms
+    h.clock += 61_000
+    await h.loop.fireTick() // due: skipped
+    await h.settle()
+    expect(runsOf(h)).toHaveLength(0)
+    expect(h.logs.filter((m) => m.startsWith('scheduled fire skipped'))).toEqual([`scheduled fire skipped job=${TEMPLATE_ID} — agent profile p1 is archived`])
+    h.clock += 15_000 // the next tick, same fire time: consumed, nothing to retry
+    await h.loop.fireTick()
+    expect(h.handled().filter((c) => c === 'run-spawn')).toHaveLength(1)
+    expect(h.logs.filter((m) => m.startsWith('scheduled fire skipped'))).toHaveLength(1)
+    // Restored before the next fire time: it fires as usual, with nothing to put back
+    profiles[0] = profile('active')
+    h.clock += 61_000
+    await h.loop.fireTick()
+    await h.settle()
+    expect(runsOf(h)).toHaveLength(1)
   })
 })
 

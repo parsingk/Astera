@@ -1091,6 +1091,13 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
           log(`scheduled fire skipped job=${runId} — its run ${running} is still running`)
           continue
         }
+        // **Skipped while the Job uses an archived agent profile** (lifecycle design §5), consumed the same way: the
+        // arming already moved on, so this is logged once per fire time, and a restore lets the next one through.
+        const archived = reply.status === 409 ? (reply.body as { archivedProfiles?: unknown } | null)?.archivedProfiles : undefined
+        if (Array.isArray(archived)) {
+          log(`scheduled fire skipped job=${runId} — agent profile ${archived.join(', ')} is archived`)
+          continue
+        }
         // run-spawn 은 `jobs run` 이 회차를 시작하는 그대로 시작한다(U1): 코디네이터 계정이 있으면 그
         // 회차의 코디네이터를 띄운다. **그것만 실패했다면 회차는 이미 있다**(N7) — 답이 그 회차를
         // `runId` 로 싣는다. 잃은 발화가 아니므로 다르게 적는다: 사람이 그 회차 줄의 ▶ 로 다시 띄운다.
