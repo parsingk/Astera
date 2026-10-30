@@ -190,6 +190,23 @@ describe('enforceVerdict', () => {
       expect(verdict(claude('Bash', { command }, { cwd: work })), command).toMatchObject(remoteWrite)
   })
 
+  // R-F8 list, A1: an endpoint the shell fills in leaves a gh api call that writes a write, as at the base
+  it('denies a gh api call that writes to an endpoint the shell fills in, under the starter rules', () => {
+    const work = path.resolve('/work/proj')
+    const githubWrite = { deny: true, ruleId: 'starter-github-write' }
+    const lines = [
+      'gh api $ENDPOINT -X POST',
+      'gh api "$URL" -f a=b',
+      'gh api $URL --method DELETE',
+      'gh api "$URL" -X PATCH -f state=closed',
+      'gh api "$URL" --input body.json -X PUT',
+      'gh api -XPOST $URL',
+      'gh api $URL -XDELETE',
+      'gh api --hostname $H repos/o/r/issues -f x=y'
+    ]
+    for (const command of lines) expect(verdict(claude('Bash', { command }, { cwd: work })), command).toMatchObject(githubWrite)
+  })
+
   it('fails closed on a script piped into a shell sudo starts', () => {
     const work = path.resolve('/work/proj')
     for (const command of ['cat script.sh | sudo -s', "echo 'git push' | sudo -u root -s", "echo 'rm -rf /x' | sudo -i"])

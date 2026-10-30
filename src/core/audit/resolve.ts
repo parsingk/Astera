@@ -2519,9 +2519,11 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
   }
 
   const subAt = SUBCOMMAND_PROGRAMS.has(prog) ? subcommandAt(prog, args) : -1
-  // A subcommand the shell fills in (`git $(echo push)`, `gh $(echo pr) create`, `npm $X`) cannot be told, so what the
-  // program does is not known (follow-up R-F6)
-  const filledAt = prog === 'gh' ? positionals(prog, args, 2) : subAt < 0 ? [] : [args[subAt]]
+  // A subcommand the shell fills in (`git $(echo push)`, `gh $GROUP create`, `gh pr $VERB`, `npm $X`) cannot be told, so
+  // what the program does is not known (follow-up R-F6). gh's second word is a verb, but `gh api`'s is the endpoint, a
+  // value whose call its method and fields say (R-F8 list, A1)
+  const ghWords = prog === 'gh' ? positionals(prog, args, 2) : []
+  const filledAt = prog === 'gh' ? ghWords.slice(0, ghWords[0] === 'api' ? 1 : 2) : subAt < 0 ? [] : [args[subAt]]
   if (filledAt.some((w) => w.startsWith('$'))) return { action: 'process.execute', target: name, known: false }
   const word = subAt < 0 ? undefined : plainSubcommand(args[subAt])
   // claude and codex take a prompt where other programs take a subcommand, so only their own subcommands are shown.

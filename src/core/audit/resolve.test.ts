@@ -3036,6 +3036,28 @@ describe('shell: a subcommand the shell fills in is not known', () => {
     }
   )
 
+  // R-F8 list, A1: `gh api`'s second word is its endpoint, a value, not a verb. One the shell fills in leaves the call what
+  // its method and fields say, as at the base
+  it.each([
+    ['gh api $ENDPOINT -X POST', 'github.write'],
+    ['gh api "$URL" -f a=b', 'github.write'],
+    ['gh api $URL --method DELETE', 'github.write'],
+    ['gh api "$URL" -X PATCH -f state=closed', 'github.write'],
+    ['gh api "$URL" --input body.json -X PUT', 'github.write'],
+    ['gh api -XPOST $URL', 'github.write'],
+    ['gh api $URL -XDELETE', 'github.write'],
+    ['gh api --hostname $H repos/o/r/issues -f x=y', 'github.write'],
+    ['gh api "$URL"', 'process.execute'],
+    ['gh api $URL --paginate', 'process.execute']
+  ] satisfies Array<[string, AuditAction]>)('%s is %s', (line, action) => {
+    expect(bash(line)).toEqual({ action, target: 'gh api', confidence: 'high', effect: action === 'github.write' ? 'write' : 'unknown' })
+  })
+
+  it('still takes a group the shell fills in for gh as not known', () => {
+    expect(bash('gh $GROUP create').confidence).toBe('unknown')
+    expect(bash('gh $GROUP -X POST x').confidence).toBe('unknown')
+  })
+
   // `git -C $(pwd) push` reads `push` as a program of its own since c2 is reverted (ruling R-F8)
   it('still reads a value the shell fills in after the subcommand', () => {
     expect(bash('git push $(git remote) main')).toMatchObject({ action: 'git.remote.write' })
