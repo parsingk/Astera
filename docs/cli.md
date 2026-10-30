@@ -1371,24 +1371,25 @@ fixed in this version:
 **The findings from usage need Observe on for 30 days**: `unused-mcp`, `over-broad-profile` and the unused skill,
 command and agent findings. Their history counts from when observe or enforce was last turned on (`observingSince` in
 `policies show`), and never from before this version first ran on the profile, less each day whose records stopped at
-the size limit. Until it has 30 days, none of them is raised and `observe` says so: `{"on":false,"days":0}` while
-observe is off, or how many whole `days` it has had, which `--human` prints first as "Usage findings need Observe on for
-30 days. It has been on for 12 days." (or "Observe is off."). Something shared, turned on or made within the 30 days is
-not judged either. `failing-profile` and `token-spike` read Dispatch outcomes and token totals, which are kept
-whatever the mode, so they do not wait. A skill Codex can use too is never a finding, since Codex does not report
-which skills it used: when Claude reported no use of it, `info` says so and that Codex cannot tell. `info` also says
-when Claude cannot tell (a Claude Code older than 2.1.312 here, a Claude chat in the window, whose typed skills and
-commands are not reported, or a Claude session started without the hooks that report uses), and for an item Codex has
-too, that neither can. An `info` line is never a finding and has no key.
+the size limit. When the records pass the size limit and their oldest days are dropped, the history counts from the
+day after the last one dropped. Until it has 30 days, none of them is raised and `observe` says so:
+`{"on":false,"days":0}` while observe is off, or how many whole `days` it has had, which `--human` prints first as
+"Usage findings need Observe on for 30 days. It has been on for 12 days." (or "Observe is off."). Something shared,
+turned on or made within the 30 days is not judged either. `failing-profile` and `token-spike` read Dispatch outcomes
+and token totals, which are kept whatever the mode, so they do not wait. A skill Codex can use too is never a finding,
+since Codex does not report which skills it used: when Claude reported no use of it, `info` says so and that Codex
+cannot tell. `info` also says when Claude cannot tell (a Claude Code older than 2.1.312 here, a Claude chat in the
+window, whose typed skills and commands are not reported, or a Claude session started without the hooks that report
+uses), and for an item Codex has too, that neither can. An `info` line is never a finding and has no key.
 
 **A source that cannot be read drops only its own findings.** `unread` names it, one of `profiles`, `accounts`,
 `orchestration`, `tokens`, `policy`, `records`, `extensions`, `account-mcp`, `credentials`, `credential-uses`,
 `runtimes`, `extension-uses`, `ignored`, `settings` and `cli-version`, the findings that need it are left out, the rest
 are given, and `--human` closes with "Could not read: …". A use log that stopped at the size limit on a day of the last
-30 counts as unread, since its uses are missing. With `policy` unread, how long Observe has been on is not known:
-`observe` reads `{"on":false,"days":0}` and `--human` prints the unread line instead of the Observe note. With `ignored`
-unread, every finding shows as open. The Host computes the findings when asked and keeps them for a minute, so a change
-elsewhere may take a minute to show; an ignore shows at once.
+30, or dropped one of those days to keep under it, counts as unread, since its uses are missing. With `policy` unread,
+how long Observe has been on is not known: `observe` reads `{"on":false,"days":0}` and `--human` prints the unread line
+instead of the Observe note. With `ignored` unread, every finding shows as open. The Host computes the findings when
+asked and keeps them for a minute, so a change elsewhere may take a minute to show; an ignore shows at once.
 
 **`audit-ignore <key>` sets a finding aside**: `audit` leaves it out, and `audit --all` shows it with `"ignored":true`,
 `ignoredAt` and the `--note` given (one line of at most 200 characters; a longer one or one with a line break is 2).

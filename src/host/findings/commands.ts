@@ -20,7 +20,7 @@ import type { SpentTokens } from '../../core/orchestration/publicViews'
 import type { RuntimeProfile } from '../../core/runtimes/registry'
 import { readAgentProfiles } from '../../core/agentProfiles/store'
 import { readAuditPolicy } from '../../core/audit/policy'
-import { auditDayOf, auditStoppedDays, stoppedDaysIn, visitRecords } from '../../core/audit/store'
+import { auditDayOf, auditDroppedThrough, auditStoppedDays, droppedThroughIn, stoppedDaysIn, visitRecords } from '../../core/audit/store'
 import { summarizeExtensionUses } from '../../core/audit/extensionUses'
 import { readExtensionRegistry } from '../../core/extensions/registry'
 import { readExtensionCopies } from '../../core/extensions/copies'
@@ -98,10 +98,12 @@ const stoppedInWindow = (days: readonly string[], sinceMs: number, nowMs: number
   return days.some((d) => d >= first && d <= last)
 }
 
-/** Throws when a day of the window in this use log's folder stopped at the size (rulings R4-4, R6-7): its uses are
- *  missing data, so the log is read as unread rather than as complete. */
+/** Throws when a day of the window in this use log's folder stopped at the size (rulings R4-4, R6-7), or was dropped for
+ *  it (final fix list, I-2): its uses are missing data, so the log is read as unread rather than as complete. */
 const refuseStoppedWindow = (folder: string, sinceMs: number, nowMs: number): void => {
   if (stoppedInWindow(stoppedDaysIn(folder), sinceMs, nowMs)) throw new Error('a day of the last 30 stopped recording at the size limit')
+  const dropped = droppedThroughIn(folder)
+  if (dropped !== null && dropped >= auditDayOf(new Date(sinceMs).toISOString())) throw new Error('a day of the last 30 was dropped at the size limit')
 }
 
 /**
@@ -184,7 +186,8 @@ export async function gatherFindings(d: FindingsDeps, nowMs: number): Promise<{ 
     return { summary, copies: registry === undefined ? new Map() : await readExtensionCopies(dir, registry) }
   })
   // When the rules file is unread so is the history, which the report then does not claim (FindingsReport.observe)
-  const observe = policy === undefined ? undefined : observeHistory({ policy, findingsSince, stoppedDays: auditStoppedDays(dir), nowMs })
+  const observe =
+    policy === undefined ? undefined : observeHistory({ policy, findingsSince, stoppedDays: auditStoppedDays(dir), droppedThrough: auditDroppedThrough(dir), nowMs })
 
   return {
     inputs: {

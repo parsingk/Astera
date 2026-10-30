@@ -37,6 +37,21 @@ describe('observeHistory', () => {
     expect(observeHistory({ ...one, stoppedDays: [auditDayOf(ago(0)), auditDayOf(ago(DAY))] })).toEqual({ on: true, days: 0 })
   })
 
+  // Final fix pass, I-2: the days before the latest one dropped for size hold no records any more
+  it('starts the history the day after the latest day dropped for size, when that is later than the other starts', () => {
+    const sixty = { policy: { mode: 'observe' as const, observingSince: ago(60 * DAY) }, findingsSince: LONG_AGO, stoppedDays: [], nowMs: NOW }
+    // Dropped through 11 days ago: the history is the whole days after it, whatever the time zone
+    expect(observeHistory({ ...sixty, droppedThrough: auditDayOf(ago(11 * DAY)) })).toEqual({ on: true, days: 10 })
+    // Dropped through yesterday: no whole day is left
+    expect(observeHistory({ ...sixty, droppedThrough: auditDayOf(ago(DAY)) })).toEqual({ on: true, days: 0 })
+    // Before the other starts, or none: they decide
+    const twenty = { ...sixty, policy: { mode: 'observe' as const, observingSince: ago(20 * DAY) } }
+    expect(observeHistory({ ...twenty, droppedThrough: auditDayOf(ago(40 * DAY)) })).toEqual({ on: true, days: 20 })
+    expect(observeHistory({ ...twenty, droppedThrough: null })).toEqual({ on: true, days: 20 })
+    // A stopped day after the dropped one is still taken out
+    expect(observeHistory({ ...sixty, droppedThrough: auditDayOf(ago(11 * DAY)), stoppedDays: [auditDayOf(ago(3 * DAY))] })).toEqual({ on: true, days: 9 })
+  })
+
   it('off gives on false and days 0', () => {
     expect(observeHistory({ policy: null, findingsSince: LONG_AGO, stoppedDays: [], nowMs: NOW })).toEqual({ on: false, days: 0 })
     // A stamp left in compatibility (a file edited by hand) does not turn it on

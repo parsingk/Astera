@@ -20,7 +20,7 @@ vi.mock('../../core/findings/ignored', async (importOriginal) => {
   return { ...real, readIgnored: vi.fn(real.readIgnored) }
 })
 
-import { auditDayOf, queryRecords, visitRecords } from '../../core/audit/store'
+import { auditDayOf, pruneRecords, queryRecords, visitRecords } from '../../core/audit/store'
 import { readAgentProfiles } from '../../core/agentProfiles/store'
 import { readIgnored } from '../../core/findings/ignored'
 import { profilePaths } from '../../core/profile/paths'
@@ -215,6 +215,27 @@ describe('the findings commands', () => {
     const r = await audit(createHostFindings(deps().d))
     expect(body(r).observe).toEqual({ on: true, days: 11 })
     expect(body(r).unread).toEqual([])
+  })
+
+  // Final fix pass, I-2, at Review Focus 5's size made small: a day the size dropped is history no longer, in the records
+  // and in a use log
+  it('days dropped for size shorten the Observe history, and make a use log unread', async () => {
+    await fs.writeFile(profilePaths(dir).auditPolicy, JSON.stringify({ ...STARTER_POLICY, mode: 'observe', observingSince: iso(NOW - 60 * DAY) }))
+    await fs.writeFile(profilePaths(dir).findingsHistory, JSON.stringify({ version: 1, since: iso(NOW - 60 * DAY) }))
+    // A day file of 1000 bytes for each of the last 30 days, in the records and in the credential uses
+    for (const folder of [profilePaths(dir).auditRecords, profilePaths(dir).credentialUses]) {
+      await fs.mkdir(folder, { recursive: true })
+      for (let d = 0; d < 30; d++) await fs.writeFile(path.join(folder, `${auditDayOf(iso(NOW - d * DAY))}.jsonl`), 'x'.repeat(999) + '\n')
+    }
+    const before = await gatherFindings(deps().d, NOW)
+    expect(before.inputs.observe).toEqual({ on: true, days: 30 })
+    expect(before.inputs.credentialLastUse).toBeDefined()
+    // The size holds 19 of them: the 11 oldest go, through the day 19 days ago
+    await pruneRecords(dir, { now: () => NOW, maxBytes: 19_000 })
+    const after = await gatherFindings(deps().d, NOW)
+    expect(after.inputs.observe).toEqual({ on: true, days: 18 })
+    expect(after.inputs.credentialLastUse).toBeUndefined()
+    expect(logs).toContain('findings: credential-uses could not be read (a day of the last 30 was dropped at the size limit)')
   })
 
   it('takes the latest credential use of each entry in the window', async () => {
