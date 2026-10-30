@@ -3012,6 +3012,33 @@ describe('shell: a wrapper option off its whitelist leaves the wrapper the progr
     }
   )
 
+  // R-F11 list, M-1: with only assignments after its options, a wrapper runs what it is fed or nothing; it is the program,
+  // not known. With a command after them, it is read as before
+  it.each([
+    'cat s.sh | sudo -u root A=1',
+    'cat s.sh | sudo A=1',
+    'cat s.sh | env -i A=1',
+    'cat s.sh | env A=1',
+    'cat s.sh | doas -u root A=1',
+    "echo 'rm -rf ~/x' | sudo -n A=1 B=2"
+  ])('%s is unknown, not a read', (line) => {
+    expect(bash(line)).toMatchObject({ confidence: 'unknown', effect: 'unknown' })
+  })
+
+  it.each([
+    ['sudo -u root A=1', 'sudo'],
+    ['env -i A=1', 'env'],
+    ['timeout 5 A=1', 'timeout']
+  ])('%s is %s, not known', (line, wrapper) => {
+    expect(bash(line)).toMatchObject({ action: 'process.execute', target: wrapper, confidence: 'unknown' })
+  })
+
+  it('reads the command after assignments that follow a wrapper', () => {
+    expect(bash('env -i A=1 git push')).toMatchObject({ action: 'git.remote.write' })
+    expect(bash('sudo -u root A=1 rm -rf ../x')).toMatchObject({ action: 'filesystem.delete', insideProject: false })
+    expect(bash('time -p A=1 (ls)')).toMatchObject({ action: 'process.execute', target: 'time', confidence: 'unknown' })
+  })
+
   // A process the PID wrappers act on runs no command: the wrapper is the program, as at the base
   it('keeps chrt -p, taskset -p and ionice -p the program', () => {
     for (const [line, target] of [['chrt -p 5 1234', 'chrt'], ['taskset -p 0x1 1234', 'taskset'], ['ionice -p 1234', 'ionice']])

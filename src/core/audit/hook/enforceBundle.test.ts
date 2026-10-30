@@ -21,7 +21,11 @@ describe('the bundled enforce hook', () => {
     const script = path.join(dir, 'astera-enforce-hook.cjs')
     await fs.writeFile(script, source)
     await fs.writeFile(path.join(dir, 'audit-policy.json'), JSON.stringify({ ...STARTER_POLICY, mode: 'enforce' }))
-    const payload = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git push origin main' }, tool_use_id: 'toolu_9', cwd: dir })
+    // The session works in a project of its own: a call that runs in the settings folder and does more than read it is
+    // the settings built-in's (ruling R-F11)
+    const project = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-enforce-project-'))
+    dirs.push(project)
+    const payload = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git push origin main' }, tool_use_id: 'toolu_9', cwd: project })
     const r = spawnSync(process.execPath, [script, 'claude'], { input: payload, encoding: 'utf8', env: { ...process.env, ASTERA_SESSION: 'sess_x' }, timeout: 20_000 })
     expect(r.status).toBe(0)
     expect(JSON.parse(r.stdout)).toEqual({

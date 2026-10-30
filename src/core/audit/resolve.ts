@@ -1058,8 +1058,8 @@ function optionOf(w: string, spec: WrapperSpec): 'none' | 'value' | 'self' | 'of
  * Where the command starts after the wrapper at `from` and its options, a `--` ending them. `from` itself when it runs none
  * (`chrt -p PID`), so it is the program, as at the base. -1 when what it runs is not known, and the wrapper is the program
  * then too: an option off its whitelist (ruling R-F10: `time -o f`, `env -C /tmp`, `sudo -e`), or no word left after its
- * options (follow-up R-F6: `cat script.sh | sudo -s` runs what it is fed), but for exec, whose bare form only opens the
- * files its redirections name.
+ * options (follow-up R-F6: `cat script.sh | sudo -u root`, which with sudoers' shell_noargs runs a shell that reads what
+ * it is fed), but for exec, whose bare form only opens the files its redirections name.
  */
 function afterWrapper(words: Words, from: number, prog: string): number {
   const spec = WRAPPER_OPTIONS.get(prog)!
@@ -1136,11 +1136,15 @@ function stripPrefix(raw: Cmd, flavor: Flavor, cli = false): { cmd: Cmd; syntax:
   let wrapped = false // a wrapper was read, so what follows its options is the command it runs
   let filled: string | undefined // the word the shell fills in that stood where the program would, kept apart below
   let opaque = false // a wrapper is the program, and what it runs is not known (afterWrapper)
+  let wrapper = -1 // where the last wrapper read stands
+  let tail = 0 // the assignments read after it
   const fills = (word: string): boolean => word === '$' || (wrapped && word.startsWith('$') && !(cli && ASTERA_CLI_WORD.test(word)))
   while (i < words.length) {
     const w = words[i].toLowerCase()
-    if (ASSIGNMENT.test(words[i])) assigned.push(words[i++])
-    else if (PS_ASSIGNED.test(words[i])) i++
+    if (ASSIGNMENT.test(words[i])) {
+      assigned.push(words[i++])
+      if (wrapped) tail++
+    } else if (PS_ASSIGNED.test(words[i])) i++
     else if (flavor === 'posix' && i + 1 < words.length && fills(words[i])) {
       // A quoted substitution standing as a word of its own (`"$(echo)" rm …`), or after a wrapper any word the shell fills
       // in (`env $X rm …`, `env "$(cat .env)" rm …`), may be a value or the program. Both are read (follow-up R-F6): the
@@ -1159,6 +1163,8 @@ function stripPrefix(raw: Cmd, flavor: Flavor, cli = false): { cmd: Cmd; syntax:
         opaque = true // nothing to run: it is the program, and what it is fed is not known
         break
       }
+      wrapper = i
+      tail = 0
       i = next
       wrapped = true
     } else if (WRAPPER_OPTIONS.has(programName(w))) {
@@ -1172,10 +1178,18 @@ function stripPrefix(raw: Cmd, flavor: Flavor, cli = false): { cmd: Cmd; syntax:
         else opaque = true
         break
       }
+      wrapper = i
+      tail = 0
       i = next
       wrapped = true
     }
     else break
+  }
+  if (i >= words.length && tail > 0) {
+    // Only assignments after a wrapper's options: it runs what it is fed (sudo with sudoers' shell_noargs) or nothing, so
+    // it is the program, not known, as with nothing after its options (R-F11 list, M-1)
+    i = wrapper
+    opaque = true
   }
   const rest = words.slice(i)
   const cmdlet = rest.length > 0 ? cmdletOf(rest[0], flavor) : undefined

@@ -72,7 +72,6 @@ function callText(call: ResolveCall): string {
 // ---------------------------------------------------------------------------------------------------------------------
 // Astera's settings folder
 
-const WRITEISH: ReadonlySet<string> = new Set(['filesystem.write', 'filesystem.delete', 'process.execute'])
 /** What may follow a path that ends exactly at the folder: a separator, a quote or the end of a word. */
 const AFTER_PATH = /[/\s"'`;&|()]/
 /** The variables a path to the folder can start from, in any shell's spelling (`$X`, `${X}`, `$env:X`, `%X%`). */
@@ -101,6 +100,15 @@ function expandHome(text: string, env: Env, platform: NodeJS.Platform): string {
   return t
 }
 
+/** A variable a line sets, wherever the assignment stands: before a command (`GIT_TRACE=x git status`), after a wrapper
+ *  and its options (`env -i HOME=x …`, `sudo -u u X=x …`), as env's or make's argument, exported, and PowerShell's
+ *  `$env:X = 'x'`. Group 1 or 2 is the value, quotes and all. */
+const ASSIGNED = /(?:^|[\s;&|(){}`!])[A-Za-z_][A-Za-z0-9_]*=((?:"[^"]*"|'[^']*'|[^\s;&|()<>"'`])*)|\$env:[A-Za-z_][A-Za-z0-9_]*\s*=\s*("[^"]*"|'[^']*'|[^\s;&|()<>]+)/gi
+
+/** The values the variables a line sets are given, without their quotes; empty ones are left out. */
+const assignedValues = (text: string): string[] =>
+  [...text.matchAll(ASSIGNED)].map((m) => (m[1] ?? m[2] ?? '').replace(/["']/g, '')).filter((v) => v !== '')
+
 /** Every string an MCP tool's arguments hold, a few levels deep: its path argument may be any of them. */
 function stringsOf(v: unknown, depth = 0): string[] {
   if (typeof v === 'string') return [v]
@@ -110,9 +118,15 @@ function stringsOf(v: unknown, depth = 0): string[] {
   return []
 }
 
+/**
+ * Whether a call writes Astera's settings folder, or may: only a read may name it (ruling R-F11). Anything else that names
+ * it is taken for a write to it: a write or a delete, a program (an unknown one too), a git command that changes the
+ * worktree (`git -C <folder> checkout -- …`), an install, an agent or a request. A variable the line sets to a path in it
+ * makes it where a program writes, whatever the line's commands do. An MCP tool cannot be told to write or to read.
+ */
 function touchesProfile(call: ResolveCall, r: ResolvedAction, profileDir: string, platform: NodeJS.Platform, env: Env): boolean {
   const mcp = r.action === 'mcp.call'
-  if (!mcp && ![r.action, ...(r.commands ?? []).map((c) => c.action)].some((a) => WRITEISH.has(a))) return false
+  const writes = mcp || !reads(r)
   const fold = platform === 'win32' || platform === 'darwin'
   const norm = (s: string): string => {
     const t = s.replace(/\\/g, '/')
@@ -126,22 +140,31 @@ function touchesProfile(call: ResolveCall, r: ResolvedAction, profileDir: string
     return resolved === root || resolved.startsWith(`${root}/`)
   }
   const rec = inputRecord(call.input)
-  for (const k of ['file_path', 'notebook_path', 'path']) {
-    const v = rec[k]
-    if (typeof v === 'string' && v !== '' && within(expandHome(v, env, platform))) return true
-  }
   // An MCP tool cannot be told to write or to read, so any of its arguments that names the folder is enough
   const raw = mcp ? stringsOf(rec).join('\n') : callText(call)
   const text = norm(expandHome(raw, env, platform))
   // Git Bash spells C:/x as /c/x
   const drive = /^([a-z]):\//i.exec(root)
   const needles = drive ? [root, `/${drive[1].toLowerCase()}/${root.slice(3)}`] : [root]
-  for (const n of needles) {
-    for (let i = text.indexOf(n); i >= 0; i = text.indexOf(n, i + 1)) {
-      const after = text[i + n.length]
-      if (after === undefined || AFTER_PATH.test(after)) return true
+  /** Whether `s` names the folder or a path in it, at the end of a word or before a separator or a quote. */
+  const names = (s: string): boolean => {
+    for (const n of needles) {
+      for (let i = s.indexOf(n); i >= 0; i = s.indexOf(n, i + 1)) {
+        const after = s[i + n.length]
+        if (after === undefined || AFTER_PATH.test(after)) return true
+      }
     }
+    return false
   }
+  // Ruling R-F11: a variable the line sets to a path in the folder makes the folder where a program writes, whatever the
+  // line's own commands do (git's GIT_TRACE and GIT_INDEX_FILE, curl's SSLKEYLOGFILE, a HOME git writes its config in)
+  if (!mcp && assignedValues(text).some((v) => names(v) || within(v))) return true
+  if (!writes) return false
+  for (const k of ['file_path', 'notebook_path', 'path']) {
+    const v = rec[k]
+    if (typeof v === 'string' && v !== '' && within(expandHome(v, env, platform))) return true
+  }
+  if (names(text)) return true
   // Every word that is a path, from where the call runs: a relative one (`../../AppData/…`), a patch's own headers
   for (const word of text.split(/[\s"'`;&|()<>=,]+/)) if ((word.includes('/') || word.startsWith('.')) && within(word)) return true
   // The shell is already in the folder: the call before it left it there
@@ -190,8 +213,10 @@ export function enforceVerdict(a: {
   env?: Env
 }): EnforceVerdict {
   const r = resolveAction(a.call)
-  if (a.policy === null) return reads(r) ? { deny: false } : { deny: true, ruleId: 'fail-closed', reason: REASONS.failClosed }
-  if (touchesProfile(a.call, r, a.profileDir, a.platform, a.env ?? {})) return { deny: true, ruleId: 'builtin-profile-write', reason: REASONS.profile }
+  const profile = touchesProfile(a.call, r, a.profileDir, a.platform, a.env ?? {})
+  // A read that sets a variable to a path in the settings folder writes there (ruling R-F11), so it is no read
+  if (a.policy === null) return reads(r) && !profile ? { deny: false } : { deny: true, ruleId: 'fail-closed', reason: REASONS.failClosed }
+  if (profile) return { deny: true, ruleId: 'builtin-profile-write', reason: REASONS.profile }
   if (changesSettings(shellText(a.call))) return { deny: true, ruleId: 'builtin-settings-command', reason: REASONS.settings }
   const d = decide(r, a.policy)
   if (d.decision === 'would-deny')
