@@ -64,8 +64,8 @@ export interface InfoLine {
 
 /** `undefined` in FindingInputs = that source could not be read; its name goes here. */
 export type FindingSource =
-  | 'profiles' | 'accounts' | 'orchestration' | 'tokens' | 'policy' | 'records' | 'extensions' | 'credentials'
-  | 'credential-uses' | 'runtimes' | 'extension-uses' | 'ignored' | 'settings' | 'cli-version'
+  | 'profiles' | 'accounts' | 'orchestration' | 'tokens' | 'policy' | 'records' | 'extensions' | 'account-mcp'
+  | 'credentials' | 'credential-uses' | 'runtimes' | 'extension-uses' | 'ignored' | 'settings' | 'cli-version'
 
 /** `days`: whole days of Observe history counted, 0..30 (history.ts). */
 export interface ObserveHistory {

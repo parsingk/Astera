@@ -32,6 +32,15 @@ export const serverAgeDays = (e: McpExtension, i: FindingInputs): number => {
   return e.enabledAt === undefined ? shared : Math.min(shared, ageDays(e.enabledAt, i.nowMs))
 }
 
+/** Whether a server went uncalled over a full usage window (§4.5, §4.10): the shorter of `days` (the Observe history, and
+ *  for a profile its own settings' age too) and the server's own age must be the full 30 days, and no server part in
+ *  `called` may name it, under its name or under the name Claude Code writes it as (mcpNameMatches). NaN for a time that
+ *  does not parse never reaches the window. */
+export function uncalledOverWindow(e: McpExtension, i: FindingInputs, days: number, called: readonly string[]): boolean {
+  if (!(Math.min(days, serverAgeDays(e, i)) >= OBSERVE_WINDOW_DAYS)) return false
+  return !called.some((part) => mcpNameMatches(e.name, part))
+}
+
 /**
  * §4.5. An enabled server is judged over its own window, the shorter of the Observe history and its age, and only when
  * that window is the full 30 days: a server added 2 days ago, or switched back on yesterday, is not unused, however long
@@ -44,11 +53,7 @@ export function unusedMcpFindings(i: FindingInputs): Finding[] {
   const called = [...observed.mcpServers]
   const out: Finding[] = []
   for (const e of servers(i)) {
-    if (!e.enabled) continue
-    // NaN for a time that does not parse, which never reaches the window
-    const window = Math.min(observe.days, serverAgeDays(e, i))
-    if (!(window >= OBSERVE_WINDOW_DAYS)) continue
-    if (called.some((part) => mcpNameMatches(e.name, part))) continue
+    if (!e.enabled || !uncalledOverWindow(e, i, observe.days, called)) continue
     out.push(
       finding({
         rule: 'unused-mcp',

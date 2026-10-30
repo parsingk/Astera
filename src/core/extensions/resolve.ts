@@ -9,7 +9,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { extensionPaths } from '../profile/paths'
-import { providerOf } from '../providers/meta'
+import { providerOf, type Provider } from '../providers/meta'
 import { writeThroughTmp } from '../accounts/fileQueue'
 import { LAUNCH_FORBIDDEN } from '../sessions/commands'
 import { ownMcpNames } from './discover'
@@ -55,13 +55,17 @@ export interface SessionCapabilities {
 const literal = (v: string): string => `'${v}'`
 const BARE_KEY = /^[A-Za-z0-9_-]+$/
 
-/** Whether Codex can be given `server` on its command line: it reads the server's name as a TOML key and a remote address
- *  and the tool lists as literals, on Windows through cmd.exe. The over-broad finding asks the same of what a Codex
- *  profile gets (lifecycle design §4.10). */
-export function codexCanLaunch(server: McpExtension, platform: NodeJS.Platform): boolean {
+/** Why a session of `provider` is never given `server`, by the server alone: not shared with that CLI, a transport Codex
+ *  does not speak (SSE), or, for Codex, a name it cannot read as a TOML key or an address or tool list it cannot take as
+ *  a literal (on Windows through cmd.exe). Null when nothing about the server keeps it out; the account's own servers and
+ *  the Gateway decide the rest. The over-broad finding asks the same of what a profile gets (lifecycle design §4.10). */
+export function serverSkipReason(server: McpExtension, provider: Provider, platform: NodeJS.Platform): Extract<SkipReason, 'provider' | 'transport' | 'launch-chars'> | null {
+  if (!server.providers.includes(provider)) return 'provider'
+  if (provider !== 'codex') return null
+  if (server.transport === 'sse') return 'transport'
   const url = server.transport === 'stdio' ? '' : (server.url ?? '')
   const texts = [url, ...(server.options?.enabledTools ?? []), ...(server.options?.disabledTools ?? [])]
-  return BARE_KEY.test(server.name) && !texts.some((t) => t.includes("'") || (platform === 'win32' && LAUNCH_FORBIDDEN.test(t)))
+  return !BARE_KEY.test(server.name) || texts.some((t) => t.includes("'") || (platform === 'win32' && LAUNCH_FORBIDDEN.test(t))) ? 'launch-chars' : null
 }
 
 /** The names Host and sessions agree on (host/gateway/tokens.ts reads them). */
@@ -126,12 +130,11 @@ export async function resolveSessionCapabilities(a: {
   }
   const usable: McpExtension[] = []
   for (const server of servers) {
-    if (!server.providers.includes(provider)) {
-      out.skipped.push({ name: server.name, reason: 'provider' })
-      continue
-    }
-    if (provider === 'codex' && server.transport === 'sse') {
-      out.skipped.push({ name: server.name, reason: 'transport' })
+    // What the server alone decides; a name or address Codex cannot take is said only after the account's own servers
+    // and the Gateway, as it always was
+    const fixed = serverSkipReason(server, provider, a.platform)
+    if (fixed === 'provider' || fixed === 'transport') {
+      out.skipped.push({ name: server.name, reason: fixed })
       continue
     }
     if (own.has(server.name)) {
@@ -142,8 +145,8 @@ export async function resolveSessionCapabilities(a: {
       out.skipped.push({ name: server.name, reason: 'gateway-unavailable' })
       continue
     }
-    if (provider === 'codex' && !codexCanLaunch(server, a.platform)) {
-      out.skipped.push({ name: server.name, reason: 'launch-chars' })
+    if (fixed === 'launch-chars') {
+      out.skipped.push({ name: server.name, reason: fixed })
       continue
     }
     usable.push(server)

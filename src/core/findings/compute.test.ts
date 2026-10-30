@@ -6,7 +6,7 @@ import type { AgentProfile } from '../agentProfiles/types'
 import { RULES, computeFindings, type FindingInputs } from './compute'
 import { finding } from './make'
 import { emptyUse } from './usage'
-import type { Finding, FindingRule, SubjectKind } from './types'
+import type { Finding, FindingRule, FindingSource, SubjectKind } from './types'
 import type { IgnoredFile } from './ignored'
 
 const NOW = Date.parse('2026-10-30T00:00:00.000Z')
@@ -57,7 +57,7 @@ describe('computeFindings', () => {
     expect(r.findings.map((f) => f.rule)).toEqual(['duplicate-profile'])
     // Four rows need the orchestration state; it is named once. The policy is unread too: the report's Observe history
     // comes from it
-    expect([...r.unread].sort()).toEqual(['accounts', 'credential-uses', 'credentials', 'extensions', 'orchestration', 'policy', 'records', 'runtimes', 'settings', 'tokens'])
+    expect([...r.unread].sort()).toEqual(['account-mcp', 'accounts', 'credential-uses', 'credentials', 'extensions', 'orchestration', 'policy', 'records', 'runtimes', 'settings', 'tokens'])
     expect(r).toMatchObject({ info: [], computedAt: new Date(NOW).toISOString() })
 
     // Read, the same profiles are also unused
@@ -68,6 +68,7 @@ describe('computeFindings', () => {
         accounts: [{ id: 'acc_1', provider: 'claude' }],
         appBypass: false,
         registry: [],
+        accountMcpNames: new Map(),
         orch: emptyState(),
         spent: [],
         policy: null,
@@ -143,9 +144,11 @@ describe('computeFindings', () => {
     without('accounts', 'accounts', ['coverage-gap'])
   })
 
-  it('the over-broad row runs on its sources, and any one of them unread drops it', () => {
+  it('each over-broad line runs on its own sources, and an unread one drops only the lines that read it (ruling R5-2)', () => {
+    // ap_a only read, inside its folder, runs as inherit under the app's bypass with its sandbox off, and never called the
+    // shared server: every line applies
     const observed = emptyUse()
-    observed.byProfile.set('ap_a', { calls: 12, allRead: true, stayedInFolder: false, mcpServers: new Set() })
+    observed.byProfile.set('ap_a', { calls: 12, allRead: true, stayedInFolder: true, mcpServers: new Set() })
     const read: FindingInputs = {
       ...BASE,
       profiles: [prof('ap_a', { accountIds: ['acc_codex'], permission: 'inherit' })],
@@ -154,20 +157,31 @@ describe('computeFindings', () => {
       policy: { version: 1, mode: 'observe', rules: [], otherwise: 'allow' },
       observe: { on: true, days: 30 },
       observed,
-      registry: []
+      registry: [
+        { id: 'mcp-github', kind: 'mcp', name: 'github', transport: 'stdio', command: 'x', env: {}, providers: ['claude', 'codex'], importedFrom: 'acc_codex', enabled: true, addedAt: ago(60) }
+      ],
+      accountMcpNames: new Map()
     }
-    expect(computeFindings(read, NONE).findings.map((f) => f.key)).toEqual(['over-broad-profile:ap_a:bypass'])
-    const sources: Array<[keyof FindingInputs, string]> = [
-      ['profiles', 'profiles'],
-      ['accounts', 'accounts'],
-      ['observed', 'records'],
-      ['observe', 'policy'],
-      ['registry', 'extensions'],
-      ['appBypass', 'settings']
+    const lines = (i: FindingInputs): { parts: Array<string | undefined>; unread: FindingSource[] } => {
+      const r = computeFindings(i, NONE)
+      return { parts: r.findings.filter((f) => f.rule === 'over-broad-profile').map((f) => f.part), unread: r.unread }
+    }
+    // Unread are only sources no over-broad line reads
+    expect(lines(read)).toEqual({ parts: ['bypass', 'mcp:mcp-github', 'sandbox'], unread: ['orchestration', 'tokens', 'credentials', 'credential-uses', 'runtimes'] })
+    // Each field left unread: the source it names, and the lines left
+    const cases: Array<[keyof FindingInputs, FindingSource, string[]]> = [
+      ['profiles', 'profiles', []],
+      ['accounts', 'accounts', []],
+      ['observed', 'records', []],
+      ['observe', 'policy', []],
+      ['policy', 'policy', []],
+      ['registry', 'extensions', ['bypass', 'sandbox']],
+      ['accountMcpNames', 'account-mcp', ['bypass', 'sandbox']],
+      ['appBypass', 'settings', ['mcp:mcp-github', 'sandbox']]
     ]
-    for (const [field, source] of sources) {
-      const r = computeFindings({ ...read, [field]: undefined }, NONE)
-      expect(r.findings.filter((f) => f.rule === 'over-broad-profile'), field).toEqual([])
+    for (const [field, source, left] of cases) {
+      const r = lines({ ...read, [field]: undefined })
+      expect(r.parts, field).toEqual(left)
       expect(r.unread, field).toContain(source)
     }
   })

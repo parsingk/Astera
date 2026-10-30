@@ -26,7 +26,7 @@ import { tokenSpikeFindings } from './rules/runs'
 import { staleCredentialFindings, unmanagedReferenceFindings, unusedMcpFindings } from './rules/extensions'
 import { coverageGapFindings } from './rules/coverage'
 import { staleRuntimeFindings } from './rules/runtimes'
-import { overBroadFindings } from './rules/overBroad'
+import { overBroadBypassFindings, overBroadMcpFindings, overBroadSandboxFindings } from './rules/overBroad'
 
 /** Every source is optional, and `undefined` means unread. */
 export interface FindingInputs {
@@ -47,6 +47,9 @@ export interface FindingInputs {
   observed?: ObservedUse
   observe?: ObserveHistory
   registry?: ExtensionEntry[]
+  /** Each account's own MCP servers by name (account id → names), as resolveSessionCapabilities reads them (discover.ts
+   *  ownMcpNames): a shared server of the same name is not given to that account's sessions (ruling R5-3). */
+  accountMcpNames?: ReadonlyMap<string, ReadonlySet<string>>
   credentials?: CredentialsFile
   /** Each Credentials entry id's latest use in the last 30 days (ISO), read with visitDaysIn, not kept as a list. */
   credentialLastUse?: ReadonlyMap<string, string>
@@ -74,6 +77,7 @@ const FIELDS: Record<RuleSource, ReadonlyArray<keyof FindingInputs>> = {
   policy: ['policy', 'observe'],
   records: ['observed'],
   extensions: ['registry'],
+  'account-mcp': ['accountMcpNames'],
   credentials: ['credentials'],
   'credential-uses': ['credentialLastUse'],
   runtimes: ['runtimes'],
@@ -101,7 +105,10 @@ export const RULES: RuleRow[] = [
   { needs: ['runtimes'], run: staleRuntimeFindings },
   { needs: ['extensions', 'credentials'], run: unmanagedReferenceFindings },
   { needs: ['extensions', 'credentials', 'credential-uses'], run: staleCredentialFindings },
-  { needs: ['profiles', 'accounts', 'records', 'policy', 'extensions', 'settings'], run: overBroadFindings }
+  // §4.10's lines each need only their own sources, so one unread drops only the lines that read it (ruling R5-2)
+  { needs: ['profiles', 'accounts', 'records', 'policy', 'settings'], run: overBroadBypassFindings },
+  { needs: ['profiles', 'accounts', 'records', 'policy'], run: overBroadSandboxFindings },
+  { needs: ['profiles', 'accounts', 'records', 'policy', 'extensions', 'account-mcp'], run: overBroadMcpFindings }
 ]
 
 /** The order the section groups subjects in (§7): profiles first, a CLI's coverage last. */

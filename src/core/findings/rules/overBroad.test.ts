@@ -9,7 +9,7 @@ import type { McpExtension } from '../../extensions/types'
 import type { FindingInputs } from '../compute'
 import { addRecord, emptyUse } from '../usage'
 import type { Finding, ObservedUse } from '../types'
-import { overBroadFindings } from './overBroad'
+import { overBroadBypassFindings, overBroadMcpFindings, overBroadSandboxFindings } from './overBroad'
 
 const NOW = Date.parse('2026-10-30T00:00:00.000Z')
 const DAY = 24 * 60 * 60 * 1000
@@ -86,8 +86,11 @@ const inputs = (over: Partial<FindingInputs> = {}): FindingInputs => ({
   observe: { on: true, days: 30 },
   observed: emptyUse(),
   registry: [],
+  accountMcpNames: new Map(),
   ...over
 })
+/** Every line, as computeFindings runs the three rows when all their sources were read. */
+const overBroadFindings = (i: FindingInputs): Finding[] => [...overBroadBypassFindings(i), ...overBroadSandboxFindings(i), ...overBroadMcpFindings(i)]
 /** The lines raised, as their parts. */
 const parts = (found: Finding[]): Array<string | undefined> => found.map((f) => f.part)
 
@@ -246,11 +249,30 @@ describe('over-broad-profile (§4.10): mcp', () => {
     }
   })
 
-  it('a profile made 10 days ago is not judged for its servers, but its bypass line stands', () => {
-    // It has had the server no longer than it has existed (Review Focus 3); every call it made still read
-    const profiles = [prof('ap_new', { permission: 'bypass', createdAt: ago(10), updatedAt: ago(10) })]
-    const found = overBroadFindings(inputs({ profiles, registry: [mcp('mcp-github')], observed: used(...reads('ap_new', 12)) }))
-    expect(parts(found)).toEqual(['bypass'])
+  it('a profile updated 10 days ago is not judged for its servers, but its bypass line stands; updated 40 days ago, it is (ruling R5-4)', () => {
+    // An edit that stopped excluding a server, or a restore from the archive, stamps updatedAt: its current settings have
+    // had the server no longer than that. Every call it made still read
+    const observed = used(...reads('ap_a', 12))
+    const recent = [prof('ap_a', { permission: 'bypass', createdAt: ago(100), updatedAt: ago(10) })]
+    expect(parts(overBroadFindings(inputs({ profiles: recent, registry: [mcp('mcp-github')], observed })))).toEqual(['bypass'])
+    const settled = [prof('ap_a', { permission: 'bypass', createdAt: ago(100), updatedAt: ago(40) })]
+    expect(parts(overBroadFindings(inputs({ profiles: settled, registry: [mcp('mcp-github')], observed })))).toEqual(['bypass', 'mcp:mcp-github'])
+  })
+
+  it('a server one of its accounts defines itself under the same name gives no mcp line (ruling R5-3)', () => {
+    // That account's sessions get its own server, so leaving the shared one out would change nothing
+    const observed = used(...reads('ap_a', 12))
+    const registry = [mcp('mcp-github'), mcp('mcp-linear')]
+    const own = new Map([['acc_codex', new Set(['github'])]])
+    expect(parts(overBroadFindings(inputs({ profiles: [prof('ap_a')], registry, observed, accountMcpNames: own })))).toEqual(['mcp:mcp-linear'])
+    // Any of its accounts: the second one's own server counts too
+    const two = [prof('ap_a', { accountIds: ['acc_codex', 'acc_codex2'] })]
+    const accounts = [...inputs().accounts!, { id: 'acc_codex2', provider: 'codex' as const }]
+    const second = new Map([['acc_codex2', new Set(['linear'])]])
+    expect(parts(overBroadFindings(inputs({ profiles: two, accounts, registry, observed, accountMcpNames: second })))).toEqual(['mcp:mcp-github'])
+    // Another account's own servers are not this profile's
+    const other = new Map([['acc_claude', new Set(['github', 'linear'])]])
+    expect(parts(overBroadFindings(inputs({ profiles: [prof('ap_a')], registry, observed, accountMcpNames: other })))).toEqual(['mcp:mcp-github', 'mcp:mcp-linear'])
   })
 })
 
@@ -293,5 +315,25 @@ describe('over-broad-profile (§4.10): threshold and history', () => {
     // A removed account before a Claude one: Claude on win32, so no sandbox line
     const claude = [prof('ap_a', { permission: 'bypass', sandbox: false, accountIds: ['acc_gone', 'acc_claude'] })]
     expect(parts(overBroadFindings(inputs({ ...wide(), profiles: claude, observed, platform: 'win32' })))).toEqual(['bypass', 'mcp:mcp-github'])
+  })
+})
+
+describe('over-broad-profile (§4.10): each line reads its own sources (ruling R5-2)', () => {
+  it('an unread source empties only the lines that need it', () => {
+    const wide: Partial<FindingInputs> = {
+      profiles: [prof('ap_a', { permission: 'bypass', sandbox: false })],
+      registry: [mcp('mcp-github')],
+      observed: used(...reads('ap_a', 12))
+    }
+    expect(parts(overBroadFindings(inputs(wide)))).toEqual(['bypass', 'sandbox', 'mcp:mcp-github'])
+    // The app's setting is the bypass line's alone
+    expect(parts(overBroadFindings(inputs({ ...wide, appBypass: undefined })))).toEqual(['sandbox', 'mcp:mcp-github'])
+    // The registry and the accounts' own servers are the mcp line's alone
+    expect(parts(overBroadFindings(inputs({ ...wide, registry: undefined })))).toEqual(['bypass', 'sandbox'])
+    expect(parts(overBroadFindings(inputs({ ...wide, accountMcpNames: undefined })))).toEqual(['bypass', 'sandbox'])
+    // The profiles, the accounts, the records and the Observe history are every line's
+    for (const field of ['profiles', 'accounts', 'observed', 'observe'] as const) {
+      expect(overBroadFindings(inputs({ ...wide, [field]: undefined })), field).toEqual([])
+    }
   })
 })
