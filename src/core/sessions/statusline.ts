@@ -9,7 +9,8 @@ import { dirIdentity } from '../files/watchedDir'
 import { HOOK_EVENT_AT } from '../hooks/eventTime'
 import { renameRetrying } from '../renameRetry'
 import { SESSION_CONTEXT_SCRIPT } from './sessionContext'
-import { CLAUDE_INPUT_FIELDS } from '../audit/resolve'
+import { CLAUDE_INPUT_FIELDS, CLAUDE_USE_INPUT_FIELDS } from '../audit/resolve'
+import { reportsUses } from './cliVersion'
 import ENFORCE_HOOK_SOURCE from 'virtual:astera-enforce-hook'
 import { codexEnforceArgs } from './codexEnforce'
 import { claudeSandboxSettings, claudeSessionDenied, claudeWritableFolders, type ClaudeSandboxSettings } from '../sandbox/claudeSettings'
@@ -27,6 +28,7 @@ export interface StatusLineSpawn {
   observed?: true // the settings file is an observe variant (ensureObserveFiles): the session sends its tool calls to its audit file
   enforced?: true // the settings file is an enforce variant (ensureEnforceFiles): every tool call waits on the blocking hook first
   sandboxed?: true // the settings file is a sandbox twin (ensureSandboxFiles): Claude's sandbox and the deny rules are in it
+  useHooks?: true // an observed session's file has the use hooks (UserPromptExpansion, SubagentStart; lifecycle design §4.12)
 }
 
 /** Whether every sandbox twin is in place (ensureSandboxFiles), or, on macOS and Linux, the links inside the session's
@@ -225,18 +227,27 @@ process.stdin.on('end', finish)
 process.stdin.on('error', finish)
 `
 
-// Observe mode's capture (node): run by the observe-only hooks (PostToolUse and PostToolUseFailure for every tool,
-// ensureObserveFiles). It writes not to the session's own hook file, which attention, `sessions list`, pendingPrompt and
-// Slack read, but beside it, to <session>.audit.jsonl (AUDIT_HOOK_EVENTS), which only the Host's recorder reads; so an
-// observed session's own file holds exactly what a plain session's does. Of the payload it keeps what names the call
-// (the event, the tool, its id, whether it was interrupted, where it ran, and of its input only the fields the resolver
-// reads, CLAUDE_INPUT_FIELDS) with the stamp the other capture takes; the tool's output (`tool_response`, a failure's
-// `error`) and the rest of its input (a Write's contents, an Edit's strings) are never written. Parsed and written
-// again, unlike the other capture: nothing here needs a number past 2^53 kept as it was sent.
+/** The fields of a UserPromptExpansion or SubagentStart payload that name what was used (lifecycle design §4.12). Never
+ *  `command_args` or `prompt`: those are what the person wrote. */
+const USE_FIELDS = ['expansion_type', 'command_name', 'agent_type', 'agent_id'] as const
+
+// Observe mode's capture (node): run by the observe-only hooks (PostToolUse and PostToolUseFailure for every tool, and
+// UserPromptExpansion and SubagentStart, ensureObserveFiles). It writes not to the session's own hook file, which
+// attention, `sessions list`, pendingPrompt and Slack read, but beside it, to <session>.audit.jsonl (AUDIT_HOOK_EVENTS),
+// which only the Host's recorder reads; so an observed session's own file holds exactly what a plain session's does. Of
+// the payload it keeps what names the call (the event, the tool, its id, whether it was interrupted, where it ran, and of
+// its input only the fields the resolver reads, CLAUDE_INPUT_FIELDS, and the Skill's or Agent's name of what it used,
+// CLAUDE_USE_INPUT_FIELDS) and what names a skill, command or agent used (USE_FIELDS, lifecycle design §4.12), with the
+// stamp the other capture takes; the tool's output (`tool_response`, a failure's `error`), the rest of its input (a
+// Write's contents, an Edit's strings, a Skill's `args`, another tool's field of a use's name), and what a person wrote (a
+// command's `command_args`, its expanded `prompt`) are never written. Parsed and written again, unlike the other capture:
+// nothing here needs a number past 2^53 kept as it was sent.
 const HOOK_AUDIT_CAPTURE_SCRIPT = `const at = typeof performance === 'object' && Number.isFinite(performance.timeOrigin) ? performance.timeOrigin : Date.now()
 const fs = require('fs')
 const out = process.env.ASTERA_HOOK_OUT
 const FIELDS = ${JSON.stringify(CLAUDE_INPUT_FIELDS)}
+const NAMED = ${JSON.stringify(CLAUDE_USE_INPUT_FIELDS)}
+const USES = ${JSON.stringify(USE_FIELDS)}
 const chunks = []
 function finish() {
   if (out && out.endsWith('.jsonl')) {
@@ -245,10 +256,15 @@ function finish() {
       if (p && typeof p === 'object' && !Array.isArray(p)) {
         const input = {}
         const given = p.tool_input
-        if (given && typeof given === 'object' && !Array.isArray(given)) for (const k of FIELDS) if (given[k] !== undefined) input[k] = given[k]
+        if (given && typeof given === 'object' && !Array.isArray(given)) {
+          for (const k of FIELDS) if (given[k] !== undefined) input[k] = given[k]
+          const named = typeof p.tool_name === 'string' && Object.prototype.hasOwnProperty.call(NAMED, p.tool_name) ? NAMED[p.tool_name] : null
+          if (named !== null && given[named] !== undefined) input[named] = given[named]
+        }
         const kept = { ${HOOK_EVENT_AT}: at, hook_event_name: p.hook_event_name, tool_name: p.tool_name, tool_input: input, tool_use_id: p.tool_use_id }
         if (p.is_interrupt === true) kept.is_interrupt = true
         if (typeof p.cwd === 'string') kept.cwd = p.cwd
+        for (const k of USES) if (typeof p[k] === 'string') kept[k] = p[k]
         fs.appendFileSync(out.slice(0, -'.jsonl'.length) + '${AUDIT_HOOK_EVENTS}', JSON.stringify(kept) + '\\n')
       }
     } catch {}
@@ -397,10 +413,34 @@ interface BuiltSettings {
   hooksSettings: { hooks: { PostToolUse: unknown[] } }
 }
 
-/** A settings file's observe variant (ensureObserveFiles): the audit capture `command` after every tool call. */
-function withObserveHooks(s: BuiltSettings['settings'], command: string): string {
-  const audit = { matcher: '*', hooks: [{ type: 'command', command, async: true }] }
-  return JSON.stringify({ ...s, hooks: { ...s.hooks, PostToolUse: [...s.hooks.PostToolUse, audit], PostToolUseFailure: [audit] } }, null, 2)
+/** A settings file's observe variant (ensureObserveFiles): the audit capture `command` after every tool call. With
+ *  `uses`, also at each skill or command a person types (UserPromptExpansion, which has no matcher to give) and each
+ *  agent's start (SubagentStart), which never arrive as a tool call (lifecycle design §4.12, research cli-use-reporting.md
+ *  §1); only a Claude Code that reports uses is given those (spawnConfig `reportsUses`), since the docs do not say since
+ *  when it knows UserPromptExpansion (fix round 1). */
+function withObserveHooks(s: BuiltSettings['settings'], command: string, uses: boolean): string {
+  const capture = { type: 'command', command, async: true }
+  const audit = { matcher: '*', hooks: [capture] }
+  const useHooks = uses ? { UserPromptExpansion: [{ hooks: [capture] }], SubagentStart: [audit] } : {}
+  return JSON.stringify({ ...s, hooks: { ...s.hooks, PostToolUse: [...s.hooks.PostToolUse, audit], PostToolUseFailure: [audit], ...useHooks } }, null, 2)
+}
+
+/** The options a session's settings file is chosen by (spawnConfig). */
+export interface StatusLineSpawnOptions {
+  toolHooks?: boolean
+  observe?: boolean
+  enforce?: boolean
+  sandbox?: SandboxScope
+  /** The session's Claude Code reports every use of a skill, command or agent (cliVersion.ts reportsUses): an observed one
+   *  is given the use hooks (lifecycle design §4.12). */
+  reportsUses?: boolean
+}
+
+/** A spawn's options with `reportsUses` from the Claude version `claudeVersion` says now (lifecycle design §4.12, fix round
+ *  1). Asked only for an observed spawn, from the cache of the probe its prepare warmed (CliVersionProbe `cached`, fix round
+ *  2), never from the CLI itself; a version not known reports none, and the session's note says so (ruling R6-8). */
+export function withUseReports<O extends StatusLineSpawnOptions>(o: O | undefined, claudeVersion: () => string | null | undefined): O | undefined {
+  return o?.observe === true ? { ...o, reportsUses: reportsUses(claudeVersion()) } : o
 }
 
 /** What a sandbox twin adds (ensureSandboxFiles): the builder's settings. */
@@ -424,11 +464,16 @@ export class StatusLineManager {
   private readonly hooksSettingsFile: string
   private readonly observeSettingsFile: string
   private readonly observeHooksSettingsFile: string
+  /** The two observe files again with the use hooks, for a Claude Code that reports uses (withObserveHooks). */
+  private readonly observeUsesSettingsFile: string
+  private readonly observeUsesHooksSettingsFile: string
   private readonly hookAuditCapturePath: string
   private readonly sessionContextPath: string
   private readonly enforceHookPath: string
   private readonly enforceSettingsFile: string
   private readonly enforceHooksSettingsFile: string
+  private readonly enforceUsesSettingsFile: string
+  private readonly enforceUsesHooksSettingsFile: string
   private readonly enforceChatSettingsFile: string
   private readonly sandboxChatSettingsFile: string
   private readonly enforceSandboxChatSettingsFile: string
@@ -503,11 +548,15 @@ export class StatusLineManager {
     this.hooksSettingsFile = path.join(userDataDir, 'astera-hooks-settings.json')
     this.observeSettingsFile = path.join(userDataDir, 'astera-observe-settings.json')
     this.observeHooksSettingsFile = path.join(userDataDir, 'astera-observe-hooks-settings.json')
+    this.observeUsesSettingsFile = path.join(userDataDir, 'astera-observe-uses-settings.json')
+    this.observeUsesHooksSettingsFile = path.join(userDataDir, 'astera-observe-uses-hooks-settings.json')
     this.hookAuditCapturePath = path.join(userDataDir, 'astera-hook-audit-capture.cjs')
     this.sessionContextPath = path.join(userDataDir, 'astera-session-context.cjs')
     this.enforceHookPath = path.join(userDataDir, ENFORCE_HOOK_FILE)
     this.enforceSettingsFile = path.join(userDataDir, 'astera-enforce-settings.json')
     this.enforceHooksSettingsFile = path.join(userDataDir, 'astera-enforce-hooks-settings.json')
+    this.enforceUsesSettingsFile = path.join(userDataDir, 'astera-enforce-uses-settings.json')
+    this.enforceUsesHooksSettingsFile = path.join(userDataDir, 'astera-enforce-uses-hooks-settings.json')
     this.enforceChatSettingsFile = path.join(userDataDir, 'astera-enforce-chat-settings.json')
     this.sandboxChatSettingsFile = path.join(userDataDir, 'astera-sandbox-chat-settings.json')
     this.enforceSandboxChatSettingsFile = path.join(userDataDir, 'astera-enforce-sandbox-chat-settings.json')
@@ -671,15 +720,17 @@ export class StatusLineManager {
    * Observe mode (observe mode design §4, §5): writes the audit capture and the two settings files a session started
    * while the mode is observe reads instead of the ones above. Each is its plain file with two more entries, for every
    * tool (`*`): PostToolUse (a call that ran) and PostToolUseFailure (one that failed or was interrupted), both through
-   * the audit capture into the session's audit file, where the Host's recorder reads them (host/audit/sources.ts).
-   * `async`, so no tool call waits on the capture's node process. The entries already there stay as they are and still
-   * write the session's own file, so attention, `sessions list`, pendingPrompt and Slack read an observed session
-   * exactly as a plain one (the review's I2).
+   * the audit capture into the session's audit file, where the Host's recorder reads them (host/audit/sources.ts); and
+   * a twin of each with two more through it for the uses of shared skills, commands and agents (UserPromptExpansion,
+   * SubagentStart, lifecycle design §4.12), which only a Claude Code that reports uses is pointed at (`reportsUses`). All
+   * `async`, so nothing waits on the capture's node process. The entries already there stay as they are and still write
+   * the session's own file, so attention, `sessions list`, pendingPrompt and Slack read an observed session exactly as a
+   * plain one (the review's I2).
    *
    * Separate files, written only when a session is about to start observed (`SessionManager.prepare`), so a
    * compatibility session reads exactly the bytes it always did, and nothing is written for observe until it is on. A
    * session reads its file once at start (see UserPromptSubmit above), so rewriting these later reaches only new
-   * sessions. Until all three are written, an observed session gets the plain file and is not marked observed
+   * sessions. Until all of them are written, an observed session gets the plain file and is not marked observed
    * (`spawnConfig`). Never throws.
    */
   async ensureObserveFiles(): Promise<void> {
@@ -688,13 +739,18 @@ export class StatusLineManager {
     if (!b) return
     const script = await writeScript(this.hookAuditCapturePath, HOOK_AUDIT_CAPTURE_SCRIPT)
     const command = captureCommand(this.nodePath, this.hookAuditCapturePath)
-    const plainJson = withObserveHooks(b.settings, command)
-    const widerJson = withObserveHooks(b.hooksSettings, command)
-    this.variants.set(this.observeSettingsFile, plainJson)
-    this.variants.set(this.observeHooksSettingsFile, widerJson)
-    const plain = await writeScript(this.observeSettingsFile, plainJson)
-    const wider = await writeScript(this.observeHooksSettingsFile, widerJson)
-    this.observeReady = script && plain && wider
+    const files: Array<[string, string]> = [
+      [this.observeSettingsFile, withObserveHooks(b.settings, command, false)],
+      [this.observeHooksSettingsFile, withObserveHooks(b.hooksSettings, command, false)],
+      [this.observeUsesSettingsFile, withObserveHooks(b.settings, command, true)],
+      [this.observeUsesHooksSettingsFile, withObserveHooks(b.hooksSettings, command, true)]
+    ]
+    let written = script
+    for (const [file, json] of files) {
+      this.variants.set(file, json)
+      if (!(await writeScript(file, json))) written = false
+    }
+    this.observeReady = written
     if (this.scopes.size > 0) await this.writeSandboxTwins()
   }
 
@@ -708,8 +764,8 @@ export class StatusLineManager {
 
   /**
    * Enforce mode (enforce design §5, E1): writes the blocking hook and the settings a session started in Enforce reads.
-   * Each terminal file is its observe variant (which it writes first) with one more PreToolUse entry for every tool
-   * (`*`), not `async`: Claude Code waits on it, and the hook prints the deny itself. Every file also says
+   * Each terminal file, with the use hooks or without, is its observe variant (which it writes first) with one more
+   * PreToolUse entry for every tool (`*`), not `async`: Claude Code waits on it, and the hook prints the deny itself. Every file also says
    * `"disableAllHooks": false`: it is passed as --settings, above user, project and local settings, so a project's
    * `.claude/settings.local.json` that turns hooks off cannot turn this one off (final review C2, measured 2026-10-27). A chat session (`--settings` on top
    * of its own arguments) gets a file with only that entry. Written only when a session is about to start in Enforce, so
@@ -734,8 +790,8 @@ export class StatusLineManager {
     }
     const script = await writeScript(this.enforceHookPath, ENFORCE_HOOK_SOURCE)
     const pre = { matcher: '*', hooks: [{ type: 'command', command, timeout: 10 }] }
-    const withEnforce = (s: BuiltSettings['settings']): string => {
-      const observed = JSON.parse(withObserveHooks(s, captureCommand(this.nodePath, this.hookAuditCapturePath))) as {
+    const withEnforce = (s: BuiltSettings['settings'], uses: boolean): string => {
+      const observed = JSON.parse(withObserveHooks(s, captureCommand(this.nodePath, this.hookAuditCapturePath), uses)) as {
         hooks: { PreToolUse?: unknown[] }
       }
       return JSON.stringify(
@@ -744,16 +800,19 @@ export class StatusLineManager {
         2
       )
     }
-    const plainJson = withEnforce(b.settings)
-    const widerJson = withEnforce(b.hooksSettings)
-    const chatJson = JSON.stringify({ disableAllHooks: false, hooks: { PreToolUse: [pre] } }, null, 2)
-    this.variants.set(this.enforceSettingsFile, plainJson)
-    this.variants.set(this.enforceHooksSettingsFile, widerJson)
-    this.variants.set(this.enforceChatSettingsFile, chatJson)
-    const plain = await writeScript(this.enforceSettingsFile, plainJson)
-    const wider = await writeScript(this.enforceHooksSettingsFile, widerJson)
-    const chat = await writeScript(this.enforceChatSettingsFile, chatJson)
-    this.enforceReady = script && plain && wider && chat
+    const files: Array<[string, string]> = [
+      [this.enforceSettingsFile, withEnforce(b.settings, false)],
+      [this.enforceHooksSettingsFile, withEnforce(b.hooksSettings, false)],
+      [this.enforceUsesSettingsFile, withEnforce(b.settings, true)],
+      [this.enforceUsesHooksSettingsFile, withEnforce(b.hooksSettings, true)],
+      [this.enforceChatSettingsFile, JSON.stringify({ disableAllHooks: false, hooks: { PreToolUse: [pre] } }, null, 2)]
+    ]
+    let written = script
+    for (const [file, json] of files) {
+      this.variants.set(file, json)
+      if (!(await writeScript(file, json))) written = false
+    }
+    this.enforceReady = written
     if (this.scopes.size > 0) await this.writeSandboxTwins()
     return this.enforceReady ? 'ok' : 'hook-write-failed'
   }
@@ -974,24 +1033,34 @@ export class StatusLineManager {
    *  capture pair. `opts.observe` (a session started while the mode is observe) points it at the
    *  observe variant of that file, once ensureObserveFiles has written them, and says so (`observed`).
    *  `opts.enforce` (with observe, a session started in Enforce) points it at the enforce variant, once
-   *  ensureEnforceFiles has written them, and says so (`enforced`). `opts.sandbox` (a sandboxed Claude session's scope)
-   *  points it at that scope's sandbox twin of whichever of these it would read, once ensureSandboxFiles has written that
+   *  ensureEnforceFiles has written them, and says so (`enforced`). `opts.reportsUses` (an observed session's
+   *  Claude Code reports uses, withUseReports) points either at its twin with the use hooks (lifecycle design §4.12).
+   *  `opts.sandbox` (a sandboxed Claude session's scope) points it at that scope's sandbox twin of whichever of these it would read, once ensureSandboxFiles has written that
    *  twin over what the file holds now, and says so (`sandboxed`); without that mark its manager refuses the start. */
-  spawnConfig(sessionId: string, account: Account, opts?: { toolHooks?: boolean; observe?: boolean; enforce?: boolean; sandbox?: SandboxScope }): StatusLineSpawn {
+  spawnConfig(sessionId: string, account: Account, opts?: StatusLineSpawnOptions): StatusLineSpawn {
     const toolHooks = opts?.toolHooks === true
     const observe = opts?.observe === true && this.observeReady
     const enforce = observe && opts?.enforce === true && this.enforceReady
+    const uses = observe && opts?.reportsUses === true
     const variant = enforce
-      ? toolHooks
-        ? this.enforceHooksSettingsFile
-        : this.enforceSettingsFile
+      ? uses
+        ? toolHooks
+          ? this.enforceUsesHooksSettingsFile
+          : this.enforceUsesSettingsFile
+        : toolHooks
+          ? this.enforceHooksSettingsFile
+          : this.enforceSettingsFile
       : observe
-      ? toolHooks
-        ? this.observeHooksSettingsFile
-        : this.observeSettingsFile
-      : toolHooks
-        ? this.hooksSettingsFile
-        : this.settingsFile
+        ? uses
+          ? toolHooks
+            ? this.observeUsesHooksSettingsFile
+            : this.observeUsesSettingsFile
+          : toolHooks
+            ? this.observeHooksSettingsFile
+            : this.observeSettingsFile
+        : toolHooks
+          ? this.hooksSettingsFile
+          : this.settingsFile
     // A scope whose named path goes through a link it could change has no twin (Task E fix round 5): not marked sandboxed
     const named = opts?.sandbox ? this.sandboxNamed(opts.sandbox) : null
     const key = named && !this.refusesLinks(named.links) ? sandboxKeyOf(named.part) : null
@@ -1007,6 +1076,7 @@ export class StatusLineManager {
       hookOutPath: hookEventsFileIn(this.hookEventsDir, sessionId),
       ...(observe ? { observed: true as const } : {}),
       ...(enforce ? { enforced: true as const } : {}),
+      ...(uses ? { useHooks: true as const } : {}),
       ...(sandboxed ? { sandboxed: true as const } : {})
     }
   }

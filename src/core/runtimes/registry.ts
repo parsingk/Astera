@@ -2,6 +2,8 @@
 // `<runtimeId>.token` each, in the secret store under `<profile>/runtimes/`. The registry is the commit point: a
 // token is written before its entry and removed after it, so a crash leaves at worst a token with no entry, which
 // the next open deletes.
+import { promises as fs } from 'node:fs'
+import path from 'node:path'
 import type { SecretStore, SecretTx } from '../secrets/secretStore'
 
 export interface RuntimeProfile {
@@ -46,6 +48,23 @@ const readAll = async (tx: Pick<SecretTx, 'read'>): Promise<RuntimeProfile[]> =>
 }
 
 const writeAll = (tx: SecretTx, list: RuntimeProfile[]): Promise<void> => tx.write(REGISTRY, JSON.stringify({ runtimes: list }, null, 2))
+
+/**
+ * The paired Runtimes, for a reader that only lists them (the findings, lifecycle design §4.7, at every compute): none
+ * while `runtimes.json` does not exist in `dir`, without opening the store, so a person who never paired a Runtime is
+ * not asked for its lock, its folder or its ACL check (final fix list M-6). `store` is called only when there is a
+ * registry to read, so the caller can keep one store for every read. A file that cannot be looked at for another reason
+ * throws, as an unreadable one does.
+ */
+export async function listPairedRuntimes(dir: string, store: () => SecretStore): Promise<RuntimeProfile[]> {
+  try {
+    await fs.stat(path.join(dir, REGISTRY))
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException | null)?.code === 'ENOENT') return []
+    throw e
+  }
+  return (await openRuntimeRegistry(store())).list()
+}
 
 export async function openRuntimeRegistry(store: SecretStore): Promise<RuntimeRegistry> {
   // A token whose entry is gone is what a crash between the two writes leaves; nothing can use it.

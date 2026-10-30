@@ -24,6 +24,7 @@ import { codexExcludesFileOf } from '../core/sandbox/gitExcludes'
 import { namedPathFor, updaterCacheDir } from '../core/sandbox/locations'
 import { codexWritableFolders } from '../core/sandbox/prepared'
 import { CHECK_STARTED_MARK, CODEX_CHECK_FLAG } from '../core/sandbox/checkRunner'
+import { cliVersionProbe } from '../core/sessions/cliVersion'
 
 const NOW = '2026-09-24T00:00:00.000Z'
 let dir: string
@@ -144,6 +145,12 @@ describe.runIf(process.platform === 'win32')('createHostSpawner, session shuttle
 })
 
 describe('createHostSpawner', () => {
+  // Lifecycle design §4.12: the findings read the Claude version from the probe the spawns warm, so one cache and one
+  // `claude --version` serve both
+  it('hands out the Claude version probe its spawns warm', () => {
+    expect(rig().spawner!.claudeVersions).toBe(cliVersionProbe(process.platform))
+  })
+
   it('writes the session shuttle at creation and says where, for the chats that read it', async () => {
     const h = rig()
     expect(h.spawner!.orchEnvNow()).toBeUndefined()

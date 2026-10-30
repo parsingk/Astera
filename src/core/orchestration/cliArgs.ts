@@ -141,8 +141,10 @@ export const NOUNS = {
   ext: ['list', 'sync'],
   // **Answered by the Host** (Agent Profiles design §6), like `sessions`: its `agent-profiles-*` commands, which the CLI
   // reaches through cli/agentProfiles.ts (a name resolved to the id first, MCP server names to their ids). Changes are
-  // refused to an agent's shell, as `ext sync` and the extension changes are.
-  'agent-profiles': ['list', 'show', 'create', 'update', 'archive', 'restore', 'delete'],
+  // refused to an agent's shell, as `ext sync` and the extension changes are. `audit` is the findings (lifecycle design
+  // §7, host/findings/commands.ts), and its ignore edits are verbs of their own, as the rule edits of `policies` are
+  // (planning ruling 1); the finding's key is the word after them (OPERANDS).
+  'agent-profiles': ['list', 'show', 'create', 'update', 'archive', 'restore', 'delete', 'audit', 'audit-ignore', 'audit-unignore'],
   // **Answered by the Host** (observe mode design §12), like `agent-profiles`: the records observe mode kept, read with the
   // decision the rules in force give each (host/audit/auditCommands.ts), through cli/audit.ts. An agent's shell is
   // refused even these reads.
@@ -183,6 +185,17 @@ export const NOUNS = {
   // item read whole. Answered by the Host before handleCommand's switch (src/core/orchestration/commandSources.ts).
   sources: ['list', 'items', 'show']
 } as const
+
+/** The commands that take one word that is not a flag, and the argument it is sent as: a finding's key, which a person
+ *  copies from `agent-profiles audit` (lifecycle design §7). Every other command takes flags only, and a loose word is
+ *  refused as before. cliUsage.ts prints it in the usage line, and cliUsage.test.ts holds the two to the same names. */
+export const OPERANDS: Readonly<Record<string, string>> = {
+  'agent-profiles-audit-ignore': 'key',
+  'agent-profiles-audit-unignore': 'key'
+}
+
+/** The argument `cmd` takes as its one loose word, or undefined. Guarded like `verbsOf`: the name is whatever was typed. */
+export const operandOf = (cmd: string): string | undefined => (Object.hasOwn(OPERANDS, cmd) ? OPERANDS[cmd] : undefined)
 
 /** 명사이면서 동사 없이도 명령인 이름. `accounts` 는 공개 명사가 되기 전부터 세션 명령이었고
  *  가이드가 `astera accounts --json` 으로 가르친다 — 동사 자리가 비었거나 플래그면 그 한 낱말
@@ -267,9 +280,17 @@ export function parseArgs(all: string[]): ParsedArgs | { error: string } {
   let noKeepalive = lead.modes.has('noKeepalive')
   let verbose = lead.modes.has('verbose')
 
+  const operand = operandOf(cmd)
+  /** The loose word, for a command that takes one: kept apart until the flags are read, so a flag of the same name is
+   *  caught rather than let one silently win. */
+  let word: string | undefined
   for (let i = first; i < argv.length; i++) {
     const tok = argv[i]
-    if (!tok.startsWith('--')) return { error: `unexpected argument: ${tok}` }
+    if (!tok.startsWith('--')) {
+      if (operand === undefined || word !== undefined) return { error: `unexpected argument: ${tok}` }
+      word = tok
+      continue
+    }
     const key = camel(tok.slice(2))
     const next = argv[i + 1]
     const hasValue = next !== undefined && !next.startsWith('--')
@@ -328,6 +349,10 @@ export function parseArgs(all: string[]): ParsedArgs | { error: string } {
       continue
     }
     args[key] = next
+  }
+  if (operand !== undefined && word !== undefined) {
+    if (Object.hasOwn(args, operand)) return { error: `${argv.slice(0, first).join(' ')} takes the ${operand} once: as the word after the command` }
+    args[operand] = word
   }
   if (cmd === 'browser-js' || cmd === 'app-js') {
     const spoken = cmd === 'browser-js' ? 'browser js' : 'app js'

@@ -288,13 +288,14 @@ describe('the Host wires the recorder', () => {
     const index = read('index.ts')
     // Each on its own (review M4): a driver pass that throws does not cost the recorder the loaded state.
     expect(index).toMatch(/onLoaded: \(\) => \{\s*try \{\s*wiring\?\.orchHooks\?\.onLoaded\?\.\(\)\s*\} catch[\s\S]{0,160}?\}\s*runGit\?\.onState\(orch\.state\(\)\)/)
-    // The load stays lazy (createHostOrch): index.ts never asks for it at its start. Its two `orch.ready()` are each
+    // The load stays lazy (createHostOrch): index.ts never asks for it at its start. Its three `orch.ready()` are each
     // made only when something needs the state as a command does: the notification wording's (plugin 3c final review
-    // M3), when a notification plugin is sent a Job's notification, and the Credentials list's projects (credentials
-    // design C9), when the list is asked for.
-    expect(index.match(/orch\.ready\(\)/g) ?? []).toHaveLength(2)
+    // M3), when a notification plugin is sent a Job's notification, the Credentials list's projects (credentials
+    // design C9), when the list is asked for, and the findings' (lifecycle design §8), when they are asked for.
+    expect(index.match(/orch\.ready\(\)/g) ?? []).toHaveLength(3)
     expect(index).toMatch(/notify: hostNotifier\(\{[\s\S]{0,400}?orch: \{ ready: \(\) => orch\.ready\(\)/)
     expect(index).toMatch(/createHostCredentials\(\{[\s\S]{0,300}?projects: async \(\) => \{\s*await orch\.ready\(\)/)
+    expect(index).toMatch(/createHostFindings\(\{[\s\S]{0,200}?orchState: async \(\) => \{\s*await orch\.ready\(\)/)
   })
   it('the one merge path tells it before and after', () => {
     const wt = read('worktrees.ts')

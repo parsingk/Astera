@@ -214,6 +214,11 @@ describe('nextStepsFor — 무엇을 치면 되는가', () => {
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'projects-get' })).toEqual(['astera projects list'])
   })
 
+  // Lifecycle design §7: the one 404 of the findings is an ignore of a key no current finding has; the keys are in audit
+  it('an ignore of a key no finding has points at the findings', () => {
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'agent-profiles-audit-ignore' })).toEqual(['astera agent-profiles audit'])
+  })
+
   // **이름의 목록이 틀린 종류일 때는 표가 이긴다.** tasks list 가 못 찾는 것은 `--run` 의 회차다 —
   // `tasks list` 를 다시 권하면 Task id 가 나온다.
   it('tasks list 의 404 는 회차 목록으로 간다', () => {

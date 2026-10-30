@@ -772,6 +772,10 @@ export interface JobRow {
    *  (snapshotFor 의 nextFireOf). 렌더러가 스스로 계산할 수 없는 이유는 interval 이다:
    *  "무장 시각 + N분" 이라 그 앵커를 렌더러가 모른다. */
   nextFireAt?: number
+  /** The names of the archived agent profiles this schedule uses (lifecycle design §5): its fires wait until they are
+   *  restored, and the card says so in place of the next fire. A template's only, and only when there is one. Injected
+   *  like nextFireAt (snapshotFor's archivedOf). */
+  archivedProfiles?: string[]
   /** 이 템플릿이 지금까지 발화한 횟수 — Run 이 들고 있는 값을 그대로 옮긴 것이다.
    *  **children.length 와 다른 질문이다**: 기록을 지우거나 TTL 이 정리해도 이 값은 줄지 않는다. */
   fireCount?: number
@@ -2018,7 +2022,8 @@ export interface AgentProfilesApi {
   list(): Promise<PluginsCallAnswer>
   create(fields: AgentProfileFields): Promise<PluginsCallAnswer>
   update(id: string, changes: Partial<AgentProfileFields>): Promise<PluginsCallAnswer>
-  archive(id: string): Promise<PluginsCallAnswer>
+  /** `reason` is the one line the person gave as why (lifecycle design §5); the Host records it with when. */
+  archive(id: string, reason?: string): Promise<PluginsCallAnswer>
   restore(id: string): Promise<PluginsCallAnswer>
   /** Refused with reason `in-use` while unfinished work or a live session holds the profile. */
   remove(id: string): Promise<PluginsCallAnswer>
@@ -2105,6 +2110,15 @@ export interface CredentialsApi {
   deleteHideOnly(id: string): Promise<PluginsCallAnswer>
   setHiding(id: string, hide: Hiding): Promise<PluginsCallAnswer>
   reset(): Promise<PluginsCallAnswer>
+}
+
+/** Settings › Security & Access › Findings and the Agent profiles mark (lifecycle design §7): the Host's
+ *  `agent-profiles-audit*` commands, as the app. `list` answers a FindingsReport (core/findings/types.ts), the ignored
+ *  findings among them with `all`. An ignore names a key a current finding has, or answers NOT_FOUND. */
+export interface FindingsApi {
+  list(all?: boolean): Promise<PluginsCallAnswer>
+  ignore(key: string, note?: string): Promise<PluginsCallAnswer>
+  unignore(key: string): Promise<PluginsCallAnswer>
 }
 
 export interface RemoteApi {
@@ -2253,6 +2267,8 @@ export type RendererApi = CoreApi & {
   audit: AuditApi
   /** Settings › Security & Access › Credentials and Audit Logs' credential uses: the Host's Credentials list, as the app. */
   credentials: CredentialsApi
+  /** Settings › Security & Access › Findings and the Agent profiles mark: the Host's findings and ignores, as the app. */
+  findings: FindingsApi
   /** The Jobs view's "+ From a source" (plugin Phase 4c): the Host's job sources, as the app. */
   sources: SourcesApi
   remoteSessions: RemoteSessionsApi

@@ -52,6 +52,8 @@ import { AgentProfilesSettings } from './components/AgentProfilesSettings'
 import { profileOfConversation, spawnPermission } from './components/agentProfilesText'
 import { SecuritySettings } from './components/SecuritySettings'
 import { SECURITY_TAB, type AuditFocus } from './components/securityText'
+import { pendingJobStep, targetOf } from './components/findingsText'
+import type { FindingPlace } from '../../core/findings/types'
 import { jobName } from './lib/jobName'
 import { RuntimeSelector } from './components/RuntimeSelector'
 import { createReplyGate } from './lib/replyGate'
@@ -724,6 +726,20 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     if (!showSettings) setAuditRun(null)
   }, [showSettings])
+  /** The profiles a finding's button opened Settings › Agent profiles for (lifecycle design §7), highlighted there until
+   *  the tab changes or Settings closes. */
+  const [profileFocus, setProfileFocus] = useState<string[] | null>(null)
+  useEffect(() => {
+    if (!showSettings || settingsTab !== 'agentProfiles') setProfileFocus(null)
+  }, [showSettings, settingsTab])
+  /** Settings › Security & Access opened at Findings, from the Agent profiles mark, until the tab changes or it closes. */
+  const [findingsFocus, setFindingsFocus] = useState(false)
+  useEffect(() => {
+    if (!showSettings || settingsTab !== 'security') setFindingsFocus(false)
+  }, [showSettings, settingsTab])
+  /** A Job or Run a finding's button asked for, opened once the Jobs view has its project's list (the effect by the
+   *  detail's below). */
+  const [jobToOpen, setJobToOpen] = useState<string | null>(null)
   /** Settings fields changed since the modal opened (audit UI-7). */
   const settingsTouched = useRef(createTouched())
   const [wtRoot, setWtRoot] = useState('') // the worktree root in the settings modal
@@ -2356,6 +2372,13 @@ export default function App(): React.JSX.Element {
     setJobsOpen(false)
     setHiwOpen(false)
   }
+  /** Shows the Jobs view whatever the sidebar showed: a finding's Job or Run opens there, never toggled shut. */
+  const showJobs = (): void => {
+    setSidebarOpen(true)
+    setExplorerOpen(false)
+    setJobsOpen(true)
+    setHiwOpen(false)
+  }
   const toggleSessions = (): void => toggleSidebar('sessions')
   const toggleExplorer = (): void => toggleSidebar('explorer')
   const toggleJobs = (): void => toggleSidebar('jobs')
@@ -3001,6 +3024,41 @@ export default function App(): React.JSX.Element {
     // A paired Runtime's Run just made there is not in the list until the next read: not closed for that.
     if (detailRunGone({ remote: !!openRun.runtimeId, found, seen: openRunSeen.current })) setOpenRun(null)
   }, [openRun, currentProject, orchSnapshot, remoteSnapshot, jobsOpen, sidebarOpen])
+
+  /** Opens a row of this computer's Jobs view in its detail, as a click on the row does: the Jobs view's own onOpenRun and
+   *  a finding's Job or Run both come here. */
+  const openLocalRun = (runId: string): void => {
+    setDetail(null) // 이전 Run 의 상세가 한 프레임 보이지 않게 한다
+    // 여는 시점의 프로젝트를 runId 와 함께 든다 — 이 스냅샷을 준 프로젝트가 그것이다
+    if (currentProject) setOpenRun({ projectPath: currentProject, runId })
+  }
+  /** Where a finding's button takes the person (lifecycle design §7): it opens the place, it never acts. Policies and
+   *  Credentials are Security & Access's own sections, scrolled to there; a Job or Run opens as its row in the Jobs view
+   *  does, once that view has the open project's list (below). */
+  const openFindingPlace = (p: FindingPlace): void => {
+    const to = targetOf(p)
+    if (to === null || 'section' in to) return
+    if ('jobs' in to) {
+      setShowSettings(false)
+      // This computer's findings: its own Jobs, never a paired Runtime's
+      setJobsRuntime(LOCAL)
+      showJobs()
+      setJobToOpen(to.jobs)
+      return
+    }
+    if (to.tab === 'agentProfiles') setProfileFocus(to.profileIds)
+    setSettingsTab(to.tab)
+  }
+  // The Job or Run a finding's button asked for (pendingJobStep): opened as a click on its row in the Jobs view opens it,
+  // once the open project's list is there; dropped when the Jobs view left or Settings came back before that.
+  useEffect(() => {
+    if (jobToOpen === null) return
+    const step = pendingJobStep({ id: jobToOpen, jobsShown: jobsOpen && sidebarOpen, settingsShown: showSettings, snapshot: orchSnapshot })
+    if (step.do === 'wait') return
+    setJobToOpen(null)
+    if (step.do === 'notHere') toast.info(t('findings.open.notHere'))
+    else if (step.do === 'open') openLocalRun(step.row)
+  }, [jobToOpen, orchSnapshot, jobsOpen, sidebarOpen, showSettings])
 
   // Whether RunConfigManager is actually on screen — gates both its render below and the shortcut
   // suppression right after it. The dialog is pinned to the project (and context) it was opened
@@ -4591,11 +4649,7 @@ export default function App(): React.JSX.Element {
                 // the fold in main cannot make, and it is exactly what selectWorkbenchTab needs.
                 canOpenSession={(sessionId) => !!layout && !!groupOfTab(layout, sessionTab(sessionId))}
                 onOpenSession={(sessionId) => selectWorkbenchTab(sessionTab(sessionId))}
-                onOpenRun={(runId) => {
-                  setDetail(null) // 이전 Run 의 상세가 한 프레임 보이지 않게 한다
-                  // 여는 시점의 프로젝트를 runId 와 함께 든다 — 이 스냅샷을 준 프로젝트가 그것이다
-                  if (currentProject) setOpenRun({ projectPath: currentProject, runId })
-                }}
+                onOpenRun={openLocalRun}
                 // currentProject 가 없으면 세우지 않는다 — hasProject 가 버튼 자체를 지우므로
                 // 정상 클릭으로는 이 가드에 닿지 않지만, 그 버튼을 세운 것이 바로 이 값을
                 // 가드 없이 세우는 사고였다(newRunOpen 선언부의 주석) — 그 원인을 한 군데(버튼)
@@ -5476,11 +5530,23 @@ export default function App(): React.JSX.Element {
                 {settingsTab === 'remote' && <RemoteRuntimesSettings onChanged={() => setPairedChanged((n) => n + 1)} />}
                 {settingsTab === 'plugins' && <PluginsSettings />}
                 {settingsTab === 'extensions' && <ExtensionsSettings accounts={accounts} />}
-                {settingsTab === 'agentProfiles' && <AgentProfilesSettings accounts={accounts} />}
+                {settingsTab === 'agentProfiles' && (
+                  <AgentProfilesSettings
+                    accounts={accounts}
+                    {...(profileFocus !== null ? { focusProfileIds: profileFocus } : {})}
+                    // The mark beside a profile with open findings (lifecycle design §7) opens them
+                    onOpenFindings={() => {
+                      setFindingsFocus(true)
+                      setSettingsTab('security')
+                    }}
+                  />
+                )}
                 {settingsTab === 'security' && (
                   <SecuritySettings
                     {...(auditRun !== null ? { focus: auditRun } : {})}
                     onClearFocus={() => setAuditRun(null)}
+                    showFindings={findingsFocus}
+                    onOpenPlace={openFindingPlace}
                     sessionTitle={(id) => sessions.find((s) => s.id === id)?.title}
                     runName={(id) => {
                       const row = orchSnapshot ? findRun(orchSnapshot, id) : undefined

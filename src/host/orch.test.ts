@@ -1279,6 +1279,69 @@ describe('audit', () => {
   })
 })
 
+// The findings (lifecycle design §7, §8): routed like the credentials, below every gate, and no gate lists them. They
+// share the `agent-profiles-` start, and the agent profiles are never asked them.
+describe('findings', () => {
+  const cli = { role: 'cli' as const, toOthers: () => {} }
+  const answering = () => {
+    const seen: { cmd: string; role?: string; agentRefusal?: string }[] = []
+    const command = async (a: { cmd: string; role?: string; agentRefusal?: string }) => (seen.push(a), { status: 200, body: { ok: true } })
+    let forgot = 0
+    return { seen, forgot: () => forgot, findings: { command, forget: () => void (forgot += 1) } }
+  }
+
+  // Ruling R8-1: a mark or the section never shows a minute of what a change just changed
+  it('a call that changed something drops the findings report; a read and a refusal do not', async () => {
+    const f = answering()
+    const agentProfiles = {
+      command: async (a: { cmd: string; marks: { effects: number } }) => {
+        if (a.cmd === 'agent-profiles-archive') {
+          a.marks.effects += 1
+          return { status: 200, body: { ok: true } }
+        }
+        return a.cmd === 'agent-profiles-delete' ? { status: 409, body: { error: 'in use' } } : { status: 200, body: { profiles: [] } }
+      }
+    }
+    const orch = orchOver({ findings: f.findings, agentProfiles })
+    await orch.call({ cmd: 'agent-profiles-list', args: {}, sessionId: '', from: cli })
+    await orch.call({ cmd: 'agent-profiles-delete', args: { id: 'ap_1' }, sessionId: '', from: cli })
+    expect(f.forgot()).toBe(0)
+    await orch.call({ cmd: 'agent-profiles-archive', args: { id: 'ap_1' }, sessionId: '', from: cli })
+    expect(f.forgot()).toBe(1)
+  })
+
+  it('is refused to MCP, a controller and a plugin by their gates, before the findings are asked', async () => {
+    const f = answering()
+    const profiles = answering()
+    const orch = orchOver({ findings: f.findings, agentProfiles: profiles.findings })
+    expect((await orch.call({ cmd: 'agent-profiles-audit', args: {}, sessionId: '', from: { role: 'mcp', toOthers: () => {} } })).status).toBe(403)
+    const controller = { role: 'controller' as const, principal: { clientId: 'cli_x', name: 'x', permission: 'full-control' as const }, toOthers: () => {} }
+    expect((await orch.call({ cmd: 'agent-profiles-audit', args: {}, sessionId: '', from: controller })).status).toBe(403)
+    const plugin = { role: 'plugin' as const, plugin: { id: 'astera-hello', granted: new Set(['jobs.read', 'jobs.create']) }, toOthers: () => {} }
+    expect((await orch.call({ cmd: 'agent-profiles-audit-ignore', args: { key: 'k' }, sessionId: '', from: plugin })).status).toBe(403)
+    expect([...f.seen, ...profiles.seen]).toEqual([])
+  })
+
+  it('answers the app and the CLI, telling the findings who asks and when an agent session’s shell is the caller', async () => {
+    const f = answering()
+    const profiles = answering()
+    const orch = orchOver({ findings: f.findings, agentProfiles: profiles.findings })
+    expect((await orch.call({ cmd: 'agent-profiles-audit', args: {}, sessionId: '', from: cli })).status).toBe(200)
+    await orch.call({ cmd: 'agent-profiles-audit-ignore', args: { key: 'k' }, sessionId: 'sess_1', from: cli })
+    await orch.call({ cmd: 'agent-profiles-audit-unignore', args: { key: 'k' }, sessionId: '', from: { role: 'app', toOthers: () => {} } })
+    expect(f.seen.map((s) => [s.cmd, s.role, s.agentRefusal !== undefined])).toEqual([
+      ['agent-profiles-audit', 'cli', false],
+      ['agent-profiles-audit-ignore', 'cli', true],
+      ['agent-profiles-audit-unignore', 'app', false]
+    ])
+    expect(profiles.seen).toEqual([])
+  })
+
+  it('answers 501 on a Host that keeps none', async () => {
+    expect((await orchOver({ agentProfiles: answering().findings }).call({ cmd: 'agent-profiles-audit', args: {}, sessionId: '', from: cli })).status).toBe(501)
+  })
+})
+
 describe('pairing and clients (local only)', () => {
   const cli = { role: 'cli' as const, toOthers: () => {} }
   it('pair-create answers a code to the CLI, and clients-list and clients-revoke see the redeemed client', async () => {

@@ -9,6 +9,8 @@
 //   folded the same way.
 // - `runs-timeline { runId, cursor, limit }`: a Run's timeline (its projection plus the Host journal's rows), newest
 //   page first, `cursor` counting the events already given from the newest end.
+//
+// A schedule that waits on an archived agent profile says which (lifecycle design §5), from this Runtime's own store.
 import { snapshotFor } from '../core/orchestration/view'
 import { timelineFor } from '../core/orchestration/timeline'
 import { resolveRunId, type OrchState } from '../core/orchestration/state'
@@ -29,6 +31,9 @@ export interface RuntimeFacts {
   journalBusy?(): boolean
   /** Now, for the next fire of a schedule this Host does not drive. */
   nowMs?: number
+  /** The names of the archived agent profiles a scheduled Job uses, from this Runtime's own store (lifecycle design §5).
+   *  Absent, none. */
+  archivedOf?(jobId: string): string[]
 }
 
 export const UNREGISTERED = 'unregistered'
@@ -38,7 +43,7 @@ export const TIMELINE_PAGE_MAX = 1000
 type Reply = { status: number; body: unknown }
 
 const fold = (s: OrchState, folder: string, f: RuntimeFacts, nextFire: (id: string) => number | null): OrchSnapshot =>
-  snapshotFor(s, folder, (id) => f.aliveSessionIds.has(id), f.worktrees, nextFire, (p) => f.exists(p))
+  snapshotFor(s, folder, (id) => f.aliveSessionIds.has(id), f.worktrees, nextFire, (p) => f.exists(p), Date.now(), (id) => f.archivedOf?.(id) ?? [])
 
 /** The next fire of each schedule: the one this Host armed, else the one its driver arms. When the app on that machine
  *  drives, this Host holds no arming (driving.ts forgets it), and the arming a driver makes on its first look is

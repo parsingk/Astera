@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
-import { BROWSER_VERBS, NOUNS, camel, parseArgs, verbsOf } from './cliArgs'
+import { BROWSER_VERBS, NOUNS, OPERANDS, camel, parseArgs, verbsOf } from './cliArgs'
 import { GLOBAL_FLAGS, USAGE, spelledCommand, unknownFlagError, usageFor, type PublicCommand } from './cliUsage'
 import { agentContext, sessionUsage } from './cliAgentContext'
 import { exitCodeFor } from './cliOutput'
@@ -678,5 +678,33 @@ describe('agent-profiles --sandbox', () => {
     expect(USAGE['agent-profiles-create'].detail).toContain("--sandbox on starts its sessions, terminal and chat, in their CLI's own sandbox (Codex's, or Claude Code's on macOS and Linux")
     expect(USAGE['agent-profiles-create'].detail).toContain('Windows')
     expect(USAGE['agent-profiles-update'].detail).toContain('keeps the sandbox state it started with')
+  })
+})
+
+// Lifecycle design §7, planning ruling 1: a finding's key is the one word after `audit-ignore` and `audit-unignore`. The
+// usage line and agent-context name it, and only the commands the parser takes a word for have one.
+describe('usage — the word after the command', () => {
+  it('prints the key in the usage line and in agent-context', () => {
+    const help = usageFor(['agent-profiles', 'audit-ignore', '--help'])
+    expect(help !== null && 'text' in help && help.text).toMatch(/^astera agent-profiles audit-ignore <key> \[--note <text>\]\n/)
+    const unignore = agentContext().commands.find((c) => c.name === 'agent-profiles-audit-unignore')
+    expect(unignore).toMatchObject({ usage: 'astera agent-profiles audit-unignore <key>', operand: { name: 'key' } })
+    expect(agentContext().commands.find((c) => c.name === 'agent-profiles-audit')).not.toHaveProperty('operand')
+  })
+
+  it('the commands with one are exactly the ones the parser takes one for, under the same name', () => {
+    const withOne = Object.entries(USAGE).flatMap(([cmd, u]) => (u.operand ? [[cmd, u.operand.name]] : []))
+    expect(withOne.sort()).toEqual(Object.entries(OPERANDS).sort())
+  })
+
+  it('answers --help after the key, and refuses a second word', () => {
+    expect(usageFor(['agent-profiles', 'audit-ignore', 'stale-runtime:rt_1', '--help'])).toHaveProperty('text')
+    expect(usageFor(['agent-profiles', 'audit', 'x', '--help'])).toEqual({ error: 'unexpected argument: x' })
+  })
+
+  it('agent-profiles audit says it changes nothing and an agent session may read it', () => {
+    expect(USAGE['agent-profiles-audit'].detail).toContain('changes nothing')
+    expect(USAGE['agent-profiles-audit'].detail).toContain('An agent session may read it')
+    expect(USAGE['agent-profiles-audit-ignore'].detail).toContain('refused with 5')
   })
 })

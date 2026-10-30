@@ -36,7 +36,9 @@ import {
 } from './fields.js'
 import type { EventType } from './types.js'
 
-const JOB = [...JOB_FIELDS, ...DERIVED_FIELDS]
+/** `archivedProfiles` is derived by `jobs list` and `jobs get` alone, and only when there is one: the archived agent
+ *  profiles a scheduled Job waits on (lifecycle design §5). */
+const JOB = [...JOB_FIELDS, ...DERIVED_FIELDS, 'archivedProfiles']
 /** Derived like DERIVED_FIELDS, by `runs get` alone and only when above zero: how many of the Run's Tasks have a
  *  worker showing a permission prompt. `github` is derived for a GitHub lifecycle Job's Run on every read. `tokens` and
  *  `coordinatorTokens`, by `runs get` alone too and only when known: what its Tasks' sessions and its coordinator's

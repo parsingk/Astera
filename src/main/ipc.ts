@@ -73,6 +73,7 @@ import { forcedSandboxBlocker } from '../core/sandbox/unavailable'
 import { claudeUsernsCheck, sandboxWarningMessage } from '../core/sandbox/startWarnings'
 import { createAuditRoute } from './host/auditRoute'
 import { createCredentialsRoute } from './host/credentialsRoute'
+import { createFindingsRoute } from './host/findingsRoute'
 import { createAppPullRequests } from './host/appPullRequests'
 import { createSourcesRoute } from './host/sourcesRoute'
 import { createHostGitHubRoute } from './host/hostGitHubRoute'
@@ -172,6 +173,7 @@ import { chatSessionUsage } from '../core/usage/chatSession'
 import { isPermissionMode, isUnattendedPermission } from '../core/chat/types'
 import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from '../core/orchestration/exec/repair'
 import { snapshotFor, jobsForProject, outcomeOf } from '../core/orchestration/view'
+import { archivedProfilesOfJob } from '../core/orchestration/archivedProfiles'
 import { createOrchPush } from './orchPush'
 import { ensureProject } from '../core/orchestration/projects'
 import { resolveRunId } from '../core/orchestration/state'
@@ -264,6 +266,7 @@ import { gateFolders, unreachableInLang, withUnreachableInLang } from './fileOpG
 import { readConfiguredModel } from './models/configuredModel'
 import { lastClaudeModelOf } from '../core/history/conversation'
 import { createPresenceRepush } from './worktreePresenceRepush'
+import { createArchivedProfilesCache } from './archivedProfilesCache'
 import {
   git,
   repoRoot,
@@ -1503,9 +1506,23 @@ export function registerIpc(
   })
   // 주기적으로 알려진 경로 전부와 레지스트리의 워크트리를 다시 묻는다. 타이머는 프로세스를 붙잡지 않는다.
   worktreePresence.start(PRESENCE_SWEEP_MS, () => core.worktrees.list().map((w) => w.path))
+  // Lifecycle design §5: the archived agent profiles a schedule waits on, for its card's waiting line. The fold below
+  // cannot await the store, so it reads what this last read (main/archivedProfilesCache.ts), which reads again lazily,
+  // with no timer of its own. A read that changes the archived set folds the current state again; the push drops it
+  // when nothing on screen changed (sameSnapshot).
+  const archivedProfiles = createArchivedProfilesCache({
+    read: async () => (await readAgentProfiles(app.getPath('userData'))).profiles,
+    nowMs: () => Date.now(),
+    onChange: () => {
+      const current = orch ? orch.deps.getState() : orchPushes.lastPushed()
+      if (current !== null) pushOrchState(current)
+    },
+    log: orchLog
+  })
   const orchSnapshotOf = (state: OrchState, projectPath: string): OrchSnapshot => {
     // The set is built once per fold rather than per Task — sessions.list() copies every SessionInfo.
     const known = new Set(core.sessions.list().map((s) => s.id))
+    const profiles = archivedProfiles.profiles()
     // The registry lives here, and runsForProject maps each Run.cwd through it — a Run created inside
     // a registered worktree is owned by the worktree's repository, which is the same mapping this
     // handler applies to the path the renderer sent (repoPathOf, in orch.list below).
@@ -1519,7 +1536,9 @@ export function registerIpc(
       // 폴더가 아직 있는가 — 캐시만 읽는다(worktreePresence). 이 폴드는 모든 setState 뒤에 메인
       // 스레드에서 돌므로 fs 를 동기로 만지지 않는다. 확인된 missing 만 뺀다: unknown(아직 묻는 중)과
       // unreachable(닿지 못했다)은 사라졌다는 증거가 아니다.
-      (p) => worktreePresence.peek(p) !== 'missing'
+      (p) => worktreePresence.peek(p) !== 'missing',
+      Date.now(),
+      (jobId) => archivedProfilesOfJob(state, jobId, profiles).map((p) => p.name)
     )
   }
   // The push is a notification hung off the awaited setState (below). It folds later in the tick, so a fold that
@@ -4668,6 +4687,8 @@ export function registerIpc(
       const { state } = ensureProject(before, { path: project, now: new Date().toISOString() })
       if (state !== before) await orch.deps.setState(state)
     }
+    // The archived profiles as they are now, so a project opened after an archive made elsewhere shows it at once
+    await archivedProfiles.refresh()
     const snapshot: OrchSnapshot = orch
       ? orchSnapshotOf(orch.deps.getState(), project)
       : { runs: [], projectFolderBusy: false }
@@ -4856,13 +4877,14 @@ export function registerIpc(
   ipcMain.handle('extensions.replace', (_e, accountId: unknown, id: unknown) => extensions.replace(accountId as string, id as string))
   // Settings › Agent profiles (Agent Profiles design §8): the Host checks every argument; this only passes them on
   // A setup gives the machine's sandbox users new passwords, so this process's own readiness answers go after one too
-  const agentProfiles = createAgentProfilesRoute({ call: (m) => orchCall(m), afterSetup: () => forgetReadiness() })
+  // A change also reads the archived profiles again, for the Jobs view's waiting line (lifecycle design §5)
+  const agentProfiles = createAgentProfilesRoute({ call: (m) => orchCall(m), afterSetup: () => forgetReadiness(), afterChange: () => void archivedProfiles.refresh() })
   ipcMain.handle('agentProfiles.list', () => agentProfiles.list())
   ipcMain.handle('agentProfiles.create', (_e, fields: unknown) => agentProfiles.create(fields as Parameters<typeof agentProfiles.create>[0]))
   ipcMain.handle('agentProfiles.update', (_e, id: unknown, changes: unknown) =>
     agentProfiles.update(id as string, changes as Parameters<typeof agentProfiles.update>[1])
   )
-  ipcMain.handle('agentProfiles.archive', (_e, id: unknown) => agentProfiles.archive(id as string))
+  ipcMain.handle('agentProfiles.archive', (_e, id: unknown, reason: unknown) => agentProfiles.archive(id as string, reason as string | undefined))
   ipcMain.handle('agentProfiles.restore', (_e, id: unknown) => agentProfiles.restore(id as string))
   ipcMain.handle('agentProfiles.remove', (_e, id: unknown) => agentProfiles.remove(id as string))
   ipcMain.handle('agentProfiles.sandboxSetup', (_e, profileId: unknown, accountId: unknown) => agentProfiles.sandboxSetup(profileId as string, accountId as string))
@@ -4895,6 +4917,12 @@ export function registerIpc(
   ipcMain.handle('credentials.deleteHideOnly', (_e, id: unknown) => credentials.deleteHideOnly(id as string))
   ipcMain.handle('credentials.setHiding', (_e, id: unknown, hide: unknown) => credentials.setHiding(id as string, hide as Parameters<Cred['setHiding']>[1]))
   ipcMain.handle('credentials.reset', () => credentials.reset())
+  // Settings › Security & Access › Findings and the Agent profiles mark (lifecycle design §7): the Host's findings, as
+  // the app
+  const findings = createFindingsRoute({ call: (m) => orchCall(m) })
+  ipcMain.handle('findings.list', (_e, all: unknown) => findings.list(all === true))
+  ipcMain.handle('findings.ignore', (_e, key: unknown, note: unknown) => findings.ignore(key as string, typeof note === 'string' ? note : undefined))
+  ipcMain.handle('findings.unignore', (_e, key: unknown) => findings.unignore(key as string))
   ipcMain.handle('plugins.list', () => plugins.list())
   ipcMain.handle('plugins.inspect', (_e, source: unknown) => plugins.inspect(source as Parameters<typeof plugins.inspect>[0]))
   ipcMain.handle('plugins.install', (_e, a: unknown) => plugins.install(a as Parameters<typeof plugins.install>[0]))

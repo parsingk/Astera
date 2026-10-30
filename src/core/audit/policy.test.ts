@@ -319,6 +319,19 @@ describe('the policy file', () => {
     expect(await readPolicyMode(p)).toBe('enforce')
     expect(isObserving('enforce') && isObserving('observe') && !isObserving('compatibility')).toBe(true)
   })
+
+  // When Observe was last turned on (lifecycle design §4, plan ruling 3): kept through a read, and a stamp that is not a
+  // time is left out rather than taken for damage, so the history counts from this release's first run instead
+  it('keeps observingSince, and leaves out one that is not a time', () => {
+    const since = '2026-10-01T00:00:00.000Z'
+    expect(parseAuditPolicy(JSON.stringify({ ...STARTER_POLICY, mode: 'observe', observingSince: since }))).toEqual({
+      ...STARTER_POLICY,
+      mode: 'observe',
+      observingSince: since
+    })
+    for (const bad of ['soon', 42, null, ''])
+      expect(parseAuditPolicy(JSON.stringify({ ...STARTER_POLICY, mode: 'observe', observingSince: bad }))).toEqual({ ...STARTER_POLICY, mode: 'observe' })
+  })
 })
 
 describe('readPolicyMode', () => {

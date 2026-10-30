@@ -137,6 +137,54 @@ describe('createHostAgentProfiles', () => {
     expect((await h.call('agent-profiles-update', { id: p.id, accountIds: ['acc_1', 'acc_2'] })).body).toMatchObject({ reason: 'unknown-account' })
   })
 
+  // Lifecycle design §5: archiving records when and why; restore clears both
+  it('archive stamps archivedAt and a one-line reason, and restore clears both', async () => {
+    const h = await rig()
+    const p = profileOf(await h.call('agent-profiles-create', { name: 'A', accountIds: ['acc_1'] }))
+    const at = '2026-10-30T01:00:00.000Z'
+    h.advance(Date.parse(at) - Date.parse('2026-10-22T10:00:00.000Z'))
+    const archived = await h.call('agent-profiles-archive', { id: p.id, reason: '  replaced by p2  ' })
+    expect(archived.status, JSON.stringify(archived.body)).toBe(200)
+    expect(profileOf(archived)).toMatchObject({ status: 'archived', archivedAt: at, archivedReason: 'replaced by p2' })
+    expect((await readAgentProfiles(h.profileDir)).profiles[0]).toMatchObject({ archivedAt: at, archivedReason: 'replaced by p2' })
+    const restored = profileOf(await h.call('agent-profiles-restore', { id: p.id }))
+    expect(restored.status).toBe('active')
+    expect('archivedAt' in restored).toBe(false)
+    expect('archivedReason' in restored).toBe(false)
+    const stored = (await readAgentProfiles(h.profileDir)).profiles[0]!
+    expect('archivedAt' in stored).toBe(false)
+    expect('archivedReason' in stored).toBe(false)
+    // No reason, or one that is blank once trimmed, records none; a second archive replaces the first one's record
+    h.advance(1_000)
+    const again = profileOf(await h.call('agent-profiles-archive', { id: p.id, reason: '   ' }))
+    expect(again).toMatchObject({ archivedAt: '2026-10-30T01:00:01.000Z' })
+    expect('archivedReason' in again).toBe(false)
+  })
+
+  it('archive refuses a reason with a line break or over 200 characters', async () => {
+    const h = await rig()
+    const p = profileOf(await h.call('agent-profiles-create', { name: 'A', accountIds: ['acc_1'] }))
+    for (const reason of ['a\nb', 'a\rb', 'x'.repeat(201), 3, null]) {
+      const r = await h.call('agent-profiles-archive', { id: p.id, reason })
+      expect(r.status, JSON.stringify(reason)).toBe(400)
+      expect(r.marks.effects).toBe(0)
+    }
+    expect((await readAgentProfiles(h.profileDir)).profiles[0]!.status).toBe('active')
+    // Exactly 200 characters, once trimmed, is one line short enough
+    expect((await h.call('agent-profiles-archive', { id: p.id, reason: ` ${'x'.repeat(200)} ` })).status).toBe(200)
+  })
+
+  it('an update of an archived profile keeps archivedAt', async () => {
+    const h = await rig()
+    const p = profileOf(await h.call('agent-profiles-create', { name: 'A', accountIds: ['acc_1'] }))
+    const archived = profileOf(await h.call('agent-profiles-archive', { id: p.id, reason: 'old' }))
+    h.advance(1_000)
+    const updated = await h.call('agent-profiles-update', { id: p.id, name: 'B' })
+    expect(updated.status, JSON.stringify(updated.body)).toBe(200)
+    expect(profileOf(updated)).toMatchObject({ name: 'B', status: 'archived', archivedAt: archived.archivedAt, archivedReason: 'old' })
+    expect(profileOf(updated).updatedAt).not.toBe(archived.updatedAt)
+  })
+
   it('refuses a caller that is not the app or the CLI, and a change from an agent\'s shell', async () => {
     const h = await rig()
     expect((await h.call('agent-profiles-list', {}, { role: 'agent' })).status).toBe(403)

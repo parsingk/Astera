@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { keepDamaged, readStoreFile } from './storeFile'
+import { hasKeptCopy, keepDamaged, readStoreFile } from './storeFile'
 
 let dir: string
 beforeEach(async () => {
@@ -54,5 +54,21 @@ describe('keepDamaged', () => {
     const kept = (await fs.readdir(dir)).filter((n) => n.endsWith('.bak'))
     const texts = await Promise.all(kept.map((n) => fs.readFile(path.join(dir, n), 'utf8')))
     expect(texts.sort()).toEqual(['first', 'fourth', 'second', 'third'])
+  })
+})
+
+// A caller says the damaged bytes were kept only when they are (findings-ignored.json, audit-policy.json's repair)
+describe('hasKeptCopy', () => {
+  it('finds a copy keepDamaged made of exactly this text, and no other', async () => {
+    const f = path.join(dir, 'a.json')
+    expect(await hasKeptCopy(f, 'broken')).toBe(false)
+    await keepDamaged(f, 'first damage')
+    await keepDamaged(f, 'broken')
+    expect(await hasKeptCopy(f, 'broken')).toBe(true)
+    expect(await hasKeptCopy(f, 'first damage')).toBe(true)
+    expect(await hasKeptCopy(f, 'brok')).toBe(false)
+    // Another file's copy is not this one's, and a folder that is not there has none
+    expect(await hasKeptCopy(path.join(dir, 'b.json'), 'broken')).toBe(false)
+    expect(await hasKeptCopy(path.join(dir, 'gone', 'a.json'), 'broken')).toBe(false)
   })
 })

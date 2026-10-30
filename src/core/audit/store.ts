@@ -2,7 +2,8 @@
 // `<profile>/audit/YYYY-MM-DD.jsonl`, the local day the call happened. Kept 30 days or 50 MB, whichever comes first:
 // the days past 30 are dropped at the Host's start and hourly (and are not read in between), and the bytes written since
 // are counted, so the oldest days go as soon as the size would pass, and a day whose own file reaches it is not filed
-// further (an empty `YYYY-MM-DD.stopped` beside it says so, for a Host that starts over, and goes with the day). A
+// further (an empty `YYYY-MM-DD.stopped` beside it says so, for a Host that starts over, and goes with the day). The
+// latest day dropped for size is named in `dropped-through`, since its file is no longer there to say so. A
 // record holds the action and a short target only (the resolver's), never a command, output or file contents, and no
 // decision: that is computed when the records are read, from the rules in force then, so editing a rule re-judges the
 // past.
@@ -17,7 +18,7 @@
 // lines, so a read of 50 MB never stalls the Host. A known limit (Task 4 ruling): a machine whose time zone moved west
 // between two writes files the later record under an earlier local day, so a page that stops at a newer day can miss it;
 // the summary, which reads every day of the period, still counts it.
-import { promises as fs } from 'node:fs'
+import { promises as fs, readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { profilePaths } from '../profile/paths'
 import type { AuditRecord } from './types'
@@ -50,6 +51,10 @@ export interface AuditStoreOptions {
 const DAY_FILE = /^\d{4}-\d{2}-\d{2}\.jsonl$/
 /** The empty file beside a day's that says the day stopped at the size (see appendRecords), so a restart still knows. */
 const STOP_MARK = /^\d{4}-\d{2}-\d{2}\.stopped$/
+/** The file that names the latest day dropped for size (prune): its file is gone, so nothing else says that its records
+ *  were (final fix list, I-2). */
+const DROPPED = 'dropped-through'
+const DAY = /^\d{4}-\d{2}-\d{2}$/
 const DAY_MS = 24 * 60 * 60 * 1000
 
 const pad = (n: number): string => String(n).padStart(2, '0')
@@ -77,13 +82,15 @@ interface FolderState {
   sizes: Map<string, number>
   /** Days whose own file reached the size: nothing more is filed for them. */
   stopped: Set<string>
+  /** The latest day this process dropped for size, as its mark names it; null when it has dropped none. */
+  dropped: string | null
 }
 
 const folders = new Map<string, FolderState>()
 const folderOf = (dir: string): FolderState => {
   let s = folders.get(dir)
   if (!s) {
-    s = { queue: Promise.resolve(), prunedAt: null, sizes: new Map(), stopped: new Set() }
+    s = { queue: Promise.resolve(), prunedAt: null, sizes: new Map(), stopped: new Set(), dropped: null }
     folders.set(dir, s)
   }
   return s
@@ -99,14 +106,22 @@ const queued = (dir: string, f: (s: FolderState) => Promise<void>): Promise<void
 /** Appends the records to their days' files. Never throws: a write that fails is logged and its records dropped, and so
  *  is a record whose time does not parse. */
 export function appendRecords(profileDir: string, recs: readonly AuditRecord[], o: AuditStoreOptions = {}): Promise<void> {
-  return appendDated(profilePaths(profileDir).auditRecords, recs, o, 'audit')
+  return appendDated(profilePaths(profileDir).auditRecords, recs, o, 'audit').then(() => {})
 }
 
 /** appendRecords over any folder of day files and any record with a time: the credential-use records share the same
- *  retention, size limit and torn-line handling (credentials design §6). `label` starts the log lines. */
-export function appendDated<T extends { at: string }>(dir: string, recs: readonly T[], o: AuditStoreOptions, label: string): Promise<void> {
+ *  retention, size limit and torn-line handling (credentials design §6). `label` starts the log lines. Resolves to whether
+ *  every record was written: false when one was dropped for its time, a day stopped at the size, or a write that failed,
+ *  for a caller that must know its line landed (the §4.12 use log's marks, lifecycle design); the others ignore it. */
+export function appendDated<T extends { at: string }>(dir: string, recs: readonly T[], o: AuditStoreOptions, label: string): Promise<boolean> {
+  /** Every record written; set by the step, which the queue's own catch keeps from rejecting. */
+  let all = false
   return queued(dir, async (s) => {
-    if (recs.length === 0) return
+    if (recs.length === 0) {
+      all = true
+      return
+    }
+    let written = true
     const now = (o.now ?? Date.now)()
     const maxBytes = o.maxBytes ?? AUDIT_MAX_BYTES
     if (s.prunedAt === null || now - s.prunedAt >= AUDIT_PRUNE_EVERY_MS) await prune(dir, s, o, 0)
@@ -122,9 +137,15 @@ export function appendDated<T extends { at: string }>(dir: string, recs: readonl
       if (list) list.push(r)
       else byDay.set(day, [r])
     }
-    if (untimed > 0) o.log?.(`${label}: ${untimed} record(s) with a time that does not parse were dropped`)
+    if (untimed > 0) {
+      written = false
+      o.log?.(`${label}: ${untimed} record(s) with a time that does not parse were dropped`)
+    }
     for (const [day, rs] of byDay) {
-      if (s.stopped.has(day)) continue
+      if (s.stopped.has(day)) {
+        written = false
+        continue
+      }
       const text = rs.map((r) => `${JSON.stringify(r)}\n`).join('')
       const textBytes = Buffer.byteLength(text)
       // With the line break a torn file may need first
@@ -132,6 +153,7 @@ export function appendDated<T extends { at: string }>(dir: string, recs: readonl
       const own = s.sizes.get(day) ?? 0
       // The day's own file is at the size: no prune can make room for it, and it must not grow without end
       if (own + bytes > maxBytes) {
+        written = false
         s.stopped.add(day)
         o.log?.(`${label}: the records of ${day} reached ${maxBytes} bytes; no more are kept for that day`)
         // The file stops short of the size (the record that did not fit was refused), so it cannot tell a Host that starts
@@ -151,10 +173,12 @@ export function appendDated<T extends { at: string }>(dir: string, recs: readonl
         await fs.appendFile(file, lead + text)
         s.sizes.set(day, (s.sizes.get(day) ?? 0) + lead.length + textBytes)
       } catch (err) {
+        written = false
         o.log?.(`${label}: could not write ${rs.length} record(s) to ${file}; they are dropped: ${String(err)}`)
       }
     }
-  })
+    all = written
+  }).then(() => all)
 }
 
 const total = (s: FolderState): number => {
@@ -181,11 +205,12 @@ async function endsWhole(file: string): Promise<boolean> {
   }
 }
 
-/** Checks the folders against both limits now, as the Host does at its start: the tool calls' and the credential uses',
- *  which share the retention (credentials design §6). Never throws. */
+/** Checks the folders against both limits now, as the Host does at its start: the tool calls', the credential uses' and
+ *  the shared skill, command and agent uses', which share the retention (credentials design §6, lifecycle design §4.12).
+ *  Never throws. */
 export async function pruneRecords(profileDir: string, o: AuditStoreOptions = {}): Promise<void> {
   const paths = profilePaths(profileDir)
-  await Promise.all([paths.auditRecords, paths.credentialUses].map((dir) => queued(dir, (s) => prune(dir, s, o, 0))))
+  await Promise.all([paths.auditRecords, paths.credentialUses, paths.extensionUses].map((dir) => queued(dir, (s) => prune(dir, s, o, 0))))
 }
 
 /** Checks the folder now and then every AUDIT_PRUNE_EVERY_MS, as the Host does from its start: a Host that writes
@@ -210,7 +235,10 @@ export function keepPruning(
 }
 
 /** Drops the days older than the kept days, then the oldest days while the folder and `room` more would pass its size.
- *  Today's file is never dropped for size (a day reaching it alone is stopped by the write). Never throws. */
+ *  Today's file is never dropped for size (a day reaching it alone is stopped by the write). A day dropped for size is
+ *  marked first (DROPPED), and one whose mark cannot be written is kept, with the days after it: its records gone with
+ *  nothing to say so would read as days with no calls (I-2). The mark goes once its day is past the kept days. Never
+ *  throws. */
 async function prune(dir: string, s: FolderState, o: AuditStoreOptions, room: number): Promise<void> {
   const now = (o.now ?? Date.now)()
   const maxBytes = o.maxBytes ?? AUDIT_MAX_BYTES
@@ -246,14 +274,30 @@ async function prune(dir: string, s: FolderState, o: AuditStoreOptions, room: nu
     }
     let sum = 0
     for (const n of sizes.values()) sum += n
+    const mark = path.join(dir, DROPPED)
+    let dropped = laterDay(s.dropped, await fs.readFile(mark, 'utf8').then(dayIn, () => null))
     for (const [day, size] of [...sizes]) {
       if (sum + room <= maxBytes) break
       if (day === today) continue
+      if (dropped === null || day > dropped) {
+        try {
+          await fs.writeFile(mark, day)
+        } catch (err) {
+          o.log?.(`audit: could not mark ${day} as dropped for size in ${dir}, so it is kept: ${String(err)}`)
+          break
+        }
+        dropped = day
+      }
       if (await remove(day)) {
         sizes.delete(day)
         sum -= size
       }
     }
+    if (dropped !== null && dropped < cutoff) {
+      await fs.rm(mark, { force: true }).catch(() => {})
+      dropped = null
+    }
+    s.dropped = dropped
     // The days an earlier process stopped, by their marks; a mark whose day file is gone is let go
     for (const name of names.filter((n) => STOP_MARK.test(n))) {
       const day = name.slice(0, 10)
@@ -266,9 +310,54 @@ async function prune(dir: string, s: FolderState, o: AuditStoreOptions, room: nu
   }
 }
 
+/** A mark's text as the day it names, or null when it names none. */
+const dayIn = (text: string): string | null => (DAY.test(text.trim()) ? text.trim() : null)
+const laterDay = (a: string | null, b: string | null): string | null => (a === null ? b : b === null || a >= b ? a : b)
+
+/** The latest local day (`YYYY-MM-DD`) whose records were dropped for size, so the days up to it hold fewer records than
+ *  their calls and a usage finding cannot judge them (lifecycle design §4, final fix list I-2): the one this process
+ *  dropped, or the one the mark on disk names, which an earlier process left. Null when none was, or when the folder
+ *  cannot be read. Never throws. */
+export function auditDroppedThrough(profileDir: string): string | null {
+  return droppedThroughIn(profilePaths(profileDir).auditRecords)
+}
+
+/** auditDroppedThrough over any folder of day files: the credential uses' and the shared extension uses', whose dropped
+ *  days make those logs missing data for the findings, as their stopped days do (rulings R4-4, R6-7). */
+export function droppedThroughIn(dir: string): string | null {
+  let onDisk: string | null = null
+  try {
+    onDisk = dayIn(readFileSync(path.join(dir, DROPPED), 'utf8'))
+  } catch {
+    // No mark, or one that cannot be read: the folder state alone
+  }
+  return laterDay(folders.get(dir)?.dropped ?? null, onDisk)
+}
+
 /** Whether the local day `at` falls in was stopped at the size, so a record of that time would not be kept. */
 export function auditDayStopped(profileDir: string, at: string): boolean {
   return folders.get(profilePaths(profileDir).auditRecords)?.stopped.has(auditDayOf(at)) ?? false
+}
+
+/** The local days (`YYYY-MM-DD`, sorted) whose records stopped at the size, so a usage finding cannot judge them
+ *  (lifecycle design §4): those this process stopped, and those the marks on disk name, which an earlier process left
+ *  before this one has looked at the folder. A folder that cannot be listed adds none. Never throws. */
+export function auditStoppedDays(profileDir: string): string[] {
+  return stoppedDaysIn(profilePaths(profileDir).auditRecords)
+}
+
+/** auditStoppedDays over any folder of day files: the credential uses' and the shared extension uses', whose stopped days
+ *  make those logs missing data for the findings (lifecycle rulings R4-4, R6-7). */
+export function stoppedDaysIn(dir: string): string[] {
+  const days = new Set(folders.get(dir)?.stopped ?? [])
+  let names: string[] = []
+  try {
+    names = readdirSync(dir)
+  } catch {
+    // No folder yet, or one that cannot be listed: the folder state alone
+  }
+  for (const n of names) if (STOP_MARK.test(n)) days.add(n.slice(0, 10))
+  return [...days].sort()
 }
 
 /** Whether a day in the period (by local day; the whole folder without one) was stopped at the size by this Host, so its
@@ -281,6 +370,15 @@ export function auditStoppedAtLimit(profileDir: string, period: { since?: string
   const first = period.since !== undefined ? auditDayOf(period.since) : null
   const last = period.until !== undefined ? localDay(new Date(Date.parse(period.until) - 1)) : null
   return [...s.stopped].some((d) => (first === null || d >= first) && (last === null || d <= last))
+}
+
+/** Whether the period (by local day, as auditStoppedAtLimit reads it; the whole folder without one) holds a day whose
+ *  records were dropped to keep the folder under its size (auditDroppedThrough): its first day is that day or before it,
+ *  so its records are fewer than its calls (follow-up R-F6). */
+export function auditDroppedAtLimit(profileDir: string, period: { since?: string; until?: string } = {}): boolean {
+  const dropped = auditDroppedThrough(profileDir)
+  if (dropped === null) return false
+  return period.since === undefined || auditDayOf(period.since) <= dropped
 }
 
 export interface AuditFilter {

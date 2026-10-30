@@ -1,9 +1,10 @@
-// `astera agent-profiles list|show|create|update|archive|restore|delete` (Agent Profiles design §6). The Host answers
-// them (host/agentProfiles/commands.ts), as it answers `sessions`; this file turns the line into its commands. Two
-// things are done here first: a profile named by its name is resolved to its id with `agent-profiles-get`, since the
-// changes take the id, and the shared MCP servers `--exclude-mcp` names are turned into their registry ids, which is
-// what a profile keeps. A name no shared server has is refused here, naming it, before anything is sent. `--sandbox
-// on|off` is sent as the boolean the Host takes.
+// `astera agent-profiles list|show|create|update|archive|restore|delete|audit|audit-ignore|audit-unignore` (Agent Profiles
+// design §6, lifecycle design §7). The Host answers them (host/agentProfiles/commands.ts, and host/findings/commands.ts
+// for the audit), as it answers `sessions`; this file turns the line into its commands. Two things are done here first:
+// a profile named by its name is resolved to its id with `agent-profiles-get`, since the changes take the id, and the
+// shared MCP servers `--exclude-mcp` names are turned into their registry ids, which is what a profile keeps. A name no
+// shared server has is refused here, naming it, before anything is sent. `--sandbox on|off` is sent as the boolean the
+// Host takes, and `archive --reason` as the line the Host records (lifecycle §5).
 import type { ExtensionEntry } from '../core/extensions/types'
 
 type Answer = { status: number; body: unknown }
@@ -34,6 +35,21 @@ export async function agentProfilesCommand<R extends object>(a: {
 }): Promise<R | Answer> {
   const { cmd, args } = a
   if (cmd === 'agent-profiles-list') return a.call('agent-profiles-list', {}, a.request)
+
+  // The findings (lifecycle design §7): one call each, answered as the Host answers it, whatever it found. The key is the
+  // word after `audit-ignore` and `audit-unignore` (cliArgs.ts OPERANDS), checked here only for being there
+  if (cmd === 'agent-profiles-audit') {
+    if (args.all !== undefined && args.all !== true) return bad('--all takes no value')
+    return a.call(cmd, args.all === true ? { all: true } : {}, a.request)
+  }
+  if (cmd === 'agent-profiles-audit-ignore' || cmd === 'agent-profiles-audit-unignore') {
+    const verb = cmd === 'agent-profiles-audit-ignore' ? 'audit-ignore' : 'audit-unignore'
+    if (typeof args.key !== 'string' || args.key === '')
+      return bad(`the finding key is required: \`astera agent-profiles ${verb} <key>\`, the key from \`agent-profiles audit${verb === 'audit-unignore' ? ' --all' : ''}\``)
+    const note = cmd === 'agent-profiles-audit-ignore' && args.note !== undefined ? text('note', args.note) : undefined
+    if (typeof note === 'object') return bad(note.error)
+    return a.call(cmd, { key: args.key, ...(note !== undefined ? { note } : {}) }, a.request)
+  }
 
   // The fields a create or an update sends, from the flags given
   const fields = async (): Promise<Record<string, unknown> | { error: string } | { refused: Answer }> => {
@@ -88,6 +104,10 @@ export async function agentProfilesCommand<R extends object>(a: {
     return unwrap(created)
   }
 
+  // The archive's reason (lifecycle design §5), refused before anything is sent when given bare; the Host checks the rest
+  const reason = cmd === 'agent-profiles-archive' && args.reason !== undefined ? text('reason', args.reason) : undefined
+  if (typeof reason === 'object') return bad(reason.error)
+
   // The rest name one profile, by its id or its name
   if (args.id === undefined) return bad('--id is required: the profile id or name (from `agent-profiles list`)')
   const idOrName = text('id', args.id)
@@ -106,7 +126,8 @@ export async function agentProfilesCommand<R extends object>(a: {
     if ('error' in f) return bad(f.error as string)
     return unwrap(await a.call('agent-profiles-update', { id, ...f }, a.request))
   }
-  if (cmd === 'agent-profiles-archive' || cmd === 'agent-profiles-restore') return unwrap(await a.call(cmd, { id }, a.request))
+  if (cmd === 'agent-profiles-archive') return unwrap(await a.call(cmd, { id, ...(reason !== undefined ? { reason } : {}) }, a.request))
+  if (cmd === 'agent-profiles-restore') return unwrap(await a.call(cmd, { id }, a.request))
   if (cmd === 'agent-profiles-delete') {
     const deleted = await a.call('agent-profiles-delete', { id }, a.request)
     if (!isAnswer(deleted) || deleted.status !== 200) return deleted

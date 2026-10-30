@@ -73,6 +73,8 @@ export async function importItems(a: { profileDir: string; homeDir: string; acco
   const secrets = extensionSecrets(a.profileDir)
   const result: ImportResult = { imported: [], refused: [] }
   const entries = [...registry.entries]
+  // When these were shared: the usage findings age an item from it, never from before it was here (lifecycle design §4.5)
+  const addedAt = new Date().toISOString()
 
   for (const pick of a.picks) {
     const d = found.find((x) => x.kind === pick.kind && x.name === pick.name)
@@ -118,14 +120,14 @@ export async function importItems(a: { profileDir: string; homeDir: string; acco
       for (const [ref, value] of toStore) await secrets.put(ref, value)
       const { envNames: _names, ...server } = d.mcp
       const isolation = knownSessionIsolated(d.mcp) ? { isolation: 'session' as const } : {}
-      entries.push({ id, kind: 'mcp', name: pick.name, ...server, env, ...isolation, providers: BOTH, importedFrom: a.account.id, enabled: true })
+      entries.push({ id, kind: 'mcp', name: pick.name, ...server, env, ...isolation, providers: BOTH, importedFrom: a.account.id, enabled: true, addedAt })
     } else {
       const canonical =
         pick.kind === 'skill' ? path.join(paths.skills, pick.name) : path.join(pick.kind === 'command' ? paths.commands : paths.agents, `${pick.name}.md`)
       await copyTree(d.source, canonical)
       const hash = pick.kind === 'skill' ? await hashTree(canonical) : await hashFile(canonical)
       const providers: Provider[] = pick.kind === 'skill' ? BOTH : ['claude']
-      entries.push({ id, kind: pick.kind as 'skill' | 'command' | 'agent', name: pick.name, hash, providers, importedFrom: a.account.id, enabled: true })
+      entries.push({ id, kind: pick.kind as 'skill' | 'command' | 'agent', name: pick.name, hash, providers, importedFrom: a.account.id, enabled: true, addedAt })
     }
     result.imported.push(pick.name)
   }
@@ -149,9 +151,17 @@ export async function removeEntry(profileDir: string, id: string): Promise<void>
   await writeExtensionRegistry(profileDir, { version: 1, entries: registry.entries.filter((x) => x.id !== id) })
 }
 
+/** Switches an entry on or off. An entry switched from off to on is stamped `enabledAt`, so the usage findings do not
+ *  count the days it was off as days it went unused (lifecycle design §4.5, §4.12, ruling R4-3); otherwise the stamp
+ *  stays. */
 export async function setEnabled(profileDir: string, id: string, enabled: boolean): Promise<void> {
   const registry = await readExtensionRegistry(profileDir)
-  await writeExtensionRegistry(profileDir, { version: 1, entries: registry.entries.map((x) => (x.id === id ? { ...x, enabled } : x)) })
+  const at = new Date().toISOString()
+  const entries = registry.entries.map((x): ExtensionEntry => {
+    if (x.id !== id) return x
+    return enabled && !x.enabled ? { ...x, enabled, enabledAt: at } : { ...x, enabled }
+  })
+  await writeExtensionRegistry(profileDir, { version: 1, entries })
 }
 
 /** How the Gateway shares a server's process (Gateway design G8); sessions started after the change follow it. */

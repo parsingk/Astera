@@ -109,6 +109,15 @@ export function chatHoldsPrompts(profile: AgentProfile | undefined, appWideYolo:
  *  this computer's list does not have it, a profile deleted since or one on a paired Runtime. */
 export const profileNameOf = (profiles: readonly AgentProfile[], id: string): string => profiles.find((p) => p.id === id)?.name ?? id
 
+/** What an archived profile's row says (lifecycle design §5): when it was archived, in the reader's date, and the reason
+ *  the person gave, if any, said as a reason. Null for an active profile, and for one archived before the date was
+ *  kept. */
+export function archivedNote(p: AgentProfile, t: T, dateOf: (iso: string) => string): { on: string; reason?: string } | null {
+  if (p.status !== 'archived' || p.archivedAt === undefined) return null
+  const on = t('settings.agentProfiles.archivedOn', { date: dateOf(p.archivedAt) })
+  return p.archivedReason !== undefined ? { on, reason: t('settings.agentProfiles.archivedReason', { reason: p.archivedReason }) } : { on }
+}
+
 /** What the editor's add list offers: the accounts not picked yet, and once one is picked only its provider's. A
  *  profile's accounts take turns on one conversation, which only one provider's CLI can carry on (the Host refuses a mix
  *  as `mixed-provider`). */

@@ -369,7 +369,10 @@ export function snapshotFor(
   exists: (path: string) => boolean,
   /** Now, for the one time-bound fact a row reads: whether a coordinator start is still in flight
    *  (`coordinatorStarting`, Task 1 fix round 1 I1). Defaults to the clock; tests pass one. */
-  nowMs: number = Date.now()
+  nowMs: number = Date.now(),
+  /** The names of the archived agent profiles a scheduled Job uses (lifecycle design §5), for its row's "waiting" line.
+   *  Injected like nextFireOf: the profiles are not in the state. A hint only, so a caller with no store gives none. */
+  archivedOf: (jobId: string) => string[] = () => []
 ): OrchSnapshot {
   // 폴더 사실을 **한 번만** 센다 — Run 마다 다시 세면 같은 순회가 Run 수만큼 돌고, 그보다 나쁜
   // 것은 두 값(폴더 수준과 Run 수준)이 다른 순간의 상태를 볼 수 있다는 것이다.
@@ -394,6 +397,8 @@ export function snapshotFor(
     const worktreesOf = (
       run ? runWorktreesFrom(run, ix.jobById.get(run.jobId)?.cwd, ix.dispatchesByRun.get(run.id) ?? []) : []
     ).filter(exists)
+    // The schedule's own row only, as nextFireAt: it is the plan that waits, not a Run a fire made
+    const archived = run === undefined && job.schedule ? archivedOf(job.id) : []
     return {
       id: rowId,
       objective: previewOf(job.objective),
@@ -457,6 +462,7 @@ export function snapshotFor(
       ...(run === undefined && job.schedule && nextFireOf(job.id) !== null
         ? { nextFireAt: nextFireOf(job.id) as number }
         : {}),
+      ...(archived.length > 0 ? { archivedProfiles: archived } : {}),
       // createdAt ascending — the order the orchestrator declared the Tasks in, which is the order
       // the dependency chain reads in. Task.deps is not a total order, so it cannot sort this.
       tasks: [...((run ? ix.tasksByRun.get(run.id) : ix.tasksByJob.get(job.id)) ?? [])]

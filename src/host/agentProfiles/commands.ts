@@ -73,9 +73,22 @@ const PERMISSIONS: readonly ProfilePermission[] = ['inherit', 'bypass', 'ask']
  *  sandbox it runs in (Review Focus 5). */
 const SANDBOX_BOOLEAN = 'sandbox must be true or false'
 
+/** The longest archive reason (lifecycle design §5, ruling 12). */
+const REASON_MAX = 200
+
 const bad = (error: string): AgentProfilesAnswer => ({ status: 400, body: { error } })
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 const strings = (v: unknown): v is string[] => Array.isArray(v) && v.every((s) => typeof s === 'string')
+
+/** An archive's reason as given: absent, or one line of text that is at most REASON_MAX characters once trimmed. Blank
+ *  once trimmed is none. Anything else is refused rather than cut, so what is kept is what the person wrote. */
+function archiveReason(v: unknown): { ok: true; text?: string } | { ok: false; error: string } {
+  if (v === undefined) return { ok: true }
+  if (typeof v !== 'string' || /[\r\n]/.test(v)) return { ok: false, error: 'reason must be one line of text' }
+  const text = v.trim()
+  if (text.length > REASON_MAX) return { ok: false, error: `reason must be at most ${REASON_MAX} characters` }
+  return text === '' ? { ok: true } : { ok: true, text }
+}
 
 export function createHostAgentProfiles(d: {
   profileDir: string
@@ -204,11 +217,20 @@ export function createHostAgentProfiles(d: {
         if (typeof args.id !== 'string') return bad(`${cmd} needs id`)
         const { id } = args
         const status = cmd === 'agent-profiles-archive' ? 'archived' : 'active'
+        // Lifecycle design §5: an archive records when, and why when the person said (ruling 12: one line, at most
+        // REASON_MAX characters once trimmed; blank is none). A restore drops both, so nothing stale stays behind
+        const reason = archiveReason(cmd === 'agent-profiles-archive' ? args.reason : undefined)
+        if (!reason.ok) return bad(reason.error)
         return queued(async () => {
           const s = await readAgentProfiles(d.profileDir)
           const old = s.profiles.find((p) => p.id === id)
           if (!old) return { status: 404, body: { error: `no agent profile ${id}` } }
-          const next: AgentProfile = { ...old, status, updatedAt: new Date(now()).toISOString() }
+          const at = new Date(now()).toISOString()
+          const { archivedAt: _at, archivedReason: _why, ...kept } = old
+          const next: AgentProfile =
+            status === 'archived'
+              ? { ...kept, status, updatedAt: at, archivedAt: at, ...(reason.text !== undefined ? { archivedReason: reason.text } : {}) }
+              : { ...kept, status, updatedAt: at }
           await writeAgentProfiles(d.profileDir, { ...s, profiles: s.profiles.map((p) => (p.id === id ? next : p)) })
           return { status: 200, body: { profile: shown(next, await d.readAccounts()) } }
         })

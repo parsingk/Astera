@@ -9,6 +9,7 @@ import { closeDispatch, createJob, createTask, emptyState, openDispatch, startJo
 import type { OrchCaller } from '../core/host/orchProtocol'
 import type { JobEvent } from '../core/types'
 import { foldsPathCase } from '../core/files/paths'
+import { writeAgentProfiles } from '../core/agentProfiles/store'
 
 const NOW = '2026-10-08T00:00:00.000Z'
 let dir: string
@@ -96,6 +97,23 @@ describe('jobs-view (remote runtime design §2.7, X1-05)', () => {
   it('an unknown project is 404', async () => {
     const h = await host(stateWith([], []))
     expect((await h.ask('jobs-view', { project: 'nope' })).status).toBe(404)
+  })
+
+  // Lifecycle design §5: a schedule whose agent profile is archived waits, and the controller's row says which, from
+  // this Runtime's own profile store; a store that cannot be read says none (the fire is the gate)
+  it("carries a schedule's archived profiles from this Runtime's store", async () => {
+    const base = stateWith([{ id: 'p1', path: '/srv/repo' }], [])
+    const made = createJob(base, { objective: 'nightly', cwd: '/srv/repo', schedule: { kind: 'daily', time: '09:00' }, agentProfileId: 'ap_1' }, NOW)
+    if (!made.ok) throw new Error(made.error)
+    const archived = { id: 'ap_1', name: 'p1', status: 'archived' as const, accountIds: ['acc_1'], mcpExclude: [], permission: 'inherit' as const, sandbox: false, createdAt: NOW, updatedAt: NOW }
+    await writeAgentProfiles(dir, { version: 1, profiles: [archived] })
+    const rowOf = (body: unknown) => (body as { snapshot: { runs: Array<{ objective: string; archivedProfiles?: string[] }> } }).snapshot.runs.find((r) => r.objective === 'nightly')!
+    const h = await host(made.state)
+    expect(rowOf((await h.ask('jobs-view', { project: 'p1' })).body).archivedProfiles).toEqual(['p1'])
+    await fs.writeFile(path.join(dir, 'agent-profiles.json'), '{ damaged', 'utf8')
+    const damaged = await h.ask('jobs-view', { project: 'p1' })
+    expect(damaged.status).toBe(200)
+    expect('archivedProfiles' in rowOf(damaged.body)).toBe(false)
   })
 })
 

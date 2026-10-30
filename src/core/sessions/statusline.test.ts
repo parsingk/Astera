@@ -5,7 +5,18 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import type { Account } from '../types'
-import { SANDBOX_SCOPES_KEPT, SANDBOX_TWINS_DIR, StatusLineManager, captureCommand, enforceCommand, enforceInterpreter, ENFORCE_HOOK_FILE, pruneSandboxTwins, type SandboxScope } from './statusline'
+import {
+  SANDBOX_SCOPES_KEPT,
+  SANDBOX_TWINS_DIR,
+  StatusLineManager,
+  captureCommand,
+  enforceCommand,
+  enforceInterpreter,
+  ENFORCE_HOOK_FILE,
+  pruneSandboxTwins,
+  withUseReports,
+  type SandboxScope
+} from './statusline'
 import enforceHookSource from 'virtual:astera-enforce-hook'
 import { codexEnforceArgs } from './codexEnforce'
 import { dirIdentity } from '../files/watchedDir'
@@ -555,10 +566,117 @@ describe('StatusLineManager observe mode', () => {
       expected.hooks.PostToolUse.push(audit)
       expected.hooks.PostToolUseFailure = [audit]
       expect(JSON.parse(await read(c.settingsFile))).toEqual(expected)
+      // A Claude Code that reports uses gets the two events a use of a skill, command or agent arrives by, and nothing else
+      // more (lifecycle design §4.12, fix round 1)
+      const uses = mgr.spawnConfig('s1', account, { toolHooks, observe: true, reportsUses: true })
+      expect(uses).toMatchObject({ observed: true, hookOutPath: plain.hookOutPath })
+      expected.hooks.UserPromptExpansion = [{ hooks: audit.hooks }]
+      expected.hooks.SubagentStart = [audit]
+      expect(JSON.parse(await read(uses.settingsFile))).toEqual(expected)
       // The compatibility file is left as it was
       expect(await read(plain.settingsFile)).toBe(was)
       expect(c.hookOutPath).toBe(plain.hookOutPath)
     }
+  })
+
+  // Lifecycle design §4.12: a person's `/name` arrives as UserPromptExpansion and an agent's start as SubagentStart, never
+  // as a tool call (research cli-use-reporting.md §1), so both go through the audit capture, which no session waits on.
+  // Fix round 1: only a Claude Code that reports uses (USE_REPORT_MIN_CLAUDE) is given them; the docs do not say since
+  // when UserPromptExpansion exists, and an older one, or one of unknown version, reads the file it read before
+  it('the observe and enforce settings carry UserPromptExpansion and SubagentStart through the audit capture, async', async () => {
+    const mgr = new StatusLineManager(dir, 'node', () => {}, { platform: 'linux', execPath: '/opt/astera/astera' })
+    await mgr.init()
+    expect(await mgr.ensureEnforceFiles()).toBe('ok')
+    const capture = { type: 'command', command: auditCmd(), async: true }
+    for (const toolHooks of [false, true])
+      for (const mode of [{ observe: true }, { observe: true, enforce: true }]) {
+        const c = mgr.spawnConfig('s1', account, { toolHooks, ...mode, reportsUses: true })
+        const without = mgr.spawnConfig('s1', account, { toolHooks, ...mode })
+        // Fix round 2 (ruling R6-8): the spawn says it got the use hooks, for the session's note
+        expect(c, JSON.stringify(mode)).toMatchObject({ observed: true, useHooks: true, ...(mode.enforce ? { enforced: true } : {}) })
+        expect(without, JSON.stringify(mode)).not.toHaveProperty('useHooks')
+        const hooks = JSON.parse(await read(c.settingsFile)).hooks
+        expect(hooks.UserPromptExpansion, JSON.stringify(mode)).toEqual([{ hooks: [capture] }])
+        expect(hooks.SubagentStart, JSON.stringify(mode)).toEqual([{ matcher: '*', hooks: [capture] }])
+        // The same file but for the two entries
+        const other = JSON.parse(await read(without.settingsFile))
+        expect(other.hooks).not.toHaveProperty('UserPromptExpansion')
+        expect(other.hooks).not.toHaveProperty('SubagentStart')
+        const withThem = JSON.parse(await read(c.settingsFile))
+        delete withThem.hooks.UserPromptExpansion
+        delete withThem.hooks.SubagentStart
+        expect(withThem, JSON.stringify(mode)).toEqual(other)
+        expect(mgr.spawnConfig('s1', account, { toolHooks, ...mode, reportsUses: false }).settingsFile).toBe(without.settingsFile)
+      }
+    // A session that is not observed hears neither, whatever its version
+    for (const toolHooks of [false, true]) {
+      const c = mgr.spawnConfig('s1', account, { toolHooks, reportsUses: true })
+      expect(c.settingsFile).toBe(mgr.spawnConfig('s1', account, { toolHooks }).settingsFile)
+      expect(c).not.toHaveProperty('useHooks')
+      const hooks = JSON.parse(await read(c.settingsFile)).hooks
+      expect(hooks).not.toHaveProperty('UserPromptExpansion')
+      expect(hooks).not.toHaveProperty('SubagentStart')
+    }
+  })
+
+  // The version is asked only for a spawn that is observed, from the probe the prepare warmed (fix round 1)
+  it('withUseReports asks the Claude version of an observed spawn only, and says whether it reports uses', () => {
+    let asked = 0
+    const probe = (v: string | null | undefined) => () => (asked++, v)
+    expect(withUseReports({ toolHooks: true }, probe('2.1.312'))).toEqual({ toolHooks: true })
+    expect(withUseReports(undefined, probe('2.1.312'))).toBeUndefined()
+    expect(asked).toBe(0)
+    expect(withUseReports({ observe: true }, probe('2.1.312'))).toEqual({ observe: true, reportsUses: true })
+    expect(withUseReports({ observe: true, enforce: true }, probe('2.2.0'))).toEqual({ observe: true, enforce: true, reportsUses: true })
+    for (const v of ['2.1.306', null, undefined]) expect(withUseReports({ observe: true }, probe(v))).toEqual({ observe: true, reportsUses: false })
+    expect(asked).toBe(5)
+  })
+
+  // spawner.ts and core.ts are never run by a test: where they hand the version to the settings file is guarded by its text.
+  // Fix round 2: from the probe's cache only, so an observed spawn never runs `claude --version` on the calling thread
+  it('the Host and the app pick the settings file by the Claude version they warmed', async () => {
+    for (const file of ['../../host/spawner.ts', '../../main/core.ts']) {
+      const src = await fs.readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), file), 'utf8')
+      expect(src, file).toMatch(/statusLine\.spawnConfig\(id, account, withUseReports\(\w+, \(\) => cliVersions\.cached\('claude'\)\)\)/)
+      expect(src, file).toContain("Promise.all([statusLine.ensureObserveFiles(), cliVersions.warm('claude')])")
+    }
+  })
+
+  // The observe design's rule: what a person wrote is never kept. A typed command's arguments and its expanded prompt are
+  // theirs; the command's name, an agent's type and id, and the Skill tool's `skill` only name what was used
+  it('the capture keeps command_name, expansion_type, agent_type, agent_id and the Skill input’s skill, and drops command_args and prompt', async () => {
+    const mgr = new StatusLineManager(dir)
+    await mgr.init()
+    await mgr.ensureObserveFiles()
+    const out = path.join(mgr.hookEventsDir, 's3.jsonl')
+    const script = path.join(dir, 'astera-hook-audit-capture.cjs')
+    await runCapture(script, out, {
+      session_id: 'c', cwd: '/w', hook_event_name: 'UserPromptExpansion', expansion_type: 'slash_command', command_name: 'ship',
+      command_args: 'secret args', command_source: 'userSettings', prompt: 'secret prompt'
+    })
+    await runCapture(script, out, { session_id: 'c', cwd: '/w', hook_event_name: 'SubagentStart', agent_id: 'agent_1', agent_type: 'Code Reviewer' })
+    await runCapture(script, out, {
+      cwd: '/w', hook_event_name: 'PostToolUse', tool_name: 'Skill', tool_input: { skill: 'review', args: 'secret args' }, tool_use_id: 'toolu_1',
+      tool_response: { success: true, commandName: 'review' }
+    })
+    await runCapture(script, out, {
+      cwd: '/w', hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_input: { subagent_type: 'code-reviewer', description: 'd', prompt: 'secret task' }, tool_use_id: 'toolu_2'
+    })
+    // Fix round 1: each name only from the tool that carries it. Another tool's field of that name is its own input
+    await runCapture(script, out, { cwd: '/w', hook_event_name: 'PostToolUse', tool_name: 'Task', tool_input: { subagent_type: 'Explore', skill: 'secret' }, tool_use_id: 'toolu_3' })
+    await runCapture(script, out, { cwd: '/w', hook_event_name: 'PostToolUse', tool_name: 'mcp__notes__save', tool_input: { skill: 'secret skill', subagent_type: 'secret' }, tool_use_id: 'toolu_4' })
+    await runCapture(script, out, { cwd: '/w', hook_event_name: 'PostToolUse', tool_name: 'Skill', tool_input: { skill: 'x', subagent_type: 'secret' }, tool_use_id: 'toolu_5' })
+    const got = await lines(path.join(mgr.hookEventsDir, 's3.audit.jsonl'))
+    expect(got.map(({ astera_at, ...rest }) => (expect(typeof astera_at).toBe('number'), rest))).toEqual([
+      { hook_event_name: 'UserPromptExpansion', tool_input: {}, cwd: '/w', expansion_type: 'slash_command', command_name: 'ship' },
+      { hook_event_name: 'SubagentStart', tool_input: {}, cwd: '/w', agent_type: 'Code Reviewer', agent_id: 'agent_1' },
+      { hook_event_name: 'PostToolUse', tool_name: 'Skill', tool_input: { skill: 'review' }, tool_use_id: 'toolu_1', cwd: '/w' },
+      { hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_input: { subagent_type: 'code-reviewer' }, tool_use_id: 'toolu_2', cwd: '/w' },
+      { hook_event_name: 'PostToolUse', tool_name: 'Task', tool_input: { subagent_type: 'Explore' }, tool_use_id: 'toolu_3', cwd: '/w' },
+      { hook_event_name: 'PostToolUse', tool_name: 'mcp__notes__save', tool_input: {}, tool_use_id: 'toolu_4', cwd: '/w' },
+      { hook_event_name: 'PostToolUse', tool_name: 'Skill', tool_input: { skill: 'x' }, tool_use_id: 'toolu_5', cwd: '/w' }
+    ])
+    expect(await fs.readFile(path.join(mgr.hookEventsDir, 's3.audit.jsonl'), 'utf8')).not.toContain('secret')
   })
 
   it('a session asked to be observed before its files are written gets the plain file, and is not marked observed', () => {
@@ -938,7 +1056,9 @@ describe('StatusLineManager sandbox', () => {
   }
   /** The scope's twins folder a twin is in: sandbox-settings/<hash>. */
   const folderOf = (file: string): string => path.dirname(file.replace(/\//g, path.sep))
-  const VARIANTS = [{}, { observe: true }, { observe: true, enforce: true }].flatMap((o) => [false, true].map((toolHooks) => ({ ...o, toolHooks })))
+  const VARIANTS = [{}, { observe: true }, { observe: true, reportsUses: true }, { observe: true, enforce: true }, { observe: true, enforce: true, reportsUses: true }].flatMap(
+    (o) => [false, true].map((toolHooks) => ({ ...o, toolHooks }))
+  )
 
   it('every variant has a sandbox twin that differs only by sandbox and deny rules', async () => {
     const mgr = managerOn('linux')
@@ -970,8 +1090,8 @@ describe('StatusLineManager sandbox', () => {
       delete b.permissions
       expect(b).toEqual(a)
     }
-    // Six files, in one folder: plain, hooks, observe, observe hooks, enforce, enforce hooks
-    expect(twins.size).toBe(6)
+    // Ten files, in one folder: plain, hooks, and observe and enforce each without and with the use hooks, plain and hooks
+    expect(twins.size).toBe(10)
     expect(new Set([...twins].map(folderOf)).size).toBe(1)
     // A chat takes only the sandbox, with nothing of the terminal's hooks, from the same folder
     const chat = mgr.sandboxChatArgs(false, scope)
@@ -1126,8 +1246,12 @@ describe('StatusLineManager sandbox', () => {
       'astera-hooks-settings.json',
       'astera-observe-settings.json',
       'astera-observe-hooks-settings.json',
+      'astera-observe-uses-settings.json',
+      'astera-observe-uses-hooks-settings.json',
       'astera-enforce-settings.json',
-      'astera-enforce-hooks-settings.json'
+      'astera-enforce-hooks-settings.json',
+      'astera-enforce-uses-settings.json',
+      'astera-enforce-uses-hooks-settings.json'
     ])
     const was = await Promise.all(files.map(read))
     const chatWas = mgr.enforceChatArgs()

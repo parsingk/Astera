@@ -878,6 +878,26 @@ describe('snapshotFor — 예약 템플릿과 회차', () => {
     expect(snap.runs[0].nextFireAt).toBe(1_800_000_000_000)
   })
 
+  // Lifecycle design §5: a schedule whose agent profile is archived waits, and its row says which profiles. Injected as
+  // nextFireOf is: the profiles are not in the state
+  it('a scheduled template whose profile is archived carries archivedProfiles', () => {
+    const s = withRuns([scheduled('t1', absPath('proj')), child('c1', absPath('proj'), 't1'), run('r1', absPath('proj'))])
+    const archivedOf = (jobId: string): string[] => (jobId === 'job_t1' ? ['p1', 'p2'] : [])
+    const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires, allExist, Date.now(), archivedOf)
+    const template = snap.runs.find((r) => r.id === 'job_t1')!
+    expect(template.archivedProfiles).toEqual(['p1', 'p2'])
+    // Only on the schedule's own row: not on its Run, and never on another Job
+    expect('archivedProfiles' in template.children![0]).toBe(false)
+    expect('archivedProfiles' in snap.runs.find((r) => r.id === 'job_r1')!).toBe(false)
+    // Empty is no field, and so is a caller that injects nothing
+    expect('archivedProfiles' in snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires, allExist, Date.now(), () => []).runs.find((r) => r.id === 'job_t1')!).toBe(false)
+    expect('archivedProfiles' in snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires, allExist).runs.find((r) => r.id === 'job_t1')!).toBe(false)
+    // A non-scheduled Job is never asked about
+    const asked: string[] = []
+    snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires, allExist, Date.now(), (id) => (asked.push(id), []))
+    expect(asked).toEqual(['job_t1'])
+  })
+
   // children: [] 이나 nextFireAt: null 도 이 자리를 통과한다 — 없어야 할 칸이 있는지는 'in' 으로만
   // 알 수 있다. toBeUndefined() 는 생략된 칸과 값이 undefined 인 칸을 구별하지 못한다
   it('회차가 아직 없고 무장도 없는 템플릿은 두 칸이 아예 없다', () => {

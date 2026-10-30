@@ -3,6 +3,7 @@
 // a file another process is renaming at that instant answers EPERM. The rule, as worktrees/registry.ts has it:
 // nothing read, nothing healed.
 import { promises as fs } from 'node:fs'
+import path from 'node:path'
 import { readFileRetrying } from './renameRetry'
 
 export type StoreRead = { kind: 'missing' } | { kind: 'unreadable'; error: unknown } | { kind: 'text'; text: string }
@@ -37,6 +38,17 @@ export async function keepDamaged(file: string, text: string): Promise<void> {
     )
     if (wrote !== false) return
   }
+}
+
+/** Whether a copy of exactly `text` is kept beside `file`, as keepDamaged names them (`<file>.bak`, `<file>.<stamp>.bak`).
+ *  keepDamaged never throws, so this is how a caller knows the copy is there before it says so. Never rejects. */
+export async function hasKeptCopy(file: string, text: string): Promise<boolean> {
+  const dir = path.dirname(file)
+  for (const n of await fs.readdir(dir).catch(() => [] as string[])) {
+    if (!n.startsWith(`${path.basename(file)}.`) || !n.endsWith('.bak')) continue
+    if ((await fs.readFile(path.join(dir, n), 'utf8').catch(() => null)) === text) return true
+  }
+  return false
 }
 
 /** A store whose file could not be read refuses to write over it (audit U-1). */

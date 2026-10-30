@@ -195,7 +195,7 @@ export function renderOk(cmd: string, body: unknown, mode: OutputMode, mark: Rep
   if (mode === 'json') return jsonSafe(okEnvelope(cmd, body, mark))
   const data = dataFor(cmd, body)
   // What a person's terminal shows carries no control characters (security audit SEC-9); JSON escapes them already.
-  if (mode === 'quiet') return terminalSafe(quietFor(data))
+  if (mode === 'quiet') return terminalSafe(quietFor(data, cmd))
   // **사람용 두 모드는 표시를 싣지 않는다.** 재생의 요점은 첫 답을 받은 것과 구별되지 않는 것이고,
   // 그것이 재생이었다는 사실은 봉투를 읽는 쪽 — 즉 스크립트 — 의 것이다. `--quiet` 는 id 목록이라
   // 얹을 자리조차 없다. 사람용이 없어 봉투로 되돌아가는 명령은 봉투이므로 그때는 실린다.

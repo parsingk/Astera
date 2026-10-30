@@ -321,3 +321,19 @@ describe('every start path carries the sandbox start warnings', () => {
     expect(hostChats).toMatch(/\.\.\.\(d\.sandboxWarn \? \{ sandboxWarn: d\.sandboxWarn \} : \{\}\),/)
   })
 })
+
+// Lifecycle design §5: the app's Jobs view says which archived profiles a schedule waits on. The fold is synchronous, so
+// it reads the cache (archivedProfilesCache.test.ts pins its rules); orch.list reads the store first, and every profile
+// change the app makes reads it again. registerIpc cannot run without Electron, so the wiring is guarded by its text.
+describe('ipc.ts folds the Jobs view with the archived profiles', () => {
+  it('reads the store of its own profile folder, folds with it, and reads again before orch.list and after a change', () => {
+    expect(src).toMatch(/createArchivedProfilesCache\(\{\n\s+read: async \(\) => \(await readAgentProfiles\(app\.getPath\('userData'\)\)\)\.profiles,/)
+    const fold = between('  const orchSnapshotOf = (state: OrchState, projectPath: string): OrchSnapshot => {', '  // The push is a notification')
+    expect(fold).toMatch(/const profiles = archivedProfiles\.profiles\(\)/)
+    expect(fold).toMatch(/\(jobId\) => archivedProfilesOfJob\(state, jobId, profiles\)\.map\(\(p\) => p\.name\)/)
+    const list = between('  const orchLocalList = async (projectPath: string): Promise<OrchSnapshot> => {', '    const snapshot: OrchSnapshot = orch')
+    expect(list).toMatch(/await archivedProfiles\.refresh\(\)/)
+    expect(src).toMatch(/createAgentProfilesRoute\(\{[^\n]*afterChange: \(\) => void archivedProfiles\.refresh\(\)/)
+    expect(src).toMatch(/ipcMain\.handle\('agentProfiles\.archive', \(_e, id: unknown, reason: unknown\) => agentProfiles\.archive\(id as string, reason as string \| undefined\)\)/)
+  })
+})

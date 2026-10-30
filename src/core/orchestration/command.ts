@@ -135,6 +135,7 @@ import type { GitHubLifecycleDefaults } from '../github/lifecycleDefaults'
 import { RepairNeeded } from '../settings/repairNeeded'
 import { findProfile, liveAccounts } from '../agentProfiles/store'
 import type { AgentProfile, AgentProfileStore } from '../agentProfiles/types'
+import { archivedProfilesOfJob, profileIdsOfJob } from './archivedProfiles'
 import { parseRunGitHubPatch, type RunGitHubPatch } from '../github/runState'
 import { sanitize } from './checkpoint'
 import type { SessionCheck } from '../workUnit/types'
@@ -1561,6 +1562,48 @@ async function profileStore(deps: OrchServerDeps): Promise<{ ok: true; store: Ag
   }
 }
 
+/** A scheduled fire of a Job that uses an archived agent profile waits (lifecycle design §5): the whole fire, not only
+ *  the Tasks that name the profile, since a Run with part of its plan left out is not the Run the person scheduled.
+ *  Answered 409 with the archived profiles' names and `reason: 'agent-profile-archived'`, which the fire logs once
+ *  (dispatchLoop.ts). The store is read only when the Job or a plan Task names a profile, so a fire of a Job that names
+ *  none never waits on the store; one that names a profile and cannot read it is refused as profileStore refuses. */
+async function archivedFireRefusal(deps: OrchServerDeps, s: OrchState, jobId: string): Promise<Reply | null> {
+  if (profileIdsOfJob(s, jobId).length === 0) return null
+  const read = await profileStore(deps)
+  if (!read.ok) return read.reply
+  const names = archivedProfilesOfJob(s, jobId, read.store.profiles).map((p) => p.name)
+  if (names.length === 0) return null
+  return {
+    status: 409,
+    body: {
+      error: `job ${jobId} waits: agent profile ${names.join(', ')} is archived; this run was not made`,
+      jobId,
+      archivedProfiles: names,
+      reason: 'agent-profile-archived'
+    }
+  }
+}
+
+/** `jobs list` and `jobs get` say why a scheduled Job that is not paused waits (lifecycle design §5): the names of the
+ *  archived profiles it uses, by Job id. A hint, as the app's row is: the fire is the gate, so a caller with no reader
+ *  or a store that cannot be read gives none, and the store is read only when such a Job names a profile. */
+async function archivedNamesOf(deps: OrchServerDeps, s: OrchState, jobs: readonly Job[]): Promise<Map<string, string[]>> {
+  const named = new Map<string, string[]>()
+  const asked = jobs.filter((j) => j.schedule !== undefined && j.paused !== true && profileIdsOfJob(s, j.id).length > 0)
+  if (asked.length === 0 || !deps.readAgentProfiles) return named
+  let profiles: AgentProfile[]
+  try {
+    profiles = (await deps.readAgentProfiles()).profiles
+  } catch {
+    return named
+  }
+  for (const job of asked) {
+    const names = archivedProfilesOfJob(s, job.id, profiles).map((p) => p.name)
+    if (names.length > 0) named.set(job.id, names)
+  }
+  return named
+}
+
 /** A Task an agent gives its own accounts in a Job that holds a profile still runs as that profile, so it is asked the
  *  same question (`profileBypassRefusal`) about it. Only that: a profile gone since falls back at the spawn as it does for
  *  a person (design §5), so it is null here, while a store that cannot be read refuses, since it may hold one. */
@@ -2932,7 +2975,9 @@ export async function handleCommand(
         const project = inProject.project
         jobs = jobs.filter((j) => jobInProject(s, j, project))
       }
-      const views = jobs.map((j) => jobView(s, j, latestRunOf(s, j)))
+      // A scheduled Job that waits on an archived profile says which (lifecycle design §5)
+      const archived = await archivedNamesOf(deps, s, jobs)
+      const views = jobs.map((j): Record<string, unknown> => ({ ...jobView(s, j, latestRunOf(s, j)), ...(archived.has(j.id) ? { archivedProfiles: archived.get(j.id) } : {}) }))
       return okBody(status.value === undefined ? views : views.filter((v) => jobStateOf(v) === status.value))
     }
     // 코디네이터가 --validate 에 넣을 id 를 알아야 한다. 상태를 바꾸지 않으므로 COORDINATOR_ONLY
@@ -2970,7 +3015,9 @@ export async function handleCommand(
       const run = named ?? latestRunOf(s, job)
       // **파생값은 접어 실은 그 회차의 것이다.** 회차를 지목해 물었는데 계획의 숫자가 다른
       // 회차를 말하면 한 응답 안에서 두 가지를 말하는 셈이 된다.
-      return okBody({ ...jobView(s, job, run), ...(run ? { run: runView(s, run) } : {}) })
+      // A scheduled Job that waits on an archived profile says which, as `jobs list` does (lifecycle design §5)
+      const archived = (await archivedNamesOf(deps, s, [job])).get(job.id)
+      return okBody({ ...jobView(s, job, run), ...(archived ? { archivedProfiles: archived } : {}), ...(run ? { run: runView(s, run) } : {}) })
     }
     // 사람이 사이드바에서 Run 을 물러나게 한다. **되돌릴 수 없다.**
     //
@@ -3456,16 +3503,24 @@ export async function handleCommand(
       // made on the state as it is after that, not on `s`.
       let base = s
       if (args.unlessRunning === true) {
-        const job = s.jobs.find((j) => j.id === id)
-        const running = job && runningRunOf(s, job, now)
+        // **A Job that uses an archived agent profile waits** (lifecycle design §5), before the running check: the fire
+        // is skipped and consumed like the skip below, and a restore lets the next fire time through with nothing to put
+        // back. Only the fire asks: a person's `jobs run` comes without the flag, and a held profile keeps resolving
+        // (ruling 13, agent profiles design §4).
+        const waits = await archivedFireRefusal(deps, s, id)
+        if (waits) return waits
+        // The store read may have waited: what follows reads the state as it is now
+        base = deps.getState()
+        const job = base.jobs.find((j) => j.id === id)
+        const running = job && runningRunOf(base, job, now)
         if (running)
           return {
             status: 409,
             body: { error: `job ${id} is still running (run ${running.id}); this run was not made`, jobId: id, running: running.id }
           }
-        const latest = job && latestRunOf(s, job)
+        const latest = job && latestRunOf(base, job)
         if (job?.schedule !== undefined && latest?.coordinatorSessionId !== undefined && latest.paused !== true) {
-          const finished = outcomeOf(s, latest.id) !== 'running'
+          const finished = outcomeOf(base, latest.id) !== 'running'
           // **An unfinished Run is replaced only while its coordinator is parked in `check --wait`**
           // (final round 2, I-A): state alone cannot tell that from a coordinator doing the work itself on
           // an objective-only Job. Busy or unknown (`false`, `null`, no dep), the plain U3 skip.
@@ -3492,7 +3547,7 @@ export async function handleCommand(
       const made = startJobRun(base, id, now)
       // **The Run is committed already marked "coordinator starting"** when it will get one (I1): there
       // is no moment in which a ▶ sees it with neither a coordinator nor a start in flight.
-      const willHandOver = made.ok && s.jobs.find((j) => j.id === id)?.coordinatorAccountId !== undefined && deps.startCoordinator !== undefined
+      const willHandOver = made.ok && base.jobs.find((j) => j.id === id)?.coordinatorAccountId !== undefined && deps.startCoordinator !== undefined
       const spawned: typeof made =
         made.ok && willHandOver
           ? (() => {

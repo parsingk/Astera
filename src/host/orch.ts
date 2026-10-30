@@ -8,6 +8,7 @@ import { AGENT_PROFILE_COMMANDS, type HostAgentProfiles } from './agentProfiles/
 import { POLICY_COMMANDS, type HostPolicies } from './audit/policyCommands'
 import { CREDENTIAL_COMMANDS, type HostCredentials } from './credentials/commands'
 import { AUDIT_COMMANDS, type HostAudit } from './audit/auditCommands'
+import { FINDINGS_COMMANDS, type HostFindings } from './findings/commands'
 import { readAgentProfiles } from '../core/agentProfiles/store'
 import { readAgentPermissionMode } from '../core/settings/agentPermissionMode'
 import type { PluginManager } from './plugins/manager'
@@ -15,6 +16,7 @@ import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { stat } from 'node:fs/promises'
 import { jobsViewOf, runsTimelineOf, type RuntimeFacts } from './remoteReads'
+import { archivedProfilesOfJob, profileIdsOfJob } from '../core/orchestration/archivedProfiles'
 import { createPresence } from './presence'
 import { handleCommand, handleExit, outsideSandbox, sandboxedCaller, type OrchServerDeps } from '../core/orchestration/command'
 import type { CompletionCheckInput } from '../core/orchestration/pluginChecks'
@@ -604,6 +606,11 @@ export function createHostOrch(a: {
   /** Observe mode's records (observe mode design §8, §12): `audit-list` and `audit-summary`, for this machine's app and
    *  CLI, routed like the policies; an agent's shell is refused even these reads. Absent: both answer 501. */
   audit?: Pick<HostAudit, 'command'>
+  /** The findings (lifecycle design §6, §7, §8): `agent-profiles-audit` and its two ignore commands, for this machine's
+   *  app and CLI, routed like the credentials and ahead of the agent profiles, whose names they share the start of; an
+   *  agent's shell may read them and changes no ignore. Absent: all three answer 501. Its report is dropped after any
+   *  call that changed something (ruling R8-1), so the section and the profile marks never show a minute of the past. */
+  findings?: Pick<HostFindings, 'command' | 'forget'>
   /** Session work units in the Host (E2 §5), asked per call: `index.ts` builds them after this orch (their
    *  in-Run test reads its state). Passed through to `hostOrchDeps` (HOST_TRACKS), and the app only
    *  `work-units-fork`, `-reload`, `-complete`, `-cancel` and `-git-op`. Absent, or null (no spawner, so no
@@ -1777,6 +1784,13 @@ export function createHostOrch(a: {
           // counts as present, and the next ask has its answer.
           // The registry's folders and every folder a Run worked in: a Job row counts only the worktrees still there.
           if (cmd === 'jobs-view') await folders.check([...worktrees.map((w) => w.path), ...store.get().dispatches.map((d) => d.cwd)])
+          // The archived profiles each schedule uses, for its row's "waiting" line (lifecycle design §5). Read only when a
+          // schedule names a profile; a store that cannot be read says none, since the row is a hint and the fire the gate
+          const st = store.get()
+          const profiles =
+            cmd === 'jobs-view' && st.jobs.some((j) => j.schedule !== undefined && profileIdsOfJob(st, j.id).length > 0)
+              ? await readAgentProfiles(a.profileDir).then((p) => p.profiles, () => [])
+              : []
           const facts: RuntimeFacts = {
             aliveSessionIds: a.aliveSessionIds(),
             worktrees,
@@ -1784,7 +1798,8 @@ export function createHostOrch(a: {
             exists: (p) => folders.peek(p) !== 'missing',
             journalTimeline: (id, st, lang) => a.journal?.timeline(id, st, lang) ?? [],
             journalBusy: () => a.journal?.busy?.() ?? false,
-            nowMs: Date.parse(a.now())
+            nowMs: Date.parse(a.now()),
+            archivedOf: (id) => archivedProfilesOfJob(store.get(), id, profiles).map((p) => p.name)
           }
           if (cmd === 'runs-timeline') return runsTimelineOf(store.get(), args, facts)
           const view = jobsViewOf(store.get(), args.project, facts)
@@ -2104,6 +2119,20 @@ export function createHostOrch(a: {
             : { status: 501, body: { error: 'this Host does not keep shared extensions' } }
           return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
         }
+        // **The findings** (lifecycle design §7, §8), the same way, before the agent profiles: the names are theirs to
+        // start with, and none of the three is theirs to answer. No gate lists them.
+        if (FINDINGS_COMMANDS.has(cmd)) {
+          const answered = a.findings
+            ? await a.findings.command({
+                cmd,
+                args,
+                role: from?.role,
+                ...(agentShell(from, sessionId) ? { agentRefusal: AGENT_REFUSAL(cmd) } : {}),
+                marks
+              })
+            : { status: 501, body: { error: 'this Host does not compute findings' } }
+          return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
+        }
         // **Agent profiles** (Agent Profiles design §4), the same way. The MCP gate admits only the list (design §6), and
         // no other gate lists them.
         if (AGENT_PROFILE_COMMANDS.has(cmd)) {
@@ -2184,6 +2213,11 @@ export function createHostOrch(a: {
         const reply = failureOf(err, marks)
         if (observing) return { ...settleObserved(observing, cmd, observing.recorded, reply), observed: true }
         return claimed === null ? reply : settleRequest(claimed, cmd, marks, reply)
+      } finally {
+        // A call that changed something (an archive, an edit, a rule, a server switched off) leaves the findings' report
+        // of a minute ago behind it (ruling R8-1). Effects only: a Run's commits come with every step it takes, and the
+        // report would then never be kept at all (Review Focus 5).
+        if (marks.effects > 0) a.findings?.forget()
       }
     }
   }

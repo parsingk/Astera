@@ -12,10 +12,12 @@ import {
   COVERAGE_ENFORCE,
   STARTER_POLICY,
   damageIsKept,
+  isObserving,
   isRuleAction,
   readAuditPolicy,
   readPolicyMode,
   writeAuditPolicy,
+  type AuditMode,
   type AuditPolicy,
   type AuditRule
 } from '../../core/audit/policy'
@@ -71,11 +73,24 @@ const newRuleId = (): string => `ar_${randomBytes(6).toString('hex')}`
 /** A position in a list, counted from 0; whether the list is that long is checked against the rules read. */
 const isPosition = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 0
 
+/** The policy in `mode`, with when Observe was last turned on (lifecycle design §4, plan ruling 3): stamped `nowMs` when
+ *  it goes from off (compatibility, or no file) to observe or enforce, kept between those two, since recording goes on
+ *  through the switch, and dropped when it goes off. */
+function withMode(p: AuditPolicy, mode: AuditMode, nowMs: number): AuditPolicy {
+  const { observingSince, ...rest } = p
+  if (!isObserving(mode)) return { ...rest, mode }
+  if (!isObserving(p.mode)) return { ...rest, mode, observingSince: new Date(nowMs).toISOString() }
+  return { ...rest, mode, ...(observingSince !== undefined ? { observingSince } : {}) }
+}
+
 export function createHostPolicies(d: {
   profileDir: string
   /** Told after every change that landed: the recorder reads the mode again rather than wait out its last read. */
   onChange?: (cmd: string) => void
+  /** Test injection for the clock (epoch ms) that stamps `observingSince`. */
+  now?: () => number
 }): HostPolicies {
+  const now = d.now ?? Date.now
   // One change at a time: two changes must each read what the other wrote
   let chain: Promise<unknown> = Promise.resolve()
   const queued = <T>(f: () => Promise<T>): Promise<T> => {
@@ -111,7 +126,7 @@ export function createHostPolicies(d: {
           // Compatibility writes no new file (the plan's first constraint): with none there is nothing to turn off
           if (p === null && mode === 'compatibility') return { status: 200, body: { mode, policy: STARTER_POLICY } }
           // The starter rules are written the first time observe or enforce is turned on (design §7), and the person's kept after
-          return saved({ ...(p ?? STARTER_POLICY), mode })
+          return saved(withMode(p ?? STARTER_POLICY, mode, now()))
         })
       }
       case 'policies-set-otherwise': {
@@ -189,18 +204,25 @@ export function createHostPolicies(d: {
         // Starts over with the starter rules and their `otherwise`; the mode is the person's switch and stays. It is also
         // the repair of a damaged file, whose bytes were kept aside when it was read: the mode is the one sessions have
         // been starting in meanwhile (readPolicyMode), so the repair never turns observing on or off by itself. A file
-        // that could not be read is never written over, nor is a damaged one whose copy could not be kept
+        // that could not be read is never written over, nor is a damaged one whose copy could not be kept. When Observe
+        // was turned on stays with the mode: the rules starting over does not start the history over (lifecycle design §4).
+        // A repair that writes an observing mode cannot read when the damaged file turned Observe on, so its history starts
+        // now, as turning Observe on starts it (final fix list M-5)
         return queued(async () => {
-          const mode = await readAuditPolicy(d.profileDir).then(
-            (p) => (p ?? STARTER_POLICY).mode,
+          const kept = await readAuditPolicy(d.profileDir).then(
+            (p): Pick<AuditPolicy, 'mode' | 'observingSince'> => {
+              const { mode, observingSince } = p ?? STARTER_POLICY
+              return { mode, ...(observingSince !== undefined ? { observingSince } : {}) }
+            },
             async (e: unknown) => {
               if (!(e instanceof AuditPolicyDamaged)) throw e
               if (!(await damageIsKept(d.profileDir)))
                 throw new RepairNeeded(`${e.file} is damaged and a copy of it could not be kept, so it is not written over`, e.file)
-              return readPolicyMode(d.profileDir)
+              const mode = await readPolicyMode(d.profileDir)
+              return isObserving(mode) ? { mode, observingSince: new Date(now()).toISOString() } : { mode }
             }
           )
-          return saved({ ...STARTER_POLICY, mode })
+          return saved({ ...STARTER_POLICY, ...kept })
         })
       default:
         return { status: 501, body: { error: `${cmd} is not answered by this Host` } }

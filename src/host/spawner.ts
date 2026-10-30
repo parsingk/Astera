@@ -54,7 +54,7 @@ import { ensureInstallDirOnPath } from '../core/sessions/installDirPath'
 import { SessionManager, askCodexWindowsReady, defaultSpawnChecks } from '../core/sessions/manager'
 import { defaultSessionTitle } from '../core/sessions/title'
 import type { PtyFactory, PtyLike } from '../core/sessions/pty'
-import { StatusLineManager, resolveNodePath } from '../core/sessions/statusline'
+import { StatusLineManager, resolveNodePath, withUseReports } from '../core/sessions/statusline'
 import { BusyScanner } from '../core/terminal/busy'
 import { previewShotsDir } from '../core/preview/shotsDir'
 import type { Account, SessionInfo } from '../core/types'
@@ -158,10 +158,10 @@ export interface HostSpawnerDeps {
   codexWindowsReady?: CodexWindowsReady
   /** Test injection; defaults to asking the claude on this machine's PATH its version (cliVersionProbe), which a sandboxed
    *  Claude start needs. A test never runs the real one. */
-  claudeVersion?: CliVersionProbe
+  claudeVersion?: Pick<CliVersionProbe, 'warm'> & ((cli: 'claude') => string | null | undefined)
   /** Test injection; defaults to asking the codex on this machine's PATH its version (cliVersionProbe), which a sandboxed
    *  Codex start needs (final review I2). A test never runs the real one. */
-  codexVersion?: CliVersionProbe
+  codexVersion?: Pick<CliVersionProbe, 'warm'> & ((cli: 'codex') => string | null | undefined)
   /** Test injection; defaults to os.tmpdir(): where a sandboxed Claude session's npm cache and the Host's socket are. A
    *  test gives its own folder, so nothing is made in the real one. */
   tmpDir?: string
@@ -205,6 +205,9 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
   sandboxWarn?: SandboxWarnSink
   /** The codex version question a sandboxed Codex start asks, shared with the Host's chat sessions (final review I2). */
   codexVersion?: ChatManagerDeps['codexVersion']
+  /** The CLI version probe this spawner warms before its spawns (cliVersionProbe), which the findings read Claude's version
+   *  from (lifecycle design §4.12), so one cache and one `claude --version` serve both. */
+  claudeVersions?: Pick<CliVersionProbe, 'warm' | 'cached'>
   /** The copy of the person's git excludes a sandboxed win32 Codex start writes in this Host's temp folder (one for its
    *  profile, core/sandbox/gitExcludes.ts), shared with the Host's chat sessions. */
   codexExcludes?: CodexExcludes
@@ -486,7 +489,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     Number.POSITIVE_INFINITY,
     0,
     homeDir,
-    (id, account, o) => statusLine.spawnConfig(id, account, o),
+    // An observed session's settings carry the use hooks when its Claude Code reports uses (lifecycle design §4.12), as the
+    // version its prepare warmed says: never asked of the CLI on this thread (fix round 2)
+    (id, account, o) => statusLine.spawnConfig(id, account, withUseReports(o, () => cliVersions.cached('claude'))),
     [previewShotsDir(profileDir)],
     // Read at each spawn, not once: the Host completes its PATH when a CLI is missing (windowsPath.ts)
     () => hostWorkerBaseEnv(d.env),
@@ -517,8 +522,12 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   // The Credentials list (credentials design §5): a worker's worktree counts as its project's folder
   const hiding = createHidingSource({ profileDir, projectOf: projectOfWorktrees(() => d.worktrees.list?.() ?? []), log: hidingLog(profileDir, log) })
   sessions.hiding = hiding
-  // Observe mode: an observed Claude session's hook settings, written by its prepare (StatusLineManager.ensureObserveFiles)
-  sessions.observeHooks = () => statusLine.ensureObserveFiles()
+  // Observe mode: an observed Claude session's hook settings, written by its prepare (StatusLineManager.ensureObserveFiles),
+  // and the Claude version that picks the file with the use hooks or without (lifecycle design §4.12), asked off the thread
+  // so the spawn reads it from the probe's cache
+  sessions.observeHooks = async () => {
+    await Promise.all([statusLine.ensureObserveFiles(), cliVersions.warm('claude')])
+  }
   // Enforce: the blocking hook, written by a session's prepare, which refuses the start without it (E5). A Claude terminal
   // session reads it from its settings file; a chat, and any Codex session, from these arguments
   sessions.enforceHooks = () => statusLine.ensureEnforceFiles()
@@ -979,6 +988,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     sandboxWarn,
     linkLook: nodeLinkLook,
     codexVersion,
+    claudeVersions: cliVersions,
     codexExcludes,
     orchEnvNow: () => orchEnvReady,
     inFlight: () => spawnsInFlight,

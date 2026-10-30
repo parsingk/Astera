@@ -204,6 +204,10 @@ export interface Job {
   readonly outcome: JobOutcome
   readonly progress: Progress
   readonly questionsOpen: number
+  /** `jobs.list` and `jobs.get` only, and only when there is one: the names of the archived agent profiles a scheduled
+   *  Job that is not paused uses. Its fires wait instead of making a Run until they are restored. An Astera before this
+   *  leaves it out. */
+  readonly archivedProfiles?: readonly string[]
 }
 
 export interface Run {
@@ -341,6 +345,10 @@ export interface AgentProfile {
   readonly createdAt: string
   readonly updatedAt: string
   readonly lastUsedAt?: string
+  /** An archived profile only: when it was last archived. An Astera before this record leaves it out. */
+  readonly archivedAt?: string
+  /** An archived profile only, and only when the person gave one: the one line saying why. */
+  readonly archivedReason?: string
 }
 
 /** One worker attempt at a Task. */

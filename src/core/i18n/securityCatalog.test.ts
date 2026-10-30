@@ -41,4 +41,12 @@ describe('the Security & Access catalog', () => {
     expect(en['audit.action.git.remote.write']).toBe('git push to a remote')
     expect(en['audit.coverageNote.web-tools-only']).toBe('web tools only')
   })
+
+  // Follow-up R-F6, item 5: days dropped to keep under the size limit
+  it('says when days of the period were removed for the size limit', () => {
+    const en = CATALOGS.en.messages as Record<string, string>
+    const ko = CATALOGS.ko.messages as Record<string, string>
+    expect(en['settings.security.audit.droppedAtLimit']).toBe('Days of this period were removed to stay under the size limit, so it holds fewer calls than were made.')
+    expect(ko['settings.security.audit.droppedAtLimit']).toBe('크기 한도를 넘지 않도록 이 기간의 일부 날을 지워, 실제보다 적은 호출만 남아 있습니다.')
+  })
 })

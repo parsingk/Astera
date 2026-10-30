@@ -12,7 +12,7 @@ import { writeAgentProfiles } from '../agentProfiles/store'
 import type { AgentProfile } from '../agentProfiles/types'
 import { writeExtensionRegistry } from './registry'
 import { extensionSecrets } from './secrets'
-import { gatewayTokenEnv, resolveSessionCapabilities, sweepGeneratedMcp } from './resolve'
+import { gatewayTokenEnv, resolveSessionCapabilities, serverSkipReason, sweepGeneratedMcp } from './resolve'
 import type { Account } from '../types'
 import type { ExtensionRegistry, McpExtension } from './types'
 
@@ -142,6 +142,29 @@ describe('resolveSessionCapabilities', () => {
   it('skips for Codex a remote address it cannot quote', async () => {
     const s = await setup([remote({ url: "https://mcp.example.com/it's" })])
     expect((await call(s, s.codex)).skipped).toEqual([{ name: 'docs', reason: 'launch-chars' }])
+  })
+
+  it('says a name or address Codex cannot take only after the account’s own servers and the Gateway', async () => {
+    // A stdio server Codex could not take, with no Gateway: the Gateway is named
+    const noGateway = await setup([server({ name: 'my.linear' })])
+    expect((await call(noGateway, noGateway.codex, { gatewayPort: null })).skipped).toEqual([{ name: 'my.linear', reason: 'gateway-unavailable' }])
+    // A remote server Codex could not quote, which the account defines itself: the account's own is named
+    const own = await setup([remote({ url: "https://mcp.example.com/it's" })])
+    await fs.mkdir(own.codex.configDir, { recursive: true })
+    await fs.writeFile(path.join(own.codex.configDir, 'config.toml'), ['[mcp_servers.docs]', 'command = "mine"', ''].join('\n'))
+    expect((await call(own, own.codex)).skipped).toEqual([{ name: 'docs', reason: 'account-own' }])
+  })
+
+  it('serverSkipReason: what the server alone decides, for each CLI', () => {
+    expect(serverSkipReason(server({ providers: ['claude'] }), 'codex', 'linux')).toBe('provider')
+    expect(serverSkipReason(remote({ transport: 'sse' }), 'codex', 'linux')).toBe('transport')
+    expect(serverSkipReason(remote({ transport: 'sse' }), 'claude', 'linux')).toBeNull()
+    expect(serverSkipReason(server({ name: 'my.linear' }), 'codex', 'linux')).toBe('launch-chars')
+    expect(serverSkipReason(server({ name: 'my.linear' }), 'claude', 'linux')).toBeNull()
+    // cmd.exe's characters keep an address out of Codex on Windows only
+    expect(serverSkipReason(remote({ url: 'https://mcp.example.com/mcp?a=1&b=2' }), 'codex', 'win32')).toBe('launch-chars')
+    expect(serverSkipReason(remote({ url: 'https://mcp.example.com/mcp?a=1&b=2' }), 'codex', 'linux')).toBeNull()
+    expect(serverSkipReason(server(), 'codex', 'win32')).toBeNull()
   })
 
   it('skips a server the account already defines itself, for an isolated and the ambient Claude account', async () => {

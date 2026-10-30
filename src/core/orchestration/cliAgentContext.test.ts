@@ -188,7 +188,10 @@ const NOT_SWITCHED = [
   'policies-rules-reset',
   'credentials-list',
   'credentials-show',
-  'credentials-doctor'
+  'credentials-doctor',
+  'agent-profiles-audit',
+  'agent-profiles-audit-ignore',
+  'agent-profiles-audit-unignore'
 ]
 
 describe('agent-context — 명령 집합은 handleCommand 가 실제로 가르는 것이다', () => {
@@ -218,7 +221,7 @@ describe('agent-context — 명령 집합은 handleCommand 가 실제로 가르�
   // 단언이 잡으려는 결함과 같은 모양의 거짓 경보다.
   it('CLI 나 Host 가 직접 답한다는 열넷은 네 파일의 코드에서 비교된다', () => {
     const here = path.dirname(fileURLToPath(import.meta.url))
-    const stripped = ['../../cli/run.ts', '../../cli/host.ts', './command.ts', '../../host/orch.ts', '../../cli/runtime/commands.ts', '../../cli/runtimes.ts', '../../host/plugins/commands.ts', './commandSources.ts', '../../cli/agentProfiles.ts', '../../host/agentProfiles/commands.ts', '../../host/audit/auditCommands.ts', '../../host/audit/policyCommands.ts', '../../host/credentials/commands.ts']
+    const stripped = ['../../cli/run.ts', '../../cli/host.ts', './command.ts', '../../host/orch.ts', '../../cli/runtime/commands.ts', '../../cli/runtimes.ts', '../../host/plugins/commands.ts', './commandSources.ts', '../../cli/agentProfiles.ts', '../../host/agentProfiles/commands.ts', '../../host/audit/auditCommands.ts', '../../host/audit/policyCommands.ts', '../../host/credentials/commands.ts', '../../host/findings/commands.ts']
       .map((rel) => readFileSync(path.resolve(here, rel), 'utf8'))
       // 블록 주석을 먼저 걷고 줄 주석을 걷는다 — 줄 끝에 붙은 `// 'doctor'` 도 함께 사라진다.
       .map((src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, ''))

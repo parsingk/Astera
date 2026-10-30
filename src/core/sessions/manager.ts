@@ -50,6 +50,7 @@ export interface StatusLineSpawnInfo {
   observed?: true // the settings file is an observe variant (StatusLineManager.spawnConfig)
   enforced?: true // the settings file is an enforce variant: the blocking hook runs before every tool call
   sandboxed?: true // the settings file is a sandbox twin: Claude's sandbox and the deny rules are in it
+  useHooks?: true // an observed session's settings file has the hooks that report a skill, command or agent use
 }
 export type StatusLineProvider = (
   sessionId: string,
@@ -577,6 +578,10 @@ export class SessionManager {
     if (enforceArgs === null) throw enforceUnavailable('no-interpreter')
     const extraArgs = [...(caps?.args ?? []), ...enforceArgs]
     const observed = observe && (d.usesStatusLine ? sl?.observed === true : true)
+    // Whether an observed Claude session got the hooks that report a typed command and an agent's start (lifecycle design
+    // §4.12, ruling R6-8): the Host marks one that did not, so the findings cannot read it as unused. A Codex session has
+    // none to get
+    const useHooks = observed && d.usesStatusLine ? sl?.useHooks === true : undefined
     const enforced = enforce
     const env = this.envFor(opts.account)
     // The Credentials list's hidden keys and logins go from what the session inherits, before Astera adds its own below
@@ -725,6 +730,9 @@ export class SessionManager {
           ...(opts.startedBy ? { startedBy: opts.startedBy } : {}),
           ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {}),
           ...(observed ? { observed: true } : {}),
+          // Whose session it is, so the Host need not read the accounts to tell a Codex one (ruling R6-10)
+          ...(observed ? { provider: providerOf(opts.account) } : {}),
+          ...(useHooks !== undefined ? { useHooks } : {}),
           ...(enforced ? { enforced: true } : {}),
           ...(sandboxed ? { sandboxed: true, sandboxKind, ...warned } : {})
         }

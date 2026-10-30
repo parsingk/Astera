@@ -13,6 +13,8 @@ import type { AuditAction, CoverageNote, SandboxCoverageRow } from '../audit/typ
 import { ACTION_PHRASES, COVERAGE_NOTE_PHRASES } from '../audit/phrases'
 import { SANDBOX_TABLE_CAPTION, sandboxRowCaption } from '../sandbox/coverage'
 import { t } from '../i18n'
+import { observeNote, unreadLine } from '../findings/note'
+import type { FindingSource, ObserveHistory } from '../findings/types'
 
 /** 상태 한 낱말. **파생값과 플래그를 한 낱말로 접는다** — 사람이 목록에서 훑는 것이 이것이고,
  *  훑으려면 한 칸에 있어야 한다.
@@ -40,10 +42,13 @@ export function stateWord(o: {
   return '-'
 }
 
-/** 마지막 칸. 사람을 기다리는 중이면 그 수가 진행률보다 급한 소식이다(설계 §6 의 예시). */
-function progressWord(o: { questionsOpen?: number; progress?: { done: number; total: number } }): string {
+/** 마지막 칸. 사람을 기다리는 중이면 그 수가 진행률보다 급한 소식이다(설계 §6 의 예시).
+ *  A schedule that waits on an archived agent profile says which ahead of its progress (lifecycle design §5): its fires
+ *  make no Run until the profile is restored. */
+function progressWord(o: { questionsOpen?: number; progress?: { done: number; total: number }; archivedProfiles?: unknown }): string {
   const open = o.questionsOpen ?? 0
   if (open > 0) return open === 1 ? '1 question' : `${open} questions`
+  if (Array.isArray(o.archivedProfiles) && o.archivedProfiles.length > 0) return `archived profile: ${o.archivedProfiles.map(String).join(', ')}`
   const p = o.progress
   return p ? `${p.done}/${p.total}` : ''
 }
@@ -143,6 +148,12 @@ const indent = (text: string): string =>
 const asList = (data: Record<string, unknown>, key: string): Record<string, unknown>[] => {
   const v = data[key]
   return Array.isArray(v) ? (v as Record<string, unknown>[]) : []
+}
+
+/** A report's Observe history as sent; one that does not read as one is off with no days, as an unread one reads. */
+const observeOf = (v: unknown): ObserveHistory => {
+  const o = v !== null && typeof v === 'object' ? (v as { on?: unknown; days?: unknown }) : {}
+  return { on: o.on === true, days: typeof o.days === 'number' ? o.days : 0 }
 }
 
 /**
@@ -377,7 +388,12 @@ export function humanFor(
       return [
         counts(data).join(', '),
         ...(byAction.length === 0 ? [] : ['', columns(byAction.map(([action, c]) => [phraseOf(action), action, ...counts(c)]))]),
-        ...(data.stoppedAtLimit === true ? ['', '(a day of this period stopped recording at the size limit, so it holds fewer calls than were made)'] : [])
+        // Days dropped to keep under the size limit, else a day that stopped recording at it (follow-up R-F6)
+        ...(data.droppedAtLimit === true
+          ? ['', '(days of this period were removed to stay under the size limit, so it holds fewer calls than were made)']
+          : data.stoppedAtLimit === true
+            ? ['', '(a day of this period stopped recording at the size limit, so it holds fewer calls than were made)']
+            : [])
       ].join('\n')
     }
     // Credentials design §7: a row per entry (its name, kind, what it hides, where), never a value
@@ -396,6 +412,30 @@ export function humanFor(
       return asList(data, 'lines')
         .map((l) => `${str(l.level).padEnd(6)}${str(l.text)}`)
         .join('\n')
+    // Lifecycle design §4, §7, §8: the Observe note while the usage findings wait for their history, a row per finding
+    // (its rule, what it is about, why and what would resolve it), the lines that are not findings, then what could not
+    // be read. The English the Host worded (Finding.reason, .action), and the catalog's for the two notes
+    case 'agent-profiles-audit': {
+      const report = { observe: observeOf(data.observe), unread: Array.isArray(data.unread) ? (data.unread as FindingSource[]) : [] }
+      const note = observeNote(report)
+      const findings = asList(data, 'findings')
+      const info = asList(data, 'info')
+      const nameOf = (s: unknown): string => str((s as { name?: unknown } | null)?.name)
+      const ignoredMark = (f: Record<string, unknown>): string[] =>
+        f.ignored !== true ? [] : [typeof f.note === 'string' && f.note !== '' ? `(ignored: ${f.note})` : '(ignored)']
+      const blocks = [
+        ...(note === null ? [] : [t('en', note.key, note.params)]),
+        // Beside "Could not read", nothing found is said of what could be read
+        findings.length === 0 ? t('en', report.unread.length > 0 ? 'findings.noneRead' : 'findings.none') : columns(findings.map((f) => [str(f.rule), nameOf(f.subject), str(f.reason), `→ ${str(f.action)}`, ...ignoredMark(f)])),
+        ...(info.length === 0 ? [] : [columns(info.map((l) => [nameOf(l.subject), str(l.reason)]))]),
+        ...[unreadLine('en', report.unread)].filter((l): l is string => l !== null)
+      ]
+      return blocks.join('\n\n')
+    }
+    case 'agent-profiles-audit-ignore':
+      return `ignored ${str(data.key)}`
+    case 'agent-profiles-audit-unignore':
+      return data.removed === true ? `brought back ${str(data.key)}` : `${str(data.key)} was not ignored`
     case 'policies-show':
     case 'policies-set-mode':
     case 'policies-set-otherwise':
@@ -708,8 +748,15 @@ export function humanFor(
 /** `--quiet` — id 만, 한 줄에 하나. `for j in $(astera jobs list --quiet)` 가 jq 없이 돌게 한다.
  *
  *  **id 가 없으면 아무것도 내지 않는다.** status 나 version 처럼 id 가 없는 답이 있고, 그때
- *  없는 것을 지어내는 것보다 빈 줄이 정직하다. */
-export function quietFor(data: Record<string, unknown>): string {
+ *  없는 것을 지어내는 것보다 빈 줄이 정직하다.
+ *
+ *  `cmd`: the findings (lifecycle design §7) are named by their `key`, the id `audit-ignore` takes, so `agent-profiles
+ *  audit` prints each finding's key, the ignored ones too under `--all`, as the Host left them in. */
+export function quietFor(data: Record<string, unknown>, cmd?: string): string {
+  if (cmd === 'agent-profiles-audit')
+    return asList(data, 'findings')
+      .flatMap((f) => (typeof f.key === 'string' ? [f.key] : []))
+      .join('\n')
   const ids: string[] = []
   const take = (v: unknown): void => {
     if (v === null || typeof v !== 'object') return

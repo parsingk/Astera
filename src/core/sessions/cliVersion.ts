@@ -33,6 +33,14 @@ export function atLeast(found: string, min: string): boolean {
   return true
 }
 
+/** The Claude Code the research saw both UserPromptExpansion and SubagentStart in (lifecycle design §4.12, plan ruling 15).
+ *  Older, or a version that could not be read, is not given the two hooks (statusline.ts), and its uses read "Claude
+ *  cannot tell" (findings/rules/extensionUse.ts): the docs do not say since when UserPromptExpansion exists. */
+export const USE_REPORT_MIN_CLAUDE = '2.1.312'
+
+/** Whether the Claude Code at `version` reports every use of a skill, command or agent (USE_REPORT_MIN_CLAUDE). */
+export const reportsUses = (version: string | null | undefined): boolean => typeof version === 'string' && atLeast(version, USE_REPORT_MIN_CLAUDE)
+
 /** Why `cli` at `version` cannot be enforced (`ENFORCE_UNAVAILABLE: cli-too-old <cli> <found> <min>`,
  *  `cli-version-unknown <cli>`, or `cli-missing <cli>` when it is not there), or null when it can. */
 export function enforceBlocker(cli: Cli, version: string | null | undefined): string | null {
@@ -42,8 +50,10 @@ export function enforceBlocker(cli: Cli, version: string | null | undefined): st
 }
 
 /** The sync answer a spawn reads (the version, null when it could not be read, undefined when the CLI is not there), and
- *  `warm`, which a prepare (or the capability refresh before a chat) awaits first. */
-export type CliVersionProbe = ((cli: Cli) => string | null | undefined) & { warm(cli: Cli): Promise<void> }
+ *  `warm`, which a prepare (or the capability refresh before a chat) awaits first. `cached` is the version last learnt and
+ *  still fresh, or undefined: it never resolves, stats or runs anything, so a spawn that must not wait on the CLI reads it
+ *  (an observed Claude session's use hooks, lifecycle design §4.12) and takes a miss for a version not known. */
+export type CliVersionProbe = ((cli: Cli) => string | null | undefined) & { warm(cli: Cli): Promise<void>; cached(cli: Cli): string | undefined }
 
 /** The CLI on PATH on macOS and Linux, the first file of that name. */
 function whichPosix(name: string): string | null {
@@ -86,17 +96,22 @@ export function makeCliVersionProbe(o: {
   const which = o.which ?? whichPosix
   const whichAsync = o.whichAsync ?? whichPosixAsync
   const now = o.now ?? Date.now
-  /** Kept by the binary's identity on every platform, so an update is asked again at once (final review M1). */
-  const known = new Map<Cli, { key: string; at: number; version: string }>()
+  /** Kept by the binary's identity on every platform, so an update is asked again at once (final review M1). `at`: when it
+   *  was asked, which the TTL counts from; `confirmed`: when a warm or a spawn last found the same binary (fix round 3),
+   *  which `cached` counts from, so a warm just before the TTL keeps the next spawn's answer. */
+  const known = new Map<Cli, { key: string; at: number; confirmed: number; version: string }>()
+  /** Whether what was learnt holds for the binary at `key`, and if so confirmed now. */
   const fresh = (cli: Cli, key: string): boolean => {
     const k = known.get(cli)
-    return k !== undefined && k.key === key && now() - k.at < TTL_MS
+    if (k === undefined || k.key !== key || now() - k.at >= TTL_MS) return false
+    k.confirmed = now()
+    return true
   }
   /** A failed answer is not kept: the next spawn asks again (final review M1). */
   const learn = (cli: Cli, key: string, out: string | null): string | null => {
     const version = out === null ? null : parseCliVersion(out)
     if (version === null) known.delete(cli)
-    else known.set(cli, { key, at: now(), version })
+    else known.set(cli, { key, at: now(), confirmed: now(), version })
     return version
   }
   const commandFor = (cli: Cli, found: string): SpawnCommand =>
@@ -122,7 +137,12 @@ export function makeCliVersionProbe(o: {
       /* the spawn's own sync answer stands */
     }
   }
-  return Object.assign(probe, { warm })
+  /** What was learnt, confirmed within the TTL; the binary is not looked at again (the prepare's warm just did). */
+  const cached = (cli: Cli): string | undefined => {
+    const k = known.get(cli)
+    return k !== undefined && now() - k.confirmed < TTL_MS ? k.version : undefined
+  }
+  return Object.assign(probe, { warm, cached })
 }
 
 const shared = new Map<NodeJS.Platform, CliVersionProbe>()

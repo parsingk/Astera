@@ -89,7 +89,35 @@ export function dataFor(cmd: string, body: unknown): Record<string, unknown> {
   if (Array.isArray(body)) return { [LIST_FIELD[cmd] ?? 'items']: body }
   // 객체가 아닌 것(문자열·숫자)을 돌려주는 명령은 없지만, 입력은 명령이 아니라 앱의 응답이다.
   if (body === null || typeof body !== 'object') return { value: body }
+  if (cmd === 'agent-profiles-audit') return findingsData(body as Record<string, unknown>)
   return body as Record<string, unknown>
+}
+
+const listOf = (v: unknown): Record<string, unknown>[] => (Array.isArray(v) ? v.filter((x): x is Record<string, unknown> => typeof x === 'object' && x !== null) : [])
+
+/**
+ * The findings as the CLI gives them (lifecycle design §7): `{ findings: [{ key, rule, subject, reason, action, ignored }],
+ * info: [{ subject, reason }], observe, unread }`, the design's shape with the key an ignore takes, the information lines
+ * and the sources that could not be read. An ignored finding (`--all`) carries when and its note too. The Host's report
+ * holds more for the app (the reason and action as messages to word in the person's language, the place to open, the
+ * profiles a finding marks), which the CLI's English makes no use of.
+ */
+function findingsData(body: Record<string, unknown>): Record<string, unknown> {
+  return {
+    findings: listOf(body.findings).map((f) => ({
+      key: f.key,
+      rule: f.rule,
+      subject: f.subject,
+      reason: f.reason,
+      action: f.action,
+      ignored: f.ignored === true,
+      ...(f.ignored === true && f.ignoredAt !== undefined ? { ignoredAt: f.ignoredAt } : {}),
+      ...(f.ignored === true && f.note !== undefined ? { note: f.note } : {})
+    })),
+    info: listOf(body.info).map((l) => ({ subject: l.subject, reason: l.reason })),
+    observe: body.observe,
+    unread: Array.isArray(body.unread) ? body.unread : []
+  }
 }
 
 /**
@@ -232,7 +260,11 @@ const LISTING: Record<string, readonly string[]> = {
   'audit-summary': ['astera agent-profiles list'],
   'policies-rules-edit': ['astera policies show'],
   'policies-rules-remove': ['astera policies show'],
-  'policies-rules-move': ['astera policies show']
+  'policies-rules-move': ['astera policies show'],
+  // **The findings** (lifecycle design §7): an ignore's 404 is a key no current finding has, and `audit` gives the keys.
+  // The noun rule cuts at the first dash (`agent`), so it would offer the guide. `audit-unignore` has no entry: a key that
+  // was not ignored answers 200 with `removed: false`, never 404 (question 1 above)
+  'agent-profiles-audit-ignore': ['astera agent-profiles audit']
 }
 
 /** 없는 id 를 말한 명령에게 줄 목록 명령들. */

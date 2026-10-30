@@ -72,7 +72,6 @@ function callText(call: ResolveCall): string {
 // ---------------------------------------------------------------------------------------------------------------------
 // Astera's settings folder
 
-const WRITEISH: ReadonlySet<string> = new Set(['filesystem.write', 'filesystem.delete', 'process.execute'])
 /** What may follow a path that ends exactly at the folder: a separator, a quote or the end of a word. */
 const AFTER_PATH = /[/\s"'`;&|()]/
 /** The variables a path to the folder can start from, in any shell's spelling (`$X`, `${X}`, `$env:X`, `%X%`). */
@@ -101,6 +100,13 @@ function expandHome(text: string, env: Env, platform: NodeJS.Platform): string {
   return t
 }
 
+/** A value that looks like a path (ruling R-F13): it holds a separator, or starts with `.`, `~` or a drive. Any other
+ *  (`LC_ALL=C`, `FOO=1`) names no place, wherever the shell is. */
+const PATH_LIKE = /[\\/]|^[.~]|^[A-Za-z]:/
+
+/** `s` as a POSIX shell reads it outside quotes: each backslash dropped, and what it escapes kept. */
+const dropEscapes = (s: string): string => s.replace(/\\([\s\S])/g, '$1')
+
 /** Every string an MCP tool's arguments hold, a few levels deep: its path argument may be any of them. */
 function stringsOf(v: unknown, depth = 0): string[] {
   if (typeof v === 'string') return [v]
@@ -110,9 +116,16 @@ function stringsOf(v: unknown, depth = 0): string[] {
   return []
 }
 
+/**
+ * Whether a call writes Astera's settings folder, or may: only a read may name it (ruling R-F11). Anything else that names
+ * it is taken for a write to it: a write or a delete, a program (an unknown one too), a git command that changes the
+ * worktree (`git -C <folder> checkout -- …`), an install, an agent or a request. A variable the line sets to a path in it
+ * makes it where a program writes, whatever the line's commands do (ruling R-F13: the variables the resolver read). An
+ * MCP tool cannot be told to write or to read.
+ */
 function touchesProfile(call: ResolveCall, r: ResolvedAction, profileDir: string, platform: NodeJS.Platform, env: Env): boolean {
   const mcp = r.action === 'mcp.call'
-  if (!mcp && ![r.action, ...(r.commands ?? []).map((c) => c.action)].some((a) => WRITEISH.has(a))) return false
+  const writes = mcp || !reads(r)
   const fold = platform === 'win32' || platform === 'darwin'
   const norm = (s: string): string => {
     const t = s.replace(/\\/g, '/')
@@ -120,30 +133,59 @@ function touchesProfile(call: ResolveCall, r: ResolvedAction, profileDir: string
   }
   const root = norm(profileDir).replace(/\/+$/, '')
   const p = platform === 'win32' ? path.win32 : path.posix
-  const within = (candidate: string): boolean => {
-    const from = call.base ?? call.cwd
-    const resolved = norm(p.isAbsolute(candidate) ? candidate : p.resolve(from, candidate)).replace(/\/+$/, '')
-    return resolved === root || resolved.startsWith(`${root}/`)
+  // The separators it ends with are trimmed by hand: `/\/+$/` starts again from each one of a long run that is not at the
+  // end, which is quadratic (a path as written can hold such a run)
+  const under = (s: string): boolean => {
+    let end = s.length
+    while (end > 0 && s[end - 1] === '/') end--
+    const t = s.slice(0, end)
+    return t === root || t.startsWith(`${root}/`)
   }
+  // Resolved from where the call runs, which also normalises an absolute path (`/home/u/.config//astera`, `…/./astera`,
+  // `…/x/../astera`), as the shell and the file system read it. An absolute path is placed as written too, as at the base
+  // (ruling R-F16): one whose `..` climbs out of the folder (`…/astera/../x`) goes through it, by a link perhaps
+  const within = (candidate: string): boolean =>
+    (p.isAbsolute(candidate) && under(norm(candidate))) || under(norm(p.resolve(call.base ?? call.cwd, candidate)))
   const rec = inputRecord(call.input)
+  // An MCP tool cannot be told to write or to read, so any of its arguments that names the folder is enough
+  const raw = mcp ? stringsOf(rec).join('\n') : callText(call)
+  const text = norm(expandHome(raw, env, platform))
+  // A POSIX shell drops a backslash outside quotes and keeps what follows it (`ast\era` is `astera`), where PowerShell and
+  // Windows take it for a separator: a path is placed in both readings
+  const bare = norm(dropEscapes(expandHome(raw, env, platform)))
+  // Git Bash spells C:/x as /c/x
+  const drive = /^([a-z]):\//i.exec(root)
+  const needles = drive ? [root, `/${drive[1].toLowerCase()}/${root.slice(3)}`] : [root]
+  /** Whether `s` names the folder or a path in it, at the end of a word or before a separator or a quote. */
+  const names = (s: string): boolean => {
+    for (const n of needles) {
+      for (let i = s.indexOf(n); i >= 0; i = s.indexOf(n, i + 1)) {
+        const after = s[i + n.length]
+        if (after === undefined || AFTER_PATH.test(after)) return true
+      }
+    }
+    return false
+  }
+  // Ruling R-F11: a variable the line sets to a path in the folder makes the folder where a program writes, whatever the
+  // line's own commands do (git's GIT_TRACE and GIT_INDEX_FILE, curl's SSLKEYLOGFILE, a HOME git writes its config in).
+  // Ruling R-F13: the variables are those the resolver read, quoted or not, past wrappers and in the scripts it read; a
+  // script too deep to read is no read, so its text is searched below. Only a value that looks like a path is placed, as
+  // written and, unquoted in a POSIX line, as the shell reads its backslashes (ruling R-F16: PowerShell and quotes keep
+  // them, so `$env:TMP = 'C:\Temp'` is no `C:Temp`)
+  const setsPath = (value: string): boolean => {
+    const v = norm(expandHome(value, env, platform))
+    return PATH_LIKE.test(v) && (names(v) || within(v))
+  }
+  if ((r.assignments ?? []).some((a) => setsPath(a.value) || (a.bare !== undefined && setsPath(a.bare)))) return true
+  if (!writes) return false
   for (const k of ['file_path', 'notebook_path', 'path']) {
     const v = rec[k]
     if (typeof v === 'string' && v !== '' && within(expandHome(v, env, platform))) return true
   }
-  // An MCP tool cannot be told to write or to read, so any of its arguments that names the folder is enough
-  const raw = mcp ? stringsOf(rec).join('\n') : callText(call)
-  const text = norm(expandHome(raw, env, platform))
-  // Git Bash spells C:/x as /c/x
-  const drive = /^([a-z]):\//i.exec(root)
-  const needles = drive ? [root, `/${drive[1].toLowerCase()}/${root.slice(3)}`] : [root]
-  for (const n of needles) {
-    for (let i = text.indexOf(n); i >= 0; i = text.indexOf(n, i + 1)) {
-      const after = text[i + n.length]
-      if (after === undefined || AFTER_PATH.test(after)) return true
-    }
-  }
+  const readings = bare === text ? [text] : [text, bare]
+  if (readings.some(names)) return true
   // Every word that is a path, from where the call runs: a relative one (`../../AppData/…`), a patch's own headers
-  for (const word of text.split(/[\s"'`;&|()<>=,]+/)) if ((word.includes('/') || word.startsWith('.')) && within(word)) return true
+  for (const t of readings) for (const word of t.split(/[\s"'`;&|()<>=,]+/)) if ((word.includes('/') || word.startsWith('.')) && within(word)) return true
   // The shell is already in the folder: the call before it left it there
   return call.base !== undefined && text !== '' && within(call.base)
 }
@@ -156,10 +198,11 @@ function touchesProfile(call: ResolveCall, r: ResolvedAction, profileDir: string
  *  guide teaches), behind a wrapper (`env`, `cmd /c`) or global flags (`--json`): any of them names `astera`. Final
  *  review C1: matching the command word alone let those through. */
 const ASTERA_REF = /astera/i
-/** The group, then a verb that changes Policies or agent profiles anywhere after it (flags may sit between). The CLI has
- *  no verb that changes the Credentials list (credentials design §7). */
+/** The group, then a verb that changes Policies or agent profiles anywhere after it (flags may sit between), the findings'
+ *  ignore list among them (lifecycle design §7: an agent cannot hide a finding about itself). The CLI has no verb that
+ *  changes the Credentials list (credentials design §7). */
 const SETTINGS_CHANGE =
-  /(?:^|[\s"'`;&|(])(?:policies|agent-profiles)(?=$|[\s"'`;&|)])[\s\S]*?(?:^|[\s"'`;&|(])(?:set-mode|set-otherwise|rules-(?:add|edit|remove|move|reset)|create|update|archive|restore|delete)(?=$|[\s"'`;&|)])/i
+  /(?:^|[\s"'`;&|(])(?:policies|agent-profiles)(?=$|[\s"'`;&|)])[\s\S]*?(?:^|[\s"'`;&|(])(?:set-mode|set-otherwise|rules-(?:add|edit|remove|move|reset)|create|update|archive|restore|delete|audit-(?:ignore|unignore))(?=$|[\s"'`;&|)])/i
 
 const changesSettings = (line: string): boolean => ASTERA_REF.test(line) && SETTINGS_CHANGE.test(line)
 
@@ -189,8 +232,10 @@ export function enforceVerdict(a: {
   env?: Env
 }): EnforceVerdict {
   const r = resolveAction(a.call)
-  if (a.policy === null) return reads(r) ? { deny: false } : { deny: true, ruleId: 'fail-closed', reason: REASONS.failClosed }
-  if (touchesProfile(a.call, r, a.profileDir, a.platform, a.env ?? {})) return { deny: true, ruleId: 'builtin-profile-write', reason: REASONS.profile }
+  const profile = touchesProfile(a.call, r, a.profileDir, a.platform, a.env ?? {})
+  // A read that sets a variable to a path in the settings folder writes there (ruling R-F11), so it is no read
+  if (a.policy === null) return reads(r) && !profile ? { deny: false } : { deny: true, ruleId: 'fail-closed', reason: REASONS.failClosed }
+  if (profile) return { deny: true, ruleId: 'builtin-profile-write', reason: REASONS.profile }
   if (changesSettings(shellText(a.call))) return { deny: true, ruleId: 'builtin-settings-command', reason: REASONS.settings }
   const d = decide(r, a.policy)
   if (d.decision === 'would-deny')

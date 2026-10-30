@@ -36,7 +36,7 @@
 //
 // The text is plain, not JSON, and no part of it needs a Host. `--help` is for a person, and a
 // person asking what the commands are must get an answer with nothing running.
-import { APP_VERBS, BROWSER_VERBS, NOUNS, camel, leadingGlobals, renamedTo, verbsOf } from './cliArgs'
+import { APP_VERBS, BROWSER_VERBS, NOUNS, camel, leadingGlobals, operandOf, renamedTo, verbsOf } from './cliArgs'
 import { AUDIT_ACTIONS } from '../audit/policy'
 
 /** `jobs-wait`, `host-start`, … — every noun/verb pair `NOUNS` declares. */
@@ -64,11 +64,22 @@ export interface UsageFlag {
   readonly about: string
 }
 
+/** The one word a command takes that is not a flag (cliArgs.ts OPERANDS), always required. */
+export interface UsageOperand {
+  /** The argument it is sent as: `key`. */
+  readonly name: string
+  /** The placeholder printed after the command: `<key>`. */
+  readonly value: string
+  readonly about: string
+}
+
 export interface CommandUsage {
   /** One line. It sits in a column beside its command, so it stays short and starts lower case. */
   readonly summary: string
   /** Printed only by the per-command level, for the commands whose one line would mislead. */
   readonly detail?: string
+  /** Only for a command in cliArgs.ts OPERANDS, under the same name (cliUsage.test.ts holds the two together). */
+  readonly operand?: UsageOperand
   readonly flags?: readonly UsageFlag[]
 }
 
@@ -587,12 +598,13 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   },
   'agent-profiles-archive': {
     summary: 'keep a profile but start no new work as it',
-    detail: 'Work that already holds it goes on. `agent-profiles restore` takes it back. From inside an agent session it is refused with 5.',
-    flags: [ID('<profileId|name>', 'the profile to archive')]
+    detail:
+      'Records when it was archived (`archivedAt`) and, with --reason, why (`archivedReason`). Work that already holds it goes on, and a person\'s own `jobs run` of a Job that uses it still runs. A scheduled Job that uses it, as its own profile or a planned task\'s, waits instead of firing: each fire time is skipped and logged, and `jobs list` says which profile it waits on. `agent-profiles restore` takes it back, and the next fire time runs as usual. A reason with a line break or over 200 characters is 2. From inside an agent session it is refused with 5.',
+    flags: [ID('<profileId|name>', 'the profile to archive'), { name: 'reason', value: '<text>', about: 'why, in one line of at most 200 characters' }]
   },
   'agent-profiles-restore': {
     summary: 'let an archived profile start work again',
-    detail: 'From inside an agent session it is refused with 5.',
+    detail: 'Clears when and why it was archived. From inside an agent session it is refused with 5.',
     flags: [ID('<profileId|name>', 'the profile to restore')]
   },
   'agent-profiles-delete': {
@@ -600,6 +612,25 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     detail:
       'Refused with 6 while unfinished work holds it (a live session, a queued or running task, an unfinished Job): archive it instead. From inside an agent session it is refused with 5.',
     flags: [ID('<profileId|name>', 'the profile to delete')]
+  },
+  // Answered by the Host (lifecycle design §7): the findings over every kind, since the noun is where agents live
+  'agent-profiles-audit': {
+    summary: 'what looks unused, duplicated, broken, failing, over-broad or costly, and what the Rules cannot cover',
+    detail:
+      'Findings about agent profiles, shared extensions, Runtimes, credentials, Jobs and Runs, each with its `key`, `rule`, `subject` (kind, id and name), `reason` and the `action` that would resolve it. Nothing is ever acted on: the command changes nothing but the ignore list, and only `audit-ignore` and `audit-unignore` change that. Findings from usage need Observe on for 30 days; until then `observe` says how many days it has been on, and none of them is raised. `unread` names a source that could not be read, whose findings are left out while the rest are given. `info` holds the lines that are not findings, such as a skill neither CLI can tell was used. The Host computes it and keeps it for a minute. `--quiet` prints only the keys, one per line. It exits 0 whatever it finds. An agent session may read it.',
+    flags: [{ name: 'all', about: 'include the findings you ignored, each with `ignored`, when and its note' }]
+  },
+  'agent-profiles-audit-ignore': {
+    summary: 'set a finding aside, so audit leaves it out until you bring it back',
+    detail:
+      "The key is a finding's `key` from `agent-profiles audit`; a key no current finding has is 4. The ignore holds until `audit-unignore`, whatever later happens to its subject. Ignoring it again replaces the note. A note with a line break or over 200 characters is 2. From inside an agent session it is refused with 5.",
+    operand: { name: 'key', value: '<key>', about: 'the finding to set aside (from `agent-profiles audit`)' },
+    flags: [{ name: 'note', value: '<text>', about: 'why, in one line of at most 200 characters' }]
+  },
+  'agent-profiles-audit-unignore': {
+    summary: 'bring an ignored finding back',
+    detail: 'Answers `removed`: false when the key was not ignored. From inside an agent session it is refused with 5.',
+    operand: { name: 'key', value: '<key>', about: 'the finding to bring back (from `agent-profiles audit --all`)' }
   },
 
   // Answered by the Host (observe mode design §12): the records are read back with the decision the rules give them now.
@@ -616,7 +647,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'audit-summary': {
     summary: 'how many recorded calls the rules allow, would deny or cannot tell, in all and per action',
     detail:
-      'The counts for the calls the filters keep, decided by the rules in force now. `stoppedAtLimit` is true when a day of the period stopped recording at the size limit, so it holds fewer calls than were made. From inside an agent session it is refused with 5.',
+      'The counts for the calls the filters keep, decided by the rules in force now. `stoppedAtLimit` is true when a day of the period stopped recording at the size limit, or was removed to stay under it, so it holds fewer calls than were made; `droppedAtLimit` is true for the second. From inside an agent session it is refused with 5.',
     flags: AUDIT_FILTERS
   },
   // Answered by the Host (credentials design §7): what Astera keeps out of agent sessions, read here, changed in the app.
@@ -819,15 +850,16 @@ const spelledFlag = (f: UsageFlag): string => {
   return f.required === true ? body : `[${body}]`
 }
 
-/** One command with its flags, ready to copy: `astera jobs wait --id <jobId> [--timeout-ms <ms>]`.
+/** One command with its flags, ready to copy: `astera jobs wait --id <jobId> [--timeout-ms <ms>]`, and the word it takes
+ *  before them, when it takes one: `astera agent-profiles audit-ignore <key> [--note <text>]`.
  *
  *  Exported because cliAgentContext.ts prints the same line for the session-only commands, whose
  *  usage is not in `USAGE` — written twice the two spellings would drift. */
-export const invocationLine = (cmd: string, flags: readonly UsageFlag[] = []): string =>
-  [`astera ${spelledCommand(cmd)}`, ...flags.map(spelledFlag)].join(' ')
+export const invocationLine = (cmd: string, flags: readonly UsageFlag[] = [], operand?: UsageOperand): string =>
+  [`astera ${spelledCommand(cmd)}`, ...(operand ? [operand.value] : []), ...flags.map(spelledFlag)].join(' ')
 
 /** The first line of the per-command level. */
-const invocation = (cmd: PublicCommand): string => invocationLine(cmd, USAGE[cmd].flags ?? [])
+const invocation = (cmd: PublicCommand): string => invocationLine(cmd, USAGE[cmd].flags ?? [], USAGE[cmd].operand)
 
 type Row = readonly [string, string]
 
@@ -930,6 +962,7 @@ function usageText(first: string, entry: CommandUsage, note: readonly string[] =
     `  ${entry.summary}`,
     ...note,
     ...(entry.detail === undefined ? [] : ['', ...wrapped(entry.detail)]),
+    ...(entry.operand === undefined ? [] : ['', 'argument:', ...columns([[entry.operand.value, `required  ${entry.operand.about}`]])]),
     ...(flags.length === 0
       ? []
       : [
@@ -995,7 +1028,9 @@ export function usageFor(
     words.push(tok)
   }
   const [first, second, ...rest] = words
-  if (rest.length > 0) return { error: `unexpected argument: ${rest[0]}` }
+  // The word a command takes besides its flags (`audit-ignore <key> --help`) is the command's, not a third word of the line
+  const extra = second !== undefined && operandOf(`${first}-${second}`) !== undefined ? rest.slice(1) : rest
+  if (extra.length > 0) return { error: `unexpected argument: ${extra[0]}` }
   if (first === undefined) return { text: rootUsage() }
   // **The rename hint is checked here too, and for the same reason it exists at all.** It is aimed
   // at an agent carrying the old vocabulary, and an agent that reads `astera help` every time it

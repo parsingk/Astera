@@ -16,6 +16,11 @@ is the guide.
   `accountIds` runs on the profile's accounts, so `tasks.create` no longer needs the Job's coordinator account for it.
 - `Job.agentProfileId` and `Task.agentProfileId`: the profile they run as, by its id. A `Run`'s worker attempts
   (`TaskAttempt.agentProfileId`) carry it too.
+- `AgentProfile.archivedAt` and `AgentProfile.archivedReason` (the Astera that records them or later; an older one
+  leaves them out): when an archived profile was archived, and the one line a person gave as why. A restore clears both.
+- `Job.archivedProfiles` on `jobs.list` and `jobs.get` (the same Astera; an older one leaves it out): the names of the
+  archived profiles a scheduled Job that is not paused uses. Its fires wait instead of making a Run until they are
+  restored.
 - A session's `sandboxed` and `sandboxKind` (the Astera that ships the sandbox or later; an older one leaves them out):
   whether it runs in its agent CLI's own sandbox, and what protection that is, `sandbox`, or `deny-only` for Claude
   Code on Windows, where only its deny rules hold.
