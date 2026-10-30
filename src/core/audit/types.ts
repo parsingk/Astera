@@ -21,8 +21,10 @@ export type AuditAction =
 export type Confidence = 'exact' | 'high' | 'heuristic' | 'unknown'
 
 /** Whether a call read or wrote (lifecycle design §4.10), from what the resolver knows of its action: `unknown` for what
- *  can do either (a program, an MCP tool, an agent, a request from a shell) and for a line with any such part. */
-export type CallEffect = 'read' | 'write' | 'unknown'
+ *  can do either (a program, an MCP tool, an agent, a request from a shell) and for a line with any such part. The list is
+ *  what a reader checks a stored value against. */
+export const CALL_EFFECTS = ['read', 'write', 'unknown'] as const
+export type CallEffect = (typeof CALL_EFFECTS)[number]
 
 /** What one command of a line does, and where, for a rule to judge on its own. */
 export interface CommandFacts {

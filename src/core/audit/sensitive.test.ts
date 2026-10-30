@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest'
 import os from 'node:os'
 import path from 'node:path'
 import { sensitiveEntries } from '../sandbox/locations'
-import { SENSITIVE_NAMES, homeSensitiveNameOf, sensitiveNameOf } from './sensitive'
+import { SENSITIVE_NAMES, homePathOf, homeSensitiveNameOf, sensitiveNameOf } from './sensitive'
 
 const home = path.join(os.tmpdir(), 'h')
 const entries = sensitiveEntries(process.platform, {}, home)
@@ -54,6 +54,16 @@ describe('sensitiveNameOf', () => {
     expect(nameOf(`${under('src')}/../.ssh/id_rsa`)).toBe('.ssh')
   })
 
+  // Fix round 1, Minor 3: a list's entries are worked out once for each case rule, and one list serves both
+  it('answers each case rule from the same list, however often it is asked', () => {
+    const upper = under('.SSH', 'id_rsa')
+    for (let i = 0; i < 3; i++) {
+      expect(sensitiveNameOf(upper, entries, 'win32')).toBe('.ssh')
+      expect(sensitiveNameOf(upper, entries, 'linux')).toBeNull()
+      expect(sensitiveNameOf(under('.ssh', 'id_rsa'), entries, 'linux')).toBe('.ssh')
+    }
+  })
+
   it('returns null for a path outside every entry', () => {
     expect(nameOf(under('notes.txt'))).toBeNull()
     expect(nameOf(home)).toBeNull()
@@ -74,6 +84,20 @@ describe('homeSensitiveNameOf', () => {
     // Windows reads its own variables in any case
     expect(homeSensitiveNameOf('$ENV:userprofile/.ssh/id_rsa', entries, home)).toBe('.ssh')
     expect(homeSensitiveNameOf('%UserProfile%/.ssh/id_rsa', entries, home)).toBe('.ssh')
+  })
+
+  // Fix round 1, Minor 5
+  it('reads PowerShell’s spellings of the home in any case, and a POSIX shell’s with its case', () => {
+    for (const p of ['$home\\.ssh\\id_rsa', '$HOME\\.ssh\\id_rsa', '${env:USERPROFILE}\\.ssh\\id_rsa', '$env:HOME\\.ssh\\id_rsa', '$Env:UserProfile\\.ssh\\id_rsa', '${Home}/.ssh']) {
+      expect(homeSensitiveNameOf(p, entries, home, true), p).toBe('.ssh')
+    }
+    // `$env:` and `%USERPROFILE%` are Windows' own wherever they are written; `$home` is PowerShell's only
+    expect(homeSensitiveNameOf('${ENV:userprofile}/.ssh', entries, home)).toBe('.ssh')
+    expect(homeSensitiveNameOf('$env:home/.ssh', entries, home)).toBe('.ssh')
+    expect(homeSensitiveNameOf('$home/.ssh/id_rsa', entries, home)).toBeNull()
+    expect(homePathOf('$home/.ssh/id_rsa', home)).toBeNull()
+    expect(homePathOf('${Home}/.ssh/id_rsa', home)).toBeNull()
+    expect(homeSensitiveNameOf('$HOME/.ssh/id_rsa', entries, home)).toBe('.ssh')
   })
 
   it('returns null for a home path outside every entry, and for what is no home spelling', () => {

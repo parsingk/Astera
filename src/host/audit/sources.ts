@@ -40,7 +40,7 @@ import { closeSync, fstatSync, openSync, readSync, promises as fsp, type watch }
 import path from 'node:path'
 import { AUDIT_ACTIONS } from '../../core/audit/policy'
 import { SENSITIVE_NAMES } from '../../core/audit/sensitive'
-import type { AuditAction, CallEffect } from '../../core/audit/types'
+import { CALL_EFFECTS, type AuditAction, type CallEffect } from '../../core/audit/types'
 import { decodeClaudeFrame } from '../../core/chat/claudeProtocol'
 import { decodeFrame } from '../../core/chat/codexProtocol'
 import { outputText } from '../../core/history/codexConversation'
@@ -412,7 +412,7 @@ function rolloutCall(type: unknown, p: Record<string, unknown>): ObservedCall | 
 
 const ACTION_NAMES = new Set<string>(AUDIT_ACTIONS)
 const CONFIDENCES = new Set(['exact', 'high', 'heuristic', 'unknown'])
-const EFFECTS = new Set<string>(['read', 'write', 'unknown'] satisfies CallEffect[])
+const EFFECTS = new Set<string>(CALL_EFFECTS)
 /** How much of an enforce file one read takes at most; the rest is read at the next. */
 const ENFORCE_READ_MAX = 1 << 20
 /** Call ids of a session's file kept for the proof; a call's report comes seconds after its hook's line. */

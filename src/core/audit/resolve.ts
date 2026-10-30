@@ -26,8 +26,8 @@ export interface ResolveCall {
   /** Where the call ran, when the source knows (for Claude, where its call before left the shell, which follows the
    *  shell's `cd`s from call to call): a relative path is read from there. Left out: from `cwd`. */
   base?: string
-  /** The login folders a path is matched against for `sensitive` (the E6 list, core/sandbox/locations.ts). Left out: this
-   *  machine's, from its environment and home. */
+  /** The login folders a path is matched against for `sensitive` (the E6 list, core/sandbox/locations.ts). Left out: the
+   *  list of `home` when that is given, else this machine's, from its environment and home. */
   sensitive?: readonly DenyEntry[]
   /** The home a `~`, `$HOME` or `%USERPROFILE%` path is read from. Left out: this machine's. */
   home?: string
@@ -127,11 +127,25 @@ function effectOf(action: AuditAction, confidence: Confidence, web = false): Cal
 /** A call that is one action, with the effect that action has. */
 const one = (r: Omit<ResolvedAction, 'effect'>, web = false): ResolvedAction => ({ ...r, effect: effectOf(r.action, r.confidence, web) })
 
-/** The E6 list and the home a call's paths are matched against: the call's, else this machine's. A home that cannot be read
- *  ('') places no home path, which then reads as one that could not be placed. */
+/** The E6 list and the home a call's paths are matched against: the call's, else this machine's. A list for a home the call
+ *  names is laid out from that home alone (its APPDATA is `<home>/AppData/Roaming`), never with this machine's
+ *  environment. */
 function e6Of(entries: readonly DenyEntry[] | undefined, home: string | undefined): E6 {
-  const h = home ?? ownHome()
-  return { entries: entries ?? (h === '' ? [] : sensitiveEntries(process.platform, process.env, h)), home: h }
+  if (home === undefined) return entries === undefined ? ownE6() : { entries, home: ownE6().home }
+  return { entries: entries ?? (home === '' ? [] : sensitiveEntries(process.platform, {}, home)), home }
+}
+
+/** This machine's list and home, worked out once for the system the process says it runs on: the Host's and the hook's
+ *  home and environment do not change while they run. */
+let own: { platform: NodeJS.Platform; e6: E6 } | null = null
+
+function ownE6(): E6 {
+  if (own === null || own.platform !== process.platform) {
+    const home = ownHome()
+    // A home that cannot be read ('') places no home path, which then reads as one that could not be placed
+    own = { platform: process.platform, e6: { entries: home === '' ? [] : sensitiveEntries(process.platform, process.env, home), home } }
+  }
+  return own.e6
 }
 
 /** os.homedir() throws where neither the environment nor the user database names a home. */
@@ -434,7 +448,7 @@ function placeOf(p: string, ctx: Ctx, fromShell: boolean): Place {
     ...(sensitive !== null ? { sensitive } : {})
   })
   if (URL_PATH.test(p)) return outside(hostOf(p) ?? 'url', null) // the host only, never the credentials in front of it
-  if (HOME.test(p) || (fromShell && (UNFOLLOWABLE.test(p) || REMOTE_PATH.test(p)))) return outside(leaf(p), unfollowed(p, ctx.e6))
+  if (HOME.test(p) || (fromShell && (UNFOLLOWABLE.test(p) || REMOTE_PATH.test(p)))) return outside(leaf(p), unfollowed(p, ctx))
   const native = shellPath(p, ctx)
   if (ctx.base === null && !path.isAbsolute(native)) return outside(leaf(p), UNPLACED)
   const abs = path.resolve(ctx.base ?? ctx.cwd, native)
@@ -447,9 +461,11 @@ function placeOf(p: string, ctx: Ctx, fromShell: boolean): Place {
 }
 
 /** The login folder of a path this cannot follow: a home spelling is placed from the home, in one folder or in none; any
- *  other (a variable, `~user`, a path on another machine) could be in any, so it is UNPLACED. */
-function unfollowed(p: string, e6: E6): string | null {
-  return homeSensitiveNameOf(p, e6.entries, e6.home) ?? (homePathOf(p, e6.home) === null ? UNPLACED : null)
+ *  other (a variable, `~user`, a path on another machine) could be in any, so it is UNPLACED. PowerShell reads its own
+ *  spellings of the home in any case. */
+function unfollowed(p: string, ctx: Ctx): string | null {
+  const ps = ctx.ps === true
+  return homeSensitiveNameOf(p, ctx.e6.entries, ctx.e6.home, ps) ?? (homePathOf(p, ctx.e6.home, ps) === null ? UNPLACED : null)
 }
 
 /** The first path and a count of the rest, whether all of them are inside, and the login folder one of them is in. */
@@ -478,6 +494,8 @@ interface Cmd {
   words: Words
   /** The files its output is redirected into (`>`, `>>`), without /dev/null and the like. */
   out: string[]
+  /** The files its input is redirected from (`<`), read for the login folder they are in (lifecycle design §4.10). */
+  inputs?: string[]
   /** It began with PowerShell's call operator `&`, so its first word is a program however it is spelled. */
   call: boolean
   /** For each word, whether it was quoted. A quoted word is a value, so it is never a program or a subcommand shown. */
@@ -529,6 +547,30 @@ const PASSIVE = new Set(['cd', 'chdir', 'pushd', 'popd', 'set-location', 'sl', '
 const MOVES = new Set(['cd', 'chdir', 'pushd', 'set-location', 'sl'])
 /** Commands that only print what they are given, so with a redirection the file written is the point of the line. */
 const PRODUCERS = new Set(['echo', 'printf', 'cat', 'write-output', 'write-host'])
+/** The producers that print only their words, so without a redirection they read (R2-1). `cat` prints files, and keeps its
+ *  own row. */
+const PRINTERS = new Set(['echo', 'printf', 'write-output', 'write-host'])
+
+/** A word that starts as a path does: `~`, `./`, `../`, a separator, a drive, a home or a variable (`$X`, `${X}`,
+ *  `$env:X`, `%X%`; not `$(`, a substitution read as its own command). */
+const PATH_START = /^(?:~|\.{1,2}[\\/]|[\\/]|[A-Za-z]:[\\/]|\$[A-Za-z_{]|%[^%\s]+%)/
+/** A flag with its value in the same word: `--key=v`, `-Path:v`. */
+const FLAG_VALUE = /^--?[A-Za-z][\w-]*[=:](.+)$/
+
+/**
+ * The words of a command that may name a file, for a command whose facts placed none (lifecycle design §4.10): each that
+ * starts as a path does, or holds a separator and no space (a message or a pattern with spaces in it is text). A flag's
+ * value is read without its flag, and a `@file` (curl's, among others) without its `@`. They are placed for the login
+ * folder they name alone, so one taken wrongly can only mark a call as touching one, which holds a suggestion back.
+ */
+function looseWords(cmd: Cmd): string[] {
+  const found: string[] = []
+  for (const word of cmd.words.slice(1)) {
+    const w = (FLAG_VALUE.exec(word)?.[1] ?? word).replace(/^@(?=\S)/, '')
+    if (PATH_START.test(w) || (/[\\/]/.test(w) && !/\s/.test(w))) found.push(w)
+  }
+  return found
+}
 
 /** A shell call. `at.base` is where it started: the session's folder, or where the provider says it ran. */
 function resolveShell(rec: Record<string, unknown>, at: Ctx, flavor: Flavor): ResolvedAction {
@@ -561,10 +603,22 @@ function resolveShell(rec: Record<string, unknown>, at: Ctx, flavor: Flavor): Re
     while (held.length > 0 && (held.length > chain.length || held[held.length - 1].id !== chain[held.length - 1])) base = held.pop()!.base
     for (let k = held.length; k < chain.length; k++) held.push({ id: chain[k], base })
     const ctx: Ctx = cmd.ps === true ? { cwd, base, e6: at.e6, ps: true } : { cwd, base, e6: at.e6 }
+    const prog = cmd.words.length > 0 ? programName(cmd.words[0]).toLowerCase() : ''
+    // `sl` is Set-Location in PowerShell only: elsewhere it is a program this does not know, which neither moves nor passes
+    const foreign = cmd.cmdlet === undefined && PS_ONLY_ALIASES.has(prog)
     let own: ResolvedAction | undefined
     if (cmd.words.length > 0) {
       const f = classify(cmd, ctx)
       own = partOf(f)
+      // A passive command changes only where the shell is, and a printer with no file to print into only prints: both
+      // read (lifecycle design §4.10, the controller's ruling R2-1). Any other program stays unknown
+      const quiet = (PASSIVE.has(prog) && !foreign) || (PRINTERS.has(prog) && cmd.out.length === 0)
+      if (quiet && own.action === 'process.execute' && own.confidence !== 'unknown') own.effect = 'read'
+      // The words its facts did not place and the files it reads its input from may still be in a login folder: placed
+      // for that alone, its action, target and place staying what the table says
+      const loose = [...(f.inside === undefined ? looseWords(cmd) : []), ...(cmd.inputs ?? [])]
+      const folder = loose.length === 0 ? own.sensitive : firstSensitive([own.sensitive, placesOf(loose, ctx, true).sensitive])
+      if (folder !== undefined) own.sensitive = folder
       parts.push(own)
       for (const also of f.also ?? []) parts.push(partOf(also))
     }
@@ -575,9 +629,6 @@ function resolveShell(rec: Record<string, unknown>, at: Ctx, flavor: Flavor): Re
     })
     parts.push(...writes)
 
-    const prog = cmd.words.length > 0 ? programName(cmd.words[0]).toLowerCase() : ''
-    // `sl` is Set-Location in PowerShell only: elsewhere it is a program this does not know, which neither moves nor passes
-    const foreign = cmd.cmdlet === undefined && PS_ONLY_ALIASES.has(prog)
     if (lead === undefined) {
       const onlyPrints = own !== undefined && PRODUCERS.has(prog) && own.action === 'process.execute'
       if (own === undefined || (onlyPrints && writes.length > 0)) lead = writes[0]
@@ -757,6 +808,7 @@ function stripPrefix(raw: Cmd, flavor: Flavor): { cmd: Cmd; syntax: boolean } {
   const cmdlet = rest.length > 0 ? cmdletOf(rest[0], flavor) : undefined
   const cmd: Cmd = {
     words: rest, out: raw.out, call: raw.call, quoted: raw.quoted.slice(i), invoked: raw.invoked, cmdlet, unread: raw.unread, groups: raw.groups,
+    ...(raw.inputs !== undefined ? { inputs: raw.inputs } : {}),
     ...(raw.ps === true ? { ps: true as const } : {})
   }
   const dropped = { cmd: { ...cmd, words: [], quoted: [] }, syntax: true }
@@ -857,7 +909,10 @@ function expand(cmds: Cmd[], flavor: Flavor, depth = 0): { commands: Cmd[]; synt
       }
     } else {
       const inner = expand(splitLine(script.text, script.flavor, depth + 1), script.flavor, depth + 1)
-      out.push(...inSubshell(cmd, inner.commands))
+      const run = inSubshell(cmd, inner.commands)
+      // What the shell reads from its input, its first command does (`bash -c "x" < f`)
+      if (cmd.inputs !== undefined && run.length > 0) run[0] = { ...run[0], inputs: [...(run[0].inputs ?? []), ...cmd.inputs] }
+      out.push(...run)
       if (cmd.out.length > 0) out.push({ words: [], out: cmd.out, call: false, quoted: [], invoked: false, ...(cmd.ps === true ? { ps: true as const } : {}) }) // `bash -c "x" > f`
       syntax ||= inner.syntax
     }
@@ -876,10 +931,11 @@ const SINK = /^(?:\/dev\/(?:null|stdout|stderr|tty|fd\/\d+)|nul|\$null)$/i
  *
  * Splits on `&&`, `||`, `;`, `|`, `&`, newlines and the brackets of `( )` and `$( )` outside quotes, so the commands in a
  * group or a substitution are seen, and in a POSIX line on the backticks of a substitution too. A redirection's operator
- * and target are not words: a `>` target is kept apart as a file the command writes; `2>&1`, `< in` and heredoc bodies
- * are left out. A `&` that starts a command is PowerShell's call operator. Each flavour escapes its own way: in POSIX a
- * backslash escapes only the characters a shell line needs it for (it is a path separator on Windows) and joins a line
- * it ends; in PowerShell a backslash is a letter, and the backtick makes the next character one, or joins a line it ends.
+ * and target are not words: a `>` target is kept apart as a file the command writes, a `<` target as one it reads (for
+ * the login folder it is in alone); `2>&1`, a `<<<` string and heredoc bodies are left out. A `&` that starts a command is
+ * PowerShell's call operator. Each flavour escapes its own way: in POSIX a backslash escapes only the characters a shell
+ * line needs it for (it is a path separator on Windows) and joins a line it ends; in PowerShell a backslash is a letter,
+ * and the backtick makes the next character one, or joins a line it ends.
  *
  * Inside double quotes a `$( )` (in a POSIX line also a pair of backticks) is a substitution the shell runs: its text is read
  * as a line of its own and its commands follow the command the quoted word is in, while the word keeps a `$` where it was,
@@ -903,13 +959,14 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
   let end = line.length
   let words: Words = []
   let out: string[] = []
+  let inputs: string[] = []
   let call = false
   let invoked = false // the last word was directly followed by `(`
   let quoted: boolean[] = [] // for each word, whether it was quoted
   let wordQuoted = false // the word being read has had a quote in it
   let cur = ''
   let has = false // a word has begun, so an empty '' counts
-  let sink: { write: boolean; dup: boolean } | null = null // the next word is a redirection's target
+  let sink: { write: boolean; dup: boolean; text: boolean } | null = null // the next word is a redirection's target; `text`: a here-string's
   const chain: number[] = [] // the unquoted `(` open now, as subshells, up to MAX_GROUPS deep: beyond it they share the last
   let beyond = 0 // the `(` open past that
   const braces: Array<'block' | 'hash' | 'switch'> = [] // the PowerShell braces open now: a block, a hashtable or a switch's body
@@ -922,7 +979,10 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
     if (has) {
       if (sink !== null) {
         const duplicate = sink.dup && /^(?:\d+|-)$/.test(cur) // the 1 of 2>&1
-        if (sink.write && !duplicate && !SINK.test(cur)) out.push(cur)
+        if (!duplicate && !SINK.test(cur)) {
+          if (sink.write) out.push(cur)
+          else if (!sink.text) inputs.push(cur)
+        }
         sink = null
       } else {
         quoted.push(wordQuoted)
@@ -990,6 +1050,7 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
     if (words.length > 0 || out.length > 0) {
       // Inside an unquoted ( ) or $( ) the command runs in a subshell, as the commands of a quoted substitution do
       const cmd: Cmd = { words, out, call, quoted, invoked }
+      if (inputs.length > 0) cmd.inputs = inputs
       if (flavor === 'ps') cmd.ps = true
       if (unread) cmd.unread = true
       if (chain.length > 0) cmd.groups = [...chain]
@@ -999,6 +1060,7 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
     unread = false
     words = []
     out = []
+    inputs = []
     call = false
     invoked = false
     quoted = []
@@ -1187,6 +1249,7 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
         words = []
         quoted = []
         out = []
+        inputs = []
         call = false
         invoked = false
         braces.push('block')
@@ -1229,12 +1292,14 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
         has = false
         wordQuoted = false
       } else endWord()
+      // `<<<` hands its word over as text (a heredoc's `<<` is read above)
+      const text = c === '<' && line[i + 1] === '<'
       let dup = false
       while (line[i + 1] === '>' || line[i + 1] === '<' || line[i + 1] === '&' || line[i + 1] === '|') {
         if (line[i + 1] === '&') dup = true
         i++
       }
-      sink = { write: c === '>', dup }
+      sink = { write: c === '>', dup, text }
     } else if (flavor === 'posix' && c === '$' && line[i + 1] === '(' && line[i + 2] === '(') {
       // arithmetic outside quotes runs nothing either: its substitutions are read, and the word keeps a `$`, a value
       cur += c
@@ -1683,6 +1748,14 @@ function whereOf(paths: string[], ctx: Ctx): Pick<Facts, 'inside' | 'sensitive'>
   return sensitive === undefined ? { inside } : { inside, sensitive }
 }
 
+/** A write's facts with the login folder of what it reads from too (lifecycle design §4.10): a copy, a mirror or an archive
+ *  reads its sources, though its place and target stay where it writes. */
+function readingFrom(facts: Facts, sources: string[], ctx: Ctx): Facts {
+  if (sources.length === 0) return facts
+  const sensitive = firstSensitive([placesOf(sources, ctx, true).sensitive, facts.sensitive])
+  return sensitive === undefined ? facts : { ...facts, sensitive }
+}
+
 /** Where `find` starts: its leading words, before the first test or expression. */
 function findStarts(args: Words): string[] {
   const out: string[] = []
@@ -1917,9 +1990,10 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
     const paths = pathArgs(prog, args, cmdlet)
     const named = valueOf(args, ['-t', '--target-directory'], ['destination'], cmdlet)
     const dest = named ?? (paths.length >= 2 ? paths[paths.length - 1] : undefined)
-    const facts = writeFacts(name, dest === undefined ? [] : [dest], ctx)
-    // A move also takes the files from where they were: every path that is not the destination.
-    const sources = named !== undefined ? paths : paths.slice(0, -1)
+    // What it copies from: every path that is not the destination, or all of them when none is
+    const sources = named !== undefined || dest === undefined ? paths : paths.slice(0, -1)
+    const facts = readingFrom(writeFacts(name, dest === undefined ? [] : [dest], ctx), sources, ctx)
+    // A move also takes the files from where they were
     if (MOVERS.has(prog) && dest !== undefined && sources.length > 0) {
       facts.also = [{ action: 'filesystem.delete', target: name, known: true, ...whereOf(sources, ctx) }]
     }
@@ -1939,22 +2013,26 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
   if (MAKERS.has(prog)) return writeFacts(name, pathArgs(prog, args, cmdlet), ctx)
 
   if (MIRRORS.has(prog)) {
-    const dest = pathArgs(prog, args)[1]
-    return writeFacts(name, dest === undefined ? [] : [dest], ctx)
+    const paths = pathArgs(prog, args)
+    const dest = paths[1]
+    return readingFrom(writeFacts(name, dest === undefined ? [] : [dest], ctx), paths.filter((_, i) => i !== 1), ctx)
   }
 
   if (prog === 'rsync') {
     const paths = pathArgs(prog, args)
-    return writeFacts(name, paths.length >= 2 ? [paths[paths.length - 1]] : [], ctx)
+    const facts = writeFacts(name, paths.length >= 2 ? [paths[paths.length - 1]] : [], ctx)
+    return readingFrom(facts, paths.length >= 2 ? paths.slice(0, -1) : paths, ctx)
   }
 
   if (prog === 'unzip' && !args.some((a) => /^-(?:[lptvZ]|[A-Za-z]*[lptvZ])$/.test(a))) {
-    return writeFacts(name, [valueOf(args, ['-d'], []) ?? '.'], ctx)
+    // It reads the archive it is named, which the words hold with the folder it extracts into
+    return readingFrom(writeFacts(name, [valueOf(args, ['-d'], []) ?? '.'], ctx), pathArgs(prog, args), ctx)
   }
 
   if (prog === 'tar') {
+    // Creating reads what it archives, extracting reads the archive: both are among its words
     const facts = tarFacts(name, args, ctx)
-    if (facts !== null) return facts
+    if (facts !== null) return readingFrom(facts, pathArgs(prog, args), ctx)
   }
 
   if (prog === 'tee') {
