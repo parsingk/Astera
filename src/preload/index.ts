@@ -417,6 +417,13 @@ const api = {
     setHiding: invoke('credentials.setHiding'),
     reset: invoke('credentials.reset')
   },
+  // Settings › Security & Access › Findings and the Agent profiles mark (lifecycle design §7): the Host's findings,
+  // through main's findings route
+  findings: {
+    list: invoke('findings.list'),
+    ignore: invoke('findings.ignore'),
+    unignore: invoke('findings.unignore')
+  },
   // The Jobs view's "+ From a source" (plugin Phase 4c): the Host's job sources, through main's sources route
   sources: {
     list: invoke('sources.list'),

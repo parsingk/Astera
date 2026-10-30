@@ -180,6 +180,30 @@ describe('the findings catalog', () => {
     }
   })
 
+  // §7: Settings › Security & Access › Findings and the Agent profiles mark, in the copy the plan gives; the open buttons
+  // name each place by its tab's name in Korean
+  it('keeps the Findings section copy', () => {
+    const en = CATALOGS.en.messages as Record<string, string>
+    const ko = CATALOGS.ko.messages as Record<string, string>
+    const copy: Record<string, [string, string]> = {
+      'findings.title': ['Findings', '발견한 것'],
+      'findings.ignore': ['Ignore', '무시'],
+      'findings.ignoredCount': ['Ignored ({count})', '무시함 ({count})'],
+      'findings.restore': ['Show again', '다시 보기'],
+      'findings.open.profiles': ['Open Agent profiles', `${ko['settings.tab.agentProfiles']} 열기`],
+      'findings.open.job': ['Open Job', 'Job 열기'],
+      'findings.open.run': ['Open Run', 'Run 열기'],
+      'findings.open.extension': ['Open MCP & Skills', `${ko['settings.tab.extensions']} 열기`],
+      'findings.open.policies': ['Open Policies', 'Policies 열기'],
+      'findings.open.runtimes': ['Open Remote', `${ko['settings.tab.remote']} 열기`],
+      'findings.open.credentials': ['Open Credentials', 'Credentials 열기']
+    }
+    for (const [key, [english, korean]] of Object.entries(copy)) {
+      expect(en[key], key).toBe(english)
+      expect(ko[key], key).toBe(korean)
+    }
+  })
+
   // Every source a report can name has a plain name, in every language (Task 8 shows them on screen)
   it('names every source a report can leave unread', () => {
     const sources: FindingSource[] = [

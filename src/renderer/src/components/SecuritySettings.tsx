@@ -3,6 +3,7 @@ import { X } from 'lucide-react'
 import type { AuditQuery, PluginsCallAnswer } from '../../../core/types'
 import type { AgentProfile } from '../../../core/agentProfiles/types'
 import type { AuditMode, AuditPolicy, AuditRule, CoverageRow, CredentialUse, SandboxCoverageRow } from '../../../core/audit/types'
+import type { FindingPlace } from '../../../core/findings/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
 import { confirmModal } from '../lib/confirm'
@@ -10,6 +11,8 @@ import { useAgentProfiles } from '../lib/agentProfiles'
 import { Select } from './Select'
 import { profileNameOf } from './agentProfilesText'
 import { CredentialsSection } from './CredentialsSection'
+import { FindingsSection } from './FindingsSection'
+import { targetOf } from './findingsText'
 import {
   appendUses,
   credentialFailure,
@@ -97,20 +100,27 @@ const PERIOD_ORDER: Period[] = ['today', 'week', 'month']
 /** Rows a page of Audit Logs reads at a time. */
 const PAGE = 100
 
-/** Settings › Security & Access (observe mode design §11, credentials design §5-§7): Policies, the observe switch, what
- *  observe can see and the one rule set; Credentials, what Astera keeps out of agent sessions; and Audit Logs, the calls
- *  observed sessions made judged by those rules as they are now, or the keys and logins used through Astera. The Host
- *  owns the rules, the list and the records and answers every change; nothing here decides a call.
+/** Settings › Security & Access (observe mode design §11, credentials design §5-§7, lifecycle design §7): Policies, the
+ *  observe switch, what observe can see and the one rule set; Findings, what Astera found that may need a person's
+ *  attention; Credentials, what Astera keeps out of agent sessions; and Audit Logs, the calls observed sessions made judged
+ *  by those rules as they are now, or the keys and logins used through Astera. The Host owns the rules, the findings, the
+ *  list and the records and answers every change; nothing here decides a call.
  *  `focus`: the Run (or a Job row with no Run of its own) Run detail opened this for, whose calls only Audit Logs shows
- *  until the filter is cleared; clearing it keeps the other filters and the period. */
+ *  until the filter is cleared; clearing it keeps the other filters and the period. `showFindings`: the Agent profiles
+ *  mark opened this, at Findings. */
 export function SecuritySettings({
   focus,
   onClearFocus,
+  showFindings,
+  onOpenPlace,
   sessionTitle,
   runName
 }: {
   focus?: AuditFocus
   onClearFocus: () => void
+  showFindings?: boolean
+  /** A finding's place outside this tab: another tab, or a Job or Run. Policies and Credentials are scrolled to here. */
+  onOpenPlace: (p: FindingPlace) => void
   /** A session's tab title while this app has the tab. */
   sessionTitle: (sessionId: string) => string | undefined
   /** A Run's Job name while this project's Jobs list has it. */
@@ -143,6 +153,23 @@ export function SecuritySettings({
     auditShown.current = due
     auditSection.current?.scrollIntoView({ block: 'start' })
   }, [focus, policy, failure])
+  const policiesSection = useRef<HTMLElement>(null)
+  const findingsSection = useRef<HTMLElement>(null)
+  const credentialsSection = useRef<HTMLElement>(null)
+  /** Findings is scrolled to once, after Policies above it has its height (its rules read, or why not). */
+  const findingsShown = useRef(false)
+  useEffect(() => {
+    if (showFindings !== true || findingsShown.current || (policy === null && failure === null)) return
+    findingsShown.current = true
+    findingsSection.current?.scrollIntoView({ block: 'start' })
+  }, [showFindings, policy, failure])
+  /** A finding's place: a section of this tab is scrolled to, any other place is App's to open (lifecycle design §7). */
+  const openPlace = (p: FindingPlace): void => {
+    const to = targetOf(p)
+    if (to === null) return
+    if ('section' in to) (to.section === 'policies' ? policiesSection : credentialsSection).current?.scrollIntoView({ block: 'start' })
+    else onOpenPlace(p)
+  }
 
   const load = async (): Promise<void> => {
     const r = await window.api.audit.policies().catch(failed)
@@ -212,7 +239,7 @@ export function SecuritySettings({
   return (
     <div className="settings-stack">
       <p className="settings-hint">{t('settings.security.hint')}</p>
-      <section className="security-section" aria-busy={busy || (policy === null && failure === null)}>
+      <section className="security-section" ref={policiesSection} aria-busy={busy || (policy === null && failure === null)}>
         <h3 className="security-title">{POLICIES_TITLE}</h3>
         {shownFailure !== null && (
           <div className="settings-group">
@@ -389,7 +416,11 @@ export function SecuritySettings({
           </>
         )}
       </section>
-      <section className="security-section">
+      <section className="security-section" ref={findingsSection}>
+        <h3 className="security-title">{t('findings.title')}</h3>
+        <FindingsSection onOpen={openPlace} />
+      </section>
+      <section className="security-section" ref={credentialsSection}>
         <h3 className="security-title">{CREDENTIALS_TITLE}</h3>
         <CredentialsSection />
       </section>

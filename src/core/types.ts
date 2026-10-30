@@ -2112,6 +2112,15 @@ export interface CredentialsApi {
   reset(): Promise<PluginsCallAnswer>
 }
 
+/** Settings › Security & Access › Findings and the Agent profiles mark (lifecycle design §7): the Host's
+ *  `agent-profiles-audit*` commands, as the app. `list` answers a FindingsReport (core/findings/types.ts), the ignored
+ *  findings among them with `all`. An ignore names a key a current finding has, or answers NOT_FOUND. */
+export interface FindingsApi {
+  list(all?: boolean): Promise<PluginsCallAnswer>
+  ignore(key: string, note?: string): Promise<PluginsCallAnswer>
+  unignore(key: string): Promise<PluginsCallAnswer>
+}
+
 export interface RemoteApi {
   list(): Promise<RemoteRuntimeInfo[]>
   /** Pairs from the string `astera runtime pair` printed on the Runtime. The token is kept in main, never returned. */
@@ -2258,6 +2267,8 @@ export type RendererApi = CoreApi & {
   audit: AuditApi
   /** Settings › Security & Access › Credentials and Audit Logs' credential uses: the Host's Credentials list, as the app. */
   credentials: CredentialsApi
+  /** Settings › Security & Access › Findings and the Agent profiles mark: the Host's findings and ignores, as the app. */
+  findings: FindingsApi
   /** The Jobs view's "+ From a source" (plugin Phase 4c): the Host's job sources, as the app. */
   sources: SourcesApi
   remoteSessions: RemoteSessionsApi

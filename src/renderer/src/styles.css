@@ -1300,6 +1300,13 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .ext-list.is-uncapped { max-height: none; }
 .agent-profile-new { border: 1px solid var(--line); border-radius: var(--radius); }
 .agent-profile-new > .ext-row-body { border-top: 0; }
+/* A profile's head with its findings mark beside it (lifecycle design §7): the head takes the row, the mark keeps its
+   size. The profiles a finding's button opened the tab for are marked as the settings nav marks its tab. */
+.agent-profile-head { display: flex; align-items: center; min-width: 0; }
+.agent-profile-head > .ext-row-head { flex: 1; }
+.findings-mark { margin-right: 12px; border: 0; cursor: pointer; }
+.findings-mark:hover { color: var(--accent); }
+.ext-row.is-focused > .agent-profile-head { background: var(--line-soft); box-shadow: inset var(--marker-w) 0 0 var(--accent); }
 /* Settings › Security & Access (observe mode design §11): two sections under English headings, Policies (the switch, what
    observe can see, the rules) and Audit Logs (the counts, the filters, the rows). Only the tokens the other settings use. */
 .security-section { display: flex; flex-direction: column; gap: 16px; }
@@ -1349,6 +1356,13 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .security-credentials { display: flex; flex-direction: column; gap: 12px; }
 .credential-hides { overflow-wrap: anywhere; }
 .credential-projects { display: flex; flex-direction: column; gap: 4px; padding-left: 22px; }
+/* Settings › Security & Access › Findings (lifecycle design §7): a subject's name over its lines, each line its reason,
+   what would resolve it (dim) and its buttons, in the list MCP & Skills draws; the ignored ones in a collapsed row of the
+   same kind. Only the tokens the other sections use. */
+.security-findings { display: flex; flex-direction: column; gap: 12px; }
+.findings-subject { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px; }
+.findings-line { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; font-size: 13px; overflow-wrap: anywhere; }
+.findings-line > .remote-actions { align-self: stretch; margin-top: 2px; }
 /* Audit Logs' rows fit the tab without a sideways scroll at the settings window's usual width (the screen finding, at a
    1280 px window: the action wrapped over four lines and the rule column was cut off). The time is the time of day, with
    the date heading each day's rows; the time, the action and the decision keep to one line; the session is cut short;

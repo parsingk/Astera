@@ -2,6 +2,7 @@ import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import type { Account, AgentProfileFields, PluginsCallAnswer } from '../../../core/types'
 import type { AgentProfile, ProfilePermission } from '../../../core/agentProfiles/types'
+import type { Finding } from '../../../core/findings/types'
 import { metaOf, providerOf } from '../../../core/providers/meta'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
@@ -10,6 +11,8 @@ import { publishAgentProfiles } from '../lib/agentProfiles'
 import { sandboxSetupOutcome } from '../lib/spawnErrors'
 import { AccountSelect } from './AccountSelect'
 import { failureLine } from './extensionsText'
+import { FindingsMark } from './FindingsSection'
+import { profileMarks, reportOf } from './findingsText'
 import {
   addableAccounts,
   archivedNote,
@@ -46,11 +49,23 @@ const draftOf = (p?: AgentProfile): Draft => ({
 /** Settings › Agent profiles (Agent Profiles design §8): accounts with their roll order, the shared MCP servers a
  *  profile uses and its permission, saved under a name that new sessions, Jobs and Tasks can be started as. Laid out
  *  like MCP & Skills: collapsed rows that open on a click. The Host owns the store and checks every change; a refusal
- *  comes back with its reason in a word, said here in the person's language. */
-export function AgentProfilesSettings({ accounts }: { accounts: Account[] }): React.JSX.Element {
+ *  comes back with its reason in a word, said here in the person's language. A profile with open findings carries a
+ *  mark with their count (lifecycle design §7), which opens Security & Access at Findings (`onOpenFindings`).
+ *  `focusProfileIds`: the profiles a finding's button opened this for, highlighted, the first scrolled to. */
+export function AgentProfilesSettings({
+  accounts,
+  focusProfileIds,
+  onOpenFindings
+}: {
+  accounts: Account[]
+  focusProfileIds?: readonly string[]
+  onOpenFindings: () => void
+}): React.JSX.Element {
   const { t } = useI18n()
   const [profiles, setProfiles] = useState<AgentProfile[] | null>(null)
   const [servers, setServers] = useState<Server[]>([])
+  /** Each profile's open findings (ruling 7); none while the Host could not say. */
+  const [marks, setMarks] = useState<ReadonlyMap<string, Finding[]>>(new Map())
   const [listFailure, setListFailure] = useState<Failure | null>(null)
   const [busy, setBusy] = useState(false)
   const [creating, setCreating] = useState(false)
@@ -81,10 +96,29 @@ export function AgentProfilesSettings({ accounts }: { accounts: Account[] }): Re
           .filter((e) => e.kind === 'mcp' && typeof e.id === 'string')
           .map((e) => ({ id: e.id as string, name: typeof e.name === 'string' ? e.name : (e.id as string), off: e.enabled !== true }))
       )
+    // The marks, read when the tab opens and after each change here (the Host holds a report for a minute, §8); a
+    // failure leaves no mark rather than a wrong one, and Security & Access › Findings says why
+    const found = await window.api.findings.list().catch(failed)
+    const report = found.ok ? reportOf(found.body) : null
+    setMarks(report === null ? new Map() : profileMarks(report))
   }
   useEffect(() => {
     void load()
   }, [])
+
+  /** The rows by profile id, so a finding's button scrolls to the first profile it names. */
+  const rows = useRef(new Map<string, HTMLDivElement>())
+  const focused = new Set(focusProfileIds ?? [])
+  const focusKey = [...focused].join(',')
+  /** The focus last scrolled to: once per opening, not again after each change reads the list anew. */
+  const scrolledFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (profiles === null || focusKey === '' || scrolledFor.current === focusKey) return
+    const first = profiles.find((p) => focused.has(p.id))
+    if (first === undefined) return
+    scrolledFor.current = focusKey
+    rows.current.get(first.id)?.scrollIntoView({ block: 'start' })
+  }, [profiles, focusKey])
 
   /** Runs one change, says why when it did not happen, and reads the list again either way. True when it happened. */
   const change = async (work: () => Promise<PluginsCallAnswer>): Promise<boolean> => {
@@ -148,22 +182,34 @@ export function AgentProfilesSettings({ accounts }: { accounts: Account[] }): Re
             // When it was archived and why (lifecycle design §5): the date as its status, the reason inside the open row
             const note = archivedNote(p, t, (iso) => new Date(iso).toLocaleDateString())
             const reason = archiving?.id === p.id ? archiving.reason : null
+            const found = marks.get(p.id) ?? []
             return (
-              <div key={p.id} className={`ext-row${isOpen ? ' is-open' : ''}`}>
-                <button type="button" className="ext-row-head" aria-expanded={isOpen} onClick={() => toggleOpen(p.id)}>
-                  <span className="ext-row-chevron" aria-hidden="true">
-                    {isOpen ? '▾' : '▸'}
-                  </span>
-                  <span className="plugin-name">{p.name}</span>
-                  {first && <span className="settings-hint">{metaOf(first).displayName}</span>}
-                  <span className="settings-hint">{t('settings.agentProfiles.accountCount', { count: p.accountIds.length })}</span>
-                  {/* One mark: the date it was archived in place of the plain badge, when the date was kept */}
-                  {p.status === 'archived' && (
-                    <span className="plugin-status" title={note?.reason}>
-                      {note ? note.on : t('settings.agentProfiles.archived')}
+              <div
+                key={p.id}
+                ref={(el) => {
+                  if (el === null) rows.current.delete(p.id)
+                  else rows.current.set(p.id, el)
+                }}
+                className={`ext-row${isOpen ? ' is-open' : ''}${focused.has(p.id) ? ' is-focused' : ''}`}
+              >
+                {/* The findings mark beside the row's head, not inside it: a button in a button is not one */}
+                <div className="agent-profile-head">
+                  <button type="button" className="ext-row-head" aria-expanded={isOpen} onClick={() => toggleOpen(p.id)}>
+                    <span className="ext-row-chevron" aria-hidden="true">
+                      {isOpen ? '▾' : '▸'}
                     </span>
-                  )}
-                </button>
+                    <span className="plugin-name">{p.name}</span>
+                    {first && <span className="settings-hint">{metaOf(first).displayName}</span>}
+                    <span className="settings-hint">{t('settings.agentProfiles.accountCount', { count: p.accountIds.length })}</span>
+                    {/* One mark: the date it was archived in place of the plain badge, when the date was kept */}
+                    {p.status === 'archived' && (
+                      <span className="plugin-status" title={note?.reason}>
+                        {note ? note.on : t('settings.agentProfiles.archived')}
+                      </span>
+                    )}
+                  </button>
+                  {found.length > 0 && <FindingsMark findings={found} onOpen={onOpenFindings} />}
+                </div>
                 {isOpen && (
                   <ProfileEditor
                     // Read again after a save: the editor starts over from what the Host kept

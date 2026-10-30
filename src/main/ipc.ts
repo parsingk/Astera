@@ -73,6 +73,7 @@ import { forcedSandboxBlocker } from '../core/sandbox/unavailable'
 import { claudeUsernsCheck, sandboxWarningMessage } from '../core/sandbox/startWarnings'
 import { createAuditRoute } from './host/auditRoute'
 import { createCredentialsRoute } from './host/credentialsRoute'
+import { createFindingsRoute } from './host/findingsRoute'
 import { createAppPullRequests } from './host/appPullRequests'
 import { createSourcesRoute } from './host/sourcesRoute'
 import { createHostGitHubRoute } from './host/hostGitHubRoute'
@@ -4916,6 +4917,12 @@ export function registerIpc(
   ipcMain.handle('credentials.deleteHideOnly', (_e, id: unknown) => credentials.deleteHideOnly(id as string))
   ipcMain.handle('credentials.setHiding', (_e, id: unknown, hide: unknown) => credentials.setHiding(id as string, hide as Parameters<Cred['setHiding']>[1]))
   ipcMain.handle('credentials.reset', () => credentials.reset())
+  // Settings › Security & Access › Findings and the Agent profiles mark (lifecycle design §7): the Host's findings, as
+  // the app
+  const findings = createFindingsRoute({ call: (m) => orchCall(m) })
+  ipcMain.handle('findings.list', (_e, all: unknown) => findings.list(all === true))
+  ipcMain.handle('findings.ignore', (_e, key: unknown, note: unknown) => findings.ignore(key as string, typeof note === 'string' ? note : undefined))
+  ipcMain.handle('findings.unignore', (_e, key: unknown) => findings.unignore(key as string))
   ipcMain.handle('plugins.list', () => plugins.list())
   ipcMain.handle('plugins.inspect', (_e, source: unknown) => plugins.inspect(source as Parameters<typeof plugins.inspect>[0]))
   ipcMain.handle('plugins.install', (_e, a: unknown) => plugins.install(a as Parameters<typeof plugins.install>[0]))
