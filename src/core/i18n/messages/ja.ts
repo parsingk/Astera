@@ -236,6 +236,7 @@ export const ja: Catalog = {
   'settings.security.period.week': '過去 7 日',
   'settings.security.period.month': '過去 30 日',
   'settings.security.audit.stoppedAtLimit': 'この期間のある日がサイズの上限に達したため、実際より少ない呼び出ししか記録されていません。',
+  'settings.security.audit.droppedAtLimit': 'サイズの上限を超えないようにこの期間の一部の日を削除したため、実際より少ない呼び出ししか残っていません。',
   'settings.security.filter.session': 'セッション',
   'settings.security.filter.allSessions': 'すべてのセッション',
   'settings.security.filter.profile': 'エージェントプロファイル',

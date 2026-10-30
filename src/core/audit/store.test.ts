@@ -13,6 +13,7 @@ import {
   AUDIT_READ_YIELD_EVERY,
   appendRecords,
   auditDayOf,
+  auditDroppedAtLimit,
   auditDroppedThrough,
   auditStoppedAtLimit,
   auditStoppedDays,
@@ -558,6 +559,18 @@ describe('a day dropped for size', () => {
     expect(auditDroppedThrough(p)).toBeNull()
     await fs.writeFile(mark(p), 'not a day')
     expect(auditDroppedThrough(p)).toBeNull()
+  })
+
+  // Follow-up R-F6, item 5: a period that holds a day dropped for size, by local day as auditStoppedAtLimit reads it
+  it('says whether a period holds a day dropped for size', async () => {
+    const p = await profile()
+    await fs.mkdir(auditDir(p), { recursive: true })
+    expect(auditDroppedAtLimit(p)).toBe(false)
+    await fs.writeFile(mark(p), '2026-10-20')
+    expect(auditDroppedAtLimit(p)).toBe(true)
+    expect(auditDroppedAtLimit(p, { since: at('2026-10-20') })).toBe(true)
+    expect(auditDroppedAtLimit(p, { since: at('2026-10-21') })).toBe(false)
+    expect(auditDroppedAtLimit(p, { since: at('2026-10-01'), until: at('2026-10-05') })).toBe(true)
   })
 
   it('marks a use log’s folder the same way', async () => {

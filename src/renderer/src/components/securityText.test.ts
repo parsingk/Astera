@@ -51,6 +51,7 @@ import {
   observeReadIsCurrent,
   resetBodyKey,
   securityFailure,
+  sizeLimitKey,
   summaryOf,
   summarySince,
   tokensOf,
@@ -395,8 +396,24 @@ describe('securityText', () => {
 
   // The summary helper
   it('reads the summary’s counts and whether a day stopped at the size limit', () => {
-    expect(summaryOf({ allow: 4, wouldDeny: 2, unknown: 1, blocked: 3, byAction: {}, stoppedAtLimit: true })).toEqual({ allow: 4, wouldDeny: 2, unknown: 1, blocked: 3, stoppedAtLimit: true })
-    expect(summaryOf({})).toEqual({ allow: 0, wouldDeny: 0, unknown: 0, blocked: 0, stoppedAtLimit: false })
+    expect(summaryOf({ allow: 4, wouldDeny: 2, unknown: 1, blocked: 3, byAction: {}, stoppedAtLimit: true })).toEqual({
+      allow: 4,
+      wouldDeny: 2,
+      unknown: 1,
+      blocked: 3,
+      stoppedAtLimit: true,
+      droppedAtLimit: false
+    })
+    expect(summaryOf({})).toEqual({ allow: 0, wouldDeny: 0, unknown: 0, blocked: 0, stoppedAtLimit: false, droppedAtLimit: false })
+  })
+
+  // Follow-up R-F6, item 5: days dropped to keep under the size limit say so, in place of the stopped day's line
+  it('says days were dropped for size, or a day stopped at it, or nothing', () => {
+    const counts = summaryOf({ allow: 1, wouldDeny: 0, unknown: 0, stoppedAtLimit: true, droppedAtLimit: true })
+    expect(counts.droppedAtLimit).toBe(true)
+    expect(sizeLimitKey(counts)).toBe('settings.security.audit.droppedAtLimit')
+    expect(sizeLimitKey(summaryOf({ stoppedAtLimit: true }))).toBe('settings.security.audit.stoppedAtLimit')
+    expect(sizeLimitKey(summaryOf({}))).toBeNull()
   })
 
   it('offers the sessions and Jobs the records name, each once', () => {

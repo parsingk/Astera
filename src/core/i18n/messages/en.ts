@@ -273,6 +273,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.security.period.week': 'Last 7 days',
   'settings.security.period.month': 'Last 30 days',
   'settings.security.audit.stoppedAtLimit': 'A day in this period reached the size limit, so it holds fewer calls than were made.',
+  'settings.security.audit.droppedAtLimit': 'Days of this period were removed to stay under the size limit, so it holds fewer calls than were made.',
   'settings.security.filter.session': 'Session',
   'settings.security.filter.allSessions': 'All sessions',
   'settings.security.filter.profile': 'Agent profile',

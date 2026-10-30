@@ -277,6 +277,7 @@ export const ko = {
   'settings.security.period.week': '최근 7일',
   'settings.security.period.month': '최근 30일',
   'settings.security.audit.stoppedAtLimit': '이 기간 중 하루가 크기 한도에 닿아, 실제보다 적은 호출만 기록되어 있습니다.',
+  'settings.security.audit.droppedAtLimit': '크기 한도를 넘지 않도록 이 기간의 일부 날을 지워, 실제보다 적은 호출만 남아 있습니다.',
   'settings.security.filter.session': '세션',
   'settings.security.filter.allSessions': '모든 세션',
   'settings.security.filter.profile': '에이전트 프로필',

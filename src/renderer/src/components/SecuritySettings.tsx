@@ -66,6 +66,7 @@ import {
   resetBodyKey,
   securityFailure,
   sessionLabel,
+  sizeLimitKey,
   summaryOf,
   SANDBOX_CLASSES,
   sandboxCellClass,
@@ -688,7 +689,7 @@ function AuditLogs({
           )}
         </div>
       )}
-      {counts?.stoppedAtLimit === true && <p className="settings-hint is-warning">{t('settings.security.audit.stoppedAtLimit')}</p>}
+      {counts !== null && sizeLimitKey(counts) !== null && <p className="settings-hint is-warning">{t(sizeLimitKey(counts)!)}</p>}
       {line !== null && <p className="settings-hint">{line}</p>}
       {rows !== null && rows.length > 0 && (
         <AuditTable rows={rows} rules={rules} coverage={coverage} profiles={profiles} sessionTitle={sessionTitle} />

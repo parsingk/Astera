@@ -178,7 +178,8 @@ describe('createHostAudit', () => {
         'filesystem.write': { allow: 0, wouldDeny: 1, unknown: 0, blocked: 0 },
         'process.execute': { allow: 0, wouldDeny: 1, unknown: 1, blocked: 0 }
       },
-      stoppedAtLimit: false
+      stoppedAtLimit: false,
+      droppedAtLimit: false
     })
     expect((await h.call('audit-summary', { sessionId: 'sess_b' })).body).toEqual({
       allow: 0,
@@ -186,7 +187,8 @@ describe('createHostAudit', () => {
       unknown: 0,
       blocked: 0,
       byAction: { 'filesystem.write': { allow: 0, wouldDeny: 1, unknown: 0, blocked: 0 } },
-      stoppedAtLimit: false
+      stoppedAtLimit: false,
+      droppedAtLimit: false
     })
   })
 
@@ -200,6 +202,21 @@ describe('createHostAudit', () => {
     expect(row).toMatchObject({ decision: 'blocked', ruleId: 'starter-git-remote-write', status: 'blocked' })
     expect(listed(await h.call('audit-list', { decision: 'blocked' })).records.map((r) => r.id)).toEqual([stopped.id])
     expect(await h.call('audit-summary')).toMatchObject({ body: { blocked: 1, byAction: { 'git.remote.write': { blocked: 1, allow: 0 } } } })
+  })
+
+  // Follow-up R-F6, item 5: days dropped to keep under the size are missing from the period's counts too
+  it('says when days of the period were dropped for size, as a day that stopped is', async () => {
+    const h = await rig([rec()])
+    const day = (ms: number): string => {
+      const d = new Date(ms)
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    }
+    const DAY = 24 * 60 * 60 * 1000
+    await fs.writeFile(path.join(profilePaths(h.profileDir).auditRecords, 'dropped-through'), day(NOW - 5 * DAY))
+    expect((await h.call('audit-summary')).body).toMatchObject({ stoppedAtLimit: true, droppedAtLimit: true })
+    expect((await h.call('audit-summary', { since: new Date(NOW - 6 * DAY).toISOString() })).body).toMatchObject({ stoppedAtLimit: true, droppedAtLimit: true })
+    // A period that starts after the last day dropped holds all of its records
+    expect((await h.call('audit-summary', { since: new Date(NOW - 2 * DAY).toISOString() })).body).toMatchObject({ stoppedAtLimit: false, droppedAtLimit: false })
   })
 
   it('says when the records of a day in the period stopped at the size', async () => {
@@ -266,7 +283,7 @@ describe('createHostAudit', () => {
   it('answers empty when nothing was recorded', async () => {
     const h = await rig()
     expect((await h.call('audit-list')).body).toEqual({ records: [], truncated: false, next: null })
-    expect((await h.call('audit-summary')).body).toEqual({ allow: 0, wouldDeny: 0, unknown: 0, blocked: 0, byAction: {}, stoppedAtLimit: false })
+    expect((await h.call('audit-summary')).body).toEqual({ allow: 0, wouldDeny: 0, unknown: 0, blocked: 0, byAction: {}, stoppedAtLimit: false, droppedAtLimit: false })
   })
 
   it('answers 409 while the rules file is damaged, since no decision can be made', async () => {

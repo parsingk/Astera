@@ -647,7 +647,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'audit-summary': {
     summary: 'how many recorded calls the rules allow, would deny or cannot tell, in all and per action',
     detail:
-      'The counts for the calls the filters keep, decided by the rules in force now. `stoppedAtLimit` is true when a day of the period stopped recording at the size limit, so it holds fewer calls than were made. From inside an agent session it is refused with 5.',
+      'The counts for the calls the filters keep, decided by the rules in force now. `stoppedAtLimit` is true when a day of the period stopped recording at the size limit, or was removed to stay under it, so it holds fewer calls than were made; `droppedAtLimit` is true for the second. From inside an agent session it is refused with 5.',
     flags: AUDIT_FILTERS
   },
   // Answered by the Host (credentials design §7): what Astera keeps out of agent sessions, read here, changed in the app.

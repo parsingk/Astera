@@ -411,8 +411,11 @@ export interface AuditCounts {
   unknown: number
   /** Stopped by Enforce's hook before they ran. */
   blocked: number
-  /** A day of the period stopped recording at the size limit, so it holds fewer calls than were made. */
+  /** A day of the period stopped recording at the size limit, or was dropped to keep under it, so it holds fewer calls
+   *  than were made. */
   stoppedAtLimit: boolean
+  /** The second of those: days of the period were dropped to keep under the size limit (follow-up R-F6). */
+  droppedAtLimit?: boolean
 }
 
 const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0)
@@ -420,7 +423,21 @@ const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(
 /** audit-summary's counts by decision. */
 export function summaryOf(body: unknown): AuditCounts {
   const b = isObject(body) ? body : {}
-  return { allow: count(b.allow), wouldDeny: count(b.wouldDeny), unknown: count(b.unknown), blocked: count(b.blocked), stoppedAtLimit: b.stoppedAtLimit === true }
+  return {
+    allow: count(b.allow),
+    wouldDeny: count(b.wouldDeny),
+    unknown: count(b.unknown),
+    blocked: count(b.blocked),
+    stoppedAtLimit: b.stoppedAtLimit === true,
+    droppedAtLimit: b.droppedAtLimit === true
+  }
+}
+
+/** What Audit Logs says when the size limit cut the period short: that days were dropped to keep under it, else that a
+ *  day stopped recording at it; null when neither. */
+export function sizeLimitKey(c: AuditCounts): 'settings.security.audit.droppedAtLimit' | 'settings.security.audit.stoppedAtLimit' | null {
+  if (c.droppedAtLimit === true) return 'settings.security.audit.droppedAtLimit'
+  return c.stoppedAtLimit ? 'settings.security.audit.stoppedAtLimit' : null
 }
 
 /** Enforce's preview (enforce design §5): the last 7 days' calls the Rules would deny, by action (audit-summary's

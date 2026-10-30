@@ -240,6 +240,7 @@ export const es: Catalog = {
   'settings.security.period.week': 'Últimos 7 días',
   'settings.security.period.month': 'Últimos 30 días',
   'settings.security.audit.stoppedAtLimit': 'Un día de este periodo llegó al límite de tamaño, así que guarda menos llamadas de las que se hicieron.',
+  'settings.security.audit.droppedAtLimit': 'Se quitaron días de este periodo para no pasar el límite de tamaño, así que guarda menos llamadas de las que se hicieron.',
   'settings.security.filter.session': 'Sesión',
   'settings.security.filter.allSessions': 'Todas las sesiones',
   'settings.security.filter.profile': 'Perfil de agente',

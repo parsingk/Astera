@@ -372,6 +372,15 @@ export function auditStoppedAtLimit(profileDir: string, period: { since?: string
   return [...s.stopped].some((d) => (first === null || d >= first) && (last === null || d <= last))
 }
 
+/** Whether the period (by local day, as auditStoppedAtLimit reads it; the whole folder without one) holds a day whose
+ *  records were dropped to keep the folder under its size (auditDroppedThrough): its first day is that day or before it,
+ *  so its records are fewer than its calls (follow-up R-F6). */
+export function auditDroppedAtLimit(profileDir: string, period: { since?: string; until?: string } = {}): boolean {
+  const dropped = auditDroppedThrough(profileDir)
+  if (dropped === null) return false
+  return period.since === undefined || auditDayOf(period.since) <= dropped
+}
+
 export interface AuditFilter {
   sessionId?: string
   jobId?: string

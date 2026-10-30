@@ -1522,7 +1522,8 @@ written for the shell you are in (PowerShell on Windows, a POSIX shell elsewhere
 or any shell named in `SHELL`), so the line can be pasted as it is. The parser takes a lone `-` as "read stdin" and a
 value starting with `--` as the next flag, so no quoting can pass one as a filter value: the hint leaves that filter out
 and says so above it. `audit summary` counts the same calls by decision, in all and per action, and `stoppedAtLimit` is
-true when a day of the period stopped recording at the size limit, so it holds fewer calls than were made.
+true when a day of the period stopped recording at the size limit, or was removed to stay under it, so it holds fewer
+calls than were made; `droppedAtLimit` is true for the second.
 
 **These commands are for a person.** From inside an agent session (`ASTERA_SESSION` is set) every change is refused
 with 5, and so are both `audit` reads, whatever filter values they carry: the refusal comes first, before any

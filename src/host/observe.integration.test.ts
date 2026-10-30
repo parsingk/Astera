@@ -403,7 +403,8 @@ describe('observe mode on the Host, end to end through the CLI', { timeout: 60_0
         'git.remote.write': { allow: 0, wouldDeny: 1, unknown: 0, blocked: 0 },
         'filesystem.read': { allow: 1, wouldDeny: 0, unknown: 0, blocked: 0 }
       },
-      stoppedAtLimit: false
+      stoppedAtLimit: false,
+      droppedAtLimit: false
     })
 
     // A record keeps the action and a short target: nothing of the rest of the command or of its description

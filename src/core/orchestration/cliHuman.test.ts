@@ -871,6 +871,9 @@ describe('humanFor — audit and policies', () => {
     const stopped = humanFor('audit-summary', { allow: 0, wouldDeny: 0, unknown: 0, byAction: {}, stoppedAtLimit: true })
     expect(stopped?.split('\n')[0]).toBe('allow 0, would-deny 0, unknown 0')
     expect(stopped).toContain('size limit')
+    // Follow-up R-F6, item 5: days dropped to keep under it say so in place of the stopped line
+    const dropped = humanFor('audit-summary', { allow: 0, wouldDeny: 0, unknown: 0, byAction: {}, stoppedAtLimit: true, droppedAtLimit: true })
+    expect(dropped?.split('\n').slice(1)).toEqual(['', '(days of this period were removed to stay under the size limit, so it holds fewer calls than were made)'])
   })
 
   const policy = {

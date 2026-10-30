@@ -15,7 +15,7 @@ import {
   type AuditDecision,
   type AuditPolicy
 } from '../../core/audit/policy'
-import { auditStoppedAtLimit, queryRecords, visitRecords, type AuditFilter, type AuditRecord } from '../../core/audit/store'
+import { auditDroppedAtLimit, auditStoppedAtLimit, queryRecords, visitRecords, type AuditFilter, type AuditRecord } from '../../core/audit/store'
 import type { OrchCaller } from '../../core/host/orchProtocol'
 
 export const AUDIT_COMMANDS: ReadonlySet<string> = new Set(['audit-list', 'audit-summary'])
@@ -131,9 +131,12 @@ export function createHostAudit(d: {
           counts[key] += 1
           byAction.set(r.action, counts)
         }, kept)
-        // A day of the period whose records stopped at the size has fewer of them than its calls
-        const stoppedAtLimit = auditStoppedAtLimit(d.profileDir, { since: f.filter.since, until: f.filter.until })
-        return { status: 200, body: { ...total, byAction: Object.fromEntries(byAction), stoppedAtLimit } }
+        // A day of the period whose records stopped at the size, or were dropped to keep under it, has fewer of them than
+        // its calls: `stoppedAtLimit` says either, and `droppedAtLimit` the second (follow-up R-F6)
+        const period = { since: f.filter.since, until: f.filter.until }
+        const droppedAtLimit = auditDroppedAtLimit(d.profileDir, period)
+        const stoppedAtLimit = droppedAtLimit || auditStoppedAtLimit(d.profileDir, period)
+        return { status: 200, body: { ...total, byAction: Object.fromEntries(byAction), stoppedAtLimit, droppedAtLimit } }
       }
       default:
         return { status: 501, body: { error: `${cmd} is not answered by this Host` } }

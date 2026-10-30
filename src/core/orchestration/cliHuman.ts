@@ -388,7 +388,12 @@ export function humanFor(
       return [
         counts(data).join(', '),
         ...(byAction.length === 0 ? [] : ['', columns(byAction.map(([action, c]) => [phraseOf(action), action, ...counts(c)]))]),
-        ...(data.stoppedAtLimit === true ? ['', '(a day of this period stopped recording at the size limit, so it holds fewer calls than were made)'] : [])
+        // Days dropped to keep under the size limit, else a day that stopped recording at it (follow-up R-F6)
+        ...(data.droppedAtLimit === true
+          ? ['', '(days of this period were removed to stay under the size limit, so it holds fewer calls than were made)']
+          : data.stoppedAtLimit === true
+            ? ['', '(a day of this period stopped recording at the size limit, so it holds fewer calls than were made)']
+            : [])
       ].join('\n')
     }
     // Credentials design §7: a row per entry (its name, kind, what it hides, where), never a value
