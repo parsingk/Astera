@@ -2799,7 +2799,11 @@ describe('effect and the login folder a call touched', () => {
     // With a `;` the list is split on it alone
     ['MY_DIRS="/opt/a;$X/b" ./run.sh', 'unknown'],
     // A search path's entry in a login folder still names it (accepted)
-    ['PATH=~/.ssh/bin:$PATH ./run.sh', '.ssh']
+    ['PATH=~/.ssh/bin:$PATH ./run.sh', '.ssh'],
+    // The same values in assignments that stand alone
+    ['VOLUME=~/.ssh:/root/.ssh', '.ssh'],
+    ['PATH=~/.ssh/bin:$PATH', '.ssh'],
+    ['KUBECONFIG=~/.kube/a:$X', '.kube']
   ])('%s names %s', (line, sensitive) => {
     expectNames('Bash', line, sensitive)
   })
