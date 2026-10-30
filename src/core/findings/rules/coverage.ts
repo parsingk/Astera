@@ -2,14 +2,15 @@
 // can see (Observe) or block (Enforce) only in part. The gap is the CLI's, the same for every profile that runs it, so it
 // is raised once per CLI, session kind and Rule, and lists the active profiles it affects. A sandboxed profile does not
 // count for a write-outside-the-folder Rule where its CLI's sandbox holds that boundary (SANDBOX_COVERAGE). The reason
-// names the coverage word Policies shows for the cell, from the same tables of keys (audit/phrases.ts).
+// names the Rule's action, the row and the cell's note as Policies words them, from the same tables of keys
+// (audit/phrases.ts), and says a cell with no note in the sentence itself.
 import { actionsOfRule, classesOf } from '../../audit/actionClasses'
 import { COVERAGE_ENFORCE } from '../../audit/coverage'
 import { COVERAGE } from '../../audit/policy'
-import { COVERAGE_LEVEL_PHRASES, COVERAGE_NOTE_PHRASES, SESSION_KIND_PHRASES, actionPhraseKey } from '../../audit/phrases'
+import { COVERAGE_NOTE_PHRASES, SESSION_KIND_PHRASES, actionPhraseKey } from '../../audit/phrases'
 import type { AgentProfile } from '../../agentProfiles/types'
 import type { AuditAction, AuditRule, CoverageCell, CoverageClass, CoverageRow } from '../../audit/types'
-import type { Message } from '../../i18n'
+import { t, type Message, type MessageKey } from '../../i18n'
 import { PROVIDER_META, providerOf } from '../../providers/meta'
 import { SANDBOX_COVERAGE } from '../../sandbox/coverage'
 import type { FindingInputs } from '../compute'
@@ -29,8 +30,14 @@ const HELD: ReadonlySet<AuditAction> = new Set<AuditAction>(['filesystem.write',
 
 const isGap = (cell: CoverageCell): boolean => cell.level === 'partial' || cell.level === 'none'
 
-/** The word Policies shows for a cell: its note's when it has one, else its level's. */
-const coverageWord = (cell: CoverageCell): Message => ({ key: cell.note !== undefined ? COVERAGE_NOTE_PHRASES[cell.note] : COVERAGE_LEVEL_PHRASES[cell.level] })
+/** The reason's sentence for the cell a Rule first reaches. A note is named after a colon, in the word Policies shows for
+ *  it. A level alone is said in the sentence ("only in part"), and a cell not seen, or not blocked, at all is never "in
+ *  part", with a note or without. */
+export function gapReason(enforce: boolean, cell: CoverageCell): { key: MessageKey; coverage?: Message } {
+  if (cell.level === 'none') return { key: enforce ? 'findings.reason.coverageGapEnforceNone' : 'findings.reason.coverageGapNone' }
+  if (cell.note === undefined) return { key: enforce ? 'findings.reason.coverageGapEnforcePart' : 'findings.reason.coverageGapPart' }
+  return { key: enforce ? 'findings.reason.coverageGapEnforce' : 'findings.reason.coverageGap', coverage: { key: COVERAGE_NOTE_PHRASES[cell.note] } }
+}
 
 /** A Rule's action as Policies says it; a pattern it has no words for, as written. */
 const actionWord = (action: string): Message | string => {
@@ -77,7 +84,12 @@ export function coverageGapFindings(i: FindingInputs): Finding[] {
     const users = active.filter((a) => a.provider === row.provider)
     if (users.length === 0) continue
     const held = sandboxHoldsWrites(row.provider, i.platform)
-    const provider = PROVIDER_META[row.provider].displayName
+    // The row as Policies labels it, in the reader's language in the reason and in English as the subject's name
+    const cli: Message = {
+      key: 'settings.security.coverage.row',
+      params: { provider: PROVIDER_META[row.provider].displayName, kind: { key: SESSION_KIND_PHRASES[row.kind] } }
+    }
+    const subject: Finding['subject'] = { kind: 'cli', id: `${row.provider}-${row.kind}`, name: t('en', cli.key, cli.params) }
     const raised = new Set<string>()
     for (const rule of rules) {
       // Rule ids are the person's: should two share one, the first decides calls first, and one key stays one finding
@@ -88,22 +100,15 @@ export function coverageGapFindings(i: FindingInputs): Finding[] {
       raised.add(rule.id)
       // The first class through which an affected profile is still reached, in the Rule's order
       const reached = affected.some((u) => !u.p.sandbox) ? open : boxed
+      const { key, coverage } = gapReason(enforce, row.classes[reached[0]])
       out.push(
         finding({
           rule: 'coverage-gap',
-          subject: { kind: 'cli', id: `${row.provider}-${row.kind}`, name: `${provider} ${row.kind}` },
+          subject,
           profileIds: affected.map((u) => u.p.id),
           // One CLI meets several Rules: each is its own finding with its own key, so each can be ignored apart
           part: rule.id,
-          message: {
-            key: enforce ? 'findings.reason.coverageGapEnforce' : 'findings.reason.coverageGap',
-            params: {
-              rule: rule.id,
-              action: actionWord(rule.action),
-              cli: { key: 'settings.security.coverage.row', params: { provider, kind: { key: SESSION_KIND_PHRASES[row.kind] } } },
-              coverage: coverageWord(row.classes[reached[0]])
-            }
-          },
+          message: { key, params: { rule: rule.id, action: actionWord(rule.action), cli, ...(coverage !== undefined ? { coverage } : {}) } },
           suggestion: { key: 'findings.do.openPolicies' },
           open: { kind: 'policies' }
         })

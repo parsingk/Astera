@@ -19,12 +19,22 @@ const serverPartOf = (target: string): string => {
   return dot > 0 ? target.slice(0, dot) : target
 }
 
+/** Writes that go to the network, not outside the folder (ruling R4-2): a push, a pull request, a change on GitHub. */
+const NETWORK_WRITES: ReadonlySet<AuditAction> = new Set<AuditAction>(['git.remote.write', 'github.pr.create', 'github.write'])
+
 /**
- * Whether one place of a call may have written outside the session's folder: a write the resolver did not place inside,
- * or (ruling R2-2) a call that may write, placed outside. `mayWrite` is the call's effect read for that place: a record's
- * own effect, or for one command of a line, what its action can do (a command carries no effect of its own).
+ * Whether one place of a call may have written outside the session's folder (ruling R4-2):
+ * - a network write never did;
+ * - a local git write did only when it was placed outside: one with no place is taken to work in the session's own
+ *   repository, which the sandbox keeps writable;
+ * - any other write did unless it was placed inside (an install with no place may have gone anywhere);
+ * - and (ruling R2-2) a call that may write did when it was placed outside.
+ * `mayWrite` is the call's effect read for that place: a record's own effect, or for one command of a line, what its action
+ * can do (a command carries no effect of its own).
  */
 function wroteOutside(action: AuditAction, inside: boolean | undefined, mayWrite: boolean): boolean {
+  if (NETWORK_WRITES.has(action)) return false
+  if (action === 'git.local.write') return inside === false
   if (WRITE_ACTIONS.has(action)) return inside !== true
   return mayWrite && inside === false
 }

@@ -109,6 +109,17 @@ describe('unused-mcp (§4.5)', () => {
     expect(unusedMcpFindings(inputs({ registry, findingsSince: ago(40) }))).toHaveLength(1)
   })
 
+  // Ruling R4-3: a server switched off for 60 days and on again yesterday had no chance to be called
+  it('re-enabled 1 day ago, added 90 days ago: not judged; re-enabled 40 days ago: judged', () => {
+    expect(unusedMcpFindings(inputs({ registry: [mcp('mcp-github', { addedAt: ago(90), enabledAt: ago(1) })] }))).toEqual([])
+    expect(unusedMcpFindings(inputs({ registry: [mcp('mcp-github', { addedAt: ago(90), enabledAt: ago(29) })] }))).toEqual([])
+    expect(unusedMcpFindings(inputs({ registry: [mcp('mcp-github', { addedAt: ago(90), enabledAt: ago(40) })] }))).toHaveLength(1)
+    // No addedAt: the later of findingsSince and enabledAt
+    expect(unusedMcpFindings(inputs({ registry: [mcp('mcp-github', { addedAt: undefined, enabledAt: ago(5) })], findingsSince: ago(90) }))).toEqual([])
+    // An enabledAt that does not parse is never taken for old
+    expect(unusedMcpFindings(inputs({ registry: [mcp('mcp-github', { addedAt: ago(90), enabledAt: 'garbled' })] }))).toEqual([])
+  })
+
   it('an addedAt that does not parse is never taken for old', () => {
     expect(unusedMcpFindings(inputs({ registry: [mcp('mcp-github', { addedAt: 'not a time' })] }))).toEqual([])
   })
@@ -211,6 +222,12 @@ describe('stale-credential (§4.9)', () => {
     expect(staleCredentialFindings(inputs({ registry: [withSecret('mcp-linear', { addedAt: ago(10) })], findingsSince: ago(40) }))).toEqual([])
     // No addedAt: aged from findingsSince
     expect(staleCredentialFindings(inputs({ registry: [withSecret('mcp-linear', { addedAt: undefined })], findingsSince: ago(40) }))).toHaveLength(1)
+  })
+
+  it('a server switched on again 10 days ago: not judged; 40 days ago: judged (ruling R4-3)', () => {
+    const at = (enabledAt: string) => staleCredentialFindings(inputs({ registry: [withSecret('mcp-linear', { addedAt: ago(90), enabledAt })], findingsSince: ago(90) }))
+    expect(at(ago(10))).toEqual([])
+    expect(at(ago(40))).toHaveLength(1)
   })
 
   it('a use 3 days ago: not raised', () => {

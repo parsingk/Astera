@@ -40,6 +40,9 @@ export interface McpExtension {
    *  design §4.5, §4.9, plan ruling 2). Absent on an entry shared before this release, which is aged from that release's
    *  first run instead. */
   addedAt?: string
+  /** When it was last switched from off to on (ISO): a server that was off could not be called, so the usage findings age
+   *  it from the later of this and `addedAt` (ruling R4-3). Absent until it is first switched back on. */
+  enabledAt?: string
 }
 
 export interface FileExtension {

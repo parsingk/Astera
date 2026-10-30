@@ -151,9 +151,16 @@ export async function removeEntry(profileDir: string, id: string): Promise<void>
   await writeExtensionRegistry(profileDir, { version: 1, entries: registry.entries.filter((x) => x.id !== id) })
 }
 
+/** Switches an entry on or off. An MCP server switched from off to on is stamped `enabledAt`, so the usage findings do not
+ *  count the days it was off as days it went uncalled (lifecycle design §4.5, ruling R4-3); otherwise the stamp stays. */
 export async function setEnabled(profileDir: string, id: string, enabled: boolean): Promise<void> {
   const registry = await readExtensionRegistry(profileDir)
-  await writeExtensionRegistry(profileDir, { version: 1, entries: registry.entries.map((x) => (x.id === id ? { ...x, enabled } : x)) })
+  const at = new Date().toISOString()
+  const entries = registry.entries.map((x): ExtensionEntry => {
+    if (x.id !== id) return x
+    return x.kind === 'mcp' && enabled && !x.enabled ? { ...x, enabled, enabledAt: at } : { ...x, enabled }
+  })
+  await writeExtensionRegistry(profileDir, { version: 1, entries })
 }
 
 /** How the Gateway shares a server's process (Gateway design G8); sessions started after the change follow it. */

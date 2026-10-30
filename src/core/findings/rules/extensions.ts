@@ -24,11 +24,19 @@ const aboutServer = (e: McpExtension): Pick<Parameters<typeof finding>[0], 'subj
   open: { kind: 'extension', entryId: e.id }
 })
 
+/** How long a server has been shared and on, in whole days: from the later of when it was shared (or this release's
+ *  first run, for one shared before it) and when it was last switched back on (ruling R4-3), since a server that was off
+ *  could not be called. NaN when either time does not parse, which no threshold passes. */
+const serverAgeDays = (e: McpExtension, i: FindingInputs): number => {
+  const shared = ageDays(e.addedAt ?? i.findingsSince, i.nowMs)
+  return e.enabledAt === undefined ? shared : Math.min(shared, ageDays(e.enabledAt, i.nowMs))
+}
+
 /**
  * §4.5. An enabled server is judged over its own window, the shorter of the Observe history and its age, and only when
- * that window is the full 30 days: a server added 2 days ago is not unused, however long Observe has been on. It is used
- * when any session's `mcp.call` named it, under its name or under the name Claude Code writes it as (mcpNameMatches).
- * Read from every session's records, so a profile's own view of it is §4.10's.
+ * that window is the full 30 days: a server added 2 days ago, or switched back on yesterday, is not unused, however long
+ * Observe has been on. It is used when any session's `mcp.call` named it, under its name or under the name Claude Code
+ * writes it as (mcpNameMatches). Read from every session's records, so a profile's own view of it is §4.10's.
  */
 export function unusedMcpFindings(i: FindingInputs): Finding[] {
   const { observed, observe } = i
@@ -38,7 +46,7 @@ export function unusedMcpFindings(i: FindingInputs): Finding[] {
   for (const e of servers(i)) {
     if (!e.enabled) continue
     // NaN for a time that does not parse, which never reaches the window
-    const window = Math.min(observe.days, ageDays(e.addedAt ?? i.findingsSince, i.nowMs))
+    const window = Math.min(observe.days, serverAgeDays(e, i))
     if (!(window >= OBSERVE_WINDOW_DAYS)) continue
     if (called.some((part) => mcpNameMatches(e.name, part))) continue
     out.push(
@@ -97,8 +105,8 @@ export function unmanagedReferenceFindings(i: FindingInputs): Finding[] {
 /**
  * §4.9. The Credentials list's entry for each shared server that keeps a stored secret (`mcp:<serverId>`), with no use
  * recorded in the last 30 days. A use is recorded whether Observe is on or not, so this does not wait for Observe; it
- * waits instead until uses have been recorded for 30 days (this release's first run) and the server has been shared for
- * 30. Hide-only entries have no use signal and are never judged.
+ * waits instead until uses have been recorded for 30 days (this release's first run) and the server has been shared, and
+ * on, for 30 (serverAgeDays). Hide-only entries have no use signal and are never judged.
  */
 export function staleCredentialFindings(i: FindingInputs): Finding[] {
   const { registry, credentials, credentialLastUse } = i
@@ -108,7 +116,7 @@ export function staleCredentialFindings(i: FindingInputs): Finding[] {
   const out: Finding[] = []
   for (const entry of mcpSecretEntries({ version: 1, entries: registry }, credentials.mcpHide)) {
     const server = byId.get(entry.serverId)
-    if (server === undefined || !(ageDays(server.addedAt ?? i.findingsSince, i.nowMs) >= STALE_CREDENTIAL_DAYS)) continue
+    if (server === undefined || !(serverAgeDays(server, i) >= STALE_CREDENTIAL_DAYS)) continue
     if (credentialLastUse.has(entry.id)) continue
     out.push(
       finding({

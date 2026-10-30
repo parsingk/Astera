@@ -90,8 +90,12 @@ export interface ProfileUse {
   calls: number
   /** Every record of the profile carried `effect`, and each was `read`. */
   allRead: boolean
-  /** Every record carried `effect`; none had `sensitive`; none wrote outside its folder (a write action whose
-   *  `insideProject` is not true, or a command in `commands` that is a write with `insideProject` not true). */
+  /** Every record carried `effect`; none had `sensitive`; none wrote outside its folder, by its headline or by a command in
+   *  `commands` (rulings R2-2, R4-2):
+   *  - a push, a pull request or a change on GitHub writes to the network, never outside;
+   *  - a local git write is outside only with `insideProject` false;
+   *  - any other write (a file write or delete, an install) is outside unless `insideProject` is true;
+   *  - a call that may write (effect `unknown`, or a command that is not a read) is outside with `insideProject` false. */
   stayedInFolder: boolean
   /** The server part of each `mcp.call` target (`server.tool` → `server`). */
   mcpServers: Set<string>

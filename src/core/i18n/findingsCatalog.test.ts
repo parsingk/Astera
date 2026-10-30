@@ -61,6 +61,20 @@ describe('the findings catalog', () => {
         'Rule {rule} denies {action}, and {cli} sessions can block it only in part: {coverage}.',
         '규칙 {rule}은 {action}을 거부하지만, {cli} 세션에서는 일부만 막을 수 있습니다: {coverage}.'
       ],
+      // A cell with a level only (fix round 1, Minor 1): no word after a colon, and `none` is never "in part"
+      'findings.reason.coverageGapPart': [
+        'Rule {rule} denies {action}, and {cli} sessions see it only in part.',
+        '규칙 {rule}은 {action}을 거부하지만, {cli} 세션에서는 일부만 보입니다.'
+      ],
+      'findings.reason.coverageGapNone': ['Rule {rule} denies {action}, and {cli} sessions do not see it.', '규칙 {rule}은 {action}을 거부하지만, {cli} 세션에서는 보이지 않습니다.'],
+      'findings.reason.coverageGapEnforcePart': [
+        'Rule {rule} denies {action}, and {cli} sessions can block it only in part.',
+        '규칙 {rule}은 {action}을 거부하지만, {cli} 세션에서는 일부만 막을 수 있습니다.'
+      ],
+      'findings.reason.coverageGapEnforceNone': [
+        'Rule {rule} denies {action}, and {cli} sessions cannot block it.',
+        '규칙 {rule}은 {action}을 거부하지만, {cli} 세션에서는 막을 수 없습니다.'
+      ],
       'findings.reason.staleRuntime': ['Not reached in {days} days.', '{days}일 동안 연결되지 않았습니다.'],
       'findings.reason.staleRuntimeNever': ['Never reached since it was paired {days} days ago.', '연결한 지 {days}일이 지났지만 한 번도 닿지 않았습니다.'],
       'findings.reason.unmanagedReference': [

@@ -1,10 +1,10 @@
 // What observe mode's actions and coverage notes are called where a person reads them (design §11): one table of message
 // keys that Settings › Security & Access says in the person's language and the CLI's `--human` output says in English,
-// so the two never name the same call differently. Never the action's own name (`git.remote.write`). The coverage words
-// (levels, session kinds, rule groups) live here too, so a finding's reason names a coverage gap as Policies does
-// (lifecycle design §4.6).
+// so the two never name the same call differently. Never the action's own name (`git.remote.write`). A rule's groups and
+// the coverage rows' session kinds live here too, so a finding's reason names a coverage gap as Policies does (lifecycle
+// design §4.6).
 import type { MessageKey } from '../i18n'
-import type { AuditAction, CoverageCell, CoverageNote, CoverageRow } from './types'
+import type { AuditAction, CoverageNote, CoverageRow } from './types'
 
 /** A record, so the compiler holds it to the resolver's list: an action missing here fails to build. */
 export const ACTION_PHRASES: Record<AuditAction, MessageKey> = {
@@ -48,14 +48,6 @@ export function actionPhraseKey(action: string): MessageKey | null {
   if (Object.hasOwn(ACTION_PHRASES, action)) return ACTION_PHRASES[action as AuditAction]
   if (Object.hasOwn(ACTION_GROUP_PHRASES, action)) return ACTION_GROUP_PHRASES[action]
   return null
-}
-
-/** How much of a class observe sees, or Enforce blocks, in the coverage tables (COVERAGE, COVERAGE_ENFORCE). */
-export const COVERAGE_LEVEL_PHRASES: Record<CoverageCell['level'], MessageKey> = {
-  seen: 'settings.security.coverage.level.seen',
-  partial: 'settings.security.coverage.level.partial',
-  none: 'settings.security.coverage.level.none',
-  enforced: 'settings.security.coverage.level.enforced'
 }
 
 /** The kind of session a coverage row is for. */

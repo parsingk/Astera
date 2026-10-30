@@ -18,7 +18,6 @@ import type {
 import {
   ACTION_GROUP_PHRASES as GROUPS,
   ACTION_PHRASES,
-  COVERAGE_LEVEL_PHRASES as LEVELS,
   COVERAGE_NOTE_PHRASES,
   SESSION_KIND_PHRASES as KINDS,
   actionPhraseKey
@@ -95,6 +94,12 @@ const CLASS_WORDS: Record<CoverageClass, MessageKey> = {
   'file-write': 'settings.security.coverage.class.file-write',
   mcp: 'settings.security.coverage.class.mcp',
   network: 'settings.security.coverage.class.network'
+}
+const LEVELS: Record<CoverageCell['level'], MessageKey> = {
+  seen: 'settings.security.coverage.level.seen',
+  partial: 'settings.security.coverage.level.partial',
+  none: 'settings.security.coverage.level.none',
+  enforced: 'settings.security.coverage.level.enforced'
 }
 
 /** The coverage table's title: what Enforce blocks while it is on, else what observe records. */

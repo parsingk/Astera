@@ -90,8 +90,8 @@ describe('the Observe usage summary', () => {
     expect(writeInside.byProfile.get('ap_a')).toMatchObject({ allRead: false, stayedInFolder: true })
     const writeOutside = useOf(rec({ action: 'filesystem.write', effect: 'write', insideProject: false }))
     expect(writeOutside.byProfile.get('ap_a')).toMatchObject({ allRead: false, stayedInFolder: false })
-    // A write the resolver could not place is not known to have stayed inside
-    const writeUnplaced = useOf(rec({ action: 'git.remote.write', effect: 'write', insideProject: undefined }))
+    // A file write the resolver could not place is not known to have stayed inside
+    const writeUnplaced = useOf(rec({ action: 'filesystem.write', effect: 'write', insideProject: undefined }))
     expect(writeUnplaced.byProfile.get('ap_a')).toMatchObject({ stayedInFolder: false })
     // A command of a line that writes outside, though the line's headline reads inside
     const line = useOf(
@@ -110,6 +110,49 @@ describe('the Observe usage summary', () => {
       })
     )
     expect(lineInside.byProfile.get('ap_a')).toMatchObject({ stayedInFolder: true })
+  })
+
+  // Ruling R4-2: a push, a pull request and a change on GitHub write to the network, not outside the folder; a local git
+  // write is outside only when it was placed there; an install the resolver could not place may have gone anywhere
+  it('a network write keeps stayedInFolder, placed or not, as a headline or as a command of a line', () => {
+    for (const action of ['git.remote.write', 'github.pr.create', 'github.write'] as const) {
+      for (const insideProject of [undefined, false]) {
+        const headline = useOf(rec({ action, effect: 'write', insideProject }))
+        expect(headline.byProfile.get('ap_a'), `${action} ${insideProject}`).toMatchObject({ allRead: false, stayedInFolder: true })
+        const command = useOf(
+          rec({
+            effect: 'write',
+            confidence: 'heuristic',
+            commands: [{ action: 'filesystem.read', insideProject: true }, insideProject === undefined ? { action } : { action, insideProject }]
+          })
+        )
+        expect(command.byProfile.get('ap_a'), `${action} ${insideProject} in a line`).toMatchObject({ stayedInFolder: true })
+      }
+    }
+  })
+
+  it('a local git write turns stayedInFolder false only when placed outside', () => {
+    const unplaced = useOf(rec({ action: 'git.local.write', effect: 'write', insideProject: undefined }))
+    expect(unplaced.byProfile.get('ap_a')).toMatchObject({ stayedInFolder: true })
+    const inside = useOf(rec({ action: 'git.local.write', effect: 'write', insideProject: true }))
+    expect(inside.byProfile.get('ap_a')).toMatchObject({ stayedInFolder: true })
+    const outside = useOf(rec({ action: 'git.local.write', effect: 'write', insideProject: false }))
+    expect(outside.byProfile.get('ap_a')).toMatchObject({ stayedInFolder: false })
+    const lineUnplaced = useOf(rec({ effect: 'write', confidence: 'heuristic', commands: [{ action: 'filesystem.read', insideProject: true }, { action: 'git.local.write' }] }))
+    expect(lineUnplaced.byProfile.get('ap_a')).toMatchObject({ stayedInFolder: true })
+    const lineOutside = useOf(
+      rec({ effect: 'write', confidence: 'heuristic', commands: [{ action: 'filesystem.read', insideProject: true }, { action: 'git.local.write', insideProject: false }] })
+    )
+    expect(lineOutside.byProfile.get('ap_a')).toMatchObject({ stayedInFolder: false })
+  })
+
+  it('an install the resolver could not place turns stayedInFolder false', () => {
+    const unplaced = useOf(rec({ action: 'package.install', effect: 'write', insideProject: undefined }))
+    expect(unplaced.byProfile.get('ap_a')).toMatchObject({ stayedInFolder: false })
+    const inLine = useOf(rec({ effect: 'write', confidence: 'heuristic', commands: [{ action: 'filesystem.read', insideProject: true }, { action: 'package.install' }] }))
+    expect(inLine.byProfile.get('ap_a')).toMatchObject({ stayedInFolder: false })
+    const inside = useOf(rec({ action: 'package.install', effect: 'write', insideProject: true }))
+    expect(inside.byProfile.get('ap_a')).toMatchObject({ stayedInFolder: true })
   })
 
   it('any sensitive value turns stayedInFolder false', () => {

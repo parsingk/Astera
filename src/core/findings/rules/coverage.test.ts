@@ -7,7 +7,7 @@ import type { AuditPolicy, AuditRule } from '../../audit/types'
 import type { AgentProfile } from '../../agentProfiles/types'
 import type { FindingInputs } from '../compute'
 import type { Finding } from '../types'
-import { coverageGapFindings, sandboxHoldsWrites } from './coverage'
+import { coverageGapFindings, gapReason, sandboxHoldsWrites } from './coverage'
 
 const NOW = Date.parse('2026-10-30T00:00:00.000Z')
 const ago = (days: number): string => new Date(NOW - days * 24 * 60 * 60 * 1000).toISOString()
@@ -63,7 +63,7 @@ describe('coverage-gap (§4.6)', () => {
       {
         key: 'coverage-gap:codex-terminal:starter-git-remote-write',
         rule: 'coverage-gap',
-        subject: { kind: 'cli', id: 'codex-terminal', name: 'Codex terminal' },
+        subject: { kind: 'cli', id: 'codex-terminal', name: 'Codex Terminal' },
         profileIds: ['ap_c1', 'ap_c2', 'ap_c4'],
         part: 'starter-git-remote-write',
         message: {
@@ -103,16 +103,45 @@ describe('coverage-gap (§4.6)', () => {
     )
   })
 
-  it('a cell with no note is named by its level, and a group is named as Policies names it', () => {
+  it('a cell with no note says only that it is partly seen, and a group is named as Policies names it', () => {
     const profiles = [prof('ap_c1', ['acc_codex'])]
-    // Codex chat's network is partial with no note
+    // Codex chat's network is partial with no note: no word after a colon
     const found = coverageGapFindings(inputs({ profiles, policy: policy('observe', [{ id: 'no-web', effect: 'deny', action: 'network.request' }]) }))
-    expect(one(found, 'codex-chat', 'no-web')[0]?.message.params?.coverage).toEqual({ key: 'settings.security.coverage.level.partial' })
+    const chat = one(found, 'codex-chat', 'no-web')[0]
+    expect(chat?.message.key).toBe('findings.reason.coverageGapPart')
+    expect(chat?.message.params).not.toHaveProperty('coverage')
+    expect(chat?.reason).toBe('Rule no-web denies make a web request, and Codex Chat sessions see it only in part.')
+    // Codex terminal's network cell has a note, which the reason names
+    expect(one(found, 'codex-terminal', 'no-web')[0]?.message).toMatchObject({
+      key: 'findings.reason.coverageGap',
+      params: { coverage: { key: 'audit.coverageNote.web-search-and-shell-text' } }
+    })
     const grouped = coverageGapFindings(inputs({ profiles, policy: policy('enforce', [{ id: 'no-git', effect: 'deny', action: 'git.*' }]) }))
     expect(one(grouped, 'codex-terminal', 'no-git')[0]?.message.params?.action).toEqual({ key: 'settings.security.group.git' })
     // A pattern Policies has no words for is named as written
     const other = coverageGapFindings(inputs({ profiles, policy: policy('enforce', [{ id: 'no-re', effect: 'deny', action: 'git.re*' }]) }))
     expect(one(other, 'codex-terminal', 'no-re')[0]?.message.params?.action).toBe('git.re*')
+  })
+
+  it('the reason follows the cell: a note is named after a colon, a level alone is said in the sentence, none is never "in part"', () => {
+    expect(gapReason(false, { level: 'partial', note: 'shell-text-only' })).toEqual({
+      key: 'findings.reason.coverageGap',
+      coverage: { key: 'audit.coverageNote.shell-text-only' }
+    })
+    expect(gapReason(true, { level: 'partial', note: 'interactive-input' })).toEqual({
+      key: 'findings.reason.coverageGapEnforce',
+      coverage: { key: 'audit.coverageNote.interactive-input' }
+    })
+    expect(gapReason(false, { level: 'partial' })).toEqual({ key: 'findings.reason.coverageGapPart' })
+    expect(gapReason(true, { level: 'partial' })).toEqual({ key: 'findings.reason.coverageGapEnforcePart' })
+    // A cell not seen at all, or not blocked at all, says so, with a note or without
+    expect(gapReason(false, { level: 'none' })).toEqual({ key: 'findings.reason.coverageGapNone' })
+    expect(gapReason(false, { level: 'none', note: 'web-tools-only' })).toEqual({ key: 'findings.reason.coverageGapNone' })
+    expect(gapReason(true, { level: 'none' })).toEqual({ key: 'findings.reason.coverageGapEnforceNone' })
+    expect(gapReason(true, { level: 'none', note: 'web-tools-only' })).toEqual({ key: 'findings.reason.coverageGapEnforceNone' })
+    // Under Enforce, Codex chat's network cell is partial with no note
+    const found = coverageGapFindings(inputs({ profiles: [prof('ap_c1', ['acc_codex'])], policy: policy('enforce', [{ id: 'no-web', effect: 'deny', action: 'network.request' }]) }))
+    expect(one(found, 'codex-chat', 'no-web')[0]?.reason).toBe('Rule no-web denies make a web request, and Codex Chat sessions can block it only in part.')
   })
 
   it('allow rules and otherwise never raise one', () => {
@@ -176,7 +205,7 @@ describe('coverage-gap (§4.6)', () => {
     // Used, Claude's rows are raised too
     const withClaude = coverageGapFindings(inputs({ profiles: [...profiles, prof('ap_cl2', ['acc_claude'])], policy: policy('observe', rules) }))
     expect(one(withClaude, 'claude-chat', 'no-web')[0]).toMatchObject({
-      subject: { kind: 'cli', id: 'claude-chat', name: 'Claude chat' },
+      subject: { kind: 'cli', id: 'claude-chat', name: 'Claude Chat' },
       profileIds: ['ap_cl2'],
       message: { params: { coverage: { key: 'audit.coverageNote.web-tools-only' } } }
     })
