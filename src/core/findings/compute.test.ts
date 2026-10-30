@@ -91,7 +91,7 @@ describe('computeFindings', () => {
         credentials: { version: 1, entries: [], mcpHide: {} },
         credentialLastUse: new Map(),
         runtimes: [],
-        extensionUses: { skillOrCommand: new Set(), agents: new Set() },
+        extensionUses: { skillOrCommand: new Set(), agents: new Set(), claudeChatSeen: false },
         extensionCopies: new Map(),
         claudeVersion: null
       },
@@ -223,7 +223,7 @@ describe('computeFindings', () => {
       observe: { on: true, days: 30 },
       observed: emptyUse(),
       registry,
-      extensionUses: { skillOrCommand: new Set(), agents: new Set() },
+      extensionUses: { skillOrCommand: new Set(), agents: new Set(), claudeChatSeen: false },
       extensionCopies: new Map([
         ['skill-zeta', {}],
         ['skill-alpha', {}],
@@ -247,8 +247,7 @@ describe('computeFindings', () => {
       ['extensionUses', 'extension-uses'],
       ['extensionCopies', 'extension-uses'],
       ['claudeVersion', 'cli-version'],
-      ['observe', 'policy'],
-      ['observed', 'records']
+      ['observe', 'policy']
     ]
     for (const [field, source] of cases) {
       const without = computeFindings({ ...full, [field]: undefined }, NONE)
@@ -256,8 +255,15 @@ describe('computeFindings', () => {
       expect(without.info, field).toEqual([])
       expect(without.unread, field).toContain(source)
     }
-    // An unknown version is a value: Claude cannot tell
-    expect(computeFindings({ ...full, claudeVersion: null }, NONE).info.map((l) => l.message.key)).toEqual(Array(4).fill('findings.info.claudeCannotTell'))
+    // Ruling R6-1: whether a Claude chat ran is the use log's to say, so the records are not this row's source
+    expect(computeFindings({ ...full, observed: undefined }, NONE).findings.map((f) => f.key)).toEqual(['unused-agent:agent-reviewer', 'unused-command:command-ship'])
+    // An unknown version is a value: Claude cannot tell, and for a skill Codex has too, neither can
+    expect(computeFindings({ ...full, claudeVersion: null }, NONE).info.map((l) => [l.subject.name, l.message.key])).toEqual([
+      ['alpha', 'findings.info.claudeCannotTellCodexToo'],
+      ['reviewer', 'findings.info.claudeCannotTell'],
+      ['ship', 'findings.info.claudeCannotTell'],
+      ['zeta', 'findings.info.claudeCannotTellCodexToo']
+    ])
   })
 
   it('null is a value and undefined is unread (ruling R-P1)', () => {

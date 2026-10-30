@@ -33,11 +33,15 @@ export interface ResolveCall {
   home?: string
 }
 
-/** The fields of a Claude tool's input this reads, and the two that name a shared skill or agent used (`skill` of the
- *  Skill tool, `subagent_type` of the Agent tool, lifecycle design §4.12), which this does not read. The audit capture
- *  keeps these and drops the rest (a Write's contents, an Edit's strings, a Skill's `args`), so nothing more of a call
- *  waits on disk (statusline.ts). */
-export const CLAUDE_INPUT_FIELDS = ['command', 'cmd', 'workdir', 'file_path', 'notebook_path', 'path', 'pattern', 'url', 'skill', 'subagent_type'] as const
+/** The fields of a Claude tool's input this reads. The audit capture keeps these and drops the rest (a Write's contents,
+ *  an Edit's strings), so nothing more of a call waits on disk (statusline.ts). */
+export const CLAUDE_INPUT_FIELDS = ['command', 'cmd', 'workdir', 'file_path', 'notebook_path', 'path', 'pattern', 'url'] as const
+
+/** The field of a Claude tool's input that names a shared skill or agent used (lifecycle design §4.12), by the tool that
+ *  carries it: the Skill tool's `skill`, the Agent tool's (Task, by its older name) `subagent_type`. This does not read
+ *  them. The audit capture keeps each from its own tool only, beside CLAUDE_INPUT_FIELDS, so another tool's input field
+ *  of that name (an MCP tool's `skill`) and the rest of these tools' input (a Skill's `args`) are never written. */
+export const CLAUDE_USE_INPUT_FIELDS: Readonly<Record<string, string>> = { Skill: 'skill', Agent: 'subagent_type', Task: 'subagent_type' }
 
 export interface ResolvedAction {
   action: AuditAction

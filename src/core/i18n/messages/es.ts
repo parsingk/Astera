@@ -2314,5 +2314,9 @@ export const es: Catalog = {
   'findings.info.claudeOnlyNoUse': 'No hay ningún uso registrado en Claude en {days} días. Codex no puede saberlo.',
   'findings.info.claudeCannotTell': 'Claude no puede saberlo: necesita Claude Code {min} o posterior para informar de los usos.',
   'findings.info.claudeChatCannotTell':
-    'Claude no puede saberlo: en estos {days} días hubo un chat de Claude, y no se informa de una habilidad o un comando escrito en un chat.'
+    'Claude no puede saberlo: hubo un chat de Claude en los últimos {days} días, y Claude Code no informa de una habilidad o un comando escrito en un chat.',
+  'findings.info.claudeCannotTellCodexToo':
+    'Ni Claude ni Codex pueden saberlo: Claude necesita Claude Code {min} o posterior para informar de los usos.',
+  'findings.info.claudeChatCannotTellCodexToo':
+    'Ni Claude ni Codex pueden saberlo: hubo un chat de Claude en los últimos {days} días, y Claude Code no informa de una habilidad o un comando escrito en un chat.'
 }

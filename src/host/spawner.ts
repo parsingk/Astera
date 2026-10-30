@@ -54,7 +54,7 @@ import { ensureInstallDirOnPath } from '../core/sessions/installDirPath'
 import { SessionManager, askCodexWindowsReady, defaultSpawnChecks } from '../core/sessions/manager'
 import { defaultSessionTitle } from '../core/sessions/title'
 import type { PtyFactory, PtyLike } from '../core/sessions/pty'
-import { StatusLineManager, resolveNodePath } from '../core/sessions/statusline'
+import { StatusLineManager, resolveNodePath, withUseReports } from '../core/sessions/statusline'
 import { BusyScanner } from '../core/terminal/busy'
 import { previewShotsDir } from '../core/preview/shotsDir'
 import type { Account, SessionInfo } from '../core/types'
@@ -486,7 +486,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     Number.POSITIVE_INFINITY,
     0,
     homeDir,
-    (id, account, o) => statusLine.spawnConfig(id, account, o),
+    // An observed session's settings carry the use hooks when its Claude Code reports uses (lifecycle design §4.12)
+    (id, account, o) => statusLine.spawnConfig(id, account, withUseReports(o, () => cliVersions('claude'))),
     [previewShotsDir(profileDir)],
     // Read at each spawn, not once: the Host completes its PATH when a CLI is missing (windowsPath.ts)
     () => hostWorkerBaseEnv(d.env),
@@ -517,8 +518,12 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   // The Credentials list (credentials design §5): a worker's worktree counts as its project's folder
   const hiding = createHidingSource({ profileDir, projectOf: projectOfWorktrees(() => d.worktrees.list?.() ?? []), log: hidingLog(profileDir, log) })
   sessions.hiding = hiding
-  // Observe mode: an observed Claude session's hook settings, written by its prepare (StatusLineManager.ensureObserveFiles)
-  sessions.observeHooks = () => statusLine.ensureObserveFiles()
+  // Observe mode: an observed Claude session's hook settings, written by its prepare (StatusLineManager.ensureObserveFiles),
+  // and the Claude version that picks the file with the use hooks or without (lifecycle design §4.12), asked off the thread
+  // so the spawn reads it from the probe's cache
+  sessions.observeHooks = async () => {
+    await Promise.all([statusLine.ensureObserveFiles(), cliVersions.warm('claude')])
+  }
   // Enforce: the blocking hook, written by a session's prepare, which refuses the start without it (E5). A Claude terminal
   // session reads it from its settings file; a chat, and any Codex session, from these arguments
   sessions.enforceHooks = () => statusLine.ensureEnforceFiles()

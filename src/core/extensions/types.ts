@@ -63,6 +63,16 @@ export interface FileExtension {
 
 export type ExtensionEntry = McpExtension | FileExtension
 
+/** What a shared skill or agent's canonical copy says of itself (lifecycle design §4.12), read from its frontmatter
+ *  (copies.ts): the `name` Claude Code also knows it by (an agent's only name, in hooks and calls), for an agent the skills
+ *  its `skills:` preloads, and for a skill the agent its `agent:` runs it in (a `context: fork` skill). Claude Code
+ *  injects a preloaded skill with no event, and may start a fork's agent with none. */
+export interface ExtensionCopy {
+  name?: string
+  skills?: string[]
+  agent?: string
+}
+
 export interface ExtensionRegistry {
   version: 1
   entries: ExtensionEntry[]

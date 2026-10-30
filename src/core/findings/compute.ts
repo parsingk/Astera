@@ -7,12 +7,11 @@ import type { Account } from '../types'
 import type { OrchState } from '../orchestration/state'
 import type { SpentTokens } from '../orchestration/publicViews'
 import type { AuditPolicy } from '../audit/types'
-import type { ExtensionEntry } from '../extensions/types'
+import type { ExtensionCopy, ExtensionEntry } from '../extensions/types'
 import type { CredentialsFile } from '../credentials/types'
 import type { RuntimeProfile } from '../runtimes/registry'
 import type { IgnoredFile } from './ignored'
 import type {
-  ExtensionCopy,
   ExtensionUseSummary,
   Finding,
   FindingRule,
@@ -58,7 +57,7 @@ export interface FindingInputs {
   credentialLastUse?: ReadonlyMap<string, string>
   runtimes?: RuntimeProfile[]
   extensionUses?: ExtensionUseSummary
-  /** What each shared skill and agent's canonical copy says it is called, by entry id (audit/extensionUses.ts
+  /** What each shared skill and agent's canonical copy says of itself, by entry id (extensions/copies.ts
    *  readExtensionCopies): a use is matched by it (§4.12). An entry missing from it could not be read. */
   extensionCopies?: ReadonlyMap<string, ExtensionCopy>
   /** The Claude Code on this machine, from the Host's version probe; null when it could not be read (Task 6). */
@@ -118,8 +117,7 @@ export const RULES: RuleRow[] = [
   { needs: ['profiles', 'accounts', 'records', 'policy', 'settings'], run: overBroadBypassFindings },
   { needs: ['profiles', 'accounts', 'records', 'policy'], run: overBroadSandboxFindings },
   { needs: ['profiles', 'accounts', 'records', 'policy', 'extensions', 'account-mcp'], run: overBroadMcpFindings },
-  // §4.12 reads the records too: a Claude chat in the window is a place a typed skill or command goes unreported
-  { needs: ['extensions', 'extension-uses', 'policy', 'cli-version', 'records'], run: extensionUseFindings, info: extensionUseInfo }
+  { needs: ['extensions', 'extension-uses', 'policy', 'cli-version'], run: extensionUseFindings, info: extensionUseInfo }
 ]
 
 /** The order the section groups subjects in (§7): profiles first, a CLI's coverage last. */

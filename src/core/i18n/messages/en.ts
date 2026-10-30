@@ -2549,5 +2549,9 @@ export const en: Record<keyof typeof ko, string> = {
   'findings.info.claudeOnlyNoUse': 'No recorded use in Claude in {days} days. Codex cannot tell.',
   'findings.info.claudeCannotTell': 'Claude cannot tell: it needs Claude Code {min} or later to report uses.',
   'findings.info.claudeChatCannotTell':
-    'Claude cannot tell: a Claude chat ran in these {days} days, and a skill or command typed in a chat is not reported.'
+    'Claude cannot tell: a Claude chat ran in the last {days} days, and Claude Code does not report a skill or command typed in a chat.',
+  'findings.info.claudeCannotTellCodexToo':
+    'Neither Claude nor Codex can tell: Claude needs Claude Code {min} or later to report uses.',
+  'findings.info.claudeChatCannotTellCodexToo':
+    'Neither Claude nor Codex can tell: a Claude chat ran in the last {days} days, and Claude Code does not report a skill or command typed in a chat.'
 }

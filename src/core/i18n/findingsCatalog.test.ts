@@ -130,9 +130,18 @@ describe('the findings catalog', () => {
         'Claude cannot tell: it needs Claude Code {min} or later to report uses.',
         'Claude는 알 수 없습니다. 사용을 알리려면 Claude Code {min} 이상이 필요합니다.'
       ],
+      // Rulings R6-3 and R6-4: the chat line's wording, and both lines for an item installed for Codex too
       'findings.info.claudeChatCannotTell': [
-        'Claude cannot tell: a Claude chat ran in these {days} days, and a skill or command typed in a chat is not reported.',
-        'Claude는 알 수 없습니다. 최근 {days}일 동안 Claude 대화가 있었고, 대화에서 입력한 스킬이나 명령은 알려지지 않습니다.'
+        'Claude cannot tell: a Claude chat ran in the last {days} days, and Claude Code does not report a skill or command typed in a chat.',
+        'Claude는 알 수 없습니다. 최근 {days}일 동안 Claude 대화가 있었고, 대화에서 입력한 스킬이나 명령은 기록되지 않습니다.'
+      ],
+      'findings.info.claudeCannotTellCodexToo': [
+        'Neither Claude nor Codex can tell: Claude needs Claude Code {min} or later to report uses.',
+        'Claude와 Codex 모두 알 수 없습니다. Claude가 사용을 알리려면 Claude Code {min} 이상이 필요합니다.'
+      ],
+      'findings.info.claudeChatCannotTellCodexToo': [
+        'Neither Claude nor Codex can tell: a Claude chat ran in the last {days} days, and Claude Code does not report a skill or command typed in a chat.',
+        'Claude와 Codex 모두 알 수 없습니다. 최근 {days}일 안에 Claude 대화가 있었고, 대화에서 입력한 스킬이나 명령은 기록되지 않습니다.'
       ]
     }
     for (const [key, [english, korean]] of Object.entries(copy)) {

@@ -41,9 +41,27 @@ export const LOOKUP_WAIT_MS = 10_000
 /** How long after a failed read of the mode the next try waits, doubling up to the longest. */
 const RETRY_FIRST_MS = 5_000
 const RETRY_MAX_MS = 30_000
-/** Dedupe keys kept per session, and sessions kept; past either, the least recently heard go first. */
+/** Dedupe keys kept per session, and sessions kept; past either, the least recently heard go first. Calls and uses each
+ *  have their own (keyMemory). */
 const KEYS_PER_SESSION = 1000
 const SESSIONS_KEPT = 200
+
+/** A memory of the keys heard in each session: whether a key was heard before in its session, remembered if not. The
+ *  least recently heard session, and a session's oldest key, are let go first. */
+function keyMemory(): (sessionId: string, key: string) => boolean {
+  const bySession = new Map<string, Set<string>>()
+  return (sessionId, key) => {
+    const keys = bySession.get(sessionId) ?? new Set<string>()
+    // Moved to the end: the least recently heard session is the first to go
+    bySession.delete(sessionId)
+    bySession.set(sessionId, keys)
+    if (bySession.size > SESSIONS_KEPT) bySession.delete(bySession.keys().next().value as string)
+    if (keys.has(key)) return true
+    keys.add(key)
+    if (keys.size > KEYS_PER_SESSION) keys.delete(keys.values().next().value as string)
+    return false
+  }
+}
 const TOOL_MAX = 100
 /** The most characters a use's name keeps: Claude Code's own limit on an agent's name. */
 const USE_NAME_MAX = 256
@@ -213,12 +231,15 @@ export function createAuditRecorder(d: {
   let pending: AuditRecord[] = []
   /** Uses that wait for the disk, behind the same mode as the records. */
   let usesPending: ExtensionUse[] = []
-  /** Calls dropped while the hold was full, told when it empties. */
+  /** Calls dropped while the hold was full, and uses dropped while theirs was, each told when it empties. */
   let dropped = 0
+  let droppedUses = 0
   /** A flush is queued or running. */
   let busy = false
   let queue: Promise<void> = Promise.resolve()
-  const heardKeys = new Map<string, Set<string>>()
+  /** Whether a call, or a use, was heard before in its session: apart, so a session's uses never push out its calls' keys. */
+  const heard = keyMemory()
+  const useHeard = keyMemory()
   const hookRan = d.hookRan ?? ((id: string) => existsSync(path.join(profilePaths(d.profileDir).enforceEvents, `${id}.jsonl`)))
   /** Enforced sessions whose hook was seen to run, and those told missing: each asked about once. */
   const proven = new Set<string>()
@@ -320,22 +341,13 @@ export function createAuditRecorder(d: {
         d.log(`audit: ${dropped} call(s) were not recorded while ${AUDIT_PENDING_MAX} records waited for the disk`)
         dropped = 0
       }
+      if (droppedUses > 0) {
+        d.log(`audit: ${droppedUses} use(s) of skills, commands or agents were not recorded while ${AUDIT_PENDING_MAX} uses waited for the disk`)
+        droppedUses = 0
+      }
     } finally {
       busy = false
     }
-  }
-
-  /** Whether the call was heard before in its session; remembered if not. */
-  const heard = (sessionId: string, key: string): boolean => {
-    const keys = heardKeys.get(sessionId) ?? new Set<string>()
-    // Moved to the end: the least recently heard session is the first to go
-    heardKeys.delete(sessionId)
-    heardKeys.set(sessionId, keys)
-    if (heardKeys.size > SESSIONS_KEPT) heardKeys.delete(heardKeys.keys().next().value as string)
-    if (keys.has(key)) return true
-    keys.add(key)
-    if (keys.size > KEYS_PER_SESSION) keys.delete(keys.values().next().value as string)
-    return false
   }
 
   const timeOf = (at: string | undefined): string =>
@@ -444,10 +456,10 @@ export function createAuditRecorder(d: {
         const info = d.sessionInfo(ev.sessionId)
         if (info === null) return
         // Its own keys: the Skill call that used a skill is a call too, under the same id
-        if (ev.dedupeKey !== undefined && heard(ev.sessionId, `use:${ev.dedupeKey}`)) return
+        if (ev.dedupeKey !== undefined && useHeard(ev.sessionId, ev.dedupeKey)) return
         if (usesPending.length >= AUDIT_PENDING_MAX) {
-          if (dropped === 0) d.log(`audit: ${AUDIT_PENDING_MAX} uses wait for the disk; later ones are counted and not recorded until it takes them`)
-          dropped += 1
+          if (droppedUses === 0) d.log(`audit: ${AUDIT_PENDING_MAX} uses wait for the disk; later uses are counted and not recorded until it takes them`)
+          droppedUses += 1
           return
         }
         usesPending.push({

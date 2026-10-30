@@ -33,6 +33,14 @@ export function atLeast(found: string, min: string): boolean {
   return true
 }
 
+/** The Claude Code the research saw both UserPromptExpansion and SubagentStart in (lifecycle design §4.12, plan ruling 15).
+ *  Older, or a version that could not be read, is not given the two hooks (statusline.ts), and its uses read "Claude
+ *  cannot tell" (findings/rules/extensionUse.ts): the docs do not say since when UserPromptExpansion exists. */
+export const USE_REPORT_MIN_CLAUDE = '2.1.312'
+
+/** Whether the Claude Code at `version` reports every use of a skill, command or agent (USE_REPORT_MIN_CLAUDE). */
+export const reportsUses = (version: string | null | undefined): boolean => typeof version === 'string' && atLeast(version, USE_REPORT_MIN_CLAUDE)
+
 /** Why `cli` at `version` cannot be enforced (`ENFORCE_UNAVAILABLE: cli-too-old <cli> <found> <min>`,
  *  `cli-version-unknown <cli>`, or `cli-missing <cli>` when it is not there), or null when it can. */
 export function enforceBlocker(cli: Cli, version: string | null | undefined): string | null {

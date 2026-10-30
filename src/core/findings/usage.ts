@@ -2,13 +2,13 @@
 // no array of records is kept, only which MCP servers were called and, per profile, how many calls it made, whether all
 // of them read, and whether they stayed in the session's folder. The two flags only ever turn false, and a record that
 // cannot say what it did turns them false: "never call something unused on missing data" (§4) holds for "never needed"
-// too. And whether a Claude chat ran, where a typed skill or command goes unreported (§4.12).
+// too.
 import { READ_ACTIONS, WRITE_ACTIONS } from '../audit/resolve'
 import type { AuditAction, AuditRecord } from '../audit/types'
 import type { ObservedUse, ProfileUse } from './types'
 
 export function emptyUse(): ObservedUse {
-  return { byProfile: new Map(), mcpServers: new Set(), claudeChatSeen: false }
+  return { byProfile: new Map(), mcpServers: new Set() }
 }
 
 /** The server part of an `mcp.call` target (`server.tool` → `server`): what sits before the first dot, since the resolver
@@ -58,11 +58,10 @@ function profileUse(u: ObservedUse, id: string): ProfileUse {
   return p
 }
 
-/** Adds one record. One with no profile counts for `mcpServers` and `claudeChatSeen` only. */
+/** Adds one record. One with no profile counts for `mcpServers` only. */
 export function addRecord(u: ObservedUse, r: AuditRecord): void {
   const server = r.action === 'mcp.call' ? serverPartOf(r.target) : null
   if (server !== null) u.mcpServers.add(server)
-  if (r.provider === 'claude' && r.kind === 'chat') u.claudeChatSeen = true
   if (r.agentProfileId === undefined) return
   const p = profileUse(u, r.agentProfileId)
   p.calls++

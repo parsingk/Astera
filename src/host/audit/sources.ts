@@ -21,7 +21,9 @@
 // - Uses of shared skills, commands and agents (lifecycle design §4.12), handed to the recorder's `use`: from a Claude
 //   terminal's audit file, a Skill call that ran, a person's `/name` (UserPromptExpansion) and an agent's start
 //   (SubagentStart, once per agent); from a Claude chat's stream, a Skill or Agent call that ran. Only the name each
-//   reported. Codex reports none exactly, so none is read from it.
+//   reported. And a mark that a Claude chat ran, at the first line of its stream read while observing (ruling R6-1): a
+//   skill or command typed into a chat is expanded with no call and no hook, so the findings cannot tell it went unused.
+//   Codex reports none exactly, so none is read from it.
 //
 // - Enforce (enforce design §5): a call the blocking hook stopped never ran, so none of the above hears it. The hook
 //   writes every call it sees to enforce/<session>.jsonl, a stopped one with its rule and what it resolved the call to;
@@ -713,8 +715,8 @@ export function createAuditSources(d: {
     { audit: true, startAtEnd: true, ...(d.watch ? { watch: d.watch } : {}) }
   )
 
-  /** Observed chat processes, by proc id. */
-  const chats = new Map<string, { sessionId: string; source: AuditSource; read: (line: string) => ObservedCall[] }>()
+  /** Observed chat processes, by proc id. `marked`: a Claude chat's mark was handed since observe was last turned on. */
+  const chats = new Map<string, { sessionId: string; source: AuditSource; read: (line: string) => ObservedCall[]; marked: boolean }>()
   /** Observed terminal sessions, by pty id: the rollout followed, once the note names one, and the files a newer one
    *  replaced (`left`), each read once more at the next poll with the calls it still waits for. */
   const rollouts = new Map<
@@ -738,14 +740,15 @@ export function createAuditSources(d: {
       chats.set(
         procId,
         meta.restore.provider === 'claude'
-          ? { sessionId: meta.id, source: 'claude-chat', read: claudeChatCalls() }
+          ? { sessionId: meta.id, source: 'claude-chat', read: claudeChatCalls(), marked: false }
           : {
               sessionId: meta.id,
               source: 'codex-chat',
               read: (line) => {
                 const c = codexChatCall(line)
                 return c ? [c] : []
-              }
+              },
+              marked: false
             }
       )
     }),
@@ -753,6 +756,11 @@ export function createAuditSources(d: {
       const chat = chats.get(procId)
       if (!chat || !d.recorder.observing()) return
       try {
+        // Its first line read while observing says a Claude chat ran, whether or not it calls a tool (ruling R6-1)
+        if (chat.source === 'claude-chat' && !chat.marked) {
+          chat.marked = true
+          d.recorder.use({ sessionId: chat.sessionId, source: 'claude-chat', via: 'chat-seen', name: '' })
+        }
         const calls = chat.read(line)
         hand(chat.sessionId, chat.source, calls)
         if (chat.source !== 'claude-chat') return
@@ -811,8 +819,10 @@ export function createAuditSources(d: {
   const follow = (): boolean => {
     const on = d.recorder.observing()
     if (on && !reading) {
-      // The calls made meanwhile were not read, so where they left the shells is not known
+      // The calls made meanwhile were not read, so where they left the shells is not known; a chat's mark handed before may
+      // have been let go when the mode turned out off, so each chat is marked again at its next line
       shellAt.clear()
+      for (const chat of chats.values()) chat.marked = false
       hooks.start()
       for (const r of rollouts.values()) {
         r.calls.forget()

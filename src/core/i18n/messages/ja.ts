@@ -2284,5 +2284,9 @@ export const ja: Catalog = {
   'findings.info.claudeOnlyNoUse': 'Claude では {days} 日間、使われた記録がありません。Codex では判断できません。',
   'findings.info.claudeCannotTell': 'Claude では判断できません。使用を報告するには Claude Code {min} 以降が必要です。',
   'findings.info.claudeChatCannotTell':
-    'Claude では判断できません。この {days} 日間に Claude のチャットがあり、チャットで入力したスキルやコマンドは報告されません。'
+    'Claude では判断できません。直近 {days} 日間に Claude のチャットがあり、Claude Code はチャットで入力したスキルやコマンドを報告しません。',
+  'findings.info.claudeCannotTellCodexToo':
+    'Claude でも Codex でも判断できません。Claude が使用を報告するには Claude Code {min} 以降が必要です。',
+  'findings.info.claudeChatCannotTellCodexToo':
+    'Claude でも Codex でも判断できません。直近 {days} 日間に Claude のチャットがあり、Claude Code はチャットで入力したスキルやコマンドを報告しません。'
 }

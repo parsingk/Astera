@@ -19,7 +19,7 @@ import { ChatSessionManager } from '../core/chat/manager'
 import { HistoryIndex } from '../core/history/index'
 import { SessionCwdCache } from '../core/history/sessionCwdCache'
 import { ProjectSettings } from '../core/projects/settings'
-import { StatusLineManager, resolveNodePath } from '../core/sessions/statusline'
+import { StatusLineManager, resolveNodePath, withUseReports } from '../core/sessions/statusline'
 import { RateLimitFetcher } from '../core/usage/rateLimitFetcher'
 import { CodexUsageFetcher } from './codexUsage'
 import { AccountUsageStore } from './accountUsageStore'
@@ -326,7 +326,8 @@ export async function createCore(userDataDir: string, osLocale: string, paths?: 
     undefined,
     undefined,
     undefined,
-    (id, account, opts) => statusLine.spawnConfig(id, account, opts),
+    // An observed session's settings carry the use hooks when its Claude Code reports uses (lifecycle design §4.12)
+    (id, account, opts) => statusLine.spawnConfig(id, account, withUseReports(opts, () => cliVersions('claude'))),
     // A Claude session may read the app's screenshot folder without a prompt — that is where Design
     // Mode writes the crops whose paths it sends. previewShotsDir is the same path capture.ts writes.
     [previewShotsDir(userDataDir)],
@@ -360,8 +361,12 @@ export async function createCore(userDataDir: string, osLocale: string, paths?: 
   // folder. `worktrees` is made below; this only reads it at a spawn, long after.
   const hiding = createHidingSource({ profileDir: userDataDir, projectOf: projectOfWorktrees(() => worktrees.list()), log: hidingLog(userDataDir, sessionsLog) })
   sessions.hiding = hiding
-  // Observe mode: an observed Claude session's hook settings, written by its prepare (StatusLineManager.ensureObserveFiles)
-  sessions.observeHooks = () => statusLine.ensureObserveFiles()
+  // Observe mode: an observed Claude session's hook settings, written by its prepare (StatusLineManager.ensureObserveFiles),
+  // and the Claude version that picks the file with the use hooks or without (lifecycle design §4.12), asked off the thread
+  // so the spawn reads it from the probe's cache
+  sessions.observeHooks = async () => {
+    await Promise.all([statusLine.ensureObserveFiles(), cliVersions.warm('claude')])
+  }
   // Enforce: the blocking hook, written by a session's prepare, which refuses the start without it (E5). A Claude terminal
   // session reads it from its settings file; a chat, and any Codex session, from these arguments
   sessions.enforceHooks = () => statusLine.ensureEnforceFiles()

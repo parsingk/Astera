@@ -289,10 +289,18 @@ const settingsOf = (s: Spawned): string => {
   return path.normalize(file!)
 }
 const PLAIN = /[\\/]astera-(statusline|hooks)-settings\.json$/
-const OBSERVE = /[\\/]astera-observe-(hooks-)?settings\.json$/
+/** With the use hooks (`uses-`) when the claude on this machine reports uses (lifecycle design §4.12): which one a session
+ *  gets is the version probe's, not this test's. */
+const OBSERVE = /[\\/]astera-observe-(uses-)?(hooks-)?settings\.json$/
 /** Whether any observe file was ever written into the profile. */
 const observeFiles = (): string[] =>
-  ['astera-observe-settings.json', 'astera-observe-hooks-settings.json', 'astera-hook-audit-capture.cjs'].filter((f) => existsSync(path.join(profile, f)))
+  [
+    'astera-observe-settings.json',
+    'astera-observe-hooks-settings.json',
+    'astera-observe-uses-settings.json',
+    'astera-observe-uses-hooks-settings.json',
+    'astera-hook-audit-capture.cjs'
+  ].filter((f) => existsSync(path.join(profile, f)))
 
 /** The audit file an observed session's capture appends to: its own hook file's name with `.audit.jsonl`, derived from
  *  ASTERA_HOOK_OUT as the capture derives it (statusline.ts HOOK_AUDIT_CAPTURE_SCRIPT). */

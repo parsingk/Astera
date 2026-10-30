@@ -165,3 +165,16 @@ export interface CredentialUse {
   evidence: 'managed' | 'observed'
   requestId: string
 }
+
+/** The uses of shared skills, commands and agents the CLIs reported in a window (lifecycle design §4.12), read from the use
+ *  log (extensionUses.ts summarizeExtensionUses). */
+export interface ExtensionUseSummary {
+  /** Names used as a skill or command (skill-tool, slash), as reported. */
+  skillOrCommand: Set<string>
+  /** Agent names (subagent, agent-tool), as reported. */
+  agents: Set<string>
+  /** A Claude chat session ran (its first stream line was marked, ruling R6-1). A skill or command a person types into a
+   *  chat (`-p`, stream-json) is expanded before the model runs, with no Skill call and no hook, so §4.12 cannot tell it
+   *  went unused. */
+  claudeChatSeen: boolean
+}

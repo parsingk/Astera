@@ -530,6 +530,8 @@ describe('the Claude chat source', () => {
       ])
     )
     expect(uses).toEqual([
+      // The chat's first line marks that a Claude chat ran (ruling R6-1)
+      { sessionId: 'sess_c', source: 'claude-chat', via: 'chat-seen', name: '' },
       { sessionId: 'sess_c', source: 'claude-chat', via: 'skill-tool', name: 'review', dedupeKey: 'toolu_1' },
       { sessionId: 'sess_c', source: 'claude-chat', via: 'agent-tool', name: 'code-reviewer', dedupeKey: 'toolu_2' }
     ])
@@ -537,9 +539,48 @@ describe('the Claude chat source', () => {
     expect(JSON.stringify(uses)).not.toContain('secret')
     // The older name of the Agent tool
     expect(claudeChatUse({ tool: 'Task', input: { subagent_type: 'Explore' }, status: 'ok', dedupeKey: 't' })).toEqual({ via: 'agent-tool', name: 'Explore', dedupeKey: 't' })
-    // A Codex chat hands no use
+    // A Codex chat hands no use, and no mark
     procs.line('proc2', itemCompleted({ type: 'collabAgentToolCall', id: 'i1', tool: 'spawnAgent', status: 'completed' }))
-    expect(uses).toHaveLength(2)
+    expect(uses).toHaveLength(3)
+    sources.dispose()
+  })
+
+  // Ruling R6-1: a skill or command typed into a Claude chat is expanded with no call in the stream, so whether a chat ran
+  // at all is what §4.12 needs, whether or not the model called a tool
+  it('a Claude chat with no tool_use still marks that it ran, once per session', async () => {
+    const procs = fakeRegistry()
+    const { events, uses, recorder } = capture()
+    const { sources } = await sourcesFor({ recorder, procs })
+    procs.open('proc1', note('chat', 'sess_c', { ...OBSERVED, provider: 'claude' }))
+    procs.open('proc2', note('chat', 'sess_old', { accountId: 'acc1', cwd, title: 't', provider: 'claude' }))
+    for (const id of ['proc1', 'proc2']) {
+      procs.line(id, JSON.stringify({ type: 'system', subtype: 'init', session_id: 'c1' }))
+      procs.line(id, assistant([{ type: 'text', text: 'Here is the summary.' }]))
+      procs.line(id, JSON.stringify({ type: 'result', subtype: 'success' }))
+    }
+    expect(uses).toEqual([{ sessionId: 'sess_c', source: 'claude-chat', via: 'chat-seen', name: '' }])
+    expect(events).toEqual([])
+    sources.dispose()
+  })
+
+  it('marks no chat while the mode is compatibility, and marks it again once observe is back', async () => {
+    const procs = fakeRegistry()
+    const { uses, recorder, setObserving } = capture()
+    const { sources } = await sourcesFor({ recorder, procs })
+    procs.open('proc1', note('chat', 'sess_c', { ...OBSERVED, provider: 'claude' }))
+    setObserving(false)
+    procs.line('proc1', JSON.stringify({ type: 'system', subtype: 'init', session_id: 'c1' }))
+    expect(uses).toEqual([])
+    setObserving(true)
+    procs.line('proc1', assistant([{ type: 'text', text: 'x' }]))
+    procs.line('proc1', assistant([{ type: 'text', text: 'y' }]))
+    expect(uses.map((u) => [u.sessionId, u.via])).toEqual([['sess_c', 'chat-seen']])
+    // A mark heard while the mode was not known yet may have been let go when it turned out off: the next line after observe
+    // is back marks again
+    setObserving(false)
+    setObserving(true)
+    procs.line('proc1', assistant([{ type: 'text', text: 'z' }]))
+    expect(uses.map((u) => u.via)).toEqual(['chat-seen', 'chat-seen'])
     sources.dispose()
   })
 

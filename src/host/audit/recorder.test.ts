@@ -723,10 +723,12 @@ describe('the recorder’s uses', () => {
     h.recorder.use(skillUse({ dedupeKey: 'toolu_1' }))
     h.recorder.record(bash('ls', { dedupeKey: 'toolu_2' }))
     h.recorder.use(skillUse({ via: 'slash', name: 'ship', dedupeKey: 'toolu_2' }))
+    h.recorder.use(skillUse({ source: 'claude-chat', via: 'chat-seen', name: '' }))
     await h.recorder.flushed()
     expect((await usesIn(h.profileDir)).map((u) => [u.via, u.name])).toEqual([
       ['skill-tool', 'review'],
-      ['slash', 'ship']
+      ['slash', 'ship'],
+      ['chat-seen', '']
     ])
     // Enforce observes too
     const e = await rig({ mode: 'enforce' })
@@ -737,6 +739,8 @@ describe('the recorder’s uses', () => {
     const c = await rig({ mode: 'compatibility' })
     await c.recorder.flushed()
     c.recorder.use(skillUse())
+    // A Claude chat's mark (ruling R6-1) as any use
+    c.recorder.use(skillUse({ source: 'claude-chat', via: 'chat-seen', name: '' }))
     await c.recorder.flushed()
     expect(c.asked).toEqual([])
     expect(await fs.stat(profilePaths(c.profileDir).extensionUses).then(() => true, () => false)).toBe(false)
@@ -752,6 +756,48 @@ describe('the recorder’s uses', () => {
     late.recorder.invalidate()
     await late.recorder.flushed()
     expect(await usesIn(late.profileDir)).toEqual([])
+  })
+
+  // Fix round 1: uses keep their own dedupe keys, so a session's many uses never push a call's key out, and the reverse
+  it('a use’s dedupe keys are its own, and leave the calls’ keys where they were', async () => {
+    const h = await rig()
+    h.recorder.record(bash('git status', { dedupeKey: 'toolu_1' }))
+    for (let k = 0; k < 1500; k++) h.recorder.use(skillUse({ dedupeKey: `toolu_u${k}` }))
+    h.recorder.record(bash('git status', { dedupeKey: 'toolu_1' }))
+    await h.recorder.flushed()
+    expect(await h.records()).toHaveLength(1)
+    expect(await usesIn(h.profileDir)).toHaveLength(1500)
+  })
+
+  // Fix round 1: a use dropped at the hold is counted and told as a use, apart from the calls
+  it('holds at most so many uses while the disk does not take them, and tells the rest apart from the calls', async () => {
+    let release: () => void = () => {}
+    const stuck = new Promise<void>((r) => (release = r))
+    const written: number[] = []
+    const h = await rig({
+      over: {
+        resolve: () => ({ action: 'git.read', target: 'git status', confidence: 'high', effect: 'read' }),
+        appendUses: async (_dir, uses) => {
+          written.push(uses.length)
+          await stuck
+        }
+      }
+    })
+    await h.recorder.flushed()
+    // The first use goes to the disk and sticks there; the next fill the hold, and three more are dropped
+    h.recorder.use(skillUse())
+    await new Promise((r) => setImmediate(r))
+    expect(written).toEqual([1])
+    // The calls overflow first: that does not keep the uses' own line from being told
+    for (let i = 0; i < AUDIT_PENDING_MAX + 2; i++) h.recorder.record(bash('git status'))
+    for (let i = 0; i < AUDIT_PENDING_MAX + 3; i++) h.recorder.use(skillUse())
+    expect(h.logs.filter((m) => /records wait for the disk/.test(m))).toHaveLength(1)
+    expect(h.logs.filter((m) => /uses wait for the disk/.test(m))).toHaveLength(1)
+    release()
+    await h.recorder.flushed()
+    expect(written).toEqual([1, AUDIT_PENDING_MAX])
+    expect(h.logs.join('\n')).toMatch(/2 call\(s\) were not recorded/)
+    expect(h.logs.join('\n')).toMatch(/3 use\(s\) of skills, commands or agents were not recorded/)
   })
 
   it('a use carries the session’s account and profile', async () => {

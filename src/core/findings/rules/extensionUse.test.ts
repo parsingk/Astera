@@ -3,10 +3,9 @@
 // a skill, so a skill for both CLIs gets an information line at most; Claude cannot before USE_REPORT_MIN_CLAUDE, nor for
 // a skill or command typed into a chat session. Nothing younger than the window, and nothing switched off, is judged.
 import { describe, it, expect } from 'vitest'
-import type { ExtensionEntry, FileExtension } from '../../extensions/types'
+import type { ExtensionCopy, ExtensionEntry, FileExtension } from '../../extensions/types'
 import type { FindingInputs } from '../compute'
-import { emptyUse } from '../usage'
-import type { ExtensionCopy, ExtensionUseSummary, ObservedUse } from '../types'
+import type { ExtensionUseSummary } from '../types'
 import { USE_REPORT_MIN_CLAUDE, agentNameKey, extensionUseFindings, extensionUseInfo } from './extensionUse'
 
 const NOW = Date.parse('2026-10-30T00:00:00.000Z')
@@ -24,7 +23,11 @@ const item = (kind: FileExtension['kind'], name: string, over: Partial<FileExten
   addedAt: ago(40),
   ...over
 })
-const used = (skillOrCommand: string[] = [], agents: string[] = []): ExtensionUseSummary => ({ skillOrCommand: new Set(skillOrCommand), agents: new Set(agents) })
+const used = (skillOrCommand: string[] = [], agents: string[] = [], claudeChatSeen = false): ExtensionUseSummary => ({
+  skillOrCommand: new Set(skillOrCommand),
+  agents: new Set(agents),
+  claudeChatSeen
+})
 /** Each skill and agent's copy, as the reader finds it: no frontmatter unless the test says. */
 const copiesOf = (registry: ExtensionEntry[], over: Record<string, ExtensionCopy> = {}): Map<string, ExtensionCopy> =>
   new Map(registry.filter((e) => e.kind === 'skill' || e.kind === 'agent').map((e) => [e.id, over[e.id] ?? {}]))
@@ -38,7 +41,6 @@ const inputs = (registry: ExtensionEntry[], over: Partial<FindingInputs> & { cop
     findingsSince: ago(40),
     policy: { version: 1, mode: 'observe', rules: [], otherwise: 'allow' },
     observe: { on: true, days: 30 },
-    observed: emptyUse(),
     registry,
     extensionUses: used(),
     extensionCopies: copiesOf(registry, copies),
@@ -76,8 +78,10 @@ describe('unused-command (§4.12)', () => {
   it('a command used through the Skill tool (skill-tool name equal to the file name) is not', () => {
     // The summary does not keep which way a name came: both ways are the same set
     expect(keys(inputs([item('command', 'ship')], { extensionUses: used(['ship']) }))).toEqual([])
+    // Ruling R6-2: whatever its case
+    expect(keys(inputs([item('command', 'ship')], { extensionUses: used(['Ship']) }))).toEqual([])
     // Another name, or a plugin's name that ends the same, is not this command's use
-    expect(keys(inputs([item('command', 'ship')], { extensionUses: used(['Ship', 'p:ship']) }))).toEqual(['unused-command:command-ship'])
+    expect(keys(inputs([item('command', 'ship')], { extensionUses: used(['shipit', 'p:ship']) }))).toEqual(['unused-command:command-ship'])
   })
 
   // Research §3 C-4: a skill and a command of the same name, and the skill wins, so the command can never run
@@ -90,6 +94,21 @@ describe('unused-command (§4.12)', () => {
     // A skill switched off is not given to the CLIs, so the command runs
     const off = [item('command', 'ship'), item('skill', 'ship', { providers: ['claude'], enabled: false })]
     expect(keys(inputs(off, { extensionUses: used(['ship']) }))).toEqual([])
+  })
+
+  // Ruling R6-2: a skill wins over a command only under the very same name. Matched loosely, more commands would read
+  // unused, which is the unsafe side
+  it('a skill shadows a command by the exact name only', () => {
+    const registry = [item('command', 'ship'), item('skill', 'Ship', { providers: ['claude'] })]
+    expect(keys(inputs(registry, { extensionUses: used(['ship', 'Ship']) }))).toEqual([])
+  })
+
+  // A skill for Codex alone is not given to Claude, so it cannot shadow a Claude command
+  it('only a skill installed for Claude shadows a command', () => {
+    const registry = [item('command', 'ship'), item('skill', 'ship', { providers: ['codex'] })]
+    expect(keys(inputs(registry, { extensionUses: used(['ship']) }))).toEqual([])
+    const both = [item('command', 'ship'), item('skill', 'ship', { providers: ['claude', 'codex'] })]
+    expect(keys(inputs(both, { extensionUses: used(['ship']) }))).toEqual(['unused-command:command-ship'])
   })
 })
 
@@ -113,6 +132,22 @@ describe('unused-agent (§4.12)', () => {
     expect(found.map((f) => [f.key, f.rule, f.reason, f.action, f.open])).toEqual([
       ['unused-agent:agent-reviewer', 'unused-agent', 'No recorded use in 30 days.', 'Remove it from the shared extensions.', { kind: 'extension', entryId: 'agent-reviewer' }]
     ])
+  })
+
+  // Ruling R6-5 (research §3 C-8): a `context: fork` skill runs in the agent its `agent:` names, which may start with no
+  // SubagentStart, the agent's side of ruling 17
+  it('an agent named in a shared skill’s agent: frontmatter is not judged', () => {
+    const registry = [item('agent', 'reviewer'), item('skill', 'deep', { enabled: false })]
+    const i = inputs(registry, { copies: { 'agent-reviewer': { name: 'code-reviewer' }, 'skill-deep': { agent: 'Code Reviewer' } } })
+    expect(keys(i)).toEqual([])
+    expect(extensionUseInfo(i).map((l) => l.subject.id)).not.toContain('agent-reviewer')
+    // Another agent's name leaves it judged
+    const other = inputs(registry, { copies: { 'agent-reviewer': { name: 'code-reviewer' }, 'skill-deep': { agent: 'Explore' } } })
+    expect(keys(other)).toEqual(['unused-agent:agent-reviewer'])
+    // A skill whose copy could not be read may name any agent
+    const unread = inputs(registry)
+    unread.extensionCopies = new Map([['agent-reviewer', { name: 'code-reviewer' }]])
+    expect(keys(unread)).toEqual([])
   })
 
   it('agentNameKey lowercases and turns each run of spaces and underscores into one hyphen', () => {
@@ -152,6 +187,13 @@ describe('unused-skill (§4.12)', () => {
     expect(extensionUseInfo(i)).toEqual([])
   })
 
+  // Ruling R6-2: a skill's names compare whatever their case
+  it('a skill’s folder and frontmatter names match a use whatever the case', () => {
+    const registry = [item('skill', 'review', { providers: ['claude'] }), item('skill', 'helper', { providers: ['claude'] })]
+    const i = inputs(registry, { copies: { 'skill-helper': { name: 'Code-Helper' } }, extensionUses: used(['REVIEW', 'code-helper']) })
+    expect(keys(i)).toEqual([])
+  })
+
   // Research §3 C-7: a skill an agent's `skills:` preloads is put in its context with no event at all
   it('a skill named in a shared agent’s skills: frontmatter gives neither a finding nor a line', () => {
     const registry = [item('skill', 'conventions', { providers: ['claude'] }), item('skill', 'both'), item('agent', 'api', { enabled: false })]
@@ -164,6 +206,12 @@ describe('unused-skill (§4.12)', () => {
       extensionUses: used([], ['api'])
     })
     expect(keys(named)).toEqual([])
+    // Whatever the case it is named in
+    const cased = inputs([item('skill', 'conventions', { providers: ['claude'] }), item('agent', 'api')], {
+      copies: { 'agent-api': { skills: ['Conventions'] } },
+      extensionUses: used([], ['api'])
+    })
+    expect(keys(cased)).toEqual([])
   })
 
   it('a skill whose copy, or any shared agent’s copy, could not be read is not judged', () => {
@@ -182,13 +230,16 @@ describe('unused-skill (§4.12)', () => {
 describe('when nothing is raised (§4.12, never on missing data)', () => {
   const registry = (): ExtensionEntry[] => [item('command', 'ship'), item('agent', 'reviewer'), item('skill', 'solo', { providers: ['claude'] }), item('skill', 'both')]
   const cannotTell = (id: string): [string, string] => [id, `Claude cannot tell: it needs Claude Code ${USE_REPORT_MIN_CLAUDE} or later to report uses.`]
+  // Ruling R6-4: an item installed for Codex too says Codex cannot tell either
+  const neitherTells = (id: string): [string, string] => [id, `Neither Claude nor Codex can tell: Claude needs Claude Code ${USE_REPORT_MIN_CLAUDE} or later to report uses.`]
 
   it("claudeVersion '2.1.306': no finding; each Claude-only item gets a \"Claude cannot tell\" info line", () => {
     const i = inputs(registry(), { claudeVersion: '2.1.306' })
     expect(keys(i)).toEqual([])
-    // The skill for both CLIs reads the same: what Claude did not report cannot say it went unused there
-    expect(lines(i)).toEqual([cannotTell('command-ship'), cannotTell('agent-reviewer'), cannotTell('skill-solo'), cannotTell('skill-both')])
+    // The skill for both CLIs reads that neither can tell: what Claude did not report cannot say it went unused there
+    expect(lines(i)).toEqual([cannotTell('command-ship'), cannotTell('agent-reviewer'), cannotTell('skill-solo'), neitherTells('skill-both')])
     expect(extensionUseInfo(i)[0].message).toEqual({ key: 'findings.info.claudeCannotTell', params: { min: '2.1.312' } })
+    expect(extensionUseInfo(i)[3].message).toEqual({ key: 'findings.info.claudeCannotTellCodexToo', params: { min: '2.1.312' } })
     // A recorded use still shows it was used
     expect(lines(inputs(registry(), { claudeVersion: '2.1.306', extensionUses: used(['ship']) })).map(([id]) => id)).not.toContain('command-ship')
     // Later versions report
@@ -198,7 +249,7 @@ describe('when nothing is raised (§4.12, never on missing data)', () => {
   it('claudeVersion null: the same', () => {
     const i = inputs(registry(), { claudeVersion: null })
     expect(keys(i)).toEqual([])
-    expect(lines(i)).toEqual([cannotTell('command-ship'), cannotTell('agent-reviewer'), cannotTell('skill-solo'), cannotTell('skill-both')])
+    expect(lines(i)).toEqual([cannotTell('command-ship'), cannotTell('agent-reviewer'), cannotTell('skill-solo'), neitherTells('skill-both')])
   })
 
   it('added 10 days ago: not judged', () => {
@@ -235,15 +286,27 @@ describe('when nothing is raised (§4.12, never on missing data)', () => {
   })
 
   // Step 0: a skill or command a person types into a Claude chat (`-p`, stream-json) is expanded before the model runs,
-  // with no Skill call in the stream and no hook, so a chat session in the window could have used one unseen
+  // with no Skill call in the stream and no hook, so a chat session in the window could have used one unseen. Ruling
+  // R6-1: the use log says a chat ran, from its first stream line
   it('with a Claude chat session seen in the window (claudeChatSeen), commands and Claude-only skills read "Claude cannot tell"', () => {
-    const observed: ObservedUse = { ...emptyUse(), claudeChatSeen: true }
-    const i = inputs(registry(), { observed })
+    const i = inputs(registry(), { extensionUses: used([], [], true) })
     // An agent is still told: a chat names it in its Agent call
     expect(keys(i)).toEqual(['unused-agent:agent-reviewer'])
-    const chat = (id: string): [string, string] => [id, 'Claude cannot tell: a Claude chat ran in these 30 days, and a skill or command typed in a chat is not reported.']
-    expect(lines(i)).toEqual([chat('command-ship'), chat('skill-solo'), chat('skill-both')])
+    const chat = (id: string): [string, string] => [
+      id,
+      'Claude cannot tell: a Claude chat ran in the last 30 days, and Claude Code does not report a skill or command typed in a chat.'
+    ]
+    const neither = (id: string): [string, string] => [
+      id,
+      'Neither Claude nor Codex can tell: a Claude chat ran in the last 30 days, and Claude Code does not report a skill or command typed in a chat.'
+    ]
+    expect(lines(i)).toEqual([chat('command-ship'), chat('skill-solo'), neither('skill-both')])
+    expect(extensionUseInfo(i).map((l) => l.message.key)).toEqual([
+      'findings.info.claudeChatCannotTell',
+      'findings.info.claudeChatCannotTell',
+      'findings.info.claudeChatCannotTellCodexToo'
+    ])
     // A use recorded anyway still counts
-    expect(lines(inputs(registry(), { observed, extensionUses: used(['ship', 'solo', 'both']) }))).toEqual([])
+    expect(lines(inputs(registry(), { extensionUses: used(['ship', 'solo', 'both'], [], true) }))).toEqual([])
   })
 })

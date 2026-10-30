@@ -3,10 +3,11 @@
 // Codex none, since its main path to a skill is the model reading SKILL.md through the shell (plan ruling 14). So a
 // finding is raised only for an item every CLI it is installed for can report, which leaves a skill shared with Codex an
 // information line at most, and commands and agents (Claude's alone) the findings. Claude cannot report either before
-// USE_REPORT_MIN_CLAUDE (ruling 15), nor a skill or command a person types into a chat session (Step 0, ruling R-P2): the
-// item then reads "Claude cannot tell". Nothing switched off, younger than the window, or judged on a copy that could not
-// be read is said to be unused: "never call something unused on missing data" (§4). Names and ids only (§8).
-import { atLeast } from '../../sessions/cliVersion'
+// USE_REPORT_MIN_CLAUDE (ruling 15), nor a skill or command a person types into a chat session (Step 0, ruling R6-1): the
+// item then reads "Claude cannot tell", and for one installed for Codex too, that neither can (ruling R6-4). Nothing
+// switched off, younger than the window, or judged on a copy that could not be read is said to be unused: "never call
+// something unused on missing data" (§4). Names and ids only (§8).
+import { USE_REPORT_MIN_CLAUDE, reportsUses } from '../../sessions/cliVersion'
 import type { ExtensionEntry, FileExtension } from '../../extensions/types'
 import type { Message } from '../../i18n'
 import type { FindingInputs } from '../compute'
@@ -15,13 +16,15 @@ import { finding, infoLine } from '../make'
 import type { Finding, FindingRule, FindingSubject, InfoLine } from '../types'
 import { entryAgeDays } from './extensions'
 
-/** The Claude Code the research saw both UserPromptExpansion and SubagentStart in (ruling 15): older, or a version the
- *  probe could not read, cannot be taken to have reported every use. */
-export const USE_REPORT_MIN_CLAUDE = '2.1.312'
+export { USE_REPORT_MIN_CLAUDE } from '../../sessions/cliVersion'
 
 /** An agent's name as Claude Code matches `subagent_type`: lowercased, each run of spaces and `_` one `-` (CHANGELOG
  *  2.1.140, "Code Reviewer" → `code-reviewer`). An agent's `agent_type` is its frontmatter name as written. */
 export const agentNameKey = (s: string): string => s.toLowerCase().replace(/[\s_]+/g, '-')
+
+/** A skill's or command's name as a use is matched to it (ruling R6-2): whatever its case. Matching more loosely only
+ *  ever counts more uses, never raises a finding. */
+const useKey = (s: string): string => s.toLowerCase()
 
 const RULE: Record<FileExtension['kind'], FindingRule> = { skill: 'unused-skill', command: 'unused-command', agent: 'unused-agent' }
 
@@ -36,27 +39,32 @@ const subjectOf = (e: FileExtension): FindingSubject => ({ kind: 'extension', id
 type Verdict = { e: FileExtension; line: Message | null }
 
 function verdicts(i: FindingInputs): Verdict[] {
-  const { registry, extensionUses, extensionCopies, observe, observed } = i
-  if (registry === undefined || extensionUses === undefined || extensionCopies === undefined || observe === undefined || observed === undefined) return []
+  const { registry, extensionUses, extensionCopies, observe } = i
+  if (registry === undefined || extensionUses === undefined || extensionCopies === undefined || observe === undefined) return []
   // The use log began with this release, and judges only a full window of Observe history
   if (!(observe.days >= OBSERVE_WINDOW_DAYS) || !(ageDays(i.findingsSince, i.nowMs) >= OBSERVE_WINDOW_DAYS)) return []
   const files = registry.filter(isFile)
-  const skillOrCommand = new Set(astera(extensionUses.skillOrCommand))
+  const skillOrCommand = new Set(astera(extensionUses.skillOrCommand).map(useKey))
   const agentKeys = new Set(astera(extensionUses.agents).map(agentNameKey))
   /** A skill's names: its folder, and the frontmatter name Claude Code also calls it by. */
   const skillNames = (e: FileExtension): string[] => {
     const own = extensionCopies.get(e.id)?.name
     return own === undefined ? [e.name] : [e.name, own]
   }
+  const skills = files.filter((e) => e.kind === 'skill')
+  const agents = files.filter((e) => e.kind === 'agent')
   // Research §3 C-7 (ruling 17): a skill an agent's `skills:` names is injected with no event. Every shared agent counts,
   // on or off, and one whose copy could not be read may name any skill
-  const agents = files.filter((e) => e.kind === 'agent')
   const agentsRead = agents.every((a) => extensionCopies.has(a.id))
-  const preloaded = new Set(agents.flatMap((a) => extensionCopies.get(a.id)?.skills ?? []))
-  // Research §3 C-4: a skill wins over a command of the same name, so that command never runs. Only a skill the CLIs are
-  // given: one switched off leaves the command its name
-  const skillsByName = new Set(files.filter((e) => e.kind === 'skill' && e.enabled).flatMap(skillNames))
-  const reports = typeof i.claudeVersion === 'string' && atLeast(i.claudeVersion, USE_REPORT_MIN_CLAUDE)
+  const preloaded = new Set(agents.flatMap((a) => extensionCopies.get(a.id)?.skills ?? []).map(useKey))
+  // Research §3 C-8 (ruling R6-5): the agent a `context: fork` skill's `agent:` names may start with no SubagentStart. Every
+  // shared skill counts, and one whose copy could not be read may name any agent
+  const skillsRead = skills.every((s) => extensionCopies.has(s.id))
+  const forkAgents = new Set(skills.flatMap((s) => extensionCopies.get(s.id)?.agent ?? []).map(agentNameKey))
+  // Research §3 C-4: a skill wins over a command of the same name, so that command never runs. Only a skill Claude is
+  // given, under the very same name (ruling R6-2): one switched off, or for Codex alone, leaves the command its name
+  const shadowing = new Set(skills.filter((e) => e.enabled && e.providers.includes('claude')).flatMap(skillNames))
+  const reports = reportsUses(i.claudeVersion)
 
   const out: Verdict[] = []
   for (const e of files) {
@@ -64,22 +72,27 @@ function verdicts(i: FindingInputs): Verdict[] {
     let used: boolean
     if (e.kind === 'skill') {
       if (!extensionCopies.has(e.id) || !agentsRead) continue
-      const names = skillNames(e)
+      const names = skillNames(e).map(useKey)
       if (names.some((n) => preloaded.has(n))) continue
       used = names.some((n) => skillOrCommand.has(n))
     } else if (e.kind === 'command') {
-      used = skillOrCommand.has(e.name) && !skillsByName.has(e.name)
+      used = skillOrCommand.has(useKey(e.name)) && !shadowing.has(e.name)
     } else {
       const copy = extensionCopies.get(e.id)
-      if (copy === undefined) continue
-      used = agentKeys.has(agentNameKey(copy.name ?? e.name))
+      if (copy === undefined || !skillsRead) continue
+      const key = agentNameKey(copy.name ?? e.name)
+      if (forkAgents.has(key)) continue
+      used = agentKeys.has(key)
     }
     // A recorded use is a use, whatever else could not be seen
     if (used) continue
-    if (!reports) out.push({ e, line: { key: 'findings.info.claudeCannotTell', params: { min: USE_REPORT_MIN_CLAUDE } } })
-    else if (e.kind !== 'agent' && observed.claudeChatSeen) out.push({ e, line: { key: 'findings.info.claudeChatCannotTell', params: { days: OBSERVE_WINDOW_DAYS } } })
-    // Codex cannot tell (ruling 14): Claude's silence is information, not a finding
-    else if (e.providers.some((p) => p !== 'claude')) out.push({ e, line: { key: 'findings.info.claudeOnlyNoUse', params: { days: OBSERVE_WINDOW_DAYS } } })
+    // Codex cannot tell (ruling 14): Claude's silence is information, not a finding, and says Codex cannot tell either
+    const codexToo = e.providers.some((p) => p !== 'claude')
+    if (!reports)
+      out.push({ e, line: { key: codexToo ? 'findings.info.claudeCannotTellCodexToo' : 'findings.info.claudeCannotTell', params: { min: USE_REPORT_MIN_CLAUDE } } })
+    else if (e.kind !== 'agent' && extensionUses.claudeChatSeen)
+      out.push({ e, line: { key: codexToo ? 'findings.info.claudeChatCannotTellCodexToo' : 'findings.info.claudeChatCannotTell', params: { days: OBSERVE_WINDOW_DAYS } } })
+    else if (codexToo) out.push({ e, line: { key: 'findings.info.claudeOnlyNoUse', params: { days: OBSERVE_WINDOW_DAYS } } })
     else out.push({ e, line: null })
   }
   return out
