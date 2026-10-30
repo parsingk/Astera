@@ -16,7 +16,7 @@ import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { profilePaths } from '../../core/profile/paths'
-import { redactTarget, resolveAction, type ResolveCall, type ResolvedAction } from '../../core/audit/resolve'
+import { redactTarget, resolveAction, type CallEffect, type ResolveCall, type ResolvedAction } from '../../core/audit/resolve'
 import { appendRecords, auditDayStopped, type AuditRecord, type AuditSource } from '../../core/audit/store'
 import { isObserving, type AuditMode } from '../../core/audit/policy'
 import type { OrchState } from '../../core/orchestration/state'
@@ -97,9 +97,12 @@ export interface AuditEvent {
   /** A call the Enforce hook stopped: the rule that stopped it (enforce design §5). */
   blockedBy?: string
   /** What the Enforce hook resolved the call to, kept as it is: the resolver is not asked again, and the call's input
-   *  was never handed over. */
-  resolved?: Pick<ResolvedAction, 'action' | 'target' | 'confidence' | 'insideProject'>
+   *  was never handed over. A hook of an earlier release wrote no effect. */
+  resolved?: Pick<ResolvedAction, 'action' | 'target' | 'confidence' | 'insideProject' | 'sensitive'> & { effect?: CallEffect }
 }
+
+/** A call's action as its record takes it: the resolver's, or the Enforce hook's, which may have no effect. */
+type Heard = Omit<ResolvedAction, 'effect'> & { effect?: CallEffect }
 
 export interface AuditRecorder {
   /** Hands a finished call over. Returns at once and never throws. */
@@ -306,7 +309,7 @@ export function createAuditRecorder(d: {
     new Date(at !== undefined && Number.isFinite(Date.parse(at)) ? Date.parse(at) : now()).toISOString()
 
   /** The call's action: as the Enforce hook resolved it, else the resolver's. */
-  const resolvedOf = (ev: AuditEvent, info: SessionFacts): ResolvedAction =>
+  const resolvedOf = (ev: AuditEvent, info: SessionFacts): Heard =>
     ev.resolved ?? resolve({ provider: PROVIDER[ev.source], tool: ev.tool, input: ev.input, cwd: info.cwd, ...(ev.cwd !== undefined ? { base: ev.cwd } : {}) })
 
   /** A call of a session started in Enforce, heard after it ran, with no line of its hook to show the hook saw it: the
@@ -320,7 +323,7 @@ export function createAuditRecorder(d: {
   }
   /** Only a call that ran is asked (ok or failed): one a source hands before it ran (a Codex rollout's MCP call, read at
    *  once) may come before its hook did (final review I5a). */
-  const checkProof = (ev: AuditEvent, info: SessionFacts, resolved: () => ResolvedAction): void => {
+  const checkProof = (ev: AuditEvent, info: SessionFacts, resolved: () => Heard): void => {
     if (info.enforced !== true || (ev.status !== 'ok' && ev.status !== 'failed') || !d.onHookMissing) return
     if (proven.has(ev.sessionId) || toldMissing.has(ev.sessionId)) return
     if (hookRan(ev.sessionId)) return remember(proven, ev.sessionId)
@@ -329,7 +332,7 @@ export function createAuditRecorder(d: {
     stopUnhooked(ev.sessionId)
   }
 
-  const recordOf = (ev: AuditEvent, info: SessionFacts, at: string, r: ResolvedAction): AuditRecord => {
+  const recordOf = (ev: AuditEvent, info: SessionFacts, at: string, r: Heard): AuditRecord => {
     const provider = PROVIDER[ev.source]
     const found = d.dispatchOf(ev.sessionId, at)
     const late = found !== null && 'later' in found ? found : null
@@ -350,6 +353,9 @@ export function createAuditRecorder(d: {
       ...(r.insideProject !== undefined ? { insideProject: r.insideProject } : {}),
       ...(r.commands !== undefined ? { commands: r.commands.slice(0, AUDIT_COMMANDS_KEPT) } : {}),
       confidence: cut ? 'unknown' : r.confidence,
+      // What was cut may have written (lifecycle design §4.10)
+      ...(cut ? { effect: 'unknown' as const } : r.effect !== undefined ? { effect: r.effect } : {}),
+      ...(r.sensitive !== undefined ? { sensitive: r.sensitive } : {}),
       status: ev.status,
       ...(ev.blockedBy !== undefined ? { blockedBy: ev.blockedBy } : {})
     }
@@ -374,8 +380,8 @@ export function createAuditRecorder(d: {
         if (info === null) return
         if (mode === 'compatibility' && info.enforced !== true) return
         // Resolved once, and only when needed: the proof is asked before it, a repeat and a stopped day never resolve
-        let r: ResolvedAction | undefined
-        const resolved = (): ResolvedAction => (r ??= resolvedOf(ev, info))
+        let r: Heard | undefined
+        const resolved = (): Heard => (r ??= resolvedOf(ev, info))
         checkProof(ev, info, resolved)
         if (ev.dedupeKey !== undefined && heard(ev.sessionId, ev.dedupeKey)) return
         const at = timeOf(ev.at)

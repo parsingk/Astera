@@ -138,6 +138,7 @@ describe('createAuditRecorder', () => {
       action: 'git.remote.write',
       target: 'git push',
       confidence: 'high',
+      effect: 'write',
       status: 'ok'
     })
     // The Dispatch is asked at the call's own time
@@ -179,13 +180,29 @@ describe('createAuditRecorder', () => {
   it('keeps at most 16 commands, and a line cut short reads unknown', async () => {
     // The resolver's commands are already without repeats, which today stays under 16 for any line; the cap is the wall
     const commands = Array.from({ length: 20 }, (_, i) => ({ action: 'process.execute' as const, insideProject: i % 2 === 0 }))
-    const h = await rig({ over: { resolve: () => ({ action: 'process.execute', target: 'a', confidence: 'heuristic', commands }) } })
+    const h = await rig({ over: { resolve: () => ({ action: 'process.execute', target: 'a', confidence: 'heuristic', commands, effect: 'read' }) } })
     h.recorder.record(bash('a && b'))
     await h.recorder.flushed()
     const [r] = await h.records()
     expect(AUDIT_COMMANDS_KEPT).toBe(16)
     expect(r.commands).toEqual(commands.slice(0, 16))
     expect(r.confidence).toBe('unknown')
+    // What was cut may have written (lifecycle design §4.10)
+    expect(r.effect).toBe('unknown')
+  })
+
+  // Lifecycle design §4.10: whether the call read or wrote, and the login folder it touched by its short name only
+  it('a record carries effect and sensitive from the resolver', async () => {
+    const h = await rig()
+    h.recorder.record(bash('cat ~/.aws/credentials', { dedupeKey: 'a' }))
+    h.recorder.record(bash('git push origin main', { dedupeKey: 'b' }))
+    await h.recorder.flushed()
+    const records = await h.records()
+    const read = records.find((r) => r.action === 'filesystem.read')
+    const push = records.find((r) => r.action === 'git.remote.write')
+    expect(read).toMatchObject({ effect: 'read', sensitive: '.aws' })
+    expect(push).toMatchObject({ effect: 'write' })
+    expect(push).not.toHaveProperty('sensitive')
   })
 
   it('keeps no full command, argument past the subcommand or secret', async () => {
@@ -463,7 +480,7 @@ describe('createAuditRecorder', () => {
 
   it('resolves a call while it is handed over, so its input is not held', async () => {
     let resolved = 0
-    const h = await rig({ over: { resolve: (): ResolvedAction => (resolved++, { action: 'git.read', target: 'git status', confidence: 'high' }) } })
+    const h = await rig({ over: { resolve: (): ResolvedAction => (resolved++, { action: 'git.read', target: 'git status', confidence: 'high', effect: 'read' }) } })
     await h.recorder.flushed()
     h.recorder.record(bash('git status'))
     expect(resolved).toBe(1)
@@ -476,7 +493,7 @@ describe('createAuditRecorder', () => {
     const written: AuditRecord[][] = []
     const h = await rig({
       over: {
-        resolve: () => ({ action: 'git.read', target: 'git status', confidence: 'high' }),
+        resolve: () => ({ action: 'git.read', target: 'git status', confidence: 'high', effect: 'read' }),
         append: async (_dir, recs) => {
           written.push([...recs])
           await stuck
@@ -654,7 +671,7 @@ describe('createAuditRecorder', () => {
     const h = await rig({
       dispatch: { jobId: 'job1' },
       over: {
-        resolve: (c): ResolvedAction => (resolved.push((c.input as { command: string }).command), { action: 'git.read', target: 'git status', confidence: 'high' }),
+        resolve: (c): ResolvedAction => (resolved.push((c.input as { command: string }).command), { action: 'git.read', target: 'git status', confidence: 'high', effect: 'read' }),
         // The first record alone passes the size, so its day stops
         append: (dir, recs, o) => appendRecords(dir, recs, { ...o, maxBytes: 1, now: () => NOW })
       }
@@ -933,7 +950,7 @@ describe('the recorder in Enforce', () => {
 
   it('keeps a blocked call once though the provider reports it too', async () => {
     const resolved: string[] = []
-    const r = await rig({ mode: 'enforce', facts: ENFORCED, over: { hookRan: () => true, resolve: (c) => (resolved.push(c.tool), { action: 'other', target: c.tool, confidence: 'unknown' }) } })
+    const r = await rig({ mode: 'enforce', facts: ENFORCED, over: { hookRan: () => true, resolve: (c) => (resolved.push(c.tool), { action: 'other', target: c.tool, confidence: 'unknown', effect: 'unknown' }) } })
     r.recorder.record(blockedEv)
     r.recorder.record({ sessionId: 's1', source: 'claude-chat', tool: 'Bash', input: { command: 'git push' }, status: 'failed', dedupeKey: 'toolu_2' })
     await r.recorder.flushed()
@@ -942,6 +959,25 @@ describe('the recorder in Enforce', () => {
     expect(records[0]).toMatchObject({ status: 'blocked', blockedBy: 'starter-git-remote-write', action: 'git.remote.write', target: 'git push', confidence: 'high', source: 'claude-hook' })
     // The hook resolved it: the resolver is not asked again
     expect(resolved).toEqual([])
+  })
+
+  // Lifecycle design §4.10: a hook of an earlier release wrote no effect, and the record does not guess one
+  it('a blocked call from an Enforce line without effect is recorded without it', async () => {
+    const r = await rig({ mode: 'enforce', facts: ENFORCED, over: { hookRan: () => true } })
+    r.recorder.record(blockedEv)
+    await r.recorder.flushed()
+    const [rec] = await r.records()
+    expect(rec).toMatchObject({ status: 'blocked', action: 'git.remote.write' })
+    expect(rec).not.toHaveProperty('effect')
+    expect(rec).not.toHaveProperty('sensitive')
+  })
+
+  it('a blocked call from an Enforce line with effect keeps it, and the login folder it names', async () => {
+    const r = await rig({ mode: 'enforce', facts: ENFORCED, over: { hookRan: () => true } })
+    r.recorder.record({ ...blockedEv, resolved: { action: 'filesystem.read', target: 'outside project: id_rsa', confidence: 'high', insideProject: false, effect: 'read', sensitive: '.ssh' } })
+    await r.recorder.flushed()
+    const [rec] = await r.records()
+    expect(rec).toMatchObject({ status: 'blocked', action: 'filesystem.read', insideProject: false, effect: 'read', sensitive: '.ssh' })
   })
 
   it('stops an enforced session whose calls arrive with no proof, once', async () => {

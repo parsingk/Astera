@@ -10,7 +10,7 @@ import { queryRecords, type AuditRecord } from '../../core/audit/store'
 import { decide, STARTER_POLICY } from '../../core/audit/policy'
 import type { PtyEntry, PtyMeta } from '../../core/host/protocol'
 import { createAuditRecorder, registrySessionFacts, type AuditEvent } from './recorder'
-import { claudeChatCalls, codexChatCall, codexRolloutCalls, createAuditSources, hookCall, hookShellAfter, pruneEnforceFiles } from './sources'
+import { claudeChatCalls, codexChatCall, codexRolloutCalls, createAuditSources, enforceBlockedCall, hookCall, hookShellAfter, pruneEnforceFiles } from './sources'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -1015,6 +1015,21 @@ describe('the enforce file source', () => {
     await sources.poll()
     expect(events).toHaveLength(2)
     sources.dispose()
+  })
+
+  // Lifecycle design §4.10: the hook writes what the resolver said of the call; a value it cannot have written is dropped,
+  // so no path reaches a record through `sensitive`
+  it("the Enforce line's effect and sensitive reach the event's resolved", () => {
+    const resolvedOf = (extra: Record<string, unknown>) => enforceBlockedCall(JSON.stringify({ ...blocked('toolu_2'), ...extra }))?.resolved
+    const base = { action: 'git.remote.write', target: 'git push', confidence: 'high' }
+    expect(resolvedOf({ effect: 'write', sensitive: '.ssh' })).toEqual({ ...base, effect: 'write', sensitive: '.ssh' })
+    expect(resolvedOf({ effect: 'unknown', sensitive: 'unknown' })).toEqual({ ...base, effect: 'unknown', sensitive: 'unknown' })
+    expect(resolvedOf({ effect: 'read', sensitive: 'gh' })).toEqual({ ...base, effect: 'read', sensitive: 'gh' })
+    // An older hook's line has neither
+    expect(resolvedOf({})).toEqual(base)
+    expect(resolvedOf({ effect: 'delete', sensitive: '/home/u/.ssh/id_rsa' })).toEqual(base)
+    expect(resolvedOf({ effect: 1, sensitive: ['.ssh'] })).toEqual(base)
+    expect(resolvedOf({ effect: 'read', sensitive: 'id_rsa' })).toEqual({ ...base, effect: 'read' })
   })
 
   // Final review I7: the blocks of a session started in Enforce are read after the mode is turned off too

@@ -20,6 +20,10 @@ export type AuditAction =
 
 export type Confidence = 'exact' | 'high' | 'heuristic' | 'unknown'
 
+/** Whether a call read or wrote (lifecycle design §4.10), from what the resolver knows of its action: `unknown` for what
+ *  can do either (a program, an MCP tool, an agent, a request from a shell) and for a line with any such part. */
+export type CallEffect = 'read' | 'write' | 'unknown'
+
 /** What one command of a line does, and where, for a rule to judge on its own. */
 export interface CommandFacts {
   action: AuditAction
@@ -116,6 +120,12 @@ export interface AuditRecord {
    *  have then. At most AUDIT_COMMANDS_KEPT (recorder.ts); a line cut short is kept as `unknown`. */
   commands?: CommandFacts[]
   confidence: Confidence
+  /** Whether it read or wrote (lifecycle design §4.10); `unknown` for a line cut short. Left out by the records of earlier
+   *  releases and by a block an earlier release's hook wrote. */
+  effect?: CallEffect
+  /** The login folder (E6) a path of the call is in or under, by the location's short name (`.ssh`, `gh`), never the path;
+   *  `unknown` when a path could not be placed. Left out when no path is one, and by earlier releases. */
+  sensitive?: string
   /** `blocked`: Enforce's hook stopped it before it ran (enforce design §5). */
   status: 'ok' | 'failed' | 'unknown' | 'blocked'
   /** What stopped a blocked call: a rule's id, `otherwise`, a built-in rule's id (`builtin-profile-write`,

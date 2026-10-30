@@ -1,14 +1,19 @@
 // Observe mode's resolver (design §6): a provider's tool call in, the canonical action out. Pure and deterministic, with
 // no I/O, no clock and no model. A shell line is classified from its words and never run. What comes out is what a
 // record keeps, so every target is short by construction (a program and its first subcommand, a path relative to the
-// session folder, a host name, `server.tool`) and passes through redactTarget before it leaves.
+// session folder, a host name, `server.tool`) and passes through redactTarget before it leaves. It also says whether the
+// call read or wrote, and which login folder it touched (lifecycle design §4.10); for that it reads this machine's home
+// and environment, unless the caller names them.
+import os from 'node:os'
 import path from 'node:path'
 import { isPathWithin } from '../files/tree'
 import { redactSecrets } from '../remote/redact'
-import type { AuditAction, CommandFacts, Confidence } from './types'
+import { sensitiveEntries, type DenyEntry } from '../sandbox/locations'
+import { UNPLACED, homePathOf, homeSensitiveNameOf, sensitiveNameOf } from './sensitive'
+import type { AuditAction, CallEffect, CommandFacts, Confidence } from './types'
 
 // Declared beside the other shapes the renderer reads (types.ts), kept importable from here
-export type { AuditAction, CommandFacts, Confidence } from './types'
+export type { AuditAction, CallEffect, CommandFacts, Confidence } from './types'
 
 export interface ResolveCall {
   provider: 'claude' | 'codex'
@@ -21,6 +26,11 @@ export interface ResolveCall {
   /** Where the call ran, when the source knows (for Claude, where its call before left the shell, which follows the
    *  shell's `cd`s from call to call): a relative path is read from there. Left out: from `cwd`. */
   base?: string
+  /** The login folders a path is matched against for `sensitive` (the E6 list, core/sandbox/locations.ts). Left out: this
+   *  machine's, from its environment and home. */
+  sensitive?: readonly DenyEntry[]
+  /** The home a `~`, `$HOME` or `%USERPROFILE%` path is read from. Left out: this machine's. */
+  home?: string
 }
 
 /** The fields of a Claude tool's input this reads. The audit capture keeps these and drops the rest (a Write's contents,
@@ -37,6 +47,12 @@ export interface ResolvedAction {
   /** Every command of a compound shell line, and every file a redirection or a pipe into a writer touches, in order and
    *  without repeats, each with its own place. Left out for a line that is one command with nothing else. */
   commands?: CommandFacts[]
+  /** Whether it read or wrote (lifecycle design §4.10): a line writes if any of its parts does, and is unknown if any part
+   *  may do either or could not be read. */
+  effect: CallEffect
+  /** The login folder (E6) a path it names is in or under, by the location's short name, never the path; UNPLACED
+   *  (`unknown`) for a path this cannot place. Left out when no path is either. */
+  sensitive?: string
 }
 
 const SHELL_TARGET_MAX = 60
@@ -89,7 +105,41 @@ export function resolveAction(call: ResolveCall): ResolvedAction {
     return { ...r, target: clip(redactTarget(r.target), TARGET_MAX) }
   } catch {
     const target = typeof call.tool === 'string' ? clip(redactTarget(call.tool), TARGET_MAX) : 'unknown'
-    return { action: 'other', target, confidence: 'unknown' }
+    return { action: 'other', target, confidence: 'unknown', effect: 'unknown' }
+  }
+}
+
+const READS: ReadonlySet<AuditAction> = new Set<AuditAction>(['filesystem.read', 'git.read'])
+const WRITES: ReadonlySet<AuditAction> = new Set<AuditAction>([
+  'filesystem.write', 'filesystem.delete', 'git.local.write', 'git.remote.write', 'github.pr.create', 'github.write', 'package.install'
+])
+
+/** Whether one action read or wrote (lifecycle design §4.10). A request through a web tool (`web`) reads; one from a shell
+ *  may send anything. `other` reads only as a quiet tool's, the one `other` that is exact: it runs nothing. A program, an
+ *  MCP tool and an agent can do either, so they are unknown. */
+function effectOf(action: AuditAction, confidence: Confidence, web = false): CallEffect {
+  if (READS.has(action)) return 'read'
+  if (WRITES.has(action)) return 'write'
+  if (action === 'network.request') return web ? 'read' : 'unknown'
+  return action === 'other' && confidence === 'exact' ? 'read' : 'unknown'
+}
+
+/** A call that is one action, with the effect that action has. */
+const one = (r: Omit<ResolvedAction, 'effect'>, web = false): ResolvedAction => ({ ...r, effect: effectOf(r.action, r.confidence, web) })
+
+/** The E6 list and the home a call's paths are matched against: the call's, else this machine's. A home that cannot be read
+ *  ('') places no home path, which then reads as one that could not be placed. */
+function e6Of(entries: readonly DenyEntry[] | undefined, home: string | undefined): E6 {
+  const h = home ?? ownHome()
+  return { entries: entries ?? (h === '' ? [] : sensitiveEntries(process.platform, process.env, h)), home: h }
+}
+
+/** os.homedir() throws where neither the environment nor the user database names a home. */
+function ownHome(): string {
+  try {
+    return os.homedir()
+  } catch {
+    return ''
   }
 }
 
@@ -101,16 +151,16 @@ function flavorOf(provider: ResolveCall['provider'], tool: string): Flavor {
   return process.platform === 'win32' ? 'ps' : 'posix'
 }
 
-function resolve({ provider, tool, input, cwd, base }: ResolveCall): ResolvedAction {
+function resolve({ provider, tool, input, cwd, base, sensitive, home }: ResolveCall): ResolvedAction {
   const mcp = mcpTarget(tool)
-  if (mcp !== null) return { action: 'mcp.call', target: mcp, confidence: 'exact' }
+  if (mcp !== null) return one({ action: 'mcp.call', target: mcp, confidence: 'exact' })
   const rec = asRecord(input)
-  const ctx: Ctx = { cwd, base: base === undefined ? cwd : path.resolve(cwd, nativePath(base)) }
+  const ctx: Ctx = { cwd, base: base === undefined ? cwd : path.resolve(cwd, nativePath(base)), e6: e6Of(sensitive, home) }
   switch (KINDS[provider].get(tool)) {
     case 'shell':
       return resolveShell(rec, ctx, flavorOf(provider, tool))
     case 'exec':
-      return resolveExec(str(input), cwd)
+      return resolveExec(str(input), cwd, ctx.e6)
     case 'read':
       return fileTool('filesystem.read', tool, [str(rec.file_path) ?? str(rec.notebook_path) ?? str(rec.path)], ctx)
     case 'write':
@@ -125,21 +175,21 @@ function resolve({ provider, tool, input, cwd, base }: ResolveCall): ResolvedAct
     case 'fetch': {
       const host = hostOf(str(rec.url) ?? '')
       return host === null
-        ? { action: 'network.request', target: tool, confidence: 'unknown' }
-        : { action: 'network.request', target: host, confidence: 'exact' }
+        ? one({ action: 'network.request', target: tool, confidence: 'unknown' }, true)
+        : one({ action: 'network.request', target: host, confidence: 'exact' }, true)
     }
     case 'web-search':
-      return { action: 'network.request', target: 'web search', confidence: 'exact' } // the query is the person's text, not recorded
+      return one({ action: 'network.request', target: 'web search', confidence: 'exact' }, true) // the query is the person's text, not recorded
     case 'agent':
-      return { action: 'agent.spawn', target: '', confidence: 'exact' }
+      return one({ action: 'agent.spawn', target: '', confidence: 'exact' })
     case 'quiet':
-      return { action: 'other', target: tool, confidence: 'exact' }
+      return one({ action: 'other', target: tool, confidence: 'exact' })
     case 'worktree':
-      return { action: 'git.local.write', target: tool, confidence: 'exact' }
+      return one({ action: 'git.local.write', target: tool, confidence: 'exact' })
     case 'stdin':
-      return { action: 'process.execute', target: tool, confidence: 'unknown' }
+      return one({ action: 'process.execute', target: tool, confidence: 'unknown' })
     default:
-      return { action: 'other', target: tool, confidence: 'unknown' }
+      return one({ action: 'other', target: tool, confidence: 'unknown' })
   }
 }
 
@@ -153,7 +203,8 @@ function effectsOf(p: ResolvedAction): CommandFacts[] {
  * What one line of work did when it was several things. The headline (`lead`, the first part unless the caller names
  * another) gives the action, target and place; `commands` lists them all without repeats; the line is unknown if any part
  * was, and heuristic if it was `compound` (several commands, or a loop or conditional), if any part was, or if it lists
- * more than one entry (a command and the file it redirects into is two things to be sure of).
+ * more than one entry (a command and the file it redirects into is two things to be sure of). It writes if any part
+ * does, else is unknown if any part or the line is, else reads; and it names the login folder a part named.
  */
 function combine(parts: ResolvedAction[], compound: boolean, lead: ResolvedAction = parts[0]): ResolvedAction {
   if (parts.length === 1 && !compound) return parts[0]
@@ -163,14 +214,28 @@ function combine(parts: ResolvedAction[], compound: boolean, lead: ResolvedActio
     return seen.has(key) ? false : (seen.add(key), true)
   })
   const unsure = compound || commands.length > 1 || parts.some((p) => p.confidence === 'heuristic')
+  const confidence: Confidence = parts.some((p) => p.confidence === 'unknown') ? 'unknown' : unsure ? 'heuristic' : lead.confidence
   const out: ResolvedAction = {
     action: lead.action,
     target: lead.target,
-    confidence: parts.some((p) => p.confidence === 'unknown') ? 'unknown' : unsure ? 'heuristic' : lead.confidence,
-    commands
+    confidence,
+    commands,
+    effect: parts.some((p) => p.effect === 'write')
+      ? 'write'
+      : confidence === 'unknown' || parts.some((p) => p.effect === 'unknown')
+        ? 'unknown'
+        : 'read'
   }
   if (lead.insideProject !== undefined) out.insideProject = lead.insideProject
+  const sensitive = firstSensitive(parts.map((p) => p.sensitive))
+  if (sensitive !== undefined) out.sensitive = sensitive
   return out
+}
+
+/** The login folder several places or parts name: the first location's name, else UNPLACED when one could not be placed,
+ *  else none. A name says more than UNPLACED, so it outranks one wherever it sits. */
+function firstSensitive(names: Array<string | undefined>): string | undefined {
+  return names.find((n) => n !== undefined && n !== UNPLACED) ?? names.find((n) => n !== undefined)
 }
 
 /**
@@ -179,12 +244,12 @@ function combine(parts: ResolvedAction[], compound: boolean, lead: ResolvedActio
  * `tools.<name>(` in the code (not in a string or a comment) is a call, resolved as the tool of that name; several make a
  * compound line: the code around them, which this does not read, decides which of them run.
  */
-function resolveExec(source: string | null, cwd: string): ResolvedAction {
+function resolveExec(source: string | null, cwd: string, e6: E6): ResolvedAction {
   const text = source ?? ''
   const calls = toolCalls(text)
-  if (calls.length === 0) return { action: 'other', target: 'exec', confidence: 'unknown' }
+  if (calls.length === 0) return one({ action: 'other', target: 'exec', confidence: 'unknown' })
   const parts = calls.map((c, i) =>
-    resolve({ provider: 'codex', tool: c.name, input: execArgs(c.name, text.slice(c.from, calls[i + 1]?.at)), cwd })
+    resolve({ provider: 'codex', tool: c.name, input: execArgs(c.name, text.slice(c.from, calls[i + 1]?.at)), cwd, sensitive: e6.entries, home: e6.home })
   )
   return combine(parts, parts.length > 1, parts[0])
 }
@@ -308,8 +373,17 @@ interface Ctx {
   /** What a relative path is relative to: the session's folder, a Codex call's own working directory, or where a `cd`
    *  went. Null after a `cd` to somewhere this cannot follow. */
   base: string | null
+  /** The login folders and the home a path is matched against. */
+  e6: E6
   /** The paths are a PowerShell command's, which takes `\` as a separator on every platform. */
   ps?: true
+}
+
+/** The E6 list and the home the paths of one call are matched against (lifecycle design §4.10). */
+interface E6 {
+  entries: readonly DenyEntry[]
+  /** '' when it could not be read. */
+  home: string
 }
 
 /** A shell path that names a place this cannot follow: home (also `~user`), or a variable. */
@@ -324,6 +398,8 @@ const REMOTE_PATH = /^(?:[^\s/\\:@]+@[^\s/\\:]+|[^\s/\\:]{2,}):/
 interface Place {
   shown: string
   inside: boolean
+  /** The login folder it is in or under, by its short name, or UNPLACED. Left out when neither. */
+  sensitive?: string
 }
 
 /** Git Bash, which Claude's Bash tool uses on Windows, writes the C: drive as /c. */
@@ -348,34 +424,50 @@ function leaf(p: string): string {
 }
 
 /** Where one path is. A home path, a shell path this cannot follow (`$VAR`, `%VAR%`, `~user`), or a relative one after a
- *  `cd` it could not follow counts as outside: the rule about outside is there for what is not provably in the folder. */
+ *  `cd` it could not follow counts as outside: the rule about outside is there for what is not provably in the folder.
+ *  Every path is matched against the login folders here (lifecycle design §4.10): an absolute one as it is, a home
+ *  spelling from the home; one that cannot be placed may be in any of them. */
 function placeOf(p: string, ctx: Ctx, fromShell: boolean): Place {
-  const outside = (name: string): Place => ({ shown: `outside project: ${name}`, inside: false })
-  if (URL_PATH.test(p)) return outside(hostOf(p) ?? 'url') // the host only, never the credentials in front of it
-  if (HOME.test(p) || (fromShell && (UNFOLLOWABLE.test(p) || REMOTE_PATH.test(p)))) return outside(leaf(p))
+  const outside = (name: string, sensitive: string | null): Place => ({
+    shown: `outside project: ${name}`,
+    inside: false,
+    ...(sensitive !== null ? { sensitive } : {})
+  })
+  if (URL_PATH.test(p)) return outside(hostOf(p) ?? 'url', null) // the host only, never the credentials in front of it
+  if (HOME.test(p) || (fromShell && (UNFOLLOWABLE.test(p) || REMOTE_PATH.test(p)))) return outside(leaf(p), unfollowed(p, ctx.e6))
   const native = shellPath(p, ctx)
-  if (ctx.base === null && !path.isAbsolute(native)) return outside(leaf(p))
+  if (ctx.base === null && !path.isAbsolute(native)) return outside(leaf(p), UNPLACED)
   const abs = path.resolve(ctx.base ?? ctx.cwd, native)
-  if (!isPathWithin(ctx.cwd, abs)) return outside(leaf(abs))
+  const sensitive = sensitiveNameOf(abs, ctx.e6.entries, process.platform)
+  if (!isPathWithin(ctx.cwd, abs)) return outside(leaf(abs), sensitive)
   // Sliced rather than path.relative, which does not fold case on darwin where isPathWithin does.
   const rel = abs.slice(path.resolve(ctx.cwd).length).replace(/^[\\/]+/, '')
-  return { shown: rel === '' ? '.' : rel.split(path.sep).join('/'), inside: true }
+  const inside: Place = { shown: rel === '' ? '.' : rel.split(path.sep).join('/'), inside: true }
+  return sensitive === null ? inside : { ...inside, sensitive }
 }
 
-/** The first path and a count of the rest, and whether all of them are inside. */
-function placesOf(paths: string[], ctx: Ctx, fromShell: boolean): { target: string; inside: boolean } {
+/** The login folder of a path this cannot follow: a home spelling is placed from the home, in one folder or in none; any
+ *  other (a variable, `~user`, a path on another machine) could be in any, so it is UNPLACED. */
+function unfollowed(p: string, e6: E6): string | null {
+  return homeSensitiveNameOf(p, e6.entries, e6.home) ?? (homePathOf(p, e6.home) === null ? UNPLACED : null)
+}
+
+/** The first path and a count of the rest, whether all of them are inside, and the login folder one of them is in. */
+function placesOf(paths: string[], ctx: Ctx, fromShell: boolean): { target: string; inside: boolean; sensitive?: string } {
   const uniq = [...new Set(paths)]
   const places = uniq.map((p) => placeOf(p, ctx, fromShell))
   const first = places[0].shown
-  return { target: uniq.length > 1 ? `${first} (+${uniq.length - 1})` : first, inside: places.every((p) => p.inside) }
+  const out = { target: uniq.length > 1 ? `${first} (+${uniq.length - 1})` : first, inside: places.every((p) => p.inside) }
+  const sensitive = firstSensitive(places.map((p) => p.sensitive))
+  return sensitive === undefined ? out : { ...out, sensitive }
 }
 
 /** A structured file tool. With no path to read, the call is unknown rather than guessed. */
 function fileTool(action: AuditAction, tool: string, paths: Array<string | null>, ctx: Ctx): ResolvedAction {
   const named = paths.filter((p): p is string => p !== null)
-  if (named.length === 0) return { action, target: tool, confidence: 'unknown' }
-  const { target, inside } = placesOf(named, ctx, false)
-  return { action, target, insideProject: inside, confidence: 'exact' }
+  if (named.length === 0) return one({ action, target: tool, confidence: 'unknown' })
+  const { target, inside, sensitive } = placesOf(named, ctx, false)
+  return one({ action, target, insideProject: inside, confidence: 'exact', ...(sensitive !== undefined ? { sensitive } : {}) })
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -423,6 +515,8 @@ interface Facts {
   /** Known only roughly (a method named for what it usually does), so the part is `heuristic`. */
   heuristic?: true
   inside?: boolean
+  /** The login folder one of its paths is in, or UNPLACED (placeOf). */
+  sensitive?: string
   /** The target is a path, which keeps to the length a structured tool's does rather than the shell cap. */
   path?: true
   /** What else the same command does: `curl -o file` also writes the file. */
@@ -466,7 +560,7 @@ function resolveShell(rec: Record<string, unknown>, at: Ctx, flavor: Flavor): Re
     const chain = cmd.groups ?? []
     while (held.length > 0 && (held.length > chain.length || held[held.length - 1].id !== chain[held.length - 1])) base = held.pop()!.base
     for (let k = held.length; k < chain.length; k++) held.push({ id: chain[k], base })
-    const ctx: Ctx = cmd.ps === true ? { cwd, base, ps: true } : { cwd, base }
+    const ctx: Ctx = cmd.ps === true ? { cwd, base, e6: at.e6, ps: true } : { cwd, base, e6: at.e6 }
     let own: ResolvedAction | undefined
     if (cmd.words.length > 0) {
       const f = classify(cmd, ctx)
@@ -475,8 +569,9 @@ function resolveShell(rec: Record<string, unknown>, at: Ctx, flavor: Flavor): Re
       for (const also of f.also ?? []) parts.push(partOf(also))
     }
     const writes: ResolvedAction[] = cmd.out.map((file) => {
-      const { target, inside } = placesOf([file], ctx, true)
-      return { action: 'filesystem.write', target: clip(redactTarget(target), TARGET_MAX), insideProject: inside, confidence: 'high' }
+      const { target, inside, sensitive } = placesOf([file], ctx, true)
+      const write: ResolvedAction = { action: 'filesystem.write', target: clip(redactTarget(target), TARGET_MAX), insideProject: inside, confidence: 'high', effect: 'write' }
+      return sensitive === undefined ? write : { ...write, sensitive }
     })
     parts.push(...writes)
 
@@ -490,7 +585,7 @@ function resolveShell(rec: Record<string, unknown>, at: Ctx, flavor: Flavor): Re
     }
     if (MOVES.has(prog) && !foreign) base = movedTo(cmd.words.slice(1), ctx, cmd.cmdlet)
   }
-  if (parts.length === 0) return { action: 'process.execute', target: 'shell', confidence: 'unknown' }
+  if (parts.length === 0) return one({ action: 'process.execute', target: 'shell', confidence: 'unknown' })
   // A command that runs the ones after it (`xargs`) is not one more command beside them, though it is listed with them
   return combine(parts, commands.filter((c) => c.runs !== true).length > 1 || syntax, lead)
 }
@@ -499,14 +594,15 @@ function resolveShell(rec: Record<string, unknown>, at: Ctx, flavor: Flavor): Re
 const argvCommand = (words: Words): Cmd => ({ words, out: [], call: false, quoted: words.map(() => false), invoked: false })
 
 /** What a command's facts become in the record. The target is redacted before it is cut, and a path target keeps to the
- *  length a structured tool's does. */
+ *  length a structured tool's does. A shell's request is not a web tool's, so its effect is unknown. */
 function partOf(f: Facts): ResolvedAction {
-  const part: ResolvedAction = {
+  const part = one({
     action: f.action,
     target: clip(redactTarget(f.target), f.path === true ? TARGET_MAX : SHELL_TARGET_MAX),
     confidence: !f.known ? 'unknown' : f.heuristic === true ? 'heuristic' : 'high'
-  }
+  })
   if (f.inside !== undefined) part.insideProject = f.inside
+  if (f.sensitive !== undefined) part.sensitive = f.sensitive
   return part
 }
 
@@ -1569,15 +1665,22 @@ function urlIn(args: Words): string | null {
 const withTarget = (name: string, sub: string | undefined): string => (sub === undefined ? name : `${name} ${sub}`)
 
 function readFacts(paths: string[], ctx: Ctx): Facts {
-  const { target, inside } = placesOf(paths, ctx, true)
-  return { action: 'filesystem.read', target, known: true, inside, path: true }
+  const { target, ...where } = placesOf(paths, ctx, true)
+  return { action: 'filesystem.read', target, known: true, ...where, path: true }
 }
 
 /** A write to `paths`. With no destination to name, the write is unknown rather than guessed. */
 function writeFacts(name: string, paths: string[], ctx: Ctx): Facts {
   if (paths.length === 0) return { action: 'filesystem.write', target: name, known: false }
-  const { target, inside } = placesOf(paths, ctx, true)
-  return { action: 'filesystem.write', target, known: true, inside, path: true }
+  const { target, ...where } = placesOf(paths, ctx, true)
+  return { action: 'filesystem.write', target, known: true, ...where, path: true }
+}
+
+/** Where a command's paths are, for facts that keep their own target: whether all are inside, and the login folder one is
+ *  in. */
+function whereOf(paths: string[], ctx: Ctx): Pick<Facts, 'inside' | 'sensitive'> {
+  const { inside, sensitive } = placesOf(paths, ctx, true)
+  return sensitive === undefined ? { inside } : { inside, sensitive }
 }
 
 /** Where `find` starts: its leading words, before the first test or expression. */
@@ -1786,13 +1889,12 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
   if (DELETERS.has(prog)) {
     const paths = pathArgs(prog, args, cmdlet)
     const facts: Facts = { action: 'filesystem.delete', target: name, known: true }
-    if (paths.length > 0) facts.inside = placesOf(paths, ctx, true).inside
-    return facts
+    return paths.length > 0 ? { ...facts, ...whereOf(paths, ctx) } : facts
   }
 
   // A find's place is where it starts, not where what it runs deletes, so one that runs commands left unread is not known
   if (prog === 'find' && findDeletes(args)) {
-    return { action: 'filesystem.delete', target: name, known: cmd.unread !== true, inside: placesOf(findStarts(args), ctx, true).inside }
+    return { action: 'filesystem.delete', target: name, known: cmd.unread !== true, ...whereOf(findStarts(args), ctx) }
   }
 
   if (prog === 'xargs') {
@@ -1803,7 +1905,7 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
       const named = pathArgs(inner, args.slice(at + 1)).filter((p) => !PLACEHOLDER.test(p))
       return named.length === 0
         ? { action: 'filesystem.delete', target: name, known: false }
-        : { action: 'filesystem.delete', target: name, known: true, inside: placesOf(named, ctx, true).inside }
+        : { action: 'filesystem.delete', target: name, known: true, ...whereOf(named, ctx) }
     }
   }
 
@@ -1819,7 +1921,7 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
     // A move also takes the files from where they were: every path that is not the destination.
     const sources = named !== undefined ? paths : paths.slice(0, -1)
     if (MOVERS.has(prog) && dest !== undefined && sources.length > 0) {
-      facts.also = [{ action: 'filesystem.delete', target: name, known: true, inside: placesOf(sources, ctx, true).inside }]
+      facts.also = [{ action: 'filesystem.delete', target: name, known: true, ...whereOf(sources, ctx) }]
     }
     return facts
   }

@@ -39,7 +39,8 @@
 import { closeSync, fstatSync, openSync, readSync, promises as fsp, type watch } from 'node:fs'
 import path from 'node:path'
 import { AUDIT_ACTIONS } from '../../core/audit/policy'
-import type { AuditAction } from '../../core/audit/types'
+import { SENSITIVE_NAMES } from '../../core/audit/sensitive'
+import type { AuditAction, CallEffect } from '../../core/audit/types'
 import { decodeClaudeFrame } from '../../core/chat/claudeProtocol'
 import { decodeFrame } from '../../core/chat/codexProtocol'
 import { outputText } from '../../core/history/codexConversation'
@@ -411,6 +412,7 @@ function rolloutCall(type: unknown, p: Record<string, unknown>): ObservedCall | 
 
 const ACTION_NAMES = new Set<string>(AUDIT_ACTIONS)
 const CONFIDENCES = new Set(['exact', 'high', 'heuristic', 'unknown'])
+const EFFECTS = new Set<string>(['read', 'write', 'unknown'] satisfies CallEffect[])
 /** How much of an enforce file one read takes at most; the rest is read at the next. */
 const ENFORCE_READ_MAX = 1 << 20
 /** Call ids of a session's file kept for the proof; a call's report comes seconds after its hook's line. */
@@ -456,7 +458,11 @@ export function enforceBlockedCall(line: string): (ObservedCall & { provider: 'c
       action: action as AuditAction,
       target,
       confidence,
-      ...(typeof o.insideProject === 'boolean' ? { insideProject: o.insideProject } : {})
+      ...(typeof o.insideProject === 'boolean' ? { insideProject: o.insideProject } : {}),
+      // Lifecycle design §4.10. Only a value the hook can write is kept, so no path reaches a record as a login folder's
+      // name; a hook of an earlier release wrote neither
+      ...(typeof o.effect === 'string' && EFFECTS.has(o.effect) ? { effect: o.effect as CallEffect } : {}),
+      ...(typeof o.sensitive === 'string' && SENSITIVE_NAMES.has(o.sensitive) ? { sensitive: o.sensitive } : {})
     }
   }
 }

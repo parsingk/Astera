@@ -64,12 +64,15 @@ export function runEnforceHook(a: {
     const line: Record<string, unknown> = { at: a.now(), provider: a.provider, tool, id }
     if (v.deny) {
       const r = resolveAction(call)
+      // Whether it read or wrote, and the login folder it named by its short name (lifecycle design §4.10)
       Object.assign(line, {
         blocked: v.ruleId,
         action: r.action,
         target: r.target,
         confidence: r.confidence,
-        ...(r.insideProject !== undefined ? { insideProject: r.insideProject } : {})
+        ...(r.insideProject !== undefined ? { insideProject: r.insideProject } : {}),
+        effect: r.effect,
+        ...(r.sensitive !== undefined ? { sensitive: r.sensitive } : {})
       })
     }
     try {

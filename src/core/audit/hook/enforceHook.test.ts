@@ -45,7 +45,7 @@ describe('runEnforceHook', () => {
     // as it is (host/audit/sources.ts enforceBlockedCall)
     expect(run(payload('Bash', { command: 'git status' })).lines).toEqual([[file, '{"at":1000,"provider":"claude","tool":"Bash","id":"toolu_1"}\n']])
     expect(run(payload('Bash', { command: 'git push origin main' })).lines).toEqual([
-      [file, '{"at":1000,"provider":"claude","tool":"Bash","id":"toolu_1","blocked":"starter-git-remote-write","action":"git.remote.write","target":"git push","confidence":"high"}\n']
+      [file, '{"at":1000,"provider":"claude","tool":"Bash","id":"toolu_1","blocked":"starter-git-remote-write","action":"git.remote.write","target":"git push","confidence":"high","effect":"write"}\n']
     ])
     expect(JSON.parse(run(payload('Write', { file_path: at('D:/elsewhere/x.txt'), content: 'x' })).lines[0][1])).toMatchObject({
       blocked: 'starter-write-outside', action: 'filesystem.write', insideProject: false, confidence: 'exact'
@@ -54,6 +54,19 @@ describe('runEnforceHook', () => {
     expect(run(payload('Bash', { command: 'git push' }), { sessionId: undefined })).toMatchObject({ lines: [], out: deny('Blocked by Astera Rules: git.remote.write is denied.') })
     // A write that fails does not change the decision
     expect(run(payload('Bash', { command: 'git push' }), { append: () => { throw new Error('EACCES') } }).out).toBe(deny('Blocked by Astera Rules: git.remote.write is denied.'))
+  })
+
+  // Lifecycle design §4.10: a stopped call's line says whether it read or wrote, and names the login folder it touched
+  it('writes the effect and the login folder of a stopped call, never its path', () => {
+    const line = (stdin: string): Record<string, unknown> => JSON.parse(run(stdin).lines[0][1])
+    const push = line(payload('Bash', { command: 'git push origin main' }))
+    expect(push).toMatchObject({ blocked: 'starter-git-remote-write', effect: 'write' })
+    expect(push).not.toHaveProperty('sensitive')
+    const keys = line(payload('Write', { file_path: '~/.ssh/authorized_keys', content: 'x' }))
+    expect(keys).toMatchObject({ blocked: 'starter-write-outside', effect: 'write', sensitive: '.ssh' })
+    expect(JSON.stringify(keys)).not.toContain('.ssh/')
+    // A call let through says neither
+    expect(line(payload('Bash', { command: 'git status' }))).toEqual({ at: 1000, provider: 'claude', tool: 'Bash', id: 'toolu_1' })
   })
 
   it('retries a busy rules file before failing closed', () => {
