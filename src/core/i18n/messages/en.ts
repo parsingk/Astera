@@ -160,6 +160,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.agentProfiles.restore': 'Restore',
   'settings.agentProfiles.archiveReason': 'Reason (optional)',
   'settings.agentProfiles.archivedOn': 'Archived {date}',
+  'settings.agentProfiles.archivedReason': 'Reason: {reason}',
   'settings.agentProfiles.delete': 'Delete',
   'settings.agentProfiles.deleteConfirm.title': 'Delete {name}?',
   'settings.agentProfiles.deleteConfirm.body': 'This cannot be undone. If you may use it again later, archive it instead.',

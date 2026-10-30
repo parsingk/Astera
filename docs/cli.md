@@ -322,10 +322,10 @@ keep a Host running. A fire is skipped, and logged once, while the Job's latest 
 the same rule that makes `jobs run` refuse a Job that is already going (see "the still running rule"
 below). A fire is skipped the same way, logged once per fire time, while the Job uses an archived agent
 profile, as its own `--agent-profile` or a planned task's: the whole fire waits, not only the tasks that
-name the profile, and `jobs list` and `jobs get` name each archived profile in `archivedProfiles` (the list
-shows `archived profile: <name>`). Nothing about the schedule changes, so once the profile is restored the
-next fire time runs as usual. A person's own `jobs run` still runs the Job, since work that holds a profile
-keeps using it.
+name the profile, and while the Job is not paused `jobs list` and `jobs get` name each archived profile in
+`archivedProfiles` (the list shows `archived profile: <name>`). Nothing about the schedule changes, so once
+the profile is restored the next fire time runs as usual. A person's own `jobs run` still runs the Job,
+since work that holds a profile keeps using it.
 
 **A finished run does not keep its sessions.** When a run finishes, which means every one of its tasks
 is done, the process that drives stops that run's coordinator and releases its idle workers (a worker
@@ -1138,9 +1138,10 @@ starts no new work, while the work that holds it goes on; `restore` takes it bac
 (`archivedAt`) and, with `--reason`, why (`archivedReason`, one line of at most 200 characters; a line break or a
 longer one is refused with 2), and `restore` clears both. A scheduled Job that uses an archived profile waits
 instead of firing until it is restored (see "A schedule's fire runs a Job exactly the way `jobs run` does",
-above). `delete` is refused with 6 while unfinished work holds the profile. Changing profiles is for a person: from inside an agent session the changes are
-refused with 5, and the reads are not. A profile the Host refuses says why in `error.details.reason`: `name-empty`,
-`name-too-long`, `name-taken`, `no-account`, `unknown-account` or `mixed-provider` with 2, and `in-use` with 6.
+above). `delete` is refused with 6 while unfinished work holds the profile. Changing profiles is for a person: from
+inside an agent session the changes are refused with 5, and the reads are not. A profile the Host refuses says why in
+`error.details.reason`: `name-empty`, `name-too-long`, `name-taken`, `no-account`, `unknown-account` or
+`mixed-provider` with 2, and `in-use` with 6.
 
 **`--sandbox on` starts the profile's sessions, terminal and chat, in their CLI's own sandbox**; `off`, the default,
 starts them as before, and a profile made before the switch existed reads as `off` (`agent-profiles list` shows it as

@@ -145,7 +145,7 @@ export function AgentProfilesSettings({ accounts }: { accounts: Account[] }): Re
           {profiles.map((p) => {
             const first = accounts.find((a) => a.id === p.accountIds[0])
             const isOpen = open.has(p.id)
-            // When it was archived and why (lifecycle design §5): the date beside its status, the reason inside
+            // When it was archived and why (lifecycle design §5): the date as its status, the reason inside the open row
             const note = archivedNote(p, t, (iso) => new Date(iso).toLocaleDateString())
             const reason = archiving?.id === p.id ? archiving.reason : null
             return (
@@ -157,10 +157,10 @@ export function AgentProfilesSettings({ accounts }: { accounts: Account[] }): Re
                   <span className="plugin-name">{p.name}</span>
                   {first && <span className="settings-hint">{metaOf(first).displayName}</span>}
                   <span className="settings-hint">{t('settings.agentProfiles.accountCount', { count: p.accountIds.length })}</span>
-                  {p.status === 'archived' && <span className="plugin-status">{t('settings.agentProfiles.archived')}</span>}
-                  {note && (
-                    <span className="settings-hint" title={note.reason}>
-                      {note.on}
+                  {/* One mark: the date it was archived in place of the plain badge, when the date was kept */}
+                  {p.status === 'archived' && (
+                    <span className="plugin-status" title={note?.reason}>
+                      {note ? note.on : t('settings.agentProfiles.archived')}
                     </span>
                   )}
                 </button>

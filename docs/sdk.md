@@ -325,9 +325,10 @@ used. An archived profile also carries `archivedAt`, when it was archived, and `
 gave as why, if any; a restore clears both. A Job and a Task made as a profile carry its id as `agentProfileId`, and so
 does a worker attempt of such a Task. A scheduled Job that uses an archived profile, as its own or a planned Task's,
 waits instead of firing until the profile is restored; `jobs.list` and `jobs.get` name those profiles in
-`archivedProfiles` while it is not paused. An Astera before these records leaves all three out. Profiles need `@astera-app/client` 0.5.0 and the Astera that ships them. A Host from before agent profiles
-answers `agentProfiles.list` and `agentProfiles.get` with `VERSION_MISMATCH`, ignores `agentProfileId` on
-`jobs.create`, and refuses a `tasks.create` that names a profile but no `accountIds`.
+`archivedProfiles` while it is not paused. An Astera before these records leaves all three out. Profiles need
+`@astera-app/client` 0.5.0 and the Astera that ships them. A Host from before agent profiles answers
+`agentProfiles.list` and `agentProfiles.get` with `VERSION_MISMATCH`, ignores `agentProfileId` on `jobs.create`, and
+refuses a `tasks.create` that names a profile but no `accountIds`.
 
 A profile whose `permission` is `bypass` runs without permission checks, so **a plugin may make work as one only while
 Astera skips them anyway**: its `jobs.create` or `tasks.create` with such a profile, or a `tasks.create`, `jobs.run` or

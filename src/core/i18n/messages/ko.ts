@@ -163,6 +163,7 @@ export const ko = {
   'settings.agentProfiles.restore': '복원',
   'settings.agentProfiles.archiveReason': '이유 (선택)',
   'settings.agentProfiles.archivedOn': '{date}에 보관함',
+  'settings.agentProfiles.archivedReason': '이유: {reason}',
   'settings.agentProfiles.delete': '삭제',
   'settings.agentProfiles.deleteConfirm.title': '{name}을(를) 삭제할까요?',
   'settings.agentProfiles.deleteConfirm.body': '되돌릴 수 없습니다. 나중에 다시 쓸 수도 있다면 보관하세요.',

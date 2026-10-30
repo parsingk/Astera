@@ -362,13 +362,16 @@ describe('the sandbox switch', () => {
 describe('an archived profile', () => {
   const day = (iso: string): string => iso.slice(0, 10)
 
-  it('says when it was archived, in the reader’s date, and the reason given', () => {
+  // Fix round 1: the reason is said as a reason, not as a bare line
+  it('says when it was archived, in the reader’s date, and the reason given, labelled', () => {
     expect(archivedNote(profile({ status: 'archived', archivedAt: '2026-10-30T01:00:00.000Z', archivedReason: 'replaced by p2' }), en, day)).toEqual({
       on: 'Archived 2026-10-30',
-      reason: 'replaced by p2'
+      reason: 'Reason: replaced by p2'
     })
     expect(archivedNote(profile({ status: 'archived', archivedAt: '2026-10-30T01:00:00.000Z' }), en, day)).toEqual({ on: 'Archived 2026-10-30' })
-    expect(archivedNote(profile({ status: 'archived', archivedAt: '2026-10-30T01:00:00.000Z' }), (k, p) => translate('ko', k, p), day)).toEqual({ on: '2026-10-30에 보관함' })
+    expect(
+      archivedNote(profile({ status: 'archived', archivedAt: '2026-10-30T01:00:00.000Z', archivedReason: 'old' }), (k, p) => translate('ko', k, p), day)
+    ).toEqual({ on: '2026-10-30에 보관함', reason: '이유: old' })
   })
 
   it('says nothing for an active profile, or one archived before the date was kept', () => {
@@ -379,6 +382,9 @@ describe('an archived profile', () => {
   it('the row shows the note, and Archive opens a one-line reason field with Archive and Cancel', () => {
     const editor = source('AgentProfilesSettings.tsx')
     expect(editor).toContain('archivedNote(p, t, (iso) => new Date(iso).toLocaleDateString())')
+    // Fix round 1: one mark on the collapsed row, the date in place of the plain badge, not the badge and the date
+    expect(editor).toContain("{note ? note.on : t('settings.agentProfiles.archived')}")
+    expect(editor.split('note.on').length - 1).toBe(1)
     expect(editor).toContain("t('settings.agentProfiles.archiveReason')")
     expect(editor).toMatch(/<input[^>]*type="text"[^>]*maxLength=\{200\}/)
     expect(editor).toContain("window.api.agentProfiles.archive(p.id, reason.trim() === '' ? undefined : reason)")

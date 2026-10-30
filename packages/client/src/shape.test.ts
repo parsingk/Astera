@@ -391,7 +391,7 @@ describe('publicFor', () => {
 
   // Agent Profiles design §6: the profile a Job or Task runs as is public, by its id
   it('keeps the agent profile a Job and a Task run as', () => {
-    expect(publicFor('jobs-get', { id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: 'T', agentProfileId: 'ap_1' })).toMatchObject({ agentProfileId: 'ap_1' })
+    expect(publicFor('jobs-get', { id: 'job_1', objective: 'o', cwd: '/p', createdAt: 'T', agentProfileId: 'ap_1' })).toMatchObject({ agentProfileId: 'ap_1' })
     expect(publicFor('tasks-add', { id: 't1', agentProfileId: 'ap_1' })).toEqual({ id: 't1', agentProfileId: 'ap_1' })
   })
 
@@ -414,15 +414,15 @@ describe('publicFor', () => {
     expect(publicFor('agent-profiles-show', profile)).toMatchObject({ archivedAt: 'T2', archivedReason: 'replaced by p2' })
     expect(publicFor('agent-profiles-list', { profiles: [profile] })).toEqual({ profiles: [profile] })
     expect(publicFor('agent-profiles-archive', { profile })).toEqual({ profile })
-    const job = { id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: 'T', schedule: { kind: 'daily', time: '09:00' }, archivedProfiles: ['Reviewer'] }
+    const job = { id: 'job_1', objective: 'o', cwd: '/p', createdAt: 'T', schedule: { kind: 'daily', time: '09:00' }, archivedProfiles: ['Reviewer'] }
     expect(publicFor('jobs-list', [job])).toEqual([job])
     expect(publicFor('jobs-get', { ...job, run: { id: 'run_1', archivedProfiles: ['x'] } })).toEqual({ ...job, run: { id: 'run_1' } })
   })
 
   // Task 7 fix round 1: a session started from an agent profile is listed with its id
   it('keeps the agent profile a session was started from', () => {
-    const row = { id: 's1', kind: 'terminal', title: 't', accountId: 'a', cwd: 'D:/p', alive: true, state: 'unknown', agentProfileId: 'ap_1', ptyId: 'p' }
-    expect(publicFor('sessions-list', [row])).toEqual([{ id: 's1', kind: 'terminal', title: 't', accountId: 'a', cwd: 'D:/p', alive: true, state: 'unknown', agentProfileId: 'ap_1' }])
+    const row = { id: 's1', kind: 'terminal', title: 't', accountId: 'a', cwd: '/p', alive: true, state: 'unknown', agentProfileId: 'ap_1', ptyId: 'p' }
+    expect(publicFor('sessions-list', [row])).toEqual([{ id: 's1', kind: 'terminal', title: 't', accountId: 'a', cwd: '/p', alive: true, state: 'unknown', agentProfileId: 'ap_1' }])
     expect(publicFor('sessions-create', row)).toMatchObject({ agentProfileId: 'ap_1' })
   })
 

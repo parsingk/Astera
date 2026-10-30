@@ -125,6 +125,7 @@ export const es: Catalog = {
   'settings.agentProfiles.restore': 'Restaurar',
   'settings.agentProfiles.archiveReason': 'Motivo (opcional)',
   'settings.agentProfiles.archivedOn': 'Archivado el {date}',
+  'settings.agentProfiles.archivedReason': 'Motivo: {reason}',
   'settings.agentProfiles.delete': 'Eliminar',
   'settings.agentProfiles.deleteConfirm.title': '¿Eliminar {name}?',
   'settings.agentProfiles.deleteConfirm.body': 'No se puede deshacer. Si puede que vuelvas a usarlo, archívalo.',

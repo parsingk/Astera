@@ -120,6 +120,13 @@ const nextTry = (prev: Retry | undefined, nowMs: number): { entry: Retry; wait: 
   return { entry: { tries, nextAt: nowMs + wait, capped, gaveUp: false }, wait }
 }
 
+/** A refused fire's reason for its log line: the reply's `error`, and the file to repair when it names one (`repair`, a
+ *  store that cannot be read). Empty when the reply says neither. */
+const failureOf = (body: unknown): string => {
+  const b = (body ?? {}) as { error?: unknown; repair?: unknown }
+  return `${typeof b.error === 'string' ? `: ${b.error}` : ''}${typeof b.repair === 'string' ? ` (repair ${b.repair})` : ''}`
+}
+
 export interface DispatchLoopContext {
   /** handleCommand under this process's own caller id (the app's UI_CALLER, the Host's HOST_CALLER). */
   handle(cmd: string, args: Record<string, unknown>): Promise<{ status: number; body: unknown }>
@@ -1109,7 +1116,9 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
           )
         // 실패한 발화는 잃는다 — 무장은 이미 다음 시각으로 옮겨졌으므로 다음 시각에 다시 시도한다.
         // 디스크가 찼거나 win32 에서 rename 이 잠긴 경우가 이 갈래다.
-        else if (reply.status >= 400) log(`scheduled spawn failed run=${runId} status=${reply.status}`)
+        // The line says why, and names the file to repair when the reply does (Task 1 fix round 1): a profile Job's fire
+        // refused because the agent profile store cannot be read is otherwise a bare 409 (lifecycle design §5)
+        else if (reply.status >= 400) log(`scheduled spawn failed run=${runId} status=${reply.status}${failureOf(reply.body)}`)
         else log(`scheduled spawn run=${runId} child=${JSON.stringify(reply.body)}`)
       } catch (e) {
         log(`scheduled spawn failed run=${runId}: ${String(e)}`)

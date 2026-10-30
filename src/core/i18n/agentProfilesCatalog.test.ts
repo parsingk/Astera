@@ -98,6 +98,8 @@ describe('the agent profiles catalog', () => {
     const given = {
       'settings.agentProfiles.archiveReason': ['이유 (선택)', 'Reason (optional)', '理由（任意）', 'Motivo (opcional)'],
       'settings.agentProfiles.archivedOn': ['{date}에 보관함', 'Archived {date}', '{date} にアーカイブ', 'Archivado el {date}'],
+      // Fix round 1: the reason inside an archived profile's row, said as one
+      'settings.agentProfiles.archivedReason': ['이유: {reason}', 'Reason: {reason}', '理由: {reason}', 'Motivo: {reason}'],
       'jobs.run.waitingArchived': [
         '대기 중: 보관된 에이전트 프로필 {names}',
         'Waiting: agent profile {names} is archived',

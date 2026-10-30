@@ -124,6 +124,7 @@ export const ja: Catalog = {
   'settings.agentProfiles.restore': '復元',
   'settings.agentProfiles.archiveReason': '理由（任意）',
   'settings.agentProfiles.archivedOn': '{date} にアーカイブ',
+  'settings.agentProfiles.archivedReason': '理由: {reason}',
   'settings.agentProfiles.delete': '削除',
   'settings.agentProfiles.deleteConfirm.title': '{name} を削除しますか?',
   'settings.agentProfiles.deleteConfirm.body': '元に戻せません。あとでまた使うかもしれない場合はアーカイブしてください。',

@@ -21,6 +21,7 @@ import { COORDINATOR_START_WINDOW_MS, emptyState, type OrchState } from '../stat
 import type { Dispatch, Job, Message, Task } from '../types'
 import type { Account } from '../../types'
 import type { AgentProfile } from '../../agentProfiles/types'
+import { RepairNeeded } from '../../settings/repairNeeded'
 import { ENTER_QUIET_MS } from '../../sessions/sessionDriver'
 
 const NOW = '2026-09-24T00:00:00.000Z'
@@ -88,6 +89,8 @@ interface RigOpts {
   scheduleProfile?: string
   /** The agent profile store the command layer reads. */
   profiles?: AgentProfile[]
+  /** The agent profile store cannot be read: it is damaged, and a copy was kept beside it. */
+  profileStoreDamaged?: boolean
 }
 
 const TEMPLATE_ID = 'job_sched'
@@ -216,7 +219,14 @@ function rig(o: RigOpts = {}) {
     log: () => {},
     runningSessions: () => 0,
     appVersion: () => '1.0.0',
-    ...(o.profiles ? { readAgentProfiles: async () => ({ version: 1 as const, profiles: o.profiles! }) } : {})
+    ...(o.profiles ? { readAgentProfiles: async () => ({ version: 1 as const, profiles: o.profiles! }) } : {}),
+    ...(o.profileStoreDamaged
+      ? {
+          readAgentProfiles: async () => {
+            throw new RepairNeeded('agent-profiles.json is damaged; a copy was kept beside it', 'agent-profiles.json')
+          }
+        }
+      : {})
   } as unknown as OrchServerDeps
 
   /** 진짜 command layer — 테스트가 ctx.handle 을 갈아 끼워도 그 안에서 부를 수 있게 따로 둔다. */
@@ -785,6 +795,20 @@ describe('a fire of a Job whose agent profile is archived', () => {
     await h.loop.fireTick()
     await h.settle()
     expect(runsOf(h)).toHaveLength(1)
+  })
+
+  // Task 1 fix round 1: a profile store that cannot be read refuses the fire of a Job that names a profile, and the log
+  // says why and which file to repair, in one line
+  it('a fire refused because the store cannot be read logs the error and the file to repair', async () => {
+    const h = rig({ schedule: { every: 'minute' }, scheduleTask: true, scheduleProfile: 'ap_1', profileStoreDamaged: true })
+    await h.loop.fireTick() // arms
+    h.clock += 61_000
+    await h.loop.fireTick()
+    await h.settle()
+    expect(runsOf(h)).toHaveLength(0)
+    expect(h.logs.filter((m) => m.startsWith('scheduled spawn failed'))).toEqual([
+      `scheduled spawn failed run=${TEMPLATE_ID} status=409: the agent profiles could not be read: agent-profiles.json is damaged; a copy was kept beside it (repair agent-profiles.json)`
+    ])
   })
 })
 
