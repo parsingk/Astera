@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { openSecretStore } from '../secrets/secretStore'
-import { openRuntimeRegistry, type RuntimeProfile } from './registry'
+import { listPairedRuntimes, openRuntimeRegistry, type RuntimeProfile } from './registry'
 
 let profile: string
 const store = () => openSecretStore({ dir: path.join(profile, 'runtimes'), profileDir: profile })
@@ -92,5 +92,25 @@ describe('runtime ids and case (Phase 2 review)', () => {
     expect(await r.token('rt_a')).toBe('tok-a')
     await r.touch('rt_b', 'x')
     expect((await r.list()).map((x) => x.runtimeId)).toEqual(['rt_a'])
+  })
+})
+
+// Final fix pass, M-6: the findings list the Runtimes at every compute, and most people never paired one
+describe('listPairedRuntimes', () => {
+  it('answers none while runtimes.json does not exist, without opening the store or making its folder', async () => {
+    let opened = 0
+    const once = () => (opened++, store())
+    expect(await listPairedRuntimes(path.join(profile, 'runtimes'), once)).toEqual([])
+    expect(opened).toBe(0)
+    await expect(fs.stat(path.join(profile, 'runtimes'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('lists the paired ones through the store once there is a registry', async () => {
+    await (await openRuntimeRegistry(store())).add(p('rt_a'), 'tok-a')
+    let opened = 0
+    const s = store()
+    const once = () => (opened++, s)
+    expect((await listPairedRuntimes(path.join(profile, 'runtimes'), once)).map((r) => r.runtimeId)).toEqual(['rt_a'])
+    expect(opened).toBe(1)
   })
 })

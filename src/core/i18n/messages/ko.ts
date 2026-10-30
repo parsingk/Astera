@@ -2817,6 +2817,7 @@ export const ko = {
   'findings.unread': '읽지 못한 것: {sources}',
   'findings.listSeparator': ', ',
   'findings.none': '찾은 것이 없습니다.',
+  'findings.noneRead': '읽을 수 있었던 것에서는 찾은 것이 없습니다.',
   'findings.source.profiles': '에이전트 프로필',
   'findings.source.accounts': '계정',
   'findings.source.orchestration': 'Job과 Run',

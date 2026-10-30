@@ -47,6 +47,9 @@ describe('the findings catalog', () => {
     expect(ko['findings.reason.unusedProfileNever']).toBe('만든 지 {days}일이 지났지만 한 번도 쓰지 않았습니다.')
     expect(ko['findings.reason.tokenSpike']).toBe('토큰을 {total}개 썼습니다. {group}의 중앙값 {median}의 {times}배입니다.')
     expect(ko['findings.do.repointJob']).toBe('Job이 다른 프로필을 쓰게 바꾸세요.')
+    // Final fix pass, M-8: nothing found beside a source that could not be read says what it was found in
+    expect(en['findings.noneRead']).toBe('No findings in what could be read.')
+    expect(ko['findings.noneRead']).toBe('읽을 수 있었던 것에서는 찾은 것이 없습니다.')
   })
 
   // §4.5 to §4.9: the copy the plan gives, in the English the CLI prints and the Korean the person reads

@@ -18,8 +18,10 @@ const failed = (e: unknown): PluginsCallAnswer => ({ ok: false, code: 'FAILED', 
 /** Settings › Security & Access › Findings, under its heading (lifecycle design §7): what Astera found unused,
  *  duplicated, broken, over-broad, failing or costly, and what the Rules cannot cover, each with the place to act and
  *  Ignore. The Host computes the report and keeps the ignores; this reads it with the ignored ones, which wait under
- *  "Ignored (N)". A button only opens its place (`onOpen`); nothing here acts on a finding. */
-export function FindingsSection({ onOpen }: { onOpen: (p: FindingPlace) => void }): React.JSX.Element {
+ *  "Ignored (N)". A button only opens its place (`onOpen`); nothing here acts on a finding. `changes` counts the changes
+ *  made on the same screen, in Policies and Credentials: the report is read again after each (final fix list M-4), as the
+ *  Host drops the one it kept once a change lands. */
+export function FindingsSection({ onOpen, changes }: { onOpen: (p: FindingPlace) => void; changes: number }): React.JSX.Element {
   const { t } = useI18n()
   const [report, setReport] = useState<FindingsReport | null>(null)
   const [failure, setFailure] = useState<Failure | null>(null)
@@ -42,7 +44,7 @@ export function FindingsSection({ onOpen }: { onOpen: (p: FindingPlace) => void 
   }
   useEffect(() => {
     void load()
-  }, [])
+  }, [changes])
 
   /** Runs one ignore change, says why when it did not happen, and reads the report again either way. */
   const change = async (work: () => Promise<PluginsCallAnswer>): Promise<void> => {
@@ -117,7 +119,8 @@ export function FindingsList({
     <>
       {note !== null && <p className="settings-hint">{tm(note)}</p>}
       {unread !== null && <p className="settings-hint is-warning">{unread}</p>}
-      {open === 0 && <p className="settings-hint">{t('findings.none')}</p>}
+      {/* Beside "Could not read", nothing found is said of what could be read (final fix list M-8) */}
+      {open === 0 && <p className="settings-hint">{t(report.unread.length > 0 ? 'findings.noneRead' : 'findings.none')}</p>}
       {groups.map((g) => (
         <div key={g.kind} className="settings-group">
           <div className="settings-field-label">{t(GROUP_KEYS[g.kind])}</div>

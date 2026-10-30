@@ -107,9 +107,17 @@ describe('Settings › Security & Access › Findings (lifecycle design §7)', (
   })
 
   it('says nothing was found when there is no open finding', () => {
-    expect(render(report([]))).toContain('findings.none')
-    expect(render(report([{ ...unused('ap_a'), ignored: true }]))).toContain('findings.none')
+    expect(render(report([]))).toContain('>findings.none<')
+    expect(render(report([{ ...unused('ap_a'), ignored: true }]))).toContain('>findings.none<')
     expect(render(report([unused('ap_a')]))).not.toContain('findings.none')
+  })
+
+  // Final fix pass, M-8: beside "Could not read", nothing found is said of what could be read
+  it('says nothing was found in what could be read when a source could not be read', () => {
+    const html = render(report([], { unread: ['profiles'] }))
+    expect(html).toContain('>findings.noneRead<')
+    expect(html).not.toContain('>findings.none<')
+    expect(render(report([unused('ap_a')], { unread: ['profiles'] }))).not.toContain('findings.none')
   })
 
   it('puts the over-broad lines of one profile under one heading, each with its own Ignore', () => {

@@ -2298,6 +2298,7 @@ export const ja: Catalog = {
   'findings.unread': '読み取れなかったもの: {sources}',
   'findings.listSeparator': '、',
   'findings.none': '見つかった項目はありません。',
+  'findings.noneRead': '読み取れたものの中に見つかった項目はありません。',
   'findings.source.profiles': 'エージェントプロファイル',
   'findings.source.accounts': 'アカウント',
   'findings.source.orchestration': 'Job と Run',

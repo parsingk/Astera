@@ -31,8 +31,8 @@ const failed = (e: unknown): PluginsCallAnswer => ({ ok: false, code: 'FAILED', 
  *  agent sessions it starts. Shared MCP servers that hold a stored key appear on their own; the person adds the other
  *  keys by variable name and CLI logins by preset. Nothing here holds or shows a value. The Host owns the list and checks
  *  every change; a change counts for sessions started afterwards. An entry can be narrowed to the projects the Host has
- *  registered. */
-export function CredentialsSection(): React.JSX.Element {
+ *  registered. `onChanged` is told after each change that happened, so Findings beside it reads again. */
+export function CredentialsSection({ onChanged }: { onChanged?: () => void } = {}): React.JSX.Element {
   const { t } = useI18n()
   const [entries, setEntries] = useState<ListedEntry[] | null>(null)
   const [presets, setPresets] = useState<ListedPreset[]>([])
@@ -76,6 +76,7 @@ export function CredentialsSection(): React.JSX.Element {
         toast.error(credentialFailure(r, t))
         return false
       }
+      onChanged?.()
       return true
     } finally {
       await load()

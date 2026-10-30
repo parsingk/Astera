@@ -157,7 +157,8 @@ function ruleOf(v: unknown): AuditRule | null {
 
 /** When Observe was last turned on, kept only when it reads as a time (lifecycle design §4). One that does not is left
  *  out rather than taken for damage: the rules and the mode still hold, and the findings then count the history from
- *  this release's first run, which never starts it earlier. */
+ *  this release's first run, as for an Observe turned on before this release, which may be earlier than Observe was
+ *  last turned on. */
 const observingSinceOf = (v: Record<string, unknown>): { observingSince?: string } =>
   typeof v.observingSince === 'string' && !Number.isNaN(Date.parse(v.observingSince)) ? { observingSince: v.observingSince } : {}
 

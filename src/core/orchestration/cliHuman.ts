@@ -420,7 +420,8 @@ export function humanFor(
         f.ignored !== true ? [] : [typeof f.note === 'string' && f.note !== '' ? `(ignored: ${f.note})` : '(ignored)']
       const blocks = [
         ...(note === null ? [] : [t('en', note.key, note.params)]),
-        findings.length === 0 ? t('en', 'findings.none') : columns(findings.map((f) => [str(f.rule), nameOf(f.subject), str(f.reason), `→ ${str(f.action)}`, ...ignoredMark(f)])),
+        // Beside "Could not read", nothing found is said of what could be read
+        findings.length === 0 ? t('en', report.unread.length > 0 ? 'findings.noneRead' : 'findings.none') : columns(findings.map((f) => [str(f.rule), nameOf(f.subject), str(f.reason), `→ ${str(f.action)}`, ...ignoredMark(f)])),
         ...(info.length === 0 ? [] : [columns(info.map((l) => [nameOf(l.subject), str(l.reason)]))]),
         ...[unreadLine('en', report.unread)].filter((l): l is string => l !== null)
       ]

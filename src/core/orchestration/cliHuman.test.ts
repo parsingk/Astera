@@ -1022,8 +1022,9 @@ describe('humanFor — agent-profiles audit', () => {
       ['stale-runtime  lab  Not reached in 40 days.  → Remove the pairing.', '', 'Could not read: agent profiles'].join('\n')
     )
     // An unread policy reads { on: false }, which is not "Observe is off" (FindingsReport.observe)
+    // Nothing found is said of what could be read (final fix pass, M-8)
     expect(humanFor('agent-profiles-audit', report({ observe: { on: false, days: 0 }, unread: ['profiles', 'policy'] }))).toBe(
-      ['No findings.', '', 'Could not read: agent profiles, rules file'].join('\n')
+      ['No findings in what could be read.', '', 'Could not read: agent profiles, rules file'].join('\n')
     )
   })
 

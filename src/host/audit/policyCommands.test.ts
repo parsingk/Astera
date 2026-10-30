@@ -6,6 +6,12 @@ import os from 'node:os'
 import path from 'node:path'
 import { removeFixture } from '../../core/testFixtures'
 import { profilePaths } from '../../core/profile/paths'
+
+// The mode a repair reads, so a test can have the file mended by hand between the two reads; the real one otherwise
+vi.mock('../../core/audit/policy', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../core/audit/policy')>()
+  return { ...real, readPolicyMode: vi.fn(real.readPolicyMode) }
+})
 import { COVERAGE, COVERAGE_ENFORCE, STARTER_POLICY, readAuditPolicy, readPolicyMode, writeAuditPolicy, type AuditPolicy, type AuditRule } from '../../core/audit/policy'
 import { SANDBOX_COVERAGE } from '../../core/sandbox/coverage'
 import { POLICY_CHANGES, POLICY_COMMANDS, createHostPolicies } from './policyCommands'
@@ -298,6 +304,25 @@ describe('createHostPolicies', () => {
     await writeAuditPolicy(ok.profileDir, { ...STARTER_POLICY, mode: 'observe', otherwise: 'deny' })
     expect((await ok.call('policies-rules-reset')).status).toBe(200)
     expect(await readAuditPolicy(ok.profileDir)).toEqual({ ...STARTER_POLICY, mode: 'observe' })
+  })
+
+  // Final fix pass, M-5: a repair that writes an observing mode starts its history then, as turning Observe on does; the
+  // damaged file's own stamp could not be read
+  it('the repair stamps observingSince now when the mode it writes observes, and none in compatibility', async () => {
+    for (const mode of ['observe', 'enforce'] as const) {
+      const h = await rig()
+      await fs.writeFile(h.file, '{ not json')
+      // The file was mended by hand between the read that found it damaged and the read of the mode sessions start in
+      vi.mocked(readPolicyMode).mockResolvedValueOnce(mode)
+      const r = await h.call('policies-rules-reset')
+      expect(r.status).toBe(200)
+      expect(policyOf(r)).toEqual({ ...STARTER_POLICY, mode, observingSince: STAMP })
+      expect(await readAuditPolicy(h.profileDir)).toEqual({ ...STARTER_POLICY, mode, observingSince: STAMP })
+    }
+    const off = await rig()
+    await fs.writeFile(off.file, '{ not json')
+    expect((await off.call('policies-rules-reset')).status).toBe(200)
+    expect(await readAuditPolicy(off.profileDir)).toEqual(STARTER_POLICY)
   })
 
   it('refuses to start over when the damaged copy could not be kept, and leaves the file as it is', async () => {

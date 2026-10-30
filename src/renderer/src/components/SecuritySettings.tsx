@@ -145,6 +145,8 @@ export function SecuritySettings({
   const [busy, setBusy] = useState(false)
   /** Counts the rule changes: Audit Logs reads again after each, since the rules decide every row it shows. */
   const [changes, setChanges] = useState(0)
+  /** Counts the Credentials changes: Findings reads again after each, as after a rule change (final fix list M-4). */
+  const [credentialChanges, setCredentialChanges] = useState(0)
   const radioGroup = useId()
   const auditSection = useRef<HTMLElement>(null)
   const auditShown = useRef<string | null>(null)
@@ -419,11 +421,11 @@ export function SecuritySettings({
       </section>
       <section className="security-section" ref={findingsSection}>
         <h3 className="security-title">{FINDINGS_TITLE}</h3>
-        <FindingsSection onOpen={openPlace} />
+        <FindingsSection onOpen={openPlace} changes={changes + credentialChanges} />
       </section>
       <section className="security-section" ref={credentialsSection}>
         <h3 className="security-title">{CREDENTIALS_TITLE}</h3>
-        <CredentialsSection />
+        <CredentialsSection onChanged={() => setCredentialChanges((n) => n + 1)} />
       </section>
       <section className="security-section" ref={auditSection}>
         <h3 className="security-title">{AUDIT_LOGS_TITLE}</h3>

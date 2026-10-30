@@ -2563,6 +2563,7 @@ export const en: Record<keyof typeof ko, string> = {
   'findings.unread': 'Could not read: {sources}',
   'findings.listSeparator': ', ',
   'findings.none': 'No findings.',
+  'findings.noneRead': 'No findings in what could be read.',
   'findings.source.profiles': 'agent profiles',
   'findings.source.accounts': 'accounts',
   'findings.source.orchestration': 'Jobs and Runs',

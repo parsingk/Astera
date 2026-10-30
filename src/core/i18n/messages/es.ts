@@ -2328,6 +2328,7 @@ export const es: Catalog = {
   'findings.unread': 'No se pudo leer: {sources}',
   'findings.listSeparator': ', ',
   'findings.none': 'No hay hallazgos.',
+  'findings.noneRead': 'No hay hallazgos en lo que se pudo leer.',
   'findings.source.profiles': 'perfiles de agente',
   'findings.source.accounts': 'cuentas',
   'findings.source.orchestration': 'Jobs y Runs',

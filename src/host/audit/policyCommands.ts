@@ -205,7 +205,9 @@ export function createHostPolicies(d: {
         // the repair of a damaged file, whose bytes were kept aside when it was read: the mode is the one sessions have
         // been starting in meanwhile (readPolicyMode), so the repair never turns observing on or off by itself. A file
         // that could not be read is never written over, nor is a damaged one whose copy could not be kept. When Observe
-        // was turned on stays with the mode: the rules starting over does not start the history over (lifecycle design §4)
+        // was turned on stays with the mode: the rules starting over does not start the history over (lifecycle design §4).
+        // A repair that writes an observing mode cannot read when the damaged file turned Observe on, so its history starts
+        // now, as turning Observe on starts it (final fix list M-5)
         return queued(async () => {
           const kept = await readAuditPolicy(d.profileDir).then(
             (p): Pick<AuditPolicy, 'mode' | 'observingSince'> => {
@@ -216,7 +218,8 @@ export function createHostPolicies(d: {
               if (!(e instanceof AuditPolicyDamaged)) throw e
               if (!(await damageIsKept(d.profileDir)))
                 throw new RepairNeeded(`${e.file} is damaged and a copy of it could not be kept, so it is not written over`, e.file)
-              return { mode: await readPolicyMode(d.profileDir) }
+              const mode = await readPolicyMode(d.profileDir)
+              return isObserving(mode) ? { mode, observingSince: new Date(now()).toISOString() } : { mode }
             }
           )
           return saved({ ...STARTER_POLICY, ...kept })

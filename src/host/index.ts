@@ -24,7 +24,7 @@ import { createHostCredentials } from './credentials/commands'
 import { createHostFindings } from './findings/commands'
 import { readFindingsSince } from '../core/findings/since'
 import { cliVersionProbe } from '../core/sessions/cliVersion'
-import { openRuntimeRegistry } from '../core/runtimes/registry'
+import { listPairedRuntimes } from '../core/runtimes/registry'
 import { hidingLog } from '../core/extensions/secrets'
 import { createHidingSource, projectOfWorktrees } from '../core/credentials/hiding'
 import { sweepGeneratedMcp } from '../core/extensions/resolve'
@@ -49,7 +49,7 @@ import { flushAll, flushAllLogsSync } from '../core/log/logWriter'
 import { startHostServer } from './server'
 import { HOST_EXIT, listenExitCode } from './exitCodes'
 import { controllerRecordsFile, createControllerRegistry } from './controllers'
-import { openSecretStore } from '../core/secrets/secretStore'
+import { openSecretStore, type SecretStore } from '../core/secrets/secretStore'
 import { randomBytes } from 'node:crypto'
 import { ensureAppKey, ensureHostKey, readAppKeySync } from '../core/host/hostKey'
 import { pruneSandboxTwins } from '../core/sessions/statusline'
@@ -962,6 +962,8 @@ async function main(): Promise<void> {
   // `claude --version` for both; a Host with no spawner asks the process's one, which is the same per platform)
   void readFindingsSince(profileDir, Date.now(), { log: (m) => log.write(m) })
   const claudeVersions = spawner?.claudeVersions ?? cliVersionProbe(process.platform)
+  const runtimesDir = path.join(profileDir, 'runtimes')
+  let runtimeStore: SecretStore | undefined
   const findings = createHostFindings({
     profileDir,
     homeDir: os.homedir(),
@@ -972,7 +974,9 @@ async function main(): Promise<void> {
     spent: () => tokenStore.spent(),
     appBypass: async () => (await readAgentPermissionMode(path.join(profileDir, 'app-settings.json'))) === 'yolo',
     readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
-    openRuntimes: async () => (await openRuntimeRegistry(openSecretStore({ dir: path.join(profileDir, 'runtimes'), profileDir }))).list(),
+    // None without opening the store while no Runtime was ever paired, and one store for every compute after, which keeps
+    // its ACL checks (final fix list M-6)
+    openRuntimes: () => listPairedRuntimes(runtimesDir, () => (runtimeStore ??= openSecretStore({ dir: runtimesDir, profileDir }))),
     claudeVersion: async () => {
       await claudeVersions.warm('claude')
       // What the warm learnt, never a synchronous ask: a CLI that is not there, or whose version could not be read, is unknown
