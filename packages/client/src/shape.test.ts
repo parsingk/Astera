@@ -181,8 +181,8 @@ describe('publicFor', () => {
   // `sessions create` answers the new session as `sessions list` shows it, and nothing of its note.
   it('sessions create 는 sessions list 의 한 줄과 같은 칸만 낸다', () => {
     expect(
-      publicFor('sessions-create', { id: 's1', kind: 'chat', title: 't', accountId: 'a', cwd: 'D:/p', alive: true, state: 'unknown', rollAccountIds: ['a'] })
-    ).toEqual({ id: 's1', kind: 'chat', title: 't', accountId: 'a', cwd: 'D:/p', alive: true, state: 'unknown' })
+      publicFor('sessions-create', { id: 's1', kind: 'chat', title: 't', accountId: 'a', cwd: '/p', alive: true, state: 'unknown', rollAccountIds: ['a'] })
+    ).toEqual({ id: 's1', kind: 'chat', title: 't', accountId: 'a', cwd: '/p', alive: true, state: 'unknown' })
   })
 
   // `tasks dispatch` answers the worker the loop started: the spec file's path is the Host's own.

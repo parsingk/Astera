@@ -23,10 +23,9 @@ export interface ExtensionUse {
   agentProfileId?: string
   /** skill-tool: the Skill tool's `skill`; slash: UserPromptExpansion's `command_name`; subagent: SubagentStart's
    *  `agent_type`; agent-tool: an Agent (or Task) call's `subagent_type`, from a chat's stream or a terminal's PostToolUse.
-   *  chat-seen: no use, the mark of a Claude chat that
-   *  ran, whose typed skills and commands are not reported (ruling R6-1). unhooked: no use, the mark of a Claude terminal
-   *  session that ran without the hooks that report them, written each local day it runs (ruling R6-8). A mark's name is
-   *  empty. */
+   *  chat-seen: no use, the mark of a Claude chat that ran, whose typed skills and commands are not reported (ruling
+   *  R6-1). unhooked: no use, the mark of a Claude terminal session that ran without the hooks that report them, written
+   *  each local day it runs (ruling R6-8). A mark's name is empty. */
   via: 'skill-tool' | 'slash' | 'subagent' | 'agent-tool' | 'chat-seen' | 'unhooked'
   name: string
 }
