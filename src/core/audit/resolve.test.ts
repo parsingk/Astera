@@ -2678,8 +2678,6 @@ describe('effect and the login folder a call touched', () => {
     'PYTHONPATH=$PWD/src pytest',
     'GOPATH=~ go build',
     'PATH=/ make',
-    'MY_DIRS=/opt/a:$X/b ./run.sh',
-    'MY_DIRS="/opt/a;$X/b" ./run.sh',
     'PREFIX=/ make install'
   ])('%s names no login folder: a search path, or a lone / under a name that is no path', (line) => {
     expectNames('Bash', line, undefined)
@@ -2782,5 +2780,140 @@ describe('effect and the login folder a call touched', () => {
     sh(`KEY_PATH=${'${:'.repeat(50_000)} make`)
     sh(`make ${'A_PATH=x;'.repeat(20_000)}`)
     expect(Date.now() - started).toBeLessThan(1500 * CI_SLACK)
+  })
+
+  // Final fix pass, I-1: a list value is read entry by entry, each as a value of its own, and only a search path's names
+  // what it is in alone (R2-7). A name that is no search path names what any entry names, a variable's included
+  it.each([
+    ['KUBECONFIG=$HOME/.kube/config:$X kubectl get pods', '.kube'],
+    ['KUBECONFIG=~/.kube/a:$X kubectl get pods', '.kube'],
+    ['export KUBECONFIG=~/.kube/config:$X/new.yaml', '.kube'],
+    ['export KUBECONFIG=$KUBECONFIG:~/.kube/new', '.kube'],
+    ['KUBECONFIG=/tmp/a:~/.kube/config kubectl get pods', '.kube'],
+    ['VOLUME=~/.ssh:/root/.ssh ./run.sh', '.ssh'],
+    // A home spelling with ssh's own %r and %h after it cannot be placed
+    ['ssh -o ControlPath=~/.ssh/cm-%r@%h:%p host', 'unknown'],
+    ['docker run -e KUBECONFIG=$X/a:/b img', 'unknown'],
+    ['KEY=$X/id:ro ./run.sh', 'unknown'],
+    ['MY_DIRS=/opt/a:$X/b ./run.sh', 'unknown'],
+    // With a `;` the list is split on it alone
+    ['MY_DIRS="/opt/a;$X/b" ./run.sh', 'unknown'],
+    // A search path's entry in a login folder still names it (accepted)
+    ['PATH=~/.ssh/bin:$PATH ./run.sh', '.ssh']
+  ])('%s names %s', (line, sensitive) => {
+    expectNames('Bash', line, sensitive)
+  })
+
+  it.each([
+    'PATH=/usr/local/bin:$PATH make',
+    'LD_LIBRARY_PATH=/opt/lib:$LD_LIBRARY_PATH ./a.out',
+    'PYTHONPATH=$PWD/src pytest',
+    // A URL is one value, whatever colons it holds
+    'DATABASE_URL=postgres://app:pw@db.example.com:5432/app ./run.sh',
+    // Every DYLD_ name is the dynamic loader's search path
+    'DYLD_INSERT_LIBRARIES=$X/lib.dylib ./a.out',
+    'DYLD_VERSIONED_LIBRARY_PATH=$X/lib:/opt/lib ./a.out'
+  ])('%s still names no login folder', (line) => {
+    expectNames('Bash', line, undefined)
+  })
+
+  // Final fix pass, foreach and b3: after a `|`, PowerShell's foreach is ForEach-Object, and ForEach-Object in member form
+  // reads a member of each item, so it runs nothing it is handed, unless the member is a method that writes or deletes
+  it.each([
+    ['Get-ChildItem ~ | ForEach { $_.Delete() }', '.ssh'],
+    ['Get-ChildItem ~ | foreach { Remove-Item $_ -Recurse }', '.ssh'],
+    ['Get-ChildItem ~ | % Delete', '.ssh'],
+    ['Get-ChildItem ~ | % Name', undefined],
+    ['Get-ChildItem ~ | ForEach-Object -MemberName FullName', undefined],
+    ['Get-ChildItem ~ | ForEach-Object -m Name', undefined],
+    ['Get-ChildItem ~ | ForEach-Object -MemberName:Name', undefined]
+  ] as const)('PowerShell %s names %s', (line, sensitive) => {
+    expectNames('PowerShell', line, sensitive)
+  })
+
+  // Final fix pass, b2: a pattern substitution (`${X/a/b}`, `${X//a/b}`) and a basename (`${X##*/}`) name no path; a
+  // default that holds one, and a dirname, still could
+  it.each(['git tag ${VERSION/v/}', 'git checkout -b ${BRANCH//\\//-}', 'docker build -t ${IMAGE//:/-} .', 'echo ${f##*/}', 'node app.js ${f##*/}'])(
+    '%s names no login folder',
+    (line) => {
+      expectNames('Bash', line, undefined)
+    }
+  )
+
+  it.each(['node app.js ${K:-~/.ssh/id}', 'node app.js ${D:-/etc/k}', 'cat ${f%/*}/x', 'node app.js ${f%/*}'])('%s says unknown', (line) => {
+    expectNames('Bash', line, 'unknown')
+  })
+
+  // Final fix pass, c1: what a shell's script prints goes where the shell's output goes
+  it.each(["bash -c 'echo ~' | xargs rm -rf", "sh -c 'ls ~' | xargs rm -rf", "sudo bash -c 'echo ~' | xargs tar czf h.tgz"])('%s names .ssh', (line) => {
+    expectNames('Bash', line, '.ssh')
+  })
+
+  it("names no login folder for a shell's script whose output goes to a filter", () => {
+    expectNames('Bash', "bash -c 'echo ~' | head", undefined)
+  })
+
+  // Final fix pass, c2: an unquoted `$( )` or pair of backticks is part of a word, as in double quotes, so the command goes
+  // on after it with the rest of its words
+  it.each([
+    ['echo $(date) ~ | xargs rm', '.ssh'],
+    ['zip -r h.zip $(pwd) ~', '.ssh'],
+    ['tar czf h.tgz `cat list` ~/.ssh', '.ssh'],
+    ['tar czf h.tgz $(cat list) ~/.ssh', '.ssh'],
+    ['cat $(mktemp) ~/.aws/credentials', '.aws']
+  ])('%s names %s', (line, sensitive) => {
+    expectNames('Bash', line, sensitive)
+  })
+})
+
+// Final fix pass, c2: the splitter reads an unquoted substitution as part of the word it is in, as one in double quotes
+describe('shell: an unquoted substitution is part of a word, and the command goes on after it', () => {
+  it('keeps the words after it in the command, and lists its commands after that command', () => {
+    // Its last word is not a program of its own
+    expect(bash('zip -r h.zip $(pwd) ../x')).toMatchObject({ action: 'process.execute', target: 'zip', confidence: 'heuristic' })
+    expect(bash('cp $(cat list) ../x')).toMatchObject({ action: 'filesystem.write', target: 'outside project: x', insideProject: false })
+    expect(acts(bash('cp $(cat list) ../x'))).toEqual(['filesystem.write', 'filesystem.read'])
+    expect(bash('cp `cat list` ../x')).toMatchObject({ action: 'filesystem.write', insideProject: false })
+    expect(acts(bash('git push origin $(git rev-parse --abbrev-ref HEAD)'))).toEqual(['git.remote.write', 'git.read'])
+    expect(bash('git push origin $(git rev-parse --abbrev-ref HEAD)')).toMatchObject({ action: 'git.remote.write', target: 'git push' })
+  })
+
+  it('reads a `$((` that no `))` closes as a substitution that starts with a subshell, as in double quotes', () => {
+    expect(acts(bash('echo $((git push) ) ok'))).toEqual(['process.execute', 'git.remote.write'])
+  })
+})
+
+// Final fix pass (ruling R-F3): the options of time and sudo are theirs, not the command's, so a rule on what follows them
+// matches
+describe('shell: the options of time and sudo', () => {
+  it.each([
+    'time -p rm -rf ../x',
+    'time -f %e rm -rf ../x',
+    '/usr/bin/time -o t.txt -a rm -rf ../x',
+    'time -- rm -rf ../x',
+    'sudo -u root rm -rf ../x',
+    'sudo -Eu root rm -rf ../x',
+    'sudo -uroot rm -rf ../x',
+    'sudo --user root rm -rf ../x',
+    'sudo --user=root -H -n rm -rf ../x',
+    'sudo -g wheel -D /tmp rm -rf ../x',
+    'sudo -u root -- rm -rf ../x'
+  ])('%s is a delete outside the project', (line) => {
+    expect(bash(line)).toMatchObject({ action: 'filesystem.delete', target: 'rm', insideProject: false })
+  })
+
+  it('reads time -p and sudo -u before a home path and an absolute one', () => {
+    expect(bash('time -p rm -rf ~/x')).toMatchObject({ action: 'filesystem.delete', insideProject: false })
+    expect(bash('sudo -u root rm -rf /x')).toMatchObject({ action: 'filesystem.delete', insideProject: false })
+  })
+})
+
+// Final fix pass, M-7 (ruling R-F1): git's global and system config are outside any project
+describe('git config --global and --system are outside the project', () => {
+  it('places git config --global and --system outside, and a repository’s own config nowhere', () => {
+    expect(bash('git config --global user.name x')).toMatchObject({ action: 'git.local.write', target: 'git config', insideProject: false })
+    expect(bash('git config --system core.autocrlf false')).toMatchObject({ action: 'git.local.write', insideProject: false })
+    expect(bash('git config --global --get user.name')).toMatchObject({ action: 'git.read', insideProject: false })
+    expect(bash('git config user.name x')).not.toHaveProperty('insideProject')
   })
 })

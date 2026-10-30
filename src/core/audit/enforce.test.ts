@@ -2,6 +2,7 @@
 // out of an agent's reach whatever the rules say, and a call the hook cannot judge against readable Rules is let through
 // only when it reads.
 import { describe, it, expect } from 'vitest'
+import path from 'node:path'
 import { enforceVerdict, BUILT_IN_RULE_IDS } from './enforce'
 import { STARTER_POLICY, type AuditPolicy } from './policy'
 import type { ResolveCall } from './resolve'
@@ -139,6 +140,14 @@ describe('enforceVerdict', () => {
       expect(verdict(claude('Bash', { command })), command).toMatchObject({ deny: true, ruleId: 'builtin-settings-command' })
     for (const command of ['astera agent-profiles audit', 'astera agent-profiles audit --all --json'])
       expect(verdict(claude('Bash', { command })), command).toEqual({ deny: false })
+  })
+
+  // Final fix pass (ruling R-F3): time's and sudo's own options are not the command, so the delete behind them is denied
+  it('denies a delete outside the project behind time -p or sudo -u, under the starter rules', () => {
+    const work = path.resolve('/work/proj')
+    const deleteOutside = { deny: true, ruleId: 'starter-delete-outside', reason: 'Blocked by Astera Rules: filesystem.delete outside the project is denied.' }
+    for (const command of ['time -p rm -rf ~/x', 'sudo -u root rm -rf /x', 'sudo -Eu root rm -rf /x', '/usr/bin/time -f %e rm -rf ~/x'])
+      expect(verdict(claude('Bash', { command }, { cwd: work })), command).toEqual(deleteOutside)
   })
 
   it('fails closed to reads when the rules cannot be read', () => {

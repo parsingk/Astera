@@ -593,6 +593,36 @@ const PIPE_RUNNERS = new Set([
   'remove-item', 'rm', 'del', 'erase', 'ri', 'rd', 'rmdir', 'copy-item', 'cp', 'copy', 'cpi', 'move-item', 'mv', 'move', 'mi',
   'compress-archive', 'foreach-object', 'foreach', '%'
 ])
+/** ForEach-Object by its name and its aliases. After a `|`, PowerShell's `foreach` is this cmdlet, not a loop. */
+const FOR_EACH = new Set(['foreach-object', 'foreach', '%'])
+
+/**
+ * The program a `|` hands a command's output to (Cmd.pipes): the receiver's, as stripPrefix finds it past assignments and
+ * wrappers (`a | sudo xargs rm`), in lower case; PowerShell's `foreach` as itself, which stripPrefix drops as a loop's
+ * keyword. None for ForEach-Object in member form (`% Name`, `-MemberName FullName`), which reads a member of each item
+ * rather than running a block on it, so it acts on nothing it is handed (final fix list, b3), unless the member is a method
+ * that writes or deletes (`% Delete`), which acts on each item as `% { $_.Delete() }` does.
+ */
+function receiverOf(cmd: Cmd, flavor: Flavor): string | undefined {
+  if (cmd.words.length === 0) return undefined
+  const words = flavor === 'ps' && cmd.words[0].toLowerCase() === 'foreach' ? cmd.words : stripPrefix(cmd, flavor).cmd.words
+  if (words.length === 0) return undefined
+  const prog = programName(words[0]).toLowerCase()
+  if (!FOR_EACH.has(prog)) return prog
+  const member = memberOf(words)
+  return member !== undefined && !ACTING_MEMBERS.has(member.toLowerCase()) ? undefined : prog
+}
+
+/** The member a ForEach-Object in member form reads: the value of its -MemberName (or a prefix of it, the only parameter of
+ *  the cmdlet that starts with M), else its first word when that is a name rather than a parameter or a variable (which may
+ *  hold a block). Undefined in block form, whose block ended the command. */
+function memberOf(words: Words): string | undefined {
+  for (let i = 1; i < words.length; i++) {
+    const m = /^-(m[a-z]*)(?::(.*))?$/i.exec(words[i])
+    if (m !== null && 'membername'.startsWith(m[1].toLowerCase())) return m[2] ?? words[i + 1]
+  }
+  return words[1] !== undefined && !/^[-$]/.test(words[1]) ? words[1] : undefined
+}
 
 /** A variable as the shells spell it: `$X`, `$1`, `$@`, `${X}`, `$env:X`, `%X%`. A `${` reads to its `}` and no further
  *  than the next `$`, so a run of them is read once wherever a match is tried. */
@@ -613,49 +643,67 @@ const NAMED_VALUE = /^([A-Za-z_][\w.-]*)=(.+)$/
 const MOUNT_FLAGS = new Set(['-v', '--volume', '--mount'])
 /** A word of separators alone: the root as a path, but as often a delimiter or an operand (`cut -d /`, `expr 10 / 2`, `IFS=/`). */
 const LONE_ROOT = /^[\\/]+$/
-/** A word that starts with a `${…}` holding a separator (`${KEY:-~/.ssh/id_rsa}`, `${D:-/etc/k}.pub`): a default that is a
- *  path, so it could name any file. Anchored, and its part before the separator holds none, so it is read once. */
-const BRACED_PATH = /^\$\{[^}\s\\/]*[\\/][^}\s]*\}/
+/** A word that starts with a `${…}` holding a separator after an operator (`${KEY:-~/.ssh/id_rsa}`, `${D:-/etc/k}.pub`,
+ *  `${f%/*}`): a default that is a path, or what is left of one, so it could name any file. A pattern substitution
+ *  (`${X/a/b}`, `${X//:/-}`), whose separator comes right after the name, names none (final fix list, b2). Anchored, and
+ *  its part before the separator holds none, so it is read once. */
+const BRACED_PATH = /^\$\{\w*[^\w}\s\\/][^}\s\\/]*[\\/][^}\s]*\}/
+// A basename, `${X##*/}`: what follows the last separator of `X`, a name with no separator, which names no path as a bare
+// word does not (b2)
+const BASENAME = /^\$\{\w+##\*[\\/]\}$/
 /** The programs that walk the folders under a path they are given, for which a lone `/` is the root (the controller's
  *  rulings R2-6 and R2-8: the folder-wide copy and archive tools too). */
 const WALKERS = new Set(['find', 'du', 'rg', 'grep', 'chmod', 'chown', 'chgrp', 'rsync', 'zip', '7z', 'scp', 'aws'])
 /** The names whose values are search paths: folders looked in for what is asked of them, and not read whole (the
- *  controller's ruling R2-7). A POSIX shell's names are exact; PowerShell reads its `$env:` names in any case. */
+ *  controller's ruling R2-7), and every name of the dynamic loader's, which starts `DYLD_` (final fix list). A POSIX
+ *  shell's names are exact; PowerShell reads its `$env:` names in any case. */
 const SEARCH_PATHS = new Set(
-  `PATH LD_LIBRARY_PATH DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FRAMEWORK_PATH LIBRARY_PATH PKG_CONFIG_PATH CPATH
-  C_INCLUDE_PATH CPLUS_INCLUDE_PATH PYTHONPATH NODE_PATH CLASSPATH GOPATH GEM_PATH MANPATH INFOPATH CDPATH FPATH PSModulePath`.split(/\s+/)
+  `PATH LD_LIBRARY_PATH LIBRARY_PATH PKG_CONFIG_PATH CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH PYTHONPATH NODE_PATH CLASSPATH
+  GOPATH GEM_PATH MANPATH INFOPATH CDPATH FPATH PSModulePath`.split(/\s+/)
 )
 const SEARCH_PATHS_FOLDED = new Set([...SEARCH_PATHS].map((name) => name.toLowerCase()))
 
-/** Whether a value is a list of paths, as a search path is written: it holds a `;`, or a `:` that is no drive's (`C:\x`), none
- *  inside a `${…}` (`${X:-d}`) and not PowerShell's `$env:`. A value with spaces is a command's words (R2-9), not a list.
- *  Read once, left to right. */
-function pathList(value: string): boolean {
-  if (/\s/.test(value)) return false
+/** Whether `name=value` sets a search path (R2-7), by its name alone: a list under any other name names what its entries
+ *  name (final fix list, I-1). */
+const isSearchPath = (name: string, ps: boolean): boolean =>
+  ps ? SEARCH_PATHS_FOLDED.has(name.toLowerCase()) || /^dyld_/i.test(name) : SEARCH_PATHS.has(name) || name.startsWith('DYLD_')
+
+/**
+ * The entries of a value written as a list of paths, or null when it is not one: split on `;` when it holds one, else on
+ * each `:` that is no drive's (`C:\x`, at an entry's start), none inside a `${…}` (`${X:-d}`) and not PowerShell's
+ * `$env:`. A value with spaces is a command's words (R2-9), and a URL (`postgres://u:p@h:5432/db`) one value, so neither
+ * is a list. Read once, left to right; empty entries are left out.
+ */
+function listEntries(value: string): string[] | null {
+  if (/\s/.test(value) || URL_PATH.test(value)) return null
+  if (value.includes(';')) return value.split(';').filter((e) => e !== '')
+  const entries: string[] = []
+  let from = 0
   let braces = 0
   for (let i = 0; i < value.length; i++) {
     const c = value[i]
-    if (c === ';') return true
     if (c === '$' && value[i + 1] === '{') {
       braces++
       i++
     } else if (c === '}' && braces > 0) braces--
-    else if (c === ':' && braces === 0 && !(i === 1 && /[A-Za-z]/.test(value[0])) && !/\$env$/i.test(value.slice(Math.max(0, i - 4), i))) return true
+    else if (c === ':' && braces === 0 && !(i === from + 1 && /[A-Za-z]/.test(value[from])) && !/\$env$/i.test(value.slice(Math.max(0, i - 4), i))) {
+      entries.push(value.slice(from, i))
+      from = i + 1
+    }
   }
-  return false
+  if (from === 0) return null
+  entries.push(value.slice(from))
+  return entries.filter((e) => e !== '')
 }
-
-/** Whether `name=value` sets a search path (R2-7): a name programs look things up in, or any name whose value is a list. */
-const isSearchPath = (name: string, value: string, ps: boolean): boolean =>
-  (ps ? SEARCH_PATHS_FOLDED.has(name.toLowerCase()) : SEARCH_PATHS.has(name)) || pathList(value)
 /** A name that says its value is a path (`ROOT_PATH`, `SSH_KEY_PATH`), so a lone `/` it is given is the root. */
 const isPathName = (name: string, ps: boolean): boolean => (ps ? name.toUpperCase() : name).endsWith('PATH')
 
 /** One way a word may name a file, placed for the login folder it names alone (lifecycle design §4.10). */
 interface Reading {
   text: string
-  /** A search path's value (R2-7, isSearchPath): it names a login folder it is in or under, and never one it holds or
-   *  UNPLACED, so `PATH=/usr/local/bin:$PATH` and `NODE_PATH=~` name none while `CLASSPATH=~/.aws/x.jar` names `.aws`. */
+  /** An entry of a search path's value (R2-7, isSearchPath): it names a login folder it is in or under, and never one it
+   *  holds or UNPLACED, so `PATH=/usr/local/bin:$PATH` and `NODE_PATH=~` name none while `CLASSPATH=~/.aws/x.jar` names
+   *  `.aws`. */
   inOnly?: true
 }
 
@@ -670,23 +718,27 @@ function hostSide(spec: string): string {
  *  spelling, or holds a separator, no space and no remote's `x:` (`main:src/x.ts`; a word that starts with `$` is a
  *  variable's, as `${KEY:-$HOME/.ssh/k}` is), and any variable in it has a separator after it (`date +%Y/%m/%d` names none). */
 function mayNameFile(w: string, ps: boolean): boolean {
+  if (BASENAME.test(w)) return false
   if (PATH_START.test(w) || BRACED_PATH.test(w) || homePathOf(w, '/', ps) !== null) return true
   return /[\\/]/.test(w) && !/\s/.test(w) && (w.startsWith('$') || !REMOTE_PATH.test(w)) && (!UNFOLLOWABLE.test(w) || VARIABLE_FOLDER.test(w))
 }
 
 /** The ways one word may name a file: as it is, a flag's or a `NAME=`'s value without its name, a `@file` (curl's, among
- *  others) without its `@`; a `NAME=`'s value with spaces in it (`export GIT_SSH_COMMAND='ssh -i ~/.ssh/k'`, or a leading
- *  assignment's) also word by word, as a command's words are (R2-9); after a mount flag, also by the mount's host side,
- *  which hands the whole of it over. Each is placed, and the first folder found is the word's. A lone `/` is the root only
- *  for a program that walks folders (`walks`, R2-6) or as the value of a name that says it is a path (`ROOT_PATH=/`), and
- *  a search path's value names only what it is in (R2-7). */
+ *  others) without its `@`; a `NAME=`'s value that is a list (`KUBECONFIG=~/.kube/a:$X`) entry by entry, each a value of
+ *  its own (final fix list, I-1); a `NAME=`'s value with spaces in it (`export GIT_SSH_COMMAND='ssh -i ~/.ssh/k'`, or a
+ *  leading assignment's) also word by word, as a command's words are (R2-9); after a mount flag, also by the mount's host
+ *  side, which hands the whole of it over. Each is placed, and the first folder found is the word's. A lone `/` is the root
+ *  only for a program that walks folders (`walks`, R2-6) or as the value of a name that says it is a path
+ *  (`ROOT_PATH=/`), and a search path's value names only what it is in (R2-7). */
 function readingsOf(word: string, before: string, walks: boolean, ps: boolean): Reading[] {
   const flag = FLAG_VALUE.exec(word)?.[1]
   const named = flag === undefined ? NAMED_VALUE.exec(word) : null
   const text = (flag ?? named?.[2] ?? word).replace(/^@(?=\S)/, '')
-  const own: Reading[] = walks || !LONE_ROOT.test(text) || (named !== null && isPathName(named[1], ps)) ? [{ text }] : []
+  const values = (named !== null ? listEntries(text) : null) ?? [text]
+  const rooted = walks || (named !== null && isPathName(named[1], ps))
+  const own: Reading[] = values.filter((v) => rooted || !LONE_ROOT.test(v)).map((v) => ({ text: v }))
   if (named !== null && /\s/.test(named[2])) own.push(...readingsAmong(named[2].split(/\s+/), 0, ps, false))
-  const found = named !== null && isSearchPath(named[1], named[2], ps) ? own.map((r): Reading => ({ ...r, inOnly: true })) : own
+  const found = named !== null && isSearchPath(named[1], ps) ? own.map((r): Reading => ({ ...r, inOnly: true })) : own
   const mount = MOUNT_FLAGS.has(before) ? word : /^--(?:volume|mount)=(.*)$/.exec(word)?.[1]
   return mount === undefined ? found : [...found, { text: hostSide(mount) }]
 }
@@ -883,6 +935,8 @@ const READ_MEMBERS = new Set(
   `ReadAllText ReadAllLines ReadAllBytes ReadLines Exists GetFiles GetDirectories GetFileSystemEntries EnumerateFiles
   EnumerateDirectories EnumerateFileSystemEntries OpenRead OpenText`.split(/\s+/)
 )
+/** The members that write or delete what they are called on, in lower case: PowerShell names members in any case. */
+const ACTING_MEMBERS: ReadonlySet<string> = new Set([...WRITE_MEMBERS, 'Delete'].map((m) => m.toLowerCase()))
 
 /**
  * What a PowerShell method call is, from the one word that names it: null for a call that is only arithmetic, text or
@@ -901,10 +955,23 @@ function methodFacts(called: string): Facts | null {
     ? { action: 'process.execute', target: 'shell', known: false }
     : { action, target: member, known: true, heuristic: true }
 }
-const WRAPPERS = new Set(['sudo', 'doas', 'env', 'time', 'nohup', 'command'])
-/** Wrappers that run their arguments after options of their own: the options that take a value, and how many plain words
- *  (a priority, a CPU mask) come before the command. */
-const WRAPPER_OPTIONS = new Map<string, { valued: ReadonlySet<string>; positional: number }>([
+const WRAPPERS = new Set(['doas', 'env', 'nohup', 'command'])
+/** Wrappers that run their arguments after options of their own: the options that take a value, how many plain words (a
+ *  priority, a CPU mask) come before the command, and the short options that take one read as getopt reads a bundle
+ *  (`letters`: `-Eu root`, `-uroot`). */
+const WRAPPER_OPTIONS = new Map<string, { valued: ReadonlySet<string>; positional: number; letters?: string }>([
+  // GNU time's and bash's (`+af:o:pqvV`): -f FORMAT and -o FILE take a value (ruling R-F3)
+  ['time', { valued: new Set(['--format', '--output']), positional: 0, letters: 'fo' }],
+  // sudo's, as its option string has them (`+Aa:BbC:c:D:Eeg:Hh::iKklNnPp:R:r:SsT:t:U:u:Vv`): `-h` takes its host only
+  // written with it (`-hhost`, `--host=host`), so a `-h` alone takes none (ruling R-F3)
+  [
+    'sudo',
+    {
+      valued: new Set(['--auth-type', '--close-from', '--login-class', '--chdir', '--group', '--prompt', '--chroot', '--role', '--command-timeout', '--type', '--other-user', '--user']),
+      positional: 0,
+      letters: 'aCcDgpRrTtUu'
+    }
+  ],
   ['exec', { valued: new Set(['-a']), positional: 0 }],
   ['builtin', { valued: new Set(), positional: 0 }],
   ['coproc', { valued: new Set(), positional: 0 }],
@@ -919,16 +986,26 @@ const WRAPPER_OPTIONS = new Map<string, { valued: ReadonlySet<string>; positiona
 /** Programs that act on a running process with -p / --pid, and run no command then. */
 const PID_WRAPPERS = new Set(['chrt', 'taskset', 'ionice'])
 
-/** Where the command starts after the wrapper at `from` and its options; `from` itself when it runs none (`chrt -p PID`). */
+/** Where the command starts after the wrapper at `from` and its options, a `--` ending them; `from` itself when it runs none
+ *  (`chrt -p PID`). */
 function afterWrapper(words: Words, from: number, prog: string): number {
   const spec = WRAPPER_OPTIONS.get(prog)!
   let positional = spec.positional
   let i = from + 1
   while (i < words.length && words[i].startsWith('-') && words[i].length > 1) {
-    if (PID_WRAPPERS.has(prog) && (words[i] === '--pid' || /^-[A-Za-z]*p[A-Za-z]*$/.test(words[i]))) return from
-    if (spec.valued.has(words[i])) {
+    const w = words[i]
+    if (w === '--') {
+      i++
+      break
+    }
+    if (PID_WRAPPERS.has(prog) && (w === '--pid' || /^-[A-Za-z]*p[A-Za-z]*$/.test(w))) return from
+    if (spec.valued.has(w)) {
       if (prog === 'taskset') positional = 0 // `-c LIST` stands for the mask
       i++
+    } else if (spec.letters !== undefined && /^-[A-Za-z]+$/.test(w)) {
+      // The first letter that takes a value takes the rest of the word, or the next word when it is the last
+      const at = [...w.slice(1)].findIndex((letter) => spec.letters!.includes(letter))
+      if (at === w.length - 2) i++
     }
     i++
   }
@@ -1115,8 +1192,12 @@ function expand(cmds: Cmd[], flavor: Flavor, depth = 0): { commands: Cmd[]; synt
       const inner = expand(splitLine(script.text, script.flavor, depth + 1), script.flavor, depth + 1)
       const outer = cmd.within
       const run = inSubshell(cmd, inner.commands).map((c) => (outer === undefined ? c : { ...c, within: [...outer, ...(c.within ?? [])].slice(-MAX_GROUPS) }))
-      // What the shell reads from its input, its first command does (`bash -c "x" < f`)
+      // What the shell reads from its input, its first command does (`bash -c "x" < f`); where its output goes, its last
+      // command's does (`bash -c 'echo ~' | xargs rm`, final fix list c1)
       if (cmd.inputs !== undefined && run.length > 0) run[0] = { ...run[0], inputs: [...(run[0].inputs ?? []), ...cmd.inputs] }
+      let last = run.length - 1
+      while (last >= 0 && run[last].words.length === 0) last--
+      if (cmd.pipes !== undefined && last >= 0) run[last] = { ...run[last], pipes: cmd.pipes }
       out.push(...run)
       if (cmd.out.length > 0) out.push({ words: [], out: cmd.out, call: false, quoted: [], invoked: false, ...(cmd.ps === true ? { ps: true as const } : {}) }) // `bash -c "x" > f`
       syntax ||= inner.syntax
@@ -1134,13 +1215,14 @@ const SINK = /^(?:\/dev\/(?:null|stdout|stderr|tty|fd\/\d+)|nul|\$null)$/i
 /**
  * A shell line as the commands it runs, each a list of words with the quotes taken off.
  *
- * Splits on `&&`, `||`, `;`, `|`, `&`, newlines and the brackets of `( )` and `$( )` outside quotes, so the commands in a
- * group or a substitution are seen, and in a POSIX line on the backticks of a substitution too. A redirection's operator
- * and target are not words: a `>` target is kept apart as a file the command writes, a `<` target as one it reads (for
- * the login folder it is in alone); `2>&1`, a `<<<` string and heredoc bodies are left out. A `&` that starts a command is
- * PowerShell's call operator. Each flavour escapes its own way: in POSIX a backslash escapes only the characters a shell
- * line needs it for (it is a path separator on Windows) and joins a line it ends; in PowerShell a backslash is a letter,
- * and the backtick makes the next character one, or joins a line it ends.
+ * Splits on `&&`, `||`, `;`, `|`, `&`, newlines and the brackets of `( )` outside quotes, so the commands in a group are
+ * seen, and on PowerShell's `$( )` too. A POSIX `$( )` or pair of backticks outside quotes is read as one inside double
+ * quotes is (below), so the command goes on after it with the rest of its words. A redirection's operator and target are
+ * not words: a `>` target is kept apart as a file the command writes, a `<` target as one it reads (for the login folder
+ * it is in alone); `2>&1`, a `<<<` string and heredoc bodies are left out. A `&` that starts a command is PowerShell's
+ * call operator. Each flavour escapes its own way: in POSIX a backslash escapes only the characters a shell line needs it
+ * for (it is a path separator on Windows) and joins a line it ends; in PowerShell a backslash is a letter, and the
+ * backtick makes the next character one, or joins a line it ends.
  *
  * Inside double quotes a `$( )` (in a POSIX line also a pair of backticks) is a substitution the shell runs: its text is read
  * as a line of its own and its commands follow the command the quoted word is in, while the word keeps a `$` where it was,
@@ -1277,10 +1359,10 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
       if (chain.length > 0) cmd.groups = [...chain]
       commands.push(cmd)
       // The command a `|` handed its output to is the first kept after it (`a | { b; }` and `a | (b)` too), and what it runs
-      // is what stripPrefix finds past its assignments and wrappers (`a | sudo xargs rm`)
+      // is its receiver (receiverOf)
       if (feeding !== null) {
-        const into = words.length > 0 ? stripPrefix(cmd, flavor).cmd.words[0] : undefined
-        if (into !== undefined) feeding.pipes = programName(into).toLowerCase()
+        const into = receiverOf(cmd, flavor)
+        if (into !== undefined) feeding.pipes = into
         feeding = null
       }
       kept = cmd
@@ -1437,6 +1519,14 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
     } else if ((c === ')' && stop === 'paren' && parens === 0 && cases - (has && sink === null && cur === 'esac' && words.length === 0 ? 1 : 0) <= 0) || (c === '`' && stop === 'tick')) {
       end = i // what closes the substitution this was started for
       break
+    } else if (flavor === 'posix' && depth < 2 && (c === '`' || (c === '$' && line[i + 1] === '(' && line[i + 2] !== '('))) {
+      // Outside quotes as inside them, a substitution is part of the word it is in (final fix list c2): its commands follow
+      // the command, which goes on after it with the rest of its words (`zip -r h.zip $(pwd) ~`), and the word keeps a `$`,
+      // a value and no place. Past the depth substitutions are read to, a `$(` is read as a group and a backtick ends the
+      // command, as they were before
+      cur += '$'
+      has = true
+      i = substitute(i, c === '`')
     } else if (c === ';' || c === '|' || c === ')' || (c === '`' && flavor === 'posix')) {
       const ended = endCommand()
       // A lone `|` hands this command's output to the next; `||` runs the next only when this one fails
@@ -1539,11 +1629,14 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
       }
       sink = { write: c === '>', dup, text }
     } else if (flavor === 'posix' && c === '$' && line[i + 1] === '(' && line[i + 2] === '(') {
-      // arithmetic outside quotes runs nothing either: its substitutions are read, and the word keeps a `$`, a value
+      // arithmetic outside quotes runs nothing either: its substitutions are read, and the word keeps a `$`, a value. With no
+      // `))` to close it, it is a substitution that starts with a subshell, as in double quotes (c2); past the depth
+      // substitutions are read to, the `(` that follows is read as a group
       cur += c
       has = true
       const to = tryArithmetic(i)
-      if (to >= 0) i = to // else the `(` that follows is read as a group
+      if (to >= 0) i = to
+      else if (depth < 2) i = substitute(i, false)
     } else {
       cur += c
       has = true
@@ -2341,7 +2434,14 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
   if (prog === 'git') {
     const at = subcommandAt(prog, args)
     const action = sub === undefined ? 'process.execute' : gitAction(sub, args.slice(at + 1))
-    return { action: action ?? 'process.execute', target, known: sub === undefined || action !== undefined }
+    const facts: Facts = { action: action ?? 'process.execute', target, known: sub === undefined || action !== undefined }
+    // The user's and the machine's git config are outside any project (ruling R-F1): placed there, with the login folder
+    // its words name read as the loose words of a command with no place are
+    if (sub === 'config' && args.slice(at + 1).some((a) => a === '--global' || a === '--system')) {
+      const folder = folderOf(looseWords(cmd, false), ctx)
+      return { ...facts, inside: false, ...(folder !== undefined ? { sensitive: folder } : {}) }
+    }
+    return facts
   }
 
   if (prog === 'gh') {
