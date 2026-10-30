@@ -541,8 +541,9 @@ interface Cmd {
   /** Set by expand on a command whose line holds the commands it runs (`xargs git push`, `find -exec`), which follow it in
    *  the list and headline the line in its place. */
   runs?: true
-  /** Set by expand on a command that runs others too deep in scripts to be read, and by splitLine on one with a substitution
-   *  in double quotes too deep to be read, so what it does is not known. */
+  /** Set by expand on a command that runs others too deep in scripts to be read, by stripPrefix on a wrapper whose command
+   *  is not known (an option off its whitelist, or none after its options: ruling R-F10), and by splitLine on one with a
+   *  substitution in double quotes too deep to be read, so what it does is not known. */
   unread?: true
   /** Set by splitLine on a command that runs in a subshell: the group `( )`, `$( )` or substitution it is in, and the ones
    *  those are in, outermost first. A `cd` in a subshell moves the commands of that subshell and none after it. */
@@ -960,51 +961,61 @@ function methodFacts(called: string): Facts | null {
 }
 /** How a wrapper reads its own options before the command it runs. */
 interface WrapperSpec {
-  /** The options that take the next word as their value: the long ones, and short ones written alone. */
+  /** The options that take the next word as their value: the long ones (also written `--name=value`), and short ones
+   *  written alone. */
   valued: ReadonlySet<string>
   /** How many plain words (a priority, a CPU mask) come before the command. */
   positional: number
-  /** The short options that take a value, read as getopt reads a bundle: the rest of the word, or the next word when the
-   *  letter is the last (`-Eu root`, `-uroot`). */
-  letters?: string
-  /** The short options whose value can only be the rest of their word (sudo's `-hhost`): the scan of a bundle ends there. */
-  attached?: string
-  /** The short options with which it runs no command (`chrt -p`, `command -v`, `doas -C`) or reads its command from the
-   *  option's own value (`env -S`): it is the program then. */
+  /** Ruling R-F10, for the wrappers the base read as a bare prefix (time, sudo, env, doas, command, nohup): the only options
+   *  it is read past, each with no side effect: it writes no file, moves no folder, edits nothing, and neither re-splits nor
+   *  re-reads the command. Any other option, an unknown one too, leaves the wrapper the program, and what it runs not known.
+   *  Absent: every option is read past, as the base read them. */
+  only?: Whitelist
+  /** The short options with which it runs no command (the PID wrappers' `-p`): it is the program then, as at the base. */
   none?: string
-  /** The long options that do the same (`--pid`, `--split-string`), alone or with `=value`. */
+  /** The long options that do the same (`--pid`), alone or with `=value`. */
   noneLong?: readonly string[]
 }
 
-/** Wrappers that run their arguments after options of their own. With no word left after their options they are the
- *  program (follow-up R-F6: `cat script.sh | sudo -s` runs what it is fed), but for exec, whose bare form only opens the
- *  files its redirections name. */
+/** The options of a wrapper's whitelist (ruling R-F10), as getopt reads them. */
+interface Whitelist {
+  /** Short options with no value, alone or in a bundle (`-En`). */
+  flags: string
+  /** Short options that take a value: the rest of the word, or the next word when the letter is the last (`-Eu root`,
+   *  `-uroot`). */
+  letters: string
+  /** Short options whose value can only be the rest of their word (sudo's `-hhost`). Alone, it is another option. */
+  attached?: string
+  /** Long options with no value. One that ends in `=` is the option written with its value in the word (`--host=h`). */
+  long: readonly string[]
+}
+
+/** Wrappers that run their arguments after options of their own. */
 const WRAPPER_OPTIONS = new Map<string, WrapperSpec>([
-  // GNU time's and bash's (`+af:o:pqvV`): -f FORMAT and -o FILE take a value (ruling R-F3)
-  ['time', { valued: new Set(['--format', '--output']), positional: 0, letters: 'fo' }],
-  // sudo's, as its option string has them (`+Aa:BbC:c:D:Eeg:Hh::iKklNnPp:R:r:SsT:t:U:u:Vv`), ruling R-F3. `-h` takes a
-  // host only written with it (`-hhost`, `--host=host`): the rest of its word is the host, never more options, so the scan
-  // of a bundle stops at the `h`, and a `-h` alone takes none. `-l` lists (with a command, says whether it may run), `-v`
-  // and `-K` touch the remembered login and `-V` prints the version: none of them runs a command
+  // GNU time's (`+af:o:pqvV`) and bash's time keyword. Whitelisted (ruling R-F10): -p, -v and -q, which change what it
+  // prints, and -f FORMAT, the form of the report it prints to stderr. Not -o FILE or -a, which write the report into a file
+  ['time', { valued: new Set(['--format']), positional: 0, only: { flags: 'pvq', letters: 'f', long: ['--portability', '--verbose', '--quiet'] } }],
+  // sudo's (sudo(8)). Whitelisted: -u USER, -g GROUP, -E and --preserve-env[=list], -H, -n, -P, -p PROMPT, -T TIMEOUT, -C FD,
+  // and a host written with its option (`-hhost`, `--host=host`). Not -e (edits the files after it), -D or -R (move the
+  // command), -i or -s (a shell in its place), -l, -v, -k, -K or -V (run nothing, or change the remembered login), -b, -S, -U
+  // or the rest; nor a -h alone, which is sudo's help, or a host in the next word
   [
     'sudo',
     {
-      valued: new Set(['--auth-type', '--close-from', '--login-class', '--chdir', '--group', '--prompt', '--chroot', '--role', '--command-timeout', '--type', '--other-user', '--user']),
+      valued: new Set(['--user', '--group', '--prompt', '--command-timeout', '--close-from']),
       positional: 0,
-      letters: 'aCcDgpRrTtUu',
-      attached: 'h',
-      none: 'lvKV',
-      noneLong: ['--list', '--validate', '--remove-timestamp', '--version']
+      only: { flags: 'EHnP', letters: 'ugpTC', attached: 'h', long: ['--preserve-env', '--preserve-env=', '--set-home', '--non-interactive', '--preserve-groups', '--host='] }
     }
   ],
-  // GNU env's (`+C:iS:u:v0`) and the BSDs' `-P altpath` (follow-up R-F6). `-S` splits its value into the command line it
-  // runs, which scriptOf reads
-  ['env', { valued: new Set(['--unset', '--chdir']), positional: 0, letters: 'uCP', none: 'S', noneLong: ['--split-string'] }],
-  // doas's (`a:C:Lnsu:`): `-C` checks a config and `-L` clears the remembered login, and neither runs a command
-  ['doas', { valued: new Set(), positional: 0, letters: 'au', none: 'CL' }],
-  // The shell's `command`: `-p` looks the command up on the default path; `-v` and `-V` only say what it is
-  ['command', { valued: new Set(), positional: 0, none: 'vV' }],
-  ['nohup', { valued: new Set(), positional: 0 }],
+  // GNU env's (env(1) in coreutils). Whitelisted: -i, -u NAME, -0 and -v. Not -C DIR (moves the command), -S (re-splits it),
+  // -P (looks it up elsewhere), -a/--argv0 (renames it), the signal options, nor a lone `-`
+  ['env', { valued: new Set(['--unset']), positional: 0, only: { flags: 'i0v', letters: 'u', long: ['--ignore-environment', '--null', '--debug'] } }],
+  // doas's (doas(1)). Whitelisted: -u USER and -n. Not -s (a shell), -C or -L (run nothing), nor -a STYLE
+  ['doas', { valued: new Set(), positional: 0, only: { flags: 'n', letters: 'u', long: [] } }],
+  // The shell's `command`. Whitelisted: -p, the default path. Not -v or -V, which only say what the command is
+  ['command', { valued: new Set(), positional: 0, only: { flags: 'p', letters: '', long: [] } }],
+  // nohup's: nothing but `--`
+  ['nohup', { valued: new Set(), positional: 0, only: { flags: '', letters: '', long: [] } }],
   ['exec', { valued: new Set(['-a']), positional: 0 }],
   ['builtin', { valued: new Set(), positional: 0 }],
   ['coproc', { valued: new Set(), positional: 0 }],
@@ -1018,23 +1029,38 @@ const WRAPPER_OPTIONS = new Map<string, WrapperSpec>([
 ])
 
 /** What one option word of a wrapper is, read as getopt reads it: `none` when the wrapper runs no command with it, `value`
- *  when the next word is its value, else `self` (a flag, a bundle whose value is in the word, a long option with `=`). */
-function optionOf(w: string, spec: WrapperSpec): 'none' | 'value' | 'self' {
+ *  when the next word is its value, `self` for a flag, a bundle whose value is in the word or a long option with `=`, and
+ *  `off` for one off the wrapper's whitelist (ruling R-F10). */
+function optionOf(w: string, spec: WrapperSpec): 'none' | 'value' | 'self' | 'off' {
   if (spec.noneLong?.some((n) => w === n || w.startsWith(`${n}=`))) return 'none'
-  if (spec.valued.has(w)) return 'value'
-  if (w.startsWith('--')) return 'self'
+  const only = spec.only
+  if (w.startsWith('--')) {
+    const eq = w.indexOf('=')
+    const name = eq < 0 ? w : w.slice(0, eq)
+    if (spec.valued.has(name)) return eq < 0 ? 'value' : 'self'
+    return only === undefined || only.long.includes(eq < 0 ? name : `${name}=`) ? 'self' : 'off'
+  }
+  if (only === undefined) {
+    if (spec.valued.has(w)) return 'value'
+    for (let j = 1; j < w.length && /[A-Za-z0-9]/.test(w[j]); j++) if (spec.none?.includes(w[j])) return 'none'
+    return 'self'
+  }
   for (let j = 1; j < w.length; j++) {
     const letter = w[j]
-    if (!/[A-Za-z0-9]/.test(letter)) return 'self'
-    if (spec.none?.includes(letter)) return 'none'
-    if (spec.attached?.includes(letter)) return 'self'
-    if (spec.letters?.includes(letter)) return j === w.length - 1 ? 'value' : 'self'
+    if (only.attached?.includes(letter)) return j < w.length - 1 ? 'self' : 'off'
+    if (only.letters.includes(letter)) return j === w.length - 1 ? 'value' : 'self'
+    if (!only.flags.includes(letter)) return 'off'
   }
   return 'self'
 }
 
-/** Where the command starts after the wrapper at `from` and its options, a `--` ending them; `from` itself when it runs none
- *  (`chrt -p PID`, `command -v x`) or when no word is left after them (WRAPPER_OPTIONS). */
+/**
+ * Where the command starts after the wrapper at `from` and its options, a `--` ending them. `from` itself when it runs none
+ * (`chrt -p PID`), so it is the program, as at the base. -1 when what it runs is not known, and the wrapper is the program
+ * then too: an option off its whitelist (ruling R-F10: `time -o f`, `env -C /tmp`, `sudo -e`), or no word left after its
+ * options (follow-up R-F6: `cat script.sh | sudo -s` runs what it is fed), but for exec, whose bare form only opens the
+ * files its redirections name.
+ */
 function afterWrapper(words: Words, from: number, prog: string): number {
   const spec = WRAPPER_OPTIONS.get(prog)!
   let positional = spec.positional
@@ -1047,6 +1073,7 @@ function afterWrapper(words: Words, from: number, prog: string): number {
     }
     const kind = optionOf(w, spec)
     if (kind === 'none') return from
+    if (kind === 'off') return -1
     if (kind === 'value') {
       if (prog === 'taskset') positional = 0 // `-c LIST` stands for the mask
       i++
@@ -1055,7 +1082,7 @@ function afterWrapper(words: Words, from: number, prog: string): number {
   }
   const at = i + positional
   if (at < words.length) return at
-  return prog === 'exec' ? words.length : from
+  return prog === 'exec' ? words.length : -1
 }
 /** Words that lead a command, which is what follows them. */
 const KEYWORDS = new Set(['if', 'elif', 'elseif', 'while', 'until', 'then', 'else', 'do', '!'])
@@ -1092,7 +1119,10 @@ function afterTimeout(words: Words, from: number): number {
  * A command without what comes before its program: `NAME=value` and PowerShell `$name =` assignments (their values can
  * be secrets), sudo-like wrappers and `timeout N` with their options, the keyword of a conditional or loop body (`then`,
  * `do`, `while`), and in a POSIX line a quoted substitution standing as a word of its own or, after a wrapper, any word
- * the shell fills in. `syntax` is whether a keyword, a word that runs nothing or a word the shell fills in was seen (a loop header, a
+ * the shell fills in. A wrapper given an option off its whitelist, or nothing after its options, is the program, marked
+ * `unread`: what it runs is not known (ruling R-F10).
+ *
+ * `syntax` is whether a keyword, a word that runs nothing or a word the shell fills in was seen (a loop header, a
  * PowerShell condition or `.Count`), which makes the line compound. A command of only assignments or only a header comes
  * back with no words. `filled`: that word the shell fills in, as a command of its own, since it may be the program.
  * `cli`: Astera's own variable names its CLI on this line (resolveShell), so after a wrapper it is the program, as it is
@@ -1105,6 +1135,7 @@ function stripPrefix(raw: Cmd, flavor: Flavor, cli = false): { cmd: Cmd; syntax:
   const assigned: string[] = [] // read for the login folder a value names, never kept (lifecycle design §4.10)
   let wrapped = false // a wrapper was read, so what follows its options is the command it runs
   let filled: string | undefined // the word the shell fills in that stood where the program would, kept apart below
+  let opaque = false // a wrapper is the program, and what it runs is not known (afterWrapper)
   const fills = (word: string): boolean => word === '$' || (wrapped && word.startsWith('$') && !(cli && ASTERA_CLI_WORD.test(word)))
   while (i < words.length) {
     const w = words[i].toLowerCase()
@@ -1124,16 +1155,21 @@ function stripPrefix(raw: Cmd, flavor: Flavor, cli = false): { cmd: Cmd; syntax:
       syntax = true
     } else if (programName(w) === 'timeout') {
       const next = afterTimeout(words, i + 1)
-      if (next >= words.length) break // nothing to run: it is the program
+      if (next >= words.length) {
+        opaque = true // nothing to run: it is the program, and what it is fed is not known
+        break
+      }
       i = next
       wrapped = true
     } else if (WRAPPER_OPTIONS.has(programName(w))) {
       const next = afterWrapper(words, i, programName(w))
-      if (next === i) {
-        // It runs no command: it is the program. But bash's time keyword, bare where a command starts, times the group that
-        // follows it (`time (ls)`, `time -p { ls; }`), which is the command, so nothing is left of it (R-F8 list, N1). Any
-        // other wrapper before a group is a syntax error, and stays the program
-        if (words[i] === 'time' && !wrapped && raw.grouped === true) i = words.length
+      if (next === i) break // it runs no command: it is the program (`chrt -p PID`)
+      if (next < 0) {
+        // What it runs is not known: it is the program (ruling R-F10). But bash's time keyword, bare where a command starts
+        // and given no option but its own `-p` and `--`, times the group that follows it (`time (ls)`, `time -p { ls; }`),
+        // which is the command, so nothing is left of it (R-F8 list, N1). Any other wrapper before a group is a syntax error
+        if (words[i] === 'time' && !wrapped && raw.grouped === true && words.slice(i + 1).every((x) => x === '-p' || x === '--')) i = words.length
+        else opaque = true
         break
       }
       i = next
@@ -1143,8 +1179,9 @@ function stripPrefix(raw: Cmd, flavor: Flavor, cli = false): { cmd: Cmd; syntax:
   }
   const rest = words.slice(i)
   const cmdlet = rest.length > 0 ? cmdletOf(rest[0], flavor) : undefined
+  const unread = opaque || raw.unread === true ? (true as const) : undefined
   const cmd: Cmd = {
-    words: rest, out: raw.out, call: raw.call, quoted: raw.quoted.slice(i), invoked: raw.invoked, cmdlet, unread: raw.unread, groups: raw.groups,
+    words: rest, out: raw.out, call: raw.call, quoted: raw.quoted.slice(i), invoked: raw.invoked, cmdlet, unread, groups: raw.groups,
     ...(raw.inputs !== undefined ? { inputs: raw.inputs } : {}),
     ...(raw.within !== undefined ? { within: raw.within } : {}),
     ...(raw.inputsOf !== undefined ? { inputsOf: raw.inputsOf } : {}),
@@ -1188,15 +1225,10 @@ function loopList(header: Words): string[] {
   return header.slice(3, end < 0 ? header.length : end)
 }
 
-/** The script a shell was handed with -c / -Command / /c, if it was handed one, and the shell it is written for; also the
- *  command line `env -S` splits (follow-up R-F6). */
+/** The script a shell was handed with -c / -Command / /c, if it was handed one, and the shell it is written for. */
 function scriptOf(words: Words): { text: string; flavor: Flavor } | null {
   const prog = programName(words[0] ?? '').toLowerCase()
   const rest = words.slice(1)
-  if (prog === 'env') {
-    const line = envSplitString(rest)
-    return line === null ? null : { text: line, flavor: 'posix' }
-  }
   if (POSIX_SHELLS.has(prog)) {
     // A bundle of letters that has a c in it, tested as two simple things: one pattern with a quantifier on each side of the
     // c backtracks quadratically on a long run of letters.
@@ -1207,32 +1239,6 @@ function scriptOf(words: Words): { text: string; flavor: Flavor } | null {
   if (i < 0 || i + 1 >= rest.length) return null
   if (prog === 'cmd') return { text: rest.slice(i + 1).join(' '), flavor: 'posix' }
   return prog === 'powershell' || prog === 'pwsh' ? { text: rest.slice(i + 1).join(' '), flavor: 'ps' } : null
-}
-
-/** The command line `env -S STRING` (`-iS STRING`, `-SSTRING`, `--split-string[=]STRING`) runs: the string, then the words
- *  after it, which env adds to it. Null when its options hold no `-S`. */
-function envSplitString(args: Words): string | null {
-  const spec = WRAPPER_OPTIONS.get('env')!
-  const line = (first: string | undefined, after: Words): string | null => (first === undefined ? null : [first, ...after].join(' '))
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i]
-    if (a === '--' || !a.startsWith('-') || a.length < 2) return null
-    const long = /^--split-string(?:=([\s\S]*))?$/.exec(a)
-    if (long !== null) return long[1] !== undefined ? line(long[1], args.slice(i + 1)) : line(args[i + 1], args.slice(i + 2))
-    if (spec.valued.has(a)) {
-      i++
-      continue
-    }
-    if (a.startsWith('--')) continue
-    for (let j = 1; j < a.length; j++) {
-      if (a[j] === 'S') return j + 1 < a.length ? line(a.slice(j + 1), args.slice(i + 1)) : line(args[i + 1], args.slice(i + 2))
-      if (spec.letters!.includes(a[j])) {
-        if (j === a.length - 1) i++
-        break
-      }
-    }
-  }
-  return null
 }
 
 /** The words `from` up to `to` of a command as a command of their own, each as quoted as it was: what xargs, watch and
@@ -1298,13 +1304,7 @@ function expand(cmds: Cmd[], flavor: Flavor, depth = 0, cli = false): { commands
   /** One command, or the commands it runs (a shell's script, what xargs runs), put in `out`. */
   function expandOne(cmd: Cmd): void {
     if (cmd.words.length === 0 && cmd.out.length === 0 && cmd.inputs === undefined && cmd.assigned === undefined && cmd.listed === undefined) return
-    const script = cmd.words.length > 0 ? scriptOf(cmd.words) : null
-    if (script !== null && depth >= 2) {
-      // Past the depth scripts are read to, the script is not read, so what the command runs is not known: a shell's -c,
-      // and the line `env -S` splits, which would else leave env a program it knows (R-F8 list, A3)
-      out.push({ ...cmd, unread: true })
-      return
-    }
+    const script = depth < 2 && cmd.words.length > 0 ? scriptOf(cmd.words) : null
     if (script === null) {
       const behind = cmd.words.length > 0 ? commandsBehind(cmd, flavor, depth) : []
       if (behind.length === 0) out.push(cmd)

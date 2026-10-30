@@ -2912,19 +2912,26 @@ describe('shell: an unquoted substitution ends the command it is in (ruling R-F8
 })
 
 // Final fix pass (ruling R-F3): the options of time and sudo are theirs, not the command's, so a rule on what follows them
-// matches
+// matches. Since ruling R-F10 only the options on their whitelist are skipped (below)
 describe('shell: the options of time and sudo', () => {
   it.each([
     'time -p rm -rf ../x',
     'time -f %e rm -rf ../x',
-    '/usr/bin/time -o t.txt -a rm -rf ../x',
+    'time --format=%e rm -rf ../x',
+    'time -pf %e rm -rf ../x',
+    '/usr/bin/time -v -q rm -rf ../x',
+    'time --portability --verbose --quiet rm -rf ../x',
     'time -- rm -rf ../x',
     'sudo -u root rm -rf ../x',
     'sudo -Eu root rm -rf ../x',
     'sudo -uroot rm -rf ../x',
     'sudo --user root rm -rf ../x',
     'sudo --user=root -H -n rm -rf ../x',
-    'sudo -g wheel -D /tmp rm -rf ../x',
+    'sudo -g wheel -P rm -rf ../x',
+    'sudo -p pw -T 5 -C 3 rm -rf ../x',
+    'sudo --preserve-env rm -rf ../x',
+    'sudo --preserve-env=A,B rm -rf ../x',
+    'sudo --host=h rm -rf ../x',
     'sudo -u root -- rm -rf ../x'
   ])('%s is a delete outside the project', (line) => {
     expect(bash(line)).toMatchObject({ action: 'filesystem.delete', target: 'rm', insideProject: false })
@@ -2933,6 +2940,90 @@ describe('shell: the options of time and sudo', () => {
   it('reads time -p and sudo -u before a home path and an absolute one', () => {
     expect(bash('time -p rm -rf ~/x')).toMatchObject({ action: 'filesystem.delete', insideProject: false })
     expect(bash('sudo -u root rm -rf /x')).toMatchObject({ action: 'filesystem.delete', insideProject: false })
+  })
+})
+
+// Ruling R-F10: a wrapper's own option is skipped, and the command after it read, only when it is on the wrapper's
+// whitelist: an option that writes no file, moves no folder, edits nothing and leaves the command as it is. Any other
+// option, an unknown one too, leaves the wrapper the program, whose command is not known, as the base read it
+describe('shell: a wrapper option off its whitelist leaves the wrapper the program (ruling R-F10)', () => {
+  it.each([
+    // time's report written into a file, or nothing run
+    ['/usr/bin/time -o t.txt ls', 'time'],
+    ['time -o t.txt rm -rf ../x', 'time'],
+    ['time --output=t.txt ls', 'time'],
+    ['time --output t.txt ls', 'time'],
+    ['/usr/bin/time -a -o t.txt ls', 'time'],
+    ['/usr/bin/time -ao t.txt ls', 'time'],
+    ['/usr/bin/time -o/tmp/t ls', 'time'],
+    ['time -V ls', 'time'],
+    // sudo: a file edited, the command moved, a shell in its place, or nothing run
+    ['sudo -e cat ../x', 'sudo'],
+    ['sudo --edit ../x', 'sudo'],
+    ['sudo -eu root cat ../x', 'sudo'],
+    ['sudo -D /tmp rm -rf x', 'sudo'],
+    ['sudo --chdir /tmp rm -rf x', 'sudo'],
+    ['sudo --chdir=/tmp rm -rf x', 'sudo'],
+    ['sudo -R /mnt rm -rf x', 'sudo'],
+    ['sudo -i rm -rf x', 'sudo'],
+    ['sudo -s rm -rf x', 'sudo'],
+    ['sudo -k rm -rf x', 'sudo'],
+    ['sudo -b rm -rf x', 'sudo'],
+    ['sudo -S rm -rf x', 'sudo'],
+    ['sudo -U u -l rm -rf x', 'sudo'],
+    // `-h` alone is sudo's help, or a host in the next word: which, cannot be told
+    ['sudo -h rm -rf ../x', 'sudo'],
+    ['sudo -h host rm -rf ../x', 'sudo'],
+    ['sudo --host h rm -rf ../x', 'sudo'],
+    // env: the command moved, re-split, looked up elsewhere or renamed
+    ['env -C /tmp rm -rf x', 'env'],
+    ['env -C/tmp rm -rf x', 'env'],
+    ['env --chdir=/ rm -rf home/u/.ssh', 'env'],
+    ['env --chdir / rm -rf etc/x', 'env'],
+    ['env -S bash -c "git push"', 'env'],
+    ["env -S 'rm -rf ../x'", 'env'],
+    ["env -iS 'git push' origin", 'env'],
+    ["env --split-string='rm -rf' ../x", 'env'],
+    ['env -P /bin rm -rf ../x', 'env'],
+    ['env --argv0=x rm -rf ../x', 'env'],
+    ['env -a x rm -rf ../x', 'env'],
+    ['env --block-signal rm -rf ../x', 'env'],
+    // doas: a shell, a check of its config, a login cleared or an authentication style
+    ['doas -s rm -rf ../x', 'doas'],
+    ['doas -C /etc/doas.conf rm -rf ../x', 'doas'],
+    ['doas -L', 'doas'],
+    ['doas -a bsdauth rm -rf ../x', 'doas'],
+    // command and nohup: nothing run
+    ['command -v rm -rf ../x', 'command'],
+    ['command -V rm', 'command'],
+    ['command -pv rm', 'command'],
+    ['nohup --help rm -rf ../x', 'nohup'],
+    ['nohup --version git push', 'nohup'],
+    ['nohup -p rm -rf ../x', 'nohup']
+  ])('%s is %s, not known', (line, wrapper) => {
+    expect(bash(line)).toMatchObject({ action: 'process.execute', target: wrapper, confidence: 'unknown' })
+  })
+
+  // With nothing after its options, what a wrapper runs is not known either (a script piped into it, or nothing)
+  it.each(['env', 'env -i', 'env -u X', "echo 'git push' | env -i", 'cat script.sh | env --', 'sudo -u root', 'doas -n', 'chrt 5', 'ionice -c3', 'taskset 0x1', 'nice', 'timeout 5', 'stdbuf -o0'])(
+    '%s is unknown',
+    (line) => {
+      expect(bash(line).confidence).toBe('unknown')
+    }
+  )
+
+  // A process the PID wrappers act on runs no command: the wrapper is the program, as at the base
+  it('keeps chrt -p, taskset -p and ionice -p the program', () => {
+    for (const [line, target] of [['chrt -p 5 1234', 'chrt'], ['taskset -p 0x1 1234', 'taskset'], ['ionice -p 1234', 'ionice']])
+      expect(bash(line), line).toMatchObject({ action: 'process.execute', target })
+  })
+
+  // An option glued to a wrapper behind another is read the same way
+  it('reads the options of a wrapper behind another', () => {
+    expect(bash('sudo -u root env -i rm -rf ../x')).toMatchObject({ action: 'filesystem.delete', insideProject: false })
+    expect(bash('sudo -u root env -C /tmp rm -rf x')).toMatchObject({ action: 'process.execute', target: 'env', confidence: 'unknown' })
+    expect(bash('command time -o t.txt ls')).toMatchObject({ action: 'process.execute', target: 'time', confidence: 'unknown' })
+    expect(bash('nohup /usr/bin/time -o t.txt ls')).toMatchObject({ action: 'process.execute', target: 'time', confidence: 'unknown' })
   })
 })
 
@@ -3017,13 +3108,28 @@ describe('shell: a wrapper with no command after its options is the program', ()
     expect(bash('exec > log.txt 2>&1')).toMatchObject({ action: 'filesystem.write', target: 'log.txt', insideProject: true, confidence: 'high' })
   })
 
+  // `sudo -h` alone is in the R-F10 block: help, or a host in the next word
   it('reads sudo -h with its host in the same word, and nothing after it as an option', () => {
     expect(bash('sudo -hhost rm -rf ../x')).toMatchObject({ action: 'filesystem.delete', target: 'rm', insideProject: false })
-    expect(bash('sudo -h rm -rf ../x')).toMatchObject({ action: 'filesystem.delete', target: 'rm', insideProject: false })
+    expect(bash('sudo -Ehhost rm -rf ../x')).toMatchObject({ action: 'filesystem.delete', target: 'rm', insideProject: false })
+  })
+
+  // Ruling R-F10: bash's time keyword takes `-p` and `--` alone, so only those leave a group to time; with any other option
+  // time is a program, and the group after it a syntax error
+  it.each([
+    ['time -- (ls)', '(ls)'],
+    ['time -p -- (ls)', '(ls)']
+  ])('%s reads as the group it times', (line, group) => {
+    expect(bash(line)).toEqual(bash(group))
+  })
+
+  it.each(['time -o f (ls)', 'time -v (ls)', 'time -f %e (ls)'])('%s is time, not known', (line) => {
+    expect(bash(line)).toMatchObject({ action: 'process.execute', target: 'time', confidence: 'unknown' })
   })
 })
 
-// Follow-up R-F6, item 4: the options of env, doas, command and nohup are theirs (the same class as R-F3)
+// Follow-up R-F6, item 4: the options of env, doas, command and nohup are theirs (the same class as R-F3). Since ruling
+// R-F10 only the options on their whitelist are skipped
 describe('shell: the options of env, doas, command and nohup', () => {
   it.each([
     ['env -i git push', 'git.remote.write'],
@@ -3032,31 +3138,37 @@ describe('shell: the options of env, doas, command and nohup', () => {
     ['env -u X rm -rf ../x', 'filesystem.delete'],
     ['env --unset=X rm -rf ../x', 'filesystem.delete'],
     ['env --unset X rm -rf ../x', 'filesystem.delete'],
-    ['env -C /tmp rm -rf ../x', 'filesystem.delete'],
-    ['env --chdir /tmp rm -rf ../x', 'filesystem.delete'],
-    ['env -P /bin rm -rf ../x', 'filesystem.delete'],
     ['env -i0 rm -rf ../x', 'filesystem.delete'],
     ['env -iu X rm -rf ../x', 'filesystem.delete'],
+    ['env -v --debug --null --ignore-environment rm -rf ../x', 'filesystem.delete'],
     ['env -- rm -rf ../x', 'filesystem.delete'],
     ['env -i PATH=/bin rm -rf ../x', 'filesystem.delete'],
     ['doas -u root rm -rf ../x', 'filesystem.delete'],
+    ['doas -nu root rm -rf ../x', 'filesystem.delete'],
+    ['doas -uroot -- rm -rf ../x', 'filesystem.delete'],
     ['doas -n rm -rf ../x', 'filesystem.delete'],
-    ['doas -a bsdauth rm -rf ../x', 'filesystem.delete'],
     ['command -p rm -rf ../x', 'filesystem.delete'],
+    ['command -p -- rm -rf ../x', 'filesystem.delete'],
     ['nohup -- rm -rf ../x', 'filesystem.delete']
   ] satisfies Array<[string, AuditAction]>)('%s is %s', (line, action) => {
     expect(bash(line)).toMatchObject({ action })
   })
 
-  it('reads the command line env -S splits as a script', () => {
-    expect(bash("env -S 'rm -rf ../x'")).toMatchObject({ action: 'filesystem.delete', insideProject: false })
-    expect(bash("env -iS 'git push' origin")).toMatchObject({ action: 'git.remote.write' })
-    expect(bash("env --split-string='rm -rf' ../x")).toMatchObject({ action: 'filesystem.delete', insideProject: false })
-    expect(bash("env -S'git push'")).toMatchObject({ action: 'git.remote.write' })
+  // Ruling R-F10: `env -S` re-splits its command line, so env is the program and what it runs is not known, at any depth
+  it.each([
+    "env -S 'rm -rf ../x'",
+    "env -S'git push'",
+    "env -S bash -c 'git push'",
+    "env -S 'bash -c' 'git push'",
+    `bash -c "env -S 'git push'"`,
+    `xargs env -S 'git push'`
+  ])('%s is env, not known', (line) => {
+    expect(bash(line)).toMatchObject({ action: 'process.execute', confidence: 'unknown' })
+    expect(acts(bash(line)) ?? []).not.toContain('git.remote.write')
   })
 
-  // R-F8 list, A3: past the depth scripts are read to, the line env -S splits is not read, so the command is not known, as
-  // a shell's -c is not there; one level up it is read
+  // R-F8 list, A3, and ruling R-F10: the line env -S splits is never read, so the command is not known, as a shell's -c is
+  // not past the depth scripts are read to
   it.each([
     `bash -c "bash -c \\"env -S 'git push'\\""`,
     `bash -c "bash -c \\"env -S 'rm -rf ../x'\\""`,
@@ -3067,20 +3179,19 @@ describe('shell: the options of env, doas, command and nohup', () => {
     `bash -c "watch \\"env -S 'git push'\\""`,
     `echo "$(bash -c "bash -c \\"env -S 'git push'\\"")"`,
     `bash -c "bash -c \\"bash -c 'git push'\\""`
-  ])('%s is unknown: the line it runs is too deep to read', (line) => {
+  ])('%s is unknown: what it runs is not read', (line) => {
     expect(bash(line)).toMatchObject({ action: 'process.execute', confidence: 'unknown' })
   })
 
-  it('reads env -S one script level down, and a command env runs at the next level', () => {
-    expect(bash(`bash -c "env -S 'git push'"`)).toMatchObject({ action: 'git.remote.write', confidence: 'high' })
-    expect(acts(bash(`xargs env -S 'git push'`))).toContain('git.remote.write')
+  it('reads a command env runs past a whitelisted option at the next level', () => {
     expect(bash(`bash -c "bash -c \\"env -i git push\\""`)).toMatchObject({ action: 'git.remote.write' })
   })
 
-  it('takes command -v, command -V and doas -C for what they are: they run nothing', () => {
-    expect(bash('command -v git push')).toMatchObject({ action: 'process.execute', target: 'command' })
-    expect(bash('command -V rm')).toMatchObject({ action: 'process.execute', target: 'command' })
-    expect(bash('doas -C /etc/doas.conf rm -rf ../x')).toMatchObject({ action: 'process.execute', target: 'doas' })
+  // Ruling R-F10: off the whitelist, they leave the wrapper the program, which is not known
+  it('takes command -v, command -V and doas -C for the wrapper, not known', () => {
+    expect(bash('command -v git push')).toMatchObject({ action: 'process.execute', target: 'command', confidence: 'unknown' })
+    expect(bash('command -V rm')).toMatchObject({ action: 'process.execute', target: 'command', confidence: 'unknown' })
+    expect(bash('doas -C /etc/doas.conf rm -rf ../x')).toMatchObject({ action: 'process.execute', target: 'doas', confidence: 'unknown' })
   })
 })
 

@@ -172,13 +172,43 @@ describe('enforceVerdict', () => {
       'env -u X rm -rf ~/x',
       'doas -u root rm -rf /x',
       'env -- rm -rf ~/x',
-      'env -C /tmp rm -rf ~/x',
       'command -p rm -rf ~/x',
       'nohup -- rm -rf ~/x',
-      "env -S 'rm -rf ~/x'",
       'sudo -hhost rm -rf /x'
     ]
     for (const command of lines) expect(verdict(claude('Bash', { command }, { cwd: work })), command).toMatchObject({ deny: true })
+  })
+
+  // Ruling R-F10: an option off a wrapper's whitelist leaves the wrapper the program, not known, as the base read it. So a
+  // write the option makes into Astera's settings folder is the built-in's, and a command it moves, edits or re-splits is
+  // held where the base held it
+  it('holds a wrapper option with a side effect as the base did', () => {
+    const profileWrites = [
+      `/usr/bin/time -f '{"version":1,"mode":"observe","rules":[],"otherwise":"allow"}' -o /home/u/.config/astera/audit-policy.json ls`,
+      '/usr/bin/time -o /home/u/.config/astera/audit-policy.json true',
+      '/usr/bin/time --output=/home/u/.config/astera/audit-policy.json ls',
+      '/usr/bin/time -a -o /home/u/.config/astera/audit-policy.json ls',
+      '\\time -o /home/u/.config/astera/audit-policy.json ls',
+      'command time -o /home/u/.config/astera/audit-policy.json ls',
+      'env time -o /home/u/.config/astera/audit-policy.json ls',
+      'nohup /usr/bin/time -o /home/u/.config/astera/audit-policy.json ls',
+      'bash -c "/usr/bin/time -o /home/u/.config/astera/audit-policy.json ls"',
+      'sudo -e cat /home/u/.config/astera/audit-policy.json',
+      'sudo --edit ls /home/u/.config/astera/audit-policy.json'
+    ]
+    const linux = (command: string, policy: AuditPolicy | null) => verdict(claude('Bash', { command }, { cwd: '/work/proj' }), policy, 'linux', LINUX_PROFILE)
+    for (const command of profileWrites) expect(linux(command, STARTER_POLICY), command).toMatchObject({ deny: true, ruleId: 'builtin-profile-write' })
+    const work = path.resolve('/work/proj')
+    const allows: AuditPolicy = {
+      ...STARTER_POLICY,
+      otherwise: 'deny',
+      rules: [...STARTER_POLICY.rules, { id: 'a1', effect: 'allow', action: 'process.execute' }, { id: 'a2', effect: 'allow', action: 'filesystem.*' }, { id: 'a3', effect: 'allow', action: 'git.*' }]
+    }
+    const moved = ['env -C / rm -rf home/u/.ssh', 'env --chdir=/tmp rm -rf x', 'sudo -i rm -rf .ssh', 'sudo -D /tmp rm -rf x', 'sudo -R /mnt rm -rf x', 'env -S bash -c "git push"']
+    for (const command of moved) {
+      expect(verdict(claude('Bash', { command }, { cwd: work }), allows), command).toMatchObject({ deny: true, ruleId: 'otherwise' })
+      expect(verdict(claude('Bash', { command }, { cwd: work }), null), command).toMatchObject({ deny: true, ruleId: 'fail-closed' })
+    }
   })
 
   // Ruling R-F8: c2 is reverted, so an unquoted substitution glued to another, to a variable or to a word, or given as an
