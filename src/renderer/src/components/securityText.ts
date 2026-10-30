@@ -34,6 +34,8 @@ export const POLICIES_TITLE = 'Policies'
 export const AUDIT_LOGS_TITLE = 'Audit Logs'
 /** The section that keeps keys and logins out of agent sessions (credentials design §5), named like the others. */
 export const CREDENTIALS_TITLE = 'Credentials'
+/** What Astera found that may need the person's attention (lifecycle design §7), named like the others (ruling R8-2). */
+export const FINDINGS_TITLE = 'Findings'
 /** The observe mode and the rules, named in English in every language too (the person, 2026-10-26). */
 export const OBSERVE_NAME = 'Observe'
 export const RULES_TITLE = 'Rules'

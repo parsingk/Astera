@@ -5,7 +5,21 @@ import { t as translate, type Message } from '../../../core/i18n'
 import { finding, infoLine } from '../../../core/findings/make'
 import type { Finding, FindingSubject, FindingsReport } from '../../../core/findings/types'
 import type { JobRow } from '../../../core/types'
-import { GROUP_ORDER, findingGroups, ignoreNote, jobsRowOf, markTitle, openLabelKey, profileMarks, reportOf, subjectName, targetOf, wordsOf } from './findingsText'
+import {
+  GROUP_ORDER,
+  findingGroups,
+  ignoreNote,
+  ignoreOutcome,
+  jobsRowOf,
+  markTitle,
+  openLabelKey,
+  pendingJobStep,
+  profileMarks,
+  reportOf,
+  subjectName,
+  targetOf,
+  wordsOf
+} from './findingsText'
 
 const profile = (id: string, name = id): FindingSubject => ({ kind: 'profile', id, name })
 const say = (key: Message['key'], params?: Message['params']): Message => (params === undefined ? { key } : { key, params })
@@ -192,6 +206,40 @@ describe('where a finding opens (§7: it opens the place, it never acts)', () =>
     expect(jobsRowOf(snapshot, 'run_c2')).toBe('run_c2')
     // In another project's Jobs, or gone
     expect(jobsRowOf(snapshot, 'job_x')).toBeUndefined()
+  })
+})
+
+describe('a Job or Run a finding asked for, in App', () => {
+  const snapshot = { runs: [{ id: 'job_a' } as JobRow, { id: 'job_b', foldedRunId: 'run_b1' } as JobRow] }
+  it('waits for the open project list, then opens its row or says it is not there', () => {
+    expect(pendingJobStep({ id: 'run_b1', jobsShown: true, settingsShown: false, snapshot: null })).toEqual({ do: 'wait' })
+    expect(pendingJobStep({ id: 'run_b1', jobsShown: true, settingsShown: false, snapshot })).toEqual({ do: 'open', row: 'job_b' })
+    expect(pendingJobStep({ id: 'job_x', jobsShown: true, settingsShown: false, snapshot })).toEqual({ do: 'notHere' })
+  })
+
+  it('drops it when the Jobs view left or Settings came back before the list arrived, so no detail opens unasked', () => {
+    expect(pendingJobStep({ id: 'job_a', jobsShown: false, settingsShown: false, snapshot: null })).toEqual({ do: 'drop' })
+    expect(pendingJobStep({ id: 'job_a', jobsShown: true, settingsShown: true, snapshot: null })).toEqual({ do: 'drop' })
+    expect(pendingJobStep({ id: 'job_a', jobsShown: false, settingsShown: false, snapshot })).toEqual({ do: 'drop' })
+  })
+})
+
+describe('what an ignore that came back says (§6)', () => {
+  const en = (key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]): string => translate('en', key, params)
+  it('says nothing when it landed, closes the note and says so for a key no finding has now, and keeps the note on a failure', () => {
+    expect(ignoreOutcome({ ok: true, body: { key: 'k' } }, en)).toEqual({ closeNote: true })
+    expect(ignoreOutcome({ ok: false, code: 'NOT_FOUND', message: 'no current finding has the key k' }, en)).toEqual({
+      closeNote: true,
+      toast: { kind: 'info', line: 'That finding is no longer there. The list was read again.' }
+    })
+    expect(ignoreOutcome({ ok: false, code: 'HOST_NOT_RUNNING', message: 'x' }, en)).toEqual({
+      closeNote: false,
+      toast: { kind: 'error', line: en('settings.plugins.fail.noHost') }
+    })
+    expect(ignoreOutcome({ ok: false, code: 'INVALID_ARGUMENTS', message: 'note must be one line of text' }, en)).toEqual({
+      closeNote: false,
+      toast: { kind: 'error', line: 'note must be one line of text' }
+    })
   })
 })
 

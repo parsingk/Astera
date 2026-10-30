@@ -60,6 +60,9 @@ export interface HostFindings {
     agentRefusal?: string
     marks: { effects: number }
   }): Promise<FindingsAnswer>
+  /** Drops the report kept for the minute (ruling R8-1): the Host calls it after any command that changed something (an
+   *  archive, an edit, a rule, an ignore), so the next request computes from what is there now. */
+  forget(): void
 }
 
 /** What the Host reads besides the profile's own files (lifecycle design §3, §8). */
@@ -268,7 +271,8 @@ export function createHostFindings(d: FindingsDeps): HostFindings {
     return run
   }
 
-  /** After an ignore change: the next request computes afresh, and a compute under way is no longer shared. */
+  /** After a change, an ignore or any other (HostFindings.forget): the next request computes afresh, and a compute under
+   *  way is no longer shared. */
   const forget = (): void => {
     cache = null
     generation += 1
@@ -314,6 +318,7 @@ export function createHostFindings(d: FindingsDeps): HostFindings {
   }
 
   return {
+    forget,
     command: async (a) => {
       if (a.role !== 'app' && a.role !== 'cli') return { status: 403, body: { error: `${a.cmd} is for this machine's app and CLI only` } }
       if (FINDINGS_CHANGES.has(a.cmd) && a.agentRefusal !== undefined) return { status: 403, body: { error: a.agentRefusal } }

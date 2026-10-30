@@ -2313,7 +2313,6 @@ export const ja: Catalog = {
   'findings.source.ignored': '無視した項目',
   'findings.source.settings': 'アプリの設定',
   'findings.source.cli-version': 'Claude Code のバージョン',
-  'findings.title': '見つかった項目',
   'findings.kind.profiles': 'エージェントプロファイル',
   'findings.kind.extensions': '共有の拡張機能',
   'findings.kind.runtimes': 'ペアリングした Runtime',
@@ -2334,5 +2333,5 @@ export const ja: Catalog = {
   'findings.ignoredCount': '無視した項目（{count}）',
   'findings.ignoredNote': 'メモ: {note}',
   'findings.restore': '再表示',
-  'findings.mark': '見つかった項目 {count}'
+  'findings.mark': 'Findings {count}'
 }

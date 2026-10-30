@@ -608,8 +608,9 @@ export function createHostOrch(a: {
   audit?: Pick<HostAudit, 'command'>
   /** The findings (lifecycle design §6, §7, §8): `agent-profiles-audit` and its two ignore commands, for this machine's
    *  app and CLI, routed like the credentials and ahead of the agent profiles, whose names they share the start of; an
-   *  agent's shell may read them and changes no ignore. Absent: all three answer 501. */
-  findings?: Pick<HostFindings, 'command'>
+   *  agent's shell may read them and changes no ignore. Absent: all three answer 501. Its report is dropped after any
+   *  call that changed something (ruling R8-1), so the section and the profile marks never show a minute of the past. */
+  findings?: Pick<HostFindings, 'command' | 'forget'>
   /** Session work units in the Host (E2 §5), asked per call: `index.ts` builds them after this orch (their
    *  in-Run test reads its state). Passed through to `hostOrchDeps` (HOST_TRACKS), and the app only
    *  `work-units-fork`, `-reload`, `-complete`, `-cancel` and `-git-op`. Absent, or null (no spawner, so no
@@ -2212,6 +2213,11 @@ export function createHostOrch(a: {
         const reply = failureOf(err, marks)
         if (observing) return { ...settleObserved(observing, cmd, observing.recorded, reply), observed: true }
         return claimed === null ? reply : settleRequest(claimed, cmd, marks, reply)
+      } finally {
+        // A call that changed something (an archive, an edit, a rule, a server switched off) leaves the findings' report
+        // of a minute ago behind it (ruling R8-1). Effects only: a Run's commits come with every step it takes, and the
+        // report would then never be kept at all (Review Focus 5).
+        if (marks.effects > 0) a.findings?.forget()
       }
     }
   }

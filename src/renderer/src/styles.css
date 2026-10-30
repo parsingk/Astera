@@ -1307,6 +1307,9 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .findings-mark { margin-right: 12px; border: 0; cursor: pointer; }
 .findings-mark:hover { color: var(--accent); }
 .ext-row.is-focused > .agent-profile-head { background: var(--line-soft); box-shadow: inset var(--marker-w) 0 0 var(--accent); }
+/* A pill's --elevated vanishes against that --line-soft (seen on the hidden desktop): on a marked row it takes the page's
+   background and an edge, so the findings mark and the archived date still read as pills */
+.ext-row.is-focused .plugin-status { background: var(--bg); box-shadow: inset 0 0 0 1px var(--line); }
 /* Settings › Security & Access (observe mode design §11): two sections under English headings, Policies (the switch, what
    observe can see, the rules) and Audit Logs (the counts, the filters, the rows). Only the tokens the other settings use. */
 .security-section { display: flex; flex-direction: column; gap: 16px; }

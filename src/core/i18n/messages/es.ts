@@ -2277,7 +2277,7 @@ export const es: Catalog = {
   'findings.reason.profileGone': 'Se ejecuta con el perfil de agente {id}, que ya no existe.',
   'findings.reason.profileArchived': 'Se ejecuta con el perfil de agente {name}, que está archivado.',
   'findings.reason.failingProfile': 'Fallaron {failed} de sus {total} inicios de trabajo en 30 días. El último fallo fue en {run}.',
-  'findings.reason.tokenSpike': 'Usó {total} tokens, {times} veces la mediana de {median} de {group}.',
+  'findings.reason.tokenSpike': 'Usó {total} tokens, {times} veces la mediana de {median} para {group}.',
   'findings.reason.pair': '{first} {second}',
   'findings.reason.unusedMcp': 'Ninguna sesión lo llamó en {days} días.',
   'findings.reason.coverageGap': 'La regla {rule} deniega {action}, y las sesiones de {cli} solo lo ven en parte: {coverage}.',
@@ -2343,7 +2343,6 @@ export const es: Catalog = {
   'findings.source.ignored': 'hallazgos ignorados',
   'findings.source.settings': 'ajustes de la app',
   'findings.source.cli-version': 'versión de Claude Code',
-  'findings.title': 'Hallazgos',
   'findings.kind.profiles': 'Perfiles de agente',
   'findings.kind.extensions': 'Extensiones compartidas',
   'findings.kind.runtimes': 'Runtimes emparejados',
@@ -2364,5 +2363,5 @@ export const es: Catalog = {
   'findings.ignoredCount': 'Ignorados ({count})',
   'findings.ignoredNote': 'Nota: {note}',
   'findings.restore': 'Mostrar de nuevo',
-  'findings.mark': 'Hallazgos {count}'
+  'findings.mark': 'Findings {count}'
 }

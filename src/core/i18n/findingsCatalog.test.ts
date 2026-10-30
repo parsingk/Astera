@@ -1,7 +1,7 @@
 // Findings speak in every language the app does (lifecycle design §7). ko is the source: a key it has under `findings.`,
 // every language has, so a new string cannot fall back to English.
 import { describe, it, expect } from 'vitest'
-import { CATALOGS, LANGS } from './index'
+import { CATALOGS, LANGS, t as translate } from './index'
 import { SOURCE_KEYS } from '../findings/note'
 import type { FindingSource } from '../findings/types'
 
@@ -57,31 +57,31 @@ describe('the findings catalog', () => {
       'findings.reason.unusedMcp': ['No session called it in {days} days.', '{days}일 동안 어느 세션도 부르지 않았습니다.'],
       'findings.reason.coverageGap': [
         'Rule {rule} denies {action}, and {cli} sessions see it only in part: {coverage}.',
-        '규칙 {rule}은 {action}을 거부하지만, {cli} 세션에서는 일부만 보입니다: {coverage}.'
+        '규칙 {rule}은(는) {action}을(를) 거부하지만, {cli} 세션에서는 일부만 보입니다: {coverage}.'
       ],
       'findings.reason.coverageGapEnforce': [
         'Rule {rule} denies {action}, and {cli} sessions can block it only in part: {coverage}.',
-        '규칙 {rule}은 {action}을 거부하지만, {cli} 세션에서는 일부만 막을 수 있습니다: {coverage}.'
+        '규칙 {rule}은(는) {action}을(를) 거부하지만, {cli} 세션에서는 일부만 막을 수 있습니다: {coverage}.'
       ],
       // A cell with a level only (fix round 1, Minor 1): no word after a colon, and `none` is never "in part"
       'findings.reason.coverageGapPart': [
         'Rule {rule} denies {action}, and {cli} sessions see it only in part.',
-        '규칙 {rule}은 {action}을 거부하지만, {cli} 세션에서는 일부만 보입니다.'
+        '규칙 {rule}은(는) {action}을(를) 거부하지만, {cli} 세션에서는 일부만 보입니다.'
       ],
-      'findings.reason.coverageGapNone': ['Rule {rule} denies {action}, and {cli} sessions do not see it.', '규칙 {rule}은 {action}을 거부하지만, {cli} 세션에서는 보이지 않습니다.'],
+      'findings.reason.coverageGapNone': ['Rule {rule} denies {action}, and {cli} sessions do not see it.', '규칙 {rule}은(는) {action}을(를) 거부하지만, {cli} 세션에서는 보이지 않습니다.'],
       'findings.reason.coverageGapEnforcePart': [
         'Rule {rule} denies {action}, and {cli} sessions can block it only in part.',
-        '규칙 {rule}은 {action}을 거부하지만, {cli} 세션에서는 일부만 막을 수 있습니다.'
+        '규칙 {rule}은(는) {action}을(를) 거부하지만, {cli} 세션에서는 일부만 막을 수 있습니다.'
       ],
       'findings.reason.coverageGapEnforceNone': [
         'Rule {rule} denies {action}, and {cli} sessions cannot block it.',
-        '규칙 {rule}은 {action}을 거부하지만, {cli} 세션에서는 막을 수 없습니다.'
+        '규칙 {rule}은(는) {action}을(를) 거부하지만, {cli} 세션에서는 막을 수 없습니다.'
       ],
       'findings.reason.staleRuntime': ['Not reached in {days} days.', '{days}일 동안 연결되지 않았습니다.'],
       'findings.reason.staleRuntimeNever': ['Never reached since it was paired {days} days ago.', '연결한 지 {days}일이 지났지만 한 번도 닿지 않았습니다.'],
       'findings.reason.unmanagedReference': [
         'Passes {names} from the session, which the Credentials list does not name.',
-        '세션의 {names}를 넘기는데, Credentials 목록에 없는 이름입니다.'
+        '세션의 {names}을(를) 넘기는데, Credentials 목록에 없는 이름입니다.'
       ],
       'findings.reason.staleCredential': ['Its stored secret was not used in {days} days.', '저장한 비밀값을 {days}일 동안 쓰지 않았습니다.'],
       'findings.do.disableMcp': ['Turn it off or remove it.', '끄거나 삭제하세요.'],
@@ -109,10 +109,10 @@ describe('the findings catalog', () => {
         'Runs outside the sandbox, but in {days} days it wrote only inside its folder and never touched a login folder.',
         '샌드박스 밖에서 실행하지만, {days}일 동안 작업 폴더 안에만 썼고 로그인 정보 폴더는 건드리지 않았습니다.'
       ],
-      'findings.reason.overBroadMcp': ['Gets MCP server {server} but did not call it in {days} days.', 'MCP 서버 {server}를 받지만 {days}일 동안 부르지 않았습니다.'],
+      'findings.reason.overBroadMcp': ['Gets MCP server {server} but did not call it in {days} days.', 'MCP 서버 {server}을(를) 받지만 {days}일 동안 부르지 않았습니다.'],
       'findings.do.askPermission': ['Run it with permission checks.', '권한을 확인하며 실행하게 바꾸세요.'],
       'findings.do.sandboxOn': ['Turn its sandbox on.', '샌드박스를 켜세요.'],
-      'findings.do.excludeMcp': ['Leave {server} out of the profile.', '프로필에서 {server}를 빼세요.']
+      'findings.do.excludeMcp': ['Leave {server} out of the profile.', '프로필에서 {server}을(를) 빼세요.']
     }
     for (const [key, [english, korean]] of Object.entries(copy)) {
       expect(en[key], key).toBe(english)
@@ -186,7 +186,6 @@ describe('the findings catalog', () => {
     const en = CATALOGS.en.messages as Record<string, string>
     const ko = CATALOGS.ko.messages as Record<string, string>
     const copy: Record<string, [string, string]> = {
-      'findings.title': ['Findings', '발견한 것'],
       'findings.ignore': ['Ignore', '무시'],
       'findings.ignoredCount': ['Ignored ({count})', '무시함 ({count})'],
       'findings.restore': ['Show again', '다시 보기'],
@@ -195,13 +194,39 @@ describe('the findings catalog', () => {
       'findings.open.run': ['Open Run', 'Run 열기'],
       'findings.open.extension': ['Open MCP & Skills', `${ko['settings.tab.extensions']} 열기`],
       'findings.open.policies': ['Open Policies', 'Policies 열기'],
-      'findings.open.runtimes': ['Open Remote', `${ko['settings.tab.remote']} 열기`],
+      'findings.open.runtimes': ['Open Remote Runtimes', `${ko['settings.tab.remote']} 열기`],
       'findings.open.credentials': ['Open Credentials', 'Credentials 열기']
     }
     for (const [key, [english, korean]] of Object.entries(copy)) {
       expect(en[key], key).toBe(english)
       expect(ko[key], key).toBe(korean)
     }
+  })
+
+  // Ruling R8-2: Findings is named in English in every language, as Policies, Credentials and Audit Logs are; the section
+  // title is a constant (securityText.ts), so no language holds a title of its own
+  it('says Findings in English on the mark in every language, and keeps no translated title', () => {
+    for (const lang of LANGS) {
+      const m = CATALOGS[lang].messages as Record<string, string | undefined>
+      expect(m['findings.mark'], lang).toBe('Findings {count}')
+      expect(m['findings.title'], lang).toBeUndefined()
+    }
+  })
+
+  // Ruling R8-3: a Korean particle after a placeholder whose last letter varies is written for both endings
+  it('writes both Korean particles after a name, a rule or an action whose last letter varies', () => {
+    const ko = CATALOGS.ko.messages as Record<string, string>
+    expect(ko['findings.reason.profileGone']).toBe('에이전트 프로필 {id}(으)로 실행하는데, 그 프로필이 없습니다.')
+    expect(ko['findings.reason.profileArchived']).toBe('에이전트 프로필 {name}(으)로 실행하는데, 그 프로필은 보관되어 있습니다.')
+    // No placeholder is followed by a bare 은, 는, 을, 를, 이, 가, 으로 or 로
+    expect(keysOf().filter((k) => /\}(은|는|을|를|이|가|으로|로)(?![(가-힣])/.test(ko[k]))).toEqual([])
+  })
+
+  // Minor: es words the token spike's group after "para", as en says "for": "de el perfil" is not Spanish
+  it('says the token spike group in Spanish without "de el"', () => {
+    const es = CATALOGS.es.messages as Record<string, string>
+    expect(es['findings.reason.tokenSpike']).toMatch(/para \{group\}/)
+    expect(translate('es', 'findings.reason.tokenSpike', { total: 9, median: 3, times: 3, group: { key: 'findings.group.profile', params: { name: 'Reviewer' } } })).not.toMatch(/de el /)
   })
 
   // Every source a report can name has a plain name, in every language (Task 8 shows them on screen)

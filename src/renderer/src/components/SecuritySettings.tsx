@@ -32,6 +32,7 @@ import {
   COVERAGE_CLASSES,
   CREDENTIALS_TITLE,
   DECISIONS,
+  FINDINGS_TITLE,
   modeLabel,
   coverageTitle,
   enforcePreviewBody,
@@ -417,7 +418,7 @@ export function SecuritySettings({
         )}
       </section>
       <section className="security-section" ref={findingsSection}>
-        <h3 className="security-title">{t('findings.title')}</h3>
+        <h3 className="security-title">{FINDINGS_TITLE}</h3>
         <FindingsSection onOpen={openPlace} />
       </section>
       <section className="security-section" ref={credentialsSection}>

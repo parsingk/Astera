@@ -11,6 +11,7 @@ import {
   DECISIONS,
   OBSERVE_NAME,
   POLICIES_TITLE,
+  FINDINGS_TITLE,
   RULES_TITLE,
   RULE_ACTION_CHOICES,
   SECURITY_KEYS,
@@ -136,9 +137,11 @@ describe('securityText', () => {
     for (const lang of LANGS) expect(translate(lang, 'settings.security.hint'), lang).not.toMatch(/막지|never blocks|ブロックしません|bloquea/)
   })
 
-  // The constraints: the tab and its two sections keep the names the person chose, in English in every language
+  // The constraints: the tab and its sections keep the names the person chose, in English in every language; Findings
+  // too (ruling R8-2)
   it('names the tab and its sections in English', () => {
-    expect([SECURITY_TAB, POLICIES_TITLE, AUDIT_LOGS_TITLE]).toEqual(['Security & Access', 'Policies', 'Audit Logs'])
+    expect([SECURITY_TAB, POLICIES_TITLE, FINDINGS_TITLE, AUDIT_LOGS_TITLE]).toEqual(['Security & Access', 'Policies', 'Findings', 'Audit Logs'])
+    expect(source('SecuritySettings.tsx')).toContain('<h3 className="security-title">{FINDINGS_TITLE}</h3>')
     const app = source('../App.tsx')
     expect(app).toContain("['security', SECURITY_TAB]")
     // After Agent profiles

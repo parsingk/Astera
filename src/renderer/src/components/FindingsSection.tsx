@@ -6,7 +6,7 @@ import { observeNote, unreadLine } from '../../../core/findings/note'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
 import { failureLine } from './extensionsText'
-import { GROUP_KEYS, IGNORE_NOTE_MAX, findingGroups, ignoreNote, markTitle, openLabelKey, reportOf, subjectName, wordsOf } from './findingsText'
+import { GROUP_KEYS, IGNORE_NOTE_MAX, findingGroups, ignoreNote, ignoreOutcome, markTitle, openLabelKey, reportOf, subjectName, wordsOf } from './findingsText'
 
 type Failure = Extract<PluginsCallAnswer, { ok: false }>
 /** The finding whose Ignore asks for its note, and the note typed so far. */
@@ -49,13 +49,9 @@ export function FindingsSection({ onOpen }: { onOpen: (p: FindingPlace) => void 
     if (busy) return
     setBusy(true)
     try {
-      const r = await work().catch(failed)
-      if (r.ok) setDraft(null)
-      else if (r.code === 'NOT_FOUND') {
-        // The report changed since it was read (the finding resolved, or its subject went): it is read again below
-        setDraft(null)
-        toast.info(t('findings.ignoreGone'))
-      } else toast.error(failureLine(r, t))
+      const out = ignoreOutcome(await work().catch(failed), t)
+      if (out.closeNote) setDraft(null)
+      if (out.toast !== undefined) toast[out.toast.kind](out.toast.line)
     } finally {
       await load()
       setBusy(false)

@@ -81,6 +81,8 @@ export function AgentProfilesSettings({
       return next
     })
 
+  /** Which marks read is the latest (load, below). */
+  const markReading = useRef(0)
   const load = async (): Promise<void> => {
     const r = await window.api.agentProfiles.list().catch(failed)
     if (!r.ok) return void setListFailure(r)
@@ -96,9 +98,12 @@ export function AgentProfilesSettings({
           .filter((e) => e.kind === 'mcp' && typeof e.id === 'string')
           .map((e) => ({ id: e.id as string, name: typeof e.name === 'string' ? e.name : (e.id as string), off: e.enabled !== true }))
       )
-    // The marks, read when the tab opens and after each change here (the Host holds a report for a minute, §8); a
-    // failure leaves no mark rather than a wrong one, and Security & Access › Findings says why
+    // The marks, read when the tab opens and after each change here (the Host drops its report after a change, ruling
+    // R8-1); a failure leaves no mark rather than a wrong one, and Security & Access › Findings says why. Only the latest
+    // read is shown: a slower answer to an earlier one would bring back a mark the change took away
+    const n = ++markReading.current
     const found = await window.api.findings.list().catch(failed)
+    if (n !== markReading.current) return
     const report = found.ok ? reportOf(found.body) : null
     setMarks(report === null ? new Map() : profileMarks(report))
   }

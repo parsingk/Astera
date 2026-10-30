@@ -248,6 +248,22 @@ describe('the findings commands', () => {
     expect(vi.mocked(visitRecords).mock.calls.length).toBe(once[2] + 1)
   })
 
+  // Ruling R8-1: any change the Host answered (an archive, an edit, a rule) drops the report, so a mark or the section
+  // never shows a minute of what was just changed
+  it('forget drops the report: the next audit within the minute computes afresh', async () => {
+    const h = createHostFindings(deps().d)
+    await audit(h)
+    const once = vi.mocked(readAgentProfiles).mock.calls.length
+    clock = NOW + 1_000
+    h.forget()
+    const again = await audit(h)
+    expect(vi.mocked(readAgentProfiles).mock.calls.length).toBe(once + 1)
+    expect(body(again).computedAt).toBe(iso(NOW + 1_000))
+    // And it is kept again from there
+    clock = NOW + 2_000
+    expect(body(await audit(h)).computedAt).toBe(iso(NOW + 1_000))
+  })
+
   it('two requests at once share one compute', async () => {
     const h = createHostFindings(deps().d)
     const [a, b] = await Promise.all([audit(h), audit(h)])

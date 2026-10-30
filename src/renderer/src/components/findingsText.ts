@@ -5,8 +5,11 @@
 import { CATALOGS, type Message, type MessageKey, type MessageParams } from '../../../core/i18n'
 import type { CoverageRow } from '../../../core/audit/types'
 import type { Finding, FindingPlace, FindingRule, FindingSource, FindingSubject, FindingsReport, InfoLine, SubjectKind } from '../../../core/findings/types'
-import type { OrchSnapshot } from '../../../core/types'
+import type { OrchSnapshot, PluginsCallAnswer } from '../../../core/types'
+import { failureLine } from './extensionsText'
 import { coverageRowLabel } from './securityText'
+
+type T = (key: MessageKey, params?: MessageParams) => string
 
 /** The section's groups, in the order §7 lists the subject kinds, a coverage gap's CLI last. */
 export const GROUP_ORDER = ['profiles', 'extensions', 'runtimes', 'credentials', 'jobs', 'clis'] as const
@@ -49,7 +52,7 @@ const CLI_SUBJECT = /^(claude|codex)-(terminal|chat)$/
 
 /** How the section names a subject: a coverage gap's CLI and session kind as Policies labels its row, in the person's
  *  language (the Host names it in English for the CLI); any other as the Host named it. */
-export function subjectName(s: FindingSubject, t: (key: MessageKey, params?: MessageParams) => string): string {
+export function subjectName(s: FindingSubject, t: T): string {
   const cli = s.kind === 'cli' ? CLI_SUBJECT.exec(s.id) : null
   return cli === null ? s.name : coverageRowLabel({ provider: cli[1] as CoverageRow['provider'], kind: cli[2] as CoverageRow['kind'] }, t)
 }
@@ -96,6 +99,33 @@ export function jobsRowOf(snapshot: Pick<OrchSnapshot, 'runs'>, id: string): str
     if (fire !== undefined) return fire.id
   }
   return undefined
+}
+
+/** What App does, at each render, with the Job or Run a finding's button asked for (§7). It waits for the open project's
+ *  list, opens the row that holds it as a click on that row does, or says it is not there (another project's Job, or one
+ *  gone since): a detail opened on a row the list does not have would close at once (detailRunGone). It drops the ask
+ *  when the Jobs view left or Settings came back before the list arrived, so no detail opens later unasked. */
+export function pendingJobStep(a: {
+  id: string
+  /** The Jobs view is on screen: its view is chosen and the sidebar is open. */
+  jobsShown: boolean
+  settingsShown: boolean
+  /** The open project's list; null while it is read. */
+  snapshot: Pick<OrchSnapshot, 'runs'> | null
+}): { do: 'wait' } | { do: 'drop' } | { do: 'notHere' } | { do: 'open'; row: string } {
+  if (!a.jobsShown || a.settingsShown) return { do: 'drop' }
+  if (a.snapshot === null) return { do: 'wait' }
+  const row = jobsRowOf(a.snapshot, a.id)
+  return row === undefined ? { do: 'notHere' } : { do: 'open', row }
+}
+
+/** What an ignore or a Show again that came back says (§6). Nothing when it landed. A key no current finding has (the
+ *  Host's 404: the report changed since it was read) closes the note and says so. Any other failure keeps the note and
+ *  says why. The section reads the report again either way. */
+export function ignoreOutcome(r: PluginsCallAnswer, t: T): { closeNote: boolean; toast?: { kind: 'info' | 'error'; line: string } } {
+  if (r.ok) return { closeNote: true }
+  if (r.code === 'NOT_FOUND') return { closeNote: true, toast: { kind: 'info', line: t('findings.ignoreGone') } }
+  return { closeNote: false, toast: { kind: 'error', line: failureLine(r, t) } }
 }
 
 /** The rules the Agent profiles mark counts (ruling 7): a profile's own findings. A coverage gap is its CLI's, and would

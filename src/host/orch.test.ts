@@ -1286,8 +1286,29 @@ describe('findings', () => {
   const answering = () => {
     const seen: { cmd: string; role?: string; agentRefusal?: string }[] = []
     const command = async (a: { cmd: string; role?: string; agentRefusal?: string }) => (seen.push(a), { status: 200, body: { ok: true } })
-    return { seen, findings: { command } }
+    let forgot = 0
+    return { seen, forgot: () => forgot, findings: { command, forget: () => void (forgot += 1) } }
   }
+
+  // Ruling R8-1: a mark or the section never shows a minute of what a change just changed
+  it('a call that changed something drops the findings report; a read and a refusal do not', async () => {
+    const f = answering()
+    const agentProfiles = {
+      command: async (a: { cmd: string; marks: { effects: number } }) => {
+        if (a.cmd === 'agent-profiles-archive') {
+          a.marks.effects += 1
+          return { status: 200, body: { ok: true } }
+        }
+        return a.cmd === 'agent-profiles-delete' ? { status: 409, body: { error: 'in use' } } : { status: 200, body: { profiles: [] } }
+      }
+    }
+    const orch = orchOver({ findings: f.findings, agentProfiles })
+    await orch.call({ cmd: 'agent-profiles-list', args: {}, sessionId: '', from: cli })
+    await orch.call({ cmd: 'agent-profiles-delete', args: { id: 'ap_1' }, sessionId: '', from: cli })
+    expect(f.forgot()).toBe(0)
+    await orch.call({ cmd: 'agent-profiles-archive', args: { id: 'ap_1' }, sessionId: '', from: cli })
+    expect(f.forgot()).toBe(1)
+  })
 
   it('is refused to MCP, a controller and a plugin by their gates, before the findings are asked', async () => {
     const f = answering()
