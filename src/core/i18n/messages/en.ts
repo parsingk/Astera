@@ -2525,6 +2525,9 @@ export const en: Record<keyof typeof ko, string> = {
   'findings.reason.staleRuntimeNever': 'Never reached since it was paired {days} days ago.',
   'findings.reason.unmanagedReference': 'Passes {names} from the session, which the Credentials list does not name.',
   'findings.reason.staleCredential': 'Its stored secret was not used in {days} days.',
+  'findings.reason.overBroadBypass': 'Runs without permission checks, but every call it made in {days} days only read.',
+  'findings.reason.overBroadSandbox': 'Runs outside the sandbox, but in {days} days it wrote only inside its folder and never touched a login folder.',
+  'findings.reason.overBroadMcp': 'Gets MCP server {server} but did not call it in {days} days.',
   'findings.group.profile': 'agent profile {name}',
   'findings.group.account': 'account {id}',
   'findings.do.archiveProfile': 'Archive the profile.',
@@ -2537,5 +2540,8 @@ export const en: Record<keyof typeof ko, string> = {
   'findings.do.openPolicies': 'Open Policies.',
   'findings.do.removePairing': 'Remove the pairing.',
   'findings.do.addCredential': 'Add it to the Credentials list, or store it with the server.',
-  'findings.do.removeSecret': 'Remove the stored value, or the server.'
+  'findings.do.removeSecret': 'Remove the stored value, or the server.',
+  'findings.do.askPermission': 'Run it with permission checks.',
+  'findings.do.sandboxOn': 'Turn its sandbox on.',
+  'findings.do.excludeMcp': 'Leave {server} out of the profile.'
 }

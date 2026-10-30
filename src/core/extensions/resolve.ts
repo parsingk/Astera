@@ -55,6 +55,15 @@ export interface SessionCapabilities {
 const literal = (v: string): string => `'${v}'`
 const BARE_KEY = /^[A-Za-z0-9_-]+$/
 
+/** Whether Codex can be given `server` on its command line: it reads the server's name as a TOML key and a remote address
+ *  and the tool lists as literals, on Windows through cmd.exe. The over-broad finding asks the same of what a Codex
+ *  profile gets (lifecycle design §4.10). */
+export function codexCanLaunch(server: McpExtension, platform: NodeJS.Platform): boolean {
+  const url = server.transport === 'stdio' ? '' : (server.url ?? '')
+  const texts = [url, ...(server.options?.enabledTools ?? []), ...(server.options?.disabledTools ?? [])]
+  return BARE_KEY.test(server.name) && !texts.some((t) => t.includes("'") || (platform === 'win32' && LAUNCH_FORBIDDEN.test(t)))
+}
+
 /** The names Host and sessions agree on (host/gateway/tokens.ts reads them). */
 export const GATEWAY_TOKEN_ENV = 'ASTERA_GATEWAY_TOKEN'
 export const GATEWAY_GRANT_ENV = 'ASTERA_GATEWAY_GRANT'
@@ -133,14 +142,9 @@ export async function resolveSessionCapabilities(a: {
       out.skipped.push({ name: server.name, reason: 'gateway-unavailable' })
       continue
     }
-    // Codex reads the server's name as a TOML key and a remote address as a literal, on Windows through cmd.exe
-    if (provider === 'codex') {
-      const url = server.transport === 'stdio' ? '' : (server.url ?? '')
-      const texts = [url, ...(server.options?.enabledTools ?? []), ...(server.options?.disabledTools ?? [])]
-      if (!BARE_KEY.test(server.name) || texts.some((t) => t.includes("'") || (a.platform === 'win32' && LAUNCH_FORBIDDEN.test(t)))) {
-        out.skipped.push({ name: server.name, reason: 'launch-chars' })
-        continue
-      }
+    if (provider === 'codex' && !codexCanLaunch(server, a.platform)) {
+      out.skipped.push({ name: server.name, reason: 'launch-chars' })
+      continue
     }
     usable.push(server)
   }

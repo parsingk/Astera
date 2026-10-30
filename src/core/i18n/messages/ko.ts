@@ -2779,6 +2779,9 @@ export const ko = {
   'findings.reason.staleRuntimeNever': '연결한 지 {days}일이 지났지만 한 번도 닿지 않았습니다.',
   'findings.reason.unmanagedReference': '세션의 {names}를 넘기는데, Credentials 목록에 없는 이름입니다.',
   'findings.reason.staleCredential': '저장한 비밀값을 {days}일 동안 쓰지 않았습니다.',
+  'findings.reason.overBroadBypass': '권한 확인 없이 실행하지만, {days}일 동안 한 호출은 모두 읽기였습니다.',
+  'findings.reason.overBroadSandbox': '샌드박스 밖에서 실행하지만, {days}일 동안 작업 폴더 안에만 썼고 로그인 정보 폴더는 건드리지 않았습니다.',
+  'findings.reason.overBroadMcp': 'MCP 서버 {server}를 받지만 {days}일 동안 부르지 않았습니다.',
   'findings.group.profile': '에이전트 프로필 {name}',
   'findings.group.account': '계정 {id}',
   'findings.do.archiveProfile': '프로필을 보관하세요.',
@@ -2791,5 +2794,8 @@ export const ko = {
   'findings.do.openPolicies': 'Policies를 열어 보세요.',
   'findings.do.removePairing': '연결을 삭제하세요.',
   'findings.do.addCredential': 'Credentials 목록에 넣거나 서버에 저장하세요.',
-  'findings.do.removeSecret': '저장한 값이나 서버를 삭제하세요.'
+  'findings.do.removeSecret': '저장한 값이나 서버를 삭제하세요.',
+  'findings.do.askPermission': '권한을 확인하며 실행하게 바꾸세요.',
+  'findings.do.sandboxOn': '샌드박스를 켜세요.',
+  'findings.do.excludeMcp': '프로필에서 {server}를 빼세요.'
 } as const

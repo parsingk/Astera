@@ -57,7 +57,7 @@ describe('computeFindings', () => {
     expect(r.findings.map((f) => f.rule)).toEqual(['duplicate-profile'])
     // Four rows need the orchestration state; it is named once. The policy is unread too: the report's Observe history
     // comes from it
-    expect([...r.unread].sort()).toEqual(['accounts', 'credential-uses', 'credentials', 'extensions', 'orchestration', 'policy', 'records', 'runtimes', 'tokens'])
+    expect([...r.unread].sort()).toEqual(['accounts', 'credential-uses', 'credentials', 'extensions', 'orchestration', 'policy', 'records', 'runtimes', 'settings', 'tokens'])
     expect(r).toMatchObject({ info: [], computedAt: new Date(NOW).toISOString() })
 
     // Read, the same profiles are also unused
@@ -66,6 +66,7 @@ describe('computeFindings', () => {
         ...BASE,
         profiles,
         accounts: [{ id: 'acc_1', provider: 'claude' }],
+        appBypass: false,
         registry: [],
         orch: emptyState(),
         spent: [],
@@ -140,6 +141,35 @@ describe('computeFindings', () => {
     without('registry', 'extensions', ['stale-credential', 'unmanaged-credential-reference', 'unused-mcp'])
     without('observe', 'policy', ['coverage-gap', 'unused-mcp'])
     without('accounts', 'accounts', ['coverage-gap'])
+  })
+
+  it('the over-broad row runs on its sources, and any one of them unread drops it', () => {
+    const observed = emptyUse()
+    observed.byProfile.set('ap_a', { calls: 12, allRead: true, stayedInFolder: false, mcpServers: new Set() })
+    const read: FindingInputs = {
+      ...BASE,
+      profiles: [prof('ap_a', { accountIds: ['acc_codex'], permission: 'inherit' })],
+      accounts: [{ id: 'acc_codex', provider: 'codex' }],
+      appBypass: true,
+      policy: { version: 1, mode: 'observe', rules: [], otherwise: 'allow' },
+      observe: { on: true, days: 30 },
+      observed,
+      registry: []
+    }
+    expect(computeFindings(read, NONE).findings.map((f) => f.key)).toEqual(['over-broad-profile:ap_a:bypass'])
+    const sources: Array<[keyof FindingInputs, string]> = [
+      ['profiles', 'profiles'],
+      ['accounts', 'accounts'],
+      ['observed', 'records'],
+      ['observe', 'policy'],
+      ['registry', 'extensions'],
+      ['appBypass', 'settings']
+    ]
+    for (const [field, source] of sources) {
+      const r = computeFindings({ ...read, [field]: undefined }, NONE)
+      expect(r.findings.filter((f) => f.rule === 'over-broad-profile'), field).toEqual([])
+      expect(r.unread, field).toContain(source)
+    }
   })
 
   it('null is a value and undefined is unread (ruling R-P1)', () => {

@@ -2290,6 +2290,9 @@ export const es: Catalog = {
   'findings.reason.staleRuntimeNever': 'No se ha conectado nunca desde que se emparejó hace {days} días.',
   'findings.reason.unmanagedReference': 'Pasa {names} de la sesión, nombres que la lista de Credentials no incluye.',
   'findings.reason.staleCredential': 'Su secreto guardado no se usó en {days} días.',
+  'findings.reason.overBroadBypass': 'Se ejecuta sin comprobar permisos, pero todas las llamadas que hizo en {days} días solo leyeron.',
+  'findings.reason.overBroadSandbox': 'Se ejecuta fuera del sandbox, pero en {days} días solo escribió dentro de su carpeta y nunca tocó una carpeta de inicio de sesión.',
+  'findings.reason.overBroadMcp': 'Recibe el servidor MCP {server}, pero no lo llamó en {days} días.',
   'findings.group.profile': 'el perfil de agente {name}',
   'findings.group.account': 'la cuenta {id}',
   'findings.do.archiveProfile': 'Archive el perfil.',
@@ -2302,5 +2305,8 @@ export const es: Catalog = {
   'findings.do.openPolicies': 'Abra Policies.',
   'findings.do.removePairing': 'Elimine el emparejamiento.',
   'findings.do.addCredential': 'Añádalo a la lista de Credentials o guárdelo con el servidor.',
-  'findings.do.removeSecret': 'Elimine el valor guardado o el servidor.'
+  'findings.do.removeSecret': 'Elimine el valor guardado o el servidor.',
+  'findings.do.askPermission': 'Ejecútelo comprobando permisos.',
+  'findings.do.sandboxOn': 'Active su sandbox.',
+  'findings.do.excludeMcp': 'Deje {server} fuera del perfil.'
 }

@@ -2260,6 +2260,9 @@ export const ja: Catalog = {
   'findings.reason.staleRuntimeNever': 'ペアリングしてから {days} 日たちましたが、一度も接続されていません。',
   'findings.reason.unmanagedReference': 'セッションの {names} を渡していますが、Credentials リストにない名前です。',
   'findings.reason.staleCredential': '保存した秘密の値が {days} 日間使われていません。',
+  'findings.reason.overBroadBypass': '権限確認なしで実行していますが、{days} 日間の呼び出しはすべて読み取りでした。',
+  'findings.reason.overBroadSandbox': 'サンドボックスの外で実行していますが、{days} 日間、書き込みは作業フォルダーの中だけで、ログイン情報のフォルダーには触れていません。',
+  'findings.reason.overBroadMcp': 'MCP サーバー {server} を受け取っていますが、{days} 日間呼び出していません。',
   'findings.group.profile': 'エージェントプロファイル {name}',
   'findings.group.account': 'アカウント {id}',
   'findings.do.archiveProfile': 'プロファイルをアーカイブしてください。',
@@ -2272,5 +2275,8 @@ export const ja: Catalog = {
   'findings.do.openPolicies': 'Policies を開いてください。',
   'findings.do.removePairing': 'ペアリングを削除してください。',
   'findings.do.addCredential': 'Credentials リストに追加するか、サーバーに保存してください。',
-  'findings.do.removeSecret': '保存した値かサーバーを削除してください。'
+  'findings.do.removeSecret': '保存した値かサーバーを削除してください。',
+  'findings.do.askPermission': '権限を確認して実行するように変えてください。',
+  'findings.do.sandboxOn': 'サンドボックスをオンにしてください。',
+  'findings.do.excludeMcp': 'プロファイルから {server} を外してください。'
 }

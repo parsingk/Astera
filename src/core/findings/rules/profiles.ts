@@ -21,7 +21,7 @@ export const FAILING_MIN_DISPATCHES = 5
 export const FAILING_WINDOW_DAYS = 30
 
 /** A finding about one profile: it is the subject, and the button opens it. */
-const aboutProfile = (p: AgentProfile): { subject: Finding['subject']; profileIds: string[]; open: FindingPlace } => ({
+export const aboutProfile = (p: AgentProfile): { subject: Finding['subject']; profileIds: string[]; open: FindingPlace } => ({
   subject: { kind: 'profile', id: p.id, name: p.name },
   profileIds: [p.id],
   open: { kind: 'profiles', profileIds: [p.id] }

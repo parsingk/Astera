@@ -46,7 +46,7 @@ const actionWord = (action: string): Message | string => {
 }
 
 /** The CLI a profile runs: its first account that is still an account. None when every one was removed. */
-function cliOf(p: AgentProfile, accounts: ReadonlyMap<string, Provider>): Provider | undefined {
+export function cliOf(p: AgentProfile, accounts: ReadonlyMap<string, Provider>): Provider | undefined {
   for (const id of p.accountIds) {
     const provider = accounts.get(id)
     if (provider !== undefined) return provider

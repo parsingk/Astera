@@ -93,4 +93,28 @@ describe('the findings catalog', () => {
       expect(ko[key], key).toBe(korean)
     }
   })
+
+  // §4.10: the copy the plan gives for each line of an over-broad profile
+  it('keeps the over-broad profile copy', () => {
+    const en = CATALOGS.en.messages as Record<string, string>
+    const ko = CATALOGS.ko.messages as Record<string, string>
+    const copy: Record<string, [string, string]> = {
+      'findings.reason.overBroadBypass': [
+        'Runs without permission checks, but every call it made in {days} days only read.',
+        '권한 확인 없이 실행하지만, {days}일 동안 한 호출은 모두 읽기였습니다.'
+      ],
+      'findings.reason.overBroadSandbox': [
+        'Runs outside the sandbox, but in {days} days it wrote only inside its folder and never touched a login folder.',
+        '샌드박스 밖에서 실행하지만, {days}일 동안 작업 폴더 안에만 썼고 로그인 정보 폴더는 건드리지 않았습니다.'
+      ],
+      'findings.reason.overBroadMcp': ['Gets MCP server {server} but did not call it in {days} days.', 'MCP 서버 {server}를 받지만 {days}일 동안 부르지 않았습니다.'],
+      'findings.do.askPermission': ['Run it with permission checks.', '권한을 확인하며 실행하게 바꾸세요.'],
+      'findings.do.sandboxOn': ['Turn its sandbox on.', '샌드박스를 켜세요.'],
+      'findings.do.excludeMcp': ['Leave {server} out of the profile.', '프로필에서 {server}를 빼세요.']
+    }
+    for (const [key, [english, korean]] of Object.entries(copy)) {
+      expect(en[key], key).toBe(english)
+      expect(ko[key], key).toBe(korean)
+    }
+  })
 })

@@ -27,7 +27,7 @@ const aboutServer = (e: McpExtension): Pick<Parameters<typeof finding>[0], 'subj
 /** How long a server has been shared and on, in whole days: from the later of when it was shared (or this release's
  *  first run, for one shared before it) and when it was last switched back on (ruling R4-3), since a server that was off
  *  could not be called. NaN when either time does not parse, which no threshold passes. */
-const serverAgeDays = (e: McpExtension, i: FindingInputs): number => {
+export const serverAgeDays = (e: McpExtension, i: FindingInputs): number => {
   const shared = ageDays(e.addedAt ?? i.findingsSince, i.nowMs)
   return e.enabledAt === undefined ? shared : Math.min(shared, ageDays(e.enabledAt, i.nowMs))
 }

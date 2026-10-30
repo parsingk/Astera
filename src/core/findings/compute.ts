@@ -26,6 +26,7 @@ import { tokenSpikeFindings } from './rules/runs'
 import { staleCredentialFindings, unmanagedReferenceFindings, unusedMcpFindings } from './rules/extensions'
 import { coverageGapFindings } from './rules/coverage'
 import { staleRuntimeFindings } from './rules/runtimes'
+import { overBroadFindings } from './rules/overBroad'
 
 /** Every source is optional, and `undefined` means unread. */
 export interface FindingInputs {
@@ -99,7 +100,8 @@ export const RULES: RuleRow[] = [
   { needs: ['policy', 'profiles', 'accounts'], run: coverageGapFindings },
   { needs: ['runtimes'], run: staleRuntimeFindings },
   { needs: ['extensions', 'credentials'], run: unmanagedReferenceFindings },
-  { needs: ['extensions', 'credentials', 'credential-uses'], run: staleCredentialFindings }
+  { needs: ['extensions', 'credentials', 'credential-uses'], run: staleCredentialFindings },
+  { needs: ['profiles', 'accounts', 'records', 'policy', 'extensions', 'settings'], run: overBroadFindings }
 ]
 
 /** The order the section groups subjects in (§7): profiles first, a CLI's coverage last. */
