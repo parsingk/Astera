@@ -109,8 +109,10 @@ export function resolveAction(call: ResolveCall): ResolvedAction {
   }
 }
 
-const READS: ReadonlySet<AuditAction> = new Set<AuditAction>(['filesystem.read', 'git.read'])
-const WRITES: ReadonlySet<AuditAction> = new Set<AuditAction>([
+/** The actions that only read, and those that write, whatever else they do (lifecycle design §4.10). Every other action
+ *  can do either. The usage summary judges a line's commands by them (findings/usage.ts). */
+export const READ_ACTIONS: ReadonlySet<AuditAction> = new Set<AuditAction>(['filesystem.read', 'git.read'])
+export const WRITE_ACTIONS: ReadonlySet<AuditAction> = new Set<AuditAction>([
   'filesystem.write', 'filesystem.delete', 'git.local.write', 'git.remote.write', 'github.pr.create', 'github.write', 'package.install'
 ])
 
@@ -118,8 +120,8 @@ const WRITES: ReadonlySet<AuditAction> = new Set<AuditAction>([
  *  may send anything. `other` reads only as a quiet tool's, the one `other` that is exact: it runs nothing. A program, an
  *  MCP tool and an agent can do either, so they are unknown. */
 function effectOf(action: AuditAction, confidence: Confidence, web = false): CallEffect {
-  if (READS.has(action)) return 'read'
-  if (WRITES.has(action)) return 'write'
+  if (READ_ACTIONS.has(action)) return 'read'
+  if (WRITE_ACTIONS.has(action)) return 'write'
   if (action === 'network.request') return web ? 'read' : 'unknown'
   return action === 'other' && confidence === 'exact' ? 'read' : 'unknown'
 }

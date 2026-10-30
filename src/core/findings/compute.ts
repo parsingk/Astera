@@ -23,6 +23,9 @@ import type {
 } from './types'
 import { brokenProfileFindings, brokenWorkFindings, duplicateProfileFindings, failingProfileFindings, unusedProfileFindings } from './rules/profiles'
 import { tokenSpikeFindings } from './rules/runs'
+import { staleCredentialFindings, unmanagedReferenceFindings, unusedMcpFindings } from './rules/extensions'
+import { coverageGapFindings } from './rules/coverage'
+import { staleRuntimeFindings } from './rules/runtimes'
 
 /** Every source is optional, and `undefined` means unread. */
 export interface FindingInputs {
@@ -91,7 +94,12 @@ export const RULES: RuleRow[] = [
   { needs: ['profiles', 'accounts', 'extensions'], run: brokenProfileFindings },
   { needs: ['profiles', 'orchestration'], run: brokenWorkFindings },
   { needs: ['profiles', 'orchestration'], run: failingProfileFindings },
-  { needs: ['orchestration', 'tokens'], run: tokenSpikeFindings }
+  { needs: ['orchestration', 'tokens'], run: tokenSpikeFindings },
+  { needs: ['extensions', 'records', 'policy'], run: unusedMcpFindings },
+  { needs: ['policy', 'profiles', 'accounts'], run: coverageGapFindings },
+  { needs: ['runtimes'], run: staleRuntimeFindings },
+  { needs: ['extensions', 'credentials'], run: unmanagedReferenceFindings },
+  { needs: ['extensions', 'credentials', 'credential-uses'], run: staleCredentialFindings }
 ]
 
 /** The order the section groups subjects in (§7): profiles first, a CLI's coverage last. */

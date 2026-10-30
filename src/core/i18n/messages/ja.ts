@@ -2249,6 +2249,13 @@ export const ja: Catalog = {
   'findings.reason.failingProfile': '直近 30 日間の作業 {total} 回のうち {failed} 回が失敗しました。最後の失敗は {run} で起きました。',
   'findings.reason.tokenSpike': 'トークンを {total} 使いました。{group} の中央値 {median} の {times} 倍です。',
   'findings.reason.pair': '{first}{second}',
+  'findings.reason.unusedMcp': '{days} 日間、どのセッションも呼び出していません。',
+  'findings.reason.coverageGap': 'ルール {rule} は {action} を拒否しますが、{cli} セッションでは一部しか見えません: {coverage}。',
+  'findings.reason.coverageGapEnforce': 'ルール {rule} は {action} を拒否しますが、{cli} セッションでは一部しかブロックできません: {coverage}。',
+  'findings.reason.staleRuntime': '{days} 日間接続されていません。',
+  'findings.reason.staleRuntimeNever': 'ペアリングしてから {days} 日たちましたが、一度も接続されていません。',
+  'findings.reason.unmanagedReference': 'セッションの {names} を渡していますが、Credentials リストにない名前です。',
+  'findings.reason.staleCredential': '保存した秘密の値が {days} 日間使われていません。',
   'findings.group.profile': 'エージェントプロファイル {name}',
   'findings.group.account': 'アカウント {id}',
   'findings.do.archiveProfile': 'プロファイルをアーカイブしてください。',
@@ -2256,5 +2263,10 @@ export const ja: Catalog = {
   'findings.do.editProfile': 'プロファイルを編集してください。',
   'findings.do.repointJob': 'Job が別のプロファイルを使うように変えてください。',
   'findings.do.openRuns': 'Run を開いてください。',
-  'findings.do.openRun': 'Run を開いてください。'
+  'findings.do.openRun': 'Run を開いてください。',
+  'findings.do.disableMcp': 'オフにするか削除してください。',
+  'findings.do.openPolicies': 'Policies を開いてください。',
+  'findings.do.removePairing': 'ペアリングを削除してください。',
+  'findings.do.addCredential': 'Credentials リストに追加するか、サーバーに保存してください。',
+  'findings.do.removeSecret': '保存した値かサーバーを削除してください。'
 }

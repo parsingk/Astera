@@ -46,4 +46,37 @@ describe('the findings catalog', () => {
     expect(ko['findings.reason.tokenSpike']).toBe('토큰을 {total}개 썼습니다. {group}의 중앙값 {median}의 {times}배입니다.')
     expect(ko['findings.do.repointJob']).toBe('Job이 다른 프로필을 쓰게 바꾸세요.')
   })
+
+  // §4.5 to §4.9: the copy the plan gives, in the English the CLI prints and the Korean the person reads
+  it('keeps the extension, coverage, Runtime and credential copy', () => {
+    const en = CATALOGS.en.messages as Record<string, string>
+    const ko = CATALOGS.ko.messages as Record<string, string>
+    const copy: Record<string, [string, string]> = {
+      'findings.reason.unusedMcp': ['No session called it in {days} days.', '{days}일 동안 어느 세션도 부르지 않았습니다.'],
+      'findings.reason.coverageGap': [
+        'Rule {rule} denies {action}, and {cli} sessions see it only in part: {coverage}.',
+        '규칙 {rule}은 {action}을 거부하지만, {cli} 세션에서는 일부만 보입니다: {coverage}.'
+      ],
+      'findings.reason.coverageGapEnforce': [
+        'Rule {rule} denies {action}, and {cli} sessions can block it only in part: {coverage}.',
+        '규칙 {rule}은 {action}을 거부하지만, {cli} 세션에서는 일부만 막을 수 있습니다: {coverage}.'
+      ],
+      'findings.reason.staleRuntime': ['Not reached in {days} days.', '{days}일 동안 연결되지 않았습니다.'],
+      'findings.reason.staleRuntimeNever': ['Never reached since it was paired {days} days ago.', '연결한 지 {days}일이 지났지만 한 번도 닿지 않았습니다.'],
+      'findings.reason.unmanagedReference': [
+        'Passes {names} from the session, which the Credentials list does not name.',
+        '세션의 {names}를 넘기는데, Credentials 목록에 없는 이름입니다.'
+      ],
+      'findings.reason.staleCredential': ['Its stored secret was not used in {days} days.', '저장한 비밀값을 {days}일 동안 쓰지 않았습니다.'],
+      'findings.do.disableMcp': ['Turn it off or remove it.', '끄거나 삭제하세요.'],
+      'findings.do.openPolicies': ['Open Policies.', 'Policies를 열어 보세요.'],
+      'findings.do.removePairing': ['Remove the pairing.', '연결을 삭제하세요.'],
+      'findings.do.addCredential': ['Add it to the Credentials list, or store it with the server.', 'Credentials 목록에 넣거나 서버에 저장하세요.'],
+      'findings.do.removeSecret': ['Remove the stored value, or the server.', '저장한 값이나 서버를 삭제하세요.']
+    }
+    for (const [key, [english, korean]] of Object.entries(copy)) {
+      expect(en[key], key).toBe(english)
+      expect(ko[key], key).toBe(korean)
+    }
+  })
 })

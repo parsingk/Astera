@@ -5,6 +5,7 @@ import { emptyState } from '../orchestration/state'
 import type { AgentProfile } from '../agentProfiles/types'
 import { RULES, computeFindings, type FindingInputs } from './compute'
 import { finding } from './make'
+import { emptyUse } from './usage'
 import type { Finding, FindingRule, SubjectKind } from './types'
 import type { IgnoredFile } from './ignored'
 
@@ -56,12 +57,25 @@ describe('computeFindings', () => {
     expect(r.findings.map((f) => f.rule)).toEqual(['duplicate-profile'])
     // Four rows need the orchestration state; it is named once. The policy is unread too: the report's Observe history
     // comes from it
-    expect([...r.unread].sort()).toEqual(['accounts', 'extensions', 'orchestration', 'policy', 'tokens'])
+    expect([...r.unread].sort()).toEqual(['accounts', 'credential-uses', 'credentials', 'extensions', 'orchestration', 'policy', 'records', 'runtimes', 'tokens'])
     expect(r).toMatchObject({ info: [], computedAt: new Date(NOW).toISOString() })
 
     // Read, the same profiles are also unused
     const all = computeFindings(
-      { ...BASE, profiles, accounts: [{ id: 'acc_1', provider: 'claude' }], registry: [], orch: emptyState(), spent: [], policy: null, observe: { on: false, days: 0 } },
+      {
+        ...BASE,
+        profiles,
+        accounts: [{ id: 'acc_1', provider: 'claude' }],
+        registry: [],
+        orch: emptyState(),
+        spent: [],
+        policy: null,
+        observe: { on: false, days: 0 },
+        observed: emptyUse(),
+        credentials: { version: 1, entries: [], mcpHide: {} },
+        credentialLastUse: new Map(),
+        runtimes: []
+      },
       NONE
     )
     expect(all.unread).toEqual([])
@@ -82,6 +96,50 @@ describe('computeFindings', () => {
     // Half read is unread
     expect(computeFindings({ ...BASE, policy: null }, NONE).unread).toContain('policy')
     expect(computeFindings({ ...BASE, observe: { on: true, days: 3 } }, NONE).unread).toContain('policy')
+  })
+
+  it('the extension, coverage, Runtime and credential rows run on their sources, and an unread one drops only its own', () => {
+    const full: FindingInputs = {
+      ...BASE,
+      profiles: [prof('ap_a', { accountIds: ['acc_codex'] })],
+      accounts: [{ id: 'acc_codex', provider: 'codex' }],
+      policy: { version: 1, mode: 'enforce', rules: [{ id: 'no-push', effect: 'deny', action: 'git.remote.write' }], otherwise: 'allow' },
+      observe: { on: true, days: 30 },
+      observed: emptyUse(),
+      registry: [
+        {
+          id: 'mcp-linear',
+          kind: 'mcp',
+          name: 'linear',
+          transport: 'stdio',
+          command: 'x',
+          env: { API_KEY: { secret: 'mcp.mcp-linear.API_KEY' }, LINEAR_TEAM: { inherit: true } },
+          providers: ['claude', 'codex'],
+          importedFrom: 'acc_codex',
+          enabled: true,
+          addedAt: ago(60)
+        }
+      ],
+      credentials: { version: 1, entries: [], mcpHide: {} },
+      credentialLastUse: new Map(),
+      runtimes: [{ runtimeId: 'rt_a', name: 'box', address: '10.0.0.2', port: 7420, fingerprint: 'f', permission: 'read-only', createdAt: ago(90), lastSeenAt: ago(40) }]
+    }
+    const rules = (i: FindingInputs): string[] => [...new Set(computeFindings(i, NONE).findings.map((f) => f.rule))].sort()
+    const NEW = ['coverage-gap', 'stale-credential', 'stale-runtime', 'unmanaged-credential-reference', 'unused-mcp']
+    expect(rules(full).filter((r) => NEW.includes(r))).toEqual(NEW)
+    const without = (field: keyof FindingInputs, source: string, gone: string[]): void => {
+      const r = computeFindings({ ...full, [field]: undefined }, NONE)
+      expect(r.unread, field).toContain(source)
+      const left = [...new Set(r.findings.map((f) => f.rule))].filter((x) => NEW.includes(x)).sort()
+      expect(left, field).toEqual(NEW.filter((x) => !gone.includes(x)))
+    }
+    without('credentialLastUse', 'credential-uses', ['stale-credential'])
+    without('observed', 'records', ['unused-mcp'])
+    without('runtimes', 'runtimes', ['stale-runtime'])
+    without('credentials', 'credentials', ['stale-credential', 'unmanaged-credential-reference'])
+    without('registry', 'extensions', ['stale-credential', 'unmanaged-credential-reference', 'unused-mcp'])
+    without('observe', 'policy', ['coverage-gap', 'unused-mcp'])
+    without('accounts', 'accounts', ['coverage-gap'])
   })
 
   it('null is a value and undefined is unread (ruling R-P1)', () => {

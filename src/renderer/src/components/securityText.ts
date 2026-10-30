@@ -15,7 +15,14 @@ import type {
   SandboxCoverageClass,
   SandboxCoverageRow
 } from '../../../core/audit/types'
-import { ACTION_PHRASES, COVERAGE_NOTE_PHRASES } from '../../../core/audit/phrases'
+import {
+  ACTION_GROUP_PHRASES as GROUPS,
+  ACTION_PHRASES,
+  COVERAGE_LEVEL_PHRASES as LEVELS,
+  COVERAGE_NOTE_PHRASES,
+  SESSION_KIND_PHRASES as KINDS,
+  actionPhraseKey
+} from '../../../core/audit/phrases'
 import { SANDBOX_TABLE_CAPTION, sandboxRowCaption } from '../../../core/sandbox/coverage'
 import { failureLine } from './extensionsText'
 
@@ -40,15 +47,7 @@ export type AuditRow = AuditRecord & { decision: AuditDecision; ruleId?: string 
 /** Every action the resolver names, in the order the CLI documents them. */
 export const AUDIT_ACTIONS = Object.keys(ACTION_PHRASES) as AuditAction[]
 
-/** The groups of actions a rule can name with a trailing `*`, said in words. Another pattern is shown as it is. */
-const GROUPS: Record<string, MessageKey> = {
-  'git.*': 'settings.security.group.git',
-  'github.*': 'settings.security.group.github',
-  'filesystem.*': 'settings.security.group.filesystem',
-  '*': 'settings.security.group.all'
-}
-
-/** What a rule's action can be picked from: every action, then the groups. */
+/** What a rule's action can be picked from: every action, then the groups (phrases.ts ACTION_GROUP_PHRASES). */
 export const RULE_ACTION_CHOICES: string[] = [...AUDIT_ACTIONS, ...Object.keys(GROUPS)]
 
 /** The choices for one rule: a pattern made elsewhere (the CLI's `git.re*`) stays among them, so editing the rule's
@@ -58,9 +57,8 @@ export const ruleActionChoices = (current?: string): string[] =>
 
 /** An action or a rule's pattern as a plain phrase; one this side does not know (a newer Host's) as it was named. */
 export function actionPhrase(action: string, t: T): string {
-  if (Object.hasOwn(ACTION_PHRASES, action)) return t(ACTION_PHRASES[action as AuditAction])
-  if (Object.hasOwn(GROUPS, action)) return t(GROUPS[action])
-  return action
+  const key = actionPhraseKey(action)
+  return key === null ? action : t(key)
 }
 
 export const DECISIONS: AuditDecision[] = ['allow', 'would-deny', 'unknown', 'blocked']
@@ -98,20 +96,10 @@ const CLASS_WORDS: Record<CoverageClass, MessageKey> = {
   mcp: 'settings.security.coverage.class.mcp',
   network: 'settings.security.coverage.class.network'
 }
-const LEVELS: Record<CoverageCell['level'], MessageKey> = {
-  seen: 'settings.security.coverage.level.seen',
-  partial: 'settings.security.coverage.level.partial',
-  none: 'settings.security.coverage.level.none',
-  enforced: 'settings.security.coverage.level.enforced'
-}
 
 /** The coverage table's title: what Enforce blocks while it is on, else what observe records. */
 const COVERAGE_TITLES = { record: 'settings.security.coverage.title', enforce: 'settings.security.coverage.titleEnforce' } as const satisfies Record<string, MessageKey>
 export const coverageTitle = (m: AuditMode, t: T): string => t(m === 'enforce' ? COVERAGE_TITLES.enforce : COVERAGE_TITLES.record)
-const KINDS: Record<CoverageRow['kind'], MessageKey> = {
-  terminal: 'settings.security.kind.terminal',
-  chat: 'settings.security.kind.chat'
-}
 const PROVIDERS: Record<CoverageRow['provider'], string> = { claude: 'Claude', codex: 'Codex' }
 
 export const coverageClassLabel = (c: CoverageClass, t: T): string => t(CLASS_WORDS[c])

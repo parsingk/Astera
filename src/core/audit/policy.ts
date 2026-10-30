@@ -67,13 +67,15 @@ export function isRuleAction(pattern: string): boolean {
 
 type Verdict = { decision: 'allow' | 'would-deny'; ruleId?: string }
 
-const matches = (pattern: string, action: string): boolean =>
+/** Whether a rule's action names an action: exactly, or as a prefix ending in `*`. The coverage findings read a rule's
+ *  actions the same way (actionClasses.ts). */
+export const ruleMatches = (pattern: string, action: string): boolean =>
   pattern.endsWith('*') ? action.startsWith(pattern.slice(0, -1)) : pattern === action
 
 /** The first rule that matches one command in one place, else `otherwise`. A scoped rule needs a place to match. */
 function judge(action: string, inside: boolean | undefined, p: AuditPolicy): Verdict {
   for (const r of p.rules) {
-    if (!matches(r.action, action)) continue
+    if (!ruleMatches(r.action, action)) continue
     if (r.scope !== undefined && (inside === undefined || inside !== (r.scope === 'inside-project'))) continue
     return { decision: r.effect === 'deny' ? 'would-deny' : 'allow', ruleId: r.id }
   }

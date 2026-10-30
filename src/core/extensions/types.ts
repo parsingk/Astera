@@ -36,6 +36,10 @@ export interface McpExtension {
   /** The account it was imported from. */
   importedFrom: string
   enabled: boolean
+  /** When it was shared (ISO), so the usage findings never judge it before it has been shared for their window (lifecycle
+   *  design §4.5, §4.9, plan ruling 2). Absent on an entry shared before this release, which is aged from that release's
+   *  first run instead. */
+  addedAt?: string
 }
 
 export interface FileExtension {
@@ -47,6 +51,8 @@ export interface FileExtension {
   providers: Provider[]
   importedFrom: string
   enabled: boolean
+  /** When it was shared (ISO), as McpExtension.addedAt (lifecycle design §4.12). */
+  addedAt?: string
 }
 
 export type ExtensionEntry = McpExtension | FileExtension

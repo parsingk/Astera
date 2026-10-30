@@ -2279,6 +2279,13 @@ export const es: Catalog = {
   'findings.reason.failingProfile': 'Fallaron {failed} de sus {total} inicios de trabajo en 30 días. El último fallo fue en {run}.',
   'findings.reason.tokenSpike': 'Usó {total} tokens, {times} veces la mediana de {median} de {group}.',
   'findings.reason.pair': '{first} {second}',
+  'findings.reason.unusedMcp': 'Ninguna sesión lo llamó en {days} días.',
+  'findings.reason.coverageGap': 'La regla {rule} deniega {action}, y las sesiones de {cli} solo lo ven en parte: {coverage}.',
+  'findings.reason.coverageGapEnforce': 'La regla {rule} deniega {action}, y las sesiones de {cli} solo pueden bloquearlo en parte: {coverage}.',
+  'findings.reason.staleRuntime': 'Sin conectar desde hace {days} días.',
+  'findings.reason.staleRuntimeNever': 'No se ha conectado nunca desde que se emparejó hace {days} días.',
+  'findings.reason.unmanagedReference': 'Pasa {names} de la sesión, nombres que la lista de Credentials no incluye.',
+  'findings.reason.staleCredential': 'Su secreto guardado no se usó en {days} días.',
   'findings.group.profile': 'el perfil de agente {name}',
   'findings.group.account': 'la cuenta {id}',
   'findings.do.archiveProfile': 'Archive el perfil.',
@@ -2286,5 +2293,10 @@ export const es: Catalog = {
   'findings.do.editProfile': 'Edite el perfil.',
   'findings.do.repointJob': 'Haga que el Job use otro perfil.',
   'findings.do.openRuns': 'Abra los Runs.',
-  'findings.do.openRun': 'Abra el Run.'
+  'findings.do.openRun': 'Abra el Run.',
+  'findings.do.disableMcp': 'Desactívelo o elimínelo.',
+  'findings.do.openPolicies': 'Abra Policies.',
+  'findings.do.removePairing': 'Elimine el emparejamiento.',
+  'findings.do.addCredential': 'Añádalo a la lista de Credentials o guárdelo con el servidor.',
+  'findings.do.removeSecret': 'Elimine el valor guardado o el servidor.'
 }

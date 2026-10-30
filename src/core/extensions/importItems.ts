@@ -73,6 +73,8 @@ export async function importItems(a: { profileDir: string; homeDir: string; acco
   const secrets = extensionSecrets(a.profileDir)
   const result: ImportResult = { imported: [], refused: [] }
   const entries = [...registry.entries]
+  // When these were shared: the usage findings age an item from it, never from before it was here (lifecycle design §4.5)
+  const addedAt = new Date().toISOString()
 
   for (const pick of a.picks) {
     const d = found.find((x) => x.kind === pick.kind && x.name === pick.name)
@@ -118,14 +120,14 @@ export async function importItems(a: { profileDir: string; homeDir: string; acco
       for (const [ref, value] of toStore) await secrets.put(ref, value)
       const { envNames: _names, ...server } = d.mcp
       const isolation = knownSessionIsolated(d.mcp) ? { isolation: 'session' as const } : {}
-      entries.push({ id, kind: 'mcp', name: pick.name, ...server, env, ...isolation, providers: BOTH, importedFrom: a.account.id, enabled: true })
+      entries.push({ id, kind: 'mcp', name: pick.name, ...server, env, ...isolation, providers: BOTH, importedFrom: a.account.id, enabled: true, addedAt })
     } else {
       const canonical =
         pick.kind === 'skill' ? path.join(paths.skills, pick.name) : path.join(pick.kind === 'command' ? paths.commands : paths.agents, `${pick.name}.md`)
       await copyTree(d.source, canonical)
       const hash = pick.kind === 'skill' ? await hashTree(canonical) : await hashFile(canonical)
       const providers: Provider[] = pick.kind === 'skill' ? BOTH : ['claude']
-      entries.push({ id, kind: pick.kind as 'skill' | 'command' | 'agent', name: pick.name, hash, providers, importedFrom: a.account.id, enabled: true })
+      entries.push({ id, kind: pick.kind as 'skill' | 'command' | 'agent', name: pick.name, hash, providers, importedFrom: a.account.id, enabled: true, addedAt })
     }
     result.imported.push(pick.name)
   }

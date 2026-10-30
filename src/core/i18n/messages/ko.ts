@@ -2768,6 +2768,13 @@ export const ko = {
   'findings.reason.failingProfile': '최근 30일 동안 작업 {total}번 가운데 {failed}번이 실패했습니다. 마지막 실패는 {run}에서 났습니다.',
   'findings.reason.tokenSpike': '토큰을 {total}개 썼습니다. {group}의 중앙값 {median}의 {times}배입니다.',
   'findings.reason.pair': '{first} {second}',
+  'findings.reason.unusedMcp': '{days}일 동안 어느 세션도 부르지 않았습니다.',
+  'findings.reason.coverageGap': '규칙 {rule}은 {action}을 거부하지만, {cli} 세션에서는 일부만 보입니다: {coverage}.',
+  'findings.reason.coverageGapEnforce': '규칙 {rule}은 {action}을 거부하지만, {cli} 세션에서는 일부만 막을 수 있습니다: {coverage}.',
+  'findings.reason.staleRuntime': '{days}일 동안 연결되지 않았습니다.',
+  'findings.reason.staleRuntimeNever': '연결한 지 {days}일이 지났지만 한 번도 닿지 않았습니다.',
+  'findings.reason.unmanagedReference': '세션의 {names}를 넘기는데, Credentials 목록에 없는 이름입니다.',
+  'findings.reason.staleCredential': '저장한 비밀값을 {days}일 동안 쓰지 않았습니다.',
   'findings.group.profile': '에이전트 프로필 {name}',
   'findings.group.account': '계정 {id}',
   'findings.do.archiveProfile': '프로필을 보관하세요.',
@@ -2775,5 +2782,10 @@ export const ko = {
   'findings.do.editProfile': '프로필을 고치세요.',
   'findings.do.repointJob': 'Job이 다른 프로필을 쓰게 바꾸세요.',
   'findings.do.openRuns': 'Run을 열어 보세요.',
-  'findings.do.openRun': 'Run을 열어 보세요.'
+  'findings.do.openRun': 'Run을 열어 보세요.',
+  'findings.do.disableMcp': '끄거나 삭제하세요.',
+  'findings.do.openPolicies': 'Policies를 열어 보세요.',
+  'findings.do.removePairing': '연결을 삭제하세요.',
+  'findings.do.addCredential': 'Credentials 목록에 넣거나 서버에 저장하세요.',
+  'findings.do.removeSecret': '저장한 값이나 서버를 삭제하세요.'
 } as const

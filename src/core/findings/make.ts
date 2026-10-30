@@ -7,7 +7,8 @@ import type { OrchState } from '../orchestration/state'
 import type { JobSourceRef } from '../orchestration/types'
 import type { Finding, FindingPlace, FindingRule, FindingSubject } from './types'
 
-/** `rule:subject`, plus `:part` for over-broad-profile's lines (spec §6). An ignore is kept by this key. */
+/** `rule:subject`, plus `:part` for over-broad-profile's lines (spec §6) and a coverage gap's Rule. An ignore is kept by
+ *  this key. */
 export function findingKey(rule: FindingRule, subjectId: string, part?: string): string {
   return part === undefined ? `${rule}:${subjectId}` : `${rule}:${subjectId}:${part}`
 }

@@ -30,14 +30,15 @@ export type FindingPlace =
   | { kind: 'credentials'; entryId: string }
 
 export interface Finding {
-  /** `${rule}:${subject.id}`, plus `:${part}` for over-broad-profile's lines (spec §6). */
+  /** `${rule}:${subject.id}`, plus `:${part}` for over-broad-profile's lines (spec §6) and a coverage gap's Rule. */
   key: string
   rule: FindingRule
   subject: FindingSubject
   /** The profiles it concerns: its subject when that is a profile, a duplicate group's members, a coverage gap's affected
    *  profiles, a broken Job or Task's profile id. Empty when none. */
   profileIds: string[]
-  /** §4.10 only: 'bypass' | 'sandbox' | `mcp:${entryId}`. */
+  /** §4.10: 'bypass' | 'sandbox' | `mcp:${entryId}`. §4.6: the Rule's id, since one CLI and session kind meets several
+   *  Rules and each is ignored apart. */
   part?: string
   /** The reason, to be worded in the reader's language. */
   message: Message

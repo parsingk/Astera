@@ -2514,6 +2514,13 @@ export const en: Record<keyof typeof ko, string> = {
   'findings.reason.failingProfile': '{failed} of its {total} worker starts in 30 days failed. The last failure was in {run}.',
   'findings.reason.tokenSpike': 'Used {total} tokens, {times} times the median of {median} for {group}.',
   'findings.reason.pair': '{first} {second}',
+  'findings.reason.unusedMcp': 'No session called it in {days} days.',
+  'findings.reason.coverageGap': 'Rule {rule} denies {action}, and {cli} sessions see it only in part: {coverage}.',
+  'findings.reason.coverageGapEnforce': 'Rule {rule} denies {action}, and {cli} sessions can block it only in part: {coverage}.',
+  'findings.reason.staleRuntime': 'Not reached in {days} days.',
+  'findings.reason.staleRuntimeNever': 'Never reached since it was paired {days} days ago.',
+  'findings.reason.unmanagedReference': 'Passes {names} from the session, which the Credentials list does not name.',
+  'findings.reason.staleCredential': 'Its stored secret was not used in {days} days.',
   'findings.group.profile': 'agent profile {name}',
   'findings.group.account': 'account {id}',
   'findings.do.archiveProfile': 'Archive the profile.',
@@ -2521,5 +2528,10 @@ export const en: Record<keyof typeof ko, string> = {
   'findings.do.editProfile': 'Edit the profile.',
   'findings.do.repointJob': 'Point the Job at another profile.',
   'findings.do.openRuns': 'Open the Runs.',
-  'findings.do.openRun': 'Open the Run.'
+  'findings.do.openRun': 'Open the Run.',
+  'findings.do.disableMcp': 'Turn it off or remove it.',
+  'findings.do.openPolicies': 'Open Policies.',
+  'findings.do.removePairing': 'Remove the pairing.',
+  'findings.do.addCredential': 'Add it to the Credentials list, or store it with the server.',
+  'findings.do.removeSecret': 'Remove the stored value, or the server.'
 }

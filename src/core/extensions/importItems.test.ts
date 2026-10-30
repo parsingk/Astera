@@ -112,6 +112,22 @@ describe('importItems', () => {
     expect(await extensionSecrets(s.profileDir).terms()).toEqual([])
     await expect(fs.stat(path.join(extensionPaths(s.profileDir).skills, 'review'))).rejects.toThrow()
   })
+
+  // Lifecycle design §4.5, §4.9 and plan ruling 2: an item is not judged unused before it has been shared for the window
+  it('an imported MCP server and skill carry addedAt', async () => {
+    const s = await setup()
+    const before = Date.now()
+    await importItems({ profileDir: s.profileDir, homeDir: s.home, account: s.account, picks: [{ kind: 'mcp', name: 'linear' }, { kind: 'skill', name: 'review' }, { kind: 'command', name: 'ship' }] })
+    const after = Date.now()
+    const entries = (await readExtensionRegistry(s.profileDir)).entries
+    expect(entries.map((e) => e.kind)).toEqual(['mcp', 'skill', 'command'])
+    for (const e of entries) {
+      expect(typeof e.addedAt, e.name).toBe('string')
+      const at = Date.parse(e.addedAt!)
+      expect(new Date(at).toISOString(), e.name).toBe(e.addedAt)
+      expect(at >= before && at <= after, e.name).toBe(true)
+    }
+  })
 })
 
 // Final review M1, M4, M8
