@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { Account } from '../types'
 import { PTY_LOST_SIGHT_EXIT_CODE, type PtyFactory, type PtyLike, type PtySpawnOptions } from './pty'
-import { SessionManager, EXITED_SESSIONS_KEPT, prependToPath, type SpawnChecks } from './manager'
+import { SessionManager, EXITED_SESSIONS_KEPT, prependToPath, type SpawnChecks, type StatusLineProvider } from './manager'
 import { createGitBashResolver } from './gitBash'
 import { PROBE_CACHE_TTL_MS, PROBE_CONCURRENCY, PROBE_TIMEOUT_MS, PathKeyedCache, createProbePool, createProber } from './pathProbe'
 import { buildClaudeCommand, buildCodexCommand } from './commands'
@@ -1673,6 +1673,30 @@ describe('observe mode at spawn', () => {
     manager.spawn({ account: codexAccount, cwd: '/work' })
     expect(observeHooks).not.toHaveBeenCalled()
     expect(spawned[0].meta?.restore).toMatchObject({ observed: true })
+    // No use hooks to have or lack
+    expect(spawned[0].meta?.restore).not.toHaveProperty('useHooks')
+  })
+
+  // Lifecycle design §4.12, ruling R6-8: the note says whether an observed Claude session got the hooks that report uses,
+  // so the Host can mark the one that did not, and the findings read "Claude cannot tell" for the window it ran in
+  it('an observed Claude session’s note says whether it got the use hooks', async () => {
+    for (const [given, want] of [[true, true], [false, false]] as const) {
+      const { manager, spawned } = rig('observe')
+      const held = manager as unknown as { statusLineProvider: StatusLineProvider }
+      const provide = held.statusLineProvider
+      held.statusLineProvider = (id, acc, o) => {
+        const sl = provide(id, acc, o)
+        return sl && given ? { ...sl, useHooks: true } : sl
+      }
+      await manager.prepare({ account, cwd: '/work' })
+      manager.spawn({ account, cwd: '/work' })
+      expect(spawned[0].meta?.restore).toMatchObject({ observed: true, useHooks: want })
+    }
+    // Not observed: no mark either way
+    const off = rig('compatibility')
+    await off.manager.prepare({ account, cwd: '/work' })
+    off.manager.spawn({ account, cwd: '/work' })
+    expect(off.spawned[0].meta?.restore).not.toHaveProperty('useHooks')
   })
 
   it('a prepare whose observe files failed does not fail the spawn', async () => {

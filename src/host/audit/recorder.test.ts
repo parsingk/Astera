@@ -758,6 +758,53 @@ describe('the recorder’s uses', () => {
     expect(await usesIn(late.profileDir)).toEqual([])
   })
 
+  // Fix round 2: a source that must hand a mark until it lands (a Claude chat's, an unhooked session's) is told whether
+  // each use was written: once the append resolved, or not, wherever it was let go
+  it('tells a use’s source whether it was written', async () => {
+    const said = (h: Awaited<ReturnType<typeof rig>>, ev: UseEvent = skillUse()) => {
+      const answers: boolean[] = []
+      h.recorder.use(ev, (written) => answers.push(written))
+      return answers
+    }
+    const h = await rig()
+    const written = said(h)
+    expect(written).toEqual([])
+    await h.recorder.flushed()
+    expect(written).toEqual([true])
+    // Known off: at once
+    const off = await rig({ mode: 'compatibility' })
+    await off.recorder.flushed()
+    expect(said(off)).toEqual([false])
+    // Turned off before it was written
+    const late = await rig()
+    const lateAnswers = said(late)
+    late.setMode('compatibility')
+    late.recorder.invalidate()
+    await late.recorder.flushed()
+    expect(lateAnswers).toEqual([false])
+    // A session Astera did not start
+    const none = await rig({ facts: null })
+    expect(said(none)).toEqual([false])
+    // An append that failed: told so, and the calls of the same flush are still written
+    let fails = 1
+    const broken = await rig({
+      over: {
+        appendUses: async () => {
+          if (fails-- > 0) throw new Error('disk gone')
+        }
+      }
+    })
+    broken.recorder.record(bash('git status'))
+    const brokenAnswers = said(broken)
+    await broken.recorder.flushed()
+    expect(brokenAnswers).toEqual([false])
+    expect(await broken.records()).toHaveLength(1)
+    expect(broken.logs.join('\n')).toMatch(/disk gone/)
+    const again = said(broken)
+    await broken.recorder.flushed()
+    expect(again).toEqual([true])
+  })
+
   // Fix round 1: uses keep their own dedupe keys, so a session's many uses never push a call's key out, and the reverse
   it('a use’s dedupe keys are its own, and leave the calls’ keys where they were', async () => {
     const h = await rig()
@@ -790,7 +837,10 @@ describe('the recorder’s uses', () => {
     expect(written).toEqual([1])
     // The calls overflow first: that does not keep the uses' own line from being told
     for (let i = 0; i < AUDIT_PENDING_MAX + 2; i++) h.recorder.record(bash('git status'))
-    for (let i = 0; i < AUDIT_PENDING_MAX + 3; i++) h.recorder.use(skillUse())
+    const answers: boolean[] = []
+    for (let i = 0; i < AUDIT_PENDING_MAX + 3; i++) h.recorder.use(skillUse(), (w) => answers.push(w))
+    // Those the full hold let go are told at once
+    expect(answers).toEqual([false, false, false])
     expect(h.logs.filter((m) => /records wait for the disk/.test(m))).toHaveLength(1)
     expect(h.logs.filter((m) => /uses wait for the disk/.test(m))).toHaveLength(1)
     release()

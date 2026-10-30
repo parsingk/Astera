@@ -2288,5 +2288,9 @@ export const ja: Catalog = {
   'findings.info.claudeCannotTellCodexToo':
     'Claude でも Codex でも判断できません。Claude が使用を報告するには Claude Code {min} 以降が必要です。',
   'findings.info.claudeChatCannotTellCodexToo':
-    'Claude でも Codex でも判断できません。直近 {days} 日間に Claude のチャットがあり、Claude Code はチャットで入力したスキルやコマンドを報告しません。'
+    'Claude でも Codex でも判断できません。直近 {days} 日間に Claude のチャットがあり、Claude Code はチャットで入力したスキルやコマンドを報告しません。',
+  'findings.info.claudeUnhookedCannotTell':
+    'Claude では判断できません。直近 {days} 日間に、使用を報告するフックなしで動いた Claude のセッションがありました。',
+  'findings.info.claudeUnhookedCannotTellCodexToo':
+    'Claude でも Codex でも判断できません。直近 {days} 日間に、使用を報告するフックなしで動いた Claude のセッションがありました。'
 }

@@ -3,8 +3,9 @@
 // Codex none, since its main path to a skill is the model reading SKILL.md through the shell (plan ruling 14). So a
 // finding is raised only for an item every CLI it is installed for can report, which leaves a skill shared with Codex an
 // information line at most, and commands and agents (Claude's alone) the findings. Claude cannot report either before
-// USE_REPORT_MIN_CLAUDE (ruling 15), nor a skill or command a person types into a chat session (Step 0, ruling R6-1): the
-// item then reads "Claude cannot tell", and for one installed for Codex too, that neither can (ruling R6-4). Nothing
+// USE_REPORT_MIN_CLAUDE (ruling 15), nor in a session started without the hooks that report uses (ruling R6-8), nor a
+// skill or command a person types into a chat session (Step 0, ruling R6-1): the item then reads "Claude cannot tell",
+// and for one installed for Codex too, that neither can (ruling R6-4). Nothing
 // switched off, younger than the window, or judged on a copy that could not be read is said to be unused: "never call
 // something unused on missing data" (§4). Names and ids only (§8).
 import { USE_REPORT_MIN_CLAUDE, reportsUses } from '../../sessions/cliVersion'
@@ -90,6 +91,12 @@ function verdicts(i: FindingInputs): Verdict[] {
     const codexToo = e.providers.some((p) => p !== 'claude')
     if (!reports)
       out.push({ e, line: { key: codexToo ? 'findings.info.claudeCannotTellCodexToo' : 'findings.info.claudeCannotTell', params: { min: USE_REPORT_MIN_CLAUDE } } })
+    // Ruling R6-8: a session without the use hooks reported no typed command and no agent's start
+    else if (extensionUses.claudeUnhookedSeen)
+      out.push({
+        e,
+        line: { key: codexToo ? 'findings.info.claudeUnhookedCannotTellCodexToo' : 'findings.info.claudeUnhookedCannotTell', params: { days: OBSERVE_WINDOW_DAYS } }
+      })
     else if (e.kind !== 'agent' && extensionUses.claudeChatSeen)
       out.push({ e, line: { key: codexToo ? 'findings.info.claudeChatCannotTellCodexToo' : 'findings.info.claudeChatCannotTell', params: { days: OBSERVE_WINDOW_DAYS } } })
     else if (codexToo) out.push({ e, line: { key: 'findings.info.claudeOnlyNoUse', params: { days: OBSERVE_WINDOW_DAYS } } })

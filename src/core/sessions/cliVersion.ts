@@ -50,8 +50,10 @@ export function enforceBlocker(cli: Cli, version: string | null | undefined): st
 }
 
 /** The sync answer a spawn reads (the version, null when it could not be read, undefined when the CLI is not there), and
- *  `warm`, which a prepare (or the capability refresh before a chat) awaits first. */
-export type CliVersionProbe = ((cli: Cli) => string | null | undefined) & { warm(cli: Cli): Promise<void> }
+ *  `warm`, which a prepare (or the capability refresh before a chat) awaits first. `cached` is the version last learnt and
+ *  still fresh, or undefined: it never resolves, stats or runs anything, so a spawn that must not wait on the CLI reads it
+ *  (an observed Claude session's use hooks, lifecycle design §4.12) and takes a miss for a version not known. */
+export type CliVersionProbe = ((cli: Cli) => string | null | undefined) & { warm(cli: Cli): Promise<void>; cached(cli: Cli): string | undefined }
 
 /** The CLI on PATH on macOS and Linux, the first file of that name. */
 function whichPosix(name: string): string | null {
@@ -130,7 +132,12 @@ export function makeCliVersionProbe(o: {
       /* the spawn's own sync answer stands */
     }
   }
-  return Object.assign(probe, { warm })
+  /** What was learnt, within its TTL; the binary is not looked at again (the prepare's warm just did). */
+  const cached = (cli: Cli): string | undefined => {
+    const k = known.get(cli)
+    return k !== undefined && now() - k.at < TTL_MS ? k.version : undefined
+  }
+  return Object.assign(probe, { warm, cached })
 }
 
 const shared = new Map<NodeJS.Platform, CliVersionProbe>()

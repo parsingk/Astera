@@ -326,8 +326,9 @@ export async function createCore(userDataDir: string, osLocale: string, paths?: 
     undefined,
     undefined,
     undefined,
-    // An observed session's settings carry the use hooks when its Claude Code reports uses (lifecycle design §4.12)
-    (id, account, opts) => statusLine.spawnConfig(id, account, withUseReports(opts, () => cliVersions('claude'))),
+    // An observed session's settings carry the use hooks when its Claude Code reports uses (lifecycle design §4.12), as the
+    // version its prepare warmed says: never asked of the CLI on this thread (fix round 2)
+    (id, account, opts) => statusLine.spawnConfig(id, account, withUseReports(opts, () => cliVersions.cached('claude'))),
     // A Claude session may read the app's screenshot folder without a prompt — that is where Design
     // Mode writes the crops whose paths it sends. previewShotsDir is the same path capture.ts writes.
     [previewShotsDir(userDataDir)],

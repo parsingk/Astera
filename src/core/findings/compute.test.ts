@@ -91,7 +91,7 @@ describe('computeFindings', () => {
         credentials: { version: 1, entries: [], mcpHide: {} },
         credentialLastUse: new Map(),
         runtimes: [],
-        extensionUses: { skillOrCommand: new Set(), agents: new Set(), claudeChatSeen: false },
+        extensionUses: { skillOrCommand: new Set(), agents: new Set(), claudeChatSeen: false, claudeUnhookedSeen: false },
         extensionCopies: new Map(),
         claudeVersion: null
       },
@@ -223,7 +223,7 @@ describe('computeFindings', () => {
       observe: { on: true, days: 30 },
       observed: emptyUse(),
       registry,
-      extensionUses: { skillOrCommand: new Set(), agents: new Set(), claudeChatSeen: false },
+      extensionUses: { skillOrCommand: new Set(), agents: new Set(), claudeChatSeen: false, claudeUnhookedSeen: false },
       extensionCopies: new Map([
         ['skill-zeta', {}],
         ['skill-alpha', {}],

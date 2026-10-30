@@ -28,6 +28,7 @@ export interface StatusLineSpawn {
   observed?: true // the settings file is an observe variant (ensureObserveFiles): the session sends its tool calls to its audit file
   enforced?: true // the settings file is an enforce variant (ensureEnforceFiles): every tool call waits on the blocking hook first
   sandboxed?: true // the settings file is a sandbox twin (ensureSandboxFiles): Claude's sandbox and the deny rules are in it
+  useHooks?: true // an observed session's file has the use hooks (UserPromptExpansion, SubagentStart; lifecycle design §4.12)
 }
 
 /** Whether every sandbox twin is in place (ensureSandboxFiles), or, on macOS and Linux, the links inside the session's
@@ -436,7 +437,8 @@ export interface StatusLineSpawnOptions {
 }
 
 /** A spawn's options with `reportsUses` from the Claude version `claudeVersion` says now (lifecycle design §4.12, fix round
- *  1). Asked only for an observed spawn, from the probe its prepare warmed; a version that cannot be read reports none. */
+ *  1). Asked only for an observed spawn, from the cache of the probe its prepare warmed (CliVersionProbe `cached`, fix round
+ *  2), never from the CLI itself; a version not known reports none, and the session's note says so (ruling R6-8). */
 export function withUseReports<O extends StatusLineSpawnOptions>(o: O | undefined, claudeVersion: () => string | null | undefined): O | undefined {
   return o?.observe === true ? { ...o, reportsUses: reportsUses(claudeVersion()) } : o
 }
@@ -1074,6 +1076,7 @@ export class StatusLineManager {
       hookOutPath: hookEventsFileIn(this.hookEventsDir, sessionId),
       ...(observe ? { observed: true as const } : {}),
       ...(enforce ? { enforced: true as const } : {}),
+      ...(uses ? { useHooks: true as const } : {}),
       ...(sandboxed ? { sandboxed: true as const } : {})
     }
   }

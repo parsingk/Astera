@@ -2807,5 +2807,9 @@ export const ko = {
   'findings.info.claudeCannotTellCodexToo':
     'Claude와 Codex 모두 알 수 없습니다. Claude가 사용을 알리려면 Claude Code {min} 이상이 필요합니다.',
   'findings.info.claudeChatCannotTellCodexToo':
-    'Claude와 Codex 모두 알 수 없습니다. 최근 {days}일 안에 Claude 대화가 있었고, 대화에서 입력한 스킬이나 명령은 기록되지 않습니다.'
+    'Claude와 Codex 모두 알 수 없습니다. 최근 {days}일 동안 Claude 대화가 있었고, 대화에서 입력한 스킬이나 명령은 기록되지 않습니다.',
+  'findings.info.claudeUnhookedCannotTell':
+    'Claude는 알 수 없습니다. 최근 {days}일 동안 사용을 알리는 훅 없이 실행된 Claude 세션이 있었습니다.',
+  'findings.info.claudeUnhookedCannotTellCodexToo':
+    'Claude와 Codex 모두 알 수 없습니다. 최근 {days}일 동안 사용을 알리는 훅 없이 실행된 Claude 세션이 있었습니다.'
 } as const

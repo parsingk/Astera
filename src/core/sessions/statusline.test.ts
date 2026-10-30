@@ -592,7 +592,9 @@ describe('StatusLineManager observe mode', () => {
       for (const mode of [{ observe: true }, { observe: true, enforce: true }]) {
         const c = mgr.spawnConfig('s1', account, { toolHooks, ...mode, reportsUses: true })
         const without = mgr.spawnConfig('s1', account, { toolHooks, ...mode })
-        expect(c, JSON.stringify(mode)).toMatchObject({ observed: true, ...(mode.enforce ? { enforced: true } : {}) })
+        // Fix round 2 (ruling R6-8): the spawn says it got the use hooks, for the session's note
+        expect(c, JSON.stringify(mode)).toMatchObject({ observed: true, useHooks: true, ...(mode.enforce ? { enforced: true } : {}) })
+        expect(without, JSON.stringify(mode)).not.toHaveProperty('useHooks')
         const hooks = JSON.parse(await read(c.settingsFile)).hooks
         expect(hooks.UserPromptExpansion, JSON.stringify(mode)).toEqual([{ hooks: [capture] }])
         expect(hooks.SubagentStart, JSON.stringify(mode)).toEqual([{ matcher: '*', hooks: [capture] }])
@@ -610,6 +612,7 @@ describe('StatusLineManager observe mode', () => {
     for (const toolHooks of [false, true]) {
       const c = mgr.spawnConfig('s1', account, { toolHooks, reportsUses: true })
       expect(c.settingsFile).toBe(mgr.spawnConfig('s1', account, { toolHooks }).settingsFile)
+      expect(c).not.toHaveProperty('useHooks')
       const hooks = JSON.parse(await read(c.settingsFile)).hooks
       expect(hooks).not.toHaveProperty('UserPromptExpansion')
       expect(hooks).not.toHaveProperty('SubagentStart')
@@ -629,11 +632,12 @@ describe('StatusLineManager observe mode', () => {
     expect(asked).toBe(5)
   })
 
-  // spawner.ts and core.ts are never run by a test: where they hand the version to the settings file is guarded by its text
+  // spawner.ts and core.ts are never run by a test: where they hand the version to the settings file is guarded by its text.
+  // Fix round 2: from the probe's cache only, so an observed spawn never runs `claude --version` on the calling thread
   it('the Host and the app pick the settings file by the Claude version they warmed', async () => {
     for (const file of ['../../host/spawner.ts', '../../main/core.ts']) {
       const src = await fs.readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), file), 'utf8')
-      expect(src, file).toMatch(/statusLine\.spawnConfig\(id, account, withUseReports\(\w+, \(\) => cliVersions\('claude'\)\)\)/)
+      expect(src, file).toMatch(/statusLine\.spawnConfig\(id, account, withUseReports\(\w+, \(\) => cliVersions\.cached\('claude'\)\)\)/)
       expect(src, file).toContain("Promise.all([statusLine.ensureObserveFiles(), cliVersions.warm('claude')])")
     }
   })

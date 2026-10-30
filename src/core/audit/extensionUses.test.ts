@@ -82,6 +82,18 @@ describe('the extension use log', () => {
     expect([s.skillOrCommand.size, s.agents.size]).toEqual([0, 0])
   })
 
+  // Ruling R6-8: a Claude terminal session started without the use hooks is marked, and the summary says one ran
+  it('an unhooked session mark in the window says a Claude session ran without the use hooks', async () => {
+    const p = await profile()
+    const now = ms('2026-10-30')
+    await appendExtensionUses(p, [use('unhooked', '', '2026-10-05')], { now: () => now })
+    const before = await summarizeExtensionUses(p, ms('2026-10-10'), now)
+    expect([before.claudeUnhookedSeen, before.claudeChatSeen]).toEqual([false, false])
+    await appendExtensionUses(p, [use('unhooked', '', '2026-10-25')], { now: () => now })
+    const s = await summarizeExtensionUses(p, ms('2026-10-10'), now)
+    expect([s.claudeUnhookedSeen, s.claudeChatSeen, s.skillOrCommand.size, s.agents.size]).toEqual([true, false, 0, 0])
+  })
+
   it('pruned with the same keep days as the records', async () => {
     const p = await profile()
     const dir = profilePaths(p).extensionUses

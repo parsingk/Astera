@@ -141,7 +141,16 @@ describe('the findings catalog', () => {
       ],
       'findings.info.claudeChatCannotTellCodexToo': [
         'Neither Claude nor Codex can tell: a Claude chat ran in the last {days} days, and Claude Code does not report a skill or command typed in a chat.',
-        'Claude와 Codex 모두 알 수 없습니다. 최근 {days}일 안에 Claude 대화가 있었고, 대화에서 입력한 스킬이나 명령은 기록되지 않습니다.'
+        'Claude와 Codex 모두 알 수 없습니다. 최근 {days}일 동안 Claude 대화가 있었고, 대화에서 입력한 스킬이나 명령은 기록되지 않습니다.'
+      ],
+      // Ruling R6-8: a Claude session ran without the hooks that report uses
+      'findings.info.claudeUnhookedCannotTell': [
+        'Claude cannot tell: a Claude session in the last {days} days ran without the hooks that report uses.',
+        'Claude는 알 수 없습니다. 최근 {days}일 동안 사용을 알리는 훅 없이 실행된 Claude 세션이 있었습니다.'
+      ],
+      'findings.info.claudeUnhookedCannotTellCodexToo': [
+        'Neither Claude nor Codex can tell: a Claude session in the last {days} days ran without the hooks that report uses.',
+        'Claude와 Codex 모두 알 수 없습니다. 최근 {days}일 동안 사용을 알리는 훅 없이 실행된 Claude 세션이 있었습니다.'
       ]
     }
     for (const [key, [english, korean]] of Object.entries(copy)) {

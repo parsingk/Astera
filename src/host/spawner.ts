@@ -158,10 +158,10 @@ export interface HostSpawnerDeps {
   codexWindowsReady?: CodexWindowsReady
   /** Test injection; defaults to asking the claude on this machine's PATH its version (cliVersionProbe), which a sandboxed
    *  Claude start needs. A test never runs the real one. */
-  claudeVersion?: CliVersionProbe
+  claudeVersion?: Pick<CliVersionProbe, 'warm'> & ((cli: 'claude') => string | null | undefined)
   /** Test injection; defaults to asking the codex on this machine's PATH its version (cliVersionProbe), which a sandboxed
    *  Codex start needs (final review I2). A test never runs the real one. */
-  codexVersion?: CliVersionProbe
+  codexVersion?: Pick<CliVersionProbe, 'warm'> & ((cli: 'codex') => string | null | undefined)
   /** Test injection; defaults to os.tmpdir(): where a sandboxed Claude session's npm cache and the Host's socket are. A
    *  test gives its own folder, so nothing is made in the real one. */
   tmpDir?: string
@@ -486,8 +486,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     Number.POSITIVE_INFINITY,
     0,
     homeDir,
-    // An observed session's settings carry the use hooks when its Claude Code reports uses (lifecycle design §4.12)
-    (id, account, o) => statusLine.spawnConfig(id, account, withUseReports(o, () => cliVersions('claude'))),
+    // An observed session's settings carry the use hooks when its Claude Code reports uses (lifecycle design §4.12), as the
+    // version its prepare warmed says: never asked of the CLI on this thread (fix round 2)
+    (id, account, o) => statusLine.spawnConfig(id, account, withUseReports(o, () => cliVersions.cached('claude'))),
     [previewShotsDir(profileDir)],
     // Read at each spawn, not once: the Host completes its PATH when a CLI is missing (windowsPath.ts)
     () => hostWorkerBaseEnv(d.env),

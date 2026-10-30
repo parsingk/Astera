@@ -14,7 +14,8 @@
 // logged and costs that call.
 //
 // Beside the calls, `use` takes a use of a shared skill, command or agent a source heard (lifecycle design §4.12): only
-// its name, stamped with the session's account and profile, written to the use log under the same mode as a record.
+// its name, stamped with the session's account and profile, written to the use log under the same mode as a record, and
+// its source told whether it was written.
 import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
@@ -147,8 +148,10 @@ export interface AuditRecorder {
   /** Hands a finished call over. Returns at once and never throws. */
   record(ev: AuditEvent): void
   /** Hands a use of a shared skill, command or agent over: written to the use log while observing, dropped in
-   *  compatibility as a call is. Returns at once and never throws. */
-  use(ev: UseEvent): void
+   *  compatibility as a call is. Returns at once and never throws. `done` is told whether it was written: true once the
+   *  append resolved, false wherever it was let go (the mode, a session not observed, a repeat, a full hold, an append
+   *  that failed), so a source that must land a mark hands it again (fix round 2). */
+  use(ev: UseEvent, done?: (written: boolean) => void): void
   /** The mode may have changed: it is read again at once, and before the next record is written. `modeUnchanged` says the
    *  change cannot have turned it (a rule edited): what is known stays until the read, and nobody is told of a
    *  change that did not happen. */
@@ -229,8 +232,16 @@ export function createAuditRecorder(d: {
   let retryWait = RETRY_FIRST_MS
   let retrying = false
   let pending: AuditRecord[] = []
-  /** Uses that wait for the disk, behind the same mode as the records. */
-  let usesPending: ExtensionUse[] = []
+  /** Uses that wait for the disk, behind the same mode as the records, each with whom to tell how it went. */
+  let usesPending: Array<{ use: ExtensionUse; done?: (written: boolean) => void }> = []
+  /** Tells a use's source how it went; a source that throws costs nothing else. */
+  const tell = (done: ((written: boolean) => void) | undefined, written: boolean): void => {
+    try {
+      done?.(written)
+    } catch (err) {
+      d.log(`audit: a source of uses failed when told one was ${written ? '' : 'not '}written: ${String(err)}`)
+    }
+  }
   /** Calls dropped while the hold was full, and uses dropped while theirs was, each told when it empties. */
   let dropped = 0
   let droppedUses = 0
@@ -319,10 +330,21 @@ export function createAuditRecorder(d: {
         // Off: only the blocks of sessions started in Enforce, which keep blocking until they end (final review I7). A use
         // has no block: off, it is let go
         const batch = isObserving(m) ? pending : pending.filter((r) => r.status === 'blocked' && d.sessionInfo(r.sessionId)?.enforced === true)
-        const uses = isObserving(m) ? usesPending : []
+        const uses = usesPending
         pending = []
         usesPending = []
-        if (uses.length > 0) await appendUses(d.profileDir, uses, { log: d.log })
+        if (!isObserving(m)) for (const u of uses) tell(u.done, false)
+        else if (uses.length > 0) {
+          // A failed append costs these uses, never the calls taken with them
+          let written = true
+          try {
+            await appendUses(d.profileDir, uses.map((u) => u.use), { log: d.log })
+          } catch (err) {
+            written = false
+            d.log(`audit: ${uses.length} use(s) of skills, commands or agents could not be written: ${String(err)}`)
+          }
+          for (const u of uses) tell(u.done, written)
+        }
         if (batch.length === 0) continue
         // A record whose lookup had to wait takes what it found before it is written, the ones behind it waiting with it
         for (const r of batch) {
@@ -448,30 +470,31 @@ export function createAuditRecorder(d: {
         d.log(`audit: a ${String(ev?.source)} call of session ${String(ev?.sessionId)} was not recorded: ${String(err)}`)
       }
     },
-    use(ev) {
+    use(ev, done) {
       try {
-        if (mode === 'compatibility') return
-        // Claude's alone: Codex reports no use exactly (lifecycle plan ruling 14)
-        if (PROVIDER[ev.source] !== 'claude') return
-        const info = d.sessionInfo(ev.sessionId)
-        if (info === null) return
+        // Known off, Codex's (it reports no use exactly, lifecycle plan ruling 14), or of a session not observed
+        const info = mode === 'compatibility' || PROVIDER[ev.source] !== 'claude' ? null : d.sessionInfo(ev.sessionId)
+        if (info === null) return tell(done, false)
         // Its own keys: the Skill call that used a skill is a call too, under the same id
-        if (ev.dedupeKey !== undefined && useHeard(ev.sessionId, ev.dedupeKey)) return
+        if (ev.dedupeKey !== undefined && useHeard(ev.sessionId, ev.dedupeKey)) return tell(done, false)
         if (usesPending.length >= AUDIT_PENDING_MAX) {
           if (droppedUses === 0) d.log(`audit: ${AUDIT_PENDING_MAX} uses wait for the disk; later uses are counted and not recorded until it takes them`)
           droppedUses += 1
-          return
+          return tell(done, false)
         }
         usesPending.push({
-          id: `eu_${randomBytes(8).toString('hex')}`,
-          at: timeOf(ev.at),
-          sessionId: ev.sessionId,
-          provider: 'claude',
-          kind: info.kind,
-          accountId: info.accountId,
-          ...(info.agentProfileId !== undefined ? { agentProfileId: info.agentProfileId } : {}),
-          via: ev.via,
-          name: ev.name.slice(0, USE_NAME_MAX)
+          use: {
+            id: `eu_${randomBytes(8).toString('hex')}`,
+            at: timeOf(ev.at),
+            sessionId: ev.sessionId,
+            provider: 'claude',
+            kind: info.kind,
+            accountId: info.accountId,
+            ...(info.agentProfileId !== undefined ? { agentProfileId: info.agentProfileId } : {}),
+            via: ev.via,
+            name: ev.name.slice(0, USE_NAME_MAX)
+          },
+          ...(done !== undefined ? { done } : {})
         })
         if (!busy) {
           busy = true
@@ -479,6 +502,7 @@ export function createAuditRecorder(d: {
         }
       } catch (err) {
         d.log(`audit: a use of session ${String(ev?.sessionId)} was not recorded: ${String(err)}`)
+        tell(done, false)
       }
     },
     invalidate(o) {

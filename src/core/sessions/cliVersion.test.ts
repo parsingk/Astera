@@ -94,4 +94,35 @@ describe('makeCliVersionProbe', () => {
     identity = '/usr/local/bin/codex|2|11'
     expect(probe('codex')).toBe('0.160.0')
   })
+
+  // Lifecycle design §4.12, fix round 2: an observed spawn reads the version the prepare warmed and never asks the CLI on
+  // the calling thread; a miss is a version not known
+  it('cached answers from what was learnt, and never resolves, stats or runs anything', async () => {
+    let now = 0
+    let answer: string | null = '2.1.312 (Claude Code)'
+    const sync = { resolve: vi.fn(() => '/usr/bin/claude'), identity: vi.fn(() => 'claude-1'), run: vi.fn(() => 'never') }
+    const probe = makeCliVersionProbe({
+      platform: 'linux',
+      which: sync.resolve,
+      identity: sync.identity,
+      run: sync.run,
+      whichAsync: async () => '/usr/bin/claude',
+      identityAsync: async () => 'claude-1',
+      runAsync: async () => answer,
+      now: () => now
+    })
+    // An empty cache: unknown, and nothing asked
+    expect(probe.cached('claude')).toBeUndefined()
+    await probe.warm('claude')
+    expect(probe.cached('claude')).toBe('2.1.312')
+    expect(probe.cached('codex')).toBeUndefined()
+    // Past the TTL it is not taken for known
+    now = 11 * 60 * 1000
+    expect(probe.cached('claude')).toBeUndefined()
+    // A failed answer leaves it unknown
+    answer = null
+    await probe.warm('claude')
+    expect(probe.cached('claude')).toBeUndefined()
+    for (const f of Object.values(sync)) expect(f).not.toHaveBeenCalled()
+  })
 })

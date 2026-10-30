@@ -21,9 +21,11 @@
 // - Uses of shared skills, commands and agents (lifecycle design §4.12), handed to the recorder's `use`: from a Claude
 //   terminal's audit file, a Skill call that ran, a person's `/name` (UserPromptExpansion) and an agent's start
 //   (SubagentStart, once per agent); from a Claude chat's stream, a Skill or Agent call that ran. Only the name each
-//   reported. And a mark that a Claude chat ran, at the first line of its stream read while observing (ruling R6-1): a
-//   skill or command typed into a chat is expanded with no call and no hook, so the findings cannot tell it went unused.
-//   Codex reports none exactly, so none is read from it.
+//   reported. And two marks, handed until the recorder says each was written, and again each local day the session runs,
+//   so neither ages out of the 30 days: a Claude chat ran, from the first line of its stream read while observing (ruling
+//   R6-1), since a skill or command typed into a chat is expanded with no call and no hook; and a Claude terminal session
+//   ran without the use hooks (its note's `useHooks` is not true, ruling R6-8), found in the Host's own list of live
+//   sessions, so one that sends nothing is marked too. Codex reports no use exactly, so none is read from it.
 //
 // - Enforce (enforce design §5): a call the blocking hook stopped never ran, so none of the above hears it. The hook
 //   writes every call it sees to enforce/<session>.jsonl, a stopped one with its rule and what it resolved the call to;
@@ -54,8 +56,8 @@ import { outputText } from '../../core/history/codexConversation'
 import { HOOK_EVENT_AT } from '../../core/hooks/eventTime'
 import { HookEventWatcher } from '../../core/hooks/eventWatcher'
 import { JsonlTail } from '../../core/rolling/jsonlTail'
-import type { AuditSource } from '../../core/audit/store'
-import type { PtyMeta } from '../../core/host/protocol'
+import { auditDayOf, type AuditSource } from '../../core/audit/store'
+import type { PtyEntry, PtyMeta } from '../../core/host/protocol'
 import type { AuditEvent, AuditRecorder, UseEvent } from './recorder'
 
 /** One finished call as a source reads it, before it is told whose session it was. `stoppedByHook`: a Codex call whose
@@ -140,6 +142,8 @@ export function claudeHookUses(): (sessionId: string, payload: unknown) => Heard
       name === null ? null : { via, name, ...(dedupeKey ? { dedupeKey } : {}), ...(at !== undefined ? { at } : {}) }
     switch (p.hook_event_name) {
       case 'PostToolUse':
+        // An Agent call names the agent it started too (Task, by its older name): with or without a SubagentStart, a use
+        if (p.tool_name === 'Agent' || p.tool_name === 'Task') return heard('agent-tool', str(obj(p.tool_input)?.subagent_type), str(p.tool_use_id))
         return p.tool_name === 'Skill' ? heard('skill-tool', str(obj(p.tool_input)?.skill), str(p.tool_use_id)) : null
       case 'UserPromptExpansion':
         return p.expansion_type === 'slash_command' ? heard('slash', str(p.command_name)) : null
@@ -614,8 +618,13 @@ export interface AuditSources {
 export function createAuditSources(d: {
   /** `retryMode` is asked at every tick of the timer: the recorder says when it is due. */
   recorder: Pick<AuditRecorder, 'record' | 'use' | 'observing' | 'onObservingChange'> & Partial<Pick<AuditRecorder, 'retryMode' | 'unhooked'>>
-  ptys: { onMeta: Listen<[string, PtyMeta, 'open' | 'note']>; onExit: Listen<[string, number]> }
+  /** `list`: the registry's entries, where the Claude terminal sessions without the use hooks are found (ruling R6-8).
+   *  Without it none is marked. */
+  ptys: { onMeta: Listen<[string, PtyMeta, 'open' | 'note']>; onExit: Listen<[string, number]>; list?: () => PtyEntry[] }
   procs: { onMeta: Listen<[string, PtyMeta, 'open' | 'note']>; onLine: Listen<[string, number, string]>; onExit: Listen<[string, number]> }
+  /** Whether an account is Claude's, for an observed terminal note that does not say whether it got the use hooks (one an
+   *  app that did not write the mark wrote): a Codex session has none. Unset: such a note is not marked. */
+  claudeAccount?: (accountId: string) => Promise<boolean>
   /** The profile's hook-events folder, where the observed sessions' audit files are. */
   hookEventsDir: string
   /** The profile's enforce folder (profilePaths `enforceEvents`), where the Enforce hook writes each session's calls.
@@ -630,6 +639,22 @@ export function createAuditSources(d: {
   watch?: typeof watch
 }): AuditSources {
   const now = d.now ?? Date.now
+  /** The local day now, the day a mark is written for. */
+  const today = (): string => auditDayOf(new Date(now()).toISOString())
+
+  /** A mark (a Claude chat that ran, a session without the use hooks) for one session: the local day it was last written
+   *  for, and whether one is on its way. Handed when neither holds, and counted only once the recorder says it was
+   *  written, so one the recorder let go is handed again. */
+  type Mark = { day: string | null; handing: boolean }
+  const handMark = (m: Mark, sessionId: string, source: Extract<AuditSource, 'claude-hook' | 'claude-chat'>, via: 'chat-seen' | 'unhooked'): void => {
+    const day = today()
+    if (m.handing || m.day === day) return
+    m.handing = true
+    d.recorder.use({ sessionId, source, via, name: '' }, (written) => {
+      m.handing = false
+      if (written) m.day = day
+    })
+  }
 
   /** The sessions started in Enforce, by session id, and which pty or process each runs in. */
   const enforcing = new Map<string, EnforceFile>()
@@ -715,8 +740,8 @@ export function createAuditSources(d: {
     { audit: true, startAtEnd: true, ...(d.watch ? { watch: d.watch } : {}) }
   )
 
-  /** Observed chat processes, by proc id. `marked`: a Claude chat's mark was handed since observe was last turned on. */
-  const chats = new Map<string, { sessionId: string; source: AuditSource; read: (line: string) => ObservedCall[]; marked: boolean }>()
+  /** Observed chat processes, by proc id, with a Claude chat's mark (ruling R6-1). */
+  const chats = new Map<string, { sessionId: string; source: AuditSource; read: (line: string) => ObservedCall[]; mark: Mark }>()
   /** Observed terminal sessions, by pty id: the rollout followed, once the note names one, and the files a newer one
    *  replaced (`left`), each read once more at the next poll with the calls it still waits for. */
   const rollouts = new Map<
@@ -740,7 +765,7 @@ export function createAuditSources(d: {
       chats.set(
         procId,
         meta.restore.provider === 'claude'
-          ? { sessionId: meta.id, source: 'claude-chat', read: claudeChatCalls(), marked: false }
+          ? { sessionId: meta.id, source: 'claude-chat', read: claudeChatCalls(), mark: { day: null, handing: false } }
           : {
               sessionId: meta.id,
               source: 'codex-chat',
@@ -748,7 +773,7 @@ export function createAuditSources(d: {
                 const c = codexChatCall(line)
                 return c ? [c] : []
               },
-              marked: false
+              mark: { day: null, handing: false }
             }
       )
     }),
@@ -756,11 +781,8 @@ export function createAuditSources(d: {
       const chat = chats.get(procId)
       if (!chat || !d.recorder.observing()) return
       try {
-        // Its first line read while observing says a Claude chat ran, whether or not it calls a tool (ruling R6-1)
-        if (chat.source === 'claude-chat' && !chat.marked) {
-          chat.marked = true
-          d.recorder.use({ sessionId: chat.sessionId, source: 'claude-chat', via: 'chat-seen', name: '' })
-        }
+        // A line read while observing says a Claude chat ran, whether or not it calls a tool (ruling R6-1)
+        if (chat.source === 'claude-chat') handMark(chat.mark, chat.sessionId, 'claude-chat', 'chat-seen')
         const calls = chat.read(line)
         hand(chat.sessionId, chat.source, calls)
         if (chat.source !== 'claude-chat') return
@@ -819,10 +841,8 @@ export function createAuditSources(d: {
   const follow = (): boolean => {
     const on = d.recorder.observing()
     if (on && !reading) {
-      // The calls made meanwhile were not read, so where they left the shells is not known; a chat's mark handed before may
-      // have been let go when the mode turned out off, so each chat is marked again at its next line
+      // The calls made meanwhile were not read, so where they left the shells is not known
       shellAt.clear()
-      for (const chat of chats.values()) chat.marked = false
       hooks.start()
       for (const r of rollouts.values()) {
         r.calls.forget()
@@ -835,10 +855,59 @@ export function createAuditSources(d: {
   }
   const offMode = d.recorder.onObservingChange(() => void follow())
 
+  /** The live Claude terminal sessions without the use hooks, by session id, with their mark (ruling R6-8); and, for a note
+   *  that does not say, whether its account is Claude's, asked once per session. */
+  const unhooked = new Map<string, Mark>()
+  const claudeOf = new Map<string, boolean>()
+  /** Set while the accounts cannot be read: one log line per streak, as the mode's reads (recorder.ts). */
+  let accountsFailing = false
+  /** Marks each live, observed Claude terminal session whose note does not say it got the use hooks, from the registry's
+   *  list rather than from anything the session sent, so a session that sends nothing is marked too. Never rejects. */
+  const markUnhooked = async (): Promise<void> => {
+    if (!d.ptys.list) return
+    const live = new Set<string>()
+    for (const e of d.ptys.list()) {
+      const meta = e.meta
+      if (!e.alive || meta?.kind !== 'session' || meta.restore.observed !== true || meta.restore.useHooks === true) continue
+      const sessionId = meta.id
+      live.add(sessionId)
+      if (meta.restore.useHooks !== false) {
+        let claude = claudeOf.get(sessionId)
+        if (claude === undefined) {
+          const accountId = str(meta.restore.accountId)
+          if (accountId === null || !d.claudeAccount) continue
+          try {
+            claude = await d.claudeAccount(accountId)
+            accountsFailing = false
+          } catch (err) {
+            if (!accountsFailing) d.log(`audit: whose account session ${sessionId} runs in could not be read, so it is not marked yet: ${String(err)}`)
+            accountsFailing = true
+            continue
+          }
+          claudeOf.set(sessionId, claude)
+        }
+        if (!claude) continue
+      }
+      let m = unhooked.get(sessionId)
+      if (!m) {
+        m = { day: null, handing: false }
+        unhooked.set(sessionId, m)
+      }
+      handMark(m, sessionId, 'claude-hook', 'unhooked')
+    }
+    for (const id of [...unhooked.keys()]) if (!live.has(id)) unhooked.delete(id)
+    for (const id of [...claudeOf.keys()]) if (!live.has(id)) claudeOf.delete(id)
+  }
+
   let polling = false
   const readRollouts = async (): Promise<void> => {
     for (const sessionId of [...enforcing.keys()]) readEnforce(sessionId)
     if (!follow()) return
+    try {
+      await markUnhooked()
+    } catch (err) {
+      d.log(`audit: the sessions without the use hooks could not be marked: ${String(err)}`)
+    }
     for (const [ptyId, r] of [...rollouts]) {
       for (const old of r.left.splice(0)) {
         try {

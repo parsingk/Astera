@@ -86,6 +86,7 @@ import { createHostExits, ptyHeldBy, type HostExits } from './exits'
 import { registrySessions } from './sessions'
 import { hookEventsDirIn } from '../core/hooks/sessionState'
 import { readAccountEntries } from '../core/accounts/accountsFile'
+import { providerOf } from '../core/providers/meta'
 import { readAgentPermissionMode } from '../core/settings/agentPermissionMode'
 import { announceChatProc, createHostSessionStarter } from './sessionCreate'
 import { previewShotsDir } from '../core/preview/shotsDir'
@@ -621,6 +622,12 @@ async function main(): Promise<void> {
     procs,
     hookEventsDir: hookEventsDirIn(profileDir),
     enforceDir: profilePaths(profileDir).enforceEvents,
+    // A terminal note that does not say whether its session got the use hooks (an app that did not write it) is a Claude
+    // session's when its account is (lifecycle design §4.12, ruling R6-8)
+    claudeAccount: async (accountId) => {
+      const account = (await readAccountEntries(path.join(profileDir, 'accounts.json'))).find((a) => a.id === accountId)
+      return account !== undefined && providerOf(account) === 'claude'
+    },
     log: (m) => log.write(m)
   })
 

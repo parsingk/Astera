@@ -177,4 +177,7 @@ export interface ExtensionUseSummary {
    *  chat (`-p`, stream-json) is expanded before the model runs, with no Skill call and no hook, so §4.12 cannot tell it
    *  went unused. */
   claudeChatSeen: boolean
+  /** A Claude terminal session ran without the hooks that report a typed skill or command and an agent's start (an older
+   *  Claude Code, or one whose version was not known; its note says `useHooks` is not true, ruling R6-8). */
+  claudeUnhookedSeen: boolean
 }

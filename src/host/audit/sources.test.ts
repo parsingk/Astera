@@ -93,35 +93,48 @@ const CUSTOM_OUT = (at: number, id: string, text: string) =>
   })
 const SHELL_DONE = (at: number, id = 'call_1', code = 0) => OUT(at, id, `Exit code: ${code}\nWall time: 0.1 seconds\nOutput:\nwhat it printed`)
 
-/** A registry that tells its listeners what the test says. */
+/** A registry that tells its listeners what the test says, and lists its entries as the Host's does. */
 function fakeRegistry() {
   const meta = new Set<(id: string, meta: PtyMeta, why: 'open' | 'note') => void>()
   const lines = new Set<(id: string, seq: number, line: string) => void>()
   const exits = new Set<(id: string, code: number) => void>()
+  const entries = new Map<string, PtyEntry>()
   const add = <T>(s: Set<T>, cb: T): (() => void) => (s.add(cb), () => void s.delete(cb))
   let seq = 0
   return {
     onMeta: (cb: (id: string, meta: PtyMeta, why: 'open' | 'note') => void) => add(meta, cb),
     onLine: (cb: (id: string, seq: number, line: string) => void) => add(lines, cb),
     onExit: (cb: (id: string, code: number) => void) => add(exits, cb),
-    open: (id: string, m: PtyMeta) => meta.forEach((cb) => cb(id, m, 'open')),
-    note: (id: string, m: PtyMeta) => meta.forEach((cb) => cb(id, m, 'note')),
+    list: (): PtyEntry[] => [...entries.values()],
+    open: (id: string, m: PtyMeta) => (entries.set(id, { id, pid: 1, alive: true, meta: m }), meta.forEach((cb) => cb(id, m, 'open'))),
+    note: (id: string, m: PtyMeta) => (entries.set(id, { id, pid: 1, alive: true, meta: m }), meta.forEach((cb) => cb(id, m, 'note'))),
     line: (id: string, l: string) => lines.forEach((cb) => cb(id, ++seq, l)),
-    exit: (id: string) => exits.forEach((cb) => cb(id, 0)),
+    exit: (id: string) => {
+      const e = entries.get(id)
+      if (e) entries.set(id, { ...e, alive: false })
+      exits.forEach((cb) => cb(id, 0))
+    },
     listeners: () => meta.size + lines.size + exits.size
   }
 }
 
 /** A recorder that keeps what it is handed, observing until told otherwise, and tells its listeners when that changes as
- *  the real one does. */
+ *  the real one does. A use is said to be written at once, unless the test says it is not (`answerUses(false)`) or is
+ *  still on its way (`answerUses('hold')`, told with `settle`). */
 function capture() {
   const events: AuditEvent[] = []
   const uses: UseEvent[] = []
   let on = true
+  let answer: boolean | 'hold' = true
+  const held: Array<(written: boolean) => void> = []
   const listeners = new Set<() => void>()
   return {
     events,
     uses,
+    answerUses: (a: boolean | 'hold') => void (answer = a),
+    settle: (written: boolean) => {
+      for (const done of held.splice(0)) done(written)
+    },
     listening: () => listeners.size,
     setObserving: (v: boolean) => {
       if (v === on) return
@@ -130,7 +143,12 @@ function capture() {
     },
     recorder: {
       record: (e: AuditEvent) => void events.push(e),
-      use: (e: UseEvent) => void uses.push(e),
+      use: (e: UseEvent, done?: (written: boolean) => void) => {
+        uses.push(e)
+        if (done === undefined) return
+        if (answer === 'hold') held.push(done)
+        else done(answer)
+      },
       observing: () => on,
       onObservingChange: (cb: () => void) => (listeners.add(cb), () => void listeners.delete(cb))
     }
@@ -145,6 +163,8 @@ async function sourcesFor(o: {
   now?: () => number
   hookEventsDir?: string
   enforceDir?: string
+  claudeAccount?: (accountId: string) => Promise<boolean>
+  log?: (message: string) => void
 }) {
   const hookEventsDir = o.hookEventsDir ?? (await tempDir())
   const sources = createAuditSources({
@@ -153,7 +173,8 @@ async function sourcesFor(o: {
     procs: o.procs ?? fakeRegistry(),
     hookEventsDir,
     ...(o.enforceDir ? { enforceDir: o.enforceDir } : {}),
-    log: () => {},
+    ...(o.claudeAccount ? { claudeAccount: o.claudeAccount } : {}),
+    log: o.log ?? (() => {}),
     every: () => () => {},
     watch: (() => ({ on: () => {}, close: () => {} })) as never,
     ...(o.now ? { now: o.now } : {})
@@ -432,6 +453,16 @@ describe('the Claude hook source, for uses', () => {
     sources.dispose()
   })
 
+  // Fix round 2: the capture keeps an Agent or Task call's `subagent_type`, so a terminal hands it as the chat does. It
+  // names the agent a session started, whether or not a SubagentStart came; counted twice it is still one use
+  it('PostToolUse Agent or Task hands an agent-tool use with tool_input.subagent_type; a failure or no type none', () => {
+    const read = claudeHookUses()
+    expect(read('sess_a', postToolUse('Agent', { subagent_type: 'code-reviewer' }, 'toolu_1'))).toEqual({ via: 'agent-tool', name: 'code-reviewer', dedupeKey: 'toolu_1', at: iso(T0) })
+    expect(read('sess_a', postToolUse('Task', { subagent_type: 'Explore' }, 'toolu_2'))).toMatchObject({ via: 'agent-tool', name: 'Explore' })
+    expect(read('sess_a', postToolUse('Agent', { subagent_type: 'code-reviewer' }, 'toolu_3', 'PostToolUseFailure'))).toBeNull()
+    expect(read('sess_a', postToolUse('Agent', {}, 'toolu_4'))).toBeNull()
+  })
+
   it("a name with ':' is handed (the mapping drops it later)", () => {
     const read = claudeHookUses()
     expect(read('sess_a', postToolUse('Skill', { skill: 'superpowers:brainstorming' }, 'toolu_1'))?.name).toBe('superpowers:brainstorming')
@@ -446,6 +477,106 @@ describe('the Claude hook source, for uses', () => {
     await fs.writeFile(audit('sess_a'), lineOf(event('UserPromptExpansion', { expansion_type: 'slash_command', command_name: 'ship' })))
     await sources.poll()
     expect(uses).toEqual([])
+    sources.dispose()
+  })
+})
+
+// Ruling R6-8: a Claude session started without the hooks that report uses (an older Claude Code, a version not known)
+// records no `/command` and no agent start. The Host marks it, from its own list of live sessions, once each local day it
+// runs, so the findings read "Claude cannot tell" for every window it was in
+describe('the unhooked Claude terminal sessions', () => {
+  const DAY = 24 * 60 * 60 * 1000
+  const UNHOOKED = { sessionId: 'sess_a', source: 'claude-hook', via: 'unhooked', name: '' }
+
+  it('a session spawned without the use hooks is marked, with no event of its own', async () => {
+    const ptys = fakeRegistry()
+    const { uses, events, recorder } = capture()
+    const { sources } = await sourcesFor({ recorder, ptys })
+    ptys.open('pty1', note('session', 'sess_a', { ...OBSERVED, useHooks: false }))
+    await sources.poll()
+    expect(uses).toEqual([UNHOOKED])
+    expect(events).toEqual([])
+    sources.dispose()
+  })
+
+  it('the mark is written once a day', async () => {
+    const ptys = fakeRegistry()
+    let now = T0
+    const { uses, recorder } = capture()
+    const { sources } = await sourcesFor({ recorder, ptys, now: () => now })
+    ptys.open('pty1', note('session', 'sess_a', { ...OBSERVED, useHooks: false }))
+    await sources.poll()
+    await sources.poll()
+    expect(uses).toEqual([UNHOOKED])
+    now = T0 + DAY
+    await sources.poll()
+    await sources.poll()
+    expect(uses).toEqual([UNHOOKED, UNHOOKED])
+    // Ended: not marked again
+    ptys.exit('pty1')
+    now = T0 + 2 * DAY
+    await sources.poll()
+    expect(uses).toHaveLength(2)
+    sources.dispose()
+  })
+
+  it('marks no session with the use hooks, none not observed, none of Codex, and asks the account of a note without the mark', async () => {
+    const ptys = fakeRegistry()
+    const asked: string[] = []
+    const { uses, recorder } = capture()
+    const claudeAccount = async (id: string) => (asked.push(id), id === 'acc_claude')
+    const { sources } = await sourcesFor({ recorder, ptys, claudeAccount })
+    ptys.open('pty1', note('session', 'sess_hooked', { ...OBSERVED, useHooks: true }))
+    ptys.open('pty2', note('session', 'sess_plain', { accountId: 'acc1', cwd, title: 't', useHooks: false }))
+    // Notes an app that did not write the mark wrote: a Codex session's account says it is not Claude's
+    ptys.open('pty3', note('session', 'sess_codex', { ...OBSERVED, accountId: 'acc_codex' }))
+    ptys.open('pty4', note('session', 'sess_old', { ...OBSERVED, accountId: 'acc_claude' }))
+    await sources.poll()
+    await sources.poll()
+    expect(uses.map((u) => u.sessionId)).toEqual(['sess_old'])
+    // Each account asked once per session
+    expect(asked.sort()).toEqual(['acc_claude', 'acc_codex'])
+    sources.dispose()
+  })
+
+  it('marks a note without the mark once its account can be read, and says once that it cannot', async () => {
+    const ptys = fakeRegistry()
+    const logs: string[] = []
+    let readable = false
+    const { uses, recorder } = capture()
+    const claudeAccount = async () => {
+      if (!readable) throw new Error('accounts.json is damaged')
+      return true
+    }
+    const { sources } = await sourcesFor({ recorder, ptys, claudeAccount, log: (m) => logs.push(m) })
+    ptys.open('pty1', note('session', 'sess_a', { ...OBSERVED }))
+    await sources.poll()
+    await sources.poll()
+    expect(uses).toEqual([])
+    expect(logs.filter((m) => /could not be read/.test(m))).toHaveLength(1)
+    readable = true
+    await sources.poll()
+    expect(uses).toEqual([UNHOOKED])
+    sources.dispose()
+  })
+
+  it('hands a mark again until it is written, and none while the mode is compatibility', async () => {
+    const ptys = fakeRegistry()
+    const { uses, recorder, answerUses, setObserving } = capture()
+    const { sources } = await sourcesFor({ recorder, ptys })
+    ptys.open('pty1', note('session', 'sess_a', { ...OBSERVED, useHooks: false }))
+    setObserving(false)
+    await sources.poll()
+    expect(uses).toEqual([])
+    setObserving(true)
+    answerUses(false)
+    await sources.poll()
+    await sources.poll()
+    expect(uses).toHaveLength(2)
+    answerUses(true)
+    await sources.poll()
+    await sources.poll()
+    expect(uses).toHaveLength(3)
     sources.dispose()
   })
 })
@@ -563,7 +694,7 @@ describe('the Claude chat source', () => {
     sources.dispose()
   })
 
-  it('marks no chat while the mode is compatibility, and marks it again once observe is back', async () => {
+  it('marks no chat while the mode is compatibility, and marks it once observe is on', async () => {
     const procs = fakeRegistry()
     const { uses, recorder, setObserving } = capture()
     const { sources } = await sourcesFor({ recorder, procs })
@@ -575,12 +706,42 @@ describe('the Claude chat source', () => {
     procs.line('proc1', assistant([{ type: 'text', text: 'x' }]))
     procs.line('proc1', assistant([{ type: 'text', text: 'y' }]))
     expect(uses.map((u) => [u.sessionId, u.via])).toEqual([['sess_c', 'chat-seen']])
-    // A mark heard while the mode was not known yet may have been let go when it turned out off: the next line after observe
-    // is back marks again
+    // Written: the mode going off and on again the same day asks no second mark
     setObserving(false)
     setObserving(true)
     procs.line('proc1', assistant([{ type: 'text', text: 'z' }]))
-    expect(uses.map((u) => u.via)).toEqual(['chat-seen', 'chat-seen'])
+    expect(uses.map((u) => u.via)).toEqual(['chat-seen'])
+    sources.dispose()
+  })
+
+  // Fix round 2: a mark counts once the recorder says it was written. One let go (the mode, a full hold, an append that
+  // failed) is handed again at a later line, and a chat that lives on is marked again each local day, so its mark never
+  // ages out of the 30 days
+  it('hands a chat mark again on a later line until it is written, and again on a new local day', async () => {
+    const procs = fakeRegistry()
+    let now = T0
+    const { uses, recorder, answerUses, settle } = capture()
+    const { sources } = await sourcesFor({ recorder, procs, now: () => now })
+    procs.open('proc1', note('chat', 'sess_c', { ...OBSERVED, provider: 'claude' }))
+    const say = (text: string) => procs.line('proc1', assistant([{ type: 'text', text }]))
+    answerUses(false)
+    say('a')
+    say('b')
+    expect(uses).toHaveLength(2)
+    // On its way: not handed again until it is told
+    answerUses('hold')
+    say('c')
+    say('d')
+    expect(uses).toHaveLength(3)
+    settle(true)
+    say('e')
+    expect(uses).toHaveLength(3)
+    // The next local day
+    answerUses(true)
+    now = T0 + 24 * 60 * 60 * 1000
+    say('f')
+    say('g')
+    expect(uses.map((u) => u.via)).toEqual(['chat-seen', 'chat-seen', 'chat-seen', 'chat-seen'])
     sources.dispose()
   })
 

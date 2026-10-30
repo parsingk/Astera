@@ -23,10 +23,11 @@ const item = (kind: FileExtension['kind'], name: string, over: Partial<FileExten
   addedAt: ago(40),
   ...over
 })
-const used = (skillOrCommand: string[] = [], agents: string[] = [], claudeChatSeen = false): ExtensionUseSummary => ({
+const used = (skillOrCommand: string[] = [], agents: string[] = [], claudeChatSeen = false, claudeUnhookedSeen = false): ExtensionUseSummary => ({
   skillOrCommand: new Set(skillOrCommand),
   agents: new Set(agents),
-  claudeChatSeen
+  claudeChatSeen,
+  claudeUnhookedSeen
 })
 /** Each skill and agent's copy, as the reader finds it: no frontmatter unless the test says. */
 const copiesOf = (registry: ExtensionEntry[], over: Record<string, ExtensionCopy> = {}): Map<string, ExtensionCopy> =>
@@ -308,5 +309,29 @@ describe('when nothing is raised (§4.12, never on missing data)', () => {
     ])
     // A use recorded anyway still counts
     expect(lines(inputs(registry(), { extensionUses: used(['ship', 'solo', 'both'], [], true) }))).toEqual([])
+  })
+
+  // Ruling R6-8: a Claude session in the window ran without the hooks that report a typed command or an agent's start
+  it('with a Claude session that ran without the use hooks (claudeUnhookedSeen), commands, agents and skills read "cannot tell"', () => {
+    const i = inputs(registry(), { extensionUses: used([], [], false, true) })
+    expect(keys(i)).toEqual([])
+    const unhooked = (id: string): [string, string] => [id, 'Claude cannot tell: a Claude session in the last 30 days ran without the hooks that report uses.']
+    const neither = (id: string): [string, string] => [
+      id,
+      'Neither Claude nor Codex can tell: a Claude session in the last 30 days ran without the hooks that report uses.'
+    ]
+    expect(lines(i)).toEqual([unhooked('command-ship'), unhooked('agent-reviewer'), unhooked('skill-solo'), neither('skill-both')])
+    expect(extensionUseInfo(i).map((l) => l.message)).toEqual([
+      { key: 'findings.info.claudeUnhookedCannotTell', params: { days: 30 } },
+      { key: 'findings.info.claudeUnhookedCannotTell', params: { days: 30 } },
+      { key: 'findings.info.claudeUnhookedCannotTell', params: { days: 30 } },
+      { key: 'findings.info.claudeUnhookedCannotTellCodexToo', params: { days: 30 } }
+    ])
+    // Over a chat: the session without the hooks is the wider reason, which covers agents too
+    expect(lines(inputs(registry(), { extensionUses: used([], [], true, true) }))).toEqual(lines(i))
+    // Below the version: the version line, which names what to update
+    expect(extensionUseInfo(inputs(registry(), { claudeVersion: '2.1.306', extensionUses: used([], [], false, true) }))[0].message.key).toBe('findings.info.claudeCannotTell')
+    // A use recorded anyway still counts
+    expect(lines(inputs(registry(), { extensionUses: used(['ship', 'solo', 'both'], ['reviewer'], false, true) }))).toEqual([])
   })
 })

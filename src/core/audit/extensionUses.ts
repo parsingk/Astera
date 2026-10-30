@@ -1,9 +1,10 @@
 // The use log of shared skills, commands and agents (lifecycle design §4.12): while Observe is on, the Host's recorder
 // appends each use Claude Code reported exactly (research cli-use-reporting.md §1), and the mark of each Claude chat that
-// ran (ruling R6-1), to day files of their own beside the tool calls, kept as long and as large as those are (the audit
-// store's own machinery, audit/store.ts). A use holds the name the CLI reported and whose session it was, never a prompt
-// or a command's arguments. The findings read back only which names were used in the window, and whether a chat ran
-// (summarizeExtensionUses); what each registry entry is called is the extensions' to say (extensions/copies.ts).
+// ran (ruling R6-1) and of each Claude terminal session that ran without the use hooks (ruling R6-8), to day files of their
+// own beside the tool calls, kept as long and as large as those are (the audit store's own machinery, audit/store.ts). A
+// use holds the name the CLI reported and whose session it was, never a prompt or a command's arguments. The findings read
+// back only which names were used in the window, and whether such a session ran (summarizeExtensionUses); what each
+// registry entry is called is the extensions' to say (extensions/copies.ts).
 import { profilePaths } from '../profile/paths'
 import { appendDated, visitDaysIn, type AuditStoreOptions } from './store'
 import type { ExtensionUseSummary } from './types'
@@ -22,12 +23,14 @@ export interface ExtensionUse {
   agentProfileId?: string
   /** skill-tool: the Skill tool's `skill`; slash: UserPromptExpansion's `command_name`; subagent: SubagentStart's
    *  `agent_type`; agent-tool: a chat stream's Agent tool `subagent_type`. chat-seen: no use, the mark of a Claude chat that
-   *  ran, whose typed skills and commands are not reported (ruling R6-1); its name is empty. */
-  via: 'skill-tool' | 'slash' | 'subagent' | 'agent-tool' | 'chat-seen'
+   *  ran, whose typed skills and commands are not reported (ruling R6-1). unhooked: no use, the mark of a Claude terminal
+   *  session that ran without the hooks that report them, written each local day it runs (ruling R6-8). A mark's name is
+   *  empty. */
+  via: 'skill-tool' | 'slash' | 'subagent' | 'agent-tool' | 'chat-seen' | 'unhooked'
   name: string
 }
 
-const VIA: ReadonlySet<string> = new Set<ExtensionUse['via']>(['skill-tool', 'slash', 'subagent', 'agent-tool', 'chat-seen'])
+const VIA: ReadonlySet<string> = new Set<ExtensionUse['via']>(['skill-tool', 'slash', 'subagent', 'agent-tool', 'chat-seen', 'unhooked'])
 const STRINGS = ['id', 'at', 'sessionId', 'name'] as const
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
@@ -49,11 +52,12 @@ export function appendExtensionUses(profileDir: string, uses: readonly Extension
   return appendDated(profilePaths(profileDir).extensionUses, uses, o, 'extension uses')
 }
 
-/** The names used from `sinceMs` on, as reported, and whether a Claude chat ran, read in one pass that keeps only those. A
- *  folder that is not there is no use at all; one that cannot be read rejects, so the findings name the source as unread
- *  rather than take every item for unused. `nowMs` is the read's clock, for the days kept. */
+/** The names used from `sinceMs` on, as reported, and whether a Claude chat, or a Claude session without the use hooks,
+ *  ran, read in one pass that keeps only those. A folder that is not there is no use at all; one that cannot be read
+ *  rejects, so the findings name the source as unread rather than take every item for unused. `nowMs` is the read's
+ *  clock, for the days kept. */
 export async function summarizeExtensionUses(profileDir: string, sinceMs: number, nowMs: number): Promise<ExtensionUseSummary> {
-  const s: ExtensionUseSummary = { skillOrCommand: new Set(), agents: new Set(), claudeChatSeen: false }
+  const s: ExtensionUseSummary = { skillOrCommand: new Set(), agents: new Set(), claudeChatSeen: false, claudeUnhookedSeen: false }
   await visitDaysIn(
     profilePaths(profileDir).extensionUses,
     useOf,
@@ -61,6 +65,7 @@ export async function summarizeExtensionUses(profileDir: string, sinceMs: number
     { since: new Date(sinceMs).toISOString() },
     (u) => {
       if (u.via === 'chat-seen') s.claudeChatSeen = true
+      else if (u.via === 'unhooked') s.claudeUnhookedSeen = true
       else (u.via === 'skill-tool' || u.via === 'slash' ? s.skillOrCommand : s.agents).add(u.name)
     },
     () => false,
