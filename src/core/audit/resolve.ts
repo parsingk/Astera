@@ -807,7 +807,7 @@ function resolveShell(rec: Record<string, unknown>, at: Ctx, flavor: Flavor): Re
   // itself, unless the line sets it: then it is a variable program like any other
   const line = typeof raw === 'string' ? raw : Array.isArray(raw) ? raw.join(' ') : ''
   const asteraCli = !/ASTERA_CLI\s*=/i.test(line)
-  const { commands: expanded, syntax } = expand(typed, flavor)
+  const { commands: expanded, syntax } = expand(typed, flavor, 0, asteraCli)
   const commands = asteraCli
     ? expanded.map((c) => (c.words.length > 0 && ASTERA_CLI_WORD.test(c.words[0]) ? { ...c, words: ['astera', ...c.words.slice(1)], quoted: [false, ...c.quoted.slice(1)] } : c))
     : expanded
@@ -1095,19 +1095,22 @@ function afterTimeout(words: Words, from: number): number {
  * the shell fills in. `syntax` is whether a keyword, a word that runs nothing or a word the shell fills in was seen (a loop header, a
  * PowerShell condition or `.Count`), which makes the line compound. A command of only assignments or only a header comes
  * back with no words. `filled`: that word the shell fills in, as a command of its own, since it may be the program.
+ * `cli`: Astera's own variable names its CLI on this line (resolveShell), so after a wrapper it is the program, as it is
+ * first (R-F8 list, N2).
  */
-function stripPrefix(raw: Cmd, flavor: Flavor): { cmd: Cmd; syntax: boolean; filled?: Cmd } {
+function stripPrefix(raw: Cmd, flavor: Flavor, cli = false): { cmd: Cmd; syntax: boolean; filled?: Cmd } {
   const words = raw.words
   let i = 0
   let syntax = false
   const assigned: string[] = [] // read for the login folder a value names, never kept (lifecycle design §4.10)
   let wrapped = false // a wrapper was read, so what follows its options is the command it runs
   let filled: string | undefined // the word the shell fills in that stood where the program would, kept apart below
+  const fills = (word: string): boolean => word === '$' || (wrapped && word.startsWith('$') && !(cli && ASTERA_CLI_WORD.test(word)))
   while (i < words.length) {
     const w = words[i].toLowerCase()
     if (ASSIGNMENT.test(words[i])) assigned.push(words[i++])
     else if (PS_ASSIGNED.test(words[i])) i++
-    else if (flavor === 'posix' && i + 1 < words.length && (words[i] === '$' || (wrapped && words[i].startsWith('$')))) {
+    else if (flavor === 'posix' && i + 1 < words.length && fills(words[i])) {
       // A quoted substitution standing as a word of its own (`"$(echo)" rm …`), or after a wrapper any word the shell fills
       // in (`env $X rm …`, `env "$(cat .env)" rm …`), may be a value or the program. Both are read (follow-up R-F6): the
       // words after it as the command, as they are after an unquoted substitution, which ends the command it is in (ruling
@@ -1278,12 +1281,12 @@ const inSubshell = (cmd: Cmd, run: Cmd[]): Cmd[] =>
 
 /** The commands of a line with the scripts inside `bash -c` and the like replaced by their own commands, and the commands
  *  that xargs, find -exec, watch and trap run put after the one that runs them. Also whether any of it was syntax rather
- *  than a command (`syntax`), which makes the line compound. */
-function expand(cmds: Cmd[], flavor: Flavor, depth = 0): { commands: Cmd[]; syntax: boolean } {
+ *  than a command (`syntax`), which makes the line compound. `cli`: Astera's own variable names its CLI (stripPrefix). */
+function expand(cmds: Cmd[], flavor: Flavor, depth = 0, cli = false): { commands: Cmd[]; syntax: boolean } {
   const out: Cmd[] = []
   let syntax = false
   for (const raw of cmds) {
-    const stripped = stripPrefix(raw, flavor)
+    const stripped = stripPrefix(raw, flavor, cli)
     const cmd = stripped.cmd
     syntax ||= stripped.syntax
     expandOne(cmd)
@@ -1307,12 +1310,12 @@ function expand(cmds: Cmd[], flavor: Flavor, depth = 0): { commands: Cmd[]; synt
       if (behind.length === 0) out.push(cmd)
       else if (depth >= 2) out.push({ ...cmd, unread: true }) // past the depth scripts are read to, where a shell's -c is unknown too
       else {
-        const inner = expand(behind, flavor, depth + 1)
+        const inner = expand(behind, flavor, depth + 1, cli)
         out.push({ ...cmd, runs: true }, ...inSubshell(cmd, inner.commands))
         syntax ||= inner.syntax
       }
     } else {
-      const inner = expand(splitLine(script.text, script.flavor, depth + 1), script.flavor, depth + 1)
+      const inner = expand(splitLine(script.text, script.flavor, depth + 1), script.flavor, depth + 1, cli)
       const outer = cmd.within
       const run = inSubshell(cmd, inner.commands).map((c) => (outer === undefined ? c : { ...c, within: [...outer, ...(c.within ?? [])].slice(-MAX_GROUPS) }))
       // What the shell reads from its input, its first command does (`bash -c "x" < f`); where its output goes, its last

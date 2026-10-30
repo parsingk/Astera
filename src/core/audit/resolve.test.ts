@@ -425,6 +425,18 @@ describe('shell: unknown', () => {
     expect(ps('$env:ASTERA_CLI = "rm"; & $env:ASTERA_CLI -rf ../x').confidence).toBe('unknown')
   })
 
+  // R-F8 list, N2: after a wrapper too, as Astera's own coordinators run it (`timeout 600 "$ASTERA_CLI" sessions create`)
+  it('reads $ASTERA_CLI after a wrapper as Astera’s CLI unless the line sets it', () => {
+    expect(bash('timeout 600 "$ASTERA_CLI" sessions create --kind chat')).toMatchObject({ action: 'process.execute', target: 'astera sessions', confidence: 'high' })
+    expect(bash('nohup $ASTERA_CLI jobs run x')).toMatchObject({ action: 'process.execute', target: 'astera jobs', confidence: 'high' })
+    expect(bash('env "${ASTERA_CLI}" sessions list')).toMatchObject({ target: 'astera sessions', confidence: 'high' })
+    expect(bash('sudo -u root $ASTERA_CLI runs get --id r1')).toMatchObject({ target: 'astera runs', confidence: 'high' })
+    // Set by the line, it is a word the shell fills in like any other: the command after it is read, and it is not known
+    const set = bash('ASTERA_CLI=x env $ASTERA_CLI rm -rf ../x')
+    expect(set.confidence).toBe('unknown')
+    expect(acts(set)).toContain('filesystem.delete')
+  })
+
   it('is unknown for a line with one unknown command among known ones', () => {
     expect(bash('npm test && ./foo.sh')).toEqual({
       action: 'process.execute',

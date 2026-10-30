@@ -231,6 +231,15 @@ describe('enforceVerdict', () => {
     expect(verdict(claude('Bash', { command: 'time (rm -rf ~/x)' }, { cwd: work }))).toMatchObject({ deny: true, ruleId: 'starter-delete-outside' })
   })
 
+  // R-F8 list, N2: Astera's own variable names its CLI after a wrapper too, so the line Astera's coordinators run is not an
+  // unknown program that `otherwise: deny` holds
+  it('reads $ASTERA_CLI after a wrapper as the CLI, so a rule that allows process.execute lets it through', () => {
+    const work = path.resolve('/work/proj')
+    const policy: AuditPolicy = { ...STARTER_POLICY, otherwise: 'deny', rules: [...STARTER_POLICY.rules, { id: 'allow-exec', effect: 'allow', action: 'process.execute' }] }
+    for (const command of ['timeout 600 "$ASTERA_CLI" sessions create --kind chat', 'nohup $ASTERA_CLI jobs run x'])
+      expect(verdict(claude('Bash', { command }, { cwd: work }), policy), command).toEqual({ deny: false })
+  })
+
   it('fails closed on a script piped into a shell sudo starts', () => {
     const work = path.resolve('/work/proj')
     for (const command of ['cat script.sh | sudo -s', "echo 'git push' | sudo -u root -s", "echo 'rm -rf /x' | sudo -i"])
