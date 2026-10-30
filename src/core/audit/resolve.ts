@@ -551,23 +551,37 @@ const PRODUCERS = new Set(['echo', 'printf', 'cat', 'write-output', 'write-host'
  *  own row. */
 const PRINTERS = new Set(['echo', 'printf', 'write-output', 'write-host'])
 
-/** A word that starts as a path does: `~`, `./`, `../`, a separator, a drive, a home or a variable (`$X`, `${X}`,
- *  `$env:X`, `%X%`; not `$(`, a substitution read as its own command). */
-const PATH_START = /^(?:~|\.{1,2}[\\/]|[\\/]|[A-Za-z]:[\\/]|\$[A-Za-z_{]|%[^%\s]+%)/
+/** A word that starts as a path does: `~`, `./`, `../`, a separator, a drive, or a variable a separator follows (`$X/`,
+ *  `${X}\`, `$env:X\`, `%X%\`), as the controller's ruling R2-3 has it. A bare variable (`$N`, `$BRANCH`, `$null`) is a
+ *  value as often as a path, and a home spelling with nothing after it is the home, in no login folder. */
+const PATH_START = /^(?:~|\.{1,2}[\\/]|[\\/]|[A-Za-z]:[\\/]|\$[A-Za-z_]\w*[\\/]|\$\{[^}\s]*\}[\\/]|\$env:\w+[\\/]|%[^%\s]+%[\\/])/i
 /** A flag with its value in the same word: `--key=v`, `-Path:v`. */
 const FLAG_VALUE = /^--?[A-Za-z][\w-]*[=:](.+)$/
+/** The flags whose value is a mount (docker's and podman's): `-v host:container[:mode]`, `--mount source=host,…`. */
+const MOUNT_FLAGS = new Set(['-v', '--volume', '--mount'])
+
+/** The host's side of a mount: the part of `-v` before its first colon that is not a drive's (`C:\x:/y`), or a
+ *  `--mount` list's `source=`/`src=`. */
+function hostSide(spec: string): string {
+  const source = /(?:^|,)(?:source|src)=([^,]*)/.exec(spec)
+  return source !== null ? source[1] : (/^(?:[A-Za-z]:)?[^:]*/.exec(spec)?.[0] ?? spec)
+}
 
 /**
  * The words of a command that may name a file, for a command whose facts placed none (lifecycle design §4.10): each that
- * starts as a path does, or holds a separator and no space (a message or a pattern with spaces in it is text). A flag's
- * value is read without its flag, and a `@file` (curl's, among others) without its `@`. They are placed for the login
- * folder they name alone, so one taken wrongly can only mark a call as touching one, which holds a suggestion back.
+ * starts as a path does (PATH_START), or holds a separator and no space, no variable and no remote's `x:` (a message, a
+ * pattern, `main:src/x.ts`). A flag's value is read without its flag, a `@file` (curl's, among others) without its `@`, and
+ * a mount by its host's side. They are placed for the login folder they name alone, so one taken wrongly can only mark a
+ * call as touching one, which holds a suggestion back.
  */
 function looseWords(cmd: Cmd): string[] {
   const found: string[] = []
-  for (const word of cmd.words.slice(1)) {
-    const w = (FLAG_VALUE.exec(word)?.[1] ?? word).replace(/^@(?=\S)/, '')
-    if (PATH_START.test(w) || (/[\\/]/.test(w) && !/\s/.test(w))) found.push(w)
+  const words = cmd.words
+  for (let i = 1; i < words.length; i++) {
+    const word = words[i]
+    const mount = MOUNT_FLAGS.has(words[i - 1]) ? word : /^--(?:volume|mount)=(.*)$/.exec(word)?.[1]
+    const w = mount !== undefined ? hostSide(mount) : (FLAG_VALUE.exec(word)?.[1] ?? word).replace(/^@(?=\S)/, '')
+    if (PATH_START.test(w) || (/[\\/]/.test(w) && !/\s/.test(w) && !UNFOLLOWABLE.test(w) && !REMOTE_PATH.test(w))) found.push(w)
   }
   return found
 }
@@ -598,6 +612,7 @@ function resolveShell(rec: Record<string, unknown>, at: Ctx, flavor: Flavor): Re
   const parts: ResolvedAction[] = []
   let lead: ResolvedAction | undefined
   const held: Array<{ id: number; base: string | null }> = [] // where the line was outside each subshell open now, which a cd in it leaves
+  const groupInputs: Array<string | undefined> = [] // the login folders a loop's, a group's or a subshell's input names
   for (const cmd of commands) {
     const chain = cmd.groups ?? []
     while (held.length > 0 && (held.length > chain.length || held[held.length - 1].id !== chain[held.length - 1])) base = held.pop()!.base
@@ -621,7 +636,7 @@ function resolveShell(rec: Record<string, unknown>, at: Ctx, flavor: Flavor): Re
       if (folder !== undefined) own.sensitive = folder
       parts.push(own)
       for (const also of f.also ?? []) parts.push(partOf(also))
-    }
+    } else if (cmd.inputs !== undefined) groupInputs.push(placesOf(cmd.inputs, ctx, true).sensitive)
     const writes: ResolvedAction[] = cmd.out.map((file) => {
       const { target, inside, sensitive } = placesOf([file], ctx, true)
       const write: ResolvedAction = { action: 'filesystem.write', target: clip(redactTarget(target), TARGET_MAX), insideProject: inside, confidence: 'high', effect: 'write' }
@@ -636,9 +651,14 @@ function resolveShell(rec: Record<string, unknown>, at: Ctx, flavor: Flavor): Re
     }
     if (MOVES.has(prog) && !foreign) base = movedTo(cmd.words.slice(1), ctx, cmd.cmdlet)
   }
-  if (parts.length === 0) return one({ action: 'process.execute', target: 'shell', confidence: 'unknown' })
-  // A command that runs the ones after it (`xargs`) is not one more command beside them, though it is listed with them
-  return combine(parts, commands.filter((c) => c.runs !== true).length > 1 || syntax, lead)
+  // A command that runs the ones after it (`xargs`) is not one more command beside them, though it is listed with them; nor
+  // is the input of a loop, group or subshell, which its commands read
+  const whole =
+    parts.length === 0
+      ? one({ action: 'process.execute', target: 'shell', confidence: 'unknown' })
+      : combine(parts, commands.filter((c) => c.runs !== true && (c.words.length > 0 || c.out.length > 0)).length > 1 || syntax, lead)
+  const folder = firstSensitive([whole.sensitive, ...groupInputs])
+  return folder === whole.sensitive ? whole : { ...whole, sensitive: folder }
 }
 
 /** A command Codex gave as an argv array: its words are already split and none was quoted in the shell's sense. */
@@ -896,7 +916,7 @@ function expand(cmds: Cmd[], flavor: Flavor, depth = 0): { commands: Cmd[]; synt
     const stripped = stripPrefix(raw, flavor)
     const cmd = stripped.cmd
     syntax ||= stripped.syntax
-    if (cmd.words.length === 0 && cmd.out.length === 0) continue
+    if (cmd.words.length === 0 && cmd.out.length === 0 && cmd.inputs === undefined) continue
     const script = depth < 2 && cmd.words.length > 0 ? scriptOf(cmd.words) : null
     if (script === null) {
       const behind = cmd.words.length > 0 ? commandsBehind(cmd, flavor, depth) : []
@@ -1047,7 +1067,8 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
     endWord()
     sink = null
     if (flavor === 'ps' && words[0]?.toLowerCase() === 'switch' && (endedBy === '(' || endedBy === '{')) switchNext = { parens, braces: braces.length }
-    if (words.length > 0 || out.length > 0) {
+    // A redirection with no words is a loop's, a group's or a subshell's (`done < f`, `} < f`, `) < f`), kept with them
+    if (words.length > 0 || out.length > 0 || inputs.length > 0) {
       // Inside an unquoted ( ) or $( ) the command runs in a subshell, as the commands of a quoted substitution do
       const cmd: Cmd = { words, out, call, quoted, invoked }
       if (inputs.length > 0) cmd.inputs = inputs
@@ -1941,6 +1962,21 @@ function tarFacts(name: string, args: Words, ctx: Ctx): Facts | null {
   return file === '-' ? null : writeFacts(name, file === undefined ? [] : [file], ctx)
 }
 
+/** A tar's words that are not flags, each read from the folder the last `-C` before it named, as tar reads the files it
+ *  archives (`tar czf a.tgz -C ~ .ssh` archives `~/.ssh`). For the login folder they name alone: the archive named after
+ *  a `-C` is placed there too, which can only mark a call as touching a folder. */
+function tarWords(args: Words): string[] {
+  const found: string[] = []
+  let dir: string | undefined
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]
+    if (a === '-C' || a === '--directory') dir = args[++i]
+    else if (a.startsWith('--directory=')) dir = a.slice('--directory='.length)
+    else if (!a.startsWith('-')) found.push(dir === undefined ? a : under(dir, a))
+  }
+  return found
+}
+
 /** Facts for a program the table has a row for. */
 function classify(cmd: Cmd, ctx: Ctx): Facts {
   if (cmd.method !== undefined) return cmd.method
@@ -2032,7 +2068,7 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
   if (prog === 'tar') {
     // Creating reads what it archives, extracting reads the archive: both are among its words
     const facts = tarFacts(name, args, ctx)
-    if (facts !== null) return readingFrom(facts, pathArgs(prog, args), ctx)
+    if (facts !== null) return readingFrom(facts, tarWords(args), ctx)
   }
 
   if (prog === 'tee') {
