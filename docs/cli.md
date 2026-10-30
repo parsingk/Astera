@@ -1360,9 +1360,10 @@ fixed in this version:
   list does not name.
 - `stale-credential`: a shared MCP server's stored secret not used through Astera in 30 days.
 - `over-broad-profile`: a profile that runs without permission checks though every call it made in 30 days only read
-  (key ending `:bypass`), that runs outside the sandbox though it wrote only inside its folder and touched no login
-  folder (`:sandbox`), or that gets a shared MCP server it did not call (`:mcp:<id>`, one per server). It needs at
-  least 10 recorded calls.
+  (key ending `:bypass`), that runs outside the sandbox though every call said whether it read or wrote, it wrote only
+  inside its folder and touched no login folder (`:sandbox`; a call such as `npm install` or `cargo build` may write
+  to caches in the home, and `git config --global` writes outside), or that gets a shared MCP server it did not call
+  (`:mcp:<id>`, one per server). It needs at least 10 recorded calls, and settings that have not changed in 30 days.
 - `token-spike`: a Run that used at least 3 times the median tokens of its group's Runs in 30 days, with at least 5
   Runs in the group (its Job's profile, else its first worker's, else its account).
 - `unused-skill`, `unused-command`, `unused-agent`: a shared skill, command or agent installed for Claude Code alone
