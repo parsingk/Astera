@@ -382,6 +382,58 @@ describe('enforceVerdict', () => {
     }
   })
 
+  // Ruling R-F16: a backslash is dropped only where a POSIX shell drops it, outside quotes. PowerShell keeps it, and so do
+  // a POSIX shell's quotes, so a drive path outside the folder stays where it is with the shell inside the folder
+  it('drops a backslash from a value only where a POSIX shell does', () => {
+    const shots = 'C:/Users/u/AppData/Roaming/astera/preview/shots'
+    const win = (command: string, tool: string, policy: AuditPolicy | null, base?: string) =>
+      verdict(claude(tool, { command }, base === undefined ? {} : { base }), policy)
+    for (const policy of [STARTER_POLICY, null]) {
+      for (const [command, tool, base] of [
+        ["$env:GIT_TRACE = 'C:\\temp\\t'; git status", 'PowerShell', shots],
+        ["$env:TMP = 'C:\\Temp'; Get-ChildItem", 'PowerShell', shots],
+        ["$env:FOO = 'C:\\x'; Get-ChildItem", 'PowerShell', shots],
+        ["$env:FOO = 'D:\\x'; Get-ChildItem", 'PowerShell', shots],
+        ["$env:FOO = 'C:/x'; Get-ChildItem", 'PowerShell', shots],
+        ["$env:FOO = '\\\\server\\share'; Get-ChildItem", 'PowerShell', shots],
+        ["$env:FOO = '\\x'; Get-ChildItem", 'PowerShell', shots],
+        ["GIT_TRACE='C:\\temp\\t' git status", 'Bash', shots],
+        ['GIT_TRACE="C:\\temp\\t" git status', 'Bash', shots],
+        ['GIT_TRACE=C:/temp/t git status', 'Bash', shots],
+        ["$env:GIT_TRACE = 'C:\\temp\\t'; git status", 'PowerShell', undefined],
+        ["$env:FOO = 'C:\\x'; Get-ChildItem", 'PowerShell', 'C:/Users/u/AppData/Roaming'],
+        ["$env:FOO = 'C:\\x'; Get-ChildItem", 'PowerShell', 'C:/Users/u/AppData/Roaming/asteraX']
+      ] as Array<[string, string, string | undefined]>)
+        expect(win(command, tool, policy, base), `${command} from ${base}`).toEqual({ deny: false })
+      // Unquoted, Git Bash reads C:\temp\t as C:tempt, which is relative to where the shell is on C:, the folder
+      expect(win('GIT_TRACE=C:\\temp\\t git status', 'Bash', policy, shots)).toMatchObject({ deny: true })
+      // And a word quoted in part still has its unquoted backslash dropped
+      const linux = verdict(claude('Bash', { command: 'env -i GIT_TRACE="/home/u/.config"/ast\\era/x git status' }, { cwd: '/work/proj' }), policy, 'linux', LINUX_PROFILE)
+      expect(linux).toMatchObject({ deny: true })
+    }
+    // On Linux, values outside the folder with the shell inside it
+    for (const command of ['GIT_TRACE=/tmp/t git status', 'GIT_TRACE=/tmp/a\\ b git status', "GIT_TRACE='/tmp/a\\b' git status", 'GIT_TRACE=~/x git status'])
+      expect(verdict(claude('Bash', { command }, { cwd: '/work/proj', base: '/home/u/.config/astera/preview/shots' }), STARTER_POLICY, 'linux', LINUX_PROFILE), command).toEqual({ deny: false })
+  })
+
+  // Ruling R-F16: an absolute path is placed as written too, as at the base, besides resolved: one whose `..` climbs out of
+  // the folder is held, and a link inside it may lead anywhere
+  it('holds an absolute path under the folder as written, even if it climbs out of it', () => {
+    const open: AuditPolicy = { version: 1, mode: 'enforce', rules: [{ id: 'all', effect: 'allow', action: '*' }], otherwise: 'allow' }
+    const linux = (tool: string, input: Record<string, unknown>) => verdict(claude(tool, input, { cwd: '/work/proj' }), open, 'linux', LINUX_PROFILE)
+    for (const [tool, input] of [
+      ['Write', { file_path: '/home/u/.config/astera/../x', content: 'a' }],
+      ['Write', { file_path: '/home/u/.config/astera/..', content: 'a' }],
+      ['Edit', { file_path: '/home/u/.config/astera/../x', old_string: 'a', new_string: 'b' }],
+      ['NotebookEdit', { notebook_path: '/home/u/.config/astera/../x.ipynb', new_source: 'a' }],
+      ['Bash', { command: 'cp a /home/u/.config/astera/../x' }],
+      ['Bash', { command: 'cp a /home/u/.config//astera/x' }]
+    ] as Array<[string, Record<string, unknown>]>)
+      expect(linux(tool, input), JSON.stringify(input)).toMatchObject({ deny: true, ruleId: 'builtin-profile-write' })
+    for (const file_path of ['C:/Users/u/AppData/Roaming/astera/../x', 'C:\\Users\\u\\AppData\\Roaming\\astera\\..\\x'])
+      expect(verdict(claude('Write', { file_path, content: 'a' }), open), file_path).toMatchObject({ deny: true, ruleId: 'builtin-profile-write' })
+  })
+
   it('reads the variables of a long line in linear time', () => {
     const n = 20_000
     const s = '/home/u/.config/astera'
@@ -398,10 +450,17 @@ describe('enforceVerdict', () => {
       [`$env:A = ${'$env:B + '.repeat(n)}x; ls`, 'PowerShell'],
       [`${`X=${s} `.repeat(n)}ls`, 'Bash'],
       [`export ${'A=/x '.repeat(n)}; ls`, 'Bash'],
-      [`bash -c "${'env -i A=/x '.repeat(n)}ls"`, 'Bash']
+      [`bash -c "${'env -i A=/x '.repeat(n)}ls"`, 'Bash'],
+      // A long run of separators, as written (ruling R-F16's literal test) and as bash reads `\\` (one backslash each)
+      [`A=${'\\\\'.repeat(2 * n)}x ls`, 'Bash'],
+      [`A=${'/'.repeat(2 * n)}x ls`, 'Bash'],
+      [`cp a ${'/'.repeat(2 * n)}x`, 'Bash'],
+      [`ls ${'a\\b '.repeat(n)}`, 'Bash']
     ]
     const started = Date.now()
     for (const [command, tool] of lines) verdict(claude(tool, { command }, { cwd: '/work/proj' }), STARTER_POLICY, 'linux', LINUX_PROFILE)
+    const open: AuditPolicy = { version: 1, mode: 'enforce', rules: [{ id: 'all', effect: 'allow', action: '*' }], otherwise: 'allow' }
+    verdict(claude('Write', { file_path: `${'/'.repeat(2 * n)}x`, content: 'a' }, { cwd: '/work/proj' }), open, 'linux', LINUX_PROFILE)
     expect(Date.now() - started).toBeLessThan(3000 * CI_SLACK)
   })
 

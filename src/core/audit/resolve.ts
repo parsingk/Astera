@@ -71,6 +71,9 @@ export interface ResolvedAction {
 export interface Assignment {
   name: string
   value: string
+  /** The value as a POSIX shell reads it, where that differs: a backslash outside quotes dropped (`ast\era` is `astera`),
+   *  which the resolver keeps as a Windows path's separator. Left out in PowerShell and inside quotes, which keep it. */
+  bare?: string
 }
 
 /** `r` with the variables a line sets, as a property that is not enumerable (ResolvedAction.assignments). */
@@ -539,6 +542,10 @@ interface Cmd {
   /** Set by stripPrefix: the variables it sets (ResolvedAction.assignments), and by expand on the first command of a
    *  script, also those its shell was started with. */
   assignments?: Assignment[]
+  /** Set by splitLine on a POSIX command with a word that holds a backslash outside quotes before a character the
+   *  resolver keeps it for: that word, and the word as the shell reads it, the backslash dropped (Assignment.bare). By
+   *  the word, so it holds through what slices the words (xargs, find -exec). */
+  bare?: ReadonlyMap<string, string>
   /** Set by stripPrefix on the header of a POSIX `for` or `select` loop, which runs nothing: the words its variable takes in
    *  turn (`for k in ~/.ssh/id_*`), read for the login folder they name alone (lifecycle design §4.10). */
   listed?: string[]
@@ -941,10 +948,12 @@ const PS_ENV_SET = /^\$(?:env:([\w.]+)|\{env:([^}]+)\})(?:([+-]?=)([\s\S]*))?$/i
 /** The builtins whose `NAME=value` arguments set variables, and cmd's `set` (a cmd script is read as a POSIX line). */
 const DECLARERS = new Set(['export', 'declare', 'typeset', 'local', 'readonly', 'set'])
 
-/** A `NAME=value` word as the variable it sets. */
-function assignmentOf(word: string): Assignment {
+/** A `NAME=value` word as the variable it sets, with its value as a POSIX shell reads it where that differs (Cmd.bare). */
+function assignmentOf(word: string, bare: ReadonlyMap<string, string> | undefined): Assignment {
   const eq = word.indexOf('=')
-  return { name: word.slice(0, eq), value: word.slice(eq + 1) }
+  const a: Assignment = { name: word.slice(0, eq), value: word.slice(eq + 1) }
+  const read = bare?.get(word)
+  return read === undefined ? a : { ...a, bare: read.slice(read.indexOf('=') + 1) }
 }
 
 /**
@@ -1207,7 +1216,7 @@ function stripPrefix(raw: Cmd, flavor: Flavor, cli = false): { cmd: Cmd; syntax:
     const env = flavor === 'ps' ? psEnvAssignment(words, i) : null
     if (env !== null) assignments.push(env)
     if (ASSIGNMENT.test(words[i])) {
-      assignments.push(assignmentOf(words[i]))
+      assignments.push(assignmentOf(words[i], raw.bare))
       assigned.push(words[i++])
       if (wrapped) tail++
     } else if (PS_ASSIGNED.test(words[i])) i++
@@ -1259,7 +1268,7 @@ function stripPrefix(raw: Cmd, flavor: Flavor, cli = false): { cmd: Cmd; syntax:
   }
   const rest = words.slice(i)
   // `export A=x`, `declare -x A=x`: the builtin's own arguments set the variables
-  if (rest.length > 0 && DECLARERS.has(rest[0])) for (const word of rest.slice(1)) if (ASSIGNMENT.test(word)) assignments.push(assignmentOf(word))
+  if (rest.length > 0 && DECLARERS.has(rest[0])) for (const word of rest.slice(1)) if (ASSIGNMENT.test(word)) assignments.push(assignmentOf(word, raw.bare))
   const cmdlet = rest.length > 0 ? cmdletOf(rest[0], flavor) : undefined
   const unread = opaque || raw.unread === true ? (true as const) : undefined
   const cmd: Cmd = {
@@ -1269,6 +1278,7 @@ function stripPrefix(raw: Cmd, flavor: Flavor, cli = false): { cmd: Cmd; syntax:
     ...(raw.inputsOf !== undefined ? { inputsOf: raw.inputsOf } : {}),
     ...(assigned.length > 0 ? { assigned } : {}),
     ...(assignments.length > 0 ? { assignments } : {}),
+    ...(raw.bare !== undefined ? { bare: raw.bare } : {}),
     ...(raw.pipes !== undefined ? { pipes: raw.pipes } : {}),
     ...(raw.ps === true ? { ps: true as const } : {})
   }
@@ -1328,6 +1338,7 @@ function scriptOf(words: Words): { text: string; flavor: Flavor } | null {
  *  find -exec run. It has none of the redirections of the command that runs it. */
 const commandAmong = (cmd: Cmd, from: number, to = cmd.words.length): Cmd => ({
   words: cmd.words.slice(from, to), out: [], call: false, quoted: cmd.quoted.slice(from, to), invoked: false,
+  ...(cmd.bare !== undefined ? { bare: cmd.bare } : {}),
   ...(cmd.ps === true ? { ps: true as const } : {})
 })
 
@@ -1470,6 +1481,9 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
   let quoted: boolean[] = [] // for each word, whether it was quoted
   let wordQuoted = false // the word being read has had a quote in it
   let cur = ''
+  let drops: number[] = [] // where in the word a backslash outside quotes is kept that a POSIX shell drops
+  let keptAt = -1 // where in the line the last of them is
+  let bare: Map<string, string> | undefined // Cmd.bare of the command being read
   let has = false // a word has begun, so an empty '' counts
   let sink: { write: boolean; dup: boolean; text: boolean } | null = null // the next word is a redirection's target; `text`: a here-string's
   const chain: number[] = [] // the unquoted `(` open now, as subshells, up to MAX_GROUPS deep: beyond it they share the last
@@ -1505,11 +1519,23 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
         words.push(cur)
         if (cur === 'in' && words.length === 3 && words[0] === 'case') cases++
         else if (cur === 'esac' && words.length === 1 && cases > 0) cases--
+        if (drops.length > 0) {
+          // The word as the shell reads it: each backslash it drops left out
+          let read = ''
+          let from = 0
+          for (const at of drops) {
+            read += cur.slice(from, at)
+            from = at + 1
+          }
+          bare ??= new Map()
+          bare.set(cur, read + cur.slice(from))
+        }
       }
     }
     cur = ''
     has = false
     wordQuoted = false
+    drops = []
   }
   let failedFrom = -1 // where the last arithmetic reading that found none began, and how far it had read
   let failedTo = -1
@@ -1578,6 +1604,7 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
       if (grouped) cmd.grouped = true
       if (unread) cmd.unread = true
       if (chain.length > 0) cmd.groups = [...chain]
+      if (bare !== undefined) cmd.bare = bare
       commands.push(cmd)
       // The command a `|` handed its output to is the first kept after it (`a | { b; }` and `a | (b)` too), and what it runs
       // is its receiver (receiverOf)
@@ -1596,6 +1623,7 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
     call = false
     invoked = false
     quoted = []
+    bare = undefined
     closing = undefined
     atCommand = true
     return kept
@@ -1710,6 +1738,13 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
         has = true
         i++
       } else {
+        // Kept, as a Windows path's separator, where the shell drops it (Cmd.bare): unless the backslash before it was
+        // dropped, and so made this one a letter (`\\`)
+        if (keptAt === i - 1) keptAt = -1
+        else {
+          drops.push(cur.length)
+          keptAt = i
+        }
         cur += c
         has = true
       }
@@ -2337,7 +2372,7 @@ function findExecs(cmd: Cmd): Cmd[] {
     if (!FIND_EXEC.test(words[i])) continue
     let end = i + 1
     while (end < words.length && !(words[end] === ';' || (words[end] === '+' && words[end - 1] === '{}'))) end++
-    const run: Cmd = { words: [], out: [], call: false, quoted: [], invoked: false }
+    const run: Cmd = { words: [], out: [], call: false, quoted: [], invoked: false, ...(cmd.bare !== undefined ? { bare: cmd.bare } : {}) }
     for (let j = i + 1; j < end; j++) {
       const found = words[j] === '{}'
       run.words.push(...(found ? starts : [words[j]]))

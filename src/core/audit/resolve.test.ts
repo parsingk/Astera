@@ -3307,6 +3307,18 @@ describe('the variables a line sets', () => {
     expect(bash('echo A=1').assignments).toBeUndefined()
   })
 
+  // Ruling R-F16: the value as a POSIX shell reads it, where that differs: a backslash outside quotes dropped. PowerShell
+  // keeps it, and so do a POSIX shell's quotes
+  it('gives the value as a POSIX shell reads a backslash outside quotes, where that differs', () => {
+    expect(bash('GIT_TRACE=/a/ast\\era/x git status').assignments).toEqual([{ name: 'GIT_TRACE', value: '/a/ast\\era/x', bare: '/a/astera/x' }])
+    expect(bash('env -i A="/a"/b\\c ls').assignments).toEqual([{ name: 'A', value: '/a/b\\c', bare: '/a/bc' }])
+    expect(bash('xargs env A=C:\\x git status').assignments).toEqual([{ name: 'A', value: 'C:\\x', bare: 'C:x' }])
+    expect(bash("bash -c 'A=C:\\x ls'").assignments).toEqual([{ name: 'A', value: 'C:\\x', bare: 'C:x' }])
+    expect(bash("A='C:\\x' ls").assignments).toEqual(set(['A', 'C:\\x']))
+    expect(bash('A="C:\\x" ls').assignments).toEqual(set(['A', 'C:\\x']))
+    expect(ps("$env:A = 'C:\\x'; ls").assignments).toEqual(set(['A', 'C:\\x']))
+  })
+
   // A value may be a secret: JSON and a spread, which is how a record or a log is made, leave the property out
   it('never shows them to JSON or to a spread', () => {
     const r = bash('TOKEN=/s3cr3t/v git status')

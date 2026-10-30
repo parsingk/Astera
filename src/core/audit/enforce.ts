@@ -133,12 +133,19 @@ function touchesProfile(call: ResolveCall, r: ResolvedAction, profileDir: string
   }
   const root = norm(profileDir).replace(/\/+$/, '')
   const p = platform === 'win32' ? path.win32 : path.posix
-  // Resolved from where the call runs, which also normalises an absolute path (`/home/u/.config//astera`, `…/./astera`,
-  // `…/x/../astera`), as the shell and the file system read it
-  const within = (candidate: string): boolean => {
-    const resolved = norm(p.resolve(call.base ?? call.cwd, candidate)).replace(/\/+$/, '')
-    return resolved === root || resolved.startsWith(`${root}/`)
+  // The separators it ends with are trimmed by hand: `/\/+$/` starts again from each one of a long run that is not at the
+  // end, which is quadratic (a path as written can hold such a run)
+  const under = (s: string): boolean => {
+    let end = s.length
+    while (end > 0 && s[end - 1] === '/') end--
+    const t = s.slice(0, end)
+    return t === root || t.startsWith(`${root}/`)
   }
+  // Resolved from where the call runs, which also normalises an absolute path (`/home/u/.config//astera`, `…/./astera`,
+  // `…/x/../astera`), as the shell and the file system read it. An absolute path is placed as written too, as at the base
+  // (ruling R-F16): one whose `..` climbs out of the folder (`…/astera/../x`) goes through it, by a link perhaps
+  const within = (candidate: string): boolean =>
+    (p.isAbsolute(candidate) && under(norm(candidate))) || under(norm(p.resolve(call.base ?? call.cwd, candidate)))
   const rec = inputRecord(call.input)
   // An MCP tool cannot be told to write or to read, so any of its arguments that names the folder is enough
   const raw = mcp ? stringsOf(rec).join('\n') : callText(call)
@@ -162,12 +169,14 @@ function touchesProfile(call: ResolveCall, r: ResolvedAction, profileDir: string
   // Ruling R-F11: a variable the line sets to a path in the folder makes the folder where a program writes, whatever the
   // line's own commands do (git's GIT_TRACE and GIT_INDEX_FILE, curl's SSLKEYLOGFILE, a HOME git writes its config in).
   // Ruling R-F13: the variables are those the resolver read, quoted or not, past wrappers and in the scripts it read; a
-  // script too deep to read is no read, so its text is searched below. Only a value that looks like a path is placed
+  // script too deep to read is no read, so its text is searched below. Only a value that looks like a path is placed, as
+  // written and, unquoted in a POSIX line, as the shell reads its backslashes (ruling R-F16: PowerShell and quotes keep
+  // them, so `$env:TMP = 'C:\Temp'` is no `C:Temp`)
   const setsPath = (value: string): boolean => {
-    const v = expandHome(value, env, platform)
-    return [norm(v), norm(dropEscapes(v))].some((x) => PATH_LIKE.test(x) && (names(x) || within(x)))
+    const v = norm(expandHome(value, env, platform))
+    return PATH_LIKE.test(v) && (names(v) || within(v))
   }
-  if ((r.assignments ?? []).some((a) => setsPath(a.value))) return true
+  if ((r.assignments ?? []).some((a) => setsPath(a.value) || (a.bare !== undefined && setsPath(a.bare)))) return true
   if (!writes) return false
   for (const k of ['file_path', 'notebook_path', 'path']) {
     const v = rec[k]
