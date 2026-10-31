@@ -137,21 +137,31 @@ describe('scripts/mac-check guides', () => {
     const install = readFileSync(path.join(root, 'src/core/orchestration/cliInstall.ts'), 'utf8')
     const packaged = checks.find((c) => c.title === '패키지한 앱')
     expect(packaged).toBeDefined()
-    if (/if \(app\.isPackaged\) \{\s*const entryPath = cliEntryPath\(\)\s*if \(entryPath\)\s*void syncShuttle\(/.test(ipc)) {
-      expect(install).toContain('return `${a.home}/.local/bin`')
-      const body = packaged.body
-      expect(body).toContain('cp -p ~/.local/bin/astera "$R/astera-cli.before"')
-      expect(body).toContain('cmp -s "$R/astera-cli.before" ~/.local/bin/astera || cp -p "$R/astera-cli.before" ~/.local/bin/astera')
-      // Put back before the build it points at is removed
-      expect(body.indexOf('cmp -s "$R/astera-cli.before"')).toBeLessThan(body.indexOf('rm -rf "$R/packaged"'))
-      expect(guides['README.md']).toContain('~/.local/bin/astera')
-    }
+    // Asserted, not a condition: a change to the boot sync fails here, so someone looks at check 25 again
+    expect(ipc).toContain('void syncShuttle(')
+    expect(install).toContain('return `${a.home}/.local/bin`')
+    const body = packaged.body
+    // The file's own two lines and nothing before them, as step 9 prints them
+    expect(body).toContain('[ -f ~/.local/bin/astera ] && head -n 2 ~/.local/bin/astera && cp -p ~/.local/bin/astera "$R/astera-cli.before"')
+    expect(body).toContain('cmp -s "$R/astera-cli.before" ~/.local/bin/astera || cp -p "$R/astera-cli.before" ~/.local/bin/astera')
+    // Put back before the build it points at is removed
+    expect(body.indexOf('cmp -s "$R/astera-cli.before"')).toBeLessThan(body.indexOf('rm -rf "$R/packaged"'))
+    expect(guides['README.md']).toContain('~/.local/bin/astera')
+  })
+
+  it("check 25 gives the agent an inspector for the packaged build's folder picker, closed before the quit", () => {
+    // The New session dialog's folder comes only from the native picker, which an agent answers by replacing
+    // dialog.showOpenDialog over the main process inspector (세션을 여는 법); an open inspector keeps the app up at quit
+    const body = checks.find((c) => c.title === '패키지한 앱').body
+    expect(body).toContain('--inspect')
+    expect(body).toContain('dialog.showOpenDialog')
+    expect(body.indexOf('dialog.showOpenDialog')).toBeLessThan(body.indexOf('window.api.app.quit()'))
   })
 
   it('the wrap-up looks for what check 12 left in imported account folders too', () => {
     const text = guides['checklist.md']
     const wrapUp = text.slice(text.indexOf('\n## 마무리'))
-    for (const folder of ['~/.claude-accounts', '~/.codex-accounts']) expect(wrapUp).toContain(folder)
+    for (const folder of ['~/.claude-accounts', '~/.codex-accounts', '<폴더>/.claude.json']) expect(wrapUp).toContain(folder)
   })
 
   it('the packaged build is signed ad hoc as the release workflow signs it, under a name and id of its own', () => {

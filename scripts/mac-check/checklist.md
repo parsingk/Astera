@@ -1304,8 +1304,12 @@ inspector 연결이 모두 끊길 때까지 끝나지 않기 때문입니다. �
 전에 inspector 연결을 닫을 것). 붙어 있는 연결이 없으면 inspector 를 켜고 띄운 앱도 몇 초 안에 끝나야 합니다.
 
 1. 저장소 폴더의 터미널에서 inspector 를 켜고 띄웁니다. `Debugger listening on ws://127.0.0.1:5858/…` 줄이 나옵니다.
-   에이전트는 터미널에서 띄우지 않고(창이 사람의 화면에 뜹니다), 앱 작업 공간의 `launch()` 로 같은 명령을 띄웁니다. 앱
-   작업 공간이 요구하는 디버깅 포트 인자를 더하고, 위의 줄은 그 출력에서 봅니다.
+   에이전트는 터미널 대신 앱 작업 공간의 `launch()` 로 같은 명령을 띄웁니다. 그래야 페이지를 CDP 로 다뤄 3단계의
+   `window.api.app.quit()` 을 부를 수 있고, 끝나지 않으면 `close()` 로 끝낼 수 있습니다. macOS 의 앱 작업 공간은 창을
+   숨겨 주지 않으므로 창이 사람의 화면에 뜰 수 있습니다. 디버깅 포트는 electron-vite 의 `--remoteDebuggingPort` 로
+   넘깁니다. 앱 작업 공간은 띄운 명령의 출력을 버리므로, 명령 끝에 `> <결과 폴더>/inspect-dev.log 2>&1` 처럼 결과 폴더의
+   파일로 보내고, 위의 줄과 통과 기준의 `Waiting for the debugger to disconnect...` 는 그 파일에서 찾습니다. '5초 안에
+   돌아옴' 은 끈 뒤 5초 안에 4단계의 `ps` 가 아무 줄도 출력하지 않는지로 봅니다.
 
    ```sh
    npm run dev -- --inspect
@@ -1321,8 +1325,9 @@ inspector 연결이 모두 끊길 때까지 끝나지 않기 때문입니다. �
    ```
 
 통과: 1단계의 터미널이 5초 안에 프롬프트로 돌아오고, `Waiting for the debugger to disconnect...` 줄이 없습니다. 4단계는
-아무 줄도 출력하지 않습니다(개발용 Host 의 줄은 빼고 봅니다). 끝나지 않으면 inspector 에 무엇이 붙어 있었는지 메모에
-적고, 1단계의 터미널에서 Ctrl+C 를 누릅니다.
+아무 줄도 출력하지 않습니다(개발용 Host 의 줄은 빼고 봅니다). 에이전트는 이것을 1단계의 로그 파일과, 끈 뒤 5초 안의
+4단계 `ps` 로 봅니다. 끝나지 않으면 inspector 에 무엇이 붙어 있었는지 메모에 적고, 1단계의 터미널에서 Ctrl+C 를
+누릅니다(에이전트는 앱 작업 공간의 `close()`).
 
 - [ ] 통과
 - [ ] 실패
@@ -1366,25 +1371,31 @@ Claude 세션과 워커가 일하는지 봅니다. 완료 검사를 sandbox 에 
 3. 설치된 `astera` 명령을 저장해 둡니다. 패키지한 앱은 켤 때마다, Astera 가 깔아 둔 `astera` 명령
    (`~/.local/bin/astera`)이 있으면 그것이 자기를 가리키도록 다시 씁니다. 설치된 Astera 의 설정에서 CLI 탭의 버튼으로
    그 명령을 깔았다면 이 파일입니다. 이 폴더는 프로필이나 앱 이름과 상관없이 정해져 있어서, 이름을 바꿔 빌드해도 피할 수
-   없습니다. 그래서 띄우기 전에 복사해 두고 9단계에서 되돌립니다. 이 파일에는 실행 파일의 경로 두 개만 있고 비밀은
-   없습니다. MCP 클라이언트에 Astera 를 등록해 두었다면 그 등록도 이 파일을 경로로 가리키므로, 이 파일과 함께 바뀌었다가
-   함께 돌아옵니다.
+   없습니다. 그래서 띄우기 전에 복사해 두고 9단계에서 되돌립니다. 이 파일에는 실행 파일과 CLI 스크립트(`cli.js`)의
+   경로만 있고 비밀은 없습니다. MCP 클라이언트에 Astera 를 등록해 두었다면 그 등록도 이 파일을 경로로 가리키므로, 이
+   파일과 함께 바뀌었다가 함께 돌아옵니다.
 
    ```sh
-   ls -l ~/.local/bin/astera 2>/dev/null && head -n 2 ~/.local/bin/astera && cp -p ~/.local/bin/astera "$R/astera-cli.before"
+   [ -f ~/.local/bin/astera ] && head -n 2 ~/.local/bin/astera && cp -p ~/.local/bin/astera "$R/astera-cli.before"
    ```
 
-   아무것도 나오지 않으면 그 명령을 깔지 않은 것이니 9단계는 건너뜁니다. 나왔다면 둘째 줄(설치된 Astera 의 실행 파일을
-   가리키는 줄)을 메모에 적습니다. 4단계부터 9단계까지는 터미널의 `astera` 가 패키지한 앱을 가리키므로, 그동안 설치된
-   Astera 에 `astera` 명령을 쓰지 않습니다.
+   아무것도 나오지 않으면 그 명령을 깔지 않은 것이니 9단계는 건너뜁니다. 나왔다면 파일의 두 줄이고, 둘째 줄(설치된
+   Astera 의 실행 파일과 `cli.js` 를 가리키는 줄)을 메모에 적습니다. 4단계부터 9단계까지는 보통 터미널의 `astera` 가
+   패키지한 앱을 가리키므로, 그동안 보통 터미널에서는 설치된 Astera 에 `astera` 명령을 쓰지 않습니다. Astera 세션 안의
+   `astera`(에이전트가 `astera app js` 로 쓰는 것)는 그 세션의 것이라 바뀌지 않으니 그대로 씁니다.
 4. 앱을 띄웁니다. 이 터미널은 앱을 끌 때까지 그대로 둡니다.
    - 설치된 Astera 가 있으면 켜 둔 채로 띄웁니다. 설치된 Astera 가 자기 프로필 폴더를 잡고 있으므로, 패키지한 앱이 혹시
      그 폴더를 골랐다면 열지 못하고 곧바로 끝납니다(프로필 하나에 앱은 하나만 뜹니다).
    - 이 앱은 macOS 에게 처음 보는 앱이라, 키체인 접근을 묻는 창이 뜨면 개발용 앱 때처럼 거부를 누릅니다.
    - 패키지한 앱은 업데이트를 확인하고, 새 버전이 있으면 저절로 내려받기 시작합니다. 제목 줄에 업데이트가 보이면 메모에
      적고, 설치는 하지 않습니다.
-   - 에이전트는 터미널에서 띄우지 않고(창이 사람의 화면에 뜹니다), 앱 작업 공간의 `launch()` 로 같은 실행 파일과 인자를
-     띄웁니다. 앱 작업 공간이 요구하는 디버깅 포트 인자를 더합니다.
+   - 에이전트는 터미널 대신 앱 작업 공간의 `launch()` 로 같은 실행 파일과 인자를 띄웁니다. 그래야 페이지를 CDP 로 다루고,
+     끝나지 않으면 `close()` 로 끝낼 수 있습니다. macOS 의 앱 작업 공간은 창을 숨겨 주지 않으므로 창이 사람의 화면에 뜰
+     수 있습니다. 앱 작업 공간이 요구하는 디버깅 포트 인자(`--remote-debugging-port=$ASTERA_APP_CDP_PORT`,
+     `$ASTERA_APP_CHROMIUM_FLAGS`)와 `--inspect` 를 더합니다. 앱 작업 공간은 띄운 명령의 출력을 버리므로, 출력은 아래
+     줄처럼 결과 폴더의 `packaged.log` 로 보내고(결과 폴더는 절대 경로로) 그 파일을 읽습니다. 6단계의 폴더 고르는 창은
+     1회차처럼 그 inspector 로 main 프로세스의 `dialog.showOpenDialog` 를 바꿔치기해 넘기고, 8단계에서 끄기 전에 그
+     inspector 연결을 닫습니다(점검 24).
 
    ```sh
    APP=$(find "$R/packaged" -maxdepth 2 -name '*.app' -print -quit); echo "$APP"
@@ -1422,8 +1433,8 @@ Claude 세션과 워커가 일하는지 봅니다. 완료 검사를 sandbox 에 
    echo worker-ok > mac-check-25w.txt && git add -A && git commit -q -m "mac-check 25: packaged worker commit" && git log --oneline -1
    ```
 
-8. 세션 탭을 코디네이터와 워커까지 모두 닫고, 앱을 Cmd+Q 로 끕니다(에이전트는 점검 24 처럼 페이지에서
-   `window.api.app.quit()`). 1분쯤 뒤 봅니다.
+8. 세션 탭을 코디네이터와 워커까지 모두 닫고, 앱을 Cmd+Q 로 끕니다. 에이전트는 4단계에서 붙인 inspector 연결을 먼저
+   닫고, 점검 24 처럼 페이지에서 `window.api.app.quit()` 을 부릅니다. 1분쯤 뒤 봅니다.
 
    ```sh
    ps -Ao pid,command | grep '[A]steraMacCheck.app'
@@ -1449,7 +1460,8 @@ Claude 세션과 워커가 일하는지 봅니다. 완료 검사를 sandbox 에 
 통과:
 
 - 2단계의 빌드가 끝나고 4단계의 `echo "$APP"` 가 `.app` 하나를 가리킵니다. 걸린 시간과 크기를 메모에 적습니다.
-- 3단계: `astera` 명령을 깔아 두었다면 두 줄이 나오고, 둘째 줄이 설치된 Astera 의 실행 파일을 가리킵니다.
+- 3단계: `astera` 명령을 깔아 두었다면 파일의 두 줄이 나옵니다. 첫 줄은 `#!/bin/sh`, 둘째 줄은
+  `ELECTRON_RUN_AS_NODE=1 exec "<설치된 Astera 의 실행 파일>" "<…/cli.js>" "$@"` 입니다.
 - 4단계: 패키지한 앱이 떴습니다(설치된 Astera 가 있었다면 그것을 켜 둔 채로). 업데이트가 보였다면 메모에 적었고
   설치하지 않았습니다.
 - 5단계의 두 줄이 위와 같습니다.
@@ -1458,8 +1470,8 @@ Claude 세션과 워커가 일하는지 봅니다. 완료 검사를 sandbox 에 
 - 7단계: 점검 18 과 같습니다. 검사가 통과하고 출력에 `inside-the-sandbox` 가 있고, **sandbox 밖에서 검증함** (validated outside the sandbox)
   이 없고, `find ~/astera-worktrees -name mac-check-sandbox-outside.txt` 가 아무것도 출력하지 않습니다.
 - 8단계: 아무 줄도 없습니다.
-- 9단계(3단계에서 저장했을 때): `head` 의 둘째 줄이 3단계에서 적은 줄과 같습니다. 다시 설치된 Astera 의 실행 파일을
-  가리키고, `AsteraMacCheck` 는 들어 있지 않습니다.
+- 9단계(3단계에서 저장했을 때): `head` 가 3단계와 같은 두 줄을 보여 줍니다. 둘째 줄이 3단계에서 적은 줄과 같아 다시
+  설치된 Astera 의 실행 파일을 가리키고, `AsteraMacCheck` 는 들어 있지 않습니다.
 
 - [ ] 통과
 - [ ] 실패
@@ -1483,7 +1495,8 @@ Claude 세션과 워커가 일하는지 봅니다. 완료 검사를 sandbox 에 
    숫자로 `kill <숫자>` 를 치고 메모에 적습니다.
 2. 점검 12 가 계정에 넣은 것이 남지 않았는지, 준비 3 과 13b 에서 등록한 계정 폴더마다 봅니다. 아래 명령은
    `~/.claude`, `~/.codex` 와, 설치된 Astera 가 만든 계정 폴더(`~/.claude-accounts/<이름>`, `~/.codex-accounts/<이름>`)를
-   모두 봅니다. 다른 곳의 폴더를 가져왔다면 첫 명령의 폴더 목록에 그 폴더를 더합니다.
+   모두 봅니다. 다른 곳의 폴더를 가져왔다면 두 명령 모두에 더합니다: 첫 명령의 폴더 목록에 `<폴더>` 를, 둘째 명령의 파일
+   목록에 `<폴더>/.claude.json` 을 넣습니다(점검 12 의 `claude mcp add` 는 그런 계정의 `<폴더>/.claude.json` 에 씁니다).
 
    ```sh
    find ~/.claude ~/.codex ~/.claude-accounts ~/.codex-accounts -maxdepth 3 -path '*/skills/mac-check-skill' 2>/dev/null
