@@ -4,19 +4,31 @@ Mac 앞에서 혼자, 한 번에 끝낼 수 있게 만든 점검 묶음입니다
 
 이 폴더에 있는 것:
 
-- `run.sh`: 자동 점검. 테스트를 돌리고, 손 점검에 쓸 작업 폴더를 만들고, 결과를 한 폴더에 모읍니다.
+- `run.sh`: 자동 점검. 테스트를 돌리고, 손 점검에 쓸 작업 폴더와 도우미 파일을 만들고, 결과를 한 폴더에 모읍니다.
 - `checklist.md`: 손 점검표. 개발용 Astera 앱을 띄워 놓고 하나씩 따라 합니다.
 - `guide.test.mjs`: 이 안내가 저장소와 어긋나지 않았는지 보는 테스트입니다. CI 가 돌리므로 직접 돌릴 일은 없습니다.
+
+## 2회차입니다
+
+- 1회차는 2026-10-29 에 develop `d4831ff1` 로 했고, 11개 점검이 모두 통과했습니다. 채운 점검표는
+  `docs/2026-10-29-mac-check-results.md` 에 있습니다. 그때는 사람 대신 이 Mac 의 Claude Code 에이전트가 했습니다.
+  개발용 앱을 에이전트 앱 작업 공간에서 화면에 보이지 않게 띄우고, 세션은 개발용 Host 의 `astera sessions send` 와
+  `astera sessions read` 로 다루고, 폴더 고르는 창은 main 프로세스에서 바꿔치기했습니다.
+- 2회차는 점검 12~25 를 새로 하고, 1~11 은 다시 합니다. 1회차 뒤에 sandbox 코드가 바뀌었기 때문입니다(sandbox 안에서
+  돌리는 완료 검사, sandbox 세션의 에이전트 브라우저, Codex sandbox 를 손본 수정들).
+- 2회차도 에이전트가 할 수 있도록 점검마다 누가 할 수 있는지 적었습니다(아래 목록과 점검표의 `누가:` 줄). 사람만 할 수
+  있는 것은 트랙패드(20), macOS 의 한글 입력(21), 화면에 보이는 창의 Cmd+Q(23) 입니다.
 
 ## 무엇을, 왜 확인하나요
 
 에이전트 프로필의 **Sandbox에서 실행** (Run in the sandbox) 을 켜면 Claude Code 와 Codex 가 각자 자기 sandbox 안에서
-돕니다. 이것과 그 뒤에 고친 것들, 그리고 작은 수정 몇 가지가 macOS 에서 실제로 맞게 도는지 봅니다.
+돕니다. 이것과 그 뒤에 고친 것들, 그리고 1회차 뒤에 들어온 기능들이 macOS 에서 실제로 맞게 도는지 봅니다.
 
-CI 의 macOS 러너에는 로그인된 Claude Code 와 Codex 가 없습니다. 그래서 진짜 CLI 가 sandbox 안에서 보통 일을 해내는지,
-막아야 할 것을 막는지는 아직 아무도 Mac 에서 보지 못했습니다. 이 점검이 그 빈칸을 채웁니다.
+CI 의 macOS 러너에는 로그인된 Claude Code 와 Codex 가 없고, 로그인된 데스크톱 화면도 없습니다. 그래서 진짜 CLI 가
+sandbox 안에서 보통 일을 해내는지, 막아야 할 것을 막는지, 그리고 아래의 새 기능들이 진짜 세션에서 도는지는 Mac 에서만
+볼 수 있습니다. 이 점검이 그 빈칸을 채웁니다.
 
-구체적으로는 이렇습니다.
+1~11 (1회차와 같음):
 
 - sandbox 안의 Claude Code 와 Codex 가 보통 일을 하는지: 작업 폴더와 임시 폴더에 쓰기, `git commit`, `npm install`,
   `astera` 명령.
@@ -26,42 +38,100 @@ CI 의 macOS 러너에는 로그인된 Claude Code 와 Codex 가 없습니다. �
 - 앱 작업 공간이 앱을 닫을 때, 그 앱이 따로 떼어 띄운 자식 프로세스까지 끝내는지.
 - 같은 폴더의 Codex 탭 두 개가 서로의 사용량을 가져가지 않는지 (Astera 가 `lsof` 로 대화 기록 파일의 주인을 가립니다).
 
+12~25 (2회차에 새로):
+
+- **MCP & Skills**: 계정 하나의 MCP 서버와 스킬을 등록하면 Claude 와 Codex 세션이 Host 의 Gateway 를 거쳐 그 서버를
+  쓰고, 스킬은 다른 계정의 폴더에 복사되는지. 에이전트 프로필이 뺀 MCP 서버는 그 프로필의 새 세션에 오지 않는지.
+- **Observe** 와 **Enforce**: 도구 호출이 **Audit Logs** 에 남는지, Rule 이 거부한 호출과 Astera 의 설정 폴더 쓰기가
+  실행 전에 막히는지(macOS 에서 훅이 도는지).
+- **Credentials**: 숨긴 환경 변수와 gh 로그인이 새 세션에서 빠지는지, 키체인에 남는 gh 토큰처럼 숨기지 못하는 것을
+  화면이 그렇다고 말하는지.
+- sandbox 안의 세션에서 에이전트 브라우저가 열리는지, sandbox 안의 Claude 워커의 완료 검사가 sandbox 안에서 도는지.
+- **Findings**: 찾은 것이 화면과 CLI 에 나오는지, Claude 세션이 쓴 스킬과 하위 에이전트가 기록되는지.
+- 탭이 많을 때 트랙패드로 탭 줄이 스크롤되는지, 에이전트가 일하는 동안 한글을 쳐도 글자가 한 번씩만 가는지.
+- 앱 작업 공간이 답하지 않는 앱도 닫는지, Cmd+Q 와 inspector 를 켠 개발용 앱이 깨끗하게 끝나는지.
+- 이 저장소로 빌드한 macOS 앱이 뜨고, 그 앱에서 sandbox 의 Claude 세션과 완료 검사가 도는지.
+
+## 점검 목록
+
+`누가` 가 `에이전트도` 이면 이 Mac 의 Claude Code 에이전트가 1회차처럼 대신 할 수 있고, `사람만` 이면 Mac 앞의 사람이
+해야 합니다.
+
+| 번호 | 점검 | 누가 |
+|---|---|---|
+| 1 | sandbox 안의 Claude 터미널 세션, 보통 일 | 에이전트도 |
+| 2 | 같은 세션, 막혀야 하는 것 | 에이전트도 |
+| 3 | sandbox 안의 Claude 대화 세션 | 에이전트도 |
+| 4 | sandbox 안의 Codex, Job 의 워커로 | 에이전트도 |
+| 5 | sandbox 안의 Codex 대화: 끝냈다가 히스토리에서 이어하기 | 에이전트도 |
+| 6 | worktree 세션 | 에이전트도 |
+| 7 | 홈 폴더에서 시작할 때의 경고 | 에이전트도 |
+| 8 | sandbox 밖의 Claude (비교용) | 에이전트도 |
+| 9 | 앱 작업 공간: 앱을 닫으면 따로 떼어 띄운 자식까지 끝나는지 | 에이전트도 |
+| 10 | 같은 폴더의 Codex 터미널 탭 두 개 | 에이전트도 |
+| 11 | (있는 사람만) 링크로 된 `~/.config` | 에이전트도 |
+| 12 | MCP & Skills: 모든 계정이 쓰는 MCP 서버와 스킬 | 에이전트도 |
+| 13 | 에이전트 프로필: MCP 서버 빼기 | 에이전트도 |
+| 14 | Observe: 도구 호출 기록 | 에이전트도 |
+| 15 | Enforce: Rule 이 막는 것과 설정 폴더 | 에이전트도 |
+| 16 | Credentials: 새 세션에서 숨기기 | 에이전트도 |
+| 17 | sandbox 안의 세션에서 에이전트 브라우저 | 에이전트도 |
+| 18 | sandbox 안의 Claude 워커, 완료 검사도 sandbox 안에서 | 에이전트도 |
+| 19 | Findings | 에이전트도 |
+| 20 | 탭 줄 스크롤, 트랙패드로 | 사람만 |
+| 21 | 한글 입력, 에이전트가 일하는 동안 | 사람만 |
+| 22 | 앱 작업 공간: 답하지 않는 앱도 닫히는지 | 에이전트도 |
+| 23 | Cmd+Q 로 개발용 앱 끄기 | 사람만 |
+| 24 | inspector 를 켜고 띄운 개발용 앱 끄기 | 에이전트도 |
+| 25 | 패키지한 앱 | 에이전트도 |
+
 ## 하지 않는 것
 
-- sandbox 를 빠져나가려는 시도는 하지 않습니다. 보통 일이 되는지, 막혀야 할 것이 그냥 막히는지만 봅니다.
+- sandbox 나 Enforce 를 빠져나가려는 시도는 하지 않습니다. 보통 일이 되는지, 막혀야 할 것이 그냥 막히는지만 봅니다.
 - **일부러 뺀 점검이 하나 있습니다.** Claude 의 sandbox 는 `astera` 로 시작하는 명령줄을 sandbox 밖에서 돌립니다
   (`excludedCommands: ["astera *"]`). 앞에 다른 명령을 붙이거나 뒤에 이어 붙인 명령줄이 이 예외를 타고 밖에서 도는지
   보는 점검은, 위의 규칙에 따라 일부러 뺐습니다. 그래서 점검표의 `astera` 명령은 언제나 한 줄에 하나만, 아무것도
   붙이지 않고 씁니다.
+- Claude 세션에서 사람이 `!` 를 붙여 친 명령은 sandbox 밖에서 돕니다. 알고 있는 동작이라 점검하지 않습니다.
+- 계정 넘기기(한도에 닿으면 다음 계정으로 이어 가기)는 한도를 써야 일어나므로 손으로 일으키지 않습니다. 점검 13b 는
+  개발용 앱에만 있는 강제 장치로, 로그인된 Claude 계정이 둘 이상인 사람만 합니다.
 - `run.sh` 는 sudo 를 쓰지 않습니다. 키체인에 손대지 않습니다. 점(.)으로 시작하는 설정 파일을 고치지 않습니다.
   Claude Code 와 Codex 를 띄우지 않습니다. 둘에게는 버전만 묻습니다(`--version`). Astera 도 sandbox 세션을 시작하기
-  전에 똑같이 묻습니다.
+  전에 똑같이 묻습니다. gh 는 있는지만 보고 실행하지 않습니다.
 - `scripts/measure` 의 sandbox 측정은 돌리지 않습니다. 그 측정은 가짜 로그인 정보를 홈 폴더에 쓰기 때문에 CI 러너에서만
   돌립니다.
 
 ## 준비물
 
 - macOS. 로그인된 데스크톱 화면 앞에서 합니다. SSH 로 접속해서 하면 앱 작업 공간이 거절됩니다.
-- Xcode Command Line Tools. git 과, 테스트 하나가 작은 앱을 컴파일하는 cc 가 여기서 옵니다. 없으면
-  `xcode-select --install`.
-- Node 22 이상. `package.json` 은 22.13.0 이상을 요구합니다. CI 는 Node 22 를 쓰고, 이 점검은 Node 24 에서도
-  돌려 봤습니다.
+- Xcode Command Line Tools. git 과, 테스트 하나가 작은 앱을 컴파일하는 cc, 점검 25 의 서명에 쓰는 codesign 이 여기서
+  옵니다. 없으면 `xcode-select --install`.
+- Node 22 이상. `package.json` 은 22.13.0 이상을 요구합니다. CI 는 Node 22 와 24 를 씁니다.
 - 이 저장소의 develop 을 받은 폴더, 그리고 그 폴더에서 한 `npm ci`.
 - Claude Code 2.1.306 이상, Codex 0.160.0 이상. 둘 다 이 Mac 에서 이미 로그인되어 있어야 합니다. 터미널의 `claude`,
   `codex` 로 로그인했거나(`~/.claude`, `~/.codex`), 설치된 Astera 에서 추가한 계정이면(`~/.claude-accounts/<이름>`,
-  `~/.codex-accounts/<이름>`) 됩니다.
+  `~/.codex-accounts/<이름>`) 됩니다. 점검 19 의 사용 기록은 Claude Code 2.1.312 이상에서만 남으니, 그보다 낮으면
+  업데이트해 두면 좋습니다.
+- 사람이 하는 점검(20, 21, 23)에는 트랙패드와 한국어(두벌식) 입력 소스가 있어야 합니다.
+- 점검 25 의 빌드에 디스크 여유가 1 GB 쯤 있으면 됩니다.
+- 있으면 좋은 것: 로그인된 `gh`(점검 16), 로그인된 두 번째 Claude 계정(점검 13b).
 
 ## 걸리는 시간
 
 - `run.sh`: 1~5분. 대부분 빌드와 테스트입니다.
-- 손 점검: 30~45분.
+- 에이전트도 할 수 있는 점검(준비, 1~19, 22, 24, 25): 사람이 하면 약 2시간 30분. 1~11 이 30~45분이고, 12~25 가 약
+  1시간 45분입니다. 그 가운데 점검 25 가 약 25분이고, 빌드는 이 Mac 에서 1~3분쯤으로 봅니다(추정. 릴리스 CI 의 macOS
+  러너는 두 아키텍처를 합친 dmg 와 zip 까지 4분 30초에 만듭니다). 에이전트에게 맡기면 세션마다 기다리는 시간이 붙어 더
+  걸릴 수 있습니다.
+- 사람만 하는 점검(20, 21, 23): 약 15분.
 
 ## 무엇을 건드리나요
 
 ### run.sh
 
 - 이 저장소 폴더 안: 빌드 결과(`out/`)와 vitest 의 캐시.
-- `~/astera-mac-check-<날짜>/` 폴더 하나: 로그, 요약, 점검표 사본, 손 점검에 쓸 작업 폴더(`work/`). 테스트가 만드는 임시
+- `~/astera-mac-check-<날짜>/` 폴더 하나: 로그, 요약, 점검표 사본, 손 점검에 쓸 작업 폴더(`work/`), 손 점검의 도우미
+  (`env.sh`, 개발용 앱의 `astera` 인 `dev-astera`, 점검 12 의 스킬 `work/ext/mac-check-skill`). 테스트가 만드는 임시
   파일도 이 안의 `tmp/` 에 만들고, 끝나면 지웁니다.
 - 테스트 몇 개는 창을 띄우지 않는 작은 앱(Electron 으로 된 것 하나, cc 로 컴파일한 앱 묶음 하나)을 잠깐 실행합니다.
   Dock 에 아이콘이 잠깐 보일 수 있습니다. 그런 앱이 실행되었다는 기록을 macOS 가 스스로 남길 수는 있습니다. 그것은
@@ -72,10 +142,11 @@ CI 의 macOS 러너에는 로그인된 Claude Code 와 Codex 가 없습니다. �
 - **개발용 앱은 설치된 Astera 와 다른 프로필 폴더를 씁니다:** `~/Library/Application Support/astera-dev`.
   설치된 Astera 는 `~/Library/Application Support/Astera` 를 씁니다. 코드로는 `src/main/index.ts` 가, 패키지되지 않은
   앱이면 프로필 폴더 이름 뒤에 `-dev` 를 붙입니다. 개발용 앱은 자기 Host 도 따로 띄웁니다. 그래서 설치된 Astera 의
-  세션, 설정, Job 은 건드리지 않습니다. 둘을 함께 켜 두어도 됩니다.
+  세션, 설정, Job 은 건드리지 않습니다. 둘을 함께 켜 두어도 됩니다. Observe 의 기록, Credentials 목록, 찾은 것의
+  무시 목록, 공유한 MCP 서버와 스킬의 등록도 모두 이 프로필 폴더에 남습니다.
 - **계정은 새로 로그인하지 않습니다.** 이미 로그인된 `~/.claude` 와 `~/.codex` 를 **자동 감지** (Auto-detect) 로
   등록합니다. 터미널의 `claude`, `codex` 가 쓰는 바로 그 폴더이고, 세션은 그 로그인으로 돕니다. 새 로그인이 없으니
-  키체인에 새 항목도 생기지 않습니다. 진짜 계정으로 짧은 세션을 몇 번 돌립니다. 로그인이 설치된 Astera 의 계정 폴더에
+  키체인에 새 항목도 생기지 않습니다. 진짜 계정으로 짧은 세션을 여러 번 돌립니다. 로그인이 설치된 Astera 의 계정 폴더에
   있으면 자동 감지에 나오지 않으니, 그 폴더를 **가져오기** (Import) 로 등록합니다(점검표 준비 3). 이것도 새 로그인이
   아닙니다.
   - 계정 칸 위쪽의 + 버튼, **추가** (Add) 로 계정을 새로 만들지 마세요. 새 계정 폴더를 만들고 새로 로그인하게 하며,
@@ -89,11 +160,26 @@ CI 의 macOS 러너에는 로그인된 Claude Code 와 Codex 가 없습니다. �
   - 작업 폴더를 믿는다는 표시: `~/.claude.json`, `~/.codex/config.toml` 에 그 폴더 항목이 생깁니다. 폴더를 처음 쓸 때
     묻는 질문에 답하거나, 앱이 워커 폴더를 미리 표시할 때입니다.
   - Astera 의 스킬 파일: `~/.claude/skills/astera-orchestration`, `~/.codex/skills/astera-orchestration`. 설치된
-    Astera 도 같은 파일을 둡니다. 점검 9에서 **에이전트 앱 작업 공간** (Agent app workspace) 을 켜면 `astera-app` 스킬도
-    같은 자리에 생깁니다. 설정을 다시 꺼도 지워지지 않으니, 필요 없으면 아래 '정리' 에서 지웁니다.
+    Astera 도 같은 파일을 둡니다. 점검 9에서 **에이전트 앱 작업 공간** (Agent app workspace) 을, 점검 17에서
+    **에이전트 브라우저** (Agent browser) 를 켜면 `astera-app` 과 `astera-browser` 스킬도 같은 자리에 생깁니다. 설정을
+    다시 꺼도 지워지지 않으니, 필요 없으면 아래 '정리' 에서 지웁니다.
   - 가져온 계정이면 위의 `~/.claude`, `~/.codex` 대신 그 계정 폴더 안에 같은 것이 생깁니다.
-  - 점검 4의 Job 워커가 일하는 worktree: `~/astera-worktrees/mac-check-repo/`.
+  - 점검 4, 18, 25 의 Job 워커가 일하는 worktree: `~/astera-worktrees/` 아래의 `mac-check-repo` 나 `mac-check-repo-wt`
+    폴더(Job 을 만들 때 앞에 있던 탭의 폴더 이름).
   - sandbox 세션의 npm 캐시(임시 폴더의 `astera-npm-cache`)와 개발용 Host 의 소켓 폴더(임시 폴더의 `astera-host-…`).
+- 점검 12 는 Claude 계정의 설정을 잠깐 바꿉니다. `claude mcp add` 로 `~/.claude.json`(가져온 계정이면
+  `<폴더>/.claude.json`)에 `mac-check-echo` 서버 한 줄을 넣었다가, 같은 점검에서 `claude mcp remove` 로 뺍니다. 스킬
+  `mac-check-skill` 은 `~/.claude/skills/` 에 직접 복사해 넣고, Astera 가 다른 계정의 폴더(`~/.codex/skills/` 등)에
+  사본을 둡니다. 점검 19 끝에서 등록을 지우면 Astera 가 둔 사본은 지워지고, 직접 넣은 것은 손으로 지웁니다. 마무리에서
+  남은 것이 없는지 봅니다.
+- 점검 16 의 `MAC_CHECK_TOKEN` 은 개발용 앱을 띄운 터미널에만 있는 가짜 변수입니다. Credentials 에 넣은 항목은 같은
+  점검에서 지웁니다.
+- 점검 25 는 결과 폴더의 `packaged/` 에 앱을 빌드합니다(약 400 MB, 추정). Electron 을 내려받아 두는 곳
+  (`~/Library/Caches/electron`)에 이 버전이 없으면 약 100 MB 를 더 내려받고, electron-builder 가 도구를
+  `~/Library/Caches/electron-builder` 에 둘 수 있습니다. 앱을 띄우고 끄면 macOS 가
+  `~/Library/Saved Application State/io.github.parsingk.astera.maccheck.savedState` 와 같은 id 의 설정 파일을 남길 수
+  있습니다. 앱 이름을 `AsteraMacCheck` 로 바꿔 빌드하므로 설치된 Astera 의 프로필 폴더와 이름이 겹치지 않습니다. 그
+  점검의 8단계가 이것들을 지웁니다.
 
 ## 순서
 
@@ -117,9 +203,10 @@ CI 의 macOS 러너에는 로그인된 Claude Code 와 Codex 가 없습니다. �
 
 4. 결과 폴더의 `checklist.md` 를 텍스트 편집기로 엽니다(원본 `scripts/mac-check/checklist.md` 가 아니라 사본입니다).
    맨 위에 `run.sh` 의 결과가 들어가 있습니다. 그 아래 '준비' 부터 차례로 따라 합니다. 개발용 앱은 '준비' 에서
-   `npm run dev` 로 띄웁니다.
+   `npm run dev` 로 띄웁니다. 에이전트에게 맡긴다면 점검표 맨 위의 '2회차에서 달라진 것' 을 먼저 읽게 하고, 사람만 하는
+   점검(20, 21, 23)은 남겨 두게 합니다.
 
-5. 점검표 맨 끝의 '마무리' 까지 합니다. 세션을 모두 닫고, 앱을 끄고, 개발용 Host 가 사라졌는지 봅니다.
+5. 점검표 맨 끝의 '마무리' 까지 합니다. 앱이 모두 꺼졌는지, 점검 12 가 계정에 넣은 것이 남지 않았는지 봅니다.
 
 6. 결과를 보냅니다(아래).
 
@@ -128,7 +215,7 @@ CI 의 macOS 러너에는 로그인된 Claude Code 와 Codex 가 없습니다. �
 `~/astera-mac-check-<날짜>/checklist.md` 파일 하나만 보내면 됩니다. `run.sh` 의 요약도 그 안에 들어 있습니다.
 
 보내기 전에 한 번 훑어보세요. 비밀번호, 토큰, 키의 내용은 들어 있으면 안 됩니다. 점검의 명령은 그런 값을 출력하지
-않도록 짜여 있습니다(키 파일은 크기만 봅니다).
+않도록 짜여 있습니다(키 파일은 크기만, 환경 변수는 있는지만, gh 는 종료 코드만 봅니다).
 
 `run.sh` 를 다시 돌리면 같은 사본의 맨 위 요약만 새로 채우고, 적어 둔 답은 그대로 둡니다. 날짜가 바뀐 뒤에 다시
 돌리면 그날 날짜로 새 폴더와 새 사본이 생기고, 점검표 '준비 1' 의 `R` 도 새 폴더를 가리킵니다. 그때는 이전 사본에
@@ -137,22 +224,28 @@ CI 의 macOS 러너에는 로그인된 Claude Code 와 Codex 가 없습니다. �
 ## 다 보낸 뒤 정리 (원하면)
 
 ```sh
-rm -rf ~/astera-mac-check-<날짜> ~/astera-worktrees/mac-check-repo
+rm -rf ~/astera-mac-check-<날짜> ~/astera-worktrees/mac-check-repo ~/astera-worktrees/mac-check-repo-wt
 ```
 
+- 결과 폴더를 지우면 점검 25 의 빌드(`packaged/`)와 도우미 파일도 함께 지워집니다.
 - 개발용 앱의 프로필 폴더 `~/Library/Application Support/astera-dev` 도 지워도 됩니다.
-- `astera-app` 스킬을 쓰지 않는다면 `~/.claude/skills/astera-app` 과 `~/.codex/skills/astera-app` 을 지웁니다(가져온
-  계정이면 그 계정 폴더의 `skills/astera-app`).
-  설치된 Astera 에서 **에이전트 앱 작업 공간** (Agent app workspace) 을 켜 두었다면 그대로 두세요.
+- `astera-app`, `astera-browser` 스킬을 쓰지 않는다면 `~/.claude/skills/` 와 `~/.codex/skills/` 의 `astera-app`,
+  `astera-browser` 를 지웁니다(가져온 계정이면 그 계정 폴더의 `skills/` 안). 설치된 Astera 에서 그 설정을 켜 두었다면
+  그대로 두세요.
+- 점검 25 의 8단계를 건너뛰었다면 그 단계의 명령을 지금 칩니다.
 - 작업 폴더의 대화 기록과 믿음 표시는 지운 폴더를 가리킬 뿐이라 그대로 두어도 됩니다.
 
 ## 막히면
 
 - `run.sh: 이 점검은 macOS 전용입니다`: Mac 에서 돌려야 합니다.
 - node 가 FAIL: Node 22 의 최신판을 설치하고 `npm ci` 부터 다시 합니다.
-- `npm ci` 가 FAIL: 저장소 폴더에서 `npm ci` 를 다시 합니다. 그래도 Electron 이 없다고 하면 `npm rebuild electron`.
+- `npm ci` 나 `xterm-patch` 가 FAIL: 저장소 폴더에서 `npm ci` 를 다시 합니다. 그래도 Electron 이 없다고 하면
+  `npm rebuild electron`.
 - `tools` 가 FAIL: `xcode-select --install` 로 Command Line Tools 를 설치하고 `run.sh` 를 다시 돌립니다.
-- claude 나 codex 가 FAIL: 업데이트한 뒤 `run.sh` 를 다시 돌립니다. 버전이 낮으면 개발용 앱이 sandbox 세션의 시작을
-  거절합니다.
+- claude 나 codex 가 FAIL: 업데이트한 뒤 `run.sh` 를 다시 돌립니다. 버전이 낮으면 개발용 앱이 sandbox 세션과 Enforce
+  세션의 시작을 거절합니다.
 - 개발용 앱이 뜨지 않음: `npm run dev` 를 띄운 터미널의 마지막 몇 줄을 점검표의 '준비' 메모에 붙여 넣어 주세요.
+- 점검 12 의 `claude mcp add` 가 실패: 출력 그대로를 그 점검의 메모에 붙이고, 13 과 19 의 MCP 부분은 건너뜁니다.
+- 점검 17 에서 `EADDRINUSE`: 다른 프로그램이 8765 번을 쓰고 있습니다. 그 프로그램을 끄고 다시 띄웁니다.
+- 점검 25 의 빌드가 실패: 터미널의 마지막 30줄을 그 점검의 메모에 붙여 넣어 주세요.
 - 점검 하나가 막혀 더 나갈 수 없으면, 본 것을 그 점검의 메모에 적고 다음 점검으로 넘어가세요.

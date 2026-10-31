@@ -8,7 +8,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ko } from '../../src/core/i18n/messages/ko'
 import { en } from '../../src/core/i18n/messages/en'
-import { ENFORCE_MIN } from '../../src/core/sessions/cliVersion'
+import { ENFORCE_MIN, USE_REPORT_MIN_CLAUDE } from '../../src/core/sessions/cliVersion'
+import * as securityText from '../../src/renderer/src/components/securityText'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here, '../..')
@@ -21,6 +22,21 @@ const runCode = runSh
   .split('\n')
   .filter((l) => !/^\s*#/.test(l))
   .join('\n')
+
+/** The checklist's numbered checks, each with its title and its text up to the next `## ` heading. */
+const checks = (() => {
+  const text = guides['checklist.md']
+  return [...text.matchAll(/^## (\d+)\. (.+)$/gm)].map((m) => {
+    const end = text.indexOf('\n## ', m.index + 1)
+    return { n: Number(m[1]), title: m[2].trim(), body: text.slice(m.index, end < 0 ? undefined : end) }
+  })
+})()
+/** Who can do a check (the brief of round 2): an agent too, or only a person at the Mac. */
+const WHO = ['에이전트도', '사람만']
+const whoLines = (body) => [...body.matchAll(/^누가: (\S+)/gm)].map((m) => m[1])
+
+/** The names Settings › Security & Access keeps in English in every language (securityText.ts). */
+const englishNames = Object.values(securityText).filter((v) => typeof v === 'string')
 
 /** Repository paths a guide names: they start at one of the repository's top folders. */
 const repoPaths = (text) => [...new Set([...text.matchAll(/(?<![\w./~$-])((?:src|scripts|docs|resources|packages|\.github)\/[\w.@/-]*[\w])/g)].map((m) => m[1]))]
@@ -51,7 +67,25 @@ describe('scripts/mac-check guides', () => {
     it(`${name} writes every app label as the app shows it, in Korean and in English`, () => {
       const pairs = [...text.matchAll(/\*\*([^*\n]+)\*\* \(([^)\n]+)\)/g)].map((m) => [m[1], m[2]])
       expect(pairs.length).toBeGreaterThan(0)
+      // A pair broken over two lines would be checked by neither this test nor the English-only one
+      expect([...text.matchAll(/\*\*([^*\n]+)\*\* \(/g)].length).toBe(pairs.length)
       expect(pairs.filter(([k, e]) => keysFor(k, e).length === 0).map(([k, e]) => `${k} (${e})`)).toEqual([])
+    })
+
+    it(`${name} writes every English-only app name as the app shows it`, () => {
+      // A bold name with no `(English)` after it is one the app shows the same in every language: a section of Security &
+      // Access, or a catalog value that is the same in Korean and English (`MCP & Skills`, `Findings {count}`)
+      const alone = [...text.matchAll(/\*\*([^*\n]+)\*\*( \()?/g)]
+        .filter((m) => m[2] === undefined)
+        .map((m) => m[1])
+        .filter((s) => /^[\x20-\x7e]+$/.test(s) && /[A-Za-z]/.test(s))
+      const known = (s) => englishNames.includes(s) || Object.keys(ko).some((k) => ko[k] === en[k] && matches(en[k], s))
+      expect(alone.filter((s) => !known(s))).toEqual([])
+    })
+
+    it(`${name} runs only package binaries this checkout installs`, () => {
+      const bins = [...new Set([...text.matchAll(/\.\/node_modules\/\.bin\/([\w-]+)/g)].map((m) => m[1]))]
+      expect(bins.filter((b) => !existsSync(path.join(root, 'node_modules', '.bin', b)))).toEqual([])
     })
 
     it(`${name} runs every astera command on a line of its own, nothing chained to it`, () => {
@@ -72,9 +106,50 @@ describe('scripts/mac-check guides', () => {
     expect(guides['README.md']).toContain(`~/Library/Application Support/${pkg.name}-dev`)
   })
 
-  it('the checklist has the eleven checks, numbered, none left out', () => {
-    const numbers = [...guides['checklist.md'].matchAll(/^## (\d+)\. /gm)].map((m) => Number(m[1]))
-    expect(numbers).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+  it('the README names the Claude Code that reports skill uses, as the code has it', () => {
+    expect(guides['README.md']).toContain(`Claude Code ${USE_REPORT_MIN_CLAUDE}`)
+  })
+
+  it("the checklist numbers its checks from 1, none left out: round 1's eleven and round 2's from 12 on", () => {
+    // A later round appends after the last one, so only the floor is fixed here
+    const numbers = checks.map((c) => c.n)
+    expect(numbers).toEqual(numbers.map((_, i) => i + 1))
+    expect(numbers.length).toBeGreaterThanOrEqual(25)
+  })
+
+  it('every check says once who can do it, and ends with a box to tick', () => {
+    for (const c of checks) {
+      expect(whoLines(c.body), `${c.n}. ${c.title}`).toHaveLength(1)
+      expect(WHO, `${c.n}. ${c.title}`).toContain(whoLines(c.body)[0])
+      expect(c.body, `${c.n}. ${c.title}`).toMatch(/^- \[ \] /m)
+    }
+  })
+
+  it('the README lists every check with who can do it, as the checklist has them', () => {
+    const rows = [...guides['README.md'].matchAll(/^\| (\d+) \| (.+?) \| (\S+) \|/gm)].map((m) => ({ n: Number(m[1]), title: m[2], who: m[3] }))
+    expect(rows).toEqual(checks.map((c) => ({ n: c.n, title: c.title, who: whoLines(c.body)[0] })))
+  })
+
+  it('the packaged build is signed ad hoc as the release workflow signs it, under a name and id of its own', () => {
+    const release = readFileSync(path.join(root, '.github/workflows/release.yml'), 'utf8')
+    const builder = readFileSync(path.join(root, 'electron-builder.yml'), 'utf8')
+    const line = guides['checklist.md'].split('\n').find((l) => l.includes('electron-builder --mac'))
+    expect(line).toBeDefined()
+    for (const flag of ['-c.mac.notarize=false', '-c.mac.identity=-']) {
+      expect(release).toContain(flag)
+      expect(line).toContain(flag)
+    }
+    expect(release).toContain("CSC_IDENTITY_AUTO_DISCOVERY: 'false'")
+    expect(guides['checklist.md']).toContain('CSC_IDENTITY_AUTO_DISCOVERY=false')
+    // Electron names the profile folder after the packaged package.json's productName (app.getName), so a build under
+    // the release's name could open the installed Astera's profile
+    const productName = /-c\.productName=(\w+)/.exec(line)?.[1]
+    const appId = /-c\.appId=([\w.]+)/.exec(line)?.[1]
+    expect(productName).toBeDefined()
+    expect(productName).not.toBe(/^productName: (\S+)/m.exec(builder)?.[1])
+    expect(line).toContain(`-c.extraMetadata.productName=${productName}`)
+    expect(appId).toBeDefined()
+    expect(appId).not.toBe(/^appId: (\S+)/m.exec(builder)?.[1])
   })
 
   it('the checklist holds the block run.sh fills, and run.sh fills that block', () => {
@@ -106,6 +181,30 @@ describe('scripts/mac-check/run.sh', () => {
   it('checks the CLI versions the sandbox needs, as the code has them', () => {
     expect(runSh).toMatch(new RegExp(`^CLAUDE_MIN=${ENFORCE_MIN.claude.replace(/\./g, '\\.')}\\b`, 'm'))
     expect(runSh).toMatch(new RegExp(`^CODEX_MIN=${ENFORCE_MIN.codex.replace(/\./g, '\\.')}\\b`, 'm'))
+  })
+
+  it('notes the Claude Code that reports skill uses, as the code has it', () => {
+    expect(runSh).toMatch(new RegExp(`^USE_MIN=${USE_REPORT_MIN_CLAUDE.replace(/\./g, '\\.')}\\b`, 'm'))
+  })
+
+  it('writes every work-folder file and helper the checklist uses', () => {
+    const text = guides['checklist.md']
+    const named = new Set([...text.matchAll(/mac-check-app\/[\w.-]+\.\w+/g)].map((m) => m[0]))
+    for (const helper of ['dev-astera', 'env.sh', 'ext/mac-check-skill']) {
+      expect(text).toContain(helper)
+      named.add(helper)
+    }
+    expect([...named].filter((f) => !runSh.includes(f))).toEqual([])
+  })
+
+  it('writes into the scratch repository the npm script the checklist picks as a completion check', () => {
+    expect(guides['checklist.md']).toContain('+ mac-check-sandbox')
+    expect(runSh).toMatch(/^ {4}"mac-check-sandbox": "/m)
+  })
+
+  it("points its helper CLI at the development app's profile folder, never the installed one", () => {
+    expect(runCode).toContain(`Application Support/${pkg.name}-dev`)
+    expect(runCode).toMatch(/ASTERA_PROFILE_DIR=/)
   })
 
   it('reads the Node floor from package.json, which CI and the app share', () => {
