@@ -6,8 +6,9 @@
 #   bash scripts/mac-check/run.sh
 #
 # What it may do: write inside this checkout (the build's out/, vitest's cache) and inside ~/astera-mac-check-<date>/,
-# which holds every log, the summary, the copy of the checklist the person fills in, and the scratch work folder. The
-# tests run with TMPDIR inside that folder, so their fixtures (and vitest's sweep of stale ones) stay there too.
+# which holds every log, the summary, the copy of the checklist the person fills in, the scratch work folder and the
+# guided part's helpers (env.sh, dev-astera, the skill check 12 shares). The tests run with TMPDIR inside that folder, so
+# their fixtures (and vitest's sweep of stale ones) stay there too.
 # What it never does: sudo, the keychain, a dotfile, a model call. Claude Code and Codex are asked for `--version` and
 # nothing else, as Astera itself asks before a sandboxed start (src/core/sessions/cliVersion.ts). The S2 measurement
 # (scripts/measure) is not run: it writes fake credentials into the home folder and belongs on a CI runner.
@@ -31,6 +32,9 @@ fi
 # the two equal).
 CLAUDE_MIN=2.1.306
 CODEX_MIN=0.160.0
+# Claude Code reports skill, command and subagent uses from this version on (USE_REPORT_MIN_CLAUDE, the same file);
+# check 19 reads them only then.
+USE_MIN=2.1.312
 
 # A shell inside an Astera session carries that session's ASTERA_* variables; none of them may reach the tests.
 for v in $(env | sed -n 's/^\(ASTERA_[A-Za-z0-9_]*\)=.*/\1/p' | grep -v '^ASTERA_MAC_CHECK_TEST_ONLY_'); do unset "$v"; done
@@ -156,6 +160,14 @@ if [ -n "$stale" ]; then
   exit 1
 fi
 result PASS "npm ci" "node_modules 가 package-lock.json 과 같고 Electron 이 있습니다"
+# The Korean input fix check 21 types against is a patch to xterm.js that npm ci applies (patches/@xterm+xterm+6.0.0.patch;
+# the renderer's xterm patch test looks for the same mark). The build refuses a node_modules without it too
+# (electron.vite.xtermPatch.ts), but this says why before the build's log does.
+if grep -q 'this._pendingCompositionSend=' "$root/node_modules/@xterm/xterm/lib/xterm.mjs" 2>/dev/null; then
+  result PASS xterm-patch "node_modules 의 xterm.js 에 한글 입력 패치가 들어 있습니다"
+else
+  result FAIL xterm-patch "node_modules 의 xterm.js 에 한글 입력 패치가 없습니다. 저장소 폴더에서 npm ci 를 다시 하세요."
+fi
 
 for cli in claude codex; do
   if [ "$cli" = claude ]; then min=$CLAUDE_MIN; else min=$CODEX_MIN; fi
@@ -169,6 +181,9 @@ for cli in claude codex; do
   if [ -z "$v" ]; then result FAIL "$cli" "버전을 읽지 못했습니다: $(printf '%s' "$out" | head -n 1)"
   elif at_least "$v" "$min"; then result PASS "$cli" "$v ($min 이상) $found"
   else result FAIL "$cli" "$v ($min 이상이 필요합니다) $found"; fi
+  if [ "$cli" = claude ] && [ -n "$v" ] && ! at_least "$v" "$USE_MIN"; then
+    result NOTE claude-uses "$v 는 $USE_MIN 보다 낮아 스킬과 하위 에이전트를 쓴 기록을 남기지 않습니다 (점검 19 의 5단계는 건너뜁니다)"
+  fi
 done
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -190,6 +205,10 @@ for p in .config .cache .local Library "Library/Application Support"; do
 done
 if [ -n "$links" ]; then result NOTE links "링크인 폴더:$links (점검 7 과 11 을 보세요)"
 else result NOTE links "위 폴더 가운데 링크는 없습니다 (점검 11 은 건너뜁니다)"; fi
+# Check 16 hides gh's login from a new session: only whether gh is here. It is never run, since asking it about its login
+# may read the keychain.
+if command -v gh > /dev/null 2>&1; then result NOTE gh "있음: $(command -v gh) (점검 16)"
+else result NOTE gh "없음 (점검 16 의 gh 줄은 건너뜁니다)"; fi
 
 # ---------------------------------------------------------------------------------------------------------------------
 # The two readers the Host runs on macOS: the Codex rollout owner (lsof, then ps for the parents;
@@ -295,13 +314,16 @@ vitest_group mac-desk-e2e 1 1 src/host/workspace/desktop.mac.e2e.test.ts
 vitest_group manual-install 1 0 src/main/manualInstall.test.ts
 # The Codex rollout owner (Task D and G): the macOS reader's cases, and the locate that asks it.
 vitest_group rollout-owner 0 0 src/core/rolling/rolloutOwner.test.ts src/core/rolling/codexLocate.test.ts
-# The sandbox builders (Task E): the lists, the start warnings and the link rule against this Mac's real folders.
+# The sandbox builders (Task E): the lists, the start warnings and the link rule against this Mac's real folders. The
+# folder takes in round 2's check runner and srt tests too, which run on fakes.
 vitest_group sandbox-builders 0 0 src/core/sandbox src/core/sessions/statusline.test.ts src/host/spawner.test.ts
+# Round 2 (2026-10-31) added no file: nothing added or changed since round 1 has real-OS cases that run only on macOS or
+# need a logged-in desktop session (guide.test.mjs fails when one appears that this list does not run).
 
 # ---------------------------------------------------------------------------------------------------------------------
 # The guided part's scratch work folder (checklist.md, 준비): a git repository with one commit and a linked worktree of
-# it, plus the workspace fixture's launcher for check 9. Kept as it is when it is already there, since sessions may be
-# using it.
+# it, plus the workspace fixture's launcher for checks 9 and 22, the agent browser's page for check 17 and the completion
+# check of checks 18 and 25. Kept as it is when it is already there, since sessions may be using it.
 section "6. 안내 점검에 쓸 작업 폴더"
 work="$R/work"
 repo="$work/mac-check-repo"
@@ -312,16 +334,38 @@ else
   mkdir -p "$repo/mac-check-app"
   printf '%s\n' '# mac-check scratch repository' '' 'Made by scripts/mac-check/run.sh for the guided Mac check. Safe to delete.' > "$repo/README.md"
   printf '%s\n' 'node_modules/' > "$repo/.gitignore"
+  # Checks 18 and 25: the completion check a sandboxed Claude worker's Task picks (Astera lists a package.json script as a
+  # run configuration, src/core/run/config.ts). Inside the sandbox the write beside the worktree is refused and the check
+  # passes; outside one it lands and the check fails.
+  cat > "$repo/package.json" <<'EOF'
+{
+  "name": "mac-check-repo",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "mac-check-sandbox": "if echo x > ../mac-check-sandbox-outside.txt; then echo outside-the-sandbox; exit 1; fi; echo inside-the-sandbox"
+  }
+}
+EOF
+  # Check 17: a page on this Mac only, which the person serves from a terminal, and the script that opens it in the agent
+  # browser (open() takes only this machine's addresses, resources/skills/browser-guide.md).
+  cat > "$repo/mac-check-app/serve.cjs" <<'EOF'
+// Check 17: a page on this Mac only, for the agent browser. Started in a terminal; Ctrl+C ends it. Written by run.sh.
+require('node:http')
+  .createServer((req, res) => res.end('<!doctype html><title>mac-check page</title><h1>mac-check</h1>'))
+  .listen(8765, '127.0.0.1', () => console.log('http://127.0.0.1:8765/'))
+EOF
+  printf '%s\n' '// Check 17: the agent browser from a sandboxed session, on the page serve.cjs serves.' "await open('http://127.0.0.1:8765/')" 'log((await snapshot()).title)' > "$repo/mac-check-app/browser.js"
   # The workspace fixture (src/host/workspace/fixtures/app/main.cjs) with a child it starts detached, as Astera's dev
   # app starts its Host. Its user data folder and the child's pid file sit beside the repository, not in it.
   {
     echo '#!/bin/sh'
-    echo '# Check 9: the workspace fixture of the Astera checkout, with a child it starts detached. Written by run.sh.'
+    echo '# Checks 9 and 22: the workspace fixture of the Astera checkout, with a child it starts detached. Written by run.sh.'
     echo "exec $(sq "$electron") $(sq "$root/src/host/workspace/fixtures/app/main.cjs") --remote-debugging-port=\"\$ASTERA_APP_CDP_PORT\" --user-data-dir=$(sq "$work/fixture-profile") --detached-child=$(sq "$work/fixture-child.pid") \$ASTERA_APP_CHROMIUM_FLAGS"
   } > "$repo/mac-check-app/start.sh"
   chmod +x "$repo/mac-check-app/start.sh"
-  printf '%s\n' '// Check 9: launch the fixture the way the astera-app skill does.' "log(await launch({ command: './mac-check-app/start.sh' }))" 'log((await snapshot()).title)' > "$repo/mac-check-app/launch.js"
-  printf '%s\n' '// Check 9: end the fixture and everything it started.' 'await close()' "log('closed')" > "$repo/mac-check-app/close.js"
+  printf '%s\n' '// Checks 9 and 22: launch the fixture the way the astera-app skill does.' "log(await launch({ command: './mac-check-app/start.sh' }))" 'log((await snapshot()).title)' > "$repo/mac-check-app/launch.js"
+  printf '%s\n' '// Checks 9 and 22: end the fixture and everything it started.' 'await close()' "log('closed')" > "$repo/mac-check-app/close.js"
   if git -C "$repo" init -q \
     && git -C "$repo" symbolic-ref HEAD refs/heads/main \
     && git -C "$repo" config user.name 'Astera mac-check' \
@@ -335,6 +379,34 @@ else
     result FAIL work "작업 폴더를 만들지 못했습니다: $repo"
   fi
 fi
+
+# The guided part's helpers, written on every run and starting nothing. env.sh holds the folders its terminal commands
+# use (준비 1 reads it). dev-astera is the development app's astera: the CLI this checkout built, talking to the
+# development Host and its profile folder (src/main/index.ts adds -dev to an unpacked app's), never the installed
+# Astera's, with no session's variables to point it elsewhere. The skill is the one check 12 copies into the Claude account
+# Settings › MCP & Skills adds from.
+{
+  echo '# The folders of the guided Mac check (checklist 준비 1). Written by scripts/mac-check/run.sh.'
+  echo "R=$(sq "$R")"
+  echo "REPO=$(sq "$root")"
+} > "$R/env.sh"
+{
+  echo '#!/bin/sh'
+  echo '# The astera of the development app (checklist 준비 1), never the installed one. Written by scripts/mac-check/run.sh.'
+  echo "exec env -u ASTERA_HOST -u ASTERA_SESSION -u ASTERA_CLI -u ASTERA_SKILLS -u ASTERA_GATEWAY_TOKEN -u ASTERA_GATEWAY_GRANT -u ASTERA_LOOPBACK ASTERA_PROFILE_DIR=\"\$HOME/Library/Application Support/astera-dev\" ELECTRON_RUN_AS_NODE=1 $(sq "$electron") $(sq "$root/out/main/cli.js") \"\$@\""
+} > "$R/dev-astera"
+chmod +x "$R/dev-astera"
+skill="$work/ext/mac-check-skill"
+mkdir -p "$skill"
+cat > "$skill/SKILL.md" <<'EOF'
+---
+name: mac-check-skill
+description: The Astera mac-check test skill. Use it only when the user types /mac-check-skill.
+---
+
+Reply with exactly this one line and nothing else: mac-check-skill-ok
+EOF
+result PASS helpers "$R/env.sh, $R/dev-astera, $skill"
 
 # ---------------------------------------------------------------------------------------------------------------------
 section "7. 다음"
