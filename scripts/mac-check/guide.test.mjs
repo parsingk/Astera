@@ -130,6 +130,30 @@ describe('scripts/mac-check guides', () => {
     expect(rows).toEqual(checks.map((c) => ({ n: c.n, title: c.title, who: whoLines(c.body)[0] })))
   })
 
+  it("check 25 saves and puts back the installed astera command a packaged build's start rewrites", () => {
+    // A packaged start points an installed public shuttle at itself (src/main/ipc.ts, the boot sync), in a folder that
+    // depends on neither the profile nor the product name (cliInstall.ts binDirFor), so the rename cannot keep it away
+    const ipc = readFileSync(path.join(root, 'src/main/ipc.ts'), 'utf8')
+    const install = readFileSync(path.join(root, 'src/core/orchestration/cliInstall.ts'), 'utf8')
+    const packaged = checks.find((c) => c.title === '패키지한 앱')
+    expect(packaged).toBeDefined()
+    if (/if \(app\.isPackaged\) \{\s*const entryPath = cliEntryPath\(\)\s*if \(entryPath\)\s*void syncShuttle\(/.test(ipc)) {
+      expect(install).toContain('return `${a.home}/.local/bin`')
+      const body = packaged.body
+      expect(body).toContain('cp -p ~/.local/bin/astera "$R/astera-cli.before"')
+      expect(body).toContain('cmp -s "$R/astera-cli.before" ~/.local/bin/astera || cp -p "$R/astera-cli.before" ~/.local/bin/astera')
+      // Put back before the build it points at is removed
+      expect(body.indexOf('cmp -s "$R/astera-cli.before"')).toBeLessThan(body.indexOf('rm -rf "$R/packaged"'))
+      expect(guides['README.md']).toContain('~/.local/bin/astera')
+    }
+  })
+
+  it('the wrap-up looks for what check 12 left in imported account folders too', () => {
+    const text = guides['checklist.md']
+    const wrapUp = text.slice(text.indexOf('\n## 마무리'))
+    for (const folder of ['~/.claude-accounts', '~/.codex-accounts']) expect(wrapUp).toContain(folder)
+  })
+
   it('the packaged build is signed ad hoc as the release workflow signs it, under a name and id of its own', () => {
     const release = readFileSync(path.join(root, '.github/workflows/release.yml'), 'utf8')
     const builder = readFileSync(path.join(root, 'electron-builder.yml'), 'utf8')

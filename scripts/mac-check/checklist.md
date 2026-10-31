@@ -21,7 +21,8 @@
 - **점검마다 `누가:` 줄이 있습니다.** `에이전트도` 는 1회차처럼 이 Mac 의 Claude Code 에이전트가 대신 할 수 있다는
   뜻입니다. 개발용 앱을 에이전트 앱 작업 공간에서 화면에 보이지 않게 띄우고, 세션에는 개발용 Host 의
   `astera sessions send` 로 붙여 넣고 `astera sessions read` 로 읽습니다. `사람만` 은 Mac 앞의 사람만 할 수 있는
-  점검입니다(트랙패드, macOS 의 한글 입력, 화면에 보이는 창의 Cmd+Q).
+  점검입니다(트랙패드, macOS 의 한글 입력, 화면에 보이는 창의 Cmd+Q). 에이전트와 사람이 나눠 할 때의 순서는 README 의
+  '에이전트와 사람이 나눠 할 때' 에 있습니다.
 - **알고 있는 것, 점검하지 않는 것.** Claude 세션에서 `!` 를 붙여 친 명령은 sandbox 밖에서 돕니다(1회차 점검 2 의
   메모). 사람이 직접 친 명령이라 그렇게 만들어져 있고, **Security & Access** 의
   **Sandbox가 막는 범위** (What the sandbox blocks) 표 아래에도 적혀 있습니다. 이 점검표의 명령을 `!` 로 대신 치지
@@ -1303,6 +1304,8 @@ inspector 연결이 모두 끊길 때까지 끝나지 않기 때문입니다. �
 전에 inspector 연결을 닫을 것). 붙어 있는 연결이 없으면 inspector 를 켜고 띄운 앱도 몇 초 안에 끝나야 합니다.
 
 1. 저장소 폴더의 터미널에서 inspector 를 켜고 띄웁니다. `Debugger listening on ws://127.0.0.1:5858/…` 줄이 나옵니다.
+   에이전트는 터미널에서 띄우지 않고(창이 사람의 화면에 뜹니다), 앱 작업 공간의 `launch()` 로 같은 명령을 띄웁니다. 앱
+   작업 공간이 요구하는 디버깅 포트 인자를 더하고, 위의 줄은 그 출력에서 봅니다.
 
    ```sh
    npm run dev -- --inspect
@@ -1360,15 +1363,35 @@ Claude 세션과 워커가 일하는지 봅니다. 완료 검사를 sandbox 에 
    du -sh "$R/packaged"
    ```
 
-3. 앱을 띄웁니다. 이 터미널은 앱을 끌 때까지 그대로 둡니다. 이 앱은 macOS 에게 처음 보는 앱이라, 키체인 접근을 묻는
-   창이 뜨면 개발용 앱 때처럼 거부를 누릅니다.
+3. 설치된 `astera` 명령을 저장해 둡니다. 패키지한 앱은 켤 때마다, Astera 가 깔아 둔 `astera` 명령
+   (`~/.local/bin/astera`)이 있으면 그것이 자기를 가리키도록 다시 씁니다. 설치된 Astera 의 설정에서 CLI 탭의 버튼으로
+   그 명령을 깔았다면 이 파일입니다. 이 폴더는 프로필이나 앱 이름과 상관없이 정해져 있어서, 이름을 바꿔 빌드해도 피할 수
+   없습니다. 그래서 띄우기 전에 복사해 두고 9단계에서 되돌립니다. 이 파일에는 실행 파일의 경로 두 개만 있고 비밀은
+   없습니다. MCP 클라이언트에 Astera 를 등록해 두었다면 그 등록도 이 파일을 경로로 가리키므로, 이 파일과 함께 바뀌었다가
+   함께 돌아옵니다.
+
+   ```sh
+   ls -l ~/.local/bin/astera 2>/dev/null && head -n 2 ~/.local/bin/astera && cp -p ~/.local/bin/astera "$R/astera-cli.before"
+   ```
+
+   아무것도 나오지 않으면 그 명령을 깔지 않은 것이니 9단계는 건너뜁니다. 나왔다면 둘째 줄(설치된 Astera 의 실행 파일을
+   가리키는 줄)을 메모에 적습니다. 4단계부터 9단계까지는 터미널의 `astera` 가 패키지한 앱을 가리키므로, 그동안 설치된
+   Astera 에 `astera` 명령을 쓰지 않습니다.
+4. 앱을 띄웁니다. 이 터미널은 앱을 끌 때까지 그대로 둡니다.
+   - 설치된 Astera 가 있으면 켜 둔 채로 띄웁니다. 설치된 Astera 가 자기 프로필 폴더를 잡고 있으므로, 패키지한 앱이 혹시
+     그 폴더를 골랐다면 열지 못하고 곧바로 끝납니다(프로필 하나에 앱은 하나만 뜹니다).
+   - 이 앱은 macOS 에게 처음 보는 앱이라, 키체인 접근을 묻는 창이 뜨면 개발용 앱 때처럼 거부를 누릅니다.
+   - 패키지한 앱은 업데이트를 확인하고, 새 버전이 있으면 저절로 내려받기 시작합니다. 제목 줄에 업데이트가 보이면 메모에
+     적고, 설치는 하지 않습니다.
+   - 에이전트는 터미널에서 띄우지 않고(창이 사람의 화면에 뜹니다), 앱 작업 공간의 `launch()` 로 같은 실행 파일과 인자를
+     띄웁니다. 앱 작업 공간이 요구하는 디버깅 포트 인자를 더합니다.
 
    ```sh
    APP=$(find "$R/packaged" -maxdepth 2 -name '*.app' -print -quit); echo "$APP"
    "$APP/Contents/MacOS/AsteraMacCheck" --user-data-dir="$HOME/Library/Application Support/astera-dev" > "$R/packaged.log" 2>&1 &
    ```
 
-4. 10초쯤 뒤 다른 터미널에서, 떠 있는 Host 가 패키지 안의 것이고 개발용 프로필 폴더에서 일하는지 봅니다.
+5. 10초쯤 뒤 다른 터미널에서, 떠 있는 Host 가 패키지 안의 것이고 개발용 프로필 폴더에서 일하는지 봅니다.
 
    ```sh
    ps -Ao pid,command | grep '[A]steraMacCheck.app' | grep 'host.js'
@@ -1380,7 +1403,7 @@ Claude 세션과 워커가 일하는지 봅니다. 완료 검사를 sandbox 에 
    계정이 보이지 않으면, 앱이 `--user-data-dir` 대신 자기 이름의 폴더(`~/Library/Application Support/AsteraMacCheck`)를
    쓴 것입니다. 그 폴더도 설치된 Astera 와 떨어져 있어 안전합니다. 메모에 적고, 그 앱에서 준비 3 과 준비 4 의 `mac-check`
    프로필만 다시 만든 뒤 이어 갑니다.
-5. 패키지한 앱에서 세션을 엽니다: 프로필 `mac-check`, **터미널** (Terminal), 폴더
+6. 패키지한 앱에서 세션을 엽니다: 프로필 `mac-check`, **터미널** (Terminal), 폴더
    `~/astera-mac-check-<날짜>/work/mac-check-repo`. 탭에 방패 아이콘이 있는지 보고 붙여 넣습니다.
 
    ```text
@@ -1391,7 +1414,7 @@ Claude 세션과 워커가 일하는지 봅니다. 완료 검사를 sandbox 에 
    astera sessions list --status alive
    ```
 
-6. 점검 18 을 이 앱에서 한 번 더 합니다. 목표와 제목은 `mac-check 25` 로 하고, 지시에는 아래 글을 붙여 넣습니다.
+7. 점검 18 을 이 앱에서 한 번 더 합니다. 목표와 제목은 `mac-check 25` 로 하고, 지시에는 아래 글을 붙여 넣습니다.
 
    ```text
    Astera mac-check 25번(패키지한 앱의 Claude 워커)입니다. 아래 명령 한 줄만 그대로 한 번 실행하고, 평소 워커처럼 astera 로 이 Task 가 끝났다고 보고하세요. 다른 파일은 만들거나 고치지 마세요.
@@ -1399,30 +1422,44 @@ Claude 세션과 워커가 일하는지 봅니다. 완료 검사를 sandbox 에 
    echo worker-ok > mac-check-25w.txt && git add -A && git commit -q -m "mac-check 25: packaged worker commit" && git log --oneline -1
    ```
 
-7. 세션 탭을 코디네이터와 워커까지 모두 닫고, 앱을 Cmd+Q 로 끕니다(에이전트는 점검 24 처럼 페이지에서
+8. 세션 탭을 코디네이터와 워커까지 모두 닫고, 앱을 Cmd+Q 로 끕니다(에이전트는 점검 24 처럼 페이지에서
    `window.api.app.quit()`). 1분쯤 뒤 봅니다.
 
    ```sh
    ps -Ao pid,command | grep '[A]steraMacCheck.app'
    ```
 
-8. 정리합니다. 둘째 명령이 무언가를 보여 주면 그것도 `rm -rf` 로 지웁니다. 모두 이 점검의 앱만 쓰는 곳입니다.
+9. 3단계에서 저장한 `astera` 명령이 있으면 되돌립니다. 바뀌었으면 저장해 둔 것으로 덮어쓰고, 지금의 첫 두 줄을 봅니다.
 
    ```sh
-   rm -rf "$R/packaged"
-   ls -d "$HOME/Library/Application Support/AsteraMacCheck" "$HOME/Library/Caches/AsteraMacCheck" "$HOME/Library/Saved Application State/io.github.parsingk.astera.maccheck.savedState" 2>/dev/null
-   defaults delete io.github.parsingk.astera.maccheck 2>/dev/null; echo "defaults=$?"
+   [ -f "$R/astera-cli.before" ] && { cmp -s "$R/astera-cli.before" ~/.local/bin/astera || cp -p "$R/astera-cli.before" ~/.local/bin/astera; head -n 2 ~/.local/bin/astera; }
    ```
+
+   되돌리지 못했으면, 설치된 Astera 를 끄고 다시 켭니다. 설치된 Astera 도 켤 때 같은 파일을 자기를 가리키도록 다시
+   씁니다. 그다음 위의 `head -n 2 ~/.local/bin/astera` 로 다시 봅니다.
+10. 정리합니다. 9단계 뒤에 합니다(그 전에 지우면 `astera` 가 지운 앱을 가리킵니다). 둘째 명령이 무언가를 보여 주면
+    그것도 `rm -rf` 로 지웁니다. 모두 이 점검의 앱만 쓰는 곳입니다.
+
+    ```sh
+    rm -rf "$R/packaged" "$R/astera-cli.before"
+    ls -d "$HOME/Library/Application Support/AsteraMacCheck" "$HOME/Library/Caches/AsteraMacCheck" "$HOME/Library/Saved Application State/io.github.parsingk.astera.maccheck.savedState" 2>/dev/null
+    defaults delete io.github.parsingk.astera.maccheck 2>/dev/null; echo "defaults=$?"
+    ```
 
 통과:
 
-- 2단계의 빌드가 끝나고 3단계의 `echo "$APP"` 가 `.app` 하나를 가리킵니다. 걸린 시간과 크기를 메모에 적습니다.
-- 4단계의 두 줄이 위와 같습니다.
-- 5단계: 방패 아이콘, `packaged-ok`, 프로필 폴더 쓰기는 `Operation not permitted` 와 `exit=1`(또는
+- 2단계의 빌드가 끝나고 4단계의 `echo "$APP"` 가 `.app` 하나를 가리킵니다. 걸린 시간과 크기를 메모에 적습니다.
+- 3단계: `astera` 명령을 깔아 두었다면 두 줄이 나오고, 둘째 줄이 설치된 Astera 의 실행 파일을 가리킵니다.
+- 4단계: 패키지한 앱이 떴습니다(설치된 Astera 가 있었다면 그것을 켜 둔 채로). 업데이트가 보였다면 메모에 적었고
+  설치하지 않았습니다.
+- 5단계의 두 줄이 위와 같습니다.
+- 6단계: 방패 아이콘, `packaged-ok`, 프로필 폴더 쓰기는 `Operation not permitted` 와 `exit=1`(또는
   `Permission to use Bash … has been denied`), 세션 목록은 `{"ok":true` 로 시작합니다.
-- 6단계: 점검 18 과 같습니다. 검사가 통과하고 출력에 `inside-the-sandbox` 가 있고, **sandbox 밖에서 검증함** (validated outside the sandbox)
+- 7단계: 점검 18 과 같습니다. 검사가 통과하고 출력에 `inside-the-sandbox` 가 있고, **sandbox 밖에서 검증함** (validated outside the sandbox)
   이 없고, `find ~/astera-worktrees -name mac-check-sandbox-outside.txt` 가 아무것도 출력하지 않습니다.
-- 7단계: 아무 줄도 없습니다.
+- 8단계: 아무 줄도 없습니다.
+- 9단계(3단계에서 저장했을 때): `head` 의 둘째 줄이 3단계에서 적은 줄과 같습니다. 다시 설치된 Astera 의 실행 파일을
+  가리키고, `AsteraMacCheck` 는 들어 있지 않습니다.
 
 - [ ] 통과
 - [ ] 실패
@@ -1444,15 +1481,17 @@ Claude 세션과 워커가 일하는지 봅니다. 완료 검사를 sandbox 에 
 
    아무 줄도 없어야 합니다. `host.js` 가 든 줄이 남아 있으면 1분 더 기다렸다가 다시 보고, 그래도 있으면 그 줄 맨 앞의
    숫자로 `kill <숫자>` 를 치고 메모에 적습니다.
-2. 점검 12 가 계정에 넣은 것이 남지 않았는지 봅니다. 가져온 계정이었으면 `~/.claude` 대신 그 폴더를, `~/.claude.json`
-   대신 `<폴더>/.claude.json` 을 봅니다.
+2. 점검 12 가 계정에 넣은 것이 남지 않았는지, 준비 3 과 13b 에서 등록한 계정 폴더마다 봅니다. 아래 명령은
+   `~/.claude`, `~/.codex` 와, 설치된 Astera 가 만든 계정 폴더(`~/.claude-accounts/<이름>`, `~/.codex-accounts/<이름>`)를
+   모두 봅니다. 다른 곳의 폴더를 가져왔다면 첫 명령의 폴더 목록에 그 폴더를 더합니다.
 
    ```sh
-   ls -d ~/.claude/skills/mac-check-skill ~/.codex/skills/mac-check-skill 2>/dev/null; grep -c mac-check-echo ~/.claude.json
+   find ~/.claude ~/.codex ~/.claude-accounts ~/.codex-accounts -maxdepth 3 -path '*/skills/mac-check-skill' 2>/dev/null
+   grep -l mac-check-echo ~/.claude.json $(find ~/.claude-accounts -maxdepth 2 -name .claude.json 2>/dev/null) 2>/dev/null
    ```
 
-   첫 명령은 아무것도 출력하지 않습니다. 둘째 명령은 보통 `0` 입니다. 0 이 아니면 그 숫자를 메모에 적습니다(Claude
-   Code 가 그 이름을 다른 자리에 적어 두었을 수 있습니다).
+   첫 명령은 아무것도 출력하지 않습니다. 둘째 명령도 보통 아무것도 출력하지 않습니다. 파일 이름이 나오면 그 이름을
+   메모에 적습니다(Claude Code 가 그 이름을 설정의 다른 자리에 적어 두었을 수 있습니다).
 
 - [ ] 통과 (아무것도 남지 않음)
 - [ ] 실패
