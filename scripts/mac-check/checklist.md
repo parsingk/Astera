@@ -1307,9 +1307,18 @@ inspector 연결이 모두 끊길 때까지 끝나지 않기 때문입니다. �
    에이전트는 터미널 대신 앱 작업 공간의 `launch()` 로 같은 명령을 띄웁니다. 그래야 페이지를 CDP 로 다뤄 3단계의
    `window.api.app.quit()` 을 부를 수 있고, 끝나지 않으면 `close()` 로 끝낼 수 있습니다. macOS 의 앱 작업 공간은 창을
    숨겨 주지 않으므로 창이 사람의 화면에 뜰 수 있습니다. 디버깅 포트는 electron-vite 의 `--remoteDebuggingPort` 로
-   넘깁니다. 앱 작업 공간은 띄운 명령의 출력을 버리므로, 명령 끝에 `> <결과 폴더>/inspect-dev.log 2>&1` 처럼 결과 폴더의
-   파일로 보내고, 위의 줄과 통과 기준의 `Waiting for the debugger to disconnect...` 는 그 파일에서 찾습니다. '5초 안에
-   돌아옴' 은 끈 뒤 5초 안에 4단계의 `ps` 가 아무 줄도 출력하지 않는지로 봅니다.
+   넘깁니다. 아무도 보지 않는 페이지도 그려지게 하는 Chromium 스위치(`$ASTERA_APP_CHROMIUM_FLAGS`)는 electron-vite 가 모르는
+   옵션이라 거기에 이어 쓰면 electron-vite 가 시작을 거절합니다. 그래서 두 번째 `--` 뒤에 둡니다. 그 뒤의 것을
+   electron-vite 가 Electron 에 넘깁니다. 앱 작업 공간은 띄운 명령의 출력을 버리므로 출력은 결과 폴더의 파일로 보냅니다.
+   에이전트가 띄우는 명령은 이렇습니다(`<결과 폴더>` 는 절대 경로로):
+
+   ```sh
+   npm run dev -- --inspect --remoteDebuggingPort $ASTERA_APP_CDP_PORT -- $ASTERA_APP_CHROMIUM_FLAGS > <결과 폴더>/inspect-dev.log 2>&1
+   ```
+
+   위의 `Debugger listening …` 줄과 통과 기준의 `Waiting for the debugger to disconnect...` 는 그 파일에서 찾습니다.
+   '5초 안에 돌아옴' 은 끈 뒤 5초 안에 4단계의 `ps` 가 아무 줄도 출력하지 않는지로 봅니다. 사람은 아래 줄을 그대로
+   칩니다.
 
    ```sh
    npm run dev -- --inspect
@@ -1391,8 +1400,8 @@ Claude 세션과 워커가 일하는지 봅니다. 완료 검사를 sandbox 에 
      적고, 설치는 하지 않습니다.
    - 에이전트는 터미널 대신 앱 작업 공간의 `launch()` 로 같은 실행 파일과 인자를 띄웁니다. 그래야 페이지를 CDP 로 다루고,
      끝나지 않으면 `close()` 로 끝낼 수 있습니다. macOS 의 앱 작업 공간은 창을 숨겨 주지 않으므로 창이 사람의 화면에 뜰
-     수 있습니다. 앱 작업 공간이 요구하는 디버깅 포트 인자(`--remote-debugging-port=$ASTERA_APP_CDP_PORT`,
-     `$ASTERA_APP_CHROMIUM_FLAGS`)와 `--inspect` 를 더합니다. 앱 작업 공간은 띄운 명령의 출력을 버리므로, 출력은 아래
+     수 있습니다. 앱 작업 공간이 요구하는 인자, 곧 디버깅 포트(`--remote-debugging-port=$ASTERA_APP_CDP_PORT`)와 아무도
+     보지 않는 페이지도 그려지게 하는 Chromium 스위치(`$ASTERA_APP_CHROMIUM_FLAGS`)에 `--inspect` 를 더합니다. 앱 작업 공간은 띄운 명령의 출력을 버리므로, 출력은 아래
      줄처럼 결과 폴더의 `packaged.log` 로 보내고(결과 폴더는 절대 경로로) 그 파일을 읽습니다. 6단계의 폴더 고르는 창은
      1회차처럼 그 inspector 로 main 프로세스의 `dialog.showOpenDialog` 를 바꿔치기해 넘기고, 8단계에서 끄기 전에 그
      inspector 연결을 닫습니다(점검 24).
@@ -1433,7 +1442,7 @@ Claude 세션과 워커가 일하는지 봅니다. 완료 검사를 sandbox 에 
    echo worker-ok > mac-check-25w.txt && git add -A && git commit -q -m "mac-check 25: packaged worker commit" && git log --oneline -1
    ```
 
-8. 세션 탭을 코디네이터와 워커까지 모두 닫고, 앱을 Cmd+Q 로 끕니다. 에이전트는 4단계에서 붙인 inspector 연결을 먼저
+8. 세션 탭을 코디네이터와 워커까지 모두 닫고, 앱을 Cmd+Q 로 끕니다. 에이전트는 6단계에서 연 inspector 연결을 먼저
    닫고, 점검 24 처럼 페이지에서 `window.api.app.quit()` 을 부릅니다. 1분쯤 뒤 봅니다.
 
    ```sh

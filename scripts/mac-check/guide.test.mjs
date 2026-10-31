@@ -153,9 +153,25 @@ describe('scripts/mac-check guides', () => {
     // The New session dialog's folder comes only from the native picker, which an agent answers by replacing
     // dialog.showOpenDialog over the main process inspector (세션을 여는 법); an open inspector keeps the app up at quit
     const body = checks.find((c) => c.title === '패키지한 앱').body
-    expect(body).toContain('--inspect')
-    expect(body).toContain('dialog.showOpenDialog')
-    expect(body.indexOf('dialog.showOpenDialog')).toBeLessThan(body.indexOf('window.api.app.quit()'))
+    // One step's text, its line breaks read as the spaces they stand for
+    const step = (n) => body.slice(body.indexOf(`\n${n}. `), body.indexOf(`\n${n + 1}. `)).replace(/\s+/g, ' ')
+    expect(step(4)).toContain('--inspect')
+    expect(step(4)).toContain('dialog.showOpenDialog')
+    expect(step(4)).toContain('8단계에서 끄기 전에 그 inspector 연결을 닫습니다')
+    // Step 8 closes the connection step 6 opened, in its text before the quit
+    const quit = step(8)
+    expect(quit).toContain('window.api.app.quit()')
+    expect(quit.slice(0, quit.indexOf('window.api.app.quit()'))).toContain('6단계에서 연 inspector 연결을')
+  })
+
+  it('check 24 hands the Chromium switches to Electron after a second --, where electron-vite does not read them', () => {
+    // electron-vite's dev command refuses an option it does not declare (no allowUnknownOptions) and hands what follows
+    // `--` to Electron; npm passes the second `--` on to the script
+    const ev = readFileSync(path.join(root, 'node_modules/electron-vite/dist/cli.js'), 'utf8')
+    expect(ev).not.toContain('allowUnknownOptions')
+    expect(ev).toContain("process.env.ELECTRON_CLI_ARGS = JSON.stringify(options['--'])")
+    const body = checks.find((c) => c.title === 'inspector 를 켜고 띄운 개발용 앱 끄기').body
+    expect(body).toContain('npm run dev -- --inspect --remoteDebuggingPort $ASTERA_APP_CDP_PORT -- $ASTERA_APP_CHROMIUM_FLAGS > <결과 폴더>/inspect-dev.log 2>&1')
   })
 
   it('the wrap-up looks for what check 12 left in imported account folders too', () => {
