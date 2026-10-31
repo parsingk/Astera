@@ -1401,10 +1401,10 @@ Claude 세션과 워커가 일하는지 봅니다. 완료 검사를 sandbox 에 
    - 에이전트는 터미널 대신 앱 작업 공간의 `launch()` 로 같은 실행 파일과 인자를 띄웁니다. 그래야 페이지를 CDP 로 다루고,
      끝나지 않으면 `close()` 로 끝낼 수 있습니다. macOS 의 앱 작업 공간은 창을 숨겨 주지 않으므로 창이 사람의 화면에 뜰
      수 있습니다. 앱 작업 공간이 요구하는 인자, 곧 디버깅 포트(`--remote-debugging-port=$ASTERA_APP_CDP_PORT`)와 아무도
-     보지 않는 페이지도 그려지게 하는 Chromium 스위치(`$ASTERA_APP_CHROMIUM_FLAGS`)에 `--inspect` 를 더합니다. 앱 작업 공간은 띄운 명령의 출력을 버리므로, 출력은 아래
-     줄처럼 결과 폴더의 `packaged.log` 로 보내고(결과 폴더는 절대 경로로) 그 파일을 읽습니다. 6단계의 폴더 고르는 창은
-     1회차처럼 그 inspector 로 main 프로세스의 `dialog.showOpenDialog` 를 바꿔치기해 넘기고, 8단계에서 끄기 전에 그
-     inspector 연결을 닫습니다(점검 24).
+     보지 않는 페이지도 그려지게 하는 Chromium 스위치(`$ASTERA_APP_CHROMIUM_FLAGS`)에 `--inspect` 를 더합니다. 앱 작업
+     공간은 띄운 명령의 출력을 버리므로, 출력은 아래 줄처럼 결과 폴더의 `packaged.log` 로 보내고(결과 폴더는 절대
+     경로로) 그 파일을 읽습니다. 6단계의 폴더 고르는 창은 1회차처럼 그 inspector 로 main 프로세스의
+     `dialog.showOpenDialog` 를 바꿔치기해 넘기고, 8단계에서 끄기 전에 그 inspector 연결을 닫습니다(점검 24).
 
    ```sh
    APP=$(find "$R/packaged" -maxdepth 2 -name '*.app' -print -quit); echo "$APP"

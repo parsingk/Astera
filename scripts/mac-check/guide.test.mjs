@@ -161,7 +161,7 @@ describe('scripts/mac-check guides', () => {
     // Step 8 closes the connection step 6 opened, in its text before the quit
     const quit = step(8)
     expect(quit).toContain('window.api.app.quit()')
-    expect(quit.slice(0, quit.indexOf('window.api.app.quit()'))).toContain('6단계에서 연 inspector 연결을')
+    expect(quit.slice(0, quit.indexOf('window.api.app.quit()'))).toContain('6단계에서 연 inspector 연결을 먼저 닫고')
   })
 
   it('check 24 hands the Chromium switches to Electron after a second --, where electron-vite does not read them', () => {
