@@ -96,6 +96,23 @@ describe('compareHashFile', () => {
     await write(path.join(root, 'lf.md'), 'a\nb')
     expect(await compareHashFile(path.join(root, 'cr.md'))).not.toBe(await compareHashFile(path.join(root, 'lf.md')))
   })
+
+  // The text test reads exactly the first 8000 bytes (indexes 0 to 7999), as git does.
+  const withNulAt = (index: number, eol: string): Buffer => Buffer.concat([Buffer.alloc(index, 0x61), Buffer.from([0]), Buffer.from(eol)])
+
+  it('a NUL at index 7999 makes the file binary, so its CRLF is kept', async () => {
+    const root = await tmp()
+    await write(path.join(root, 'crlf.bin'), withNulAt(7999, '\r\n'))
+    await write(path.join(root, 'lf.bin'), withNulAt(7999, '\n'))
+    expect(await compareHashFile(path.join(root, 'crlf.bin'))).not.toBe(await compareHashFile(path.join(root, 'lf.bin')))
+  })
+
+  it('a NUL at index 8000 leaves the file text, so its CRLF is folded', async () => {
+    const root = await tmp()
+    await write(path.join(root, 'crlf.txt'), withNulAt(8000, '\r\n'))
+    await write(path.join(root, 'lf.txt'), withNulAt(8000, '\n'))
+    expect(await compareHashFile(path.join(root, 'crlf.txt'))).toBe(await compareHashFile(path.join(root, 'lf.txt')))
+  })
 })
 
 describe('compareHashOf', () => {
@@ -107,7 +124,7 @@ describe('compareHashOf', () => {
     const base = { hash: 'sha256:x', providers: ['claude' as const], importedFrom: 'acc_0', enabled: true }
     const skill: FileExtension = { ...base, id: 'skill-review', kind: 'skill', name: 'review' }
     const agent: FileExtension = { ...base, id: 'agent-helper', kind: 'agent', name: 'helper' }
-    expect(await compareHashOf(profileDir, skill)).toBe(await compareHashTree(path.join(p.skills, 'review')))
+    expect(await compareHashOf(profileDir, skill)).toBe(`cmp1:sha256:${createHash('sha256').update('SKILL.md\0' + '# review\n' + '\0').digest('hex')}`)
     expect(await compareHashOf(profileDir, agent)).toBe(await compareHashFile(path.join(p.agents, 'helper.md')))
     expect(await compareHashOf(profileDir, agent)).toBe(`cmp1:sha256:${createHash('sha256').update('help\n').digest('hex')}`)
   })
