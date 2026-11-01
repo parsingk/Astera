@@ -420,7 +420,7 @@ export const ja: Catalog = {
   'settings.remote.revoke.title': 'ペアリング解除',
   'settings.remote.revoke.body': '{name} のペアリングを解除しますか? {name} はすぐに切断され、接続するには再度ペアリングが必要です。',
   'settings.remote.revoke.done': '{name} のペアリングを解除しました。',
-  'settings.remote.revoke.paused': '{name} のペアリングを解除しました。そこで作成され一時停止したスケジュール Job: {paused} 件。作成元が記録されていないため、スケジュールをそのまま残すスケジュール Job: {unrecorded} 件。',
+  'settings.remote.revoke.paused': '{name} のペアリングを解除しました。そこで作成され一時停止した予約 Job: {paused} 件。作成元が記録されていないため、予約をそのまま残す予約 Job: {unrecorded} 件。',
   'settings.remote.revoke.notPaused': '一時停止できなかった Job: {jobs}。',
   'jobs.runtime.label': 'Runtime',
   'jobs.runtime.local': 'このコンピューター',

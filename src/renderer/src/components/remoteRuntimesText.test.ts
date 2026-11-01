@@ -90,5 +90,7 @@ describe('the revoke toast', () => {
       'settings.remote.revoke.paused {"name":"laptop","paused":0,"unrecorded":0} settings.remote.revoke.notPaused {"jobs":"job_a, job_b"}'
     )
     expect(revokeDoneLine({ name: 'laptop' }, t)).toBe('settings.remote.revoke.done {"name":"laptop"}')
+    // Ruling R8-3: nothing paused, unrecorded or refused is the plain line
+    expect(revokeDoneLine({ name: 'laptop', pausedJobs: 0, unrecordedScheduled: 0, notPaused: [] }, t)).toBe('settings.remote.revoke.done {"name":"laptop"}')
   })
 })

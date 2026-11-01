@@ -416,8 +416,13 @@ export function humanFor(
     // English, then each Job whose pause was refused. An older Host answers without the counts: the envelope as before
     case 'runtime-revoke': {
       if (typeof data.pausedJobs !== 'number' || typeof data.unrecordedScheduled !== 'number') return null
-      const head = t('en', 'settings.remote.revoke.paused', { name: str(data.clientId), paused: data.pausedJobs, unrecorded: data.unrecordedScheduled })
-      const refused = asList(data, 'notPaused').map(
+      // The controller's name, which the record kept; a Host that sends none is named by the id (ruling R8-3)
+      const name = str(data.name ?? data.clientId)
+      const notPaused = asList(data, 'notPaused')
+      // A controller that made no scheduled Job is just unpaired, in the line that said so before (ruling R8-3)
+      if (data.pausedJobs === 0 && data.unrecordedScheduled === 0 && notPaused.length === 0) return t('en', 'settings.remote.revoke.done', { name })
+      const head = t('en', 'settings.remote.revoke.paused', { name, paused: data.pausedJobs, unrecorded: data.unrecordedScheduled })
+      const refused = notPaused.map(
         (n) => `job ${str(n.jobId)}: ${str(n.error)}${typeof n.reason === 'string' ? ` (reason: ${n.reason})` : ''}`
       )
       return [head, ...refused].join('\n')

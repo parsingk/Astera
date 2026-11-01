@@ -51,4 +51,12 @@ describe('the remote governance catalog', () => {
       expect(ko[key], key).toBe(korean)
     }
   })
+
+  // Ruling R8-3: ja names a schedule 予約, as its Jobs area does, never スケジュール
+  it('says 予約 in Japanese, as the Jobs area does', () => {
+    const ja = CATALOGS.ja.messages as Record<string, string>
+    expect(ja['settings.remote.revoke.paused']).toContain('予約 Job')
+    expect(ja['settings.remote.revoke.paused']).toContain('予約をそのまま残す')
+    expect(keysOf().filter((k) => (ja[k] ?? '').includes('スケジュール'))).toEqual([])
+  })
 })

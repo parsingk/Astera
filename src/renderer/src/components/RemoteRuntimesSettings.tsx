@@ -120,7 +120,11 @@ export function RemoteRuntimesSettings({ onChanged }: { /** A Runtime was paired
       const r = await window.api.remote.revoke(c.clientId)
       if (!r.ok) return void toast.error(controlFailureLine(r, 'revoke', t as never))
       // The Host's counts of the scheduled Jobs it paused (remote governance design §8.2), through runRuntimeCommand's body
-      toast.success(revokeDoneLine({ ...(r.body as Parameters<typeof revokeDoneLine>[0]), name: c.name }, t as never))
+      const body = { ...(r.body as Parameters<typeof revokeDoneLine>[0]), name: c.name }
+      // A schedule whose pause was refused is still armed, and the person has to see that (ruling R8-3). The toast has no
+      // warning kind, so it is the kind that stays until it is closed (lib/toast.ts: an error is never auto-dismissed).
+      if ((body.notPaused ?? []).length > 0) toast.error(revokeDoneLine(body, t as never))
+      else toast.success(revokeDoneLine(body, t as never))
     })
   }
   const remoteOn = !!mine && (mine.gateway as { state: string }).state !== 'disabled'

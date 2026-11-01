@@ -1054,6 +1054,10 @@ describe('humanFor — agent-profiles audit', () => {
 // Jobs it paused and how many it could not tell the maker of, then each Job whose pause was refused
 describe('runtime revoke', () => {
   it('runtime revoke says how many scheduled Jobs it paused and how many have no maker on record', () => {
+    expect(humanFor('runtime-revoke', { revoked: true, clientId: 'cli_1', name: 'laptop', pausedJobs: 2, unrecordedScheduled: 1, notPaused: [] })).toBe(
+      'Unpaired laptop. Scheduled Jobs it made, now paused: 2. Scheduled Jobs with no maker on record, which keep their schedule: 1.'
+    )
+    // A Host that names no controller (ruling R8-3): the id stands in
     expect(humanFor('runtime-revoke', { revoked: true, clientId: 'cli_1', pausedJobs: 2, unrecordedScheduled: 1, notPaused: [] })).toBe(
       'Unpaired cli_1. Scheduled Jobs it made, now paused: 2. Scheduled Jobs with no maker on record, which keep their schedule: 1.'
     )
@@ -1075,6 +1079,11 @@ describe('runtime revoke', () => {
         'job job_b: a worker is still starting; the pause is retried in 95 s (reason: still-starting)'
       ].join('\n')
     )
+  })
+
+  // Ruling R8-3: a controller that made no scheduled Job is just unpaired, as before this release
+  it('says only that it unpaired when nothing was paused, unrecorded or refused', () => {
+    expect(humanFor('runtime-revoke', { revoked: true, clientId: 'cli_1', name: 'laptop', pausedJobs: 0, unrecordedScheduled: 0, notPaused: [] })).toBe('Unpaired laptop.')
   })
 
   // An older Host answers without the counts: the envelope as before, not a sentence with holes in it

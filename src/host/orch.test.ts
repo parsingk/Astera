@@ -5290,9 +5290,12 @@ describe('clients-revoke pauses the scheduled Jobs the client made (remote gover
   const releaseWorker = vi.fn(async () => {})
   /** Two paired clients, laptop and desk, and four Jobs: a scheduled one each of them made, a scheduled one with no
    *  maker (made before this release), and one laptop made with no schedule. Laptop's two each hold an open worker. */
-  const fixture = async (o: { retained?: boolean; minesSession?: string; now?: () => string; setTimer?: (run: () => void, ms: number) => () => void } = {}) => {
+  const fixture = async (o: { retained?: boolean; minesSession?: string; now?: () => string; setTimer?: (run: () => void, ms: number) => () => void; saveFails?: boolean } = {}) => {
     releaseWorker.mockClear()
-    const controllers = createControllerRegistry()
+    let failing = false
+    const controllers = o.saveFails
+      ? createControllerRegistry({ records: { load: async () => [], save: async () => { if (failing) throw new Error('disk full') } } })
+      : createControllerRegistry()
     const redeem = async (name: string): Promise<string> => {
       const got = await controllers.redeem(controllers.createPairing({ permission: 'full-control', name }).code, 'x')
       if (!got.ok) throw new Error('redeem')
@@ -5300,6 +5303,7 @@ describe('clients-revoke pauses the scheduled Jobs the client made (remote gover
     }
     const laptop = await redeem('laptop')
     const desk = await redeem('desk')
+    failing = o.saveFails === true
     let s: OrchState = emptyState()
     const job = (a: { schedule?: typeof DAILY; createdBy?: { kind: 'controller'; clientId: string; name: string } }): string => {
       const r = createJob(s, { objective: 'o', cwd: 'D:/p', ...a }, NOW)
@@ -5360,12 +5364,26 @@ describe('clients-revoke pauses the scheduled Jobs the client made (remote gover
   it('revoking a controller pauses the scheduled Jobs it made and only those', async () => {
     const f = await fixture()
     const r = await f.revoke()
-    expect(r).toEqual({ status: 200, body: { revoked: true, clientId: f.laptop, pausedJobs: 1, notPaused: [], unrecordedScheduled: 1 } })
+    expect(r).toEqual({ status: 200, body: { revoked: true, clientId: f.laptop, name: 'laptop', pausedJobs: 1, notPaused: [], unrecordedScheduled: 1 } })
     expect(f.jobOf(f.mine)).toMatchObject({ paused: true, pausedBy: { reason: 'controller-revoked', clientId: f.laptop, name: 'laptop', at: NOW } })
     for (const id of [f.theirs, f.makerless, f.unscheduled]) {
       expect(f.jobOf(id).paused, id).toBeUndefined()
       expect(f.jobOf(id).pausedBy, id).toBeUndefined()
     }
+  })
+
+  // Ruling R8-3: a failure answer reaches the CLI and Settings as its error alone, so the error says what the pauses did
+  it('a revoke whose clients.json cannot be written says in its error what it paused and what it could not', async () => {
+    const f = await fixture({ saveFails: true, retained: true })
+    const r = await f.revoke()
+    expect(r.status).toBe(500)
+    const body = r.body as { error: string; name: string; notPaused: Array<{ jobId: string }> }
+    expect(body.name).toBe('laptop')
+    expect(body.error).toBe(
+      'revoked until this Host stops, but clients.json could not be written: disk full. Unpaired laptop. Scheduled Jobs it made, now paused: 0. ' +
+        `Scheduled Jobs with no maker on record, which keep their schedule: 1. Could not pause: ${f.mine}.`
+    )
+    expect(body.error).not.toMatch(/[\r\n]/)
   })
 
   it('its open workers end as run-pause ends them', async () => {

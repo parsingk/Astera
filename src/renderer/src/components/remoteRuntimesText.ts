@@ -35,9 +35,11 @@ export function revokeDoneLine(
   t: T
 ): string {
   const tt = t as (k: string, p?: Record<string, string | number>) => string
-  if (typeof r.pausedJobs !== 'number' || typeof r.unrecordedScheduled !== 'number') return tt('settings.remote.revoke.done', { name: r.name })
-  const line = tt('settings.remote.revoke.paused', { name: r.name, paused: r.pausedJobs, unrecorded: r.unrecordedScheduled })
   const refused = r.notPaused ?? []
+  // A controller that made no scheduled Job is just unpaired, as before (ruling R8-3)
+  if (typeof r.pausedJobs !== 'number' || typeof r.unrecordedScheduled !== 'number' || (r.pausedJobs === 0 && r.unrecordedScheduled === 0 && refused.length === 0))
+    return tt('settings.remote.revoke.done', { name: r.name })
+  const line = tt('settings.remote.revoke.paused', { name: r.name, paused: r.pausedJobs, unrecorded: r.unrecordedScheduled })
   return refused.length === 0 ? line : `${line} ${tt('settings.remote.revoke.notPaused', { jobs: refused.map((j) => j.jobId).join(', ') })}`
 }
 

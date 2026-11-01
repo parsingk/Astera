@@ -33,6 +33,7 @@ import { mcpRefusal } from '../core/host/mcpGate'
 import { controllerRefusal } from '../core/host/controllerGate'
 import { pluginRefusal } from '../core/host/pluginGate'
 import { sanitizeForController } from '../core/remote/sanitize'
+import { t } from '../core/i18n'
 import type { GatewayState } from '../core/remote/gatewayState'
 import type { ControllerRegistry } from './controllers'
 import { readMcpAccess } from '../core/settings/mcpAccess'
@@ -2070,9 +2071,21 @@ export function createHostOrch(a: {
           // Then its scheduled Jobs pause (remote governance design §8.2), also when the file could not be written: the
           // client is refused for this Host's life either way.
           const paused = await pauseRevoked(id, name)
-          if (out.saveError !== undefined)
-            return { status: 500, body: { error: `revoked until this Host stops, but clients.json could not be written: ${out.saveError}`, clientId: id, ...paused } }
-          return { status: 200, body: { revoked: true, clientId: id, ...paused } }
+          if (out.saveError !== undefined) {
+            // A failure answer reaches the CLI and Settings as its error alone, so what the pauses did is said in it, in the
+            // catalog's English as the CLI's own line (ruling R8-3). Nothing to say when the client made no scheduled Job.
+            const did =
+              paused.pausedJobs === 0 && paused.unrecordedScheduled === 0 && paused.notPaused.length === 0
+                ? ''
+                : ` ${t('en', 'settings.remote.revoke.paused', { name, paused: paused.pausedJobs, unrecorded: paused.unrecordedScheduled })}` +
+                  (paused.notPaused.length > 0 ? ` ${t('en', 'settings.remote.revoke.notPaused', { jobs: paused.notPaused.map((n) => n.jobId).join(', ') })}` : '')
+            return {
+              status: 500,
+              body: { error: `revoked until this Host stops, but clients.json could not be written: ${out.saveError}.${did}`, clientId: id, name, ...paused }
+            }
+          }
+          // The name too, for the CLI's line: the record is gone once revoked, and the CLI cannot look it up (ruling R8-3)
+          return { status: 200, body: { revoked: true, clientId: id, name, ...paused } }
         }
         if (cmd === 'workspace-list' || cmd === 'workspace-stop' || cmd === 'workspace-close' || cmd === 'workspace-size') {
           if (from?.role !== 'app') return { status: 403, body: { error: `${cmd} is the app’s to send` } }
