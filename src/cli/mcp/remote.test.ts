@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { promises as fs } from 'node:fs'
@@ -10,6 +10,7 @@ import type { HostLink } from './hostLink'
 import { controllerRegistry } from '../runtimes'
 import { RemoteError } from '../../core/remote/client'
 import type { RemoteLink, RemoteTarget } from '../../core/remote/link'
+import type { HelloFrame } from '../../core/remote/frames'
 import { mcpAccessForRemote } from '../../core/settings/mcpAccess'
 
 const FP = 'F'.repeat(43)
@@ -189,6 +190,61 @@ describe('openMcpRuntimes', () => {
     await r.linkFor('rt_a')
     expect(opened.map((t) => t.token)).toEqual(['tok-a', 'tok-b'])
     expect(opened[1].fingerprint).toBe('G'.repeat(43))
+  })
+
+  // Remote governance design §4.4, §9.1: what the MCP server reaches is reached, and the stale-runtime finding reads it.
+  describe('last seen and facts', () => {
+    afterEach(() => vi.useRealTimers())
+    const hello: HelloFrame = {
+      t: 'hello', runtimeId: 'rt_a', displayName: 'Office', asteraVersion: '1.5.0', hostProtocol: 4, gatewayProtocol: 1, bootId: 'b1',
+      platform: 'darwin', pathStyle: 'posix', permission: 'full-control', capabilities: ['pty.seq']
+    }
+    /** A link that says hello at its first call, as a real one does at its first connection. */
+    const helloing = () =>
+      openMcpRuntimes({
+        profileDir: dir,
+        version: '1.4.8',
+        client: () => undefined,
+        open: (_t, o) => {
+          let said = false
+          return {
+            hello: () => (said ? hello : null),
+            call: async () => {
+              if (!said) {
+                said = true
+                o?.onHello?.(hello)
+              }
+              return { status: 200, body: [] }
+            },
+            subscribe: () => () => {},
+            close: () => {}
+          }
+        }
+      })
+    const profile = async () => (await (await controllerRegistry(dir)).list())[0]
+
+    it('a call answered through a Runtime\'s link saves lastSeenAt, at most once a minute', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-11-01T10:00:00.000Z'))
+      const r = helloing()
+      const first = await r.linkFor('rt_a')
+      if ('code' in first) throw new Error(first.code)
+      await first.call('jobs-list', {})
+      expect((await profile()).lastSeenAt).toBe('2026-11-01T10:00:00.000Z')
+      vi.setSystemTime(new Date('2026-11-01T10:00:10.000Z'))
+      const again = await r.linkFor('rt_a')
+      if ('code' in again) throw new Error(again.code)
+      await again.call('jobs-list', {})
+      expect((await profile()).lastSeenAt).toBe('2026-11-01T10:00:00.000Z')
+    })
+
+    it("the link's hello is kept as the Runtime's facts", async () => {
+      const r = helloing()
+      const l = await r.linkFor('rt_a')
+      if ('code' in l) throw new Error(l.code)
+      await l.call('jobs-list', {})
+      await vi.waitFor(async () => expect((await profile()).facts).toMatchObject({ asteraVersion: '1.5.0', platform: 'darwin', hostProtocol: 4, capabilities: ['pty.seq'] }))
+    })
   })
 })
 

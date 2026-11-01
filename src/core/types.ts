@@ -847,6 +847,9 @@ export interface RemoteRuntimeInfo {
   lastSeenAt: string | null
   /** null until this app has asked it anything since it started. */
   offline: boolean | null
+  /** From its last hello, by any surface (remote governance design §4.1); absent before the first. */
+  asteraVersion?: string
+  platform?: string
 }
 
 /** What a remote reply says about its Runtime beside the data (remote runtime design §2.7, §3.6). */

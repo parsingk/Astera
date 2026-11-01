@@ -5,7 +5,8 @@
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { openRemoteLink, type RemoteLink, type RemoteTarget } from '../../core/remote/link'
-import { registryStamp, type RuntimeRegistry } from '../../core/runtimes/registry'
+import { factsOf, registryStamp, seenRecorder, type RuntimeRegistry } from '../../core/runtimes/registry'
+import type { HelloFrame } from '../../core/remote/frames'
 import os from 'node:os'
 import { controllerRegistry, resolveRuntime, runRuntimesCommand } from '../../cli/runtimes'
 import { connectRuntime } from '../../core/remote/client'
@@ -33,7 +34,7 @@ export function createRemoteRuntimes(a: {
   profileDir: string
   version: string
   /** Test seam: the controller link for a target. */
-  open?(t: RemoteTarget): RemoteLink
+  open?(t: RemoteTarget, o?: { onHello?(h: HelloFrame): void }): RemoteLink
   /** This app's language, for the Runtime's journal rows (review I6). */
   lang?(): string
   /** A Runtime's client was replaced (a re-pair) or removed, after the fact. Its link does not tell the streams on it
@@ -84,11 +85,15 @@ export function createRemoteRuntimes(a: {
     }
     kept?.client.close()
     const target: RemoteTarget = { runtimeId: found.runtimeId, address: found.address, port: found.port, fingerprint: found.fingerprint, token }
+    // Saved in the registry as the CLI and MCP save them (remote governance design §4.1, §4.2), so the findings and the
+    // other surfaces see what the app reached.
+    const onHello = (h: HelloFrame): void => void r.noteFacts(found.runtimeId, factsOf(h, new Date().toISOString())).catch(() => undefined)
+    const seen = seenRecorder(r, found.runtimeId, found.lastSeenAt)
     const link = (
       a.open ??
-      ((t) => openRemoteLink({ target: t, client: { name: 'astera app', version: a.version, surface: 'desktop' }, reconnectForMs: APP_RECONNECT_FOR_MS }))
-    )(target)
-    const client = createRemoteRuntimeClient({ runtimeId: found.runtimeId, link, ...(a.lang ? { lang: a.lang } : {}) })
+      ((t, o) => openRemoteLink({ target: t, client: { name: 'astera app', version: a.version, surface: 'desktop' }, reconnectForMs: APP_RECONNECT_FOR_MS, ...o }))
+    )(target, { onHello })
+    const client = createRemoteRuntimeClient({ runtimeId: found.runtimeId, link, ...(a.lang ? { lang: a.lang } : {}), onHeard: () => void seen() })
     clients.set(found.runtimeId, { client, pairing, stamp })
     // After this lookup settles, so the owner's own client() finds the new client rather than this pending lookup.
     if (kept) setTimeout(() => a.onClientChange?.(found.runtimeId), 0)
@@ -109,7 +114,9 @@ export function createRemoteRuntimes(a: {
           // What this app last heard, by any call (Phase 6 review minor); the registry's time before any.
           lastSeenAt: c?.status().lastSeenAt ?? p.lastSeenAt,
           // Unknown until this app asked it something; then whether the last call was answered.
-          offline: c ? c.status().offline : null
+          offline: c ? c.status().offline : null,
+          // What its last hello said, by any surface (remote governance design §4.1).
+          ...(p.facts && { asteraVersion: p.facts.asteraVersion, platform: p.facts.platform })
         }
       })
     },

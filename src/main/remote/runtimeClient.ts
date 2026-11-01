@@ -92,6 +92,8 @@ export function createRemoteRuntimeClient(a: {
   mintRequest?(): string
   /** This app's language, for the Runtime's journal rows (review I6). English when left out. */
   lang?(): string
+  /** After every answered call, of any status (remote governance design §4.2: last seen). Must not throw. */
+  onHeard?(): void
 }): RemoteRuntimeClient {
   const now = a.now ?? Date.now
   const mint = a.mintRequest ?? (() => `desk_${randomUUID()}`)
@@ -107,7 +109,10 @@ export function createRemoteRuntimeClient(a: {
   const heard = <R>(r: R): R => {
     const lost = r instanceof RemoteError
     lastOffline = lost
-    if (!lost) lastSeen = now()
+    if (!lost) {
+      lastSeen = now()
+      a.onHeard?.()
+    }
     return r
   }
   /** Each project's read number and the newest one that answered: an older answer landing later is not kept over it. */

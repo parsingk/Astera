@@ -87,6 +87,9 @@ export function openRemoteLink(a: {
   /** How long an idle connection is kept; DEFAULT_IDLE_MS when left out. */
   idleMs?: number
   now?(): number
+  /** Each connection's hello, once, after the protocol and identity checks passed (remote governance design §4.1).
+   *  Must not throw. */
+  onHello?(h: HelloFrame): void
 }): RemoteLink {
   const connect = a.connect ?? connectRuntime
   const sleep = a.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
@@ -177,7 +180,17 @@ export function openRemoteLink(a: {
           `the Runtime speaks remote protocol ${h.gatewayProtocol} and this build speaks ${GATEWAY_PROTOCOL}; update the older side`
         )
       }
+      // The pinned key matched, but the Runtime names itself another id (remote governance design): a reinstall
+      // that kept the key, or another Runtime behind it. Final, like a changed key (§4.4).
+      if (h.runtimeId !== target.runtimeId) {
+        link.close()
+        return new RemoteError(
+          'RUNTIME_IDENTITY_CHANGED',
+          `the Runtime at ${target.address}:${target.port} says it is ${h.runtimeId}, and this computer paired ${target.runtimeId}; pair it again if it was reinstalled`
+        )
+      }
       lastHello = h
+      a.onHello?.(h)
     } catch (e) {
       link.close()
       return asRemoteError(e, 'RUNTIME_OFFLINE')

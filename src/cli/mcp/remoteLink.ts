@@ -16,7 +16,8 @@ import { mcpSessionsOf } from '../../core/settings/mcpSessions'
 import { mcpGithubWriteOf } from '../../core/settings/mcpGithubWrite'
 import { readAppSettingsObject } from '../../core/settings/settingsObject'
 import type { McpClient } from '../../core/continuity/actor'
-import { registryStamp, type RuntimeProfile, type RuntimeRegistry } from '../../core/runtimes/registry'
+import { factsOf, registryStamp, seenRecorder, type RuntimeProfile, type RuntimeRegistry } from '../../core/runtimes/registry'
+import type { HelloFrame } from '../../core/remote/frames'
 import { controllerRegistry, resolveRuntime } from '../runtimes'
 import type { HostLink, LinkFailure } from './hostLink'
 
@@ -31,13 +32,15 @@ export interface McpRuntimes {
 }
 
 /** A controller link as the tools call it. A change carries a request id, minted when the tool call gave none, so a
- *  resend after a lost reply is a retry the Runtime answers from its receipt (§3.9). */
-export function remoteHostLink(link: RemoteLink): HostLink {
+ *  resend after a lost reply is a retry the Runtime answers from its receipt (§3.9). `onAnswer` hears each answered
+ *  call (remote governance design §4.2: last seen) and must not reject. */
+export function remoteHostLink(link: RemoteLink, onAnswer?: () => Promise<void>): HostLink {
   return {
     async call(cmd, args, request) {
       const id = remoteMutation(cmd) ? (request ?? `mcp_${randomUUID()}`) : undefined
       const r = await link.call(cmd, args, id !== undefined ? { request: id } : {})
       if (r instanceof RemoteError) return { code: remoteCodeOf({ code: r.code }) ?? 'FAILED', message: r.message }
+      await onAnswer?.()
       return r
     },
     close: () => link.close()
@@ -49,7 +52,7 @@ export function openMcpRuntimes(a: {
   version: string
   client(): McpClient | undefined
   /** Test seam: the controller link for a target. */
-  open?(t: RemoteTarget): RemoteLink
+  open?(t: RemoteTarget, o?: { onHello?(h: HelloFrame): void }): RemoteLink
 }): McpRuntimes {
   /** One link per Runtime, with the pairing it was opened for: a re-pair (a new token or key) opens a new one (review I6). */
   const links = new Map<string, { link: HostLink; pairing: string; stamp: string | null }>()
@@ -99,8 +102,14 @@ export function openMcpRuntimes(a: {
       kept?.link.close()
       const target: RemoteTarget = { runtimeId: found.runtimeId, address: found.address, port: found.port, fingerprint: found.fingerprint, token }
       const c = a.client()
+      // What this server reaches is reached, and who the Runtime says it is kept (remote governance design §4.1, §4.2).
+      const onHello = (h: HelloFrame): void => void r.noteFacts(found.runtimeId, factsOf(h, new Date().toISOString())).catch(() => undefined)
       const link = remoteHostLink(
-        (a.open ?? ((t) => openRemoteLink({ target: t, client: { name: c?.name ?? 'astera mcp', version: c?.version ?? a.version, surface: 'mcp' } })))(target)
+        (
+          a.open ??
+          ((t, o) => openRemoteLink({ target: t, client: { name: c?.name ?? 'astera mcp', version: c?.version ?? a.version, surface: 'mcp' }, ...o }))
+        )(target, { onHello }),
+        seenRecorder(r, found.runtimeId, found.lastSeenAt)
       )
       links.set(found.runtimeId, { link, pairing, stamp })
       return link

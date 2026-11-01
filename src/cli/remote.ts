@@ -14,7 +14,8 @@ import { remoteMutation, remoteTarget } from '../core/remote/targets'
 import { openRemoteLink, type RemoteLink, type RemoteTarget } from '../core/remote/link'
 import { RemoteError } from '../core/remote/client'
 import { bodyCodeOf, codeForStatus, messageFrom, refusalDetailsOf, remoteCodeOf, type CliError } from '../core/orchestration/cliOutput'
-import { LAST_SEEN_EVERY_MS, type RuntimeRegistry } from '../core/runtimes/registry'
+import { factsOf, seenRecorder, type RuntimeRegistry } from '../core/runtimes/registry'
+import type { HelloFrame } from '../core/remote/frames'
 import { spelledCommand } from '../core/orchestration/cliUsage'
 import { DEFAULT_WAIT_TIMEOUT_MS } from '../core/orchestration/types'
 import { controllerRegistry, resolveRuntime } from './runtimes'
@@ -22,7 +23,7 @@ import { clientTimeoutMs, followRun, type HostAnswer, type OutputMode } from './
 
 export interface RemoteDeps {
   registry(): Promise<RuntimeRegistry>
-  link(t: RemoteTarget): RemoteLink
+  link(t: RemoteTarget, o?: { onHello?(h: HelloFrame): void }): RemoteLink
 }
 
 type Refused = { error: CliError }
@@ -87,12 +88,17 @@ export async function answerRemote(a: {
     return { error: { code: 'RUNTIME_NOT_FOUND', message: `${found.name} has no token on this machine; pair it again with \`astera runtimes add\`` } }
   const target: RemoteTarget = { runtimeId: found.runtimeId, address: found.address, port: found.port, fingerprint: found.fingerprint, token }
   /** The Runtime answered (design §4.5, Phase 3 minor): kept at most once a minute, and never at the cost of the answer. */
-  const reached = async (): Promise<void> => {
-    const last = found.lastSeenAt === null ? null : Date.parse(found.lastSeenAt)
-    if (last !== null && Date.now() - last < LAST_SEEN_EVERY_MS) return
-    await registry.touch(found.runtimeId, new Date().toISOString()).catch(() => undefined)
+  const reached = seenRecorder(registry, found.runtimeId, found.lastSeenAt)
+  /** The sign-in hello's facts (remote governance design §4.1), waited for before this command returns: the CLI exits
+   *  right after it. */
+  let noted: Promise<unknown> = Promise.resolve()
+  const onHello = (h: HelloFrame): void => {
+    noted = registry.noteFacts(found.runtimeId, factsOf(h, new Date().toISOString())).catch(() => undefined)
   }
-  const link = (a.deps?.link ?? ((t: RemoteTarget) => openRemoteLink({ target: t, client: { name: 'astera cli', version: a.version, surface: 'cli' } })))(target)
+  const link = (
+    a.deps?.link ??
+    ((t: RemoteTarget, o?: { onHello?(h: HelloFrame): void }) => openRemoteLink({ target: t, client: { name: 'astera cli', version: a.version, surface: 'cli' }, ...o }))
+  )(target, { onHello })
   try {
     if (a.cmd === 'runs-follow') {
       let lost: RemoteError | null = null
@@ -133,5 +139,6 @@ export async function answerRemote(a: {
     return { error: { code, message, details: { ...refusalDetailsOf(r.body), runtime: found.runtimeId } } }
   } finally {
     link.close()
+    await noted
   }
 }

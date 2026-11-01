@@ -7,6 +7,7 @@ import { nextStepsFor } from '../core/orchestration/cliOutput'
 import { controllerRegistry } from './runtimes'
 import { RemoteError } from '../core/remote/client'
 import type { RemoteLink, RemoteTarget } from '../core/remote/link'
+import type { HelloFrame } from '../core/remote/frames'
 
 const FP = 'F'.repeat(43)
 let dir: string
@@ -79,6 +80,24 @@ describe('answerRemote (remote runtime design §2.8, X1-14)', () => {
     expect(seen).not.toBeNull()
     await ask('jobs-list', {}, deps().d)
     expect((await (await controllerRegistry(dir)).list())[0].lastSeenAt).toBe(seen)
+  })
+  // Remote governance design §4.1: the sign-in hello is kept as the Runtime's facts, before the command answers.
+  it("the link's hello is kept as the Runtime's facts", async () => {
+    const hello: HelloFrame = {
+      t: 'hello', runtimeId: 'rt_a', displayName: 'Office', asteraVersion: '1.5.0', hostProtocol: 4, gatewayProtocol: 1, bootId: 'b1',
+      platform: 'linux', pathStyle: 'posix', permission: 'full-control', capabilities: ['pty.seq']
+    }
+    const d: RemoteDeps = {
+      registry: () => controllerRegistry(dir),
+      link: (_t, o) => ({
+        hello: () => hello,
+        call: async () => (o?.onHello?.(hello), { status: 200, body: [] }),
+        subscribe: () => () => {},
+        close: () => {}
+      })
+    }
+    await ask('jobs-list', {}, d)
+    expect((await (await controllerRegistry(dir)).list())[0].facts).toMatchObject({ asteraVersion: '1.5.0', platform: 'linux', hostProtocol: 4, capabilities: ['pty.seq'] })
   })
   it('an unknown Runtime is RUNTIME_NOT_FOUND', async () => {
     expect(await ask('jobs-list', {}, deps().d, 'nope')).toMatchObject({ error: { code: 'RUNTIME_NOT_FOUND' } })

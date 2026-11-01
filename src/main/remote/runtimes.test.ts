@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createRemoteRuntimes } from './runtimes'
 import { controllerRegistry } from '../../cli/runtimes'
 import type { RemoteLink, RemoteTarget } from '../../core/remote/link'
+import type { HelloFrame } from '../../core/remote/frames'
 
 const FP = 'F'.repeat(43)
 let dir: string
@@ -25,6 +26,30 @@ const opener = () => {
     return { hello: () => null, call: async () => ({ status: 200, body: {} }), subscribe: () => () => {}, close: () => void closed.push(t.token) }
   }
   return { open, opened, closed }
+}
+
+const HELLO: HelloFrame = {
+  t: 'hello', runtimeId: 'rt_a', displayName: 'Office', asteraVersion: '1.5.0', hostProtocol: 4, gatewayProtocol: 1, bootId: 'b1',
+  platform: 'darwin', pathStyle: 'posix', permission: 'full-control', capabilities: ['pty.seq']
+}
+/** Links that say hello at their first call, as a real one does at its first connection. */
+const helloing = () => {
+  const open = (_t: RemoteTarget, o?: { onHello?(h: HelloFrame): void }): RemoteLink => {
+    let said = false
+    return {
+      hello: () => (said ? HELLO : null),
+      call: async () => {
+        if (!said) {
+          said = true
+          o?.onHello?.(HELLO)
+        }
+        return { status: 200, body: [] }
+      },
+      subscribe: () => () => {},
+      close: () => {}
+    }
+  }
+  return { open }
 }
 
 describe('createRemoteRuntimes (remote runtime design §2.7, D1.1)', () => {
@@ -84,6 +109,26 @@ describe('createRemoteRuntimes (remote runtime design §2.7, D1.1)', () => {
     const [listed] = await r.list()
     expect(listed.offline).toBe(false)
     expect(listed.lastSeenAt).not.toBeNull()
+  })
+  // Remote governance design §4.1, §4.4, §9.1: what the app reaches is saved, so the findings and the CLI see it too.
+  it('an answered call saves lastSeenAt and the hello\'s facts', async () => {
+    const r = createRemoteRuntimes({ profileDir: dir, version: '1.4.8', open: helloing().open })
+    const c = await r.client('rt_a')
+    if ('code' in c) throw new Error(c.code)
+    await c.projects()
+    await vi.waitFor(async () => {
+      const [p] = await (await controllerRegistry(dir)).list()
+      expect(p.lastSeenAt).not.toBeNull()
+      expect(p.facts).toMatchObject({ asteraVersion: '1.5.0', platform: 'darwin', hostProtocol: 4, capabilities: ['pty.seq'] })
+    })
+  })
+  it('list() carries asteraVersion and platform from the kept facts', async () => {
+    const r = createRemoteRuntimes({ profileDir: dir, version: '1.4.8', open: helloing().open })
+    expect((await r.list())[0]).not.toHaveProperty('asteraVersion')
+    const c = await r.client('rt_a')
+    if ('code' in c) throw new Error(c.code)
+    await c.projects()
+    await vi.waitFor(async () => expect((await r.list())[0]).toMatchObject({ asteraVersion: '1.5.0', platform: 'darwin' }))
   })
   it('remove forgets a Runtime and closes its client; an unknown id is NOT_FOUND', async () => {
     const o = opener()
