@@ -1125,7 +1125,7 @@ echo worker-ok > mac-check-18.txt && git add -A && git commit -q -m "mac-check 1
      항목이 생깁니다. `mac-check-nomcp` 를 삭제하면(13b 를 했다면 `mac-check-roll` 도) 사라집니다.
    - 터미널에서 `ls ~/.codex/skills` 에 `mac-check-skill` 이 없는지 봅니다. Astera 가 둔 사본은 Astera 가 지웁니다.
      2단계에서 직접 넣은 사본은 남으므로 `rm -rf ~/.claude/skills/mac-check-skill` 로 지웁니다(점검 12 가 B 였으면
-     `rm -rf "$C/skills/mac-check-skill"`).
+     `rm -rf "${C:?}/skills/mac-check-skill"`).
 
 통과:
 

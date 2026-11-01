@@ -292,6 +292,14 @@ describe('scripts/mac-check guides', () => {
     }
   })
 
+  it('removes nothing through a bare $C, which an unset C would turn into a folder under the root', () => {
+    for (const text of Object.values(guides)) {
+      const rms = text.split('\n').filter((l) => /\brm\s/.test(l))
+      expect(rms.length).toBeGreaterThan(0)
+      expect(rms.filter((l) => l.includes('"$C/'))).toEqual([])
+    }
+  })
+
   it('the checklist holds the block run.sh fills, and run.sh fills that block', () => {
     for (const mark of ['<!-- run.sh summary start -->', '<!-- run.sh summary end -->']) {
       expect(guides['checklist.md']).toContain(mark)
