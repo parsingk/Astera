@@ -857,6 +857,8 @@ export interface RemoteRuntimeInfo {
   /** From its last hello, by any surface (remote governance design §4.1); absent before the first. */
   asteraVersion?: string
   platform?: string
+  /** Whether that version is older than this app's (§4.3); absent with it. */
+  older?: boolean
 }
 
 /** A paired Runtime's detail (remote governance design §10.1, §10.2): its pairing, what its hello said, its last report
@@ -2162,10 +2164,19 @@ export interface RemoteApi {
   /** The Runtime's projects, then `{ id: 'unregistered' }` for Jobs in folders that are no project. null when the
    *  Runtime cannot be asked now (never an empty list for an unreachable one). */
   projects(runtimeId: string): Promise<Array<{ id: string; name: string | null; path: string | null }> | null>
+  /** A paired Runtime's detail (remote governance design §10.1): its report read anew when `refresh` asks or the kept
+   *  one is five minutes old, else the kept one; offline or refused, the last snapshot with `refusal`. */
+  detail(runtimeId: string, refresh?: boolean): Promise<RuntimeDetail | { code: string; message: string }>
+  /** Every paired Runtime's report under the same rule, one at a time. Never rejects. */
+  readReports(): Promise<void>
+  /** Edits which of this computer's extensions the person expects on a Runtime (§6.1). */
+  expect(runtimeId: string, add: string[], remove: string[]): Promise<{ ok: true; expected: string[] } | { ok: false; code: string; message: string }>
   /** This computer as a Runtime: whether Remote is on, the Gateway, the paired controllers. null when the Host cannot say. */
   thisMachine(): Promise<{
     gateway: { state: string; [k: string]: unknown }
-    clients: Array<{ clientId: string; name: string; permission: string; lastSeenAt: string | null }>
+    /** `surface` and `clientVersion`: what the controller last said of itself (remote governance design §7.1); absent
+     *  until it says, and from an older Host. */
+    clients: Array<{ clientId: string; name: string; permission: string; lastSeenAt: string | null; surface?: 'desktop' | 'cli' | 'mcp'; clientVersion?: string }>
     /** The ids of the pairing codes that can still be redeemed (absent from an older Host). */
     pairings?: string[]
   } | null>

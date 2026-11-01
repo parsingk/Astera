@@ -336,19 +336,31 @@ async function expectIds(args: Record<string, unknown>, d: RuntimesDeps): Promis
   if (isResult(p)) return p
   const local = await localOf(d)
   if (isResult(local)) return local
-  // §6.1: the list names this computer's entries. An id to remove may instead be one still kept in the list after it was
-  // removed here (ruling R14-2), so it can be cleared; any other is refused, and nothing is written
+  const e = editExpected(p.expected, local, add, remove)
+  if (!e.ok) return failure('INVALID_ARGUMENTS', e.message)
+  if (e.store) await reg.setExpected(p.runtimeId, e.store)
+  return { ok: true, body: { runtimeId: p.runtimeId, expected: e.expected } }
+}
+
+/**
+ * `expect`'s edit of the kept list, shared with the app's (main/remote/runtimes.ts): `store` is the list to write, null
+ * when nothing was asked, and `expected` the ids as read back. §6.1: the list names this computer's entries. An id to
+ * remove may instead be one still kept in the list after it was removed here (ruling R14-2), so it can be cleared; any
+ * other is refused whole, and nothing is written.
+ */
+export function editExpected(
+  kept: readonly string[] | undefined,
+  local: readonly ReportExtension[],
+  add: readonly string[],
+  remove: readonly string[]
+): { ok: true; store: string[] | null; expected: string[] } | { ok: false; message: string } {
   const here = new Set(local.map((e) => e.id))
-  const kept = p.expected ?? []
-  const unknown = [...add.filter((id) => !here.has(id)), ...remove.filter((id) => !here.has(id) && !kept.includes(id))]
+  const held = kept ?? []
+  const unknown = [...add.filter((id) => !here.has(id)), ...remove.filter((id) => !here.has(id) && !held.includes(id))]
   if (unknown.length > 0)
-    return failure('INVALID_ARGUMENTS', `${unknown.join(', ')} ${unknown.length === 1 ? 'is' : 'are'} not an extension on this computer; \`astera ext list\` names them`)
-  let expected = kept
-  if (add.length > 0 || remove.length > 0) {
-    expected = [...expected.filter((id) => !remove.includes(id)), ...add]
-    await reg.setExpected(p.runtimeId, expected)
-  }
-  return { ok: true, body: { runtimeId: p.runtimeId, expected: liveExpected([...new Set(expected)], local) } }
+    return { ok: false, message: `${unknown.join(', ')} ${unknown.length === 1 ? 'is' : 'are'} not an extension on this computer; \`astera ext list\` names them` }
+  const store = add.length > 0 || remove.length > 0 ? [...held.filter((id) => !remove.includes(id)), ...add] : null
+  return { ok: true, store, expected: liveExpected([...new Set(store ?? held)], local) }
 }
 
 export async function runRuntimesCommand(cmd: string, args: Record<string, unknown>, d: RuntimesDeps): Promise<Result> {

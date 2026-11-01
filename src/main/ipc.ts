@@ -4961,6 +4961,18 @@ export function registerIpc(
     const c = await remoteRuntimes.client(runtimeId)
     return 'code' in c ? null : c.projects()
   })
+  // A Runtime's report and the expected list (remote governance design §5.4, §6.1, §10.1): read when Settings asks, at
+  // most every five minutes per Runtime unless refreshed. Never on a timer.
+  ipcMain.handle('remote.detail', (_e, runtimeId: unknown, refresh?: unknown) =>
+    typeof runtimeId === 'string' ? remoteRuntimes.detail(runtimeId, { refresh: refresh === true }) : { code: 'RUNTIME_NOT_FOUND', message: 'a runtime id is a string' }
+  )
+  ipcMain.handle('remote.readReports', () => remoteRuntimes.readReports())
+  ipcMain.handle('remote.expect', (_e, runtimeId: unknown, add: unknown, remove: unknown) => {
+    if (typeof runtimeId !== 'string') return { ok: false, code: 'RUNTIME_NOT_FOUND', message: 'a runtime id is a string' }
+    const ids = (v: unknown): v is string[] => Array.isArray(v) && v.every((id) => typeof id === 'string')
+    if (!ids(add) || !ids(remove)) return { ok: false, code: 'INVALID_ARGUMENTS', message: 'add and remove are lists of extension ids' }
+    return remoteRuntimes.expect(runtimeId, add, remove)
+  })
   // This computer as a Runtime, switched from Settings (thisMachineControl.ts): the CLI's own runtime commands, on this
   // profile's settings and identity and its Host. A person's clicks: never an agent session.
   const thisMachine = createThisMachineControl({

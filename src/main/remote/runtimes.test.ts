@@ -7,6 +7,8 @@ import { controllerRegistry } from '../../cli/runtimes'
 import type { RemoteLink, RemoteTarget } from '../../core/remote/link'
 import type { HelloFrame } from '../../core/remote/frames'
 import { staleRuntimeFindings } from '../../core/findings/rules/runtimes'
+import { RemoteError } from '../../core/remote/client'
+import { REPORT_CAPABILITY, type ControlPlaneReport, type ReportExtension } from '../../core/controlPlane/report'
 
 const FP = 'F'.repeat(43)
 let dir: string
@@ -209,5 +211,128 @@ describe('a client replaced or removed is announced', () => {
     await fs.writeFile(path.join(dir, 'runtimes', 'rt_a.token'), 'tok-z')
     await r.client('rt_a')
     expect(o.opened.map((t) => t.token)).toEqual(['tok-a'])
+  })
+})
+
+// Remote governance design §5.4, §10.1: Settings shows a Runtime's report, read at most every five minutes or on
+// refresh and kept; the expected list is this computer's choice of its own extensions.
+describe('reports and the expected list (remote governance design §5.4, §6.1, §10.1)', () => {
+  const MIN = 60_000
+  const LOCAL: ReportExtension[] = [{ id: 'skill-a', kind: 'skill', name: 'skill-a', enabled: true, providers: ['claude'] }]
+  const REPORT: ControlPlaneReport = {
+    version: 1,
+    astera: { version: '1.5.0', platform: 'darwin' },
+    extensions: [],
+    profiles: [],
+    appBypass: false,
+    policy: null,
+    sandbox: { claude: { kind: 'sandbox', blocker: null }, codex: { kind: 'deny-only', blocker: null } },
+    credentials: null,
+    secretStore: { kind: 'owner-only-files', ok: true },
+    findings: null
+  }
+  const REPORTING: HelloFrame = { ...HELLO, capabilities: [REPORT_CAPABILITY] }
+  /** Links to Runtimes that answer their report, except the ids in `offline`, which never answer. */
+  const reporting = (offline: string[] = []) => {
+    const calls: Array<{ runtimeId: string; cmd: string }> = []
+    const open = (t: RemoteTarget, o?: { onHello?(h: HelloFrame): void }): RemoteLink => {
+      let said = false
+      return {
+        hello: () => (said ? REPORTING : null),
+        call: async (cmd) => {
+          calls.push({ runtimeId: t.runtimeId, cmd })
+          if (offline.includes(t.runtimeId)) return new RemoteError('RUNTIME_OFFLINE', 'connect ECONNREFUSED')
+          said = true
+          o?.onHello?.(REPORTING)
+          return cmd === 'control-plane-report' ? { status: 200, body: REPORT } : { status: 200, body: [] }
+        },
+        subscribe: () => () => {},
+        close: () => {}
+      }
+    }
+    return { open, reads: (id = 'rt_a') => calls.filter((c) => c.cmd === 'control-plane-report' && c.runtimeId === id).length }
+  }
+  let t: number
+  beforeEach(() => {
+    t = Date.parse('2026-11-01T00:00:00.000Z')
+  })
+  const runtimes = (open: ReturnType<typeof reporting>['open'], version = '1.5.0') =>
+    createRemoteRuntimes({ profileDir: dir, version, open, now: () => t, localExtensions: async () => LOCAL })
+
+  it('detail reads a report once and answers the kept one within five minutes', async () => {
+    const o = reporting()
+    const r = runtimes(o.open)
+    const first = await r.detail('rt_a')
+    expect(first).toMatchObject({ runtimeId: 'rt_a', answering: true, snapshot: { readAt: '2026-11-01T00:00:00.000Z', report: { astera: { version: '1.5.0' } } } })
+    expect((await (await controllerRegistry(dir)).list())[0].snapshot?.readAt).toBe('2026-11-01T00:00:00.000Z')
+    t += 4 * MIN
+    expect(await r.detail('rt_a')).toMatchObject({ answering: null, snapshot: { readAt: '2026-11-01T00:00:00.000Z' } })
+    expect(o.reads()).toBe(1)
+  })
+
+  it('refresh reads again at once', async () => {
+    const o = reporting()
+    const r = runtimes(o.open)
+    await r.detail('rt_a')
+    t += MIN
+    expect(await r.detail('rt_a', { refresh: true })).toMatchObject({ answering: true, snapshot: { readAt: '2026-11-01T00:01:00.000Z' } })
+    expect(o.reads()).toBe(2)
+  })
+
+  it('past five minutes it reads again', async () => {
+    const o = reporting()
+    const r = runtimes(o.open)
+    await r.detail('rt_a')
+    t += 5 * MIN
+    expect(await r.detail('rt_a')).toMatchObject({ snapshot: { readAt: '2026-11-01T00:05:00.000Z' } })
+    expect(o.reads()).toBe(2)
+  })
+
+  it('an offline Runtime answers its last snapshot with its time and the refusal', async () => {
+    await (await controllerRegistry(dir)).keepSnapshot('rt_a', { readAt: '2026-10-31T00:00:00.000Z', report: REPORT })
+    const r = runtimes(reporting(['rt_a']).open)
+    expect(await r.detail('rt_a')).toMatchObject({
+      answering: false,
+      snapshot: { readAt: '2026-10-31T00:00:00.000Z' },
+      refusal: { code: 'RUNTIME_OFFLINE' }
+    })
+    expect((await (await controllerRegistry(dir)).list())[0].snapshot?.readAt).toBe('2026-10-31T00:00:00.000Z')
+  })
+
+  it('readReports reads each paired Runtime under the same rule and never rejects', async () => {
+    const reg = await controllerRegistry(dir)
+    await reg.add({ runtimeId: 'rt_b', name: 'Home', address: '10.0.0.3', port: 47831, fingerprint: FP, permission: 'read-only', createdAt: 'x', lastSeenAt: null }, 'tok-b')
+    const o = reporting(['rt_b'])
+    const r = runtimes(o.open)
+    await expect(r.readReports()).resolves.toBeUndefined()
+    expect([o.reads('rt_a'), o.reads('rt_b')]).toEqual([1, 1])
+    expect((await reg.list()).find((p) => p.runtimeId === 'rt_a')?.snapshot?.readAt).toBe('2026-11-01T00:00:00.000Z')
+    t += 4 * MIN
+    await r.readReports()
+    // rt_a's report is fresh; rt_b has none, so it is asked again
+    expect([o.reads('rt_a'), o.reads('rt_b')]).toEqual([1, 2])
+    // A registry that cannot be read still resolves
+    const broken = createRemoteRuntimes({ profileDir: path.join(dir, 'runtimes', 'rt_a.token'), version: '1.5.0', open: o.open })
+    await expect(broken.readReports()).resolves.toBeUndefined()
+  })
+
+  it('expect keeps the list, and an id this computer does not have is refused', async () => {
+    const r = runtimes(reporting().open)
+    expect(await r.expect('rt_a', ['skill-a'], [])).toEqual({ ok: true, expected: ['skill-a'] })
+    expect((await (await controllerRegistry(dir)).list())[0].expected).toEqual(['skill-a'])
+    expect(await r.expect('rt_a', ['nope'], [])).toMatchObject({ ok: false, code: 'INVALID_ARGUMENTS', message: expect.stringContaining('nope') })
+    expect(await r.expect('rt_a', [], ['typo'])).toMatchObject({ ok: false, code: 'INVALID_ARGUMENTS' })
+    expect((await (await controllerRegistry(dir)).list())[0].expected).toEqual(['skill-a'])
+    expect(await r.expect('rt_a', [], ['skill-a'])).toEqual({ ok: true, expected: [] })
+    expect(await r.expect('rt_nope', [], [])).toMatchObject({ ok: false, code: 'RUNTIME_NOT_FOUND' })
+  })
+
+  it('list marks a Runtime older than this app', async () => {
+    const r = runtimes(reporting().open, '1.6.0')
+    expect((await r.list())[0]).not.toHaveProperty('older')
+    await r.detail('rt_a')
+    await vi.waitFor(async () => expect((await r.list())[0]).toMatchObject({ asteraVersion: '1.5.0', older: true }))
+    const same = runtimes(reporting().open, '1.5.0')
+    expect((await same.list())[0]).toMatchObject({ older: false })
   })
 })
