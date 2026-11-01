@@ -3,7 +3,16 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { openSecretStore } from '../secrets/secretStore'
-import { listPairedRuntimes, openRuntimeRegistry, type RuntimeProfile } from './registry'
+import type { ControlPlaneReport } from '../controlPlane/report'
+import {
+  factsOf,
+  listPairedRuntimes,
+  openRuntimeRegistry,
+  registryStamp,
+  seenRecorder,
+  type RuntimeFacts,
+  type RuntimeProfile
+} from './registry'
 
 let profile: string
 const store = () => openSecretStore({ dir: path.join(profile, 'runtimes'), profileDir: profile })
@@ -112,5 +121,168 @@ describe('listPairedRuntimes', () => {
     const once = () => (opened++, s)
     expect((await listPairedRuntimes(path.join(profile, 'runtimes'), once)).map((r) => r.runtimeId)).toEqual(['rt_a'])
     expect(opened).toBe(1)
+  })
+})
+
+// Remote governance design §4.1, §5.4, §6.1: what the controller keeps beside each pairing
+describe('facts, snapshot and expected list per Runtime', () => {
+  const registryFile = () => path.join(profile, 'runtimes', 'runtimes.json')
+  const facts = (readAt: string, asteraVersion = '1.5.0'): RuntimeFacts =>
+    factsOf({ asteraVersion, platform: 'darwin', hostProtocol: 4, capabilities: ['control-plane.report'] }, readAt)
+  const report = (): ControlPlaneReport => ({
+    version: 1,
+    astera: { version: '1.5.0', platform: 'darwin' },
+    extensions: [],
+    profiles: [],
+    appBypass: false,
+    policy: null,
+    sandbox: { claude: { kind: 'sandbox', blocker: null }, codex: { kind: 'deny-only', blocker: null } },
+    credentials: null,
+    secretStore: { kind: 'owner-only-files', ok: true },
+    findings: null
+  })
+  const fileOf = async () => JSON.parse(await fs.readFile(registryFile(), 'utf8')) as { runtimes: Array<Record<string, unknown>> }
+
+  it('a profile written before this release reads with no facts, snapshot or expected', async () => {
+    await (await openRuntimeRegistry(store())).add(p('rt_a'), 'tok')
+    await fs.writeFile(registryFile(), JSON.stringify({ runtimes: [p('rt_a')] }))
+    const listed = await (await openRuntimeRegistry(store())).list()
+    expect(listed).toEqual([p('rt_a')])
+    expect(Object.keys(listed[0]).sort()).toEqual(Object.keys(p('rt_a')).sort())
+  })
+
+  it('noteFacts writes once and not again for the same facts', async () => {
+    const r = await openRuntimeRegistry(store())
+    await r.add(p('rt_a'), 'tok')
+    expect(await r.noteFacts('rt_a', facts('2026-11-01T00:00:00.000Z'))).toBe(true)
+    const mtime = (await fs.stat(registryFile())).mtimeMs
+    expect(await r.noteFacts('rt_a', facts('2026-11-01T01:00:00.000Z'))).toBe(false)
+    expect((await fs.stat(registryFile())).mtimeMs).toBe(mtime)
+    expect((await r.list())[0].facts?.readAt).toBe('2026-11-01T00:00:00.000Z')
+  })
+
+  it('noteFacts writes again when the version changes', async () => {
+    const r = await openRuntimeRegistry(store())
+    await r.add(p('rt_a'), 'tok')
+    await r.noteFacts('rt_a', facts('2026-11-01T00:00:00.000Z'))
+    expect(await r.noteFacts('rt_a', facts('2026-11-02T00:00:00.000Z', '1.6.0'))).toBe(true)
+    expect((await r.list())[0].facts).toEqual(facts('2026-11-02T00:00:00.000Z', '1.6.0'))
+  })
+
+  it('keepSnapshot keeps the report and its time; a snapshot that does not parse reads as absent', async () => {
+    const r = await openRuntimeRegistry(store())
+    await r.add(p('rt_a'), 'tok')
+    await r.keepSnapshot('rt_a', { readAt: '2026-11-01T00:00:00.000Z', report: report() })
+    expect((await r.list())[0].snapshot).toEqual({ readAt: '2026-11-01T00:00:00.000Z', report: report() })
+    const file = await fileOf()
+    ;(file.runtimes[0].snapshot as { report: { version: number } }).report.version = 9
+    await fs.writeFile(registryFile(), JSON.stringify(file))
+    const listed = await r.list()
+    expect(listed[0]).not.toHaveProperty('snapshot')
+    expect(listed[0].runtimeId).toBe('rt_a')
+  })
+
+  it('setExpected keeps the order and drops repeats', async () => {
+    const r = await openRuntimeRegistry(store())
+    await r.add(p('rt_a'), 'tok')
+    await r.setExpected('rt_a', ['skill-b', 'mcp-a', 'skill-b', 'cmd-c', 'mcp-a'])
+    expect((await r.list())[0].expected).toEqual(['skill-b', 'mcp-a', 'cmd-c'])
+  })
+
+  it('an id with no profile changes nothing in all three', async () => {
+    const r = await openRuntimeRegistry(store())
+    await r.add(p('rt_a'), 'tok')
+    expect(await r.noteFacts('rt_b', facts('T'))).toBe(false)
+    await r.keepSnapshot('rt_b', { readAt: 'T', report: report() })
+    await r.setExpected('rt_b', ['x'])
+    expect(await r.list()).toEqual([p('rt_a')])
+  })
+
+  it("touch, noteFacts and keepSnapshot keep each other's fields", async () => {
+    const r = await openRuntimeRegistry(store())
+    await r.add(p('rt_a'), 'tok')
+    await r.setExpected('rt_a', ['skill-b'])
+    await r.touch('rt_a', '2026-11-01T00:00:00.000Z')
+    await r.noteFacts('rt_a', facts('2026-11-01T00:00:01.000Z'))
+    await r.keepSnapshot('rt_a', { readAt: '2026-11-01T00:00:02.000Z', report: report() })
+    expect((await r.list())[0]).toEqual({
+      ...p('rt_a'),
+      lastSeenAt: '2026-11-01T00:00:00.000Z',
+      facts: facts('2026-11-01T00:00:01.000Z'),
+      snapshot: { readAt: '2026-11-01T00:00:02.000Z', report: report() },
+      expected: ['skill-b']
+    })
+  })
+
+  // Review Focus 5: a new key is another machine, so what it said is not this one's; what the person expects stays.
+  it('a re-pair under another key with replace drops facts and snapshot and keeps expected', async () => {
+    const r = await openRuntimeRegistry(store())
+    await r.add(p('rt_a'), 'tok')
+    await r.noteFacts('rt_a', facts('T'))
+    await r.keepSnapshot('rt_a', { readAt: 'T', report: report() })
+    await r.setExpected('rt_a', ['skill-b'])
+    await r.add({ ...p('rt_a'), fingerprint: 'other' }, 'two', { replace: true })
+    expect(await r.list()).toEqual([{ ...p('rt_a'), fingerprint: 'other', expected: ['skill-b'] }])
+  })
+
+  // Ruling C9: add keeps no facts by itself; the sign-in hello writes them through noteFacts (Task 14).
+  it('add keeps no facts or snapshot handed to it', async () => {
+    const r = await openRuntimeRegistry(store())
+    await r.add({ ...p('rt_a'), facts: facts('T'), snapshot: { readAt: 'T', report: report() } }, 'tok')
+    expect(await r.list()).toEqual([p('rt_a')])
+  })
+
+  // Ruling C7: the Host's findings cache recomputes when this stamp changes (Task 12).
+  it('registryStamp changes after keepSnapshot and setExpected, not after a noteFacts that writes nothing', async () => {
+    const dir = path.join(profile, 'runtimes')
+    expect(await registryStamp(dir)).toBeNull()
+    const r = await openRuntimeRegistry(store())
+    await r.add(p('rt_a'), 'tok')
+    await r.noteFacts('rt_a', facts('T'))
+    const first = await registryStamp(dir)
+    expect(first).not.toBeNull()
+    expect(await r.noteFacts('rt_a', facts('T2'))).toBe(false)
+    expect(await registryStamp(dir)).toBe(first)
+    await r.keepSnapshot('rt_a', { readAt: 'T', report: report() })
+    const second = await registryStamp(dir)
+    expect(second).not.toBe(first)
+    await r.setExpected('rt_a', ['skill-b'])
+    expect(await registryStamp(dir)).not.toBe(second)
+  })
+
+  it('seenRecorder touches at most once a minute', async () => {
+    const touched: Array<[string, string]> = []
+    let t = 0
+    const seen = seenRecorder({ touch: async (id, at) => void touched.push([id, at]) }, 'rt_a', null, () => t)
+    await seen()
+    t = 30_000
+    await seen()
+    t = 61_000
+    await seen()
+    expect(touched).toEqual([
+      ['rt_a', new Date(0).toISOString()],
+      ['rt_a', new Date(61_000).toISOString()]
+    ])
+  })
+
+  it('seenRecorder counts from the last time it was given and never rejects', async () => {
+    const touched: string[] = []
+    let t = Date.parse('2026-11-01T00:00:30.000Z')
+    const seen = seenRecorder(
+      {
+        touch: async (_id, at) => {
+          touched.push(at)
+          throw new Error('locked')
+        }
+      },
+      'rt_a',
+      '2026-11-01T00:00:00.000Z',
+      () => t
+    )
+    await seen()
+    expect(touched).toEqual([])
+    t = Date.parse('2026-11-01T00:01:01.000Z')
+    await expect(seen()).resolves.toBeUndefined()
+    expect(touched).toEqual(['2026-11-01T00:01:01.000Z'])
   })
 })
