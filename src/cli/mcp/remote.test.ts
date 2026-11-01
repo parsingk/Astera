@@ -222,6 +222,19 @@ describe('openMcpRuntimes', () => {
     expect(await r.linkFor('nope')).toMatchObject({ code: 'RUNTIME_NOT_FOUND' })
   })
 
+  // Ruling RF-2: the Runtime shows "MCP · Astera {version}", so the version is this Astera's, not the MCP client's
+  it('signs in with this Astera\'s version and the MCP client\'s name', async () => {
+    const clients: unknown[] = []
+    const r = openMcpRuntimes({
+      profileDir: dir,
+      version: '1.5.0',
+      client: () => ({ name: 'claude-code', version: '2.1.288' }),
+      open: (_t, o) => (clients.push(o.client), fakeLink())
+    })
+    await r.linkFor('rt_a')
+    expect(clients).toEqual([{ name: 'claude-code', version: '1.5.0', surface: 'mcp' }])
+  })
+
   // Second pass RR-9: each remote tool call opened the registry again (a locked sweep and ACL checks on Windows) and read
   // the token. While the registry file is as it was, the kept link answers without either, as the app does.
   it('a call while the registry is unchanged reads neither the registry nor the token again', async () => {

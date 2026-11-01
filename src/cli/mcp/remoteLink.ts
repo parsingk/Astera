@@ -18,7 +18,7 @@ import { mcpGithubWriteOf } from '../../core/settings/mcpGithubWrite'
 import { readAppSettingsObject } from '../../core/settings/settingsObject'
 import type { McpClient } from '../../core/continuity/actor'
 import { factsNoter, registryStamp, seenRecorder, type RuntimeProfile, type RuntimeRegistry } from '../../core/runtimes/registry'
-import type { HelloFrame } from '../../core/remote/frames'
+import type { ClientInfo, HelloFrame } from '../../core/remote/frames'
 import { controllerRegistry, resolveRuntime } from '../runtimes'
 import type { HostLink, LinkFailure } from './hostLink'
 
@@ -58,8 +58,8 @@ export function openMcpRuntimes(a: {
   /** True when this server's env names no Astera session (ruling R13-4): its sandbox is unknown, so every change is
    *  refused without asking. Absent or false, `sandboxed` is asked. */
   noSession?: boolean
-  /** Test seam: the controller link for a target. */
-  open?(t: RemoteTarget, o?: { onHello?(h: HelloFrame): void }): RemoteLink
+  /** Test seam: the controller link for a target, with the client it signs in as. */
+  open?(t: RemoteTarget, o: { onHello?(h: HelloFrame): void; client: ClientInfo }): RemoteLink
 }): McpRuntimes {
   /** One link per Runtime, with the pairing it was opened for: a re-pair (a new token or key) opens a new one (review I6). */
   const links = new Map<string, { link: HostLink; pairing: string; stamp: string | null }>()
@@ -115,11 +115,11 @@ export function openMcpRuntimes(a: {
       // What this server reaches is reached, and who the Runtime says it is kept (remote governance design §4.1, §4.2).
       const note = factsNoter(r, found.runtimeId, found.facts)
       const onHello = (h: HelloFrame): void => void note(h)
+      // The version is this Astera's, which the Runtime shows as "MCP · Astera {version}" (ruling RF-2); the MCP client's
+      // own version is not Astera's, and only its name rides along.
+      const client: ClientInfo = { name: c?.name ?? 'astera mcp', version: a.version, surface: 'mcp' }
       const link = remoteHostLink(
-        (
-          a.open ??
-          ((t, o) => openRemoteLink({ target: t, client: { name: c?.name ?? 'astera mcp', version: c?.version ?? a.version, surface: 'mcp' }, ...o }))
-        )(target, { onHello }),
+        (a.open ?? ((t, o) => openRemoteLink({ target: t, ...o })))(target, { onHello, client }),
         seenRecorder(r, found.runtimeId, found.lastSeenAt)
       )
       links.set(found.runtimeId, { link, pairing, stamp })

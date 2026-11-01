@@ -221,19 +221,21 @@ export function createControllerRegistry(
       for (const r of records.values()) {
         if (!sameHash(r.tokenHash, tokenHash)) continue
         // §4.5: kept at most once a minute (Phase 3 minor), so a controller that signs in often costs one save a minute.
-        // A different surface or version is saved at once (remote governance design §7.1): an update shows right away.
+        // A different surface or version shows in memory at once (remote governance design §7.1) and waits for the same
+        // once-a-minute save (ruling RF-2): a pairing the app and the CLI both use changes surface at every sign-in.
         const seen = r.lastSeenAt === null ? null : Date.parse(r.lastSeenAt)
         const changed = r.surface !== client?.surface || r.clientVersion !== client?.version
-        if (!changed && seen !== null && now() - seen < LAST_SEEN_EVERY_MS) return r
+        const due = seen === null || now() - seen >= LAST_SEEN_EVERY_MS
+        if (!changed && !due) return r
         const { surface: _surface, clientVersion: _version, ...rest } = r
         const touched: ControllerRecord = {
           ...rest,
-          lastSeenAt: new Date(now()).toISOString(),
+          ...(due ? { lastSeenAt: new Date(now()).toISOString() } : {}),
           ...(client?.surface !== undefined ? { surface: client.surface } : {}),
           ...(client?.version !== undefined ? { clientVersion: client.version } : {})
         }
         records.set(r.clientId, touched)
-        void persist().catch(() => undefined)
+        if (due) void persist().catch(() => undefined)
         return touched
       }
       return null

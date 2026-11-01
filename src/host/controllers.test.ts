@@ -126,29 +126,34 @@ describe('who each connection is (remote governance design §7.2)', () => {
     expect(r.list()[0]).toMatchObject({ surface: 'cli', clientVersion: '1.5.0' })
     expect(r.list()[0]).not.toHaveProperty('agent')
   })
-  it('a changed version is saved inside the minute', async () => {
+  // Ruling RF-2: a pairing used by both the app and the CLI changes surface at every sign-in, so a change alone is not
+  // saved inside the minute; it shows in memory at once and reaches the file with the next minute's save
+  it('a changed surface or version shows at once and is saved no more than once a minute', async () => {
     const c = clock()
+    let saves = 0
     let saved: ControllerRecord[] = []
-    const r = createControllerRegistry({ now: c.now, records: { load: async () => [], save: async (x) => void (saved = x) } })
+    const r = createControllerRegistry({ now: c.now, records: { load: async () => [], save: async (x) => void (saves++, (saved = x)) } })
     const { token } = await paired(r)
     const hash = sha256Base64url(token)
+    await new Promise((x) => setTimeout(x, 10))
+    const atPairing = saves
     r.authenticate(hash, { surface: 'cli', version: '1.5.0' })
     await new Promise((x) => setTimeout(x, 10))
+    expect(saves).toBe(atPairing + 1)
     expect(saved[0]).toMatchObject({ clientVersion: '1.5.0' })
-    c.advance(5_000)
-    r.authenticate(hash, { surface: 'cli', version: '1.5.1' })
+    for (const surface of ['desktop', 'cli', 'desktop'] as const) {
+      c.advance(5_000)
+      expect(r.authenticate(hash, { surface, version: '1.5.1' })).toMatchObject({ surface, clientVersion: '1.5.1' })
+      expect(r.list()[0]).toMatchObject({ surface, clientVersion: '1.5.1' })
+    }
     await new Promise((x) => setTimeout(x, 10))
-    expect(saved[0]).toMatchObject({ surface: 'cli', clientVersion: '1.5.1' })
-    c.advance(5_000)
+    expect(saves).toBe(atPairing + 1)
+    // Past the minute the next sign-in saves, with what the last one said
+    c.advance(60_000)
     r.authenticate(hash, { surface: 'desktop', version: '1.5.1' })
     await new Promise((x) => setTimeout(x, 10))
+    expect(saves).toBe(atPairing + 2)
     expect(saved[0]).toMatchObject({ surface: 'desktop', clientVersion: '1.5.1' })
-    // Nothing changed and inside the minute: no save, the record keeps its last sign-in time.
-    const before = saved
-    c.advance(5_000)
-    r.authenticate(hash, { surface: 'desktop', version: '1.5.1' })
-    await new Promise((x) => setTimeout(x, 10))
-    expect(saved).toBe(before)
   })
   it('revoke, stillBound and boundCount still work with the new bindings', async () => {
     const { r, clientId } = await paired()
