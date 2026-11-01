@@ -1184,6 +1184,9 @@ export async function main(): Promise<void> {
     home: homedir()
   })
   const sessionId = process.env.ASTERA_SESSION ?? ''
+  // What a paired Runtime is told about this CLI (remote governance design §7.1): the same signal that makes a local call
+  // an agent's, a session id or a session's workload token.
+  const inAgentSession = (process.env.ASTERA_SESSION ?? '') !== '' || !!process.env.ASTERA_GATEWAY_TOKEN
   verbose.say(`Host address ${address} (profile ${profileDir})`)
 
   // **stdin is read before connecting, not after.** A report's body arrives on stdin, and the
@@ -1372,7 +1375,8 @@ export async function main(): Promise<void> {
       connect: (o) => connectRuntime(o),
       hostname: () => os.hostname(),
       now: () => new Date().toISOString(),
-      version: CLI_VERSION
+      version: CLI_VERSION,
+      agent: inAgentSession
     })
     if (!done.ok) fail(done.error)
     out(renderOk(parsed.cmd, done.body, mode))
@@ -1496,7 +1500,8 @@ export async function main(): Promise<void> {
         profileDir,
         mode,
         write: out,
-        version: CLI_VERSION
+        version: CLI_VERSION,
+        agent: inAgentSession
       })
       if ('error' in remote) fail(remote.error)
       return remote

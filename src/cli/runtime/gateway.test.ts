@@ -93,6 +93,15 @@ describe('startGateway (remote runtime design §2.3, §3.1, §3.2)', () => {
     expect(g.raw.join('')).not.toContain('good-token')
     expect(g.seen.find((f) => f.t === 'auth')).toMatchObject({ tokenHash: sha256Base64url('good-token') })
   })
+  // Remote governance design §7.2: the Runtime classifies a controller by what its client said, so the Gateway passes it on.
+  it('the Gateway forwards the controller’s client with the token hash', async () => {
+    const g = await start()
+    const l = await g.connect()
+    await l.auth('good-token', { surface: 'cli', version: '1.5.0', agent: false })
+    const line = g.raw.join('').split('\n').find((x) => x.includes('"t":"auth"'))!
+    expect(JSON.parse(line)).toEqual({ t: 'auth', conn: expect.any(String), tokenHash: sha256Base64url('good-token'), client: { surface: 'cli', version: '1.5.0', agent: false } })
+    expect(line).not.toContain('good-token')
+  })
   it('closes a bad token with RUNTIME_AUTH_FAILED', async () => {
     const g = await start()
     const l = await g.connect()

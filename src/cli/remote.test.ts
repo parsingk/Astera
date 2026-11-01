@@ -44,8 +44,8 @@ function deps(answer: (cmd: string, args: Record<string, unknown>, o?: { request
   return { d, calls, targets, registryReads: () => registryReads }
 }
 
-const ask = (cmd: string, args: Record<string, unknown>, d: RemoteDeps, runtime = 'rt_a') =>
-  answerRemote({ cmd, args, runtime, request: 'req-1', profileDir: dir, mode: 'json', write: () => {}, version: '1.4.8', deps: d })
+const ask = (cmd: string, args: Record<string, unknown>, d: RemoteDeps, runtime = 'rt_a', agent = false) =>
+  answerRemote({ cmd, args, runtime, request: 'req-1', profileDir: dir, mode: 'json', write: () => {}, version: '1.4.8', agent, deps: d })
 
 describe('answerRemote (remote runtime design §2.8, X1-14)', () => {
   it('refuses a command with no remote form before it reads anything here', async () => {
@@ -126,6 +126,20 @@ describe('answerRemote (remote runtime design §2.8, X1-14)', () => {
     await ask('jobs-list', {}, { ...d, link: (t, o) => d.link(t, { onHello: (h) => o?.onHello?.({ ...h, asteraVersion: '1.5.1' }) }) })
     expect(notes).toBe(1)
   })
+  // Remote governance design §7.1: the Runtime reads a CLI as a person only when it says it is not in an agent session.
+  it('answerRemote sends agent true from inside a session and false from a person’s shell', async () => {
+    const clients: unknown[] = []
+    const d: RemoteDeps = {
+      registry: () => controllerRegistry(dir),
+      link: (_t, o) => (clients.push(o?.client), { hello: () => null, call: async () => ({ status: 200, body: [] }), subscribe: () => () => {}, close: () => {} })
+    }
+    await ask('jobs-list', {}, d, 'rt_a', true)
+    await ask('jobs-list', {}, d, 'rt_a', false)
+    expect(clients).toEqual([
+      { name: 'astera cli', version: '1.4.8', surface: 'cli', agent: true },
+      { name: 'astera cli', version: '1.4.8', surface: 'cli', agent: false }
+    ])
+  })
   it('an unknown Runtime is RUNTIME_NOT_FOUND', async () => {
     expect(await ask('jobs-list', {}, deps().d, 'nope')).toMatchObject({ error: { code: 'RUNTIME_NOT_FOUND' } })
   })
@@ -187,7 +201,7 @@ describe('answerRemote (remote runtime design §2.8, X1-14)', () => {
         : { status: 200, body: { events: [{ at: '2026-10-08T00:00:00.000Z', text: 'started' }], ending: { state: 'completed' } } }
     })
     const lines: string[] = []
-    const r = await answerRemote({ cmd: 'runs-follow', args: { id: 'run_1' }, runtime: 'rt_a', request: 'req-1', profileDir: dir, mode: 'json', write: (l) => lines.push(l), version: '1.4.8', deps: h.d })
+    const r = await answerRemote({ cmd: 'runs-follow', args: { id: 'run_1' }, runtime: 'rt_a', request: 'req-1', profileDir: dir, mode: 'json', write: (l) => lines.push(l), version: '1.4.8', agent: false, deps: h.d })
     expect(r).toMatchObject({ status: 200, body: { state: 'completed' } })
     expect(h.calls.every((c) => c.cmd === 'runs-follow' && c.o?.request === undefined)).toBe(true)
   })

@@ -23,6 +23,7 @@ const profile = (over: Partial<RuntimeProfile> = {}): RuntimeProfile => ({
 function deps(over: Partial<RuntimesDeps> = {}) {
   const seen: Array<{ host: string; port: number; pin: string }> = []
   const redeemed: Array<{ code: string; name: string }> = []
+  const clients: unknown[] = []
   const d: RuntimesDeps = {
     registry: () => controllerRegistry(dir),
     connect: async (o) => {
@@ -34,7 +35,8 @@ function deps(over: Partial<RuntimesDeps> = {}) {
           if (code !== 'GOODCODE01') throw new RemoteError('RUNTIME_AUTH_FAILED', 'that pairing code is not valid')
           return { clientId: 'cl_1', token: 'tok-secret-value' }
         },
-        auth: async (token) => {
+        auth: async (token, client) => {
+          clients.push(client)
           if (token !== 'tok-secret-value') throw new RemoteError('RUNTIME_AUTH_FAILED', 'unknown token')
           return { t: 'hello', runtimeId: 'rt_office', displayName: 'Office PC', asteraVersion: '1.4.8', hostProtocol: 4, gatewayProtocol: 1, bootId: 'b', platform: 'win32', pathStyle: 'windows', permission: 'full-control', capabilities: [] }
         },
@@ -49,7 +51,7 @@ function deps(over: Partial<RuntimesDeps> = {}) {
     version: '1.4.8',
     ...over
   }
-  return { d, seen, redeemed }
+  return { d, seen, redeemed, clients }
 }
 
 describe('resolveRuntime', () => {
@@ -74,6 +76,17 @@ describe('resolveRuntime', () => {
 })
 
 describe('astera runtimes (remote runtime design §4.4, §4.5)', () => {
+  // Remote governance design §7.1: the first sign-in says whether a person asked; left out, it says an agent did.
+  it('add signs in with the agent flag its caller gave, and as an agent when none was given', async () => {
+    const pair = formatPairing({ address: '10.0.0.2', port: 47831, code: 'GOODCODE01', fingerprint: FP })
+    const person = deps({ agent: false })
+    await runRuntimesCommand('runtimes-add', { pair }, person.d)
+    expect(person.clients).toEqual([{ name: 'astera cli', version: '1.4.8', surface: 'cli', agent: false }])
+    await fs.rm(dir, { recursive: true, force: true })
+    const unsaid = deps()
+    await runRuntimesCommand('runtimes-add', { pair }, unsaid.d)
+    expect(unsaid.clients).toEqual([{ name: 'astera cli', version: '1.4.8', surface: 'cli', agent: true }])
+  })
   it('add with a pairing string pins, redeems, reads the hello, and stores the profile and token; prints no token', async () => {
     const h = deps()
     const pair = formatPairing({ address: '10.0.0.2', port: 47831, code: 'GOODCODE01', fingerprint: FP })

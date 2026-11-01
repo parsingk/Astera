@@ -15,7 +15,7 @@ import { openRemoteLink, type RemoteLink, type RemoteTarget } from '../core/remo
 import { RemoteError } from '../core/remote/client'
 import { bodyCodeOf, codeForStatus, messageFrom, refusalDetailsOf, remoteCodeOf, type CliError } from '../core/orchestration/cliOutput'
 import { factsNoter, seenRecorder, type RuntimeRegistry } from '../core/runtimes/registry'
-import type { HelloFrame } from '../core/remote/frames'
+import type { ClientInfo, HelloFrame } from '../core/remote/frames'
 import { spelledCommand } from '../core/orchestration/cliUsage'
 import { DEFAULT_WAIT_TIMEOUT_MS } from '../core/orchestration/types'
 import { controllerRegistry, resolveRuntime } from './runtimes'
@@ -23,7 +23,8 @@ import { clientTimeoutMs, followRun, type HostAnswer, type OutputMode } from './
 
 export interface RemoteDeps {
   registry(): Promise<RuntimeRegistry>
-  link(t: RemoteTarget, o?: { onHello?(h: HelloFrame): void }): RemoteLink
+  /** `client` is what this CLI says about itself at sign-in; answerRemote always gives it. */
+  link(t: RemoteTarget, o?: { onHello?(h: HelloFrame): void; client?: ClientInfo }): RemoteLink
 }
 
 type Refused = { error: CliError }
@@ -64,6 +65,9 @@ export async function answerRemote(a: {
   mode: OutputMode
   write(text: string): void
   version: string
+  /** Whether this CLI runs inside an agent session (remote governance design §7.1): the Runtime reads it as a person
+   *  only when this is false. */
+  agent: boolean
   deps?: Partial<RemoteDeps>
 }): Promise<HostAnswer | Refused> {
   if (remoteTarget(a.cmd) === 'no')
@@ -97,10 +101,11 @@ export async function answerRemote(a: {
   const onHello = (h: HelloFrame): void => {
     noted = noted.then(() => note(h))
   }
+  const client: ClientInfo = { name: 'astera cli', version: a.version, surface: 'cli', agent: a.agent }
   const link = (
     a.deps?.link ??
-    ((t: RemoteTarget, o?: { onHello?(h: HelloFrame): void }) => openRemoteLink({ target: t, client: { name: 'astera cli', version: a.version, surface: 'cli' }, ...o }))
-  )(target, { onHello })
+    ((t: RemoteTarget, o?: { onHello?(h: HelloFrame): void; client?: ClientInfo }) => openRemoteLink({ ...o, target: t, client: o?.client ?? client }))
+  )(target, { onHello, client })
   try {
     if (a.cmd === 'runs-follow') {
       let lost: RemoteError | null = null

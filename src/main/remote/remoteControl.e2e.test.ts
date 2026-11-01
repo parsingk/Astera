@@ -108,7 +108,8 @@ const pair = async (pairingString: string, name?: string) =>
     connect: (o) => connectRuntime(o),
     hostname: () => 'laptop',
     now: () => NOW,
-    version: '9.9.9'
+    version: '9.9.9',
+    agent: false
   })
 
 

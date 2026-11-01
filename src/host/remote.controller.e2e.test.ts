@@ -110,7 +110,8 @@ const pair = async (pairingString: string, name?: string) =>
     connect: (o) => connectRuntime(o),
     hostname: () => 'laptop',
     now: () => NOW,
-    version: '9.9.9'
+    version: '9.9.9',
+    agent: false
   })
 
 /** `astera --runtime <key> <cmd>` on the laptop. */
@@ -124,9 +125,10 @@ const remote = (key: string, cmd: string, args: Record<string, unknown>, o: { re
     mode: 'json',
     write: () => {},
     version: '9.9.9',
+    agent: false,
     deps: {
       link: (t) => {
-        const l = o.link ? o.link(t) : openRemoteLink({ target: t, client: { surface: 'cli' } })
+        const l = o.link ? o.link(t) : openRemoteLink({ target: t, client: { surface: 'cli', version: '9.9.9', agent: false } })
         links.push(l)
         return l
       }
@@ -171,7 +173,7 @@ describe('Remote Runtime Phase 4 acceptance (design §6 Phase 4)', { timeout: 30
       link: (t) =>
         openRemoteLink({
           target: t,
-          client: { surface: 'cli' },
+          client: { surface: 'cli', version: '9.9.9', agent: false },
           // The first connection sends the call and closes at once, so its answer never comes back; the next one
           // waits until the Runtime has run it, as a reconnect after a real drop would.
           connect: async (o) => {
@@ -200,7 +202,7 @@ describe('Remote Runtime Phase 4 acceptance (design §6 Phase 4)', { timeout: 30
       link: (t) =>
         openRemoteLink({
           target: t,
-          client: { surface: 'cli' },
+          client: { surface: 'cli', version: '9.9.9', agent: false },
           // The first connection closes before the call is written: as after a Runtime restart, there is no receipt.
           connect: async (o) => {
             const l = await connectRuntime(o)
@@ -353,7 +355,7 @@ describe('a GitHub lifecycle Run on a Runtime (design §10 Remote)', { timeout: 
     // A link the device keeps open (answerRemote closes its own), then drops
     let held: RemoteLink | undefined
     const keep = (target: RemoteTarget): RemoteLink => {
-      held = openRemoteLink({ target, client: { surface: 'cli' } })
+      held = openRemoteLink({ target, client: { surface: 'cli', version: '9.9.9', agent: false } })
       const h = held
       return { hello: () => h.hello(), call: (c, a, opts) => h.call(c, a, opts), subscribe: (pty, hs) => h.subscribe(pty, hs), close: () => {} }
     }

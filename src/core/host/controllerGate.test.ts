@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { controllerRefusal, CONTROLLER_READ_COMMANDS, CONTROLLER_CONTROL_COMMANDS } from './controllerGate'
+import { controllerKind, controllerRefusal, CONTROLLER_READ_COMMANDS, CONTROLLER_CONTROL_COMMANDS, UNSAID_CLI_NOTE } from './controllerGate'
+import type { ControllerKind } from './orchProtocol'
+import type { ClientInfo } from '../remote/frames'
 
 const p = (permission: string) => ({ clientId: 'cli_ab12', name: 'laptop', permission }) as never
 
@@ -51,5 +53,25 @@ describe('controllerRefusal (remote runtime design §3.4)', () => {
   it('lets runs-wait and jobs-wait through as reads', () => {
     for (const cmd of ['runs-wait', 'jobs-wait'])
       expect(controllerRefusal(cmd, { clientId: 'c', name: 'n', permission: 'read-only' } as never), cmd).toBeNull()
+  })
+})
+
+// Remote governance design §7.2: who a controller is, from the client its sign-in carried. Unsaid reads as an agent
+// wherever it gates anything.
+describe('controllerKind', () => {
+  it('controllerKind reads desktop as a person, mcp as an agent, cli by its flag, and anything unsaid as unsaid', () => {
+    const table: Array<[ClientInfo | undefined, ControllerKind]> = [
+      [undefined, 'unsaid'],
+      [{}, 'unsaid'],
+      [{ surface: 'desktop', version: '1.5.0' }, 'person'],
+      [{ surface: 'mcp', agent: false }, 'agent'],
+      [{ surface: 'cli', agent: false }, 'person'],
+      [{ surface: 'cli', agent: true }, 'agent'],
+      [{ surface: 'cli', version: '1.4.8' }, 'unsaid']
+    ]
+    for (const [c, kind] of table) expect(controllerKind(c), JSON.stringify(c)).toBe(kind)
+  })
+  it('names the update in the note an unsaid CLI gets', () => {
+    expect(UNSAID_CLI_NOTE).toBe(' An Astera CLI older than this release cannot say whether it runs in an agent session; update Astera on that computer.')
   })
 })

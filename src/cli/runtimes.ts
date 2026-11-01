@@ -22,6 +22,9 @@ export interface RuntimesDeps {
   timeoutMs?: number
   /** Who asks: the app has no --replace to point at (final review M-4). */
   surface?: 'app' | 'cli'
+  /** Whether a person or an agent session asks (remote governance design §7.1), said at the first sign-in. Absent means
+   *  an agent. */
+  agent?: boolean
 }
 
 /** Second pass RR-5: a mistyped or firewalled address held a pairing for the OS's connect wait (two minutes on Linux), and
@@ -137,7 +140,7 @@ async function add(args: Record<string, unknown>, d: RuntimesDeps): Promise<Resu
   // --address wins over the hint the string carries (Tailscale names, NAT).
   if (typeof args.address === 'string' && args.address.trim() !== '') address = args.address.trim()
   const name = typeof args.name === 'string' && args.name !== '' ? args.name : d.hostname()
-  const client = { name: 'astera cli', version: d.version, surface: 'cli' as const }
+  const client = { name: 'astera cli', version: d.version, surface: 'cli' as const, agent: d.agent !== false }
 
   // The pin is checked on the TLS handshake, before any frame (§3.2): a different key never sees the code.
   let paired: { clientId: string; token: string }

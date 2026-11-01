@@ -207,7 +207,8 @@ export async function startGateway(o: {
       c.state = 'authing'
       c.announced = true
       awaitHost(c, 'authing')
-      return toHost({ t: 'auth', conn: c.id, tokenHash: sha256Base64url(f.token) })
+      // Who the controller says it is goes with the hash (remote governance design §7.2); the token itself never does.
+      return toHost({ t: 'auth', conn: c.id, tokenHash: sha256Base64url(f.token), client: f.client })
     }
     if (c.state === 'new' && f.t === 'redeem') {
       const from = c.sock.remoteAddress ?? '?'

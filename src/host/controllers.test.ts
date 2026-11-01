@@ -72,7 +72,7 @@ describe('ControllerRegistry (remote runtime design §3.3, §4.4, §4.5)', () =>
     const got = await r.redeem(r.createPairing({ permission: 'read-only', name: 'laptop' }).code, 'laptop')
     if (!got.ok) throw new Error('redeem')
     r.bind(1, 'c1', got.clientId)
-    expect(r.principalFor(1, 'c1')).toEqual({ clientId: got.clientId, name: 'laptop', permission: 'read-only' })
+    expect(r.principalFor(1, 'c1')).toEqual({ clientId: got.clientId, name: 'laptop', permission: 'read-only', kind: 'unsaid' })
     expect(r.principalFor(2, 'c1')).toBeNull()
   })
   it('revocation drops every binding at once, so a queued frame is admitted nowhere and its reply has nowhere to go', async () => {
@@ -95,6 +95,75 @@ describe('ControllerRegistry (remote runtime design §3.3, §4.4, §4.5)', () =>
     r.bind(3, 'c1', got.clientId)
     r.dropLink(3)
     expect(r.principalFor(3, 'c1')).toBeNull()
+  })
+})
+
+// Remote governance design §7.1, §7.2: who a controller is travels with the connection it signed in on, not with its
+// record, so one pairing used by the app and by an MCP server is a person on one connection and an agent on the other.
+describe('who each connection is (remote governance design §7.2)', () => {
+  const paired = async (r = createControllerRegistry()) => {
+    const got = await r.redeem(r.createPairing({ permission: 'full-control', name: 'laptop' }).code, 'laptop')
+    if (!got.ok) throw new Error('redeem')
+    return { r, ...got }
+  }
+  it('principalFor carries the kind, surface and version of the client its connection signed in with', async () => {
+    const { r, clientId } = await paired()
+    r.bind(1, 'c1', clientId, { name: 'astera cli', surface: 'cli', version: '1.5.0', agent: false })
+    r.bind(1, 'c2', clientId)
+    expect(r.principalFor(1, 'c1')).toEqual({ clientId, name: 'laptop', permission: 'full-control', kind: 'person', surface: 'cli', clientVersion: '1.5.0' })
+    expect(r.principalFor(1, 'c2')).toEqual({ clientId, name: 'laptop', permission: 'full-control', kind: 'unsaid' })
+  })
+  it('two connections of one client keep their own kinds', async () => {
+    const { r, clientId } = await paired()
+    r.bind(1, 'app', clientId, { surface: 'desktop', version: '1.5.0' })
+    r.bind(1, 'mcp', clientId, { surface: 'mcp', version: '1.5.0' })
+    expect(r.principalFor(1, 'app')).toMatchObject({ kind: 'person', surface: 'desktop' })
+    expect(r.principalFor(1, 'mcp')).toMatchObject({ kind: 'agent', surface: 'mcp' })
+  })
+  it('authenticate keeps the client’s surface and version on the record, and list() shows them', async () => {
+    const { r, token } = await paired()
+    expect(r.authenticate(sha256Base64url(token), { surface: 'cli', version: '1.5.0', agent: true })).toMatchObject({ surface: 'cli', clientVersion: '1.5.0' })
+    expect(r.list()[0]).toMatchObject({ surface: 'cli', clientVersion: '1.5.0' })
+    expect(r.list()[0]).not.toHaveProperty('agent')
+  })
+  it('a changed version is saved inside the minute', async () => {
+    const c = clock()
+    let saved: ControllerRecord[] = []
+    const r = createControllerRegistry({ now: c.now, records: { load: async () => [], save: async (x) => void (saved = x) } })
+    const { token } = await paired(r)
+    const hash = sha256Base64url(token)
+    r.authenticate(hash, { surface: 'cli', version: '1.5.0' })
+    await new Promise((x) => setTimeout(x, 10))
+    expect(saved[0]).toMatchObject({ clientVersion: '1.5.0' })
+    c.advance(5_000)
+    r.authenticate(hash, { surface: 'cli', version: '1.5.1' })
+    await new Promise((x) => setTimeout(x, 10))
+    expect(saved[0]).toMatchObject({ surface: 'cli', clientVersion: '1.5.1' })
+    c.advance(5_000)
+    r.authenticate(hash, { surface: 'desktop', version: '1.5.1' })
+    await new Promise((x) => setTimeout(x, 10))
+    expect(saved[0]).toMatchObject({ surface: 'desktop', clientVersion: '1.5.1' })
+    // Nothing changed and inside the minute: no save, the record keeps its last sign-in time.
+    const before = saved
+    c.advance(5_000)
+    r.authenticate(hash, { surface: 'desktop', version: '1.5.1' })
+    await new Promise((x) => setTimeout(x, 10))
+    expect(saved).toBe(before)
+  })
+  it('revoke, stillBound and boundCount still work with the new bindings', async () => {
+    const { r, clientId } = await paired()
+    r.bind(1, 'c1', clientId, { surface: 'desktop' })
+    r.bind(1, 'c2', clientId, { surface: 'mcp' })
+    r.bind(2, 'c3', clientId)
+    expect(r.boundCount(1, clientId)).toBe(2)
+    expect(r.stillBound(1, 'c1', clientId)).toBe(true)
+    expect(r.stillBound(1, 'c1', 'cli_other')).toBe(false)
+    r.unbind(1, 'c2')
+    expect(r.boundCount(1, clientId)).toBe(1)
+    expect(await r.revoke(clientId)).toEqual({ revoked: true, conns: [{ linkGen: 1, conn: 'c1' }, { linkGen: 2, conn: 'c3' }] })
+    expect(r.stillBound(1, 'c1', clientId)).toBe(false)
+    expect(r.boundCount(1, clientId)).toBe(0)
+    expect(r.principalFor(2, 'c3')).toBeNull()
   })
 })
 

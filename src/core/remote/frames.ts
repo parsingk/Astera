@@ -12,6 +12,9 @@ export interface ClientInfo {
   name?: string
   version?: string
   surface?: Surface
+  /** Whether the controller runs inside an agent session (remote governance design §7.1). Absent means it did not say,
+   *  which the Runtime reads as an agent (core/host/controllerGate.ts `controllerKind`). */
+  agent?: boolean
 }
 
 /** Controller to Gateway. */
@@ -82,7 +85,8 @@ export type ServerFrame =
 export type GatewayLinkFrame =
   | { t: 'gateway-ready'; port: number; address: string; fingerprint: string }
   | { t: 'gateway-failed'; code: string; message: string }
-  | { t: 'auth'; conn: string; tokenHash: string }
+  /** `client` is what the controller's own auth frame said (remote governance design §7.2), checked again here. */
+  | { t: 'auth'; conn: string; tokenHash: string; client?: ClientInfo }
   | { t: 'redeem'; conn: string; code: string; name: string }
   | { t: 'call'; conn: string; id: string; cmd: string; args: Record<string, unknown>; request?: string; retry?: true }
   | { t: 'conn-closed'; conn: string }
@@ -122,6 +126,10 @@ const client = (v: unknown): ClientInfo | null => {
   if (v.surface !== undefined) {
     if (v.surface !== 'desktop' && v.surface !== 'cli' && v.surface !== 'mcp') return null
     out.surface = v.surface
+  }
+  if (v.agent !== undefined) {
+    if (typeof v.agent !== 'boolean') return null
+    out.agent = v.agent
   }
   return out
 }
@@ -294,9 +302,11 @@ export function parseLinkFrame(v: unknown, from: 'gateway' | 'host'): GatewayLin
       case 'gateway-failed':
         if (!str(v.code, 64) || !str(v.message, 1024)) return fail('bad gateway-failed')
         return { t: 'gateway-failed', code: v.code, message: v.message }
-      case 'auth':
-        if (!conn || !str(v.tokenHash, 128)) return fail('bad auth')
-        return { t: 'auth', conn, tokenHash: v.tokenHash }
+      case 'auth': {
+        const c = client(v.client)
+        if (!conn || !str(v.tokenHash, 128) || !c) return fail('bad auth')
+        return { t: 'auth', conn, tokenHash: v.tokenHash, ...(v.client !== undefined ? { client: c } : {}) }
+      }
       case 'redeem':
         if (!conn || !str(v.code, 64) || !str(v.name, 128)) return fail('bad redeem')
         return { t: 'redeem', conn, code: v.code, name: v.name }
