@@ -1854,6 +1854,7 @@ export function createHostOrch(a: {
             cmd === 'clients-list' ||
             cmd === 'clients-revoke' ||
             cmd === 'control-plane-report' ||
+            cmd === 'caller-sandboxed' ||
             WORKTREE_CALLS.has(cmd)) &&
           request !== undefined
         )
@@ -1919,6 +1920,14 @@ export function createHostOrch(a: {
             return { status: 403, body: { error: "control-plane-report is for this machine's app and CLI, and for a person on a paired computer" } }
           if (!a.controlPlaneReport) return { status: 501, body: { error: 'this Host does not answer control-plane-report' } }
           return { status: 200, body: await a.controlPlaneReport() }
+        }
+        // **Whether the calling session runs in its CLI's sandbox** (remote governance design §7.4): this machine's CLI and
+        // stdio MCP server ask it before they send a change to a paired Runtime, which a sandboxed session may only read.
+        // The session is the one the call's token or `session` names, as for every CLI call. Only the CLI role: an MCP
+        // connection has no session, and a controller's question would be about nobody here. Above the receipt line: a read.
+        if (cmd === 'caller-sandboxed') {
+          if (from?.role !== 'cli') return { status: 403, body: { error: "caller-sandboxed is for this machine's CLI" } }
+          return { status: 200, body: { sandboxed: await sandboxedCaller({ sessionSandboxed: a.sessionSandboxed }, { sessionId }) } }
         }
         // **Answered here, beside the two above, and for the same reason (Host S3, §3.1).** None of
         // the four `worktree-*` names goes through `handleCommand` — the app is their only caller

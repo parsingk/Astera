@@ -176,7 +176,8 @@ regenerates one, and two that list the Runtimes this machine is paired with. Wha
 Runtime instead of this machine ([remote-runtime.md](remote-runtime.md)). Such a call passes this machine's MCP
 access first, then the list of what a Runtime offers (a tool without a remote form answers
 `RUNTIME_CAPABILITY_MISSING`), then the Runtime's own pairing of this machine. For a remote call, an MCP access
-value Astera does not recognize counts as off. Leave `runtimeId` out for this machine.
+value Astera does not recognize counts as off. From inside a sandboxed session, a tool that changes work on the
+Runtime is refused with `PERMISSION_DENIED` before anything is sent; reads go. Leave `runtimeId` out for this machine.
 
 | Tool | What it does |
 | --- | --- |

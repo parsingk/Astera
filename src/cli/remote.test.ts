@@ -140,6 +140,34 @@ describe('answerRemote (remote runtime design §2.8, X1-14)', () => {
       { name: 'astera cli', version: '1.4.8', surface: 'cli', agent: false }
     ])
   })
+  // Remote governance design §7.4: a sandboxed session only reads a Runtime.
+  it("a sandboxed session's jobs create to a Runtime is refused before any link opens", async () => {
+    const h = deps()
+    let linked = 0
+    const d: RemoteDeps = { ...h.d, link: (t, o) => (linked++, h.d.link(t, o)), callerSandboxed: async () => true }
+    const r = await ask('jobs-create', { objective: 'o', cwd: '/srv/repo' }, d, 'rt_a', true)
+    expect(r).toEqual({
+      error: {
+        code: 'PERMISSION_DENIED',
+        message: 'a sandboxed session can only read another computer: jobs create changes work there, so it was not sent'
+      }
+    })
+    expect(linked).toBe(0)
+    expect(h.calls).toEqual([])
+  })
+  it('its jobs list is sent', async () => {
+    const h = deps()
+    let asked = 0
+    await ask('jobs-list', {}, { ...h.d, callerSandboxed: async () => (asked++, true) }, 'rt_a', true)
+    expect(h.calls.map((c) => c.cmd)).toEqual(['jobs-list'])
+    // A read does not ask at all: nothing it could answer would refuse it.
+    expect(asked).toBe(0)
+  })
+  it('with no callerSandboxed dep, nothing is asked', async () => {
+    const h = deps(() => ({ status: 200, body: { id: 'job_1' } }))
+    expect(await ask('jobs-create', { objective: 'o', cwd: '/srv/repo' }, h.d, 'rt_a', true)).toEqual({ status: 200, body: { id: 'job_1' } })
+    expect(h.calls.map((c) => c.cmd)).toEqual(['jobs-create'])
+  })
   it('an unknown Runtime is RUNTIME_NOT_FOUND', async () => {
     expect(await ask('jobs-list', {}, deps().d, 'nope')).toMatchObject({ error: { code: 'RUNTIME_NOT_FOUND' } })
   })

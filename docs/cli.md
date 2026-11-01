@@ -933,7 +933,8 @@ take one, as any flag a command does not take is.
 **The global `--runtime <id|name>` goes before the command too**, as in `astera --runtime office jobs list`,
 and sends the command to a paired Runtime instead of this machine's Host ([remote-runtime.md](remote-runtime.md)).
 Only the commands a Runtime offers take it; any other refuses with `RUNTIME_CAPABILITY_MISSING` before it
-reads anything on this machine. After the command, `--runtime` is refused with 2.
+reads anything on this machine. After the command, `--runtime` is refused with 2. From inside a sandboxed
+session, a command that changes work on the Runtime is refused with 5 before anything is sent; reads go.
 
 **`projects find --path <path>` names the project a folder belongs to**: the registered project whose
 folder is that path or holds it. When registered projects nest, as a package registered inside a

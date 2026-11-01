@@ -32,6 +32,7 @@ import { runRuntimeGateway } from './runtime/gateway'
 import { runRuntimeCommand, type RuntimeCommandDeps } from './runtime/commands'
 import { controllerRegistry, runRuntimesCommand } from './runtimes'
 import { answerRemote, trailingRuntimeError } from './remote'
+import { askCallerSandboxed } from './callerSandboxed'
 import { clientTimeoutMs, followRun, type HostAnswer } from './follow'
 export { clientTimeoutMs, followRun, type FollowEnd, type HostAnswer } from './follow'
 import { remoteTarget } from '../core/remote/targets'
@@ -1489,7 +1490,8 @@ export async function main(): Promise<void> {
   // is exactly that — so the assignment must not be something a later edit can move past them.
   // Defining `reply` *from* `answer` is what makes that impossible rather than merely unlikely.
   answer = await (async (): Promise<HostAnswer> => {
-    // A paired Runtime instead of this machine's Host (cli/remote.ts): no local connection, no file fallback.
+    // A paired Runtime instead of this machine's Host (cli/remote.ts): no file fallback, and this machine's Host is asked
+    // only whether a session's change may go (remote governance design §7.4).
     if (parsed.runtime !== undefined) {
       verbose.say(`sending ${spelledCommand(parsed.cmd)} to the paired Runtime ${parsed.runtime}`)
       const remote = await answerRemote({
@@ -1501,7 +1503,8 @@ export async function main(): Promise<void> {
         mode,
         write: out,
         version: CLI_VERSION,
-        agent: inAgentSession
+        agent: inAgentSession,
+        deps: { callerSandboxed: () => askCallerSandboxed({ env: process.env, platform: process.platform, home: homedir(), version: CLI_VERSION }) }
       })
       if ('error' in remote) fail(remote.error)
       return remote

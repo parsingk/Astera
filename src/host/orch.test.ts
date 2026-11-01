@@ -1310,6 +1310,37 @@ describe('control-plane-report', () => {
   })
 })
 
+// A sandboxed session only reads a Runtime (remote governance design §7.4): its CLI and MCP server ask this Host whether
+// the session they run in is sandboxed before they send a change to a paired Runtime.
+describe('caller-sandboxed', () => {
+  const cli = { role: 'cli' as const, toOthers: () => {} }
+  const ask = (orch: ReturnType<typeof orchOver>, from: OrchCaller, sessionId = '') => orch.call({ cmd: 'caller-sandboxed', args: {}, sessionId, from })
+
+  it('caller-sandboxed answers true for a session the Host holds as sandboxed, false for another, false with no session', async () => {
+    const orch = orchOver({ sessionSandboxed: (id) => id === 'ses_box' })
+    expect(await ask(orch, cli, 'ses_box')).toEqual({ status: 200, body: { sandboxed: true } })
+    expect(await ask(orch, cli, 'ses_open')).toEqual({ status: 200, body: { sandboxed: false } })
+    expect(await ask(orch, cli)).toEqual({ status: 200, body: { sandboxed: false } })
+  })
+
+  it('MCP and a controller are refused it', async () => {
+    const orch = orchOver({ sessionSandboxed: () => true })
+    await fs.writeFile(path.join(dir, 'app-settings.json'), JSON.stringify({ mcpAccess: 'control' }))
+    expect((await ask(orch, { role: 'mcp', toOthers: () => {} }, 'ses_box')).status).toBe(403)
+    const controller: OrchCaller = { role: 'controller', principal: { clientId: 'cli_x', name: 'laptop', permission: 'full-control' }, toOthers: () => {} }
+    expect((await ask(orch, controller)).status).toBe(403)
+    expect((await ask(orch, { role: 'app', toOthers: () => {} })).status).toBe(403)
+  })
+
+  it('a request id on it is refused 400', async () => {
+    const orch = orchOver({ sessionSandboxed: () => true })
+    expect(await orch.call({ cmd: 'caller-sandboxed', args: {}, sessionId: 'ses_box', from: cli, request: 'r-1' })).toEqual({
+      status: 400,
+      body: { error: 'caller-sandboxed does not take a request id' }
+    })
+  })
+})
+
 // Observe mode's records (design §8, §12): routed like the policies, below every gate, and no gate lists them. An agent's
 // shell is told so even for these reads, and the audit commands refuse it.
 describe('audit', () => {

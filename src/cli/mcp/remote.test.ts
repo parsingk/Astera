@@ -131,6 +131,15 @@ describe('MCP tools with runtimeId (remote runtime design §2.8, X1-07)', () => 
     expect(textOf(r)).toMatch(/RUNTIME_CAPABILITY_MISSING/)
   })
 
+  // Remote governance design §7.4: the HTTP entrance has no session to ask about, so it reaches no Runtime at all, and
+  // the case above is what it serves.
+  it('the HTTP entrance reaches no Runtime at all', async () => {
+    const source = await fs.readFile(path.join(__dirname, 'http.ts'), 'utf8')
+    const made = source.match(/createMcpServer\(\{[^}]*\}\)/g) ?? []
+    expect(made).toHaveLength(1)
+    expect(made[0]).not.toMatch(/runtimes/)
+  })
+
   it('list_runtimes lists the paired Runtimes without tokens; get_runtime finds one by name, or says NOT_FOUND', async () => {
     const client = await connected(recording().link, runtimes(recording().link))
     const listed = await client.callTool({ name: 'list_runtimes', arguments: {} })
@@ -190,6 +199,32 @@ describe('openMcpRuntimes', () => {
     await r.linkFor('rt_a')
     expect(opened.map((t) => t.token)).toEqual(['tok-a', 'tok-b'])
     expect(opened[1].fingerprint).toBe('G'.repeat(43))
+  })
+
+  // Remote governance design §7.4: a sandboxed session only reads a Runtime, whatever this machine's MCP access says.
+  it("a sandboxed session's MCP server refuses create_job with runtimeId and still lists jobs there", async () => {
+    await write({ mcpAccess: 'control' })
+    const seen: string[] = []
+    const r = openMcpRuntimes({
+      profileDir: dir,
+      version: '1.4.8',
+      client: () => undefined,
+      sandboxed: async () => true,
+      open: () => ({ hello: () => null, call: async (cmd) => (seen.push(cmd), { status: 200, body: [] }), subscribe: () => () => {}, close: () => {} })
+    })
+    expect(await r.refusal('jobs-create')).toBe('a sandboxed session can only read another computer: jobs create changes work there, so it was not sent')
+    const client = await connected(recording().link, r)
+    const refused = await client.callTool({ name: 'create_job', arguments: { runtimeId: 'rt_a', projectId: 'p1', objective: 'o', coordinatorAccountId: 'acc_1' } })
+    expect(refused.isError).toBe(true)
+    expect(textOf(refused)).toMatch(/PERMISSION_DENIED/)
+    expect(textOf(refused)).toContain('a sandboxed session can only read another computer')
+    expect(seen).toEqual([])
+    const listed = await client.callTool({ name: 'list_jobs', arguments: { runtimeId: 'rt_a' } })
+    expect(listed.isError).not.toBe(true)
+    expect(seen).toEqual(['jobs-list'])
+    // One that is not sandboxed is not refused by it
+    const open = openMcpRuntimes({ profileDir: dir, version: '1.4.8', client: () => undefined, sandboxed: async () => false, open: () => fakeLink() })
+    expect(await open.refusal('jobs-create')).toBeNull()
   })
 
   // Remote governance design §4.4, §9.1: what the MCP server reaches is reached, and the stale-runtime finding reads it.

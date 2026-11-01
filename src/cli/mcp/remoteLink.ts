@@ -9,6 +9,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { RemoteError } from '../../core/remote/client'
 import { openRemoteLink, type RemoteLink, type RemoteTarget } from '../../core/remote/link'
 import { remoteMutation } from '../../core/remote/targets'
+import { sandboxedRemoteRefusal } from '../callerSandboxed'
 import { remoteCodeOf } from '../../core/orchestration/cliOutput'
 import { mcpRefusal } from '../../core/host/mcpGate'
 import { mcpAccessForRemote } from '../../core/settings/mcpAccess'
@@ -51,6 +52,9 @@ export function openMcpRuntimes(a: {
   profileDir: string
   version: string
   client(): McpClient | undefined
+  /** Whether the session this server runs in is sandboxed (remote governance design §7.4, cli/callerSandboxed.ts), asked
+   *  only for a change. Absent, nothing is asked. */
+  sandboxed?: () => Promise<boolean>
   /** Test seam: the controller link for a target. */
   open?(t: RemoteTarget, o?: { onHello?(h: HelloFrame): void }): RemoteLink
 }): McpRuntimes {
@@ -71,6 +75,8 @@ export function openMcpRuntimes(a: {
   return {
     list: async () => (await reg()).list(),
     refusal: async (cmd, args) => {
+      // §7.4: a sandboxed session only reads a Runtime, whatever this machine's MCP access allows.
+      if (remoteMutation(cmd) && (await a.sandboxed?.()) === true) return sandboxedRemoteRefusal(cmd)
       let o: Record<string, unknown> | null
       try {
         o = await readAppSettingsObject(settingsFile)
