@@ -183,11 +183,59 @@ describe('the Runtime detail (remote governance design §10.1)', () => {
       'settings.remote.detail.extensions'
     )
     expect(unread).toContain('settings.remote.detail.extensionsUnread')
-    expect(unread).not.toContain('SKILL-A')
+    // Ruling R17-1: the local rows stay, to tick, with nothing judged and the other side not read
+    expect(unread).toContain('SKILL-A')
+    expect(unread.match(/type="checkbox"/g)).toHaveLength(1)
+    expect(unread).toContain('settings.remote.detail.thereNotRead')
+    expect(unread).not.toContain('settings.remote.detail.state.')
+    expect(unread.indexOf('settings.remote.detail.extensionsUnread')).toBeLessThan(unread.indexOf('<table'))
+    // Each kind starts with a heading over the columns
+    expect(html).toContain('<th colSpan="5" scope="colgroup">settings.extensions.kind.mcp</th>')
     // Ruling R16-1: this computer's extensions could not be read; the line stands in for the rows, the rest still shows
     const local = render(detail({ localError: true, comparison: [] }))
     expect(part(local, 'settings.remote.detail.extensions')).toContain('settings.remote.detail.localError')
     expect(local).toContain('settings.remote.detail.valuesStay')
+  })
+
+  // Ruling R17-1: §6.1 and §10.1 make this detail the place to set the expected list, from this computer's set, so it
+  // is there before the first readable report and for a Runtime too old to report
+  it('the extensions part lists the entries here to tick before any report, for an older Runtime too', () => {
+    const local = [row('mcp-a', 'mcp', true, null, true, false), row('skill-d', 'skill', false, null, true, false)]
+    for (const d of [
+      detail({ snapshot: null, comparison: local }),
+      detail({ snapshot: null, comparison: local, refusal: { code: 'RUNTIME_CAPABILITY_MISSING', message: 'update Astera there' } })
+    ]) {
+      const html = part(render(d), 'settings.remote.detail.extensions')
+      expect(html.match(/type="checkbox"/g)).toHaveLength(2)
+      expect(html.match(/type="checkbox"[^>]*checked=""/g)).toHaveLength(1)
+      expect(html.match(/settings\.remote\.detail\.thereNotRead/g)).toHaveLength(2)
+      expect(html).not.toContain('settings.remote.detail.state.')
+      // No report to judge against: no advice to install there
+      expect(html).not.toContain('settings.remote.detail.installThere')
+      expect(html.indexOf('settings.remote.detail.notReadYet')).toBeLessThan(html.indexOf('<table'))
+    }
+    // Nothing here and nothing there: a short line, not an empty part
+    expect(part(render(detail({ comparison: [] })), 'settings.remote.detail.extensions')).toContain('settings.remote.detail.noExtensions')
+    expect(part(render(detail({ snapshot: null, comparison: [] })), 'settings.remote.detail.extensions')).toContain('settings.remote.detail.noExtensions')
+    // A failure says why instead
+    expect(part(render(detail({ localError: true, comparison: [] })), 'settings.remote.detail.extensions')).not.toContain('settings.remote.detail.noExtensions')
+  })
+
+  // Ruling R17-1: a link that failed for a reason the person can act on says it in plain words, whether this read asked
+  // (answering false) or a refusal remembered a moment ago answered (answering null); a changed identity is not "does not answer"
+  it('names a refused pairing, a changed identity and a version mismatch in plain words on both paths', () => {
+    const cases: Array<[string, string]> = [
+      ['RUNTIME_AUTH_FAILED', 'settings.remote.link.authFailed'],
+      ['RUNTIME_IDENTITY_CHANGED', 'settings.remote.link.identityChanged'],
+      ['RUNTIME_PROTOCOL_MISMATCH', 'settings.remote.link.protocolMismatch']
+    ]
+    for (const [code, key] of cases)
+      for (const answering of [false, null]) {
+        const html = render(detail({ answering, refusal: { code, message: 'm' } }))
+        expect(part(html, 'settings.remote.detail.health'), `${code} ${answering}`).toContain(key)
+        expect(html, `${code} ${answering}`).not.toContain('settings.remote.paired.offline')
+        expect(html, `${code} ${answering}`).not.toContain(words('settings.remote.failed', { code, message: 'm' }))
+      }
   })
 
   it('the credentials part shows names and hidden flags under the line that values stay on that computer', () => {

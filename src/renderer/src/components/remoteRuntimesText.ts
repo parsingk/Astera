@@ -17,10 +17,23 @@ export function thisMachineLine(s: ThisMachine, t: T): string {
   return tt('settings.remote.thisMachine.on', { listen: g.listen ?? '?', port: g.port ?? '?', state: g.state })
 }
 
-/** What a ping found: who answered, or the code it failed with. */
+/** Link failures the person can act on, each with its own sentence (ruling R17-1): the other side answered, so none of
+ *  them is "does not answer". */
+const LINK_KEYS: Record<string, string> = {
+  RUNTIME_AUTH_FAILED: 'settings.remote.link.authFailed',
+  RUNTIME_IDENTITY_CHANGED: 'settings.remote.link.identityChanged',
+  RUNTIME_PROTOCOL_MISMATCH: 'settings.remote.link.protocolMismatch'
+}
+
+/** A link failure's sentence, or null for a code that is not one of them. */
+export function linkLine(code: string, t: T): string | null {
+  return Object.hasOwn(LINK_KEYS, code) ? (t as (k: string) => string)(LINK_KEYS[code]) : null
+}
+
+/** What a ping found: who answered, a link failure in plain words, or the code it failed with. */
 export function pingLine(p: Ping, t: T): string {
   const tt = t as (k: string, p?: Record<string, string | number>) => string
-  if (!p.ok) return tt('settings.remote.paired.offline', { code: p.code })
+  if (!p.ok) return linkLine(p.code, t) ?? tt('settings.remote.paired.offline', { code: p.code })
   return tt('settings.remote.paired.online', { version: p.hello?.asteraVersion ?? '?', platform: p.hello?.platform ?? '?' })
 }
 
@@ -145,16 +158,24 @@ const NO_ANSWER = new Set(['RUNTIME_OFFLINE', 'RUNTIME_OUTCOME_UNKNOWN', 'REMOTE
 const CANNOT_REPORT = 'RUNTIME_CAPABILITY_MISSING'
 type ReadState = Pick<RuntimeDetail, 'answering' | 'refusal' | 'snapshot'>
 
+/** The link failed for a reason with its own sentence (ruling R17-1), on either path: a read that asked, or a refusal
+ *  remembered a moment ago. */
+const linkFailed = (d: ReadState): boolean => d.refusal !== undefined && d.answering !== true && Object.hasOwn(LINK_KEYS, d.refusal.code)
+
 /** Whether the detail's refusal says the Runtime does not answer. A read that asked says so in `answering`; one answered
  *  from the refusal remembered a moment ago did not ask (`answering` null), so its code says it (ruling R16-1). */
 const notAnswering = (d: ReadState): boolean =>
-  d.refusal !== undefined && d.refusal.code !== CANNOT_REPORT && (d.answering === false || (d.answering === null && NO_ANSWER.has(d.refusal.code)))
+  d.refusal !== undefined &&
+  d.refusal.code !== CANNOT_REPORT &&
+  !linkFailed(d) &&
+  (d.answering === false || (d.answering === null && NO_ANSWER.has(d.refusal.code)))
 
-/** The detail's health line about now (§10.1): it answers, the existing "does not answer" line with the code, or nothing
- *  when this read did not ask and nothing says it failed (the kept report was recent). */
+/** The detail's health line about now (§10.1): it answers, a link failure in plain words, the existing "does not answer"
+ *  line with the code, or nothing when this read did not ask and nothing says it failed (the kept report was recent). */
 export function answerLine(d: ReadState, t: T): string | null {
   const tt = t as (k: string, p?: Record<string, string | number>) => string
   if (d.answering === true) return tt('settings.remote.detail.answers')
+  if (linkFailed(d)) return linkLine(d.refusal?.code ?? '', t)
   return notAnswering(d) ? tt('settings.remote.paired.offline', { code: d.refusal?.code ?? '' }) : null
 }
 
@@ -163,7 +184,7 @@ export function answerLine(d: ReadState, t: T): string | null {
 export function freshnessLines(d: ReadState, t: T): string[] {
   const tt = t as (k: string, p?: Record<string, string | number>) => string
   const why =
-    d.refusal === undefined || notAnswering(d)
+    d.refusal === undefined || notAnswering(d) || linkFailed(d)
       ? []
       : d.refusal.code === CANNOT_REPORT
         ? [tt('settings.remote.detail.unsupported')]

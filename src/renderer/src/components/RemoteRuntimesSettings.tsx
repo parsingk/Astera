@@ -111,39 +111,55 @@ export function RemoteRuntimesSettings({
       if (n === detailRead.current) setReading(false)
     }
   }
-  const openDetail = (id: string): void => {
+  /** The open detail's Runtime as of now, for an answer that comes back after the person closed it or opened another. */
+  const openNow = useRef<string | null>(null)
+  const setOpen = (id: string | null): void => {
+    openNow.current = id
     setOpenId(id)
+  }
+  const openDetail = (id: string): void => {
+    setOpen(id)
     setDetail(null)
     void readDetail(id)
   }
   const toggleDetail = (id: string): void => {
     if (openId !== id) return openDetail(id)
     detailRead.current++
-    setOpenId(null)
+    setOpen(null)
     setDetail(null)
     setReading(false)
   }
-  /** Marks one of this computer's extensions expected there or not (§6.1), then reads the detail again without asking the
-   *  Runtime: the kept report compared with the list as it is now. */
+  /** An edit of the expected list on its way: the checkboxes wait for it, so two edits never cross. */
+  const [expecting, setExpecting] = useState(false)
+  /** Marks one of this computer's extensions expected there or not (§6.1), then reads the detail again for this
+   *  computer's list as it is now. A recent kept report answers that read; one older than five minutes is read anew from
+   *  the Runtime, as opening the detail would. Nothing is read for a detail closed or changed meanwhile. */
   const setExpected = async (id: string, on: boolean): Promise<void> => {
-    if (openId === null) return
-    const runtimeId = openId
-    const r = await window.api.remote
-      .expect(runtimeId, on ? [id] : [], on ? [] : [id])
-      .catch((e: unknown) => ({ ok: false as const, code: 'FAILED', message: e instanceof Error ? e.message : String(e) }))
-    if (!r.ok) toast.error(expectFailureLine(r, t as never))
-    await readDetail(runtimeId)
+    const runtimeId = openNow.current
+    if (runtimeId === null || expecting) return
+    setExpecting(true)
+    try {
+      const r = await window.api.remote
+        .expect(runtimeId, on ? [id] : [], on ? [] : [id])
+        .catch((e: unknown) => ({ ok: false as const, code: 'FAILED', message: e instanceof Error ? e.message : String(e) }))
+      if (!r.ok) toast.error(expectFailureLine(r, t as never))
+      if (openNow.current === runtimeId) await readDetail(runtimeId)
+    } finally {
+      setExpecting(false)
+    }
   }
   // A finding's button opens its Runtime's detail once the list has it, once per opening, as Agent profiles scrolls to
-  // its profile once
+  // its profile once; keyboard focus goes to that row's Details button, so the person starts where the screen moved
   const focusedFor = useRef<string | null>(null)
   const rows = useRef(new Map<string, HTMLDivElement>())
+  const detailButtons = useRef(new Map<string, HTMLButtonElement>())
   useEffect(() => {
     if (focusRuntimeId === undefined || focusedFor.current === focusRuntimeId || paired === null) return
     if (!paired.some((r) => r.runtimeId === focusRuntimeId)) return
     focusedFor.current = focusRuntimeId
     openDetail(focusRuntimeId)
     rows.current.get(focusRuntimeId)?.scrollIntoView({ block: 'start' })
+    detailButtons.current.get(focusRuntimeId)?.focus()
   }, [focusRuntimeId, paired])
 
   // A pairing string's clock, and every few seconds the Host's word on its code (used, dropped by a stop from the CLI,
@@ -416,7 +432,15 @@ export function RemoteRuntimesSettings({
                 )}
               </span>
               <span>
-                <button className="settings-gen-refresh" aria-expanded={openId === r.runtimeId} onClick={() => toggleDetail(r.runtimeId)}>
+                <button
+                  className="settings-gen-refresh"
+                  aria-expanded={openId === r.runtimeId}
+                  ref={(el) => {
+                    if (el) detailButtons.current.set(r.runtimeId, el)
+                    else detailButtons.current.delete(r.runtimeId)
+                  }}
+                  onClick={() => toggleDetail(r.runtimeId)}
+                >
                   {t('settings.remote.detail.open')}
                 </button>{' '}
                 <button className="settings-gen-refresh" onClick={() => void ping(r.runtimeId)}>
@@ -429,11 +453,13 @@ export function RemoteRuntimesSettings({
             </div>
             {openId === r.runtimeId &&
               (detail === null ? (
-                <p className="settings-hint">…</p>
+                <p className="settings-hint" role="status">
+                  {t('settings.remote.detail.loading')}
+                </p>
               ) : 'code' in detail ? (
                 <p className="settings-hint is-warning">{failureLine({ ok: false, ...detail }, t as never)}</p>
               ) : (
-                <RuntimeDetailView detail={detail} busy={reading} onRefresh={() => void readDetail(r.runtimeId, true)} onExpect={(id, on) => void setExpected(id, on)} now={now} />
+                <RuntimeDetailView detail={detail} busy={reading || expecting} onRefresh={() => void readDetail(r.runtimeId, true)} onExpect={(id, on) => void setExpected(id, on)} now={now} />
               ))}
           </Fragment>
         ))}
@@ -504,7 +530,10 @@ export function RuntimeDetailView(p: { detail: RuntimeDetail; busy: boolean; onR
   const enforceWord = (code: string | null): string =>
     code === null ? t('settings.remote.detail.enforceReady') : t('settings.remote.detail.enforceBlocked', { code })
   const onOff = (e: { enabled: boolean } | null): string => (e === null ? '' : t(e.enabled ? 'settings.remote.detail.entryOn' : 'settings.remote.detail.entryOff'))
-  const fixThere = d.comparison.some((c) => c.state !== null && c.state !== 'same')
+  /** Whether the Runtime's side of the table is known: a report whose extensions it could read (ruling R9-3). */
+  const thereRead = r !== null && r.extensions !== null
+  // Advice needs a report to judge against; a state is judged only with one (compareExtensions)
+  const fixThere = thereRead && d.comparison.some((c) => c.state !== null && c.state !== 'same')
 
   return (
     <div className="settings-stack">
@@ -607,61 +636,77 @@ export function RuntimeDetailView(p: { detail: RuntimeDetail; busy: boolean; onR
             )}
           </div>
 
-          <div className="settings-group">
-            <div className="settings-field-label">{t('settings.remote.detail.extensions')}</div>
-            {d.localError ? (
-              <p className="settings-hint is-warning">{t('settings.remote.detail.localError')}</p>
-            ) : r.extensions === null ? (
-              <p className="settings-hint is-warning">{t('settings.remote.detail.extensionsUnread')}</p>
-            ) : (
-              d.comparison.length > 0 && (
-                <div className="security-table-wrap">
-                  <table className="security-table">
-                    <thead>
-                      <tr>
-                        <th scope="col">{t('settings.remote.detail.expected')}</th>
-                        <th scope="col">{t('settings.remote.detail.entry')}</th>
-                        <th scope="col">{t('settings.remote.detail.hereColumn')}</th>
-                        <th scope="col">{t('settings.remote.detail.thereColumn')}</th>
-                        <th scope="col">{t('settings.remote.detail.stateColumn')}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {d.comparison.map((row, n) => (
-                        <Fragment key={`${row.kind}:${row.id}`}>
-                          {/* The rows come sorted by kind (compareExtensions): a heading where each kind starts */}
-                          {d.comparison[n - 1]?.kind !== row.kind && (
-                            <tr>
-                              <th colSpan={5}>{t(`settings.extensions.kind.${row.kind}`)}</th>
-                            </tr>
-                          )}
-                          <tr>
-                            <td>
-                              {row.here !== null && (
-                                <input
-                                  type="checkbox"
-                                  checked={row.expected}
-                                  disabled={p.busy}
-                                  aria-label={`${t('settings.remote.detail.expected')}: ${row.name}`}
-                                  onChange={(e) => p.onExpect(row.id, e.target.checked)}
-                                />
-                              )}
-                            </td>
-                            <td>{row.name}</td>
-                            <td>{onOff(row.here)}</td>
-                            <td>{onOff(row.there)}</td>
-                            <td>{stateWord(row, t as never)}</td>
-                          </tr>
-                        </Fragment>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )
-            )}
-            {fixThere && <p className="settings-hint">{t('settings.remote.detail.installThere')}</p>}
-          </div>
+        </>
+      )}
 
+      {/* Outside the report's parts: the expected list is set from this computer's set (§6.1, §10.1, ruling R17-1), before
+          the first readable report and for a Runtime too old to report */}
+      <div className="settings-group">
+        <div className="settings-field-label">{t('settings.remote.detail.extensions')}</div>
+        {d.localError ? (
+          <p className="settings-hint is-warning">{t('settings.remote.detail.localError')}</p>
+        ) : (
+          <>
+            {r === null ? (
+              <p className="settings-hint">{t('settings.remote.detail.notReadYet')}</p>
+            ) : (
+              r.extensions === null && <p className="settings-hint is-warning">{t('settings.remote.detail.extensionsUnread')}</p>
+            )}
+            {d.comparison.length === 0 ? (
+              <p className="settings-hint">{t('settings.remote.detail.noExtensions')}</p>
+            ) : (
+              <div className="security-table-wrap">
+                <table className="security-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">{t('settings.remote.detail.expected')}</th>
+                      <th scope="col">{t('settings.remote.detail.entry')}</th>
+                      <th scope="col">{t('settings.remote.detail.hereColumn')}</th>
+                      <th scope="col">{t('settings.remote.detail.thereColumn')}</th>
+                      <th scope="col">{t('settings.remote.detail.stateColumn')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {d.comparison.map((row, n) => (
+                      <Fragment key={`${row.kind}:${row.id}`}>
+                        {/* The rows come sorted by kind (compareExtensions): a heading where each kind starts */}
+                        {d.comparison[n - 1]?.kind !== row.kind && (
+                          <tr>
+                            <th colSpan={5} scope="colgroup">
+                              {t(`settings.extensions.kind.${row.kind}`)}
+                            </th>
+                          </tr>
+                        )}
+                        <tr>
+                          <td>
+                            {row.here !== null && (
+                              <input
+                                type="checkbox"
+                                checked={row.expected}
+                                disabled={p.busy}
+                                aria-label={`${t('settings.remote.detail.expected')}: ${row.name}`}
+                                onChange={(e) => p.onExpect(row.id, e.target.checked)}
+                              />
+                            )}
+                          </td>
+                          <td>{row.name}</td>
+                          <td>{onOff(row.here)}</td>
+                          <td>{thereRead ? onOff(row.there) : t('settings.remote.detail.thereNotRead')}</td>
+                          <td>{stateWord(row, t as never)}</td>
+                        </tr>
+                      </Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
+        {fixThere && <p className="settings-hint">{t('settings.remote.detail.installThere')}</p>}
+      </div>
+
+      {r !== null && (
+        <>
           <div className="settings-group">
             <div className="settings-field-label">{t('settings.remote.detail.credentials')}</div>
             <p className="settings-hint">{t('settings.remote.detail.valuesStay')}</p>

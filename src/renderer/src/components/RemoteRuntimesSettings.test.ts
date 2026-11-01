@@ -67,6 +67,8 @@ const mount = (props: Parameters<typeof RemoteRuntimesSettings>[0]): void => {
   hooks.render(RemoteRuntimesSettings, props)
   for (const e of hooks.effects()) e.run()
 }
+const detailsButton = (tree: unknown) =>
+  elements(tree).find((e) => e.type === 'button' && (e.props as { children?: unknown }).children === 'settings.remote.detail.open')
 const detailShown = (tree: unknown) => elements(tree).find((e) => e.type === RuntimeDetailView)?.props as Parameters<typeof RuntimeDetailView>[0] | undefined
 
 type Call = Mock<(...args: any[]) => any>
@@ -125,15 +127,59 @@ describe('Settings › Remote Runtimes reads', () => {
     expect(api.remote.detail).toHaveBeenLastCalledWith('rt_a', true)
   })
 
-  it('a focused Runtime opens its detail', async () => {
+  it('a focused Runtime opens its detail, scrolled to, with keyboard focus on its Details button', async () => {
     mount({ focusRuntimeId: 'rt_a' })
     await settle()
-    hooks.render(RemoteRuntimesSettings, { focusRuntimeId: 'rt_a' })
+    let tree = hooks.render(RemoteRuntimesSettings, { focusRuntimeId: 'rt_a' })
+    // What React would attach: the row and its Details button
+    const row = { scrollIntoView: vi.fn() }
+    const button = { focus: vi.fn() }
+    const refOf = (e: ReactElement) => (e.props as { ref?: (el: unknown) => void }).ref
+    refOf(elements(tree).find((e) => e.type === 'div' && refOf(e) !== undefined)!)!(row)
+    refOf(detailsButton(tree)!)!(button)
     for (const e of hooks.effects()) e.run()
     await settle()
-    const tree = hooks.render(RemoteRuntimesSettings, { focusRuntimeId: 'rt_a' })
+    tree = hooks.render(RemoteRuntimesSettings, { focusRuntimeId: 'rt_a' })
     expect(api.remote.detail).toHaveBeenCalledWith('rt_a')
     expect(detailShown(tree)?.detail).toEqual(DETAIL)
+    expect(row.scrollIntoView).toHaveBeenCalledWith({ block: 'start' })
+    expect(button.focus).toHaveBeenCalledTimes(1)
+  })
+
+  it('says the detail is being read in words, while it is', async () => {
+    api.remote.detail.mockImplementation(() => new Promise(() => {}))
+    mount({})
+    await settle()
+    let tree = hooks.render(RemoteRuntimesSettings, {})
+    ;(detailsButton(tree)!.props as { onClick: () => void }).onClick()
+    tree = hooks.render(RemoteRuntimesSettings, {})
+    const loading = elements(tree).find((e) => (e.props as { role?: string }).role === 'status')
+    expect((loading?.props as { children?: unknown }).children).toBe('settings.remote.detail.loading')
+  })
+
+  // Ruling R17-1 minor 1: the checkboxes wait while an edit is on its way, and an answer for a detail closed since
+  // reads nothing
+  it('disables the checkboxes while an edit is in flight, and skips the read again once that detail closed', async () => {
+    mount({})
+    await settle()
+    let tree = hooks.render(RemoteRuntimesSettings, {})
+    ;(detailsButton(tree)!.props as { onClick: () => void }).onClick()
+    await settle()
+    tree = hooks.render(RemoteRuntimesSettings, {})
+    expect(detailShown(tree)?.busy).toBe(false)
+    let edited = (): void => {}
+    api.remote.expect.mockImplementationOnce(() => new Promise((resolve) => (edited = () => resolve({ ok: true, expected: ['skill-a'] }))))
+    detailShown(tree)!.onExpect('skill-a', true)
+    tree = hooks.render(RemoteRuntimesSettings, {})
+    expect(detailShown(tree)?.busy).toBe(true)
+    const reads = api.remote.detail.mock.calls.length
+    // Closed before the answer came
+    ;(detailsButton(tree)!.props as { onClick: () => void }).onClick()
+    edited()
+    await settle()
+    tree = hooks.render(RemoteRuntimesSettings, {})
+    expect(api.remote.detail.mock.calls.length).toBe(reads)
+    expect(detailShown(tree)).toBeUndefined()
   })
 
   // Ruling R16-1: the screen's own sentence for an id gone from this computer, then the detail read again

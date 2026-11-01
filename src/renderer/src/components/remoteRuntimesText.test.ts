@@ -34,6 +34,10 @@ describe('Settings › Remote Runtimes text (remote runtime design Phase 6)', ()
       'settings.remote.paired.online {"version":"1.4.8","platform":"linux"}'
     )
     expect(pingLine({ ok: false, code: 'RUNTIME_OFFLINE', message: 'connect refused' }, t)).toBe('settings.remote.paired.offline {"code":"RUNTIME_OFFLINE"}')
+    // Ruling R17-1: the same plain words the detail gives, never "does not answer" for a computer that did answer
+    expect(pingLine({ ok: false, code: 'RUNTIME_AUTH_FAILED', message: 'x' }, t)).toBe('settings.remote.link.authFailed')
+    expect(pingLine({ ok: false, code: 'RUNTIME_IDENTITY_CHANGED', message: 'x' }, t)).toBe('settings.remote.link.identityChanged')
+    expect(pingLine({ ok: false, code: 'RUNTIME_PROTOCOL_MISMATCH', message: 'x' }, t)).toBe('settings.remote.link.protocolMismatch')
   })
   it('a failure says its code and message', () => {
     expect(failureLine({ ok: false, code: 'RUNTIME_IDENTITY_CHANGED', message: 'a different key' }, t)).toBe(

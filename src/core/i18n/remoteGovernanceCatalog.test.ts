@@ -3,13 +3,25 @@
 import { describe, it, expect } from 'vitest'
 import { CATALOGS, LANGS } from './index'
 
-const PREFIXES = ['settings.remote.revoke.', 'jobs.run.pausedRevoked', 'settings.remote.detail.', 'settings.remote.surface.', 'settings.remote.thisMachine.clientSeen']
+const PREFIXES = ['settings.remote.revoke.', 'jobs.run.pausedRevoked', 'settings.remote.detail.', 'settings.remote.surface.', 'settings.remote.thisMachine.clientSeen', 'settings.remote.link.']
 const keysOf = (): string[] => Object.keys(CATALOGS.ko.messages).filter((k) => PREFIXES.some((p) => k.startsWith(p)))
 
 describe('the remote governance catalog', () => {
   it('has every key in every language', () => {
     const ko = keysOf()
-    expect(ko).toEqual(expect.arrayContaining(['settings.remote.revoke.paused', 'settings.remote.revoke.notPaused', 'jobs.run.pausedRevoked']))
+    expect(ko).toEqual(
+      expect.arrayContaining([
+        'settings.remote.revoke.paused',
+        'settings.remote.revoke.notPaused',
+        'jobs.run.pausedRevoked',
+        'settings.remote.link.authFailed',
+        'settings.remote.link.identityChanged',
+        'settings.remote.link.protocolMismatch',
+        'settings.remote.detail.thereNotRead',
+        'settings.remote.detail.noExtensions',
+        'settings.remote.detail.loading'
+      ])
+    )
     for (const lang of LANGS) {
       const messages = CATALOGS[lang].messages as Record<string, string | undefined>
       expect(ko.filter((k) => !messages[k]), lang).toEqual([])
