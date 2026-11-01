@@ -159,7 +159,8 @@ export function RemoteRuntimesSettings({
     focusedFor.current = focusRuntimeId
     openDetail(focusRuntimeId)
     rows.current.get(focusRuntimeId)?.scrollIntoView({ block: 'start' })
-    detailButtons.current.get(focusRuntimeId)?.focus()
+    // The scroll above placed the row; focus must not scroll again
+    detailButtons.current.get(focusRuntimeId)?.focus({ preventScroll: true })
   }, [focusRuntimeId, paired])
 
   // A pairing string's clock, and every few seconds the Host's word on its code (used, dropped by a stop from the CLI,
@@ -451,12 +452,16 @@ export function RemoteRuntimesSettings({
                 </button>
               </span>
             </div>
+            {/* One live region for as long as the detail is open, only its text changing: a region mounted with its text
+                already in it is not announced */}
+            {openId === r.runtimeId && (
+              <p className="settings-hint" role="status">
+                {detail === null ? t('settings.remote.detail.loading') : ''}
+              </p>
+            )}
             {openId === r.runtimeId &&
-              (detail === null ? (
-                <p className="settings-hint" role="status">
-                  {t('settings.remote.detail.loading')}
-                </p>
-              ) : 'code' in detail ? (
+              detail !== null &&
+              ('code' in detail ? (
                 <p className="settings-hint is-warning">{failureLine({ ok: false, ...detail }, t as never)}</p>
               ) : (
                 <RuntimeDetailView detail={detail} busy={reading || expecting} onRefresh={() => void readDetail(r.runtimeId, true)} onExpect={(id, on) => void setExpected(id, on)} now={now} />

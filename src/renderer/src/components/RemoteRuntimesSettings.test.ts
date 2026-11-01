@@ -144,17 +144,27 @@ describe('Settings › Remote Runtimes reads', () => {
     expect(detailShown(tree)?.detail).toEqual(DETAIL)
     expect(row.scrollIntoView).toHaveBeenCalledWith({ block: 'start' })
     expect(button.focus).toHaveBeenCalledTimes(1)
+    // The scroll above already moved the screen: focus must not scroll it a second time
+    expect(button.focus).toHaveBeenCalledWith({ preventScroll: true })
   })
 
   it('says the detail is being read in words, while it is', async () => {
-    api.remote.detail.mockImplementation(() => new Promise(() => {}))
+    let answer = (_d: unknown): void => {}
+    api.remote.detail.mockImplementation(() => new Promise((resolve) => (answer = resolve)))
     mount({})
     await settle()
     let tree = hooks.render(RemoteRuntimesSettings, {})
     ;(detailsButton(tree)!.props as { onClick: () => void }).onClick()
     tree = hooks.render(RemoteRuntimesSettings, {})
-    const loading = elements(tree).find((e) => (e.props as { role?: string }).role === 'status')
-    expect((loading?.props as { children?: unknown }).children).toBe('settings.remote.detail.loading')
+    const status = (t: unknown) => elements(t).find((e) => (e.props as { role?: string }).role === 'status')?.props as { children?: unknown } | undefined
+    expect(status(tree)?.children).toBe('settings.remote.detail.loading')
+    // The same live region stays while the detail shows, its text emptied, so a screen reader hears each change
+    answer(DETAIL)
+    await settle()
+    tree = hooks.render(RemoteRuntimesSettings, {})
+    expect(detailShown(tree)?.detail).toEqual(DETAIL)
+    expect(status(tree)).toBeDefined()
+    expect(status(tree)?.children).toBe('')
   })
 
   // Ruling R17-1 minor 1: the checkboxes wait while an edit is on its way, and an answer for a detail closed since
