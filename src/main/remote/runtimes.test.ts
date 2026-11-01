@@ -309,8 +309,11 @@ describe('reports and the expected list (remote governance design §5.4, §6.1, 
     expect((await reg.list()).find((p) => p.runtimeId === 'rt_a')?.snapshot?.readAt).toBe('2026-11-01T00:00:00.000Z')
     t += 4 * MIN
     await r.readReports()
-    // rt_a's report is fresh; rt_b has none, so it is asked again
-    expect([o.reads('rt_a'), o.reads('rt_b')]).toEqual([1, 2])
+    // rt_a's report is fresh, and rt_b's failed read stands (ruling R16-1)
+    expect([o.reads('rt_a'), o.reads('rt_b')]).toEqual([1, 1])
+    t += MIN
+    await r.readReports()
+    expect([o.reads('rt_a'), o.reads('rt_b')]).toEqual([2, 2])
     // A registry that cannot be read still resolves
     const broken = createRemoteRuntimes({ profileDir: path.join(dir, 'runtimes', 'rt_a.token'), version: '1.5.0', open: o.open })
     await expect(broken.readReports()).resolves.toBeUndefined()
@@ -334,5 +337,113 @@ describe('reports and the expected list (remote governance design §5.4, §6.1, 
     await vi.waitFor(async () => expect((await r.list())[0]).toMatchObject({ asteraVersion: '1.5.0', older: true }))
     const same = runtimes(reporting().open, '1.5.0')
     expect((await same.list())[0]).toMatchObject({ older: false })
+  })
+})
+
+// Ruling R16-1: a Runtime that does not answer is not dialled on every ask, the list and the detail agree on its
+// health, a damaged registry here does not hide the snapshot, and a time ahead of the clock is not fresh.
+describe('report reads after review (ruling R16-1)', () => {
+  const MIN = 60_000
+  const REPORT: ControlPlaneReport = {
+    version: 1,
+    astera: { version: '1.5.0', platform: 'darwin' },
+    extensions: [],
+    profiles: [],
+    appBypass: false,
+    policy: null,
+    sandbox: { claude: { kind: 'sandbox', blocker: null }, codex: { kind: 'deny-only', blocker: null } },
+    credentials: null,
+    secretStore: { kind: 'owner-only-files', ok: true },
+    findings: null
+  }
+  const REPORTING: HelloFrame = { ...HELLO, capabilities: [REPORT_CAPABILITY] }
+  /** Links that answer their report while `state.offline` is false. */
+  const reporting = (state = { offline: false }) => {
+    let reads = 0
+    const open = (_t: RemoteTarget, o?: { onHello?(h: HelloFrame): void }): RemoteLink => ({
+      hello: () => REPORTING,
+      call: async (cmd) => {
+        if (cmd === 'control-plane-report') reads++
+        if (state.offline) return new RemoteError('RUNTIME_OFFLINE', 'connect ECONNREFUSED')
+        o?.onHello?.(REPORTING)
+        return cmd === 'control-plane-report' ? { status: 200, body: REPORT } : { status: 200, body: [] }
+      },
+      subscribe: () => () => {},
+      close: () => {}
+    })
+    return { open, state, reads: () => reads }
+  }
+  let t: number
+  beforeEach(() => {
+    t = Date.parse('2026-11-01T00:00:00.000Z')
+  })
+  const runtimes = (open: ReturnType<typeof reporting>['open'], local: () => Promise<ReportExtension[]> = async () => []) =>
+    createRemoteRuntimes({ profileDir: dir, version: '1.5.0', open, now: () => t, localExtensions: local })
+
+  it('an offline Runtime is dialled once across two detail calls inside the window, and again after it or on refresh', async () => {
+    await (await controllerRegistry(dir)).keepSnapshot('rt_a', { readAt: '2026-10-31T00:00:00.000Z', report: REPORT })
+    const o = reporting({ offline: true })
+    const r = runtimes(o.open)
+    expect(await r.detail('rt_a')).toMatchObject({ answering: false, refusal: { code: 'RUNTIME_OFFLINE' } })
+    t += 4 * MIN
+    expect(await r.detail('rt_a')).toMatchObject({ answering: null, snapshot: { readAt: '2026-10-31T00:00:00.000Z' }, refusal: { code: 'RUNTIME_OFFLINE' } })
+    await r.readReports()
+    expect(o.reads()).toBe(1)
+    t += MIN
+    await r.detail('rt_a')
+    expect(o.reads()).toBe(2)
+    await r.detail('rt_a', { refresh: true })
+    expect(o.reads()).toBe(3)
+  })
+
+  it('a successful read clears the remembered refusal', async () => {
+    const o = reporting({ offline: true })
+    const r = runtimes(o.open)
+    await r.detail('rt_a')
+    o.state.offline = false
+    t += MIN
+    expect(await r.detail('rt_a', { refresh: true })).not.toHaveProperty('refusal')
+    o.state.offline = true
+    t += MIN
+    expect(await r.detail('rt_a')).not.toHaveProperty('refusal')
+    expect(o.reads()).toBe(2)
+  })
+
+  it('a report read tells the list the Runtime answers, and the list shows the later last seen', async () => {
+    const o = reporting({ offline: true })
+    const r = runtimes(o.open)
+    await r.detail('rt_a')
+    expect((await r.list())[0].offline).toBe(true)
+    o.state.offline = false
+    await r.detail('rt_a', { refresh: true })
+    const [listed] = await r.list()
+    expect(listed.offline).toBe(false)
+    expect(listed.lastSeenAt).not.toBeNull()
+    await (await controllerRegistry(dir)).touch('rt_a', '2030-01-01T00:00:00.000Z')
+    expect((await r.list())[0].lastSeenAt).toBe('2030-01-01T00:00:00.000Z')
+  })
+
+  it('a damaged registry here answers the kept snapshot with no comparison and localError', async () => {
+    await (await controllerRegistry(dir)).keepSnapshot('rt_a', { readAt: '2026-10-31T23:58:00.000Z', report: REPORT })
+    const r = runtimes(reporting().open, async () => {
+      throw new Error('extensions.json is damaged')
+    })
+    expect(await r.detail('rt_a')).toMatchObject({ snapshot: { readAt: '2026-10-31T23:58:00.000Z' }, comparison: [], localError: true })
+  })
+
+  it('a snapshot time ahead of the clock is not fresh', async () => {
+    await (await controllerRegistry(dir)).keepSnapshot('rt_a', { readAt: '2026-11-01T01:00:00.000Z', report: REPORT })
+    const o = reporting()
+    await runtimes(o.open).detail('rt_a')
+    expect(o.reads()).toBe(1)
+  })
+
+  it('expect refuses more than 2000 ids to add or to remove, writing nothing', async () => {
+    const r = runtimes(reporting().open, async () => [{ id: 'skill-a', kind: 'skill', name: 'skill-a', enabled: true, providers: ['claude'] }])
+    const many = Array.from({ length: 2001 }, () => 'skill-a')
+    expect(await r.expect('rt_a', many, [])).toMatchObject({ ok: false, code: 'INVALID_ARGUMENTS' })
+    expect(await r.expect('rt_a', [], many)).toMatchObject({ ok: false, code: 'INVALID_ARGUMENTS' })
+    expect((await (await controllerRegistry(dir)).list())[0].expected).toBeUndefined()
+    expect(await r.expect('rt_a', many.slice(1), [])).toEqual({ ok: true, expected: ['skill-a'] })
   })
 })

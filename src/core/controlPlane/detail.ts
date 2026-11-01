@@ -15,10 +15,11 @@ export function runtimeIsOlder(there: string, here: string): boolean {
 
 /** The detail of one paired Runtime from what this computer keeps of it: its profile's facts and last snapshot, and this
  *  computer's extensions (`local`) compared with that snapshot over the expected ids that still exist here (§6.1). Pure:
- *  reading the report and keeping it are the caller's. */
+ *  reading the report and keeping it are the caller's. `local` null: this computer's extensions could not be read, so
+ *  nothing is compared (an empty list would call every entry there "only there") and the snapshot still shows. */
 export function runtimeDetail(a: {
   profile: RuntimeProfile
-  local: readonly ReportExtension[]
+  local: readonly ReportExtension[] | null
   here: string
   answering: boolean | null
   refusal?: { code: string; message: string }
@@ -39,6 +40,7 @@ export function runtimeDetail(a: {
     answering: a.answering,
     snapshot,
     ...(a.refusal && { refusal: a.refusal }),
-    comparison: compareExtensions({ local: a.local, report: snapshot?.report ?? null, expected: liveExpected(p.expected, a.local) })
+    ...(a.local === null && { localError: true as const }),
+    comparison: a.local === null ? [] : compareExtensions({ local: a.local, report: snapshot?.report ?? null, expected: liveExpected(p.expected, a.local) })
   }
 }

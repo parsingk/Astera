@@ -26,7 +26,14 @@ export const APP_RECONNECT_FOR_MS = 10_000
  *  a read happens when Settings asks, and then at most this often per Runtime unless the person refreshes. */
 export const REPORT_EVERY_MS = 5 * 60_000
 
+/** The most ids one `expect` may add or remove, the most entries a report carries (core/controlPlane/report.ts): the
+ *  renderer's lists come over IPC, and main bounds what it is handed. */
+export const EXPECT_IDS_MAX = 2000
+
 type Refusal = { code: string; message: string }
+
+/** The later of two ISO times, either of which may be absent. */
+const later = (x: string | null, y: string | null): string | null => (x === null ? y : y === null ? x : Date.parse(y) > Date.parse(x) ? y : x)
 
 export interface RemoteRuntimes {
   client(runtimeId: string): Promise<RemoteRuntimeClient | { code: string; message: string }>
@@ -37,7 +44,8 @@ export interface RemoteRuntimes {
   /** Forgets a Runtime here; it does not revoke the pairing there (§4.5). */
   remove(runtimeId: string): Promise<{ ok: true } | { ok: false; code: string; message: string }>
   /** One Runtime's detail (§10.1): its report read anew when `refresh` asks or the kept one is REPORT_EVERY_MS old or
-   *  absent, else the kept one. A refusal or an offline Runtime answers the last snapshot with `refusal`. */
+   *  absent, else the kept one. A refusal or an offline Runtime answers the last snapshot with `refusal`, and that refusal
+   *  stands without dialling again for REPORT_EVERY_MS unless `refresh` asks. */
   detail(runtimeId: string, o?: { refresh?: boolean }): Promise<RuntimeDetail | Refusal>
   /** Every paired Runtime's report under the same rule, one Runtime at a time. Never rejects. */
   readReports(): Promise<void>
@@ -136,10 +144,21 @@ export function createRemoteRuntimes(a: {
     return p
   }
 
-  /** Whether `p`'s kept report is recent enough to answer with. A time that does not read is not recent. */
-  const fresh = (p: RuntimeProfile): boolean => {
-    const at = p.snapshot ? Date.parse(p.snapshot.readAt) : NaN
-    return now() - at < REPORT_EVERY_MS
+  /** Whether a time is within the last REPORT_EVERY_MS. One that does not read, or is ahead of the clock (a clock set
+   *  back, a file from elsewhere), is not: it would otherwise hold a read off for as long as it is ahead. */
+  const recent = (at: number): boolean => {
+    const age = now() - at
+    return age >= 0 && age < REPORT_EVERY_MS
+  }
+  /** Whether `p`'s kept report is recent enough to answer with. */
+  const fresh = (p: RuntimeProfile): boolean => p.snapshot !== undefined && recent(Date.parse(p.snapshot.readAt))
+
+  /** Each Runtime's last failed read, kept in memory only (ruling R16-1): an offline or older Runtime is not dialled
+   *  again on every ask within REPORT_EVERY_MS. A refresh always reads, and a read that succeeds clears it. */
+  const failed = new Map<string, { at: number; refusal: Refusal }>()
+  const recentFailure = (runtimeId: string): Refusal | null => {
+    const f = failed.get(runtimeId)
+    return f && recent(f.at) ? f.refusal : null
   }
 
   /** One read per Runtime at a time: Settings' detail and readReports asking together share it. */
@@ -160,14 +179,22 @@ export function createRemoteRuntimes(a: {
         hello: () => held.link.hello(),
         call: async (cmd, args, o) => {
           const reply = await held.link.call(cmd, args, o)
-          if (!(reply instanceof RemoteError)) answered = true
+          if (!(reply instanceof RemoteError)) {
+            answered = true
+            // Awaited before the client hears it, so the detail read next sees the new last seen
+            await held.seen()
+          }
+          // The list's offline and last seen say what this read heard, as the detail does (ruling R16-1)
+          held.client.noteReply(reply)
           return reply
         },
         subscribe: (pty, h) => held.link.subscribe(pty, h),
         close: () => held.link.close()
       })
-      if (answered) await held.seen()
-      if (r.ok) await (await reg()).keepSnapshot(runtimeId, { readAt: new Date(now()).toISOString(), report: r.report })
+      if (r.ok) {
+        failed.delete(runtimeId)
+        await (await reg()).keepSnapshot(runtimeId, { readAt: new Date(now()).toISOString(), report: r.report })
+      } else failed.set(runtimeId, { at: now(), refusal: { code: r.code, message: r.message } })
       return { r, answered }
     })().finally(() => reading.delete(runtimeId))
     reading.set(runtimeId, p)
@@ -185,8 +212,9 @@ export function createRemoteRuntimes(a: {
           address: p.address,
           port: p.port,
           permission: p.permission,
-          // What this app last heard, by any call (Phase 6 review minor); the registry's time before any.
-          lastSeenAt: c?.status().lastSeenAt ?? p.lastSeenAt,
+          // The later of what this app last heard, by any call (Phase 6 review minor), and the registry's, which another
+          // surface may have moved since (ruling R16-1).
+          lastSeenAt: later(c?.status().lastSeenAt ?? null, p.lastSeenAt),
           // Unknown until this app asked it something; then whether the last call was answered.
           offline: c ? c.status().offline : null,
           // What its last hello said, by any surface (remote governance design §4.1).
@@ -198,14 +226,11 @@ export function createRemoteRuntimes(a: {
       const r = await reg()
       const before = (await r.list()).find((p) => p.runtimeId === runtimeId)
       if (!before) return { code: 'RUNTIME_NOT_FOUND', message: `no paired Runtime has the id ${runtimeId}` }
-      // An empty list would call every entry there "only there", so a failed read is the answer, as `runtimes get` says
-      let local: ReportExtension[]
-      try {
-        local = await localExtensions()
-      } catch (e) {
-        return { code: 'FAILED', message: `this computer's extensions could not be read: ${e instanceof Error ? e.message : String(e)}` }
-      }
+      // Null when they cannot be read: the detail then compares nothing and still shows the snapshot (ruling R16-1)
+      const local = await localExtensions().catch(() => null)
       if (!o.refresh && fresh(before)) return runtimeDetail({ profile: before, local, here: a.version, answering: null })
+      const lastRefusal = o.refresh ? null : recentFailure(runtimeId)
+      if (lastRefusal) return runtimeDetail({ profile: before, local, here: a.version, answering: null, refusal: lastRefusal })
       const read = await readReport(runtimeId)
       // Read again for what this ask changed: the facts, the snapshot, the time it answered
       const after = (await r.list()).find((p) => p.runtimeId === runtimeId) ?? before
@@ -220,7 +245,7 @@ export function createRemoteRuntimes(a: {
     readReports: async () => {
       try {
         for (const p of await (await reg()).list()) {
-          if (fresh(p)) continue
+          if (fresh(p) || recentFailure(p.runtimeId)) continue
           await readReport(p.runtimeId).catch(() => undefined)
         }
       } catch {
@@ -231,6 +256,8 @@ export function createRemoteRuntimes(a: {
       const r = await reg()
       const p = (await r.list()).find((x) => x.runtimeId === runtimeId)
       if (!p) return { ok: false, code: 'RUNTIME_NOT_FOUND', message: `no paired Runtime has the id ${runtimeId}` }
+      if (add.length > EXPECT_IDS_MAX || remove.length > EXPECT_IDS_MAX)
+        return { ok: false, code: 'INVALID_ARGUMENTS', message: `add and remove take at most ${EXPECT_IDS_MAX} extension ids each` }
       let local: ReportExtension[]
       try {
         local = await localExtensions()
