@@ -57,9 +57,15 @@ describe('docs/remote-runtime.md', () => {
     [seen, 'sandboxed sessions read', /sandboxed session can (?:only )?read a Runtime/],
     ['## Revoke and remove', 'revoke pauses', /[Rr]evoking[^.]*pauses the scheduled Jobs it made/],
     ['## Revoke and remove', 'only the Runtime resumes', /[Oo]nly (?:a person on )?the Runtime (?:can )?resumes? them/],
-    [seen, 'older CLIs', /older Astera CLI[^.]*counts as an agent[^.]*update/]
+    [seen, 'older CLIs', /older Astera CLI[^.]*counts as an agent[^.]*update Astera on the computer that CLI runs on/],
+    [
+      '### A sandboxed session only reads a Runtime',
+      'the MCP no-session refusal',
+      /MCP server whose client\s+passed it neither `ASTERA_SESSION` nor `ASTERA_GATEWAY_TOKEN`[^.]*refuses every\s+remote change/
+    ],
+    ['### A sandboxed session only reads a Runtime', 'that the sandbox rule is not a boundary', /not a hard boundary/]
   ]
-  for (const [heading, what, re] of sectionSays) it(`says ${what}, under ${heading.slice(3)}`, () => expect(section(doc, heading)).toMatch(re))
+  for (const [heading, what, re] of sectionSays) it(`says ${what}, under ${heading.replace(/^#+ /, '')}`, () => expect(section(doc, heading)).toMatch(re))
 
   const recipes: Array<[string, RegExp[]]> = [
     ['### Windows', [/runtime serve/, /update-hold/, /LASTEXITCODE -eq 78/, /Register-ScheduledTask/, /Unregister-ScheduledTask/, /S4U/]],

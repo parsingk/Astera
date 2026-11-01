@@ -187,10 +187,12 @@ hidden, its secret store's check, and how many findings it has. The report holds
 never a value, a path, a command line or a Rule's text. A Runtime on an older Astera cannot report, and this computer
 says to update Astera there.
 
-The Runtime keeps two slow answers for 10 minutes, whether its Codex accounts are ready on Windows and whether the
-sandbox runtime can run, so a fix there can take that long to show. It works out a skill's hash again only when the
-skill changed. A Runtime that cannot read its own extensions says "Could not read its extensions", never an empty
-list, and nothing is compared against it.
+The Runtime keeps two slow answers for up to 10 minutes. Whether the sandbox runtime can run is kept either way, so a
+fix there can take that long to show. Whether a Codex account is ready on Windows is kept only when it is ready, so a
+fix to Codex setup shows at once, and an account that stops being ready can take up to 10 minutes to show. Both are
+dropped when a setup runs from Astera on the Runtime. It works out a skill's hash again only when the skill changed.
+A Runtime that cannot read its own extensions says "Could not read its extensions", never an empty list, and nothing
+is compared against it.
 
 ### Read it
 
@@ -220,8 +222,9 @@ list, and nothing is compared against it.
 For each Runtime, choose which of this computer's extensions it should have too: tick them in the Extensions part of
 its detail, or run `astera runtimes expect --id <runtime> --add <ids>` with ids from `astera ext list`. The list can be
 set before the first report is read, and for a Runtime too old to report. `--add` refuses an id this computer does not
-have; `--remove` also takes an id that is still in the list. An id that is no longer on this computer drops out of the
-list.
+have; `--remove` also takes an id that is still in the stored list. An id that is no longer on this computer is left
+out of what is shown and compared, but stays in the stored list: it comes back if the extension returns here, and
+`--remove` clears it.
 
 Each expected extension reads as missing, different, off, secret missing or same there:
 
@@ -258,7 +261,7 @@ request, or type into a terminal that waits at a permission prompt or a question
 that answers a person only, and an agent controller gets `RUNTIME_PERMISSION_DENIED`.
 
 An older Astera CLI, from before this release, cannot say whether it runs in an agent session, so it counts as an agent
-until you update Astera on that computer; its refusals say so.
+until you update Astera on the computer that CLI runs on; its refusals say so.
 
 On the Runtime, Settings › Remote Runtimes › This computer shows each paired controller's surface (app, CLI or MCP),
 its Astera version and when it was last seen.
@@ -462,13 +465,14 @@ list the newest Jobs or runs on that Runtime before trying again.
   {name}, which was unpaired". Only a person on the Runtime can resume them, in the Astera app there or at that user's
   own shell. Every controller, and an agent on the Runtime itself, is refused resuming, running, starting or deleting
   such a Job, starting a worker or reopening a Task of it, and `runs resume` and `runs reconverge` on it.
-- The revoke's answer says how many scheduled Jobs it paused, and how many scheduled Jobs have no maker on record and
-  keep their schedule. Jobs made before this release record no maker and none is guessed, so they are counted, not
-  paused: review them on the Runtime.
+- The revoke's answer says how many scheduled Jobs it paused, and how many scheduled Jobs on the Runtime have no maker
+  on record. Every Job made from this release on records who made it, a controller or the Runtime itself, so only Jobs
+  made before this release have no maker. None is guessed: they are counted and left as they are, paused or not, so
+  review them on the Runtime. Jobs made on the Runtime itself are never paused by a revoke, and are not counted.
 - A Job with a worker held by `worker-retain` is not paused, and the answer and the Host log name it: release the worker
   and pause the Job yourself. A Job whose worker is still starting is named too, and its pause is tried again once
-  after the start window, about two minutes. If the Host restarts before that retry, the retry is lost and the Job
-  keeps its schedule; the Host log names the Job, so pause it by hand.
+  after the start window, about two minutes. If that retry also fails, or the Host restarts before it, the Job keeps
+  its schedule until you pause it; the Host log names the Job, so pause it by hand.
 - Sessions the controller started and its Jobs without a schedule keep running, as a disconnect leaves them. The
   person on the Runtime can stop them.
 - On the controller: `astera runtimes remove --id <runtimeId|name>`, or Remove in Settings › Remote Runtimes, forgets
