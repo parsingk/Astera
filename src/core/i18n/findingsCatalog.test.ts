@@ -164,6 +164,29 @@ describe('the findings catalog', () => {
     }
   })
 
+  // Remote governance design §9.2, §9.3: the copy the plan gives, Korean settings paths written 설정 › (ruling R12-1)
+  it('keeps the Runtime extension and version copy', () => {
+    const en = CATALOGS.en.messages as Record<string, string>
+    const ko = CATALOGS.ko.messages as Record<string, string>
+    const copy: Record<string, [string, string]> = {
+      'findings.reason.runtimeExtension.missing': ['{extension} is not there, as of {at}.', '{at} 기준으로 그 컴퓨터에 {extension}이(가) 없습니다.'],
+      'findings.reason.outdatedRuntime': ['Astera {there} there, {here} here.', '그 컴퓨터는 Astera {there}, 이 컴퓨터는 {here}입니다.'],
+      'findings.do.fixOnRuntime': [
+        'On {runtime}, install, update, turn on or add the secret in its Settings › MCP & Skills.',
+        '{runtime}의 설정 › MCP & Skills에서 설치, 업데이트, 켜기 또는 비밀값 추가를 하세요.'
+      ],
+      'findings.do.updateRuntime': ['Update Astera on {runtime}.', '{runtime}의 Astera를 업데이트하세요.'],
+      'findings.info.runtimeNotRead': ['Not read yet. Open its detail in Settings › Remote Runtimes.', '아직 읽지 않았습니다. 설정 › 원격 Runtime에서 자세히를 여세요.']
+    }
+    for (const [key, [english, korean]] of Object.entries(copy)) {
+      expect(en[key], key).toBe(english)
+      expect(ko[key], key).toBe(korean)
+    }
+    expect(keysOf().filter((k) => ko[k].includes('Settings ›'))).toEqual([])
+    const es = CATALOGS.es.messages as Record<string, string>
+    expect(es['findings.info.runtimeNotRead']).toContain(`Configuración › ${es['settings.tab.remote']}`)
+  })
+
   // §4 and §8: the lines a report says beside its findings, which the CLI prints in English and the section shows
   it('keeps the Observe note, the unread line and the empty line', () => {
     const en = CATALOGS.en.messages as Record<string, string>

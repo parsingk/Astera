@@ -158,9 +158,20 @@ function known(m: Message): boolean {
   return Object.values(m.params ?? {}).every((v) => typeof v === 'string' || typeof v === 'number' || (isMessage(v) && known(v)))
 }
 
+/** An ISO time on the viewer's clock and in their locale, as Remote Runtimes words "Last seen" (RemoteRuntimesSettings).
+ *  The Host words a time as ISO in UTC, which can read a day off in Korea (remote governance ruling R12-1). */
+export const localTime = (iso: string): string => new Date(iso).toLocaleString()
+
+/** The Message with an `at` that is a time worded by localTime; anything else as sent. */
+function withLocalAt(m: Message): Message {
+  const at = m.params?.at
+  if (typeof at !== 'string' || !Number.isFinite(Date.parse(at))) return m
+  return { ...m, params: { ...m.params, at: localTime(at) } }
+}
+
 /** A Message in the person's language, or the English the Host sent beside it when this app does not know its key (a
  *  newer Host's): never a key, never nothing. */
-export const wordsOf = (m: Message, english: string, tm: Words): string => (known(m) ? (tm(m) ?? english) : english)
+export const wordsOf = (m: Message, english: string, tm: Words): string => (known(m) ? (tm(withLocalAt(m)) ?? english) : english)
 
 /** The mark's tooltip: each reason on a line of its own. */
 export const markTitle = (findings: readonly Finding[], tm: Words): string => findings.map((f) => wordsOf(f.message, f.reason, tm)).join('\n')

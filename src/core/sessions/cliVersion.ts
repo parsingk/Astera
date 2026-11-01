@@ -7,6 +7,7 @@ import path from 'node:path'
 import type { ResolveExecutable, SpawnCommand } from './commands'
 import { fileIdentity, fileIdentityAsync, runHelp, runHelpAsync } from './codexNoDaemon'
 import { resolveWindowsExecutable, warmWindowsExecutable, windowsSpawn } from './windowsExecutable'
+import { atLeast, parseCliVersion } from './versionCompare'
 
 type Cli = 'claude' | 'codex'
 
@@ -17,23 +18,8 @@ const TTL_MS = 10 * 60 * 1000
 /** How long a warm whose run failed or timed out answers for that binary (remote governance ruling R9-5). */
 const FAILED_HOLD_MS = 30 * 1000
 
-/** `2.1.311 (Claude Code)` → `2.1.311`; `codex-cli 0.160.0` → `0.160.0`; a pre-release keeps its numbers. */
-export function parseCliVersion(text: string): string | null {
-  const m = /(\d+)\.(\d+)\.(\d+)/.exec(text)
-  return m ? `${m[1]}.${m[2]}.${m[3]}` : null
-}
-
-/** Whether `found` is `min` or later, part by part as numbers. */
-export function atLeast(found: string, min: string): boolean {
-  const a = found.split('.').map(Number)
-  const b = min.split('.').map(Number)
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    const x = a[i] ?? 0
-    const y = b[i] ?? 0
-    if (x !== y) return x > y
-  }
-  return true
-}
+// Read and compared apart from the probe (versionCompare.ts), so a reader with no file access shares them
+export { atLeast, parseCliVersion }
 
 /** The Claude Code the research saw both UserPromptExpansion and SubagentStart in (lifecycle design §4.12, plan ruling 15).
  *  Older, or a version that could not be read, is not given the two hooks (statusline.ts), and its uses read "Claude

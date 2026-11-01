@@ -2320,7 +2320,7 @@ export const es: Catalog = {
   'findings.do.sandboxOn': 'Active su sandbox.',
   'findings.do.excludeMcp': 'Deje {server} fuera del perfil.',
   'findings.do.removeExtension': 'Elimínelo de las extensiones compartidas.',
-  'findings.do.fixOnRuntime': 'En {runtime}, instálelo, actualícelo, actívelo o añada el secreto en Ajustes › MCP & Skills.',
+  'findings.do.fixOnRuntime': 'En {runtime}, instálelo, actualícelo, actívelo o añada el secreto en Configuración › MCP & Skills.',
   'findings.do.updateRuntime': 'Actualice Astera en {runtime}.',
   'findings.info.claudeOnlyNoUse': 'No hay ningún uso registrado en Claude en {days} días. Codex no puede saberlo.',
   'findings.info.claudeCannotTell': 'Claude no puede saberlo: necesita Claude Code {min} o posterior para informar de los usos.',
@@ -2334,7 +2334,7 @@ export const es: Catalog = {
     'Claude no puede saberlo: en los últimos {days} días una sesión de Claude se ejecutó sin los hooks que informan de los usos.',
   'findings.info.claudeUnhookedCannotTellCodexToo':
     'Ni Claude ni Codex pueden saberlo: en los últimos {days} días una sesión de Claude se ejecutó sin los hooks que informan de los usos.',
-  'findings.info.runtimeNotRead': 'Aún no se ha leído. Abra su detalle en Ajustes › Remote Runtimes.',
+  'findings.info.runtimeNotRead': 'Aún no se ha leído. Abra su detalle en Configuración › Runtimes remotos.',
   'findings.observe.off': 'Los hallazgos de uso necesitan Observe activado durante 30 días. Observe está desactivado.',
   'findings.observe.days': 'Los hallazgos de uso necesitan Observe activado durante 30 días. Lleva {days} días activado.',
   'findings.unread': 'No se pudo leer: {sources}',

@@ -11,6 +11,7 @@ import {
   ignoreNote,
   ignoreOutcome,
   jobsRowOf,
+  localTime,
   markTitle,
   openLabelKey,
   pendingJobStep,
@@ -270,5 +271,17 @@ describe('reading the report', () => {
     expect(wordsOf(say('findings.reason.tokenSpike', { total: 9, median: 3, times: 3, group: { key: 'findings.group.unknown' as never } }), 'Used 9 tokens.', tm)).toBe(
       'Used 9 tokens.'
     )
+  })
+
+  // Remote governance ruling R12-1: a snapshot's time is the viewer's clock, as Remote Runtimes' "Last seen" is, never UTC
+  it('words an ISO time in the at param in local time, the way the app shows other times', () => {
+    const at = '2026-10-31T23:30:00.000Z'
+    const tm = (m: Message): string => translate('ko', m.key, m.params)
+    const words = wordsOf(say('findings.reason.runtimeExtension.missing', { extension: 'my-skill', at }), `my-skill is not there, as of ${at}.`, tm)
+    expect(words).toBe(translate('ko', 'findings.reason.runtimeExtension.missing', { extension: 'my-skill', at: new Date(at).toLocaleString() }))
+    expect(words).not.toContain(at)
+    expect(localTime(at)).toBe(new Date(at).toLocaleString())
+    // An at that is not a time, and every other param, is worded as sent
+    expect(wordsOf(say('findings.reason.runtimeExtension.missing', { extension: 'x', at: 'soon' }), '', tm)).toContain('soon')
   })
 })

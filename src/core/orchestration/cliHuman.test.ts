@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { columns, displayWidth, humanFor, quietFor, shellOf, stateWord } from './cliHuman'
+import { dataFor } from './cliOutput'
 import { ACTION_PHRASES, COVERAGE_NOTE_PHRASES } from '../audit/phrases'
 import type { AuditAction, CoverageNote } from '../audit/types'
 import { SANDBOX_COVERAGE } from '../sandbox/coverage'
@@ -1033,6 +1034,27 @@ describe('humanFor — agent-profiles audit', () => {
 
   it('nothing found reads no findings', () => {
     expect(humanFor('agent-profiles-audit', report())).toBe('No findings.')
+  })
+
+  // Remote governance ruling R12-1: a snapshot's time reads on this computer's clock, as the audit records do; --json
+  // keeps the ISO the Host worded
+  it('prints an ISO time in a reason as local time, and --json keeps the ISO', () => {
+    const at = '2026-10-31T23:30:00.000Z'
+    const missing = {
+      key: 'runtime-missing-extension:rt_1:sk_1',
+      rule: 'runtime-missing-extension',
+      subject: { kind: 'runtime', id: 'rt_1', name: 'Office' },
+      message: { key: 'findings.reason.runtimeExtension.missing', params: { extension: 'my-skill', at } },
+      reason: `my-skill is not there, as of ${at}.`,
+      action: 'Update Astera on Office.',
+      ignored: false
+    }
+    const data = dataFor('agent-profiles-audit', report({ findings: [missing] }))
+    expect((data.findings as Array<{ reason: string }>)[0].reason).toBe(`my-skill is not there, as of ${at}.`)
+    const d = new Date(at)
+    const two = (n: number): string => String(n).padStart(2, '0')
+    const local = `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`
+    expect(humanFor('agent-profiles-audit', data)).toBe(`runtime-missing-extension  Office  my-skill is not there, as of ${local}.  → Update Astera on Office.`)
   })
 
   // As other commands print ids under --quiet: the key each finding is ignored by, the ignored ones too under --all

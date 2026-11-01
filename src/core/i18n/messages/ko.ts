@@ -2809,7 +2809,7 @@ export const ko = {
   'findings.do.sandboxOn': '샌드박스를 켜세요.',
   'findings.do.excludeMcp': '프로필에서 {server}을(를) 빼세요.',
   'findings.do.removeExtension': '공유 확장에서 삭제하세요.',
-  'findings.do.fixOnRuntime': '{runtime}의 Settings › MCP & Skills에서 설치, 업데이트, 켜기 또는 비밀값 추가를 하세요.',
+  'findings.do.fixOnRuntime': '{runtime}의 설정 › MCP & Skills에서 설치, 업데이트, 켜기 또는 비밀값 추가를 하세요.',
   'findings.do.updateRuntime': '{runtime}의 Astera를 업데이트하세요.',
   'findings.info.claudeOnlyNoUse': 'Claude에서 {days}일 동안 쓴 기록이 없습니다. Codex는 알 수 없습니다.',
   'findings.info.claudeCannotTell': 'Claude는 알 수 없습니다. 사용을 알리려면 Claude Code {min} 이상이 필요합니다.',
@@ -2823,7 +2823,7 @@ export const ko = {
     'Claude는 알 수 없습니다. 최근 {days}일 동안 사용을 알리는 훅 없이 실행된 Claude 세션이 있었습니다.',
   'findings.info.claudeUnhookedCannotTellCodexToo':
     'Claude와 Codex 모두 알 수 없습니다. 최근 {days}일 동안 사용을 알리는 훅 없이 실행된 Claude 세션이 있었습니다.',
-  'findings.info.runtimeNotRead': '아직 읽지 않았습니다. Settings › Remote Runtimes에서 자세히를 여세요.',
+  'findings.info.runtimeNotRead': '아직 읽지 않았습니다. 설정 › 원격 Runtime에서 자세히를 여세요.',
   'findings.observe.off': '사용 기록으로 찾는 항목은 Observe를 30일 켜 두어야 합니다. 지금 Observe가 꺼져 있습니다.',
   'findings.observe.days': '사용 기록으로 찾는 항목은 Observe를 30일 켜 두어야 합니다. 지금까지 {days}일 켜져 있었습니다.',
   'findings.unread': '읽지 못한 것: {sources}',

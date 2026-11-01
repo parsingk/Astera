@@ -260,7 +260,7 @@ export function createHostFindings(d: FindingsDeps): HostFindings {
   let computing: { generation: number; run: Promise<FindingsReport> } | null = null
   /** Counts the ignore changes: a compute that began before one is not kept, nor shared after it. */
   let generation = 0
-  /** The runtimes.json stamp the current generation began under; undefined until the first request reads one. */
+  /** The runtimes.json stamp the latest request read before its compute; undefined until the first request reads one. */
   let stamp: string | null | undefined
 
   const compute = async (atMs: number): Promise<FindingsReport> => {

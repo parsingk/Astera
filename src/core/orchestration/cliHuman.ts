@@ -222,6 +222,10 @@ function localTime(iso: unknown): string {
   return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`
 }
 
+/** Each ISO time in a line the Host worded, as localTime shows it: a finding's reason carries a snapshot's time in UTC
+ *  (remote governance ruling R12-1), which --json keeps as it is. */
+const localTimesIn = (line: string): string => line.replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, (iso) => localTime(iso))
+
 /** Terse column heads, not the screen's labels (en.ts `settings.security.coverage.class.*`): the CLI prints words a script reads. */
 const COVERAGE_CLASSES = [
   ['shell', 'shell'],
@@ -441,8 +445,8 @@ export function humanFor(
       const blocks = [
         ...(note === null ? [] : [t('en', note.key, note.params)]),
         // Beside "Could not read", nothing found is said of what could be read
-        findings.length === 0 ? t('en', report.unread.length > 0 ? 'findings.noneRead' : 'findings.none') : columns(findings.map((f) => [str(f.rule), nameOf(f.subject), str(f.reason), `→ ${str(f.action)}`, ...ignoredMark(f)])),
-        ...(info.length === 0 ? [] : [columns(info.map((l) => [nameOf(l.subject), str(l.reason)]))]),
+        findings.length === 0 ? t('en', report.unread.length > 0 ? 'findings.noneRead' : 'findings.none') : columns(findings.map((f) => [str(f.rule), nameOf(f.subject), localTimesIn(str(f.reason)), `→ ${str(f.action)}`, ...ignoredMark(f)])),
+        ...(info.length === 0 ? [] : [columns(info.map((l) => [nameOf(l.subject), localTimesIn(str(l.reason))]))]),
         ...[unreadLine('en', report.unread)].filter((l): l is string => l !== null)
       ]
       return blocks.join('\n\n')
