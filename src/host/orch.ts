@@ -1571,6 +1571,46 @@ export function createHostOrch(a: {
     }
   }
 
+  /** HostOrch.handle: a command the Host issues for itself. Here so that `clients-revoke` issues its pauses the same way. */
+  const hostHandle = async (cmd: string, args: Record<string, unknown>): Promise<{ status: number; body: unknown }> => {
+    const marks: CallMarks = { appRefused: false, commits: 0, effects: 0 }
+    // Inside the try for `call`'s reason: the loop that asks this must be told, not thrown at.
+    try {
+      await ready()
+      return answerOf(await handleCommand(depsFor(marks, HOST_ACTOR), { sessionId: HOST_CALLER }, cmd, args), marks)
+    } catch (err) {
+      return failureOf(err, marks)
+    }
+  }
+
+  /**
+   * After a revoke, the scheduled Jobs the client made are paused (remote governance design §8.2; the person's decision
+   * P2: pause, not delete), each through the Host's own `run-pause`, which ends their open workers as a person's pause
+   * does. A Job that pause refuses (a retained worker) is left as it is and named; the revoke stands either way. Its
+   * Jobs with no schedule keep running (§8.3), and a scheduled Job with no maker recorded, made before this release, is
+   * only counted: nothing guesses its maker (§8.4).
+   */
+  const pauseRevoked = async (
+    clientId: string,
+    name: string
+  ): Promise<{ pausedJobs: number; notPaused: Array<{ jobId: string; error: string }>; unrecordedScheduled: number }> => {
+    await ready()
+    const scheduled = store.get().jobs.filter((j) => j.schedule !== undefined)
+    let pausedJobs = 0
+    const notPaused: Array<{ jobId: string; error: string }> = []
+    for (const job of scheduled.filter((j) => j.createdBy?.clientId === clientId)) {
+      const r = await hostHandle('run-pause', { run: job.id, revokedBy: { clientId, name } })
+      if (r.status === 200) {
+        pausedJobs++
+        continue
+      }
+      const error = (r.body as { error?: unknown } | null)?.error
+      notPaused.push({ jobId: job.id, error: typeof error === 'string' ? error : `answered ${r.status}` })
+      a.log(`remote: revoked ${clientId}; job ${job.id} could not be paused: ${notPaused.at(-1)!.error}`)
+    }
+    return { pausedJobs, notPaused, unrecordedScheduled: scheduled.filter((j) => j.createdBy === undefined).length }
+  }
+
   return {
     ready,
     loadUnattended: async () => {
@@ -1635,16 +1675,7 @@ export function createHostOrch(a: {
         if (r.coordinatorSessionId && !isAlive(r.coordinatorSessionId)) ids.add(r.coordinatorSessionId)
       return [...ids]
     },
-    handle: async (cmd, args) => {
-      const marks: CallMarks = { appRefused: false, commits: 0, effects: 0 }
-      // Inside the try for `call`'s reason: the loop that asks this must be told, not thrown at.
-      try {
-        await ready()
-        return answerOf(await handleCommand(depsFor(marks, HOST_ACTOR), { sessionId: HOST_CALLER }, cmd, args), marks)
-      } catch (err) {
-        return failureOf(err, marks)
-      }
-    },
+    handle: hostHandle,
     internalDeps: () => depsFor(throwaway(), HOST_ACTOR),
     loaded: () => loaded,
     drainOnce: async () => {
@@ -1667,6 +1698,10 @@ export function createHostOrch(a: {
       // `runs-github-record` trust the Host's caller id, and anything on this machine can write that id in a frame. Other
       // commands keep taking it and journal it as the CLI it came from.
       if (sessionId === HOST_CALLER && HOST_OWN_RECORDS.has(cmd)) return { status: 403, body: { error: `${HOST_CALLER} is the Host's own caller id; a connection cannot use it` } }
+      // Nor a revoke's pause (remote governance design §8.2): it locks a Job away from every controller and agent, and
+      // only `clients-revoke` sends it, through `hostHandle`.
+      if (sessionId === HOST_CALLER && cmd === 'run-pause' && args.revokedBy !== undefined)
+        return { status: 403, body: { error: `${HOST_CALLER} is the Host's own caller id; a connection cannot use it for revokedBy` } }
       if (sessionId === APP_CALLER && from?.role !== 'app' && APP_OWN_STEPS.has(cmd))
         return { status: 403, body: { error: `${APP_CALLER} is the app's own caller id; only the app's connection can use it for ${cmd}` } }
       // **Everything is inside the try, including `state-put` and `ready()`.** `server.ts` answers
@@ -1976,12 +2011,18 @@ export function createHostOrch(a: {
           if (cmd === 'clients-list') return { status: 200, body: { clients: a.controllers.list(), health: a.controllers.health() } }
           const id = args.id
           if (typeof id !== 'string' || id === '') return { status: 400, body: { error: 'clients-revoke needs --id' } }
+          // The name its Jobs' pause records is the record's, read before `revoke` deletes it.
+          const name = a.controllers.list().find((c) => c.clientId === id)?.name ?? id
           const out = await a.controllers.revoke(id)
           // Design §3.3's order: the record and its bindings are gone (inside `revoke`), then its connections close.
           a.closeControllerConns?.(out.conns)
+          if (!out.revoked) return { status: 404, body: { error: `unknown client: ${id}` } }
+          // Then its scheduled Jobs pause (remote governance design §8.2), also when the file could not be written: the
+          // client is refused for this Host's life either way.
+          const paused = await pauseRevoked(id, name)
           if (out.saveError !== undefined)
-            return { status: 500, body: { error: `revoked until this Host stops, but clients.json could not be written: ${out.saveError}`, clientId: id } }
-          return out.revoked ? { status: 200, body: { revoked: true, clientId: id } } : { status: 404, body: { error: `unknown client: ${id}` } }
+            return { status: 500, body: { error: `revoked until this Host stops, but clients.json could not be written: ${out.saveError}`, clientId: id, ...paused } }
+          return { status: 200, body: { revoked: true, clientId: id, ...paused } }
         }
         if (cmd === 'workspace-list' || cmd === 'workspace-stop' || cmd === 'workspace-close' || cmd === 'workspace-size') {
           if (from?.role !== 'app') return { status: 403, body: { error: `${cmd} is the app’s to send` } }

@@ -76,8 +76,9 @@ const RUN_HIDDEN = [
 ] as const
 
 /** A Job's mark that a sandboxed session made it (final fix pass, C3): the Host's own rule for what its work starts in,
- *  not part of the SDK's contract. */
-const JOB_HIDDEN = ['sandboxed'] as const
+ *  not part of the SDK's contract. So are the remote controller that made it and a revoke's pause (remote governance
+ *  design §8.1, §8.2): the Host's own rule for who may resume it. */
+const JOB_HIDDEN = ['sandboxed', 'createdBy', 'pausedBy'] as const
 
 /**
  * A Task's fields kept back on purpose: all of them **the ledger the app keeps to drive convergence**. The guide

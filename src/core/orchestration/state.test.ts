@@ -2547,6 +2547,29 @@ describe('pauseSchedule', () => {
     const r = unwrap<unknown>(pauseSchedule(opened.state, templateId, NOW))
     for (const d of r.state.dispatches.filter((x) => x.endedAt === NOW)) expect(d.closedBy).toBe('pause')
   })
+
+  // Remote governance design §8.2: a revoke's pause says whose pairing it was, on the Job, the one a resume reads
+  it('pauseSchedule with pausedBy stamps it on the Job only', () => {
+    const { s, templateId } = template()
+    const fired = unwrap<{ id: string }>(startJobRun(s, templateId, FIRE) as never)
+    const pausedBy = { reason: 'controller-revoked' as const, clientId: 'cli_1', name: 'laptop', at: NOW }
+    const r = unwrap<{ pausedBy?: unknown }>(pauseSchedule(fired.state, templateId, NOW, pausedBy) as never)
+    expect(r.value.pausedBy).toEqual(pausedBy)
+    expect(r.state.jobs.find((j) => j.id === templateId)?.pausedBy).toEqual(pausedBy)
+    const run = r.state.runs.find((x) => x.id === fired.value.id)!
+    expect(run.paused).toBe(true)
+    expect('pausedBy' in run).toBe(false)
+  })
+
+  it('resumeSchedule drops pausedBy', () => {
+    const { s, templateId } = template()
+    const pausedBy = { reason: 'controller-revoked' as const, clientId: 'cli_1', name: 'laptop', at: NOW }
+    const held = unwrap<unknown>(pauseSchedule(s, templateId, NOW, pausedBy))
+    const r = unwrap<Record<string, unknown>>(resumeSchedule(held.state, templateId) as never)
+    expect('paused' in r.value).toBe(false)
+    expect('pausedBy' in r.value).toBe(false)
+    expect(r.state.jobs.find((j) => j.id === templateId)).not.toHaveProperty('pausedBy')
+  })
 })
 
 describe('latestRun', () => {

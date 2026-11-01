@@ -14,6 +14,7 @@ import {
   RECEIPT_TTL_MS
 } from './orch'
 import { PENDING_START_WINDOW_MS } from '../core/orchestration/command'
+import { HOST_CALLER } from '../core/host/driver'
 import {
   applyWorkerDone,
   attachCoordinator,
@@ -5280,6 +5281,136 @@ describe('clients-revoke closes the client’s live connections (remote runtime 
     const r = await orch.call({ cmd: 'clients-revoke', args: { id: got.clientId }, sessionId: '', from: { role: 'cli', toOthers: () => {} } })
     expect(r.status).toBe(200)
     expect(closed).toEqual([{ linkGen: 3, conn: 'c7' }])
+  })
+})
+
+describe('clients-revoke pauses the scheduled Jobs the client made (remote governance design §8.2 to §8.4)', () => {
+  const cli = { role: 'cli' as const, toOthers: () => {} }
+  const DAILY = { kind: 'daily' as const, time: '09:00' }
+  const releaseWorker = vi.fn(async () => {})
+  /** Two paired clients, laptop and desk, and four Jobs: a scheduled one each of them made, a scheduled one with no
+   *  maker (made before this release), and one laptop made with no schedule. Laptop's two each hold an open worker. */
+  const fixture = async (o: { retained?: boolean } = {}) => {
+    releaseWorker.mockClear()
+    const controllers = createControllerRegistry()
+    const redeem = async (name: string): Promise<string> => {
+      const got = await controllers.redeem(controllers.createPairing({ permission: 'full-control', name }).code, 'x')
+      if (!got.ok) throw new Error('redeem')
+      return got.clientId
+    }
+    const laptop = await redeem('laptop')
+    const desk = await redeem('desk')
+    let s: OrchState = emptyState()
+    const job = (a: { schedule?: typeof DAILY; createdBy?: { kind: 'controller'; clientId: string; name: string } }): string => {
+      const r = createJob(s, { objective: 'o', cwd: 'D:/p', ...a }, NOW)
+      if (!r.ok) throw new Error(r.error)
+      s = r.state
+      return r.value.id
+    }
+    /** A Run of the Job with one Task on an open worker, alive in this Host */
+    const working = (jobId: string, sessionId: string, retained = false): string => {
+      const run = startJobRun(s, jobId, NOW)
+      if (!run.ok) throw new Error(run.error)
+      const task = createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW)
+      if (!task.ok) throw new Error(task.error)
+      const d = openDispatch(task.state, { taskId: task.value.id, provider: 'claude', accountId: 'acc', sessionId, cwd: 'D:/p', specPath: 'D:/p/s.md' }, NOW)
+      if (!d.ok) throw new Error(d.error)
+      s = { ...d.state, dispatches: d.state.dispatches.map((x) => (x.id === d.value.id ? { ...x, retained } : x)) }
+      return d.value.id
+    }
+    const mine = job({ schedule: DAILY, createdBy: { kind: 'controller', clientId: laptop, name: 'laptop' } })
+    const minesWorker = working(mine, 'ses_mine', o.retained === true)
+    const theirs = job({ schedule: DAILY, createdBy: { kind: 'controller', clientId: desk, name: 'desk' } })
+    const makerless = job({ schedule: DAILY })
+    const unscheduled = job({ createdBy: { kind: 'controller', clientId: laptop, name: 'laptop' } })
+    const unscheduledWorker = working(unscheduled, 'ses_plain')
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(s), 'utf8')
+    const orch = orchOver({
+      controllers,
+      hasApp: () => false,
+      act: vi.fn(),
+      aliveSessionIds: () => new Set(['ses_mine', 'ses_plain']),
+      local: {
+        owns: () => true,
+        startWorker: vi.fn(),
+        startCoordinator: vi.fn(),
+        releaseWorker,
+        readWorker: vi.fn(),
+        probeLimit: vi.fn(async () => null),
+        readReviewFile: vi.fn(async () => null),
+        makeRunWorktree: vi.fn(),
+        mergeWorktrees: vi.fn(),
+        removeWorktrees: vi.fn()
+      } as unknown as HostLocal
+    })
+    const revoke = () => orch.call({ cmd: 'clients-revoke', args: { id: laptop }, sessionId: '', from: cli })
+    const jobOf = (id: string) => orch.state().jobs.find((j) => j.id === id)!
+    return { orch, laptop, revoke, jobOf, mine, minesWorker, theirs, makerless, unscheduled, unscheduledWorker }
+  }
+
+  it('revoking a controller pauses the scheduled Jobs it made and only those', async () => {
+    const f = await fixture()
+    const r = await f.revoke()
+    expect(r).toEqual({ status: 200, body: { revoked: true, clientId: f.laptop, pausedJobs: 1, notPaused: [], unrecordedScheduled: 1 } })
+    expect(f.jobOf(f.mine)).toMatchObject({ paused: true, pausedBy: { reason: 'controller-revoked', clientId: f.laptop, name: 'laptop', at: NOW } })
+    for (const id of [f.theirs, f.makerless, f.unscheduled]) {
+      expect(f.jobOf(id).paused, id).toBeUndefined()
+      expect(f.jobOf(id).pausedBy, id).toBeUndefined()
+    }
+  })
+
+  it('its open workers end as run-pause ends them', async () => {
+    const f = await fixture()
+    await f.revoke()
+    expect(releaseWorker).toHaveBeenCalledWith({ dispatchId: f.minesWorker })
+    expect(f.orch.state().dispatches.find((d) => d.id === f.minesWorker)).toMatchObject({ workerState: 'stopped', closedBy: 'pause' })
+  })
+
+  // §8.3: a revoke stops what would start again on its own, not work already under way
+  it('a Job it made with no schedule keeps running', async () => {
+    const f = await fixture()
+    await f.revoke()
+    expect(releaseWorker).not.toHaveBeenCalledWith({ dispatchId: f.unscheduledWorker })
+    const d = f.orch.state().dispatches.find((x) => x.id === f.unscheduledWorker)!
+    expect(d.endedAt).toBeUndefined()
+    expect(d.closedBy).toBeUndefined()
+  })
+
+  it('a retained worker refuses that Job’s pause, the revoke still succeeds and names it in notPaused', async () => {
+    const f = await fixture({ retained: true })
+    const r = await f.revoke()
+    expect(r.status).toBe(200)
+    const body = r.body as { revoked: boolean; pausedJobs: number; notPaused: Array<{ jobId: string; error: string }> }
+    expect(body).toMatchObject({ revoked: true, pausedJobs: 0, unrecordedScheduled: 1 })
+    expect(body.notPaused).toEqual([{ jobId: f.mine, error: expect.stringContaining('worker-retain') }])
+    // No half state: the Job and its worker are as they were, and the Host log names it
+    expect(f.jobOf(f.mine).paused).toBeUndefined()
+    expect(f.jobOf(f.mine).pausedBy).toBeUndefined()
+    expect(releaseWorker).not.toHaveBeenCalled()
+    expect(logs).toContain(`remote: revoked ${f.laptop}; job ${f.mine} could not be paused: ${body.notPaused[0].error}`)
+    // The client is gone all the same
+    expect((await f.orch.call({ cmd: 'clients-list', args: {}, sessionId: '', from: cli })).body).toMatchObject({ clients: [{ name: 'desk' }] })
+  })
+
+  // Anything on this machine can write the Host's caller id in a frame (HOST_OWN_RECORDS' reason), and a revoke's
+  // pause locks a Job away from every controller and agent
+  it('a connection naming itself the Host’s caller is refused revokedBy', async () => {
+    const f = await fixture()
+    const r = await f.orch.call({ cmd: 'run-pause', args: { run: f.theirs, revokedBy: { clientId: 'cli_x', name: 'x' } }, sessionId: HOST_CALLER, from: cli })
+    expect(r.status).toBe(403)
+    await f.orch.ready()
+    expect(f.jobOf(f.theirs).paused).toBeUndefined()
+    expect(f.jobOf(f.theirs).pausedBy).toBeUndefined()
+  })
+
+  it('a second revoke of the same client is 404 and pauses nothing', async () => {
+    const f = await fixture()
+    await f.revoke()
+    // A person resumes it, so a second pause would show
+    expect((await f.orch.call({ cmd: 'run-resume', args: { run: f.mine }, sessionId: '', from: cli })).status).toBe(200)
+    const again = await f.revoke()
+    expect(again).toEqual({ status: 404, body: { error: `unknown client: ${f.laptop}` } })
+    expect(f.jobOf(f.mine).paused).toBeUndefined()
   })
 })
 

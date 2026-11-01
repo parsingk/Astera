@@ -1547,6 +1547,32 @@ function outsideSandboxTarget(
   }
 }
 
+/** The commands that resume or run a Job, or set a Run of it going again (remote governance design §8.2; the
+ *  controller's ruling C3): `runs-resume` and `runs-reconverge` too, since a revoke's pause pauses every Run of the Job
+ *  and either would set one going while the Job waits for a person. */
+const RESUMES_JOB: ReadonlySet<string> = new Set(['run-resume', 'run-start', 'run-spawn', 'jobs-run', 'runs-resume', 'runs-reconverge'])
+
+/** The refusal of a controller or an agent that resumes or runs a Job a revoke paused (Job.pausedBy; remote governance
+ *  design §8.2, the person's decision P2), or null. Every controller is refused, a person's too: the pairing that made
+ *  the Job is gone, and the decision to start it again is for a person on this computer, the app or their own shell.
+ *  The Job is found as outsideSandboxTarget finds it: a Run id names its Job. An id that names nothing is null here,
+ *  and the command answers it as before. */
+function revokedPauseRefusal(s: OrchState, caller: RuleCaller, cmd: string, args: Record<string, unknown>): Reply | null {
+  if (!RESUMES_JOB.has(cmd) || (caller.role !== 'controller' && !agentCaller(caller))) return null
+  const id = str(cmd === 'jobs-run' || cmd === 'runs-resume' || cmd === 'runs-reconverge' ? args.id : args.run)
+  if (id === null) return null
+  const run = s.runs.find((r) => r.id === id)
+  const job = run ? jobOf(s, run) : s.jobs.find((j) => j.id === id)
+  if (job?.pausedBy === undefined) return null
+  return {
+    status: 403,
+    body: {
+      error: `job ${job.id} was paused because the pairing of ${job.pausedBy.name}, which made it, was revoked; only a person on this computer can resume it`,
+      reason: 'controller-revoked'
+    }
+  }
+}
+
 /** The person's decision on the final review (2026-10-22): an agent (`agentCaller`) may start work as a profile that
  *  runs without permission checks only while the app-wide mode already skips them, so a profile is never an agent's way
  *  around the app's own setting. A person is not asked, and neither is a profile that checks or follows the app. A
@@ -1898,6 +1924,10 @@ export async function handleCommand(
     // 자리이고, 그 위에 커밋은 없다 — 여기서 멈춰도 읽고-쓰는 창이 열리지 않는다.
     if (!(await deps.trackingEnabled?.())) return conflict('work unit tracking is off')
   }
+  // **A Job a revoke paused waits for a person here** (remote governance design §8.2), before every other check of a
+  // start, so a controller is told why rather than about a plugin or a profile.
+  const revoked = revokedPauseRefusal(deps.getState(), caller, cmd, args)
+  if (revoked) return revoked
   // **The plugin checks of a Run about to start, before the state too** (plugin Phase 5 C7; 5a final review I2). The
   // plugin list is a disk read in the Host: a refusal read after `s` below would commit a state from before it, over
   // whatever landed meanwhile. The ids come from a read of their own; `jobs run` checks once for the `run-start` it
@@ -2495,6 +2525,11 @@ export async function handleCommand(
             ...(agentProfileId ? { agentProfileId } : {}),
             // Made by a sandboxed session: its coordinator and workers start in the sandbox (final fix pass, C3)
             ...(callerBoxed ? { sandboxed: true } : {}),
+            // Made by a remote controller: a revoke of its pairing pauses it if it is scheduled (remote governance
+            // design §8.1, §8.2). The name is the record's on this Host, as the principal carries it.
+            ...(caller.role === 'controller' && caller.principal
+              ? { createdBy: { kind: 'controller' as const, clientId: caller.principal.clientId, name: caller.principal.name } }
+              : {}),
             // `--auto` 는 값이 없는 플래그다(task-create --review 와 같은 모양). **예약이면 켜지
             // 않는다** — 템플릿 자신은 돌지 않기 때문이다.
             //
@@ -3291,6 +3326,16 @@ export async function handleCommand(
     case 'run-pause': {
       const id = str(args.run)
       if (!id) return bad('--run is required')
+      // A revoke's pause (remote governance design §8.2): the Host's own, after it revoked the pairing of the controller
+      // that made this Job. Anyone else naming one could lock a Job away from every controller and agent.
+      let pausedBy: Job['pausedBy']
+      if (args.revokedBy !== undefined) {
+        if (caller.sessionId !== HOST_CALLER) return bad('revokedBy is the Host’s own, sent when it revokes a pairing')
+        const by = args.revokedBy as { clientId?: unknown; name?: unknown } | null
+        if (typeof by !== 'object' || by === null || typeof by.clientId !== 'string' || typeof by.name !== 'string')
+          return bad('revokedBy takes { clientId, name }')
+        pausedBy = { reason: 'controller-revoked', clientId: by.clientId, name: by.name, at: now }
+      }
       const target = s.jobs.find((j) => j.id === id)
       if (!target) return notFound(`unknown job: ${id}`)
       // 일시 중지는 예약에만 있다. 보통 Job 에는 멈출 발화가 없고, 그 Job 의 워커를 멈추는 것은
@@ -3342,7 +3387,7 @@ export async function handleCommand(
         }
         latest = deps.getState()
       }
-      return commit(pauseSchedule(latest, id, now))
+      return commit(pauseSchedule(latest, id, now, pausedBy))
     }
     case 'run-resume': {
       const id = str(args.run)
