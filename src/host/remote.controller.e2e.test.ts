@@ -93,7 +93,17 @@ async function runtime(seed?: OrchState, o: { github?: OrchServerDeps['github'] 
         cliVersions: { warm: async () => {}, cached: () => undefined },
         claudeUsernsRestricted: () => false,
         checkRunner: false,
-        findings: async () => ({ findings: [], info: [], observe: { on: false, days: 0 }, unread: [], computedAt: NOW }),
+        // One open finding whose words name a path and a command line: only its rule is counted across (design §5.3)
+        findings: async () => ({
+          findings: [
+            {
+              key: 'unused-mcp:mcp_s7', rule: 'unused-mcp', subject: { kind: 'extension', id: 'mcp_s7', name: `secret-cmd-7 in ${runtimeDir}` }, profileIds: [],
+              message: { key: 'findings.x' } as never, reason: `secret-cmd-7 in ${runtimeDir} was not called`, suggestion: { key: 'findings.y' } as never,
+              action: 'a', open: { kind: 'extensions' } as never, ignored: false
+            }
+          ],
+          info: [], observe: { on: false, days: 0 }, unread: [], computedAt: NOW
+        }),
         log: (m) => logs.push(m)
       }),
     ...(o.github ? { github: o.github } : {}),
@@ -413,13 +423,15 @@ describe('a GitHub lifecycle Run on a Runtime (design §10 Remote)', { timeout: 
 // read it; an MCP client, an agent session and a CLI that does not say are refused it; and what crosses is names, states
 // and counts, its whole shape pinned below so a field added later fails here until someone has looked at it.
 describe('the Runtime report over a paired link (remote governance design §5.1, §5.3)', { timeout: 30_000 }, () => {
+  /** Never created: only its name is stored, as a hide-only project. */
+  const HOME_PROJECT = path.join(os.homedir(), 'proj-7')
   /** The Runtime's Control Plane, each part holding something that must never cross. */
   const seedControlPlane = async (): Promise<void> => {
     await writeExtensionRegistry(runtimeDir, {
       version: 1,
       entries: [
         {
-          id: 'mcp_s7', kind: 'mcp', name: 'tracker', transport: 'stdio', command: 'secret-cmd-7', args: ['--key', 'arg-7'],
+          id: 'mcp_s7', kind: 'mcp', name: 'tracker', transport: 'stdio', command: 'secret-cmd-7', args: ['--key', 'arg-7'], cwd: path.join(runtimeDir, 'srv-7'),
           env: { TOKEN: { secret: 'mcp_s7.TOKEN' }, PLAIN: { value: 'pv-7' } }, providers: ['claude', 'codex'], importedFrom: 'acc_1', enabled: true
         },
         { id: 'mcp_h7', kind: 'mcp', name: 'web', transport: 'http', url: 'https://u7.example', env: {}, providers: ['claude'], importedFrom: 'acc_1', enabled: false },
@@ -432,7 +444,11 @@ describe('the Runtime report over a paired link (remote governance design §5.1,
     await fs.writeFile(path.join(skill, 'SKILL.md'), '---\nname: review\n---\nReview it.\n')
     await writeCredentials(runtimeDir, {
       version: 1,
-      entries: [{ kind: 'hide-only', id: 'hc_7', alias: 'Cloud', envNames: ['AWS_SECRET_ACCESS_KEY'], presets: ['aws'], hide: { on: true, projects: [runtimeDir] }, createdAt: NOW }],
+      entries: [
+        { kind: 'hide-only', id: 'hc_7', alias: 'Cloud', envNames: ['AWS_SECRET_ACCESS_KEY'], presets: ['aws'], hide: { on: true, projects: [runtimeDir] }, createdAt: NOW },
+        // A project under the home folder, as most are: a leak would carry the person's user name
+        { kind: 'hide-only', id: 'hc_8', alias: 'Home', envNames: ['HOME_TOKEN'], presets: [], hide: { on: true, projects: [HOME_PROJECT] }, createdAt: NOW }
+      ],
       mcpHide: {}
     })
     await fs.writeFile(
@@ -461,7 +477,7 @@ describe('the Runtime report over a paired link (remote governance design §5.1,
   }
 
   /** What the seeded Runtime's report holds. A key added to the report shows up here first: look at what it carries
-   *  against §5.3 before adding it. (No open findings, so `byRule` is empty; its keys would be rule names.) */
+   *  against §5.3 before adding it. `byRule`'s key is the seeded finding's rule name. */
   const EXPECTED_SHAPE = [
     'appBypass',
     'astera.platform',
@@ -482,7 +498,7 @@ describe('the Runtime report over a paired link (remote governance design §5.1,
     'extensions[].name',
     'extensions[].providers[]',
     'extensions[].secretNames[]',
-    'findings.byRule',
+    'findings.byRule.unused-mcp',
     'findings.total',
     'policy.cliVersions.claude',
     'policy.cliVersions.codex',
@@ -522,7 +538,7 @@ describe('the Runtime report over a paired link (remote governance design §5.1,
       astera: { version: '9.9.9', platform: process.platform },
       extensions: [{ id: 'mcp_s7', kind: 'mcp', secretNames: ['TOKEN'], gateway: 'failed' }, { id: 'mcp_h7', kind: 'mcp', enabled: false }, { id: 'skill-review', kind: 'skill' }],
       policy: { mode: 'observe', rules: 1 },
-      credentials: { hideOnly: [{ alias: 'Cloud', hidden: true }], mcp: [{ serverId: 'mcp_s7', names: ['TOKEN'] }] }
+      credentials: { hideOnly: [{ alias: 'Cloud', hidden: true }, { alias: 'Home', hidden: true }], mcp: [{ serverId: 'mcp_s7', names: ['TOKEN'] }] }
     })
   })
 
@@ -535,8 +551,12 @@ describe('the Runtime report over a paired link (remote governance design §5.1,
     const body = (r as { body: unknown }).body
     const wire = JSON.stringify(body)
     // A path as it is, and as JSON writes it (a Windows path's backslashes doubled)
-    const paths = [runtimeDir, os.homedir()].flatMap((p) => [p, JSON.stringify(p).slice(1, -1)])
-    for (const leak of ['sv-7', 'pv-7', 'secret-cmd-7', 'arg-7', 'u7.example', 'rule-7', 'git.remote.write', ...paths]) expect(wire, leak).not.toContain(leak)
+    const paths = [runtimeDir, os.homedir(), HOME_PROJECT].flatMap((p) => [p, JSON.stringify(p).slice(1, -1)])
+    // A short user name could match a word the report holds anyway, so it is looked for only from four characters
+    const user = os.userInfo().username
+    const names = user.length >= 4 ? [user] : []
+    const refs = ['acc_1', 'acc_gone', 'mcp_s7.TOKEN']
+    for (const leak of ['sv-7', 'pv-7', 'secret-cmd-7', 'arg-7', 'u7.example', 'rule-7', 'git.remote.write', ...refs, ...paths, ...names]) expect(wire, leak).not.toContain(leak)
     expect(shapeOf(body)).toEqual(EXPECTED_SHAPE)
   })
 
@@ -568,5 +588,20 @@ describe('the Runtime report over a paired link (remote governance design §5.1,
     const r = await remote('rt_p4', 'control-plane-report', {}, { client: { surface: 'cli' } })
     expect(r).toMatchObject({ error: { code: 'RUNTIME_PERMISSION_DENIED' } })
     expect((r as { error: { message: string } }).error.message).toContain(UNSAID_CLI_NOTE.trim())
+  })
+
+  // §13: the report is the only Control Plane read a controller gets. The CLI never sends these (they have no --runtime
+  // form), so the link sends them as another client would, and the Runtime's own gate answers
+  it('extensions-list and credentials-list over a full-control link answer the controller refusal', async () => {
+    await seedControlPlane()
+    const rt = await runtime()
+    await pair(await rt.pairing('full-control'))
+    const reg = await controllerRegistry(laptopDir)
+    const found = (await reg.list())[0]
+    const token = await reg.token(found.runtimeId)
+    const l = openRemoteLink({ target: { runtimeId: found.runtimeId, address: found.address, port: found.port, fingerprint: found.fingerprint, token: token! }, client: PERSON })
+    links.push(l)
+    for (const cmd of ['extensions-list', 'credentials-list'])
+      expect(await l.call(cmd, {}), cmd).toMatchObject({ status: 403, body: { code: 'RUNTIME_PERMISSION_DENIED', error: `${cmd} is not available to a remote controller` } })
   })
 })
