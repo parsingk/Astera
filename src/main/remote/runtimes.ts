@@ -5,7 +5,7 @@
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { openRemoteLink, type RemoteLink, type RemoteTarget } from '../../core/remote/link'
-import { factsOf, registryStamp, seenRecorder, type RuntimeRegistry } from '../../core/runtimes/registry'
+import { factsOf, registryStamp, sameFacts, seenRecorder, type RuntimeRegistry } from '../../core/runtimes/registry'
 import type { HelloFrame } from '../../core/remote/frames'
 import os from 'node:os'
 import { controllerRegistry, resolveRuntime, runRuntimesCommand } from '../../cli/runtimes'
@@ -87,7 +87,14 @@ export function createRemoteRuntimes(a: {
     const target: RemoteTarget = { runtimeId: found.runtimeId, address: found.address, port: found.port, fingerprint: found.fingerprint, token }
     // Saved in the registry as the CLI and MCP save them (remote governance design §4.1, §4.2), so the findings and the
     // other surfaces see what the app reached.
-    const onHello = (h: HelloFrame): void => void r.noteFacts(found.runtimeId, factsOf(h, new Date().toISOString())).catch(() => undefined)
+    // Facts the profile already holds are not written: a write takes the store's cross-process lock.
+    let heldFacts = found.facts
+    const onHello = (h: HelloFrame): void => {
+      const facts = factsOf(h, new Date().toISOString())
+      if (heldFacts && sameFacts(heldFacts, facts)) return
+      heldFacts = facts
+      void r.noteFacts(found.runtimeId, facts).catch(() => undefined)
+    }
     const seen = seenRecorder(r, found.runtimeId, found.lastSeenAt)
     const link = (
       a.open ??

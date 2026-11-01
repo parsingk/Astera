@@ -8,6 +8,7 @@ import { controllerRegistry } from './runtimes'
 import { RemoteError } from '../core/remote/client'
 import type { RemoteLink, RemoteTarget } from '../core/remote/link'
 import type { HelloFrame } from '../core/remote/frames'
+import { factsOf } from '../core/runtimes/registry'
 
 const FP = 'F'.repeat(43)
 let dir: string
@@ -98,6 +99,32 @@ describe('answerRemote (remote runtime design §2.8, X1-14)', () => {
     }
     await ask('jobs-list', {}, d)
     expect((await (await controllerRegistry(dir)).list())[0].facts).toMatchObject({ asteraVersion: '1.5.0', platform: 'linux', hostProtocol: 4, capabilities: ['pty.seq'] })
+  })
+  // Task 4 review: noteFacts takes the store's cross-process lock, which a busy profile holds for up to 5 s. Facts the
+  // profile already holds (in any capability order) are not written, so a command does not wait on that lock.
+  it('facts the profile already holds cause no noteFacts call', async () => {
+    const hello: HelloFrame = {
+      t: 'hello', runtimeId: 'rt_a', displayName: 'Office', asteraVersion: '1.5.0', hostProtocol: 4, gatewayProtocol: 1, bootId: 'b1',
+      platform: 'linux', pathStyle: 'posix', permission: 'full-control', capabilities: ['pty.seq', 'pty.checkpoint']
+    }
+    await (await controllerRegistry(dir)).noteFacts('rt_a', factsOf({ ...hello, capabilities: ['pty.checkpoint', 'pty.seq'] }, 'earlier'))
+    let notes = 0
+    const d: RemoteDeps = {
+      registry: async () => {
+        const r = await controllerRegistry(dir)
+        return { ...r, noteFacts: (id, f) => (notes++, r.noteFacts(id, f)) }
+      },
+      link: (_t, o) => ({
+        hello: () => hello,
+        call: async () => (o?.onHello?.(hello), { status: 200, body: [] }),
+        subscribe: () => () => {},
+        close: () => {}
+      })
+    }
+    await ask('jobs-list', {}, d)
+    expect(notes).toBe(0)
+    await ask('jobs-list', {}, { ...d, link: (t, o) => d.link(t, { onHello: (h) => o?.onHello?.({ ...h, asteraVersion: '1.5.1' }) }) })
+    expect(notes).toBe(1)
   })
   it('an unknown Runtime is RUNTIME_NOT_FOUND', async () => {
     expect(await ask('jobs-list', {}, deps().d, 'nope')).toMatchObject({ error: { code: 'RUNTIME_NOT_FOUND' } })

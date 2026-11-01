@@ -1,12 +1,7 @@
 // stale-runtime (lifecycle design §4.7): a paired Remote Runtime this machine has not reached in more than 30 days, or
 // never reached in the 30 days since it was paired.
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { promises as fs } from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
+import { describe, it, expect } from 'vitest'
 import type { RuntimeProfile } from '../../runtimes/registry'
-import { controllerRegistry } from '../../../cli/runtimes'
-import { createRemoteRuntimes } from '../../../main/remote/runtimes'
 import type { FindingInputs } from '../compute'
 import { staleRuntimeFindings } from './runtimes'
 
@@ -66,28 +61,4 @@ describe('stale-runtime (§4.7)', () => {
   })
 })
 
-// Remote governance design §9.1: only the CLI saved lastSeenAt, so a Runtime the app used every day read as never
-// reached, and stale, 30 days after it was paired.
-describe('stale-runtime over what the app saved', () => {
-  let dir: string
-  beforeEach(async () => {
-    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-stale-runtime-'))
-  })
-  afterEach(async () => fs.rm(dir, { recursive: true, force: true }))
-
-  it('a Runtime the app reached yesterday raises no stale-runtime', async () => {
-    const registry = await controllerRegistry(dir)
-    await registry.add(runtime('rt_a', { createdAt: new Date(Date.now() - 100 * DAY).toISOString(), lastSeenAt: null }), 'tok-a')
-    const app = createRemoteRuntimes({
-      profileDir: dir,
-      version: '1.4.8',
-      open: () => ({ hello: () => null, call: async () => ({ status: 200, body: [] }), subscribe: () => () => {}, close: () => {} })
-    })
-    const c = await app.client('rt_a')
-    if ('code' in c) throw new Error(c.code)
-    await c.projects()
-    await vi.waitFor(async () => expect((await registry.list())[0].lastSeenAt).not.toBeNull())
-    const nowMs = Date.now() + DAY
-    expect(staleRuntimeFindings({ nowMs, platform: 'linux', findingsSince: new Date(nowMs - 400 * DAY).toISOString(), runtimes: await registry.list() })).toEqual([])
-  })
-})
+// The end-to-end case over what the app saves (remote governance design §9.1) is in src/main/remote/runtimes.test.ts.

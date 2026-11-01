@@ -65,7 +65,7 @@ export const factsOf = (h: Pick<HelloFrame, 'asteraVersion' | 'platform' | 'host
 })
 
 /** The same facts in another capability order are the same facts: the hello's list carries no order. */
-const sameFacts = (a: RuntimeFacts, b: RuntimeFacts): boolean =>
+export const sameFacts = (a: RuntimeFacts, b: RuntimeFacts): boolean =>
   a.asteraVersion === b.asteraVersion &&
   a.platform === b.platform &&
   a.hostProtocol === b.hostProtocol &&

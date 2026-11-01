@@ -180,8 +180,8 @@ export function openRemoteLink(a: {
           `the Runtime speaks remote protocol ${h.gatewayProtocol} and this build speaks ${GATEWAY_PROTOCOL}; update the older side`
         )
       }
-      // The pinned key matched, but the Runtime names itself another id (remote governance design): a reinstall
-      // that kept the key, or another Runtime behind it. Final, like a changed key (§4.4).
+      // The pinned key matched, but the Runtime names itself another id (remote governance design §4.4): a reinstall
+      // that kept the key, or another Runtime behind it. Final, like a changed key.
       if (h.runtimeId !== target.runtimeId) {
         link.close()
         return new RemoteError(

@@ -6,6 +6,7 @@ import { createRemoteRuntimes } from './runtimes'
 import { controllerRegistry } from '../../cli/runtimes'
 import type { RemoteLink, RemoteTarget } from '../../core/remote/link'
 import type { HelloFrame } from '../../core/remote/frames'
+import { staleRuntimeFindings } from '../../core/findings/rules/runtimes'
 
 const FP = 'F'.repeat(43)
 let dir: string
@@ -129,6 +130,23 @@ describe('createRemoteRuntimes (remote runtime design §2.7, D1.1)', () => {
     if ('code' in c) throw new Error(c.code)
     await c.projects()
     await vi.waitFor(async () => expect((await r.list())[0]).toMatchObject({ asteraVersion: '1.5.0', platform: 'darwin' }))
+  })
+  // Remote governance design §9.1: only the CLI saved lastSeenAt, so a Runtime the app used every day read as never
+  // reached, and stale, 30 days after it was paired.
+  it('a Runtime the app reached yesterday raises no stale-runtime', async () => {
+    const registry = await controllerRegistry(dir)
+    const DAY = 24 * 60 * 60 * 1000
+    await registry.add(
+      { runtimeId: 'rt_a', name: 'Office', address: '10.0.0.2', port: 47831, fingerprint: FP, permission: 'full-control', createdAt: new Date(Date.now() - 100 * DAY).toISOString(), lastSeenAt: null },
+      'tok-a'
+    )
+    const r = createRemoteRuntimes({ profileDir: dir, version: '1.4.8', open: opener().open })
+    const c = await r.client('rt_a')
+    if ('code' in c) throw new Error(c.code)
+    await c.projects()
+    await vi.waitFor(async () => expect((await registry.list())[0].lastSeenAt).not.toBeNull())
+    const nowMs = Date.now() + DAY
+    expect(staleRuntimeFindings({ nowMs, platform: 'linux', findingsSince: new Date(nowMs - 400 * DAY).toISOString(), runtimes: await registry.list() })).toEqual([])
   })
   it('remove forgets a Runtime and closes its client; an unknown id is NOT_FOUND', async () => {
     const o = opener()

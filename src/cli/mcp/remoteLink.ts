@@ -16,7 +16,7 @@ import { mcpSessionsOf } from '../../core/settings/mcpSessions'
 import { mcpGithubWriteOf } from '../../core/settings/mcpGithubWrite'
 import { readAppSettingsObject } from '../../core/settings/settingsObject'
 import type { McpClient } from '../../core/continuity/actor'
-import { factsOf, registryStamp, seenRecorder, type RuntimeProfile, type RuntimeRegistry } from '../../core/runtimes/registry'
+import { factsOf, registryStamp, sameFacts, seenRecorder, type RuntimeProfile, type RuntimeRegistry } from '../../core/runtimes/registry'
 import type { HelloFrame } from '../../core/remote/frames'
 import { controllerRegistry, resolveRuntime } from '../runtimes'
 import type { HostLink, LinkFailure } from './hostLink'
@@ -103,7 +103,14 @@ export function openMcpRuntimes(a: {
       const target: RemoteTarget = { runtimeId: found.runtimeId, address: found.address, port: found.port, fingerprint: found.fingerprint, token }
       const c = a.client()
       // What this server reaches is reached, and who the Runtime says it is kept (remote governance design §4.1, §4.2).
-      const onHello = (h: HelloFrame): void => void r.noteFacts(found.runtimeId, factsOf(h, new Date().toISOString())).catch(() => undefined)
+      // Facts the profile already holds are not written: a write takes the store's cross-process lock.
+      let heldFacts = found.facts
+      const onHello = (h: HelloFrame): void => {
+        const facts = factsOf(h, new Date().toISOString())
+        if (heldFacts && sameFacts(heldFacts, facts)) return
+        heldFacts = facts
+        void r.noteFacts(found.runtimeId, facts).catch(() => undefined)
+      }
       const link = remoteHostLink(
         (
           a.open ??
