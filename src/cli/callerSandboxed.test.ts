@@ -56,6 +56,8 @@ describe('askCallerSandboxed (remote governance design §7.4)', () => {
 
   it('a 403 answers true', async () => {
     expect(await ask(SESSION_ENV, answering({ status: 403, body: { error: 'no' } }).connect)).toBe(true)
+    // A workload token the Host does not know (ruling R13-1)
+    expect(await ask({ ...SESSION_ENV, ASTERA_GATEWAY_TOKEN: 'stale' }, answering({ status: 401, body: { error: 'workload token not recognised' } }).connect)).toBe(true)
     // So does a Host too old to know the command, and an answer with no boolean in it
     expect(await ask(SESSION_ENV, answering({ status: 400, body: { error: 'unknown command: caller-sandboxed' } }).connect)).toBe(true)
     expect(await ask(SESSION_ENV, answering({ status: 200, body: { sandboxed: 'no' } }).connect)).toBe(true)

@@ -1316,11 +1316,20 @@ describe('caller-sandboxed', () => {
   const cli = { role: 'cli' as const, toOthers: () => {} }
   const ask = (orch: ReturnType<typeof orchOver>, from: OrchCaller, sessionId = '') => orch.call({ cmd: 'caller-sandboxed', args: {}, sessionId, from })
 
+  const HELD = new Set(['ses_box', 'ses_open'])
   it('caller-sandboxed answers true for a session the Host holds as sandboxed, false for another, false with no session', async () => {
-    const orch = orchOver({ sessionSandboxed: (id) => id === 'ses_box' })
+    const orch = orchOver({ sessionSandboxed: (id) => id === 'ses_box', sessionHeld: (id) => HELD.has(id) })
     expect(await ask(orch, cli, 'ses_box')).toEqual({ status: 200, body: { sandboxed: true } })
     expect(await ask(orch, cli, 'ses_open')).toEqual({ status: 200, body: { sandboxed: false } })
     expect(await ask(orch, cli)).toEqual({ status: 200, body: { sandboxed: false } })
+  })
+
+  // Ruling R13-1 (§7.4: unknown counts as sandboxed): a stale ASTERA_SESSION, or one of another Host's sessions. A token
+  // names a held session or is refused 401 before this (host/server.ts), so the name is what is left to check.
+  it('a session id the Host does not hold answers true, and so does every id on a Host that cannot say what it holds', async () => {
+    expect(await ask(orchOver({ sessionSandboxed: () => false, sessionHeld: (id) => HELD.has(id) }), cli, 'ses_gone')).toEqual({ status: 200, body: { sandboxed: true } })
+    expect(await ask(orchOver({ sessionSandboxed: () => false }), cli, 'ses_open')).toEqual({ status: 200, body: { sandboxed: true } })
+    expect(await ask(orchOver({ sessionSandboxed: () => false }), cli)).toEqual({ status: 200, body: { sandboxed: false } })
   })
 
   it('MCP and a controller are refused it', async () => {

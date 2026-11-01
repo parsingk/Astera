@@ -569,6 +569,10 @@ export function createHostOrch(a: {
   /** Whether a session this Host holds runs in its CLI's sandbox (sandboxedSession.ts), passed through to `hostOrchDeps`:
    *  what such a session starts starts in the sandbox too (final fix pass, C3). Absent: no caller reads as sandboxed. */
   sessionSandboxed?: OrchServerDeps['sessionSandboxed']
+  /** Whether a live terminal or chat of this Host is the session (sandboxedSession.ts sessionHeldIn), for
+   *  `caller-sandboxed` only (remote governance design §7.4). Absent: no session reads as held, so every one counts as
+   *  sandboxed there. */
+  sessionHeld?: (sessionId: string) => boolean
   /** GitHub through the Host's gh (MCP P2-B), passed through to `hostOrchDeps`. Absent: the `github-*`
    *  commands answer 409. */
   github?: OrchServerDeps['github']
@@ -1923,10 +1927,13 @@ export function createHostOrch(a: {
         }
         // **Whether the calling session runs in its CLI's sandbox** (remote governance design §7.4): this machine's CLI and
         // stdio MCP server ask it before they send a change to a paired Runtime, which a sandboxed session may only read.
-        // The session is the one the call's token or `session` names, as for every CLI call. Only the CLI role: an MCP
-        // connection has no session, and a controller's question would be about nobody here. Above the receipt line: a read.
+        // The session is the one the call's token or `session` names, as for every CLI call; one this Host does not hold
+        // (a stale ASTERA_SESSION, another Host's session) cannot be vouched for, so it counts as sandboxed (ruling R13-1).
+        // No session at all is the person's own shell. Only the CLI role: an MCP connection has no session, and a
+        // controller's question would be about nobody here. Above the receipt line: a read.
         if (cmd === 'caller-sandboxed') {
           if (from?.role !== 'cli') return { status: 403, body: { error: "caller-sandboxed is for this machine's CLI" } }
+          if (sessionId !== '' && a.sessionHeld?.(sessionId) !== true) return { status: 200, body: { sandboxed: true } }
           return { status: 200, body: { sandboxed: await sandboxedCaller({ sessionSandboxed: a.sessionSandboxed }, { sessionId }) } }
         }
         // **Answered here, beside the two above, and for the same reason (Host S3, §3.1).** None of

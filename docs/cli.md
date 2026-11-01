@@ -934,7 +934,8 @@ take one, as any flag a command does not take is.
 and sends the command to a paired Runtime instead of this machine's Host ([remote-runtime.md](remote-runtime.md)).
 Only the commands a Runtime offers take it; any other refuses with `RUNTIME_CAPABILITY_MISSING` before it
 reads anything on this machine. After the command, `--runtime` is refused with 2. From inside a sandboxed
-session, a command that changes work on the Runtime is refused with 5 before anything is sent; reads go.
+session, a command that changes work on the Runtime is refused with 5 before anything is sent; reads go. A shell
+whose `ASTERA_SESSION` names no session this machine's Astera holds counts as sandboxed: unset it.
 
 **`projects find --path <path>` names the project a folder belongs to**: the registered project whose
 folder is that path or holds it. When registered projects nest, as a package registered inside a

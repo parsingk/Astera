@@ -62,7 +62,7 @@ import { createConhostReaper, reapWindowsConsoleHosts } from './conhostReaper'
 import { createRemoteSessions, type RemoteSessions } from './remoteSessions'
 import { attachPtyHost } from './ptyHost'
 import { attachProcHost } from './procHost'
-import { sessionSandboxedIn } from './sandboxedSession'
+import { sessionHeldIn, sessionSandboxedIn } from './sandboxedSession'
 import { ProcRegistry } from './procRegistry'
 import { createProcHolders, procHeldBy } from './procHolders'
 import { nodeProcSpawn } from './nodeProc'
@@ -1094,6 +1094,8 @@ async function main(): Promise<void> {
     // Whether a caller's session runs in the sandbox, from its pty's or chat proc's note: what it starts then starts in
     // the sandbox too (final fix pass, C3)
     sessionSandboxed: (sessionId) => sessionSandboxedIn({ ptys: registry, procs }, sessionId),
+    // Whether the session is one this Host holds at all, for `caller-sandboxed` (remote governance design §7.4)
+    sessionHeld: (sessionId) => sessionHeldIn({ ptys: registry, procs }, sessionId),
     // `sessions create` (CLI spec §14): the spawner's path for a terminal session, the chat manager's for
     // a chat one (sessionCreate.ts). Without a spawner both refuse with 6.
     createSession: createHostSessionStarter({

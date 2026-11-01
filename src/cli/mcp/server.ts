@@ -21,7 +21,7 @@ import { sanitize } from '../../core/orchestration/checkpoint'
 import { cliHostTarget, runHostCommand } from '../host'
 import { openHostLink, type HostLink } from './hostLink'
 import { openMcpRuntimes, type McpRuntimes } from './remoteLink'
-import { askCallerSandboxed } from '../callerSandboxed'
+import { hostSaysSandboxed, rememberedSandboxed } from '../callerSandboxed'
 import { remoteTarget } from '../../core/remote/targets'
 import { resolveRuntime } from '../runtimes'
 import { LIST_LIMIT, cursorOffset, orderAndCut } from './lists'
@@ -575,16 +575,14 @@ export async function serveMcp(a: {
   const link = counted(inner)
 
   // The paired Runtimes of this profile, for the tools given a runtimeId (remote runtime design §2.8). Whether this
-  // server's session is sandboxed is asked once, at the first change, and kept: a session's sandbox does not change while
-  // it runs (remote governance design §7.4).
-  let sandboxed: Promise<boolean> | null = null
+  // server's session is sandboxed is asked at a change until the Host answers, then kept (remote governance design §7.4).
   const opened =
     a.runtimes ??
     openMcpRuntimes({
       profileDir: cliHostTarget({ env: a.env, platform: a.platform, home: a.home }).profileDir,
       version: a.version,
       client: () => server.server.getClientVersion(),
-      sandboxed: () => (sandboxed ??= askCallerSandboxed({ env: a.env, platform: a.platform, home: a.home, version: a.version }))
+      sandboxed: rememberedSandboxed(() => hostSaysSandboxed({ env: a.env, platform: a.platform, home: a.home, version: a.version }))
     })
   const runtimes: McpRuntimes = {
     list: () => opened.list(),

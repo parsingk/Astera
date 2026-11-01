@@ -11,23 +11,32 @@ import { cliHostTarget, workloadTokenFor } from './host'
 
 /** Why a change to a Runtime is not sent from a sandboxed session (§7.4, the person's decision P3). Here and not beside
  *  `remoteMutation` in core/remote/targets.ts: that module is in the renderer's build, and the CLI's spelling of a
- *  command (cliUsage.ts) brings node-only modules with it. */
+ *  command (cliUsage.ts) brings node-only modules with it. The closing clause is for a person's shell that kept a stale
+ *  `ASTERA_SESSION`, which the Host cannot vouch for and so counts as sandboxed (ruling R13-1). */
 export const sandboxedRemoteRefusal = (cmd: string): string =>
-  `a sandboxed session can only read another computer: ${spelledCommand(cmd)} changes work there, so it was not sent`
+  `a sandboxed session can only read another computer: ${spelledCommand(cmd)} changes work there, so it was not sent (if this shell is not an agent session, unset ASTERA_SESSION)`
 
 /** The whole question, connection included: a Host that says nothing in this long counts as no answer. */
 const DEADLINE_MS = 10_000
 
-/** False for a process in no agent session (no `ASTERA_SESSION`, no `ASTERA_GATEWAY_TOKEN`): the person's own shell, the
- *  same trust the local classification gives it (§7.2). Otherwise the Host's answer, and true for anything that is not
- *  a 200 with a boolean in it: an answer that cannot be had counts as sandboxed (§7.4). */
-export async function askCallerSandboxed(a: {
+type AskArgs = {
   env: NodeJS.ProcessEnv
   platform: NodeJS.Platform
   home: string
   version: string
   connect?: typeof connectHost
-}): Promise<boolean> {
+}
+
+/** False for a process in no agent session (no `ASTERA_SESSION`, no `ASTERA_GATEWAY_TOKEN`): the person's own shell, the
+ *  same trust the local classification gives it (§7.2). Otherwise the Host's answer, and true for anything that is not
+ *  a 200 with a boolean in it: an answer that cannot be had counts as sandboxed (§7.4). */
+export async function askCallerSandboxed(a: AskArgs): Promise<boolean> {
+  return (await hostSaysSandboxed(a)) ?? true
+}
+
+/** `askCallerSandboxed` with the failure kept apart: null when no definite answer was had (no Host, no reply in time, a
+ *  refusal, an older Host), so a caller that remembers the answer can leave that one out (ruling R13-2). */
+export async function hostSaysSandboxed(a: AskArgs): Promise<boolean | null> {
   const sessionId = a.env.ASTERA_SESSION ?? ''
   if (sessionId === '' && !a.env.ASTERA_GATEWAY_TOKEN) return false
   const started = Date.now()
@@ -36,9 +45,9 @@ export async function askCallerSandboxed(a: {
   try {
     conn = await (a.connect ?? connectHost)({ address, profileDir, app: a.version, log: () => {}, timeoutMs: DEADLINE_MS })
   } catch {
-    return true
+    return null
   }
-  if ('error' in conn) return true
+  if ('error' in conn) return null
   const c = conn
   try {
     const token = workloadTokenFor({ env: a.env, platform: a.platform, home: a.home, profileDir, address })
@@ -61,8 +70,21 @@ export async function askCallerSandboxed(a: {
       c.call({ t: 'orch-call', call, cmd: 'caller-sandboxed', args: {}, session: sessionId, ...(token === undefined ? {} : { token }) })
     })
     const sandboxed = (body as { sandboxed?: unknown } | null)?.sandboxed
-    return typeof sandboxed === 'boolean' ? sandboxed : true
+    return typeof sandboxed === 'boolean' ? sandboxed : null
   } finally {
     c.close()
+  }
+}
+
+/** The MCP server's question, asked until the Host gives a definite answer and then kept for the server's life: a
+ *  session's sandbox does not change while it runs (§7.4). An ask with no answer counts as sandboxed for that call only,
+ *  so a Host that was restarting does not refuse the session's changes for good (ruling R13-2). */
+export function rememberedSandboxed(ask: () => Promise<boolean | null>): () => Promise<boolean> {
+  let kept: boolean | null = null
+  return async () => {
+    if (kept !== null) return kept
+    const said = await ask()
+    if (said !== null) kept = said
+    return said ?? true
   }
 }

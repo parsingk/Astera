@@ -149,7 +149,7 @@ describe('answerRemote (remote runtime design §2.8, X1-14)', () => {
     expect(r).toEqual({
       error: {
         code: 'PERMISSION_DENIED',
-        message: 'a sandboxed session can only read another computer: jobs create changes work there, so it was not sent'
+        message: 'a sandboxed session can only read another computer: jobs create changes work there, so it was not sent (if this shell is not an agent session, unset ASTERA_SESSION)'
       }
     })
     expect(linked).toBe(0)

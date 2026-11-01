@@ -12,6 +12,9 @@ import { RemoteError } from '../../core/remote/client'
 import type { RemoteLink, RemoteTarget } from '../../core/remote/link'
 import type { HelloFrame } from '../../core/remote/frames'
 import { mcpAccessForRemote } from '../../core/settings/mcpAccess'
+import { hostSaysSandboxed, rememberedSandboxed } from '../callerSandboxed'
+import type { connectHost } from '../../core/host/connect'
+import type { HostMessage } from '../../core/host/protocol'
 
 const FP = 'F'.repeat(43)
 let dir: string
@@ -212,7 +215,7 @@ describe('openMcpRuntimes', () => {
       sandboxed: async () => true,
       open: () => ({ hello: () => null, call: async (cmd) => (seen.push(cmd), { status: 200, body: [] }), subscribe: () => () => {}, close: () => {} })
     })
-    expect(await r.refusal('jobs-create')).toBe('a sandboxed session can only read another computer: jobs create changes work there, so it was not sent')
+    expect(await r.refusal('jobs-create')).toBe('a sandboxed session can only read another computer: jobs create changes work there, so it was not sent (if this shell is not an agent session, unset ASTERA_SESSION)')
     const client = await connected(recording().link, r)
     const refused = await client.callTool({ name: 'create_job', arguments: { runtimeId: 'rt_a', projectId: 'p1', objective: 'o', coordinatorAccountId: 'acc_1' } })
     expect(refused.isError).toBe(true)
@@ -225,6 +228,40 @@ describe('openMcpRuntimes', () => {
     // One that is not sandboxed is not refused by it
     const open = openMcpRuntimes({ profileDir: dir, version: '1.4.8', client: () => undefined, sandboxed: async () => false, open: () => fakeLink() })
     expect(await open.refusal('jobs-create')).toBeNull()
+  })
+
+  // Ruling R13-2: only the Host's own answer is kept. A failed ask refuses that call and the next change asks again.
+  it('a Host down at the first write refuses it; up at the second, an unsandboxed session is let through and that is remembered', async () => {
+    await write({ mcpAccess: 'control' })
+    let up = false
+    let connects = 0
+    const connect = (async () => {
+      connects++
+      if (!up) return { error: 'unreachable' as const }
+      let listener: ((m: HostMessage) => void) | null = null
+      return {
+        hello: { host: 'h', pid: 1, startedAt: 'x', features: [] },
+        call: (m: { call: string }) => queueMicrotask(() => listener?.({ t: 'orch-result', call: m.call, status: 200, body: { sandboxed: false } } as HostMessage)),
+        onMessage: (cb: (m: HostMessage) => void) => ((listener = cb), () => (listener = null)),
+        onClose: () => () => {},
+        ref: () => {},
+        unref: () => {},
+        close: () => {}
+      }
+    }) as unknown as typeof connectHost
+    const env = { ASTERA_SESSION: 'ses_1', ASTERA_PROFILE_DIR: dir }
+    const r = openMcpRuntimes({
+      profileDir: dir,
+      version: '1.4.8',
+      client: () => undefined,
+      sandboxed: rememberedSandboxed(() => hostSaysSandboxed({ env, platform: process.platform, home: os.homedir(), version: '1.4.8', connect })),
+      open: () => fakeLink()
+    })
+    expect(await r.refusal('jobs-create')).toMatch(/^a sandboxed session can only read another computer/)
+    up = true
+    expect(await r.refusal('jobs-create')).toBeNull()
+    expect(await r.refusal('jobs-run')).toBeNull()
+    expect(connects).toBe(2)
   })
 
   // Remote governance design §4.4, §9.1: what the MCP server reaches is reached, and the stale-runtime finding reads it.
