@@ -1581,8 +1581,9 @@ export function createHostOrch(a: {
     }
   }
 
-  /** A revoke's pauses waiting for a worker to finish starting (R7-2), each by its cancel; HostOrch.dispose clears them. */
-  const retries = new Set<() => void>()
+  /** A revoke's pauses waiting for a worker to finish starting (R7-2): each cancel, with the Job and the client it is
+   *  for. HostOrch.dispose clears them and names each one it drops (R7-6). */
+  const retries = new Map<() => void, { jobId: string; clientId: string }>()
   const setTimer =
     a.setTimer ??
     ((run: () => void, ms: number): (() => void) => {
@@ -1641,7 +1642,7 @@ export function createHostOrch(a: {
             if (again.status !== 200) a.log(`remote: revoked ${clientId}; job ${job.id} could not be paused on the retry: ${errorOf(again)}`)
           })
         }, retryMs)
-        retries.add(cancel)
+        retries.set(cancel, { jobId: job.id, clientId })
       } else notPaused.push({ jobId: job.id, error: errorOf(r) })
       a.log(`remote: revoked ${clientId}; job ${job.id} could not be paused: ${notPaused.at(-1)!.error}`)
     }
@@ -1651,7 +1652,13 @@ export function createHostOrch(a: {
   return {
     ready,
     dispose: () => {
-      for (const cancel of retries) cancel()
+      // **Each dropped retry is named** (ruling R7-6): a revoke deletes the client's record and keeps no mark of it, so
+      // the next Host cannot tell that this Job's maker was revoked and will not pause it. The log is the one record left
+      // for the person to pause it by hand.
+      for (const [cancel, r] of retries) {
+        cancel()
+        a.log(`remote: revoked ${r.clientId}; the retried pause of job ${r.jobId} was dropped as the Host left, and the job is not paused`)
+      }
       retries.clear()
     },
     loadUnattended: async () => {

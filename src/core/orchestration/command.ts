@@ -1586,6 +1586,15 @@ function jobActedOn(s: OrchState, cmd: string, args: Record<string, unknown>): J
   return run ? jobOf(s, run) : s.jobs.find((j) => j.id === id)
 }
 
+/** A Job as a reply shows it to the caller: a remote controller is not shown which controller made it or whose revoke
+ *  paused it (ruling R7-3, as sanitizeForController leaves them out of the pushed state). Every other caller gets the
+ *  view as it is; the CLI hides both itself (JOB_HIDDEN). */
+function jobForCaller<T extends object>(caller: RuleCaller, view: T): T {
+  if (caller.role !== 'controller' || (!('createdBy' in view) && !('pausedBy' in view))) return view
+  const { createdBy: _maker, pausedBy: _why, ...rest } = view as T & { createdBy?: unknown; pausedBy?: unknown }
+  return rest as T
+}
+
 /** The refusal of a controller or an agent that resumes, runs or deletes a Job a revoke paused, or sets a Task of it
  *  going again (Job.pausedBy; remote governance design §8.2, the person's decision P2), or null. Every controller is
  *  refused, a person's too: the pairing that made the Job is gone, and the decision to start it again is for a person on
@@ -2740,7 +2749,7 @@ export async function handleCommand(
       if (reply.status < 200 || reply.status >= 300) return reply
       const after = deps.getState()
       const created = after.jobs.find((j) => j.id === (reply.body as { id?: unknown }).id)
-      return created ? okBody(jobView(after, created, undefined)) : reply
+      return created ? okBody(jobForCaller(caller, jobView(after, created, undefined))) : reply
     }
     /**
      * Task 를 더한다 — task-create 의 공개 이름(phase C).
@@ -3105,7 +3114,7 @@ export async function handleCommand(
       }
       // A scheduled Job that waits on an archived profile says which (lifecycle design §5)
       const archived = await archivedNamesOf(deps, s, jobs)
-      const views = jobs.map((j): Record<string, unknown> => ({ ...jobView(s, j, latestRunOf(s, j)), ...(archived.has(j.id) ? { archivedProfiles: archived.get(j.id) } : {}) }))
+      const views = jobs.map((j): Record<string, unknown> => jobForCaller(caller, { ...jobView(s, j, latestRunOf(s, j)), ...(archived.has(j.id) ? { archivedProfiles: archived.get(j.id) } : {}) }))
       return okBody(status.value === undefined ? views : views.filter((v) => jobStateOf(v) === status.value))
     }
     // 코디네이터가 --validate 에 넣을 id 를 알아야 한다. 상태를 바꾸지 않으므로 COORDINATOR_ONLY
@@ -3145,7 +3154,7 @@ export async function handleCommand(
       // 회차를 말하면 한 응답 안에서 두 가지를 말하는 셈이 된다.
       // A scheduled Job that waits on an archived profile says which, as `jobs list` does (lifecycle design §5)
       const archived = (await archivedNamesOf(deps, s, [job])).get(job.id)
-      return okBody({ ...jobView(s, job, run), ...(archived ? { archivedProfiles: archived } : {}), ...(run ? { run: runView(s, run) } : {}) })
+      return okBody(jobForCaller(caller, { ...jobView(s, job, run), ...(archived ? { archivedProfiles: archived } : {}), ...(run ? { run: runView(s, run) } : {}) }))
     }
     // 사람이 사이드바에서 Run 을 물러나게 한다. **되돌릴 수 없다.**
     //
@@ -3418,7 +3427,8 @@ export async function handleCommand(
         }
         latest = deps.getState()
       }
-      return commit(pauseSchedule(latest, id, now, pausedBy))
+      const held = pauseSchedule(latest, id, now, pausedBy)
+      return commit(held.ok ? { ...held, value: jobForCaller(caller, held.value) } : held)
     }
     case 'run-resume': {
       const id = str(args.run)

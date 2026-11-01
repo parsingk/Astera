@@ -5450,6 +5450,8 @@ describe('clients-revoke pauses the scheduled Jobs the client made (remote gover
       await f.revoke()
       f.orch.dispose()
       expect(t.pending[0].cancelled).toBe(true)
+      // Ruling R7-6: revoked records are not kept, so no next Host can find this Job again; the log names it
+      expect(logs).toContain(`remote: revoked ${f.laptop}; the retried pause of job ${f.mine} was dropped as the Host left, and the job is not paused`)
     })
 
     it('a retained worker is named and not retried', async () => {

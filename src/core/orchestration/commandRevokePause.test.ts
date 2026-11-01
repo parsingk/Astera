@@ -253,6 +253,40 @@ describe('a revoked-paused Job is resumed only by a person on this computer (rem
   })
 })
 
+// Ruling R7-3: one controller is not shown another's pairing, in a read's reply as in the pushed state
+describe('what a controller reads of a Job', () => {
+  const READER: Caller = { sessionId: '', role: 'controller', principal: { clientId: 'cli_r', name: 'reader', permission: 'read-only', kind: 'person' } }
+  const hidden = (v: unknown): void => {
+    expect(v).not.toHaveProperty('createdBy')
+    expect(v).not.toHaveProperty('pausedBy')
+  }
+
+  it('jobs-list and jobs-get leave out createdBy and pausedBy for a controller, and a local caller keeps them', async () => {
+    const { deps, jobId, runId } = await revokedJob()
+    const list = await handleCommand(deps, READER, 'jobs-list', {})
+    expect(list.status).toBe(200)
+    for (const v of list.body as unknown[]) hidden(v)
+    for (const id of [jobId, runId]) {
+      const got = await handleCommand(deps, READER, 'jobs-get', { id })
+      expect(got.status).toBe(200)
+      hidden(got.body)
+    }
+    const local = await handleCommand(deps, PERSON_SHELL, 'jobs-get', { id: jobId })
+    expect(local.body).toMatchObject({ createdBy: { clientId: 'cli_1' }, pausedBy: { reason: 'controller-revoked' } })
+    expect((await handleCommand(deps, PERSON_SHELL, 'jobs-list', {})).body).toMatchObject([{ createdBy: { clientId: 'cli_1' } }])
+  })
+
+  it("jobs-create's reply and run-pause's reply leave them out for a controller", async () => {
+    const { deps, jobId } = await revokedJob()
+    const made = await handleCommand(deps, controller(), 'jobs-create', { objective: 'o', cwd: ROOT, schedule: DAILY })
+    expect(made.status).toBe(200)
+    hidden(made.body)
+    const paused = await handleCommand(deps, controller(), 'run-pause', { run: jobId })
+    expect(paused.status, JSON.stringify(paused.body)).toBe(200)
+    hidden(paused.body)
+  })
+})
+
 // Ruling R7-4: a fire waits on the profile store (and on the coordinator's idle check); a pause that lands meanwhile
 // must not be fired past
 describe('a scheduled fire and a pause that lands while it waits', () => {
