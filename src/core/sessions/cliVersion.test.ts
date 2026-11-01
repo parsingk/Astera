@@ -124,6 +124,43 @@ describe('makeCliVersionProbe', () => {
     expect(run).toHaveBeenCalledTimes(1)
   })
 
+  // Remote governance ruling R9-5: a warm whose run failed or timed out is held 30 s for that binary, so the sync probe
+  // after it (Enforce's blocker in a Runtime report) runs nothing; a changed binary is asked at once
+  it('holds a failed warm 30 seconds for the same binary', async () => {
+    let now = 0
+    let identity = 'codex-1'
+    let answer: string | null = null
+    const run = vi.fn(() => answer)
+    const runAsync = vi.fn(async () => answer)
+    const probe = makeCliVersionProbe({
+      platform: 'linux',
+      which: () => '/usr/bin/codex',
+      identity: () => identity,
+      run,
+      whichAsync: async () => '/usr/bin/codex',
+      identityAsync: async () => identity,
+      runAsync,
+      now: () => now
+    })
+    await probe.warm('codex')
+    expect(probe('codex')).toBeNull()
+    await probe.warm('codex')
+    expect(run).not.toHaveBeenCalled()
+    expect(runAsync).toHaveBeenCalledTimes(1)
+    // Past the hold it is asked again
+    now = 30_000
+    answer = 'codex-cli 0.160.0'
+    expect(probe('codex')).toBe('0.160.0')
+    expect(run).toHaveBeenCalledTimes(1)
+    // A failure held for one binary does not hold an updated one
+    answer = null
+    identity = 'codex-2'
+    await probe.warm('codex')
+    identity = 'codex-3'
+    answer = 'codex-cli 0.161.0'
+    expect(probe('codex')).toBe('0.161.0')
+  })
+
   // Lifecycle design §4.12, fix round 2: an observed spawn reads the version the prepare warmed and never asks the CLI on
   // the calling thread; a miss is a version not known
   it('cached answers from what was learnt, and never resolves, stats or runs anything', async () => {

@@ -13,6 +13,7 @@ import { writeCredentials } from '../core/credentials/store'
 import { SecretFileUnsafe } from '../core/secrets/secretStore'
 import { parseControlPlaneReport, type ControlPlaneReport } from '../core/controlPlane/report'
 import type { Account } from '../core/types'
+import type { Readiness } from '../core/sandbox/windowsReadiness'
 import type { Finding, FindingsReport } from '../core/findings/types'
 import { forgetReadiness } from '../core/sandbox/windowsReadiness'
 import { buildControlPlaneReport, cachedReportProbes, REPORT_PROBE_TTL_MS, type ControlPlaneReportDeps } from './controlPlaneReport'
@@ -219,6 +220,19 @@ describe('buildControlPlaneReport (remote governance design §5.2)', () => {
     expect(r.findings).toEqual({ total: 3, byRule: { 'unused-profile': 2, 'stale-runtime': 1 } })
   })
 
+  // Ruling R9-5: a report is a read; a damaged registry is a part not read, and no copy of it is written beside it
+  it('a damaged registry gives extensions null and writes no file', async () => {
+    const registry = extensionPaths(dir).registry
+    await fs.mkdir(path.dirname(registry), { recursive: true })
+    await fs.writeFile(registry, '{ damaged')
+    const before = (await fs.readdir(path.dirname(registry))).sort()
+    const r = await built()
+    await built()
+    expect(r.extensions).toBeNull()
+    expect(r.credentials).toBeNull()
+    expect((await fs.readdir(path.dirname(registry))).sort()).toEqual(before)
+  })
+
   it('a part that throws is null and logged, and the rest are kept', async () => {
     await fs.writeFile(profilePaths(dir).agentProfiles, '{ damaged')
     await fs.mkdir(path.dirname(extensionPaths(dir).registry), { recursive: true })
@@ -267,6 +281,29 @@ describe('cachedReportProbes', () => {
     fail = false
     expect(await probes.codexReadiness!(account('cx1', 'codex'))).toBe('ready')
     expect(asked).toBe(2)
+  })
+
+  // Ruling R9-5: as codexWindowsReadiness keeps only a ready home, so does the report; a setup may follow any other answer
+  it('keeps only a ready answer, and shares an ask in flight whatever it answers', async () => {
+    let answer: Readiness = 'check-failed'
+    let asked = 0
+    let release: () => void = () => {}
+    const probes = cachedReportProbes({ codexReadiness: () => (asked++, new Promise<Readiness>((r) => (release = () => r(answer)))), nowMs: () => 0 })
+    const a = account('cx1', 'codex')
+    const both = Promise.all([probes.codexReadiness!(a), probes.codexReadiness!(a)])
+    release()
+    expect(await both).toEqual(['check-failed', 'check-failed'])
+    expect(asked).toBe(1)
+    const again = probes.codexReadiness!(a)
+    release()
+    expect(await again).toBe('check-failed')
+    expect(asked).toBe(2)
+    answer = 'ready'
+    const ready = probes.codexReadiness!(a)
+    release()
+    expect(await ready).toBe('ready')
+    expect(await probes.codexReadiness!(a)).toBe('ready')
+    expect(asked).toBe(3)
   })
 
   it('srt missing() rides the same cache', async () => {

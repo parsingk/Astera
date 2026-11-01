@@ -994,8 +994,8 @@ async function main(): Promise<void> {
   // session. The spawner's Enforce blocker and its version probe, which serves both CLIs; the srt dependency check a
   // sandboxed Claude check's start makes, off Windows where the runner was built (ruling C5); and on Windows the Codex
   // readiness Settings asks, which runs `codex doctor` for each Codex account every time it is asked. Both start a
-  // process, so the report keeps their answers ten minutes, one question shared while it is asked, and drops the
-  // readiness ones when a setup forgets readiness (rulings R9-1, R9-4)
+  // process, so the report keeps srt's answer and a ready home's ten minutes, one question shared while it is asked, and
+  // drops the readiness ones when a setup forgets readiness (rulings R9-1, R9-4, R9-5)
   const checkRunnerPath = path.join(__dirname, 'sandbox-check.js')
   const checkRunner = existsSync(checkRunnerPath)
   const reportProbes = cachedReportProbes({

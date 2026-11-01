@@ -116,6 +116,30 @@ describe('localReportExtensions hashing', () => {
     expect(readsUnder(reads, extensionPaths(d).skills)).toBeGreaterThan(0)
   })
 
+  // Ruling R9-5: a skill with many files is stamped at most 16 stats at a time
+  it('stats one skill\'s files at most 16 at a time', async () => {
+    const d = await profile([skill('big')])
+    const root = path.join(extensionPaths(d).skills, 'big')
+    await fs.mkdir(root, { recursive: true })
+    for (let i = 0; i < 40; i++) await fs.writeFile(path.join(root, `f${i}.md`), `${i}`)
+    const real = fs.stat.bind(fs)
+    let open = 0
+    let most = 0
+    vi.spyOn(fs, 'stat').mockImplementation((async (...a: Parameters<typeof fs.stat>) => {
+      open++
+      most = Math.max(most, open)
+      try {
+        await new Promise((r) => setTimeout(r, 2))
+        return await (real as (...x: unknown[]) => Promise<unknown>)(...a)
+      } finally {
+        open--
+      }
+    }) as never)
+    expect((await localReportExtensions(d))[0].compareHash).toBe(await compareHashTree(root))
+    expect(most).toBeGreaterThan(1)
+    expect(most).toBeLessThanOrEqual(16)
+  })
+
   it('hashes at most 8 entries at a time', async () => {
     const names = Array.from({ length: 20 }, (_, i) => `s${i}`)
     const d = await profile(names.map(skill))

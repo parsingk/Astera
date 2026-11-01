@@ -14,6 +14,8 @@ type Cli = 'claude' | 'codex'
 export const ENFORCE_MIN: Record<Cli, string> = { claude: '2.1.306', codex: '0.160.0' }
 
 const TTL_MS = 10 * 60 * 1000
+/** How long a warm whose run failed or timed out answers for that binary (remote governance ruling R9-5). */
+const FAILED_HOLD_MS = 30 * 1000
 
 /** `2.1.311 (Claude Code)` → `2.1.311`; `codex-cli 0.160.0` → `0.160.0`; a pre-release keeps its numbers. */
 export function parseCliVersion(text: string): string | null {
@@ -119,6 +121,14 @@ export function makeCliVersionProbe(o: {
     known.set(cli, { key, at: now(), confirmed: now(), version })
     return version
   }
+  /** A warm whose run failed, by the binary it asked (ruling R9-5): held FAILED_HOLD_MS, so the sync answer after it (an
+   *  Enforce blocker, read on every Runtime report) does not run a broken CLI on the calling thread again. Only a warm sets
+   *  it: a spawn nobody warmed still asks again at once (M1), and a changed binary is not held. */
+  const failed = new Map<Cli, { key: string; at: number }>()
+  const held = (cli: Cli, key: string): boolean => {
+    const f = failed.get(cli)
+    return f !== undefined && f.key === key && now() - f.at < FAILED_HOLD_MS
+  }
   const commandFor = (cli: Cli, found: string): SpawnCommand =>
     o.platform === 'win32' ? windowsSpawn(cli, ['--version'], () => found) : { file: found, args: ['--version'] }
   const probe = (cli: Cli): string | null | undefined => {
@@ -127,6 +137,7 @@ export function makeCliVersionProbe(o: {
     if (found === null) return undefined
     const key = identity(found)
     if (fresh(cli, key)) return known.get(cli)?.version ?? null
+    if (held(cli, key)) return null
     // A spawn nobody warmed: asked here, synchronously, as codexNoDaemon.ts does.
     return learn(cli, key, run(commandFor(cli, found)))
   }
@@ -136,8 +147,11 @@ export function makeCliVersionProbe(o: {
       if (found === null) return
       const cmd = commandFor(cli, found)
       const key = await identityAsync(found)
-      if (fresh(cli, key)) return
-      learn(cli, key, await runAsync(cmd))
+      if (fresh(cli, key) || held(cli, key)) return
+      const out = await runAsync(cmd)
+      if (out === null) failed.set(cli, { key, at: now() })
+      else failed.delete(cli)
+      learn(cli, key, out)
     } catch {
       /* the spawn's own sync answer stands */
     }

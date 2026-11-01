@@ -15,8 +15,9 @@ import type { ExtensionEntry, FileExtension } from '../extensions/types'
 import type { UpstreamState } from '../../host/gateway/upstream'
 import type { ReportExtension } from './report'
 
-/** How many canonical copies are stamped and hashed at once. */
+/** How many canonical copies are stamped and hashed at once, and how many of one skill's files are stat'ed at once. */
 const HASH_AT_ONCE = 8
+const STAT_AT_ONCE = 16
 
 /** Each canonical copy's last hash, by its path, with the stamp it was made at. */
 const hashes = new Map<string, { stamp: string; hash: string }>()
@@ -29,7 +30,7 @@ async function stampOf(e: FileExtension, p: string): Promise<string> {
   }
   if (e.kind !== 'skill') return line(p, '')
   const rels = (await comparedFiles(p)).sort()
-  return (await Promise.all(rels.map((rel) => line(path.join(p, rel), rel)))).join('\n')
+  return (await pooled(rels, STAT_AT_ONCE, (rel) => line(path.join(p, rel), rel))).join('\n')
 }
 
 /** The comparison hash of an entry's canonical copy, read again only when its stamp moved. Throws when it cannot be read. */
@@ -57,10 +58,11 @@ async function pooled<T, R>(items: readonly T[], limit: number, f: (item: T) => 
   return out
 }
 
-/** Every registry entry as the report holds it. A registry that cannot be read throws, as readExtensionRegistry does: an
- *  empty list would tell a controller this machine shares nothing. */
+/** Every registry entry as the report holds it. A registry that cannot be read, or is damaged, throws, as
+ *  readExtensionRegistry does: an empty list would tell a controller this machine shares nothing. A read only (ruling
+ *  R9-5): no copy of a damaged file is written beside it. */
 export async function localReportExtensions(profileDir: string, gateway?: readonly UpstreamState[]): Promise<ReportExtension[]> {
-  const { entries } = await readExtensionRegistry(profileDir)
+  const { entries } = await readExtensionRegistry(profileDir, { keepDamaged: false })
   return pooled(entries, HASH_AT_ONCE, async (e: ExtensionEntry): Promise<ReportExtension> => {
     const out: ReportExtension = { id: e.id, kind: e.kind, name: e.name, enabled: e.enabled, providers: [...e.providers] }
     if (e.kind === 'mcp') {

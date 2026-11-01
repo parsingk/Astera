@@ -164,7 +164,7 @@ export async function buildControlPlaneReport(d: ControlPlaneReportDeps): Promis
     part('sandbox claude', claudeBlocker),
     part('sandbox codexAccounts', codexAccounts),
     part('credentials', async () => {
-      const [file, registry] = await Promise.all([readCredentials(d.profileDir), readExtensionRegistry(d.profileDir)])
+      const [file, registry] = await Promise.all([readCredentials(d.profileDir), readExtensionRegistry(d.profileDir, { keepDamaged: false })])
       return {
         // A hide-only entry's projects are paths (§5.3): only whether it hides crosses
         hideOnly: file.entries.map((e) => ({ alias: e.alias, presets: [...e.presets], envNames: [...e.envNames], hidden: e.hide.on })),
@@ -211,9 +211,10 @@ export async function buildControlPlaneReport(d: ControlPlaneReportDeps): Promis
  *  dependency check. A paired person may open a Runtime's detail again and again; each look must not start them again. */
 export const REPORT_PROBE_TTL_MS = 10 * 60_000
 
-/** Keeps each answer per key for REPORT_PROBE_TTL_MS, one question shared while it is asked. A rejection is not kept,
- *  and every answer is dropped when this process forgets readiness (a setup ran: forgetReadiness). */
-function keptFor<K, V>(nowMs: () => number): (key: K, ask: () => Promise<V>) => Promise<V> {
+/** Keeps each answer per key for REPORT_PROBE_TTL_MS, one question shared while it is asked. A rejection is not kept, nor
+ *  an answer `keep` turns down once it lands, and every answer is dropped when this process forgets readiness (a setup
+ *  ran: forgetReadiness). */
+function keptFor<K, V>(nowMs: () => number, keep: (v: V) => boolean = () => true): (key: K, ask: () => Promise<V>) => Promise<V> {
   const kept = new Map<K, { at: number; generation: number; answer: Promise<V> }>()
   return (key, ask) => {
     const now = nowMs()
@@ -222,9 +223,12 @@ function keptFor<K, V>(nowMs: () => number): (key: K, ask: () => Promise<V>) => 
     if (held && held.generation === generation && now - held.at < REPORT_PROBE_TTL_MS) return held.answer
     const answer = ask()
     kept.set(key, { at: now, generation, answer })
-    answer.catch(() => {
+    const drop = (): void => {
       if (kept.get(key)?.answer === answer) kept.delete(key)
-    })
+    }
+    answer.then((v) => {
+      if (!keep(v)) drop()
+    }, drop)
     return answer
   }
 }
@@ -241,7 +245,9 @@ export function cachedReportProbes(p: {
   const out: Pick<ControlPlaneReportDeps, 'codexReadiness' | 'checkRunnerMissing'> = {}
   const readiness = p.codexReadiness
   if (readiness) {
-    const keep = keptFor<string, Readiness>(nowMs)
+    // Only a ready home is kept, as codexWindowsReadiness keeps it (ruling R9-5): the person may set up any other next,
+    // in another process or outside Astera, where this process's forgetReadiness never hears of it
+    const keep = keptFor<string, Readiness>(nowMs, (r) => r === 'ready')
     out.codexReadiness = (account) => keep(account.id, () => readiness(account))
   }
   const missing = p.checkRunnerMissing
