@@ -105,6 +105,13 @@ describe('credentials commands', () => {
     }
   })
 
+  // Remote governance design §13: the controller gate refuses these first; the handler refuses a controller as well
+  it('a controller role is refused at the handler too', async () => {
+    await writeRegistry()
+    const r = await host().command({ cmd: 'credentials-list', args: {}, role: 'controller', marks: marks() })
+    expect(r.status).toBe(403)
+  })
+
   it('adds, edits and deletes a hide-only entry', async () => {
     const h = host()
     const added = await h.command({ cmd: 'credentials-add-hide-only', args: { alias: 'Keys', envNames: ['A'], presets: [] }, ...app, marks: marks() })
