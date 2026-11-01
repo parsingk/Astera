@@ -1049,3 +1049,36 @@ describe('humanFor — agent-profiles audit', () => {
     expect(humanFor('agent-profiles-audit-unignore', { key: 'x', removed: false })).toBe('x was not ignored')
   })
 })
+
+// Remote governance design §8.2 to §8.4 (ruling R8-1): `runtime revoke` says, in the catalog's English, how many scheduled
+// Jobs it paused and how many it could not tell the maker of, then each Job whose pause was refused
+describe('runtime revoke', () => {
+  it('runtime revoke says how many scheduled Jobs it paused and how many have no maker on record', () => {
+    expect(humanFor('runtime-revoke', { revoked: true, clientId: 'cli_1', pausedJobs: 2, unrecordedScheduled: 1, notPaused: [] })).toBe(
+      'Unpaired cli_1. Scheduled Jobs it made, now paused: 2. Scheduled Jobs with no maker on record, which keep their schedule: 1.'
+    )
+    expect(
+      humanFor('runtime-revoke', {
+        revoked: true,
+        clientId: 'cli_1',
+        pausedJobs: 0,
+        unrecordedScheduled: 0,
+        notPaused: [
+          { jobId: 'job_a', error: 'a worker is retained (worker-retain)' },
+          { jobId: 'job_b', error: 'a worker is still starting; the pause is retried in 95 s', reason: 'still-starting' }
+        ]
+      })
+    ).toBe(
+      [
+        'Unpaired cli_1. Scheduled Jobs it made, now paused: 0. Scheduled Jobs with no maker on record, which keep their schedule: 0.',
+        'job job_a: a worker is retained (worker-retain)',
+        'job job_b: a worker is still starting; the pause is retried in 95 s (reason: still-starting)'
+      ].join('\n')
+    )
+  })
+
+  // An older Host answers without the counts: the envelope as before, not a sentence with holes in it
+  it('leaves an older Host answer to the envelope', () => {
+    expect(humanFor('runtime-revoke', { revoked: true, clientId: 'cli_1' })).toBeNull()
+  })
+})

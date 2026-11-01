@@ -508,7 +508,10 @@ function ScheduleCard({
             사람이 "왜 안 도는지" 를 찾게 된다. 한 번도 돌리지 않은 것도 같은 자리에 선다: 둘 다
             버튼을 눌러야 도는 상태이고, 아래 회차 목록의 문구가 그 둘을 이미 구별해 준다. */}
         {run.paused ? (
-          <span className="jobs-tmpl-paused">{t('jobs.run.paused')}</span>
+          // Why, when an unpairing paused it (remote governance design §8.2): only a person here can resume it
+          <span className="jobs-tmpl-paused">
+            {run.pausedRevokedFrom !== undefined ? t('jobs.run.pausedRevoked', { name: run.pausedRevokedFrom }) : t('jobs.run.paused')}
+          </span>
         ) : run.archivedProfiles !== undefined && run.archivedProfiles.length > 0 ? (
           // Lifecycle design §5: its fires wait while a profile it uses is archived, so the next fire would not run
           <span className="jobs-tmpl-paused">{t('jobs.run.waitingArchived', { names: run.archivedProfiles.join(', ') })}</span>

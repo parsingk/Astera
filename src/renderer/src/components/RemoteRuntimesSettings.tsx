@@ -4,7 +4,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
 import { confirmModal } from '../lib/confirm'
 import { Select } from './Select'
-import { addressLabel, controlFailureLine, failureLine, pairedStateLine, pairingLeftLine, pairingState, pingLine, thisMachineLine } from './remoteRuntimesText'
+import { addressLabel, controlFailureLine, failureLine, pairedStateLine, pairingLeftLine, pairingState, pingLine, revokeDoneLine, thisMachineLine } from './remoteRuntimesText'
 
 type ThisMachine = Awaited<ReturnType<RemoteApi['thisMachine']>>
 type Choice = Awaited<ReturnType<RemoteApi['addresses']>>[number]
@@ -119,7 +119,8 @@ export function RemoteRuntimesSettings({ onChanged }: { /** A Runtime was paired
     await control(async () => {
       const r = await window.api.remote.revoke(c.clientId)
       if (!r.ok) return void toast.error(controlFailureLine(r, 'revoke', t as never))
-      toast.success(t('settings.remote.revoke.done', { name: c.name }))
+      // The Host's counts of the scheduled Jobs it paused (remote governance design §8.2), through runRuntimeCommand's body
+      toast.success(revokeDoneLine({ ...(r.body as Parameters<typeof revokeDoneLine>[0]), name: c.name }, t as never))
     })
   }
   const remoteOn = !!mine && (mine.gateway as { state: string }).state !== 'disabled'

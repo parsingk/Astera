@@ -27,6 +27,20 @@ export function pairedStateLine(r: { offline: boolean | null }, t: T): string | 
   return r.offline === true ? (t as (k: string) => string)('settings.remote.paired.notAnswering') : null
 }
 
+/** What an unpairing did to the controller's scheduled Jobs (remote governance design §8.2 to §8.4): how many it paused,
+ *  how many have no maker on record and keep their schedule, then the Jobs whose pause was refused. An older Host answers
+ *  without the counts, and gets the line it had. */
+export function revokeDoneLine(
+  r: { name: string; pausedJobs?: number; unrecordedScheduled?: number; notPaused?: Array<{ jobId: string }> },
+  t: T
+): string {
+  const tt = t as (k: string, p?: Record<string, string | number>) => string
+  if (typeof r.pausedJobs !== 'number' || typeof r.unrecordedScheduled !== 'number') return tt('settings.remote.revoke.done', { name: r.name })
+  const line = tt('settings.remote.revoke.paused', { name: r.name, paused: r.pausedJobs, unrecorded: r.unrecordedScheduled })
+  const refused = r.notPaused ?? []
+  return refused.length === 0 ? line : `${line} ${tt('settings.remote.revoke.notPaused', { jobs: refused.map((j) => j.jobId).join(', ') })}`
+}
+
 /** A refusal as a person reads it: its code, then its sentence. */
 export function failureLine(r: { ok: false; code: string; message: string }, t: T): string {
   return (t as (k: string, p?: Record<string, string | number>) => string)('settings.remote.failed', { code: r.code, message: r.message })

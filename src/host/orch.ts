@@ -1885,7 +1885,9 @@ export function createHostOrch(a: {
             archivedOf: (id) => archivedProfilesOfJob(store.get(), id, profiles).map((p) => p.name)
           }
           if (cmd === 'runs-timeline') return runsTimelineOf(store.get(), args, facts)
-          const view = jobsViewOf(store.get(), args.project, facts)
+          // A controller's rows are folded from the state it is pushed (ruling R8-2): whose revoke paused a schedule is
+          // this Runtime's own to show (remote governance design §5.3, R7-3), and the fold would carry it onto the row.
+          const view = jobsViewOf(from?.role === 'controller' ? sanitizeForController(store.get()) : store.get(), args.project, facts)
           // The state version the view was folded from: the controller's view says the Runtime's own (review minor).
           return view.status === 200 ? { status: 200, body: { ...(view.body as object), version } } : view
         }

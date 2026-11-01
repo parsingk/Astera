@@ -412,6 +412,16 @@ export function humanFor(
       return asList(data, 'lines')
         .map((l) => `${str(l.level).padEnd(6)}${str(l.text)}`)
         .join('\n')
+    // Remote governance design §8.2 to §8.4: what the unpairing did to the controller's scheduled Jobs, in the catalog's
+    // English, then each Job whose pause was refused. An older Host answers without the counts: the envelope as before
+    case 'runtime-revoke': {
+      if (typeof data.pausedJobs !== 'number' || typeof data.unrecordedScheduled !== 'number') return null
+      const head = t('en', 'settings.remote.revoke.paused', { name: str(data.clientId), paused: data.pausedJobs, unrecorded: data.unrecordedScheduled })
+      const refused = asList(data, 'notPaused').map(
+        (n) => `job ${str(n.jobId)}: ${str(n.error)}${typeof n.reason === 'string' ? ` (reason: ${n.reason})` : ''}`
+      )
+      return [head, ...refused].join('\n')
+    }
     // Lifecycle design §4, §7, §8: the Observe note while the usage findings wait for their history, a row per finding
     // (its rule, what it is about, why and what would resolve it), the lines that are not findings, then what could not
     // be read. The English the Host worded (Finding.reason, .action), and the catalog's for the two notes

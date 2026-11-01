@@ -763,6 +763,11 @@ export interface JobRow {
    *  적는 근거다 — 세우면 무장하지 않으므로(firesDue) 그 줄이 그냥 사라지고, 말이 없으면 세운 예약과
    *  도는 예약이 화면에서 같아 보인다. */
   paused?: boolean
+  /** The name of the controller that made this schedule, when its unpairing paused it (Job.pausedBy; remote governance
+   *  design §8.2): the card says why it is paused, as only a person here can resume it. The schedule's own row only.
+   *  This Runtime's own app and CLI only: a controller's jobs-view is folded from the sanitized state, which has no
+   *  pausedBy (ruling R8-2). */
+  pausedRevokedFrom?: string
   /** 이 Run 이 예약 템플릿이면 그 규칙 — Run 이 들고 있는 값을 그대로 옮긴 것이다. 있으면 이
    *  줄은 정의이고 스스로 돌지 않는다. 사이드바가 "매일 09:00" 을 적는 근거다. */
   schedule?: ScheduleRule

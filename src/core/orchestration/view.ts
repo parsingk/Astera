@@ -430,6 +430,9 @@ export function snapshotFor(
       sharesProjectFolder: workingHere.has(ownerId) && workingHere.size > 1,
       ...(job.pendingStart ? { pendingStart: true } : {}),
       ...(job.paused || run?.paused ? { paused: true } : {}),
+      // Why the schedule is paused, when a revoke paused it (remote governance design §8.2): on its own row, as `schedule`.
+      // A controller's view never gets here with pausedBy, since jobs-view folds the sanitized state for it (ruling R8-2)
+      ...(run === undefined && job.schedule && job.pausedBy ? { pausedRevokedFrom: job.pausedBy.name } : {}),
       // 빈 배열은 싣지 않는다 — sameSnapshot 의 문자열을 이유 없이 늘리고, "워크트리를 안 썼다" 와
       // "이 칸이 없다" 가 화면에서 같은 뜻이다(JobRow.children 과 같은 판단)
       ...(worktreesOf.length > 0 ? { worktrees: worktreesOf } : {}),

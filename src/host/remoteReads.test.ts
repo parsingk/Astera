@@ -65,6 +65,26 @@ describe('jobs-view (remote runtime design §2.7, X1-05)', () => {
     expect(objectives(r.body)).toEqual(['in repo'])
   })
 
+  // Remote governance R8-2 (design §5.3, ruling R7-3): the name of the controller whose revoke paused a schedule is for
+  // this Runtime's own app and CLI. A controller's view is folded from the sanitized state, so it never carries it
+  it('a controller is not told whose revoke paused a schedule, while the local view is', async () => {
+    let s: OrchState = emptyState()
+    const made = createJob(s, { objective: 'nightly', cwd: '/srv/loose', schedule: { kind: 'daily', time: '09:00' } }, NOW)
+    if (!made.ok) throw new Error(made.error)
+    s = {
+      ...made.state,
+      jobs: made.state.jobs.map((j) => ({ ...j, paused: true, pausedBy: { reason: 'controller-revoked' as const, clientId: 'cli_9', name: 'old laptop', at: NOW } }))
+    }
+    const h = await host(s)
+    const rowOf = (body: unknown) => (body as { snapshot: { runs: Array<{ objective: string; paused?: boolean; pausedRevokedFrom?: string }> } }).snapshot.runs[0]
+    const remote = await h.ask('jobs-view', { project: 'unregistered' })
+    expect(rowOf(remote.body)).toMatchObject({ objective: 'nightly', paused: true })
+    expect('pausedRevokedFrom' in rowOf(remote.body)).toBe(false)
+    expect(JSON.stringify(remote.body)).not.toContain('old laptop')
+    const local = await h.ask('jobs-view', { project: 'unregistered' }, { role: 'cli', toOthers: () => {} } as OrchCaller)
+    expect(rowOf(local.body)).toMatchObject({ paused: true, pausedRevokedFrom: 'old laptop' })
+  })
+
   // G7b (Review Focus 4): a Runtime's lifecycle Run shows the same GitHub block in the controller's window
   it("carries a lifecycle Run's GitHub side, as the local fold does", async () => {
     const s = stateWith([{ id: 'p1', path: '/srv/repo' }], [{ objective: 'carried', cwd: '/srv/repo' }])

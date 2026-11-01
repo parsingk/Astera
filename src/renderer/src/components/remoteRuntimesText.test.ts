@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { addressLabel, controlFailureLine, failureLine, pairedStateLine, pairingLeftLine, pairingState, pingLine, thisMachineLine } from './remoteRuntimesText'
+import { addressLabel, controlFailureLine, failureLine, pairedStateLine, pairingLeftLine, pairingState, pingLine, revokeDoneLine, thisMachineLine } from './remoteRuntimesText'
 
 /** A t that shows the key and its params, so each assertion names the sentence it expects. */
 const t = (key: string, params?: Record<string, unknown>): string => `${key}${params ? ` ${JSON.stringify(params)}` : ''}`
@@ -76,5 +76,19 @@ describe('a refusal of a control, in the app language', () => {
     expect(controlFailureLine({ ok: false, code: 'TIMEOUT', message: 'x' }, 'start', t)).toBe('settings.remote.control.timeout')
     expect(controlFailureLine({ ok: false, code: 'FAILED', message: 'the Gateway failed: EADDRINUSE: taken' }, 'start', t)).toBe('settings.remote.control.gatewayFailed {"code":"EADDRINUSE"}')
     expect(controlFailureLine({ ok: false, code: 'NOT_FOUND', message: 'unknown client: cli_1' }, 'revoke', t)).toBe('settings.remote.failed {"code":"NOT_FOUND","message":"unknown client: cli_1"}')
+  })
+})
+
+// Remote governance design §8.2 to §8.4 (ruling R8-1): the revoke toast says what happened to the controller's scheduled
+// Jobs, and which could not be paused
+describe('the revoke toast', () => {
+  it('revokeDoneLine words the counts, and falls back to the old line for an older Host', () => {
+    expect(revokeDoneLine({ name: 'laptop', pausedJobs: 2, unrecordedScheduled: 1, notPaused: [] }, t)).toBe(
+      'settings.remote.revoke.paused {"name":"laptop","paused":2,"unrecorded":1}'
+    )
+    expect(revokeDoneLine({ name: 'laptop', pausedJobs: 0, unrecordedScheduled: 0, notPaused: [{ jobId: 'job_a' }, { jobId: 'job_b' }] }, t)).toBe(
+      'settings.remote.revoke.paused {"name":"laptop","paused":0,"unrecorded":0} settings.remote.revoke.notPaused {"jobs":"job_a, job_b"}'
+    )
+    expect(revokeDoneLine({ name: 'laptop' }, t)).toBe('settings.remote.revoke.done {"name":"laptop"}')
   })
 })
