@@ -177,6 +177,113 @@ For a remote call, an MCP access value Astera does not recognize counts as off.
 The first check runs on this machine. An agent that can run `astera --runtime x` directly has the command line's
 authority, which is the pairing's: the MCP settings limit MCP clients, not the person's own shell.
 
+## What this computer can see of a Runtime
+
+A paired Runtime answers a report of how it is set up for agents: its extensions (MCP servers, skills, commands and
+agents, each with whether it is on and for which providers), its agent profiles, whether "Run agents without permission
+checks" is on there, its policy (mode, how many Rules, and whether Enforce can start for each provider), what its
+sandbox gives each provider, the names of its credentials and of each MCP server's secrets with whether they are
+hidden, its secret store's check, and how many findings it has. The report holds names, states and counts, and
+never a value, a path, a command line or a Rule's text. A Runtime on an older Astera cannot report, and this computer
+says to update Astera there.
+
+The Runtime keeps two slow answers for 10 minutes, whether its Codex accounts are ready on Windows and whether the
+sandbox runtime can run, so a fix there can take that long to show. It works out a skill's hash again only when the
+skill changed. A Runtime that cannot read its own extensions says "Could not read its extensions", never an empty
+list, and nothing is compared against it.
+
+### Read it
+
+- **In the app.** Settings › Remote Runtimes, Details beside a Runtime: its identity, health (last seen, whether it
+  answers now, Astera there and here, OS), agents, protection, extensions, credentials, secret store and findings
+  there. The detail says when its report was read. The app reads a report when Settings › Remote Runtimes or the
+  Findings section opens, at most once every five minutes per Runtime, failed attempts included, and at once when you
+  press Refresh. It never reads one in the background. When the Runtime does not answer, the detail shows the last
+  report kept, with its read time, under the line that says so.
+- **From the command line:**
+
+  ```text
+  astera runtimes ping   --id office                  does it answer now, and with which Astera and OS
+  astera runtimes get    --id office                  its report, read now and compared with this computer
+  astera runtimes expect --id office --add skill-a    expect this computer's skill-a there too
+  ```
+
+  `get` keeps the report as the last one read. When the Runtime is offline, does not answer in time, or is too old to
+  report, `get` shows the last report kept with its read time and still exits 0. When the Runtime refuses the asker, or
+  sends a report this computer cannot read, `get` exits non-zero and the report kept stays as it was. `--json` is
+  described in [cli.md](cli.md).
+- **From MCP.** `list_runtimes` and `get_runtime` say each Runtime's Astera version and platform as it last said them,
+  and when this computer last reached it. They never carry the report.
+
+### Expect extensions there
+
+For each Runtime, choose which of this computer's extensions it should have too: tick them in the Extensions part of
+its detail, or run `astera runtimes expect --id <runtime> --add <ids>` with ids from `astera ext list`. The list can be
+set before the first report is read, and for a Runtime too old to report. `--add` refuses an id this computer does not
+have; `--remove` also takes an id that is still in the list. An id that is no longer on this computer drops out of the
+list.
+
+Each expected extension reads as missing, different, off, secret missing or same there:
+
+- **missing:** it is not there.
+- **different:** a skill, command or agent whose content differs from this computer's. Line endings and OS files
+  (`.DS_Store`, `._*`, `Thumbs.db`, `desktop.ini`) do not count, so the same skill checked out on Windows and on macOS
+  reads the same. It does not say which side is newer: updating it here makes every Runtime that expects it different
+  until it is updated there.
+- **off:** it is there but turned off, or not given to a provider this computer gives it to.
+- **secret missing:** an MCP server with a stored secret here whose name its entry there lacks. Only names are
+  compared.
+- **same:** none of these.
+
+Each state but same is a `runtime-missing-extension` finding, in Settings › Security & Access › Findings and
+`astera agent-profiles audit`. It is read from the report kept on this computer, names the state and when that report
+was read, and opens the Runtime's detail. A Runtime with expected extensions and no report kept gives a "Not read yet"
+line instead. A Runtime that said, when this computer last reached it, that it runs an older Astera than this one is an
+`outdated-runtime` finding. A new report shows in Findings the next time they are read. Ignoring a
+`runtime-missing-extension` finding holds for that Runtime and extension even when its state changes, from missing to
+different for example, and ignoring `outdated-runtime` holds for that Runtime through later versions.
+
+Nothing installs from here. Install, update, turn on or add the secret on that computer, in its own Settings › MCP &
+Skills. This computer never changes a Runtime's extensions, profiles, Rules or credentials.
+
+### Who counts as an agent there
+
+An MCP client or a CLI inside an agent session counts as an agent on the Runtime, as the same caller would on that
+machine itself, and so does a client that does not say which it is. The Astera app and the command line in a person's
+own shell are a person. The CLI knows it is in an agent session from `ASTERA_SESSION` or `ASTERA_GATEWAY_TOKEN`.
+
+An agent controller meets every rule an agent meets on the Runtime itself. It cannot start work as a profile that runs
+without permission checks while the Runtime's own "Run agents without permission checks" is off, answer a permission
+request, or type into a terminal that waits at a permission prompt or a question. It cannot read the report either:
+that answers a person only, and an agent controller gets `RUNTIME_PERMISSION_DENIED`.
+
+An older Astera CLI, from before this release, cannot say whether it runs in an agent session, so it counts as an agent
+until you update Astera on that computer; its refusals say so.
+
+On the Runtime, Settings › Remote Runtimes › This computer shows each paired controller's surface (app, CLI or MCP),
+its Astera version and when it was last seen.
+
+### A sandboxed session only reads a Runtime
+
+A sandboxed session can only read a Runtime. From a session Astera runs in a sandbox, `astera --runtime …` and the MCP
+tools given a `runtimeId` read as usual, but a command that starts or changes work there is refused on this computer
+before anything is sent. When this computer's Host cannot say whether the session is sandboxed, it counts as
+sandboxed, and so does an `ASTERA_SESSION` that names a session the Host does not hold. An MCP server whose client
+passed it neither `ASTERA_SESSION` nor `ASTERA_GATEWAY_TOKEN` cannot tell which session it serves, so it refuses every
+remote change: send the change with `astera --runtime <id|name> …` from the session's shell instead. A shell with
+neither variable is a person's own and is not limited.
+
+This rule guards against accidents and defaults. An agent that clears its environment, or speaks the remote protocol
+with the pairing's token directly, is not stopped by it, so it is not a hard boundary. Only revoking the pairing stops a
+controller you no longer trust.
+
+### What it does not do
+
+- It installs, updates, turns on or removes nothing on a Runtime, and edits none of its profiles, Rules or
+  credentials.
+- It reads nothing in the background: a report is read when you open Settings › Remote Runtimes or Findings, press
+  Refresh, or run `astera runtimes get`.
+
 ## Keep it running: OS recipes
 
 `astera runtime serve` keeps exactly one Host running on this profile while Remote is on and restarts a Host that
@@ -311,6 +418,16 @@ renames and Unicode names included.
   types into them, and those run any command the Runtime's user can, in any folder that user can reach. Pair with full
   control only a controller you would trust with that user account; the rest keep the read-only default.
 - Logs on both sides never carry tokens, pairing codes or terminal output.
+- **What the report never carries.** A Runtime's report never carries secret values, tokens or keys; paths, command
+  lines, an MCP server's command, arguments, folder or URL, environment values, Rule text or the Gateway's error text;
+  or account labels and config folders beyond what `accounts list` gives. A probe's own words, which can name a path,
+  stay in the Runtime's Host log; only its code crosses. Values stay on that computer. Astera never copies them.
+- Astera copies no secret, login or credential between computers, in either direction, so there is no replication to
+  approve. Each machine keeps its own, signed in there.
+- A controller's Job reads leave out which controller made a Job and whose revoke paused it, so one controller never
+  sees another's pairing.
+- The sandboxed session rule above is a guard against accidents, not a boundary against a hostile controller. Revoke a
+  pairing you no longer trust.
 - Connections that have not signed in have a budget of their own, and few from one address, so sockets that say nothing
   cannot hold paired controllers off. One pairing holds at most twelve connections at once, and a controller closes a
   connection it has not used for two minutes, so idle agent sessions with Astera MCP do not hold them. More than 32
@@ -340,6 +457,20 @@ list the newest Jobs or runs on that Runtime before trying again.
 - On the Runtime: Unpair beside a controller in Settings › Remote Runtimes › This computer (on or off), or list
   them with `astera runtime clients` and unpair one with `astera runtime revoke --id <clientId>`. Its next command
   is refused with `RUNTIME_AUTH_FAILED`, and its open connections close.
+- **Scheduled Jobs.** Revoking a controller's pairing also pauses the scheduled Jobs it made, as a person's pause
+  does: their open workers end, and a fire already running stops. The Runtime's Jobs view says "Paused: made from
+  {name}, which was unpaired". Only a person on the Runtime can resume them, in the Astera app there or at that user's
+  own shell. Every controller, and an agent on the Runtime itself, is refused resuming, running, starting or deleting
+  such a Job, starting a worker or reopening a Task of it, and `runs resume` and `runs reconverge` on it.
+- The revoke's answer says how many scheduled Jobs it paused, and how many scheduled Jobs have no maker on record and
+  keep their schedule. Jobs made before this release record no maker and none is guessed, so they are counted, not
+  paused: review them on the Runtime.
+- A Job with a worker held by `worker-retain` is not paused, and the answer and the Host log name it: release the worker
+  and pause the Job yourself. A Job whose worker is still starting is named too, and its pause is tried again once
+  after the start window, about two minutes. If the Host restarts before that retry, the retry is lost and the Job
+  keeps its schedule; the Host log names the Job, so pause it by hand.
+- Sessions the controller started and its Jobs without a schedule keep running, as a disconnect leaves them. The
+  person on the Runtime can stop them.
 - On the controller: `astera runtimes remove --id <runtimeId|name>`, or Remove in Settings › Remote Runtimes, forgets
   the Runtime here. It does **not** revoke the pairing on the Runtime.
 - Turning off (in Settings › Remote Runtimes › This computer, or with `astera runtime stop`) stops listening and
@@ -372,7 +503,7 @@ list the newest Jobs or runs on that Runtime before trying again.
 | `RUNTIME_PROTOCOL_MISMATCH` | 9 | the two machines speak different remote protocols; update the older |
 | `RUNTIME_CAPABILITY_MISSING` | 9 | the command has no remote form, or that Runtime cannot do it |
 | `RUNTIME_BUSY` | 6 | too many connections or calls in flight on the Runtime; try again shortly |
-| `RUNTIME_PERMISSION_DENIED` | 5 | a read-only pairing asked for a change; pair again with `astera runtime pair --full-control` on the Runtime |
+| `RUNTIME_PERMISSION_DENIED` | 5 | a read-only pairing asked for a change; pair again with `astera runtime pair --full-control` on the Runtime. Or an agent controller asked for the report, which answers a person only |
 | `RUNTIME_OUTCOME_UNKNOWN` | 6 | an answer was lost and the Runtime cannot say whether the change ran |
 | `REMOTE_TIMEOUT` | 7 | no answer in time; the command may still finish |
 | `REMOTE_REPLY_TOO_LARGE` | 1 | the answer was over 64 MiB |

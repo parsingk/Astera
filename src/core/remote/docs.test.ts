@@ -45,6 +45,22 @@ describe('docs/remote-runtime.md', () => {
   ]
   for (const [what, re] of says) it(`says ${what}`, () => expect(doc).toMatch(re))
 
+  // Remote governance design §10.4: what this computer sees of a Runtime, how agents and sandboxed sessions count there,
+  // and what a revoke does to scheduled Jobs, each in the section a person looks in.
+  const seen = '## What this computer can see of a Runtime'
+  const sectionSays: Array<[string, string, RegExp]> = [
+    [seen, 'the report holds names only', /names, states and counts[^.]*never a value, a path, a command line or a Rule/],
+    ['## Security', 'values stay', /Values stay on that computer\. Astera never copies them\./],
+    [seen, 'the comparison', /missing, different, off, secret missing or same/],
+    [seen, 'nothing installs from here', /[Nn]othing installs from (?:here|this computer)/],
+    [seen, 'agents are agents there', /MCP client or a CLI inside an agent session counts as an agent on the Runtime/],
+    [seen, 'sandboxed sessions read', /sandboxed session can (?:only )?read a Runtime/],
+    ['## Revoke and remove', 'revoke pauses', /[Rr]evoking[^.]*pauses the scheduled Jobs it made/],
+    ['## Revoke and remove', 'only the Runtime resumes', /[Oo]nly (?:a person on )?the Runtime (?:can )?resumes? them/],
+    [seen, 'older CLIs', /older Astera CLI[^.]*counts as an agent[^.]*update/]
+  ]
+  for (const [heading, what, re] of sectionSays) it(`says ${what}, under ${heading.slice(3)}`, () => expect(section(doc, heading)).toMatch(re))
+
   const recipes: Array<[string, RegExp[]]> = [
     ['### Windows', [/runtime serve/, /update-hold/, /LASTEXITCODE -eq 78/, /Register-ScheduledTask/, /Unregister-ScheduledTask/, /S4U/]],
     ['### macOS', [/runtime serve/, /SuccessfulExit/, /keychain/, /not been measured/]],
