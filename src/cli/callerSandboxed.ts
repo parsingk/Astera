@@ -52,6 +52,10 @@ export async function hostSaysSandboxed(a: AskArgs): Promise<boolean | null> {
   if (!inAgentSession(a.env)) return false
   const started = Date.now()
   const { address, profileDir } = cliHostTarget({ env: a.env, platform: a.platform, home: a.home })
+  const token = workloadTokenFor({ env: a.env, platform: a.platform, home: a.home, profileDir, address })
+  // A session known only by a token this Host is not handed: an ask would name no session, so there is no answer, which
+  // counts as sandboxed (final review F5)
+  if (sessionId === '' && token === undefined) return null
   let conn: Awaited<ReturnType<typeof connectHost>>
   try {
     conn = await (a.connect ?? connectHost)({ address, profileDir, app: a.version, log: () => {}, timeoutMs: DEADLINE_MS })
@@ -61,7 +65,6 @@ export async function hostSaysSandboxed(a: AskArgs): Promise<boolean | null> {
   if ('error' in conn) return null
   const c = conn
   try {
-    const token = workloadTokenFor({ env: a.env, platform: a.platform, home: a.home, profileDir, address })
     const body = await new Promise<unknown>((resolve) => {
       const call = 'sandboxed_1'
       let offMessage: () => void = () => {}

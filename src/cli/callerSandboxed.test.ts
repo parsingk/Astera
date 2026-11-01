@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import os from 'node:os'
 import path from 'node:path'
-import { askCallerSandboxed } from './callerSandboxed'
+import { askCallerSandboxed, hostSaysSandboxed } from './callerSandboxed'
 import type { connectHost } from '../core/host/connect'
 import type { HostMessage } from '../core/host/protocol'
 
@@ -63,5 +63,15 @@ describe('askCallerSandboxed (remote governance design §7.4)', () => {
     // So does a Host too old to know the command, and an answer with no boolean in it
     expect(await ask(SESSION_ENV, answering({ status: 400, body: { error: 'unknown command: caller-sandboxed' } }).connect)).toBe(true)
     expect(await ask(SESSION_ENV, answering({ status: 200, body: { sandboxed: 'no' } }).connect)).toBe(true)
+  })
+
+  // Final review F5: a session known only by a token this Host must not be handed has nothing to be asked about, and
+  // an ask with session '' would be answered for no session at all
+  it('a token-only session whose token cannot be sent asks nothing and has no answer', async () => {
+    const h = answering({ status: 200, body: { sandboxed: false } })
+    const env = { ASTERA_GATEWAY_TOKEN: 'tok', ASTERA_PROFILE_DIR: PROFILE, ASTERA_CLI: path.join(os.tmpdir(), 'astera-other-profile', 'orch', 'astera') }
+    expect(await hostSaysSandboxed({ env, platform: process.platform, home: os.homedir(), version: '1.4.8', connect: h.connect })).toBeNull()
+    expect(await ask(env, h.connect)).toBe(true)
+    expect(h.sent).toEqual([])
   })
 })
