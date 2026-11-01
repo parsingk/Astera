@@ -9,6 +9,8 @@ import { RemoteError } from '../core/remote/client'
 import type { RemoteLink, RemoteTarget } from '../core/remote/link'
 import type { HelloFrame } from '../core/remote/frames'
 import { factsOf } from '../core/runtimes/registry'
+import { askCallerSandboxed } from './callerSandboxed'
+import type { connectHost } from '../core/host/connect'
 
 const FP = 'F'.repeat(43)
 let dir: string
@@ -162,6 +164,15 @@ describe('answerRemote (remote runtime design §2.8, X1-14)', () => {
     expect(h.calls.map((c) => c.cmd)).toEqual(['jobs-list'])
     // A read does not ask at all: nothing it could answer would refuse it.
     expect(asked).toBe(0)
+  })
+  // Ruling R13-4: only the MCP server reads a missing session as unknown; the CLI's person's shell stays unrestricted.
+  it('the CLI with no session env stays unrestricted, and asks no Host', async () => {
+    const h = deps(() => ({ status: 200, body: { id: 'job_1' } }))
+    let connects = 0
+    const connect = (async () => (connects++, { error: 'unreachable' as const })) as unknown as typeof connectHost
+    const callerSandboxed = () => askCallerSandboxed({ env: { PATH: '/usr/bin' }, platform: process.platform, home: os.homedir(), version: '1.4.8', connect })
+    expect(await ask('jobs-create', { objective: 'o', cwd: '/srv/repo' }, { ...h.d, callerSandboxed }, 'rt_a', false)).toEqual({ status: 200, body: { id: 'job_1' } })
+    expect(connects).toBe(0)
   })
   it('with no callerSandboxed dep, nothing is asked', async () => {
     const h = deps(() => ({ status: 200, body: { id: 'job_1' } }))

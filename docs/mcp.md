@@ -178,7 +178,10 @@ access first, then the list of what a Runtime offers (a tool without a remote fo
 `RUNTIME_CAPABILITY_MISSING`), then the Runtime's own pairing of this machine. For a remote call, an MCP access
 value Astera does not recognize counts as off. From inside a sandboxed session, a tool that changes work on the
 Runtime is refused with `PERMISSION_DENIED` before anything is sent; reads go. An `ASTERA_SESSION` that names no
-session this machine's Astera holds counts as sandboxed. Leave `runtimeId` out for this machine.
+session this machine's Astera holds counts as sandboxed, and so does a server whose client passed it no
+`ASTERA_SESSION` or `ASTERA_GATEWAY_TOKEN` at all (Codex starts MCP servers with only the environment variables it
+allows): send such a change with `astera --runtime <id|name> ...` from the session's shell instead. Leave `runtimeId`
+out for this machine.
 
 | Tool | What it does |
 | --- | --- |

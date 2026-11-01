@@ -16,6 +16,15 @@ import { cliHostTarget, workloadTokenFor } from './host'
 export const sandboxedRemoteRefusal = (cmd: string): string =>
   `a sandboxed session can only read another computer: ${spelledCommand(cmd)} changes work there, so it was not sent (if this shell is not an agent session, unset ASTERA_SESSION)`
 
+/** Why an MCP server with no Astera session in its env does not send a change to a Runtime (ruling R13-4). Codex starts a
+ *  stdio MCP server with an allowlisted env, so a sandboxed Codex session's server sees no `ASTERA_*` at all; an MCP
+ *  server is always an agent's, so a missing session there is an unknown sandbox, which counts as sandboxed (§7.4). */
+export const mcpNoSessionRefusal = (cmd: string): string =>
+  `this MCP client did not pass its Astera session, so Astera treats it as sandboxed and did not send ${spelledCommand(cmd)}; use \`astera --runtime <id|name> ${spelledCommand(cmd)}\` from the session's shell`
+
+/** Whether the env names an Astera agent session: a session id or a session's workload token (§7.1). */
+export const inAgentSession = (env: NodeJS.ProcessEnv): boolean => (env.ASTERA_SESSION ?? '') !== '' || !!env.ASTERA_GATEWAY_TOKEN
+
 /** The whole question, connection included: a Host that says nothing in this long counts as no answer. */
 const DEADLINE_MS = 10_000
 
@@ -28,7 +37,8 @@ type AskArgs = {
 }
 
 /** False for a process in no agent session (no `ASTERA_SESSION`, no `ASTERA_GATEWAY_TOKEN`): the person's own shell, the
- *  same trust the local classification gives it (§7.2). Otherwise the Host's answer, and true for anything that is not
+ *  same trust the local classification gives it (§7.2). That holds for the CLI only: the MCP server refuses before asking
+ *  when its env has no session (remoteLink.ts `noSession`, ruling R13-4). Otherwise the Host's answer, and true for anything that is not
  *  a 200 with a boolean in it: an answer that cannot be had counts as sandboxed (§7.4). */
 export async function askCallerSandboxed(a: AskArgs): Promise<boolean> {
   return (await hostSaysSandboxed(a)) ?? true
@@ -38,7 +48,7 @@ export async function askCallerSandboxed(a: AskArgs): Promise<boolean> {
  *  refusal, an older Host), so a caller that remembers the answer can leave that one out (ruling R13-2). */
 export async function hostSaysSandboxed(a: AskArgs): Promise<boolean | null> {
   const sessionId = a.env.ASTERA_SESSION ?? ''
-  if (sessionId === '' && !a.env.ASTERA_GATEWAY_TOKEN) return false
+  if (!inAgentSession(a.env)) return false
   const started = Date.now()
   const { address, profileDir } = cliHostTarget({ env: a.env, platform: a.platform, home: a.home })
   let conn: Awaited<ReturnType<typeof connectHost>>

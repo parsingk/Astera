@@ -12,7 +12,7 @@ import { RemoteError } from '../../core/remote/client'
 import type { RemoteLink, RemoteTarget } from '../../core/remote/link'
 import type { HelloFrame } from '../../core/remote/frames'
 import { mcpAccessForRemote } from '../../core/settings/mcpAccess'
-import { hostSaysSandboxed, rememberedSandboxed } from '../callerSandboxed'
+import { hostSaysSandboxed, inAgentSession, rememberedSandboxed } from '../callerSandboxed'
 import type { connectHost } from '../../core/host/connect'
 import type { HostMessage } from '../../core/host/protocol'
 
@@ -228,6 +228,44 @@ describe('openMcpRuntimes', () => {
     // One that is not sandboxed is not refused by it
     const open = openMcpRuntimes({ profileDir: dir, version: '1.4.8', client: () => undefined, sandboxed: async () => false, open: () => fakeLink() })
     expect(await open.refusal('jobs-create')).toBeNull()
+  })
+
+  // Ruling R13-4: Codex starts a stdio MCP server with an allowlisted env, so a sandboxed Codex session's server sees no
+  // ASTERA_* at all. An MCP server is always an agent's, so a missing session is an unknown sandbox: changes refused.
+  it('a Codex-shaped env (no ASTERA_* at all) refuses an MCP remote write without asking the Host, and still allows a read', async () => {
+    await write({ mcpAccess: 'control' })
+    const env: NodeJS.ProcessEnv = { PATH: '/usr/bin', HOME: '/home/u' }
+    let asked = 0
+    const seen: string[] = []
+    const r = openMcpRuntimes({
+      profileDir: dir,
+      version: '1.4.8',
+      client: () => undefined,
+      noSession: !inAgentSession(env),
+      sandboxed: async () => (asked++, false),
+      open: () => ({ hello: () => null, call: async (cmd) => (seen.push(cmd), { status: 200, body: [] }), subscribe: () => () => {}, close: () => {} })
+    })
+    expect(await r.refusal('jobs-create')).toBe(
+      "this MCP client did not pass its Astera session, so Astera treats it as sandboxed and did not send jobs create; use `astera --runtime <id|name> jobs create` from the session's shell"
+    )
+    const client = await connected(recording().link, r)
+    const refused = await client.callTool({ name: 'run_job', arguments: { runtimeId: 'rt_a', jobId: 'job_1' } })
+    expect(textOf(refused)).toMatch(/PERMISSION_DENIED/)
+    expect(textOf(refused)).toContain('did not pass its Astera session')
+    const listed = await client.callTool({ name: 'list_jobs', arguments: { runtimeId: 'rt_a' } })
+    expect(listed.isError).not.toBe(true)
+    expect(seen).toEqual(['jobs-list'])
+    expect(asked).toBe(0)
+  })
+
+  it('with ASTERA_SESSION present, the Host is asked as before', async () => {
+    await write({ mcpAccess: 'control' })
+    for (const env of [{ ASTERA_SESSION: 'ses_1' }, { ASTERA_GATEWAY_TOKEN: 'tok' }] as NodeJS.ProcessEnv[]) {
+      let asked = 0
+      const r = openMcpRuntimes({ profileDir: dir, version: '1.4.8', client: () => undefined, noSession: !inAgentSession(env), sandboxed: async () => (asked++, false), open: () => fakeLink() })
+      expect(await r.refusal('jobs-create')).toBeNull()
+      expect(asked).toBe(1)
+    }
   })
 
   // Ruling R13-2: only the Host's own answer is kept. A failed ask refuses that call and the next change asks again.

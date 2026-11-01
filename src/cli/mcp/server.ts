@@ -21,7 +21,7 @@ import { sanitize } from '../../core/orchestration/checkpoint'
 import { cliHostTarget, runHostCommand } from '../host'
 import { openHostLink, type HostLink } from './hostLink'
 import { openMcpRuntimes, type McpRuntimes } from './remoteLink'
-import { hostSaysSandboxed, rememberedSandboxed } from '../callerSandboxed'
+import { hostSaysSandboxed, inAgentSession, rememberedSandboxed } from '../callerSandboxed'
 import { remoteTarget } from '../../core/remote/targets'
 import { resolveRuntime } from '../runtimes'
 import { LIST_LIMIT, cursorOffset, orderAndCut } from './lists'
@@ -576,12 +576,14 @@ export async function serveMcp(a: {
 
   // The paired Runtimes of this profile, for the tools given a runtimeId (remote runtime design §2.8). Whether this
   // server's session is sandboxed is asked at a change until the Host answers, then kept (remote governance design §7.4).
+  // An env with no session is an agent whose client did not pass it (Codex's allowlisted env): refused, never asked.
   const opened =
     a.runtimes ??
     openMcpRuntimes({
       profileDir: cliHostTarget({ env: a.env, platform: a.platform, home: a.home }).profileDir,
       version: a.version,
       client: () => server.server.getClientVersion(),
+      noSession: !inAgentSession(a.env),
       sandboxed: rememberedSandboxed(() => hostSaysSandboxed({ env: a.env, platform: a.platform, home: a.home, version: a.version }))
     })
   const runtimes: McpRuntimes = {

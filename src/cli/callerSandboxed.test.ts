@@ -33,6 +33,8 @@ const ask = (env: NodeJS.ProcessEnv, connect: typeof connectHost) =>
   askCallerSandboxed({ env, platform: process.platform, home: os.homedir(), version: '1.4.8', connect })
 
 describe('askCallerSandboxed (remote governance design §7.4)', () => {
+  // Ruling R13-4 keeps this for the CLI: no session env is the person's own shell, unrestricted. Only the MCP server
+  // reads a missing session as unknown (mcp/remoteLink.ts noSession).
   it('no session in the env asks nothing and answers false', async () => {
     const connect = vi.fn() as unknown as typeof connectHost
     expect(await ask({ ASTERA_PROFILE_DIR: PROFILE }, connect)).toBe(false)
