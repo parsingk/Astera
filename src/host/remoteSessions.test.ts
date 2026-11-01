@@ -274,6 +274,28 @@ describe('remote sessions through the Host (Phase 9a)', () => {
     }
   })
 
+  // Controller ruling R6-1: an agent's input is not a person's, as an agent's sessions send is not (command.ts `by`). The
+  // person-write mark feeds token accounting (`submittedBetween`) and a finished Run coordinator's grace period
+  // (`lastPersonInputAt`); the size still follows the side that typed.
+  it("an agent controller's input sets no person-write mark and no person submission; a person controller's sets both", async () => {
+    for (const who of [{ kind: 'agent', surface: 'mcp' }, { kind: 'unsaid', surface: 'cli' }, {}] as Who[]) {
+      // A local app holds the pty, so the controller's size waits until it types
+      const h = await rig({ held: true })
+      expect(await h.ask('sessions-resize', { id: 'ses-1', cols: 100, rows: 30 }, 'full-control', undefined, undefined, who)).toMatchObject({ body: { applied: false } })
+      expect((await h.ask('sessions-input', { id: 'ses-1', data: 'go\r' }, 'full-control', undefined, undefined, who)).status).toBe(200)
+      expect(h.pty.sent, JSON.stringify(who)).toEqual(['go\r'])
+      expect(h.ptys.lastPersonWrite('pty-1'), JSON.stringify(who)).toBeNull()
+      expect(h.ptys.personSubmittedBetween('pty-1', 0, Date.now() + 1000), JSON.stringify(who)).toBe(false)
+      expect(h.ptys.submittedBetween('pty-1', 0, Date.now() + 1000), JSON.stringify(who)).toBe('host')
+      expect(h.ptys.ownerOf('pty-1'), JSON.stringify(who)).toBe('controller:c1')
+      expect(h.pty.sizes, JSON.stringify(who)).toEqual([[100, 30]])
+    }
+    const h = await rig()
+    expect((await h.ask('sessions-input', { id: 'ses-1', data: 'go\r' })).status).toBe(200)
+    expect(h.ptys.lastPersonWrite('pty-1')).not.toBeNull()
+    expect(h.ptys.personSubmittedBetween('pty-1', 0, Date.now() + 1000)).toBe(true)
+  })
+
   it('sessions-input to a terminal not at a prompt is typed for either', async () => {
     for (const turn of [
       { alive: true, state: 'waiting', prompt: null },

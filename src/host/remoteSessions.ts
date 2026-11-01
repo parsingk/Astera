@@ -229,12 +229,15 @@ export function createRemoteSessions(d: RemoteSessionDeps): RemoteSessions {
       if (typeof args.data !== 'string' || args.data === '') return bad('sessions-input needs --data')
       if (args.data.length > SESSION_INPUT_MAX) return bad(`sessions-input takes at most ${SESSION_INPUT_MAX} characters at a time`)
       // Raw input is sessions send's text: an agent's into a terminal at a prompt would answer it, and nothing is typed
-      if (caller && agentCaller(caller) && d.sessions.sessionTurn) {
+      const fromAgent = caller !== null && agentCaller(caller)
+      if (caller && fromAgent && d.sessions.sessionTurn) {
         const refused = await promptRefusal(d.sessions.sessionTurn, caller, s.id)
         if (refused) return refused
       }
-      // Typing takes the size for this controller (registry `sizeOwner`); its terminal's own reports do not.
-      d.ptys.write(s.ptyId, args.data, side !== undefined ? { person: true, side } : { person: true })
+      // Typing takes the size for this controller (registry `sizeOwner`); its terminal's own reports do not. An agent's
+      // input is not a person's, as an agent's sessions send is not (controller ruling R6-1): it moves no person-write
+      // mark, so it neither counts as a person's prompt in token accounting nor holds a finished Run's sessions open.
+      d.ptys.write(s.ptyId, args.data, { ...(fromAgent ? {} : { person: true as const }), ...(side !== undefined ? { side } : {}) })
       marked()
       return { status: 200, body: { written: args.data.length } }
     }
