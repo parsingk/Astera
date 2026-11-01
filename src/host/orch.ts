@@ -18,7 +18,7 @@ import { stat } from 'node:fs/promises'
 import { jobsViewOf, runsTimelineOf, type RuntimeFacts } from './remoteReads'
 import { archivedProfilesOfJob, profileIdsOfJob } from '../core/orchestration/archivedProfiles'
 import { createPresence } from './presence'
-import { handleCommand, handleExit, outsideSandbox, sandboxedCaller, type OrchServerDeps } from '../core/orchestration/command'
+import { handleCommand, handleExit, outsideSandbox, PENDING_START_WINDOW_MS, sandboxedCaller, type OrchServerDeps } from '../core/orchestration/command'
 import type { CompletionCheckInput } from '../core/orchestration/pluginChecks'
 import { OrchestrationStore, isValidState, type OrchLoadResult } from '../core/orchestration/store'
 import { applyPendingReports, readPendingReports, type QueuedReport } from '../core/orchestration/pendingDrain'
@@ -372,6 +372,9 @@ export const OBSERVED: Record<string, ObservedReplay> = {
 export interface HostOrch extends OrchCall {
   /** Loads the state, once. Lazy and memoized on purpose — see `createHostOrch`. */
   ready(): Promise<void>
+  /** Cancels the timers this orch owns (a revoke's retried pause, remote governance R7-2): the Host is leaving. Never
+   *  throws. */
+  dispose(): void
   /** Loads with no app attached (GitHub lifecycle G6, host/earlyLoad.ts): the Host drives and runs the resume sweep itself
    *  at the load's handover, so the load's findings are spent here — an app attaching later does not act on them
    *  again, and the Host's own journal already recorded the load. */
@@ -422,6 +425,10 @@ export interface HostOrch extends OrchCall {
   drainOnce(): Promise<boolean>
 }
 
+/** How long after the start window a revoke's refused pause is tried again (remote governance R7-2): past the window a
+ *  worker still on its placeholder is a start that died, and the pause goes ahead. */
+const REVOKE_PAUSE_RETRY_MARGIN_MS = 5_000
+
 /** The records only the Host itself writes: its git ranges and what it read of a Run's pull request (GitHub lifecycle),
  *  and the drivers' own lifecycle steps (G3a: starting a lifecycle Task, keeping its handed-off round). A socket that
  *  names itself the Host's caller is refused them. */
@@ -439,6 +446,9 @@ export function createHostOrch(a: {
   /** The Host's own version (`ASTERA_HOST_VERSION`) — what `status` and `version` answer with. */
   version: string
   now(): string
+  /** The timer a revoke's retried pause waits on (remote governance R7-2); answers its cancel. A test hands its own;
+   *  the default is an unref'd setTimeout, so a pending retry never holds the Host up. */
+  setTimer?(run: () => void, ms: number): () => void
   /** When this Host began serving — **the same string its `hello` carries**, which is the whole point
    *  of asking for it rather than taking one at construction (request receipts design §6). A receipt
    *  lives only as long as the Host that holds it, so an `absent` is dangerous exactly when the Host
@@ -1571,6 +1581,16 @@ export function createHostOrch(a: {
     }
   }
 
+  /** A revoke's pauses waiting for a worker to finish starting (R7-2), each by its cancel; HostOrch.dispose clears them. */
+  const retries = new Set<() => void>()
+  const setTimer =
+    a.setTimer ??
+    ((run: () => void, ms: number): (() => void) => {
+      const t = setTimeout(run, ms)
+      t.unref?.()
+      return () => clearTimeout(t)
+    })
+
   /** HostOrch.handle: a command the Host issues for itself. Here so that `clients-revoke` issues its pauses the same way. */
   const hostHandle = async (cmd: string, args: Record<string, unknown>): Promise<{ status: number; body: unknown }> => {
     const marks: CallMarks = { appRefused: false, commits: 0, effects: 0 }
@@ -1593,19 +1613,36 @@ export function createHostOrch(a: {
   const pauseRevoked = async (
     clientId: string,
     name: string
-  ): Promise<{ pausedJobs: number; notPaused: Array<{ jobId: string; error: string }>; unrecordedScheduled: number }> => {
+  ): Promise<{ pausedJobs: number; notPaused: Array<{ jobId: string; error: string; reason?: 'still-starting' }>; unrecordedScheduled: number }> => {
     await ready()
     const scheduled = store.get().jobs.filter((j) => j.schedule !== undefined)
     let pausedJobs = 0
-    const notPaused: Array<{ jobId: string; error: string }> = []
+    const notPaused: Array<{ jobId: string; error: string; reason?: 'still-starting' }> = []
+    const errorOf = (r: { status: number; body: unknown }): string => {
+      const error = (r.body as { error?: unknown } | null)?.error
+      return typeof error === 'string' ? error : `answered ${r.status}`
+    }
     for (const job of scheduled.filter((j) => j.createdBy?.clientId === clientId)) {
-      const r = await hostHandle('run-pause', { run: job.id, revokedBy: { clientId, name } })
+      const args = { run: job.id, revokedBy: { clientId, name } }
+      const r = await hostHandle('run-pause', args)
       if (r.status === 200) {
         pausedJobs++
         continue
       }
-      const error = (r.body as { error?: unknown } | null)?.error
-      notPaused.push({ jobId: job.id, error: typeof error === 'string' ? error : `answered ${r.status}` })
+      // **A worker still starting is waited out once** (ruling R7-2): run-pause refuses inside the start window, and a
+      // schedule left armed would keep firing with nobody told. Past the window the placeholder is a start that died,
+      // and the pause goes ahead. A retained worker is not retried: that refusal is the person's to lift.
+      if ((r.body as { reason?: unknown } | null)?.reason === 'still-starting') {
+        const retryMs = PENDING_START_WINDOW_MS + REVOKE_PAUSE_RETRY_MARGIN_MS
+        notPaused.push({ jobId: job.id, error: `${errorOf(r)}; the pause is retried in ${Math.round(retryMs / 1000)} s`, reason: 'still-starting' })
+        const cancel = setTimer(() => {
+          retries.delete(cancel)
+          void hostHandle('run-pause', args).then((again) => {
+            if (again.status !== 200) a.log(`remote: revoked ${clientId}; job ${job.id} could not be paused on the retry: ${errorOf(again)}`)
+          })
+        }, retryMs)
+        retries.add(cancel)
+      } else notPaused.push({ jobId: job.id, error: errorOf(r) })
       a.log(`remote: revoked ${clientId}; job ${job.id} could not be paused: ${notPaused.at(-1)!.error}`)
     }
     return { pausedJobs, notPaused, unrecordedScheduled: scheduled.filter((j) => j.createdBy === undefined).length }
@@ -1613,6 +1650,10 @@ export function createHostOrch(a: {
 
   return {
     ready,
+    dispose: () => {
+      for (const cancel of retries) cancel()
+      retries.clear()
+    },
     loadUnattended: async () => {
       await ready()
       bootHandedOut = true

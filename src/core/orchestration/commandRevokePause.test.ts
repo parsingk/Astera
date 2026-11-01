@@ -2,14 +2,14 @@
 // this computer resumes them (remote governance design §8.1 to §8.4; the person's decision P2: pause, not delete).
 import { describe, it, expect } from 'vitest'
 import { handleCommand, type OrchServerDeps } from './command'
-import { emptyState, startJobRun, type OrchState } from './state'
+import { createJob, createTask, emptyState, startJobRun, type OrchState } from './state'
 import { APP_CALLER, HOST_CALLER } from '../host/driver'
 import type { ControllerKind, ControllerPrincipal } from '../host/orchProtocol'
 import { absPath } from '../testPaths'
 
 const NOW = '2026-11-01T00:00:00.000Z'
 const ROOT = absPath('p')
-const DAILY = { kind: 'daily', time: '09:00' }
+const DAILY = { kind: 'daily' as const, time: '09:00' }
 
 const makeDeps = (): OrchServerDeps & { released: string[] } => {
   const box: { state: OrchState } = { state: { ...emptyState(), projects: [{ id: 'prj_p', path: ROOT, name: 'p', addedAt: NOW }] } }
@@ -56,6 +56,14 @@ const revokedJob = async (): Promise<{ deps: ReturnType<typeof makeDeps>; jobId:
   const paused = await handleCommand(deps, HOST, 'run-pause', { run: jobId, revokedBy: { clientId: 'cli_1', name: 'laptop' } })
   expect(paused.status, JSON.stringify(paused.body)).toBe(200)
   return { deps, jobId, runId: fired.value.id }
+}
+
+/** A ready Task in the Run, as a fire's copy of the plan would be */
+const taskIn = async (deps: OrchServerDeps, runId: string): Promise<string> => {
+  const made = createTask(deps.getState(), { runId, title: 't', spec: 's', deps: [] }, NOW)
+  if (!made.ok) throw new Error(made.error)
+  await deps.setState(made.state)
+  return made.value.id
 }
 
 describe('a Job records the controller that made it (remote governance design §8.1)', () => {
@@ -177,6 +185,61 @@ describe('a revoked-paused Job is resumed only by a person on this computer (rem
     }
   })
 
+  // Ruling R7-1: one Task of the Job set going again is the Job set going again
+  it('worker-start on a Task of a revoked-paused Run is refused to a controller and an agent', async () => {
+    const { deps, jobId, runId } = await revokedJob()
+    const taskId = await taskIn(deps, runId)
+    for (const caller of [controller('person', 'cli_2', 'desk'), AGENT_SHELL]) {
+      const r = await handleCommand(deps, caller, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1', worktree: 'current' })
+      expect([r.status, r.body], JSON.stringify(caller)).toEqual([403, { error: REFUSAL(jobId), reason: 'controller-revoked' }])
+    }
+    expect(deps.getState().dispatches).toHaveLength(0)
+  })
+
+  it('gate-resolve that reopens a Task of it is refused the same way, and mark-failed is not', async () => {
+    const { deps, jobId, runId } = await revokedJob()
+    const taskId = await taskIn(deps, runId)
+    // A Task blocked on a question, as a Gate leaves it
+    const st = deps.getState()
+    await deps.setState({
+      ...st,
+      tasks: st.tasks.map((t) => (t.id === taskId ? { ...t, status: 'blocked' as const } : t)),
+      gates: [{ id: 'gate_1', runId, taskId, question: 'q', status: 'open', createdAt: NOW }]
+    })
+    for (const caller of [controller(), AGENT_SHELL]) {
+      const r = await handleCommand(deps, caller, 'gate-resolve', { id: 'gate_1', resolution: 'try again' })
+      expect([r.status, r.body], JSON.stringify(caller)).toEqual([403, { error: REFUSAL(jobId), reason: 'controller-revoked' }])
+    }
+    expect(deps.getState().gates[0].status).toBe('open')
+    const failed = await handleCommand(deps, controller(), 'gate-resolve', { id: 'gate_1', resolution: 'mark-failed' })
+    expect(failed.status, JSON.stringify(failed.body)).toBe(200)
+  })
+
+  it("a person's own pause does not refuse worker-start this way", async () => {
+    const deps = makeDeps()
+    await handleCommand(deps, controller(), 'jobs-create', { objective: 'o', cwd: ROOT, schedule: DAILY })
+    const jobId = deps.getState().jobs[0].id
+    const fired = startJobRun(deps.getState(), jobId, NOW)
+    if (!fired.ok) throw new Error(fired.error)
+    await deps.setState(fired.state)
+    expect((await handleCommand(deps, PERSON_SHELL, 'run-pause', { run: jobId })).status).toBe(200)
+    const taskId = await taskIn(deps, fired.value.id)
+    const r = await handleCommand(deps, controller(), 'worker-start', { task: taskId, agent: 'claude', account: 'acc1', worktree: 'current' })
+    expect((r.body as { reason?: unknown }).reason).not.toBe('controller-revoked')
+  })
+
+  // Ruling R7-5: the person reviews a revoked Job before it goes
+  it('run-delete of a revoked-paused Job is refused to a controller and an agent, and a person deletes it', async () => {
+    const { deps, jobId } = await revokedJob()
+    for (const caller of [controller(), AGENT_SHELL]) {
+      const r = await handleCommand(deps, caller, 'run-delete', { id: jobId })
+      expect([r.status, r.body], JSON.stringify(caller)).toEqual([403, { error: REFUSAL(jobId), reason: 'controller-revoked' }])
+    }
+    expect(deps.getState().jobs).toHaveLength(1)
+    expect((await handleCommand(deps, PERSON_SHELL, 'run-delete', { id: jobId })).status).toBe(200)
+    expect(deps.getState().jobs).toHaveLength(0)
+  })
+
   it("a person's pause and resume of an ordinary scheduled Job are unchanged", async () => {
     const deps = makeDeps()
     await handleCommand(deps, controller(), 'jobs-create', { objective: 'o', cwd: ROOT, schedule: DAILY })
@@ -187,5 +250,28 @@ describe('a revoked-paused Job is resumed only by a person on this computer (rem
     expect(deps.getState().jobs[0].pausedBy).toBeUndefined()
     expect((await handleCommand(deps, controller(), 'run-resume', { run: jobId })).status).toBe(200)
     expect(deps.getState().jobs[0].paused).toBeUndefined()
+  })
+})
+
+// Ruling R7-4: a fire waits on the profile store (and on the coordinator's idle check); a pause that lands meanwhile
+// must not be fired past
+describe('a scheduled fire and a pause that lands while it waits', () => {
+  it('run-spawn --unless-running re-reads the Job after its awaits and skips it once paused', async () => {
+    const deps = makeDeps()
+    const made = createJob(deps.getState(), { objective: 'o', cwd: ROOT, schedule: DAILY, agentProfileId: 'ap_1' }, NOW)
+    if (!made.ok) throw new Error(made.error)
+    await deps.setState(made.state)
+    const jobId = made.value.id
+    deps.readAgentProfiles = async () => {
+      // The revoke's pause commits while the fire reads the store
+      await deps.setState({ ...deps.getState(), jobs: deps.getState().jobs.map((j) => (j.id === jobId ? { ...j, paused: true } : j)) })
+      return {
+        version: 1,
+        profiles: [{ id: 'ap_1', name: 'P', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'inherit', sandbox: false, createdAt: NOW, updatedAt: NOW }]
+      } as never
+    }
+    const r = await handleCommand(deps, HOST, 'run-spawn', { run: jobId, unlessRunning: true })
+    expect([r.status, (r.body as { paused?: unknown }).paused], JSON.stringify(r.body)).toEqual([409, true])
+    expect(deps.getState().runs).toHaveLength(0)
   })
 })

@@ -851,7 +851,8 @@ const stillStarting = (open: readonly Dispatch[], now: string): Reply | null => 
   const d = open.find(
     (x) => isPlaceholderSessionId(x.sessionId) && Date.parse(now) - Date.parse(x.startedAt) < PENDING_START_WINDOW_MS
   )
-  return d ? conflict(`the worker is still starting; try again in a moment (dispatch ${d.id})`) : null
+  // `reason` lets a caller that retries on its own tell this apart (a revoke's pause, remote governance R7-2)
+  return d ? { status: 409, body: { error: `the worker is still starting; try again in a moment (dispatch ${d.id})`, reason: 'still-starting' } } : null
 }
 /** Whether stopping this Dispatch has a session to kill. A placeholder that got past `stillStarting`
  *  is a start that died: no pty was ever opened for it, so there is nothing to release. */
@@ -1549,20 +1550,50 @@ function outsideSandboxTarget(
 
 /** The commands that resume or run a Job, or set a Run of it going again (remote governance design §8.2; the
  *  controller's ruling C3): `runs-resume` and `runs-reconverge` too, since a revoke's pause pauses every Run of the Job
- *  and either would set one going while the Job waits for a person. */
-const RESUMES_JOB: ReadonlySet<string> = new Set(['run-resume', 'run-start', 'run-spawn', 'jobs-run', 'runs-resume', 'runs-reconverge'])
+ *  and either would set one going while the Job waits for a person. Then the ones that set one Task of it going again
+ *  (R7-1): `worker-start`, and `gate-resolve` with any answer but mark-failed (it reopens the Task, opens a repair or
+ *  starts its checks again, as outsideSandboxTarget reads it). And `run-delete` (R7-5): the person reviews the Job
+ *  first. */
+const RESUMES_JOB: ReadonlySet<string> = new Set([
+  'run-resume',
+  'run-start',
+  'run-spawn',
+  'jobs-run',
+  'runs-resume',
+  'runs-reconverge',
+  'worker-start',
+  'gate-resolve',
+  'run-delete'
+])
 
-/** The refusal of a controller or an agent that resumes or runs a Job a revoke paused (Job.pausedBy; remote governance
- *  design §8.2, the person's decision P2), or null. Every controller is refused, a person's too: the pairing that made
- *  the Job is gone, and the decision to start it again is for a person on this computer, the app or their own shell.
- *  The Job is found as outsideSandboxTarget finds it: a Run id names its Job. An id that names nothing is null here,
- *  and the command answers it as before. */
+/** The Job a RESUMES_JOB command acts on, found as outsideSandboxTarget finds it: a Task names its Run, a Run its Job.
+ *  Undefined when the id names nothing, or for a gate-resolve that only fails its Task. */
+function jobActedOn(s: OrchState, cmd: string, args: Record<string, unknown>): Job | undefined {
+  const ofTask = (id: string | null): Job | undefined => {
+    const task = id === null ? undefined : s.tasks.find((t) => t.id === id)
+    const run = task?.runId === undefined ? undefined : s.runs.find((r) => r.id === task.runId)
+    return run ? jobOf(s, run) : undefined
+  }
+  if (cmd === 'worker-start') return ofTask(str(args.taskId ?? args.task))
+  if (cmd === 'gate-resolve') {
+    if (str(args.resolution) === 'mark-failed') return undefined
+    const gate = s.gates.find((g) => g.id === str(args.id) && g.status === 'open')
+    return gate ? ofTask(gate.taskId) : undefined
+  }
+  const id = str(cmd === 'run-resume' || cmd === 'run-start' || cmd === 'run-spawn' ? args.run : args.id)
+  if (id === null) return undefined
+  const run = s.runs.find((r) => r.id === id)
+  return run ? jobOf(s, run) : s.jobs.find((j) => j.id === id)
+}
+
+/** The refusal of a controller or an agent that resumes, runs or deletes a Job a revoke paused, or sets a Task of it
+ *  going again (Job.pausedBy; remote governance design §8.2, the person's decision P2), or null. Every controller is
+ *  refused, a person's too: the pairing that made the Job is gone, and the decision to start it again is for a person on
+ *  this computer, the app or their own shell. Keyed on pausedBy alone, so a person's own pause answers as before. An id
+ *  that names nothing is null here, and the command answers it as before. */
 function revokedPauseRefusal(s: OrchState, caller: RuleCaller, cmd: string, args: Record<string, unknown>): Reply | null {
   if (!RESUMES_JOB.has(cmd) || (caller.role !== 'controller' && !agentCaller(caller))) return null
-  const id = str(cmd === 'jobs-run' || cmd === 'runs-resume' || cmd === 'runs-reconverge' ? args.id : args.run)
-  if (id === null) return null
-  const run = s.runs.find((r) => r.id === id)
-  const job = run ? jobOf(s, run) : s.jobs.find((j) => j.id === id)
+  const job = jobActedOn(s, cmd, args)
   if (job?.pausedBy === undefined) return null
   return {
     status: 403,
@@ -3619,6 +3650,14 @@ export async function handleCommand(
         // The store read may have waited: what follows reads the state as it is now
         base = deps.getState()
         const job = base.jobs.find((j) => j.id === id)
+        // A pause that landed while the fire waited (a person's, or a revoke's, remote governance R7-4) wins: the fire
+        // is skipped like the others
+        const pausedSkip = (st: OrchState): Reply | null =>
+          st.jobs.find((j) => j.id === id)?.paused === true
+            ? { status: 409, body: { error: `job ${id} is paused; this run was not made`, jobId: id, paused: true } }
+            : null
+        const pausedNow = pausedSkip(base)
+        if (pausedNow) return pausedNow
         const running = job && runningRunOf(base, job, now)
         if (running)
           return {
@@ -3649,6 +3688,8 @@ export async function handleCommand(
             !finished
           )
           base = deps.getState()
+          const pausedAfter = pausedSkip(base)
+          if (pausedAfter) return pausedAfter
         }
       }
       const made = startJobRun(base, id, now)

@@ -5290,7 +5290,7 @@ describe('clients-revoke pauses the scheduled Jobs the client made (remote gover
   const releaseWorker = vi.fn(async () => {})
   /** Two paired clients, laptop and desk, and four Jobs: a scheduled one each of them made, a scheduled one with no
    *  maker (made before this release), and one laptop made with no schedule. Laptop's two each hold an open worker. */
-  const fixture = async (o: { retained?: boolean } = {}) => {
+  const fixture = async (o: { retained?: boolean; minesSession?: string; now?: () => string; setTimer?: (run: () => void, ms: number) => () => void } = {}) => {
     releaseWorker.mockClear()
     const controllers = createControllerRegistry()
     const redeem = async (name: string): Promise<string> => {
@@ -5329,6 +5329,8 @@ describe('clients-revoke pauses the scheduled Jobs the client made (remote gover
       controllers,
       hasApp: () => false,
       act: vi.fn(),
+      ...(o.now ? { now: o.now } : {}),
+      ...(o.setTimer ? { setTimer: o.setTimer } : {}),
       aliveSessionIds: () => new Set(['ses_mine', 'ses_plain']),
       local: {
         owns: () => true,
@@ -5343,6 +5345,13 @@ describe('clients-revoke pauses the scheduled Jobs the client made (remote gover
         removeWorktrees: vi.fn()
       } as unknown as HostLocal
     })
+    // A worker-start in flight in this Host: put after the load, whose restart cleanup closes a placeholder it finds
+    if (o.minesSession !== undefined) {
+      await orch.ready()
+      const deps = orch.internalDeps()
+      const st = deps.getState()
+      await deps.setState({ ...st, dispatches: st.dispatches.map((d) => (d.id === minesWorker ? { ...d, sessionId: o.minesSession! } : d)) })
+    }
     const revoke = () => orch.call({ cmd: 'clients-revoke', args: { id: laptop }, sessionId: '', from: cli })
     const jobOf = (id: string) => orch.state().jobs.find((j) => j.id === id)!
     return { orch, laptop, revoke, jobOf, mine, minesWorker, theirs, makerless, unscheduled, unscheduledWorker }
@@ -5390,6 +5399,66 @@ describe('clients-revoke pauses the scheduled Jobs the client made (remote gover
     expect(logs).toContain(`remote: revoked ${f.laptop}; job ${f.mine} could not be paused: ${body.notPaused[0].error}`)
     // The client is gone all the same
     expect((await f.orch.call({ cmd: 'clients-list', args: {}, sessionId: '', from: cli })).body).toMatchObject({ clients: [{ name: 'desk' }] })
+  })
+
+  // Ruling R7-2: a worker still starting refuses the pause; left at that, the schedule would keep firing with nobody told
+  describe('a worker of that Job still starting', () => {
+    const timers = () => {
+      const pending: Array<{ run: () => void; ms: number; cancelled: boolean }> = []
+      return {
+        pending,
+        setTimer: (run: () => void, ms: number) => {
+          const t = { run, ms, cancelled: false }
+          pending.push(t)
+          return () => void (t.cancelled = true)
+        }
+      }
+    }
+    const LATER = new Date(Date.parse(NOW) + PENDING_START_WINDOW_MS + 5_000).toISOString()
+
+    it('is named still-starting, and the pause is retried after the start window and then holds', async () => {
+      let clock = NOW
+      const t = timers()
+      const f = await fixture({ minesSession: 'pending:ab12cd34', now: () => clock, setTimer: t.setTimer })
+      const r = await f.revoke()
+      expect(r.status).toBe(200)
+      const body = r.body as { pausedJobs: number; notPaused: Array<{ jobId: string; error: string; reason?: string }> }
+      expect(body.pausedJobs).toBe(0)
+      expect(body.notPaused).toEqual([{ jobId: f.mine, error: expect.stringContaining('the pause is retried'), reason: 'still-starting' }])
+      expect(f.jobOf(f.mine).paused).toBeUndefined()
+      expect(t.pending).toHaveLength(1)
+      expect(t.pending[0].ms).toBe(PENDING_START_WINDOW_MS + 5_000)
+      clock = LATER
+      t.pending[0].run()
+      await vi.waitFor(() => expect(f.jobOf(f.mine).paused).toBe(true))
+      expect(f.jobOf(f.mine).pausedBy).toMatchObject({ reason: 'controller-revoked', clientId: f.laptop, name: 'laptop', at: LATER })
+    })
+
+    it('a retry that fails again is logged', async () => {
+      const t = timers()
+      // The clock does not move, so the worker is still starting at the retry
+      const f = await fixture({ minesSession: 'pending:ab12cd34', setTimer: t.setTimer })
+      await f.revoke()
+      t.pending[0].run()
+      await vi.waitFor(() => expect(logs.some((l) => l.startsWith(`remote: revoked ${f.laptop}; job ${f.mine} could not be paused on the retry:`))).toBe(true))
+      expect(f.jobOf(f.mine).paused).toBeUndefined()
+    })
+
+    it('the retry is cancelled when the Host leaves', async () => {
+      const t = timers()
+      const f = await fixture({ minesSession: 'pending:ab12cd34', setTimer: t.setTimer })
+      await f.revoke()
+      f.orch.dispose()
+      expect(t.pending[0].cancelled).toBe(true)
+    })
+
+    it('a retained worker is named and not retried', async () => {
+      const t = timers()
+      const f = await fixture({ retained: true, setTimer: t.setTimer })
+      const body = (await f.revoke()).body as { notPaused: Array<{ reason?: string }> }
+      expect(body.notPaused[0].reason).toBeUndefined()
+      expect(t.pending).toHaveLength(0)
+    })
   })
 
   // Anything on this machine can write the Host's caller id in a frame (HOST_OWN_RECORDS' reason), and a revoke's

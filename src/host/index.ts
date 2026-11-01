@@ -341,6 +341,9 @@ async function main(): Promise<void> {
     // Slack back would be a second one beside. Never rejects.
     void slackWiring?.dispose()
     remoteSessions?.dispose()
+    // A revoke's pause still waiting to be retried is dropped (remote governance R7-2): the next Host starts with no
+    // timer, and the client stays revoked on disk. Never throws.
+    orch.dispose()
     // Before the close, so a Host that is on its way out is not offered up as one to end. A failure
     // here costs nothing: the app checks the executable behind the pid before acting on it, and a
     // record this Host left behind names a pid that is about to stop existing.
