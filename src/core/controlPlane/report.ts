@@ -4,6 +4,7 @@
 // that is too large is refused whole rather than cut.
 import type { ExtensionKind } from '../extensions/types'
 import type { Provider } from '../types'
+import { isProvider } from '../providers/meta'
 import type { ProfilePermission } from '../agentProfiles/types'
 import type { AuditMode } from '../audit/types'
 
@@ -30,8 +31,8 @@ export interface ReportExtension {
 export interface ReportProfile {
   id: string
   name: string
-  status: 'active' | 'archived'
-  permission: ProfilePermission
+  status: 'active' | 'archived' | (string & {})
+  permission: ProfilePermission | (string & {})
   sandbox: boolean
   mcpExclude: string[]
   /** How many of its accountIds exist there, and how many it names. */
@@ -44,7 +45,8 @@ export interface PerProvider<T> {
   codex: T
 }
 
-/** `null` in a part = that part could not be read on the Runtime. */
+/** `null` in a part = that part could not be read on the Runtime. A `(string & {})` member is a state word a newer
+ *  Runtime sent that this build does not know: kept as that word and shown, not refused (design §4.3). */
 export interface ControlPlaneReport {
   version: 1
   astera: { version: string; platform: string }
@@ -53,8 +55,8 @@ export interface ControlPlaneReport {
   /** "Run agents without permission checks" there. */
   appBypass: boolean | null
   policy: {
-    mode: AuditMode
-    otherwise: 'allow' | 'deny'
+    mode: AuditMode | (string & {})
+    otherwise: 'allow' | 'deny' | (string & {})
     rules: number
     observingSince?: string
     /** A blocker code (ENFORCE_BLOCKER_CODES or a newer one) per session kind, null when Enforce can start; the whole
@@ -63,7 +65,7 @@ export interface ControlPlaneReport {
     /** The CLI version found, null when it is not there or could not be read. */
     cliVersions: PerProvider<string | null>
   } | null
-  sandbox: PerProvider<{ kind: 'sandbox' | 'deny-only'; blocker: string | null }> & {
+  sandbox: PerProvider<{ kind: 'sandbox' | 'deny-only' | (string & {}); blocker: string | null }> & {
     /** Windows only: Codex accounts whose elevated sandbox is set up, out of all Codex accounts. */
     codexAccounts?: { ready: number; total: number }
   }
@@ -71,7 +73,7 @@ export interface ControlPlaneReport {
     hideOnly: Array<{ alias: string; presets: string[]; envNames: string[]; hidden: boolean }>
     mcp: Array<{ serverId: string; serverName: string; names: string[]; hidden: boolean }>
   } | null
-  secretStore: { kind: 'owner-only-files'; ok: boolean; code?: string }
+  secretStore: { kind: 'owner-only-files' | (string & {}); ok: boolean; code?: string }
   /** Open findings there: total and per rule. */
   findings: { total: number; byRule: Record<string, number> } | null
 }
@@ -83,15 +85,16 @@ const PROFILES_MAX = 500
 /** One credentials entry per hide-only alias or MCP server, so the extensions cap bounds both. */
 const CREDENTIALS_MAX = EXTENSIONS_MAX
 const RULES_MAX = 256
-/** A blocker, secret store or findings rule code: the Host's command-word shape, so a newer one still reads as a word. */
+/** A code or state word: the Host's command-word shape, so a newer Runtime's word still reads as a word. */
 const CODE = /^[a-z][a-z0-9-]{0,63}$/
 
-const KINDS: readonly ExtensionKind[] = ['mcp', 'skill', 'command', 'agent']
-const PROVIDER_NAMES: readonly Provider[] = ['claude', 'codex']
-const GATEWAY_STATES = ['running', 'stopped', 'restarting', 'failed'] as const
-const PERMISSIONS: readonly ProfilePermission[] = ['inherit', 'bypass', 'ask']
-const MODES: readonly AuditMode[] = ['compatibility', 'observe', 'enforce']
+// Records rather than lists, so tsc flags a member added to the union and not here.
+const KINDS: Record<ExtensionKind, true> = { mcp: true, skill: true, command: true, agent: true }
+const GATEWAY_STATES: Record<NonNullable<ReportExtension['gateway']>, true> = { running: true, stopped: true, restarting: true, failed: true }
+const known = <T extends string>(set: Record<T, true>, v: unknown): v is T => typeof v === 'string' && Object.hasOwn(set, v)
 
+// frames.ts returns a Fail value from each check; this report nests several levels deep, so a check at every call
+// would triple the file, and its readers throw Refused instead.
 /** Thrown inside the parser only, so each field check stays one line; the top level turns it into `{ error }`. */
 class Refused extends Error {}
 const refuse = (what: string): never => {
@@ -102,9 +105,10 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object
 const obj = (v: unknown, what: string): Record<string, unknown> => (isObj(v) ? v : refuse(`${what} is not an object`))
 const str = (v: unknown, what: string): string => (typeof v === 'string' && v.length <= STRING_MAX ? v : refuse(`${what} is not a short string`))
 const bool = (v: unknown, what: string): boolean => (typeof v === 'boolean' ? v : refuse(`${what} is not a boolean`))
-const count = (v: unknown, what: string): number => (typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : refuse(`${what} is not a count`))
-const oneOf = <T extends string>(v: unknown, of: readonly T[], what: string): T => (of.includes(v as T) ? (v as T) : refuse(`${what} is not one this build knows`))
+const count = (v: unknown, what: string): number => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : refuse(`${what} is not a count`))
 const code = (v: unknown, what: string): string => (typeof v === 'string' && CODE.test(v) ? v : refuse(`${what} is not a code`))
+/** A state this build may not know: a newer Runtime's word is kept as that word and shown, not refused (design §4.3). */
+const word = <T extends string>(v: unknown, what: string): T | (string & {}) => code(v, what)
 const codeOrNull = (v: unknown, what: string): string | null => (v === null ? null : code(v, what))
 const list = (v: unknown, max: number, what: string): unknown[] => {
   if (!Array.isArray(v)) return refuse(`${what} is not a list`)
@@ -120,18 +124,24 @@ const perProvider = <T>(v: unknown, what: string, read: (v: unknown, what: strin
 /** null for a kind this build does not know: that entry is dropped, the rest kept (Review Focus 1). */
 function extension(v: unknown): ReportExtension | null {
   const o = obj(v, 'an extension')
-  if (typeof o.kind === 'string' && !KINDS.includes(o.kind as ExtensionKind)) return null
+  const kind = o.kind
+  if (typeof kind !== 'string') return refuse('an extension kind is not a string')
+  if (!known(KINDS, kind)) return null
   const out: ReportExtension = {
     id: str(o.id, 'an extension id'),
-    kind: oneOf(o.kind, KINDS, 'an extension kind'),
+    kind,
     name: str(o.name, 'an extension name'),
     enabled: bool(o.enabled, 'an extension enabled'),
     // A provider a newer build added is not one this build can show or compare, so it is left out of the list.
-    providers: names(o.providers, 'an extension providers list').filter((p): p is Provider => PROVIDER_NAMES.includes(p as Provider))
+    providers: names(o.providers, 'an extension providers list').filter(isProvider)
   }
   if (o.compareHash !== undefined) out.compareHash = str(o.compareHash, 'an extension compare hash')
   if (o.secretNames !== undefined) out.secretNames = names(o.secretNames, 'an extension secret names list')
-  if (o.gateway !== undefined) out.gateway = oneOf(o.gateway, GATEWAY_STATES, 'an extension gateway state')
+  if (o.gateway !== undefined) {
+    // A state a newer Runtime added leaves the state unsaid rather than refusing the report (design §4.3).
+    const state = word(o.gateway, 'an extension gateway state')
+    if (known(GATEWAY_STATES, state)) out.gateway = state
+  }
   return out
 }
 
@@ -140,8 +150,8 @@ function profile(v: unknown): ReportProfile {
   return {
     id: str(o.id, 'a profile id'),
     name: str(o.name, 'a profile name'),
-    status: oneOf(o.status, ['active', 'archived'] as const, 'a profile status'),
-    permission: oneOf(o.permission, PERMISSIONS, 'a profile permission'),
+    status: word(o.status, 'a profile status'),
+    permission: word(o.permission, 'a profile permission'),
     sandbox: bool(o.sandbox, 'a profile sandbox'),
     mcpExclude: names(o.mcpExclude, 'a profile mcpExclude list'),
     accountsThere: count(o.accountsThere, 'a profile accountsThere'),
@@ -152,8 +162,8 @@ function profile(v: unknown): ReportProfile {
 function policy(v: unknown): NonNullable<ControlPlaneReport['policy']> {
   const o = obj(v, 'policy')
   const out: NonNullable<ControlPlaneReport['policy']> = {
-    mode: oneOf(o.mode, MODES, 'policy mode'),
-    otherwise: oneOf(o.otherwise, ['allow', 'deny'] as const, 'policy otherwise'),
+    mode: word(o.mode, 'policy mode'),
+    otherwise: word(o.otherwise, 'policy otherwise'),
     rules: count(o.rules, 'policy rules'),
     enforce: nullable(o.enforce, (e) =>
       perProvider(e, 'policy enforce', (p, what) => {
@@ -171,7 +181,7 @@ function sandbox(v: unknown): ControlPlaneReport['sandbox'] {
   const o = obj(v, 'sandbox')
   const out: ControlPlaneReport['sandbox'] = perProvider(o, 'sandbox', (p, what) => {
     const s = obj(p, what)
-    return { kind: oneOf(s.kind, ['sandbox', 'deny-only'] as const, `${what}.kind`), blocker: codeOrNull(s.blocker, `${what}.blocker`) }
+    return { kind: word(s.kind, `${what}.kind`), blocker: codeOrNull(s.blocker, `${what}.blocker`) }
   })
   if (o.codexAccounts !== undefined) {
     const a = obj(o.codexAccounts, 'sandbox codexAccounts')
@@ -206,7 +216,7 @@ function credentials(v: unknown): NonNullable<ControlPlaneReport['credentials']>
 
 function secretStore(v: unknown): ControlPlaneReport['secretStore'] {
   const o = obj(v, 'secretStore')
-  const out: ControlPlaneReport['secretStore'] = { kind: oneOf(o.kind, ['owner-only-files'] as const, 'secretStore kind'), ok: bool(o.ok, 'secretStore ok') }
+  const out: ControlPlaneReport['secretStore'] = { kind: word(o.kind, 'secretStore kind'), ok: bool(o.ok, 'secretStore ok') }
   if (o.code !== undefined) out.code = code(o.code, 'secretStore code')
   return out
 }

@@ -84,6 +84,43 @@ describe('parseControlPlaneReport (remote governance design §5.2, §5.3)', () =
     expect(errorOf(badCount)).toBeTypeOf('string')
   })
 
+  it('an unknown gateway state leaves only that gateway unsaid (design §4.3)', () => {
+    const r = full() as unknown as { extensions: Array<Record<string, unknown>> }
+    r.extensions[0].gateway = 'paused'
+    const parsed = parseControlPlaneReport(r) as ControlPlaneReport
+    const { gateway: _gone, ...rest } = full().extensions[0]
+    expect(parsed.extensions[0]).toEqual(rest)
+    expect(parsed.extensions.slice(1)).toEqual(full().extensions.slice(1))
+    r.extensions[0].gateway = 'Bad Value!'
+    expect(errorOf(r)).toBeTypeOf('string')
+  })
+
+  it('an unknown state word is kept as its word, a malformed one refuses (design §4.3)', () => {
+    const r = full()
+    r.profiles![0].status = 'retired'
+    r.profiles![0].permission = 'ask-once'
+    r.policy!.mode = 'strict'
+    r.policy!.otherwise = 'ask'
+    r.sandbox.codex.kind = 'vm'
+    r.secretStore.kind = 'keychain'
+    expect(parseControlPlaneReport(r)).toEqual(r)
+
+    const set: Array<(x: ControlPlaneReport) => void> = [
+      (x) => (x.profiles![0].status = 'Bad Value!'),
+      (x) => (x.profiles![0].permission = 'Bad Value!'),
+      (x) => (x.policy!.mode = 'Bad Value!'),
+      (x) => (x.policy!.otherwise = 'Bad Value!'),
+      (x) => (x.sandbox.claude.kind = 'Bad Value!'),
+      (x) => (x.secretStore.kind = 'Bad Value!'),
+      (x) => ((x.policy as unknown as Record<string, unknown>).mode = 3)
+    ]
+    for (const s of set) {
+      const bad = full()
+      s(bad)
+      expect(errorOf(bad)).toBeTypeOf('string')
+    }
+  })
+
   it('names srt missing among the sandbox blocker codes after the user namespace one (ruling C5)', () => {
     expect(SANDBOX_BLOCKER_CODES).toEqual(['no-check-runner', 'userns-restricted', 'runtime-missing'])
   })
@@ -120,6 +157,19 @@ describe('parseControlPlaneReport (remote governance design §5.2, §5.3)', () =
     const namesEdge = full()
     namesEdge.extensions[0].secretNames = Array.from({ length: 256 }, (_, i) => `N${i}`)
     expect(parseControlPlaneReport(namesEdge)).not.toHaveProperty('error')
+
+    const hide = full().credentials!.hideOnly[0]
+    const creds = (n: number) => ({ ...full(), credentials: { hideOnly: Array.from({ length: n }, () => hide), mcp: [] } })
+    expect(errorOf(creds(2001))).toBeTypeOf('string')
+    expect(parseControlPlaneReport(creds(2000))).not.toHaveProperty('error')
+
+    const rules = (n: number) => ({ ...full(), findings: { total: n, byRule: Object.fromEntries(Array.from({ length: n }, (_, i) => [`rule-${i}`, 1])) } })
+    expect(errorOf(rules(257))).toBeTypeOf('string')
+    expect(parseControlPlaneReport(rules(256))).not.toHaveProperty('error')
+
+    const unsafe = full()
+    unsafe.findings!.total = Number.MAX_SAFE_INTEGER + 1
+    expect(errorOf(unsafe)).toBeTypeOf('string')
   })
 
   it('null parts stay null', () => {
