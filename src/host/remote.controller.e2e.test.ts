@@ -552,9 +552,10 @@ describe('the Runtime report over a paired link (remote governance design §5.1,
     const wire = JSON.stringify(body)
     // A path as it is, and as JSON writes it (a Windows path's backslashes doubled)
     const paths = [runtimeDir, os.homedir(), HOME_PROJECT].flatMap((p) => [p, JSON.stringify(p).slice(1, -1)])
-    // A short user name could match a word the report holds anyway, so it is looked for only from four characters
+    // The user name is looked for as a whole value, a path segment or an account, not inside a word: a CI runner's
+    // user is `runner`, which the report's own code word `no-check-runner` holds
     const user = os.userInfo().username
-    const names = user.length >= 4 ? [user] : []
+    const names = [`"${user}"`, `/${user}`, `\\\\${user}`, `${user}@`]
     const refs = ['acc_1', 'acc_gone', 'mcp_s7.TOKEN']
     for (const leak of ['sv-7', 'pv-7', 'secret-cmd-7', 'arg-7', 'u7.example', 'rule-7', 'git.remote.write', ...refs, ...paths, ...names]) expect(wire, leak).not.toContain(leak)
     expect(shapeOf(body)).toEqual(EXPECTED_SHAPE)

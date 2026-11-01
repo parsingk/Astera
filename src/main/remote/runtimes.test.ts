@@ -10,6 +10,7 @@ import { staleRuntimeFindings } from '../../core/findings/rules/runtimes'
 import { RemoteError } from '../../core/remote/client'
 import { REPORT_CAPABILITY, type ControlPlaneReport, type ReportExtension } from '../../core/controlPlane/report'
 import { SNAPSHOT_TOO_LARGE } from '../../core/runtimes/registry'
+import { removeFixture } from '../../core/testFixtures'
 
 const FP = 'F'.repeat(43)
 let dir: string
@@ -20,7 +21,8 @@ beforeEach(async () => {
     'tok-a'
   )
 })
-afterEach(async () => fs.rm(dir, { recursive: true, force: true }))
+// An answered call saves lastSeenAt without being awaited, so a save can land while the folder is removed
+afterEach(async () => removeFixture(dir))
 
 const opener = () => {
   const opened: RemoteTarget[] = []
