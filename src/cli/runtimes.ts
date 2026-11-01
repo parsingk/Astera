@@ -18,7 +18,7 @@ import { readRuntimeReport } from '../core/controlPlane/read'
 import { runtimeDetail } from '../core/controlPlane/detail'
 import { liveExpected } from '../core/controlPlane/compare'
 import type { ReportExtension } from '../core/controlPlane/report'
-import { remoteCodeOf, type CliError } from '../core/orchestration/cliOutput'
+import { CLI_ERROR_CODES, remoteCodeOf, type CliError } from '../core/orchestration/cliOutput'
 import { REMOTE_DEFAULTS } from '../core/remote/settings'
 
 export interface RuntimesDeps {
@@ -36,7 +36,7 @@ export interface RuntimesDeps {
    *  an agent. */
   agent?: boolean
   /** The controller link `get` and `ping` open (core/remote/link.ts `openRemoteLink` when left out). */
-  link?(t: RemoteTarget, o: { onHello(h: HelloFrame): void; client: ClientInfo }): RemoteLink
+  link?(t: RemoteTarget, o: { onHello(h: HelloFrame): void; client: ClientInfo; reconnectForMs?: number }): RemoteLink
   /** This computer's extensions as a report gives them (core/controlPlane/local.ts), for `get` and `expect`. */
   localExtensions?(): Promise<ReportExtension[]>
 }
@@ -44,6 +44,14 @@ export interface RuntimesDeps {
 /** Second pass RR-5: a mistyped or firewalled address held a pairing for the OS's connect wait (two minutes on Linux), and
  *  a Runtime that never answered held it for good. */
 export const PAIR_STEP_MS = 30_000
+
+/** How long `ping` keeps trying after a connection drops mid-call: the app's APP_RECONNECT_FOR_MS (main/remote/runtimes.ts,
+ *  which imports this file, so it is not imported back). A link that never connected answers at once either way. */
+export const PING_RECONNECT_FOR_MS = 10_000
+
+/** The refusals `get` answers with the last snapshot and exit 0 (ruling R14-2): the Runtime did not answer, or it is too
+ *  old to report. Any other refusal is the command's error. */
+const SNAPSHOT_REFUSALS: ReadonlySet<string> = new Set(['RUNTIME_OFFLINE', 'RUNTIME_CAPABILITY_MISSING'])
 
 /** Connects, runs `f` on the link and closes it, all within `ms`; past it the link is closed and the step is
  *  RUNTIME_OFFLINE. */
@@ -234,7 +242,8 @@ async function withLink<T extends object>(
   d: RuntimesDeps,
   reg: RuntimeRegistry,
   p: RuntimeProfile,
-  f: (link: RemoteLink, reached: () => Promise<void>) => Promise<T>
+  f: (link: RemoteLink, reached: () => Promise<void>) => Promise<T>,
+  o: { reconnectForMs?: number } = {}
 ): Promise<T | Result> {
   const token = await reg.token(p.runtimeId)
   if (token === null) return failure('RUNTIME_NOT_FOUND', `${p.name} has no token on this machine; pair it again with \`astera runtimes add\``)
@@ -245,7 +254,7 @@ async function withLink<T extends object>(
     noted = noted.then(() => note(h))
   }
   const client: ClientInfo = { name: 'astera cli', version: d.version, surface: 'cli', agent: d.agent !== false }
-  const link = (d.link ?? ((t, o) => openRemoteLink({ ...o, target: t })))(target, { onHello, client })
+  const link = (d.link ?? ((t, lo) => openRemoteLink({ ...lo, target: t })))(target, { onHello, client, ...o })
   try {
     return await f(link, seenRecorder(reg, p.runtimeId, p.lastSeenAt))
   } finally {
@@ -278,6 +287,10 @@ async function get(args: Record<string, unknown>, d: RuntimesDeps): Promise<Resu
     return { r, answered }
   })
   if (isResult(read)) return read
+  if (!read.r.ok && !SNAPSHOT_REFUSALS.has(read.r.code)) {
+    const code = (CLI_ERROR_CODES as readonly string[]).includes(read.r.code) ? (read.r.code as CliError['code']) : 'FAILED'
+    return failure(code, read.r.message, { runtime: p.runtimeId })
+  }
   // Read again for what this ask changed: the facts, the snapshot, the time it answered
   const now = (await reg.list()).find((x) => x.runtimeId === p.runtimeId) ?? p
   return {
@@ -306,7 +319,7 @@ async function ping(args: Record<string, unknown>, d: RuntimesDeps): Promise<Res
       ...(h && { asteraVersion: h.asteraVersion, platform: h.platform }),
       ...(r instanceof RemoteError && { code: r.code })
     }
-  })
+  }, { reconnectForMs: PING_RECONNECT_FOR_MS })
   return isResult(body) ? body : { ok: true, body }
 }
 
@@ -323,13 +336,14 @@ async function expectIds(args: Record<string, unknown>, d: RuntimesDeps): Promis
   if (isResult(p)) return p
   const local = await localOf(d)
   if (isResult(local)) return local
-  // §6.1: the list names this computer's entries. An id to remove need not be here, so one removed here can still be
-  // cleared from the list
+  // §6.1: the list names this computer's entries. An id to remove may instead be one still kept in the list after it was
+  // removed here (ruling R14-2), so it can be cleared; any other is refused, and nothing is written
   const here = new Set(local.map((e) => e.id))
-  const unknown = add.filter((id) => !here.has(id))
+  const kept = p.expected ?? []
+  const unknown = [...add.filter((id) => !here.has(id)), ...remove.filter((id) => !here.has(id) && !kept.includes(id))]
   if (unknown.length > 0)
     return failure('INVALID_ARGUMENTS', `${unknown.join(', ')} ${unknown.length === 1 ? 'is' : 'are'} not an extension on this computer; \`astera ext list\` names them`)
-  let expected = p.expected ?? []
+  let expected = kept
   if (add.length > 0 || remove.length > 0) {
     expected = [...expected.filter((id) => !remove.includes(id)), ...add]
     await reg.setExpected(p.runtimeId, expected)

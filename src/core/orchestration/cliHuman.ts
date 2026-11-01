@@ -350,9 +350,6 @@ export const flagValue = (v: unknown, shell: ShellFamily = shellOf()): string =>
 /** A value the parser (cliArgs.ts) cannot take as a flag's value whatever the quoting: `-` is stdin, `--…` the next flag. */
 const unpassable = (s: string): boolean => s === '-' || s.startsWith('--')
 
-/** `args`: the flags the command was typed with, as the parser keys them, for an answer that names how to ask again;
- *  `shell`, the family a hint is quoted for (this machine's). The CLI's words differ from the screen's (strings in
- *  en.ts) for decisions, coverage classes and levels: they are the flag words and terse column heads a script reads back. */
 // A record rather than a list, so tsc flags a state added to compare.ts and not here.
 const STATE_KEYS: Record<ComparisonState, MessageKey> = {
   missing: 'settings.remote.detail.state.missing',
@@ -462,6 +459,9 @@ function runtimeDetailText(d: RuntimeDetail): string {
   ].join('\n\n')
 }
 
+/** `args`: the flags the command was typed with, as the parser keys them, for an answer that names how to ask again;
+ *  `shell`, the family a hint is quoted for (this machine's). The CLI's words differ from the screen's (strings in
+ *  en.ts) for decisions, coverage classes and levels: they are the flag words and terse column heads a script reads back. */
 export function humanFor(
   cmd: string,
   data: Record<string, unknown>,

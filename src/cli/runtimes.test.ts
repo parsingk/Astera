@@ -255,11 +255,11 @@ describe('astera runtimes get, ping and expect (remote governance design §10.2,
   /** A paired Runtime behind the `link` seam: `h` null is one that never answers. Each call says the hello first, as a
    *  connection does. */
   function remote(answers: Record<string, RemoteAnswer>, h: HelloFrame | null = hello()) {
-    const opened: Array<{ target: RemoteTarget; client: ClientInfo }> = []
+    const opened: Array<{ target: RemoteTarget; client: ClientInfo; reconnectForMs?: number }> = []
     const calls: string[] = []
     let closed = 0
-    const link = (target: RemoteTarget, o: { onHello(h: HelloFrame): void; client: ClientInfo }): RemoteLink => {
-      opened.push({ target, client: o.client })
+    const link = (target: RemoteTarget, o: { onHello(h: HelloFrame): void; client: ClientInfo; reconnectForMs?: number }): RemoteLink => {
+      opened.push({ target, client: o.client, ...(o.reconnectForMs !== undefined && { reconnectForMs: o.reconnectForMs }) })
       let heard: HelloFrame | null = null
       return {
         hello: () => heard,
@@ -347,6 +347,23 @@ describe('astera runtimes get, ping and expect (remote governance design §10.2,
     })
   })
 
+  // Ruling R14-2: a refusal that is not "it did not answer" or "it is older" is an error, never a stale snapshot
+  it('get refused as an agent, or sent a report it cannot read, errors and leaves the kept snapshot as it was', async () => {
+    const reg = await pairOne()
+    await reg.keepSnapshot('rt_a', { readAt: OLD, report: THERE })
+    const person = remote({ 'control-plane-report': { status: 403, body: { error: 'control-plane-report answers a person on another computer', code: 'RUNTIME_PERMISSION_DENIED' } } })
+    expect(await runRuntimesCommand('runtimes-get', { id: 'rt_a' }, getDeps(person))).toEqual({
+      ok: false,
+      error: { code: 'RUNTIME_PERMISSION_DENIED', message: 'control-plane-report answers a person on another computer', details: { runtime: 'rt_a' } }
+    })
+    const garbled = remote({ 'control-plane-report': { status: 200, body: { ...THERE, version: 2 } } })
+    expect(await runRuntimesCommand('runtimes-get', { id: 'rt_a' }, getDeps(garbled))).toMatchObject({
+      ok: false,
+      error: { code: 'FAILED', message: 'the Runtime sent a report this computer cannot read: the report is not version 1' }
+    })
+    expect((await reg.list())[0].snapshot).toEqual({ readAt: OLD, report: THERE })
+  })
+
   it('ping answers with version and OS, or does not answer with the code', async () => {
     const reg = await pairOne()
     const up = remote({ 'projects-list': { status: 200, body: [] } }, hello({ asteraVersion: '1.5.1', platform: 'linux' }))
@@ -355,6 +372,8 @@ describe('astera runtimes get, ping and expect (remote governance design §10.2,
       body: { runtimeId: 'rt_a', answers: true, asteraVersion: '1.5.1', platform: 'linux' }
     })
     expect(up.calls).toEqual(['projects-list'])
+    // Ruling R14-2: a ping waits for a dropped connection no longer than the app does
+    expect(up.opened[0].reconnectForMs).toBe(10_000)
     // Ruling C9: what the hello said and when it answered
     expect((await reg.list())[0]).toMatchObject({ facts: { asteraVersion: '1.5.1', platform: 'linux' }, lastSeenAt: expect.any(String) })
     expect(await runRuntimesCommand('runtimes-ping', { id: 'rt_a' }, getDeps(remote({}, null)))).toEqual({
@@ -373,6 +392,18 @@ describe('astera runtimes get, ping and expect (remote governance design §10.2,
     const unknown = await runRuntimesCommand('runtimes-expect', { id: 'Office', add: 'skill-a,nope' }, d)
     expect(unknown).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENTS', message: expect.stringContaining('nope') } })
     // Refused whole: the id that is here is not added either
+    expect((await reg.list())[0].expected).toEqual(['mcp-x'])
+  })
+
+  // Ruling R14-2: --remove takes an id here or one in the kept list (gone from here since), and refuses any other
+  it('expect --remove refuses an id neither here nor expected, and clears a stale one', async () => {
+    const reg = await pairOne()
+    await reg.setExpected('rt_a', ['mcp-x', 'gone-here'])
+    const d = getDeps(remote({}))
+    const refused = await runRuntimesCommand('runtimes-expect', { id: 'rt_a', remove: 'mcp-x,typo' }, d)
+    expect(refused).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENTS', message: expect.stringContaining('typo') } })
+    expect((await reg.list())[0].expected).toEqual(['mcp-x', 'gone-here'])
+    expect(await runRuntimesCommand('runtimes-expect', { id: 'rt_a', remove: 'gone-here' }, d)).toEqual({ ok: true, body: { runtimeId: 'rt_a', expected: ['mcp-x'] } })
     expect((await reg.list())[0].expected).toEqual(['mcp-x'])
   })
 
