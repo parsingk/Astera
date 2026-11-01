@@ -40,6 +40,10 @@ const englishNames = Object.values(securityText).filter((v) => typeof v === 'str
 
 /** Repository paths a guide names: they start at one of the repository's top folders. */
 const repoPaths = (text) => [...new Set([...text.matchAll(/(?<![\w./~$-])((?:src|scripts|docs|resources|packages|\.github)\/[\w.@/-]*[\w])/g)].map((m) => m[1]))]
+/** The person's own two-computer checklist, which checks 28 and 30 point to: kept out of git on purpose, so it is on
+ *  their disk and nowhere else. The guides may name it only while git ignores it. */
+const LOCAL_ONLY = 'docs/remote-runtime-checks.md'
+const ignored = (p) => spawnSync('git', ['check-ignore', '-q', p], { cwd: root }).status === 0
 
 /** A catalog value matches a label as written when it is the label, its `{placeholders}` standing for any text. A value
  *  with no words of its own (`{detail}`) matches nothing: it would vouch for any label. */
@@ -54,7 +58,7 @@ const keysFor = (koText, enText) => Object.keys(ko).filter((k) => matches(ko[k],
 describe('scripts/mac-check guides', () => {
   for (const [name, text] of Object.entries(guides)) {
     it(`${name} names only repository files that exist`, () => {
-      const missing = repoPaths(text).filter((p) => !existsSync(path.join(root, p)))
+      const missing = repoPaths(text).filter((p) => !existsSync(path.join(root, p)) && !(p === LOCAL_ONLY && ignored(p)))
       expect(missing).toEqual([])
     })
 
@@ -202,6 +206,79 @@ describe('scripts/mac-check guides', () => {
     expect(appId).not.toBe(/^appId: (\S+)/m.exec(builder)?.[1])
   })
 
+  // Control Plane Phase 12 (remote governance design §13): one Mac pairs the dev app, as controller, with a Runtime on a
+  // profile of its own inside the results folder. What needs two computers stays in the person's two-computer checklist.
+  const phase12 = (n) => checks.find((c) => c.n === n)
+
+  it('checks 26 to 30 are the Phase 12 checks, after 25 and before the wrap-up', () => {
+    const text = guides['checklist.md']
+    const words = ['연결', '자세히', 'Finding', 'MCP', '해제']
+    words.forEach((w, i) => expect(phase12(26 + i)?.title, `check ${26 + i}`).toContain(w))
+    expect(text.indexOf('\n## 26. ')).toBeGreaterThan(text.indexOf('\n## 25. '))
+    expect(text.indexOf('\n## 30. ')).toBeLessThan(text.indexOf('\n## 마무리'))
+  })
+
+  it('check 26 confirms one Mac can pair with itself before anything else, on a Runtime profile of its own', () => {
+    const body = phase12(26).body
+    for (const verb of ['host start', 'runtime start', 'runtime pair']) {
+      expect(body).toContain(`"$R/runtime-astera" ${verb}`)
+      expect(body).not.toContain(`"$R/dev-astera" ${verb}`)
+    }
+    expect(body).toContain('--listen 127.0.0.1 --port 47900')
+    expect(body).toContain('--full-control')
+  })
+
+  it('names a Runtime to the CLI with --id, the one way runtimes get, ping and expect take it', () => {
+    // A command, not a verb named in a sentence (`runtimes get` 의 출력): the verb with something after it
+    const uses = Object.values(guides).flatMap((text) => [...text.matchAll(/runtimes (?:get|ping|expect) (\S+)/g)])
+    expect(uses.length).toBeGreaterThan(0)
+    expect(uses.filter((m) => m[1] !== '--id').map((m) => m[0])).toEqual([])
+  })
+
+  it('check 28 clears the finding from this computer and sees it gone at the next read, with no wait for a cache', () => {
+    // A fresh runtimes.json reaches Findings at the next request (plan ruling 11, changed 2026-11-01)
+    const body = phase12(28).body
+    expect(body).toContain('runtimes expect --id mac-check-runtime --remove skill-mac-check-skill')
+    expect(body).toContain('runtime-missing-extension')
+    expect(body).not.toMatch(/1분|a minute/)
+  })
+
+  it('check 29 runs an agent-classified CLI and expects RUNTIME_PERMISSION_DENIED', () => {
+    // The CLI tells the Runtime it is an agent's from ASTERA_SESSION (cli/run.ts), which both helpers clear
+    expect(readFileSync(path.join(root, 'src/cli/run.ts'), 'utf8')).toContain("const inAgentSession = (process.env.ASTERA_SESSION ?? '') !== ''")
+    const body = phase12(29).body
+    const line = body.split('\n').find((l) => l.includes('ASTERA_SESSION=mac-check'))
+    expect(line).toBeDefined()
+    expect(line).not.toMatch(/dev-astera|runtime-astera/)
+    expect(line).toContain('ASTERA_PROFILE_DIR="$HOME/Library/Application Support/astera-dev"')
+    expect(line).toContain('out/main/cli.js runtimes get --id mac-check-runtime')
+    expect(body).toContain('RUNTIME_PERMISSION_DENIED')
+    // MCP has no tool that asks for the report (design §10.3); its case is an e2e test
+    expect(body).toContain('get_runtime')
+  })
+
+  it('check 30 unpairs from the Runtime, which paused nothing, and the controller is then refused as unpaired', () => {
+    const body = phase12(30).body
+    const name = 'mac-check-dev'
+    expect(body).toContain('"$R/runtime-astera" runtime revoke --id')
+    expect(body).toContain(ko['settings.remote.revoke.done'].replace('{name}', name))
+    expect(body).toContain(en['settings.remote.revoke.done'].replace('{name}', name))
+    // With no scheduled Job there, the line that names counts is not the one shown
+    expect(body).not.toContain(ko['settings.remote.revoke.paused'].split('{paused}')[0].replace('{name}', name))
+    expect(body).toContain(ko['settings.remote.link.authFailed'])
+    expect(body).toContain('RUNTIME_AUTH_FAILED')
+  })
+
+  it('checks 28 and 30 end by pointing to the two-computer checklist for what one Mac cannot show', () => {
+    expect(ignored(LOCAL_ONLY)).toBe(true)
+    for (const [n, part] of [[28, '3-3'], [30, '3-6']]) {
+      const body = phase12(n).body
+      const pointer = body.slice(body.lastIndexOf('- [ ] 실패'))
+      expect(pointer, `check ${n}`).toContain(`\`${LOCAL_ONLY}\``)
+      expect(pointer, `check ${n}`).toContain(part)
+    }
+  })
+
   it('the checklist holds the block run.sh fills, and run.sh fills that block', () => {
     for (const mark of ['<!-- run.sh summary start -->', '<!-- run.sh summary end -->']) {
       expect(guides['checklist.md']).toContain(mark)
@@ -240,7 +317,7 @@ describe('scripts/mac-check/run.sh', () => {
   it('writes every work-folder file and helper the checklist uses', () => {
     const text = guides['checklist.md']
     const named = new Set([...text.matchAll(/mac-check-app\/[\w.-]+\.\w+/g)].map((m) => m[0]))
-    for (const helper of ['dev-astera', 'env.sh', 'ext/mac-check-skill']) {
+    for (const helper of ['dev-astera', 'runtime-astera', 'env.sh', 'ext/mac-check-skill']) {
       expect(text).toContain(helper)
       named.add(helper)
     }
@@ -255,6 +332,19 @@ describe('scripts/mac-check/run.sh', () => {
   it("points its helper CLI at the development app's profile folder, never the installed one", () => {
     expect(runCode).toContain(`Application Support/${pkg.name}-dev`)
     expect(runCode).toMatch(/ASTERA_PROFILE_DIR=/)
+  })
+
+  it("writes runtime-astera beside dev-astera, on a profile folder inside the results folder, clearing the session's variables", () => {
+    // Each helper's exec line, told apart by the profile folder it names
+    const unset = (profile) => {
+      const line = runCode.split('\n').find((l) => l.includes('exec env') && l.includes(`ASTERA_PROFILE_DIR=${profile}`))
+      return line === undefined ? null : [...line.matchAll(/-u (\w+)/g)].map((m) => m[1])
+    }
+    const dev = unset('\\"\\$HOME/Library/Application Support/astera-dev\\"')
+    const runtime = unset('$(sq "$R/runtime-profile")')
+    expect(runCode).toContain('> "$R/runtime-astera"')
+    expect(dev).toContain('ASTERA_SESSION')
+    expect(runtime).toEqual(dev)
   })
 
   it('reads the Node floor from package.json, which CI and the app share', () => {

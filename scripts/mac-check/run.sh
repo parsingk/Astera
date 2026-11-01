@@ -7,8 +7,8 @@
 #
 # What it may do: write inside this checkout (the build's out/, vitest's cache) and inside ~/astera-mac-check-<date>/,
 # which holds every log, the summary, the copy of the checklist the person fills in, the scratch work folder and the
-# guided part's helpers (env.sh, dev-astera, the skill check 12 shares). The tests run with TMPDIR inside that folder, so
-# their fixtures (and vitest's sweep of stale ones) stay there too.
+# guided part's helpers (env.sh, dev-astera, runtime-astera, the skill check 12 shares). The tests run with TMPDIR
+# inside that folder, so their fixtures (and vitest's sweep of stale ones) stay there too.
 # What it never does: sudo, the keychain, a dotfile, a model call. Claude Code and Codex are asked for `--version` and
 # nothing else, as Astera itself asks before a sandboxed start (src/core/sessions/cliVersion.ts). The S2 measurement
 # (scripts/measure) is not run: it writes fake credentials into the home folder and belongs on a CI runner.
@@ -383,8 +383,9 @@ fi
 # The guided part's helpers, written on every run and starting nothing. env.sh holds the folders its terminal commands
 # use (준비 1 reads it). dev-astera is the development app's astera: the CLI this checkout built, talking to the
 # development Host and its profile folder (src/main/index.ts adds -dev to an unpacked app's), never the installed
-# Astera's, with no session's variables to point it elsewhere. The skill is the one check 12 copies into the Claude account
-# Settings › MCP & Skills adds from.
+# Astera's, with no session's variables to point it elsewhere. runtime-astera is the same CLI on a profile folder of its
+# own inside the results folder: the Runtime checks 26 to 30 pair the development app with, on this one Mac (remote
+# governance design §13). The skill is the one check 12 copies into the Claude account Settings › MCP & Skills adds from.
 {
   echo '# The folders of the guided Mac check (checklist 준비 1). Written by scripts/mac-check/run.sh.'
   echo "R=$(sq "$R")"
@@ -396,6 +397,12 @@ fi
   echo "exec env -u ASTERA_HOST -u ASTERA_SESSION -u ASTERA_CLI -u ASTERA_SKILLS -u ASTERA_GATEWAY_TOKEN -u ASTERA_GATEWAY_GRANT -u ASTERA_LOOPBACK ASTERA_PROFILE_DIR=\"\$HOME/Library/Application Support/astera-dev\" ELECTRON_RUN_AS_NODE=1 $(sq "$electron") $(sq "$root/out/main/cli.js") \"\$@\""
 } > "$R/dev-astera"
 chmod +x "$R/dev-astera"
+{
+  echo '#!/bin/sh'
+  echo '# The astera of the Runtime checks 26 to 30 pair with, on a profile of its own (checklist 26). Written by scripts/mac-check/run.sh.'
+  echo "exec env -u ASTERA_HOST -u ASTERA_SESSION -u ASTERA_CLI -u ASTERA_SKILLS -u ASTERA_GATEWAY_TOKEN -u ASTERA_GATEWAY_GRANT -u ASTERA_LOOPBACK ASTERA_PROFILE_DIR=$(sq "$R/runtime-profile") ELECTRON_RUN_AS_NODE=1 $(sq "$electron") $(sq "$root/out/main/cli.js") \"\$@\""
+} > "$R/runtime-astera"
+chmod +x "$R/runtime-astera"
 skill="$work/ext/mac-check-skill"
 mkdir -p "$skill"
 cat > "$skill/SKILL.md" <<'EOF'
@@ -406,7 +413,7 @@ description: The Astera mac-check test skill. Use it only when the user types /m
 
 Reply with exactly this one line and nothing else: mac-check-skill-ok
 EOF
-result PASS helpers "$R/env.sh, $R/dev-astera, $skill"
+result PASS helpers "$R/env.sh, $R/dev-astera, $R/runtime-astera, $skill"
 
 # ---------------------------------------------------------------------------------------------------------------------
 section "7. 다음"

@@ -14,6 +14,8 @@
 ### 2회차에서 달라진 것
 
 - **새 점검은 12번부터 25번까지입니다.** 1회차(2026-10-29, develop `d4831ff1`)에 없던 기능을 Mac 에서 처음 봅니다.
+- **26~30번은 원격 Runtime 관리(Control Plane Phase 12)입니다.** 이 Mac 하나에서 개발용 앱을, 결과 폴더 안의 따로 된
+  프로필로 띄운 Runtime 과 페어링합니다. 25 뒤에 개발용 앱을 다시 띄우고, 30 의 끝에서 다시 끕니다.
 - **1~11번은 다시 합니다.** 모두 통과했지만, 그 뒤로 sandbox 코드가 바뀌었습니다. Job 의 완료 검사를 워커와 같은
   sandbox 안에서 돌리게 되었고, sandbox 세션의 에이전트 브라우저가 따로 만든 빈 저장소를 쓰게 되었고, Codex sandbox 를
   손본 수정이 여럿 들어갔습니다. 1~11 가운데 바뀐 곳은 점검 4(토큰 줄, 워커가 줄을 건너뛸 때 적을 것)와 점검 9 의
@@ -1491,6 +1493,278 @@ Claude 세션과 워커가 일하는지 봅니다. 완료 검사를 sandbox 에 
 
 ```text
 ```
+
+## 26. 한 Mac 에서 자기 자신과 연결하기
+
+누가: 에이전트도
+
+약 8분. 점검 26~30 은 Control Plane Phase 12 의 원격 Runtime 관리를 봅니다. Runtime 은 보통 다른 컴퓨터이지만, 여기서는
+이 Mac 하나로 합니다. 개발용 앱이 컨트롤러이고, 결과 폴더 안의 따로 된 프로필(`$R/runtime-profile`)에서 도는 Host 가
+Runtime 입니다. 그 Runtime 은 `run.sh` 가 만든 `"$R/runtime-astera"` 로만 다룹니다. 개발용 Host 와 그 프로필에도, 설치된
+Astera 에도 닿지 않습니다. Runtime 은 이 Mac 안의 주소(`127.0.0.1`)에서만 받으므로 다른 컴퓨터에는 열리지 않습니다.
+27~30 은 모두 이 연결 위에서 하므로, 이 점검이 실패하면 본 것을 메모에 적고 27~30 은 건너뜁니다.
+
+1. 점검 23~25 에서 앱을 모두 껐으므로 개발용 앱을 다시 띄웁니다. 먼저 남은 앱이 없는지 봅니다. 아무 줄도 없어야 하고,
+   있으면 1분 더 기다렸다가 다시 봅니다.
+
+   ```sh
+   ps -Ao pid,command | grep -E '[n]ode_modules/electron/dist/Electron.app|[A]steraMacCheck.app'
+   ```
+
+   그다음 준비 2 의 3단계 줄로 개발용 앱을 띄웁니다. 에이전트는 준비 때처럼 앱 작업 공간에서 띄웁니다.
+2. 다른 터미널(준비 1 의 변수가 있는 창)에서 Runtime 을 켭니다. 첫 줄은 이 프로필의 Host 를 띄우고, 둘째 줄은 이 Mac
+   안에서만 받는 Gateway 를 켜고, 셋째 줄은 전체 제어 페어링 문자열을 만듭니다.
+
+   ```sh
+   "$R/runtime-astera" host start
+   "$R/runtime-astera" runtime start --listen 127.0.0.1 --port 47900
+   "$R/runtime-astera" runtime pair --full-control --name mac-check-dev
+   ```
+
+   셋째 출력의 `astera-pair:v1:` 로 시작하는 문자열에는 10분 동안 한 번만 쓰는 비밀 코드가 들어 있습니다. 이 점검표의
+   출력 칸에는 그 문자열과 `code` 를 빼고 붙여 넣습니다.
+3. 개발용 앱의 **설정** (Settings) › **원격 Runtime** (Remote Runtimes) 에서 **Runtime 과 페어링** (Pair a Runtime) 의
+   칸에 그 문자열을 붙여 넣고, 이름 칸에 `mac-check-runtime` 을 넣은 뒤 **페어링** (Pair) 을 누릅니다. 에이전트는 다른
+   점검의 앱 조작처럼 페이지에서 붙여 넣습니다.
+4. **페어링된 Runtime** (Paired Runtimes) 에 생긴 `mac-check-runtime` 줄에서 **확인** (Ping) 을 누릅니다. 터미널에서도
+   묻습니다.
+
+   ```sh
+   "$R/dev-astera" runtimes ping --id mac-check-runtime
+   ```
+
+통과:
+
+- 2단계: 세 명령의 출력이 모두 `{"ok":true` 로 시작합니다. 둘째 명령은 Gateway 가 받기 시작한 뒤에 끝납니다.
+- 3단계: 오류 없이 페어링되고, **페어링된 Runtime** (Paired Runtimes) 에 `mac-check-runtime` 줄이 생깁니다.
+- 4단계: 앱에 **응답합니다: Astera <버전>, <OS>** (Answers: Astera <version> on <OS>) 가 나오고, 터미널의 출력에
+  `"answers":true` 가 있습니다.
+
+- [ ] 통과
+- [ ] 실패
+
+메모:
+
+출력:
+
+```text
+```
+
+## 27. Runtime 자세히와 비교
+
+누가: 에이전트도
+
+약 8분. 페어링한 Runtime 의 설정을 그 컴퓨터에서 읽어 온 보고서로 봅니다. 보고서에는 이름, 상태, 개수만 있고 값, 경로,
+명령줄은 없어야 합니다. 그리고 이 컴퓨터의 스킬 하나를 그 Runtime 에도 있어야 한다고 표시합니다. 점검 19 에서 점검 12 의
+스킬 등록을 지웠으므로 먼저 다시 등록합니다.
+
+1. 터미널에서 점검 12 의 2단계처럼 스킬을 그 Claude 계정에 넣습니다. MCP 서버는 넣지 않습니다. 점검 12 가 A 였으면:
+
+   ```sh
+   mkdir -p ~/.claude/skills && cp -R "$R/work/ext/mac-check-skill" ~/.claude/skills/
+   ```
+
+   B 였으면(`<이름>` 을 그 폴더 이름으로):
+
+   ```sh
+   C=~/.claude-accounts/<이름>
+   mkdir -p "$C/skills" && cp -R "$R/work/ext/mac-check-skill" "$C/skills/"
+   ```
+
+2. 앱의 **MCP & Skills** 에서 **등록** (Add) 을 누르고 그 Claude 계정을 고릅니다. 창에서 `mac-check-skill` 만 체크하고
+   **등록** (Add) 을 누릅니다.
+3. **원격 Runtime** (Remote Runtimes) 의 `mac-check-runtime` 줄에서 **자세히** (Details) 를 누르고, 부분마다 봅니다.
+   - **식별 정보** (Identity): Runtime id, 줄인 지문, 페어링한 시각, 권한.
+   - **상태** (Health): 마지막 연결, **지금 응답합니다** (Answers now), 그 컴퓨터와 이 컴퓨터의 Astera 버전, OS.
+   - **에이전트** (Agents): 그 프로필에는 에이전트 프로필이 없으므로 비어 있고, 권한 확인 없이 실행하는 설정이 꺼져 있다는
+     줄이 있습니다.
+   - **보호** (Protection): 정책, CLI 마다 Enforce 를 시작할 수 있는지, sandbox 의 종류, CLI 버전.
+   - **확장** (Extensions): 이 컴퓨터의 확장과 그 컴퓨터의 확장이 나란히 있습니다.
+   - Credentials: 이름과 숨김 여부만, 그리고 그 아래
+     **값은 그 컴퓨터에만 있습니다. Astera는 값을 복사하지 않습니다.** (Values stay on that computer. Astera never copies them.)
+   - 비밀 저장소 줄과 **그 컴퓨터의 Findings: 0** (Findings there: 0).
+4. **확장** (Extensions) 의 `mac-check-skill` 줄에서 **그 컴퓨터에도 있어야 함** (Expected there) 을 체크합니다.
+5. 터미널에서 이 컴퓨터가 기억한 목록과, Runtime 쪽에서 본 이 컨트롤러를 봅니다.
+
+   ```sh
+   "$R/dev-astera" runtimes expect --id mac-check-runtime
+   "$R/runtime-astera" runtime clients
+   ```
+
+통과:
+
+- 2단계: **MCP & Skills** 의 **스킬** (Skills) 아래에 `mac-check-skill` 이 다시 있습니다.
+- 3단계: 부분이 모두 있고, 보고서를 읽은 시각이 나옵니다. 화면 어디에도 비밀값, 경로, 명령줄, MCP 서버의 명령이나 URL,
+  Rule 내용이 없습니다.
+- 4단계: 그 줄의 **상태** (State) 칸이 **그 컴퓨터에 없음** (Not there) 입니다.
+- 5단계: 첫 출력에 `"expected":["skill-mac-check-skill"]` 이 있습니다. 둘째 출력의 `mac-check-dev` 항목에
+  `"surface":"desktop"` 과 `"clientVersion"` 이 있고, 토큰은 없습니다.
+
+- [ ] 통과
+- [ ] 실패
+
+메모:
+
+출력:
+
+```text
+```
+
+## 28. 빠진 기대 스킬의 Finding
+
+누가: 에이전트도
+
+약 6분. 그 Runtime 에 있어야 한다고 표시한 스킬이 거기에 없으면 `runtime-missing-extension` 으로 찾은 것이 생깁니다.
+이 컴퓨터가 기억한 마지막 보고서로 판단하고, 아무것도 설치하지 않습니다. 새 보고서나 바뀐 목록은 다음에 Findings 를 열 때
+곧바로 반영됩니다.
+
+1. **설정** (Settings) › **Security & Access** 의 **Findings** 를 엽니다. `mac-check-runtime` 에 대해
+   **<시각> 기준으로 그 컴퓨터에 mac-check-skill이(가) 없습니다.** (mac-check-skill is not there, as of <time>.)
+   항목이 있는지 보고, **원격 Runtime 열기** (Open Remote Runtimes) 를 누릅니다.
+2. 터미널에서 같은 것을 묻습니다.
+
+   ```sh
+   "$R/dev-astera" agent-profiles audit --human
+   "$R/dev-astera" runtimes get --id mac-check-runtime; echo "exit=$?"
+   ```
+
+3. 이 컴퓨터에서 기대 목록을 비웁니다.
+
+   ```sh
+   "$R/dev-astera" runtimes expect --id mac-check-runtime --remove skill-mac-check-skill
+   ```
+
+4. 앱의 자세히에서 **새로 고침** (Refresh) 을 누른 뒤 **Findings** 를 다시 엽니다.
+
+통과:
+
+- 1단계: 항목이 있고, 버튼을 누르면 **원격 Runtime** (Remote Runtimes) 의 `mac-check-runtime` 자세히로 갑니다.
+- 2단계: `runtime-missing-extension` 으로 시작하는 줄에 `mac-check-runtime` 과 `mac-check-skill` 이 있습니다. `runtimes get`
+  의 출력에 `mac-check-skill` 이 missing 으로 나오고 `exit=0` 입니다.
+- 3단계: 출력에 `"expected":[]` 가 있습니다.
+- 4단계: Findings 를 다시 열면 그 항목이 없습니다.
+
+- [ ] 통과
+- [ ] 실패
+
+메모:
+
+출력:
+
+```text
+```
+
+그 컴퓨터에 스킬을 설치해 항목이 사라지는 것과 **그 컴퓨터와 다름** (Different there) 은 두 컴퓨터로 하는 점검표
+`docs/remote-runtime-checks.md` 의 3부, 3-3 에서 봅니다.
+
+## 29. MCP 와 에이전트 세션의 CLI 는 보고서를 못 읽음
+
+누가: 에이전트도
+
+약 4분. 그 Runtime 의 보고서는 사람에게만 답합니다. 에이전트 세션 안의 CLI 는 Runtime 에서도 에이전트로 분류되어
+`RUNTIME_PERMISSION_DENIED` 로 거절되어야 합니다. MCP 에는 보고서를 묻는 도구가 아예 없습니다. `list_runtimes` 와
+`get_runtime` 은 Astera 버전, 플랫폼, 마지막 연결만 알려 주므로 여기서는 MCP 를 따로 부르지 않습니다(MCP 의 경우는 e2e
+테스트가 봅니다).
+
+`dev-astera` 와 `runtime-astera` 는 `ASTERA_SESSION` 을 지우므로 언제나 사람으로 읽힙니다. 그래서 1단계는 도우미를 거치지
+않고 개발용 CLI 를 직접, 에이전트 세션의 표시인 `ASTERA_SESSION` 을 붙여 실행합니다. 이 변수 하나가 다를 뿐, 개발용
+프로필에서 보통으로 읽는 명령입니다.
+
+1. 저장소 폴더의 터미널(준비 1 의 변수가 있는 창)에서:
+
+   ```sh
+   cd "$REPO"
+   env -u ASTERA_HOST -u ASTERA_CLI -u ASTERA_SKILLS -u ASTERA_GATEWAY_TOKEN -u ASTERA_GATEWAY_GRANT -u ASTERA_LOOPBACK ASTERA_SESSION=mac-check ASTERA_PROFILE_DIR="$HOME/Library/Application Support/astera-dev" ELECTRON_RUN_AS_NODE=1 "node_modules/electron/dist/$(cat node_modules/electron/path.txt)" out/main/cli.js runtimes get --id mac-check-runtime; echo "exit=$?"
+   ```
+
+2. 같은 것을 사람으로 묻습니다.
+
+   ```sh
+   "$R/dev-astera" runtimes get --id mac-check-runtime; echo "exit=$?"
+   ```
+
+통과: 1단계의 출력에 `RUNTIME_PERMISSION_DENIED` 가 있고 `exit=5` 입니다(0 이 아닌 것이 핵심이니 다른 숫자면 메모에
+적습니다). 2단계는 보고서를 읽고 `exit=0` 입니다.
+
+- [ ] 통과
+- [ ] 실패
+
+메모:
+
+출력:
+
+```text
+```
+
+## 30. 연결 해제
+
+누가: 에이전트도
+
+약 6분. Runtime 쪽에서 컨트롤러의 페어링을 해제하면 그 연결이 바로 끊기고, 컨트롤러는 다시 페어링하라는 거절을 받아야
+합니다. 이 Mac 의 Runtime 에는 예약 Job 이 없으므로, 해제의 답은 일시 중지한 Job 의 개수 없이 해제했다는 한 줄뿐이어야
+합니다.
+
+1. Runtime 쪽에서 컨트롤러의 id 를 찾습니다. 출력에서 `"name":"mac-check-dev"` 인 항목의 `"clientId"` 입니다.
+
+   ```sh
+   "$R/runtime-astera" runtime clients
+   ```
+
+2. 그 컨트롤러의 페어링을 해제합니다(`<clientId>` 를 1단계의 값으로).
+
+   ```sh
+   "$R/runtime-astera" runtime revoke --id <clientId> --human
+   ```
+
+3. 컨트롤러 쪽에서 봅니다. 앱의 `mac-check-runtime` 자세히에서 **새로 고침** (Refresh) 을 누르고, 터미널에서도 묻습니다.
+
+   ```sh
+   "$R/dev-astera" runtimes get --id mac-check-runtime; echo "exit=$?"
+   ```
+
+4. 정리합니다. 이 점검에서 띄운 것과 넣은 것을 모두 거둡니다.
+   - 이 컴퓨터에서 그 Runtime 을 지웁니다(그 컴퓨터의 페어링과는 상관없이 이 컴퓨터의 기억만 지웁니다). 그리고 Runtime 의
+     Gateway 와 Host 를 끕니다.
+
+     ```sh
+     "$R/dev-astera" runtimes remove --id mac-check-runtime
+     "$R/runtime-astera" runtime stop
+     "$R/runtime-astera" host stop
+     ```
+
+   - **MCP & Skills** 에서 `mac-check-skill` 을 펼쳐 **제거** (Remove) 를 누르고, 확인 창의 **제거** (Remove) 를
+     누릅니다. 점검 27 의 1단계에서 직접 넣은 사본은 남으므로 `rm -rf ~/.claude/skills/mac-check-skill` 로
+     지웁니다(점검 12 가 B 였으면 `rm -rf "$C/skills/mac-check-skill"`).
+   - 개발용 앱을 Cmd+Q 로 끕니다. 에이전트는 점검 24 처럼 페이지에서 `window.api.app.quit()` 을 부르고, inspector 에
+     붙어 있었다면 그 연결을 먼저 닫습니다. 1분쯤 뒤 봅니다.
+
+     ```sh
+     ps -Ao pid,command | grep '[n]ode_modules/electron/dist/Electron.app'
+     ```
+
+통과:
+
+- 2단계: 출력이 `Unpaired mac-check-dev.` 한 줄뿐입니다. 앱에서 해제했다면 나왔을
+  **mac-check-dev 의 페어링을 해제했습니다.** (Unpaired mac-check-dev.) 의 영어이고, 일시 중지한 예약 Job 의 개수를 말하는
+  문장은 붙지 않습니다.
+- 3단계: 앱의 자세히에
+  **그 컴퓨터가 이 페어링을 더 이상 받지 않습니다. 다시 페어링하세요.** (That computer no longer accepts this pairing. Pair again.)
+  가 나옵니다. 터미널의 출력에 `RUNTIME_AUTH_FAILED` 가 있고 `exit=5` 입니다.
+- 4단계: 세 명령이 모두 `{"ok":true` 로 시작하고, 마지막 `ps` 는 아무 줄도 출력하지 않습니다. `host.js` 가 든 줄이 남아
+  있으면 1분 더 기다렸다가 다시 봅니다.
+
+- [ ] 통과
+- [ ] 실패
+
+메모:
+
+출력:
+
+```text
+```
+
+해제가 그 컨트롤러가 만든 예약 Job 을 일시 중지하는 것과 그 Job 을 그 컴퓨터의 사람만 재개할 수 있는 것은 두 컴퓨터로
+하는 점검표 `docs/remote-runtime-checks.md` 의 3부, 3-6 에서 봅니다.
 
 ## 마무리
 
