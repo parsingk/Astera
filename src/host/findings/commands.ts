@@ -63,6 +63,9 @@ export interface HostFindings {
   /** Drops the report kept for the minute (ruling R8-1): the Host calls it after any command that changed something (an
    *  archive, an edit, a rule, an ignore), so the next request computes from what is there now. */
   forget(): void
+  /** The report the minute's cache holds, ignored findings marked, or a fresh one (remote governance design §5.2: the
+   *  Runtime report counts it). */
+  current(): Promise<FindingsReport>
 }
 
 /** What the Host reads besides the profile's own files (lifecycle design §3, §8). */
@@ -322,6 +325,7 @@ export function createHostFindings(d: FindingsDeps): HostFindings {
 
   return {
     forget,
+    current: report,
     command: async (a) => {
       if (a.role !== 'app' && a.role !== 'cli') return { status: 403, body: { error: `${a.cmd} is for this machine's app and CLI only` } }
       if (FINDINGS_CHANGES.has(a.cmd) && a.agentRefusal !== undefined) return { status: 403, body: { error: a.agentRefusal } }

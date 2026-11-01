@@ -54,6 +54,12 @@ describe('controllerRefusal (remote runtime design §3.4)', () => {
     for (const cmd of ['runs-wait', 'jobs-wait'])
       expect(controllerRefusal(cmd, { clientId: 'c', name: 'n', permission: 'read-only' } as never), cmd).toBeNull()
   })
+
+  // Remote governance design §5.1: the Runtime report is a read; that it answers only a person is the Host's own check
+  it('control-plane-report is open at read-only', () => {
+    expect(CONTROLLER_READ_COMMANDS).toContain('control-plane-report')
+    expect(controllerRefusal('control-plane-report', p('read-only'))).toBeNull()
+  })
 })
 
 // Remote governance design §7.2: who a controller is, from the client its sign-in carried. Unsaid reads as an agent

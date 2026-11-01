@@ -285,6 +285,19 @@ describe('the findings commands', () => {
     expect(body(await audit(h)).computedAt).toBe(iso(NOW + 1_000))
   })
 
+  // Remote governance design §5.2: the Runtime report counts the findings from the report the minute's cache holds
+  it('current gives the report the cache holds, ignored ones included, or computes one', async () => {
+    const h = createHostFindings(deps().d)
+    const first = await h.current()
+    expect(first.findings.map((f) => f.key)).toEqual([KEY])
+    expect(first.computedAt).toBe(iso(NOW))
+    const once = vi.mocked(readAgentProfiles).mock.calls.length
+    clock = NOW + 1_000
+    expect((await h.current()).computedAt).toBe(iso(NOW))
+    expect((await audit(h)).body).toMatchObject({ computedAt: iso(NOW) })
+    expect(vi.mocked(readAgentProfiles).mock.calls.length).toBe(once)
+  })
+
   it('two requests at once share one compute', async () => {
     const h = createHostFindings(deps().d)
     const [a, b] = await Promise.all([audit(h), audit(h)])

@@ -45,7 +45,10 @@ export const CONTROLLER_READ_COMMANDS = [
   // Sanitized for a controller (§3.6).
   'state-get',
   'sessions-list',
-  'sessions-read'
+  'sessions-read',
+  // Remote governance design §5.1: the Runtime report, names, states and counts. Read-only, as session output says far
+  // more; the Host answers it only to a controller that counts as a person (orch.ts).
+  'control-plane-report'
 ] as const
 
 export const CONTROLLER_CONTROL_COMMANDS = [

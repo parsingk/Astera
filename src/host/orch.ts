@@ -18,7 +18,7 @@ import { stat } from 'node:fs/promises'
 import { jobsViewOf, runsTimelineOf, type RuntimeFacts } from './remoteReads'
 import { archivedProfilesOfJob, profileIdsOfJob } from '../core/orchestration/archivedProfiles'
 import { createPresence } from './presence'
-import { handleCommand, handleExit, outsideSandbox, PENDING_START_WINDOW_MS, sandboxedCaller, type OrchServerDeps } from '../core/orchestration/command'
+import { agentCaller, handleCommand, handleExit, outsideSandbox, PENDING_START_WINDOW_MS, sandboxedCaller, withUnsaidNote, type OrchServerDeps } from '../core/orchestration/command'
 import type { CompletionCheckInput } from '../core/orchestration/pluginChecks'
 import { OrchestrationStore, isValidState, type OrchLoadResult } from '../core/orchestration/store'
 import { applyPendingReports, readPendingReports, type QueuedReport } from '../core/orchestration/pendingDrain'
@@ -31,6 +31,7 @@ import { coordinatorReleaseOf } from '../core/orchestration/exec/releaseDefer'
 import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
 import { mcpRefusal } from '../core/host/mcpGate'
 import { controllerRefusal } from '../core/host/controllerGate'
+import type { ControlPlaneReport } from '../core/controlPlane/report'
 import { pluginRefusal } from '../core/host/pluginGate'
 import { sanitizeForController } from '../core/remote/sanitize'
 import { t } from '../core/i18n'
@@ -267,6 +268,10 @@ const isUnitShaped = (u: unknown): u is SessionWorkUnit => {
 const agentShell = (from: OrchCaller | undefined, sessionId: string): boolean => from?.role === 'cli' && sessionId !== ''
 const AGENT_REFUSAL = (cmd: string): string =>
   `${cmd} is for a person at their own shell or in the Astera app, not an agent session (ASTERA_SESSION is set)`
+
+/** Why a controller that is not a person is refused the Runtime report (remote governance design §5.1). */
+const REPORT_AGENT_REFUSAL =
+  "control-plane-report answers a person on another computer: the Astera app or a person's own shell, not an MCP client or an agent session"
 
 const WORK_UNITS_CALLS: ReadonlySet<string> = new Set([
   'work-units-fork',
@@ -622,6 +627,9 @@ export function createHostOrch(a: {
    *  agent's shell may read them and changes no ignore. Absent: all three answer 501. Its report is dropped after any
    *  call that changed something (ruling R8-1), so the section and the profile marks never show a minute of the past. */
   findings?: Pick<HostFindings, 'command' | 'forget'>
+  /** The Runtime report (remote governance design §5.1, §5.2): `control-plane-report`, above the receipt line, for this
+   *  machine's app and CLI and for a controller that counts as a person. Absent: it answers 501. */
+  controlPlaneReport?: () => Promise<ControlPlaneReport>
   /** Session work units in the Host (E2 §5), asked per call: `index.ts` builds them after this orch (their
    *  in-Run test reads its state). Passed through to `hostOrchDeps` (HOST_TRACKS), and the app only
    *  `work-units-fork`, `-reload`, `-complete`, `-cancel` and `-git-op`. Absent, or null (no spawner, so no
@@ -1845,6 +1853,7 @@ export function createHostOrch(a: {
             cmd === 'pair-create' ||
             cmd === 'clients-list' ||
             cmd === 'clients-revoke' ||
+            cmd === 'control-plane-report' ||
             WORKTREE_CALLS.has(cmd)) &&
           request !== undefined
         )
@@ -1896,6 +1905,21 @@ export function createHostOrch(a: {
         // command. Read only, and it needs no load: the log is fed by commits, not read from the state. MCP and a
         // controller were refused above (neither allowlist names it).
         if (cmd === 'events-poll') return await pollEvents(a.events, args)
+        // **The Runtime report** (remote governance design §5.1), a read beside the findings' own: this machine's app and
+        // CLI get it as they get the other Control Plane reads, an agent's shell included, and a controller only when it
+        // counts as a person (§7.3), since an MCP client or an agent session over the link is refused as MCP is refused
+        // the Control Plane here. MCP and plugins were refused by their gates above; refused again here, so those gates
+        // are not the only barrier. Above the receipt line: it changes nothing, so there is nothing to replay.
+        if (cmd === 'control-plane-report') {
+          if (from?.role === 'controller') {
+            const caller = { sessionId, role: from.role, principal: from.principal }
+            if (agentCaller(caller))
+              return { status: 403, body: { error: withUnsaidNote(caller, REPORT_AGENT_REFUSAL), code: 'RUNTIME_PERMISSION_DENIED' } }
+          } else if (from?.role !== 'app' && from?.role !== 'cli')
+            return { status: 403, body: { error: "control-plane-report is for this machine's app and CLI, and for a person on a paired computer" } }
+          if (!a.controlPlaneReport) return { status: 501, body: { error: 'this Host does not answer control-plane-report' } }
+          return { status: 200, body: await a.controlPlaneReport() }
+        }
         // **Answered here, beside the two above, and for the same reason (Host S3, §3.1).** None of
         // the four `worktree-*` names goes through `handleCommand` — the app is their only caller
         // (`HostWorktrees.call` itself checks `from?.role === 'app'`) — so a Host too old to own

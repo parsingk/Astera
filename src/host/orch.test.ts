@@ -15,6 +15,7 @@ import {
 } from './orch'
 import { PENDING_START_WINDOW_MS } from '../core/orchestration/command'
 import { HOST_CALLER } from '../core/host/driver'
+import { UNSAID_CLI_NOTE } from '../core/host/controllerGate'
 import {
   applyWorkerDone,
   attachCoordinator,
@@ -1242,6 +1243,70 @@ describe('credentials', () => {
 
   it('answers 501 on a Host that keeps none', async () => {
     expect((await orchOver().call({ cmd: 'credentials-list', args: {}, sessionId: '', from: cli })).status).toBe(501)
+  })
+})
+
+// The Runtime report (remote governance design §5.1): this machine's app and CLI, as the other Control Plane reads, and a
+// person on a paired computer. An agent there is refused as MCP is refused the Control Plane here.
+describe('control-plane-report', () => {
+  const cli = { role: 'cli' as const, toOthers: () => {} }
+  const REPORT = { version: 1, marker: 'the report' }
+  const reporting = () => {
+    let asked = 0
+    return { asked: () => asked, controlPlaneReport: async () => (asked++, REPORT as never) }
+  }
+  const controller = (kind?: 'person' | 'agent' | 'unsaid', surface?: 'desktop' | 'cli' | 'mcp'): OrchCaller => ({
+    role: 'controller',
+    principal: { clientId: 'cli_x', name: 'laptop', permission: 'read-only', ...(kind ? { kind } : {}), ...(surface ? { surface } : {}) },
+    toOthers: () => {}
+  })
+  const ask = (orch: ReturnType<typeof orchOver>, from: OrchCaller, sessionId = '', request?: string) =>
+    orch.call({ cmd: 'control-plane-report', args: {}, sessionId, from, ...(request !== undefined ? { request } : {}) })
+
+  it('the app, the CLI and an agent\'s shell get the report', async () => {
+    const f = reporting()
+    const orch = orchOver({ controlPlaneReport: f.controlPlaneReport })
+    for (const [from, sessionId] of [[{ role: 'app', toOthers: () => {} }, ''], [cli, ''], [cli, 'sess_agent']] as Array<[OrchCaller, string]>)
+      expect(await ask(orch, from, sessionId), `${from.role} ${sessionId}`).toEqual({ status: 200, body: REPORT })
+    expect(f.asked()).toBe(3)
+  })
+
+  it('a person controller gets it', async () => {
+    const orch = orchOver({ controlPlaneReport: reporting().controlPlaneReport })
+    expect(await ask(orch, controller('person', 'desktop'))).toEqual({ status: 200, body: REPORT })
+    expect(await ask(orch, controller('person', 'cli'))).toEqual({ status: 200, body: REPORT })
+  })
+
+  it('an agent controller and an unsaid one are refused, unsaid with the update note', async () => {
+    const f = reporting()
+    const orch = orchOver({ controlPlaneReport: f.controlPlaneReport })
+    const SENTENCE = "control-plane-report answers a person on another computer: the Astera app or a person's own shell, not an MCP client or an agent session"
+    for (const from of [controller('agent', 'mcp'), controller('agent', 'cli')])
+      expect(await ask(orch, from)).toEqual({ status: 403, body: { error: SENTENCE, code: 'RUNTIME_PERMISSION_DENIED' } })
+    expect(await ask(orch, controller('unsaid', 'cli'))).toEqual({ status: 403, body: { error: `${SENTENCE}.${UNSAID_CLI_NOTE}`, code: 'RUNTIME_PERMISSION_DENIED' } })
+    // A client that named no surface is no Astera CLI: refused with the sentence alone (Task 5 review)
+    expect(await ask(orch, controller())).toEqual({ status: 403, body: { error: SENTENCE, code: 'RUNTIME_PERMISSION_DENIED' } })
+    expect(f.asked()).toBe(0)
+  })
+
+  it('MCP and a plugin are refused', async () => {
+    const f = reporting()
+    const orch = orchOver({ controlPlaneReport: f.controlPlaneReport })
+    await fs.writeFile(path.join(dir, 'app-settings.json'), JSON.stringify({ mcpAccess: 'control' }))
+    expect((await ask(orch, { role: 'mcp', toOthers: () => {} })).status).toBe(403)
+    expect((await ask(orch, { role: 'plugin', plugin: { id: 'astera-hello', granted: new Set(['jobs.read', 'jobs.create']) }, toOthers: () => {} })).status).toBe(403)
+    expect(f.asked()).toBe(0)
+  })
+
+  it('a request id on it is refused 400', async () => {
+    const f = reporting()
+    const orch = orchOver({ controlPlaneReport: f.controlPlaneReport })
+    expect(await ask(orch, cli, '', 'r-1')).toEqual({ status: 400, body: { error: 'control-plane-report does not take a request id' } })
+    expect(f.asked()).toBe(0)
+  })
+
+  it('a Host with no report answers 501', async () => {
+    expect((await ask(orchOver(), cli)).status).toBe(501)
   })
 })
 

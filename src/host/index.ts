@@ -24,6 +24,9 @@ import { createHostCredentials } from './credentials/commands'
 import { createHostFindings } from './findings/commands'
 import { readFindingsSince } from '../core/findings/since'
 import { cliVersionProbe } from '../core/sessions/cliVersion'
+import { srtCheckRunner } from '../core/sandbox/srtCheck'
+import { REPORT_CAPABILITY } from '../core/controlPlane/report'
+import { buildControlPlaneReport } from './controlPlaneReport'
 import { listPairedRuntimes } from '../core/runtimes/registry'
 import { hidingLog } from '../core/extensions/secrets'
 import { createHidingSource, projectOfWorktrees } from '../core/credentials/hiding'
@@ -850,7 +853,7 @@ async function main(): Promise<void> {
           bootId,
           platform: process.platform,
           pathStyle: process.platform === 'win32' ? 'windows' : 'posix',
-          capabilities: ['remote.jobs', 'remote.retry', 'remote.changed-files', 'remote.diff', 'pty.seq', 'pty.checkpoint']
+          capabilities: ['remote.jobs', 'remote.retry', 'remote.changed-files', 'remote.diff', 'pty.seq', 'pty.checkpoint', REPORT_CAPABILITY]
         }),
         log: (m) => log.write(m),
         onReady: events.ready,
@@ -987,6 +990,31 @@ async function main(): Promise<void> {
     },
     log: (m) => log.write(m)
   })
+  // The Runtime report (remote governance design §5.1, §5.2, §13): composed from the probes above without starting a
+  // session. The spawner's Enforce blocker and its version probe, which serves both CLIs; the srt dependency check a
+  // sandboxed Claude check's start makes, off Windows where the runner was built (ruling C5); and on Windows the Codex
+  // readiness Settings asks, which runs `codex doctor` once per account and keeps its answer
+  const checkRunnerPath = path.join(__dirname, 'sandbox-check.js')
+  const checkRunner = existsSync(checkRunnerPath)
+  const controlPlaneReport = (): ReturnType<typeof buildControlPlaneReport> =>
+    buildControlPlaneReport({
+      profileDir,
+      platform: process.platform,
+      asteraVersion: hostVersion,
+      readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
+      appBypass: async () => (await readAgentPermissionMode(path.join(profileDir, 'app-settings.json'))) === 'yolo',
+      gatewayStates: () => mcpGateway.states(),
+      enforce: spawner?.enforce,
+      cliVersions: claudeVersions,
+      claudeUsernsRestricted: () => spawner?.sandboxWarn?.claudeUsernsRestricted() ?? false,
+      checkRunner,
+      ...(process.platform !== 'win32' && checkRunner
+        ? { checkRunnerMissing: () => srtCheckRunner({ execPath: process.execPath, runnerPath: checkRunnerPath }).missing() }
+        : {}),
+      ...(sandboxReadiness ? { codexReadiness: sandboxReadiness } : {}),
+      findings: () => findings.current(),
+      log: (m) => log.write(m)
+    })
   const orch = createHostOrch({
     profileDir,
     useRecorder,
@@ -999,6 +1027,7 @@ async function main(): Promise<void> {
     credentials,
     audit,
     findings,
+    controlPlaneReport,
     // The job-source plugins a person makes Jobs from (plugin Phase 4 J10), asked through the runtime
     jobSources: hostJobSources({ manager: plugins, runtime: pluginRuntime }),
     // The completion check plugins a Task's checks ask (plugin Phase 5 C8), through the same runtime
