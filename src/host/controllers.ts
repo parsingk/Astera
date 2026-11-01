@@ -6,6 +6,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { ControllerPermission, ControllerPrincipal } from '../core/host/orchProtocol'
 import type { SecretStore } from '../core/secrets/secretStore'
+import { LAST_SEEN_EVERY_MS } from '../core/runtimes/registry'
 
 /** 32 symbols, so 10 of them are 50 bits (DC-11). */
 const CODE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
@@ -85,9 +86,6 @@ const sameHash = (a: string, b: string): boolean => {
 
 /** The waits before a revocation that could not be saved is saved again (security audit SEC-3); the last repeats. */
 export const REVOKE_RETRY_MS = [1_000, 5_000, 30_000, 2 * 60_000, 10 * 60_000]
-
-/** How often a client's lastSeenAt is saved at most (design §4.5). */
-export const LAST_SEEN_EVERY_MS = 60_000
 
 export function createControllerRegistry(
   deps: { now?: () => number; random?: (bytes: number) => Buffer; records?: ControllerRecordsFile } = {}

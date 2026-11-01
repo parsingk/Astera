@@ -14,7 +14,7 @@ import { remoteMutation, remoteTarget } from '../core/remote/targets'
 import { openRemoteLink, type RemoteLink, type RemoteTarget } from '../core/remote/link'
 import { RemoteError } from '../core/remote/client'
 import { bodyCodeOf, codeForStatus, messageFrom, refusalDetailsOf, remoteCodeOf, type CliError } from '../core/orchestration/cliOutput'
-import type { RuntimeRegistry } from '../core/runtimes/registry'
+import { LAST_SEEN_EVERY_MS, type RuntimeRegistry } from '../core/runtimes/registry'
 import { spelledCommand } from '../core/orchestration/cliUsage'
 import { DEFAULT_WAIT_TIMEOUT_MS } from '../core/orchestration/types'
 import { controllerRegistry, resolveRuntime } from './runtimes'
@@ -89,7 +89,7 @@ export async function answerRemote(a: {
   /** The Runtime answered (design §4.5, Phase 3 minor): kept at most once a minute, and never at the cost of the answer. */
   const reached = async (): Promise<void> => {
     const last = found.lastSeenAt === null ? null : Date.parse(found.lastSeenAt)
-    if (last !== null && Date.now() - last < 60_000) return
+    if (last !== null && Date.now() - last < LAST_SEEN_EVERY_MS) return
     await registry.touch(found.runtimeId, new Date().toISOString()).catch(() => undefined)
   }
   const link = (a.deps?.link ?? ((t: RemoteTarget) => openRemoteLink({ target: t, client: { name: 'astera cli', version: a.version, surface: 'cli' } })))(target)

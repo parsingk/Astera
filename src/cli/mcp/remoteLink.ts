@@ -5,7 +5,6 @@
 // The laptop's settings are enforced here, on the laptop: an agent that can run `astera --runtime x` directly has the
 // CLI's authority, which is the paired permission (the accepted limit §2.8 states).
 import path from 'node:path'
-import { promises as fs } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import { RemoteError } from '../../core/remote/client'
 import { openRemoteLink, type RemoteLink, type RemoteTarget } from '../../core/remote/link'
@@ -17,7 +16,7 @@ import { mcpSessionsOf } from '../../core/settings/mcpSessions'
 import { mcpGithubWriteOf } from '../../core/settings/mcpGithubWrite'
 import { readAppSettingsObject } from '../../core/settings/settingsObject'
 import type { McpClient } from '../../core/continuity/actor'
-import type { RuntimeProfile, RuntimeRegistry } from '../../core/runtimes/registry'
+import { registryStamp, type RuntimeProfile, type RuntimeRegistry } from '../../core/runtimes/registry'
 import { controllerRegistry, resolveRuntime } from '../runtimes'
 import type { HostLink, LinkFailure } from './hostLink'
 
@@ -65,15 +64,6 @@ export function openMcpRuntimes(a: {
     })
     return registry
   }
-  const registryFile = path.join(a.profileDir, 'runtimes', 'runtimes.json')
-  const stampOf = async (): Promise<string | null> => {
-    try {
-      const st = await fs.stat(registryFile)
-      return `${st.ino}:${st.mtimeMs}:${st.ctimeMs}:${st.size}`
-    } catch {
-      return null
-    }
-  }
   let known: { stamp: string; list: RuntimeProfile[] } | null = null
   return {
     list: async () => (await reg()).list(),
@@ -90,7 +80,7 @@ export function openMcpRuntimes(a: {
       return refused ? `${refused.body.error} (this machine's Astera settings)` : null
     },
     linkFor: async (key) => {
-      const stamp = await stampOf()
+      const stamp = await registryStamp(path.join(a.profileDir, 'runtimes'))
       const r = await reg()
       const list = stamp !== null && known?.stamp === stamp ? known.list : await r.list()
       known = stamp === null ? null : { stamp, list }

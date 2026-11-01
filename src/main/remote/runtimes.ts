@@ -3,10 +3,9 @@
 // pairing dialog fill it). Kept per pairing: a re-pair (a new token or key for the same Runtime) opens a new client and
 // closes the old, as MCP's kept links do.
 import { createHash } from 'node:crypto'
-import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { openRemoteLink, type RemoteLink, type RemoteTarget } from '../../core/remote/link'
-import type { RuntimeRegistry } from '../../core/runtimes/registry'
+import { registryStamp, type RuntimeRegistry } from '../../core/runtimes/registry'
 import os from 'node:os'
 import { controllerRegistry, resolveRuntime, runRuntimesCommand } from '../../cli/runtimes'
 import { connectRuntime } from '../../core/remote/client'
@@ -46,15 +45,7 @@ export function createRemoteRuntimes(a: {
    *  and checks the registry and the token file; while this file is unchanged a kept client is still the pairing it
    *  was made for, since a pairing (here or by `astera runtimes add|remove` elsewhere) always rewrites it. One stat
    *  instead of two checked reads. Null when it cannot be read: then nothing is reused. */
-  const registryFile = path.join(a.profileDir, 'runtimes', 'runtimes.json')
-  const stampOf = async (): Promise<string | null> => {
-    try {
-      const st = await fs.stat(registryFile)
-      return `${st.ino}:${st.mtimeMs}:${st.ctimeMs}:${st.size}`
-    } catch {
-      return null
-    }
-  }
+  const registryDir = path.join(a.profileDir, 'runtimes')
   /** Opened once (review I-4): opening takes the store's lock and sweeps it, which a read on every call must not do. */
   let registry: Promise<RuntimeRegistry> | null = null
   const reg = (): Promise<RuntimeRegistry> => {
@@ -68,7 +59,7 @@ export function createRemoteRuntimes(a: {
   const pending = new Map<string, Promise<Found>>()
 
   const lookup = async (runtimeId: string): Promise<Found> => {
-    const stamp = await stampOf()
+    const stamp = await registryStamp(registryDir)
     const held = clients.get(runtimeId)
     if (held && stamp !== null && held.stamp === stamp) return held.client
     const r = await reg()

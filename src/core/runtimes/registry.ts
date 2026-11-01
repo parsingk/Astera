@@ -71,8 +71,8 @@ const sameFacts = (a: RuntimeFacts, b: RuntimeFacts): boolean =>
   a.hostProtocol === b.hostProtocol &&
   JSON.stringify([...a.capabilities].sort()) === JSON.stringify([...b.capabilities].sort())
 
-/** As the Host keeps a controller's lastSeenAt (LAST_SEEN_EVERY_MS) and the CLI its `reached()`. */
-const SEEN_EVERY_MS = 60_000
+/** How often a lastSeenAt is saved at most (design §4.5): a controller's on the Host, a Runtime's here. */
+export const LAST_SEEN_EVERY_MS = 60_000
 
 /**
  * When this machine last reached the Runtime, for a caller that reaches it many times (design §4.5): touched at most once
@@ -83,7 +83,7 @@ export function seenRecorder(reg: Pick<RuntimeRegistry, 'touch'>, runtimeId: str
   let lastMs = last === null ? null : Date.parse(last)
   return async () => {
     const t = now()
-    if (lastMs !== null && t - lastMs < SEEN_EVERY_MS) return
+    if (lastMs !== null && t - lastMs < LAST_SEEN_EVERY_MS) return
     lastMs = t
     await reg.touch(runtimeId, new Date(t).toISOString()).catch(() => undefined)
   }
