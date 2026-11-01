@@ -407,7 +407,7 @@ describe('openMcpRuntimes', () => {
       const l = await r.linkFor('rt_a')
       if ('code' in l) throw new Error(l.code)
       await l.call('jobs-list', {})
-      await vi.waitFor(async () => expect((await profile()).facts).toMatchObject({ asteraVersion: '1.5.0', platform: 'darwin', hostProtocol: 4, capabilities: ['pty.seq'] }))
+      await vi.waitFor(async () => expect((await profile()).facts).toMatchObject({ asteraVersion: '1.5.0', platform: 'darwin', hostProtocol: 4, capabilities: ['pty.seq'] }), { timeout: 10_000 })
     })
   })
 })

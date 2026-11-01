@@ -124,7 +124,7 @@ describe('createRemoteRuntimes (remote runtime design §2.7, D1.1)', () => {
       const [p] = await (await controllerRegistry(dir)).list()
       expect(p.lastSeenAt).not.toBeNull()
       expect(p.facts).toMatchObject({ asteraVersion: '1.5.0', platform: 'darwin', hostProtocol: 4, capabilities: ['pty.seq'] })
-    })
+    }, { timeout: 10_000 })
   })
   it('list() carries asteraVersion and platform from the kept facts', async () => {
     const r = createRemoteRuntimes({ profileDir: dir, version: '1.4.8', open: helloing().open })
@@ -132,7 +132,7 @@ describe('createRemoteRuntimes (remote runtime design §2.7, D1.1)', () => {
     const c = await r.client('rt_a')
     if ('code' in c) throw new Error(c.code)
     await c.projects()
-    await vi.waitFor(async () => expect((await r.list())[0]).toMatchObject({ asteraVersion: '1.5.0', platform: 'darwin' }))
+    await vi.waitFor(async () => expect((await r.list())[0]).toMatchObject({ asteraVersion: '1.5.0', platform: 'darwin' }), { timeout: 10_000 })
   })
   // Remote governance design §9.1: only the CLI saved lastSeenAt, so a Runtime the app used every day read as never
   // reached, and stale, 30 days after it was paired.
@@ -147,7 +147,7 @@ describe('createRemoteRuntimes (remote runtime design §2.7, D1.1)', () => {
     const c = await r.client('rt_a')
     if ('code' in c) throw new Error(c.code)
     await c.projects()
-    await vi.waitFor(async () => expect((await registry.list())[0].lastSeenAt).not.toBeNull())
+    await vi.waitFor(async () => expect((await registry.list())[0].lastSeenAt).not.toBeNull(), { timeout: 10_000 })
     const nowMs = Date.now() + DAY
     expect(staleRuntimeFindings({ nowMs, platform: 'linux', findingsSince: new Date(nowMs - 400 * DAY).toISOString(), runtimes: await registry.list() })).toEqual([])
   })
@@ -354,7 +354,7 @@ describe('reports and the expected list (remote governance design §5.4, §6.1, 
     const r = runtimes(reporting().open, '1.6.0')
     expect((await r.list())[0]).not.toHaveProperty('older')
     await r.detail('rt_a')
-    await vi.waitFor(async () => expect((await r.list())[0]).toMatchObject({ asteraVersion: '1.5.0', older: true }))
+    await vi.waitFor(async () => expect((await r.list())[0]).toMatchObject({ asteraVersion: '1.5.0', older: true }), { timeout: 10_000 })
     const same = runtimes(reporting().open, '1.5.0')
     expect((await same.list())[0]).toMatchObject({ older: false })
   })

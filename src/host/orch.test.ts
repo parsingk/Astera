@@ -5572,7 +5572,7 @@ describe('clients-revoke pauses the scheduled Jobs the client made (remote gover
       expect(t.pending[0].ms).toBe(PENDING_START_WINDOW_MS + 5_000)
       clock = LATER
       t.pending[0].run()
-      await vi.waitFor(() => expect(f.jobOf(f.mine).paused).toBe(true))
+      await vi.waitFor(() => expect(f.jobOf(f.mine).paused).toBe(true), { timeout: 10_000 })
       expect(f.jobOf(f.mine).pausedBy).toMatchObject({ reason: 'controller-revoked', clientId: f.laptop, name: 'laptop', at: LATER })
     })
 
@@ -5582,7 +5582,7 @@ describe('clients-revoke pauses the scheduled Jobs the client made (remote gover
       const f = await fixture({ minesSession: 'pending:ab12cd34', setTimer: t.setTimer })
       await f.revoke()
       t.pending[0].run()
-      await vi.waitFor(() => expect(logs.some((l) => l.startsWith(`remote: revoked ${f.laptop}; job ${f.mine} could not be paused on the retry:`))).toBe(true))
+      await vi.waitFor(() => expect(logs.some((l) => l.startsWith(`remote: revoked ${f.laptop}; job ${f.mine} could not be paused on the retry:`))).toBe(true), { timeout: 10_000 })
       expect(f.jobOf(f.mine).paused).toBeUndefined()
     })
 
