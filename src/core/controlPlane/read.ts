@@ -7,7 +7,9 @@ import { bodyCodeOf, codeForStatus, messageFrom } from '../orchestration/cliOutp
 import { t } from '../i18n'
 import { parseControlPlaneReport, REPORT_CAPABILITY, type ControlPlaneReport } from './report'
 
-export type ReportRead = { ok: true; report: ControlPlaneReport } | { ok: false; code: string; message: string }
+/** `reason` says why a FAILED read failed where the app words it in its own language (no wire code of its own): a report
+ *  newer than this build reads. */
+export type ReportRead = { ok: true; report: ControlPlaneReport } | { ok: false; code: string; message: string; reason?: 'report-newer' }
 
 export async function readRuntimeReport(link: RemoteLink): Promise<ReportRead> {
   const r = await link.call('control-plane-report', {})
@@ -22,7 +24,7 @@ export async function readRuntimeReport(link: RemoteLink): Promise<ReportRead> {
   if ('error' in report) {
     // A newer Runtime's report (final review F8): this computer is the one to update, and the code stays FAILED
     const version = (r.body as { version?: unknown } | null)?.version
-    if (typeof version === 'number' && version > 1) return { ok: false, code: 'FAILED', message: t('en', 'settings.remote.detail.reportNewer') }
+    if (typeof version === 'number' && version > 1) return { ok: false, code: 'FAILED', message: t('en', 'settings.remote.detail.reportNewer'), reason: 'report-newer' }
     return { ok: false, code: 'FAILED', message: `the Runtime sent a report this computer cannot read: ${report.error}` }
   }
   return { ok: true, report }

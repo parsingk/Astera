@@ -3,6 +3,7 @@
 import type { RemoteApi, RuntimeDetail } from '../../../core/types'
 import type { ComparisonRow, ComparisonState } from '../../../core/controlPlane/compare'
 import { localTime } from './findingsText'
+import { LINK_FAILURE_KEYS as LINK_KEYS } from '../../../core/remote/linkFailures'
 
 type T = (key: never, params?: Record<string, string | number>) => string
 type ThisMachine = Awaited<ReturnType<RemoteApi['thisMachine']>>
@@ -15,14 +16,6 @@ export function thisMachineLine(s: ThisMachine, t: T): string {
   const g = s.gateway as { state: string; listen?: string; port?: number }
   if (g.state === 'disabled') return tt('settings.remote.thisMachine.off')
   return tt('settings.remote.thisMachine.on', { listen: g.listen ?? '?', port: g.port ?? '?', state: g.state })
-}
-
-/** Link failures the person can act on, each with its own sentence (ruling R17-1): the other side answered, so none of
- *  them is "does not answer". */
-const LINK_KEYS: Record<string, string> = {
-  RUNTIME_AUTH_FAILED: 'settings.remote.link.authFailed',
-  RUNTIME_IDENTITY_CHANGED: 'settings.remote.link.identityChanged',
-  RUNTIME_PROTOCOL_MISMATCH: 'settings.remote.link.protocolMismatch'
 }
 
 /** A link failure's sentence, or null for a code that is not one of them. */
@@ -188,6 +181,8 @@ export function freshnessLines(d: ReadState, t: T): string[] {
       ? []
       : d.refusal.code === CANNOT_REPORT
         ? [tt('settings.remote.detail.unsupported')]
-        : [failureLine({ ok: false, ...d.refusal }, t)]
+        : d.refusal.reason === 'report-newer'
+          ? [tt('settings.remote.detail.reportNewer')]
+          : [failureLine({ ok: false, ...d.refusal }, t)]
   return [...why, d.snapshot ? tt('settings.remote.detail.readAt', { at: localTime(d.snapshot.readAt) }) : tt('settings.remote.detail.notReadYet')]
 }

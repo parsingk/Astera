@@ -22,7 +22,7 @@ export function runtimeDetail(a: {
   local: readonly ReportExtension[] | null
   here: string
   answering: boolean | null
-  refusal?: { code: string; message: string }
+  refusal?: { code: string; message: string; reason?: 'report-newer' }
 }): RuntimeDetail {
   const p = a.profile
   const facts = p.facts ?? null

@@ -7,6 +7,7 @@ import {
   controlFailureLine,
   expectFailureLine,
   failureLine,
+  freshnessLines,
   pairedStateLine,
   pairingLeftLine,
   pairingState,
@@ -17,6 +18,7 @@ import {
   versionLine
 } from './remoteRuntimesText'
 import { localTime } from './findingsText'
+import { t as tr, type MessageKey } from '../../../core/i18n'
 
 /** A t that shows the key and its params, so each assertion names the sentence it expects. */
 const t = (key: string, params?: Record<string, unknown>): string => `${key}${params ? ` ${JSON.stringify(params)}` : ''}`
@@ -165,5 +167,19 @@ describe('the Runtime detail text', () => {
     expect(expectFailureLine({ ok: false, code: 'RUNTIME_NOT_FOUND', message: 'no paired Runtime has the id rt' }, t)).toBe(
       'settings.remote.failed {"code":"RUNTIME_NOT_FOUND","message":"no paired Runtime has the id rt"}'
     )
+  })
+})
+
+// Re-review minor 1: a newer Runtime's report is FAILED with reason report-newer, said in the app's language, never
+// matched on its English sentence
+describe('the freshness lines of a newer report', () => {
+  it('a refusal with reason report-newer says to update Astera here, in Korean', () => {
+    const ko = (key: never, params?: Record<string, string | number>): string => tr('ko', key as MessageKey, params)
+    const lines = freshnessLines({ answering: true, snapshot: null, refusal: { code: 'FAILED', message: 'anything', reason: 'report-newer' } }, ko)
+    expect(lines).toEqual([tr('ko', 'settings.remote.detail.reportNewer'), tr('ko', 'settings.remote.detail.notReadYet')])
+    expect(lines[0]).toContain('이 컴퓨터의 Astera를 업데이트하세요')
+    // The same English sentence with no reason is any other failure
+    const plain = freshnessLines({ answering: true, snapshot: null, refusal: { code: 'FAILED', message: tr('en', 'settings.remote.detail.reportNewer') } }, ko)
+    expect(plain[0]).not.toBe(tr('ko', 'settings.remote.detail.reportNewer'))
   })
 })

@@ -30,7 +30,7 @@ export const REPORT_EVERY_MS = 5 * 60_000
  *  renderer's lists come over IPC, and main bounds what it is handed. */
 export const EXPECT_IDS_MAX = 2000
 
-type Refusal = { code: string; message: string }
+type Refusal = { code: string; message: string; reason?: 'report-newer' }
 
 /** The later of two ISO times, either of which may be absent. */
 const later = (x: string | null, y: string | null): string | null => (x === null ? y : y === null ? x : Date.parse(y) > Date.parse(x) ? y : x)
@@ -195,7 +195,7 @@ export function createRemoteRuntimes(a: {
       if (r.ok && !(await (await reg()).keepSnapshot(runtimeId, { readAt: new Date(now()).toISOString(), report: r.report })))
         r = { ok: false, code: 'FAILED', message: SNAPSHOT_TOO_LARGE }
       if (r.ok) failed.delete(runtimeId)
-      else failed.set(runtimeId, { at: now(), refusal: { code: r.code, message: r.message } })
+      else failed.set(runtimeId, { at: now(), refusal: { code: r.code, message: r.message, ...(r.reason !== undefined && { reason: r.reason }) } })
       return { r, answered }
     })().finally(() => reading.delete(runtimeId))
     reading.set(runtimeId, p)
@@ -240,7 +240,7 @@ export function createRemoteRuntimes(a: {
         local,
         here: a.version,
         answering: read.answered,
-        ...(read.r.ok ? {} : { refusal: { code: read.r.code, message: read.r.message } })
+        ...(read.r.ok ? {} : { refusal: { code: read.r.code, message: read.r.message, ...(read.r.reason !== undefined && { reason: read.r.reason }) } })
       })
     },
     readReports: async () => {

@@ -20,7 +20,8 @@ import { liveExpected } from '../core/controlPlane/compare'
 import type { ReportExtension } from '../core/controlPlane/report'
 import { CLI_ERROR_CODES, remoteCodeOf, type CliError } from '../core/orchestration/cliOutput'
 import { REMOTE_DEFAULTS } from '../core/remote/settings'
-import { t, type MessageKey } from '../core/i18n'
+import { t } from '../core/i18n'
+import { LINK_FAILURE_KEYS } from '../core/remote/linkFailures'
 
 export interface RuntimesDeps {
   registry(): Promise<RuntimeRegistry>
@@ -291,7 +292,7 @@ async function get(args: Record<string, unknown>, d: RuntimesDeps): Promise<Resu
   if (isResult(read)) return read
   if (!read.r.ok && !SNAPSHOT_REFUSALS.has(read.r.code)) {
     const code = (CLI_ERROR_CODES as readonly string[]).includes(read.r.code) ? (read.r.code as CliError['code']) : 'FAILED'
-    return failure(code, read.r.message, { runtime: p.runtimeId })
+    return failure(code, read.r.message, { runtime: p.runtimeId, ...(read.r.reason !== undefined && { reason: read.r.reason }) })
   }
   // Read again for what this ask changed: the facts, the snapshot, the time it answered
   const now = (await reg.list()).find((x) => x.runtimeId === p.runtimeId) ?? p
@@ -302,18 +303,9 @@ async function get(args: Record<string, unknown>, d: RuntimesDeps): Promise<Resu
       local,
       here: d.version,
       answering: read.answered,
-      ...(read.r.ok ? {} : { refusal: { code: read.r.code, message: read.r.message } })
+      ...(read.r.ok ? {} : { refusal: { code: read.r.code, message: read.r.message, ...(read.r.reason !== undefined && { reason: read.r.reason }) } })
     })
   }
-}
-
-/** The link failures that a retry does not mend, in the sentences Settings › Remote Runtimes says for them
- *  (renderer remoteRuntimesText.ts LINK_KEYS). `ping` ends with them as `get` does with any refusal it does not answer
- *  from the snapshot: an error and a non-zero exit (final review F9). */
-const LINK_FAILURES: Readonly<Record<string, MessageKey>> = {
-  RUNTIME_AUTH_FAILED: 'settings.remote.link.authFailed',
-  RUNTIME_IDENTITY_CHANGED: 'settings.remote.link.identityChanged',
-  RUNTIME_PROTOCOL_MISMATCH: 'settings.remote.link.protocolMismatch'
 }
 
 async function ping(args: Record<string, unknown>, d: RuntimesDeps): Promise<Result> {
@@ -323,7 +315,9 @@ async function ping(args: Record<string, unknown>, d: RuntimesDeps): Promise<Res
   const body = await withLink(d, reg, p, async (link, reached) => {
     const r = await link.call('projects-list', {})
     const h = link.hello()
-    if (r instanceof RemoteError && Object.hasOwn(LINK_FAILURES, r.code)) return failure(r.code as CliError['code'], t('en', LINK_FAILURES[r.code]))
+    if (r instanceof RemoteError && Object.hasOwn(LINK_FAILURE_KEYS, r.code))
+      // An error and a non-zero exit, as `get` ends with any refusal it does not answer from the snapshot (final review F9)
+      return failure(r.code as CliError['code'], t('en', LINK_FAILURE_KEYS[r.code]))
     if (!(r instanceof RemoteError)) await reached()
     return {
       runtimeId: p.runtimeId,

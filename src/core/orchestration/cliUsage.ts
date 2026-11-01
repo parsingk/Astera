@@ -277,7 +277,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'runtimes-expect': {
     summary: "which of this computer's extensions should be on a paired Runtime too",
     detail:
-      'With neither flag it lists them. The ids are this computer\'s, from `astera ext list`: `--add` refuses an id that is not here, and `--remove` also takes an id that is still in the stored list. `runtimes get` then says of each whether it is there, the same, different, off, or missing a secret. Nothing is installed there: install it in that computer\'s own Settings or CLI. An agent session can list them but not change them.',
+      'With neither flag it lists them. The ids are this computer\'s, from `astera ext list`: `--add` refuses an id that is not here, and `--remove` also takes an id that is still in the stored list. `runtimes get` then says of each whether it is there, the same, different, off, or missing a secret. Nothing is installed there: install it in that computer\'s own Settings or CLI. --add and --remove are refused with 5 inside an agent session (ASTERA_SESSION is set); listing is not.',
     flags: [
       ID('<runtimeId|name>', 'the Runtime (from `runtimes list`)'),
       { name: 'add', value: '<ids>', about: 'extension ids to expect there, comma separated' },

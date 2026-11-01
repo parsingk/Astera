@@ -878,7 +878,7 @@ export interface RuntimeDetail {
   answering: boolean | null
   snapshot: RuntimeSnapshot | null
   /** Why no fresh report: the Runtime's refusal or its missing capability. */
-  refusal?: { code: string; message: string }
+  refusal?: { code: string; message: string; reason?: 'report-newer' }
   /** This computer's extensions could not be read (ruling R16-1): `comparison` is empty, the snapshot still shows. */
   localError?: true
   comparison: ComparisonRow[]

@@ -82,7 +82,7 @@ describe('readRuntimeReport (remote governance design §5.1, §5.3)', () => {
   it('a report whose version is above 1 is FAILED, says to update Astera on this computer, and is never kept', async () => {
     for (const body of [{ ...REPORT, version: 2 }, { version: 3, somethingNew: true }]) {
       const r = await readRuntimeReport(stub({ status: 200, body }).link)
-      expect(r).toEqual({ ok: false, code: 'FAILED', message: t('en', 'settings.remote.detail.reportNewer') })
+      expect(r).toEqual({ ok: false, code: 'FAILED', message: t('en', 'settings.remote.detail.reportNewer'), reason: 'report-newer' })
       expect((r as { message: string }).message).toContain('Update Astera on this computer')
     }
   })

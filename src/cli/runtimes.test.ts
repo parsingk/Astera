@@ -362,6 +362,12 @@ describe('astera runtimes get, ping and expect (remote governance design §10.2,
       error: { code: 'FAILED', message: 'the Runtime sent a report this computer cannot read: the report is not version 1' }
     })
     expect((await reg.list())[0].snapshot).toEqual({ readAt: OLD, report: THERE })
+    // Re-review minor 1: a newer Runtime's report says why in a field --json carries, beside the FAILED code
+    const newer = remote({ 'control-plane-report': { status: 200, body: { ...THERE, version: 2 } } })
+    expect(await runRuntimesCommand('runtimes-get', { id: 'rt_a' }, getDeps(newer))).toEqual({
+      ok: false,
+      error: { code: 'FAILED', message: expect.stringContaining('Update Astera on this computer'), details: { runtime: 'rt_a', reason: 'report-newer' } }
+    })
   })
 
   // Ruling R14-3: a Runtime that signed in but did not reply in time is as transient as one that does not answer
