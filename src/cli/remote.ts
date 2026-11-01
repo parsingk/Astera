@@ -14,7 +14,7 @@ import { remoteMutation, remoteTarget } from '../core/remote/targets'
 import { openRemoteLink, type RemoteLink, type RemoteTarget } from '../core/remote/link'
 import { RemoteError } from '../core/remote/client'
 import { bodyCodeOf, codeForStatus, messageFrom, refusalDetailsOf, remoteCodeOf, type CliError } from '../core/orchestration/cliOutput'
-import { factsOf, sameFacts, seenRecorder, type RuntimeRegistry } from '../core/runtimes/registry'
+import { factsNoter, seenRecorder, type RuntimeRegistry } from '../core/runtimes/registry'
 import type { HelloFrame } from '../core/remote/frames'
 import { spelledCommand } from '../core/orchestration/cliUsage'
 import { DEFAULT_WAIT_TIMEOUT_MS } from '../core/orchestration/types'
@@ -92,13 +92,10 @@ export async function answerRemote(a: {
   /** The sign-in hello's facts (remote governance design §4.1), every write waited for before this command returns:
    *  the CLI exits right after it. Facts the profile already holds are not written, so the common command takes no
    *  store lock. */
-  let noted: Promise<unknown> = Promise.resolve()
-  let held = found.facts
+  const note = factsNoter(registry, found.runtimeId, found.facts)
+  let noted: Promise<void> = Promise.resolve()
   const onHello = (h: HelloFrame): void => {
-    const facts = factsOf(h, new Date().toISOString())
-    if (held && sameFacts(held, facts)) return
-    held = facts
-    noted = noted.then(() => registry.noteFacts(found.runtimeId, facts).catch(() => undefined))
+    noted = noted.then(() => note(h))
   }
   const link = (
     a.deps?.link ??

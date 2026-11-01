@@ -5,6 +5,7 @@ import path from 'node:path'
 import { openSecretStore } from '../secrets/secretStore'
 import type { ControlPlaneReport } from '../controlPlane/report'
 import {
+  factsNoter,
   factsOf,
   listPairedRuntimes,
   openRuntimeRegistry,
@@ -284,5 +285,40 @@ describe('facts, snapshot and expected list per Runtime', () => {
     t = Date.parse('2026-11-01T00:01:01.000Z')
     await expect(seen()).resolves.toBeUndefined()
     expect(touched).toEqual(['2026-11-01T00:01:01.000Z'])
+  })
+
+  // Task 4 review: a write takes the store's cross-process lock, so held facts are not written again; and a write that
+  // failed (a busy store) is tried again at the next hello, since an app's link lives long.
+  const hi = { asteraVersion: '1.5.0', platform: 'linux', hostProtocol: 4, capabilities: ['pty.seq', 'pty.checkpoint'] }
+  it('factsNoter makes no call for the facts already held, in any capability order', async () => {
+    const calls: RuntimeFacts[] = []
+    const note = factsNoter({ noteFacts: async (_id, f) => (calls.push(f), true) }, 'rt_a', factsOf({ ...hi, capabilities: ['pty.checkpoint', 'pty.seq'] }, 'T'))
+    await note(hi)
+    expect(calls).toEqual([])
+  })
+  it('factsNoter calls again after a rejected write, and never rejects', async () => {
+    let calls = 0
+    const note = factsNoter(
+      {
+        noteFacts: async () => {
+          calls++
+          throw new Error('busy')
+        }
+      },
+      'rt_a',
+      undefined
+    )
+    await expect(note(hi)).resolves.toBeUndefined()
+    await note(hi)
+    expect(calls).toBe(2)
+  })
+  it('factsNoter does not call again after a resolved write', async () => {
+    const calls: Array<[string, RuntimeFacts]> = []
+    const note = factsNoter({ noteFacts: async (id, f) => (calls.push([id, f]), true) }, 'rt_a', undefined)
+    await note(hi)
+    await note(hi)
+    expect(calls).toEqual([['rt_a', expect.objectContaining({ asteraVersion: '1.5.0', capabilities: ['pty.seq', 'pty.checkpoint'] })]])
+    await note({ ...hi, asteraVersion: '1.5.1' })
+    expect(calls).toHaveLength(2)
   })
 })

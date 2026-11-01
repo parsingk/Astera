@@ -65,7 +65,7 @@ export const factsOf = (h: Pick<HelloFrame, 'asteraVersion' | 'platform' | 'host
 })
 
 /** The same facts in another capability order are the same facts: the hello's list carries no order. */
-export const sameFacts = (a: RuntimeFacts, b: RuntimeFacts): boolean =>
+const sameFacts =(a: RuntimeFacts, b: RuntimeFacts): boolean =>
   a.asteraVersion === b.asteraVersion &&
   a.platform === b.platform &&
   a.hostProtocol === b.hostProtocol &&
@@ -86,6 +86,28 @@ export function seenRecorder(reg: Pick<RuntimeRegistry, 'touch'>, runtimeId: str
     if (lastMs !== null && t - lastMs < LAST_SEEN_EVERY_MS) return
     lastMs = t
     await reg.touch(runtimeId, new Date(t).toISOString()).catch(() => undefined)
+  }
+}
+
+/**
+ * Who the Runtime says it is, kept from each hello (design §4.1), for a surface that hears a hello on every connect.
+ * Facts equal to `held` (the profile's) are not written, since a write takes the store's cross-process lock; `held`
+ * moves only once a write resolved, so one that failed (a busy store) is tried again at the next hello. Never rejects.
+ */
+export function factsNoter(
+  reg: Pick<RuntimeRegistry, 'noteFacts'>,
+  runtimeId: string,
+  held: RuntimeFacts | undefined
+): (h: Pick<HelloFrame, 'asteraVersion' | 'platform' | 'hostProtocol' | 'capabilities'>) => Promise<void> {
+  return async (h) => {
+    const facts = factsOf(h, new Date().toISOString())
+    if (held && sameFacts(held, facts)) return
+    try {
+      await reg.noteFacts(runtimeId, facts)
+      held = facts
+    } catch {
+      // Tried again at the next hello.
+    }
   }
 }
 
