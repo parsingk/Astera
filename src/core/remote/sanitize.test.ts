@@ -17,9 +17,10 @@ describe('sanitizeForController (remote runtime design §3.6, D10.2)', () => {
       createdBy: { kind: 'controller', clientId: 'cli_1', name: 'laptop' },
       pausedBy: { reason: 'controller-revoked', clientId: 'cli_1', name: 'laptop', at: 'T' }
     }
-    const s = { ...emptyState(), jobs: [job, { id: 'job_2' }] } as never
+    // Ruling R18-1: a Job made here records { here: true }, which is not shown either
+    const s = { ...emptyState(), jobs: [job, { id: 'job_2' }, { id: 'job_3', createdBy: { here: true } }] } as never
     const out = sanitizeForController(s) as unknown as { jobs: Array<Record<string, unknown>> }
-    expect(out.jobs).toEqual([{ id: 'job_1', paused: true }, { id: 'job_2' }])
+    expect(out.jobs).toEqual([{ id: 'job_1', paused: true }, { id: 'job_2' }, { id: 'job_3' }])
     expect((s as { jobs: Array<Record<string, unknown>> }).jobs[0].createdBy).toEqual(job.createdBy)
   })
   it('leaves a task with no checks untouched', () => {

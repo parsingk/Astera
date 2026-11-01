@@ -5477,6 +5477,25 @@ describe('clients-revoke pauses the scheduled Jobs the client made (remote gover
     }
   })
 
+  // Ruling R18-1: a scheduled Job the person made here in this release has a maker on record, so the revoke neither
+  // counts it as unrecorded nor pauses it; the makerless one (as loaded from an older file) is still counted
+  it("a scheduled Job made here is not counted as unrecorded, and a revoke never pauses it, and the state carries no createdBy to a controller", async () => {
+    const f = await fixture()
+    const made = await f.orch.call({ cmd: 'jobs-create', args: { objective: 'mine here', cwd: dir, schedule: DAILY }, sessionId: '', from: cli })
+    expect(made.status, JSON.stringify(made.body)).toBe(200)
+    const here = f.orch.state().jobs.find((j) => j.objective === 'mine here')!
+    expect(here.createdBy).toEqual({ here: true })
+    expect(f.jobOf(f.makerless).createdBy).toBeUndefined()
+    const r = await f.revoke()
+    expect(r.body).toMatchObject({ pausedJobs: 1, unrecordedScheduled: 1 })
+    expect(f.jobOf(here.id).paused).toBeUndefined()
+    expect(f.jobOf(here.id).pausedBy).toBeUndefined()
+    const reader = { role: 'controller' as const, principal: { clientId: 'cli_x', name: 'x', permission: 'read-only' as const }, toOthers: () => {} }
+    const st = await f.orch.call({ cmd: 'state-get', args: {}, sessionId: '', from: reader })
+    expect(st.status).toBe(200)
+    for (const j of (st.body as { state: { jobs: object[] } }).state.jobs) expect(j).not.toHaveProperty('createdBy')
+  })
+
   // Ruling R8-3: a failure answer reaches the CLI and Settings as its error alone, so the error says what the pauses did
   it('a revoke whose clients.json cannot be written says in its error what it paused and what it could not', async () => {
     const f = await fixture({ saveFails: true, retained: true })

@@ -2566,10 +2566,12 @@ export async function handleCommand(
             // Made by a sandboxed session: its coordinator and workers start in the sandbox (final fix pass, C3)
             ...(callerBoxed ? { sandboxed: true } : {}),
             // Made by a remote controller: a revoke of its pairing pauses it if it is scheduled (remote governance
-            // design §8.1, §8.2). The name is the record's on this Host, as the principal carries it.
-            ...(caller.role === 'controller' && caller.principal
-              ? { createdBy: { kind: 'controller' as const, clientId: caller.principal.clientId, name: caller.principal.name } }
-              : {}),
+            // design §8.1, §8.2). The name is the record's on this Host, as the principal carries it. Any other caller
+            // is on this computer and says so (ruling R18-1), so only a Job from before this release has no maker.
+            createdBy:
+              caller.role === 'controller' && caller.principal
+                ? { kind: 'controller' as const, clientId: caller.principal.clientId, name: caller.principal.name }
+                : { here: true as const },
             // `--auto` 는 값이 없는 플래그다(task-create --review 와 같은 모양). **예약이면 켜지
             // 않는다** — 템플릿 자신은 돌지 않기 때문이다.
             //

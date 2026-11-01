@@ -229,10 +229,14 @@ export interface Job {
    *  돌던 회차를 함께 세우는 것은 JobRun.paused 다 — 세우는 순간 그 Job 의 회차 전부에 붙는다.
    *  이 칸 하나로 겸할 수 없는 이유는 그쪽 주석에 있다. */
   paused?: boolean
-  /** The remote controller that made this Job (remote governance design §8.1), stamped by run-create from the caller's
-   *  principal. Absent on a Job made here (the app, a shell, an agent session, the Host) and on every Job made before
-   *  this field existed: nothing guesses one afterwards (§8.4). */
-  createdBy?: { kind: 'controller'; clientId: string; name: string }
+  /** Who made this Job (remote governance design §8.1), stamped by run-create: a remote controller from the caller's
+   *  principal, or `{ here: true }` for any caller on this computer (the app, a shell, an agent session, the Host;
+   *  ruling R18-1). Absent only on a Job made before this field existed: nothing guesses one afterwards (§8.4), and the
+   *  revoke counts those as having no maker on record. The `?: undefined` keys let a reader ask `createdBy?.clientId`
+   *  without narrowing first. */
+  createdBy?:
+    | { kind: 'controller'; clientId: string; name: string; here?: undefined }
+    | { here: true; kind?: undefined; clientId?: undefined; name?: undefined }
   /** Why `paused` is set when it was not a person (§8.2): the pairing of the controller that made it was revoked. A
    *  controller or an agent may not resume or run it while this stands; a person on this computer may, and the resume
    *  drops it with `paused` (resumeSchedule). */

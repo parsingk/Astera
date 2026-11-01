@@ -81,12 +81,14 @@ describe('a Job records the controller that made it (remote governance design §
     expect(deps.getState().jobs[0].createdBy).toEqual({ kind: 'controller', clientId: 'cli_2', name: 'desk' })
   })
 
-  it("a Job made by the app or a person's shell records no createdBy", async () => {
+  // Ruling R18-1: a Job made here says so, so only a Job made before this release has no maker on record
+  it("a Job made by the app, a person's shell, an agent's shell or the Host records createdBy { here: true }", async () => {
     const deps = makeDeps()
     for (const caller of [APP, PERSON_SHELL, AGENT_SHELL, HOST])
       expect((await handleCommand(deps, caller, 'jobs-create', { objective: 'o', cwd: ROOT, schedule: DAILY })).status).toBe(200)
-    expect(deps.getState().jobs).toHaveLength(4)
-    for (const job of deps.getState().jobs) expect(job.createdBy).toBeUndefined()
+    expect((await handleCommand(deps, PERSON_SHELL, 'run-create', { objective: 'o', cwd: ROOT })).status).toBe(200)
+    expect(deps.getState().jobs).toHaveLength(5)
+    for (const job of deps.getState().jobs) expect(job.createdBy).toEqual({ here: true })
   })
 
   // No other command sets a schedule (§8.1): a schedule given to them is not read, so a Job a controller made without one
@@ -274,6 +276,15 @@ describe('what a controller reads of a Job', () => {
     const local = await handleCommand(deps, PERSON_SHELL, 'jobs-get', { id: jobId })
     expect(local.body).toMatchObject({ createdBy: { clientId: 'cli_1' }, pausedBy: { reason: 'controller-revoked' } })
     expect((await handleCommand(deps, PERSON_SHELL, 'jobs-list', {})).body).toMatchObject([{ createdBy: { clientId: 'cli_1' } }])
+  })
+
+  it('a Job made here is read by a controller without createdBy, and by a local caller with it', async () => {
+    const deps = makeDeps()
+    expect((await handleCommand(deps, PERSON_SHELL, 'jobs-create', { objective: 'o', cwd: ROOT, schedule: DAILY })).status).toBe(200)
+    const jobId = deps.getState().jobs[0].id
+    for (const v of (await handleCommand(deps, READER, 'jobs-list', {})).body as unknown[]) hidden(v)
+    hidden((await handleCommand(deps, READER, 'jobs-get', { id: jobId })).body)
+    expect((await handleCommand(deps, PERSON_SHELL, 'jobs-get', { id: jobId })).body).toMatchObject({ createdBy: { here: true } })
   })
 
   it("jobs-create's reply and run-pause's reply leave them out for a controller", async () => {

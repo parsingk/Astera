@@ -267,7 +267,7 @@ export function createJob(
     agentProfileId?: string
     /** Made by a sandboxed session (Job.sandboxed); the caller (run-create) asked. */
     sandboxed?: boolean
-    /** The remote controller that made it (Job.createdBy); the caller (run-create) read it from the principal. */
+    /** Who made it (Job.createdBy); the caller (run-create) read it from the principal, or gives `{ here: true }`. */
     createdBy?: Job['createdBy']
   },
   now: string
