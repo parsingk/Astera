@@ -6,7 +6,9 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { SecretStore, SecretTx } from '../secrets/secretStore'
 import type { HelloFrame } from '../remote/frames'
-import { parseControlPlaneReport, type ControlPlaneReport } from '../controlPlane/report'
+import { parseControlPlaneReport, type RuntimeFacts, type RuntimeSnapshot } from '../controlPlane/report'
+// Declared beside the report, which the renderer may import (RuntimeDetail in core/types.ts carries both).
+export type { RuntimeFacts, RuntimeSnapshot } from '../controlPlane/report'
 
 export interface RuntimeProfile {
   runtimeId: string
@@ -24,20 +26,6 @@ export interface RuntimeProfile {
   snapshot?: RuntimeSnapshot
   /** This computer's extension ids the person expects there (§6.1). */
   expected?: string[]
-}
-
-export interface RuntimeFacts {
-  asteraVersion: string
-  platform: string
-  hostProtocol: number
-  capabilities: string[]
-  /** When these facts were first read as they are. */
-  readAt: string
-}
-
-export interface RuntimeSnapshot {
-  readAt: string
-  report: ControlPlaneReport
 }
 
 export interface RuntimeRegistry {

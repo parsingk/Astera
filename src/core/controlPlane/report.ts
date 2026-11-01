@@ -79,6 +79,22 @@ export interface ControlPlaneReport {
   findings: { total: number; byRule: Record<string, number> } | null
 }
 
+/** What a Runtime's hello said about itself, as the controller keeps it (§4.1). */
+export interface RuntimeFacts {
+  asteraVersion: string
+  platform: string
+  hostProtocol: number
+  capabilities: string[]
+  /** When these facts were first read as they are. */
+  readAt: string
+}
+
+/** A Runtime's last report on the controller, with when it was read (§5.4). */
+export interface RuntimeSnapshot {
+  readAt: string
+  report: ControlPlaneReport
+}
+
 const STRING_MAX = 256
 const NAMES_MAX = 256
 const EXTENSIONS_MAX = 2000

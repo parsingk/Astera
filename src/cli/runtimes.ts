@@ -2,12 +2,22 @@
 // the controller side of pairing. Answered in the CLI process: the profiles and their tokens live in
 // `<profile>/runtimes/` through the secret store, and a token is never printed, never read from an argument and never
 // put in the environment. `remove` forgets a Runtime here; it does not revoke the pairing there (§4.5).
+//
+// `get`, `ping` and `expect` (remote governance design §10.2): `get` reads a Runtime's report, keeps it as the last
+// snapshot (§5.4) and compares it with this computer's extensions; `ping` asks whether it answers; `expect` edits which of
+// this computer's extensions the person expects there (§6.1). `expect` changes only this computer's registry, so the
+// sandboxed-session gate on `--runtime` changes (§7.4) does not apply to it (ruling R14-1). Nothing installs there.
 import path from 'node:path'
 import { openSecretStore } from '../core/secrets/secretStore'
-import { openRuntimeRegistry, type RuntimeProfile, type RuntimeRegistry } from '../core/runtimes/registry'
+import { factsNoter, openRuntimeRegistry, seenRecorder, type RuntimeProfile, type RuntimeRegistry } from '../core/runtimes/registry'
 import { parsePairing } from '../core/remote/pairing'
-import { GATEWAY_PROTOCOL } from '../core/remote/frames'
+import { GATEWAY_PROTOCOL, type ClientInfo, type HelloFrame } from '../core/remote/frames'
 import { RemoteError, type RuntimeLink } from '../core/remote/client'
+import { openRemoteLink, type RemoteLink, type RemoteTarget } from '../core/remote/link'
+import { readRuntimeReport } from '../core/controlPlane/read'
+import { runtimeDetail } from '../core/controlPlane/detail'
+import { liveExpected } from '../core/controlPlane/compare'
+import type { ReportExtension } from '../core/controlPlane/report'
 import { remoteCodeOf, type CliError } from '../core/orchestration/cliOutput'
 import { REMOTE_DEFAULTS } from '../core/remote/settings'
 
@@ -25,6 +35,10 @@ export interface RuntimesDeps {
   /** Whether a person or an agent session asks (remote governance design §7.1), said at the first sign-in. Absent means
    *  an agent. */
   agent?: boolean
+  /** The controller link `get` and `ping` open (core/remote/link.ts `openRemoteLink` when left out). */
+  link?(t: RemoteTarget, o: { onHello(h: HelloFrame): void; client: ClientInfo }): RemoteLink
+  /** This computer's extensions as a report gives them (core/controlPlane/local.ts), for `get` and `expect`. */
+  localExtensions?(): Promise<ReportExtension[]>
 }
 
 /** Second pass RR-5: a mistyped or firewalled address held a pairing for the OS's connect wait (two minutes on Linux), and
@@ -172,8 +186,10 @@ async function add(args: Record<string, unknown>, d: RuntimesDeps): Promise<Resu
     createdAt: d.now(),
     lastSeenAt: d.now()
   }
+  let reg: RuntimeRegistry
   try {
-    await (await d.registry()).add(profile, paired.token, { replace: args.replace === true })
+    reg = await d.registry()
+    await reg.add(profile, paired.token, { replace: args.replace === true })
   } catch (e) {
     // A Runtime makes a new id with every new key (identity.ts), so the same id under another key is another machine
     // claiming to be the paired one (final review M-4).
@@ -186,7 +202,139 @@ async function add(args: Record<string, unknown>, d: RuntimesDeps): Promise<Resu
       )
     return failure('FAILED', `paired, but this machine could not keep the pairing: ${messageOf(e)}`)
   }
+  // The pairing keeps no facts (registry.ts `add`): the sign-in hello's are noted as every later hello's are (§4.1)
+  await factsNoter(reg, profile.runtimeId, undefined)(hello)
   return { ok: true, body: shown(profile) }
+}
+
+/** The paired Runtime `--id` names, or the refusal. */
+async function named(verb: string, args: Record<string, unknown>, reg: RuntimeRegistry): Promise<RuntimeProfile | Result> {
+  if (typeof args.id !== 'string' || args.id === '') return failure('INVALID_ARGUMENTS', `runtimes ${verb} needs --id <runtimeId|name>`)
+  const r = resolveRuntime(await reg.list(), args.id)
+  return 'code' in r ? failure(r.code, r.message) : r
+}
+const isResult = (v: object): v is Result => 'ok' in v
+
+/** This computer's extensions, or why they cannot be compared: an empty list would call every entry there "only there". */
+async function localOf(d: RuntimesDeps): Promise<ReportExtension[] | Result> {
+  if (!d.localExtensions) return failure('FAILED', "this caller cannot read this computer's extensions")
+  try {
+    return await d.localExtensions()
+  } catch (e) {
+    return failure('FAILED', `this computer's extensions could not be read: ${messageOf(e)}`)
+  }
+}
+
+/**
+ * Opens a link to `p`, runs `f` on it and closes it, as answerRemote does (cli/remote.ts): each hello's facts are noted
+ * and waited for before this returns, since the CLI exits right after (§4.1), and `reached` keeps the time it answered,
+ * at most once a minute (§4.2).
+ */
+async function withLink<T extends object>(
+  d: RuntimesDeps,
+  reg: RuntimeRegistry,
+  p: RuntimeProfile,
+  f: (link: RemoteLink, reached: () => Promise<void>) => Promise<T>
+): Promise<T | Result> {
+  const token = await reg.token(p.runtimeId)
+  if (token === null) return failure('RUNTIME_NOT_FOUND', `${p.name} has no token on this machine; pair it again with \`astera runtimes add\``)
+  const target: RemoteTarget = { runtimeId: p.runtimeId, address: p.address, port: p.port, fingerprint: p.fingerprint, token }
+  const note = factsNoter(reg, p.runtimeId, p.facts)
+  let noted: Promise<void> = Promise.resolve()
+  const onHello = (h: HelloFrame): void => {
+    noted = noted.then(() => note(h))
+  }
+  const client: ClientInfo = { name: 'astera cli', version: d.version, surface: 'cli', agent: d.agent !== false }
+  const link = (d.link ?? ((t, o) => openRemoteLink({ ...o, target: t })))(target, { onHello, client })
+  try {
+    return await f(link, seenRecorder(reg, p.runtimeId, p.lastSeenAt))
+  } finally {
+    link.close()
+    await noted
+  }
+}
+
+async function get(args: Record<string, unknown>, d: RuntimesDeps): Promise<Result> {
+  const reg = await d.registry()
+  const p = await named('get', args, reg)
+  if (isResult(p)) return p
+  const local = await localOf(d)
+  if (isResult(local)) return local
+  const read = await withLink(d, reg, p, async (link, reached) => {
+    // Any reply counts as an answer, a refusal too: only a link failure means the Runtime did not answer
+    let answered = false
+    const r = await readRuntimeReport({
+      hello: () => link.hello(),
+      call: async (cmd, a, o) => {
+        const reply = await link.call(cmd, a, o)
+        if (!(reply instanceof RemoteError)) answered = true
+        return reply
+      },
+      subscribe: (pty, h) => link.subscribe(pty, h),
+      close: () => link.close()
+    })
+    if (answered) await reached()
+    if (r.ok) await reg.keepSnapshot(p.runtimeId, { readAt: d.now(), report: r.report })
+    return { r, answered }
+  })
+  if (isResult(read)) return read
+  // Read again for what this ask changed: the facts, the snapshot, the time it answered
+  const now = (await reg.list()).find((x) => x.runtimeId === p.runtimeId) ?? p
+  return {
+    ok: true,
+    body: runtimeDetail({
+      profile: now,
+      local,
+      here: d.version,
+      answering: read.answered,
+      ...(read.r.ok ? {} : { refusal: { code: read.r.code, message: read.r.message } })
+    })
+  }
+}
+
+async function ping(args: Record<string, unknown>, d: RuntimesDeps): Promise<Result> {
+  const reg = await d.registry()
+  const p = await named('ping', args, reg)
+  if (isResult(p)) return p
+  const body = await withLink(d, reg, p, async (link, reached) => {
+    const r = await link.call('projects-list', {})
+    const h = link.hello()
+    if (!(r instanceof RemoteError)) await reached()
+    return {
+      runtimeId: p.runtimeId,
+      answers: !(r instanceof RemoteError),
+      ...(h && { asteraVersion: h.asteraVersion, platform: h.platform }),
+      ...(r instanceof RemoteError && { code: r.code })
+    }
+  })
+  return isResult(body) ? body : { ok: true, body }
+}
+
+/** `--add a,b`: the ids, trimmed, empty ones left out; null for a flag given with no value. */
+const idsOf = (v: unknown): string[] | null =>
+  v === undefined ? [] : typeof v === 'string' ? v.split(',').map((s) => s.trim()).filter((s) => s !== '') : null
+
+async function expectIds(args: Record<string, unknown>, d: RuntimesDeps): Promise<Result> {
+  const add = idsOf(args.add)
+  const remove = idsOf(args.remove)
+  if (add === null || remove === null) return failure('INVALID_ARGUMENTS', '--add and --remove take extension ids, comma separated (from `astera ext list`)')
+  const reg = await d.registry()
+  const p = await named('expect', args, reg)
+  if (isResult(p)) return p
+  const local = await localOf(d)
+  if (isResult(local)) return local
+  // §6.1: the list names this computer's entries. An id to remove need not be here, so one removed here can still be
+  // cleared from the list
+  const here = new Set(local.map((e) => e.id))
+  const unknown = add.filter((id) => !here.has(id))
+  if (unknown.length > 0)
+    return failure('INVALID_ARGUMENTS', `${unknown.join(', ')} ${unknown.length === 1 ? 'is' : 'are'} not an extension on this computer; \`astera ext list\` names them`)
+  let expected = p.expected ?? []
+  if (add.length > 0 || remove.length > 0) {
+    expected = [...expected.filter((id) => !remove.includes(id)), ...add]
+    await reg.setExpected(p.runtimeId, expected)
+  }
+  return { ok: true, body: { runtimeId: p.runtimeId, expected: liveExpected([...new Set(expected)], local) } }
 }
 
 export async function runRuntimesCommand(cmd: string, args: Record<string, unknown>, d: RuntimesDeps): Promise<Result> {
@@ -211,6 +359,12 @@ export async function runRuntimesCommand(cmd: string, args: Record<string, unkno
         }
       }
     }
+    case 'runtimes-get':
+      return get(args, d)
+    case 'runtimes-ping':
+      return ping(args, d)
+    case 'runtimes-expect':
+      return expectIds(args, d)
     default:
       return failure('INVALID_ARGUMENTS', `unknown runtimes command ${cmd}`)
   }

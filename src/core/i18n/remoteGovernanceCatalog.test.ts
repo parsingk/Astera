@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import { CATALOGS, LANGS } from './index'
 
-const PREFIXES = ['settings.remote.revoke.', 'jobs.run.pausedRevoked']
+const PREFIXES = ['settings.remote.revoke.', 'jobs.run.pausedRevoked', 'settings.remote.detail.']
 const keysOf = (): string[] => Object.keys(CATALOGS.ko.messages).filter((k) => PREFIXES.some((p) => k.startsWith(p)))
 
 describe('the remote governance catalog', () => {
@@ -45,6 +45,25 @@ describe('the remote governance catalog', () => {
       ],
       'settings.remote.revoke.notPaused': ['Could not pause: {jobs}.', '일시 중지하지 못한 Job: {jobs}.'],
       'jobs.run.pausedRevoked': ['Paused: made from {name}, which was unpaired', '일시 중지됨: {name} 에서 만들었고 그 페어링은 해제되었습니다']
+    }
+    for (const [key, [english, korean]] of Object.entries(copy)) {
+      expect(en[key], key).toBe(english)
+      expect(ko[key], key).toBe(korean)
+    }
+  })
+
+  // Ruling C6: the state words the CLI prints and the detail shows (Task 17), in the plan's English and Korean
+  it('keeps the comparison state words', () => {
+    const en = CATALOGS.en.messages as Record<string, string>
+    const ko = CATALOGS.ko.messages as Record<string, string>
+    const copy: Record<string, [string, string]> = {
+      'settings.remote.detail.state.missing': ['Not there', '그 컴퓨터에 없음'],
+      'settings.remote.detail.state.different': ['Different there', '그 컴퓨터와 다름'],
+      'settings.remote.detail.state.off': ['Off there', '그 컴퓨터에서 꺼짐'],
+      'settings.remote.detail.state.secretMissing': ['Secret missing there', '그 컴퓨터에 비밀값 없음'],
+      'settings.remote.detail.state.same': ['Same', '같음'],
+      'settings.remote.detail.state.onlyThere': ['Only there', '그 컴퓨터에만 있음'],
+      'settings.remote.detail.updateThere': ['Update Astera on that computer.', '그 컴퓨터의 Astera를 업데이트하세요.']
     }
     for (const [key, [english, korean]] of Object.entries(copy)) {
       expect(en[key], key).toBe(english)

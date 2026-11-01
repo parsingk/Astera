@@ -262,6 +262,26 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     summary: 'forget a paired Runtime on this machine (it does not revoke the pairing there)',
     flags: [ID('<runtimeId|name>', 'the Runtime to forget (from `runtimes list`)')]
   },
+  'runtimes-get': {
+    summary: "a paired Runtime's setup, read now and compared with this computer's extensions",
+    detail:
+      'Reads the Runtime\'s report (its extensions, agent profiles, policy, sandbox, credential names, secret store and findings counts: names and states, never values or paths), keeps it as the last one read, and compares it with this computer\'s extensions. The Runtime answers only a person\'s own shell; an agent session is refused there. When the Runtime does not answer, the last report kept is shown with when it was read, and the command still exits 0.',
+    flags: [ID('<runtimeId|name>', 'the Runtime to read (from `runtimes list`)')]
+  },
+  'runtimes-ping': {
+    summary: 'whether a paired Runtime answers now, with its Astera version and OS',
+    flags: [ID('<runtimeId|name>', 'the Runtime to ask (from `runtimes list`)')]
+  },
+  'runtimes-expect': {
+    summary: "which of this computer's extensions should be on a paired Runtime too",
+    detail:
+      'With neither flag it lists them. The ids are this computer\'s, from `astera ext list`; an id that is not here is refused. `runtimes get` then says of each whether it is there, the same, different, off, or missing a secret. Nothing is installed there: install it in that computer\'s own Settings or CLI.',
+    flags: [
+      ID('<runtimeId|name>', 'the Runtime (from `runtimes list`)'),
+      { name: 'add', value: '<ids>', about: 'extension ids to expect there, comma separated' },
+      { name: 'remove', value: '<ids>', about: 'extension ids to stop expecting there, comma separated' }
+    ]
+  },
   'plugins-install': {
     summary: 'install a plugin from a folder or from npm, after you approve what it asks for',
     detail:

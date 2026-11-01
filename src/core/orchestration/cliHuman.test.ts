@@ -1113,3 +1113,132 @@ describe('runtime revoke', () => {
     expect(humanFor('runtime-revoke', { revoked: true, clientId: 'cli_1' })).toBeNull()
   })
 })
+
+// Remote governance design §10.2, §4.3, §5.4, ruling C6: the words come from the catalog's English, as the detail says them
+describe('runtimes get and ping', () => {
+  const two = (n: number): string => String(n).padStart(2, '0')
+  const local = (iso: string): string => {
+    const d = new Date(iso)
+    return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`
+  }
+  const SEEN = '2026-10-08T01:02:03.000Z'
+  const READ = '2026-10-08T04:05:06.000Z'
+  const ext = (id: string, kind: string, over: Record<string, unknown> = {}) => ({ id, kind, name: id, enabled: true, providers: ['claude'], ...over })
+  const row = (id: string, kind: string, expected: boolean, state: string | null, here: boolean, there: boolean) => ({
+    id, kind, name: id.toUpperCase(), expected, state, here: here ? ext(id, kind) : null, there: there ? ext(id, kind) : null
+  })
+  const REPORT = {
+    version: 1,
+    astera: { version: '1.4.8', platform: 'darwin' },
+    extensions: [ext('skill-a', 'skill')],
+    profiles: [{ id: 'p1', name: 'Review', status: 'active', permission: 'bypass', sandbox: true, mcpExclude: [], accountsThere: 1, accountsNamed: 2 }],
+    appBypass: false,
+    policy: {
+      mode: 'observe',
+      otherwise: 'allow',
+      rules: 3,
+      enforce: { claude: { terminal: null, chat: 'hooks-off' }, codex: { terminal: 'codex-daemon', chat: null } },
+      cliVersions: { claude: '2.1.300', codex: null }
+    },
+    sandbox: { claude: { kind: 'sandbox', blocker: 'userns-restricted' }, codex: { kind: 'deny-only', blocker: null } },
+    credentials: { hideOnly: [{ alias: 'npm', presets: ['npm'], envNames: ['NPM_TOKEN'], hidden: true }], mcp: [{ serverId: 'mcp-gh', serverName: 'GitHub', names: ['GH_TOKEN'], hidden: false }] },
+    secretStore: { kind: 'owner-only-files', ok: false, code: 'secret-file-unsafe' },
+    findings: { total: 4, byRule: { 'stale-runtime': 1 } }
+  }
+  const detail = (over: Record<string, unknown> = {}) => ({
+    runtimeId: 'rt_a',
+    name: 'Office',
+    fingerprint: 'A'.repeat(43),
+    permission: 'full-control',
+    createdAt: SEEN,
+    lastSeenAt: SEEN,
+    facts: { asteraVersion: '1.4.8', platform: 'darwin', hostProtocol: 4, capabilities: [], readAt: SEEN },
+    here: '1.5.0',
+    older: true,
+    answering: true,
+    snapshot: { readAt: READ, report: REPORT },
+    comparison: [
+      row('mcp-a', 'mcp', true, 'missing', true, false),
+      row('mcp-b', 'mcp', true, 'secret-missing', true, true),
+      row('skill-a', 'skill', true, 'different', true, true),
+      row('skill-b', 'skill', true, 'off', true, true),
+      row('skill-c', 'skill', true, 'same', true, true),
+      row('skill-d', 'skill', false, null, true, false),
+      row('skill-z', 'skill', false, null, false, true)
+    ],
+    ...over
+  })
+  const lines = (d: Record<string, unknown>): string[] => (humanFor('runtimes-get', d) ?? '').split('\n').map((l) => l.trimEnd())
+
+  it('runtimes-get names the Runtime, both versions, its OS and when it was last seen, and says to update when older', () => {
+    const out = lines(detail())
+    expect(out[0]).toBe(`Office  rt_a  Astera 1.4.8 there, 1.5.0 here  darwin  Last seen ${local(SEEN)}`)
+    expect(out[1]).toBe('Update Astera on that computer.')
+    expect(out).toContain(`Read ${local(READ)}`)
+    // A newer or equal Runtime is shown, not told to update; one never reached says so
+    const newer = lines(detail({ older: false, lastSeenAt: null }))
+    expect(newer[0]).toBe('Office  rt_a  Astera 1.4.8 there, 1.5.0 here  darwin  Not reached yet')
+    expect(newer).not.toContain('Update Astera on that computer.')
+  })
+
+  it('runtimes-get shows a line per comparison row with its state word', () => {
+    const out = lines(detail())
+    const at = out.indexOf('Extensions')
+    expect(out.slice(at + 1, at + 8).map((l) => l.split(/\s{2,}/))).toEqual([
+      ['Not there', 'mcp', 'MCP-A', 'mcp-a'],
+      ['Secret missing there', 'mcp', 'MCP-B', 'mcp-b'],
+      ['Different there', 'skill', 'SKILL-A', 'skill-a'],
+      ['Off there', 'skill', 'SKILL-B', 'skill-b'],
+      ['Same', 'skill', 'SKILL-C', 'skill-c'],
+      ['-', 'skill', 'SKILL-D', 'skill-d'],
+      ['Only there', 'skill', 'SKILL-Z', 'skill-z']
+    ])
+  })
+
+  it('runtimes-get shows the report parts, with values staying on that computer', () => {
+    const text = humanFor('runtimes-get', detail()) ?? ''
+    for (const part of [
+      'Run agents without permission checks is off there.',
+      'policy observe, otherwise allow, 3 rules',
+      'Enforce cannot start: hooks-off',
+      'Enforce can start',
+      'userns-restricted',
+      'Values stay on that computer. Astera never copies them.',
+      'NPM_TOKEN',
+      'Secret store: owner-only files, check fails (secret-file-unsafe)',
+      'Findings there: 4'
+    ])
+      expect(text, part).toContain(part)
+    // Ruling R2-1: a word this build does not know is shown as it came
+    const newer = { ...REPORT, secretStore: { kind: 'os-keychain', ok: true }, sandbox: { ...REPORT.sandbox, codex: { kind: 'microvm', blocker: null } } }
+    const shown = humanFor('runtimes-get', detail({ snapshot: { readAt: READ, report: newer } })) ?? ''
+    expect(shown).toContain('Secret store: os-keychain, check passes')
+    expect(shown).toContain('microvm')
+  })
+
+  it('runtimes-get says not read yet, offline, and the update line for a Runtime that cannot report', () => {
+    const never = lines(detail({ snapshot: null, comparison: [], answering: true, refusal: { code: 'RUNTIME_CAPABILITY_MISSING', message: 'this Runtime cannot report its setup; update Astera there' } }))
+    expect(never).toContain('Not read yet')
+    expect(never).toContain('This Runtime cannot report its setup. Update Astera there.')
+    expect(never).not.toContain('Values stay on that computer. Astera never copies them.')
+    // The last snapshot under the line that it does not answer, with its read time (§5.4)
+    const offline = lines(detail({ answering: false, refusal: { code: 'RUNTIME_OFFLINE', message: 'connect ECONNREFUSED' } }))
+    expect(offline.indexOf('Does not answer (RUNTIME_OFFLINE)')).toBeGreaterThan(0)
+    expect(offline.indexOf(`Read ${local(READ)}`)).toBeGreaterThan(offline.indexOf('Does not answer (RUNTIME_OFFLINE)'))
+    const refused = lines(detail({ refusal: { code: 'RUNTIME_PERMISSION_DENIED', message: 'control-plane-report answers a person on another computer' } }))
+    expect(refused).toContain('RUNTIME_PERMISSION_DENIED: control-plane-report answers a person on another computer')
+  })
+
+  // Ruling R9-3: a Runtime that could not read its registry is not one with nothing installed
+  it('runtimes-get says it could not read its extensions in place of the rows', () => {
+    const out = lines(detail({ snapshot: { readAt: READ, report: { ...REPORT, extensions: null } }, comparison: [row('skill-a', 'skill', true, null, true, false)] }))
+    const at = out.indexOf('Extensions')
+    expect(out[at + 1]).toBe('Could not read its extensions.')
+    expect(out.join('\n')).not.toContain('skill-a')
+  })
+
+  it('runtimes-ping says it answers with the version and OS, or does not answer with the code', () => {
+    expect(humanFor('runtimes-ping', { runtimeId: 'rt_a', answers: true, asteraVersion: '1.5.1', platform: 'linux' })).toBe('Answers: Astera 1.5.1 on linux')
+    expect(humanFor('runtimes-ping', { runtimeId: 'rt_a', answers: false, code: 'RUNTIME_OFFLINE' })).toBe('Does not answer (RUNTIME_OFFLINE)')
+  })
+})

@@ -6,6 +6,9 @@ import { resolveRuntime, runRuntimesCommand, controllerRegistry, type RuntimesDe
 import { RemoteError, type RuntimeLink } from '../core/remote/client'
 import { formatPairing } from '../core/remote/pairing'
 import type { RuntimeProfile } from '../core/runtimes/registry'
+import type { RemoteAnswer, RemoteLink, RemoteTarget } from '../core/remote/link'
+import type { ClientInfo, HelloFrame } from '../core/remote/frames'
+import { REPORT_CAPABILITY, type ControlPlaneReport, type ReportExtension } from '../core/controlPlane/report'
 
 const FP = 'A'.repeat(43)
 const NOW = '2026-10-08T00:00:00.000Z'
@@ -217,5 +220,170 @@ describe('astera runtimes (remote runtime design §4.4, §4.5)', () => {
     expect(removed).toMatchObject({ ok: true, body: { removed: 'rt_a', revoked: false } })
     expect(await reg.list()).toEqual([])
     expect(await runRuntimesCommand('runtimes-remove', { id: 'rt_a' }, deps().d)).toMatchObject({ ok: false, error: { code: 'RUNTIME_NOT_FOUND' } })
+  })
+  // Remote governance design §4.1, ruling C9: the sign-in hello's facts are kept with the pairing
+  it('add keeps the facts the sign-in hello said', async () => {
+    const pair = formatPairing({ address: '10.0.0.2', port: 47831, code: 'GOODCODE01', fingerprint: FP })
+    await runRuntimesCommand('runtimes-add', { pair }, deps().d)
+    const [kept] = await (await controllerRegistry(dir)).list()
+    expect(kept.facts).toMatchObject({ asteraVersion: '1.4.8', platform: 'win32', hostProtocol: 4, capabilities: [] })
+  })
+})
+
+describe('astera runtimes get, ping and expect (remote governance design §10.2, §4.3, §5.4, §6.1)', () => {
+  const OLD = '2026-10-01T00:00:00.000Z'
+  const HASH = (c: string): string => `cmp1:sha256:${c.repeat(64)}`
+  const ext = (id: string, kind: ReportExtension['kind'], over: Partial<ReportExtension> = {}): ReportExtension => ({ id, kind, name: id, enabled: true, providers: ['claude'], ...over })
+  const LOCAL: ReportExtension[] = [ext('skill-a', 'skill', { compareHash: HASH('a') }), ext('mcp-x', 'mcp', { secretNames: [] })]
+  const report = (extensions: ReportExtension[] | null): ControlPlaneReport => ({
+    version: 1,
+    astera: { version: '1.5.0', platform: 'darwin' },
+    extensions,
+    profiles: [],
+    appBypass: false,
+    policy: null,
+    sandbox: { claude: { kind: 'sandbox', blocker: null }, codex: { kind: 'deny-only', blocker: null } },
+    credentials: null,
+    secretStore: { kind: 'owner-only-files', ok: true },
+    findings: null
+  })
+  const THERE = report([ext('skill-a', 'skill', { compareHash: HASH('b') }), ext('skill-z', 'skill', { compareHash: HASH('z') })])
+  const hello = (over: Partial<HelloFrame> = {}): HelloFrame => ({
+    t: 'hello', runtimeId: 'rt_a', displayName: 'Office', asteraVersion: '1.5.0', hostProtocol: 4, gatewayProtocol: 1, bootId: 'b', platform: 'darwin', pathStyle: 'posix', permission: 'full-control', capabilities: [REPORT_CAPABILITY], ...over
+  })
+
+  /** A paired Runtime behind the `link` seam: `h` null is one that never answers. Each call says the hello first, as a
+   *  connection does. */
+  function remote(answers: Record<string, RemoteAnswer>, h: HelloFrame | null = hello()) {
+    const opened: Array<{ target: RemoteTarget; client: ClientInfo }> = []
+    const calls: string[] = []
+    let closed = 0
+    const link = (target: RemoteTarget, o: { onHello(h: HelloFrame): void; client: ClientInfo }): RemoteLink => {
+      opened.push({ target, client: o.client })
+      let heard: HelloFrame | null = null
+      return {
+        hello: () => heard,
+        call: async (cmd) => {
+          calls.push(cmd)
+          if (h === null) return new RemoteError('RUNTIME_OFFLINE', 'connect ECONNREFUSED 10.0.0.2:47831')
+          heard = h
+          o.onHello(h)
+          return answers[cmd] ?? { status: 404, body: { error: `unknown ${cmd}` } }
+        },
+        subscribe: () => () => {},
+        close: () => void closed++
+      }
+    }
+    return { link, opened, calls, closedCount: () => closed }
+  }
+  const getDeps = (r: ReturnType<typeof remote>, over: Partial<RuntimesDeps> = {}) =>
+    deps({ link: r.link, localExtensions: async () => LOCAL, version: '1.5.0', ...over }).d
+  const pairOne = async (over: Partial<RuntimeProfile> = {}) => {
+    const reg = await controllerRegistry(dir)
+    await reg.add(profile(over), 'tok-a')
+    return reg
+  }
+
+  it('get reads, keeps the snapshot with its time, and answers the comparison', async () => {
+    const reg = await pairOne()
+    await reg.setExpected('rt_a', ['skill-a', 'mcp-x'])
+    const r = remote({ 'control-plane-report': { status: 200, body: THERE } })
+    const got = await runRuntimesCommand('runtimes-get', { id: 'Office' }, getDeps(r))
+    expect(got).toMatchObject({
+      ok: true,
+      body: {
+        runtimeId: 'rt_a',
+        name: 'Office',
+        here: '1.5.0',
+        older: false,
+        answering: true,
+        facts: { asteraVersion: '1.5.0', platform: 'darwin' },
+        snapshot: { readAt: NOW, report: THERE }
+      }
+    })
+    const body = (got as { body: { comparison: Array<{ id: string; state: string | null; expected: boolean }>; refusal?: unknown } }).body
+    expect(body.refusal).toBeUndefined()
+    expect(body.comparison.map((c) => [c.id, c.expected, c.state])).toEqual([
+      ['mcp-x', true, 'missing'],
+      ['skill-a', true, 'different'],
+      ['skill-z', false, null]
+    ])
+    const [kept] = await reg.list()
+    expect(kept.snapshot).toEqual({ readAt: NOW, report: THERE })
+    // Ruling C9: the hello's facts and the time it answered are kept, as answerRemote keeps them
+    expect(kept.facts).toMatchObject({ asteraVersion: '1.5.0', platform: 'darwin', capabilities: [REPORT_CAPABILITY] })
+    expect(kept.lastSeenAt).not.toBeNull()
+    expect(r.calls).toEqual(['control-plane-report'])
+    expect(r.opened[0].target).toMatchObject({ runtimeId: 'rt_a', address: '10.0.0.2', port: 47831, fingerprint: FP, token: 'tok-a' })
+    expect(r.closedCount()).toBe(1)
+  })
+
+  it('get with the Runtime offline answers the last snapshot and says so, exit 0', async () => {
+    const reg = await pairOne()
+    await reg.keepSnapshot('rt_a', { readAt: OLD, report: THERE })
+    const got = await runRuntimesCommand('runtimes-get', { id: 'rt_a' }, getDeps(remote({}, null)))
+    expect(got).toMatchObject({
+      ok: true,
+      body: { answering: false, snapshot: { readAt: OLD, report: THERE }, refusal: { code: 'RUNTIME_OFFLINE' }, facts: null, lastSeenAt: null }
+    })
+    expect((await reg.list())[0]).toMatchObject({ snapshot: { readAt: OLD }, lastSeenAt: null })
+  })
+
+  // §4.3: a Runtime older than this app is shown with both versions and told to update, never refused bare
+  it('get of an older Runtime shows its facts and the update message', async () => {
+    await pairOne()
+    const r = remote({ 'control-plane-report': { status: 501, body: { error: 'unknown command control-plane-report' } } }, hello({ asteraVersion: '1.4.8', capabilities: [] }))
+    const got = await runRuntimesCommand('runtimes-get', { id: 'rt_a' }, getDeps(r))
+    expect(got).toMatchObject({
+      ok: true,
+      body: {
+        facts: { asteraVersion: '1.4.8' },
+        here: '1.5.0',
+        older: true,
+        answering: true,
+        snapshot: null,
+        refusal: { code: 'RUNTIME_CAPABILITY_MISSING', message: 'this Runtime cannot report its setup; update Astera there' }
+      }
+    })
+  })
+
+  it('ping answers with version and OS, or does not answer with the code', async () => {
+    const reg = await pairOne()
+    const up = remote({ 'projects-list': { status: 200, body: [] } }, hello({ asteraVersion: '1.5.1', platform: 'linux' }))
+    expect(await runRuntimesCommand('runtimes-ping', { id: 'Office' }, getDeps(up))).toEqual({
+      ok: true,
+      body: { runtimeId: 'rt_a', answers: true, asteraVersion: '1.5.1', platform: 'linux' }
+    })
+    expect(up.calls).toEqual(['projects-list'])
+    // Ruling C9: what the hello said and when it answered
+    expect((await reg.list())[0]).toMatchObject({ facts: { asteraVersion: '1.5.1', platform: 'linux' }, lastSeenAt: expect.any(String) })
+    expect(await runRuntimesCommand('runtimes-ping', { id: 'rt_a' }, getDeps(remote({}, null)))).toEqual({
+      ok: true,
+      body: { runtimeId: 'rt_a', answers: false, code: 'RUNTIME_OFFLINE' }
+    })
+  })
+
+  it('expect adds, removes and lists; an id unknown here is 400', async () => {
+    const reg = await pairOne()
+    const d = getDeps(remote({}))
+    expect(await runRuntimesCommand('runtimes-expect', { id: 'Office', add: 'skill-a, mcp-x' }, d)).toEqual({ ok: true, body: { runtimeId: 'rt_a', expected: ['skill-a', 'mcp-x'] } })
+    expect(await runRuntimesCommand('runtimes-expect', { id: 'Office', remove: 'skill-a' }, d)).toEqual({ ok: true, body: { runtimeId: 'rt_a', expected: ['mcp-x'] } })
+    expect(await runRuntimesCommand('runtimes-expect', { id: 'Office' }, d)).toEqual({ ok: true, body: { runtimeId: 'rt_a', expected: ['mcp-x'] } })
+    expect((await reg.list())[0].expected).toEqual(['mcp-x'])
+    const unknown = await runRuntimesCommand('runtimes-expect', { id: 'Office', add: 'skill-a,nope' }, d)
+    expect(unknown).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENTS', message: expect.stringContaining('nope') } })
+    // Refused whole: the id that is here is not added either
+    expect((await reg.list())[0].expected).toEqual(['mcp-x'])
+  })
+
+  // Remote governance design §7.1: the Runtime answers its report only to a person's shell
+  it('the links get and ping open say agent false from a person\'s shell and true from a session', async () => {
+    await pairOne()
+    for (const [agent, said] of [[false, false], [true, true], [undefined, true]] as const) {
+      const r = remote({ 'control-plane-report': { status: 200, body: THERE }, 'projects-list': { status: 200, body: [] } })
+      await runRuntimesCommand('runtimes-get', { id: 'rt_a' }, getDeps(r, { agent }))
+      await runRuntimesCommand('runtimes-ping', { id: 'rt_a' }, getDeps(r, { agent }))
+      expect(r.opened.map((o) => o.client)).toEqual([0, 1].map(() => ({ name: 'astera cli', version: '1.5.0', surface: 'cli', agent: said })))
+    }
   })
 })

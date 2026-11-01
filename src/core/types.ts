@@ -45,6 +45,8 @@ import type { ThemeId } from './theme/themes'
 import type { ProfilePermission } from './agentProfiles/types'
 import type { AuditDecision, AuditMode, AuditRule } from './audit/types'
 import type { Hiding } from './credentials/types'
+import type { RuntimeFacts, RuntimeSnapshot } from './controlPlane/report'
+import type { ComparisonRow } from './controlPlane/compare'
 import type { ConvTurn } from './history/convTypes'
 export type { ConvTurn } from './history/convTypes'
 // The Jobs sidebar shows a Task's status, so the orchestration domain's own enum comes in here. Only
@@ -855,6 +857,27 @@ export interface RemoteRuntimeInfo {
   /** From its last hello, by any surface (remote governance design §4.1); absent before the first. */
   asteraVersion?: string
   platform?: string
+}
+
+/** A paired Runtime's detail (remote governance design §10.1, §10.2): its pairing, what its hello said, its last report
+ *  and this computer's extensions against it. `astera runtimes get --json` prints it, and Settings shows it. */
+export interface RuntimeDetail {
+  runtimeId: string
+  name: string
+  fingerprint: string
+  permission: 'read-only' | 'full-control'
+  createdAt: string
+  lastSeenAt: string | null
+  facts: RuntimeFacts | null
+  /** This app's version, and whether the Runtime's is older (§4.3). */
+  here: string
+  older: boolean
+  /** Whether the last ask was answered now; null when this read did not ask. */
+  answering: boolean | null
+  snapshot: RuntimeSnapshot | null
+  /** Why no fresh report: the Runtime's refusal or its missing capability. */
+  refusal?: { code: string; message: string }
+  comparison: ComparisonRow[]
 }
 
 /** What a remote reply says about its Runtime beside the data (remote runtime design §2.7, §3.6). */

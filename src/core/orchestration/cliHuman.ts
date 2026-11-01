@@ -12,9 +12,11 @@ import type { CheckResult, JobSourceRef } from './types'
 import type { AuditAction, CoverageNote, SandboxCoverageRow } from '../audit/types'
 import { ACTION_PHRASES, COVERAGE_NOTE_PHRASES } from '../audit/phrases'
 import { SANDBOX_TABLE_CAPTION, sandboxRowCaption } from '../sandbox/coverage'
-import { t } from '../i18n'
+import { t, type MessageKey } from '../i18n'
 import { observeNote, unreadLine } from '../findings/note'
 import type { FindingSource, ObserveHistory } from '../findings/types'
+import type { RuntimeDetail } from '../types'
+import type { ComparisonRow, ComparisonState } from '../controlPlane/compare'
 
 /** 상태 한 낱말. **파생값과 플래그를 한 낱말로 접는다** — 사람이 목록에서 훑는 것이 이것이고,
  *  훑으려면 한 칸에 있어야 한다.
@@ -351,6 +353,115 @@ const unpassable = (s: string): boolean => s === '-' || s.startsWith('--')
 /** `args`: the flags the command was typed with, as the parser keys them, for an answer that names how to ask again;
  *  `shell`, the family a hint is quoted for (this machine's). The CLI's words differ from the screen's (strings in
  *  en.ts) for decisions, coverage classes and levels: they are the flag words and terse column heads a script reads back. */
+// A record rather than a list, so tsc flags a state added to compare.ts and not here.
+const STATE_KEYS: Record<ComparisonState, MessageKey> = {
+  missing: 'settings.remote.detail.state.missing',
+  different: 'settings.remote.detail.state.different',
+  off: 'settings.remote.detail.state.off',
+  'secret-missing': 'settings.remote.detail.state.secretMissing',
+  same: 'settings.remote.detail.state.same'
+}
+
+/** A comparison row's word: its state when it is expected, "only there" for an entry only there, a dash otherwise. */
+const comparisonWord = (row: ComparisonRow): string =>
+  row.state !== null ? t('en', STATE_KEYS[row.state]) : row.here === null ? t('en', 'settings.remote.detail.state.onlyThere') : '-'
+
+/**
+ * Remote governance design §10.1, §10.2: a paired Runtime as `runtimes get` read it, in the catalog's English the detail
+ * says (ruling C6). Who it is, both versions and when it was last seen; whether to update there; why no fresh report
+ * came, the line it does not answer above the last report's time (§5.4); then each part of that report. A state word a
+ * newer Runtime sends is printed as it came (ruling R2-1), and a part the Runtime could not read says so rather than
+ * reading as empty (ruling R9-3).
+ */
+function runtimeDetailText(d: RuntimeDetail): string {
+  const en = (key: MessageKey, params?: Record<string, string | number>): string => t('en', key, params)
+  const head = [
+    d.name,
+    d.runtimeId,
+    ...(d.facts ? [en('settings.remote.detail.versions', { there: d.facts.asteraVersion, here: d.here }), d.facts.platform] : []),
+    d.lastSeenAt === null ? en('settings.remote.paired.neverSeen') : en('settings.remote.paired.lastSeen', { at: localTime(d.lastSeenAt) })
+  ].join('  ')
+  const cannotReport = d.refusal?.code === 'RUNTIME_CAPABILITY_MISSING'
+  const why =
+    d.answering === false
+      ? [en('settings.remote.paired.offline', { code: d.refusal?.code ?? '' })]
+      : cannotReport
+        ? [en('settings.remote.detail.unsupported')]
+        : d.refusal
+          ? [en('settings.remote.failed', { code: d.refusal.code, message: d.refusal.message })]
+          : []
+  const top = [
+    head,
+    // The unsupported line already says to update there
+    ...(d.older && !cannotReport ? [en('settings.remote.detail.updateThere')] : []),
+    ...why,
+    d.snapshot ? en('settings.remote.detail.readAt', { at: localTime(d.snapshot.readAt) }) : en('settings.remote.detail.notReadYet')
+  ].join('\n')
+  if (!d.snapshot) return top
+  const r = d.snapshot.report
+  const unread = en('settings.remote.detail.unread')
+  const block = (heading: MessageKey, lines: string[]): string => [en(heading), ...lines].join('\n')
+  const extensions =
+    r.extensions === null
+      ? [en('settings.remote.detail.extensionsUnread')]
+      : d.comparison.length === 0
+        ? []
+        : [columns(d.comparison.map((c) => [comparisonWord(c), c.kind, c.name, c.id]))]
+  const agents = [
+    ...(r.appBypass === null ? [] : [en(r.appBypass ? 'settings.remote.detail.bypassOn' : 'settings.remote.detail.bypassOff')]),
+    ...(r.profiles === null
+      ? [unread]
+      : r.profiles.length === 0
+        ? []
+        : [columns(r.profiles.map((p) => [p.name, p.status, p.permission, p.sandbox ? 'sandbox on' : 'sandbox off', `accounts ${p.accountsThere}/${p.accountsNamed}`]))])
+  ]
+  const enforceWord = (code: string | null): string =>
+    code === null ? en('settings.remote.detail.enforceReady') : en('settings.remote.detail.enforceBlocked', { code })
+  const policy = r.policy
+  const protection = [
+    policy === null
+      ? unread
+      : `policy ${policy.mode}, otherwise ${policy.otherwise}, ${policy.rules} rules${policy.observingSince ? `, observing since ${localTime(policy.observingSince)}` : ''}`,
+    columns(
+      (['claude', 'codex'] as const).map((p) => [
+        p,
+        ...(policy?.enforce ? [`terminal: ${enforceWord(policy.enforce[p].terminal)}`, `chat: ${enforceWord(policy.enforce[p].chat)}`] : []),
+        `sandbox ${r.sandbox[p].kind}${r.sandbox[p].blocker === null ? '' : ` (${r.sandbox[p].blocker})`}`,
+        ...(policy ? [`CLI ${policy.cliVersions[p] ?? '-'}`] : []),
+        ...(p === 'codex' && r.sandbox.codexAccounts ? [`accounts set up ${r.sandbox.codexAccounts.ready}/${r.sandbox.codexAccounts.total}`] : [])
+      ])
+    )
+  ]
+  const credentials = [
+    en('settings.remote.detail.valuesStay'),
+    ...(r.credentials === null
+      ? [unread]
+      : r.credentials.hideOnly.length + r.credentials.mcp.length === 0
+        ? []
+        : [
+            columns([
+              ...r.credentials.hideOnly.map((h) => [h.alias, h.envNames.join(', '), h.hidden ? 'hidden' : 'not hidden']),
+              ...r.credentials.mcp.map((m) => [m.serverName, m.names.join(', '), m.hidden ? 'hidden' : 'not hidden'])
+            ])
+          ])
+  ]
+  const state = r.secretStore.ok
+    ? en('settings.remote.detail.secretStoreOk')
+    : en('settings.remote.detail.secretStoreFailed', { code: r.secretStore.code ?? 'failed' })
+  const store =
+    r.secretStore.kind === 'owner-only-files'
+      ? en('settings.remote.detail.secretStore', { state })
+      : en('settings.remote.detail.secretStoreOther', { kind: r.secretStore.kind, state })
+  return [
+    top,
+    block('settings.remote.detail.extensions', extensions),
+    block('settings.remote.detail.agents', agents),
+    block('settings.remote.detail.protection', protection),
+    block('settings.remote.detail.credentials', credentials),
+    [store, ...(r.findings === null ? [] : [en('settings.remote.detail.findingsThere', { count: r.findings.total })])].join('\n')
+  ].join('\n\n')
+}
+
 export function humanFor(
   cmd: string,
   data: Record<string, unknown>,
@@ -431,6 +542,13 @@ export function humanFor(
       )
       return [head, ...refused].join('\n')
     }
+    case 'runtimes-get':
+      return runtimeDetailText(data as unknown as RuntimeDetail)
+    // Remote governance design §10.2: the lines Settings › Remote Runtimes says after a Ping
+    case 'runtimes-ping':
+      return data.answers === true
+        ? t('en', 'settings.remote.paired.online', { version: str(data.asteraVersion), platform: str(data.platform) })
+        : t('en', 'settings.remote.paired.offline', { code: str(data.code) })
     // Lifecycle design §4, §7, §8: the Observe note while the usage findings wait for their history, a row per finding
     // (its rule, what it is about, why and what would resolve it), the lines that are not findings, then what could not
     // be read. The English the Host worded (Finding.reason, .action), and the catalog's for the two notes

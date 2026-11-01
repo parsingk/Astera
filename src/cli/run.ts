@@ -31,6 +31,7 @@ import { runMcpHttp } from './mcp/http'
 import { runRuntimeGateway } from './runtime/gateway'
 import { runRuntimeCommand, type RuntimeCommandDeps } from './runtime/commands'
 import { controllerRegistry, runRuntimesCommand } from './runtimes'
+import { localReportExtensions } from '../core/controlPlane/local'
 import { answerRemote, trailingRuntimeError } from './remote'
 import { askCallerSandboxed } from './callerSandboxed'
 import { clientTimeoutMs, followRun, type HostAnswer } from './follow'
@@ -1377,7 +1378,8 @@ export async function main(): Promise<void> {
       hostname: () => os.hostname(),
       now: () => new Date().toISOString(),
       version: CLI_VERSION,
-      agent: inAgentSession
+      agent: inAgentSession,
+      localExtensions: () => localReportExtensions(profileDir)
     })
     if (!done.ok) fail(done.error)
     out(renderOk(parsed.cmd, done.body, mode))

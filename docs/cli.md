@@ -554,6 +554,33 @@ answering at that address is refused. Five wrong codes burn the code.
 Listen on a private network, a VPN or Tailscale. Do not forward the port to the internet. A pairing is read-only
 unless `--full-control` is given; a read-only controller can read Jobs, Runs and Tasks but not change them.
 
+On the controller, the machine that paired with it:
+
+```text
+astera runtimes ping   --id office                  does it answer now, and with which Astera and OS
+astera runtimes get    --id office                  its setup, read now and compared with this computer
+astera runtimes expect --id office --add skill-a    expect this computer's skill-a there too
+```
+
+`get` reads the Runtime's report: its extensions, agent profiles, permission setting, policy, sandbox, credential
+names, secret store and findings counts. These are names, states and counts; no secret value, path, command line or
+Rule text leaves that computer. `get` keeps the report as the last one read, with when it was read, and compares it with
+this computer's extensions. The Runtime answers only a person's own shell. An agent session is refused there, as an MCP
+client is. A Runtime on an older Astera cannot report, and `get` says to update Astera there.
+
+When the Runtime does not answer, `get` shows the last report kept with its read time, says it does not answer, and
+still exits 0. `--json` gives the same as data (`RuntimeDetail`): `runtimeId`, `name`, `fingerprint`, `permission`,
+`createdAt`, `lastSeenAt`, `facts` (what its last sign-in said: `asteraVersion`, `platform`, `hostProtocol`,
+`capabilities`, `readAt`), `here` (this Astera's version), `older`, `answering`, `snapshot` (`readAt` and `report`),
+`refusal` (`code` and `message`, when no fresh report came) and `comparison`, a row per extension here and per one only
+there.
+
+`expect` names the extensions of this computer, by their ids from `astera ext list`, that should be on the Runtime too.
+`--add` and `--remove` take comma separated ids, and with neither it lists them. An id that is not on this computer is
+refused. `get` then says of each expected one whether it is not there, different there, off there, missing a secret
+there, or the same. Nothing installs there from here: install, update or turn it on in that computer's own Settings ›
+MCP & Skills.
+
 ### Plugins
 
 A plugin is a folder with a `package.json` whose `astera` field names its entry file, the Plugin API it is written
@@ -698,6 +725,9 @@ astera runtime revoke  --id <clientId>
 astera runtimes list
 astera runtimes add    [--pair <string>] [--address <host>] [--port <n>] [--code <code>] [--fingerprint <fp>] [--name <n>] [--replace]
 astera runtimes remove --id <runtimeId|name>
+astera runtimes get    --id <runtimeId|name>
+astera runtimes ping   --id <runtimeId|name>
+astera runtimes expect --id <runtimeId|name> [--add <ids>] [--remove <ids>]
 
 astera plugins list
 astera plugins get     --id <pluginId>
