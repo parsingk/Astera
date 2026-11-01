@@ -2,7 +2,8 @@
 // files and the state this Host already holds, and the ignore file. The Host gathers every input here, each source in a
 // try of its own, so a source it cannot read leaves its field undefined, is logged once naming it, and drops only the
 // findings that need it (§8, Review Focus 1); the rules themselves are pure (core/findings/compute.ts). One report is
-// kept for a minute, so the section, the profile marks and the CLI asking together read the disk once (§8, Review Focus 5).
+// kept for a minute, so the section, the profile marks and the CLI asking together read the disk once (§8, Review Focus 5),
+// unless runtimes.json changed since it was computed (remote governance design §9.2).
 // Nothing here acts on a finding (§1, §9), and the ignore list is the one thing these commands change for the person. A
 // compute also writes what the readers it calls write as they read: the history stamp the first time
 // (`findings-history.json`, since.ts), the copy a store reader keeps beside a damaged file, and the orphaned token files
@@ -28,6 +29,7 @@ import { ownMcpNames } from '../../core/extensions/discover'
 import { readCredentials } from '../../core/credentials/store'
 import { latestUsesSince } from '../../core/credentials/uses'
 import { profilePaths } from '../../core/profile/paths'
+import { localReportExtensions } from '../../core/controlPlane/local'
 import { computeFindings, type FindingInputs } from '../../core/findings/compute'
 import { readIgnored, writeIgnored, type IgnoredFile } from '../../core/findings/ignored'
 import { readFindingsSince } from '../../core/findings/since'
@@ -88,6 +90,12 @@ export interface FindingsDeps {
   /** The Claude Code on this machine, from the Host's version probe after a warm; null when it is not there or its
    *  version could not be read. */
   claudeVersion(): Promise<string | null>
+  /** This Host's Astera version, which outdated-runtime compares a Runtime's with (remote governance design §9.3). */
+  asteraVersion: string
+  /** runtimes.json's stamp (core/runtimes/registry.ts registryStamp), null when it is absent or cannot be looked at; never
+   *  rejects. A change drops the minute's report, so a fresh snapshot, an expected list or a pairing written by the app,
+   *  the CLI or MCP shows at the next request (§9.2). */
+  runtimesStamp(): Promise<string | null>
   log(line: string): void
 }
 
@@ -181,6 +189,10 @@ export async function gatherFindings(d: FindingsDeps, nowMs: number): Promise<{ 
           }
           return names
         })
+  // This computer's entries as a Runtime's report would give them, hashed, to compare with each kept snapshot (remote
+  // governance design §9.2). Read on its own, after the registry: a copy it cannot hash leaves that entry's hash out
+  // rather than failing the source (controlPlane/local.ts)
+  const localExtensions = await read('extension-hashes', () => localReportExtensions(dir))
   // The canonical copies are read only to place a use (§4.12): with no registry there is none, and the rule that reads
   // them needs the registry too
   const uses = await read('extension-uses', async () => {
@@ -212,7 +224,9 @@ export async function gatherFindings(d: FindingsDeps, nowMs: number): Promise<{ 
       runtimes,
       extensionUses: uses?.summary,
       extensionCopies: uses?.copies,
-      claudeVersion
+      claudeVersion,
+      asteraVersion: d.asteraVersion,
+      localExtensions
     },
     ignored
   }
@@ -246,6 +260,8 @@ export function createHostFindings(d: FindingsDeps): HostFindings {
   let computing: { generation: number; run: Promise<FindingsReport> } | null = null
   /** Counts the ignore changes: a compute that began before one is not kept, nor shared after it. */
   let generation = 0
+  /** The runtimes.json stamp the current generation began under; undefined until the first request reads one. */
+  let stamp: string | null | undefined
 
   const compute = async (atMs: number): Promise<FindingsReport> => {
     const { inputs, ignored } = await gatherFindings(d, atMs)
@@ -255,7 +271,12 @@ export function createHostFindings(d: FindingsDeps): HostFindings {
     return ignored === null ? { ...report, unread: [...report.unread, 'ignored'] } : report
   }
 
-  const report = (): Promise<FindingsReport> => {
+  const report = async (): Promise<FindingsReport> => {
+    // A changed runtimes.json is a change as forget's are (controller ruling C7): the minute's report and a compute begun
+    // under the old stamp both go. Null against null is no change
+    const seen = await d.runtimesStamp()
+    if (stamp !== undefined && seen !== stamp) forget()
+    stamp = seen
     const now = nowMs()
     if (cache !== null && now >= cache.atMs && now - cache.atMs < FINDINGS_CACHE_MS) return Promise.resolve(cache.report)
     if (computing !== null && computing.generation === generation) return computing.run

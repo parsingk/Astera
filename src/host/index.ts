@@ -27,7 +27,7 @@ import { cliVersionProbe } from '../core/sessions/cliVersion'
 import { srtCheckRunner } from '../core/sandbox/srtCheck'
 import { REPORT_CAPABILITY } from '../core/controlPlane/report'
 import { buildControlPlaneReport, cachedReportProbes } from './controlPlaneReport'
-import { listPairedRuntimes } from '../core/runtimes/registry'
+import { listPairedRuntimes, registryStamp } from '../core/runtimes/registry'
 import { hidingLog } from '../core/extensions/secrets'
 import { createHidingSource, projectOfWorktrees } from '../core/credentials/hiding'
 import { sweepGeneratedMcp } from '../core/extensions/resolve'
@@ -988,6 +988,9 @@ async function main(): Promise<void> {
       // What the warm learnt, never a synchronous ask: a CLI that is not there, or whose version could not be read, is unknown
       return claudeVersions.cached('claude') ?? null
     },
+    asteraVersion: hostVersion,
+    // Whoever writes runtimes.json (the app, the CLI, MCP), the next request computes afresh (remote governance §9.2)
+    runtimesStamp: () => registryStamp(runtimesDir),
     log: (m) => log.write(m)
   })
   // The Runtime report (remote governance design §5.1, §5.2, §13): composed from the probes above without starting a

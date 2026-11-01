@@ -236,7 +236,7 @@ describe('the findings catalog', () => {
   it('names every source a report can leave unread', () => {
     const sources: FindingSource[] = [
       'profiles', 'accounts', 'orchestration', 'tokens', 'policy', 'records', 'extensions', 'account-mcp', 'credentials',
-      'credential-uses', 'runtimes', 'extension-uses', 'ignored', 'settings', 'cli-version'
+      'credential-uses', 'runtimes', 'extension-uses', 'ignored', 'settings', 'cli-version', 'extension-hashes'
     ]
     expect(Object.keys(SOURCE_KEYS).sort()).toEqual([...sources].sort())
     for (const lang of LANGS) {
