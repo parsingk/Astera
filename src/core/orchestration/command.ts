@@ -1595,6 +1595,12 @@ function jobForCaller<T extends object>(caller: RuleCaller, view: T): T {
   return rest as T
 }
 
+/** jobForCaller on the Job a state change answers with (final review F3): run-create, run-start and run-resume reply
+ *  with the Job they changed. */
+function jobResForCaller<T extends object>(caller: RuleCaller, r: Res<T>): Res<T> {
+  return r.ok ? { ...r, value: jobForCaller(caller, r.value) } : r
+}
+
 /** The refusal of a controller or an agent that resumes, runs or deletes a Job a revoke paused, or sets a Task of it
  *  going again (Job.pausedBy; remote governance design §8.2, the person's decision P2), or null. Every controller is
  *  refused, a person's too: the pairing that made the Job is gone, and the decision to start it again is for a person on
@@ -1607,7 +1613,8 @@ function revokedPauseRefusal(s: OrchState, caller: RuleCaller, cmd: string, args
   return {
     status: 403,
     body: {
-      error: `job ${job.id} was paused because the pairing of ${job.pausedBy.name}, which made it, was revoked; only a person on this computer can resume it`,
+      // No pairing's name (ruling RF-3): one controller is not told another's (R7-3); the app's view names it
+      error: `job ${job.id} was paused because the pairing that made it was unpaired; only a person on this computer can resume it`,
       reason: 'controller-revoked'
     }
   }
@@ -2602,7 +2609,7 @@ export async function handleCommand(
       // 회차를 만들지 않는 두 경우는 **아직 돌 때가 아닌 계획**이다. 사람이 화면에서 만든 Job 은
       // '실행' 을 누를 때까지 기다리고(`--auto` + pendingStart), 예약 Job 의 회차는 발화가 만든다 —
       // 여기서 하나 만들면 예약 시각이 되기도 전에 1회차가 도는 일이 된다.
-      if (args.auto === true || schedule !== undefined) return commit(created)
+      if (args.auto === true || schedule !== undefined) return commit(jobResForCaller(caller, created))
       const started = startJobRun(created.state, created.value.id, now)
       if (!started.ok || !fromAgentSession || coordinatorAccountId !== undefined) return commit(started)
       // **부른 세션이 이 회차를 몬다**(spec E3) — 스킬의 `run-create` → `check --wait` 고리다. 적지 않으면
@@ -3342,7 +3349,7 @@ export async function handleCommand(
         started = { ok: true, state: first.state, value: job }
         target = first.value
       }
-      if (target === undefined) return commit(started)
+      if (target === undefined) return commit(jobResForCaller(caller, started))
       // **코디네이터를 띄울 수 있으면 띄우고, 이 Run 의 운전자를 그에게 넘긴다.** 넘기는 방식이
       // `autoDispatch` 를 끄는 것이다 — 한 Run 에 운전자는 하나이고, 켜 둔 채로 코디네이터를
       // 붙이면 둘이 같은 ready Task 를 두고 경합한다(Run.autoDispatch 의 주석).
@@ -3356,11 +3363,11 @@ export async function handleCommand(
       // **이미 관리자가 있으면 아무것도 하지 않는다.** 이 명령은 사이드바의 '실행' 과 코디네이터를
       // 다시 띄우는 버튼이 함께 쓴다 — 뜻은 "이 Run 에 관리자가 있게 하라" 이고, 두 번 눌러도 두
       // 세션이 뜨지 않아야 한다.
-      if (target.coordinatorSessionId) return commit(started)
+      if (target.coordinatorSessionId) return commit(jobResForCaller(caller, started))
       // A Run that was already there and has finished: the same as its own row's ▶ (I3).
-      if (s.runs.some((r) => r.id === target.id) && outcomeOf(s, target.id) !== 'running') return commit(started)
+      if (s.runs.some((r) => r.id === target.id) && outcomeOf(s, target.id) !== 'running') return commit(jobResForCaller(caller, started))
       const accountId = job.schedule ? undefined : job.coordinatorAccountId
-      if (!accountId || !deps.startCoordinator) return commit(started)
+      if (!accountId || !deps.startCoordinator) return commit(jobResForCaller(caller, started))
       // Rebased when this call changes nothing on its own (no gate to release, no first Run): the ▶
       // on a Job row restarting its latest Run's coordinator (handToCoordinator's `rebase`).
       return handToCoordinator(started.state, job, target, accountId, started.state === s)
@@ -3438,7 +3445,7 @@ export async function handleCommand(
       // **run-start 와 다른 명령이다.** 그쪽은 pendingStart("아직 시작하지 않았다")를 걷고, 이쪽은
       // paused("세워 뒀다")를 걷는다 — 사람에게 다른 버튼이고 다른 상황이다(Run.paused 의 주석).
       // 하나로 겸하게 했더니 세운 뒤에 '실행' 버튼과 '▶' 가 같은 일을 하는 둘로 나란히 떴다.
-      return commit(resumeSchedule(s, id))
+      return commit(jobResForCaller(caller, resumeSchedule(s, id)))
     }
     // The git range a Run or one attempt worked over (remote runtime design Phase 10), which `runs-changed-files` and
     // `runs-diff` read. **The Host's alone**: anyone else could point a Run's changed files at any commits.

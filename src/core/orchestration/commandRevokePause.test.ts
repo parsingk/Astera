@@ -42,7 +42,7 @@ const PERSON_SHELL: Caller = { sessionId: '', role: 'cli' }
 const AGENT_SHELL: Caller = { sessionId: 'ses_agent', role: 'cli' }
 
 const REFUSAL = (jobId: string): string =>
-  `job ${jobId} was paused because the pairing of laptop, which made it, was revoked; only a person on this computer can resume it`
+  `job ${jobId} was paused because the pairing that made it was unpaired; only a person on this computer can resume it`
 
 /** A scheduled Job cli_1 made, with one Run of it, paused by the Host's revoke of cli_1. */
 const revokedJob = async (): Promise<{ deps: ReturnType<typeof makeDeps>; jobId: string; runId: string }> => {
@@ -295,6 +295,32 @@ describe('what a controller reads of a Job', () => {
     const paused = await handleCommand(deps, controller(), 'run-pause', { run: jobId })
     expect(paused.status, JSON.stringify(paused.body)).toBe(200)
     hidden(paused.body)
+  })
+
+  // Final review F3: every reply that answers with the Job itself
+  it("run-create's, run-start's and run-resume's replies leave them out for a controller, and a local caller keeps them", async () => {
+    const deps = makeDeps()
+    const plain = await handleCommand(deps, controller(), 'run-create', { objective: 'o', cwd: ROOT, auto: true })
+    expect(plain.status, JSON.stringify(plain.body)).toBe(200)
+    hidden(plain.body)
+    const plainId = deps.getState().jobs[0].id
+    const started = await handleCommand(deps, controller(), 'run-start', { run: plainId })
+    expect(started.status, JSON.stringify(started.body)).toBe(200)
+    expect(started.body).toMatchObject({ id: plainId })
+    hidden(started.body)
+    expect((await handleCommand(deps, controller(), 'jobs-create', { objective: 'o', cwd: ROOT, schedule: DAILY })).status).toBe(200)
+    const scheduledId = deps.getState().jobs[1].id
+    const released = await handleCommand(deps, controller(), 'run-start', { run: scheduledId })
+    expect(released.status, JSON.stringify(released.body)).toBe(200)
+    expect(released.body).toMatchObject({ id: scheduledId })
+    hidden(released.body)
+    expect((await handleCommand(deps, controller(), 'run-pause', { run: scheduledId })).status).toBe(200)
+    const resumed = await handleCommand(deps, controller(), 'run-resume', { run: scheduledId })
+    expect(resumed.status, JSON.stringify(resumed.body)).toBe(200)
+    expect(resumed.body).toMatchObject({ id: scheduledId })
+    hidden(resumed.body)
+    expect((await handleCommand(deps, PERSON_SHELL, 'run-pause', { run: scheduledId })).status).toBe(200)
+    expect((await handleCommand(deps, PERSON_SHELL, 'run-resume', { run: scheduledId })).body).toMatchObject({ createdBy: { clientId: 'cli_1' } })
   })
 })
 
