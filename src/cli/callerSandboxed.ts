@@ -16,9 +16,10 @@ import { cliHostTarget, workloadTokenFor } from './host'
 export const sandboxedRemoteRefusal = (cmd: string): string =>
   `a sandboxed session can only read another computer: ${spelledCommand(cmd)} changes work there, so it was not sent (if this shell is not an agent session, unset ASTERA_SESSION)`
 
-/** Why an MCP server with no Astera session in its env does not send a change to a Runtime (ruling R13-4). Codex starts a
- *  stdio MCP server with an allowlisted env, so a sandboxed Codex session's server sees no `ASTERA_*` at all; an MCP
- *  server is always an agent's, so a missing session there is an unknown sandbox, which counts as sandboxed (§7.4). */
+/** Why an MCP server with no Astera session in its env does not send a change to a Runtime (ruling R13-4): an MCP client
+ *  that does not pass the session's `ASTERA_SESSION` or `ASTERA_GATEWAY_TOKEN` to the server leaves it no session to ask
+ *  about. An MCP server is always an agent's, so a missing session there is an unknown sandbox, which counts as
+ *  sandboxed (§7.4). */
 export const mcpNoSessionRefusal = (cmd: string): string =>
   `this MCP client did not pass its Astera session, so Astera treats it as sandboxed and did not send ${spelledCommand(cmd)}; use \`astera --runtime <id|name> ${spelledCommand(cmd)}\` from the session's shell`
 

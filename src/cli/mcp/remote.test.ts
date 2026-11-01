@@ -230,9 +230,9 @@ describe('openMcpRuntimes', () => {
     expect(await open.refusal('jobs-create')).toBeNull()
   })
 
-  // Ruling R13-4: Codex starts a stdio MCP server with an allowlisted env, so a sandboxed Codex session's server sees no
-  // ASTERA_* at all. An MCP server is always an agent's, so a missing session is an unknown sandbox: changes refused.
-  it('a Codex-shaped env (no ASTERA_* at all) refuses an MCP remote write without asking the Host, and still allows a read', async () => {
+  // Ruling R13-4: an MCP client that does not pass the session's ASTERA_SESSION or ASTERA_GATEWAY_TOKEN to the server.
+  // An MCP server is always an agent's, so a missing session is an unknown sandbox: changes refused.
+  it('an env with no ASTERA_* at all refuses an MCP remote write without asking the Host, and still allows a read', async () => {
     await write({ mcpAccess: 'control' })
     const env: NodeJS.ProcessEnv = { PATH: '/usr/bin', HOME: '/home/u' }
     let asked = 0

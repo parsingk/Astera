@@ -576,7 +576,7 @@ export async function serveMcp(a: {
 
   // The paired Runtimes of this profile, for the tools given a runtimeId (remote runtime design §2.8). Whether this
   // server's session is sandboxed is asked at a change until the Host answers, then kept (remote governance design §7.4).
-  // An env with no session is an agent whose client did not pass it (Codex's allowlisted env): refused, never asked.
+  // An env with no session is an agent whose MCP client did not pass it to this server: refused, never asked.
   const opened =
     a.runtimes ??
     openMcpRuntimes({
