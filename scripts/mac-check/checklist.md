@@ -1505,7 +1505,8 @@ Astera 에도 닿지 않습니다. Runtime 은 이 Mac 안의 주소(`127.0.0.1`
 27~30 은 모두 이 연결 위에서 하므로, 이 점검이 실패하면 본 것을 메모에 적고 27~30 은 건너뜁니다.
 
 1. 점검 23~25 에서 앱을 모두 껐으므로 개발용 앱을 다시 띄웁니다. 먼저 남은 앱이 없는지 봅니다. 아무 줄도 없어야 하고,
-   있으면 1분 더 기다렸다가 다시 봅니다.
+   있으면 1분 더 기다렸다가 다시 봅니다. 그래도 남아 있으면 준비 2 의 2단계처럼 그 줄 맨 앞의 숫자로 `kill <숫자>` 를
+   칩니다.
 
    ```sh
    ps -Ao pid,command | grep -E '[n]ode_modules/electron/dist/Electron.app|[A]steraMacCheck.app'
@@ -1598,7 +1599,10 @@ Astera 에도 닿지 않습니다. Runtime 은 이 Mac 안의 주소(`127.0.0.1`
   Rule 내용이 없습니다.
 - 4단계: 그 줄의 **상태** (State) 칸이 **그 컴퓨터에 없음** (Not there) 입니다.
 - 5단계: 첫 출력에 `"expected":["skill-mac-check-skill"]` 이 있습니다. 둘째 출력의 `mac-check-dev` 항목에
-  `"surface":"desktop"` 과 `"clientVersion"` 이 있고, 토큰은 없습니다.
+  `"clientVersion"` 이 있고, 토큰은 없습니다. `"surface"` 는 `"surface":"desktop"` 이거나 `"surface":"cli"` 입니다. 둘
+  다 맞습니다. Runtime 은 이 컨트롤러가 마지막으로 연결할 때 말한 쪽만 기억하는데, 점검 26 의 4단계에서 앱과 터미널이
+  차례로 물었고, 앱은 열어 둔 연결을 2분 동안 다시 쓰므로 어느 쪽이 마지막인지는 그때그때 다릅니다. 어느 쪽이었는지 적어
+  주세요.
 
 - [ ] 통과
 - [ ] 실패
@@ -1655,7 +1659,7 @@ Astera 에도 닿지 않습니다. Runtime 은 이 Mac 안의 주소(`127.0.0.1`
 ```
 
 그 컴퓨터에 스킬을 설치해 항목이 사라지는 것과 **그 컴퓨터와 다름** (Different there) 은 두 컴퓨터로 하는 점검표
-`docs/remote-runtime-checks.md` 의 3부, 3-3 에서 봅니다.
+`docs/remote-runtime-checks.md` 의 3부, 3-3 에서 봅니다(사람의 Windows PC 에만 있는 파일이고, 저장소에는 없습니다).
 
 ## 29. MCP 와 에이전트 세션의 CLI 는 보고서를 못 읽음
 
@@ -1696,7 +1700,7 @@ Astera 에도 닿지 않습니다. Runtime 은 이 Mac 안의 주소(`127.0.0.1`
 ```text
 ```
 
-## 30. 연결 해제
+## 30. 페어링 해제
 
 누가: 에이전트도
 
@@ -1734,7 +1738,8 @@ Astera 에도 닿지 않습니다. Runtime 은 이 Mac 안의 주소(`127.0.0.1`
 
    - **MCP & Skills** 에서 `mac-check-skill` 을 펼쳐 **제거** (Remove) 를 누르고, 확인 창의 **제거** (Remove) 를
      누릅니다. 점검 27 의 1단계에서 직접 넣은 사본은 남으므로 `rm -rf ~/.claude/skills/mac-check-skill` 로
-     지웁니다(점검 12 가 B 였으면 `rm -rf "$C/skills/mac-check-skill"`).
+     지웁니다(점검 12 가 B 였으면 `rm -rf "${C:?}/skills/mac-check-skill"`. 이 창에 `C` 가 없으면 점검 27 의 첫 줄로
+     먼저 정합니다).
    - 개발용 앱을 Cmd+Q 로 끕니다. 에이전트는 점검 24 처럼 페이지에서 `window.api.app.quit()` 을 부르고, inspector 에
      붙어 있었다면 그 연결을 먼저 닫습니다. 1분쯤 뒤 봅니다.
 
@@ -1751,7 +1756,7 @@ Astera 에도 닿지 않습니다. Runtime 은 이 Mac 안의 주소(`127.0.0.1`
   **그 컴퓨터가 이 페어링을 더 이상 받지 않습니다. 다시 페어링하세요.** (That computer no longer accepts this pairing. Pair again.)
   가 나옵니다. 터미널의 출력에 `RUNTIME_AUTH_FAILED` 가 있고 `exit=5` 입니다.
 - 4단계: 세 명령이 모두 `{"ok":true` 로 시작하고, 마지막 `ps` 는 아무 줄도 출력하지 않습니다. `host.js` 가 든 줄이 남아
-  있으면 1분 더 기다렸다가 다시 봅니다.
+  있으면 1분 더 기다렸다가 다시 보고, 그래도 있으면 준비 2 의 2단계처럼 그 줄 맨 앞의 숫자로 `kill <숫자>` 를 칩니다.
 
 - [ ] 통과
 - [ ] 실패
@@ -1764,7 +1769,8 @@ Astera 에도 닿지 않습니다. Runtime 은 이 Mac 안의 주소(`127.0.0.1`
 ```
 
 해제가 그 컨트롤러가 만든 예약 Job 을 일시 중지하는 것과 그 Job 을 그 컴퓨터의 사람만 재개할 수 있는 것은 두 컴퓨터로
-하는 점검표 `docs/remote-runtime-checks.md` 의 3부, 3-6 에서 봅니다.
+하는 점검표 `docs/remote-runtime-checks.md` 의 3부, 3-6 에서 봅니다(사람의 Windows PC 에만 있는 파일이고, 저장소에는
+없습니다).
 
 ## 마무리
 

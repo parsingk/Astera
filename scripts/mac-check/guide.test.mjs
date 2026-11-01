@@ -235,6 +235,13 @@ describe('scripts/mac-check guides', () => {
     expect(uses.filter((m) => m[1] !== '--id').map((m) => m[0])).toEqual([])
   })
 
+  it('check 27 takes either surface the controller last signed in with, since the record keeps only the last', () => {
+    // host/controllers.ts ControllerRecord.surface: what the client said at its last sign-in. Check 26 asks from the app
+    // and then the CLI, and the app keeps its connection open for a while, so which came last is not fixed
+    const body = phase12(27).body
+    expect(body).toContain('`"surface":"desktop"` 이거나 `"surface":"cli"`')
+  })
+
   it('check 28 clears the finding from this computer and sees it gone at the next read, with no wait for a cache', () => {
     // A fresh runtimes.json reaches Findings at the next request (plan ruling 11, changed 2026-11-01)
     const body = phase12(28).body
@@ -252,6 +259,12 @@ describe('scripts/mac-check guides', () => {
     expect(line).not.toMatch(/dev-astera|runtime-astera/)
     expect(line).toContain('ASTERA_PROFILE_DIR="$HOME/Library/Application Support/astera-dev"')
     expect(line).toContain('out/main/cli.js runtimes get --id mac-check-runtime')
+    // Every other session variable the helpers clear is cleared here too, so only ASTERA_SESSION speaks for an agent
+    const devLine = runCode.split('\n').find((l) => l.includes('exec env') && l.includes('astera-dev'))
+    const others = [...devLine.matchAll(/-u (\w+)/g)].map((m) => m[1]).filter((v) => v !== 'ASTERA_SESSION')
+    expect(others.length).toBeGreaterThan(0)
+    expect(others.filter((v) => !line.includes(`-u ${v} `))).toEqual([])
+    expect(line).not.toContain('-u ASTERA_SESSION')
     expect(body).toContain('RUNTIME_PERMISSION_DENIED')
     // MCP has no tool that asks for the report (design §10.3); its case is an e2e test
     expect(body).toContain('get_runtime')
