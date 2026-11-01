@@ -146,7 +146,8 @@ import { parseHandoffBody } from '../handoff/parse'
 import type { HandoffBody } from '../handoff/types'
 import type { Lang } from '../i18n'
 import { isOverrideCompletion, policyOf, resolvedConvergence } from './convergence'
-import { leftNothingBehind } from '../host/orchProtocol'
+import { leftNothingBehind, type ControllerPrincipal } from '../host/orchProtocol'
+import { UNSAID_CLI_NOTE } from '../host/controllerGate'
 import { APP_CALLER, HOST_CALLER } from '../host/driver'
 import { UNREADABLE, recordDetail, recordSummary, recordsFor, type StoreShape } from '../understanding/read'
 import { JOB_SOURCE, SOURCE_COMMANDS, capturedIssue, createFromContext, sourcesCommand, type JobSourcesDeps } from './commandSources'
@@ -1340,10 +1341,68 @@ const profileRefused = (reason: 'agent-profile-unavailable' | 'agent-profile-no-
   body: { error: msg, reason }
 })
 
+/** Who asks, as the agent rules read it: the Host connection's role, and on a remote controller the principal the Host
+ *  bound it to (OrchCaller.principal). */
+type RuleCaller = { sessionId: string; role?: string; principal?: ControllerPrincipal }
+
 /** A caller that is an agent rather than a person: an agent session's shell (the CLI with a session id), an MCP client
- *  or a plugin. The app, a person's own shell (the CLI with none) and a remote controller's dialog are a person's. */
-const agentCaller = (caller: { sessionId: string; role?: string }): boolean =>
-  caller.role === 'mcp' || caller.role === 'plugin' || (caller.role === 'cli' && caller.sessionId !== '')
+ *  or a plugin. The app and a person's own shell (the CLI with none) are a person's. A remote controller is a person's
+ *  only when its client said it is (remote governance design §7.3): an MCP client, a CLI inside an agent session, and
+ *  one that did not say (`unsaid`, or no kind) meet every rule an agent here meets. The Runtime's own MCP settings are
+ *  not asked of a remote call: MCP authority over a link is decided on the controller's computer (design X1-07). */
+export const agentCaller = (caller: RuleCaller): boolean =>
+  caller.role === 'mcp' ||
+  caller.role === 'plugin' ||
+  (caller.role === 'cli' && caller.sessionId !== '') ||
+  (caller.role === 'controller' && caller.principal?.kind !== 'person')
+
+/** How a refusal of an agent names a remote controller (remote governance design §7.3). */
+const REMOTE_AGENT = 'an agent on another computer (an MCP client or a CLI inside an agent session)'
+
+/** A refusal's sentence, closed with UNSAID_CLI_NOTE when the caller is an Astera CLI on another computer that did not
+ *  say whether it runs in an agent session: an older one cannot, and updating it is the way out. A client that named no
+ *  surface is no Astera CLI, so it gets the sentence alone (the controller's ruling on the Task 5 review). */
+export const withUnsaidNote = (caller: RuleCaller, msg: string): string =>
+  caller.role === 'controller' && (caller.principal?.kind ?? 'unsaid') === 'unsaid' && caller.principal?.surface === 'cli'
+    ? `${msg}.${UNSAID_CLI_NOTE}`
+    : msg
+
+/** **An answer to a permission prompt is for a person** (Task 8 fix round 1, the controller's ruling): `chats answer`,
+ *  and a remote controller's `sessions-answer` (host/remoteSessions.ts; remote governance design §7.3). Letting a tool
+ *  run is the decision the prompt exists to put to someone, so every caller inside an agent session is refused: a
+ *  worker, a coordinator and a plain tab alike. The shell's CLI has no ASTERA_SESSION and calls with an empty session
+ *  id. Null when the caller may. */
+export function answerRefusal(caller: RuleCaller): Reply | null {
+  if (caller.sessionId !== '') return denied('chats answer is for a person: run it from a shell, not from inside an agent session')
+  // An MCP client calls with an empty session id, so it passed the check above. The MCP gate does
+  // not list chats-answer; this refusal keeps the gate from being the only barrier (MCP P1 §2).
+  if (caller.role === 'mcp') return denied('chats answer is for a person: run it from a shell, not from an MCP client')
+  // A controller has no session either (orch.ts drops it)
+  if (caller.role === 'controller' && agentCaller(caller))
+    return denied(withUnsaidNote(caller, `chats answer is for a person: answer it from your own Astera or shell, not from ${REMOTE_AGENT}`))
+  return null
+}
+
+/** **An agent does not answer another session's prompt** (security review 2026-09-28): `sessions send`'s check, and a
+ *  remote controller's raw `sessions-input` (host/remoteSessions.ts; remote governance design §7.3). Text typed into a
+ *  terminal session that holds a permission prompt or a question is the answer to it, so it is refused before anything
+ *  is typed. A session whose state is not known is not refused: nothing says it is at a prompt. Asked only of an agent;
+ *  null when nothing is waiting. */
+export async function promptRefusal(
+  sessionTurn: NonNullable<OrchServerDeps['sessionTurn']>,
+  caller: RuleCaller,
+  id: string
+): Promise<Reply | null> {
+  const now = await sessionTurn(id)
+  if (now === null || !now.alive || now.state !== 'waiting' || now.prompt === null) return null
+  const from = caller.role === 'mcp' ? 'an MCP client' : caller.role === 'controller' ? 'an agent on another computer' : 'an agent session'
+  return conflict(
+    withUnsaidNote(
+      caller,
+      `${id} is waiting on ${now.prompt === 'permission' ? 'a permission prompt' : 'a question'}, and text sent from ${from} would answer it; nothing was sent. Read it with \`astera sessions read --id ${id}\` and tell the person what it is waiting on`
+    )
+  )
+}
 
 /** The commands whose work starts in the sandbox when a sandboxed session asks (final fix pass, C3): a session, a Job
  *  (its coordinator and workers), a Task (its workers), a worker. `tasks add` is `task-create` under another name. */
@@ -1493,7 +1552,7 @@ function outsideSandboxTarget(
  *  around the app's own setting. A person is not asked, and neither is a profile that checks or follows the app. A
  *  settings file that cannot be read refuses and names the file, as the Host's spawn does: it may have said manual.
  *  Null when the caller may. */
-async function profileBypassRefusal(deps: OrchServerDeps, caller: { sessionId: string; role?: string }, profile: AgentProfile): Promise<Reply | null> {
+async function profileBypassRefusal(deps: OrchServerDeps, caller: RuleCaller, profile: AgentProfile): Promise<Reply | null> {
   if (profile.permission !== 'bypass' || !agentCaller(caller)) return null
   let yolo: boolean
   try {
@@ -1506,10 +1565,12 @@ async function profileBypassRefusal(deps: OrchServerDeps, caller: { sessionId: s
   return {
     status: 403,
     body: {
-      error:
-        `agent profile ${profile.name} runs without permission checks, and an agent, an MCP client or a plugin may start work as it ` +
-        `only while Astera's own setting "Run agents without permission checks" is on. Turn that on in Settings, or start it yourself ` +
-        `from the app or your own shell`,
+      error: withUnsaidNote(
+        caller,
+        `agent profile ${profile.name} runs without permission checks, and ${caller.role === 'controller' ? REMOTE_AGENT : 'an agent, an MCP client or a plugin'} may start work as it ` +
+          `only while Astera's own setting "Run agents without permission checks" is on. Turn that on in Settings, or start it yourself ` +
+          `from the app or your own shell`
+      ),
       reason: 'agent-profile-bypass-refused'
     }
   }
@@ -1523,7 +1584,7 @@ async function profileBypassRefusal(deps: OrchServerDeps, caller: { sessionId: s
  *  Job's own profile asked for by the coordinator carrying out that Job (`drivesRun`). */
 async function profileFor(
   deps: OrchServerDeps,
-  caller: { sessionId: string; role?: string },
+  caller: RuleCaller,
   idOrName: string,
   opts: { held?: boolean; bypassOk?: boolean } = {}
 ): Promise<{ ok: true; profile: AgentProfile } | { ok: false; reply: Reply }> {
@@ -1607,7 +1668,7 @@ async function archivedNamesOf(deps: OrchServerDeps, s: OrchState, jobs: readonl
 /** A Task an agent gives its own accounts in a Job that holds a profile still runs as that profile, so it is asked the
  *  same question (`profileBypassRefusal`) about it. Only that: a profile gone since falls back at the spawn as it does for
  *  a person (design §5), so it is null here, while a store that cannot be read refuses, since it may hold one. */
-async function inheritedBypassRefusal(deps: OrchServerDeps, caller: { sessionId: string; role?: string }, id: string): Promise<Reply | null> {
+async function inheritedBypassRefusal(deps: OrchServerDeps, caller: RuleCaller, id: string): Promise<Reply | null> {
   return startRefusal(deps, caller, [id])
 }
 
@@ -1616,7 +1677,7 @@ async function inheritedBypassRefusal(deps: OrchServerDeps, caller: { sessionId:
  *  task-create asks an inherited one (`profileBypassRefusal`): a profile gone since, or one that checks or follows the
  *  app, starts as before, and a store that cannot be read refuses. A person, and work that holds no profile, are not
  *  asked and nothing is read. */
-async function startRefusal(deps: OrchServerDeps, caller: { sessionId: string; role?: string }, profileIds: ReadonlyArray<string | undefined>): Promise<Reply | null> {
+async function startRefusal(deps: OrchServerDeps, caller: RuleCaller, profileIds: ReadonlyArray<string | undefined>): Promise<Reply | null> {
   if (!agentCaller(caller)) return null
   const ids = [...new Set(profileIds.filter((id): id is string => id !== undefined))]
   if (ids.length === 0) return null
@@ -1789,8 +1850,9 @@ const checkNamesOf = (v: unknown): string[] | null => {
 export async function handleCommand(
   deps: OrchServerDeps,
   /** `role` is the Host connection's (OrchCaller.role); absent where no Host connection exists. Only
-   *  `'mcp'` changes an answer: an MCP client calls with an empty session id, as a shell does. */
-  caller: { sessionId: string; role?: 'app' | 'cli' | 'mcp' | 'controller' | 'plugin' },
+   *  `'mcp'` changes an answer: an MCP client calls with an empty session id, as a shell does. `principal` is a remote
+   *  controller's (OrchCaller.principal): its kind decides whether the agent rules apply (agentCaller). */
+  caller: { sessionId: string; role?: 'app' | 'cli' | 'mcp' | 'controller' | 'plugin'; principal?: ControllerPrincipal },
   cmd: string,
   args: Record<string, unknown>
 ): Promise<Reply> {
@@ -5178,19 +5240,18 @@ export async function handleCommand(
        * **An MCP client is refused the same way** (MCP P1 design §2, Q4): it calls with an empty
        * session id, which reads as a shell, but its text comes from an agent all the same.
        */
+      // **So is a remote controller that is an agent** (remote governance design §7.3): it has no session either.
       const fromMcp = caller.role === 'mcp'
+      const fromController = caller.role === 'controller' && agentCaller(caller)
       const fromAgent =
-        (caller.sessionId !== '' && caller.sessionId !== APP_CALLER && caller.sessionId !== HOST_CALLER) || fromMcp
+        (caller.sessionId !== '' && caller.sessionId !== APP_CALLER && caller.sessionId !== HOST_CALLER) || fromMcp || fromController
       // A person's send (a shell, the app) is a person's prompt, written marked down to the pty or process: it ends what a
       // finished Run's or an ended attempt's session still holds, and an agent's or the Host's does not (observe deferred
       // fix round 2, Minor b)
       const by = !fromAgent && caller.sessionId !== HOST_CALLER ? ({ person: true } as const) : undefined
       if (session.kind === 'terminal' && fromAgent && !resuming && deps.sessionTurn) {
-        const now = await deps.sessionTurn(id)
-        if (now !== null && now.alive && now.state === 'waiting' && now.prompt !== null)
-          return conflict(
-            `${id} is waiting on ${now.prompt === 'permission' ? 'a permission prompt' : 'a question'}, and text sent from ${fromMcp ? 'an MCP client' : 'an agent session'} would answer it; nothing was sent. Read it with \`astera sessions read --id ${id}\` and tell the person what it is waiting on`
-          )
+        const refused = await promptRefusal(deps.sessionTurn, caller, id)
+        if (refused) return refused
       }
       let waitFor: (() => Promise<TurnEnding | null>) | null = null
       if (wait) {
@@ -5377,8 +5438,9 @@ export async function handleCommand(
             rollAccountIds: chain,
             ...(sessionKind === 'chat' ? { unattended: unattended.value ?? 'hold' } : {}),
             // Who started it, by who asked (2026-10-20, review M1): a remote controller's new-session dialog and the app
-            // are a person; the CLI, MCP and a plugin are an agent, and its tab closes when it ends
-            ...(caller.role === 'controller' || caller.role === 'app' ? {} : { startedBy: 'agent' as const }),
+            // are a person; the CLI, MCP and a plugin are an agent, and its tab closes when it ends. A controller that is
+            // an agent, or did not say, is an agent's (remote governance design §7.3)
+            ...((caller.role === 'controller' && !agentCaller(caller)) || caller.role === 'app' ? {} : { startedBy: 'agent' as const }),
             ...(agentProfileId !== undefined ? { agentProfileId } : {})
           })
         )
@@ -5395,16 +5457,11 @@ export async function handleCommand(
      */
     case 'chats-pending':
     case 'chats-answer': {
-      // **An answer is for a person** (Task 8 fix round 1, the controller's ruling). Letting a tool run
-      // is the decision the prompt exists to put to someone, so every caller inside an agent session is
-      // refused: a worker, a coordinator and a plain tab alike. The shell's CLI has no ASTERA_SESSION
-      // and calls with an empty session id. `chats pending` is a read and stays open to every caller.
-      if (routed === 'chats-answer' && caller.sessionId !== '')
-        return denied('chats answer is for a person: run it from a shell, not from inside an agent session')
-      // An MCP client calls with an empty session id, so it passed the check above. The MCP gate does
-      // not list chats-answer; this refusal keeps the gate from being the only barrier (MCP P1 §2).
-      if (routed === 'chats-answer' && caller.role === 'mcp')
-        return denied('chats answer is for a person: run it from a shell, not from an MCP client')
+      // **An answer is for a person** (answerRefusal). `chats pending` is a read and stays open to every caller.
+      if (routed === 'chats-answer') {
+        const refused = answerRefusal(caller)
+        if (refused) return refused
+      }
       if (!deps.chatPrompts || !deps.chatAnswer)
         return conflict('chat prompts are answered by the Astera Host, and this caller is not one')
       const session = args.session === undefined ? undefined : str(args.session)

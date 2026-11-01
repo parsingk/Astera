@@ -2033,7 +2033,8 @@ export function createHostOrch(a: {
         // **A remote session's changes** (Phase 9a): below the receipt line, so a retried input, stop or answer replays
         // its answer instead of acting twice. Each marks an effect only when it acted.
         if (REMOTE_SESSION_CHANGES.has(cmd)) {
-          const changed = a.remoteSessions?.change(cmd, args, () => void (marks.effects += 1), from?.role === 'controller' && from.principal ? `controller:${from.principal.clientId}` : undefined)
+          const principal = from?.role === 'controller' ? from.principal : undefined
+          const changed = a.remoteSessions?.change(cmd, args, () => void (marks.effects += 1), principal ? `controller:${principal.clientId}` : undefined, principal)
           const answered = changed ? await changed : { status: 501, body: { error: `${cmd} is not answered by this Host` } }
           return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
         }
@@ -2191,7 +2192,7 @@ export function createHostOrch(a: {
         // P5: judged on the state the call found, so a worker's report that closes its own Dispatch is
         // still the agent's.
         const actor = actorOf({ sessionId, role: from?.role, client: from?.client, remote: from?.remote, principal: from?.principal, plugin: from?.plugin, state: store.get() })
-        const r = await handleCommand(depsFor(marks, actor, useOf(from, sessionId)), { sessionId, role: from?.role }, cmd, runArgs)
+        const r = await handleCommand(depsFor(marks, actor, useOf(from, sessionId)), { sessionId, role: from?.role, principal: from?.principal }, cmd, runArgs)
         const answered = answerOf(r, marks)
         // **Who drives, on `status`, from the Host and not from `handleCommand`** (R6): the two fields
         // exist only on a Host that drives, and their absence tells a script this one does not.
