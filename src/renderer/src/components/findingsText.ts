@@ -60,11 +60,12 @@ export function subjectName(s: FindingSubject, t: T): string {
 /** The open button's words; null for a place this app does not know (a newer Host's), which then gets no button. */
 export const openLabelKey = (p: FindingPlace): MessageKey | null => (Object.hasOwn(OPEN_KEYS, p.kind) ? OPEN_KEYS[p.kind] : null)
 
-/** Where a place is on screen: another Settings tab (Agent profiles with the profiles to show), a section of Security &
- *  Access, or a row of the Jobs view by the Job's or Run's id. */
+/** Where a place is on screen: another Settings tab (Agent profiles with the profiles to show, Remote Runtimes with the
+ *  Runtime whose detail opens), a section of Security & Access, or a row of the Jobs view by the Job's or Run's id. */
 export type FindingTarget =
   | { tab: 'agentProfiles'; profileIds: string[] }
-  | { tab: 'extensions' | 'remote' }
+  | { tab: 'extensions' }
+  | { tab: 'remote'; runtimeId?: string }
   | { section: 'policies' | 'credentials' }
   | { jobs: string }
 
@@ -75,7 +76,7 @@ export function targetOf(p: FindingPlace): FindingTarget | null {
     case 'extension':
       return { tab: 'extensions' }
     case 'runtimes':
-      return { tab: 'remote' }
+      return { tab: 'remote', runtimeId: p.runtimeId }
     case 'policies':
       return { section: 'policies' }
     case 'credentials':

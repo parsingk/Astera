@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import { CATALOGS, LANGS } from './index'
 
-const PREFIXES = ['settings.remote.revoke.', 'jobs.run.pausedRevoked', 'settings.remote.detail.']
+const PREFIXES = ['settings.remote.revoke.', 'jobs.run.pausedRevoked', 'settings.remote.detail.', 'settings.remote.surface.', 'settings.remote.thisMachine.clientSeen']
 const keysOf = (): string[] => Object.keys(CATALOGS.ko.messages).filter((k) => PREFIXES.some((p) => k.startsWith(p)))
 
 describe('the remote governance catalog', () => {
@@ -69,6 +69,44 @@ describe('the remote governance catalog', () => {
       expect(en[key], key).toBe(english)
       expect(ko[key], key).toBe(korean)
     }
+  })
+
+  // Task 17: the detail's and This computer's copy in the plan's English and Korean, pairing words as the app has them
+  // (ruling C11)
+  it('keeps the detail and controller surface copy', () => {
+    const en = CATALOGS.en.messages as Record<string, string>
+    const ko = CATALOGS.ko.messages as Record<string, string>
+    const copy: Record<string, [string, string]> = {
+      'settings.remote.detail.open': ['Details', '자세히'],
+      'settings.remote.detail.identity': ['Identity', '식별 정보'],
+      'settings.remote.detail.runtimeId': ['Runtime id {id}', 'Runtime id {id}'],
+      'settings.remote.detail.fingerprint': ['Fingerprint {fingerprint}', '지문 {fingerprint}'],
+      'settings.remote.detail.copyFingerprint': ['Copy', '복사'],
+      'settings.remote.detail.pairedAt': ['Paired {at}', '{at}에 페어링함'],
+      'settings.remote.detail.health': ['Health', '상태'],
+      'settings.remote.detail.answers': ['Answers now', '지금 응답합니다'],
+      'settings.remote.detail.os': ['OS {platform}', 'OS {platform}'],
+      'settings.remote.detail.expected': ['Expected there', '그 컴퓨터에도 있어야 함'],
+      'settings.remote.detail.installThere': [
+        'Install, update, turn on or add the secret on that computer, in its Settings › MCP & Skills.',
+        '그 컴퓨터의 설정 › MCP & Skills에서 설치, 업데이트, 켜기 또는 비밀값 추가를 하세요.'
+      ],
+      'settings.remote.detail.refresh': ['Refresh', '새로 고침'],
+      'settings.remote.surface.desktop': ['app', '앱'],
+      'settings.remote.surface.cli': ['CLI', 'CLI'],
+      'settings.remote.surface.mcp': ['MCP', 'MCP'],
+      'settings.remote.thisMachine.clientSeen': ['{surface} · Astera {version} · Last seen {at}', '{surface} · Astera {version} · 마지막 연결 {at}']
+    }
+    for (const [key, [english, korean]] of Object.entries(copy)) {
+      expect(en[key], key).toBe(english)
+      expect(ko[key], key).toBe(korean)
+    }
+  })
+
+  // A settings path in Korean is named by the ko tab names, as the app shows them
+  it('names settings paths in Korean as 설정, never Settings', () => {
+    const ko = CATALOGS.ko.messages as Record<string, string>
+    expect(keysOf().filter((k) => ko[k].includes('Settings ›'))).toEqual([])
   })
 
   // Ruling R8-3: ja names a schedule 予約, as its Jobs area does, never スケジュール

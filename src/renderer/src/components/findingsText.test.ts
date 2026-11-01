@@ -191,12 +191,16 @@ describe('where a finding opens (§7: it opens the place, it never acts)', () =>
   it('takes each place to its tab, its section, or the Jobs view', () => {
     expect(targetOf({ kind: 'profiles', profileIds: ['ap_a', 'ap_b'] })).toEqual({ tab: 'agentProfiles', profileIds: ['ap_a', 'ap_b'] })
     expect(targetOf({ kind: 'extension', entryId: 'm1' })).toEqual({ tab: 'extensions' })
-    expect(targetOf({ kind: 'runtimes', runtimeId: 'rt1' })).toEqual({ tab: 'remote' })
     expect(targetOf({ kind: 'policies' })).toEqual({ section: 'policies' })
     expect(targetOf({ kind: 'credentials', entryId: 'mcp:m1' })).toEqual({ section: 'credentials' })
     expect(targetOf({ kind: 'job', jobId: 'job_1' })).toEqual({ jobs: 'job_1' })
     expect(targetOf({ kind: 'run', runId: 'run_1' })).toEqual({ jobs: 'run_1' })
     expect(targetOf({ kind: 'somewhere' } as never)).toBeNull()
+  })
+
+  // Remote governance design §6.3, §9.2: a Runtime's finding opens its detail, not just the tab
+  it('a runtimes place opens the remote tab at that Runtime', () => {
+    expect(targetOf({ kind: 'runtimes', runtimeId: 'rt1' })).toEqual({ tab: 'remote', runtimeId: 'rt1' })
   })
 
   it('finds the Jobs view row a Job or Run opens: its own row, a Job row folded onto it, or a fire under its Job', () => {

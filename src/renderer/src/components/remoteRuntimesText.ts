@@ -1,6 +1,8 @@
 // The sentences Settings › Remote Runtimes shows (remote runtime design Phase 6), apart from the component so each
 // is tested as text.
-import type { RemoteApi } from '../../../core/types'
+import type { RemoteApi, RuntimeDetail } from '../../../core/types'
+import type { ComparisonRow, ComparisonState } from '../../../core/controlPlane/compare'
+import { localTime } from './findingsText'
 
 type T = (key: never, params?: Record<string, string | number>) => string
 type ThisMachine = Awaited<ReturnType<RemoteApi['thisMachine']>>
@@ -86,4 +88,85 @@ export function controlFailureLine(r: { ok: false; code: string; message: string
   const gateway = /the Gateway failed: ([A-Z_]+)/.exec(r.message)
   if (r.code === 'FAILED' && op === 'start' && gateway) return tt('settings.remote.control.gatewayFailed', { code: gateway[1] })
   return failureLine(r, t)
+}
+
+/** Both Astera versions, and to update there when the Runtime's is older (remote governance design §4.3); null before
+ *  its first hello. A newer Runtime is shown, not flagged. */
+export function versionLine(d: { facts: { asteraVersion: string } | null; here: string; older: boolean }, t: T): string | null {
+  const tt = t as (k: string, p?: Record<string, string | number>) => string
+  if (d.facts === null) return null
+  const both = tt('settings.remote.detail.versions', { there: d.facts.asteraVersion, here: d.here })
+  return d.older ? `${both} ${tt('settings.remote.detail.updateThere')}` : both
+}
+
+// A record rather than a list, so tsc flags a state added to compare.ts and not here.
+const STATE_KEYS: Record<ComparisonState, string> = {
+  missing: 'settings.remote.detail.state.missing',
+  different: 'settings.remote.detail.state.different',
+  off: 'settings.remote.detail.state.off',
+  'secret-missing': 'settings.remote.detail.state.secretMissing',
+  same: 'settings.remote.detail.state.same'
+}
+
+/** A comparison row's state (§6.2): judged for an expected row, "only there" for an entry only there, else nothing. */
+export function stateWord(row: ComparisonRow, t: T): string {
+  const tt = t as (k: string) => string
+  if (row.state !== null) return tt(STATE_KEYS[row.state])
+  return row.here === null ? tt('settings.remote.detail.state.onlyThere') : ''
+}
+
+const SURFACE_KEYS: Record<'desktop' | 'cli' | 'mcp', string> = {
+  desktop: 'settings.remote.surface.desktop',
+  cli: 'settings.remote.surface.cli',
+  mcp: 'settings.remote.surface.mcp'
+}
+
+/** A paired controller as This computer lists it (§7.3): what it said it is, its Astera and when it was last seen. One
+ *  that has not said (an older Host, or a controller from before this release) gets when it was last seen alone, with
+ *  nothing guessed. A surface this build does not know is shown as its word (ruling R2-1). */
+export function clientSeenLine(c: { surface?: string; clientVersion?: string; lastSeenAt: string | null }, t: T): string {
+  const tt = t as (k: string, p?: Record<string, string | number>) => string
+  if (c.lastSeenAt === null) return tt('settings.remote.paired.neverSeen')
+  const at = localTime(c.lastSeenAt)
+  if (c.surface === undefined || c.clientVersion === undefined) return tt('settings.remote.paired.lastSeen', { at })
+  const surface = Object.hasOwn(SURFACE_KEYS, c.surface) ? tt(SURFACE_KEYS[c.surface as keyof typeof SURFACE_KEYS]) : c.surface
+  return tt('settings.remote.thisMachine.clientSeen', { surface, version: c.clientVersion, at })
+}
+
+/** A refused edit of the expected list (§6.1). INVALID_ARGUMENTS is an id this computer no longer has, a one-checkbox
+ *  edit's only way to get it: said in the app's language, as the CLI's sentence names `astera ext list` (ruling R16-1). */
+export function expectFailureLine(r: { ok: false; code: string; message: string }, t: T): string {
+  if (r.code === 'INVALID_ARGUMENTS') return (t as (k: string) => string)('settings.remote.detail.expectGone')
+  return failureLine(r, t)
+}
+
+/** The codes a read gets when the Runtime gave no answer at all: the link failed, or the answer did not come in time. */
+const NO_ANSWER = new Set(['RUNTIME_OFFLINE', 'RUNTIME_OUTCOME_UNKNOWN', 'REMOTE_TIMEOUT'])
+const CANNOT_REPORT = 'RUNTIME_CAPABILITY_MISSING'
+type ReadState = Pick<RuntimeDetail, 'answering' | 'refusal' | 'snapshot'>
+
+/** Whether the detail's refusal says the Runtime does not answer. A read that asked says so in `answering`; one answered
+ *  from the refusal remembered a moment ago did not ask (`answering` null), so its code says it (ruling R16-1). */
+const notAnswering = (d: ReadState): boolean =>
+  d.refusal !== undefined && d.refusal.code !== CANNOT_REPORT && (d.answering === false || (d.answering === null && NO_ANSWER.has(d.refusal.code)))
+
+/** The detail's health line about now (§10.1): it answers, the existing "does not answer" line with the code, or nothing
+ *  when this read did not ask and nothing says it failed (the kept report was recent). */
+export function answerLine(d: ReadState, t: T): string | null {
+  const tt = t as (k: string, p?: Record<string, string | number>) => string
+  if (d.answering === true) return tt('settings.remote.detail.answers')
+  return notAnswering(d) ? tt('settings.remote.paired.offline', { code: d.refusal?.code ?? '' }) : null
+}
+
+/** How fresh the detail is (§5.4): why no fresh report came, when the health line has not said it (an older Runtime is
+ *  told to update there, never shown a bare refusal, §5.1), then when the shown report was read, or that none was yet. */
+export function freshnessLines(d: ReadState, t: T): string[] {
+  const tt = t as (k: string, p?: Record<string, string | number>) => string
+  const why =
+    d.refusal === undefined || notAnswering(d)
+      ? []
+      : d.refusal.code === CANNOT_REPORT
+        ? [tt('settings.remote.detail.unsupported')]
+        : [failureLine({ ok: false, ...d.refusal }, t)]
+  return [...why, d.snapshot ? tt('settings.remote.detail.readAt', { at: localTime(d.snapshot.readAt) }) : tt('settings.remote.detail.notReadYet')]
 }

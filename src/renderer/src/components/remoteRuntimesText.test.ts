@@ -1,5 +1,22 @@
 import { describe, it, expect } from 'vitest'
-import { addressLabel, controlFailureLine, failureLine, pairedStateLine, pairingLeftLine, pairingState, pingLine, revokeDoneLine, thisMachineLine } from './remoteRuntimesText'
+import type { ComparisonRow } from '../../../core/controlPlane/compare'
+import type { ReportExtension } from '../../../core/controlPlane/report'
+import {
+  addressLabel,
+  clientSeenLine,
+  controlFailureLine,
+  expectFailureLine,
+  failureLine,
+  pairedStateLine,
+  pairingLeftLine,
+  pairingState,
+  pingLine,
+  revokeDoneLine,
+  stateWord,
+  thisMachineLine,
+  versionLine
+} from './remoteRuntimesText'
+import { localTime } from './findingsText'
 
 /** A t that shows the key and its params, so each assertion names the sentence it expects. */
 const t = (key: string, params?: Record<string, unknown>): string => `${key}${params ? ` ${JSON.stringify(params)}` : ''}`
@@ -92,5 +109,57 @@ describe('the revoke toast', () => {
     expect(revokeDoneLine({ name: 'laptop' }, t)).toBe('settings.remote.revoke.done {"name":"laptop"}')
     // Ruling R8-3: nothing paused, unrecorded or refused is the plain line
     expect(revokeDoneLine({ name: 'laptop', pausedJobs: 0, unrecordedScheduled: 0, notPaused: [] }, t)).toBe('settings.remote.revoke.done {"name":"laptop"}')
+  })
+})
+
+// Remote governance design §4.3, §6.2, §7.3, §10.1: the detail's version line and state words, and This computer's line
+// for each paired controller
+describe('the Runtime detail text', () => {
+  const facts = { asteraVersion: '1.4.8', platform: 'darwin', hostProtocol: 4, capabilities: [], readAt: '2026-10-08T01:02:03.000Z' }
+  it('versionLine says both versions and to update when older, both versions alone when newer, nothing with no facts', () => {
+    expect(versionLine({ facts, here: '1.5.0', older: true }, t)).toBe(
+      'settings.remote.detail.versions {"there":"1.4.8","here":"1.5.0"} settings.remote.detail.updateThere'
+    )
+    expect(versionLine({ facts: { ...facts, asteraVersion: '1.6.0' }, here: '1.5.0', older: false }, t)).toBe('settings.remote.detail.versions {"there":"1.6.0","here":"1.5.0"}')
+    expect(versionLine({ facts: null, here: '1.5.0', older: false }, t)).toBeNull()
+  })
+
+  it('stateWord names each state and "only there"', () => {
+    const ext = (id: string): ReportExtension => ({ id, kind: 'skill', name: id, enabled: true, providers: ['claude'] })
+    const row = (state: ComparisonRow['state'], here: boolean, there: boolean): ComparisonRow => ({
+      id: 'x', kind: 'skill', name: 'x', expected: state !== null, here: here ? ext('x') : null, there: there ? ext('x') : null, state
+    })
+    expect(stateWord(row('missing', true, false), t)).toBe('settings.remote.detail.state.missing')
+    expect(stateWord(row('different', true, true), t)).toBe('settings.remote.detail.state.different')
+    expect(stateWord(row('off', true, true), t)).toBe('settings.remote.detail.state.off')
+    expect(stateWord(row('secret-missing', true, true), t)).toBe('settings.remote.detail.state.secretMissing')
+    expect(stateWord(row('same', true, true), t)).toBe('settings.remote.detail.state.same')
+    expect(stateWord(row(null, false, true), t)).toBe('settings.remote.detail.state.onlyThere')
+    // Not expected: nothing is judged, so nothing is said
+    expect(stateWord(row(null, true, false), t)).toBe('')
+  })
+
+  it('clientSeenLine names the surface, the version and last seen, and never seen', () => {
+    const at = '2026-10-30T09:00:00.000Z'
+    expect(clientSeenLine({ surface: 'desktop', clientVersion: '1.5.0', lastSeenAt: at }, t)).toBe(
+      `settings.remote.thisMachine.clientSeen {"surface":"settings.remote.surface.desktop","version":"1.5.0","at":${JSON.stringify(localTime(at))}}`
+    )
+    expect(clientSeenLine({ surface: 'cli', clientVersion: '1.5.0', lastSeenAt: at }, t)).toContain('"surface":"settings.remote.surface.cli"')
+    expect(clientSeenLine({ surface: 'mcp', clientVersion: '1.5.0', lastSeenAt: at }, t)).toContain('"surface":"settings.remote.surface.mcp"')
+    expect(clientSeenLine({ lastSeenAt: null }, t)).toBe('settings.remote.paired.neverSeen')
+    // An older Host, or a controller that has not said what it is yet: when it was last seen, and nothing guessed
+    expect(clientSeenLine({ lastSeenAt: at }, t)).toBe(`settings.remote.paired.lastSeen {"at":${JSON.stringify(localTime(at))}}`)
+    // Ruling R2-1: a surface this build does not know is shown as its word
+    expect(clientSeenLine({ surface: 'tablet' as never, clientVersion: '1.6.0', lastSeenAt: at }, t)).toContain('"surface":"tablet"')
+  })
+
+  // Ruling R16-1: the screen's own sentence for an id that is no longer here, never the CLI's that names `astera ext list`
+  it('expectFailureLine says an extension is gone in the app language, and any other refusal with its code', () => {
+    expect(expectFailureLine({ ok: false, code: 'INVALID_ARGUMENTS', message: 'x is not an extension on this computer; `astera ext list` names them' }, t)).toBe(
+      'settings.remote.detail.expectGone'
+    )
+    expect(expectFailureLine({ ok: false, code: 'RUNTIME_NOT_FOUND', message: 'no paired Runtime has the id rt' }, t)).toBe(
+      'settings.remote.failed {"code":"RUNTIME_NOT_FOUND","message":"no paired Runtime has the id rt"}'
+    )
   })
 })

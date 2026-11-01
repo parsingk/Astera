@@ -20,7 +20,7 @@ const failed = (e: unknown): PluginsCallAnswer => ({ ok: false, code: 'FAILED', 
  *  Ignore. The Host computes the report and keeps the ignores; this reads it with the ignored ones, which wait under
  *  "Ignored (N)". A button only opens its place (`onOpen`); nothing here acts on a finding. `changes` counts the changes
  *  made on the same screen, in Policies and Credentials: the report is read again after each (final fix list M-4), as the
- *  Host drops the one it kept once a change lands. */
+ *  Host drops the one it kept once a change lands, and once more after the paired Runtimes' reports are read. */
 export function FindingsSection({ onOpen, changes }: { onOpen: (p: FindingPlace) => void; changes: number }): React.JSX.Element {
   const { t } = useI18n()
   const [report, setReport] = useState<FindingsReport | null>(null)
@@ -45,6 +45,12 @@ export function FindingsSection({ onOpen, changes }: { onOpen: (p: FindingPlace)
   useEffect(() => {
     void load()
   }, [changes])
+  // The paired Runtimes' reports, read once when the section opens (remote governance design §5.4): the Host's Runtime
+  // findings come from the snapshots they leave. Never awaited first: the report at hand shows at once, and is read
+  // again when they are in (ruling R16-1). readReports never rejects.
+  useEffect(() => {
+    void window.api.remote.readReports().then(() => load())
+  }, [])
 
   /** Runs one ignore change, says why when it did not happen, and reads the report again either way. */
   const change = async (work: () => Promise<PluginsCallAnswer>): Promise<void> => {
