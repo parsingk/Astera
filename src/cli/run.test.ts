@@ -1723,3 +1723,14 @@ describe('run.ts — host commands hear --no-keepalive (stage 4 T6)', () => {
     expect(call).toMatch(/noKeepalive:\s*parsed\.noKeepalive/)
   })
 })
+
+// Final review F6: what a paired Runtime is told about this CLI and whether `runtimes expect` edits are refused read one
+// signal, so the CLI takes callerSandboxed.ts's `inAgentSession` rather than a copy that could drift from it.
+describe('run.ts — one inAgentSession', () => {
+  it('imports inAgentSession from callerSandboxed.ts and keeps no copy of its own', () => {
+    const src = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'run.ts'), 'utf8')
+    expect(src).toMatch(/import \{[^}]*\binAgentSession\b[^}]*\} from '\.\/callerSandboxed'/)
+    expect(src).not.toMatch(/const inAgentSession\s*=/)
+    expect(src).toMatch(/agent: inAgentSession\(process\.env\)/)
+  })
+})

@@ -251,8 +251,10 @@ describe('scripts/mac-check guides', () => {
   })
 
   it('check 29 runs an agent-classified CLI and expects RUNTIME_PERMISSION_DENIED', () => {
-    // The CLI tells the Runtime it is an agent's from ASTERA_SESSION (cli/run.ts), which both helpers clear
-    expect(readFileSync(path.join(root, 'src/cli/run.ts'), 'utf8')).toContain("const inAgentSession = (process.env.ASTERA_SESSION ?? '') !== ''")
+    // The CLI tells the Runtime it is an agent's from ASTERA_SESSION (cli/run.ts, through cli/callerSandboxed.ts), which
+    // both helpers clear
+    expect(readFileSync(path.join(root, 'src/cli/callerSandboxed.ts'), 'utf8')).toContain("export const inAgentSession = (env: NodeJS.ProcessEnv): boolean => (env.ASTERA_SESSION ?? '') !== ''")
+    expect(readFileSync(path.join(root, 'src/cli/run.ts'), 'utf8')).toContain('agent: inAgentSession(process.env)')
     const body = phase12(29).body
     const line = body.split('\n').find((l) => l.includes('ASTERA_SESSION=mac-check'))
     expect(line).toBeDefined()

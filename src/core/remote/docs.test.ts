@@ -80,6 +80,16 @@ describe('docs/remote-runtime.md', () => {
     })
 })
 
+// Final review F9: `ping` exits as `get` does, for the link failures a retry does not mend
+describe('runtimes ping exit', () => {
+  it('docs/cli.md says it, with the three codes', () =>
+    expect(read('docs/cli.md')).toMatch(
+      /`ping` exits 0 whether the Runtime answers or not[\s\S]{0,300}`ping` is an error with a non-zero exit, as `get` is: `RUNTIME_AUTH_FAILED`,\s+`RUNTIME_IDENTITY_CHANGED` or `RUNTIME_PROTOCOL_MISMATCH`/
+    ))
+  it('docs/remote-runtime.md says it', () =>
+    expect(read('docs/remote-runtime.md')).toMatch(/`ping` exits 0\s+whether the Runtime answers or not, and non-zero when the Runtime no longer accepts this pairing/))
+})
+
 describe('README', () => {
   it('the English README names Remote runtimes and needs no relay', () => {
     const readme = read('README.md')

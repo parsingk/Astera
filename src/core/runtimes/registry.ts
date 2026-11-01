@@ -39,7 +39,9 @@ export interface RuntimeRegistry {
   /** Writes only when the version, platform, protocol or capabilities differ from the kept ones, and answers whether it
    *  wrote: a hello on every connect must not rewrite the file, whose stamp the findings watch. */
   noteFacts(runtimeId: string, facts: RuntimeFacts): Promise<boolean>
-  keepSnapshot(runtimeId: string, s: RuntimeSnapshot): Promise<void>
+  /** False, with nothing written, for a report whose JSON is over SNAPSHOT_MAX_BYTES (final review F12): the caller
+   *  answers FAILED with SNAPSHOT_TOO_LARGE and the old snapshot stays. True otherwise, an id with no profile too. */
+  keepSnapshot(runtimeId: string, s: RuntimeSnapshot): Promise<boolean>
   /** Repeats dropped, first-seen order kept. */
   setExpected(runtimeId: string, ids: string[]): Promise<void>
 }
@@ -58,6 +60,13 @@ const sameFacts =(a: RuntimeFacts, b: RuntimeFacts): boolean =>
   a.platform === b.platform &&
   a.hostProtocol === b.hostProtocol &&
   JSON.stringify([...a.capabilities].sort()) === JSON.stringify([...b.capabilities].sort())
+
+/** The largest report kept as a snapshot, as JSON (final review F12): the parser's caps still let about a megabyte
+ *  through, and the whole registry file is read and rewritten on every change. */
+export const SNAPSHOT_MAX_BYTES = 1024 * 1024
+
+/** Why a report over SNAPSHOT_MAX_BYTES was not kept. */
+export const SNAPSHOT_TOO_LARGE = 'the Runtime sent a report larger than 1 MiB; it was not kept, and the last report kept stays'
 
 /** How often a lastSeenAt is saved at most (design §4.5): a controller's on the Host, a Runtime's here. */
 export const LAST_SEEN_EVERY_MS = 60_000
@@ -235,12 +244,15 @@ export async function openRuntimeRegistry(store: SecretStore): Promise<RuntimeRe
         await writeAll(tx, list.map((r) => (r.runtimeId === id ? { ...r, facts } : r)))
         return true
       }),
-    keepSnapshot: (id, s) =>
-      store.withLock(async (tx) => {
+    keepSnapshot: async (id, s) => {
+      if (Buffer.byteLength(JSON.stringify(s.report), 'utf8') > SNAPSHOT_MAX_BYTES) return false
+      await store.withLock(async (tx) => {
         const list = await readAll(tx)
         if (!list.some((r) => r.runtimeId === id)) return
         await writeAll(tx, list.map((r) => (r.runtimeId === id ? { ...r, snapshot: s } : r)))
-      }),
+      })
+      return true
+    },
     setExpected: (id, ids) =>
       store.withLock(async (tx) => {
         const list = await readAll(tx)

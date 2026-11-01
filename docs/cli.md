@@ -578,11 +578,17 @@ report kept. `--json` gives the same as data (`RuntimeDetail`): `runtimeId`, `na
 `refusal` (`code` and `message`, when no fresh report came) and `comparison`, a row per extension here and per one only
 there.
 
+`ping` exits 0 whether the Runtime answers or not, and `answers` says which, with the code when it does not. When the
+Runtime no longer accepts this pairing, a different computer answers at that address, or the two Astera versions
+cannot talk to each other, `ping` is an error with a non-zero exit, as `get` is: `RUNTIME_AUTH_FAILED`,
+`RUNTIME_IDENTITY_CHANGED` or `RUNTIME_PROTOCOL_MISMATCH`, with the sentence Settings › Remote Runtimes says for it.
+
 `expect` names the extensions of this computer, by their ids from `astera ext list`, that should be on the Runtime too.
 `--add` and `--remove` take comma separated ids, and with neither it lists them. `--add` refuses an id that is not on
 this computer; `--remove` also takes an id that is still in the stored list. `get` then says of each expected one
 whether it is not there, different there, off there, missing a secret there, or the same. Nothing installs there
-from here: install, update or turn it on in that computer's own Settings › MCP & Skills.
+from here: install, update or turn it on in that computer's own Settings › MCP & Skills. An agent session can list the
+ids but not change them: taking one off the list hides what `get` would say of it, as ignoring a finding does.
 
 ### Plugins
 

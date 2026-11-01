@@ -9,7 +9,7 @@
 // sandboxed-session gate on `--runtime` changes (§7.4) does not apply to it (ruling R14-1). Nothing installs there.
 import path from 'node:path'
 import { openSecretStore } from '../core/secrets/secretStore'
-import { factsNoter, openRuntimeRegistry, seenRecorder, type RuntimeProfile, type RuntimeRegistry } from '../core/runtimes/registry'
+import { factsNoter, openRuntimeRegistry, seenRecorder, SNAPSHOT_TOO_LARGE, type RuntimeProfile, type RuntimeRegistry } from '../core/runtimes/registry'
 import { parsePairing } from '../core/remote/pairing'
 import { GATEWAY_PROTOCOL, type ClientInfo, type HelloFrame } from '../core/remote/frames'
 import { RemoteError, type RuntimeLink } from '../core/remote/client'
@@ -20,6 +20,7 @@ import { liveExpected } from '../core/controlPlane/compare'
 import type { ReportExtension } from '../core/controlPlane/report'
 import { CLI_ERROR_CODES, remoteCodeOf, type CliError } from '../core/orchestration/cliOutput'
 import { REMOTE_DEFAULTS } from '../core/remote/settings'
+import { t, type MessageKey } from '../core/i18n'
 
 export interface RuntimesDeps {
   registry(): Promise<RuntimeRegistry>
@@ -272,7 +273,7 @@ async function get(args: Record<string, unknown>, d: RuntimesDeps): Promise<Resu
   const read = await withLink(d, reg, p, async (link, reached) => {
     // Any reply counts as an answer, a refusal too: only a link failure means the Runtime did not answer
     let answered = false
-    const r = await readRuntimeReport({
+    let r = await readRuntimeReport({
       hello: () => link.hello(),
       call: async (cmd, a, o) => {
         const reply = await link.call(cmd, a, o)
@@ -283,7 +284,8 @@ async function get(args: Record<string, unknown>, d: RuntimesDeps): Promise<Resu
       close: () => link.close()
     })
     if (answered) await reached()
-    if (r.ok) await reg.keepSnapshot(p.runtimeId, { readAt: d.now(), report: r.report })
+    // Too large to keep is a report this computer does not take (final review F12): FAILED, the old snapshot kept
+    if (r.ok && !(await reg.keepSnapshot(p.runtimeId, { readAt: d.now(), report: r.report }))) r = { ok: false, code: 'FAILED', message: SNAPSHOT_TOO_LARGE }
     return { r, answered }
   })
   if (isResult(read)) return read
@@ -305,6 +307,15 @@ async function get(args: Record<string, unknown>, d: RuntimesDeps): Promise<Resu
   }
 }
 
+/** The link failures that a retry does not mend, in the sentences Settings › Remote Runtimes says for them
+ *  (renderer remoteRuntimesText.ts LINK_KEYS). `ping` ends with them as `get` does with any refusal it does not answer
+ *  from the snapshot: an error and a non-zero exit (final review F9). */
+const LINK_FAILURES: Readonly<Record<string, MessageKey>> = {
+  RUNTIME_AUTH_FAILED: 'settings.remote.link.authFailed',
+  RUNTIME_IDENTITY_CHANGED: 'settings.remote.link.identityChanged',
+  RUNTIME_PROTOCOL_MISMATCH: 'settings.remote.link.protocolMismatch'
+}
+
 async function ping(args: Record<string, unknown>, d: RuntimesDeps): Promise<Result> {
   const reg = await d.registry()
   const p = await named('ping', args, reg)
@@ -312,6 +323,7 @@ async function ping(args: Record<string, unknown>, d: RuntimesDeps): Promise<Res
   const body = await withLink(d, reg, p, async (link, reached) => {
     const r = await link.call('projects-list', {})
     const h = link.hello()
+    if (r instanceof RemoteError && Object.hasOwn(LINK_FAILURES, r.code)) return failure(r.code as CliError['code'], t('en', LINK_FAILURES[r.code]))
     if (!(r instanceof RemoteError)) await reached()
     return {
       runtimeId: p.runtimeId,
@@ -331,6 +343,10 @@ async function expectIds(args: Record<string, unknown>, d: RuntimesDeps): Promis
   const add = idsOf(args.add)
   const remove = idsOf(args.remove)
   if (add === null || remove === null) return failure('INVALID_ARGUMENTS', '--add and --remove take extension ids, comma separated (from `astera ext list`)')
+  // Ruling RF-1: an id taken off the list takes its finding with it, an ignore by another name, so an agent is refused
+  // the edit as it is refused an ignore (host/orch.ts AGENT_REFUSAL). Absent means an agent, as at sign-in
+  if ((add.length > 0 || remove.length > 0) && d.agent !== false)
+    return failure('PERMISSION_DENIED', 'runtimes expect --add/--remove is for a person at their own shell or in the Astera app, not an agent session (ASTERA_SESSION is set)')
   const reg = await d.registry()
   const p = await named('expect', args, reg)
   if (isResult(p)) return p

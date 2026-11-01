@@ -11,6 +11,7 @@ import {
   openRuntimeRegistry,
   registryStamp,
   seenRecorder,
+  SNAPSHOT_MAX_BYTES,
   type RuntimeFacts,
   type RuntimeProfile
 } from './registry'
@@ -181,6 +182,20 @@ describe('facts, snapshot and expected list per Runtime', () => {
     const listed = await r.list()
     expect(listed[0]).not.toHaveProperty('snapshot')
     expect(listed[0].runtimeId).toBe('rt_a')
+  })
+
+  // Final review F12: the whole file is read and rewritten on every change, so one report may not grow it past a megabyte
+  it('keepSnapshot refuses a report over 1 MiB as JSON, writes nothing and keeps the old snapshot', async () => {
+    const r = await openRuntimeRegistry(store())
+    await r.add(p('rt_a'), 'tok')
+    expect(await r.keepSnapshot('rt_a', { readAt: 'T1', report: report() })).toBe(true)
+    const mtime = (await fs.stat(registryFile())).mtimeMs
+    const ext = (i: number) => ({ id: `${i}`.padStart(256, 'x'), kind: 'skill' as const, name: 'n'.repeat(256), enabled: true, providers: ['claude' as const] })
+    const big = { ...report(), extensions: Array.from({ length: 2000 }, (_, i) => ext(i)) }
+    expect(Buffer.byteLength(JSON.stringify(big))).toBeGreaterThan(SNAPSHOT_MAX_BYTES)
+    expect(await r.keepSnapshot('rt_a', { readAt: 'T2', report: big })).toBe(false)
+    expect((await fs.stat(registryFile())).mtimeMs).toBe(mtime)
+    expect((await r.list())[0].snapshot).toEqual({ readAt: 'T1', report: report() })
   })
 
   it('setExpected keeps the order and drops repeats', async () => {

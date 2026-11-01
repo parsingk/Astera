@@ -5,7 +5,7 @@ import path from 'node:path'
 import { resolveRuntime, runRuntimesCommand, controllerRegistry, type RuntimesDeps } from './runtimes'
 import { RemoteError, type RuntimeLink } from '../core/remote/client'
 import { formatPairing } from '../core/remote/pairing'
-import type { RuntimeProfile } from '../core/runtimes/registry'
+import { SNAPSHOT_TOO_LARGE, type RuntimeProfile } from '../core/runtimes/registry'
 import type { RemoteAnswer, RemoteLink, RemoteTarget } from '../core/remote/link'
 import type { ClientInfo, HelloFrame } from '../core/remote/frames'
 import { REPORT_CAPABILITY, type ControlPlaneReport, type ReportExtension } from '../core/controlPlane/report'
@@ -356,7 +356,7 @@ describe('astera runtimes get, ping and expect (remote governance design §10.2,
       ok: false,
       error: { code: 'RUNTIME_PERMISSION_DENIED', message: 'control-plane-report answers a person on another computer', details: { runtime: 'rt_a' } }
     })
-    const garbled = remote({ 'control-plane-report': { status: 200, body: { ...THERE, version: 2 } } })
+    const garbled = remote({ 'control-plane-report': { status: 200, body: { ...THERE, version: 0 } } })
     expect(await runRuntimesCommand('runtimes-get', { id: 'rt_a' }, getDeps(garbled))).toMatchObject({
       ok: false,
       error: { code: 'FAILED', message: 'the Runtime sent a report this computer cannot read: the report is not version 1' }
@@ -401,9 +401,43 @@ describe('astera runtimes get, ping and expect (remote governance design §10.2,
     })
   })
 
+  // Final review F12: a report too large to keep is FAILED, and the snapshot kept stays as it was
+  it('get of a report over 1 MiB fails FAILED and keeps the old snapshot', async () => {
+    const reg = await pairOne()
+    await reg.keepSnapshot('rt_a', { readAt: '2026-10-01T00:00:00.000Z', report: THERE })
+    const big = report(Array.from({ length: 2000 }, (_, i) => ext(`${i}`.padStart(256, 'x'), 'skill', { name: 'n'.repeat(256) })))
+    const r = await runRuntimesCommand('runtimes-get', { id: 'rt_a' }, getDeps(remote({ 'control-plane-report': { status: 200, body: big } })))
+    expect(r).toEqual({ ok: false, error: { code: 'FAILED', message: SNAPSHOT_TOO_LARGE, details: { runtime: 'rt_a' } } })
+    expect((await reg.list())[0].snapshot).toEqual({ readAt: '2026-10-01T00:00:00.000Z', report: THERE })
+  })
+
+  // Final review F9: a link failure a retry does not mend is an error, as `get` makes it, in the app's sentence for it
+  it('ping of a Runtime that refuses this pairing, is another computer or cannot talk to this one fails with the code', async () => {
+    await pairOne()
+    const failing = (code: string) => (): RemoteLink => ({
+      hello: () => null,
+      call: async () => new RemoteError(code, `raw ${code}`),
+      subscribe: () => () => {},
+      close: () => {}
+    })
+    for (const [code, message] of [
+      ['RUNTIME_AUTH_FAILED', 'That computer no longer accepts this pairing. Pair again.'],
+      ['RUNTIME_IDENTITY_CHANGED', 'A different computer answered at that address. Check it before pairing again.'],
+      ['RUNTIME_PROTOCOL_MISMATCH', "The two computers' Astera versions cannot talk to each other. Update Astera on one side."]
+    ] as const) {
+      const r = await runRuntimesCommand('runtimes-ping', { id: 'rt_a' }, deps({ link: failing(code), version: '1.5.0' }).d)
+      expect(r, code).toEqual({ ok: false, error: { code, message } })
+    }
+    // Not reaching it is still an answer: exit 0, with the code
+    expect(await runRuntimesCommand('runtimes-ping', { id: 'rt_a' }, deps({ link: failing('RUNTIME_OFFLINE'), version: '1.5.0' }).d)).toEqual({
+      ok: true,
+      body: { runtimeId: 'rt_a', answers: false, code: 'RUNTIME_OFFLINE' }
+    })
+  })
+
   it('expect adds, removes and lists; an id unknown here is 400', async () => {
     const reg = await pairOne()
-    const d = getDeps(remote({}))
+    const d = getDeps(remote({}), { agent: false })
     expect(await runRuntimesCommand('runtimes-expect', { id: 'Office', add: 'skill-a, mcp-x' }, d)).toEqual({ ok: true, body: { runtimeId: 'rt_a', expected: ['skill-a', 'mcp-x'] } })
     expect(await runRuntimesCommand('runtimes-expect', { id: 'Office', remove: 'skill-a' }, d)).toEqual({ ok: true, body: { runtimeId: 'rt_a', expected: ['mcp-x'] } })
     expect(await runRuntimesCommand('runtimes-expect', { id: 'Office' }, d)).toEqual({ ok: true, body: { runtimeId: 'rt_a', expected: ['mcp-x'] } })
@@ -418,11 +452,27 @@ describe('astera runtimes get, ping and expect (remote governance design §10.2,
   it('expect --remove refuses an id neither here nor expected, and clears a stale one', async () => {
     const reg = await pairOne()
     await reg.setExpected('rt_a', ['mcp-x', 'gone-here'])
-    const d = getDeps(remote({}))
+    const d = getDeps(remote({}), { agent: false })
     const refused = await runRuntimesCommand('runtimes-expect', { id: 'rt_a', remove: 'mcp-x,typo' }, d)
     expect(refused).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENTS', message: expect.stringContaining('typo') } })
     expect((await reg.list())[0].expected).toEqual(['mcp-x', 'gone-here'])
     expect(await runRuntimesCommand('runtimes-expect', { id: 'rt_a', remove: 'gone-here' }, d)).toEqual({ ok: true, body: { runtimeId: 'rt_a', expected: ['mcp-x'] } })
+    expect((await reg.list())[0].expected).toEqual(['mcp-x'])
+  })
+
+  // Ruling RF-1: removing an id from the expected list hides its finding, an ignore by another name, and agents are
+  // refused ignore changes; listing stays open
+  it('expect --add and --remove are refused to an agent session, and to a caller that does not say', async () => {
+    const reg = await pairOne()
+    await reg.setExpected('rt_a', ['mcp-x'])
+    for (const over of [{ agent: true }, {}] as Partial<RuntimesDeps>[]) {
+      const d = getDeps(remote({}), over)
+      for (const edit of [{ add: 'skill-a' }, { remove: 'mcp-x' }]) {
+        const r = await runRuntimesCommand('runtimes-expect', { id: 'Office', ...edit }, d)
+        expect(r).toMatchObject({ ok: false, error: { code: 'PERMISSION_DENIED', message: expect.stringContaining('not an agent session') } })
+      }
+      expect(await runRuntimesCommand('runtimes-expect', { id: 'Office' }, d)).toEqual({ ok: true, body: { runtimeId: 'rt_a', expected: ['mcp-x'] } })
+    }
     expect((await reg.list())[0].expected).toEqual(['mcp-x'])
   })
 

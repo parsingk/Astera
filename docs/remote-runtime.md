@@ -212,8 +212,10 @@ is compared against it.
 
   `get` keeps the report as the last one read. When the Runtime is offline, does not answer in time, or is too old to
   report, `get` shows the last report kept with its read time and still exits 0. When the Runtime refuses the asker, or
-  sends a report this computer cannot read, `get` exits non-zero and the report kept stays as it was. `--json` is
-  described in [cli.md](cli.md).
+  sends a report this computer cannot read, `get` exits non-zero and the report kept stays as it was. `ping` exits 0
+  whether the Runtime answers or not, and non-zero when the Runtime no longer accepts this pairing, a different computer
+  answers at that address, or the two Astera versions cannot talk to each other. `--json` is described in
+  [cli.md](cli.md).
 - **From MCP.** `list_runtimes` and `get_runtime` say each Runtime's Astera version and platform as it last said them,
   and when this computer last reached it. They never carry the report.
 
@@ -224,7 +226,8 @@ its detail, or run `astera runtimes expect --id <runtime> --add <ids>` with ids 
 set before the first report is read, and for a Runtime too old to report. `--add` refuses an id this computer does not
 have; `--remove` also takes an id that is still in the stored list. An id that is no longer on this computer is left
 out of what is shown and compared, but stays in the stored list: it comes back if the extension returns here, and
-`--remove` clears it.
+`--remove` clears it. An agent session can list the ids but not change them: taking one off the list hides what `get`
+would say of it, as ignoring a finding does.
 
 Each expected extension reads as missing, different, off, secret missing or same there:
 

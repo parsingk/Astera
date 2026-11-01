@@ -270,16 +270,18 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   },
   'runtimes-ping': {
     summary: 'whether a paired Runtime answers now, with its Astera version and OS',
+    detail:
+      'Exits 0 whether it answers or not. A Runtime that no longer accepts this pairing, a different computer at that address, or two Astera versions that cannot talk to each other is an error, as for `runtimes get`.',
     flags: [ID('<runtimeId|name>', 'the Runtime to ask (from `runtimes list`)')]
   },
   'runtimes-expect': {
     summary: "which of this computer's extensions should be on a paired Runtime too",
     detail:
-      'With neither flag it lists them. The ids are this computer\'s, from `astera ext list`; an id that is not here is refused. `runtimes get` then says of each whether it is there, the same, different, off, or missing a secret. Nothing is installed there: install it in that computer\'s own Settings or CLI.',
+      'With neither flag it lists them. The ids are this computer\'s, from `astera ext list`: `--add` refuses an id that is not here, and `--remove` also takes an id that is still in the stored list. `runtimes get` then says of each whether it is there, the same, different, off, or missing a secret. Nothing is installed there: install it in that computer\'s own Settings or CLI. An agent session can list them but not change them.',
     flags: [
       ID('<runtimeId|name>', 'the Runtime (from `runtimes list`)'),
       { name: 'add', value: '<ids>', about: 'extension ids to expect there, comma separated' },
-      { name: 'remove', value: '<ids>', about: 'extension ids to stop expecting there, comma separated' }
+      { name: 'remove', value: '<ids>', about: 'extension ids to stop expecting there, comma separated: ids here, or ids still in the stored list' }
     ]
   },
   'plugins-install': {

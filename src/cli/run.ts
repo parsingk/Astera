@@ -33,7 +33,7 @@ import { runRuntimeCommand, type RuntimeCommandDeps } from './runtime/commands'
 import { controllerRegistry, runRuntimesCommand } from './runtimes'
 import { localReportExtensions } from '../core/controlPlane/local'
 import { answerRemote, trailingRuntimeError } from './remote'
-import { askCallerSandboxed } from './callerSandboxed'
+import { askCallerSandboxed, inAgentSession } from './callerSandboxed'
 import { clientTimeoutMs, followRun, type HostAnswer } from './follow'
 export { clientTimeoutMs, followRun, type FollowEnd, type HostAnswer } from './follow'
 import { remoteTarget } from '../core/remote/targets'
@@ -1186,9 +1186,6 @@ export async function main(): Promise<void> {
     home: homedir()
   })
   const sessionId = process.env.ASTERA_SESSION ?? ''
-  // What a paired Runtime is told about this CLI (remote governance design §7.1): the same signal that makes a local call
-  // an agent's, a session id or a session's workload token.
-  const inAgentSession = (process.env.ASTERA_SESSION ?? '') !== '' || !!process.env.ASTERA_GATEWAY_TOKEN
   verbose.say(`Host address ${address} (profile ${profileDir})`)
 
   // **stdin is read before connecting, not after.** A report's body arrives on stdin, and the
@@ -1378,7 +1375,9 @@ export async function main(): Promise<void> {
       hostname: () => os.hostname(),
       now: () => new Date().toISOString(),
       version: CLI_VERSION,
-      agent: inAgentSession,
+      // What a paired Runtime is told about this CLI (remote governance design §7.1), and who may edit the expected list
+      // (ruling RF-1): the same signal that makes a local call an agent's
+      agent: inAgentSession(process.env),
       localExtensions: () => localReportExtensions(profileDir)
     })
     if (!done.ok) fail(done.error)
@@ -1505,7 +1504,7 @@ export async function main(): Promise<void> {
         mode,
         write: out,
         version: CLI_VERSION,
-        agent: inAgentSession,
+        agent: inAgentSession(process.env),
         deps: { callerSandboxed: () => askCallerSandboxed({ env: process.env, platform: process.platform, home: homedir(), version: CLI_VERSION }) }
       })
       if ('error' in remote) fail(remote.error)

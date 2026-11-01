@@ -5,7 +5,7 @@
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { openRemoteLink, type RemoteLink, type RemoteTarget } from '../../core/remote/link'
-import { factsNoter, registryStamp, seenRecorder, type RuntimeRegistry } from '../../core/runtimes/registry'
+import { factsNoter, registryStamp, seenRecorder, SNAPSHOT_TOO_LARGE, type RuntimeRegistry } from '../../core/runtimes/registry'
 import type { HelloFrame } from '../../core/remote/frames'
 import os from 'node:os'
 import { controllerRegistry, editExpected, resolveRuntime, runRuntimesCommand } from '../../cli/runtimes'
@@ -175,7 +175,7 @@ export function createRemoteRuntimes(a: {
       const held = clients.get(runtimeId)
       if (held?.client !== c) return { r: { ok: false as const, code: 'RUNTIME_NOT_FOUND', message: `no paired Runtime has the id ${runtimeId}` }, answered: false }
       let answered = false
-      const r = await readRuntimeReport({
+      let r: ReportRead = await readRuntimeReport({
         hello: () => held.link.hello(),
         call: async (cmd, args, o) => {
           const reply = await held.link.call(cmd, args, o)
@@ -191,10 +191,11 @@ export function createRemoteRuntimes(a: {
         subscribe: (pty, h) => held.link.subscribe(pty, h),
         close: () => held.link.close()
       })
-      if (r.ok) {
-        failed.delete(runtimeId)
-        await (await reg()).keepSnapshot(runtimeId, { readAt: new Date(now()).toISOString(), report: r.report })
-      } else failed.set(runtimeId, { at: now(), refusal: { code: r.code, message: r.message } })
+      // Too large to keep is a report this computer does not take (final review F12): FAILED, the old snapshot kept
+      if (r.ok && !(await (await reg()).keepSnapshot(runtimeId, { readAt: new Date(now()).toISOString(), report: r.report })))
+        r = { ok: false, code: 'FAILED', message: SNAPSHOT_TOO_LARGE }
+      if (r.ok) failed.delete(runtimeId)
+      else failed.set(runtimeId, { at: now(), refusal: { code: r.code, message: r.message } })
       return { r, answered }
     })().finally(() => reading.delete(runtimeId))
     reading.set(runtimeId, p)

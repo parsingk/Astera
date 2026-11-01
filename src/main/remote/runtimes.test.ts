@@ -9,6 +9,7 @@ import type { HelloFrame } from '../../core/remote/frames'
 import { staleRuntimeFindings } from '../../core/findings/rules/runtimes'
 import { RemoteError } from '../../core/remote/client'
 import { REPORT_CAPABILITY, type ControlPlaneReport, type ReportExtension } from '../../core/controlPlane/report'
+import { SNAPSHOT_TOO_LARGE } from '../../core/runtimes/registry'
 
 const FP = 'F'.repeat(43)
 let dir: string
@@ -297,6 +298,25 @@ describe('reports and the expected list (remote governance design §5.4, §6.1, 
       refusal: { code: 'RUNTIME_OFFLINE' }
     })
     expect((await (await controllerRegistry(dir)).list())[0].snapshot?.readAt).toBe('2026-10-31T00:00:00.000Z')
+  })
+
+  // Final review F12: a report too large to keep is FAILED, and the old snapshot stays
+  it('a report over 1 MiB is refused FAILED with the old snapshot kept', async () => {
+    await (await controllerRegistry(dir)).keepSnapshot('rt_a', { readAt: '2026-10-31T00:00:00.000Z', report: REPORT })
+    const ext = (i: number) => ({ id: `${i}`.padStart(256, 'x'), kind: 'skill', name: 'n'.repeat(256), enabled: true, providers: ['claude'] })
+    const big = { ...REPORT, extensions: Array.from({ length: 2000 }, (_, i) => ext(i)) }
+    const open = (_t: RemoteTarget, o?: { onHello?(h: HelloFrame): void }): RemoteLink => ({
+      hello: () => REPORTING,
+      call: async () => (o?.onHello?.(REPORTING), { status: 200, body: big }),
+      subscribe: () => () => {},
+      close: () => {}
+    })
+    expect(await runtimes(open).detail('rt_a', { refresh: true })).toMatchObject({
+      answering: true,
+      snapshot: { readAt: '2026-10-31T00:00:00.000Z' },
+      refusal: { code: 'FAILED', message: SNAPSHOT_TOO_LARGE }
+    })
+    expect((await (await controllerRegistry(dir)).list())[0].snapshot).toEqual({ readAt: '2026-10-31T00:00:00.000Z', report: REPORT })
   })
 
   it('readReports reads each paired Runtime under the same rule and never rejects', async () => {
