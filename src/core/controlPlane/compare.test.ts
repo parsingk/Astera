@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { compareExtensions, liveExpected } from './compare'
 import type { ControlPlaneReport, ReportExtension } from './report'
 
@@ -57,6 +57,28 @@ describe('compareExtensions (remote governance design §6.2)', () => {
     expect(stateOf(ext('x'), ext('x', 'skill', { providers: ['claude'] }))).toBe('off')
     // Given to more providers there than here is not off.
     expect(stateOf(ext('x', 'skill', { providers: ['claude'] }), ext('x'))).toBe('same')
+  })
+
+  // Ruling R11-1: an entry disabled here is given to no provider here, so off never applies to it.
+  it('an entry disabled on this computer is never off', () => {
+    expect(stateOf(ext('x', 'skill', { enabled: false }), ext('x', 'skill', { enabled: false }))).toBe('same')
+    expect(stateOf(ext('x', 'skill', { enabled: false }), ext('x', 'skill', { providers: ['claude'] }))).toBe('same')
+    expect(stateOf(ext('x'), ext('x', 'skill', { enabled: false }))).toBe('off')
+    expect(stateOf(ext('m', 'mcp', { enabled: false, secretNames: ['K'] }), ext('m', 'mcp', { enabled: false }))).toBe('secret-missing')
+  })
+
+  it('names sort the same whatever the machine locale is', () => {
+    // A machine whose default locale is Swedish, where "ä" sorts after "z"; in English it sorts with "a".
+    const original = String.prototype.localeCompare
+    const spy = vi.spyOn(String.prototype, 'localeCompare').mockImplementation(function (this: string, that, locales, options) {
+      return original.call(this, that, locales ?? 'sv', options)
+    })
+    try {
+      const rows = compareExtensions({ local: [ext('z', 'skill', { name: 'zeta' }), ext('a', 'skill', { name: 'äpple' })], report: null, expected: undefined })
+      expect(rows.map((r) => r.name)).toEqual(['äpple', 'zeta'])
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it('an MCP server whose secret names here include one there lacks is secret-missing', () => {

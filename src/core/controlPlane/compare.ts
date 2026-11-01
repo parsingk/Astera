@@ -30,7 +30,8 @@ function judge(here: ReportExtension, there: ReportExtension | undefined): Compa
   // A copy that could not be read has no hash and makes no claim about its content, so it is never "different"
   // (planning ruling 10). An MCP server carries no hash at all.
   if (here.compareHash !== undefined && there.compareHash !== undefined && here.compareHash !== there.compareHash) return 'different'
-  if (!there.enabled || here.providers.some((p) => !there.providers.includes(p))) return 'off'
+  // Ruling R11-1: an entry disabled here is given to no provider here, so nothing there can be "off" against it.
+  if (here.enabled && (!there.enabled || here.providers.some((p) => !there.providers.includes(p)))) return 'off'
   const thereNames = there.secretNames ?? []
   if (here.kind === 'mcp' && (here.secretNames ?? []).some((n) => !thereNames.includes(n))) return 'secret-missing'
   return 'same'
@@ -63,5 +64,6 @@ export function compareExtensions(a: {
     // An id only there is never expected: the expected list names this computer's entries (§6.1).
     if (!hereIds.has(e.id)) rows.push({ id: e.id, kind: e.kind, name: e.name, expected: false, here: null, there: e, state: null })
   }
-  return rows.sort((x, y) => KIND_ORDER[x.kind] - KIND_ORDER[y.kind] || x.name.localeCompare(y.name) || x.id.localeCompare(y.id))
+  // A fixed locale, so the Host's findings and the detail list in the same order on every machine.
+  return rows.sort((x, y) => KIND_ORDER[x.kind] - KIND_ORDER[y.kind] || x.name.localeCompare(y.name, 'en') || x.id.localeCompare(y.id, 'en'))
 }
