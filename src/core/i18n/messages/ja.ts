@@ -436,6 +436,7 @@ export const ja: Catalog = {
   'settings.remote.detail.enforceBlocked': 'Enforce を開始できません: {code}',
   'settings.remote.detail.extensions': '拡張機能',
   'settings.remote.detail.extensionsUnread': 'あちらの拡張機能を読み取れませんでした。',
+  'settings.remote.detail.reportNewer': 'あちらの Astera は、このコンピューターでは読めない新しい形式で報告しました。このコンピューターの Astera を更新してください。',
   'settings.remote.detail.state.missing': 'あちらにありません',
   'settings.remote.detail.state.different': 'あちらと異なります',
   'settings.remote.detail.state.off': 'あちらでオフ',
@@ -2374,6 +2375,7 @@ export const ja: Catalog = {
   'findings.info.claudeUnhookedCannotTellCodexToo':
     'Claude でも Codex でも判断できません。直近 {days} 日間に、使用を報告するフックなしで動いた Claude のセッションがありました。',
   'findings.info.runtimeNotRead': 'まだ読み取っていません。設定 › リモート Runtime で詳細を開いてください。',
+  'findings.info.runtimeExtensionsUnread': 'あちらの拡張機能を読み取れませんでした。設定 › リモート Runtime で詳細を開いてください。',
   'findings.observe.off': '使用記録による項目は、Observe を 30 日間オンにしておく必要があります。いまは Observe がオフです。',
   'findings.observe.days': '使用記録による項目は、Observe を 30 日間オンにしておく必要があります。これまで {days} 日間オンでした。',
   'findings.unread': '読み取れなかったもの: {sources}',

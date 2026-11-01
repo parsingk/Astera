@@ -440,6 +440,7 @@ export const es: Catalog = {
   'settings.remote.detail.enforceBlocked': 'Enforce no puede iniciarse: {code}',
   'settings.remote.detail.extensions': 'Extensiones',
   'settings.remote.detail.extensionsUnread': 'No se pudieron leer sus extensiones.',
+  'settings.remote.detail.reportNewer': 'El Astera de ese equipo envió un informe más nuevo del que este puede leer. Actualice Astera en este equipo.',
   'settings.remote.detail.state.missing': 'No está allí',
   'settings.remote.detail.state.different': 'Distinta allí',
   'settings.remote.detail.state.off': 'Desactivada allí',
@@ -2404,6 +2405,7 @@ export const es: Catalog = {
   'findings.info.claudeUnhookedCannotTellCodexToo':
     'Ni Claude ni Codex pueden saberlo: en los últimos {days} días una sesión de Claude se ejecutó sin los hooks que informan de los usos.',
   'findings.info.runtimeNotRead': 'Aún no se ha leído. Abra su detalle en Configuración › Runtimes remotos.',
+  'findings.info.runtimeExtensionsUnread': 'No se pudieron leer sus extensiones. Abra su detalle en Configuración › Runtimes remotos.',
   'findings.observe.off': 'Los hallazgos de uso necesitan Observe activado durante 30 días. Observe está desactivado.',
   'findings.observe.days': 'Los hallazgos de uso necesitan Observe activado durante 30 días. Lleva {days} días activado.',
   'findings.unread': 'No se pudo leer: {sources}',

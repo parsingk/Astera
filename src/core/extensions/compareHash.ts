@@ -40,11 +40,16 @@ export async function comparedFiles(dir: string, rel = ''): Promise<string[]> {
   return out
 }
 
+/** A relative path as it is hashed, sorted and stamped: in NFC (final review F11), since macOS can hand out a name
+ *  decomposed that Windows and Linux keep composed, and the same skill must compare the same on both. */
+export const comparedName = (rel: string): string => rel.normalize('NFC')
+
 /** The comparison hash of a folder: as `hashTree`, over normalized contents and without OS metadata files. */
 export async function compareHashTree(dir: string): Promise<string> {
   const h = createHash('sha256')
-  for (const rel of (await comparedFiles(dir)).sort()) {
-    h.update(rel).update('\0').update(normalized(await fs.readFile(path.join(dir, rel)))).update('\0')
+  const files = (await comparedFiles(dir)).map((rel) => ({ rel, name: comparedName(rel) }))
+  for (const f of files.sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0))) {
+    h.update(f.name).update('\0').update(normalized(await fs.readFile(path.join(dir, f.rel)))).update('\0')
   }
   return `cmp1:sha256:${h.digest('hex')}`
 }

@@ -78,6 +78,28 @@ describe('compareHashTree', () => {
     const expected = `cmp1:sha256:${createHash('sha256').update('a/b.md\0' + 'x\n' + '\0').digest('hex')}`
     expect(await compareHashTree(dir)).toBe(expected)
   })
+
+  // Final review F11: macOS has handed out file names decomposed (NFD) where Windows and Linux keep what was typed (NFC
+  // as a rule), so the same skill copied across can name its files in either form
+  it('a file named in NFD and the same name in NFC hash the same, in the same order', async () => {
+    const nfc = 'caf' + String.fromCharCode(0xe9)
+    const nfd = 'cafe' + String.fromCharCode(0x301)
+    expect(nfd.normalize('NFC')).toBe(nfc)
+    const a = path.join(await tmp(), 'skill')
+    const b = path.join(await tmp(), 'skill')
+    for (const [dir, name] of [[a, nfc], [b, nfd]]) {
+      await write(path.join(dir, `${name}.md`), 'same\n')
+      await write(path.join(dir, `${name}`, 'x.md'), 'deep\n')
+      await write(path.join(dir, 'cafe.md'), 'other\n')
+    }
+    expect(await compareHashTree(b)).toBe(await compareHashTree(a))
+    const expected = `cmp1:sha256:${createHash('sha256')
+      .update('cafe.md\0other\n\0')
+      .update(`${nfc}.md\0same\n\0`)
+      .update(`${nfc}/x.md\0deep\n\0`)
+      .digest('hex')}`
+    expect(await compareHashTree(b)).toBe(expected)
+  })
 })
 
 describe('compareHashFile', () => {

@@ -560,6 +560,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.remote.detail.enforceBlocked': 'Enforce cannot start: {code}',
   'settings.remote.detail.extensions': 'Extensions',
   'settings.remote.detail.extensionsUnread': 'Could not read its extensions.',
+  'settings.remote.detail.reportNewer': "That computer's Astera sent a newer report than this one can read. Update Astera on this computer.",
   'settings.remote.detail.state.missing': 'Not there',
   'settings.remote.detail.state.different': 'Different there',
   'settings.remote.detail.state.off': 'Off there',
@@ -2639,6 +2640,7 @@ export const en: Record<keyof typeof ko, string> = {
   'findings.info.claudeUnhookedCannotTellCodexToo':
     'Neither Claude nor Codex can tell: a Claude session in the last {days} days ran without the hooks that report uses.',
   'findings.info.runtimeNotRead': 'Not read yet. Open its detail in Settings › Remote Runtimes.',
+  'findings.info.runtimeExtensionsUnread': 'Could not read its extensions. Open its detail in Settings › Remote Runtimes.',
   'findings.observe.off': 'Usage findings need Observe on for 30 days. Observe is off.',
   'findings.observe.days': 'Usage findings need Observe on for 30 days. It has been on for {days} days.',
   'findings.unread': 'Could not read: {sources}',

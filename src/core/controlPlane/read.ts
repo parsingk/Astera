@@ -4,6 +4,7 @@
 import { RemoteError } from '../remote/client'
 import type { RemoteLink } from '../remote/link'
 import { bodyCodeOf, codeForStatus, messageFrom } from '../orchestration/cliOutput'
+import { t } from '../i18n'
 import { parseControlPlaneReport, REPORT_CAPABILITY, type ControlPlaneReport } from './report'
 
 export type ReportRead = { ok: true; report: ControlPlaneReport } | { ok: false; code: string; message: string }
@@ -18,6 +19,11 @@ export async function readRuntimeReport(link: RemoteLink): Promise<ReportRead> {
     return { ok: false, code: bodyCodeOf(r.body) ?? codeForStatus(r.status), message: messageFrom(r.body, `the Runtime answered ${r.status}`) }
   }
   const report = parseControlPlaneReport(r.body)
-  if ('error' in report) return { ok: false, code: 'FAILED', message: `the Runtime sent a report this computer cannot read: ${report.error}` }
+  if ('error' in report) {
+    // A newer Runtime's report (final review F8): this computer is the one to update, and the code stays FAILED
+    const version = (r.body as { version?: unknown } | null)?.version
+    if (typeof version === 'number' && version > 1) return { ok: false, code: 'FAILED', message: t('en', 'settings.remote.detail.reportNewer') }
+    return { ok: false, code: 'FAILED', message: `the Runtime sent a report this computer cannot read: ${report.error}` }
+  }
   return { ok: true, report }
 }

@@ -9,7 +9,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { readExtensionRegistry } from '../extensions/registry'
-import { compareHashOf, comparedFiles } from '../extensions/compareHash'
+import { compareHashOf, comparedFiles, comparedName } from '../extensions/compareHash'
 import { canonicalOf } from '../extensions/materialize'
 import type { ExtensionEntry, FileExtension } from '../extensions/types'
 import type { UpstreamState } from '../../host/gateway/upstream'
@@ -29,8 +29,10 @@ async function stampOf(e: FileExtension, p: string): Promise<string> {
     return `${rel}\0${st.size}\0${st.mtimeMs}`
   }
   if (e.kind !== 'skill') return line(p, '')
-  const rels = (await comparedFiles(p)).sort()
-  return (await pooled(rels, STAT_AT_ONCE, (rel) => line(path.join(p, rel), rel))).join('\n')
+  // Named, sorted and stamped as the hash names them (comparedName, final review F11)
+  const files = (await comparedFiles(p)).map((rel) => ({ rel, name: comparedName(rel) }))
+  files.sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0))
+  return (await pooled(files, STAT_AT_ONCE, (f) => line(path.join(p, f.rel), f.name))).join('\n')
 }
 
 /** The comparison hash of an entry's canonical copy, read again only when its stamp moved. Throws when it cannot be read. */

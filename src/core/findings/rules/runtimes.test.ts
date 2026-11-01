@@ -154,7 +154,14 @@ describe('runtime-missing-extension (remote governance design §9.2)', () => {
   it('a snapshot whose extensions are null gives the info line too, never a finding', () => {
     const i = withLocal([office(['my-skill'], null)], [ext('my-skill')])
     expect(runtimeExtensionFindings(i)).toEqual([])
-    expect(runtimeExtensionInfo(i).map((l) => [l.subject.id, l.message.key])).toEqual([['rt_office', 'findings.info.runtimeNotRead']])
+    // Final review F7: it was read, and its extensions could not be, which is not "not read yet"
+    expect(runtimeExtensionInfo(i)).toEqual([
+      {
+        subject: { kind: 'runtime', id: 'rt_office', name: 'Office' },
+        message: { key: 'findings.info.runtimeExtensionsUnread' },
+        reason: 'Could not read its extensions. Open its detail in Settings › Remote Runtimes.'
+      }
+    ])
     // A snapshot with a list gives no line
     expect(runtimeExtensionInfo(withLocal([office(['my-skill'], [])], [ext('my-skill')]))).toEqual([])
   })

@@ -91,9 +91,10 @@ export function runtimeExtensionFindings(i: FindingInputs): Finding[] {
 export function runtimeExtensionInfo(i: FindingInputs): InfoLine[] {
   if (i.runtimes === undefined || i.localExtensions === undefined) return []
   const local = i.localExtensions
+  // A snapshot whose list is null was read, and its extensions could not be (final review F7): not "not read yet"
   return i.runtimes
     .filter((r) => liveExpected(r.expected, local).length > 0 && keptList(r) === null)
-    .map((r) => infoLine(subjectOf(r), { key: 'findings.info.runtimeNotRead' }))
+    .map((r) => infoLine(subjectOf(r), { key: r.snapshot === undefined ? 'findings.info.runtimeNotRead' : 'findings.info.runtimeExtensionsUnread' }))
 }
 
 /** outdated-runtime (§9.3): a Runtime whose hello said an older Astera than this one. A newer one is shown in its detail,

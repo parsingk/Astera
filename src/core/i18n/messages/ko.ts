@@ -565,6 +565,7 @@ export const ko = {
   'settings.remote.detail.enforceBlocked': 'Enforce를 시작할 수 없음: {code}',
   'settings.remote.detail.extensions': '확장',
   'settings.remote.detail.extensionsUnread': '그 컴퓨터의 확장 목록을 읽지 못했습니다.',
+  'settings.remote.detail.reportNewer': '그 컴퓨터의 Astera가 이 컴퓨터가 읽을 수 없는 새 형식으로 보고했습니다. 이 컴퓨터의 Astera를 업데이트하세요.',
   'settings.remote.detail.state.missing': '그 컴퓨터에 없음',
   'settings.remote.detail.state.different': '그 컴퓨터와 다름',
   'settings.remote.detail.state.off': '그 컴퓨터에서 꺼짐',
@@ -2893,6 +2894,7 @@ export const ko = {
   'findings.info.claudeUnhookedCannotTellCodexToo':
     'Claude와 Codex 모두 알 수 없습니다. 최근 {days}일 동안 사용을 알리는 훅 없이 실행된 Claude 세션이 있었습니다.',
   'findings.info.runtimeNotRead': '아직 읽지 않았습니다. 설정 › 원격 Runtime에서 자세히를 여세요.',
+  'findings.info.runtimeExtensionsUnread': '그 컴퓨터의 확장 목록을 읽지 못했습니다. 설정 › 원격 Runtime에서 자세히를 여세요.',
   'findings.observe.off': '사용 기록으로 찾는 항목은 Observe를 30일 켜 두어야 합니다. 지금 Observe가 꺼져 있습니다.',
   'findings.observe.days': '사용 기록으로 찾는 항목은 Observe를 30일 켜 두어야 합니다. 지금까지 {days}일 켜져 있었습니다.',
   'findings.unread': '읽지 못한 것: {sources}',
