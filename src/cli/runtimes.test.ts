@@ -364,6 +364,25 @@ describe('astera runtimes get, ping and expect (remote governance design §10.2,
     expect((await reg.list())[0].snapshot).toEqual({ readAt: OLD, report: THERE })
   })
 
+  // Ruling R14-3: a Runtime that signed in but did not reply in time is as transient as one that does not answer
+  it('get of a Runtime that did not reply in time answers the last snapshot and says so, exit 0', async () => {
+    const reg = await pairOne()
+    await reg.keepSnapshot('rt_a', { readAt: OLD, report: THERE })
+    const slow = (_t: RemoteTarget, o: { onHello(h: HelloFrame): void }): RemoteLink => ({
+      hello: () => hello(),
+      call: async () => {
+        o.onHello(hello())
+        return new RemoteError('REMOTE_TIMEOUT', 'the Runtime did not answer control-plane-report within 60 s; it may still finish')
+      },
+      subscribe: () => () => {},
+      close: () => {}
+    })
+    expect(await runRuntimesCommand('runtimes-get', { id: 'rt_a' }, deps({ link: slow, localExtensions: async () => LOCAL, version: '1.5.0' }).d)).toMatchObject({
+      ok: true,
+      body: { answering: false, snapshot: { readAt: OLD, report: THERE }, refusal: { code: 'REMOTE_TIMEOUT' } }
+    })
+  })
+
   it('ping answers with version and OS, or does not answer with the code', async () => {
     const reg = await pairOne()
     const up = remote({ 'projects-list': { status: 200, body: [] } }, hello({ asteraVersion: '1.5.1', platform: 'linux' }))

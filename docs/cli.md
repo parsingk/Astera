@@ -568,8 +568,8 @@ Rule text leaves that computer. `get` keeps the report as the last one read, wit
 this computer's extensions. The Runtime answers only a person's own shell. An agent session is refused there, as an MCP
 client is. A Runtime on an older Astera cannot report, and `get` says to update Astera there.
 
-When the Runtime does not answer, `get` shows the last report kept with its read time, says it does not answer, and
-still exits 0. A Runtime too old to report also exits 0, with the last report kept and the line to update Astera there.
+When the Runtime does not answer, or does not answer in time, `get` shows the last report kept with its read time, says
+it does not answer, and still exits 0. A Runtime too old to report also exits 0, with the last report kept and the line to update Astera there.
 Any other refusal is an error with a non-zero exit, and no report is shown: `RUNTIME_PERMISSION_DENIED` when the Runtime
 refused the asker (an agent session), `FAILED` when it sent a report this computer cannot read. Neither changes the
 report kept. `--json` gives the same as data (`RuntimeDetail`): `runtimeId`, `name`, `fingerprint`, `permission`,

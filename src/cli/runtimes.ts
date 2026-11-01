@@ -49,9 +49,9 @@ export const PAIR_STEP_MS = 30_000
  *  which imports this file, so it is not imported back). A link that never connected answers at once either way. */
 export const PING_RECONNECT_FOR_MS = 10_000
 
-/** The refusals `get` answers with the last snapshot and exit 0 (ruling R14-2): the Runtime did not answer, or it is too
- *  old to report. Any other refusal is the command's error. */
-const SNAPSHOT_REFUSALS: ReadonlySet<string> = new Set(['RUNTIME_OFFLINE', 'RUNTIME_CAPABILITY_MISSING'])
+/** The refusals `get` answers with the last snapshot and exit 0 (rulings R14-2, R14-3): the Runtime did not answer, or
+ *  not in time, or it is too old to report. Any other refusal is the command's error. */
+const SNAPSHOT_REFUSALS: ReadonlySet<string> = new Set(['RUNTIME_OFFLINE', 'REMOTE_TIMEOUT', 'RUNTIME_CAPABILITY_MISSING'])
 
 /** Connects, runs `f` on the link and closes it, all within `ms`; past it the link is closed and the step is
  *  RUNTIME_OFFLINE. */

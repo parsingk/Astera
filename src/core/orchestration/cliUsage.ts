@@ -265,7 +265,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'runtimes-get': {
     summary: "a paired Runtime's setup, read now and compared with this computer's extensions",
     detail:
-      'Reads the Runtime\'s report (its extensions, agent profiles, policy, sandbox, credential names, secret store and findings counts: names and states, never values or paths), keeps it as the last one read, and compares it with this computer\'s extensions. The Runtime answers only a person\'s own shell; an agent session is refused there. When the Runtime does not answer, or is too old to report, the last report kept is shown with when it was read, and the command still exits 0. Any other refusal is an error.',
+      'Reads the Runtime\'s report (its extensions, agent profiles, policy, sandbox, credential names, secret store and findings counts: names and states, never values or paths), keeps it as the last one read, and compares it with this computer\'s extensions. The Runtime answers only a person\'s own shell; an agent session is refused there. When the Runtime does not answer (or not in time), or is too old to report, the last report kept is shown with when it was read, and the command still exits 0. Any other refusal is an error.',
     flags: [ID('<runtimeId|name>', 'the Runtime to read (from `runtimes list`)')]
   },
   'runtimes-ping': {
