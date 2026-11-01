@@ -95,6 +95,35 @@ describe('makeCliVersionProbe', () => {
     expect(probe('codex')).toBe('0.160.0')
   })
 
+  // Remote governance ruling R9-4: a CLI that answers with no version it can read is kept like one that did, so a
+  // Runtime report's Enforce blocker asks it at most once per TTL; a run that failed is still asked again (M1 above)
+  it('keeps an answer that does not parse until the TTL, as an unknown version', async () => {
+    let now = 0
+    const run = vi.fn(() => 'some banner with no version')
+    const runAsync = vi.fn(async () => 'some banner with no version')
+    const probe = makeCliVersionProbe({
+      platform: 'linux',
+      which: () => '/usr/bin/claude',
+      identity: () => 'claude-1',
+      run,
+      whichAsync: async () => '/usr/bin/claude',
+      identityAsync: async () => 'claude-1',
+      runAsync,
+      now: () => now
+    })
+    await probe.warm('claude')
+    expect(probe('claude')).toBeNull()
+    expect(probe('claude')).toBeNull()
+    await probe.warm('claude')
+    expect(run).not.toHaveBeenCalled()
+    expect(runAsync).toHaveBeenCalledTimes(1)
+    // Not a version a spawn can read without asking
+    expect(probe.cached('claude')).toBeUndefined()
+    now = 10 * 60 * 1000
+    expect(probe('claude')).toBeNull()
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+
   // Lifecycle design §4.12, fix round 2: an observed spawn reads the version the prepare warmed and never asks the CLI on
   // the calling thread; a miss is a version not known
   it('cached answers from what was learnt, and never resolves, stats or runs anything', async () => {

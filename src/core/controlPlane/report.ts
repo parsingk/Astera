@@ -50,7 +50,8 @@ export interface PerProvider<T> {
 export interface ControlPlaneReport {
   version: 1
   astera: { version: string; platform: string }
-  extensions: ReportExtension[]
+  /** null: the Runtime could not read its registry, which is not "nothing installed" (ruling R9-3). */
+  extensions: ReportExtension[] | null
   profiles: ReportProfile[] | null
   /** "Run agents without permission checks" there. */
   appBypass: boolean | null
@@ -238,11 +239,14 @@ export function parseControlPlaneReport(v: unknown): ControlPlaneReport | { erro
     const o = obj(v, 'the report')
     if (o.version !== 1) refuse('the report is not version 1')
     const astera = obj(o.astera, 'astera')
-    const extensions: ReportExtension[] = []
-    for (const e of list(o.extensions, EXTENSIONS_MAX, 'extensions')) {
-      const ok = extension(e)
-      if (ok) extensions.push(ok)
-    }
+    const extensions = nullable(o.extensions, (v) => {
+      const kept: ReportExtension[] = []
+      for (const e of list(v, EXTENSIONS_MAX, 'extensions')) {
+        const ok = extension(e)
+        if (ok) kept.push(ok)
+      }
+      return kept
+    })
     return {
       version: 1,
       astera: { version: str(astera.version, 'astera version'), platform: str(astera.platform, 'astera platform') },

@@ -341,6 +341,19 @@ export function hostPtyFactory(a: { registry: PtyRegistry; onOpened(entry: PtyEn
   }
 }
 
+/** Enforce's warm (EnforceStart.warm): everything its blocker asks, asked off the thread first, so the blocker reads
+ *  answers and never runs a probe of its own. Codex's --no-daemon question is one of them (remote governance ruling
+ *  R9-4): the Runtime report reads a codex terminal's blocker on every look. */
+export function enforceWarm(p: {
+  cliVersions: Pick<CliVersionProbe, 'warm'>
+  managedHooks: { warm(): Promise<void> }
+  noDaemon: Pick<CodexNoDaemonProbe, 'warm'>
+}): (provider: 'claude' | 'codex') => Promise<void> {
+  return async (provider) => {
+    await Promise.all([p.cliVersions.warm(provider), provider === 'claude' ? p.managedHooks.warm() : p.noDaemon.warm()])
+  }
+}
+
 /** null, with one log line naming the missing variables, when the Host was started without the
  *  CLI paths — then every Host-local name takes its old route (R1). */
 export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
@@ -531,16 +544,15 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   // Enforce: the blocking hook, written by a session's prepare, which refuses the start without it (E5). A Claude terminal
   // session reads it from its settings file; a chat, and any Codex session, from these arguments
   sessions.enforceHooks = () => statusLine.ensureEnforceFiles()
+  const noDaemon = d.codexNoDaemon ?? codexNoDaemonProbe(platform)
   const enforce: EnforceStart = {
     args: (provider) => (provider === 'claude' ? statusLine.enforceChatArgs() : statusLine.enforceCodexArgs()),
     blocker: (provider, kind) =>
       enforceBlocker(provider, cliVersions(provider)) ??
       (provider === 'claude' && managedHooks.off() ? 'ENFORCE_UNAVAILABLE: hooks-off' : null) ??
       // A codex terminal without --no-daemon may run its tools in a daemon another session started (final review M11)
-      (provider === 'codex' && kind === 'terminal' && !codexNoDaemonProbe(platform)() ? 'ENFORCE_UNAVAILABLE: codex-daemon' : null),
-    warm: async (provider) => {
-      await Promise.all([cliVersions.warm(provider), provider === 'claude' ? managedHooks.warm() : Promise.resolve()])
-    }
+      (provider === 'codex' && kind === 'terminal' && !noDaemon() ? 'ENFORCE_UNAVAILABLE: codex-daemon' : null),
+    warm: enforceWarm({ cliVersions, managedHooks, noDaemon })
   }
   sessions.enforce = enforce
   // The sandbox for Claude (sandbox design §6): its settings twins, the version floor Enforce asks (one probe for both),

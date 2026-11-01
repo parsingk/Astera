@@ -27,12 +27,14 @@ function normalized(bytes: Buffer): Buffer {
   return out.subarray(0, n)
 }
 
-async function files(dir: string, rel = ''): Promise<string[]> {
+/** The relative paths ("/"-joined) a folder's comparison hash covers: every file, OS metadata files left out. Shared with
+ *  the Runtime report's stamp (controlPlane/local.ts), so both skip the same files. */
+export async function comparedFiles(dir: string, rel = ''): Promise<string[]> {
   const out: string[] = []
   for (const e of await fs.readdir(path.join(dir, rel), { withFileTypes: true })) {
     if (isOsMetadata(e.name)) continue
     const r = rel === '' ? e.name : `${rel}/${e.name}`
-    if (e.isDirectory()) out.push(...(await files(dir, r)))
+    if (e.isDirectory()) out.push(...(await comparedFiles(dir, r)))
     else if (e.isFile()) out.push(r)
   }
   return out
@@ -41,7 +43,7 @@ async function files(dir: string, rel = ''): Promise<string[]> {
 /** The comparison hash of a folder: as `hashTree`, over normalized contents and without OS metadata files. */
 export async function compareHashTree(dir: string): Promise<string> {
   const h = createHash('sha256')
-  for (const rel of (await files(dir)).sort()) {
+  for (const rel of (await comparedFiles(dir)).sort()) {
     h.update(rel).update('\0').update(normalized(await fs.readFile(path.join(dir, rel)))).update('\0')
   }
   return `cmp1:sha256:${h.digest('hex')}`

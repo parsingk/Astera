@@ -3,7 +3,7 @@ import { parseControlPlaneReport, SANDBOX_BLOCKER_CODES, type ControlPlaneReport
 
 const ext = (id: string, kind: ReportExtension['kind']): ReportExtension => ({ id, kind, name: id, enabled: true, providers: ['claude', 'codex'] })
 
-const full = (): ControlPlaneReport => ({
+const full = (): ControlPlaneReport & { extensions: ReportExtension[] } => ({
   version: 1,
   astera: { version: '1.5.0', platform: 'darwin' },
   extensions: [
@@ -55,6 +55,12 @@ describe('parseControlPlaneReport (remote governance design §5.2, §5.3)', () =
     for (const leak of ['npx', 'https://h', '"v"', 'C:/x', '/home/me', 'accountIds']) expect(text).not.toContain(leak)
   })
 
+  // Ruling R9-3: a Runtime that could not read its registry says so, rather than "nothing installed"
+  it('extensions null is kept as not read', () => {
+    const parsed = parseControlPlaneReport({ ...full(), extensions: null })
+    expect(parsed).toEqual({ ...full(), extensions: null })
+  })
+
   it('an extension of a kind this build does not know is dropped and the rest kept', () => {
     const r = full() as unknown as { extensions: unknown[] }
     r.extensions.splice(1, 0, { id: 'w', kind: 'workflow', name: 'w', enabled: true, providers: ['claude'] })
@@ -66,7 +72,7 @@ describe('parseControlPlaneReport (remote governance design §5.2, §5.3)', () =
     const r = full()
     r.sandbox.claude.blocker = 'future-code'
     r.policy!.enforce!.codex.chat = 'future-code'
-    const parsed = parseControlPlaneReport(r) as ControlPlaneReport
+    const parsed = parseControlPlaneReport(r) as ReturnType<typeof full>
     expect(parsed.sandbox.claude.blocker).toBe('future-code')
     expect(parsed.policy!.enforce!.codex.chat).toBe('future-code')
 
@@ -87,7 +93,7 @@ describe('parseControlPlaneReport (remote governance design §5.2, §5.3)', () =
   it('an unknown gateway state leaves only that gateway unsaid (design §4.3)', () => {
     const r = full() as unknown as { extensions: Array<Record<string, unknown>> }
     r.extensions[0].gateway = 'paused'
-    const parsed = parseControlPlaneReport(r) as ControlPlaneReport
+    const parsed = parseControlPlaneReport(r) as ReturnType<typeof full>
     const { gateway: _gone, ...rest } = full().extensions[0]
     expect(parsed.extensions[0]).toEqual(rest)
     expect(parsed.extensions.slice(1)).toEqual(full().extensions.slice(1))

@@ -14,7 +14,8 @@ import { SecretFileUnsafe } from '../core/secrets/secretStore'
 import { parseControlPlaneReport, type ControlPlaneReport } from '../core/controlPlane/report'
 import type { Account } from '../core/types'
 import type { Finding, FindingsReport } from '../core/findings/types'
-import { buildControlPlaneReport, type ControlPlaneReportDeps } from './controlPlaneReport'
+import { forgetReadiness } from '../core/sandbox/windowsReadiness'
+import { buildControlPlaneReport, cachedReportProbes, REPORT_PROBE_TTL_MS, type ControlPlaneReportDeps } from './controlPlaneReport'
 
 const NOW = '2026-11-01T00:00:00.000Z'
 
@@ -110,6 +111,14 @@ describe('buildControlPlaneReport (remote governance design §5.2)', () => {
     expect(r.policy?.enforce).toEqual({ claude: { terminal: 'cli-too-old', chat: 'cli-too-old' }, codex: { terminal: 'codex-daemon', chat: null } })
     expect(r.policy?.cliVersions).toEqual({ claude: '2.0.0', codex: '0.160.0' })
     expect(warmed).toEqual(expect.arrayContaining(['enforce:claude', 'enforce:codex', 'cli:claude', 'cli:codex']))
+  })
+
+  // Ruling R9-4: a blocker sentence that is not one this build reads is the code word 'unknown', never refused whole
+  it('an unprefixed or malformed blocker reads as unknown', async () => {
+    const r = await built({
+      enforce: { warm: async () => {}, blocker: (p, kind) => (p === 'claude' ? (kind === 'terminal' ? 'cli-too-old claude 1 2' : 'ENFORCE_UNAVAILABLE: Not A Code') : kind === 'terminal' ? 'ENFORCE_UNAVAILABLE: ' : null) }
+    })
+    expect(r.policy?.enforce).toEqual({ claude: { terminal: 'unknown', chat: 'unknown' }, codex: { terminal: 'unknown', chat: null } })
   })
 
   it('no spawner gives policy.enforce null and still versions', async () => {
@@ -218,11 +227,60 @@ describe('buildControlPlaneReport (remote governance design §5.2)', () => {
     expect(r.profiles).toBeNull()
     expect(r.appBypass).toBeNull()
     expect(r.findings).toBeNull()
-    expect(r.extensions).toEqual([])
+    // Not [] (ruling R9-3): a registry that cannot be read is not "nothing installed"
+    expect(r.extensions).toBeNull()
     // The credentials read the registry for their MCP part
     expect(r.credentials).toBeNull()
     expect(r.policy).not.toBeNull()
     expect(r.secretStore.ok).toBe(true)
     for (const part of ['profiles', 'appBypass', 'findings', 'extensions', 'credentials']) expect(logs.some((l) => l.includes(part)), part).toBe(true)
+  })
+})
+
+// Ruling R9-1 and R9-4: what a report asks of codex doctor and srt is kept 10 minutes and shared while it is asked, so a
+// person who opens a Runtime's detail again and again starts no process for each look
+describe('cachedReportProbes', () => {
+  it('two reports in a row start doctor once per account, and a forget re-asks', async () => {
+    let now = 0
+    const asked: string[] = []
+    const probes = cachedReportProbes({ codexReadiness: async (a) => (asked.push(a.id), 'ready'), nowMs: () => now })
+    const accounts = async (): Promise<Account[]> => [account('cx1', 'codex'), account('cx2', 'codex')]
+    const twice = await Promise.all([built({ platform: 'win32', readAccounts: accounts, ...probes }), built({ platform: 'win32', readAccounts: accounts, ...probes })])
+    expect(twice.map((r) => r.sandbox.codexAccounts)).toEqual([{ ready: 2, total: 2 }, { ready: 2, total: 2 }])
+    await built({ platform: 'win32', readAccounts: accounts, ...probes })
+    expect(asked.sort()).toEqual(['cx1', 'cx2'])
+    // A setup forgets every readiness answer in this process, the report's too
+    forgetReadiness()
+    await built({ platform: 'win32', readAccounts: accounts, ...probes })
+    expect(asked.length).toBe(4)
+    // And the answer is old after ten minutes
+    now = REPORT_PROBE_TTL_MS
+    await built({ platform: 'win32', readAccounts: accounts, ...probes })
+    expect(asked.length).toBe(6)
+  })
+
+  it('a probe that rejects is not kept', async () => {
+    let fail = true
+    let asked = 0
+    const probes = cachedReportProbes({ codexReadiness: async () => (asked++, fail ? Promise.reject(new Error('x')) : 'ready'), nowMs: () => 0 })
+    await expect(probes.codexReadiness!(account('cx1', 'codex'))).rejects.toThrow()
+    fail = false
+    expect(await probes.codexReadiness!(account('cx1', 'codex'))).toBe('ready')
+    expect(asked).toBe(2)
+  })
+
+  it('srt missing() rides the same cache', async () => {
+    let now = 0
+    let asked = 0
+    const probes = cachedReportProbes({ checkRunnerMissing: async () => (asked++, 'bubblewrap missing'), nowMs: () => now })
+    for (let i = 0; i < 3; i++) expect((await built({ platform: 'linux', ...probes })).sandbox.claude.blocker).toBe('runtime-missing')
+    expect(asked).toBe(1)
+    now = REPORT_PROBE_TTL_MS
+    await built({ platform: 'linux', ...probes })
+    expect(asked).toBe(2)
+  })
+
+  it('leaves out a probe it was not given', () => {
+    expect(cachedReportProbes({})).toEqual({})
   })
 })

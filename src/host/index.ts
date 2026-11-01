@@ -26,7 +26,7 @@ import { readFindingsSince } from '../core/findings/since'
 import { cliVersionProbe } from '../core/sessions/cliVersion'
 import { srtCheckRunner } from '../core/sandbox/srtCheck'
 import { REPORT_CAPABILITY } from '../core/controlPlane/report'
-import { buildControlPlaneReport } from './controlPlaneReport'
+import { buildControlPlaneReport, cachedReportProbes } from './controlPlaneReport'
 import { listPairedRuntimes } from '../core/runtimes/registry'
 import { hidingLog } from '../core/extensions/secrets'
 import { createHidingSource, projectOfWorktrees } from '../core/credentials/hiding'
@@ -993,9 +993,17 @@ async function main(): Promise<void> {
   // The Runtime report (remote governance design §5.1, §5.2, §13): composed from the probes above without starting a
   // session. The spawner's Enforce blocker and its version probe, which serves both CLIs; the srt dependency check a
   // sandboxed Claude check's start makes, off Windows where the runner was built (ruling C5); and on Windows the Codex
-  // readiness Settings asks, which runs `codex doctor` once per account and keeps its answer
+  // readiness Settings asks, which runs `codex doctor` for each Codex account every time it is asked. Both start a
+  // process, so the report keeps their answers ten minutes, one question shared while it is asked, and drops the
+  // readiness ones when a setup forgets readiness (rulings R9-1, R9-4)
   const checkRunnerPath = path.join(__dirname, 'sandbox-check.js')
   const checkRunner = existsSync(checkRunnerPath)
+  const reportProbes = cachedReportProbes({
+    ...(process.platform !== 'win32' && checkRunner
+      ? { checkRunnerMissing: () => srtCheckRunner({ execPath: process.execPath, runnerPath: checkRunnerPath }).missing() }
+      : {}),
+    ...(sandboxReadiness ? { codexReadiness: sandboxReadiness } : {})
+  })
   const controlPlaneReport = (): ReturnType<typeof buildControlPlaneReport> =>
     buildControlPlaneReport({
       profileDir,
@@ -1008,10 +1016,7 @@ async function main(): Promise<void> {
       cliVersions: claudeVersions,
       claudeUsernsRestricted: () => spawner?.sandboxWarn?.claudeUsernsRestricted() ?? false,
       checkRunner,
-      ...(process.platform !== 'win32' && checkRunner
-        ? { checkRunnerMissing: () => srtCheckRunner({ execPath: process.execPath, runnerPath: checkRunnerPath }).missing() }
-        : {}),
-      ...(sandboxReadiness ? { codexReadiness: sandboxReadiness } : {}),
+      ...reportProbes,
       findings: () => findings.current(),
       log: (m) => log.write(m)
     })

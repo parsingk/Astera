@@ -12,11 +12,11 @@ import { readCredentials } from '../core/credentials/store'
 import { mcpSecretEntries } from '../core/credentials/mcpEntries'
 import { readExtensionRegistry } from '../core/extensions/registry'
 import { localReportExtensions } from '../core/controlPlane/local'
-import type { ControlPlaneReport, PerProvider, ReportExtension } from '../core/controlPlane/report'
+import type { ControlPlaneReport, PerProvider } from '../core/controlPlane/report'
 import { extensionPaths } from '../core/profile/paths'
 import { providerOf } from '../core/providers/meta'
 import { sandboxKindOf } from '../core/sandbox/coverage'
-import type { Readiness } from '../core/sandbox/windowsReadiness'
+import { readinessGeneration, type Readiness } from '../core/sandbox/windowsReadiness'
 import { openSecretStore, type SecretStore } from '../core/secrets/secretStore'
 import type { CliVersionProbe } from '../core/sessions/cliVersion'
 import type { FindingsReport } from '../core/findings/types'
@@ -58,7 +58,13 @@ const CODE = /^[a-z][a-z0-9-]{0,63}$/
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
 /** The code of a blocker sentence: the first word after `ENFORCE_UNAVAILABLE: ` (`cli-too-old claude 2.0.0 2.1.306`). */
-const blockerCode = (s: string | null): string | null => (s === null ? null : (s.startsWith(ENFORCE_PREFIX) ? s.slice(ENFORCE_PREFIX.length) : s).split(/\s/)[0])
+function blockerCode(s: string | null): string | null {
+  if (s === null) return null
+  // A sentence without the prefix, or whose word is no code word, is `unknown`, so the parser keeps the report (R9-4)
+  if (!s.startsWith(ENFORCE_PREFIX)) return 'unknown'
+  const word = s.slice(ENFORCE_PREFIX.length).split(/\s/)[0]
+  return CODE.test(word) ? word : 'unknown'
+}
 
 /** A thrown error's code as a code word; one with no code, or none that can be made a word, is `failed`. */
 function failureCode(e: unknown): string {
@@ -190,7 +196,7 @@ export async function buildControlPlaneReport(d: ControlPlaneReportDeps): Promis
   return {
     version: 1,
     astera: { version: d.asteraVersion, platform: d.platform },
-    extensions: extensions ?? ([] as ReportExtension[]),
+    extensions,
     profiles,
     appBypass,
     policy,
@@ -199,4 +205,49 @@ export async function buildControlPlaneReport(d: ControlPlaneReportDeps): Promis
     secretStore: store,
     findings
   }
+}
+
+/** How long a report's process-starting probe answers (rulings R9-1, R9-4): codex doctor per Codex account, and srt's
+ *  dependency check. A paired person may open a Runtime's detail again and again; each look must not start them again. */
+export const REPORT_PROBE_TTL_MS = 10 * 60_000
+
+/** Keeps each answer per key for REPORT_PROBE_TTL_MS, one question shared while it is asked. A rejection is not kept,
+ *  and every answer is dropped when this process forgets readiness (a setup ran: forgetReadiness). */
+function keptFor<K, V>(nowMs: () => number): (key: K, ask: () => Promise<V>) => Promise<V> {
+  const kept = new Map<K, { at: number; generation: number; answer: Promise<V> }>()
+  return (key, ask) => {
+    const now = nowMs()
+    const generation = readinessGeneration()
+    const held = kept.get(key)
+    if (held && held.generation === generation && now - held.at < REPORT_PROBE_TTL_MS) return held.answer
+    const answer = ask()
+    kept.set(key, { at: now, generation, answer })
+    answer.catch(() => {
+      if (kept.get(key)?.answer === answer) kept.delete(key)
+    })
+    return answer
+  }
+}
+
+/** The report's two process-starting probes, kept (rulings R9-1, R9-4). Made once per Host, so every report shares it;
+ *  a probe not given is left out. */
+export function cachedReportProbes(p: {
+  codexReadiness?: (account: Account) => Promise<Readiness>
+  checkRunnerMissing?: () => Promise<string | null>
+  /** Test injection for the clock (epoch ms). */
+  nowMs?: () => number
+}): Pick<ControlPlaneReportDeps, 'codexReadiness' | 'checkRunnerMissing'> {
+  const nowMs = p.nowMs ?? Date.now
+  const out: Pick<ControlPlaneReportDeps, 'codexReadiness' | 'checkRunnerMissing'> = {}
+  const readiness = p.codexReadiness
+  if (readiness) {
+    const keep = keptFor<string, Readiness>(nowMs)
+    out.codexReadiness = (account) => keep(account.id, () => readiness(account))
+  }
+  const missing = p.checkRunnerMissing
+  if (missing) {
+    const keep = keptFor<'srt', string | null>(nowMs)
+    out.checkRunnerMissing = () => keep('srt', missing)
+  }
+  return out
 }

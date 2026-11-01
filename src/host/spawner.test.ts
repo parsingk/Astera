@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs, realpathSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { createHostSpawner, type HostSpawnerDeps } from './spawner'
+import { createHostSpawner, enforceWarm, type HostSpawnerDeps } from './spawner'
 import { RepairNeeded } from '../core/settings/repairNeeded'
 import { leftNothingBehind, wasRefusedBeforeActing } from '../core/host/orchProtocol'
 import { PtyRegistry, type RegistryPty } from './registry'
@@ -1457,5 +1457,22 @@ describe('createHostSpawner — createSession', () => {
     expect(String(unknown)).toContain('unknown account')
     expect(wasRefusedBeforeActing(unknown)).toBe(true)
     expect(h.spawned).toHaveLength(0)
+  })
+})
+
+// Remote governance ruling R9-4: a warm leaves Enforce's blocker nothing to ask synchronously, Codex's --no-daemon included
+describe('enforceWarm', () => {
+  it('warms the CLI version for both, managed hooks for Claude and the --no-daemon question for Codex', async () => {
+    const warmed: string[] = []
+    const warm = enforceWarm({
+      cliVersions: { warm: async (c) => void warmed.push('version:' + c) },
+      managedHooks: { warm: async () => void warmed.push('hooks') },
+      noDaemon: { warm: async () => void warmed.push('no-daemon') }
+    })
+    await warm('codex')
+    expect(warmed.sort()).toEqual(['no-daemon', 'version:codex'])
+    warmed.length = 0
+    await warm('claude')
+    expect(warmed.sort()).toEqual(['hooks', 'version:claude'])
   })
 })
