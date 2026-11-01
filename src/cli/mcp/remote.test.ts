@@ -154,6 +154,47 @@ describe('MCP tools with runtimeId (remote runtime design §2.8, X1-07)', () => 
     expect(none.isError).toBe(true)
     expect(textOf(none)).toMatch(/RUNTIME_NOT_FOUND/)
   })
+
+  // Remote governance design §10.3: the kept facts, never the report or this computer's expected list.
+  it('list_runtimes and get_runtime carry the kept Astera version and platform, and no snapshot or expected list', async () => {
+    const reg = await controllerRegistry(dir)
+    await reg.touch('rt_a', '2026-11-01T10:00:00.000Z')
+    await reg.noteFacts('rt_a', { asteraVersion: '1.5.0', platform: 'darwin', hostProtocol: 4, capabilities: ['control-plane.report'], readAt: '2026-11-01T09:00:00.000Z' })
+    await reg.keepSnapshot('rt_a', {
+      readAt: '2026-11-01T09:00:00.000Z',
+      report: {
+        version: 1,
+        astera: { version: '1.5.0', platform: 'darwin' },
+        extensions: [],
+        profiles: [],
+        appBypass: false,
+        policy: null,
+        sandbox: { claude: { kind: 'sandbox', blocker: null }, codex: { kind: 'deny-only', blocker: null } },
+        credentials: null,
+        secretStore: { kind: 'owner-only-files', ok: true },
+        findings: null
+      }
+    })
+    await reg.setExpected('rt_a', ['skill:review'])
+    expect((await reg.list())[0]).toMatchObject({ snapshot: { readAt: '2026-11-01T09:00:00.000Z' }, expected: ['skill:review'] })
+    const client = await connected(recording().link, runtimes(recording().link))
+    const listed = (await client.callTool({ name: 'list_runtimes', arguments: {} })).structuredContent as { runtimes: Array<Record<string, unknown>> }
+    const one = (await client.callTool({ name: 'get_runtime', arguments: { runtimeId: 'rt_a' } })).structuredContent as Record<string, unknown>
+    for (const r of [listed.runtimes[0], one]) {
+      expect(r).toMatchObject({ runtimeId: 'rt_a', asteraVersion: '1.5.0', platform: 'darwin', lastSeenAt: '2026-11-01T10:00:00.000Z' })
+      expect(r).not.toHaveProperty('snapshot')
+      expect(r).not.toHaveProperty('expected')
+      expect(r).not.toHaveProperty('facts')
+    }
+  })
+
+  it('a Runtime with no kept facts yet answers without asteraVersion or platform', async () => {
+    const client = await connected(recording().link, runtimes(recording().link))
+    const one = (await client.callTool({ name: 'get_runtime', arguments: { runtimeId: 'rt_a' } })).structuredContent as Record<string, unknown>
+    expect(one).toMatchObject({ runtimeId: 'rt_a', lastSeenAt: null })
+    expect(one).not.toHaveProperty('asteraVersion')
+    expect(one).not.toHaveProperty('platform')
+  })
 })
 
 describe('openMcpRuntimes', () => {

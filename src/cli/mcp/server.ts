@@ -434,7 +434,16 @@ async function runtimeTool(runtimes: McpRuntimes | undefined, t: ToolDef, input:
   const refused = (await runtimes?.refusal('projects-list')) ?? null
   if (refused !== null) return errorResult('PERMISSION_DENIED', refused)
   const list = (await runtimes?.list()) ?? []
-  const shown = list.map((r) => ({ runtimeId: r.runtimeId, name: r.name, address: r.address, port: r.port, permission: r.permission, lastSeenAt: r.lastSeenAt }))
+  // The kept facts as last read, never the report (remote governance design §10.3): MCP gets no Control Plane reads.
+  const shown = list.map((r) => ({
+    runtimeId: r.runtimeId,
+    name: r.name,
+    address: r.address,
+    port: r.port,
+    permission: r.permission,
+    ...(r.facts && { asteraVersion: r.facts.asteraVersion, platform: r.facts.platform }),
+    lastSeenAt: r.lastSeenAt
+  }))
   if (t.name === 'list_runtimes') {
     const data = { runtimes: shown }
     return { content: textResult(`${t.title} (${shown.length}).`, data), structuredContent: data }

@@ -797,7 +797,7 @@ const LISTED_TOOLS: ToolDef[] = [
     readOnly: true,
     cmd: 'runtimes-list',
     description:
-      'The other machines this one is paired with (`astera runtimes add`): runtimeId, name, address, port and permission (read-only or full-control). Pass a runtimeId to another tool to run it there.',
+      'The other machines this one is paired with (`astera runtimes add`): runtimeId, name, address, port, permission (read-only or full-control), lastSeenAt (when this machine last reached it, or null), and asteraVersion and platform as that Runtime last said them (absent until this machine has reached it). Pass a runtimeId to another tool to run it there.',
     inputSchema: {},
     args: () => ({})
   },
@@ -806,7 +806,7 @@ const LISTED_TOOLS: ToolDef[] = [
     title: 'Get a paired Runtime',
     readOnly: true,
     cmd: 'runtimes-get',
-    description: 'One paired Runtime, by id or name.',
+    description: 'One paired Runtime, by id or name, with the same fields as list_runtimes: asteraVersion, platform and lastSeenAt are as last read, not asked now.',
     inputSchema: { runtimeId: id.describe('A runtimeId or a name from list_runtimes.') },
     args: (i) => ({ id: i.runtimeId })
   }
