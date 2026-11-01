@@ -579,10 +579,10 @@ report kept. `--json` gives the same as data (`RuntimeDetail`): `runtimeId`, `na
 there.
 
 `expect` names the extensions of this computer, by their ids from `astera ext list`, that should be on the Runtime too.
-`--add` and `--remove` take comma separated ids, and with neither it lists them. An id that is not on this computer is
-refused. `get` then says of each expected one whether it is not there, different there, off there, missing a secret
-there, or the same. Nothing installs there from here: install, update or turn it on in that computer's own Settings ›
-MCP & Skills.
+`--add` and `--remove` take comma separated ids, and with neither it lists them. `--add` refuses an id that is not on
+this computer; `--remove` also takes an id that is still in the stored list. `get` then says of each expected one
+whether it is not there, different there, off there, missing a secret there, or the same. Nothing installs there from here:
+install, update or turn it on in that computer's own Settings › MCP & Skills.
 
 ### Plugins
 
