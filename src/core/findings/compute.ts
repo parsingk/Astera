@@ -10,6 +10,7 @@ import type { AuditPolicy } from '../audit/types'
 import type { ExtensionCopy, ExtensionEntry } from '../extensions/types'
 import type { CredentialsFile } from '../credentials/types'
 import type { RuntimeProfile } from '../runtimes/registry'
+import type { ReportExtension } from '../controlPlane/report'
 import type { IgnoredFile } from './ignored'
 import type {
   ExtensionUseSummary,
@@ -26,7 +27,7 @@ import { brokenProfileFindings, brokenWorkFindings, duplicateProfileFindings, fa
 import { tokenSpikeFindings } from './rules/runs'
 import { staleCredentialFindings, unmanagedReferenceFindings, unusedMcpFindings } from './rules/extensions'
 import { coverageGapFindings } from './rules/coverage'
-import { staleRuntimeFindings } from './rules/runtimes'
+import { outdatedRuntimeFindings, runtimeExtensionFindings, runtimeExtensionInfo, staleRuntimeFindings } from './rules/runtimes'
 import { overBroadBypassFindings, overBroadMcpFindings, overBroadSandboxFindings } from './rules/overBroad'
 import { extensionUseFindings, extensionUseInfo } from './rules/extensionUse'
 
@@ -62,6 +63,12 @@ export interface FindingInputs {
   extensionCopies?: ReadonlyMap<string, ExtensionCopy>
   /** The Claude Code on this machine, from the Host's version probe; null when it could not be read (Task 6). */
   claudeVersion?: string | null
+  /** This Astera's own version, which a Runtime's kept one is compared with (remote governance design §9.3). Not a source:
+   *  the Host always has it, and without it no Runtime is called older. */
+  asteraVersion?: string
+  /** This computer's shared extensions as the Runtime report gives them (controlPlane/local.ts), compared with each
+   *  Runtime's kept snapshot (§9.2). */
+  localExtensions?: ReportExtension[]
 }
 
 /** A source a rule can need: every one but `ignored`, the ignore file, which is computeFindings' second argument and
@@ -87,6 +94,7 @@ const FIELDS: Record<RuleSource, ReadonlyArray<keyof FindingInputs>> = {
   credentials: ['credentials'],
   'credential-uses': ['credentialLastUse'],
   runtimes: ['runtimes'],
+  'extension-hashes': ['localExtensions'],
   'extension-uses': ['extensionUses', 'extensionCopies'],
   settings: ['appBypass'],
   'cli-version': ['claudeVersion']
@@ -113,6 +121,8 @@ export const RULES: RuleRow[] = [
   { name: 'unused-mcp', needs: ['extensions', 'records', 'policy'], run: unusedMcpFindings },
   { name: 'coverage-gap', needs: ['policy', 'profiles', 'accounts'], run: coverageGapFindings },
   { name: 'stale-runtime', needs: ['runtimes'], run: staleRuntimeFindings },
+  { name: 'runtime-missing-extension', needs: ['runtimes', 'extension-hashes'], run: runtimeExtensionFindings, info: runtimeExtensionInfo },
+  { name: 'outdated-runtime', needs: ['runtimes'], run: outdatedRuntimeFindings },
   { name: 'unmanaged-credential-reference', needs: ['extensions', 'credentials'], run: unmanagedReferenceFindings },
   { name: 'stale-credential', needs: ['extensions', 'credentials', 'credential-uses'], run: staleCredentialFindings },
   // §4.10's lines each need only their own sources, so one unread drops only the lines that read it (ruling R5-2)
@@ -139,13 +149,15 @@ const RULE_ORDER: Record<FindingRule, number> = {
   'unused-mcp': 4,
   'coverage-gap': 5,
   'stale-runtime': 6,
-  'unmanaged-credential-reference': 7,
-  'stale-credential': 8,
-  'over-broad-profile': 9,
-  'token-spike': 10,
-  'unused-skill': 11,
-  'unused-command': 12,
-  'unused-agent': 13
+  'runtime-missing-extension': 7,
+  'outdated-runtime': 8,
+  'unmanaged-credential-reference': 9,
+  'stale-credential': 10,
+  'over-broad-profile': 11,
+  'token-spike': 12,
+  'unused-skill': 13,
+  'unused-command': 14,
+  'unused-agent': 15
 }
 
 /** By subject kind, then subject name, then rule; the key last, so two subjects of one name keep one order. */

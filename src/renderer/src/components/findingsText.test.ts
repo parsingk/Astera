@@ -11,6 +11,7 @@ import {
   ignoreNote,
   ignoreOutcome,
   jobsRowOf,
+  localTime,
   markTitle,
   openLabelKey,
   pendingJobStep,
@@ -190,12 +191,16 @@ describe('where a finding opens (§7: it opens the place, it never acts)', () =>
   it('takes each place to its tab, its section, or the Jobs view', () => {
     expect(targetOf({ kind: 'profiles', profileIds: ['ap_a', 'ap_b'] })).toEqual({ tab: 'agentProfiles', profileIds: ['ap_a', 'ap_b'] })
     expect(targetOf({ kind: 'extension', entryId: 'm1' })).toEqual({ tab: 'extensions' })
-    expect(targetOf({ kind: 'runtimes', runtimeId: 'rt1' })).toEqual({ tab: 'remote' })
     expect(targetOf({ kind: 'policies' })).toEqual({ section: 'policies' })
     expect(targetOf({ kind: 'credentials', entryId: 'mcp:m1' })).toEqual({ section: 'credentials' })
     expect(targetOf({ kind: 'job', jobId: 'job_1' })).toEqual({ jobs: 'job_1' })
     expect(targetOf({ kind: 'run', runId: 'run_1' })).toEqual({ jobs: 'run_1' })
     expect(targetOf({ kind: 'somewhere' } as never)).toBeNull()
+  })
+
+  // Remote governance design §6.3, §9.2: a Runtime's finding opens its detail, not just the tab
+  it('a runtimes place opens the remote tab at that Runtime', () => {
+    expect(targetOf({ kind: 'runtimes', runtimeId: 'rt1' })).toEqual({ tab: 'remote', runtimeId: 'rt1' })
   })
 
   it('finds the Jobs view row a Job or Run opens: its own row, a Job row folded onto it, or a fire under its Job', () => {
@@ -270,5 +275,17 @@ describe('reading the report', () => {
     expect(wordsOf(say('findings.reason.tokenSpike', { total: 9, median: 3, times: 3, group: { key: 'findings.group.unknown' as never } }), 'Used 9 tokens.', tm)).toBe(
       'Used 9 tokens.'
     )
+  })
+
+  // Remote governance ruling R12-1: a snapshot's time is the viewer's clock, as Remote Runtimes' "Last seen" is, never UTC
+  it('words an ISO time in the at param in local time, the way the app shows other times', () => {
+    const at = '2026-10-31T23:30:00.000Z'
+    const tm = (m: Message): string => translate('ko', m.key, m.params)
+    const words = wordsOf(say('findings.reason.runtimeExtension.missing', { extension: 'my-skill', at }), `my-skill is not there, as of ${at}.`, tm)
+    expect(words).toBe(translate('ko', 'findings.reason.runtimeExtension.missing', { extension: 'my-skill', at: new Date(at).toLocaleString() }))
+    expect(words).not.toContain(at)
+    expect(localTime(at)).toBe(new Date(at).toLocaleString())
+    // An at that is not a time, and every other param, is worded as sent
+    expect(wordsOf(say('findings.reason.runtimeExtension.missing', { extension: 'x', at: 'soon' }), '', tm)).toContain('soon')
   })
 })

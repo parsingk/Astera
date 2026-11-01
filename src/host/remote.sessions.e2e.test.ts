@@ -19,7 +19,7 @@ import { emptyState } from '../core/orchestration/state'
 import { buildCertificate, certificatePem, spkiSha256 } from '../core/remote/cert'
 import { connectRuntime } from '../core/remote/client'
 import { openRemoteLink, type RemoteLink } from '../core/remote/link'
-import type { RemotePtyEvent } from '../core/remote/frames'
+import type { ClientInfo, RemotePtyEvent } from '../core/remote/frames'
 import type { Account } from '../core/types'
 import { startGateway } from '../cli/runtime/gateway'
 
@@ -173,12 +173,16 @@ async function runtime(o: { chats?: ReturnType<typeof hostChat>['chats'] } = {})
   return { port: started.port, controllers, open, openChat, hook, transcript, setHeld: (v: boolean) => void (held = v) }
 }
 
-async function controller(rt: Awaited<ReturnType<typeof runtime>>, permission: 'read-only' | 'full-control' = 'full-control'): Promise<RemoteLink> {
+async function controller(
+  rt: Awaited<ReturnType<typeof runtime>>,
+  permission: 'read-only' | 'full-control' = 'full-control',
+  client: ClientInfo = { surface: 'desktop' }
+): Promise<RemoteLink> {
   const pairing = rt.controllers.createPairing({ permission })
   const first = await connectRuntime({ host: '127.0.0.1', port: rt.port, pin: identity.spkiSha256 })
   const paired = await first.redeem(pairing.code, 'laptop', {})
   first.close()
-  const link = openRemoteLink({ target: { runtimeId: 'rt_p9', address: '127.0.0.1', port: rt.port, fingerprint: identity.spkiSha256, token: paired.token }, client: { surface: 'desktop' } })
+  const link = openRemoteLink({ target: { runtimeId: 'rt_p9', address: '127.0.0.1', port: rt.port, fingerprint: identity.spkiSha256, token: paired.token }, client })
   cleanups.push(() => link.close())
   return link
 }
@@ -277,6 +281,19 @@ describe('Remote Runtime Phase 9a acceptance (remote sessions over the link)', {
     expect(body<{ prompt: string }>(await link.call('sessions-facts', { id: 'chat-1' })).prompt).toBe(null)
     expect(body(await link.call('sessions-stop', { id: 'chat-1' }))).toEqual({ stopped: true })
     expect(chat.killed).toEqual(['chat-1'])
+  })
+
+  // Remote governance design §7.3: the surface the controller's client named at sign-in reaches the Runtime's
+  // sessions-answer, which refuses an agent as chats-answer refuses one locally.
+  it('an MCP-surface controller is refused sessions-answer end to end', async () => {
+    const chat = hostChat()
+    const rt = await runtime({ chats: chat.chats })
+    rt.openChat('proc-h', 'chat-1', 'cl')
+    const link = await controller(rt, 'full-control', { surface: 'mcp', name: 'astera-mcp' })
+    const refused = await link.call('sessions-answer', { id: 'chat-1', request: 'r1', answer: { kind: 'approval', decision: 'accept' } })
+    expect(refused).toMatchObject({ status: 403 })
+    expect(body<{ error: string }>(refused).error).toMatch(/^chats answer is for a person/)
+    expect(chat.answered).toEqual([])
   })
 
   it('a read-only pairing reads but cannot drive', async () => {

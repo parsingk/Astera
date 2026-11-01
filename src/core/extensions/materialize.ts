@@ -48,7 +48,7 @@ const fileName = (e: Pick<FileExtension, 'kind' | 'name'>): string => (e.kind ==
 const folderOf = (kind: FileExtension['kind']): string => (kind === 'skill' ? 'skills' : kind === 'command' ? 'commands' : 'agents')
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
-function canonicalOf(profileDir: string, e: FileExtension): string {
+export function canonicalOf(profileDir: string, e: FileExtension): string {
   const p = extensionPaths(profileDir)
   return path.join(e.kind === 'skill' ? p.skills : e.kind === 'command' ? p.commands : p.agents, fileName(e))
 }

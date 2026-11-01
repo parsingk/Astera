@@ -15,4 +15,11 @@ describe('remoteTarget (remote runtime design §3.4, X1-14)', () => {
     for (const cmd of ['audit-list', 'audit-summary', 'policies-show', 'policies-set-mode', 'policies-set-otherwise', 'policies-rules-add', 'policies-rules-edit', 'policies-rules-remove', 'policies-rules-move', 'policies-rules-reset'])
       expect(remoteTarget(cmd), cmd).toBe('no')
   })
+  // Remote governance design §5.1: the Runtime report is the one Control Plane read a controller asks; every command that
+  // reads or changes a Control Plane store still runs on this machine only
+  it('control-plane-report has a remote form', () => {
+    expect(remoteTarget('control-plane-report')).toBe('yes')
+    for (const cmd of ['extensions-list', 'extensions-import', 'agent-profiles-list', 'agent-profiles-create', 'agent-profiles-audit', 'credentials-list', 'credentials-show', 'policies-show', 'audit-list'])
+      expect(remoteTarget(cmd), cmd).toBe('no')
+  })
 })

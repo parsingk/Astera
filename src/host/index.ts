@@ -24,7 +24,10 @@ import { createHostCredentials } from './credentials/commands'
 import { createHostFindings } from './findings/commands'
 import { readFindingsSince } from '../core/findings/since'
 import { cliVersionProbe } from '../core/sessions/cliVersion'
-import { listPairedRuntimes } from '../core/runtimes/registry'
+import { srtCheckRunner } from '../core/sandbox/srtCheck'
+import { REPORT_CAPABILITY } from '../core/controlPlane/report'
+import { buildControlPlaneReport, cachedReportProbes } from './controlPlaneReport'
+import { listPairedRuntimes, registryStamp } from '../core/runtimes/registry'
 import { hidingLog } from '../core/extensions/secrets'
 import { createHidingSource, projectOfWorktrees } from '../core/credentials/hiding'
 import { sweepGeneratedMcp } from '../core/extensions/resolve'
@@ -59,7 +62,7 @@ import { createConhostReaper, reapWindowsConsoleHosts } from './conhostReaper'
 import { createRemoteSessions, type RemoteSessions } from './remoteSessions'
 import { attachPtyHost } from './ptyHost'
 import { attachProcHost } from './procHost'
-import { sessionSandboxedIn } from './sandboxedSession'
+import { sessionHeldIn, sessionSandboxedIn } from './sandboxedSession'
 import { ProcRegistry } from './procRegistry'
 import { createProcHolders, procHeldBy } from './procHolders'
 import { nodeProcSpawn } from './nodeProc'
@@ -341,6 +344,9 @@ async function main(): Promise<void> {
     // Slack back would be a second one beside. Never rejects.
     void slackWiring?.dispose()
     remoteSessions?.dispose()
+    // A revoke's pause still waiting to be retried is dropped (remote governance R7-2): the next Host starts with no
+    // timer, and the client stays revoked on disk. Never throws.
+    orch.dispose()
     // Before the close, so a Host that is on its way out is not offered up as one to end. A failure
     // here costs nothing: the app checks the executable behind the pid before acting on it, and a
     // record this Host left behind names a pid that is about to stop existing.
@@ -847,7 +853,7 @@ async function main(): Promise<void> {
           bootId,
           platform: process.platform,
           pathStyle: process.platform === 'win32' ? 'windows' : 'posix',
-          capabilities: ['remote.jobs', 'remote.retry', 'remote.changed-files', 'remote.diff', 'pty.seq', 'pty.checkpoint']
+          capabilities: ['remote.jobs', 'remote.retry', 'remote.changed-files', 'remote.diff', 'pty.seq', 'pty.checkpoint', REPORT_CAPABILITY]
         }),
         log: (m) => log.write(m),
         onReady: events.ready,
@@ -982,8 +988,41 @@ async function main(): Promise<void> {
       // What the warm learnt, never a synchronous ask: a CLI that is not there, or whose version could not be read, is unknown
       return claudeVersions.cached('claude') ?? null
     },
+    asteraVersion: hostVersion,
+    // Whoever writes runtimes.json (the app, the CLI, MCP), the next request computes afresh (remote governance §9.2)
+    runtimesStamp: () => registryStamp(runtimesDir),
     log: (m) => log.write(m)
   })
+  // The Runtime report (remote governance design §5.1, §5.2, §13): composed from the probes above without starting a
+  // session. The spawner's Enforce blocker and its version probe, which serves both CLIs; the srt dependency check a
+  // sandboxed Claude check's start makes, off Windows where the runner was built (ruling C5); and on Windows the Codex
+  // readiness Settings asks, which runs `codex doctor` for each Codex account every time it is asked. Both start a
+  // process, so the report keeps srt's answer and a ready home's ten minutes, one question shared while it is asked, and
+  // drops the readiness ones when a setup forgets readiness (rulings R9-1, R9-4, R9-5)
+  const checkRunnerPath = path.join(__dirname, 'sandbox-check.js')
+  const checkRunner = existsSync(checkRunnerPath)
+  const reportProbes = cachedReportProbes({
+    ...(process.platform !== 'win32' && checkRunner
+      ? { checkRunnerMissing: () => srtCheckRunner({ execPath: process.execPath, runnerPath: checkRunnerPath }).missing() }
+      : {}),
+    ...(sandboxReadiness ? { codexReadiness: sandboxReadiness } : {})
+  })
+  const controlPlaneReport = (): ReturnType<typeof buildControlPlaneReport> =>
+    buildControlPlaneReport({
+      profileDir,
+      platform: process.platform,
+      asteraVersion: hostVersion,
+      readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
+      appBypass: async () => (await readAgentPermissionMode(path.join(profileDir, 'app-settings.json'))) === 'yolo',
+      gatewayStates: () => mcpGateway.states(),
+      enforce: spawner?.enforce,
+      cliVersions: claudeVersions,
+      claudeUsernsRestricted: () => spawner?.sandboxWarn?.claudeUsernsRestricted() ?? false,
+      checkRunner,
+      ...reportProbes,
+      findings: () => findings.current(),
+      log: (m) => log.write(m)
+    })
   const orch = createHostOrch({
     profileDir,
     useRecorder,
@@ -996,6 +1035,7 @@ async function main(): Promise<void> {
     credentials,
     audit,
     findings,
+    controlPlaneReport,
     // The job-source plugins a person makes Jobs from (plugin Phase 4 J10), asked through the runtime
     jobSources: hostJobSources({ manager: plugins, runtime: pluginRuntime }),
     // The completion check plugins a Task's checks ask (plugin Phase 5 C8), through the same runtime
@@ -1054,6 +1094,8 @@ async function main(): Promise<void> {
     // Whether a caller's session runs in the sandbox, from its pty's or chat proc's note: what it starts then starts in
     // the sandbox too (final fix pass, C3)
     sessionSandboxed: (sessionId) => sessionSandboxedIn({ ptys: registry, procs }, sessionId),
+    // Whether the session is one this Host holds at all, for `caller-sandboxed` (remote governance design §7.4)
+    sessionHeld: (sessionId) => sessionHeldIn({ ptys: registry, procs }, sessionId),
     // `sessions create` (CLI spec §14): the spawner's path for a terminal session, the chat manager's for
     // a chat one (sessionCreate.ts). Without a spawner both refuse with 6.
     createSession: createHostSessionStarter({

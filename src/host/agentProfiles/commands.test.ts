@@ -38,7 +38,7 @@ async function rig(o: { sandboxSetup?: Deps['sandboxSetup']; sandboxReadiness?: 
     ...(o.sandboxReadiness ? { sandboxReadiness: o.sandboxReadiness } : {}),
     ...(o.sandboxDefault ? { sandboxDefault: o.sandboxDefault } : {})
   })
-  const call = (cmd: string, args: Record<string, unknown> = {}, extra: { role?: 'app' | 'cli' | 'mcp' | 'agent'; agentRefusal?: string } = {}) => {
+  const call = (cmd: string, args: Record<string, unknown> = {}, extra: { role?: 'app' | 'cli' | 'mcp' | 'agent' | 'controller'; agentRefusal?: string } = {}) => {
     const marks = { effects: 0 }
     return hub
       .command({ cmd, args, role: (extra.role ?? 'app') as 'app', ...(extra.agentRefusal ? { agentRefusal: extra.agentRefusal } : {}), marks })
@@ -199,6 +199,13 @@ describe('createHostAgentProfiles', () => {
     expect((await readAgentProfiles(h.profileDir)).profiles).toEqual([])
     // A read is allowed to an agent's shell
     expect((await h.call('agent-profiles-list', {}, { role: 'cli', agentRefusal: 'not from an agent' })).status).toBe(200)
+  })
+
+  // Remote governance design §13: the controller gate refuses these first; the handler refuses a controller as well
+  it('a controller role is refused at the handler too', async () => {
+    const h = await rig({ sandboxReadiness: async () => 'ready' })
+    for (const cmd of ['agent-profiles-list', 'agent-profiles-sandbox-readiness'])
+      expect((await h.call(cmd, {}, { role: 'controller' })).status, cmd).toBe(403)
   })
 
   // Sandbox design §6: the switch is the person's, off unless they turn it on, and kept by an update that leaves it alone

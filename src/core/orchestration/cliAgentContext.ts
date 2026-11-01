@@ -618,6 +618,9 @@ const NOT_SWITCHED = [
   'runtimes-add',
   'runtimes-list',
   'runtimes-remove',
+  'runtimes-get',
+  'runtimes-ping',
+  'runtimes-expect',
   // Answered by the Host's plugin manager (src/host/plugins/commands.ts), beside `projects-add`.
   'plugins-install',
   'plugins-list',

@@ -898,6 +898,29 @@ describe('snapshotFor — 예약 템플릿과 회차', () => {
     expect(asked).toEqual(['job_t1'])
   })
 
+  // Remote governance design §8.2: the Runtime's own Jobs view says a schedule is paused because its maker was unpaired,
+  // naming that controller. The schedule's own row only, as `schedule` is; a person's own pause carries no name
+  it('a template paused by a revoke carries pausedRevokedFrom with the controller\'s name', () => {
+    const base = withRuns([scheduled('t1', absPath('proj')), child('c1', absPath('proj'), 't1'), scheduled('t2', absPath('proj'))])
+    const s: OrchState = {
+      ...base,
+      jobs: base.jobs.map((j) =>
+        j.id === 'job_t1'
+          ? { ...j, paused: true, pausedBy: { reason: 'controller-revoked' as const, clientId: 'cli_1', name: 'laptop', at: '2026-08-20T00:00:00.000Z' } }
+          : j.id === 'job_t2'
+            ? { ...j, paused: true }
+            : j
+      )
+    }
+    const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires, allExist)
+    const revoked = snap.runs.find((r) => r.id === 'job_t1')!
+    expect(revoked).toMatchObject({ paused: true, pausedRevokedFrom: 'laptop' })
+    expect('pausedRevokedFrom' in revoked.children![0]).toBe(false)
+    const byHand = snap.runs.find((r) => r.id === 'job_t2')!
+    expect(byHand.paused).toBe(true)
+    expect('pausedRevokedFrom' in byHand).toBe(false)
+  })
+
   // children: [] 이나 nextFireAt: null 도 이 자리를 통과한다 — 없어야 할 칸이 있는지는 'in' 으로만
   // 알 수 있다. toBeUndefined() 는 생략된 칸과 값이 undefined 인 칸을 구별하지 못한다
   it('회차가 아직 없고 무장도 없는 템플릿은 두 칸이 아예 없다', () => {

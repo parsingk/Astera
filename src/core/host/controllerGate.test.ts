@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { controllerRefusal, CONTROLLER_READ_COMMANDS, CONTROLLER_CONTROL_COMMANDS } from './controllerGate'
+import { controllerKind, controllerRefusal, CONTROLLER_READ_COMMANDS, CONTROLLER_CONTROL_COMMANDS, UNSAID_CLI_NOTE } from './controllerGate'
+import type { ControllerKind } from './orchProtocol'
+import type { ClientInfo } from '../remote/frames'
+import { EXTENSION_COMMANDS } from '../../host/extensions/commands'
+import { AGENT_PROFILE_COMMANDS } from '../../host/agentProfiles/commands'
+import { CREDENTIAL_COMMANDS } from '../../host/credentials/commands'
 
 const p = (permission: string) => ({ clientId: 'cli_ab12', name: 'laptop', permission }) as never
 
@@ -30,6 +35,12 @@ describe('controllerRefusal (remote runtime design §3.4)', () => {
     for (const cmd of ['plugins-inspect', 'plugins-install', 'plugins-list', 'plugins-get', 'plugins-enable', 'plugins-disable', 'plugins-remove'])
       expect(controllerRefusal(cmd, p('full-control'))).toMatchObject({ status: 403, body: { code: 'RUNTIME_PERMISSION_DENIED' } })
   })
+  // Remote governance design §13: the report is the first Control Plane read a controller gets; the rest stays shut
+  it('every extensions-*, agent-profiles-* (with the sandbox three), and credentials-* command is refused to a full-control controller', () => {
+    const all = [...EXTENSION_COMMANDS, ...AGENT_PROFILE_COMMANDS, ...CREDENTIAL_COMMANDS]
+    for (const cmd of ['agent-profiles-sandbox-setup', 'agent-profiles-sandbox-readiness', 'agent-profiles-sandbox-default-remove']) expect(all).toContain(cmd)
+    for (const cmd of all) expect(controllerRefusal(cmd, p('full-control')), cmd).toMatchObject({ status: 403, body: { code: 'RUNTIME_PERMISSION_DENIED' } })
+  })
   // Observe mode design §3, §12: the audit log and the rules are this machine's app's and CLI's only
   it('never lists an audit or policies command, and refuses each at full control', () => {
     for (const cmd of [...CONTROLLER_READ_COMMANDS, ...CONTROLLER_CONTROL_COMMANDS]) expect(cmd).not.toMatch(/^(?:audit|policies)-/)
@@ -51,5 +62,31 @@ describe('controllerRefusal (remote runtime design §3.4)', () => {
   it('lets runs-wait and jobs-wait through as reads', () => {
     for (const cmd of ['runs-wait', 'jobs-wait'])
       expect(controllerRefusal(cmd, { clientId: 'c', name: 'n', permission: 'read-only' } as never), cmd).toBeNull()
+  })
+
+  // Remote governance design §5.1: the Runtime report is a read; that it answers only a person is the Host's own check
+  it('control-plane-report is open at read-only', () => {
+    expect(CONTROLLER_READ_COMMANDS).toContain('control-plane-report')
+    expect(controllerRefusal('control-plane-report', p('read-only'))).toBeNull()
+  })
+})
+
+// Remote governance design §7.2: who a controller is, from the client its sign-in carried. Unsaid reads as an agent
+// wherever it gates anything.
+describe('controllerKind', () => {
+  it('controllerKind reads desktop as a person, mcp as an agent, cli by its flag, and anything unsaid as unsaid', () => {
+    const table: Array<[ClientInfo | undefined, ControllerKind]> = [
+      [undefined, 'unsaid'],
+      [{}, 'unsaid'],
+      [{ surface: 'desktop', version: '1.5.0' }, 'person'],
+      [{ surface: 'mcp', agent: false }, 'agent'],
+      [{ surface: 'cli', agent: false }, 'person'],
+      [{ surface: 'cli', agent: true }, 'agent'],
+      [{ surface: 'cli', version: '1.4.8' }, 'unsaid']
+    ]
+    for (const [c, kind] of table) expect(controllerKind(c), JSON.stringify(c)).toBe(kind)
+  })
+  it('names the update in the note an unsaid CLI gets', () => {
+    expect(UNSAID_CLI_NOTE).toBe(' An Astera CLI older than this release cannot say whether it runs in an agent session; update Astera on that computer.')
   })
 })

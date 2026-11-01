@@ -7,6 +7,10 @@ import { nextStepsFor } from '../core/orchestration/cliOutput'
 import { controllerRegistry } from './runtimes'
 import { RemoteError } from '../core/remote/client'
 import type { RemoteLink, RemoteTarget } from '../core/remote/link'
+import type { HelloFrame } from '../core/remote/frames'
+import { factsOf } from '../core/runtimes/registry'
+import { askCallerSandboxed } from './callerSandboxed'
+import type { connectHost } from '../core/host/connect'
 
 const FP = 'F'.repeat(43)
 let dir: string
@@ -42,8 +46,8 @@ function deps(answer: (cmd: string, args: Record<string, unknown>, o?: { request
   return { d, calls, targets, registryReads: () => registryReads }
 }
 
-const ask = (cmd: string, args: Record<string, unknown>, d: RemoteDeps, runtime = 'rt_a') =>
-  answerRemote({ cmd, args, runtime, request: 'req-1', profileDir: dir, mode: 'json', write: () => {}, version: '1.4.8', deps: d })
+const ask = (cmd: string, args: Record<string, unknown>, d: RemoteDeps, runtime = 'rt_a', agent = false) =>
+  answerRemote({ cmd, args, runtime, request: 'req-1', profileDir: dir, mode: 'json', write: () => {}, version: '1.4.8', agent, deps: d })
 
 describe('answerRemote (remote runtime design §2.8, X1-14)', () => {
   it('refuses a command with no remote form before it reads anything here', async () => {
@@ -79,6 +83,101 @@ describe('answerRemote (remote runtime design §2.8, X1-14)', () => {
     expect(seen).not.toBeNull()
     await ask('jobs-list', {}, deps().d)
     expect((await (await controllerRegistry(dir)).list())[0].lastSeenAt).toBe(seen)
+  })
+  // Remote governance design §4.1: the sign-in hello is kept as the Runtime's facts, before the command answers.
+  it("the link's hello is kept as the Runtime's facts", async () => {
+    const hello: HelloFrame = {
+      t: 'hello', runtimeId: 'rt_a', displayName: 'Office', asteraVersion: '1.5.0', hostProtocol: 4, gatewayProtocol: 1, bootId: 'b1',
+      platform: 'linux', pathStyle: 'posix', permission: 'full-control', capabilities: ['pty.seq']
+    }
+    const d: RemoteDeps = {
+      registry: () => controllerRegistry(dir),
+      link: (_t, o) => ({
+        hello: () => hello,
+        call: async () => (o?.onHello?.(hello), { status: 200, body: [] }),
+        subscribe: () => () => {},
+        close: () => {}
+      })
+    }
+    await ask('jobs-list', {}, d)
+    expect((await (await controllerRegistry(dir)).list())[0].facts).toMatchObject({ asteraVersion: '1.5.0', platform: 'linux', hostProtocol: 4, capabilities: ['pty.seq'] })
+  })
+  // Task 4 review: noteFacts takes the store's cross-process lock, which a busy profile holds for up to 5 s. Facts the
+  // profile already holds (in any capability order) are not written, so a command does not wait on that lock.
+  it('facts the profile already holds cause no noteFacts call', async () => {
+    const hello: HelloFrame = {
+      t: 'hello', runtimeId: 'rt_a', displayName: 'Office', asteraVersion: '1.5.0', hostProtocol: 4, gatewayProtocol: 1, bootId: 'b1',
+      platform: 'linux', pathStyle: 'posix', permission: 'full-control', capabilities: ['pty.seq', 'pty.checkpoint']
+    }
+    await (await controllerRegistry(dir)).noteFacts('rt_a', factsOf({ ...hello, capabilities: ['pty.checkpoint', 'pty.seq'] }, 'earlier'))
+    let notes = 0
+    const d: RemoteDeps = {
+      registry: async () => {
+        const r = await controllerRegistry(dir)
+        return { ...r, noteFacts: (id, f) => (notes++, r.noteFacts(id, f)) }
+      },
+      link: (_t, o) => ({
+        hello: () => hello,
+        call: async () => (o?.onHello?.(hello), { status: 200, body: [] }),
+        subscribe: () => () => {},
+        close: () => {}
+      })
+    }
+    await ask('jobs-list', {}, d)
+    expect(notes).toBe(0)
+    await ask('jobs-list', {}, { ...d, link: (t, o) => d.link(t, { onHello: (h) => o?.onHello?.({ ...h, asteraVersion: '1.5.1' }) }) })
+    expect(notes).toBe(1)
+  })
+  // Remote governance design §7.1: the Runtime reads a CLI as a person only when it says it is not in an agent session.
+  it('answerRemote sends agent true from inside a session and false from a person’s shell', async () => {
+    const clients: unknown[] = []
+    const d: RemoteDeps = {
+      registry: () => controllerRegistry(dir),
+      link: (_t, o) => (clients.push(o?.client), { hello: () => null, call: async () => ({ status: 200, body: [] }), subscribe: () => () => {}, close: () => {} })
+    }
+    await ask('jobs-list', {}, d, 'rt_a', true)
+    await ask('jobs-list', {}, d, 'rt_a', false)
+    expect(clients).toEqual([
+      { name: 'astera cli', version: '1.4.8', surface: 'cli', agent: true },
+      { name: 'astera cli', version: '1.4.8', surface: 'cli', agent: false }
+    ])
+  })
+  // Remote governance design §7.4: a sandboxed session only reads a Runtime.
+  it("a sandboxed session's jobs create to a Runtime is refused before any link opens", async () => {
+    const h = deps()
+    let linked = 0
+    const d: RemoteDeps = { ...h.d, link: (t, o) => (linked++, h.d.link(t, o)), callerSandboxed: async () => true }
+    const r = await ask('jobs-create', { objective: 'o', cwd: '/srv/repo' }, d, 'rt_a', true)
+    expect(r).toEqual({
+      error: {
+        code: 'PERMISSION_DENIED',
+        message: 'a sandboxed session can only read another computer: jobs create changes work there, so it was not sent (if this shell is not an agent session, unset ASTERA_SESSION)'
+      }
+    })
+    expect(linked).toBe(0)
+    expect(h.calls).toEqual([])
+  })
+  it('its jobs list is sent', async () => {
+    const h = deps()
+    let asked = 0
+    await ask('jobs-list', {}, { ...h.d, callerSandboxed: async () => (asked++, true) }, 'rt_a', true)
+    expect(h.calls.map((c) => c.cmd)).toEqual(['jobs-list'])
+    // A read does not ask at all: nothing it could answer would refuse it.
+    expect(asked).toBe(0)
+  })
+  // Ruling R13-4: only the MCP server reads a missing session as unknown; the CLI's person's shell stays unrestricted.
+  it('the CLI with no session env stays unrestricted, and asks no Host', async () => {
+    const h = deps(() => ({ status: 200, body: { id: 'job_1' } }))
+    let connects = 0
+    const connect = (async () => (connects++, { error: 'unreachable' as const })) as unknown as typeof connectHost
+    const callerSandboxed = () => askCallerSandboxed({ env: { PATH: '/usr/bin' }, platform: process.platform, home: os.homedir(), version: '1.4.8', connect })
+    expect(await ask('jobs-create', { objective: 'o', cwd: '/srv/repo' }, { ...h.d, callerSandboxed }, 'rt_a', false)).toEqual({ status: 200, body: { id: 'job_1' } })
+    expect(connects).toBe(0)
+  })
+  it('with no callerSandboxed dep, nothing is asked', async () => {
+    const h = deps(() => ({ status: 200, body: { id: 'job_1' } }))
+    expect(await ask('jobs-create', { objective: 'o', cwd: '/srv/repo' }, h.d, 'rt_a', true)).toEqual({ status: 200, body: { id: 'job_1' } })
+    expect(h.calls.map((c) => c.cmd)).toEqual(['jobs-create'])
   })
   it('an unknown Runtime is RUNTIME_NOT_FOUND', async () => {
     expect(await ask('jobs-list', {}, deps().d, 'nope')).toMatchObject({ error: { code: 'RUNTIME_NOT_FOUND' } })
@@ -141,7 +240,7 @@ describe('answerRemote (remote runtime design §2.8, X1-14)', () => {
         : { status: 200, body: { events: [{ at: '2026-10-08T00:00:00.000Z', text: 'started' }], ending: { state: 'completed' } } }
     })
     const lines: string[] = []
-    const r = await answerRemote({ cmd: 'runs-follow', args: { id: 'run_1' }, runtime: 'rt_a', request: 'req-1', profileDir: dir, mode: 'json', write: (l) => lines.push(l), version: '1.4.8', deps: h.d })
+    const r = await answerRemote({ cmd: 'runs-follow', args: { id: 'run_1' }, runtime: 'rt_a', request: 'req-1', profileDir: dir, mode: 'json', write: (l) => lines.push(l), version: '1.4.8', agent: false, deps: h.d })
     expect(r).toMatchObject({ status: 200, body: { state: 'completed' } })
     expect(h.calls.every((c) => c.cmd === 'runs-follow' && c.o?.request === undefined)).toBe(true)
   })

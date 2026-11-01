@@ -27,6 +27,9 @@ import { profilePaths } from '../../core/profile/paths'
 import { STARTER_POLICY } from '../../core/audit/policy'
 import { emptyState } from '../../core/orchestration/state'
 import type { RuntimeProfile } from '../../core/runtimes/registry'
+import type { ReportExtension } from '../../core/controlPlane/report'
+import { writeExtensionRegistry } from '../../core/extensions/registry'
+import type { ExtensionEntry } from '../../core/extensions/types'
 import type { Account } from '../../core/types'
 import { RULES, type RuleSource } from '../../core/findings/compute'
 import type { Finding } from '../../core/findings/types'
@@ -62,6 +65,39 @@ const STALE: RuntimeProfile = {
 }
 const KEY = 'stale-runtime:rt_old'
 
+/** A shared MCP server on this computer, and as a Runtime's report lists it (remote governance design §5.2). */
+const TRACKER: ExtensionEntry = { id: 'mcp_1', kind: 'mcp', name: 'tracker', transport: 'stdio', command: 'tracker-bin', env: {}, providers: ['claude', 'codex'], importedFrom: 'acc1', enabled: true }
+const TRACKER_THERE: ReportExtension = { id: 'mcp_1', kind: 'mcp', name: 'tracker', enabled: true, providers: ['claude', 'codex'], secretNames: [] }
+
+/** Office, reached yesterday on Astera 1.4.9, expecting the tracker, with a kept snapshot that lists `there`. */
+const behind = (there: ReportExtension[]): RuntimeProfile => ({
+  runtimeId: 'rt_office',
+  name: 'Office',
+  address: '10.0.0.3',
+  port: 7000,
+  fingerprint: 'f',
+  permission: 'read-only',
+  createdAt: iso(NOW - 10 * DAY),
+  lastSeenAt: iso(NOW - DAY),
+  facts: { asteraVersion: '1.4.9', platform: 'darwin', hostProtocol: 4, capabilities: [], readAt: iso(NOW - DAY) },
+  expected: ['mcp_1'],
+  snapshot: {
+    readAt: iso(NOW - DAY),
+    report: {
+      version: 1,
+      astera: { version: '1.4.9', platform: 'darwin' },
+      extensions: there,
+      profiles: null,
+      appBypass: null,
+      policy: null,
+      sandbox: { claude: { kind: 'sandbox', blocker: null }, codex: { kind: 'sandbox', blocker: null } },
+      credentials: null,
+      secretStore: { kind: 'owner-only-files', ok: true },
+      findings: null
+    }
+  }
+})
+
 /** A Host's readers over the temp profile, each call named in `calls`. */
 const deps = (over: Partial<FindingsDeps> = {}) => {
   const calls: string[] = []
@@ -76,6 +112,8 @@ const deps = (over: Partial<FindingsDeps> = {}) => {
     readAccounts: async () => (calls.push('accounts'), []),
     openRuntimes: async () => (calls.push('runtimes'), [STALE]),
     claudeVersion: async () => (calls.push('cli-version'), null),
+    asteraVersion: '1.5.0',
+    runtimesStamp: async () => null,
     log: (m) => logs.push(m),
     ...over
   }
@@ -285,11 +323,111 @@ describe('the findings commands', () => {
     expect(body(await audit(h)).computedAt).toBe(iso(NOW + 1_000))
   })
 
+  // Remote governance design §5.2: the Runtime report counts the findings from the report the minute's cache holds
+  it('current gives the report the cache holds, ignored ones included, or computes one', async () => {
+    const h = createHostFindings(deps().d)
+    const first = await h.current()
+    expect(first.findings.map((f) => f.key)).toEqual([KEY])
+    expect(first.computedAt).toBe(iso(NOW))
+    const once = vi.mocked(readAgentProfiles).mock.calls.length
+    clock = NOW + 1_000
+    expect((await h.current()).computedAt).toBe(iso(NOW))
+    expect((await audit(h)).body).toMatchObject({ computedAt: iso(NOW) })
+    expect(vi.mocked(readAgentProfiles).mock.calls.length).toBe(once)
+  })
+
   it('two requests at once share one compute', async () => {
     const h = createHostFindings(deps().d)
     const [a, b] = await Promise.all([audit(h), audit(h)])
     expect(a.body).toEqual(b.body)
     expect(vi.mocked(readAgentProfiles)).toHaveBeenCalledTimes(1)
+  })
+
+  // Remote governance design §9.2: the Runtime is never asked; what the registry kept is what the finding reads
+  it('the report carries runtime-missing-extension from the kept snapshot without connecting to the Runtime', async () => {
+    await writeExtensionRegistry(dir, { version: 1, entries: [TRACKER] })
+    const { d } = deps({ openRuntimes: async () => [behind([])] })
+    // No dep reaches a Runtime: the registry is all the findings get
+    expect(Object.keys(d).sort()).toEqual(
+      ['appBypass', 'asteraVersion', 'claudeVersion', 'homeDir', 'log', 'nowMs', 'openRuntimes', 'orchState', 'platform', 'profileDir', 'readAccounts', 'runtimesStamp', 'spent'].sort()
+    )
+    const r = await audit(createHostFindings(d))
+    expect(body(r).unread).toEqual([])
+    expect(body(r).findings.map((f) => [f.key, (f.message as { key: string }).key])).toEqual([
+      ['runtime-missing-extension:rt_office:mcp_1', 'findings.reason.runtimeExtension.missing'],
+      ['outdated-runtime:rt_office', 'findings.reason.outdatedRuntime']
+    ])
+  })
+
+  // Controller ruling C7: a changed runtimes.json acts as forget does, whoever wrote it (the app, the CLI or MCP)
+  it("a changed runtimes stamp drops the minute's report", async () => {
+    await writeExtensionRegistry(dir, { version: 1, entries: [TRACKER] })
+    let stamp: string | null = 's1'
+    let runtimes: RuntimeProfile[] = [behind([TRACKER_THERE])]
+    const h = createHostFindings(deps({ openRuntimes: async () => runtimes, runtimesStamp: async () => stamp }).d)
+    expect(keysOf(await audit(h))).toEqual(['outdated-runtime:rt_office'])
+    stamp = 's2'
+    runtimes = [behind([])]
+    clock = NOW + 10_000
+    const again = await audit(h)
+    expect(keysOf(again)).toEqual(['runtime-missing-extension:rt_office:mcp_1', 'outdated-runtime:rt_office'])
+    expect(body(again).computedAt).toBe(iso(NOW + 10_000))
+  })
+
+  it('an unchanged stamp answers from the cache', async () => {
+    await writeExtensionRegistry(dir, { version: 1, entries: [TRACKER] })
+    let runtimes: RuntimeProfile[] = [behind([TRACKER_THERE])]
+    const { d, calls } = deps({ openRuntimes: async () => (calls.push('runtimes'), runtimes), runtimesStamp: async () => 's1' })
+    const h = createHostFindings(d)
+    await audit(h)
+    runtimes = [behind([])]
+    clock = NOW + 10_000
+    const again = await audit(h)
+    expect(keysOf(again)).toEqual(['outdated-runtime:rt_office'])
+    expect(body(again).computedAt).toBe(iso(NOW))
+    expect(calls.filter((c) => c === 'runtimes')).toHaveLength(1)
+  })
+
+  it('a stamp that reads null twice is unchanged', async () => {
+    const { d, calls } = deps({ runtimesStamp: async () => null })
+    const h = createHostFindings(d)
+    await audit(h)
+    clock = NOW + 10_000
+    expect(body(await audit(h)).computedAt).toBe(iso(NOW))
+    expect(calls.filter((c) => c === 'runtimes')).toHaveLength(1)
+  })
+
+  it('a compute begun under the old stamp is neither shared nor kept', async () => {
+    await writeExtensionRegistry(dir, { version: 1, entries: [TRACKER] })
+    let stamp: string | null = 's1'
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    let entered!: () => void
+    const inside = new Promise<void>((resolve) => (entered = resolve))
+    let reads = 0
+    const h = createHostFindings(
+      deps({
+        runtimesStamp: async () => stamp,
+        openRuntimes: async () => {
+          reads += 1
+          if (reads > 1) return [behind([])]
+          entered()
+          await gate
+          return [behind([TRACKER_THERE])]
+        }
+      }).d
+    )
+    const first = audit(h)
+    await inside
+    stamp = 's2'
+    const second = audit(h)
+    release()
+    expect(keysOf(await first)).toEqual(['outdated-runtime:rt_office'])
+    expect(keysOf(await second)).toEqual(['runtime-missing-extension:rt_office:mcp_1', 'outdated-runtime:rt_office'])
+    expect(reads).toBe(2)
+    // The minute keeps the second
+    expect(keysOf(await audit(h))).toEqual(['runtime-missing-extension:rt_office:mcp_1', 'outdated-runtime:rt_office'])
+    expect(reads).toBe(2)
   })
 
   it('the record window is read once with visitRecords and no record array is kept', async () => {

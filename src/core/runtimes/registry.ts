@@ -5,6 +5,10 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { SecretStore, SecretTx } from '../secrets/secretStore'
+import type { HelloFrame } from '../remote/frames'
+import { parseControlPlaneReport, type RuntimeFacts, type RuntimeSnapshot } from '../controlPlane/report'
+// Declared beside the report, which the renderer may import (RuntimeDetail in core/types.ts carries both).
+export type { RuntimeFacts, RuntimeSnapshot } from '../controlPlane/report'
 
 export interface RuntimeProfile {
   runtimeId: string
@@ -16,6 +20,12 @@ export interface RuntimeProfile {
   permission: 'read-only' | 'full-control'
   createdAt: string
   lastSeenAt: string | null
+  /** What the Runtime's hello said about itself (remote governance design §4.1). Never kept over a re-pair. */
+  facts?: RuntimeFacts
+  /** Its last report (§5.4): shown with its time while it does not answer. */
+  snapshot?: RuntimeSnapshot
+  /** This computer's extension ids the person expects there (§6.1). */
+  expected?: string[]
 }
 
 export interface RuntimeRegistry {
@@ -26,6 +36,76 @@ export interface RuntimeRegistry {
   token(runtimeId: string): Promise<string | null>
   /** When this machine last reached the Runtime (design §4.5). An id with no profile changes nothing. */
   touch(runtimeId: string, at: string): Promise<void>
+  /** Writes only when the version, platform, protocol or capabilities differ from the kept ones, and answers whether it
+   *  wrote: a hello on every connect must not rewrite the file, whose stamp the findings watch. */
+  noteFacts(runtimeId: string, facts: RuntimeFacts): Promise<boolean>
+  /** False, with nothing written, for a report whose JSON is over SNAPSHOT_MAX_BYTES (final review F12): the caller
+   *  answers FAILED with SNAPSHOT_TOO_LARGE and the old snapshot stays. True otherwise, an id with no profile too. */
+  keepSnapshot(runtimeId: string, s: RuntimeSnapshot): Promise<boolean>
+  /** Repeats dropped, first-seen order kept. */
+  setExpected(runtimeId: string, ids: string[]): Promise<void>
+}
+
+export const factsOf = (h: Pick<HelloFrame, 'asteraVersion' | 'platform' | 'hostProtocol' | 'capabilities'>, readAt: string): RuntimeFacts => ({
+  asteraVersion: h.asteraVersion,
+  platform: h.platform,
+  hostProtocol: h.hostProtocol,
+  capabilities: [...h.capabilities],
+  readAt
+})
+
+/** The same facts in another capability order are the same facts: the hello's list carries no order. */
+const sameFacts =(a: RuntimeFacts, b: RuntimeFacts): boolean =>
+  a.asteraVersion === b.asteraVersion &&
+  a.platform === b.platform &&
+  a.hostProtocol === b.hostProtocol &&
+  JSON.stringify([...a.capabilities].sort()) === JSON.stringify([...b.capabilities].sort())
+
+/** The largest report kept as a snapshot, as JSON (final review F12): the parser's caps still let about a megabyte
+ *  through, and the whole registry file is read and rewritten on every change. */
+export const SNAPSHOT_MAX_BYTES = 1024 * 1024
+
+/** Why a report over SNAPSHOT_MAX_BYTES was not kept. */
+export const SNAPSHOT_TOO_LARGE = 'the Runtime sent a report larger than 1 MiB; it was not kept, and the last report kept stays'
+
+/** How often a lastSeenAt is saved at most (design §4.5): a controller's on the Host, a Runtime's here. */
+export const LAST_SEEN_EVERY_MS = 60_000
+
+/**
+ * When this machine last reached the Runtime, for a caller that reaches it many times (design §4.5): touched at most once
+ * a minute counting from `last`, the profile's lastSeenAt, and never at the cost of the call that reached it, so it
+ * never rejects.
+ */
+export function seenRecorder(reg: Pick<RuntimeRegistry, 'touch'>, runtimeId: string, last: string | null, now: () => number = Date.now): () => Promise<void> {
+  let lastMs = last === null ? null : Date.parse(last)
+  return async () => {
+    const t = now()
+    if (lastMs !== null && t - lastMs < LAST_SEEN_EVERY_MS) return
+    lastMs = t
+    await reg.touch(runtimeId, new Date(t).toISOString()).catch(() => undefined)
+  }
+}
+
+/**
+ * Who the Runtime says it is, kept from each hello (design §4.1), for a surface that hears a hello on every connect.
+ * Facts equal to `held` (the profile's) are not written, since a write takes the store's cross-process lock; `held`
+ * moves only once a write resolved, so one that failed (a busy store) is tried again at the next hello. Never rejects.
+ */
+export function factsNoter(
+  reg: Pick<RuntimeRegistry, 'noteFacts'>,
+  runtimeId: string,
+  held: RuntimeFacts | undefined
+): (h: Pick<HelloFrame, 'asteraVersion' | 'platform' | 'hostProtocol' | 'capabilities'>) => Promise<void> {
+  return async (h) => {
+    const facts = factsOf(h, new Date().toISOString())
+    if (held && sameFacts(held, facts)) return
+    try {
+      await reg.noteFacts(runtimeId, facts)
+      held = facts
+    } catch {
+      // Tried again at the next hello.
+    }
+  }
 }
 
 const REGISTRY = 'runtimes.json'
@@ -40,14 +120,59 @@ const tokenFile = (id: string): string => {
   return `${id}${TOKEN}`
 }
 
+const isStrings = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string')
+
+const factsIn = (v: unknown): RuntimeFacts | null => {
+  const f = v as Partial<RuntimeFacts> | null
+  return typeof f === 'object' &&
+    f !== null &&
+    typeof f.asteraVersion === 'string' &&
+    typeof f.platform === 'string' &&
+    typeof f.hostProtocol === 'number' &&
+    isStrings(f.capabilities) &&
+    typeof f.readAt === 'string'
+    ? { asteraVersion: f.asteraVersion, platform: f.platform, hostProtocol: f.hostProtocol, capabilities: f.capabilities, readAt: f.readAt }
+    : null
+}
+
+/** Through the report's own parser, so a field it does not know is not carried on by the next write. */
+const snapshotIn = (v: unknown): RuntimeSnapshot | null => {
+  const s = v as Partial<RuntimeSnapshot> | null
+  if (typeof s !== 'object' || s === null || typeof s.readAt !== 'string') return null
+  const report = parseControlPlaneReport(s.report)
+  return 'error' in report ? null : { readAt: s.readAt, report }
+}
+
+/** A part that does not read reads as absent, with no migration and no write; the pairing itself is kept. */
+const profileIn = (r: RuntimeProfile): RuntimeProfile => {
+  const { facts, snapshot, expected, ...pairing } = r
+  const f = factsIn(facts)
+  const s = snapshotIn(snapshot)
+  return { ...pairing, ...(f && { facts: f }), ...(s && { snapshot: s }), ...(isStrings(expected) && { expected }) }
+}
+
 const readAll = async (tx: Pick<SecretTx, 'read'>): Promise<RuntimeProfile[]> => {
   const text = await tx.read(REGISTRY)
   if (text === null) return []
   const parsed = JSON.parse(text) as { runtimes?: unknown }
-  return Array.isArray(parsed.runtimes) ? (parsed.runtimes as RuntimeProfile[]).filter((r) => isRuntimeId(r.runtimeId)) : []
+  return Array.isArray(parsed.runtimes) ? (parsed.runtimes as RuntimeProfile[]).filter((r) => isRuntimeId(r.runtimeId)).map(profileIn) : []
 }
 
 const writeAll = (tx: SecretTx, list: RuntimeProfile[]): Promise<void> => tx.write(REGISTRY, JSON.stringify({ runtimes: list }, null, 2))
+
+/**
+ * The registry file's stamp in `dir`, or null when it is absent or cannot be looked at; never rejects. Every change
+ * here rewrites the file, so a reader that keeps what it computed from the list (the Host's findings) recomputes only
+ * when this changes.
+ */
+export async function registryStamp(dir: string): Promise<string | null> {
+  try {
+    const st = await fs.stat(path.join(dir, REGISTRY))
+    return `${st.ino}:${st.mtimeMs}:${st.ctimeMs}:${st.size}`
+  } catch {
+    return null
+  }
+}
 
 /**
  * The paired Runtimes, for a reader that only lists them (the findings, lifecycle design §4.7, at every compute): none
@@ -86,7 +211,13 @@ export async function openRuntimeRegistry(store: SecretStore): Promise<RuntimeRe
             code: 'RUNTIME_ALREADY_PAIRED'
           })
         await tx.write(file, token)
-        await writeAll(tx, [...list.filter((r) => r.runtimeId !== p.runtimeId), p])
+        // The pairing only: facts come from the sign-in hello through noteFacts, and a re-pair (even under another key)
+        // keeps what the person expects there but never what the old pairing's machine said (design §6.1).
+        const next: RuntimeProfile = { ...p }
+        delete next.facts
+        delete next.snapshot
+        if (held?.expected) next.expected = held.expected
+        await writeAll(tx, [...list.filter((r) => r.runtimeId !== p.runtimeId), next])
       })
     },
     remove: async (id) => {
@@ -104,6 +235,29 @@ export async function openRuntimeRegistry(store: SecretStore): Promise<RuntimeRe
         const list = await readAll(tx)
         if (!list.some((r) => r.runtimeId === id)) return
         await writeAll(tx, list.map((r) => (r.runtimeId === id ? { ...r, lastSeenAt: at } : r)))
+      }),
+    noteFacts: (id, facts) =>
+      store.withLock(async (tx) => {
+        const list = await readAll(tx)
+        const held = list.find((r) => r.runtimeId === id)
+        if (!held || (held.facts && sameFacts(held.facts, facts))) return false
+        await writeAll(tx, list.map((r) => (r.runtimeId === id ? { ...r, facts } : r)))
+        return true
+      }),
+    keepSnapshot: async (id, s) => {
+      if (Buffer.byteLength(JSON.stringify(s.report), 'utf8') > SNAPSHOT_MAX_BYTES) return false
+      await store.withLock(async (tx) => {
+        const list = await readAll(tx)
+        if (!list.some((r) => r.runtimeId === id)) return
+        await writeAll(tx, list.map((r) => (r.runtimeId === id ? { ...r, snapshot: s } : r)))
+      })
+      return true
+    },
+    setExpected: (id, ids) =>
+      store.withLock(async (tx) => {
+        const list = await readAll(tx)
+        if (!list.some((r) => r.runtimeId === id)) return
+        await writeAll(tx, list.map((r) => (r.runtimeId === id ? { ...r, expected: [...new Set(ids)] } : r)))
       }),
     token: async (id) => {
       const text = await store.read(tokenFile(id))

@@ -86,12 +86,20 @@ export function leftNothingBehind(err: unknown): boolean {
 /** A remote controller's permission level (remote runtime design §3.4, N15). Set at pairing. */
 export type ControllerPermission = 'read-only' | 'full-control'
 
+/** Whether a remote controller is a person or an agent, from the client its connection signed in with (remote governance
+ *  design §7.2). `unsaid` is a client that did not say, and is treated as an agent wherever the kind gates anything. */
+export type ControllerKind = 'person' | 'agent' | 'unsaid'
+
 /** Who a remote controller's call is, as the Host derived it from its own binding of the link connection (remote
  *  runtime design §3.3, X1-08). */
 export interface ControllerPrincipal {
   clientId: string
   name: string
   permission: ControllerPermission
+  /** Absent reads as `unsaid` everywhere (fail closed). */
+  kind?: ControllerKind
+  surface?: 'desktop' | 'cli' | 'mcp'
+  clientVersion?: string
 }
 
 /** The client behind one `orch-call`. Supplied by `server.ts`, which is the only place that knows

@@ -45,6 +45,28 @@ describe('docs/remote-runtime.md', () => {
   ]
   for (const [what, re] of says) it(`says ${what}`, () => expect(doc).toMatch(re))
 
+  // Remote governance design §10.4: what this computer sees of a Runtime, how agents and sandboxed sessions count there,
+  // and what a revoke does to scheduled Jobs, each in the section a person looks in.
+  const seen = '## What this computer can see of a Runtime'
+  const sectionSays: Array<[string, string, RegExp]> = [
+    [seen, 'the report holds names only', /names, states and counts[^.]*never a value, a path, a command line or a Rule/],
+    ['## Security', 'values stay', /Values stay on that computer\. Astera never copies them\./],
+    [seen, 'the comparison', /missing, different, off, secret missing or same/],
+    [seen, 'nothing installs from here', /[Nn]othing installs from (?:here|this computer)/],
+    [seen, 'agents are agents there', /MCP client or a CLI inside an agent session counts as an agent on the Runtime/],
+    [seen, 'sandboxed sessions read', /sandboxed session can (?:only )?read a Runtime/],
+    ['## Revoke and remove', 'revoke pauses', /[Rr]evoking[^.]*pauses the scheduled Jobs it made/],
+    ['## Revoke and remove', 'only the Runtime resumes', /[Oo]nly (?:a person on )?the Runtime (?:can )?resumes? them/],
+    [seen, 'older CLIs', /older Astera CLI[^.]*counts as an agent[^.]*update Astera on the computer that CLI runs on/],
+    [
+      '### A sandboxed session only reads a Runtime',
+      'the MCP no-session refusal',
+      /MCP server whose client\s+passed it neither `ASTERA_SESSION` nor `ASTERA_GATEWAY_TOKEN`[^.]*refuses every\s+remote change/
+    ],
+    ['### A sandboxed session only reads a Runtime', 'that the sandbox rule is not a boundary', /not a hard boundary/]
+  ]
+  for (const [heading, what, re] of sectionSays) it(`says ${what}, under ${heading.replace(/^#+ /, '')}`, () => expect(section(doc, heading)).toMatch(re))
+
   const recipes: Array<[string, RegExp[]]> = [
     ['### Windows', [/runtime serve/, /update-hold/, /LASTEXITCODE -eq 78/, /Register-ScheduledTask/, /Unregister-ScheduledTask/, /S4U/]],
     ['### macOS', [/runtime serve/, /SuccessfulExit/, /keychain/, /not been measured/]],
@@ -56,6 +78,16 @@ describe('docs/remote-runtime.md', () => {
       expect(body.length).toBeGreaterThan(0)
       for (const re of res) expect(body).toMatch(re)
     })
+})
+
+// Final review F9: `ping` exits as `get` does, for the link failures a retry does not mend
+describe('runtimes ping exit', () => {
+  it('docs/cli.md says it, with the three codes', () =>
+    expect(read('docs/cli.md')).toMatch(
+      /`ping` exits 0 whether the Runtime answers or not[\s\S]{0,300}`ping` is an error with a non-zero exit, as `get` is: `RUNTIME_AUTH_FAILED`,\s+`RUNTIME_IDENTITY_CHANGED` or `RUNTIME_PROTOCOL_MISMATCH`/
+    ))
+  it('docs/remote-runtime.md says it', () =>
+    expect(read('docs/remote-runtime.md')).toMatch(/`ping` exits 0\s+whether the Runtime answers or not, and non-zero when the Runtime no longer accepts this pairing/))
 })
 
 describe('README', () => {

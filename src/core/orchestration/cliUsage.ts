@@ -262,6 +262,28 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     summary: 'forget a paired Runtime on this machine (it does not revoke the pairing there)',
     flags: [ID('<runtimeId|name>', 'the Runtime to forget (from `runtimes list`)')]
   },
+  'runtimes-get': {
+    summary: "a paired Runtime's setup, read now and compared with this computer's extensions",
+    detail:
+      'Reads the Runtime\'s report (its extensions, agent profiles, policy, sandbox, credential names, secret store and findings counts: names and states, never values or paths), keeps it as the last one read, and compares it with this computer\'s extensions. The Runtime answers only a person\'s own shell; an agent session is refused there. When the Runtime does not answer (or not in time), or is too old to report, the last report kept is shown with when it was read, and the command still exits 0. Any other refusal is an error.',
+    flags: [ID('<runtimeId|name>', 'the Runtime to read (from `runtimes list`)')]
+  },
+  'runtimes-ping': {
+    summary: 'whether a paired Runtime answers now, with its Astera version and OS',
+    detail:
+      'Exits 0 whether it answers or not. A Runtime that no longer accepts this pairing, a different computer at that address, or two Astera versions that cannot talk to each other is an error, as for `runtimes get`.',
+    flags: [ID('<runtimeId|name>', 'the Runtime to ask (from `runtimes list`)')]
+  },
+  'runtimes-expect': {
+    summary: "which of this computer's extensions should be on a paired Runtime too",
+    detail:
+      'With neither flag it lists them. The ids are this computer\'s, from `astera ext list`: `--add` refuses an id that is not here, and `--remove` also takes an id that is still in the stored list. `runtimes get` then says of each whether it is there, the same, different, off, or missing a secret. Nothing is installed there: install it in that computer\'s own Settings or CLI. --add and --remove are refused with 5 inside an agent session (ASTERA_SESSION is set); listing is not.',
+    flags: [
+      ID('<runtimeId|name>', 'the Runtime (from `runtimes list`)'),
+      { name: 'add', value: '<ids>', about: 'extension ids to expect there, comma separated' },
+      { name: 'remove', value: '<ids>', about: 'extension ids to stop expecting there, comma separated: ids here, or ids still in the stored list' }
+    ]
+  },
   'plugins-install': {
     summary: 'install a plugin from a folder or from npm, after you approve what it asks for',
     detail:

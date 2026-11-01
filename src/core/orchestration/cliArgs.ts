@@ -176,8 +176,9 @@ export const NOUNS = {
   // which writes remote-runtime.json and the identity and asks the Host only what it holds (cli/runtime/commands.ts).
   runtime: ['start', 'stop', 'status', 'serve', 'pair', 'clients', 'revoke'],
   // **The paired Runtimes of this machine** (remote runtime design §4.4): answered in the CLI process from
-  // <profile>/runtimes (cli/runtimes.ts). `add` pairs, `remove` forgets without revoking.
-  runtimes: ['add', 'list', 'remove'],
+  // <profile>/runtimes (cli/runtimes.ts). `add` pairs, `remove` forgets without revoking. `get` and `ping` ask the
+  // Runtime itself, and `expect` edits what this machine expects there (remote governance design §10.2).
+  runtimes: ['add', 'list', 'remove', 'get', 'ping', 'expect'],
   // **Answered by the Host's plugin manager** (plugin runtime design P5): this machine's app and CLI install, list and
   // switch plugins. `install` asks the Host to inspect the folder first and needs --yes or --grant (cli/plugins.ts).
   plugins: ['install', 'list', 'get', 'enable', 'disable', 'remove', 'logs', 'doctor', 'settings', 'configure'],

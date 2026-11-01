@@ -559,11 +559,11 @@ export class PtyRegistry {
   }
 
   /** `by.person`: a person typed this (an app's `pty-write`, a Slack reply), not the Host itself. `by.side`: which
-   *  side typed it; typing that is not only terminal reports gives that side the size, applied before the keystroke
+   *  side typed it, a person or not (a remote controller that is an agent types without `person`); typing that is not only terminal reports gives that side the size, applied before the keystroke
    *  so what it typed is drawn for its window (`sizeOwner`). `by.delivery`: the app's own delivery (a schedule, a roll's
    *  prompt), which holds a finished Run's sessions open as a person's input does, but whose Enter is not a person's
    *  prompt (`submittedBetween`; observe deferred fix round 2, Important a). */
-  write(id: string, data: string, by?: { person: true; side?: string; delivery?: true }): void {
+  write(id: string, data: string, by?: { person?: true; side?: string; delivery?: true }): void {
     const e = this.live(id)
     if (!e) return
     const reports = isOnlyTerminalReports(data)

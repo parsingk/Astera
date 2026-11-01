@@ -63,6 +63,7 @@ describe('computeFindings', () => {
       'cli-version',
       'credential-uses',
       'credentials',
+      'extension-hashes',
       'extension-uses',
       'extensions',
       'orchestration',
@@ -91,6 +92,7 @@ describe('computeFindings', () => {
         credentials: { version: 1, entries: [], mcpHide: {} },
         credentialLastUse: new Map(),
         runtimes: [],
+        localExtensions: [],
         extensionUses: { skillOrCommand: new Set(), agents: new Set(), claudeChatSeen: false, claudeUnhookedSeen: false },
         extensionCopies: new Map(),
         claudeVersion: null
@@ -161,6 +163,53 @@ describe('computeFindings', () => {
     without('accounts', 'accounts', ['coverage-gap'])
   })
 
+  // Remote governance design §9.2, §9.3: a Runtime missing an expected skill and running an older Astera
+  const behind = (): FindingInputs => ({
+    ...BASE,
+    asteraVersion: '1.5.0',
+    localExtensions: [{ id: 'my-skill', kind: 'skill', name: 'my-skill', enabled: true, providers: ['claude'], compareHash: 'cmp1:sha256:a' }],
+    runtimes: [
+      {
+        runtimeId: 'rt_a',
+        name: 'Office',
+        address: '10.0.0.2',
+        port: 7420,
+        fingerprint: 'f',
+        permission: 'read-only',
+        createdAt: ago(10),
+        lastSeenAt: ago(1),
+        expected: ['my-skill'],
+        facts: { asteraVersion: '1.4.9', platform: 'darwin', hostProtocol: 4, capabilities: [], readAt: ago(1) },
+        snapshot: {
+          readAt: ago(1),
+          report: {
+            version: 1,
+            astera: { version: '1.4.9', platform: 'darwin' },
+            extensions: [],
+            profiles: null,
+            appBypass: null,
+            policy: null,
+            sandbox: { claude: { kind: 'sandbox', blocker: null }, codex: { kind: 'sandbox', blocker: null } },
+            credentials: null,
+            secretStore: { kind: 'owner-only-files', ok: true },
+            findings: null
+          }
+        }
+      }
+    ]
+  })
+
+  it('unread extension hashes drop the runtime-extension row and name the source', () => {
+    expect(computeFindings(behind(), NONE).findings.map((f) => f.key)).toEqual(['runtime-missing-extension:rt_a:my-skill', 'outdated-runtime:rt_a'])
+    const r = computeFindings({ ...behind(), localExtensions: undefined }, NONE)
+    expect(r.unread).toContain('extension-hashes')
+    expect(r.findings.map((f) => f.rule)).not.toContain('runtime-missing-extension')
+  })
+
+  it('outdated-runtime still runs', () => {
+    expect(computeFindings({ ...behind(), localExtensions: undefined }, NONE).findings.map((f) => f.key)).toEqual(['outdated-runtime:rt_a'])
+  })
+
   it('each over-broad line runs on its own sources, and an unread one drops only the lines that read it (ruling R5-2)', () => {
     // ap_a only read, inside its folder, runs as inherit under the app's bypass with its sandbox off, and never called the
     // shared server: every line applies
@@ -184,7 +233,7 @@ describe('computeFindings', () => {
       return { parts: r.findings.filter((f) => f.rule === 'over-broad-profile').map((f) => f.part), unread: r.unread }
     }
     // Unread are only sources no over-broad line reads
-    expect(lines(read)).toEqual({ parts: ['bypass', 'mcp:mcp-github', 'sandbox'], unread: ['orchestration', 'tokens', 'credentials', 'credential-uses', 'runtimes', 'extension-uses', 'cli-version'] })
+    expect(lines(read)).toEqual({ parts: ['bypass', 'mcp:mcp-github', 'sandbox'], unread: ['orchestration', 'tokens', 'credentials', 'credential-uses', 'runtimes', 'extension-hashes', 'extension-uses', 'cli-version'] })
     // Each field left unread: the source it names, and the lines left
     const cases: Array<[keyof FindingInputs, FindingSource, string[]]> = [
       ['profiles', 'profiles', []],

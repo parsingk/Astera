@@ -21,7 +21,8 @@ export const SOURCE_KEYS: Record<FindingSource, MessageKey> = {
   'extension-uses': 'findings.source.extension-uses',
   ignored: 'findings.source.ignored',
   settings: 'findings.source.settings',
-  'cli-version': 'findings.source.cli-version'
+  'cli-version': 'findings.source.cli-version',
+  'extension-hashes': 'findings.source.extension-hashes'
 }
 
 /** The Observe note (§4), or null once the usage findings have had their days. Null too when the rules file could not

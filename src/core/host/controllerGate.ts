@@ -1,7 +1,8 @@
 // Which Host commands a remote controller may send (remote runtime design §3.4, N15). An allowlist like mcpGate's,
 // so a command added to the Host later is closed to controllers until it is listed here. Unlike mcpGate, an unknown
 // permission level denies: the MCP gate reads an unknown value as control (mcpAccess.ts), which must not be copied.
-import type { ControllerPrincipal } from './orchProtocol'
+import type { ControllerKind, ControllerPrincipal } from './orchProtocol'
+import type { ClientInfo } from '../remote/frames'
 
 export const CONTROLLER_READ_COMMANDS = [
   'projects-list',
@@ -44,7 +45,10 @@ export const CONTROLLER_READ_COMMANDS = [
   // Sanitized for a controller (§3.6).
   'state-get',
   'sessions-list',
-  'sessions-read'
+  'sessions-read',
+  // Remote governance design §5.1: the Runtime report, names, states and counts. Read-only, as session output says far
+  // more; the Host answers it only to a controller that counts as a person (orch.ts).
+  'control-plane-report'
 ] as const
 
 export const CONTROLLER_CONTROL_COMMANDS = [
@@ -98,3 +102,16 @@ export function controllerRefusal(
   if (CONTROL.has(cmd)) return level === 'full-control' ? null : denied(`${cmd} needs full control; ${principal.name} is paired read-only`)
   return denied(`${cmd} is not available to a remote controller`)
 }
+
+/** Who a controller is, from what its client said at sign-in (remote governance design §7.2). The app is a person and an
+ *  MCP server is an agent; a CLI is a person only when it says it is not in an agent session. A CLI from before this
+ *  release sends no flag, and neither does a client that names no surface: both are `unsaid`. */
+export function controllerKind(c: ClientInfo | undefined): ControllerKind {
+  if (c?.surface === 'desktop') return 'person'
+  if (c?.surface === 'mcp') return 'agent'
+  if (c?.surface === 'cli' && typeof c.agent === 'boolean') return c.agent ? 'agent' : 'person'
+  return 'unsaid'
+}
+
+/** Added to a refusal that an `unsaid` controller gets only because it did not say (remote governance design §7.3). */
+export const UNSAID_CLI_NOTE = ' An Astera CLI older than this release cannot say whether it runs in an agent session; update Astera on that computer.'

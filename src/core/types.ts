@@ -45,6 +45,8 @@ import type { ThemeId } from './theme/themes'
 import type { ProfilePermission } from './agentProfiles/types'
 import type { AuditDecision, AuditMode, AuditRule } from './audit/types'
 import type { Hiding } from './credentials/types'
+import type { RuntimeFacts, RuntimeSnapshot } from './controlPlane/report'
+import type { ComparisonRow } from './controlPlane/compare'
 import type { ConvTurn } from './history/convTypes'
 export type { ConvTurn } from './history/convTypes'
 // The Jobs sidebar shows a Task's status, so the orchestration domain's own enum comes in here. Only
@@ -763,6 +765,11 @@ export interface JobRow {
    *  적는 근거다 — 세우면 무장하지 않으므로(firesDue) 그 줄이 그냥 사라지고, 말이 없으면 세운 예약과
    *  도는 예약이 화면에서 같아 보인다. */
   paused?: boolean
+  /** The name of the controller that made this schedule, when its unpairing paused it (Job.pausedBy; remote governance
+   *  design §8.2): the card says why it is paused, as only a person here can resume it. The schedule's own row only.
+   *  This Runtime's own app and CLI only: a controller's jobs-view is folded from the sanitized state, which has no
+   *  pausedBy (ruling R8-2). */
+  pausedRevokedFrom?: string
   /** 이 Run 이 예약 템플릿이면 그 규칙 — Run 이 들고 있는 값을 그대로 옮긴 것이다. 있으면 이
    *  줄은 정의이고 스스로 돌지 않는다. 사이드바가 "매일 09:00" 을 적는 근거다. */
   schedule?: ScheduleRule
@@ -847,6 +854,34 @@ export interface RemoteRuntimeInfo {
   lastSeenAt: string | null
   /** null until this app has asked it anything since it started. */
   offline: boolean | null
+  /** From its last hello, by any surface (remote governance design §4.1); absent before the first. */
+  asteraVersion?: string
+  platform?: string
+  /** Whether that version is older than this app's (§4.3); absent with it. */
+  older?: boolean
+}
+
+/** A paired Runtime's detail (remote governance design §10.1, §10.2): its pairing, what its hello said, its last report
+ *  and this computer's extensions against it. `astera runtimes get --json` prints it, and Settings shows it. */
+export interface RuntimeDetail {
+  runtimeId: string
+  name: string
+  fingerprint: string
+  permission: 'read-only' | 'full-control'
+  createdAt: string
+  lastSeenAt: string | null
+  facts: RuntimeFacts | null
+  /** This app's version, and whether the Runtime's is older (§4.3). */
+  here: string
+  older: boolean
+  /** Whether the last ask was answered now; null when this read did not ask. */
+  answering: boolean | null
+  snapshot: RuntimeSnapshot | null
+  /** Why no fresh report: the Runtime's refusal or its missing capability. */
+  refusal?: { code: string; message: string; reason?: 'report-newer' }
+  /** This computer's extensions could not be read (ruling R16-1): `comparison` is empty, the snapshot still shows. */
+  localError?: true
+  comparison: ComparisonRow[]
 }
 
 /** What a remote reply says about its Runtime beside the data (remote runtime design §2.7, §3.6). */
@@ -2131,10 +2166,19 @@ export interface RemoteApi {
   /** The Runtime's projects, then `{ id: 'unregistered' }` for Jobs in folders that are no project. null when the
    *  Runtime cannot be asked now (never an empty list for an unreachable one). */
   projects(runtimeId: string): Promise<Array<{ id: string; name: string | null; path: string | null }> | null>
+  /** A paired Runtime's detail (remote governance design §10.1): its report read anew when `refresh` asks or the kept
+   *  one is five minutes old, else the kept one; offline or refused, the last snapshot with `refusal`. */
+  detail(runtimeId: string, refresh?: boolean): Promise<RuntimeDetail | { code: string; message: string }>
+  /** Every paired Runtime's report under the same rule, one at a time. Never rejects. */
+  readReports(): Promise<void>
+  /** Edits which of this computer's extensions the person expects on a Runtime (§6.1). */
+  expect(runtimeId: string, add: string[], remove: string[]): Promise<{ ok: true; expected: string[] } | { ok: false; code: string; message: string }>
   /** This computer as a Runtime: whether Remote is on, the Gateway, the paired controllers. null when the Host cannot say. */
   thisMachine(): Promise<{
     gateway: { state: string; [k: string]: unknown }
-    clients: Array<{ clientId: string; name: string; permission: string; lastSeenAt: string | null }>
+    /** `surface` and `clientVersion`: what the controller last said of itself (remote governance design §7.1); absent
+     *  until it says, and from an older Host. */
+    clients: Array<{ clientId: string; name: string; permission: string; lastSeenAt: string | null; surface?: 'desktop' | 'cli' | 'mcp'; clientVersion?: string }>
     /** The ids of the pairing codes that can still be redeemed (absent from an older Host). */
     pairings?: string[]
   } | null>

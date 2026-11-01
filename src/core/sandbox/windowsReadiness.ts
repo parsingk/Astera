@@ -200,6 +200,10 @@ export function forgetReadiness(): void {
   answers.clear()
 }
 
+/** How many times readiness was forgotten in this process: a cache of readiness answers kept elsewhere (the Runtime
+ *  report's, host/controlPlaneReport.ts) drops what it holds when this moves on. */
+export const readinessGeneration = (): number => generation
+
 /** Task 2's setup for the one home (the person's decision: accounts are set up one at a time, and Codex's own files are
  *  never copied between homes), then its answers forgotten. `out` is what Codex said, on one or more lines; empty when it
  *  said nothing, and the app then says it in its own words (session.spawn.sandbox.setUpFailed). Never rejects. */

@@ -79,6 +79,7 @@ let api: {
   audit: Record<'policies' | 'setMode', Call>
   findings: Record<'list', Call>
   credentials: Record<'list' | 'reset', Call>
+  remote: Record<'readReports', Call>
 }
 beforeEach(() => {
   hooks.reset()
@@ -92,7 +93,8 @@ beforeEach(() => {
     credentials: {
       list: vi.fn(async () => ({ ok: false as const, code: 'REPAIR_NEEDED', reason: 'damaged', message: 'credentials.json is damaged' })),
       reset: vi.fn(ok({ entries: [] }))
-    }
+    },
+    remote: { readReports: vi.fn(async () => undefined) }
   }
   vi.stubGlobal('window', { api })
 })
@@ -134,6 +136,26 @@ describe('Findings reads again after a change on the same screen (final fix pass
     api.findings.list.mockClear()
     again[0].run()
     expect(api.findings.list).toHaveBeenCalledWith(true)
+  })
+
+  // Remote governance design §5.4, ruling R16-1: opening Findings asks for the paired Runtimes' reports once, shows the
+  // report it has at once, and reads it again when they are in
+  it("Findings lists at once, asks for the Runtimes' reports once when it opens, and lists again after them", async () => {
+    let reportsIn = (): void => {}
+    api.remote.readReports.mockImplementation(() => new Promise<void>((resolve) => (reportsIn = resolve)))
+    const props = { onOpen: () => {}, changes: 0 }
+    hooks.render(FindingsSection, props)
+    const first = hooks.effects()
+    for (const e of first) e.run()
+    expect(api.remote.readReports).toHaveBeenCalledTimes(1)
+    expect(api.findings.list).toHaveBeenCalledTimes(1)
+    reportsIn()
+    await settle()
+    expect(api.findings.list).toHaveBeenCalledTimes(2)
+    // A change on the screen reads the report again, and never asks the Runtimes again
+    hooks.render(FindingsSection, { ...props, changes: 1 })
+    for (const e of rerun(first, hooks.effects())) e.run()
+    expect(api.remote.readReports).toHaveBeenCalledTimes(1)
   })
 
   it('Credentials says when a change happened, and only then', async () => {

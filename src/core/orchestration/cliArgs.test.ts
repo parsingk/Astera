@@ -56,6 +56,16 @@ describe('parseArgs', () => {
     // Security audit SEC-6: a pairing string off the command line, where other users of the machine can read it.
     expect(parseArgs(['runtimes', 'add', '--pair', '-'])).toMatchObject({ cmd: 'runtimes-add', wantsStdin: ['pair'] })
   })
+  // Remote governance design §10.2, ruling C4: the Runtime is --id, as `runtimes remove` takes it, and expect's ids are
+  // comma lists
+  it('runtimes get, ping and expect parse, with the runtime as --id and --add and --remove', () => {
+    expect(parseArgs(['runtimes', 'get', '--id', 'Office'])).toMatchObject({ cmd: 'runtimes-get', args: { id: 'Office' } })
+    expect(parseArgs(['runtimes', 'ping', '--id', 'rt_a'])).toMatchObject({ cmd: 'runtimes-ping', args: { id: 'rt_a' } })
+    expect(parseArgs(['runtimes', 'expect', '--id', 'rt_a', '--add', 'skill-a,mcp-x', '--remove', 'cmd-b'])).toMatchObject({
+      cmd: 'runtimes-expect',
+      args: { id: 'rt_a', add: 'skill-a,mcp-x', remove: 'cmd-b' }
+    })
+  })
   // Plugin runtime design P6: install approves with --yes or names the grant.
   it('reads plugins install with its path and its approval', () => {
     expect(parseArgs(['plugins', 'install', '--path', 'my-plugin', '--yes'])).toMatchObject({ cmd: 'plugins-install', args: { path: 'my-plugin', yes: true } })

@@ -5,7 +5,10 @@
 // minutes and die with the Host.
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { ControllerPermission, ControllerPrincipal } from '../core/host/orchProtocol'
+import { controllerKind } from '../core/host/controllerGate'
+import type { ClientInfo } from '../core/remote/frames'
 import type { SecretStore } from '../core/secrets/secretStore'
+import { LAST_SEEN_EVERY_MS } from '../core/runtimes/registry'
 
 /** 32 symbols, so 10 of them are 50 bits (DC-11). */
 const CODE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
@@ -22,6 +25,10 @@ export interface ControllerRecord {
   permission: ControllerPermission
   createdAt: string
   lastSeenAt: string | null
+  /** What the client said at its last sign-in (remote governance design §7.1). Who each connection is lives in its
+   *  binding, not here: one pairing can be used by the app and an MCP server at once. */
+  surface?: 'desktop' | 'cli' | 'mcp'
+  clientVersion?: string
 }
 
 export interface ControllerRecordsFile {
@@ -57,9 +64,11 @@ export interface ControllerRegistry {
   dropPairings(): void
   /** The code a controller sent over the pinned link. A right one makes a client record and its token, once. */
   redeem(code: string, name: string): Promise<{ ok: true; clientId: string; token: string } | { ok: false; reason: 'unknown' | 'expired' | 'burned' }>
-  /** The record whose token hashes to this, compared in constant time; null for none. */
-  authenticate(tokenHash: string): ControllerRecord | null
-  bind(linkGen: number, conn: string, clientId: string): void
+  /** The record whose token hashes to this, compared in constant time; null for none. `client` is what the sign-in
+   *  said; its surface and version are kept on the record. */
+  authenticate(tokenHash: string, client?: ClientInfo): ControllerRecord | null
+  /** `client` stays with this connection's binding: its principal's kind comes from it (remote governance design §7.2). */
+  bind(linkGen: number, conn: string, clientId: string, client?: ClientInfo): void
   /** How many connections of this link generation are bound to this client. */
   boundCount(linkGen: number, clientId: string): number
   /** Who a link connection is, from this registry's own binding and record (X1-08); null once unbound or revoked. */
@@ -85,9 +94,6 @@ const sameHash = (a: string, b: string): boolean => {
 
 /** The waits before a revocation that could not be saved is saved again (security audit SEC-3); the last repeats. */
 export const REVOKE_RETRY_MS = [1_000, 5_000, 30_000, 2 * 60_000, 10 * 60_000]
-
-/** How often a client's lastSeenAt is saved at most (design §4.5). */
-export const LAST_SEEN_EVERY_MS = 60_000
 
 export function createControllerRegistry(
   deps: { now?: () => number; random?: (bytes: number) => Buffer; records?: ControllerRecordsFile } = {}
@@ -121,8 +127,8 @@ export function createControllerRegistry(
   let burnedCodes = 0
   // A name reaches error text and the client list, so it is one printable line.
   const cleanName = (n: string): string => n.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 64)
-  /** `${linkGen}\u0000${conn}` to clientId. */
-  const bindings = new Map<string, string>()
+  /** `${linkGen}\u0000${conn}` to its client and what that client said when this connection signed in. */
+  const bindings = new Map<string, { clientId: string; client?: ClientInfo }>()
   const bindKey = (linkGen: number, conn: string): string => `${linkGen}\u0000${conn}`
 
   /** Saves again until a save lands (security audit SEC-3), with waits that grow to REVOKE_RETRY_MS's last. */
@@ -211,33 +217,51 @@ export function createControllerRegistry(
       }
       return { ok: true, clientId, token }
     },
-    authenticate: (tokenHash) => {
+    authenticate: (tokenHash, client) => {
       for (const r of records.values()) {
         if (!sameHash(r.tokenHash, tokenHash)) continue
         // §4.5: kept at most once a minute (Phase 3 minor), so a controller that signs in often costs one save a minute.
+        // A different surface or version shows in memory at once (remote governance design §7.1) and waits for the same
+        // once-a-minute save (ruling RF-2): a pairing the app and the CLI both use changes surface at every sign-in.
         const seen = r.lastSeenAt === null ? null : Date.parse(r.lastSeenAt)
-        if (seen !== null && now() - seen < LAST_SEEN_EVERY_MS) return r
-        const touched = { ...r, lastSeenAt: new Date(now()).toISOString() }
+        const changed = r.surface !== client?.surface || r.clientVersion !== client?.version
+        const due = seen === null || now() - seen >= LAST_SEEN_EVERY_MS
+        if (!changed && !due) return r
+        const { surface: _surface, clientVersion: _version, ...rest } = r
+        const touched: ControllerRecord = {
+          ...rest,
+          ...(due ? { lastSeenAt: new Date(now()).toISOString() } : {}),
+          ...(client?.surface !== undefined ? { surface: client.surface } : {}),
+          ...(client?.version !== undefined ? { clientVersion: client.version } : {})
+        }
         records.set(r.clientId, touched)
-        void persist().catch(() => undefined)
+        if (due) void persist().catch(() => undefined)
         return touched
       }
       return null
     },
-    bind: (linkGen, conn, clientId) => {
-      if (records.has(clientId)) bindings.set(bindKey(linkGen, conn), clientId)
+    bind: (linkGen, conn, clientId, client) => {
+      if (records.has(clientId)) bindings.set(bindKey(linkGen, conn), { clientId, ...(client !== undefined ? { client } : {}) })
     },
     boundCount: (linkGen, clientId) => {
       let n = 0
-      for (const [k, id] of bindings) if (id === clientId && k.startsWith(`${linkGen}\u0000`)) n++
+      for (const [k, b] of bindings) if (b.clientId === clientId && k.startsWith(`${linkGen}\u0000`)) n++
       return n
     },
     principalFor: (linkGen, conn) => {
-      const clientId = bindings.get(bindKey(linkGen, conn))
-      const r = clientId === undefined ? undefined : records.get(clientId)
-      return r ? { clientId: r.clientId, name: r.name, permission: r.permission } : null
+      const b = bindings.get(bindKey(linkGen, conn))
+      const r = b === undefined ? undefined : records.get(b.clientId)
+      if (!b || !r) return null
+      return {
+        clientId: r.clientId,
+        name: r.name,
+        permission: r.permission,
+        kind: controllerKind(b.client),
+        ...(b.client?.surface !== undefined ? { surface: b.client.surface } : {}),
+        ...(b.client?.version !== undefined ? { clientVersion: b.client.version } : {})
+      }
     },
-    stillBound: (linkGen, conn, clientId) => bindings.get(bindKey(linkGen, conn)) === clientId && records.has(clientId),
+    stillBound: (linkGen, conn, clientId) => bindings.get(bindKey(linkGen, conn))?.clientId === clientId && records.has(clientId),
     unbind: (linkGen, conn) => {
       bindings.delete(bindKey(linkGen, conn))
     },
@@ -249,8 +273,8 @@ export function createControllerRegistry(
       if (loading) await loading.catch(() => {})
       const revoked = records.delete(clientId)
       const conns: Array<{ linkGen: number; conn: string }> = []
-      for (const [k, id] of [...bindings]) {
-        if (id !== clientId) continue
+      for (const [k, b] of [...bindings]) {
+        if (b.clientId !== clientId) continue
         bindings.delete(k)
         const [gen, conn] = k.split('\u0000')
         conns.push({ linkGen: Number(gen), conn })

@@ -13,8 +13,10 @@ const FILE = path.join('extensions', 'registry.json')
 
 const empty = (): ExtensionRegistry => ({ version: 1, entries: [] })
 
-/** The profile's registry; empty when there is none. Throws RepairNeeded when the file is damaged or unreadable. */
-export async function readExtensionRegistry(profileDir: string): Promise<ExtensionRegistry> {
+/** The profile's registry; empty when there is none. Throws RepairNeeded when the file is damaged or unreadable, keeping a
+ *  copy of the damage beside it unless `keepDamaged` is false: a reader that must write nothing (the Runtime report, remote
+ *  governance ruling R9-5) leaves the copy to the Host's own commands. */
+export async function readExtensionRegistry(profileDir: string, o: { keepDamaged?: boolean } = {}): Promise<ExtensionRegistry> {
   const file = extensionPaths(profileDir).registry
   const read = await readStoreFile(file)
   if (read.kind === 'missing') return empty()
@@ -27,6 +29,7 @@ export async function readExtensionRegistry(profileDir: string): Promise<Extensi
   }
   const r = parsed as ExtensionRegistry | null
   if (!r || r.version !== 1 || !Array.isArray(r.entries)) {
+    if (o.keepDamaged === false) throw new RepairNeeded(`${FILE} is damaged`, FILE)
     await keepDamaged(file, read.text)
     throw new RepairNeeded(`${FILE} is damaged; a copy was kept beside it`, FILE)
   }

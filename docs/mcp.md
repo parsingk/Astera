@@ -176,7 +176,11 @@ regenerates one, and two that list the Runtimes this machine is paired with. Wha
 Runtime instead of this machine ([remote-runtime.md](remote-runtime.md)). Such a call passes this machine's MCP
 access first, then the list of what a Runtime offers (a tool without a remote form answers
 `RUNTIME_CAPABILITY_MISSING`), then the Runtime's own pairing of this machine. For a remote call, an MCP access
-value Astera does not recognize counts as off. Leave `runtimeId` out for this machine.
+value Astera does not recognize counts as off. From inside a sandboxed session, a tool that changes work on the
+Runtime is refused with `PERMISSION_DENIED` before anything is sent; reads go. An `ASTERA_SESSION` that names no
+session this machine's Astera holds counts as sandboxed, and so does the server of an MCP client that does not pass
+the session's `ASTERA_SESSION` or `ASTERA_GATEWAY_TOKEN` to the server: send such a change with
+`astera --runtime <id|name> ...` from the session's shell instead. Leave `runtimeId` out for this machine.
 
 | Tool | What it does |
 | --- | --- |
@@ -220,8 +224,8 @@ value Astera does not recognize counts as off. Leave `runtimeId` out for this ma
 | `list_work_records` | A project's [How It Works](#how-it-works) records (`projectId`), newest first: `id`, `at`, `title` (`null` before the write-up has one), `request`, `status`, `reason`, `source`, `changedFiles` (how many) and `verification` (its `status`, or `null`). |
 | `get_work_record` | One How It Works record in full (`projectId` and `recordId`): the request, source, changed files, git heads and commits, verification (`validation` on an older record), Job tasks, a GitHub lifecycle Run's GitHub evidence (`github`: its issue, pull request, local checks, GitHub CI at the head, Astera's review, and whether it was merge-ready when the Run finished), status, reason and the write-up (`explanation`). |
 | `regenerate_work_record` | Start a new write-up of one How It Works record (`projectId` and `recordId`) in the background, as the app's regenerate button does: it overwrites the current write-up. It answers at once with the record's `id` and `status: "generating"`; read `get_work_record` for the result. While an older Astera app is the one writing the records, it is refused with `CONFLICT`. Needs "Read and control". |
-| `list_runtimes` | The machines this one is paired with (`astera runtimes add`): `runtimeId`, name, address, port and permission. Read from this machine; no Host is asked. |
-| `get_runtime` | One paired Runtime, by `runtimeId` or name; `RUNTIME_NOT_FOUND` for none. |
+| `list_runtimes` | The machines this one is paired with (`astera runtimes add`): `runtimeId`, name, address, port, permission, `lastSeenAt` (when this machine last reached it, or `null`), and `asteraVersion` and `platform` as that Runtime last said them (absent until this machine has reached it). Read from this machine; no Host is asked, and no report of the Runtime's setup is read. |
+| `get_runtime` | One paired Runtime, by `runtimeId` or name, with `list_runtimes`'s fields; `RUNTIME_NOT_FOUND` for none. |
 
 `create_job` takes a `projectId` from `list_projects` and an `objective`. The coordinator is a
 `coordinatorAccountId` from `list_accounts`, or, without one, the default account of

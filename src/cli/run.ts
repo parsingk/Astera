@@ -31,7 +31,9 @@ import { runMcpHttp } from './mcp/http'
 import { runRuntimeGateway } from './runtime/gateway'
 import { runRuntimeCommand, type RuntimeCommandDeps } from './runtime/commands'
 import { controllerRegistry, runRuntimesCommand } from './runtimes'
+import { localReportExtensions } from '../core/controlPlane/local'
 import { answerRemote, trailingRuntimeError } from './remote'
+import { askCallerSandboxed, inAgentSession } from './callerSandboxed'
 import { clientTimeoutMs, followRun, type HostAnswer } from './follow'
 export { clientTimeoutMs, followRun, type FollowEnd, type HostAnswer } from './follow'
 import { remoteTarget } from '../core/remote/targets'
@@ -1372,7 +1374,11 @@ export async function main(): Promise<void> {
       connect: (o) => connectRuntime(o),
       hostname: () => os.hostname(),
       now: () => new Date().toISOString(),
-      version: CLI_VERSION
+      version: CLI_VERSION,
+      // What a paired Runtime is told about this CLI (remote governance design §7.1), and who may edit the expected list
+      // (ruling RF-1): the same signal that makes a local call an agent's
+      agent: inAgentSession(process.env),
+      localExtensions: () => localReportExtensions(profileDir)
     })
     if (!done.ok) fail(done.error)
     out(renderOk(parsed.cmd, done.body, mode))
@@ -1485,7 +1491,8 @@ export async function main(): Promise<void> {
   // is exactly that — so the assignment must not be something a later edit can move past them.
   // Defining `reply` *from* `answer` is what makes that impossible rather than merely unlikely.
   answer = await (async (): Promise<HostAnswer> => {
-    // A paired Runtime instead of this machine's Host (cli/remote.ts): no local connection, no file fallback.
+    // A paired Runtime instead of this machine's Host (cli/remote.ts): no file fallback, and this machine's Host is asked
+    // only whether a session's change may go (remote governance design §7.4).
     if (parsed.runtime !== undefined) {
       verbose.say(`sending ${spelledCommand(parsed.cmd)} to the paired Runtime ${parsed.runtime}`)
       const remote = await answerRemote({
@@ -1496,7 +1503,9 @@ export async function main(): Promise<void> {
         profileDir,
         mode,
         write: out,
-        version: CLI_VERSION
+        version: CLI_VERSION,
+        agent: inAgentSession(process.env),
+        deps: { callerSandboxed: () => askCallerSandboxed({ env: process.env, platform: process.platform, home: homedir(), version: CLI_VERSION }) }
       })
       if ('error' in remote) fail(remote.error)
       return remote

@@ -106,7 +106,8 @@ const pair = async (pairingString: string, name?: string) =>
     connect: (o) => connectRuntime(o),
     hostname: () => 'laptop',
     now: () => NOW,
-    version: '9.9.9'
+    version: '9.9.9',
+    agent: false
   })
 
 /** `astera --runtime <key> <cmd>` on the laptop. */
@@ -120,9 +121,10 @@ const remote = (key: string, cmd: string, args: Record<string, unknown>, o: { re
     mode: 'json',
     write: () => {},
     version: '9.9.9',
+    agent: false,
     deps: {
       link: (t) => {
-        const l = o.link ? o.link(t) : openRemoteLink({ target: t, client: { surface: 'cli' } })
+        const l = o.link ? o.link(t) : openRemoteLink({ target: t, client: { surface: 'cli', version: '9.9.9', agent: false } })
         links.push(l)
         return l
       }

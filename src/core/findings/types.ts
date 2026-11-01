@@ -6,7 +6,7 @@ import type { Message } from '../i18n'
 export type FindingRule =
   | 'unused-profile' | 'duplicate-profile' | 'broken-reference' | 'failing-profile' | 'unused-mcp' | 'coverage-gap'
   | 'stale-runtime' | 'unmanaged-credential-reference' | 'stale-credential' | 'over-broad-profile' | 'token-spike'
-  | 'unused-skill' | 'unused-command' | 'unused-agent'
+  | 'unused-skill' | 'unused-command' | 'unused-agent' | 'runtime-missing-extension' | 'outdated-runtime'
 
 /** What a finding is about. `profiles` is a duplicate group, its id the fingerprint (`fp-` + 12 hex). `cli` is a coverage
  *  gap's CLI and session kind, its id `claude-terminal`, `codex-chat` and so on. */
@@ -66,6 +66,7 @@ export interface InfoLine {
 export type FindingSource =
   | 'profiles' | 'accounts' | 'orchestration' | 'tokens' | 'policy' | 'records' | 'extensions' | 'account-mcp'
   | 'credentials' | 'credential-uses' | 'runtimes' | 'extension-uses' | 'ignored' | 'settings' | 'cli-version'
+  | 'extension-hashes'
 
 /** The usage window (plan thresholds): what a usage finding needs, and the most history counts, since records are kept 30
  *  days (audit store). */

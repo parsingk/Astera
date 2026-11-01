@@ -732,6 +732,12 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     if (!showSettings || settingsTab !== 'agentProfiles') setProfileFocus(null)
   }, [showSettings, settingsTab])
+  /** The paired Runtime a finding's button opened Settings › Remote Runtimes for (remote governance design §6.3), whose
+   *  detail opens there, until the tab changes or Settings closes. */
+  const [runtimeFocus, setRuntimeFocus] = useState<string | null>(null)
+  useEffect(() => {
+    if (!showSettings || settingsTab !== 'remote') setRuntimeFocus(null)
+  }, [showSettings, settingsTab])
   /** Settings › Security & Access opened at Findings, from the Agent profiles mark, until the tab changes or it closes. */
   const [findingsFocus, setFindingsFocus] = useState(false)
   useEffect(() => {
@@ -3047,6 +3053,7 @@ export default function App(): React.JSX.Element {
       return
     }
     if (to.tab === 'agentProfiles') setProfileFocus(to.profileIds)
+    if (to.tab === 'remote' && to.runtimeId !== undefined) setRuntimeFocus(to.runtimeId)
     setSettingsTab(to.tab)
   }
   // The Job or Run a finding's button asked for (pendingJobStep): opened as a click on its row in the Jobs view opens it,
@@ -5527,7 +5534,9 @@ export default function App(): React.JSX.Element {
                 </div>
                 {settingsTab === 'notifications' && <NotificationSettings />}
                 {settingsTab === 'github' && <GithubSettings />}
-                {settingsTab === 'remote' && <RemoteRuntimesSettings onChanged={() => setPairedChanged((n) => n + 1)} />}
+                {settingsTab === 'remote' && (
+                  <RemoteRuntimesSettings onChanged={() => setPairedChanged((n) => n + 1)} {...(runtimeFocus !== null ? { focusRuntimeId: runtimeFocus } : {})} />
+                )}
                 {settingsTab === 'plugins' && <PluginsSettings />}
                 {settingsTab === 'extensions' && <ExtensionsSettings accounts={accounts} />}
                 {settingsTab === 'agentProfiles' && (

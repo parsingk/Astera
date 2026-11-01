@@ -7,6 +7,7 @@ import path from 'node:path'
 import type { ResolveExecutable, SpawnCommand } from './commands'
 import { fileIdentity, fileIdentityAsync, runHelp, runHelpAsync } from './codexNoDaemon'
 import { resolveWindowsExecutable, warmWindowsExecutable, windowsSpawn } from './windowsExecutable'
+import { atLeast, parseCliVersion } from './versionCompare'
 
 type Cli = 'claude' | 'codex'
 
@@ -14,24 +15,11 @@ type Cli = 'claude' | 'codex'
 export const ENFORCE_MIN: Record<Cli, string> = { claude: '2.1.306', codex: '0.160.0' }
 
 const TTL_MS = 10 * 60 * 1000
+/** How long a warm whose run failed or timed out answers for that binary (remote governance ruling R9-5). */
+const FAILED_HOLD_MS = 30 * 1000
 
-/** `2.1.311 (Claude Code)` → `2.1.311`; `codex-cli 0.160.0` → `0.160.0`; a pre-release keeps its numbers. */
-export function parseCliVersion(text: string): string | null {
-  const m = /(\d+)\.(\d+)\.(\d+)/.exec(text)
-  return m ? `${m[1]}.${m[2]}.${m[3]}` : null
-}
-
-/** Whether `found` is `min` or later, part by part as numbers. */
-export function atLeast(found: string, min: string): boolean {
-  const a = found.split('.').map(Number)
-  const b = min.split('.').map(Number)
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    const x = a[i] ?? 0
-    const y = b[i] ?? 0
-    if (x !== y) return x > y
-  }
-  return true
-}
+// Read and compared apart from the probe (versionCompare.ts), so a reader with no file access shares them
+export { atLeast, parseCliVersion }
 
 /** The Claude Code the research saw both UserPromptExpansion and SubagentStart in (lifecycle design §4.12, plan ruling 15).
  *  Older, or a version that could not be read, is not given the two hooks (statusline.ts), and its uses read "Claude
@@ -99,7 +87,7 @@ export function makeCliVersionProbe(o: {
   /** Kept by the binary's identity on every platform, so an update is asked again at once (final review M1). `at`: when it
    *  was asked, which the TTL counts from; `confirmed`: when a warm or a spawn last found the same binary (fix round 3),
    *  which `cached` counts from, so a warm just before the TTL keeps the next spawn's answer. */
-  const known = new Map<Cli, { key: string; at: number; confirmed: number; version: string }>()
+  const known = new Map<Cli, { key: string; at: number; confirmed: number; version: string | null }>()
   /** Whether what was learnt holds for the binary at `key`, and if so confirmed now. */
   const fresh = (cli: Cli, key: string): boolean => {
     const k = known.get(cli)
@@ -107,12 +95,25 @@ export function makeCliVersionProbe(o: {
     k.confirmed = now()
     return true
   }
-  /** A failed answer is not kept: the next spawn asks again (final review M1). */
+  /** A failed run is not kept: the next spawn asks again (final review M1). An answer that names no version it can read
+   *  is kept like one that does, as unknown (remote governance ruling R9-4): that binary will say the same next time, and
+   *  Enforce's blocker would otherwise ask it on the calling thread at every read. */
   const learn = (cli: Cli, key: string, out: string | null): string | null => {
-    const version = out === null ? null : parseCliVersion(out)
-    if (version === null) known.delete(cli)
-    else known.set(cli, { key, at: now(), confirmed: now(), version })
+    if (out === null) {
+      known.delete(cli)
+      return null
+    }
+    const version = parseCliVersion(out)
+    known.set(cli, { key, at: now(), confirmed: now(), version })
     return version
+  }
+  /** A warm whose run failed, by the binary it asked (ruling R9-5): held FAILED_HOLD_MS, so the sync answer after it (an
+   *  Enforce blocker, read on every Runtime report) does not run a broken CLI on the calling thread again. Only a warm sets
+   *  it: a spawn nobody warmed still asks again at once (M1), and a changed binary is not held. */
+  const failed = new Map<Cli, { key: string; at: number }>()
+  const held = (cli: Cli, key: string): boolean => {
+    const f = failed.get(cli)
+    return f !== undefined && f.key === key && now() - f.at < FAILED_HOLD_MS
   }
   const commandFor = (cli: Cli, found: string): SpawnCommand =>
     o.platform === 'win32' ? windowsSpawn(cli, ['--version'], () => found) : { file: found, args: ['--version'] }
@@ -122,6 +123,7 @@ export function makeCliVersionProbe(o: {
     if (found === null) return undefined
     const key = identity(found)
     if (fresh(cli, key)) return known.get(cli)?.version ?? null
+    if (held(cli, key)) return null
     // A spawn nobody warmed: asked here, synchronously, as codexNoDaemon.ts does.
     return learn(cli, key, run(commandFor(cli, found)))
   }
@@ -131,8 +133,11 @@ export function makeCliVersionProbe(o: {
       if (found === null) return
       const cmd = commandFor(cli, found)
       const key = await identityAsync(found)
-      if (fresh(cli, key)) return
-      learn(cli, key, await runAsync(cmd))
+      if (fresh(cli, key) || held(cli, key)) return
+      const out = await runAsync(cmd)
+      if (out === null) failed.set(cli, { key, at: now() })
+      else failed.delete(cli)
+      learn(cli, key, out)
     } catch {
       /* the spawn's own sync answer stands */
     }
@@ -140,7 +145,7 @@ export function makeCliVersionProbe(o: {
   /** What was learnt, confirmed within the TTL; the binary is not looked at again (the prepare's warm just did). */
   const cached = (cli: Cli): string | undefined => {
     const k = known.get(cli)
-    return k !== undefined && now() - k.confirmed < TTL_MS ? k.version : undefined
+    return k !== undefined && k.version !== null && now() - k.confirmed < TTL_MS ? k.version : undefined
   }
   return Object.assign(probe, { warm, cached })
 }

@@ -146,7 +146,8 @@ import { parseHandoffBody } from '../handoff/parse'
 import type { HandoffBody } from '../handoff/types'
 import type { Lang } from '../i18n'
 import { isOverrideCompletion, policyOf, resolvedConvergence } from './convergence'
-import { leftNothingBehind } from '../host/orchProtocol'
+import { leftNothingBehind, type ControllerPrincipal } from '../host/orchProtocol'
+import { UNSAID_CLI_NOTE } from '../host/controllerGate'
 import { APP_CALLER, HOST_CALLER } from '../host/driver'
 import { UNREADABLE, recordDetail, recordSummary, recordsFor, type StoreShape } from '../understanding/read'
 import { JOB_SOURCE, SOURCE_COMMANDS, capturedIssue, createFromContext, sourcesCommand, type JobSourcesDeps } from './commandSources'
@@ -850,7 +851,8 @@ const stillStarting = (open: readonly Dispatch[], now: string): Reply | null => 
   const d = open.find(
     (x) => isPlaceholderSessionId(x.sessionId) && Date.parse(now) - Date.parse(x.startedAt) < PENDING_START_WINDOW_MS
   )
-  return d ? conflict(`the worker is still starting; try again in a moment (dispatch ${d.id})`) : null
+  // `reason` lets a caller that retries on its own tell this apart (a revoke's pause, remote governance R7-2)
+  return d ? { status: 409, body: { error: `the worker is still starting; try again in a moment (dispatch ${d.id})`, reason: 'still-starting' } } : null
 }
 /** Whether stopping this Dispatch has a session to kill. A placeholder that got past `stillStarting`
  *  is a start that died: no pty was ever opened for it, so there is nothing to release. */
@@ -1340,10 +1342,68 @@ const profileRefused = (reason: 'agent-profile-unavailable' | 'agent-profile-no-
   body: { error: msg, reason }
 })
 
+/** Who asks, as the agent rules read it: the Host connection's role, and on a remote controller the principal the Host
+ *  bound it to (OrchCaller.principal). */
+type RuleCaller = { sessionId: string; role?: string; principal?: ControllerPrincipal }
+
 /** A caller that is an agent rather than a person: an agent session's shell (the CLI with a session id), an MCP client
- *  or a plugin. The app, a person's own shell (the CLI with none) and a remote controller's dialog are a person's. */
-const agentCaller = (caller: { sessionId: string; role?: string }): boolean =>
-  caller.role === 'mcp' || caller.role === 'plugin' || (caller.role === 'cli' && caller.sessionId !== '')
+ *  or a plugin. The app and a person's own shell (the CLI with none) are a person's. A remote controller is a person's
+ *  only when its client said it is (remote governance design §7.3): an MCP client, a CLI inside an agent session, and
+ *  one that did not say (`unsaid`, or no kind) meet every rule an agent here meets. The Runtime's own MCP settings are
+ *  not asked of a remote call: MCP authority over a link is decided on the controller's computer (design X1-07). */
+export const agentCaller = (caller: RuleCaller): boolean =>
+  caller.role === 'mcp' ||
+  caller.role === 'plugin' ||
+  (caller.role === 'cli' && caller.sessionId !== '') ||
+  (caller.role === 'controller' && caller.principal?.kind !== 'person')
+
+/** How a refusal of an agent names a remote controller (remote governance design §7.3). */
+const REMOTE_AGENT = 'an agent on another computer (an MCP client or a CLI inside an agent session)'
+
+/** A refusal's sentence, closed with UNSAID_CLI_NOTE when the caller is an Astera CLI on another computer that did not
+ *  say whether it runs in an agent session: an older one cannot, and updating it is the way out. A client that named no
+ *  surface is no Astera CLI, so it gets the sentence alone (the controller's ruling on the Task 5 review). */
+export const withUnsaidNote = (caller: RuleCaller, msg: string): string =>
+  caller.role === 'controller' && (caller.principal?.kind ?? 'unsaid') === 'unsaid' && caller.principal?.surface === 'cli'
+    ? `${msg}.${UNSAID_CLI_NOTE}`
+    : msg
+
+/** **An answer to a permission prompt is for a person** (Task 8 fix round 1, the controller's ruling): `chats answer`,
+ *  and a remote controller's `sessions-answer` (host/remoteSessions.ts; remote governance design §7.3). Letting a tool
+ *  run is the decision the prompt exists to put to someone, so every caller inside an agent session is refused: a
+ *  worker, a coordinator and a plain tab alike. The shell's CLI has no ASTERA_SESSION and calls with an empty session
+ *  id. Null when the caller may. */
+export function answerRefusal(caller: RuleCaller): Reply | null {
+  if (caller.sessionId !== '') return denied('chats answer is for a person: run it from a shell, not from inside an agent session')
+  // An MCP client calls with an empty session id, so it passed the check above. The MCP gate does
+  // not list chats-answer; this refusal keeps the gate from being the only barrier (MCP P1 §2).
+  if (caller.role === 'mcp') return denied('chats answer is for a person: run it from a shell, not from an MCP client')
+  // A controller has no session either (orch.ts drops it)
+  if (caller.role === 'controller' && agentCaller(caller))
+    return denied(withUnsaidNote(caller, `chats answer is for a person: answer it from your own Astera or shell, not from ${REMOTE_AGENT}`))
+  return null
+}
+
+/** **An agent does not answer another session's prompt** (security review 2026-09-28): `sessions send`'s check, and a
+ *  remote controller's raw `sessions-input` (host/remoteSessions.ts; remote governance design §7.3). Text typed into a
+ *  terminal session that holds a permission prompt or a question is the answer to it, so it is refused before anything
+ *  is typed. A session whose state is not known is not refused: nothing says it is at a prompt. Asked only of an agent;
+ *  null when nothing is waiting. */
+export async function promptRefusal(
+  sessionTurn: NonNullable<OrchServerDeps['sessionTurn']>,
+  caller: RuleCaller,
+  id: string
+): Promise<Reply | null> {
+  const now = await sessionTurn(id)
+  if (now === null || !now.alive || now.state !== 'waiting' || now.prompt === null) return null
+  const from = caller.role === 'mcp' ? 'an MCP client' : caller.role === 'controller' ? 'an agent on another computer' : 'an agent session'
+  return conflict(
+    withUnsaidNote(
+      caller,
+      `${id} is waiting on ${now.prompt === 'permission' ? 'a permission prompt' : 'a question'}, and text sent from ${from} would answer it; nothing was sent. Read it with \`astera sessions read --id ${id}\` and tell the person what it is waiting on`
+    )
+  )
+}
 
 /** The commands whose work starts in the sandbox when a sandboxed session asks (final fix pass, C3): a session, a Job
  *  (its coordinator and workers), a Task (its workers), a worker. `tasks add` is `task-create` under another name. */
@@ -1488,12 +1548,84 @@ function outsideSandboxTarget(
   }
 }
 
+/** The commands that resume or run a Job, or set a Run of it going again (remote governance design §8.2; the
+ *  controller's ruling C3): `runs-resume` and `runs-reconverge` too, since a revoke's pause pauses every Run of the Job
+ *  and either would set one going while the Job waits for a person. Then the ones that set one Task of it going again
+ *  (R7-1): `worker-start`, and `gate-resolve` with any answer but mark-failed (it reopens the Task, opens a repair or
+ *  starts its checks again, as outsideSandboxTarget reads it). And `run-delete` (R7-5): the person reviews the Job
+ *  first. */
+const RESUMES_JOB: ReadonlySet<string> = new Set([
+  'run-resume',
+  'run-start',
+  'run-spawn',
+  'jobs-run',
+  'runs-resume',
+  'runs-reconverge',
+  'worker-start',
+  'gate-resolve',
+  'run-delete'
+])
+
+/** The Job a RESUMES_JOB command acts on, found as outsideSandboxTarget finds it: a Task names its Run, a Run its Job.
+ *  Undefined when the id names nothing, or for a gate-resolve that only fails its Task. */
+function jobActedOn(s: OrchState, cmd: string, args: Record<string, unknown>): Job | undefined {
+  const ofTask = (id: string | null): Job | undefined => {
+    const task = id === null ? undefined : s.tasks.find((t) => t.id === id)
+    const run = task?.runId === undefined ? undefined : s.runs.find((r) => r.id === task.runId)
+    return run ? jobOf(s, run) : undefined
+  }
+  if (cmd === 'worker-start') return ofTask(str(args.taskId ?? args.task))
+  if (cmd === 'gate-resolve') {
+    if (str(args.resolution) === 'mark-failed') return undefined
+    const gate = s.gates.find((g) => g.id === str(args.id) && g.status === 'open')
+    return gate ? ofTask(gate.taskId) : undefined
+  }
+  const id = str(cmd === 'run-resume' || cmd === 'run-start' || cmd === 'run-spawn' ? args.run : args.id)
+  if (id === null) return undefined
+  const run = s.runs.find((r) => r.id === id)
+  return run ? jobOf(s, run) : s.jobs.find((j) => j.id === id)
+}
+
+/** A Job as a reply shows it to the caller: a remote controller is not shown which controller made it or whose revoke
+ *  paused it (ruling R7-3, as sanitizeForController leaves them out of the pushed state). Every other caller gets the
+ *  view as it is; the CLI hides both itself (JOB_HIDDEN). */
+function jobForCaller<T extends object>(caller: RuleCaller, view: T): T {
+  if (caller.role !== 'controller' || (!('createdBy' in view) && !('pausedBy' in view))) return view
+  const { createdBy: _maker, pausedBy: _why, ...rest } = view as T & { createdBy?: unknown; pausedBy?: unknown }
+  return rest as T
+}
+
+/** jobForCaller on the Job a state change answers with (final review F3): run-create, run-start and run-resume reply
+ *  with the Job they changed. */
+function jobResForCaller<T extends object>(caller: RuleCaller, r: Res<T>): Res<T> {
+  return r.ok ? { ...r, value: jobForCaller(caller, r.value) } : r
+}
+
+/** The refusal of a controller or an agent that resumes, runs or deletes a Job a revoke paused, or sets a Task of it
+ *  going again (Job.pausedBy; remote governance design §8.2, the person's decision P2), or null. Every controller is
+ *  refused, a person's too: the pairing that made the Job is gone, and the decision to start it again is for a person on
+ *  this computer, the app or their own shell. Keyed on pausedBy alone, so a person's own pause answers as before. An id
+ *  that names nothing is null here, and the command answers it as before. */
+function revokedPauseRefusal(s: OrchState, caller: RuleCaller, cmd: string, args: Record<string, unknown>): Reply | null {
+  if (!RESUMES_JOB.has(cmd) || (caller.role !== 'controller' && !agentCaller(caller))) return null
+  const job = jobActedOn(s, cmd, args)
+  if (job?.pausedBy === undefined) return null
+  return {
+    status: 403,
+    body: {
+      // No pairing's name (ruling RF-3): one controller is not told another's (R7-3); the app's view names it
+      error: `job ${job.id} was paused because the pairing that made it was unpaired; only a person on this computer can resume it`,
+      reason: 'controller-revoked'
+    }
+  }
+}
+
 /** The person's decision on the final review (2026-10-22): an agent (`agentCaller`) may start work as a profile that
  *  runs without permission checks only while the app-wide mode already skips them, so a profile is never an agent's way
  *  around the app's own setting. A person is not asked, and neither is a profile that checks or follows the app. A
  *  settings file that cannot be read refuses and names the file, as the Host's spawn does: it may have said manual.
  *  Null when the caller may. */
-async function profileBypassRefusal(deps: OrchServerDeps, caller: { sessionId: string; role?: string }, profile: AgentProfile): Promise<Reply | null> {
+async function profileBypassRefusal(deps: OrchServerDeps, caller: RuleCaller, profile: AgentProfile): Promise<Reply | null> {
   if (profile.permission !== 'bypass' || !agentCaller(caller)) return null
   let yolo: boolean
   try {
@@ -1506,10 +1638,12 @@ async function profileBypassRefusal(deps: OrchServerDeps, caller: { sessionId: s
   return {
     status: 403,
     body: {
-      error:
-        `agent profile ${profile.name} runs without permission checks, and an agent, an MCP client or a plugin may start work as it ` +
-        `only while Astera's own setting "Run agents without permission checks" is on. Turn that on in Settings, or start it yourself ` +
-        `from the app or your own shell`,
+      error: withUnsaidNote(
+        caller,
+        `agent profile ${profile.name} runs without permission checks, and ${caller.role === 'controller' ? REMOTE_AGENT : 'an agent, an MCP client or a plugin'} may start work as it ` +
+          `only while Astera's own setting "Run agents without permission checks" is on. Turn that on in Settings, or start it yourself ` +
+          `from the app or your own shell`
+      ),
       reason: 'agent-profile-bypass-refused'
     }
   }
@@ -1523,7 +1657,7 @@ async function profileBypassRefusal(deps: OrchServerDeps, caller: { sessionId: s
  *  Job's own profile asked for by the coordinator carrying out that Job (`drivesRun`). */
 async function profileFor(
   deps: OrchServerDeps,
-  caller: { sessionId: string; role?: string },
+  caller: RuleCaller,
   idOrName: string,
   opts: { held?: boolean; bypassOk?: boolean } = {}
 ): Promise<{ ok: true; profile: AgentProfile } | { ok: false; reply: Reply }> {
@@ -1607,7 +1741,7 @@ async function archivedNamesOf(deps: OrchServerDeps, s: OrchState, jobs: readonl
 /** A Task an agent gives its own accounts in a Job that holds a profile still runs as that profile, so it is asked the
  *  same question (`profileBypassRefusal`) about it. Only that: a profile gone since falls back at the spawn as it does for
  *  a person (design §5), so it is null here, while a store that cannot be read refuses, since it may hold one. */
-async function inheritedBypassRefusal(deps: OrchServerDeps, caller: { sessionId: string; role?: string }, id: string): Promise<Reply | null> {
+async function inheritedBypassRefusal(deps: OrchServerDeps, caller: RuleCaller, id: string): Promise<Reply | null> {
   return startRefusal(deps, caller, [id])
 }
 
@@ -1616,7 +1750,7 @@ async function inheritedBypassRefusal(deps: OrchServerDeps, caller: { sessionId:
  *  task-create asks an inherited one (`profileBypassRefusal`): a profile gone since, or one that checks or follows the
  *  app, starts as before, and a store that cannot be read refuses. A person, and work that holds no profile, are not
  *  asked and nothing is read. */
-async function startRefusal(deps: OrchServerDeps, caller: { sessionId: string; role?: string }, profileIds: ReadonlyArray<string | undefined>): Promise<Reply | null> {
+async function startRefusal(deps: OrchServerDeps, caller: RuleCaller, profileIds: ReadonlyArray<string | undefined>): Promise<Reply | null> {
   if (!agentCaller(caller)) return null
   const ids = [...new Set(profileIds.filter((id): id is string => id !== undefined))]
   if (ids.length === 0) return null
@@ -1789,8 +1923,9 @@ const checkNamesOf = (v: unknown): string[] | null => {
 export async function handleCommand(
   deps: OrchServerDeps,
   /** `role` is the Host connection's (OrchCaller.role); absent where no Host connection exists. Only
-   *  `'mcp'` changes an answer: an MCP client calls with an empty session id, as a shell does. */
-  caller: { sessionId: string; role?: 'app' | 'cli' | 'mcp' | 'controller' | 'plugin' },
+   *  `'mcp'` changes an answer: an MCP client calls with an empty session id, as a shell does. `principal` is a remote
+   *  controller's (OrchCaller.principal): its kind decides whether the agent rules apply (agentCaller). */
+  caller: { sessionId: string; role?: 'app' | 'cli' | 'mcp' | 'controller' | 'plugin'; principal?: ControllerPrincipal },
   cmd: string,
   args: Record<string, unknown>
 ): Promise<Reply> {
@@ -1836,6 +1971,10 @@ export async function handleCommand(
     // 자리이고, 그 위에 커밋은 없다 — 여기서 멈춰도 읽고-쓰는 창이 열리지 않는다.
     if (!(await deps.trackingEnabled?.())) return conflict('work unit tracking is off')
   }
+  // **A Job a revoke paused waits for a person here** (remote governance design §8.2), before every other check of a
+  // start, so a controller is told why rather than about a plugin or a profile.
+  const revoked = revokedPauseRefusal(deps.getState(), caller, cmd, args)
+  if (revoked) return revoked
   // **The plugin checks of a Run about to start, before the state too** (plugin Phase 5 C7; 5a final review I2). The
   // plugin list is a disk read in the Host: a refusal read after `s` below would commit a state from before it, over
   // whatever landed meanwhile. The ids come from a read of their own; `jobs run` checks once for the `run-start` it
@@ -2433,6 +2572,13 @@ export async function handleCommand(
             ...(agentProfileId ? { agentProfileId } : {}),
             // Made by a sandboxed session: its coordinator and workers start in the sandbox (final fix pass, C3)
             ...(callerBoxed ? { sandboxed: true } : {}),
+            // Made by a remote controller: a revoke of its pairing pauses it if it is scheduled (remote governance
+            // design §8.1, §8.2). The name is the record's on this Host, as the principal carries it. Any other caller
+            // is on this computer and says so (ruling R18-1), so only a Job from before this release has no maker.
+            createdBy:
+              caller.role === 'controller' && caller.principal
+                ? { kind: 'controller' as const, clientId: caller.principal.clientId, name: caller.principal.name }
+                : { here: true as const },
             // `--auto` 는 값이 없는 플래그다(task-create --review 와 같은 모양). **예약이면 켜지
             // 않는다** — 템플릿 자신은 돌지 않기 때문이다.
             //
@@ -2463,7 +2609,7 @@ export async function handleCommand(
       // 회차를 만들지 않는 두 경우는 **아직 돌 때가 아닌 계획**이다. 사람이 화면에서 만든 Job 은
       // '실행' 을 누를 때까지 기다리고(`--auto` + pendingStart), 예약 Job 의 회차는 발화가 만든다 —
       // 여기서 하나 만들면 예약 시각이 되기도 전에 1회차가 도는 일이 된다.
-      if (args.auto === true || schedule !== undefined) return commit(created)
+      if (args.auto === true || schedule !== undefined) return commit(jobResForCaller(caller, created))
       const started = startJobRun(created.state, created.value.id, now)
       if (!started.ok || !fromAgentSession || coordinatorAccountId !== undefined) return commit(started)
       // **부른 세션이 이 회차를 몬다**(spec E3) — 스킬의 `run-create` → `check --wait` 고리다. 적지 않으면
@@ -2612,7 +2758,7 @@ export async function handleCommand(
       if (reply.status < 200 || reply.status >= 300) return reply
       const after = deps.getState()
       const created = after.jobs.find((j) => j.id === (reply.body as { id?: unknown }).id)
-      return created ? okBody(jobView(after, created, undefined)) : reply
+      return created ? okBody(jobForCaller(caller, jobView(after, created, undefined))) : reply
     }
     /**
      * Task 를 더한다 — task-create 의 공개 이름(phase C).
@@ -2977,7 +3123,7 @@ export async function handleCommand(
       }
       // A scheduled Job that waits on an archived profile says which (lifecycle design §5)
       const archived = await archivedNamesOf(deps, s, jobs)
-      const views = jobs.map((j): Record<string, unknown> => ({ ...jobView(s, j, latestRunOf(s, j)), ...(archived.has(j.id) ? { archivedProfiles: archived.get(j.id) } : {}) }))
+      const views = jobs.map((j): Record<string, unknown> => jobForCaller(caller, { ...jobView(s, j, latestRunOf(s, j)), ...(archived.has(j.id) ? { archivedProfiles: archived.get(j.id) } : {}) }))
       return okBody(status.value === undefined ? views : views.filter((v) => jobStateOf(v) === status.value))
     }
     // 코디네이터가 --validate 에 넣을 id 를 알아야 한다. 상태를 바꾸지 않으므로 COORDINATOR_ONLY
@@ -3017,7 +3163,7 @@ export async function handleCommand(
       // 회차를 말하면 한 응답 안에서 두 가지를 말하는 셈이 된다.
       // A scheduled Job that waits on an archived profile says which, as `jobs list` does (lifecycle design §5)
       const archived = (await archivedNamesOf(deps, s, [job])).get(job.id)
-      return okBody({ ...jobView(s, job, run), ...(archived ? { archivedProfiles: archived } : {}), ...(run ? { run: runView(s, run) } : {}) })
+      return okBody(jobForCaller(caller, { ...jobView(s, job, run), ...(archived ? { archivedProfiles: archived } : {}), ...(run ? { run: runView(s, run) } : {}) }))
     }
     // 사람이 사이드바에서 Run 을 물러나게 한다. **되돌릴 수 없다.**
     //
@@ -3203,7 +3349,7 @@ export async function handleCommand(
         started = { ok: true, state: first.state, value: job }
         target = first.value
       }
-      if (target === undefined) return commit(started)
+      if (target === undefined) return commit(jobResForCaller(caller, started))
       // **코디네이터를 띄울 수 있으면 띄우고, 이 Run 의 운전자를 그에게 넘긴다.** 넘기는 방식이
       // `autoDispatch` 를 끄는 것이다 — 한 Run 에 운전자는 하나이고, 켜 둔 채로 코디네이터를
       // 붙이면 둘이 같은 ready Task 를 두고 경합한다(Run.autoDispatch 의 주석).
@@ -3217,11 +3363,11 @@ export async function handleCommand(
       // **이미 관리자가 있으면 아무것도 하지 않는다.** 이 명령은 사이드바의 '실행' 과 코디네이터를
       // 다시 띄우는 버튼이 함께 쓴다 — 뜻은 "이 Run 에 관리자가 있게 하라" 이고, 두 번 눌러도 두
       // 세션이 뜨지 않아야 한다.
-      if (target.coordinatorSessionId) return commit(started)
+      if (target.coordinatorSessionId) return commit(jobResForCaller(caller, started))
       // A Run that was already there and has finished: the same as its own row's ▶ (I3).
-      if (s.runs.some((r) => r.id === target.id) && outcomeOf(s, target.id) !== 'running') return commit(started)
+      if (s.runs.some((r) => r.id === target.id) && outcomeOf(s, target.id) !== 'running') return commit(jobResForCaller(caller, started))
       const accountId = job.schedule ? undefined : job.coordinatorAccountId
-      if (!accountId || !deps.startCoordinator) return commit(started)
+      if (!accountId || !deps.startCoordinator) return commit(jobResForCaller(caller, started))
       // Rebased when this call changes nothing on its own (no gate to release, no first Run): the ▶
       // on a Job row restarting its latest Run's coordinator (handToCoordinator's `rebase`).
       return handToCoordinator(started.state, job, target, accountId, started.state === s)
@@ -3229,6 +3375,16 @@ export async function handleCommand(
     case 'run-pause': {
       const id = str(args.run)
       if (!id) return bad('--run is required')
+      // A revoke's pause (remote governance design §8.2): the Host's own, after it revoked the pairing of the controller
+      // that made this Job. Anyone else naming one could lock a Job away from every controller and agent.
+      let pausedBy: Job['pausedBy']
+      if (args.revokedBy !== undefined) {
+        if (caller.sessionId !== HOST_CALLER) return bad('revokedBy is the Host’s own, sent when it revokes a pairing')
+        const by = args.revokedBy as { clientId?: unknown; name?: unknown } | null
+        if (typeof by !== 'object' || by === null || typeof by.clientId !== 'string' || typeof by.name !== 'string')
+          return bad('revokedBy takes { clientId, name }')
+        pausedBy = { reason: 'controller-revoked', clientId: by.clientId, name: by.name, at: now }
+      }
       const target = s.jobs.find((j) => j.id === id)
       if (!target) return notFound(`unknown job: ${id}`)
       // 일시 중지는 예약에만 있다. 보통 Job 에는 멈출 발화가 없고, 그 Job 의 워커를 멈추는 것은
@@ -3280,7 +3436,8 @@ export async function handleCommand(
         }
         latest = deps.getState()
       }
-      return commit(pauseSchedule(latest, id, now))
+      const held = pauseSchedule(latest, id, now, pausedBy)
+      return commit(held.ok ? { ...held, value: jobForCaller(caller, held.value) } : held)
     }
     case 'run-resume': {
       const id = str(args.run)
@@ -3288,7 +3445,7 @@ export async function handleCommand(
       // **run-start 와 다른 명령이다.** 그쪽은 pendingStart("아직 시작하지 않았다")를 걷고, 이쪽은
       // paused("세워 뒀다")를 걷는다 — 사람에게 다른 버튼이고 다른 상황이다(Run.paused 의 주석).
       // 하나로 겸하게 했더니 세운 뒤에 '실행' 버튼과 '▶' 가 같은 일을 하는 둘로 나란히 떴다.
-      return commit(resumeSchedule(s, id))
+      return commit(jobResForCaller(caller, resumeSchedule(s, id)))
     }
     // The git range a Run or one attempt worked over (remote runtime design Phase 10), which `runs-changed-files` and
     // `runs-diff` read. **The Host's alone**: anyone else could point a Run's changed files at any commits.
@@ -3512,6 +3669,14 @@ export async function handleCommand(
         // The store read may have waited: what follows reads the state as it is now
         base = deps.getState()
         const job = base.jobs.find((j) => j.id === id)
+        // A pause that landed while the fire waited (a person's, or a revoke's, remote governance R7-4) wins: the fire
+        // is skipped like the others
+        const pausedSkip = (st: OrchState): Reply | null =>
+          st.jobs.find((j) => j.id === id)?.paused === true
+            ? { status: 409, body: { error: `job ${id} is paused; this run was not made`, jobId: id, paused: true } }
+            : null
+        const pausedNow = pausedSkip(base)
+        if (pausedNow) return pausedNow
         const running = job && runningRunOf(base, job, now)
         if (running)
           return {
@@ -3542,6 +3707,8 @@ export async function handleCommand(
             !finished
           )
           base = deps.getState()
+          const pausedAfter = pausedSkip(base)
+          if (pausedAfter) return pausedAfter
         }
       }
       const made = startJobRun(base, id, now)
@@ -5178,19 +5345,18 @@ export async function handleCommand(
        * **An MCP client is refused the same way** (MCP P1 design §2, Q4): it calls with an empty
        * session id, which reads as a shell, but its text comes from an agent all the same.
        */
+      // **So is a remote controller that is an agent** (remote governance design §7.3): it has no session either.
       const fromMcp = caller.role === 'mcp'
+      const fromController = caller.role === 'controller' && agentCaller(caller)
       const fromAgent =
-        (caller.sessionId !== '' && caller.sessionId !== APP_CALLER && caller.sessionId !== HOST_CALLER) || fromMcp
+        (caller.sessionId !== '' && caller.sessionId !== APP_CALLER && caller.sessionId !== HOST_CALLER) || fromMcp || fromController
       // A person's send (a shell, the app) is a person's prompt, written marked down to the pty or process: it ends what a
       // finished Run's or an ended attempt's session still holds, and an agent's or the Host's does not (observe deferred
       // fix round 2, Minor b)
       const by = !fromAgent && caller.sessionId !== HOST_CALLER ? ({ person: true } as const) : undefined
       if (session.kind === 'terminal' && fromAgent && !resuming && deps.sessionTurn) {
-        const now = await deps.sessionTurn(id)
-        if (now !== null && now.alive && now.state === 'waiting' && now.prompt !== null)
-          return conflict(
-            `${id} is waiting on ${now.prompt === 'permission' ? 'a permission prompt' : 'a question'}, and text sent from ${fromMcp ? 'an MCP client' : 'an agent session'} would answer it; nothing was sent. Read it with \`astera sessions read --id ${id}\` and tell the person what it is waiting on`
-          )
+        const refused = await promptRefusal(deps.sessionTurn, caller, id)
+        if (refused) return refused
       }
       let waitFor: (() => Promise<TurnEnding | null>) | null = null
       if (wait) {
@@ -5377,8 +5543,9 @@ export async function handleCommand(
             rollAccountIds: chain,
             ...(sessionKind === 'chat' ? { unattended: unattended.value ?? 'hold' } : {}),
             // Who started it, by who asked (2026-10-20, review M1): a remote controller's new-session dialog and the app
-            // are a person; the CLI, MCP and a plugin are an agent, and its tab closes when it ends
-            ...(caller.role === 'controller' || caller.role === 'app' ? {} : { startedBy: 'agent' as const }),
+            // are a person; the CLI, MCP and a plugin are an agent, and its tab closes when it ends. A controller that is
+            // an agent, or did not say, is an agent's (remote governance design §7.3)
+            ...((caller.role === 'controller' && !agentCaller(caller)) || caller.role === 'app' ? {} : { startedBy: 'agent' as const }),
             ...(agentProfileId !== undefined ? { agentProfileId } : {})
           })
         )
@@ -5395,16 +5562,11 @@ export async function handleCommand(
      */
     case 'chats-pending':
     case 'chats-answer': {
-      // **An answer is for a person** (Task 8 fix round 1, the controller's ruling). Letting a tool run
-      // is the decision the prompt exists to put to someone, so every caller inside an agent session is
-      // refused: a worker, a coordinator and a plain tab alike. The shell's CLI has no ASTERA_SESSION
-      // and calls with an empty session id. `chats pending` is a read and stays open to every caller.
-      if (routed === 'chats-answer' && caller.sessionId !== '')
-        return denied('chats answer is for a person: run it from a shell, not from inside an agent session')
-      // An MCP client calls with an empty session id, so it passed the check above. The MCP gate does
-      // not list chats-answer; this refusal keeps the gate from being the only barrier (MCP P1 §2).
-      if (routed === 'chats-answer' && caller.role === 'mcp')
-        return denied('chats answer is for a person: run it from a shell, not from an MCP client')
+      // **An answer is for a person** (answerRefusal). `chats pending` is a read and stays open to every caller.
+      if (routed === 'chats-answer') {
+        const refused = answerRefusal(caller)
+        if (refused) return refused
+      }
       if (!deps.chatPrompts || !deps.chatAnswer)
         return conflict('chat prompts are answered by the Astera Host, and this caller is not one')
       const session = args.session === undefined ? undefined : str(args.session)

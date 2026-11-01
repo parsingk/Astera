@@ -28,6 +28,17 @@ describe('parseControllerFrame (remote runtime design §3.1, §3.2, §3.3)', () 
     expect(parseControllerFrame({ t: 'call', id: 'x'.repeat(200), cmd: 'jobs-list', args: {} })).toHaveProperty('error')
     expect(parseControllerFrame(null)).toHaveProperty('error')
   })
+  // Remote governance design §7.1: whether the controller runs in an agent session is a boolean or nothing.
+  it('auth keeps a boolean agent and refuses another type', () => {
+    expect(parseControllerFrame({ t: 'auth', token: 'x', client: { surface: 'cli', version: '1.5.0', agent: false } })).toEqual({
+      t: 'auth',
+      token: 'x',
+      client: { surface: 'cli', version: '1.5.0', agent: false }
+    })
+    expect(parseControllerFrame({ t: 'auth', token: 'x', client: { surface: 'cli', agent: true } })).toEqual({ t: 'auth', token: 'x', client: { surface: 'cli', agent: true } })
+    expect(parseControllerFrame({ t: 'auth', token: 'x', client: { surface: 'cli' } })).toEqual({ t: 'auth', token: 'x', client: { surface: 'cli' } })
+    for (const agent of ['false', 0, 1, null, {}]) expect(parseControllerFrame({ t: 'auth', token: 'x', client: { surface: 'cli', agent } }), String(agent)).toHaveProperty('error')
+  })
 })
 
 describe('parseLinkFrame', () => {
@@ -36,6 +47,17 @@ describe('parseLinkFrame', () => {
     expect(parseLinkFrame({ t: 'call', conn: 'c1', id: '1', cmd: 'jobs-list', args: {}, role: 'app' }, 'gateway')).toEqual({ t: 'call', conn: 'c1', id: '1', cmd: 'jobs-list', args: {} })
     expect(parseLinkFrame({ t: 'conn-closed', conn: 'c1' }, 'gateway')).toEqual({ t: 'conn-closed', conn: 'c1' })
     expect(parseLinkFrame({ t: 'gateway-ready', port: 1, address: '127.0.0.1', fingerprint: 'f' }, 'gateway')).toMatchObject({ t: 'gateway-ready' })
+  })
+  // Remote governance design §7.2: the Runtime classifies a controller by the client its Gateway forwarded.
+  it("the link's auth frame carries the client through parseLinkFrame(…, 'gateway')", () => {
+    expect(
+      parseLinkFrame({ t: 'auth', conn: 'c1', tokenHash: 'h', client: { name: 'astera cli', version: '1.5.0', surface: 'cli', agent: false, role: 'app' } }, 'gateway')
+    ).toEqual({ t: 'auth', conn: 'c1', tokenHash: 'h', client: { name: 'astera cli', version: '1.5.0', surface: 'cli', agent: false } })
+    expect(parseLinkFrame({ t: 'auth', conn: 'c1', tokenHash: 'h', client: {} }, 'gateway')).toEqual({ t: 'auth', conn: 'c1', tokenHash: 'h', client: {} })
+  })
+  it('a link auth with a client of the wrong shape is refused', () => {
+    for (const client of ['cli', [], { surface: 'phone' }, { agent: 'yes' }, { version: 7 }])
+      expect(parseLinkFrame({ t: 'auth', conn: 'c1', tokenHash: 'h', client }, 'gateway'), JSON.stringify(client)).toHaveProperty('error')
   })
   it('reads what the Host sends the Gateway, and refuses one side’s frames on the other', () => {
     expect(parseLinkFrame({ t: 'close-conn', conn: 'c1', code: 'RUNTIME_AUTH_FAILED' }, 'host')).toMatchObject({ t: 'close-conn' })

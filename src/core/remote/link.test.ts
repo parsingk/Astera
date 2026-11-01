@@ -141,6 +141,38 @@ describe('openRemoteLink (remote runtime design §2.8, §3.9)', () => {
     expect(sleeps).toEqual([])
   })
 
+  // Remote governance design §4.4: the same key under another id is a reinstalled Runtime, not the one paired.
+  it('a hello naming another runtime id is RUNTIME_IDENTITY_CHANGED and is not retried', async () => {
+    const rt = fakeRuntime({ hello: hello({ runtimeId: 'rt_b' }) })
+    const { link, sleeps } = fastLink(rt)
+    const r = await link.call('jobs-list', {})
+    expect(r).toBeInstanceOf(RemoteError)
+    expect(r).toMatchObject({ code: 'RUNTIME_IDENTITY_CHANGED' })
+    expect((r as RemoteError).message).toBe(
+      'the Runtime at 10.0.0.2:47831 says it is rt_b, and this computer paired rt_a; pair it again if it was reinstalled'
+    )
+    expect(rt.conns()).toBe(1)
+    expect(rt.sent).toEqual([])
+    expect(sleeps).toEqual([])
+  })
+
+  it('onHello hears each connection\'s hello once, after the checks', async () => {
+    const heard: HelloFrame[] = []
+    const rt = fakeRuntime({ answer: (_s, conn) => (conn === 1 ? 'drop' : { status: 200, body: [] }) })
+    const { link } = fastLink(rt, { onHello: (h) => void heard.push(h) })
+    expect(await link.call('jobs-list', {})).toEqual({ status: 200, body: [] })
+    expect(rt.conns()).toBe(2)
+    expect(heard).toHaveLength(2)
+    expect(heard[0]).toMatchObject({ runtimeId: 'rt_a', asteraVersion: '1.4.8' })
+
+    const none: HelloFrame[] = []
+    const old = fakeRuntime({ hello: hello({ gatewayProtocol: 2 }) })
+    await fastLink(old, { onHello: (h) => void none.push(h) }).link.call('jobs-list', {})
+    const other = fakeRuntime({ hello: hello({ runtimeId: 'rt_b' }) })
+    await fastLink(other, { onHello: (h) => void none.push(h) }).link.call('jobs-list', {})
+    expect(none).toEqual([])
+  })
+
   it('a revoked pairing is RUNTIME_AUTH_FAILED, and is not retried', async () => {
     const rt = fakeRuntime({ authFails: new RemoteError('RUNTIME_AUTH_FAILED', 'unknown token') })
     const { link } = fastLink(rt)
