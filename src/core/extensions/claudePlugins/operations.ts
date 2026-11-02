@@ -232,7 +232,12 @@ export function createClaudePluginOps(d: { profileDir: string; run: PluginCliRun
     if (at <= 0 || at === p.id.length - 1) throw failed(`${p.id} is not a plugin id`, 'not-shareable')
     const name = p.id.slice(0, at)
     const marketplace = p.id.slice(at + 1)
-    if ((await readClaudePlugins(d.profileDir)).plugins.some((e) => e.id === p.id)) throw failed(`${p.id} is already shared`, 'already-shared')
+    const plugins = (await readClaudePlugins(d.profileDir)).plugins
+    if (plugins.some((e) => e.id === p.id)) throw failed(`${p.id} is already shared`, 'already-shared')
+    // Asked here, in the queue, and not only when the share was asked for: two same-name shares asked together both pass
+    // that check, and both would load as `<name>@inline` (C3)
+    const taken = plugins.find((e) => e.name === name)
+    if (taken) throw failed(`${taken.id} is already shared under the name ${name}`, 'name-taken')
     const arg = marketplaceArg(p.source)
     if (arg === null) throw failed(`the source of marketplace ${marketplace} cannot be given to claude plugin marketplace add`, 'not-shareable')
 

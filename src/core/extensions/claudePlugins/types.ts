@@ -91,6 +91,7 @@ export type ClaudePluginJobKind = 'share' | 'update' | 'check' | 'remove'
  *  Code reported has no code; its `message` is Claude Code's own. */
 export type ClaudePluginFailureCode =
   | 'already-shared' // a share of an id the store already holds
+  | 'name-taken' // a share whose name another shared plugin has: both would load as `<name>@inline` (C3)
   | 'not-shared' // an update or removal of an id the store does not hold
   | 'not-shareable' // a share of something that is not a plugin id, or whose source `marketplace add` cannot take
   | 'marketplace-mismatch' // the home knows the marketplace's name from another source (M10)

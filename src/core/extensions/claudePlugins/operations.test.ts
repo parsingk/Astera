@@ -407,6 +407,38 @@ describe('share', () => {
     expect((await readClaudePlugins(p)).plugins).toEqual([a])
   })
 
+  it('a second share with a taken name fails name-taken and runs nothing', async () => {
+    const p = await profile()
+    const home = homeOf(p)
+    // the same plugin published in two marketplaces: both would load as superpowers@inline (C3)
+    await addMarketplace(home, 'one', SOURCE, [{ name: 'superpowers', version: '7.0.0' }])
+    await addMarketplace(home, 'two', OTHER, [{ name: 'superpowers', version: '6.3.0' }])
+    const h = installs(home)
+    const f = fakeRun({
+      'plugin install superpowers@one': async () => {
+        await h.put('superpowers@one', '7.0.0')
+        return installed
+      },
+      // answered as Claude Code would, so a queue that let it through would record a second superpowers
+      'plugin install superpowers@two': async () => {
+        await h.put('superpowers@two', '6.3.0')
+        return installed
+      },
+      'plugin list': h.list
+    })
+    const ops = opsFor(p, f.run)
+    // asked together, as one register dialog with both checked does: each passed the Host's check before either ran
+    const first = ops.share({ id: 'superpowers@one', source: SOURCE, importedFrom: 'acc_1' })
+    const second = ops.share({ id: 'superpowers@two', source: OTHER, importedFrom: 'acc_2' })
+
+    expect((await ended(ops, first)).state).toBe('done')
+    const job = await ended(ops, second)
+    expect(job).toMatchObject({ state: 'failed', code: 'name-taken' })
+    expect(job.message).toContain('superpowers@one')
+    expect(f.lines()).toEqual(['plugin list', 'plugin install superpowers@one', 'plugin list'])
+    expect((await readClaudePlugins(p)).plugins.map((e) => e.id)).toEqual(['superpowers@one'])
+  })
+
   it("share fails when the plugin's catalog entry cannot be read", async () => {
     const p = await profile()
     const home = homeOf(p)

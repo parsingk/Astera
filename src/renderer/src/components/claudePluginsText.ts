@@ -37,6 +37,8 @@ const REFUSALS: Record<ClaudePluginRefusal | 'not-offered', MessageKey> = {
 }
 const CODES: Record<ClaudePluginFailureCode, MessageKey> = {
   'already-shared': 'settings.extensions.plugin.code.already-shared',
+  // The same words as the refusal the register dialog shows before a share is asked for
+  'name-taken': 'settings.extensions.plugin.reason.name-taken',
   'not-shared': 'settings.extensions.plugin.code.not-shared',
   'not-shareable': 'settings.extensions.plugin.code.not-shareable',
   'marketplace-mismatch': 'settings.extensions.plugin.code.marketplace-mismatch',

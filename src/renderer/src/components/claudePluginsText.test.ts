@@ -24,7 +24,7 @@ const REFUSALS = Object.keys({
 } satisfies Record<ClaudePluginRefusal | 'not-offered', 1>)
 const CODES = Object.keys({
   'already-shared': 1, 'not-shared': 1, 'not-shareable': 1, 'marketplace-mismatch': 1, 'home-unreadable': 1, 'not-listed': 1,
-  'dependency-missing': 1, 'catalog-unreadable': 1, 'store-unreadable': 1, refused: 1, 'timed-out': 1
+  'dependency-missing': 1, 'catalog-unreadable': 1, 'store-unreadable': 1, refused: 1, 'timed-out': 1, 'name-taken': 1
 } satisfies Record<ClaudePluginFailureCode, 1>) as ClaudePluginFailureCode[]
 
 const LABELS: Record<string, string> = { c2: 'claude2@…', c4: 'claude4@…' }
@@ -63,6 +63,13 @@ describe('claudePluginsText', () => {
     expect(jobLine(job({ state: 'failed', message: claudes }), en)).toBe(`Failed: ${claudes}`)
     // A code a newer Host sends that this build has no words for falls back to the message
     expect(jobLine(job({ state: 'failed', code: 'brand-new' as ClaudePluginFailureCode, message: 'why' }), en)).toBe('Failed: why')
+  })
+
+  it('says a share refused in the queue for a taken name with the refusal’s own words', () => {
+    const taken = job({ state: 'failed', code: 'name-taken', message: 'superpowers@one is already shared under the name superpowers' })
+    expect(jobLine(taken, ko)).toBe(ko('settings.extensions.plugin.reason.name-taken'))
+    expect(jobLine(taken, en)).toBe(en('settings.extensions.plugin.reason.name-taken'))
+    expect(jobLine(taken, ko)).toBe(refusalLabel('name-taken', ko))
   })
 
   it('puts missing files before an update, and an update before off', () => {
