@@ -20,7 +20,8 @@ import type { OrchCaller } from '../../core/host/orchProtocol'
 import type { ExtensionEntry, ExtensionKind } from '../../core/extensions/types'
 import { resolveSessionCapabilities, type SkipReason } from '../../core/extensions/resolve'
 import { readClaudePlugins } from '../../core/extensions/claudePlugins/store'
-import { discoverClaudePlugins } from '../../core/extensions/claudePlugins/discover'
+import { discoverClaudePlugins, withOfferedVersions } from '../../core/extensions/claudePlugins/discover'
+import { readClaudePluginContents } from '../../core/extensions/claudePlugins/contents'
 import { createClaudePluginOps, sweepOrphanedClaudePlugins, type ClaudePluginOps } from '../../core/extensions/claudePlugins/operations'
 import type { PluginCliRun } from '../../core/extensions/claudePlugins/cli'
 import type { ClaudePluginRefusal } from '../../core/extensions/claudePlugins/types'
@@ -262,14 +263,19 @@ export function createHostExtensions(d: {
             missing: (await Promise.all([e.installPath, ...e.dependencies.map((x) => x.installPath)].map(isFolder))).includes(false),
             accountCopies: copies.find((c) => c.id === e.id)?.holders ?? [],
             // An entry that is off still loads for each of these, which need it (spawnArgs.ts)
-            requiredBy: store.plugins.filter((o) => o.enabled && o.dependencies.some((x) => x.id === e.id)).map((o) => o.id)
+            requiredBy: store.plugins.filter((o) => o.enabled && o.dependencies.some((x) => x.id === e.id)).map((o) => o.id),
+            // What it brings, for the row (§5.9); a folder that is gone brings nothing
+            contents: await readClaudePluginContents(e.installPath)
           }))
         )
         return { status: 200, body: { plugins, jobs: pluginJobs?.jobs() ?? [], ...(store.lastCheck ? { lastCheck: store.lastCheck } : {}) } }
       }
       case 'extensions-plugin-discover': {
         const store = await readPlugins()
-        return { status: 200, body: await discoverClaudePlugins({ accounts: await d.readAccounts(), shared: store.plugins }) }
+        const accounts = await d.readAccounts()
+        const found = await discoverClaudePlugins({ accounts, shared: store.plugins })
+        // The version each would install (§5.3), for the register dialog only: the list's discovery skips it
+        return { status: 200, body: { ...found, plugins: await withOfferedVersions(found.plugins, accounts) } }
       }
       case 'extensions-plugin-share': {
         const { id, acceptCommand } = args

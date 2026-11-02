@@ -6,7 +6,8 @@ import path from 'node:path'
 import { providerOf } from '../../providers/meta'
 import { credentialInLaunch } from '../discover'
 import type { Account } from '../../types'
-import type { ClaudePluginHolder, ClaudePluginRefusal, DiscoveredClaudePlugin, MarketplaceSource, SharedClaudePlugin } from './types'
+import { catalogFingerprint } from './catalog'
+import type { ClaudePluginHolder, ClaudePluginRefusal, DiscoveredClaudePlugin, MarketplaceSource, OfferedClaudePlugin, SharedClaudePlugin } from './types'
 
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -231,4 +232,19 @@ export async function discoverClaudePlugins(a: {
     plugins.push(reason ? { ...found, shareable: false, reason } : { ...found, shareable: true })
   }
   return { plugins, unreadable }
+}
+
+/** Each plugin with the version the marketplace clone of its source account offers (§5.3): what a share would install,
+ *  as of that account's last marketplace update. An account config folder keeps its clones as Astera's plugin folder
+ *  does, so `catalogFingerprint` reads it. Null when the account is not in `accounts` or its clone does not say. Kept
+ *  apart from `discoverClaudePlugins`, which the plugin list runs on every poll: this hashes a folder source, so only the
+ *  register dialog asks for it. */
+export async function withOfferedVersions(plugins: DiscoveredClaudePlugin[], accounts: Account[]): Promise<OfferedClaudePlugin[]> {
+  return Promise.all(
+    plugins.map(async (p) => {
+      const account = accounts.find((a) => a.id === p.sourceAccountId)
+      const offer = account === undefined ? null : await catalogFingerprint({ home: account.configDir, marketplace: p.marketplace, name: p.name }).catch(() => null)
+      return { ...p, offeredVersion: offer?.offeredVersion ?? null }
+    })
+  )
 }

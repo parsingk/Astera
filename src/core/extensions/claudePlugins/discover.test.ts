@@ -6,7 +6,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { removeFixture } from '../../testFixtures'
-import { discoverClaudePlugins, marketplaceArg } from './discover'
+import { discoverClaudePlugins, marketplaceArg, withOfferedVersions } from './discover'
 import type { Account } from '../../types'
 import type { ClaudePluginRefusal, MarketplaceSource, SharedClaudePlugin } from './types'
 
@@ -436,6 +436,35 @@ describe('discoverClaudePlugins', () => {
       const found = await discoverClaudePlugins({ accounts: [a], shared: [] })
       expect(found.unreadable).toEqual(['a'])
     })
+  })
+})
+
+// §5.3: the register dialog says the version a share would install, as the source account's marketplace clone offers it
+describe('withOfferedVersions', () => {
+  it("reads each plugin's version from its source account's catalog, and null where that catalog does not say", async () => {
+    const home = await temp()
+    const entry = (name: string, version?: string) => ({ name, source: { source: 'github', repo: `acme/${name}` }, ...(version ? { version } : {}) })
+    const held = { plugins: { [`superpowers@${OFFICIAL}`]: [{ version: '6.3.0' }], [`hud@${OFFICIAL}`]: [{}], [`lint@${OFFICIAL}`]: [{}] } }
+    // The source is the first account that knows the marketplace: its catalog, not a later one's
+    const holdsOnly = await account(home, 'holds-only', held)
+    const one = await account(home, 'one', { ...held, marketplaces: { [OFFICIAL]: GITHUB }, catalogs: { [OFFICIAL]: { name: OFFICIAL, plugins: [entry('superpowers', '7.1.0'), entry('hud')] } } })
+    const two = await account(home, 'two', { ...held, marketplaces: { [OFFICIAL]: GITHUB }, catalogs: { [OFFICIAL]: { name: OFFICIAL, plugins: [entry('superpowers', '9.9.9'), entry('lint', '1.0.0')] } } })
+    const accounts = [holdsOnly, one, two]
+    const found = await discoverClaudePlugins({ accounts, shared: [] })
+    expect((await withOfferedVersions(found.plugins, accounts)).map((p) => [p.id, p.sourceAccountId, p.offeredVersion])).toEqual([
+      [`superpowers@${OFFICIAL}`, 'one', '7.1.0'],
+      // In the catalog without a version, and not in it at all
+      [`hud@${OFFICIAL}`, 'one', null],
+      [`lint@${OFFICIAL}`, 'one', null]
+    ])
+  })
+
+  it('says null for a source account it is not given, or one without the marketplace clone', async () => {
+    const home = await temp()
+    const a = await account(home, 'a', { plugins: { [`p@${OFFICIAL}`]: [{}] }, marketplaces: { [OFFICIAL]: GITHUB } })
+    const found = await discoverClaudePlugins({ accounts: [a], shared: [] })
+    expect((await withOfferedVersions(found.plugins, [a])).map((p) => p.offeredVersion)).toEqual([null])
+    expect((await withOfferedVersions(found.plugins, [])).map((p) => p.offeredVersion)).toEqual([null])
   })
 })
 

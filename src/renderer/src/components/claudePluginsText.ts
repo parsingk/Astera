@@ -3,11 +3,13 @@
 // in the person's language; one Claude Code reported is shown in Claude Code's own words.
 import type { MessageKey, MessageParams } from '../../../core/i18n'
 import type {
+  ClaudePluginContents,
+  ClaudePluginDependency,
   ClaudePluginFailureCode,
   ClaudePluginHolder,
   ClaudePluginJob,
   ClaudePluginRefusal,
-  DiscoveredClaudePlugin,
+  OfferedClaudePlugin,
   SharedClaudePlugin
 } from '../../../core/extensions/claudePlugins/types'
 import type { ConfirmChoice } from '../lib/confirm'
@@ -16,8 +18,13 @@ type T = (key: MessageKey, params?: MessageParams) => string
 type LabelOf = (accountId: string) => string
 
 /** A shared plugin as `pluginList` answers it: whether its folder (or a dependency's) is gone, each account's own copy
- *  of the same id, and the enabled shared plugins that need it. */
-export type ListedClaudePlugin = SharedClaudePlugin & { missing: boolean; accountCopies: ClaudePluginHolder[]; requiredBy: string[] }
+ *  of the same id, the enabled shared plugins that need it, and what it brings (absent from a Host that does not say). */
+export type ListedClaudePlugin = SharedClaudePlugin & {
+  missing: boolean
+  accountCopies: ClaudePluginHolder[]
+  requiredBy: string[]
+  contents?: ClaudePluginContents
+}
 
 const REFUSALS: Record<ClaudePluginRefusal | 'not-offered', MessageKey> = {
   'user-config': 'settings.extensions.plugin.reason.user-config',
@@ -103,16 +110,48 @@ export function offConfirmBody(p: Pick<ListedClaudePlugin, 'accountCopies' | 're
   return lines.join('\n')
 }
 
+/** Each account's own copy, worded by what runs there (P4): while the shared plugin is on, the shared version stands in
+ *  for it; while off, the account's own version runs, unless that copy is switched off in the account too. */
+export function ownCopyLines(p: Pick<ListedClaudePlugin, 'enabled' | 'accountCopies'>, labelOf: LabelOf, t: T): string[] {
+  return p.accountCopies.map((h) => {
+    const params = { account: labelOf(h.accountId), version: h.version }
+    if (p.enabled) return t('settings.extensions.plugin.ownCopy', params)
+    return t(h.enabled ? 'settings.extensions.plugin.ownCopyOff' : 'settings.extensions.plugin.ownCopyOffDisabled', params)
+  })
+}
+
+/** What Claude Code installed with the plugin, which loads with it (§5.4), one line each. */
+export const dependencyLines = (deps: readonly ClaudePluginDependency[], t: T): string[] =>
+  deps.map((d) => t('settings.extensions.plugin.dependency', { name: d.id, version: d.version }))
+
+const CONTENT_KINDS: [kind: 'skills' | 'commands' | 'agents' | 'mcpServers', key: MessageKey][] = [
+  ['skills', 'settings.extensions.plugin.contents.skills'],
+  ['commands', 'settings.extensions.plugin.contents.commands'],
+  ['agents', 'settings.extensions.plugin.contents.agents'],
+  ['mcpServers', 'settings.extensions.plugin.contents.mcpServers']
+]
+
+/** What the plugin brings (§5.9): a line a kind it has, with the count and the names, then whether it has hooks. */
+export function contentLines(c: ClaudePluginContents | undefined, t: T): string[] {
+  if (c === undefined) return []
+  const lines = CONTENT_KINDS.flatMap(([kind, key]) => (c[kind].length === 0 ? [] : [t(key, { count: c[kind].length, list: c[kind].join(', ') })]))
+  if (c.hooks) lines.push(t('settings.extensions.plugin.contents.hooks'))
+  return lines
+}
+
 /** The register dialog for what `pluginDiscover` found across the Claude accounts: one choice a plugin that can be
- *  shared, labelled with its id over the accounts holding it. A plugin that cannot be shared is not a choice; it is
- *  listed in the body with why, as is each account whose plugins could not be read (ruling P-2). Nothing starts checked. */
+ *  shared, labelled with its id over the accounts holding it and, on a line of its own, the version a share would
+ *  install when the catalog says (§5.3). A plugin that cannot be shared is not a choice; it is listed in the body with
+ *  why, as is each account whose plugins could not be read (ruling P-2). Nothing starts checked. */
 export function pluginPrompt(
-  found: readonly DiscoveredClaudePlugin[],
+  found: readonly OfferedClaudePlugin[],
   unreadable: readonly string[],
   labelOf: LabelOf,
   t: T
 ): { title: string; body: string; footer: string; confirmLabel: string; choices: ConfirmChoice[] } {
-  const choices = found.filter((p) => p.shareable).map((p) => ({ id: p.id, label: p.id, hint: holdersHint(p.holders, labelOf, t), defaultChecked: false }))
+  const hint = (p: OfferedClaudePlugin): string =>
+    [holdersHint(p.holders, labelOf, t), ...(typeof p.offeredVersion === 'string' ? [t('settings.extensions.plugin.offeredVersion', { version: p.offeredVersion })] : [])].join('\n')
+  const choices = found.filter((p) => p.shareable).map((p) => ({ id: p.id, label: p.id, hint: hint(p), defaultChecked: false }))
   const refused = found.flatMap((p) => (p.shareable ? [] : [`${p.id}: ${refusalLabel(p.reason, t)}`]))
   return {
     title: t('settings.extensions.plugin.register'),

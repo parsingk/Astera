@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import type { Account, PluginsCallAnswer, Provider } from '../../../core/types'
 import type { ExtensionKind } from '../../../core/extensions/types'
-import type { DiscoveredClaudePlugin } from '../../../core/extensions/claudePlugins/types'
+import type { OfferedClaudePlugin } from '../../../core/extensions/claudePlugins/types'
 import { PROVIDERS, PROVIDER_META, providerOf } from '../../../core/providers/meta'
 import { useI18n } from '../i18n/I18nProvider'
 import { useAccountStatus } from '../hooks/useAccountStatus'
@@ -110,12 +110,12 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
   const shareClaudePlugins = async (): Promise<void> => {
     if (busy !== null) return
     setBusy('reading')
-    let found: DiscoveredClaudePlugin[]
+    let found: OfferedClaudePlugin[]
     let unreadable: string[]
     try {
       const r = await window.api.extensions.pluginDiscover().catch(failed)
       if (!r.ok) return void toast.error(failureLine(r, t, { read: true }))
-      found = arr<DiscoveredClaudePlugin>(r.body.plugins)
+      found = arr<OfferedClaudePlugin>(r.body.plugins)
       unreadable = arr<string>(r.body.unreadable)
     } finally {
       setBusy(null)

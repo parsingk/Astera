@@ -44,4 +44,14 @@ describe('ConfirmView', () => {
     expect(html.indexOf('BODY-TEXT')).toBeLessThan(html.indexOf('<pre'))
     expect(html.indexOf('<pre')).toBeLessThan(html.indexOf('<button'))
   })
+
+  // Task 10 review I1: a command confirmation opens from a poll, not a click, so a stray Enter must not run the command
+  it('focuses Cancel, not the confirm button, when it shows a command', () => {
+    const buttons = (pending: { title: string; body: string; code?: string; resolve: () => void }): string[] =>
+      [...renderToStaticMarkup(React.createElement(ConfirmView, { pending, checked: [], onChecked: () => {} })).matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map(
+        (m) => `${m[1]}${/autofocus/.test(m[0]) ? ' [focused]' : ''}`
+      )
+    expect(buttons({ title: 'T', body: 'B', code: 'npx run-me', resolve: () => {} })).toEqual(['common.cancel [focused]', 'common.confirm'])
+    expect(buttons({ title: 'T', body: 'B', resolve: () => {} })).toEqual(['common.cancel', 'common.confirm [focused]'])
+  })
 })

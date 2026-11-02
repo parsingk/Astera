@@ -601,7 +601,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* 확인 창 안의 곁가지 선택들. 본문과 버튼 줄 사이에 서므로 위아래 여백을 스스로 갖는다 */
 .confirm-choices { display: flex; flex-direction: column; gap: 8px; margin: 2px 0; }
 /* 그 선택이 무엇을 잃게 하는지 — 라벨 아래 줄로 내려 붙는다(경고가 아니라 사실이라 톤은 흐리게) */
-.confirm-choice-hint { display: block; margin-top: 2px; font-size: 10.5px; color: var(--text-faint); }
+.confirm-choice-hint { display: block; margin-top: 2px; font-size: 10.5px; color: var(--text-faint); white-space: pre-line; }
 .confirm-text { font-size: 13px; color: var(--text); line-height: 1.5; margin: 0 0 12px; }
 /* A command the person must see before it runs, as it is: the plugin log's box (.plugin-log) */
 .confirm-code { max-height: 200px; overflow: auto; margin: 0; padding: 8px; background: var(--bg); border: 1px solid var(--line-soft);

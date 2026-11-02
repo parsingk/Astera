@@ -1,7 +1,19 @@
 import { describe, it, expect } from 'vitest'
 import { t as translate, LANGS, type MessageKey, type MessageParams } from '../../../core/i18n'
-import { holdersHint, jobLine, offConfirmBody, pendingLines, pluginPrompt, refusalLabel, rowState, updateLabel } from './claudePluginsText'
-import type { ClaudePluginFailureCode, ClaudePluginJob, ClaudePluginRefusal, DiscoveredClaudePlugin } from '../../../core/extensions/claudePlugins/types'
+import {
+  contentLines,
+  dependencyLines,
+  holdersHint,
+  jobLine,
+  offConfirmBody,
+  ownCopyLines,
+  pendingLines,
+  pluginPrompt,
+  refusalLabel,
+  rowState,
+  updateLabel
+} from './claudePluginsText'
+import type { ClaudePluginFailureCode, ClaudePluginJob, ClaudePluginRefusal, OfferedClaudePlugin } from '../../../core/extensions/claudePlugins/types'
 
 const en = (key: MessageKey, params?: MessageParams): string => translate('en', key, params)
 const ko = (key: MessageKey, params?: MessageParams): string => translate('ko', key, params)
@@ -102,18 +114,67 @@ describe('claudePluginsText', () => {
   })
 
   it('offers each shareable plugin, and lists the refused ones and the unreadable accounts in the body (P-2)', () => {
-    const found: DiscoveredClaudePlugin[] = [
-      { id: 'superpowers@obra', name: 'superpowers', marketplace: 'obra', holders: [{ accountId: 'c2', version: '7.0.0', enabled: true }, { accountId: 'c4', version: '6.3.0', enabled: false }], source: { source: 'github', repo: 'obra/superpowers-marketplace' }, sourceAccountId: 'c2', shareable: true },
-      { id: 'keyed@corp', name: 'keyed', marketplace: 'corp', holders: [{ accountId: 'c2', version: '1.0.0', enabled: true }], source: null, sourceAccountId: 'c2', shareable: false, reason: 'source-credential' }
+    const found: OfferedClaudePlugin[] = [
+      { id: 'superpowers@obra', name: 'superpowers', marketplace: 'obra', holders: [{ accountId: 'c2', version: '7.0.0', enabled: true }, { accountId: 'c4', version: '6.3.0', enabled: false }], source: { source: 'github', repo: 'obra/superpowers-marketplace' }, sourceAccountId: 'c2', shareable: true, offeredVersion: '7.1.0' },
+      { id: 'hud@obra', name: 'hud', marketplace: 'obra', holders: [{ accountId: 'c2', version: '1.0.0', enabled: true }], source: { source: 'github', repo: 'obra/superpowers-marketplace' }, sourceAccountId: 'c2', shareable: true, offeredVersion: null },
+      { id: 'keyed@corp', name: 'keyed', marketplace: 'corp', holders: [{ accountId: 'c2', version: '1.0.0', enabled: true }], source: null, sourceAccountId: 'c2', shareable: false, reason: 'source-credential', offeredVersion: null }
     ]
     const p = pluginPrompt(found, ['c4'], labelOf, en)
-    expect(p.choices).toEqual([{ id: 'superpowers@obra', label: 'superpowers@obra', hint: 'claude2@… 7.0.0, claude4@… 6.3.0 (Off)', defaultChecked: false }])
+    // §5.3: the version a share would install, on a line of its own, and nothing when the catalog does not say
+    expect(p.choices).toEqual([
+      { id: 'superpowers@obra', label: 'superpowers@obra', hint: `claude2@… 7.0.0, claude4@… 6.3.0 (Off)\n${en('settings.extensions.plugin.offeredVersion', { version: '7.1.0' })}`, defaultChecked: false },
+      { id: 'hud@obra', label: 'hud@obra', hint: 'claude2@… 1.0.0', defaultChecked: false }
+    ])
+    expect(pluginPrompt(found, [], labelOf, ko).choices[0].hint?.split('\n')[1]).toBe('설치될 버전 7.1.0')
     expect(p.body.split('\n')).toEqual([
       en('settings.extensions.plugin.registerBody'),
       `keyed@corp: ${en('settings.extensions.plugin.reason.source-credential')}`,
       en('settings.extensions.plugin.unreadable', { account: 'claude4@…' })
     ])
     expect(p.title).toBe('Claude Code plugins')
+  })
+
+  // §5.9: the expanded row names the account copies whether the shared plugin is on or off, worded by what runs
+  it('words each account copy by whether the shared plugin is on, and whether the account’s own copy is', () => {
+    const accountCopies = [
+      { accountId: 'c2', version: '7.0.0', enabled: true },
+      { accountId: 'c4', version: '6.3.0', enabled: false }
+    ]
+    expect(ownCopyLines({ enabled: true, accountCopies }, labelOf, ko)).toEqual([
+      'claude2@…: 자기 버전 7.0.0 대신 공유 버전을 씀',
+      'claude4@…: 자기 버전 6.3.0 대신 공유 버전을 씀'
+    ])
+    expect(ownCopyLines({ enabled: false, accountCopies }, labelOf, ko)).toEqual([
+      ko('settings.extensions.plugin.ownCopyOff', { account: 'claude2@…', version: '7.0.0' }),
+      // Its own copy is switched off in that account, so it runs neither
+      ko('settings.extensions.plugin.ownCopyOffDisabled', { account: 'claude4@…', version: '6.3.0' })
+    ])
+    expect(ownCopyLines({ enabled: false, accountCopies: [] }, labelOf, ko)).toEqual([])
+  })
+
+  // §5.4: what Claude Code installed with the plugin is shown under it
+  it('says each dependency with its version, one line each', () => {
+    expect(dependencyLines([{ id: 'base@obra', version: '1.2.0', installPath: '/x' }, { id: 'tools@other', version: '0.3.0', installPath: '/y' }], en)).toEqual([
+      en('settings.extensions.plugin.dependency', { name: 'base@obra', version: '1.2.0' }),
+      en('settings.extensions.plugin.dependency', { name: 'tools@other', version: '0.3.0' })
+    ])
+    expect(dependencyLines([], en)).toEqual([])
+  })
+
+  // §5.9: what the plugin brings, a line a kind it has, with the count and the names
+  it('says what a plugin brings, a line a kind, and nothing for a kind it lacks', () => {
+    const lines = contentLines({ skills: ['brainstorm', 'review'], commands: [], agents: ['critic'], mcpServers: ['linear'], hooks: true }, ko)
+    expect(lines).toEqual([
+      ko('settings.extensions.plugin.contents.skills', { count: 2, list: 'brainstorm, review' }),
+      ko('settings.extensions.plugin.contents.agents', { count: 1, list: 'critic' }),
+      ko('settings.extensions.plugin.contents.mcpServers', { count: 1, list: 'linear' }),
+      ko('settings.extensions.plugin.contents.hooks')
+    ])
+    expect(lines[0]).toContain('2')
+    expect(lines[0]).toContain('brainstorm, review')
+    expect(contentLines({ skills: [], commands: ['ship'], agents: [], mcpServers: [], hooks: false }, en)).toEqual([en('settings.extensions.plugin.contents.commands', { count: 1, list: 'ship' })])
+    // A Host that does not say
+    expect(contentLines(undefined, en)).toEqual([])
   })
 
   it('says where a job stands for a plugin not in the list yet, by its latest job', () => {

@@ -5,7 +5,20 @@ import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
 import { confirmModal, isConfirmOpen } from '../lib/confirm'
 import { failureLine } from './extensionsText'
-import { isLiveJob, jobLine, latestJob, offConfirmBody, pendingLines, refusalLabel, rowState, updateLabel, type ListedClaudePlugin } from './claudePluginsText'
+import {
+  contentLines,
+  dependencyLines,
+  isLiveJob,
+  jobLine,
+  latestJob,
+  offConfirmBody,
+  ownCopyLines,
+  pendingLines,
+  refusalLabel,
+  rowState,
+  updateLabel,
+  type ListedClaudePlugin
+} from './claudePluginsText'
 
 type Failure = Extract<PluginsCallAnswer, { ok: false }>
 type LastCheck = ClaudePluginStore['lastCheck']
@@ -204,8 +217,9 @@ export function ClaudePluginsSection({ plugins, labelOf }: { plugins: ClaudePlug
 }
 
 /** One shared plugin, as ExtensionRow draws an item: its name, and marks for off, an update, a job under way and
- *  anything that needs a look; opened, its marketplace, version and last update, what went wrong, the accounts whose
- *  own copy it stands in for, and its actions. Update is offered when there is one, or to install missing files again. */
+ *  anything that needs a look; opened, its marketplace, version and last update, what went wrong, what it brings, what
+ *  was installed with it, each account's own copy as on or off leaves it, and its actions. Update is offered when there
+ *  is one, or to install missing files again. */
 function ClaudePluginRow({
   plugin: p,
   job,
@@ -251,13 +265,17 @@ function ClaudePluginRow({
           <span className="settings-hint">{t('settings.extensions.plugin.facts', { marketplace: p.marketplace, version: p.version, time: when(p.lastUpdated) })}</span>
           {state === 'missing' && <span className="settings-hint is-warning">{t('settings.extensions.plugin.missing')}</span>}
           {stopped && <span className="settings-hint is-warning">{line}</span>}
-          {/* P4: the shared version stands in for an account's own copy only while it is on */}
-          {p.enabled &&
-            p.accountCopies.map((h) => (
-              <span key={h.accountId} className="settings-hint">
-                {t('settings.extensions.plugin.ownCopy', { account: labelOf(h.accountId), version: h.version })}
-              </span>
-            ))}
+          {/* What it brings (§5.9), what was installed with it (§5.4), and each account's own copy (P4): one block each */}
+          {[contentLines(p.contents, t), dependencyLines(p.dependencies, t), ownCopyLines(p, labelOf, t)].map(
+            (lines, block) =>
+              lines.length > 0 && (
+                <div key={block} className="settings-hint">
+                  {lines.map((l, i) => (
+                    <div key={i}>{l}</div>
+                  ))}
+                </div>
+              )
+          )}
           <div className="remote-actions">
             <button className="settings-gen-refresh" disabled={busy} onClick={onToggle}>
               {p.enabled ? t('settings.extensions.disable') : t('settings.extensions.enable')}

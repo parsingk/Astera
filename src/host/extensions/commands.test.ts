@@ -348,7 +348,15 @@ describe('createHostExtensions, shared Claude plugins', () => {
     const listed = await h.call('extensions-plugin-list')
     expect(listed).toMatchObject({ status: 200, marks: { effects: 0 } })
     expect(listed.body).toEqual({
-      plugins: [{ ...review, missing: false, accountCopies: [{ accountId: 'acc_1', version: '0.9.0', enabled: true }], requiredBy: [] }],
+      plugins: [
+        {
+          ...review,
+          missing: false,
+          accountCopies: [{ accountId: 'acc_1', version: '0.9.0', enabled: true }],
+          requiredBy: [],
+          contents: { skills: [], commands: [], agents: [], mcpServers: [], hooks: false }
+        }
+      ],
       jobs: [expect.objectContaining({ id: (checked.body as { jobId: string }).jobId, kind: 'check', state: 'running' })]
     })
     expect(h.gateway.sync).not.toHaveBeenCalled()
@@ -376,6 +384,41 @@ describe('createHostExtensions, shared Claude plugins', () => {
       ['gone@market', true],
       ['owner@market', true]
     ])
+  })
+
+  // §5.9: the row lists what the plugin brings, read from its folder; a folder that is gone brings nothing
+  it('list says what each plugin brings', async () => {
+    const h = await pluginRig()
+    const review = sharedEntry(h.pluginHome, 'review')
+    await write(path.join(review.installPath, 'skills', 'review', 'SKILL.md'), '# review')
+    await write(path.join(review.installPath, 'commands', 'ship.md'), 'x')
+    await write(path.join(review.installPath, 'agents', 'critic.md'), 'x')
+    await write(path.join(review.installPath, '.mcp.json'), JSON.stringify({ mcpServers: { linear: { command: 'npx' } } }))
+    await write(path.join(review.installPath, 'hooks', 'hooks.json'), '{}')
+    await h.seed([review, sharedEntry(h.pluginHome, 'gone')])
+    expect((await h.listed()).plugins.map((p) => [p.id, (p as { contents?: unknown }).contents])).toEqual([
+      ['review@market', { skills: ['review'], commands: ['ship'], agents: ['critic'], mcpServers: ['linear'], hooks: true }],
+      ['gone@market', { skills: [], commands: [], agents: [], mcpServers: [], hooks: false }]
+    ])
+  })
+
+  // §5.3: the register dialog says what a share would install, as the source account's marketplace clone offers it
+  it('plugin-discover answers the version the source account’s marketplace offers', async () => {
+    const h = await pluginRig()
+    await holding(h.account.configDir, { 'review@market': { version: '1.0.0' }, 'lint@market': { version: '2.0.0' } })
+    await write(
+      path.join(h.account.configDir, 'plugins', 'marketplaces', 'market', '.claude-plugin', 'marketplace.json'),
+      JSON.stringify({ name: 'market', plugins: [{ name: 'review', source: { source: 'github', repo: 'acme/review' }, version: '1.2.0' }] })
+    )
+    expect((await h.call('extensions-plugin-discover')).body).toEqual({
+      plugins: [
+        expect.objectContaining({ id: 'review@market', offeredVersion: '1.2.0' }),
+        // Not in the catalog: nothing to say
+        expect.objectContaining({ id: 'lint@market', offeredVersion: null })
+      ],
+      unreadable: []
+    })
+    expect(h.fake.calls).toEqual([])
   })
 
   // Task 7: an entry that is off still loads for an enabled entry that needs it, and the row says for which

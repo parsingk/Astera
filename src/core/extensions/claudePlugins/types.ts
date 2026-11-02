@@ -72,6 +72,19 @@ export type DiscoveredClaudePlugin = {
   sourceAccountId: string
 } & ({ shareable: true } | { shareable: false; reason: ClaudePluginRefusal })
 
+/** A discovered plugin as `extensions-plugin-discover` answers it (§5.3): with the version the marketplace clone of its
+ *  source account offers, null when that clone does not say. */
+export type OfferedClaudePlugin = DiscoveredClaudePlugin & { offeredVersion: string | null }
+
+/** What a shared plugin brings, as its install folder holds it (§5.9): names only, each list sorted. */
+export interface ClaudePluginContents {
+  skills: string[]
+  commands: string[]
+  agents: string[]
+  mcpServers: string[]
+  hooks: boolean
+}
+
 export type ClaudePluginJobKind = 'share' | 'update' | 'check' | 'remove'
 
 /** Why a job failed when Astera decided it, so the settings tab can say it in the person's language. A failure Claude
