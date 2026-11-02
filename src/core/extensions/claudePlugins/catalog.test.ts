@@ -158,10 +158,11 @@ describe('catalogFingerprint', () => {
       expect(await fingerprint(await home({ files: binary('\n') }))).toEqual(lf)
     })
 
-    it('a NUL byte anywhere in a file makes it binary, not only near the start', async () => {
-      const late = (body: string) => ({ ...text, 'probe/assets/big.bin': `${'x'.repeat(9000)}${NUL}${body}` })
+    // git's rule, the one the Runtime comparison hash uses too (compareHash.ts): only the first 8000 bytes are looked at
+    it('a NUL byte after the first 8000 bytes does not make a file binary', async () => {
+      const late = (body: string) => ({ ...text, 'probe/assets/big.dat': `${'x'.repeat(9000)}${NUL}${body}` })
       const lf = await fingerprint(await home({ files: late('\n') }))
-      expect((await fingerprint(await home({ files: late('\r\n') })))?.fingerprint).not.toBe(lf?.fingerprint)
+      expect(await fingerprint(await home({ files: late('\r\n') }))).toEqual(lf)
     })
   })
 
