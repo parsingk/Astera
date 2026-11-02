@@ -1378,6 +1378,8 @@ export const en: Record<keyof typeof ko, string> = {
     'config.toml is merged key by key. Matching keys take the source values, and this account keeps its own keys, its trusted folders and its hook approvals. The existing file is backed up as .bak.',
   'account.sync.extensionsNote':
     'Once anything is shared in Settings › MCP & Skills, MCP servers, skills, commands and agents come from there and are not copied here.',
+  'account.sync.pluginsNote':
+    'Once a plugin is shared in Settings › MCP & Skills, the list of enabled plugins and the list of marketplaces are not copied here.',
   'account.sync.appliesNextSession':
     'This does not apply to running sessions — it takes effect starting with the next session.',
   'account.sync.confirm': 'Import',

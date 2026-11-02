@@ -63,6 +63,7 @@ import { createManagedHooksCheck } from '../core/sessions/managedHooks'
 import { codexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
 import { findInstalledHostExe } from '../core/host/installedRuntime'
 import { settingsImportCopiesCapabilities } from '../core/extensions/registry'
+import { claudePluginsShared } from '../core/extensions/claudePlugins/store'
 import { hidingLog } from '../core/extensions/secrets'
 import { createHidingSource, projectOfWorktrees } from '../core/credentials/hiding'
 import { profileConversations, type ProfileConversations } from '../core/agentProfiles/conversations'
@@ -560,7 +561,10 @@ export async function createCore(userDataDir: string, osLocale: string, paths?: 
     const src = accounts.get(srcId)
     try {
       const r = await descriptorOf(descriptors, account).syncSettings(src.configDir, account.configDir, os.homedir(), {
-        capabilities: await settingsImportCopiesCapabilities(userDataDir)
+        capabilities: await settingsImportCopiesCapabilities(userDataDir),
+        // plugins are in their own store, not the registry above, so the button leaves the two plugin keys alone once
+        // any plugin is shared
+        keepTargetKeys: (await claudePluginsShared(userDataDir)) ? ['enabledPlugins', 'extraKnownMarketplaces'] : []
       })
       if (!r.settingsApplied && !r.mcpApplied && r.contentApplied.length === 0)
         return { ok: true, message: { key: 'account.sync.nothingToCopy' } }

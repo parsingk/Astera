@@ -1217,6 +1217,8 @@ export const es: Catalog = {
     'El archivo config.toml se combina clave por clave. Las claves coincidentes toman el valor del origen, y esta cuenta conserva sus propias claves, sus carpetas de confianza y sus aprobaciones de hooks. El archivo existente se respalda como .bak.',
   'account.sync.extensionsNote':
     'En cuanto se comparta algo en Ajustes › MCP & Skills, los servidores MCP, las habilidades, los comandos y los agentes vienen de allí y no se copian aquí.',
+  'account.sync.pluginsNote':
+    'En cuanto se comparta un plugin en Ajustes › MCP & Skills, la lista de plugins activados y la lista de marketplaces no se copian aquí.',
   'account.sync.appliesNextSession':
     'No se aplica a las sesiones en ejecución: surte efecto a partir de la siguiente sesión.',
   'account.sync.confirm': 'Importar',

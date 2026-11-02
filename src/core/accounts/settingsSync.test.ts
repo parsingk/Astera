@@ -244,6 +244,69 @@ describe('syncClaudeSettings — capabilities 가 꺼져 있을 때', () => {
   })
 })
 
+// Plugins shared through Astera (Claude plugin sharing P3, C1): the account keeps its own two plugin keys, and every other
+// key is copied as before
+describe('syncClaudeSettings — keepTargetKeys', () => {
+  const PLUGIN_KEYS = ['enabledPlugins', 'extraKnownMarketplaces']
+
+  it('keepTargetKeys 의 키는 대상 값을 유지한다', async () => {
+    await writeHomeSettings({
+      theme: 'light',
+      enabledPlugins: { b: true },
+      extraKnownMarketplaces: { fromSrc: { source: { source: 'github', repo: 'acme/src' } } }
+    })
+    await fs.writeFile(
+      path.join(target, 'settings.json'),
+      JSON.stringify({
+        theme: 'dark',
+        enabledPlugins: { a: true },
+        extraKnownMarketplaces: { own: { source: { source: 'github', repo: 'acme/own' } } }
+      }),
+      'utf8'
+    )
+    const r = await syncClaudeSettings(path.join(home, '.claude'), target, home, {
+      capabilities: false,
+      keepTargetKeys: PLUGIN_KEYS
+    })
+    expect(r.settingsApplied).toBe(true)
+    expect(await readTarget('settings.json')).toEqual({
+      theme: 'light',
+      enabledPlugins: { a: true },
+      extraKnownMarketplaces: { own: { source: { source: 'github', repo: 'acme/own' } } }
+    })
+  })
+
+  it('keepTargetKeys 의 키가 대상에 없으면 만들지 않는다', async () => {
+    await writeHomeSettings({ theme: 'light', enabledPlugins: { b: true }, extraKnownMarketplaces: { fromSrc: {} } })
+    await fs.writeFile(path.join(target, 'settings.json'), JSON.stringify({ model: 'claude-fable-5' }), 'utf8')
+    const opts = { capabilities: false, keepTargetKeys: PLUGIN_KEYS }
+    await syncClaudeSettings(path.join(home, '.claude'), target, home, opts)
+    expect(await readTarget('settings.json')).toEqual({ theme: 'light', model: 'claude-fable-5' })
+
+    // the same when the target has no settings.json at all
+    await fs.rm(path.join(target, 'settings.json'))
+    await syncClaudeSettings(path.join(home, '.claude'), target, home, opts)
+    expect(await readTarget('settings.json')).toEqual({ theme: 'light' })
+  })
+
+  it('keepTargetKeys 가 비면 오늘과 같다', async () => {
+    const other = path.join(home, '.claude-accounts', 'claude4')
+    await fs.mkdir(other, { recursive: true })
+    await writeHomeSettings({ theme: 'light', enabledPlugins: { b: true }, model: 'claude-fable-5' })
+    const before = JSON.stringify({ enabledPlugins: { a: true }, skipDangerousModePermissionPrompt: true })
+    await fs.writeFile(path.join(target, 'settings.json'), before, 'utf8')
+    await fs.writeFile(path.join(other, 'settings.json'), before, 'utf8')
+
+    const src = path.join(home, '.claude')
+    await syncClaudeSettings(src, target, home, { capabilities: true })
+    await syncClaudeSettings(src, other, home, { capabilities: true, keepTargetKeys: [] })
+    expect(await fs.readFile(path.join(other, 'settings.json'), 'utf8')).toBe(
+      await fs.readFile(path.join(target, 'settings.json'), 'utf8')
+    )
+    expect((await readTarget('settings.json')).enabledPlugins).toEqual({ b: true })
+  })
+})
+
 // The source is no longer always the home account — it is whichever account is that provider's default,
 // which is usually but not necessarily the home one.
 describe('syncClaudeSettings — 원본이 홈이 아닌 계정일 때', () => {

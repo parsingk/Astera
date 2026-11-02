@@ -1486,6 +1486,8 @@ export const ko = {
     'config.toml 을 키 단위로 합칩니다. 같은 키는 원본 값을 따르고, 이 계정에만 있는 키와 신뢰한 폴더, 승인한 훅은 남습니다. 기존 파일은 .bak으로 백업합니다.',
   'account.sync.extensionsNote':
     '설정 › MCP & Skills에서 무언가를 등록하기 시작하면 MCP 서버·스킬·커맨드·에이전트는 그쪽에서 받고, 여기서는 복사하지 않습니다.',
+  'account.sync.pluginsNote':
+    '설정 › MCP & Skills에서 플러그인을 공유하면, 플러그인 켜짐 목록과 마켓플레이스 목록은 여기서 복사하지 않습니다.',
   'account.sync.appliesNextSession': '실행 중인 세션에는 적용되지 않고 다음 세션부터 반영됩니다.',
   'account.sync.confirm': '가져오기',
   'account.sync.confirming': '가져오는 중…',

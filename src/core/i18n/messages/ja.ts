@@ -1204,6 +1204,8 @@ export const ja: Catalog = {
     'config.toml をキー単位でマージします。同じキーは取り込み元の値になり、このアカウントだけのキー、信頼したフォルダ、承認したフックはそのまま残ります。既存のファイルは .bak としてバックアップします。',
   'account.sync.extensionsNote':
     '設定 › MCP & Skills で何かを共有すると、MCP サーバー・スキル・コマンド・エージェントはそちらから届き、ここではコピーしません。',
+  'account.sync.pluginsNote':
+    '設定 › MCP & Skills でプラグインを共有すると、有効なプラグインの一覧とマーケットプレイスの一覧はここではコピーしません。',
   'account.sync.appliesNextSession':
     '実行中のセッションには適用されず、次のセッションから反映されます。',
   'account.sync.confirm': '取り込む',

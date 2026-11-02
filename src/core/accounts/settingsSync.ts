@@ -15,6 +15,10 @@ export interface SyncResult {
  *  Settings › Extensions, which then gives them to every account itself (Agent Control Plane release 1 design §4.7, D9). */
 export interface SyncOptions {
   capabilities: boolean
+  /** Top-level `settings.json` keys the target keeps as they are: its own value (or its absence) stays and the source's
+   *  is not copied. The import passes the two plugin keys once plugins are shared through Astera, which then gives
+   *  every account its plugins itself (Claude plugin sharing P3, C1). Claude only; codex ignores it. */
+  keepTargetKeys?: string[]
 }
 
 // Paths compare through comparablePath (core/files/tree.ts): case folded on win32 and darwin, exact on linux.
@@ -75,7 +79,7 @@ async function mergeDirTree(srcDir: string, destDir: string): Promise<boolean> {
 /**
  * Copies one claude account's settings into another.
  * settings.json merges by top-level key and mcpServers merges by server name — in both the source wins,
- * and entries only the target has are kept.
+ * and entries only the target has are kept. The exception is `opts.keepTargetKeys`: those top-level keys stay the target's.
  * .credentials.json is never touched.
  *
  * The source used to be hardcoded to the home directory. It is now whichever account is that provider's
@@ -93,7 +97,9 @@ export async function syncClaudeSettings(
   if (srcSettings) {
     const targetFile = path.join(targetConfigDir, 'settings.json')
     const target = (await readObjectOrNull(targetFile)) ?? {}
-    await writeJsonBackedUp(targetFile, { ...target, ...srcSettings })
+    const incoming = { ...srcSettings }
+    for (const key of opts.keepTargetKeys ?? []) delete incoming[key]
+    await writeJsonBackedUp(targetFile, { ...target, ...incoming })
     result.settingsApplied = true
   }
   if (!opts.capabilities) return result
