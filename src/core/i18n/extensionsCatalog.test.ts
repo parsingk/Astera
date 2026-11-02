@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import { CATALOGS, LANGS } from './index'
 
-const PREFIXES = ['settings.extensions.', 'settings.tab.extensions', 'account.sync.codexMergeNote', 'account.sync.extensionsNote']
+const PREFIXES = ['settings.extensions.', 'settings.tab.extensions', 'account.sync.codexMergeNote', 'account.sync.extensionsNote', 'account.sync.pluginsNote']
 
 describe('the Extensions catalog', () => {
   it('has every Extensions key in every language', () => {

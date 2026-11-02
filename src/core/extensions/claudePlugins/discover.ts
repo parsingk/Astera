@@ -6,27 +6,7 @@ import path from 'node:path'
 import { providerOf } from '../../providers/meta'
 import { credentialInLaunch } from '../discover'
 import type { Account } from '../../types'
-import type { ClaudePluginRefusal, MarketplaceSource, SharedClaudePlugin } from './types'
-
-export interface ClaudePluginHolder {
-  accountId: string
-  version: string
-  enabled: boolean
-}
-
-export type DiscoveredClaudePlugin = {
-  id: string
-  name: string
-  marketplace: string
-  /** Every Claude account holding the plugin at user scope, in the order the accounts were given. */
-  holders: ClaudePluginHolder[]
-  /** From the first account that holds the plugin and knows its marketplace; null when none does, when the source is one
-   *  Astera cannot hand to `claude plugin marketplace add`, and when the address or the recorded headers hold a
-   *  credential, whatever the refusal: this object goes to the renderer, and it must not hold the credential. */
-  source: MarketplaceSource | null
-  /** That account; the first holder when no holder knows the marketplace. */
-  sourceAccountId: string
-} & ({ shareable: true } | { shareable: false; reason: ClaudePluginRefusal })
+import type { ClaudePluginHolder, ClaudePluginRefusal, DiscoveredClaudePlugin, MarketplaceSource, SharedClaudePlugin } from './types'
 
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)

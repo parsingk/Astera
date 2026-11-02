@@ -28,5 +28,20 @@ describe('ConfirmView', () => {
       React.createElement(ConfirmView, { pending: { title: 'T', body: 'B', resolve: () => {} }, checked: [], onChecked: () => {} })
     )
     expect(html.match(/confirm-body/g)).toHaveLength(1)
+    expect(html).not.toContain('<pre')
+  })
+
+  // Claude plugin sharing §5.4: a marketplace-declared command is shown to the person as it is, before it runs
+  it('draws a command in a code block after the body, as it is', () => {
+    const command = 'npx -y "@acme/helper@1.2.0" --token=%TOKEN% & echo <done>\nhttps://example.test/archive.tgz'
+    const html = renderToStaticMarkup(
+      React.createElement(ConfirmView, { pending: { title: 'T', body: 'BODY-TEXT', code: command, resolve: () => {} }, checked: [], onChecked: () => {} })
+    )
+    const pre = /<pre class="confirm-code">([\s\S]*?)<\/pre>/.exec(html)
+    expect(pre).not.toBeNull()
+    const shown = pre![1].replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#x27;/g, "'").replace(/&amp;/g, '&')
+    expect(shown).toBe(command)
+    expect(html.indexOf('BODY-TEXT')).toBeLessThan(html.indexOf('<pre'))
+    expect(html.indexOf('<pre')).toBeLessThan(html.indexOf('<button'))
   })
 })

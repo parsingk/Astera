@@ -53,6 +53,7 @@ export function ConfirmView({
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>{pending.title}</h2>
         <p className="confirm-text confirm-body">{pending.body}</p>
+        {pending.code !== undefined && <pre className="confirm-code">{pending.code}</pre>}
         {/* 곁가지 선택. 되돌릴 수 없는 동작에 딸린 결정을 이 자리에서 받는다 — 확인 창을 닫고 다른
             곳에서 다시 묻게 하면 사람이 무엇을 고른 채로 지웠는지 알 수 없다 */}
         {pending.choices && pending.choices.length > 0 && (
