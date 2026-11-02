@@ -1317,6 +1317,9 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .security-choices { display: flex; align-items: center; gap: 14px; }
 /* The coverage table and the rows: wide, so they scroll sideways inside the tab rather than widen it */
 .security-table-wrap { container-type: inline-size; overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+/* Audit Logs' rows scroll in their own box, so reading more does not push the page down; the column names stay on top */
+.security-table-wrap.is-rows { max-height: 480px; overflow-y: auto; }
+.security-table-wrap.is-rows thead th { position: sticky; top: 0; z-index: 1; background: var(--panel); }
 .security-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .security-table th, .security-table td { padding: 6px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line-soft); }
 .security-table tr:last-child > * { border-bottom: 0; }
