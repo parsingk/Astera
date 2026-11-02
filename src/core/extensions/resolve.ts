@@ -196,6 +196,17 @@ export async function resolveSessionCapabilities(a: {
   return out
 }
 
+/** A sandboxed Codex session's approval of its shared servers' tools (the Mac check, check 12b). Codex asks before a tool
+ *  call its sandbox profile does not approve by itself, and the sandbox's `-a never` (a chat's `approvalPolicy: "never"`)
+ *  refuses the question: "MCP tool call requires approval, but approval policy is never". The bypass the sandbox stands
+ *  for approves them (measured, codex 0.165: the same call completes under --dangerously-bypass-approvals-and-sandbox), so
+ *  each server Astera gives the session is approved the same way. `default_tools_approval_mode` is in Codex's MCP server
+ *  config since before the sandbox's floor (config/src/mcp_types.rs at rust-v0.160.0), and a stricter mode the person's
+ *  organization requires still wins (`AppToolApproval::restrict_to`). The account's own servers are its own config's. */
+export function sandboxedCodexApprovals(given: readonly string[]): string[] {
+  return given.flatMap((name) => ['-c', `mcp_servers.${name}.default_tools_approval_mode=${literal('approve')}`])
+}
+
 /** The session's context: explicit when its profile id resolves (an archived profile still does, for work already
  *  holding it), else implicit with one log line, as the session ran before profiles. Never rejects. */
 async function resolveAgentContext(a: {
