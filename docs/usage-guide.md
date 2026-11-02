@@ -60,6 +60,27 @@ the shared copy**. Once anything is shared, **Import settings from the default a
 these to Extensions and copies settings only. `astera ext list` and `astera ext sync` do the same
 from a terminal (see [the CLI reference](cli.md)).
 
+**Claude Code plugins** are shared from the **Plugins** group of the same tab. Choose **Add**, then
+**Claude Code plugins** under Plugins, and pick the plugins found in any of your Claude accounts.
+Astera installs one copy of each in its own folder, and every Claude session Astera starts loads
+that copy, so every account runs the same version. In those sessions a shared plugin replaces an
+account's own copy of the same name while it is shared and on. Turn it off or remove it, and the
+account's own copy runs again from its next session. Opening a row lists the accounts that have
+their own copy, with its version. Nothing in an account's folder is changed, and a `claude` you start
+outside Astera does not get the shared plugins. A plugin that needs settings values, comes from a
+marketplace address that holds a password or key, or was not installed from a marketplace is shown
+with the reason it cannot be shared, and two shared plugins cannot have the same name. Plugins are
+shared with Claude accounts only; Codex accounts do not get them.
+
+Astera looks for newer versions when it starts and once a day, and **Check now** does it at once.
+A newer version only marks the row **Update available**. A shared plugin never changes until you
+press **Update**. If a marketplace asks to run a command of its own to install or update a plugin,
+Astera shows you the command and runs it only after you confirm. Once any plugin is shared,
+**Import settings from the default account** keeps each account's own `enabledPlugins` and
+`extraKnownMarketplaces` instead of copying the default account's, and copies the other settings as
+before. Sharing only plugins does not stop the import from copying the default account's servers,
+skills, commands and agents. `astera ext list` names the shared plugins.
+
 **Smart Resume** is optional and experimental. Choose it under **Settings → Agents → Session
 resume strategy** to give a new session a compact checkpoint when rolling moves work to another
 account. If checkpoint creation fails, Astera falls back to ordinary resume.
