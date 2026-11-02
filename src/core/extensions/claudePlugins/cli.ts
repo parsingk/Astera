@@ -4,12 +4,15 @@
 //
 // Every run carries --json and an environment with no trace of a parent session or an account: Claude Code ignores
 // --accept-command while CLAUDECODE is set (M8), and an inherited CLAUDE_CONFIG_DIR would point the command at an
-// account's folder. `claude` is found the way sessions find it, and on win32 a `.cmd` claude runs through the npm shim
-// as node on its script, or through cmd.exe only when no argument is cmd.exe syntax (higgsfield's commandFor).
+// account's folder. `claude` is found the way sessions find it, PATH refreshed first as before every Host CLI start, and
+// on win32 a `.cmd` claude runs through the npm shim as node on its script, or through cmd.exe only when no argument is
+// cmd.exe syntax (higgsfield's commandFor).
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { commandFor } from '../../higgsfield/runner'
 import { killProcessTree } from '../../run/kill'
 import { resolveWindowsExecutable, warmWindowsExecutable } from '../../sessions/windowsExecutable'
+import { ensureOnWindowsPath } from '../../sessions/windowsPath'
+import { ensureInstallDirOnPath } from '../../sessions/installDirPath'
 
 export interface PluginCliResult {
   code: number | null
@@ -72,19 +75,30 @@ function jsonOf(stdout: string): Record<string, unknown> | unknown[] | null {
 export function createPluginCliRunner(d: {
   home: string
   platform: NodeJS.Platform
-  baseEnv: NodeJS.ProcessEnv
+  /** What each run's environment starts from. A function is read at each run, after `refreshPath`, so a PATH that grew
+   *  since the runner was made is the one the command gets. */
+  baseEnv: NodeJS.ProcessEnv | (() => NodeJS.ProcessEnv)
   spawn?: typeof nodeSpawn
   /** Where `claude` is on win32. Default: the PATH lookup sessions use (buildClaudeCommand). */
   resolve?: (name: string) => string | null
   /** Awaited before `resolve` on win32: the same lookup off the calling thread, its answer kept for `resolve`.
    *  Default: warmWindowsExecutable. */
   warm?: (name: string) => Promise<unknown>
+  /** Awaited first at each run, as before every CLI start in the Host (spawner.ts): puts a `claude` installed or moved
+   *  since this process started on this process's PATH. A failure is ignored. Default: ensureOnWindowsPath on win32,
+   *  ensureInstallDirOnPath elsewhere. */
+  refreshPath?: () => Promise<void> | void
 }): PluginCliRun {
-  const env = pluginCliEnv(d.baseEnv, d.home)
   const resolve = d.resolve ?? resolveWindowsExecutable
   const warm = d.warm ?? warmWindowsExecutable
+  const refreshPath = d.refreshPath ?? (() => (d.platform === 'win32' ? ensureOnWindowsPath(['claude']) : ensureInstallDirOnPath(['claude'])))
   return async (args, o = {}) => {
     const full = args.includes('--json') ? args : [...args, '--json']
+    // The Host outlives the app: a `claude` installed from the app after the Host started is not on the PATH it began with
+    await Promise.resolve()
+      .then(refreshPath)
+      .catch(() => null)
+    const env = pluginCliEnv(typeof d.baseEnv === 'function' ? d.baseEnv() : d.baseEnv, d.home)
     // Looked up off the thread first (audit U-10): `resolve` then reads the kept answer instead of walking PATH
     // synchronously, which a dead drive on PATH held for 20 to 60 s. A failed warm leaves `resolve` to look itself.
     if (d.platform === 'win32') await warm('claude').catch(() => null)

@@ -903,11 +903,12 @@ async function main(): Promise<void> {
     readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
     log: (m) => log.write(m),
     gateway: mcpGateway,
-    // And the shared Claude Code plugins, installed once in Astera's own plugin folder by `claude plugin …`
+    // And the shared Claude Code plugins, installed once in Astera's own plugin folder by `claude plugin …`. The
+    // environment is read at each command, after its PATH refresh, as a worker's is at each start
     claudePluginRun: createPluginCliRunner({
       home: extensionPaths(profileDir).claudePluginHome,
       platform: process.platform,
-      baseEnv: hostWorkerBaseEnv(process.env)
+      baseEnv: () => hostWorkerBaseEnv(process.env)
     })
   })
   // Agent Profiles (design §4): the store this Host owns. A profile cannot be deleted while a live session holds it

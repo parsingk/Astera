@@ -141,17 +141,28 @@ export function createHostExtensions(d: {
 
   // The shared Claude plugins' jobs, on their own queue. They are made once the plugin folder has been swept, so no job
   // runs beside the sweep: the Host's start or the first plugin command, whichever comes first, starts it, and both wait
-  // for it. `pluginJobs` is what the list reads meanwhile, and it never waits.
+  // for it. `pluginJobs` is what the list reads meanwhile, and it never waits. A start-up step that failed fails the
+  // callers waiting for it and is tried again by the next one, rather than kept as every later answer until a restart.
   let pluginJobs: ClaudePluginOps | null = null
   let pluginsReady: Promise<ClaudePluginOps> | null = null
   const claudePlugins = (): Promise<ClaudePluginOps> | null => {
     const run = d.claudePluginRun
     if (run === undefined) return null
-    pluginsReady ??= sweepOrphanedClaudePlugins(d.profileDir).then((gone) => {
-      if (gone.length > 0) log(`claude plugins: removed ${gone.length} version folder(s) no session used: ${gone.join(', ')}`)
-      pluginJobs = createClaudePluginOps({ profileDir: d.profileDir, run, log })
-      return pluginJobs
-    })
+    if (pluginsReady === null) {
+      const ready = sweepOrphanedClaudePlugins(d.profileDir)
+        .then((gone) => {
+          if (gone.length > 0) log(`claude plugins: removed ${gone.length} version folder(s) no session used: ${gone.join(', ')}`)
+          pluginJobs = createClaudePluginOps({ profileDir: d.profileDir, run, log })
+          return pluginJobs
+        })
+        .catch((e: unknown) => {
+          pluginsReady = null
+          throw new Error(`the shared Claude plugins could not be started (${message(e)})`)
+        })
+      // A caller that answers before it waits (a share no account offers) must not leave the failure unhandled
+      ready.catch(() => {})
+      pluginsReady = ready
+    }
     return pluginsReady
   }
   // Read only: a damaged store's copy is kept by the jobs' own reading, never by a question
@@ -338,8 +349,7 @@ export function createHostExtensions(d: {
         return []
       }),
     keepCheckingClaudePlugins: (o = {}) => {
-      const ready = claudePlugins()
-      if (ready === null) return () => {}
+      if (d.claudePluginRun === undefined) return () => {}
       const every =
         o.every ??
         ((ms: number, fn: () => void) => {
@@ -348,12 +358,15 @@ export function createHostExtensions(d: {
           return () => clearInterval(t)
         })
       // While nothing is shared a check would run nothing, so it is not even a job: a person who shares no plugin sees no
-      // job and gets no store. A store that cannot be read is checked, so the job fails and says why.
+      // job and gets no store. A store that cannot be read is checked, so the job fails and says why. Each tick asks for
+      // the jobs again, so a start-up step that failed is tried again by the next one.
       const check = (): void => {
-        void ready.then(async (ops) => {
-          const nothingShared = await readPlugins().then((s) => s.plugins.length === 0, () => false)
-          if (!nothingShared) ops.check()
-        })
+        void claudePlugins()
+          ?.then(async (ops) => {
+            const nothingShared = await readPlugins().then((s) => s.plugins.length === 0, () => false)
+            if (!nothingShared) ops.check()
+          })
+          .catch((e: unknown) => log(`claude plugins: the update check did not start (${message(e)})`))
       }
       check()
       return every(CLAUDE_PLUGIN_CHECK_EVERY_MS, check)

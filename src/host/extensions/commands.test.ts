@@ -10,11 +10,17 @@ import { readExtensionRegistry, writeExtensionRegistry } from '../../core/extens
 import { extensionSecrets } from '../../core/extensions/secrets'
 import { readClaudePlugins, updateClaudePlugins } from '../../core/extensions/claudePlugins/store'
 import type { PluginCliResult, PluginCliRun } from '../../core/extensions/claudePlugins/cli'
-import type { ClaudePluginJob } from '../../core/extensions/claudePlugins/operations'
+import { sweepOrphanedClaudePlugins, type ClaudePluginJob } from '../../core/extensions/claudePlugins/operations'
 import type { MarketplaceSource, SharedClaudePlugin } from '../../core/extensions/claudePlugins/types'
 import type { McpExtension } from '../../core/extensions/types'
 import { createHostExtensions } from './commands'
 import type { Account } from '../../core/types'
+
+// The real sweep, which a test can make fail once: the start-up step the plugin jobs wait for
+vi.mock('../../core/extensions/claudePlugins/operations', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../core/extensions/claudePlugins/operations')>()
+  return { ...real, sweepOrphanedClaudePlugins: vi.fn(real.sweepOrphanedClaudePlugins) }
+})
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -303,7 +309,8 @@ async function pluginRig() {
     states: () => [],
     stopServer: vi.fn(async (_id: string) => {})
   }
-  const ext = createHostExtensions({ profileDir, homeDir: home, readAccounts: async () => [account], log: () => {}, gateway, claudePluginRun: fake.run })
+  const logs: string[] = []
+  const ext = createHostExtensions({ profileDir, homeDir: home, readAccounts: async () => [account], log: (l) => logs.push(l), gateway, claudePluginRun: fake.run })
   const call = (cmd: string, args: Record<string, unknown> = {}, extra: { role?: 'app' | 'cli' | 'mcp'; agentRefusal?: string } = {}) => {
     const marks = { effects: 0 }
     return ext.command({ cmd, args, role: extra.role ?? 'app', ...(extra.agentRefusal ? { agentRefusal: extra.agentRefusal } : {}), marks }).then((r) => ({ ...r, marks }))
@@ -311,7 +318,7 @@ async function pluginRig() {
   const seed = (plugins: SharedClaudePlugin[]) => updateClaudePlugins(profileDir, (s) => ({ ...s, plugins }))
   const listed = async () => (await call('extensions-plugin-list')).body as { plugins: (SharedClaudePlugin & { missing: boolean; requiredBy: string[] })[]; jobs: ClaudePluginJob[] }
   const jobs = async () => (await listed()).jobs
-  return { profileDir, account, pluginHome, script, fake, gateway, ext, call, seed, listed, jobs }
+  return { profileDir, account, pluginHome, script, fake, gateway, ext, call, seed, listed, jobs, logs }
 }
 
 describe('createHostExtensions, shared Claude plugins', () => {
@@ -567,4 +574,69 @@ describe('createHostExtensions, shared Claude plugins', () => {
     expect(await exists(extensionPaths(h.profileDir).claudePlugins)).toBe(false)
     stop()
   })
+
+  // The jobs wait for the start's sweep; one that failed is tried again by the next caller rather than kept as the answer
+  it('a failing start-up step does not leave plugin commands broken forever', async () => {
+    const h = await pluginRig()
+    await h.seed([sharedEntry(h.pluginHome, 'review')])
+    h.script['plugin marketplace update market'] = () => okOutcome
+    const sweep = vi.mocked(sweepOrphanedClaudePlugins)
+    sweep.mockClear()
+    sweep.mockRejectedValueOnce(new Error('the plugin folder could not be read')).mockRejectedValueOnce(new Error('the plugin folder could not be read'))
+
+    const unhandled = await unhandledDuring(async () => {
+      // A share refused before it waits for the step: the step's failure is still handled, and tried again next time
+      expect(await h.call('extensions-plugin-share', { id: 'nope@market' })).toMatchObject({ status: 400, body: { reason: 'not-offered' } })
+
+      const failed = await h.call('extensions-plugin-check')
+      expect(failed).toMatchObject({ status: 500, marks: { effects: 0 } })
+      expect((failed.body as { error: string }).error).toContain('the plugin folder could not be read')
+      expect(h.fake.calls).toEqual([])
+
+      const checked = await h.call('extensions-plugin-check')
+      expect(checked).toMatchObject({ status: 200, body: { jobId: expect.any(String) }, marks: { effects: 1 } })
+      await vi.waitFor(async () => expect(await h.jobs()).toEqual([expect.objectContaining({ kind: 'check', state: 'done' })]))
+    })
+    expect(sweep).toHaveBeenCalledTimes(3)
+    expect(unhandled).toEqual([])
+  })
+
+  it('the check tick logs a failure instead of rejecting', async () => {
+    const h = await pluginRig()
+    await h.seed([sharedEntry(h.pluginHome, 'review')])
+    h.script['plugin marketplace update market'] = () => okOutcome
+    vi.mocked(sweepOrphanedClaudePlugins).mockRejectedValueOnce(new Error('the plugin folder could not be read'))
+    let tick: (() => void) | null = null
+    const unhandled = await unhandledDuring(async () => {
+      const stop = h.ext.keepCheckingClaudePlugins({
+        every: (_ms, fn) => {
+          tick = fn
+          return () => (tick = null)
+        }
+      })
+      await vi.waitFor(() => expect(h.logs.join('\n')).toContain('the plugin folder could not be read'))
+      expect(h.fake.calls).toEqual([])
+      // The next tick tries the start-up step again, and checks
+      tick!()
+      await vi.waitFor(async () => expect(await h.jobs()).toEqual([expect.objectContaining({ kind: 'check', state: 'done' })]))
+      expect(h.fake.calls).toEqual(['plugin marketplace update market'])
+      stop()
+    })
+    expect(unhandled).toEqual([])
+  })
 })
+
+/** The rejections nobody handled while `f` ran. */
+async function unhandledDuring(f: () => Promise<void>): Promise<unknown[]> {
+  const seen: unknown[] = []
+  const on = (e: unknown): void => {
+    seen.push(e)
+  }
+  process.on('unhandledRejection', on)
+  try {
+    await f()
+  } finally {
+    process.off('unhandledRejection', on)
+  }
+  return seen
+}

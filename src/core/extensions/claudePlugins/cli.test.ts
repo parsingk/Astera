@@ -31,8 +31,10 @@ const tmp = async (): Promise<string> => {
 }
 
 const HOME = path.join(os.tmpdir(), 'astera-profile', 'extensions', 'claude-plugins')
-/** The win32 tests name their `claude` with `resolve`; the off-thread lookup of the real PATH is left out. */
+/** The win32 tests name their `claude` with `resolve`; the off-thread lookup of the real PATH, and the real refresh of
+ *  this process's PATH, are left out. */
 const noWarm = async (): Promise<null> => null
+const noRefresh = (): void => {}
 
 interface Script { out?: string[]; err?: string[]; code?: number; hang?: boolean }
 interface Call { file: string; args: string[]; opts: SpawnOptions }
@@ -173,7 +175,8 @@ describe('createPluginCliRunner', () => {
       baseEnv: {},
       spawn: spawn as unknown as typeof import('node:child_process').spawn,
       resolve: () => cli,
-      warm: noWarm
+      warm: noWarm,
+      refreshPath: noRefresh
     })
     const r = await run(['plugin', 'marketplace', 'add', 'https://x/y?a=1&b=2'])
     expect(spawn).not.toHaveBeenCalled()
@@ -186,7 +189,7 @@ describe('createPluginCliRunner', () => {
     const cli = path.join(dir, 'claude.cmd')
     await fs.writeFile(cli, '@echo off\r\necho hi %*\r\n')
     const { spawn, calls } = fakeSpawn({ out: ['[]\n'] })
-    const run = createPluginCliRunner({ home: HOME, platform: 'win32', baseEnv: {}, spawn, resolve: () => cli, warm: noWarm })
+    const run = createPluginCliRunner({ home: HOME, platform: 'win32', baseEnv: {}, spawn, resolve: () => cli, warm: noWarm, refreshPath: noRefresh })
     const r = await run(['plugin', 'list'])
     expect(r.refused).toBeUndefined()
     expect(calls[0].file).toBe('cmd.exe')
@@ -208,14 +211,14 @@ describe('createPluginCliRunner', () => {
       return 'C:\\tools\\claude.exe'
     }
     const { spawn, calls } = fakeSpawn({ out: ['[]\n'] })
-    await createPluginCliRunner({ home: HOME, platform: 'win32', baseEnv: {}, spawn, resolve, warm })(['plugin', 'list'])
+    await createPluginCliRunner({ home: HOME, platform: 'win32', baseEnv: {}, spawn, resolve, warm, refreshPath: noRefresh })(['plugin', 'list'])
     expect(order).toEqual(['warm claude', 'warmed', 'resolve claude'])
     expect(calls[0].file).toBe('C:\\tools\\claude.exe')
 
     const failing = vi.fn(async () => {
       throw new Error('lookup failed')
     })
-    const r = await createPluginCliRunner({ home: HOME, platform: 'win32', baseEnv: {}, spawn, resolve, warm: failing })([
+    const r = await createPluginCliRunner({ home: HOME, platform: 'win32', baseEnv: {}, spawn, resolve, warm: failing, refreshPath: noRefresh })([
       'plugin',
       'list'
     ])
@@ -234,6 +237,61 @@ describe('createPluginCliRunner', () => {
     expect(calls[0].file).toBe('claude')
   })
 
+  // As every CLI start in the Host (spawner.ts): a `claude` installed or moved while the Host runs is put on PATH first.
+  // The Host outlives the app, so a runner made at its start must not keep what PATH held then.
+  it('refreshes PATH before resolving claude on each run', async () => {
+    const order: string[] = []
+    const refreshPath = (): void => {
+      order.push('refresh')
+    }
+    const warm = async (name: string): Promise<null> => {
+      order.push(`warm ${name}`)
+      return null
+    }
+    const resolve = (name: string): string => {
+      order.push(`resolve ${name}`)
+      return 'C:\\tools\\claude.exe'
+    }
+    const { spawn, calls } = fakeSpawn({ out: ['[]\n'] })
+    const run = createPluginCliRunner({ home: HOME, platform: 'win32', baseEnv: {}, spawn, resolve, warm, refreshPath })
+    await run(['plugin', 'list'])
+    await run(['plugin', 'list'])
+    expect(order).toEqual(['refresh', 'warm claude', 'resolve claude', 'refresh', 'warm claude', 'resolve claude'])
+
+    // A refresh that fails, at once or later, still runs the command
+    const throwing = (): void => {
+      throw new Error('the saved Path could not be read')
+    }
+    const rejecting = async (): Promise<void> => {
+      throw new Error('the saved Path could not be read')
+    }
+    for (const refresh of [throwing, rejecting]) {
+      const r = await createPluginCliRunner({ home: HOME, platform: 'win32', baseEnv: {}, spawn, resolve, warm, refreshPath: refresh })(['plugin', 'list'])
+      expect(r.code).toBe(0)
+    }
+    expect(calls).toHaveLength(4)
+  })
+
+  it('reads baseEnv on each run', async () => {
+    const env: NodeJS.ProcessEnv = { PATH: '/usr/bin' }
+    let refreshes = 0
+    // On its second run the refresh finds an install and puts its folder in front, as ensureInstallDirOnPath does
+    const refreshPath = (): void => {
+      if (++refreshes === 2) env.PATH = `/home/u/.local/bin:${env.PATH}`
+    }
+    const { spawn, calls } = fakeSpawn({ out: ['[]\n'] })
+    const run = createPluginCliRunner({ home: HOME, platform: 'linux', baseEnv: () => env, spawn, refreshPath })
+    await run(['plugin', 'list'])
+    await run(['plugin', 'list'])
+    env.PATH = '/opt/claude/bin:/usr/bin'
+    await run(['plugin', 'list'])
+    expect(calls.map((c) => c.opts.env)).toEqual([
+      { PATH: '/usr/bin', CLAUDE_CONFIG_DIR: HOME },
+      { PATH: '/home/u/.local/bin:/usr/bin', CLAUDE_CONFIG_DIR: HOME },
+      { PATH: '/opt/claude/bin:/usr/bin', CLAUDE_CONFIG_DIR: HOME }
+    ])
+  })
+
   it.runIf(process.platform === 'win32')('runs a cmd shim with a spaced, non-ASCII home', async () => {
     const dir = path.join(await tmp(), '프로필 폴더')
     await fs.mkdir(dir)
@@ -247,7 +305,7 @@ describe('createPluginCliRunner', () => {
     await fs.writeFile(cli, `@"${process.execPath}" "%~dp0fake.js" %*\r\n`, 'utf8')
     const home = path.join(dir, 'extensions', 'claude-plugins')
     const args = ['plugin', 'marketplace', 'add', path.join(dir, '마켓 플레이스'), 'owner/repo#v1.0']
-    const r = await createPluginCliRunner({ home, platform: 'win32', baseEnv: process.env, resolve: () => cli, warm: noWarm })(args)
+    const r = await createPluginCliRunner({ home, platform: 'win32', baseEnv: process.env, resolve: () => cli, warm: noWarm, refreshPath: noRefresh })(args)
     expect(r.stderr).toBe('')
     expect(r.code).toBe(0)
     expect(r.json).toEqual({ argv: [...args, '--json'], cfg: home })
