@@ -220,6 +220,9 @@ const deferred = () => {
   const p = new Promise<void>((r) => (release = r))
   return { p, release }
 }
+/** A plugin job ends after real file work (the sweep, discovery, store writes), which a loaded machine can stretch well
+ *  past vi.waitFor's one-second default. */
+const waitLong = <T>(f: () => T | Promise<T>): Promise<T> => vi.waitFor(f, { timeout: 10_000, interval: 20 })
 
 type Reply = Partial<PluginCliResult>
 type Script = Record<string, (args: string[]) => Reply | Promise<Reply>>
@@ -342,8 +345,8 @@ describe('createHostExtensions, shared Claude plugins', () => {
     const checked = await h.call('extensions-plugin-check')
     expect(checked).toMatchObject({ status: 200, marks: { effects: 1 } })
     const removing = h.call('extensions-remove', { id: 'mcp-linear' })
-    await vi.waitFor(() => expect(h.fake.calls).toEqual(['plugin marketplace update market']))
-    await vi.waitFor(() => expect(h.gateway.stopServer).toHaveBeenCalled())
+    await waitLong(() => expect(h.fake.calls).toEqual(['plugin marketplace update market']))
+    await waitLong(() => expect(h.gateway.stopServer).toHaveBeenCalled())
 
     const listed = await h.call('extensions-plugin-list')
     expect(listed).toMatchObject({ status: 200, marks: { effects: 0 } })
@@ -364,7 +367,7 @@ describe('createHostExtensions, shared Claude plugins', () => {
     check.release()
     stop.release()
     expect((await removing).status).toBe(200)
-    await vi.waitFor(async () => expect(await h.jobs()).toEqual([expect.objectContaining({ state: 'done' })]))
+    await waitLong(async () => expect(await h.jobs()).toEqual([expect.objectContaining({ state: 'done' })]))
     expect((await h.listed()) as unknown).toMatchObject({ lastCheck: { at: expect.any(String) } })
   })
 
@@ -459,7 +462,7 @@ describe('createHostExtensions, shared Claude plugins', () => {
     expect(await h.jobs()).toEqual([expect.objectContaining({ id: jobId, kind: 'share', target: 'review@market', state: expect.stringMatching(/^(queued|running)$/) })])
 
     install.release()
-    await vi.waitFor(async () => expect(await h.jobs()).toEqual([expect.objectContaining({ id: jobId, state: 'done' })]))
+    await waitLong(async () => expect(await h.jobs()).toEqual([expect.objectContaining({ id: jobId, state: 'done' })]))
     expect((await readClaudePlugins(h.profileDir)).plugins).toEqual([
       expect.objectContaining({ id: 'review@market', source: SOURCE, importedFrom: 'acc_1', version: '1.0.0', enabled: true })
     ])
@@ -523,14 +526,14 @@ describe('createHostExtensions, shared Claude plugins', () => {
     }
     const shared = await h.call('extensions-plugin-share', { id: 'review@market' })
     expect(shared.status).toBe(200)
-    await vi.waitFor(() => expect(h.fake.calls).toEqual(['plugin marketplace add acme/market']))
+    await waitLong(() => expect(h.fake.calls).toEqual(['plugin marketplace add acme/market']))
 
     expect((await h.call('extensions-remove', { id: 'mcp-linear' })).status).toBe(200)
     expect((await readExtensionRegistry(h.profileDir)).entries).toEqual([])
     expect(await h.jobs()).toEqual([expect.objectContaining({ id: (shared.body as { jobId: string }).jobId, state: 'running' })])
 
     add.release()
-    await vi.waitFor(async () => expect(await h.jobs()).toEqual([expect.objectContaining({ state: 'failed', message: 'the marketplace could not be reached' })]))
+    await waitLong(async () => expect(await h.jobs()).toEqual([expect.objectContaining({ state: 'failed', message: 'the marketplace could not be reached' })]))
   })
 
   it('update and remove answer a job id at once, and set-enabled switches the entry', async () => {
@@ -545,7 +548,7 @@ describe('createHostExtensions, shared Claude plugins', () => {
     const removed = await h.call('extensions-plugin-remove', { id: 'review@market' })
     expect(updated).toMatchObject({ status: 200, body: { jobId: expect.any(String) }, marks: { effects: 1 } })
     expect(removed).toMatchObject({ status: 200, body: { jobId: expect.any(String) }, marks: { effects: 1 } })
-    await vi.waitFor(async () =>
+    await waitLong(async () =>
       expect((await h.jobs()).map((j) => [j.kind, j.state, j.message])).toEqual([
         ['update', 'failed', 'offline'],
         ['remove', 'done', undefined]
@@ -594,12 +597,12 @@ describe('createHostExtensions, shared Claude plugins', () => {
       }
     })
     expect(period).toBe(DAY_MS)
-    await vi.waitFor(async () => expect(await h.jobs()).toEqual([expect.objectContaining({ kind: 'check', state: 'done' })]))
+    await waitLong(async () => expect(await h.jobs()).toEqual([expect.objectContaining({ kind: 'check', state: 'done' })]))
     expect(orphanAtCheck).toEqual([false])
     expect((await readClaudePlugins(h.profileDir)).lastCheck).toEqual({ at: expect.any(String) })
 
     tick!()
-    await vi.waitFor(async () => expect((await h.jobs()).map((j) => [j.kind, j.state])).toEqual([['check', 'done'], ['check', 'done']]))
+    await waitLong(async () => expect((await h.jobs()).map((j) => [j.kind, j.state])).toEqual([['check', 'done'], ['check', 'done']]))
     expect(h.fake.calls).toEqual(['plugin marketplace update market', 'plugin marketplace update market'])
     stop()
     expect(tick).toBeNull()
@@ -610,7 +613,7 @@ describe('createHostExtensions, shared Claude plugins', () => {
     const orphan = await orphanedVersion(h.pluginHome)
     const stop = h.ext.keepCheckingClaudePlugins({ every: () => () => {} })
     // The sweep still runs: the last plugin removed leaves its folder for it
-    await vi.waitFor(async () => expect(await exists(orphan)).toBe(false))
+    await waitLong(async () => expect(await exists(orphan)).toBe(false))
     await new Promise((r) => setTimeout(r, 100))
     expect(h.fake.calls).toEqual([])
     expect(await h.jobs()).toEqual([])
@@ -638,7 +641,7 @@ describe('createHostExtensions, shared Claude plugins', () => {
 
       const checked = await h.call('extensions-plugin-check')
       expect(checked).toMatchObject({ status: 200, body: { jobId: expect.any(String) }, marks: { effects: 1 } })
-      await vi.waitFor(async () => expect(await h.jobs()).toEqual([expect.objectContaining({ kind: 'check', state: 'done' })]))
+      await waitLong(async () => expect(await h.jobs()).toEqual([expect.objectContaining({ kind: 'check', state: 'done' })]))
     })
     expect(sweep).toHaveBeenCalledTimes(3)
     expect(unhandled).toEqual([])
@@ -657,11 +660,11 @@ describe('createHostExtensions, shared Claude plugins', () => {
           return () => (tick = null)
         }
       })
-      await vi.waitFor(() => expect(h.logs.join('\n')).toContain('the plugin folder could not be read'))
+      await waitLong(() => expect(h.logs.join('\n')).toContain('the plugin folder could not be read'))
       expect(h.fake.calls).toEqual([])
       // The next tick tries the start-up step again, and checks
       tick!()
-      await vi.waitFor(async () => expect(await h.jobs()).toEqual([expect.objectContaining({ kind: 'check', state: 'done' })]))
+      await waitLong(async () => expect(await h.jobs()).toEqual([expect.objectContaining({ kind: 'check', state: 'done' })]))
       expect(h.fake.calls).toEqual(['plugin marketplace update market'])
       stop()
     })
