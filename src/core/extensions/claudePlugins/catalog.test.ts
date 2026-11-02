@@ -25,6 +25,8 @@ const write = async (file: string, text: string): Promise<void> => {
 type Entry = { name: string; source: string | object; version?: string; description?: string; [field: string]: unknown }
 interface Layout {
   entries?: Entry[]
+  /** The catalog's `metadata` (where `pluginRoot` is). */
+  metadata?: unknown
   /** Files under the marketplace folder, keyed by their path relative to it. */
   files?: Record<string, string>
 }
@@ -41,7 +43,7 @@ const home = async (layout: Layout = {}): Promise<{ home: string; clone: string 
     JSON.stringify({ [MKT]: { source: { source: 'github', repo: 'o/r' }, installLocation: clone, lastUpdated: '2026-11-02T00:00:00.000Z' } })
   )
   const entries = layout.entries ?? [{ name: 'probe', source: './probe', version: '1.0.0' }]
-  await write(path.join(clone, '.claude-plugin', 'marketplace.json'), JSON.stringify({ name: MKT, owner: { name: 'o' }, plugins: entries }))
+  await write(path.join(clone, '.claude-plugin', 'marketplace.json'), JSON.stringify({ name: MKT, owner: { name: 'o' }, metadata: layout.metadata, plugins: entries }))
   for (const [rel, text] of Object.entries(layout.files ?? { 'probe/skills/a/SKILL.md': 'one' })) await write(path.join(clone, rel), text)
   return { home: homeDir, clone }
 }
@@ -140,6 +142,53 @@ describe('catalogFingerprint', () => {
     expect(await fingerprint(h)).toEqual(before)
     await fs.writeFile(path.join(h.clone, 'README.md'), 'two')
     expect((await fingerprint(h))?.fingerprint).not.toBe(before?.fingerprint)
+  })
+
+  describe('a bare source (a name, not ./ or ../)', () => {
+    const entries: Entry[] = [{ name: 'probe', source: 'probe', version: '1.0.0' }]
+    const under = { pluginRoot: './plugins' }
+    const files = {
+      'plugins/probe/skills/a/SKILL.md': 'one',
+      'plugins/probe/.claude-plugin/plugin.json': JSON.stringify({ name: 'probe', version: '2.0.0' }),
+      // a folder of the same name at the root of the marketplace is not the plugin
+      'probe/skills/a/SKILL.md': 'decoy'
+    }
+
+    it('resolves under metadata.pluginRoot', async () => {
+      const h = await home({ entries, metadata: under, files })
+      const before = await fingerprint(h)
+      expect(before?.offeredVersion).toBe('2.0.0')
+      await fs.writeFile(path.join(h.clone, 'probe', 'skills', 'a', 'SKILL.md'), 'decoy changed')
+      expect(await fingerprint(h)).toEqual(before)
+      await fs.writeFile(path.join(h.clone, 'plugins', 'probe', 'skills', 'a', 'SKILL.md'), 'two')
+      expect((await fingerprint(h))?.fingerprint).not.toBe(before?.fingerprint)
+    })
+
+    it('gives null without a pluginRoot, though a folder of that name is at the root', async () => {
+      expect(await fingerprint(await home({ entries, files }))).toBeNull()
+      expect(await fingerprint(await home({ entries, files, metadata: {} }))).toBeNull()
+      expect(await fingerprint(await home({ entries, files, metadata: { pluginRoot: '' } }))).toBeNull()
+      expect(await fingerprint(await home({ entries, files, metadata: { pluginRoot: 7 } }))).toBeNull()
+    })
+
+    it('gives null when pluginRoot, or the name under it, leaves the marketplace folder', async () => {
+      expect(await fingerprint(await home({ entries, files, metadata: { pluginRoot: '../elsewhere' } }))).toBeNull()
+      expect(await fingerprint(await home({ entries: [{ name: 'probe', source: 'a/../../../x' }], files, metadata: under }))).toBeNull()
+      // a root outside is refused even when the name climbs back into a folder of the marketplace
+      const inside = [{ name: 'probe', source: 'y/../../plugins/probe' }]
+      expect(await fingerprint(await home({ entries: inside, files, metadata: { pluginRoot: './x' } }))).not.toBeNull()
+      const back = [{ name: 'probe', source: `y/../../${MKT}/plugins/probe` }]
+      expect(await fingerprint(await home({ entries: back, files, metadata: { pluginRoot: '../x' } }))).toBeNull()
+    })
+
+    it('leaves a ./ source alone: pluginRoot does not apply to it', async () => {
+      const h = await home({ entries: [{ name: 'probe', source: './probe' }], metadata: under, files })
+      const before = await fingerprint(h)
+      await fs.writeFile(path.join(h.clone, 'plugins', 'probe', 'skills', 'a', 'SKILL.md'), 'two')
+      expect(await fingerprint(h)).toEqual(before)
+      await fs.writeFile(path.join(h.clone, 'probe', 'skills', 'a', 'SKILL.md'), 'decoy changed')
+      expect((await fingerprint(h))?.fingerprint).not.toBe(before?.fingerprint)
+    })
   })
 
   describe('offeredVersion', () => {

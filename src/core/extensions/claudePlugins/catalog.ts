@@ -52,13 +52,34 @@ const insideOf = (parent: string, child: string): boolean => {
   return rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)
 }
 
+/** A source that is a path from the marketplace folder (`./x`, `../x`, `.`), as opposed to a bare name. */
+const startsHere = (source: string): boolean => /^\.{1,2}([\\/]|$)/.test(source)
+
+/** The folder a string source names, or null when it names none Astera may read. Claude Code resolves a bare name
+ *  (`formatter`) under the catalog's `metadata.pluginRoot` and refuses it when the catalog sets none or sets one outside
+ *  the marketplace; a path (`./plugins/formatter`) starts at the marketplace folder, pluginRoot or not. A catalog is
+ *  third-party text, so neither the root nor the folder may climb out of the clone: Astera must not hash whatever folder
+ *  it names. */
+function sourceFolder(installLocation: string, catalog: Obj, source: string): string | null {
+  let base = installLocation
+  if (!startsHere(source)) {
+    const root = isObj(catalog.metadata) && typeof catalog.metadata.pluginRoot === 'string' ? catalog.metadata.pluginRoot : ''
+    if (root === '') return null
+    base = path.resolve(installLocation, root)
+    if (!insideOf(installLocation, base)) return null
+  }
+  const folder = path.resolve(base, source)
+  return insideOf(installLocation, folder) ? folder : null
+}
+
 const versionOf = (v: unknown): string | null => (isObj(v) && typeof v.version === 'string' && v.version !== '' ? v.version : null)
 
 /** What the marketplace of `home` offers for the plugin `name` right now: a fingerprint that changes when anything in the
  *  entry but its description changes (canonical JSON, so key order does not matter) and, for a source that is a folder of
- *  the marketplace (a relative string), when any file in that folder does; and the version on offer, which is that folder's own manifest version when it has one, else the
- *  entry's version, else null. Null when the home has no such marketplace, plugin, catalog or folder, or a file cannot be
- *  read: there is then nothing to compare, and the caller leaves what it recorded alone. */
+ *  the marketplace (a string), when any file in that folder does; and the version on offer, which is that folder's own
+ *  manifest version when it has one, else the entry's version, else null. Null when the home has no such marketplace,
+ *  plugin, catalog or folder, when a string source cannot be resolved (`sourceFolder`), or when a file cannot be read:
+ *  there is then nothing to compare, and the caller leaves what it recorded alone. */
 export async function catalogFingerprint(a: {
   home: string
   marketplace: string
@@ -70,7 +91,8 @@ export async function catalogFingerprint(a: {
   if (installLocation === null) return null
 
   const catalog = await readJson(path.join(installLocation, '.claude-plugin', 'marketplace.json'))
-  const entry = isObj(catalog) && Array.isArray(catalog.plugins) ? catalog.plugins.find((e) => isObj(e) && e.name === a.name) : undefined
+  if (!isObj(catalog)) return null
+  const entry = Array.isArray(catalog.plugins) ? catalog.plugins.find((e) => isObj(e) && e.name === a.name) : undefined
   if (!isObj(entry)) return null
 
   // The whole entry but its description: a `strict: false` entry declares hooks, MCP servers and commands in the catalog,
@@ -79,10 +101,8 @@ export async function catalogFingerprint(a: {
   const hash = createHash('sha256').update(canonical(loadable))
   let offeredVersion = versionOf(entry)
   if (typeof entry.source === 'string') {
-    const folder = path.resolve(installLocation, entry.source)
-    // a catalog is third-party text: a source that climbs out of the clone is not one of its plugins, and must not make
-    // Astera hash whatever folder it names
-    if (!insideOf(installLocation, folder)) return null
+    const folder = sourceFolder(installLocation, catalog, entry.source)
+    if (folder === null) return null
     try {
       hash.update('\0').update(await folderDigest(folder))
     } catch {
