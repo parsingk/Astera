@@ -28,6 +28,19 @@ describe('the read-only refusal names the way to full control', () => {
   })
 })
 
+// The Mac check (check 29): an agent session's `runtimes get` was told to pair again with full control, which the
+// pairing already had. Every pairing may read the report; it answers only a person, so a new pairing changes nothing.
+describe("the report's refusal does not send an agent to pair again", () => {
+  it('has no next step to type', () => {
+    expect(nextStepsFor({ code: 'RUNTIME_PERMISSION_DENIED', cmd: 'runtimes-get', details: { runtime: 'rt_1' } })).toEqual([])
+  })
+  it('is in the CLI meaning of RUNTIME_PERMISSION_DENIED', () => {
+    const row = agentContext().exitCodes.find((e) => e.code === 'RUNTIME_PERMISSION_DENIED')
+    expect(row?.meaning).toContain('report')
+    expect(row?.meaning).toContain('agent session')
+  })
+})
+
 // The person's word for it (2026-10-12): the Korean screens say 페어링, the word the read-only reason already used,
 // not 짝짓기 beside it.
 describe('the Korean remote screens say 페어링', () => {

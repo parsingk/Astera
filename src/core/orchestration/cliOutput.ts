@@ -322,8 +322,10 @@ const STEPS: Record<
   RUNTIME_CAPABILITY_MISSING: (cmd) => [usageCommandFor(cmd)],
   RUNTIME_BUSY: () => [],
   // Read-only is the default pairing: full control is a new pairing, made on the Runtime (the first line, run there)
-  // and added here (final review I1).
-  RUNTIME_PERMISSION_DENIED: () => ['astera runtime pair --full-control', 'astera runtimes add --pair <string>'],
+  // and added here (final review I1). The report is a read every pairing may make (controllerGate.ts), refused only to
+  // an agent session or MCP (remote governance design §7.3), so `runtimes get` has nothing to type: a new pairing would
+  // be refused the same, and the person reads it in the app or their own shell (the Mac check, check 29).
+  RUNTIME_PERMISSION_DENIED: (cmd) => (cmd === 'runtimes-get' ? [] : ['astera runtime pair --full-control', 'astera runtimes add --pair <string>']),
   // §3.9: whether the first attempt ran cannot be proven; the newest Jobs on that Runtime say.
   RUNTIME_OUTCOME_UNKNOWN: (_cmd, details) => [typeof details.runtime === 'string' ? `astera --runtime ${details.runtime} jobs list` : 'astera runtimes list'],
   REMOTE_TIMEOUT: (_cmd, details) => [typeof details.runtime === 'string' ? `astera --runtime ${details.runtime} jobs list` : 'astera runtimes list'],
