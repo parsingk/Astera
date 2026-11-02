@@ -27,6 +27,7 @@ import type { LifecycleRepairFacts } from '../lifecycleTask'
 import type { WeakeningFinding } from '../../github/weakening'
 import { REPAIR_DIAGNOSTICS, diagnosticLine, findingsCountOf } from '../pluginChecks'
 import { boundedSlug } from '../../worktrees/naming'
+import { SANDBOXED_LINE_NOTE } from '../sandboxedLine'
 
 /** Job Continuity's two prompt events (P0 design §5): 'requested' right before the prompt leaves
  *  the app, 'confirmed' once it has — the spawned process holds it as argv, or the typed prompt's
@@ -506,6 +507,8 @@ session.
     --files-modified "path/a,path/b" --json
   (body through stdin: three sentences on what you did, what you found, and what is left)
 
+${SANDBOXED_LINE_NOTE}
+
 Failure is a terminal report too — use --outcome failed.
 Do not record a failure in the body alone.
 
@@ -815,6 +818,8 @@ session.
     --outcome succeeded --subject "<one-line verdict>" --body - <<'EOF'
   <why the requirement is satisfied>
   EOF
+
+${SANDBOXED_LINE_NOTE}
 
 Use \`--outcome failed\` instead when it is not satisfied, and put what is missing in the body.
 `

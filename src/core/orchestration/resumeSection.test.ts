@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { formatResumeNote, formatResumeSection, MAX_PACKET_CHARS } from './resumeSection'
 import type { Checkpoint } from './checkpoint'
+import { SANDBOXED_LINE_NOTE } from './sandboxedLine'
 
 const base: Checkpoint = {
   version: 1,
@@ -53,6 +54,13 @@ describe('formatResumeSection', () => {
     const out = formatResumeSection(minimal)
     expect(out).not.toContain('undefined')
     expect(out).not.toContain('null')
+  })
+
+  // The Mac check (checks 18 and 25): the report command through stdin never leaves Claude Code's sandbox
+  it('says how a sandboxed Claude Code session sends the report', () => {
+    const out = formatResumeSection(base)
+    expect(out).toContain(SANDBOXED_LINE_NOTE)
+    expect(out.indexOf(SANDBOXED_LINE_NOTE)).toBeGreaterThan(out.indexOf('REPORT WHEN DONE'))
   })
 
   it('includes the four required instructions', () => {

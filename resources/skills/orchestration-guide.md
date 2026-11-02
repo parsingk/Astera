@@ -237,7 +237,7 @@ astera worker-release --dispatch dsp_c3c3c3c3 --json
 ## 4. CLI reference
 
 Arguments like `--spec`, `--body`, `--question`, and `--result` **read from stdin** when given the
-value `-` (4.6). Every command already outputs JSON — the `--json` flag is accepted but makes no
+value `-` (4.6; not in a sandboxed Claude Code session, where they go inline). Every command already outputs JSON — the `--json` flag is accepted but makes no
 difference to the output.
 
 **`astera agent-context` prints this whole surface as JSON**, including every command below, with
@@ -518,6 +518,18 @@ EOF
 Do not pass long text directly as a command-line argument — quoting and special characters break
 differently from shell to shell.
 
+**In a sandboxed Claude Code session it is the other way round.** There `astera` reaches the app only
+as a command line of its own that starts with `astera`: a line that pipes or redirects text into it
+(`|`, `<`, a heredoc), or starts with anything else (`"$ASTERA_CLI"` included), runs inside the sandbox,
+reaches nothing and fails with `HOST_NOT_RUNNING`. Give each `-` value inline in quotes instead. A
+quoted value may span lines, and inside double quotes the shell expands backticks and `$`:
+
+```bash
+astera send --type worker_done --task-id tsk_1a2b3c4d --dispatch-id dsp_c3c3c3c3 \
+  --outcome succeeded --subject "types consolidated" --files-modified "src/a.ts,src/b.ts" --json \
+  --body "Merged the core/auth types into one. Tests untouched so far; the next Task can pick that up."
+```
+
 ### 4.7 What comes back
 
 **Every reply is an envelope.** One line of JSON, always one of these two shapes:
@@ -787,7 +799,8 @@ server blocks `check` and `inbox` as coordinator-only (403).
     --outcome succeeded --subject "<one-line status>" --body - --files-modified "path/a,path/b" --json
   ```
   Body goes through stdin: three sentences on what you did, what you found, and what is left — do not
-  copy the code across, you share a working directory with the orchestrator.
+  copy the code across, you share a working directory with the orchestrator. In a sandboxed Claude
+  Code session give it inline instead (`--body "…"`, 4.6): there a report through stdin never arrives.
 - **A worker started for a review Dispatch does not change code.** Its spec file says so explicitly —
   read the requirement, the implementer's report, and the changed files, then judge; do not fix
   anything you find wrong. It still reports exactly once, `worker_done --outcome succeeded` or

@@ -1207,9 +1207,11 @@ started later is not closed to it), so its `astera` reaches the Host only throug
 endpoint with the session's own token (`ASTERA_LOOPBACK`, above). A Claude Code session,
 terminal or chat, gets Claude Code's own sandbox on macOS and Linux through its settings file, with the same limits: its
 commands cannot run outside it, and a Claude Code whose sandbox cannot start exits at once and says why in its tab;
-`astera` runs outside it, as a command line of its own: a line that starts with something else (`cd x && astera …`)
-runs inside the sandbox, which reaches no Unix socket, the Host's included, so `astera` fails there on macOS as on
-Linux. On Linux its git reads an excludes file Astera writes
+`astera` runs outside it, as a command line of its own: a line that starts with something else (`cd x && astera …`,
+`"$ASTERA_CLI" …`) runs inside the sandbox, and so does one that pipes or redirects text into `astera` or feeds it a
+heredoc (measured with Claude Code 2.1.316). The sandbox reaches no Unix socket, the Host's included, and no TCP port on
+`127.0.0.1`, so the loopback endpoint is closed to it too and `astera` fails there on macOS as on Linux: it ends with
+`HOST_NOT_RUNNING` and says to run the line on its own, with each `-` value given inline in quotes (`--body "…"`). On Linux its git reads an excludes file Astera writes
 (`<profile>/sandbox/excludes-<uid>`: the person's own `core.excludesFile`, or git's default one, then the names the
 sandbox keeps placeholders for, such as `.bashrc` and `.vscode`), so `git add -A` works. A sandboxed Codex session on Windows runs as the
 sandbox's own account, which cannot read the person's home, so its git reads a copy of the person's global excludes
