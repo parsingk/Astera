@@ -4,7 +4,8 @@
 // Host's MCP Gateway (release 2 Gateway design §4.2): the session gets its URL and a reference to its own Gateway token,
 // and none of the server's values. A remote server is given directly, as in release 1, so its per-account login keeps
 // working (G7). An empty registry adds nothing, so a profile that shares nothing starts exactly as it did (AC-09.1). A
-// server that cannot be passed is skipped with its reason; nothing here throws into the spawn path.
+// server that cannot be passed is skipped with its reason; nothing here throws into the spawn path. A Claude process also
+// gets the enabled shared Claude Code plugins as `--plugin-dir` (claudePlugins/spawnArgs.ts), on the same terms.
 import { createHash, randomBytes } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
@@ -14,6 +15,8 @@ import { writeThroughTmp } from '../accounts/fileQueue'
 import { LAUNCH_FORBIDDEN } from '../sessions/commands'
 import { ownMcpNames } from './discover'
 import { readExtensionRegistry } from './registry'
+import { claudePluginArgs, type ClaudePluginSkip } from './claudePlugins/spawnArgs'
+import { stampClaudePluginUse } from './claudePlugins/operations'
 import { findProfile, readAgentProfiles } from '../agentProfiles/store'
 import type { ProfilePermission } from '../agentProfiles/types'
 import type { Account } from '../types'
@@ -49,6 +52,10 @@ export interface SessionCapabilities {
   /** The ids of the stdio servers it gets through the Gateway; `gatewayTokenEnv` makes each spawn's token for them. */
   gatewayGrant: string[]
   skipped: { name: string; reason: SkipReason }[]
+  /** The shared Claude Code plugins (Claude plugin sharing design §5.5): the plugins given by name, and those left out
+   *  with their reason, apart from `skipped`, which is read by server name. Absent when there is neither, which is
+   *  always so for Codex and for a profile that shares no plugin, so such a session resolves exactly as before. */
+  plugins?: { given: string[]; skipped: { name: string; reason: ClaudePluginSkip }[] }
 }
 
 /** TOML literal string: no escapes inside, so a value holding `'` cannot be one. */
@@ -98,6 +105,20 @@ export async function resolveSessionCapabilities(a: {
     given: [],
     gatewayGrant: [],
     skipped: []
+  }
+  // Shared Claude Code plugins, before the registry read so that none of the early returns below drops them, and ahead
+  // of `--mcp-config`. A dry run works them out too, which only stats their folders
+  if (providerOf(a.account) === 'claude') {
+    const plugins = await claudePluginArgs({ profileDir: a.profileDir, log: a.log })
+    out.args.push(...plugins.args)
+    if (plugins.given.length > 0 || plugins.skipped.length > 0) out.plugins = { given: plugins.given, skipped: plugins.skipped }
+    // Each folder handed out is noted, owners and dependencies alike, so the sweep spares it; a stamp that fails is only
+    // logged
+    const folders = plugins.args.filter((_, i) => i % 2 === 1)
+    if (!a.dryRun && folders.length > 0)
+      await stampClaudePluginUse(a.profileDir, folders).catch((e: unknown) =>
+        a.log?.(`extensions: the use of the shared Claude plugins could not be noted (${e instanceof Error ? e.message : String(e)})`)
+      )
   }
   let servers: McpExtension[]
   try {

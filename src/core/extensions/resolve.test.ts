@@ -13,6 +13,8 @@ import type { AgentProfile } from '../agentProfiles/types'
 import { writeExtensionRegistry } from './registry'
 import { extensionSecrets } from './secrets'
 import { gatewayTokenEnv, resolveSessionCapabilities, serverSkipReason, sweepGeneratedMcp } from './resolve'
+import { updateClaudePlugins } from './claudePlugins/store'
+import type { SharedClaudePlugin } from './claudePlugins/types'
 import type { Account } from '../types'
 import type { ExtensionRegistry, McpExtension } from './types'
 
@@ -311,6 +313,161 @@ describe('resolveSessionCapabilities with an agent profile', () => {
     expect(r.given).toEqual(['linear', 'docs'])
     expect(lines).toHaveLength(1)
     expect(lines[0]).toContain('ap_000000000001')
+  })
+})
+
+// Claude plugin sharing (design §5.5): every Claude session gets the enabled shared plugins as `--plugin-dir`, whatever
+// becomes of the shared MCP servers; a Codex session, and a profile that shares no plugin, start exactly as before
+describe('resolveSessionCapabilities with shared Claude plugins', () => {
+  const folder = async (s: S, name: string, o: { gone?: boolean } = {}): Promise<string> => {
+    const dir = path.join(extensionPaths(s.profileDir).claudePluginHome, 'plugins', 'cache', 'market', name, '1.0.0')
+    if (!o.gone) await fs.mkdir(dir, { recursive: true })
+    return dir
+  }
+  const plugin = (name: string, installPath: string, over: Partial<SharedClaudePlugin> = {}): SharedClaudePlugin => ({
+    id: `${name}@market`, name, marketplace: 'market', source: { source: 'github', repo: 'acme/market' }, version: '1.0.0', installPath,
+    dependencies: [], importedFrom: 'acc_1', enabled: true, addedAt: '2026-11-02T00:00:00.000Z', lastUpdated: '2026-11-02T00:00:00.000Z',
+    fingerprint: 'sha256:aa', ...over
+  })
+  const seed = (s: S, plugins: SharedClaudePlugin[]): Promise<unknown> => updateClaudePlugins(s.profileDir, (st) => ({ ...st, plugins }))
+  const stamped = async (s: S): Promise<string[] | null> => {
+    const dir = extensionPaths(s.profileDir).claudePluginUse
+    const names = await fs.readdir(dir).catch(() => null)
+    return names && (await Promise.all(names.map((n) => fs.readFile(path.join(dir, n), 'utf8')))).sort()
+  }
+
+  // Acceptance 1, against the expected values of 'gives a session without a profile exactly what it got before profiles'
+  it('with no shared plugin the args are exactly today’s', async () => {
+    const s = await setup([server(), remote()])
+    const today = async (): Promise<void> => {
+      expect(await call(s, s.codex)).toEqual({
+        context: { kind: 'implicit', accounts: ['acc_3'], policyMode: 'compatibility', executionMode: 'managed' },
+        args: [
+          '-c', `mcp_servers.linear.url='${URL_OF}'`,
+          '-c', "mcp_servers.linear.bearer_token_env_var='ASTERA_GATEWAY_TOKEN'",
+          '-c', "mcp_servers.docs.url='https://mcp.example.com/mcp'"
+        ],
+        env: { ASTERA_LOOPBACK: `http://127.0.0.1:${PORT}` },
+        given: ['linear', 'docs'],
+        gatewayGrant: ['mcp-linear'],
+        skipped: []
+      })
+      expect(await call(s, s.claude)).toEqual({
+        context: { kind: 'implicit', accounts: ['acc_2'], policyMode: 'compatibility', executionMode: 'managed' },
+        args: ['--mcp-config', expect.stringMatching(/claude-[0-9a-f]{16}\.json$/)],
+        env: { ASTERA_LOOPBACK: `http://127.0.0.1:${PORT}` },
+        given: ['linear', 'docs'],
+        gatewayGrant: ['mcp-linear'],
+        skipped: []
+      })
+    }
+    // No store at all, then a store whose one plugin is switched off
+    await today()
+    await seed(s, [plugin('off', await folder(s, 'off'), { enabled: false })])
+    await today()
+    expect(await stamped(s)).toBeNull()
+  })
+
+  it('a Claude account gets plugin dirs even with no MCP server shared', async () => {
+    const s = await setup([])
+    const review = await folder(s, 'review')
+    await seed(s, [plugin('review', review)])
+    const r = await call(s, s.claude)
+    expect(r.args).toEqual(['--plugin-dir', review])
+    expect(r.plugins).toEqual({ given: ['review'], skipped: [] })
+    expect(r.given).toEqual([])
+    expect(r.skipped).toEqual([])
+    // Started from an agent profile (an explicit context) too
+    const now = '2026-10-22T00:00:00.000Z'
+    await writeAgentProfiles(s.profileDir, {
+      version: 1,
+      profiles: [{ id: 'ap_000000000001', name: 'Reviewer', status: 'active', accountIds: ['acc_2'], mcpExclude: [], permission: 'bypass', sandbox: false, createdAt: now, updatedAt: now }]
+    })
+    const explicit = await call(s, s.claude, { agentProfileId: 'ap_000000000001' })
+    expect(explicit.context.kind).toBe('explicit')
+    expect(explicit.args).toEqual(['--plugin-dir', review])
+  })
+
+  it('a Codex account gets none', async () => {
+    const s = await setup([server()])
+    await seed(s, [plugin('review', await folder(s, 'review'))])
+    const r = await call(s, s.codex)
+    expect(r.args.join(' ')).not.toContain('--plugin-dir')
+    expect(r.plugins).toBeUndefined()
+    expect(await stamped(s)).toBeNull()
+  })
+
+  it('plugin dirs survive the account-unreadable early return', async () => {
+    const s = await setup()
+    const review = await folder(s, 'review')
+    await seed(s, [plugin('review', review)])
+    await fs.mkdir(s.claude.configDir, { recursive: true })
+    await fs.writeFile(path.join(s.claude.configDir, '.claude.json'), '{ half written')
+    const r = await call(s, s.claude)
+    expect(r.args).toEqual(['--plugin-dir', review])
+    expect(r.skipped).toEqual([{ name: 'linear', reason: 'account-unreadable' }])
+    expect(r.plugins).toEqual({ given: ['review'], skipped: [] })
+  })
+
+  it('plugin dirs come before --mcp-config, and survive the other early returns', async () => {
+    const s = await setup()
+    const review = await folder(s, 'review')
+    await seed(s, [plugin('review', review)])
+    // A server given: the plugin dirs first
+    const given = await call(s, s.claude)
+    expect(given.args).toEqual(['--plugin-dir', review, '--mcp-config', expect.stringMatching(/claude-[0-9a-f]{16}\.json$/)])
+    // No server usable (a stdio server with no Gateway), and a dry run
+    expect((await call(s, s.claude, { gatewayPort: null })).args).toEqual(['--plugin-dir', review])
+    expect((await call(s, s.claude, { dryRun: true })).args).toEqual(['--plugin-dir', review])
+    // A registry that cannot be read
+    await fs.writeFile(extensionPaths(s.profileDir).registry, '{ half written')
+    const unreadable = await call(s, s.claude)
+    expect(unreadable.args).toEqual(['--plugin-dir', review])
+    expect(unreadable.plugins).toEqual({ given: ['review'], skipped: [] })
+  })
+
+  it('a resolve stamps the use of each given path, and a dryRun stamps none', async () => {
+    const s = await setup([])
+    const [owner, base, gone] = [await folder(s, 'owner'), await folder(s, 'base'), await folder(s, 'gone', { gone: true })]
+    await seed(s, [plugin('owner', owner, { dependencies: [{ id: 'base@market', version: '1.0.0', installPath: base }] }), plugin('gone', gone)])
+    const dry = await call(s, s.claude, { dryRun: true })
+    expect(dry.plugins).toEqual({ given: ['owner'], skipped: [{ name: 'gone', reason: 'plugin-missing' }] })
+    expect(await stamped(s)).toBeNull()
+    await call(s, s.claude)
+    expect(await stamped(s)).toEqual([owner, base].sort())
+  })
+
+  it('a stamp that fails is logged, and the session still gets its plugin dirs', async () => {
+    const s = await setup([])
+    const review = await folder(s, 'review')
+    await seed(s, [plugin('review', review)])
+    // A file where the stamps' folder should be
+    const use = extensionPaths(s.profileDir).claudePluginUse
+    await fs.mkdir(path.dirname(use), { recursive: true })
+    await fs.writeFile(use, 'not a folder')
+    const lines: string[] = []
+    const r = await call(s, s.claude, { log: (l) => lines.push(l) })
+    expect(r.args).toEqual(['--plugin-dir', review])
+    expect(lines).toHaveLength(1)
+  })
+
+  // The servers' `skipped` is read by server name (host/extensions/commands.ts): a plugin's never joins it
+  it('plugin skips stay in plugins, apart from the servers’ skipped', async () => {
+    const s = await setup()
+    await seed(s, [plugin('gone', await folder(s, 'gone', { gone: true }))])
+    const missing = await call(s, s.claude)
+    expect(missing.args).toEqual(['--mcp-config', expect.stringMatching(/claude-[0-9a-f]{16}\.json$/)])
+    expect(missing.skipped).toEqual([])
+    expect(missing.plugins).toEqual({ given: [], skipped: [{ name: 'gone', reason: 'plugin-missing' }] })
+    // A store that cannot be read: one skip and one log line, and the servers are given as before
+    await fs.writeFile(extensionPaths(s.profileDir).claudePlugins, '{ broken')
+    const lines: string[] = []
+    const unreadable = await call(s, s.claude, { log: (l) => lines.push(l) })
+    expect(unreadable.args).toEqual(missing.args)
+    expect(unreadable.given).toEqual(['linear'])
+    expect(unreadable.skipped).toEqual([])
+    expect(unreadable.plugins).toEqual({ given: [], skipped: [{ name: '*', reason: 'plugin-store-unreadable' }] })
+    expect(lines).toHaveLength(1)
   })
 })
 
