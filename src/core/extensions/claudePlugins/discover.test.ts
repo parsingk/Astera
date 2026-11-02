@@ -233,6 +233,32 @@ describe('discoverClaudePlugins', () => {
       }
     })
 
+    // Another reason may win the order, but the credential must not travel with the item whatever the reason is
+    describe('never carries a credentialed source out, whichever reason wins', () => {
+      const credentialed: [string, unknown, string][] = [
+        ['a password in the address', { source: 'git', url: 'https://user:hunter2@git.example.com/m.git' }, 'hunter2'],
+        ['a secret-named query parameter', { source: 'url', url: 'https://git.example.com/m.json?access_token=abc123' }, 'abc123'],
+        ['a token as the user name', { source: 'git', url: 'https://ghp_abc123@git.example.com/m.git' }, 'ghp_abc123'],
+        ['headers', { source: 'url', url: 'https://market.example.com/m.json', headers: { Authorization: 'Bearer HEADER_VALUE_MUST_NOT_APPEAR' } }, 'HEADER_VALUE_MUST_NOT_APPEAR']
+      ]
+      it.each(credentialed)('name-taken with %s', async (_name, source, secret) => {
+        const p = await only({ plugins: { 'x@m': [{}] }, marketplaces: { m: source } }, [sharedPlugin('x', 'other')])
+        expect(p).toMatchObject({ source: null, sourceAccountId: 'a', shareable: false, reason: 'name-taken' })
+        expect(JSON.stringify(p)).not.toContain(secret)
+      })
+
+      it.each(credentialed)('not-from-marketplace with %s', async (_name, source, secret) => {
+        const p = await only({ plugins: { 'x@inline': [{}] }, marketplaces: { inline: source } })
+        expect(p).toMatchObject({ source: null, shareable: false, reason: 'not-from-marketplace' })
+        expect(JSON.stringify(p)).not.toContain(secret)
+      })
+
+      it('keeps the source of a plugin refused for another reason when it holds no credential', async () => {
+        const p = await only({ plugins: { 'x@m': [{}] }, marketplaces: { m: GITHUB } }, [sharedPlugin('x', 'other')])
+        expect(p).toMatchObject({ source: GITHUB, reason: 'name-taken' })
+      })
+    })
+
     it('source-credential: a url source with headers, whatever they hold', async () => {
       const url = 'https://market.example.com/marketplace.json'
       const raw = { source: 'url', url, headers: { Authorization: 'Bearer HEADER_VALUE_MUST_NOT_APPEAR' } }

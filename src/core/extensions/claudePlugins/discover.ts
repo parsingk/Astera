@@ -21,8 +21,8 @@ export type DiscoveredClaudePlugin = {
   /** Every Claude account holding the plugin at user scope, in the order the accounts were given. */
   holders: ClaudePluginHolder[]
   /** From the first account that holds the plugin and knows its marketplace; null when none does, when the source is one
-   *  Astera cannot hand to `claude plugin marketplace add`, and when it was refused as `source-credential`: this object
-   *  goes to the renderer, and it must not hold the credential. */
+   *  Astera cannot hand to `claude plugin marketplace add`, and when the address or the recorded headers hold a
+   *  credential, whatever the refusal: this object goes to the renderer, and it must not hold the credential. */
   source: MarketplaceSource | null
   /** That account; the first holder when no holder knows the marketplace. */
   sourceAccountId: string
@@ -187,6 +187,10 @@ interface Group {
   sourceAccountId: string | null
 }
 
+/** Whether the source's address or headers hold a credential. Asked on its own, not through the order of reasons: a
+ *  plugin refused for another reason first still must not carry the credential out. */
+const holdsCredential = (g: Group): boolean => g.source !== null && (g.headers || ('url' in g.source && addressHoldsCredential(g.source.url)))
+
 /** The first reason that applies, in the order the design gives them. userConfig is asked of every holder's copy and of
  *  every holder's catalog, since versions differ between accounts and the one Astera installs may be newer than any of
  *  them. */
@@ -194,7 +198,7 @@ async function refusalOf(g: Group, shared: SharedClaudePlugin[]): Promise<Claude
   if (NOT_FROM_MARKETPLACE.has(g.marketplace)) return 'not-from-marketplace'
   if (shared.some((s) => s.name === g.name && s.marketplace !== g.marketplace)) return 'name-taken'
   if (g.source === null) return 'source-unsupported'
-  if (g.headers || ('url' in g.source && addressHoldsCredential(g.source.url))) return 'source-credential'
+  if (holdsCredential(g)) return 'source-credential'
   const asked = [...g.installPaths.map(declaresUserConfig), ...g.catalogs.map((c) => catalogDeclaresUserConfig(c, g.name))]
   if ((await Promise.all(asked)).some(Boolean)) return 'user-config'
   return null
@@ -241,7 +245,7 @@ export async function discoverClaudePlugins(a: {
       name: g.name,
       marketplace: g.marketplace,
       holders: g.holders,
-      source: reason === 'source-credential' ? null : g.source,
+      source: holdsCredential(g) ? null : g.source,
       sourceAccountId: g.sourceAccountId ?? g.holders[0].accountId
     }
     plugins.push(reason ? { ...found, shareable: false, reason } : { ...found, shareable: true })
