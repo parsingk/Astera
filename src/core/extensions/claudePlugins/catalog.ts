@@ -5,7 +5,6 @@
 import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { hashFile } from '../hash'
 
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -37,13 +36,28 @@ async function files(dir: string, rel = ''): Promise<string[]> {
   return out
 }
 
-/** sha256 of a plugin folder: each relative path (with `/`) and the hash of its bytes, in sorted path order. It is the
- *  recipe of `hashTree`, which cannot be told to leave `.git` out: a plugin that is its marketplace's own root has the
- *  clone's `.git` inside it, and every pull changes that without changing what the plugin loads. Throws when the folder is
- *  missing. */
+/** A text file's bytes with each CRLF made LF (a lone CR stays); a file holding a NUL byte is binary and stays as it is.
+ *  `claude plugin marketplace add` clones with git, which on Windows writes text files with CRLF, and the first
+ *  `marketplace update` replaces the clone with a download of the same commit, with LF: the same plugin must not
+ *  look changed for that. */
+function withoutCrlf(bytes: Buffer): Buffer {
+  if (bytes.includes(0)) return bytes
+  const out = Buffer.allocUnsafe(bytes.length)
+  let n = 0
+  for (let i = 0; i < bytes.length; i++) {
+    if (bytes[i] === 0x0d && bytes[i + 1] === 0x0a) continue
+    out[n++] = bytes[i]
+  }
+  return out.subarray(0, n)
+}
+
+/** sha256 of a plugin folder: each relative path (with `/`) and its bytes (`withoutCrlf`), in sorted path order. It
+ *  is the recipe of `hashTree`, which can be told neither to leave `.git` out nor to fold line endings: a plugin that
+ *  is its marketplace's own root has the clone's `.git` inside it, and every pull changes that without changing what the
+ *  plugin loads. Throws when the folder is missing. */
 async function folderDigest(dir: string): Promise<string> {
   const h = createHash('sha256')
-  for (const rel of (await files(dir)).sort()) h.update(rel).update('\0').update(await hashFile(path.join(dir, rel))).update('\0')
+  for (const rel of (await files(dir)).sort()) h.update(rel).update('\0').update(withoutCrlf(await fs.readFile(path.join(dir, rel)))).update('\0')
   return h.digest('hex')
 }
 

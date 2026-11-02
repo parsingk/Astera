@@ -134,6 +134,37 @@ describe('catalogFingerprint', () => {
     expect(await fingerprint(h)).toEqual(before)
   })
 
+  describe('line endings', () => {
+    const NUL = String.fromCharCode(0)
+    const text = { 'probe/skills/a/SKILL.md': 'one\ntwo\n', 'probe/hooks/hooks.json': '{\n  "a": 1\n}\n' }
+    const crlf = (files: Record<string, string>): Record<string, string> => Object.fromEntries(Object.entries(files).map(([k, v]) => [k, v.replace(/\n/g, '\r\n')]))
+
+    // `claude plugin marketplace add` clones with git, which on Windows writes text files with CRLF; the first `marketplace
+    // update` replaces the clone with a download of the same commit, with LF
+    it('the same tree with CRLF and LF text files gives the same fingerprint', async () => {
+      const lf = await fingerprint(await home({ files: text }))
+      expect(lf).not.toBeNull()
+      expect(await fingerprint(await home({ files: crlf(text) }))).toEqual(lf)
+      // a real change in a CRLF tree still counts, and so does a lone CR, which is not a line ending of either kind
+      expect((await fingerprint(await home({ files: crlf({ ...text, 'probe/skills/a/SKILL.md': 'one\ntwo changed\n' }) })))?.fingerprint).not.toBe(lf?.fingerprint)
+      const joined = await fingerprint(await home({ files: { ...text, 'probe/skills/a/SKILL.md': 'onetwo\n' } }))
+      expect((await fingerprint(await home({ files: { ...text, 'probe/skills/a/SKILL.md': 'one\rtwo\n' } })))?.fingerprint).not.toBe(joined?.fingerprint)
+    })
+
+    it("a binary file's bytes still count as they are", async () => {
+      const binary = (body: string) => ({ ...text, 'probe/assets/icon.bin': `a${NUL}b${body}c` })
+      const lf = await fingerprint(await home({ files: binary('\n') }))
+      expect((await fingerprint(await home({ files: binary('\r\n') })))?.fingerprint).not.toBe(lf?.fingerprint)
+      expect(await fingerprint(await home({ files: binary('\n') }))).toEqual(lf)
+    })
+
+    it('a NUL byte anywhere in a file makes it binary, not only near the start', async () => {
+      const late = (body: string) => ({ ...text, 'probe/assets/big.bin': `${'x'.repeat(9000)}${NUL}${body}` })
+      const lf = await fingerprint(await home({ files: late('\n') }))
+      expect((await fingerprint(await home({ files: late('\r\n') })))?.fingerprint).not.toBe(lf?.fingerprint)
+    })
+  })
+
   it('does not read .git, so a marketplace whose plugin is its own root keeps its fingerprint across a pull', async () => {
     const h = await home({ entries: [{ name: 'probe', source: './' }], files: { 'README.md': 'one', '.git/HEAD': 'ref: a' } })
     const before = await fingerprint(h)
