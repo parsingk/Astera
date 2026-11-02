@@ -31,6 +31,8 @@ const tmp = async (): Promise<string> => {
 }
 
 const HOME = path.join(os.tmpdir(), 'astera-profile', 'extensions', 'claude-plugins')
+/** The win32 tests name their `claude` with `resolve`; the off-thread lookup of the real PATH is left out. */
+const noWarm = async (): Promise<null> => null
 
 interface Script { out?: string[]; err?: string[]; code?: number; hang?: boolean }
 interface Call { file: string; args: string[]; opts: SpawnOptions }
@@ -170,7 +172,8 @@ describe('createPluginCliRunner', () => {
       platform: 'win32',
       baseEnv: {},
       spawn: spawn as unknown as typeof import('node:child_process').spawn,
-      resolve: () => cli
+      resolve: () => cli,
+      warm: noWarm
     })
     const r = await run(['plugin', 'marketplace', 'add', 'https://x/y?a=1&b=2'])
     expect(spawn).not.toHaveBeenCalled()
@@ -183,11 +186,52 @@ describe('createPluginCliRunner', () => {
     const cli = path.join(dir, 'claude.cmd')
     await fs.writeFile(cli, '@echo off\r\necho hi %*\r\n')
     const { spawn, calls } = fakeSpawn({ out: ['[]\n'] })
-    const run = createPluginCliRunner({ home: HOME, platform: 'win32', baseEnv: {}, spawn, resolve: () => cli })
+    const run = createPluginCliRunner({ home: HOME, platform: 'win32', baseEnv: {}, spawn, resolve: () => cli, warm: noWarm })
     const r = await run(['plugin', 'list'])
     expect(r.refused).toBeUndefined()
     expect(calls[0].file).toBe('cmd.exe')
     expect(calls[0].args).toEqual(['/d', '/c', 'call', cli, 'plugin', 'list', '--json'])
+  })
+
+  // Audit U-10: the synchronous PATH walk held Electron main for 20 to 60 s with a dead drive on PATH, so every spawn
+  // site looks the name up off the thread first and the synchronous lookup then reads the kept answer.
+  it('awaits the off-thread lookup before the PATH lookup on win32, and runs even when it fails', async () => {
+    const order: string[] = []
+    const warm = async (name: string): Promise<null> => {
+      order.push(`warm ${name}`)
+      await new Promise((r) => setTimeout(r, 20))
+      order.push('warmed')
+      return null
+    }
+    const resolve = (name: string): string => {
+      order.push(`resolve ${name}`)
+      return 'C:\\tools\\claude.exe'
+    }
+    const { spawn, calls } = fakeSpawn({ out: ['[]\n'] })
+    await createPluginCliRunner({ home: HOME, platform: 'win32', baseEnv: {}, spawn, resolve, warm })(['plugin', 'list'])
+    expect(order).toEqual(['warm claude', 'warmed', 'resolve claude'])
+    expect(calls[0].file).toBe('C:\\tools\\claude.exe')
+
+    const failing = vi.fn(async () => {
+      throw new Error('lookup failed')
+    })
+    const r = await createPluginCliRunner({ home: HOME, platform: 'win32', baseEnv: {}, spawn, resolve, warm: failing })([
+      'plugin',
+      'list'
+    ])
+    expect(failing).toHaveBeenCalledTimes(1)
+    expect(r.code).toBe(0)
+    expect(calls).toHaveLength(2)
+  })
+
+  it('does not look claude up on posix, where spawn finds it by name', async () => {
+    const warm = vi.fn(async () => null)
+    const resolve = vi.fn(() => null)
+    const { spawn, calls } = fakeSpawn({ out: ['[]\n'] })
+    await createPluginCliRunner({ home: HOME, platform: 'linux', baseEnv: {}, spawn, resolve, warm })(['plugin', 'list'])
+    expect(warm).not.toHaveBeenCalled()
+    expect(resolve).not.toHaveBeenCalled()
+    expect(calls[0].file).toBe('claude')
   })
 
   it.runIf(process.platform === 'win32')('runs a cmd shim with a spaced, non-ASCII home', async () => {
@@ -203,7 +247,7 @@ describe('createPluginCliRunner', () => {
     await fs.writeFile(cli, `@"${process.execPath}" "%~dp0fake.js" %*\r\n`, 'utf8')
     const home = path.join(dir, 'extensions', 'claude-plugins')
     const args = ['plugin', 'marketplace', 'add', path.join(dir, '마켓 플레이스'), 'owner/repo#v1.0']
-    const r = await createPluginCliRunner({ home, platform: 'win32', baseEnv: process.env, resolve: () => cli })(args)
+    const r = await createPluginCliRunner({ home, platform: 'win32', baseEnv: process.env, resolve: () => cli, warm: noWarm })(args)
     expect(r.stderr).toBe('')
     expect(r.code).toBe(0)
     expect(r.json).toEqual({ argv: [...args, '--json'], cfg: home })

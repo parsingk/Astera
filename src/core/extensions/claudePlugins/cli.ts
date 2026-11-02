@@ -9,7 +9,7 @@
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { commandFor } from '../../higgsfield/runner'
 import { killProcessTree } from '../../run/kill'
-import { resolveWindowsExecutable } from '../../sessions/windowsExecutable'
+import { resolveWindowsExecutable, warmWindowsExecutable } from '../../sessions/windowsExecutable'
 
 export interface PluginCliResult {
   code: number | null
@@ -76,22 +76,28 @@ export function createPluginCliRunner(d: {
   spawn?: typeof nodeSpawn
   /** Where `claude` is on win32. Default: the PATH lookup sessions use (buildClaudeCommand). */
   resolve?: (name: string) => string | null
+  /** Awaited before `resolve` on win32: the same lookup off the calling thread, its answer kept for `resolve`.
+   *  Default: warmWindowsExecutable. */
+  warm?: (name: string) => Promise<unknown>
 }): PluginCliRun {
   const env = pluginCliEnv(d.baseEnv, d.home)
   const resolve = d.resolve ?? resolveWindowsExecutable
-  return (args, o = {}) =>
-    new Promise((answer) => {
-      const full = args.includes('--json') ? args : [...args, '--json']
-      // As a session starts it: by name on posix; on win32 by the file PATH names, else by the bare name with no shell,
-      // which then fails to start (windowsSpawn's rule for a name PATH does not know)
-      const found = d.platform === 'win32' ? resolve('claude') : null
-      const cmd = found === null ? { file: 'claude', args: full, env } : commandFor(found, d.platform, full, env)
-      if ('refusal' in cmd) {
-        // cmdRefusal's advice after the ';' is for registering an MCP client by hand; only its diagnosis applies here
-        const refused = `${cmd.refusal.split(';')[0]}; nothing was run`
-        answer({ code: null, json: null, stdout: '', stderr: '', timedOut: false, refused })
-        return
-      }
+  const warm = d.warm ?? warmWindowsExecutable
+  return async (args, o = {}) => {
+    const full = args.includes('--json') ? args : [...args, '--json']
+    // Looked up off the thread first (audit U-10): `resolve` then reads the kept answer instead of walking PATH
+    // synchronously, which a dead drive on PATH held for 20 to 60 s. A failed warm leaves `resolve` to look itself.
+    if (d.platform === 'win32') await warm('claude').catch(() => null)
+    // As a session starts it: by name on posix; on win32 by the file PATH names, else by the bare name with no shell,
+    // which then fails to start (windowsSpawn's rule for a name PATH does not know)
+    const found = d.platform === 'win32' ? resolve('claude') : null
+    const cmd = found === null ? { file: 'claude', args: full, env } : commandFor(found, d.platform, full, env)
+    if ('refusal' in cmd) {
+      // cmdRefusal's advice after the ';' is for registering an MCP client by hand; only its diagnosis applies here
+      const refused = `${cmd.refusal.split(';')[0]}; nothing was run`
+      return { code: null, json: null, stdout: '', stderr: '', timedOut: false, refused }
+    }
+    return new Promise((answer) => {
       let stdout = ''
       let stderr = ''
       let timedOut = false
@@ -131,4 +137,5 @@ export function createPluginCliRunner(d: {
         killProcessTree(child)
       }, ms)
     })
+  }
 }
