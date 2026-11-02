@@ -15,7 +15,13 @@ import type {
   SandboxCoverageClass,
   SandboxCoverageRow
 } from '../../../core/audit/types'
-import { ACTION_PHRASES, COVERAGE_NOTE_PHRASES } from '../../../core/audit/phrases'
+import {
+  ACTION_GROUP_PHRASES as GROUPS,
+  ACTION_PHRASES,
+  COVERAGE_NOTE_PHRASES,
+  SESSION_KIND_PHRASES as KINDS,
+  actionPhraseKey
+} from '../../../core/audit/phrases'
 import { SANDBOX_TABLE_CAPTION, sandboxRowCaption } from '../../../core/sandbox/coverage'
 import { failureLine } from './extensionsText'
 
@@ -28,6 +34,8 @@ export const POLICIES_TITLE = 'Policies'
 export const AUDIT_LOGS_TITLE = 'Audit Logs'
 /** The section that keeps keys and logins out of agent sessions (credentials design §5), named like the others. */
 export const CREDENTIALS_TITLE = 'Credentials'
+/** What Astera found that may need the person's attention (lifecycle design §7), named like the others (ruling R8-2). */
+export const FINDINGS_TITLE = 'Findings'
 /** The observe mode and the rules, named in English in every language too (the person, 2026-10-26). */
 export const OBSERVE_NAME = 'Observe'
 export const RULES_TITLE = 'Rules'
@@ -40,15 +48,7 @@ export type AuditRow = AuditRecord & { decision: AuditDecision; ruleId?: string 
 /** Every action the resolver names, in the order the CLI documents them. */
 export const AUDIT_ACTIONS = Object.keys(ACTION_PHRASES) as AuditAction[]
 
-/** The groups of actions a rule can name with a trailing `*`, said in words. Another pattern is shown as it is. */
-const GROUPS: Record<string, MessageKey> = {
-  'git.*': 'settings.security.group.git',
-  'github.*': 'settings.security.group.github',
-  'filesystem.*': 'settings.security.group.filesystem',
-  '*': 'settings.security.group.all'
-}
-
-/** What a rule's action can be picked from: every action, then the groups. */
+/** What a rule's action can be picked from: every action, then the groups (phrases.ts ACTION_GROUP_PHRASES). */
 export const RULE_ACTION_CHOICES: string[] = [...AUDIT_ACTIONS, ...Object.keys(GROUPS)]
 
 /** The choices for one rule: a pattern made elsewhere (the CLI's `git.re*`) stays among them, so editing the rule's
@@ -58,9 +58,8 @@ export const ruleActionChoices = (current?: string): string[] =>
 
 /** An action or a rule's pattern as a plain phrase; one this side does not know (a newer Host's) as it was named. */
 export function actionPhrase(action: string, t: T): string {
-  if (Object.hasOwn(ACTION_PHRASES, action)) return t(ACTION_PHRASES[action as AuditAction])
-  if (Object.hasOwn(GROUPS, action)) return t(GROUPS[action])
-  return action
+  const key = actionPhraseKey(action)
+  return key === null ? action : t(key)
 }
 
 export const DECISIONS: AuditDecision[] = ['allow', 'would-deny', 'unknown', 'blocked']
@@ -108,10 +107,6 @@ const LEVELS: Record<CoverageCell['level'], MessageKey> = {
 /** The coverage table's title: what Enforce blocks while it is on, else what observe records. */
 const COVERAGE_TITLES = { record: 'settings.security.coverage.title', enforce: 'settings.security.coverage.titleEnforce' } as const satisfies Record<string, MessageKey>
 export const coverageTitle = (m: AuditMode, t: T): string => t(m === 'enforce' ? COVERAGE_TITLES.enforce : COVERAGE_TITLES.record)
-const KINDS: Record<CoverageRow['kind'], MessageKey> = {
-  terminal: 'settings.security.kind.terminal',
-  chat: 'settings.security.kind.chat'
-}
 const PROVIDERS: Record<CoverageRow['provider'], string> = { claude: 'Claude', codex: 'Codex' }
 
 export const coverageClassLabel = (c: CoverageClass, t: T): string => t(CLASS_WORDS[c])
@@ -343,6 +338,8 @@ export interface ObserveRead {
   state: string
   at: number
   failures: number
+  /** What the last good read of this target showed, as one string, when the caller tells (afterObserveRead). */
+  facts?: string
 }
 
 /** How many times a failed read is asked again on its own, a wait apart. After that it waits for the Run to move. */
@@ -352,13 +349,21 @@ export const OBSERVE_RETRIES = 3
 export const startObserveRead = (last: ObserveRead | null, next: { target: string; state: string }, now: number): ObserveRead => ({
   ...next,
   at: now,
-  failures: last !== null && last.target === next.target ? last.failures : 0
+  failures: last !== null && last.target === next.target ? last.failures : 0,
+  ...(last !== null && last.target === next.target && last.facts !== undefined ? { facts: last.facts } : {})
 })
 
 /** What Run detail remembers of a read, and when to ask again. A read that failed is remembered as one of another state,
  *  so the next trigger reads again once the wait is over instead of finding nothing moved and leaving the facts empty
- *  for good; on its own it asks again after one wait, OBSERVE_RETRIES times. A good read starts the count again. */
-export function afterObserveRead(read: ObserveRead, ok: boolean): { last: ObserveRead; retryIn: number | null } {
+ *  for good; on its own it asks again after one wait, OBSERVE_RETRIES times. A good read starts the count again.
+ *
+ *  A good read that shows `facts` other than the last one's is read again after one wait too, until two reads in a row
+ *  agree: the tokens a worker and a coordinator spend go on after the Run's last move (the worker ends its turn after it
+ *  reports, the coordinator answers the report), and Run detail read them only when the Run moved, so it kept what it
+ *  read at the report, or nothing when they were not counted yet (the Mac check, check 4). A Run still at work keeps
+ *  changing them and is read every wait, the rate observeReadDue allows; one at rest stops after a read. */
+export function afterObserveRead(read: ObserveRead, ok: boolean, facts?: string): { last: ObserveRead; retryIn: number | null } {
+  if (ok && facts !== undefined && facts !== read.facts) return { last: { ...read, state: '', failures: 0, facts }, retryIn: OBSERVE_READ_EVERY_MS }
   if (ok) return { last: { ...read, failures: 0 }, retryIn: null }
   const failures = read.failures + 1
   return { last: { ...read, state: '', failures }, retryIn: failures <= OBSERVE_RETRIES ? OBSERVE_READ_EVERY_MS : null }
@@ -416,8 +421,11 @@ export interface AuditCounts {
   unknown: number
   /** Stopped by Enforce's hook before they ran. */
   blocked: number
-  /** A day of the period stopped recording at the size limit, so it holds fewer calls than were made. */
+  /** A day of the period stopped recording at the size limit, or was dropped to keep under it, so it holds fewer calls
+   *  than were made. */
   stoppedAtLimit: boolean
+  /** The second of those: days of the period were dropped to keep under the size limit (follow-up R-F6). */
+  droppedAtLimit?: boolean
 }
 
 const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0)
@@ -425,7 +433,21 @@ const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(
 /** audit-summary's counts by decision. */
 export function summaryOf(body: unknown): AuditCounts {
   const b = isObject(body) ? body : {}
-  return { allow: count(b.allow), wouldDeny: count(b.wouldDeny), unknown: count(b.unknown), blocked: count(b.blocked), stoppedAtLimit: b.stoppedAtLimit === true }
+  return {
+    allow: count(b.allow),
+    wouldDeny: count(b.wouldDeny),
+    unknown: count(b.unknown),
+    blocked: count(b.blocked),
+    stoppedAtLimit: b.stoppedAtLimit === true,
+    droppedAtLimit: b.droppedAtLimit === true
+  }
+}
+
+/** What Audit Logs says when the size limit cut the period short: that days were dropped to keep under it, else that a
+ *  day stopped recording at it; null when neither. */
+export function sizeLimitKey(c: AuditCounts): 'settings.security.audit.droppedAtLimit' | 'settings.security.audit.stoppedAtLimit' | null {
+  if (c.droppedAtLimit === true) return 'settings.security.audit.droppedAtLimit'
+  return c.stoppedAtLimit ? 'settings.security.audit.stoppedAtLimit' : null
 }
 
 /** Enforce's preview (enforce design §5): the last 7 days' calls the Rules would deny, by action (audit-summary's

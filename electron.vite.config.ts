@@ -5,6 +5,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { isNoise } from './electron.vite.warnings'
 import { enforceHookPlugin } from './electron.vite.enforceHook'
+import { xtermPatchPlugin } from './electron.vite.xtermPatch'
 
 // CLI 는 Electron 없이 도는 번들이라(ELECTRON_RUN_AS_NODE) `app.getVersion()` 을 부를 수 없다.
 // 앱과 CLI 는 한 프로그램이므로 버전도 하나여야 하고, 그 하나를 빌드가 박아 넣는다 — 두 곳에서
@@ -26,7 +27,11 @@ export default defineConfig({
           index: 'src/main/index.ts',
           cli: 'src/cli/index.ts',
           host: 'src/host/index.ts',
-          'plugin-host': 'src/pluginHost/index.ts'
+          'plugin-host': 'src/pluginHost/index.ts',
+          // Astera's check runner (Task K), run by the app's or the Host's own executable as node: a sandboxed Claude Task's
+          // check under srt on macOS and Linux (core/sandbox/srtCheck.ts), and a sandboxed Codex Task's check on Windows
+          // (core/sandbox/checkRunner.ts), which the Windows Host runs from its runtime's copy (scripts/host-runtime.mjs)
+          'sandbox-check': 'src/sandboxCheck/index.ts'
         }
       }
     }
@@ -38,6 +43,7 @@ export default defineConfig({
         '@': fileURLToPath(new URL('./src/renderer/src', import.meta.url))
       }
     },
-    plugins: [react(), tailwindcss()]
+    // Refuses a node_modules whose xterm.js is not patched (electron.vite.xtermPatch.ts)
+    plugins: [xtermPatchPlugin(), react(), tailwindcss()]
   }
 })

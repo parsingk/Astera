@@ -108,9 +108,9 @@ const runtime = async () => {
     return (r.body as { code: string }).code
   }
   const paired = async (permission: 'read-only' | 'full-control' = 'full-control') => {
-    const p = await (await connect()).redeem(await pairCode(permission), 'laptop', { surface: 'cli' })
+    const p = await (await connect()).redeem(await pairCode(permission), 'laptop', { surface: 'cli', version: '9.9.9', agent: false })
     const l = await connect()
-    await l.auth(p.token, { surface: 'cli' })
+    await l.auth(p.token, { surface: 'cli', version: '9.9.9', agent: false })
     return { link: l, ...p }
   }
   return { orch, logs, linkFrames, connect, pairCode, paired, cli, orchCalls: () => orchCalls }
@@ -159,7 +159,7 @@ describe('Remote Runtime end to end (design §6 Phase 3 acceptance)', () => {
     // Phase 3 minor: the call above is refused by this side's closed socket; the Runtime's own refusal is a new
     // connection with the same token, which signs in to nothing.
     const again = await rt.connect()
-    await expect(again.auth(token, { surface: 'cli' })).rejects.toMatchObject({ code: 'RUNTIME_AUTH_FAILED' })
+    await expect(again.auth(token, { surface: 'cli', version: '9.9.9', agent: false })).rejects.toMatchObject({ code: 'RUNTIME_AUTH_FAILED' })
     expect(rt.orchCalls()).toBe(before)
   })
 

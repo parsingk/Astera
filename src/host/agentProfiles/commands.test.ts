@@ -18,7 +18,7 @@ afterEach(async () => {
 
 type Deps = Parameters<typeof createHostAgentProfiles>[0]
 
-async function rig(o: { sandboxSetup?: Deps['sandboxSetup']; sandboxReadiness?: Deps['sandboxReadiness'] } = {}) {
+async function rig(o: { sandboxSetup?: Deps['sandboxSetup']; sandboxReadiness?: Deps['sandboxReadiness']; sandboxDefault?: Deps['sandboxDefault'] } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-host-ap-'))
   dirs.push(root)
   const profileDir = path.join(root, 'profile')
@@ -35,9 +35,10 @@ async function rig(o: { sandboxSetup?: Deps['sandboxSetup']; sandboxReadiness?: 
     now: () => clock,
     log: (l) => logs.push(l),
     ...(o.sandboxSetup ? { sandboxSetup: o.sandboxSetup } : {}),
-    ...(o.sandboxReadiness ? { sandboxReadiness: o.sandboxReadiness } : {})
+    ...(o.sandboxReadiness ? { sandboxReadiness: o.sandboxReadiness } : {}),
+    ...(o.sandboxDefault ? { sandboxDefault: o.sandboxDefault } : {})
   })
-  const call = (cmd: string, args: Record<string, unknown> = {}, extra: { role?: 'app' | 'cli' | 'mcp' | 'agent'; agentRefusal?: string } = {}) => {
+  const call = (cmd: string, args: Record<string, unknown> = {}, extra: { role?: 'app' | 'cli' | 'mcp' | 'agent' | 'controller'; agentRefusal?: string } = {}) => {
     const marks = { effects: 0 }
     return hub
       .command({ cmd, args, role: (extra.role ?? 'app') as 'app', ...(extra.agentRefusal ? { agentRefusal: extra.agentRefusal } : {}), marks })
@@ -136,6 +137,54 @@ describe('createHostAgentProfiles', () => {
     expect((await h.call('agent-profiles-update', { id: p.id, accountIds: ['acc_1', 'acc_2'] })).body).toMatchObject({ reason: 'unknown-account' })
   })
 
+  // Lifecycle design §5: archiving records when and why; restore clears both
+  it('archive stamps archivedAt and a one-line reason, and restore clears both', async () => {
+    const h = await rig()
+    const p = profileOf(await h.call('agent-profiles-create', { name: 'A', accountIds: ['acc_1'] }))
+    const at = '2026-10-30T01:00:00.000Z'
+    h.advance(Date.parse(at) - Date.parse('2026-10-22T10:00:00.000Z'))
+    const archived = await h.call('agent-profiles-archive', { id: p.id, reason: '  replaced by p2  ' })
+    expect(archived.status, JSON.stringify(archived.body)).toBe(200)
+    expect(profileOf(archived)).toMatchObject({ status: 'archived', archivedAt: at, archivedReason: 'replaced by p2' })
+    expect((await readAgentProfiles(h.profileDir)).profiles[0]).toMatchObject({ archivedAt: at, archivedReason: 'replaced by p2' })
+    const restored = profileOf(await h.call('agent-profiles-restore', { id: p.id }))
+    expect(restored.status).toBe('active')
+    expect('archivedAt' in restored).toBe(false)
+    expect('archivedReason' in restored).toBe(false)
+    const stored = (await readAgentProfiles(h.profileDir)).profiles[0]!
+    expect('archivedAt' in stored).toBe(false)
+    expect('archivedReason' in stored).toBe(false)
+    // No reason, or one that is blank once trimmed, records none; a second archive replaces the first one's record
+    h.advance(1_000)
+    const again = profileOf(await h.call('agent-profiles-archive', { id: p.id, reason: '   ' }))
+    expect(again).toMatchObject({ archivedAt: '2026-10-30T01:00:01.000Z' })
+    expect('archivedReason' in again).toBe(false)
+  })
+
+  it('archive refuses a reason with a line break or over 200 characters', async () => {
+    const h = await rig()
+    const p = profileOf(await h.call('agent-profiles-create', { name: 'A', accountIds: ['acc_1'] }))
+    for (const reason of ['a\nb', 'a\rb', 'x'.repeat(201), 3, null]) {
+      const r = await h.call('agent-profiles-archive', { id: p.id, reason })
+      expect(r.status, JSON.stringify(reason)).toBe(400)
+      expect(r.marks.effects).toBe(0)
+    }
+    expect((await readAgentProfiles(h.profileDir)).profiles[0]!.status).toBe('active')
+    // Exactly 200 characters, once trimmed, is one line short enough
+    expect((await h.call('agent-profiles-archive', { id: p.id, reason: ` ${'x'.repeat(200)} ` })).status).toBe(200)
+  })
+
+  it('an update of an archived profile keeps archivedAt', async () => {
+    const h = await rig()
+    const p = profileOf(await h.call('agent-profiles-create', { name: 'A', accountIds: ['acc_1'] }))
+    const archived = profileOf(await h.call('agent-profiles-archive', { id: p.id, reason: 'old' }))
+    h.advance(1_000)
+    const updated = await h.call('agent-profiles-update', { id: p.id, name: 'B' })
+    expect(updated.status, JSON.stringify(updated.body)).toBe(200)
+    expect(profileOf(updated)).toMatchObject({ name: 'B', status: 'archived', archivedAt: archived.archivedAt, archivedReason: 'old' })
+    expect(profileOf(updated).updatedAt).not.toBe(archived.updatedAt)
+  })
+
   it('refuses a caller that is not the app or the CLI, and a change from an agent\'s shell', async () => {
     const h = await rig()
     expect((await h.call('agent-profiles-list', {}, { role: 'agent' })).status).toBe(403)
@@ -150,6 +199,13 @@ describe('createHostAgentProfiles', () => {
     expect((await readAgentProfiles(h.profileDir)).profiles).toEqual([])
     // A read is allowed to an agent's shell
     expect((await h.call('agent-profiles-list', {}, { role: 'cli', agentRefusal: 'not from an agent' })).status).toBe(200)
+  })
+
+  // Remote governance design §13: the controller gate refuses these first; the handler refuses a controller as well
+  it('a controller role is refused at the handler too', async () => {
+    const h = await rig({ sandboxReadiness: async () => 'ready' })
+    for (const cmd of ['agent-profiles-list', 'agent-profiles-sandbox-readiness'])
+      expect((await h.call(cmd, {}, { role: 'controller' })).status, cmd).toBe(403)
   })
 
   // Sandbox design §6: the switch is the person's, off unless they turn it on, and kept by an update that leaves it alone
@@ -253,6 +309,57 @@ describe('createHostAgentProfiles', () => {
     const none = await rig()
     const n = profileOf(await none.call('agent-profiles-create', { name: 'Boxed', accountIds: ['acc_x'], sandbox: true }))
     expect((await none.call('agent-profiles-sandbox-readiness', { id: n.id })).status).toBe(501)
+  })
+
+  // Task P (the person's decision, 2026-10-29): Settings › Agent profiles says which Codex accounts' config.toml still makes
+  // the elevated sandbox their default, and takes it out (the line or Codex's older feature key) only when the person
+  // presses Remove, from the app only
+  it('the readiness names an elevated default, and agent-profiles-sandbox-default-remove takes it out on the app’s word', async () => {
+    const elevated = new Set<string>()
+    const removed: string[] = []
+    const sandboxDefault: NonNullable<Deps['sandboxDefault']> = {
+      fileOf: (a) => path.join(a.configDir, 'config.toml'),
+      elevated: async (file) => elevated.has(file),
+      remove: async (file) => (removed.push(file), elevated.delete(file) ? 'removed' : 'absent')
+    }
+    const h = await rig({ sandboxReadiness: async () => 'ready', sandboxDefault })
+    const fileX = path.join(h.accounts().find((a) => a.id === 'acc_x')!.configDir, 'config.toml')
+    elevated.add(fileX)
+    const p = profileOf(await h.call('agent-profiles-create', { name: 'Boxed', accountIds: ['acc_x', 'acc_y'], sandbox: true }))
+    expect((await h.call('agent-profiles-sandbox-readiness', { id: p.id })).body).toEqual({
+      accounts: [{ accountId: 'acc_x', state: 'ready', elevatedDefault: true }, { accountId: 'acc_y', state: 'ready' }]
+    })
+    for (const extra of [{ role: 'cli' as const, agentRefusal: 'not from an agent' }, { role: 'cli' as const }, { role: 'mcp' as const }, { role: 'agent' as const }])
+      expect((await h.call('agent-profiles-sandbox-default-remove', { id: p.id, accountId: 'acc_x' }, extra)).status, JSON.stringify(extra)).toBe(403)
+    expect(removed).toEqual([])
+    const r = await h.call('agent-profiles-sandbox-default-remove', { id: p.id, accountId: 'acc_x' })
+    expect(r.status, JSON.stringify(r.body)).toBe(200)
+    expect(r.body).toEqual({ outcome: 'removed', file: fileX })
+    expect(r.marks.effects).toBe(0)
+    expect(removed).toEqual([fileX])
+    expect((await h.call('agent-profiles-sandbox-readiness', { id: p.id })).body).toEqual({ accounts: [{ accountId: 'acc_x', state: 'ready' }, { accountId: 'acc_y', state: 'ready' }] })
+    // Only an account of the profile, and a Codex one; a profile that is not there
+    const claude = profileOf(await h.call('agent-profiles-create', { name: 'Claude', accountIds: ['acc_1'] }))
+    expect((await h.call('agent-profiles-sandbox-default-remove', { id: p.id, accountId: 'acc_1' })).status).toBe(400)
+    expect((await h.call('agent-profiles-sandbox-default-remove', { id: claude.id, accountId: 'acc_1' })).status).toBe(400)
+    expect((await h.call('agent-profiles-sandbox-default-remove', { id: 'ap_nope', accountId: 'acc_x' })).status).toBe(404)
+    expect((await h.call('agent-profiles-sandbox-default-remove', { id: p.id })).status).toBe(400)
+    expect(removed).toEqual([fileX])
+    // A file that cannot be read or written is said, with the file the person can edit instead: the command ran
+    const failing = await rig({ sandboxReadiness: async () => 'ready', sandboxDefault: { ...sandboxDefault, remove: async () => Promise.reject(new Error('EBUSY')) } })
+    const q = profileOf(await failing.call('agent-profiles-create', { name: 'Boxed', accountIds: ['acc_x'], sandbox: true }))
+    const f = await failing.call('agent-profiles-sandbox-default-remove', { id: q.id, accountId: 'acc_x' })
+    expect(f.status).toBe(200)
+    expect(f.body).toEqual({ outcome: 'failed', file: path.join(failing.accounts().find((a) => a.id === 'acc_x')!.configDir, 'config.toml'), error: 'EBUSY' })
+    expect(failing.logs).toContainEqual(expect.stringMatching(/could not take .*elevated default.*EBUSY/))
+    // A file that cannot be read is no elevated default (a hint, never a gate)
+    const unread = await rig({ sandboxReadiness: async () => 'ready', sandboxDefault: { ...sandboxDefault, elevated: async () => Promise.reject(new Error('EPERM')) } })
+    const u = profileOf(await unread.call('agent-profiles-create', { name: 'Boxed', accountIds: ['acc_x'], sandbox: true }))
+    expect((await unread.call('agent-profiles-sandbox-readiness', { id: u.id })).body).toEqual({ accounts: [{ accountId: 'acc_x', state: 'ready' }] })
+    // A Host with no Windows sandbox (macOS, Linux) says so
+    const none = await rig()
+    const n = profileOf(await none.call('agent-profiles-create', { name: 'Boxed', accountIds: ['acc_x'], sandbox: true }))
+    expect((await none.call('agent-profiles-sandbox-default-remove', { id: n.id, accountId: 'acc_x' })).status).toBe(501)
   })
 
   // Task 6 fix round 1: a second press of 설정하기 for the account while its setup runs (the administrator prompt is up)

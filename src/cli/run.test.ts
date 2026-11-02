@@ -3,7 +3,7 @@ import { GIT_WRITE_TIMEOUT_MS } from '../core/worktrees/git'
 import { MERGE_CLIENT_TIMEOUT_MS } from '../core/orchestration/cliKeepalive'
 import { SCRIPT_TIMEOUT_MS } from '../core/agentBrowser/script'
 import { LAUNCH_WAIT_MAX_MS } from '../core/workspace/script'
-import { exitCodeFor, refusalDetailsOf } from '../core/orchestration/cliOutput'
+import { exitCodeFor, nextStepsFor, refusalDetailsOf, type CliErrorCode } from '../core/orchestration/cliOutput'
 import { promises as fs, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import os from 'node:os'
@@ -782,6 +782,24 @@ describe('connectFailureEnd — 접속 실패 셋을 가른다', () => {
       SILENT_HOST_CODE
     )
     expect(exitCodeFor(SILENT_HOST_CODE)).toBe(7)
+  })
+
+  // The Mac check (checks 18 and 25): a worker in Claude Code's sandbox piped its report into astera, the line ran inside
+  // the sandbox, and the answer said to start a Host. The worker printed its environment looking for why.
+  it("inside Claude Code's sandbox nothing reached is not nobody: it says how to run the line, and reads no file", () => {
+    const end = connectFailureEnd({ error: 'unreachable', address: addr, profileDir: 'P', sandboxed: true })
+    expect(end.fallback).toBe(false)
+    const e = end as { code: CliErrorCode; message: string; details?: Record<string, unknown> }
+    expect(e.code).toBe('HOST_NOT_RUNNING')
+    expect(e.message).toContain('sandbox')
+    expect(e.message).toContain('heredoc')
+    expect(e.message).toContain('--body "')
+    expect(e.message).not.toContain('host start')
+    expect(nextStepsFor({ code: e.code, cmd: 'send', details: e.details })).toEqual([])
+    // Outside it, and for a Host that answered wrongly, nothing changes
+    expect(connectFailureEnd({ error: 'unreachable', address: addr, profileDir: 'P', sandboxed: false })).toEqual({ fallback: true })
+    expect((connectFailureEnd({ error: 'impostor', address: addr, profileDir: 'P', sandboxed: true }) as { code: string }).code).toBe('PERMISSION_DENIED')
+    expect(nextStepsFor({ code: 'HOST_NOT_RUNNING', cmd: 'send' })).toEqual(['astera host start'])
   })
 })
 
@@ -1721,5 +1739,16 @@ describe('run.ts — host commands hear --no-keepalive (stage 4 T6)', () => {
     expect(at).toBeGreaterThan(0)
     const call = src.slice(at, src.indexOf('})', at))
     expect(call).toMatch(/noKeepalive:\s*parsed\.noKeepalive/)
+  })
+})
+
+// Final review F6: what a paired Runtime is told about this CLI and whether `runtimes expect` edits are refused read one
+// signal, so the CLI takes callerSandboxed.ts's `inAgentSession` rather than a copy that could drift from it.
+describe('run.ts — one inAgentSession', () => {
+  it('imports inAgentSession from callerSandboxed.ts and keeps no copy of its own', () => {
+    const src = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'run.ts'), 'utf8')
+    expect(src).toMatch(/import \{[^}]*\binAgentSession\b[^}]*\} from '\.\/callerSandboxed'/)
+    expect(src).not.toMatch(/const inAgentSession\s*=/)
+    expect(src).toMatch(/agent: inAgentSession\(process\.env\)/)
   })
 })

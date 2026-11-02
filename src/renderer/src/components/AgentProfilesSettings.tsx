@@ -1,7 +1,8 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import type { Account, AgentProfileFields, PluginsCallAnswer } from '../../../core/types'
 import type { AgentProfile, ProfilePermission } from '../../../core/agentProfiles/types'
+import type { Finding } from '../../../core/findings/types'
 import { metaOf, providerOf } from '../../../core/providers/meta'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
@@ -10,13 +11,17 @@ import { publishAgentProfiles } from '../lib/agentProfiles'
 import { sandboxSetupOutcome } from '../lib/spawnErrors'
 import { AccountSelect } from './AccountSelect'
 import { failureLine } from './extensionsText'
+import { FindingsMark } from './FindingsSection'
+import { profileMarks, reportOf } from './findingsText'
 import {
   addableAccounts,
+  archivedNote,
   offersSetUp,
   permissionLabel,
   profileFailureLine,
   providerSuffix,
   readinessRows,
+  sandboxDefaultRemoved,
   sandboxHintKeys,
   sandboxReadinessShown,
   sandboxStateLine
@@ -44,14 +49,28 @@ const draftOf = (p?: AgentProfile): Draft => ({
 /** Settings › Agent profiles (Agent Profiles design §8): accounts with their roll order, the shared MCP servers a
  *  profile uses and its permission, saved under a name that new sessions, Jobs and Tasks can be started as. Laid out
  *  like MCP & Skills: collapsed rows that open on a click. The Host owns the store and checks every change; a refusal
- *  comes back with its reason in a word, said here in the person's language. */
-export function AgentProfilesSettings({ accounts }: { accounts: Account[] }): React.JSX.Element {
+ *  comes back with its reason in a word, said here in the person's language. A profile with open findings carries a
+ *  mark with their count (lifecycle design §7), which opens Security & Access at Findings (`onOpenFindings`).
+ *  `focusProfileIds`: the profiles a finding's button opened this for, highlighted, the first scrolled to. */
+export function AgentProfilesSettings({
+  accounts,
+  focusProfileIds,
+  onOpenFindings
+}: {
+  accounts: Account[]
+  focusProfileIds?: readonly string[]
+  onOpenFindings: () => void
+}): React.JSX.Element {
   const { t } = useI18n()
   const [profiles, setProfiles] = useState<AgentProfile[] | null>(null)
   const [servers, setServers] = useState<Server[]>([])
+  /** Each profile's open findings (ruling 7); none while the Host could not say. */
+  const [marks, setMarks] = useState<ReadonlyMap<string, Finding[]>>(new Map())
   const [listFailure, setListFailure] = useState<Failure | null>(null)
   const [busy, setBusy] = useState(false)
   const [creating, setCreating] = useState(false)
+  /** The profile whose Archive asks for the reason first, and the reason typed so far (lifecycle design §5). */
+  const [archiving, setArchiving] = useState<{ id: string; reason: string } | null>(null)
   /** The rows opened, by profile id. */
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set())
   const toggleOpen = (id: string): void =>
@@ -62,6 +81,8 @@ export function AgentProfilesSettings({ accounts }: { accounts: Account[] }): Re
       return next
     })
 
+  /** Which marks read is the latest (load, below). */
+  const markReading = useRef(0)
   const load = async (): Promise<void> => {
     const r = await window.api.agentProfiles.list().catch(failed)
     if (!r.ok) return void setListFailure(r)
@@ -77,10 +98,32 @@ export function AgentProfilesSettings({ accounts }: { accounts: Account[] }): Re
           .filter((e) => e.kind === 'mcp' && typeof e.id === 'string')
           .map((e) => ({ id: e.id as string, name: typeof e.name === 'string' ? e.name : (e.id as string), off: e.enabled !== true }))
       )
+    // The marks, read when the tab opens and after each change here (the Host drops its report after a change, ruling
+    // R8-1); a failure leaves no mark rather than a wrong one, and Security & Access › Findings says why. Only the latest
+    // read is shown: a slower answer to an earlier one would bring back a mark the change took away
+    const n = ++markReading.current
+    const found = await window.api.findings.list().catch(failed)
+    if (n !== markReading.current) return
+    const report = found.ok ? reportOf(found.body) : null
+    setMarks(report === null ? new Map() : profileMarks(report))
   }
   useEffect(() => {
     void load()
   }, [])
+
+  /** The rows by profile id, so a finding's button scrolls to the first profile it names. */
+  const rows = useRef(new Map<string, HTMLDivElement>())
+  const focused = new Set(focusProfileIds ?? [])
+  const focusKey = [...focused].join(',')
+  /** The focus last scrolled to: once per opening, not again after each change reads the list anew. */
+  const scrolledFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (profiles === null || focusKey === '' || scrolledFor.current === focusKey) return
+    const first = profiles.find((p) => focused.has(p.id))
+    if (first === undefined) return
+    scrolledFor.current = focusKey
+    rows.current.get(first.id)?.scrollIntoView({ block: 'start' })
+  }, [profiles, focusKey])
 
   /** Runs one change, says why when it did not happen, and reads the list again either way. True when it happened. */
   const change = async (work: () => Promise<PluginsCallAnswer>): Promise<boolean> => {
@@ -141,17 +184,37 @@ export function AgentProfilesSettings({ accounts }: { accounts: Account[] }): Re
           {profiles.map((p) => {
             const first = accounts.find((a) => a.id === p.accountIds[0])
             const isOpen = open.has(p.id)
+            // When it was archived and why (lifecycle design §5): the date as its status, the reason inside the open row
+            const note = archivedNote(p, t, (iso) => new Date(iso).toLocaleDateString())
+            const reason = archiving?.id === p.id ? archiving.reason : null
+            const found = marks.get(p.id) ?? []
             return (
-              <div key={p.id} className={`ext-row${isOpen ? ' is-open' : ''}`}>
-                <button type="button" className="ext-row-head" aria-expanded={isOpen} onClick={() => toggleOpen(p.id)}>
-                  <span className="ext-row-chevron" aria-hidden="true">
-                    {isOpen ? '▾' : '▸'}
-                  </span>
-                  <span className="plugin-name">{p.name}</span>
-                  {first && <span className="settings-hint">{metaOf(first).displayName}</span>}
-                  <span className="settings-hint">{t('settings.agentProfiles.accountCount', { count: p.accountIds.length })}</span>
-                  {p.status === 'archived' && <span className="plugin-status">{t('settings.agentProfiles.archived')}</span>}
-                </button>
+              <div
+                key={p.id}
+                ref={(el) => {
+                  if (el === null) rows.current.delete(p.id)
+                  else rows.current.set(p.id, el)
+                }}
+                className={`ext-row${isOpen ? ' is-open' : ''}${focused.has(p.id) ? ' is-focused' : ''}`}
+              >
+                {/* The findings mark beside the row's head, not inside it: a button in a button is not one */}
+                <div className="agent-profile-head">
+                  <button type="button" className="ext-row-head" aria-expanded={isOpen} onClick={() => toggleOpen(p.id)}>
+                    <span className="ext-row-chevron" aria-hidden="true">
+                      {isOpen ? '▾' : '▸'}
+                    </span>
+                    <span className="plugin-name">{p.name}</span>
+                    {first && <span className="settings-hint">{metaOf(first).displayName}</span>}
+                    <span className="settings-hint">{t('settings.agentProfiles.accountCount', { count: p.accountIds.length })}</span>
+                    {/* One mark: the date it was archived in place of the plain badge, when the date was kept */}
+                    {p.status === 'archived' && (
+                      <span className="plugin-status" title={note?.reason}>
+                        {note ? note.on : t('settings.agentProfiles.archived')}
+                      </span>
+                    )}
+                  </button>
+                  {found.length > 0 && <FindingsMark findings={found} onOpen={onOpenFindings} />}
+                </div>
                 {isOpen && (
                   <ProfileEditor
                     // Read again after a save: the editor starts over from what the Host kept
@@ -163,19 +226,52 @@ export function AgentProfilesSettings({ accounts }: { accounts: Account[] }): Re
                     saveLabel={t('settings.agentProfiles.save')}
                     onSave={(d) => void change(() => window.api.agentProfiles.update(p.id, d))}
                     warning={p.status === 'active' && p.accountIds.length === 0 ? t('settings.agentProfiles.noAccounts') : undefined}
+                    note={note?.reason}
                     // Each Codex account's Windows sandbox, for a profile whose sessions start in it (Task 8)
                     sandboxReadiness={sandboxReadinessShown(p, window.api.platform, accounts) ? <SandboxReadiness profile={p} accounts={accounts} /> : undefined}
                   >
-                    <button
-                      className="settings-gen-refresh"
-                      disabled={busy}
-                      onClick={() => void change(() => (p.status === 'archived' ? window.api.agentProfiles.restore(p.id) : window.api.agentProfiles.archive(p.id)))}
-                    >
-                      {p.status === 'archived' ? t('settings.agentProfiles.restore') : t('settings.agentProfiles.archive')}
-                    </button>
-                    <button className="ghost danger" disabled={busy} onClick={() => void remove(p)}>
-                      {t('settings.agentProfiles.delete')}
-                    </button>
+                    {reason !== null ? (
+                      // Archive asks for the reason in one line first, then archives or cancels (lifecycle design §5)
+                      <>
+                        <input
+                          type="text"
+                          className="settings-gen-input remote-actions-grow"
+                          aria-label={t('settings.agentProfiles.archiveReason')}
+                          placeholder={t('settings.agentProfiles.archiveReason')}
+                          value={reason}
+                          maxLength={200}
+                          autoFocus
+                          onChange={(e) => setArchiving({ id: p.id, reason: e.target.value })}
+                        />
+                        <button
+                          className="settings-gen-refresh"
+                          disabled={busy}
+                          onClick={() =>
+                            void change(() => window.api.agentProfiles.archive(p.id, reason.trim() === '' ? undefined : reason)).then((ok) => {
+                              if (ok) setArchiving(null)
+                            })
+                          }
+                        >
+                          {t('settings.agentProfiles.archive')}
+                        </button>
+                        <button className="settings-gen-refresh" disabled={busy} onClick={() => setArchiving(null)}>
+                          {t('common.cancel')}
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          className="settings-gen-refresh"
+                          disabled={busy}
+                          onClick={() => (p.status === 'archived' ? void change(() => window.api.agentProfiles.restore(p.id)) : setArchiving({ id: p.id, reason: '' }))}
+                        >
+                          {p.status === 'archived' ? t('settings.agentProfiles.restore') : t('settings.agentProfiles.archive')}
+                        </button>
+                        <button className="ghost danger" disabled={busy} onClick={() => void remove(p)}>
+                          {t('settings.agentProfiles.delete')}
+                        </button>
+                      </>
+                    )}
                   </ProfileEditor>
                 )}
               </div>
@@ -198,6 +294,7 @@ function ProfileEditor({
   onSave,
   onCancel,
   warning,
+  note,
   sandboxReadiness,
   children
 }: {
@@ -209,6 +306,8 @@ function ProfileEditor({
   onSave: (d: Draft) => void
   onCancel?: () => void
   warning?: string
+  /** A line shown first, as a hint: why an archived profile was archived (lifecycle design §5). */
+  note?: string
   /** Shown under the sandbox switch while it is on: the readiness of a stored profile's Codex accounts on Windows. */
   sandboxReadiness?: React.ReactNode
   children?: React.ReactNode
@@ -229,6 +328,7 @@ function ProfileEditor({
   return (
     <div className="ext-row-body">
       {warning !== undefined && <span className="settings-hint is-warning">{warning}</span>}
+      {note !== undefined && <span className="settings-hint">{note}</span>}
       <label className="plugin-field">
         <span className="plugin-field-label">{t('settings.agentProfiles.name')}</span>
         <input type="text" className="settings-gen-input" value={d.name} maxLength={60} onChange={(e) => set('name', e.target.value)} />
@@ -348,6 +448,21 @@ function SandboxReadiness({ profile, accounts }: { profile: AgentProfile; accoun
     void ask()
   }, [profile.id])
 
+  /** Task P: Remove under an account whose config.toml still makes the elevated sandbox its default, on the person's
+   *  press only; the readiness is asked again after it, which shows whether the default is gone (the line, or Codex's
+   *  older feature key) */
+  const removeDefault = async (accountId: string): Promise<void> => {
+    if (settingUp) return
+    setSettingUp(true)
+    try {
+      const removed = sandboxDefaultRemoved(await window.api.agentProfiles.sandboxDefaultRemove(profile.id, accountId).catch(failed))
+      if (!removed.ok) toast.error(t('settings.agentProfiles.sandboxDefault.removeFailed', { file: removed.file ?? 'config.toml' }))
+    } finally {
+      setSettingUp(false)
+      void ask()
+    }
+  }
+
   const setUp = async (accountId: string): Promise<void> => {
     if (settingUp) return
     setSettingUp(true)
@@ -365,17 +480,29 @@ function SandboxReadiness({ profile, accounts }: { profile: AgentProfile; accoun
   return (
     <>
       {readinessRows(profile, accounts, answer).map((r) => (
-        <div key={r.accountId} className="settings-row">
-          <span>{r.label}</span>
-          <div className="remote-actions">
-            {r.state !== null && <span className="settings-hint">{sandboxStateLine(r.state, t)}</span>}
-            {offersSetUp(r.state) && (
-              <button type="button" className="settings-gen-refresh" disabled={settingUp} onClick={() => void setUp(r.accountId)}>
-                {t('session.spawn.sandbox.setUp')}
-              </button>
-            )}
+        <Fragment key={r.accountId}>
+          <div className="settings-row">
+            <span>{r.label}</span>
+            <div className="remote-actions">
+              {r.state !== null && <span className="settings-hint">{sandboxStateLine(r.state, t)}</span>}
+              {offersSetUp(r.state) && (
+                <button type="button" className="settings-gen-refresh" disabled={settingUp} onClick={() => void setUp(r.accountId)}>
+                  {t('session.spawn.sandbox.setUp')}
+                </button>
+              )}
+            </div>
           </div>
-        </div>
+          {r.elevatedDefault && (
+            // A dim sentence that takes the width, beside a button that keeps its own (seen on the hidden desktop: as a
+            // settings row the sentence took the label's weight and squeezed the button)
+            <div className="remote-actions sandbox-default-row">
+              <span className="settings-hint remote-actions-grow">{t('settings.agentProfiles.sandboxDefault.hint')}</span>
+              <button type="button" className="settings-gen-refresh" disabled={settingUp} onClick={() => void removeDefault(r.accountId)}>
+                {t('settings.agentProfiles.sandboxDefault.remove')}
+              </button>
+            </div>
+          )}
+        </Fragment>
       ))}
     </>
   )

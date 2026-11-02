@@ -56,9 +56,17 @@ export interface ProfilePaths {
   credentialEmpty: string
   /** Credential-use records: one `YYYY-MM-DD.jsonl` per local day, written by the Host alone (credentials design §6). */
   credentialUses: string
+  /** The uses of shared skills, commands and agents the CLIs reported while observing (lifecycle design §4.12): one
+   *  `YYYY-MM-DD.jsonl` per local day, written by the Host alone, kept as the tool calls are. */
+  extensionUses: string
   /** Enforce's hook writes each call it sees here, one file per session (enforce design §5): the proof it ran, and what it
    *  blocked. */
   enforceEvents: string
+  /** The findings the person set aside (lifecycle design §6): `{ version, ignored }`, written by the Host alone. */
+  findingsIgnored: string
+  /** When this release first ran on the profile (lifecycle plan ruling 2): `{ version, since }`, the start of every
+   *  history it began recording. */
+  findingsHistory: string
 }
 
 export function profilePaths(profileDir: string): ProfilePaths {
@@ -71,6 +79,9 @@ export function profilePaths(profileDir: string): ProfilePaths {
     credentials: path.join(profileDir, 'credentials.json'),
     credentialEmpty: path.join(profileDir, 'credentials', 'empty'),
     credentialUses: path.join(profileDir, 'credential-uses'),
-    enforceEvents: path.join(profileDir, 'enforce')
+    extensionUses: path.join(profileDir, 'extension-uses'),
+    enforceEvents: path.join(profileDir, 'enforce'),
+    findingsIgnored: path.join(profileDir, 'findings-ignored.json'),
+    findingsHistory: path.join(profileDir, 'findings-history.json')
   }
 }

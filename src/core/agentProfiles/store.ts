@@ -72,6 +72,8 @@ export interface ProfileInput {
   createdAt?: string
   updatedAt?: string
   lastUsedAt?: string
+  archivedAt?: string
+  archivedReason?: string
 }
 
 /** Checks a profile against the accounts and the other profiles, and returns it whole (trimmed name, defaults filled).
@@ -91,7 +93,7 @@ export function validateProfile(
   if (found.some((a) => !a)) return { ok: false, reason: 'unknown-account' }
   if (new Set(found.map((a) => providerOf(a!))).size > 1) return { ok: false, reason: 'mixed-provider' }
   const now = new Date().toISOString()
-  const { lastUsedAt, description } = input
+  const { lastUsedAt, description, archivedAt, archivedReason } = input
   return {
     ok: true,
     profile: {
@@ -105,7 +107,9 @@ export function validateProfile(
       sandbox: input.sandbox ?? false,
       createdAt: input.createdAt ?? now,
       updatedAt: input.updatedAt ?? now,
-      ...(lastUsedAt !== undefined ? { lastUsedAt } : {})
+      ...(lastUsedAt !== undefined ? { lastUsedAt } : {}),
+      ...(archivedAt !== undefined ? { archivedAt } : {}),
+      ...(archivedReason !== undefined ? { archivedReason } : {})
     }
   }
 }

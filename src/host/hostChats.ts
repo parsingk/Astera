@@ -57,6 +57,13 @@ export interface HostChatsDeps {
   hostSocketDir?: ChatManagerDeps['hostSocketDir']
   /** The profile's app key file, the spawner's: a sandboxed Codex chat's profile denies it on every OS. */
   appKeyFile?: ChatManagerDeps['appKeyFile']
+  /** The read-only folders, the spawner's: a sandboxed Codex chat's profile keeps them read on every OS (Task E and its
+   *  fix round 1). */
+  readOnly?: ChatManagerDeps['readOnly']
+  /** How the disk is read for links on the named paths, the spawner's (Task E fix round 5). Required (fix round 6). */
+  linkLook: ChatManagerDeps['linkLook']
+  /** Where a sandboxed chat start's warnings are told (Task E fix round 2), rollingWiring's: the chat notice to the apps. */
+  sandboxWarn?: ChatManagerDeps['sandboxWarn']
   /** The codex version question, the spawner's: a sandboxed Codex chat's floor (final review I2). */
   codexVersion?: ChatManagerDeps['codexVersion']
   /** The copy of the person's git excludes a sandboxed win32 Codex chat reads: the spawner's (HostSpawner.codexExcludes). */
@@ -202,6 +209,9 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     ...(d.claudeSandbox ? { claudeSandbox: d.claudeSandbox } : {}),
     ...(d.hostSocketDir !== undefined ? { hostSocketDir: d.hostSocketDir } : {}),
     ...(d.appKeyFile !== undefined ? { appKeyFile: d.appKeyFile } : {}),
+    ...(d.readOnly !== undefined ? { readOnly: d.readOnly } : {}),
+    linkLook: d.linkLook,
+    ...(d.sandboxWarn ? { sandboxWarn: d.sandboxWarn } : {}),
     ...(d.codexVersion ? { codexVersion: d.codexVersion } : {}),
     ...(d.codexExcludes ? { codexExcludes: d.codexExcludes } : {}),
     ...(d.createAdapter ? { createAdapter: d.createAdapter } : {})

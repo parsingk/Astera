@@ -31,7 +31,9 @@ import { runMcpHttp } from './mcp/http'
 import { runRuntimeGateway } from './runtime/gateway'
 import { runRuntimeCommand, type RuntimeCommandDeps } from './runtime/commands'
 import { controllerRegistry, runRuntimesCommand } from './runtimes'
+import { localReportExtensions } from '../core/controlPlane/local'
 import { answerRemote, trailingRuntimeError } from './remote'
+import { askCallerSandboxed, inAgentSession } from './callerSandboxed'
 import { clientTimeoutMs, followRun, type HostAnswer } from './follow'
 export { clientTimeoutMs, followRun, type FollowEnd, type HostAnswer } from './follow'
 import { remoteTarget } from '../core/remote/targets'
@@ -170,7 +172,10 @@ export function connectFailureEnd(a: {
   error: ConnectFailure['error']
   address: string
   profileDir: string
+  /** Run inside Claude Code's sandbox (`sandboxedLine`). */
+  sandboxed?: boolean
 }): { fallback: true } | { fallback: false; code: CliErrorCode; message: string; details?: Record<string, unknown> } {
+  if (a.error === 'unreachable' && a.sandboxed === true) return { fallback: false, code: 'HOST_NOT_RUNNING', message: SANDBOXED_LINE, details: { sandbox: 'claude' } }
   if (a.error === 'unreachable') return { fallback: true }
   // Somebody else's process at this profile's address (core/host/hostKey.ts): not a Host to read the
   // file around, and not one to talk to.
@@ -195,7 +200,7 @@ export function renderOk(cmd: string, body: unknown, mode: OutputMode, mark: Rep
   if (mode === 'json') return jsonSafe(okEnvelope(cmd, body, mark))
   const data = dataFor(cmd, body)
   // What a person's terminal shows carries no control characters (security audit SEC-9); JSON escapes them already.
-  if (mode === 'quiet') return terminalSafe(quietFor(data))
+  if (mode === 'quiet') return terminalSafe(quietFor(data, cmd))
   // **사람용 두 모드는 표시를 싣지 않는다.** 재생의 요점은 첫 답을 받은 것과 구별되지 않는 것이고,
   // 그것이 재생이었다는 사실은 봉투를 읽는 쪽 — 즉 스크립트 — 의 것이다. `--quiet` 는 id 목록이라
   // 얹을 자리조차 없다. 사람용이 없어 봉투로 되돌아가는 명령은 봉투이므로 그때는 실린다.
@@ -599,6 +604,23 @@ export function lostAnswerDetails(a: {
  *  **닿지 못한 것과 답을 못 받은 것을 가른다.** 연결이 답 전에 끊기면 그 Host 는 사라진 것이므로
  *  `unreachable` 과 같은 사실이고(보고는 파일에 적힌다), 시한을 넘긴 것은 연결은 됐는데 저쪽이
  *  멈춘 것이라 그냥 실패다 — HTTP 시절의 갈래(`ctl.signal.aborted`)를 그대로 옮긴 것이다. */
+
+/** Whether this astera runs inside Claude Code's sandbox: srt sets `SANDBOX_RUNTIME=1` in every command it runs. That
+ *  sandbox grants no Unix socket and no TCP to 127.0.0.1 (srt's `allowLocalBinding` is off), so neither the pipe nor the
+ *  loopback reaches the Host from inside it, and nobody answering there is not a Host that is gone: the state file is not
+ *  read, and a report is not queued in the profile folder it cannot write. */
+export const sandboxedLine = (env: NodeJS.ProcessEnv): boolean => env.SANDBOX_RUNTIME === '1'
+
+/** What a command that ran inside Claude Code's sandbox is told. `astera` runs outside it only as a command line of its
+ *  own (`excludedCommands`): measured on a Mac with Claude Code 2.1.316 (2026-11-02), a line that pipes text into it,
+ *  redirects a file into it or feeds it a heredoc runs inside, as does one that starts with anything else; a line
+ *  continued with `\` and a quoted value over several lines run outside. "Start a Host" sent a worker looking through its
+ *  environment instead (the Mac check, checks 18 and 25). */
+const SANDBOXED_LINE =
+  "this astera ran inside Claude Code's sandbox, which reaches no Host, so nothing was sent: a command line that pipes " +
+  'or redirects text into astera (|, <, a heredoc), or starts with anything but astera ("$ASTERA_CLI" included), runs ' +
+  'there. Run the same command as a line of its own that starts with astera, with each - value given inline in quotes ' +
+  'instead (--body "…", which may span lines; inside double quotes the shell expands backticks and $)'
 
 /** Which of the two words this answer wears at the top of the envelope, if either (`ReplayMark`).
  *  They are never both set, and an ordinary answer wears neither. */
@@ -1372,7 +1394,11 @@ export async function main(): Promise<void> {
       connect: (o) => connectRuntime(o),
       hostname: () => os.hostname(),
       now: () => new Date().toISOString(),
-      version: CLI_VERSION
+      version: CLI_VERSION,
+      // What a paired Runtime is told about this CLI (remote governance design §7.1), and who may edit the expected list
+      // (ruling RF-1): the same signal that makes a local call an agent's
+      agent: inAgentSession(process.env),
+      localExtensions: () => localReportExtensions(profileDir)
     })
     if (!done.ok) fail(done.error)
     out(renderOk(parsed.cmd, done.body, mode))
@@ -1485,7 +1511,8 @@ export async function main(): Promise<void> {
   // is exactly that — so the assignment must not be something a later edit can move past them.
   // Defining `reply` *from* `answer` is what makes that impossible rather than merely unlikely.
   answer = await (async (): Promise<HostAnswer> => {
-    // A paired Runtime instead of this machine's Host (cli/remote.ts): no local connection, no file fallback.
+    // A paired Runtime instead of this machine's Host (cli/remote.ts): no file fallback, and this machine's Host is asked
+    // only whether a session's change may go (remote governance design §7.4).
     if (parsed.runtime !== undefined) {
       verbose.say(`sending ${spelledCommand(parsed.cmd)} to the paired Runtime ${parsed.runtime}`)
       const remote = await answerRemote({
@@ -1496,7 +1523,9 @@ export async function main(): Promise<void> {
         profileDir,
         mode,
         write: out,
-        version: CLI_VERSION
+        version: CLI_VERSION,
+        agent: inAgentSession(process.env),
+        deps: { callerSandboxed: () => askCallerSandboxed({ env: process.env, platform: process.platform, home: homedir(), version: CLI_VERSION }) }
       })
       if ('error' in remote) fail(remote.error)
       return remote
@@ -1532,7 +1561,7 @@ export async function main(): Promise<void> {
       // **셋 중 하나만 "아무도 없다" 다** (connectFailureEnd). 나머지 둘에서 파일을 읽으면 살아
       // 있는 주인의 파일을 0 으로 답하게 된다 — 바로 아래 `orch` 없는 Host 를 9 로 끝내는 가지와
       // 같은 판단이다.
-      const end = connectFailureEnd({ error: conn.error, address, profileDir })
+      const end = connectFailureEnd({ error: conn.error, address, profileDir, sandboxed: sandboxedLine(process.env) })
       if (!end.fallback) {
         if (parsed.cmd === 'version') versionWithoutHost()
         fail({ code: end.code, message: end.message, ...(end.details ? { details: end.details } : {}) })

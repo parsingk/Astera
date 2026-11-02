@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync, mkdirSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { applyHiding, createHidingSource, hidingFor, projectOfWorktrees } from './hiding'
+import { applyHiding, createHidingSource, hiddenNames, hidingFor, projectOfWorktrees } from './hiding'
 import { PRESETS } from './presets'
 import type { CredentialEntry, HideOnlyEntry, McpSecretEntry } from './types'
 
@@ -103,6 +103,17 @@ describe('applyHiding', () => {
     expect(statSync(folder).isDirectory()).toBe(true)
     expect(statSync(file).size).toBe(0)
     expect(readdirSync(folder)).toEqual([])
+  })
+})
+
+// Task K fix round 2: a check says which names it started without (names only), so a failure for a hidden token reads as
+// that and not as the code's fault
+describe('hiddenNames', () => {
+  it('names what the change takes from the environment, as the list names it, and every redirect', () => {
+    const h = { remove: ['GH_TOKEN', 'NPM_TOKEN', 'ABSENT'], set: { KUBECONFIG: '/e/k/KUBECONFIG' } }
+    expect(hiddenNames({ Gh_Token: 'x', NPM_TOKEN: 'y', PATH: 'p' }, h, 'win32')).toEqual(['GH_TOKEN', 'NPM_TOKEN', 'KUBECONFIG'])
+    expect(hiddenNames({ Gh_Token: 'x', NPM_TOKEN: 'y' }, h, 'linux')).toEqual(['NPM_TOKEN', 'KUBECONFIG'])
+    expect(hiddenNames({ PATH: 'p' }, { remove: ['GH_TOKEN'], set: {} }, 'linux')).toEqual([])
   })
 })
 

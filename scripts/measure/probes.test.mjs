@@ -1,7 +1,7 @@
 // The sandbox probes (enforce and sandbox design §8, E4): each a shell line run in a workspace, judged against the same
 // line with no sandbox, so a sandbox's "denied" never means only that the fixture was not there.
 import { describe, it, expect } from 'vitest'
-import { PROBES, probeTable, runProbes, runSet, verdict } from './probes.mjs'
+import { PROBES, failIfMeasuredNothing, probeTable, refusedAll, refusedSets, runProbes, runSet, verdict } from './probes.mjs'
 
 const node = (line) => ({ file: process.execPath, args: ['-e', line] })
 const probes = (...lines) => lines.map((line, i) => ({ id: `p${i}`, line }))
@@ -57,6 +57,23 @@ describe('runSet', () => {
     ])
     expect(refused[0].out).toBe('cannot')
     expect(verdict({ ok: true }, refused[0])).toBe('refused')
+  })
+})
+
+// Task E (2026-10-28), found by the Ubuntu 26.04 run: srt refused every command and the job still reported success
+describe('a set that measured nothing', () => {
+  it('is one whose every sandboxed probe was refused', () => {
+    expect(refusedAll([{ id: 'a', refused: true }, { id: 'b', refused: true }])).toBe(true)
+    expect(refusedAll([{ id: 'a', refused: true }, { id: 'b', ok: false }])).toBe(false)
+    expect(refusedAll([{ id: 'a', ok: false }])).toBe(false)
+    expect(refusedAll([])).toBe(false)
+  })
+
+  it('fails the run, naming every such set', () => {
+    const sets = { codex: [{ id: 'a', ok: true }], srt: [{ id: 'a', refused: true }], srt2: [{ id: 'a', refused: true }] }
+    expect(refusedSets(sets)).toEqual(['srt', 'srt2'])
+    expect(() => failIfMeasuredNothing(sets)).toThrow('measured nothing: every sandboxed probe was refused in srt, srt2')
+    expect(() => failIfMeasuredNothing({ codex: sets.codex })).not.toThrow()
   })
 })
 

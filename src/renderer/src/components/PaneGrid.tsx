@@ -15,6 +15,7 @@ import {
   type Rect
 } from '../../../core/panes/tree'
 import { parseTab, sessionTab } from '../../../core/panes/tabId'
+import { isSandboxPartition } from '../../../core/preview/guards'
 import { mediaKindOf } from '../../../core/files/media'
 import { MediaViewer } from './MediaViewer'
 import { tabLabels } from '../../../core/files/tabLabel'
@@ -26,6 +27,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { useAgentProfilesNaming } from '../lib/agentProfiles'
 import { profileNameOf } from './agentProfilesText'
 import { TerminalView } from './TerminalView'
+import { SandboxWarningLine } from './SandboxWarningLine'
 import { ConversationPane } from './conversation/ConversationPane'
 import { RemoteTerminalView } from './RemoteTerminalView'
 import { RemoteConversationPane } from './conversation/RemoteConversationPane'
@@ -320,6 +322,7 @@ export function PaneGrid({
               <div className="session-slot-view" style={{ display: 'flex' }}>
                 <ConversationPane
                   sessionId={s.id}
+                  sandboxWarnings={s.sandboxed === true ? s.sandboxWarnings : undefined}
                   visible={visible}
                   exited={s.status === 'exited'}
                   active={visible && pane != null && pane.id === activePaneId}
@@ -331,6 +334,7 @@ export function PaneGrid({
               </div>
             ) : (
               <div className="session-slot-view" style={{ display: 'flex' }}>
+                <SandboxWarningLine sessionId={s.id} warnings={s.sandboxed === true ? s.sandboxWarnings : undefined} />
                 <TerminalView
                   session={s}
                   onRestart={onRestart}
@@ -673,7 +677,8 @@ export function PaneGrid({
                 title: b.title || displayHostOf(b.url) || t('preview.tab.untitled'),
                 loading: browserLoading[tabId] === true || agentRunning,
                 agentRunning,
-                agentSessionId: b.agentSessionId
+                agentSessionId: b.agentSessionId,
+                agentSandboxed: isSandboxPartition(b.partition)
               }
             }
             const f = ref?.kind === 'file' ? fileTabOf.get(tabId) : undefined

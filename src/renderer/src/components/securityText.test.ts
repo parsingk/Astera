@@ -11,6 +11,7 @@ import {
   DECISIONS,
   OBSERVE_NAME,
   POLICIES_TITLE,
+  FINDINGS_TITLE,
   RULES_TITLE,
   RULE_ACTION_CHOICES,
   SECURITY_KEYS,
@@ -50,6 +51,7 @@ import {
   observeReadIsCurrent,
   resetBodyKey,
   securityFailure,
+  sizeLimitKey,
   summaryOf,
   summarySince,
   tokensOf,
@@ -136,9 +138,11 @@ describe('securityText', () => {
     for (const lang of LANGS) expect(translate(lang, 'settings.security.hint'), lang).not.toMatch(/막지|never blocks|ブロックしません|bloquea/)
   })
 
-  // The constraints: the tab and its two sections keep the names the person chose, in English in every language
+  // The constraints: the tab and its sections keep the names the person chose, in English in every language; Findings
+  // too (ruling R8-2)
   it('names the tab and its sections in English', () => {
-    expect([SECURITY_TAB, POLICIES_TITLE, AUDIT_LOGS_TITLE]).toEqual(['Security & Access', 'Policies', 'Audit Logs'])
+    expect([SECURITY_TAB, POLICIES_TITLE, FINDINGS_TITLE, AUDIT_LOGS_TITLE]).toEqual(['Security & Access', 'Policies', 'Findings', 'Audit Logs'])
+    expect(source('SecuritySettings.tsx')).toContain('<h3 className="security-title">{FINDINGS_TITLE}</h3>')
     const app = source('../App.tsx')
     expect(app).toContain("['security', SECURITY_TAB]")
     // After Agent profiles
@@ -241,9 +245,18 @@ describe('securityText', () => {
   // Task 8 fix round 1: what the table cannot say in a cell. Outside the login folders the home stays readable (spec §6),
   // and Claude Code's shell on Windows is not restricted, said beside its row
   it('says under the table that the home stays readable, and beside the Claude Windows row that its shell is not restricted', () => {
-    expect(sandboxTableCaption(en)).toBe('Outside the login folders, the home folder stays readable inside the sandbox.')
-    expect(sandboxTableCaption(ko)).toBe('로그인 정보 폴더 밖의 홈 폴더는 sandbox 안에서도 읽을 수 있습니다.')
-    expect(SANDBOX_COVERAGE.map((r) => sandboxRowNote(r, en))).toEqual(['Windows: the shell is not restricted', null, null, null, null, null])
+    expect(sandboxTableCaption(en)).toBe("Outside the login folders, the home folder stays readable inside the sandbox. In a Claude session, commands the person types with `!` usually run outside the sandbox (see Claude Code's sandboxing docs); the agent's own commands run inside it.")
+    expect(sandboxTableCaption(ko)).toBe('로그인 정보 폴더 밖의 홈 폴더는 sandbox 안에서도 읽을 수 있습니다. Claude 세션에서 사람이 `!` 로 직접 입력한 명령은 보통 sandbox 밖에서 실행됩니다(Claude Code의 sandbox 문서 참고). 에이전트가 낸 명령은 sandbox 안에서 실행됩니다.')
+    // Task E fix rounds 2 and 3: beside the Claude Linux row, that on Ubuntu 25.04 and later its shell commands fail
+    // under AppArmor's bubblewrap profile
+    expect(SANDBOX_COVERAGE.map((r) => sandboxRowNote(r, en))).toEqual([
+      'Windows: the shell is not restricted',
+      null,
+      "Ubuntu 25.04 and later: shell commands fail under AppArmor's bubblewrap profile",
+      null,
+      null,
+      null
+    ])
     expect(sandboxRowNote({ provider: 'claude', os: 'win32' }, ko)).toBe('Windows: 셸은 제한 없음')
   })
 
@@ -383,8 +396,24 @@ describe('securityText', () => {
 
   // The summary helper
   it('reads the summary’s counts and whether a day stopped at the size limit', () => {
-    expect(summaryOf({ allow: 4, wouldDeny: 2, unknown: 1, blocked: 3, byAction: {}, stoppedAtLimit: true })).toEqual({ allow: 4, wouldDeny: 2, unknown: 1, blocked: 3, stoppedAtLimit: true })
-    expect(summaryOf({})).toEqual({ allow: 0, wouldDeny: 0, unknown: 0, blocked: 0, stoppedAtLimit: false })
+    expect(summaryOf({ allow: 4, wouldDeny: 2, unknown: 1, blocked: 3, byAction: {}, stoppedAtLimit: true })).toEqual({
+      allow: 4,
+      wouldDeny: 2,
+      unknown: 1,
+      blocked: 3,
+      stoppedAtLimit: true,
+      droppedAtLimit: false
+    })
+    expect(summaryOf({})).toEqual({ allow: 0, wouldDeny: 0, unknown: 0, blocked: 0, stoppedAtLimit: false, droppedAtLimit: false })
+  })
+
+  // Follow-up R-F6, item 5: days dropped to keep under the size limit say so, in place of the stopped day's line
+  it('says days were dropped for size, or a day stopped at it, or nothing', () => {
+    const counts = summaryOf({ allow: 1, wouldDeny: 0, unknown: 0, stoppedAtLimit: true, droppedAtLimit: true })
+    expect(counts.droppedAtLimit).toBe(true)
+    expect(sizeLimitKey(counts)).toBe('settings.security.audit.droppedAtLimit')
+    expect(sizeLimitKey(summaryOf({ stoppedAtLimit: true }))).toBe('settings.security.audit.stoppedAtLimit')
+    expect(sizeLimitKey(summaryOf({}))).toBeNull()
   })
 
   it('offers the sessions and Jobs the records name, each once', () => {
@@ -514,6 +543,24 @@ describe('Run detail reads', () => {
     const done = afterObserveRead(first, true)
     expect(done.retryIn).toBeNull()
     expect(observeReadDue(done.last, key, 1000 + 5000)).toBeNull()
+  })
+
+  // The Mac check (check 4): the last read came when the worker reported, the Run did not move again, and the tokens the
+  // worker and the coordinator spent after it never showed (none at all there; on the dev app 83,531 against the Host's
+  // 142,943). A read that shows new facts is read again after the wait, until two reads in a row agree.
+  it('reads again while the facts it shows keep changing, and stops once two reads agree', () => {
+    let last = startObserveRead(null, key, 0)
+    const seen: Array<number | null> = []
+    for (const [i, facts] of ['none', '83531', '142943', '142943'].entries()) {
+      const out = afterObserveRead(last, true, facts)
+      seen.push(out.retryIn)
+      if (out.retryIn !== null) expect(observeReadDue(out.last, key, last.at + OBSERVE_READ_EVERY_MS), String(i)).toBe(0)
+      else expect(observeReadDue(out.last, key, last.at + OBSERVE_READ_EVERY_MS)).toBeNull()
+      last = startObserveRead(out.last, key, last.at + OBSERVE_READ_EVERY_MS)
+    }
+    expect(seen).toEqual([OBSERVE_READ_EVERY_MS, OBSERVE_READ_EVERY_MS, OBSERVE_READ_EVERY_MS, null])
+    // Another Run's facts are not this one's
+    expect(startObserveRead(last, { target: 'run_2', state: 'x' }, 0).facts).toBeUndefined()
   })
 
   it('tries a failed read again once the wait is over, up to the cap, then only when the Run moves', () => {

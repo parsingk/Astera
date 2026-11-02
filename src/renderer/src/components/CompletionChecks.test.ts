@@ -15,6 +15,32 @@ const render = (checks: CompletionCheckDetail[], tails: string[] = []): string =
   renderToStaticMarkup(React.createElement(CompletionChecks, { checks, tails: new Set(tails), onToggleTail: () => {}, onOpenLink: () => {} }))
 
 describe('CompletionChecks', () => {
+  // Task K (the person's Q1): beside its verdict, where the Task shows its check result
+  it('says beside its verdict that a check ran outside the sandbox, and nothing for one that did not', () => {
+    const html = render([
+      { configId: 'c1', name: 'Tests', status: 'passed', outsideSandbox: true },
+      { configId: 'c2', name: 'Lint', status: 'passed' }
+    ])
+    expect(html).toContain('jobs.convergence.check.passed · jobs.checks.outsideSandbox')
+    expect(html.match(/jobs\.checks\.outsideSandbox/g)).toHaveLength(1)
+  })
+
+  // Task K fix round 2: which variables the Credentials list kept from the check, by name, so a failure for a hidden token
+  // reads as that
+  // Fix round 3 (N3): only under a check that did not pass, where it can explain the result; a passing check carries the
+  // same names (a preset's redirects are always named) and would repeat them under every check of every Task. The results
+  // that reach a Task with names are passed and failed ones: a check that timed out twice is not committed, and its
+  // question names them instead (validator.test, fix round 4)
+  it('names the variables the Credentials list kept from a failed check, and says nothing under a passing one', () => {
+    const html = render([
+      { configId: 'c1', name: 'Tests', status: 'failed', exitCode: 1, hiddenEnv: ['NPM_TOKEN', 'KUBECONFIG'] },
+      { configId: 'c2', name: 'Lint', status: 'passed', hiddenEnv: ['NPM_TOKEN', 'KUBECONFIG'] },
+      { configId: 'c4', name: 'Types', status: 'failed', exitCode: 2 }
+    ])
+    expect(html).toContain('jobs.checks.hiddenEnv {&quot;names&quot;:&quot;NPM_TOKEN, KUBECONFIG&quot;}')
+    expect(html.match(/jobs\.checks\.hiddenEnv/g)).toHaveLength(1)
+  })
+
   it('a failed plugin check: its summary, each finding at its place, a warning said as one, and its report link', () => {
     const html = render([
       {
@@ -100,7 +126,8 @@ describe('CompletionChecks', () => {
       'jobs.completion.moreFindings',
       'jobs.completion.moreFindingsReport',
       'jobs.completion.findingsUnlisted',
-      'jobs.completion.findingsUnlistedReport'
+      'jobs.completion.findingsUnlistedReport',
+      'jobs.checks.hiddenEnv'
     ])
       for (const lang of LANGS) expect((CATALOGS[lang].messages as Record<string, string>)[key], `${lang} ${key}`).toBeTruthy()
   })

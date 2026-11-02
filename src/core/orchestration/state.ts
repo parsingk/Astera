@@ -267,6 +267,8 @@ export function createJob(
     agentProfileId?: string
     /** Made by a sandboxed session (Job.sandboxed); the caller (run-create) asked. */
     sandboxed?: boolean
+    /** Who made it (Job.createdBy); the caller (run-create) read it from the principal, or gives `{ here: true }`. */
+    createdBy?: Job['createdBy']
   },
   now: string
 ): Res<Job> {
@@ -285,6 +287,7 @@ export function createJob(
     ...(a.coordinatorAccountId ? { coordinatorAccountId: a.coordinatorAccountId } : {}),
     ...(a.agentProfileId ? { agentProfileId: a.agentProfileId } : {}),
     ...(a.sandboxed ? { sandboxed: true as const } : {}),
+    ...(a.createdBy ? { createdBy: a.createdBy } : {}),
     ...(a.autoDispatch ? { autoDispatch: true } : {}),
     ...(a.schedule ? { schedule: a.schedule } : {}),
     ...(a.pendingStart ? { pendingStart: true } : {}),
@@ -448,8 +451,11 @@ export function latestRun(s: OrchState): JobRun | undefined {
  *
  * **멈춘 회차는 이어지지 않는다.** resumeSchedule 은 부른 템플릿의 칸만 걷으므로 그 회차의 남은
  * Task 는 다시 돌지 않는다. 재개가 만드는 것은 다음 예약 시각의 **새 회차**다.
+ *
+ * `pausedBy` is a revoke's pause (remote governance design §8.2), stamped on the Job only: the Job is what a resume
+ * and a run are asked about, and a Run of it is asked through its Job. Without it, a pause keeps whatever the Job had.
  */
-export function pauseSchedule(s: OrchState, jobId: string, now: string): Res<Job> {
+export function pauseSchedule(s: OrchState, jobId: string, now: string, pausedBy?: Job['pausedBy']): Res<Job> {
   const job = s.jobs.find((j) => j.id === jobId)
   if (!job) return gone(`unknown job: ${jobId}`)
   if (!job.schedule) return err(`job is not scheduled: ${jobId}`)
@@ -457,7 +463,7 @@ export function pauseSchedule(s: OrchState, jobId: string, now: string): Res<Job
   const taskIds = new Set(
     s.tasks.filter((t) => t.runId !== undefined && runIds.has(t.runId)).map((t) => t.id)
   )
-  const held: Job = { ...job, paused: true }
+  const held: Job = { ...job, paused: true, ...(pausedBy ? { pausedBy } : {}) }
   return ok(
     {
       ...s,
@@ -492,8 +498,8 @@ export function resumeSchedule(s: OrchState, jobId: string): Res<Job> {
   if (!job.schedule) return err(`job is not scheduled: ${jobId}`)
   if (!job.paused) return ok(s, job)
   // paused 를 **지운다** — false 로 두면 JSON 비교에서 "없음" 과 다른 값이 되고, 이 코드베이스는
-  // 해당 없는 칸을 아예 두지 않는 관례다
-  const { paused: _drop, ...resumed } = job
+  // 해당 없는 칸을 아예 두지 않는 관례다. A revoke's reason goes with it (remote governance design §8.2).
+  const { paused: _drop, pausedBy: _why, ...resumed } = job
   return ok({ ...s, jobs: s.jobs.map((j) => (j.id === jobId ? resumed : j)) }, resumed)
 }
 
@@ -1610,9 +1616,13 @@ export function applyReviewResult(
   // applyWorkerDone 과 같은 판정 — outcome 만 보면 closeDispatch 가 닫아 둔(endedAt 만 있고
   // outcome 은 없는) Dispatch 가 걸러지지 않아, 늦게 도착한 보고가 Task 의 종료 상태를 가로챈다.
   if (dispatch.outcome || dispatch.endedAt) return ok(s, 'alreadyReported')
-  const task = s.tasks.find((t) => t.id === a.taskId)
-  if (!task) return gone(`unknown task: ${a.taskId}`)
-  if (task.status !== 'reviewing') return err(`task is not reviewing: ${task.status}`)
+  const reviewed = s.tasks.find((t) => t.id === a.taskId)
+  if (!reviewed) return gone(`unknown task: ${a.taskId}`)
+  if (reviewed.status !== 'reviewing') return err(`task is not reviewing: ${reviewed.status}`)
+  // Task K fix round 1: whether this review ran with Claude Code's file-tool protection only, on the Task's record from
+  // its verdict on, as the last review's issues are; a review in a sandbox, or with none, clears it
+  const { reviewFileToolsOnly: _was, ...unmarked } = reviewed
+  const task: Task = dispatch.sandboxKind === 'deny-only' ? { ...unmarked, reviewFileToolsOnly: true } : unmarked
   const lang: Lang = a.lang ?? 'en'
   const nextDispatch: Dispatch = {
     ...dispatch,

@@ -5,11 +5,11 @@
 // The laptop's settings are enforced here, on the laptop: an agent that can run `astera --runtime x` directly has the
 // CLI's authority, which is the paired permission (the accepted limit §2.8 states).
 import path from 'node:path'
-import { promises as fs } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import { RemoteError } from '../../core/remote/client'
 import { openRemoteLink, type RemoteLink, type RemoteTarget } from '../../core/remote/link'
 import { remoteMutation } from '../../core/remote/targets'
+import { mcpNoSessionRefusal, sandboxedRemoteRefusal } from '../callerSandboxed'
 import { remoteCodeOf } from '../../core/orchestration/cliOutput'
 import { mcpRefusal } from '../../core/host/mcpGate'
 import { mcpAccessForRemote } from '../../core/settings/mcpAccess'
@@ -17,7 +17,8 @@ import { mcpSessionsOf } from '../../core/settings/mcpSessions'
 import { mcpGithubWriteOf } from '../../core/settings/mcpGithubWrite'
 import { readAppSettingsObject } from '../../core/settings/settingsObject'
 import type { McpClient } from '../../core/continuity/actor'
-import type { RuntimeProfile, RuntimeRegistry } from '../../core/runtimes/registry'
+import { factsNoter, registryStamp, seenRecorder, type RuntimeProfile, type RuntimeRegistry } from '../../core/runtimes/registry'
+import type { ClientInfo, HelloFrame } from '../../core/remote/frames'
 import { controllerRegistry, resolveRuntime } from '../runtimes'
 import type { HostLink, LinkFailure } from './hostLink'
 
@@ -32,13 +33,15 @@ export interface McpRuntimes {
 }
 
 /** A controller link as the tools call it. A change carries a request id, minted when the tool call gave none, so a
- *  resend after a lost reply is a retry the Runtime answers from its receipt (§3.9). */
-export function remoteHostLink(link: RemoteLink): HostLink {
+ *  resend after a lost reply is a retry the Runtime answers from its receipt (§3.9). `onAnswer` hears each answered
+ *  call (remote governance design §4.2: last seen) and must not reject. */
+export function remoteHostLink(link: RemoteLink, onAnswer?: () => Promise<void>): HostLink {
   return {
     async call(cmd, args, request) {
       const id = remoteMutation(cmd) ? (request ?? `mcp_${randomUUID()}`) : undefined
       const r = await link.call(cmd, args, id !== undefined ? { request: id } : {})
       if (r instanceof RemoteError) return { code: remoteCodeOf({ code: r.code }) ?? 'FAILED', message: r.message }
+      await onAnswer?.()
       return r
     },
     close: () => link.close()
@@ -49,8 +52,14 @@ export function openMcpRuntimes(a: {
   profileDir: string
   version: string
   client(): McpClient | undefined
-  /** Test seam: the controller link for a target. */
-  open?(t: RemoteTarget): RemoteLink
+  /** Whether the session this server runs in is sandboxed (remote governance design §7.4, cli/callerSandboxed.ts), asked
+   *  only for a change. Absent, nothing is asked. */
+  sandboxed?: () => Promise<boolean>
+  /** True when this server's env names no Astera session (ruling R13-4): its sandbox is unknown, so every change is
+   *  refused without asking. Absent or false, `sandboxed` is asked. */
+  noSession?: boolean
+  /** Test seam: the controller link for a target, with the client it signs in as. */
+  open?(t: RemoteTarget, o: { onHello?(h: HelloFrame): void; client: ClientInfo }): RemoteLink
 }): McpRuntimes {
   /** One link per Runtime, with the pairing it was opened for: a re-pair (a new token or key) opens a new one (review I6). */
   const links = new Map<string, { link: HostLink; pairing: string; stamp: string | null }>()
@@ -65,19 +74,13 @@ export function openMcpRuntimes(a: {
     })
     return registry
   }
-  const registryFile = path.join(a.profileDir, 'runtimes', 'runtimes.json')
-  const stampOf = async (): Promise<string | null> => {
-    try {
-      const st = await fs.stat(registryFile)
-      return `${st.ino}:${st.mtimeMs}:${st.ctimeMs}:${st.size}`
-    } catch {
-      return null
-    }
-  }
   let known: { stamp: string; list: RuntimeProfile[] } | null = null
   return {
     list: async () => (await reg()).list(),
     refusal: async (cmd, args) => {
+      // §7.4: a sandboxed session only reads a Runtime, whatever this machine's MCP access allows.
+      if (remoteMutation(cmd) && a.noSession === true) return mcpNoSessionRefusal(cmd)
+      if (remoteMutation(cmd) && (await a.sandboxed?.()) === true) return sandboxedRemoteRefusal(cmd)
       let o: Record<string, unknown> | null
       try {
         o = await readAppSettingsObject(settingsFile)
@@ -90,7 +93,7 @@ export function openMcpRuntimes(a: {
       return refused ? `${refused.body.error} (this machine's Astera settings)` : null
     },
     linkFor: async (key) => {
-      const stamp = await stampOf()
+      const stamp = await registryStamp(path.join(a.profileDir, 'runtimes'))
       const r = await reg()
       const list = stamp !== null && known?.stamp === stamp ? known.list : await r.list()
       known = stamp === null ? null : { stamp, list }
@@ -109,8 +112,15 @@ export function openMcpRuntimes(a: {
       kept?.link.close()
       const target: RemoteTarget = { runtimeId: found.runtimeId, address: found.address, port: found.port, fingerprint: found.fingerprint, token }
       const c = a.client()
+      // What this server reaches is reached, and who the Runtime says it is kept (remote governance design §4.1, §4.2).
+      const note = factsNoter(r, found.runtimeId, found.facts)
+      const onHello = (h: HelloFrame): void => void note(h)
+      // The version is this Astera's, which the Runtime shows as "MCP · Astera {version}" (ruling RF-2); the MCP client's
+      // own version is not Astera's, and only its name rides along.
+      const client: ClientInfo = { name: c?.name ?? 'astera mcp', version: a.version, surface: 'mcp' }
       const link = remoteHostLink(
-        (a.open ?? ((t) => openRemoteLink({ target: t, client: { name: c?.name ?? 'astera mcp', version: c?.version ?? a.version, surface: 'mcp' } })))(target)
+        (a.open ?? ((t, o) => openRemoteLink({ target: t, ...o })))(target, { onHello, client }),
+        seenRecorder(r, found.runtimeId, found.lastSeenAt)
       )
       links.set(found.runtimeId, { link, pairing, stamp })
       return link

@@ -115,6 +115,10 @@ export function CompletionBlock({
             <p className="settings-cli-failed">{t('jobs.completion.policyChanged')}</p>
           )}
 
+          {/* Task K fix round 1: the review of sandboxed work ran as Claude Code on Windows, with its file tools kept out of
+              the login folders and its shell unrestricted (E2), as a check's "validated outside the sandbox" says */}
+          {detail.reviewFileToolsOnly === true && <p className="modal-hint">{t('jobs.completion.reviewFileToolsOnly')}</p>}
+
           {/* 명세 §38 — 검사 설정을 건드린 파일. 리뷰어에게 넘어간 그 목록을 사람도 본다 */}
           {detail.suspiciousFiles.length > 0 && (
             <>

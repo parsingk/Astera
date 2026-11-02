@@ -12,23 +12,30 @@
 // its embedded server (tui/src/daemon_startup.rs 26-89, startup_orchestration.rs 176-183).
 //
 // Read once per candidate and session process, never per poll tick (rolloutOwnerCheck). Each platform reads it its
-// own way: Linux from /proc, macOS with lsof and ps, Windows with Restart Manager through one PowerShell run. Only a
-// positive answer rejects a candidate: held by a process outside the session's tree, or held by none. Where the
-// evidence cannot be read (a tool missing or failing, a process or an fd this user may not read, a timeout), the answer
-// is 'unknown': the locate keeps the rule it had before, nothing is remembered, and it is logged once per session.
-import { execFile } from 'node:child_process'
-import { createHash } from 'node:crypto'
+// own way: Linux from /proc, macOS with lsof and ps, Windows with Restart Manager through a PowerShell helper kept while
+// questions come. Only a positive answer rejects a candidate: held by a process outside the session's tree, or held by
+// none (asked again a few times first: the session's own file is unheld for a moment while its writer recovers from a
+// failed write). Where the evidence cannot be read (a tool missing or failing, a process or an fd this user may not read, a
+// timeout), the answer is 'unknown': the locate keeps the rule it had before, nothing is remembered, and it is logged
+// once per session.
+import { execFile, spawn, type ChildProcessByStdio, type SpawnOptions } from 'node:child_process'
 import { promises as fs } from 'node:fs'
-import path from 'node:path'
+import type { Readable, Writable } from 'node:stream'
 import { comparablePath } from '../files/tree'
+import { windowsPowerShellExe } from '../sessions/windowsPath'
 
-export type RolloutOwnership = { verdict: 'own' } | { verdict: 'other'; why: string } | { verdict: 'unknown'; why: string }
+/** `recheck` on an `other`: no process holds the file, or none the reader can see in the session. A session's own file
+ *  answers that too while its writer recovers from a failed write (recorder.rs 1848-1861), until the next write opens it
+ *  again, so the check asks again a few times before it is final (review Minor 3). */
+export type RolloutOwnership = { verdict: 'own' } | { verdict: 'other'; why: string; recheck?: true } | { verdict: 'unknown'; why: string }
 
 /** Whether `file` is held open by the process `pid` or a process started under it. */
 export type RolloutOwnerReader = (file: string, pid: number) => Promise<RolloutOwnership>
 
 const OWN: RolloutOwnership = { verdict: 'own' }
 const other = (why: string): RolloutOwnership => ({ verdict: 'other', why })
+/** An `other` that is asked again: see RolloutOwnership. */
+const otherForNow = (why: string): RolloutOwnership => ({ verdict: 'other', why, recheck: true })
 const unknown = (why: string): RolloutOwnership => ({ verdict: 'unknown', why })
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
@@ -161,7 +168,8 @@ export function linuxOwnerReader(d: ProcFs = realProcFs): RolloutOwnerReader {
         }
       }
     }
-    return blind ? unknown(blind) : other(`not open in process ${pid} or any process under it`)
+    // The fds of the processes outside the session are not read, so held by another and held by none look the same here
+    return blind ? unknown(blind) : otherForNow(`not open in process ${pid} or any process under it`)
   }
 }
 
@@ -184,7 +192,7 @@ export function macOwnerReader(run: RunTool = runTool): RolloutOwnerReader {
       .filter((n) => Number.isSafeInteger(n) && n > 0)
     if (holders.includes(pid)) return OWN
     const failed = lsof.stderr.trim() !== '' || (lsof.code !== 0 && lsof.code !== 1) ? `lsof exited ${lsof.code}: ${firstLine(lsof.stderr)}` : null
-    if (holders.length === 0) return failed ? unknown(failed) : other('held open by no process')
+    if (holders.length === 0) return failed ? unknown(failed) : otherForNow('held open by no process')
     let ps: RunResult
     try {
       ps = await run('/bin/ps', ['-A', '-o', 'pid=,ppid='])
@@ -296,7 +304,8 @@ public static class AsteraRolloutOwner {
     if (rootStart == -2) return "unknown|the session's process " + root + " is gone";
     if (rootStart < 0) return "unknown|the session's process " + root + " cannot be read (error " + error + ")";
     var holders = Holders(path);
-    if (holders.Count == 0) return "other|held open by no process";
+    // Said apart from held by another: the session's own file says this while its writer recovers from a failed write
+    if (holders.Count == 0) return "none|held open by no process";
     if (holders.ContainsKey(root)) return "own|" + root;
     var parent = Parents();
     string blind = null;
@@ -319,103 +328,245 @@ public static class AsteraRolloutOwner {
     if (blind != null) return "unknown|" + blind;
     return "other|held by pid " + string.Join(", ", new List<int>(holders.Keys).ConvertAll(x => x.ToString()).ToArray()) + " outside the session";
   }
+
+  // A question as Astera writes it: the file as base64 of its UTF-8, so no path reaches PowerShell as code and a name in
+  // any script survives the console's code page.
+  public static string Ask(string file, int root) {
+    return Verdict(System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(file)), root);
+  }
 }
 `
 
-/** The script a PowerShell run executes, with the file and the session's pid as its arguments: compile the helper and
- *  print one verdict line, `own|<pid>`, `other|<why>` or `unknown|<why>`. Add-Type refused (Constrained Language
- *  Mode) is caught here and said as unknown. ASCII only: Windows PowerShell reads a script with no byte order mark in
- *  the ANSI code page. */
-export const WINDOWS_OWNER_PS1 = [
-  '# Whether a process under the session holds a codex rollout open, for Astera (core/rolling/rolloutOwner.ts).',
-  '# Arguments: the file, the pid of the session process. Prints own|<pid>, other|<why> or unknown|<why>.',
-  'param([string]$Path, [int]$Root)',
+/** What the helper reads first on its stdin: compile the C# once, and say `ready`, or `unready|<why>` when it cannot
+ *  (Add-Type refused in Constrained Language Mode, AMSI). Its output is UTF-8 with no byte order mark, so a localized
+ *  error message reads back as written. ASCII only, as PowerShell reads its stdin in the console's code page.
+ *
+ *  It ends with an empty line. Read from stdin "as though they were typed at the PowerShell command prompt", a
+ *  statement over several lines runs only once an empty line follows it, as at the prompt (Learn's own example of
+ *  `-Command -` has one after its two-line pipeline). Without it Windows PowerShell 5.1 ran nothing and said nothing,
+ *  measured on this machine 2026-10-29. */
+export const WINDOWS_OWNER_SETUP = [
   "$ErrorActionPreference = 'Stop'",
   'try {',
+  '  [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false',
   `  Add-Type -TypeDefinition @'${WINDOWS_HELPER}'@`,
-  '  [AsteraRolloutOwner]::Verdict($Path, $Root)',
-  "} catch { 'unknown|' + ($_.Exception.Message -replace '[\\r\\n|]', ' ') }",
+  "  'ready'",
+  "} catch { 'unready|' + ($_.Exception.Message -replace '[\\r\\n|]', ' ') }",
+  '',
   ''
 ].join('\n')
 
-/** Writes the script under a content name in `dir` unless it is already there as it should be, and answers its path:
- *  the desk helper's way (host/workspace/desktopHelper.ts writeDeskScript). Checked before every run, so a changed
- *  copy is never run. */
-async function writeOwnerScript(dir: string): Promise<string> {
-  const hash = createHash('sha256').update(WINDOWS_OWNER_PS1).digest('hex').slice(0, 8)
-  const file = path.join(dir, `astera-rollout-owner-${hash}.ps1`)
-  const current = await fs.readFile(file, 'utf8').catch(() => null)
-  if (current !== WINDOWS_OWNER_PS1) {
-    await fs.mkdir(dir, { recursive: true })
-    await fs.writeFile(file, WINDOWS_OWNER_PS1, 'utf8')
-  }
-  return file
+/** One question, one line of PowerShell, answered with one line: `<n>|own|<pid>`, `<n>|other|<why>`,
+ *  `<n>|none|<why>` (held by no process) or `<n>|unknown|<why>`. Only a number, base64 and a pid go into it. */
+const ownerQuestion = (n: number, file: string, pid: number): string =>
+  `try { '${n}|' + [AsteraRolloutOwner]::Ask('${Buffer.from(file, 'utf8').toString('base64')}', ${pid}) } catch { '${n}|unknown|' + ($_.Exception.Message -replace '[\\r\\n|]', ' ') }\n`
+
+/** A Windows PowerShell the reader keeps to ask its questions of, reading commands from its stdin. */
+export interface OwnerHelper {
+  /** Writes to its stdin. */
+  write(text: string): void
+  /** Closes its stdin: PowerShell ends once it has run what it read. */
+  end(): void
+  kill(): void
+  /** Each line it prints, without the line end. */
+  onLine(cb: (line: string) => void): void
+  /** Once, when it has ended or could not start. */
+  onEnd(cb: (why: string) => void): void
 }
 
-/** Windows: one Windows PowerShell run per question (about half a second, measured on this machine 2026-10-28), its
- *  script a file run with `-File` as the desk helper's is, the file and the pid passed as plain arguments.
- *
- *  The script goes in `dir`, which the caller names and must be a folder no sandboxed session may write
- *  (`<profile>/host`, where the desk helper writes its own, host/workspace/platformDesk.ts): the Host and the app run
- *  it outside any sandbox, so a session that could replace it between the content check and PowerShell reading it
- *  would run its own code as the person (fix round 2). No default, and never the temp folder, which a sandboxed
- *  session may write. */
-export function windowsOwnerReader(run: RunTool, dir: string): RolloutOwnerReader {
-  if (typeof dir !== 'string' || !path.isAbsolute(dir)) throw new Error(`the owner script folder must be an absolute path: ${String(dir)}`)
-  return async (file, pid) => {
-    if (!Number.isSafeInteger(pid) || pid <= 0) return unknown(`not a pid: ${pid}`)
-    let script: string
-    try {
-      script = await writeOwnerScript(dir)
-    } catch (err) {
-      return unknown(`the PowerShell script cannot be written: ${messageOf(err)}`)
+/** Windows PowerShell reading its commands from stdin (Microsoft Learn, about_PowerShell_exe, -Command: "If the value
+ *  of Command is -, the command text is read from standard input", each statement "executed one statement at a time, as
+ *  though they were typed at the PowerShell command prompt"). Commands typed at the prompt are outside the execution
+ *  policy, which "controls the conditions under which PowerShell loads configuration files and runs scripts" and which
+ *  "users can easily bypass ... by typing the script contents at the command line" (about_Execution_Policies; its
+ *  Restricted, what a Group Policy that turns scripts off means: "Permits individual commands, but doesn't allow
+ *  scripts"). So a Group Policy execution policy, which the -File of fix round 1 met, does not stop it (re-review
+ *  Minor 2).
+ *  https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_powershell_exe?view=powershell-5.1
+ *  https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_execution_policies?view=powershell-5.1 */
+export function powerShellHelperCommand(systemRoot: string | undefined = process.env.SystemRoot): { file: string; args: string[] } {
+  return { file: windowsPowerShellExe(systemRoot), args: ['-NoProfile', '-NonInteractive', '-Command', '-'] }
+}
+
+/** Starts the helper. It holds nothing open that keeps this process alive, and it ends by itself when this process
+ *  does, at the end of its stdin. `spawnChild` is for tests. */
+export function startPowerShellHelper(
+  spawnChild: (file: string, args: string[], opts: SpawnOptions) => ChildProcessByStdio<Writable, Readable, null> = (f, a, o) =>
+    spawn(f, a, o) as ChildProcessByStdio<Writable, Readable, null>
+): OwnerHelper {
+  const { file, args } = powerShellHelperCommand()
+  const child = spawnChild(file, args, { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] })
+  child.unref()
+  for (const s of [child.stdin, child.stdout] as Array<{ unref?: () => void } | null>) s?.unref?.()
+  // A write after it ended fails here rather than as an uncaught error; its end says why
+  child.stdin.on('error', () => {})
+  const lines: Array<(line: string) => void> = []
+  const ends: Array<(why: string) => void> = []
+  let ended = false
+  const end = (why: string): void => {
+    if (ended) return
+    ended = true
+    for (const cb of ends) cb(why)
+  }
+  child.on('error', (err) => end(messageOf(err)))
+  // 'close', not 'exit': 'exit' can come before stdout has given its last chunk, and an answer printed just before the
+  // end would be lost (fix round 1, review M2). 'close' comes once the child's stdio has ended.
+  // https://nodejs.org/api/child_process.html#event-close
+  child.on('close', (code, signal) => end(`exit ${code ?? signal}`))
+  let rest = ''
+  child.stdout.setEncoding('utf8')
+  child.stdout.on('data', (chunk: string) => {
+    rest += chunk
+    for (let i = rest.indexOf('\n'); i >= 0; i = rest.indexOf('\n')) {
+      const line = rest.slice(0, i).replace(/\r$/, '').replace(/^﻿/, '')
+      rest = rest.slice(i + 1)
+      for (const cb of lines) cb(line)
     }
-    let r: RunResult
-    try {
-      r = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, file, String(pid)])
-    } catch (err) {
-      return unknown(`PowerShell could not run: ${messageOf(err)}`)
-    }
-    const line = r.stdout
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .find((l) => /^(own|other|unknown)\|/.test(l))
-    if (!line) return unknown(`PowerShell gave no verdict (exit ${r.code})`)
-    const bar = line.indexOf('|')
-    const verdict = line.slice(0, bar)
-    const why = line.slice(bar + 1).trim()
-    return verdict === 'own' ? OWN : verdict === 'other' ? other(why) : unknown(why)
+  })
+  return {
+    write: (text) => void child.stdin.write(text),
+    end: () => child.stdin.end(),
+    kill: () => void child.kill(),
+    onLine: (cb) => void lines.push(cb),
+    onEnd: (cb) => void ends.push(cb)
   }
 }
 
-const readers = new Map<string, RolloutOwnerReader>()
+/** How long the helper is kept with no question waiting. The questions come in the minute a codex tab starts (a look
+ *  per candidate, in the app and in the Host), and a cannot-tell is asked again after UNKNOWN_KEEP_MS: kept past that,
+ *  one compile serves them, and no PowerShell stays for the app's whole life. */
+export const HELPER_IDLE_MS = 2 * 60_000
 
-/** This platform's reader, one per process and script folder, so the checks built over it share their answers
- *  (rolloutOwnerCheck). `scriptDir` is where the Windows reader writes the script it runs: `<profile>/host`, a folder no
- *  sandboxed session may write (windowsOwnerReader); the other platforms run no script and ignore it. */
-export function rolloutOwnerReader(platform: NodeJS.Platform, scriptDir: string): RolloutOwnerReader {
-  const key = `${platform}\u0000${typeof scriptDir === 'string' ? path.resolve(scriptDir) : ''}`
-  let read = readers.get(key)
+/** Windows: Restart Manager through a C# helper compiled once in one Windows PowerShell, kept while questions come
+ *  (review Minor 6: compiled again for every question it was a PowerShell and a csc run each time, about half a
+ *  second, measured on this machine 2026-10-28). The helper reads its commands from stdin (powerShellHelperCommand), so
+ *  no script file is written anywhere, and nothing a sandboxed session could replace runs as the person (fix round 2).
+ *  Questions are answered one at a time, in the order they are written. The limit `answerMs` is on the helper making
+ *  no progress, not on a question's wait in the line (fix round 1, review M1: a burst of questions, most of a second
+ *  each with a live holder, timed out the tail of the queue and ended the helper for all of them): with a question
+ *  waiting, no answer for `answerMs` ends the helper, and every question waiting on it is "cannot tell". A question
+ *  passed over by a later answer is "cannot tell" at once, since PowerShell runs its statements in order and will not
+ *  come back to it. `close` ends the helper at once. */
+export function windowsOwnerReader(
+  start: () => OwnerHelper = startPowerShellHelper,
+  o: { answerMs?: number; idleMs?: number } = {}
+): RolloutOwnerReader & { close(): void } {
+  const answerMs = o.answerMs ?? RUN_TIMEOUT_MS
+  const idleMs = o.idleMs ?? HELPER_IDLE_MS
+  type Timer = ReturnType<typeof setTimeout>
+  type Helper = { proc: OwnerHelper; waiting: Map<number, (r: RolloutOwnership) => void>; idle: Timer | null; stalled: Timer | null }
+  let helper: Helper | null = null
+  let next = 0
+  /** This helper is done: every question waiting on it is "cannot tell", and the next question starts another. */
+  const finish = (h: Helper, why: string): void => {
+    if (helper === h) helper = null
+    if (h.idle) clearTimeout(h.idle)
+    if (h.stalled) clearTimeout(h.stalled)
+    h.stalled = null
+    for (const resolve of h.waiting.values()) resolve(unknown(why))
+    h.waiting.clear()
+  }
+  /** The clock on progress, started again on each sign of it: armed while a question waits, off when none does. Not
+   *  unref'd, unlike the helper: a question waiting keeps this process up until it is answered or the helper is ended. */
+  const watch = (h: Helper): void => {
+    if (h.stalled) clearTimeout(h.stalled)
+    h.stalled =
+      h.waiting.size === 0
+        ? null
+        : setTimeout(() => {
+            finish(h, `PowerShell gave no answer in ${answerMs} ms`)
+            h.proc.kill()
+          }, answerMs)
+  }
+  const open = (): Helper => {
+    const h: Helper = { proc: start(), waiting: new Map(), idle: null, stalled: null }
+    h.proc.onEnd((why) => finish(h, `the PowerShell helper ended (${why})`))
+    h.proc.onLine((line) => {
+      if (line.startsWith('unready|')) {
+        finish(h, `the helper cannot be compiled: ${line.slice('unready|'.length).trim()}`)
+        h.proc.kill()
+        return
+      }
+      // The compile is done: its time does not count against the first question
+      if (line === 'ready') return watch(h)
+      const m = /^(\d+)\|(own|other|none|unknown)\|(.*)$/.exec(line)
+      const resolve = m ? h.waiting.get(Number(m[1])) : undefined
+      if (!m || !resolve) return
+      const n = Number(m[1])
+      h.waiting.delete(n)
+      const why = m[3].trim()
+      resolve(m[2] === 'own' ? OWN : m[2] === 'other' ? other(why) : m[2] === 'none' ? otherForNow(why) : unknown(why))
+      for (const [k, passed] of h.waiting)
+        if (k < n) {
+          h.waiting.delete(k)
+          passed(unknown('PowerShell gave no answer to it'))
+        }
+      watch(h)
+      if (h.waiting.size === 0 && helper === h) {
+        h.idle = setTimeout(() => {
+          if (helper !== h || h.waiting.size > 0) return
+          helper = null
+          h.proc.end()
+        }, idleMs)
+        h.idle.unref?.()
+      }
+    })
+    h.proc.write(WINDOWS_OWNER_SETUP)
+    return h
+  }
+  const read: RolloutOwnerReader = (file, pid) => {
+    if (!Number.isSafeInteger(pid) || pid <= 0 || pid > 0x7fffffff) return Promise.resolve(unknown(`not a pid: ${pid}`))
+    let h: Helper
+    try {
+      h = helper ??= open()
+    } catch (err) {
+      return Promise.resolve(unknown(`PowerShell could not run: ${messageOf(err)}`))
+    }
+    if (h.idle) clearTimeout(h.idle)
+    h.idle = null
+    const n = next++
+    return new Promise((resolve) => {
+      h.waiting.set(n, resolve)
+      // A question joining a line already waiting is no progress: the clock runs on from the last answer
+      if (!h.stalled) watch(h)
+      h.proc.write(ownerQuestion(n, file, pid))
+    })
+  }
+  return Object.assign(read, {
+    close: (): void => {
+      const h = helper
+      if (!h) return
+      finish(h, 'the reader was closed')
+      h.proc.end()
+    }
+  })
+}
+
+/** Whether rolloutOwnerReader has a way to read open files on `platform`. */
+export const hasOwnerReader = (platform: NodeJS.Platform): boolean => platform === 'win32' || platform === 'darwin' || platform === 'linux'
+
+const readers = new Map<NodeJS.Platform, RolloutOwnerReader>()
+
+/** This platform's reader, one per process, so the checks built over it share their answers (rolloutOwnerCheck) and, on
+ *  Windows, its one PowerShell helper. */
+export function rolloutOwnerReader(platform: NodeJS.Platform): RolloutOwnerReader {
+  let read = readers.get(platform)
   if (!read) {
     read =
       platform === 'win32'
-        ? windowsOwnerReader(runTool, scriptDir)
+        ? windowsOwnerReader()
         : platform === 'darwin'
           ? macOwnerReader()
           : platform === 'linux'
             ? linuxOwnerReader()
             : async () => unknown(`no way to read open files on ${platform}`)
-    readers.set(key, read)
+    readers.set(platform, read)
   }
   return read
 }
 
-/** The folder a caller passes as `scriptDir`: the profile's Host folder, as the desk helper's script (`<profile>/host`). */
-export const ownerScriptDir = (profileDir: string): string => path.join(profileDir, 'host')
-
-/** What a rollout watcher or coordinator is given to ask whose codex holds a rollout: the session's pty process, and the
- *  reader built for this profile. Both or neither, and no default reader (fix round 2: only the wiring knows the profile
- *  folder the Windows script must sit in). */
+/** What a rollout watcher or coordinator is given to ask whose codex holds a rollout: the session's pty process, and
+ *  this platform's reader. Both or neither. */
 export interface RolloutOwnerSource {
   pidOf(sessionId: string): number | null
   read: RolloutOwnerReader
@@ -431,12 +582,21 @@ const MEMO_MAX = 256
 /** Each reader's answers, by session process and candidate: shared by every check over that reader, since the
  *  Host's spawner, its Slack watcher and its rolling coordinator can be looking for one session's file at once, and
  *  a Windows answer is a PowerShell run. */
-const answers = new WeakMap<RolloutOwnerReader, Map<string, { answer: Promise<RolloutOwnership>; unknownAt?: number }>>()
+const answers = new WeakMap<RolloutOwnerReader, Map<string, Kept>>()
+
+/** A kept answer: when it was a "cannot tell" or a "held by no process" for now, and how many of the latter came. */
+type Kept = { answer: Promise<RolloutOwnership>; unheld: number; unknownAt?: number; recheckAt?: number }
 
 /** How long a "cannot tell" is kept before the same question (session process and file) is asked again (fix round 3).
  *  Not kept at all, every look and re-scan of a tab asked again on the machines that answer it, a PowerShell run every
  *  few seconds for each open tab; kept for good, a passing failure (a timeout under load) would never be asked again. */
 export const UNKNOWN_KEEP_MS = 60_000
+
+/** How long a "held by no process" is kept before it is asked again, and how many answers it takes to be final (review
+ *  Minor 3): three in its first 40 s. A session's own file is unheld only while its writer recovers from a failed write,
+ *  until the next write; an ended session's file stays unheld, and is asked about no more than that. */
+export const UNHELD_RECHECK_MS = 20_000
+export const UNHELD_ASKS = 3
 
 /** Drops the oldest entry once there are more than MEMO_MAX. */
 const trim = (m: { size: number; keys(): IterableIterator<string>; delete(k: string): boolean }): void => {
@@ -445,8 +605,10 @@ const trim = (m: { size: number; keys(): IterableIterator<string>; delete(k: str
 
 /** A caller's check: the reader asked once per (candidate, session process) and a positive answer kept, since neither
  *  who writes a file nor the session's process changes. "Cannot tell" (review Important 1: a failed read is no
- *  verdict) is kept only UNKNOWN_KEEP_MS by `now`, then asked again. Logs to the caller's log why a candidate is skipped
- *  (its path, never its contents), and once per session that it cannot tell. */
+ *  verdict) is kept only UNKNOWN_KEEP_MS by `now`, then asked again. "Held by no process" is kept UNHELD_RECHECK_MS and
+ *  asked again until the UNHELD_ASKS-th such answer, which is final: until then it comes back with `recheck`, which the
+ *  locate passes over without remembering. Logs to the caller's log why a candidate is skipped (its path, never its
+ *  contents), and once per session that it cannot tell. */
 export function rolloutOwnerCheck(o: { read: RolloutOwnerReader; log: (m: string) => void; now?: () => number }): RolloutOwnerCheck {
   let memo = answers.get(o.read)
   if (!memo) answers.set(o.read, (memo = new Map()))
@@ -456,15 +618,28 @@ export function rolloutOwnerCheck(o: { read: RolloutOwnerReader; log: (m: string
   return async (file, pid, sessionId) => {
     const key = `${pid}\u0000${comparablePath(file)}`
     let kept = shared.get(key)
-    if (kept?.unknownAt !== undefined && now() - kept.unknownAt >= UNKNOWN_KEEP_MS) kept = undefined
-    if (!kept) {
-      const entry: { answer: Promise<RolloutOwnership>; unknownAt?: number } = {
-        answer: o.read(file, pid).catch((err): RolloutOwnership => unknown(messageOf(err)))
+    const due =
+      kept !== undefined &&
+      ((kept.unknownAt !== undefined && now() - kept.unknownAt >= UNKNOWN_KEEP_MS) ||
+        (kept.recheckAt !== undefined && now() - kept.recheckAt >= UNHELD_RECHECK_MS))
+    if (!kept || due) {
+      const unheld = kept?.unheld ?? 0
+      const entry: Kept = {
+        unheld,
+        answer: o
+          .read(file, pid)
+          .catch((err): RolloutOwnership => unknown(messageOf(err)))
+          // The last of the answers it is asked again for is final, as any other `other`
+          .then((r) => (r.verdict === 'other' && r.recheck && unheld + 1 >= UNHELD_ASKS ? other(r.why) : r))
       }
       shared.set(key, entry)
       trim(shared)
       void entry.answer.then((r) => {
         if (r.verdict === 'unknown') entry.unknownAt = now()
+        if (r.verdict === 'other' && r.recheck) {
+          entry.unheld = unheld + 1
+          entry.recheckAt = now()
+        }
       })
       kept = entry
     }

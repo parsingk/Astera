@@ -21,6 +21,13 @@ import { keepPruning } from '../core/audit/store'
 import { createGatewayHub } from './gateway/hub'
 import { createUseRecorder, recordPush, recordingGhRunner, workOfSession } from './credentials/recordUses'
 import { createHostCredentials } from './credentials/commands'
+import { createHostFindings } from './findings/commands'
+import { readFindingsSince } from '../core/findings/since'
+import { cliVersionProbe } from '../core/sessions/cliVersion'
+import { srtCheckRunner } from '../core/sandbox/srtCheck'
+import { REPORT_CAPABILITY } from '../core/controlPlane/report'
+import { buildControlPlaneReport, cachedReportProbes } from './controlPlaneReport'
+import { listPairedRuntimes, registryStamp } from '../core/runtimes/registry'
 import { hidingLog } from '../core/extensions/secrets'
 import { createHidingSource, projectOfWorktrees } from '../core/credentials/hiding'
 import { sweepGeneratedMcp } from '../core/extensions/resolve'
@@ -45,7 +52,7 @@ import { flushAll, flushAllLogsSync } from '../core/log/logWriter'
 import { startHostServer } from './server'
 import { HOST_EXIT, listenExitCode } from './exitCodes'
 import { controllerRecordsFile, createControllerRegistry } from './controllers'
-import { openSecretStore } from '../core/secrets/secretStore'
+import { openSecretStore, type SecretStore } from '../core/secrets/secretStore'
 import { randomBytes } from 'node:crypto'
 import { ensureAppKey, ensureHostKey, readAppKeySync } from '../core/host/hostKey'
 import { pruneSandboxTwins } from '../core/sessions/statusline'
@@ -55,7 +62,7 @@ import { createConhostReaper, reapWindowsConsoleHosts } from './conhostReaper'
 import { createRemoteSessions, type RemoteSessions } from './remoteSessions'
 import { attachPtyHost } from './ptyHost'
 import { attachProcHost } from './procHost'
-import { sessionSandboxedIn } from './sandboxedSession'
+import { sessionHeldIn, sessionSandboxedIn } from './sandboxedSession'
 import { ProcRegistry } from './procRegistry'
 import { createProcHolders, procHeldBy } from './procHolders'
 import { nodeProcSpawn } from './nodeProc'
@@ -79,13 +86,14 @@ import { hostFeatures } from './features'
 import { loadSlackSdk } from './slackSdk'
 import { composeHostSlack, type HostSlackWiring } from './slackWiring'
 import { createHostSpawner } from './spawner'
-import { hostSandboxReadiness, hostSandboxSetup } from './sandboxSetup'
+import { hostSandboxDefault, hostSandboxReadiness, hostSandboxSetup } from './sandboxSetup'
 import { createHostWorktrees, loadWorktreesIfSpawning } from './worktrees'
 import { createHostProjectRoots } from './projectRoots'
 import { createHostExits, ptyHeldBy, type HostExits } from './exits'
 import { registrySessions } from './sessions'
 import { hookEventsDirIn } from '../core/hooks/sessionState'
 import { readAccountEntries } from '../core/accounts/accountsFile'
+import { providerOf } from '../core/providers/meta'
 import { readAgentPermissionMode } from '../core/settings/agentPermissionMode'
 import { announceChatProc, createHostSessionStarter } from './sessionCreate'
 import { previewShotsDir } from '../core/preview/shotsDir'
@@ -336,6 +344,9 @@ async function main(): Promise<void> {
     // Slack back would be a second one beside. Never rejects.
     void slackWiring?.dispose()
     remoteSessions?.dispose()
+    // A revoke's pause still waiting to be retried is dropped (remote governance R7-2): the next Host starts with no
+    // timer, and the client stays revoked on disk. Never throws.
+    orch.dispose()
     // Before the close, so a Host that is on its way out is not offered up as one to end. A failure
     // here costs nothing: the app checks the executable behind the pid before acting on it, and a
     // record this Host left behind names a pid that is about to stop existing.
@@ -518,7 +529,11 @@ async function main(): Promise<void> {
     // Host journal (A19 lifted): the prompt rows of the workers this Host starts, read against its state.
     onPromptWrite: (e) => hostJournal.promptWrite(e, orch.state()),
     // Agent Profiles design §5: a spawn from a profile stamps its use through the Host's own command
-    touchAgentProfile: (id) => touchAgentProfile(id)
+    touchAgentProfile: (id) => touchAgentProfile(id),
+    // Task K: the runner bundled beside this Host's own bundle, run by this Host's executable as node: a sandboxed Claude
+    // Task's check under srt on macOS and Linux (the app's Electron), and a sandboxed Codex Task's check on Windows (fix
+    // round 2), from the copy the Host's runtime keeps beside host.js, under its own node (scripts/host-runtime.mjs)
+    checkRunnerPath: path.join(__dirname, 'sandbox-check.js')
   })
 
   // R10: the one read that may heal a damaged worktrees.json, done once — and only when the Host
@@ -617,6 +632,12 @@ async function main(): Promise<void> {
     procs,
     hookEventsDir: hookEventsDirIn(profileDir),
     enforceDir: profilePaths(profileDir).enforceEvents,
+    // A terminal note that does not say whether its session got the use hooks (an app that did not write it) is a Claude
+    // session's when its account is (lifecycle design §4.12, ruling R6-8)
+    claudeAccount: async (accountId) => {
+      const account = (await readAccountEntries(path.join(profileDir, 'accounts.json'))).find((a) => a.id === accountId)
+      return account !== undefined && providerOf(account) === 'claude'
+    },
     log: (m) => log.write(m)
   })
 
@@ -832,7 +853,7 @@ async function main(): Promise<void> {
           bootId,
           platform: process.platform,
           pathStyle: process.platform === 'win32' ? 'windows' : 'posix',
-          capabilities: ['remote.jobs', 'remote.retry', 'remote.changed-files', 'remote.diff', 'pty.seq', 'pty.checkpoint']
+          capabilities: ['remote.jobs', 'remote.retry', 'remote.changed-files', 'remote.diff', 'pty.seq', 'pty.checkpoint', REPORT_CAPABILITY]
         }),
         log: (m) => log.write(m),
         onReady: events.ready,
@@ -885,12 +906,15 @@ async function main(): Promise<void> {
   // Agent Profiles (design §4): the store this Host owns. A profile cannot be deleted while a live session holds it
   // (the session's note carries `agentProfileId`) or unfinished orchestration work does (a Job, a Task, an open
   // Dispatch). `orch` is made below; the guard reads it only when a delete is asked.
-  // 설정하기 (sandbox design §6): Codex's Windows sandbox setup for one account, run here, where the sessions start
+  // 설정하기 (sandbox design §6): Codex's Windows sandbox setup for one account, run here, where the sessions start, for
+  // the sandboxed sessions only (Task P: the default Codex writes is taken back out, or the person's own value it wrote
+  // over is put back, and the log says so)
   const sandboxSetup = hostSandboxSetup({
     platform: process.platform,
     homeDir: os.homedir(),
     baseEnv: () => hostWorkerBaseEnv(process.env),
-    descriptors: makeDescriptors(process.platform)
+    descriptors: makeDescriptors(process.platform),
+    log: (m) => log.write(m)
   })
   // And the readiness Settings › Agent profiles shows beside it, asked as the Host's own sandboxed starts ask it
   const sandboxReadiness = hostSandboxReadiness({
@@ -900,13 +924,21 @@ async function main(): Promise<void> {
     descriptors: makeDescriptors(process.platform),
     log: (m) => log.write(m)
   })
+  // And whether each account's config.toml still makes the elevated sandbox its default, with Remove beside it (Task P)
+  const sandboxDefault = hostSandboxDefault({
+    platform: process.platform,
+    homeDir: os.homedir(),
+    baseEnv: () => hostWorkerBaseEnv(process.env),
+    descriptors: makeDescriptors(process.platform)
+  })
   const agentProfiles = createHostAgentProfiles({
     profileDir,
     readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
     inUse: agentProfileInUse({ sessions: () => [...registry.list(), ...procs.list()], orch: () => orch }),
     log: (m) => log.write(m),
     ...(sandboxSetup ? { sandboxSetup } : {}),
-    ...(sandboxReadiness ? { sandboxReadiness } : {})
+    ...(sandboxReadiness ? { sandboxReadiness } : {}),
+    ...(sandboxDefault ? { sandboxDefault } : {})
   })
   /** `agent-profiles-touch` as the app would send it, not awaited by the spawn that asks: the command logs its own
    *  failures and answers success, so a stamp never fails or delays a spawn. */
@@ -929,6 +961,68 @@ async function main(): Promise<void> {
       return orch.state().projects
     }
   })
+  // The findings (lifecycle design §6, §7, §8): computed on request from what this Host holds, kept a minute, and the
+  // ignore list. The history stamp is written at this start (plan ruling 2), so the usage findings count from the first
+  // run of this release, not from the first time someone asks. The orchestration state is loaded as every command loads
+  // it; the Claude version is the spawner's probe, warmed first so nothing waits on a synchronous ask (one cache and one
+  // `claude --version` for both; a Host with no spawner asks the process's one, which is the same per platform)
+  void readFindingsSince(profileDir, Date.now(), { log: (m) => log.write(m) })
+  const claudeVersions = spawner?.claudeVersions ?? cliVersionProbe(process.platform)
+  const runtimesDir = path.join(profileDir, 'runtimes')
+  let runtimeStore: SecretStore | undefined
+  const findings = createHostFindings({
+    profileDir,
+    homeDir: os.homedir(),
+    orchState: async () => {
+      await orch.ready()
+      return orch.state()
+    },
+    spent: () => tokenStore.spent(),
+    appBypass: async () => (await readAgentPermissionMode(path.join(profileDir, 'app-settings.json'))) === 'yolo',
+    readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
+    // None without opening the store while no Runtime was ever paired, and one store for every compute after, which keeps
+    // its ACL checks (final fix list M-6)
+    openRuntimes: () => listPairedRuntimes(runtimesDir, () => (runtimeStore ??= openSecretStore({ dir: runtimesDir, profileDir }))),
+    claudeVersion: async () => {
+      await claudeVersions.warm('claude')
+      // What the warm learnt, never a synchronous ask: a CLI that is not there, or whose version could not be read, is unknown
+      return claudeVersions.cached('claude') ?? null
+    },
+    asteraVersion: hostVersion,
+    // Whoever writes runtimes.json (the app, the CLI, MCP), the next request computes afresh (remote governance §9.2)
+    runtimesStamp: () => registryStamp(runtimesDir),
+    log: (m) => log.write(m)
+  })
+  // The Runtime report (remote governance design §5.1, §5.2, §13): composed from the probes above without starting a
+  // session. The spawner's Enforce blocker and its version probe, which serves both CLIs; the srt dependency check a
+  // sandboxed Claude check's start makes, off Windows where the runner was built (ruling C5); and on Windows the Codex
+  // readiness Settings asks, which runs `codex doctor` for each Codex account every time it is asked. Both start a
+  // process, so the report keeps srt's answer and a ready home's ten minutes, one question shared while it is asked, and
+  // drops the readiness ones when a setup forgets readiness (rulings R9-1, R9-4, R9-5)
+  const checkRunnerPath = path.join(__dirname, 'sandbox-check.js')
+  const checkRunner = existsSync(checkRunnerPath)
+  const reportProbes = cachedReportProbes({
+    ...(process.platform !== 'win32' && checkRunner
+      ? { checkRunnerMissing: () => srtCheckRunner({ execPath: process.execPath, runnerPath: checkRunnerPath }).missing() }
+      : {}),
+    ...(sandboxReadiness ? { codexReadiness: sandboxReadiness } : {})
+  })
+  const controlPlaneReport = (): ReturnType<typeof buildControlPlaneReport> =>
+    buildControlPlaneReport({
+      profileDir,
+      platform: process.platform,
+      asteraVersion: hostVersion,
+      readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
+      appBypass: async () => (await readAgentPermissionMode(path.join(profileDir, 'app-settings.json'))) === 'yolo',
+      gatewayStates: () => mcpGateway.states(),
+      enforce: spawner?.enforce,
+      cliVersions: claudeVersions,
+      claudeUsernsRestricted: () => spawner?.sandboxWarn?.claudeUsernsRestricted() ?? false,
+      checkRunner,
+      ...reportProbes,
+      findings: () => findings.current(),
+      log: (m) => log.write(m)
+    })
   const orch = createHostOrch({
     profileDir,
     useRecorder,
@@ -940,6 +1034,8 @@ async function main(): Promise<void> {
     policies,
     credentials,
     audit,
+    findings,
+    controlPlaneReport,
     // The job-source plugins a person makes Jobs from (plugin Phase 4 J10), asked through the runtime
     jobSources: hostJobSources({ manager: plugins, runtime: pluginRuntime }),
     // The completion check plugins a Task's checks ask (plugin Phase 5 C8), through the same runtime
@@ -998,6 +1094,8 @@ async function main(): Promise<void> {
     // Whether a caller's session runs in the sandbox, from its pty's or chat proc's note: what it starts then starts in
     // the sandbox too (final fix pass, C3)
     sessionSandboxed: (sessionId) => sessionSandboxedIn({ ptys: registry, procs }, sessionId),
+    // Whether the session is one this Host holds at all, for `caller-sandboxed` (remote governance design §7.4)
+    sessionHeld: (sessionId) => sessionHeldIn({ ptys: registry, procs }, sessionId),
     // `sessions create` (CLI spec §14): the spawner's path for a terminal session, the chat manager's for
     // a chat one (sessionCreate.ts). Without a spawner both refuse with 6.
     createSession: createHostSessionStarter({

@@ -7,7 +7,7 @@ import {
   btimeOf,
   execText,
   killGroup,
-  killProcessTree,
+  killPosixTree,
   lateTreeTargets,
   linuxStartTimes,
   macStartTimes,
@@ -208,6 +208,14 @@ describe('treeKillTargets', () => {
     expect(treeKillTargets(rows, 2000, 500)).toEqual({ groups: [2002], pids: [2000, 2001] })
   })
 
+  it("does not walk the Host's group when a tree process leads it: the Host's other children stay out", () => {
+    // The Host (500) does not lead its group; root 400 does, and brings in no member of it.
+    const rows = [row(1, 0, 1), row(400, 1, 400), row(500, 400, 400), row(2000, 500, 400), row(2001, 2000, 400), row(2002, 2001, 2002)]
+    expect(treeKillTargets(rows, 400, 500)).toEqual({ groups: [], pids: [400] })
+    const flat = [row(300, 1, 300), row(500, 300, 300), row(600, 500, 300)]
+    expect(treeKillTargets(flat, 300, 500)).toEqual({ groups: [], pids: [300] })
+  })
+
   it('never reaches the Host, or anything it started, from a root above it', () => {
     const rows = [...BASE, row(1003, 1001, 1003)]
     expect(treeKillTargets(rows, 400, 500)).toEqual({ groups: [400], pids: [] })
@@ -249,6 +257,18 @@ describe('lateTreeTargets', () => {
     expect(lateTreeTargets(BEFORE, after, 1000, 500)).toEqual({ groups: [1001], pids: [] })
   })
 
+  it('does not count a first-tree pid reused by an unrelated process: its parent and its group both differ now', () => {
+    // The helper (1002) is gone and 1002 is a stranger now, with a child of its own (1040).
+    const after = [row(1, 0, 1), row(500, 400, 500), row(1000, 500, 1000), row(1001, 1000, 1000), row(1002, 700, 1002), row(1040, 1002, 1002)]
+    expect(lateTreeTargets(BEFORE, after, 1000, 500)).toEqual({ groups: [], pids: [] })
+  })
+
+  it('still counts a first-tree process whose parent died during the grace: the parent changed but the group is the same', () => {
+    // Electron (1001) is gone; the helper (1002) went to parent 1 and kept group 1000, and started 1041 detached.
+    const after = [row(1, 0, 1), row(500, 400, 500), row(1002, 1, 1000), row(1041, 1002, 1041)]
+    expect(lateTreeTargets(BEFORE, after, 1000, 500)).toEqual({ groups: [1041], pids: [] })
+  })
+
   it("keeps the guards: never pid 0 or 1, the Host's pid or its group, and nothing for a root that is one of them", () => {
     // A new child in group 1 or 0 is ended by its pid alone; a row claiming pid 1 or the Host as a new
     // child of Electron is never taken.
@@ -258,7 +278,7 @@ describe('lateTreeTargets', () => {
   })
 })
 
-describe('killProcessTree', () => {
+describe('killPosixTree', () => {
   /** A process table: `ps` answers it (the first listing with `rows`, any later one with what is still
    *  alive), and signals end its processes. A group signal reaches every member; EPERM only when it
    *  reaches no process it may signal, as kill(2) says. `later` start at the first wait of the grace. */
@@ -293,7 +313,7 @@ describe('killProcessTree', () => {
 
   it('lists the table with ps under LC_ALL=C, ends every target with SIGTERM, and SIGKILLs what is left after the grace', async () => {
     const t = table([...BASE, row(1003, 1001, 1003), row(1004, 1003, 1003)], { stubborn: [1004] })
-    await killProcessTree(1000, { exec: t.exec, signals: t.s, hostPid: 500, graceMs: 200 })
+    await killPosixTree(1000, { exec: t.exec, signals: t.s, hostPid: 500, graceMs: 200 })
     // Once before any signal, and once more before SIGKILL, since something outlived the grace.
     expect(t.exec.mock.calls).toEqual([
       ['env', PS_TREE_ARGS],
@@ -313,10 +333,10 @@ describe('killProcessTree', () => {
 
   it('a tree already gone, wholly or in part, is not a failure', async () => {
     const empty = table([row(1, 0, 1), row(500, 400, 500)])
-    await expect(killProcessTree(1000, { exec: empty.exec, signals: empty.s, hostPid: 500 })).resolves.toBeUndefined()
+    await expect(killPosixTree(1000, { exec: empty.exec, signals: empty.s, hostPid: 500 })).resolves.toBeUndefined()
     expect(empty.sent).toEqual([])
     const raced = table([...BASE, row(1003, 1001, 1003)], { gone: [1003] })
-    await expect(killProcessTree(1000, { exec: raced.exec, signals: raced.s, hostPid: 500 })).resolves.toBeUndefined()
+    await expect(killPosixTree(1000, { exec: raced.exec, signals: raced.s, hostPid: 500 })).resolves.toBeUndefined()
     expect(raced.sent).toEqual([[-1000, 'SIGTERM'], [-1003, 'SIGTERM'], [-1000, 0]])
     // Nothing outlived the grace, so there is no second listing.
     expect(raced.exec).toHaveBeenCalledTimes(1)
@@ -325,7 +345,7 @@ describe('killProcessTree', () => {
   it('lists again before SIGKILL and ends what a process still alive started during the grace (a dev app starting its Host again)', async () => {
     // Electron (1001) outlives its SIGTERM and starts a new Host (1010) in a session of its own.
     const t = table(BASE, { stubborn: [1001, 1010], later: [row(1010, 1001, 1010), row(1020, 500, 1020)] })
-    await killProcessTree(1000, { exec: t.exec, signals: t.s, hostPid: 500, graceMs: 200 })
+    await killPosixTree(1000, { exec: t.exec, signals: t.s, hostPid: 500, graceMs: 200 })
     expect(t.exec).toHaveBeenCalledTimes(2)
     expect(t.sent).toEqual([
       [-1000, 'SIGTERM'],
@@ -341,7 +361,7 @@ describe('killProcessTree', () => {
   it('a second listing that fails still SIGKILLs what is left, then says the tree could not be listed again', async () => {
     const t = table(BASE, { stubborn: [1001] })
     t.exec.mockImplementationOnce(t.exec.getMockImplementation()!).mockRejectedValueOnce(new Error('ps timed out'))
-    await expect(killProcessTree(1000, { exec: t.exec, signals: t.s, hostPid: 500, graceMs: 100 })).rejects.toThrow('could not be listed again before SIGKILL: ps timed out')
+    await expect(killPosixTree(1000, { exec: t.exec, signals: t.s, hostPid: 500, graceMs: 100 })).rejects.toThrow('could not be listed again before SIGKILL: ps timed out')
     expect(t.sent.at(-1)).toEqual([-1000, 'SIGKILL'])
     expect([...t.live.keys()]).toEqual([1, 400, 500])
   })
@@ -349,27 +369,27 @@ describe('killProcessTree', () => {
   it('a ps that fails still ends the root group, as before, and then says the rest could not be listed', async () => {
     const t = table(BASE)
     t.exec.mockRejectedValue(Object.assign(new Error('spawn env ENOENT'), { code: 'ENOENT' }))
-    await expect(killProcessTree(1000, { exec: t.exec, signals: t.s, hostPid: 500 })).rejects.toThrow('could not be listed: spawn env ENOENT')
+    await expect(killPosixTree(1000, { exec: t.exec, signals: t.s, hostPid: 500 })).rejects.toThrow('could not be listed: spawn env ENOENT')
     expect(t.sent[0]).toEqual([-1000, 'SIGTERM'])
     expect([...t.live.keys()]).toEqual([1, 400, 500])
   })
 
   it('a target it may not signal does not keep the rest of the tree alive; the failure is passed on afterwards', async () => {
     const t = table([...BASE, row(1003, 1001, 1003)], { eperm: [1003] })
-    await expect(killProcessTree(1000, { exec: t.exec, signals: t.s, hostPid: 500 })).rejects.toThrow('EPERM')
+    await expect(killPosixTree(1000, { exec: t.exec, signals: t.s, hostPid: 500 })).rejects.toThrow('EPERM')
     expect(t.sent.slice(0, 2)).toEqual([[-1000, 'SIGTERM'], [-1003, 'SIGTERM']])
     expect([...t.live.keys()]).toEqual([1, 400, 500, 1003])
   })
 
   it("refuses pid 0, 1, a negative, a fraction and the Host's own pid before it lists or signals anything", async () => {
     const t = table(BASE)
-    for (const pid of [0, 1, -1, -4242, 1.5, Number.NaN, 500]) await expect(killProcessTree(pid, { exec: t.exec, signals: t.s, hostPid: 500 })).rejects.toThrow('not a pid')
+    for (const pid of [0, 1, -1, -4242, 1.5, Number.NaN, 500]) await expect(killPosixTree(pid, { exec: t.exec, signals: t.s, hostPid: 500 })).rejects.toThrow('not a pid')
     expect(t.exec).not.toHaveBeenCalled()
     expect(t.sent).toEqual([])
   })
 })
 
-describe.runIf(process.platform !== 'win32')('killProcessTree on this machine', () => {
+describe.runIf(process.platform !== 'win32')('killPosixTree on this machine', () => {
   it('ends a child the root started detached, in a session of its own, which the root group kill leaves running', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-tree-'))
     const pidFile = path.join(dir, 'child.pid')
@@ -385,7 +405,7 @@ describe.runIf(process.platform !== 'win32')('killProcessTree on this machine', 
       }
       expect(child).toBeGreaterThan(1)
       const exited = new Promise<string>((r) => p.onExit(r))
-      await killProcessTree(p.pid!)
+      await killPosixTree(p.pid!)
       expect(await exited).toBe('exited SIGTERM')
       // An orphan is reaped by whoever adopted it, a moment after it dies.
       const gone = (): boolean => {
@@ -427,7 +447,7 @@ describe.runIf(process.platform !== 'win32')('killProcessTree on this machine', 
       try {
         for (let i = 0; i < 100 && !(await fs.readFile(readyFile, 'utf8').catch(() => '')); i++) await new Promise((r) => setTimeout(r, 100))
         const exited = new Promise<string>((r) => p.onExit(r))
-        await killProcessTree(p.pid!)
+        await killPosixTree(p.pid!)
         expect(await exited).toBe('exited SIGKILL')
         child = Number(await fs.readFile(pidFile, 'utf8').catch(() => '')) || 0
         expect(child).toBeGreaterThan(1)

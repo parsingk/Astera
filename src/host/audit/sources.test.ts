@@ -6,11 +6,23 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { removeFixture } from '../../core/testFixtures'
-import { queryRecords, type AuditRecord } from '../../core/audit/store'
+import { auditDayOf, queryRecords, type AuditRecord } from '../../core/audit/store'
+import { profilePaths } from '../../core/profile/paths'
 import { decide, STARTER_POLICY } from '../../core/audit/policy'
 import type { PtyEntry, PtyMeta } from '../../core/host/protocol'
-import { createAuditRecorder, registrySessionFacts, type AuditEvent } from './recorder'
-import { claudeChatCalls, codexChatCall, codexRolloutCalls, createAuditSources, hookCall, hookShellAfter, pruneEnforceFiles } from './sources'
+import { createAuditRecorder, registrySessionFacts, type AuditEvent, type UseEvent } from './recorder'
+import {
+  claudeChatCalls,
+  claudeChatUse,
+  claudeHookUses,
+  codexChatCall,
+  codexRolloutCalls,
+  createAuditSources,
+  enforceBlockedCall,
+  hookCall,
+  hookShellAfter,
+  pruneEnforceFiles
+} from './sources'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -82,33 +94,48 @@ const CUSTOM_OUT = (at: number, id: string, text: string) =>
   })
 const SHELL_DONE = (at: number, id = 'call_1', code = 0) => OUT(at, id, `Exit code: ${code}\nWall time: 0.1 seconds\nOutput:\nwhat it printed`)
 
-/** A registry that tells its listeners what the test says. */
+/** A registry that tells its listeners what the test says, and lists its entries as the Host's does. */
 function fakeRegistry() {
   const meta = new Set<(id: string, meta: PtyMeta, why: 'open' | 'note') => void>()
   const lines = new Set<(id: string, seq: number, line: string) => void>()
   const exits = new Set<(id: string, code: number) => void>()
+  const entries = new Map<string, PtyEntry>()
   const add = <T>(s: Set<T>, cb: T): (() => void) => (s.add(cb), () => void s.delete(cb))
   let seq = 0
   return {
     onMeta: (cb: (id: string, meta: PtyMeta, why: 'open' | 'note') => void) => add(meta, cb),
     onLine: (cb: (id: string, seq: number, line: string) => void) => add(lines, cb),
     onExit: (cb: (id: string, code: number) => void) => add(exits, cb),
-    open: (id: string, m: PtyMeta) => meta.forEach((cb) => cb(id, m, 'open')),
-    note: (id: string, m: PtyMeta) => meta.forEach((cb) => cb(id, m, 'note')),
+    list: (): PtyEntry[] => [...entries.values()],
+    open: (id: string, m: PtyMeta) => (entries.set(id, { id, pid: 1, alive: true, meta: m }), meta.forEach((cb) => cb(id, m, 'open'))),
+    note: (id: string, m: PtyMeta) => (entries.set(id, { id, pid: 1, alive: true, meta: m }), meta.forEach((cb) => cb(id, m, 'note'))),
     line: (id: string, l: string) => lines.forEach((cb) => cb(id, ++seq, l)),
-    exit: (id: string) => exits.forEach((cb) => cb(id, 0)),
+    exit: (id: string) => {
+      const e = entries.get(id)
+      if (e) entries.set(id, { ...e, alive: false })
+      exits.forEach((cb) => cb(id, 0))
+    },
     listeners: () => meta.size + lines.size + exits.size
   }
 }
 
 /** A recorder that keeps what it is handed, observing until told otherwise, and tells its listeners when that changes as
- *  the real one does. */
+ *  the real one does. A use is said to be written at once, unless the test says it is not (`answerUses(false)`) or is
+ *  still on its way (`answerUses('hold')`, told with `settle`). */
 function capture() {
   const events: AuditEvent[] = []
+  const uses: UseEvent[] = []
   let on = true
+  let answer: boolean | 'hold' = true
+  const held: Array<(written: boolean) => void> = []
   const listeners = new Set<() => void>()
   return {
     events,
+    uses,
+    answerUses: (a: boolean | 'hold') => void (answer = a),
+    settle: (written: boolean) => {
+      for (const done of held.splice(0)) done(written)
+    },
     listening: () => listeners.size,
     setObserving: (v: boolean) => {
       if (v === on) return
@@ -117,6 +144,12 @@ function capture() {
     },
     recorder: {
       record: (e: AuditEvent) => void events.push(e),
+      use: (e: UseEvent, done?: (written: boolean) => void) => {
+        uses.push(e)
+        if (done === undefined) return
+        if (answer === 'hold') held.push(done)
+        else done(answer)
+      },
       observing: () => on,
       onObservingChange: (cb: () => void) => (listeners.add(cb), () => void listeners.delete(cb))
     }
@@ -131,6 +164,8 @@ async function sourcesFor(o: {
   now?: () => number
   hookEventsDir?: string
   enforceDir?: string
+  claudeAccount?: (accountId: string) => Promise<boolean>
+  log?: (message: string) => void
 }) {
   const hookEventsDir = o.hookEventsDir ?? (await tempDir())
   const sources = createAuditSources({
@@ -139,7 +174,8 @@ async function sourcesFor(o: {
     procs: o.procs ?? fakeRegistry(),
     hookEventsDir,
     ...(o.enforceDir ? { enforceDir: o.enforceDir } : {}),
-    log: () => {},
+    ...(o.claudeAccount ? { claudeAccount: o.claudeAccount } : {}),
+    log: o.log ?? (() => {}),
     every: () => () => {},
     watch: (() => ({ on: () => {}, close: () => {} })) as never,
     ...(o.now ? { now: o.now } : {})
@@ -342,6 +378,212 @@ describe('the Claude hook source', () => {
   })
 })
 
+// Lifecycle design §4.12: what Claude Code reports exactly of a skill, command or agent use, as the audit capture keeps it
+describe('the Claude hook source, for uses', () => {
+  /** A hook line of an event that names no tool, as the capture writes it. */
+  const event = (name: string, fields: Record<string, unknown>) => ({ astera_at: T0 + 0.25, hook_event_name: name, tool_input: {}, cwd, ...fields })
+
+  it('PostToolUse Skill hands a skill-tool use with tool_input.skill', async () => {
+    const { events, uses, recorder } = capture()
+    const { sources, audit } = await sourcesFor({ recorder })
+    await fs.writeFile(audit('sess_a'), lineOf(postToolUse('Skill', { skill: 'review' }, 'toolu_1')))
+    await sources.poll()
+    expect(uses).toEqual([{ sessionId: 'sess_a', source: 'claude-hook', via: 'skill-tool', name: 'review', dedupeKey: 'toolu_1', at: iso(T0) }])
+    // The call is a call too, as before
+    expect(events.map((e) => e.tool)).toEqual(['Skill'])
+    // Another tool, or a Skill line with no name, is no use
+    const read = claudeHookUses()
+    expect(read('sess_a', postToolUse('Read', { skill: 'review' }, 'toolu_2'))).toBeNull()
+    expect(read('sess_a', postToolUse('Skill', {}, 'toolu_3'))).toBeNull()
+    expect(read('sess_a', postToolUse('Skill', { skill: '' }, 'toolu_4'))).toBeNull()
+    sources.dispose()
+  })
+
+  // An unknown skill or a blocked call fails: nothing was used
+  it('PostToolUseFailure Skill hands none', async () => {
+    const { events, uses, recorder } = capture()
+    const { sources, audit } = await sourcesFor({ recorder })
+    await fs.writeFile(audit('sess_a'), lineOf(postToolUse('Skill', { skill: 'review' }, 'toolu_1', 'PostToolUseFailure')))
+    await sources.poll()
+    expect(uses).toEqual([])
+    expect(events.map((e) => e.status)).toEqual(['failed'])
+    sources.dispose()
+  })
+
+  it('UserPromptExpansion slash_command hands a slash use; mcp_prompt hands none', async () => {
+    const { events, uses, recorder } = capture()
+    const { sources, audit } = await sourcesFor({ recorder })
+    await fs.writeFile(
+      audit('sess_a'),
+      [
+        event('UserPromptExpansion', { expansion_type: 'slash_command', command_name: 'ship' }),
+        event('UserPromptExpansion', { expansion_type: 'mcp_prompt', command_name: 'github:triage' }),
+        event('UserPromptExpansion', { expansion_type: 'slash_command' })
+      ]
+        .map(lineOf)
+        .join('')
+    )
+    await sources.poll()
+    expect(uses).toEqual([{ sessionId: 'sess_a', source: 'claude-hook', via: 'slash', name: 'ship', at: iso(T0) }])
+    // Not a call
+    expect(events).toEqual([])
+    sources.dispose()
+  })
+
+  // Claude Code fires SubagentStart again when an agent is resumed and for each message a teammate takes up
+  it('SubagentStart hands a subagent use once per agent_id', async () => {
+    const { uses, recorder } = capture()
+    const { sources, audit } = await sourcesFor({ recorder })
+    const start = (id: string, type: string) => event('SubagentStart', { agent_id: id, agent_type: type })
+    await fs.writeFile(audit('sess_a'), [start('agent_1', 'Code Reviewer'), start('agent_1', 'Code Reviewer'), start('agent_2', 'Code Reviewer')].map(lineOf).join(''))
+    // The same id in another session is that session's own
+    await fs.writeFile(audit('sess_b'), lineOf(start('agent_1', 'Explore')))
+    await sources.poll()
+    expect(uses.map((u) => [u.sessionId, u.via, u.name]).sort()).toEqual([
+      ['sess_a', 'subagent', 'Code Reviewer'],
+      ['sess_a', 'subagent', 'Code Reviewer'],
+      ['sess_b', 'subagent', 'Explore']
+    ])
+    // A tool call made inside an agent carries its type too, and is not its start
+    const read = claudeHookUses()
+    expect(read('sess_a', postToolUse('Read', { file_path: 'a' }, 'toolu_1', 'PostToolUse', { agent_id: 'agent_9', agent_type: 'x' }))).toBeNull()
+    // The ids kept are bounded: an id let go long ago may be handed again, never one heard recently
+    for (let k = 0; k < 1500; k++) read('sess_c', start(`agent_${k}`, 'a'))
+    expect(read('sess_c', start('agent_1499', 'a'))).toBeNull()
+    expect(read('sess_c', start('agent_0', 'a'))).not.toBeNull()
+    sources.dispose()
+  })
+
+  // Fix round 2: the capture keeps an Agent or Task call's `subagent_type`, so a terminal hands it as the chat does. It
+  // names the agent a session started, whether or not a SubagentStart came; counted twice it is still one use
+  it('PostToolUse Agent or Task hands an agent-tool use with tool_input.subagent_type; a failure or no type none', () => {
+    const read = claudeHookUses()
+    expect(read('sess_a', postToolUse('Agent', { subagent_type: 'code-reviewer' }, 'toolu_1'))).toEqual({ via: 'agent-tool', name: 'code-reviewer', dedupeKey: 'toolu_1', at: iso(T0) })
+    expect(read('sess_a', postToolUse('Task', { subagent_type: 'Explore' }, 'toolu_2'))).toMatchObject({ via: 'agent-tool', name: 'Explore' })
+    expect(read('sess_a', postToolUse('Agent', { subagent_type: 'code-reviewer' }, 'toolu_3', 'PostToolUseFailure'))).toBeNull()
+    expect(read('sess_a', postToolUse('Agent', {}, 'toolu_4'))).toBeNull()
+  })
+
+  it("a name with ':' is handed (the mapping drops it later)", () => {
+    const read = claudeHookUses()
+    expect(read('sess_a', postToolUse('Skill', { skill: 'superpowers:brainstorming' }, 'toolu_1'))?.name).toBe('superpowers:brainstorming')
+    expect(read('sess_a', event('UserPromptExpansion', { expansion_type: 'slash_command', command_name: 'apps/web:deploy' }))?.name).toBe('apps/web:deploy')
+    expect(read('sess_a', event('SubagentStart', { agent_id: 'a1', agent_type: 'my-plugin:reviewer' }))?.name).toBe('my-plugin:reviewer')
+  })
+
+  it('hands no use while the mode is compatibility', async () => {
+    const { uses, recorder, setObserving } = capture()
+    const { sources, audit } = await sourcesFor({ recorder })
+    setObserving(false)
+    await fs.writeFile(audit('sess_a'), lineOf(event('UserPromptExpansion', { expansion_type: 'slash_command', command_name: 'ship' })))
+    await sources.poll()
+    expect(uses).toEqual([])
+    sources.dispose()
+  })
+})
+
+// Ruling R6-8: a Claude session started without the hooks that report uses (an older Claude Code, a version not known)
+// records no `/command` and no agent start. The Host marks it, from its own list of live sessions, once each local day it
+// runs, so the findings read "Claude cannot tell" for every window it was in
+describe('the unhooked Claude terminal sessions', () => {
+  const DAY = 24 * 60 * 60 * 1000
+  const UNHOOKED = { sessionId: 'sess_a', source: 'claude-hook', via: 'unhooked', name: '' }
+
+  it('a session spawned without the use hooks is marked, with no event of its own', async () => {
+    const ptys = fakeRegistry()
+    const { uses, events, recorder } = capture()
+    const { sources } = await sourcesFor({ recorder, ptys })
+    ptys.open('pty1', note('session', 'sess_a', { ...OBSERVED, useHooks: false }))
+    await sources.poll()
+    expect(uses).toEqual([UNHOOKED])
+    expect(events).toEqual([])
+    sources.dispose()
+  })
+
+  it('the mark is written once a day', async () => {
+    const ptys = fakeRegistry()
+    let now = T0
+    const { uses, recorder } = capture()
+    const { sources } = await sourcesFor({ recorder, ptys, now: () => now })
+    ptys.open('pty1', note('session', 'sess_a', { ...OBSERVED, useHooks: false }))
+    await sources.poll()
+    await sources.poll()
+    expect(uses).toEqual([UNHOOKED])
+    now = T0 + DAY
+    await sources.poll()
+    await sources.poll()
+    expect(uses).toEqual([UNHOOKED, UNHOOKED])
+    // Ended: not marked again
+    ptys.exit('pty1')
+    now = T0 + 2 * DAY
+    await sources.poll()
+    expect(uses).toHaveLength(2)
+    sources.dispose()
+  })
+
+  it('marks no session with the use hooks, none not observed, none of Codex, and asks the account of a note without the mark', async () => {
+    const ptys = fakeRegistry()
+    const asked: string[] = []
+    const { uses, recorder } = capture()
+    const claudeAccount = async (id: string) => (asked.push(id), id === 'acc_claude')
+    const { sources } = await sourcesFor({ recorder, ptys, claudeAccount })
+    ptys.open('pty1', note('session', 'sess_hooked', { ...OBSERVED, useHooks: true }))
+    ptys.open('pty2', note('session', 'sess_plain', { accountId: 'acc1', cwd, title: 't', useHooks: false }))
+    // A note that says its provider (ruling R6-10): a Codex session's needs no account read
+    ptys.open('pty5', note('session', 'sess_codex_new', { ...OBSERVED, accountId: 'acc_codex_new', provider: 'codex' }))
+    // Notes an app that did not write either wrote: a Codex session's account says it is not Claude's
+    ptys.open('pty3', note('session', 'sess_codex', { ...OBSERVED, accountId: 'acc_codex' }))
+    ptys.open('pty4', note('session', 'sess_old', { ...OBSERVED, accountId: 'acc_claude' }))
+    await sources.poll()
+    await sources.poll()
+    expect(uses.map((u) => u.sessionId)).toEqual(['sess_old'])
+    // Each account asked once per session, and only for a note that says neither
+    expect(asked.sort()).toEqual(['acc_claude', 'acc_codex'])
+    sources.dispose()
+  })
+
+  it('marks a note without the mark once its account can be read, and says once that it cannot', async () => {
+    const ptys = fakeRegistry()
+    const logs: string[] = []
+    let readable = false
+    const { uses, recorder } = capture()
+    const claudeAccount = async () => {
+      if (!readable) throw new Error('accounts.json is damaged')
+      return true
+    }
+    const { sources } = await sourcesFor({ recorder, ptys, claudeAccount, log: (m) => logs.push(m) })
+    ptys.open('pty1', note('session', 'sess_a', { ...OBSERVED }))
+    await sources.poll()
+    await sources.poll()
+    expect(uses).toEqual([])
+    expect(logs.filter((m) => /could not be read/.test(m))).toHaveLength(1)
+    readable = true
+    await sources.poll()
+    expect(uses).toEqual([UNHOOKED])
+    sources.dispose()
+  })
+
+  it('hands a mark again until it is written, and none while the mode is compatibility', async () => {
+    const ptys = fakeRegistry()
+    const { uses, recorder, answerUses, setObserving } = capture()
+    const { sources } = await sourcesFor({ recorder, ptys })
+    ptys.open('pty1', note('session', 'sess_a', { ...OBSERVED, useHooks: false }))
+    setObserving(false)
+    await sources.poll()
+    expect(uses).toEqual([])
+    setObserving(true)
+    answerUses(false)
+    await sources.poll()
+    await sources.poll()
+    expect(uses).toHaveLength(2)
+    answerUses(true)
+    await sources.poll()
+    await sources.poll()
+    expect(uses).toHaveLength(3)
+    sources.dispose()
+  })
+})
+
 describe('the Claude chat source', () => {
   it('pairs each tool_use with its result: ok, failed, and not kept when it never ran', () => {
     const read = claudeChatCalls()
@@ -394,6 +636,154 @@ describe('the Claude chat source', () => {
     expect(events).toHaveLength(1)
     sources.dispose()
     expect(procs.listeners()).toBe(0)
+  })
+
+  // §4.12: a chat has no hook of its own; its stream names the skill and the agent of each call that ran
+  it('a chat stream’s Skill and Agent tool_use hand skill-tool and agent-tool uses', async () => {
+    const procs = fakeRegistry()
+    const { events, uses, recorder } = capture()
+    const { sources } = await sourcesFor({ recorder, procs })
+    procs.open('proc1', note('chat', 'sess_c', { ...OBSERVED, provider: 'claude' }))
+    procs.open('proc2', note('chat', 'sess_x', { ...OBSERVED, provider: 'codex' }))
+    procs.line(
+      'proc1',
+      assistant([
+        { type: 'tool_use', id: 'toolu_1', name: 'Skill', input: { skill: 'review', args: 'secret args' } },
+        { type: 'tool_use', id: 'toolu_2', name: 'Agent', input: { subagent_type: 'code-reviewer', description: 'd', prompt: 'secret task' } },
+        { type: 'tool_use', id: 'toolu_3', name: 'Skill', input: { skill: 'nope' } },
+        { type: 'tool_use', id: 'toolu_4', name: 'Agent', input: { description: 'd', prompt: 'p' } }
+      ])
+    )
+    procs.line(
+      'proc1',
+      user([
+        { type: 'tool_result', tool_use_id: 'toolu_1', content: 'x' },
+        { type: 'tool_result', tool_use_id: 'toolu_2', content: 'x' },
+        { type: 'tool_result', tool_use_id: 'toolu_3', content: 'Unknown skill: nope', is_error: true },
+        { type: 'tool_result', tool_use_id: 'toolu_4', content: 'x' }
+      ])
+    )
+    expect(uses).toEqual([
+      // The chat's first line marks that a Claude chat ran (ruling R6-1)
+      { sessionId: 'sess_c', source: 'claude-chat', via: 'chat-seen', name: '' },
+      { sessionId: 'sess_c', source: 'claude-chat', via: 'skill-tool', name: 'review', dedupeKey: 'toolu_1' },
+      { sessionId: 'sess_c', source: 'claude-chat', via: 'agent-tool', name: 'code-reviewer', dedupeKey: 'toolu_2' }
+    ])
+    expect(events).toHaveLength(4)
+    expect(JSON.stringify(uses)).not.toContain('secret')
+    // The older name of the Agent tool
+    expect(claudeChatUse({ tool: 'Task', input: { subagent_type: 'Explore' }, status: 'ok', dedupeKey: 't' })).toEqual({ via: 'agent-tool', name: 'Explore', dedupeKey: 't' })
+    // A Codex chat hands no use, and no mark
+    procs.line('proc2', itemCompleted({ type: 'collabAgentToolCall', id: 'i1', tool: 'spawnAgent', status: 'completed' }))
+    expect(uses).toHaveLength(3)
+    sources.dispose()
+  })
+
+  // Ruling R6-1: a skill or command typed into a Claude chat is expanded with no call in the stream, so whether a chat ran
+  // at all is what §4.12 needs, whether or not the model called a tool
+  it('a Claude chat with no tool_use still marks that it ran, once per session', async () => {
+    const procs = fakeRegistry()
+    const { events, uses, recorder } = capture()
+    const { sources } = await sourcesFor({ recorder, procs })
+    procs.open('proc1', note('chat', 'sess_c', { ...OBSERVED, provider: 'claude' }))
+    procs.open('proc2', note('chat', 'sess_old', { accountId: 'acc1', cwd, title: 't', provider: 'claude' }))
+    for (const id of ['proc1', 'proc2']) {
+      procs.line(id, JSON.stringify({ type: 'system', subtype: 'init', session_id: 'c1' }))
+      procs.line(id, assistant([{ type: 'text', text: 'Here is the summary.' }]))
+      procs.line(id, JSON.stringify({ type: 'result', subtype: 'success' }))
+    }
+    expect(uses).toEqual([{ sessionId: 'sess_c', source: 'claude-chat', via: 'chat-seen', name: '' }])
+    expect(events).toEqual([])
+    sources.dispose()
+  })
+
+  it('marks no chat while the mode is compatibility, and marks it once observe is on', async () => {
+    const procs = fakeRegistry()
+    const { uses, recorder, setObserving } = capture()
+    const { sources } = await sourcesFor({ recorder, procs })
+    procs.open('proc1', note('chat', 'sess_c', { ...OBSERVED, provider: 'claude' }))
+    setObserving(false)
+    procs.line('proc1', JSON.stringify({ type: 'system', subtype: 'init', session_id: 'c1' }))
+    expect(uses).toEqual([])
+    setObserving(true)
+    procs.line('proc1', assistant([{ type: 'text', text: 'x' }]))
+    procs.line('proc1', assistant([{ type: 'text', text: 'y' }]))
+    expect(uses.map((u) => [u.sessionId, u.via])).toEqual([['sess_c', 'chat-seen']])
+    // Written: the mode going off and on again the same day asks no second mark
+    setObserving(false)
+    setObserving(true)
+    procs.line('proc1', assistant([{ type: 'text', text: 'z' }]))
+    expect(uses.map((u) => u.via)).toEqual(['chat-seen'])
+    sources.dispose()
+  })
+
+  // Fix round 2: a mark counts once the recorder says it was written. One let go (the mode, a full hold, an append that
+  // failed) is handed again at a later line, and a chat that lives on is marked again each local day, so its mark never
+  // ages out of the 30 days
+  // Fix round 3: the real recorder over the real store, which drops what it cannot write; a mark it could not write is
+  // handed again at a later line, and once written it is not
+  it('hands a chat mark again after the real store could not write it: a folder it cannot write, a stopped day', async () => {
+    for (const blockedBy of ['a file in its place', 'a stopped day'] as const) {
+      const r = await realRecorder({ procs: [entry('proc1', note('chat', 'sess_c', { ...OBSERVED, provider: 'claude' }))] })
+      const dir = profilePaths(r.profileDir).extensionUses
+      if (blockedBy === 'a file in its place') await fs.writeFile(dir, 'not a folder')
+      else {
+        const day = auditDayOf(new Date().toISOString())
+        await fs.mkdir(dir, { recursive: true })
+        await fs.writeFile(path.join(dir, `${day}.jsonl`), '\n')
+        await fs.writeFile(path.join(dir, `${day}.stopped`), '')
+      }
+      const handed: UseEvent[] = []
+      const recorder = { ...r.recorder, use: (e: UseEvent, done?: (written: boolean) => void) => (handed.push(e), r.recorder.use(e, done)) }
+      const procs = fakeRegistry()
+      const { sources } = await sourcesFor({ recorder, procs })
+      procs.open('proc1', note('chat', 'sess_c', { ...OBSERVED, provider: 'claude' }))
+      const say = async (text: string): Promise<void> => {
+        procs.line('proc1', assistant([{ type: 'text', text }]))
+        await r.recorder.flushed()
+      }
+      await say('a')
+      await say('b')
+      expect(handed.map((u) => u.via), blockedBy).toEqual(['chat-seen', 'chat-seen'])
+      if (blockedBy === 'a file in its place') {
+        // The way is clear again: the next line's mark is written, and the one after asks none
+        await fs.rm(dir, { force: true })
+        await say('c')
+        await say('d')
+        expect(handed).toHaveLength(3)
+        const written = (await fs.readFile(path.join(dir, (await fs.readdir(dir))[0]), 'utf8')).split('\n').filter((l) => l !== '')
+        expect(written.map((l) => JSON.parse(l).via)).toEqual(['chat-seen'])
+      }
+      sources.dispose()
+    }
+  })
+
+  it('hands a chat mark again on a later line until it is written, and again on a new local day', async () => {
+    const procs = fakeRegistry()
+    let now = T0
+    const { uses, recorder, answerUses, settle } = capture()
+    const { sources } = await sourcesFor({ recorder, procs, now: () => now })
+    procs.open('proc1', note('chat', 'sess_c', { ...OBSERVED, provider: 'claude' }))
+    const say = (text: string) => procs.line('proc1', assistant([{ type: 'text', text }]))
+    answerUses(false)
+    say('a')
+    say('b')
+    expect(uses).toHaveLength(2)
+    // On its way: not handed again until it is told
+    answerUses('hold')
+    say('c')
+    say('d')
+    expect(uses).toHaveLength(3)
+    settle(true)
+    say('e')
+    expect(uses).toHaveLength(3)
+    // The next local day
+    answerUses(true)
+    now = T0 + 24 * 60 * 60 * 1000
+    say('f')
+    say('g')
+    expect(uses.map((u) => u.via)).toEqual(['chat-seen', 'chat-seen', 'chat-seen', 'chat-seen'])
+    sources.dispose()
   })
 
   it('reads no line while the mode is compatibility', async () => {
@@ -1015,6 +1405,21 @@ describe('the enforce file source', () => {
     await sources.poll()
     expect(events).toHaveLength(2)
     sources.dispose()
+  })
+
+  // Lifecycle design §4.10: the hook writes what the resolver said of the call; a value it cannot have written is dropped,
+  // so no path reaches a record through `sensitive`
+  it("the Enforce line's effect and sensitive reach the event's resolved", () => {
+    const resolvedOf = (extra: Record<string, unknown>) => enforceBlockedCall(JSON.stringify({ ...blocked('toolu_2'), ...extra }))?.resolved
+    const base = { action: 'git.remote.write', target: 'git push', confidence: 'high' }
+    expect(resolvedOf({ effect: 'write', sensitive: '.ssh' })).toEqual({ ...base, effect: 'write', sensitive: '.ssh' })
+    expect(resolvedOf({ effect: 'unknown', sensitive: 'unknown' })).toEqual({ ...base, effect: 'unknown', sensitive: 'unknown' })
+    expect(resolvedOf({ effect: 'read', sensitive: 'gh' })).toEqual({ ...base, effect: 'read', sensitive: 'gh' })
+    // An older hook's line has neither
+    expect(resolvedOf({})).toEqual(base)
+    expect(resolvedOf({ effect: 'delete', sensitive: '/home/u/.ssh/id_rsa' })).toEqual(base)
+    expect(resolvedOf({ effect: 1, sensitive: ['.ssh'] })).toEqual(base)
+    expect(resolvedOf({ effect: 'read', sensitive: 'id_rsa' })).toEqual({ ...base, effect: 'read' })
   })
 
   // Final review I7: the blocks of a session started in Enforce are read after the mode is turned off too

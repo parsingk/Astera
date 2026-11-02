@@ -320,7 +320,12 @@ is attached, so with Astera closed a schedule keeps firing as long as some Host 
 client and no work still leaves a minute after the last one, so an armed schedule by itself does not
 keep a Host running. A fire is skipped, and logged once, while the Job's latest run is still running,
 the same rule that makes `jobs run` refuse a Job that is already going (see "the still running rule"
-below).
+below). A fire is skipped the same way, logged once per fire time, while the Job uses an archived agent
+profile, as its own `--agent-profile` or a planned task's: the whole fire waits, not only the tasks that
+name the profile, and while the Job is not paused `jobs list` and `jobs get` name each archived profile in
+`archivedProfiles` (the list shows `archived profile: <name>`). Nothing about the schedule changes, so once
+the profile is restored the next fire time runs as usual. A person's own `jobs run` still runs the Job,
+since work that holds a profile keeps using it.
 
 **A finished run does not keep its sessions.** When a run finishes, which means every one of its tasks
 is done, the process that drives stops that run's coordinator and releases its idle workers (a worker
@@ -549,6 +554,42 @@ answering at that address is refused. Five wrong codes burn the code.
 Listen on a private network, a VPN or Tailscale. Do not forward the port to the internet. A pairing is read-only
 unless `--full-control` is given; a read-only controller can read Jobs, Runs and Tasks but not change them.
 
+On the controller, the machine that paired with it:
+
+```text
+astera runtimes ping   --id office                  does it answer now, and with which Astera and OS
+astera runtimes get    --id office                  its setup, read now and compared with this computer
+astera runtimes expect --id office --add skill-a    expect this computer's skill-a there too
+```
+
+`get` reads the Runtime's report: its extensions, agent profiles, permission setting, policy, sandbox, credential
+names, secret store and findings counts. These are names, states and counts; no secret value, path, command line or
+Rule text leaves that computer. `get` keeps the report as the last one read, with when it was read, and compares it with
+this computer's extensions. The Runtime answers only a person's own shell. An agent session is refused there, as an MCP
+client is. A Runtime on an older Astera cannot report, and `get` says to update Astera there.
+
+When the Runtime does not answer, or does not answer in time, `get` shows the last report kept with its read time, says
+it does not answer, and still exits 0. A Runtime too old to report also exits 0, with the last report kept and the line to update Astera there.
+Any other refusal is an error with a non-zero exit, and no report is shown: `RUNTIME_PERMISSION_DENIED` when the Runtime
+refused the asker (an agent session), `FAILED` when it sent a report this computer cannot read. Neither changes the
+report kept. `--json` gives the same as data (`RuntimeDetail`): `runtimeId`, `name`, `fingerprint`, `permission`,
+`createdAt`, `lastSeenAt`, `facts` (what its last sign-in said: `asteraVersion`, `platform`, `hostProtocol`,
+`capabilities`, `readAt`), `here` (this Astera's version), `older`, `answering`, `snapshot` (`readAt` and `report`),
+`refusal` (`code` and `message`, when no fresh report came) and `comparison`, a row per extension here and per one only
+there.
+
+`ping` exits 0 whether the Runtime answers or not, and `answers` says which, with the code when it does not. When the
+Runtime no longer accepts this pairing, a different computer answers at that address, or the two Astera versions
+cannot talk to each other, `ping` is an error with a non-zero exit, as `get` is: `RUNTIME_AUTH_FAILED`,
+`RUNTIME_IDENTITY_CHANGED` or `RUNTIME_PROTOCOL_MISMATCH`, with the sentence Settings › Remote Runtimes says for it.
+
+`expect` names the extensions of this computer, by their ids from `astera ext list`, that should be on the Runtime too.
+`--add` and `--remove` take comma separated ids, and with neither it lists them. `--add` refuses an id that is not on
+this computer; `--remove` also takes an id that is still in the stored list. `get` then says of each expected one
+whether it is not there, different there, off there, missing a secret there, or the same. Nothing installs there
+from here: install, update or turn it on in that computer's own Settings › MCP & Skills. An agent session can list the
+ids but not change them: taking one off the list hides what `get` would say of it, as ignoring a finding does.
+
 ### Plugins
 
 A plugin is a folder with a `package.json` whose `astera` field names its entry file, the Plugin API it is written
@@ -693,6 +734,9 @@ astera runtime revoke  --id <clientId>
 astera runtimes list
 astera runtimes add    [--pair <string>] [--address <host>] [--port <n>] [--code <code>] [--fingerprint <fp>] [--name <n>] [--replace]
 astera runtimes remove --id <runtimeId|name>
+astera runtimes get    --id <runtimeId|name>
+astera runtimes ping   --id <runtimeId|name>
+astera runtimes expect --id <runtimeId|name> [--add <ids>] [--remove <ids>]
 
 astera plugins list
 astera plugins get     --id <pluginId>
@@ -751,9 +795,12 @@ astera agent-profiles list
 astera agent-profiles show    --id <profileId|name>
 astera agent-profiles create  --name <text> --account <id,…> [--exclude-mcp <name,…>] [--permission <inherit|bypass|ask>] [--sandbox <on|off>] [--description <text>]
 astera agent-profiles update  --id <profileId|name> [--name <text>] [--account <id,…>] [--exclude-mcp <name,…>] [--permission <inherit|bypass|ask>] [--sandbox <on|off>] [--description <text>]
-astera agent-profiles archive --id <profileId|name>
+astera agent-profiles archive --id <profileId|name> [--reason <text>]
 astera agent-profiles restore --id <profileId|name>
 astera agent-profiles delete  --id <profileId|name>
+astera agent-profiles audit   [--all]
+astera agent-profiles audit-ignore   <key> [--note <text>]
+astera agent-profiles audit-unignore <key>
 
 astera audit   list    [--session <sessionId>] [--job <jobId>] [--run <runId>] [--task <taskId>] [--agent-profile <id|name>] [--action <action>] [--decision <allow|would-deny|unknown|blocked>] [--since <time>] [--until <time>] [--before-id <recordId>] [--limit <n>]
 astera audit   summary [--session <sessionId>] [--job <jobId>] [--run <runId>] [--task <taskId>] [--agent-profile <id|name>] [--action <action>] [--decision <allow|would-deny|unknown|blocked>] [--since <time>] [--until <time>]
@@ -796,6 +843,12 @@ astera browser help                      the agent browser guide
 ```
 
 `astera help` is the reference agents read.
+
+**`browser js` from a sandboxed session opens its page in a browser storage of its own.** A session that is not
+sandboxed drives a tab in the same storage as the person's own preview tabs (`persist:preview`), so a page there may
+be logged in as the person. A sandboxed session's tab is in an in-memory partition made for that session: no cookies,
+storage or logins of the person's, empty each time the app starts, and not shared with another sandboxed session. The
+project's own localhost pages open as before. The tab shows a small shield beside its agent tag.
 
 **`astera agent-context` prints the command surface as JSON**, for a caller that is a program rather
 than a person. It covers every command this binary can route, not only the public ones above: the
@@ -919,7 +972,9 @@ take one, as any flag a command does not take is.
 **The global `--runtime <id|name>` goes before the command too**, as in `astera --runtime office jobs list`,
 and sends the command to a paired Runtime instead of this machine's Host ([remote-runtime.md](remote-runtime.md)).
 Only the commands a Runtime offers take it; any other refuses with `RUNTIME_CAPABILITY_MISSING` before it
-reads anything on this machine. After the command, `--runtime` is refused with 2.
+reads anything on this machine. After the command, `--runtime` is refused with 2. From inside a sandboxed
+session, a command that changes work on the Runtime is refused with 5 before anything is sent; reads go. A shell
+whose `ASTERA_SESSION` names no session this machine's Astera holds counts as sandboxed: unset it.
 
 **`projects find --path <path>` names the project a folder belongs to**: the registered project whose
 folder is that path or holds it. When registered projects nest, as a package registered inside a
@@ -1123,21 +1178,28 @@ answers these commands, so they work with Astera closed. `show`, `update`, `arch
 the profile's id or its name in `--id`. `--exclude-mcp` takes the names `ext list` shows; a name no shared MCP server
 has is refused with 2, naming it, and nothing is changed. `update` changes only the flags given, and its
 `--account` and `--exclude-mcp` replace the lists (`--exclude-mcp ""` leaves no server out). An archived profile
-starts no new work, while the work that holds it goes on; `restore` takes it back. `delete` is refused with 6 while
-unfinished work holds the profile. Changing profiles is for a person: from inside an agent session the changes are
-refused with 5, and the reads are not. A profile the Host refuses says why in `error.details.reason`: `name-empty`,
-`name-too-long`, `name-taken`, `no-account`, `unknown-account` or `mixed-provider` with 2, and `in-use` with 6.
+starts no new work, while the work that holds it goes on; `restore` takes it back. `archive` records when
+(`archivedAt`) and, with `--reason`, why (`archivedReason`, one line of at most 200 characters; a line break or a
+longer one is refused with 2), and `restore` clears both. A scheduled Job that uses an archived profile waits
+instead of firing until it is restored (see "A schedule's fire runs a Job exactly the way `jobs run` does",
+above). `delete` is refused with 6 while unfinished work holds the profile. Changing profiles is for a person: from
+inside an agent session the changes are refused with 5, and the reads are not. A profile the Host refuses says why in
+`error.details.reason`: `name-empty`, `name-too-long`, `name-taken`, `no-account`, `unknown-account` or
+`mixed-provider` with 2, and `in-use` with 6.
 
 **`--sandbox on` starts the profile's sessions, terminal and chat, in their CLI's own sandbox**; `off`, the default,
 starts them as before, and a profile made before the switch existed reads as `off` (`agent-profiles list` shows it as
 `sandbox`). In Codex's sandbox a session never stops to ask (`-a never` takes the place of the permission bypass; a
-chat's thread names the profile and its approval policy is `never`) and a terminal session runs on its own server
-(`--no-daemon`). It needs codex 0.160.0 or later: an older codex, or one whose version cannot be read, is not started
+chat's thread names the profile and its approval policy is `never`), so the tools of the MCP servers Astera shares
+with it are approved as the bypass approves them (`default_tools_approval_mode`; a stricter mode your organization
+requires still wins), and a terminal session runs on its own server (`--no-daemon`). It needs codex 0.160.0 or later: an older codex, or one whose version cannot be read, is not started
 (`SANDBOX_UNAVAILABLE: cli-too-old codex …`), and a chat whose thread Codex does not confirm runs under the profile is
 stopped (`SANDBOX_UNAVAILABLE: profile-not-active codex`). On every OS it writes only in its folder, the git directories of the folder's repository (never their
 `hooks` or `config`, nor what decides where git finds them: each `commondir` file, the `modules` folder of submodules'
 git directories, and a worktree's `.git` file; a start makes a missing `commondir`, holding `.`, and an empty
-`modules`, so they can be kept read-only) and the temp folder, where npm's cache goes; it cannot read `~/.ssh`, `~/.aws`, the GitHub CLI's
+`modules`, so they can be kept read-only) and the temp folder, where npm's cache goes, and never in Astera's own profile
+folder, even where its folder holds it (a session started in the home folder), though it still reads the Host key
+there; it cannot read `~/.ssh`, `~/.aws`, the GitHub CLI's
 and gcloud's settings, `~/.docker`, `~/.npmrc`, `~/.git-credentials` or `~/.kube`; and the network works. On macOS
 `~/Library/Keychains` is closed too, and on Linux the session bus a secret service answers on. On macOS and Linux it
 cannot open the folder the Host's socket is in either, nor any other Host's folder of yours beside it (`astera-host-*`
@@ -1146,14 +1208,23 @@ started later is not closed to it), so its `astera` reaches the Host only throug
 endpoint with the session's own token (`ASTERA_LOOPBACK`, above). A Claude Code session,
 terminal or chat, gets Claude Code's own sandbox on macOS and Linux through its settings file, with the same limits: its
 commands cannot run outside it, and a Claude Code whose sandbox cannot start exits at once and says why in its tab;
-`astera` runs outside it, as a command line of its own: a line that starts with something else (`cd x && astera …`)
-runs inside the sandbox, which reaches no Unix socket, the Host's included, so `astera` fails there on macOS as on
-Linux. On Linux its git reads an excludes file Astera writes
+`astera` runs outside it, as a command line of its own: a line that starts with something else (`cd x && astera …`,
+`"$ASTERA_CLI" …`) runs inside the sandbox, and so does one that pipes or redirects text into `astera` or feeds it a
+heredoc (measured with Claude Code 2.1.316). The sandbox reaches no Unix socket, the Host's included, and no TCP port on
+`127.0.0.1`, so the loopback endpoint is closed to it too and `astera` fails there on macOS as on Linux: it ends with
+`HOST_NOT_RUNNING` and says to run the line on its own, with each `-` value given inline in quotes (`--body "…"`). On Linux its git reads an excludes file Astera writes
 (`<profile>/sandbox/excludes-<uid>`: the person's own `core.excludesFile`, or git's default one, then the names the
 sandbox keeps placeholders for, such as `.bashrc` and `.vscode`), so `git add -A` works. A sandboxed Codex session on Windows runs as the
 sandbox's own account, which cannot read the person's home, so its git reads a copy of the person's global excludes
 that Astera writes in the temp folder. Claude Code has no sandbox on
-Windows: there the switch only keeps its file tools, not its shell, out of those folders, and npm keeps its own cache.
+Windows: there the switch only keeps its file tools, not its shell, out of those folders and from changing the profile
+folder, and npm keeps its own cache.
+A command the person types in a Claude session with the `!` prefix usually runs outside Claude Code's sandbox; the agent's own
+commands run inside it. Claude Code's sandboxing docs (https://code.claude.com/docs/en/sandboxing, "What runs outside the
+sandbox" and "Turn off the retry with strict sandbox mode") say a command you enter at the `!` shell-mode prompt "runs
+unsandboxed in most sessions", and name the sessions where it is sandboxed: "A background session: strict sandbox mode covers
+shell-mode commands too" and "A Linux session with `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` set: every command runs sandboxed,
+shell-mode commands included". Seen on a Mac, 2026-10-29: a profile folder write typed with `!` succeeded.
 What a sandboxed session starts runs in the sandbox too, whatever profile it names: a session it makes with `sessions
 create`, a Job it makes (its coordinator and every worker), a Task it adds to any Job and a worker it starts with
 `worker-start`. Where that CLI has no sandbox (Claude Code on Windows) such a start is refused with
@@ -1169,12 +1240,85 @@ or started. A message or a question in a run (`send`, `ask`) is open to a worker
 Astera started for it; from any other sandboxed session it is refused with `outside-sandbox job <id>` unless the
 run's Job is a sandboxed session's. A sandboxed target is not refused, and a worker's `send` and `ask` in its own run
 stay open whoever its coordinator is.
+A Task's checks (`--validate`) run in the same kind of sandbox its workers ran in, since they run the files the workers
+edited (a package script, a test, a build file). The kind is the one each attempt's session actually started with, kept
+on its Dispatch; a lifecycle Task's merged check follows the latest sandboxed worker Dispatch of its Run (a reviewer's
+never counts). A Codex worker's check
+runs as `codex sandbox` with the session's own permission profile, as that account; a Claude Code worker's, on macOS and
+Linux, under the sandbox runtime Claude Code builds its sandbox on (`@anthropic-ai/sandbox-runtime` 0.0.79, through
+Astera's own runner, network allowed as in the session). A check whose sandbox cannot be put around it (the account's
+Windows sandbox not set up, the runtime missing a tool, Ubuntu's AppArmor profile for bubblewrap) is not run outside it
+and is not the code's failure: the Task asks a person (retry, skip the check, or mark the Task failed), saying why in a
+check's words and what can be done there (for an account whose Windows sandbox is not set up, Set up beside it under a
+sandboxed profile in Settings › Agent profiles, then retry; for a path no sandbox can carry, that retrying will not
+help). A sandbox that stops before the check starts is such a question too, not the code's failure: Astera's check
+runner says so with its own exit code, 125, and its own short mark, `astera-sandbox-failed`, as the very last thing it
+prints, after a line with its reason for whoever reads the run. It also writes the reason to a file Astera named for the
+run, which the question quotes; on Windows the run's output passes through the console, which can glue a long line to
+the one before it or break it where it wraps, so only the mark is read from the output. The check's output is kept with
+its result. A Claude Code check under the sandbox runtime runs through that runner,
+and so does a Codex check on Windows, whose shell first prints a line of its own so the runner knows the check started
+(`codex sandbox` there exits 1 for its own failure as for a check's). A Codex check on macOS and Linux runs straight in
+its terminal as before, so a sandbox that stops there still reads as the check's failure. A check that ran and failed
+is a failure. A Docker check
+(`compose`, `dockerfile`) of a sandboxed Task is refused that way too, since Docker reaches past any of these sandboxes.
+Claude Code on Windows has no sandbox, so its checks run as before and say `validated outside the sandbox`. Every check,
+sandboxed or not, starts without the variables the Credentials list hides from a session in its folder, and its result
+names them (`hiddenEnv`: names only, never a value), which the completion block shows under a failed check; a check that
+timed out twice opens a question whose words name them. A value a check needs can be given on purpose in its run
+configuration's `env`, which is laid over that environment; inside `codex sandbox` the account's
+`shell_environment_policy` still decides what reaches the command, as it does for a session's commands. A reviewer of
+such a Task works in the implementer's tree and starts in its own CLI's sandbox too. A Claude Code reviewer on Windows,
+which has none, depends on what put the work in the sandbox. For work a profile's sandbox switch sandboxed, it starts
+as a sandboxed profile's Claude Code session does there, with its file tools kept out of the login folders and its
+shell unrestricted, and the Task's `reviewFileToolsOnly` (and its completion block) says the review ran with file-tool
+protection only. For a Job or Task a sandboxed session made, it is refused with `SANDBOX_UNAVAILABLE: no-sandbox
+claude`, as every start of such work is there, and the review asks a person. The packaged app keeps the sandbox runtime's helpers (its Linux seccomp
+loader, its JVM proxy agent) out of `app.asar`, and Astera hands srt their unpacked paths.
 On Windows the Codex sandbox is Codex's elevated one, which keeps Credential Manager out, and the repository is named a
-safe directory for the account it runs as; a repository or home folder whose path holds a character cmd.exe reads as
-syntax (`" & | < > ^ %`) cannot be carried to it. Each Codex account's home must have the elevated sandbox set up once
-(Codex's `codex sandbox setup --elevated --current-user`, which brings up Windows' administrator prompt): Astera asks
+safe directory for the account it runs as; a repository, a home folder or one of Astera's own folders whose path holds
+a character cmd.exe reads as syntax (`" & | < > ^ %`) cannot be carried to it. Each Codex account's home must have the
+elevated sandbox set up once (Codex's `codex sandbox setup --elevated --current-user`, which brings up Windows'
+administrator prompt): Astera asks
 before a sandboxed start, Codex's `doctor --json` first and then, only on a home doctor calls complete, an echo through
-the sandbox (on a home with no setup the echo would start the setup and its prompt), and the app offers to set up the
+the sandbox (on a home with no setup the echo would start the setup and its prompt). The echo runs under the same
+permission profile and deny list the account's sandboxed sessions get. Each elevated run applies its list's read
+denials to the sandbox's users group, one for the whole machine, and asks Windows to revoke those its home's last run
+applied that the new list lacks. That revoke never takes a denial away: Codex's `revoke_ace` uses `REVOKE_ACCESS`
+(codex-rs/windows-sandbox-rs/src/acl.rs at rust-v0.160.0, the same in rust-v0.166.0 and on Codex's main branch on
+2026-10-29), which "Indicates that all existing ACCESS_ALLOWED_ACE or SYSTEM_AUDIT_ACE structures for the specified
+trustee are removed" (Microsoft Learn, ACCESS_MODE) and leaves the deny entries, as measured on Windows 11 (Codex
+tracks it as [openai/codex#43363](https://github.com/openai/codex/issues/43363)). So a denial stays on its folder once
+any sandboxed run of any account has applied it. A read grant does not lift it either: `GRANT_ACCESS` adds an allow
+entry beside it. Only a run that makes that very folder writable to the sandbox does, since Codex's write grant uses
+`SET_ACCESS`, which "discards any existing access control information for the trustee" (the same page; measured too),
+and Astera's sessions never make a login folder itself writable. Astera still runs the echo under the sessions' own
+list, so nothing changes the day Codex's revoke starts working. Codex's setup records the elevated sandbox
+as the home's default (`windows.sandbox = "elevated"` in its `config.toml`). Astera's sandboxed launches do not need it:
+each names the elevated sandbox itself (`-c windows.sandbox="elevated"`, which Codex takes over the file), and so does
+the doctor it asks. So after a setup Astera runs, it takes that line back out of the account's `config.toml` and leaves
+the rest of the file as it was (it keeps the old file as `config.toml.bak`), and the home's other Codex sessions run as
+they did before the setup. If your line named another sandbox (say `"unelevated"`), Codex's setup writes `"elevated"`
+over it, and Astera puts your line back exactly as it was. An inline `windows = { … }` table is the exception: Codex's
+setup rewrites it as a `[windows]` table reading `"elevated"`, which Astera leaves and says in its log, so the home then
+makes the elevated sandbox its default and gets the warning and Remove described below; Remove leaves it with no sandbox
+default, not your earlier value, so add that back by hand. A line that already said `"elevated"` before the setup is
+left, since whose it is cannot be told, and so is a home that Codex's older `[features] elevated_windows_sandbox = true`
+already made elevated: Codex still honours that key when no `windows.sandbox` is set, and its setup command does not
+clear it. For a home whose `config.toml` still makes the elevated sandbox its default, through the line or that key,
+Settings › Agent profiles says so in one sentence under that Codex account of a sandboxed profile, with Remove, which
+takes them out only when you press it, and a sandboxed Codex session or chat started on that home starts as today and
+says so in the line above its terminal or chat. Astera reads only the account's own `config.toml` for this: a project's
+`.codex/config.toml` or a Codex profile that sets `windows.sandbox` is not seen. What stays otherwise reaches further
+than Astera's sessions: while a home's `config.toml` has the line or that older key (set up before this, or by you or
+Codex's own app), a Codex session of that home that is not one of Astera's sandboxed sessions yet still runs its
+commands in Codex's sandbox (an Astera tab with YOLO off, a How It Works write-up, your own `codex`, with no bypass flag
+and no config turning the sandbox off) runs each command as the sandbox's own account, which those denials keep out of
+the login folders too (`~/.ssh`, `~/.aws`, the GitHub CLI's and gcloud's folders, `~/.docker`, `~/.kube`): an ssh `git
+push`, `gh` or `kubectl` fails inside its sandbox, and Codex asks to run it outside, or fails it where nothing can be
+asked. On a home made stale by another account's setup, such a command can bring up Windows' administrator prompt while
+Codex sets the home up again. `icacls <folder> /remove:d CodexSandboxUsers` takes a denial away by hand, until the next
+sandboxed run applies it again. The app offers to set up the
 one account a start was refused for. A ready answer is kept until Astera restarts or a setup runs through it, so a home
 made stale by a setup outside Astera keeps reading ready until then. Settings › Agent profiles also shows, under a
 sandboxed profile on Windows, whether each of its Codex accounts is set up, asked of Codex's doctor alone (no sandboxed
@@ -1182,7 +1326,11 @@ echo runs from Settings, so a stale home can read ready there and be refused at 
 is not. A session the sandbox
 cannot be applied to does not start, and says why with `SANDBOX_UNAVAILABLE: <code>`: `codex-daemon codex` for a codex
 that does not take `--no-daemon`, `cli-too-old claude <found> 2.1.306` for an older Claude Code (`cli-version-unknown
-claude` when its version cannot be read, `cli-missing claude` when it is not there), `path-unsafe` for such a path,
+claude` when its version cannot be read, `cli-missing claude` when it is not there), `path-unsafe` for such a path in
+the repository, `named-path-unsafe` for one elsewhere (a login folder, one of Astera's own; the log names it),
+`linked-path` when such a folder is reached through a link inside the session's own folders, which it could repoint
+(macOS and Windows Codex, macOS and Linux Claude; on Linux Codex starts and refuses every command there, and the tab
+says so; the log names the link),
 `git-layout` when the folder's git data could not be read, `windows-setup codex <accountId>` for an account whose
 Windows sandbox is not set up (or no longer works: setting up one account's home can leave another's stale),
 `windows-check-failed codex <accountId>` when Codex could not be asked about it (not there, too old for `doctor --json`,
@@ -1230,6 +1378,87 @@ say why in `error.details.reason` too: `agent-profile-unavailable` (unknown or a
   "accountIds":["acc_1","acc_2"],"mcpExclude":["mcp-github"],"permission":"ask", …}]}}
 ```
 
+**`agent-profiles audit` says what looks unused, duplicated, broken, failing, over-broad or costly**, and what the
+Rules cannot cover: the same findings **Settings › Security & Access › Findings** shows in the app. It covers every
+kind, not only profiles: agent profiles, the shared MCP servers, skills, commands and agents, paired Runtimes,
+credentials, Jobs and Runs, and the CLIs' coverage of a deny rule. Each finding has a `key`, its `rule`, its `subject`
+(`kind`, `id` and `name`), a `reason` and one `action`, the step that would resolve it. **Nothing is ever acted on**:
+no finding archives, removes, turns off, revokes or blocks anything, and the command changes nothing but the ignore
+list, which only `audit-ignore` and `audit-unignore` change. It exits 0 whatever it finds. The rules, with thresholds
+fixed in this version:
+
+- `unused-profile`: an active profile last used more than 90 days ago (or, never used, made more than 90 days ago)
+  that no scheduled Job holds.
+- `duplicate-profile`: active profiles with the same accounts in the same order, MCP exclusions, permission and
+  sandbox. One finding names the whole group.
+- `broken-reference`: a profile that names an account or a shared MCP server that was removed, or a Job or Task not
+  finished yet that runs as a profile that is gone or archived (a scheduled Job that waits on an archived profile says
+  so in `jobs list` instead).
+- `failing-profile`: a profile with at least 5 worker starts in 30 days, at least half of them failed.
+- `unused-mcp`: an enabled shared MCP server no session called in 30 days.
+- `coverage-gap`: a deny rule in force whose action the sessions of one CLI and session kind see (observe), or block
+  (enforce), only in part or not at all, while an active profile runs on that CLI. One finding per CLI, session kind
+  and rule, whose key ends with the rule's id, so each rule's gap is ignored apart.
+- `stale-runtime`: a paired Runtime not reached in more than 30 days.
+- `unmanaged-credential-reference`: a shared MCP server that passes a variable from the session that the Credentials
+  list does not name.
+- `stale-credential`: a shared MCP server's stored secret not used through Astera in 30 days.
+- `over-broad-profile`: a profile that runs without permission checks though every call it made in 30 days only read
+  (key ending `:bypass`), that runs outside the sandbox though every call said whether it read or wrote, it wrote only
+  inside its folder and touched no login folder (`:sandbox`; a call such as `npm install` or `cargo build` may write
+  to caches in the home, and `git config --global` writes outside), or that gets a shared MCP server it did not call
+  (`:mcp:<id>`, one per server). It needs at least 10 recorded calls, and settings that have not changed in 30 days.
+- `token-spike`: a Run that used at least 3 times the median tokens of its group's Runs in 30 days, with at least 5
+  Runs in the group (its Job's profile, else its first worker's, else its account).
+- `unused-skill`, `unused-command`, `unused-agent`: a shared skill, command or agent installed for Claude Code alone
+  with no recorded use in 30 days.
+
+**The findings from usage need Observe on for 30 days**: `unused-mcp`, `over-broad-profile` and the unused skill,
+command and agent findings. Their history counts from when observe or enforce was last turned on (`observingSince` in
+`policies show`), and never from before this version first ran on the profile, less each day whose records stopped at
+the size limit. When the records pass the size limit and their oldest days are dropped, the history counts from the
+day after the last one dropped. Until it has 30 days, none of them is raised and `observe` says so:
+`{"on":false,"days":0}` while observe is off, or how many whole `days` it has had, which `--human` prints first as
+"Usage findings need Observe on for 30 days. It has been on for 12 days." (or "Observe is off."). Something shared,
+turned on or made within the 30 days is not judged either. `failing-profile` and `token-spike` read Dispatch outcomes
+and token totals, which are kept whatever the mode, so they do not wait. A skill Codex can use too is never a finding,
+since Codex does not report which skills it used: when Claude reported no use of it, `info` says so and that Codex
+cannot tell. `info` also says when Claude cannot tell (a Claude Code older than 2.1.312 here, a Claude chat in the
+window, whose typed skills and commands are not reported, or a Claude session started without the hooks that report
+uses), and for an item Codex has too, that neither can. An `info` line is never a finding and has no key.
+
+**A source that cannot be read drops only its own findings.** `unread` names it, one of `profiles`, `accounts`,
+`orchestration`, `tokens`, `policy`, `records`, `extensions`, `account-mcp`, `credentials`, `credential-uses`,
+`runtimes`, `extension-uses`, `ignored`, `settings` and `cli-version`, the findings that need it are left out, the rest
+are given, and `--human` closes with "Could not read: …". A use log that stopped at the size limit on a day of the last
+30, or dropped one of those days to keep under it, counts as unread, since its uses are missing. With `policy` unread,
+how long Observe has been on is not known: `observe` reads `{"on":false,"days":0}` and `--human` prints the unread line
+instead of the Observe note. With `ignored` unread, every finding shows as open. The Host computes the findings when
+asked and keeps them for a minute, so a change elsewhere may take a minute to show; an ignore shows at once.
+
+**`audit-ignore <key>` sets a finding aside**: `audit` leaves it out, and `audit --all` shows it with `"ignored":true`,
+`ignoredAt` and the `--note` given (one line of at most 200 characters; a longer one or one with a line break is 2).
+Ignoring it again replaces the note. It holds until `audit-unignore <key>`, whatever later happens to its subject. The
+key is the word after the command, as `audit` gives it (`audit --quiet` prints only the keys, one per line); a key no
+current finding has is 4, and nothing is written.
+`audit-unignore` answers `"removed":false` for a key that was not ignored. The Host keeps the ignores in
+`findings-ignored.json` in the profile; a damaged one refuses both with 6, and a copy of it is kept beside it. **An agent
+session may read the findings**, which hold names and ids only, never a value, a command or a file's contents; the two
+ignore commands are refused there with 5, so an agent cannot hide a finding about itself. MCP clients, plugins, the SDK
+and a paired controller (`--runtime`) have none of the three.
+
+```bash
+astera agent-profiles audit --human
+astera agent-profiles audit-ignore stale-runtime:rt_lab --note "the lab is shut until spring"
+astera agent-profiles audit --all --json
+```
+
+```json
+{"ok":true,"data":{"findings":[{"key":"unused-profile:ap_3f2a9c01b7de","rule":"unused-profile",
+  "subject":{"kind":"profile","id":"ap_3f2a9c01b7de","name":"Reviewer"},"reason":"Not used in 120 days.",
+  "action":"Archive the profile.","ignored":false}],"info":[],"observe":{"on":true,"days":12},"unread":[]}}
+```
+
 **`credentials` reads the Credentials list**, the same as **Settings › Security & Access › Credentials** in the app: what
 Astera keeps out of the sessions it starts. Shared MCP servers that hold a stored secret appear on their own, hidden by
 default (the Gateway gives the session the server, so the raw variables go); the entries you registered name environment
@@ -1258,18 +1487,22 @@ the runtime it uses (srt), not with Claude Code itself.
 session's folder or `outside project: <name>`, a host name, `server.tool`), never the full command, its output, a
 file's contents or a secret. Nothing is blocked and no session waits. A session already running keeps what it started
 with. `compatibility`, the default, observes nothing, and observe writes nothing new in it (the token totals `runs get`
-shows are kept in `token-totals.json` in every mode); turning observe off keeps the records and the rules. The Host
-keeps the records in the profile (`audit/`, a file a day, for 30 days or up to 50 MB) and the rules beside them
-(`audit-policy.json`), so these commands work with Astera closed.
+shows are kept in `token-totals.json` in every mode); turning observe off keeps the records and the rules. While
+observe or enforce is on, `policies show` and every policies change answer `observingSince` too: when it was last
+turned on from off, which a switch between observe and enforce keeps and turning it off drops. `agent-profiles audit`
+counts Observe history from it (a file from before it existed has none, and the count then starts when this version
+first ran on the profile). The Host keeps the records in the profile (`audit/`, a file a day, for 30 days or up to
+50 MB) and the rules beside them (`audit-policy.json`), so these commands work with Astera closed.
 
 **`policies set-mode --mode enforce` stops what the rules deny.** Every Claude Code or Codex session Astera starts
 afterwards runs a blocking hook before each tool call, with Astera's own executable (the Host runtime on Windows, the
 app run as node elsewhere). The hook reads the rules at that call and decides it there: a call the rules deny does not
 run, the agent is told `Blocked by Astera Rules: …`, and the call is recorded with the decision `blocked` and the rule
 (`ruleId`) that stopped it. Before any rule, an agent session cannot write Astera's profile folder or run an `astera
-policies`, `credentials` or `agent-profiles` command that changes them, and a rules file it cannot read lets only reads
-through. An agent running as you can still write those files from a script it runs. A session does not start in
-enforce when it cannot be protected: Claude Code older than 2.1.306, codex older than 0.160.0, a CLI that is not there
+policies`, `credentials` or `agent-profiles` command that changes them (the findings' ignore list among them), and a
+rules file it cannot read lets only reads through. An agent running as you can still write those files from a script it
+runs. A session does not start in enforce when it cannot be protected: Claude Code older than 2.1.306, codex older
+than 0.160.0, a CLI that is not there
 or whose version cannot be read, Claude Code hooks turned off by your organization's managed settings on this computer
 (a policy served from the claude.ai console cannot be seen), a codex that does not take `--no-daemon`, or no Astera
 executable to run the hook (Windows without the Host runtime). A project's own `disableAllHooks` does not turn the hook
@@ -1333,7 +1566,8 @@ written for the shell you are in (PowerShell on Windows, a POSIX shell elsewhere
 or any shell named in `SHELL`), so the line can be pasted as it is. The parser takes a lone `-` as "read stdin" and a
 value starting with `--` as the next flag, so no quoting can pass one as a filter value: the hint leaves that filter out
 and says so above it. `audit summary` counts the same calls by decision, in all and per action, and `stoppedAtLimit` is
-true when a day of the period stopped recording at the size limit, so it holds fewer calls than were made.
+true when a day of the period stopped recording at the size limit, or was removed to stay under it, so it holds fewer
+calls than were made; `droppedAtLimit` is true for the second.
 
 **These commands are for a person.** From inside an agent session (`ASTERA_SESSION` is set) every change is refused
 with 5, and so are both `audit` reads, whatever filter values they carry: the refusal comes first, before any
@@ -1845,7 +2079,9 @@ launch, drive and photograph the project's own app on a Windows desktop the pers
 the person keeps their screen and pointer; `astera app help` documents them, and `astera agent-context`
 lists them with `"public": false`. The Host answers `app js` whether or not Astera is open. It needs
 **Agent app workspace** switched on in Settings and refuses, with the reason, on another platform or
-where there is no interactive desktop (an SSH session, a service). The clipboard is shared with the
+where there is no interactive desktop (an SSH session, a service). A sandboxed session is refused with 5 and
+`SANDBOX_UNAVAILABLE: outside-sandbox command app-js`, since `launch({ command })` starts a program as Astera, outside the
+sandbox. The clipboard is shared with the
 person.
 
 ## Output

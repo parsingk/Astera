@@ -227,9 +227,17 @@ export function treeKillTargets(rows: readonly ProcRow[], root: number, hostPid:
 export function lateTreeTargets(before: readonly ProcRow[], after: readonly ProcRow[], root: number, hostPid: number): { groups: number[]; pids: number[] } {
   if (root <= 1 || root === hostPid) return { groups: [], pids: [] }
   const first = walkTree(before, [root], hostPid)
-  const now = new Set(after.map((r) => r.pid))
+  const was = new Map(before.map((r) => [r.pid, r]))
+  const now = new Map(after.map((r) => [r.pid, r]))
+  // Still the same process: its row has the parent or the group it had. A pid reused within the
+  // grace by a stranger has neither; a process whose parent died keeps its group.
+  const same = (p: number): boolean => {
+    const a = was.get(p)
+    const b = now.get(p)
+    return a !== undefined && b !== undefined && (a.ppid === b.ppid || a.pgid === b.pgid)
+  }
   // A group the first listing targets still covers its members when its leader has gone since.
-  const late = walkTree(after, [...first.tree].filter((p) => now.has(p)), hostPid, first.groups)
+  const late = walkTree(after, [...first.tree].filter(same), hostPid, first.groups)
   const had = new Set([...first.groups.map((g) => -g), ...first.pids])
   return { groups: late.groups.filter((g) => !had.has(-g)), pids: late.pids.filter((p) => !had.has(p)) }
 }
@@ -257,7 +265,9 @@ function walkTree(
   const tree = new Set<number>(seeds.filter((p) => !wall(p)))
   for (const queue = [...tree]; queue.length > 0; ) {
     const p = queue.pop()!
-    for (const next of [...(children.get(p) ?? []), ...(members.get(p) ?? [])]) {
+    // The Host's own group is never expanded: a tree process that leads it would bring in the Host's
+    // other children.
+    for (const next of [...(children.get(p) ?? []), ...(p === hostPgid ? [] : (members.get(p) ?? []))]) {
       if (wall(next) || tree.has(next)) continue
       tree.add(next)
       queue.push(next)
@@ -281,7 +291,7 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
  *  then and is missed. A target already gone is not a failure; one that may not be signalled does not
  *  stop the rest, and its error is thrown once the others are done. When the first listing fails, the
  *  root's own group is still ended (killGroup), and then the failure is thrown. */
-export async function killProcessTree(
+export async function killPosixTree(
   pid: number,
   o: { exec?: ExecText; signals?: Signals; graceMs?: number; hostPid?: number } = {}
 ): Promise<void> {

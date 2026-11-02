@@ -140,6 +140,19 @@ describe('validateProfile', () => {
   it('lets a profile keep its own name when it is not among others', () => {
     expect(validateProfile(input({ name: 'Reviewer' }), ACCOUNTS, [])).toMatchObject({ ok: true })
   })
+  // Lifecycle design §5: an archived profile records when and why, and a change to it keeps both
+  it('keeps archivedAt and archivedReason through validateProfile', () => {
+    const v = validateProfile(
+      { name: 'p', accountIds: ['acc_c2'], status: 'archived', archivedAt: '2026-10-30T00:00:00.000Z', archivedReason: 'old' },
+      [acc('acc_c2', 'claude')],
+      []
+    )
+    expect(v.ok && v.profile.archivedAt).toBe('2026-10-30T00:00:00.000Z')
+    expect(v.ok && v.profile.archivedReason).toBe('old')
+    const plain = validateProfile(input(), ACCOUNTS, [])
+    expect(plain.ok && 'archivedAt' in plain.profile).toBe(false)
+    expect(plain.ok && 'archivedReason' in plain.profile).toBe(false)
+  })
 })
 
 describe('liveAccounts and findProfile', () => {

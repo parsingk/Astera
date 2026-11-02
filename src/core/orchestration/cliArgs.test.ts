@@ -56,6 +56,16 @@ describe('parseArgs', () => {
     // Security audit SEC-6: a pairing string off the command line, where other users of the machine can read it.
     expect(parseArgs(['runtimes', 'add', '--pair', '-'])).toMatchObject({ cmd: 'runtimes-add', wantsStdin: ['pair'] })
   })
+  // Remote governance design §10.2, ruling C4: the Runtime is --id, as `runtimes remove` takes it, and expect's ids are
+  // comma lists
+  it('runtimes get, ping and expect parse, with the runtime as --id and --add and --remove', () => {
+    expect(parseArgs(['runtimes', 'get', '--id', 'Office'])).toMatchObject({ cmd: 'runtimes-get', args: { id: 'Office' } })
+    expect(parseArgs(['runtimes', 'ping', '--id', 'rt_a'])).toMatchObject({ cmd: 'runtimes-ping', args: { id: 'rt_a' } })
+    expect(parseArgs(['runtimes', 'expect', '--id', 'rt_a', '--add', 'skill-a,mcp-x', '--remove', 'cmd-b'])).toMatchObject({
+      cmd: 'runtimes-expect',
+      args: { id: 'rt_a', add: 'skill-a,mcp-x', remove: 'cmd-b' }
+    })
+  })
   // Plugin runtime design P6: install approves with --yes or names the grant.
   it('reads plugins install with its path and its approval', () => {
     expect(parseArgs(['plugins', 'install', '--path', 'my-plugin', '--yes'])).toMatchObject({ cmd: 'plugins-install', args: { path: 'my-plugin', yes: true } })
@@ -432,6 +442,33 @@ describe('parseArgs — audit and policies', () => {
     expect(parseArgs(['audit'])).toEqual({ error: 'audit needs one of: list, summary' })
     // Two words for a rule edit are refused with the verbs there are
     expect(parseArgs(['policies', 'rules', 'add'])).toMatchObject({ error: expect.stringContaining('rules-add') })
+  })
+})
+
+// The findings (lifecycle design §7, planning ruling 1): one verb each, the finding's key the one word that is not a flag
+describe('parseArgs — agent-profiles audit', () => {
+  it('agent-profiles audit, audit-ignore and audit-unignore parse, with the key positional and --note, --all, --json', () => {
+    expect(parseArgs(['agent-profiles', 'audit'])).toMatchObject({ cmd: 'agent-profiles-audit', args: {}, json: false })
+    expect(parseArgs(['agent-profiles', 'audit', '--all', '--json'])).toMatchObject({ cmd: 'agent-profiles-audit', args: { all: true }, json: true })
+    expect(parseArgs(['agent-profiles', 'audit-ignore', 'stale-runtime:rt_old', '--note', 'the lab is shut'])).toMatchObject({
+      cmd: 'agent-profiles-audit-ignore',
+      args: { key: 'stale-runtime:rt_old', note: 'the lab is shut' }
+    })
+    // The key may come after the flags too
+    expect(parseArgs(['agent-profiles', 'audit-ignore', '--note', 'n', 'unused-profile:ap_1'])).toMatchObject({ args: { key: 'unused-profile:ap_1', note: 'n' } })
+    expect(parseArgs(['agent-profiles', 'audit-unignore', 'over-broad-profile:ap_1:mcp:m1', '--json'])).toMatchObject({
+      cmd: 'agent-profiles-audit-unignore',
+      args: { key: 'over-broad-profile:ap_1:mcp:m1' },
+      json: true
+    })
+  })
+
+  it('takes one key, and none on the commands that have no key', () => {
+    expect(parseArgs(['agent-profiles', 'audit-ignore', 'a', 'b'])).toEqual({ error: 'unexpected argument: b' })
+    expect(parseArgs(['agent-profiles', 'audit', 'a'])).toEqual({ error: 'unexpected argument: a' })
+    expect(parseArgs(['agent-profiles', 'list', 'a'])).toEqual({ error: 'unexpected argument: a' })
+    // A key given as a flag besides the word is two keys
+    expect(parseArgs(['agent-profiles', 'audit-ignore', 'a', '--key', 'b'])).toEqual({ error: 'agent-profiles audit-ignore takes the key once: as the word after the command' })
   })
 })
 

@@ -20,7 +20,8 @@ import {
   dispatchOfSession,
   dispatchOfWithTurns,
   registrySessionFacts,
-  type SessionFacts
+  type SessionFacts,
+  type UseEvent
 } from './recorder'
 
 const dirs: string[] = []
@@ -138,6 +139,7 @@ describe('createAuditRecorder', () => {
       action: 'git.remote.write',
       target: 'git push',
       confidence: 'high',
+      effect: 'write',
       status: 'ok'
     })
     // The Dispatch is asked at the call's own time
@@ -179,13 +181,29 @@ describe('createAuditRecorder', () => {
   it('keeps at most 16 commands, and a line cut short reads unknown', async () => {
     // The resolver's commands are already without repeats, which today stays under 16 for any line; the cap is the wall
     const commands = Array.from({ length: 20 }, (_, i) => ({ action: 'process.execute' as const, insideProject: i % 2 === 0 }))
-    const h = await rig({ over: { resolve: () => ({ action: 'process.execute', target: 'a', confidence: 'heuristic', commands }) } })
+    const h = await rig({ over: { resolve: () => ({ action: 'process.execute', target: 'a', confidence: 'heuristic', commands, effect: 'read' }) } })
     h.recorder.record(bash('a && b'))
     await h.recorder.flushed()
     const [r] = await h.records()
     expect(AUDIT_COMMANDS_KEPT).toBe(16)
     expect(r.commands).toEqual(commands.slice(0, 16))
     expect(r.confidence).toBe('unknown')
+    // What was cut may have written (lifecycle design §4.10)
+    expect(r.effect).toBe('unknown')
+  })
+
+  // Lifecycle design §4.10: whether the call read or wrote, and the login folder it touched by its short name only
+  it('a record carries effect and sensitive from the resolver', async () => {
+    const h = await rig()
+    h.recorder.record(bash('cat ~/.aws/credentials', { dedupeKey: 'a' }))
+    h.recorder.record(bash('git push origin main', { dedupeKey: 'b' }))
+    await h.recorder.flushed()
+    const records = await h.records()
+    const read = records.find((r) => r.action === 'filesystem.read')
+    const push = records.find((r) => r.action === 'git.remote.write')
+    expect(read).toMatchObject({ effect: 'read', sensitive: '.aws' })
+    expect(push).toMatchObject({ effect: 'write' })
+    expect(push).not.toHaveProperty('sensitive')
   })
 
   it('keeps no full command, argument past the subcommand or secret', async () => {
@@ -463,7 +481,7 @@ describe('createAuditRecorder', () => {
 
   it('resolves a call while it is handed over, so its input is not held', async () => {
     let resolved = 0
-    const h = await rig({ over: { resolve: (): ResolvedAction => (resolved++, { action: 'git.read', target: 'git status', confidence: 'high' }) } })
+    const h = await rig({ over: { resolve: (): ResolvedAction => (resolved++, { action: 'git.read', target: 'git status', confidence: 'high', effect: 'read' }) } })
     await h.recorder.flushed()
     h.recorder.record(bash('git status'))
     expect(resolved).toBe(1)
@@ -476,7 +494,7 @@ describe('createAuditRecorder', () => {
     const written: AuditRecord[][] = []
     const h = await rig({
       over: {
-        resolve: () => ({ action: 'git.read', target: 'git status', confidence: 'high' }),
+        resolve: () => ({ action: 'git.read', target: 'git status', confidence: 'high', effect: 'read' }),
         append: async (_dir, recs) => {
           written.push([...recs])
           await stuck
@@ -654,7 +672,7 @@ describe('createAuditRecorder', () => {
     const h = await rig({
       dispatch: { jobId: 'job1' },
       over: {
-        resolve: (c): ResolvedAction => (resolved.push((c.input as { command: string }).command), { action: 'git.read', target: 'git status', confidence: 'high' }),
+        resolve: (c): ResolvedAction => (resolved.push((c.input as { command: string }).command), { action: 'git.read', target: 'git status', confidence: 'high', effect: 'read' }),
         // The first record alone passes the size, so its day stops
         append: (dir, recs, o) => appendRecords(dir, recs, { ...o, maxBytes: 1, now: () => NOW })
       }
@@ -683,6 +701,190 @@ describe('createAuditRecorder', () => {
     await h.recorder.flushed()
     expect(h.logs.join('\n')).toMatch(/registry gone/)
     expect(await h.records()).toHaveLength(1)
+  })
+})
+
+// Lifecycle design §4.12: a use of a skill, command or agent goes to its own log, under the same mode as a call
+describe('the recorder’s uses', () => {
+  /** Every use written so far, from the use log's day files. */
+  const usesIn = async (profileDir: string): Promise<Array<Record<string, unknown>>> => {
+    const dir = profilePaths(profileDir).extensionUses
+    const names = await fs.readdir(dir).catch(() => [] as string[])
+    const out: Array<Record<string, unknown>> = []
+    for (const n of names.sort()) for (const l of (await fs.readFile(path.join(dir, n), 'utf8')).split('\n')) if (l !== '') out.push(JSON.parse(l))
+    return out
+  }
+  const skillUse = (over: Partial<UseEvent> = {}): UseEvent => ({ sessionId: 'sess_a', source: 'claude-hook', via: 'skill-tool', name: 'review', ...over })
+
+  it('uses are written while observing and dropped in compatibility', async () => {
+    const h = await rig()
+    h.recorder.use(skillUse({ dedupeKey: 'toolu_1' }))
+    // Heard twice, kept once; the same id as a call is still a use
+    h.recorder.use(skillUse({ dedupeKey: 'toolu_1' }))
+    h.recorder.record(bash('ls', { dedupeKey: 'toolu_2' }))
+    h.recorder.use(skillUse({ via: 'slash', name: 'ship', dedupeKey: 'toolu_2' }))
+    h.recorder.use(skillUse({ source: 'claude-chat', via: 'chat-seen', name: '' }))
+    await h.recorder.flushed()
+    expect((await usesIn(h.profileDir)).map((u) => [u.via, u.name])).toEqual([
+      ['skill-tool', 'review'],
+      ['slash', 'ship'],
+      ['chat-seen', '']
+    ])
+    // Enforce observes too
+    const e = await rig({ mode: 'enforce' })
+    e.recorder.use(skillUse())
+    await e.recorder.flushed()
+    expect(await usesIn(e.profileDir)).toHaveLength(1)
+    // Compatibility: nothing written, no folder, no session asked
+    const c = await rig({ mode: 'compatibility' })
+    await c.recorder.flushed()
+    c.recorder.use(skillUse())
+    // A Claude chat's mark (ruling R6-1) as any use
+    c.recorder.use(skillUse({ source: 'claude-chat', via: 'chat-seen', name: '' }))
+    await c.recorder.flushed()
+    expect(c.asked).toEqual([])
+    expect(await fs.stat(profilePaths(c.profileDir).extensionUses).then(() => true, () => false)).toBe(false)
+    // Heard before the mode was known to be compatibility: let go without the disk
+    const early = await rig({ mode: 'compatibility' })
+    early.recorder.use(skillUse())
+    await early.recorder.flushed()
+    expect(await usesIn(early.profileDir)).toEqual([])
+    // Turned off after it was heard: let go too
+    const late = await rig()
+    late.recorder.use(skillUse())
+    late.setMode('compatibility')
+    late.recorder.invalidate()
+    await late.recorder.flushed()
+    expect(await usesIn(late.profileDir)).toEqual([])
+  })
+
+  // Fix round 2: a source that must hand a mark until it lands (a Claude chat's, an unhooked session's) is told whether
+  // each use was written: once the append resolved, or not, wherever it was let go
+  it('tells a use’s source whether it was written', async () => {
+    const said = (h: Awaited<ReturnType<typeof rig>>, ev: UseEvent = skillUse()) => {
+      const answers: boolean[] = []
+      h.recorder.use(ev, (written) => answers.push(written))
+      return answers
+    }
+    const h = await rig()
+    const written = said(h)
+    expect(written).toEqual([])
+    await h.recorder.flushed()
+    expect(written).toEqual([true])
+    // Known off: at once
+    const off = await rig({ mode: 'compatibility' })
+    await off.recorder.flushed()
+    expect(said(off)).toEqual([false])
+    // Turned off before it was written
+    const late = await rig()
+    const lateAnswers = said(late)
+    late.setMode('compatibility')
+    late.recorder.invalidate()
+    await late.recorder.flushed()
+    expect(lateAnswers).toEqual([false])
+    // A session Astera did not start
+    const none = await rig({ facts: null })
+    expect(said(none)).toEqual([false])
+    // An append that failed: told so, and the calls of the same flush are still written
+    let fails = 1
+    const broken = await rig({
+      over: {
+        appendUses: async () => {
+          if (fails-- > 0) throw new Error('disk gone')
+          return true
+        }
+      }
+    })
+    broken.recorder.record(bash('git status'))
+    const brokenAnswers = said(broken)
+    await broken.recorder.flushed()
+    expect(brokenAnswers).toEqual([false])
+    expect(await broken.records()).toHaveLength(1)
+    expect(broken.logs.join('\n')).toMatch(/disk gone/)
+    const again = said(broken)
+    await broken.recorder.flushed()
+    expect(again).toEqual([true])
+    // Fix round 3: the store resolves without throwing, saying a line did not land (a day it stopped, a write that failed)
+    const dropped = await rig({ over: { appendUses: async () => false } })
+    const droppedAnswers = said(dropped)
+    await dropped.recorder.flushed()
+    expect(droppedAnswers).toEqual([false])
+  })
+
+  // Fix round 1: uses keep their own dedupe keys, so a session's many uses never push a call's key out, and the reverse
+  it('a use’s dedupe keys are its own, and leave the calls’ keys where they were', async () => {
+    const h = await rig()
+    h.recorder.record(bash('git status', { dedupeKey: 'toolu_1' }))
+    for (let k = 0; k < 1500; k++) h.recorder.use(skillUse({ dedupeKey: `toolu_u${k}` }))
+    h.recorder.record(bash('git status', { dedupeKey: 'toolu_1' }))
+    await h.recorder.flushed()
+    expect(await h.records()).toHaveLength(1)
+    expect(await usesIn(h.profileDir)).toHaveLength(1500)
+  })
+
+  // Fix round 1: a use dropped at the hold is counted and told as a use, apart from the calls
+  it('holds at most so many uses while the disk does not take them, and tells the rest apart from the calls', async () => {
+    let release: () => void = () => {}
+    const stuck = new Promise<void>((r) => (release = r))
+    const written: number[] = []
+    const h = await rig({
+      over: {
+        resolve: () => ({ action: 'git.read', target: 'git status', confidence: 'high', effect: 'read' }),
+        appendUses: async (_dir, uses) => {
+          written.push(uses.length)
+          await stuck
+          return true
+        }
+      }
+    })
+    await h.recorder.flushed()
+    // The first use goes to the disk and sticks there; the next fill the hold, and three more are dropped
+    h.recorder.use(skillUse())
+    await new Promise((r) => setImmediate(r))
+    expect(written).toEqual([1])
+    // The calls overflow first: that does not keep the uses' own line from being told
+    for (let i = 0; i < AUDIT_PENDING_MAX + 2; i++) h.recorder.record(bash('git status'))
+    const answers: boolean[] = []
+    for (let i = 0; i < AUDIT_PENDING_MAX + 3; i++) h.recorder.use(skillUse(), (w) => answers.push(w))
+    // Those the full hold let go are told at once
+    expect(answers).toEqual([false, false, false])
+    expect(h.logs.filter((m) => /records wait for the disk/.test(m))).toHaveLength(1)
+    expect(h.logs.filter((m) => /uses wait for the disk/.test(m))).toHaveLength(1)
+    release()
+    await h.recorder.flushed()
+    expect(written).toEqual([1, AUDIT_PENDING_MAX])
+    expect(h.logs.join('\n')).toMatch(/2 call\(s\) were not recorded/)
+    expect(h.logs.join('\n')).toMatch(/3 use\(s\) of skills, commands or agents were not recorded/)
+  })
+
+  it('a use carries the session’s account and profile', async () => {
+    const h = await rig()
+    h.recorder.use(skillUse({ via: 'subagent', name: 'Code Reviewer', at: '2026-10-22T10:00:00.000Z' }))
+    await h.recorder.flushed()
+    expect(await usesIn(h.profileDir)).toEqual([
+      {
+        id: expect.stringMatching(/^eu_[0-9a-f]{16}$/),
+        at: '2026-10-22T10:00:00.000Z',
+        sessionId: 'sess_a',
+        provider: 'claude',
+        kind: 'terminal',
+        accountId: 'acc1',
+        agentProfileId: 'ap1',
+        via: 'subagent',
+        name: 'Code Reviewer'
+      }
+    ])
+    // A chat's use, with no profile; a session Astera did not start is not observed
+    const chat = await rig({ facts: { kind: 'chat', accountId: 'acc2', cwd } })
+    chat.recorder.use(skillUse({ source: 'claude-chat', via: 'agent-tool', name: 'code-reviewer' }))
+    await chat.recorder.flushed()
+    const [u] = await usesIn(chat.profileDir)
+    expect(u).toMatchObject({ kind: 'chat', accountId: 'acc2', via: 'agent-tool', name: 'code-reviewer', at: new Date(NOW).toISOString() })
+    expect(u).not.toHaveProperty('agentProfileId')
+    const none = await rig({ facts: null })
+    none.recorder.use(skillUse())
+    await none.recorder.flushed()
+    expect(await usesIn(none.profileDir)).toEqual([])
   })
 })
 
@@ -933,7 +1135,7 @@ describe('the recorder in Enforce', () => {
 
   it('keeps a blocked call once though the provider reports it too', async () => {
     const resolved: string[] = []
-    const r = await rig({ mode: 'enforce', facts: ENFORCED, over: { hookRan: () => true, resolve: (c) => (resolved.push(c.tool), { action: 'other', target: c.tool, confidence: 'unknown' }) } })
+    const r = await rig({ mode: 'enforce', facts: ENFORCED, over: { hookRan: () => true, resolve: (c) => (resolved.push(c.tool), { action: 'other', target: c.tool, confidence: 'unknown', effect: 'unknown' }) } })
     r.recorder.record(blockedEv)
     r.recorder.record({ sessionId: 's1', source: 'claude-chat', tool: 'Bash', input: { command: 'git push' }, status: 'failed', dedupeKey: 'toolu_2' })
     await r.recorder.flushed()
@@ -942,6 +1144,25 @@ describe('the recorder in Enforce', () => {
     expect(records[0]).toMatchObject({ status: 'blocked', blockedBy: 'starter-git-remote-write', action: 'git.remote.write', target: 'git push', confidence: 'high', source: 'claude-hook' })
     // The hook resolved it: the resolver is not asked again
     expect(resolved).toEqual([])
+  })
+
+  // Lifecycle design §4.10: a hook of an earlier release wrote no effect, and the record does not guess one
+  it('a blocked call from an Enforce line without effect is recorded without it', async () => {
+    const r = await rig({ mode: 'enforce', facts: ENFORCED, over: { hookRan: () => true } })
+    r.recorder.record(blockedEv)
+    await r.recorder.flushed()
+    const [rec] = await r.records()
+    expect(rec).toMatchObject({ status: 'blocked', action: 'git.remote.write' })
+    expect(rec).not.toHaveProperty('effect')
+    expect(rec).not.toHaveProperty('sensitive')
+  })
+
+  it('a blocked call from an Enforce line with effect keeps it, and the login folder it names', async () => {
+    const r = await rig({ mode: 'enforce', facts: ENFORCED, over: { hookRan: () => true } })
+    r.recorder.record({ ...blockedEv, resolved: { action: 'filesystem.read', target: 'outside project: id_rsa', confidence: 'high', insideProject: false, effect: 'read', sensitive: '.ssh' } })
+    await r.recorder.flushed()
+    const [rec] = await r.records()
+    expect(rec).toMatchObject({ status: 'blocked', action: 'filesystem.read', insideProject: false, effect: 'read', sensitive: '.ssh' })
   })
 
   it('stops an enforced session whose calls arrive with no proof, once', async () => {

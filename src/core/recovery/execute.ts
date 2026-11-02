@@ -14,6 +14,8 @@ import type { LostAttempt, RecoveryDecision } from './types'
 import type { Provider } from '../providers/meta'
 import type { KnowledgeFiles } from '../knowledge/detect'
 import { buildSpecFile } from '../orchestration/exec/coordinator'
+import { startedSandboxKind } from '../orchestration/exec/checkSandbox'
+import type { StartedWorker } from '../orchestration/command'
 
 export type ExecuteResult = { ok: true; newDispatchId?: string } | { ok: false; error: string }
 
@@ -40,7 +42,7 @@ export interface ExecuteDeps {
     rollFrom?: string[]
     /** The agent profile the worker starts as (Agent Profiles design §6; startWorker's). */
     agentProfileId?: string
-  }): Promise<{ sessionId: string; cwd: string; specPath: string }>
+  }): Promise<StartedWorker>
   /** Not injected = recheck cannot start a check; the Task still moves to `validating` and waits. */
   startValidation?(a: { taskId: string; cwd: string }): void
   /** Not injected = the smart-resume briefing is built with `git: null` (buildCheckpoint accepts that). */
@@ -204,7 +206,7 @@ async function startAttempt(a: ExecuteInput, deps: ExecuteDeps): Promise<Execute
     return { ok: false, error: goneBeforeStart }
   }
 
-  let started: { sessionId: string; cwd: string; specPath: string }
+  let started: StartedWorker
   try {
     started = await deps.startWorker({
       dispatchId,
@@ -245,7 +247,7 @@ async function startAttempt(a: ExecuteInput, deps: ExecuteDeps): Promise<Execute
     ...latest,
     dispatches: latest.dispatches.map((d) =>
       d.id === dispatchId
-        ? { ...d, sessionId: started.sessionId, cwd: started.cwd, specPath: started.specPath }
+        ? { ...d, sessionId: started.sessionId, cwd: started.cwd, specPath: started.specPath, ...startedSandboxKind(latest, started) }
         : d
     )
   })

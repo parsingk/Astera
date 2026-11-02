@@ -8,6 +8,7 @@ import { AGENT_PROFILE_COMMANDS, type HostAgentProfiles } from './agentProfiles/
 import { POLICY_COMMANDS, type HostPolicies } from './audit/policyCommands'
 import { CREDENTIAL_COMMANDS, type HostCredentials } from './credentials/commands'
 import { AUDIT_COMMANDS, type HostAudit } from './audit/auditCommands'
+import { FINDINGS_COMMANDS, type HostFindings } from './findings/commands'
 import { readAgentProfiles } from '../core/agentProfiles/store'
 import { readAgentPermissionMode } from '../core/settings/agentPermissionMode'
 import type { PluginManager } from './plugins/manager'
@@ -15,8 +16,9 @@ import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { stat } from 'node:fs/promises'
 import { jobsViewOf, runsTimelineOf, type RuntimeFacts } from './remoteReads'
+import { archivedProfilesOfJob, profileIdsOfJob } from '../core/orchestration/archivedProfiles'
 import { createPresence } from './presence'
-import { handleCommand, handleExit, type OrchServerDeps } from '../core/orchestration/command'
+import { agentCaller, handleCommand, handleExit, outsideSandbox, PENDING_START_WINDOW_MS, sandboxedCaller, withUnsaidNote, type OrchServerDeps } from '../core/orchestration/command'
 import type { CompletionCheckInput } from '../core/orchestration/pluginChecks'
 import { OrchestrationStore, isValidState, type OrchLoadResult } from '../core/orchestration/store'
 import { applyPendingReports, readPendingReports, type QueuedReport } from '../core/orchestration/pendingDrain'
@@ -29,8 +31,10 @@ import { coordinatorReleaseOf } from '../core/orchestration/exec/releaseDefer'
 import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
 import { mcpRefusal } from '../core/host/mcpGate'
 import { controllerRefusal } from '../core/host/controllerGate'
+import type { ControlPlaneReport } from '../core/controlPlane/report'
 import { pluginRefusal } from '../core/host/pluginGate'
 import { sanitizeForController } from '../core/remote/sanitize'
+import { t } from '../core/i18n'
 import type { GatewayState } from '../core/remote/gatewayState'
 import type { ControllerRegistry } from './controllers'
 import { readMcpAccess } from '../core/settings/mcpAccess'
@@ -265,6 +269,10 @@ const agentShell = (from: OrchCaller | undefined, sessionId: string): boolean =>
 const AGENT_REFUSAL = (cmd: string): string =>
   `${cmd} is for a person at their own shell or in the Astera app, not an agent session (ASTERA_SESSION is set)`
 
+/** Why a controller that is not a person is refused the Runtime report (remote governance design §5.1). */
+const REPORT_AGENT_REFUSAL =
+  "control-plane-report answers a person on another computer: the Astera app or a person's own shell, not an MCP client or an agent session"
+
 const WORK_UNITS_CALLS: ReadonlySet<string> = new Set([
   'work-units-fork',
   'work-units-reload',
@@ -370,6 +378,9 @@ export const OBSERVED: Record<string, ObservedReplay> = {
 export interface HostOrch extends OrchCall {
   /** Loads the state, once. Lazy and memoized on purpose — see `createHostOrch`. */
   ready(): Promise<void>
+  /** Cancels the timers this orch owns (a revoke's retried pause, remote governance R7-2): the Host is leaving. Never
+   *  throws. */
+  dispose(): void
   /** Loads with no app attached (GitHub lifecycle G6, host/earlyLoad.ts): the Host drives and runs the resume sweep itself
    *  at the load's handover, so the load's findings are spent here — an app attaching later does not act on them
    *  again, and the Host's own journal already recorded the load. */
@@ -420,6 +431,10 @@ export interface HostOrch extends OrchCall {
   drainOnce(): Promise<boolean>
 }
 
+/** How long after the start window a revoke's refused pause is tried again (remote governance R7-2): past the window a
+ *  worker still on its placeholder is a start that died, and the pause goes ahead. */
+const REVOKE_PAUSE_RETRY_MARGIN_MS = 5_000
+
 /** The records only the Host itself writes: its git ranges and what it read of a Run's pull request (GitHub lifecycle),
  *  and the drivers' own lifecycle steps (G3a: starting a lifecycle Task, keeping its handed-off round). A socket that
  *  names itself the Host's caller is refused them. */
@@ -437,6 +452,9 @@ export function createHostOrch(a: {
   /** The Host's own version (`ASTERA_HOST_VERSION`) — what `status` and `version` answer with. */
   version: string
   now(): string
+  /** The timer a revoke's retried pause waits on (remote governance R7-2); answers its cancel. A test hands its own;
+   *  the default is an unref'd setTimeout, so a pending retry never holds the Host up. */
+  setTimer?(run: () => void, ms: number): () => void
   /** When this Host began serving — **the same string its `hello` carries**, which is the whole point
    *  of asking for it rather than taking one at construction (request receipts design §6). A receipt
    *  lives only as long as the Host that holds it, so an `absent` is dangerous exactly when the Host
@@ -551,6 +569,10 @@ export function createHostOrch(a: {
   /** Whether a session this Host holds runs in its CLI's sandbox (sandboxedSession.ts), passed through to `hostOrchDeps`:
    *  what such a session starts starts in the sandbox too (final fix pass, C3). Absent: no caller reads as sandboxed. */
   sessionSandboxed?: OrchServerDeps['sessionSandboxed']
+  /** Whether a live terminal or chat of this Host is the session (sandboxedSession.ts sessionHeldIn), for
+   *  `caller-sandboxed` only (remote governance design §7.4). Absent: no session reads as held, so every one counts as
+   *  sandboxed there. */
+  sessionHeld?: (sessionId: string) => boolean
   /** GitHub through the Host's gh (MCP P2-B), passed through to `hostOrchDeps`. Absent: the `github-*`
    *  commands answer 409. */
   github?: OrchServerDeps['github']
@@ -604,6 +626,14 @@ export function createHostOrch(a: {
   /** Observe mode's records (observe mode design §8, §12): `audit-list` and `audit-summary`, for this machine's app and
    *  CLI, routed like the policies; an agent's shell is refused even these reads. Absent: both answer 501. */
   audit?: Pick<HostAudit, 'command'>
+  /** The findings (lifecycle design §6, §7, §8): `agent-profiles-audit` and its two ignore commands, for this machine's
+   *  app and CLI, routed like the credentials and ahead of the agent profiles, whose names they share the start of; an
+   *  agent's shell may read them and changes no ignore. Absent: all three answer 501. Its report is dropped after any
+   *  call that changed something (ruling R8-1), so the section and the profile marks never show a minute of the past. */
+  findings?: Pick<HostFindings, 'command' | 'forget'>
+  /** The Runtime report (remote governance design §5.1, §5.2): `control-plane-report`, above the receipt line, for this
+   *  machine's app and CLI and for a controller that counts as a person. Absent: it answers 501. */
+  controlPlaneReport?: () => Promise<ControlPlaneReport>
   /** Session work units in the Host (E2 §5), asked per call: `index.ts` builds them after this orch (their
    *  in-Run test reads its state). Passed through to `hostOrchDeps` (HOST_TRACKS), and the app only
    *  `work-units-fork`, `-reload`, `-complete`, `-cancel` and `-git-op`. Absent, or null (no spawner, so no
@@ -1420,6 +1450,14 @@ export function createHostOrch(a: {
    *  request id replays this answer instead of launching the app twice (plan ruling P2); a refusal
    *  marks nothing and leaves no receipt. */
   const appJs = async (args: Record<string, unknown>, sessionId: string, marks: CallMarks): Promise<Reply> => {
+    // **A sandboxed session cannot ask for it**: `launch({ command })` starts a program as this Host, outside any sandbox,
+    // so the script is as good as a program the session ran there. The same check and words as `sessions send` and the
+    // Job commands (command.ts outsideSandbox); read before anything else, so nothing is started and no receipt is left.
+    if (await sandboxedCaller({ sessionSandboxed: a.sessionSandboxed }, { sessionId }))
+      return outsideSandbox(
+        'command app-js',
+        'app js starts programs as Astera, outside the sandbox, and a sandboxed session cannot hand work outside it, so nothing was started'
+      )
     if (!a.workspaces) return { status: 501, body: { error: 'this Host has no agent app workspace' } }
     const script = args.script
     if (typeof script !== 'string' || script.trim() === '') return { status: 400, body: { error: 'script is required' } }
@@ -1556,8 +1594,86 @@ export function createHostOrch(a: {
     }
   }
 
+  /** A revoke's pauses waiting for a worker to finish starting (R7-2): each cancel, with the Job and the client it is
+   *  for. HostOrch.dispose clears them and names each one it drops (R7-6). */
+  const retries = new Map<() => void, { jobId: string; clientId: string }>()
+  const setTimer =
+    a.setTimer ??
+    ((run: () => void, ms: number): (() => void) => {
+      const t = setTimeout(run, ms)
+      t.unref?.()
+      return () => clearTimeout(t)
+    })
+
+  /** HostOrch.handle: a command the Host issues for itself. Here so that `clients-revoke` issues its pauses the same way. */
+  const hostHandle = async (cmd: string, args: Record<string, unknown>): Promise<{ status: number; body: unknown }> => {
+    const marks: CallMarks = { appRefused: false, commits: 0, effects: 0 }
+    // Inside the try for `call`'s reason: the loop that asks this must be told, not thrown at.
+    try {
+      await ready()
+      return answerOf(await handleCommand(depsFor(marks, HOST_ACTOR), { sessionId: HOST_CALLER }, cmd, args), marks)
+    } catch (err) {
+      return failureOf(err, marks)
+    }
+  }
+
+  /**
+   * After a revoke, the scheduled Jobs the client made are paused (remote governance design §8.2; the person's decision
+   * P2: pause, not delete), each through the Host's own `run-pause`, which ends their open workers as a person's pause
+   * does. A Job that pause refuses (a retained worker) is left as it is and named; the revoke stands either way. Its
+   * Jobs with no schedule keep running (§8.3), and a scheduled Job with no maker recorded, made before this release, is
+   * only counted: nothing guesses its maker (§8.4).
+   */
+  const pauseRevoked = async (
+    clientId: string,
+    name: string
+  ): Promise<{ pausedJobs: number; notPaused: Array<{ jobId: string; error: string; reason?: 'still-starting' }>; unrecordedScheduled: number }> => {
+    await ready()
+    const scheduled = store.get().jobs.filter((j) => j.schedule !== undefined)
+    let pausedJobs = 0
+    const notPaused: Array<{ jobId: string; error: string; reason?: 'still-starting' }> = []
+    const errorOf = (r: { status: number; body: unknown }): string => {
+      const error = (r.body as { error?: unknown } | null)?.error
+      return typeof error === 'string' ? error : `answered ${r.status}`
+    }
+    for (const job of scheduled.filter((j) => j.createdBy?.clientId === clientId)) {
+      const args = { run: job.id, revokedBy: { clientId, name } }
+      const r = await hostHandle('run-pause', args)
+      if (r.status === 200) {
+        pausedJobs++
+        continue
+      }
+      // **A worker still starting is waited out once** (ruling R7-2): run-pause refuses inside the start window, and a
+      // schedule left armed would keep firing with nobody told. Past the window the placeholder is a start that died,
+      // and the pause goes ahead. A retained worker is not retried: that refusal is the person's to lift.
+      if ((r.body as { reason?: unknown } | null)?.reason === 'still-starting') {
+        const retryMs = PENDING_START_WINDOW_MS + REVOKE_PAUSE_RETRY_MARGIN_MS
+        notPaused.push({ jobId: job.id, error: `${errorOf(r)}; the pause is retried in ${Math.round(retryMs / 1000)} s`, reason: 'still-starting' })
+        const cancel = setTimer(() => {
+          retries.delete(cancel)
+          void hostHandle('run-pause', args).then((again) => {
+            if (again.status !== 200) a.log(`remote: revoked ${clientId}; job ${job.id} could not be paused on the retry: ${errorOf(again)}`)
+          })
+        }, retryMs)
+        retries.set(cancel, { jobId: job.id, clientId })
+      } else notPaused.push({ jobId: job.id, error: errorOf(r) })
+      a.log(`remote: revoked ${clientId}; job ${job.id} could not be paused: ${notPaused.at(-1)!.error}`)
+    }
+    return { pausedJobs, notPaused, unrecordedScheduled: scheduled.filter((j) => j.createdBy === undefined).length }
+  }
+
   return {
     ready,
+    dispose: () => {
+      // **Each dropped retry is named** (ruling R7-6): a revoke deletes the client's record and keeps no mark of it, so
+      // the next Host cannot tell that this Job's maker was revoked and will not pause it. The log is the one record left
+      // for the person to pause it by hand.
+      for (const [cancel, r] of retries) {
+        cancel()
+        a.log(`remote: revoked ${r.clientId}; the retried pause of job ${r.jobId} was dropped as the Host left, and the job is not paused`)
+      }
+      retries.clear()
+    },
     loadUnattended: async () => {
       await ready()
       bootHandedOut = true
@@ -1620,16 +1736,7 @@ export function createHostOrch(a: {
         if (r.coordinatorSessionId && !isAlive(r.coordinatorSessionId)) ids.add(r.coordinatorSessionId)
       return [...ids]
     },
-    handle: async (cmd, args) => {
-      const marks: CallMarks = { appRefused: false, commits: 0, effects: 0 }
-      // Inside the try for `call`'s reason: the loop that asks this must be told, not thrown at.
-      try {
-        await ready()
-        return answerOf(await handleCommand(depsFor(marks, HOST_ACTOR), { sessionId: HOST_CALLER }, cmd, args), marks)
-      } catch (err) {
-        return failureOf(err, marks)
-      }
-    },
+    handle: hostHandle,
     internalDeps: () => depsFor(throwaway(), HOST_ACTOR),
     loaded: () => loaded,
     drainOnce: async () => {
@@ -1652,6 +1759,10 @@ export function createHostOrch(a: {
       // `runs-github-record` trust the Host's caller id, and anything on this machine can write that id in a frame. Other
       // commands keep taking it and journal it as the CLI it came from.
       if (sessionId === HOST_CALLER && HOST_OWN_RECORDS.has(cmd)) return { status: 403, body: { error: `${HOST_CALLER} is the Host's own caller id; a connection cannot use it` } }
+      // Nor a revoke's pause (remote governance design §8.2): it locks a Job away from every controller and agent, and
+      // only `clients-revoke` sends it, through `hostHandle`.
+      if (sessionId === HOST_CALLER && cmd === 'run-pause' && args.revokedBy !== undefined)
+        return { status: 403, body: { error: `${HOST_CALLER} is the Host's own caller id; a connection cannot use it for revokedBy` } }
       if (sessionId === APP_CALLER && from?.role !== 'app' && APP_OWN_STEPS.has(cmd))
         return { status: 403, body: { error: `${APP_CALLER} is the app's own caller id; only the app's connection can use it for ${cmd}` } }
       // **Everything is inside the try, including `state-put` and `ready()`.** `server.ts` answers
@@ -1746,6 +1857,8 @@ export function createHostOrch(a: {
             cmd === 'pair-create' ||
             cmd === 'clients-list' ||
             cmd === 'clients-revoke' ||
+            cmd === 'control-plane-report' ||
+            cmd === 'caller-sandboxed' ||
             WORKTREE_CALLS.has(cmd)) &&
           request !== undefined
         )
@@ -1769,6 +1882,13 @@ export function createHostOrch(a: {
           // counts as present, and the next ask has its answer.
           // The registry's folders and every folder a Run worked in: a Job row counts only the worktrees still there.
           if (cmd === 'jobs-view') await folders.check([...worktrees.map((w) => w.path), ...store.get().dispatches.map((d) => d.cwd)])
+          // The archived profiles each schedule uses, for its row's "waiting" line (lifecycle design §5). Read only when a
+          // schedule names a profile; a store that cannot be read says none, since the row is a hint and the fire the gate
+          const st = store.get()
+          const profiles =
+            cmd === 'jobs-view' && st.jobs.some((j) => j.schedule !== undefined && profileIdsOfJob(st, j.id).length > 0)
+              ? await readAgentProfiles(a.profileDir).then((p) => p.profiles, () => [])
+              : []
           const facts: RuntimeFacts = {
             aliveSessionIds: a.aliveSessionIds(),
             worktrees,
@@ -1776,10 +1896,13 @@ export function createHostOrch(a: {
             exists: (p) => folders.peek(p) !== 'missing',
             journalTimeline: (id, st, lang) => a.journal?.timeline(id, st, lang) ?? [],
             journalBusy: () => a.journal?.busy?.() ?? false,
-            nowMs: Date.parse(a.now())
+            nowMs: Date.parse(a.now()),
+            archivedOf: (id) => archivedProfilesOfJob(store.get(), id, profiles).map((p) => p.name)
           }
           if (cmd === 'runs-timeline') return runsTimelineOf(store.get(), args, facts)
-          const view = jobsViewOf(store.get(), args.project, facts)
+          // A controller's rows are folded from the state it is pushed (ruling R8-2): whose revoke paused a schedule is
+          // this Runtime's own to show (remote governance design §5.3, R7-3), and the fold would carry it onto the row.
+          const view = jobsViewOf(from?.role === 'controller' ? sanitizeForController(store.get()) : store.get(), args.project, facts)
           // The state version the view was folded from: the controller's view says the Runtime's own (review minor).
           return view.status === 200 ? { status: 200, body: { ...(view.body as object), version } } : view
         }
@@ -1787,6 +1910,32 @@ export function createHostOrch(a: {
         // command. Read only, and it needs no load: the log is fed by commits, not read from the state. MCP and a
         // controller were refused above (neither allowlist names it).
         if (cmd === 'events-poll') return await pollEvents(a.events, args)
+        // **The Runtime report** (remote governance design §5.1), a read beside the findings' own: this machine's app and
+        // CLI get it as they get the other Control Plane reads, an agent's shell included, and a controller only when it
+        // counts as a person (§7.3), since an MCP client or an agent session over the link is refused as MCP is refused
+        // the Control Plane here. MCP and plugins were refused by their gates above; refused again here, so those gates
+        // are not the only barrier. Above the receipt line: it changes nothing, so there is nothing to replay.
+        if (cmd === 'control-plane-report') {
+          if (from?.role === 'controller') {
+            const caller = { sessionId, role: from.role, principal: from.principal }
+            if (agentCaller(caller))
+              return { status: 403, body: { error: withUnsaidNote(caller, REPORT_AGENT_REFUSAL), code: 'RUNTIME_PERMISSION_DENIED' } }
+          } else if (from?.role !== 'app' && from?.role !== 'cli')
+            return { status: 403, body: { error: "control-plane-report is for this machine's app and CLI, and for a person on a paired computer" } }
+          if (!a.controlPlaneReport) return { status: 501, body: { error: 'this Host does not answer control-plane-report' } }
+          return { status: 200, body: await a.controlPlaneReport() }
+        }
+        // **Whether the calling session runs in its CLI's sandbox** (remote governance design §7.4): this machine's CLI and
+        // stdio MCP server ask it before they send a change to a paired Runtime, which a sandboxed session may only read.
+        // The session is the one the call's token or `session` names, as for every CLI call; one this Host does not hold
+        // (a stale ASTERA_SESSION, another Host's session) cannot be vouched for, so it counts as sandboxed (ruling R13-1).
+        // No session at all is the person's own shell. Only the CLI role: an MCP connection has no session, and a
+        // controller's question would be about nobody here. Above the receipt line: a read.
+        if (cmd === 'caller-sandboxed') {
+          if (from?.role !== 'cli') return { status: 403, body: { error: "caller-sandboxed is for this machine's CLI" } }
+          if (sessionId !== '' && a.sessionHeld?.(sessionId) !== true) return { status: 200, body: { sandboxed: true } }
+          return { status: 200, body: { sandboxed: await sandboxedCaller({ sessionSandboxed: a.sessionSandboxed }, { sessionId }) } }
+        }
         // **Answered here, beside the two above, and for the same reason (Host S3, §3.1).** None of
         // the four `worktree-*` names goes through `handleCommand` — the app is their only caller
         // (`HostWorktrees.call` itself checks `from?.role === 'app'`) — so a Host too old to own
@@ -1953,12 +2102,30 @@ export function createHostOrch(a: {
           if (cmd === 'clients-list') return { status: 200, body: { clients: a.controllers.list(), health: a.controllers.health() } }
           const id = args.id
           if (typeof id !== 'string' || id === '') return { status: 400, body: { error: 'clients-revoke needs --id' } }
+          // The name its Jobs' pause records is the record's, read before `revoke` deletes it.
+          const name = a.controllers.list().find((c) => c.clientId === id)?.name ?? id
           const out = await a.controllers.revoke(id)
           // Design §3.3's order: the record and its bindings are gone (inside `revoke`), then its connections close.
           a.closeControllerConns?.(out.conns)
-          if (out.saveError !== undefined)
-            return { status: 500, body: { error: `revoked until this Host stops, but clients.json could not be written: ${out.saveError}`, clientId: id } }
-          return out.revoked ? { status: 200, body: { revoked: true, clientId: id } } : { status: 404, body: { error: `unknown client: ${id}` } }
+          if (!out.revoked) return { status: 404, body: { error: `unknown client: ${id}` } }
+          // Then its scheduled Jobs pause (remote governance design §8.2), also when the file could not be written: the
+          // client is refused for this Host's life either way.
+          const paused = await pauseRevoked(id, name)
+          if (out.saveError !== undefined) {
+            // A failure answer reaches the CLI and Settings as its error alone, so what the pauses did is said in it, in the
+            // catalog's English as the CLI's own line (ruling R8-3). Nothing to say when the client made no scheduled Job.
+            const did =
+              paused.pausedJobs === 0 && paused.unrecordedScheduled === 0 && paused.notPaused.length === 0
+                ? ''
+                : ` ${t('en', 'settings.remote.revoke.paused', { name, paused: paused.pausedJobs, unrecorded: paused.unrecordedScheduled })}` +
+                  (paused.notPaused.length > 0 ? ` ${t('en', 'settings.remote.revoke.notPaused', { jobs: paused.notPaused.map((n) => n.jobId).join(', ') })}` : '')
+            return {
+              status: 500,
+              body: { error: `revoked until this Host stops, but clients.json could not be written: ${out.saveError}.${did}`, clientId: id, name, ...paused }
+            }
+          }
+          // The name too, for the CLI's line: the record is gone once revoked, and the CLI cannot look it up (ruling R8-3)
+          return { status: 200, body: { revoked: true, clientId: id, name, ...paused } }
         }
         if (cmd === 'workspace-list' || cmd === 'workspace-stop' || cmd === 'workspace-close' || cmd === 'workspace-size') {
           if (from?.role !== 'app') return { status: 403, body: { error: `${cmd} is the app’s to send` } }
@@ -2010,7 +2177,8 @@ export function createHostOrch(a: {
         // **A remote session's changes** (Phase 9a): below the receipt line, so a retried input, stop or answer replays
         // its answer instead of acting twice. Each marks an effect only when it acted.
         if (REMOTE_SESSION_CHANGES.has(cmd)) {
-          const changed = a.remoteSessions?.change(cmd, args, () => void (marks.effects += 1), from?.role === 'controller' && from.principal ? `controller:${from.principal.clientId}` : undefined)
+          const principal = from?.role === 'controller' ? from.principal : undefined
+          const changed = a.remoteSessions?.change(cmd, args, () => void (marks.effects += 1), principal ? `controller:${principal.clientId}` : undefined, principal)
           const answered = changed ? await changed : { status: 501, body: { error: `${cmd} is not answered by this Host` } }
           return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
         }
@@ -2096,6 +2264,20 @@ export function createHostOrch(a: {
             : { status: 501, body: { error: 'this Host does not keep shared extensions' } }
           return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
         }
+        // **The findings** (lifecycle design §7, §8), the same way, before the agent profiles: the names are theirs to
+        // start with, and none of the three is theirs to answer. No gate lists them.
+        if (FINDINGS_COMMANDS.has(cmd)) {
+          const answered = a.findings
+            ? await a.findings.command({
+                cmd,
+                args,
+                role: from?.role,
+                ...(agentShell(from, sessionId) ? { agentRefusal: AGENT_REFUSAL(cmd) } : {}),
+                marks
+              })
+            : { status: 501, body: { error: 'this Host does not compute findings' } }
+          return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
+        }
         // **Agent profiles** (Agent Profiles design §4), the same way. The MCP gate admits only the list (design §6), and
         // no other gate lists them.
         if (AGENT_PROFILE_COMMANDS.has(cmd)) {
@@ -2154,7 +2336,7 @@ export function createHostOrch(a: {
         // P5: judged on the state the call found, so a worker's report that closes its own Dispatch is
         // still the agent's.
         const actor = actorOf({ sessionId, role: from?.role, client: from?.client, remote: from?.remote, principal: from?.principal, plugin: from?.plugin, state: store.get() })
-        const r = await handleCommand(depsFor(marks, actor, useOf(from, sessionId)), { sessionId, role: from?.role }, cmd, runArgs)
+        const r = await handleCommand(depsFor(marks, actor, useOf(from, sessionId)), { sessionId, role: from?.role, principal: from?.principal }, cmd, runArgs)
         const answered = answerOf(r, marks)
         // **Who drives, on `status`, from the Host and not from `handleCommand`** (R6): the two fields
         // exist only on a Host that drives, and their absence tells a script this one does not.
@@ -2176,6 +2358,11 @@ export function createHostOrch(a: {
         const reply = failureOf(err, marks)
         if (observing) return { ...settleObserved(observing, cmd, observing.recorded, reply), observed: true }
         return claimed === null ? reply : settleRequest(claimed, cmd, marks, reply)
+      } finally {
+        // A call that changed something (an archive, an edit, a rule, a server switched off) leaves the findings' report
+        // of a minute ago behind it (ruling R8-1). Effects only: a Run's commits come with every step it takes, and the
+        // report would then never be kept at all (Review Focus 5).
+        if (marks.effects > 0) a.findings?.forget()
       }
     }
   }

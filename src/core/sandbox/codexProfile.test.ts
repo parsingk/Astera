@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { codexSandboxArgs, codexSandboxEnv, npmCacheOf } from './codexProfile'
-import { forcedSandboxBlocker, sandboxRefusalMessage, sandboxUnavailable } from './unavailable'
+import { CATALOGS, LANGS } from '../i18n'
+import { checkRefusalMessage, forcedSandboxBlocker, sandboxRefusalMessage, sandboxUnavailable } from './unavailable'
 
 // worktreeConfigs as gitLayoutOf lists them: the checkout's own config.worktree, the main checkout's, the other worktrees';
 // gitFiles: the checkout's commondir, the common directory's, its modules, the other worktrees' commondir
@@ -17,7 +18,7 @@ const repo = {
 
 describe('codexSandboxArgs', () => {
   it('names the worktree git directory, keeps the common directory writable and its hooks and config read', () => {
-    const a = codexSandboxArgs({ platform: 'linux', layout: wt, denied: ['/h/.ssh'] }).join(' ')
+    const a = codexSandboxArgs({ platform: 'linux', layout: wt, denied: ['/h/.ssh'], readOnly: [] }).join(' ')
     for (const want of ['-a never', '":workspace_roots"={".git"="read"}', '"/m/.git/worktrees/wt"="write"', '"/m/.git"="write"', '"/m/.git/hooks"="read"', '"/m/.git/config"="read"', '"/h/.ssh"="deny"', 'network={enabled=true}', 'default_permissions="astera"'])
       expect(a, want).toContain(want)
     expect(a).not.toContain('windows.sandbox')
@@ -28,20 +29,20 @@ describe('codexSandboxArgs', () => {
   // run in any of them and the person's git runs in all
   it('keeps every config.worktree git may read for the repository read, in every layout', () => {
     for (const cwd of ['/w/wt', '/w/wt/sub']) {
-      const a = codexSandboxArgs({ platform: 'linux', layout: { ...wt, cwd }, denied: [] }).join(' ')
+      const a = codexSandboxArgs({ platform: 'linux', layout: { ...wt, cwd }, denied: [], readOnly: [] }).join(' ')
       for (const p of wt.worktreeConfigs) expect(a, `${cwd} ${p}`).toContain(`"${p}"="read"`)
     }
-    const sub = codexSandboxArgs({ platform: 'linux', layout: { ...repo, cwd: '/r/sub' }, denied: [] }).join(' ')
+    const sub = codexSandboxArgs({ platform: 'linux', layout: { ...repo, cwd: '/r/sub' }, denied: [], readOnly: [] }).join(' ')
     for (const p of repo.worktreeConfigs) expect(sub, p).toContain(`"${p}"="read"`)
     // At a repository's top its own is the relative entry in :workspace_roots, the other worktrees' are named
-    const top = codexSandboxArgs({ platform: 'linux', layout: repo, denied: [] }).join(' ')
+    const top = codexSandboxArgs({ platform: 'linux', layout: repo, denied: [], readOnly: [] }).join(' ')
     expect(top).toContain('".git/config.worktree"="read"')
     expect(top).not.toContain('"/r/.git/config.worktree"')
     expect(top).toContain('"/r/.git/worktrees/x/config.worktree"="read"')
   })
 
   it('in a repository, grants its .git and keeps its hooks, config, config.worktree, commondir and modules read', () => {
-    const a = codexSandboxArgs({ platform: 'linux', layout: repo, denied: [] }).join(' ')
+    const a = codexSandboxArgs({ platform: 'linux', layout: repo, denied: [], readOnly: [] }).join(' ')
     expect(a).toContain(
       '":workspace_roots"={".git"="write", ".git/hooks"="read", ".git/config"="read", ".git/config.worktree"="read", ".git/commondir"="read", ".git/modules"="read"}'
     )
@@ -56,43 +57,58 @@ describe('codexSandboxArgs', () => {
   // git directory, and `modules` holds the submodules' git directories: none of them is the session's to rewrite
   it('keeps every commondir, modules and a worktree’s pointer file read, in every layout', () => {
     for (const cwd of ['/w/wt', '/w/wt/sub']) {
-      const a = codexSandboxArgs({ platform: 'linux', layout: { ...wt, cwd }, denied: [] }).join(' ')
+      const a = codexSandboxArgs({ platform: 'linux', layout: { ...wt, cwd }, denied: [], readOnly: [] }).join(' ')
       for (const p of wt.gitFiles) expect(a, `${cwd} ${p}`).toContain(`"${p}"="read"`)
       expect(a).not.toContain('".git"="write"')
     }
-    expect(codexSandboxArgs({ platform: 'linux', layout: wt, denied: [] }).join(' ')).toContain('":workspace_roots"={".git"="read"}')
-    const sub = codexSandboxArgs({ platform: 'linux', layout: { ...repo, cwd: '/r/sub' }, denied: [] }).join(' ')
+    expect(codexSandboxArgs({ platform: 'linux', layout: wt, denied: [], readOnly: [] }).join(' ')).toContain('":workspace_roots"={".git"="read"}')
+    const sub = codexSandboxArgs({ platform: 'linux', layout: { ...repo, cwd: '/r/sub' }, denied: [], readOnly: [] }).join(' ')
     for (const p of repo.gitFiles) expect(sub, p).toContain(`"${p}"="read"`)
   })
 
   it('in a subfolder, names the git directories by absolute path', () => {
-    const a = codexSandboxArgs({ platform: 'linux', layout: { ...repo, cwd: '/r/sub' }, denied: [] }).join(' ')
+    const a = codexSandboxArgs({ platform: 'linux', layout: { ...repo, cwd: '/r/sub' }, denied: [], readOnly: [] }).join(' ')
     expect(a).not.toContain(':workspace_roots')
     for (const want of ['"/r/.git"="write"', '"/r/.git/hooks"="read"', '"/r/.git/config"="read"']) expect(a, want).toContain(want)
-    const w = codexSandboxArgs({ platform: 'linux', layout: { ...wt, cwd: '/w/wt/sub' }, denied: [] }).join(' ')
+    const w = codexSandboxArgs({ platform: 'linux', layout: { ...wt, cwd: '/w/wt/sub' }, denied: [], readOnly: [] }).join(' ')
     expect(w).not.toContain(':workspace_roots')
     for (const want of ['"/m/.git/worktrees/wt"="write"', '"/m/.git"="write"', '"/m/.git/hooks"="read"']) expect(w, want).toContain(want)
   })
 
   it('writes git paths with spaces, Korean letters and quotes as TOML basic strings', () => {
     const l = { cwd: '/w/내 폴더 x', top: '/w/내 폴더 x', gitDir: '/m/내 폴더 x/.git/worktrees/a"b', commonDir: '/m/내 폴더 x/.git', worktree: true, worktreeConfigs: [], gitFiles: [] }
-    const a = codexSandboxArgs({ platform: 'linux', layout: l, denied: [] }).join(' ')
+    const a = codexSandboxArgs({ platform: 'linux', layout: l, denied: [], readOnly: [] }).join(' ')
     for (const p of [l.gitDir, l.commonDir, l.commonDir + '/hooks', l.commonDir + '/config']) expect(a, p).toContain(JSON.stringify(p) + '=')
   })
 
   it('outside a repository, says nothing about git', () => {
-    const a = codexSandboxArgs({ platform: 'linux', layout: null, denied: [] }).join(' ')
+    const a = codexSandboxArgs({ platform: 'linux', layout: null, denied: [], readOnly: [] }).join(' ')
     expect(a).not.toContain('.git')
     expect(a).toContain('permissions={astera={extends=":workspace", filesystem={}, network={enabled=true}}}')
   })
 
   it('pins the elevated sandbox on Windows', () => {
-    const a = codexSandboxArgs({ platform: 'win32', layout: null, denied: [] })
+    const a = codexSandboxArgs({ platform: 'win32', layout: null, denied: [], readOnly: [] })
     expect(a.join(' ')).toContain('-c windows.sandbox="elevated"')
   })
 
+  // Task E (2026-10-28): the profile folder is "read" in the filesystem table, so where the session's folder holds it, it
+  // is a read-only carve-out of that writable root; the app key's "deny", the deeper entry, still holds inside it (Codex
+  // takes the most specific entry, protocol/src/permissions.rs resolve_access at rust-v0.160.0)
+  it('keeps the profile folder read, with the app key inside it still denied, on every OS', () => {
+    for (const platform of ['linux', 'darwin', 'win32'] as const) {
+      const profile = platform === 'win32' ? 'C:/Users/a/AppData/Roaming/astera' : '/h/.config/astera'
+      const a = codexSandboxArgs({ platform, layout: wt, denied: ['/h/.ssh', `${profile}/host/app.key`], readOnly: [profile] }).join(' ')
+      expect(a, platform).toContain(`"${profile}"="read"`)
+      expect(a, platform).toContain(`"${profile}/host/app.key"="deny"`)
+      expect(a, platform).not.toContain('host.key')
+      expect(a, platform).toContain('"/h/.ssh"="deny"')
+    }
+    expect(codexSandboxArgs({ platform: 'linux', layout: null, denied: [], readOnly: ['/h/내 폴더/"x"'] }).join(' ')).toContain('"/h/내 폴더/\\"x\\""="read"')
+  })
+
   it('quotes paths as TOML strings', () => {
-    const a = codexSandboxArgs({ platform: 'linux', layout: null, denied: ['/h/내 폴더/"x"'] }).join(' ')
+    const a = codexSandboxArgs({ platform: 'linux', layout: null, denied: ['/h/내 폴더/"x"'], readOnly: [] }).join(' ')
     expect(a).toContain('"/h/내 폴더/\\"x\\""="deny"')
   })
 })
@@ -186,6 +202,13 @@ describe('sandboxUnavailable', () => {
       expect(forcedSandboxBlocker(provider, platform), `${provider} ${platform}`).toBeNull()
   })
 
+  // Task K: a sandboxed Claude Task's check is refused where srt cannot run a command, and where Ubuntu's AppArmor profile
+  // confines bubblewrap; each in words the app has (the check-unavailable question carries them)
+  it('says why a Claude check could not be put in its sandbox', () => {
+    expect(sandboxRefusalMessage('SANDBOX_UNAVAILABLE: runtime-missing claude')).toEqual({ key: 'session.spawn.sandbox.runtimeMissing', params: { cli: 'Claude Code' } })
+    expect(sandboxRefusalMessage('Error: SANDBOX_UNAVAILABLE: userns-restricted claude')).toEqual({ key: 'session.spawn.sandbox.usernsRestricted', params: { cli: 'Claude Code' } })
+  })
+
   // Final fix pass, part 2 (A): a sandboxed caller handing work to a session, Job or Task outside its sandbox is refused
   // (`outside-sandbox <session|job|task> <id>`, the command layer's), in words the app has, naming what it is
   it('words a refusal of work outside the sandbox, with what it names', () => {
@@ -193,5 +216,50 @@ describe('sandboxUnavailable', () => {
       expect(sandboxRefusalMessage(`SANDBOX_UNAVAILABLE: outside-sandbox ${target} ${id}`)).toEqual({ key: 'session.spawn.sandbox.outsideSandbox', params: { id } })
     // As the CLI's error carries it, and as the app's IPC wraps it
     expect(sandboxRefusalMessage('Error: SANDBOX_UNAVAILABLE: outside-sandbox job job_9.')).toEqual({ key: 'session.spawn.sandbox.outsideSandbox', params: { id: 'job_9' } })
+  })
+})
+
+// Task K fix round 2: a refusal on a Task check's question (check-unavailable: run the checks again, go on without it, or
+// mark the Task failed) is said in a check's words, with where the person can act; a start's words name buttons and
+// sessions that question does not have
+describe('checkRefusalMessage', () => {
+  const nameOf = (id: string): string | null => (id === 'acc1' ? 'Work' : null)
+  it('words every refusal a check can meet for that question, naming the account by its name', () => {
+    const cases: Array<[string, string, Record<string, string>?]> = [
+      ['windows-setup codex acc1', 'jobs.checks.sandbox.windowsSetup', { account: 'Work' }],
+      ['windows-setup codex acc2', 'jobs.checks.sandbox.windowsSetup', { account: 'acc2' }],
+      ['windows-check-failed codex acc1', 'jobs.checks.sandbox.windowsCheckFailed', { account: 'Work' }],
+      ['cli-too-old codex 0.150.0 0.160.0', 'jobs.checks.sandbox.cliTooOld', { cli: 'Codex', found: '0.150.0', min: '0.160.0' }],
+      ['cli-version-unknown claude', 'jobs.checks.sandbox.cliVersionUnknown', { cli: 'Claude Code' }],
+      ['cli-missing codex', 'jobs.checks.sandbox.cliMissing', { cli: 'Codex' }],
+      ['path-unsafe', 'jobs.checks.sandbox.pathUnsafe'],
+      ['named-path-unsafe', 'jobs.checks.sandbox.namedPathUnsafe'],
+      ['linked-path', 'jobs.checks.sandbox.linkedPath'],
+      ['git-layout', 'jobs.checks.sandbox.gitLayout'],
+      ['not-prepared', 'jobs.checks.sandbox.notPrepared'],
+      ['command-too-long', 'jobs.checks.sandbox.commandTooLong'],
+      ['settings-write-failed', 'jobs.checks.sandbox.settingsWriteFailed'],
+      ['no-sandbox claude', 'jobs.checks.sandbox.noSandbox', { cli: 'Claude Code' }],
+      ['runtime-missing claude', 'jobs.checks.sandbox.runtimeMissing', { cli: 'Claude Code' }],
+      ['userns-restricted claude', 'jobs.checks.sandbox.usernsRestricted', { cli: 'Claude Code' }],
+      ['no-check-runner', 'jobs.checks.sandbox.cannot']
+    ]
+    for (const [code, key, params] of cases)
+      expect(checkRefusalMessage(`Error: SANDBOX_UNAVAILABLE: ${code}`, nameOf), code).toEqual(params ? { key, params } : { key })
+  })
+
+  it('leaves a refusal no check meets in a start’s words, and what is not a refusal alone', () => {
+    expect(checkRefusalMessage('SANDBOX_UNAVAILABLE: codex-daemon codex', nameOf)).toEqual(sandboxRefusalMessage('SANDBOX_UNAVAILABLE: codex-daemon codex'))
+    expect(checkRefusalMessage('spawn codex ENOENT', nameOf)).toBeNull()
+  })
+
+  it('names no button the question lacks, and its words are in all four languages', () => {
+    const keys = Object.keys(CATALOGS.en.messages).filter((k) => k.startsWith('jobs.checks.sandbox.'))
+    expect(keys.length).toBeGreaterThan(15)
+    for (const key of keys) {
+      for (const lang of LANGS) expect((CATALOGS[lang].messages as Record<string, string>)[key], `${lang} ${key}`).toBeTruthy()
+      // A start's words: its Set up button and "Start it again" belong to a session's refusal, not to this question
+      expect(CATALOGS.en.messages[key as keyof typeof CATALOGS.en.messages], key).not.toMatch(/^Set up|\. Set up |Start it again|the session/)
+    }
   })
 })

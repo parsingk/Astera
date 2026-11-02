@@ -39,6 +39,24 @@ describe('a plugin check in the completion read model (plugin Phase 5 C12, C13)'
     ])
   })
 
+  // Task K fix round 1: and that its review ran with Claude Code's file-tool protection only
+  it('carries that the review ran with file-tool protection only, which alone is something to show', () => {
+    expect(completionDetailOf(task({ reviewFileToolsOnly: true }))).toMatchObject({ reviewFileToolsOnly: true })
+    expect(completionDetailOf(task({ checks: [check({ configId: 'c', name: 'T', status: 'passed' })] }))).not.toHaveProperty('reviewFileToolsOnly')
+  })
+
+  // Task K (the person's Q1)
+  it('carries that a check ran outside the sandbox its workers had', () => {
+    const d = completionDetailOf(task({ checks: [check({ configId: 'c', name: 'Tests', status: 'passed', outsideSandbox: true })] }))!
+    expect(d.checks).toEqual([{ configId: 'c', name: 'Tests', status: 'passed', outsideSandbox: true }])
+  })
+
+  // Task K fix round 2: and the names of what the Credentials list kept from it
+  it('carries the variables the Credentials list kept from a check, by name', () => {
+    const d = completionDetailOf(task({ checks: [check({ configId: 'c', name: 'Tests', status: 'failed', exitCode: 1, hiddenEnv: ['NPM_TOKEN'] })] }))!
+    expect(d.checks).toEqual([{ configId: 'c', name: 'Tests', status: 'failed', exitCode: 1, hiddenEnv: ['NPM_TOKEN'] }])
+  })
+
   it('names a failed plugin check by its summary in the failure summary, and leaves a check that could not be made out', () => {
     expect(failedChecksSummary([check({ configId: 'plugin:d', name: 'D', status: 'failed', summary: '2 leftovers' })])).toBe('D failed: 2 leftovers')
     expect(failedChecksSummary([check({ configId: 'plugin:d', name: 'D', status: 'error', summary: 'down' })])).toBeNull()

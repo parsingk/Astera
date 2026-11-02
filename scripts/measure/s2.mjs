@@ -7,6 +7,7 @@ import path from 'node:path'
 import { codexSandboxArgs } from '../../src/core/sandbox/codexProfile'
 import { claudeSessionDenied } from '../../src/core/sandbox/claudeSettings'
 import { codexSessionDenied } from '../../src/core/sandbox/prepared'
+import { sandboxReadOnly } from '../../src/core/sandbox/locations'
 import { PROBES, verdict } from './probes.mjs'
 import { probeEnv } from './measure-sandbox.mjs'
 
@@ -43,7 +44,12 @@ export const S2_SETS = [
   { name: 'srt-linux-exclude-dirs', kind: 'srt', layout: 'worktree', platforms: ['linux'], exclude: 'directories' },
   // srt on macOS with a socket where the Host listens, granted and not: the shipped settings grant none (final fix pass,
   // C2), so the ungranted control (socketWithoutGrant) is what a sandboxed Claude session gets
-  { name: 'srt-mac-socket', kind: 'srt', layout: 'worktree', platforms: ['darwin'], socket: true }
+  { name: 'srt-mac-socket', kind: 'srt', layout: 'worktree', platforms: ['darwin'], socket: true },
+  // Task E (2026-10-28): Astera's profile folder inside the session's folder (no repository), as a session started in
+  // the home folder holds it: its sandbox keeps it read-only and the Host key in it readable. Sets of their own, so a
+  // profile folder never sits in another set's repository, where git would see it
+  { name: 'codex-profile', kind: 'codex', layout: 'folder', profileInside: true },
+  { name: 'srt-profile', kind: 'srt', layout: 'folder', platforms: ['linux', 'darwin'], profileInside: true }
 ]
 
 export const s2SetNames = (platform) => S2_SETS.filter((s) => s.platforms === undefined || s.platforms.includes(platform)).map((s) => s.name)
@@ -60,6 +66,12 @@ export const codexDenied = (platform, env, home, hostDir = null, appKeyFile = nu
  *  list a Claude start builds (claudeSettings.ts claudeSessionDenied, which StatusLineManager's twins deny), so what is
  *  measured is what a start hands Claude. */
 export const claudeDenied = (platform, env, home, appKeyFile = null) => claudeSessionDenied({ platform, env, homeDir: home, appKeyFile })
+
+/** What a sandboxed session of either CLI may not write (locations.ts sandboxReadOnly), the one builder every start and
+ *  the measurement share. The measurement passes only the profile: the runner has no real install, Host runtime or
+ *  updater cache to place, so those are covered by unit tests (locations.test.ts) and the start-path guards, not here
+ *  (Task E fix round 1 report). */
+export const sessionReadOnly = (profileDir = null) => sandboxReadOnly({ profileDir })
 
 /** `codex sandbox` and `codex app-server` take the profile's `-c` values; `-a never` is an option of the session command,
  *  which the builder puts first. */
@@ -79,8 +91,8 @@ const tomlEntry = (p, access) => `${JSON.stringify(p)}=${JSON.stringify(access)}
 
 /** A set's Codex arguments: the builder's, with `-a never` dropped. The fallback (`variant: 'alt'`) names the common
  *  directory's `worktrees` folder where the builder names the worktree's own git directory, and nothing else changes. */
-export function codexSetArgs({ platform, layout, denied, variant = 'shipped' }) {
-  const args = codexSandboxCommandArgs(codexSandboxArgs({ platform, layout, denied }))
+export function codexSetArgs({ platform, layout, denied, readOnly, variant = 'shipped' }) {
+  const args = codexSandboxCommandArgs(codexSandboxArgs({ platform, layout, denied, readOnly }))
   if (variant !== 'alt') return args
   if (!layout?.worktree || layout.gitDir === layout.commonDir) throw new Error('the fallback grant is for a session in a linked worktree')
   const from = tomlEntry(layout.gitDir, 'write')
@@ -222,6 +234,23 @@ export const WIN32_NORMAL_WORK_PROBES = [
   { id: 'git-worktree-list', line: 'git worktree list' },
   { id: GLOBAL_EXCLUDE_PROBE.id, line: `git check-ignore -v ${GLOBAL_IGNORED}` }
 ]
+
+/** Where a profile set keeps its profile folder, inside the session's folder. */
+export const PROFILE_FOLDER = 'astera-profile'
+
+/** The two checks of a profile folder inside the session's folder (ASTERA_PROBE_PROFILE), and nothing else (Task E): a
+ *  single file written into it, which the sandbox must refuse, and the Host key read, which it must allow, since the
+ *  `astera` inside a session checks the loopback's proof with it. Plain normal use only. */
+export const PROFILE_PROBES = [
+  { id: 'profile-write', line: 'echo x > "$ASTERA_PROBE_PROFILE/astera-probe-write.txt"' },
+  { id: 'profile-host-key-read', line: 'cat "$ASTERA_PROBE_PROFILE/host/host.key" > /dev/null' }
+]
+/** The same for cmd.exe, with no double quote (WIN32_PROBES). */
+export const WIN32_PROFILE_PROBES = [
+  { id: 'profile-write', line: 'echo x> %ASTERA_PROBE_PROFILE%\\astera-probe-write.txt' },
+  { id: 'profile-host-key-read', line: 'type %ASTERA_PROBE_PROFILE%\\host\\host.key > nul' }
+]
+export const profileProbesFor = (platform) => (platform === 'win32' ? WIN32_PROFILE_PROBES : PROFILE_PROBES)
 
 /** What the common-case set runs (and its sanity line first): a commit, the config.worktree writes and normal work. */
 export const COMMON_CASE_PROBES = ['git-commit', ...CONFIG_WORKTREE_PROBES.map((p) => p.id), ...NORMAL_WORK_PROBES.map((p) => p.id)]

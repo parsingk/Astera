@@ -684,8 +684,14 @@ describe('the macOS desk: real deps', () => {
         ''
       ].join('\n')
       await fs.writeFile(path.posix.join(app, 'Contents', 'Info.plist'), plist)
-      // Not `exec sleep`: the script's own process must keep the argv open passed it, tag included.
-      await fs.writeFile(path.posix.join(macos, 'probe'), '#!/bin/sh\nsleep 60 &\nwait\n', { mode: 0o755 })
+      // A compiled probe, not a script: on a Mac whose Gatekeeper assessments are on, as a person's are,
+      // LaunchServices refuses a bundle whose executable is a script (error -10669), signed or not. The
+      // probe's own process keeps the argv open passed it, tag included.
+      const source = path.posix.join(dir, 'probe.c')
+      await fs.writeFile(source, '#include <unistd.h>\nint main(void) { sleep(60); return 0; }\n')
+      await new Promise<void>((resolve, reject) =>
+        execFile('cc', ['-o', path.posix.join(macos, 'probe'), source], (err) => (err ? reject(err) : resolve()))
+      )
       const desk = await createMacDesks(realMacDeskDeps({ log: () => {} })).start(`real-app-${process.pid}`)
       try {
         const got = await desk.launch({ command: `"${app}"`, cwd: dir, env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } })

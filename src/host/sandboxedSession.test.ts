@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import { PtyRegistry, type RegistryPty } from './registry'
 import { ProcRegistry, type RegistryProc } from './procRegistry'
-import { sessionSandboxedIn } from './sandboxedSession'
+import { sessionHeldIn, sessionSandboxedIn } from './sandboxedSession'
 
 const fakePty = (): RegistryPty => ({ pid: 1, onData: () => {}, onExit: () => {}, write: () => {}, resize: () => {}, kill: () => {}, pause: () => {}, resume: () => {} })
 const fakeProc = (): RegistryProc => ({ pid: 2, onData: () => {}, onExit: () => {}, write: () => {}, kill: () => {} })
@@ -22,5 +22,17 @@ describe('sessionSandboxedIn', () => {
     expect(asked('ses_open')).toBe(false)
     expect(asked('chat_open')).toBe(false)
     expect(asked('ses_gone')).toBe(false)
+  })
+
+  // Remote governance design §7.4 (ruling R13-1): `caller-sandboxed` counts a session this Host does not hold as sandboxed.
+  it('sessionHeldIn says whether a live terminal or chat holds the session', () => {
+    const ptys = new PtyRegistry({ spawn: () => fakePty(), log: () => {} })
+    const procs = new ProcRegistry({ spawn: () => fakeProc(), log: () => {} })
+    ptys.open({ id: 'p1', file: 'codex', args: [], opts: { cwd: 'D:/p', cols: 80, rows: 24, env: {} }, meta: { kind: 'session', id: 'ses_open', restore: {} } })
+    procs.open({ id: 'q1', file: 'codex', args: ['app-server'], opts: { cwd: 'D:/p', env: {} }, meta: { kind: 'chat', id: 'chat_open', restore: {} } })
+    const held = (id: string) => sessionHeldIn({ ptys, procs }, id)
+    expect(held('ses_open')).toBe(true)
+    expect(held('chat_open')).toBe(true)
+    expect(held('ses_gone')).toBe(false)
   })
 })

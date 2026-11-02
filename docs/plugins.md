@@ -422,6 +422,12 @@ asked with:
   recorded them. A check configured per project reads the project's own files under `root`; the plugin's settings are
   the rest of its configuration.
 
+**A check plugin runs outside any sandbox, for every Task.** It is trusted code running as you
+([Plugins are trusted code](#plugins-are-trusted-code)). A Task whose workers ran in their CLI's sandbox has its run
+configuration checks run in that sandbox too ([docs/cli.md](cli.md), agent profiles), but Astera does not put a
+plugin there. A plugin that runs a linter, a test or a build in `workspace.root` runs files a sandboxed worker may have
+written, as you. Write such a plugin to read the folder, or to run what it runs in a sandbox of its own.
+
 It answers `{ status, summary?, diagnostics?, diagnosticsTotal?, externalUrl? }`. `status` is `passed`, `failed` (the code's fault) or
 `error` (the check could not be made: a service down, a missing token). A diagnostic is a finding,
 `{ file?, line?, message, severity? }`, `severity` `error` or `warning`. A plugin that names `completion-check` and has

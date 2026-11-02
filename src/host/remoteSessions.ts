@@ -17,7 +17,8 @@ import type { PtyRegistry } from './registry'
 import type { ProcRegistry } from './procRegistry'
 import type { HostSessions } from './sessions'
 import type { HostChats } from './hostChats'
-import type { HostSession } from '../core/orchestration/command'
+import { agentCaller, answerRefusal, promptRefusal, type HostSession } from '../core/orchestration/command'
+import type { ControllerPrincipal } from '../core/host/orchProtocol'
 import type { ChatAnswer } from '../core/chat/types'
 import { HOST_ACT_SLACK_ANSWER } from '../core/host/protocol'
 import { createSessionFacts, type SessionFactsDeps } from './sessionFacts'
@@ -60,8 +61,10 @@ export interface RemoteSessions {
   /** A read, or null when `cmd` is not one of REMOTE_SESSION_READS. */
   read(cmd: string, args: Record<string, unknown>): Promise<Reply> | null
   /** A change, marking an effect through `marked` when it acted; null when `cmd` is not one of REMOTE_SESSION_CHANGES. */
-  /** `side` is the caller's side for the pty's size (`controller:<clientId>`, registry `sizeOwner`). */
-  change(cmd: string, args: Record<string, unknown>, marked: () => void, side?: string): Promise<Reply> | null
+  /** `side` is the caller's side for the pty's size (`controller:<clientId>`, registry `sizeOwner`). `principal` is the
+   *  controller the Host bound the call to: the agent rules read its kind (remote governance design §7.3). Absent for a
+   *  local caller, which they leave alone. */
+  change(cmd: string, args: Record<string, unknown>, marked: () => void, side?: string, principal?: ControllerPrincipal): Promise<Reply> | null
   dispose(): void
 }
 
@@ -188,7 +191,14 @@ export function createRemoteSessions(d: RemoteSessionDeps): RemoteSessions {
     return { status: 200, body: { answered: true } }
   }
 
-  const changes = async (cmd: string, args: Record<string, unknown>, marked: () => void, side: string | undefined): Promise<Reply> => {
+  const changes = async (cmd: string, args: Record<string, unknown>, marked: () => void, side: string | undefined, principal: ControllerPrincipal | undefined): Promise<Reply> => {
+    // Every local agent rule applies to a controller that is an agent (remote governance design §7.3), through the
+    // command layer's own checks: an answer is chats answer's, refused before anything is read as there.
+    const caller = principal ? { sessionId: '', role: 'controller', principal } : null
+    if (cmd === 'sessions-answer' && caller) {
+      const refused = answerRefusal(caller)
+      if (refused) return refused
+    }
     // The id is checked before the sessions are read (review M2).
     if (typeof args.id !== 'string' || args.id === '') return bad(`${cmd} needs --id`)
     if (cmd === 'sessions-answer' && (typeof args.request !== 'string' || args.request === '')) return bad('sessions-answer needs --request')
@@ -218,8 +228,16 @@ export function createRemoteSessions(d: RemoteSessionDeps): RemoteSessions {
     if (cmd === 'sessions-input') {
       if (typeof args.data !== 'string' || args.data === '') return bad('sessions-input needs --data')
       if (args.data.length > SESSION_INPUT_MAX) return bad(`sessions-input takes at most ${SESSION_INPUT_MAX} characters at a time`)
-      // Typing takes the size for this controller (registry `sizeOwner`); its terminal's own reports do not.
-      d.ptys.write(s.ptyId, args.data, side !== undefined ? { person: true, side } : { person: true })
+      // Raw input is sessions send's text: an agent's into a terminal at a prompt would answer it, and nothing is typed
+      const fromAgent = caller !== null && agentCaller(caller)
+      if (caller && fromAgent && d.sessions.sessionTurn) {
+        const refused = await promptRefusal(d.sessions.sessionTurn, caller, s.id)
+        if (refused) return refused
+      }
+      // Typing takes the size for this controller (registry `sizeOwner`); its terminal's own reports do not. An agent's
+      // input is not a person's, as an agent's sessions send is not (controller ruling R6-1): it moves no person-write
+      // mark, so it neither counts as a person's prompt in token accounting nor holds a finished Run's sessions open.
+      d.ptys.write(s.ptyId, args.data, { ...(fromAgent ? {} : { person: true as const }), ...(side !== undefined ? { side } : {}) })
       marked()
       return { status: 200, body: { written: args.data.length } }
     }
@@ -244,7 +262,7 @@ export function createRemoteSessions(d: RemoteSessionDeps): RemoteSessions {
 
   return {
     read: (cmd, args) => (REMOTE_SESSION_READS.has(cmd) ? reads(cmd, args) : null),
-    change: (cmd, args, marked, side) => (REMOTE_SESSION_CHANGES.has(cmd) ? changes(cmd, args, marked, side) : null),
+    change: (cmd, args, marked, side, principal) => (REMOTE_SESSION_CHANGES.has(cmd) ? changes(cmd, args, marked, side, principal) : null),
     dispose: () => facts.dispose()
   }
 }

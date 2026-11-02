@@ -48,10 +48,10 @@ const SANDBOX_GIVEN = {
     'Sin sandbox: solo las herramientas de archivos no pueden leer las carpetas de inicio de sesión (el shell no tiene límites)'
   ],
   'settings.security.sandboxCoverage.homeReadable': [
-    '로그인 정보 폴더 밖의 홈 폴더는 sandbox 안에서도 읽을 수 있습니다.',
-    'Outside the login folders, the home folder stays readable inside the sandbox.',
-    'ログイン情報のフォルダー以外のホームフォルダーは、サンドボックス内でも読めます。',
-    'Fuera de las carpetas de inicio de sesión, la carpeta personal sigue siendo legible dentro del sandbox.'
+    '로그인 정보 폴더 밖의 홈 폴더는 sandbox 안에서도 읽을 수 있습니다. Claude 세션에서 사람이 `!` 로 직접 입력한 명령은 보통 sandbox 밖에서 실행됩니다(Claude Code의 sandbox 문서 참고). 에이전트가 낸 명령은 sandbox 안에서 실행됩니다.',
+    'Outside the login folders, the home folder stays readable inside the sandbox. In a Claude session, commands the person types with `!` usually run outside the sandbox (see Claude Code\'s sandboxing docs); the agent\'s own commands run inside it.',
+    'ログイン情報のフォルダー以外のホームフォルダーは、サンドボックス内でも読めます。 Claude のセッションで人が `!` を付けて直接入力したコマンドは、通常サンドボックスの外で実行されます（Claude Code のサンドボックスのドキュメントを参照）。エージェント自身のコマンドは内側で実行されます。',
+    'Fuera de las carpetas de inicio de sesión, la carpeta personal sigue siendo legible dentro del sandbox. En una sesión de Claude, los comandos que la persona escribe con `!` suelen ejecutarse fuera del sandbox (véase la documentación de sandbox de Claude Code); los del propio agente se ejecutan dentro.'
   ],
   'settings.security.sandboxCoverage.windowsClaude': ['Windows: 셸은 제한 없음', 'Windows: the shell is not restricted', 'Windows: シェルは制限なし', 'Windows: el shell no tiene límites'],
   'audit.coverageNote.bus-path-only': [
@@ -90,6 +90,26 @@ describe('the agent profiles catalog', () => {
         expect((CATALOGS[lang].messages as Record<string, string | undefined>)[key], `${lang} ${key}`).toBe(lines[i])
       })
     }
+  })
+
+  // Lifecycle design §5: Archive's reason field, the archived row's date, and a schedule that waits on an archived
+  // profile, in the words the plan gave (ko, en), ja and es after the en meaning
+  it('says the archive reason, the date archived and a waiting schedule in the words given', () => {
+    const given = {
+      'settings.agentProfiles.archiveReason': ['이유 (선택)', 'Reason (optional)', '理由（任意）', 'Motivo (opcional)'],
+      'settings.agentProfiles.archivedOn': ['{date}에 보관함', 'Archived {date}', '{date} にアーカイブ', 'Archivado el {date}'],
+      // Fix round 1: the reason inside an archived profile's row, said as one
+      'settings.agentProfiles.archivedReason': ['이유: {reason}', 'Reason: {reason}', '理由: {reason}', 'Motivo: {reason}'],
+      'jobs.run.waitingArchived': [
+        '대기 중: 보관된 에이전트 프로필 {names}',
+        'Waiting: agent profile {names} is archived',
+        '待機中: エージェントプロファイル {names} はアーカイブ済みです',
+        'En espera: el perfil de agente {names} está archivado'
+      ]
+    }
+    const order = ['ko', 'en', 'ja', 'es'] as const
+    for (const [key, lines] of Object.entries(given))
+      order.forEach((lang, i) => expect((CATALOGS[lang].messages as Record<string, string | undefined>)[key], `${lang} ${key}`).toBe(lines[i]))
   })
 
   it('names the tab as the person chose, and keeps the Agents tab’s own name', () => {

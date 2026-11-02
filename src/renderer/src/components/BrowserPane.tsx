@@ -895,7 +895,7 @@ export function BrowserPane({
           ref={viewRef}
           className="bp-view"
           src="about:blank"
-          partition={PREVIEW_PARTITION}
+          partition={tab.partition ?? PREVIEW_PARTITION}
           style={frame ? { width: frame.width, height: frame.height } : undefined}
         />
         {agentRunning && viewBox && (

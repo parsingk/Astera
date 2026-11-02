@@ -21,3 +21,16 @@ export function sessionSandboxedIn(
   if (pty !== null) return sandboxedNote(a.ptys.metaOf(pty))
   return a.procs.liveEntries().some((e) => e.meta?.kind === 'chat' && e.meta.id === sessionId && sandboxedNote(e.meta))
 }
+
+/** True when a live pty or a live chat proc of this Host is the session (remote governance design §7.4): `caller-sandboxed`
+ *  counts a session id it does not hold as sandboxed, since a stale `ASTERA_SESSION` or another Host's session cannot be
+ *  vouched for (ruling R13-1). */
+export function sessionHeldIn(
+  a: {
+    ptys: { sessionPty(sessionId: string): string | null }
+    procs: { liveEntries(): Array<{ id: string; meta: PtyMeta | null }> }
+  },
+  sessionId: string
+): boolean {
+  return a.ptys.sessionPty(sessionId) !== null || a.procs.liveEntries().some((e) => e.meta?.kind === 'chat' && e.meta.id === sessionId)
+}

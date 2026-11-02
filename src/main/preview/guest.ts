@@ -10,6 +10,18 @@ import {
   permissionAllowed
 } from '../../core/preview/guards'
 
+/** The permission rule for one partition's session. A sandboxed session's partition (core/preview/guards.ts)
+ *  is held to it as the person's preview partition is. */
+export function guardPartition(partition: string): void {
+  const previewSession = session.fromPartition(partition)
+  previewSession.setPermissionRequestHandler((_wc, _permission, callback, details) => {
+    callback(permissionAllowed(details.requestingUrl))
+  })
+  previewSession.setPermissionCheckHandler((_wc, _permission, requestingOrigin) =>
+    permissionAllowed(requestingOrigin)
+  )
+}
+
 export function installPreviewGuards(win: BrowserWindow, isAgentGuest: (webContentsId: number) => boolean): void {
   // The renderer's <webview> tag can carry any attribute; whatever it says, the guest gets these
   // preferences and no preload. A src outside http(s)/blank, or a foreign partition, never attaches.
@@ -50,13 +62,7 @@ export function installPreviewGuards(win: BrowserWindow, isAgentGuest: (webConte
   // (navigator.permissions.query, enumerateDevices) goes to the check handler, and an unset check
   // handler falls back to Electron's default rather than to this rule — so installing only the first
   // would enforce "this machine only" on one of the two paths.
-  const previewSession = session.fromPartition(PREVIEW_PARTITION)
-  previewSession.setPermissionRequestHandler((_wc, _permission, callback, details) => {
-    callback(permissionAllowed(details.requestingUrl))
-  })
-  previewSession.setPermissionCheckHandler((_wc, _permission, requestingOrigin) =>
-    permissionAllowed(requestingOrigin)
-  )
+  guardPartition(PREVIEW_PARTITION)
   // Dev HTTPS (mkcert) on localhost is waved through; the app's own window and any other host are not.
   app.on('certificate-error', (e, wc, url, _error, _certificate, callback) => {
     const ok = certificateAllowed(url, wc.getType())

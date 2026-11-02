@@ -89,7 +89,35 @@ export function dataFor(cmd: string, body: unknown): Record<string, unknown> {
   if (Array.isArray(body)) return { [LIST_FIELD[cmd] ?? 'items']: body }
   // 객체가 아닌 것(문자열·숫자)을 돌려주는 명령은 없지만, 입력은 명령이 아니라 앱의 응답이다.
   if (body === null || typeof body !== 'object') return { value: body }
+  if (cmd === 'agent-profiles-audit') return findingsData(body as Record<string, unknown>)
   return body as Record<string, unknown>
+}
+
+const listOf = (v: unknown): Record<string, unknown>[] => (Array.isArray(v) ? v.filter((x): x is Record<string, unknown> => typeof x === 'object' && x !== null) : [])
+
+/**
+ * The findings as the CLI gives them (lifecycle design §7): `{ findings: [{ key, rule, subject, reason, action, ignored }],
+ * info: [{ subject, reason }], observe, unread }`, the design's shape with the key an ignore takes, the information lines
+ * and the sources that could not be read. An ignored finding (`--all`) carries when and its note too. The Host's report
+ * holds more for the app (the reason and action as messages to word in the person's language, the place to open, the
+ * profiles a finding marks), which the CLI's English makes no use of.
+ */
+function findingsData(body: Record<string, unknown>): Record<string, unknown> {
+  return {
+    findings: listOf(body.findings).map((f) => ({
+      key: f.key,
+      rule: f.rule,
+      subject: f.subject,
+      reason: f.reason,
+      action: f.action,
+      ignored: f.ignored === true,
+      ...(f.ignored === true && f.ignoredAt !== undefined ? { ignoredAt: f.ignoredAt } : {}),
+      ...(f.ignored === true && f.note !== undefined ? { note: f.note } : {})
+    })),
+    info: listOf(body.info).map((l) => ({ subject: l.subject, reason: l.reason })),
+    observe: body.observe,
+    unread: Array.isArray(body.unread) ? body.unread : []
+  }
 }
 
 /**
@@ -232,7 +260,11 @@ const LISTING: Record<string, readonly string[]> = {
   'audit-summary': ['astera agent-profiles list'],
   'policies-rules-edit': ['astera policies show'],
   'policies-rules-remove': ['astera policies show'],
-  'policies-rules-move': ['astera policies show']
+  'policies-rules-move': ['astera policies show'],
+  // **The findings** (lifecycle design §7): an ignore's 404 is a key no current finding has, and `audit` gives the keys.
+  // The noun rule cuts at the first dash (`agent`), so it would offer the guide. `audit-unignore` has no entry: a key that
+  // was not ignored answers 200 with `removed: false`, never 404 (question 1 above)
+  'agent-profiles-audit-ignore': ['astera agent-profiles audit']
 }
 
 /** 없는 id 를 말한 명령에게 줄 목록 명령들. */
@@ -290,8 +322,10 @@ const STEPS: Record<
   RUNTIME_CAPABILITY_MISSING: (cmd) => [usageCommandFor(cmd)],
   RUNTIME_BUSY: () => [],
   // Read-only is the default pairing: full control is a new pairing, made on the Runtime (the first line, run there)
-  // and added here (final review I1).
-  RUNTIME_PERMISSION_DENIED: () => ['astera runtime pair --full-control', 'astera runtimes add --pair <string>'],
+  // and added here (final review I1). The report is a read every pairing may make (controllerGate.ts), refused only to
+  // an agent session or MCP (remote governance design §7.3), so `runtimes get` has nothing to type: a new pairing would
+  // be refused the same, and the person reads it in the app or their own shell (the Mac check, check 29).
+  RUNTIME_PERMISSION_DENIED: (cmd) => (cmd === 'runtimes-get' ? [] : ['astera runtime pair --full-control', 'astera runtimes add --pair <string>']),
   // §3.9: whether the first attempt ran cannot be proven; the newest Jobs on that Runtime say.
   RUNTIME_OUTCOME_UNKNOWN: (_cmd, details) => [typeof details.runtime === 'string' ? `astera --runtime ${details.runtime} jobs list` : 'astera runtimes list'],
   REMOTE_TIMEOUT: (_cmd, details) => [typeof details.runtime === 'string' ? `astera --runtime ${details.runtime} jobs list` : 'astera runtimes list'],
@@ -302,7 +336,9 @@ const STEPS: Record<
   PLUGIN_CAPABILITY_MISSING: (_cmd, details) => (typeof details.runtime === 'string' ? [] : ['astera plugins list']),
   // **`host start` 가 3 으로 끝난 것에 `host start` 를 권하지 않는다**(리뷰 I1). 방금 그것이 안 됐다.
   // 무엇을 봤는지는 `host status` 가 말하고, Host 의 로그 자리는 이 오류의 details 가 싣는다.
-  HOST_NOT_RUNNING: (cmd) => [cmd === 'host-start' ? 'astera host status' : 'astera host start'],
+  // Inside Claude Code's sandbox (cli/run.ts sandboxedLine) no Host is reached whether one runs or not: the message says
+  // how to run the line instead, and no command typed there would help.
+  HOST_NOT_RUNNING: (cmd, details) => (details.sandbox === 'claude' ? [] : [cmd === 'host-start' ? 'astera host status' : 'astera host start']),
   // **`tasks add --validate` 의 없는 구성 id 는 그 계획의 목록 한 줄이다**(phase D). 그 404 만 답에
   // 계획 id 를 싣고 오고(command.ts, run.ts 가 `details` 로 옮긴다), 채워진 줄은 그대로 칠 수 있다.
   // 문구가 아니라 칸으로 가른다 — CONFLICT 의 `requestId` 와 같은 판단이다.

@@ -22,6 +22,15 @@ import { controllerRegistry, runRuntimesCommand } from '../cli/runtimes'
 import { answerRemote } from '../cli/remote'
 import { publicFor } from '../core/orchestration/cliPublic'
 import { openMcpRuntimes } from '../cli/mcp/remoteLink'
+import { buildControlPlaneReport } from './controlPlaneReport'
+import { parseControlPlaneReport, REPORT_CAPABILITY } from '../core/controlPlane/report'
+import { UNSAID_CLI_NOTE } from '../core/host/controllerGate'
+import type { ClientInfo } from '../core/remote/frames'
+import { extensionPaths, profilePaths } from '../core/profile/paths'
+import { writeExtensionRegistry } from '../core/extensions/registry'
+import { extensionSecrets } from '../core/extensions/secrets'
+import { writeCredentials } from '../core/credentials/store'
+import { writeAgentProfiles } from '../core/agentProfiles/store'
 
 const NOW = '2026-10-08T00:00:00.000Z'
 const identity = (() => {
@@ -71,6 +80,32 @@ async function runtime(seed?: OrchState, o: { github?: OrchServerDeps['github'] 
     onState: () => {},
     log: (m) => logs.push(m),
     controllers,
+    // The Runtime report as index.ts builds it, on this profile's own stores; the probes that start a process are left
+    // out, and the Gateway holds the stdio server with a lastError that quotes its command line (design §5.3)
+    controlPlaneReport: () =>
+      buildControlPlaneReport({
+        profileDir: runtimeDir,
+        platform: process.platform,
+        asteraVersion: '9.9.9',
+        readAccounts: async () => [],
+        appBypass: async () => false,
+        gatewayStates: () => [{ serverId: 'mcp_s7', processes: 1, state: 'failed', lastError: 'secret-cmd-7 --key arg-7 exited' }],
+        cliVersions: { warm: async () => {}, cached: () => undefined },
+        claudeUsernsRestricted: () => false,
+        checkRunner: false,
+        // One open finding whose words name a path and a command line: only its rule is counted across (design §5.3)
+        findings: async () => ({
+          findings: [
+            {
+              key: 'unused-mcp:mcp_s7', rule: 'unused-mcp', subject: { kind: 'extension', id: 'mcp_s7', name: `secret-cmd-7 in ${runtimeDir}` }, profileIds: [],
+              message: { key: 'findings.x' } as never, reason: `secret-cmd-7 in ${runtimeDir} was not called`, suggestion: { key: 'findings.y' } as never,
+              action: 'a', open: { kind: 'extensions' } as never, ignored: false
+            }
+          ],
+          info: [], observe: { on: false, days: 0 }, unread: [], computedAt: NOW
+        }),
+        log: (m) => logs.push(m)
+      }),
     ...(o.github ? { github: o.github } : {}),
     closeControllerConns: (conns) => link?.closeConns(conns),
     sessions: { listSessions: async () => [], readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }), sendSession: async () => {}, readChat: async () => [], sendChat: async () => {}, serial: (_id, run) => run() }
@@ -83,7 +118,7 @@ async function runtime(seed?: OrchState, o: { github?: OrchServerDeps['github'] 
     output: fromHost,
     controllers,
     orch: { call: (c) => orch.call(c) },
-    hello: () => ({ runtimeId: 'rt_p4', displayName: 'Office', asteraVersion: '9.9.9', hostProtocol: 4, gatewayProtocol: 1, bootId: 'b', platform: process.platform, pathStyle: 'windows', capabilities: ['remote.jobs'] }),
+    hello: () => ({ runtimeId: 'rt_p4', displayName: 'Office', asteraVersion: '9.9.9', hostProtocol: 4, gatewayProtocol: 1, bootId: 'b', platform: process.platform, pathStyle: 'windows', capabilities: ['remote.jobs', REPORT_CAPABILITY] }),
     log: (m) => logs.push(m),
     onReady: () => {},
     onFailed: () => {},
@@ -110,11 +145,12 @@ const pair = async (pairingString: string, name?: string) =>
     connect: (o) => connectRuntime(o),
     hostname: () => 'laptop',
     now: () => NOW,
-    version: '9.9.9'
+    version: '9.9.9',
+    agent: false
   })
 
 /** `astera --runtime <key> <cmd>` on the laptop. */
-const remote = (key: string, cmd: string, args: Record<string, unknown>, o: { request?: string; link?: (t: RemoteTarget) => RemoteLink } = {}) =>
+const remote = (key: string, cmd: string, args: Record<string, unknown>, o: { request?: string; link?: (t: RemoteTarget) => RemoteLink; client?: ClientInfo } = {}) =>
   answerRemote({
     cmd,
     args,
@@ -124,9 +160,10 @@ const remote = (key: string, cmd: string, args: Record<string, unknown>, o: { re
     mode: 'json',
     write: () => {},
     version: '9.9.9',
+    agent: false,
     deps: {
       link: (t) => {
-        const l = o.link ? o.link(t) : openRemoteLink({ target: t, client: { surface: 'cli' } })
+        const l = o.link ? o.link(t) : openRemoteLink({ target: t, client: o.client ?? { surface: 'cli', version: '9.9.9', agent: false } })
         links.push(l)
         return l
       }
@@ -171,7 +208,7 @@ describe('Remote Runtime Phase 4 acceptance (design §6 Phase 4)', { timeout: 30
       link: (t) =>
         openRemoteLink({
           target: t,
-          client: { surface: 'cli' },
+          client: { surface: 'cli', version: '9.9.9', agent: false },
           // The first connection sends the call and closes at once, so its answer never comes back; the next one
           // waits until the Runtime has run it, as a reconnect after a real drop would.
           connect: async (o) => {
@@ -200,7 +237,7 @@ describe('Remote Runtime Phase 4 acceptance (design §6 Phase 4)', { timeout: 30
       link: (t) =>
         openRemoteLink({
           target: t,
-          client: { surface: 'cli' },
+          client: { surface: 'cli', version: '9.9.9', agent: false },
           // The first connection closes before the call is written: as after a Runtime restart, there is no receipt.
           connect: async (o) => {
             const l = await connectRuntime(o)
@@ -353,7 +390,7 @@ describe('a GitHub lifecycle Run on a Runtime (design §10 Remote)', { timeout: 
     // A link the device keeps open (answerRemote closes its own), then drops
     let held: RemoteLink | undefined
     const keep = (target: RemoteTarget): RemoteLink => {
-      held = openRemoteLink({ target, client: { surface: 'cli' } })
+      held = openRemoteLink({ target, client: { surface: 'cli', version: '9.9.9', agent: false } })
       const h = held
       return { hello: () => h.hello(), call: (c, a, opts) => h.call(c, a, opts), subscribe: (pty, hs) => h.subscribe(pty, hs), close: () => {} }
     }
@@ -379,5 +416,193 @@ describe('a GitHub lifecycle Run on a Runtime (design §10 Remote)', { timeout: 
       error: { message: expect.stringContaining('only for a folder inside a project this Host knows') }
     })
     expect(await remote('rt_p4', 'github-preflight', { cwd: 'D:/p' })).toMatchObject({ status: 200, body: { ok: true, repo: 'o/r' } })
+  })
+})
+
+// Remote governance design §5.1, §5.3, §13: the Runtime report over the real link. A person's CLI and a read-only pairing
+// read it; an MCP client, an agent session and a CLI that does not say are refused it; and what crosses is names, states
+// and counts, its whole shape pinned below so a field added later fails here until someone has looked at it.
+describe('the Runtime report over a paired link (remote governance design §5.1, §5.3)', { timeout: 30_000 }, () => {
+  /** Never created: only its name is stored, as a hide-only project. */
+  const HOME_PROJECT = path.join(os.homedir(), 'proj-7')
+  /** The Runtime's Control Plane, each part holding something that must never cross. */
+  const seedControlPlane = async (): Promise<void> => {
+    await writeExtensionRegistry(runtimeDir, {
+      version: 1,
+      entries: [
+        {
+          id: 'mcp_s7', kind: 'mcp', name: 'tracker', transport: 'stdio', command: 'secret-cmd-7', args: ['--key', 'arg-7'], cwd: path.join(runtimeDir, 'srv-7'),
+          env: { TOKEN: { secret: 'mcp_s7.TOKEN' }, PLAIN: { value: 'pv-7' } }, providers: ['claude', 'codex'], importedFrom: 'acc_1', enabled: true
+        },
+        { id: 'mcp_h7', kind: 'mcp', name: 'web', transport: 'http', url: 'https://u7.example', env: {}, providers: ['claude'], importedFrom: 'acc_1', enabled: false },
+        { id: 'skill-review', kind: 'skill', name: 'review', hash: '0'.repeat(64), providers: ['claude', 'codex'], importedFrom: 'acc_1', enabled: true }
+      ]
+    })
+    await extensionSecrets(runtimeDir).put('mcp_s7.TOKEN', 'sv-7')
+    const skill = path.join(extensionPaths(runtimeDir).skills, 'review')
+    await fs.mkdir(skill, { recursive: true })
+    await fs.writeFile(path.join(skill, 'SKILL.md'), '---\nname: review\n---\nReview it.\n')
+    await writeCredentials(runtimeDir, {
+      version: 1,
+      entries: [
+        { kind: 'hide-only', id: 'hc_7', alias: 'Cloud', envNames: ['AWS_SECRET_ACCESS_KEY'], presets: ['aws'], hide: { on: true, projects: [runtimeDir] }, createdAt: NOW },
+        // A project under the home folder, as most are: a leak would carry the person's user name
+        { kind: 'hide-only', id: 'hc_8', alias: 'Home', envNames: ['HOME_TOKEN'], presets: [], hide: { on: true, projects: [HOME_PROJECT] }, createdAt: NOW }
+      ],
+      mcpHide: {}
+    })
+    await fs.writeFile(
+      profilePaths(runtimeDir).auditPolicy,
+      JSON.stringify({ version: 1, mode: 'observe', otherwise: 'allow', observingSince: NOW, rules: [{ id: 'rule-7', effect: 'deny', action: 'git.remote.write' }] })
+    )
+    await writeAgentProfiles(runtimeDir, {
+      version: 1,
+      profiles: [{ id: 'ap_7', name: 'Reviewer', status: 'active', accountIds: ['acc_gone'], mcpExclude: ['mcp_h7'], permission: 'ask', sandbox: true, createdAt: NOW, updatedAt: NOW }]
+    })
+  }
+
+  /** Every key path in `v`, sorted, an array's items folded into one `[]` so the shape does not depend on how many. */
+  const shapeOf = (v: unknown): string[] => {
+    const paths = new Set<string>()
+    const walk = (x: unknown, at: string): void => {
+      if (Array.isArray(x)) {
+        if (x.length === 0) paths.add(`${at}[]`)
+        for (const item of x) walk(item, `${at}[]`)
+      } else if (typeof x === 'object' && x !== null && Object.keys(x).length > 0) {
+        for (const [k, item] of Object.entries(x)) walk(item, at === '' ? k : `${at}.${k}`)
+      } else paths.add(at)
+    }
+    walk(v, '')
+    return [...paths].sort()
+  }
+
+  /** What the seeded Runtime's report holds. A key added to the report shows up here first: look at what it carries
+   *  against §5.3 before adding it. `byRule`'s key is the seeded finding's rule name. */
+  const EXPECTED_SHAPE = [
+    'appBypass',
+    'astera.platform',
+    'astera.version',
+    'credentials.hideOnly[].alias',
+    'credentials.hideOnly[].envNames[]',
+    'credentials.hideOnly[].hidden',
+    'credentials.hideOnly[].presets[]',
+    'credentials.mcp[].hidden',
+    'credentials.mcp[].names[]',
+    'credentials.mcp[].serverId',
+    'credentials.mcp[].serverName',
+    'extensions[].compareHash',
+    'extensions[].enabled',
+    'extensions[].gateway',
+    'extensions[].id',
+    'extensions[].kind',
+    'extensions[].name',
+    'extensions[].providers[]',
+    'extensions[].secretNames[]',
+    'findings.byRule.unused-mcp',
+    'findings.total',
+    'policy.cliVersions.claude',
+    'policy.cliVersions.codex',
+    'policy.enforce',
+    'policy.mode',
+    'policy.observingSince',
+    'policy.otherwise',
+    'policy.rules',
+    'profiles[].accountsNamed',
+    'profiles[].accountsThere',
+    'profiles[].id',
+    'profiles[].mcpExclude[]',
+    'profiles[].name',
+    'profiles[].permission',
+    'profiles[].sandbox',
+    'profiles[].status',
+    'sandbox.claude.blocker',
+    'sandbox.claude.kind',
+    'sandbox.codex.blocker',
+    'sandbox.codex.kind',
+    'secretStore.kind',
+    'secretStore.ok',
+    'version'
+  ]
+
+  const PERSON: ClientInfo = { surface: 'cli', version: '9.9.9', agent: false }
+
+  it("a person's CLI reads the report through the pinned link", async () => {
+    await seedControlPlane()
+    const rt = await runtime()
+    await pair(await rt.pairing())
+    const r = await remote('rt_p4', 'control-plane-report', {}, { client: PERSON })
+    expect(r).toMatchObject({ status: 200 })
+    const parsed = parseControlPlaneReport((r as { body: unknown }).body)
+    expect(parsed, JSON.stringify(parsed)).not.toHaveProperty('error')
+    expect(parsed).toMatchObject({
+      astera: { version: '9.9.9', platform: process.platform },
+      extensions: [{ id: 'mcp_s7', kind: 'mcp', secretNames: ['TOKEN'], gateway: 'failed' }, { id: 'mcp_h7', kind: 'mcp', enabled: false }, { id: 'skill-review', kind: 'skill' }],
+      policy: { mode: 'observe', rules: 1 },
+      credentials: { hideOnly: [{ alias: 'Cloud', hidden: true }, { alias: 'Home', hidden: true }], mcp: [{ serverId: 'mcp_s7', names: ['TOKEN'] }] }
+    })
+  })
+
+  it('no secret, path, command line, MCP argument or URL, Rule content or env value crosses', async () => {
+    await seedControlPlane()
+    const rt = await runtime()
+    await pair(await rt.pairing())
+    const r = await remote('rt_p4', 'control-plane-report', {}, { client: PERSON })
+    expect(r).toMatchObject({ status: 200 })
+    const body = (r as { body: unknown }).body
+    const wire = JSON.stringify(body)
+    // A path as it is, and as JSON writes it (a Windows path's backslashes doubled)
+    const paths = [runtimeDir, os.homedir(), HOME_PROJECT].flatMap((p) => [p, JSON.stringify(p).slice(1, -1)])
+    // The user name is looked for as a whole value, a path segment or an account, not inside a word: a CI runner's
+    // user is `runner`, which the report's own code word `no-check-runner` holds
+    const user = os.userInfo().username
+    const names = [`"${user}"`, `/${user}`, `\\\\${user}`, `${user}@`]
+    const refs = ['acc_1', 'acc_gone', 'mcp_s7.TOKEN']
+    for (const leak of ['sv-7', 'pv-7', 'secret-cmd-7', 'arg-7', 'u7.example', 'rule-7', 'git.remote.write', ...refs, ...paths, ...names]) expect(wire, leak).not.toContain(leak)
+    expect(shapeOf(body)).toEqual(EXPECTED_SHAPE)
+  })
+
+  it('a read-only pairing reads it', async () => {
+    const rt = await runtime()
+    await pair(await rt.pairing('read-only'))
+    expect(await remote('rt_p4', 'control-plane-report', {}, { client: PERSON })).toMatchObject({ status: 200, body: { version: 1 } })
+  })
+
+  it('an MCP-surface controller is refused it', async () => {
+    const rt = await runtime()
+    await pair(await rt.pairing())
+    const r = await remote('rt_p4', 'control-plane-report', {}, { client: { surface: 'mcp' } })
+    expect(r).toMatchObject({ error: { code: 'RUNTIME_PERMISSION_DENIED', details: { runtime: 'rt_p4' } } })
+    expect((r as { error: { message: string } }).error.message).not.toContain(UNSAID_CLI_NOTE.trim())
+  })
+
+  it('a CLI controller in an agent session is refused it', async () => {
+    const rt = await runtime()
+    await pair(await rt.pairing())
+    const r = await remote('rt_p4', 'control-plane-report', {}, { client: { surface: 'cli', version: '9.9.9', agent: true } })
+    expect(r).toMatchObject({ error: { code: 'RUNTIME_PERMISSION_DENIED' } })
+    expect((r as { error: { message: string } }).error.message).not.toContain(UNSAID_CLI_NOTE.trim())
+  })
+
+  it('a CLI controller that does not say it is a person is refused, with the update note', async () => {
+    const rt = await runtime()
+    await pair(await rt.pairing())
+    const r = await remote('rt_p4', 'control-plane-report', {}, { client: { surface: 'cli' } })
+    expect(r).toMatchObject({ error: { code: 'RUNTIME_PERMISSION_DENIED' } })
+    expect((r as { error: { message: string } }).error.message).toContain(UNSAID_CLI_NOTE.trim())
+  })
+
+  // §13: the report is the only Control Plane read a controller gets. The CLI never sends these (they have no --runtime
+  // form), so the link sends them as another client would, and the Runtime's own gate answers
+  it('extensions-list and credentials-list over a full-control link answer the controller refusal', async () => {
+    await seedControlPlane()
+    const rt = await runtime()
+    await pair(await rt.pairing('full-control'))
+    const reg = await controllerRegistry(laptopDir)
+    const found = (await reg.list())[0]
+    const token = await reg.token(found.runtimeId)
+    const l = openRemoteLink({ target: { runtimeId: found.runtimeId, address: found.address, port: found.port, fingerprint: found.fingerprint, token: token! }, client: PERSON })
+    links.push(l)
+    for (const cmd of ['extensions-list', 'credentials-list'])
+      expect(await l.call(cmd, {}), cmd).toMatchObject({ status: 403, body: { code: 'RUNTIME_PERMISSION_DENIED', error: `${cmd} is not available to a remote controller` } })
   })
 })

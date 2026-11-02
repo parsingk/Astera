@@ -39,8 +39,26 @@ export interface ValidatorRunner {
    *  longer a place for the result. Throwing would open a Gate and undo the person's decision
    *  (ready/failed -> blocked is allowed by the transition table), so a quiet exit from the queue has
    *  to exist. The judgement sits on this interface because the runner is a closure in ipc.ts that tests
-   *  do not reach — it reports the fact, and this class decides what to do with it. */
-  start(a: { cwd: string; taskId: string; configId: string }): Promise<{ runId: string; name: string } | 'skip'>
+   *  do not reach — it reports the fact, and this class decides what to do with it.
+   *
+   *  **`unavailable` is not a failure either** (Task K, rule E5): the Task's workers ran in a sandbox this check cannot
+   *  be put in (the account's Windows sandbox not set up, the sandbox runtime missing, a Docker check), and it was not
+   *  run outside it. The round settles with it as a check that could not be made, which the verdict puts to a person.
+   *  `outsideSandbox`: it runs outside any sandbox though its workers were sandboxed (Claude Code on Windows, which has
+   *  none), recorded on its result. `hiddenEnv`: the variables the Credentials list kept from it, by name, recorded on
+   *  its result too (fix round 2). `sandboxFailed`: it runs through Astera's check runner (core/sandbox/checkRunner.ts):
+   *  asked with its exit code and output, it gives the words for a sandbox that stopped before the check started, as the
+   *  runner says by its own exit code and mark, or null for the check's own result. Such an exit is a check that could not
+   *  be made, not a failure (fix rounds 2 and 3, M1 and N1). */
+  start(a: {
+    cwd: string
+    taskId: string
+    configId: string
+  }): Promise<
+    | { runId: string; name: string; outsideSandbox?: true; hiddenEnv?: string[]; sandboxFailed?: (exitCode: number, output: string) => string | null }
+    | { unavailable: string; name: string }
+    | 'skip'
+  >
   /** That run's recent output */
   output(runId: string): string
   /** timeout 이 부른다. 이어 오는 exit 는 timed-out 으로 읽힌다 */
@@ -59,6 +77,13 @@ interface Pending {
   runId: string | null
   /** 지금 도는 check 의 RunConfig.name — 결과와 사유 문구에 쓴다 */
   name: string | null
+  /** The check running now runs outside any sandbox though its workers were sandboxed (Task K); set at each start */
+  outsideSandbox: boolean
+  /** The variables the Credentials list kept from the check running now, by name (fix round 2); set at each start */
+  hiddenEnv: string[]
+  /** The check running now runs through Astera's check runner: its exit read for a sandbox that stopped before the check
+   *  started (fix rounds 2 to 4, M1, N1 and R1); null for any other run. Set at each start */
+  sandboxFailed: ((exitCode: number, output: string) => string | null) | null
   startedAt: string | null
   /** Whether this entry's exit is already being settled. The same head's exit can arrive twice —
    *  settling is an await, and a second exit landing inside it still finds the head at the front. This
@@ -131,7 +156,7 @@ export class TaskValidator {
     const configIds = [...new Set(a.configIds)]
     const entry: Pending = {
       taskId: a.taskId, cwd: a.cwd, configIds, index: 0, results: [...(a.done ?? [])],
-      runId: null, name: null, startedAt: null, settling: false, stopped: false,
+      runId: null, name: null, outsideSandbox: false, hiddenEnv: [], sandboxFailed: null, startedAt: null, settling: false, stopped: false,
       timedOut: false, timedOutOnce: new Set(), erroredOnce: new Set(), timer: null
     }
     const q = this.queues.get(a.cwd)
@@ -213,9 +238,16 @@ export class TaskValidator {
       // 앞에 이미 통과한 check 들의 결과는 지금 onCannotRun 을 처리하는 쪽(Gate)에는 닿지 않는다.
       // CheckResult.status 의 주석이 말하는 "화면과 Journal" 은 아직 이 값을 읽는 자리가 없다 —
       // Gate 가 열릴 때 head.results 를 함께 넘기는 자리가 생기면 그때 쓴다.
-      head.results.push({ configId, name, status: 'timed-out', startedAt: head.startedAt ?? undefined, endedAt: now })
+      head.results.push({
+        configId, name, status: 'timed-out', startedAt: head.startedAt ?? undefined, endedAt: now,
+        ...(head.hiddenEnv.length > 0 ? { hiddenEnv: [...head.hiddenEnv] } : {})
+      })
+      // That round is not committed (onCannotRun carries the reason alone), so its question is where a person meets a check
+      // that hung, perhaps for a login or a token the Credentials list kept from it: the words name those, by name, as a
+      // failed result's line does (Task K fix round 4, R3)
+      const without = head.hiddenEnv.length > 0 ? `; it started without ${head.hiddenEnv.join(', ')}, which the Credentials list hides there` : ''
       void this.deps
-        .onCannotRun({ taskId: head.taskId, reason: `check "${name}" timed out twice (${this.timeoutMs}ms each)` })
+        .onCannotRun({ taskId: head.taskId, reason: `check "${name}" timed out twice (${this.timeoutMs}ms each)${without}` })
         .catch((e) => this.deps.log?.(`onCannotRun failed task=${head.taskId}: ${String(e)}`))
         .finally(() => this.advance(cwd, head))
       return
@@ -225,10 +257,25 @@ export class TaskValidator {
     // retry. Stripping only on screen leaves the deciding side reading control characters. RunPanel's
     // xterm is untouched — that is a terminal and escapes do their job there.
     const output = stripAnsi(this.deps.runner.output(a.runId))
+    // The sandbox stopped before the check started, as Astera's runner says by its own exit code and last line (fix round
+    // 2, M1): settled as a check that could not be made, which asks a person, as a sandbox that could not be put around it
+    // before the start does (rule E5). Only a run through the runner is read so: a check outside any sandbox, or a
+    // `codex sandbox` straight in its pty, never goes through it
+    const stoppedBefore = head.sandboxFailed?.(a.exitCode, output) ?? null
+    if (stoppedBefore !== null) {
+      this.deps.log?.(`check "${name}" task=${head.taskId}: the sandbox stopped before the check started: ${stoppedBefore}`)
+      // Its output kept, which the words point the person to (fix round 3, N4)
+      head.results.push({ configId, name, status: 'error', summary: stoppedBefore, outputTail: output, startedAt: head.startedAt ?? undefined, endedAt: now })
+      for (const rest of head.configIds.slice(head.index + 1)) head.results.push({ configId: rest, name: rest, status: 'not-run' })
+      this.settle(cwd, head)
+      return
+    }
     const passed = a.exitCode === 0
     head.results.push({
       configId, name, status: passed ? 'passed' : 'failed', exitCode: a.exitCode, outputTail: output,
-      startedAt: head.startedAt ?? undefined, endedAt: now
+      startedAt: head.startedAt ?? undefined, endedAt: now,
+      ...(head.outsideSandbox ? { outsideSandbox: true as const } : {}),
+      ...(head.hiddenEnv.length > 0 ? { hiddenEnv: [...head.hiddenEnv] } : {})
     })
     if (passed && head.index + 1 < head.configIds.length) {
       // 같은 이유로 runId·name 을 먼저 지운다(위 첫 timeout 자리와 같은 창) — 지우지 않으면 다음
@@ -323,12 +370,15 @@ export class TaskValidator {
     // Carried out of the try so advance is called after it, not inside
     let brokenReason: string | null = null
     let skipped = false
+    /** The sandbox could not be put around this check (Task K): settled as a check that could not be made */
+    let unavailable: { reason: string; name: string } | null = null
     /** This run's exit, if it arrived before the runId below was recorded (earlyExits). */
     let early: { runId: string; exitCode: number } | null = null
     this.startsInFlight++
     try {
       const outcome = await this.deps.runner.start({ cwd, taskId: head.taskId, configId })
       if (outcome === 'skip') skipped = true
+      else if ('unavailable' in outcome) unavailable = { reason: outcome.unavailable, name: outcome.name }
       // **The exit can beat this assignment.** node-pty delivers its exit from the event loop, after this
       // continuation — but a runner may queue it as a microtask inside start (the app's Host pty factory
       // does, for a spawn that never reached the Host), and that microtask runs before this continuation.
@@ -337,6 +387,9 @@ export class TaskValidator {
       else {
         head.runId = outcome.runId
         head.name = outcome.name
+        head.outsideSandbox = outcome.outsideSandbox === true
+        head.hiddenEnv = outcome.hiddenEnv ?? []
+        head.sandboxFailed = outcome.sandboxFailed ?? null
         head.startedAt = new Date().toISOString()
         head.timer = setTimeout(() => {
           if (head.runId !== outcome.runId || head.settling) return
@@ -375,6 +428,17 @@ export class TaskValidator {
     if (skipped) {
       this.deps.log?.(`validation no longer needed task=${head.taskId} cwd=${cwd}`)
       this.advance(cwd, head)
+      return
+    }
+    if (unavailable !== null) {
+      // As a plugin check that could not be made settles (askPlugin): recorded with its reason, the checks after it not
+      // run, and the verdict (applyValidationResult) asks a person. Not asked again at once: nothing a moment changes
+      // would put the sandbox around it
+      this.deps.log?.(`check "${unavailable.name}" could not be put in the sandbox task=${head.taskId}: ${unavailable.reason}`)
+      const now = new Date().toISOString()
+      head.results.push({ configId, name: unavailable.name, status: 'error', summary: unavailable.reason, startedAt: now, endedAt: now })
+      for (const rest of head.configIds.slice(head.index + 1)) head.results.push({ configId: rest, name: rest, status: 'not-run' })
+      this.settle(cwd, head)
       return
     }
     if (brokenReason !== null) {

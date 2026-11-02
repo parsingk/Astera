@@ -121,6 +121,16 @@ describe('attachGatewayLink (remote runtime design §2.4, §3.3)', () => {
     expect(s.calls[0].from).toMatchObject({ role: 'controller', principal: { clientId: c.clientId, name: 'laptop', permission: 'full-control' } })
     expect(s.frames.at(-1)).toEqual({ t: 'result', conn: 'c1', id: '1', status: 200, body: { ok: 'runs-stop' } })
   })
+  // Remote governance design §7.2: the kind comes from the client the Gateway forwarded with the sign-in.
+  it('a call’s principal is the one the auth frame’s client made', async () => {
+    const s = await setup()
+    const c = await s.pairClient('full-control')
+    s.send({ t: 'auth', conn: 'c1', tokenHash: sha256Base64url(c.token), client: { surface: 'mcp' } })
+    await s.settle()
+    s.send({ t: 'call', conn: 'c1', id: '1', cmd: 'jobs-list', args: {} })
+    await s.settle()
+    expect(s.calls[0].from?.principal).toMatchObject({ clientId: c.clientId, kind: 'agent', surface: 'mcp' })
+  })
   it('answers a call on a connection nobody bound with RUNTIME_AUTH_FAILED, running nothing', async () => {
     const s = await setup()
     s.send({ t: 'call', conn: 'c9', id: '1', cmd: 'jobs-list', args: {} })

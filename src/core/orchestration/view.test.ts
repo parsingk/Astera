@@ -878,6 +878,49 @@ describe('snapshotFor — 예약 템플릿과 회차', () => {
     expect(snap.runs[0].nextFireAt).toBe(1_800_000_000_000)
   })
 
+  // Lifecycle design §5: a schedule whose agent profile is archived waits, and its row says which profiles. Injected as
+  // nextFireOf is: the profiles are not in the state
+  it('a scheduled template whose profile is archived carries archivedProfiles', () => {
+    const s = withRuns([scheduled('t1', absPath('proj')), child('c1', absPath('proj'), 't1'), run('r1', absPath('proj'))])
+    const archivedOf = (jobId: string): string[] => (jobId === 'job_t1' ? ['p1', 'p2'] : [])
+    const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires, allExist, Date.now(), archivedOf)
+    const template = snap.runs.find((r) => r.id === 'job_t1')!
+    expect(template.archivedProfiles).toEqual(['p1', 'p2'])
+    // Only on the schedule's own row: not on its Run, and never on another Job
+    expect('archivedProfiles' in template.children![0]).toBe(false)
+    expect('archivedProfiles' in snap.runs.find((r) => r.id === 'job_r1')!).toBe(false)
+    // Empty is no field, and so is a caller that injects nothing
+    expect('archivedProfiles' in snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires, allExist, Date.now(), () => []).runs.find((r) => r.id === 'job_t1')!).toBe(false)
+    expect('archivedProfiles' in snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires, allExist).runs.find((r) => r.id === 'job_t1')!).toBe(false)
+    // A non-scheduled Job is never asked about
+    const asked: string[] = []
+    snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires, allExist, Date.now(), (id) => (asked.push(id), []))
+    expect(asked).toEqual(['job_t1'])
+  })
+
+  // Remote governance design §8.2: the Runtime's own Jobs view says a schedule is paused because its maker was unpaired,
+  // naming that controller. The schedule's own row only, as `schedule` is; a person's own pause carries no name
+  it('a template paused by a revoke carries pausedRevokedFrom with the controller\'s name', () => {
+    const base = withRuns([scheduled('t1', absPath('proj')), child('c1', absPath('proj'), 't1'), scheduled('t2', absPath('proj'))])
+    const s: OrchState = {
+      ...base,
+      jobs: base.jobs.map((j) =>
+        j.id === 'job_t1'
+          ? { ...j, paused: true, pausedBy: { reason: 'controller-revoked' as const, clientId: 'cli_1', name: 'laptop', at: '2026-08-20T00:00:00.000Z' } }
+          : j.id === 'job_t2'
+            ? { ...j, paused: true }
+            : j
+      )
+    }
+    const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires, allExist)
+    const revoked = snap.runs.find((r) => r.id === 'job_t1')!
+    expect(revoked).toMatchObject({ paused: true, pausedRevokedFrom: 'laptop' })
+    expect('pausedRevokedFrom' in revoked.children![0]).toBe(false)
+    const byHand = snap.runs.find((r) => r.id === 'job_t2')!
+    expect(byHand.paused).toBe(true)
+    expect('pausedRevokedFrom' in byHand).toBe(false)
+  })
+
   // children: [] 이나 nextFireAt: null 도 이 자리를 통과한다 — 없어야 할 칸이 있는지는 'in' 으로만
   // 알 수 있다. toBeUndefined() 는 생략된 칸과 값이 undefined 인 칸을 구별하지 못한다
   it('회차가 아직 없고 무장도 없는 템플릿은 두 칸이 아예 없다', () => {
@@ -1037,6 +1080,19 @@ describe('snapshotFor — 검사 결과와 자동 수정 진행', () => {
       { configId: 'c2', name: 'Tests', status: 'failed', exitCode: 1, unstable: true }
     ])
     expect(taskOf(s).convergence).toBeUndefined()
+  })
+
+  // Task K (the person's Q1): a check that ran outside any sandbox for sandboxed workers says so on the run's graph too
+  it('projects a check that ran outside the sandbox as such, and no other', () => {
+    const round: CheckResult[] = [
+      { configId: 'c1', name: 'Tests', status: 'passed', outsideSandbox: true },
+      { configId: 'c2', name: 'Lint', status: 'passed' }
+    ]
+    const s = withRuns([run('r1', absPath('p'))], [{ ...task('t1', 'r1', 'completed'), checks: round }])
+    expect(taskOf(s).checks).toEqual([
+      { configId: 'c1', name: 'Tests', status: 'passed', outsideSandbox: true },
+      { configId: 'c2', name: 'Lint', status: 'passed' }
+    ])
   })
 
   // Plugin Phase 5c: a skipped check says so, and a round a person let go on without a check (C9 skip-check) shows what

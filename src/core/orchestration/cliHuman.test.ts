@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { columns, displayWidth, humanFor, quietFor, shellOf, stateWord } from './cliHuman'
+import { dataFor } from './cliOutput'
 import { ACTION_PHRASES, COVERAGE_NOTE_PHRASES } from '../audit/phrases'
 import type { AuditAction, CoverageNote } from '../audit/types'
 import { SANDBOX_COVERAGE } from '../sandbox/coverage'
@@ -102,6 +103,17 @@ describe('humanFor', () => {
       ]
     })
     expect(out).toBe('PENDING  job_1  Fix the login page on Safari  0/0')
+  })
+
+  // Lifecycle design §5: a scheduled Job that uses an archived profile waits, and the list says why ahead of its progress
+  it('jobs list shows archived profile beside a scheduled Job', () => {
+    const out = humanFor('jobs-list', {
+      jobs: [
+        { id: 'job_1', objective: 'nightly', outcome: 'pending', schedule: { kind: 'daily', time: '09:00' }, progress: { done: 0, total: 1 }, archivedProfiles: ['p1'] },
+        { id: 'job_2', objective: 'weekly', outcome: 'pending', schedule: { kind: 'daily', time: '09:00' }, progress: { done: 0, total: 1 }, archivedProfiles: ['p1', 'p2'] }
+      ]
+    })
+    expect(out).toBe(['SCHEDULED  job_1  nightly  archived profile: p1', 'SCHEDULED  job_2  weekly   archived profile: p1, p2'].join('\n'))
   })
 
   it('질문이 여럿이면 복수로 센다', () => {
@@ -860,6 +872,9 @@ describe('humanFor — audit and policies', () => {
     const stopped = humanFor('audit-summary', { allow: 0, wouldDeny: 0, unknown: 0, byAction: {}, stoppedAtLimit: true })
     expect(stopped?.split('\n')[0]).toBe('allow 0, would-deny 0, unknown 0')
     expect(stopped).toContain('size limit')
+    // Follow-up R-F6, item 5: days dropped to keep under it say so in place of the stopped line
+    const dropped = humanFor('audit-summary', { allow: 0, wouldDeny: 0, unknown: 0, byAction: {}, stoppedAtLimit: true, droppedAtLimit: true })
+    expect(dropped?.split('\n').slice(1)).toEqual(['', '(days of this period were removed to stay under the size limit, so it holds fewer calls than were made)'])
   })
 
   const policy = {
@@ -929,7 +944,7 @@ describe('humanFor — audit and policies', () => {
     expect(table[2].split(/\s{2,}/).slice(1)).toEqual(['enforced (measured on the runtime)', 'enforced (measured on the runtime)', 'enforced (measured on the runtime)', 'allowed'])
     expect(table[6].split(/\s{2,}/).slice(1)).toEqual(['enforced', 'enforced', 'enforced (when the session bus is a file path)', 'allowed'])
     // And under it, that the home stays readable outside the login folders
-    expect(block.slice(7)).toEqual(['Outside the login folders, the home folder stays readable inside the sandbox.'])
+    expect(block.slice(7)).toEqual(["Outside the login folders, the home folder stays readable inside the sandbox. In a Claude session, commands the person types with `!` usually run outside the sandbox (see Claude Code's sandboxing docs); the agent's own commands run inside it."])
     // A Host that does not answer it prints the rules and the coverage as before
     expect(humanFor('policies-show', { mode: 'observe', policy })).toBe(rules.join('\n'))
   })
@@ -962,5 +977,268 @@ describe('humanFor — credentials', () => {
   })
   it('prints doctor’s lines with their level', () => {
     expect(humanFor('credentials-doctor', { lines: [{ level: 'ok', text: 'fine' }, { level: 'warn', text: 'careful' }] })).toBe(['ok    fine', 'warn  careful'].join('\n'))
+  })
+})
+
+// Lifecycle design §7: the findings as the CLI's --json carries them (cliOutput.ts), in the English the Host worded
+describe('humanFor — agent-profiles audit', () => {
+  const unused = { key: 'unused-profile:ap_1', rule: 'unused-profile', subject: { kind: 'profile', id: 'ap_1', name: 'Reviewer' }, reason: 'Not used in 120 days.', action: 'Archive the profile.', ignored: false }
+  const stale = { key: 'stale-runtime:rt_1', rule: 'stale-runtime', subject: { kind: 'runtime', id: 'rt_1', name: 'lab' }, reason: 'Not reached in 40 days.', action: 'Remove the pairing.', ignored: false }
+  const report = (over: Record<string, unknown> = {}) => ({ findings: [], info: [], observe: { on: true, days: 30 }, unread: [], ...over })
+
+  it('prints the Observe note, then a line per finding: rule, subject, reason and the action', () => {
+    expect(humanFor('agent-profiles-audit', report({ observe: { on: false, days: 0 }, findings: [unused, stale] }))).toBe(
+      [
+        'Usage findings need Observe on for 30 days. Observe is off.',
+        '',
+        'unused-profile  Reviewer  Not used in 120 days.    → Archive the profile.',
+        'stale-runtime   lab       Not reached in 40 days.  → Remove the pairing.'
+      ].join('\n')
+    )
+  })
+
+  it('says how many days Observe has been on while under 30, and nothing once it has had them', () => {
+    expect(humanFor('agent-profiles-audit', report({ observe: { on: true, days: 12 } }))).toBe(
+      ['Usage findings need Observe on for 30 days. It has been on for 12 days.', '', 'No findings.'].join('\n')
+    )
+    expect(humanFor('agent-profiles-audit', report())).toBe('No findings.')
+  })
+
+  it('--all marks the ignored ones, with the note when there is one', () => {
+    const out = humanFor('agent-profiles-audit', report({ findings: [unused, { ...stale, ignored: true, ignoredAt: '2026-10-30T12:00:00.000Z', note: 'the lab is shut' }] }), { all: true })
+    expect(out?.split('\n')).toEqual([
+      'unused-profile  Reviewer  Not used in 120 days.    → Archive the profile.',
+      'stale-runtime   lab       Not reached in 40 days.  → Remove the pairing.  (ignored: the lab is shut)'
+    ])
+    const bare = humanFor('agent-profiles-audit', report({ findings: [{ ...unused, ignored: true }] }), { all: true })
+    expect(bare).toBe('unused-profile  Reviewer  Not used in 120 days.  → Archive the profile.  (ignored)')
+  })
+
+  it('prints the information lines under the findings', () => {
+    const info = [{ subject: { kind: 'extension', id: 'skill_1', name: 'lint' }, reason: 'No recorded use in Claude in 30 days. Codex cannot tell.' }]
+    expect(humanFor('agent-profiles-audit', report({ findings: [unused], info }))).toBe(
+      ['unused-profile  Reviewer  Not used in 120 days.  → Archive the profile.', '', 'lint  No recorded use in Claude in 30 days. Codex cannot tell.'].join('\n')
+    )
+  })
+
+  it('closes with the sources it could not read, and leaves out the Observe note when the rules file is one', () => {
+    expect(humanFor('agent-profiles-audit', report({ findings: [stale], unread: ['profiles'] }))).toBe(
+      ['stale-runtime  lab  Not reached in 40 days.  → Remove the pairing.', '', 'Could not read: agent profiles'].join('\n')
+    )
+    // An unread policy reads { on: false }, which is not "Observe is off" (FindingsReport.observe)
+    // Nothing found is said of what could be read (final fix pass, M-8)
+    expect(humanFor('agent-profiles-audit', report({ observe: { on: false, days: 0 }, unread: ['profiles', 'policy'] }))).toBe(
+      ['No findings in what could be read.', '', 'Could not read: agent profiles, rules file'].join('\n')
+    )
+  })
+
+  it('nothing found reads no findings', () => {
+    expect(humanFor('agent-profiles-audit', report())).toBe('No findings.')
+  })
+
+  // Remote governance ruling R12-1: a snapshot's time reads on this computer's clock, as the audit records do; --json
+  // keeps the ISO the Host worded
+  it('prints an ISO time in a reason as local time, and --json keeps the ISO', () => {
+    const at = '2026-10-31T23:30:00.000Z'
+    const missing = {
+      key: 'runtime-missing-extension:rt_1:sk_1',
+      rule: 'runtime-missing-extension',
+      subject: { kind: 'runtime', id: 'rt_1', name: 'Office' },
+      message: { key: 'findings.reason.runtimeExtension.missing', params: { extension: 'my-skill', at } },
+      reason: `my-skill is not there, as of ${at}.`,
+      action: 'Update Astera on Office.',
+      ignored: false
+    }
+    const data = dataFor('agent-profiles-audit', report({ findings: [missing] }))
+    expect((data.findings as Array<{ reason: string }>)[0].reason).toBe(`my-skill is not there, as of ${at}.`)
+    const d = new Date(at)
+    const two = (n: number): string => String(n).padStart(2, '0')
+    const local = `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`
+    expect(humanFor('agent-profiles-audit', data)).toBe(`runtime-missing-extension  Office  my-skill is not there, as of ${local}.  → Update Astera on Office.`)
+  })
+
+  // As other commands print ids under --quiet: the key each finding is ignored by, the ignored ones too under --all
+  it('--quiet prints each finding key, one per line', () => {
+    expect(quietFor(report({ findings: [unused, { ...stale, ignored: true }] }), 'agent-profiles-audit')).toBe(['unused-profile:ap_1', 'stale-runtime:rt_1'].join('\n'))
+    expect(quietFor(report(), 'agent-profiles-audit')).toBe('')
+    // Any other command reads ids as before
+    expect(quietFor({ findings: [unused] })).toBe('')
+  })
+
+  it('an ignore and an unignore say what changed', () => {
+    expect(humanFor('agent-profiles-audit-ignore', { key: 'stale-runtime:rt_1' })).toBe('ignored stale-runtime:rt_1')
+    expect(humanFor('agent-profiles-audit-unignore', { key: 'stale-runtime:rt_1', removed: true })).toBe('brought back stale-runtime:rt_1')
+    expect(humanFor('agent-profiles-audit-unignore', { key: 'x', removed: false })).toBe('x was not ignored')
+  })
+})
+
+// Remote governance design §8.2 to §8.4 (ruling R8-1): `runtime revoke` says, in the catalog's English, how many scheduled
+// Jobs it paused and how many it could not tell the maker of, then each Job whose pause was refused
+describe('runtime revoke', () => {
+  it('runtime revoke says how many scheduled Jobs it paused and how many have no maker on record', () => {
+    expect(humanFor('runtime-revoke', { revoked: true, clientId: 'cli_1', name: 'laptop', pausedJobs: 2, unrecordedScheduled: 1, notPaused: [] })).toBe(
+      'Unpaired laptop. Scheduled Jobs it made, now paused: 2. Scheduled Jobs with no maker on record, which keep their schedule: 1.'
+    )
+    // A Host that names no controller (ruling R8-3): the id stands in
+    expect(humanFor('runtime-revoke', { revoked: true, clientId: 'cli_1', pausedJobs: 2, unrecordedScheduled: 1, notPaused: [] })).toBe(
+      'Unpaired cli_1. Scheduled Jobs it made, now paused: 2. Scheduled Jobs with no maker on record, which keep their schedule: 1.'
+    )
+    expect(
+      humanFor('runtime-revoke', {
+        revoked: true,
+        clientId: 'cli_1',
+        pausedJobs: 0,
+        unrecordedScheduled: 0,
+        notPaused: [
+          { jobId: 'job_a', error: 'a worker is retained (worker-retain)' },
+          { jobId: 'job_b', error: 'a worker is still starting; the pause is retried in 95 s', reason: 'still-starting' }
+        ]
+      })
+    ).toBe(
+      [
+        'Unpaired cli_1. Scheduled Jobs it made, now paused: 0. Scheduled Jobs with no maker on record, which keep their schedule: 0.',
+        'job job_a: a worker is retained (worker-retain)',
+        'job job_b: a worker is still starting; the pause is retried in 95 s (reason: still-starting)'
+      ].join('\n')
+    )
+  })
+
+  // Ruling R8-3: a controller that made no scheduled Job is just unpaired, as before this release
+  it('says only that it unpaired when nothing was paused, unrecorded or refused', () => {
+    expect(humanFor('runtime-revoke', { revoked: true, clientId: 'cli_1', name: 'laptop', pausedJobs: 0, unrecordedScheduled: 0, notPaused: [] })).toBe('Unpaired laptop.')
+  })
+
+  // An older Host answers without the counts: the envelope as before, not a sentence with holes in it
+  it('leaves an older Host answer to the envelope', () => {
+    expect(humanFor('runtime-revoke', { revoked: true, clientId: 'cli_1' })).toBeNull()
+  })
+})
+
+// Remote governance design §10.2, §4.3, §5.4, ruling C6: the words come from the catalog's English, as the detail says them
+describe('runtimes get and ping', () => {
+  const two = (n: number): string => String(n).padStart(2, '0')
+  const local = (iso: string): string => {
+    const d = new Date(iso)
+    return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`
+  }
+  const SEEN = '2026-10-08T01:02:03.000Z'
+  const READ = '2026-10-08T04:05:06.000Z'
+  const ext = (id: string, kind: string, over: Record<string, unknown> = {}) => ({ id, kind, name: id, enabled: true, providers: ['claude'], ...over })
+  const row = (id: string, kind: string, expected: boolean, state: string | null, here: boolean, there: boolean) => ({
+    id, kind, name: id.toUpperCase(), expected, state, here: here ? ext(id, kind) : null, there: there ? ext(id, kind) : null
+  })
+  const REPORT = {
+    version: 1,
+    astera: { version: '1.4.8', platform: 'darwin' },
+    extensions: [ext('skill-a', 'skill')],
+    profiles: [{ id: 'p1', name: 'Review', status: 'active', permission: 'bypass', sandbox: true, mcpExclude: [], accountsThere: 1, accountsNamed: 2 }],
+    appBypass: false,
+    policy: {
+      mode: 'observe',
+      otherwise: 'allow',
+      rules: 3,
+      enforce: { claude: { terminal: null, chat: 'hooks-off' }, codex: { terminal: 'codex-daemon', chat: null } },
+      cliVersions: { claude: '2.1.300', codex: null }
+    },
+    sandbox: { claude: { kind: 'sandbox', blocker: 'userns-restricted' }, codex: { kind: 'deny-only', blocker: null } },
+    credentials: { hideOnly: [{ alias: 'npm', presets: ['npm'], envNames: ['NPM_TOKEN'], hidden: true }], mcp: [{ serverId: 'mcp-gh', serverName: 'GitHub', names: ['GH_TOKEN'], hidden: false }] },
+    secretStore: { kind: 'owner-only-files', ok: false, code: 'secret-file-unsafe' },
+    findings: { total: 4, byRule: { 'stale-runtime': 1 } }
+  }
+  const detail = (over: Record<string, unknown> = {}) => ({
+    runtimeId: 'rt_a',
+    name: 'Office',
+    fingerprint: 'A'.repeat(43),
+    permission: 'full-control',
+    createdAt: SEEN,
+    lastSeenAt: SEEN,
+    facts: { asteraVersion: '1.4.8', platform: 'darwin', hostProtocol: 4, capabilities: [], readAt: SEEN },
+    here: '1.5.0',
+    older: true,
+    answering: true,
+    snapshot: { readAt: READ, report: REPORT },
+    comparison: [
+      row('mcp-a', 'mcp', true, 'missing', true, false),
+      row('mcp-b', 'mcp', true, 'secret-missing', true, true),
+      row('skill-a', 'skill', true, 'different', true, true),
+      row('skill-b', 'skill', true, 'off', true, true),
+      row('skill-c', 'skill', true, 'same', true, true),
+      row('skill-d', 'skill', false, null, true, false),
+      row('skill-z', 'skill', false, null, false, true)
+    ],
+    ...over
+  })
+  const lines = (d: Record<string, unknown>): string[] => (humanFor('runtimes-get', d) ?? '').split('\n').map((l) => l.trimEnd())
+
+  it('runtimes-get names the Runtime, both versions, its OS and when it was last seen, and says to update when older', () => {
+    const out = lines(detail())
+    expect(out[0]).toBe(`Office  rt_a  Astera 1.4.8 there, 1.5.0 here  darwin  Last seen ${local(SEEN)}`)
+    expect(out[1]).toBe('Update Astera on that computer.')
+    expect(out).toContain(`Read ${local(READ)}`)
+    // A newer or equal Runtime is shown, not told to update; one never reached says so
+    const newer = lines(detail({ older: false, lastSeenAt: null }))
+    expect(newer[0]).toBe('Office  rt_a  Astera 1.4.8 there, 1.5.0 here  darwin  Not reached yet')
+    expect(newer).not.toContain('Update Astera on that computer.')
+  })
+
+  it('runtimes-get shows a line per comparison row with its state word', () => {
+    const out = lines(detail())
+    const at = out.indexOf('Extensions')
+    expect(out.slice(at + 1, at + 8).map((l) => l.split(/\s{2,}/))).toEqual([
+      ['Not there', 'mcp', 'MCP-A', 'mcp-a'],
+      ['Secret missing there', 'mcp', 'MCP-B', 'mcp-b'],
+      ['Different there', 'skill', 'SKILL-A', 'skill-a'],
+      ['Off there', 'skill', 'SKILL-B', 'skill-b'],
+      ['Same', 'skill', 'SKILL-C', 'skill-c'],
+      ['-', 'skill', 'SKILL-D', 'skill-d'],
+      ['Only there', 'skill', 'SKILL-Z', 'skill-z']
+    ])
+  })
+
+  it('runtimes-get shows the report parts, with values staying on that computer', () => {
+    const text = humanFor('runtimes-get', detail()) ?? ''
+    for (const part of [
+      'Run agents without permission checks is off there.',
+      'policy observe, otherwise allow, 3 rules',
+      'Enforce cannot start: hooks-off',
+      'Enforce can start',
+      'userns-restricted',
+      'Values stay on that computer. Astera never copies them.',
+      'NPM_TOKEN',
+      'Secret store: owner-only files, check fails (secret-file-unsafe)',
+      'Findings there: 4'
+    ])
+      expect(text, part).toContain(part)
+    // Ruling R2-1: a word this build does not know is shown as it came
+    const newer = { ...REPORT, secretStore: { kind: 'os-keychain', ok: true }, sandbox: { ...REPORT.sandbox, codex: { kind: 'microvm', blocker: null } } }
+    const shown = humanFor('runtimes-get', detail({ snapshot: { readAt: READ, report: newer } })) ?? ''
+    expect(shown).toContain('Secret store: os-keychain, check passes')
+    expect(shown).toContain('microvm')
+  })
+
+  it('runtimes-get says not read yet, offline, and the update line for a Runtime that cannot report', () => {
+    const never = lines(detail({ snapshot: null, comparison: [], answering: true, refusal: { code: 'RUNTIME_CAPABILITY_MISSING', message: 'this Runtime cannot report its setup; update Astera there' } }))
+    expect(never).toContain('Not read yet')
+    expect(never).toContain('This Runtime cannot report its setup. Update Astera there.')
+    expect(never).not.toContain('Values stay on that computer. Astera never copies them.')
+    // The last snapshot under the line that it does not answer, with its read time (§5.4)
+    const offline = lines(detail({ answering: false, refusal: { code: 'RUNTIME_OFFLINE', message: 'connect ECONNREFUSED' } }))
+    expect(offline.indexOf('Does not answer (RUNTIME_OFFLINE)')).toBeGreaterThan(0)
+    expect(offline.indexOf(`Read ${local(READ)}`)).toBeGreaterThan(offline.indexOf('Does not answer (RUNTIME_OFFLINE)'))
+    const refused = lines(detail({ refusal: { code: 'RUNTIME_PERMISSION_DENIED', message: 'control-plane-report answers a person on another computer' } }))
+    expect(refused).toContain('RUNTIME_PERMISSION_DENIED: control-plane-report answers a person on another computer')
+  })
+
+  // Ruling R9-3: a Runtime that could not read its registry is not one with nothing installed
+  it('runtimes-get says it could not read its extensions in place of the rows', () => {
+    const out = lines(detail({ snapshot: { readAt: READ, report: { ...REPORT, extensions: null } }, comparison: [row('skill-a', 'skill', true, null, true, false)] }))
+    const at = out.indexOf('Extensions')
+    expect(out[at + 1]).toBe('Could not read its extensions.')
+    expect(out.join('\n')).not.toContain('skill-a')
+  })
+
+  it('runtimes-ping says it answers with the version and OS, or does not answer with the code', () => {
+    expect(humanFor('runtimes-ping', { runtimeId: 'rt_a', answers: true, asteraVersion: '1.5.1', platform: 'linux' })).toBe('Answers: Astera 1.5.1 on linux')
+    expect(humanFor('runtimes-ping', { runtimeId: 'rt_a', answers: false, code: 'RUNTIME_OFFLINE' })).toBe('Does not answer (RUNTIME_OFFLINE)')
   })
 })

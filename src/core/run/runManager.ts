@@ -47,6 +47,13 @@ export interface StartOpts {
   /** Marks an orchestration Task's validation run. Carried on the status as-is to the renderer;
    *  RunManager makes no decision from it (see RunStatus.validation) */
   validation?: boolean
+  /** The environment this run starts from in place of the manager's base: a validation's, without what the Credentials
+   *  list hides (Task K, Q5), or the sandboxed environment of a sandboxed Task's check. The config's own env and fields
+   *  still go over it. */
+  env?: NodeJS.ProcessEnv
+  /** What is started in place of `command` through the shell: a sandboxed Task's check, as the program that puts it in
+   *  its workers' sandbox (Task K). `command` stays what the run shows and its note keeps. */
+  launch?: { file: string; args: string[] | string }
 }
 
 /** Project run management. Keyed by runId, so a project holds any number of runs — the same shape
@@ -80,7 +87,7 @@ export class RunManager {
     const cwd = opts.config.cwd || opts.projectPath
     // The assembled command needs shell interpretation. Which shell, and the win32 string/posix array
     // asymmetry that keeps quoted values intact, are decided (and explained) in shellSpawn
-    const spawn = shellSpawn(opts.command, this.platform)
+    const spawn = opts.launch ?? shellSpawn(opts.command, this.platform)
     // javaHome and springProfiles are model fields but have to reach the process as environment variables.
     // Only Gradle/Maven configs carry them, so RunConfig (a union) needs a cast to read them here — this cast
     // is the point, not a narrowing to remove later, since RunManager otherwise stays kind-agnostic.
@@ -91,7 +98,7 @@ export class RunManager {
     if (c.springProfiles) fromFields.SPRING_PROFILES_ACTIVE = c.springProfiles
     // The config env overrides the base environment, and fromFields overrides both — per-config
     // overrides such as JAVA_HOME have to win.
-    const merged = { ...this.baseEnv(), ...opts.config.env, ...fromFields }
+    const merged = { ...(opts.env ?? this.baseEnv()), ...opts.config.env, ...fromFields }
     // When the config specified JAVA_HOME (via the field or, for shell configs migrated from v1, via env),
     // its bin is prepended to PATH so the chosen JDK also applies when the command invokes java directly.
     // This happens **only when the config specified it**: reacting to a JAVA_HOME the app merely inherited

@@ -95,30 +95,32 @@ const LIMITS = [
  *  is set in one place for every OS a profile's sessions may start on. Windows was measured on the build's PC (inventory
  *  §23.3), macOS and Linux on GitHub's runners (§22, §23.4). */
 const LOGIN_FOLDERS = '~/.ssh, ~/.aws, gh’s and gcloud’s settings, ~/.docker, ~/.npmrc, ~/.git-credentials and ~/.kube'
+/** Task E (2026-10-28): what the app and the Host run outside any sandbox is in the profile folder. */
+const NOT_THE_PROFILE = 'never in Astera’s profile folder, even where the session’s folder holds it'
 const SANDBOX_LINES: { level: 'ok' | 'warn'; text: string }[] = [
   {
     level: 'ok',
-    text: `Sandbox, Codex on Windows: Codex’s elevated sandbox, set up once for each Codex account; writes stay in the session’s folder, its repository’s git directories (not their hooks, config, commondir files or modules folder) and the temp folder, ${LOGIN_FOLDERS} cannot be read, Credential Manager is kept out, and the network works.`
+    text: `Sandbox, Codex on Windows: Codex’s elevated sandbox, set up once for each Codex account; writes stay in the session’s folder, its repository’s git directories (not their hooks, config, commondir files or modules folder) and the temp folder, ${NOT_THE_PROFILE}; ${LOGIN_FOLDERS} cannot be read, Credential Manager is kept out, and the network works.`
   },
   {
     level: 'ok',
-    text: `Sandbox, Codex on macOS: Codex’s own sandbox; writes stay in the session’s folder, its repository’s git directories (not their hooks, config, commondir files or modules folder) and the temp folder, ${LOGIN_FOLDERS} and ~/Library/Keychains cannot be read, and the network works.`
+    text: `Sandbox, Codex on macOS: Codex’s own sandbox; writes stay in the session’s folder, its repository’s git directories (not their hooks, config, commondir files or modules folder) and the temp folder, ${NOT_THE_PROFILE}; ${LOGIN_FOLDERS} and ~/Library/Keychains cannot be read, and the network works.`
   },
   {
     level: 'ok',
-    text: `Sandbox, Codex on Linux: Codex’s own sandbox; writes stay in the session’s folder, its repository’s git directories (not their hooks, config, commondir files or modules folder) and the temp folder, ${LOGIN_FOLDERS} cannot be read, the session bus a secret service answers on cannot be reached when the session bus is a file path (a bus on an abstract socket is not denied), and the network works.`
+    text: `Sandbox, Codex on Linux: Codex’s own sandbox; writes stay in the session’s folder, its repository’s git directories (not their hooks, config, commondir files or modules folder) and the temp folder, ${NOT_THE_PROFILE}; ${LOGIN_FOLDERS} cannot be read, the session bus a secret service answers on cannot be reached when the session bus is a file path (a bus on an abstract socket is not denied), and the network works.`
   },
   {
     level: 'warn',
-    text: `Sandbox, Claude Code on Windows: Claude Code has no sandbox here; the switch adds deny rules that keep its file tools out of ${LOGIN_FOLDERS}, and its shell is not restricted.`
+    text: `Sandbox, Claude Code on Windows: Claude Code has no sandbox here; the switch adds deny rules that keep its file tools out of ${LOGIN_FOLDERS} and from changing Astera’s profile folder, and its shell is not restricted.`
   },
   {
     level: 'ok',
-    text: `Sandbox, Claude Code on macOS: Claude Code’s own sandbox; its commands write only in the session’s folder, its git directories and the temp folder, ${LOGIN_FOLDERS} and ~/Library/Keychains cannot be read, astera runs outside it, and the network works.`
+    text: `Sandbox, Claude Code on macOS: Claude Code’s own sandbox; its commands write only in the session’s folder, its git directories and the temp folder, ${NOT_THE_PROFILE}; ${LOGIN_FOLDERS} and ~/Library/Keychains cannot be read, astera runs outside it, and the network works.`
   },
   {
     level: 'ok',
-    text: `Sandbox, Claude Code on Linux: Claude Code’s own sandbox; its commands write only in the session’s folder, its git directories and the temp folder, ${LOGIN_FOLDERS} cannot be read, the session bus cannot be reached, astera runs outside it, and the network works.`
+    text: `Sandbox, Claude Code on Linux: Claude Code’s own sandbox; its commands write only in the session’s folder, its git directories and the temp folder, ${NOT_THE_PROFILE}; ${LOGIN_FOLDERS} cannot be read, the session bus cannot be reached, astera runs outside it, and the network works.`
   },
   {
     level: 'ok',

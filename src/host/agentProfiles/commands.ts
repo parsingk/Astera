@@ -8,6 +8,7 @@ import type { AgentProfile, ProfilePermission } from '../../core/agentProfiles/t
 import type { OrchCaller } from '../../core/host/orchProtocol'
 import type { Account } from '../../core/types'
 import type { Readiness } from '../../core/sandbox/windowsReadiness'
+import type { RemoveOutcome } from '../../core/sandbox/codexDefaultSandbox'
 import { agentProfileIdOf } from '../../core/sessions/noteInfo'
 import { holdsAgentProfile } from '../../core/orchestration/running'
 import type { OrchState } from '../../core/orchestration/state'
@@ -22,13 +23,19 @@ export const AGENT_PROFILE_COMMANDS: ReadonlySet<string> = new Set([
   'agent-profiles-delete',
   'agent-profiles-touch',
   'agent-profiles-sandbox-setup',
-  'agent-profiles-sandbox-readiness'
+  'agent-profiles-sandbox-readiness',
+  'agent-profiles-sandbox-default-remove'
 ])
 
 /** What only the app may send: Codex's Windows sandbox setup brings up the administrator prompt on the person's screen,
  *  so it follows a press of 설정하기 and nothing else, not the person's CLI and never an agent's shell. The readiness
- *  Settings › Agent profiles shows beside it is the app's too: it runs codex for each account, which no shell needs. */
-const APP_ONLY_AGENT_PROFILE_COMMANDS: ReadonlySet<string> = new Set(['agent-profiles-sandbox-setup', 'agent-profiles-sandbox-readiness'])
+ *  Settings › Agent profiles shows beside it is the app's too: it runs codex for each account, which no shell needs. So
+ *  is Remove beside it (Task P): it changes the account's own Codex config.toml, on the person's press only. */
+const APP_ONLY_AGENT_PROFILE_COMMANDS: ReadonlySet<string> = new Set([
+  'agent-profiles-sandbox-setup',
+  'agent-profiles-sandbox-readiness',
+  'agent-profiles-sandbox-default-remove'
+])
 
 /** The ones that change the store: all but the two reads and the use stamp, which is not a person's change. */
 export const AGENT_PROFILE_CHANGES: ReadonlySet<string> = new Set([
@@ -66,9 +73,22 @@ const PERMISSIONS: readonly ProfilePermission[] = ['inherit', 'bypass', 'ask']
  *  sandbox it runs in (Review Focus 5). */
 const SANDBOX_BOOLEAN = 'sandbox must be true or false'
 
+/** The longest archive reason (lifecycle design §5, ruling 12). */
+const REASON_MAX = 200
+
 const bad = (error: string): AgentProfilesAnswer => ({ status: 400, body: { error } })
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 const strings = (v: unknown): v is string[] => Array.isArray(v) && v.every((s) => typeof s === 'string')
+
+/** An archive's reason as given: absent, or one line of text that is at most REASON_MAX characters once trimmed. Blank
+ *  once trimmed is none. Anything else is refused rather than cut, so what is kept is what the person wrote. */
+function archiveReason(v: unknown): { ok: true; text?: string } | { ok: false; error: string } {
+  if (v === undefined) return { ok: true }
+  if (typeof v !== 'string' || /[\r\n]/.test(v)) return { ok: false, error: 'reason must be one line of text' }
+  const text = v.trim()
+  if (text.length > REASON_MAX) return { ok: false, error: `reason must be at most ${REASON_MAX} characters` }
+  return text === '' ? { ok: true } : { ok: true, text }
+}
 
 export function createHostAgentProfiles(d: {
   profileDir: string
@@ -84,6 +104,14 @@ export function createHostAgentProfiles(d: {
    *  (core/sandbox/windowsReadiness.ts codexWindowsReadiness: doctor first, the echo only on a home doctor calls
    *  complete, so asking never brings up the administrator prompt). Absent on a Host with no Windows sandbox. */
   sandboxReadiness?: (account: Account) => Promise<Readiness>
+  /** The elevated sandbox as a Codex account's default (Task P, core/sandbox/codexDefaultSandbox.ts): the config.toml its
+   *  sessions read, whether that file makes the elevated sandbox their default, and taking that default out (the line
+   *  and Codex's older feature key). Absent on a Host with no Windows sandbox. */
+  sandboxDefault?: {
+    fileOf(account: Account): string
+    elevated(file: string): Promise<boolean>
+    remove(file: string): Promise<RemoveOutcome>
+  }
 }): HostAgentProfiles {
   const now = d.now ?? Date.now
   // One change at a time: two updates must each read what the other wrote
@@ -189,11 +217,20 @@ export function createHostAgentProfiles(d: {
         if (typeof args.id !== 'string') return bad(`${cmd} needs id`)
         const { id } = args
         const status = cmd === 'agent-profiles-archive' ? 'archived' : 'active'
+        // Lifecycle design §5: an archive records when, and why when the person said (ruling 12: one line, at most
+        // REASON_MAX characters once trimmed; blank is none). A restore drops both, so nothing stale stays behind
+        const reason = archiveReason(cmd === 'agent-profiles-archive' ? args.reason : undefined)
+        if (!reason.ok) return bad(reason.error)
         return queued(async () => {
           const s = await readAgentProfiles(d.profileDir)
           const old = s.profiles.find((p) => p.id === id)
           if (!old) return { status: 404, body: { error: `no agent profile ${id}` } }
-          const next: AgentProfile = { ...old, status, updatedAt: new Date(now()).toISOString() }
+          const at = new Date(now()).toISOString()
+          const { archivedAt: _at, archivedReason: _why, ...kept } = old
+          const next: AgentProfile =
+            status === 'archived'
+              ? { ...kept, status, updatedAt: at, archivedAt: at, ...(reason.text !== undefined ? { archivedReason: reason.text } : {}) }
+              : { ...kept, status, updatedAt: at }
           await writeAgentProfiles(d.profileDir, { ...s, profiles: s.profiles.map((p) => (p.id === id ? next : p)) })
           return { status: 200, body: { profile: shown(next, await d.readAccounts()) } }
         })
@@ -261,15 +298,50 @@ export function createHostAgentProfiles(d: {
         const codex = liveAccounts(p, all)
           .map((id) => all.find((a) => a.id === id))
           .filter((a): a is Account => a?.provider === 'codex')
+        // Task P: and whether its config.toml still makes the elevated sandbox its default, for Remove beside the row; one
+        // that cannot be read is said as none (a hint, never a gate)
+        const defaults = d.sandboxDefault
+        const elevatedDefault = (a: Account): Promise<boolean> =>
+          defaults
+            ? Promise.resolve()
+                .then(() => defaults.elevated(defaults.fileOf(a)))
+                .catch(() => false)
+            : Promise.resolve(false)
         const accounts = await Promise.all(
-          codex.map(async (a) => ({
-            accountId: a.id,
-            state: await Promise.resolve()
-              .then(() => ask(a))
-              .catch((): Readiness => 'check-failed')
-          }))
+          codex.map(async (a) => {
+            const [state, shared] = await Promise.all([
+              Promise.resolve()
+                .then(() => ask(a))
+                .catch((): Readiness => 'check-failed'),
+              elevatedDefault(a)
+            ])
+            return { accountId: a.id, state, ...(shared ? { elevatedDefault: true } : {}) }
+          })
         )
         return { status: 200, body: { accounts } }
+      }
+      case 'agent-profiles-sandbox-default-remove': {
+        // Task P (the person's decision, 2026-10-29): the `windows.sandbox = "elevated"` line and Codex's older
+        // `[features] elevated_windows_sandbox = true` of one Codex account's config.toml, taken out only when the
+        // person presses Remove beside its row; the rest of the file stays as it was
+        if (typeof args.id !== 'string' || typeof args.accountId !== 'string') return bad('agent-profiles-sandbox-default-remove needs id and accountId')
+        const defaults = d.sandboxDefault
+        if (!defaults) return { status: 501, body: { error: 'this Host has no Windows sandbox default to remove' } }
+        const p = findProfile(await readAgentProfiles(d.profileDir), args.id)
+        if (!p) return { status: 404, body: { error: `no agent profile ${args.id}` } }
+        const accounts = await d.readAccounts()
+        const account = liveAccounts(p, accounts).includes(args.accountId) ? accounts.find((a) => a.id === args.accountId) : undefined
+        if (!account) return bad(`${args.accountId} is not an account of the profile ${p.name}`)
+        if (account.provider !== 'codex') return bad(`${args.accountId} is not a Codex account`)
+        const file = defaults.fileOf(account)
+        try {
+          const outcome = await defaults.remove(file)
+          d.log(`agent profiles: the elevated default of ${account.id} in ${file}: ${outcome}`)
+          return { status: 200, body: { outcome, file } }
+        } catch (e) {
+          d.log(`agent profiles: could not take the elevated default of ${account.id} out of ${file} (${message(e)})`)
+          return { status: 200, body: { outcome: 'failed', file, error: message(e) } }
+        }
       }
       default:
         return { status: 501, body: { error: `${cmd} is not answered by this Host` } }

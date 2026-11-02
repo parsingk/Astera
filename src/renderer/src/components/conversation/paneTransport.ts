@@ -1,5 +1,6 @@
 import type { ChatRequest, ChatState } from '../../../../core/chat/types'
 import type { Message } from '../../../../core/i18n'
+import { isSandboxWarningMessage } from '../../../../core/sandbox/warningKeys'
 
 /** Task 8: what a session slot's ConversationPane is talking to. `'terminal'` is a terminal session's
  *  conversation view (PendingBanner, ToolRow, etc. all read the CLI's own pty-shaped transcript);
@@ -46,9 +47,14 @@ export type ChatBanner =
 export function chatBannerFor(chat: ChatPaneState, threadFailure: string | null = null): ChatBanner {
   if (chat === null) return { kind: 'none' }
   if (chat.request !== null) return { kind: 'request', request: chat.request }
-  if (typeof chat.notice === 'object' && chat.notice !== null) return { kind: 'notice', key: 'rollRefused', reason: chat.notice.reason }
+  const notice = chat.notice
+  // Task E fix round 3: a sandboxed start's warning travels as this notice too (so an app of round 2 still words it),
+  // but this pane says it in the line above the thread, from the session's info (SandboxWarningLine): that line outlives
+  // the first turn and reaches an app that attaches later, and here it would push the error and the quiet notices aside
+  if (typeof notice === 'object' && notice !== null && !isSandboxWarningMessage(notice.reason))
+    return { kind: 'notice', key: 'rollRefused', reason: notice.reason }
   if (chat.error !== null && chat.error !== threadFailure) return { kind: 'error', message: chat.error }
-  if (chat.notice) return { kind: 'notice', key: chat.notice }
+  if (typeof notice === 'string') return { kind: 'notice', key: notice }
   if (chat.truncated && chat.status === 'idle') return { kind: 'checking' }
   if (!chat.outlivesApp && chat.status === 'idle') return { kind: 'endsWithApp' }
   return { kind: 'none' }

@@ -21,6 +21,7 @@ import { sanitize } from '../../core/orchestration/checkpoint'
 import { cliHostTarget, runHostCommand } from '../host'
 import { openHostLink, type HostLink } from './hostLink'
 import { openMcpRuntimes, type McpRuntimes } from './remoteLink'
+import { hostSaysSandboxed, inAgentSession, rememberedSandboxed } from '../callerSandboxed'
 import { remoteTarget } from '../../core/remote/targets'
 import { resolveRuntime } from '../runtimes'
 import { LIST_LIMIT, cursorOffset, orderAndCut } from './lists'
@@ -433,7 +434,16 @@ async function runtimeTool(runtimes: McpRuntimes | undefined, t: ToolDef, input:
   const refused = (await runtimes?.refusal('projects-list')) ?? null
   if (refused !== null) return errorResult('PERMISSION_DENIED', refused)
   const list = (await runtimes?.list()) ?? []
-  const shown = list.map((r) => ({ runtimeId: r.runtimeId, name: r.name, address: r.address, port: r.port, permission: r.permission, lastSeenAt: r.lastSeenAt }))
+  // The kept facts as last read, never the report (remote governance design §10.3): MCP gets no Control Plane reads.
+  const shown = list.map((r) => ({
+    runtimeId: r.runtimeId,
+    name: r.name,
+    address: r.address,
+    port: r.port,
+    permission: r.permission,
+    ...(r.facts && { asteraVersion: r.facts.asteraVersion, platform: r.facts.platform }),
+    lastSeenAt: r.lastSeenAt
+  }))
   if (t.name === 'list_runtimes') {
     const data = { runtimes: shown }
     return { content: textResult(`${t.title} (${shown.length}).`, data), structuredContent: data }
@@ -573,13 +583,17 @@ export async function serveMcp(a: {
   })
   const link = counted(inner)
 
-  // The paired Runtimes of this profile, for the tools given a runtimeId (remote runtime design §2.8).
+  // The paired Runtimes of this profile, for the tools given a runtimeId (remote runtime design §2.8). Whether this
+  // server's session is sandboxed is asked at a change until the Host answers, then kept (remote governance design §7.4).
+  // An env with no session is an agent whose MCP client did not pass it to this server: refused, never asked.
   const opened =
     a.runtimes ??
     openMcpRuntimes({
       profileDir: cliHostTarget({ env: a.env, platform: a.platform, home: a.home }).profileDir,
       version: a.version,
-      client: () => server.server.getClientVersion()
+      client: () => server.server.getClientVersion(),
+      noSession: !inAgentSession(a.env),
+      sandboxed: rememberedSandboxed(() => hostSaysSandboxed({ env: a.env, platform: a.platform, home: a.home, version: a.version }))
     })
   const runtimes: McpRuntimes = {
     list: () => opened.list(),

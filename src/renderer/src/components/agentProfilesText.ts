@@ -109,6 +109,15 @@ export function chatHoldsPrompts(profile: AgentProfile | undefined, appWideYolo:
  *  this computer's list does not have it, a profile deleted since or one on a paired Runtime. */
 export const profileNameOf = (profiles: readonly AgentProfile[], id: string): string => profiles.find((p) => p.id === id)?.name ?? id
 
+/** What an archived profile's row says (lifecycle design §5): when it was archived, in the reader's date, and the reason
+ *  the person gave, if any, said as a reason. Null for an active profile, and for one archived before the date was
+ *  kept. */
+export function archivedNote(p: AgentProfile, t: T, dateOf: (iso: string) => string): { on: string; reason?: string } | null {
+  if (p.status !== 'archived' || p.archivedAt === undefined) return null
+  const on = t('settings.agentProfiles.archivedOn', { date: dateOf(p.archivedAt) })
+  return p.archivedReason !== undefined ? { on, reason: t('settings.agentProfiles.archivedReason', { reason: p.archivedReason }) } : { on }
+}
+
 /** What the editor's add list offers: the accounts not picked yet, and once one is picked only its provider's. A
  *  profile's accounts take turns on one conversation, which only one provider's CLI can carry on (the Host refuses a mix
  *  as `mixed-provider`). */
@@ -156,21 +165,36 @@ export function sandboxReadinessShown(p: AgentProfile, platform: string, account
 }
 
 /** The readiness lines, one per Codex account of the profile in its order, with what the Host answered (null while it is
- *  still being asked). An account the Host left out, or an answer that did not come, could not be asked about. */
+ *  still being asked). An account the Host left out, or an answer that did not come, could not be asked about.
+ *  `elevatedDefault` (Task P): the Host said the account's config.toml still makes the elevated sandbox its default, so
+ *  the row offers Remove; only an explicit `true` counts. */
 export function readinessRows(
   p: AgentProfile,
   accounts: readonly { id: string; label: string; provider?: Provider }[],
   answer: PluginsCallAnswer | null
-): { accountId: string; label: string; state: SandboxState | null }[] {
+): { accountId: string; label: string; state: SandboxState | null; elevatedDefault: boolean }[] {
   const said = new Map<string, SandboxState>()
+  const shared = new Set<string>()
   if (answer?.ok && Array.isArray(answer.body.accounts))
     for (const e of answer.body.accounts as unknown[]) {
       const o = typeof e === 'object' && e !== null ? (e as Record<string, unknown>) : {}
       if (typeof o.accountId === 'string' && isState(o.state)) said.set(o.accountId, o.state)
+      if (typeof o.accountId === 'string' && o.elevatedDefault === true) shared.add(o.accountId)
     }
   return codexAccountsOf(p, accounts).map((a) => ({
     accountId: a.id,
     label: a.label,
-    state: answer === null ? null : (said.get(a.id) ?? 'check-failed')
+    state: answer === null ? null : (said.get(a.id) ?? 'check-failed'),
+    elevatedDefault: shared.has(a.id)
   }))
+}
+
+/** What the Host did with Remove (Task P): the elevated default is gone (the line, or Codex's older feature key), was
+ *  not there, or names another sandbox now, and the readiness asked again shows it, so nothing more is said; or it
+ *  could not be taken out (an inline table, a file that could not be read or written, no Host), and the person is told
+ *  which file to edit by hand when the Host named it. */
+export function sandboxDefaultRemoved(answer: PluginsCallAnswer): { ok: true } | { ok: false; file: string | null } {
+  const body = answer.ok ? answer.body : null
+  if (body && (body.outcome === 'removed' || body.outcome === 'absent' || body.outcome === 'other-value')) return { ok: true }
+  return { ok: false, file: body && typeof body.file === 'string' ? body.file : null }
 }

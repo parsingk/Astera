@@ -118,7 +118,11 @@ const host = async () => {
     sessions: { listSessions: async () => [], readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }), sendSession: async () => {}, readChat: async () => [], sendChat: async () => {}, serial: (_id, run) => run() },
     workspaces
   })
-  const addr = hostAddress({ profileDir, platform: process.platform, tmpDir: dir, protocol: HOST_PROTOCOL })
+  // The socket in a short folder of its own: under `dir` (Hangul and a space, three bytes a syllable) it passed macOS's
+  // 104 byte cap on a socket path. Node 22 cut it short without a word; Node 24 (the Electron the app ships) refuses it.
+  const sockets = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-wsi-'))
+  cleanups.push(() => fs.rm(sockets, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }))
+  const addr = hostAddress({ profileDir, platform: process.platform, tmpDir: sockets, protocol: HOST_PROTOCOL })
   server = await startHostServer({
     address: addr.address,
     dirToPrepare: addr.dirToPrepare,

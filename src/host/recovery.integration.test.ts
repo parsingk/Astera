@@ -197,7 +197,8 @@ async function boot(p: { profileDir: string; home: string }, startedAt: string, 
     retarget: () => {},
     createSession: async () => {
       throw new Error('not in this rig')
-    }
+    },
+    linkLook: null
   } satisfies HostSpawner
 
   const wiring: HostDrivingWiring = composeHostDriving({

@@ -210,7 +210,7 @@ describe('sessions create — a profile that runs without permission checks, by 
 // Agent tabs close on exit (2026-10-20), review M1: a session the CLI, MCP or a plugin makes is an agent's; one a
 // person opens from a remote controller's new-session dialog, or the app asks for, is the person's and keeps its tab
 describe('sessions create — who started the session', () => {
-  const startedBy = async (caller: { sessionId: string; role?: 'app' | 'cli' | 'mcp' | 'controller' | 'plugin' }): Promise<unknown> => {
+  const startedBy = async (caller: Parameters<typeof handleCommand>[1]): Promise<unknown> => {
     const createSession = vi.fn(async () => row())
     const deps = makeDeps({ createSession })
     await deps.setState({ ...deps.getState(), projects: [{ id: 'prj_p', path: 'D:/p', name: 'p', addedAt: NOW }] })
@@ -224,8 +224,11 @@ describe('sessions create — who started the session', () => {
     expect(await startedBy({ sessionId: '', role: 'mcp' })).toBe('agent')
     expect(await startedBy({ sessionId: '', role: 'plugin' })).toBe('agent')
   })
+  // A controller is a person's only when its client said so (remote governance design §7.3,
+  // commandAgentController.test.ts holds the agent side)
   it('the person’s for a remote controller and for the app', async () => {
-    expect(await startedBy({ sessionId: '', role: 'controller' })).toBeUndefined()
+    const principal = { clientId: 'cli_1', name: 'laptop', permission: 'full-control' as const, kind: 'person' as const, surface: 'desktop' as const }
+    expect(await startedBy({ sessionId: '', role: 'controller', principal })).toBeUndefined()
     expect(await startedBy({ sessionId: '', role: 'app' })).toBeUndefined()
   })
 })

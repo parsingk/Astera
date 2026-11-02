@@ -582,7 +582,8 @@ async function hostRig(
       openSession(id, { title, accountId: o.accountId, cwd: o.cwd })
       created.push({ id, cwd: o.cwd, ...(o.initialPrompt !== undefined ? { prompt: o.initialPrompt } : {}) })
       return { id, accountId: o.accountId, cwd: o.cwd, status: 'running', title }
-    }
+    },
+    linkLook: null
   } satisfies HostSpawner
 
   const wiring = composeHostDriving({
@@ -1396,7 +1397,8 @@ describe('the public CLI against a real Host (§48, §49)', { timeout: 60_000 },
         'filesystem.read': { allow: 1, wouldDeny: 0, unknown: 0, blocked: 0 },
         'process.execute': { allow: 0, wouldDeny: 0, unknown: 1, blocked: 0 }
       },
-      stoppedAtLimit: false
+      stoppedAtLimit: false,
+      droppedAtLimit: false
     })
 
     // A rule edit changes what the past would have been

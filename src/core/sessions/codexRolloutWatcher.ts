@@ -18,7 +18,7 @@
 import type { Account, SessionInfo, SessionUsage } from '../types'
 import { JsonlTail } from '../rolling/jsonlTail'
 import { DAY_MS, findRollout } from '../rolling/codexLocate'
-import { rolloutOwnerCheck, type RolloutOwnerCheck, type RolloutOwnerSource, type RolloutOwnership } from '../rolling/rolloutOwner'
+import { hasOwnerReader, rolloutOwnerCheck, type RolloutOwnerCheck, type RolloutOwnerSource, type RolloutOwnership } from '../rolling/rolloutOwner'
 import { limitStateFromLines, type CodexLimitState } from '../rolling/codexSignal'
 import { tailLines } from '../rolling/tailLines'
 import { contextFromLines, sessionUsageOf } from '../usage/codex'
@@ -55,6 +55,10 @@ interface Entry {
    *  supplied. A caller that hands over both is adopting a session back from the Host: it read the
    *  pair out of that session's note, and it has no `resumeSessionId` to carry the id instead. */
   codexSessionId: string | null
+  /** What the owner question said about `rolloutPath` when it was mapped: 'own', 'unknown' (kept as the newest without an
+   *  answer), or null when it was not asked (a path handed over at registration, or no owner to ask). The `/new` re-scan
+   *  reads it (re-review Minor 3). */
+  rolloutVerdict: 'own' | 'unknown' | null
   tail: JsonlTail | null
   /** When the current rollout was adopted — the cutoff a re-scan uses to ask whether codex has since
    *  opened a *newer* file for this session (`/new`). Null while nothing is mapped. */
@@ -119,7 +123,7 @@ export interface CodexRolloutDeps {
   remember?(sessionId: string, note: { rolloutPath: string; codexSessionId?: string }): void
   now?: () => number
   /** Whose codex holds a rollout open (rolloutOwner.ts, Task D): the session's pty process (`pidOf`, null for a chat
-   *  session or a pty the Host has not answered for yet) and the reader the wiring built for its profile. Given, a
+   *  session or a pty the Host has not answered for yet) and this platform's reader. Given, a
    *  rollout is mapped to a session only when that process or one under it holds the file: folder, time and "newest"
    *  alone took another Host's session's file. Absent, or no pid, folder and time decide as before. */
   rolloutOwner?: RolloutOwnerSource
@@ -148,6 +152,23 @@ export function codexRolloutFromNote(
   if (typeof rolloutPath !== 'string' || rolloutPath === '') return null
   const codexSessionId = restore.codexSessionId
   return { rolloutPath, codexSessionId: typeof codexSessionId === 'string' ? codexSessionId : null }
+}
+
+/**
+ * The rollout the note of a session's last-opened pty names, or null: the mapping the Host's spawner and the app's watcher
+ * (through `remember`) wrote there. From the Host's pty list, its own (`PtyRegistry.list`) or the app's `pty-list`
+ * answer, which keeps an ended session's entry and note for a while. The limit probe of an ended worker reads it in place
+ * of a folder-and-time search that can take a sibling worker's newer file (Task D review Minor 7).
+ *
+ * Only the last-opened pty's note: of several (a roll that keeps the session id), that is the one that just ended.
+ */
+export function noteRolloutPath(
+  entries: Iterable<{ meta: { kind: string; id: string; restore: Record<string, unknown> } | null }>,
+  sessionId: string
+): string | null {
+  let last: Record<string, unknown> | null = null
+  for (const e of entries) if (e.meta?.kind === 'session' && e.meta.id === sessionId) last = e.meta.restore
+  return last ? (codexRolloutFromNote(last)?.rolloutPath ?? null) : null
 }
 
 /** Whether a line is a task_complete event */
@@ -184,6 +205,9 @@ export class CodexRolloutWatcher {
   constructor(private deps: CodexRolloutDeps) {
     this.now = deps.now ?? Date.now
     this.owner = deps.rolloutOwner ? rolloutOwnerCheck({ read: deps.rolloutOwner.read, log: deps.log, now: this.now }) : null
+    // Review Minor 5: a wiring that dropped its owner source went back to folder and time without a word
+    if (!deps.rolloutOwner && hasOwnerReader(process.platform))
+      deps.log('codex rollout owner is not wired: this watcher maps a rollout by folder and time alone')
   }
 
   /** The owner question for this entry's session, when its process is known; undefined keeps folder and time alone. */
@@ -228,6 +252,7 @@ export class CodexRolloutWatcher {
       since: this.now(),
       rolloutPath: rolloutPath ?? null,
       codexSessionId: codexSessionId ?? null,
+      rolloutVerdict: null,
       tail: rolloutPath ? new JsonlTail(rolloutPath, { startAtEnd: true }) : null,
       mappedAt: rolloutPath ? this.now() : null,
       rescanAt: this.now() + RESCAN_MS,
@@ -357,7 +382,8 @@ export class CodexRolloutWatcher {
    * cleared one showing. So this narrows to the case where the answer cannot be wrong, and the rest keep
    * today's behaviour. Alone among this watcher's sessions is not alone in the folder (a codex outside
    * Astera, another Host's session), so with the session's process known the newer file must also be one
-   * it holds open (ownerFor).
+   * it holds open (ownerFor), and one it cannot tell about is not taken where its own file was told apart
+   * (re-review Minor 3): only where that file was "cannot tell" too is the newest still its /new.
    */
   private async rescan(entry: Entry): Promise<void> {
     if (entry.mappedAt === null) return
@@ -367,25 +393,41 @@ export class CodexRolloutWatcher {
     }
     const account = this.deps.getAccount(entry.accountId)
     if (!account) return
-    const found = await findRollout({
-      configDir: account.configDir,
-      cwd: entry.cwd,
-      // The clock-skew margin findRollout allows means the file we are already on could come back here. It is left
-      // out (fix round 3): it can never be the `/new` file, and asking whose it is costs a process where the answer
-      // is "cannot tell", every re-scan for the tab's whole life.
-      // Bounded to the last day: the date folders read run from the day before `since`, and a tab mapped
-      // weeks ago would otherwise walk up to ROLLOUT_SCAN_DAYS_MAX folders on every rescan. The file
-      // `/new` opens is seconds newer than the previous rescan, so today's and yesterday's folders (the
-      // search before limit L5) are all it can be in.
-      since: Math.max(entry.mappedAt, this.now() - DAY_MS),
-      now: this.now,
-      excludePaths: entry.rolloutPath ? [...this.claimed(entry), entry.rolloutPath] : this.claimed(entry),
-      // A codex outside Astera opening a file in this folder is "newer" too: only one this session holds is its /new
-      owner: this.ownerFor(entry)
-    })
+    const mappedAt = entry.mappedAt
+    const owner = this.ownerFor(entry)
+    const look = (requireOwn: boolean): ReturnType<typeof findRollout> =>
+      findRollout({
+        configDir: account.configDir,
+        cwd: entry.cwd,
+        // The clock-skew margin findRollout allows means the file we are already on could come back here. It is left
+        // out (fix round 3): it can never be the `/new` file, and asking whose it is costs a process where the answer
+        // is "cannot tell", every re-scan for the tab's whole life.
+        // Bounded to the last day: the date folders read run from the day before `since`, and a tab mapped
+        // weeks ago would otherwise walk up to ROLLOUT_SCAN_DAYS_MAX folders on every rescan. The file
+        // `/new` opens is seconds newer than the previous rescan, so today's and yesterday's folders (the
+        // search before limit L5) are all it can be in.
+        since: Math.max(mappedAt, this.now() - DAY_MS),
+        now: this.now,
+        excludePaths: entry.rolloutPath ? [...this.claimed(entry), entry.rolloutPath] : this.claimed(entry),
+        // A codex outside Astera opening a file in this folder is "newer" too: only one this session holds is its /new
+        owner,
+        ...(requireOwn ? { requireOwn: true } : {})
+      })
+    let found = await look(owner !== undefined && entry.rolloutVerdict === 'own')
+    // A file handed over at registration was never asked about: asked now, only when a newer one cannot be told about.
+    // Its own (or another's) means this machine can see the session's processes, so that newer file is not its /new.
+    // An own answer is kept (fix round 1, review M3), so the next re-scan looks with requireOwn at once rather than walking
+    // the folder twice.
+    const current = entry.rolloutPath
+    if (found?.verdict === 'unknown' && owner && entry.rolloutVerdict === null && current) {
+      const said = (await owner(current)).verdict
+      if (said === 'own' && entry.rolloutPath === current) entry.rolloutVerdict = 'own'
+      if (said !== 'unknown') found = await look(true)
+    }
     if (entry.disposed || !found || found.path === entry.rolloutPath) return
     entry.rolloutPath = found.path
     entry.codexSessionId = found.sessionId
+    entry.rolloutVerdict = found.verdict ?? null
     entry.tail = new JsonlTail(found.path)
     entry.mappedAt = this.now()
     // Both belong to the conversation that has just ended: its context is not this one's, and its limit
@@ -428,7 +470,7 @@ export class CodexRolloutWatcher {
     owner: ((file: string) => Promise<RolloutOwnership>) | undefined,
     ordered: boolean
   ): Promise<void> {
-    let found: { path: string; sessionId: string } | null = null
+    let found: Awaited<ReturnType<typeof findRollout>> = null
     // Another session can claim it first across the await — re-check so one rollout ends up owned by exactly one
     // session (mirroring codexRolling's re-check for the same reason). Both paths were built by findRollout, so the
     // strings match. The looks of several sessions now run side by side rather than one after another in the tick, so
@@ -456,6 +498,7 @@ export class CodexRolloutWatcher {
     if (!found) return
     entry.rolloutPath = found.path
     entry.codexSessionId = found.sessionId
+    entry.rolloutVerdict = found.verdict ?? null
     entry.tail = new JsonlTail(found.path)
     entry.mappedAt = this.now()
     // Told once, here, because this is the one moment the scan makes a mapping and the only moment it

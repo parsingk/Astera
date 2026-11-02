@@ -4,13 +4,13 @@ import { describe, it, expect } from 'vitest'
 import { CATALOGS, LANGS, t } from './index'
 
 // As the brief gave them, with the Task 6 fix round's changes: the setup's sentence says Codex records the elevated
-// sandbox as the account's default, the done line's English, and Spanish in usted like the screen's other strings
+// sandbox as the account's default (and, since Task P, that Astera takes that line back out), the done line's English, and Spanish in usted like the screen's other strings
 const GIVEN = {
   'session.spawn.sandbox.windowsSetup': [
-    '이 Codex 계정은 Windows sandbox가 설정되지 않았습니다. 설정하기를 누르면 관리자 확인 창이 한 번 뜹니다. Codex가 이 계정의 기본 sandbox를 elevated로 기록합니다.',
-    "This Codex account has no Windows sandbox set up yet. Set up shows Windows' administrator prompt once. Codex records the elevated sandbox as this account's default.",
-    'この Codex アカウントには Windows サンドボックスがまだ設定されていません。「設定する」を押すと管理者の確認が一度表示されます。Codex はこのアカウントの既定のサンドボックスを elevated として記録します。',
-    'Esta cuenta de Codex aún no tiene el sandbox de Windows configurado. Configurar muestra una vez el aviso de administrador de Windows. Codex guarda el sandbox elevado como predeterminado de esta cuenta.'
+    '이 Codex 계정은 Windows sandbox가 설정되지 않았습니다. 설정하기를 누르면 관리자 확인 창이 한 번 뜹니다. Codex가 이 계정의 기본 sandbox를 elevated로 기록하지만 Astera가 그 줄을 다시 지우므로, sandbox 세션만 이것을 씁니다.',
+    "This Codex account has no Windows sandbox set up yet. Set up shows Windows' administrator prompt once. Codex records the elevated sandbox as this account's default, and Astera takes that line back out, so only sandboxed sessions use it.",
+    'この Codex アカウントには Windows サンドボックスがまだ設定されていません。「設定する」を押すと管理者の確認が一度表示されます。Codex はこのアカウントの既定のサンドボックスを elevated として記録しますが、Astera がその行を削除するため、これを使うのはサンドボックスのセッションだけです。',
+    'Esta cuenta de Codex aún no tiene el sandbox de Windows configurado. Configurar muestra una vez el aviso de administrador de Windows. Codex guarda el sandbox elevado como predeterminado de esta cuenta y Astera quita esa línea, así que solo lo usan las sesiones en el sandbox.'
   ],
   'session.spawn.sandbox.setUp': ['설정하기', 'Set up', '設定する', 'Configurar'],
   'session.spawn.sandbox.setUpDone': [
@@ -43,6 +43,20 @@ const GIVEN = {
     'The folder\'s path holds a character the Windows command line cannot carry (" & | < > ^ %), so it cannot start in the sandbox.',
     'フォルダーのパスに Windows のコマンドラインで扱えない文字（" & | < > ^ %）が含まれているため、サンドボックスで起動できません。',
     'La ruta de la carpeta tiene un carácter que la línea de comandos de Windows no admite (" & | < > ^ %), así que no puede iniciarse en el sandbox.'
+  ],
+  // Task E fix round 3 (re-review Minor 6): a path the sandbox names besides the work folder, which the log names
+  'session.spawn.sandbox.namedPathUnsafe': [
+    '작업 폴더 말고 sandbox가 지정해야 하는 폴더(Astera 자체 폴더나 홈의 로그인 정보 폴더)의 경로에 Windows 명령줄이 다룰 수 없는 문자(" & | < > ^ %)가 있어 sandbox로 시작할 수 없습니다. 어느 폴더인지는 Astera 로그에 있습니다.',
+    "A folder the sandbox has to name besides the work folder (one of Astera's own, or a login folder in your home) holds a character the Windows command line cannot carry (\" & | < > ^ %), so it cannot start in the sandbox. Astera's log names the folder.",
+    '作業フォルダー以外にサンドボックスが指定するフォルダー（Astera 自身のフォルダー、またはホームのログイン情報のフォルダー）のパスに Windows のコマンドラインで扱えない文字（" & | < > ^ %）が含まれているため、サンドボックスで起動できません。どのフォルダーかは Astera のログに記録されています。',
+    'Una carpeta que el sandbox debe indicar además de la carpeta de trabajo (una de Astera o una carpeta de inicio de sesión de su carpeta personal) tiene un carácter que la línea de comandos de Windows no admite (" & | < > ^ %), así que no puede iniciarse en el sandbox. El registro de Astera indica cuál es.'
+  ],
+  // Task E fix round 5 (rule E5): a named path through a link inside the work folder, where nothing else refuses it
+  'session.spawn.sandbox.linkedPath': [
+    '로그인 정보나 Astera 자체 파일이 든 폴더가 작업 폴더 안의 링크를 거쳐 있고 세션이 그 링크를 바꿀 수 있어서, sandbox가 그 폴더를 지킬 수 없어 sandbox로 시작할 수 없습니다. 프로젝트 폴더에서 시작해 주세요. 어느 링크인지는 Astera 로그에 있습니다.',
+    "A folder that holds logins or Astera's own files is reached through a link inside the work folder, which the session could change, so the sandbox cannot keep it protected and the session cannot start in the sandbox. Start it in a project folder. Astera's log names the link.",
+    'ログイン情報や Astera 自身のファイルを含むフォルダーが作業フォルダー内のリンクの先にあり、セッションがそのリンクを変えられるため、サンドボックスがそのフォルダーを守れず、サンドボックスで起動できません。プロジェクトのフォルダーで起動してください。どのリンクかは Astera のログに記録されています。',
+    'Una carpeta con datos de inicio de sesión o con archivos propios de Astera se alcanza a través de un enlace dentro de la carpeta de trabajo, que la sesión podría cambiar, así que el sandbox no puede protegerla y la sesión no puede iniciarse en el sandbox. Iníciela en una carpeta de proyecto. El registro de Astera indica cuál es el enlace.'
   ],
   'session.spawn.sandbox.gitLayout': [
     '작업 폴더의 git 정보를 읽지 못해 sandbox로 시작할 수 없습니다.',
@@ -83,6 +97,20 @@ const GIVEN = {
     '{id} はサンドボックスの外で動いています。サンドボックス内のセッションはサンドボックスの外に作業を渡せないため、何も送信も起動もしませんでした。',
     '{id} se ejecuta fuera del sandbox, y una sesión en el sandbox no puede pasar trabajo fuera de él, así que no se envió ni se inició nada.'
   ],
+  // Task P: Settings › Agent profiles offers to remove a home's elevated default, in one sentence
+  'settings.agentProfiles.sandboxDefault.hint': [
+    '이 계정의 config.toml이 elevated sandbox를 모든 Codex 세션의 기본값으로 정해 두어 일반 세션도 로그인 정보가 든 폴더를 읽지 못하며, 줄 삭제를 누르면 그 줄을 지워 sandbox 세션만 이것을 쓰게 됩니다.',
+    "This account's config.toml makes the elevated sandbox the default for all its Codex sessions, so its ordinary sessions cannot read the folders holding logins either; Remove takes that line out and leaves the sandbox to sandboxed sessions.",
+    'このアカウントの config.toml が elevated サンドボックスをすべての Codex セッションの既定にしているため通常のセッションもログイン情報を含むフォルダーを読めず、「行を削除」でその行を消すとサンドボックスのセッションだけがこれを使います。',
+    'El config.toml de esta cuenta hace que el sandbox elevado sea el predeterminado de todas sus sesiones de Codex, así que sus sesiones normales tampoco pueden leer las carpetas con datos de inicio de sesión; Quitar borra esa línea y deja el sandbox solo para las sesiones en el sandbox.'
+  ],
+  'settings.agentProfiles.sandboxDefault.remove': ['줄 삭제', 'Remove', '行を削除', 'Quitar'],
+  'settings.agentProfiles.sandboxDefault.removeFailed': [
+    '그 줄을 지우지 못했습니다. {file}을(를) 직접 고쳐 주세요.',
+    'The line could not be removed. Edit {file} yourself.',
+    'その行を削除できませんでした。{file} を直接編集してください。',
+    'No se pudo quitar la línea. Edite {file} usted mismo.'
+  ],
   'session.spawn.sandbox.notPrepared': [
     'sandbox 준비가 끝나기 전에 시작하려 했습니다. 다시 시작해 주세요.',
     'The session tried to start before its sandbox was prepared. Start it again.',
@@ -90,6 +118,45 @@ const GIVEN = {
     'La sesión intentó iniciarse antes de preparar su sandbox. Iníciela de nuevo.'
   ]
 } as const
+
+// Task E fix rounds 2 and 3, in the order ko, en, ja, es: the session starts as today and its tab says this. Round 3:
+// the Ubuntu line says what Ubuntu's profile does and points to srt's README for the fix, in its words. Round 4:
+// only the AppArmor route (our run 40761549024 had the sysctl set and srt still failed under the bwrap profile)
+const WARNINGS = {
+  'session.sandbox.warn.homeInWorkFolder': [
+    '이 sandbox 세션의 작업 폴더가 홈 폴더를 포함하고 있어서, sandbox 안에서 홈 폴더의 프로그램과 설정을 바꿀 수 있습니다. 이것들을 지키려면 프로젝트 폴더에서 시작해 주세요.',
+    "This sandboxed session's work folder contains your home folder, so programs and settings in your home folder can be changed from inside the sandbox. Start it in a project folder to keep them out of reach.",
+    'このサンドボックスのセッションの作業フォルダーはホームフォルダーを含んでいるため、サンドボックスの中からホームフォルダーのプログラムや設定を変更できます。それらを守るには、プロジェクトのフォルダーで起動してください。',
+    'La carpeta de trabajo de esta sesión del sandbox contiene su carpeta personal, así que los programas y la configuración de su carpeta personal se pueden cambiar desde dentro del sandbox. Iníciela en una carpeta de proyecto para mantenerlos fuera de su alcance.'
+  ],
+  'session.sandbox.warn.claudeUserns': [
+    '이 시스템에서는 Claude Code의 sandbox가 셸 명령을 실행할 수 없습니다. Ubuntu의 bubblewrap용 AppArmor 프로필(bwrap-userns-restrict)이 bubblewrap 안에서 도는 프로그램의 권한을 빼앗아, 이 세션의 셸 명령은 모두 실패합니다. 파일 도구는 그대로 쓸 수 있습니다. 해결하려면 관련 바이너리에 userns를 허용하는 AppArmor 프로필을 추가해야 합니다. 자세한 내용은 Claude Code의 sandbox 런타임(@anthropic-ai/sandbox-runtime) README의 Ubuntu 안내를 보세요.',
+    "Claude Code's sandbox cannot run shell commands on this system: Ubuntu's AppArmor profile for bubblewrap (bwrap-userns-restrict) takes capabilities away from the programs running inside bubblewrap, so every shell command in this session will fail. File tools still work. The fix is an AppArmor profile that grants userns to the relevant binaries; see the Ubuntu note in the README of Claude Code's sandbox runtime (@anthropic-ai/sandbox-runtime) for the details.",
+    'このシステムでは Claude Code のサンドボックスがシェルコマンドを実行できません。Ubuntu の bubblewrap 用 AppArmor プロファイル(bwrap-userns-restrict)が bubblewrap の中で動くプログラムから権限を外すため、このセッションのシェルコマンドはすべて失敗します。ファイルツールはそのまま使えます。解決するには、関連するバイナリに userns を許可する AppArmor プロファイルを追加します。詳しくは Claude Code のサンドボックスランタイム(@anthropic-ai/sandbox-runtime)の README の Ubuntu の項を参照してください。',
+    'En este sistema, el sandbox de Claude Code no puede ejecutar comandos de shell: el perfil de AppArmor de Ubuntu para bubblewrap (bwrap-userns-restrict) quita los permisos a los programas que se ejecutan dentro de bubblewrap, así que todos los comandos de shell de esta sesión fallarán. Las herramientas de archivos siguen funcionando. La solución es un perfil de AppArmor que conceda userns a los binarios correspondientes; consulte los detalles en la nota sobre Ubuntu del README del entorno de sandbox de Claude Code (@anthropic-ai/sandbox-runtime).'
+  ],
+  // Fix round 5: a Codex session on Linux whose named path goes through a link inside the work folder
+  'session.sandbox.warn.linkInWorkFolder': [
+    '이 세션에서 Codex는 모든 명령을 거부합니다. 로그인 정보나 Astera 자체 파일이 든 폴더가 작업 폴더 안의 링크를 거쳐 있어, 세션이 그 링크를 바꿀 수 있기 때문입니다. 프로젝트 폴더에서 시작하면 이 문제가 없습니다.',
+    "Codex will refuse every command in this session: a folder that holds logins or Astera's own files is reached through a link inside the work folder, which the session could change. Starting it in a project folder avoids this.",
+    'このセッションでは Codex がすべてのコマンドを拒否します。ログイン情報や Astera 自身のファイルを含むフォルダーが作業フォルダー内のリンクの先にあり、セッションがそのリンクを変えられるためです。プロジェクトのフォルダーで起動すれば避けられます。',
+    'Codex rechazará todos los comandos de esta sesión: una carpeta con datos de inicio de sesión o con archivos propios de Astera se alcanza a través de un enlace dentro de la carpeta de trabajo, que la sesión podría cambiar. Iniciarla en una carpeta de proyecto lo evita.'
+  ],
+  // Task P: a Windows Codex home whose config.toml makes the elevated sandbox its default
+  'session.sandbox.warn.elevatedDefault': [
+    '이 계정의 config.toml이 Codex의 elevated sandbox를 기본값으로 정해 두어, 이 계정의 일반 Codex 세션도 명령을 그 안에서 실행하고 로그인 정보가 든 폴더를 읽지 못합니다. 설정 › 에이전트 프로필에서 그 줄을 지울 수 있습니다.',
+    "This account's config.toml makes Codex's elevated sandbox the default, so its ordinary Codex sessions also run their commands in it and cannot read the folders holding logins. Settings › Agent profiles can remove that line.",
+    'このアカウントの config.toml が Codex の elevated サンドボックスを既定にしているため、このアカウントの通常の Codex セッションもコマンドをその中で実行し、ログイン情報を含むフォルダーを読めません。設定 › エージェントプロファイルでその行を削除できます。',
+    'El config.toml de esta cuenta hace que el sandbox elevado de Codex sea el predeterminado, así que sus sesiones normales de Codex también ejecutan sus comandos en él y no pueden leer las carpetas con datos de inicio de sesión. Puede quitar esa línea en Configuración › Perfiles de agente.'
+  ]
+} as const
+/** The Linux Claude row's caption in What the sandbox blocks (coverage.ts sandboxRowCaption). */
+const CAPTION = [
+  'Ubuntu 25.04 이상: AppArmor의 bubblewrap 프로필 때문에 셸 명령이 실패합니다',
+  "Ubuntu 25.04 and later: shell commands fail under AppArmor's bubblewrap profile",
+  'Ubuntu 25.04 以降: AppArmor の bubblewrap 用プロファイルによりシェルコマンドが失敗します',
+  'Ubuntu 25.04 y posteriores: los comandos de shell fallan por el perfil de AppArmor para bubblewrap'
+] as const
 
 describe('the sandbox refusals', () => {
   it('says each one in every language, in the words given', () => {
@@ -112,6 +179,28 @@ describe('the sandbox refusals', () => {
     }
     // Spanish in usted, as the screen's other strings are
     expect((CATALOGS.es.messages as Record<string, string>)['session.spawn.sandbox.cliTooOld']).toContain('Actualice la CLI.')
+  })
+
+  // Task E fix round 2: the two start warnings, in every language, in the words given; the pair is both sentences,
+  // with no space between them in Japanese (fix round 3, re-review Minor 4)
+  it('says the start warnings in every language, in the words given', () => {
+    const order = ['ko', 'en', 'ja', 'es'] as const
+    for (const [key, lines] of Object.entries(WARNINGS)) {
+      order.forEach((lang, i) => {
+        expect((CATALOGS[lang].messages as Record<string, string | undefined>)[key], `${lang} ${key}`).toBe(lines[i])
+      })
+    }
+    order.forEach((lang, i) => {
+      const m = CATALOGS[lang].messages as Record<string, string | undefined>
+      // No sysctl is offered any more, in either message (fix round 4)
+      for (const key of ['session.sandbox.warn.claudeUserns', 'session.sandbox.warn.claudeUsernsAndHome']) expect(m[key], `${lang} ${key}`).not.toMatch(/sysctl/)
+      expect(m['session.sandbox.warn.claudeUsernsAndHome'], lang).toBe(`${WARNINGS['session.sandbox.warn.claudeUserns'][i]}${lang === 'ja' ? '' : ' '}${WARNINGS['session.sandbox.warn.homeInWorkFolder'][i]}`)
+      // Fix round 5: the link warning and the home warning, the same way
+      expect(m['session.sandbox.warn.linkAndHome'], lang).toBe(`${WARNINGS['session.sandbox.warn.linkInWorkFolder'][i]}${lang === 'ja' ? '' : ' '}${WARNINGS['session.sandbox.warn.homeInWorkFolder'][i]}`)
+      // Task P: the elevated default warning and the home warning, the same way
+      expect(m['session.sandbox.warn.elevatedDefaultAndHome'], lang).toBe(`${WARNINGS['session.sandbox.warn.elevatedDefault'][i]}${lang === 'ja' ? '' : ' '}${WARNINGS['session.sandbox.warn.homeInWorkFolder'][i]}`)
+      expect(m['settings.security.sandboxCoverage.linuxClaudeUbuntu'], lang).toBe(CAPTION[i])
+    })
   })
 
   // Task 7 fix round 1: a refused Claude roll's line carries the refusal's own sentence, worded in the same language

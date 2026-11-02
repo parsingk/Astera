@@ -2319,6 +2319,23 @@ describe('handleCommand — worker-start × OrchCoordinator 통합 배선', () =
     expect(writes).toContain(sessionId)
   })
 
+  // Task K: the protection the worker's session started in is on its Dispatch, and a reuse of that session (--terminal)
+  // records the same; a Task's checks follow it (exec/checkSandbox.ts)
+  it('records on the Dispatch the protection its session started in, and a reused session keeps it', async () => {
+    const deps = makeWiredDeps({ spawnSession: async () => ({ id: 'sess1', sandboxKind: 'sandbox' as const }) })
+    const first = await seedTask(deps)
+    const sessionId = await finishOnce(deps, first)
+    expect(deps.getState().dispatches[0]).toMatchObject({ sessionId, sandboxKind: 'sandbox' })
+    const next = await call(deps, 'task-create', { account: 'acc1', runId: runOf(deps, first), title: 'n', spec: 's' })
+    const r = await call(deps, 'worker-start', { taskId: (next.body as { id: string }).id, agent: 'codex', account: 'acc1', worktree: 'current', terminal: sessionId })
+    expect(r.status).toBe(200)
+    expect(deps.getState().dispatches[1]).toMatchObject({ sessionId, sandboxKind: 'sandbox' })
+    // An unsandboxed start records nothing
+    const plain = makeWiredDeps()
+    await finishOnce(plain, await seedTask(plain))
+    expect(plain.getState().dispatches[0]).not.toHaveProperty('sandboxKind')
+  })
+
   it('다른 회차의 세션은 --terminal 로 다시 쓸 수 없다 — 403, 아무것도 타이핑하지 않는다', async () => {
     const writes: string[] = []
     const deps = makeWiredDeps({ writeToSession: (id) => void writes.push(id) })
@@ -5149,6 +5166,18 @@ describe('browser-js', () => {
     }
     expect(await call(deps, 'browser-js', { script: "log('hi')" }, 'sess-9')).toEqual({ status: 200, body: { log: ['hi'] } })
     expect(seen).toEqual(['sess-9', "log('hi')"])
+  })
+  it('tells the run whether the calling session is sandboxed, so its page gets a partition of its own', async () => {
+    const seen: boolean[] = []
+    const deps = {
+      ...makeDeps(),
+      browserEnabled: () => true,
+      sessionSandboxed: (id: string) => id === 'boxed',
+      browserRun: async (_s: string, _script: string, sandboxed: boolean) => { seen.push(sandboxed); return { ok: true as const, result: { log: [] } } }
+    }
+    await call(deps, 'browser-js', { script: 'log(1)' }, 'boxed')
+    await call(deps, 'browser-js', { script: 'log(1)' }, 'plain')
+    expect(seen).toEqual([true, false])
   })
   it('passes a failed outcome through with its status', async () => {
     const deps = { ...makeDeps(), browserEnabled: () => true, browserRun: async () => ({ ok: false as const, status: 409 as const, error: 'a script is already running' }) }

@@ -586,6 +586,32 @@ describe('RunManager', () => {
       expect(seenEnv.ELECTRON_RUN_AS_NODE).toBeUndefined()
     })
 
+    // Task K: a validation starts from the environment its wiring gives it (the Credentials list's hiding applied, Q5), and
+    // a sandboxed Task's check as the program that puts it in the sandbox, not through the shell. The command stays the
+    // one shown and kept in the note.
+    it('a run given its own environment and launch starts from them, the config env still over it', () => {
+      let seen: { file: string; args: string[] | string; env: Record<string, string | undefined> } | null = null
+      const mgr = new RunManager(
+        (file, args, opts) => {
+          seen = { file, args, env: opts.env }
+          return new FakePty()
+        },
+        'linux',
+        () => {},
+        () => ({ PATH: '/bin', SECRET_TOKEN: 'from-the-base' })
+      )
+      const status = mgr.start(
+        startOpts({
+          config: { ...cfg, env: { EXTRA: 'x' } },
+          env: { PATH: '/bin', OWN: '1' },
+          launch: { file: 'codex', args: ['sandbox', '--', 'sh', '-c', 'npm run dev'] }
+        })
+      )
+      expect(seen).toEqual({ file: 'codex', args: ['sandbox', '--', 'sh', '-c', 'npm run dev'], env: expect.objectContaining({ PATH: '/bin', OWN: '1', EXTRA: 'x' }) })
+      expect(seen!.env).not.toHaveProperty('SECRET_TOKEN')
+      expect(status.command).toBe('npm run dev')
+    })
+
     it('reads the base environment at each start, not at construction', () => {
       let base: NodeJS.ProcessEnv = { A: '1' }
       let seen: Record<string, string | undefined> = {}

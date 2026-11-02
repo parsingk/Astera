@@ -49,6 +49,9 @@ export interface RemoteRuntimeClient {
   status(): { offline: boolean | null; lastSeenAt: string | null }
   /** Whether the Runtime answers now, and who it says it is. */
   ping(): Promise<{ ok: true; hello: HelloFrame | null } | { ok: false; code: string; message: string }>
+  /** A reply to a call made on this client's link from outside it (the report read, remote governance design §5.4),
+   *  noted as this client's own calls are, so status() and last seen agree with it (ruling R16-1). */
+  noteReply(reply: unknown): void
   completion(runId: string, taskId: string): Promise<CompletionDetail | null>
   command(cmd: string, args: Record<string, unknown>): Promise<{ status: number; body: unknown }>
   /** A pty's output on the Runtime (Phase 9b), kept going across gaps and reconnects by the link. Returns the
@@ -92,6 +95,8 @@ export function createRemoteRuntimeClient(a: {
   mintRequest?(): string
   /** This app's language, for the Runtime's journal rows (review I6). English when left out. */
   lang?(): string
+  /** After every answered call, of any status (remote governance design §4.2: last seen). Must not throw. */
+  onHeard?(): void
 }): RemoteRuntimeClient {
   const now = a.now ?? Date.now
   const mint = a.mintRequest ?? (() => `desk_${randomUUID()}`)
@@ -107,7 +112,10 @@ export function createRemoteRuntimeClient(a: {
   const heard = <R>(r: R): R => {
     const lost = r instanceof RemoteError
     lastOffline = lost
-    if (!lost) lastSeen = now()
+    if (!lost) {
+      lastSeen = now()
+      a.onHeard?.()
+    }
     return r
   }
   /** Each project's read number and the newest one that answered: an older answer landing later is not kept over it. */
@@ -236,6 +244,7 @@ export function createRemoteRuntimeClient(a: {
       return [...list, { id: 'unregistered', name: null, path: null }]
     },
     status: () => ({ offline: lastOffline, lastSeenAt: lastSeen === null ? null : new Date(lastSeen).toISOString() }),
+    noteReply: (reply) => void heard(reply),
     ping: async () => {
       const r = heard(await a.link.call('projects-list', {}))
       if (r instanceof RemoteError) return { ok: false, code: r.code, message: r.message }

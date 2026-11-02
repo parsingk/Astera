@@ -12,6 +12,22 @@
 // Only a report that reads "incomplete" (or a stale echo) is a home to set up. When Codex could not be asked at all (not
 // there, too old for `doctor --json`, timed out, a report that does not read), setting up would not help: that is its
 // own answer, `check-failed` (`SANDBOX_UNAVAILABLE: windows-check-failed codex <account>`), with no setup offered.
+//
+// **The echo runs under the account's own permission profile** (Task K part 1). Every elevated launch refreshes the
+// setup with that launch's deny paths (windows-sandbox-rs/src/identity.rs:267-311), which applies them to the machine's
+// one sandbox users group and asks to revoke every path the home's last launch applied that the new list lacks
+// (setup_provisioning.rs:929-939, deny_read_state.rs:22-68, all at rust-v0.160.0). The revoke takes no denial away:
+// `revoke_ace` (acl.rs:956-1023) uses REVOKE_ACCESS, which "Indicates that all existing ACCESS_ALLOWED_ACE or
+// SYSTEM_AUDIT_ACE structures for the specified trustee are removed" (Microsoft Learn, ACCESS_MODE,
+// learn.microsoft.com/windows/win32/api/accctrl/ne-accctrl-access_mode); measured on Windows 11 (Task P), the deny
+// entries stayed and the entry count did not change, so `revoke_ace` wrote nothing. A denial stays once any account's
+// sandboxed launch applied it, until a launch makes that very folder writable (Codex's write grant uses SET_ACCESS,
+// which replaces the group's entries there; Astera never makes a login folder writable). Upstream: openai/codex#43363.
+// So an echo under the read-only profile a `codex sandbox` with no profile falls back to
+// (cli/src/debug_sandbox.rs:713-731), which denies nothing, lifts nothing today; it would the day Codex's revoke works.
+// The prepare hands the sessions' own `-c` values (core/sandbox/prepared.ts); without them no echo runs. Doctor and the
+// setup are not launches: doctor reads (cli/src/doctor/sandbox.rs), and `sandbox setup` provisions only
+// (cli/src/sandbox_setup.rs:86-125, SetupMode::ProvisionOnly, setup_provisioning.rs:891-905).
 import { execFile } from 'node:child_process'
 import os from 'node:os'
 import { windowsSpawn } from '../sessions/windowsExecutable'
@@ -24,9 +40,17 @@ export type CodexRun = (argv: string[], env: Record<string, string | undefined>)
 
 export const DOCTOR_ARGV = ['-c', 'windows.sandbox="elevated"', 'doctor', '--json']
 export const READY_MARKER = 'ASTERA_SANDBOX_OK'
-export const READY_ARGV = ['sandbox', '-c', 'windows.sandbox="elevated"', '--', 'cmd.exe', '/d', '/c', 'echo', READY_MARKER]
+/** The echo through the sandbox, under `profile`: the `-c` values of the account's sessions' permission profile. */
+export const readyArgv = (profile: readonly string[]): string[] => ['sandbox', ...profile, '--', 'cmd.exe', '/d', '/c', 'echo', READY_MARKER]
+/** Whether `profile` is one the echo may run under: it names the permission profile it defines, so codex runs it rather
+ *  than its read-only fallback, whose empty deny list asks Codex to revoke the sessions' denials (which Windows keeps
+ *  today, see above). */
+const runsAsProfile = (profile: readonly string[] | undefined): profile is readonly string[] =>
+  profile !== undefined && profile.some((a) => a.startsWith('permissions=')) && profile.some((a) => /^default_permissions=/.test(a))
 /** The setup Task 2 measured, for the home in CODEX_HOME. It brings up Windows' administrator prompt, and writes
- *  `windows.sandbox = "elevated"` into that home's config.toml. */
+ *  `windows.sandbox = "elevated"` into that home's config.toml, which the Host's setup takes back out, or puts the
+ *  person's own line back where the setup wrote over it (Task P, codexDefaultSandbox.ts setUpForSandboxedSessionsOnly):
+ *  doctor above and every sandboxed launch name it themselves. */
 export const SETUP_ARGV = ['sandbox', 'setup', '--elevated', '--current-user']
 
 /** doctor answered in 0.5 to 12 s and the echo in about 1 s (Task 2); past this a home reads not set up. */
@@ -105,8 +129,9 @@ export async function codexWindowsDoctor(a: { codexHome: string | null; run: Cod
   return r === 'complete' ? 'ready' : r
 }
 
-/** One question: doctor, then (only on a complete report) the echo. Each way it could not be asked is logged once. */
-async function ask(a: { codexHome: string | null; run: CodexRun; log: (m: string) => void }): Promise<Readiness> {
+/** One question: doctor, then (only on a complete report) the echo, under `profile` (runsAsProfile) or not at all. Each
+ *  way it could not be asked is logged once. */
+async function ask(a: { codexHome: string | null; profile?: readonly string[]; run: CodexRun; log: (m: string) => void }): Promise<Readiness> {
   const doctor = await askDoctor(a)
   if (doctor !== 'complete') return doctor
   const env = homeEnv(a.codexHome)
@@ -115,9 +140,11 @@ async function ask(a: { codexHome: string | null; run: CodexRun; log: (m: string
     a.log(`sandbox: the Windows sandbox of ${home} could not be asked about: ${why}`)
     return 'check-failed'
   }
+  if (!runsAsProfile(a.profile))
+    return failed("the sandbox echo was not run: it was given no permission profile of the account's sessions, and an echo under another deny list asks Codex to revoke what they deny")
   let echo: Awaited<ReturnType<CodexRun>>
   try {
-    echo = await a.run(READY_ARGV, env)
+    echo = await a.run(readyArgv(a.profile), env)
   } catch (e) {
     return failed(`codex could not be run for the sandbox echo: ${e instanceof Error ? e.message : String(e)}`)
   }
@@ -132,7 +159,7 @@ let generation = 0
 /** How many times one start asks again because setups kept running meanwhile, before it says it could not ask. */
 const ASKS_PER_START = 3
 
-async function askSince(a: { codexHome: string | null; run: CodexRun; log: (m: string) => void }): Promise<Readiness> {
+async function askSince(a: { codexHome: string | null; profile?: readonly string[]; run: CodexRun; log: (m: string) => void }): Promise<Readiness> {
   for (let i = 0; i < ASKS_PER_START; i++) {
     const asked = generation
     const r = await ask(a)
@@ -148,9 +175,11 @@ async function askSince(a: { codexHome: string | null; run: CodexRun; log: (m: s
  * rejects. A ready answer is kept for the process's life, and two starts asking at once share one question. Any other
  * answer is not kept: the setup may run in another process (the Host runs 설정하기 while the app's own managers ask
  * too) or outside Astera, and asking such a home again runs doctor only, which cannot bring up the prompt. `log` says
- * which way Codex could not be asked, when it could not.
+ * which way Codex could not be asked, when it could not. `profile` is what the echo runs under: the `-c` values of the
+ * permission profile the account's sandboxed sessions get (readyArgv); without it no echo runs, and a home doctor calls
+ * complete reads `check-failed`.
  */
-export function codexWindowsReadiness(a: { codexHome: string | null; run: CodexRun; log?: (m: string) => void }): Promise<Readiness> {
+export function codexWindowsReadiness(a: { codexHome: string | null; profile?: readonly string[]; run: CodexRun; log?: (m: string) => void }): Promise<Readiness> {
   const key = keyOf(a.codexHome)
   const kept = answers.get(key)
   if (kept) return kept
@@ -170,6 +199,10 @@ export function forgetReadiness(): void {
   generation++
   answers.clear()
 }
+
+/** How many times readiness was forgotten in this process: a cache of readiness answers kept elsewhere (the Runtime
+ *  report's, host/controlPlaneReport.ts) drops what it holds when this moves on. */
+export const readinessGeneration = (): number => generation
 
 /** Task 2's setup for the one home (the person's decision: accounts are set up one at a time, and Codex's own files are
  *  never copied between homes), then its answers forgotten. `out` is what Codex said, on one or more lines; empty when it

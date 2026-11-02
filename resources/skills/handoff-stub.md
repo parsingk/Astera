@@ -59,6 +59,15 @@ where `handoff.json` (in the temp directory) is, for example:
 }
 ```
 
+In a sandboxed Claude Code session the `< handoff.json` line runs inside the sandbox and fails (`HOST_NOT_RUNNING`):
+there `astera` reaches Astera only as a command line of its own, with nothing piped or redirected into
+it. Pass the JSON inline instead, on one line in single quotes, writing any apostrophe in it as
+`\u0027`, and skip the file:
+
+```bash
+astera handoff --memo '{"…": "…"}'
+```
+
 Every field is optional except that the memo must say something. Lists are plain strings.
 `verification[].type` is one of `test`, `build`, `lint`, `typecheck`, `review`, `other`; `.status` is
 `passed`, `failed` or `unknown`. A new memo replaces your previous one for this session, so write the

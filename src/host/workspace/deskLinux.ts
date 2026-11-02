@@ -11,7 +11,7 @@ import path from 'node:path'
 import type { DeskHandle, DeskPointer } from '../../core/workspace/helpers'
 import { START_TIME_TOLERANCE_MS } from '../../core/workspace/lifecycle'
 import { DESK_CLOSE_MS, DESK_READY_MS, type DeskLaunched, type DeskShot, type DeskWindow } from '../../core/workspace/protocol'
-import { execText, killProcessTree, linuxStartTimes, realLinuxProcFs, runTool, spawnDetached, type RunTool, type SpawnDetached, type SpawnedProc } from './posixProc'
+import { execText, killPosixTree, linuxStartTimes, realLinuxProcFs, runTool, spawnDetached, type RunTool, type SpawnDetached, type SpawnedProc } from './posixProc'
 
 export const FIRST_DISPLAY = 90
 export const LAST_DISPLAY = 189
@@ -92,7 +92,7 @@ export interface LinuxDeskDeps {
   /** A live pid's start time in epoch ms from /proc, or null when it is gone. */
   startTime(pid: number): Promise<number | null>
   /** Ends a launched app and everything it started, a child it started detached included
-   *  (killProcessTree, posixProc.ts). Never Xvfb, which the desk ends itself. */
+   *  (killPosixTree, posixProc.ts). Never Xvfb, which the desk ends itself. */
   killTree(pid: number): Promise<void>
   /** Resolves after ms, or at once when `signal` aborts (its timer cleared). */
   sleep(ms: number, signal?: AbortSignal): Promise<void>
@@ -605,7 +605,7 @@ export function realLinuxDeskDeps(a: { hostEnv: Record<string, string | undefine
     removeDir: (p) => fs.rm(p, { recursive: true, force: true }),
     writeFile: (p, text) => fs.writeFile(p, text, 'utf8'),
     startTime: async (pid) => (await linuxStartTimes([pid], procFs)).get(pid) ?? null,
-    killTree: (pid) => killProcessTree(pid),
+    killTree: (pid) => killPosixTree(pid),
     sleep: (ms, signal) =>
       new Promise((r) => {
         if (signal?.aborted) return r()

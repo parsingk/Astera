@@ -333,6 +333,16 @@ describe('CodexRollingCoordinator maps only a rollout its session holds', () => 
     expect(native).toEqual(['cx-own'])
     expect(asked).toEqual([5100, 5100])
   })
+
+  // Task D review Minor 5: a wiring that lost its owner source went back to folder and time without a word
+  it('says once when it is built without an owner source, and nothing when it has one', () => {
+    const logs: string[] = []
+    harness({ log: (m) => logs.push(m) })
+    expect(logs).toEqual(['codex rollout owner is not wired: this coordinator locates a rollout by folder and time alone'])
+    const quiet: string[] = []
+    harness({ log: (m) => quiet.push(m), rolloutOwner: { pidOf: () => null, read: async () => ({ verdict: 'own' }) } })
+    expect(quiet).toEqual([])
+  })
 })
 
 describe('CodexRollingCoordinator', () => {

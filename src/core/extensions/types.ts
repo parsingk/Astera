@@ -36,6 +36,13 @@ export interface McpExtension {
   /** The account it was imported from. */
   importedFrom: string
   enabled: boolean
+  /** When it was shared (ISO), so the usage findings never judge it before it has been shared for their window (lifecycle
+   *  design §4.5, §4.9, plan ruling 2). Absent on an entry shared before this release, which is aged from that release's
+   *  first run instead. */
+  addedAt?: string
+  /** When it was last switched from off to on (ISO): a server that was off could not be called, so the usage findings age
+   *  it from the later of this and `addedAt` (ruling R4-3). Absent until it is first switched back on. */
+  enabledAt?: string
 }
 
 export interface FileExtension {
@@ -47,9 +54,24 @@ export interface FileExtension {
   providers: Provider[]
   importedFrom: string
   enabled: boolean
+  /** When it was shared (ISO), as McpExtension.addedAt (lifecycle design §4.12). */
+  addedAt?: string
+  /** When it was last switched from off to on (ISO), as McpExtension.enabledAt: one that was off was not given to the CLIs,
+   *  so §4.12 ages it from the later of this and `addedAt` (ruling R4-3). */
+  enabledAt?: string
 }
 
 export type ExtensionEntry = McpExtension | FileExtension
+
+/** What a shared skill or agent's canonical copy says of itself (lifecycle design §4.12), read from its frontmatter
+ *  (copies.ts): the `name` Claude Code also knows it by (an agent's only name, in hooks and calls), for an agent the skills
+ *  its `skills:` preloads, and for a skill the agent its `agent:` runs it in (a `context: fork` skill). Claude Code
+ *  injects a preloaded skill with no event, and may start a fork's agent with none. */
+export interface ExtensionCopy {
+  name?: string
+  skills?: string[]
+  agent?: string
+}
 
 export interface ExtensionRegistry {
   version: 1

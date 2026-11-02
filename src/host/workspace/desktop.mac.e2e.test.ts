@@ -29,9 +29,10 @@ const commandFor = (udd: string): string =>
   `"${electronExe()}" "${path.join(here, 'fixtures', 'app', 'main.cjs')}" --remote-debugging-port=$ASTERA_APP_CDP_PORT --user-data-dir="${udd}" $ASTERA_APP_CHROMIUM_FLAGS`
 
 /** Pids whose command line holds this user data folder. `-ww`: without a tty ps cuts its columns
- *  short, and the folder sits far along an Electron command line. */
+ *  short, and the folder sits far along an Electron command line. A UTF-8 locale: without one (no
+ *  LANG, as under a shell an app started) ps escapes the folder's Hangul and nothing would match. */
 const fixturePids = async (udd: string): Promise<number[]> =>
-  (await execText('ps', ['-ww', '-Ao', 'pid=,command=']))
+  (await execText('env', ['LC_ALL=en_US.UTF-8', 'ps', '-ww', '-Ao', 'pid=,command=']))
     .split('\n')
     .filter((l) => l.includes(udd))
     .map((l) => Number(l.trim().split(/\s+/)[0]))

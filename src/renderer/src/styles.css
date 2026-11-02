@@ -858,6 +858,16 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .exit-overlay { position: absolute; inset: 0; background: rgba(0,0,0,.7); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text); }
 .exit-overlay button { background: var(--btn-bg); border-color: var(--btn-bg); color: var(--btn-ink); font-weight: 600; }
 .exit-overlay button:hover { filter: brightness(.85); }
+/* What a sandboxed start warned about (Task E fix round 3, SandboxWarningLine.tsx): one quiet line above the terminal or
+   the chat thread, in the sandbox marker's manner (.tab-sandbox: a small shield at its opacity, dim words). A flex item
+   of the slot's column (.session-slot-view) or the chat pane's, so the terminal below fits what is left and refits when
+   it is closed; one line, the whole sentence in its title. */
+.sandbox-warning-line { flex: none; display: flex; align-items: center; gap: 6px; min-width: 0; padding: 3px 6px 3px 10px; font-size: 11.5px; color: var(--text-dim); background: var(--bg); border-bottom: 1px solid var(--line-soft); }
+.sandbox-warning-icon { flex: none; display: inline-flex; opacity: 0.65; }
+.sandbox-warning-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: default; }
+.sandbox-warning-close { flex: none; display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: var(--radius); background: transparent; color: var(--text-faint); cursor: pointer; }
+.sandbox-warning-close:hover { background: var(--elevated); color: var(--text); }
+.sandbox-warning-close:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
 /* A remote session tab's notes (Phase 9b): reconnecting, read-only, a size held by a viewer on that machine. */
 .remote-session-banners { position: absolute; left: 8px; right: 8px; bottom: 8px; display: flex; flex-direction: column; gap: 4px; pointer-events: none; z-index: 2; }
 .remote-session-banner { align-self: flex-start; padding: 4px 8px; border-radius: 4px; background: var(--elevated); color: var(--text-dim); font-size: 12px; }
@@ -1255,6 +1265,9 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .remote-actions { display: flex; align-items: center; gap: 8px; }
 .remote-actions.is-end { justify-content: flex-end; }
 .remote-actions-grow { flex: 1; min-width: 0; }
+/* Settings › Agent profiles, under a Codex account whose config.toml makes the elevated sandbox its default (Task P): the
+   sentence wraps beside Remove, which keeps its width rather than breaking a letter a line. */
+.sandbox-default-row .settings-gen-refresh { flex: none; white-space: nowrap; }
 /* Settings › Plugins (plugin runtime design slice 2d): a card a plugin with its status in a pill, and its settings form
    or its log below. Only the tokens the other settings use. */
 .plugin-card { padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); }
@@ -1287,6 +1300,16 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .ext-list.is-uncapped { max-height: none; }
 .agent-profile-new { border: 1px solid var(--line); border-radius: var(--radius); }
 .agent-profile-new > .ext-row-body { border-top: 0; }
+/* A profile's head with its findings mark beside it (lifecycle design §7): the head takes the row, the mark keeps its
+   size. The profiles a finding's button opened the tab for are marked as the settings nav marks its tab. */
+.agent-profile-head { display: flex; align-items: center; min-width: 0; }
+.agent-profile-head > .ext-row-head { flex: 1; }
+.findings-mark { margin-right: 12px; border: 0; cursor: pointer; }
+.findings-mark:hover { color: var(--accent); }
+.ext-row.is-focused > .agent-profile-head { background: var(--line-soft); box-shadow: inset var(--marker-w) 0 0 var(--accent); }
+/* A pill's --elevated vanishes against that --line-soft (seen on the hidden desktop): on a marked row it takes the page's
+   background and an edge, so the findings mark and the archived date still read as pills */
+.ext-row.is-focused .plugin-status { background: var(--bg); box-shadow: inset 0 0 0 1px var(--line); }
 /* Settings › Security & Access (observe mode design §11): two sections under English headings, Policies (the switch, what
    observe can see, the rules) and Audit Logs (the counts, the filters, the rows). Only the tokens the other settings use. */
 .security-section { display: flex; flex-direction: column; gap: 16px; }
@@ -1294,6 +1317,9 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .security-choices { display: flex; align-items: center; gap: 14px; }
 /* The coverage table and the rows: wide, so they scroll sideways inside the tab rather than widen it */
 .security-table-wrap { container-type: inline-size; overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+/* Audit Logs' rows scroll in their own box, so reading more does not push the page down; the column names stay on top */
+.security-table-wrap.is-rows { max-height: 480px; overflow-y: auto; }
+.security-table-wrap.is-rows thead th { position: sticky; top: 0; z-index: 1; background: var(--panel); }
 .security-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .security-table th, .security-table td { padding: 6px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line-soft); }
 .security-table tr:last-child > * { border-bottom: 0; }
@@ -1336,6 +1362,13 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .security-credentials { display: flex; flex-direction: column; gap: 12px; }
 .credential-hides { overflow-wrap: anywhere; }
 .credential-projects { display: flex; flex-direction: column; gap: 4px; padding-left: 22px; }
+/* Settings › Security & Access › Findings (lifecycle design §7): a subject's name over its lines, each line its reason,
+   what would resolve it (dim) and its buttons, in the list MCP & Skills draws; the ignored ones in a collapsed row of the
+   same kind. Only the tokens the other sections use. */
+.security-findings { display: flex; flex-direction: column; gap: 12px; }
+.findings-subject { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px; }
+.findings-line { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; font-size: 13px; overflow-wrap: anywhere; }
+.findings-line > .remote-actions { align-self: stretch; margin-top: 2px; }
 /* Audit Logs' rows fit the tab without a sideways scroll at the settings window's usual width (the screen finding, at a
    1280 px window: the action wrapped over four lines and the rule column was cut off). The time is the time of day, with
    the date heading each day's rows; the time, the action and the decision keep to one line; the session is cut short;

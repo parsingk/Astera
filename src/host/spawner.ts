@@ -24,10 +24,12 @@ import { OrchCoordinator, type CoordinatorDeps, type PromptWriteEvent } from '..
 import { WorkerTails } from '../core/orchestration/exec/tail'
 import { releaseArgsFor } from '../core/orchestration/exec/release'
 import { makeLimitProbe } from '../core/orchestration/exec/limitProbe'
-import { ensureShuttle, sessionCmdLink } from '../core/orchestration/exec/shuttle'
+import { ensureShuttle, sessionCmdLink, shuttleNames } from '../core/orchestration/exec/shuttle'
 import type { ChatManagerDeps, ChatOrchEnv } from '../core/chat/manager'
 import type { CodexWindowsReady, PreparedLayouts } from '../core/sandbox/prepared'
 import { claudeSandboxStart, type ClaudeSandboxStart } from '../core/sandbox/claudeStart'
+import { srtCheckRunner } from '../core/sandbox/srtCheck'
+import { codexCheckRunner } from '../core/sandbox/checkRunner'
 import { codexExcludesWriter, type CodexExcludes, type RunGit } from '../core/sandbox/gitExcludes'
 import { forcedSandboxBlocker } from '../core/sandbox/unavailable'
 import { binDirFor } from '../core/orchestration/cliInstall'
@@ -44,7 +46,7 @@ import { RepairNeeded } from '../core/settings/repairNeeded'
 import { HostRetiring } from '../core/host/hostRetiring'
 import { refusedBeforeActing, undoneBeforeFailing } from '../core/host/orchProtocol'
 import { findRollout as findRolloutOnDisk } from '../core/rolling/codexLocate'
-import { ownerScriptDir, rolloutOwnerCheck, rolloutOwnerReader, type RolloutOwnerReader } from '../core/rolling/rolloutOwner'
+import { rolloutOwnerCheck, rolloutOwnerReader, type RolloutOwnerReader } from '../core/rolling/rolloutOwner'
 import { descriptorOf, makeDescriptors } from '../core/providers/descriptor'
 import { providerOf } from '../core/providers/meta'
 import { ensureOnWindowsPath } from '../core/sessions/windowsPath'
@@ -52,7 +54,7 @@ import { ensureInstallDirOnPath } from '../core/sessions/installDirPath'
 import { SessionManager, askCodexWindowsReady, defaultSpawnChecks } from '../core/sessions/manager'
 import { defaultSessionTitle } from '../core/sessions/title'
 import type { PtyFactory, PtyLike } from '../core/sessions/pty'
-import { StatusLineManager, resolveNodePath } from '../core/sessions/statusline'
+import { StatusLineManager, resolveNodePath, withUseReports } from '../core/sessions/statusline'
 import { BusyScanner } from '../core/terminal/busy'
 import { previewShotsDir } from '../core/preview/shotsDir'
 import type { Account, SessionInfo } from '../core/types'
@@ -66,8 +68,11 @@ import type { EnforceStart } from '../core/audit/enforce'
 import { cliVersionProbe, enforceBlocker, type CliVersionProbe } from '../core/sessions/cliVersion'
 import { createManagedHooksCheck } from '../core/sessions/managedHooks'
 import { codexNoDaemonProbe, type CodexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
+import { noteRolloutPath } from '../core/sessions/codexRolloutWatcher'
 import { findInstalledHostExe } from '../core/host/installedRuntime'
 import { hostRuntimeBase } from '../core/host/runtime'
+import { ensureOwnFolders, installRootOf, localAsteraDir, nodeLinkLook, presentOrNull, publicShuttleFiles, sandboxReadOnly, updaterCacheDir, type LinkLook } from '../core/sandbox/locations'
+import { claudeUsernsCheck, type SandboxWarnSink } from '../core/sandbox/startWarnings'
 import { hidingLog } from '../core/extensions/secrets'
 import { setBounded } from '../core/bounded'
 import { dispatchLookup } from '../core/orchestration/dispatchIndex'
@@ -135,6 +140,10 @@ export interface HostSpawnerDeps {
   rolloutOwner?: RolloutOwnerReader
   /** Test injection; defaults to readAccountEntries. */
   readAccounts?: (file: string) => Promise<Account[]>
+  /** Astera's check runner beside the Host's own bundle (Task K), run by this Host's executable as node: a sandboxed Claude
+   *  Task's check runs under srt through it on macOS and Linux, and a sandboxed Codex Task's check on Windows (fix round
+   *  2), from the Host runtime's copy beside host.js. Absent or not built, such a check is refused (`no-check-runner`). */
+  checkRunnerPath?: string
   /** Each prompt write of a worker this Host's coordinator starts (Host journal, A19 lifted). Isolated: a
    *  throw is logged and the start goes on. */
   onPromptWrite?(e: PromptWriteEvent): void
@@ -149,10 +158,10 @@ export interface HostSpawnerDeps {
   codexWindowsReady?: CodexWindowsReady
   /** Test injection; defaults to asking the claude on this machine's PATH its version (cliVersionProbe), which a sandboxed
    *  Claude start needs. A test never runs the real one. */
-  claudeVersion?: CliVersionProbe
+  claudeVersion?: Pick<CliVersionProbe, 'warm'> & ((cli: 'claude') => string | null | undefined)
   /** Test injection; defaults to asking the codex on this machine's PATH its version (cliVersionProbe), which a sandboxed
    *  Codex start needs (final review I2). A test never runs the real one. */
-  codexVersion?: CliVersionProbe
+  codexVersion?: Pick<CliVersionProbe, 'warm'> & ((cli: 'codex') => string | null | undefined)
   /** Test injection; defaults to os.tmpdir(): where a sandboxed Claude session's npm cache and the Host's socket are. A
    *  test gives its own folder, so nothing is made in the real one. */
   tmpDir?: string
@@ -185,11 +194,31 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
   /** The profile's app key file, which a sandboxed Codex session's profile denies on every OS, terminal or chat (sandbox
    *  follow-ups, item 1). */
   appKeyFile?: string | null
+  /** The read-only folders a sandboxed Codex session's profile keeps on every OS, terminal or chat (Task E and its fix
+   *  round 1): the profile and every place Astera writes code or an installer to and runs unsandboxed. */
+  readOnly?: readonly string[]
+  /** How the disk is read for links on the paths a sandboxed start names (Task E fix round 5), handed to the Host's chat
+   *  sessions too (rollingWiring). Required (fix round 6). */
+  linkLook: LinkLook | null
+  /** Where this Host's terminal sessions tell a sandboxed start's warnings (Task E fix round 2); its Ubuntu check, asked
+   *  once for this Host process, is the one its chat sessions ask too (rollingWiring). */
+  sandboxWarn?: SandboxWarnSink
   /** The codex version question a sandboxed Codex start asks, shared with the Host's chat sessions (final review I2). */
   codexVersion?: ChatManagerDeps['codexVersion']
+  /** The CLI version probe this spawner warms before its spawns (cliVersionProbe), which the findings read Claude's version
+   *  from (lifecycle design §4.12), so one cache and one `claude --version` serve both. */
+  claudeVersions?: Pick<CliVersionProbe, 'warm' | 'cached'>
   /** The copy of the person's git excludes a sandboxed win32 Codex start writes in this Host's temp folder (one for its
    *  profile, core/sandbox/gitExcludes.ts), shared with the Host's chat sessions. */
   codexExcludes?: CodexExcludes
+  /** The environment a Task's check in `cwd` starts from, `base` without what the Credentials list hides there, and the
+   *  names it took (Task K, Q5 and fix round 2; SessionManager.checkEnv). */
+  checkEnv?(base: NodeJS.ProcessEnv, cwd: string): { env: NodeJS.ProcessEnv; hidden: string[] }
+  /** How a sandboxed Task's check runs inside its workers' sandbox, as the attempt's registered account (Task K;
+   *  SessionManager.checkLaunch). Rejects for an account no longer registered, and with a sandbox refusal. */
+  checkLaunch?(a: { accountId: string; cwd: string; command: string }): Promise<{ file: string; args: string[] | string; env: Record<string, string>; runner?: true }>
+  /** A registered account's display name, null for one not registered (Task K fix round 2: a check's words name it). */
+  accountName?(accountId: string): Promise<string | null>
   /** The session shuttle's values once the Host wrote it (kicked at creation); undefined until then. */
   orchEnvNow(): ChatOrchEnv | undefined
   /** How many worker and coordinator starts are under way right now. */
@@ -312,6 +341,19 @@ export function hostPtyFactory(a: { registry: PtyRegistry; onOpened(entry: PtyEn
   }
 }
 
+/** Enforce's warm (EnforceStart.warm): everything its blocker asks, asked off the thread first, so the blocker reads
+ *  answers and never runs a probe of its own. Codex's --no-daemon question is one of them (remote governance ruling
+ *  R9-4): the Runtime report reads a codex terminal's blocker on every look. */
+export function enforceWarm(p: {
+  cliVersions: Pick<CliVersionProbe, 'warm'>
+  managedHooks: { warm(): Promise<void> }
+  noDaemon: Pick<CodexNoDaemonProbe, 'warm'>
+}): (provider: 'claude' | 'codex') => Promise<void> {
+  return async (provider) => {
+    await Promise.all([p.cliVersions.warm(provider), provider === 'claude' ? p.managedHooks.warm() : p.noDaemon.warm()])
+  }
+}
+
 /** null, with one log line naming the missing variables, when the Host was started without the
  *  CLI paths — then every Host-local name takes its old route (R1). */
 export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
@@ -337,6 +379,27 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   // The key that lets a process be the app to this Host, which a sandboxed session's profile denies (sandbox follow-ups,
   // item 1)
   const appKeyFile = appKeyPath(profileDir)
+  // What a sandboxed session keeps read-only on every OS (Task E and its fix round 1): the profile folder and every place
+  // Astera itself writes code or an installer to and runs unsandboxed — the Windows Host runtime it was handed from
+  // (hostRuntimeBase, the same `cli/host.ts` rule this StatusLineManager's findRuntime uses), electron-updater's download
+  // cache, the installed app's own folder (from `cli.exec`, the app's executable), on Windows Astera's own
+  // %LOCALAPPDATA%\astera whole (the public CLI's bin, the session-`.cmd` junction; fix round 2), and on macOS and Linux
+  // the public CLI's own files in ~/.local/bin, where they are now. One list, built once for both managers and the twins,
+  // naming only what is there when this Host starts (fix round 3: no placeholder file at a missing one), as spelled:
+  // each start names it where namedPathFor puts it for that session's folders (fix round 5). The updater cache and the Host runtime folder
+  // are made first, empty if missing (fix round 4), so they are always named, however long this Host then runs
+  const hostRuntimeDir = hostRuntimeBase({ platform, localAppData: d.env.LOCALAPPDATA, userData: profileDir, appName: path.win32.basename(profileDir) })
+  const updaterCache = updaterCacheDir(platform, d.env, homeDir)
+  ensureOwnFolders([updaterCache, hostRuntimeDir])
+  const readOnly = sandboxReadOnly({
+    profileDir,
+    hostRuntimeBase: hostRuntimeDir,
+    updaterCache,
+    installRoot: installRootOf(cli.exec, platform),
+    localAstera: localAsteraDir(platform, d.env, homeDir),
+    publicShuttle: publicShuttleFiles({ platform, binDir: binDirFor({ platform, env: d.env, home: homeDir }), names: shuttleNames(platform), exists }),
+    resolve: presentOrNull
+  })
   // The copy of the person's git excludes a sandboxed Codex session on Windows reads, in the temp folder, asked by this
   // spawner's prepares and the Host's chat sessions alike; the elevated sandbox's own account cannot read theirs
   const codexExcludes = codexExcludesWriter({ profileDir, tmpDir, homeDir, env: d.env, ...(d.runGit ? { runGit: d.runGit } : {}), log })
@@ -354,13 +417,11 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       platform,
       // Enforce's hook when this Host runs from the app's Electron (development, or no runtime put in place): a runtime
       // an Astera installed, under the profile folder's name as the app's own (`astera`), the CLI's rule (cli/host.ts)
-      findRuntime: () =>
-        findInstalledHostExe(
-          hostRuntimeBase({ platform, localAppData: d.env.LOCALAPPDATA, userData: profileDir, appName: path.win32.basename(profileDir) })
-        ),
+      findRuntime: () => findInstalledHostExe(hostRuntimeDir),
       // The sandbox's denied places are read under the person's home, from each session's own environment (its scope)
       homeDir,
-      tmpDir
+      tmpDir,
+      readOnly
     }
   )
   const ensured = once(() => statusLine.ensureFiles())
@@ -397,8 +458,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   const locateForMs = d.locateForMs ?? LOCATE_FOR_MS
   /** Whose codex holds a candidate open, asked once per candidate (Task D): another Host's session in the same folder
    *  and Codex home is the newest file there too. */
-  // Its Windows script goes in `<profile>/host`, which no sandboxed session may write, as the desk helper's (fix round 2)
-  const rolloutOwner = rolloutOwnerCheck({ read: d.rolloutOwner ?? rolloutOwnerReader(platform, ownerScriptDir(profileDir)), log })
+  const rolloutOwner = rolloutOwnerCheck({ read: d.rolloutOwner ?? rolloutOwnerReader(platform), log })
   /** ptyId → the codex sessions still looking for their rollout, in start order (`seq`). */
   const looking = new Map<string, { accountId: string; cwd: string; seq: number }>()
   let lookSeq = 0
@@ -442,12 +502,14 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     Number.POSITIVE_INFINITY,
     0,
     homeDir,
-    (id, account, o) => statusLine.spawnConfig(id, account, o),
+    // An observed session's settings carry the use hooks when its Claude Code reports uses (lifecycle design §4.12), as the
+    // version its prepare warmed says: never asked of the CLI on this thread (fix round 2)
+    (id, account, o) => statusLine.spawnConfig(id, account, withUseReports(o, () => cliVersions.cached('claude'))),
     [previewShotsDir(profileDir)],
     // Read at each spawn, not once: the Host completes its PATH when a CLI is missing (windowsPath.ts)
     () => hostWorkerBaseEnv(d.env),
     // The Host's own log: a spawn that had to fall back to a sync check says so in host.log.
-    { ...defaultSpawnChecks(log), codexWindowsReady, hostSocketDir, appKeyFile, codexExcludes }
+    { ...defaultSpawnChecks(log), codexWindowsReady, hostSocketDir, appKeyFile, readOnly, linkLook: nodeLinkLook, codexExcludes }
   )
   // Shared extensions (Agent Control Plane release 1 design §4.5): `sessions.prepare` refreshes the account before
   // every spawn and roll, and the Host's chat sessions read the same cache
@@ -473,21 +535,24 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   // The Credentials list (credentials design §5): a worker's worktree counts as its project's folder
   const hiding = createHidingSource({ profileDir, projectOf: projectOfWorktrees(() => d.worktrees.list?.() ?? []), log: hidingLog(profileDir, log) })
   sessions.hiding = hiding
-  // Observe mode: an observed Claude session's hook settings, written by its prepare (StatusLineManager.ensureObserveFiles)
-  sessions.observeHooks = () => statusLine.ensureObserveFiles()
+  // Observe mode: an observed Claude session's hook settings, written by its prepare (StatusLineManager.ensureObserveFiles),
+  // and the Claude version that picks the file with the use hooks or without (lifecycle design §4.12), asked off the thread
+  // so the spawn reads it from the probe's cache
+  sessions.observeHooks = async () => {
+    await Promise.all([statusLine.ensureObserveFiles(), cliVersions.warm('claude')])
+  }
   // Enforce: the blocking hook, written by a session's prepare, which refuses the start without it (E5). A Claude terminal
   // session reads it from its settings file; a chat, and any Codex session, from these arguments
   sessions.enforceHooks = () => statusLine.ensureEnforceFiles()
+  const noDaemon = d.codexNoDaemon ?? codexNoDaemonProbe(platform)
   const enforce: EnforceStart = {
     args: (provider) => (provider === 'claude' ? statusLine.enforceChatArgs() : statusLine.enforceCodexArgs()),
     blocker: (provider, kind) =>
       enforceBlocker(provider, cliVersions(provider)) ??
       (provider === 'claude' && managedHooks.off() ? 'ENFORCE_UNAVAILABLE: hooks-off' : null) ??
       // A codex terminal without --no-daemon may run its tools in a daemon another session started (final review M11)
-      (provider === 'codex' && kind === 'terminal' && !codexNoDaemonProbe(platform)() ? 'ENFORCE_UNAVAILABLE: codex-daemon' : null),
-    warm: async (provider) => {
-      await Promise.all([cliVersions.warm(provider), provider === 'claude' ? managedHooks.warm() : Promise.resolve()])
-    }
+      (provider === 'codex' && kind === 'terminal' && !noDaemon() ? 'ENFORCE_UNAVAILABLE: codex-daemon' : null),
+    warm: enforceWarm({ cliVersions, managedHooks, noDaemon })
   }
   sessions.enforce = enforce
   // The sandbox for Claude (sandbox design §6): its settings twins, the version floor Enforce asks (one probe for both),
@@ -501,12 +566,30 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     files: statusLine,
     version: d.claudeVersion ?? cliVersions,
     ...(d.runGit ? { runGit: d.runGit } : {}),
+    linkLook: nodeLinkLook,
     log
   })
   sessions.claudeSandbox = claudeSandbox
+  // A sandboxed Claude Task's check under srt (Task K), on the systems Claude's sandbox runs on
+  // Only where the runner was built (fix round 2): one that is not there would end each check as if the check had failed.
+  // On Windows it is copied beside host.js into the Host's runtime (scripts/host-runtime.mjs)
+  const checkRunnerPath = d.checkRunnerPath !== undefined && exists(d.checkRunnerPath) ? d.checkRunnerPath : null
+  if (platform !== 'win32' && checkRunnerPath) sessions.checkRunner = srtCheckRunner({ execPath: process.execPath, runnerPath: checkRunnerPath })
+  // The same runner for a Windows Codex check (fix round 2, checkRunner.ts); the session manager asks for it on Windows only
+  if (checkRunnerPath) sessions.codexCheckRunner = codexCheckRunner({ execPath: process.execPath, runnerPath: checkRunnerPath })
   // The codex floor a sandboxed Codex start asks, here and in the Host's chat sessions (final review I2)
   const codexVersion = d.codexVersion ?? cliVersions
   sessions.codexVersion = codexVersion
+  // Task E fix rounds 2 and 3: a sandboxed start that will not be as safe, or will not work, as the person may expect
+  // starts as today. Its warnings ride the session's info and note (the manager puts them there), which an app's tab shows
+  // as a line above the terminal, a Job or Task worker's included; the Host log keeps them. Nothing is written into the
+  // pty's ring: the CLI's alternate screen would hide it. The Ubuntu check is asked once for this Host process
+  const claudeUsernsRestricted = claudeUsernsCheck(platform)
+  const sandboxWarn: SandboxWarnSink = {
+    claudeUsernsRestricted,
+    warn: (id, ws) => log(`sandbox: session=${id} starts with a warning: ${ws.join(', ')}`)
+  }
+  sessions.sandboxWarn = sandboxWarn
   sessions.onExit = (e) => {
     sessions.forget(e.sessionId)
   }
@@ -662,7 +745,10 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     // The profile's sandbox switch (sandbox design §6): the prepare reads the folder for it, and the spawn starts in it.
     // What a sandboxed session asked for, or the work it made, starts in it whatever the profile says (final fix pass,
     // C3), and where its CLI has no sandbox it is refused before anything starts rather than run without one
-    if (o.sandbox === true) {
+    // A reviewer of work a profile's switch sandboxed allows the deny rules only there (`sandboxDenyOnly`, Task K fix
+    // rounds 1 and 2): it starts as a sandboxed profile's session does on that system, and its Dispatch records
+    // `deny-only`. A reviewer of a sandboxed session's work never asks, so C3's refusal holds for it
+    if (o.sandbox === true && o.sandboxDenyOnly !== true) {
       const refused = forcedSandboxBlocker(providerOf(account), platform)
       if (refused) {
         log(`spawn refused: ${refused.message} (a sandboxed session's work)`)
@@ -894,13 +980,27 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   return {
     capabilities,
     hiding,
+    checkEnv: (base, cwd) => sessions.checkEnv(base, cwd),
+    checkLaunch: async (a) => {
+      const account = (await readAccounts(accountsPath)).find((x) => x.id === a.accountId)
+      if (!account) throw new Error(`account ${a.accountId} is no longer registered, so the check cannot run in the sandbox its worker ran in`)
+      // As a spawn finds the CLI: one installed since this Host started
+      await ensureOnWindowsPath([providerOf(account)])
+      await ensureInstallDirOnPath([providerOf(account)])
+      return sessions.checkLaunch({ account, cwd: a.cwd, command: a.command })
+    },
+    accountName: async (id) => (await readAccounts(accountsPath)).find((x) => x.id === id)?.label ?? null,
     enforce,
     sandboxLayouts: sessions.sandboxLayouts,
     codexWindowsReady,
     claudeSandbox,
     hostSocketDir,
     appKeyFile,
+    readOnly,
+    sandboxWarn,
+    linkLook: nodeLinkLook,
     codexVersion,
+    claudeVersions: cliVersions,
     codexExcludes,
     orchEnvNow: () => orchEnvReady,
     inFlight: () => spawnsInFlight,
@@ -1025,6 +1125,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       return makeLimitProbe({
         statusLinePayload: (sid) => statusLine.read(sid),
         configDirOf: (id) => accounts.find((x) => x.id === id)?.configDir ?? null,
+        // The rollout locateRollout wrote into the worker's note, which the registry keeps after its pty ended
+        rolloutPathOf: (sid) => noteRolloutPath(registry.list(), sid),
         log
       })(disp)
     },

@@ -918,7 +918,8 @@ describe('the debug leftovers sample', () => {
   it('answers error with git’s sentence for a folder that is not a repository or a base that is not a commit, and says so for a folder that is gone', async () => {
     const plain = await tempDir('astera-leftovers plain ')
     dirs.push(plain)
-    const check = await checker()
+    // git's sentence in English: a Mac in Korean answered "깃 저장소가 아닙니다" (the Mac check, 2026-11-02)
+    const check = await checker(undefined, { ...process.env, LC_ALL: 'C' })
     expect(await check(plain)).toMatchObject({ status: 'error', summary: expect.stringMatching(/^git [a-z-]+: .*not a git repository/i) })
     const { dir } = await repo({ 'a.js': '' })
     expect(await check(dir, 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef')).toMatchObject({

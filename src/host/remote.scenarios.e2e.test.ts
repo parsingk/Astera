@@ -112,7 +112,7 @@ async function controller(rt: Awaited<ReturnType<typeof host>>): Promise<RemoteL
   let current: RuntimeLink | null = null
   const l = openRemoteLink({
     target: { runtimeId: 'rt_v1', address: '127.0.0.1', port: rt.port, fingerprint: identity.spkiSha256, token: paired.token },
-    client: { surface: 'cli' },
+    client: { surface: 'cli', version: '9.9.9', agent: false },
     connect: async (c) => (current = await connectRuntime(c)),
     sleep: async (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 50))),
     random: () => 0.5

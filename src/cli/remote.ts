@@ -1,5 +1,5 @@
 // `astera --runtime <id|name> ...` (remote runtime design §2.8, §3.4, §3.9, X1-14): a command sent to a paired Runtime
-// through the controller link instead of this machine's Host. Three refusals come before anything else, in this
+// through the controller link instead of this machine's Host. Four refusals come before anything else, in this
 // order, and none of them reads a file of this profile:
 //
 // 1. a command the Runtime does not offer at all (its target is not "yes"): RUNTIME_CAPABILITY_MISSING. This is what
@@ -7,14 +7,18 @@
 //    `skills`, `higgsfield`, `mcp`, `projects add` and the rest are local only;
 // 2. a `jobs create` with no `--cwd`: the folder is the Runtime's, so this machine's working directory is never
 //    filled in for it (D8.3);
-// 3. a Runtime nobody paired: RUNTIME_NOT_FOUND.
+// 3. a change asked from a sandboxed session, or one whose sandbox this machine's Host cannot vouch for: PERMISSION_DENIED
+//    (remote governance design §7.4). The one that asks this machine's Host, and only from inside an agent session;
+// 4. a Runtime nobody paired: RUNTIME_NOT_FOUND.
 //
 // Arguments go as typed: a path names a folder on the Runtime, so nothing here resolves it against this machine.
 import { remoteMutation, remoteTarget } from '../core/remote/targets'
+import { sandboxedRemoteRefusal } from './callerSandboxed'
 import { openRemoteLink, type RemoteLink, type RemoteTarget } from '../core/remote/link'
 import { RemoteError } from '../core/remote/client'
 import { bodyCodeOf, codeForStatus, messageFrom, refusalDetailsOf, remoteCodeOf, type CliError } from '../core/orchestration/cliOutput'
-import type { RuntimeRegistry } from '../core/runtimes/registry'
+import { factsNoter, seenRecorder, type RuntimeRegistry } from '../core/runtimes/registry'
+import type { ClientInfo, HelloFrame } from '../core/remote/frames'
 import { spelledCommand } from '../core/orchestration/cliUsage'
 import { DEFAULT_WAIT_TIMEOUT_MS } from '../core/orchestration/types'
 import { controllerRegistry, resolveRuntime } from './runtimes'
@@ -22,7 +26,11 @@ import { clientTimeoutMs, followRun, type HostAnswer, type OutputMode } from './
 
 export interface RemoteDeps {
   registry(): Promise<RuntimeRegistry>
-  link(t: RemoteTarget): RemoteLink
+  /** `client` is what this CLI says about itself at sign-in; answerRemote always gives it. */
+  link(t: RemoteTarget, o?: { onHello?(h: HelloFrame): void; client?: ClientInfo }): RemoteLink
+  /** Whether the session this CLI runs in is sandboxed (remote governance design §7.4, cli/callerSandboxed.ts), asked
+   *  only before a change. Absent, nothing is asked. */
+  callerSandboxed?: () => Promise<boolean>
 }
 
 type Refused = { error: CliError }
@@ -63,6 +71,9 @@ export async function answerRemote(a: {
   mode: OutputMode
   write(text: string): void
   version: string
+  /** Whether this CLI runs inside an agent session (remote governance design §7.1): the Runtime reads it as a person
+   *  only when this is false. */
+  agent: boolean
   deps?: Partial<RemoteDeps>
 }): Promise<HostAnswer | Refused> {
   if (remoteTarget(a.cmd) === 'no')
@@ -79,6 +90,9 @@ export async function answerRemote(a: {
         message: `a remote ${spelledCommand(a.cmd)} needs --cwd: the folder on the Runtime, which this machine's folder is not`
       }
     }
+  // §7.4: a sandboxed session only reads a Runtime. Asked before the registry is read, so a refused change opens nothing.
+  if (remoteMutation(a.cmd) && (await a.deps?.callerSandboxed?.()) === true)
+    return { error: { code: 'PERMISSION_DENIED', message: sandboxedRemoteRefusal(a.cmd) } }
   const registry = await (a.deps?.registry ?? (() => controllerRegistry(a.profileDir)))()
   const found = resolveRuntime(await registry.list(), a.runtime)
   if ('code' in found) return { error: { code: found.code, message: found.message } }
@@ -87,12 +101,20 @@ export async function answerRemote(a: {
     return { error: { code: 'RUNTIME_NOT_FOUND', message: `${found.name} has no token on this machine; pair it again with \`astera runtimes add\`` } }
   const target: RemoteTarget = { runtimeId: found.runtimeId, address: found.address, port: found.port, fingerprint: found.fingerprint, token }
   /** The Runtime answered (design §4.5, Phase 3 minor): kept at most once a minute, and never at the cost of the answer. */
-  const reached = async (): Promise<void> => {
-    const last = found.lastSeenAt === null ? null : Date.parse(found.lastSeenAt)
-    if (last !== null && Date.now() - last < 60_000) return
-    await registry.touch(found.runtimeId, new Date().toISOString()).catch(() => undefined)
+  const reached = seenRecorder(registry, found.runtimeId, found.lastSeenAt)
+  /** The sign-in hello's facts (remote governance design §4.1), every write waited for before this command returns:
+   *  the CLI exits right after it. Facts the profile already holds are not written, so the common command takes no
+   *  store lock. */
+  const note = factsNoter(registry, found.runtimeId, found.facts)
+  let noted: Promise<void> = Promise.resolve()
+  const onHello = (h: HelloFrame): void => {
+    noted = noted.then(() => note(h))
   }
-  const link = (a.deps?.link ?? ((t: RemoteTarget) => openRemoteLink({ target: t, client: { name: 'astera cli', version: a.version, surface: 'cli' } })))(target)
+  const client: ClientInfo = { name: 'astera cli', version: a.version, surface: 'cli', agent: a.agent }
+  const link = (
+    a.deps?.link ??
+    ((t: RemoteTarget, o?: { onHello?(h: HelloFrame): void; client?: ClientInfo }) => openRemoteLink({ ...o, target: t, client: o?.client ?? client }))
+  )(target, { onHello, client })
   try {
     if (a.cmd === 'runs-follow') {
       let lost: RemoteError | null = null
@@ -133,5 +155,6 @@ export async function answerRemote(a: {
     return { error: { code, message, details: { ...refusalDetailsOf(r.body), runtime: found.runtimeId } } }
   } finally {
     link.close()
+    await noted
   }
 }

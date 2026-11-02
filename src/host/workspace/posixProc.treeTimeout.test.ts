@@ -19,11 +19,11 @@ vi.mock('node:child_process', async (importOriginal) => {
 describe('the tree kill: ps timeout', () => {
   it('lists the table within the desk request limit, from the desks and from native killTree alike', async () => {
     const { DESK_REQUEST_MS } = await import('../../core/workspace/protocol')
-    const { PS_TREE_ARGS, killProcessTree } = await import('./posixProc')
+    const { PS_TREE_ARGS, killPosixTree } = await import('./posixProc')
     const { realLinuxDeskDeps } = await import('./deskLinux')
     const { realMacDeskDeps } = await import('./deskMac')
     const { killTree } = await import('./native')
-    await killProcessTree(999_999)
+    await killPosixTree(999_999)
     await realLinuxDeskDeps({ hostEnv: {}, log: () => {} }).killTree(999_999)
     await realMacDeskDeps({ log: () => {} }).killTree(999_999)
     await killTree(999_999, undefined, 'linux')

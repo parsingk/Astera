@@ -13,7 +13,11 @@ import {
   AUDIT_READ_YIELD_EVERY,
   appendRecords,
   auditDayOf,
+  auditDroppedAtLimit,
+  auditDroppedThrough,
   auditStoppedAtLimit,
+  auditStoppedDays,
+  droppedThroughIn,
   keepPruning,
   pruneRecords,
   queryRecords as queryAt,
@@ -250,7 +254,9 @@ describe('retention (Review Focus 4)', () => {
     const logs: string[] = []
     const newest = rec()
     await appendRecords(p, [newest], { now: () => ms('2026-10-23'), maxBytes: 1000, log: (m) => logs.push(m) })
-    expect(await files(p)).toEqual(['2026-10-21.jsonl', '2026-10-22.jsonl', '2026-10-23.jsonl'])
+    // With the mark that names the latest day dropped (I-2)
+    expect(await files(p)).toEqual(['2026-10-21.jsonl', '2026-10-22.jsonl', '2026-10-23.jsonl', 'dropped-through'])
+    expect(auditDroppedThrough(p)).toBe('2026-10-20')
     expect((await queryRecords(p, {})).map((r) => r.id)).toEqual([newest.id])
     expect(logs).toEqual([])
   })
@@ -346,7 +352,7 @@ describe('retention (Review Focus 4)', () => {
     // Two minutes on, well inside the hour: two more records would pass the size, so the oldest day goes first
     now += 2 * 60 * 1000
     await appendRecords(p, [rec({ at: at('2026-10-23', 1) }), rec({ at: at('2026-10-23', 2) })], o)
-    expect(await files(p)).toEqual(['2026-10-22.jsonl', '2026-10-23.jsonl'])
+    expect(await files(p)).toEqual(['2026-10-22.jsonl', '2026-10-23.jsonl', 'dropped-through'])
     expect(await queryRecords(p, {})).toHaveLength(3)
   })
 
@@ -472,6 +478,109 @@ describe('a day that stopped at the size, across a restart', () => {
     await fresh.pruneRecords(p, later)
     expect(await files(p)).toEqual([])
     expect(fresh.auditStoppedAtLimit(p)).toBe(false)
+  })
+})
+
+// The days the findings' Observe history leaves out (lifecycle design §4): a day stopped for size holds fewer records
+// than its calls, so a usage finding cannot judge it
+describe('auditStoppedDays', () => {
+  it('auditStoppedDays lists the .stopped marks', async () => {
+    const p = await profile()
+    expect(auditStoppedDays(p)).toEqual([])
+    // Marks an earlier process left, read from the disk before this one has looked at the folder
+    await fs.mkdir(auditDir(p), { recursive: true })
+    for (const name of ['2026-10-21.jsonl', '2026-10-21.stopped', '2026-10-19.stopped', 'notes.stopped', '2026-10-20.jsonl'])
+      await fs.writeFile(path.join(auditDir(p), name), '')
+    expect(auditStoppedDays(p)).toEqual(['2026-10-19', '2026-10-21'])
+
+    // A day this process stopped is known from its folder state, though its mark is gone
+    const o = { now: () => ms('2026-10-23'), maxBytes: 1000 }
+    for (let i = 0; i < 20 && !auditStoppedAtLimit(p, { since: at('2026-10-23'), until: at('2026-10-24') }); i++)
+      await appendRecords(p, [rec({ at: at('2026-10-23', i) })], o)
+    await fs.rm(path.join(auditDir(p), '2026-10-23.stopped'), { force: true })
+    // The first write's prune let go of the mark whose day file is not there
+    expect(auditStoppedDays(p)).toEqual(['2026-10-21', '2026-10-23'])
+  })
+})
+
+// Final fix pass, I-2: a day dropped for size leaves no file, so the latest one dropped is marked; the Observe history
+// and the use logs start after it (findings/history.ts, host/findings/commands.ts)
+describe('a day dropped for size', () => {
+  beforeEach(() => void vi.resetModules())
+  const restarted = async (): Promise<typeof import('./store')> => {
+    vi.resetModules()
+    return import('./store')
+  }
+  const mark = (p: string): string => path.join(auditDir(p), 'dropped-through')
+
+  it('marks the latest day dropped for size, and none dropped for age, and a Host that starts over reads the mark', async () => {
+    const p = await profile()
+    await fs.mkdir(auditDir(p), { recursive: true })
+    // 2026-09-01 is older than the kept days; the three days after it are 2400 bytes, past 2000
+    for (const d of ['2026-09-01', '2026-10-20', '2026-10-21', '2026-10-22']) await fs.writeFile(path.join(auditDir(p), `${d}.jsonl`), 'x'.repeat(799) + '\n')
+    expect(auditDroppedThrough(p)).toBeNull()
+    await appendRecords(p, [rec()], { now: () => ms('2026-10-23'), maxBytes: 2000 })
+    expect(await files(p)).toEqual(['2026-10-21.jsonl', '2026-10-22.jsonl', '2026-10-23.jsonl', 'dropped-through'])
+    expect(auditDroppedThrough(p)).toBe('2026-10-20')
+    // A later drop moves it on, today never being dropped
+    await pruneRecords(p, { now: () => ms('2026-10-23'), maxBytes: 1000 })
+    expect(await files(p)).toEqual(['2026-10-23.jsonl', 'dropped-through'])
+    expect(auditDroppedThrough(p)).toBe('2026-10-22')
+    const fresh = await restarted()
+    expect(fresh.auditDroppedThrough(p)).toBe('2026-10-22')
+  })
+
+  it('drops nothing for size when the mark cannot be written, rather than drop a day unmarked', async () => {
+    const p = await profile()
+    await fs.mkdir(auditDir(p), { recursive: true })
+    for (const d of ['2026-10-20', '2026-10-21', '2026-10-22']) await fs.writeFile(path.join(auditDir(p), `${d}.jsonl`), 'x'.repeat(799) + '\n')
+    const real = fs.writeFile.bind(fs)
+    const write = vi.spyOn(fs, 'writeFile').mockImplementation(((file: Parameters<typeof fs.writeFile>[0], ...rest: unknown[]) =>
+      String(file).endsWith('dropped-through')
+        ? Promise.reject(Object.assign(new Error('denied'), { code: 'EPERM' }))
+        : (real as (...a: unknown[]) => Promise<void>)(file, ...rest)) as typeof fs.writeFile)
+    try {
+      const logs: string[] = []
+      await pruneRecords(p, { now: () => ms('2026-10-23'), maxBytes: 2000, log: (m) => logs.push(m) })
+      expect(await files(p)).toEqual(['2026-10-20.jsonl', '2026-10-21.jsonl', '2026-10-22.jsonl'])
+      expect(auditDroppedThrough(p)).toBeNull()
+      expect(logs.join('\n')).toMatch(/could not mark/)
+    } finally {
+      write.mockRestore()
+    }
+  })
+
+  it('lets the mark go once its day is past the kept days, and reads a mark it did not write only as a day', async () => {
+    const p = await profile()
+    await fs.mkdir(auditDir(p), { recursive: true })
+    await fs.writeFile(mark(p), '2026-09-01')
+    await pruneRecords(p, { now: () => ms('2026-10-23') })
+    expect(await files(p)).toEqual([])
+    expect(auditDroppedThrough(p)).toBeNull()
+    await fs.writeFile(mark(p), 'not a day')
+    expect(auditDroppedThrough(p)).toBeNull()
+  })
+
+  // Follow-up R-F6, item 5: a period that holds a day dropped for size, by local day as auditStoppedAtLimit reads it
+  it('says whether a period holds a day dropped for size', async () => {
+    const p = await profile()
+    await fs.mkdir(auditDir(p), { recursive: true })
+    expect(auditDroppedAtLimit(p)).toBe(false)
+    await fs.writeFile(mark(p), '2026-10-20')
+    expect(auditDroppedAtLimit(p)).toBe(true)
+    expect(auditDroppedAtLimit(p, { since: at('2026-10-20') })).toBe(true)
+    expect(auditDroppedAtLimit(p, { since: at('2026-10-21') })).toBe(false)
+    expect(auditDroppedAtLimit(p, { since: at('2026-10-01'), until: at('2026-10-05') })).toBe(true)
+  })
+
+  it('marks a use log’s folder the same way', async () => {
+    const p = await profile()
+    const folder = profilePaths(p).credentialUses
+    await fs.mkdir(folder, { recursive: true })
+    for (const d of ['2026-10-21', '2026-10-22', '2026-10-23']) await fs.writeFile(path.join(folder, `${d}.jsonl`), 'x'.repeat(299) + '\n')
+    await pruneRecords(p, { now: () => ms('2026-10-23'), maxBytes: 600 })
+    expect(droppedThroughIn(folder)).toBe('2026-10-21')
+    expect(auditDroppedThrough(p)).toBeNull()
   })
 })
 

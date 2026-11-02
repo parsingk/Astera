@@ -14,6 +14,7 @@ import {
   type CoordinatorDeps
 } from './coordinator'
 import { ENTER_QUIET_MS } from '../../sessions/sessionDriver'
+import { SANDBOXED_LINE_NOTE } from '../sandboxedLine'
 import type { CheckResult, ReviewIssue } from '../types'
 import type { WeakeningFinding } from '../../github/weakening'
 
@@ -292,6 +293,21 @@ describe('buildSpecFile — a lifecycle repair', () => {
   })
 })
 
+// The Mac check (checks 18 and 25): a worker in Claude Code's sandbox piped its report into astera as the spec asked
+// (`--body -`), the line ran inside the sandbox, and the report never arrived. Both spec files say how to send it there.
+describe('the reporting obligation in a sandboxed Claude Code session', () => {
+  it('says to give the body inline, in the spec file and in the review spec file', () => {
+    const spec = buildSpecFile({ title: 'T', spec: 'S', taskId: 'tsk_1', dispatchId: 'dsp_1' })
+    const review = buildReviewSpecFile({ title: 't', spec: 's', taskId: 'tsk', dispatchId: 'dsp', validated: true })
+    for (const s of [spec, review]) {
+      expect(s).toContain(SANDBOXED_LINE_NOTE)
+      expect(s.indexOf(SANDBOXED_LINE_NOTE)).toBeGreaterThan(s.indexOf('## Reporting obligation'))
+    }
+    expect(SANDBOXED_LINE_NOTE).toContain('heredoc')
+    expect(SANDBOXED_LINE_NOTE).toContain('--body "')
+  })
+})
+
 // GitHub lifecycle G3c1: a lifecycle Task's reviewer reads the pull request's whole diff
 // GitHub lifecycle G5a (design §7.4, §7.5): the review before a GitHub Run is ready to merge
 describe('buildReviewSpecFile — the review before merge-ready', () => {
@@ -532,6 +548,15 @@ describe('knowledgeIn', () => {
 })
 
 describe('OrchCoordinator.startWorker', () => {
+  // Task K: what the session actually ran in comes back with it, for its Dispatch to record (a Task's checks follow it)
+  it('hands back the protection the started session runs in, and none for an unsandboxed one', async () => {
+    const deps = makeDeps()
+    deps.spawnSession = async (o) => (deps.spawned.push(o), { id: 'boxed', sandboxKind: 'sandbox' as const })
+    expect(await new OrchCoordinator(deps).startWorker({ ...baseArgs(), runCwd: dir })).toMatchObject({ sessionId: 'boxed', sandboxKind: 'sandbox' })
+    const plain = await new OrchCoordinator(makeDeps()).startWorker({ ...baseArgs('dsp_2'), runCwd: dir })
+    expect(plain).not.toHaveProperty('sandboxKind')
+  })
+
   it('세션을 띄우고 spec 파일을 쓴다', async () => {
     const deps = makeDeps()
     const co = new OrchCoordinator(deps)

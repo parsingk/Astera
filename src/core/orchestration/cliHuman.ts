@@ -12,7 +12,11 @@ import type { CheckResult, JobSourceRef } from './types'
 import type { AuditAction, CoverageNote, SandboxCoverageRow } from '../audit/types'
 import { ACTION_PHRASES, COVERAGE_NOTE_PHRASES } from '../audit/phrases'
 import { SANDBOX_TABLE_CAPTION, sandboxRowCaption } from '../sandbox/coverage'
-import { t } from '../i18n'
+import { t, type MessageKey } from '../i18n'
+import { observeNote, unreadLine } from '../findings/note'
+import type { FindingSource, ObserveHistory } from '../findings/types'
+import type { RuntimeDetail } from '../types'
+import type { ComparisonRow, ComparisonState } from '../controlPlane/compare'
 
 /** 상태 한 낱말. **파생값과 플래그를 한 낱말로 접는다** — 사람이 목록에서 훑는 것이 이것이고,
  *  훑으려면 한 칸에 있어야 한다.
@@ -40,10 +44,13 @@ export function stateWord(o: {
   return '-'
 }
 
-/** 마지막 칸. 사람을 기다리는 중이면 그 수가 진행률보다 급한 소식이다(설계 §6 의 예시). */
-function progressWord(o: { questionsOpen?: number; progress?: { done: number; total: number } }): string {
+/** 마지막 칸. 사람을 기다리는 중이면 그 수가 진행률보다 급한 소식이다(설계 §6 의 예시).
+ *  A schedule that waits on an archived agent profile says which ahead of its progress (lifecycle design §5): its fires
+ *  make no Run until the profile is restored. */
+function progressWord(o: { questionsOpen?: number; progress?: { done: number; total: number }; archivedProfiles?: unknown }): string {
   const open = o.questionsOpen ?? 0
   if (open > 0) return open === 1 ? '1 question' : `${open} questions`
+  if (Array.isArray(o.archivedProfiles) && o.archivedProfiles.length > 0) return `archived profile: ${o.archivedProfiles.map(String).join(', ')}`
   const p = o.progress
   return p ? `${p.done}/${p.total}` : ''
 }
@@ -145,6 +152,12 @@ const asList = (data: Record<string, unknown>, key: string): Record<string, unkn
   return Array.isArray(v) ? (v as Record<string, unknown>[]) : []
 }
 
+/** A report's Observe history as sent; one that does not read as one is off with no days, as an unread one reads. */
+const observeOf = (v: unknown): ObserveHistory => {
+  const o = v !== null && typeof v === 'object' ? (v as { on?: unknown; days?: unknown }) : {}
+  return { on: o.on === true, days: typeof o.days === 'number' ? o.days : 0 }
+}
+
 /**
  * 그 명령의 사람용 출력. **모르는 명령은 null 이다** — 부르는 쪽이 JSON 으로 되돌린다. 공개
  * 표면이 아닌 명령(코디네이터의 것들)에 억지로 표를 씌우면 가이드가 시키는 것을 못 읽게 된다.
@@ -210,6 +223,10 @@ function localTime(iso: unknown): string {
   if (!Number.isFinite(d.getTime())) return str(iso)
   return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`
 }
+
+/** Each ISO time in a line the Host worded, as localTime shows it: a finding's reason carries a snapshot's time in UTC
+ *  (remote governance ruling R12-1), which --json keeps as it is. */
+const localTimesIn = (line: string): string => line.replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, (iso) => localTime(iso))
 
 /** Terse column heads, not the screen's labels (en.ts `settings.security.coverage.class.*`): the CLI prints words a script reads. */
 const COVERAGE_CLASSES = [
@@ -333,6 +350,115 @@ export const flagValue = (v: unknown, shell: ShellFamily = shellOf()): string =>
 /** A value the parser (cliArgs.ts) cannot take as a flag's value whatever the quoting: `-` is stdin, `--…` the next flag. */
 const unpassable = (s: string): boolean => s === '-' || s.startsWith('--')
 
+// A record rather than a list, so tsc flags a state added to compare.ts and not here.
+const STATE_KEYS: Record<ComparisonState, MessageKey> = {
+  missing: 'settings.remote.detail.state.missing',
+  different: 'settings.remote.detail.state.different',
+  off: 'settings.remote.detail.state.off',
+  'secret-missing': 'settings.remote.detail.state.secretMissing',
+  same: 'settings.remote.detail.state.same'
+}
+
+/** A comparison row's word: its state when it is expected, "only there" for an entry only there, a dash otherwise. */
+const comparisonWord = (row: ComparisonRow): string =>
+  row.state !== null ? t('en', STATE_KEYS[row.state]) : row.here === null ? t('en', 'settings.remote.detail.state.onlyThere') : '-'
+
+/**
+ * Remote governance design §10.1, §10.2: a paired Runtime as `runtimes get` read it, in the catalog's English the detail
+ * says (ruling C6). Who it is, both versions and when it was last seen; whether to update there; why no fresh report
+ * came, the line it does not answer above the last report's time (§5.4); then each part of that report. A state word a
+ * newer Runtime sends is printed as it came (ruling R2-1), and a part the Runtime could not read says so rather than
+ * reading as empty (ruling R9-3).
+ */
+function runtimeDetailText(d: RuntimeDetail): string {
+  const en = (key: MessageKey, params?: Record<string, string | number>): string => t('en', key, params)
+  const head = [
+    d.name,
+    d.runtimeId,
+    ...(d.facts ? [en('settings.remote.detail.versions', { there: d.facts.asteraVersion, here: d.here }), d.facts.platform] : []),
+    d.lastSeenAt === null ? en('settings.remote.paired.neverSeen') : en('settings.remote.paired.lastSeen', { at: localTime(d.lastSeenAt) })
+  ].join('  ')
+  const cannotReport = d.refusal?.code === 'RUNTIME_CAPABILITY_MISSING'
+  const why =
+    d.answering === false
+      ? [en('settings.remote.paired.offline', { code: d.refusal?.code ?? '' })]
+      : cannotReport
+        ? [en('settings.remote.detail.unsupported')]
+        : d.refusal
+          ? [en('settings.remote.failed', { code: d.refusal.code, message: d.refusal.message })]
+          : []
+  const top = [
+    head,
+    // The unsupported line already says to update there
+    ...(d.older && !cannotReport ? [en('settings.remote.detail.updateThere')] : []),
+    ...why,
+    d.snapshot ? en('settings.remote.detail.readAt', { at: localTime(d.snapshot.readAt) }) : en('settings.remote.detail.notReadYet')
+  ].join('\n')
+  if (!d.snapshot) return top
+  const r = d.snapshot.report
+  const unread = en('settings.remote.detail.unread')
+  const block = (heading: MessageKey, lines: string[]): string => [en(heading), ...lines].join('\n')
+  const extensions =
+    r.extensions === null
+      ? [en('settings.remote.detail.extensionsUnread')]
+      : d.comparison.length === 0
+        ? []
+        : [columns(d.comparison.map((c) => [comparisonWord(c), c.kind, c.name, c.id]))]
+  const agents = [
+    ...(r.appBypass === null ? [] : [en(r.appBypass ? 'settings.remote.detail.bypassOn' : 'settings.remote.detail.bypassOff')]),
+    ...(r.profiles === null
+      ? [unread]
+      : r.profiles.length === 0
+        ? []
+        : [columns(r.profiles.map((p) => [p.name, p.status, p.permission, p.sandbox ? 'sandbox on' : 'sandbox off', `accounts ${p.accountsThere}/${p.accountsNamed}`]))])
+  ]
+  const enforceWord = (code: string | null): string =>
+    code === null ? en('settings.remote.detail.enforceReady') : en('settings.remote.detail.enforceBlocked', { code })
+  const policy = r.policy
+  const protection = [
+    policy === null
+      ? unread
+      : `policy ${policy.mode}, otherwise ${policy.otherwise}, ${policy.rules} rules${policy.observingSince ? `, observing since ${localTime(policy.observingSince)}` : ''}`,
+    columns(
+      (['claude', 'codex'] as const).map((p) => [
+        p,
+        ...(policy?.enforce ? [`terminal: ${enforceWord(policy.enforce[p].terminal)}`, `chat: ${enforceWord(policy.enforce[p].chat)}`] : []),
+        `sandbox ${r.sandbox[p].kind}${r.sandbox[p].blocker === null ? '' : ` (${r.sandbox[p].blocker})`}`,
+        ...(policy ? [`CLI ${policy.cliVersions[p] ?? '-'}`] : []),
+        ...(p === 'codex' && r.sandbox.codexAccounts ? [`accounts set up ${r.sandbox.codexAccounts.ready}/${r.sandbox.codexAccounts.total}`] : [])
+      ])
+    )
+  ]
+  const credentials = [
+    en('settings.remote.detail.valuesStay'),
+    ...(r.credentials === null
+      ? [unread]
+      : r.credentials.hideOnly.length + r.credentials.mcp.length === 0
+        ? []
+        : [
+            columns([
+              ...r.credentials.hideOnly.map((h) => [h.alias, h.envNames.join(', '), h.hidden ? 'hidden' : 'not hidden']),
+              ...r.credentials.mcp.map((m) => [m.serverName, m.names.join(', '), m.hidden ? 'hidden' : 'not hidden'])
+            ])
+          ])
+  ]
+  const state = r.secretStore.ok
+    ? en('settings.remote.detail.secretStoreOk')
+    : en('settings.remote.detail.secretStoreFailed', { code: r.secretStore.code ?? 'failed' })
+  const store =
+    r.secretStore.kind === 'owner-only-files'
+      ? en('settings.remote.detail.secretStore', { state })
+      : en('settings.remote.detail.secretStoreOther', { kind: r.secretStore.kind, state })
+  return [
+    top,
+    block('settings.remote.detail.extensions', extensions),
+    block('settings.remote.detail.agents', agents),
+    block('settings.remote.detail.protection', protection),
+    block('settings.remote.detail.credentials', credentials),
+    [store, ...(r.findings === null ? [] : [en('settings.remote.detail.findingsThere', { count: r.findings.total })])].join('\n')
+  ].join('\n\n')
+}
+
 /** `args`: the flags the command was typed with, as the parser keys them, for an answer that names how to ask again;
  *  `shell`, the family a hint is quoted for (this machine's). The CLI's words differ from the screen's (strings in
  *  en.ts) for decisions, coverage classes and levels: they are the flag words and terse column heads a script reads back. */
@@ -377,7 +503,12 @@ export function humanFor(
       return [
         counts(data).join(', '),
         ...(byAction.length === 0 ? [] : ['', columns(byAction.map(([action, c]) => [phraseOf(action), action, ...counts(c)]))]),
-        ...(data.stoppedAtLimit === true ? ['', '(a day of this period stopped recording at the size limit, so it holds fewer calls than were made)'] : [])
+        // Days dropped to keep under the size limit, else a day that stopped recording at it (follow-up R-F6)
+        ...(data.droppedAtLimit === true
+          ? ['', '(days of this period were removed to stay under the size limit, so it holds fewer calls than were made)']
+          : data.stoppedAtLimit === true
+            ? ['', '(a day of this period stopped recording at the size limit, so it holds fewer calls than were made)']
+            : [])
       ].join('\n')
     }
     // Credentials design §7: a row per entry (its name, kind, what it hides, where), never a value
@@ -396,6 +527,52 @@ export function humanFor(
       return asList(data, 'lines')
         .map((l) => `${str(l.level).padEnd(6)}${str(l.text)}`)
         .join('\n')
+    // Remote governance design §8.2 to §8.4: what the unpairing did to the controller's scheduled Jobs, in the catalog's
+    // English, then each Job whose pause was refused. An older Host answers without the counts: the envelope as before
+    case 'runtime-revoke': {
+      if (typeof data.pausedJobs !== 'number' || typeof data.unrecordedScheduled !== 'number') return null
+      // The controller's name, which the record kept; a Host that sends none is named by the id (ruling R8-3)
+      const name = str(data.name ?? data.clientId)
+      const notPaused = asList(data, 'notPaused')
+      // A controller that made no scheduled Job is just unpaired, in the line that said so before (ruling R8-3)
+      if (data.pausedJobs === 0 && data.unrecordedScheduled === 0 && notPaused.length === 0) return t('en', 'settings.remote.revoke.done', { name })
+      const head = t('en', 'settings.remote.revoke.paused', { name, paused: data.pausedJobs, unrecorded: data.unrecordedScheduled })
+      const refused = notPaused.map(
+        (n) => `job ${str(n.jobId)}: ${str(n.error)}${typeof n.reason === 'string' ? ` (reason: ${n.reason})` : ''}`
+      )
+      return [head, ...refused].join('\n')
+    }
+    case 'runtimes-get':
+      return runtimeDetailText(data as unknown as RuntimeDetail)
+    // Remote governance design §10.2: the lines Settings › Remote Runtimes says after a Ping
+    case 'runtimes-ping':
+      return data.answers === true
+        ? t('en', 'settings.remote.paired.online', { version: str(data.asteraVersion), platform: str(data.platform) })
+        : t('en', 'settings.remote.paired.offline', { code: str(data.code) })
+    // Lifecycle design §4, §7, §8: the Observe note while the usage findings wait for their history, a row per finding
+    // (its rule, what it is about, why and what would resolve it), the lines that are not findings, then what could not
+    // be read. The English the Host worded (Finding.reason, .action), and the catalog's for the two notes
+    case 'agent-profiles-audit': {
+      const report = { observe: observeOf(data.observe), unread: Array.isArray(data.unread) ? (data.unread as FindingSource[]) : [] }
+      const note = observeNote(report)
+      const findings = asList(data, 'findings')
+      const info = asList(data, 'info')
+      const nameOf = (s: unknown): string => str((s as { name?: unknown } | null)?.name)
+      const ignoredMark = (f: Record<string, unknown>): string[] =>
+        f.ignored !== true ? [] : [typeof f.note === 'string' && f.note !== '' ? `(ignored: ${f.note})` : '(ignored)']
+      const blocks = [
+        ...(note === null ? [] : [t('en', note.key, note.params)]),
+        // Beside "Could not read", nothing found is said of what could be read
+        findings.length === 0 ? t('en', report.unread.length > 0 ? 'findings.noneRead' : 'findings.none') : columns(findings.map((f) => [str(f.rule), nameOf(f.subject), localTimesIn(str(f.reason)), `→ ${str(f.action)}`, ...ignoredMark(f)])),
+        ...(info.length === 0 ? [] : [columns(info.map((l) => [nameOf(l.subject), localTimesIn(str(l.reason))]))]),
+        ...[unreadLine('en', report.unread)].filter((l): l is string => l !== null)
+      ]
+      return blocks.join('\n\n')
+    }
+    case 'agent-profiles-audit-ignore':
+      return `ignored ${str(data.key)}`
+    case 'agent-profiles-audit-unignore':
+      return data.removed === true ? `brought back ${str(data.key)}` : `${str(data.key)} was not ignored`
     case 'policies-show':
     case 'policies-set-mode':
     case 'policies-set-otherwise':
@@ -708,8 +885,15 @@ export function humanFor(
 /** `--quiet` — id 만, 한 줄에 하나. `for j in $(astera jobs list --quiet)` 가 jq 없이 돌게 한다.
  *
  *  **id 가 없으면 아무것도 내지 않는다.** status 나 version 처럼 id 가 없는 답이 있고, 그때
- *  없는 것을 지어내는 것보다 빈 줄이 정직하다. */
-export function quietFor(data: Record<string, unknown>): string {
+ *  없는 것을 지어내는 것보다 빈 줄이 정직하다.
+ *
+ *  `cmd`: the findings (lifecycle design §7) are named by their `key`, the id `audit-ignore` takes, so `agent-profiles
+ *  audit` prints each finding's key, the ignored ones too under `--all`, as the Host left them in. */
+export function quietFor(data: Record<string, unknown>, cmd?: string): string {
+  if (cmd === 'agent-profiles-audit')
+    return asList(data, 'findings')
+      .flatMap((f) => (typeof f.key === 'string' ? [f.key] : []))
+      .join('\n')
   const ids: string[] = []
   const take = (v: unknown): void => {
     if (v === null || typeof v !== 'object') return

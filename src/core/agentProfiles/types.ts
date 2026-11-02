@@ -18,6 +18,9 @@ export interface AgentProfile {
   createdAt: string
   updatedAt: string
   lastUsedAt?: string
+  /** When it was last archived, and the one line the person gave as why (lifecycle design §5). Restore drops both. */
+  archivedAt?: string
+  archivedReason?: string
 }
 
 export interface AgentProfileStore {

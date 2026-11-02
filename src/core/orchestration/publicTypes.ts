@@ -68,8 +68,12 @@ type Derived = 'outcome' | 'progress' | 'questionsOpen'
 
 type _project = Check<Fits<Pick<Project, Fields<typeof PROJECT_FIELDS>>, ProjectDto>>
 type _projectKeys = Check<SameKeys<ProjectDto, Fields<typeof PROJECT_FIELDS>>>
-type _job = Check<Fits<Pick<Job, Fields<typeof JOB_FIELDS>>, Omit<JobDto, Derived>>>
-type _jobKeys = Check<SameKeys<Omit<JobDto, Derived>, Fields<typeof JOB_FIELDS>>>
+/** What `jobs list` and `jobs get` add beside the view (command.ts archivedNamesOf): the archived agent profiles a
+ *  scheduled Job waits on (lifecycle design §5). */
+type JobReadOnly = 'archivedProfiles'
+type _job = Check<Fits<Pick<Job, Fields<typeof JOB_FIELDS>>, Omit<JobDto, Derived | JobReadOnly>>>
+type _jobKeys = Check<SameKeys<Omit<JobDto, Derived | JobReadOnly>, Fields<typeof JOB_FIELDS>>>
+type _jobArchived = Check<Fits<string[], NonNullable<JobDto['archivedProfiles']>>>
 /** What `runs get` adds beside the view (command.ts): how many Tasks wait on an approval, and the token totals. */
 type RunGetOnly = 'waitingForApproval' | 'tokens' | 'coordinatorTokens'
 type _run = Check<Fits<Pick<JobRun, Fields<typeof RUN_FIELDS>>, Omit<RunDto, Derived | RunGetOnly | 'github'>>>

@@ -618,6 +618,9 @@ const NOT_SWITCHED = [
   'runtimes-add',
   'runtimes-list',
   'runtimes-remove',
+  'runtimes-get',
+  'runtimes-ping',
+  'runtimes-expect',
   // Answered by the Host's plugin manager (src/host/plugins/commands.ts), beside `projects-add`.
   'plugins-install',
   'plugins-list',
@@ -658,7 +661,12 @@ const NOT_SWITCHED = [
   // Answered by the Host's Credentials list (src/host/credentials/commands.ts): read here, changed in the app only
   'credentials-list',
   'credentials-show',
-  'credentials-doctor'
+  'credentials-doctor',
+  // Answered by the Host's findings (src/host/findings/commands.ts) through cli/agentProfiles.ts, beside the credentials:
+  // an agent's shell may read them and changes no ignore
+  'agent-profiles-audit',
+  'agent-profiles-audit-ignore',
+  'agent-profiles-audit-unignore'
 ] as const satisfies readonly AgentCommand[]
 
 /**
@@ -689,6 +697,9 @@ export interface AgentContextCommand {
   readonly summary: string
   /** Only where one line would mislead. */
   readonly detail?: string
+  /** The one word it takes that is not a flag, always required, sent as the argument `name` (`agent-profiles
+   *  audit-ignore <key>`). Absent for every command that takes flags only. */
+  readonly operand?: { readonly name: string; readonly about: string }
   readonly flags: readonly AgentContextFlag[]
 }
 
@@ -733,7 +744,7 @@ const MEANING: Record<CliErrorCode, string> = {
   RUNTIME_ACCOUNT_NOT_FOUND: 'the account does not exist on that Runtime',
   RUNTIME_CAPABILITY_MISSING: 'the command has no --runtime form, or that Runtime cannot do it',
   RUNTIME_BUSY: 'the Runtime refused for now: too many connections or calls in flight',
-  RUNTIME_PERMISSION_DENIED: "refused by the Runtime's pairing: a read-only controller asked for a change; a pairing made with `astera runtime pair --full-control` on the Runtime may change things",
+  RUNTIME_PERMISSION_DENIED: "refused by the Runtime: a read-only controller asked for a change, and a pairing made with `astera runtime pair --full-control` on the Runtime may change things; or an agent session asked for the Runtime's report (`runtimes get`), which answers only a person, under any pairing",
   RUNTIME_OUTCOME_UNKNOWN: 'a change was sent and its answer lost, and the Runtime cannot say whether it ran; list before trying again',
   REMOTE_TIMEOUT: 'the Runtime did not answer in time; the command may still finish',
   REMOTE_OPERATION_CONFLICT: 'refused by the Runtime because of current state',
@@ -803,10 +814,11 @@ const flagsOf = (entry: CommandUsage): AgentContextFlag[] =>
 
 const entryFor = (name: string, entry: CommandUsage, isPublic: boolean): AgentContextCommand => ({
   name,
-  usage: invocationLine(name, entry.flags ?? []),
+  usage: invocationLine(name, entry.flags ?? [], entry.operand),
   public: isPublic,
   summary: entry.summary,
   ...(entry.detail === undefined ? {} : { detail: entry.detail }),
+  ...(entry.operand === undefined ? {} : { operand: { name: entry.operand.name, about: entry.operand.about } }),
   flags: flagsOf(entry)
 })
 

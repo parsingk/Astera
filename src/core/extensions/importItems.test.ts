@@ -1,7 +1,7 @@
 // Agent Control Plane release 1 (design §4.4, D5, D11): picked items are imported once; secret values move to the
 // store and nowhere else; files are copied with a stable hash; the source account is not touched; a server whose
 // environment name another shared server uses with a different value is refused.
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -111,6 +111,78 @@ describe('importItems', () => {
     expect((await readExtensionRegistry(s.profileDir)).entries).toEqual([])
     expect(await extensionSecrets(s.profileDir).terms()).toEqual([])
     await expect(fs.stat(path.join(extensionPaths(s.profileDir).skills, 'review'))).rejects.toThrow()
+  })
+
+  // Lifecycle design §4.5, §4.9 and plan ruling 2: an item is not judged unused before it has been shared for the window
+  it('an imported MCP server and skill carry addedAt', async () => {
+    const s = await setup()
+    const before = Date.now()
+    await importItems({ profileDir: s.profileDir, homeDir: s.home, account: s.account, picks: [{ kind: 'mcp', name: 'linear' }, { kind: 'skill', name: 'review' }, { kind: 'command', name: 'ship' }] })
+    const after = Date.now()
+    const entries = (await readExtensionRegistry(s.profileDir)).entries
+    expect(entries.map((e) => e.kind)).toEqual(['mcp', 'skill', 'command'])
+    for (const e of entries) {
+      expect(typeof e.addedAt, e.name).toBe('string')
+      const at = Date.parse(e.addedAt!)
+      expect(new Date(at).toISOString(), e.name).toBe(e.addedAt)
+      expect(at >= before && at <= after, e.name).toBe(true)
+    }
+  })
+
+  // Ruling R4-3: a server switched back on is aged from then, so it is not called unused for the days it was off
+  it('setEnabled stamps enabledAt when an MCP server goes from off to on, and leaves it otherwise', async () => {
+    const s = await setup()
+    await importItems({ profileDir: s.profileDir, homeDir: s.home, account: s.account, picks: [{ kind: 'mcp', name: 'linear' }] })
+    const read = async () => (await readExtensionRegistry(s.profileDir)).entries[0]
+    const id = (await read()).id
+    // On already: the switch did not move
+    await setEnabled(s.profileDir, id, true)
+    expect(await read()).not.toHaveProperty('enabledAt')
+    await setEnabled(s.profileDir, id, false)
+    expect(await read()).not.toHaveProperty('enabledAt')
+    // Only the clock is faked, so the file system's own timers run as they do
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-10-01T00:00:00.000Z'))
+      await setEnabled(s.profileDir, id, true)
+      expect(await read()).toMatchObject({ enabled: true, enabledAt: '2026-10-01T00:00:00.000Z' })
+      // setEnabled(true) on an enabled entry does not move the stamp, and switching off keeps it
+      vi.setSystemTime(new Date('2026-10-05T00:00:00.000Z'))
+      await setEnabled(s.profileDir, id, true)
+      expect(await read()).toMatchObject({ enabledAt: '2026-10-01T00:00:00.000Z' })
+      await setEnabled(s.profileDir, id, false)
+      expect(await read()).toMatchObject({ enabled: false, enabledAt: '2026-10-01T00:00:00.000Z' })
+      // On again: stamped anew
+      vi.setSystemTime(new Date('2026-10-09T00:00:00.000Z'))
+      await setEnabled(s.profileDir, id, true)
+      expect(await read()).toMatchObject({ enabled: true, enabledAt: '2026-10-09T00:00:00.000Z' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // Lifecycle design §4.12 (ruling R4-3 extended): a skill, command or agent that was off was not given to the CLIs, so it
+  // is aged from when it was switched back on
+  it('setEnabled stamps enabledAt when a skill, command or agent goes from off to on, and leaves it otherwise', async () => {
+    const s = await setup()
+    await importItems({ profileDir: s.profileDir, homeDir: s.home, account: s.account, picks: [{ kind: 'skill', name: 'review' }, { kind: 'command', name: 'ship' }] })
+    const entries = async () => (await readExtensionRegistry(s.profileDir)).entries
+    for (const e of await entries()) {
+      await setEnabled(s.profileDir, e.id, true)
+      await setEnabled(s.profileDir, e.id, false)
+    }
+    for (const e of await entries()) expect(e, e.name).not.toHaveProperty('enabledAt')
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-10-01T00:00:00.000Z'))
+      for (const e of await entries()) await setEnabled(s.profileDir, e.id, true)
+      for (const e of await entries()) expect(e, e.name).toMatchObject({ enabled: true, enabledAt: '2026-10-01T00:00:00.000Z' })
+      vi.setSystemTime(new Date('2026-10-05T00:00:00.000Z'))
+      for (const e of await entries()) await setEnabled(s.profileDir, e.id, true)
+      for (const e of await entries()) expect(e, e.name).toMatchObject({ enabledAt: '2026-10-01T00:00:00.000Z' })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

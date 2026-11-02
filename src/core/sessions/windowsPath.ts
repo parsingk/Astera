@@ -24,10 +24,15 @@ const END = '__END__'
 /** How often a CLI that is not on PATH may make this process read the saved Path again. */
 export const REFRESH_MS = 30_000
 
+/** Windows PowerShell by its absolute path under `systemRoot` (a bare name is looked up in the working directory first).
+ *  The rollout owner check (core/rolling/rolloutOwner.ts) starts it the same way. */
+export const windowsPowerShellExe = (systemRoot: string | undefined = process.env.SystemRoot): string =>
+  `${systemRoot ?? 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
+
 /** The Windows PowerShell call that prints the saved Path, Machine then User, between markers. */
 export function windowsPathProbe(systemRoot: string | undefined = process.env.SystemRoot): { file: string; args: string[] } {
   return {
-    file: `${systemRoot ?? 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`,
+    file: windowsPowerShellExe(systemRoot),
     args: [
       '-NoProfile',
       '-NonInteractive',

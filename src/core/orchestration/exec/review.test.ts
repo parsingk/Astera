@@ -46,6 +46,11 @@ interface RigOpts {
   startFails?: string
   /** The Task runs as this agent profile */
   agentProfileId?: string
+  /** The protection the implementer's session ran in, and the one the reviewer's starts in (Task K) */
+  implSandboxKind?: 'sandbox' | 'deny-only'
+  reviewerSandboxKind?: 'sandbox' | 'deny-only'
+  /** A sandboxed session made the work (final fix pass C3): it added the Task, or made its Job */
+  madeBySandboxed?: 'task' | 'job'
 }
 
 type StartArgs = Parameters<ReviewContext['startWorker']>[0]
@@ -89,6 +94,12 @@ function rig(o: RigOpts) {
   // 사람이 세운 회차(runs stop) — runGatedForTask 가 읽는 칸이다.
   if (o.convergenceNull) state = { ...state, jobs: state.jobs.map((j) => ({ ...j, convergence: null as never })) }
   if (o.runPaused) state = { ...state, runs: state.runs.map((r) => ({ ...r, paused: true })) }
+  if (o.implSandboxKind) {
+    const sandboxKind = o.implSandboxKind
+    state = { ...state, dispatches: state.dispatches.map((x) => (x.id === d.value.id ? { ...x, sandboxKind } : x)) }
+  }
+  if (o.madeBySandboxed === 'task') state = { ...state, tasks: state.tasks.map((x) => (x.id === t.value.id ? { ...x, sandboxed: true as const } : x)) }
+  if (o.madeBySandboxed === 'job') state = { ...state, jobs: state.jobs.map((j) => ({ ...j, sandboxed: true as const })) }
 
   const history: OrchState[] = []
   const logs: string[] = []
@@ -98,7 +109,7 @@ function rig(o: RigOpts) {
     committed = state.dispatches.some((x) => x.id === a.dispatchId)
     specFileContent = a.specFileContent
     if (o.startFails !== undefined) throw new Error(o.startFails)
-    return { sessionId: 's-review', cwd: a.runCwd, specPath: path.join(specsDir, 'x.md') }
+    return { sessionId: 's-review', cwd: a.runCwd, specPath: path.join(specsDir, 'x.md'), ...(o.reviewerSandboxKind ? { sandboxKind: o.reviewerSandboxKind } : {}) }
   })
 
   const ctx: ReviewContext = {
@@ -262,6 +273,45 @@ describe('createReviewStarter', () => {
     // Committed before the spawn: the Dispatch named in the call already existed.
     expect(h.committedBeforeSpawn()).toBe(true)
     expect(h.state().dispatches.find((d) => d.id === a.dispatchId)?.sessionId).toBe('s-review')
+  })
+
+  // Task K part 3: a reviewer of work done in a sandbox (or, Claude Code on Windows, under its deny rules) starts in its own
+  // CLI's sandbox: it works in the implementer's tree and commonly runs its tests. Where that CLI has none the start is
+  // refused by the wiring (forcedSandboxBlocker), never run outside it
+  it('starts the reviewer of sandboxed work in its own CLI’s sandbox, and of unsandboxed work as before', async () => {
+    for (const [kind, boxed] of [['sandbox', true], ['deny-only', true], [undefined, false]] as const) {
+      const h = rig({ accounts: [claude('c1'), codex('x1')], loggedIn: ['c1', 'x1'], ...(kind ? { implSandboxKind: kind } : {}) })
+      await h.start({ taskId: h.taskId })
+      const a = h.startWorker.mock.calls[0][0]
+      // Fix round 1 (the controller's ruling, after E2): where the reviewer's CLI has no sandbox (Claude Code on Windows)
+      // it starts with its deny rules only, as a sandboxed profile's session does there, rather than being refused
+      if (boxed) expect(a, String(kind)).toMatchObject({ provider: 'codex', sandbox: true, sandboxDenyOnly: true })
+      else {
+        expect(a, String(kind)).not.toHaveProperty('sandbox')
+        expect(a, String(kind)).not.toHaveProperty('sandboxDenyOnly')
+      }
+    }
+  })
+
+  // Task K fix round 2 (the controller's ruling, correcting fix round 1's): the allowance of deny rules only is E2's, for
+  // work a profile's switch sandboxed. Work a sandboxed session made (C3) keeps the person's strict rule: its reviewer asks
+  // for its CLI's sandbox without the allowance, so a Claude reviewer on Windows is refused there as before (spawner.ts)
+  it('starts the reviewer of work a sandboxed session made in its sandbox without allowing deny rules only', async () => {
+    for (const madeBySandboxed of ['task', 'job'] as const) {
+      const h = rig({ accounts: [claude('c1'), codex('x1')], loggedIn: ['c1', 'x1'], implSandboxKind: 'sandbox', madeBySandboxed })
+      await h.start({ taskId: h.taskId })
+      const a = h.startWorker.mock.calls[0][0]
+      expect(a, madeBySandboxed).toMatchObject({ provider: 'codex', sandbox: true })
+      expect(a, madeBySandboxed).not.toHaveProperty('sandboxDenyOnly')
+    }
+  })
+
+  // Task K: the reviewer's Dispatch records the protection its session started in, as every attempt's does
+  it("records on the reviewer's Dispatch the protection its session started in", async () => {
+    const h = rig({ accounts: [claude('c1'), codex('x1')], loggedIn: ['c1', 'x1'], reviewerSandboxKind: 'sandbox' })
+    await h.start({ taskId: h.taskId })
+    const a = h.startWorker.mock.calls[0][0]
+    expect(h.state().dispatches.find((d) => d.id === a.dispatchId)).toMatchObject({ sessionId: 's-review', sandboxKind: 'sandbox' })
   })
 
   // Agent Profiles design §6: a reviewer is Astera's own role, not the person's agent

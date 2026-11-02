@@ -51,6 +51,20 @@ describe('chatBannerFor', () => {
     expect(chatBannerFor({ ...base, notice, request: approval })).toEqual({ kind: 'request', request: approval })
   })
 
+  // Task E fix round 3 (re-review Minor 7): a sandboxed start's warning rides the same notice on the wire, so an app of
+  // round 2 still words it; this one says it in the line above the thread (SandboxWarningLine, from the session's info),
+  // which a carry-on prompt does not retire and an app that attaches later still has. Its notice takes no place in the
+  // slot, where it would push aside a non-exit error or the endsWithApp notice until the first turn
+  it('a sandboxed start’s warning notice leaves the slot to the error and the quiet notices', () => {
+    const notice = { key: 'rollRefused' as const, reason: { key: 'session.sandbox.warn.homeInWorkFolder' as const } }
+    expect(chatBannerFor({ ...base, notice })).toEqual({ kind: 'none' })
+    expect(chatBannerFor({ ...base, notice, error: 'rate limited' })).toEqual({ kind: 'error', message: 'rate limited' })
+    expect(chatBannerFor({ ...base, notice, outlivesApp: false })).toEqual({ kind: 'endsWithApp' })
+    expect(chatBannerFor({ ...base, notice, truncated: true })).toEqual({ kind: 'checking' })
+    const both = { key: 'rollRefused' as const, reason: { key: 'session.sandbox.warn.claudeUsernsAndHome' as const } }
+    expect(chatBannerFor({ ...base, notice: both })).toEqual({ kind: 'none' })
+  })
+
   // codex writes a failed turn into its rollout, and the thread now draws it (convTypes' failure part):
   // the same sentence above the composer said it twice. A failure the thread does not show (Claude's)
   // keeps its notice.

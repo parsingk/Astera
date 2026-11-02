@@ -12,7 +12,8 @@ import { ProcRegistry, type RegistryProc } from './procRegistry'
 import { registrySessions } from './sessions'
 import { createRemoteSessions } from './remoteSessions'
 import { emptyState } from '../core/orchestration/state'
-import type { OrchCaller } from '../core/host/orchProtocol'
+import type { ControllerPrincipal, OrchCaller } from '../core/host/orchProtocol'
+import { UNSAID_CLI_NOTE } from '../core/host/controllerGate'
 import type { Account } from '../core/types'
 
 const NOW = '2026-10-08T00:00:00.000Z'
@@ -44,7 +45,12 @@ const fakeProc = (): RegistryProc => ({ pid: 2, onData: () => {}, onExit: () => 
 
 const accounts: Account[] = [{ id: 'acc1', label: 'Work', configDir: 'D:/acc1', color: '#000', createdAt: NOW, provider: 'claude' }]
 
-const rig = async (o: { held?: boolean | null; transcript?: string; hostWrites?: boolean; app?: boolean } = {}) => {
+type Turn = { alive: boolean; state: 'working' | 'waiting' | 'unknown'; prompt: 'permission' | 'question' | null }
+/** Who a controller is (remote governance design §7.2); the rig's default is the app's remote view, a person. */
+type Who = Pick<ControllerPrincipal, 'kind' | 'surface'>
+const PERSON: Who = { kind: 'person', surface: 'desktop' }
+
+const rig = async (o: { held?: boolean | null; transcript?: string; hostWrites?: boolean; app?: boolean; turn?: Turn } = {}) => {
   const pty = fakePty()
   const ptys = new PtyRegistry({ spawn: () => pty as unknown as RegistryPty, log: () => {}, bootId: 'b' })
   const procs = new ProcRegistry({ spawn: fakeProc, log: () => {} })
@@ -59,7 +65,7 @@ const rig = async (o: { held?: boolean | null; transcript?: string; hostWrites?:
   const remote = createRemoteSessions({
     ptys,
     procs,
-    sessions,
+    sessions: o.turn ? { ...sessions, sessionTurn: async () => o.turn! } : sessions,
     holdersOf: () => (o.held === null ? null : o.held ? [3] : []),
     hasApp: () => o.app === true,
     askApp: async (act: string, args: unknown[]) => (acts.push([act, args]), { answered: true }),
@@ -90,10 +96,10 @@ const rig = async (o: { held?: boolean | null; transcript?: string; hostWrites?:
     sessions: { ...sessions, sendChat: async () => {}, serial: (_id, run) => run() },
     remoteSessions: remote
   })
-  const as = (permission: 'read-only' | 'full-control', clientId = 'c1'): OrchCaller =>
-    ({ role: 'controller', principal: { clientId, name: 'laptop', permission }, toOthers: () => {} }) as OrchCaller
-  const ask = (cmd: string, args: Record<string, unknown>, permission: 'read-only' | 'full-control' = 'full-control', request?: string, clientId?: string) =>
-    orch.call({ cmd, args, sessionId: '', from: as(permission, clientId), ...(request ? { request } : {}) })
+  const as = (permission: 'read-only' | 'full-control', clientId = 'c1', who: Who = PERSON): OrchCaller =>
+    ({ role: 'controller', principal: { clientId, name: 'laptop', permission, ...who }, toOthers: () => {} }) as OrchCaller
+  const ask = (cmd: string, args: Record<string, unknown>, permission: 'read-only' | 'full-control' = 'full-control', request?: string, clientId?: string, who?: Who) =>
+    orch.call({ cmd, args, sessionId: '', from: as(permission, clientId, who), ...(request ? { request } : {}) })
   return { pty, ptys, ask, answered, killed, acts, remote }
 }
 
@@ -221,6 +227,86 @@ describe('remote sessions through the Host (Phase 9a)', () => {
     expect((await h.ask('sessions-answer', { id: 'chat-1', request: 'r1', answer: { kind: 'question', answers: [7] } })).status).toBe(400)
     expect((await h.ask('sessions-answer', { id: 'chat-1', request: 'r1', answer: { kind: 'approval', decision: 'decline', message: 'm'.repeat(5000) } })).status).toBe(400)
     expect(h.answered).toEqual([])
+  })
+
+  // Remote governance design §7.3: answering a permission request is for a person (chats-answer's rule), so an agent
+  // controller, and one that did not say what it is, is refused; a CLI that did not say is told to update Astera there.
+  it('sessions-answer refuses an agent controller and an unsaid one', async () => {
+    const h = await rig()
+    const answer = { kind: 'approval', decision: 'accept' }
+    const ask = (who: Who) => h.ask('sessions-answer', { id: 'chat-1', request: 'r1', answer }, 'full-control', undefined, undefined, who)
+    const error = (r: { body: unknown }): string => (r.body as { error: string }).error
+    const agent = await ask({ kind: 'agent', surface: 'mcp' })
+    expect(agent.status).toBe(403)
+    expect(error(agent)).toMatch(/^chats answer is for a person: .*an agent on another computer/)
+    expect(error(agent)).not.toContain(UNSAID_CLI_NOTE)
+    const unsaid = await ask({ kind: 'unsaid', surface: 'cli' })
+    expect(unsaid.status).toBe(403)
+    expect(error(unsaid).endsWith(UNSAID_CLI_NOTE)).toBe(true)
+    // A client that named no surface is no older Astera CLI: refused without the note
+    const third = await ask({})
+    expect(third.status).toBe(403)
+    expect(error(third)).not.toContain(UNSAID_CLI_NOTE)
+    expect(h.answered).toEqual([])
+  })
+
+  it('sessions-answer still answers a person controller', async () => {
+    const h = await rig()
+    const answer = { kind: 'approval', decision: 'accept' }
+    for (const who of [PERSON, { kind: 'person', surface: 'cli' }] as Who[])
+      expect(await h.ask('sessions-answer', { id: 'chat-1', request: 'r1', answer }, 'full-control', undefined, undefined, who)).toMatchObject({ status: 200 })
+    expect(h.answered).toHaveLength(2)
+  })
+
+  // Remote governance design §7.3: sessions-send's prompt rule, for raw input: text an agent types into a terminal that
+  // holds a permission prompt or a question answers it
+  it('sessions-input into a terminal waiting on a prompt is refused to an agent controller, and typed for a person one', async () => {
+    for (const prompt of ['permission', 'question'] as const) {
+      const h = await rig({ turn: { alive: true, state: 'waiting', prompt } })
+      const refused = await h.ask('sessions-input', { id: 'ses-1', data: '1' }, 'full-control', undefined, undefined, { kind: 'agent', surface: 'cli' })
+      expect(refused.status, prompt).toBe(409)
+      expect((refused.body as { error: string }).error, prompt).toContain('an agent on another computer')
+      const unsaid = await h.ask('sessions-input', { id: 'ses-1', data: '1' }, 'full-control', undefined, undefined, { kind: 'unsaid', surface: 'cli' })
+      expect((unsaid.body as { error: string }).error.endsWith(UNSAID_CLI_NOTE), prompt).toBe(true)
+      expect(h.pty.sent, prompt).toEqual([])
+      expect((await h.ask('sessions-input', { id: 'ses-1', data: '1' })).status, prompt).toBe(200)
+      expect(h.pty.sent, prompt).toEqual(['1'])
+    }
+  })
+
+  // Controller ruling R6-1: an agent's input is not a person's, as an agent's sessions send is not (command.ts `by`). The
+  // person-write mark feeds token accounting (`submittedBetween`) and a finished Run coordinator's grace period
+  // (`lastPersonInputAt`); the size still follows the side that typed.
+  it("an agent controller's input sets no person-write mark and no person submission; a person controller's sets both", async () => {
+    for (const who of [{ kind: 'agent', surface: 'mcp' }, { kind: 'unsaid', surface: 'cli' }, {}] as Who[]) {
+      // A local app holds the pty, so the controller's size waits until it types
+      const h = await rig({ held: true })
+      expect(await h.ask('sessions-resize', { id: 'ses-1', cols: 100, rows: 30 }, 'full-control', undefined, undefined, who)).toMatchObject({ body: { applied: false } })
+      expect((await h.ask('sessions-input', { id: 'ses-1', data: 'go\r' }, 'full-control', undefined, undefined, who)).status).toBe(200)
+      expect(h.pty.sent, JSON.stringify(who)).toEqual(['go\r'])
+      expect(h.ptys.lastPersonWrite('pty-1'), JSON.stringify(who)).toBeNull()
+      expect(h.ptys.personSubmittedBetween('pty-1', 0, Date.now() + 1000), JSON.stringify(who)).toBe(false)
+      expect(h.ptys.submittedBetween('pty-1', 0, Date.now() + 1000), JSON.stringify(who)).toBe('host')
+      expect(h.ptys.ownerOf('pty-1'), JSON.stringify(who)).toBe('controller:c1')
+      expect(h.pty.sizes, JSON.stringify(who)).toEqual([[100, 30]])
+    }
+    const h = await rig()
+    expect((await h.ask('sessions-input', { id: 'ses-1', data: 'go\r' })).status).toBe(200)
+    expect(h.ptys.lastPersonWrite('pty-1')).not.toBeNull()
+    expect(h.ptys.personSubmittedBetween('pty-1', 0, Date.now() + 1000)).toBe(true)
+  })
+
+  it('sessions-input to a terminal not at a prompt is typed for either', async () => {
+    for (const turn of [
+      { alive: true, state: 'waiting', prompt: null },
+      { alive: true, state: 'working', prompt: null },
+      { alive: true, state: 'unknown', prompt: null }
+    ] as Turn[]) {
+      const h = await rig({ turn })
+      expect((await h.ask('sessions-input', { id: 'ses-1', data: 'a' }, 'full-control', undefined, undefined, { kind: 'agent', surface: 'mcp' })).status).toBe(200)
+      expect((await h.ask('sessions-input', { id: 'ses-1', data: 'b' })).status).toBe(200)
+      expect(h.pty.sent, JSON.stringify(turn)).toEqual(['a', 'b'])
+    }
   })
 
   // Phase 9a review I3: a chat the app holds is stopped there; the Host does not claim it stopped it.

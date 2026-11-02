@@ -81,6 +81,13 @@ describe('createHostExtensions', () => {
     expect(await fs.stat(extensionPaths(h.profileDir).registry).then(() => true, () => false)).toBe(false)
   })
 
+  // Remote governance design §13: the controller gate refuses these first; the handler refuses a controller as well
+  it('a controller role is refused at the handler too', async () => {
+    const h = await rig()
+    const r = await h.ext.command({ cmd: 'extensions-list', args: {}, role: 'controller', marks: { effects: 0 } })
+    expect(r.status).toBe(403)
+  })
+
   it('answers 400 for missing arguments and 404 for an unknown account or item', async () => {
     const h = await rig()
     expect((await h.call('extensions-import', { accountId: 'acc_1' })).status).toBe(400)

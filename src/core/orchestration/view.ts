@@ -226,7 +226,8 @@ function jobTaskOf(
             ...(c.exitCode !== undefined ? { exitCode: c.exitCode } : {}),
             ...(c.startedAt && c.endedAt ? { durationMs: Date.parse(c.endedAt) - Date.parse(c.startedAt) } : {}),
             ...(c.unstable ? { unstable: true as const } : {}),
-            ...(c.skipped ? { skipped: true as const } : {})
+            ...(c.skipped ? { skipped: true as const } : {}),
+            ...(c.outsideSandbox ? { outsideSandbox: true as const } : {})
           }))
         }
       : {}),
@@ -368,7 +369,10 @@ export function snapshotFor(
   exists: (path: string) => boolean,
   /** Now, for the one time-bound fact a row reads: whether a coordinator start is still in flight
    *  (`coordinatorStarting`, Task 1 fix round 1 I1). Defaults to the clock; tests pass one. */
-  nowMs: number = Date.now()
+  nowMs: number = Date.now(),
+  /** The names of the archived agent profiles a scheduled Job uses (lifecycle design §5), for its row's "waiting" line.
+   *  Injected like nextFireOf: the profiles are not in the state. A hint only, so a caller with no store gives none. */
+  archivedOf: (jobId: string) => string[] = () => []
 ): OrchSnapshot {
   // 폴더 사실을 **한 번만** 센다 — Run 마다 다시 세면 같은 순회가 Run 수만큼 돌고, 그보다 나쁜
   // 것은 두 값(폴더 수준과 Run 수준)이 다른 순간의 상태를 볼 수 있다는 것이다.
@@ -393,6 +397,8 @@ export function snapshotFor(
     const worktreesOf = (
       run ? runWorktreesFrom(run, ix.jobById.get(run.jobId)?.cwd, ix.dispatchesByRun.get(run.id) ?? []) : []
     ).filter(exists)
+    // The schedule's own row only, as nextFireAt: it is the plan that waits, not a Run a fire made
+    const archived = run === undefined && job.schedule ? archivedOf(job.id) : []
     return {
       id: rowId,
       objective: previewOf(job.objective),
@@ -424,6 +430,9 @@ export function snapshotFor(
       sharesProjectFolder: workingHere.has(ownerId) && workingHere.size > 1,
       ...(job.pendingStart ? { pendingStart: true } : {}),
       ...(job.paused || run?.paused ? { paused: true } : {}),
+      // Why the schedule is paused, when a revoke paused it (remote governance design §8.2): on its own row, as `schedule`.
+      // A controller's view never gets here with pausedBy, since jobs-view folds the sanitized state for it (ruling R8-2)
+      ...(run === undefined && job.schedule && job.pausedBy ? { pausedRevokedFrom: job.pausedBy.name } : {}),
       // 빈 배열은 싣지 않는다 — sameSnapshot 의 문자열을 이유 없이 늘리고, "워크트리를 안 썼다" 와
       // "이 칸이 없다" 가 화면에서 같은 뜻이다(JobRow.children 과 같은 판단)
       ...(worktreesOf.length > 0 ? { worktrees: worktreesOf } : {}),
@@ -456,6 +465,7 @@ export function snapshotFor(
       ...(run === undefined && job.schedule && nextFireOf(job.id) !== null
         ? { nextFireAt: nextFireOf(job.id) as number }
         : {}),
+      ...(archived.length > 0 ? { archivedProfiles: archived } : {}),
       // createdAt ascending — the order the orchestrator declared the Tasks in, which is the order
       // the dependency chain reads in. Task.deps is not a total order, so it cannot sort this.
       tasks: [...((run ? ix.tasksByRun.get(run.id) : ix.tasksByJob.get(job.id)) ?? [])]

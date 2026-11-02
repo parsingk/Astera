@@ -6,7 +6,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { profilePaths } from '../profile/paths'
-import { keepDamaged, readStoreFile } from '../storeFile'
+import { hasKeptCopy, keepDamaged, readStoreFile } from '../storeFile'
 import { writeThroughTmp } from '../accounts/fileQueue'
 import { RepairNeeded } from '../settings/repairNeeded'
 import type { ResolvedAction } from './resolve'
@@ -67,13 +67,15 @@ export function isRuleAction(pattern: string): boolean {
 
 type Verdict = { decision: 'allow' | 'would-deny'; ruleId?: string }
 
-const matches = (pattern: string, action: string): boolean =>
+/** Whether a rule's action names an action: exactly, or as a prefix ending in `*`. The coverage findings read a rule's
+ *  actions the same way (actionClasses.ts). */
+export const ruleMatches = (pattern: string, action: string): boolean =>
   pattern.endsWith('*') ? action.startsWith(pattern.slice(0, -1)) : pattern === action
 
 /** The first rule that matches one command in one place, else `otherwise`. A scoped rule needs a place to match. */
 function judge(action: string, inside: boolean | undefined, p: AuditPolicy): Verdict {
   for (const r of p.rules) {
-    if (!matches(r.action, action)) continue
+    if (!ruleMatches(r.action, action)) continue
     if (r.scope !== undefined && (inside === undefined || inside !== (r.scope === 'inside-project'))) continue
     return { decision: r.effect === 'deny' ? 'would-deny' : 'allow', ruleId: r.id }
   }
@@ -153,12 +155,19 @@ function ruleOf(v: unknown): AuditRule | null {
   return { id, effect: effect as AuditRule['effect'], action, ...(scope !== undefined ? { scope: scope as AuditRule['scope'] } : {}) }
 }
 
+/** When Observe was last turned on, kept only when it reads as a time (lifecycle design §4). One that does not is left
+ *  out rather than taken for damage: the rules and the mode still hold, and the findings then count the history from
+ *  this release's first run, as for an Observe turned on before this release, which may be earlier than Observe was
+ *  last turned on. */
+const observingSinceOf = (v: Record<string, unknown>): { observingSince?: string } =>
+  typeof v.observingSince === 'string' && !Number.isNaN(Date.parse(v.observingSince)) ? { observingSince: v.observingSince } : {}
+
 /** The policy a parsed file holds, or null when it is not one. */
 function policyOf(v: unknown): AuditPolicy | null {
   if (!isRecord(v) || v.version !== 1 || !Array.isArray(v.rules) || !EFFECTS.includes(v.otherwise as string)) return null
   const rules = v.rules.map(ruleOf)
   if (rules.some((r) => r === null)) return null
-  return { version: 1, mode: modeOf(v), rules: rules as AuditRule[], otherwise: v.otherwise as AuditPolicy['otherwise'] }
+  return { version: 1, mode: modeOf(v), rules: rules as AuditRule[], otherwise: v.otherwise as AuditPolicy['otherwise'], ...observingSinceOf(v) }
 }
 
 /** The policy a file's text holds, or null when it is none: what the Enforce hook reads, synchronously, at every call.
@@ -204,17 +213,9 @@ export async function damageIsKept(profileDir: string): Promise<boolean> {
   const file = profilePaths(profileDir).auditPolicy
   const read = await readStoreFile(file)
   if (read.kind !== 'text') return false
-  const dir = path.dirname(file)
-  const has = async (): Promise<boolean> => {
-    for (const n of await fs.readdir(dir).catch(() => [] as string[])) {
-      if (!n.startsWith(`${path.basename(file)}.`) || !n.endsWith('.bak')) continue
-      if ((await fs.readFile(path.join(dir, n), 'utf8').catch(() => null)) === read.text) return true
-    }
-    return false
-  }
-  if (await has()) return true
+  if (await hasKeptCopy(file, read.text)) return true
   await keepDamaged(file, read.text)
-  return has()
+  return hasKeptCopy(file, read.text)
 }
 
 /** Writes the rules and mode atomically. */

@@ -397,17 +397,21 @@ export function RunDetail({
       // A read that failed (a deadline, the Host away a moment) keeps what is shown rather than clearing it, and is
       // read again at the next trigger once the wait is over (afterObserveRead)
       const body = 'runId' in ids ? await readTokens(door, runtimeId, 'runs-get', ids.runId).catch(() => null) : null
-      if (body !== null && mine()) setSpent(tokensOf(body))
+      const tokens = body !== null ? tokensOf(body) : null
+      if (tokens !== null && mine()) setSpent(tokens)
       let ok = 'jobId' in ids || body !== null
+      let counts: AuditCounts | null = null
       // The records are this computer's: a Runtime's Run has none here
       if (runtimeId === undefined) {
         const createdAt = typeof body === 'object' && body !== null ? (body as { createdAt?: unknown }).createdAt : undefined
         const r = await window.api.audit.summary({ ...ids, since: summarySince(createdAt, new Date()) }).catch(() => null)
-        if (r?.ok === true && mine()) setDenyCounts(summaryOf(r.body))
+        if (r?.ok === true) counts = summaryOf(r.body)
+        if (counts !== null && mine()) setDenyCounts(counts)
         if (r?.ok !== true) ok = false
       }
       if (mine() && lastRead.current === read) {
-        const out = afterObserveRead(read, ok)
+        // What this read showed: read again after the wait while it keeps changing (afterObserveRead)
+        const out = afterObserveRead(read, ok, JSON.stringify([tokens, counts]))
         lastRead.current = out.last
         // Nothing else may come for a finished Run, so the retry is asked for here, after the wait
         if (retryTimer.current !== null) clearTimeout(retryTimer.current)
@@ -521,7 +525,15 @@ export function RunDetail({
   const [taskSpent, setTaskSpent] = useState<{ taskId: string; tokens?: TokenTotals } | null>(null)
   const selectedId = selectedTask?.id
   const selectedState = selectedTask?.status
-  const lastTaskRead = useRef<{ target: string; state: string; at: number } | null>(null)
+  const lastTaskRead = useRef<ObserveRead | null>(null)
+  /** The Task read again while its tokens keep changing (afterObserveRead), ended with the window. */
+  const taskRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (taskRetryTimer.current !== null) clearTimeout(taskRetryTimer.current)
+    },
+    []
+  )
   const [readTaskAgain, setReadTaskAgain] = useState(0)
   useEffect(() => {
     if (selectedId === undefined || selectedState === undefined) return
@@ -531,15 +543,20 @@ export function RunDetail({
       const timer = setTimeout(() => setReadTaskAgain((n) => n + 1), wait)
       return () => clearTimeout(timer)
     }
-    lastTaskRead.current = { target: selectedId, state: selectedState, at: Date.now() }
-    void readTokens(door, runtimeId, 'tasks-get', selectedId).then(
-      (body) => {
-        if (body === null) return
-        const { tokens } = tokensOf(body)
-        setTaskSpent({ taskId: selectedId, ...(tokens ? { tokens } : {}) })
-      },
-      () => {}
-    )
+    const read = startObserveRead(lastTaskRead.current, { target: selectedId, state: selectedState }, Date.now())
+    lastTaskRead.current = read
+    void readTokens(door, runtimeId, 'tasks-get', selectedId)
+      .catch(() => null)
+      .then((body) => {
+        if (!alive.current || lastTaskRead.current !== read) return
+        const tokens = body === null ? undefined : tokensOf(body).tokens
+        if (body !== null) setTaskSpent({ taskId: selectedId, ...(tokens ? { tokens } : {}) })
+        // A Task's tokens go on after its status last moved too, as a Run's do (afterObserveRead)
+        const out = afterObserveRead(read, body !== null, JSON.stringify(tokens ?? null))
+        lastTaskRead.current = out.last
+        if (taskRetryTimer.current !== null) clearTimeout(taskRetryTimer.current)
+        taskRetryTimer.current = out.retryIn === null ? null : setTimeout(() => setReadTaskAgain((n) => n + 1), out.retryIn)
+      })
   }, [selectedId, selectedState, readTaskAgain, runtimeId, door])
   const selectedTokens = taskSpent !== null && taskSpent.taskId === selectedId ? taskSpent.tokens : undefined
   const denyLine = denyCounts !== null ? wouldDenyLine(denyCounts, t) : null

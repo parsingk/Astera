@@ -13,6 +13,8 @@ import { appendGitConfig, npmCacheOf } from './codexProfile'
 import { globalExcludesText, runGitFile, type RunGit } from './gitExcludes'
 import { ensureGitFiles, ensureWorktreeConfigFiles, gitLayoutOf, type GitLayout } from './gitLayout'
 import { PreparedLayouts } from './prepared'
+import type { LinkLook } from './locations'
+import type { ClaudeSandboxSettings } from './claudeSettings'
 import { SANDBOX_UNAVAILABLE, sandboxUnavailable } from './unavailable'
 
 const slashed = (p: string): string => p.replace(/\\/g, '/')
@@ -82,6 +84,9 @@ export interface ClaudeSandboxStart {
   /** A chat's one `--settings`: the sandbox of its scope, with the Enforce hook when `enforce`; null when it was not
    *  written. */
   chatArgs(enforce: boolean, scope: SandboxScope): string[] | null
+  /** The settings the scope's twin holds, and the links its named paths go through (Task K: a Task's check runs under
+   *  them, srtCheck.ts). */
+  settingsOf(scope: SandboxScope): { part: ClaudeSandboxSettings; links: string[] }
   /** What the session's environment gets, after everything else Astera adds: `inherited` is that environment. */
   env(inherited: Record<string, string | undefined>): Record<string, string>
 }
@@ -98,6 +103,7 @@ export function claudeSandboxStart(o: {
   files: {
     ensureSandboxFiles(scope: SandboxScope): Promise<SandboxFilesResult>
     sandboxChatArgs(enforce: boolean, scope: SandboxScope): string[] | null
+    sandboxPartOf(scope: SandboxScope): { part: ClaudeSandboxSettings; links: string[] }
   }
   /** The version check Enforce asks (cliVersion.ts), shared with it. */
   version: Pick<CliVersionProbe, 'warm'> & ((cli: 'claude') => string | null | undefined)
@@ -107,6 +113,10 @@ export function claudeSandboxStart(o: {
   runGit?: RunGit
   /** Test injection; default Date.now. */
   now?: () => number
+  /** How the disk is read for links on the paths the twins name (Task E fix round 5, core/sandbox/locations.ts
+   *  namedPathFor), carried on each scope: the app's and the Host's wiring give nodeLinkLook; null names every path as
+   *  given. Required (fix round 6), so a wiring that forgets it does not compile. */
+  linkLook: LinkLook | null
   log: (m: string) => void
 }): ClaudeSandboxStart {
   const excludesFile = gitExcludesFileOf(o.profileDir, o.uid ?? process.getuid?.() ?? 0)
@@ -155,7 +165,14 @@ export function claudeSandboxStart(o: {
       const blocked = blocker()
       if (blocked !== null) throw new Error(blocked)
       const layout = await layoutFor(p.cwd)
-      if ((await o.files.ensureSandboxFiles({ layout, env: p.env })) !== 'ok') {
+      const written = await o.files.ensureSandboxFiles({ layout, env: p.env, cwd: p.cwd, look: o.linkLook })
+      // Task E fix rounds 5 and 6 (rule E5): a named path through a link the session could change, through which srt
+      // cannot keep the deny in force (StatusLineManager.refusesLinks says how, per OS; ensureSandboxFiles writes no twin)
+      if (typeof written === 'object') {
+        o.log(`sandbox: ${written.linked.join(', ')} is a link inside the session's writable folders, which it could repoint, and Claude's sandbox cannot keep the path closed through it, so the sandboxed start is refused`)
+        throw sandboxUnavailable('linked-path')
+      }
+      if (written !== 'ok') {
         o.log("sandbox: Claude's sandbox settings could not be written, so the sandboxed start is refused")
         throw sandboxUnavailable('settings-write-failed')
       }
@@ -172,9 +189,10 @@ export function claudeSandboxStart(o: {
     blocker,
     scopeOf: (accountId, cwd, env) => {
       const layout = layouts.layoutOf(accountId, cwd, now())
-      return layout === undefined ? undefined : { layout, env }
+      return layout === undefined ? undefined : { layout, env, cwd, look: o.linkLook }
     },
     chatArgs: (enforce, scope) => o.files.sandboxChatArgs(enforce, scope),
+    settingsOf: (scope) => o.files.sandboxPartOf(scope),
     env: (inherited) =>
       claudeSandboxEnv({
         platform: o.platform,

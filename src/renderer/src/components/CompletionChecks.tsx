@@ -36,6 +36,8 @@ export function CompletionChecks({
             <span className="detail-completion-verdict">
               {checkVerdict(c, t)}
               {c.unstable === true && ` · ${t('jobs.convergence.check.unstable')}`}
+              {/* Claude Code on Windows has no sandbox: its checks ran outside one (Task K, the person's Q1) */}
+              {c.outsideSandbox === true && ` · ${t('jobs.checks.outsideSandbox')}`}
             </span>
             {link !== undefined && (
               <button className="detail-completion-more" title={link} onClick={() => onOpenLink(link)}>
@@ -52,6 +54,12 @@ export function CompletionChecks({
             {c.outputTail !== undefined && tails.has(c.configId) && <pre className="detail-completion-tail">{c.outputTail}</pre>}
             {said !== undefined && said.trim() !== '' && (
               <p className={`detail-completion-summary${c.status === 'error' ? ' detail-completion-summary--error' : ''}`}>{said}</p>
+            )}
+            {/* What the Credentials list kept from the check, by name (Task K fix round 2): a failure for a hidden token
+                or login reads as that. Only under a check that did not pass (fix round 3): a passing one carries the
+                same names, and would repeat them under every check of every Task in that folder */}
+            {c.status !== 'passed' && c.hiddenEnv !== undefined && c.hiddenEnv.length > 0 && (
+              <p className="detail-completion-summary">{t('jobs.checks.hiddenEnv', { names: c.hiddenEnv.join(', ') })}</p>
             )}
             {c.diagnostics !== undefined && c.diagnostics.length > 0 && (
               <ul className="detail-completion-diags">

@@ -19,7 +19,7 @@ import { ChatSessionManager } from '../core/chat/manager'
 import { HistoryIndex } from '../core/history/index'
 import { SessionCwdCache } from '../core/history/sessionCwdCache'
 import { ProjectSettings } from '../core/projects/settings'
-import { StatusLineManager, resolveNodePath } from '../core/sessions/statusline'
+import { StatusLineManager, resolveNodePath, withUseReports } from '../core/sessions/statusline'
 import { RateLimitFetcher } from '../core/usage/rateLimitFetcher'
 import { CodexUsageFetcher } from './codexUsage'
 import { AccountUsageStore } from './accountUsageStore'
@@ -50,9 +50,14 @@ import { readPolicyMode } from '../core/audit/policy'
 import type { EnforceStart } from '../core/audit/enforce'
 import { cliVersionProbe, enforceBlocker } from '../core/sessions/cliVersion'
 import { claudeSandboxStart } from '../core/sandbox/claudeStart'
+import { srtCheckRunner } from '../core/sandbox/srtCheck'
+import { codexCheckRunner } from '../core/sandbox/checkRunner'
 import { codexExcludesWriter } from '../core/sandbox/gitExcludes'
 import { hostAddress } from '../core/publicContract'
 import { appKeyPath } from '../core/host/hostKey'
+import { ensureOwnFolders, installRootOf, localAsteraDir, nodeLinkLook, presentOrNull, publicShuttleFiles, sandboxReadOnly, updaterCacheDir } from '../core/sandbox/locations'
+import { binDirFor } from '../core/orchestration/cliInstall'
+import { shuttleNames } from '../core/orchestration/exec/shuttle'
 import { HOST_PROTOCOL } from '../core/host/protocol'
 import { createManagedHooksCheck } from '../core/sessions/managedHooks'
 import { codexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
@@ -216,7 +221,10 @@ export function runAccountLogout(
 }
 
 
-export async function createCore(userDataDir: string, osLocale: string): Promise<Core> {
+/** `paths.sandboxCheck`: Astera's check runner (Task K), bundled beside the main bundle (out/main/sandbox-check.js): a
+ *  sandboxed Claude Task's check runs under srt through it on macOS and Linux, and a sandboxed Codex Task's check on
+ *  Windows (fix round 2). index.ts names it, since only the entry knows its own folder. */
+export async function createCore(userDataDir: string, osLocale: string, paths?: { sandboxCheck?: string }): Promise<Core> {
   // Same switch on the main side, so banners and error sentences are padded too
   // Dev-only layout check: VITE_PSEUDO_LOCALE=1 ASTERA_PSEUDO_LOCALE=1 npm run dev
   setPseudoLocalization(!app.isPackaged && process.env.ASTERA_PSEUDO_LOCALE === '1')
@@ -251,6 +259,26 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   // Enforce's hook on Windows when the capture scripts are left a bare node (development, or no runtime put in place):
   // a runtime an Astera installed here
   const findRuntime = (): Promise<string | null> => findInstalledHostExe(runtimeBase)
+  // What a sandboxed session keeps read-only on every OS (Task E and its fix rounds 1 and 2): the profile folder and every
+  // place the app itself writes code or an installer to and runs unsandboxed — the Windows Host runtime it lays down
+  // (runtimeBase), electron-updater's download cache, the installed app's own folder (from its executable), on Windows
+  // Astera's own %LOCALAPPDATA%\astera whole (the public CLI's bin, the session-`.cmd` junction), and on macOS and Linux
+  // the public CLI's own files in the person's ~/.local/bin, where they are now. One list, for the twins and both managers,
+  // naming only what is there when the app starts (fix round 3: no placeholder file at a missing one), as spelled: each
+  // start names it where namedPathFor puts it for that session's folders (fix round 5). The updater cache and the Host runtime folder are made
+  // first, empty if missing (fix round 4), so they are always named: a download that first made the cache while the app
+  // runs would otherwise leave it writable until the next start
+  const updaterCache = updaterCacheDir(process.platform, process.env, os.homedir())
+  ensureOwnFolders([updaterCache, runtimeBase])
+  const readOnly = sandboxReadOnly({
+    profileDir: userDataDir,
+    hostRuntimeBase: runtimeBase,
+    updaterCache,
+    installRoot: installRootOf(app.getPath('exe'), process.platform),
+    localAstera: localAsteraDir(process.platform, process.env, os.homedir()),
+    publicShuttle: publicShuttleFiles({ platform: process.platform, binDir: binDirFor({ platform: process.platform, env: process.env, home: os.homedir() }), names: shuttleNames(process.platform), exists: existsSync }),
+    resolve: presentOrNull
+  })
   const statusLine = new StatusLineManager(
     userDataDir,
     process.platform !== 'win32'
@@ -264,7 +292,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
           })) ?? 'node')
         : 'node',
     undefined,
-    { findRuntime }
+    { findRuntime, readOnly }
   )
   await statusLine.init()
   // One factory for the app's life. Slice 2's Host-backed one is attached to it by registerIpc once
@@ -298,12 +326,15 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     undefined,
     undefined,
     undefined,
-    (id, account, opts) => statusLine.spawnConfig(id, account, opts),
+    // An observed session's settings carry the use hooks when its Claude Code reports uses (lifecycle design §4.12), as the
+    // version its prepare warmed says: never asked of the CLI on this thread (fix round 2)
+    (id, account, opts) => statusLine.spawnConfig(id, account, withUseReports(opts, () => cliVersions.cached('claude'))),
     // A Claude session may read the app's screenshot folder without a prompt — that is where Design
     // Mode writes the crops whose paths it sends. previewShotsDir is the same path capture.ts writes.
     [previewShotsDir(userDataDir)],
     process.env,
-    { ...defaultSpawnChecks(sessionsLog), hostSocketDir, appKeyFile, codexExcludes }
+    // The folders a sandboxed Codex session keeps read-only (Task E and its fix round 1)
+    { ...defaultSpawnChecks(sessionsLog), hostSocketDir, appKeyFile, readOnly, linkLook: nodeLinkLook, codexExcludes }
   )
   // Shared extensions (Agent Control Plane release 1 design §4.5). The two managers read the same cache:
   // a chat roll's respawn is prepared through `sessions.prepare`, which refreshes the target account
@@ -331,8 +362,12 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   // folder. `worktrees` is made below; this only reads it at a spawn, long after.
   const hiding = createHidingSource({ profileDir: userDataDir, projectOf: projectOfWorktrees(() => worktrees.list()), log: hidingLog(userDataDir, sessionsLog) })
   sessions.hiding = hiding
-  // Observe mode: an observed Claude session's hook settings, written by its prepare (StatusLineManager.ensureObserveFiles)
-  sessions.observeHooks = () => statusLine.ensureObserveFiles()
+  // Observe mode: an observed Claude session's hook settings, written by its prepare (StatusLineManager.ensureObserveFiles),
+  // and the Claude version that picks the file with the use hooks or without (lifecycle design §4.12), asked off the thread
+  // so the spawn reads it from the probe's cache
+  sessions.observeHooks = async () => {
+    await Promise.all([statusLine.ensureObserveFiles(), cliVersions.warm('claude')])
+  }
   // Enforce: the blocking hook, written by a session's prepare, which refuses the start without it (E5). A Claude terminal
   // session reads it from its settings file; a chat, and any Codex session, from these arguments
   sessions.enforceHooks = () => statusLine.ensureEnforceFiles()
@@ -358,9 +393,17 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     tmpDir: os.tmpdir(),
     files: statusLine,
     version: cliVersions,
+    linkLook: nodeLinkLook,
     log: sessionsLog
   })
   sessions.claudeSandbox = claudeSandbox
+  // A sandboxed Claude Task's check under srt (Task K), on the systems Claude's sandbox runs on
+  // Only where the runner was built (fix round 2): one that is not there would end each check as if the check had failed
+  const checkRunnerPath = paths?.sandboxCheck !== undefined && existsSync(paths.sandboxCheck) ? paths.sandboxCheck : null
+  if (process.platform !== 'win32' && checkRunnerPath) sessions.checkRunner = srtCheckRunner({ execPath: process.execPath, runnerPath: checkRunnerPath })
+  // The same runner for a Windows Codex check (fix round 2): it tells a sandbox that stopped before the check from a check
+  // that failed. Given on every system; the session manager asks for it on Windows only
+  if (checkRunnerPath) sessions.codexCheckRunner = codexCheckRunner({ execPath: process.execPath, runnerPath: checkRunnerPath })
   // The codex floor a sandboxed Codex start asks, the version Enforce asks (final review I2)
   sessions.codexVersion = cliVersions
   // The chat sessions. It is handed `procRouter.factory` rather than a factory chosen now, for exactly
@@ -385,6 +428,8 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     claudeSandbox,
     hostSocketDir,
     appKeyFile,
+    readOnly,
+    linkLook: nodeLinkLook,
     codexVersion: cliVersions,
     codexExcludes
   })

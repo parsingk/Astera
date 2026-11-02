@@ -112,7 +112,9 @@ const make = (over: Partial<HostUnderstandingDeps> = {}) => {
 }
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-hostunderstanding-'))
+  // A short name: a Host's socket goes under this folder, and macOS caps a socket path at 104 bytes. Node 22 cut a
+  // longer one short without a word; Node 24 (the Electron the app ships) refuses it with EINVAL.
+  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-hu-'))
   project = path.join(dir, 'project')
   worktree = path.join(dir, 'wt', 'project-1')
   await fs.mkdir(path.join(project, 'src'), { recursive: true })

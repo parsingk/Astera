@@ -3,6 +3,7 @@
 // a file another process is renaming at that instant answers EPERM. The rule, as worktrees/registry.ts has it:
 // nothing read, nothing healed.
 import { promises as fs } from 'node:fs'
+import path from 'node:path'
 import { readFileRetrying } from './renameRetry'
 
 export type StoreRead = { kind: 'missing' } | { kind: 'unreadable'; error: unknown } | { kind: 'text'; text: string }
@@ -20,15 +21,34 @@ export async function readStoreFile(file: string): Promise<StoreRead> {
 }
 
 /** Keeps the bytes of a damaged file beside it: `<file>.bak`, or a stamped name when one is already there, so a
- *  second damage never writes over the copy of the first. Never throws. */
+ *  second damage never writes over the copy of the first. A stamped name already taken (two damages in one millisecond,
+ *  seen on Node 24) moves on to the same stamp with a count, rather than dropping the copy. Never throws. */
 export async function keepDamaged(file: string, text: string): Promise<void> {
   const plain = `${file}.bak`
   const taken = await fs.stat(plain).then(
     () => true,
     () => false
   )
-  const target = taken ? `${file}.${Date.now()}-${process.pid}.bak` : plain
-  await fs.writeFile(target, text, { encoding: 'utf8', flag: 'wx' }).catch(() => {})
+  const stamp = `${file}.${Date.now()}-${process.pid}`
+  const names = [...(taken ? [] : [plain]), ...Array.from({ length: 100 }, (_, n) => (n === 0 ? `${stamp}.bak` : `${stamp}-${n}.bak`))]
+  for (const target of names) {
+    const wrote = await fs.writeFile(target, text, { encoding: 'utf8', flag: 'wx' }).then(
+      () => true,
+      (e: NodeJS.ErrnoException) => (e.code === 'EEXIST' ? false : null)
+    )
+    if (wrote !== false) return
+  }
+}
+
+/** Whether a copy of exactly `text` is kept beside `file`, as keepDamaged names them (`<file>.bak`, `<file>.<stamp>.bak`).
+ *  keepDamaged never throws, so this is how a caller knows the copy is there before it says so. Never rejects. */
+export async function hasKeptCopy(file: string, text: string): Promise<boolean> {
+  const dir = path.dirname(file)
+  for (const n of await fs.readdir(dir).catch(() => [] as string[])) {
+    if (!n.startsWith(`${path.basename(file)}.`) || !n.endsWith('.bak')) continue
+    if ((await fs.readFile(path.join(dir, n), 'utf8').catch(() => null)) === text) return true
+  }
+  return false
 }
 
 /** A store whose file could not be read refuses to write over it (audit U-1). */

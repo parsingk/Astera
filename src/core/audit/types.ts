@@ -20,6 +20,12 @@ export type AuditAction =
 
 export type Confidence = 'exact' | 'high' | 'heuristic' | 'unknown'
 
+/** Whether a call read or wrote (lifecycle design §4.10), from what the resolver knows of its action: `unknown` for what
+ *  can do either (a program, an MCP tool, an agent, a request from a shell) and for a line with any such part. The list is
+ *  what a reader checks a stored value against. */
+export const CALL_EFFECTS = ['read', 'write', 'unknown'] as const
+export type CallEffect = (typeof CALL_EFFECTS)[number]
+
 /** What one command of a line does, and where, for a rule to judge on its own. */
 export interface CommandFacts {
   action: AuditAction
@@ -45,6 +51,10 @@ export interface AuditPolicy {
   rules: AuditRule[]
   /** What a call no rule matches gets. */
   otherwise: 'allow' | 'deny'
+  /** When Observe or Enforce was last turned on from off (lifecycle design §4, plan ruling 3): the start of the history
+   *  the usage findings judge. Dropped when the mode goes back to compatibility; absent in a file from before it existed,
+   *  whose history counts from this release's first run instead. */
+  observingSince?: string
 }
 
 /** `blocked`: Enforce's hook stopped the call before it ran (enforce design §5), whatever the rules say at the read. */
@@ -116,6 +126,12 @@ export interface AuditRecord {
    *  have then. At most AUDIT_COMMANDS_KEPT (recorder.ts); a line cut short is kept as `unknown`. */
   commands?: CommandFacts[]
   confidence: Confidence
+  /** Whether it read or wrote (lifecycle design §4.10); `unknown` for a line cut short. Left out by the records of earlier
+   *  releases and by a block an earlier release's hook wrote. */
+  effect?: CallEffect
+  /** The login folder (E6) a path of the call is in or under, by the location's short name (`.ssh`, `gh`), never the path;
+   *  `unknown` when a path could not be placed. Left out when no path is one, and by earlier releases. */
+  sensitive?: string
   /** `blocked`: Enforce's hook stopped it before it ran (enforce design §5). */
   status: 'ok' | 'failed' | 'unknown' | 'blocked'
   /** What stopped a blocked call: a rule's id, `otherwise`, a built-in rule's id (`builtin-profile-write`,
@@ -148,4 +164,20 @@ export interface CredentialUse {
   /** `managed`: a stored secret reached the tool through Astera; `observed`: Astera ran it with a login it does not manage. */
   evidence: 'managed' | 'observed'
   requestId: string
+}
+
+/** The uses of shared skills, commands and agents the CLIs reported in a window (lifecycle design §4.12), read from the use
+ *  log (extensionUses.ts summarizeExtensionUses). */
+export interface ExtensionUseSummary {
+  /** Names used as a skill or command (skill-tool, slash), as reported. */
+  skillOrCommand: Set<string>
+  /** Agent names (subagent, agent-tool), as reported. */
+  agents: Set<string>
+  /** A Claude chat session ran (its first stream line was marked, ruling R6-1). A skill or command a person types into a
+   *  chat (`-p`, stream-json) is expanded before the model runs, with no Skill call and no hook, so §4.12 cannot tell it
+   *  went unused. */
+  claudeChatSeen: boolean
+  /** A Claude terminal session ran without the hooks that report a typed skill or command and an agent's start (an older
+   *  Claude Code, or one whose version was not known; its note says `useHooks` is not true, ruling R6-8). */
+  claudeUnhookedSeen: boolean
 }

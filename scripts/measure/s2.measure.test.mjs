@@ -26,9 +26,9 @@ import { ensureGitFiles, ensureWorktreeConfigFiles, gitLayoutOf } from '../../sr
 import { initializeParams } from '../../src/core/chat/codexProtocol'
 import { hostAddress } from '../../src/host/address'
 import { HOST_PROTOCOL } from '../../src/core/host/protocol'
-import { appKeyPath, ensureAppKey } from '../../src/core/host/hostKey'
+import { appKeyPath, ensureAppKey, ensureHostKey } from '../../src/core/host/hostKey'
 import { fixtures, loopbackServer, probeEnv, sh, srtArgv, workspaceFor } from './measure-sandbox.mjs'
-import { runProbes, runSet } from './probes.mjs'
+import { refusedAll, runProbes, runSet } from './probes.mjs'
 import { startAppServer } from './appServer.mjs'
 import {
   COMMON_CASE_PROBES,
@@ -51,8 +51,11 @@ import {
   execResult,
   globalExcludesPath,
   localWin32Env,
+  PROFILE_FOLDER,
   probesFor,
   profileNameOf,
+  profileProbesFor,
+  sessionReadOnly,
   readinessArgv,
   s2Enabled,
   s2SetNames,
@@ -139,6 +142,7 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
       'srt sets: claudeSandboxSettings as Claude Code hands them to srt (s2.mjs srtSettingsOf); the network list names the probes’ hosts. Claude Code’s own use of these settings is not measured (no login): runtime-measured.',
       'The config.worktree probes write the one git names for the session, the main checkout’s and a second worktree’s (each set adds one). On the shipped path the repository has extensions.worktreeConfig on and every config.worktree made first by ensureWorktreeConfigFiles (worktreeConfig in each set), as the start does; codex-worktree-common has the extension off and none made (filesBefore, filesAfter). In the srt sets they are informational: how Claude Code itself treats a worktree’s git data is not srt’s.',
       'Every set makes the missing git files first, as every sandboxed start does (ensureGitFiles: a commondir holding `.` and an empty modules folder; gitFiles in each set), and both profiles keep them read-only with a worktree’s `.git` pointer; the normal-work probes (git-status, git-log, git-worktree-list, and the commits) say whether everyday git still runs.',
+      'Every set keeps a profile folder read-only as a start does (readOnly = sessionReadOnly, locations.ts profileReadOnly; Task E): the run’s own scratch profile, outside every set’s folder as a profile is in normal work, so these sets’ results are not meant to change. codex-profile and srt-profile put a profile folder inside the session’s folder (no repository) and run exactly two probes: one file written into it (expected denied) and its Host key read (expected allowed).',
       ...(WIN
         ? [
             'win32: the fake home is in TEMP, which the sandbox may write, so write-home writes ASTERA_PROBE_OUTSIDE (a folder in the checkout, outside TEMP and the workspace); git-credential uses the store helper and the fake .git-credentials, with Git’s system config (Credential Manager) left out.',
@@ -191,6 +195,9 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
     const hostProfile = path.join(ctx.scratch, 'host-profile')
     await ensureAppKey(hostProfile)
     ctx.appKeyFile = appKeyPath(hostProfile)
+    // The profile folder itself, which every set keeps read-only as a session's start does (Task E); here it is outside
+    // the sets' folders, as a profile is in normal work, so no set's results change for it
+    ctx.profileDir = hostProfile
     if (!WIN) {
       // A Host-shaped socket folder, there as a running Host's is, which the Codex sets deny as a session's start does
       ctx.hostDir = hostAddress({ profileDir: hostProfile, platform: PLATFORM, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL }).dirToPrepare
@@ -325,10 +332,11 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
     const plain = runProbes(plainWrap, { cwd: pp.cwd, env: codexEnvOf(pp).env, probes, timeoutMs: PROBE_MS })
     const p = await prepare(set.name, set.layout, {}, { shipped })
     const denied = codexDenied(PLATFORM, ctx.base, ctx.home, ctx.hostDir, ctx.appKeyFile)
-    const args = codexSetArgs({ platform: PLATFORM, layout: p.gitLayout, denied, variant: set.variant })
+    const readOnly = sessionReadOnly(ctx.profileDir)
+    const args = codexSetArgs({ platform: PLATFORM, layout: p.gitLayout, denied, readOnly, variant: set.variant })
     const { own, env } = codexEnvOf(p)
     const wrap = (line) => ({ file: 'codex', args: ['sandbox', ...args, '--', ...shellArgv(PLATFORM, line)] })
-    const record = { layout: set.layout, cwd: p.cwd, gitLayout: p.gitLayout, sibling: p.sibling, worktreeConfig: p.worktreeConfig, gitFiles: p.gitFiles, args, env: own, denied }
+    const record = { layout: set.layout, cwd: p.cwd, gitLayout: p.gitLayout, sibling: p.sibling, worktreeConfig: p.worktreeConfig, gitFiles: p.gitFiles, args, env: own, denied, readOnly }
     if (set.common) {
       record.filesBefore = worktreeConfigFiles(p.gitLayout)
       record.sanity = runProbes(wrap, { cwd: p.cwd, env, probes: [{ id: 'sanity', line: sanityLine(PLATFORM) }], timeoutMs: PROBE_MS })[0]
@@ -344,7 +352,8 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
     const plain = runProbes(plainWrap, { cwd: pp.cwd, env: codexEnvOf(pp).env, probes, timeoutMs: PROBE_MS })
     const p = await prepare(set.name, set.layout)
     const denied = codexDenied(PLATFORM, ctx.base, ctx.home, ctx.hostDir, ctx.appKeyFile)
-    const args = codexSetArgs({ platform: PLATFORM, layout: p.gitLayout, denied })
+    const readOnly = sessionReadOnly(ctx.profileDir)
+    const args = codexSetArgs({ platform: PLATFORM, layout: p.gitLayout, denied, readOnly })
     const profile = profileNameOf(args)
     const { own, env } = codexEnvOf(p)
     const record = {
@@ -357,6 +366,7 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
       args: ['app-server', ...args],
       env: own,
       denied,
+      readOnly,
       profile,
       permissionProfileParam: Boolean(set.profileParam)
     }
@@ -433,14 +443,15 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
       record.plain = runProbes(plainWrap, { cwd: pp.cwd, env: envOf(pp), probes, timeoutMs: PROBE_MS })
       const p = await prepare(set.name, set.layout, files)
       const npmCache = npmCacheOf(p.tmpDir)
-      const claude = claudeSandboxSettings({ platform: PLATFORM, denied: claudeDenied(PLATFORM, ctx.base, ctx.home, ctx.appKeyFile), npmCache, layout: p.gitLayout })
+      const readOnly = sessionReadOnly(ctx.profileDir)
+      const claude = claudeSandboxSettings({ platform: PLATFORM, denied: claudeDenied(PLATFORM, ctx.base, ctx.home, ctx.appKeyFile), readOnly, npmCache, layout: p.gitLayout })
       const commonDir = p.gitLayout?.worktree ? p.gitLayout.commonDir : null
       const settings = srtSettingsOf(claude, { commonDir, ...(socket ? { allowUnixSockets: [socket.path] } : {}) })
       const settingsFile = path.join(ctx.scratch, `srt-settings-${set.name}.json`)
       writeFileSync(settingsFile, JSON.stringify(settings, null, 2))
       const wrap = (file) => (line) => ({ file: 'srt', args: srtArgv(file, line) })
       const env = envOf(p)
-      Object.assign(record, { cwd: p.cwd, gitLayout: p.gitLayout, worktreeConfig: p.worktreeConfig, gitFiles: p.gitFiles, claude: claude.sandbox, settings, env: { npm_config_cache: npmCache, ...extra } })
+      Object.assign(record, { cwd: p.cwd, gitLayout: p.gitLayout, worktreeConfig: p.worktreeConfig, gitFiles: p.gitFiles, readOnly, claude: claude.sandbox, settings, env: { npm_config_cache: npmCache, ...extra } })
       record.sandboxed = runSet(wrap(settingsFile), { cwd: p.cwd, env, probes, timeoutMs: PROBE_MS })
       // srt on Linux skips a write path that does not exist (dist/sandbox/linux-sandbox-utils.js): when the install
       // failed, it runs again with the folder made first, as the Host could make it
@@ -463,13 +474,61 @@ describe.skipIf(!s2Enabled(process.env, process.platform))('S2: the sandbox buil
     return record
   }
 
+  /** A fresh folder outside any repository holding a profile folder (PROFILE_FOLDER), as a session started in the home
+   *  folder holds Astera's: its Host key and app key made as the Host and the app make them (Task E). */
+  async function profileWorkspace(name) {
+    const cwd = path.join(ctx.home, `astera-probe-ws-s2-${name}`)
+    mkdirSync(cwd, { recursive: true })
+    const profileDir = path.join(cwd, PROFILE_FOLDER)
+    await ensureHostKey(profileDir)
+    await ensureAppKey(profileDir)
+    const tmpDir = path.join(ctx.scratch, `tmp-${name}`)
+    mkdirSync(tmpDir, { recursive: true })
+    return { cwd, profileDir, appKeyFile: appKeyPath(profileDir), tmpDir, gitLayout: await gitLayoutOf(cwd) }
+  }
+
+  /** The profile inside the session's folder (Task E), under Codex or srt with what a start would hand either for that
+   *  profile (its own folder read-only, its own app key denied): the two plain probes, with no sandbox and then in it. */
+  async function profileSet(set) {
+    const probes = profileProbesFor(PLATFORM)
+    const envOf = (w, own) => ({ ...ctx.base, ...own, ASTERA_PROBE_PROFILE: WIN ? path.win32.normalize(w.profileDir) : w.profileDir })
+    const pw = await profileWorkspace(`${set.name}-plain`)
+    const plain = runProbes(plainWrap, { cwd: pw.cwd, env: envOf(pw, {}), probes, timeoutMs: PROBE_MS })
+    const w = await profileWorkspace(set.name)
+    const readOnly = sessionReadOnly(w.profileDir)
+    const record = { layout: set.layout, cwd: w.cwd, profileDir: w.profileDir, gitLayout: w.gitLayout, readOnly }
+    let wrap
+    let env
+    if (set.kind === 'codex') {
+      const denied = codexDenied(PLATFORM, ctx.base, ctx.home, ctx.hostDir, w.appKeyFile)
+      const args = codexSetArgs({ platform: PLATFORM, layout: w.gitLayout, denied, readOnly })
+      const own = codexSandboxEnv({ platform: PLATFORM, layout: w.gitLayout, tmpDir: w.tmpDir })
+      wrap = (line) => ({ file: 'codex', args: ['sandbox', ...args, '--', ...shellArgv(PLATFORM, line)] })
+      env = envOf(w, own)
+      Object.assign(record, { args, env: own, denied })
+    } else {
+      const npmCache = npmCacheOf(w.tmpDir)
+      const claude = claudeSandboxSettings({ platform: PLATFORM, denied: claudeDenied(PLATFORM, ctx.base, ctx.home, w.appKeyFile), readOnly, npmCache, layout: w.gitLayout })
+      const settings = srtSettingsOf(claude, { commonDir: w.gitLayout?.worktree ? w.gitLayout.commonDir : null })
+      const settingsFile = path.join(ctx.scratch, `srt-settings-${set.name}.json`)
+      writeFileSync(settingsFile, JSON.stringify(settings, null, 2))
+      wrap = (line) => ({ file: 'srt', args: srtArgv(settingsFile, line) })
+      env = envOf(w, { npm_config_cache: npmCache })
+      Object.assign(record, { claude: claude.sandbox, settings, env: { npm_config_cache: npmCache } })
+    }
+    const sandboxed = runSet(wrap, { cwd: w.cwd, env, probes, timeoutMs: PROBE_MS, sanity: sanityLine(PLATFORM) })
+    return { ...record, plain, sandboxed, verdicts: verdicts(plain, sandboxed) }
+  }
+
   for (const set of S2_SETS) {
     it.skipIf(!s2SetNames(PLATFORM).includes(set.name))(set.name, async () => {
-      const run = set.kind === 'codex' ? codexSet : set.kind === 'app-server' ? appServerSet : srtSet
+      const run = set.profileInside ? profileSet : set.kind === 'codex' ? codexSet : set.kind === 'app-server' ? appServerSet : srtSet
       const r = await run(set)
       result.sets[set.name] = r
       save()
       expect(brokenPlain(r.plain), 'probes that failed with no sandbox: the instrument is broken there, not the sandbox').toEqual([])
+      // A sandbox that started no command measured nothing (found on Ubuntu 26.04, run 40761549024): the set fails
+      expect(refusedAll(r.sandboxed), `${set.name} measured nothing: every sandboxed probe was refused (${r.sandboxed[0]?.out ?? ''})`).toBe(false)
     })
   }
 

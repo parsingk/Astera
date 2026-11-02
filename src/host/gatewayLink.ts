@@ -191,10 +191,10 @@ export function attachGatewayLink(o: {
         // Not before the paired clients are read (second pass RR-7): a refusal here is final for the controller.
         const l = o.controllers.loading()
         if (l) await l
-        const r = o.controllers.authenticate(f.tokenHash)
+        const r = o.controllers.authenticate(f.tokenHash, f.client)
         if (!r) return send({ t: 'authed', conn: f.conn, ok: false })
         if (o.controllers.boundCount(o.linkGen, r.clientId) >= CONNS_PER_CLIENT) return send({ t: 'authed', conn: f.conn, ok: false, code: 'RUNTIME_BUSY' })
-        o.controllers.bind(o.linkGen, f.conn, r.clientId)
+        o.controllers.bind(o.linkGen, f.conn, r.clientId, f.client)
         return send({ t: 'authed', conn: f.conn, ok: true, hello: { t: 'hello', ...o.hello(), permission: r.permission } })
       }
       case 'redeem': {

@@ -78,6 +78,19 @@ export function runSet(wrap, o) {
   return list.map((p) => ({ id: p.id, code: sane.code, ok: false, timedOut: false, missing: false, refused: true, out: sane.out }))
 }
 
+/** Whether a set measured nothing: its sandbox refused every probe (runSet's `refused`). Found by the Ubuntu 26.04 run
+ *  (40761549024): srt started no command there, every probe read refused, and the job still reported success. */
+export const refusedAll = (sandboxed) => sandboxed.length > 0 && sandboxed.every((r) => r.refused === true)
+
+/** The names of the sets (name to sandboxed results) that measured nothing, in their order. */
+export const refusedSets = (sets) => Object.entries(sets).filter(([, results]) => refusedAll(results)).map(([name]) => name)
+
+/** A run in which a set measured nothing does not pass: thrown, naming every such set. */
+export function failIfMeasuredNothing(sets) {
+  const names = refusedSets(sets)
+  if (names.length > 0) throw new Error(`measured nothing: every sandboxed probe was refused in ${names.join(', ')}`)
+}
+
 /** One probe under a sandbox, read against the same probe with none. */
 export function verdict(plain, sandboxed) {
   if (sandboxed.refused) return 'refused'

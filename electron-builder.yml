@@ -21,8 +21,13 @@ files:
   # below, and only on Windows. Keeping it out of the asar is not a tidiness point here: without this
   # line every platform's package would carry a second, unreachable copy of a Windows Node binary.
   - '!resources/host-runtime/**'
+  # The sandbox runtime's Windows helper: a sandboxed Claude Task's checks run under it on macOS and Linux only (Claude Code
+  # has no sandbox on Windows, Task K), so its .exe would be dead weight in every package.
+  - '!**/node_modules/@anthropic-ai/sandbox-runtime/vendor/srt-win/**'
 asarUnpack:
   - '**/node_modules/node-pty/**'
+  # srt runs its own helpers (Linux's seccomp loader) and hands the JVM its proxy agent by path: they must be real files
+  - '**/node_modules/@anthropic-ai/sandbox-runtime/**'
 extraResources:
   # The orchestration CLI is bundled into main (out/main/cli.js) and is not copied here.
   # Only the skill document that `astera help` reads is shipped as a resource.

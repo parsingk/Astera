@@ -387,7 +387,8 @@ const api = {
     restore: invoke('agentProfiles.restore'),
     remove: invoke('agentProfiles.remove'),
     sandboxSetup: invoke('agentProfiles.sandboxSetup'),
-    sandboxReadiness: invoke('agentProfiles.sandboxReadiness')
+    sandboxReadiness: invoke('agentProfiles.sandboxReadiness'),
+    sandboxDefaultRemove: invoke('agentProfiles.sandboxDefaultRemove')
   },
   // Settings › Security & Access and Run detail's token totals (observe mode design §11): the Host's observe rules,
   // records and tokens, through main's route
@@ -416,6 +417,13 @@ const api = {
     setHiding: invoke('credentials.setHiding'),
     reset: invoke('credentials.reset')
   },
+  // Settings › Security & Access › Findings and the Agent profiles mark (lifecycle design §7): the Host's findings,
+  // through main's findings route
+  findings: {
+    list: invoke('findings.list'),
+    ignore: invoke('findings.ignore'),
+    unignore: invoke('findings.unignore')
+  },
   // The Jobs view's "+ From a source" (plugin Phase 4c): the Host's job sources, through main's sources route
   sources: {
     list: invoke('sources.list'),
@@ -429,6 +437,9 @@ const api = {
     remove: invoke('remote.remove'),
     ping: invoke('remote.ping'),
     projects: invoke('remote.projects'),
+    detail: invoke('remote.detail'),
+    readReports: invoke('remote.readReports'),
+    expect: invoke('remote.expect'),
     thisMachine: invoke('remote.thisMachine'),
     addresses: invoke('remote.addresses'),
     start: invoke('remote.start'),

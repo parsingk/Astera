@@ -22,7 +22,7 @@ import { isForwardedChatEvent } from '../core/slack/forwarded'
 import type { SlackOwnership } from './slackOwnership'
 import type { SlackConfigStore } from './slackConfigStore'
 import type { SlackConfig } from '../core/slack/config'
-import { codexRolloutFromNote, type CodexRolloutWatcher } from '../core/sessions/codexRolloutWatcher'
+import { codexRolloutFromNote, noteRolloutPath, type CodexRolloutWatcher } from '../core/sessions/codexRolloutWatcher'
 import type { DesktopNotifier } from './desktopNotifier'
 import type { SessionSignalForwarder } from './sessionSignals'
 import type { DesktopNotifySettings } from '../core/notify/settings'
@@ -70,8 +70,10 @@ import { createExtensionsRoute } from './host/extensionsRoute'
 import { createAgentProfilesRoute } from './host/agentProfilesRoute'
 import { forgetReadiness } from '../core/sandbox/windowsReadiness'
 import { forcedSandboxBlocker } from '../core/sandbox/unavailable'
+import { claudeUsernsCheck, sandboxWarningMessage } from '../core/sandbox/startWarnings'
 import { createAuditRoute } from './host/auditRoute'
 import { createCredentialsRoute } from './host/credentialsRoute'
+import { createFindingsRoute } from './host/findingsRoute'
 import { createAppPullRequests } from './host/appPullRequests'
 import { createSourcesRoute } from './host/sourcesRoute'
 import { createHostGitHubRoute } from './host/hostGitHubRoute'
@@ -171,6 +173,7 @@ import { chatSessionUsage } from '../core/usage/chatSession'
 import { isPermissionMode, isUnattendedPermission } from '../core/chat/types'
 import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from '../core/orchestration/exec/repair'
 import { snapshotFor, jobsForProject, outcomeOf } from '../core/orchestration/view'
+import { archivedProfilesOfJob } from '../core/orchestration/archivedProfiles'
 import { createOrchPush } from './orchPush'
 import { ensureProject } from '../core/orchestration/projects'
 import { resolveRunId } from '../core/orchestration/state'
@@ -228,6 +231,7 @@ import type { GuestDriver } from './agentBrowser/helpers'
 import { AgentBrowserRuns, devServersFor } from './agentBrowser/runs'
 import { previewShotsDir } from './preview/shots'
 import { PREVIEW_PARTITION } from '../core/preview/guards'
+import { guardPartition } from './preview/guest'
 import { buildResumeNote, buildResumePacket, buildTabResumeText } from '../core/orchestration/exec/resumePacket'
 import { extractStatusLineModel, extractStatusLineSession } from '../core/usage/statusline'
 import { listSlashCommands, listCodexMentions } from './slashCommands'
@@ -262,6 +266,7 @@ import { gateFolders, unreachableInLang, withUnreachableInLang } from './fileOpG
 import { readConfiguredModel } from './models/configuredModel'
 import { lastClaudeModelOf } from '../core/history/conversation'
 import { createPresenceRepush } from './worktreePresenceRepush'
+import { createArchivedProfilesCache } from './archivedProfilesCache'
 import {
   git,
   repoRoot,
@@ -1501,9 +1506,23 @@ export function registerIpc(
   })
   // 주기적으로 알려진 경로 전부와 레지스트리의 워크트리를 다시 묻는다. 타이머는 프로세스를 붙잡지 않는다.
   worktreePresence.start(PRESENCE_SWEEP_MS, () => core.worktrees.list().map((w) => w.path))
+  // Lifecycle design §5: the archived agent profiles a schedule waits on, for its card's waiting line. The fold below
+  // cannot await the store, so it reads what this last read (main/archivedProfilesCache.ts), which reads again lazily,
+  // with no timer of its own. A read that changes the archived set folds the current state again; the push drops it
+  // when nothing on screen changed (sameSnapshot).
+  const archivedProfiles = createArchivedProfilesCache({
+    read: async () => (await readAgentProfiles(app.getPath('userData'))).profiles,
+    nowMs: () => Date.now(),
+    onChange: () => {
+      const current = orch ? orch.deps.getState() : orchPushes.lastPushed()
+      if (current !== null) pushOrchState(current)
+    },
+    log: orchLog
+  })
   const orchSnapshotOf = (state: OrchState, projectPath: string): OrchSnapshot => {
     // The set is built once per fold rather than per Task — sessions.list() copies every SessionInfo.
     const known = new Set(core.sessions.list().map((s) => s.id))
+    const profiles = archivedProfiles.profiles()
     // The registry lives here, and runsForProject maps each Run.cwd through it — a Run created inside
     // a registered worktree is owned by the worktree's repository, which is the same mapping this
     // handler applies to the path the renderer sent (repoPathOf, in orch.list below).
@@ -1517,7 +1536,9 @@ export function registerIpc(
       // 폴더가 아직 있는가 — 캐시만 읽는다(worktreePresence). 이 폴드는 모든 setState 뒤에 메인
       // 스레드에서 돌므로 fs 를 동기로 만지지 않는다. 확인된 missing 만 뺀다: unknown(아직 묻는 중)과
       // unreachable(닿지 못했다)은 사라졌다는 증거가 아니다.
-      (p) => worktreePresence.peek(p) !== 'missing'
+      (p) => worktreePresence.peek(p) !== 'missing',
+      Date.now(),
+      (jobId) => archivedProfilesOfJob(state, jobId, profiles).map((p) => p.name)
     )
   }
   // The push is a notification hung off the awaited setState (below). It folds later in the tick, so a fold that
@@ -1555,6 +1576,25 @@ export function registerIpc(
       send('orch:host', next)
     } catch (err) {
       orchLog(`orch:host push failed: ${String(err)}`)
+    }
+  }
+
+  // Task E fix rounds 2 and 3 (the person's decision): a sandboxed start that will not be as safe, or will not work, as
+  // the person may expect starts as it does today, and says why. The managers decide (core/sandbox/startWarnings.ts) and
+  // put the warnings on the session's info and note, which the tab shows as a line above the terminal or the chat (a line
+  // in a terminal's output would sit behind the CLI's alternate screen); a chat also gets its notice at the start, which
+  // its pane words; the same fact goes to the Host log. The Ubuntu check is asked once for this app process
+  const claudeUsernsRestricted = claudeUsernsCheck(process.platform)
+  core.sessions.sandboxWarn = {
+    claudeUsernsRestricted,
+    warn: (id, ws) => hostWiring?.log(`sandbox: session=${id} starts with a warning: ${ws.join(', ')}`)
+  }
+  core.chat.sandboxWarn = {
+    claudeUsernsRestricted,
+    warn: (id, ws) => {
+      const m = sandboxWarningMessage(ws)
+      if (m) core.chat.notice(id, { key: 'rollRefused', reason: m })
+      hostWiring?.log(`sandbox: chat session=${id} starts with a warning: ${ws.join(', ')}`)
     }
   }
 
@@ -2101,11 +2141,15 @@ export function registerIpc(
     // worker or coordinator, asks for it apart (`forceSandbox`, C3), and where the CLI has no sandbox it is refused
     // rather than started without one; the renderer's handler clears that one.
     const forceSandbox = opts.forceSandbox === true
+    // A reviewer of work a profile's switch sandboxed allows the deny rules only where the CLI has no sandbox (Task K fix
+    // rounds 1 and 2): it then starts as a sandboxed profile's session does there, rather than being refused. A reviewer
+    // of a sandboxed session's work never asks (review.ts), so C3's refusal holds for it
+    const forceSandboxDenyOnly = opts.forceSandboxDenyOnly === true
     {
-      const { sandbox: _callerSandbox, forceSandbox: _forced, ...withoutSandbox } = opts
+      const { sandbox: _callerSandbox, forceSandbox: _forced, forceSandboxDenyOnly: _denyOnly, ...withoutSandbox } = opts
       opts = withoutSandbox
     }
-    if (forceSandbox) {
+    if (forceSandbox && !forceSandboxDenyOnly) {
       const refused = forcedSandboxBlocker(providerOf(account), process.platform)
       if (refused) throw refused
     }
@@ -2405,7 +2449,7 @@ export function registerIpc(
     return info
   }
   // The renderer's options never force the sandbox: only the app's own start of a sandboxed session's work does
-  ipcMain.handle('sessions.spawn', async (_e, opts) => spawnSession({ ...opts, forceSandbox: undefined }))
+  ipcMain.handle('sessions.spawn', async (_e, opts) => spawnSession({ ...opts, forceSandbox: undefined, forceSandboxDenyOnly: undefined }))
 
   // ---- agent browser (spec: docs/superpowers/specs/2026-09-06-agent-browser-design.md) ----
   // It sits here, above the orchestration startup, because `agentRuns` is read from the server deps
@@ -2414,6 +2458,15 @@ export function registerIpc(
   // Installed once, for every agent tab: Electron's webRequest keeps one listener per event, so a
   // per-tab registration would let the newest tab steal every other tab's network events.
   installNetworkCapture(session.fromPartition(PREVIEW_PARTITION).webRequest, (id) => agentBuffers.byWebContents(id))
+  // A sandboxed session's partition (core/preview/guards.ts) is a session of its own that exists once something asks
+  // for it, so it gets the same two hooks the person's preview partition got above, before its tab is requested.
+  const preparedPartitions = new Set<string>([PREVIEW_PARTITION])
+  const preparePartition = (partition: string): void => {
+    if (preparedPartitions.has(partition)) return
+    preparedPartitions.add(partition)
+    guardPartition(partition)
+    installNetworkCapture(session.fromPartition(partition).webRequest, (id) => agentBuffers.byWebContents(id))
+  }
   ipcMain.handle('preview.registerAgentGuest', (_e, sessionId: unknown, webContentsId: unknown) => {
     if (typeof sessionId !== 'string' || typeof webContentsId !== 'number') return
     const info = core.sessions.list().find((s) => s.id === sessionId)
@@ -2481,7 +2534,10 @@ export function registerIpc(
     registry: agentGuests as unknown as AgentGuestRegistry<GuestDriver & GuestLike>,
     buffersOf: (sid) => agentBuffers.bySession(sid),
     cwdOf: (sid) => core.sessions.list().find((s) => s.id === sid)?.cwd ?? null,
-    requestTab: (sessionId, cwd, url) => send('preview:agentTab', { sessionId, cwd, url }),
+    requestTab: (sessionId, cwd, url, partition) => {
+      preparePartition(partition)
+      send('preview:agentTab', { sessionId, cwd, url, partition })
+    },
     closeTab: (sessionId) => {
       // The registration goes as the event goes out, not when the renderer answers. The renderer only
       // calls preview.unregisterAgentGuest once its pane has unmounted, and until then the registry
@@ -3059,6 +3115,7 @@ export function registerIpc(
           startedBy: 'agent',
           // A worker of a sandboxed session's work starts in the sandbox whatever its profile says (final fix pass, C3)
           ...(o.sandbox ? { forceSandbox: true } : {}),
+          ...(o.sandboxDenyOnly ? { forceSandboxDenyOnly: true } : {}),
           ...({
             accountId: o.accountId,
             cwd: o.cwd,
@@ -3178,7 +3235,19 @@ export function registerIpc(
       pluginCheck: (plugin, input) =>
         deps.completionChecks?.run(plugin, input) ?? Promise.resolve({ name: plugin, ...unavailable('plugin checks cannot run here') }),
       // GitHub CI is the Host's (GitHub lifecycle §4): a round this app runs hands it over through the socket
-      lifecycleCiBegin: (args) => orchCall({ cmd: 'lifecycle-ci-begin', args, sessionId: '' })
+      lifecycleCiBegin: (args) => orchCall({ cmd: 'lifecycle-ci-begin', args, sessionId: '' }),
+      // Task K: every check starts from the app's environment without what the Credentials list hides there (Q5), and a
+      // sandboxed Task's inside its workers' sandbox, as the app's session manager builds it for the attempt's account
+      platform: process.platform,
+      checkEnv: (cwd) => core.sessions.checkEnv(process.env, cwd),
+      sandboxedCheck: async (a) => {
+        const account = core.accounts.list().find((x) => x.id === a.accountId)
+        if (!account) throw new Error(`account ${a.accountId} is no longer registered, so the check cannot run in the sandbox its worker ran in`)
+        const l = await core.sessions.checkLaunch({ account, cwd: a.cwd, command: a.command })
+        return { launch: { file: l.file, args: l.args }, env: l.env, ...(l.runner ? { runner: true as const } : {}) }
+      },
+      // A check's words name the account by its name (Task K fix round 2)
+      accountName: (id) => core.accounts.list().find((x) => x.id === id)?.label ?? null
     })
     orchValidator = validation.validator
 
@@ -3461,7 +3530,7 @@ export function registerIpc(
       // Same reasoning again, for browser-js — and `agentRuns` is built above this function so the
       // deps can name it here.
       browserEnabled: () => core.appSettings.getAgentBrowserEnabled(),
-      browserRun: (sessionId, script) => agentRuns.run(sessionId, script),
+      browserRun: (sessionId, script, sandboxed) => agentRuns.run(sessionId, script, sandboxed),
       // Same reasoning again, for `handoff` — read on every request so switching Smart Resume off
       // rejects the command from then on.
       handoffEnabled: () => core.appSettings.getResumeStrategy() === 'smart',
@@ -3507,6 +3576,12 @@ export function registerIpc(
           } catch {
             return null
           }
+        },
+        // The rollout the worker's pty note names (the Host's spawner or this app's watcher wrote it), from the Host's
+        // list, which keeps an ended session's note. No Host, or no answer: null, and the folder-and-time search runs.
+        rolloutPathOf: async (sessionId) => {
+          const entries = await hostPtyList?.()
+          return entries ? noteRolloutPath(entries, sessionId) : null
         },
         log: orchLog
       }),
@@ -4612,6 +4687,8 @@ export function registerIpc(
       const { state } = ensureProject(before, { path: project, now: new Date().toISOString() })
       if (state !== before) await orch.deps.setState(state)
     }
+    // The archived profiles as they are now, so a project opened after an archive made elsewhere shows it at once
+    await archivedProfiles.refresh()
     const snapshot: OrchSnapshot = orch
       ? orchSnapshotOf(orch.deps.getState(), project)
       : { runs: [], projectFolderBusy: false }
@@ -4800,17 +4877,21 @@ export function registerIpc(
   ipcMain.handle('extensions.replace', (_e, accountId: unknown, id: unknown) => extensions.replace(accountId as string, id as string))
   // Settings › Agent profiles (Agent Profiles design §8): the Host checks every argument; this only passes them on
   // A setup gives the machine's sandbox users new passwords, so this process's own readiness answers go after one too
-  const agentProfiles = createAgentProfilesRoute({ call: (m) => orchCall(m), afterSetup: () => forgetReadiness() })
+  // A change also reads the archived profiles again, for the Jobs view's waiting line (lifecycle design §5)
+  const agentProfiles = createAgentProfilesRoute({ call: (m) => orchCall(m), afterSetup: () => forgetReadiness(), afterChange: () => void archivedProfiles.refresh() })
   ipcMain.handle('agentProfiles.list', () => agentProfiles.list())
   ipcMain.handle('agentProfiles.create', (_e, fields: unknown) => agentProfiles.create(fields as Parameters<typeof agentProfiles.create>[0]))
   ipcMain.handle('agentProfiles.update', (_e, id: unknown, changes: unknown) =>
     agentProfiles.update(id as string, changes as Parameters<typeof agentProfiles.update>[1])
   )
-  ipcMain.handle('agentProfiles.archive', (_e, id: unknown) => agentProfiles.archive(id as string))
+  ipcMain.handle('agentProfiles.archive', (_e, id: unknown, reason: unknown) => agentProfiles.archive(id as string, reason as string | undefined))
   ipcMain.handle('agentProfiles.restore', (_e, id: unknown) => agentProfiles.restore(id as string))
   ipcMain.handle('agentProfiles.remove', (_e, id: unknown) => agentProfiles.remove(id as string))
   ipcMain.handle('agentProfiles.sandboxSetup', (_e, profileId: unknown, accountId: unknown) => agentProfiles.sandboxSetup(profileId as string, accountId as string))
   ipcMain.handle('agentProfiles.sandboxReadiness', (_e, profileId: unknown) => agentProfiles.sandboxReadiness(profileId as string))
+  ipcMain.handle('agentProfiles.sandboxDefaultRemove', (_e, profileId: unknown, accountId: unknown) =>
+    agentProfiles.sandboxDefaultRemove(profileId as string, accountId as string)
+  )
   // Settings › Security & Access and Run detail's token totals (observe mode design §11): the Host checks every
   // argument; this only passes them on
   const audit = createAuditRoute({ call: (m) => orchCall(m) })
@@ -4836,6 +4917,12 @@ export function registerIpc(
   ipcMain.handle('credentials.deleteHideOnly', (_e, id: unknown) => credentials.deleteHideOnly(id as string))
   ipcMain.handle('credentials.setHiding', (_e, id: unknown, hide: unknown) => credentials.setHiding(id as string, hide as Parameters<Cred['setHiding']>[1]))
   ipcMain.handle('credentials.reset', () => credentials.reset())
+  // Settings › Security & Access › Findings and the Agent profiles mark (lifecycle design §7): the Host's findings, as
+  // the app
+  const findings = createFindingsRoute({ call: (m) => orchCall(m) })
+  ipcMain.handle('findings.list', (_e, all: unknown) => findings.list(all === true))
+  ipcMain.handle('findings.ignore', (_e, key: unknown, note: unknown) => findings.ignore(key as string, typeof note === 'string' ? note : undefined))
+  ipcMain.handle('findings.unignore', (_e, key: unknown) => findings.unignore(key as string))
   ipcMain.handle('plugins.list', () => plugins.list())
   ipcMain.handle('plugins.inspect', (_e, source: unknown) => plugins.inspect(source as Parameters<typeof plugins.inspect>[0]))
   ipcMain.handle('plugins.install', (_e, a: unknown) => plugins.install(a as Parameters<typeof plugins.install>[0]))
@@ -4873,6 +4960,18 @@ export function registerIpc(
     if (typeof runtimeId !== 'string') return null
     const c = await remoteRuntimes.client(runtimeId)
     return 'code' in c ? null : c.projects()
+  })
+  // A Runtime's report and the expected list (remote governance design §5.4, §6.1, §10.1): read when Settings asks, at
+  // most every five minutes per Runtime unless refreshed. Never on a timer.
+  ipcMain.handle('remote.detail', (_e, runtimeId: unknown, refresh?: unknown) =>
+    typeof runtimeId === 'string' ? remoteRuntimes.detail(runtimeId, { refresh: refresh === true }) : { code: 'RUNTIME_NOT_FOUND', message: 'a runtime id is a string' }
+  )
+  ipcMain.handle('remote.readReports', () => remoteRuntimes.readReports())
+  ipcMain.handle('remote.expect', (_e, runtimeId: unknown, add: unknown, remove: unknown) => {
+    if (typeof runtimeId !== 'string') return { ok: false, code: 'RUNTIME_NOT_FOUND', message: 'a runtime id is a string' }
+    const ids = (v: unknown): v is string[] => Array.isArray(v) && v.every((id) => typeof id === 'string')
+    if (!ids(add) || !ids(remove)) return { ok: false, code: 'INVALID_ARGUMENTS', message: 'add and remove are lists of extension ids' }
+    return remoteRuntimes.expect(runtimeId, add, remove)
   })
   // This computer as a Runtime, switched from Settings (thisMachineControl.ts): the CLI's own runtime commands, on this
   // profile's settings and identity and its Host. A person's clicks: never an agent session.

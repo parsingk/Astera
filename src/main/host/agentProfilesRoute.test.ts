@@ -39,8 +39,45 @@ describe('the agent profiles route (Agent Profiles design §8)', () => {
     ])
   })
 
+  // Lifecycle design §5: Archive's reason, when the person wrote one
+  it('sends the archive reason when there is one', async () => {
+    const { route, sent } = host()
+    await route.archive('ap_1', 'replaced by p2')
+    await route.archive('ap_1')
+    expect(sent.map(({ cmd, args }) => ({ cmd, args }))).toEqual([
+      { cmd: 'agent-profiles-archive', args: { id: 'ap_1', reason: 'replaced by p2' } },
+      { cmd: 'agent-profiles-archive', args: { id: 'ap_1' } }
+    ])
+  })
+
+  // Lifecycle design §5: the Jobs view reads the archived profiles again after each change the app makes, whatever the
+  // Host answered; a read or a sandbox call is no change
+  it('calls afterChange once each change has answered, and only then', async () => {
+    const changed: string[] = []
+    let last = ''
+    const route = createAgentProfilesRoute({
+      call: async (m) => ((last = m.cmd), { status: m.cmd === 'agent-profiles-delete' ? 409 : 200, body: {} }),
+      afterChange: () => changed.push(last)
+    })
+    await route.list()
+    await route.create({ name: 'R', accountIds: ['a'] })
+    await route.update('ap_1', { name: 'S' })
+    await route.archive('ap_1', 'old')
+    await route.restore('ap_1')
+    await route.remove('ap_1')
+    await route.sandboxReadiness('ap_1')
+    expect(changed).toEqual(['agent-profiles-create', 'agent-profiles-update', 'agent-profiles-archive', 'agent-profiles-restore', 'agent-profiles-delete'])
+  })
+
   it('offers exactly the commands the tab, the pickers and the start toast use', () => {
-    expect(Object.keys(host().route).sort()).toEqual(['archive', 'create', 'list', 'remove', 'restore', 'sandboxReadiness', 'sandboxSetup', 'update'])
+    expect(Object.keys(host().route).sort()).toEqual(['archive', 'create', 'list', 'remove', 'restore', 'sandboxDefaultRemove', 'sandboxReadiness', 'sandboxSetup', 'update'])
+  })
+
+  // Task P: Remove under a Codex account whose config.toml makes the elevated sandbox its default, sent as the app
+  it('asks the Host to take an account’s elevated default out, on the person’s press', async () => {
+    const { route, sent } = host(async () => ({ status: 200, body: { outcome: 'removed', file: 'C:/h/config.toml' } }))
+    expect(await route.sandboxDefaultRemove('ap_1', 'acc_x')).toEqual({ ok: true, body: { outcome: 'removed', file: 'C:/h/config.toml' } })
+    expect(sent.map(({ cmd, args, sessionId }) => ({ cmd, args, sessionId }))).toEqual([{ cmd: 'agent-profiles-sandbox-default-remove', args: { id: 'ap_1', accountId: 'acc_x' }, sessionId: '' }])
   })
 
   // Task 8: each Codex account's readiness under a sandboxed profile, asked of the Host, which runs Codex's doctor for

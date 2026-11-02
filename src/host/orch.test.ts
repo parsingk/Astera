@@ -14,6 +14,8 @@ import {
   RECEIPT_TTL_MS
 } from './orch'
 import { PENDING_START_WINDOW_MS } from '../core/orchestration/command'
+import { HOST_CALLER } from '../core/host/driver'
+import { UNSAID_CLI_NOTE } from '../core/host/controllerGate'
 import {
   applyWorkerDone,
   attachCoordinator,
@@ -1244,6 +1246,110 @@ describe('credentials', () => {
   })
 })
 
+// The Runtime report (remote governance design §5.1): this machine's app and CLI, as the other Control Plane reads, and a
+// person on a paired computer. An agent there is refused as MCP is refused the Control Plane here.
+describe('control-plane-report', () => {
+  const cli = { role: 'cli' as const, toOthers: () => {} }
+  const REPORT = { version: 1, marker: 'the report' }
+  const reporting = () => {
+    let asked = 0
+    return { asked: () => asked, controlPlaneReport: async () => (asked++, REPORT as never) }
+  }
+  const controller = (kind?: 'person' | 'agent' | 'unsaid', surface?: 'desktop' | 'cli' | 'mcp'): OrchCaller => ({
+    role: 'controller',
+    principal: { clientId: 'cli_x', name: 'laptop', permission: 'read-only', ...(kind ? { kind } : {}), ...(surface ? { surface } : {}) },
+    toOthers: () => {}
+  })
+  const ask = (orch: ReturnType<typeof orchOver>, from: OrchCaller, sessionId = '', request?: string) =>
+    orch.call({ cmd: 'control-plane-report', args: {}, sessionId, from, ...(request !== undefined ? { request } : {}) })
+
+  it('the app, the CLI and an agent\'s shell get the report', async () => {
+    const f = reporting()
+    const orch = orchOver({ controlPlaneReport: f.controlPlaneReport })
+    for (const [from, sessionId] of [[{ role: 'app', toOthers: () => {} }, ''], [cli, ''], [cli, 'sess_agent']] as Array<[OrchCaller, string]>)
+      expect(await ask(orch, from, sessionId), `${from.role} ${sessionId}`).toEqual({ status: 200, body: REPORT })
+    expect(f.asked()).toBe(3)
+  })
+
+  it('a person controller gets it', async () => {
+    const orch = orchOver({ controlPlaneReport: reporting().controlPlaneReport })
+    expect(await ask(orch, controller('person', 'desktop'))).toEqual({ status: 200, body: REPORT })
+    expect(await ask(orch, controller('person', 'cli'))).toEqual({ status: 200, body: REPORT })
+  })
+
+  it('an agent controller and an unsaid one are refused, unsaid with the update note', async () => {
+    const f = reporting()
+    const orch = orchOver({ controlPlaneReport: f.controlPlaneReport })
+    const SENTENCE = "control-plane-report answers a person on another computer: the Astera app or a person's own shell, not an MCP client or an agent session"
+    for (const from of [controller('agent', 'mcp'), controller('agent', 'cli')])
+      expect(await ask(orch, from)).toEqual({ status: 403, body: { error: SENTENCE, code: 'RUNTIME_PERMISSION_DENIED' } })
+    expect(await ask(orch, controller('unsaid', 'cli'))).toEqual({ status: 403, body: { error: `${SENTENCE}.${UNSAID_CLI_NOTE}`, code: 'RUNTIME_PERMISSION_DENIED' } })
+    // A client that named no surface is no Astera CLI: refused with the sentence alone (Task 5 review)
+    expect(await ask(orch, controller())).toEqual({ status: 403, body: { error: SENTENCE, code: 'RUNTIME_PERMISSION_DENIED' } })
+    expect(f.asked()).toBe(0)
+  })
+
+  it('MCP and a plugin are refused', async () => {
+    const f = reporting()
+    const orch = orchOver({ controlPlaneReport: f.controlPlaneReport })
+    await fs.writeFile(path.join(dir, 'app-settings.json'), JSON.stringify({ mcpAccess: 'control' }))
+    expect((await ask(orch, { role: 'mcp', toOthers: () => {} })).status).toBe(403)
+    expect((await ask(orch, { role: 'plugin', plugin: { id: 'astera-hello', granted: new Set(['jobs.read', 'jobs.create']) }, toOthers: () => {} })).status).toBe(403)
+    expect(f.asked()).toBe(0)
+  })
+
+  it('a request id on it is refused 400', async () => {
+    const f = reporting()
+    const orch = orchOver({ controlPlaneReport: f.controlPlaneReport })
+    expect(await ask(orch, cli, '', 'r-1')).toEqual({ status: 400, body: { error: 'control-plane-report does not take a request id' } })
+    expect(f.asked()).toBe(0)
+  })
+
+  it('a Host with no report answers 501', async () => {
+    expect((await ask(orchOver(), cli)).status).toBe(501)
+  })
+})
+
+// A sandboxed session only reads a Runtime (remote governance design §7.4): its CLI and MCP server ask this Host whether
+// the session they run in is sandboxed before they send a change to a paired Runtime.
+describe('caller-sandboxed', () => {
+  const cli = { role: 'cli' as const, toOthers: () => {} }
+  const ask = (orch: ReturnType<typeof orchOver>, from: OrchCaller, sessionId = '') => orch.call({ cmd: 'caller-sandboxed', args: {}, sessionId, from })
+
+  const HELD = new Set(['ses_box', 'ses_open'])
+  it('caller-sandboxed answers true for a session the Host holds as sandboxed, false for another, false with no session', async () => {
+    const orch = orchOver({ sessionSandboxed: (id) => id === 'ses_box', sessionHeld: (id) => HELD.has(id) })
+    expect(await ask(orch, cli, 'ses_box')).toEqual({ status: 200, body: { sandboxed: true } })
+    expect(await ask(orch, cli, 'ses_open')).toEqual({ status: 200, body: { sandboxed: false } })
+    expect(await ask(orch, cli)).toEqual({ status: 200, body: { sandboxed: false } })
+  })
+
+  // Ruling R13-1 (§7.4: unknown counts as sandboxed): a stale ASTERA_SESSION, or one of another Host's sessions. A token
+  // names a held session or is refused 401 before this (host/server.ts), so the name is what is left to check.
+  it('a session id the Host does not hold answers true, and so does every id on a Host that cannot say what it holds', async () => {
+    expect(await ask(orchOver({ sessionSandboxed: () => false, sessionHeld: (id) => HELD.has(id) }), cli, 'ses_gone')).toEqual({ status: 200, body: { sandboxed: true } })
+    expect(await ask(orchOver({ sessionSandboxed: () => false }), cli, 'ses_open')).toEqual({ status: 200, body: { sandboxed: true } })
+    expect(await ask(orchOver({ sessionSandboxed: () => false }), cli)).toEqual({ status: 200, body: { sandboxed: false } })
+  })
+
+  it('MCP and a controller are refused it', async () => {
+    const orch = orchOver({ sessionSandboxed: () => true })
+    await fs.writeFile(path.join(dir, 'app-settings.json'), JSON.stringify({ mcpAccess: 'control' }))
+    expect((await ask(orch, { role: 'mcp', toOthers: () => {} }, 'ses_box')).status).toBe(403)
+    const controller: OrchCaller = { role: 'controller', principal: { clientId: 'cli_x', name: 'laptop', permission: 'full-control' }, toOthers: () => {} }
+    expect((await ask(orch, controller)).status).toBe(403)
+    expect((await ask(orch, { role: 'app', toOthers: () => {} })).status).toBe(403)
+  })
+
+  it('a request id on it is refused 400', async () => {
+    const orch = orchOver({ sessionSandboxed: () => true })
+    expect(await orch.call({ cmd: 'caller-sandboxed', args: {}, sessionId: 'ses_box', from: cli, request: 'r-1' })).toEqual({
+      status: 400,
+      body: { error: 'caller-sandboxed does not take a request id' }
+    })
+  })
+})
+
 // Observe mode's records (design §8, §12): routed like the policies, below every gate, and no gate lists them. An agent's
 // shell is told so even for these reads, and the audit commands refuse it.
 describe('audit', () => {
@@ -1276,6 +1382,69 @@ describe('audit', () => {
 
   it('answers 501 on a Host that keeps none', async () => {
     expect((await orchOver().call({ cmd: 'audit-list', args: {}, sessionId: '', from: cli })).status).toBe(501)
+  })
+})
+
+// The findings (lifecycle design §7, §8): routed like the credentials, below every gate, and no gate lists them. They
+// share the `agent-profiles-` start, and the agent profiles are never asked them.
+describe('findings', () => {
+  const cli = { role: 'cli' as const, toOthers: () => {} }
+  const answering = () => {
+    const seen: { cmd: string; role?: string; agentRefusal?: string }[] = []
+    const command = async (a: { cmd: string; role?: string; agentRefusal?: string }) => (seen.push(a), { status: 200, body: { ok: true } })
+    let forgot = 0
+    return { seen, forgot: () => forgot, findings: { command, forget: () => void (forgot += 1) } }
+  }
+
+  // Ruling R8-1: a mark or the section never shows a minute of what a change just changed
+  it('a call that changed something drops the findings report; a read and a refusal do not', async () => {
+    const f = answering()
+    const agentProfiles = {
+      command: async (a: { cmd: string; marks: { effects: number } }) => {
+        if (a.cmd === 'agent-profiles-archive') {
+          a.marks.effects += 1
+          return { status: 200, body: { ok: true } }
+        }
+        return a.cmd === 'agent-profiles-delete' ? { status: 409, body: { error: 'in use' } } : { status: 200, body: { profiles: [] } }
+      }
+    }
+    const orch = orchOver({ findings: f.findings, agentProfiles })
+    await orch.call({ cmd: 'agent-profiles-list', args: {}, sessionId: '', from: cli })
+    await orch.call({ cmd: 'agent-profiles-delete', args: { id: 'ap_1' }, sessionId: '', from: cli })
+    expect(f.forgot()).toBe(0)
+    await orch.call({ cmd: 'agent-profiles-archive', args: { id: 'ap_1' }, sessionId: '', from: cli })
+    expect(f.forgot()).toBe(1)
+  })
+
+  it('is refused to MCP, a controller and a plugin by their gates, before the findings are asked', async () => {
+    const f = answering()
+    const profiles = answering()
+    const orch = orchOver({ findings: f.findings, agentProfiles: profiles.findings })
+    expect((await orch.call({ cmd: 'agent-profiles-audit', args: {}, sessionId: '', from: { role: 'mcp', toOthers: () => {} } })).status).toBe(403)
+    const controller = { role: 'controller' as const, principal: { clientId: 'cli_x', name: 'x', permission: 'full-control' as const }, toOthers: () => {} }
+    expect((await orch.call({ cmd: 'agent-profiles-audit', args: {}, sessionId: '', from: controller })).status).toBe(403)
+    const plugin = { role: 'plugin' as const, plugin: { id: 'astera-hello', granted: new Set(['jobs.read', 'jobs.create']) }, toOthers: () => {} }
+    expect((await orch.call({ cmd: 'agent-profiles-audit-ignore', args: { key: 'k' }, sessionId: '', from: plugin })).status).toBe(403)
+    expect([...f.seen, ...profiles.seen]).toEqual([])
+  })
+
+  it('answers the app and the CLI, telling the findings who asks and when an agent session’s shell is the caller', async () => {
+    const f = answering()
+    const profiles = answering()
+    const orch = orchOver({ findings: f.findings, agentProfiles: profiles.findings })
+    expect((await orch.call({ cmd: 'agent-profiles-audit', args: {}, sessionId: '', from: cli })).status).toBe(200)
+    await orch.call({ cmd: 'agent-profiles-audit-ignore', args: { key: 'k' }, sessionId: 'sess_1', from: cli })
+    await orch.call({ cmd: 'agent-profiles-audit-unignore', args: { key: 'k' }, sessionId: '', from: { role: 'app', toOthers: () => {} } })
+    expect(f.seen.map((s) => [s.cmd, s.role, s.agentRefusal !== undefined])).toEqual([
+      ['agent-profiles-audit', 'cli', false],
+      ['agent-profiles-audit-ignore', 'cli', true],
+      ['agent-profiles-audit-unignore', 'app', false]
+    ])
+    expect(profiles.seen).toEqual([])
+  })
+
+  it('answers 501 on a Host that keeps none', async () => {
+    expect((await orchOver({ agentProfiles: answering().findings }).call({ cmd: 'agent-profiles-audit', args: {}, sessionId: '', from: cli })).status).toBe(501)
   })
 })
 
@@ -3428,6 +3597,20 @@ describe('Host-local spawn (S2)', () => {
       expect((await orchOver().call({ cmd: 'app-js', args: { script: 'log(1)' }, sessionId: 's1', from: cli })).status).toBe(501)
     })
 
+    // `app js` launches programs as the Host, outside any sandbox, so a sandboxed session cannot ask for it
+    it('refuses app-js to a sandboxed session with outside-sandbox, and runs it for one that is not', async () => {
+      const workspaces = fakeWorkspaces()
+      const orch = orchOver({ workspaces, sessionSandboxed: (id) => id === 'ses_box' })
+      const refused = await orch.call({ cmd: 'app-js', args: { script: 'await launch({ command: "calc" })' }, sessionId: 'ses_box', from: cli, request: 'req-box-1' })
+      expect(refused.status).toBe(403)
+      expect((refused.body as { error: string }).error).toMatch(/^SANDBOX_UNAVAILABLE: outside-sandbox command app-js\b/)
+      expect((refused.body as { error: string }).error).toContain('nothing was started')
+      expect(workspaces.run).not.toHaveBeenCalled()
+      // a refusal leaves no receipt: the same id from a session that is not sandboxed would run
+      expect((await orch.call({ cmd: 'app-js', args: { script: "log('x')" }, sessionId: 'ses_open', from: cli })).status).toBe(200)
+      expect(workspaces.run).toHaveBeenCalledWith('ses_open', "log('x')")
+    })
+
     it('a retried request id replays the recorded answer instead of running the script again (ruling P2)', async () => {
       const workspaces = fakeWorkspaces()
       const orch = orchOver({ workspaces })
@@ -5203,6 +5386,244 @@ describe('clients-revoke closes the client’s live connections (remote runtime 
     const r = await orch.call({ cmd: 'clients-revoke', args: { id: got.clientId }, sessionId: '', from: { role: 'cli', toOthers: () => {} } })
     expect(r.status).toBe(200)
     expect(closed).toEqual([{ linkGen: 3, conn: 'c7' }])
+  })
+})
+
+describe('clients-revoke pauses the scheduled Jobs the client made (remote governance design §8.2 to §8.4)', () => {
+  const cli = { role: 'cli' as const, toOthers: () => {} }
+  const DAILY = { kind: 'daily' as const, time: '09:00' }
+  const releaseWorker = vi.fn(async () => {})
+  /** Two paired clients, laptop and desk, and four Jobs: a scheduled one each of them made, a scheduled one with no
+   *  maker (made before this release), and one laptop made with no schedule. Laptop's two each hold an open worker. */
+  const fixture = async (o: { retained?: boolean; minesSession?: string; now?: () => string; setTimer?: (run: () => void, ms: number) => () => void; saveFails?: boolean } = {}) => {
+    releaseWorker.mockClear()
+    let failing = false
+    const controllers = o.saveFails
+      ? createControllerRegistry({ records: { load: async () => [], save: async () => { if (failing) throw new Error('disk full') } } })
+      : createControllerRegistry()
+    const redeem = async (name: string): Promise<string> => {
+      const got = await controllers.redeem(controllers.createPairing({ permission: 'full-control', name }).code, 'x')
+      if (!got.ok) throw new Error('redeem')
+      return got.clientId
+    }
+    const laptop = await redeem('laptop')
+    const desk = await redeem('desk')
+    failing = o.saveFails === true
+    let s: OrchState = emptyState()
+    const job = (a: { schedule?: typeof DAILY; createdBy?: { kind: 'controller'; clientId: string; name: string } }): string => {
+      const r = createJob(s, { objective: 'o', cwd: 'D:/p', ...a }, NOW)
+      if (!r.ok) throw new Error(r.error)
+      s = r.state
+      return r.value.id
+    }
+    /** A Run of the Job with one Task on an open worker, alive in this Host */
+    const working = (jobId: string, sessionId: string, retained = false): string => {
+      const run = startJobRun(s, jobId, NOW)
+      if (!run.ok) throw new Error(run.error)
+      const task = createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW)
+      if (!task.ok) throw new Error(task.error)
+      const d = openDispatch(task.state, { taskId: task.value.id, provider: 'claude', accountId: 'acc', sessionId, cwd: 'D:/p', specPath: 'D:/p/s.md' }, NOW)
+      if (!d.ok) throw new Error(d.error)
+      s = { ...d.state, dispatches: d.state.dispatches.map((x) => (x.id === d.value.id ? { ...x, retained } : x)) }
+      return d.value.id
+    }
+    const mine = job({ schedule: DAILY, createdBy: { kind: 'controller', clientId: laptop, name: 'laptop' } })
+    const minesWorker = working(mine, 'ses_mine', o.retained === true)
+    const theirs = job({ schedule: DAILY, createdBy: { kind: 'controller', clientId: desk, name: 'desk' } })
+    const makerless = job({ schedule: DAILY })
+    const unscheduled = job({ createdBy: { kind: 'controller', clientId: laptop, name: 'laptop' } })
+    const unscheduledWorker = working(unscheduled, 'ses_plain')
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(s), 'utf8')
+    const orch = orchOver({
+      controllers,
+      hasApp: () => false,
+      act: vi.fn(),
+      ...(o.now ? { now: o.now } : {}),
+      ...(o.setTimer ? { setTimer: o.setTimer } : {}),
+      aliveSessionIds: () => new Set(['ses_mine', 'ses_plain']),
+      local: {
+        owns: () => true,
+        startWorker: vi.fn(),
+        startCoordinator: vi.fn(),
+        releaseWorker,
+        readWorker: vi.fn(),
+        probeLimit: vi.fn(async () => null),
+        readReviewFile: vi.fn(async () => null),
+        makeRunWorktree: vi.fn(),
+        mergeWorktrees: vi.fn(),
+        removeWorktrees: vi.fn()
+      } as unknown as HostLocal
+    })
+    // A worker-start in flight in this Host: put after the load, whose restart cleanup closes a placeholder it finds
+    if (o.minesSession !== undefined) {
+      await orch.ready()
+      const deps = orch.internalDeps()
+      const st = deps.getState()
+      await deps.setState({ ...st, dispatches: st.dispatches.map((d) => (d.id === minesWorker ? { ...d, sessionId: o.minesSession! } : d)) })
+    }
+    const revoke = () => orch.call({ cmd: 'clients-revoke', args: { id: laptop }, sessionId: '', from: cli })
+    const jobOf = (id: string) => orch.state().jobs.find((j) => j.id === id)!
+    return { orch, laptop, revoke, jobOf, mine, minesWorker, theirs, makerless, unscheduled, unscheduledWorker }
+  }
+
+  it('revoking a controller pauses the scheduled Jobs it made and only those', async () => {
+    const f = await fixture()
+    const r = await f.revoke()
+    expect(r).toEqual({ status: 200, body: { revoked: true, clientId: f.laptop, name: 'laptop', pausedJobs: 1, notPaused: [], unrecordedScheduled: 1 } })
+    expect(f.jobOf(f.mine)).toMatchObject({ paused: true, pausedBy: { reason: 'controller-revoked', clientId: f.laptop, name: 'laptop', at: NOW } })
+    for (const id of [f.theirs, f.makerless, f.unscheduled]) {
+      expect(f.jobOf(id).paused, id).toBeUndefined()
+      expect(f.jobOf(id).pausedBy, id).toBeUndefined()
+    }
+  })
+
+  // Ruling R18-1: a scheduled Job the person made here in this release has a maker on record, so the revoke neither
+  // counts it as unrecorded nor pauses it; the makerless one (as loaded from an older file) is still counted
+  it("a scheduled Job made here is not counted as unrecorded, and a revoke never pauses it, and the state carries no createdBy to a controller", async () => {
+    const f = await fixture()
+    const made = await f.orch.call({ cmd: 'jobs-create', args: { objective: 'mine here', cwd: dir, schedule: DAILY }, sessionId: '', from: cli })
+    expect(made.status, JSON.stringify(made.body)).toBe(200)
+    const here = f.orch.state().jobs.find((j) => j.objective === 'mine here')!
+    expect(here.createdBy).toEqual({ here: true })
+    expect(f.jobOf(f.makerless).createdBy).toBeUndefined()
+    const r = await f.revoke()
+    expect(r.body).toMatchObject({ pausedJobs: 1, unrecordedScheduled: 1 })
+    expect(f.jobOf(here.id).paused).toBeUndefined()
+    expect(f.jobOf(here.id).pausedBy).toBeUndefined()
+    const reader = { role: 'controller' as const, principal: { clientId: 'cli_x', name: 'x', permission: 'read-only' as const }, toOthers: () => {} }
+    const st = await f.orch.call({ cmd: 'state-get', args: {}, sessionId: '', from: reader })
+    expect(st.status).toBe(200)
+    for (const j of (st.body as { state: { jobs: object[] } }).state.jobs) expect(j).not.toHaveProperty('createdBy')
+  })
+
+  // Ruling R8-3: a failure answer reaches the CLI and Settings as its error alone, so the error says what the pauses did
+  it('a revoke whose clients.json cannot be written says in its error what it paused and what it could not', async () => {
+    const f = await fixture({ saveFails: true, retained: true })
+    const r = await f.revoke()
+    expect(r.status).toBe(500)
+    const body = r.body as { error: string; name: string; notPaused: Array<{ jobId: string }> }
+    expect(body.name).toBe('laptop')
+    expect(body.error).toBe(
+      'revoked until this Host stops, but clients.json could not be written: disk full. Unpaired laptop. Scheduled Jobs it made, now paused: 0. ' +
+        `Scheduled Jobs with no maker on record, which keep their schedule: 1. Could not pause: ${f.mine}.`
+    )
+    expect(body.error).not.toMatch(/[\r\n]/)
+  })
+
+  it('its open workers end as run-pause ends them', async () => {
+    const f = await fixture()
+    await f.revoke()
+    expect(releaseWorker).toHaveBeenCalledWith({ dispatchId: f.minesWorker })
+    expect(f.orch.state().dispatches.find((d) => d.id === f.minesWorker)).toMatchObject({ workerState: 'stopped', closedBy: 'pause' })
+  })
+
+  // §8.3: a revoke stops what would start again on its own, not work already under way
+  it('a Job it made with no schedule keeps running', async () => {
+    const f = await fixture()
+    await f.revoke()
+    expect(releaseWorker).not.toHaveBeenCalledWith({ dispatchId: f.unscheduledWorker })
+    const d = f.orch.state().dispatches.find((x) => x.id === f.unscheduledWorker)!
+    expect(d.endedAt).toBeUndefined()
+    expect(d.closedBy).toBeUndefined()
+  })
+
+  it('a retained worker refuses that Job’s pause, the revoke still succeeds and names it in notPaused', async () => {
+    const f = await fixture({ retained: true })
+    const r = await f.revoke()
+    expect(r.status).toBe(200)
+    const body = r.body as { revoked: boolean; pausedJobs: number; notPaused: Array<{ jobId: string; error: string }> }
+    expect(body).toMatchObject({ revoked: true, pausedJobs: 0, unrecordedScheduled: 1 })
+    expect(body.notPaused).toEqual([{ jobId: f.mine, error: expect.stringContaining('worker-retain') }])
+    // No half state: the Job and its worker are as they were, and the Host log names it
+    expect(f.jobOf(f.mine).paused).toBeUndefined()
+    expect(f.jobOf(f.mine).pausedBy).toBeUndefined()
+    expect(releaseWorker).not.toHaveBeenCalled()
+    expect(logs).toContain(`remote: revoked ${f.laptop}; job ${f.mine} could not be paused: ${body.notPaused[0].error}`)
+    // The client is gone all the same
+    expect((await f.orch.call({ cmd: 'clients-list', args: {}, sessionId: '', from: cli })).body).toMatchObject({ clients: [{ name: 'desk' }] })
+  })
+
+  // Ruling R7-2: a worker still starting refuses the pause; left at that, the schedule would keep firing with nobody told
+  describe('a worker of that Job still starting', () => {
+    const timers = () => {
+      const pending: Array<{ run: () => void; ms: number; cancelled: boolean }> = []
+      return {
+        pending,
+        setTimer: (run: () => void, ms: number) => {
+          const t = { run, ms, cancelled: false }
+          pending.push(t)
+          return () => void (t.cancelled = true)
+        }
+      }
+    }
+    const LATER = new Date(Date.parse(NOW) + PENDING_START_WINDOW_MS + 5_000).toISOString()
+
+    it('is named still-starting, and the pause is retried after the start window and then holds', async () => {
+      let clock = NOW
+      const t = timers()
+      const f = await fixture({ minesSession: 'pending:ab12cd34', now: () => clock, setTimer: t.setTimer })
+      const r = await f.revoke()
+      expect(r.status).toBe(200)
+      const body = r.body as { pausedJobs: number; notPaused: Array<{ jobId: string; error: string; reason?: string }> }
+      expect(body.pausedJobs).toBe(0)
+      expect(body.notPaused).toEqual([{ jobId: f.mine, error: expect.stringContaining('the pause is retried'), reason: 'still-starting' }])
+      expect(f.jobOf(f.mine).paused).toBeUndefined()
+      expect(t.pending).toHaveLength(1)
+      expect(t.pending[0].ms).toBe(PENDING_START_WINDOW_MS + 5_000)
+      clock = LATER
+      t.pending[0].run()
+      await vi.waitFor(() => expect(f.jobOf(f.mine).paused).toBe(true), { timeout: 10_000 })
+      expect(f.jobOf(f.mine).pausedBy).toMatchObject({ reason: 'controller-revoked', clientId: f.laptop, name: 'laptop', at: LATER })
+    })
+
+    it('a retry that fails again is logged', async () => {
+      const t = timers()
+      // The clock does not move, so the worker is still starting at the retry
+      const f = await fixture({ minesSession: 'pending:ab12cd34', setTimer: t.setTimer })
+      await f.revoke()
+      t.pending[0].run()
+      await vi.waitFor(() => expect(logs.some((l) => l.startsWith(`remote: revoked ${f.laptop}; job ${f.mine} could not be paused on the retry:`))).toBe(true), { timeout: 10_000 })
+      expect(f.jobOf(f.mine).paused).toBeUndefined()
+    })
+
+    it('the retry is cancelled when the Host leaves', async () => {
+      const t = timers()
+      const f = await fixture({ minesSession: 'pending:ab12cd34', setTimer: t.setTimer })
+      await f.revoke()
+      f.orch.dispose()
+      expect(t.pending[0].cancelled).toBe(true)
+      // Ruling R7-6: revoked records are not kept, so no next Host can find this Job again; the log names it
+      expect(logs).toContain(`remote: revoked ${f.laptop}; the retried pause of job ${f.mine} was dropped as the Host left, and the job is not paused`)
+    })
+
+    it('a retained worker is named and not retried', async () => {
+      const t = timers()
+      const f = await fixture({ retained: true, setTimer: t.setTimer })
+      const body = (await f.revoke()).body as { notPaused: Array<{ reason?: string }> }
+      expect(body.notPaused[0].reason).toBeUndefined()
+      expect(t.pending).toHaveLength(0)
+    })
+  })
+
+  // Anything on this machine can write the Host's caller id in a frame (HOST_OWN_RECORDS' reason), and a revoke's
+  // pause locks a Job away from every controller and agent
+  it('a connection naming itself the Host’s caller is refused revokedBy', async () => {
+    const f = await fixture()
+    const r = await f.orch.call({ cmd: 'run-pause', args: { run: f.theirs, revokedBy: { clientId: 'cli_x', name: 'x' } }, sessionId: HOST_CALLER, from: cli })
+    expect(r.status).toBe(403)
+    await f.orch.ready()
+    expect(f.jobOf(f.theirs).paused).toBeUndefined()
+    expect(f.jobOf(f.theirs).pausedBy).toBeUndefined()
+  })
+
+  it('a second revoke of the same client is 404 and pauses nothing', async () => {
+    const f = await fixture()
+    await f.revoke()
+    // A person resumes it, so a second pause would show
+    expect((await f.orch.call({ cmd: 'run-resume', args: { run: f.mine }, sessionId: '', from: cli })).status).toBe(200)
+    const again = await f.revoke()
+    expect(again).toEqual({ status: 404, body: { error: `unknown client: ${f.laptop}` } })
+    expect(f.jobOf(f.mine).paused).toBeUndefined()
   })
 })
 

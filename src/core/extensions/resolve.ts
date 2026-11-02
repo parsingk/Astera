@@ -9,7 +9,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { extensionPaths } from '../profile/paths'
-import { providerOf } from '../providers/meta'
+import { providerOf, type Provider } from '../providers/meta'
 import { writeThroughTmp } from '../accounts/fileQueue'
 import { LAUNCH_FORBIDDEN } from '../sessions/commands'
 import { ownMcpNames } from './discover'
@@ -54,6 +54,19 @@ export interface SessionCapabilities {
 /** TOML literal string: no escapes inside, so a value holding `'` cannot be one. */
 const literal = (v: string): string => `'${v}'`
 const BARE_KEY = /^[A-Za-z0-9_-]+$/
+
+/** Why a session of `provider` is never given `server`, by the server alone: not shared with that CLI, a transport Codex
+ *  does not speak (SSE), or, for Codex, a name it cannot read as a TOML key or an address or tool list it cannot take as
+ *  a literal (on Windows through cmd.exe). Null when nothing about the server keeps it out; the account's own servers and
+ *  the Gateway decide the rest. The over-broad finding asks the same of what a profile gets (lifecycle design §4.10). */
+export function serverSkipReason(server: McpExtension, provider: Provider, platform: NodeJS.Platform): Extract<SkipReason, 'provider' | 'transport' | 'launch-chars'> | null {
+  if (!server.providers.includes(provider)) return 'provider'
+  if (provider !== 'codex') return null
+  if (server.transport === 'sse') return 'transport'
+  const url = server.transport === 'stdio' ? '' : (server.url ?? '')
+  const texts = [url, ...(server.options?.enabledTools ?? []), ...(server.options?.disabledTools ?? [])]
+  return !BARE_KEY.test(server.name) || texts.some((t) => t.includes("'") || (platform === 'win32' && LAUNCH_FORBIDDEN.test(t))) ? 'launch-chars' : null
+}
 
 /** The names Host and sessions agree on (host/gateway/tokens.ts reads them). */
 export const GATEWAY_TOKEN_ENV = 'ASTERA_GATEWAY_TOKEN'
@@ -117,12 +130,11 @@ export async function resolveSessionCapabilities(a: {
   }
   const usable: McpExtension[] = []
   for (const server of servers) {
-    if (!server.providers.includes(provider)) {
-      out.skipped.push({ name: server.name, reason: 'provider' })
-      continue
-    }
-    if (provider === 'codex' && server.transport === 'sse') {
-      out.skipped.push({ name: server.name, reason: 'transport' })
+    // What the server alone decides; a name or address Codex cannot take is said only after the account's own servers
+    // and the Gateway, as it always was
+    const fixed = serverSkipReason(server, provider, a.platform)
+    if (fixed === 'provider' || fixed === 'transport') {
+      out.skipped.push({ name: server.name, reason: fixed })
       continue
     }
     if (own.has(server.name)) {
@@ -133,14 +145,9 @@ export async function resolveSessionCapabilities(a: {
       out.skipped.push({ name: server.name, reason: 'gateway-unavailable' })
       continue
     }
-    // Codex reads the server's name as a TOML key and a remote address as a literal, on Windows through cmd.exe
-    if (provider === 'codex') {
-      const url = server.transport === 'stdio' ? '' : (server.url ?? '')
-      const texts = [url, ...(server.options?.enabledTools ?? []), ...(server.options?.disabledTools ?? [])]
-      if (!BARE_KEY.test(server.name) || texts.some((t) => t.includes("'") || (a.platform === 'win32' && LAUNCH_FORBIDDEN.test(t)))) {
-        out.skipped.push({ name: server.name, reason: 'launch-chars' })
-        continue
-      }
+    if (fixed === 'launch-chars') {
+      out.skipped.push({ name: server.name, reason: fixed })
+      continue
     }
     usable.push(server)
   }
@@ -187,6 +194,17 @@ export async function resolveSessionCapabilities(a: {
     if (o?.disabledTools) out.args.push('-c', `${key}.disabled_tools=[${o.disabledTools.map(literal).join(',')}]`)
   }
   return out
+}
+
+/** A sandboxed Codex session's approval of its shared servers' tools (the Mac check, check 12b). Codex asks before a tool
+ *  call its sandbox profile does not approve by itself, and the sandbox's `-a never` (a chat's `approvalPolicy: "never"`)
+ *  refuses the question: "MCP tool call requires approval, but approval policy is never". The bypass the sandbox stands
+ *  for approves them (measured, codex 0.165: the same call completes under --dangerously-bypass-approvals-and-sandbox), so
+ *  each server Astera gives the session is approved the same way. `default_tools_approval_mode` is in Codex's MCP server
+ *  config since before the sandbox's floor (config/src/mcp_types.rs at rust-v0.160.0), and a stricter mode the person's
+ *  organization requires still wins (`AppToolApproval::restrict_to`). The account's own servers are its own config's. */
+export function sandboxedCodexApprovals(given: readonly string[]): string[] {
+  return given.flatMap((name) => ['-c', `mcp_servers.${name}.default_tools_approval_mode=${literal('approve')}`])
 }
 
 /** The session's context: explicit when its profile id resolves (an archived profile still does, for work already
