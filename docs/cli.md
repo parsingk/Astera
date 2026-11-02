@@ -1190,8 +1190,9 @@ inside an agent session the changes are refused with 5, and the reads are not. A
 **`--sandbox on` starts the profile's sessions, terminal and chat, in their CLI's own sandbox**; `off`, the default,
 starts them as before, and a profile made before the switch existed reads as `off` (`agent-profiles list` shows it as
 `sandbox`). In Codex's sandbox a session never stops to ask (`-a never` takes the place of the permission bypass; a
-chat's thread names the profile and its approval policy is `never`) and a terminal session runs on its own server
-(`--no-daemon`). It needs codex 0.160.0 or later: an older codex, or one whose version cannot be read, is not started
+chat's thread names the profile and its approval policy is `never`), so the tools of the MCP servers Astera shares
+with it are approved as the bypass approves them (`default_tools_approval_mode`; a stricter mode your organization
+requires still wins), and a terminal session runs on its own server (`--no-daemon`). It needs codex 0.160.0 or later: an older codex, or one whose version cannot be read, is not started
 (`SANDBOX_UNAVAILABLE: cli-too-old codex …`), and a chat whose thread Codex does not confirm runs under the profile is
 stopped (`SANDBOX_UNAVAILABLE: profile-not-active codex`). On every OS it writes only in its folder, the git directories of the folder's repository (never their
 `hooks` or `config`, nor what decides where git finds them: each `commondir` file, the `modules` folder of submodules'

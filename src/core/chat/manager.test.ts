@@ -12,6 +12,7 @@ import { chatInfoFromNote } from '../sessions/noteInfo'
 import { SessionManager } from '../sessions/manager'
 import { createGitBashResolver } from '../sessions/gitBash'
 import type { Account, ScheduleConfig, SessionInfo } from '../types'
+import type { SessionCapabilities } from '../extensions/resolve'
 import type { Provider } from '../providers/meta'
 import type { ProcFactory, ProcLike, ProcSpawnOptions } from '../sessions/proc'
 import { makeDescriptors } from '../providers/descriptor'
@@ -1560,7 +1561,7 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
     win32: { Path: 'C:\\Windows', APPDATA: 'C:\\Users\\t\\AppData\\Roaming' }
   } as const
   type Ready = NonNullable<ChatManagerDeps['codexWindowsReady']>
-  const rig = (platform: 'linux' | 'win32', o: { ready?: Ready; layouts?: PreparedLayouts; noDaemon?: boolean; hostSocketDir?: string | null; codex?: string | null; excludes?: ChatManagerDeps['codexExcludes']; appKeyFile?: string; readOnly?: readonly string[]; elevatedDefault?: ChatManagerDeps['codexElevatedDefault'] } = {}) => {
+  const rig = (platform: 'linux' | 'win32', o: { ready?: Ready; layouts?: PreparedLayouts; noDaemon?: boolean; hostSocketDir?: string | null; codex?: string | null; excludes?: ChatManagerDeps['codexExcludes']; appKeyFile?: string; readOnly?: readonly string[]; elevatedDefault?: ChatManagerDeps['codexElevatedDefault']; caps?: SessionCapabilities } = {}) => {
     const spawned: Array<{ file: string; args: string[]; opts: ProcSpawnOptions; proc: FakeProc }> = []
     const { createAdapter, handles } = makeAdapterFactory()
     const manager = new ChatSessionManager({ linkLook: null,
@@ -1584,6 +1585,7 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
       ...(o.appKeyFile ? { appKeyFile: o.appKeyFile } : {}),
       ...(o.readOnly ? { readOnly: o.readOnly } : {}),
       ...(o.elevatedDefault ? { codexElevatedDefault: o.elevatedDefault } : {}),
+      ...(o.caps ? { capabilities: { get: () => o.caps ?? null, refresh: async () => {} } } : {}),
       // codex 0.160.0, the floor, unless a case says otherwise
       codexVersion: Object.assign(() => ('codex' in o ? o.codex : '0.160.0'), { warm: async () => {} })
     })
@@ -1624,6 +1626,29 @@ describe('ChatSessionManager — the sandbox (sandbox design §6)', () => {
       expect(readFileSync(path.join(cwd, '.git', 'commondir'), 'utf8'), platform).toBe('.\n')
       expect(existsSync(path.join(cwd, '.git', 'modules')), platform).toBe(true)
     }
+  })
+
+  // The Mac check (check 12b): a sandboxed chat's thread never asks (approvalPolicy never), so Codex refused every tool call
+  // of its shared servers; the bypass it stands for approves them
+  it("a sandboxed chat approves its shared servers' tools, and a chat outside the sandbox is left as it was", async () => {
+    const caps: SessionCapabilities = {
+      context: { kind: 'implicit', accounts: [codexAccount.id], policyMode: 'compatibility', executionMode: 'managed' },
+      args: ['-c', "mcp_servers.docs.url='http://127.0.0.1:1/mcp/docs'"],
+      env: {},
+      given: ['docs'],
+      gatewayGrant: [],
+      skipped: []
+    }
+    const approve = "mcp_servers.docs.default_tools_approval_mode='approve'"
+    const cwd = repo()
+    const sandboxed = rig('linux', { caps })
+    await sandboxed.manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    sandboxed.manager.spawn({ account: codexAccount, cwd, sandbox: true, bypassPermissions: true })
+    const args = sandboxed.spawned[0].args
+    expect(args[args.indexOf(approve) - 1]).toBe('-c')
+    const plain = rig('linux', { caps })
+    plain.manager.spawn({ account: codexAccount, cwd, bypassPermissions: true })
+    expect(plain.spawned[0].args).not.toContain(approve)
   })
 
   // Final review I2: a chat's app-server is held to the same codex floor as a terminal session, at the prepare and the spawn

@@ -21,7 +21,7 @@ import type { ProcFactory, ProcLike } from '../sessions/proc'
 import { cliEnvFor } from '../sessions/cliEnv'
 import { EXITED_SESSIONS_KEPT, prependToPath } from '../sessions/manager'
 import type { CapabilitySource } from '../extensions/capabilityCache'
-import { gatewayTokenEnv } from '../extensions/resolve'
+import { gatewayTokenEnv, sandboxedCodexApprovals } from '../extensions/resolve'
 import { applyHiding, type HidingSource } from '../credentials/hiding'
 import { isObserving } from '../audit/policy'
 import { enforceUnavailable, type EnforceStart } from '../audit/enforce'
@@ -502,7 +502,8 @@ export class ChatSessionManager {
     // of Enforce's own; a file not written for it refuses the start rather than drop either (E5)
     const settingsArgs = claudeScope ? (this.deps.claudeSandbox?.chatArgs(enforced, claudeScope) ?? null) : enforceArgs
     if (settingsArgs === null) throw sandboxUnavailable('not-prepared')
-    const extraArgs = [...(caps?.args ?? []), ...settingsArgs]
+    // A sandboxed Codex approves its shared servers' tools, as the bypass the sandbox stands for does (resolve.ts)
+    const extraArgs = [...(caps?.args ?? []), ...(sandboxedCodex ? sandboxedCodexApprovals(caps?.given ?? []) : []), ...settingsArgs]
     const { file, args } =
       provider === 'claude'
         ? buildClaudeChatCommand(this.deps.platform, { resumeSessionId: resumeThreadId, bypass, model: opts.model, extraArgs })

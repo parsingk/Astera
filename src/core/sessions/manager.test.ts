@@ -1928,6 +1928,31 @@ describe('the sandbox at spawn', () => {
     }
   })
 
+  // The Mac check (check 12b): Codex asks before an MCP tool call its sandbox did not approve, and `-a never` refuses the
+  // question, so a sandboxed session could call none of its shared servers' tools; the bypass it stands for approves them
+  it("a sandboxed Codex session approves its shared servers' tools, and a session outside the sandbox is left as it was", async () => {
+    const caps: SessionCapabilities = {
+      context: { kind: 'implicit', accounts: [codexAccount.id], policyMode: 'compatibility', executionMode: 'managed' },
+      args: ['-c', "mcp_servers.docs.url='http://127.0.0.1:1/mcp/docs'"],
+      env: {},
+      given: ['docs'],
+      gatewayGrant: [],
+      skipped: []
+    }
+    const approve = "mcp_servers.docs.default_tools_approval_mode='approve'"
+    const cwd = repo()
+    const sandboxed = rig('darwin')
+    sandboxed.manager.capabilities = { get: () => caps, refresh: async () => {} }
+    await sandboxed.manager.prepare({ account: codexAccount, cwd, sandbox: true })
+    sandboxed.manager.spawn({ account: codexAccount, cwd, sandbox: true, bypassPermissions: true })
+    const args = codexArgs(sandboxed.argv[0])
+    expect(args[args.indexOf(approve) - 1]).toBe('-c')
+    const plain = rig('darwin')
+    plain.manager.capabilities = { get: () => caps, refresh: async () => {} }
+    plain.manager.spawn({ account: codexAccount, cwd, bypassPermissions: true })
+    expect(codexArgs(plain.argv[0])).not.toContain(approve)
+  })
+
   // Final fix pass (minor 4): on Windows the profile names every worktree's git files, and with enough of them the command
   // line passes what cmd.exe (8191) or CreateProcess (32767) carries; the start is refused, at the prepare and at the
   // spawn, rather than launched broken with a generic error

@@ -18,7 +18,7 @@ import { cliEnvFor } from './cliEnv'
 import { providerOf } from '../providers/meta'
 import { codexDeveloperInstructions } from './sessionContext'
 import type { CapabilitySource } from '../extensions/capabilityCache'
-import { gatewayTokenEnv } from '../extensions/resolve'
+import { gatewayTokenEnv, sandboxedCodexApprovals } from '../extensions/resolve'
 import { applyHiding, hiddenNames, type HidingSource } from '../credentials/hiding'
 import { isObserving } from '../audit/policy'
 import { enforceUnavailable, type EnforceStart } from '../audit/enforce'
@@ -576,7 +576,8 @@ export class SessionManager {
     if (sandboxedClaude && sl?.sandboxed !== true) throw sandboxUnavailable('not-prepared')
     const enforceArgs = enforce && !d.usesStatusLine ? (this.enforce?.args(providerOf(opts.account)) ?? null) : []
     if (enforceArgs === null) throw enforceUnavailable('no-interpreter')
-    const extraArgs = [...(caps?.args ?? []), ...enforceArgs]
+    // A sandboxed Codex approves its shared servers' tools, as the bypass the sandbox stands for does (resolve.ts)
+    const extraArgs = [...(caps?.args ?? []), ...(sandboxedCodex ? sandboxedCodexApprovals(caps?.given ?? []) : []), ...enforceArgs]
     const observed = observe && (d.usesStatusLine ? sl?.observed === true : true)
     // Whether an observed Claude session got the hooks that report a typed command and an agent's start (lifecycle design
     // §4.12, ruling R6-8): the Host marks one that did not, so the findings cannot read it as unused. A Codex session has
