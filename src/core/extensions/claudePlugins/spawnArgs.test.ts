@@ -68,6 +68,14 @@ describe('claudePluginArgs', () => {
     expect(await claudePluginArgs({ profileDir: p })).toEqual({ args: flags([on]), given: ['on'], skipped: [] })
   })
 
+  // Off stops the entry being given for itself, not as what an enabled entry needs: the owner does not load without it (M9)
+  it('a disabled shared entry still loads while an enabled entry depends on it', async () => {
+    const p = await profile()
+    const [base, review] = [await folder(p, 'base'), await folder(p, 'review')]
+    await seed(p, [entry('base', base, { enabled: false }), entry('review', review, { dependencies: [dependency('base', base)] })])
+    expect(await claudePluginArgs({ profileDir: p })).toEqual({ args: flags([review, base]), given: ['review'], skipped: [] })
+  })
+
   // Review Focus 2: deleted by hand, or swept
   it('skips a plugin whose folder is gone', async () => {
     const p = await profile()

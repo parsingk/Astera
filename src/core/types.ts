@@ -2036,6 +2036,19 @@ export interface ExtensionsApi {
   replace(accountId: string, id: string): Promise<PluginsCallAnswer>
   /** One process per project folder, or one per session, for a shared stdio server (Gateway design G8). */
   setIsolation(id: string, isolation: 'folder' | 'session'): Promise<PluginsCallAnswer>
+  /** The shared Claude Code plugins, each with `missing`, `accountCopies` and `requiredBy`, the plugin jobs, and the last
+   *  update check. Poll it while a job is queued or running (R4). */
+  pluginList(): Promise<PluginsCallAnswer>
+  /** The Claude Code plugins every Claude account holds that are not shared yet: `{ plugins, unreadable }`. */
+  pluginDiscover(): Promise<PluginsCallAnswer>
+  /** Each answers `{ jobId }` at once; the job's state is in `pluginList`. `acceptCommand` is the sha256 of the command
+   *  a job that ended asking for confirmation showed the person. */
+  pluginShare(id: string, acceptCommand?: string): Promise<PluginsCallAnswer>
+  pluginUpdate(id: string, acceptCommand?: string): Promise<PluginsCallAnswer>
+  pluginCheck(): Promise<PluginsCallAnswer>
+  pluginRemove(id: string): Promise<PluginsCallAnswer>
+  /** Not a job: answers once the store says it. */
+  pluginSetEnabled(id: string, on: boolean): Promise<PluginsCallAnswer>
 }
 
 /** What a person sets on an agent profile in Settings › Agent profiles. */

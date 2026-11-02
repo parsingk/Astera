@@ -4875,6 +4875,18 @@ export function registerIpc(
   ipcMain.handle('extensions.setEnabled', (_e, id: unknown, enabled: unknown) => extensions.setEnabled(id as string, enabled === true))
   ipcMain.handle('extensions.remove', (_e, id: unknown) => extensions.remove(id as string))
   ipcMain.handle('extensions.replace', (_e, accountId: unknown, id: unknown) => extensions.replace(accountId as string, id as string))
+  // The shared Claude Code plugins (R4): a change answers its job id at once, and the tab polls the list
+  ipcMain.handle('extensions.pluginList', () => extensions.pluginList())
+  ipcMain.handle('extensions.pluginDiscover', () => extensions.pluginDiscover())
+  ipcMain.handle('extensions.pluginShare', (_e, id: unknown, acceptCommand: unknown) =>
+    extensions.pluginShare(id as string, typeof acceptCommand === 'string' ? acceptCommand : undefined)
+  )
+  ipcMain.handle('extensions.pluginUpdate', (_e, id: unknown, acceptCommand: unknown) =>
+    extensions.pluginUpdate(id as string, typeof acceptCommand === 'string' ? acceptCommand : undefined)
+  )
+  ipcMain.handle('extensions.pluginCheck', () => extensions.pluginCheck())
+  ipcMain.handle('extensions.pluginRemove', (_e, id: unknown) => extensions.pluginRemove(id as string))
+  ipcMain.handle('extensions.pluginSetEnabled', (_e, id: unknown, on: unknown) => extensions.pluginSetEnabled(id as string, on === true))
   // Settings › Agent profiles (Agent Profiles design §8): the Host checks every argument; this only passes them on
   // A setup gives the machine's sandbox users new passwords, so this process's own readiness answers go after one too
   // A change also reads the archived profiles again, for the Jobs view's waiting line (lifecycle design §5)

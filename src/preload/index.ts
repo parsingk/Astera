@@ -376,7 +376,14 @@ const api = {
     setEnabled: invoke('extensions.setEnabled'),
     remove: invoke('extensions.remove'),
     replace: invoke('extensions.replace'),
-    setIsolation: invoke('extensions.setIsolation')
+    setIsolation: invoke('extensions.setIsolation'),
+    pluginList: invoke('extensions.pluginList'),
+    pluginDiscover: invoke('extensions.pluginDiscover'),
+    pluginShare: invoke('extensions.pluginShare'),
+    pluginUpdate: invoke('extensions.pluginUpdate'),
+    pluginCheck: invoke('extensions.pluginCheck'),
+    pluginRemove: invoke('extensions.pluginRemove'),
+    pluginSetEnabled: invoke('extensions.pluginSetEnabled')
   },
   // Settings › Agent profiles and the profile pickers (Agent Profiles design §8): the Host's profiles, through main's route
   agentProfiles: {
