@@ -28,7 +28,7 @@ export const ja: Catalog = {
   'higgsfield.copyUrl': 'アドレスをコピー',
   'higgsfield.urlCopied': 'ログインアドレスをコピーしました。',
   'higgsfield.cancelLogin': 'キャンセル',
-  'higgsfield.loginHint': '別のアカウントでログイン済みのブラウザが開いた場合は、アドレスをコピーしてシークレットウィンドウに貼り付けてください。',
+  'higgsfield.loginHint': '別のアカウントでログイン済みのブラウザーが開いた場合は、アドレスをコピーしてシークレットウィンドウに貼り付けてください。',
   'higgsfield.loginTimeout': '3 分以内にログインが終わらなかったため停止しました。もう一度お試しください。',
   'higgsfield.loginFailed': 'ログインできませんでした。',
   'higgsfield.needsWorkspace': 'ワークスペースの選択が必要',
@@ -64,7 +64,7 @@ export const ja: Catalog = {
   'settings.extensions.off': 'オフ',
   'settings.extensions.attention': '確認が必要',
   'settings.extensions.isolation': 'セッションごとに実行',
-  'settings.extensions.mcpSharing': "既定では、同じプロジェクトフォルダで開いたセッション(タブ)は 1 つの MCP サーバーを共有します。\nセッションを 5 つ開いてもサーバーは 1 つだけ起動するので、メモリを節約できます。ただし、セッションごとに MCP サーバーを別に起動すべき場合があります。\nたとえば playwright は 1 つのサーバーが 1 つのブラウザを開きます。2 つのセッションで共有すると、一方のセッションが開いたページをもう一方が上書きしてしまいます。\nその場合は「{option}」をオンにしてください。",
+  'settings.extensions.mcpSharing': "既定では、同じプロジェクトフォルダーで開いたセッション(タブ)は 1 つの MCP サーバーを共有します。\nセッションを 5 つ開いてもサーバーは 1 つだけ起動するので、メモリを節約できます。ただし、セッションごとに MCP サーバーを別に起動すべき場合があります。\nたとえば playwright は 1 つのサーバーが 1 つのブラウザーを開きます。2 つのセッションで共有すると、一方のセッションが開いたページをもう一方が上書きしてしまいます。\nその場合は「{option}」をオンにしてください。",
   'settings.extensions.replace': '共有版に置き換える',
   'settings.extensions.replaceConfirm.title': '{label} の {name} を置き換えますか?',
   'settings.extensions.replaceConfirm.body': 'アカウントにあった {name} は先にバックアップします。',
@@ -581,7 +581,7 @@ export const ja: Catalog = {
   'settings.agentPermission.hint':
     'アプリが起動するすべてのエージェントセッションを権限確認なしで実行します' +
     '(claude は --dangerously-skip-permissions、codex は --dangerously-bypass-approvals-and-sandbox)。' +
-    '既定はオンです。Job のワーカーは毎回新しく作られた worktree で起動しますが、そのフォルダには承認履歴がなく、' +
+    '既定はオンです。Job のワーカーは毎回新しく作られた worktree で起動しますが、そのフォルダーには承認履歴がなく、' +
     'プロジェクトに蓄積した許可リスト(.claude/settings.local.json)も引き継がれないため、' +
     'オフにするとワーカーは最初のコマンドで停止します。' +
     'すでに開いているセッションには適用されません。次のセッションから有効です。',
@@ -594,13 +594,13 @@ export const ja: Catalog = {
     'すでに開いているセッションには適用されません — 新しいセッションから有効になります。' +
     'オンにした後の会話だけを見ます — 既存の履歴は読みません。',
   'settings.workUnit.saveFailed': '作業単位の追跡設定を保存できませんでした: {detail}',
-  // エージェントブラウザ
-  'settings.agentBrowser.label': 'エージェントブラウザ',
+  // エージェントブラウザー
+  'settings.agentBrowser.label': 'エージェントブラウザー',
   'settings.agentBrowser.hint':
     'オンにすると、各セッションが自分のプレビュータブを持ち、このプロジェクトの開発サーバーを開いて再読み込みし、コンソールエラーを読めます。' +
     'すべてのアカウントに astera-browser スキルをインストールします。localhost のみ開けます。' +
     '既に開いているセッションには適用されません。新しいセッションから有効です。',
-  'settings.agentBrowser.saveFailed': 'エージェントブラウザ設定を保存できませんでした: {detail}',
+  'settings.agentBrowser.saveFailed': 'エージェントブラウザー設定を保存できませんでした: {detail}',
   // エージェントアプリ作業スペース
   'settings.agentApp.label': 'エージェントアプリ作業スペース',
   'settings.agentApp.hint':
@@ -635,14 +635,14 @@ export const ja: Catalog = {
   'files.validate.windowsReserved': 'Windows で予約されている名前です',
   'files.validate.trailing': '名前を空白やピリオドで終えることはできません',
   'files.validate.tooLong': '名前が長すぎます',
-  'files.move.intoSelf': 'フォルダを自分自身の中へ移動することはできません',
+  'files.move.intoSelf': 'フォルダーを自分自身の中へ移動することはできません',
   'files.move.alreadyThere': 'すでにその場所にあります',
-  'files.copy.intoSelf': 'フォルダを自分自身の中へコピーすることはできません',
+  'files.copy.intoSelf': 'フォルダーを自分自身の中へコピーすることはできません',
   'files.error.pathNotAllowed': '許可されていないパスです',
   'files.error.unsupportedImageType': 'サポートされていない画像形式です',
   'files.error.imageTooLarge': '画像が大きすぎます',
   'files.error.alreadyExists': '「{name}」はすでに存在します',
-  'files.error.alreadyExistsInDest': '「{name}」は移動先フォルダにすでに存在します',
+  'files.error.alreadyExistsInDest': '「{name}」は移動先フォルダーにすでに存在します',
   'files.error.renameStranded':
     '名前の変更に失敗し、元に戻すこともできませんでした。ファイルは「{tmp}」にあります',
   'files.error.unreachable': 'フォルダーが応答しなかったため、何も変更していません（ネットワークドライブが切断されている可能性があります）。到達できるようになってから再試行してください。',
@@ -672,7 +672,7 @@ export const ja: Catalog = {
   'worktree.create.autoSetupRemoteFailed':
     'push.autoSetupRemote の設定に失敗しました — 最初の push に -u が必要です',
   // worktreeErrors.ts — worktree IPC error code → user-facing message
-  'worktree.error.notGitRepo': '選択したフォルダは git リポジトリではありません。',
+  'worktree.error.notGitRepo': '選択したフォルダーは git リポジトリではありません。',
   'worktree.error.noBase':
     '既定ブランチ (origin/HEAD・main・master) が見つからないため worktree を作成できません。',
   'worktree.error.fetchFailed':
@@ -686,7 +686,7 @@ export const ja: Catalog = {
   'worktree.error.orphanUnproven':
     '所有権を確認できないため削除しませんでした。手動で確認してから削除してください。',
   'worktree.error.orphanUnverifiable':
-    'git がこのフォルダを追跡していないため、未コミットの変更の有無を確認できません。',
+    'git がこのフォルダーを追跡していないため、未コミットの変更の有無を確認できません。',
   'worktree.error.gitAddFailed': 'git worktree の作成に失敗しました。',
   'worktree.error.cancelled': 'worktree の作成をキャンセルしました。作成途中のものはすべて元に戻しました。',
   'worktree.error.rollbackIncomplete': 'worktree の作成を元に戻せませんでした。フォルダー {path} とブランチ {branch} を手動で削除してください。',
@@ -866,7 +866,7 @@ export const ja: Catalog = {
   'settings.worktree.createLocation': 'worktree の作成場所',
   'settings.worktree.change': '変更…',
   'settings.worktree.hint':
-    '新しい worktree はこのフォルダの下に <repo名>/<名前> で作成されます。既存の worktree は移動しません。',
+    '新しい worktree はこのフォルダーの下に <repo名>/<名前> で作成されます。既存の worktree は移動しません。',
   'settings.history.hiddenProjects': '非表示のプロジェクト',
   'settings.history.unhide': '解除',
   'settings.history.empty': '非表示のプロジェクトはありません。',
@@ -879,7 +879,7 @@ export const ja: Catalog = {
   'settings.history.deleteSelected': '記録を削除 ({count})',
   'settings.history.deleteTitle': '選択したプロジェクトの記録を削除しますか?',
   'settings.history.deleteBody':
-    '会話記録 {count} 件をゴミ箱に移します。プロジェクトフォルダとその中のファイルは削除しません。\n\n{list}',
+    '会話記録 {count} 件をゴミ箱に移します。プロジェクトフォルダーとその中のファイルは削除しません。\n\n{list}',
   'settings.history.deleteConfirm': 'ゴミ箱に移す',
   'settings.history.deleteDone': '記録 {count} 件をゴミ箱に移しました。',
   'settings.history.deleteBusy': '{name} が実行中のため {count} 件をスキップしました。',
@@ -1042,10 +1042,10 @@ export const ja: Catalog = {
     '{mod}+Z または Local History から復元できます (最大30日間保管 · 50MB または 5,000 項目を超えるものは除く)。',
   'files.delete.confirmOne': '「{name}」を削除しますか？\n{undoHint}',
   'files.delete.confirmDirWithCount':
-    'フォルダ「{name}」と配下の {count} 件の項目を削除しますか？\n{undoHint}',
-  'files.delete.confirmDirAll': 'フォルダ「{name}」と配下の項目をすべて削除しますか？\n{undoHint}',
+    'フォルダー「{name}」と配下の {count} 件の項目を削除しますか？\n{undoHint}',
+  'files.delete.confirmDirAll': 'フォルダー「{name}」と配下の項目をすべて削除しますか？\n{undoHint}',
   'files.delete.confirmMany': '{shown}{more} — {total} 件の項目を削除しますか？{dirNote}\n{undoHint}',
-  'files.delete.dirNote': ' フォルダ {count} 件の配下の項目も一緒に削除されます。',
+  'files.delete.dirNote': ' フォルダー {count} 件の配下の項目も一緒に削除されます。',
   'files.delete.moreNames': ' ほか {count} 件',
   'files.delete.skippedTooLarge': '項目が大きすぎるため (50MB または 5,000 項目超) Local History に残しませんでした',
   // explorer busy status (delete / copy progress)
@@ -1108,7 +1108,7 @@ export const ja: Catalog = {
   'explorer.refresh': '更新',
   'explorer.reveal.failed': 'エクスプローラーの起動に失敗しました: {detail}',
   'explorer.menu.newFile': '新しいファイル',
-  'explorer.menu.newFolder': '新しいフォルダ',
+  'explorer.menu.newFolder': '新しいフォルダー',
   'explorer.menu.rename': '名前の変更 (F2)',
   'explorer.menu.delete': '削除 ({del})',
   'explorer.menu.deleteCount': '削除 ({count} 件, {del})',
@@ -1201,7 +1201,7 @@ export const ja: Catalog = {
   'account.sync.mergeNote':
     'プラグイン・MCP・個人のスキル/コマンド/エージェントを項目単位でマージします。同じ項目は取り込み元の値で上書きし、このアカウントにしかない項目は残ります。',
   'account.sync.codexMergeNote':
-    'config.toml をキー単位でマージします。同じキーは取り込み元の値になり、このアカウントだけのキー、信頼したフォルダ、承認したフックはそのまま残ります。既存のファイルは .bak としてバックアップします。',
+    'config.toml をキー単位でマージします。同じキーは取り込み元の値になり、このアカウントだけのキー、信頼したフォルダー、承認したフックはそのまま残ります。既存のファイルは .bak としてバックアップします。',
   'account.sync.extensionsNote':
     '設定 › MCP & Skills で何かを共有すると、MCP サーバー・スキル・コマンド・エージェントはそちらから届き、ここではコピーしません。',
   'account.sync.appliesNextSession':
@@ -1230,7 +1230,7 @@ export const ja: Catalog = {
   // 10秒のタイムアウトまで何も言わずに死んだとき用(shell:true のシムがハングした場合) —
   // 理由なしでも文になる文言を別に用意する。「: undefined」は文にならない。
   'session.new.cliFailsHereUnknown': '{cli} はこのフォルダーで実行できません。',
-  'session.field.projectFolder': 'プロジェクトフォルダ',
+  'session.field.projectFolder': 'プロジェクトフォルダー',
   'session.field.account': 'アカウント',
   'session.new.folderNotSelected': '(未選択)',
   'session.new.pickFolder': '選択…',
@@ -1238,11 +1238,11 @@ export const ja: Catalog = {
   'session.new.worktreeNoBase':
     'このリポジトリには基準にできるブランチがないため worktree を作成できません。コミットを1つ作成してから再試行してください。',
   'session.new.worktreeBranchesUnavailable': 'ブランチ一覧を確認できませんでした（git が応答しません）。基準ブランチは自動で決まります。',
-  'session.new.worktreeRepoUnknown': 'このフォルダが git リポジトリか確認できませんでした（git が時間内に応答しません — ネットワークや WSL のパスは遅いことがあります）。ここでセッションは開始できますが、worktree に分離しては開始できません。',
-  'session.new.worktreeRepoNoGit': 'git を実行できず、このフォルダがリポジトリか確認できませんでした（git はインストールされ PATH にありますか？）。ここでセッションは開始できますが、worktree に分離しては開始できません。',
-  'session.new.worktreeRepoNoFolder': 'このフォルダが見つかりません。フォルダを選び直してください。',
-  'session.new.worktreeRepoError': 'このフォルダが git リポジトリか確認できませんでした。ここでセッションは開始できますが、worktree に分離しては開始できません。',
-  'session.new.checkingCli': 'このフォルダで CLI を確認しています…',
+  'session.new.worktreeRepoUnknown': 'このフォルダーが git リポジトリか確認できませんでした（git が時間内に応答しません — ネットワークや WSL のパスは遅いことがあります）。ここでセッションは開始できますが、worktree に分離しては開始できません。',
+  'session.new.worktreeRepoNoGit': 'git を実行できず、このフォルダーがリポジトリか確認できませんでした（git はインストールされ PATH にありますか？）。ここでセッションは開始できますが、worktree に分離しては開始できません。',
+  'session.new.worktreeRepoNoFolder': 'このフォルダーが見つかりません。フォルダーを選び直してください。',
+  'session.new.worktreeRepoError': 'このフォルダーが git リポジトリか確認できませんでした。ここでセッションは開始できますが、worktree に分離しては開始できません。',
+  'session.new.checkingCli': 'このフォルダーで CLI を確認しています…',
   'pr.create.branchesUnavailable': 'ブランチ一覧を確認できませんでした（git が応答しません）。',
   'session.new.worktreeBaseRef': '基準ブランチ',
   'session.new.worktreeBaseCurrent': '(現在のブランチ)',
@@ -1312,15 +1312,15 @@ export const ja: Catalog = {
   'conversation.exited.restart': '再開',
   // design §4 F5 の確認ダイアログの5つの項目。S1(1〜2行)の例外 — 本人にしかできない判断なので、
   // 事実を削るとボタンだけが残る。
-  'conversation.exited.bypassConfirm.title': 'このフォルダの toolchain 設定をスキップして再試行しますか?',
+  'conversation.exited.bypassConfirm.title': 'このフォルダーの toolchain 設定をスキップして再試行しますか?',
   'conversation.exited.bypassConfirm.whatBlockedLabel': '何が止めたか',
   'conversation.exited.bypassConfirm.whatBlocked':
-    'CLI ではなく、PATH の手前にあるツールバージョン管理ツール(Volta)が実行を拒否しました。このフォルダの package.json を読んでどのバージョンを使うか決める必要がありますが、そのファイルを読めませんでした',
+    'CLI ではなく、PATH の手前にあるツールバージョン管理ツール(Volta)が実行を拒否しました。このフォルダーの package.json を読んでどのバージョンを使うか決める必要がありますが、そのファイルを読めませんでした',
   // fix round 1 / Important 4: VOLTA_HOME しか一致しなかったときの文言。Volta がこの端末に入っている
   // ことは確かだが、それが*この* CLI を止めたという確証ではない — Volta は Node を管理していて、
   // codex は別にアンチウイルスが止めた単独インストールという可能性がある。
   'conversation.exited.bypassConfirm.whatBlockedSoft':
-    'この CLI 自体ではなく、この端末に入っているツールバージョン管理ツール(Volta)が原因かもしれません。Volta が管理する対象なら、PATH 手前の Volta がこのフォルダの package.json を読んでバージョンを決めようとして実行を拒否した可能性があります',
+    'この CLI 自体ではなく、この端末に入っているツールバージョン管理ツール(Volta)が原因かもしれません。Volta が管理する対象なら、PATH 手前の Volta がこのフォルダーの package.json を読んでバージョンを決めようとして実行を拒否した可能性があります',
   'conversation.exited.bypassConfirm.ifSkippedLabel': 'スキップすると',
   'conversation.exited.bypassConfirm.ifSkipped': 'バージョン判定を省略し、デフォルトの CLI をそのまま実行します。セッションは起動します。',
   'conversation.exited.bypassConfirm.givesUpLabel': '何を諦めるか',
@@ -1346,7 +1346,7 @@ export const ja: Catalog = {
   'session.resume.confirm': '再開',
   // TerminalView.tsx — the rolling banner and the loading/exit overlays
   'session.terminal.rollSwitching': '「{label}」に切り替えています…',
-  'session.terminal.trustAccepting': 'フォルダの信頼を自動承認しています…',
+  'session.terminal.trustAccepting': 'フォルダーの信頼を自動承認しています…',
   // {time} here is fmtDateTime (M/D HH:MM), not fmtTime — no preposition can precede it
   'session.terminal.weeklyLimitWaiting': '週間上限に到達 — {time} に自動再開',
   'session.terminal.limitWaiting': '上限に到達 — {time} に自動再開',
@@ -1383,10 +1383,10 @@ export const ja: Catalog = {
   'history.entry.resume': 'セッションを再開',
   'history.preview.truncated': '(最近の会話のみ)',
   'history.preview.me': '自分',
-  'history.resume.folderMissingTitle': 'プロジェクトフォルダなし',
+  'history.resume.folderMissingTitle': 'プロジェクトフォルダーなし',
   'history.resume.folderMissingBody':
-    '元のプロジェクトフォルダがありません:\n{cwd}\n\n再開するフォルダを選び直しますか？',
-  'history.resume.pickFolder': 'フォルダを選択',
+    '元のプロジェクトフォルダーがありません:\n{cwd}\n\n再開するフォルダーを選び直しますか？',
+  'history.resume.pickFolder': 'フォルダーを選択',
   // WorktreePanel.tsx — status labels
   'worktree.status.orphanDir': 'git 登録が消失',
   'worktree.status.unreachable': 'フォルダーに接続できません',
@@ -1394,7 +1394,7 @@ export const ja: Catalog = {
   // WorktreePanel.tsx — delete confirmation modal, result toasts
   'worktree.remove.title': 'worktree の削除',
   'worktree.remove.body':
-    '{name} ({branch})\n{path}\n\nこの worktree を削除しますか？ フォルダとブランチを一緒に削除します。マージされていないブランチはコミットを失わないよう残します。',
+    '{name} ({branch})\n{path}\n\nこの worktree を削除しますか？ フォルダーとブランチを一緒に削除します。マージされていないブランチはコミットを失わないよう残します。',
   'worktree.remove.branchPreserved': 'ブランチ {branch} はマージされていないため残しました',
   'worktree.remove.done': 'worktree を削除しました',
   'worktree.remove.alreadyGone': '{name} はすでに削除されていたため一覧から整理しました',
@@ -1404,7 +1404,7 @@ export const ja: Catalog = {
   'worktree.forceRemove.unverifiableTitle': '変更の有無を確認できません',
   'worktree.forceRemove.dirtyTitle': 'コミットされていない変更',
   'worktree.forceRemove.unverifiableBody':
-    '{name} は git がもう追跡していないため、未コミットの変更の有無を確認できません。\n{path}\n強制削除するとフォルダの内容が失われます。フォルダを直接開いて確認してから進めてください。',
+    '{name} は git がもう追跡していないため、未コミットの変更の有無を確認できません。\n{path}\n強制削除するとフォルダーの内容が失われます。フォルダーを直接開いて確認してから進めてください。',
   'worktree.forceRemove.dirtyBody':
     '{name} にコミットされていない変更が {count} 件あります。\n強制削除すると変更内容が失われます。続行しますか？',
   'worktree.forceRemove.confirm': '強制削除',
@@ -1425,8 +1425,8 @@ export const ja: Catalog = {
   // App.tsx runManagerApply — shown when the run.saveConfigs IPC throws
   'run.config.saveFailed': '保存に失敗しました: {detail}',
   // main/run/prepare.ts resolveRunCwd (run.start) and ipc.ts assertConfigCwd (run.saveConfigs) — thrown in main, shown verbatim in a renderer toast
-  'run.config.cwdNotString': '実行構成の作業フォルダが正しくありません',
-  'run.config.cwdOutsideProject': '実行構成の作業フォルダはプロジェクト内である必要があります',
+  'run.config.cwdNotString': '実行構成の作業フォルダーが正しくありません',
+  'run.config.cwdOutsideProject': '実行構成の作業フォルダーはプロジェクト内である必要があります',
   'run.start.incomplete': '実行構成の必須項目が空です: {fields}',
   'run.start.cycle': '実行構成が互いを待機しています: {path}',
   'run.start.missingTask': '{name} が参照している実行構成がありません',
@@ -1499,7 +1499,7 @@ export const ja: Catalog = {
   'run.field.javaHome': 'JDK',
   'run.field.springProfiles': 'Spring プロファイル',
   'run.field.args': '引数',
-  'run.field.cwd': '作業フォルダ',
+  'run.field.cwd': '作業フォルダー',
   'run.field.env': '環境変数',
   'run.field.members': 'メンバー',
   'run.env.key': 'キー',
@@ -1583,7 +1583,7 @@ export const ja: Catalog = {
   'preview.toolbar.stop': '停止',
   'preview.toolbar.address': 'アドレス',
   'preview.toolbar.devtools': 'DevTools',
-  'preview.toolbar.openExternal': 'ブラウザで開く',
+  'preview.toolbar.openExternal': 'ブラウザーで開く',
   'preview.viewport.label': '画面幅',
   'preview.viewport.fill': 'パネルの大きさ',
   'preview.viewport.mobileS': 'モバイル S',
@@ -1624,7 +1624,7 @@ export const ja: Catalog = {
   'preview.design.copied': 'コピーしました',
   'preview.design.shotFailed': 'スクリーンショットを撮れませんでした',
   'preview.agent.tab': 'エージェント',
-  'preview.agent.sandboxed': 'サンドボックス内セッションのページです。専用の空のブラウザ保存領域を使い、あなたのログインはありません',
+  'preview.agent.sandboxed': 'サンドボックス内セッションのページです。専用の空のブラウザー保存領域を使い、あなたのログインはありません',
   'preview.agent.running': 'エージェントがこのページを操作しています',
   'preview.agent.stop': 'エージェントのスクリプトを中断',
   'preview.agent.stopped': 'エージェントのスクリプトを中断しました',
@@ -1691,7 +1691,7 @@ export const ja: Catalog = {
   // 一つの経路のままなので、どちらも消さずに言う
   'jobs.empty.hint': '作業はここで直接作れます — コーディネーターセッションで作った作業もここに表示されます',
   'jobs.noProject': '開いているプロジェクトがありません',
-  'jobs.noProject.hint': 'セッションを開くとそのフォルダがこのウィンドウのプロジェクトになり、そこから作業を作れます',
+  'jobs.noProject.hint': 'セッションを開くとそのフォルダーがこのウィンドウのプロジェクトになり、そこから作業を作れます',
   // 8 つの状態グリフ(JobIcons.tsx)のツールチップ。サイドバーが状態を言葉で書かなくなったので、
   // これらは常時表示されない — アイコンを初めて見る人が学ぶ場所。pending と blocked は書き分ける:
   // 前者は依存が、後者は人が止めている
@@ -1747,8 +1747,8 @@ export const ja: Catalog = {
   'jobs.run.deleteBusy': 'この作業でワーカーが動いているため削除できません — 先に停止してください',
   'jobs.run.deleteFailed': '作業を削除できませんでした',
   'jobs.run.deleteKeptWorktrees': 'ワークツリーのフォルダーを {count} 個残しました。コミットされていない変更があるか、状態を確認できませんでした。中身を確認してから、ワークツリーパネルで削除してください。',
-  'jobs.run.sharedFolder': 'フォルダ共有',
-  'jobs.run.sharedFolderHint': '別の作業のワーカーと同じフォルダで動いています — 互いの編集が混ざることがあり、アプリはそれを防ぐことも気づくこともできません',
+  'jobs.run.sharedFolder': 'フォルダー共有',
+  'jobs.run.sharedFolderHint': '別の作業のワーカーと同じフォルダーで動いています — 互いの編集が混ざることがあり、アプリはそれを防ぐことも気づくこともできません',
   'jobs.run.scheduled': '予約',
   'jobs.run.scheduleNext': '次回 {time}',
   'jobs.run.waitingArchived': '待機中: エージェントプロファイル {names} はアーカイブ済みです',
@@ -2099,7 +2099,7 @@ export const ja: Catalog = {
   'github.settings.lifecycle.bounds': '再実行は {min}〜{max} 回、待ち時間は {waitMin}〜{waitMax} 分です。',
   'github.settings.lifecycle.invalid': '許容範囲外のため保存しませんでした。',
   'jobs.new.create': '作る',
-  'jobs.new.folderBusy': 'このフォルダではすでにワーカーが動いています — 同時実行が 1 だとこの作業のワーカーも同じフォルダで回るため、互いの編集が混ざることがあります',
+  'jobs.new.folderBusy': 'このフォルダーではすでにワーカーが動いています — 同時実行が 1 だとこの作業のワーカーも同じフォルダーで回るため、互いの編集が混ざることがあります',
   'jobs.new.failed': '作業を作れませんでした',
   'jobs.source.open': 'ソースから',
   'jobs.source.title': 'ソースから作業を作る',
@@ -2119,10 +2119,10 @@ export const ja: Catalog = {
   'jobs.source.cut': 'Astera の上限に合わせて一部を切りました',
   'jobs.source.pickItem': '項目を選ぶと内容がここに表示されます',
   'jobs.source.dataHint': '他の人が書いた文章です。作業はこれを指示ではなく資料として受け取ります。',
-  'jobs.source.openLink': 'ブラウザで開く',
+  'jobs.source.openLink': 'ブラウザーで開く',
   'jobs.source.make': '作業を作る',
   'jobs.source.lost': '応答がありませんでした。作業が作られた可能性があるので、作業一覧を確認してください。',
-  'jobs.source.chipOpen': '{label} をブラウザで開く',
+  'jobs.source.chipOpen': '{label} をブラウザーで開く',
   'jobs.gate.noAccountAssigned': 'この Task にアカウントが指定されていないため、どのエージェントで起動するか判断できません — アカウントを指定してください',
   'jobs.gate.noAccount': '{provider} アカウントにログインしていないため、この Task を開始できません',
   'jobs.gate.workerLostNoApp': 'この Task のワーカーは、復旧できる Astera が開いていない間に失われました（dispatch {dispatch}）。この Gate を解決すると、もう一度開始します。',
@@ -2144,7 +2144,7 @@ export const ja: Catalog = {
   'jobs.task.accountHint':
     'この Task のワーカーを起動するアカウントです — 最初のアカウントがどのエージェントで動かすかを決めるので、必ず1つ選んでください。2つ以上選ぶと、利用上限に達したときに並べた順に切り替わります',
   'jobs.task.accountTrust':
-    '選んだアカウントがこのフォルダを初めて使うとき、セッションタブにフォルダの信頼確認が出ます — 承認するまでワーカーは始まりません',
+    '選んだアカウントがこのフォルダーを初めて使うとき、セッションタブにフォルダーの信頼確認が出ます — 承認するまでワーカーは始まりません',
   'jobs.task.validate': '完了検査',
   'jobs.task.checksHint': '速い検査を前に置いてください — 最初の失敗で止まるので、遅い検査が前にあると修正のたびにその時間を失います。',
   'jobs.task.checksUnpicked': '未選択',
