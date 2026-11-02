@@ -1659,7 +1659,7 @@ Astera 에도 닿지 않습니다. Runtime 은 이 Mac 안의 주소(`127.0.0.1`
 ```
 
 그 컴퓨터에 스킬을 설치해 항목이 사라지는 것과 **그 컴퓨터와 다름** (Different there) 은 두 컴퓨터로 하는 점검표
-`docs/remote-runtime-checks.md` 의 3부, 3-3 에서 봅니다(사람의 Windows PC 에만 있는 파일이고, 저장소에는 없습니다).
+`scripts/mac-check/remote-runtime-checks.md` 의 3부, 3-3 에서 봅니다.
 
 ## 29. MCP 와 에이전트 세션의 CLI 는 보고서를 못 읽음
 
@@ -1769,8 +1769,7 @@ Astera 에도 닿지 않습니다. Runtime 은 이 Mac 안의 주소(`127.0.0.1`
 ```
 
 해제가 그 컨트롤러가 만든 예약 Job 을 일시 중지하는 것과 그 Job 을 그 컴퓨터의 사람만 재개할 수 있는 것은 두 컴퓨터로
-하는 점검표 `docs/remote-runtime-checks.md` 의 3부, 3-6 에서 봅니다(사람의 Windows PC 에만 있는 파일이고, 저장소에는
-없습니다).
+하는 점검표 `scripts/mac-check/remote-runtime-checks.md` 의 3부, 3-6 에서 봅니다.
 
 ## 마무리
 

@@ -40,10 +40,9 @@ const englishNames = Object.values(securityText).filter((v) => typeof v === 'str
 
 /** Repository paths a guide names: they start at one of the repository's top folders. */
 const repoPaths = (text) => [...new Set([...text.matchAll(/(?<![\w./~$-])((?:src|scripts|docs|resources|packages|\.github)\/[\w.@/-]*[\w])/g)].map((m) => m[1]))]
-/** The person's own two-computer checklist, which checks 28 and 30 point to: kept out of git on purpose, so it is on
- *  their disk and nowhere else. The guides may name it only while git ignores it. */
-const LOCAL_ONLY = 'docs/remote-runtime-checks.md'
-const ignored = (p) => spawnSync('git', ['check-ignore', '-q', p], { cwd: root }).status === 0
+/** The two-computer checklist, which checks 28 and 30 point to for what one Mac cannot show. */
+const TWO_COMPUTER = 'scripts/mac-check/remote-runtime-checks.md'
+const tracked = (p) => spawnSync('git', ['ls-files', '--error-unmatch', p], { cwd: root }).status === 0
 
 /** A catalog value matches a label as written when it is the label, its `{placeholders}` standing for any text. A value
  *  with no words of its own (`{detail}`) matches nothing: it would vouch for any label. */
@@ -58,7 +57,7 @@ const keysFor = (koText, enText) => Object.keys(ko).filter((k) => matches(ko[k],
 describe('scripts/mac-check guides', () => {
   for (const [name, text] of Object.entries(guides)) {
     it(`${name} names only repository files that exist`, () => {
-      const missing = repoPaths(text).filter((p) => !existsSync(path.join(root, p)) && !(p === LOCAL_ONLY && ignored(p)))
+      const missing = repoPaths(text).filter((p) => !existsSync(path.join(root, p)))
       expect(missing).toEqual([])
     })
 
@@ -285,11 +284,11 @@ describe('scripts/mac-check guides', () => {
   })
 
   it('checks 28 and 30 end by pointing to the two-computer checklist for what one Mac cannot show', () => {
-    expect(ignored(LOCAL_ONLY)).toBe(true)
+    expect(tracked(TWO_COMPUTER)).toBe(true)
     for (const [n, part] of [[28, '3-3'], [30, '3-6']]) {
       const body = phase12(n).body
       const pointer = body.slice(body.lastIndexOf('- [ ] 실패'))
-      expect(pointer, `check ${n}`).toContain(`\`${LOCAL_ONLY}\``)
+      expect(pointer, `check ${n}`).toContain(`\`${TWO_COMPUTER}\``)
       expect(pointer, `check ${n}`).toContain(part)
     }
   })
