@@ -6,6 +6,12 @@ import path from 'node:path'
 export interface ExtensionPaths {
   /** The shared extensions: `{ version, entries }`. */
   registry: string
+  /** The shared Claude Code plugins: `{ version, plugins }`, written by the Host alone. Not the registry, so an older
+   *  build that reads the registry never meets a plugin. */
+  claudePlugins: string
+  /** Where Astera installs each shared Claude Code plugin once: Claude Code's own config layout, used only by
+   *  `claude plugin …` commands, never as a session's `CLAUDE_CONFIG_DIR`. */
+  claudePluginHome: string
   /** Canonical skill folders, one per skill name. */
   skills: string
   /** Canonical Claude slash commands, `<name>.md`. */
@@ -27,6 +33,8 @@ export function extensionPaths(profileDir: string): ExtensionPaths {
   const state = path.join(profileDir, 'extension-state')
   return {
     registry: path.join(ext, 'registry.json'),
+    claudePlugins: path.join(ext, 'claude-plugins.json'),
+    claudePluginHome: path.join(ext, 'claude-plugins'),
     skills: path.join(ext, 'skills'),
     commands: path.join(ext, 'commands'),
     agents: path.join(ext, 'agents'),
