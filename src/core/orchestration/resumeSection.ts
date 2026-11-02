@@ -6,6 +6,7 @@
 // 이 파일도 순수하다. checkpoint.ts 의 타입만 가져온다.
 import type { Checkpoint, CheckpointReport } from './checkpoint'
 import type { WorkerState } from './types'
+import { SANDBOXED_LINE_NOTE } from './sandboxedLine'
 
 /** Packet 은 작아야 한다(SPEC 9.3) — diff 본문·소스·knowledge 파일 내용을 안 담는 대신, 남는
  *  자리를 잡아먹을 수 있는 유일한 가변 길이 절은 PREVIOUS WORKER REPORTS 다. 6000 자는 대략
@@ -113,6 +114,8 @@ once when the work is finished:
     --task-id ${c.taskId} --dispatch-id ${c.dispatchId} \\
     --outcome succeeded --subject "<one-line status>" --body - \\
     --files-modified "path/a,path/b" --json
+
+${SANDBOXED_LINE_NOTE}
 
 Failure is a terminal report too — use --outcome failed.`
 }

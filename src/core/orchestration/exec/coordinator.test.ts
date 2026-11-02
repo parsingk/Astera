@@ -14,6 +14,7 @@ import {
   type CoordinatorDeps
 } from './coordinator'
 import { ENTER_QUIET_MS } from '../../sessions/sessionDriver'
+import { SANDBOXED_LINE_NOTE } from '../sandboxedLine'
 import type { CheckResult, ReviewIssue } from '../types'
 import type { WeakeningFinding } from '../../github/weakening'
 
@@ -289,6 +290,21 @@ describe('buildSpecFile — a lifecycle repair', () => {
     // G3c1 final review M1: a review's repair is not told its checks failed
     expect(lifecycleRepairPrompt('C:/specs/x.md', 'review-failure')).toMatch(/its review/)
     expect(lifecycleRepairPrompt('C:/specs/x.md', 'review-failure')).not.toMatch(/GitHub CI/)
+  })
+})
+
+// The Mac check (checks 18 and 25): a worker in Claude Code's sandbox piped its report into astera as the spec asked
+// (`--body -`), the line ran inside the sandbox, and the report never arrived. Both spec files say how to send it there.
+describe('the reporting obligation in a sandboxed Claude Code session', () => {
+  it('says to give the body inline, in the spec file and in the review spec file', () => {
+    const spec = buildSpecFile({ title: 'T', spec: 'S', taskId: 'tsk_1', dispatchId: 'dsp_1' })
+    const review = buildReviewSpecFile({ title: 't', spec: 's', taskId: 'tsk', dispatchId: 'dsp', validated: true })
+    for (const s of [spec, review]) {
+      expect(s).toContain(SANDBOXED_LINE_NOTE)
+      expect(s.indexOf(SANDBOXED_LINE_NOTE)).toBeGreaterThan(s.indexOf('## Reporting obligation'))
+    }
+    expect(SANDBOXED_LINE_NOTE).toContain('heredoc')
+    expect(SANDBOXED_LINE_NOTE).toContain('--body "')
   })
 })
 

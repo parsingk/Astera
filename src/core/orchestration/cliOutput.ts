@@ -336,7 +336,9 @@ const STEPS: Record<
   PLUGIN_CAPABILITY_MISSING: (_cmd, details) => (typeof details.runtime === 'string' ? [] : ['astera plugins list']),
   // **`host start` 가 3 으로 끝난 것에 `host start` 를 권하지 않는다**(리뷰 I1). 방금 그것이 안 됐다.
   // 무엇을 봤는지는 `host status` 가 말하고, Host 의 로그 자리는 이 오류의 details 가 싣는다.
-  HOST_NOT_RUNNING: (cmd) => [cmd === 'host-start' ? 'astera host status' : 'astera host start'],
+  // Inside Claude Code's sandbox (cli/run.ts sandboxedLine) no Host is reached whether one runs or not: the message says
+  // how to run the line instead, and no command typed there would help.
+  HOST_NOT_RUNNING: (cmd, details) => (details.sandbox === 'claude' ? [] : [cmd === 'host-start' ? 'astera host status' : 'astera host start']),
   // **`tasks add --validate` 의 없는 구성 id 는 그 계획의 목록 한 줄이다**(phase D). 그 404 만 답에
   // 계획 id 를 싣고 오고(command.ts, run.ts 가 `details` 로 옮긴다), 채워진 줄은 그대로 칠 수 있다.
   // 문구가 아니라 칸으로 가른다 — CONFLICT 의 `requestId` 와 같은 판단이다.
