@@ -201,7 +201,7 @@ export const es: Catalog = {
   'settings.security.enforce.builtins': 'Antes que cualquier Rule, en las sesiones de agentes siempre se bloquea escribir en la carpeta de ajustes de Astera y ejecutar comandos que cambian los ajustes de Astera.',
   'settings.security.enforce.sameUser': 'Un agente que se ejecuta con el mismo usuario todavía puede escribir los archivos de ajustes directamente desde un script.',
   'settings.security.enforce.running': 'Un cambio se aplica a las sesiones que empiecen después.',
-  'settings.security.enforce.keeps': 'Las sesiones iniciadas en Enforce siguen bloqueando hasta que terminan, y sus llamadas bloqueadas se registran aunque se desactive.',
+  'settings.security.enforce.keeps': 'Las sesiones iniciadas con Enforce activo siguen bloqueando hasta que terminan, aunque desactives Enforce. Sus llamadas bloqueadas siguen apareciendo en Audit Logs. Para quitarlo ya, reinicia esas sesiones.',
   'settings.security.enforce.confirm': 'Activar Enforce',
   'settings.security.coverage.withNote': '{level} ({note})',
   'settings.security.rules.hint': 'Las reglas se prueban desde arriba. La primera que coincide con una llamada decide.',

@@ -234,7 +234,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.security.enforce.builtins': "Before any Rule, agent sessions are always blocked from writing Astera's settings folder and from running commands that change Astera's settings.",
   'settings.security.enforce.sameUser': 'An agent running as the same user can still write the settings files directly from a script.',
   'settings.security.enforce.running': 'A change applies to sessions started after it.',
-  'settings.security.enforce.keeps': 'Sessions started in Enforce keep blocking until they end, and their blocked calls are recorded even after it is turned off.',
+  'settings.security.enforce.keeps': 'Sessions started while Enforce was on keep blocking until they end, even after you turn Enforce off. Their blocked calls still go to Audit Logs. To lift it now, restart those sessions.',
   'settings.security.enforce.confirm': 'Turn on Enforce',
   'settings.security.coverage.withNote': '{level} ({note})',
   'settings.security.rules.hint': 'Rules are tried from the top. The first one that matches a call decides it.',

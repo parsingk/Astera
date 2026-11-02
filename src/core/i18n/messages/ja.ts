@@ -198,7 +198,7 @@ export const ja: Catalog = {
   'settings.security.enforce.builtins': 'どの Rule よりも先に、エージェントのセッションによる Astera の設定フォルダーへの書き込みと Astera の設定を変えるコマンドを常に止めます。',
   'settings.security.enforce.sameUser': '同じユーザーとして動くエージェントがスクリプトで設定ファイルを直接書くことは止められません。',
   'settings.security.enforce.running': '切り替えは、その後に開始するセッションから適用されます。',
-  'settings.security.enforce.keeps': 'Enforce で開始したセッションは終わるまで止め続け、止めた呼び出しはオフにした後も記録します。',
+  'settings.security.enforce.keeps': 'Enforce の間に開始したセッションは、Enforce をオフにしてもそのセッションが終わるまで止め続けます。そのセッションで止めた呼び出しも Audit Logs に残ります。すぐに解除するには、そのセッションを開始し直してください。',
   'settings.security.enforce.confirm': 'Enforce をオンにする',
   'settings.security.coverage.withNote': '{level}（{note}）',
   'settings.security.rules.hint': 'ルールは上から順に試されます。呼び出しに最初に一致したルールが決めます。',

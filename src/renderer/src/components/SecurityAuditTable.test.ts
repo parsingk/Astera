@@ -21,3 +21,19 @@ describe('Audit Logs table at the minimum window', () => {
     expect(css).toMatch(/\.security-rows tr\s*\{[^}]*grid-template-columns:\s*5\.75em minmax\(0, 1fr\) auto/)
   })
 })
+
+// A long list scrolls in its own box, so adding a rule or reading more rows does not push the rest of the page down
+describe('Policies Rules and Audit Logs scroll in their own box', () => {
+  const tsx = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'SecuritySettings.tsx'), 'utf8')
+
+  it("keeps the person's rules in the list's capped box", () => {
+    expect(tsx).toContain('<ol className="ext-list security-rules">')
+    expect(css).toMatch(/\.ext-list\s*\{[^}]*max-height:\s*360px;[^}]*overflow-y:\s*auto/)
+  })
+
+  it('caps the tool calls and the credential uses tables, with the column names held at the top', () => {
+    expect(tsx.match(/<div className="security-table-wrap is-rows">/g)).toHaveLength(2)
+    expect(css).toMatch(/\.security-table-wrap\.is-rows\s*\{[^}]*max-height:\s*\d+px;[^}]*overflow-y:\s*auto/)
+    expect(css).toMatch(/\.security-table-wrap\.is-rows thead th\s*\{[^}]*position:\s*sticky;[^}]*top:\s*0/)
+  })
+})

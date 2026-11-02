@@ -364,7 +364,7 @@ export function SecuritySettings({
               {policy.rules.length === 0 ? (
                 <p className="settings-hint">{t('settings.security.rules.none')}</p>
               ) : (
-                <ol className="ext-list is-uncapped security-rules">
+                <ol className="ext-list security-rules">
                   {policy.rules.map((r, i) => (
                     <li key={r.id} className="ext-row security-rule">
                       <span className="detail-check-no">{i + 1}</span>
@@ -806,7 +806,7 @@ function CredentialUses({ sessionTitle }: { sessionTitle: (sessionId: string) =>
       </div>
       {line !== null && <p className="settings-hint">{line}</p>}
       {rows !== null && rows.length > 0 && (
-        <div className="security-table-wrap">
+        <div className="security-table-wrap is-rows">
           <table className="security-table security-rows" role="table">
             <thead role="rowgroup">
               <tr role="row">
@@ -876,7 +876,7 @@ export function AuditTable({
 }): React.JSX.Element {
   const { t } = useI18n()
   return (
-    <div className="security-table-wrap">
+    <div className="security-table-wrap is-rows">
       <table className="security-table security-rows" role="table">
         <thead role="rowgroup">
           <tr role="row">
