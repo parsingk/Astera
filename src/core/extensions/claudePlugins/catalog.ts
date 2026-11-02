@@ -54,9 +54,9 @@ const insideOf = (parent: string, child: string): boolean => {
 
 const versionOf = (v: unknown): string | null => (isObj(v) && typeof v.version === 'string' && v.version !== '' ? v.version : null)
 
-/** What the marketplace of `home` offers for the plugin `name` right now: a fingerprint that changes when the entry's
- *  name, version or source changes and, for a source that is a folder of the marketplace (a relative string), when any file
- *  in that folder does; and the version on offer, which is that folder's own manifest version when it has one, else the
+/** What the marketplace of `home` offers for the plugin `name` right now: a fingerprint that changes when anything in the
+ *  entry but its description changes (canonical JSON, so key order does not matter) and, for a source that is a folder of
+ *  the marketplace (a relative string), when any file in that folder does; and the version on offer, which is that folder's own manifest version when it has one, else the
  *  entry's version, else null. Null when the home has no such marketplace, plugin, catalog or folder, or a file cannot be
  *  read: there is then nothing to compare, and the caller leaves what it recorded alone. */
 export async function catalogFingerprint(a: {
@@ -73,7 +73,10 @@ export async function catalogFingerprint(a: {
   const entry = isObj(catalog) && Array.isArray(catalog.plugins) ? catalog.plugins.find((e) => isObj(e) && e.name === a.name) : undefined
   if (!isObj(entry)) return null
 
-  const hash = createHash('sha256').update(canonical({ name: a.name, version: entry.version ?? null, source: entry.source ?? null }))
+  // The whole entry but its description: a `strict: false` entry declares hooks, MCP servers and commands in the catalog,
+  // and an update missed is worse than one that turns out to change nothing
+  const { description: _description, ...loadable } = entry
+  const hash = createHash('sha256').update(canonical(loadable))
   let offeredVersion = versionOf(entry)
   if (typeof entry.source === 'string') {
     const folder = path.resolve(installLocation, entry.source)

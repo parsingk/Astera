@@ -22,7 +22,7 @@ const write = async (file: string, text: string): Promise<void> => {
   await fs.writeFile(file, text)
 }
 
-type Entry = { name: string; source: string | object; version?: string; description?: string }
+type Entry = { name: string; source: string | object; version?: string; description?: string; [field: string]: unknown }
 interface Layout {
   entries?: Entry[]
   /** Files under the marketplace folder, keyed by their path relative to it. */
@@ -91,16 +91,34 @@ describe('catalogFingerprint', () => {
     expect(b).toEqual(a)
   })
 
-  it('a description-only change of another plugin does not', async () => {
-    const entries = (other: string): Entry[] => [
-      { name: 'probe', source: './probe', version: '1.0.0' },
+  it('a description-only change of another plugin does not, nor one of the plugin itself', async () => {
+    const entries = (own: string, other: string): Entry[] => [
+      { name: 'probe', source: './probe', version: '1.0.0', description: own },
       { name: 'other', source: './other', version: '1.0.0', description: other }
     ]
     const files = { 'probe/skills/a/SKILL.md': 'one', 'other/skills/b/SKILL.md': 'two' }
-    const a = await fingerprint(await home({ entries: entries('before'), files }))
-    const b = await fingerprint(await home({ entries: entries('after'), files }))
+    const a = await fingerprint(await home({ entries: entries('own before', 'other before'), files }))
     expect(a).not.toBeNull()
-    expect(b).toEqual(a)
+    expect(await fingerprint(await home({ entries: entries('own before', 'other after'), files }))).toEqual(a)
+    expect(await fingerprint(await home({ entries: entries('own after', 'other before'), files }))).toEqual(a)
+    // a description that is not there at all is the same
+    expect(await fingerprint(await home({ entries: [{ name: 'probe', source: './probe', version: '1.0.0' }], files }))).toEqual(a)
+  })
+
+  it('a changed hooks field in the entry changes it', async () => {
+    const entry = (hooks: object | undefined): Entry => ({ name: 'probe', source: './probe', strict: false, hooks })
+    const hook = (command: string) => ({ PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command }] }] })
+    const a = await fingerprint(await home({ entries: [entry(hook('echo one'))] }))
+    expect(await fingerprint(await home({ entries: [entry(hook('echo one'))] }))).toEqual(a)
+    expect((await fingerprint(await home({ entries: [entry(hook('echo two'))] })))?.fingerprint).not.toBe(a?.fingerprint)
+    expect((await fingerprint(await home({ entries: [entry(undefined)] })))?.fingerprint).not.toBe(a?.fingerprint)
+  })
+
+  it('any other field of the entry counts too', async () => {
+    const entry = (extra: object): Entry => ({ name: 'probe', source: './probe', ...extra })
+    const a = await fingerprint(await home({ entries: [entry({ mcpServers: { s: { command: 'a' } } })] }))
+    expect((await fingerprint(await home({ entries: [entry({ mcpServers: { s: { command: 'b' } } })] })))?.fingerprint).not.toBe(a?.fingerprint)
+    expect((await fingerprint(await home({ entries: [entry({ commands: ['./c.md'] })] })))?.fingerprint).not.toBe(a?.fingerprint)
   })
 
   it('a change in the folder of another plugin does not either', async () => {
