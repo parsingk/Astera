@@ -20,8 +20,9 @@ export type DiscoveredClaudePlugin = {
   marketplace: string
   /** Every Claude account holding the plugin at user scope, in the order the accounts were given. */
   holders: ClaudePluginHolder[]
-  /** From the first account that holds the plugin and knows its marketplace; null when none does or the source is one
-   *  Astera cannot hand to `claude plugin marketplace add`. */
+  /** From the first account that holds the plugin and knows its marketplace; null when none does, when the source is one
+   *  Astera cannot hand to `claude plugin marketplace add`, and when it was refused as `source-credential`: this object
+   *  goes to the renderer, and it must not hold the credential. */
   source: MarketplaceSource | null
   /** That account; the first holder when no holder knows the marketplace. */
   sourceAccountId: string
@@ -78,6 +79,23 @@ function sourceOf(raw: unknown): MarketplaceSource | null {
   return clean as MarketplaceSource
 }
 
+/** A url source that carries request headers (a private marketplace): they hold a token, and Astera could not pass them
+ *  on, so `sourceOf` drops them and this is what says they were there. */
+const holdsHeaders = (raw: unknown): boolean => isObj(raw) && raw.source === 'url' && isObj(raw.headers) && Object.keys(raw.headers).length > 0
+
+/** Whether a git or url address carries a credential. `credentialInLaunch` finds a password and secret-named query keys;
+ *  a git address also puts a token as the whole user name (`https://<token>@host/...`). Only http(s) counts: the user
+ *  name of `ssh://git@host` or `git@host:o/r.git` is a login, not a secret. */
+function addressHoldsCredential(url: string): boolean {
+  if (credentialInLaunch(undefined, url)) return true
+  try {
+    const u = new URL(url)
+    return (u.protocol === 'http:' || u.protocol === 'https:') && u.username !== ''
+  } catch {
+    return false
+  }
+}
+
 /** Undefined when there is no such file; throws when it is there but cannot be read or is not a JSON object (damaged, or
  *  the CLI is writing it). */
 async function readObject(file: string): Promise<Obj | undefined> {
@@ -129,14 +147,27 @@ async function readAccount(account: Account): Promise<AccountFiles> {
   }
 }
 
+const nonEmpty = (v: unknown): boolean => typeof v === 'object' && v !== null && Object.keys(v).length > 0
+
 /** Whether a plugin's manifest asks the person for settings (`userConfig`). Those values live in the account that was
  *  asked, so a copy installed once for every account would never have them. A manifest that is missing or cannot be
  *  parsed declares none. */
 async function declaresUserConfig(installPath: string): Promise<boolean> {
   try {
     const manifest: unknown = JSON.parse(await fs.readFile(path.join(installPath, '.claude-plugin', 'plugin.json'), 'utf8'))
-    const asked = isObj(manifest) ? manifest.userConfig : undefined
-    return typeof asked === 'object' && asked !== null && Object.keys(asked).length > 0
+    return isObj(manifest) && nonEmpty(manifest.userConfig)
+  } catch {
+    return false
+  }
+}
+
+/** The same question of the plugin's entry in its marketplace's catalog (`<installLocation>/.claude-plugin/marketplace.json`),
+ *  where a marketplace may declare `userConfig` instead of the plugin's own manifest. A catalog that is missing or cannot
+ *  be parsed declares none. */
+async function catalogDeclaresUserConfig(installLocation: string, name: string): Promise<boolean> {
+  try {
+    const catalog: unknown = JSON.parse(await fs.readFile(path.join(installLocation, '.claude-plugin', 'marketplace.json'), 'utf8'))
+    return isObj(catalog) && Array.isArray(catalog.plugins) && catalog.plugins.some((e) => isObj(e) && e.name === name && nonEmpty(e.userConfig))
   } catch {
     return false
   }
@@ -148,18 +179,24 @@ interface Group {
   marketplace: string
   holders: ClaudePluginHolder[]
   installPaths: string[]
+  /** Where each holder's account keeps its clone of the marketplace. */
+  catalogs: string[]
   source: MarketplaceSource | null
+  /** The recorded source carried request headers, which `source` does not. */
+  headers: boolean
   sourceAccountId: string | null
 }
 
-/** The first reason that applies, in the order the design gives them. userConfig is asked of every holder's copy, since
- *  versions differ between accounts and the one Astera installs may be newer than any of them. */
+/** The first reason that applies, in the order the design gives them. userConfig is asked of every holder's copy and of
+ *  every holder's catalog, since versions differ between accounts and the one Astera installs may be newer than any of
+ *  them. */
 async function refusalOf(g: Group, shared: SharedClaudePlugin[]): Promise<ClaudePluginRefusal | null> {
   if (NOT_FROM_MARKETPLACE.has(g.marketplace)) return 'not-from-marketplace'
   if (shared.some((s) => s.name === g.name && s.marketplace !== g.marketplace)) return 'name-taken'
   if (g.source === null) return 'source-unsupported'
-  if ('url' in g.source && credentialInLaunch(undefined, g.source.url)) return 'source-credential'
-  if ((await Promise.all(g.installPaths.map(declaresUserConfig))).some(Boolean)) return 'user-config'
+  if (g.headers || ('url' in g.source && addressHoldsCredential(g.source.url))) return 'source-credential'
+  const asked = [...g.installPaths.map(declaresUserConfig), ...g.catalogs.map((c) => catalogDeclaresUserConfig(c, g.name))]
+  if ((await Promise.all(asked)).some(Boolean)) return 'user-config'
   return null
 }
 
@@ -182,22 +219,31 @@ export async function discoverClaudePlugins(a: {
       if (sharedIds.has(id)) continue
       const at = id.lastIndexOf('@')
       if (at <= 0 || at === id.length - 1) continue
-      const g: Group = groups.get(id) ?? { id, name: id.slice(0, at), marketplace: id.slice(at + 1), holders: [], installPaths: [], source: null, sourceAccountId: null }
+      const g: Group = groups.get(id) ?? { id, name: id.slice(0, at), marketplace: id.slice(at + 1), holders: [], installPaths: [], catalogs: [], source: null, headers: false, sourceAccountId: null }
       groups.set(id, g)
       g.holders.push({ accountId: files.accountId, version: held.version, enabled: files.enabled[id] === true })
       if (held.installPath !== null) g.installPaths.push(held.installPath)
+      const record = files.marketplaces.get(g.marketplace)
+      if (isObj(record) && typeof record.installLocation === 'string') g.catalogs.push(record.installLocation)
       if (g.sourceAccountId === null && files.marketplaces.has(g.marketplace)) {
-        const record = files.marketplaces.get(g.marketplace)
         g.sourceAccountId = files.accountId
         g.source = sourceOf(isObj(record) ? record.source : undefined)
+        g.headers = holdsHeaders(isObj(record) ? record.source : undefined)
       }
     }
   }
 
   const plugins: DiscoveredClaudePlugin[] = []
   for (const g of groups.values()) {
-    const found = { id: g.id, name: g.name, marketplace: g.marketplace, holders: g.holders, source: g.source, sourceAccountId: g.sourceAccountId ?? g.holders[0].accountId }
     const reason = await refusalOf(g, a.shared)
+    const found = {
+      id: g.id,
+      name: g.name,
+      marketplace: g.marketplace,
+      holders: g.holders,
+      source: reason === 'source-credential' ? null : g.source,
+      sourceAccountId: g.sourceAccountId ?? g.holders[0].accountId
+    }
     plugins.push(reason ? { ...found, shareable: false, reason } : { ...found, shareable: true })
   }
   return { plugins, unreadable }

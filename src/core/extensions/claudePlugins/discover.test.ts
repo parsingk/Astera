@@ -37,6 +37,9 @@ interface Layout {
   plugins?: Record<string, Held[]>
   /** Raw JSON values of known_marketplaces.json: `{ source }` objects keyed by marketplace name. */
   marketplaces?: Record<string, unknown>
+  /** Written to the marketplace's `installLocation` as `.claude-plugin/marketplace.json`, keyed by marketplace name; a
+   *  string is written as it is (to make a damaged file). */
+  catalogs?: Record<string, unknown>
   enabled?: Record<string, boolean>
 }
 
@@ -59,6 +62,9 @@ const account = async (home: string, id: string, layout: Layout = {}, provider: 
   if (layout.marketplaces) {
     const known = Object.fromEntries(Object.entries(layout.marketplaces).map(([name, source]) => [name, { source, installLocation: path.join(configDir, 'plugins', 'marketplaces', name) }]))
     await write(path.join(configDir, 'plugins', 'known_marketplaces.json'), JSON.stringify(known))
+  }
+  for (const [name, catalog] of Object.entries(layout.catalogs ?? {})) {
+    await write(path.join(configDir, 'plugins', 'marketplaces', name, '.claude-plugin', 'marketplace.json'), typeof catalog === 'string' ? catalog : JSON.stringify(catalog))
   }
   if (layout.enabled) await write(path.join(configDir, 'settings.json'), JSON.stringify({ enabledPlugins: layout.enabled }))
   return { id, label: id, configDir, color: '#888', createdAt: '2026-11-02T00:00:00.000Z', ...(provider === 'codex' ? { provider } : {}) }
@@ -213,14 +219,37 @@ describe('discoverClaudePlugins', () => {
       expect(p).toMatchObject({ sourceAccountId: 'a', source: null, shareable: false, reason: 'source-unsupported' })
     })
 
+    // The refusal carries source null: the object goes to the renderer, and it must not hold the credential
     it.each([
-      ['a password in the address', 'https://user:hunter2@git.example.com/m.git'],
-      ['a secret-named query parameter', 'https://git.example.com/m.git?access_token=abc123']
-    ])('source-credential: %s', async (_name, url) => {
+      ['a password in the address', 'https://user:hunter2@git.example.com/m.git', 'hunter2'],
+      ['a secret-named query parameter', 'https://git.example.com/m.git?access_token=abc123', 'abc123'],
+      ['a token as the whole user name of an https address', 'https://ghp_abc123@git.example.com/m.git', 'ghp_abc123'],
+      ['a token as the whole user name of an http address', 'http://ghp_abc123@10.0.0.5/m.git', 'ghp_abc123']
+    ])('source-credential: %s', async (_name, url, secret) => {
       for (const source of [{ source: 'git', url }, { source: 'url', url }]) {
         const p = await only({ plugins: { [`x@m`]: [{}] }, marketplaces: { m: source } })
-        expect(p).toMatchObject({ shareable: false, reason: 'source-credential' })
+        expect(p).toMatchObject({ source: null, sourceAccountId: 'a', shareable: false, reason: 'source-credential' })
+        expect(JSON.stringify(p)).not.toContain(secret)
       }
+    })
+
+    it('source-credential: a url source with headers, whatever they hold', async () => {
+      const url = 'https://market.example.com/marketplace.json'
+      const raw = { source: 'url', url, headers: { Authorization: 'Bearer HEADER_VALUE_MUST_NOT_APPEAR' } }
+      const p = await only({ plugins: { 'x@m': [{}] }, marketplaces: { m: raw } })
+      expect(p).toMatchObject({ source: null, shareable: false, reason: 'source-credential' })
+      expect(JSON.stringify(p)).not.toContain('HEADER_VALUE_MUST_NOT_APPEAR')
+    })
+
+    it.each([
+      ['an ssh address with a login name', { source: 'git', url: 'ssh://git@git.example.com/m.git' }],
+      ['an scp-style address', { source: 'git', url: 'git@git.example.com:o/m.git' }],
+      ['an https address with no user', { source: 'git', url: 'https://git.example.com/m.git' }],
+      ['a url source with empty headers', { source: 'url', url: 'https://market.example.com/marketplace.json', headers: {} }]
+    ])('shares %s, which holds no credential', async (_name, source) => {
+      const p = await only({ plugins: { 'x@m': [{}] }, marketplaces: { m: source } })
+      expect(p).toMatchObject({ shareable: true })
+      expect(p.source).not.toBeNull()
     })
 
     it('user-config: the plugin declares a non-empty userConfig', async () => {
@@ -255,6 +284,41 @@ describe('discoverClaudePlugins', () => {
       expect(found.plugins[0]).toMatchObject({ shareable: true })
     })
 
+    describe('user-config declared in the marketplace catalog entry', () => {
+      const ask = { api_key: { type: 'string', title: 'API key', sensitive: true } }
+      const catalog = (...plugins: object[]) => ({ name: OFFICIAL, plugins })
+      const layout = (catalogs: Record<string, unknown>): Layout => ({ plugins: { [`x@${OFFICIAL}`]: [{ manifest: { name: 'x' } }] }, marketplaces: { [OFFICIAL]: GITHUB }, catalogs })
+
+      it('refuses when the entry with the plugin name has a non-empty userConfig', async () => {
+        const p = await only(layout({ [OFFICIAL]: catalog({ name: 'other' }, { name: 'x', source: './x', userConfig: ask }) }))
+        expect(p).toMatchObject({ source: GITHUB, shareable: false, reason: 'user-config' })
+      })
+
+      it("is not asked by another plugin's entry, an empty userConfig, or an entry with none", async () => {
+        for (const entries of [[{ name: 'other', userConfig: ask }, { name: 'x' }], [{ name: 'x', userConfig: {} }], [{ name: 'other' }]]) {
+          expect(await only(layout({ [OFFICIAL]: catalog(...entries) }))).toMatchObject({ shareable: true })
+        }
+      })
+
+      it.each([
+        ['has no catalog file', undefined],
+        ['holds a catalog that cannot be parsed', '{'],
+        ['holds a catalog with no plugin list', { name: OFFICIAL }],
+        ['holds a plugin list with entries that are not objects', { plugins: ['x', null, 3] }]
+      ])('counts a marketplace folder that %s as declaring none', async (_name, content) => {
+        const p = await only(layout(content === undefined ? {} : { [OFFICIAL]: content }))
+        expect(p).toMatchObject({ shareable: true })
+      })
+
+      it('asks the catalog of every account holding the plugin', async () => {
+        const home = await temp()
+        const a = await account(home, 'a', layout({ [OFFICIAL]: catalog({ name: 'x' }) }))
+        const b = await account(home, 'b', layout({ [OFFICIAL]: catalog({ name: 'x', userConfig: ask }) }))
+        const found = await discoverClaudePlugins({ accounts: [a, b], shared: [] })
+        expect(found.plugins[0]).toMatchObject({ shareable: false, reason: 'user-config' })
+      })
+    })
+
     it('goes by the order: marketplace kind, then name taken, then source, then credential, then userConfig', async () => {
       const userConfig = { k: { type: 'string' } }
       const credentialed = { source: 'git', url: 'https://u:p@git.example.com/m.git' }
@@ -267,15 +331,19 @@ describe('discoverClaudePlugins', () => {
       expect(await reasonOf({ plugins: { 'x@m': [{ manifest }] }, marketplaces: { m: { source: 'npm', package: 'p' } } })).toBe('source-unsupported')
       // a credential beats userConfig
       expect(await reasonOf({ plugins: { 'x@m': [{ manifest }] }, marketplaces: { m: credentialed } })).toBe('source-credential')
+      // ... also when the catalog is what asks
+      const catalogs = { m: { plugins: [{ name: 'x', userConfig }] } }
+      expect(await reasonOf({ plugins: { 'x@m': [{}] }, marketplaces: { m: credentialed }, catalogs })).toBe('source-credential')
+      expect(await reasonOf({ plugins: { 'x@m': [{}] }, marketplaces: { m: { source: 'github', repo: 'o/r' } }, catalogs })).toBe('user-config')
     })
   })
 
-  it('carries over only the fields a source is made of, never a header or anything else the account recorded', async () => {
+  it('carries over only the fields a source is made of, nothing else the account recorded', async () => {
     const url = 'https://market.example.com/marketplace.json'
-    const raw = { source: 'url', url, headers: { Authorization: 'Bearer HEADER_VALUE_MUST_NOT_APPEAR' }, extra: 1 }
-    const p = await only({ plugins: { 'x@m': [{}] }, marketplaces: { m: raw } })
-    expect(p.source).toEqual({ source: 'url', url })
-    expect(JSON.stringify(p)).not.toContain('HEADER_VALUE_MUST_NOT_APPEAR')
+    const github = await only({ plugins: { 'x@m': [{}] }, marketplaces: { m: { source: 'github', repo: 'o/r', ref: 'v2', autoUpdate: true, note: 'n' } } })
+    expect(github.source).toEqual({ source: 'github', repo: 'o/r', ref: 'v2' })
+    const plain = await only({ plugins: { 'x@m': [{}] }, marketplaces: { m: { source: 'url', url, headers: {}, extra: 1 } } })
+    expect(plain.source).toEqual({ source: 'url', url })
   })
 
   it('does not write to an account folder', async () => {
