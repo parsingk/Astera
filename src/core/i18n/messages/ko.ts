@@ -239,7 +239,7 @@ export const ko = {
   'settings.security.enforce.builtins': '어떤 Rule 보다 먼저, 에이전트 세션의 Astera 설정 폴더 쓰기와 Astera 설정 변경 명령은 항상 막습니다.',
   'settings.security.enforce.sameUser': '같은 사용자로 도는 에이전트가 스크립트로 설정 파일을 직접 쓰는 것은 막지 못합니다.',
   'settings.security.enforce.running': '켜고 끈 설정은 그 뒤에 시작하는 세션부터 적용됩니다.',
-  'settings.security.enforce.keeps': 'Enforce 로 시작한 세션은 끝날 때까지 계속 막고, 그 막은 호출은 끈 뒤에도 기록합니다.',
+  'settings.security.enforce.keeps': 'Enforce 일 때 시작한 세션은 Enforce 를 꺼도 그 세션이 끝날 때까지 계속 막습니다. 그 세션에서 막힌 호출도 계속 Audit Logs 에 남습니다. 바로 풀려면 그 세션을 다시 시작하세요.',
   'settings.security.enforce.confirm': 'Enforce 켜기',
   'settings.security.coverage.withNote': '{level} ({note})',
   'settings.security.rules.hint': 'Rules 는 위에서부터 차례로 봅니다. 호출에 처음 맞는 Rule 이 결정합니다.',
