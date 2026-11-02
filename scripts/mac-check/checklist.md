@@ -1576,9 +1576,12 @@ Astera 에도 닿지 않습니다. Runtime 은 이 Mac 안의 주소(`127.0.0.1`
    **등록** (Add) 을 누릅니다.
 3. **원격 Runtime** (Remote Runtimes) 의 `mac-check-runtime` 줄에서 **자세히** (Details) 를 누르고, 부분마다 봅니다.
    - **식별 정보** (Identity): Runtime id, 줄인 지문, 페어링한 시각, 권한.
-   - **상태** (Health): 마지막 연결, **지금 응답합니다** (Answers now), 그 컴퓨터와 이 컴퓨터의 Astera 버전, OS.
-   - **에이전트** (Agents): 그 프로필에는 에이전트 프로필이 없으므로 비어 있고, 권한 확인 없이 실행하는 설정이 꺼져 있다는
-     줄이 있습니다.
+   - **상태** (Health): 마지막 연결, 그 컴퓨터와 이 컴퓨터의 Astera 버전, OS. 자세히를 열 때는 최근에 읽은 보고서를
+     보여 주고 다시 묻지 않으므로, 그 부분의 **새로 고침** (Refresh) 을 누르면 **지금 응답합니다** (Answers now) 가
+     더 나옵니다.
+   - **에이전트** (Agents): 그 프로필에는 에이전트 프로필이 없으므로 비어 있고, 아래 줄이 있습니다. 설정을 한 번도
+     저장하지 않은 프로필은 이것이 켜져 있습니다.
+     **그 컴퓨터에서 권한 확인 없이 에이전트 실행이 켜져 있습니다.** (Run agents without permission checks is on there.)
    - **보호** (Protection): 정책, CLI 마다 Enforce 를 시작할 수 있는지, sandbox 의 종류, CLI 버전.
    - **확장** (Extensions): 이 컴퓨터의 확장과 그 컴퓨터의 확장이 나란히 있습니다.
    - Credentials: 이름과 숨김 여부만, 그리고 그 아래
