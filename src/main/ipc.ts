@@ -234,7 +234,7 @@ import { PREVIEW_PARTITION } from '../core/preview/guards'
 import { guardPartition } from './preview/guest'
 import { buildResumeNote, buildResumePacket, buildTabResumeText } from '../core/orchestration/exec/resumePacket'
 import { extractStatusLineModel, extractStatusLineSession } from '../core/usage/statusline'
-import { listSlashCommands, listCodexMentions } from './slashCommands'
+import { listSlashCommands, listCodexMentions, sharedPluginsForMenu } from './slashCommands'
 import { createFileIndex } from './fileIndex'
 import { filterFilePaths } from '../core/files/fileMatch'
 import { sortEntries, isPathWithin, isSamePath, renamePlan, resolveProjectRootFrom } from '../core/files/tree'
@@ -7860,10 +7860,14 @@ export function registerIpc(
     if (!session) return []
     try {
       const account = core.accounts.get(session.accountId)
+      const codex = account.provider === 'codex'
       return await listSlashCommands({
         configDir: account.configDir,
         cwd: session.cwd ?? null,
-        kind: account.provider === 'codex' ? 'codex' : 'claude'
+        kind: codex ? 'codex' : 'claude',
+        // A Claude session starts with the shared plugins as --plugin-dir, which replace the account's own copies;
+        // codex gets none of them
+        shared: codex ? [] : await sharedPluginsForMenu(app.getPath('userData'))
       })
     } catch {
       return []

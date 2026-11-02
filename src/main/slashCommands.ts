@@ -5,6 +5,7 @@ import {
   frontmatterDescription,
   type SlashCommand
 } from '../core/commands/slashCommands'
+import { readClaudePlugins } from '../core/extensions/claudePlugins/store'
 
 // What `/` can start, read off disk for one session.
 //
@@ -13,6 +14,8 @@ import {
 //   <configDir>/skills/<name>/SKILL.md   a skill the person (or this app) installed
 //   <cwd>/.claude/{commands,skills}/…    the same two, belonging to the project
 //   an installed plugin's own two        listed by <configDir>/plugins/installed_plugins.json
+//   a shared plugin's own two            handed in by the caller; the session loads it with --plugin-dir, which
+//                                        replaces the account's own copy of the same name
 //
 // The CLI's built-ins (/model, /status, /clear …) are NOT here, and deliberately: nothing on disk
 // describes them, so the only way to list them would be to hand-keep a copy that goes quietly wrong
@@ -78,8 +81,9 @@ async function skillsIn(dir: string, source: SlashCommand['source']): Promise<Sl
   return out
 }
 
-/** Every installed plugin's install path, from the CLI's own record of what is installed. */
-async function pluginPaths(configDir: string): Promise<string[]> {
+/** Every installed plugin, from the CLI's own record of what is installed: its name (the part of the key before the `@`)
+ *  and its install path. */
+async function pluginPaths(configDir: string): Promise<{ name: string; installPath: string }[]> {
   let parsed: unknown
   try {
     parsed = JSON.parse(
@@ -91,16 +95,51 @@ async function pluginPaths(configDir: string): Promise<string[]> {
   if (typeof parsed !== 'object' || parsed === null) return []
   const plugins = (parsed as { plugins?: unknown }).plugins
   if (typeof plugins !== 'object' || plugins === null) return []
-  const out: string[] = []
-  for (const installs of Object.values(plugins as Record<string, unknown>)) {
+  const out: { name: string; installPath: string }[] = []
+  for (const [key, installs] of Object.entries(plugins as Record<string, unknown>)) {
     if (!Array.isArray(installs)) continue
+    const at = key.lastIndexOf('@')
+    const name = at > 0 ? key.slice(0, at) : key
     for (const install of installs) {
       if (typeof install !== 'object' || install === null) continue
       const p = (install as { installPath?: unknown }).installPath
-      if (typeof p === 'string' && p !== '') out.push(p)
+      if (typeof p === 'string' && p !== '') out.push({ name, installPath: p })
     }
   }
   return out
+}
+
+const isFolder = (p: string): Promise<boolean> => fs.stat(p).then((s) => s.isDirectory(), () => false)
+
+/** The shared Claude plugins a session of this profile loads, as the `/` menu needs them: each enabled store entry, then
+ *  its dependencies (the session gives each its own `--plugin-dir`), named by the part of the id before the `@`, each
+ *  folder once. An entry with a folder gone, its own or a dependency's, is left out as the spawn leaves it out
+ *  (core/extensions/claudePlugins/spawnArgs.ts). A store that cannot be read gives none, and nothing is written. */
+export async function sharedPluginsForMenu(profileDir: string): Promise<{ name: string; installPath: string }[]> {
+  try {
+    const store = await readClaudePlugins(profileDir, { keepDamaged: false })
+    const out: { name: string; installPath: string }[] = []
+    const seen = new Set<string>()
+    for (const plugin of store.plugins) {
+      if (!plugin.enabled) continue
+      const parts = [
+        { name: plugin.name, installPath: plugin.installPath },
+        ...plugin.dependencies.map((d) => {
+          const at = d.id.lastIndexOf('@')
+          return { name: at > 0 ? d.id.slice(0, at) : d.id, installPath: d.installPath }
+        })
+      ]
+      if ((await Promise.all(parts.map((p) => isFolder(p.installPath)))).includes(false)) continue
+      for (const p of parts) {
+        if (seen.has(p.installPath)) continue
+        seen.add(p.installPath)
+        out.push(p)
+      }
+    }
+    return out
+  } catch {
+    return []
+  }
 }
 
 /** Everything `/` offers for one session, in the order the menu shows it: the project's own first,
@@ -113,19 +152,24 @@ export async function listSlashCommands(opts: {
    *  `Unrecognized command` for the skills in its own folder — so it gets its own list instead
    *  (core/commands/slashCommands.ts). Measured, not assumed. */
   kind?: 'claude' | 'codex'
+  /** The shared Claude plugins the session is started with. Their commands and skills are listed, and an account plugin
+   *  of the same name is dropped: `--plugin-dir` replaces it, so the session no longer has its rows. */
+  shared?: { name: string; installPath: string }[]
 }): Promise<SlashCommand[]> {
   const { configDir, cwd } = opts
+  const shared = opts.shared ?? []
   if (opts.kind === 'codex') return [...CODEX_SLASH_COMMANDS]
   const groups = await Promise.all([
     cwd === null ? [] : commandsIn(path.join(cwd, '.claude', 'commands'), 'project'),
     cwd === null ? [] : skillsIn(path.join(cwd, '.claude', 'skills'), 'project'),
     commandsIn(path.join(configDir, 'commands'), 'user'),
     skillsIn(path.join(configDir, 'skills'), 'user'),
-    pluginPaths(configDir).then(async (paths) => {
+    pluginPaths(configDir).then(async (own) => {
+      const taken = new Set(shared.map((s) => s.name))
       const nested = await Promise.all(
-        paths.flatMap((p) => [
-          commandsIn(path.join(p, 'commands'), 'plugin' as const),
-          skillsIn(path.join(p, 'skills'), 'plugin' as const)
+        [...own.filter((p) => !taken.has(p.name)), ...shared].flatMap((p) => [
+          commandsIn(path.join(p.installPath, 'commands'), 'plugin' as const),
+          skillsIn(path.join(p.installPath, 'skills'), 'plugin' as const)
         ])
       )
       return nested.flat()
@@ -146,8 +190,8 @@ export async function listSlashCommands(opts: {
  */
 export async function listCodexMentions(configDir: string): Promise<string[]> {
   const own = await skillsIn(path.join(configDir, 'skills'), 'user')
-  const fromPlugins = await pluginPaths(configDir).then(async (paths) => {
-    const nested = await Promise.all(paths.map((p) => skillsIn(path.join(p, 'skills'), 'plugin')))
+  const fromPlugins = await pluginPaths(configDir).then(async (plugins) => {
+    const nested = await Promise.all(plugins.map((p) => skillsIn(path.join(p.installPath, 'skills'), 'plugin')))
     return nested.flat()
   })
   const names = [...own, ...fromPlugins].map((c) => c.name)
