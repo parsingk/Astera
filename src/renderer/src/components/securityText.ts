@@ -338,6 +338,8 @@ export interface ObserveRead {
   state: string
   at: number
   failures: number
+  /** What the last good read of this target showed, as one string, when the caller tells (afterObserveRead). */
+  facts?: string
 }
 
 /** How many times a failed read is asked again on its own, a wait apart. After that it waits for the Run to move. */
@@ -347,13 +349,21 @@ export const OBSERVE_RETRIES = 3
 export const startObserveRead = (last: ObserveRead | null, next: { target: string; state: string }, now: number): ObserveRead => ({
   ...next,
   at: now,
-  failures: last !== null && last.target === next.target ? last.failures : 0
+  failures: last !== null && last.target === next.target ? last.failures : 0,
+  ...(last !== null && last.target === next.target && last.facts !== undefined ? { facts: last.facts } : {})
 })
 
 /** What Run detail remembers of a read, and when to ask again. A read that failed is remembered as one of another state,
  *  so the next trigger reads again once the wait is over instead of finding nothing moved and leaving the facts empty
- *  for good; on its own it asks again after one wait, OBSERVE_RETRIES times. A good read starts the count again. */
-export function afterObserveRead(read: ObserveRead, ok: boolean): { last: ObserveRead; retryIn: number | null } {
+ *  for good; on its own it asks again after one wait, OBSERVE_RETRIES times. A good read starts the count again.
+ *
+ *  A good read that shows `facts` other than the last one's is read again after one wait too, until two reads in a row
+ *  agree: the tokens a worker and a coordinator spend go on after the Run's last move (the worker ends its turn after it
+ *  reports, the coordinator answers the report), and Run detail read them only when the Run moved, so it kept what it
+ *  read at the report, or nothing when they were not counted yet (the Mac check, check 4). A Run still at work keeps
+ *  changing them and is read every wait, the rate observeReadDue allows; one at rest stops after a read. */
+export function afterObserveRead(read: ObserveRead, ok: boolean, facts?: string): { last: ObserveRead; retryIn: number | null } {
+  if (ok && facts !== undefined && facts !== read.facts) return { last: { ...read, state: '', failures: 0, facts }, retryIn: OBSERVE_READ_EVERY_MS }
   if (ok) return { last: { ...read, failures: 0 }, retryIn: null }
   const failures = read.failures + 1
   return { last: { ...read, state: '', failures }, retryIn: failures <= OBSERVE_RETRIES ? OBSERVE_READ_EVERY_MS : null }

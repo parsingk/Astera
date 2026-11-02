@@ -545,6 +545,24 @@ describe('Run detail reads', () => {
     expect(observeReadDue(done.last, key, 1000 + 5000)).toBeNull()
   })
 
+  // The Mac check (check 4): the last read came when the worker reported, the Run did not move again, and the tokens the
+  // worker and the coordinator spent after it never showed (none at all there; on the dev app 83,531 against the Host's
+  // 142,943). A read that shows new facts is read again after the wait, until two reads in a row agree.
+  it('reads again while the facts it shows keep changing, and stops once two reads agree', () => {
+    let last = startObserveRead(null, key, 0)
+    const seen: Array<number | null> = []
+    for (const [i, facts] of ['none', '83531', '142943', '142943'].entries()) {
+      const out = afterObserveRead(last, true, facts)
+      seen.push(out.retryIn)
+      if (out.retryIn !== null) expect(observeReadDue(out.last, key, last.at + OBSERVE_READ_EVERY_MS), String(i)).toBe(0)
+      else expect(observeReadDue(out.last, key, last.at + OBSERVE_READ_EVERY_MS)).toBeNull()
+      last = startObserveRead(out.last, key, last.at + OBSERVE_READ_EVERY_MS)
+    }
+    expect(seen).toEqual([OBSERVE_READ_EVERY_MS, OBSERVE_READ_EVERY_MS, OBSERVE_READ_EVERY_MS, null])
+    // Another Run's facts are not this one's
+    expect(startObserveRead(last, { target: 'run_2', state: 'x' }, 0).facts).toBeUndefined()
+  })
+
   it('tries a failed read again once the wait is over, up to the cap, then only when the Run moves', () => {
     let last = startObserveRead(null, key, 1000)
     const retries: Array<number | null> = []
