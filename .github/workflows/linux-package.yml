@@ -146,8 +146,18 @@ jobs:
             # ELF magic (7f 45 4c 46). The payload is mostly scripts, JSON and the asar, and ldd on
             # those is meaningless.
             [ "$(od -An -N4 -tx1 "$obj" | tr -d ' \n')" = "7f454c46" ] || continue
+            # e_machine (offset 18, little-endian): only x86-64 (3e 00) can be linked here. The
+            # sandbox runtime ships an arm64 helper beside the x64 one, and this host cannot load it.
+            if [ "$(od -An -j18 -N2 -tx1 "$obj" | tr -d ' \n')" != "3e00" ]; then
+              echo "not x86-64, skipped: $obj"; continue
+            fi
             checked=$((checked + 1))
             if ! out=$(ldd "$obj" 2>&1); then
+              # A statically linked executable (the sandbox runtime's apply-seccomp) has no shared
+              # libraries to resolve, and ldd says so with a non-zero exit.
+              if printf '%s\n' "$out" | grep -q 'not a dynamic executable'; then
+                echo "statically linked: $obj"; continue
+              fi
               echo "ldd failed on $obj:"; echo "$out"; status=1; continue
             fi
             if missing=$(printf '%s\n' "$out" | grep 'not found'); then
