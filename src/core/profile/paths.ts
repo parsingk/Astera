@@ -22,6 +22,9 @@ export interface ExtensionPaths {
   secrets: string
   /** What was copied into which account, with the hashes the next sync compares. */
   materializedState: string
+  /** When a session was last handed each shared Claude Code plugin folder: one file per folder, holding its path, whose
+   *  mtime is the last use. Claude Code never sweeps Astera's plugin folder, so Astera does, sparing a recent use. */
+  claudePluginUse: string
   /** Copies Astera replaced or restored, kept before it wrote over them. */
   backups: string
   /** Generated Claude `--mcp-config` files, named by their content hash. */
@@ -40,6 +43,7 @@ export function extensionPaths(profileDir: string): ExtensionPaths {
     agents: path.join(ext, 'agents'),
     secrets: path.join(ext, 'secrets'),
     materializedState: path.join(state, 'materialized.json'),
+    claudePluginUse: path.join(state, 'claude-plugin-use'),
     backups: path.join(state, 'backups'),
     generatedMcp: path.join(profileDir, 'materialized', 'mcp')
   }

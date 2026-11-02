@@ -16,6 +16,7 @@ describe('extensionPaths', () => {
       agents: path.join(p, 'extensions', 'agents'),
       secrets: path.join(p, 'extensions', 'secrets'),
       materializedState: path.join(p, 'extension-state', 'materialized.json'),
+      claudePluginUse: path.join(p, 'extension-state', 'claude-plugin-use'),
       backups: path.join(p, 'extension-state', 'backups'),
       generatedMcp: path.join(p, 'materialized', 'mcp')
     })
