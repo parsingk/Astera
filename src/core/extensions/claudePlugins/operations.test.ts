@@ -12,7 +12,7 @@ import { extensionPaths } from '../../profile/paths'
 import { catalogFingerprint } from './catalog'
 import { PLUGIN_INSTALL_TIMEOUT_MS, type PluginCliResult, type PluginCliRun } from './cli'
 import { readClaudePlugins, updateClaudePlugins } from './store'
-import type { MarketplaceSource, SharedClaudePlugin } from './types'
+import type { ClaudePluginDependency, MarketplaceSource, SharedClaudePlugin } from './types'
 import {
   createClaudePluginOps,
   stampClaudePluginUse,
@@ -81,6 +81,20 @@ const row = (id: string, version: string, installPath: string) => ({
   projectEnabled: false
 })
 
+/** The home's installs as `claude plugin list --json` reports them: `put` installs a version (replacing the plugin's
+ *  row), and `list` answers what is installed at that moment. */
+function installs(home: string) {
+  const rows: ReturnType<typeof row>[] = []
+  const put = async (id: string, version: string, deps: unknown[] = []): Promise<ClaudePluginDependency> => {
+    const installPath = await installFolder(home, id, version, deps)
+    const at = rows.findIndex((r) => r.id === id)
+    if (at >= 0) rows.splice(at, 1)
+    rows.push(row(id, version, installPath))
+    return { id, version, installPath }
+  }
+  return { put, list: () => ok([...rows]) }
+}
+
 const fingerprintOf = async (home: string, marketplace: string, name: string): Promise<string> => {
   const fp = await catalogFingerprint({ home, marketplace, name })
   if (fp === null) throw new Error(`no catalog entry for ${name}@${marketplace}`)
@@ -122,6 +136,11 @@ function fakeRun(script: Script) {
 }
 const ok = (json: Record<string, unknown> | unknown[]): Reply => ({ code: 0, json })
 const failure = (json: Record<string, unknown>): Reply => ({ code: 1, json, stderr: String(json.message ?? '') })
+const installed = ok({ command: 'install', outcome: 'ok' })
+const uninstalled = ok({ command: 'uninstall', outcome: 'ok', keptData: false })
+/** M12: what `uninstall --json` answers for a plugin the home does not have. */
+const notInstalled = (id: string): Reply =>
+  failure({ command: 'uninstall', outcome: 'failed', plugin: id, message: `Plugin "${id}" is not installed`, failureCode: 'not_installed' })
 
 const opsFor = (p: string, run: PluginCliRun, now: () => Date = () => NOW): ClaudePluginOps => createClaudePluginOps({ profileDir: p, run, now })
 
@@ -162,20 +181,22 @@ describe('share', () => {
     const p = await profile()
     const home = homeOf(p)
     await addMarketplace(home, 'market', SOURCE, [{ name: 'review', version: '1.0.0' }, { name: 'base', version: '2.0.0' }])
+    const h = installs(home)
     let review = ''
-    let base = ''
+    let base: ClaudePluginDependency | undefined
     const f = fakeRun({
       'plugin install review@market': async () => {
-        review = await installFolder(home, 'review@market', '1.0.0', ['base'])
-        base = await installFolder(home, 'base@market', '2.0.0')
+        review = (await h.put('review@market', '1.0.0', ['base'])).installPath
+        base = await h.put('base@market', '2.0.0')
         return ok({ command: 'install', outcome: 'ok', pluginId: 'review@market', message: 'Successfully installed plugin: review@market (scope: user) (+ 1 dependency: base)' })
       },
-      'plugin list': () => ok([row('base@market', '2.0.0', base), row('review@market', '1.0.0', review)])
+      'plugin list': h.list
     })
     const ops = opsFor(p, f.run)
     const job = await ended(ops, ops.share({ id: 'review@market', source: SOURCE, importedFrom: 'acc_1' }))
 
     expect(job).toMatchObject({ kind: 'share', target: 'review@market', state: 'done', startedAt: NOW.toISOString(), endedAt: NOW.toISOString() })
+    expect(job.code).toBeUndefined()
     expect((await readClaudePlugins(p)).plugins).toEqual([
       {
         id: 'review@market',
@@ -184,7 +205,7 @@ describe('share', () => {
         source: SOURCE,
         version: '1.0.0',
         installPath: review,
-        dependencies: [{ id: 'base@market', version: '2.0.0', installPath: base }],
+        dependencies: [base],
         importedFrom: 'acc_1',
         enabled: true,
         addedAt: NOW.toISOString(),
@@ -192,7 +213,9 @@ describe('share', () => {
         fingerprint: await fingerprintOf(home, 'market', 'review')
       }
     ])
+    // the list before the install tells a later failure what this share installed
     expect(f.calls).toEqual([
+      { args: ['plugin', 'list'], timeoutMs: undefined },
       { args: ['plugin', 'install', 'review@market'], timeoutMs: PLUGIN_INSTALL_TIMEOUT_MS },
       { args: ['plugin', 'list'], timeoutMs: undefined }
     ])
@@ -204,17 +227,17 @@ describe('share', () => {
       const p = await profile()
       const home = homeOf(p)
       await prepare(home)
-      let dir = ''
+      const h = installs(home)
       const f = fakeRun({
         'plugin marketplace add acme/market#main': async () => {
           await addMarketplace(home, 'market', pinned, [{ name: 'review', version: '1.0.0' }])
           return ok({ command: 'marketplace-add', outcome: 'ok', marketplace: 'market' })
         },
         'plugin install review@market': async () => {
-          dir = await installFolder(home, 'review@market', '1.0.0')
-          return ok({ command: 'install', outcome: 'ok' })
+          await h.put('review@market', '1.0.0')
+          return installed
         },
-        'plugin list': () => ok([row('review@market', '1.0.0', dir)])
+        'plugin list': h.list
       })
       const ops = opsFor(p, f.run)
       const job = await ended(ops, ops.share({ id: 'review@market', source: pinned, importedFrom: 'acc_1' }))
@@ -223,23 +246,24 @@ describe('share', () => {
 
     const lacking = await shareInto(async () => {})
     expect(lacking.job.state).toBe('done')
-    expect(lacking.lines).toEqual(['plugin marketplace add acme/market#main', 'plugin install review@market', 'plugin list'])
+    expect(lacking.lines).toEqual(['plugin marketplace add acme/market#main', 'plugin list', 'plugin install review@market', 'plugin list'])
     expect(lacking.plugins.map((e) => e.id)).toEqual(['review@market'])
 
     const knowing = await shareInto((home) => addMarketplace(home, 'market', pinned, [{ name: 'review', version: '1.0.0' }]))
     expect(knowing.job.state).toBe('done')
-    expect(knowing.lines).toEqual(['plugin install review@market', 'plugin list'])
+    expect(knowing.lines).toEqual(['plugin list', 'plugin install review@market', 'plugin list'])
   })
 
   it('share stops at needs-confirmation and records nothing', async () => {
     const p = await profile()
     await addMarketplace(homeOf(p), 'market', SOURCE, [{ name: 'cmdprobe', version: '1.0.0' }])
-    const f = fakeRun({ 'plugin install cmdprobe@market': refusedInstall(SHOWN) })
+    const f = fakeRun({ 'plugin list': ok([]), 'plugin install cmdprobe@market': refusedInstall(SHOWN) })
     const ops = opsFor(p, f.run)
     const job = await ended(ops, ops.share({ id: 'cmdprobe@market', source: SOURCE, importedFrom: 'acc_1' }))
 
     expect(job).toMatchObject({ state: 'needs-confirmation', step: 'install', command: { text: SHOWN.command, sha256: 'e552' } })
-    expect(f.lines()).toEqual(['plugin install cmdprobe@market'])
+    // nothing was installed, so there is nothing to uninstall
+    expect(f.lines()).toEqual(['plugin list', 'plugin install cmdprobe@market'])
     expect((await readClaudePlugins(p)).plugins).toEqual([])
   })
 
@@ -247,19 +271,20 @@ describe('share', () => {
     const p = await profile()
     const home = homeOf(p)
     await addMarketplace(home, 'market', SOURCE, [{ name: 'cmdprobe', version: '1.0.0' }])
+    const h = installs(home)
     let dir = ''
     const f = fakeRun({
       'plugin install cmdprobe@market --accept-command e552': async () => {
-        dir = await installFolder(home, 'cmdprobe@market', '1.0.0-d5e3941fb248')
-        return ok({ command: 'install', outcome: 'ok', pluginId: 'cmdprobe@market' })
+        dir = (await h.put('cmdprobe@market', '1.0.0-d5e3941fb248')).installPath
+        return installed
       },
-      'plugin list': () => ok([row('cmdprobe@market', '1.0.0-d5e3941fb248', dir)])
+      'plugin list': h.list
     })
     const ops = opsFor(p, f.run)
     const job = await ended(ops, ops.share({ id: 'cmdprobe@market', source: SOURCE, importedFrom: 'acc_1', acceptCommand: 'e552' }))
 
     expect(job.state).toBe('done')
-    expect(f.calls[0]).toEqual({ args: ['plugin', 'install', 'cmdprobe@market', '--accept-command', 'e552'], timeoutMs: PLUGIN_INSTALL_TIMEOUT_MS })
+    expect(f.calls[1]).toEqual({ args: ['plugin', 'install', 'cmdprobe@market', '--accept-command', 'e552'], timeoutMs: PLUGIN_INSTALL_TIMEOUT_MS })
     expect((await readClaudePlugins(p)).plugins).toMatchObject([{ id: 'cmdprobe@market', version: '1.0.0-d5e3941fb248', installPath: dir }])
   })
 
@@ -279,6 +304,7 @@ describe('share', () => {
     const a = shared(home, 'a')
     await seed(p, [a])
     const f = fakeRun({
+      'plugin list': ok([]),
       'plugin install hh@market --accept-command old': refusedInstall(helper, { failureCode: 'entry_helper_unconfirmed', acceptCommandMatched: false }),
       'plugin update a@market --accept-command old': failure({
         command: 'update',
@@ -298,7 +324,7 @@ describe('share', () => {
     expect(update).toMatchObject({ state: 'needs-confirmation', command: { text: SHOWN.command, sha256: 'newer' } })
 
     expect((await readClaudePlugins(p)).plugins).toEqual([a])
-    expect(f.lines()).toEqual(['plugin install hh@market --accept-command old', 'plugin update a@market --accept-command old'])
+    expect(f.lines()).toEqual(['plugin list', 'plugin install hh@market --accept-command old', 'plugin update a@market --accept-command old'])
   })
 
   it('share fails on a marketplace name the home knows from another source and runs nothing', async () => {
@@ -309,7 +335,8 @@ describe('share', () => {
     const ops = opsFor(p, f.run)
     const job = await ended(ops, ops.share({ id: 'review@market', source: { source: 'git', url: 'https://git.example/market.git' }, importedFrom: 'acc_1' }))
 
-    expect(job).toMatchObject({ state: 'failed', message: 'marketplace-mismatch' })
+    expect(job).toMatchObject({ state: 'failed', step: 'marketplace', code: 'marketplace-mismatch' })
+    expect(job.message).toContain('market')
     expect(f.calls).toEqual([])
     expect((await readClaudePlugins(p)).plugins).toEqual([])
   })
@@ -318,30 +345,25 @@ describe('share', () => {
     const p = await profile()
     const home = homeOf(p)
     await addMarketplace(home, 'market', SOURCE, [{ name: 'owner', version: '1.0.0' }])
-    const rows: ReturnType<typeof row>[] = []
-    const put = async (id: string, version: string, deps: unknown[] = []) => {
-      const dir = await installFolder(home, id, version, deps)
-      rows.push(row(id, version, dir))
-      return { id, version, installPath: dir }
-    }
-    const expected: { id: string; version: string; installPath: string }[] = []
+    const h = installs(home)
+    const expected: ClaudePluginDependency[] = []
     const f = fakeRun({
       'plugin install owner@market': async () => {
         // plugin-dependencies docs: a bare name is in the declaring plugin's own marketplace, `name@m` and
         // `{ name, marketplace }` in another, `{ name, version }` a range
-        await put('owner@market', '1.0.0', ['mid', 'w@other', { name: 'pinned', version: '^1.0' }, { name: 'x', marketplace: 'other' }])
+        await h.put('owner@market', '1.0.0', ['mid', 'w@other', { name: 'pinned', version: '^1.0' }, { name: 'x', marketplace: 'other' }])
         expected.push(
-          await put('mid@market', '1.0.0', ['leaf']),
-          await put('leaf@market', '1.0.0', ['mid', 'owner']),
-          await put('w@other', '3.0.0'),
-          await put('pinned@market', '1.4.0'),
-          await put('x@other', '2.0.0', ['y']),
-          await put('y@other', '0.1.0', ['x@other'])
+          await h.put('mid@market', '1.0.0', ['leaf']),
+          await h.put('leaf@market', '1.0.0', ['mid', 'owner']),
+          await h.put('w@other', '3.0.0'),
+          await h.put('pinned@market', '1.4.0'),
+          await h.put('x@other', '2.0.0', ['y']),
+          await h.put('y@other', '0.1.0', ['x@other'])
         )
-        await put('unrelated@market', '5.0.0')
-        return ok({ command: 'install', outcome: 'ok' })
+        await h.put('unrelated@market', '5.0.0')
+        return installed
       },
-      'plugin list': () => ok(rows)
+      'plugin list': h.list
     })
     const ops = opsFor(p, f.run)
     const job = await ended(ops, ops.share({ id: 'owner@market', source: SOURCE, importedFrom: 'acc_1' }))
@@ -354,18 +376,19 @@ describe('share', () => {
     const p = await profile()
     const home = homeOf(p)
     await addMarketplace(home, 'market', SOURCE, [{ name: 'owner', version: '1.0.0' }])
-    let dir = ''
+    const h = installs(home)
     const f = fakeRun({
       'plugin install owner@market': async () => {
-        dir = await installFolder(home, 'owner@market', '1.0.0', ['ghost'])
-        return ok({ command: 'install', outcome: 'ok' })
+        await h.put('owner@market', '1.0.0', ['ghost'])
+        return installed
       },
-      'plugin list': () => ok([row('owner@market', '1.0.0', dir)])
+      'plugin list': h.list,
+      'plugin uninstall owner@market': uninstalled
     })
     const ops = opsFor(p, f.run)
     const job = await ended(ops, ops.share({ id: 'owner@market', source: SOURCE, importedFrom: 'acc_1' }))
 
-    expect(job).toMatchObject({ state: 'failed', step: 'record' })
+    expect(job).toMatchObject({ state: 'failed', step: 'record', code: 'dependency-missing' })
     expect(job.message).toContain('ghost@market')
     expect((await readClaudePlugins(p)).plugins).toEqual([])
   })
@@ -378,7 +401,7 @@ describe('share', () => {
     const ops = opsFor(p, f.run)
     const job = await ended(ops, ops.share({ id: 'a@market', source: SOURCE, importedFrom: 'acc_2' }))
 
-    expect(job.state).toBe('failed')
+    expect(job).toMatchObject({ state: 'failed', code: 'already-shared' })
     expect(job.message).toContain('a@market')
     expect(f.calls).toEqual([])
     expect((await readClaudePlugins(p)).plugins).toEqual([a])
@@ -389,31 +412,102 @@ describe('share', () => {
     const home = homeOf(p)
     // the catalog does not list the plugin, so there is no fingerprint to find its updates by
     await addMarketplace(home, 'market', SOURCE, [{ name: 'someone-else', version: '1.0.0' }])
-    let dir = ''
+    const h = installs(home)
     const f = fakeRun({
       'plugin install review@market': async () => {
-        dir = await installFolder(home, 'review@market', '1.0.0')
-        return ok({ command: 'install', outcome: 'ok' })
+        await h.put('review@market', '1.0.0')
+        return installed
       },
-      'plugin list': () => ok([row('review@market', '1.0.0', dir)])
+      'plugin list': h.list,
+      'plugin uninstall review@market': uninstalled
     })
     const ops = opsFor(p, f.run)
     const job = await ended(ops, ops.share({ id: 'review@market', source: SOURCE, importedFrom: 'acc_1' }))
 
-    expect(job).toMatchObject({ state: 'failed', step: 'record' })
+    expect(job).toMatchObject({ state: 'failed', step: 'record', code: 'catalog-unreadable' })
     expect(job.message).toMatch(/catalog/)
     expect((await readClaudePlugins(p)).plugins).toEqual([])
   })
 
-  it('a run refused for cmd.exe syntax fails the job with the refusal', async () => {
+  it('a share that fails after install uninstalls what it installed, and leaves a plugin that was already there', async () => {
+    // new to the home: the catalog cannot be read, so the install is taken back
+    const p = await profile()
+    const home = homeOf(p)
+    await addMarketplace(home, 'market', SOURCE, [{ name: 'someone-else', version: '1.0.0' }])
+    const h = installs(home)
+    const f = fakeRun({
+      'plugin install review@market': async () => {
+        await h.put('review@market', '1.0.0')
+        return installed
+      },
+      'plugin list': h.list,
+      'plugin uninstall review@market': uninstalled
+    })
+    const ops = opsFor(p, f.run)
+    const job = await ended(ops, ops.share({ id: 'review@market', source: SOURCE, importedFrom: 'acc_1' }))
+    expect(job).toMatchObject({ state: 'failed', code: 'catalog-unreadable' })
+    expect(f.lines()).toEqual(['plugin list', 'plugin install review@market', 'plugin list', 'plugin uninstall review@market'])
+
+    // already in the home (another shared plugin's dependency): the install answers "already installed", the share
+    // fails on a missing dependency, and the plugin stays
+    const p2 = await profile()
+    const home2 = homeOf(p2)
+    await addMarketplace(home2, 'market', SOURCE, [{ name: 'review', version: '1.0.0' }])
+    const h2 = installs(home2)
+    await h2.put('review@market', '1.0.0', ['ghost'])
+    const f2 = fakeRun({
+      'plugin install review@market': ok({ command: 'install', outcome: 'ok', message: 'Plugin "review@market" is already installed (scope: user)' }),
+      'plugin list': h2.list
+    })
+    const ops2 = opsFor(p2, f2.run)
+    const job2 = await ended(ops2, ops2.share({ id: 'review@market', source: SOURCE, importedFrom: 'acc_1' }))
+    expect(job2).toMatchObject({ state: 'failed', code: 'dependency-missing' })
+    expect(f2.lines()).toEqual(['plugin list', 'plugin install review@market', 'plugin list'])
+    expect((await readClaudePlugins(p2)).plugins).toEqual([])
+  })
+
+  it('share refuses what it cannot share, with a code', async () => {
+    const p = await profile()
+    const home = homeOf(p)
+    const f = fakeRun({ 'plugin list': ok([]), 'plugin install review@market': installed, 'plugin uninstall review@market': notInstalled('review@market') })
+    const ops = opsFor(p, f.run)
+
+    // not a plugin id
+    const notId = await ended(ops, ops.share({ id: 'review', source: SOURCE, importedFrom: 'acc_1' }))
+    expect(notId).toMatchObject({ state: 'failed', code: 'not-shareable' })
+    expect(f.calls).toEqual([])
+
+    // the home's list of marketplaces is damaged, so a mismatch cannot be ruled out
+    await write(path.join(home, 'plugins', 'known_marketplaces.json'), '{ broken')
+    const damaged = await ended(ops, ops.share({ id: 'review@market', source: SOURCE, importedFrom: 'acc_1' }))
+    expect(damaged).toMatchObject({ state: 'failed', step: 'marketplace', code: 'home-unreadable' })
+    expect(f.calls).toEqual([])
+
+    // the install answered ok, but Claude Code does not list the plugin
+    await fs.rm(path.join(home, 'plugins', 'known_marketplaces.json'))
+    await addMarketplace(home, 'market', SOURCE, [{ name: 'review', version: '1.0.0' }])
+    const unlisted = await ended(ops, ops.share({ id: 'review@market', source: SOURCE, importedFrom: 'acc_1' }))
+    expect(unlisted).toMatchObject({ state: 'failed', step: 'record', code: 'not-listed' })
+    expect((await readClaudePlugins(p)).plugins).toEqual([])
+  })
+
+  it('a refused or timed-out run fails the job with its code', async () => {
     const p = await profile()
     const refused = 'the arguments hold cmd.exe syntax and claude is a .cmd that only cmd.exe can run; nothing was run'
-    const f = fakeRun({ 'plugin marketplace add https://git.example/a&b.git': { code: null, refused } })
+    const a = shared(homeOf(p), 'a')
+    await seed(p, [a])
+    const f = fakeRun({
+      'plugin marketplace add https://git.example/a&b.git': { code: null, refused },
+      'plugin update a@market': { code: null, timedOut: true, stderr: 'claude did not finish within 600 s' }
+    })
     const ops = opsFor(p, f.run)
-    const job = await ended(ops, ops.share({ id: 'review@market', source: { source: 'git', url: 'https://git.example/a&b.git' }, importedFrom: 'acc_1' }))
 
-    expect(job).toMatchObject({ state: 'failed', step: 'marketplace', message: refused })
-    expect((await readClaudePlugins(p)).plugins).toEqual([])
+    const share = await ended(ops, ops.share({ id: 'review@market', source: { source: 'git', url: 'https://git.example/a&b.git' }, importedFrom: 'acc_1' }))
+    expect(share).toMatchObject({ state: 'failed', step: 'marketplace', code: 'refused', message: refused })
+
+    const update = await ended(ops, ops.update('a@market'))
+    expect(update).toMatchObject({ state: 'failed', step: 'install', code: 'timed-out', message: 'claude did not finish within 600 s' })
+    expect((await readClaudePlugins(p)).plugins).toEqual([a])
   })
 })
 
@@ -470,6 +564,8 @@ describe('check', () => {
 
     expect(job.state).toBe('failed')
     expect(job.message).toContain(message)
+    // Claude Code's failure, not one Astera decided
+    expect(job.code).toBeUndefined()
     const after = await readClaudePlugins(p)
     expect(after.plugins).toEqual([a])
     expect(after.lastCheck?.at).toBe(NOW.toISOString())
@@ -493,9 +589,10 @@ describe('update', () => {
     const p = await profile()
     const home = homeOf(p)
     await addMarketplace(home, 'market', SOURCE, [{ name: 'a', version: '1.0.0' }])
-    const old = await installFolder(home, 'a@market', '1.0.0')
+    const h = installs(home)
+    const old = await h.put('a@market', '1.0.0')
     const a = shared(home, 'a', {
-      installPath: old,
+      installPath: old.installPath,
       enabled: false,
       fingerprint: await fingerprintOf(home, 'market', 'a'),
       update: { version: '1.1.0', fingerprint: 'sha256:seen', checkedAt: EARLIER }
@@ -504,14 +601,14 @@ describe('update', () => {
     // what the check saw: the catalog offers 1.1.0, which now needs base
     await writeCatalog(home, 'market', [{ name: 'a', version: '1.1.0' }, { name: 'base', version: '2.0.0' }])
     let next = ''
-    let base = ''
+    let base: ClaudePluginDependency | undefined
     const f = fakeRun({
       'plugin update a@market': async () => {
-        next = await installFolder(home, 'a@market', '1.1.0', ['base'])
-        base = await installFolder(home, 'base@market', '2.0.0')
+        next = (await h.put('a@market', '1.1.0', ['base'])).installPath
+        base = await h.put('base@market', '2.0.0')
         return ok({ command: 'update', outcome: 'ok', updateOutcome: 'updated', oldVersion: '1.0.0', newVersion: '1.1.0' })
       },
-      'plugin list': () => ok([row('a@market', '1.1.0', next), row('base@market', '2.0.0', base)])
+      'plugin list': h.list
     })
     const ops = opsFor(p, f.run)
     const job = await ended(ops, ops.update('a@market'))
@@ -523,7 +620,7 @@ describe('update', () => {
         ...kept,
         version: '1.1.0',
         installPath: next,
-        dependencies: [{ id: 'base@market', version: '2.0.0', installPath: base }],
+        dependencies: [base],
         fingerprint: await fingerprintOf(home, 'market', 'a'),
         lastUpdated: NOW.toISOString()
       }
@@ -535,7 +632,8 @@ describe('update', () => {
     const p = await profile()
     const home = homeOf(p)
     await addMarketplace(home, 'market', SOURCE, [{ name: 'a', version: '1.0.0' }])
-    const dir = await installFolder(home, 'a@market', '1.0.0')
+    const h = installs(home)
+    const dir = (await h.put('a@market', '1.0.0')).installPath
     const a = shared(home, 'a', {
       installPath: dir,
       fingerprint: await fingerprintOf(home, 'market', 'a'),
@@ -546,7 +644,7 @@ describe('update', () => {
     await writeCatalog(home, 'market', [{ name: 'a', version: '1.0.0', keywords: ['new'] }])
     const f = fakeRun({
       'plugin update a@market': ok({ command: 'update', outcome: 'ok', updateOutcome: 'up_to_date', oldVersion: '1.0.0', newVersion: '1.0.0' }),
-      'plugin list': () => ok([row('a@market', '1.0.0', dir)])
+      'plugin list': h.list
     })
     const ops = opsFor(p, f.run)
     const job = await ended(ops, ops.update('a@market'))
@@ -568,8 +666,47 @@ describe('update', () => {
     const job = await ended(ops, ops.update('a@market'))
 
     expect(job).toMatchObject({ state: 'failed', step: 'install', message })
+    expect(job.code).toBeUndefined()
     expect((await readClaudePlugins(p)).plugins).toEqual([a])
     expect(f.lines()).toEqual(['plugin update a@market'])
+  })
+
+  it("updating a shared plugin that is another's dependency moves that dependency path too", async () => {
+    const p = await profile()
+    const home = homeOf(p)
+    await addMarketplace(home, 'market', SOURCE, [{ name: 'a', version: '1.0.0' }, { name: 'b', version: '1.0.0' }])
+    const h = installs(home)
+    const a = await h.put('a@market', '1.0.0', ['b'])
+    const b1 = await h.put('b@market', '1.0.0')
+    // c's folder is gone (Review Focus 2), so its manifest cannot be walked: it keeps what it records, moved the same way
+    const c = path.join(home, 'plugins', 'cache', 'market', 'c', '1.0.0')
+    await seed(p, [
+      shared(home, 'a', { installPath: a.installPath, dependencies: [b1] }),
+      shared(home, 'b', { installPath: b1.installPath, fingerprint: await fingerprintOf(home, 'market', 'b') }),
+      shared(home, 'c', { installPath: c, dependencies: [b1] })
+    ])
+    await writeCatalog(home, 'market', [{ name: 'a', version: '1.0.0' }, { name: 'b', version: '1.1.0' }])
+    let b2: ClaudePluginDependency | undefined
+    let e: ClaudePluginDependency | undefined
+    const f = fakeRun({
+      'plugin update b@market': async () => {
+        // the new b needs e: a now needs e too, or b does not load in a's sessions (M9)
+        b2 = await h.put('b@market', '1.1.0', ['e'])
+        e = await h.put('e@market', '0.1.0')
+        return ok({ command: 'update', outcome: 'ok', updateOutcome: 'updated', oldVersion: '1.0.0', newVersion: '1.1.0' })
+      },
+      'plugin list': h.list
+    })
+    const ops = opsFor(p, f.run)
+    const job = await ended(ops, ops.update('b@market'))
+
+    expect(job.state).toBe('done')
+    const plugins = (await readClaudePlugins(p)).plugins
+    expect(plugins.map((x) => [x.id, x.version, x.installPath, x.dependencies])).toEqual([
+      ['a@market', '1.0.0', a.installPath, [b2, e]],
+      ['b@market', '1.1.0', b2?.installPath, [e]],
+      ['c@market', '1.0.0', c, [b2]]
+    ])
   })
 })
 
@@ -582,7 +719,7 @@ describe('remove', () => {
     const f = fakeRun({
       'plugin uninstall a@market': async () => {
         during = (await readClaudePlugins(p)).plugins.map((e) => e.id)
-        return ok({ command: 'uninstall', outcome: 'ok', keptData: false })
+        return uninstalled
       }
     })
     const ops = opsFor(p, f.run)
@@ -602,7 +739,6 @@ describe('remove', () => {
       shared(home, 'b', { dependencies: [dep('base')] }),
       shared(home, 'c')
     ])
-    const uninstalled = ok({ command: 'uninstall', outcome: 'ok', keptData: false })
     const f = fakeRun({ 'plugin uninstall a@market': uninstalled, 'plugin uninstall util@market': uninstalled })
     const ops = opsFor(p, f.run)
     const job = await ended(ops, ops.remove('a@market'))
@@ -626,6 +762,30 @@ describe('remove', () => {
     expect(f.calls).toEqual([])
     expect((await readClaudePlugins(p)).plugins.map((e) => e.id)).toEqual(['a@market'])
   })
+
+  it('remove succeeds when the plugin or a dependency is already gone', async () => {
+    const p = await profile()
+    const home = homeOf(p)
+    const dep = (name: string) => ({ id: `${name}@market`, version: '1.0.0', installPath: path.join(home, 'plugins', 'cache', 'market', name, '1.0.0') })
+    await seed(p, [shared(home, 'a', { dependencies: [dep('x'), dep('y')] }), shared(home, 'b')])
+    const f = fakeRun({
+      'plugin uninstall a@market': notInstalled('a@market'),
+      'plugin uninstall x@market': uninstalled,
+      'plugin uninstall y@market': notInstalled('y@market'),
+      'plugin uninstall b@market': failure({ command: 'uninstall', outcome: 'failed', message: 'EBUSY: resource busy or locked' })
+    })
+    const ops = opsFor(p, f.run)
+
+    const gone = await ended(ops, ops.remove('a@market'))
+    expect(gone.state).toBe('done')
+    expect(f.lines()).toEqual(['plugin uninstall a@market', 'plugin uninstall x@market', 'plugin uninstall y@market'])
+
+    // any other failure still fails, with Claude Code's message and no code
+    const busy = await ended(ops, ops.remove('b@market'))
+    expect(busy).toMatchObject({ state: 'failed', step: 'install', message: 'EBUSY: resource busy or locked' })
+    expect(busy.code).toBeUndefined()
+    expect((await readClaudePlugins(p)).plugins).toEqual([])
+  })
 })
 
 describe('the queue', () => {
@@ -637,7 +797,6 @@ describe('the queue', () => {
     const gate = new Promise<void>((r) => {
       release = r
     })
-    const uninstalled = ok({ command: 'uninstall', outcome: 'ok', keptData: false })
     const f = fakeRun({
       'plugin uninstall a@market': async () => {
         await gate
@@ -681,6 +840,25 @@ describe('the queue', () => {
     const job = await ended(ops, id)
     job.state = 'failed'
     expect(ops.jobs()[0].state).toBe('done')
+  })
+
+  it('update or remove of an id not shared fails with not-shared and runs nothing', async () => {
+    const p = await profile()
+    const f = fakeRun({})
+    const ops = opsFor(p, f.run)
+    expect(await ended(ops, ops.update('a@market'))).toMatchObject({ state: 'failed', code: 'not-shared' })
+    expect(await ended(ops, ops.remove('a@market'))).toMatchObject({ state: 'failed', code: 'not-shared' })
+    expect(f.calls).toEqual([])
+  })
+
+  it('a job on a damaged store fails with store-unreadable and runs nothing', async () => {
+    const p = await profile()
+    await write(extensionPaths(p).claudePlugins, '{ broken')
+    const f = fakeRun({})
+    const ops = opsFor(p, f.run)
+    expect(await ended(ops, ops.share({ id: 'a@market', source: SOURCE, importedFrom: 'acc_1' }))).toMatchObject({ state: 'failed', code: 'store-unreadable' })
+    expect(await ended(ops, ops.check())).toMatchObject({ state: 'failed', code: 'store-unreadable' })
+    expect(f.calls).toEqual([])
   })
 })
 
