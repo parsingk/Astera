@@ -511,7 +511,6 @@ const api = {
     model: invoke('conversation.model'),
     models: invoke('conversation.models'),
     attach: invoke('conversation.attach'),
-    commands: invoke('conversation.commands'),
     files: invoke('conversation.files')
   },
   // A chat session talks to its adapter through these; everything it hears back arrives on the one

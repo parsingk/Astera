@@ -234,7 +234,7 @@ import { PREVIEW_PARTITION } from '../core/preview/guards'
 import { guardPartition } from './preview/guest'
 import { buildResumeNote, buildResumePacket, buildTabResumeText } from '../core/orchestration/exec/resumePacket'
 import { extractStatusLineModel, extractStatusLineSession } from '../core/usage/statusline'
-import { listSlashCommands, listCodexMentions, sharedPluginsForMenu } from './slashCommands'
+import { listCodexMentions } from './codexMentions'
 import { createFileIndex } from './fileIndex'
 import { filterFilePaths } from '../core/files/fileMatch'
 import { sortEntries, isPathWithin, isSamePath, renamePlan, resolveProjectRootFrom } from '../core/files/tree'
@@ -7855,25 +7855,6 @@ export function registerIpc(
       ...unavailable
     }
   })
-  ipcMain.handle('conversation.commands', async (_e, sessionId: string) => {
-    const session = allSessions().find((s) => s.id === sessionId)
-    if (!session) return []
-    try {
-      const account = core.accounts.get(session.accountId)
-      const codex = account.provider === 'codex'
-      return await listSlashCommands({
-        configDir: account.configDir,
-        cwd: session.cwd ?? null,
-        kind: codex ? 'codex' : 'claude',
-        // A Claude session starts with the shared plugins as --plugin-dir, which replace the account's own copies;
-        // codex gets none of them
-        shared: codex ? [] : await sharedPluginsForMenu(app.getPath('userData'))
-      })
-    } catch {
-      return []
-    }
-  })
-
   // The chat pane (core/chat/manager.ts). The counterpart of the conversation block above for a
   // session whose kind is 'chat': where a terminal session is driven by writing bytes into its pty,
   // this one is driven by these seven calls, and everything it says back arrives on 'chat:event'.

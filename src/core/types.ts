@@ -1,7 +1,6 @@
 import type { GitHubLifecycleDefaults } from './github/lifecycleDefaults'
 import type { CiFailureClass, GitHubInvalidatedReason } from './github/lifecycle'
 import type { GitHubLifecycleView } from './github/view'
-import type { SlashCommand } from './commands/slashCommands'
 import type { RunConfig, RunStatus, SaveConfigsResult } from './run/config'
 import type { EmulationMetrics } from './preview/viewports'
 import type { CaptureResult, Rect } from './preview/pick/types'
@@ -2445,10 +2444,6 @@ export type RendererApi = CoreApi & {
      *  file someone asked to add to their repository. Rejects an empty payload, one over the cap, and
      *  a session id that is not a uuid (it names the folder). */
     attach(sessionId: string, name: string, mime: string, base64: string): Promise<string>
-    /** Everything `/` can start for this session, read off disk (main/slashCommands.ts). The CLI's
-     *  own built-ins are not in it — nothing on disk describes them — and a name that is missing still
-     *  runs when it is typed in full. */
-    commands(sessionId: string): Promise<SlashCommand[]>
     /** Project files matching what follows an `@`, best first, already capped. Root-relative with
      *  forward slashes. Empty for a session with no project, or one whose folder cannot be read.
      *  `indexing` is true while the project's first walk is still under way (main/fileIndex.ts

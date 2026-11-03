@@ -26,8 +26,7 @@ const inlineList = (raw: string): string[] => {
 }
 
 /**
- * The `name`, `skills` and `agent` of a markdown frontmatter block (§4.12). Not a YAML parser, as the composer's menu reads
- * a description (core/commands/slashCommands.ts): a name is one line, and `skills:` is written inline or as a block list of
+ * The `name`, `skills` and `agent` of a markdown frontmatter block (§4.12). Not a YAML parser: a name is one line, and `skills:` is written inline or as a block list of
  * one name per line, as Claude Code's own docs write it (sub-agents, "Preload skills into subagents"). Nothing after the
  * block is read.
  */
