@@ -9,11 +9,14 @@ describe('extensionPaths', () => {
     const p = path.join('C:', 'Users', 'u', 'AppData', 'Roaming', 'astera')
     expect(extensionPaths(p)).toEqual({
       registry: path.join(p, 'extensions', 'registry.json'),
+      claudePlugins: path.join(p, 'extensions', 'claude-plugins.json'),
+      claudePluginHome: path.join(p, 'extensions', 'claude-plugins'),
       skills: path.join(p, 'extensions', 'skills'),
       commands: path.join(p, 'extensions', 'commands'),
       agents: path.join(p, 'extensions', 'agents'),
       secrets: path.join(p, 'extensions', 'secrets'),
       materializedState: path.join(p, 'extension-state', 'materialized.json'),
+      claudePluginUse: path.join(p, 'extension-state', 'claude-plugin-use'),
       backups: path.join(p, 'extension-state', 'backups'),
       generatedMcp: path.join(p, 'materialized', 'mcp')
     })

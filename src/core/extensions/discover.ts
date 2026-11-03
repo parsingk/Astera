@@ -91,7 +91,7 @@ export function knownSessionIsolated(def: { command?: string; args?: string[] })
 /** Whether a server's arguments or address carry a credential (final review I3): `--api-key <value>`, `--token=<value>`,
  *  a query parameter such as `access_token`, or a password in the address. Shared, it would sit on every Codex
  *  session's command line, in Claude's generated file and in the registry. */
-function credentialInLaunch(args: string[] | undefined, url: string | undefined): boolean {
+export function credentialInLaunch(args: string[] | undefined, url: string | undefined): boolean {
   const a = args ?? []
   for (let i = 0; i < a.length; i++) {
     const joined = /^--?([\w.-]+)=(.+)$/.exec(a[i])

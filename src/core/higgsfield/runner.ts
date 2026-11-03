@@ -37,7 +37,7 @@ export interface RealRunnerOptions {
 
 /** How to start `file` with `args`: on win32 an npm `.cmd` becomes node on its script (so no cmd.exe reads
  *  the agent's words), any other `.cmd`/`.bat` goes through cmd.exe only when no argument is cmd syntax. */
-function commandFor(file: string, platform: NodeJS.Platform, args: string[], env: NodeJS.ProcessEnv):
+export function commandFor(file: string, platform: NodeJS.Platform, args: string[], env: NodeJS.ProcessEnv):
   { file: string; args: string[]; env: NodeJS.ProcessEnv } | { refusal: string } {
   if (platform !== 'win32') return { file, args, env }
   const ext = path.win32.extname(file).toLowerCase()

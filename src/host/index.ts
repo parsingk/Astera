@@ -12,7 +12,7 @@ import { createHostPolicies } from './audit/policyCommands'
 import { createHostAudit } from './audit/auditCommands'
 import { createAuditRecorder, dispatchOfWithTurns, registrySessionFacts } from './audit/recorder'
 import { createAuditSources, pruneEnforceFiles } from './audit/sources'
-import { profilePaths } from '../core/profile/paths'
+import { extensionPaths, profilePaths } from '../core/profile/paths'
 import { t } from '../core/i18n'
 import { openTokenStore } from './tokens/store'
 import { createTokenSources, tokenOwnerOf } from './tokens/sources'
@@ -31,6 +31,7 @@ import { listPairedRuntimes, registryStamp } from '../core/runtimes/registry'
 import { hidingLog } from '../core/extensions/secrets'
 import { createHidingSource, projectOfWorktrees } from '../core/credentials/hiding'
 import { sweepGeneratedMcp } from '../core/extensions/resolve'
+import { createPluginCliRunner } from '../core/extensions/claudePlugins/cli'
 import { hostJobSources } from './jobSources'
 import { hostCompletionChecks } from './completionChecks'
 import { PLUGIN_STOP_CAP_MS, createPluginRuntime } from './plugins/runtime'
@@ -901,7 +902,14 @@ async function main(): Promise<void> {
     homeDir: os.homedir(),
     readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
     log: (m) => log.write(m),
-    gateway: mcpGateway
+    gateway: mcpGateway,
+    // And the shared Claude Code plugins, installed once in Astera's own plugin folder by `claude plugin …`. The
+    // environment is read at each command, after its PATH refresh, as a worker's is at each start
+    claudePluginRun: createPluginCliRunner({
+      home: extensionPaths(profileDir).claudePluginHome,
+      platform: process.platform,
+      baseEnv: () => hostWorkerBaseEnv(process.env)
+    })
   })
   // Agent Profiles (design §4): the store this Host owns. A profile cannot be deleted while a live session holds it
   // (the session's note carries `agentProfileId`) or unfinished orchestration work does (a Job, a Task, an open
@@ -1464,6 +1472,10 @@ async function main(): Promise<void> {
   // And the shared skills, commands and agents, into every account as it is now (design §4.6). A profile that shares
   // nothing writes nothing. Never rejects.
   void extensions.sync()
+  // And the shared Claude Code plugins: their folder swept of the versions no session uses, before any plugin job runs,
+  // then their marketplaces checked for updates, now and every day on a timer that never keeps the Host alive. A profile
+  // that shares no plugin runs no check.
+  extensions.keepCheckingClaudePlugins()
   // And the MCP Gateway, when a stdio server is shared. Never rejects.
   void mcpGateway.sync().catch(() => null)
   // And the generated MCP files no session used for 30 days (a session in use touches its own at every spawn)

@@ -1146,18 +1146,37 @@ second run is all `unchanged`.
 skill installed after it, and `data.note` says so. Open a new session.
 
 **`ext` is for the extensions shared with every account**: the MCP servers, skills, slash commands and
-subagents set up once in Settings › Extensions. Every session Astera starts gets the shared MCP servers
+subagents set up once in Settings › MCP & Skills. Every session Astera starts gets the shared MCP servers
 when it starts; a server that runs as a command runs in the Host's MCP Gateway, and the session gets only
 its address and a token of its own. The skills, commands and agents are copied into each account's
 folder, and Astera keeps a record of the copies it owns instead of marking your files. `ext list` names
 what is shared and where the copies are. An MCP server's environment names say where each value comes
 from (`secret`, `value` or `inherit`), and no value is ever printed. `ext list` reads the profile and does
-not show whether the Gateway's processes are running; Settings › Extensions does.
+not show whether the Gateway's processes are running; Settings › MCP & Skills does.
 
 ```json
 {"ok":true,"data":{"entries":[{"id":"skill-review","kind":"skill","name":"review","enabled":true, …}],
-  "copies":[{"id":"skill-review","accountId":"acc_1","destination":"…/skills/review","adopted":false}]}}
+  "copies":[{"id":"skill-review","accountId":"acc_1","destination":"…/skills/review","adopted":false}],
+  "claudePlugins":[{"id":"superpowers@claude-plugins-official","name":"superpowers",
+    "marketplace":"claude-plugins-official","version":"7.0.0","installPath":"…/extensions/claude-plugins/…",
+    "enabled":true,"update":{"version":"7.1.0","checkedAt":"2026-11-02T02:00:00.000Z", …}, …}]}}
 ```
+
+`ext list` also names the Claude Code plugins shared in the Plugins group of that tab, in `claudePlugins`,
+one object each. They are not in `entries`, so `runtimes expect` does not take their ids. Each has `id`
+(`<name>@<marketplace>`, Claude Code's own id), `name`, `marketplace`, `source` (where the marketplace comes
+from), `version`, `installPath` (the one copy Astera loads into every Claude session it starts),
+`dependencies` (plugins installed with it, each with `id`, `version` and `installPath`), `importedFrom` (the
+account it was taken from), `enabled`, `addedAt`, `lastUpdated`, `enabledAt` (once it has been turned on),
+`fingerprint` and `update`. `update` is there only when a check found a newer version in the marketplace:
+`version` is that version, or `null` when the marketplace does not say, and `checkedAt` is when. It marks the
+plugin and installs nothing; only **Update** in the app does. `claudePlugins` is `[]` while nothing is
+shared. `ext` only reads them: no verb shares, updates, turns off or removes a plugin, and nothing in an
+account's folder is read or changed for them.
+
+A damaged `extensions/claude-plugins.json` does not fail `ext list`. `claudePlugins` is then left out, because
+`[]` would say nothing is shared, and `claudePluginsError` gives the message, which names the file. `entries`
+and `copies` are answered as usual and the exit code stays 0. `ext list` keeps no copy of the damaged file.
 
 `ext sync` puts the shared skills, commands and agents into every account now. The Host does the same
 whenever the shared extensions change, when it starts and when an account is added, so this is for

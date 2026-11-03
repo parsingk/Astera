@@ -16,7 +16,7 @@ export function isOsMetadata(name: string): boolean {
 }
 
 /** Text, as git decides it (no NUL in the first 8000 bytes), has each `\r\n` made `\n`; a lone `\r` stays. */
-function normalized(bytes: Buffer): Buffer {
+export function normalized(bytes: Buffer): Buffer {
   if (bytes.subarray(0, 8000).includes(0)) return bytes
   const out = Buffer.allocUnsafe(bytes.length)
   let n = 0

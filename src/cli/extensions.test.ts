@@ -9,6 +9,8 @@ import { extensionPaths } from '../core/profile/paths'
 import { writeExtensionRegistry } from '../core/extensions/registry'
 import { extensionSecrets } from '../core/extensions/secrets'
 import { hashFile } from '../core/extensions/hash'
+import { updateClaudePlugins } from '../core/extensions/claudePlugins/store'
+import type { SharedClaudePlugin } from '../core/extensions/claudePlugins/types'
 import { extensionsCommand } from './extensions'
 
 const dirs: string[] = []
@@ -61,6 +63,48 @@ describe('extensionsCommand', () => {
       entries: [{ id: 'command-ship' }, { id: 'mcp-linear', env: { LINEAR_API_KEY: 'secret', LOG_LEVEL: 'value' } }],
       copies: [{ id: 'command-ship', accountId: 'acc_1', destination: path.join(p.configDir, 'commands', 'ship.md'), adopted: false }]
     } })
+  })
+
+  const sharedPlugin: SharedClaudePlugin = {
+    id: 'review@market',
+    name: 'review',
+    marketplace: 'market',
+    source: { source: 'github', repo: 'acme/market' },
+    version: '1.0.0',
+    installPath: '/astera/extensions/claude-plugins/plugins/cache/market/review/1.0.0',
+    dependencies: [],
+    importedFrom: 'acc_1',
+    enabled: true,
+    addedAt: '2026-11-02T00:00:00.000Z',
+    lastUpdated: '2026-11-02T00:00:00.000Z',
+    fingerprint: 'sha256:aa',
+    update: { version: '1.1.0', fingerprint: 'sha256:bb', checkedAt: '2026-11-02T02:00:00.000Z' }
+  }
+
+  it('list includes shared plugins, and an empty list when none is shared', async () => {
+    const p = await profile()
+    const none = await extensionsCommand({ cmd: 'ext-list', profileDir: p.profileDir })
+    expect(none).toMatchObject({ ok: true, body: { claudePlugins: [] } })
+    expect(JSON.stringify(none)).not.toContain('claudePluginsError')
+    await updateClaudePlugins(p.profileDir, (s) => ({ ...s, plugins: [sharedPlugin] }))
+    const r = await extensionsCommand({ cmd: 'ext-list', profileDir: p.profileDir })
+    expect(r).toMatchObject({ ok: true, body: { entries: [{ id: 'command-ship' }, { id: 'mcp-linear' }], claudePlugins: [sharedPlugin] } })
+    expect(JSON.stringify(r)).not.toContain('claudePluginsError')
+  })
+
+  it('list answers the registry when the plugin store is damaged, and writes nothing beside it', async () => {
+    const p = await profile()
+    await fs.writeFile(p.paths.claudePlugins, '{ damaged')
+    const extDir = path.dirname(p.paths.claudePlugins)
+    const before = await fs.readdir(extDir)
+    const r = await extensionsCommand({ cmd: 'ext-list', profileDir: p.profileDir })
+    expect(r).toMatchObject({ ok: true, body: { entries: [{ id: 'command-ship' }, { id: 'mcp-linear' }], copies: [] } })
+    if (!r.ok) throw new Error('unreachable')
+    expect(r.body.claudePluginsError).toEqual(expect.stringContaining('claude-plugins.json'))
+    // a damaged store is not "nothing shared": no list is given, and the file and its folder are as they were
+    expect(r.body).not.toHaveProperty('claudePlugins')
+    expect(await fs.readFile(p.paths.claudePlugins, 'utf8')).toBe('{ damaged')
+    expect(await fs.readdir(extDir)).toEqual(before)
   })
 
   it('refuses a damaged registry with the file to repair, and a failed copy exits as a failure', async () => {

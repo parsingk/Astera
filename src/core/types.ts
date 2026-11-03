@@ -1,7 +1,6 @@
 import type { GitHubLifecycleDefaults } from './github/lifecycleDefaults'
 import type { CiFailureClass, GitHubInvalidatedReason } from './github/lifecycle'
 import type { GitHubLifecycleView } from './github/view'
-import type { SlashCommand } from './commands/slashCommands'
 import type { RunConfig, RunStatus, SaveConfigsResult } from './run/config'
 import type { EmulationMetrics } from './preview/viewports'
 import type { CaptureResult, Rect } from './preview/pick/types'
@@ -2036,6 +2035,19 @@ export interface ExtensionsApi {
   replace(accountId: string, id: string): Promise<PluginsCallAnswer>
   /** One process per project folder, or one per session, for a shared stdio server (Gateway design G8). */
   setIsolation(id: string, isolation: 'folder' | 'session'): Promise<PluginsCallAnswer>
+  /** The shared Claude Code plugins, each with `missing`, `accountCopies` and `requiredBy`, the plugin jobs, and the last
+   *  update check. Poll it while a job is queued or running (R4). */
+  pluginList(): Promise<PluginsCallAnswer>
+  /** The Claude Code plugins every Claude account holds that are not shared yet: `{ plugins, unreadable }`. */
+  pluginDiscover(): Promise<PluginsCallAnswer>
+  /** Each answers `{ jobId }` at once; the job's state is in `pluginList`. `acceptCommand` is the sha256 of the command
+   *  a job that ended asking for confirmation showed the person. */
+  pluginShare(id: string, acceptCommand?: string): Promise<PluginsCallAnswer>
+  pluginUpdate(id: string, acceptCommand?: string): Promise<PluginsCallAnswer>
+  pluginCheck(): Promise<PluginsCallAnswer>
+  pluginRemove(id: string): Promise<PluginsCallAnswer>
+  /** Not a job: answers once the store says it. */
+  pluginSetEnabled(id: string, on: boolean): Promise<PluginsCallAnswer>
 }
 
 /** What a person sets on an agent profile in Settings › Agent profiles. */
@@ -2432,10 +2444,6 @@ export type RendererApi = CoreApi & {
      *  file someone asked to add to their repository. Rejects an empty payload, one over the cap, and
      *  a session id that is not a uuid (it names the folder). */
     attach(sessionId: string, name: string, mime: string, base64: string): Promise<string>
-    /** Everything `/` can start for this session, read off disk (main/slashCommands.ts). The CLI's
-     *  own built-ins are not in it — nothing on disk describes them — and a name that is missing still
-     *  runs when it is typed in full. */
-    commands(sessionId: string): Promise<SlashCommand[]>
     /** Project files matching what follows an `@`, best first, already capped. Root-relative with
      *  forward slashes. Empty for a session with no project, or one whose folder cannot be read.
      *  `indexing` is true while the project's first walk is still under way (main/fileIndex.ts

@@ -8,6 +8,7 @@ import { removeFixture } from '../testFixtures'
 import { extensionPaths } from '../profile/paths'
 import { readExtensionRegistry, writeExtensionRegistry, registryIsEmpty, settingsImportCopiesCapabilities } from './registry'
 import { extensionSecrets } from './secrets'
+import { updateClaudePlugins, claudePluginsShared } from './claudePlugins/store'
 import type { ExtensionRegistry } from './types'
 
 const dirs: string[] = []
@@ -67,6 +68,25 @@ describe('extension registry', () => {
     expect(await settingsImportCopiesCapabilities(p)).toBe(false)
     await fs.writeFile(extensionPaths(p).registry, '{ broken')
     expect(await settingsImportCopiesCapabilities(p)).toBe(false)
+  })
+
+  // Plugins live in their own store (R1), so sharing one leaves this answer where it was (C1)
+  it('a shared plugin does not change the D9 answer', async () => {
+    const p = await profile()
+    await updateClaudePlugins(p, (s) => ({
+      ...s,
+      plugins: [
+        {
+          id: 'review@market', name: 'review', marketplace: 'market', source: { source: 'github', repo: 'acme/market' },
+          version: '1.0.0', installPath: path.join('plugins', 'cache', 'market', 'review', '1.0.0'), dependencies: [],
+          importedFrom: 'acc_1', enabled: true, addedAt: '2026-11-02T00:00:00.000Z', lastUpdated: '2026-11-02T00:00:00.000Z',
+          fingerprint: 'sha256:aa'
+        }
+      ]
+    }))
+    expect(await claudePluginsShared(p)).toBe(true)
+    expect(registryIsEmpty(await readExtensionRegistry(p))).toBe(true)
+    expect(await settingsImportCopiesCapabilities(p)).toBe(true)
   })
 
   it('never holds a secret value: only the secret name is written', async () => {

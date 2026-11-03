@@ -14,6 +14,9 @@ export type ConfirmChoice = {
 export type ConfirmRequest = {
   title: string
   body: string
+  /** Drawn after the body in a code block, as it is: a command the person must see before it runs, as a Claude Code
+   *  marketplace's (Claude plugin sharing §5.4). With it, Cancel has focus, so a stray Enter does not run the command. */
+  code?: string
   /** Drawn after the choices, before the buttons: what to read last, as the plugin install warning's trust sentence
    *  (spec §31). */
   footer?: string

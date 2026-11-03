@@ -31,6 +31,13 @@ describe('claude — 쓰기를 막는 세 겹', () => {
     expect(args).toContain('--no-session-persistence')
   })
 
+  // Acceptance 7: the shared Claude Code plugins go to sessions only (core/extensions/resolve.ts), and a write-up is
+  // not one: these arguments are all its claude is started with (agent.ts)
+  it('the How It Works generator passes no --plugin-dir', () => {
+    expect(args).not.toContain('--plugin-dir')
+    expect(agentArgs({ provider: 'claude', model: 'opus', effort: 'low' })).not.toContain('--plugin-dir')
+  })
+
   it('모델과 노력은 고른 때만 실린다', () => {
     expect(agentArgs({ provider: 'claude' }).join(' ')).not.toContain('--model')
     expect(pairs(agentArgs({ provider: 'claude', model: 'opus', effort: 'low' }))).toEqual(

@@ -6,9 +6,11 @@ import { hostSender } from './pluginsRoute'
 
 type Call = Parameters<typeof hostSender>[0]['call']
 
-/** A change (the `true` below) syncs every account's copies before it answers, so it waits as long as a plugin change. */
+/** A change (the `true` below) syncs every account's copies before it answers, so it waits as long as a plugin change.
+ *  A shared Claude plugin's change answers its job id at once (R4), so for those the deadline is only an upper bound. */
 export function createExtensionsRoute(d: { call: Call }): ExtensionsApi {
   const send = hostSender(d)
+  const accept = (acceptCommand: string | undefined) => (acceptCommand === undefined ? {} : { acceptCommand })
   return {
     list: () => send('extensions-list', {}),
     discover: (accountId) => send('extensions-discover', { accountId }),
@@ -16,6 +18,13 @@ export function createExtensionsRoute(d: { call: Call }): ExtensionsApi {
     setEnabled: (id, enabled) => send(enabled ? 'extensions-enable' : 'extensions-disable', { id }, true),
     remove: (id) => send('extensions-remove', { id }, true),
     replace: (accountId, id) => send('extensions-replace', { accountId, id }, true),
-    setIsolation: (id, isolation) => send('extensions-isolation', { id, isolation }, true)
+    setIsolation: (id, isolation) => send('extensions-isolation', { id, isolation }, true),
+    pluginList: () => send('extensions-plugin-list', {}),
+    pluginDiscover: () => send('extensions-plugin-discover', {}),
+    pluginShare: (id, acceptCommand) => send('extensions-plugin-share', { id, ...accept(acceptCommand) }, true),
+    pluginUpdate: (id, acceptCommand) => send('extensions-plugin-update', { id, ...accept(acceptCommand) }, true),
+    pluginCheck: () => send('extensions-plugin-check', {}, true),
+    pluginRemove: (id) => send('extensions-plugin-remove', { id }, true),
+    pluginSetEnabled: (id, on) => send('extensions-plugin-set-enabled', { id, enabled: on }, true)
   }
 }

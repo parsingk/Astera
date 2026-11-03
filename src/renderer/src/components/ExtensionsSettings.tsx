@@ -2,12 +2,15 @@ import { useEffect, useRef, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import type { Account, PluginsCallAnswer, Provider } from '../../../core/types'
 import type { ExtensionKind } from '../../../core/extensions/types'
-import { PROVIDERS, PROVIDER_META } from '../../../core/providers/meta'
+import type { OfferedClaudePlugin } from '../../../core/extensions/claudePlugins/types'
+import { PROVIDERS, PROVIDER_META, providerOf } from '../../../core/providers/meta'
 import { useI18n } from '../i18n/I18nProvider'
 import { useAccountStatus } from '../hooks/useAccountStatus'
 import { toast } from '../lib/toast'
 import { confirmModal, confirmModalWithChoices } from '../lib/confirm'
 import { copyProblem, failureLine, importPrompt, kindLabel, notGivenLabel, notGivenWorthSaying, offeredItems, picksOf, reasonLabel, serverProblem, type FoundItem } from './extensionsText'
+import { pluginPrompt } from './claudePluginsText'
+import { ClaudePluginsSection, useClaudePlugins } from './ClaudePluginsSection'
 
 type Entry = Record<string, unknown>
 type Status = { id: string; accountId: string; outcome: string; detail?: string }
@@ -33,6 +36,8 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
   const [mcpStatus, setMcpStatus] = useState<McpState[]>([])
   const [gateway, setGateway] = useState<GatewayState[]>([])
   const [listFailure, setListFailure] = useState<Failure | null>(null)
+  /** The shared Claude Code plugins, on a queue of their own (R4): the register menu shares into them. */
+  const claudePlugins = useClaudePlugins()
   /** One change at a time: every change syncs every account before the Host answers. */
   const [busy, setBusy] = useState<'reading' | 'changing' | null>(null)
   /** The rows opened, by entry id. */
@@ -100,6 +105,30 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
     )
   }
 
+  /** The register menu's Claude Code plugins: what any Claude account holds that is not shared yet. Each one picked
+   *  starts a share job, and the Plugins group says how it goes. */
+  const shareClaudePlugins = async (): Promise<void> => {
+    if (busy !== null) return
+    setBusy('reading')
+    let found: OfferedClaudePlugin[]
+    let unreadable: string[]
+    try {
+      const r = await window.api.extensions.pluginDiscover().catch(failed)
+      if (!r.ok) return void toast.error(failureLine(r, t, { read: true }))
+      found = arr<OfferedClaudePlugin>(r.body.plugins)
+      unreadable = arr<string>(r.body.unreadable)
+    } finally {
+      setBusy(null)
+    }
+    if (found.length === 0) {
+      for (const accountId of unreadable) toast.error(t('settings.extensions.plugin.unreadable', { account: labelOf(accountId) }))
+      return void toast.info(t('settings.extensions.plugin.nothing'))
+    }
+    const answer = await confirmModalWithChoices(pluginPrompt(found, unreadable, labelOf, t))
+    if (!answer.ok) return
+    for (const id of answer.checked) await claudePlugins.share(id)
+  }
+
   const remove = async (e: Entry): Promise<void> => {
     const name = str(e.name)
     const ok = await confirmModal({ title: t('settings.extensions.removeConfirm.title', { name }), body: t('settings.extensions.removeConfirm.body'), confirmLabel: t('settings.extensions.remove') })
@@ -121,19 +150,24 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
     provider: Provider
     accountId: string
   }[]
+  // Plugin discovery reads every Claude account's files, so one that is not signed in counts too
+  const hasClaude = accounts.some((a) => providerOf(a) === 'claude')
+  // No plugin shared either: known once the plugin list answered, or once it failed and so shows none
+  const noPlugins = claudePlugins.listed !== null ? claudePlugins.listed.length === 0 : claudePlugins.failure !== null
   return (
     <div className="settings-stack">
       <p className="settings-hint">{t('settings.extensions.hint')}</p>
-      {sources.length > 0 && (
+      {(sources.length > 0 || hasClaude) && (
         <RegisterMenu
           sources={sources.map((s) => ({ ...s, label: labelOf(s.accountId) }))}
           reading={busy === 'reading'}
           disabled={busy !== null || listFailure !== null}
           onPick={(accountId) => void importFrom(accountId)}
+          onClaudePlugins={hasClaude ? () => void shareClaudePlugins() : undefined}
         />
       )}
       {listFailure !== null && <p className="settings-hint is-warning">{failureLine(listFailure, t, { read: true })}</p>}
-      {entries !== null && entries.length === 0 && <p className="settings-hint">{t('settings.extensions.none')}</p>}
+      {entries !== null && entries.length === 0 && noPlugins && <p className="settings-hint">{t('settings.extensions.none')}</p>}
       {KINDS.map((kind) => {
         const ofKind = (entries ?? []).filter((e) => e.kind === kind)
         if (ofKind.length === 0) return null
@@ -166,22 +200,27 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
           </div>
         )
       })}
+      <ClaudePluginsSection plugins={claudePlugins} labelOf={labelOf} />
     </div>
   )
 }
 
-/** The one Register button: it opens the list of accounts to register from, the default account of each provider.
- *  Closes on a pick, a click outside or Escape, as the run type picker does. */
+/** The one Register button: it opens the list of accounts to register from, the default account of each provider, and
+ *  the Claude Code plugins of every Claude account. Closes on a pick, a click outside or Escape, as the run type picker
+ *  does. */
 function RegisterMenu({
   sources,
   reading,
   disabled,
-  onPick
+  onPick,
+  onClaudePlugins
 }: {
   sources: { provider: Provider; accountId: string; label: string }[]
   reading: boolean
   disabled: boolean
   onPick: (accountId: string) => void
+  /** Given when any Claude account exists. */
+  onClaudePlugins?: () => void
 }): React.JSX.Element {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
@@ -212,7 +251,7 @@ function RegisterMenu({
       </button>
       {open && (
         <div className="rtp-menu" role="menu">
-          <div className="rtp-group">{t('settings.extensions.registerFrom')}</div>
+          {sources.length > 0 && <div className="rtp-group">{t('settings.extensions.registerFrom')}</div>}
           {sources.map((s) => (
             <button
               key={s.provider}
@@ -228,6 +267,22 @@ function RegisterMenu({
               <span className="ext-register-provider">{PROVIDER_META[s.provider].displayName}</span>
             </button>
           ))}
+          {onClaudePlugins !== undefined && (
+            <>
+              <div className="rtp-group">{t('settings.extensions.plugin.group')}</div>
+              <button
+                type="button"
+                role="menuitem"
+                className="rtp-item"
+                onClick={() => {
+                  setOpen(false)
+                  onClaudePlugins()
+                }}
+              >
+                {t('settings.extensions.plugin.register')}
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>
