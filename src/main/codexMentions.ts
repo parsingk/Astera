@@ -22,6 +22,9 @@ async function skillsIn(dir: string): Promise<string[]> {
   return out
 }
 
+/** One folder name, not a path: the key in `config.toml` is joined into the cache path, so it must not leave it. */
+const isFolderName = (name: string): boolean => name !== '' && name !== '.' && name !== '..' && path.basename(name) === name
+
 /** The plugins `config.toml` has turned on, as `[name, marketplace]`: codex keys each as `<name>@<marketplace>`. */
 async function enabledPlugins(configDir: string): Promise<Array<[string, string]>> {
   let plugins: unknown
@@ -35,7 +38,9 @@ async function enabledPlugins(configDir: string): Promise<Array<[string, string]
   for (const [key, entry] of Object.entries(plugins)) {
     if ((entry as { enabled?: unknown } | null)?.enabled !== true) continue
     const at = key.lastIndexOf('@')
-    if (at > 0 && at < key.length - 1) out.push([key.slice(0, at), key.slice(at + 1)])
+    const name = key.slice(0, at)
+    const marketplace = key.slice(at + 1)
+    if (at > 0 && isFolderName(name) && isFolderName(marketplace)) out.push([name, marketplace])
   }
   return out
 }
@@ -71,16 +76,21 @@ async function installedFolder(configDir: string, name: string, marketplace: str
 async function pluginSkills(configDir: string, name: string, marketplace: string): Promise<string[]> {
   const dir = await installedFolder(configDir, name, marketplace)
   if (dir === null) return []
-  let skillsFolder = 'skills'
+  let skillsFolder = path.join(dir, 'skills')
   try {
     const manifest = JSON.parse(await fs.readFile(path.join(dir, '.codex-plugin', 'plugin.json'), 'utf8')) as {
       skills?: unknown
     }
-    if (typeof manifest.skills === 'string' && manifest.skills !== '') skillsFolder = manifest.skills
+    if (typeof manifest.skills === 'string') {
+      // The manifest is the plugin author's file: a folder outside the plugin's own is never walked from here.
+      const named = path.resolve(dir, manifest.skills)
+      const relative = path.relative(dir, named)
+      if (relative !== '' && relative.split(path.sep)[0] !== '..' && !path.isAbsolute(relative)) skillsFolder = named
+    }
   } catch {
     // No manifest, or one that is not JSON: codex falls back to the default folder.
   }
-  const folders = [path.join(dir, skillsFolder), path.join(dir, '.codex-plugin', 'migrated-command-skills')]
+  const folders = [skillsFolder, path.join(dir, '.codex-plugin', 'migrated-command-skills')]
   const nested = await Promise.all(folders.map((folder) => skillsIn(folder)))
   return nested.flat().map((skill) => `${name}:${skill}`)
 }

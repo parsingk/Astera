@@ -42,6 +42,21 @@ describe('listCodexMentions', () => {
     expect(await listCodexMentions(configDir)).toEqual(['astera-task', 'p:a', 'p:source-command-b'])
   })
 
+  // The names in config.toml are joined into the cache path, so one that is not a single folder name would walk
+  // out of `plugins/cache`; each of these has a real SKILL.md where that walk would end.
+  it('skips a plugin or marketplace name that is more than one folder name, and lists the others', async () => {
+    const cache = path.join(configDir, 'plugins', 'cache')
+    await skill(path.join(cache, 'p', '1.0.0', 'skills', 'evil1', 'SKILL.md'), 'x')
+    await skill(path.join(configDir, 'plugins', 'm', 'p', '1.0.0', 'skills', 'evil2', 'SKILL.md'), 'x')
+    await skill(path.join(configDir, 'plugins', 'p', '1.0.0', 'skills', 'evil3', 'SKILL.md'), 'x')
+    await fs.appendFile(
+      path.join(configDir, 'config.toml'),
+      '\n[plugins."../p@m"]\nenabled = true\n\n[plugins."p@../m"]\nenabled = true\n\n[plugins."p@.."]\nenabled = true\n' +
+        '\n[plugins."..@m"]\nenabled = true\n\n[plugins."@m"]\nenabled = true\n'
+    )
+    expect(await listCodexMentions(configDir)).toEqual(['astera-task', 'p:a', 'p:source-command-b'])
+  })
+
   it('leaves out an enabled plugin that is not installed', async () => {
     await fs.rm(path.join(configDir, 'plugins'), { recursive: true, force: true })
     expect(await listCodexMentions(configDir)).toEqual(['astera-task'])
@@ -54,6 +69,23 @@ describe('listCodexMentions', () => {
     await skill(path.join(dir, 'cskills', 'c', 'SKILL.md'), '둘째')
     await write(path.join(dir, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'p', skills: './cskills/' }))
     expect(await listCodexMentions(configDir)).toEqual(['astera-task', 'p:c', 'p:source-command-b'])
+  })
+
+  // The manifest is the plugin author's file, not the person's. A folder it names outside the plugin's own folder
+  // (or the plugin folder itself) is not one codex was asked to read from here, so it is not walked and not listed.
+  it.each([
+    ['a relative path that leaves the plugin folder', '../../outside'],
+    ['an absolute path', 'ABSOLUTE'],
+    ['the plugin folder itself', '.']
+  ])('falls back to skills when the manifest names %s', async (_what, named) => {
+    const dir = installed('m', 'p', '1.0.0')
+    const outside = path.join(configDir, 'plugins', 'cache', 'm', 'outside')
+    await skill(path.join(outside, 'o', 'SKILL.md'), '바깥')
+    await write(
+      path.join(dir, '.codex-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'p', skills: named === 'ABSOLUTE' ? outside : named })
+    )
+    expect(await listCodexMentions(configDir)).toEqual(['astera-task', 'p:a', 'p:source-command-b'])
   })
 
   it('reads skills when the manifest names no folder for them', async () => {
