@@ -186,6 +186,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.extensions.plugin.codex.installed': '{account} (Codex): {version} installed',
   'settings.extensions.plugin.codex.waiting': "{account} (Codex): applies when this account's sessions end",
   'settings.extensions.plugin.codex.pending': '{account} (Codex): not installed yet',
+  'settings.extensions.plugin.codex.held': '{account} (Codex): the new version could not be converted for Codex, so the previous one stays',
   'settings.extensions.plugin.codex.failed': '{account} (Codex): {reason}',
   'settings.extensions.plugin.codex.turnedOff': "{account} (Codex): turned off the account's own {id}",
   'settings.extensions.plugin.codex.code.marketplace-taken': 'a marketplace with the same name is already added from elsewhere',

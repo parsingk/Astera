@@ -151,6 +151,7 @@ export const ja: Catalog = {
   'settings.extensions.plugin.codex.installed': '{account} (Codex): {version} をインストール済み',
   'settings.extensions.plugin.codex.waiting': '{account} (Codex): このアカウントのセッションが終わると適用されます',
   'settings.extensions.plugin.codex.pending': '{account} (Codex): まだインストールされていません',
+  'settings.extensions.plugin.codex.held': '{account} (Codex): 新しいバージョンを Codex 向けに変換できなかったため、以前のバージョンをそのまま残しています',
   'settings.extensions.plugin.codex.failed': '{account} (Codex): {reason}',
   'settings.extensions.plugin.codex.turnedOff': '{account} (Codex): アカウントにあった {id} をオフにしました',
   'settings.extensions.plugin.codex.code.marketplace-taken': '同じ名前のマーケットプレイスがすでに別の場所から登録されています',

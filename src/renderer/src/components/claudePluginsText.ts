@@ -161,10 +161,12 @@ export function ownCopyLines(p: Pick<ListedClaudePlugin, 'enabled' | 'accountCop
 
 /** One line per Codex account, in the order the accounts are listed (§5.8), with the outcome row the sync left for it. A
  *  failure comes first: the Host keeps the installs when only the trust of the hooks failed, and the attention mark has to
- *  have its reason on the row. Then waiting, but only while this plugin is not at the shared version (the account waits as
- *  a whole, for any plugin it has to change), then the version Codex has, and otherwise not installed yet. An own plugin of
- *  the same name that Astera turned off in the account adds a line. A failure Astera decided is worded; one Codex reported,
- *  or a code this build does not know, is shown as the message. A row of an account no longer listed says nothing. */
+ *  have its reason on the row. Then held: the new version could not be made into a Codex copy, so the account keeps the
+ *  one it has and waits for nothing. Then waiting, but only while this plugin is not at the shared version (the account
+ *  waits as a whole, for any plugin it has to change), then the version Codex has, and otherwise not installed yet, which
+ *  is also what a held plugin the account does not have reads as. An own plugin of the same name that Astera turned off in
+ *  the account adds a line. A failure Astera decided is worded; one Codex reported, or a code this build does not know, is
+ *  shown as the message. A row of an account no longer listed says nothing. */
 export function codexLines(
   p: Pick<ListedClaudePlugin, 'name' | 'version'>,
   rows: readonly CodexPluginAccountState[],
@@ -181,7 +183,8 @@ export function codexLines(
       const { code, message } = row.failure
       const reason = code !== undefined && Object.hasOwn(CODEX_CODES, code) ? t(CODEX_CODES[code]) : message
       state = t('settings.extensions.plugin.codex.failed', { account, reason })
-    } else if (row?.waiting === true && version !== p.version) state = t('settings.extensions.plugin.codex.waiting', { account })
+    } else if (version !== undefined && row?.held?.includes(p.name) === true) state = t('settings.extensions.plugin.codex.held', { account })
+    else if (row?.waiting === true && version !== p.version) state = t('settings.extensions.plugin.codex.waiting', { account })
     else if (version !== undefined) state = t('settings.extensions.plugin.codex.installed', { account, version })
     else state = t('settings.extensions.plugin.codex.pending', { account })
     const off = (row?.turnedOff ?? []).filter((own) => own.split('@')[0] === p.name).map((own) => t('settings.extensions.plugin.codex.turnedOff', { account, id: own }))

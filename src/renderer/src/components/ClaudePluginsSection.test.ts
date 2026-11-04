@@ -409,6 +409,15 @@ describe('ClaudePluginRow', () => {
     expect(out).not.toContain('plugin.codex.noteHooks')
   })
 
+  // Final review I2: an update whose Codex copy could not be made leaves the account at the version it has
+  it('says a Codex account keeps the previous version where the plugin is held, and not installed yet where it is held but absent', () => {
+    const held: CodexPluginAccountState = { ...installed, installed: { superpowers: '6.3.0' }, held: ['superpowers'] }
+    const out = row({ codexAccountIds: ['x1', 'x2'], codexRows: [held, { ...installed, accountId: 'x2', installed: {} }] })
+    expect(out).toContain('settings.extensions.plugin.codex.held {\\"account\\":\\"x1\\"}')
+    expect(out).not.toContain('settings.extensions.plugin.codex.installed {\\"account\\":\\"x1\\"')
+    expect(out).toContain('settings.extensions.plugin.codex.pending {\\"account\\":\\"x2\\"}')
+  })
+
   it('shows nothing of Codex while no Codex account exists', () => {
     const out = row({ plugin: listed({ contents: { skills: [], commands: ['ship'], agents: ['critic'], mcpServers: [], hooks: true } }), codexAccountIds: [], codexRows: [installed] })
     expect(out).not.toContain('plugin.codex.')

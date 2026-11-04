@@ -213,7 +213,7 @@ describe('claudePluginsText', () => {
           expect(line, `${lang} ${code}`).not.toMatch(/settings\./)
           expect(line, `${lang} ${code}`).not.toContain('detail')
         }
-        for (const key of ['installed', 'waiting', 'pending', 'turnedOff', 'noteAgents', 'noteCommands', 'noteHooks'] as const) {
+        for (const key of ['installed', 'waiting', 'pending', 'held', 'turnedOff', 'noteAgents', 'noteCommands', 'noteHooks'] as const) {
           expect(tr(`settings.extensions.plugin.codex.${key}`, { account: 'a', version: 'v', id: 'i', name: 'n' }), `${lang} ${key}`).not.toMatch(/^settings\./)
         }
       }
@@ -249,6 +249,17 @@ describe('claudePluginsText', () => {
     it('says a failure even where the plugin is installed, so the attention mark has its reason', () => {
       const failed = row({ installed: { superpowers: '7.0.0' }, failure: { message: 'app-server timed out', code: 'hooks-unreadable' } })
       expect(codexLines(plugin, [failed], ['x1'], codexLabel, en)).toEqual(['codex1@… (Codex): the hooks could not be listed, so they were not trusted'])
+    })
+
+    // Final review I2: the Host lists a plugin as held only in an account that has it installed
+    it('says a held plugin keeps the previous version, waiting or not, and one held where it is absent is not installed yet', () => {
+      expect(codexLines(plugin, [row({ installed: { superpowers: '6.3.0' }, held: ['superpowers'] })], ['x1'], codexLabel, ko)).toEqual([
+        'codex1@… (Codex): 새 버전을 Codex에 맞게 바꾸지 못해 이전 버전을 그대로 둡니다'
+      ])
+      expect(codexLines(plugin, [row({ installed: { superpowers: '6.3.0' }, held: ['superpowers'], waiting: true })], ['x1'], codexLabel, en)).toEqual([
+        'codex1@… (Codex): the new version could not be converted for Codex, so the previous one stays'
+      ])
+      expect(codexLines(plugin, [row({ installed: { other: '1.0.0' }, held: ['other'] })], ['x1'], codexLabel, en)).toEqual(['codex1@… (Codex): not installed yet'])
     })
 
     it('says a waiting account is waiting for this plugin only when it is not at the shared version yet', () => {

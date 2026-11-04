@@ -151,6 +151,7 @@ export const es: Catalog = {
   'settings.extensions.plugin.codex.installed': '{account} (Codex): versión {version} instalada',
   'settings.extensions.plugin.codex.waiting': '{account} (Codex): se aplica cuando terminen las sesiones de esta cuenta',
   'settings.extensions.plugin.codex.pending': '{account} (Codex): aún no instalado',
+  'settings.extensions.plugin.codex.held': '{account} (Codex): la nueva versión no se pudo convertir para Codex, así que se mantiene la anterior',
   'settings.extensions.plugin.codex.failed': '{account} (Codex): {reason}',
   'settings.extensions.plugin.codex.turnedOff': '{account} (Codex): se desactivó el {id} que ya tenía la cuenta',
   'settings.extensions.plugin.codex.code.marketplace-taken': 'ya hay un marketplace con el mismo nombre añadido desde otro lugar',

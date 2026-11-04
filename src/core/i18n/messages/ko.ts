@@ -190,6 +190,7 @@ export const ko = {
   'settings.extensions.plugin.codex.installed': '{account} (Codex): {version} 설치됨',
   'settings.extensions.plugin.codex.waiting': '{account} (Codex): 이 계정의 세션이 끝나면 적용됩니다',
   'settings.extensions.plugin.codex.pending': '{account} (Codex): 아직 설치하지 않았습니다',
+  'settings.extensions.plugin.codex.held': '{account} (Codex): 새 버전을 Codex에 맞게 바꾸지 못해 이전 버전을 그대로 둡니다',
   'settings.extensions.plugin.codex.failed': '{account} (Codex): {reason}',
   'settings.extensions.plugin.codex.turnedOff': '{account} (Codex): 계정에 있던 {id}를 껐습니다',
   'settings.extensions.plugin.codex.code.marketplace-taken': '같은 이름의 마켓플레이스가 다른 곳에서 이미 등록되어 있습니다',
