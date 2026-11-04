@@ -34,6 +34,20 @@ vi.mock('../../fileLock', async (importOriginal) => {
   }
 })
 
+// Every rename the code under test asks for, and the one folder whose rename is made to fail as a busy folder does on Windows
+const renames = vi.hoisted(() => ({ seen: [] as { from: string; to: string }[], busy: null as string | null }))
+vi.mock('../../renameRetry', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../renameRetry')>()
+  return {
+    ...real,
+    renameRetrying: (from: string, to: string) => {
+      renames.seen.push({ from, to })
+      if (from === renames.busy) return Promise.reject(Object.assign(new Error(`EBUSY: resource busy or locked, rename '${from}'`), { code: 'EBUSY' }))
+      return real.renameRetrying(from, to)
+    }
+  }
+})
+
 const M = 'astera-shared'
 const NOW = new Date('2026-11-04T01:02:03.000Z')
 const AT = NOW.toISOString()
@@ -42,6 +56,8 @@ const dirs: string[] = []
 let unscripted: string[] = []
 beforeEach(() => {
   locks.taken = []
+  renames.seen = []
+  renames.busy = null
   unscripted = []
 })
 afterEach(async () => {
@@ -413,6 +429,37 @@ describe('syncCodexPlugins', () => {
     expect(logs[1]).toContain('lost@market')
   })
 
+  it('a plugin whose Claude copy is gone stays shared while its Codex copy is there, and is left out when neither is', async () => {
+    const w = await world()
+    await addAccount(w, 'acc_codex')
+    await share(w, [{ name: 'p', version: '1.0.0', deps: [{ name: 'base', version: '2.0.0' }] }])
+    const cli = fakeCodex(w)
+    await sync(w, cli)
+    await fs.rm(claudeCopyOf(w, 'p', '1.0.0'), { recursive: true })
+    await fs.rm(claudeCopyOf(w, 'base', '2.0.0'), { recursive: true })
+    const logs: string[] = []
+
+    const rows = await sync(w, cli, { logs })
+
+    // Codex copies are never rewritten, so one that is there is complete: it is still listed, and nothing is removed
+    expect(await marketplaceOf(w)).toEqual([
+      { name: 'p', path: './plugins/p/1.0.0' },
+      { name: 'base', path: './plugins/base/2.0.0' }
+    ])
+    expect(cli.calls.filter((c) => c.line.startsWith('plugin remove'))).toEqual([])
+    expect(rows[0].installed).toEqual({ p: '1.0.0', base: '2.0.0' })
+    expect(logs).toEqual([])
+
+    // The version that has neither a Claude copy nor a Codex copy has nothing to install from
+    await share(w, [{ name: 'p', version: '1.0.1', gone: true }])
+    const next = await sync(w, cli, { logs })
+
+    expect(cli.calls.filter((c) => c.line.startsWith('plugin remove')).map((c) => c.line)).toEqual([`plugin remove p@${M}`, `plugin remove base@${M}`])
+    expect(next).toEqual([])
+    expect(logs).toHaveLength(1)
+    expect(logs[0]).toContain('p@market')
+  })
+
   it('a plugin whose copy cannot be made is left out and logged, and the others install', async () => {
     const w = await world()
     await addAccount(w, 'acc_codex')
@@ -430,8 +477,8 @@ describe('syncCodexPlugins', () => {
     expect(logs).toHaveLength(1)
     expect(logs[0]).toContain('broken@market')
     expect(logs[0]).toContain('.mcp.json')
-    // No version folder and no temporary one of the failed copy is left
-    expect(await fs.readdir(path.join(w.root, 'plugins', 'broken'))).toEqual([])
+    // Nothing of the failed copy is left, not even the empty folder that would have held it
+    expect(await fs.readdir(path.join(w.root, 'plugins'))).toEqual(['fine'])
   })
 
   it('never rewrites a Codex copy whose version folder is there, since servers run from it', async () => {
@@ -737,6 +784,60 @@ describe('sweepCodexCopies', () => {
     expect(await exists(crashed)).toBe(false)
     expect(await exists(current)).toBe(true)
     expect(await exists(marketplace)).toBe(true)
+  })
+
+  it('renames a version folder to a temporary sibling before it removes it', async () => {
+    const w = await world()
+    const old = await folder(w, 'p', '1.0.0')
+
+    expect(await sweepCodexCopies(w.profile, [], [])).toEqual([old])
+
+    expect(renames.seen).toHaveLength(1)
+    expect(renames.seen[0].from).toBe(old)
+    expect(path.dirname(renames.seen[0].to)).toBe(path.dirname(old))
+    expect(path.basename(renames.seen[0].to)).toMatch(new RegExp(String.raw`^1\.0\.0\.${process.pid}\.\d+\.tmp$`))
+    expect(await exists(renames.seen[0].to)).toBe(false)
+  })
+
+  it('leaves a version folder as it is when it cannot be renamed, and removes it at the next sweep', async () => {
+    const w = await world()
+    const old = await folder(w, 'p', '1.0.0')
+    renames.busy = old
+
+    expect(await sweepCodexCopies(w.profile, [], [])).toEqual([])
+
+    // Not half removed, and nothing beside it
+    expect(await fs.readFile(path.join(old, 'keep.txt'), 'utf8')).toBe('x')
+    expect(await fs.readdir(path.dirname(old))).toEqual(['1.0.0'])
+
+    renames.busy = null
+    expect(await sweepCodexCopies(w.profile, [], [])).toEqual([old])
+    expect(await exists(old)).toBe(false)
+  })
+
+  it('clears a folder an earlier sweep renamed but could not finish removing, without renaming it again', async () => {
+    const w = await world()
+    const half = path.join(w.root, 'plugins', 'p', `1.0.0.${process.pid}.7.tmp`)
+    await write(path.join(half, 'left.txt'), 'x')
+
+    expect(await sweepCodexCopies(w.profile, [], [])).toEqual([half])
+
+    expect(await exists(half)).toBe(false)
+    expect(renames.seen).toEqual([])
+  })
+
+  it('removes a plugin folder left empty, and keeps one that still holds a version', async () => {
+    const w = await world()
+    await folder(w, 'p', '1.0.0')
+    await folder(w, 'q', '1.0.0')
+    await folder(w, 'q', '1.0.1')
+    const empty = path.join(w.root, 'plugins', 'broken')
+    await fs.mkdir(empty, { recursive: true })
+
+    await sweepCodexCopies(w.profile, [], [{ name: 'q', version: '1.0.1' }])
+
+    expect(await fs.readdir(path.join(w.root, 'plugins'))).toEqual(['q'])
+    expect(await fs.readdir(path.join(w.root, 'plugins', 'q'))).toEqual(['1.0.1'])
   })
 
   it('never deletes through a symlinked version folder', async (ctx) => {

@@ -7,6 +7,7 @@ import path from 'node:path'
 import { withFileLock } from '../../fileLock'
 import { extensionPaths } from '../../profile/paths'
 import { providerOf } from '../../providers/meta'
+import { renameRetrying } from '../../renameRetry'
 import type { Account } from '../../types'
 import { readClaudePlugins } from '../claudePlugins/store'
 import type { SharedClaudePlugin } from '../claudePlugins/types'
@@ -72,17 +73,19 @@ const exists = (p: string): Promise<boolean> => fs.lstat(p).then(() => true, () 
 const dataFolderOf = (profileDir: string, name: string): string => path.join(extensionPaths(profileDir).codexPluginData, versionSegment(name))
 
 /** The candidates that have a Codex copy, made now when it is not there. A copy is made only when its version folder does
- *  not exist: a Codex account's MCP servers run from it, and making it again replaces the folder (writeCodexCopy). One
- *  that has no Claude copy to make it from, or whose copy cannot be converted, is left out and logged, and the rest go on. */
+ *  not exist: a Codex account's MCP servers run from it, and making it again replaces the folder (writeCodexCopy). A copy
+ *  is built beside its folder and swapped in, so a folder that is there is complete, and the plugin stays shared whether or
+ *  not its Claude copy is still there. One with neither a Codex copy nor a Claude copy to make it from, or whose Claude
+ *  copy cannot be converted, is left out and logged, and the rest go on. */
 async function withCopies(profileDir: string, candidates: Candidate[], log: (line: string) => void): Promise<DesiredCodexPlugin[]> {
   const ready: DesiredCodexPlugin[] = []
   for (const c of candidates) {
-    if (!(await isFolder(c.installPath))) {
-      log(`codex plugins: ${c.id} is left out of Codex, its Claude copy ${c.installPath} is gone`)
-      continue
-    }
     const to = codexCopyFolder(profileDir, c.name, c.version)
     if (!(await exists(to))) {
+      if (!(await isFolder(c.installPath))) {
+        log(`codex plugins: ${c.id} is left out of Codex, its Claude copy ${c.installPath} is gone`)
+        continue
+      }
       try {
         await writeCodexCopy({ from: c.installPath, to, name: c.name, version: c.version, dataDir: dataFolderOf(profileDir, c.name) })
       } catch (e) {
@@ -170,7 +173,7 @@ async function sync(d: Parameters<typeof syncCodexPlugins>[0]): Promise<CodexPlu
   }
 
   // After the accounts, so a version one of them still holds is in `rows`. What is current is what the store shares, copy
-  // or not: a plugin left out for a moment keeps the copy it has
+  // or not
   await sweepCodexCopies(d.profileDir, rows, candidates)
   return rows
 }
@@ -207,11 +210,40 @@ async function subfolders(dir: string): Promise<string[]> {
   return entries.filter((e) => e.isDirectory()).map((e) => path.join(dir, e.name))
 }
 
+let removals = 0
+
+/** Removes a version folder whole or not at all as far as the version's name goes. Windows deletes the files nothing holds
+ *  and fails on the rest, which would leave a half-removed folder under the version's name, and a copy is never rewritten
+ *  while its folder is there. So it is renamed to a temporary sibling first: a folder a process holds fails the rename and
+ *  stays as it was, and what the removal cannot finish is a `.tmp` folder, which the next sweep clears. A folder already
+ *  named `.tmp` is such a leftover, or one a crashed copy left, and is removed where it is. Answers whether the version's
+ *  name is free. */
+async function removeVersionFolder(folder: string): Promise<boolean> {
+  const leftover = folder.endsWith('.tmp')
+  let doomed = folder
+  if (!leftover) {
+    doomed = `${folder}.${process.pid}.${++removals}.tmp`
+    try {
+      await renameRetrying(folder, doomed)
+    } catch {
+      return false
+    }
+  }
+  try {
+    await fs.rm(doomed, { recursive: true, force: true })
+  } catch {
+    // Left for the next sweep: it is a temporary folder now, so it is not mistaken for a copy
+    return !leftover
+  }
+  return true
+}
+
 /** Deletes each folder `<codexPluginHome>/plugins/<name>/<folder>` that is not the current version of a shared plugin or
  *  dependency and that no account's recorded outcome shows installed: MCP servers run from a copy (C3), so it stays while
  *  any account has that version. That takes the temporary folders a crashed copy left, as nothing else names them, and it
- *  leaves the marketplace file. It walks real folders only, so it never follows a link and never deletes one, and it
- *  deletes nothing when the copies folder is not a real folder. Resolves to the folders it deleted. */
+ *  leaves the marketplace file. A plugin's folder that is left empty goes too. It walks real folders only, so it never
+ *  follows a link and never deletes one, and it deletes nothing when the copies folder is not a real folder. Resolves to
+ *  the folders it deleted. */
 export async function sweepCodexCopies(
   profileDir: string,
   outcome: CodexPluginAccountState[],
@@ -229,13 +261,10 @@ export async function sweepCodexCopies(
   for (const plugin of await subfolders(plugins)) {
     for (const version of await subfolders(plugin)) {
       if (keep.has(sameFolder(version))) continue
-      try {
-        await fs.rm(version, { recursive: true, force: true })
-      } catch {
-        continue
-      }
-      deleted.push(version)
+      if (await removeVersionFolder(version)) deleted.push(version)
     }
+    // Not recursive: a folder that holds anything is left as it is
+    await fs.rmdir(plugin).catch(() => {})
   }
   return deleted
 }
