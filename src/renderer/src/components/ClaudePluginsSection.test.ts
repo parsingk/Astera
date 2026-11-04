@@ -401,12 +401,18 @@ describe('ClaudePluginRow', () => {
     expect(out.indexOf(INSTALLED)).toBeGreaterThan(out.indexOf('settings.extensions.plugin.ownCopy'))
   })
 
-  it('puts the notes before the lines, each only for what the plugin has', () => {
+  // The notes say the same for every plugin and never change, so they wait, folded, under the lines that do
+  it('folds the notes under one line after the account lines, each only for what the plugin has', () => {
     const out = row({ plugin: listed({ contents: { skills: [], commands: ['ship'], agents: ['critic'], mcpServers: [], hooks: false } }) })
-    expect(out.indexOf('plugin.codex.noteAgents')).toBeGreaterThan(-1)
+    const fold = out.indexOf('"type":"details"')
+    expect(fold).toBeGreaterThan(out.indexOf(INSTALLED))
+    expect(out.indexOf('"type":"summary"')).toBeGreaterThan(fold)
+    expect(out.indexOf('settings.extensions.plugin.codex.notes"')).toBeGreaterThan(out.indexOf('"type":"summary"'))
+    expect(out.indexOf('plugin.codex.noteAgents')).toBeGreaterThan(out.indexOf('settings.extensions.plugin.codex.notes"'))
     expect(out.indexOf('plugin.codex.noteCommands')).toBeGreaterThan(out.indexOf('plugin.codex.noteAgents'))
-    expect(out.indexOf(INSTALLED)).toBeGreaterThan(out.indexOf('plugin.codex.noteCommands'))
     expect(out).not.toContain('plugin.codex.noteHooks')
+    // Nothing to fold for a plugin that brings none of them
+    expect(row()).not.toContain('"type":"details"')
   })
 
   // Final review I2: an update whose Codex copy could not be made leaves the account at the version it has

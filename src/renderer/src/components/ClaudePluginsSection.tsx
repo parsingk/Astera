@@ -286,6 +286,7 @@ export function ClaudePluginRow({
   // The Host drops the row of a removed account at its next sync, which removing the account does not ask for: a row of an
   // account that is not listed is neither drawn nor asks for a look
   const rows = codexRows.filter((r) => codexAccountIds.includes(r.accountId))
+  const notes = codexAccountIds.length > 0 ? codexNotes(p, t) : []
   const line = job === undefined ? null : jobLine(job, t)
   const live = job !== undefined && isLiveJob(job)
   /** Its latest job ended without doing its work: it failed, or stopped to ask about a command. */
@@ -308,13 +309,8 @@ export function ClaudePluginRow({
           {state === 'missing' && <span className="settings-hint is-warning">{t('settings.extensions.plugin.missing')}</span>}
           {stopped && <span className="settings-hint is-warning">{line}</span>}
           {/* What it brings (§5.9), what was installed with it (§5.4), each account's own copy (P4), and the Codex accounts
-              (§5.8), whose notes show only while one is listed: one block each */}
-          {[
-            contentLines(p.contents, t),
-            dependencyLines(p.dependencies, t),
-            ownCopyLines(p, labelOf, t),
-            [...(codexAccountIds.length > 0 ? codexNotes(p, t) : []), ...codexLines(p, rows, codexAccountIds, labelOf, t)]
-          ].map(
+              (§5.8): one block each */}
+          {[contentLines(p.contents, t), dependencyLines(p.dependencies, t), ownCopyLines(p, labelOf, t), codexLines(p, rows, codexAccountIds, labelOf, t)].map(
             (lines, block) =>
               lines.length > 0 && (
                 <div key={block} className="settings-hint">
@@ -323,6 +319,15 @@ export function ClaudePluginRow({
                   ))}
                 </div>
               )
+          )}
+          {/* How Codex differs, the same for every plugin, folded under one line while a Codex account is listed */}
+          {notes.length > 0 && (
+            <details className="settings-hint ext-row-notes">
+              <summary>{t('settings.extensions.plugin.codex.notes')}</summary>
+              {notes.map((l, i) => (
+                <div key={i}>{l}</div>
+              ))}
+            </details>
           )}
           <div className="remote-actions">
             <button className="settings-gen-refresh" disabled={busy} onClick={onToggle}>

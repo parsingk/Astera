@@ -213,8 +213,8 @@ describe('claudePluginsText', () => {
           expect(line, `${lang} ${code}`).not.toMatch(/settings\./)
           expect(line, `${lang} ${code}`).not.toContain('detail')
         }
-        for (const key of ['installed', 'waiting', 'pending', 'held', 'turnedOff', 'noteAgents', 'noteCommands', 'noteHooks'] as const) {
-          expect(tr(`settings.extensions.plugin.codex.${key}`, { account: 'a', version: 'v', id: 'i', name: 'n' }), `${lang} ${key}`).not.toMatch(/^settings\./)
+        for (const key of ['installed', 'allInstalled', 'waiting', 'pending', 'held', 'turnedOff', 'notes', 'noteAgents', 'noteCommands', 'noteHooks'] as const) {
+          expect(tr(`settings.extensions.plugin.codex.${key}`, { account: 'a', version: 'v', id: 'i', name: 'n', count: 2 }), `${lang} ${key}`).not.toMatch(/^settings\./)
         }
       }
     })
@@ -290,6 +290,40 @@ describe('claudePluginsText', () => {
         'codex1@… (Codex): 계정에 있던 superpowers@openai-curated를 껐습니다'
       ])
       expect(codexLines(plugin, [turned], ['x1'], codexLabel, en)[1]).toBe("codex1@… (Codex): turned off the account's own superpowers@openai-curated")
+    })
+
+    // A line per account says nothing more than one line does while every account is fine, and grows with the accounts
+    it('says once that every Codex account has the shared version, then the own plugins it turned off', () => {
+      const rows = [
+        row({ installed: { superpowers: '7.0.0' } }),
+        // Waiting for another plugin, at the shared version of this one
+        row({ accountId: 'x2', installed: { superpowers: '7.0.0' }, waiting: true, turnedOff: ['superpowers@openai-curated'] })
+      ]
+      expect(codexLines(plugin, rows, ['x1', 'x2'], codexLabel, ko)).toEqual([
+        'Codex 계정 2개 모두 7.0.0 설치됨',
+        'codex2@… (Codex): 계정에 있던 superpowers@openai-curated를 껐습니다'
+      ])
+      expect(codexLines(plugin, rows, ['x1', 'x2'], codexLabel, en)).toEqual([
+        'Every Codex account (2) has 7.0.0 installed',
+        "codex2@… (Codex): turned off the account's own superpowers@openai-curated"
+      ])
+    })
+
+    it('keeps a line per account for a single account, and while any account is not at the shared version', () => {
+      const at = (version: string, over: Partial<CodexPluginAccountState> = {}): CodexPluginAccountState => row({ accountId: 'x2', installed: { superpowers: version }, ...over })
+      const fine = row({ installed: { superpowers: '7.0.0' } })
+      expect(codexLines(plugin, [fine], ['x1'], codexLabel, en)).toEqual(['codex1@… (Codex): 7.0.0 installed'])
+      for (const [what, other] of [
+        ['another version', at('6.3.0')],
+        ['waiting for this one', at('6.3.0', { waiting: true })],
+        ['held', at('7.0.0', { held: ['superpowers'] })],
+        ['failed', at('7.0.0', { failure: { message: 'boom' } })],
+        ['not installed', row({ accountId: 'x2' })]
+      ] as const) {
+        const lines = codexLines(plugin, [fine, other], ['x1', 'x2'], codexLabel, en)
+        expect(lines, what).toHaveLength(2)
+        expect(lines[0], what).toBe('codex1@… (Codex): 7.0.0 installed')
+      }
     })
 
     it('says nothing without a Codex account, and nothing of a row whose account is gone', () => {

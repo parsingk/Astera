@@ -166,7 +166,8 @@ export function ownCopyLines(p: Pick<ListedClaudePlugin, 'enabled' | 'accountCop
  *  waits as a whole, for any plugin it has to change), then the version Codex has, and otherwise not installed yet, which
  *  is also what a held plugin the account does not have reads as. An own plugin of the same name that Astera turned off in
  *  the account adds a line. A failure Astera decided is worded; one Codex reported, or a code this build does not know, is
- *  shown as the message. A row of an account no longer listed says nothing. */
+ *  shown as the message. A row of an account no longer listed says nothing. While two or more accounts all have the
+ *  shared version and nothing else to say, one line says so for all of them, and the turned-off lines follow it. */
 export function codexLines(
   p: Pick<ListedClaudePlugin, 'name' | 'version'>,
   rows: readonly CodexPluginAccountState[],
@@ -174,22 +175,29 @@ export function codexLines(
   labelOf: LabelOf,
   t: T
 ): string[] {
-  return codexAccountIds.flatMap((id) => {
+  const accounts = codexAccountIds.map((id) => {
     const row = rows.find((r) => r.accountId === id)
     const account = labelOf(id)
     const version = row !== undefined && Object.hasOwn(row.installed, p.name) ? row.installed[p.name] : undefined
     let state: string
+    let shared = false
     if (row?.failure !== undefined) {
       const { code, message } = row.failure
       const reason = code !== undefined && Object.hasOwn(CODEX_CODES, code) ? t(CODEX_CODES[code]) : message
       state = t('settings.extensions.plugin.codex.failed', { account, reason })
     } else if (version !== undefined && row?.held?.includes(p.name) === true) state = t('settings.extensions.plugin.codex.held', { account })
     else if (row?.waiting === true && version !== p.version) state = t('settings.extensions.plugin.codex.waiting', { account })
-    else if (version !== undefined) state = t('settings.extensions.plugin.codex.installed', { account, version })
-    else state = t('settings.extensions.plugin.codex.pending', { account })
+    else if (version !== undefined) {
+      state = t('settings.extensions.plugin.codex.installed', { account, version })
+      shared = version === p.version
+    } else state = t('settings.extensions.plugin.codex.pending', { account })
     const off = (row?.turnedOff ?? []).filter((own) => own.split('@')[0] === p.name).map((own) => t('settings.extensions.plugin.codex.turnedOff', { account, id: own }))
-    return [state, ...off]
+    return { state, shared, off }
   })
+  if (accounts.length > 1 && accounts.every((a) => a.shared)) {
+    return [t('settings.extensions.plugin.codex.allInstalled', { count: accounts.length, version: p.version }), ...accounts.flatMap((a) => a.off)]
+  }
+  return accounts.flatMap((a) => [a.state, ...a.off])
 }
 
 /** How Codex differs for what this plugin brings (§5.8): agents are left out, commands become skills, and Astera trusts
