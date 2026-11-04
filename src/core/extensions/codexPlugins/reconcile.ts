@@ -99,6 +99,11 @@ function flagPatch(current: Table, flags: Map<string, boolean>): Table {
   return { ...current, plugins }
 }
 
+/** Codex records a Windows marketplace folder with the `\\?\` prefix (measured on codex-cli 0.160); the folder is the
+ *  same without it. */
+const VERBATIM = '\\\\?\\'
+const withoutVerbatim = (p: string): string => (p.startsWith(VERBATIM) ? p.slice(VERBATIM.length) : p)
+
 export async function reconcileCodexAccount(a: {
   account: Account
   homeDir: string
@@ -151,7 +156,19 @@ export async function reconcileCodexAccount(a: {
       throw new Stop(messageOf(e), 'config-unreadable')
     }
   }
-  const ours = (rows: Listed[]): Listed[] => rows.filter((r) => r.marketplace === m)
+  // This profile's marketplace is its name added from its own folder. Another profile whose folder has the same base
+  // name has the same marketplace name (C12), so a row or a marketplace table under the name is Astera's to touch only
+  // when it comes from this folder.
+  const fromRoot = (source: string | null): boolean =>
+    source !== null && comparablePath(withoutVerbatim(source)) === comparablePath(a.marketplace.root)
+  const taken = (source: string | null): Stop =>
+    new Stop(`marketplace '${m}' is already added from ${source ?? 'a folder codex did not name'}, not from ${a.marketplace.root}`, 'marketplace-taken')
+  /** The name taken by another folder fails the account before anything is done in it, as a refused add does (step 2). */
+  const refuseTaken = (rows: Listed[]): void => {
+    const other = rows.find((r) => r.marketplace === m && !fromRoot(r.marketplaceSource))
+    if (other !== undefined) throw taken(other.marketplaceSource)
+  }
+  const ours = (rows: Listed[]): Listed[] => rows.filter((r) => r.marketplace === m && fromRoot(r.marketplaceSource))
   const versions = (rows: Listed[]): Record<string, string> => Object.fromEntries(ours(rows).map((r) => [r.name, r.version]))
   /** The name of this marketplace's plugin a `hooks.state` key or a plugin id belongs to; null for anything else. */
   const pluginOf = (id: string): string | null => (id.endsWith(`@${m}`) ? id.slice(0, -(m.length + 1)) : null)
@@ -162,12 +179,14 @@ export async function reconcileCodexAccount(a: {
 
   /** Steps 5 and 6: each installed shared copy's flag as the person set it, and each own plugin of the same name off
    *  while the shared copy is on here, back on once it is not, but only one Astera turned off and still finds off (C1).
-   *  Another profile's marketplace and its plugins are never an account's own (C12). */
-  const writeFlags = async (rows: Listed[]): Promise<void> => {
+   *  Another profile's marketplace and its plugins are never an account's own (C12). With `waiting`, a copy no longer
+   *  shared, whose removal waits for the account's sessions, is turned off first, so the own copy turned back on never
+   *  loads beside it. */
+  const writeFlags = async (rows: Listed[], o: { waiting?: boolean } = {}): Promise<void> => {
     const flags = new Map<string, boolean>()
     for (const r of ours(rows)) {
-      const d = desired.get(r.name)
-      if (d !== undefined && r.enabled !== d.enabled) flags.set(r.id, d.enabled)
+      const enabled = desired.get(r.name)?.enabled ?? (o.waiting ? false : undefined)
+      if (enabled !== undefined && r.enabled !== enabled) flags.set(r.id, enabled)
     }
     const sharedOn = (name: string): boolean => desired.get(name)?.enabled === true && ours(rows).some((r) => r.name === name)
     const off: string[] = []
@@ -188,13 +207,14 @@ export async function reconcileCodexAccount(a: {
     // 1. What the account has
     const before = await list()
     installed = versions(before)
+    refuseTaken(before)
     const toAdd = a.desired.filter((d) => ours(before).find((r) => r.name === d.name)?.version !== d.version)
 
     // 3., decided on the first list and before step 2, so an account left waiting runs nothing more. A reinstall and a
     // removal delete the folder a running session reads its hooks and skills from (C5, C14); a flag does not, so the
     // flags are still written, and the versions recorded stay as they were until the account is brought in line.
     if (a.busy && (toAdd.length > 0 || ours(before).some((r) => !desired.has(r.name)))) {
-      await writeFlags(before)
+      await writeFlags(before, { waiting: true })
       installed = { ...a.previous?.installed }
       return answer({ waiting: true })
     }
@@ -207,6 +227,7 @@ export async function reconcileCodexAccount(a: {
     for (const d of toAdd) await run(['plugin', 'add', `${d.name}@${m}`], { timeoutMs: CODEX_PLUGIN_ADD_TIMEOUT_MS })
     const rows = toAdd.length > 0 ? await list() : before
     installed = versions(rows)
+    refuseTaken(rows)
 
     // 5., 6. Before the hooks are listed, so a plugin just turned on has its hooks listed
     await writeFlags(rows)
@@ -233,11 +254,22 @@ export async function reconcileCodexAccount(a: {
       const name = keyPlugin(key)
       return name !== null && !keep.has(name) && !trusted.has(key)
     }
-    let marketplaceAdded = false
+    // config.toml's table for the name says whose it is when no plugin of it is installed. One from another folder means
+    // the `<name>@<m>:` keys are that folder's too, so nothing is written and the account fails as taken.
+    const table = { added: false, other: undefined as string | null | undefined }
     await write((current) => {
-      marketplaceAdded = isTable(current.marketplaces) && isTable(current.marketplaces[m])
+      const entry = isTable(current.marketplaces) ? current.marketplaces[m] : undefined
+      if (isTable(entry)) {
+        const source = typeof entry.source === 'string' ? entry.source : null
+        if (!fromRoot(source)) {
+          table.other = source
+          return current
+        }
+        table.added = true
+      }
       return trustPatch(current, { trust, drop: stale(new Set([...desired.keys(), ...leaving.map((r) => r.name)])) })
     })
+    if (table.other !== undefined) throw taken(table.other)
 
     // 8. What is no longer shared, then its trust keys
     for (const r of leaving) {
@@ -248,7 +280,7 @@ export async function reconcileCodexAccount(a: {
 
     // 9. After the plugins: a marketplace removed first leaves them installed with nothing to remove them by (C13). Only
     // when config.toml names it, as `plugin list` does not say whether it is added
-    if (a.desired.length === 0 && marketplaceAdded) await run(['plugin', 'marketplace', 'remove', m])
+    if (a.desired.length === 0 && table.added) await run(['plugin', 'marketplace', 'remove', m])
 
     // 10. The outcome
     return answer()

@@ -299,8 +299,19 @@ describe('reconcileCodexAccount', () => {
       const state = await pass(f, { desired: [], previous: prev({ installed: { old: '1.0.0' } }), busy: true, cli })
       expect(cli.lines()).toEqual(['plugin list'])
       expect(state).toEqual({ accountId: ACCOUNT_ID, installed: { old: '1.0.0' }, waiting: true, turnedOff: [], at: AT })
-      // A plugin that stays installed keeps its trust
-      expect(await fs.readFile(f.file, 'utf8')).toBe(config)
+      // The copy waiting to be removed is turned off, and keeps its trust while it stays installed
+      expect(await fs.readFile(f.file, 'utf8')).toBe(config.replace('enabled = true', 'enabled = false'))
+    })
+
+    it('turns a copy no longer shared off while its removal waits, and the own copy back on', async () => {
+      const OWN = 'p@claude-plugins-official'
+      const config = [`[plugins."p@${M}"]`, 'enabled = true', '', `[plugins."${OWN}"]`, 'enabled = false', ''].join('\n')
+      const f = await fixture(config)
+      const cli = scripted({ 'plugin list': listed(row('p', M, '1.0.0'), row('p', 'claude-plugins-official', '2.0.0', { enabled: false })) })
+      const state = await pass(f, { desired: [], previous: prev({ installed: { p: '1.0.0' }, turnedOff: [OWN] }), busy: true, cli })
+      expect(cli.lines()).toEqual(['plugin list'])
+      expect(state).toEqual({ accountId: ACCOUNT_ID, installed: { p: '1.0.0' }, waiting: true, turnedOff: [], at: AT })
+      expect(await pluginsOf(f.file)).toEqual({ [`p@${M}`]: { enabled: false }, [OWN]: { enabled: true } })
     })
 
     it('with only an enabled change writes the flag and does not wait', async () => {
@@ -440,6 +451,57 @@ describe('reconcileCodexAccount', () => {
       expect(cli.lines()).toEqual(['plugin list', `plugin remove p@${M}`, `plugin marketplace remove ${M}`])
       expect(state.installed).toEqual({})
       expect(state.failure).toBeUndefined()
+    })
+  })
+
+  describe('this marketplace name added from another folder', () => {
+    /** Another profile whose folder has the same base name, so the same marketplace name. Codex records it with `\\?\`. */
+    const OTHER_ROOT = path.join(os.tmpdir(), 'elsewhere', 'astera', 'extensions', 'codex-plugins')
+    const OTHER_SOURCE = `\\\\?\\${OTHER_ROOT}`
+    const config = [
+      `[plugins."p@${M}"]`,
+      'enabled = true',
+      '',
+      `[hooks.state."p@${M}:hooks/hooks.json:stop:0:0"]`,
+      'trusted_hash = "sha256:theirs"',
+      '',
+      `[marketplaces.${M}]`,
+      'source_type = "local"',
+      `source = '${OTHER_SOURCE}'`,
+      ''
+    ].join('\n')
+
+    it.each([
+      ['when this profile shares nothing', [] as DesiredCodexPlugin[]],
+      ['when this profile shares the same plugin', [off('p', '1.0.0')]]
+    ])('leaves its plugin alone %s, and fails the account naming that folder', async (_when, desired) => {
+      const f = await fixture(config)
+      const cli = scripted({ 'plugin list': listed(row('p', M, '1.0.0', { source: OTHER_SOURCE })) })
+      const state = await pass(f, { desired, previous: prev({ installed: { p: '1.0.0' } }), cli })
+      expect(cli.lines()).toEqual(['plugin list'])
+      expect(state.failure?.code).toBe('marketplace-taken')
+      expect(state.failure?.message).toContain(OTHER_SOURCE)
+      expect(state.installed).toEqual({})
+      expect(seen.writes).toEqual([])
+      expect(await fs.readFile(f.file, 'utf8')).toBe(config)
+    })
+
+    it('leaves its trust keys and its marketplace alone when none of its plugins is installed', async () => {
+      const f = await fixture(config)
+      const cli = scripted({ 'plugin list': listed() })
+      const state = await pass(f, { desired: [], previous: prev(), cli })
+      expect(cli.lines()).toEqual(['plugin list'])
+      expect(state.failure?.code).toBe('marketplace-taken')
+      expect(state.failure?.message).toContain(OTHER_SOURCE)
+      expect(await fs.readFile(f.file, 'utf8')).toBe(config)
+    })
+
+    it('takes a source Codex records with \\\\?\\ for this folder as this folder', async () => {
+      const f = await fixture(SHARED_ON)
+      const cli = scripted({ 'plugin list': listed(row('p', M, '1.0.0', { source: `\\\\?\\${ROOT}` })), [`plugin marketplace add ${ROOT}`]: marketplaceAdded })
+      const state = await pass(f, { desired: [on('p', '1.0.0')], cli })
+      expect(cli.lines()).toEqual(['plugin list', `plugin marketplace add ${ROOT}`])
+      expect(state).toEqual({ accountId: ACCOUNT_ID, installed: { p: '1.0.0' }, waiting: false, turnedOff: [], at: AT })
     })
   })
 
