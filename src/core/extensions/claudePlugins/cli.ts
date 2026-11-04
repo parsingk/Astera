@@ -7,6 +7,9 @@
 // account's folder. `claude` is found the way sessions find it, PATH refreshed first as before every Host CLI start, and
 // on win32 a `.cmd` claude runs through the npm shim as node on its script, or through cmd.exe only when no argument is
 // cmd.exe syntax (higgsfield's commandFor).
+//
+// The spawn, the resolution and the time limit are not Claude's alone: createJsonCliRunner and resolveCliCommand also
+// run `codex plugin …` and `codex app-server` (codexPlugins/cli.ts), with the environment of a Codex account.
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { commandFor } from '../../higgsfield/runner'
 import { killProcessTree } from '../../run/kill'
@@ -21,7 +24,7 @@ export interface PluginCliResult {
   stdout: string
   stderr: string
   timedOut: boolean
-  /** Set when nothing was run: the arguments hold cmd.exe syntax and `claude` is a `.cmd` that only cmd.exe can run. */
+  /** Set when nothing was run: the arguments hold cmd.exe syntax and the CLI is a `.cmd` that only cmd.exe can run. */
   refused?: string
 }
 
@@ -40,14 +43,18 @@ const NOT_PASSED = /^(ASTERA_|CLAUDE_|CODEX_|CLAUDECODE$)/i
 /** A setting the person chose: where Git Bash is, which Claude Code needs on win32. */
 const KEPT = 'CLAUDE_CODE_GIT_BASH_PATH'
 
-/** The environment of a `claude plugin` command: `base` without any ASTERA_, CLAUDE_ or CODEX_ variable and without
- *  CLAUDECODE, except CLAUDE_CODE_GIT_BASH_PATH, and with CLAUDE_CONFIG_DIR set to `home`. Case-insensitive, as a
- *  Windows environment block is. */
-export function pluginCliEnv(base: NodeJS.ProcessEnv, home: string): NodeJS.ProcessEnv {
+/** `base` without any ASTERA_, CLAUDE_ or CODEX_ variable and without CLAUDECODE, except CLAUDE_CODE_GIT_BASH_PATH.
+ *  Case-insensitive, as a Windows environment block is. The account a command runs for is then set by the caller
+ *  (pluginCliEnv, codexPluginCliEnv). */
+export function cleanCliEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
   for (const [k, v] of Object.entries(base)) if (!NOT_PASSED.test(k) || k.toUpperCase() === KEPT) env[k] = v
-  env.CLAUDE_CONFIG_DIR = home
   return env
+}
+
+/** The environment of a `claude plugin` command: `cleanCliEnv(base)` with CLAUDE_CONFIG_DIR set to `home`. */
+export function pluginCliEnv(base: NodeJS.ProcessEnv, home: string): NodeJS.ProcessEnv {
+  return { ...cleanCliEnv(base), CLAUDE_CONFIG_DIR: home }
 }
 
 const objectOrArray = (text: string): Record<string, unknown> | unknown[] | null => {
@@ -72,45 +79,66 @@ function jsonOf(stdout: string): Record<string, unknown> | unknown[] | null {
   return null
 }
 
-export function createPluginCliRunner(d: {
-  home: string
+/** The environment of a run, or a function that makes it. A function is read once at each run, after the PATH refresh,
+ *  so a PATH that grew since the runner was made is the one the command gets. */
+export type CliEnvSource = NodeJS.ProcessEnv | (() => NodeJS.ProcessEnv)
+
+/** How a CLI is found. Shared by every command that starts `claude` or `codex` the way a session does. */
+export interface CliLookup {
+  name: 'claude' | 'codex'
   platform: NodeJS.Platform
-  /** What each run's environment starts from. A function is read at each run, after `refreshPath`, so a PATH that grew
-   *  since the runner was made is the one the command gets. */
-  baseEnv: NodeJS.ProcessEnv | (() => NodeJS.ProcessEnv)
-  spawn?: typeof nodeSpawn
-  /** Where `claude` is on win32. Default: the PATH lookup sessions use (buildClaudeCommand). */
+  /** Where the CLI is on win32. Default: the PATH lookup sessions use (buildClaudeCommand). */
   resolve?: (name: string) => string | null
   /** Awaited before `resolve` on win32: the same lookup off the calling thread, its answer kept for `resolve`.
    *  Default: warmWindowsExecutable. */
   warm?: (name: string) => Promise<unknown>
-  /** Awaited first at each run, as before every CLI start in the Host (spawner.ts): puts a `claude` installed or moved
+  /** Awaited first at each run, as before every CLI start in the Host (spawner.ts): puts a CLI installed or moved
    *  since this process started on this process's PATH. A failure is ignored. Default: ensureOnWindowsPath on win32,
    *  ensureInstallDirOnPath elsewhere. */
   refreshPath?: () => Promise<void> | void
-}): PluginCliRun {
+}
+
+/** The file, arguments and environment that start `d.name args…` the way a session starts it, or the reason nothing
+ *  can: `refused` when the arguments hold cmd.exe syntax and the CLI is a `.cmd` that only cmd.exe can run. The runners
+ *  spawn it for one command; a caller that needs a long-lived child (`codex app-server`) spawns it itself. */
+export async function resolveCliCommand(
+  d: CliLookup,
+  args: string[],
+  env: CliEnvSource
+): Promise<{ file: string; args: string[]; env: NodeJS.ProcessEnv } | { refused: string }> {
   const resolve = d.resolve ?? resolveWindowsExecutable
   const warm = d.warm ?? warmWindowsExecutable
-  const refreshPath = d.refreshPath ?? (() => (d.platform === 'win32' ? ensureOnWindowsPath(['claude']) : ensureInstallDirOnPath(['claude'])))
-  return async (args, o = {}) => {
+  const refreshPath = d.refreshPath ?? (() => (d.platform === 'win32' ? ensureOnWindowsPath([d.name]) : ensureInstallDirOnPath([d.name])))
+  // The Host outlives the app: a CLI installed from the app after the Host started is not on the PATH it began with
+  await Promise.resolve()
+    .then(refreshPath)
+    .catch(() => null)
+  const runEnv = typeof env === 'function' ? env() : env
+  // Looked up off the thread first (audit U-10): `resolve` then reads the kept answer instead of walking PATH
+  // synchronously, which a dead drive on PATH held for 20 to 60 s. A failed warm leaves `resolve` to look itself.
+  if (d.platform === 'win32') await warm(d.name).catch(() => null)
+  // As a session starts it: by name on posix; on win32 by the file PATH names, else by the bare name with no shell,
+  // which then fails to start (windowsSpawn's rule for a name PATH does not know)
+  const found = d.platform === 'win32' ? resolve(d.name) : null
+  const cmd = found === null ? { file: d.name, args, env: runEnv } : commandFor(found, d.platform, args, runEnv)
+  if ('refusal' in cmd) {
+    // cmdRefusal's advice after the ';' is for registering an MCP client by hand; only its diagnosis applies here
+    return { refused: `${cmd.refusal.split(';')[0]}; nothing was run` }
+  }
+  return cmd
+}
+
+/** A runner of `d.name` commands that print a JSON result: --json added when the arguments lack it, `env` as the
+ *  whole environment, a time limit, and the whole process tree killed when it passes. */
+export function createJsonCliRunner(d: CliLookup & { spawn?: typeof nodeSpawn }): (
+  args: string[],
+  env: CliEnvSource,
+  o?: { timeoutMs?: number }
+) => Promise<PluginCliResult> {
+  return async (args, env, o = {}) => {
     const full = args.includes('--json') ? args : [...args, '--json']
-    // The Host outlives the app: a `claude` installed from the app after the Host started is not on the PATH it began with
-    await Promise.resolve()
-      .then(refreshPath)
-      .catch(() => null)
-    const env = pluginCliEnv(typeof d.baseEnv === 'function' ? d.baseEnv() : d.baseEnv, d.home)
-    // Looked up off the thread first (audit U-10): `resolve` then reads the kept answer instead of walking PATH
-    // synchronously, which a dead drive on PATH held for 20 to 60 s. A failed warm leaves `resolve` to look itself.
-    if (d.platform === 'win32') await warm('claude').catch(() => null)
-    // As a session starts it: by name on posix; on win32 by the file PATH names, else by the bare name with no shell,
-    // which then fails to start (windowsSpawn's rule for a name PATH does not know)
-    const found = d.platform === 'win32' ? resolve('claude') : null
-    const cmd = found === null ? { file: 'claude', args: full, env } : commandFor(found, d.platform, full, env)
-    if ('refusal' in cmd) {
-      // cmdRefusal's advice after the ';' is for registering an MCP client by hand; only its diagnosis applies here
-      const refused = `${cmd.refusal.split(';')[0]}; nothing was run`
-      return { code: null, json: null, stdout: '', stderr: '', timedOut: false, refused }
-    }
+    const cmd = await resolveCliCommand(d, full, env)
+    if ('refused' in cmd) return { code: null, json: null, stdout: '', stderr: '', timedOut: false, refused: cmd.refused }
     return new Promise((answer) => {
       let stdout = ''
       let stderr = ''
@@ -143,13 +171,26 @@ export function createPluginCliRunner(d: {
       const ms = o.timeoutMs ?? PLUGIN_COMMAND_TIMEOUT_MS
       limit = setTimeout(() => {
         timedOut = true
-        stderr += `${stderr === '' ? '' : '\n'}claude did not finish within ${Math.round(ms / 1000)} s`
+        stderr += `${stderr === '' ? '' : '\n'}${d.name} did not finish within ${Math.round(ms / 1000)} s`
         // After a kill the exit is the answer: a process the child started may still hold the pipes open
         child.once('exit', (code) => finish(code))
-        grace = setTimeout(() => finish(child.exitCode, '\nclaude did not exit after the kill'), KILL_GRACE_MS)
-        // The whole tree: on win32 claude may run under cmd.exe
+        grace = setTimeout(() => finish(child.exitCode, `\n${d.name} did not exit after the kill`), KILL_GRACE_MS)
+        // The whole tree: on win32 the CLI may run under cmd.exe
         killProcessTree(child)
       }, ms)
     })
   }
+}
+
+export function createPluginCliRunner(
+  d: Omit<CliLookup, 'name'> & {
+    home: string
+    /** What each run's environment starts from. A function is read at each run, after `refreshPath`, so a PATH that grew
+     *  since the runner was made is the one the command gets. */
+    baseEnv: NodeJS.ProcessEnv | (() => NodeJS.ProcessEnv)
+    spawn?: typeof nodeSpawn
+  }
+): PluginCliRun {
+  const run = createJsonCliRunner({ ...d, name: 'claude' })
+  return (args, o) => run(args, () => pluginCliEnv(typeof d.baseEnv === 'function' ? d.baseEnv() : d.baseEnv, d.home), o)
 }
