@@ -82,6 +82,8 @@ Astera Codex session does not get a new plugin or a new version, or lose a remov
 sessions end; turning a plugin on or off reaches an account that already has it at once. Opening the
 plugin's row lists each Codex account's state: the installed version, waiting for its sessions to end,
 the previous version kept because the new one could not be converted for Codex, or the reason it failed.
+While every Codex account has the shared version, a single line says so. What Codex does differently
+with the plugin waits folded under **What is different in Codex**.
 
 Astera looks for newer versions when it starts and once a day, and **Check now** does it at once.
 A newer version only marks the row **Update available**. A shared plugin never changes until you
