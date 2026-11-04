@@ -100,8 +100,28 @@ async function readJsonObject(dir: string, rel: string): Promise<Obj | undefined
   return parsed
 }
 
-const writeJson = (dir: string, rel: string, value: unknown): Promise<void> =>
-  fs.writeFile(path.join(dir, rel), JSON.stringify(value, null, 2) + '\n', 'utf8')
+/** Makes each part of `rel` below `dir` that is a link a real file or folder of its own. The copy keeps a link as a link
+ *  (verbatimSymlinks), and a write through one would land where it points, which can be the Claude copy. A linked folder
+ *  becomes a folder holding a copy of what it points at; a linked file is removed, as the write that follows makes it. */
+async function ownPath(dir: string, rel: string): Promise<void> {
+  const parts = rel.split('/')
+  let at = dir
+  for (const [i, part] of parts.entries()) {
+    at = path.join(at, part)
+    const st = await fs.lstat(at).catch(() => null)
+    if (st === null) return
+    if (!st.isSymbolicLink()) continue
+    if (i === parts.length - 1) return void (await fs.unlink(at))
+    const target = await fs.realpath(at)
+    await fs.unlink(at)
+    await fs.cp(target, at, { recursive: true, verbatimSymlinks: true })
+  }
+}
+
+const writeJson = async (dir: string, rel: string, value: unknown): Promise<void> => {
+  await ownPath(dir, rel)
+  await fs.writeFile(path.join(dir, rel), JSON.stringify(value, null, 2) + '\n', 'utf8')
+}
 
 const namesData = (config: unknown): boolean => JSON.stringify(config).includes('${CLAUDE_PLUGIN_DATA}')
 

@@ -392,6 +392,54 @@ describe('writeCodexCopy', () => {
     expect(await exists(dataDir)).toBe(false)
   })
 
+  // Final review D1: the copy keeps a link as a link (verbatimSymlinks), and a write through one would land where it
+  // points, which can be the Claude copy
+  it('replaces a linked .mcp.json with a converted file of its own and leaves what the link points at as it was', async (ctx) => {
+    const root = await temp()
+    const outside = path.join(root, 'outside.mcp.json')
+    const text = JSON.stringify({ mcpServers: { s: { command: 'node', args: ['${CLAUDE_PLUGIN_ROOT}/a.js'] } } })
+    await write(outside, text)
+    const from = await claudePlugin(root)
+    await fs.rm(path.join(from, '.mcp.json'))
+    try {
+      await fs.symlink(outside, path.join(from, '.mcp.json'), 'file')
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'EPERM') return ctx.skip()
+      throw e
+    }
+    const to = path.join(root, 'out', 'p', V)
+
+    await writeCodexCopy({ from, to, name: 'p', version: V, dataDir: path.join(root, 'data') })
+
+    expect(await fs.readFile(outside, 'utf8')).toBe(text)
+    expect((await fs.lstat(path.join(to, '.mcp.json'))).isSymbolicLink()).toBe(false)
+    expect(await readJson(path.join(to, '.mcp.json'))).toEqual({ mcpServers: { s: { command: 'node', args: [`${to}/a.js`] } } })
+  })
+
+  it('replaces a linked .claude-plugin folder with a folder of its own and leaves the manifest it points at as it was', async (ctx) => {
+    const root = await temp()
+    const outside = path.join(root, 'outside-manifest')
+    const manifest = JSON.stringify({ name: 'p', version: '0.0.1' })
+    await write(path.join(outside, 'plugin.json'), manifest)
+    await write(path.join(outside, 'extra.txt'), 'x')
+    const from = await claudePlugin(root)
+    await fs.rm(path.join(from, '.claude-plugin'), { recursive: true })
+    try {
+      await fs.symlink(outside, path.join(from, '.claude-plugin'), 'junction')
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'EPERM') return ctx.skip()
+      throw e
+    }
+    const to = path.join(root, 'out', 'p', V)
+
+    await writeCodexCopy({ from, to, name: 'p', version: V, dataDir: path.join(root, 'data') })
+
+    expect(await fs.readFile(path.join(outside, 'plugin.json'), 'utf8')).toBe(manifest)
+    expect((await fs.lstat(path.join(to, '.claude-plugin'))).isSymbolicLink()).toBe(false)
+    expect(await readJson(path.join(to, '.claude-plugin', 'plugin.json'))).toEqual({ name: 'p', version: V })
+    expect(await fs.readFile(path.join(to, '.claude-plugin', 'extra.txt'), 'utf8')).toBe('x')
+  })
+
   it('writes a profile folder with spaces and Korean exactly into .mcp.json', async () => {
     const root = await temp()
     const profile = path.join(root, '에이 스테라')
