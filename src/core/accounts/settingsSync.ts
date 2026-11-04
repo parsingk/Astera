@@ -163,6 +163,7 @@ export async function syncCodexSettings(srcConfigDir: string, targetConfigDir: s
   const source = readTomlObject(raw)
 
   await fs.mkdir(targetConfigDir, { recursive: true })
+  // Through a link, as Codex writes: a config.toml a dotfile manager links stays a link
   const patch = (): Promise<unknown> =>
     patchTomlFile(path.join(targetConfigDir, 'config.toml'), (current) => {
       const next: JsonObject = { ...current, ...source }
@@ -183,7 +184,7 @@ export async function syncCodexSettings(srcConfigDir: string, targetConfigDir: s
       else if (isPlainObject(current.mcp_servers) && isPlainObject(source.mcp_servers))
         next.mcp_servers = { ...current.mcp_servers, ...source.mcp_servers }
       return next
-    })
+    }, { throughLink: true })
   await (opts.lock ? opts.lock(patch) : patch())
   result.settingsApplied = true
 

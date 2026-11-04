@@ -478,6 +478,26 @@ describe('syncCodexSettings', () => {
     expect(events).toEqual(['enter:old', 'exit:src'])
   })
 
+  // Codex plugin sharing §5.3 and the final review (D5): a dotfile manager's link stays a link, as Codex writes through it
+  it('대상 config.toml 이 링크면 링크로 남기고 링크가 가리키는 파일을 고친다', async (ctx) => {
+    await fs.writeFile(path.join(src, 'config.toml'), 'model = "src"\n', 'utf8')
+    const real = path.join(home, 'dotfiles', 'codex.toml')
+    await fs.mkdir(path.dirname(real), { recursive: true })
+    await fs.writeFile(real, '# mine\nmodel = "old"\n', 'utf8')
+    try {
+      await fs.symlink(real, path.join(dst, 'config.toml'), 'file')
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'EPERM') return ctx.skip()
+      throw e
+    }
+    const r = await syncCodexSettings(src, dst, { capabilities: true })
+    expect(r.settingsApplied).toBe(true)
+    expect((await fs.lstat(path.join(dst, 'config.toml'))).isSymbolicLink()).toBe(true)
+    const text = await fs.readFile(real, 'utf8')
+    expect(text).toContain('# mine')
+    expect(readTomlObject(text).model).toBe('src')
+  })
+
   it('원본에 config.toml 이 없으면 lock 을 잡지도 않는다', async () => {
     let entered = false
     const lock = async <T>(fn: () => Promise<T>): Promise<T> => {
