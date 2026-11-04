@@ -11,12 +11,16 @@ describe('extensionPaths', () => {
       registry: path.join(p, 'extensions', 'registry.json'),
       claudePlugins: path.join(p, 'extensions', 'claude-plugins.json'),
       claudePluginHome: path.join(p, 'extensions', 'claude-plugins'),
+      codexPluginHome: path.join(p, 'extensions', 'codex-plugins'),
+      codexPluginData: path.join(p, 'extensions', 'codex-plugin-data'),
       skills: path.join(p, 'extensions', 'skills'),
       commands: path.join(p, 'extensions', 'commands'),
       agents: path.join(p, 'extensions', 'agents'),
       secrets: path.join(p, 'extensions', 'secrets'),
       materializedState: path.join(p, 'extension-state', 'materialized.json'),
       claudePluginUse: path.join(p, 'extension-state', 'claude-plugin-use'),
+      codexPluginAccounts: path.join(p, 'extension-state', 'codex-plugin-accounts.json'),
+      codexConfigLock: path.join(p, 'extension-state', 'codex-config.lock'),
       backups: path.join(p, 'extension-state', 'backups'),
       generatedMcp: path.join(p, 'materialized', 'mcp')
     })
