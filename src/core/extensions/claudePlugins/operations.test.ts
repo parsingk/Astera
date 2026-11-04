@@ -894,6 +894,99 @@ describe('the queue', () => {
   })
 })
 
+describe('runExclusive and onJobEnd', () => {
+  it('runExclusive starts after the jobs queued before it, and a job queued after it starts after it', async () => {
+    const p = await profile()
+    const home = homeOf(p)
+    await seed(p, [shared(home, 'a'), shared(home, 'b')])
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const order: string[] = []
+    const f = fakeRun({
+      'plugin uninstall a@market': async () => {
+        order.push('a starts')
+        await gate
+        order.push('a ends')
+        return uninstalled
+      },
+      'plugin uninstall b@market': () => {
+        order.push('b runs')
+        return uninstalled
+      }
+    })
+    const ops = opsFor(p, f.run)
+    ops.remove('a@market')
+    const exclusive = ops.runExclusive(async () => {
+      order.push('exclusive runs')
+      return 7
+    })
+    const later = ops.remove('b@market')
+
+    await vi.waitFor(() => expect(order).toEqual(['a starts']), { timeout: 5_000, interval: 5 })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(order).toEqual(['a starts'])
+    release()
+    expect(await exclusive).toBe(7)
+    await ended(ops, later)
+    expect(order).toEqual(['a starts', 'a ends', 'exclusive runs', 'b runs'])
+  })
+
+  it('runExclusive leaves no job record, answers its result, and a rejection reaches only its caller', async () => {
+    const p = await profile()
+    const f = fakeRun({})
+    const ops = opsFor(p, f.run)
+    expect(await ops.runExclusive(async () => 'done')).toBe('done')
+    await expect(ops.runExclusive(() => Promise.reject(new Error('the sync broke')))).rejects.toThrow('the sync broke')
+    expect(ops.jobs()).toEqual([])
+    // The queue goes on: the next job and the next exclusive run both start
+    expect(await ended(ops, ops.check())).toMatchObject({ state: 'done' })
+    expect(await ops.runExclusive(async () => 'again')).toBe('again')
+  })
+
+  it('onJobEnd is called once per job, with the state the job ends in', async () => {
+    const p = await profile()
+    const home = homeOf(p)
+    await seed(p, [shared(home, 'a')])
+    await addMarketplace(home, 'market', SOURCE, [{ name: 'cmdprobe', version: '1.0.0' }])
+    const f = fakeRun({ 'plugin uninstall a@market': uninstalled, 'plugin list': ok([]), 'plugin install cmdprobe@market': refusedInstall(SHOWN) })
+    const seen: { id: string; kind: string; state: string; endedAt: string | undefined }[] = []
+    const ops = createClaudePluginOps({
+      profileDir: p,
+      run: f.run,
+      now: () => NOW,
+      onJobEnd: (job) => seen.push({ id: job.id, kind: job.kind, state: job.state, endedAt: job.endedAt })
+    })
+    const removed = ops.remove('a@market')
+    const failed = ops.update('nope@market')
+    const asked = ops.share({ id: 'cmdprobe@market', source: SOURCE, importedFrom: 'acc_1' })
+    await ended(ops, asked)
+
+    expect(seen).toEqual([
+      { id: removed, kind: 'remove', state: 'done', endedAt: NOW.toISOString() },
+      { id: failed, kind: 'update', state: 'failed', endedAt: NOW.toISOString() },
+      { id: asked, kind: 'share', state: 'needs-confirmation', endedAt: NOW.toISOString() }
+    ])
+  })
+
+  it('a job whose onJobEnd throws still ends, and the queue goes on', async () => {
+    const p = await profile()
+    const logs: string[] = []
+    const ops = createClaudePluginOps({
+      profileDir: p,
+      run: fakeRun({}).run,
+      log: (l) => logs.push(l),
+      onJobEnd: () => {
+        throw new Error('the listener broke')
+      }
+    })
+    expect(await ended(ops, ops.check())).toMatchObject({ state: 'done' })
+    expect(await ended(ops, ops.check())).toMatchObject({ state: 'done' })
+    expect(logs.join(' ')).toContain('the listener broke')
+  })
+})
+
 describe('setEnabled', () => {
   it('setEnabled stamps enabledAt when switching on', async () => {
     const p = await profile()
