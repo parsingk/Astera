@@ -1186,17 +1186,23 @@ Every shared plugin is also installed into every Codex account, and `ext list` s
 stands in `codexPluginAccounts`, one object per Codex account that has something to report: a shared plugin
 installed, an own plugin turned off, a failure or a wait. An account with none of these has no object.
 `accountId` is the account's id. `installed` maps each shared plugin's name to the version that account has
-installed from Astera's marketplace, and is `{}` when it has none. `waiting` is `true` while a new plugin, a new
-version or a removal is held back because a Codex session Astera started with that account is still
-running; it is applied when those sessions end, and turning a plugin on or off is not held back. `failure` is there only when the last pass failed in that account, with `message` and
-usually a `code` (`marketplace-taken`, `codex-unsupported`, `config-unreadable`, `hooks-unreadable`,
-`refused` or `timed-out`). A failure in one account does not stop the others. `turnedOff` lists the ids
-(`<name>@<marketplace>`) of the account's own plugins that Astera switched off because a shared plugin of the
-same name is on, and is `[]` when there are none. `at` is when the pass last ran for that account.
-`codexPluginAccounts` is `[]` while no account has anything to report, and likewise when the file is missing
-or damaged: the rows are rebuilt at the next pass. A file that is there and cannot be read does not fail
-`ext list` either. `codexPluginAccounts` is then left out and `codexPluginAccountsError` gives the message,
-and `entries`, `copies` and `claudePlugins` are answered as usual.
+installed from Astera's marketplace, and is `{}` when it has none. `held` lists the shared plugins installed
+there whose new version could not be converted for Codex, so the account keeps the version in `installed`;
+it is there only when there are some. `waiting` is `true` while a new plugin, a new version or a removal is
+held back because a Codex session Astera started with that account is still running; it is applied when
+those sessions end, and turning on or off a plugin the account already has is not held back. `failure` is
+there only when the last pass failed in that account, with `message` and usually a `code`
+(`marketplace-taken`, `codex-unsupported`, `config-unreadable`, `hooks-unreadable`, `refused` or
+`timed-out`). A failure in one account does not stop the others, and a plugin that could not be installed
+or removed does not stop the rest of that account. `turnedOff` lists the ids (`<name>@<marketplace>`) of
+the account's own plugins that Astera switched off because a shared plugin of the same name is on, and is
+`[]` when there are none. `at` is when the pass last ran for that account. `codexPluginAccounts` is `[]`
+while no account has anything to report, and likewise when the file is missing or damaged. The installed
+versions are read from Codex again at the next pass, but `turnedOff` is Astera's only record of which own
+plugins it switched off, so the next pass keeps a copy of a damaged file beside it (`.bak`). A file that
+is there and cannot be read does not fail `ext list` either. `codexPluginAccounts` is then left out and
+`codexPluginAccountsError` gives the message, and `entries`, `copies` and `claudePlugins` are answered
+as usual.
 
 `ext sync` puts the shared skills, commands and agents into every account now. The Host does the same
 whenever the shared extensions change, when it starts and when an account is added, so this is for

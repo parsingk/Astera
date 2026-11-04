@@ -79,8 +79,9 @@ plugin's hooks in each Codex account, so no hook review menu stops a session. A 
 plugin of the same name is turned off while the shared one is on, and turned back on after the shared
 one is turned off or removed, if Astera turned it off and it is still there. An account with a running
 Astera Codex session does not get a new plugin or a new version, or lose a removed plugin, until its
-sessions end; turning a plugin on or off reaches it at once. Opening the plugin's row lists each Codex
-account's state: the installed version, waiting for its sessions to end, or the reason it failed.
+sessions end; turning a plugin on or off reaches an account that already has it at once. Opening the
+plugin's row lists each Codex account's state: the installed version, waiting for its sessions to end,
+the previous version kept because the new one could not be converted for Codex, or the reason it failed.
 
 Astera looks for newer versions when it starts and once a day, and **Check now** does it at once.
 A newer version only marks the row **Update available**. A shared plugin never changes until you

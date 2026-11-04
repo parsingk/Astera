@@ -913,8 +913,8 @@ async function main(): Promise<void> {
       baseEnv: () => hostWorkerBaseEnv(process.env)
     }),
     // And those plugins brought into each Codex account after every change, in the same way: `codex plugin …` and the
-    // hooks Codex loads are asked as a worker's CLI is started, and an account with an Astera-started Codex session alive
-    // is not changed until that session ends
+    // hooks Codex loads are asked as a worker's CLI is started. In an account with an Astera-started Codex session alive,
+    // only the installs, reinstalls and removals wait until that session ends; turning a plugin on or off does not
     codexPluginRun: createCodexPluginCliRunner({ platform: process.platform, baseEnv: () => hostWorkerBaseEnv(process.env) }),
     codexHooks: createCodexHooksList({ platform: process.platform, baseEnv: () => hostWorkerBaseEnv(process.env) }),
     liveAccountIds: async () =>
