@@ -37,10 +37,10 @@ async function patchFile(
   // The queue is keyed by the path given, not by what a link points to, so every write that names this path (Codex trust
   // marks among them) takes its turn in one line.
   await oneAtATime(file, async () => {
-    // A link is written through so it stays a link; one that points nowhere is not written at all. The `.bak` stays beside
-    // the path given.
+    // A link is written through so it stays a link; one that points nowhere is not written at all, and that is a failure,
+    // not 'unchanged': a caller told 'unchanged' would take the file for in line. The `.bak` stays beside the path given.
     const target = o.throughLink ? await writeTarget(file) : file
-    if (target === null) return
+    if (target === null) throw new Error(`${file} is a link that points nowhere, or cannot be looked at, so it was not written`)
     const before = await readText(target)
     const current = before === null || before.trim() === '' ? {} : format.parse(before)
     const next = patch(current)
@@ -55,8 +55,8 @@ async function patchFile(
 }
 
 /** Patches Codex's `config.toml` (or any TOML file) in place. With `throughLink` a file that is a symbolic link is read
- *  and written where the link points, as Codex does (a dotfile manager's link stays a link); a link that points nowhere
- *  is left alone and the answer is 'unchanged'. */
+ *  and written where the link points, as Codex does (a dotfile manager's link stays a link); a link that points nowhere,
+ *  or that cannot be looked at, is left alone and the call rejects. */
 export function patchTomlFile(file: string, patch: Patch, o?: { throughLink?: boolean }): Promise<'written' | 'unchanged'> {
   return patchFile(
     file,

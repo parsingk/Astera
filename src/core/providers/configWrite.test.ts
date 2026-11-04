@@ -97,9 +97,12 @@ describe('patchTomlFile', () => {
       await expect(fs.stat(`${real}.bak`)).rejects.toThrow()
     })
 
-    it.skipIf(!canLink)('writes nothing for a link that points nowhere', async () => {
+    // 'unchanged' would tell a caller the file is in line when nothing was written, so a link like this is a failure.
+    it.skipIf(!canLink)('fails for a link that points nowhere, naming the file, and writes nothing', async () => {
       const { real, link } = await linked(null)
-      expect(await patchTomlFile(link, (c) => ({ ...c, model: 'x' }), { throughLink: true })).toBe('unchanged')
+      await expect(patchTomlFile(link, (c) => ({ ...c, model: 'x' }), { throughLink: true })).rejects.toThrow(
+        `${link} is a link that points nowhere, or cannot be looked at, so it was not written`
+      )
       expect((await fs.lstat(link)).isSymbolicLink()).toBe(true)
       await expect(fs.stat(real)).rejects.toThrow()
       await expect(fs.stat(`${link}.bak`)).rejects.toThrow()
