@@ -370,6 +370,115 @@ describe('syncCodexPlugins', () => {
     expect(logs).toEqual([expect.stringContaining('s@other'), expect.stringContaining('q@market'), expect.stringContaining('d@market')])
   })
 
+  describe('a plugin that is a store entry and also a dependency of another entry', () => {
+    // The plugins this account has turned off, whatever else its config.toml holds (no file when nothing was written)
+    const disabledIn = async (account: Account): Promise<string[]> => {
+      const text = await fs.readFile(path.join(account.configDir, 'config.toml'), 'utf8').catch(() => '')
+      const plugins = (readTomlObject(text).plugins ?? {}) as Record<string, { enabled?: boolean }>
+      return Object.entries(plugins).filter(([, v]) => v.enabled === false).map(([id]) => id).sort()
+    }
+
+    it('is on when a plugin that is on needs it, though it is off as an entry, and is not logged as left out', async () => {
+      const w = await world()
+      const codex = await addAccount(w, 'acc_codex')
+      await share(w, [{ name: 'q', version: '1.0.0', enabled: false }, { name: 'p', version: '1.0.0', deps: [{ name: 'q', version: '1.0.0' }] }])
+      const cli = fakeCodex(w)
+      const logs: string[] = []
+      // Codex lists q's hook, which is untrusted: it is trusted only when q is wanted on
+      const qHook = `q@${M}:hooks/hooks.json:pre_tool_use:0:0`
+      const hooks = { list: (async () => [{ key: qHook, pluginId: `q@${M}`, currentHash: 'sha256:q', trustStatus: 'untrusted' }]) as CodexHooksList }
+
+      const rows = await sync(w, cli, { logs, hooks })
+
+      expect(logs).toEqual([])
+      expect(await marketplaceOf(w)).toEqual([
+        { name: 'q', path: './plugins/q/1.0.0' },
+        { name: 'p', path: './plugins/p/1.0.0' }
+      ])
+      expect(rows[0].installed).toEqual({ q: '1.0.0', p: '1.0.0' })
+      expect(await disabledIn(codex)).toEqual([])
+      const state = readTomlObject(await fs.readFile(path.join(codex.configDir, 'config.toml'), 'utf8')).hooks as { state: Record<string, { trusted_hash: string }> }
+      expect(state.state[qHook].trusted_hash).toBe('sha256:q')
+    })
+
+    it('is on when it is on as an entry, and is not logged as left out', async () => {
+      const w = await world()
+      const codex = await addAccount(w, 'acc_codex')
+      await share(w, [{ name: 'p', version: '1.0.0', deps: [{ name: 'q', version: '1.0.0' }] }, { name: 'q', version: '1.0.0' }])
+      const cli = fakeCodex(w)
+      const logs: string[] = []
+
+      const rows = await sync(w, cli, { logs })
+
+      expect(logs).toEqual([])
+      expect(await marketplaceOf(w)).toEqual([
+        { name: 'p', path: './plugins/p/1.0.0' },
+        { name: 'q', path: './plugins/q/1.0.0' }
+      ])
+      expect(rows[0].installed).toEqual({ p: '1.0.0', q: '1.0.0' })
+      expect(await disabledIn(codex)).toEqual([])
+    })
+
+    it('stays on when it is on as an entry and the plugin that needs it is off', async () => {
+      const w = await world()
+      const codex = await addAccount(w, 'acc_codex')
+      await share(w, [{ name: 'q', version: '1.0.0' }, { name: 'p', version: '1.0.0', enabled: false, deps: [{ name: 'q', version: '1.0.0' }] }])
+      const logs: string[] = []
+
+      await sync(w, fakeCodex(w), { logs })
+
+      expect(logs).toEqual([])
+      expect(await disabledIn(codex)).toEqual([`p@${M}`])
+    })
+
+    it('is off when it is off as an entry and nothing that is on needs it', async () => {
+      const w = await world()
+      const codex = await addAccount(w, 'acc_codex')
+      await share(w, [
+        { name: 'q', version: '1.0.0', enabled: false },
+        { name: 'p', version: '1.0.0', enabled: false, deps: [{ name: 'q', version: '1.0.0' }] }
+      ])
+      const logs: string[] = []
+
+      await sync(w, fakeCodex(w), { logs })
+
+      expect(logs).toEqual([])
+      expect(await disabledIn(codex)).toEqual([`p@${M}`, `q@${M}`])
+    })
+
+    it('is the entry as it stands when the dependency is another plugin of the same name and version, and that is logged', async () => {
+      const w = await world()
+      const codex = await addAccount(w, 'acc_codex')
+      await share(w, [{ name: 'q', version: '1.0.0', market: 'other', enabled: false }, { name: 'p', version: '1.0.0', deps: [{ name: 'q', version: '1.0.0' }] }])
+      const logs: string[] = []
+
+      await sync(w, fakeCodex(w), { logs })
+
+      // `q@other` and `q@market` are two plugins that claim one name (PF2): the entry wins, with its own flag
+      expect(await disabledIn(codex)).toEqual([`q@${M}`])
+      expect(logs).toEqual([expect.stringContaining('q@market')])
+    })
+
+    it('is the entry as it stands when another version of it is what the plugin records, and that is logged', async () => {
+      const w = await world()
+      const codex = await addAccount(w, 'acc_codex')
+      await share(w, [{ name: 'q', version: '2.0.0', enabled: false }, { name: 'p', version: '1.0.0', deps: [{ name: 'q', version: '1.0.0' }] }])
+      const cli = fakeCodex(w)
+      const logs: string[] = []
+
+      const rows = await sync(w, cli, { logs })
+
+      // PF2: the entry wins, at its own version and its own flag, and the dependency left out is said once
+      expect(await marketplaceOf(w)).toEqual([
+        { name: 'q', path: './plugins/q/2.0.0' },
+        { name: 'p', path: './plugins/p/1.0.0' }
+      ])
+      expect(rows[0].installed).toEqual({ q: '2.0.0', p: '1.0.0' })
+      expect(await disabledIn(codex)).toEqual([`q@${M}`])
+      expect(logs).toEqual([expect.stringContaining('q@market')])
+    })
+  })
+
   it('writes the copies and the marketplace before reconciling any account, and reconciles only Codex accounts, one by one', async () => {
     const w = await world()
     const a = await addAccount(w, 'acc_a')

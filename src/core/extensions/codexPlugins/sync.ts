@@ -27,8 +27,10 @@ interface Candidate extends DesiredCodexPlugin {
 
 /** What this profile shares, one entry per name: each store entry in store order, then each dependency by the name in its
  *  id, at its recorded version, on when any plugin that is on records it. The name is all Codex has (the marketplace
- *  holds names), so a name two things claim goes to one of them (ledger ruling PF2): a store entry over a dependency, an
- *  earlier over a later, and the one left out is logged. */
+ *  holds names), so a name two different plugins claim goes to one of them (ledger ruling PF2): a store entry over a
+ *  dependency, an earlier over a later, and the one left out is logged. The same plugin at the same version, once as an
+ *  entry and again as a dependency, is not a claim: it is one plugin, on when the entry is on or any plugin that is on
+ *  records it. */
 function candidatesOf(plugins: SharedClaudePlugin[], log: (line: string) => void): Candidate[] {
   const byName = new Map<string, Candidate>()
   const entries: SharedClaudePlugin[] = []
@@ -53,6 +55,10 @@ function candidatesOf(plugins: SharedClaudePlugin[], log: (line: string) => void
       const held = byName.get(name)
       if (held === undefined) {
         byName.set(name, { id: dep.id, name, version: dep.version, enabled: e.enabled, installPath: dep.installPath })
+      } else if (held.id === dep.id && held.version === dep.version) {
+        // One plugin, not two claiming a name: a store entry another entry needs (Claude lets it be both), or a dependency
+        // two entries record. It is on when anything that is on wants it, as the entry's own flag is not the only reason.
+        held.enabled ||= e.enabled
       } else if (entryNames.has(name)) {
         log(`codex plugins: dependency ${dep.id} of ${e.id} is left out of Codex, the shared plugin ${held.id} holds the name ${name}`)
       } else if (held.version !== dep.version) {
