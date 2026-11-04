@@ -78,18 +78,20 @@ are left out, commands become skills named `<plugin>:source-command-<name>`, and
 plugin's hooks in each Codex account, so no hook review menu stops a session. A Codex account's own
 plugin of the same name is turned off while the shared one is on, and turned back on after the shared
 one is turned off or removed, if Astera turned it off and it is still there. An account with a running
-Astera Codex session is not changed until its sessions end. Opening the plugin's row lists each Codex
+Astera Codex session does not get a new plugin or a new version, or lose a removed plugin, until its
+sessions end; turning a plugin on or off reaches it at once. Opening the plugin's row lists each Codex
 account's state: the installed version, waiting for its sessions to end, or the reason it failed.
 
 Astera looks for newer versions when it starts and once a day, and **Check now** does it at once.
 A newer version only marks the row **Update available**. A shared plugin never changes until you
 press **Update**. If a marketplace asks to run a command of its own to install or update a plugin,
 Astera shows you the command and runs it only after you confirm. Once any plugin is shared,
-**Import settings from the default account** keeps each Claude account's own `enabledPlugins` and
-`extraKnownMarketplaces` instead of copying the default account's, and each Codex account's own
-`plugins` and `marketplaces` tables in `config.toml`. Astera then brings that Codex account in line with
-the shared plugins. The other settings are copied as before. Sharing only plugins does not stop the
-import from copying the default account's servers, skills, commands and agents. `astera ext list` names the shared plugins and each Codex account's state.
+**Import settings from the default account** keeps a Claude account's own `enabledPlugins` and
+`extraKnownMarketplaces`, and a Codex account's own `plugins` and `marketplaces` tables in `config.toml`,
+instead of copying the default account's, and copies the other settings as before. Astera then brings
+that Codex account in line with the shared plugins. Sharing only plugins does not stop the import from
+copying the default account's servers, skills, commands and agents. `astera ext list` names the shared
+plugins and each Codex account's state.
 
 **Smart Resume** is optional and experimental. Choose it under **Settings → Agents → Session
 resume strategy** to give a new session a compact checkpoint when rolling moves work to another

@@ -1186,9 +1186,9 @@ Every shared plugin is also installed into every Codex account, and `ext list` s
 stands in `codexPluginAccounts`, one object per Codex account that has something to report: a shared plugin
 installed, an own plugin turned off, a failure or a wait. An account with none of these has no object.
 `accountId` is the account's id. `installed` maps each shared plugin's name to the version that account has
-installed from Astera's marketplace, and is `{}` when it has none. `waiting` is `true` while the account is
-not updated because a Codex session Astera started with that account is still running; the account is
-updated when those sessions end. `failure` is there only when the last pass failed in that account, with `message` and
+installed from Astera's marketplace, and is `{}` when it has none. `waiting` is `true` while a new plugin, a new
+version or a removal is held back because a Codex session Astera started with that account is still
+running; it is applied when those sessions end, and turning a plugin on or off is not held back. `failure` is there only when the last pass failed in that account, with `message` and
 usually a `code` (`marketplace-taken`, `codex-unsupported`, `config-unreadable`, `hooks-unreadable`,
 `refused` or `timed-out`). A failure in one account does not stop the others. `turnedOff` lists the ids
 (`<name>@<marketplace>`) of the account's own plugins that Astera switched off because a shared plugin of the
