@@ -1,7 +1,7 @@
 // The one sync the Host runs for Codex (Codex plugin sharing design §5.1, §5.3, §5.10): the list of what is shared is built
 // from the store, the Codex copies and the marketplace file that lists them are kept, every Codex account is brought in
-// line one after the other (reconcile.ts), the outcome is recorded, and the Codex copies no account uses are swept. It
-// never rejects: whatever stops it is a log line, and the Claude side that called it is already done.
+// line one after the other (reconcile.ts), the outcome is recorded as each account goes, and the Codex copies no account
+// uses are swept. It never rejects: whatever stops it is a log line, and the Claude side that called it is already done.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { withFileLock } from '../../fileLock'
@@ -15,7 +15,7 @@ import type { CodexPluginCliRun } from './cli'
 import { codexCopyFolder, codexMarketplaceName, versionSegment, writeCodexCopy, writeCodexMarketplace } from './copy'
 import type { CodexHooksList } from './hooks'
 import { reconcileCodexAccount, type DesiredCodexPlugin } from './reconcile'
-import { readCodexPluginAccounts, writeCodexPluginAccounts, type CodexPluginAccountState } from './state'
+import { readCodexPluginAccountsForSync, writeCodexPluginAccounts, type CodexPluginAccountState } from './state'
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
@@ -101,30 +101,32 @@ const exists = (p: string): Promise<boolean> => fs.lstat(p).then(() => true, () 
  *  folders are, so a name never leaves the folder that holds them all. */
 const dataFolderOf = (profileDir: string, name: string): string => path.join(extensionPaths(profileDir).codexPluginData, versionSegment(name))
 
-/** The candidates that have a Codex copy, made now when it is not there. A copy is made only when its version folder does
- *  not exist: a Codex account's MCP servers run from it, and making it again replaces the folder (writeCodexCopy). A copy
- *  is built beside its folder and swapped in, so a folder that is there is complete, and the plugin stays shared whether or
- *  not its Claude copy is still there. One with neither a Codex copy nor a Claude copy to make it from, or whose Claude
- *  copy cannot be converted, is left out and logged, and the rest go on. */
-async function withCopies(profileDir: string, candidates: Candidate[], log: (line: string) => void): Promise<DesiredCodexPlugin[]> {
-  const ready: DesiredCodexPlugin[] = []
+/** Every candidate as the accounts want it, with the names of those held: a candidate's Codex copy is made now when it is
+ *  not there. A copy is made only when its version folder does not exist: a Codex account's MCP servers run from it, and
+ *  making it again replaces the folder (writeCodexCopy). A copy is built beside its folder and swapped in, so a folder
+ *  that is there is complete, and the plugin stays shared whether or not its Claude copy is still there. One with neither
+ *  a Codex copy nor a Claude copy to make it from, or whose Claude copy cannot be converted, is still shared, so it is
+ *  held: each account keeps the version it has (reconcile.ts), it is logged, and the rest go on. */
+async function withCopies(profileDir: string, candidates: Candidate[], log: (line: string) => void): Promise<{ desired: DesiredCodexPlugin[]; held: string[] }> {
+  const desired: DesiredCodexPlugin[] = []
+  const held: string[] = []
   for (const c of candidates) {
+    desired.push({ name: c.name, version: c.version, enabled: c.enabled })
     const to = codexCopyFolder(profileDir, c.name, c.version)
-    if (!(await exists(to))) {
-      if (!(await isFolder(c.installPath))) {
-        log(`codex plugins: ${c.id} is left out of Codex, its Claude copy ${c.installPath} is gone`)
-        continue
-      }
-      try {
-        await writeCodexCopy({ from: c.installPath, to, name: c.name, version: c.version, dataDir: dataFolderOf(profileDir, c.name) })
-      } catch (e) {
-        log(`codex plugins: ${c.id} is left out of Codex, its copy could not be made (${messageOf(e)})`)
-        continue
-      }
+    if (await exists(to)) continue
+    if (!(await isFolder(c.installPath))) {
+      log(`codex plugins: ${c.id} stays at the version each Codex account has, its Claude copy ${c.installPath} is gone`)
+      held.push(c.name)
+      continue
     }
-    ready.push({ name: c.name, version: c.version, enabled: c.enabled })
+    try {
+      await writeCodexCopy({ from: c.installPath, to, name: c.name, version: c.version, dataDir: dataFolderOf(profileDir, c.name) })
+    } catch (e) {
+      log(`codex plugins: ${c.id} stays at the version each Codex account has, its Codex copy could not be made (${messageOf(e)})`)
+      held.push(c.name)
+    }
   }
-  return ready
+  return { desired, held }
 }
 
 /** A row that says nothing is worth visiting an account for: no plugin installed, none turned off, no failure, not waiting. */
@@ -136,14 +138,18 @@ async function sync(d: Parameters<typeof syncCodexPlugins>[0]): Promise<CodexPlu
   const paths = extensionPaths(d.profileDir)
 
   // The record of what each account has says which copies are still in use and which own plugins Astera turned off. A
-  // record that is there and cannot be read could be either, so nothing is done on it.
+  // record that is there and cannot be read could be either, so nothing is done on it. A damaged one has lost both: its
+  // text is kept beside it, the accounts are still brought in line (an account whose config.toml names this profile's
+  // marketplace is visited without a row), and no copy is swept, since an account could still run from any of them.
   let before: CodexPluginAccountState[]
+  let damaged: boolean
   try {
-    before = await readCodexPluginAccounts(d.profileDir)
+    ;({ rows: before, damaged } = await readCodexPluginAccountsForSync(d.profileDir))
   } catch (e) {
     d.log(`codex plugins: the outcome file could not be read, so nothing was synced (${messageOf(e)})`)
     return []
   }
+  if (damaged) d.log('codex plugins: the outcome file was damaged, so a copy of it was kept beside it and no Codex copy is swept this time')
   // A store that cannot be read is not "nothing shared": taking it so would remove every shared plugin from every account.
   // The damaged file is kept aside by the Host's own reading, not here.
   let shared: SharedClaudePlugin[]
@@ -159,11 +165,14 @@ async function sync(d: Parameters<typeof syncCodexPlugins>[0]): Promise<CodexPlu
   // The copies and the marketplace exist for the accounts that will add them: with none, or with nothing to share, none
   // is made. With nothing desired but rows left, the accounts are reconciled to remove what they have.
   let desired: DesiredCodexPlugin[] = []
+  let held: string[] = []
   if (accounts.length > 0 && candidates.length > 0) {
-    desired = await withCopies(d.profileDir, candidates, d.log)
-    if (desired.length > 0) {
+    ;({ desired, held } = await withCopies(d.profileDir, candidates, d.log))
+    // The marketplace lists what can be installed: a held plugin has no copy at the version shared
+    const ready = desired.filter((p) => !held.includes(p.name))
+    if (ready.length > 0) {
       try {
-        await writeCodexMarketplace(d.profileDir, desired)
+        await writeCodexMarketplace(d.profileDir, ready)
       } catch (e) {
         d.log(`codex plugins: the marketplace file could not be written, so nothing was synced (${messageOf(e)})`)
         return before
@@ -171,45 +180,62 @@ async function sync(d: Parameters<typeof syncCodexPlugins>[0]): Promise<CodexPlu
     }
   }
 
-  const lock = <T>(fn: () => Promise<T>): Promise<T> => withFileLock(paths.codexConfigLock, fn, { waitMs: 60_000, staleMs: 600_000 })
-  const marketplace = { name: codexMarketplaceName(d.profileDir), root: paths.codexPluginHome }
-  const results: CodexPluginAccountState[] = []
-  for (const account of accounts) {
-    results.push(
-      await reconcileCodexAccount({
-        account,
-        homeDir: d.homeDir,
-        marketplace,
-        desired,
-        previous: before.find((r) => r.accountId === account.id),
-        busy: d.liveAccountIds.has(account.id),
-        run: d.run,
-        hooks: d.hooks,
-        lock,
-        now
-      })
-    )
-  }
-
-  // A row of an account that is gone is not in `results`, and a clean one is not worth keeping: an account with nothing
-  // shared stops being visited, and with no row left the file goes, so the next sync with nothing shared runs nothing
-  const rows = results.filter((s) => !isClean(s))
-  try {
+  // The rows as they stand: each account done in this sync by its new row (or `row` for its own account), each still to
+  // come by the row it had, an account that is gone by none, and a clean row not at all: an account with nothing shared
+  // stops being visited, and with no row left the file goes, so the next sync with nothing shared runs nothing
+  const done = new Map<string, CodexPluginAccountState>()
+  const merged = (row?: CodexPluginAccountState): CodexPluginAccountState[] =>
+    accounts.flatMap((account) => {
+      const r = account.id === row?.accountId ? row : (done.get(account.id) ?? before.find((b) => b.accountId === account.id))
+      return r === undefined || isClean(r) ? [] : [r]
+    })
+  const keep = async (rows: CodexPluginAccountState[]): Promise<void> => {
     if (rows.length > 0) await writeCodexPluginAccounts(d.profileDir, rows)
     else await fs.rm(paths.codexPluginAccounts, { force: true })
-  } catch (e) {
-    d.log(`codex plugins: the outcome could not be recorded (${messageOf(e)})`)
+  }
+  const keepNow = async (): Promise<void> => {
+    try {
+      await keep(merged())
+    } catch (e) {
+      d.log(`codex plugins: the outcome could not be recorded (${messageOf(e)})`)
+    }
   }
 
+  const lock = <T>(fn: () => Promise<T>): Promise<T> => withFileLock(paths.codexConfigLock, fn, { waitMs: 60_000, staleMs: 600_000 })
+  const marketplace = { name: codexMarketplaceName(d.profileDir), root: paths.codexPluginHome }
+  for (const account of accounts) {
+    const row = await reconcileCodexAccount({
+      account,
+      homeDir: d.homeDir,
+      marketplace,
+      desired,
+      held,
+      previous: before.find((r) => r.accountId === account.id),
+      busy: d.liveAccountIds.has(account.id),
+      run: d.run,
+      hooks: d.hooks,
+      // An own plugin about to be turned off is on disk first, and so is each account once it is done: a Host that dies
+      // in the middle of a sync leaves the record of what Astera turned off, the only one there is (C1)
+      record: (r) => keep(merged(r)),
+      lock,
+      now
+    })
+    done.set(account.id, row)
+    await keepNow()
+  }
+  // With no Codex account, nothing above wrote, and the rows of the accounts that are gone go here
+  if (accounts.length === 0) await keepNow()
+  const rows = merged()
+
   // After the accounts, so a version one of them still holds is in `rows`. What is current is what the store shares, copy
-  // or not
-  await sweepCodexCopies(d.profileDir, rows, candidates)
+  // or not. Not after a damaged record: the rows it lost may have named a version an account still has
+  if (!damaged) await sweepCodexCopies(d.profileDir, rows, candidates)
   return rows
 }
 
-/** Brings every Codex account in line with what this profile shares, records how each went, and sweeps the Codex copies no
- *  account uses. Runs nothing and writes nothing for a profile that shares no plugin and has no rows (§4). Resolves to the
- *  rows it recorded; never rejects. */
+/** Brings every Codex account in line with what this profile shares, records how each went as it goes, and sweeps the
+ *  Codex copies no account uses. Runs nothing and writes nothing for a profile that shares no plugin and has no rows (§4),
+ *  unless an account's config.toml names its marketplace. Resolves to the rows it recorded; never rejects. */
 export async function syncCodexPlugins(d: {
   profileDir: string
   homeDir: string

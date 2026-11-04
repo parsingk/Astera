@@ -11,6 +11,7 @@ import path from 'node:path'
 import { removeFixture } from '../../testFixtures'
 import { readTomlObject } from '../../providers/configWrite'
 import { extensionPaths } from '../../profile/paths'
+import { hasKeptCopy } from '../../storeFile'
 import type { Account } from '../../types'
 import type { PluginCliResult } from '../claudePlugins/cli'
 import { updateClaudePlugins } from '../claudePlugins/store'
@@ -176,11 +177,12 @@ interface AtAdd {
   copies: string[]
 }
 
-/** A `codex` for every account: `plugin list`, `plugin marketplace add`, `plugin add` and `plugin remove` over what each
- *  account has installed. `fail` answers a command in place of the fake. */
+/** A `codex` for every account: `plugin list`, `plugin marketplace add`, `plugin add`, `plugin remove` and `plugin
+ *  marketplace remove` over what each account has installed. `fail` answers a command in place of the fake, and `own`
+ *  gives the rows of plugins an account has from other marketplaces, listed after this profile's. */
 function fakeCodex(
   w: World,
-  o: { fail?: (codexHome: string | null, line: string) => PluginCliResult | undefined } = {}
+  o: { fail?: (codexHome: string | null, line: string) => PluginCliResult | undefined; own?: (codexHome: string | null) => Record<string, unknown>[] } = {}
 ): { run: CodexPluginCliRun; calls: Call[]; atAdd: AtAdd[]; seed: (account: Account, name: string, version: string) => void; of: (account: Account) => Call[] } {
   const installed = new Map<string, Map<string, string>>()
   const mine = (codexHome: string | null): Map<string, string> => {
@@ -207,8 +209,9 @@ function fakeCodex(
         enabled: true,
         marketplaceSource: { sourceType: 'local', source: w.root }
       }))
-      return ok({ installed: rows, available: [] })
+      return ok({ installed: [...rows, ...(o.own?.(codexHome) ?? [])], available: [] })
     }
+    if (line === `plugin marketplace remove ${M}`) return ok({ marketplaceName: M })
     if (line === `plugin marketplace add ${w.root}`) {
       const market = (await exists(marketplaceFile)) ? (await readJson<Marketplace>(marketplaceFile)).plugins.map((p) => p.name) : null
       const copies: string[] = []
@@ -581,7 +584,7 @@ describe('syncCodexPlugins', () => {
     expect(logs[1]).toContain('lost@market')
   })
 
-  it('a plugin whose Claude copy is gone stays shared while its Codex copy is there, and is left out when neither is', async () => {
+  it('a plugin whose Claude copy is gone stays shared while its Codex copy is there, and keeps the version each account has when neither is', async () => {
     const w = await world()
     await addAccount(w, 'acc_codex')
     await share(w, [{ name: 'p', version: '1.0.0', deps: [{ name: 'base', version: '2.0.0' }] }])
@@ -602,14 +605,132 @@ describe('syncCodexPlugins', () => {
     expect(rows[0].installed).toEqual({ p: '1.0.0', base: '2.0.0' })
     expect(logs).toEqual([])
 
-    // The version that has neither a Claude copy nor a Codex copy has nothing to install from
+    // The version that has neither a Claude copy nor a Codex copy has nothing to install from, but p is still shared: it is
+    // held at the version the account has (final review I2), and only the dependency the new version no longer records goes
     await share(w, [{ name: 'p', version: '1.0.1', gone: true }])
     const next = await sync(w, cli, { logs })
 
-    expect(cli.calls.filter((c) => c.line.startsWith('plugin remove')).map((c) => c.line)).toEqual([`plugin remove p@${M}`, `plugin remove base@${M}`])
-    expect(next).toEqual([])
+    expect(cli.calls.filter((c) => c.line.startsWith('plugin remove')).map((c) => c.line)).toEqual([`plugin remove base@${M}`])
+    expect(next).toEqual([{ accountId: 'acc_codex', installed: { p: '1.0.0' }, held: ['p'], waiting: false, turnedOff: [], at: AT }])
+    expect(await exists(codexCopyFolder(w.profile, 'p', '1.0.0'))).toBe(true)
     expect(logs).toHaveLength(1)
     expect(logs[0]).toContain('p@market')
+  })
+
+  it('an update whose new Codex copy cannot be made keeps the old version: nothing removed, its trust and old copy kept, and the row says it is held', async () => {
+    const w = await world()
+    const a = await addAccount(w, 'acc_a')
+    await share(w, [{ name: 'p', version: '1.0.0' }])
+    const KEY = `p@${M}:hooks/hooks.json:stop:0:0`
+    const hooks = { list: (async () => [{ key: KEY, pluginId: `p@${M}`, currentHash: 'sha256:p', trustStatus: 'untrusted' }]) as CodexHooksList }
+    const cli = fakeCodex(w)
+    await sync(w, cli, { hooks })
+
+    // The new version's .mcp.json cannot be read, so its Codex copy cannot be made
+    await share(w, [{ name: 'p', version: '1.1.0', files: { '.mcp.json': '{ not json' } }])
+    const logs: string[] = []
+    const rows = await sync(w, cli, { hooks, logs })
+
+    expect(cli.of(a).filter((c) => /^plugin (add|remove) /.test(c.line)).map((c) => c.line)).toEqual([`plugin add p@${M}`])
+    const held = { accountId: 'acc_a', installed: { p: '1.0.0' }, held: ['p'], waiting: false, turnedOff: [], at: AT }
+    expect(rows).toEqual([held])
+    expect(await readCodexPluginAccounts(w.profile)).toEqual([held])
+    expect(await exists(codexCopyFolder(w.profile, 'p', '1.0.0'))).toBe(true)
+    const state = readTomlObject(await fs.readFile(path.join(a.configDir, 'config.toml'), 'utf8')).hooks as { state: Record<string, { trusted_hash: string }> }
+    expect(state.state[KEY]).toEqual({ trusted_hash: 'sha256:p' })
+    expect(logs).toEqual([expect.stringContaining('p@market')])
+  })
+
+  // Final review I3: which own plugins Astera turned off is its only record of them, so it is on disk before the write
+  // that turns one off and after every account, not only once the whole sync is done
+  it('records an own plugin before it is turned off and each account once done, so a sync cut off after it keeps the record', async () => {
+    const w = await world()
+    const a = await addAccount(w, 'acc_a')
+    const b = await addAccount(w, 'acc_b')
+    const OWN = 'p@claude-plugins-official'
+    await write(path.join(a.configDir, 'config.toml'), `[plugins."${OWN}"]\nenabled = true\n`)
+    await share(w, [{ name: 'p', version: '1.0.0' }])
+    const bRow = row('acc_b', { installed: { p: '1.0.0' } })
+    await writeCodexPluginAccounts(w.profile, [bRow])
+    const own = {
+      pluginId: OWN,
+      name: 'p',
+      marketplaceName: 'claude-plugins-official',
+      version: '2.0.0',
+      installed: true,
+      enabled: true,
+      marketplaceSource: { sourceType: 'git', source: 'https://github.com/anthropics/claude-plugins-official.git' }
+    }
+    const cli = fakeCodex(w, { own: (home) => (home === a.configDir ? [own] : []) })
+    cli.seed(b, 'p', '1.0.0')
+    // Read while a's hooks are asked for (after its flags are written, before its pass ends), and when b's first command
+    // runs, which is made to fail the way a Host that stops would leave it
+    let whileA: CodexPluginAccountState[] | undefined
+    let atB: CodexPluginAccountState[] | undefined
+    const hooks = {
+      list: (async (home) => {
+        if (home === a.configDir) whileA ??= await readCodexPluginAccounts(w.profile)
+        return []
+      }) as CodexHooksList
+    }
+    const run: CodexPluginCliRun = async (home, args, o) => {
+      if (home === b.configDir) {
+        atB ??= await readCodexPluginAccounts(w.profile)
+        throw new Error('the Host stopped')
+      }
+      return cli.run(home, args, o)
+    }
+
+    await sync(w, { run }, { hooks })
+
+    const aRow = { accountId: 'acc_a', installed: { p: '1.0.0' }, waiting: false, turnedOff: [OWN], at: AT }
+    expect(whileA).toEqual([aRow, bRow])
+    expect(atB).toEqual([aRow, bRow])
+    expect((await pluginsOf(a))[OWN]).toEqual({ enabled: false })
+  })
+
+  // Final review I4: a damaged outcome file is not a missing one, and an account whose row is gone can still hold what
+  // this profile installed
+  describe('a row that was lost', () => {
+    const named = (w: World): string => `[plugins."p@${M}"]\nenabled = true\n\n[marketplaces.${M}]\nsource_type = "local"\nsource = '${w.root}'\n`
+
+    it('a damaged outcome file is kept beside it, nothing is swept, and an account whose config.toml names the marketplace is still cleaned', async () => {
+      const w = await world()
+      const a = await addAccount(w, 'acc_a')
+      const c = await addAccount(w, 'acc_c')
+      await write(path.join(a.configDir, 'config.toml'), named(w))
+      const copy = codexCopyFolder(w.profile, 'p', '1.0.0')
+      await write(path.join(copy, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'p', version: '1.0.0' }))
+      await write(outcomeFile(w), '{ damaged')
+      const cli = fakeCodex(w)
+      cli.seed(a, 'p', '1.0.0')
+      const logs: string[] = []
+
+      const rows = await sync(w, cli, { logs })
+
+      expect(cli.of(a).map((x) => x.line)).toEqual(['plugin list', `plugin remove p@${M}`, `plugin marketplace remove ${M}`])
+      expect(cli.of(c)).toEqual([])
+      expect(rows).toEqual([])
+      expect(await hasKeptCopy(outcomeFile(w), '{ damaged')).toBe(true)
+      // Another account could still have a version the lost rows named
+      expect(await exists(copy)).toBe(true)
+      expect(logs).toEqual([expect.stringContaining('damaged')])
+    })
+
+    it('an account with no row whose config.toml names the marketplace is visited though nothing is shared, and then swept', async () => {
+      const w = await world()
+      const a = await addAccount(w, 'acc_a')
+      await write(path.join(a.configDir, 'config.toml'), named(w))
+      const copy = codexCopyFolder(w.profile, 'p', '1.0.0')
+      await write(path.join(copy, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'p', version: '1.0.0' }))
+      const cli = fakeCodex(w)
+      cli.seed(a, 'p', '1.0.0')
+
+      expect(await sync(w, cli)).toEqual([])
+
+      expect(cli.of(a).map((x) => x.line)).toEqual(['plugin list', `plugin remove p@${M}`, `plugin marketplace remove ${M}`])
+      expect(await exists(copy)).toBe(false)
+    })
   })
 
   it('a plugin whose copy cannot be made is left out and logged, and the others install', async () => {

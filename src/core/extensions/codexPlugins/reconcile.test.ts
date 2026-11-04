@@ -170,6 +170,8 @@ function pass(
     hooks?: { list: CodexHooksList }
     root?: string
     lock?: <T>(fn: () => Promise<T>) => Promise<T>
+    held?: string[]
+    record?: (row: CodexPluginAccountState) => Promise<void>
   }
 ): Promise<CodexPluginAccountState> {
   return reconcileCodexAccount({
@@ -177,10 +179,12 @@ function pass(
     homeDir: f.home,
     marketplace: { name: M, root: o.root ?? ROOT },
     desired: o.desired,
+    held: o.held ?? [],
     previous: o.previous,
     busy: o.busy ?? false,
     run: o.cli.run,
     hooks: (o.hooks ?? hooksAnswering()).list,
+    record: o.record ?? (async () => {}),
     lock: o.lock ?? lock,
     now: () => NOW
   })
@@ -677,7 +681,8 @@ describe('reconcileCodexAccount', () => {
     const state = await pass(f, { desired: [], previous: prev({ installed: { old: '1.0.0' } }), cli })
     expect(cli.lines()).toEqual(['plugin list', `plugin remove old@${M}`])
     expect(state).toEqual({ accountId: ACCOUNT_ID, installed: { old: '1.0.0' }, waiting: false, failure: { message: 'Error: access denied' }, turnedOff: [], at: AT })
-    expect(await fs.readFile(f.file, 'utf8')).toBe(config)
+    // Turned off before its removal was tried, so it never loads beside an own copy turned back on (final review I1)
+    expect(await fs.readFile(f.file, 'utf8')).toBe(config.replace('enabled = true', 'enabled = false'))
   })
 
   it('does not remove a marketplace the account has not added', async () => {
@@ -745,7 +750,7 @@ describe('reconcileCodexAccount', () => {
       accountId: ACCOUNT_ID,
       installed: { p: '1.0.0' },
       waiting: false,
-      failure: { message: 'Error: failed to load configuration: TOML parse error at line 1, column 4', code: 'config-unreadable' },
+      failure: { message: loadFailure.trim(), code: 'config-unreadable' },
       turnedOff: ['x@own'],
       at: AT
     })
@@ -768,7 +773,7 @@ describe('reconcileCodexAccount', () => {
       throw new Error('extension-state/codex-config.lock could not be taken')
     }
     const state = await pass(f, { desired: [off('p', '1.0.0')], previous: prev({ turnedOff: ['x@own'] }), cli, lock: held })
-    expect(state.failure).toEqual({ message: 'extension-state/codex-config.lock could not be taken', code: 'config-unreadable' })
+    expect(state.failure).toEqual({ message: `Astera could not update ${f.file}: extension-state/codex-config.lock could not be taken`, code: 'config-unreadable' })
     expect(state.turnedOff).toEqual(['x@own'])
     expect(await fs.readFile(f.file, 'utf8')).toBe(SHARED_ON)
   })
@@ -819,7 +824,9 @@ describe('reconcileCodexAccount', () => {
         [`plugin add p@${M}`]: answer as PluginCliResult
       })
       const state = await pass(f, { desired: [on('p', '1.0.0'), on('q', '1.0.0')], previous: prev({ turnedOff: ['x@own'] }), cli })
-      expect(state).toEqual({ accountId: ACCOUNT_ID, installed: { q: '1.0.0' }, waiting: false, failure, turnedOff: ['x@own'], at: AT })
+      // The pass goes on after the add that failed (final review I1), so it ends knowing x@own is no longer installed
+      expect(cli.lines()).toEqual(['plugin list', `plugin marketplace add ${ROOT}`, `plugin add p@${M}`, 'plugin list'])
+      expect(state).toEqual({ accountId: ACCOUNT_ID, installed: { q: '1.0.0' }, waiting: false, failure, turnedOff: [], at: AT })
     })
 
     it('does not take an unexpected argument from the plugin list after an add for a codex without plugin', async () => {
@@ -842,6 +849,313 @@ describe('reconcileCodexAccount', () => {
       expect(state.failure?.code).toBeUndefined()
       expect(state.failure?.message).toMatch(/installed/)
       expect(state.installed).toEqual({ p: '1.0.0' })
+    })
+  })
+
+  // Final review I1: a step that fails for one plugin no longer skips the later steps for every plugin of the account, and
+  // a copy no longer shared is turned off in the same write that turns the person's own copy back on
+  describe('a step that fails does not stop the steps after it', () => {
+    const OWN_X = 'x@claude-plugins-official'
+    const HOOKS_DOWN = 'codex app-server did not answer hooks/list within 30 s'
+
+    it('a removal while the hooks cannot be listed: the shared copy goes off as the own copy comes back, and the removal still runs', async () => {
+      const KEY_X = `x@${M}:hooks/hooks.json:stop:0:0`
+      const config = [
+        `[plugins."x@${M}"]`,
+        'enabled = true',
+        '',
+        `[plugins."${OWN_X}"]`,
+        'enabled = false',
+        '',
+        `[plugins."y@${M}"]`,
+        'enabled = true',
+        '',
+        `[hooks.state."${KEY_X}"]`,
+        'trusted_hash = "sha256:x"',
+        ''
+      ].join('\n')
+      const f = await fixture(config)
+      const cli = scripted({
+        'plugin list': listed(row('x', M, '1.0.0'), row('y', M, '1.0.0'), row('x', 'claude-plugins-official', '2.0.0', { enabled: false })),
+        [`plugin marketplace add ${ROOT}`]: marketplaceAdded,
+        [`plugin remove x@${M}`]: removed('x')
+      })
+      const state = await pass(f, {
+        desired: [on('y', '1.0.0')],
+        previous: prev({ installed: { x: '1.0.0', y: '1.0.0' }, turnedOff: [OWN_X] }),
+        cli,
+        hooks: hooksAnswering(new Error(HOOKS_DOWN))
+      })
+      expect(cli.lines()).toEqual(['plugin list', `plugin marketplace add ${ROOT}`, `plugin remove x@${M}`])
+      expect(state).toEqual({
+        accountId: ACCOUNT_ID,
+        installed: { y: '1.0.0' },
+        waiting: false,
+        failure: { message: HOOKS_DOWN, code: 'hooks-unreadable' },
+        turnedOff: [],
+        at: AT
+      })
+      // Never both copies of x on, at any write
+      const plugins = await pluginsOf(f.file)
+      expect(plugins[`x@${M}`]).toEqual({ enabled: false })
+      expect(plugins[OWN_X]).toEqual({ enabled: true })
+      expect(plugins[`y@${M}`]).toEqual({ enabled: true })
+      // The removed plugin's trust goes after its removal
+      expect(await hookStateOf(f.file)).toBeUndefined()
+    })
+
+    it('a removal that fails: the shared copy is off, the own copy back on, the next removal still runs, and the failure is said', async () => {
+      const KEY_X = `x@${M}:hooks/hooks.json:stop:0:0`
+      const KEY_Z = `z@${M}:hooks/hooks.json:stop:0:0`
+      const config = [
+        `[plugins."x@${M}"]`,
+        'enabled = true',
+        '',
+        `[plugins."${OWN_X}"]`,
+        'enabled = false',
+        '',
+        `[plugins."z@${M}"]`,
+        'enabled = true',
+        '',
+        `[hooks.state."${KEY_X}"]`,
+        'trusted_hash = "sha256:x"',
+        '',
+        `[hooks.state."${KEY_Z}"]`,
+        'trusted_hash = "sha256:z"',
+        '',
+        `[marketplaces.${M}]`,
+        'source_type = "local"',
+        `source = '${ROOT}'`,
+        ''
+      ].join('\n')
+      const f = await fixture(config)
+      const cli = scripted({
+        'plugin list': listed(row('x', M, '1.0.0'), row('z', M, '1.0.0'), row('x', 'claude-plugins-official', '2.0.0', { enabled: false })),
+        [`plugin remove x@${M}`]: exited(1, { stderr: 'Error: access denied\n' }),
+        [`plugin remove z@${M}`]: removed('z')
+      })
+      const state = await pass(f, { desired: [], previous: prev({ installed: { x: '1.0.0', z: '1.0.0' }, turnedOff: [OWN_X] }), cli })
+      // The marketplace stays while x is still installed from it
+      expect(cli.lines()).toEqual(['plugin list', `plugin remove x@${M}`, `plugin remove z@${M}`])
+      expect(state).toEqual({ accountId: ACCOUNT_ID, installed: { x: '1.0.0' }, waiting: false, failure: { message: 'Error: access denied' }, turnedOff: [], at: AT })
+      const plugins = await pluginsOf(f.file)
+      expect(plugins[`x@${M}`]).toEqual({ enabled: false })
+      expect(plugins[OWN_X]).toEqual({ enabled: true })
+      // x is still installed, so its hooks stay trusted; z's trust goes with it
+      expect(await hookStateOf(f.file)).toEqual({ [KEY_X]: { trusted_hash: 'sha256:x' } })
+    })
+
+    it('one plugin whose add fails: every other add runs, the others get their flags and trust, the own copy goes off, and the failure is said', async () => {
+      const OWN_A = 'a@claude-plugins-official'
+      const KEY_A = `a@${M}:hooks/hooks.json:pre_tool_use:0:0`
+      const f = await fixture([`[plugins."a@${M}"]`, 'enabled = true', '', `[plugins."${OWN_A}"]`, 'enabled = true', ''].join('\n'))
+      const cli = scripted({
+        'plugin list': [
+          listed(row('a', M, '1.0.0'), row('a', 'claude-plugins-official', '2.0.0')),
+          listed(row('a', M, '1.0.0'), row('c', M, '1.0.0', { enabled: true }), row('a', 'claude-plugins-official', '2.0.0'))
+        ],
+        [`plugin marketplace add ${ROOT}`]: marketplaceAdded,
+        [`plugin add b@${M}`]: exited(1, { stderr: 'Error: invalid plugin manifest\n' }),
+        [`plugin add c@${M}`]: pluginAdded('c', '1.0.0')
+      })
+      const hooks = hooksAnswering([{ key: KEY_A, pluginId: `a@${M}`, currentHash: 'sha256:a', trustStatus: 'untrusted' }])
+      const state = await pass(f, {
+        desired: [on('a', '1.0.0'), on('b', '1.0.0'), off('c', '1.0.0')],
+        previous: prev({ installed: { a: '1.0.0' }, failure: { message: 'Error: invalid plugin manifest' } }),
+        cli,
+        hooks
+      })
+      expect(cli.lines()).toEqual(['plugin list', `plugin marketplace add ${ROOT}`, `plugin add b@${M}`, `plugin add c@${M}`, 'plugin list'])
+      expect(state).toEqual({
+        accountId: ACCOUNT_ID,
+        installed: { a: '1.0.0', c: '1.0.0' },
+        waiting: false,
+        failure: { message: 'Error: invalid plugin manifest' },
+        turnedOff: [OWN_A],
+        at: AT
+      })
+      expect(await pluginsOf(f.file)).toEqual({ [`a@${M}`]: { enabled: true }, [OWN_A]: { enabled: false }, [`c@${M}`]: { enabled: false } })
+      expect(hooks.calls).toHaveLength(1)
+      expect(await hookStateOf(f.file)).toEqual({ [KEY_A]: { trusted_hash: 'sha256:a' } })
+    })
+
+    it('still stops at once when an add finds config.toml unreadable, writing nothing', async () => {
+      const f = await fixture(SHARED_ON)
+      const cli = scripted({
+        'plugin list': listed(row('p', M, '1.0.0', { enabled: false })),
+        [`plugin marketplace add ${ROOT}`]: marketplaceAdded,
+        [`plugin add q@${M}`]: exited(1, { stderr: 'Error: failed to load configuration: TOML parse error at line 1, column 4\n' })
+      })
+      const state = await pass(f, { desired: [on('p', '1.0.0'), on('q', '1.0.0')], cli })
+      expect(cli.lines()).toEqual(['plugin list', `plugin marketplace add ${ROOT}`, `plugin add q@${M}`])
+      expect(state.failure?.code).toBe('config-unreadable')
+      expect(seen.writes).toEqual([])
+    })
+  })
+
+  // Final review I3: which own plugins Astera turned off is its only record of them, so it is kept before the write that
+  // turns one off, not only once the whole sync is done
+  describe('records an own plugin before turning it off', () => {
+    const OWN = 'p@claude-plugins-official'
+    const config = [`[plugins."p@${M}"]`, 'enabled = true', '', `[plugins."${OWN}"]`, 'enabled = true', ''].join('\n')
+    const listing = (): PluginCliResult => listed(row('p', M, '1.0.0'), row('p', 'claude-plugins-official', '2.0.0'))
+
+    it('hands the row with the id to record while the own plugin is still on, then turns it off', async () => {
+      const f = await fixture(config)
+      const cli = scripted({ 'plugin list': listing(), [`plugin marketplace add ${ROOT}`]: marketplaceAdded })
+      const recorded: { row: CodexPluginAccountState; ownOn: boolean | undefined }[] = []
+      const record = async (r: CodexPluginAccountState): Promise<void> => {
+        recorded.push({ row: r, ownOn: (await pluginsOf(f.file))[OWN].enabled })
+      }
+      const state = await pass(f, { desired: [on('p', '1.0.0')], previous: prev({ installed: { p: '1.0.0' } }), cli, record })
+      expect(recorded).toEqual([{ row: { accountId: ACCOUNT_ID, installed: { p: '1.0.0' }, waiting: false, turnedOff: [OWN], at: AT }, ownOn: true }])
+      expect(state.turnedOff).toEqual([OWN])
+      expect((await pluginsOf(f.file))[OWN]).toEqual({ enabled: false })
+    })
+
+    it('a record that fails leaves the own plugin on and fails the account with no code', async () => {
+      const f = await fixture(config)
+      const cli = scripted({ 'plugin list': listing(), [`plugin marketplace add ${ROOT}`]: marketplaceAdded })
+      const record = async (): Promise<void> => {
+        throw new Error('ENOSPC: no space left on device')
+      }
+      const state = await pass(f, { desired: [on('p', '1.0.0')], previous: prev({ installed: { p: '1.0.0' } }), cli, record })
+      expect(state).toEqual({ accountId: ACCOUNT_ID, installed: { p: '1.0.0' }, waiting: false, failure: { message: 'ENOSPC: no space left on device' }, turnedOff: [], at: AT })
+      expect(await fs.readFile(f.file, 'utf8')).toBe(config)
+    })
+
+    it('keeps an id it is about to turn back on in what it records until that write is made', async () => {
+      const f = await fixture(
+        [`[plugins."p@${M}"]`, 'enabled = true', '', `[plugins."${OWN}"]`, 'enabled = false', '', `[plugins."q@${M}"]`, 'enabled = true', '', '[plugins."q@other"]', 'enabled = true', ''].join('\n')
+      )
+      const cli = scripted({
+        'plugin list': listed(row('p', M, '1.0.0'), row('p', 'claude-plugins-official', '2.0.0', { enabled: false }), row('q', 'other', '1.0.0'), row('q', M, '1.0.0')),
+        [`plugin marketplace add ${ROOT}`]: marketplaceAdded
+      })
+      const recorded: CodexPluginAccountState[] = []
+      // p is turned off, so its own copy comes back; q is turned on, so its own copy goes off
+      await pass(f, {
+        desired: [off('p', '1.0.0'), on('q', '1.0.0')],
+        previous: prev({ installed: { p: '1.0.0', q: '1.0.0' }, turnedOff: [OWN] }),
+        cli,
+        record: async (r) => void recorded.push(r)
+      })
+      expect(recorded.map((r) => r.turnedOff)).toEqual([[OWN, 'q@other']])
+    })
+
+    it('records nothing when nothing is turned off', async () => {
+      const f = await fixture(SHARED_ON)
+      const cli = scripted({ 'plugin list': listed(row('p', M, '1.0.0')), [`plugin marketplace add ${ROOT}`]: marketplaceAdded })
+      const recorded: CodexPluginAccountState[] = []
+      await pass(f, { desired: [off('p', '1.0.0')], cli, record: async (r) => void recorded.push(r) })
+      expect(recorded).toEqual([])
+    })
+  })
+
+  // Final review I2: a plugin still shared whose current Codex copy cannot be made keeps the version each account has
+  describe('a held plugin', () => {
+    const KEY_P = `p@${M}:hooks/hooks.json:stop:0:0`
+    const config = [
+      `[plugins."p@${M}"]`,
+      'enabled = true',
+      '',
+      `[hooks.state."${KEY_P}"]`,
+      'trusted_hash = "sha256:p"',
+      '',
+      `[marketplaces.${M}]`,
+      'source_type = "local"',
+      `source = '${ROOT}'`,
+      ''
+    ].join('\n')
+
+    it('is never reinstalled or removed, keeps its trust and its marketplace, its flag follows the store, and the row lists it', async () => {
+      const f = await fixture(config)
+      const cli = scripted({ 'plugin list': listed(row('p', M, '1.0.0')) })
+      const state = await pass(f, { desired: [off('p', '1.1.0')], held: ['p'], previous: prev({ installed: { p: '1.0.0' } }), cli })
+      expect(cli.lines()).toEqual(['plugin list'])
+      expect(state).toEqual({ accountId: ACCOUNT_ID, installed: { p: '1.0.0' }, held: ['p'], waiting: false, turnedOff: [], at: AT })
+      expect((await pluginsOf(f.file))[`p@${M}`]).toEqual({ enabled: false })
+      expect(await hookStateOf(f.file)).toEqual({ [KEY_P]: { trusted_hash: 'sha256:p' } })
+    })
+
+    it('is no reason to wait, and is not listed as held where it is not installed', async () => {
+      const f = await fixture(SHARED_ON)
+      const cli = scripted({ 'plugin list': listed(row('p', M, '1.0.0')), [`plugin marketplace add ${ROOT}`]: marketplaceAdded })
+      const state = await pass(f, { desired: [on('p', '1.0.0'), on('h', '2.0.0')], held: ['h'], previous: prev({ installed: { p: '1.0.0' } }), busy: true, cli })
+      expect(cli.lines()).toEqual(['plugin list', `plugin marketplace add ${ROOT}`])
+      expect(state).toEqual({ accountId: ACCOUNT_ID, installed: { p: '1.0.0' }, waiting: false, turnedOff: [], at: AT })
+    })
+
+    it('leaves the own plugin it turned off as recorded where the held plugin is not installed', async () => {
+      const OWN = 'h@claude-plugins-official'
+      const own = [`[plugins."${OWN}"]`, 'enabled = false', ''].join('\n')
+      const f = await fixture(own)
+      const cli = scripted({ 'plugin list': listed(row('h', 'claude-plugins-official', '2.0.0', { enabled: false })) })
+      const state = await pass(f, { desired: [on('h', '1.1.0')], held: ['h'], previous: prev({ turnedOff: [OWN] }), cli })
+      expect(cli.lines()).toEqual(['plugin list'])
+      expect(state.turnedOff).toEqual([OWN])
+      expect(state.failure).toBeUndefined()
+      expect(await fs.readFile(f.file, 'utf8')).toBe(own)
+    })
+  })
+
+  // Final review I4: a row can be lost (a damaged outcome file, an account removed and added again), and what this profile
+  // installed is still there; its config.toml says so without running codex
+  describe('an account with no row', () => {
+    it('is visited when its config.toml names this marketplace from this folder, though nothing is shared', async () => {
+      const f = await fixture(`${SHARED_ON}\n[marketplaces.${M}]\nsource_type = "local"\nsource = '${ROOT}'\n`)
+      const cli = scripted({
+        'plugin list': listed(row('p', M, '1.0.0')),
+        [`plugin remove p@${M}`]: removed('p'),
+        [`plugin marketplace remove ${M}`]: ok({ marketplaceName: M })
+      })
+      const state = await pass(f, { desired: [], cli })
+      expect(cli.lines()).toEqual(['plugin list', `plugin remove p@${M}`, `plugin marketplace remove ${M}`])
+      expect(state).toEqual({ accountId: ACCOUNT_ID, installed: {}, waiting: false, turnedOff: [], at: AT })
+    })
+
+    it('is left alone when its config.toml names this marketplace from another folder, or cannot be read as TOML', async () => {
+      const other = `${SHARED_ON}\n[marketplaces.${M}]\nsource_type = "local"\nsource = '${path.join(os.tmpdir(), 'elsewhere', 'extensions', 'codex-plugins')}'\n`
+      for (const text of [other, `[[[\n[marketplaces.${M}]\nsource = '${ROOT}'\n`]) {
+        const f = await fixture(text)
+        const cli = scripted({})
+        expect(await pass(f, { desired: [], cli })).toEqual({ accountId: ACCOUNT_ID, installed: {}, waiting: false, turnedOff: [], at: AT })
+        expect(cli.calls).toEqual([])
+        expect(await fs.readFile(f.file, 'utf8')).toBe(text)
+      }
+    })
+  })
+
+  // Final review D4: Codex's parse error is drawn under its first line, so the message keeps the block, bounded
+  describe('the message of a config.toml Codex cannot load', () => {
+    it('keeps what Codex wrote up to the first blank line', async () => {
+      const f = await fixture('[[[')
+      const stderr = ['Error: failed to load configuration: TOML parse error at line 1, column 4', '  |', '1 | [[[', '  |    ^', 'invalid table header', '', 'more text', ''].join('\n')
+      const cli = scripted({ 'plugin list': exited(1, { stderr }) })
+      const state = await pass(f, { desired: [on('p', '1.0.0')], cli })
+      expect(state.failure).toEqual({
+        message: ['Error: failed to load configuration: TOML parse error at line 1, column 4', '  |', '1 | [[[', '  |    ^', 'invalid table header'].join('\n'),
+        code: 'config-unreadable'
+      })
+    })
+
+    it('keeps at most 500 characters of it', async () => {
+      const f = await fixture('[[[')
+      const stderr = `Error: failed to load configuration: ${'x'.repeat(1000)}\n`
+      const cli = scripted({ 'plugin list': exited(1, { stderr }) })
+      const state = await pass(f, { desired: [on('p', '1.0.0')], cli })
+      expect(state.failure?.message).toHaveLength(500)
+      expect(state.failure?.message.startsWith('Error: failed to load configuration: xxx')).toBe(true)
+    })
+
+    it('says it was Astera that could not read config.toml when its own parse fails, not Codex', async () => {
+      const f = await fixture('[[[')
+      const cli = scripted({ 'plugin list': listed(row('p', M, '1.0.0')), [`plugin marketplace add ${ROOT}`]: marketplaceAdded })
+      const state = await pass(f, { desired: [off('p', '1.0.0')], cli })
+      expect(state.failure?.code).toBe('config-unreadable')
+      expect(state.failure?.message).toMatch(/^Astera could not update /)
+      expect(state.failure?.message).toContain(f.file)
+      expect(await fs.readFile(f.file, 'utf8')).toBe('[[[')
     })
   })
 })

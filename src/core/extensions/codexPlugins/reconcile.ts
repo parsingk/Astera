@@ -5,11 +5,13 @@
 // …`); Astera writes the flags and the trust itself, since codex-cli 0.160 has no command for either.
 //
 // A pass never rejects. Whatever stops it is the account's failure, and the row it answers says what is known by then,
-// so one account's trouble never stops the others and the Claude side, already done, never fails over it.
+// so one account's trouble never stops the others and the Claude side, already done, never fails over it. A step that
+// fails for one plugin (an add, a removal, the hook list) is remembered and the pass goes on, so one plugin's trouble
+// never leaves every other plugin of the account without its flag or its trust; the first such failure is the answer's.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { comparablePath } from '../../files/tree'
-import { patchTomlFile } from '../../providers/configWrite'
+import { patchTomlFile, readTomlObject } from '../../providers/configWrite'
 import type { Account } from '../../types'
 import type { PluginCliResult } from '../claudePlugins/cli'
 import { CODEX_PLUGIN_ADD_TIMEOUT_MS, type CodexPluginCliRun } from './cli'
@@ -39,6 +41,11 @@ class Stop extends Error {
 }
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+
+/** Failures after which nothing more is done in the account: this profile's marketplace name belongs to another folder,
+ *  so nothing under it is this profile's to touch; codex has no plugin command; or config.toml cannot be read, by Codex
+ *  or by Astera, so no flag or trust can be written. */
+const STOPS_THE_PASS = new Set<CodexPluginFailureCode>(['marketplace-taken', 'codex-unsupported', 'config-unreadable'])
 
 /** A plugin `codex plugin list --json` reports installed (C3). */
 interface Listed {
@@ -74,6 +81,8 @@ const UNSUPPORTED = ['unexpected argument', 'unrecognized subcommand']
 /** What codex answers, with exit code 1, when the account's config.toml does not parse (measured), with the parse error
  *  drawn under it. */
 const CONFIG_LOAD = 'failed to load configuration'
+/** The most of Codex's load failure kept: its parser's lines, not whatever else it prints. */
+const CONFIG_LOAD_MAX = 500
 
 const lineWith = (text: string, needles: string[]): string | undefined =>
   text
@@ -81,14 +90,21 @@ const lineWith = (text: string, needles: string[]): string | undefined =>
     .map((l) => l.trim())
     .find((l) => needles.some((n) => l.includes(n)))
 
+/** What Codex wrote from its line that says it could not load config.toml up to the next blank line, at most 500
+ *  characters: the parser draws the line and the column under that line and names the error last. */
+function loadFailure(err: string): string {
+  const from = err.lastIndexOf('\n', err.indexOf(CONFIG_LOAD)) + 1
+  return err.slice(from).split(/\r?\n[ \t]*\r?\n/)[0].trimEnd().slice(0, CONFIG_LOAD_MAX)
+}
+
 /** A run that did not succeed, as the account's failure. A refusal and a time limit are Astera's own. A config.toml
- *  Codex could not load is told by its first line. A name taken by another folder is told by Codex's line that says
+ *  Codex could not load is told by its parser's lines. A name taken by another folder is told by Codex's line that says
  *  so, on whichever stream it wrote it. Anything else is Codex's own words, else its exit code. */
 function cliFailed(r: PluginCliResult, args: string[]): Stop {
   if (r.refused !== undefined) return new Stop(r.refused, 'refused')
   const err = r.stderr.trim()
   if (r.timedOut) return new Stop(err !== '' ? err : `codex ${args.join(' ')} did not finish in time`, 'timed-out')
-  if (err.includes(CONFIG_LOAD)) return new Stop(err.split(/\r?\n/)[0].trim(), 'config-unreadable')
+  if (err.includes(CONFIG_LOAD)) return new Stop(loadFailure(err), 'config-unreadable')
   const taken = lineWith(`${r.stdout}\n${r.stderr}`, [TAKEN])
   if (taken !== undefined) return new Stop(taken, 'marketplace-taken')
   const out = r.stdout.trim()
@@ -117,32 +133,48 @@ export async function reconcileCodexAccount(a: {
   homeDir: string
   marketplace: { name: string; root: string }
   desired: DesiredCodexPlugin[]
+  /** Names among `desired` whose Codex copy at the shared version could not be made (sync.ts), so each keeps the version
+   *  an account has: one is never added, reinstalled or removed, its trust keys stay, its flag follows the store where it
+   *  is installed, and an own plugin of its name that Astera turned off stays as recorded where it is not. */
+  held: string[]
   previous: CodexPluginAccountState | undefined
   /** An Astera-started session of this account is alive (C5, C14). */
   busy: boolean
   run: CodexPluginCliRun
   hooks: CodexHooksList
+  /** Keeps the row so far, with `turnedOff` already holding each own plugin about to be turned off, before the config.toml
+   *  write that turns it off: that list is Astera's only memory of it (C1), and a Host that dies after the write would
+   *  otherwise leave the person's plugin off for good. One that rejects stops the pass before the write. */
+  record: (row: CodexPluginAccountState) => Promise<void>
   lock: <T>(fn: () => Promise<T>) => Promise<T>
   now: () => Date
 }): Promise<CodexPluginAccountState> {
   const m = a.marketplace.name
   const desired = new Map(a.desired.map((d) => [d.name, d]))
+  const held = new Set(a.held)
+  // What can be installed: a held plugin has no copy at the version shared
+  const addable = a.desired.filter((d) => !held.has(d.name))
   const previousOff = a.previous?.turnedOff ?? []
   // What is known so far, answered as it stands when a step fails: the versions of the latest list Codex gave, and the
   // own plugins Astera has turned off as far as config.toml has been written
   let installed: Record<string, string> = { ...a.previous?.installed }
   let turnedOff = previousOff
-  const answer = (o: { waiting?: boolean; failure?: CodexPluginAccountState['failure'] } = {}): CodexPluginAccountState => ({
-    accountId: a.account.id,
-    installed,
-    waiting: o.waiting ?? false,
-    ...(o.failure === undefined ? {} : { failure: o.failure }),
-    turnedOff,
-    at: a.now().toISOString()
-  })
-
-  // A person who shares nothing, in an account this profile never touched: no codex runs and no file changes (§4)
-  if (a.desired.length === 0 && a.previous === undefined) return answer()
+  const answer = (
+    o: { waiting?: boolean; failure?: CodexPluginAccountState['failure']; turnedOff?: string[] } = {}
+  ): CodexPluginAccountState => {
+    const heldHere = a.held.filter((name) => Object.hasOwn(installed, name))
+    return {
+      accountId: a.account.id,
+      installed,
+      ...(heldHere.length === 0 ? {} : { held: heldHere }),
+      waiting: o.waiting ?? false,
+      ...(o.failure === undefined ? {} : { failure: o.failure }),
+      turnedOff: o.turnedOff ?? turnedOff,
+      at: a.now().toISOString()
+    }
+  }
+  const failureOf = (e: unknown): CodexPluginAccountState['failure'] =>
+    e instanceof Stop && e.code !== undefined ? { message: e.message, code: e.code } : { message: messageOf(e) }
 
   // The ambient ~/.codex account is found by codex with no CODEX_HOME (isAmbientDir's rule)
   const codexHome = comparablePath(a.account.configDir) === comparablePath(path.join(a.homeDir, '.codex')) ? null : a.account.configDir
@@ -170,8 +202,16 @@ export async function reconcileCodexAccount(a: {
     try {
       await a.lock(() => patchTomlFile(configFile, patch, { throughLink: true }))
     } catch (e) {
-      throw new Stop(messageOf(e), 'config-unreadable')
+      // Said as Astera's, so it is not read as Codex refusing the file
+      throw new Stop(`Astera could not update ${configFile}: ${messageOf(e)}`, 'config-unreadable')
     }
+  }
+  let first: Stop | undefined
+  /** A failure of one plugin's step, which the pass goes on after and answers at its end, the first one said. A failure
+   *  that stops the pass, or one that is not Codex's answer, ends it here. */
+  const remember = (e: unknown): void => {
+    if (!(e instanceof Stop) || (e.code !== undefined && STOPS_THE_PASS.has(e.code))) throw e
+    first ??= e
   }
   // This profile's marketplace is its name added from its own folder. Another profile whose folder has the same base
   // name has the same marketplace name (C12), so a row or a marketplace table under the name is Astera's to touch only
@@ -197,28 +237,58 @@ export async function reconcileCodexAccount(a: {
     const colon = key.indexOf(':')
     return colon < 0 ? null : pluginOf(key.slice(0, colon))
   }
+  /** Whether config.toml, read as a file, names this profile's marketplace from this folder. An account with no row can
+   *  still hold what this profile installed, when the row was lost (a damaged outcome file, an account removed and added
+   *  again). A file that is not there or does not parse names nothing. */
+  const namesThisMarketplace = async (): Promise<boolean> => {
+    let current: Table
+    try {
+      current = readTomlObject(await fs.readFile(configFile, 'utf8'))
+    } catch {
+      return false
+    }
+    const entry = isTable(current.marketplaces) ? current.marketplaces[m] : undefined
+    return isTable(entry) && typeof entry.source === 'string' && fromThisFolder(entry.source)
+  }
 
   /** Steps 5 and 6: each installed shared copy's flag as the person set it, and each own plugin of the same name off
    *  while the shared copy is on here, back on once it is not, but only one Astera turned off and still finds off (C1).
-   *  Another profile's marketplace and its plugins are never an account's own (C12). With `waiting`, a copy no longer
-   *  shared, whose removal waits for the account's sessions, is turned off first, so the own copy turned back on never
-   *  loads beside it. */
+   *  Another profile's marketplace and its plugins are never an account's own (C12). A copy no longer shared is turned
+   *  off in the same write, whether its removal waits for the account's sessions, fails or never comes this pass, so the
+   *  own copy turned back on never loads beside it. An own plugin about to be turned off is recorded first (`record`). */
   const writeFlags = async (rows: Listed[], o: { waiting?: boolean } = {}): Promise<void> => {
     const flags = new Map<string, boolean>()
     for (const r of ours(rows)) {
-      const enabled = desired.get(r.name)?.enabled ?? (o.waiting ? false : undefined)
-      if (enabled !== undefined && r.enabled !== enabled) flags.set(r.id, enabled)
+      const enabled = desired.get(r.name)?.enabled ?? false
+      if (r.enabled !== enabled) flags.set(r.id, enabled)
     }
-    const sharedOn = (name: string): boolean => desired.get(name)?.enabled === true && ours(rows).some((r) => r.name === name)
+    const installedHere = (name: string): boolean => ours(rows).some((r) => r.name === name)
+    const sharedOn = (name: string): boolean => desired.get(name)?.enabled === true && installedHere(name)
     const off: string[] = []
+    const turningOff: string[] = []
     for (const r of rows) {
       if (r.marketplace === m || (r.marketplaceSource !== null && isAsteraCodexMarketplace(r.marketplaceSource))) continue
       const astera = previousOff.includes(r.id)
       if (sharedOn(r.name)) {
-        if (r.enabled) flags.set(r.id, false)
+        if (r.enabled) {
+          flags.set(r.id, false)
+          turningOff.push(r.id)
+        }
         // One the person had off already stays theirs, so it is never turned back on
         if (r.enabled || astera) off.push(r.id)
+      } else if (held.has(r.name) && !installedHere(r.name)) {
+        // A held plugin that is not installed here was not removed either: the own copy stays as Astera recorded it
+        if (astera && !r.enabled) off.push(r.id)
       } else if (astera && !r.enabled) flags.set(r.id, true)
+    }
+    if (turningOff.length > 0) {
+      // Every id still recorded is kept too, one about to be turned back on among them, until the write is made
+      const row = answer({ waiting: o.waiting, turnedOff: [...new Set([...turnedOff, ...turningOff])] })
+      try {
+        await a.record(row)
+      } catch (e) {
+        throw new Stop(messageOf(e))
+      }
     }
     if (flags.size > 0) await write((current) => flagPatch(current, flags))
     turnedOff = off
@@ -230,15 +300,19 @@ export async function reconcileCodexAccount(a: {
     const resolved = await fs.realpath(a.marketplace.root).catch(() => null)
     if (resolved !== null) roots.add(comparablePath(resolved))
 
+    // A person who shares nothing, in an account this profile has no row for and whose config.toml does not name its
+    // marketplace: no codex runs and no file changes (§4)
+    if (a.desired.length === 0 && a.previous === undefined && !(await namesThisMarketplace())) return answer()
+
     // 1. What the account has
     const before = await list({ first: true })
     installed = versions(before)
     // Read on every row under the name: which of them are this profile's is settled by the add, which comes after
     const named = before.filter((r) => r.marketplace === m)
-    const due = a.desired.some((d) => named.find((r) => r.name === d.name)?.version !== d.version) || named.some((r) => !desired.has(r.name))
+    const due = addable.some((d) => named.find((r) => r.name === d.name)?.version !== d.version) || named.some((r) => !desired.has(r.name))
     const waiting = a.busy && due
     // A pass that will add nothing settles by folder which rows are this profile's
-    if (a.desired.length === 0 || waiting) refuseTaken(before)
+    if (addable.length === 0 || waiting) refuseTaken(before)
 
     // 3., decided on the first list and before step 2, so an account left waiting runs nothing more. A reinstall and a
     // removal delete the folder a running session reads its hooks and skills from (C5, C14); a flag does not, so the
@@ -250,30 +324,39 @@ export async function reconcileCodexAccount(a: {
 
     // 2. Adding a folder already added is a no-op that answers alreadyAdded; under this name from another folder Codex
     // refuses, and the account goes no further. Once it succeeds, every row under the name is this profile's.
-    if (a.desired.length > 0) {
+    if (addable.length > 0) {
       await run(['plugin', 'marketplace', 'add', a.marketplace.root])
       added = true
       installed = versions(before)
     }
 
-    // 4. Each one missing or at another version; an add at a new version replaces the old version's folder
-    const toAdd = a.desired.filter((d) => ours(before).find((r) => r.name === d.name)?.version !== d.version)
-    for (const d of toAdd) await run(['plugin', 'add', `${d.name}@${m}`], { timeoutMs: CODEX_PLUGIN_ADD_TIMEOUT_MS })
+    // 4. Each one missing or at another version; an add at a new version replaces the old version's folder. One that
+    // fails leaves the others to be tried, and the steps after them to be taken for what is installed.
+    const toAdd = addable.filter((d) => ours(before).find((r) => r.name === d.name)?.version !== d.version)
+    for (const d of toAdd) {
+      try {
+        await run(['plugin', 'add', `${d.name}@${m}`], { timeoutMs: CODEX_PLUGIN_ADD_TIMEOUT_MS })
+      } catch (e) {
+        remember(e)
+      }
+    }
+    // What was installed is known only from Codex, so a list that fails here ends the pass
     const rows = toAdd.length > 0 ? await list() : before
     installed = versions(rows)
 
     // 5., 6. Before the hooks are listed, so a plugin just turned on has its hooks listed
     await writeFlags(rows)
 
-    // 7. Codex gives the keys and hashes (P1). Its app-server is started only when a hook of a shared plugin can load
+    // 7. Codex gives the keys and hashes (P1). Its app-server is started only when a hook of a shared plugin can load.
+    // Hooks it could not list are trusted at a later pass; what is no longer shared is still removed.
     const leaving = ours(rows).filter((r) => !desired.has(r.name))
     const trust: { key: string; hash: string }[] = []
     if (ours(rows).some((r) => desired.get(r.name)?.enabled === true)) {
-      let hooks: CodexHookRow[]
+      let hooks: CodexHookRow[] = []
       try {
         hooks = await a.hooks(codexHome, a.marketplace.root)
       } catch (e) {
-        throw new Stop(messageOf(e), 'hooks-unreadable')
+        remember(new Stop(messageOf(e), 'hooks-unreadable'))
       }
       for (const h of hooks) {
         const name = h.pluginId === null ? null : pluginOf(h.pluginId)
@@ -304,24 +387,32 @@ export async function reconcileCodexAccount(a: {
     })
     if (table.other !== undefined) throw taken(table.other)
 
-    // 8. What is no longer shared, then its trust keys
+    // 8. What is no longer shared, then the trust keys of each one removed. One whose removal fails stays installed, so
+    // its hooks stay trusted, and the next one is still removed.
+    const stillInstalled: string[] = []
     for (const r of leaving) {
-      await run(['plugin', 'remove', `${r.name}@${m}`])
-      delete installed[r.name]
+      try {
+        await run(['plugin', 'remove', `${r.name}@${m}`])
+        delete installed[r.name]
+      } catch (e) {
+        remember(e)
+        stillInstalled.push(r.name)
+      }
     }
-    if (leaving.length > 0) await write((current) => trustPatch(current, { trust: [], drop: stale(new Set(desired.keys())) }))
+    if (leaving.length > stillInstalled.length)
+      await write((current) => trustPatch(current, { trust: [], drop: stale(new Set([...desired.keys(), ...stillInstalled])) }))
 
     // 9. After the plugins: a marketplace removed first leaves them installed with nothing to remove them by (C13). Only
     // when config.toml names it, as `plugin list` does not say whether it is added
-    if (a.desired.length === 0 && table.added) await run(['plugin', 'marketplace', 'remove', m])
+    if (a.desired.length === 0 && table.added && stillInstalled.length === 0) await run(['plugin', 'marketplace', 'remove', m])
 
-    // 10. The outcome
-    return answer()
+    // 10. The outcome, with the first failure the pass went on after
+    return answer(first === undefined ? {} : { failure: failureOf(first) })
   }
 
   try {
     return await pass()
   } catch (e) {
-    return answer({ failure: e instanceof Stop && e.code !== undefined ? { message: e.message, code: e.code } : { message: messageOf(e) } })
+    return answer({ failure: failureOf(e) })
   }
 }

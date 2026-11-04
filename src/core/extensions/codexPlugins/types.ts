@@ -13,6 +13,9 @@ export interface CodexPluginAccountState {
   accountId: string
   /** Plugin name to the version Codex reports installed from this profile's marketplace. */
   installed: Record<string, string>
+  /** Shared plugins installed here whose Codex copy at the shared version could not be made, so the account keeps the
+   *  version in `installed`; absent when there are none. */
+  held?: string[]
   waiting: boolean
   failure?: { message: string; code?: CodexPluginFailureCode }
   /** Own plugin ids (`name@marketplace`) Astera set to enabled = false (C1). */

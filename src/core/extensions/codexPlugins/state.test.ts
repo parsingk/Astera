@@ -1,12 +1,13 @@
-// What Astera remembers about each Codex account's plugins (Codex plugin sharing design §5): the outcome file. A missing
-// or damaged file reads as no rows, so the next sync works every account out again and writes the file anew.
+// What Astera remembers about each Codex account's plugins (Codex plugin sharing design §5): the outcome file. The screen
+// and the CLI read a missing or damaged file as no rows; the sync tells a damaged one apart and keeps its text beside it.
 import { describe, it, expect, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { removeFixture } from '../../testFixtures'
 import { extensionPaths } from '../../profile/paths'
-import { readCodexPluginAccounts, writeCodexPluginAccounts, type CodexPluginAccountState } from './state'
+import { hasKeptCopy } from '../../storeFile'
+import { readCodexPluginAccounts, readCodexPluginAccountsForSync, writeCodexPluginAccounts, type CodexPluginAccountState } from './state'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -78,6 +79,30 @@ describe('Codex plugin outcome file', () => {
     const file = extensionPaths(p).codexPluginAccounts
     await fs.mkdir(file, { recursive: true }) // a folder where the file belongs: reading it is EISDIR
     await expect(readCodexPluginAccounts(p)).rejects.toMatchObject({ code: 'EISDIR' })
+    await expect(readCodexPluginAccountsForSync(p)).rejects.toMatchObject({ code: 'EISDIR' })
     expect((await fs.stat(file)).isDirectory()).toBe(true)
+  })
+
+  // Final review I4: the sync tells a damaged file from a missing one, since the rows it lost said which copies are in
+  // use and which own plugins Astera turned off
+  describe('as the sync reads it', () => {
+    it('answers the rows of a file it can read, and of a missing file none, neither damaged', async () => {
+      const p = await profile()
+      expect(await readCodexPluginAccountsForSync(p)).toEqual({ rows: [], damaged: false })
+      await writeCodexPluginAccounts(p, rows)
+      expect(await readCodexPluginAccountsForSync(p)).toEqual({ rows, damaged: false })
+    })
+
+    it('answers a damaged file as damaged with no rows, keeping its text beside it first', async () => {
+      const p = await profile()
+      const file = extensionPaths(p).codexPluginAccounts
+      await fs.mkdir(path.dirname(file), { recursive: true })
+      for (const text of ['{', '{"version":2,"accounts":[]}', '{"version":1,"accounts":{}}']) {
+        await fs.writeFile(file, text)
+        expect(await readCodexPluginAccountsForSync(p), text).toEqual({ rows: [], damaged: true })
+        expect(await hasKeptCopy(file, text), text).toBe(true)
+        expect(await fs.readFile(file, 'utf8')).toBe(text)
+      }
+    })
   })
 })
