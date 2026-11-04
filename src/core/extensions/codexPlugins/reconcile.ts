@@ -6,6 +6,7 @@
 //
 // A pass never rejects. Whatever stops it is the account's failure, and the row it answers says what is known by then,
 // so one account's trouble never stops the others and the Claude side, already done, never fails over it.
+import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { comparablePath } from '../../files/tree'
 import { patchTomlFile } from '../../providers/configWrite'
@@ -67,27 +68,29 @@ function installedRows(json: PluginCliResult['json']): Listed[] {
 
 /** What Codex says when the marketplace name is already added from another folder (C10). */
 const TAKEN = 'is already added from a different source'
-/** What clap says to a `codex` that has no `plugin` command (assumed, not measured). */
-const UNSUPPORTED = 'unrecognized subcommand'
+/** What a codex with no `plugin` command answers, with exit code 2. codex-cli 0.160 takes an unknown first word for its
+ *  PROMPT and refuses the word after it (measured); clap says the subcommand is unrecognized when there is no PROMPT. */
+const UNSUPPORTED = ['unexpected argument', 'unrecognized subcommand']
+/** What codex answers, with exit code 1, when the account's config.toml does not parse (measured), with the parse error
+ *  drawn under it. */
+const CONFIG_LOAD = 'failed to load configuration'
 
-const lineWith = (text: string, needle: string): string | undefined =>
+const lineWith = (text: string, needles: string[]): string | undefined =>
   text
     .split(/\r?\n/)
     .map((l) => l.trim())
-    .find((l) => l.includes(needle))
+    .find((l) => needles.some((n) => l.includes(n)))
 
-/** A run that did not succeed, as the account's failure. A refusal and a time limit are Astera's own. A name taken by
- *  another folder and a codex with no plugin command are told by Codex's line that says so, on whichever stream it
- *  wrote it. Anything else is Codex's own words, else its exit code. */
+/** A run that did not succeed, as the account's failure. A refusal and a time limit are Astera's own. A config.toml
+ *  Codex could not load is told by its first line. A name taken by another folder is told by Codex's line that says
+ *  so, on whichever stream it wrote it. Anything else is Codex's own words, else its exit code. */
 function cliFailed(r: PluginCliResult, args: string[]): Stop {
   if (r.refused !== undefined) return new Stop(r.refused, 'refused')
   const err = r.stderr.trim()
   if (r.timedOut) return new Stop(err !== '' ? err : `codex ${args.join(' ')} did not finish in time`, 'timed-out')
-  const output = `${r.stdout}\n${r.stderr}`
-  const taken = lineWith(output, TAKEN)
+  if (err.includes(CONFIG_LOAD)) return new Stop(err.split(/\r?\n/)[0].trim(), 'config-unreadable')
+  const taken = lineWith(`${r.stdout}\n${r.stderr}`, [TAKEN])
   if (taken !== undefined) return new Stop(taken, 'marketplace-taken')
-  const unsupported = lineWith(output, UNSUPPORTED)
-  if (unsupported !== undefined) return new Stop(unsupported, 'codex-unsupported')
   const out = r.stdout.trim()
   return new Stop(err !== '' ? err : out !== '' ? out : `codex ${args.join(' ')} exited with code ${String(r.code)}`)
 }
@@ -99,10 +102,15 @@ function flagPatch(current: Table, flags: Map<string, boolean>): Table {
   return { ...current, plugins }
 }
 
-/** Codex records a Windows marketplace folder with the `\\?\` prefix (measured on codex-cli 0.160); the folder is the
- *  same without it. */
 const VERBATIM = '\\\\?\\'
-const withoutVerbatim = (p: string): string => (p.startsWith(VERBATIM) ? p.slice(VERBATIM.length) : p)
+const VERBATIM_UNC = '\\\\?\\UNC\\'
+
+/** A marketplace source as Codex records it, as a plain folder path. On Windows Codex records the folder it resolved
+ *  with the `\\?\` prefix (measured on codex-cli 0.160), which Windows writes `\\?\UNC\server\share` for a share. */
+export function marketplaceFolder(source: string): string {
+  if (source.startsWith(VERBATIM_UNC)) return `\\\\${source.slice(VERBATIM_UNC.length)}`
+  return source.startsWith(VERBATIM) ? source.slice(VERBATIM.length) : source
+}
 
 export async function reconcileCodexAccount(a: {
   account: Account
@@ -146,7 +154,16 @@ export async function reconcileCodexAccount(a: {
     if (r.refused !== undefined || r.timedOut || r.code !== 0) throw cliFailed(r, args)
     return r
   }
-  const list = async (): Promise<Listed[]> => installedRows((await run(['plugin', 'list'])).json)
+  /** `plugin list`. Only the pass's first one can tell a codex that has no plugin command: a later command refused the
+   *  same way has some other cause. */
+  const list = async (o: { first?: boolean } = {}): Promise<Listed[]> => {
+    const args = ['plugin', 'list']
+    const r = await a.run(codexHome, args)
+    const unsupported = o.first && r.refused === undefined && !r.timedOut && r.code === 2 ? lineWith(r.stderr, UNSUPPORTED) : undefined
+    if (unsupported !== undefined) throw new Stop(unsupported, 'codex-unsupported')
+    if (r.refused !== undefined || r.timedOut || r.code !== 0) throw cliFailed(r, args)
+    return installedRows(r.json)
+  }
   /** One config.toml write, under the profile lock the settings import also takes (P4), through a link as Codex does. A
    *  file that does not parse is left as it is and fails the account. */
   const write = async (patch: (current: Table) => Table): Promise<void> => {
@@ -158,17 +175,21 @@ export async function reconcileCodexAccount(a: {
   }
   // This profile's marketplace is its name added from its own folder. Another profile whose folder has the same base
   // name has the same marketplace name (C12), so a row or a marketplace table under the name is Astera's to touch only
-  // when it comes from this folder.
-  const fromRoot = (source: string | null): boolean =>
-    source !== null && comparablePath(withoutVerbatim(source)) === comparablePath(a.marketplace.root)
+  // when it comes from this folder. A pass whose `marketplace add` succeeded knows that of every row under the name, as
+  // Codex refuses an add from a different source. A pass that adds nothing compares folders, with the root both as given
+  // and as the file system resolves it: Codex records the folder resolved (a junction, a symlink, a subst drive).
+  let added = false
+  const roots = new Set<string>()
+  const fromThisFolder = (source: string | null): boolean =>
+    added || (source !== null && roots.has(comparablePath(marketplaceFolder(source))))
   const taken = (source: string | null): Stop =>
     new Stop(`marketplace '${m}' is already added from ${source ?? 'a folder codex did not name'}, not from ${a.marketplace.root}`, 'marketplace-taken')
   /** The name taken by another folder fails the account before anything is done in it, as a refused add does (step 2). */
   const refuseTaken = (rows: Listed[]): void => {
-    const other = rows.find((r) => r.marketplace === m && !fromRoot(r.marketplaceSource))
+    const other = rows.find((r) => r.marketplace === m && !fromThisFolder(r.marketplaceSource))
     if (other !== undefined) throw taken(other.marketplaceSource)
   }
-  const ours = (rows: Listed[]): Listed[] => rows.filter((r) => r.marketplace === m && fromRoot(r.marketplaceSource))
+  const ours = (rows: Listed[]): Listed[] => rows.filter((r) => r.marketplace === m && fromThisFolder(r.marketplaceSource))
   const versions = (rows: Listed[]): Record<string, string> => Object.fromEntries(ours(rows).map((r) => [r.name, r.version]))
   /** The name of this marketplace's plugin a `hooks.state` key or a plugin id belongs to; null for anything else. */
   const pluginOf = (id: string): string | null => (id.endsWith(`@${m}`) ? id.slice(0, -(m.length + 1)) : null)
@@ -204,30 +225,42 @@ export async function reconcileCodexAccount(a: {
   }
 
   const pass = async (): Promise<CodexPluginAccountState> => {
+    // fs.promises.realpath has fs.realpath.native's semantics: the operating system resolves the whole path
+    roots.add(comparablePath(a.marketplace.root))
+    const resolved = await fs.realpath(a.marketplace.root).catch(() => null)
+    if (resolved !== null) roots.add(comparablePath(resolved))
+
     // 1. What the account has
-    const before = await list()
+    const before = await list({ first: true })
     installed = versions(before)
-    refuseTaken(before)
-    const toAdd = a.desired.filter((d) => ours(before).find((r) => r.name === d.name)?.version !== d.version)
+    // Read on every row under the name: which of them are this profile's is settled by the add, which comes after
+    const named = before.filter((r) => r.marketplace === m)
+    const due = a.desired.some((d) => named.find((r) => r.name === d.name)?.version !== d.version) || named.some((r) => !desired.has(r.name))
+    const waiting = a.busy && due
+    // A pass that will add nothing settles by folder which rows are this profile's
+    if (a.desired.length === 0 || waiting) refuseTaken(before)
 
     // 3., decided on the first list and before step 2, so an account left waiting runs nothing more. A reinstall and a
     // removal delete the folder a running session reads its hooks and skills from (C5, C14); a flag does not, so the
-    // flags are still written, and the versions recorded stay as they were until the account is brought in line.
-    if (a.busy && (toAdd.length > 0 || ours(before).some((r) => !desired.has(r.name)))) {
+    // flags are still written, and the versions recorded are what the first list shows.
+    if (waiting) {
       await writeFlags(before, { waiting: true })
-      installed = { ...a.previous?.installed }
       return answer({ waiting: true })
     }
 
     // 2. Adding a folder already added is a no-op that answers alreadyAdded; under this name from another folder Codex
-    // refuses, and the account goes no further
-    if (a.desired.length > 0) await run(['plugin', 'marketplace', 'add', a.marketplace.root])
+    // refuses, and the account goes no further. Once it succeeds, every row under the name is this profile's.
+    if (a.desired.length > 0) {
+      await run(['plugin', 'marketplace', 'add', a.marketplace.root])
+      added = true
+      installed = versions(before)
+    }
 
     // 4. Each one missing or at another version; an add at a new version replaces the old version's folder
+    const toAdd = a.desired.filter((d) => ours(before).find((r) => r.name === d.name)?.version !== d.version)
     for (const d of toAdd) await run(['plugin', 'add', `${d.name}@${m}`], { timeoutMs: CODEX_PLUGIN_ADD_TIMEOUT_MS })
     const rows = toAdd.length > 0 ? await list() : before
     installed = versions(rows)
-    refuseTaken(rows)
 
     // 5., 6. Before the hooks are listed, so a plugin just turned on has its hooks listed
     await writeFlags(rows)
@@ -261,7 +294,7 @@ export async function reconcileCodexAccount(a: {
       const entry = isTable(current.marketplaces) ? current.marketplaces[m] : undefined
       if (isTable(entry)) {
         const source = typeof entry.source === 'string' ? entry.source : null
-        if (!fromRoot(source)) {
+        if (!fromThisFolder(source)) {
           table.other = source
           return current
         }

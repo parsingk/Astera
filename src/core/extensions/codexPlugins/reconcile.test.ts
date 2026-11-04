@@ -14,7 +14,7 @@ import type { PluginCliResult } from '../claudePlugins/cli'
 import { CODEX_PLUGIN_ADD_TIMEOUT_MS, type CodexPluginCliRun } from './cli'
 import type { CodexHookRow, CodexHooksList } from './hooks'
 import type { CodexPluginAccountState } from './state'
-import { reconcileCodexAccount, type DesiredCodexPlugin } from './reconcile'
+import { marketplaceFolder, reconcileCodexAccount, type DesiredCodexPlugin } from './reconcile'
 
 // Every config.toml write is seen with the path, the options and whether the profile lock was held at that moment
 const seen = vi.hoisted(() => ({ lockDepth: 0, locks: 0, writes: [] as { file: string; o: unknown; inLock: boolean }[] }))
@@ -168,18 +168,20 @@ function pass(
     busy?: boolean
     cli: { run: CodexPluginCliRun }
     hooks?: { list: CodexHooksList }
+    root?: string
+    lock?: <T>(fn: () => Promise<T>) => Promise<T>
   }
 ): Promise<CodexPluginAccountState> {
   return reconcileCodexAccount({
     account: f.account,
     homeDir: f.home,
-    marketplace: { name: M, root: ROOT },
+    marketplace: { name: M, root: o.root ?? ROOT },
     desired: o.desired,
     previous: o.previous,
     busy: o.busy ?? false,
     run: o.cli.run,
     hooks: (o.hooks ?? hooksAnswering()).list,
-    lock,
+    lock: o.lock ?? lock,
     now: () => NOW
   })
 }
@@ -258,7 +260,7 @@ describe('reconcileCodexAccount', () => {
   describe('waits while busy', () => {
     const SHARED_Q = [`[plugins."q@${M}"]`, 'enabled = true', ''].join('\n')
 
-    it('with an install due runs only plugin list, still writes the flags it can, and keeps the installed versions it had', async () => {
+    it('with an install due runs only plugin list, still writes the flags it can, and records the versions it lists', async () => {
       const f = await fixture(SHARED_Q)
       const cli = scripted({ 'plugin list': listed(row('q', M, '1.0.0')) })
       const hooks = hooksAnswering()
@@ -266,7 +268,8 @@ describe('reconcileCodexAccount', () => {
       const state = await pass(f, { desired: [on('p', '1.0.0'), off('q', '1.0.0')], previous, busy: true, cli, hooks })
       expect(cli.lines()).toEqual(['plugin list'])
       expect(hooks.calls).toEqual([])
-      expect(state).toEqual({ accountId: ACCOUNT_ID, installed: { q: '1.0.0', gone: '0.1.0' }, waiting: true, turnedOff: [], at: AT })
+      // What the first list shows, not what the previous row said
+      expect(state).toEqual({ accountId: ACCOUNT_ID, installed: { q: '1.0.0' }, waiting: true, turnedOff: [], at: AT })
       expect((await pluginsOf(f.file))[`q@${M}`]).toEqual({ enabled: false })
     })
 
@@ -471,16 +474,28 @@ describe('reconcileCodexAccount', () => {
       ''
     ].join('\n')
 
-    it.each([
-      ['when this profile shares nothing', [] as DesiredCodexPlugin[]],
-      ['when this profile shares the same plugin', [off('p', '1.0.0')]]
-    ])('leaves its plugin alone %s, and fails the account naming that folder', async (_when, desired) => {
+    it('leaves its plugin alone when this profile shares nothing, and fails the account naming that folder', async () => {
       const f = await fixture(config)
       const cli = scripted({ 'plugin list': listed(row('p', M, '1.0.0', { source: OTHER_SOURCE })) })
-      const state = await pass(f, { desired, previous: prev({ installed: { p: '1.0.0' } }), cli })
+      const state = await pass(f, { desired: [], previous: prev({ installed: { p: '1.0.0' } }), cli })
       expect(cli.lines()).toEqual(['plugin list'])
       expect(state.failure?.code).toBe('marketplace-taken')
       expect(state.failure?.message).toContain(OTHER_SOURCE)
+      expect(state.installed).toEqual({})
+      expect(seen.writes).toEqual([])
+      expect(await fs.readFile(f.file, 'utf8')).toBe(config)
+    })
+
+    it('leaves its plugin alone when this profile shares the same plugin, as Codex refuses the add', async () => {
+      const refusal = `Error: marketplace '${M}' is already added from a different source; remove it before adding this source`
+      const f = await fixture(config)
+      const cli = scripted({
+        'plugin list': listed(row('p', M, '1.0.0', { source: OTHER_SOURCE })),
+        [`plugin marketplace add ${ROOT}`]: exited(1, { stderr: `${refusal}\n` })
+      })
+      const state = await pass(f, { desired: [off('p', '1.0.0')], previous: prev({ installed: { p: '1.0.0' } }), cli })
+      expect(cli.lines()).toEqual(['plugin list', `plugin marketplace add ${ROOT}`])
+      expect(state.failure).toEqual({ message: refusal, code: 'marketplace-taken' })
       expect(state.installed).toEqual({})
       expect(seen.writes).toEqual([])
       expect(await fs.readFile(f.file, 'utf8')).toBe(config)
@@ -495,13 +510,70 @@ describe('reconcileCodexAccount', () => {
       expect(state.failure?.message).toContain(OTHER_SOURCE)
       expect(await fs.readFile(f.file, 'utf8')).toBe(config)
     })
+  })
 
-    it('takes a source Codex records with \\\\?\\ for this folder as this folder', async () => {
-      const f = await fixture(SHARED_ON)
-      const cli = scripted({ 'plugin list': listed(row('p', M, '1.0.0', { source: `\\\\?\\${ROOT}` })), [`plugin marketplace add ${ROOT}`]: marketplaceAdded })
-      const state = await pass(f, { desired: [on('p', '1.0.0')], cli })
-      expect(cli.lines()).toEqual(['plugin list', `plugin marketplace add ${ROOT}`])
-      expect(state).toEqual({ accountId: ACCOUNT_ID, installed: { p: '1.0.0' }, waiting: false, turnedOff: [], at: AT })
+  describe('rows under this marketplace name from this folder', () => {
+    it('takes every row under the name once the marketplace add succeeded, wherever Codex says it comes from', async () => {
+      // Codex records the folder resolved (a junction, a subst drive, a redirected folder); its add succeeding proves the
+      // name is this folder's, as it refuses an add from a different source
+      const RESOLVED = `\\\\?\\${path.join(os.tmpdir(), 'resolved', 'astera', 'extensions', 'codex-plugins')}`
+      const KEY = `p@${M}:hooks/hooks.json:pre_tool_use:0:0`
+      const config = `${SHARED_ON}\n[marketplaces.${M}]\nsource_type = "local"\nsource = '${RESOLVED}'\n`
+      const f = await fixture(config)
+      const cli = scripted({
+        'plugin list': [listed(row('p', M, '1.0.0', { source: RESOLVED })), listed(row('p', M, '1.1.0', { source: RESOLVED }))],
+        [`plugin marketplace add ${ROOT}`]: marketplaceAdded,
+        [`plugin add p@${M}`]: pluginAdded('p', '1.1.0')
+      })
+      const hooks = hooksAnswering([{ key: KEY, pluginId: `p@${M}`, currentHash: 'sha256:pre', trustStatus: 'untrusted' }])
+      const state = await pass(f, { desired: [on('p', '1.1.0')], previous: prev({ installed: { p: '1.0.0' } }), cli, hooks })
+      expect(cli.lines()).toEqual(['plugin list', `plugin marketplace add ${ROOT}`, `plugin add p@${M}`, 'plugin list'])
+      expect(state).toEqual({ accountId: ACCOUNT_ID, installed: { p: '1.1.0' }, waiting: false, turnedOff: [], at: AT })
+      expect(await hookStateOf(f.file)).toEqual({ [KEY]: { trusted_hash: 'sha256:pre' } })
+    })
+
+    it('takes a source Codex records with \\\\?\\ for this folder as this folder when nothing is added', async () => {
+      const source = `\\\\?\\${ROOT}`
+      const f = await fixture(`${SHARED_ON}\n[marketplaces.${M}]\nsource_type = "local"\nsource = '${source}'\n`)
+      const cli = scripted({
+        'plugin list': listed(row('p', M, '1.0.0', { source })),
+        [`plugin remove p@${M}`]: removed('p'),
+        [`plugin marketplace remove ${M}`]: ok({ marketplaceName: M })
+      })
+      const state = await pass(f, { desired: [], previous: prev({ installed: { p: '1.0.0' } }), cli })
+      expect(cli.lines()).toEqual(['plugin list', `plugin remove p@${M}`, `plugin marketplace remove ${M}`])
+      expect(state).toEqual({ accountId: ACCOUNT_ID, installed: {}, waiting: false, turnedOff: [], at: AT })
+    })
+
+    it('takes the folder a junction resolves to as this folder when nothing is added', async (ctx) => {
+      const base = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-codex-junction-'))
+      dirs.push(base)
+      await fs.mkdir(path.join(base, 'real', 'extensions', 'codex-plugins'), { recursive: true })
+      try {
+        await fs.symlink(path.join(base, 'real'), path.join(base, 'link'), 'junction')
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === 'EPERM') return ctx.skip()
+        throw e
+      }
+      const root = path.join(base, 'link', 'extensions', 'codex-plugins')
+      // What Codex records: the resolved folder, with `\\?\` on Windows
+      const source = `\\\\?\\${await fs.realpath(root)}`
+      expect(marketplaceFolder(source)).not.toBe(root)
+      const f = await fixture(`${SHARED_ON}\n[marketplaces.${M}]\nsource_type = "local"\nsource = '${source}'\n`)
+      const cli = scripted({
+        'plugin list': listed(row('p', M, '1.0.0', { source })),
+        [`plugin remove p@${M}`]: removed('p'),
+        [`plugin marketplace remove ${M}`]: ok({ marketplaceName: M })
+      })
+      const state = await pass(f, { desired: [], previous: prev({ installed: { p: '1.0.0' } }), cli, root })
+      expect(cli.lines()).toEqual(['plugin list', `plugin remove p@${M}`, `plugin marketplace remove ${M}`])
+      expect(state).toEqual({ accountId: ACCOUNT_ID, installed: {}, waiting: false, turnedOff: [], at: AT })
+    })
+
+    it('reads a marketplace source as a plain folder', () => {
+      expect(marketplaceFolder('\\\\?\\F:\\x\\extensions\\codex-plugins')).toBe('F:\\x\\extensions\\codex-plugins')
+      expect(marketplaceFolder('\\\\?\\UNC\\server\\share\\x\\extensions\\codex-plugins')).toBe('\\\\server\\share\\x\\extensions\\codex-plugins')
+      expect(marketplaceFolder('/home/x/.config/astera/extensions/codex-plugins')).toBe('/home/x/.config/astera/extensions/codex-plugins')
     })
   })
 
@@ -641,33 +713,64 @@ describe('reconcileCodexAccount', () => {
     })
   })
 
-  it('codex without plugin', async () => {
+  it.each([
+    // Measured on codex-cli 0.160 with an unknown first word: clap takes it for the PROMPT and refuses the next one
+    ["error: unexpected argument 'list' found\n\nUsage: codex [OPTIONS] [PROMPT]\n       codex [OPTIONS] <COMMAND> [ARGS]\n\nFor more information, try '--help'.\n", "error: unexpected argument 'list' found"],
+    ["error: unrecognized subcommand 'plugin'\n\nUsage: codex [OPTIONS] <COMMAND>\n", "error: unrecognized subcommand 'plugin'"]
+  ])('codex without plugin (%#)', async (stderr, message) => {
     const f = await fixture(SHARED_ON)
-    const cli = scripted({
-      'plugin list': exited(2, { stderr: "error: unrecognized subcommand 'plugin'\n\nUsage: codex [OPTIONS] [PROMPT]\n\nFor more information, try '--help'.\n" })
-    })
+    const cli = scripted({ 'plugin list': exited(2, { stderr }) })
     const state = await pass(f, { desired: [on('p', '1.0.0')], previous: prev({ installed: { p: '0.9.0' } }), cli })
     expect(cli.lines()).toEqual(['plugin list'])
-    expect(state.failure).toEqual({ message: "error: unrecognized subcommand 'plugin'", code: 'codex-unsupported' })
+    expect(state.failure).toEqual({ message, code: 'codex-unsupported' })
     expect(state.installed).toEqual({ p: '0.9.0' })
     expect(state.waiting).toBe(false)
   })
 
   it('damaged config fails only that account', async () => {
+    // What codex-cli 0.160 answers for a config.toml it cannot parse (measured)
+    const loadFailure = [
+      'Error: failed to load configuration: TOML parse error at line 1, column 4',
+      '  |',
+      '1 | [[[',
+      '  |    ^',
+      'invalid table header',
+      ''
+    ].join('\n')
     const damaged = await fixture('[[[')
-    const cli = () => scripted({ 'plugin list': listed(row('p', M, '1.0.0')), [`plugin marketplace add ${ROOT}`]: marketplaceAdded })
-    const failed = await pass(damaged, { desired: [off('p', '1.0.0')], previous: prev({ turnedOff: ['x@own'] }), cli: cli() })
-    expect(failed.failure?.code).toBe('config-unreadable')
-    expect(failed.failure?.message).not.toBe('')
-    expect(failed.installed).toEqual({ p: '1.0.0' })
-    expect(failed.turnedOff).toEqual(['x@own'])
+    const cli = scripted({ 'plugin list': exited(1, { stderr: loadFailure }) })
+    const failed = await pass(damaged, { desired: [off('p', '1.0.0')], previous: prev({ installed: { p: '1.0.0' }, turnedOff: ['x@own'] }), cli })
+    expect(cli.lines()).toEqual(['plugin list'])
+    expect(failed).toEqual({
+      accountId: ACCOUNT_ID,
+      installed: { p: '1.0.0' },
+      waiting: false,
+      failure: { message: 'Error: failed to load configuration: TOML parse error at line 1, column 4', code: 'config-unreadable' },
+      turnedOff: ['x@own'],
+      at: AT
+    })
     expect(await fs.readFile(damaged.file, 'utf8')).toBe('[[[')
     expect(await fs.readdir(damaged.account.configDir)).toEqual(['config.toml'])
     // Another account of the same pass goes on
     const fine = await fixture(SHARED_ON)
-    const other = await pass(fine, { desired: [off('p', '1.0.0')], cli: cli() })
+    const other = await pass(fine, {
+      desired: [off('p', '1.0.0')],
+      cli: scripted({ 'plugin list': listed(row('p', M, '1.0.0')), [`plugin marketplace add ${ROOT}`]: marketplaceAdded })
+    })
     expect(other.failure).toBeUndefined()
     expect((await pluginsOf(fine.file))[`p@${M}`]).toEqual({ enabled: false })
+  })
+
+  it('a config.toml write that cannot be made fails the account as config-unreadable', async () => {
+    const f = await fixture(SHARED_ON)
+    const cli = scripted({ 'plugin list': listed(row('p', M, '1.0.0')), [`plugin marketplace add ${ROOT}`]: marketplaceAdded })
+    const held = async (): Promise<never> => {
+      throw new Error('extension-state/codex-config.lock could not be taken')
+    }
+    const state = await pass(f, { desired: [off('p', '1.0.0')], previous: prev({ turnedOff: ['x@own'] }), cli, lock: held })
+    expect(state.failure).toEqual({ message: 'extension-state/codex-config.lock could not be taken', code: 'config-unreadable' })
+    expect(state.turnedOff).toEqual(['x@own'])
+    expect(await fs.readFile(f.file, 'utf8')).toBe(SHARED_ON)
   })
 
   it('trust failure keeps installs and fails the account', async () => {
@@ -696,6 +799,8 @@ describe('reconcileCodexAccount', () => {
     it.each([
       ['with Codex\'s words and no code', exited(1, { stderr: 'Error: plugin p not found in marketplace\n' }), { message: 'Error: plugin p not found in marketplace' }],
       ['with its exit code when Codex said nothing', exited(3), { message: `codex plugin add p@${M} exited with code 3` }],
+      // Only the first plugin list can tell a codex with no plugin command
+      ['with no code for an unexpected argument after the first list', exited(2, { stderr: "error: unexpected argument '--json' found\n" }), { message: "error: unexpected argument '--json' found" }],
       [
         'as timed out',
         { ...exited(1, { stderr: 'codex did not finish within 600 s' }), timedOut: true },
@@ -715,6 +820,18 @@ describe('reconcileCodexAccount', () => {
       })
       const state = await pass(f, { desired: [on('p', '1.0.0'), on('q', '1.0.0')], previous: prev({ turnedOff: ['x@own'] }), cli })
       expect(state).toEqual({ accountId: ACCOUNT_ID, installed: { q: '1.0.0' }, waiting: false, failure, turnedOff: ['x@own'], at: AT })
+    })
+
+    it('does not take an unexpected argument from the plugin list after an add for a codex without plugin', async () => {
+      const f = await fixture(SHARED_ON)
+      const cli = scripted({
+        'plugin list': [listed(), exited(2, { stderr: "error: unexpected argument '--json' found\n" })],
+        [`plugin marketplace add ${ROOT}`]: marketplaceAdded,
+        [`plugin add p@${M}`]: pluginAdded('p', '1.0.0')
+      })
+      const state = await pass(f, { desired: [on('p', '1.0.0')], cli })
+      expect(cli.lines()).toEqual(['plugin list', `plugin marketplace add ${ROOT}`, `plugin add p@${M}`, 'plugin list'])
+      expect(state.failure).toEqual({ message: "error: unexpected argument '--json' found" })
     })
 
     it('reads a plugin list with no installed list as a failure, not as nothing installed', async () => {
