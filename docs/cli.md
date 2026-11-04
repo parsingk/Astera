@@ -1173,8 +1173,10 @@ account it was taken from), `enabled`, `addedAt`, `lastUpdated`, `enabledAt` (on
 `fingerprint` and `update`. `update` is there only when a check found a newer version in the marketplace:
 `version` is that version, or `null` when the marketplace does not say, and `checkedAt` is when. It marks the
 plugin and installs nothing; only **Update** in the app does. `claudePlugins` is `[]` while nothing is
-shared. `ext` only reads them: no verb shares, updates, turns off or removes a plugin, and nothing in an
-account's folder is read or changed for them.
+shared. `ext` only reads them: no verb shares, updates, turns off or removes a plugin, and `ext list`
+itself reads only the profile, never an account's folder. The Host, not the CLI, installs the shared
+plugins into the Codex accounts and writes their `config.toml` (the marketplace entry, the enabled
+flags of plugins and the trust of their hooks), and `codexPluginAccounts` below reports what it did.
 
 A damaged `extensions/claude-plugins.json` does not fail `ext list`. `claudePlugins` is then left out, because
 `[]` would say nothing is shared, and `claudePluginsError` gives the message, which names the file. `entries`

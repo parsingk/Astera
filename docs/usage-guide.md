@@ -85,10 +85,11 @@ Astera looks for newer versions when it starts and once a day, and **Check now**
 A newer version only marks the row **Update available**. A shared plugin never changes until you
 press **Update**. If a marketplace asks to run a command of its own to install or update a plugin,
 Astera shows you the command and runs it only after you confirm. Once any plugin is shared,
-**Import settings from the default account** keeps each account's own `enabledPlugins` and
-`extraKnownMarketplaces` instead of copying the default account's, and copies the other settings as
-before. Sharing only plugins does not stop the import from copying the default account's servers,
-skills, commands and agents. `astera ext list` names the shared plugins and each Codex account's state.
+**Import settings from the default account** keeps each Claude account's own `enabledPlugins` and
+`extraKnownMarketplaces` instead of copying the default account's, and each Codex account's own
+`plugins` and `marketplaces` tables in `config.toml`. Astera then brings that Codex account in line with
+the shared plugins. The other settings are copied as before. Sharing only plugins does not stop the
+import from copying the default account's servers, skills, commands and agents. `astera ext list` names the shared plugins and each Codex account's state.
 
 **Smart Resume** is optional and experimental. Choose it under **Settings → Agents → Session
 resume strategy** to give a new session a compact checkpoint when rolling moves work to another
