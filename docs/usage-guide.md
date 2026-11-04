@@ -42,7 +42,7 @@ folders and hook approvals, and imported settings apply to new sessions rather t
 already running.
 
 To give every account the same MCP servers, skills, slash commands and subagents, use
-**Settings → MCP & Skills**. Choose **Add**, pick a provider's default account and what to share, and
+**Settings → MCP & Skills**. Choose **Add**, pick an account and what to share, and
 choose which environment values to keep as secrets. A server that carries a credential in its
 arguments or its address is not offered, since it would be stored in plain text. The sessions
 Astera starts then get the shared MCP servers. A server that runs as a command runs once inside
@@ -60,8 +60,9 @@ shared version**. Once anything is shared, **Import settings from the default ac
 these to MCP & Skills and copies settings only. `astera ext list` and `astera ext sync` do the same
 from a terminal (see [the CLI reference](cli.md)).
 
-**Claude Code plugins** are shared from the **Plugins** group of the same tab. Choose **Add**, then
-**Claude Code plugins** under Plugins, and pick the plugins found in any of your Claude accounts.
+**Claude Code plugins** are shared from the same tab, and its **Plugins** group lists them. Choose
+**Add**, pick a Claude account, and that account's plugins are listed with its servers and skills.
+Pick the ones to share.
 Astera installs one copy of each in its own folder, and every Claude session Astera starts loads
 that copy, so every account runs the same version. In those sessions a shared plugin replaces an
 account's own copy of the same name while it is shared and on. Turn it off or remove it, and the

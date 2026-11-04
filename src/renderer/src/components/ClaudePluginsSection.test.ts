@@ -149,12 +149,29 @@ describe('useClaudePlugins', () => {
     await settle()
     expect(confirmModal).toHaveBeenCalledTimes(1)
     expect(confirmModal.mock.calls[0][0]).toMatchObject({ code: 'npx -y @acme/setup && echo "%PATH%"', confirmLabel: 'settings.extensions.plugin.confirmCommand.run' })
-    expect(api.extensions.pluginShare).toHaveBeenLastCalledWith('superpowers@obra', 'f00d')
+    expect(api.extensions.pluginShare).toHaveBeenLastCalledWith('superpowers@obra', 'f00d', undefined)
 
     // Still listed as asking: not asked again
     hooks.render(useClaudePlugins)
     await settle()
     expect(confirmModal).toHaveBeenCalledTimes(1)
+  })
+
+  // K4: a share from the register menu names the account it came from, and its confirmation repeats it
+  it('repeats a confirmed share with the account it was asked for', async () => {
+    const asking = job({ id: 'a1', state: 'needs-confirmation', command: { text: 'run me', sha256: 'face' } })
+    api.extensions.pluginList.mockResolvedValueOnce(answer({ plugins: [], jobs: [] })).mockResolvedValue(answer({ plugins: [], jobs: [asking] }))
+    api.extensions.pluginShare.mockResolvedValueOnce(answer({ jobId: 'a1' })).mockResolvedValueOnce(answer({ jobId: 'a2' }))
+    let plugins = hooks.render(useClaudePlugins)
+    await settle()
+    plugins = hooks.render(useClaudePlugins)
+    await plugins.share('superpowers@obra', undefined, 'c4')
+    expect(api.extensions.pluginShare).toHaveBeenLastCalledWith('superpowers@obra', undefined, 'c4')
+
+    hooks.render(useClaudePlugins)
+    await settle()
+    expect(confirmModal).toHaveBeenCalledTimes(1)
+    expect(api.extensions.pluginShare).toHaveBeenLastCalledWith('superpowers@obra', 'face', 'c4')
   })
 
   it('waits while another confirmation is open, and asks at the next read', async () => {
@@ -178,7 +195,7 @@ describe('useClaudePlugins', () => {
     hooks.render(useClaudePlugins)
     await settle()
     expect(confirmModal).toHaveBeenCalledTimes(1)
-    expect(api.extensions.pluginShare).toHaveBeenLastCalledWith('superpowers@obra', 'cafe')
+    expect(api.extensions.pluginShare).toHaveBeenLastCalledWith('superpowers@obra', 'cafe', undefined)
   })
 
   it('confirms an update with the update, not a share', async () => {

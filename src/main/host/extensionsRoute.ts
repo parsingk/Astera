@@ -11,6 +11,7 @@ type Call = Parameters<typeof hostSender>[0]['call']
 export function createExtensionsRoute(d: { call: Call }): ExtensionsApi {
   const send = hostSender(d)
   const accept = (acceptCommand: string | undefined) => (acceptCommand === undefined ? {} : { acceptCommand })
+  const from = (accountId: string | undefined) => (accountId === undefined ? {} : { accountId })
   return {
     list: () => send('extensions-list', {}),
     discover: (accountId) => send('extensions-discover', { accountId }),
@@ -20,8 +21,8 @@ export function createExtensionsRoute(d: { call: Call }): ExtensionsApi {
     replace: (accountId, id) => send('extensions-replace', { accountId, id }, true),
     setIsolation: (id, isolation) => send('extensions-isolation', { id, isolation }, true),
     pluginList: () => send('extensions-plugin-list', {}),
-    pluginDiscover: () => send('extensions-plugin-discover', {}),
-    pluginShare: (id, acceptCommand) => send('extensions-plugin-share', { id, ...accept(acceptCommand) }, true),
+    pluginDiscover: (accountId) => send('extensions-plugin-discover', from(accountId)),
+    pluginShare: (id, acceptCommand, accountId) => send('extensions-plugin-share', { id, ...accept(acceptCommand), ...from(accountId) }, true),
     pluginUpdate: (id, acceptCommand) => send('extensions-plugin-update', { id, ...accept(acceptCommand) }, true),
     pluginCheck: () => send('extensions-plugin-check', {}, true),
     pluginRemove: (id) => send('extensions-plugin-remove', { id }, true),

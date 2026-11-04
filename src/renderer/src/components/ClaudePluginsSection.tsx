@@ -32,10 +32,11 @@ const arr = <V,>(v: unknown): V[] => (Array.isArray(v) ? (v as V[]) : [])
 const failed = (e: unknown): PluginsCallAnswer => ({ ok: false, code: 'FAILED', message: e instanceof Error ? e.message : String(e) })
 const when = (iso: string): string => new Date(iso).toLocaleString()
 
-/** The jobs this app started, until each is seen to end. One that ends asking to run a marketplace command (M8) is put
- *  to the person once, even if the tab was closed and opened again meanwhile; one another app run started is not put
- *  in front of them unasked. */
-const awaiting = new Set<string>()
+/** The jobs this app started, until each is seen to end, each with the account a share was asked for (none for an
+ *  update, or a share from every account). One that ends asking to run a marketplace command (M8) is put to the person
+ *  once, even if the tab was closed and opened again meanwhile, and confirming repeats it with the same account; one
+ *  another app run started is not put in front of them unasked. */
+const awaiting = new Map<string, string | undefined>()
 
 /** The shared Claude Code plugins as Settings › MCP & Skills reads them: the register menu shares into them, and the
  *  Plugins group shows them. */
@@ -46,10 +47,12 @@ export interface ClaudePlugins {
   lastCheck: LastCheck
   failure: Failure | null
   busy: boolean
-  /** Runs one plugin call, says why when it did not happen (`refusal` words a refused one), and reads the list again. */
-  act: (work: () => Promise<PluginsCallAnswer>, refusal?: (r: Failure) => string) => Promise<void>
-  /** Shares one plugin, with the sha256 of the command the person confirmed when there is one. */
-  share: (id: string, acceptCommand?: string) => Promise<void>
+  /** Runs one plugin call, says why when it did not happen (`refusal` words a refused one), and reads the list again.
+   *  `accountId` is the account a share was asked for, kept for the confirmation that may follow. */
+  act: (work: () => Promise<PluginsCallAnswer>, refusal?: (r: Failure) => string, accountId?: string) => Promise<void>
+  /** Shares one plugin from the account the register menu picked, with the sha256 of the command the person confirmed
+   *  when there is one. */
+  share: (id: string, acceptCommand?: string, accountId?: string) => Promise<void>
 }
 
 /** Reads `pluginList` once, then every 1.5 s while a job is queued or running and not otherwise (R4), each read after
@@ -86,22 +89,23 @@ export function useClaudePlugins(): ClaudePlugins {
     return () => clearTimeout(timer)
   }, [live, reads])
 
-  const act: ClaudePlugins['act'] = async (work, refusal) => {
+  const act: ClaudePlugins['act'] = async (work, refusal, accountId) => {
     setBusy(true)
     try {
       const r = await work().catch(failed)
       if (!r.ok) return void toast.error(refusal?.(r) ?? failureLine(r, t))
-      if (typeof r.body.jobId === 'string') awaiting.add(r.body.jobId)
+      if (typeof r.body.jobId === 'string') awaiting.set(r.body.jobId, accountId)
     } finally {
       setBusy(false)
       await load()
     }
   }
   // A share the Host refused carries why, as discovery words it
-  const share: ClaudePlugins['share'] = (id, acceptCommand) =>
+  const share: ClaudePlugins['share'] = (id, acceptCommand, accountId) =>
     act(
-      () => window.api.extensions.pluginShare(id, acceptCommand),
-      (r) => (r.reason !== undefined ? t('settings.extensions.import.refused', { name: id, reason: refusalLabel(r.reason, t) }) : failureLine(r, t))
+      () => window.api.extensions.pluginShare(id, acceptCommand, accountId),
+      (r) => (r.reason !== undefined ? t('settings.extensions.import.refused', { name: id, reason: refusalLabel(r.reason, t) }) : failureLine(r, t)),
+      accountId
     )
 
   // One confirmation at a time: a second confirm modal would be answered as a cancel at once, so a job waits for its turn
@@ -115,6 +119,7 @@ export function useClaudePlugins(): ClaudePlugins {
     if (j?.command === undefined || j.target === undefined) return
     const target = j.target
     const command = j.command
+    const accountId = awaiting.get(j.id)
     awaiting.delete(j.id)
     asking.current = true
     void (async () => {
@@ -125,7 +130,7 @@ export function useClaudePlugins(): ClaudePlugins {
         confirmLabel: t('settings.extensions.plugin.confirmCommand.run')
       })
       asking.current = false
-      if (ok) await (j.kind === 'update' ? act(() => window.api.extensions.pluginUpdate(target, command.sha256)) : share(target, command.sha256))
+      if (ok) await (j.kind === 'update' ? act(() => window.api.extensions.pluginUpdate(target, command.sha256)) : share(target, command.sha256, accountId))
       // Read again after a cancel too, so the next job waiting to ask gets its turn
       else await load()
     })()

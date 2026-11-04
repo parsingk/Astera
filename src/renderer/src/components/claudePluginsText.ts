@@ -141,32 +141,28 @@ export function contentLines(c: ClaudePluginContents | undefined, t: T): string[
   return lines
 }
 
-/** The register dialog for what `pluginDiscover` found across the Claude accounts: one choice a plugin that can be
- *  shared, labelled with its id over the accounts holding it and, on a line of its own, the version a share would
- *  install when the catalog says (§5.3). A plugin that cannot be shared is not a choice; it is listed in the body with
- *  why, as is each account whose plugins could not be read (ruling P-2). Nothing starts checked. */
-export function pluginPrompt(
-  found: readonly OfferedClaudePlugin[],
-  unreadable: readonly string[],
-  labelOf: LabelOf,
-  t: T
-): { title: string; body: string; footer: string; confirmLabel: string; choices: ConfirmChoice[] } {
-  const hint = (p: OfferedClaudePlugin): string =>
-    [holdersHint(p.holders, labelOf, t), ...(typeof p.offeredVersion === 'string' ? [t('settings.extensions.plugin.offeredVersion', { version: p.offeredVersion })] : [])].join('\n')
-  const choices = found.filter((p) => p.shareable).map((p) => ({ id: p.id, label: p.id, hint: hint(p), defaultChecked: false }))
+const PLUGIN_CHOICE = 'plugin:'
+
+/** The plugins `pluginDiscover` found in the account picked in the register menu, as choices of that account's dialog
+ *  (K4), after its servers and skills: one choice a plugin that can be shared, hinted with the version a share would
+ *  install when the catalog says (§5.3). A plugin that cannot be shared is not a choice; it is listed with why, for the
+ *  dialog's body. Nothing starts checked. */
+export function pluginChoices(found: readonly OfferedClaudePlugin[], t: T): { choices: ConfirmChoice[]; refused: string[] } {
+  const choices = found
+    .filter((p) => p.shareable)
+    .map((p) => ({
+      id: `${PLUGIN_CHOICE}${p.id}`,
+      label: t('settings.extensions.plugin.choice', { id: p.id }),
+      ...(typeof p.offeredVersion === 'string' ? { hint: t('settings.extensions.plugin.offeredVersion', { version: p.offeredVersion }) } : {}),
+      defaultChecked: false
+    }))
   const refused = found.flatMap((p) => (p.shareable ? [] : [`${p.id}: ${refusalLabel(p.reason, t)}`]))
-  return {
-    title: t('settings.extensions.plugin.register'),
-    body: [
-      t('settings.extensions.plugin.registerBody'),
-      ...refused,
-      ...unreadable.map((accountId) => t('settings.extensions.plugin.unreadable', { account: labelOf(accountId) }))
-    ].join('\n'),
-    footer: t('settings.extensions.import.footer'),
-    confirmLabel: t('settings.extensions.import.confirm'),
-    choices
-  }
+  return { choices, refused }
 }
+
+/** The plugin ids among the choices the person checked in the register dialog. */
+export const pickedPluginIds = (checked: readonly string[]): string[] =>
+  checked.filter((id) => id.startsWith(PLUGIN_CHOICE)).map((id) => id.slice(PLUGIN_CHOICE.length))
 
 /** The latest job for one plugin id, the Host listing jobs in the order they were asked for. */
 export const latestJob = (jobs: readonly ClaudePluginJob[], target: string): ClaudePluginJob | undefined => jobs.filter((j) => j.target === target).at(-1)

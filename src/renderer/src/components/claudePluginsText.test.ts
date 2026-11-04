@@ -8,7 +8,8 @@ import {
   offConfirmBody,
   ownCopyLines,
   pendingLines,
-  pluginPrompt,
+  pickedPluginIds,
+  pluginChoices,
   refusalLabel,
   rowState,
   updateLabel
@@ -120,25 +121,29 @@ describe('claudePluginsText', () => {
     expect(body).toContain('a@m, b@m')
   })
 
-  it('offers each shareable plugin, and lists the refused ones and the unreadable accounts in the body (P-2)', () => {
+  // K4: the plugins of the account picked in the register menu are choices of its own dialog
+  it('offers each shareable plugin with the version a share would install, and lists the refused ones with why', () => {
     const found: OfferedClaudePlugin[] = [
-      { id: 'superpowers@obra', name: 'superpowers', marketplace: 'obra', holders: [{ accountId: 'c2', version: '7.0.0', enabled: true }, { accountId: 'c4', version: '6.3.0', enabled: false }], source: { source: 'github', repo: 'obra/superpowers-marketplace' }, sourceAccountId: 'c2', shareable: true, offeredVersion: '7.1.0' },
+      { id: 'superpowers@obra', name: 'superpowers', marketplace: 'obra', holders: [{ accountId: 'c2', version: '7.0.0', enabled: true }], source: { source: 'github', repo: 'obra/superpowers-marketplace' }, sourceAccountId: 'c2', shareable: true, offeredVersion: '7.1.0' },
       { id: 'hud@obra', name: 'hud', marketplace: 'obra', holders: [{ accountId: 'c2', version: '1.0.0', enabled: true }], source: { source: 'github', repo: 'obra/superpowers-marketplace' }, sourceAccountId: 'c2', shareable: true, offeredVersion: null },
       { id: 'keyed@corp', name: 'keyed', marketplace: 'corp', holders: [{ accountId: 'c2', version: '1.0.0', enabled: true }], source: null, sourceAccountId: 'c2', shareable: false, reason: 'source-credential', offeredVersion: null }
     ]
-    const p = pluginPrompt(found, ['c4'], labelOf, en)
-    // §5.3: the version a share would install, on a line of its own, and nothing when the catalog does not say
+    const p = pluginChoices(found, en)
+    // The account is the one picked, so no choice names its holders; the version is a line of its own when the catalog says
     expect(p.choices).toEqual([
-      { id: 'superpowers@obra', label: 'superpowers@obra', hint: `claude2@… 7.0.0, claude4@… 6.3.0 (Off)\n${en('settings.extensions.plugin.offeredVersion', { version: '7.1.0' })}`, defaultChecked: false },
-      { id: 'hud@obra', label: 'hud@obra', hint: 'claude2@… 1.0.0', defaultChecked: false }
+      { id: 'plugin:superpowers@obra', label: 'Plugin superpowers@obra', hint: en('settings.extensions.plugin.offeredVersion', { version: '7.1.0' }), defaultChecked: false },
+      { id: 'plugin:hud@obra', label: 'Plugin hud@obra', defaultChecked: false }
     ])
-    expect(pluginPrompt(found, [], labelOf, ko).choices[0].hint?.split('\n')[1]).toBe('설치될 버전 7.1.0')
-    expect(p.body.split('\n')).toEqual([
-      en('settings.extensions.plugin.registerBody'),
-      `keyed@corp: ${en('settings.extensions.plugin.reason.source-credential')}`,
-      en('settings.extensions.plugin.unreadable', { account: 'claude4@…' })
-    ])
-    expect(p.title).toBe('Claude Code plugins')
+    expect(p.choices[1]).not.toHaveProperty('hint')
+    expect(pluginChoices(found, ko).choices[0]).toMatchObject({ label: '플러그인 superpowers@obra', hint: '설치될 버전 7.1.0' })
+    expect(p.refused).toEqual([`keyed@corp: ${en('settings.extensions.plugin.reason.source-credential')}`])
+    expect(pluginChoices([], en)).toEqual({ choices: [], refused: [] })
+  })
+
+  it('names the plugins picked in the dialog, apart from the items', () => {
+    expect(pickedPluginIds(['item:skill:review', 'plugin:superpowers@obra', 'item:mcp:linear', 'plugin:hud@obra'])).toEqual(['superpowers@obra', 'hud@obra'])
+    expect(pickedPluginIds(['item:skill:review'])).toEqual([])
+    expect(pickedPluginIds([])).toEqual([])
   })
 
   // §5.9: the expanded row names the account copies whether the shared plugin is on or off, worded by what runs

@@ -38,6 +38,26 @@ describe('the extensions route, shared Claude plugins', () => {
     ])
   })
 
+  // K4: the register menu asks about one account, and a share that stops to confirm a command repeats with that account
+  it('sends the account for discovery and for a share when one is given, and for nothing else', async () => {
+    const sent: Sent[] = []
+    const route = createExtensionsRoute({
+      call: async (m) => {
+        sent.push(m)
+        return { status: 200, body: { jobId: 'j' } }
+      }
+    })
+    await route.pluginDiscover('c2')
+    await route.pluginShare('review@market', undefined, 'c2')
+    await route.pluginShare('review@market', 'sha-shown', 'c2')
+    const change = PLUGIN_CHANGE_DEADLINE_MS
+    expect(sent).toEqual([
+      { cmd: 'extensions-plugin-discover', args: { accountId: 'c2' }, sessionId: '' },
+      { cmd: 'extensions-plugin-share', args: { id: 'review@market', accountId: 'c2' }, sessionId: '', timeoutMs: change },
+      { cmd: 'extensions-plugin-share', args: { id: 'review@market', acceptCommand: 'sha-shown', accountId: 'c2' }, sessionId: '', timeoutMs: change }
+    ])
+  })
+
   it('carries the reason a refused share is answered with', async () => {
     const route = createExtensionsRoute({ call: async () => ({ status: 400, body: { error: 'form@market cannot be shared', reason: 'user-config' } }) })
     expect(await route.pluginShare('form@market')).toEqual({ ok: false, code: 'INVALID_ARGUMENTS', message: 'form@market cannot be shared', reason: 'user-config' })

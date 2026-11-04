@@ -96,9 +96,7 @@ export const ja: Catalog = {
   'settings.extensions.pluginsLink': 'すべてのアカウントに同じ MCP サーバー・スキル・コマンド・エージェントを渡すには、拡張機能タブを使ってください。',
   // Settings › MCP & Skills, the shared Claude Code plugins (Claude plugin sharing design §5.9)
   'settings.extensions.plugin.group': 'プラグイン',
-  'settings.extensions.plugin.register': 'Claude Code プラグイン',
-  'settings.extensions.plugin.registerBody': 'すべての Claude アカウントで使うプラグインを選んでください。',
-  'settings.extensions.plugin.nothing': 'まだ共有していない Claude Code プラグインはありません。',
+  'settings.extensions.plugin.choice': 'プラグイン {id}',
   'settings.extensions.plugin.unreadable': '{account} のプラグイン一覧を読めませんでした',
   'settings.extensions.plugin.check': '今すぐ確認',
   'settings.extensions.plugin.checking': '確認中…',

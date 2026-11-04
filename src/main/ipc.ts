@@ -4886,9 +4886,9 @@ export function registerIpc(
   ipcMain.handle('extensions.replace', (_e, accountId: unknown, id: unknown) => extensions.replace(accountId as string, id as string))
   // The shared Claude Code plugins (R4): a change answers its job id at once, and the tab polls the list
   ipcMain.handle('extensions.pluginList', () => extensions.pluginList())
-  ipcMain.handle('extensions.pluginDiscover', () => extensions.pluginDiscover())
-  ipcMain.handle('extensions.pluginShare', (_e, id: unknown, acceptCommand: unknown) =>
-    extensions.pluginShare(id as string, typeof acceptCommand === 'string' ? acceptCommand : undefined)
+  ipcMain.handle('extensions.pluginDiscover', (_e, accountId: unknown) => extensions.pluginDiscover(typeof accountId === 'string' ? accountId : undefined))
+  ipcMain.handle('extensions.pluginShare', (_e, id: unknown, acceptCommand: unknown, accountId: unknown) =>
+    extensions.pluginShare(id as string, typeof acceptCommand === 'string' ? acceptCommand : undefined, typeof accountId === 'string' ? accountId : undefined)
   )
   ipcMain.handle('extensions.pluginUpdate', (_e, id: unknown, acceptCommand: unknown) =>
     extensions.pluginUpdate(id as string, typeof acceptCommand === 'string' ? acceptCommand : undefined)

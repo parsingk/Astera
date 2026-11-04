@@ -2038,11 +2038,13 @@ export interface ExtensionsApi {
   /** The shared Claude Code plugins, each with `missing`, `accountCopies` and `requiredBy`, the plugin jobs, and the last
    *  update check. Poll it while a job is queued or running (R4). */
   pluginList(): Promise<PluginsCallAnswer>
-  /** The Claude Code plugins every Claude account holds that are not shared yet: `{ plugins, unreadable }`. */
-  pluginDiscover(): Promise<PluginsCallAnswer>
+  /** The Claude Code plugins that are not shared yet: `{ plugins, unreadable }`, from the one account `accountId` names
+   *  when given (the register menu's pick), else from every Claude account. */
+  pluginDiscover(accountId?: string): Promise<PluginsCallAnswer>
   /** Each answers `{ jobId }` at once; the job's state is in `pluginList`. `acceptCommand` is the sha256 of the command
-   *  a job that ended asking for confirmation showed the person. */
-  pluginShare(id: string, acceptCommand?: string): Promise<PluginsCallAnswer>
+   *  a job that ended asking for confirmation showed the person. `accountId` takes the plugin and its source from that
+   *  one account, as discovery of it offered them. */
+  pluginShare(id: string, acceptCommand?: string, accountId?: string): Promise<PluginsCallAnswer>
   pluginUpdate(id: string, acceptCommand?: string): Promise<PluginsCallAnswer>
   pluginCheck(): Promise<PluginsCallAnswer>
   pluginRemove(id: string): Promise<PluginsCallAnswer>
