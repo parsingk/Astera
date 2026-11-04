@@ -12,6 +12,7 @@ import type {
   OfferedClaudePlugin,
   SharedClaudePlugin
 } from '../../../core/extensions/claudePlugins/types'
+import type { CodexPluginAccountState, CodexPluginFailureCode } from '../../../core/extensions/codexPlugins/types'
 import type { ConfirmChoice } from '../lib/confirm'
 
 type T = (key: MessageKey, params?: MessageParams) => string
@@ -49,6 +50,17 @@ const CODES: Record<ClaudePluginFailureCode, MessageKey> = {
   'store-unreadable': 'settings.extensions.plugin.code.store-unreadable',
   refused: 'settings.extensions.plugin.code.refused',
   'timed-out': 'settings.extensions.plugin.code.timed-out'
+}
+
+// The words for each Codex failure code. `refused` and `timed-out` are also Claude codes, but their Claude wording names
+// claude and Claude Code, so Codex has its own
+const CODEX_CODES: Record<CodexPluginFailureCode, MessageKey> = {
+  'marketplace-taken': 'settings.extensions.plugin.codex.code.marketplace-taken',
+  'codex-unsupported': 'settings.extensions.plugin.codex.code.codex-unsupported',
+  'config-unreadable': 'settings.extensions.plugin.codex.code.config-unreadable',
+  'hooks-unreadable': 'settings.extensions.plugin.codex.code.hooks-unreadable',
+  refused: 'settings.extensions.plugin.codex.code.refused',
+  'timed-out': 'settings.extensions.plugin.codex.code.timed-out'
 }
 
 /** Why a plugin cannot be shared; a reason this build does not know reads as the Host's own word. */
@@ -121,6 +133,53 @@ export function ownCopyLines(p: Pick<ListedClaudePlugin, 'enabled' | 'accountCop
     return t(h.enabled ? 'settings.extensions.plugin.ownCopyOff' : 'settings.extensions.plugin.ownCopyOffDisabled', params)
   })
 }
+
+/** One line per Codex account, in the order the accounts are listed (§5.8), with the outcome row the sync left for it. A
+ *  failure comes first: the Host keeps the installs when only the trust of the hooks failed, and the attention mark has to
+ *  have its reason on the row. Then waiting, but only while this plugin is not at the shared version (the account waits as
+ *  a whole, for any plugin it has to change), then the version Codex has, and otherwise not installed yet. An own plugin of
+ *  the same name that Astera turned off in the account adds a line. A failure Astera decided is worded; one Codex reported,
+ *  or a code this build does not know, is shown as the message. A row of an account no longer listed says nothing. */
+export function codexLines(
+  p: Pick<ListedClaudePlugin, 'name' | 'version'>,
+  rows: readonly CodexPluginAccountState[],
+  codexAccountIds: readonly string[],
+  labelOf: LabelOf,
+  t: T
+): string[] {
+  return codexAccountIds.flatMap((id) => {
+    const row = rows.find((r) => r.accountId === id)
+    const account = labelOf(id)
+    const version = row !== undefined && Object.hasOwn(row.installed, p.name) ? row.installed[p.name] : undefined
+    let state: string
+    if (row?.failure !== undefined) {
+      const { code, message } = row.failure
+      const reason = code !== undefined && Object.hasOwn(CODEX_CODES, code) ? t(CODEX_CODES[code]) : message
+      state = t('settings.extensions.plugin.codex.failed', { account, reason })
+    } else if (row?.waiting === true && version !== p.version) state = t('settings.extensions.plugin.codex.waiting', { account })
+    else if (version !== undefined) state = t('settings.extensions.plugin.codex.installed', { account, version })
+    else state = t('settings.extensions.plugin.codex.pending', { account })
+    const off = (row?.turnedOff ?? []).filter((own) => own.split('@')[0] === p.name).map((own) => t('settings.extensions.plugin.codex.turnedOff', { account, id: own }))
+    return [state, ...off]
+  })
+}
+
+/** How Codex differs for what this plugin brings (§5.8): agents are left out, commands become skills, and Astera trusts
+ *  the hooks. A note for each the plugin has; none from a Host that does not say what it brings. The row shows them only
+ *  while a Codex account exists. */
+export function codexNotes(p: Pick<ListedClaudePlugin, 'name' | 'contents'>, t: T): string[] {
+  const c = p.contents
+  if (c === undefined) return []
+  return [
+    ...(c.agents.length > 0 ? [t('settings.extensions.plugin.codex.noteAgents')] : []),
+    ...(c.commands.length > 0 ? [t('settings.extensions.plugin.codex.noteCommands', { name: p.name })] : []),
+    ...(c.hooks ? [t('settings.extensions.plugin.codex.noteHooks')] : [])
+  ]
+}
+
+/** Whether a Codex account failed, which the collapsed row marks as it does a failed job. A failure belongs to the account,
+ *  not to one plugin, so `p` does not narrow it. */
+export const codexAttention = (_p: Pick<ListedClaudePlugin, 'name'>, rows: readonly CodexPluginAccountState[]): boolean => rows.some((r) => r.failure !== undefined)
 
 /** What Claude Code installed with the plugin, which loads with it (§5.4), one line each. */
 export const dependencyLines = (deps: readonly ClaudePluginDependency[], t: T): string[] =>

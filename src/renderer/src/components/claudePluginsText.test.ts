@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { t as translate, LANGS, type MessageKey, type MessageParams } from '../../../core/i18n'
 import {
+  codexAttention,
+  codexLines,
+  codexNotes,
   contentLines,
   dependencyLines,
   holdersHint,
@@ -15,6 +18,7 @@ import {
   updateLabel
 } from './claudePluginsText'
 import type { ClaudePluginFailureCode, ClaudePluginJob, ClaudePluginRefusal, OfferedClaudePlugin } from '../../../core/extensions/claudePlugins/types'
+import type { CodexPluginAccountState, CodexPluginFailureCode } from '../../../core/extensions/codexPlugins/types'
 
 const en = (key: MessageKey, params?: MessageParams): string => translate('en', key, params)
 const ko = (key: MessageKey, params?: MessageParams): string => translate('ko', key, params)
@@ -27,6 +31,9 @@ const CODES = Object.keys({
   'already-shared': 1, 'not-shared': 1, 'not-shareable': 1, 'marketplace-mismatch': 1, 'home-unreadable': 1, 'not-listed': 1,
   'dependency-missing': 1, 'catalog-unreadable': 1, 'store-unreadable': 1, refused: 1, 'timed-out': 1, 'name-taken': 1
 } satisfies Record<ClaudePluginFailureCode, 1>) as ClaudePluginFailureCode[]
+const CODEX_CODES = Object.keys({
+  'marketplace-taken': 1, 'codex-unsupported': 1, 'config-unreadable': 1, 'hooks-unreadable': 1, refused: 1, 'timed-out': 1
+} satisfies Record<CodexPluginFailureCode, 1>) as CodexPluginFailureCode[]
 
 const LABELS: Record<string, string> = { c2: 'claude2@…', c4: 'claude4@…' }
 const labelOf = (id: string): string => LABELS[id] ?? id
@@ -187,6 +194,119 @@ describe('claudePluginsText', () => {
     expect(contentLines({ skills: [], commands: ['ship'], agents: [], mcpServers: [], hooks: false }, en)).toEqual([en('settings.extensions.plugin.contents.commands', { count: 1, list: 'ship' })])
     // A Host that does not say
     expect(contentLines(undefined, en)).toEqual([])
+  })
+
+  // §5.8: one line per Codex account, in the order the accounts are listed
+  describe('the Codex accounts of a plugin', () => {
+    const plugin = { name: 'superpowers', version: '7.0.0' }
+    const row = (over: Partial<CodexPluginAccountState>): CodexPluginAccountState => ({ accountId: 'x1', installed: {}, waiting: false, turnedOff: [], at: '2026-11-04T00:00:00.000Z', ...over })
+    const names: Record<string, string> = { x1: 'codex1@…', x2: 'codex2@…', x3: 'codex3@…' }
+    const codexLabel = (id: string): string => names[id] ?? id
+
+    it('has words for every Codex failure code in every language', () => {
+      for (const lang of LANGS) {
+        const tr = (key: MessageKey, params?: MessageParams): string => translate(lang, key, params)
+        for (const code of CODEX_CODES) {
+          const [line] = codexLines(plugin, [row({ failure: { message: 'detail', code } })], ['x1'], codexLabel, tr)
+          expect(line, `${lang} ${code}`).not.toMatch(/settings\./)
+          expect(line, `${lang} ${code}`).not.toContain('detail')
+        }
+        for (const key of ['installed', 'waiting', 'pending', 'turnedOff', 'noteAgents', 'noteCommands', 'noteHooks'] as const) {
+          expect(tr(`settings.extensions.plugin.codex.${key}`, { account: 'a', version: 'v', id: 'i', name: 'n' }), `${lang} ${key}`).not.toMatch(/^settings\./)
+        }
+      }
+    })
+
+    it('says installed, waiting and not installed yet, in the order the accounts are listed', () => {
+      const rows = [
+        row({ accountId: 'x2', waiting: true }),
+        row({ accountId: 'x1', installed: { superpowers: '7.0.0' } })
+      ]
+      // x3 has no row at all
+      expect(codexLines(plugin, rows, ['x1', 'x2', 'x3'], codexLabel, ko)).toEqual([
+        'codex1@… (Codex): 7.0.0 설치됨',
+        'codex2@… (Codex): 이 계정의 세션이 끝나면 적용됩니다',
+        'codex3@… (Codex): 아직 설치하지 않았습니다'
+      ])
+      expect(codexLines(plugin, rows, ['x1', 'x2', 'x3'], codexLabel, en)).toEqual([
+        'codex1@… (Codex): 7.0.0 installed',
+        "codex2@… (Codex): applies when this account's sessions end",
+        'codex3@… (Codex): not installed yet'
+      ])
+    })
+
+    it('says not installed yet for a row that holds other plugins but not this one', () => {
+      expect(codexLines(plugin, [row({ installed: { other: '1.0.0' } })], ['x1'], codexLabel, en)).toEqual(['codex1@… (Codex): not installed yet'])
+    })
+
+    it('says the version Codex has, even one other than the shared version', () => {
+      expect(codexLines(plugin, [row({ installed: { superpowers: '6.3.0' } })], ['x1'], codexLabel, en)).toEqual(['codex1@… (Codex): 6.3.0 installed'])
+    })
+
+    // The Host keeps the installs when only the trust of the hooks failed, and the row's attention mark points at the line
+    it('says a failure even where the plugin is installed, so the attention mark has its reason', () => {
+      const failed = row({ installed: { superpowers: '7.0.0' }, failure: { message: 'app-server timed out', code: 'hooks-unreadable' } })
+      expect(codexLines(plugin, [failed], ['x1'], codexLabel, en)).toEqual(['codex1@… (Codex): the hooks could not be listed, so they were not trusted'])
+    })
+
+    it('says a waiting account is waiting for this plugin only when it is not at the shared version yet', () => {
+      expect(codexLines(plugin, [row({ installed: { superpowers: '6.3.0' }, waiting: true })], ['x1'], codexLabel, en)).toEqual([
+        "codex1@… (Codex): applies when this account's sessions end"
+      ])
+      // The account waits for another plugin; this one is installed at the shared version
+      expect(codexLines(plugin, [row({ installed: { superpowers: '7.0.0' }, waiting: true })], ['x1'], codexLabel, en)).toEqual(['codex1@… (Codex): 7.0.0 installed'])
+    })
+
+    it('words a failure Astera decided, and shows Codex’s own message as it is when there is no code or this build does not know it', () => {
+      const lines = (failure: CodexPluginAccountState['failure'], t: typeof en): string[] => codexLines(plugin, [row({ failure })], ['x1'], codexLabel, t)
+      expect(lines({ message: 'm', code: 'marketplace-taken' }, ko)).toEqual(['codex1@… (Codex): 같은 이름의 마켓플레이스가 다른 곳에서 이미 등록되어 있습니다'])
+      expect(lines({ message: 'm', code: 'codex-unsupported' }, en)).toEqual(['codex1@… (Codex): this Codex has no plugin command (checked on 0.160)'])
+      expect(lines({ message: 'm', code: 'config-unreadable' }, ko)).toEqual(['codex1@… (Codex): config.toml을 읽지 못했습니다'])
+      expect(lines({ message: 'm', code: 'hooks-unreadable' }, ko)).toEqual(['codex1@… (Codex): 훅 목록을 읽지 못해 훅을 신뢰하지 못했습니다'])
+      // The Codex wording: the Claude wording of the same words names claude
+      expect(lines({ message: 'm', code: 'refused' }, en)).toEqual(['codex1@… (Codex): Nothing was run: it holds characters that cannot be passed to codex on this computer'])
+      expect(lines({ message: 'm', code: 'timed-out' }, ko)).toEqual(['codex1@… (Codex): Codex 가 제시간에 끝나지 않아 멈췄습니다'])
+      expect(lines({ message: 'codex plugin add exited with 2' }, en)).toEqual(['codex1@… (Codex): codex plugin add exited with 2'])
+      expect(lines({ message: 'newer words', code: 'brand-new' as CodexPluginFailureCode }, en)).toEqual(['codex1@… (Codex): newer words'])
+    })
+
+    it('adds a line for each own plugin of the same name that Astera turned off', () => {
+      const turned = row({ installed: { superpowers: '7.0.0' }, turnedOff: ['superpowers@openai-curated', 'other@openai-curated', 'superpowers-extras@x'] })
+      expect(codexLines(plugin, [turned], ['x1'], codexLabel, ko)).toEqual([
+        'codex1@… (Codex): 7.0.0 설치됨',
+        'codex1@… (Codex): 계정에 있던 superpowers@openai-curated를 껐습니다'
+      ])
+      expect(codexLines(plugin, [turned], ['x1'], codexLabel, en)[1]).toBe("codex1@… (Codex): turned off the account's own superpowers@openai-curated")
+    })
+
+    it('says nothing without a Codex account, and nothing of a row whose account is gone', () => {
+      expect(codexLines(plugin, [row({ accountId: 'gone', installed: { superpowers: '7.0.0' } })], [], codexLabel, en)).toEqual([])
+      expect(codexLines(plugin, [row({ accountId: 'gone', installed: { superpowers: '7.0.0' } })], ['x1'], codexLabel, en)).toEqual(['codex1@… (Codex): not installed yet'])
+    })
+
+    it('notes what Codex does differently, a note for each of agents, commands and hooks the plugin has', () => {
+      const all = { ...plugin, contents: { skills: ['a'], commands: ['ship'], agents: ['critic'], mcpServers: [], hooks: true } }
+      expect(codexNotes(all, ko)).toEqual([
+        'Codex에서는 에이전트가 빠집니다',
+        'Codex에서는 명령이 superpowers:source-command-<이름> 스킬이 됩니다',
+        '훅은 Astera가 Codex 계정마다 신뢰해 두었습니다'
+      ])
+      expect(codexNotes(all, en)).toEqual([
+        'Codex leaves the agents out',
+        'In Codex, commands become skills named superpowers:source-command-<name>',
+        'Astera has trusted the hooks in each Codex account'
+      ])
+      expect(codexNotes({ ...plugin, contents: { skills: ['a'], commands: [], agents: [], mcpServers: ['m'], hooks: false } }, en)).toEqual([])
+      expect(codexNotes({ ...plugin, contents: { skills: [], commands: [], agents: ['critic'], mcpServers: [], hooks: false } }, en)).toEqual(['Codex leaves the agents out'])
+      // A Host that does not say what it brings
+      expect(codexNotes(plugin, en)).toEqual([])
+    })
+
+    it('asks for a look when any Codex account failed', () => {
+      expect(codexAttention(plugin, [row({}), row({ accountId: 'x2', failure: { message: 'm' } })])).toBe(true)
+      expect(codexAttention(plugin, [row({}), row({ accountId: 'x2', waiting: true })])).toBe(false)
+      expect(codexAttention(plugin, [])).toBe(false)
+    })
   })
 
   it('says where a job stands for a plugin not in the list yet, by its latest job', () => {

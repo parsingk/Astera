@@ -189,7 +189,11 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
           </div>
         )
       })}
-      <ClaudePluginsSection plugins={claudePlugins} labelOf={labelOf} />
+      <ClaudePluginsSection
+        plugins={claudePlugins}
+        labelOf={labelOf}
+        codexAccountIds={accounts.filter((a) => providerOf(a) === 'codex').map((a) => a.id)}
+      />
     </div>
   )
 }

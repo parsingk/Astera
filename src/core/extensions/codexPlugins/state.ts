@@ -11,25 +11,9 @@ import path from 'node:path'
 import { writeThroughTmp } from '../../accounts/fileQueue'
 import { extensionPaths } from '../../profile/paths'
 import { readStoreFile } from '../../storeFile'
+import type { CodexPluginAccountState } from './types'
 
-export type CodexPluginFailureCode =
-  | 'marketplace-taken'
-  | 'codex-unsupported'
-  | 'config-unreadable'
-  | 'hooks-unreadable'
-  | 'refused'
-  | 'timed-out'
-
-export interface CodexPluginAccountState {
-  accountId: string
-  /** Plugin name to the version Codex reports installed from this profile's marketplace. */
-  installed: Record<string, string>
-  waiting: boolean
-  failure?: { message: string; code?: CodexPluginFailureCode }
-  /** Own plugin ids (`name@marketplace`) Astera set to enabled = false (C1). */
-  turnedOff: string[]
-  at: string
-}
+export type { CodexPluginAccountState, CodexPluginFailureCode } from './types'
 
 /** The outcome rows; empty when the file is missing or its text is not `{ version: 1, accounts: [...] }`. Rejects with the
  *  read error when the file is there but could not be read. */

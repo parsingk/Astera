@@ -63,13 +63,20 @@ vi.mock('../lib/confirm', () => ({ confirmModal, isConfirmOpen }))
 const toastError = vi.hoisted(() => vi.fn())
 vi.mock('../lib/toast', () => ({ toast: { error: toastError, info: vi.fn(), success: vi.fn() } }))
 
-import { useClaudePlugins, ClaudePluginsSection, type ClaudePlugins } from './ClaudePluginsSection'
+import { useClaudePlugins, ClaudePluginRow, ClaudePluginsSection, type ClaudePlugins } from './ClaudePluginsSection'
 import type { ClaudePluginJob } from '../../../core/extensions/claudePlugins/types'
+import type { CodexPluginAccountState } from '../../../core/extensions/codexPlugins/types'
+import type { ListedClaudePlugin } from './claudePluginsText'
 
 type Call = Mock<(...args: any[]) => any>
 let api: { extensions: Record<'pluginList' | 'pluginShare' | 'pluginUpdate', Call> }
 const answer = (body: Record<string, unknown>) => ({ ok: true as const, body })
 const job = (over: Partial<ClaudePluginJob>): ClaudePluginJob => ({ id: 'j', kind: 'share', target: 'superpowers@obra', state: 'running', startedAt: '2026-11-02T00:00:00.000Z', ...over })
+const listed = (over: Partial<ListedClaudePlugin> = {}): ListedClaudePlugin => ({
+  id: 'superpowers@obra', name: 'superpowers', marketplace: 'obra', source: { source: 'github', repo: 'obra/superpowers-marketplace' }, version: '7.0.0',
+  installPath: '/shared/superpowers', dependencies: [], importedFrom: 'c2', enabled: true, addedAt: '2026-11-01T00:00:00.000Z', lastUpdated: '2026-11-01T00:00:00.000Z',
+  fingerprint: 'f', missing: false, accountCopies: [], requiredBy: [], ...over
+})
 /** Lets every answer already given arrive. */
 const settle = async (): Promise<void> => void (await vi.advanceTimersByTimeAsync(0))
 
@@ -121,6 +128,19 @@ describe('useClaudePlugins', () => {
     hooks.render(useClaudePlugins)
     await vi.advanceTimersByTimeAsync(10_000)
     expect(api.extensions.pluginList).toHaveBeenCalledTimes(1)
+  })
+
+  // §5.8: the Host's list carries each Codex account's outcome row, and the rows are kept beside the plugins
+  it('keeps the Codex account rows of the list, and none from a Host that sends none', async () => {
+    const rows: CodexPluginAccountState[] = [{ accountId: 'x1', installed: { superpowers: '7.0.0' }, waiting: false, turnedOff: [], at: '2026-11-04T00:00:00.000Z' }]
+    api.extensions.pluginList.mockResolvedValueOnce(answer({ plugins: [], jobs: [], codexAccounts: rows })).mockResolvedValue(answer({ plugins: [], jobs: [] }))
+    hooks.render(useClaudePlugins)
+    await settle()
+    expect(hooks.render(useClaudePlugins).codexAccounts).toEqual(rows)
+
+    // Read again, from a Host that does not say
+    await hooks.render(useClaudePlugins).act(async () => answer({}))
+    expect(hooks.render(useClaudePlugins).codexAccounts).toEqual([])
   })
 
   it('stops reading when the tab goes', async () => {
@@ -238,16 +258,86 @@ describe('useClaudePlugins', () => {
 })
 
 describe('ClaudePluginsSection', () => {
-  const plugins: ClaudePlugins = { listed: [], jobs: [], lastCheck: undefined, failure: null, busy: false, act: async () => {}, share: async () => {} }
+  const plugins: ClaudePlugins = { listed: [], codexAccounts: [], jobs: [], lastCheck: undefined, failure: null, busy: false, act: async () => {}, share: async () => {} }
+  const section = (over: Partial<ClaudePlugins> = {}, codexAccountIds: string[] = []): React.JSX.Element | null =>
+    hooks.render(() => ClaudePluginsSection({ plugins: { ...plugins, ...over }, labelOf: (id) => id, codexAccountIds }))
 
   it('draws nothing while nothing is shared and no job has anything to say', () => {
-    expect(hooks.render(() => ClaudePluginsSection({ plugins, labelOf: (id) => id }))).toBeNull()
+    expect(section()).toBeNull()
     // No Host: the tab says so above
-    expect(hooks.render(() => ClaudePluginsSection({ plugins: { ...plugins, failure: { ok: false, code: 'HOST_NOT_RUNNING', message: 'x' } }, labelOf: (id) => id }))).toBeNull()
+    expect(section({ failure: { ok: false, code: 'HOST_NOT_RUNNING', message: 'x' } })).toBeNull()
   })
 
   it('draws the group for a share under way before anything is shared', () => {
-    const tree = hooks.render(() => ClaudePluginsSection({ plugins: { ...plugins, jobs: [job({ id: 's1', state: 'running' })] }, labelOf: (id) => id }))
+    const tree = section({ jobs: [job({ id: 's1', state: 'running' })] })
     expect(JSON.stringify(tree)).toContain('superpowers@obra')
+  })
+
+  it('hands each row the Codex account ids and the outcome rows', () => {
+    const codexAccounts: CodexPluginAccountState[] = [{ accountId: 'x1', installed: {}, waiting: true, turnedOff: [], at: '2026-11-04T00:00:00.000Z' }]
+    const tree = section({ listed: [listed()], codexAccounts }, ['x1', 'x2']) as React.JSX.Element
+    const rows: React.JSX.Element[] = []
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) return node.forEach(walk)
+      const el = node as React.JSX.Element | null
+      if (el === null || typeof el !== 'object') return
+      if (el.type === ClaudePluginRow) rows.push(el)
+      walk((el.props as { children?: unknown }).children)
+    }
+    walk(tree)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].props).toMatchObject({ codexAccountIds: ['x1', 'x2'], codexRows: codexAccounts })
+  })
+})
+
+// §5.8: under the existing blocks of the expanded row, a note on how Codex differs and one line per Codex account; the
+// collapsed row asks for a look when an account failed
+describe('ClaudePluginRow', () => {
+  const failed: CodexPluginAccountState = { accountId: 'x1', installed: { superpowers: '7.0.0' }, waiting: false, failure: { message: 'boom', code: 'hooks-unreadable' }, turnedOff: [], at: '2026-11-04T00:00:00.000Z' }
+  const installed: CodexPluginAccountState = { accountId: 'x1', installed: { superpowers: '7.0.0' }, waiting: false, turnedOff: [], at: '2026-11-04T00:00:00.000Z' }
+  const row = (over: Partial<Parameters<typeof ClaudePluginRow>[0]> = {}): string =>
+    JSON.stringify(
+      hooks.render(() =>
+        ClaudePluginRow({ plugin: listed(), job: undefined, open: true, onOpen: () => {}, labelOf: (id) => id, busy: false, codexAccountIds: ['x1'], codexRows: [installed], onToggle: () => {}, onUpdate: () => {}, onRemove: () => {}, ...over })
+      )
+    )
+  const ATTENTION = 'settings.extensions.attention'
+  const INSTALLED = 'settings.extensions.plugin.codex.installed {\\"account\\":\\"x1\\",\\"version\\":\\"7.0.0\\"}'
+
+  it('shows a line for each Codex account after the accounts’ own copies', () => {
+    const out = row({ plugin: listed({ accountCopies: [{ accountId: 'c2', version: '7.0.0', enabled: true }] }), codexAccountIds: ['x1', 'x2'] })
+    expect(out).toContain(INSTALLED)
+    expect(out).toContain('settings.extensions.plugin.codex.pending {\\"account\\":\\"x2\\"}')
+    expect(out.indexOf('settings.extensions.plugin.ownCopy')).toBeGreaterThan(-1)
+    expect(out.indexOf(INSTALLED)).toBeGreaterThan(out.indexOf('settings.extensions.plugin.ownCopy'))
+  })
+
+  it('puts the notes before the lines, each only for what the plugin has', () => {
+    const out = row({ plugin: listed({ contents: { skills: [], commands: ['ship'], agents: ['critic'], mcpServers: [], hooks: false } }) })
+    expect(out.indexOf('plugin.codex.noteAgents')).toBeGreaterThan(-1)
+    expect(out.indexOf('plugin.codex.noteCommands')).toBeGreaterThan(out.indexOf('plugin.codex.noteAgents'))
+    expect(out.indexOf(INSTALLED)).toBeGreaterThan(out.indexOf('plugin.codex.noteCommands'))
+    expect(out).not.toContain('plugin.codex.noteHooks')
+  })
+
+  it('shows nothing of Codex while no Codex account exists', () => {
+    const out = row({ plugin: listed({ contents: { skills: [], commands: ['ship'], agents: ['critic'], mcpServers: [], hooks: true } }), codexAccountIds: [], codexRows: [installed] })
+    expect(out).not.toContain('plugin.codex.')
+  })
+
+  it('shows nothing of Codex while the row is collapsed', () => {
+    expect(row({ open: false })).not.toContain('plugin.codex.')
+  })
+
+  it('marks attention for a failed Codex account, and says why when opened', () => {
+    expect(row({ open: false, codexRows: [failed] })).toContain(ATTENTION)
+    const out = row({ codexRows: [failed] })
+    expect(out).toContain(ATTENTION)
+    expect(out).toContain('settings.extensions.plugin.codex.failed {\\"account\\":\\"x1\\",\\"reason\\":\\"settings.extensions.plugin.codex.code.hooks-unreadable\\"}')
+  })
+
+  it('marks no attention for Codex accounts that are installed or waiting', () => {
+    expect(row({ open: false })).not.toContain(ATTENTION)
+    expect(row({ open: false, codexRows: [{ ...installed, installed: {}, waiting: true }] })).not.toContain(ATTENTION)
   })
 })

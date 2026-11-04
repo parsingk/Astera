@@ -1,11 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PluginsCallAnswer } from '../../../core/types'
 import type { ClaudePluginJob, ClaudePluginStore } from '../../../core/extensions/claudePlugins/types'
+import type { CodexPluginAccountState } from '../../../core/extensions/codexPlugins/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
 import { confirmModal, isConfirmOpen } from '../lib/confirm'
 import { failureLine } from './extensionsText'
 import {
+  codexAttention,
+  codexLines,
+  codexNotes,
   contentLines,
   dependencyLines,
   isLiveJob,
@@ -43,6 +47,8 @@ const awaiting = new Map<string, string | undefined>()
 export interface ClaudePlugins {
   /** Null until the Host first answers. */
   listed: ListedClaudePlugin[] | null
+  /** What the Codex sync left for each Codex account (§5.8); none from a Host that does not say. */
+  codexAccounts: CodexPluginAccountState[]
   jobs: ClaudePluginJob[]
   lastCheck: LastCheck
   failure: Failure | null
@@ -61,6 +67,7 @@ export interface ClaudePlugins {
 export function useClaudePlugins(): ClaudePlugins {
   const { t } = useI18n()
   const [listed, setListed] = useState<ListedClaudePlugin[] | null>(null)
+  const [codexAccounts, setCodexAccounts] = useState<CodexPluginAccountState[]>([])
   const [jobs, setJobs] = useState<ClaudePluginJob[]>([])
   const [lastCheck, setLastCheck] = useState<LastCheck>(undefined)
   const [failure, setFailure] = useState<Failure | null>(null)
@@ -73,6 +80,7 @@ export function useClaudePlugins(): ClaudePlugins {
     if (r.ok) {
       setFailure(null)
       setListed(arr<ListedClaudePlugin>(r.body.plugins))
+      setCodexAccounts(arr<CodexPluginAccountState>(r.body.codexAccounts))
       setJobs(arr<ClaudePluginJob>(r.body.jobs))
       setLastCheck(r.body.lastCheck as LastCheck)
     } else setFailure(r)
@@ -136,13 +144,22 @@ export function useClaudePlugins(): ClaudePlugins {
     })()
   }, [jobs])
 
-  return { listed, jobs, lastCheck, failure, busy, act, share }
+  return { listed, codexAccounts, jobs, lastCheck, failure, busy, act, share }
 }
 
 /** The Plugins group of Settings › MCP & Skills (Claude plugin sharing design §5.9): the Claude Code plugins shared with
  *  every Claude account, one collapsed row each as the other kinds have, the update check, and where each plugin job
- *  stands. Nothing is drawn while nothing is shared and no job has anything to say. */
-export function ClaudePluginsSection({ plugins, labelOf }: { plugins: ClaudePlugins; labelOf: LabelOf }): React.JSX.Element | null {
+ *  stands. Nothing is drawn while nothing is shared and no job has anything to say. `codexAccountIds` are the Codex
+ *  accounts Astera lists, which each row draws a line for. */
+export function ClaudePluginsSection({
+  plugins,
+  labelOf,
+  codexAccountIds
+}: {
+  plugins: ClaudePlugins
+  labelOf: LabelOf
+  codexAccountIds: readonly string[]
+}): React.JSX.Element | null {
   const { t } = useI18n()
   const { jobs, lastCheck, failure, busy, act } = plugins
   /** The rows opened, by plugin id. */
@@ -209,6 +226,8 @@ export function ClaudePluginsSection({ plugins, labelOf }: { plugins: ClaudePlug
               open={open.has(p.id)}
               onOpen={() => toggleOpen(p.id)}
               labelOf={labelOf}
+              codexAccountIds={codexAccountIds}
+              codexRows={plugins.codexAccounts}
               busy={busy}
               onToggle={() => void (p.enabled ? turnOff(p) : act(() => window.api.extensions.pluginSetEnabled(p.id, true)))}
               onUpdate={() => void act(() => window.api.extensions.pluginUpdate(p.id))}
@@ -222,15 +241,18 @@ export function ClaudePluginsSection({ plugins, labelOf }: { plugins: ClaudePlug
 }
 
 /** One shared plugin, as ExtensionRow draws an item: its name, and marks for off, an update, a job under way and
- *  anything that needs a look; opened, its marketplace, version and last update, what went wrong, what it brings, what
- *  was installed with it, each account's own copy as on or off leaves it, and its actions. Update is offered when there
- *  is one, or to install missing files again. */
-function ClaudePluginRow({
+ *  anything that needs a look, a failed Codex account among them; opened, its marketplace, version and last update, what
+ *  went wrong, what it brings, what was installed with it, each account's own copy as on or off leaves it, how Codex
+ *  differs and each Codex account's state (§5.8), and its actions. Update is offered when there is one, or to install
+ *  missing files again. */
+export function ClaudePluginRow({
   plugin: p,
   job,
   open,
   onOpen,
   labelOf,
+  codexAccountIds,
+  codexRows,
   busy,
   onToggle,
   onUpdate,
@@ -242,6 +264,10 @@ function ClaudePluginRow({
   open: boolean
   onOpen: () => void
   labelOf: LabelOf
+  /** The Codex accounts Astera lists, one line each. */
+  codexAccountIds: readonly string[]
+  /** What the Codex sync left for each Codex account. */
+  codexRows: readonly CodexPluginAccountState[]
   busy: boolean
   onToggle: () => void
   onUpdate: () => void
@@ -263,15 +289,21 @@ function ClaudePluginRow({
         {!p.enabled && <span className="plugin-status">{t('settings.extensions.off')}</span>}
         {state === 'update' && <span className="plugin-status is-starting">{updateLabel(p.version, p.update?.version ?? null, t)}</span>}
         {live && <span className="plugin-status is-starting">{line}</span>}
-        {(state === 'missing' || stopped) && <span className="plugin-status is-failed">{t('settings.extensions.attention')}</span>}
+        {(state === 'missing' || stopped || codexAttention(p, codexRows)) && <span className="plugin-status is-failed">{t('settings.extensions.attention')}</span>}
       </button>
       {open && (
         <div className="ext-row-body">
           <span className="settings-hint">{t('settings.extensions.plugin.facts', { marketplace: p.marketplace, version: p.version, time: when(p.lastUpdated) })}</span>
           {state === 'missing' && <span className="settings-hint is-warning">{t('settings.extensions.plugin.missing')}</span>}
           {stopped && <span className="settings-hint is-warning">{line}</span>}
-          {/* What it brings (§5.9), what was installed with it (§5.4), and each account's own copy (P4): one block each */}
-          {[contentLines(p.contents, t), dependencyLines(p.dependencies, t), ownCopyLines(p, labelOf, t)].map(
+          {/* What it brings (§5.9), what was installed with it (§5.4), each account's own copy (P4), and the Codex accounts
+              (§5.8), whose notes show only while one is listed: one block each */}
+          {[
+            contentLines(p.contents, t),
+            dependencyLines(p.dependencies, t),
+            ownCopyLines(p, labelOf, t),
+            [...(codexAccountIds.length > 0 ? codexNotes(p, t) : []), ...codexLines(p, codexRows, codexAccountIds, labelOf, t)]
+          ].map(
             (lines, block) =>
               lines.length > 0 && (
                 <div key={block} className="settings-hint">
