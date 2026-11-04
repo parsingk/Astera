@@ -258,6 +258,15 @@ const flagsOf = (cmd: PublicCommand): DocFlag[] =>
 // 줄이 어떤 모양인지는 아무것도 지키지 않는다 — 두 글은 읽는 사람이 다르고, 문구까지 묶으면 옳은
 // 문서를 고쳤다는 이유로 테스트가 깨진다(이 파일의 명령 가드가 자리표시자를 비교하지 않는 것과
 // 같은 판단이다).
+// ext list 의 도움말은 그 명령이 답하는 공유 플러그인 필드의 이름을 다 말한다(Codex plugin sharing 최종 리뷰 D3).
+// 문구가 아니라 필드 이름만 본다.
+describe('cliUsage — ext list 도움말은 답하는 플러그인 필드를 말한다', () => {
+  it('claudePlugins 옆에 codexPluginAccounts 와 codexPluginAccountsError 도 있다', () => {
+    const detail = USAGE['ext-list'].detail ?? ''
+    for (const field of ['claudePlugins', 'claudePluginsError', 'codexPluginAccounts', 'codexPluginAccountsError']) expect(detail, field).toContain(`\`${field}\``)
+  })
+})
+
 describe('cliUsage — 전역 플래그는 사용법과 문서에도 있다', () => {
   const globals = agentContext().globalFlags.map((f) => f.name)
   const doc = readFileSync(docPath, 'utf8')

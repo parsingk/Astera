@@ -12,6 +12,10 @@ import { readClaudePlugins, updateClaudePlugins } from '../../core/extensions/cl
 import type { PluginCliResult, PluginCliRun } from '../../core/extensions/claudePlugins/cli'
 import { sweepOrphanedClaudePlugins, type ClaudePluginJob } from '../../core/extensions/claudePlugins/operations'
 import type { MarketplaceSource, SharedClaudePlugin } from '../../core/extensions/claudePlugins/types'
+import type { CodexPluginCliRun } from '../../core/extensions/codexPlugins/cli'
+import type { CodexHooksList } from '../../core/extensions/codexPlugins/hooks'
+import { syncCodexPlugins } from '../../core/extensions/codexPlugins/sync'
+import { writeCodexPluginAccounts, type CodexPluginAccountState } from '../../core/extensions/codexPlugins/state'
 import type { McpExtension } from '../../core/extensions/types'
 import { createHostExtensions } from './commands'
 import type { Account } from '../../core/types'
@@ -20,6 +24,13 @@ import type { Account } from '../../core/types'
 vi.mock('../../core/extensions/claudePlugins/operations', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../core/extensions/claudePlugins/operations')>()
   return { ...real, sweepOrphanedClaudePlugins: vi.fn(real.sweepOrphanedClaudePlugins) }
+})
+
+// The Codex sync, counted: what it does is the sync's own tests'; here it is when the Host asks for it. It answers no rows
+// unless a test says otherwise.
+vi.mock('../../core/extensions/codexPlugins/sync', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../core/extensions/codexPlugins/sync')>()
+  return { ...real, syncCodexPlugins: vi.fn(async () => []) }
 })
 
 const dirs: string[] = []
@@ -207,6 +218,7 @@ describe('createHostExtensions, the Gateway’s errors', () => {
 // folder, then checks for updates, then checks again every day. `claude plugin …` is a fake that answers per argument
 // list; what Claude Code would leave in Astera's plugin folder is written by hand.
 const SOURCE: MarketplaceSource = { source: 'github', repo: 'acme/market' }
+const OTHER: MarketplaceSource = { source: 'github', repo: 'acme/other' }
 const EARLIER = '2026-10-01T00:00:00.000Z'
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -242,7 +254,12 @@ function fakeRun(script: Script) {
 }
 
 /** An account's plugins at user scope, all from marketplace `market` (SOURCE), as Claude Code records them. */
-async function holding(configDir: string, plugins: Record<string, { version: string; manifest?: object }>, enabled: Record<string, boolean> = {}): Promise<void> {
+async function holding(
+  configDir: string,
+  plugins: Record<string, { version: string; manifest?: object }>,
+  enabled: Record<string, boolean> = {},
+  source: MarketplaceSource = SOURCE
+): Promise<void> {
   const installed: Record<string, object[]> = {}
   for (const [id, p] of Object.entries(plugins)) {
     const [name, marketplace] = id.split('@')
@@ -253,7 +270,7 @@ async function holding(configDir: string, plugins: Record<string, { version: str
   await write(path.join(configDir, 'plugins', 'installed_plugins.json'), JSON.stringify({ version: 2, plugins: installed }))
   await write(
     path.join(configDir, 'plugins', 'known_marketplaces.json'),
-    JSON.stringify({ market: { source: SOURCE, installLocation: path.join(configDir, 'plugins', 'marketplaces', 'market') } })
+    JSON.stringify({ market: { source, installLocation: path.join(configDir, 'plugins', 'marketplaces', 'market') } })
   )
   await write(path.join(configDir, 'settings.json'), JSON.stringify({ enabledPlugins: enabled }))
 }
@@ -296,7 +313,10 @@ async function orphanedVersion(pluginHome: string): Promise<string> {
   return dir
 }
 
-async function pluginRig() {
+/** `codex`: the Host is given the three things that make it sync Codex accounts, a runner and a hooks list that are never
+ *  called (the sync is mocked), and the accounts whose Codex session is alive (`live`, read at each sync). `second`: the
+ *  Host reads a second Claude account too. */
+async function pluginRig(o: { codex?: boolean; second?: boolean } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-ext-plugin-'))
   dirs.push(root)
   const profileDir = path.join(root, 'profile')
@@ -313,15 +333,31 @@ async function pluginRig() {
     stopServer: vi.fn(async (_id: string) => {})
   }
   const logs: string[] = []
-  const ext = createHostExtensions({ profileDir, homeDir: home, readAccounts: async () => [account], log: (l) => logs.push(l), gateway, claudePluginRun: fake.run })
+  const second: Account = { ...account, id: 'acc_2', label: 'b', configDir: path.join(home, '.claude-b') }
+  if (o.second) await fs.mkdir(second.configDir, { recursive: true })
+  const accounts = o.second ? [account, second] : [account]
+  const codexRun: CodexPluginCliRun = async () => ({ code: 0, json: null, stdout: '', stderr: '', timedOut: false })
+  const codexHooks: CodexHooksList = async () => []
+  const live = new Set<string>()
+  const syncs = vi.mocked(syncCodexPlugins)
+  syncs.mockReset()
+  const syncCount = (): number => syncs.mock.calls.length
+  const deps = { profileDir, homeDir: home, readAccounts: async () => accounts, log: (l: string) => logs.push(l), gateway, claudePluginRun: fake.run }
+  const codexDeps = { codexPluginRun: codexRun, codexHooks, liveAccountIds: async () => new Set(live) }
+  const ext = createHostExtensions({ ...deps, ...(o.codex ? codexDeps : {}) })
   const call = (cmd: string, args: Record<string, unknown> = {}, extra: { role?: 'app' | 'cli' | 'mcp'; agentRefusal?: string } = {}) => {
     const marks = { effects: 0 }
     return ext.command({ cmd, args, role: extra.role ?? 'app', ...(extra.agentRefusal ? { agentRefusal: extra.agentRefusal } : {}), marks }).then((r) => ({ ...r, marks }))
   }
   const seed = (plugins: SharedClaudePlugin[]) => updateClaudePlugins(profileDir, (s) => ({ ...s, plugins }))
-  const listed = async () => (await call('extensions-plugin-list')).body as { plugins: (SharedClaudePlugin & { missing: boolean; requiredBy: string[] })[]; jobs: ClaudePluginJob[] }
+  const listed = async () =>
+    (await call('extensions-plugin-list')).body as {
+      plugins: (SharedClaudePlugin & { missing: boolean; requiredBy: string[] })[]
+      jobs: ClaudePluginJob[]
+      codexAccounts: CodexPluginAccountState[]
+    }
   const jobs = async () => (await listed()).jobs
-  return { profileDir, account, pluginHome, script, fake, gateway, ext, call, seed, listed, jobs, logs }
+  return { profileDir, homeDir: home, account, second, pluginHome, script, fake, gateway, ext, call, seed, listed, jobs, logs, deps, codexDeps, codexRun, codexHooks, live, syncs, syncCount }
 }
 
 describe('createHostExtensions, shared Claude plugins', () => {
@@ -360,7 +396,8 @@ describe('createHostExtensions, shared Claude plugins', () => {
           contents: { skills: [], commands: [], agents: [], mcpServers: [], hooks: false }
         }
       ],
-      jobs: [expect.objectContaining({ id: (checked.body as { jobId: string }).jobId, kind: 'check', state: 'running' })]
+      jobs: [expect.objectContaining({ id: (checked.body as { jobId: string }).jobId, kind: 'check', state: 'running' })],
+      codexAccounts: []
     })
     expect(h.gateway.sync).not.toHaveBeenCalled()
 
@@ -669,6 +706,493 @@ describe('createHostExtensions, shared Claude plugins', () => {
       stop()
     })
     expect(unhandled).toEqual([])
+  })
+})
+
+// Codex plugin sharing design §5.3: after every plugin change the Host brings the Codex accounts in line, on the plugin jobs'
+// queue so it never runs beside a share, update, remove or the start-up sweep. The sync itself is mocked and counted: what
+// matters here is when the Host asks for it, and what it hands over.
+const quiet = (): Promise<void> => new Promise((r) => setTimeout(r, 100))
+const CODEX_ROW: CodexPluginAccountState = { accountId: 'acc_c', installed: { review: '1.0.0' }, waiting: false, turnedOff: [], at: EARLIER }
+
+/** What `claude plugin` answers for the share of review@market that `holding` made discoverable. */
+function scriptShare(h: { pluginHome: string; script: Script }): void {
+  const rows: object[] = []
+  h.script['plugin marketplace add acme/market'] = async () => {
+    await addMarketplace(h.pluginHome)
+    return okOutcome
+  }
+  h.script['plugin list'] = () => ({ code: 0, json: [...rows] })
+  h.script['plugin install review@market'] = async () => {
+    const installPath = path.join(h.pluginHome, 'plugins', 'cache', 'market', 'review', '1.0.0')
+    await write(path.join(installPath, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'review', version: '1.0.0' }))
+    rows.push({ id: 'review@market', version: '1.0.0', scope: 'user', enabled: true, installPath })
+    return okOutcome
+  }
+}
+
+describe('createHostExtensions, Codex accounts', () => {
+  it('a share that ends done runs one Codex sync', async () => {
+    const h = await pluginRig({ codex: true })
+    await holding(h.account.configDir, { 'review@market': { version: '1.0.0' } })
+    scriptShare(h)
+    expect((await h.call('extensions-plugin-share', { id: 'review@market' })).status).toBe(200)
+    await waitLong(() => expect(h.syncCount()).toBe(1))
+    await quiet()
+    expect(h.syncCount()).toBe(1)
+    expect((await h.jobs()).map((j) => [j.kind, j.state])).toEqual([['share', 'done']])
+  })
+
+  it('an update that ends done runs one Codex sync', async () => {
+    const h = await pluginRig({ codex: true })
+    const review = sharedEntry(h.pluginHome, 'review')
+    await fs.mkdir(review.installPath, { recursive: true })
+    await h.seed([review])
+    h.script['plugin update review@market'] = () => okOutcome
+    h.script['plugin list'] = () => ({ code: 0, json: [{ id: review.id, version: '1.0.0', scope: 'user', installPath: review.installPath }] })
+    expect((await h.call('extensions-plugin-update', { id: review.id })).status).toBe(200)
+    await waitLong(() => expect(h.syncCount()).toBe(1))
+    await quiet()
+    expect(h.syncCount()).toBe(1)
+    expect((await h.jobs()).map((j) => [j.kind, j.state])).toEqual([['update', 'done']])
+  })
+
+  it('a remove that ends done runs one Codex sync', async () => {
+    const h = await pluginRig({ codex: true })
+    await h.seed([sharedEntry(h.pluginHome, 'review')])
+    h.script['plugin uninstall review@market'] = () => okOutcome
+    expect((await h.call('extensions-plugin-remove', { id: 'review@market' })).status).toBe(200)
+    await waitLong(() => expect(h.syncCount()).toBe(1))
+    await quiet()
+    expect(h.syncCount()).toBe(1)
+    expect((await h.jobs()).map((j) => [j.kind, j.state])).toEqual([['remove', 'done']])
+  })
+
+  // The store entry is dropped before the uninstall can fail, so the Codex accounts still hold what is no longer shared
+  it('a remove whose uninstall fails runs one Codex sync', async () => {
+    const h = await pluginRig({ codex: true })
+    await h.seed([sharedEntry(h.pluginHome, 'review')])
+    h.script['plugin uninstall review@market'] = () => ({ code: 1, json: { outcome: 'failed', message: 'offline' } })
+    expect((await h.call('extensions-plugin-remove', { id: 'review@market' })).status).toBe(200)
+    await waitLong(() => expect(h.syncCount()).toBe(1))
+    await quiet()
+    expect(h.syncCount()).toBe(1)
+    expect((await h.jobs()).map((j) => [j.kind, j.state])).toEqual([['remove', 'failed']])
+    expect((await readClaudePlugins(h.profileDir)).plugins).toEqual([])
+  })
+
+  it('a failed share and a share asking for confirmation each run one Codex sync', async () => {
+    const h = await pluginRig({ codex: true })
+    await holding(h.account.configDir, { 'lint@market': { version: '1.0.0' } })
+    h.script['plugin marketplace add acme/market'] = () => ({ code: 1, json: { outcome: 'failed', message: 'the marketplace could not be reached' } })
+    await h.call('extensions-plugin-share', { id: 'lint@market' })
+    await waitLong(() => expect(h.syncCount()).toBe(1))
+    await quiet()
+    expect(h.syncCount()).toBe(1)
+
+    h.script['plugin marketplace add acme/market'] = async () => {
+      await addMarketplace(h.pluginHome)
+      return okOutcome
+    }
+    h.script['plugin list'] = () => ({ code: 0, json: [] })
+    h.script['plugin install lint@market'] = () => ({ code: 1, json: { outcome: 'failed', message: 'review it', shownCommand: { command: 'node x', sha256: 'abc' } } })
+    await h.call('extensions-plugin-share', { id: 'lint@market' })
+    await waitLong(() => expect(h.syncCount()).toBe(2))
+    await quiet()
+    expect(h.syncCount()).toBe(2)
+    expect((await h.jobs()).map((j) => [j.kind, j.state])).toEqual([['share', 'failed'], ['share', 'needs-confirmation']])
+  })
+
+  it('a failed update runs one Codex sync, and a check runs none', async () => {
+    const h = await pluginRig({ codex: true })
+    await h.seed([sharedEntry(h.pluginHome, 'review')])
+    h.script['plugin marketplace update market'] = () => okOutcome
+    h.script['plugin update review@market'] = () => ({ code: 1, json: { outcome: 'failed', message: 'offline' } })
+    await h.call('extensions-plugin-check')
+    await waitLong(async () => expect((await h.jobs()).map((j) => [j.kind, j.state])).toEqual([['check', 'done']]))
+    await quiet()
+    expect(h.syncCount()).toBe(0)
+
+    await h.call('extensions-plugin-update', { id: 'review@market' })
+    await waitLong(() => expect(h.syncCount()).toBe(1))
+    await quiet()
+    expect(h.syncCount()).toBe(1)
+    expect((await h.jobs()).map((j) => [j.kind, j.state])).toEqual([['check', 'done'], ['update', 'failed']])
+  })
+
+  it('set-enabled runs one Codex sync once the store is written, and extensions-sync runs one', async () => {
+    const h = await pluginRig({ codex: true })
+    await h.seed([sharedEntry(h.pluginHome, 'review')])
+    const enabledAtSync: boolean[] = []
+    h.syncs.mockImplementation(async () => {
+      enabledAtSync.push((await readClaudePlugins(h.profileDir)).plugins[0].enabled)
+      return []
+    })
+    expect(await h.call('extensions-plugin-set-enabled', { id: 'review@market', enabled: false })).toMatchObject({ status: 200 })
+    await waitLong(() => expect(h.syncCount()).toBe(1))
+    expect(enabledAtSync).toEqual([false])
+
+    expect((await h.call('extensions-sync')).status).toBe(200)
+    await waitLong(() => expect(h.syncCount()).toBe(2))
+    await quiet()
+    expect(h.syncCount()).toBe(2)
+
+    // An id that is not shared changes nothing, so asks for nothing
+    expect((await h.call('extensions-plugin-set-enabled', { id: 'nope@market', enabled: true })).status).toBe(404)
+    await quiet()
+    expect(h.syncCount()).toBe(2)
+  })
+
+  it('extensions-sync runs one Codex sync even when its own copies could not be synced', async () => {
+    const h = await pluginRig()
+    // The copies' sync reads the accounts first and fails; the Codex sync that follows reads them again and goes through
+    let reads = 0
+    const ext = createHostExtensions({
+      ...h.deps,
+      readAccounts: async () => {
+        if (reads++ === 0) throw new Error('accounts.json could not be read')
+        return [h.account]
+      },
+      ...h.codexDeps
+    })
+    const answered = await ext.command({ cmd: 'extensions-sync', args: {}, role: 'app', marks: { effects: 0 } })
+    expect(answered.status).toBe(500)
+    await waitLong(() => expect(h.syncCount()).toBe(1))
+    await quiet()
+    expect(h.syncCount()).toBe(1)
+  })
+
+  it('hands the sync the profile, the accounts, the runners and the accounts with a live Codex session, and its log', async () => {
+    const h = await pluginRig({ codex: true })
+    h.live.add('acc_c')
+    h.syncs.mockImplementation(async (a) => {
+      a.log('codex plugins: a line from the sync')
+      return []
+    })
+    await h.call('extensions-sync')
+    await waitLong(() => expect(h.syncCount()).toBe(1))
+    expect(h.syncs.mock.calls[0][0]).toEqual({
+      profileDir: h.profileDir,
+      homeDir: h.homeDir,
+      accounts: [h.account],
+      run: h.codexRun,
+      hooks: h.codexHooks,
+      liveAccountIds: new Set(['acc_c']),
+      log: expect.any(Function)
+    })
+    await waitLong(() => expect(h.logs).toContain('codex plugins: a line from the sync'))
+
+    // The live accounts are asked at each sync, not once
+    h.live.clear()
+    await h.call('extensions-sync')
+    await waitLong(() => expect(h.syncCount()).toBe(2))
+    expect(h.syncs.mock.calls[1][0].liveAccountIds).toEqual(new Set())
+  })
+
+  it('counts no account as busy when the Host is given no way to ask', async () => {
+    const h = await pluginRig()
+    const { liveAccountIds: _none, ...without } = h.codexDeps
+    const ext = createHostExtensions({ ...h.deps, ...without })
+    await ext.command({ cmd: 'extensions-sync', args: {}, role: 'app', marks: { effects: 0 } })
+    await waitLong(() => expect(h.syncCount()).toBe(1))
+    expect(h.syncs.mock.calls[0][0].liveAccountIds).toEqual(new Set())
+  })
+
+  it('syncs nothing without a Codex runner, a hooks list or a Claude plugin runner', async () => {
+    const h = await pluginRig()
+    await h.seed([sharedEntry(h.pluginHome, 'review')])
+    h.script['plugin marketplace update market'] = () => okOutcome
+    const { codexPluginRun: _run, ...noRun } = h.codexDeps
+    const { codexHooks: _hooks, ...noHooks } = h.codexDeps
+    const { claudePluginRun: _claude, ...noClaude } = h.deps
+    const variants: [string, ReturnType<typeof createHostExtensions>, number[]][] = [
+      ['neither', createHostExtensions(h.deps), [DAY_MS]],
+      ['no runner', createHostExtensions({ ...h.deps, ...noRun }), [DAY_MS]],
+      ['no hooks list', createHostExtensions({ ...h.deps, ...noHooks }), [DAY_MS]],
+      ['no Claude runner', createHostExtensions({ ...noClaude, ...h.codexDeps }), []]
+    ]
+    for (const [name, ext, expectedPeriods] of variants) {
+      const call = (cmd: string, args: Record<string, unknown> = {}) => ext.command({ cmd, args, role: 'app', marks: { effects: 0 } })
+      expect(await call('extensions-sync'), name).toMatchObject({ status: 200 })
+      await call('extensions-plugin-set-enabled', { id: 'review@market', enabled: true })
+      const periods: number[] = []
+      const stop = ext.keepCheckingClaudePlugins({
+        every: (ms) => {
+          periods.push(ms)
+          return () => {}
+        }
+      })
+      expect(periods, name).toEqual(expectedPeriods)
+      stop()
+    }
+    // The three that start checks each ran theirs
+    await waitLong(() => expect(h.fake.calls).toEqual(Array<string>(3).fill('plugin marketplace update market')))
+    await quiet()
+    expect(h.syncCount()).toBe(0)
+  })
+
+  it('requests made while a sync waits run one sync, and one made while it runs queues exactly one more', async () => {
+    const h = await pluginRig({ codex: true })
+    await h.seed([sharedEntry(h.pluginHome, 'review')])
+    // The queue is held by a check, so each request below finds the sync waiting and not yet started
+    const check = deferred()
+    h.script['plugin marketplace update market'] = async () => {
+      await check.p
+      return okOutcome
+    }
+    expect((await h.call('extensions-plugin-check')).status).toBe(200)
+    await waitLong(() => expect(h.fake.calls).toEqual(['plugin marketplace update market']))
+    const request = (on: boolean) => h.call('extensions-plugin-set-enabled', { id: 'review@market', enabled: on })
+    await request(false)
+    await request(true)
+    await request(false)
+    await quiet()
+    expect(h.syncCount()).toBe(0)
+
+    const running = deferred()
+    h.syncs.mockImplementation(async () => {
+      await running.p
+      return []
+    })
+    check.release()
+    await waitLong(() => expect(h.syncCount()).toBe(1))
+    // Held now that it runs: two more requests make one more sync
+    await request(true)
+    await request(false)
+    await quiet()
+    expect(h.syncCount()).toBe(1)
+    running.release()
+    await waitLong(() => expect(h.syncCount()).toBe(2))
+    await quiet()
+    expect(h.syncCount()).toBe(2)
+  })
+
+  it('a sync waits for the start-up sweep and never runs beside it', async () => {
+    const h = await pluginRig({ codex: true })
+    const sweep = deferred()
+    vi.mocked(sweepOrphanedClaudePlugins).mockImplementationOnce(async () => {
+      await sweep.p
+      return []
+    })
+    // The answer does not wait for the sync
+    expect((await h.call('extensions-sync')).status).toBe(200)
+    await quiet()
+    expect(h.syncCount()).toBe(0)
+    sweep.release()
+    await waitLong(() => expect(h.syncCount()).toBe(1))
+  })
+
+  it('a start-up that failed is logged, not thrown, and the next request tries it again', async () => {
+    const h = await pluginRig({ codex: true })
+    vi.mocked(sweepOrphanedClaudePlugins).mockRejectedValueOnce(new Error('the plugin folder could not be read'))
+    const unhandled = await unhandledDuring(async () => {
+      expect((await h.call('extensions-sync')).status).toBe(200)
+      await waitLong(() => expect(h.logs.join('\n')).toContain('the plugin folder could not be read'))
+      expect(h.syncCount()).toBe(0)
+      expect((await h.call('extensions-sync')).status).toBe(200)
+      await waitLong(() => expect(h.syncCount()).toBe(1))
+    })
+    expect(unhandled).toEqual([])
+  })
+
+  it('accounts or live sessions that cannot be read are logged, not thrown, and the next request syncs', async () => {
+    const h = await pluginRig()
+    await h.seed([sharedEntry(h.pluginHome, 'review')])
+    let accountsError: Error | null = new Error('accounts.json could not be read')
+    let liveError: Error | null = null
+    const ext = createHostExtensions({
+      ...h.deps,
+      readAccounts: async () => {
+        if (accountsError) throw accountsError
+        return [h.account]
+      },
+      ...h.codexDeps,
+      liveAccountIds: async () => {
+        if (liveError) throw liveError
+        return new Set<string>()
+      }
+    })
+    const enable = () => ext.command({ cmd: 'extensions-plugin-set-enabled', args: { id: 'review@market', enabled: true }, role: 'app', marks: { effects: 0 } })
+    const unhandled = await unhandledDuring(async () => {
+      expect(await enable()).toMatchObject({ status: 200 })
+      await waitLong(() => expect(h.logs.join('\n')).toContain('accounts.json could not be read'))
+      accountsError = null
+      liveError = new Error('sessions could not be listed')
+      await enable()
+      await waitLong(() => expect(h.logs.join('\n')).toContain('sessions could not be listed'))
+      expect(h.syncCount()).toBe(0)
+      liveError = null
+      await enable()
+      await waitLong(() => expect(h.syncCount()).toBe(1))
+    })
+    expect(unhandled).toEqual([])
+  })
+
+  it('the start runs one Codex sync, after the sweep', async () => {
+    const h = await pluginRig({ codex: true })
+    const orphan = await orphanedVersion(h.pluginHome)
+    const orphanAtSync: boolean[] = []
+    h.syncs.mockImplementation(async () => {
+      orphanAtSync.push(await exists(orphan))
+      return []
+    })
+    const periods: number[] = []
+    const stop = h.ext.keepCheckingClaudePlugins({
+      every: (ms) => {
+        periods.push(ms)
+        return () => {}
+      }
+    })
+    expect(periods).toEqual([DAY_MS, 60_000])
+    await waitLong(() => expect(h.syncCount()).toBe(1))
+    await quiet()
+    expect(h.syncCount()).toBe(1)
+    expect(orphanAtSync).toEqual([false])
+    stop()
+  })
+
+  it('every minute it asks for a sync only for a waiting account none of whose sessions is alive, and the stop stops both timers', async () => {
+    const h = await pluginRig({ codex: true })
+    const ticks = new Map<number, () => void>()
+    const stopped: number[] = []
+    const stop = h.ext.keepCheckingClaudePlugins({
+      every: (ms, fn) => {
+        ticks.set(ms, fn)
+        return () => {
+          stopped.push(ms)
+        }
+      }
+    })
+    await waitLong(() => expect(h.syncCount()).toBe(1))
+    const minute = ticks.get(60_000)!
+    const tick = async (): Promise<void> => {
+      minute()
+      await quiet()
+    }
+
+    await tick()
+    expect(h.syncCount()).toBe(1)
+    await writeCodexPluginAccounts(h.profileDir, [CODEX_ROW])
+    await tick()
+    expect(h.syncCount()).toBe(1)
+
+    // A waiting account whose sessions are still alive would only be left waiting again: nothing is asked
+    await writeCodexPluginAccounts(h.profileDir, [CODEX_ROW, { ...CODEX_ROW, accountId: 'acc_d', waiting: true }])
+    h.live.add('acc_d')
+    await tick()
+    expect(h.syncCount()).toBe(1)
+    await tick()
+    expect(h.syncCount()).toBe(1)
+
+    // Its sessions ended: one sync
+    h.live.delete('acc_d')
+    await tick()
+    expect(h.syncCount()).toBe(2)
+
+    // One waiting account that is free is enough, whatever the others are doing
+    h.live.add('acc_c')
+    await writeCodexPluginAccounts(h.profileDir, [{ ...CODEX_ROW, waiting: true }, { ...CODEX_ROW, accountId: 'acc_d', waiting: true }])
+    await tick()
+    expect(h.syncCount()).toBe(3)
+    h.live.clear()
+
+    // A file that cannot be read says nothing about waiting: logged, no sync
+    const file = extensionPaths(h.profileDir).codexPluginAccounts
+    await fs.rm(file)
+    await fs.mkdir(file)
+    await tick()
+    expect(h.syncCount()).toBe(3)
+    await waitLong(() => expect(h.logs.join('\n')).toContain('codex plugins: the outcome file could not be read'))
+
+    stop()
+    expect(stopped.sort((a, b) => a - b)).toEqual([60_000, DAY_MS])
+  })
+
+  it('a minute tick that cannot ask which accounts are busy logs it and syncs nothing', async () => {
+    const h = await pluginRig()
+    let liveError: Error | null = null
+    const ext = createHostExtensions({
+      ...h.deps,
+      ...h.codexDeps,
+      liveAccountIds: async () => {
+        if (liveError) throw liveError
+        return new Set<string>()
+      }
+    })
+    const ticks = new Map<number, () => void>()
+    const stop = ext.keepCheckingClaudePlugins({
+      every: (ms, fn) => {
+        ticks.set(ms, fn)
+        return () => {}
+      }
+    })
+    await waitLong(() => expect(h.syncCount()).toBe(1))
+    await writeCodexPluginAccounts(h.profileDir, [{ ...CODEX_ROW, waiting: true }])
+    liveError = new Error('sessions could not be listed')
+    const unhandled = await unhandledDuring(async () => {
+      ticks.get(60_000)!()
+      await waitLong(() => expect(h.logs.join('\n')).toContain('the check for an account left waiting did not run (sessions could not be listed)'))
+      await quiet()
+    })
+    expect(unhandled).toEqual([])
+    expect(h.syncCount()).toBe(1)
+    stop()
+  })
+
+  it('the list carries the outcome rows, and none with a log line when the file cannot be read', async () => {
+    const h = await pluginRig()
+    expect((await h.listed()).codexAccounts).toEqual([])
+    await writeCodexPluginAccounts(h.profileDir, [CODEX_ROW])
+    expect((await h.listed()).codexAccounts).toEqual([CODEX_ROW])
+    const file = extensionPaths(h.profileDir).codexPluginAccounts
+    await fs.rm(file)
+    await fs.mkdir(file)
+    expect((await h.listed()).codexAccounts).toEqual([])
+    await waitLong(() => expect(h.logs.join('\n')).toContain('codex plugins: the outcome file could not be read'))
+  })
+
+  it('plugin-discover with an accountId reads that account only, and an unknown one answers 404', async () => {
+    const h = await pluginRig({ second: true })
+    await holding(h.account.configDir, { 'review@market': { version: '1.0.0' } })
+    await holding(h.second.configDir, { 'review@market': { version: '1.1.0' }, 'lint@market': { version: '2.0.0' } }, {}, OTHER)
+    await write(
+      path.join(h.second.configDir, 'plugins', 'marketplaces', 'market', '.claude-plugin', 'marketplace.json'),
+      JSON.stringify({ name: 'market', plugins: [{ name: 'review', source: { source: 'github', repo: 'acme/review' }, version: '1.2.0' }] })
+    )
+    const discover = async (args: Record<string, unknown>) =>
+      ((await h.call('extensions-plugin-discover', args)).body as { plugins: { id: string; holders: { accountId: string }[]; sourceAccountId: string; source: unknown; offeredVersion: string | null }[] }).plugins
+    const shape = (plugins: Awaited<ReturnType<typeof discover>>) => plugins.map((p) => [p.id, p.holders.map((x) => x.accountId), p.sourceAccountId, p.source])
+
+    expect(shape(await discover({}))).toEqual([['review@market', ['acc_1', 'acc_2'], 'acc_1', SOURCE], ['lint@market', ['acc_2'], 'acc_2', OTHER]])
+    expect(shape(await discover({ accountId: 'acc_1' }))).toEqual([['review@market', ['acc_1'], 'acc_1', SOURCE]])
+    const second = await discover({ accountId: 'acc_2' })
+    expect(shape(second)).toEqual([['review@market', ['acc_2'], 'acc_2', OTHER], ['lint@market', ['acc_2'], 'acc_2', OTHER]])
+    // The version a share would install comes from that account's clone
+    expect(second.map((p) => p.offeredVersion)).toEqual(['1.2.0', null])
+
+    expect(await h.call('extensions-plugin-discover', { accountId: 'acc_9' })).toMatchObject({ status: 404, body: { error: 'no account acc_9' } })
+    expect((await h.call('extensions-plugin-discover', { accountId: 7 })).status).toBe(400)
+  })
+
+  it('plugin-share with an accountId finds the plugin and its source in that account only', async () => {
+    const h = await pluginRig({ second: true })
+    await holding(h.account.configDir, { 'review@market': { version: '1.0.0' } })
+    await holding(h.second.configDir, { 'review@market': { version: '1.0.0' } }, {}, OTHER)
+    h.script['plugin marketplace add acme/other'] = () => ({ code: 1, json: { outcome: 'failed', message: 'the second account was used' } })
+    h.script['plugin marketplace add acme/market'] = () => ({ code: 1, json: { outcome: 'failed', message: 'the first account was used' } })
+
+    expect(await h.call('extensions-plugin-share', { id: 'review@market', accountId: 'acc_2' })).toMatchObject({ status: 200, marks: { effects: 1 } })
+    await waitLong(async () => expect((await h.jobs()).map((j) => j.message)).toEqual(['the second account was used']))
+    // As today without it: the first account that has a record of the marketplace
+    expect((await h.call('extensions-plugin-share', { id: 'review@market' })).status).toBe(200)
+    await waitLong(async () => expect((await h.jobs()).map((j) => j.message)).toEqual(['the second account was used', 'the first account was used']))
+    expect(h.fake.calls).toEqual(['plugin marketplace add acme/other', 'plugin marketplace add acme/market'])
+
+    expect(await h.call('extensions-plugin-share', { id: 'review@market', accountId: 'acc_9' })).toMatchObject({ status: 404, body: { error: 'no account acc_9' }, marks: { effects: 0 } })
+    // An account that does not hold it does not offer it
+    await holding(h.second.configDir, { 'lint@market': { version: '1.0.0' } }, {}, OTHER)
+    expect(await h.call('extensions-plugin-share', { id: 'review@market', accountId: 'acc_2' })).toMatchObject({ status: 400, body: { reason: 'not-offered' } })
+    expect((await h.call('extensions-plugin-share', { id: 'review@market', accountId: 7 })).status).toBe(400)
   })
 })
 

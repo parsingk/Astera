@@ -1989,13 +1989,16 @@ export function registerIpc(
   // A new account gets Astera's own skills and the shared extensions now, not at the next app or Host start
   // (Agent Control Plane release 1 design §4.6, inventory §4). With no Host the sync waits for its next start, which
   // syncs every account: the Host is the registry's one writer.
-  const afterAccountAdded = (): void => {
-    installStubsForCurrentToggles()
+  const syncExtensionsAfter = (what: string): void => {
     void orchCall({ cmd: 'extensions-sync', args: {}, sessionId: '' })
       .then((r) => {
-        if (r.status !== 200) orchLog(`extensions sync after an account was added answered ${r.status}`)
+        if (r.status !== 200) orchLog(`extensions sync after ${what} answered ${r.status}`)
       })
-      .catch((err: unknown) => orchLog(`extensions sync after an account was added did not run: ${String(err)}`))
+      .catch((err: unknown) => orchLog(`extensions sync after ${what} did not run: ${String(err)}`))
+  }
+  const afterAccountAdded = (): void => {
+    installStubsForCurrentToggles()
+    syncExtensionsAfter('an account was added')
   }
   ipcMain.handle('accounts.create', async (_e, input) => {
     const account = await core.accounts.create(input)
@@ -2022,7 +2025,13 @@ export function registerIpc(
   ipcMain.handle('accounts.email', (_e, id) => core.accountEmail(id))
   ipcMain.handle('accounts.emailOfDir', (_e, dir, provider) => core.accountEmailOfDir(dir, provider))
   ipcMain.handle('accounts.logout', (_e, id) => core.accountLogout(id))
-  ipcMain.handle('accounts.syncSettings', (_e, id) => core.accountSyncSettings(id))
+  // A Codex account that took the import is brought in line with the shared plugins by the Host, in the background:
+  // the import keeps the account's own plugin tables, which may now differ from what the Host would have written.
+  ipcMain.handle('accounts.syncSettings', async (_e, id) => {
+    const r = await core.accountSyncSettings(id)
+    if (r.ok && providerOf(core.accounts.get(id)) === 'codex') syncExtensionsAfter('a settings import')
+    return r
+  })
 
   // sessions (resolving accountId to an Account is a plain lookup)
 
@@ -4877,9 +4886,9 @@ export function registerIpc(
   ipcMain.handle('extensions.replace', (_e, accountId: unknown, id: unknown) => extensions.replace(accountId as string, id as string))
   // The shared Claude Code plugins (R4): a change answers its job id at once, and the tab polls the list
   ipcMain.handle('extensions.pluginList', () => extensions.pluginList())
-  ipcMain.handle('extensions.pluginDiscover', () => extensions.pluginDiscover())
-  ipcMain.handle('extensions.pluginShare', (_e, id: unknown, acceptCommand: unknown) =>
-    extensions.pluginShare(id as string, typeof acceptCommand === 'string' ? acceptCommand : undefined)
+  ipcMain.handle('extensions.pluginDiscover', (_e, accountId: unknown) => extensions.pluginDiscover(typeof accountId === 'string' ? accountId : undefined))
+  ipcMain.handle('extensions.pluginShare', (_e, id: unknown, acceptCommand: unknown, accountId: unknown) =>
+    extensions.pluginShare(id as string, typeof acceptCommand === 'string' ? acceptCommand : undefined, typeof accountId === 'string' ? accountId : undefined)
   )
   ipcMain.handle('extensions.pluginUpdate', (_e, id: unknown, acceptCommand: unknown) =>
     extensions.pluginUpdate(id as string, typeof acceptCommand === 'string' ? acceptCommand : undefined)

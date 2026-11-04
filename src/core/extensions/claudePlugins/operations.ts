@@ -39,6 +39,9 @@ export interface ClaudePluginOps {
   setEnabled(id: string, on: boolean): Promise<void>
   /** The queued and running jobs and the last 20 ended, in the order they were asked for. */
   jobs(): ClaudePluginJob[]
+  /** Runs `work` on the jobs' queue, after every job queued before it and before any queued after, with no job record. Its
+   *  result or rejection is its caller's alone: a rejection does not hold up the jobs behind it. */
+  runExclusive<T>(work: () => Promise<T>): Promise<T>
 }
 
 type Obj = Record<string, unknown>
@@ -157,7 +160,15 @@ async function knownMarketplaces(home: string): Promise<Obj> {
   throw failed(`${file} is damaged`, 'home-unreadable')
 }
 
-export function createClaudePluginOps(d: { profileDir: string; run: PluginCliRun; now?: () => Date; log?: (l: string) => void }): ClaudePluginOps {
+export function createClaudePluginOps(d: {
+  profileDir: string
+  run: PluginCliRun
+  now?: () => Date
+  log?: (l: string) => void
+  /** Called once for each job when its state is final (done, failed or needs confirmation), before the oldest ended jobs
+   *  are dropped from `jobs()`. */
+  onJobEnd?: (job: ClaudePluginJob) => void
+}): ClaudePluginOps {
   const home = extensionPaths(d.profileDir).claudePluginHome
   const now = (): string => (d.now ?? (() => new Date()))().toISOString()
 
@@ -370,6 +381,7 @@ export function createClaudePluginOps(d: { profileDir: string; run: PluginCliRun
   const all: ClaudePluginJob[] = []
   let chain: Promise<unknown> = Promise.resolve()
   const live = (j: ClaudePluginJob): boolean => j.state === 'queued' || j.state === 'running'
+  const copyOf = (j: ClaudePluginJob): ClaudePluginJob => ({ ...j, ...(j.command === undefined ? {} : { command: { ...j.command } }) })
 
   const enqueue = (kind: ClaudePluginJobKind, target: string | undefined, work: (job: ClaudePluginJob) => Promise<void>): string => {
     const job: ClaudePluginJob = { id: randomUUID(), kind, ...(target === undefined ? {} : { target }), state: 'queued', startedAt: now() }
@@ -391,6 +403,12 @@ export function createClaudePluginOps(d: { profileDir: string; run: PluginCliRun
         }
       }
       job.endedAt = now()
+      // A listener's failure is its own: the job has ended, and the queue goes on
+      try {
+        d.onJobEnd?.(copyOf(job))
+      } catch (e) {
+        d.log?.(`claude plugins: the listener of an ended ${kind} job failed (${e instanceof Error ? e.message : String(e)})`)
+      }
       const ended = all.filter((j) => !live(j))
       for (const j of ended.slice(0, Math.max(0, ended.length - ENDED_KEPT))) all.splice(all.indexOf(j), 1)
       if (job.state !== 'done') {
@@ -416,7 +434,12 @@ export function createClaudePluginOps(d: { profileDir: string; run: PluginCliRun
         plugins: s.plugins.map((e) => (e.id !== id ? e : on && !e.enabled ? { ...e, enabled: on, enabledAt: at } : { ...e, enabled: on }))
       }))
     },
-    jobs: () => all.map((j) => ({ ...j, ...(j.command === undefined ? {} : { command: { ...j.command } }) }))
+    jobs: () => all.map(copyOf),
+    runExclusive: <T>(work: () => Promise<T>): Promise<T> => {
+      const run = chain.then(work, work)
+      chain = run.catch(() => {})
+      return run
+    }
   }
 }
 

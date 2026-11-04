@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { t as translate, LANGS, type MessageKey, type MessageParams } from '../../../core/i18n'
 import {
+  CODEX_CATCH_UP_MS,
+  codexAttention,
+  codexCatchingUp,
+  codexLines,
+  codexNotes,
   contentLines,
   dependencyLines,
   holdersHint,
@@ -8,12 +13,14 @@ import {
   offConfirmBody,
   ownCopyLines,
   pendingLines,
-  pluginPrompt,
+  pickedPluginIds,
+  pluginChoices,
   refusalLabel,
   rowState,
   updateLabel
 } from './claudePluginsText'
 import type { ClaudePluginFailureCode, ClaudePluginJob, ClaudePluginRefusal, OfferedClaudePlugin } from '../../../core/extensions/claudePlugins/types'
+import type { CodexPluginAccountState, CodexPluginFailureCode } from '../../../core/extensions/codexPlugins/types'
 
 const en = (key: MessageKey, params?: MessageParams): string => translate('en', key, params)
 const ko = (key: MessageKey, params?: MessageParams): string => translate('ko', key, params)
@@ -26,6 +33,9 @@ const CODES = Object.keys({
   'already-shared': 1, 'not-shared': 1, 'not-shareable': 1, 'marketplace-mismatch': 1, 'home-unreadable': 1, 'not-listed': 1,
   'dependency-missing': 1, 'catalog-unreadable': 1, 'store-unreadable': 1, refused: 1, 'timed-out': 1, 'name-taken': 1
 } satisfies Record<ClaudePluginFailureCode, 1>) as ClaudePluginFailureCode[]
+const CODEX_CODES = Object.keys({
+  'marketplace-taken': 1, 'codex-unsupported': 1, 'config-unreadable': 1, 'hooks-unreadable': 1, refused: 1, 'timed-out': 1
+} satisfies Record<CodexPluginFailureCode, 1>) as CodexPluginFailureCode[]
 
 const LABELS: Record<string, string> = { c2: 'claude2@…', c4: 'claude4@…' }
 const labelOf = (id: string): string => LABELS[id] ?? id
@@ -120,25 +130,29 @@ describe('claudePluginsText', () => {
     expect(body).toContain('a@m, b@m')
   })
 
-  it('offers each shareable plugin, and lists the refused ones and the unreadable accounts in the body (P-2)', () => {
+  // K4: the plugins of the account picked in the register menu are choices of its own dialog
+  it('offers each shareable plugin with the version a share would install, and lists the refused ones with why', () => {
     const found: OfferedClaudePlugin[] = [
-      { id: 'superpowers@obra', name: 'superpowers', marketplace: 'obra', holders: [{ accountId: 'c2', version: '7.0.0', enabled: true }, { accountId: 'c4', version: '6.3.0', enabled: false }], source: { source: 'github', repo: 'obra/superpowers-marketplace' }, sourceAccountId: 'c2', shareable: true, offeredVersion: '7.1.0' },
+      { id: 'superpowers@obra', name: 'superpowers', marketplace: 'obra', holders: [{ accountId: 'c2', version: '7.0.0', enabled: true }], source: { source: 'github', repo: 'obra/superpowers-marketplace' }, sourceAccountId: 'c2', shareable: true, offeredVersion: '7.1.0' },
       { id: 'hud@obra', name: 'hud', marketplace: 'obra', holders: [{ accountId: 'c2', version: '1.0.0', enabled: true }], source: { source: 'github', repo: 'obra/superpowers-marketplace' }, sourceAccountId: 'c2', shareable: true, offeredVersion: null },
       { id: 'keyed@corp', name: 'keyed', marketplace: 'corp', holders: [{ accountId: 'c2', version: '1.0.0', enabled: true }], source: null, sourceAccountId: 'c2', shareable: false, reason: 'source-credential', offeredVersion: null }
     ]
-    const p = pluginPrompt(found, ['c4'], labelOf, en)
-    // §5.3: the version a share would install, on a line of its own, and nothing when the catalog does not say
+    const p = pluginChoices(found, en)
+    // The account is the one picked, so no choice names its holders; the version is a line of its own when the catalog says
     expect(p.choices).toEqual([
-      { id: 'superpowers@obra', label: 'superpowers@obra', hint: `claude2@… 7.0.0, claude4@… 6.3.0 (Off)\n${en('settings.extensions.plugin.offeredVersion', { version: '7.1.0' })}`, defaultChecked: false },
-      { id: 'hud@obra', label: 'hud@obra', hint: 'claude2@… 1.0.0', defaultChecked: false }
+      { id: 'plugin:superpowers@obra', label: 'Plugin superpowers@obra', hint: en('settings.extensions.plugin.offeredVersion', { version: '7.1.0' }), defaultChecked: false },
+      { id: 'plugin:hud@obra', label: 'Plugin hud@obra', defaultChecked: false }
     ])
-    expect(pluginPrompt(found, [], labelOf, ko).choices[0].hint?.split('\n')[1]).toBe('설치될 버전 7.1.0')
-    expect(p.body.split('\n')).toEqual([
-      en('settings.extensions.plugin.registerBody'),
-      `keyed@corp: ${en('settings.extensions.plugin.reason.source-credential')}`,
-      en('settings.extensions.plugin.unreadable', { account: 'claude4@…' })
-    ])
-    expect(p.title).toBe('Claude Code plugins')
+    expect(p.choices[1]).not.toHaveProperty('hint')
+    expect(pluginChoices(found, ko).choices[0]).toMatchObject({ label: '플러그인 superpowers@obra', hint: '설치될 버전 7.1.0' })
+    expect(p.refused).toEqual([`keyed@corp: ${en('settings.extensions.plugin.reason.source-credential')}`])
+    expect(pluginChoices([], en)).toEqual({ choices: [], refused: [] })
+  })
+
+  it('names the plugins picked in the dialog, apart from the items', () => {
+    expect(pickedPluginIds(['item:skill:review', 'plugin:superpowers@obra', 'item:mcp:linear', 'plugin:hud@obra'])).toEqual(['superpowers@obra', 'hud@obra'])
+    expect(pickedPluginIds(['item:skill:review'])).toEqual([])
+    expect(pickedPluginIds([])).toEqual([])
   })
 
   // §5.9: the expanded row names the account copies whether the shared plugin is on or off, worded by what runs
@@ -182,6 +196,187 @@ describe('claudePluginsText', () => {
     expect(contentLines({ skills: [], commands: ['ship'], agents: [], mcpServers: [], hooks: false }, en)).toEqual([en('settings.extensions.plugin.contents.commands', { count: 1, list: 'ship' })])
     // A Host that does not say
     expect(contentLines(undefined, en)).toEqual([])
+  })
+
+  // §5.8: one line per Codex account, in the order the accounts are listed
+  describe('the Codex accounts of a plugin', () => {
+    const plugin = { name: 'superpowers', version: '7.0.0' }
+    const row = (over: Partial<CodexPluginAccountState>): CodexPluginAccountState => ({ accountId: 'x1', installed: {}, waiting: false, turnedOff: [], at: '2026-11-04T00:00:00.000Z', ...over })
+    const names: Record<string, string> = { x1: 'codex1@…', x2: 'codex2@…', x3: 'codex3@…' }
+    const codexLabel = (id: string): string => names[id] ?? id
+
+    it('has words for every Codex failure code in every language', () => {
+      for (const lang of LANGS) {
+        const tr = (key: MessageKey, params?: MessageParams): string => translate(lang, key, params)
+        for (const code of CODEX_CODES) {
+          const [line] = codexLines(plugin, [row({ failure: { message: 'detail', code } })], ['x1'], codexLabel, tr)
+          expect(line, `${lang} ${code}`).not.toMatch(/settings\./)
+          expect(line, `${lang} ${code}`).not.toContain('detail')
+        }
+        for (const key of ['installed', 'waiting', 'pending', 'held', 'turnedOff', 'noteAgents', 'noteCommands', 'noteHooks'] as const) {
+          expect(tr(`settings.extensions.plugin.codex.${key}`, { account: 'a', version: 'v', id: 'i', name: 'n' }), `${lang} ${key}`).not.toMatch(/^settings\./)
+        }
+      }
+    })
+
+    it('says installed, waiting and not installed yet, in the order the accounts are listed', () => {
+      const rows = [
+        row({ accountId: 'x2', waiting: true }),
+        row({ accountId: 'x1', installed: { superpowers: '7.0.0' } })
+      ]
+      // x3 has no row at all
+      expect(codexLines(plugin, rows, ['x1', 'x2', 'x3'], codexLabel, ko)).toEqual([
+        'codex1@… (Codex): 7.0.0 설치됨',
+        'codex2@… (Codex): 이 계정의 세션이 끝나면 적용됩니다',
+        'codex3@… (Codex): 아직 설치하지 않았습니다'
+      ])
+      expect(codexLines(plugin, rows, ['x1', 'x2', 'x3'], codexLabel, en)).toEqual([
+        'codex1@… (Codex): 7.0.0 installed',
+        "codex2@… (Codex): applies when this account's sessions end",
+        'codex3@… (Codex): not installed yet'
+      ])
+    })
+
+    it('says not installed yet for a row that holds other plugins but not this one', () => {
+      expect(codexLines(plugin, [row({ installed: { other: '1.0.0' } })], ['x1'], codexLabel, en)).toEqual(['codex1@… (Codex): not installed yet'])
+    })
+
+    it('says the version Codex has, even one other than the shared version', () => {
+      expect(codexLines(plugin, [row({ installed: { superpowers: '6.3.0' } })], ['x1'], codexLabel, en)).toEqual(['codex1@… (Codex): 6.3.0 installed'])
+    })
+
+    // The Host keeps the installs when only the trust of the hooks failed, and the row's attention mark points at the line
+    it('says a failure even where the plugin is installed, so the attention mark has its reason', () => {
+      const failed = row({ installed: { superpowers: '7.0.0' }, failure: { message: 'app-server timed out', code: 'hooks-unreadable' } })
+      expect(codexLines(plugin, [failed], ['x1'], codexLabel, en)).toEqual(['codex1@… (Codex): the hooks could not be listed, so they were not trusted'])
+    })
+
+    // Final review I2: the Host lists a plugin as held only in an account that has it installed
+    it('says a held plugin keeps the previous version, waiting or not, and one held where it is absent is not installed yet', () => {
+      expect(codexLines(plugin, [row({ installed: { superpowers: '6.3.0' }, held: ['superpowers'] })], ['x1'], codexLabel, ko)).toEqual([
+        'codex1@… (Codex): 새 버전을 Codex에 맞게 바꾸지 못해 이전 버전을 그대로 둡니다'
+      ])
+      expect(codexLines(plugin, [row({ installed: { superpowers: '6.3.0' }, held: ['superpowers'], waiting: true })], ['x1'], codexLabel, en)).toEqual([
+        'codex1@… (Codex): the new version could not be converted for Codex, so the previous one stays'
+      ])
+      expect(codexLines(plugin, [row({ installed: { other: '1.0.0' }, held: ['other'] })], ['x1'], codexLabel, en)).toEqual(['codex1@… (Codex): not installed yet'])
+    })
+
+    it('says a waiting account is waiting for this plugin only when it is not at the shared version yet', () => {
+      expect(codexLines(plugin, [row({ installed: { superpowers: '6.3.0' }, waiting: true })], ['x1'], codexLabel, en)).toEqual([
+        "codex1@… (Codex): applies when this account's sessions end"
+      ])
+      // The account waits for another plugin; this one is installed at the shared version
+      expect(codexLines(plugin, [row({ installed: { superpowers: '7.0.0' }, waiting: true })], ['x1'], codexLabel, en)).toEqual(['codex1@… (Codex): 7.0.0 installed'])
+    })
+
+    it('words a failure Astera decided, and shows Codex’s own message as it is when there is no code or this build does not know it', () => {
+      const lines = (failure: CodexPluginAccountState['failure'], t: typeof en): string[] => codexLines(plugin, [row({ failure })], ['x1'], codexLabel, t)
+      expect(lines({ message: 'm', code: 'marketplace-taken' }, ko)).toEqual(['codex1@… (Codex): 같은 이름의 마켓플레이스가 다른 곳에서 이미 등록되어 있습니다'])
+      expect(lines({ message: 'm', code: 'codex-unsupported' }, en)).toEqual(['codex1@… (Codex): this Codex has no plugin command (checked on 0.160)'])
+      expect(lines({ message: 'm', code: 'config-unreadable' }, ko)).toEqual(['codex1@… (Codex): config.toml을 읽지 못했습니다'])
+      expect(lines({ message: 'm', code: 'hooks-unreadable' }, ko)).toEqual(['codex1@… (Codex): 훅 목록을 읽지 못해 훅을 신뢰하지 못했습니다'])
+      // The Codex wording: the Claude wording of the same words names claude
+      expect(lines({ message: 'm', code: 'refused' }, en)).toEqual(['codex1@… (Codex): Nothing was run: it holds characters that cannot be passed to codex on this computer'])
+      expect(lines({ message: 'm', code: 'timed-out' }, ko)).toEqual(['codex1@… (Codex): Codex 가 제시간에 끝나지 않아 멈췄습니다'])
+      expect(lines({ message: 'codex plugin add exited with 2' }, en)).toEqual(['codex1@… (Codex): codex plugin add exited with 2'])
+      expect(lines({ message: 'newer words', code: 'brand-new' as CodexPluginFailureCode }, en)).toEqual(['codex1@… (Codex): newer words'])
+    })
+
+    it('adds a line for each own plugin of the same name that Astera turned off', () => {
+      const turned = row({ installed: { superpowers: '7.0.0' }, turnedOff: ['superpowers@openai-curated', 'other@openai-curated', 'superpowers-extras@x'] })
+      expect(codexLines(plugin, [turned], ['x1'], codexLabel, ko)).toEqual([
+        'codex1@… (Codex): 7.0.0 설치됨',
+        'codex1@… (Codex): 계정에 있던 superpowers@openai-curated를 껐습니다'
+      ])
+      expect(codexLines(plugin, [turned], ['x1'], codexLabel, en)[1]).toBe("codex1@… (Codex): turned off the account's own superpowers@openai-curated")
+    })
+
+    it('says nothing without a Codex account, and nothing of a row whose account is gone', () => {
+      expect(codexLines(plugin, [row({ accountId: 'gone', installed: { superpowers: '7.0.0' } })], [], codexLabel, en)).toEqual([])
+      expect(codexLines(plugin, [row({ accountId: 'gone', installed: { superpowers: '7.0.0' } })], ['x1'], codexLabel, en)).toEqual(['codex1@… (Codex): not installed yet'])
+    })
+
+    it('notes what Codex does differently, a note for each of agents, commands and hooks the plugin has', () => {
+      const all = { ...plugin, contents: { skills: ['a'], commands: ['ship'], agents: ['critic'], mcpServers: [], hooks: true } }
+      expect(codexNotes(all, ko)).toEqual([
+        'Codex에서는 에이전트가 빠집니다',
+        'Codex에서는 명령이 superpowers:source-command-<이름> 스킬이 됩니다',
+        '훅은 Astera가 Codex 계정마다 신뢰해 두었습니다'
+      ])
+      expect(codexNotes(all, en)).toEqual([
+        'Codex leaves the agents out',
+        'In Codex, commands become skills named superpowers:source-command-<name>',
+        'Astera has trusted the hooks in each Codex account'
+      ])
+      expect(codexNotes({ ...plugin, contents: { skills: ['a'], commands: [], agents: [], mcpServers: ['m'], hooks: false } }, en)).toEqual([])
+      expect(codexNotes({ ...plugin, contents: { skills: [], commands: [], agents: ['critic'], mcpServers: [], hooks: false } }, en)).toEqual(['Codex leaves the agents out'])
+      // A Host that does not say what it brings
+      expect(codexNotes(plugin, en)).toEqual([])
+    })
+
+    it('asks for a look when any Codex account failed', () => {
+      expect(codexAttention(plugin, [row({}), row({ accountId: 'x2', failure: { message: 'm' } })])).toBe(true)
+      expect(codexAttention(plugin, [row({}), row({ accountId: 'x2', waiting: true })])).toBe(false)
+      expect(codexAttention(plugin, [])).toBe(false)
+    })
+
+    // The Codex sync starts after a plugin job ends and runs codex in each account, so the outcome rows trail the job
+    describe('while the Codex outcome catches up with the last job', () => {
+      const ENDED = '2026-11-04T12:00:00.000Z'
+      const endedAt = Date.parse(ENDED)
+      const ended = (over: Partial<ClaudePluginJob> = {}): ClaudePluginJob => job({ state: 'done', endedAt: ENDED, ...over })
+      const at = (offsetMs: number): string => new Date(endedAt + offsetMs).toISOString()
+      const catching = (jobs: ClaudePluginJob[], rows: CodexPluginAccountState[], ids: string[], nowMs = endedAt + 1000): boolean => codexCatchingUp(jobs, rows, ids, nowMs)
+
+      it('does while a listed account has no row, or a row older than the job ended', () => {
+        expect(catching([ended()], [], ['x1'])).toBe(true)
+        expect(catching([ended()], [row({ at: at(-60_000) })], ['x1'])).toBe(true)
+        // One of two accounts has caught up
+        expect(catching([ended()], [row({ at: at(2000) }), row({ accountId: 'x2', at: at(-5000) })], ['x1', 'x2'])).toBe(true)
+        expect(catching([ended()], [row({ at: at(2000) })], ['x1', 'x2'])).toBe(true)
+      })
+
+      it('does not once every listed account has a row from after the job ended', () => {
+        expect(catching([ended()], [row({ at: at(2000) }), row({ accountId: 'x2', at: at(500) })], ['x1', 'x2'])).toBe(false)
+        // Written at the moment it ended counts as after
+        expect(catching([ended()], [row({ at: ENDED })], ['x1'])).toBe(false)
+      })
+
+      it('does not for rows of accounts that are not listed', () => {
+        expect(catching([ended()], [row({ at: at(2000) }), row({ accountId: 'gone', at: at(-60_000) })], ['x1'])).toBe(false)
+      })
+
+      it('adds nothing without a listed Codex account', () => {
+        expect(catching([ended()], [], [])).toBe(false)
+        expect(catching([ended()], [row({ at: at(-60_000) })], [])).toBe(false)
+      })
+
+      it('adds nothing without a job that ended, and a check is not one', () => {
+        expect(catching([], [], ['x1'])).toBe(false)
+        expect(catching([job({ state: 'running' }), job({ id: 'q', state: 'queued' })], [], ['x1'])).toBe(false)
+        expect(catching([ended({ kind: 'check', target: undefined })], [], ['x1'])).toBe(false)
+        // A check that ended later does not move the mark: the share's own end is what the row is compared with
+        expect(catching([ended(), ended({ id: 'c', kind: 'check', target: undefined, endedAt: at(30_000) })], [row({ at: at(2000) })], ['x1'], endedAt + 31_000)).toBe(false)
+      })
+
+      it('goes by the latest job that ended', () => {
+        const later = ended({ id: 'later', kind: 'update', endedAt: at(60_000) })
+        expect(catching([ended(), later], [row({ at: at(30_000) })], ['x1'], endedAt + 61_000)).toBe(true)
+        expect(catching([ended(), later], [row({ at: at(62_000) })], ['x1'], endedAt + 63_000)).toBe(false)
+      })
+
+      it('stops 3 minutes after the job ended, however the rows stand', () => {
+        expect(CODEX_CATCH_UP_MS).toBe(3 * 60_000)
+        expect(catching([ended()], [], ['x1'], endedAt + CODEX_CATCH_UP_MS - 1)).toBe(true)
+        expect(catching([ended()], [], ['x1'], endedAt + CODEX_CATCH_UP_MS)).toBe(false)
+      })
+
+      it('reads a time it cannot parse as nothing to wait for', () => {
+        expect(catching([ended({ endedAt: 'sometime' })], [], ['x1'])).toBe(false)
+        expect(catching([ended()], [row({ at: 'sometime' })], ['x1'])).toBe(false)
+      })
+    })
   })
 
   it('says where a job stands for a plugin not in the list yet, by its latest job', () => {

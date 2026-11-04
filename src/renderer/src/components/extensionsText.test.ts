@@ -63,6 +63,27 @@ describe('extensionsText', () => {
     expect(p.body).not.toContain('astera-task')
   })
 
+  // K4: picking a Claude account lists its plugins in the same dialog, after its servers and skills
+  it('puts the plugin choices after the item choices, and both lists of what cannot be shared in the body', () => {
+    const plugins = {
+      choices: [{ id: 'plugin:hud@obra', label: 'Plugin hud@obra', hint: 'Installs version 1.0.0', defaultChecked: false }],
+      refused: ['keyed@corp: some reason', 'Could not read the plugin list of Work']
+    }
+    const p = importPrompt([...ITEMS, { kind: 'mcp', name: 'keyed', shareable: false, reason: 'arg-secret' }], 'Work', en, plugins)
+    expect(p.choices.map((c) => c.id)).toEqual(['item:mcp:linear', 'item:skill:review', 'plugin:hud@obra'])
+    expect(p.choices[2]).toEqual(plugins.choices[0])
+    expect(p.body.split('\n')).toEqual([
+      en('settings.extensions.import.body'),
+      en('settings.extensions.import.notShareable', { kind: en('settings.extensions.kindOne.mcp'), name: 'keyed', reason: en('settings.extensions.reason.arg-secret') }),
+      'keyed@corp: some reason',
+      'Could not read the plugin list of Work'
+    ])
+    // Plugins only: an account with nothing else to add still gets the dialog
+    expect(importPrompt([], 'Work', en, plugins).choices.map((c) => c.id)).toEqual(['plugin:hud@obra'])
+    // Without plugins (a Codex account) it is the dialog it always was
+    expect(importPrompt(ITEMS, 'Work', en).choices.map((c) => c.id)).toEqual(['item:mcp:linear', 'item:skill:review'])
+  })
+
   it('keeps every environment value of a picked server as a secret', () => {
     expect(picksOf(ITEMS, ['item:mcp:linear', 'item:skill:astera-task'])).toEqual([{ kind: 'mcp', name: 'linear', secretNames: ['LINEAR_API_KEY', 'LOG_LEVEL'] }])
     expect(picksOf(ITEMS, ['item:skill:review'])).toEqual([{ kind: 'skill', name: 'review' }])

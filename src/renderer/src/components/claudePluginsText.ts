@@ -12,6 +12,7 @@ import type {
   OfferedClaudePlugin,
   SharedClaudePlugin
 } from '../../../core/extensions/claudePlugins/types'
+import type { CodexPluginAccountState, CodexPluginFailureCode } from '../../../core/extensions/codexPlugins/types'
 import type { ConfirmChoice } from '../lib/confirm'
 
 type T = (key: MessageKey, params?: MessageParams) => string
@@ -51,11 +52,47 @@ const CODES: Record<ClaudePluginFailureCode, MessageKey> = {
   'timed-out': 'settings.extensions.plugin.code.timed-out'
 }
 
+// The words for each Codex failure code. `refused` and `timed-out` are also Claude codes, but their Claude wording names
+// claude and Claude Code, so Codex has its own
+const CODEX_CODES: Record<CodexPluginFailureCode, MessageKey> = {
+  'marketplace-taken': 'settings.extensions.plugin.codex.code.marketplace-taken',
+  'codex-unsupported': 'settings.extensions.plugin.codex.code.codex-unsupported',
+  'config-unreadable': 'settings.extensions.plugin.codex.code.config-unreadable',
+  'hooks-unreadable': 'settings.extensions.plugin.codex.code.hooks-unreadable',
+  refused: 'settings.extensions.plugin.codex.code.refused',
+  'timed-out': 'settings.extensions.plugin.codex.code.timed-out'
+}
+
 /** Why a plugin cannot be shared; a reason this build does not know reads as the Host's own word. */
 export const refusalLabel = (r: string, t: T): string => (Object.hasOwn(REFUSALS, r) ? t(REFUSALS[r as ClaudePluginRefusal]) : r)
 
 /** A job the Host has not finished: the tab reads the list again while one is. */
 export const isLiveJob = (j: Pick<ClaudePluginJob, 'state'>): boolean => j.state === 'queued' || j.state === 'running'
+
+/** How long after a plugin job ends the list is still read for the Codex outcome. */
+export const CODEX_CATCH_UP_MS = 3 * 60_000
+
+/** Whether the Codex outcome may still be catching up with the last share, update or removal (not a check, which changes
+ *  no plugin). The Codex sync starts after the job ends and runs codex in each account, so the last read of a job can see
+ *  it done while the rows still trail it. That is so while a listed Codex account has no row, or one written before the
+ *  job ended, and it is given up 3 minutes after the job ended, however the rows stand: an account with nothing to
+ *  record may never get a row. No listed Codex account, no job that ended, or a time that cannot be read waits for
+ *  nothing. */
+export function codexCatchingUp(
+  jobs: readonly Pick<ClaudePluginJob, 'kind' | 'endedAt'>[],
+  rows: readonly Pick<CodexPluginAccountState, 'accountId' | 'at'>[],
+  codexAccountIds: readonly string[],
+  now: number
+): boolean {
+  const ends = jobs.flatMap((j) => (j.kind !== 'check' && j.endedAt !== undefined ? [Date.parse(j.endedAt)] : [])).filter(Number.isFinite)
+  if (codexAccountIds.length === 0 || ends.length === 0) return false
+  const endedAt = Math.max(...ends)
+  if (now >= endedAt + CODEX_CATCH_UP_MS) return false
+  return codexAccountIds.some((id) => {
+    const row = rows.find((r) => r.accountId === id)
+    return row === undefined || Date.parse(row.at) < endedAt
+  })
+}
 
 /** Where a job stands, or null once it is done and the list says the rest. */
 export function jobLine(j: ClaudePluginJob, t: T): string | null {
@@ -122,6 +159,56 @@ export function ownCopyLines(p: Pick<ListedClaudePlugin, 'enabled' | 'accountCop
   })
 }
 
+/** One line per Codex account, in the order the accounts are listed (§5.8), with the outcome row the sync left for it. A
+ *  failure comes first: the Host keeps the installs when only the trust of the hooks failed, and the attention mark has to
+ *  have its reason on the row. Then held: the new version could not be made into a Codex copy, so the account keeps the
+ *  one it has and waits for nothing. Then waiting, but only while this plugin is not at the shared version (the account
+ *  waits as a whole, for any plugin it has to change), then the version Codex has, and otherwise not installed yet, which
+ *  is also what a held plugin the account does not have reads as. An own plugin of the same name that Astera turned off in
+ *  the account adds a line. A failure Astera decided is worded; one Codex reported, or a code this build does not know, is
+ *  shown as the message. A row of an account no longer listed says nothing. */
+export function codexLines(
+  p: Pick<ListedClaudePlugin, 'name' | 'version'>,
+  rows: readonly CodexPluginAccountState[],
+  codexAccountIds: readonly string[],
+  labelOf: LabelOf,
+  t: T
+): string[] {
+  return codexAccountIds.flatMap((id) => {
+    const row = rows.find((r) => r.accountId === id)
+    const account = labelOf(id)
+    const version = row !== undefined && Object.hasOwn(row.installed, p.name) ? row.installed[p.name] : undefined
+    let state: string
+    if (row?.failure !== undefined) {
+      const { code, message } = row.failure
+      const reason = code !== undefined && Object.hasOwn(CODEX_CODES, code) ? t(CODEX_CODES[code]) : message
+      state = t('settings.extensions.plugin.codex.failed', { account, reason })
+    } else if (version !== undefined && row?.held?.includes(p.name) === true) state = t('settings.extensions.plugin.codex.held', { account })
+    else if (row?.waiting === true && version !== p.version) state = t('settings.extensions.plugin.codex.waiting', { account })
+    else if (version !== undefined) state = t('settings.extensions.plugin.codex.installed', { account, version })
+    else state = t('settings.extensions.plugin.codex.pending', { account })
+    const off = (row?.turnedOff ?? []).filter((own) => own.split('@')[0] === p.name).map((own) => t('settings.extensions.plugin.codex.turnedOff', { account, id: own }))
+    return [state, ...off]
+  })
+}
+
+/** How Codex differs for what this plugin brings (§5.8): agents are left out, commands become skills, and Astera trusts
+ *  the hooks. A note for each the plugin has; none from a Host that does not say what it brings. The row shows them only
+ *  while a Codex account exists. */
+export function codexNotes(p: Pick<ListedClaudePlugin, 'name' | 'contents'>, t: T): string[] {
+  const c = p.contents
+  if (c === undefined) return []
+  return [
+    ...(c.agents.length > 0 ? [t('settings.extensions.plugin.codex.noteAgents')] : []),
+    ...(c.commands.length > 0 ? [t('settings.extensions.plugin.codex.noteCommands', { name: p.name })] : []),
+    ...(c.hooks ? [t('settings.extensions.plugin.codex.noteHooks')] : [])
+  ]
+}
+
+/** Whether a Codex account failed, which the collapsed row marks as it does a failed job. A failure belongs to the account,
+ *  not to one plugin, so `p` does not narrow it. */
+export const codexAttention = (_p: Pick<ListedClaudePlugin, 'name'>, rows: readonly CodexPluginAccountState[]): boolean => rows.some((r) => r.failure !== undefined)
+
 /** What Claude Code installed with the plugin, which loads with it (§5.4), one line each. */
 export const dependencyLines = (deps: readonly ClaudePluginDependency[], t: T): string[] =>
   deps.map((d) => t('settings.extensions.plugin.dependency', { name: d.id, version: d.version }))
@@ -141,32 +228,28 @@ export function contentLines(c: ClaudePluginContents | undefined, t: T): string[
   return lines
 }
 
-/** The register dialog for what `pluginDiscover` found across the Claude accounts: one choice a plugin that can be
- *  shared, labelled with its id over the accounts holding it and, on a line of its own, the version a share would
- *  install when the catalog says (§5.3). A plugin that cannot be shared is not a choice; it is listed in the body with
- *  why, as is each account whose plugins could not be read (ruling P-2). Nothing starts checked. */
-export function pluginPrompt(
-  found: readonly OfferedClaudePlugin[],
-  unreadable: readonly string[],
-  labelOf: LabelOf,
-  t: T
-): { title: string; body: string; footer: string; confirmLabel: string; choices: ConfirmChoice[] } {
-  const hint = (p: OfferedClaudePlugin): string =>
-    [holdersHint(p.holders, labelOf, t), ...(typeof p.offeredVersion === 'string' ? [t('settings.extensions.plugin.offeredVersion', { version: p.offeredVersion })] : [])].join('\n')
-  const choices = found.filter((p) => p.shareable).map((p) => ({ id: p.id, label: p.id, hint: hint(p), defaultChecked: false }))
+const PLUGIN_CHOICE = 'plugin:'
+
+/** The plugins `pluginDiscover` found in the account picked in the register menu, as choices of that account's dialog
+ *  (K4), after its servers and skills: one choice a plugin that can be shared, hinted with the version a share would
+ *  install when the catalog says (§5.3). A plugin that cannot be shared is not a choice; it is listed with why, for the
+ *  dialog's body. Nothing starts checked. */
+export function pluginChoices(found: readonly OfferedClaudePlugin[], t: T): { choices: ConfirmChoice[]; refused: string[] } {
+  const choices = found
+    .filter((p) => p.shareable)
+    .map((p) => ({
+      id: `${PLUGIN_CHOICE}${p.id}`,
+      label: t('settings.extensions.plugin.choice', { id: p.id }),
+      ...(typeof p.offeredVersion === 'string' ? { hint: t('settings.extensions.plugin.offeredVersion', { version: p.offeredVersion }) } : {}),
+      defaultChecked: false
+    }))
   const refused = found.flatMap((p) => (p.shareable ? [] : [`${p.id}: ${refusalLabel(p.reason, t)}`]))
-  return {
-    title: t('settings.extensions.plugin.register'),
-    body: [
-      t('settings.extensions.plugin.registerBody'),
-      ...refused,
-      ...unreadable.map((accountId) => t('settings.extensions.plugin.unreadable', { account: labelOf(accountId) }))
-    ].join('\n'),
-    footer: t('settings.extensions.import.footer'),
-    confirmLabel: t('settings.extensions.import.confirm'),
-    choices
-  }
+  return { choices, refused }
 }
+
+/** The plugin ids among the choices the person checked in the register dialog. */
+export const pickedPluginIds = (checked: readonly string[]): string[] =>
+  checked.filter((id) => id.startsWith(PLUGIN_CHOICE)).map((id) => id.slice(PLUGIN_CHOICE.length))
 
 /** The latest job for one plugin id, the Host listing jobs in the order they were asked for. */
 export const latestJob = (jobs: readonly ClaudePluginJob[], target: string): ClaudePluginJob | undefined => jobs.filter((j) => j.target === target).at(-1)

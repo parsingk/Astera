@@ -5,6 +5,7 @@
 import type { MessageKey, MessageParams } from '../../../core/i18n'
 import type { ExtensionKind, SkipReason } from '../../../core/extensions/types'
 import type { NotShareableReason } from '../../../core/extensions/envRules'
+import type { ConfirmChoice } from '../lib/confirm'
 
 type T = (key: MessageKey, params?: MessageParams) => string
 
@@ -82,22 +83,25 @@ const itemId = (i: Pick<FoundItem, 'kind' | 'name'>): string => `item:${i.kind}:
 export const offeredItems = (items: readonly FoundItem[]): FoundItem[] => items.filter((i) => i.reason !== 'astera-own')
 
 /** The import dialog for what `extensions-discover` found in the account labelled `label`: one choice an item that can
- *  be shared; what cannot be shared is listed in the body with why, Astera's own left out. Nothing starts checked. */
+ *  be shared; what cannot be shared is listed in the body with why, Astera's own left out. A Claude account's plugins
+ *  (`pluginChoices`) are choices after the items, with their own refusals after the items' in the body. Nothing starts
+ *  checked. */
 export function importPrompt(
   items: readonly FoundItem[],
   label: string,
-  t: T
-): { title: string; body: string; footer: string; confirmLabel: string; choices: { id: string; label: string; defaultChecked: boolean }[] } {
-  const choices = items.filter((x) => x.shareable).map((i) => ({ id: itemId(i), label: `${kindOneLabel(i.kind, t)} ${i.name}`, defaultChecked: false }))
+  t: T,
+  plugins?: { choices: readonly ConfirmChoice[]; refused: readonly string[] }
+): { title: string; body: string; footer: string; confirmLabel: string; choices: ConfirmChoice[] } {
+  const choices: ConfirmChoice[] = items.filter((x) => x.shareable).map((i) => ({ id: itemId(i), label: `${kindOneLabel(i.kind, t)} ${i.name}`, defaultChecked: false }))
   const refused = offeredItems(items)
     .filter((x) => !x.shareable)
     .map((i) => t('settings.extensions.import.notShareable', { kind: kindOneLabel(i.kind, t), name: i.name, reason: reasonLabel(i.reason ?? '', t) }))
   return {
     title: t('settings.extensions.import.title', { label }),
-    body: [t('settings.extensions.import.body'), ...refused].join('\n'),
+    body: [t('settings.extensions.import.body'), ...refused, ...(plugins?.refused ?? [])].join('\n'),
     footer: t('settings.extensions.import.footer'),
     confirmLabel: t('settings.extensions.import.confirm'),
-    choices
+    choices: [...choices, ...(plugins?.choices ?? [])]
   }
 }
 

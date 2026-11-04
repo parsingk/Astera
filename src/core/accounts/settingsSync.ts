@@ -15,10 +15,13 @@ export interface SyncResult {
  *  Settings › Extensions, which then gives them to every account itself (Agent Control Plane release 1 design §4.7, D9). */
 export interface SyncOptions {
   capabilities: boolean
-  /** Top-level `settings.json` keys the target keeps as they are: its own value (or its absence) stays and the source's
-   *  is not copied. The import passes the two plugin keys once plugins are shared through Astera, which then gives
-   *  every account its plugins itself (Claude plugin sharing P3, C1). Claude only; codex ignores it. */
+  /** Top-level keys of `settings.json` (Claude) or `config.toml` (Codex) the target keeps as they are: its own value (or
+   *  its absence) stays and the source's is not copied. The import passes the plugin keys once plugins are shared through
+   *  Astera, which then gives every account its plugins itself (Claude plugin sharing P3, C1; Codex plugin sharing C6). */
   keepTargetKeys?: string[]
+  /** Codex only: runs the `config.toml` patch inside this, so the import never writes the file while the Host's Codex pass
+   *  does. Not taken when the source has no `config.toml`, as then nothing is written. */
+  lock?: <T>(fn: () => Promise<T>) => Promise<T>
 }
 
 // Paths compare through comparablePath (core/files/tree.ts): case folded on win32 and darwin, exact on linux.
@@ -141,7 +144,8 @@ export async function syncClaudeSettings(
  * config.toml is **merged** key by key, in place, so the target keeps its comments and the order of its tables
  * (configWrite.ts). The source's keys win, except two that belong to the target account alone: `projects`, the
  * folders it trusts, and `hooks.state`, the hooks it approved. With `capabilities` off the target's `mcp_servers` is
- * kept too; with it on the servers merge by name, as Claude's do. The existing file is backed up to .bak first, and a
+ * kept too; with it on the servers merge by name, as Claude's do. The keys of `opts.keepTargetKeys` (`plugins` and
+ * `marketplaces` once plugins are shared) stay the target's as well. The existing file is backed up to .bak first, and a
  * file that does not parse is refused, never overwritten. This used to replace the whole file, because there was no
  * TOML parser here.
  *
@@ -159,25 +163,29 @@ export async function syncCodexSettings(srcConfigDir: string, targetConfigDir: s
   const source = readTomlObject(raw)
 
   await fs.mkdir(targetConfigDir, { recursive: true })
-  await patchTomlFile(path.join(targetConfigDir, 'config.toml'), (current) => {
-    const next: JsonObject = { ...current, ...source }
-    const keep = (key: string): void => {
-      if (key in current) next[key] = current[key]
-      else delete next[key]
-    }
-    keep('projects')
-    const targetHooks = isPlainObject(current.hooks) ? current.hooks : null
-    if (isPlainObject(next.hooks)) {
-      const hooks: JsonObject = { ...next.hooks }
-      if (targetHooks && 'state' in targetHooks) hooks.state = targetHooks.state
-      else delete hooks.state
-      next.hooks = hooks
-    }
-    if (!opts.capabilities) keep('mcp_servers')
-    else if (isPlainObject(current.mcp_servers) && isPlainObject(source.mcp_servers))
-      next.mcp_servers = { ...current.mcp_servers, ...source.mcp_servers }
-    return next
-  })
+  // Through a link, as Codex writes: a config.toml a dotfile manager links stays a link
+  const patch = (): Promise<unknown> =>
+    patchTomlFile(path.join(targetConfigDir, 'config.toml'), (current) => {
+      const next: JsonObject = { ...current, ...source }
+      const keep = (key: string): void => {
+        if (key in current) next[key] = current[key]
+        else delete next[key]
+      }
+      keep('projects')
+      for (const key of opts.keepTargetKeys ?? []) keep(key)
+      const targetHooks = isPlainObject(current.hooks) ? current.hooks : null
+      if (isPlainObject(next.hooks)) {
+        const hooks: JsonObject = { ...next.hooks }
+        if (targetHooks && 'state' in targetHooks) hooks.state = targetHooks.state
+        else delete hooks.state
+        next.hooks = hooks
+      }
+      if (!opts.capabilities) keep('mcp_servers')
+      else if (isPlainObject(current.mcp_servers) && isPlainObject(source.mcp_servers))
+        next.mcp_servers = { ...current.mcp_servers, ...source.mcp_servers }
+      return next
+    }, { throughLink: true })
+  await (opts.lock ? opts.lock(patch) : patch())
   result.settingsApplied = true
 
   return result

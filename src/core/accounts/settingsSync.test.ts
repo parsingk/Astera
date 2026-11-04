@@ -418,4 +418,94 @@ describe('syncCodexSettings', () => {
     expect(await fs.readFile(path.join(dst, 'auth.json'), 'utf8')).toBe('{"tokens":{"id_token":"DST"}}')
     await expect(fs.access(path.join(dst, 'sessions'))).rejects.toThrow()
   })
+
+  // Codex plugin sharing C6: once a plugin is shared, Astera manages the two plugin tables of every Codex account
+  const sourcePluginTables =
+    'model = "src"\n' +
+    '[plugins."q@astera-shared"]\nenabled = true\n' +
+    '[plugins."own@elsewhere"]\nenabled = true\n' +
+    '[marketplaces.astera-shared]\nsource_type = "local"\nsource = "C:/src/extensions/codex-plugins"\n' +
+    '[marketplaces.elsewhere]\nsource_type = "git"\nsource = "https://example.com/m.git"\n'
+  const targetPluginTables =
+    'model = "old"\n' +
+    '[plugins."p@astera-shared"]\nenabled = true\n' +
+    '[marketplaces.astera-shared]\nsource_type = "local"\nsource = "C:/dst/extensions/codex-plugins"\n'
+
+  it('keepTargetKeys 로 plugins 와 marketplaces 를 지정하면 대상의 두 표가 그대로 남고 원본의 것은 오지 않는다', async () => {
+    await fs.writeFile(path.join(src, 'config.toml'), sourcePluginTables, 'utf8')
+    await fs.writeFile(path.join(dst, 'config.toml'), targetPluginTables, 'utf8')
+    await syncCodexSettings(src, dst, { capabilities: true, keepTargetKeys: ['plugins', 'marketplaces'] })
+    const merged = readTomlObject(await fs.readFile(path.join(dst, 'config.toml'), 'utf8'))
+    expect(merged.model).toBe('src')
+    expect(Object.keys(merged.plugins as object)).toEqual(['p@astera-shared'])
+    expect(Object.keys(merged.marketplaces as object)).toEqual(['astera-shared'])
+    expect((merged.marketplaces as Record<string, { source: string }>)['astera-shared'].source).toBe('C:/dst/extensions/codex-plugins')
+  })
+
+  it('keepTargetKeys 로 지정한 표가 대상에 없으면 원본의 것도 만들어지지 않는다', async () => {
+    await fs.writeFile(path.join(src, 'config.toml'), sourcePluginTables, 'utf8')
+    await fs.writeFile(path.join(dst, 'config.toml'), 'model = "old"\n', 'utf8')
+    await syncCodexSettings(src, dst, { capabilities: true, keepTargetKeys: ['plugins', 'marketplaces'] })
+    const merged = readTomlObject(await fs.readFile(path.join(dst, 'config.toml'), 'utf8'))
+    expect(merged.model).toBe('src')
+    expect('plugins' in merged).toBe(false)
+    expect('marketplaces' in merged).toBe(false)
+  })
+
+  it('keepTargetKeys 가 비어 있으면 원본의 plugins 와 marketplaces 가 지금처럼 이긴다', async () => {
+    await fs.writeFile(path.join(src, 'config.toml'), sourcePluginTables, 'utf8')
+    await fs.writeFile(path.join(dst, 'config.toml'), targetPluginTables, 'utf8')
+    await syncCodexSettings(src, dst, { capabilities: true, keepTargetKeys: [] })
+    const merged = readTomlObject(await fs.readFile(path.join(dst, 'config.toml'), 'utf8'))
+    expect(Object.keys(merged.plugins as object).sort()).toEqual(['own@elsewhere', 'q@astera-shared'])
+    expect(Object.keys(merged.marketplaces as object).sort()).toEqual(['astera-shared', 'elsewhere'])
+  })
+
+  it('lock 이 주어지면 config.toml 을 고치는 일이 그 안에서 일어난다', async () => {
+    await fs.writeFile(path.join(src, 'config.toml'), 'model = "src"\n', 'utf8')
+    await fs.writeFile(path.join(dst, 'config.toml'), 'model = "old"\n', 'utf8')
+    const events: string[] = []
+    const lock = async <T>(fn: () => Promise<T>): Promise<T> => {
+      events.push(`enter:${readTomlObject(await fs.readFile(path.join(dst, 'config.toml'), 'utf8')).model}`)
+      try {
+        return await fn()
+      } finally {
+        events.push(`exit:${readTomlObject(await fs.readFile(path.join(dst, 'config.toml'), 'utf8')).model}`)
+      }
+    }
+    const r = await syncCodexSettings(src, dst, { capabilities: true, lock })
+    expect(r.settingsApplied).toBe(true)
+    expect(events).toEqual(['enter:old', 'exit:src'])
+  })
+
+  // Codex plugin sharing §5.3 and the final review (D5): a dotfile manager's link stays a link, as Codex writes through it
+  it('대상 config.toml 이 링크면 링크로 남기고 링크가 가리키는 파일을 고친다', async (ctx) => {
+    await fs.writeFile(path.join(src, 'config.toml'), 'model = "src"\n', 'utf8')
+    const real = path.join(home, 'dotfiles', 'codex.toml')
+    await fs.mkdir(path.dirname(real), { recursive: true })
+    await fs.writeFile(real, '# mine\nmodel = "old"\n', 'utf8')
+    try {
+      await fs.symlink(real, path.join(dst, 'config.toml'), 'file')
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'EPERM') return ctx.skip()
+      throw e
+    }
+    const r = await syncCodexSettings(src, dst, { capabilities: true })
+    expect(r.settingsApplied).toBe(true)
+    expect((await fs.lstat(path.join(dst, 'config.toml'))).isSymbolicLink()).toBe(true)
+    const text = await fs.readFile(real, 'utf8')
+    expect(text).toContain('# mine')
+    expect(readTomlObject(text).model).toBe('src')
+  })
+
+  it('원본에 config.toml 이 없으면 lock 을 잡지도 않는다', async () => {
+    let entered = false
+    const lock = async <T>(fn: () => Promise<T>): Promise<T> => {
+      entered = true
+      return fn()
+    }
+    const r = await syncCodexSettings(src, dst, { capabilities: true, lock })
+    expect(r.settingsApplied).toBe(false)
+    expect(entered).toBe(false)
+  })
 })

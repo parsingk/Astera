@@ -32,6 +32,8 @@ import { hidingLog } from '../core/extensions/secrets'
 import { createHidingSource, projectOfWorktrees } from '../core/credentials/hiding'
 import { sweepGeneratedMcp } from '../core/extensions/resolve'
 import { createPluginCliRunner } from '../core/extensions/claudePlugins/cli'
+import { createCodexPluginCliRunner } from '../core/extensions/codexPlugins/cli'
+import { createCodexHooksList } from '../core/extensions/codexPlugins/hooks'
 import { hostJobSources } from './jobSources'
 import { hostCompletionChecks } from './completionChecks'
 import { PLUGIN_STOP_CAP_MS, createPluginRuntime } from './plugins/runtime'
@@ -909,7 +911,14 @@ async function main(): Promise<void> {
       home: extensionPaths(profileDir).claudePluginHome,
       platform: process.platform,
       baseEnv: () => hostWorkerBaseEnv(process.env)
-    })
+    }),
+    // And those plugins brought into each Codex account after every change, in the same way: `codex plugin …` and the
+    // hooks Codex loads are asked as a worker's CLI is started. In an account with an Astera-started Codex session alive,
+    // only the installs, reinstalls and removals wait until that session ends; turning a plugin on or off does not
+    codexPluginRun: createCodexPluginCliRunner({ platform: process.platform, baseEnv: () => hostWorkerBaseEnv(process.env) }),
+    codexHooks: createCodexHooksList({ platform: process.platform, baseEnv: () => hostWorkerBaseEnv(process.env) }),
+    liveAccountIds: async () =>
+      new Set((await hostSessions.listSessions()).filter((s) => s.alive && s.provider === 'codex' && s.accountId !== null).map((s) => s.accountId!))
   })
   // Agent Profiles (design §4): the store this Host owns. A profile cannot be deleted while a live session holds it
   // (the session's note carries `agentProfileId`) or unfinished orchestration work does (a Job, a Task, an open

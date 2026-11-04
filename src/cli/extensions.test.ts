@@ -11,6 +11,8 @@ import { extensionSecrets } from '../core/extensions/secrets'
 import { hashFile } from '../core/extensions/hash'
 import { updateClaudePlugins } from '../core/extensions/claudePlugins/store'
 import type { SharedClaudePlugin } from '../core/extensions/claudePlugins/types'
+import { writeCodexPluginAccounts } from '../core/extensions/codexPlugins/state'
+import type { CodexPluginAccountState } from '../core/extensions/codexPlugins/types'
 import { extensionsCommand } from './extensions'
 
 const dirs: string[] = []
@@ -105,6 +107,35 @@ describe('extensionsCommand', () => {
     expect(r.body).not.toHaveProperty('claudePlugins')
     expect(await fs.readFile(p.paths.claudePlugins, 'utf8')).toBe('{ damaged')
     expect(await fs.readdir(extDir)).toEqual(before)
+  })
+
+  const codexRows: CodexPluginAccountState[] = [
+    { accountId: 'acc_2', installed: { review: '1.0.0' }, waiting: false, turnedOff: ['review@other'], at: '2026-11-04T00:00:00.000Z' },
+    { accountId: 'acc_3', installed: {}, waiting: true, failure: { message: 'codex plugin add failed', code: 'refused' }, turnedOff: [], at: '2026-11-04T00:01:00.000Z' }
+  ]
+
+  it('list gives each Codex account its outcome row, and an empty list when no outcome is kept', async () => {
+    const p = await profile()
+    const none = await extensionsCommand({ cmd: 'ext-list', profileDir: p.profileDir })
+    expect(none).toMatchObject({ ok: true, body: { codexPluginAccounts: [] } })
+    expect(JSON.stringify(none)).not.toContain('codexPluginAccountsError')
+    await writeCodexPluginAccounts(p.profileDir, codexRows)
+    const r = await extensionsCommand({ cmd: 'ext-list', profileDir: p.profileDir })
+    if (!r.ok) throw new Error('unreachable')
+    expect(r.body.codexPluginAccounts).toEqual(codexRows)
+    expect(r.body).not.toHaveProperty('codexPluginAccountsError')
+  })
+
+  it('list answers the rest when the outcome file cannot be read, and gives the reason', async () => {
+    const p = await profile()
+    await fs.mkdir(p.paths.codexPluginAccounts, { recursive: true }) // a folder where the file belongs: reading it fails
+    const r = await extensionsCommand({ cmd: 'ext-list', profileDir: p.profileDir })
+    expect(r).toMatchObject({ ok: true, body: { entries: [{ id: 'command-ship' }, { id: 'mcp-linear' }], claudePlugins: [] } })
+    if (!r.ok) throw new Error('unreachable')
+    expect(typeof r.body.codexPluginAccountsError).toBe('string')
+    expect(r.body.codexPluginAccountsError).not.toBe('')
+    // an unreadable file is not "no rows": the list is left out
+    expect(r.body).not.toHaveProperty('codexPluginAccounts')
   })
 
   it('refuses a damaged registry with the file to repair, and a failed copy exits as a failure', async () => {
