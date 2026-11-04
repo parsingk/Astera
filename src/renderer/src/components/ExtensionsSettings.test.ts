@@ -193,6 +193,16 @@ describe('the register menu', () => {
     expect(confirmModalWithChoices.mock.calls[0][0].choices.map((c: { id: string }) => c.id)).toEqual(['item:skill:review'])
   })
 
+  // Final review D2: with the plugins unasked, "nothing to add" would not be known
+  it('says only why the plugins could not be asked for when the account offers no servers or skills either', async () => {
+    api.extensions.discover.mockResolvedValue(answer({ items: [] }))
+    api.extensions.pluginDiscover.mockResolvedValue({ ok: false, code: 'TIMEOUT', message: 'late' })
+    await openMenu().pick('c1')
+    expect(toast.error.mock.calls).toEqual([['settings.plugins.fail.timeoutRead']])
+    expect(toast.info).not.toHaveBeenCalled()
+    expect(confirmModalWithChoices).not.toHaveBeenCalled()
+  })
+
   it('offers nothing when the servers and skills could not be read', async () => {
     api.extensions.discover.mockResolvedValue({ ok: false, code: 'TIMEOUT', message: 'late' })
     await openMenu().pick('c1')

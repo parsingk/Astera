@@ -87,6 +87,7 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
     let items: FoundItem[]
     let found: OfferedClaudePlugin[] = []
     let unreadable: string[] = []
+    let pluginsUnasked = false
     try {
       const [r, p] = await Promise.all([
         window.api.extensions.discover(accountId).catch(failed),
@@ -96,8 +97,10 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
       items = arr<FoundItem>(r.body.items)
       // Plugins that could not be asked for leave the servers and skills to be offered, with the reason said
       if (p !== null) {
-        if (!p.ok) toast.error(failureLine(p, t, { read: true }))
-        else {
+        if (!p.ok) {
+          toast.error(failureLine(p, t, { read: true }))
+          pluginsUnasked = true
+        } else {
           found = arr<OfferedClaudePlugin>(p.body.plugins)
           unreadable = arr<string>(p.body.unreadable)
         }
@@ -107,9 +110,11 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
     }
     const label = labelOf(accountId)
     const unreadableLines = unreadable.map((id) => t('settings.extensions.plugin.unreadable', { account: labelOf(id) }))
-    // An account with plugins only still gets the dialog
+    // An account with plugins only still gets the dialog. With its plugins not asked, there may be some, so the reason
+    // already said is all that is said
     if (offeredItems(items).length === 0 && found.length === 0) {
       for (const line of unreadableLines) toast.error(line)
+      if (pluginsUnasked) return
       return void toast.info(t('settings.extensions.import.nothing', { label }))
     }
     const plugins = pluginChoices(found, t)
