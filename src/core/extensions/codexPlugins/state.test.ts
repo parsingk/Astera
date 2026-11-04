@@ -70,4 +70,14 @@ describe('Codex plugin outcome file', () => {
     }
     expect((await fs.readdir(path.dirname(file))).sort()).toEqual([path.basename(file)])
   })
+
+  // The rows hold what Codex cannot give back (which own plugins Astera turned off), so a file that could not be read
+  // is never taken for a file with no rows: the next write would drop them (audit U-1).
+  it('rejects with the read error when the file cannot be read, and leaves the path as it was', async () => {
+    const p = await profile()
+    const file = extensionPaths(p).codexPluginAccounts
+    await fs.mkdir(file, { recursive: true }) // a folder where the file belongs: reading it is EISDIR
+    await expect(readCodexPluginAccounts(p)).rejects.toMatchObject({ code: 'EISDIR' })
+    expect((await fs.stat(file)).isDirectory()).toBe(true)
+  })
 })

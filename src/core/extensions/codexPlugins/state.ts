@@ -1,7 +1,11 @@
 // What Astera remembers about each Codex account's plugins (Codex plugin sharing design §5): per account, the shared
 // plugins it installed and their versions, whether it is waiting for its sessions to end, the last failure, and which of
-// the account's own plugins Astera turned off. A missing or damaged file reads as no rows, nothing is kept aside: the
-// next sync works every account out again from Codex itself and writes the file anew, so there is nothing here to lose.
+// the account's own plugins Astera turned off. A missing or damaged file reads as no rows and nothing is kept aside: the
+// installed versions are read from Codex again at the next sync, so those rows are rebuilt. `turnedOff` is not: it is
+// Astera's own memory of which plugins it switched off and Codex cannot give it back. A file with no text to read it from
+// (missing, or damaged) has lost it already, but a file that is there and could not be read has not, and a write made
+// after taking it for no rows would leave the person's own plugin disabled for good. So that case is a failure, never
+// no rows (audit U-1, as storeFile.ts has it).
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { writeThroughTmp } from '../../accounts/fileQueue'
@@ -27,10 +31,12 @@ export interface CodexPluginAccountState {
   at: string
 }
 
-/** The outcome rows; empty when the file is missing or cannot be read as `{ version: 1, accounts: [...] }`. */
+/** The outcome rows; empty when the file is missing or its text is not `{ version: 1, accounts: [...] }`. Rejects with the
+ *  read error when the file is there but could not be read. */
 export async function readCodexPluginAccounts(profileDir: string): Promise<CodexPluginAccountState[]> {
   const read = await readStoreFile(extensionPaths(profileDir).codexPluginAccounts)
-  if (read.kind !== 'text') return []
+  if (read.kind === 'unreadable') throw read.error
+  if (read.kind === 'missing') return []
   let parsed: unknown
   try {
     parsed = JSON.parse(read.text)
