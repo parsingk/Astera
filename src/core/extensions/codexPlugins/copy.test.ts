@@ -54,11 +54,30 @@ describe('versionSegment and codexCopyFolder', () => {
     expect(versionSegment('2.0:한')).toBe('2.0__')
   })
 
+  it('never gives a segment that is empty or only dots, since that names the folder itself or its parent', () => {
+    expect(versionSegment('')).toBe('_')
+    expect(versionSegment('.')).toBe('_')
+    expect(versionSegment('..')).toBe('__')
+    expect(versionSegment('...')).toBe('___')
+    expect(versionSegment('.1')).toBe('.1')
+    expect(versionSegment('1..')).toBe('1..')
+  })
+
   it('puts a copy at <codexPluginHome>/plugins/<name>/<version segment>', () => {
     const profile = path.join(os.tmpdir(), 'astera')
     expect(codexCopyFolder(profile, 'review', '1.0.0+b')).toBe(
       path.join(extensionPaths(profile).codexPluginHome, 'plugins', 'review', '1.0.0_b')
     )
+  })
+
+  it('keeps the copy folder of any name and version two segments below <codexPluginHome>/plugins', () => {
+    const profile = path.join(os.tmpdir(), 'astera')
+    const plugins = path.join(extensionPaths(profile).codexPluginHome, 'plugins')
+    for (const [name, version] of [['..', '1.0.0'], ['p', '..'], ['.', ''], ['..', '..'], ['a/../..', '..\\..'], ['', '.']]) {
+      const rel = path.relative(plugins, codexCopyFolder(profile, name, version)).split(path.sep)
+      expect(rel).toHaveLength(2)
+      for (const segment of rel) expect(segment).not.toMatch(/^\.*$/)
+    }
   })
 })
 
@@ -298,6 +317,29 @@ describe('writeCodexCopy', () => {
     expect(await fs.readdir(path.dirname(to))).toEqual([V])
   })
 
+  it('never removes anything outside the copies folder, whatever the plugin is named', async () => {
+    const root = await temp()
+    const profile = path.join(root, 'astera')
+    const home = extensionPaths(profile).codexPluginHome
+    const kept = [
+      path.join(home, '.agents', 'plugins', 'marketplace.json'),
+      path.join(home, 'plugins', 'other', '1.0.0', 'keep.txt'),
+      path.join(extensionPaths(profile).claudePluginHome, 'plugins', 'keep.txt'),
+      path.join(profile, 'extensions', 'registry.json')
+    ]
+    for (const file of kept) await write(file, 'kept')
+    const from = await claudePlugin(root)
+
+    for (const [name, version] of [['..', '..'], ['.', '.'], ['p', '..']]) {
+      const to = codexCopyFolder(profile, name, version)
+      await writeCodexCopy({ from, to, name, version, dataDir: path.join(extensionPaths(profile).codexPluginData, 'p') })
+      expect(path.relative(path.join(home, 'plugins'), to).startsWith('..')).toBe(false)
+      expect(await exists(path.join(to, '.mcp.json'))).toBe(true)
+    }
+
+    for (const file of kept) expect(await fs.readFile(file, 'utf8')).toBe('kept')
+  })
+
   it('creates the data folder and keeps what is already in it', async () => {
     const root = await temp()
     const from = await claudePlugin(root)
@@ -311,6 +353,43 @@ describe('writeCodexCopy', () => {
     await fs.rm(dataDir, { recursive: true })
     await writeCodexCopy({ from, to, name: 'p', version: V, dataDir })
     expect(await exists(dataDir)).toBe(true)
+  })
+
+  it('leaves no data folder for a plugin whose MCP config does not name it', async () => {
+    const root = await temp()
+    const mcp = JSON.stringify({ mcpServers: { s: { command: 'node', args: ['${CLAUDE_PLUGIN_ROOT}/a.js'] } } })
+    const from = await claudePlugin(root, { '.mcp.json': mcp })
+    const dataDir = path.join(root, 'data', 'p')
+
+    await writeCodexCopy({ from, to: path.join(root, 'out', 'a', V), name: 'p', version: V, dataDir })
+    await fs.rm(path.join(from, '.mcp.json'))
+    await writeCodexCopy({ from, to: path.join(root, 'out', 'b', V), name: 'p', version: V, dataDir })
+
+    expect(await exists(dataDir)).toBe(false)
+    expect(await exists(path.dirname(dataDir))).toBe(false)
+  })
+
+  it('creates the data folder for a plugin that names it only in the servers of its manifest', async () => {
+    const root = await temp()
+    const from = await claudePlugin(root, {
+      '.mcp.json': JSON.stringify({ mcpServers: {} }),
+      '.claude-plugin/plugin.json': JSON.stringify({ name: 'p', mcpServers: { s: { command: 'node', args: ['--data=${CLAUDE_PLUGIN_DATA}'] } } })
+    })
+    const dataDir = path.join(root, 'data', 'p')
+
+    await writeCodexCopy({ from, to: path.join(root, 'out', 'p', V), name: 'p', version: V, dataDir })
+
+    expect(await exists(dataDir)).toBe(true)
+  })
+
+  it('does not make the data folder for a plugin it cannot convert', async () => {
+    const root = await temp()
+    const from = await claudePlugin(root, { '.claude-plugin/plugin.json': '[]' })
+    const dataDir = path.join(root, 'data', 'p')
+
+    await expect(writeCodexCopy({ from, to: path.join(root, 'out', 'p', V), name: 'p', version: V, dataDir })).rejects.toThrow(/plugin\.json/)
+
+    expect(await exists(dataDir)).toBe(false)
   })
 
   it('writes a profile folder with spaces and Korean exactly into .mcp.json', async () => {
@@ -366,17 +445,19 @@ describe('writeCodexMarketplace', () => {
 
     await writeCodexMarketplace(profile, [
       { name: 'one', version: '1.0.0' },
-      { name: 'two', version: '2.0.0+build 7' }
+      { name: 'two', version: '2.0.0+build 7' },
+      { name: '..', version: '..' }
     ])
 
     const file = (await readJson(marketplaceFile(profile))) as { plugins: { name: string; source: { path: string } }[] }
     expect(file.plugins.map((p) => [p.name, p.source.path])).toEqual([
       ['one', './plugins/one/1.0.0'],
-      ['two', './plugins/two/2.0.0_build_7']
+      ['two', './plugins/two/2.0.0_build_7'],
+      ['..', './plugins/__/__']
     ])
-    for (const [name, version] of [['one', '1.0.0'], ['two', '2.0.0+build 7']]) {
+    for (const [name, version] of [['one', '1.0.0'], ['two', '2.0.0+build 7'], ['..', '..']]) {
       const rel = path.relative(extensionPaths(profile).codexPluginHome, codexCopyFolder(profile, name, version))
-      expect(rel.split(path.sep).join('/')).toBe(`plugins/${name}/${versionSegment(version)}`)
+      expect(`./${rel.split(path.sep).join('/')}`).toBe(file.plugins.find((p) => p.name === name)?.source.path)
     }
   })
 

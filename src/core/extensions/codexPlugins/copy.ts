@@ -23,14 +23,23 @@ export function codexMarketplaceName(profileDir: string): string {
   return `${slug === '' ? 'astera' : slug}-shared`
 }
 
-/** A version as a folder name (plan ruling P5): every character outside `[A-Za-z0-9._-]` becomes `_`. */
-export function versionSegment(version: string): string {
-  return version.replace(/[^A-Za-z0-9._-]/gu, '_')
+/** Text as one folder name (plan ruling P5): every character outside `[A-Za-z0-9._-]` becomes `_`, and a result that is
+ *  empty or only dots becomes `_` as many times as it was long, at least once: `.` and `..` would name the folder a copy
+ *  sits in or its parent, and a copy is removed whole before it is replaced. */
+function folderSegment(text: string): string {
+  const segment = text.replace(/[^A-Za-z0-9._-]/gu, '_')
+  return /^\.*$/.test(segment) ? '_'.repeat(Math.max(segment.length, 1)) : segment
 }
 
-/** Where the Codex copy of `name` at `version` lives. The marketplace file names the same place, relative to its folder. */
+/** A version as a folder name (P5). */
+export function versionSegment(version: string): string {
+  return folderSegment(version)
+}
+
+/** Where the Codex copy of `name` at `version` lives, always two folders below `<codexPluginHome>/plugins` whatever the
+ *  name and the version hold. The marketplace file names the same place, relative to its folder. */
 export function codexCopyFolder(profileDir: string, name: string, version: string): string {
-  return path.join(extensionPaths(profileDir).codexPluginHome, 'plugins', name, versionSegment(version))
+  return path.join(extensionPaths(profileDir).codexPluginHome, 'plugins', folderSegment(name), versionSegment(version))
 }
 
 /** Whether a marketplace source is an Astera one, of this profile or another: a folder ending in
@@ -94,9 +103,14 @@ async function readJsonObject(dir: string, rel: string): Promise<Obj | undefined
 const writeJson = (dir: string, rel: string, value: unknown): Promise<void> =>
   fs.writeFile(path.join(dir, rel), JSON.stringify(value, null, 2) + '\n', 'utf8')
 
-/** Makes the folder `dir`, a plain copy of a Claude copy, the Codex copy that will live at `root`. */
-async function convert(dir: string, root: string, a: { name: string; version: string; dataDir: string }): Promise<void> {
+const namesData = (config: unknown): boolean => JSON.stringify(config).includes('${CLAUDE_PLUGIN_DATA}')
+
+/** Makes the folder `dir`, a plain copy of a Claude copy, the Codex copy that will live at `root`. Answers whether an MCP
+ *  config of the plugin names `${CLAUDE_PLUGIN_DATA}`, read before it was filled in: only then does the plugin need its
+ *  data folder. */
+async function convert(dir: string, root: string, a: { name: string; version: string; dataDir: string }): Promise<boolean> {
   const mcp = await readJsonObject(dir, '.mcp.json')
+  let usesData = mcp !== undefined && namesData(mcp)
   if (mcp !== undefined) await writeJson(dir, '.mcp.json', codexMcpConfig(mcp, root, a.dataDir))
 
   // Codex reads `.codex-plugin/plugin.json` when the plugin has one, and then never the Claude manifest (C22). A Codex
@@ -105,32 +119,36 @@ async function convert(dir: string, root: string, a: { name: string; version: st
   const own = await readJsonObject(dir, codexManifest)
   if (own !== undefined) {
     await writeJson(dir, codexManifest, { ...own, version: a.version })
-    return
+    return usesData
   }
 
   const claudeManifest = '.claude-plugin/plugin.json'
   const manifest: Obj = (await readJsonObject(dir, claudeManifest)) ?? { name: a.name }
   const next: Obj = { ...manifest, version: a.version }
   // Servers declared in the manifest itself are read by Codex and start the same way (C23)
-  if (isObj(manifest.mcpServers)) next.mcpServers = codexMcpConfig(manifest.mcpServers, root, a.dataDir)
+  if (isObj(manifest.mcpServers)) {
+    usesData ||= namesData(manifest.mcpServers)
+    next.mcpServers = codexMcpConfig(manifest.mcpServers, root, a.dataDir)
+  }
   // Codex loads manifest hooks only as `{ hooks: {...} }`; an unwrapped object loads nothing (C25). A path is left alone.
   if (isObj(manifest.hooks) && !isObj(manifest.hooks.hooks)) next.hooks = { hooks: manifest.hooks }
   await fs.mkdir(path.join(dir, '.claude-plugin'), { recursive: true })
   await writeJson(dir, claudeManifest, next)
+  return usesData
 }
 
 /** Makes the Codex copy of the plugin at `from` (its Claude copy) at `to`, replacing any copy there whole. It is built
  *  beside `to` and swapped in, so a plugin that cannot be converted leaves the old copy as it was. `dataDir` is the
- *  plugin's data folder, made if it is not there and never cleared: it outlives every version. */
+ *  plugin's data folder, made when an MCP config of the plugin names it (Codex does not make it) and never cleared: it
+ *  outlives every version. */
 export async function writeCodexCopy(a: { from: string; to: string; name: string; version: string; dataDir: string }): Promise<void> {
   const tmp = `${a.to}.${process.pid}.tmp`
   // A leftover of an earlier run that had this process id would be merged into the new copy
   await fs.rm(tmp, { recursive: true, force: true })
   await fs.mkdir(path.dirname(a.to), { recursive: true })
-  await fs.mkdir(a.dataDir, { recursive: true })
   try {
     await fs.cp(a.from, tmp, { recursive: true, verbatimSymlinks: true })
-    await convert(tmp, a.to, a)
+    if (await convert(tmp, a.to, a)) await fs.mkdir(a.dataDir, { recursive: true })
     await fs.rm(a.to, { recursive: true, force: true })
     await renameRetrying(tmp, a.to)
   } catch (err) {
@@ -149,7 +167,7 @@ export async function writeCodexMarketplace(profileDir: string, plugins: { name:
     interface: { displayName: 'Astera shared' },
     plugins: plugins.map((p) => ({
       name: p.name,
-      source: { source: 'local', path: `./plugins/${p.name}/${versionSegment(p.version)}` },
+      source: { source: 'local', path: `./plugins/${folderSegment(p.name)}/${versionSegment(p.version)}` },
       policy: { installation: 'AVAILABLE', authentication: 'ON_INSTALL' },
       category: 'Productivity'
     }))
