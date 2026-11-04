@@ -768,24 +768,56 @@ describe('createHostExtensions, Codex accounts', () => {
     expect((await h.jobs()).map((j) => [j.kind, j.state])).toEqual([['remove', 'done']])
   })
 
-  it('a check, a failed job and a job asking for confirmation run none', async () => {
+  // The store entry is dropped before the uninstall can fail, so the Codex accounts still hold what is no longer shared
+  it('a remove whose uninstall fails runs one Codex sync', async () => {
+    const h = await pluginRig({ codex: true })
+    await h.seed([sharedEntry(h.pluginHome, 'review')])
+    h.script['plugin uninstall review@market'] = () => ({ code: 1, json: { outcome: 'failed', message: 'offline' } })
+    expect((await h.call('extensions-plugin-remove', { id: 'review@market' })).status).toBe(200)
+    await waitLong(() => expect(h.syncCount()).toBe(1))
+    await quiet()
+    expect(h.syncCount()).toBe(1)
+    expect((await h.jobs()).map((j) => [j.kind, j.state])).toEqual([['remove', 'failed']])
+    expect((await readClaudePlugins(h.profileDir)).plugins).toEqual([])
+  })
+
+  it('a failed share and a share asking for confirmation each run one Codex sync', async () => {
     const h = await pluginRig({ codex: true })
     await holding(h.account.configDir, { 'lint@market': { version: '1.0.0' } })
-    await h.seed([sharedEntry(h.pluginHome, 'review')])
-    h.script['plugin marketplace update market'] = () => okOutcome
-    h.script['plugin update review@market'] = () => ({ code: 1, json: { outcome: 'failed', message: 'offline' } })
+    h.script['plugin marketplace add acme/market'] = () => ({ code: 1, json: { outcome: 'failed', message: 'the marketplace could not be reached' } })
+    await h.call('extensions-plugin-share', { id: 'lint@market' })
+    await waitLong(() => expect(h.syncCount()).toBe(1))
+    await quiet()
+    expect(h.syncCount()).toBe(1)
+
     h.script['plugin marketplace add acme/market'] = async () => {
       await addMarketplace(h.pluginHome)
       return okOutcome
     }
     h.script['plugin list'] = () => ({ code: 0, json: [] })
     h.script['plugin install lint@market'] = () => ({ code: 1, json: { outcome: 'failed', message: 'review it', shownCommand: { command: 'node x', sha256: 'abc' } } })
-    await h.call('extensions-plugin-check')
-    await h.call('extensions-plugin-update', { id: 'review@market' })
     await h.call('extensions-plugin-share', { id: 'lint@market' })
-    await waitLong(async () => expect((await h.jobs()).map((j) => [j.kind, j.state])).toEqual([['check', 'done'], ['update', 'failed'], ['share', 'needs-confirmation']]))
+    await waitLong(() => expect(h.syncCount()).toBe(2))
+    await quiet()
+    expect(h.syncCount()).toBe(2)
+    expect((await h.jobs()).map((j) => [j.kind, j.state])).toEqual([['share', 'failed'], ['share', 'needs-confirmation']])
+  })
+
+  it('a failed update runs one Codex sync, and a check runs none', async () => {
+    const h = await pluginRig({ codex: true })
+    await h.seed([sharedEntry(h.pluginHome, 'review')])
+    h.script['plugin marketplace update market'] = () => okOutcome
+    h.script['plugin update review@market'] = () => ({ code: 1, json: { outcome: 'failed', message: 'offline' } })
+    await h.call('extensions-plugin-check')
+    await waitLong(async () => expect((await h.jobs()).map((j) => [j.kind, j.state])).toEqual([['check', 'done']]))
     await quiet()
     expect(h.syncCount()).toBe(0)
+
+    await h.call('extensions-plugin-update', { id: 'review@market' })
+    await waitLong(() => expect(h.syncCount()).toBe(1))
+    await quiet()
+    expect(h.syncCount()).toBe(1)
+    expect((await h.jobs()).map((j) => [j.kind, j.state])).toEqual([['check', 'done'], ['update', 'failed']])
   })
 
   it('set-enabled runs one Codex sync once the store is written, and extensions-sync runs one', async () => {
@@ -809,6 +841,25 @@ describe('createHostExtensions, Codex accounts', () => {
     expect((await h.call('extensions-plugin-set-enabled', { id: 'nope@market', enabled: true })).status).toBe(404)
     await quiet()
     expect(h.syncCount()).toBe(2)
+  })
+
+  it('extensions-sync runs one Codex sync even when its own copies could not be synced', async () => {
+    const h = await pluginRig()
+    // The copies' sync reads the accounts first and fails; the Codex sync that follows reads them again and goes through
+    let reads = 0
+    const ext = createHostExtensions({
+      ...h.deps,
+      readAccounts: async () => {
+        if (reads++ === 0) throw new Error('accounts.json could not be read')
+        return [h.account]
+      },
+      ...h.codexDeps
+    })
+    const answered = await ext.command({ cmd: 'extensions-sync', args: {}, role: 'app', marks: { effects: 0 } })
+    expect(answered.status).toBe(500)
+    await waitLong(() => expect(h.syncCount()).toBe(1))
+    await quiet()
+    expect(h.syncCount()).toBe(1)
   })
 
   it('hands the sync the profile, the accounts, the runners and the accounts with a live Codex session, and its log', async () => {
@@ -1000,7 +1051,7 @@ describe('createHostExtensions, Codex accounts', () => {
     stop()
   })
 
-  it('every minute it asks for a sync only while an account waits, and the stop stops both timers', async () => {
+  it('every minute it asks for a sync only for a waiting account none of whose sessions is alive, and the stop stops both timers', async () => {
     const h = await pluginRig({ codex: true })
     const ticks = new Map<number, () => void>()
     const stopped: number[] = []
@@ -1025,20 +1076,67 @@ describe('createHostExtensions, Codex accounts', () => {
     await tick()
     expect(h.syncCount()).toBe(1)
 
+    // A waiting account whose sessions are still alive would only be left waiting again: nothing is asked
     await writeCodexPluginAccounts(h.profileDir, [CODEX_ROW, { ...CODEX_ROW, accountId: 'acc_d', waiting: true }])
+    h.live.add('acc_d')
+    await tick()
+    expect(h.syncCount()).toBe(1)
+    await tick()
+    expect(h.syncCount()).toBe(1)
+
+    // Its sessions ended: one sync
+    h.live.delete('acc_d')
     await tick()
     expect(h.syncCount()).toBe(2)
+
+    // One waiting account that is free is enough, whatever the others are doing
+    h.live.add('acc_c')
+    await writeCodexPluginAccounts(h.profileDir, [{ ...CODEX_ROW, waiting: true }, { ...CODEX_ROW, accountId: 'acc_d', waiting: true }])
+    await tick()
+    expect(h.syncCount()).toBe(3)
+    h.live.clear()
 
     // A file that cannot be read says nothing about waiting: logged, no sync
     const file = extensionPaths(h.profileDir).codexPluginAccounts
     await fs.rm(file)
     await fs.mkdir(file)
     await tick()
-    expect(h.syncCount()).toBe(2)
+    expect(h.syncCount()).toBe(3)
     await waitLong(() => expect(h.logs.join('\n')).toContain('codex plugins: the outcome file could not be read'))
 
     stop()
     expect(stopped.sort((a, b) => a - b)).toEqual([60_000, DAY_MS])
+  })
+
+  it('a minute tick that cannot ask which accounts are busy logs it and syncs nothing', async () => {
+    const h = await pluginRig()
+    let liveError: Error | null = null
+    const ext = createHostExtensions({
+      ...h.deps,
+      ...h.codexDeps,
+      liveAccountIds: async () => {
+        if (liveError) throw liveError
+        return new Set<string>()
+      }
+    })
+    const ticks = new Map<number, () => void>()
+    const stop = ext.keepCheckingClaudePlugins({
+      every: (ms, fn) => {
+        ticks.set(ms, fn)
+        return () => {}
+      }
+    })
+    await waitLong(() => expect(h.syncCount()).toBe(1))
+    await writeCodexPluginAccounts(h.profileDir, [{ ...CODEX_ROW, waiting: true }])
+    liveError = new Error('sessions could not be listed')
+    const unhandled = await unhandledDuring(async () => {
+      ticks.get(60_000)!()
+      await waitLong(() => expect(h.logs.join('\n')).toContain('the check for an account left waiting did not run (sessions could not be listed)'))
+      await quiet()
+    })
+    expect(unhandled).toEqual([])
+    expect(h.syncCount()).toBe(1)
+    stop()
   })
 
   it('the list carries the outcome rows, and none with a log line when the file cannot be read', async () => {

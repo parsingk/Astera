@@ -86,8 +86,8 @@ export interface HostExtensions {
   sync(): Promise<SyncItem[]>
   /** The Host's start for the shared Claude plugins: sweeps their folder once, before any plugin job runs, then checks
    *  them for updates now and every CLAUDE_PLUGIN_CHECK_EVERY_MS. When Codex accounts are synced, it also syncs them once
-   *  after the sweep and every CODEX_WAITING_RETRY_MS while an account waits for its sessions to end. Returns the stop of
-   *  every timer; none keeps the process alive. */
+   *  after the sweep, and every CODEX_WAITING_RETRY_MS when an account waiting for its sessions to end has none alive
+   *  now. Returns the stop of every timer; none keeps the process alive. */
   keepCheckingClaudePlugins(o?: {
     /** Test injection: how the check is repeated; returns the stop. */
     every?: (ms: number, fn: () => void) => () => void
@@ -173,10 +173,11 @@ export function createHostExtensions(d: {
             profileDir: d.profileDir,
             run,
             log,
-            // A share, update or remove that went through changed what the Codex accounts should have. A check changes
-            // nothing there, and a job that failed or asks for confirmation left the store as it was.
+            // Every job but a check, however it ended: a remove drops the store entry before its uninstall can fail, and an
+            // update or share that failed may have moved the store or an install before it did. A sync is coalesced and
+            // finds nothing to do when nothing changed, so asking after a job that changed nothing costs a store read.
             onJobEnd: (job) => {
-              if (job.state === 'done' && (job.kind === 'share' || job.kind === 'update' || job.kind === 'remove')) requestCodexSync()
+              if (job.kind !== 'check') requestCodexSync()
             }
           })
           return pluginJobs
@@ -197,6 +198,7 @@ export function createHostExtensions(d: {
   // made while a sync runs queues exactly one more, since the store may have changed after that sync read it. A failure is
   // a log line and never reaches the caller: the change that asked for it is done, and the next request tries again.
   let codexSyncWaiting = false
+  const liveNow = (): Promise<Set<string>> => d.liveAccountIds?.() ?? Promise.resolve(new Set<string>())
   const requestCodexSync = (): void => {
     const { codexPluginRun: run, codexHooks: hooks } = d
     if (run === undefined || hooks === undefined || codexSyncWaiting) return
@@ -209,7 +211,7 @@ export function createHostExtensions(d: {
           .runExclusive(async () => {
             codexSyncWaiting = false
             const accounts = await d.readAccounts()
-            const liveAccountIds = await (d.liveAccountIds?.() ?? Promise.resolve(new Set<string>()))
+            const liveAccountIds = await liveNow()
             await syncCodexPlugins({ profileDir: d.profileDir, homeDir: d.homeDir, accounts, run, hooks, liveAccountIds, log })
           })
           .catch((e: unknown) => log(`codex plugins: the sync did not run (${message(e)})`)),
@@ -398,12 +400,14 @@ export function createHostExtensions(d: {
         requestCodexSync()
         return { status: 200, body: { enabled } }
       }
-      case 'extensions-sync': {
-        const r = await queued(async () => ({ status: 200, body: { sync: await syncNow() } }))
-        // An account just added is brought in line too. Not waited for: the answer is the copies' sync
-        requestCodexSync()
-        return r
-      }
+      case 'extensions-sync':
+        try {
+          return await queued(async () => ({ status: 200, body: { sync: await syncNow() } }))
+        } finally {
+          // An account just added is brought in line too, whether or not the copies could be synced into the accounts.
+          // Not waited for: the answer is the copies' sync
+          requestCodexSync()
+        }
       case 'extensions-replace': {
         if (typeof args.accountId !== 'string' || typeof args.id !== 'string') return bad('extensions-replace needs accountId and id')
         const { accountId, id } = args as { accountId: string; id: string }
@@ -461,12 +465,16 @@ export function createHostExtensions(d: {
       if (d.codexPluginRun === undefined || d.codexHooks === undefined) return stopChecking
       // The start brings the Codex accounts in line once, after the sweep: accounts added, settings imported or sessions
       // ended while the Host was away. Then an account left waiting for its sessions to end (C5) is tried again every
-      // minute for as long as any account waits; with none waiting the tick reads one file and does nothing.
+      // minute once none of its sessions is alive; a tick with no account waiting reads one file and does nothing, and a
+      // waiting account that is still busy would only be left waiting again.
       requestCodexSync()
       const stopWaiting = every(CODEX_WAITING_RETRY_MS, () => {
         void codexRows()
-          .then((rows) => {
-            if (rows.some((r) => r.waiting)) requestCodexSync()
+          .then(async (rows) => {
+            const waiting = rows.filter((r) => r.waiting)
+            if (waiting.length === 0) return
+            const live = await liveNow()
+            if (waiting.some((r) => !live.has(r.accountId))) requestCodexSync()
           })
           .catch((e: unknown) => log(`codex plugins: the check for an account left waiting did not run (${message(e)})`))
       })
