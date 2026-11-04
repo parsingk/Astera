@@ -47,7 +47,8 @@ const messageOf = (e: unknown): string => (e instanceof Error ? e.message : Stri
  *  or by Astera, so no flag or trust can be written. */
 const STOPS_THE_PASS = new Set<CodexPluginFailureCode>(['marketplace-taken', 'codex-unsupported', 'config-unreadable'])
 
-/** A plugin `codex plugin list --json` reports installed (C3). */
+/** A plugin the account has installed: as `codex plugin list --json` reports it (C3), or, for one of this profile's that
+ *  the list leaves out, as config.toml and the account's plugin cache show it (C27). */
 interface Listed {
   id: string
   name: string
@@ -71,6 +72,26 @@ function installedRows(json: PluginCliResult['json']): Listed[] {
     out.push({ id: x.pluginId, name: x.name, marketplace: x.marketplaceName, version: x.version, enabled: x.enabled === true, marketplaceSource: source })
   }
   return out
+}
+
+/** One folder name, not a path (codexMentions.ts has the same rule): a name read from config.toml is joined into the
+ *  cache path, so it must not leave it. */
+const isFolderName = (name: string): boolean => name !== '' && name !== '.' && name !== '..' && path.basename(name) === name
+
+/** The version folder codex keeps for a plugin in the account's cache: the newest by mtime, as codex keeps one and
+ *  codexMentions.ts reads it the same way. Null when there is none. */
+async function cachedVersion(dir: string): Promise<string | null> {
+  const folders = await fs.readdir(dir, { withFileTypes: true }).then(
+    (entries) => entries.filter((e) => e.isDirectory()).map((e) => e.name),
+    () => [] as string[]
+  )
+  let newest: { version: string; mtimeMs: number } | null = null
+  for (const version of folders) {
+    const mtimeMs = await fs.stat(path.join(dir, version)).then((s) => s.mtimeMs, () => null)
+    // Gone since the listing: codex is replacing the version this moment
+    if (mtimeMs !== null && (newest === null || mtimeMs > newest.mtimeMs)) newest = { version, mtimeMs }
+  }
+  return newest?.version ?? null
 }
 
 /** What Codex says when the marketplace name is already added from another folder (C10). */
@@ -237,18 +258,44 @@ export async function reconcileCodexAccount(a: {
     const colon = key.indexOf(':')
     return colon < 0 ? null : pluginOf(key.slice(0, colon))
   }
-  /** Whether config.toml, read as a file, names this profile's marketplace from this folder. An account with no row can
-   *  still hold what this profile installed, when the row was lost (a damaged outcome file, an account removed and added
-   *  again). A file that is not there or does not parse names nothing. */
-  const namesThisMarketplace = async (): Promise<boolean> => {
-    let current: Table
+  /** config.toml, read as a file; null when it is not there or does not parse (a write to it then fails the account). */
+  const readConfig = async (): Promise<Table | null> => {
     try {
-      current = readTomlObject(await fs.readFile(configFile, 'utf8'))
+      return readTomlObject(await fs.readFile(configFile, 'utf8'))
     } catch {
-      return false
+      return null
     }
-    const entry = isTable(current.marketplaces) ? current.marketplaces[m] : undefined
-    return isTable(entry) && typeof entry.source === 'string' && fromThisFolder(entry.source)
+  }
+  /** The source config.toml gives this profile's marketplace name; null when it names none. */
+  const sourceIn = (current: Table | null): string | null => {
+    const entry = current !== null && isTable(current.marketplaces) ? current.marketplaces[m] : undefined
+    return isTable(entry) && typeof entry.source === 'string' ? entry.source : null
+  }
+  /** Whether config.toml names this profile's marketplace from this folder. An account with no row can still hold what
+   *  this profile installed, when the row was lost (a damaged outcome file, an account removed and added again). */
+  const namesThisMarketplace = async (): Promise<boolean> => {
+    const source = sourceIn(await readConfig())
+    return source !== null && fromThisFolder(source)
+  }
+  /** `listed` with each plugin of this profile that codex leaves out of it. Codex lists only what the marketplace file
+   *  lists (C27), and the sync writes that file without a plugin no longer shared and without a held one, though each is
+   *  still installed, still loads in sessions and can still be removed (C28). Such a plugin is a `[plugins."<name>@<m>"]`
+   *  table of config.toml whose cache folder holds a version, the newest by mtime, and it is taken only while the
+   *  marketplace is this profile's: added in this pass, or named in config.toml from this folder. Its flag is the table's,
+   *  on unless it says false. */
+  const withUnlisted = async (listed: Listed[]): Promise<Listed[]> => {
+    const current = await readConfig()
+    const source = sourceIn(current)
+    if (current === null || !isTable(current.plugins) || !fromThisFolder(source)) return listed
+    const known = new Set(listed.filter((r) => r.marketplace === m).map((r) => r.name))
+    const out = [...listed]
+    for (const [id, table] of Object.entries(current.plugins)) {
+      const name = pluginOf(id)
+      if (name === null || known.has(name) || !isFolderName(name) || !isTable(table)) continue
+      const version = await cachedVersion(path.join(a.account.configDir, 'plugins', 'cache', m, name))
+      if (version !== null) out.push({ id, name, marketplace: m, version, enabled: table.enabled !== false, marketplaceSource: source })
+    }
+    return out
   }
 
   /** Steps 5 and 6: each installed shared copy's flag as the person set it, and each own plugin of the same name off
@@ -304,8 +351,9 @@ export async function reconcileCodexAccount(a: {
     // marketplace: no codex runs and no file changes (§4)
     if (a.desired.length === 0 && a.previous === undefined && !(await namesThisMarketplace())) return answer()
 
-    // 1. What the account has
-    const before = await list({ first: true })
+    // 1. What the account has: what codex lists, and what of this profile's it leaves out
+    const listedBefore = await list({ first: true })
+    let before = await withUnlisted(listedBefore)
     installed = versions(before)
     // Read on every row under the name: which of them are this profile's is settled by the add, which comes after
     const named = before.filter((r) => r.marketplace === m)
@@ -316,7 +364,7 @@ export async function reconcileCodexAccount(a: {
 
     // 3., decided on the first list and before step 2, so an account left waiting runs nothing more. A reinstall and a
     // removal delete the folder a running session reads its hooks and skills from (C5, C14); a flag does not, so the
-    // flags are still written, and the versions recorded are what the first list shows.
+    // flags are still written, and the versions recorded are what the account had before anything was run.
     if (waiting) {
       await writeFlags(before, { waiting: true })
       return answer({ waiting: true })
@@ -327,6 +375,7 @@ export async function reconcileCodexAccount(a: {
     if (addable.length > 0) {
       await run(['plugin', 'marketplace', 'add', a.marketplace.root])
       added = true
+      before = await withUnlisted(listedBefore)
       installed = versions(before)
     }
 
@@ -341,7 +390,7 @@ export async function reconcileCodexAccount(a: {
       }
     }
     // What was installed is known only from Codex, so a list that fails here ends the pass
-    const rows = toAdd.length > 0 ? await list() : before
+    const rows = toAdd.length > 0 ? await withUnlisted(await list()) : before
     installed = versions(rows)
 
     // 5., 6. Before the hooks are listed, so a plugin just turned on has its hooks listed

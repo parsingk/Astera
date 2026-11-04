@@ -1099,6 +1099,92 @@ describe('reconcileCodexAccount', () => {
     })
   })
 
+  // R1, measured (C27, C28): `codex plugin list` reports only what the marketplace file lists, yet a plugin left out of it
+  // is still installed, still loaded and still removable. These scripts list such a plugin nowhere; its config.toml table
+  // and its cache folder are what codex keeps for it.
+  describe('a plugin of this profile that codex does not list', () => {
+    /** The folder codex installed `name` at `version` into, in the account's own cache. */
+    const cached = async (f: Fixture, name: string, version: string, mtime?: Date): Promise<string> => {
+      const dir = path.join(f.account.configDir, 'plugins', 'cache', M, name, version)
+      await fs.mkdir(dir, { recursive: true })
+      if (mtime !== undefined) await fs.utimes(dir, mtime, mtime)
+      return dir
+    }
+    const marketplaceTable = `[marketplaces.${M}]\nsource_type = "local"\nsource = '${ROOT}'\n`
+
+    it('is removed when no longer shared, its trust keys go after it, and the own copy comes back', async () => {
+      const OWN = 'x@claude-plugins-official'
+      const KEY_X = `x@${M}:hooks/hooks.json:stop:0:0`
+      const config = [
+        `[plugins."x@${M}"]`,
+        'enabled = true',
+        '',
+        `[plugins."${OWN}"]`,
+        'enabled = false',
+        '',
+        `[plugins."y@${M}"]`,
+        'enabled = true',
+        '',
+        `[hooks.state."${KEY_X}"]`,
+        'trusted_hash = "sha256:x"',
+        '',
+        marketplaceTable
+      ].join('\n')
+      const f = await fixture(config)
+      await cached(f, 'x', '1.0.0')
+      await cached(f, 'y', '1.0.0')
+      // The marketplace file lists only y now, so codex lists only y
+      const cli = scripted({
+        'plugin list': listed(row('y', M, '1.0.0'), row('x', 'claude-plugins-official', '2.0.0', { enabled: false })),
+        [`plugin marketplace add ${ROOT}`]: marketplaceAdded,
+        [`plugin remove x@${M}`]: removed('x')
+      })
+      const state = await pass(f, { desired: [on('y', '1.0.0')], previous: prev({ installed: { x: '1.0.0', y: '1.0.0' }, turnedOff: [OWN] }), cli })
+      expect(cli.lines()).toEqual(['plugin list', `plugin marketplace add ${ROOT}`, `plugin remove x@${M}`])
+      expect(state).toEqual({ accountId: ACCOUNT_ID, installed: { y: '1.0.0' }, waiting: false, turnedOff: [], at: AT })
+      const plugins = await pluginsOf(f.file)
+      expect(plugins[OWN]).toEqual({ enabled: true })
+      expect(plugins[`x@${M}`]).toEqual({ enabled: false })
+      expect(await hookStateOf(f.file)).toBeUndefined()
+    })
+
+    it('held: recorded at the version in its cache folder (the newest), its flag following the store, nothing run on it', async () => {
+      const f = await fixture([`[plugins."h@${M}"]`, 'enabled = true', '', marketplaceTable].join('\n'))
+      await cached(f, 'h', '0.9.0', new Date('2026-11-01T00:00:00.000Z'))
+      await cached(f, 'h', '1.0.0', new Date('2026-11-03T00:00:00.000Z'))
+      const cli = scripted({ 'plugin list': listed() })
+      const state = await pass(f, { desired: [off('h', '1.1.0')], held: ['h'], previous: prev({ installed: { h: '1.0.0' } }), cli })
+      expect(cli.lines()).toEqual(['plugin list'])
+      expect(state).toEqual({ accountId: ACCOUNT_ID, installed: { h: '1.0.0' }, held: ['h'], waiting: false, turnedOff: [], at: AT })
+      expect((await pluginsOf(f.file))[`h@${M}`]).toEqual({ enabled: false })
+    })
+
+    it('counts a table only with a cache folder and a single folder name, so only that one is removed', async () => {
+      const config = [`[plugins."g@${M}"]`, 'enabled = true', '', `[plugins."..@${M}"]`, 'enabled = true', '', `[plugins."h@${M}"]`, 'enabled = true', '', marketplaceTable].join('\n')
+      const f = await fixture(config)
+      // `..` would name the cache folder of the marketplace itself, which holds h
+      await cached(f, 'h', '1.0.0')
+      const cli = scripted({ 'plugin list': listed(), [`plugin remove h@${M}`]: removed('h'), [`plugin marketplace remove ${M}`]: ok({ marketplaceName: M }) })
+      const state = await pass(f, { desired: [], previous: prev({ installed: { h: '1.0.0' } }), cli })
+      // g and .. are not installed, so nothing is run on them, and nothing of the marketplace is left after h
+      expect(cli.lines()).toEqual(['plugin list', `plugin remove h@${M}`, `plugin marketplace remove ${M}`])
+      expect(state.installed).toEqual({})
+    })
+
+    it('is not counted when config.toml has this marketplace from another folder', async () => {
+      const other = path.join(os.tmpdir(), 'elsewhere', 'astera', 'extensions', 'codex-plugins')
+      const config = [`[plugins."h@${M}"]`, 'enabled = true', '', `[marketplaces.${M}]`, 'source_type = "local"', `source = '${other}'`, ''].join('\n')
+      const f = await fixture(config)
+      await cached(f, 'h', '1.0.0')
+      const cli = scripted({ 'plugin list': listed() })
+      const state = await pass(f, { desired: [], previous: prev({ installed: { h: '1.0.0' } }), cli })
+      expect(cli.lines()).toEqual(['plugin list'])
+      expect(state.installed).toEqual({})
+      expect(state.failure?.code).toBe('marketplace-taken')
+      expect(await fs.readFile(f.file, 'utf8')).toBe(config)
+    })
+  })
+
   // Final review I4: a row can be lost (a damaged outcome file, an account removed and added again), and what this profile
   // installed is still there; its config.toml says so without running codex
   describe('an account with no row', () => {
