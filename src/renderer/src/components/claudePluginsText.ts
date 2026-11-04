@@ -69,6 +69,31 @@ export const refusalLabel = (r: string, t: T): string => (Object.hasOwn(REFUSALS
 /** A job the Host has not finished: the tab reads the list again while one is. */
 export const isLiveJob = (j: Pick<ClaudePluginJob, 'state'>): boolean => j.state === 'queued' || j.state === 'running'
 
+/** How long after a plugin job ends the list is still read for the Codex outcome. */
+export const CODEX_CATCH_UP_MS = 3 * 60_000
+
+/** Whether the Codex outcome may still be catching up with the last share, update or removal (not a check, which changes
+ *  no plugin). The Codex sync starts after the job ends and runs codex in each account, so the last read of a job can see
+ *  it done while the rows still trail it. That is so while a listed Codex account has no row, or one written before the
+ *  job ended, and it is given up 3 minutes after the job ended, however the rows stand: an account with nothing to
+ *  record may never get a row. No listed Codex account, no job that ended, or a time that cannot be read waits for
+ *  nothing. */
+export function codexCatchingUp(
+  jobs: readonly Pick<ClaudePluginJob, 'kind' | 'endedAt'>[],
+  rows: readonly Pick<CodexPluginAccountState, 'accountId' | 'at'>[],
+  codexAccountIds: readonly string[],
+  now: number
+): boolean {
+  const ends = jobs.flatMap((j) => (j.kind !== 'check' && j.endedAt !== undefined ? [Date.parse(j.endedAt)] : [])).filter(Number.isFinite)
+  if (codexAccountIds.length === 0 || ends.length === 0) return false
+  const endedAt = Math.max(...ends)
+  if (now >= endedAt + CODEX_CATCH_UP_MS) return false
+  return codexAccountIds.some((id) => {
+    const row = rows.find((r) => r.accountId === id)
+    return row === undefined || Date.parse(row.at) < endedAt
+  })
+}
+
 /** Where a job stands, or null once it is done and the list says the rest. */
 export function jobLine(j: ClaudePluginJob, t: T): string | null {
   switch (j.state) {

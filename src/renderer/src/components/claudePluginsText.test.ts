@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { t as translate, LANGS, type MessageKey, type MessageParams } from '../../../core/i18n'
 import {
+  CODEX_CATCH_UP_MS,
   codexAttention,
+  codexCatchingUp,
   codexLines,
   codexNotes,
   contentLines,
@@ -306,6 +308,63 @@ describe('claudePluginsText', () => {
       expect(codexAttention(plugin, [row({}), row({ accountId: 'x2', failure: { message: 'm' } })])).toBe(true)
       expect(codexAttention(plugin, [row({}), row({ accountId: 'x2', waiting: true })])).toBe(false)
       expect(codexAttention(plugin, [])).toBe(false)
+    })
+
+    // The Codex sync starts after a plugin job ends and runs codex in each account, so the outcome rows trail the job
+    describe('while the Codex outcome catches up with the last job', () => {
+      const ENDED = '2026-11-04T12:00:00.000Z'
+      const endedAt = Date.parse(ENDED)
+      const ended = (over: Partial<ClaudePluginJob> = {}): ClaudePluginJob => job({ state: 'done', endedAt: ENDED, ...over })
+      const at = (offsetMs: number): string => new Date(endedAt + offsetMs).toISOString()
+      const catching = (jobs: ClaudePluginJob[], rows: CodexPluginAccountState[], ids: string[], nowMs = endedAt + 1000): boolean => codexCatchingUp(jobs, rows, ids, nowMs)
+
+      it('does while a listed account has no row, or a row older than the job ended', () => {
+        expect(catching([ended()], [], ['x1'])).toBe(true)
+        expect(catching([ended()], [row({ at: at(-60_000) })], ['x1'])).toBe(true)
+        // One of two accounts has caught up
+        expect(catching([ended()], [row({ at: at(2000) }), row({ accountId: 'x2', at: at(-5000) })], ['x1', 'x2'])).toBe(true)
+        expect(catching([ended()], [row({ at: at(2000) })], ['x1', 'x2'])).toBe(true)
+      })
+
+      it('does not once every listed account has a row from after the job ended', () => {
+        expect(catching([ended()], [row({ at: at(2000) }), row({ accountId: 'x2', at: at(500) })], ['x1', 'x2'])).toBe(false)
+        // Written at the moment it ended counts as after
+        expect(catching([ended()], [row({ at: ENDED })], ['x1'])).toBe(false)
+      })
+
+      it('does not for rows of accounts that are not listed', () => {
+        expect(catching([ended()], [row({ at: at(2000) }), row({ accountId: 'gone', at: at(-60_000) })], ['x1'])).toBe(false)
+      })
+
+      it('adds nothing without a listed Codex account', () => {
+        expect(catching([ended()], [], [])).toBe(false)
+        expect(catching([ended()], [row({ at: at(-60_000) })], [])).toBe(false)
+      })
+
+      it('adds nothing without a job that ended, and a check is not one', () => {
+        expect(catching([], [], ['x1'])).toBe(false)
+        expect(catching([job({ state: 'running' }), job({ id: 'q', state: 'queued' })], [], ['x1'])).toBe(false)
+        expect(catching([ended({ kind: 'check', target: undefined })], [], ['x1'])).toBe(false)
+        // A check that ended later does not move the mark: the share's own end is what the row is compared with
+        expect(catching([ended(), ended({ id: 'c', kind: 'check', target: undefined, endedAt: at(30_000) })], [row({ at: at(2000) })], ['x1'], endedAt + 31_000)).toBe(false)
+      })
+
+      it('goes by the latest job that ended', () => {
+        const later = ended({ id: 'later', kind: 'update', endedAt: at(60_000) })
+        expect(catching([ended(), later], [row({ at: at(30_000) })], ['x1'], endedAt + 61_000)).toBe(true)
+        expect(catching([ended(), later], [row({ at: at(62_000) })], ['x1'], endedAt + 63_000)).toBe(false)
+      })
+
+      it('stops 3 minutes after the job ended, however the rows stand', () => {
+        expect(CODEX_CATCH_UP_MS).toBe(3 * 60_000)
+        expect(catching([ended()], [], ['x1'], endedAt + CODEX_CATCH_UP_MS - 1)).toBe(true)
+        expect(catching([ended()], [], ['x1'], endedAt + CODEX_CATCH_UP_MS)).toBe(false)
+      })
+
+      it('reads a time it cannot parse as nothing to wait for', () => {
+        expect(catching([ended({ endedAt: 'sometime' })], [], ['x1'])).toBe(false)
+        expect(catching([ended()], [row({ at: 'sometime' })], ['x1'])).toBe(false)
+      })
     })
   })
 

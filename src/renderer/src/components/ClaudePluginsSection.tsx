@@ -8,6 +8,7 @@ import { confirmModal, isConfirmOpen } from '../lib/confirm'
 import { failureLine } from './extensionsText'
 import {
   codexAttention,
+  codexCatchingUp,
   codexLines,
   codexNotes,
   contentLines,
@@ -62,9 +63,11 @@ export interface ClaudePlugins {
 }
 
 /** Reads `pluginList` once, then every 1.5 s while a job is queued or running and not otherwise (R4), each read after
- *  the last one answered; the reads stop when the tab goes. A job this app started that stops to ask about a marketplace
- *  command opens the confirmation, and confirming repeats the share or update with the command's sha256. */
-export function useClaudePlugins(): ClaudePlugins {
+ *  the last one answered; the reads stop when the tab goes. They go on after a job ends while the Codex outcome of the
+ *  listed Codex accounts (`codexAccountIds`) may still be catching up with it, for 3 minutes at most
+ *  (`codexCatchingUp`). A job this app started that stops to ask about a marketplace command opens the confirmation,
+ *  and confirming repeats the share or update with the command's sha256. */
+export function useClaudePlugins(codexAccountIds: readonly string[]): ClaudePlugins {
   const { t } = useI18n()
   const [listed, setListed] = useState<ListedClaudePlugin[] | null>(null)
   const [codexAccounts, setCodexAccounts] = useState<CodexPluginAccountState[]>([])
@@ -91,11 +94,16 @@ export function useClaudePlugins(): ClaudePlugins {
   }, [])
 
   const live = jobs.some(isLiveJob)
+  // The time is looked at again when the timer fires, so a read is not made after the 3 minutes ran out in between
+  const readsMore = (now: number): boolean => live || codexCatchingUp(jobs, codexAccounts, codexAccountIds, now)
+  const polling = readsMore(Date.now())
   useEffect(() => {
-    if (!live) return
-    const timer = setTimeout(() => void load(), POLL_MS)
+    if (!polling) return
+    const timer = setTimeout(() => {
+      if (readsMore(Date.now())) void load()
+    }, POLL_MS)
     return () => clearTimeout(timer)
-  }, [live, reads])
+  }, [polling, reads])
 
   const act: ClaudePlugins['act'] = async (work, refusal, accountId) => {
     setBusy(true)
@@ -275,6 +283,9 @@ export function ClaudePluginRow({
 }): React.JSX.Element {
   const { t } = useI18n()
   const state = rowState(p)
+  // The Host drops the row of a removed account at its next sync, which removing the account does not ask for: a row of an
+  // account that is not listed is neither drawn nor asks for a look
+  const rows = codexRows.filter((r) => codexAccountIds.includes(r.accountId))
   const line = job === undefined ? null : jobLine(job, t)
   const live = job !== undefined && isLiveJob(job)
   /** Its latest job ended without doing its work: it failed, or stopped to ask about a command. */
@@ -289,7 +300,7 @@ export function ClaudePluginRow({
         {!p.enabled && <span className="plugin-status">{t('settings.extensions.off')}</span>}
         {state === 'update' && <span className="plugin-status is-starting">{updateLabel(p.version, p.update?.version ?? null, t)}</span>}
         {live && <span className="plugin-status is-starting">{line}</span>}
-        {(state === 'missing' || stopped || codexAttention(p, codexRows)) && <span className="plugin-status is-failed">{t('settings.extensions.attention')}</span>}
+        {(state === 'missing' || stopped || codexAttention(p, rows)) && <span className="plugin-status is-failed">{t('settings.extensions.attention')}</span>}
       </button>
       {open && (
         <div className="ext-row-body">
@@ -302,7 +313,7 @@ export function ClaudePluginRow({
             contentLines(p.contents, t),
             dependencyLines(p.dependencies, t),
             ownCopyLines(p, labelOf, t),
-            [...(codexAccountIds.length > 0 ? codexNotes(p, t) : []), ...codexLines(p, codexRows, codexAccountIds, labelOf, t)]
+            [...(codexAccountIds.length > 0 ? codexNotes(p, t) : []), ...codexLines(p, rows, codexAccountIds, labelOf, t)]
           ].map(
             (lines, block) =>
               lines.length > 0 && (

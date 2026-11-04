@@ -35,7 +35,8 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
   const [gateway, setGateway] = useState<GatewayState[]>([])
   const [listFailure, setListFailure] = useState<Failure | null>(null)
   /** The shared Claude Code plugins, on a queue of their own (R4): the register dialog of a Claude account shares into them. */
-  const claudePlugins = useClaudePlugins()
+  const codexAccountIds = accounts.filter((a) => providerOf(a) === 'codex').map((a) => a.id)
+  const claudePlugins = useClaudePlugins(codexAccountIds)
   /** One change at a time: every change syncs every account before the Host answers. */
   const [busy, setBusy] = useState<'reading' | 'changing' | null>(null)
   /** The rows opened, by entry id. */
@@ -189,11 +190,7 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
           </div>
         )
       })}
-      <ClaudePluginsSection
-        plugins={claudePlugins}
-        labelOf={labelOf}
-        codexAccountIds={accounts.filter((a) => providerOf(a) === 'codex').map((a) => a.id)}
-      />
+      <ClaudePluginsSection plugins={claudePlugins} labelOf={labelOf} codexAccountIds={codexAccountIds} />
     </div>
   )
 }
