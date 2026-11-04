@@ -64,6 +64,8 @@ import { codexNoDaemonProbe } from '../core/sessions/codexNoDaemon'
 import { findInstalledHostExe } from '../core/host/installedRuntime'
 import { settingsImportCopiesCapabilities } from '../core/extensions/registry'
 import { claudePluginsShared } from '../core/extensions/claudePlugins/store'
+import { extensionPaths } from '../core/profile/paths'
+import { withFileLock } from '../core/fileLock'
 import { hidingLog } from '../core/extensions/secrets'
 import { createHidingSource, projectOfWorktrees } from '../core/credentials/hiding'
 import { profileConversations, type ProfileConversations } from '../core/agentProfiles/conversations'
@@ -559,12 +561,22 @@ export async function createCore(userDataDir: string, osLocale: string, paths?: 
     if (srcId === null) return { ok: false, message: { key: 'account.sync.noDefault' } }
     if (srcId === account.id) return { ok: false, message: { key: 'account.sync.isDefaultSource' } }
     const src = accounts.get(srcId)
+    const codex = providerOf(account) === 'codex'
     try {
       const r = await descriptorOf(descriptors, account).syncSettings(src.configDir, account.configDir, os.homedir(), {
         capabilities: await settingsImportCopiesCapabilities(userDataDir),
-        // plugins are in their own store, not the registry above, so the button leaves the two plugin keys alone once
-        // any plugin is shared
-        keepTargetKeys: (await claudePluginsShared(userDataDir)) ? ['enabledPlugins', 'extraKnownMarketplaces'] : []
+        // plugins are in their own store, not the registry above, so the button leaves the plugin keys of the account's
+        // own provider alone once any plugin is shared
+        keepTargetKeys: (await claudePluginsShared(userDataDir))
+          ? codex
+            ? ['plugins', 'marketplaces']
+            : ['enabledPlugins', 'extraKnownMarketplaces']
+          : [],
+        // the Host's Codex pass writes the same config.toml under this lock
+        ...(codex && {
+          lock: <T>(fn: () => Promise<T>): Promise<T> =>
+            withFileLock(extensionPaths(userDataDir).codexConfigLock, fn, { waitMs: 60_000, staleMs: 600_000 })
+        })
       })
       if (!r.settingsApplied && !r.mcpApplied && r.contentApplied.length === 0)
         return { ok: true, message: { key: 'account.sync.nothingToCopy' } }

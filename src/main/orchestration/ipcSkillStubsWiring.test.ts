@@ -40,13 +40,25 @@ describe('ipc.ts skill stub wiring (source guard)', () => {
 
   // Agent Control Plane release 1 (inventory §4): a new account used to wait for the next app start for its skills
   it('installs the skills and syncs the shared extensions when an account is added', () => {
-    const after = ipcSource.slice(ipcSource.indexOf('const afterAccountAdded = (): void => {'), ipcSource.indexOf("ipcMain.handle('accounts.create'"))
+    const after = ipcSource.slice(ipcSource.indexOf('const syncExtensionsAfter = (what: string): void => {'), ipcSource.indexOf("ipcMain.handle('accounts.create'"))
+    expect(after).toMatch(/const afterAccountAdded = \(\): void => \{/)
     expect(after).toMatch(/installStubsForCurrentToggles\(\)/)
     expect(after).toMatch(/cmd: 'extensions-sync'/)
+    expect(after).toMatch(/syncExtensionsAfter\('an account was added'\)/)
     for (const channel of ['accounts.create', 'accounts.import']) {
       const start = ipcSource.indexOf(`ipcMain.handle('${channel}'`)
       expect(ipcSource.slice(start, ipcSource.indexOf('})', start))).toMatch(/afterAccountAdded\(\)/)
     }
+  })
+
+  // Codex plugin sharing C6: the import keeps the target's plugin tables, and the Host then brings that account in line
+  it('asks the Host to sync the shared extensions after a settings import into a Codex account', () => {
+    const start = ipcSource.indexOf("ipcMain.handle('accounts.syncSettings'")
+    expect(start).toBeGreaterThan(-1)
+    const handler = ipcSource.slice(start, ipcSource.indexOf('\n  })\n', start))
+    expect(handler).toMatch(/core\.accountSyncSettings\(id\)/)
+    expect(handler).toMatch(/r\.ok\s*&&\s*providerOf\(core\.accounts\.get\(id\)\)\s*===\s*'codex'/)
+    expect(handler).toMatch(/syncExtensionsAfter\('a settings import'\)/)
   })
 
   it('names no stub file or skill directory of its own', () => {
