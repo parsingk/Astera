@@ -446,6 +446,49 @@ describe('syncCodexPlugins', () => {
       expect(await disabledIn(codex)).toEqual([`p@${M}`, `q@${M}`])
     })
 
+    // `q` is off as an entry and carries `r`; `p` is on and records `q` only. What `q` carries is wanted once `q` is, in
+    // whatever order the store lists them (the store's own lists are transitive, so this pins the rule, not the usual shape)
+    const orders: [string, ('p' | 'q')[]][] = [
+      ['q before p', ['q', 'p']],
+      ['p before q', ['p', 'q']]
+    ]
+    it.each(orders)('settles which entries are on before it reads what they record: what an off entry carries is on once an on plugin needs it (%s)', async (_label, order) => {
+      const w = await world()
+      const codex = await addAccount(w, 'acc_codex')
+      const specs: Record<'p' | 'q', Spec> = {
+        q: { name: 'q', version: '1.0.0', enabled: false, deps: [{ name: 'r', version: '1.0.0' }] },
+        p: { name: 'p', version: '1.0.0', deps: [{ name: 'q', version: '1.0.0' }] }
+      }
+      await share(w, order.map((n) => specs[n]))
+      const cli = fakeCodex(w)
+      const logs: string[] = []
+
+      const rows = await sync(w, cli, { logs })
+
+      expect(rows[0].installed).toEqual({ q: '1.0.0', p: '1.0.0', r: '1.0.0' })
+      expect(await disabledIn(codex)).toEqual([])
+      expect(logs).toEqual([])
+    })
+
+    it.each([
+      ['s, q, p', ['s', 'q', 'p']],
+      ['p, q, s', ['p', 'q', 's']]
+    ] as [string, ('p' | 'q' | 's')[]][])('reaches through a chain of entries that each record the next (%s)', async (_label, order) => {
+      const w = await world()
+      const codex = await addAccount(w, 'acc_codex')
+      const specs: Record<'p' | 'q' | 's', Spec> = {
+        s: { name: 's', version: '1.0.0', enabled: false, deps: [{ name: 'r', version: '1.0.0' }] },
+        q: { name: 'q', version: '1.0.0', enabled: false, deps: [{ name: 's', version: '1.0.0' }] },
+        p: { name: 'p', version: '1.0.0', deps: [{ name: 'q', version: '1.0.0' }] }
+      }
+      await share(w, order.map((n) => specs[n]))
+
+      const rows = await sync(w, fakeCodex(w))
+
+      expect(rows[0].installed).toEqual({ p: '1.0.0', q: '1.0.0', s: '1.0.0', r: '1.0.0' })
+      expect(await disabledIn(codex)).toEqual([])
+    })
+
     it('is the entry as it stands when the dependency is another plugin of the same name and version, and that is logged', async () => {
       const w = await world()
       const codex = await addAccount(w, 'acc_codex')

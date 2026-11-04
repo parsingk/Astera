@@ -25,46 +25,69 @@ interface Candidate extends DesiredCodexPlugin {
   installPath: string
 }
 
+/** The name in a plugin id, `name@marketplace`; null for an id with no name. */
+const nameOf = (id: string): string | null => {
+  const at = id.lastIndexOf('@')
+  return at <= 0 ? null : id.slice(0, at)
+}
+
 /** What this profile shares, one entry per name: each store entry in store order, then each dependency by the name in its
  *  id, at its recorded version, on when any plugin that is on records it. The name is all Codex has (the marketplace
  *  holds names), so a name two different plugins claim goes to one of them (ledger ruling PF2): a store entry over a
  *  dependency, an earlier over a later, and the one left out is logged. The same plugin at the same version, once as an
  *  entry and again as a dependency, is not a claim: it is one plugin, on when the entry is on or any plugin that is on
- *  records it. */
+ *  records it, and so is what it records in turn. That is settled for the entries first, to the end of any chain of them,
+ *  and only then are the dependencies read from the entries' final flags, so the store's order changes nothing. */
 function candidatesOf(plugins: SharedClaudePlugin[], log: (line: string) => void): Candidate[] {
   const byName = new Map<string, Candidate>()
-  const entries: SharedClaudePlugin[] = []
+  const entries: { plugin: SharedClaudePlugin; want: Candidate }[] = []
   for (const e of plugins) {
     const held = byName.get(e.name)
     if (held !== undefined) {
       log(`codex plugins: ${e.id} is left out of Codex, ${held.id} already holds the name ${e.name}`)
       continue
     }
-    byName.set(e.name, { id: e.id, name: e.name, version: e.version, enabled: e.enabled, installPath: e.installPath })
-    entries.push(e)
+    const want = { id: e.id, name: e.name, version: e.version, enabled: e.enabled, installPath: e.installPath }
+    byName.set(e.name, want)
+    entries.push({ plugin: e, want })
   }
   const entryNames = new Set(byName.keys())
-  for (const e of entries) {
-    for (const dep of e.dependencies) {
-      const at = dep.id.lastIndexOf('@')
-      if (at <= 0) {
-        log(`codex plugins: dependency ${dep.id} of ${e.id} is left out of Codex, it is not a plugin id`)
+
+  // An entry that is on turns on each entry it records at the same id and version. Flags only turn on, so this ends.
+  for (let changed = true; changed; ) {
+    changed = false
+    for (const { plugin, want } of entries) {
+      if (!want.enabled) continue
+      for (const dep of plugin.dependencies) {
+        const name = nameOf(dep.id)
+        const held = name === null ? undefined : byName.get(name)
+        if (held !== undefined && !held.enabled && held.id === dep.id && held.version === dep.version) {
+          held.enabled = true
+          changed = true
+        }
+      }
+    }
+  }
+
+  for (const { plugin, want } of entries) {
+    for (const dep of plugin.dependencies) {
+      const name = nameOf(dep.id)
+      if (name === null) {
+        log(`codex plugins: dependency ${dep.id} of ${plugin.id} is left out of Codex, it is not a plugin id`)
         continue
       }
-      const name = dep.id.slice(0, at)
       const held = byName.get(name)
       if (held === undefined) {
-        byName.set(name, { id: dep.id, name, version: dep.version, enabled: e.enabled, installPath: dep.installPath })
+        byName.set(name, { id: dep.id, name, version: dep.version, enabled: want.enabled, installPath: dep.installPath })
       } else if (held.id === dep.id && held.version === dep.version) {
-        // One plugin, not two claiming a name: a store entry another entry needs (Claude lets it be both), or a dependency
-        // two entries record. It is on when anything that is on wants it, as the entry's own flag is not the only reason.
-        held.enabled ||= e.enabled
+        // One plugin, not two claiming a name: an entry, already settled above, or a dependency two entries record
+        held.enabled ||= want.enabled
       } else if (entryNames.has(name)) {
-        log(`codex plugins: dependency ${dep.id} of ${e.id} is left out of Codex, the shared plugin ${held.id} holds the name ${name}`)
+        log(`codex plugins: dependency ${dep.id} of ${plugin.id} is left out of Codex, the shared plugin ${held.id} holds the name ${name}`)
       } else if (held.version !== dep.version) {
-        log(`codex plugins: dependency ${dep.id} at ${dep.version} of ${e.id} is left out of Codex, ${held.id} is wanted at ${held.version}`)
+        log(`codex plugins: dependency ${dep.id} at ${dep.version} of ${plugin.id} is left out of Codex, ${held.id} is wanted at ${held.version}`)
       } else {
-        held.enabled ||= e.enabled
+        held.enabled ||= want.enabled
       }
     }
   }
