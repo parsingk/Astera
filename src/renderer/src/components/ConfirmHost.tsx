@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { settle, subscribe, type PendingConfirm } from '../lib/confirm'
 import { useI18n } from '../i18n/I18nProvider'
 import { backdropProps } from '../lib/backdrop'
@@ -50,7 +50,7 @@ export function ConfirmView({
   const { t } = useI18n()
   return (
     <div className="modal-backdrop" {...backdropProps(() => settle(false))}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal confirm-modal" onClick={(e) => e.stopPropagation()}>
         <h2>{pending.title}</h2>
         <p className="confirm-text confirm-body">{pending.body}</p>
         {pending.code !== undefined && <pre className="confirm-code">{pending.code}</pre>}
@@ -58,23 +58,31 @@ export function ConfirmView({
             곳에서 다시 묻게 하면 사람이 무엇을 고른 채로 지웠는지 알 수 없다 */}
         {pending.choices && pending.choices.length > 0 && (
           <div className="confirm-choices">
-            {pending.choices.map((c) => (
-              <label key={c.id} className="check-small">
-                <input
-                  type="checkbox"
-                  checked={checked.includes(c.id)}
-                  onChange={(e) =>
-                    onChecked((prev) =>
-                      e.target.checked ? [...prev, c.id] : prev.filter((x) => x !== c.id)
-                    )
-                  }
-                />
-                <span>
-                  {c.label}
-                  {c.hint && <span className="confirm-choice-hint">{c.hint}</span>}
-                </span>
-              </label>
-            ))}
+            {pending.choices.map((c, i) => {
+              // A group's name is drawn once, above its first choice, with a rule before every group but the first
+              const startsGroup = c.group !== undefined && (i === 0 || pending.choices?.[i - 1]?.group !== c.group)
+              return (
+                <Fragment key={c.id}>
+                  {startsGroup && i > 0 && <hr className="confirm-choices-rule" />}
+                  {startsGroup && <span className="confirm-choices-group">{c.group}</span>}
+                  <label className="check-small">
+                    <input
+                      type="checkbox"
+                      checked={checked.includes(c.id)}
+                      onChange={(e) =>
+                        onChecked((prev) =>
+                          e.target.checked ? [...prev, c.id] : prev.filter((x) => x !== c.id)
+                        )
+                      }
+                    />
+                    <span>
+                      {c.label}
+                      {c.hint && <span className="confirm-choice-hint">{c.hint}</span>}
+                    </span>
+                  </label>
+                </Fragment>
+              )
+            })}
           </div>
         )}
         {/* Read last, after the choices: the plugin install warning's trust sentence (spec §31). */}

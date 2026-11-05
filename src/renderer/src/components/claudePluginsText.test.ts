@@ -139,12 +139,14 @@ describe('claudePluginsText', () => {
     ]
     const p = pluginChoices(found, en)
     // The account is the one picked, so no choice names its holders; the version is a line of its own when the catalog says
+    // Each row is the plugin's id alone, under the dialog's Plugins area
+    const group = en('settings.extensions.plugin.group')
     expect(p.choices).toEqual([
-      { id: 'plugin:superpowers@obra', label: 'Plugin superpowers@obra', hint: en('settings.extensions.plugin.offeredVersion', { version: '7.1.0' }), defaultChecked: false },
-      { id: 'plugin:hud@obra', label: 'Plugin hud@obra', defaultChecked: false }
+      { id: 'plugin:superpowers@obra', label: 'superpowers@obra', group, hint: en('settings.extensions.plugin.offeredVersion', { version: '7.1.0' }), defaultChecked: false },
+      { id: 'plugin:hud@obra', label: 'hud@obra', group, defaultChecked: false }
     ])
     expect(p.choices[1]).not.toHaveProperty('hint')
-    expect(pluginChoices(found, ko).choices[0]).toMatchObject({ label: '플러그인 superpowers@obra', hint: '설치될 버전 7.1.0' })
+    expect(pluginChoices(found, ko).choices[0]).toMatchObject({ label: 'superpowers@obra', group: '플러그인', hint: '설치될 버전 7.1.0' })
     expect(p.refused).toEqual([`keyed@corp: ${en('settings.extensions.plugin.reason.source-credential')}`])
     expect(pluginChoices([], en)).toEqual({ choices: [], refused: [] })
   })

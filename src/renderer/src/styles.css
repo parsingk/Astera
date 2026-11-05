@@ -600,6 +600,15 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .provider-badge.codex { color: var(--brand-codex); } /* the OpenAI mark — its size is set by the svg attributes */
 /* 확인 창 안의 곁가지 선택들. 본문과 버튼 줄 사이에 서므로 위아래 여백을 스스로 갖는다 */
 .confirm-choices { display: flex; flex-direction: column; gap: 8px; margin: 2px 0; }
+/* 영역으로 나뉜 선택들(등록 창의 MCP 서버·스킬·플러그인). 영역 이름은 첫 줄 위에 한 번, 영역 사이의 선은 창 안의
+   다른 구분선과 같은 색이다(.plugin-form) */
+.confirm-choices-group { font-size: 11px; color: var(--text-dim); }
+.confirm-choices-rule { align-self: stretch; margin: 2px 0; border: 0; border-top: 1px solid var(--line-soft); }
+/* 확인 창은 창 높이의 80% 에서 멈추고, 선택 목록만 그 안에서 스크롤한다. 등록 창에 MCP·스킬·플러그인이 많으면 창이 위아래로
+   넘쳐 버튼에 닿을 수 없었다. 목록은 창의 세로 flex 항목이라 min-height: 0 이 있어야 제 줄 수 아래로 줄어든다. 제목·본문·
+   버튼은 줄어들지 않으니 늘 보이고, 본문만으로 80% 를 넘는 극단에서는 창 전체가 스크롤한다 */
+.modal.confirm-modal { max-height: 80vh; overflow-y: auto; }
+.confirm-modal .confirm-choices { min-height: 0; overflow-y: auto; }
 /* 그 선택이 무엇을 잃게 하는지 — 라벨 아래 줄로 내려 붙는다(경고가 아니라 사실이라 톤은 흐리게) */
 .confirm-choice-hint { display: block; margin-top: 2px; font-size: 10.5px; color: var(--text-faint); white-space: pre-line; }
 .confirm-text { font-size: 13px; color: var(--text); line-height: 1.5; margin: 0 0 12px; }

@@ -96,7 +96,6 @@ export const es: Catalog = {
   'settings.extensions.pluginsLink': 'Para dar a todas las cuentas los mismos servidores MCP, habilidades, comandos y agentes, usa la pestaña Extensiones.',
   // Settings › MCP & Skills, the shared Claude Code plugins (Claude plugin sharing design §5.9)
   'settings.extensions.plugin.group': 'Plugins',
-  'settings.extensions.plugin.choice': 'Plugin {id}',
   'settings.extensions.plugin.unreadable': 'No se pudo leer la lista de plugins de {account}',
   'settings.extensions.plugin.check': 'Comprobar ahora',
   'settings.extensions.plugin.checking': 'Comprobando…',
