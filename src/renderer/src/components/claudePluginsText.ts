@@ -239,15 +239,17 @@ export function contentLines(c: ClaudePluginContents | undefined, t: T): string[
 const PLUGIN_CHOICE = 'plugin:'
 
 /** The plugins `pluginDiscover` found in the account picked in the register menu, as choices of that account's dialog
- *  (K4), after its servers and skills: one choice a plugin that can be shared, hinted with the version a share would
- *  install when the catalog says (§5.3). A plugin that cannot be shared is not a choice; it is listed with why, for the
- *  dialog's body. Nothing starts checked. */
+ *  (K4), the area after its servers and skills under the Plugins heading: one choice a plugin that can be shared, its id
+ *  alone, hinted with the version a share would install when the catalog says (§5.3). A plugin that cannot be shared is
+ *  not a choice; it is listed with why, for the dialog's body. Nothing starts checked. */
 export function pluginChoices(found: readonly OfferedClaudePlugin[], t: T): { choices: ConfirmChoice[]; refused: string[] } {
+  const group = t('settings.extensions.plugin.group')
   const choices = found
     .filter((p) => p.shareable)
     .map((p) => ({
       id: `${PLUGIN_CHOICE}${p.id}`,
-      label: t('settings.extensions.plugin.choice', { id: p.id }),
+      label: p.id,
+      group,
       ...(typeof p.offeredVersion === 'string' ? { hint: t('settings.extensions.plugin.offeredVersion', { version: p.offeredVersion }) } : {}),
       defaultChecked: false
     }))

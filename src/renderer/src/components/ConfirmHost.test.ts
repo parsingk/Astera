@@ -23,6 +23,48 @@ describe('ConfirmView', () => {
     expect(at('FOOTER-TEXT')).toBeLessThan(at('<button'))
   })
 
+  // The register dialog: an account's servers, skills and plugins are areas, each named once, with a rule between them,
+  // rather than a kind word on every row
+  it('draws each group of choices under its name once, with a rule between groups', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(ConfirmView, {
+        pending: {
+          title: 'T',
+          body: 'B',
+          choices: [
+            { id: 'a', label: 'LINEAR', group: 'GROUP-MCP' },
+            { id: 'b', label: 'GITHUB', group: 'GROUP-MCP' },
+            { id: 'c', label: 'HUD', group: 'GROUP-PLUGINS' }
+          ],
+          resolve: () => {}
+        },
+        checked: [],
+        onChecked: () => {}
+      })
+    )
+    const at = (s: string): number => html.indexOf(s)
+    expect(html.match(/GROUP-MCP/g)).toHaveLength(1)
+    expect(html.match(/<hr/g)).toHaveLength(1)
+    expect(at('GROUP-MCP')).toBeLessThan(at('LINEAR'))
+    expect(at('LINEAR')).toBeLessThan(at('GITHUB'))
+    expect(at('GITHUB')).toBeLessThan(at('<hr'))
+    expect(at('<hr')).toBeLessThan(at('GROUP-PLUGINS'))
+    expect(at('GROUP-PLUGINS')).toBeLessThan(at('HUD'))
+  })
+
+  it('draws choices without a group as one list, with no name and no rule', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(ConfirmView, {
+        pending: { title: 'T', body: 'B', choices: [{ id: 'a', label: 'A-LABEL' }, { id: 'b', label: 'B-LABEL' }], resolve: () => {} },
+        checked: [],
+        onChecked: () => {}
+      })
+    )
+    expect(html).toContain('B-LABEL')
+    expect(html).not.toContain('<hr')
+    expect(html).not.toContain('confirm-choices-group')
+  })
+
   it('draws no footer when there is none', () => {
     const html = renderToStaticMarkup(
       React.createElement(ConfirmView, { pending: { title: 'T', body: 'B', resolve: () => {} }, checked: [], onChecked: () => {} })

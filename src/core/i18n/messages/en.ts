@@ -131,7 +131,6 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.extensions.pluginsLink': 'To give every account the same MCP servers, skills, commands and agents, use the Extensions tab.',
   // Settings › MCP & Skills, the shared Claude Code plugins (Claude plugin sharing design §5.9)
   'settings.extensions.plugin.group': 'Plugins',
-  'settings.extensions.plugin.choice': 'Plugin {id}',
   'settings.extensions.plugin.unreadable': 'Could not read the plugin list of {account}',
   'settings.extensions.plugin.check': 'Check now',
   'settings.extensions.plugin.checking': 'Checking…',

@@ -135,7 +135,6 @@ export const ko = {
   'settings.extensions.pluginsLink': '모든 계정에 같은 MCP 서버·스킬·명령·에이전트를 주려면 확장 탭을 쓰세요.',
   // Settings › MCP & Skills, 공유한 Claude Code 플러그인 (Claude plugin sharing design §5.9)
   'settings.extensions.plugin.group': '플러그인',
-  'settings.extensions.plugin.choice': '플러그인 {id}',
   'settings.extensions.plugin.unreadable': '{account}의 플러그인 목록을 읽지 못했습니다',
   'settings.extensions.plugin.check': '지금 확인',
   'settings.extensions.plugin.checking': '확인하는 중…',
