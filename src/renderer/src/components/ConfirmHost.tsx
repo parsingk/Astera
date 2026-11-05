@@ -50,7 +50,7 @@ export function ConfirmView({
   const { t } = useI18n()
   return (
     <div className="modal-backdrop" {...backdropProps(() => settle(false))}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal confirm-modal" onClick={(e) => e.stopPropagation()}>
         <h2>{pending.title}</h2>
         <p className="confirm-text confirm-body">{pending.body}</p>
         {pending.code !== undefined && <pre className="confirm-code">{pending.code}</pre>}

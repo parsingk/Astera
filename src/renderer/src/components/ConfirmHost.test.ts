@@ -1,6 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
 
 vi.mock('../i18n/I18nProvider', () => ({ useI18n: () => ({ lang: 'en', t: (key: string) => key, tm: (m: unknown) => String(m) }) }))
 
@@ -63,6 +66,25 @@ describe('ConfirmView', () => {
     expect(html).toContain('B-LABEL')
     expect(html).not.toContain('<hr')
     expect(html).not.toContain('confirm-choices-group')
+  })
+
+  // The register dialog with many servers, skills and plugins ran past the window at both ends, its buttons out of
+  // reach. It stops at 80% of the window and its list of choices scrolls, the title, body, footer and buttons staying
+  // in view. Layout cannot be measured here, so the rules are read from styles.css, as shrinkCss.test.ts does.
+  it('stops at 80% of the window and scrolls its list of choices inside', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(ConfirmView, {
+        pending: { title: 'T', body: 'B', choices: [{ id: 'a', label: 'A' }], resolve: () => {} },
+        checked: [],
+        onChecked: () => {}
+      })
+    )
+    expect(html).toContain('class="modal confirm-modal"')
+    const styles = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../styles.css'), 'utf8')
+    expect(styles).toMatch(/\.modal\.confirm-modal\s*\{[^}]*max-height:\s*80vh/)
+    // min-height: 0 lets the list, a flex item of the modal's column, shrink below its rows; overflow scrolls them
+    expect(styles).toMatch(/\.confirm-modal \.confirm-choices\s*\{[^}]*min-height:\s*0/)
+    expect(styles).toMatch(/\.confirm-modal \.confirm-choices\s*\{[^}]*overflow-y:\s*auto/)
   })
 
   it('draws no footer when there is none', () => {
