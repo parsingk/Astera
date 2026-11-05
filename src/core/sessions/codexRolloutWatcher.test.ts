@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { mkdtemp, rm, mkdir, writeFile, appendFile } from 'node:fs/promises'
 import { promises as fsPromises } from 'node:fs'
+import { createHook } from 'node:async_hooks'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { CodexRolloutWatcher, noteRolloutPath } from './codexRolloutWatcher'
@@ -66,9 +67,33 @@ async function makeRollout(configDir: string, uuid: string, sessionId: string, c
 // 워쳐는 진짜 파일을 읽는다(findRollout·JsonlTail). fake timer가 걸린 동안에는 실제 fs I/O 완료
 // 콜백이 돌지 않아, 타이머만 진행시키면 폴링이 파일을 못 본 채로 끝난다(codexCoordinator.test.ts와 같은
 // 문제, 같은 해법). fake 타이머를 진행시킨 뒤 실제 타이머로 이벤트 루프에 시간을 줘서 I/O를 정착시킨다.
+//
+// 기다리는 것은 정해진 시간이 아니라 떠 있는 fs 작업이다. 예전의 30ms(5ms×6) 고정 예산은 한가한 머신에서만
+// 충분해서, 전체 스위트처럼 붐빌 때는 tick 밖에서 도는 찾기와 재검색이 끝나기 전에 단언이 읽혔다.
+// 상한과 연속 유휴 라운드를 두는 이유는 codexCoordinator.test.ts 의 settleIo 주석에 있다.
 const realSetTimeout = setTimeout
+const fsInFlight = new Set<number>()
+createHook({
+  init(id, type) {
+    if (type.startsWith('FSREQ')) fsInFlight.add(id)
+  },
+  after(id) {
+    fsInFlight.delete(id)
+  },
+  destroy(id) {
+    fsInFlight.delete(id)
+  }
+}).enable()
+const SETTLE_MIN_ROUNDS = 6 // 종전의 5ms×6: "아무 일도 없었다"는 단언의 하한을 유지한다
+const SETTLE_MAX_ROUNDS = 400 // 5ms×400 = 2초. 부하가 아무리 심해도 여기서 멈춘다. 넘으면 진짜 실패다
+const SETTLE_IDLE_ROUNDS = 3 // 이만큼 연속으로 fs 가 비어 있어야 정말 끝난 것으로 본다
 const settleIo = async (): Promise<void> => {
-  for (let i = 0; i < 6; i++) await new Promise((r) => realSetTimeout(r, 5))
+  let idle = 0
+  for (let round = 1; round <= SETTLE_MAX_ROUNDS; round++) {
+    await new Promise((r) => realSetTimeout(r, 5))
+    idle = fsInFlight.size === 0 ? idle + 1 : 0
+    if (round >= SETTLE_MIN_ROUNDS && idle >= SETTLE_IDLE_ROUNDS) return
+  }
 }
 
 /** 폴링·타이머를 진행시키고 대기 중인 Promise(실제 fs I/O 포함)를 소화한다 */
