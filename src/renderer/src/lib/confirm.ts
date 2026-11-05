@@ -9,11 +9,17 @@ export type ConfirmChoice = {
   label: string
   /** 라벨 아래 작게. 그 선택이 무엇을 잃게 하는지 적는 자리다 */
   hint?: string
+  /** 이 선택이 속한 영역의 이름. 이어지는 같은 이름의 선택들이 그 이름 아래 한 영역으로 묶이고, 영역 사이에 선이
+   *  그어진다(등록 창의 MCP 서버·스킬·플러그인). 없으면 줄마다 종류를 적지 않는 보통의 목록이다 */
+  group?: string
   defaultChecked?: boolean
 }
 export type ConfirmRequest = {
   title: string
   body: string
+  /** Drawn after the body in a code block, as it is: a command the person must see before it runs, as a Claude Code
+   *  marketplace's (Claude plugin sharing §5.4). With it, Cancel has focus, so a stray Enter does not run the command. */
+  code?: string
   /** Drawn after the choices, before the buttons: what to read last, as the plugin install warning's trust sentence
    *  (spec §31). */
   footer?: string

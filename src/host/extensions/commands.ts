@@ -3,6 +3,12 @@
 // `plugins-*` commands, they are for the app and the CLI only: MCP, a remote controller and a plugin never get here,
 // since no gate lists them, and an agent's shell may read but not change. Every change syncs the managed copies
 // afterwards, and the answer never carries an environment value, only names (D5).
+//
+// The shared Claude Code plugins' `extensions-plugin-*` commands are here too, beside the other kinds but not on their
+// queue (R4): each change is a job on the plugins' own queue (claudePlugins/operations.ts) that answers its id at once,
+// since an install can take minutes, and the settings tab reads the jobs' state in the list. After each change the Host
+// also brings every Codex account in line with what is shared (codexPlugins/sync.ts), on that same queue.
+import { promises as fs } from 'node:fs'
 import { RepairNeeded } from '../../core/settings/repairNeeded'
 import { publicEntry, readExtensionRegistry } from '../../core/extensions/registry'
 import { hideExtensionSecrets, hidingLog } from '../../core/extensions/secrets'
@@ -14,6 +20,16 @@ import { replaceConflict, syncMaterialized, type SyncItem } from '../../core/ext
 import type { OrchCaller } from '../../core/host/orchProtocol'
 import type { ExtensionEntry, ExtensionKind } from '../../core/extensions/types'
 import { resolveSessionCapabilities, type SkipReason } from '../../core/extensions/resolve'
+import { readClaudePlugins } from '../../core/extensions/claudePlugins/store'
+import { discoverClaudePlugins, withOfferedVersions } from '../../core/extensions/claudePlugins/discover'
+import { readClaudePluginContents } from '../../core/extensions/claudePlugins/contents'
+import { createClaudePluginOps, sweepOrphanedClaudePlugins, type ClaudePluginOps } from '../../core/extensions/claudePlugins/operations'
+import type { PluginCliRun } from '../../core/extensions/claudePlugins/cli'
+import type { ClaudePluginRefusal } from '../../core/extensions/claudePlugins/types'
+import type { CodexPluginCliRun } from '../../core/extensions/codexPlugins/cli'
+import type { CodexHooksList } from '../../core/extensions/codexPlugins/hooks'
+import { readCodexPluginAccounts, type CodexPluginAccountState } from '../../core/extensions/codexPlugins/state'
+import { syncCodexPlugins } from '../../core/extensions/codexPlugins/sync'
 import type { Account } from '../../core/types'
 
 export const EXTENSION_COMMANDS: ReadonlySet<string> = new Set([
@@ -26,10 +42,17 @@ export const EXTENSION_COMMANDS: ReadonlySet<string> = new Set([
   'extensions-sync',
   'extensions-replace',
   'extensions-gateway',
-  'extensions-isolation'
+  'extensions-isolation',
+  'extensions-plugin-list',
+  'extensions-plugin-discover',
+  'extensions-plugin-share',
+  'extensions-plugin-update',
+  'extensions-plugin-check',
+  'extensions-plugin-remove',
+  'extensions-plugin-set-enabled'
 ])
 
-/** The ones that change the registry or the accounts' copies. */
+/** The ones that change the registry, the accounts' copies, or the shared Claude plugins. */
 export const EXTENSION_CHANGES: ReadonlySet<string> = new Set([
   'extensions-import',
   'extensions-enable',
@@ -37,7 +60,12 @@ export const EXTENSION_CHANGES: ReadonlySet<string> = new Set([
   'extensions-remove',
   'extensions-sync',
   'extensions-replace',
-  'extensions-isolation'
+  'extensions-isolation',
+  'extensions-plugin-share',
+  'extensions-plugin-update',
+  'extensions-plugin-check',
+  'extensions-plugin-remove',
+  'extensions-plugin-set-enabled'
 ])
 
 export interface ExtensionsAnswer {
@@ -56,12 +84,29 @@ export interface HostExtensions {
   }): Promise<ExtensionsAnswer>
   /** Syncs the managed copies into every account now; never rejects. */
   sync(): Promise<SyncItem[]>
+  /** The Host's start for the shared Claude plugins: sweeps their folder once, before any plugin job runs, then checks
+   *  them for updates now and every CLAUDE_PLUGIN_CHECK_EVERY_MS. When Codex accounts are synced, it also syncs them once
+   *  after the sweep, and every CODEX_WAITING_RETRY_MS when an account waiting for its sessions to end has none alive
+   *  now. Returns the stop of every timer; none keeps the process alive. */
+  keepCheckingClaudePlugins(o?: {
+    /** Test injection: how the check is repeated; returns the stop. */
+    every?: (ms: number, fn: () => void) => () => void
+  }): () => void
 }
 
 const KINDS: readonly ExtensionKind[] = ['mcp', 'skill', 'command', 'agent']
 
+/** How often the Host checks the shared Claude plugins' marketplaces for updates. */
+const CLAUDE_PLUGIN_CHECK_EVERY_MS = 24 * 60 * 60 * 1000
+/** How often the Host looks for a Codex account left waiting, to bring it in line once its sessions have ended (C5). */
+const CODEX_WAITING_RETRY_MS = 60_000
+
 const bad = (error: string): ExtensionsAnswer => ({ status: 400, body: { error } })
+/** A share the accounts do not offer, with why in a word the settings tab can say. */
+const refusedShare = (error: string, reason: ClaudePluginRefusal | 'not-offered'): ExtensionsAnswer => ({ status: 400, body: { error, reason } })
+const NO_CLAUDE_PLUGINS: ExtensionsAnswer = { status: 501, body: { error: 'this Host does not share Claude plugins' } }
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+const isFolder = (p: string): Promise<boolean> => fs.stat(p).then((s) => s.isDirectory(), () => false)
 
 function picksOf(v: unknown): ImportPick[] | null {
   if (!Array.isArray(v) || v.length === 0) return null
@@ -85,6 +130,17 @@ export function createHostExtensions(d: {
   /** The Host's MCP Gateway (Gateway design §4.1): synced after every change, its port for the per-account status and
    *  the app, its processes' state for the list. Absent: this Host runs none, and stdio servers are not given. */
   gateway?: Pick<GatewayHub, 'sync' | 'port' | 'states' | 'stopServer'>
+  /** How `claude plugin …` runs in Astera's own plugin folder (claudePlugins/cli.ts). Absent: this Host shares no Claude
+   *  plugins, and the plugin changes answer 501. */
+  claudePluginRun?: PluginCliRun
+  /** How `codex plugin …` runs in a Codex account (codexPlugins/cli.ts), and how the hooks Codex loads are asked for
+   *  (codexPlugins/hooks.ts). With both and `claudePluginRun`, the Host brings the Codex accounts in line with the shared
+   *  plugins after every change; without any of the three it never does. */
+  codexPluginRun?: CodexPluginCliRun
+  codexHooks?: CodexHooksList
+  /** The accounts an Astera-started Codex session is alive in, asked at each sync: a change to one of them waits for its
+   *  sessions to end (C5). Absent: no account is busy. */
+  liveAccountIds?: () => Promise<Set<string>>
 }): HostExtensions {
   // Every line written about shared extensions, and every error answered, has the stored secret values taken out
   // (design §4.9): an error's own words may quote a file that holds one
@@ -99,6 +155,93 @@ export function createHostExtensions(d: {
     chain = run.catch(() => {})
     return run
   }
+
+  // The shared Claude plugins' jobs, on their own queue. They are made once the plugin folder has been swept, so no job
+  // runs beside the sweep: the Host's start or the first plugin command, whichever comes first, starts it, and both wait
+  // for it. `pluginJobs` is what the list reads meanwhile, and it never waits. A start-up step that failed fails the
+  // callers waiting for it and is tried again by the next one, rather than kept as every later answer until a restart.
+  let pluginJobs: ClaudePluginOps | null = null
+  let pluginsReady: Promise<ClaudePluginOps> | null = null
+  const claudePlugins = (): Promise<ClaudePluginOps> | null => {
+    const run = d.claudePluginRun
+    if (run === undefined) return null
+    if (pluginsReady === null) {
+      const ready = sweepOrphanedClaudePlugins(d.profileDir)
+        .then((gone) => {
+          if (gone.length > 0) log(`claude plugins: removed ${gone.length} version folder(s) no session used: ${gone.join(', ')}`)
+          pluginJobs = createClaudePluginOps({
+            profileDir: d.profileDir,
+            run,
+            log,
+            // Every job but a check, however it ended: a remove drops the store entry before its uninstall can fail, and an
+            // update or share that failed may have moved the store or an install before it did. A sync is coalesced and
+            // finds nothing to do when nothing changed, so asking after a job that changed nothing costs a store read.
+            onJobEnd: (job) => {
+              if (job.kind !== 'check') requestCodexSync()
+            }
+          })
+          return pluginJobs
+        })
+        .catch((e: unknown) => {
+          pluginsReady = null
+          throw new Error(`the shared Claude plugins could not be started (${message(e)})`)
+        })
+      // A caller that answers before it waits (a share no account offers) must not leave the failure unhandled
+      ready.catch(() => {})
+      pluginsReady = ready
+    }
+    return pluginsReady
+  }
+  // Bringing the Codex accounts in line (Codex plugin sharing design §5.3) runs on the plugin jobs' queue, so it never
+  // overlaps a share, update or remove, and after the start-up sweep, since the queue exists only then. A request returns
+  // at once. While one sync waits for its turn another request adds nothing: that sync reads the store when it starts. One
+  // made while a sync runs queues exactly one more, since the store may have changed after that sync read it. A failure is
+  // a log line and never reaches the caller: the change that asked for it is done, and the next request tries again.
+  let codexSyncWaiting = false
+  const liveNow = (): Promise<Set<string>> => d.liveAccountIds?.() ?? Promise.resolve(new Set<string>())
+  const requestCodexSync = (): void => {
+    const { codexPluginRun: run, codexHooks: hooks } = d
+    if (run === undefined || hooks === undefined || codexSyncWaiting) return
+    const ready = claudePlugins()
+    if (ready === null) return
+    codexSyncWaiting = true
+    void ready.then(
+      (ops) =>
+        ops
+          .runExclusive(async () => {
+            codexSyncWaiting = false
+            const accounts = await d.readAccounts()
+            const liveAccountIds = await liveNow()
+            await syncCodexPlugins({ profileDir: d.profileDir, homeDir: d.homeDir, accounts, run, hooks, liveAccountIds, log })
+          })
+          .catch((e: unknown) => log(`codex plugins: the sync did not run (${message(e)})`)),
+      (e: unknown) => {
+        // The start-up failed, so nothing is queued: the next request asks for it again
+        codexSyncWaiting = false
+        log(`codex plugins: the sync did not run (${message(e)})`)
+      }
+    )
+  }
+  /** What each Codex account's last sync recorded: no rows, and a log line, when the file cannot be read. */
+  const codexRows = (): Promise<CodexPluginAccountState[]> =>
+    readCodexPluginAccounts(d.profileDir).catch((e: unknown) => {
+      log(`codex plugins: the outcome file could not be read (${message(e)})`)
+      return []
+    })
+
+  /** The accounts a plugin question is about: all of them, or the one `accountId` names; an `accountId` that names none is
+   *  the 404 to answer with. */
+  const pluginAccounts = async (accountId: unknown): Promise<{ accounts: Account[] } | { refused: ExtensionsAnswer }> => {
+    const all = await d.readAccounts()
+    if (accountId === undefined) return { accounts: all }
+    const one = all.find((a) => a.id === accountId)
+    return one ? { accounts: [one] } : { refused: { status: 404, body: { error: `no account ${String(accountId)}` } } }
+  }
+
+  // Read only: a damaged store's copy is kept by the jobs' own reading, never by a question
+  const readPlugins = () => readClaudePlugins(d.profileDir, { keepDamaged: false })
+  const pluginShared = async (id: string): Promise<boolean> => (await readPlugins()).plugins.some((e) => e.id === id)
+  const notShared = (id: string): ExtensionsAnswer => ({ status: 404, body: { error: `no shared Claude plugin ${id}` } })
 
   const syncNow = async (): Promise<SyncItem[]> => {
     const r = await syncMaterialized({ profileDir: d.profileDir, accounts: await d.readAccounts() })
@@ -180,8 +323,91 @@ export function createHostExtensions(d: {
           return { status: 200, body: { sync: await syncNow() } }
         })
       }
+      case 'extensions-plugin-list': {
+        // Not queued and no Gateway sync: the settings tab polls it while a job runs
+        const store = await readPlugins()
+        // Each account's own copy of a shared id: discovery leaves out what it is told is shared, so it is told nothing
+        const copies = store.plugins.length === 0 ? [] : (await discoverClaudePlugins({ accounts: await d.readAccounts(), shared: [] })).plugins
+        const plugins = await Promise.all(
+          store.plugins.map(async (e) => ({
+            ...e,
+            // As a spawn finds it (spawnArgs.ts): with its own folder or a dependency's gone, no session is handed it
+            missing: (await Promise.all([e.installPath, ...e.dependencies.map((x) => x.installPath)].map(isFolder))).includes(false),
+            accountCopies: copies.find((c) => c.id === e.id)?.holders ?? [],
+            // An entry that is off still loads for each of these, which need it (spawnArgs.ts)
+            requiredBy: store.plugins.filter((o) => o.enabled && o.dependencies.some((x) => x.id === e.id)).map((o) => o.id),
+            // What it brings, for the row (§5.9); a folder that is gone brings nothing
+            contents: await readClaudePluginContents(e.installPath)
+          }))
+        )
+        return { status: 200, body: { plugins, jobs: pluginJobs?.jobs() ?? [], codexAccounts: await codexRows(), ...(store.lastCheck ? { lastCheck: store.lastCheck } : {}) } }
+      }
+      case 'extensions-plugin-discover': {
+        const { accountId } = args
+        if (accountId !== undefined && typeof accountId !== 'string') return bad('extensions-plugin-discover takes accountId as a string when given')
+        const store = await readPlugins()
+        // With an accountId, that account alone: the register dialog's "from this account" choice
+        const picked = await pluginAccounts(accountId)
+        if ('refused' in picked) return picked.refused
+        const found = await discoverClaudePlugins({ accounts: picked.accounts, shared: store.plugins })
+        // The version each would install (§5.3), for the register dialog only: the list's discovery skips it
+        return { status: 200, body: { ...found, plugins: await withOfferedVersions(found.plugins, picked.accounts) } }
+      }
+      case 'extensions-plugin-share': {
+        const { id, acceptCommand, accountId } = args
+        if (typeof id !== 'string' || (acceptCommand !== undefined && typeof acceptCommand !== 'string') || (accountId !== undefined && typeof accountId !== 'string'))
+          return bad('extensions-plugin-share needs id, and acceptCommand and accountId as strings when given')
+        const ready = claudePlugins()
+        if (ready === null) return NO_CLAUDE_PLUGINS
+        // Asked again now rather than taken from the tab: the source and the account it comes from are the Host's to find,
+        // in the account the person chose when they chose one
+        const store = await readPlugins()
+        const picked = await pluginAccounts(accountId)
+        if ('refused' in picked) return picked.refused
+        const found = (await discoverClaudePlugins({ accounts: picked.accounts, shared: store.plugins })).plugins.find((p) => p.id === id)
+        if (!found) return refusedShare(`no Claude account offers ${id} to share`, 'not-offered')
+        if (!found.shareable) return refusedShare(`${id} cannot be shared (${found.reason})`, found.reason)
+        // Discovery refuses a plugin it has no source for, so this is only a guard
+        if (found.source === null) return refusedShare(`${id} has no marketplace source Astera can add`, 'source-unsupported')
+        const jobId = (await ready).share({ id, source: found.source, importedFrom: found.sourceAccountId, ...(acceptCommand === undefined ? {} : { acceptCommand }) })
+        return { status: 200, body: { jobId } }
+      }
+      case 'extensions-plugin-update':
+      case 'extensions-plugin-remove': {
+        const { id, acceptCommand } = args
+        if (typeof id !== 'string' || (cmd === 'extensions-plugin-update' && acceptCommand !== undefined && typeof acceptCommand !== 'string'))
+          return bad(`${cmd} needs id${cmd === 'extensions-plugin-update' ? ', and acceptCommand as a string when given' : ''}`)
+        const ready = claudePlugins()
+        if (ready === null) return NO_CLAUDE_PLUGINS
+        if (!(await pluginShared(id))) return notShared(id)
+        const ops = await ready
+        const jobId = cmd === 'extensions-plugin-update' ? ops.update(id, acceptCommand as string | undefined) : ops.remove(id)
+        return { status: 200, body: { jobId } }
+      }
+      case 'extensions-plugin-check': {
+        const ready = claudePlugins()
+        if (ready === null) return NO_CLAUDE_PLUGINS
+        return { status: 200, body: { jobId: (await ready).check() } }
+      }
+      case 'extensions-plugin-set-enabled': {
+        const { id, enabled } = args
+        if (typeof id !== 'string' || typeof enabled !== 'boolean') return bad('extensions-plugin-set-enabled needs id and enabled (true or false)')
+        const ready = claudePlugins()
+        if (ready === null) return NO_CLAUDE_PLUGINS
+        if (!(await pluginShared(id))) return notShared(id)
+        // A store write, not a job: it changes what the next session is handed and runs nothing
+        await (await ready).setEnabled(id, enabled)
+        requestCodexSync()
+        return { status: 200, body: { enabled } }
+      }
       case 'extensions-sync':
-        return queued(async () => ({ status: 200, body: { sync: await syncNow() } }))
+        try {
+          return await queued(async () => ({ status: 200, body: { sync: await syncNow() } }))
+        } finally {
+          // An account just added is brought in line too, whether or not the copies could be synced into the accounts.
+          // Not waited for: the answer is the copies' sync
+          requestCodexSync()
+        }
       case 'extensions-replace': {
         if (typeof args.accountId !== 'string' || typeof args.id !== 'string') return bad('extensions-replace needs accountId and id')
         const { accountId, id } = args as { accountId: string; id: string }
@@ -213,6 +439,49 @@ export function createHostExtensions(d: {
       queued(syncNow).catch((e: unknown) => {
         log(`extensions: the shared copies could not be synced (${message(e)})`)
         return []
+      }),
+    keepCheckingClaudePlugins: (o = {}) => {
+      if (d.claudePluginRun === undefined) return () => {}
+      const every =
+        o.every ??
+        ((ms: number, fn: () => void) => {
+          const t = setInterval(fn, ms)
+          t.unref?.()
+          return () => clearInterval(t)
+        })
+      // While nothing is shared a check would run nothing, so it is not even a job: a person who shares no plugin sees no
+      // job and gets no store. A store that cannot be read is checked, so the job fails and says why. Each tick asks for
+      // the jobs again, so a start-up step that failed is tried again by the next one.
+      const check = (): void => {
+        void claudePlugins()
+          ?.then(async (ops) => {
+            const nothingShared = await readPlugins().then((s) => s.plugins.length === 0, () => false)
+            if (!nothingShared) ops.check()
+          })
+          .catch((e: unknown) => log(`claude plugins: the update check did not start (${message(e)})`))
+      }
+      check()
+      const stopChecking = every(CLAUDE_PLUGIN_CHECK_EVERY_MS, check)
+      if (d.codexPluginRun === undefined || d.codexHooks === undefined) return stopChecking
+      // The start brings the Codex accounts in line once, after the sweep: accounts added, settings imported or sessions
+      // ended while the Host was away. Then an account left waiting for its sessions to end (C5) is tried again every
+      // minute once none of its sessions is alive; a tick with no account waiting reads one file and does nothing, and a
+      // waiting account that is still busy would only be left waiting again.
+      requestCodexSync()
+      const stopWaiting = every(CODEX_WAITING_RETRY_MS, () => {
+        void codexRows()
+          .then(async (rows) => {
+            const waiting = rows.filter((r) => r.waiting)
+            if (waiting.length === 0) return
+            const live = await liveNow()
+            if (waiting.some((r) => !live.has(r.accountId))) requestCodexSync()
+          })
+          .catch((e: unknown) => log(`codex plugins: the check for an account left waiting did not run (${message(e)})`))
       })
+      return () => {
+        stopChecking()
+        stopWaiting()
+      }
+    }
   }
 }

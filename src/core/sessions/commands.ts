@@ -27,8 +27,8 @@ export type CommandBuilder = (opts: {
   /** codex only: what Astera tells the session at start, carried as `-c developer_instructions=…`
    *  (sessionContext.ts, codexDeveloperInstructions — Claude gets the same lines from a hook). */
   developerInstructions?: string
-  /** Shared extensions' arguments (Agent Control Plane release 1): Claude `--mcp-config <file>`, Codex `-c
-   *  mcp_servers.*` overrides, from the spawn-time resolver (core/extensions/resolve.ts). */
+  /** Shared extensions' arguments (Agent Control Plane release 1): Claude `--plugin-dir <folder>`s and `--mcp-config
+   *  <file>`, Codex `-c mcp_servers.*` overrides, from the spawn-time resolver (core/extensions/resolve.ts). */
   extraArgs?: string[]
   /** codex only: the sandbox (sandbox design §6), `-a never` and the Astera permission profile from codexSandboxArgs
    *  (core/sandbox/codexProfile.ts). Set, it takes the bypass flag's place and the bypass flag is left out. Claude's

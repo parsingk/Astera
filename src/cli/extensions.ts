@@ -2,13 +2,17 @@
 // design §4.6). Everything they need is a file in the profile: the shared extension registry, the record of the copies
 // Astera owns and accounts.json. `list` says what is shared and where its copies are, names only, never an
 // environment value (D5); `sync` puts the shared skills, commands and agents into every account, the same sync the
-// Host runs when the registry changes, and running it twice changes nothing the second time (AC-14).
+// Host runs when the registry changes, and running it twice changes nothing the second time (AC-14). `list` also names the
+// shared Claude Code plugins, which live in a store of their own, and what each Codex account holds of them; changing them
+// stays in the app (the Host writes that store and those rows).
 import path from 'node:path'
 import type { CliError } from '../core/orchestration/cliOutput'
 import type { Account } from '../core/types'
 import { readAccountEntries } from '../core/accounts/accountsFile'
 import { publicEntry, readExtensionRegistry } from '../core/extensions/registry'
 import { readState, syncMaterialized } from '../core/extensions/materialize'
+import { readClaudePlugins } from '../core/extensions/claudePlugins/store'
+import { readCodexPluginAccounts } from '../core/extensions/codexPlugins/state'
 import { hideExtensionSecrets } from '../core/extensions/secrets'
 import { redactSecrets } from '../core/remote/redact'
 
@@ -24,12 +28,37 @@ const refusal = async (profileDir: string, err: unknown, file: string): Promise<
   }
 }
 
+// The shared plugins beside the registry's answer. A store that cannot be read does not hide the rest, and is not taken for
+// "nothing shared": the list is left out and the reason given. It only reads, so no copy of a damaged file is kept here.
+const claudePluginsPart = (profileDir: string): Promise<Record<string, unknown>> =>
+  readClaudePlugins(profileDir, { keepDamaged: false }).then(
+    (s) => ({ claudePlugins: s.plugins }),
+    (err: unknown) => ({ claudePluginsError: err instanceof Error ? err.message : String(err) })
+  )
+
+// The Codex accounts' outcome rows of the shared plugins (Codex plugin sharing design §5.3), beside the registry's answer. No
+// outcome file is no rows, but a file that is there and could not be read is not "no account has a plugin": the rows are
+// left out and the reason given, as for the store above.
+const codexPluginAccountsPart = (profileDir: string): Promise<Record<string, unknown>> =>
+  readCodexPluginAccounts(profileDir).then(
+    (rows) => ({ codexPluginAccounts: rows }),
+    (err: unknown) => ({ codexPluginAccountsError: err instanceof Error ? err.message : String(err) })
+  )
+
 export async function extensionsCommand(a: { cmd: 'ext-list' | 'ext-sync'; profileDir: string }): Promise<Outcome> {
   if (a.cmd === 'ext-list') {
     try {
       const registry = await readExtensionRegistry(a.profileDir)
       const copies = (await readState(a.profileDir)).map((r) => ({ id: r.id, accountId: r.accountId, destination: r.destination, adopted: r.adopted }))
-      return { ok: true, body: { entries: registry.entries.map(publicEntry), copies } }
+      return {
+        ok: true,
+        body: {
+          entries: registry.entries.map(publicEntry),
+          copies,
+          ...(await claudePluginsPart(a.profileDir)),
+          ...(await codexPluginAccountsPart(a.profileDir))
+        }
+      }
     } catch (err) {
       return refusal(a.profileDir, err, 'extensions/registry.json')
     }

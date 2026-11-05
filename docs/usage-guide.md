@@ -42,23 +42,59 @@ folders and hook approvals, and imported settings apply to new sessions rather t
 already running.
 
 To give every account the same MCP servers, skills, slash commands and subagents, use
-**Settings → Extensions**. **Import from** a provider's default account, pick what to share, and
+**Settings → MCP & Skills**. Choose **Add**, pick an account and what to share, and
 choose which environment values to keep as secrets. A server that carries a credential in its
 arguments or its address is not offered, since it would be stored in plain text. The sessions
 Astera starts then get the shared MCP servers. A server that runs as a command runs once inside
 Astera's MCP Gateway for each project folder: sessions in that folder share it, reach it with a
 token of their own, and never see its secret values. Sessions sharing a process also share what
-it is told to log and which of its resources are watched. Turn on **One process per session** for a
+it is told to log and which of its resources are watched. Turn on **Run per session** for a
 server that holds a browser or a connection, or when that sharing matters. A remote server is reached directly by each session,
 so an account's own sign-in to it keeps working. Each server says per account whether its
 sessions get it and why not (an account with its own server of that name keeps its own, for
 example), and whether its process is running. Each account also
 gets a copy of the shared skills, commands and subagents. Each item shows how its copy stands in
 every account: a copy edited outside Astera is put back and the edit kept in backups,
-and an account that already has its own different copy keeps it until you choose **Replace with
-the shared copy**. Once anything is shared, **Import settings from the default account** leaves
-these to Extensions and copies settings only. `astera ext list` and `astera ext sync` do the same
+and an account that already has its own different copy keeps it until you choose **Use the
+shared version**. Once anything is shared, **Import settings from the default account** leaves
+these to MCP & Skills and copies settings only. `astera ext list` and `astera ext sync` do the same
 from a terminal (see [the CLI reference](cli.md)).
+
+**Claude Code plugins** are shared from the same tab, and its **Plugins** group lists them. Choose
+**Add**, pick a Claude account, and that account's plugins are listed with its servers and skills.
+Pick the ones to share.
+Astera installs one copy of each in its own folder, and every Claude session Astera starts loads
+that copy, so every account runs the same version. In those sessions a shared plugin replaces an
+account's own copy of the same name while it is shared and on. Turn it off or remove it, and the
+account's own copy runs again from its next session. Opening a row lists the accounts that have
+their own copy, with its version. Nothing in a Claude account's folder is changed, and a `claude` you
+start outside Astera does not get the shared plugins. A plugin that needs settings values, comes from a
+marketplace address that holds a password or key, or was not installed from a marketplace is shown
+with the reason it cannot be shared, and two shared plugins cannot have the same name.
+
+Every shared plugin is also installed into every Codex account, so a `codex` you start outside Astera
+has it too, unlike a Claude session. Astera puts it into each account's own folder in Codex's form: agents
+are left out, commands become skills named `<plugin>:source-command-<name>`, and Astera trusts the
+plugin's hooks in each Codex account, so no hook review menu stops a session. A Codex account's own
+plugin of the same name is turned off while the shared one is on, and turned back on after the shared
+one is turned off or removed, if Astera turned it off and it is still there. An account with a running
+Astera Codex session does not get a new plugin or a new version, or lose a removed plugin, until its
+sessions end; turning a plugin on or off reaches an account that already has it at once. Opening the
+plugin's row lists each Codex account's state: the installed version, waiting for its sessions to end,
+the previous version kept because the new one could not be converted for Codex, or the reason it failed.
+While every Codex account has the shared version, a single line says so. What Codex does differently
+with the plugin waits folded under **What is different in Codex**.
+
+Astera looks for newer versions when it starts and once a day, and **Check now** does it at once.
+A newer version only marks the row **Update available**. A shared plugin never changes until you
+press **Update**. If a marketplace asks to run a command of its own to install or update a plugin,
+Astera shows you the command and runs it only after you confirm. Once any plugin is shared,
+**Import settings from the default account** keeps a Claude account's own `enabledPlugins` and
+`extraKnownMarketplaces`, and a Codex account's own `plugins` and `marketplaces` tables in `config.toml`,
+instead of copying the default account's, and copies the other settings as before. Astera then brings
+that Codex account in line with the shared plugins. Sharing only plugins does not stop the import from
+copying the default account's servers, skills, commands and agents. `astera ext list` names the shared
+plugins and each Codex account's state.
 
 **Smart Resume** is optional and experimental. Choose it under **Settings → Agents → Session
 resume strategy** to give a new session a compact checkpoint when rolling moves work to another

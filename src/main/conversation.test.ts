@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, rm, writeFile, appendFile } from 'node:fs/promises'
+import { createHook } from 'node:async_hooks'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { transcriptPathFor, createConversationSessions } from './conversation'
@@ -65,11 +66,35 @@ function toolResultLine(toolId: string, stdout: string): string {
 
 // The follow reads real files, so advancing only the fake timer runs the poll before the real fs I/O
 // it starts has settled — the same problem, and the same fix, as codexRolloutWatcher.test.ts: advance
-// the fake timer, then hand the event loop a few real ticks so the I/O (and anything it schedules
-// next) finishes, before advancing again.
+// the fake timer, then hand the event loop real ticks until the I/O (and anything it schedules next)
+// finishes, before advancing again.
+//
+// What it waits for is the fs requests still in flight, not a fixed time: a fixed 30 ms (5 ms × 6) was
+// enough only on an idle machine, and under the full suite the poll's read had not landed when the
+// assertion ran. Why the cap and the run of idle rounds: codexCoordinator.test.ts's settleIo comment.
 const realSetTimeout = setTimeout
+const fsInFlight = new Set<number>()
+createHook({
+  init(id, type) {
+    if (type.startsWith('FSREQ')) fsInFlight.add(id)
+  },
+  after(id) {
+    fsInFlight.delete(id)
+  },
+  destroy(id) {
+    fsInFlight.delete(id)
+  }
+}).enable()
+const SETTLE_MIN_ROUNDS = 6 // the old 5 ms × 6, kept as the floor for "nothing happened" assertions
+const SETTLE_MAX_ROUNDS = 400 // 5 ms × 400 = 2 s: stops here however loaded the machine is; past it is a real failure
+const SETTLE_IDLE_ROUNDS = 3 // this many idle rounds in a row before it counts as done
 const settleIo = async (): Promise<void> => {
-  for (let i = 0; i < 6; i++) await new Promise((r) => realSetTimeout(r, 5))
+  let idle = 0
+  for (let round = 1; round <= SETTLE_MAX_ROUNDS; round++) {
+    await new Promise((r) => realSetTimeout(r, 5))
+    idle = fsInFlight.size === 0 ? idle + 1 : 0
+    if (round >= SETTLE_MIN_ROUNDS && idle >= SETTLE_IDLE_ROUNDS) return
+  }
 }
 const advance = async (ms: number): Promise<void> => {
   await vi.advanceTimersByTimeAsync(ms)

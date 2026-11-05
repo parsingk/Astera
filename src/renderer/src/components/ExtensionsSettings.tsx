@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import type { Account, PluginsCallAnswer, Provider } from '../../../core/types'
 import type { ExtensionKind } from '../../../core/extensions/types'
-import { PROVIDERS, PROVIDER_META } from '../../../core/providers/meta'
+import type { OfferedClaudePlugin } from '../../../core/extensions/claudePlugins/types'
+import { PROVIDERS, PROVIDER_META, providerOf } from '../../../core/providers/meta'
 import { useI18n } from '../i18n/I18nProvider'
-import { useAccountStatus } from '../hooks/useAccountStatus'
 import { toast } from '../lib/toast'
 import { confirmModal, confirmModalWithChoices } from '../lib/confirm'
 import { copyProblem, failureLine, importPrompt, kindLabel, notGivenLabel, notGivenWorthSaying, offeredItems, picksOf, reasonLabel, serverProblem, type FoundItem } from './extensionsText'
+import { pickedPluginIds, pluginChoices } from './claudePluginsText'
+import { ClaudePluginsSection, useClaudePlugins } from './ClaudePluginsSection'
 
 type Entry = Record<string, unknown>
 type Status = { id: string; accountId: string; outcome: string; detail?: string }
@@ -27,12 +29,14 @@ const failed = (e: unknown): PluginsCallAnswer => ({ ok: false, code: 'FAILED', 
  *  owns the registry and checks everything; no environment value ever reaches this tab. */
 export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React.JSX.Element {
   const { t } = useI18n()
-  const { defaultIdByProvider } = useAccountStatus(accounts)
   const [entries, setEntries] = useState<Entry[] | null>(null)
   const [status, setStatus] = useState<Status[]>([])
   const [mcpStatus, setMcpStatus] = useState<McpState[]>([])
   const [gateway, setGateway] = useState<GatewayState[]>([])
   const [listFailure, setListFailure] = useState<Failure | null>(null)
+  /** The shared Claude Code plugins, on a queue of their own (R4): the register dialog of a Claude account shares into them. */
+  const codexAccountIds = accounts.filter((a) => providerOf(a) === 'codex').map((a) => a.id)
+  const claudePlugins = useClaudePlugins(codexAccountIds)
   /** One change at a time: every change syncs every account before the Host answers. */
   const [busy, setBusy] = useState<'reading' | 'changing' | null>(null)
   /** The rows opened, by entry id. */
@@ -73,31 +77,61 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
     }
   }
 
+  /** The register dialog of one account (K4). A Claude account's plugins are read with its servers and skills, so one dialog
+   *  offers all of them: the picked servers and skills are imported, and each picked plugin starts a share job from this
+   *  account, whose progress the Plugins group says. */
   const importFrom = async (accountId: string): Promise<void> => {
     if (busy !== null) return
     setBusy('reading')
+    const account = accounts.find((a) => a.id === accountId)
     let items: FoundItem[]
+    let found: OfferedClaudePlugin[] = []
+    let unreadable: string[] = []
+    let pluginsUnasked = false
     try {
-      const r = await window.api.extensions.discover(accountId).catch(failed)
+      const [r, p] = await Promise.all([
+        window.api.extensions.discover(accountId).catch(failed),
+        account !== undefined && providerOf(account) === 'claude' ? window.api.extensions.pluginDiscover(accountId).catch(failed) : null
+      ])
       if (!r.ok) return void toast.error(failureLine(r, t, { read: true }))
       items = arr<FoundItem>(r.body.items)
+      // Plugins that could not be asked for leave the servers and skills to be offered, with the reason said
+      if (p !== null) {
+        if (!p.ok) {
+          toast.error(failureLine(p, t, { read: true }))
+          pluginsUnasked = true
+        } else {
+          found = arr<OfferedClaudePlugin>(p.body.plugins)
+          unreadable = arr<string>(p.body.unreadable)
+        }
+      }
     } finally {
       setBusy(null)
     }
     const label = labelOf(accountId)
-    if (offeredItems(items).length === 0) return void toast.info(t('settings.extensions.import.nothing', { label }))
-    const answer = await confirmModalWithChoices(importPrompt(items, label, t))
+    const unreadableLines = unreadable.map((id) => t('settings.extensions.plugin.unreadable', { account: labelOf(id) }))
+    // An account with plugins only still gets the dialog. With its plugins not asked, there may be some, so the reason
+    // already said is all that is said
+    if (offeredItems(items).length === 0 && found.length === 0) {
+      for (const line of unreadableLines) toast.error(line)
+      if (pluginsUnasked) return
+      return void toast.info(t('settings.extensions.import.nothing', { label }))
+    }
+    const plugins = pluginChoices(found, t)
+    const answer = await confirmModalWithChoices(importPrompt(items, label, t, { choices: plugins.choices, refused: [...plugins.refused, ...unreadableLines] }))
     const picks = answer.ok ? picksOf(items, answer.checked) : []
-    if (picks.length === 0) return
-    await change(
-      () => window.api.extensions.import(accountId, picks),
-      (body) => {
-        for (const x of arr<{ name: string; reason: string }>(body.refused))
-          toast.error(t('settings.extensions.import.refused', { name: x.name, reason: reasonLabel(x.reason, t) }))
-        const count = arr(body.imported).length
-        if (count > 0) toast.success(t('settings.extensions.import.done', { count }))
-      }
-    )
+    const pluginIds = answer.ok ? pickedPluginIds(answer.checked) : []
+    if (picks.length > 0)
+      await change(
+        () => window.api.extensions.import(accountId, picks),
+        (body) => {
+          for (const x of arr<{ name: string; reason: string }>(body.refused))
+            toast.error(t('settings.extensions.import.refused', { name: x.name, reason: reasonLabel(x.reason, t) }))
+          const count = arr(body.imported).length
+          if (count > 0) toast.success(t('settings.extensions.import.done', { count }))
+        }
+      )
+    for (const id of pluginIds) await claudePlugins.share(id, undefined, accountId)
   }
 
   const remove = async (e: Entry): Promise<void> => {
@@ -117,23 +151,18 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
     if (ok) await change(() => window.api.extensions.replace(accountId, str(e.id)))
   }
 
-  const sources = PROVIDERS.map((p: Provider) => ({ provider: p, accountId: defaultIdByProvider[p] })).filter((x) => x.accountId !== null) as {
-    provider: Provider
-    accountId: string
-  }[]
+  // Every account, grouped by provider: what an account holds is read from its files, so it need not be signed in
+  const sources = PROVIDERS.flatMap((p: Provider) => accounts.filter((a) => providerOf(a) === p).map((a) => ({ provider: p, accountId: a.id, label: a.label })))
+  // No plugin shared either: known once the plugin list answered, or once it failed and so shows none
+  const noPlugins = claudePlugins.listed !== null ? claudePlugins.listed.length === 0 : claudePlugins.failure !== null
   return (
     <div className="settings-stack">
       <p className="settings-hint">{t('settings.extensions.hint')}</p>
       {sources.length > 0 && (
-        <RegisterMenu
-          sources={sources.map((s) => ({ ...s, label: labelOf(s.accountId) }))}
-          reading={busy === 'reading'}
-          disabled={busy !== null || listFailure !== null}
-          onPick={(accountId) => void importFrom(accountId)}
-        />
+        <RegisterMenu sources={sources} reading={busy === 'reading'} disabled={busy !== null || listFailure !== null} onPick={(accountId) => void importFrom(accountId)} />
       )}
       {listFailure !== null && <p className="settings-hint is-warning">{failureLine(listFailure, t, { read: true })}</p>}
-      {entries !== null && entries.length === 0 && <p className="settings-hint">{t('settings.extensions.none')}</p>}
+      {entries !== null && entries.length === 0 && noPlugins && <p className="settings-hint">{t('settings.extensions.none')}</p>}
       {KINDS.map((kind) => {
         const ofKind = (entries ?? []).filter((e) => e.kind === kind)
         if (ofKind.length === 0) return null
@@ -166,12 +195,13 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
           </div>
         )
       })}
+      <ClaudePluginsSection plugins={claudePlugins} labelOf={labelOf} codexAccountIds={codexAccountIds} />
     </div>
   )
 }
 
-/** The one Register button: it opens the list of accounts to register from, the default account of each provider.
- *  Closes on a pick, a click outside or Escape, as the run type picker does. */
+/** The one Register button: it opens the list of accounts to register from, every account grouped by provider. Closes on
+ *  a pick, a click outside or Escape, as the run type picker does. */
 function RegisterMenu({
   sources,
   reading,
@@ -215,7 +245,7 @@ function RegisterMenu({
           <div className="rtp-group">{t('settings.extensions.registerFrom')}</div>
           {sources.map((s) => (
             <button
-              key={s.provider}
+              key={s.accountId}
               type="button"
               role="menuitem"
               className="rtp-item"

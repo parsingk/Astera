@@ -6,6 +6,19 @@ import path from 'node:path'
 export interface ExtensionPaths {
   /** The shared extensions: `{ version, entries }`. */
   registry: string
+  /** The shared Claude Code plugins: `{ version, plugins }`, written by the Host alone. Not the registry, so an older
+   *  build that reads the registry never meets a plugin. */
+  claudePlugins: string
+  /** Where Astera installs each shared Claude Code plugin once: Claude Code's own config layout, used only by
+   *  `claude plugin …` commands, never as a session's `CLAUDE_CONFIG_DIR`. */
+  claudePluginHome: string
+  /** The Codex copies of the shared plugins and the one marketplace file that lists them
+   *  (`.agents/plugins/marketplace.json`): the folder every Codex account's `codex plugin marketplace add` is given.
+   *  Never a Codex account's own folder. */
+  codexPluginHome: string
+  /** What the shared plugins' MCP servers keep between runs, one folder per plugin, standing in for
+   *  `${CLAUDE_PLUGIN_DATA}` in the Codex copies; kept across versions, shared by the Codex accounts. */
+  codexPluginData: string
   /** Canonical skill folders, one per skill name. */
   skills: string
   /** Canonical Claude slash commands, `<name>.md`. */
@@ -16,6 +29,14 @@ export interface ExtensionPaths {
   secrets: string
   /** What was copied into which account, with the hashes the next sync compares. */
   materializedState: string
+  /** When a session was last handed each shared Claude Code plugin folder: one file per folder, holding its path, whose
+   *  mtime is the last use. Claude Code never sweeps Astera's plugin folder, so Astera does, sparing a recent use. */
+  claudePluginUse: string
+  /** How the last Codex pass went for each Codex account, written by the Host alone. */
+  codexPluginAccounts: string
+  /** Taken around Astera's writes to a Codex account's `config.toml`, so the settings import and the plugin pass never
+   *  write one at once. */
+  codexConfigLock: string
   /** Copies Astera replaced or restored, kept before it wrote over them. */
   backups: string
   /** Generated Claude `--mcp-config` files, named by their content hash. */
@@ -27,11 +48,18 @@ export function extensionPaths(profileDir: string): ExtensionPaths {
   const state = path.join(profileDir, 'extension-state')
   return {
     registry: path.join(ext, 'registry.json'),
+    claudePlugins: path.join(ext, 'claude-plugins.json'),
+    claudePluginHome: path.join(ext, 'claude-plugins'),
+    codexPluginHome: path.join(ext, 'codex-plugins'),
+    codexPluginData: path.join(ext, 'codex-plugin-data'),
     skills: path.join(ext, 'skills'),
     commands: path.join(ext, 'commands'),
     agents: path.join(ext, 'agents'),
     secrets: path.join(ext, 'secrets'),
     materializedState: path.join(state, 'materialized.json'),
+    claudePluginUse: path.join(state, 'claude-plugin-use'),
+    codexPluginAccounts: path.join(state, 'codex-plugin-accounts.json'),
+    codexConfigLock: path.join(state, 'codex-config.lock'),
     backups: path.join(state, 'backups'),
     generatedMcp: path.join(profileDir, 'materialized', 'mcp')
   }

@@ -172,6 +172,7 @@ export function AccountSettings({ accounts }: { accounts: Account[] }): React.JS
               <p className="confirm-text">{t('account.sync.mergeNote')}</p>
             )}
             <p className="confirm-text">{t('account.sync.extensionsNote')}</p>
+            {providerOf(syncTarget) !== 'codex' && <p className="confirm-text">{t('account.sync.pluginsNote')}</p>}
             <p className="warn-text">{t('account.sync.appliesNextSession')}</p>
             <div className="row right">
               <button type="button" disabled={syncing} onClick={() => setSyncTarget(null)}>

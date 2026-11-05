@@ -4,7 +4,7 @@
 // does not know stay as the person left them. A file that cannot be parsed is refused, never overwritten.
 import { promises as fs } from 'node:fs'
 import { parse as parseToml, patch as patchToml, stringify as stringifyToml } from '@decimalturn/toml-patch'
-import { oneAtATime, writeThroughTmp } from '../accounts/fileQueue'
+import { oneAtATime, writeTarget, writeThroughTmp } from '../accounts/fileQueue'
 
 type ConfigObject = Record<string, unknown>
 type Patch = (current: ConfigObject) => ConfigObject | null
@@ -30,29 +30,43 @@ const readText = async (file: string): Promise<string | null> => {
 async function patchFile(
   file: string,
   patch: Patch,
-  format: { parse(text: string): ConfigObject; render(before: string | null, next: ConfigObject): string }
+  format: { parse(text: string): ConfigObject; render(before: string | null, next: ConfigObject): string },
+  o: { throughLink?: boolean } = {}
 ): Promise<'written' | 'unchanged'> {
   let result: 'written' | 'unchanged' = 'unchanged'
+  // The queue is keyed by the path given, not by what a link points to, so every write that names this path (Codex trust
+  // marks among them) takes its turn in one line.
   await oneAtATime(file, async () => {
-    const before = await readText(file)
+    // A link is written through so it stays a link; one that points nowhere is not written at all, and that is a failure,
+    // not 'unchanged': a caller told 'unchanged' would take the file for in line. The `.bak` stays beside the path given.
+    const target = o.throughLink ? await writeTarget(file) : file
+    if (target === null) throw new Error(`${file} is a link that points nowhere, or cannot be looked at, so it was not written`)
+    const before = await readText(target)
     const current = before === null || before.trim() === '' ? {} : format.parse(before)
     const next = patch(current)
     if (next === null || sameValue(next, current)) return
     const text = format.render(before, next)
     format.parse(text) // a write that would not read back is not made
     if (before !== null) await fs.writeFile(`${file}.bak`, before, 'utf8')
-    await writeThroughTmp(file, text)
+    await writeThroughTmp(target, text)
     result = 'written'
   })
   return result
 }
 
-/** Patches Codex's `config.toml` (or any TOML file) in place. */
-export function patchTomlFile(file: string, patch: Patch): Promise<'written' | 'unchanged'> {
-  return patchFile(file, patch, {
-    parse: readTomlObject,
-    render: (before, next) => (before === null || before.trim() === '' ? stringifyToml(next) : patchToml(before, next))
-  })
+/** Patches Codex's `config.toml` (or any TOML file) in place. With `throughLink` a file that is a symbolic link is read
+ *  and written where the link points, as Codex does (a dotfile manager's link stays a link); a link that points nowhere,
+ *  or that cannot be looked at, is left alone and the call rejects. */
+export function patchTomlFile(file: string, patch: Patch, o?: { throughLink?: boolean }): Promise<'written' | 'unchanged'> {
+  return patchFile(
+    file,
+    patch,
+    {
+      parse: readTomlObject,
+      render: (before, next) => (before === null || before.trim() === '' ? stringifyToml(next) : patchToml(before, next))
+    },
+    o
+  )
 }
 
 /** Patches a JSON settings file, keeping its indentation and final newline. */

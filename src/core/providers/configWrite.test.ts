@@ -17,6 +17,21 @@ const temp = async (): Promise<string> => {
   return d
 }
 
+// Windows without developer mode refuses to make a symbolic link (EPERM): those cases are skipped there.
+const canLink = await (async (): Promise<boolean> => {
+  const d = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-configwrite-probe-'))
+  try {
+    await fs.writeFile(path.join(d, 'a'), '')
+    await fs.symlink(path.join(d, 'a'), path.join(d, 'b'), 'file')
+    return true
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'EPERM') return false
+    throw e
+  } finally {
+    await removeFixture(d)
+  }
+})()
+
 const TOML = ['# kept comment', 'model = "gpt-a"  # inline kept', '', '[experimental.x]', 'flag = true', ''].join('\n')
 
 describe('patchTomlFile', () => {
@@ -53,6 +68,74 @@ describe('patchTomlFile', () => {
     const f = path.join(await temp(), 'config.toml')
     expect(await patchTomlFile(f, (c) => ({ ...c, model: 'gpt-c' }))).toBe('written')
     expect(readTomlObject(await fs.readFile(f, 'utf8'))).toEqual({ model: 'gpt-c' })
+  })
+
+  // A config.toml that is a link (a dotfile manager's) is written through when the caller says so, as Codex itself does
+  // (utils/path-utils/src/lib.rs resolve_symlink_write_paths at rust-v0.160.0): the link stays a link and the change lands
+  // in the file it points to. A link to a file that is not there, or loops, is not written through and not replaced.
+  describe('through a link', () => {
+    const linked = async (text: string | null): Promise<{ real: string; link: string }> => {
+      const d = await temp()
+      const real = path.join(d, 'dotfiles', 'real.toml')
+      await fs.mkdir(path.dirname(real))
+      if (text !== null) await fs.writeFile(real, text)
+      const link = path.join(d, 'config.toml')
+      await fs.symlink(real, link, 'file')
+      return { real, link }
+    }
+
+    it.skipIf(!canLink)('patches the file the link points to and leaves the link a link', async () => {
+      const { real, link } = await linked(TOML)
+      expect(await patchTomlFile(link, (c) => ({ ...c, model: 'gpt-b' }), { throughLink: true })).toBe('written')
+      expect((await fs.lstat(link)).isSymbolicLink()).toBe(true)
+      const out = await fs.readFile(real, 'utf8')
+      expect(out).toContain('# kept comment')
+      expect(out).toContain('model = "gpt-b"  # inline kept')
+      expect(out).toContain('[experimental.x]\nflag = true')
+      // The old text is kept beside the path that was given, as it is without a link.
+      expect(await fs.readFile(`${link}.bak`, 'utf8')).toBe(TOML)
+      await expect(fs.stat(`${real}.bak`)).rejects.toThrow()
+    })
+
+    // 'unchanged' would tell a caller the file is in line when nothing was written, so a link like this is a failure.
+    it.skipIf(!canLink)('fails for a link that points nowhere, naming the file, and writes nothing', async () => {
+      const { real, link } = await linked(null)
+      await expect(patchTomlFile(link, (c) => ({ ...c, model: 'x' }), { throughLink: true })).rejects.toThrow(
+        `${link} is a link that points nowhere, or cannot be looked at, so it was not written`
+      )
+      expect((await fs.lstat(link)).isSymbolicLink()).toBe(true)
+      await expect(fs.stat(real)).rejects.toThrow()
+      await expect(fs.stat(`${link}.bak`)).rejects.toThrow()
+    })
+
+    it.skipIf(!canLink)('without the option the link is replaced by a plain file and its target is left alone, as before', async () => {
+      const { real, link } = await linked(TOML)
+      expect(await patchTomlFile(link, (c) => ({ ...c, model: 'gpt-b' }))).toBe('written')
+      expect((await fs.lstat(link)).isSymbolicLink()).toBe(false)
+      expect(await fs.readFile(link, 'utf8')).toContain('model = "gpt-b"')
+      expect(await fs.readFile(real, 'utf8')).toBe(TOML)
+    })
+
+    it('patches an ordinary file as it does without the option, and creates a missing one', async () => {
+      const d = await temp()
+      const f = path.join(d, 'config.toml')
+      await fs.writeFile(f, TOML)
+      expect(await patchTomlFile(f, (c) => ({ ...c, model: 'gpt-b' }), { throughLink: true })).toBe('written')
+      expect(await fs.readFile(f, 'utf8')).toContain('model = "gpt-b"  # inline kept')
+      expect(await fs.readFile(`${f}.bak`, 'utf8')).toBe(TOML)
+      const fresh = path.join(d, 'fresh.toml')
+      expect(await patchTomlFile(fresh, (c) => ({ ...c, model: 'gpt-c' }), { throughLink: true })).toBe('written')
+      expect(readTomlObject(await fs.readFile(fresh, 'utf8'))).toEqual({ model: 'gpt-c' })
+    })
+
+    it.skipIf(!canLink)('shares the queue with every other write to the same path, so two patches both land', async () => {
+      const { real, link } = await linked(TOML)
+      await Promise.all([
+        patchTomlFile(link, (c) => ({ ...c, a: 1 }), { throughLink: true }),
+        patchTomlFile(link, (c) => ({ ...c, b: 2 }), { throughLink: true })
+      ])
+      expect(readTomlObject(await fs.readFile(real, 'utf8'))).toMatchObject({ a: 1, b: 2 })
+    })
   })
 })
 

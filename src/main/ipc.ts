@@ -234,7 +234,7 @@ import { PREVIEW_PARTITION } from '../core/preview/guards'
 import { guardPartition } from './preview/guest'
 import { buildResumeNote, buildResumePacket, buildTabResumeText } from '../core/orchestration/exec/resumePacket'
 import { extractStatusLineModel, extractStatusLineSession } from '../core/usage/statusline'
-import { listSlashCommands, listCodexMentions } from './slashCommands'
+import { listCodexMentions } from './codexMentions'
 import { createFileIndex } from './fileIndex'
 import { filterFilePaths } from '../core/files/fileMatch'
 import { sortEntries, isPathWithin, isSamePath, renamePlan, resolveProjectRootFrom } from '../core/files/tree'
@@ -1989,13 +1989,16 @@ export function registerIpc(
   // A new account gets Astera's own skills and the shared extensions now, not at the next app or Host start
   // (Agent Control Plane release 1 design §4.6, inventory §4). With no Host the sync waits for its next start, which
   // syncs every account: the Host is the registry's one writer.
-  const afterAccountAdded = (): void => {
-    installStubsForCurrentToggles()
+  const syncExtensionsAfter = (what: string): void => {
     void orchCall({ cmd: 'extensions-sync', args: {}, sessionId: '' })
       .then((r) => {
-        if (r.status !== 200) orchLog(`extensions sync after an account was added answered ${r.status}`)
+        if (r.status !== 200) orchLog(`extensions sync after ${what} answered ${r.status}`)
       })
-      .catch((err: unknown) => orchLog(`extensions sync after an account was added did not run: ${String(err)}`))
+      .catch((err: unknown) => orchLog(`extensions sync after ${what} did not run: ${String(err)}`))
+  }
+  const afterAccountAdded = (): void => {
+    installStubsForCurrentToggles()
+    syncExtensionsAfter('an account was added')
   }
   ipcMain.handle('accounts.create', async (_e, input) => {
     const account = await core.accounts.create(input)
@@ -2022,7 +2025,13 @@ export function registerIpc(
   ipcMain.handle('accounts.email', (_e, id) => core.accountEmail(id))
   ipcMain.handle('accounts.emailOfDir', (_e, dir, provider) => core.accountEmailOfDir(dir, provider))
   ipcMain.handle('accounts.logout', (_e, id) => core.accountLogout(id))
-  ipcMain.handle('accounts.syncSettings', (_e, id) => core.accountSyncSettings(id))
+  // A Codex account that took the import is brought in line with the shared plugins by the Host, in the background:
+  // the import keeps the account's own plugin tables, which may now differ from what the Host would have written.
+  ipcMain.handle('accounts.syncSettings', async (_e, id) => {
+    const r = await core.accountSyncSettings(id)
+    if (r.ok && providerOf(core.accounts.get(id)) === 'codex') syncExtensionsAfter('a settings import')
+    return r
+  })
 
   // sessions (resolving accountId to an Account is a plain lookup)
 
@@ -4875,6 +4884,18 @@ export function registerIpc(
   ipcMain.handle('extensions.setEnabled', (_e, id: unknown, enabled: unknown) => extensions.setEnabled(id as string, enabled === true))
   ipcMain.handle('extensions.remove', (_e, id: unknown) => extensions.remove(id as string))
   ipcMain.handle('extensions.replace', (_e, accountId: unknown, id: unknown) => extensions.replace(accountId as string, id as string))
+  // The shared Claude Code plugins (R4): a change answers its job id at once, and the tab polls the list
+  ipcMain.handle('extensions.pluginList', () => extensions.pluginList())
+  ipcMain.handle('extensions.pluginDiscover', (_e, accountId: unknown) => extensions.pluginDiscover(typeof accountId === 'string' ? accountId : undefined))
+  ipcMain.handle('extensions.pluginShare', (_e, id: unknown, acceptCommand: unknown, accountId: unknown) =>
+    extensions.pluginShare(id as string, typeof acceptCommand === 'string' ? acceptCommand : undefined, typeof accountId === 'string' ? accountId : undefined)
+  )
+  ipcMain.handle('extensions.pluginUpdate', (_e, id: unknown, acceptCommand: unknown) =>
+    extensions.pluginUpdate(id as string, typeof acceptCommand === 'string' ? acceptCommand : undefined)
+  )
+  ipcMain.handle('extensions.pluginCheck', () => extensions.pluginCheck())
+  ipcMain.handle('extensions.pluginRemove', (_e, id: unknown) => extensions.pluginRemove(id as string))
+  ipcMain.handle('extensions.pluginSetEnabled', (_e, id: unknown, on: unknown) => extensions.pluginSetEnabled(id as string, on === true))
   // Settings › Agent profiles (Agent Profiles design §8): the Host checks every argument; this only passes them on
   // A setup gives the machine's sandbox users new passwords, so this process's own readiness answers go after one too
   // A change also reads the archived profiles again, for the Jobs view's waiting line (lifecycle design §5)
@@ -7843,21 +7864,6 @@ export function registerIpc(
       ...unavailable
     }
   })
-  ipcMain.handle('conversation.commands', async (_e, sessionId: string) => {
-    const session = allSessions().find((s) => s.id === sessionId)
-    if (!session) return []
-    try {
-      const account = core.accounts.get(session.accountId)
-      return await listSlashCommands({
-        configDir: account.configDir,
-        cwd: session.cwd ?? null,
-        kind: account.provider === 'codex' ? 'codex' : 'claude'
-      })
-    } catch {
-      return []
-    }
-  })
-
   // The chat pane (core/chat/manager.ts). The counterpart of the conversation block above for a
   // session whose kind is 'chat': where a terminal session is driven by writing bytes into its pty,
   // this one is driven by these seven calls, and everything it says back arrives on 'chat:event'.
