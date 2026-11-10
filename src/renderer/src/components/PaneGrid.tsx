@@ -771,6 +771,9 @@ export function PaneGrid({
               }
               const onMove = (ev: PointerEvent): void => {
                 if (ev.pointerId !== startId) return
+                // A move with no button held means the release never arrived (it can go missing while an app
+                // or agent tab is on screen): the drag ends there, as the sidebar's resizer does.
+                if ((ev.buttons & 1) === 0) return onUp(ev)
                 latest = b.dir === 'row' ? ev.clientX : ev.clientY
                 if (!rafId) rafId = requestAnimationFrame(apply)
               }
