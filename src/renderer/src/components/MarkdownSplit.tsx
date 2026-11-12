@@ -265,6 +265,8 @@ export function MarkdownSplit({
     const startId = e.pointerId
     const move = (ev: PointerEvent): void => {
       if (ev.pointerId !== startId) return
+      // 버튼이 눌려 있지 않은 이동은 놓기를 놓친 것이다 — 드래그를 끝낸다(사이드바 리사이저와 같은 이유)
+      if ((ev.buttons & 1) === 0) return up(ev)
       const box = host.getBoundingClientRect()
       // 폭이 0인 프레임(모드 전환 직후)에서는 NaN 이 나온다. clampSplitRatio 가 기본값으로 되돌린다
       setRatio(clampSplitRatio((ev.clientX - box.left) / box.width))

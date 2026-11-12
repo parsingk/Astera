@@ -4745,8 +4745,12 @@ export default function App(): React.JSX.Element {
               // 이 드래그를 시작한 포인터가 아닌 다른 포인터(예: 화면 다른 곳의 두 번째 터치 접점)의
               // pointermove/pointerup/pointercancel 도 그냥 받는다. 그 이벤트를 걸러내지 않으면 무관한
               // 포인터가 드래그를 조기에 끝내거나(onUp) 폭을 엉뚱한 좌표로 끌고 간다(onMove).
+              // 버튼이 눌려 있지 않은 이동은 놓기를 놓친 것이다 — 그 자리에서 드래그를 끝낸다. 앱 탭이나
+              // 에이전트 탭을 보는 중에는 놓기가 window 에 오지 않을 때가 있고, 그러면 손을 뗀 뒤에도
+              // 폭이 커서를 따라간다(2026-11-10 사용자 보고, 왜 오지 않는지는 아직 모른다).
               const onMove = (ev: PointerEvent): void => {
                 if (ev.pointerId !== startId) return
+                if ((ev.buttons & 1) === 0) return onUp(ev)
                 latestX = ev.clientX
                 if (!rafId) rafId = requestAnimationFrame(apply)
               }
@@ -4873,6 +4877,8 @@ export default function App(): React.JSX.Element {
                         runHostRef.current?.style.setProperty('--run-panel-h', `${clamp(latestY)}px`)
                       }
                       const onMove = (ev: PointerEvent): void => {
+                        // 놓기를 놓친 이동은 드래그를 끝낸다(사이드바 리사이저와 같은 이유)
+                        if ((ev.buttons & 1) === 0) return onUp()
                         latestY = ev.clientY
                         if (!rafId) rafId = requestAnimationFrame(apply)
                       }
