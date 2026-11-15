@@ -25,6 +25,19 @@ describe('parseExternalVerdict', () => {
     expect(r).toEqual({ ok: true, verdict: { outcome: 'approved', summary: 'a } b { c', issues: [] } })
   })
 
+  // Final fix wave B1 (measured): a fence inside a JSON string ended the block early
+  it('reads a verdict whose suggestedFix holds a fenced code block', () => {
+    const issue = { severity: 'medium', title: 'off by one', description: 'see below', suggestedFix: `Use this:\n${FENCE}ts\nfor (let i = 0; i < n; i++) {}\n${FENCE}\n` }
+    const r = parseExternalVerdict(`I read it.\n\n${block({ outcome: 'rejected', summary: 's', issues: [issue] })}\n`)
+    expect(r).toEqual({ ok: true, verdict: { outcome: 'rejected', summary: 's', issues: [issue] } })
+  })
+
+  it('reads a verdict whose summary holds three backticks, pretty-printed over several lines', () => {
+    const v = { outcome: 'approved', summary: `Fine; the ${FENCE} in the docs is intended.`, issues: [] }
+    const r = parseExternalVerdict(`Done.\n${FENCE}json\n${JSON.stringify(v, null, 2)}\n${FENCE}`)
+    expect(r).toEqual({ ok: true, verdict: v })
+  })
+
   it('treats a missing summary as empty', () => {
     expect(parseExternalVerdict(block({ outcome: 'approved', issues: [] }))).toEqual({ ok: true, verdict: { outcome: 'approved', summary: '', issues: [] } })
   })

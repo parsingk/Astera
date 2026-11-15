@@ -358,20 +358,31 @@ async function externalPromptOf(c: ReviewContext, a: { taskId: string; cwd: stri
   const lifecycle = isLifecycleTask(task)
   const run = st.runs.find((r) => r.id === task.runId)
   const brief = lifecycle ? lifecycleBriefOf(st, task) : { title: task.title, spec: task.spec }
-  // A lifecycle Task: the Run's base to the head Astera pushed. Any other Task: from where its first attempt began to where
-  // its last one ended, when both are recorded and differ.
+  // A lifecycle Task: the Run's base to the head Astera pushed. Any other Task: from where its first attempt began to HEAD.
+  // Not the last attempt's recorded head: the driver records it after that attempt ends, and this prompt is built moments
+  // later, before it has (final fix wave B2); the review runs in the implementer's folder right after the work, so HEAD is
+  // what would be recorded.
   let range: { base: string; head: string } | undefined
   if (lifecycle) {
     if (run?.git?.base !== undefined) range = { base: run.git.base, head: run.githubState?.lastPushedSha ?? 'HEAD' }
   } else {
     const attempts = st.dispatches.filter((d) => d.taskId === a.taskId && !d.review).sort((x, y) => x.startedAt.localeCompare(y.startedAt))
     const base = attempts.at(0)?.git?.base
-    const head = attempts.at(-1)?.git?.head
-    if (base !== undefined && head !== undefined && base !== head) range = { base, head }
+    if (base !== undefined) range = { base, head: 'HEAD' }
   }
-  const diffRead = range && c.rangeDiff ? await c.rangeDiff(a.cwd, range.base, range.head, { maxBytes: EXTERNAL_DIFF_MAX_BYTES }).catch(() => null) : null
+  /** A diff that cannot be read leaves the reviewer to read the files; that is said in the log, never swallowed. */
+  const readDiff = async (r: { base: string; head: string }, o?: { maxBytes?: number }): Promise<{ diff: string; truncated: boolean } | null> => {
+    if (!c.rangeDiff) return null
+    const read = await c.rangeDiff(a.cwd, r.base, r.head, o).catch((e: unknown) => {
+      c.log(`external review of task=${a.taskId} dispatch=${a.dispatchId}: the diff ${r.base}..${r.head} could not be read: ${e instanceof Error ? e.message : String(e)}`)
+      return undefined
+    })
+    if (read === null) c.log(`external review of task=${a.taskId} dispatch=${a.dispatchId}: the diff ${r.base}..${r.head} could not be read: git failed`)
+    return read ?? null
+  }
+  const diffRead = range ? await readDiff(range, { maxBytes: EXTERNAL_DIFF_MAX_BYTES }) : null
   // What can weaken a pull request's checks is read from the whole diff, not from the part the prompt carries
-  const wholeRead = lifecycle && range && c.rangeDiff ? await c.rangeDiff(a.cwd, range.base, range.head).catch(() => null) : null
+  const wholeRead = lifecycle && range ? await readDiff(range) : null
   const findings = wholeRead ? { ...weakeningFindings(wholeRead.diff), cut: wholeRead.truncated } : undefined
   const current = c.getState().tasks.find((t) => t.id === a.taskId) ?? task
   return buildReviewSpecFile({
@@ -390,6 +401,7 @@ async function externalPromptOf(c: ReviewContext, a: { taskId: string; cwd: stri
     policyChanged: current.policyChanged === true,
     ...(a.resultPath !== undefined ? { resultPath: a.resultPath } : {}),
     report: 'inline',
-    ...(diffRead ? { diffText: { text: diffRead.diff, truncated: diffRead.truncated } } : {})
+    // An empty diff is no diff: the reviewer is told to read the files instead
+    ...(diffRead && diffRead.diff.trim() !== '' ? { diffText: { text: diffRead.diff, truncated: diffRead.truncated } } : {})
   })
 }

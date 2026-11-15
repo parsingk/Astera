@@ -77,6 +77,23 @@ const isOpenIn = (s: OrchState, dispatchId: string): boolean => {
 
 const firstLine = (text: string): string => text.split(/\r?\n/, 1)[0]
 
+/** At most this many findings are written into a settle's body. */
+const BODY_ISSUES_MAX = 20
+
+const oneLine = (text: string): string => text.replace(/\s*[\r\n]+\s*/g, ' ').trim()
+
+/** The summary, then one line per finding: `- [severity] title (file:line): description`, each part only when present. */
+function bodyWithIssues(summary: string, issues: ExternalVerdict['issues']): string {
+  if (issues.length === 0) return summary
+  const lines = issues.slice(0, BODY_ISSUES_MAX).map((i) => {
+    const where = i.file ? ` (${i.file}${i.line !== undefined ? `:${i.line}` : ''})` : ''
+    const what = i.description ? `: ${oneLine(i.description)}` : ''
+    return `- [${i.severity}] ${oneLine(i.title)}${where}${what}`
+  })
+  if (issues.length > BODY_ISSUES_MAX) lines.push(`and ${issues.length - BODY_ISSUES_MAX} more`)
+  return `${summary}\n\n${lines.join('\n')}`
+}
+
 const errorText = (body: unknown): string => {
   if (typeof body === 'string') return body
   const e = (body as { error?: unknown } | null)?.error
@@ -283,7 +300,8 @@ export function createExternalReviews(c: {
           dispatchId: d.id,
           outcome: verdict.outcome === 'approved' ? 'succeeded' : 'failed',
           subject: summary.trim() === '' ? verdict.outcome : firstLine(summary.trim()).slice(0, 120),
-          body: summary
+          // Outside a convergence Run no review.json is read, so the findings travel in the body (final fix wave B4)
+          body: convergence ? summary : bodyWithIssues(summary, verdict.issues)
         })
       } catch (e) {
         reply = { status: 500, body: { error: e instanceof Error ? e.message : String(e) } }

@@ -18,7 +18,7 @@ import { VERDICT_RETRY_PROMPT } from './externalVerdict'
 import type { ExternalReviewer, ReviewerSettings } from '../../settings/externalReviewers'
 import type { Account } from '../../types'
 import type { ProcLike } from '../../sessions/proc'
-import { trackedTreeState } from '../../git/changes'
+import { readRangeDiff, trackedTreeState } from '../../git/changes'
 import { gitSync } from '../../worktrees/testRepo'
 
 const NOW = '2026-09-24T00:00:00.000Z'
@@ -298,11 +298,29 @@ describe('createReviewStarter with an external reviewer', () => {
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({
       issues: [{ severity: 'high', title: 'empty input', description: 'crashes on an empty list', file: 'src/x.ts', line: 3 }]
     })
+    // with a convergence policy the findings travel in review.json and the body stays the summary (final fix wave B4)
     expect(h.handled[0].args).toMatchObject({ outcome: 'failed', subject: 'Misses the empty case.', body: 'Misses the empty case.' })
     expect(h.state().gates).toEqual([])
     const repair = h.state().dispatches.find((x) => x.repair !== undefined && !x.endedAt)
     expect(repair).toBeDefined()
     expect(h.repairs).toEqual([repair!.id])
+    await gone(h.pid())
+  })
+
+  // Final fix wave B5: an approval with a blocking finding can only go to repair if the command read the review.json the
+  // runner wrote before it sent
+  it('an approved verdict with a critical finding in a convergence Run goes to repair, carrying that finding', async () => {
+    const h = rig({
+      convergence: true,
+      message: verdictMessage({ outcome: 'approved', summary: 'Fine apart from one thing.', issues: [{ severity: 'critical', title: 'drops the last row', file: 'src/y.ts' }] })
+    })
+    await h.run()
+    expect(h.handled[0].args).toMatchObject({ outcome: 'succeeded' })
+    expect(h.task().status).not.toBe('completed')
+    const repair = h.state().dispatches.find((x) => x.repair === 'review-failure' && !x.endedAt)
+    expect(repair).toBeDefined()
+    expect(h.repairs).toEqual([repair!.id])
+    expect(h.task().reviewIssues?.map((i) => i.title)).toContain('drops the last row')
     await gone(h.pid())
   })
 
@@ -313,6 +331,23 @@ describe('createReviewStarter with an external reviewer', () => {
     expect(h.state().gates).toEqual([])
     expect(fs.existsSync(`${h.review()!.specPath}.review.json`)).toBe(false)
     expect(h.handled[0].args).toMatchObject({ outcome: 'failed' })
+    // Final fix wave B4: with no review.json the findings travel in the body, or they are lost
+    expect(h.handled[0].args.body).toBe('Misses the empty case.\n\n- [high] empty input (src/x.ts:3): crashes on an empty list')
+  })
+
+  it('renders at most 20 findings in the body, each with only the parts it has, then says how many more', async () => {
+    const issues = [
+      { severity: 'medium', title: 'no file' },
+      { severity: 'low', title: 'file only', file: 'a.ts' },
+      { severity: 'info', title: 'two\nlines', description: 'first\nsecond' },
+      ...Array.from({ length: 20 }, (_, i) => ({ severity: 'high', title: `t${i}`, file: 'b.ts', line: i + 1, description: 'd' }))
+    ]
+    const h = rig({ message: verdictMessage({ outcome: 'rejected', summary: 'Several.', issues }) })
+    await h.run()
+    const lines = String(h.handled[0].args.body).split('\n')
+    expect(lines.slice(0, 5)).toEqual(['Several.', '', '- [medium] no file', '- [low] file only (a.ts)', '- [info] two lines: first second'])
+    expect(lines.filter((l) => l.startsWith('- ['))).toHaveLength(20)
+    expect(lines.at(-1)).toBe('and 3 more')
   })
 
   it('an answer with no verdict gets one retry prompt in the same session, then settles', async () => {
@@ -362,6 +397,50 @@ describe('createReviewStarter with an external reviewer', () => {
     expect(h.prompts()).toContain('env REVIEW_MARK=for tree')
     expect(h.spawned[0].env).toMatchObject({ REVIEW_MARK: 'for tree', NO_BROWSER: 'true' })
     expect(h.spawned[0].env).not.toHaveProperty('ASTERA_HOST_PIPE')
+  })
+
+  // Final fix wave B2: the implementer's head is recorded after it ends, later than the review builds its prompt
+  describe('the diff in the prompt', () => {
+    /** A repository in the implementer's folder, its first commit recorded as the implementer's base (and no head) */
+    const withRepo = (h: ReturnType<typeof rig>): string => {
+      const g = (args: string[]): string => gitSync(h.implCwd, args)
+      g(['init', '-q'])
+      g(['config', 'user.email', 't@t'])
+      g(['config', 'user.name', 't'])
+      g(['config', 'core.autocrlf', 'false'])
+      fs.writeFileSync(path.join(h.implCwd, 'a.txt'), 'one\n')
+      g(['add', '-A'])
+      g(['commit', '-q', '-m', 'base'])
+      const base = g(['rev-parse', 'HEAD'])
+      h.setState({ ...h.state(), dispatches: h.state().dispatches.map((d) => (d.taskId === h.taskId && !d.review ? { ...d, git: { base } } : d)) })
+      return base
+    }
+
+    it('embeds the change from the first attempt’s base to HEAD when the head is not recorded yet', async () => {
+      const h = rig({ rangeDiff: (cwd, base, head, o) => readRangeDiff(cwd, base, head, o) })
+      withRepo(h)
+      fs.writeFileSync(path.join(h.implCwd, 'a.txt'), 'the changed line\n')
+      gitSync(h.implCwd, ['commit', '-q', '-am', 'work'])
+      await h.run()
+      expect(h.task().status).toBe('completed')
+      expect(h.prompts()[0]).toContain('+the changed line')
+      expect(h.prompts()[0]).not.toContain('No diff is attached')
+    }, 30_000)
+
+    it('says no diff is attached when nothing changed since the base', async () => {
+      const h = rig({ rangeDiff: (cwd, base, head, o) => readRangeDiff(cwd, base, head, o) })
+      withRepo(h)
+      await h.run()
+      expect(h.prompts()[0]).toContain('No diff is attached. Read the files listed above.')
+    }, 30_000)
+
+    it('logs a diff that could not be read, and says no diff is attached', async () => {
+      const h = rig({ rangeDiff: async () => { throw new Error('git broke') } })
+      h.setState({ ...h.state(), dispatches: h.state().dispatches.map((d) => (d.taskId === h.taskId && !d.review ? { ...d, git: { base: 'abc123' } } : d)) })
+      await h.run()
+      expect(h.prompts()[0]).toContain('No diff is attached. Read the files listed above.')
+      expect(h.logs.join('\n')).toMatch(/diff abc123\.\.HEAD could not be read: .*git broke/)
+    })
   })
 
   it('a command that is not there makes a Gate', async () => {

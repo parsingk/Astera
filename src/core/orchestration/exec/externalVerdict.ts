@@ -14,7 +14,8 @@ export const VERDICT_RETRY_PROMPT =
   'Your last message had no verdict I could read. Answer again with only the fenced json block, nothing before it and nothing after it:\n\n' +
   '```json\n{ "outcome": "approved" | "rejected", "summary": "…", "issues": [ { "severity": "critical|high|medium|low|info", "title": "…", "description": "…", "file": "src/x.ts", "line": 42, "suggestedFix": "…" } ] }\n```'
 
-const FENCED_JSON = /```json[^\S\n]*\r?\n([\s\S]*?)```/gi
+/** The opening line of a fenced json block. A JSON string cannot hold a line break, so this never matches inside one. */
+const JSON_FENCE_OPENER = /```json[^\S\n]*\r?\n/gi
 
 /** The top-level `{...}` spans of `text`, in order. Braces inside a JSON string do not count; outside an object a quote
  *  is prose and is ignored. */
@@ -41,10 +42,15 @@ function balancedObjects(text: string): string[] {
 }
 
 export function parseExternalVerdict(text: string): { ok: true; verdict: ExternalVerdict } | { ok: false; error: string } {
-  const blocks = [...text.matchAll(FENCED_JSON)]
+  // From the last opener, the first whole object: a fence inside one of its strings (a suggestedFix with a code block) is
+  // inside the object and does not end it, which a match up to the next fence did (final fix wave B1)
+  const openers = [...text.matchAll(JSON_FENCE_OPENER)]
   let raw: string | undefined
-  if (blocks.length > 0) raw = blocks[blocks.length - 1][1]
-  else {
+  if (openers.length > 0) {
+    const last = openers[openers.length - 1]
+    raw = balancedObjects(text.slice((last.index ?? 0) + last[0].length))[0]
+    if (raw === undefined) return { ok: false, error: 'the last fenced json block holds no complete JSON object' }
+  } else {
     const spans = balancedObjects(text)
     for (let i = spans.length - 1; i >= 0 && raw === undefined; i--) {
       try {
