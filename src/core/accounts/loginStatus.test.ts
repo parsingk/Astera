@@ -59,3 +59,28 @@ describe('login probes heal an empty folder at the login file path', () => {
     })
   }
 })
+
+// A junction or symlink at the login path is no folder Codex's sandbox made: rmdir would remove the link itself even when
+// its target holds files, so the healing leaves it alone
+describe.skipIf(process.platform !== 'win32')('login probes leave a junction at the login file path alone', () => {
+  it('keeps a junction whose target holds a file, for both probes', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-login-junction-'))
+    try {
+      for (const { file, make } of [
+        { file: 'auth.json', make: fileMarkerProbe('auth.json', 'win32') },
+        { file: '.credentials.json', make: claudeLoginProbe({ platform: 'win32', homeDir: dir, account: 'u', keychainHas: async () => false }) }
+      ]) {
+        const target = path.join(dir, `target-${file}`)
+        await fs.mkdir(target)
+        await fs.writeFile(path.join(target, 'keep.txt'), 'x')
+        const at = path.join(dir, file)
+        await fs.symlink(target, at, 'junction')
+        await make(dir)
+        expect((await fs.lstat(at)).isSymbolicLink(), file).toBe(true)
+        expect(await fs.readFile(path.join(target, 'keep.txt'), 'utf8')).toBe('x')
+      }
+    } finally {
+      await removeFixture(dir)
+    }
+  })
+})

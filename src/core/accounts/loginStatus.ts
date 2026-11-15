@@ -24,15 +24,17 @@ async function exists(p: string): Promise<boolean> {
  *  `apply_deny_read_acls`: "Missing paths are materialized as directories"; the same at rust-v0.160.0 and rust-v0.169.0).
  *  A session that started while the account was logged in keeps naming its login file, so after a logout its next
  *  command leaves an empty folder named `auth.json` or `.credentials.json`, which the probe would read as a login and
- *  which the CLI's next login could not write its file over. `rmdir` removes only an empty folder: a file, a folder that
- *  holds something, or a path that is not there is left as it is, and it is never recursive. Never throws. Nothing
- *  happens off Windows. */
+ *  which the CLI's next login could not write its file over. Only a real directory is removed (`lstat` first: a junction or
+ *  symlink is not one Codex made, and `rmdir` on a link removes the link itself whatever its target holds), and `rmdir`
+ *  removes only an empty one: a file, a link, a folder that holds something, or a path that is not there is left as it
+ *  is, and it is never recursive. Never throws. Nothing happens off Windows. */
 async function dropEmptyFolder(p: string, platform: NodeJS.Platform): Promise<void> {
   if (platform !== 'win32') return
   try {
-    await fs.rmdir(p)
+    const st = await fs.lstat(p)
+    if (st.isDirectory() && !st.isSymbolicLink()) await fs.rmdir(p)
   } catch {
-    /* a file, a folder with something in it, or nothing there: nothing to heal */
+    /* a file, a link, a folder with something in it, or nothing there: nothing to heal */
   }
 }
 
