@@ -109,7 +109,8 @@ const keyOf = (accountId: string, cwd: string): string => `${accountId}\u0000${c
 /** What a sandboxed Codex session may not read: the E6 list and the OS credential store, read from the session's own
  *  environment and home, on macOS and Linux the folder the Host's socket is in (`hostSocketDir`, hostSocketDenies) and
  *  every other Host's folder its prepare found beside it (`otherHostDirs`, otherHostFolders), and on every OS the app's
- *  key (`appKeyFile`, appKeyDenies; sandbox follow-ups, item 1). One list for a session's start (sessionSandboxArgs) and
+ *  key (`appKeyFile`, appKeyDenies; sandbox follow-ups, item 1), and the agents' login files (`agentLogins`,
+ *  locations.ts agentLoginEntries; sandbox design §6), as given. One list for a session's start (sessionSandboxArgs) and
  *  the S2 measurement (scripts/measure/s2.mjs codexDenied), so what is measured is what a start hands Codex. */
 export function codexSessionDenied(o: {
   platform: NodeJS.Platform
@@ -120,12 +121,15 @@ export function codexSessionDenied(o: {
   otherHostDirs?: readonly string[]
   /** `<profile>/host/app.key` (core/host/hostKey.ts appKeyPath). */
   appKeyFile?: string | null
+  /** The agents' login files of every account and the default folders (locations.ts agentLoginEntries). */
+  agentLogins?: readonly DenyEntry[]
 }): string[] {
   return [
     ...sensitiveLocations(o.platform, o.env, o.homeDir),
     ...credentialStoreDenies(o.platform, o.env, o.homeDir),
     ...hostSocketDenies(o.platform, o.hostSocketDir ?? null, o.otherHostDirs ?? []),
-    ...appKeyDenies(o.appKeyFile ?? null)
+    ...appKeyDenies(o.appKeyFile ?? null),
+    ...(o.agentLogins ?? []).map((e) => e.path)
   ]
 }
 
@@ -158,6 +162,8 @@ function codexNamedEntries(o: {
   hostSocketDir?: string | null
   otherHostDirs?: readonly string[]
   appKeyFile?: string | null
+  /** The agents' login files (codexSessionDenied); with `links`, each only if it is there at the start. */
+  agentLogins?: readonly DenyEntry[]
   readOnly?: readonly string[]
   links: SessionLinks | null
 }): { denied: string[]; readOnly: string[]; links: string[] } {
@@ -165,7 +171,8 @@ function codexNamedEntries(o: {
   const readOnly = [...(o.readOnly ?? [])]
   const loginEntries = [...sensitiveEntries(o.platform, o.env, o.homeDir), ...credentialStoreEntries(o.platform, o.env, o.homeDir)]
   const keyEntries = appKeyEntries(o.appKeyFile ?? null)
-  if (!o.links) return { denied: [...loginEntries, ...sockets.map((path) => ({ path })), ...keyEntries].map((e) => e.path), readOnly, links: [] }
+  const agentEntries = o.agentLogins ?? []
+  if (!o.links) return { denied: [...loginEntries, ...sockets.map((path) => ({ path })), ...keyEntries, ...agentEntries].map((e) => e.path), readOnly, links: [] }
   const look = o.links.look
   // Task E fix round 6: Codex's Windows sandbox makes every missing deny-read path a folder before it denies it
   // (windows-sandbox-rs/src/deny_read_acl.rs:58-76 `create_dir_all`, reached through deny_read_state.rs:32-46 from
@@ -182,7 +189,18 @@ function codexNamedEntries(o: {
       return true
     }
   }
-  const logins = loginEntries.filter(present).map((e) => e.path)
+  // The agents' login files (sandbox design §6) are left out when missing on every OS, not only Windows: a logged-out
+  // account has no file to protect, Codex's Windows sandbox would make a folder of the missing path (which the CLI's next
+  // login could not write its file over), and another sandbox may put a placeholder file at it. A look that fails keeps
+  // the entry
+  const agentPresent = (e: DenyEntry): boolean => {
+    try {
+      return look.lstat(e.path) !== null
+    } catch {
+      return true
+    }
+  }
+  const logins = [...loginEntries.filter(present), ...agentEntries.filter(agentPresent)].map((e) => e.path)
   const key = keyEntries.filter(present).map((e) => e.path)
   const writable = codexWritableFolders({ platform: o.platform, cwd: o.links.cwd, layout: o.layout, env: o.env })
   const named = (paths: readonly string[]) => namedPaths(paths, writable, o.platform, o.links!.look)
@@ -228,6 +246,9 @@ export function sessionSandboxArgs(o: {
   otherHostDirs?: readonly string[]
   /** The profile's app key file, denied on every OS (codexSessionDenied). */
   appKeyFile?: string | null
+  /** The agents' login files (locations.ts agentLoginEntries), denied on every OS; with `links`, only those there at the
+   *  start (codexNamedEntries). */
+  agentLogins?: readonly DenyEntry[]
   /** The read-only folders, built by the start's wiring (sandboxReadOnly). Absent, nothing is kept read-only. */
   readOnly?: readonly string[]
   /** Where a refused path is named (the manager's log). */
@@ -311,6 +332,8 @@ export async function prepareCodexSandbox(o: {
   hostSocketDir?: string | null
   /** The profile's app key file, denied on every OS (sessionSandboxArgs). */
   appKeyFile?: string | null
+  /** The agents' login files, denied on every OS; the session and the readiness echo get this one list (sessionSandboxArgs). */
+  agentLogins?: readonly DenyEntry[]
   /** The read-only folders, built by the start's wiring (sessionSandboxArgs). */
   readOnly?: readonly string[]
   /** The codex version question (final review I2): asked first, so an old codex is refused before anything is read or
@@ -351,6 +374,7 @@ export async function prepareCodexSandbox(o: {
     hostSocketDir: o.hostSocketDir ?? null,
     otherHostDirs: otherHosts,
     appKeyFile: o.appKeyFile ?? null,
+    agentLogins: o.agentLogins ?? [],
     readOnly: o.readOnly ?? [],
     log: o.log,
     links: o.look ? { cwd: o.cwd, look: o.look } : null
@@ -366,6 +390,7 @@ export async function prepareCodexSandbox(o: {
       hostSocketDir: o.hostSocketDir ?? null,
       otherHostDirs: otherHosts,
       appKeyFile: o.appKeyFile ?? null,
+      agentLogins: o.agentLogins ?? [],
       readOnly: o.readOnly ?? [],
       links: o.look ? { cwd: o.cwd, look: o.look } : null
     })

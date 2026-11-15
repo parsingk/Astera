@@ -11,7 +11,8 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { removeFixture } from '../testFixtures'
 import { gitLayoutOf } from './gitLayout'
-import { prepareCodexSandbox, sessionSandboxArgs, type CodexVersionProbe, type CodexWindowsReady } from './prepared'
+import { codexEchoArgs, codexSessionDenied, prepareCodexSandbox, sessionSandboxArgs, type CodexVersionProbe, type CodexWindowsReady } from './prepared'
+import { nodeLinkLook, type DenyEntry, type LinkLook } from './locations'
 
 const git = (cwd: string, ...args: string[]): void => {
   execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, stdio: 'ignore' })
@@ -99,5 +100,80 @@ describe('prepareCodexSandbox and the Windows readiness echo', () => {
     expect(asked).toEqual([])
     expect((await prepareCodexSandbox({ ...base, platform: 'win32', env, elevatedDefault: reader })).elevatedDefault).toBe(true)
     expect(asked).toEqual([path.join(codexHome, 'config.toml')])
+  })
+})
+
+// Sandbox design §6, the agents' login files: a sandboxed session's shell could open every account's `.credentials.json`
+// and `auth.json`. The entries are files, and with `links` one is named only if it is there at the start, on every OS:
+// Codex's Windows sandbox turns a missing deny path into a folder (which the CLI's next login could not write a file
+// over), and another sandbox may put a placeholder at it.
+describe('the agents login files in a sandboxed Codex start', () => {
+  const present = '/acct/one/.credentials.json'
+  const missing = '/acct/two/auth.json'
+  const logins: DenyEntry[] = [
+    { path: present, kind: 'file' },
+    { path: missing, kind: 'file' }
+  ]
+  /** A disk where only `present` (and the folders above it) is there. */
+  const look: LinkLook = {
+    lstat: (p) => (p === present || present.startsWith(`${p}/`) ? { isSymbolicLink: () => false } : null),
+    readlink: () => {
+      throw new Error('no links')
+    },
+    realpath: (p) => {
+      throw new Error(`no ${p}`)
+    }
+  }
+  const base = (platform: NodeJS.Platform) => ({ platform, homeDir: '/h', layout: null, env: {} as Record<string, string | undefined>, agentLogins: logins })
+  const deny = (args: readonly string[]) => args.find((a) => a.startsWith('permissions=')) ?? ''
+
+  it('denies a login file that is there, and leaves a missing one out, on every OS', () => {
+    for (const platform of ['win32', 'linux', 'darwin'] as const) {
+      const links = { cwd: '/work', look }
+      const session = deny(sessionSandboxArgs({ ...base(platform), links }))
+      expect(session, platform).toContain(`"${present}"="deny"`)
+      expect(session, platform).not.toContain(missing)
+      const echo = deny(codexEchoArgs({ ...base(platform), links }))
+      expect(echo, platform).toContain(`"${present}"="deny"`)
+      expect(echo, platform).not.toContain(missing)
+    }
+  })
+
+  it('names both without links (the measurement), as given', () => {
+    const session = deny(sessionSandboxArgs({ ...base('linux'), links: null }))
+    expect(session).toContain(`"${present}"="deny"`)
+    expect(session).toContain(`"${missing}"="deny"`)
+    expect(codexSessionDenied({ platform: 'linux', homeDir: '/h', env: {}, agentLogins: logins })).toEqual(expect.arrayContaining([present, missing]))
+  })
+
+  it('keeps an entry whose look throws', () => {
+    const broken: LinkLook = { ...look, lstat: () => { throw new Error('EACCES') } }
+    const session = deny(sessionSandboxArgs({ ...base('win32'), links: { cwd: '/work', look: broken } }))
+    expect(session).toContain(`"${missing}"="deny"`)
+  })
+
+  it('hands the readiness echo the very list the session gets', async () => {
+    const root = await fs.promises.realpath(await fs.promises.mkdtemp(path.join(os.tmpdir(), 'astera-logins-')))
+    try {
+      const home = path.join(root, 'home')
+      const repo = path.join(root, 'repo')
+      fs.mkdirSync(path.join(home, 'a'), { recursive: true })
+      fs.mkdirSync(repo)
+      const there = path.join(home, 'a', 'auth.json').split(path.sep).join('/')
+      const gone = path.join(home, 'b', 'auth.json').split(path.sep).join('/')
+      fs.writeFileSync(there, 'fake')
+      const asked: Parameters<CodexWindowsReady>[0][] = []
+      const ready: CodexWindowsReady = async (a) => (asked.push(a), 'ready')
+      const env = { APPDATA: path.join(home, 'AppData', 'Roaming'), TEMP: os.tmpdir(), TMP: os.tmpdir() }
+      const agentLogins: DenyEntry[] = [{ path: there, kind: 'file' }, { path: gone, kind: 'file' }]
+      await prepareCodexSandbox({ accountId: 'acc', cwd: repo, platform: 'win32', homeDir: home, env, agentLogins, ready, version, look: nodeLinkLook, log: () => {} })
+      const profile = asked[0].profile ?? []
+      expect(entriesOf(profile, 'deny')).toContain(there)
+      expect(entriesOf(profile, 'deny')).not.toContain(gone)
+      const session = sessionSandboxArgs({ platform: 'win32', homeDir: home, layout: await gitLayoutOf(repo), env, agentLogins, links: { cwd: repo, look: nodeLinkLook } })
+      expect(entriesOf(profile, 'deny')).toEqual(entriesOf(session, 'deny'))
+    } finally {
+      await removeFixture(root)
+    }
   })
 })
