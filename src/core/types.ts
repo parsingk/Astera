@@ -1,4 +1,5 @@
 import type { GitHubLifecycleDefaults } from './github/lifecycleDefaults'
+import type { ReviewerSettings } from './settings/externalReviewers'
 import type { CiFailureClass, GitHubInvalidatedReason } from './github/lifecycle'
 import type { GitHubLifecycleView } from './github/view'
 import type { RunConfig, RunStatus, SaveConfigsResult } from './run/config'
@@ -1518,6 +1519,9 @@ export interface CoreApi {
     // 에이전트를 권한 확인 없이 띄우는가. See AgentPermissionMode — 기본은 'yolo' 다.
     getAgentPermissionMode(): Promise<AgentPermissionMode>
     setAgentPermissionMode(mode: AgentPermissionMode): Promise<void>
+    // External reviewers registered and the one chosen (spec 3.1). The set returns the narrowed value it stored.
+    getReviewerSettings(): Promise<ReviewerSettings>
+    setReviewerSettings(next: ReviewerSettings): Promise<ReviewerSettings>
     // What an MCP client may do through `astera mcp serve`. See McpAccess.
     getMcpAccess(): Promise<McpAccess>
     setMcpAccess(v: McpAccess): Promise<void>

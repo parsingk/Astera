@@ -1086,3 +1086,58 @@ describe('mcpHttp', () => {
     expect(store.getMcpHttp().hosts).toEqual(['a'])
   })
 })
+
+describe('reviewer settings', () => {
+  const entry = { id: 'ext_0123abcd', name: 'Gemini CLI', command: 'gemini', args: ['--acp'] }
+
+  it('are empty by default and a default write leaves both keys out of the file', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getReviewerSettings()).toEqual({ reviewers: [], reviewBy: null })
+    await store.setReviewerSettings({ reviewers: [], reviewBy: null })
+    const onDisk = JSON.parse(await fs.readFile(file(), 'utf8')) as Record<string, unknown>
+    expect(onDisk).not.toHaveProperty('externalReviewers')
+    expect(onDisk).not.toHaveProperty('reviewBy')
+  })
+
+  it('round-trip through set and a fresh load', async () => {
+    const a = new AppSettingsStore(file())
+    await a.load()
+    const saved = await a.setReviewerSettings({ reviewers: [entry], reviewBy: entry.id })
+    expect(saved).toEqual({ reviewers: [entry], reviewBy: entry.id })
+    const b = new AppSettingsStore(file())
+    await b.load()
+    expect(b.getReviewerSettings()).toEqual({ reviewers: [entry], reviewBy: entry.id })
+  })
+
+  it('stores the narrowed value: an entry that does not fit and a dangling choice are dropped', async () => {
+    const a = new AppSettingsStore(file())
+    await a.load()
+    const saved = await a.setReviewerSettings({ reviewers: [entry, { ...entry, id: 'bad' }], reviewBy: 'ext_ffffffff' })
+    expect(saved).toEqual({ reviewers: [entry], reviewBy: null })
+  })
+
+  it('a hand-edited file narrows on load', async () => {
+    await fs.writeFile(file(), JSON.stringify({ externalReviewers: [entry, { ...entry, id: 'ext_11111111', name: 'a\nb' }], reviewBy: 'ext_11111111' }), 'utf8')
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getReviewerSettings()).toEqual({ reviewers: [entry], reviewBy: null })
+  })
+
+  it('a corrupt file recovers to no reviewers', async () => {
+    await fs.writeFile(file(), '{ not json', 'utf8')
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getReviewerSettings()).toEqual({ reviewers: [], reviewBy: null })
+  })
+
+  it('writing another setting keeps the reviewers', async () => {
+    const a = new AppSettingsStore(file())
+    await a.load()
+    await a.setReviewerSettings({ reviewers: [entry], reviewBy: null })
+    await a.setLang('en')
+    const b = new AppSettingsStore(file())
+    await b.load()
+    expect(b.getReviewerSettings().reviewers).toEqual([entry])
+  })
+})

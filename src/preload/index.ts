@@ -204,6 +204,8 @@ const api = {
     setResumeStrategy: invoke('settings.setResumeStrategy'),
     getAgentPermissionMode: invoke('settings.getAgentPermissionMode'),
     setAgentPermissionMode: invoke('settings.setAgentPermissionMode'),
+    getReviewerSettings: invoke('settings.getReviewerSettings'),
+    setReviewerSettings: invoke('settings.setReviewerSettings'),
     getMcpAccess: invoke('settings.getMcpAccess'),
     setMcpAccess: invoke('settings.setMcpAccess'),
     getMcpSessions: invoke('settings.getMcpSessions'),

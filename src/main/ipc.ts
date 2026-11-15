@@ -53,6 +53,7 @@ import { createHostDriverView, type HostDriverView } from './host/hostDriver'
 import { createHostWorkspaceView, type HostWorkspaceView } from './host/hostWorkspace'
 import { clampAppSize } from '../core/workspace/size'
 import { createHostMcpHttpView, type HostMcpHttpView } from './host/hostMcpHttp'
+import type { ReviewerSettings } from '../core/settings/externalReviewers'
 import { mcpHttpHostsProblem, mcpHttpOf, type McpHttpSettings } from '../core/settings/mcpHttp'
 import { appProfileSpawn, profileSpawn } from '../core/agentProfiles/permission'
 import { readAgentProfiles } from '../core/agentProfiles/store'
@@ -6223,6 +6224,11 @@ export function registerIpc(
     if (mode !== 'yolo' && mode !== 'manual') throw new Error(`INVALID_AGENT_PERMISSION_MODE: ${String(mode)}`)
     await core.appSettings.setAgentPermissionMode(mode)
   })
+
+  // External reviewers (spec 3.1). The store narrows what it is given and returns what it kept; the Host
+  // reads the file when a Task is reviewed, so saving it is the whole effect.
+  ipcMain.handle('settings.getReviewerSettings', () => core.appSettings.getReviewerSettings())
+  ipcMain.handle('settings.setReviewerSettings', (_e, next: unknown) => core.appSettings.setReviewerSettings(next as ReviewerSettings))
 
   // MCP access (MCP design M5). The Host reads the file on every MCP call (readMcpAccess), so saving it
   // is the whole effect.
