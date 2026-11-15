@@ -634,20 +634,48 @@ describe('createReviewStarter with an external reviewer', () => {
   })
 
   // Final fix wave A4: a person who moved the Task out of `reviewing` is not overruled by the review they left behind
-  it('a Task moved out of reviewing during a review ends it silently: the process is killed, no Gate, the Task untouched', async () => {
+  // Follow-up R1: the review closes its own Dispatch as unproven, or the moved Task could never be started again
+  it('a Task moved out of reviewing during a review ends it: the process is killed, its Dispatch closed as unproven, no Gate, the Task untouched', async () => {
     const h = rig({ mode: 'hang-prompt' })
     await h.start({ taskId: h.taskId })
     await until(() => h.prompts().length === 1, 'the agent to be mid-turn')
     const pid = h.pid()
     // what task-update does: the Task moves, the review Dispatch stays open
     h.setState({ ...h.state(), tasks: h.state().tasks.map((t) => (t.id === h.taskId ? { ...t, status: 'pending' as const } : t)) })
-    const before = h.state()
     await Promise.race([h.start.externalIdle(), sleep(20_000).then(() => Promise.reject(new Error('not idle')))])
     await gone(pid)
-    expect(h.state()).toBe(before)
+    const d = h.review()!
+    expect(d.endedAt).toBeDefined()
+    expect(d.workerState).toBe('outcome_unknown')
+    expect(d.outcome).toBeUndefined()
     expect(h.task().status).toBe('pending')
     expect(h.state().gates).toEqual([])
     expect(h.handled).toEqual([])
+    // the rescued Task can be started again
+    const again = openDispatch(h.state(), { taskId: h.taskId, provider: 'claude', accountId: 'c1', sessionId: 'sess2', cwd: h.implCwd, specPath: path.join(h.specsDir, 'again.md') }, NOW)
+    expect(again.ok ? '' : again.error).not.toMatch(/already open/)
+  })
+
+  // Follow-up R3: a failure that lands before the poll notices the move does not gate the moved Task
+  it('an agent that exits mid-turn after the Task moved, before the poll saw it, closes the Dispatch as unproven and opens no Gate', async () => {
+    let reads = 0
+    const h = rig({
+      mode: 'exit-mid-turn',
+      pollMs: 60_000,
+      treeState: async () => {
+        // the person moves the Task while the review starts; the poll will not look for a minute
+        if (reads++ === 0) h.setState({ ...h.state(), tasks: h.state().tasks.map((t) => (t.id === h.taskId ? { ...t, status: 'pending' as const } : t)) })
+        return 'same'
+      }
+    })
+    await h.run()
+    await gone(h.pid())
+    expect(h.state().gates).toEqual([])
+    expect(h.task().status).toBe('pending')
+    const d = h.review()!
+    expect(d).toMatchObject({ workerState: 'outcome_unknown' })
+    expect(d.endedAt).toBeDefined()
+    expect(d.outcome).toBeUndefined()
   })
 
   it('a settle refused after the Task left reviewing is dropped and logged, not gated', async () => {
@@ -658,7 +686,10 @@ describe('createReviewStarter with an external reviewer', () => {
     await h.run()
     expect(h.task().status).toBe('pending')
     expect(h.state().gates).toEqual([])
-    expect(h.review()!.endedAt).toBeUndefined()
+    // Follow-up R1: its Dispatch is closed as unproven, so the moved Task can be started again
+    expect(h.review()).toMatchObject({ workerState: 'outcome_unknown' })
+    expect(h.review()!.endedAt).toBeDefined()
+    expect(h.review()!.outcome).toBeUndefined()
     expect(h.logs.join('\n')).toContain('was refused after its Task left reviewing or its Dispatch closed; dropped')
   })
 

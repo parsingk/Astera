@@ -1,7 +1,7 @@
 // "Test this reviewer" (design section 4, Settings): initialize and session/new in a folder the caller made, then close.
 // The same command resolution and environment as a review (spawn.ts), so a passing test means a review can start.
 import type { ProcFactory, ProcLike } from '../sessions/proc'
-import { openAcpSession, type AcpFailureKind } from './client'
+import { killOnce, openAcpSession, type AcpFailureKind } from './client'
 import { agentChildEnv, resolveAgentCommand } from './spawn'
 import type { ReviewerProbe } from './probeTypes'
 
@@ -25,7 +25,8 @@ export async function probeReviewer(a: {
   try {
     const resolved = await (a.resolve ?? resolveAgentCommand)(a.reviewer, a.platform)
     if (!resolved.ok) return { ok: false, kind: 'protocol', message: resolved.error }
-    proc = a.spawn(resolved.file, resolved.args, { cwd: a.cwd, env: agentChildEnv(a.baseEnv, a.platform) })
+    // Killed once, though a failing session and the cleanup below both kill it (follow-up R4)
+    proc = killOnce(a.spawn(resolved.file, resolved.args, { cwd: a.cwd, env: agentChildEnv(a.baseEnv, a.platform) }))
     const session = await openAcpSession({ proc, cwd: a.cwd, clientVersion: a.clientVersion, log: () => {}, timeouts: a.timeouts })
     return { ok: true, agent: session.agent }
   } catch (e) {

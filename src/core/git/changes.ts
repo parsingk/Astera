@@ -5,6 +5,7 @@
 import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { git } from '../worktrees/git'
+import { windowsExecutable } from '../sessions/windowsExecutable'
 import type { GitRun } from './range'
 import { CHANGES_MAX_FILES, type ChangedFile } from './changedFile'
 
@@ -146,7 +147,9 @@ function gitBounded(args: string[], cwd: string, maxBytes: number): Promise<{ ok
       clearTimeout(timer)
       resolve(r)
     }
-    const child = spawn('git', args, { cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
+    // By PATH on win32, not by name: libuv looks a bare name up in the child's cwd first, and the cwd here is a repository
+    // (worktrees/git.ts, security review 2026-09-28; follow-up R2)
+    const child = spawn(windowsExecutable('git'), args, { cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
     const timer = setTimeout(() => {
       child.kill()
       finish({ ok: false, out: Buffer.alloc(0), cut: false })
@@ -213,18 +216,26 @@ function gitHashed(args: string[], cwd: string): Promise<string | null> {
   return new Promise((resolve) => {
     const hash = createHash('sha256')
     let done = false
+    let timer: ReturnType<typeof setTimeout> | undefined
     const finish = (r: string | null): void => {
       if (done) return
       done = true
-      clearTimeout(timer)
+      if (timer !== undefined) clearTimeout(timer)
       resolve(r)
     }
-    const child = spawn('git', args, { cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
-    const timer = setTimeout(() => {
+    // By PATH on win32, not by name (see gitBounded); a spawn that throws answers null like any other failure
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(windowsExecutable('git'), args, { cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
+    } catch {
+      return finish(null)
+    }
+    timer = setTimeout(() => {
       child.kill()
       finish(null)
     }, TIMEOUT_MS)
-    child.stdout.on('data', (b: Buffer) => hash.update(b))
+    child.stdout?.on('data', (b: Buffer) => hash.update(b))
+    child.stdout?.on('error', () => finish(null))
     child.on('error', () => finish(null))
     child.on('close', (code) => finish(code === 0 ? hash.digest('hex') : null))
   })

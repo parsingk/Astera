@@ -43,7 +43,8 @@ describe('probeReviewer', () => {
     const r = await probeReviewer({ ...base, spawn: spy, reviewer: fake('hang-initialize'), timeouts: { initializeMs: 300 } })
     expect(r).toMatchObject({ ok: false, kind: 'timeout' })
     expect(pids.length).toBe(1)
-    expect(kills.length).toBeGreaterThan(0)
+    // once, though the client's timeout and the probe's own cleanup both end it (follow-up R4)
+    expect(kills.length).toBe(1)
     expect(new Set(kills)).toEqual(new Set(pids))
   }, 20_000)
 

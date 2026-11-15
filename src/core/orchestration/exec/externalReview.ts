@@ -8,8 +8,9 @@
 // - Every end that is ours (verdict reached, timeout, violation, dispose, a closed Dispatch) calls `stop` first, so the
 //   exit that follows is a consequence and never a cause: the ACP client reads its own close() as intentional.
 // - A failure is a Gate keyed by this review's Dispatch (`gateDispatch`): it acts only while that Dispatch is still open.
-// - A Dispatch closed under the run, a Task moved out of `reviewing`, and a dispose, end it silently: the process is killed
-//   and nothing is recorded.
+// - A Dispatch closed under the run, and a dispose, end it silently: the process is killed and nothing is recorded.
+// - A Task moved out of `reviewing` ends it too, and the run closes its own Dispatch as unproven (`closeMoved`) and nothing
+//   else: no Gate, no settle, the Task untouched. Left open, that Dispatch would refuse the Task's next start.
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { AcpFailure, killOnce, openAcpSession, type AcpSession } from '../../acp/client'
@@ -18,7 +19,7 @@ import { isSamePath } from '../../files/tree'
 import type { ProcLike } from '../../sessions/proc'
 import type { ExternalReviewer } from '../../settings/externalReviewers'
 import { policyOf } from '../convergence'
-import { openReviewDispatch, workSandboxed, type OrchState } from '../state'
+import { endedUnproven, openReviewDispatch, workSandboxed, type OrchState } from '../state'
 import { EXTERNAL_REVIEW_SESSION_PREFIX, type Dispatch } from '../types'
 import type { Provider } from '../../providers/meta'
 import { specFileName } from './coordinator'
@@ -155,6 +156,8 @@ export function createExternalReviews(c: {
     let poll: ReturnType<typeof setInterval> | undefined
     let stopped = false
     let timedOut = false
+    /** Set by the poll when it ends the run because the Task left `reviewing` while this Dispatch was open. */
+    let movedAway = false
 
     /** The agent's message is kept in the transcript: once the Dispatch is gone nothing else shows what it said. */
     const logTurn = (turn: { stopReason: string; text: string }): void => {
@@ -185,9 +188,30 @@ export function createExternalReviews(c: {
       log('the Dispatch is not open any more; nothing is recorded')
       return true
     }
+    /** The one record a moved Task's review makes (follow-up R1): its own Dispatch ended as unproven, as the orphan close
+     *  writes it, and only while it is still open and its Task still is not `reviewing`. Read and committed with no await
+     *  between. A disposed driver records nothing. */
+    const closeMoved = async (why: string): Promise<void> => {
+      if (disposed) return
+      const s = c.getState()
+      const x = s.dispatches.find((y) => y.id === d.id)
+      if (!x || x.outcome || x.endedAt || s.tasks.find((t) => t.id === taskId)?.status === 'reviewing') return
+      await c.setState({ ...s, dispatches: s.dispatches.map((y) => (y.id === d.id ? endedUnproven(y, c.now()) : y)) })
+      log(`the Task left reviewing (${why}); this review's Dispatch is closed as unproven`)
+      c.log(`external review of task=${taskId} dispatch=${d.id}: the Task left reviewing (${why}); its Dispatch is closed as unproven`)
+    }
+    /** How a silent end finishes: nothing, unless the poll ended it for a moved Task. */
+    const endSilently = async (): Promise<void> => {
+      if (movedAway) await closeMoved('seen by the poll')
+    }
     const fail = async (reason: string): Promise<void> => {
       stop()
-      if (self.silent) return
+      if (self.silent) return await endSilently()
+      // A failure that lands before the poll saw a moved Task is not put to the person who moved it (follow-up R3)
+      if (c.getState().tasks.find((t) => t.id === taskId)?.status !== 'reviewing') {
+        log(`failed after the Task left reviewing, so no Gate: ${reason}`)
+        return await closeMoved(`the review then failed: ${agentWords(reason)}`)
+      }
       log(`failed: ${reason}`)
       // The Dispatch and its spec go; the transcript stays, and the Gate says where (final fix wave C1)
       const gated = await c.reviewGate.gateDispatch({ taskId, dispatchId: d.id, reason: `${reason} Transcript: ${logFile}` })
@@ -265,7 +289,10 @@ export function createExternalReviews(c: {
       // A Task a person moved out of `reviewing` (task-update) leaves this Dispatch open, and a verdict could only be
       // refused and then gate the Task they moved: that ends the review as silently as a closed Dispatch (final fix wave A4)
       poll = setInterval(() => {
-        if (live(c.getState())) return
+        const s = c.getState()
+        if (live(s)) return
+        // Open but its Task moved: the end closes the Dispatch (follow-up R1). Closed: nothing is recorded.
+        if (isOpenIn(s, d.id)) movedAway = true
         abort(d.id, false)
       }, ext.pollMs ?? EXTERNAL_OPEN_POLL_MS)
 
@@ -331,15 +358,18 @@ export function createExternalReviews(c: {
       // Read with no await before the Gate `fail` opens: a refusal because a person moved the Task, or the Dispatch closed,
       // is theirs to have made, never a failure to put to them (final fix wave A4)
       if (!live(c.getState())) {
-        log(`the verdict was refused (${errorText(reply.body)}) after the Task left reviewing or the Dispatch closed; nothing is recorded`)
-        return void c.log(
+        log(`the verdict was refused (${errorText(reply.body)}) after the Task left reviewing or the Dispatch closed; no Gate`)
+        c.log(
           `external review of task=${taskId} dispatch=${d.id}: the verdict was refused after its Task left reviewing or its Dispatch closed; dropped: ${errorText(reply.body)}`
         )
+        // A Dispatch still open under a moved Task is closed (follow-up R1); a closed one is left as it is
+        return await closeMoved('its verdict was refused')
       }
       await fail(`the verdict of the external reviewer ${name} was refused: ${errorText(reply.body)}`)
     } catch (e) {
-      // A dispose or a closed Dispatch records nothing; the stop they made is what rejected the pending call
-      if (self.silent) return
+      // A dispose or a closed Dispatch records nothing, a moved Task closes the Dispatch; the stop they made is what
+      // rejected the pending call
+      if (self.silent) return await endSilently()
       await fail(reasonOf(e))
     } finally {
       stop()
