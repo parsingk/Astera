@@ -58,10 +58,18 @@ export function createRunReportPoster(a: {
     if (!run || !report) return
     const job = s.jobs.find((j) => j.id === run.jobId)
     const binding = run.githubState?.binding
-    const kept = run.githubState?.reportComment
+    const recorded = run.githubState?.reportComment
+    // A comment recorded on another pull request than the one now bound is not this one's: it is never edited, and the
+    // bound one is searched, then posted to, as if nothing were recorded. A record from before the number was kept is
+    // taken as this one's
+    const kept = recorded?.pr === undefined || recorded.pr === binding?.number ? recorded : undefined
     if (!job || !postsRunReport(job.github) || !binding || kept?.gone) return
     const repo = repoOfBinding(binding)
-    if (!repo) return
+    if (!repo) {
+      a.log(`run report: the pull request of ${runId} names a repository that is not owner/name (${binding.repository}), so no comment is posted`)
+      await record(runId, { reportComment: { failed: 'the pull request’s repository is not owner/name' } })
+      return
+    }
 
     const labels = (await accounts()).map((x) => x.label)
     const secrets = [...labels, ...labels.flatMap((l) => l.match(EMAIL) ?? [])]
@@ -94,7 +102,7 @@ export function createRunReportPoster(a: {
       a.log(`run report: the comment of ${runId} was deleted on GitHub, so it is not posted again`)
       await record(runId, { reportComment: { gone: true } })
     } else if (out.ok) {
-      await record(runId, { reportComment: { posted: { id: out.id, url: out.url } } })
+      await record(runId, { reportComment: { posted: { id: out.id, url: out.url, pr: binding.number } } })
     } else {
       a.log(`run report: the comment of ${runId} could not be posted: ${out.message}`)
       await record(runId, { reportComment: { failed: out.message } })
@@ -129,8 +137,9 @@ export function createRunReportPoster(a: {
               a.log(`run report: the accounts could not be read, so none is scrubbed by label: ${String(err)}`)
               return []
             }))
-          await slackPost(runId, accounts)
-          await comment(runId, accounts)
+          // Side by side: a slow Slack post never holds the comment back, nor the other way round
+          const sides = await Promise.allSettled([slackPost(runId, accounts), comment(runId, accounts)])
+          for (const side of sides) if (side.status === 'rejected') a.log(`run report: posting the report of ${runId} failed: ${String(side.reason)}`)
         })
         .catch((err) => a.log(`run report: posting the report of ${runId} failed: ${String(err)}`))
         .finally(() => {

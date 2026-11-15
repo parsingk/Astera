@@ -47,7 +47,7 @@ export interface RunGitHubPatch {
    *  merge-ready standing and no verdict beside it is dropped (G5c). */
   invalidated?: { reason: GitHubInvalidatedReason }
   /** The run report's comment (run report C2): posted, deleted by a person, or failed. Adds no log entry. */
-  reportComment?: { posted: { id: number; url: string } } | { gone: true } | { failed: string }
+  reportComment?: { posted: { id: number; url: string; pr: number } } | { gone: true } | { failed: string }
 }
 
 type NewEntry = Omit<GitHubLogEntry, 'seq' | 'at'>
@@ -146,9 +146,15 @@ export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitH
   if (patch.reportComment) {
     const c = patch.reportComment
     const kept = base.reportComment
-    if ('posted' in c) next.reportComment = { id: c.posted.id, url: c.posted.url, at: now }
-    else if ('gone' in c) next.reportComment = { ...(kept?.id !== undefined ? { id: kept.id } : {}), ...(kept?.url !== undefined ? { url: kept.url } : {}), gone: true, at: now }
-    else next.reportComment = { ...(kept?.id !== undefined ? { id: kept.id } : {}), ...(kept?.url !== undefined ? { url: kept.url } : {}), ...(kept?.gone ? { gone: true as const } : {}), error: c.failed, at: now }
+    // The comment's id, url and pull request, kept through a deletion or a failure
+    const where = {
+      ...(kept?.id !== undefined ? { id: kept.id } : {}),
+      ...(kept?.url !== undefined ? { url: kept.url } : {}),
+      ...(kept?.pr !== undefined ? { pr: kept.pr } : {})
+    }
+    if ('posted' in c) next.reportComment = { id: c.posted.id, url: c.posted.url, pr: c.posted.pr, at: now }
+    else if ('gone' in c) next.reportComment = { ...where, gone: true, at: now }
+    else next.reportComment = { ...where, ...(kept?.gone ? { gone: true as const } : {}), error: c.failed, at: now }
   }
   if (entries.length > 0) {
     let seq = base.seq
@@ -246,7 +252,7 @@ function rerunOk(r: unknown): boolean {
 
 function reportCommentOk(c: unknown): boolean {
   if (!isObj(c)) return false
-  if (c.posted !== undefined) return isObj(c.posted) && typeof c.posted.id === 'number' && isStr(c.posted.url)
+  if (c.posted !== undefined) return isObj(c.posted) && typeof c.posted.id === 'number' && isStr(c.posted.url) && typeof c.posted.pr === 'number'
   if (c.gone !== undefined) return c.gone === true
   return isStr(c.failed)
 }

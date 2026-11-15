@@ -298,30 +298,31 @@ describe('nextGitHubState', () => {
 
 describe('reportComment', () => {
   const prev: RunGitHubState = { log: [], seq: 3, binding: BINDING }
-  it('a post sets id, url and time, and clears an error and a gone mark', () => {
-    const before: RunGitHubState = { ...prev, reportComment: { id: 1, url: 'u0', gone: true, error: 'x', at: T1 } }
-    const s = nextGitHubState(before, { reportComment: { posted: { id: 9, url: 'u9' } } }, T2)!
-    expect(s.reportComment).toEqual({ id: 9, url: 'u9', at: T2 })
+  it('a post sets id, url, pull request and time, and clears an error and a gone mark', () => {
+    const before: RunGitHubState = { ...prev, reportComment: { id: 1, url: 'u0', pr: 6, gone: true, error: 'x', at: T1 } }
+    const s = nextGitHubState(before, { reportComment: { posted: { id: 9, url: 'u9', pr: 7 } } }, T2)!
+    expect(s.reportComment).toEqual({ id: 9, url: 'u9', pr: 7, at: T2 })
     expect(s.log).toEqual([])
     expect(s.seq).toBe(3)
   })
-  it('gone keeps the id and url and marks it', () => {
-    const before: RunGitHubState = { ...prev, reportComment: { id: 9, url: 'u9', at: T1 } }
+  it('gone keeps the id, url and pull request and marks it', () => {
+    const before: RunGitHubState = { ...prev, reportComment: { id: 9, url: 'u9', pr: 7, at: T1 } }
     const s = nextGitHubState(before, { reportComment: { gone: true } }, T2)!
-    expect(s.reportComment).toEqual({ id: 9, url: 'u9', gone: true, at: T2 })
+    expect(s.reportComment).toEqual({ id: 9, url: 'u9', pr: 7, gone: true, at: T2 })
     expect(s.seq).toBe(3)
   })
-  it('failed keeps the id and sets the error', () => {
-    const before: RunGitHubState = { ...prev, reportComment: { id: 9, url: 'u9', at: T1 } }
+  it('failed keeps the id and pull request and sets the error', () => {
+    const before: RunGitHubState = { ...prev, reportComment: { id: 9, url: 'u9', pr: 7, at: T1 } }
     const s = nextGitHubState(before, { reportComment: { failed: 'rate limit' } }, T2)!
-    expect(s.reportComment).toEqual({ id: 9, url: 'u9', error: 'rate limit', at: T2 })
+    expect(s.reportComment).toEqual({ id: 9, url: 'u9', pr: 7, error: 'rate limit', at: T2 })
     expect(s.log).toEqual([])
     const first = nextGitHubState(prev, { reportComment: { failed: 'boom' } }, T2)!
     expect(first.reportComment).toEqual({ error: 'boom', at: T2 })
   })
   it('is parsed in its three shapes, and a malformed one is refused', () => {
-    for (const reportComment of [{ posted: { id: 1, url: 'u' } }, { gone: true }, { failed: 'x' }]) expect(parseRunGitHubPatch({ reportComment })).toEqual({ reportComment })
+    for (const reportComment of [{ posted: { id: 1, url: 'u', pr: 7 } }, { gone: true }, { failed: 'x' }]) expect(parseRunGitHubPatch({ reportComment })).toEqual({ reportComment })
     expect(parseRunGitHubPatch({ reportComment: { posted: { id: 'x' } } })).toBe('reportComment is malformed')
+    expect(parseRunGitHubPatch({ reportComment: { posted: { id: 1, url: 'u' } } })).toBe('reportComment is malformed')
     expect(parseRunGitHubPatch({ reportComment: { gone: false } })).toBe('reportComment is malformed')
     expect(parseRunGitHubPatch({ reportComment: {} })).toBe('reportComment is malformed')
   })

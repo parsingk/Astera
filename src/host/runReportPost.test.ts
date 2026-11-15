@@ -1,12 +1,12 @@
 // The Host's run report comment (run report C2, R8): posted once, edited after, never twice; a fake gh and a fake record.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { createRunReportPoster } from './runReportPost'
 import { buildRunReport } from '../core/runReport/build'
 import { RUN_REPORT_MARKER, reportSlack } from '../core/runReport/render'
 import { emptyState, recordRunGitHub, type OrchState } from '../core/orchestration/state'
 import type { GhResult, GhRunner } from '../core/github/gh'
 import type { RunGitHubPatch } from '../core/github/runState'
-import type { GitHubBinding } from '../core/github/lifecycle'
+import type { GitHubBinding, RunReportComment } from '../core/github/lifecycle'
 
 const T0 = '2026-11-15T09:00:00.000Z'
 const END = '2026-11-15T10:00:00.000Z'
@@ -15,7 +15,9 @@ const BINDING: GitHubBinding = { repository: 'o/r', number: 7, url: 'https://git
 const COMMENT_URL = 'https://github.com/o/r/pull/7#issuecomment-123'
 const HOME = 'C:\\Users\\John Smith'
 
-const world = (o: { postRunReport?: boolean; binding?: boolean; report?: boolean; title?: string; commentError?: boolean } = {}): OrchState => {
+const world = (
+  o: { postRunReport?: boolean; binding?: boolean | GitHubBinding; report?: boolean; title?: string; commentError?: boolean; kept?: RunReportComment } = {}
+): OrchState => {
   const s: OrchState = {
     ...emptyState(),
     jobs: [{ id: 'job_1', objective: 'Ship it', cwd: '/repo', github: { postRunReport: o.postRunReport ?? true } } as never],
@@ -27,7 +29,17 @@ const world = (o: { postRunReport?: boolean; binding?: boolean; report?: boolean
         createdAt: T0,
         endedAt: END,
         worktree: WT,
-        ...(o.binding === false ? {} : { githubState: { binding: BINDING, log: [], seq: 0, ...(o.commentError ? { reportComment: { error: 'gh: timeout', at: T0 } } : {}) } })
+        ...(o.binding === false
+          ? {}
+          : {
+              githubState: {
+                binding: typeof o.binding === 'object' ? o.binding : BINDING,
+                log: [],
+                seq: 0,
+                ...(o.commentError ? { reportComment: { error: 'gh: timeout', at: T0 } } : {}),
+                ...(o.kept ? { reportComment: o.kept } : {})
+              }
+            })
       } as never
     ],
     tasks: [{ id: 't1', runId: 'run_1', title: o.title ?? 'Do it', spec: '', deps: [], status: 'completed', createdAt: T0, updatedAt: END } as never]
@@ -235,6 +247,64 @@ describe('createRunReportPoster', () => {
     const body = bodyOf(r.calls.find((c) => kind(c) === 'post')!)
     expect(body).toContain('Read … first')
     expect(body).not.toContain('Smith')
+  })
+
+  it('records the pull request a comment was posted on', async () => {
+    const r = rig()
+    r.poster.finished('run_1')
+    await r.poster.idle()
+    expect(comment(r.state())).toMatchObject({ id: 123, pr: 7 })
+  })
+
+  it('a comment kept for another pull request is never edited: the bound one is searched, then posted to', async () => {
+    const r = rig({
+      state: world({ binding: { ...BINDING, number: 8, url: 'https://github.com/o/r/pull/8' }, kept: { id: 123, url: COMMENT_URL, pr: 7, at: T0 } }),
+      answer: (args) => (args[0] === 'pr' ? ok('https://github.com/o/r/pull/8#issuecomment-456') : ok(''))
+    })
+    r.poster.finished('run_1')
+    await r.poster.idle()
+    expect(r.calls.map(kind)).toEqual(['find', 'post'])
+    expect(r.calls[0].join(' ')).toContain('issues/8/comments')
+    expect(r.calls[1]).toContain('8')
+    expect(r.calls.some((c) => c.join(' ').includes('comments/123'))).toBe(false)
+    expect(comment(r.state())).toMatchObject({ id: 456, pr: 8 })
+  })
+
+  it('a comment once deleted on another pull request does not stop the bound one', async () => {
+    const r = rig({ state: world({ binding: { ...BINDING, number: 8 }, kept: { id: 123, url: COMMENT_URL, pr: 7, gone: true, at: T0 } }) })
+    r.poster.finished('run_1')
+    await r.poster.idle()
+    expect(r.calls.map(kind)).toEqual(['find', 'post'])
+  })
+
+  it('a binding whose repository Astera cannot read is logged and recorded as failed', async () => {
+    const r = rig({ state: world({ binding: { ...BINDING, repository: 'not-a-repo' } }) })
+    r.poster.finished('run_1')
+    await r.poster.idle()
+    expect(r.calls).toEqual([])
+    expect(r.logs.filter((l) => /run_1/.test(l) && /repositor/i.test(l))).toHaveLength(1)
+    expect(comment(r.state())?.error).toMatch(/repositor/i)
+  })
+
+  it('the Slack post and the comment go side by side, on one accounts read', async () => {
+    let release!: () => void
+    const held = new Promise<void>((res) => (release = res))
+    let reads = 0
+    const r = rig({
+      slack: {
+        postRunReport: async () => {
+          await held
+          return 'posted'
+        }
+      },
+      accounts: async () => (reads++, [{ id: 'acc_a', label: 'Work Account' }])
+    })
+    r.poster.finished('run_1')
+    await vi.waitFor(() => expect(r.calls.map(kind)).toEqual(['find', 'post']))
+    release()
+    await r.poster.idle()
+    expect(comment(r.state())?.id).toBe(123)
+    expect(reads).toBe(1)
   })
 
   it('an accounts read that fails is logged and the post goes on', async () => {

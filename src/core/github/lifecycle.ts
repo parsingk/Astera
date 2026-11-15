@@ -247,6 +247,8 @@ export interface GitHubLogEntry {
 export interface RunReportComment {
   id?: number
   url?: string
+  /** The pull request the comment was posted on: a Run bound to another one since has no comment there yet */
+  pr?: number
   /** A person deleted the comment: nothing is posted again for this Run. */
   gone?: true
   error?: string
