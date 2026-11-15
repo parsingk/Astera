@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import { createRunReportPoster } from './runReportPost'
 import { buildRunReport } from '../core/runReport/build'
-import { RUN_REPORT_MARKER } from '../core/runReport/render'
+import { RUN_REPORT_MARKER, reportSlack } from '../core/runReport/render'
 import { emptyState, recordRunGitHub, type OrchState } from '../core/orchestration/state'
 import type { GhResult, GhRunner } from '../core/github/gh'
 import type { RunGitHubPatch } from '../core/github/runState'
@@ -39,7 +39,7 @@ const world = (o: { postRunReport?: boolean; binding?: boolean; report?: boolean
 const ok = (stdout: string): GhResult => ({ ok: true, stdout, stderr: '' })
 const fail = (stderr: string): GhResult => ({ ok: false, stdout: '', stderr })
 
-function rig(o: { state?: OrchState; answer?: (args: string[], n: number) => GhResult | Promise<GhResult>; accounts?: () => Promise<{ id: string; label: string }[]> } = {}) {
+function rig(o: { slack?: { postRunReport(text: string): Promise<string> }; state?: OrchState; answer?: (args: string[], n: number) => GhResult | Promise<GhResult>; accounts?: () => Promise<{ id: string; label: string }[]> } = {}) {
   let state = o.state ?? world()
   const calls: string[][] = []
   const logs: string[] = []
@@ -58,7 +58,7 @@ function rig(o: { state?: OrchState; answer?: (args: string[], n: number) => GhR
       if (r.ok) state = r.state
       return { status: 200, body: {} }
     },
-    slack: null,
+    slack: o.slack ?? null,
     lang: () => 'en',
     log: (m) => logs.push(m),
     retryAfterMs: 0
@@ -236,5 +236,57 @@ describe('createRunReportPoster', () => {
     await r.poster.idle()
     expect(r.calls.map(kind)).toEqual(['find', 'post'])
     expect(r.logs.some((l) => /accounts/.test(l))).toBe(true)
+  })
+
+  it('one Slack post per finish', async () => {
+    const texts: string[] = []
+    const base = world()
+    const report = { ...base.runs[0].report!, cost: { accountIds: ['acc_a'] } }
+    const state = { ...base, runs: [{ ...base.runs[0], report }] }
+    const r = rig({
+      state,
+      slack: { postRunReport: async (t) => (texts.push(t), 'posted') },
+      accounts: async () => [{ id: 'acc_a', label: 'Work Account' }]
+    })
+    r.poster.finished('run_1')
+    r.poster.finished('run_1')
+    await r.poster.idle()
+    const want = reportSlack(report, 'en', { accounts: new Map([['acc_a', 'Work Account']]) })
+    expect(texts).toEqual([want, want])
+    expect(want).toContain('Work Account')
+  })
+
+  it('posts to Slack with no pull request and with the comment switch off', async () => {
+    for (const s of [world({ binding: false }), world({ postRunReport: false })]) {
+      const texts: string[] = []
+      const r = rig({ state: s, slack: { postRunReport: async (t) => (texts.push(t), 'posted') } })
+      r.poster.finished('run_1')
+      await r.poster.idle()
+      expect(texts).toHaveLength(1)
+      expect(r.calls).toEqual([])
+    }
+  })
+
+  it('a Slack failure is not retried and touches nothing else', async () => {
+    let n = 0
+    const r = rig({ slack: { postRunReport: async () => (n++, Promise.reject(new Error('boom'))) } })
+    r.poster.finished('run_1')
+    await r.poster.idle()
+    expect(n).toBe(1)
+    expect(r.calls.map(kind)).toEqual(['find', 'post'])
+    expect(comment(r.state())?.id).toBe(123)
+  })
+
+  it('logs an answer other than posted, and posts nothing for a Run with no report', async () => {
+    let n = 0
+    const slack = { postRunReport: async () => (n++, 'off') }
+    const r = rig({ slack })
+    r.poster.finished('run_1')
+    await r.poster.idle()
+    expect(r.logs.some((l) => /slack/i.test(l) && /off/.test(l))).toBe(true)
+    const none = rig({ state: world({ report: false }), slack })
+    none.poster.finished('run_1')
+    await none.poster.idle()
+    expect(n).toBe(1)
   })
 })

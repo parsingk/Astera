@@ -17,6 +17,9 @@ export interface SlackConfig {
   // value blocks everyone rather than allowing everyone, so an old slack.json with no such field
   // converges on the safe side with no migration.
   memberId: string | null
+  // Whether the Host posts a finished Run's report to the channel (run report C5). On unless the file says false, so
+  // an old slack.json keeps getting reports once Slack is set up. It plays no part in choosing the transport.
+  runReports: boolean
 }
 
 export const EMPTY_SLACK_CONFIG: SlackConfig = {
@@ -24,7 +27,8 @@ export const EMPTY_SLACK_CONFIG: SlackConfig = {
   botToken: null,
   channelId: null,
   appToken: null,
-  memberId: null
+  memberId: null,
+  runReports: true
 }
 
 export const norm = (v: unknown): string | null =>
@@ -58,7 +62,8 @@ export class SlackConfigReader {
         botToken: norm(raw.botToken),
         channelId: norm(raw.channelId),
         appToken: norm(raw.appToken),
-        memberId: norm(raw.memberId)
+        memberId: norm(raw.memberId),
+        runReports: raw.runReports !== false
       }
     } catch {
       return { ...EMPTY_SLACK_CONFIG }

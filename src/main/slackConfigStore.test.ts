@@ -15,6 +15,7 @@ const cfg = (over: Partial<SlackConfig> = {}): SlackConfig => ({
   channelId: null,
   appToken: null,
   memberId: null,
+  runReports: true,
   ...over
 })
 
@@ -270,5 +271,21 @@ describe('SlackConfigStore — memberId', () => {
     // 봇 토큰+채널이 채워지면 memberId를 지워도 전송은 준비 완료다 (답장 주입만 막힌다)
     const withBot = await store.patch({ botToken: 'xoxb-1', channelId: 'C1', memberId: null })
     expect(isSlackReady(withBot)).toBe(true)
+  })
+})
+
+describe('SlackConfigStore runReports', () => {
+  it('patch({ runReports: false }) keeps the tokens and writes false; patch({}) keeps it', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-slackcfg-rr-'))
+    try {
+      const store = new SlackConfigStore(path.join(dir, 'slack.json'))
+      await store.save(cfg({ botToken: 'xoxb-1', channelId: 'C1' }))
+      expect(await store.patch({ runReports: false })).toEqual(cfg({ botToken: 'xoxb-1', channelId: 'C1', runReports: false }))
+      expect(JSON.parse(await fs.readFile(path.join(dir, 'slack.json'), 'utf8')).runReports).toBe(false)
+      expect(await store.patch({})).toEqual(cfg({ botToken: 'xoxb-1', channelId: 'C1', runReports: false }))
+      expect((await store.load()).runReports).toBe(false)
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+    }
   })
 })

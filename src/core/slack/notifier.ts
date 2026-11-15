@@ -520,6 +520,16 @@ export class SlackNotifier {
     }
   }
 
+  /** A message at channel level, outside every session thread (the run report, C5). False with no transport; a
+   *  failed post throws its SlackPostError, whose reason is the only thing a caller may log. */
+  async postToChannel(text: string): Promise<boolean> {
+    const transport = this.transport
+    if (!transport) return false
+    const ts = await transport.post(text)
+    if (ts) this.rememberOwnPost(ts)
+    return true
+  }
+
   /** Deletes the entries pointing at this session from the index — it has to be cleaned up along with the
    *  record so nothing tries to inject into a dead session. A session never has several threadTs values (the
    *  root is one per chain), but scanning by value is what makes the cleanup certain even after rolling

@@ -1213,13 +1213,13 @@ async function main(): Promise<void> {
     gateway,
     closeControllerConns: (conns) => gateway.link()?.closeConns(conns)
   })
-  // The run report's comment on a finished Run's pull request (run report C2, R8). The Slack side is wired later.
+  // The run report's comment on a finished Run's pull request (run report C2, R8). The Slack side goes through the Host's Slack wiring (C13).
   runReportPoster = createRunReportPoster({
     state: () => orch.state(),
     gh: hostGh,
     accounts: async () => (await readAccountEntries(path.join(profileDir, 'accounts.json'), readFileRetrying)).map((x) => ({ id: x.id, label: x.label })),
     record: (args) => orch.handle('runs-github-record', args),
-    slack: null,
+    slack: slackWiring,
     lang: () => (wiring ? wiring.checks.langNow() : 'en'),
     log: (m) => log.write(m)
   })

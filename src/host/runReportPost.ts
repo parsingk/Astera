@@ -9,7 +9,7 @@ import { editIssueComment, findReportComment, postPrComment } from '../core/gith
 import { repoOfBinding } from '../core/github/remote'
 import type { RunGitHubPatch } from '../core/github/runState'
 import type { OrchState } from '../core/orchestration/state'
-import { forPullRequest, reportMarkdown, RUN_REPORT_MARKER } from '../core/runReport/render'
+import { forPullRequest, reportMarkdown, reportSlack, RUN_REPORT_MARKER } from '../core/runReport/render'
 
 /** A failed post or edit is tried once more after this long (R8) */
 export const RUN_REPORT_RETRY_MS = 30_000
@@ -30,6 +30,7 @@ export function createRunReportPoster(a: {
   gh: GhRunner
   accounts(): Promise<readonly { id: string; label: string }[]>
   record(args: { runId: string; patch: RunGitHubPatch }): Promise<{ status: number; body: unknown }>
+  /** The Host's Slack wiring (null when it has none): asked once per finish, never retried */
   slack: { postRunReport(text: string): Promise<string> } | null
   lang(): Lang
   log(m: string): void
@@ -48,7 +49,7 @@ export function createRunReportPoster(a: {
     }
   }
 
-  const comment = async (runId: string): Promise<void> => {
+  const comment = async (runId: string, accounts: () => Promise<readonly { id: string; label: string }[]>): Promise<void> => {
     const s = a.state()
     const run = s.runs.find((r) => r.id === runId)
     const report = run?.report
@@ -60,12 +61,7 @@ export function createRunReportPoster(a: {
     const repo = repoOfBinding(binding)
     if (!repo) return
 
-    let labels: string[] = []
-    try {
-      labels = (await a.accounts()).map((x) => x.label)
-    } catch (err) {
-      a.log(`run report: the accounts could not be read, so none is scrubbed by label: ${String(err)}`)
-    }
+    const labels = (await accounts()).map((x) => x.label)
     const secrets = [...labels, ...labels.flatMap((l) => l.match(EMAIL) ?? [])]
     const roots = [job.cwd, run.worktree].filter((p): p is string => typeof p === 'string' && p !== '')
     const body = reportMarkdown(forPullRequest(report, { roots, secrets }), a.lang(), { audience: 'pull-request' })
@@ -103,11 +99,37 @@ export function createRunReportPoster(a: {
     }
   }
 
+  /** The channel post: for every finished Run with a report, whatever the PR side is (no PR, switch off, a gh failure).
+   *  Once per finish and never retried; its answer is logged when it is not `posted`. Account labels are shown here
+   *  (D2 hides them only from the pull request). */
+  const slackPost = async (runId: string, accounts: () => Promise<readonly { id: string; label: string }[]>): Promise<void> => {
+    if (!a.slack) return
+    const report = a.state().runs.find((r) => r.id === runId)?.report
+    if (!report) return
+    try {
+      const names = new Map((await accounts()).map((x) => [x.id, x.label] as const))
+      const answer = await a.slack.postRunReport(reportSlack(report, a.lang(), { accounts: names }))
+      if (answer !== 'posted') a.log(`run report: the Slack post of ${runId} answered ${answer}`)
+    } catch (err) {
+      a.log(`run report: the Slack post of ${runId} failed: ${String(err)}`)
+    }
+  }
+
   return {
     finished(runId) {
       const prev = chains.get(runId) ?? Promise.resolve()
       const next: Promise<void> = prev
-        .then(() => comment(runId))
+        .then(async () => {
+          // One accounts read per finish, shared by both sides; a failed read is logged once and leaves no labels
+          let read: Promise<readonly { id: string; label: string }[]> | null = null
+          const accounts = (): Promise<readonly { id: string; label: string }[]> =>
+            (read ??= a.accounts().catch((err) => {
+              a.log(`run report: the accounts could not be read, so none is scrubbed by label: ${String(err)}`)
+              return []
+            }))
+          await slackPost(runId, accounts)
+          await comment(runId, accounts)
+        })
         .catch((err) => a.log(`run report: posting the report of ${runId} failed: ${String(err)}`))
         .finally(() => {
           pending.delete(next)

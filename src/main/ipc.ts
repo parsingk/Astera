@@ -5913,7 +5913,7 @@ export function registerIpc(
   ipcMain.handle('slack.getConfig', () =>
     slack
       ? slack.store.load()
-      : { webhookUrl: null, botToken: null, channelId: null, appToken: null, memberId: null }
+      : { webhookUrl: null, botToken: null, channelId: null, appToken: null, memberId: null, runReports: true }
   )
   // A partial update — passing the received object straight to store.save() would turn fields that were
   // not sent into null during normalisation, silently erasing already-stored values in a single save.
