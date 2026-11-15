@@ -12,6 +12,7 @@ import { handleCommand, type OrchServerDeps } from '../command'
 import { APP_CALLER } from '../../host/driver'
 import { applyWorkerDone, createJob, createTask, emptyState, openDispatch, startJobRun, type OrchState } from '../state'
 import { nodeProcFactory } from '../../sessions/nodeProcFactory'
+import { removeFixture, waitPidsGone } from '../../testFixtures'
 import { resolveAgentCommand } from '../../acp/spawn'
 import { VERDICT_RETRY_PROMPT } from './externalVerdict'
 import type { ExternalReviewer, ReviewerSettings } from '../../settings/externalReviewers'
@@ -48,12 +49,13 @@ const gone = (pid: number): Promise<void> => until(() => !alive(pid), `process $
 const dirs: string[] = []
 const pids = new Set<number>()
 const rigs: { start: { disposeExternal(): void } }[] = []
-afterEach(() => {
+afterEach(async () => {
   for (const r of rigs.splice(0)) r.start.disposeExternal()
-  // Only processes this test file spawned
-  for (const pid of pids) if (alive(pid)) process.kill(pid)
+  // Only processes this test file spawned: killed if still alive, then waited for, before their folder goes
+  for (const pid of pids) if (pid > 0 && alive(pid)) process.kill(pid)
+  await waitPidsGone(pids)
   pids.clear()
-  for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true })
+  for (const d of dirs.splice(0)) await removeFixture(d)
 })
 
 const claude = (id: string): Account => ({ id, label: id, configDir: `/cfg/${id}`, color: '#000', createdAt: NOW, provider: 'claude' })

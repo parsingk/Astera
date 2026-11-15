@@ -17,10 +17,10 @@
 // **Portable:** every path comes from `tempDir`/`path.join`, git runs through the S3 fixtures, and every
 // wait is a bounded `vi.waitFor` or a quiescence check — no fixed sleep decides an assertion.
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { removeFixture } from '../core/testFixtures'
+import { removeFixture, waitPidsGone } from '../core/testFixtures'
 import { promises as fs, readFileSync } from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { composeHostDriving, type HostDrivingWiring } from './drivingWiring'
 import { createHostOrch, type HostOrch } from './orch'
 import { PtyRegistry, type RegistryPty } from './registry'
@@ -91,6 +91,9 @@ async function rig(o: RigOpts) {
   const home = await tempDir('astera-hostdrive-home-')
   const repo = await makeRepo('astera-hostdrive-repo-')
   cleanups.push(async () => {
+    // Cleanups run last in, first out: the Host is stopped by now. Its agent, if one was started, is waited for before its folders go.
+    const pid = Number(await fs.readFile(path.join(profileDir, 'agent.pid'), 'utf8').catch(() => '0'))
+    await waitPidsGone([pid])
     for (const d of [profileDir, home, repo]) await removeFixture(d)
   })
   // The seed run configuration `seed:npm:test` comes from the project's package.json, and every worktree
@@ -101,12 +104,31 @@ async function rig(o: RigOpts) {
 
   // The profile: the migration marker (the Host may drive, F62), a worktrees root of the test's own, and
   // accounts logged in by their providers' own markers (C8's one login rule, read for real).
+  // The fake agent behind a wrapper that writes its pid first, so the teardown can wait for the process to be gone
+  // before the folders it ran in are removed
+  const agentPidFile = path.join(profileDir, 'agent.pid')
+  const agentWrapper = path.join(profileDir, 'agentWrapper.mjs')
+  if (o.externalReviewer) {
+    await fs.writeFile(
+      agentWrapper,
+      [
+        "import { writeFileSync } from 'node:fs'",
+        "const i = process.argv.indexOf('--pidfile')",
+        'if (i >= 0) writeFileSync(process.argv[i + 1], String(process.pid))',
+        `await import(${JSON.stringify(pathToFileURL(fakeAgentPath).href)})`,
+        ''
+      ].join('\n')
+    )
+  }
   await fs.writeFile(
     path.join(profileDir, 'app-settings.json'),
     JSON.stringify({
       orchAlwaysOnMigrated: true,
       ...(o.externalReviewer
-        ? { externalReviewers: [{ id: 'ext_0123abcd', name: 'Fake', command: process.execPath, args: [fakeAgentPath, ...o.externalReviewer.args] }], reviewBy: 'ext_0123abcd' }
+        ? {
+            externalReviewers: [{ id: 'ext_0123abcd', name: 'Fake', command: process.execPath, args: [agentWrapper, ...o.externalReviewer.args, '--pidfile', agentPidFile] }],
+            reviewBy: 'ext_0123abcd'
+          }
         : {})
     })
   )

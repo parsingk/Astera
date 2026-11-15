@@ -8,6 +8,7 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createHostChecks, createHostChecksForTest, type HostChecks } from './checks'
 import { PtyRegistry, type RegistryPty } from './registry'
+import { removeFixture, waitPidsGone } from '../core/testFixtures'
 import type { HostMessage, PtyEntry } from '../core/host/protocol'
 import type { OrchServerDeps } from '../core/orchestration/command'
 import { applyWorkerDone, createJob, createTask, emptyState, openDispatch, startJobRun, type OrchState } from '../core/orchestration/state'
@@ -23,8 +24,18 @@ const unwrap = <T>(r: { ok: boolean } & Record<string, unknown>): { state: OrchS
 const osLang = (): string => pickInitialLang(Intl.DateTimeFormat().resolvedOptions().locale)
 
 const dirs: string[] = []
-afterEach(() => {
-  for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true })
+afterEach(async () => {
+  for (const d of dirs.splice(0)) {
+    // An external-review test's fake agent wrote its pid here: it is waited for before the folder it runs in is removed
+    let pid = 0
+    try {
+      pid = Number(fs.readFileSync(path.join(d, 'agent.pid'), 'utf8'))
+    } catch {
+      // no agent was started in this folder
+    }
+    await waitPidsGone([pid])
+    await removeFixture(d)
+  }
 })
 
 type FakePty = RegistryPty & { exit(c: number): void }
