@@ -1196,6 +1196,46 @@ describe('StatusLineManager sandbox', () => {
     }
   })
 
+  // Sandbox design §6: the agents' login files. The manager is handed a thunk for the current entries and names only those
+  // there at the start (when the scope can look), on every OS, into the sandbox's denyRead (macOS, Linux) and the Read
+  // rules (every OS); a logged-out account's missing file is not named
+  it('denies the agents login files that are there at the start, and leaves a missing one out', async () => {
+    const base = (await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'astera-sl-logins-')))).replace(/\\/g, '/')
+    try {
+      const home = `${base}/home`
+      await fs.mkdir(`${home}/proj`, { recursive: true })
+      await fs.mkdir(`${home}/acc`, { recursive: true })
+      const there = `${home}/acc/.credentials.json`
+      const gone = `${home}/acc2/.credentials.json`
+      await fs.writeFile(there, 'fake')
+      const rule = (p: string): string => (/^[A-Za-z]:/.test(p) ? `Read(//${p[0].toLowerCase()}${p.slice(2)})` : `Read(/${p})`)
+      for (const platform of ['linux', 'darwin', 'win32'] as const) {
+        const mgr = new StatusLineManager(dir, 'node', () => {}, {
+          platform,
+          execPath: platform === 'win32' ? 'C:/x/electron.exe' : '/opt/astera/astera',
+          ...(platform === 'win32' ? { findRuntime: async () => 'C:\\rt\\astera-host.exe' } : {}),
+          homeDir: home,
+          tmpDir: TMP[platform],
+          agentLogins: () => [{ path: there, kind: 'file' }, { path: gone, kind: 'file' }]
+        })
+        await mgr.init()
+        const scope: SandboxScope = { layout: null, env: { ...ENV[platform] }, cwd: `${home}/proj`, look: nodeLinkLook }
+        const { part } = mgr.sandboxPartOf(scope)
+        expect(part.permissions.deny, platform).toContain(rule(there))
+        expect(part.permissions.deny.join(' '), platform).not.toContain('acc2')
+        if (platform !== 'win32') {
+          expect(part.sandbox?.filesystem.denyRead, platform).toContain(there)
+          expect(part.sandbox?.filesystem.denyRead.join(' '), platform).not.toContain('acc2')
+        }
+        // Without a way to look (the measurement), both are named as given
+        const measured = mgr.sandboxPartOf({ layout: null, env: { ...ENV[platform] } })
+        expect(measured.part.permissions.deny, platform).toContain(rule(gone))
+      }
+    } finally {
+      await fs.rm(base, { recursive: true, force: true })
+    }
+  })
+
   // Final fix pass (C1, minor 2): a twin keeps its own repository's git files from being written and denies the places
   // its own environment names, so two scopes never share a file, and one prepared scope is no other's
   it('gives each scope its own twins, from its own layout and environment, and none to a scope not prepared', async () => {

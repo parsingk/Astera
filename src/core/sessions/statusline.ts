@@ -17,7 +17,7 @@ import { claudeSandboxSettings, claudeSessionDenied, claudeWritableFolders, type
 import { appKeyPath } from '../host/hostKey'
 import { npmCacheOf } from '../sandbox/codexProfile'
 import type { GitLayout } from '../sandbox/gitLayout'
-import { namedPaths, profileReadOnly, type LinkLook } from '../sandbox/locations'
+import { namedPaths, profileReadOnly, type DenyEntry, type LinkLook } from '../sandbox/locations'
 
 /** The statusLine injection info handed to SessionManager when a session is spawned. */
 export interface StatusLineSpawn {
@@ -508,6 +508,9 @@ export class StatusLineManager {
   private readonly tmpDir: string
   /** The read-only folders a sandbox twin keeps from being written (Task E and its fix round 1). */
   private readonly readOnly: readonly string[]
+  /** The agents' login files as the manager's wiring knows them now (locations.ts agentLoginEntries), asked at each
+   *  sandbox start; none by default. */
+  private readonly agentLogins: () => readonly DenyEntry[]
 
   constructor(
     private userDataDir: string,
@@ -531,6 +534,10 @@ export class StatusLineManager {
        *  Astera writes code or an installer to and runs unsandboxed, built by the app and Host wiring (sandboxReadOnly).
        *  Default: this profile folder alone (profileReadOnly), so a start that names no more still protects the profile. */
       readOnly?: readonly string[]
+      /** The agents' login files a sandboxed Claude twin denies (sandbox design §6): a thunk, since accounts come and go
+       *  while the process runs, built by the app and Host wiring (agentLoginEntries). Each is named only if it is there
+       *  at the start, when the scope can look (sandboxNamed). Default: none. */
+      agentLogins?: () => readonly DenyEntry[]
     } = {}
   ) {
     this.findRuntime = host.findRuntime
@@ -539,6 +546,7 @@ export class StatusLineManager {
     this.homeDir = host.homeDir ?? os.homedir()
     this.tmpDir = host.tmpDir ?? os.tmpdir()
     this.readOnly = host.readOnly ?? profileReadOnly(userDataDir)
+    this.agentLogins = host.agentLogins ?? (() => [])
     // A test that names the executable names the AppImage too, or there is none
     this.appImage = host.execPath === undefined ? process.env.APPIMAGE : host.appImage
     this.capturePath = path.join(userDataDir, 'astera-statusline-capture.cjs')
@@ -864,9 +872,26 @@ export class StatusLineManager {
   /** The twin's part, and the links inside the session's writable folders its named paths go through (Task E fix
    *  round 5). With the app key of this profile (sandbox follow-ups, item 1), as a Codex session's profile denies it, and
    *  the read-only folders the start's wiring named (Task E and its fix round 1), as a Codex session's profile keeps them
-   *  read; each where namedPathFor puts it for this scope's folder, when the wiring gave a way to look. */
+   *  read; each where namedPathFor puts it for this scope's folder, when the wiring gave a way to look. The agents' login
+   *  files (sandbox design §6) are named on every OS only if they are there at the start, when the scope can look: a
+   *  logged-out account has no file to protect, and Codex's twin leaves a missing one out for the reasons prepared.ts
+   *  gives; a look that throws keeps the entry. Without a look (the measurement), as given. */
   private sandboxNamed(scope: SandboxScope): { part: SandboxPart; links: string[] } {
-    const denied = claudeSessionDenied({ platform: this.platform, env: scope.env, homeDir: this.homeDir, appKeyFile: appKeyPath(this.userDataDir) })
+    const logins = this.agentLogins().filter((e) => {
+      if (!scope.look) return true
+      try {
+        return scope.look.lstat(e.path) !== null
+      } catch {
+        return true
+      }
+    })
+    const denied = claudeSessionDenied({
+      platform: this.platform,
+      env: scope.env,
+      homeDir: this.homeDir,
+      appKeyFile: appKeyPath(this.userDataDir),
+      agentLogins: logins.map((e) => e.path)
+    })
     const npmCache = npmCacheOf(this.tmpDir)
     const look = scope.look
     if (!look || scope.cwd === undefined)

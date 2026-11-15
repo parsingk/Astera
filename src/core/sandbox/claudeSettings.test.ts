@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { claudeSandboxSettings } from './claudeSettings'
+import { claudeSandboxSettings, claudeSessionDenied } from './claudeSettings'
 
 const wt = {
   cwd: '/w/wt', top: '/w/wt', gitDir: '/m/.git/worktrees/wt', commonDir: '/m/.git', worktree: true,
@@ -63,5 +63,21 @@ describe('claudeSandboxSettings', () => {
     const s = claudeSandboxSettings({ platform: 'linux', denied: ['/h/내 폴더 x/"q"'], readOnly: [], npmCache: '/t/c', layout: null })
     expect(s.permissions.deny).toEqual(['Read(//h/내 폴더 x/"q")', 'Read(//h/내 폴더 x/"q"/**)'])
     expect(s.sandbox?.filesystem.denyRead).toEqual(['/h/내 폴더 x/"q"'])
+  })
+})
+
+// Sandbox design §6: the agents' login files, already chosen by the caller (the ones there at the start), join the denied
+// list, so the sandbox's denyRead (macOS, Linux) and the Read rules (every OS) both name them
+describe('claudeSessionDenied with the agents login files', () => {
+  it('appends the login paths it is given, and nothing without them', () => {
+    const o = { platform: 'linux' as const, env: {}, homeDir: '/h' }
+    expect(claudeSessionDenied(o)).not.toContain('/h/.claude/.credentials.json')
+    const denied = claudeSessionDenied({ ...o, agentLogins: ['/h/.claude/.credentials.json', '/acc/auth.json'] })
+    expect(denied.slice(-2)).toEqual(['/h/.claude/.credentials.json', '/acc/auth.json'])
+    const s = claudeSandboxSettings({ platform: 'linux', denied, readOnly: [], npmCache: '/t/c', layout: null })
+    expect(s.sandbox?.filesystem.denyRead).toContain('/h/.claude/.credentials.json')
+    expect(s.permissions.deny).toContain('Read(//h/.claude/.credentials.json)')
+    const win = claudeSandboxSettings({ platform: 'win32', denied: claudeSessionDenied({ ...o, platform: 'win32', agentLogins: ['C:/Users/a/.claude/.credentials.json'] }), readOnly: [], npmCache: 'C:/t/c', layout: null })
+    expect(win.permissions.deny).toContain('Read(//c/Users/a/.claude/.credentials.json)')
   })
 })
