@@ -44,6 +44,19 @@ describe('RunReportCard', () => {
     const html = draw(report)
     for (const c of caveats) expect(html).toContain(escape(caveatLine(c, 'en')))
   })
+  it('keeps the caveats outside the scrolling part', () => {
+    const html = draw(report)
+    const scrollAt = html.indexOf('run-report-scroll')
+    expect(scrollAt).toBeGreaterThan(-1)
+    const inside = html.slice(scrollAt)
+    for (const c of caveats) {
+      const at = html.indexOf(escape(caveatLine(c, 'en')))
+      expect(at).toBeGreaterThan(-1)
+      expect(at).toBeLessThan(scrollAt)
+      expect(inside).not.toContain(escape(caveatLine(c, 'en')))
+    }
+    expect(inside).toContain(escape(taskLine(report.tasks[0], 'en')))
+  })
   it('says a Task with no checks had nothing check it', () => {
     expect(draw(report)).toContain(escape(taskLine(report.tasks[0], 'en')))
     expect(taskLine(report.tasks[0], 'en')).toContain('Nothing checked')

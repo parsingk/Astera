@@ -1863,7 +1863,8 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .detail-observe-link { background: none; border: 0; padding: 0; color: var(--accent); font-size: inherit; cursor: pointer; }
 .detail-observe-link:hover { text-decoration: underline; }
 /* The finished Run's report card (run report design §6.1): the GitHub block's frame, caveats in the warning colour */
-.run-report { flex: none; display: flex; flex-direction: column; gap: 4px; margin-top: 8px; padding: 8px 12px; border: 1px solid var(--line-soft); border-radius: 6px; font-size: 12px; max-height: 40vh; overflow-y: auto; }
+.run-report { flex: none; display: flex; flex-direction: column; gap: 4px; margin-top: 8px; padding: 8px 12px; border: 1px solid var(--line-soft); border-radius: 6px; font-size: 12px; }
+.run-report-scroll { display: flex; flex-direction: column; gap: 4px; max-height: 30vh; overflow-y: auto; }
 .run-report-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .run-report-outcome { font-size: 12.5px; }
 .run-report-copy { flex: none; background: none; border: 0; padding: 0; color: var(--accent); font-size: 11.5px; cursor: pointer; }

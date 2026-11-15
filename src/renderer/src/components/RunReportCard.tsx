@@ -39,6 +39,8 @@ export function RunReportCard(p: {
           ))}
         </ul>
       )}
+      {/* Only this part scrolls: the head, the GitHub line, the comment error and every caveat stay in view (§6.1) */}
+      <div className="run-report-scroll">
       {report.tasks.length > 0 && (
         <ul className="run-report-tasks">
           {report.tasks.map((task, i) => (
@@ -49,6 +51,7 @@ export function RunReportCard(p: {
       <p className="run-report-line">{interruptionsLine(report, lang)}</p>
       {people !== '' && <p className="run-report-line">{people}</p>}
       {accountNames.length > 0 && <p className="run-report-line">{t('runReport.card.accounts', { names: accountNames.join(lang === 'ja' ? '、' : ', ') })}</p>}
+      </div>
     </section>
   )
 }
