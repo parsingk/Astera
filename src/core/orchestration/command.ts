@@ -2993,6 +2993,22 @@ export async function handleCommand(
       const tokens = deps.spentTokens ? runTokensOf(s, run.id, deps.spentTokens()) : {}
       return okBody({ ...runView(s, run), ...(waitingTasks > 0 ? { waitingForApproval: waitingTasks } : {}), ...tokens })
     }
+    // A finished Run's report, the Host's snapshot stored on the Run (run report design C9, C12). Null for one that
+    // finished before reports. For a person in the app or at their own shell: an agent is refused, as it is for the other
+    // person-only reads.
+    case 'runs-report': {
+      if (agentCaller(caller))
+        return denied(
+          caller.role === 'controller'
+            ? withUnsaidNote(caller, `runs report is for a person: read it in your own Astera or shell, not from ${REMOTE_AGENT}`)
+            : 'runs report is for a person: read it in the app or from your own shell, not from an agent session'
+        )
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      const run = s.runs.find((r) => r.id === id)
+      if (!run) return notFound(`unknown run: ${id}`)
+      return okBody({ runId: run.id, report: run.report ?? null })
+    }
     /**
      * One long poll of `astera runs follow` (CLI spec §22). **The client loops; this answers once.**
      *

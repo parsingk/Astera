@@ -411,6 +411,7 @@ const api = {
     list: invoke('audit.list'),
     summary: invoke('audit.summary'),
     runTokens: invoke('audit.runTokens'),
+    runReport: invoke('audit.runReport'),
     taskTokens: invoke('audit.taskTokens')
   },
   // Settings › Security & Access › Credentials and Audit Logs' credential uses (credentials design §7): the Host's

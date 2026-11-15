@@ -72,7 +72,8 @@ const RUN_HIDDEN = [
   'coordinatorStopPending',
   'externalCoordinatorSessionId',
   'githubState',
-  'endedAt'
+  'endedAt',
+  'report'
 ] as const
 
 /** A Job's mark that a sandboxed session made it (final fix pass, C3): the Host's own rule for what its work starts in,

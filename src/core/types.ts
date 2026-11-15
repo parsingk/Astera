@@ -2126,6 +2126,8 @@ export interface AuditApi {
   list(q: AuditQuery & { limit?: number }): Promise<PluginsCallAnswer>
   summary(q: AuditQuery): Promise<PluginsCallAnswer>
   runTokens(runId: string): Promise<PluginsCallAnswer>
+  /** A finished Run's report as the Host stored it (run report design C9): `{ runId, report }`, report null before reports. */
+  runReport(runId: string): Promise<PluginsCallAnswer>
   taskTokens(taskId: string): Promise<PluginsCallAnswer>
 }
 

@@ -23,6 +23,7 @@ export function createAuditRoute(d: { call: Call }): AuditApi {
     list: (q) => send('audit-list', { ...q }),
     summary: (q) => send('audit-summary', { ...q }),
     runTokens: (runId) => send('runs-get', { id: runId }),
+    runReport: (runId) => send('runs-report', { id: runId }),
     taskTokens: (taskId) => send('tasks-get', { id: taskId })
   }
 }

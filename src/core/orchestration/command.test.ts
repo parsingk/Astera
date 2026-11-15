@@ -8657,6 +8657,41 @@ describe('handleCommand — tokens on runs-get and tasks-get', () => {
   })
 })
 
+describe('handleCommand — runs-report', () => {
+  const REPORT = { version: 1, runId: 'r1', outcome: 'completed' }
+  const world = (withReport: boolean): OrchState => ({
+    ...emptyState(),
+    jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW }],
+    runs: [{ id: 'r1', jobId: 'job_1', ordinal: 1, createdAt: NOW, ...(withReport ? { report: REPORT } : {}) } as never],
+    tasks: [{ id: 't1', runId: 'r1', title: 'T', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }]
+  })
+
+  it('runs-report answers the stored report, null for a Run finished before reports', async () => {
+    expect((await call(makeDeps(world(true)), 'runs-report', { id: 'r1' }, '')).body).toEqual({ runId: 'r1', report: REPORT })
+    expect((await call(makeDeps(world(false)), 'runs-report', { id: 'r1' }, '')).body).toEqual({ runId: 'r1', report: null })
+  })
+
+  it('runs get carries no report', async () => {
+    expect((await call(makeDeps(world(true)), 'runs-get', { id: 'r1' }, '')).body).not.toHaveProperty('report')
+  })
+
+  it('runs-report refuses an agent caller', async () => {
+    const deps = makeDeps(world(true))
+    const as = (c: { sessionId: string; role?: string; principal?: unknown }) => handleCommand(deps, c as never, 'runs-report', { id: 'r1' })
+    expect((await as({ sessionId: 'sess_agent', role: 'cli' })).status).toBe(403)
+    expect((await as({ sessionId: '', role: 'mcp' })).status).toBe(403)
+    expect((await as({ sessionId: '', role: 'controller', principal: { clientId: 'c', name: 'n', permission: 'control', kind: 'agent' } })).status).toBe(403)
+    expect((await as({ sessionId: '', role: 'controller', principal: { clientId: 'c', name: 'n', permission: 'control', kind: 'person' } })).status).toBe(200)
+    expect((await as({ sessionId: APP_CALLER, role: 'app' })).status).toBe(200)
+    expect((await as({ sessionId: '', role: 'cli' })).status).toBe(200)
+  })
+
+  it('runs-report names an unknown Run', async () => {
+    expect((await call(makeDeps(world(true)), 'runs-report', { id: 'nope' }, '')).status).toBe(404)
+    expect((await call(makeDeps(world(true)), 'runs-report', {}, '')).status).toBe(400)
+  })
+})
+
 describe('handleCommand — tasks-check-output and tasks-output', () => {
   const dispatch = (id: string, startedAt: string): OrchState['dispatches'][number] =>
     ({ id, taskId: 't1', accountId: 'acc1', sessionId: 's', cwd: 'D:/p', specPath: 'x', startedAt, workerState: 'running' }) as unknown as OrchState['dispatches'][number]

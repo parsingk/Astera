@@ -60,8 +60,10 @@ export const jobView = (s: OrchState, job: Job, run: JobRun | undefined): Record
 export const runView = (s: OrchState, run: JobRun): Record<string, unknown> => {
   const policy = s.jobs.find((j) => j.id === run.jobId)?.github
   const github = policy ? githubLifecycleOf(policy, run.githubState, lifecycleFactsOf(s, run.id)) : undefined
+  // The report is the Host's snapshot for the app, never public output (run report design C9)
+  const { report: _report, ...body } = run
   return {
-    ...run,
+    ...body,
     ...derivedFor(s, run.id, [run.id]),
     ...(run.paused === true ? { outcome: 'paused' satisfies RunOutcomePublic } : {}),
     ...(github !== undefined ? { github } : {})

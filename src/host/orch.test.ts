@@ -4668,6 +4668,47 @@ describe('the Host journal at the commit points (Host journal Task 5)', () => {
       expect(t.completionOverride?.reason).toBe('why')
       expect(t.completionOverrideBy).toBe('coordinator')
     })
+
+    // Run report Task 3: the commit that finishes a Run stores its report, and a mirror cannot take it away.
+    it('a commit that finishes a Run stores its report', async () => {
+      const { taskId } = await seedGate({ convergence: true })
+      const orch = orchOver({ aliveSessionIds: () => new Set(['ses_c']) })
+      expect(orch.state().runs[0]?.report).toBeUndefined()
+      const r = await orch.call({
+        cmd: 'task-update',
+        args: { id: taskId, status: 'completed', result: 'r', reason: 'why' },
+        sessionId: 'ses_c',
+        from: { role: 'cli', toOthers: () => {} }
+      })
+      expect(r.status, JSON.stringify(r.body)).toBe(200)
+      const run = orch.state().runs[0]
+      expect(run.report?.runId).toBe(run.id)
+      expect(run.report?.outcome).toBe('completed')
+    })
+
+    it('a state-put keeps a report the mirror lacks', async () => {
+      const { taskId } = await seedGate({ convergence: true })
+      const orch = orchOver({ aliveSessionIds: () => new Set(['ses_c']) })
+      await orch.call({
+        cmd: 'task-update',
+        args: { id: taskId, status: 'completed', result: 'r', reason: 'why' },
+        sessionId: 'ses_c',
+        from: { role: 'cli', toOthers: () => {} }
+      })
+      const got = (await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })).body as { state: OrchState; version: number }
+      const stored = got.state.runs[0].report
+      expect(stored).toBeDefined()
+      const mirror: OrchState = {
+        ...got.state,
+        runs: got.state.runs.map((run) => {
+          const { report: _heard, ...rest } = run
+          return rest
+        })
+      }
+      expect(mirror.runs[0].report).toBeUndefined()
+      expect((await orch.call({ cmd: 'state-put', args: { state: mirror, version: got.version }, sessionId: '', from: app })).status).toBe(200)
+      expect(orch.state().runs[0].report).toEqual(stored)
+    })
   })
 
   it('a shell is cli, the Host’s own command is host, the app’s state-put is desktop, each under a new version', async () => {

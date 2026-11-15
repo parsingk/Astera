@@ -5,6 +5,7 @@ import type { Provider } from '../providers/meta'
 import type { ScheduleRule } from '../scheduler/rule'
 import type { GitHubLifecyclePolicy, RunGitHubState } from '../github/lifecycle'
 import type { SandboxKind } from '../types'
+import type { RunReport } from '../runReport/types'
 
 export type TaskStatus = 'pending' | 'ready' | 'dispatched' | 'validating' | 'reviewing' | 'completed' | 'failed' | 'blocked'
 export type Outcome = 'succeeded' | 'failed'
@@ -336,6 +337,10 @@ export interface JobRun {
    *  bounded by it (`runEndOf`, running.ts). Absent on a Run that runs, and on one that finished before it was kept.
    *  Kept back from the public surface. */
   endedAt?: string
+  /** The Host's snapshot of how this Run got to its outcome, built inside the commit that finished it (run report design
+   *  C9, `stampRunReports`), kept through later commits and dropped on the commit that sets the Run running again. Absent
+   *  on a Run that runs and on one that finished before reports. Kept back from the public surface. */
+  report?: RunReport
   /** 이 회차의 워커들이 일하는 워크트리. **없으면 아직 만들어지지 않았다** — 첫 워커를 띄우기
    *  직전에 만들고 기록한다: 예약의 게으른 포크는 배선이 `run-worktree-set` 으로(src/main/ipc.ts),
    *  코디네이터가 있는 Job 의 첫 실행은 command.ts 가 직접(Host 도 만든다, Host S3).
