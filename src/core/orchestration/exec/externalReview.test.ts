@@ -71,7 +71,7 @@ const APPROVED = verdictMessage({ outcome: 'approved', summary: 'Looks right.\nS
 const REJECTED = verdictMessage({
   outcome: 'rejected',
   summary: 'Misses the empty case.',
-  issues: [{ severity: 'high', title: 'empty input', description: 'crashes on an empty list', file: 'src/x.ts', line: 3 }]
+  issues: [{ severity: 'high', title: 'empty input', description: 'crashes on an empty list', file: 'lib/x.js', line: 3 }]
 })
 
 interface RigOpts {
@@ -352,7 +352,7 @@ describe('createReviewStarter with an external reviewer', () => {
     const d = h.review()!
     const file = `${d.specPath}.review.json`
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({
-      issues: [{ severity: 'high', title: 'empty input', description: 'crashes on an empty list', file: 'src/x.ts', line: 3 }]
+      issues: [{ severity: 'high', title: 'empty input', description: 'crashes on an empty list', file: 'lib/x.js', line: 3 }]
     })
     // with a convergence policy the findings travel in review.json and the body stays the summary (final fix wave B4)
     expect(h.handled[0].args).toMatchObject({ outcome: 'failed', subject: 'Misses the empty case.', body: 'Misses the empty case.' })
@@ -388,7 +388,7 @@ describe('createReviewStarter with an external reviewer', () => {
     expect(fs.existsSync(`${h.review()!.specPath}.review.json`)).toBe(false)
     expect(h.handled[0].args).toMatchObject({ outcome: 'failed' })
     // Final fix wave B4: with no review.json the findings travel in the body, or they are lost
-    expect(h.handled[0].args.body).toBe('Misses the empty case.\n\n- [high] empty input (src/x.ts:3): crashes on an empty list')
+    expect(h.handled[0].args.body).toBe('Misses the empty case.\n\n- [high] empty input (lib/x.js:3): crashes on an empty list')
   })
 
   it('renders at most 20 findings in the body, each with only the parts it has, then says how many more', async () => {
