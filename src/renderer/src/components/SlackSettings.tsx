@@ -16,6 +16,8 @@ export function SlackSettings(): React.JSX.Element {
   const [slackAppToken, setSlackAppToken] = useState('')
   // The one Slack Member ID allowed to reply into sessions. Left empty, every reply is blocked
   const [slackMemberId, setSlackMemberId] = useState('')
+  // Whether a finished Run's summary is posted to the channel (absent in the stored configuration reads as on)
+  const [slackRunReports, setSlackRunReports] = useState(true)
   // Saving is blocked until getConfig has returned — the save button sends all five fields
   // explicitly, so pressing it while they are still empty strings would overwrite an already-stored
   // token, channel, and webhook with null in one go. (When there was a single field, patch()
@@ -35,6 +37,7 @@ export function SlackSettings(): React.JSX.Element {
         touched.current.unless('channel', () => setSlackChannelId(c.channelId ?? ''))
         touched.current.unless('app', () => setSlackAppToken(c.appToken ?? ''))
         touched.current.unless('member', () => setSlackMemberId(c.memberId ?? ''))
+        touched.current.unless('runReports', () => setSlackRunReports(c.runReports))
         setSlackLoaded(true)
       },
       // Said, and Save stays off (audit UI-7): saving the empty fields would erase the configuration it could not read.
@@ -132,6 +135,19 @@ export function SlackSettings(): React.JSX.Element {
               {t('settings.slack.memberIdRequired')}
             </span>
           )}
+        <label className="settings-row">
+          <span>{t('settings.slack.runReports')}</span>
+          <input
+            type="checkbox"
+            checked={slackRunReports}
+            onChange={(e) => {
+              touched.current.touch('runReports')
+              setSlackRunReports(e.target.checked)
+              setSlackSaved(false)
+            }}
+          />
+        </label>
+        <span className="settings-hint">{t('settings.slack.runReportsHint')}</span>
         <div className="slack-cell">
           <button
             disabled={!slackLoaded}
@@ -142,7 +158,8 @@ export function SlackSettings(): React.JSX.Element {
                   botToken: slackBotToken.trim() || null,
                   channelId: slackChannelId.trim() || null,
                   appToken: slackAppToken.trim() || null,
-                  memberId: slackMemberId.trim() || null
+                  memberId: slackMemberId.trim() || null,
+                  runReports: slackRunReports
                 })
                 .then(() => setSlackSaved(true))
                 // A rejection means the store refused to overwrite values it could not read —

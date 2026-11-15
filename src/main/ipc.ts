@@ -4927,6 +4927,7 @@ export function registerIpc(
   ipcMain.handle('audit.list', (_e, q: unknown) => audit.list(q as Parameters<typeof audit.list>[0]))
   ipcMain.handle('audit.summary', (_e, q: unknown) => audit.summary(q as Parameters<typeof audit.summary>[0]))
   ipcMain.handle('audit.runTokens', (_e, runId: unknown) => audit.runTokens(runId as string))
+  ipcMain.handle('audit.runReport', (_e, runId: unknown) => audit.runReport(runId as string))
   ipcMain.handle('audit.taskTokens', (_e, taskId: unknown) => audit.taskTokens(taskId as string))
   // Settings › Security & Access › Credentials (credentials design §7): the Host's list, as the app
   const credentials = createCredentialsRoute({ call: (m) => orchCall(m) })
@@ -5912,7 +5913,7 @@ export function registerIpc(
   ipcMain.handle('slack.getConfig', () =>
     slack
       ? slack.store.load()
-      : { webhookUrl: null, botToken: null, channelId: null, appToken: null, memberId: null }
+      : { webhookUrl: null, botToken: null, channelId: null, appToken: null, memberId: null, runReports: true }
   )
   // A partial update — passing the received object straight to store.save() would turn fields that were
   // not sent into null during normalisation, silently erasing already-stored values in a single save.

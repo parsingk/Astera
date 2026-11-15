@@ -1434,6 +1434,7 @@ export interface CoreApi {
       channelId: string | null
       appToken: string | null
       memberId: string | null
+      runReports: boolean
     }>
     setConfig(cfg: {
       webhookUrl?: string | null
@@ -1441,6 +1442,7 @@ export interface CoreApi {
       channelId?: string | null
       appToken?: string | null
       memberId?: string | null
+      runReports?: boolean
     }): Promise<void>
   }
   /** `astera` 명령을 사람의 PATH 에서 닿는 자리에 깔아 둔다(공개 CLI 설계 §10). */
@@ -2126,6 +2128,8 @@ export interface AuditApi {
   list(q: AuditQuery & { limit?: number }): Promise<PluginsCallAnswer>
   summary(q: AuditQuery): Promise<PluginsCallAnswer>
   runTokens(runId: string): Promise<PluginsCallAnswer>
+  /** A finished Run's report as the Host stored it (run report design C9): `{ runId, report }`, report null before reports. */
+  runReport(runId: string): Promise<PluginsCallAnswer>
   taskTokens(taskId: string): Promise<PluginsCallAnswer>
 }
 

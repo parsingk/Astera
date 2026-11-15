@@ -49,7 +49,7 @@ describe('the audit route (observe mode design §11)', () => {
 
   it('offers exactly the commands the screens use', () => {
     expect(Object.keys(host().route).sort()).toEqual(
-      ['addRule', 'editRule', 'list', 'moveRule', 'policies', 'removeRule', 'resetRules', 'runTokens', 'setMode', 'setOtherwise', 'summary', 'taskTokens'].sort()
+      ['addRule', 'editRule', 'list', 'moveRule', 'policies', 'removeRule', 'resetRules', 'runReport', 'runTokens', 'setMode', 'setOtherwise', 'summary', 'taskTokens'].sort()
     )
   })
 

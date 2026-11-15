@@ -25,7 +25,7 @@ vi.mock('../core/sessions/codexRolloutWatcher', async (orig) => {
   return { ...m, CodexRolloutWatcher: Recording }
 })
 
-const CFG: SlackConfig = { webhookUrl: null, botToken: 'xoxb-fake', channelId: 'C1', appToken: 'xapp-fake', memberId: 'U1' }
+const CFG: SlackConfig = { webhookUrl: null, botToken: 'xoxb-fake', channelId: 'C1', appToken: 'xapp-fake', memberId: 'U1', runReports: true }
 const account: Account = { id: 'a1', label: 'home', configDir: 'C:\\c1', color: '#fff', createdAt: '2026-09-26T00:00:00Z' }
 
 /** A fake SDK. `live` is the set of open sockets; `peak` the most ever open at once; `trail` the order
@@ -426,6 +426,65 @@ describe('composeHostSlack (Slack in the Host Task 5, S1, S2, S4)', () => {
     cfg = { ...CFG, channelId: 'C2' }
     await h.wiring.reload()
     expect(h.slack.posters()).toBe(built + 1)
+    await h.wiring.dispose()
+  })
+
+  it('posts a run report while it holds Slack', async () => {
+    const h = await rig()
+    h.wiring.start()
+    await h.active()
+    expect(await h.wiring.postRunReport('the report')).toBe('posted')
+    expect(h.slack.posts).toEqual([{ channel: 'C1', text: 'the report' }])
+    await h.wiring.dispose()
+  })
+
+  it('does not post while an app keeps Slack', async () => {
+    const h = await rig({ keep: true })
+    h.wiring.start()
+    expect(await h.wiring.postRunReport('the report')).toBe('not-held')
+    expect(h.slack.posts).toEqual([])
+    expect(h.logs.some((l) => /run report/.test(l))).toBe(true)
+    await h.wiring.dispose()
+  })
+
+  it('the switch off posts nothing', async () => {
+    const h = await rig({ readConfig: async () => ({ ...CFG, runReports: false }) })
+    h.wiring.start()
+    await h.active()
+    expect(await h.wiring.postRunReport('the report')).toBe('off')
+    expect(h.slack.posts).toEqual([])
+    await h.wiring.dispose()
+  })
+
+  it('answers not-set-up with no transport, and failed when the post throws, with no token in the log', async () => {
+    const none = await rig({ readConfig: async () => ({ ...CFG, botToken: null, channelId: null }) })
+    none.wiring.start()
+    await none.active()
+    expect(await none.wiring.postRunReport('r')).toBe('not-set-up')
+    await none.wiring.dispose()
+    const h = await rig()
+    h.wiring.start()
+    await h.active()
+    h.wiring.notifier.setTransport({ supportsThreads: true, post: async () => { throw new Error('xoxb-fake leaked') } }, 'C1')
+    expect(await h.wiring.postRunReport('r')).toBe('failed')
+    expect(h.logs.join(' ')).not.toContain('xoxb-fake')
+    await h.wiring.dispose()
+  })
+
+  it('toggling run reports keeps the transport', async () => {
+    let cfg = { ...CFG }
+    const h = await rig({ readConfig: async () => ({ ...cfg }) })
+    h.wiring.start()
+    await h.active()
+    const built = h.slack.posters()
+    cfg = { ...CFG, runReports: false }
+    await h.wiring.reload()
+    expect(h.slack.posters()).toBe(built)
+    expect(await h.wiring.postRunReport('r')).toBe('off')
+    cfg = { ...CFG, runReports: true }
+    await h.wiring.reload()
+    expect(h.slack.posters()).toBe(built)
+    expect(await h.wiring.postRunReport('r')).toBe('posted')
     await h.wiring.dispose()
   })
 

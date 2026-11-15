@@ -6,7 +6,7 @@ import { createSlackOwnership, SLACK_HANDBACK_MS } from './slackOwnership'
 import { HOST_FEATURE_SLACK_OWNER } from '../core/host/protocol'
 import type { SlackConfig } from '../core/slack/config'
 
-const CFG: SlackConfig = { webhookUrl: null, botToken: 'xoxb-fake', channelId: 'C1', appToken: 'xapp-fake', memberId: 'U1' }
+const CFG: SlackConfig = { webhookUrl: null, botToken: 'xoxb-fake', channelId: 'C1', appToken: 'xapp-fake', memberId: 'U1', runReports: true }
 const owner = { connected: true, features: [HOST_FEATURE_SLACK_OWNER] }
 const older = { connected: true, features: ['rolling'] }
 const closed = { connected: false, features: [] }

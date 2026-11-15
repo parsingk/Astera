@@ -17,7 +17,8 @@ describe('githubLifecycleDefaultsOf', () => {
     expect(githubLifecycleDefaultsOf({ autoRerunInfrastructureFailures: false, maxInfrastructureReruns: 10, ciWaitMinutes: 10 })).toEqual({
       autoRerunInfrastructureFailures: false,
       maxInfrastructureReruns: 10,
-      ciWaitMinutes: 10
+      ciWaitMinutes: 10,
+      postRunReport: true
     })
     for (const n of [0, 11, 2.5, '3', null]) expect(githubLifecycleDefaultsOf({ maxInfrastructureReruns: n }).maxInfrastructureReruns).toBe(2)
     for (const n of [9, 1441, null, '90']) expect(githubLifecycleDefaultsOf({ ciWaitMinutes: n }).ciWaitMinutes).toBe(90)
@@ -37,7 +38,7 @@ describe('githubLifecycleDefaultsOf', () => {
 // The pane's save: a value is taken whole or not at all, so the pane and the file never disagree about what was set
 describe('exactGithubLifecycleDefaults', () => {
   it('takes a value that is all in bounds, and refuses one with anything out of them or missing', () => {
-    const mine = { autoRerunInfrastructureFailures: false, maxInfrastructureReruns: 4, ciWaitMinutes: 45 }
+    const mine = { autoRerunInfrastructureFailures: false, maxInfrastructureReruns: 4, ciWaitMinutes: 45, postRunReport: true }
     expect(exactGithubLifecycleDefaults(mine)).toEqual(mine)
     expect(exactGithubLifecycleDefaults({ ...mine, maxInfrastructureReruns: 0 })).toBe(null)
     expect(exactGithubLifecycleDefaults({ ...mine, ciWaitMinutes: 9.5 })).toBe(null)

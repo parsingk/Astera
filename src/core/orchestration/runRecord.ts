@@ -76,7 +76,7 @@ export function stampRunEnds(prev: OrchState, next: OrchState, now: string, o: {
 }
 
 /** `tasksOwnedBy` for every owner at once: a Task under its Run's id and, when different, its Job's. */
-function tasksByOwner(state: OrchState): Map<string, Task[]> {
+export function tasksByOwner(state: OrchState): Map<string, Task[]> {
   const by = new Map<string, Task[]>()
   const add = (k: string | undefined, t: Task): void => {
     if (k === undefined) return

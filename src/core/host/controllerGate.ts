@@ -12,6 +12,8 @@ export const CONTROLLER_READ_COMMANDS = [
   'jobs-get',
   'runs-list',
   'runs-get',
+  // A finished Run's report: the state a controller reads carries none, so it asks for it here (run report design C12).
+  'runs-report',
   'tasks-list',
   'tasks-get',
   'dispatch-show',

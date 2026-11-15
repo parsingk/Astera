@@ -2349,3 +2349,22 @@ describe('SlackNotifier.has (Slack in the Host Task 5, P7)', () => {
     }
   })
 })
+
+describe('SlackNotifier postToChannel', () => {
+  it('is false with no transport, and posts with no thread ts through a transport', async () => {
+    const h = setup()
+    h.notifier.setTransport(null, null)
+    expect(await h.notifier.postToChannel('report')).toBe(false)
+    const calls: Array<[string, string | undefined]> = []
+    const transport: SlackTransport = { supportsThreads: true, post: async (text, ts) => (calls.push([text, ts]), '1.1') }
+    h.notifier.setTransport(transport, 'C1')
+    expect(await h.notifier.postToChannel('report')).toBe(true)
+    expect(calls).toEqual([['report', undefined]])
+  })
+
+  it('lets a SlackPostError propagate', async () => {
+    const h = setup()
+    h.notifier.setTransport({ supportsThreads: true, post: async () => { throw new SlackPostError('status=500') } }, 'C1')
+    await expect(h.notifier.postToChannel('report')).rejects.toBeInstanceOf(SlackPostError)
+  })
+})

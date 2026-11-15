@@ -46,6 +46,8 @@ export interface RunGitHubPatch {
   /** Why merge-ready was withheld or withdrawn (G5b): kept once, not replaced while one stands. A withdrawal with no
    *  merge-ready standing and no verdict beside it is dropped (G5c). */
   invalidated?: { reason: GitHubInvalidatedReason }
+  /** The run report's comment (run report C2): posted, deleted by a person, or failed. Adds no log entry. */
+  reportComment?: { posted: { id: number; url: string; pr: number } } | { gone: true } | { failed: string }
 }
 
 type NewEntry = Omit<GitHubLogEntry, 'seq' | 'at'>
@@ -141,6 +143,19 @@ export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitH
     next.invalidated = { reason: patch.invalidated.reason, at: now }
     entries.push({ kind: 'invalidated', reason: patch.invalidated.reason })
   }
+  if (patch.reportComment) {
+    const c = patch.reportComment
+    const kept = base.reportComment
+    // The comment's id, url and pull request, kept through a deletion or a failure
+    const where = {
+      ...(kept?.id !== undefined ? { id: kept.id } : {}),
+      ...(kept?.url !== undefined ? { url: kept.url } : {}),
+      ...(kept?.pr !== undefined ? { pr: kept.pr } : {})
+    }
+    if ('posted' in c) next.reportComment = { id: c.posted.id, url: c.posted.url, pr: c.posted.pr, at: now }
+    else if ('gone' in c) next.reportComment = { ...where, gone: true, at: now }
+    else next.reportComment = { ...where, ...(kept?.gone ? { gone: true as const } : {}), error: c.failed, at: now }
+  }
   if (entries.length > 0) {
     let seq = base.seq
     const all = [...base.log, ...entries.map((e) => ({ seq: ++seq, at: now, ...e }))]
@@ -235,6 +250,13 @@ function rerunOk(r: unknown): boolean {
   )
 }
 
+function reportCommentOk(c: unknown): boolean {
+  if (!isObj(c)) return false
+  if (c.posted !== undefined) return isObj(c.posted) && typeof c.posted.id === 'number' && isStr(c.posted.url) && typeof c.posted.pr === 'number'
+  if (c.gone !== undefined) return c.gone === true
+  return isStr(c.failed)
+}
+
 /** The patch `runs-github-record` takes, or why it is refused. Only the Host sends it (in-process), so this is a
  *  sanity check on its shape, not a defence. */
 export function parseRunGitHubPatch(v: unknown): RunGitHubPatch | string {
@@ -254,6 +276,7 @@ export function parseRunGitHubPatch(v: unknown): RunGitHubPatch | string {
   if (v.rerunPending !== undefined && v.rerunPending !== null && !rerunOk(v.rerunPending)) return 'rerunPending is malformed'
   if (v.mergeReady !== undefined && v.mergeReady !== null && !mergeReadyOk(v.mergeReady)) return 'mergeReady is malformed'
   if (v.invalidated !== undefined && !(isObj(v.invalidated) && isStr(v.invalidated.reason))) return 'invalidated is malformed'
+  if (v.reportComment !== undefined && !reportCommentOk(v.reportComment)) return 'reportComment is malformed'
   // The re-bind is reconvergeRun's own (G6): never taken off the wire (G6 final review M8)
   const { rebase: _rebase, ...wire } = v
   return wire as RunGitHubPatch

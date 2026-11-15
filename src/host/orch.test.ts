@@ -20,11 +20,13 @@ import {
   applyWorkerDone,
   attachCoordinator,
   closeDispatch,
+  createGate,
   createJob,
   createTask,
   emptyState,
   openDispatch,
   openReviewDispatch,
+  resolveGate,
   setRunWorktree,
   startJobRun,
   type OrchState
@@ -4571,6 +4573,187 @@ describe('the Host journal at the commit points (Host journal Task 5)', () => {
     expect(f.committed.map((c) => c.actor)).toEqual(f.committed.map(() => ({ surface: 'agent', sessionId: 'ses_w' })))
   })
 
+  // Run report Task 1: who answered a Gate or forced a completion is stamped as a group by the Host's commit path.
+  describe('who answered a gate or forced a completion', () => {
+    /** One Run (coordinator `ses_c`) with one Task and an open Gate on it; `convergence` makes a completion a forced one. */
+    const seedGate = async (o: { convergence?: boolean } = {}): Promise<{ taskId: string; gateId: string }> => {
+      const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p', ...(o.convergence ? { convergence: {} } : {}) }, NOW)
+      if (!job.ok) throw new Error(job.error)
+      const run = startJobRun(job.state, job.value.id, NOW)
+      if (!run.ok) throw new Error(run.error)
+      const coord = attachCoordinator(run.state, { runId: run.value.id, sessionId: 'ses_c' })
+      if (!coord.ok) throw new Error(coord.error)
+      const task = createTask(
+        coord.state,
+        { runId: run.value.id, title: 't', spec: 's', deps: [], ...(o.convergence ? { validateConfigId: 'cfg1', accountIds: ['acc1'] } : {}) },
+        NOW
+      )
+      if (!task.ok) throw new Error(task.error)
+      const gate = createGate(task.state, { taskId: task.value.id, question: 'q' }, NOW)
+      if (!gate.ok) throw new Error(gate.error)
+      await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(gate.state), 'utf8')
+      return { taskId: task.value.id, gateId: gate.value.id }
+    }
+    const answeredBy = async (from: OrchCaller | undefined, sessionId = '', cmd = 'gate-resolve'): Promise<string | undefined> => {
+      const { gateId } = await seedGate()
+      const orch = orchOver({ aliveSessionIds: () => new Set(['ses_c']) })
+      const r = await orch.call({ cmd, args: { id: gateId, resolution: 'ok' }, sessionId, ...(from ? { from } : {}) })
+      expect(r.status).toBe(200)
+      return orch.state().gates[0].resolvedBy
+    }
+    const controller = (kind: 'person' | 'agent'): OrchCaller => ({
+      role: 'controller',
+      principal: { clientId: 'c1', name: 'L', permission: 'full-control', kind },
+      toOthers: () => {}
+    })
+
+    it('the app answers as a person', async () => expect(await answeredBy(app)).toBe('person'))
+    it('a controller whose kind is person answers as a person', async () => expect(await answeredBy(controller('person'))).toBe('person'))
+    it('a controller whose kind is agent is unknown', async () => expect(await answeredBy(controller('agent'))).toBe('unknown'))
+    it('a CLI with no session is unknown', async () => expect(await answeredBy({ role: 'cli', toOthers: () => {} })).toBe('unknown'))
+    it('a CLI in the coordinator session is the coordinator', async () =>
+      expect(await answeredBy({ role: 'cli', toOthers: () => {} }, 'ses_c')).toBe('coordinator'))
+
+    it('an MCP caller is unknown', async () => {
+      await fs.writeFile(path.join(dir, 'app-settings.json'), JSON.stringify({ mcpAccess: 'control' }))
+      expect(await answeredBy({ role: 'mcp', client: { name: 'claude-code' }, remote: '192.168.0.7', toOthers: () => {} }, '', 'questions-answer')).toBe('unknown')
+    })
+
+    it('the Host’s own command is Astera', async () => {
+      const { gateId } = await seedGate()
+      const orch = orchOver({ aliveSessionIds: () => new Set(['ses_c']) })
+      await orch.ready()
+      expect((await orch.handle('gate-resolve', { id: gateId, resolution: 'ok' })).status).toBe(200)
+      expect(orch.state().gates[0].resolvedBy).toBe('astera')
+    })
+
+    it('a state-put that resolves the Gate is a person’s', async () => {
+      const { gateId } = await seedGate()
+      const orch = orchOver({ aliveSessionIds: () => new Set(['ses_c']) })
+      const got = (await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })).body as { state: OrchState; version: number }
+      const done = resolveGate(got.state, { gateId, resolution: 'ok' }, NOW)
+      if (!done.ok) throw new Error(done.error)
+      expect((await orch.call({ cmd: 'state-put', args: { state: done.state, version: got.version }, sessionId: '', from: app })).status).toBe(200)
+      expect(orch.state().gates[0].resolvedBy).toBe('person')
+    })
+
+    it('a state-put carries the groups the app has not heard of', async () => {
+      const { gateId } = await seedGate()
+      const orch = orchOver({ aliveSessionIds: () => new Set(['ses_c']) })
+      expect((await orch.call({ cmd: 'gate-resolve', args: { id: gateId, resolution: 'ok' }, sessionId: 'ses_c', from: { role: 'cli', toOthers: () => {} } })).status).toBe(200)
+      const got = (await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })).body as { state: OrchState; version: number }
+      expect(got.state.gates[0].resolvedBy).toBe('coordinator')
+      const mirror: OrchState = {
+        ...got.state,
+        gates: got.state.gates.map((g) => {
+          const { resolvedBy: _heard, ...rest } = g
+          return rest
+        })
+      }
+      expect((await orch.call({ cmd: 'state-put', args: { state: mirror, version: got.version }, sessionId: '', from: app })).status).toBe(200)
+      expect(orch.state().gates[0].resolvedBy).toBe('coordinator')
+    })
+
+    it('a forced completion records who forced it', async () => {
+      const { taskId } = await seedGate({ convergence: true })
+      const orch = orchOver({ aliveSessionIds: () => new Set(['ses_c']) })
+      const r = await orch.call({
+        cmd: 'task-update',
+        args: { id: taskId, status: 'completed', result: 'r', reason: 'why' },
+        sessionId: 'ses_c',
+        from: { role: 'cli', toOthers: () => {} }
+      })
+      expect(r.status, JSON.stringify(r.body)).toBe(200)
+      const t = orch.state().tasks[0]
+      expect(t.completionOverride?.reason).toBe('why')
+      expect(t.completionOverrideBy).toBe('coordinator')
+    })
+
+    /** Forces the Task's completion past its policy from `from` and reads the group stamped on it. */
+    const forcedBy = async (from: OrchCaller | undefined, sessionId = ''): Promise<string | undefined> => {
+      const { taskId } = await seedGate({ convergence: true })
+      const orch = orchOver({ aliveSessionIds: () => new Set(['ses_c']) })
+      const r = await orch.call({ cmd: 'task-update', args: { id: taskId, status: 'completed', result: 'r', reason: 'why' }, sessionId, ...(from ? { from } : {}) })
+      expect(r.status, JSON.stringify(r.body)).toBe(200)
+      const t = orch.state().tasks[0]
+      expect(t.completionOverride?.reason).toBe('why')
+      return t.completionOverrideBy
+    }
+
+    it('the app forces a completion as a person', async () => expect(await forcedBy(app)).toBe('person'))
+    it('a controller whose kind is person forces a completion as a person', async () => expect(await forcedBy(controller('person'))).toBe('person'))
+    it('a controller whose kind is agent forces a completion as unknown', async () => expect(await forcedBy(controller('agent'))).toBe('unknown'))
+    it('a CLI with no session forces a completion as unknown', async () => expect(await forcedBy({ role: 'cli', toOthers: () => {} })).toBe('unknown'))
+
+    // MCP reaches no command that forces a completion: task-update is not in its lists, so nothing is stamped
+    it('an MCP caller cannot force a completion', async () => {
+      await fs.writeFile(path.join(dir, 'app-settings.json'), JSON.stringify({ mcpAccess: 'control' }))
+      const { taskId } = await seedGate({ convergence: true })
+      const orch = orchOver({ aliveSessionIds: () => new Set(['ses_c']) })
+      const mcp: OrchCaller = { role: 'mcp', client: { name: 'claude-code' }, remote: '192.168.0.7', toOthers: () => {} }
+      const r = await orch.call({ cmd: 'task-update', args: { id: taskId, status: 'completed', result: 'r', reason: 'why' }, sessionId: '', from: mcp })
+      expect(r.status).toBe(403)
+      await orch.ready()
+      const t = orch.state().tasks[0]
+      expect(t.status).not.toBe('completed')
+      expect(t.completionOverride).toBeUndefined()
+      expect(t.completionOverrideBy).toBeUndefined()
+    })
+
+    it('a state-put that forces a completion is a person’s', async () => {
+      const { taskId } = await seedGate({ convergence: true })
+      const orch = orchOver({ aliveSessionIds: () => new Set(['ses_c']) })
+      const got = (await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })).body as { state: OrchState; version: number }
+      const forced: OrchState = {
+        ...got.state,
+        tasks: got.state.tasks.map((t) => (t.id === taskId ? { ...t, status: 'completed' as const, completionOverride: { reason: 'why', at: NOW } } : t))
+      }
+      expect((await orch.call({ cmd: 'state-put', args: { state: forced, version: got.version }, sessionId: '', from: app })).status).toBe(200)
+      expect(orch.state().tasks[0].completionOverrideBy).toBe('person')
+    })
+
+    // Run report Task 3: the commit that finishes a Run stores its report, and a mirror cannot take it away.
+    it('a commit that finishes a Run stores its report', async () => {
+      const { taskId } = await seedGate({ convergence: true })
+      const orch = orchOver({ aliveSessionIds: () => new Set(['ses_c']) })
+      expect(orch.state().runs[0]?.report).toBeUndefined()
+      const r = await orch.call({
+        cmd: 'task-update',
+        args: { id: taskId, status: 'completed', result: 'r', reason: 'why' },
+        sessionId: 'ses_c',
+        from: { role: 'cli', toOthers: () => {} }
+      })
+      expect(r.status, JSON.stringify(r.body)).toBe(200)
+      const run = orch.state().runs[0]
+      expect(run.report?.runId).toBe(run.id)
+      expect(run.report?.outcome).toBe('completed')
+    })
+
+    it('a state-put keeps a report the mirror lacks', async () => {
+      const { taskId } = await seedGate({ convergence: true })
+      const orch = orchOver({ aliveSessionIds: () => new Set(['ses_c']) })
+      await orch.call({
+        cmd: 'task-update',
+        args: { id: taskId, status: 'completed', result: 'r', reason: 'why' },
+        sessionId: 'ses_c',
+        from: { role: 'cli', toOthers: () => {} }
+      })
+      const got = (await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })).body as { state: OrchState; version: number }
+      const stored = got.state.runs[0].report
+      expect(stored).toBeDefined()
+      const mirror: OrchState = {
+        ...got.state,
+        runs: got.state.runs.map((run) => {
+          const { report: _heard, ...rest } = run
+          return rest
+        })
+      }
+      expect(mirror.runs[0].report).toBeUndefined()
+      expect((await orch.call({ cmd: 'state-put', args: { state: mirror, version: got.version }, sessionId: '', from: app })).status).toBe(200)
+      expect(orch.state().runs[0].report).toEqual(stored)
+    })
+  })
+
   it('a shell is cli, the Host’s own command is host, the app’s state-put is desktop, each under a new version', async () => {
     await seed()
     const f = fake()
@@ -4857,6 +5040,39 @@ describe('How It Works at the commit points (E1 Task 3)', () => {
     const got = (await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })).body as { state: OrchState; version: number }
     expect((await orch.call({ cmd: 'state-put', args: { state: got.state, version: got.version }, sessionId: '', from: app })).status).toBe(200)
     expect(calls).toHaveLength(1)
+  })
+
+  it('hands each finished Run to the poster once', async () => {
+    const ids = await seedOne()
+    const finished: string[] = []
+    // No understanding duty: the poster is handed the Run all the same.
+    const orch = orchOver({ aliveSessionIds: () => new Set(['ses_w']), runReports: { finished: (id) => void finished.push(id) } })
+    expect((await orch.call(done(ids))).status).toBe(200)
+    const runId = orch.state().runs[0].id
+    expect(finished).toEqual([runId])
+    // A later commit that changes nothing about the Run does not hand it over again.
+    const got = (await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })).body as { state: OrchState; version: number }
+    expect((await orch.call({ cmd: 'state-put', args: { state: got.state, version: got.version }, sessionId: '', from: app })).status).toBe(200)
+    expect(finished).toEqual([runId])
+  })
+
+  it('a state-put that finishes a Run hands it to the poster; a poster that throws leaves the commit landed', async () => {
+    const ids = await seedOne()
+    const finished: string[] = []
+    const orch = orchOver({
+      runReports: {
+        finished: (id) => {
+          finished.push(id)
+          throw new Error('poster boom')
+        }
+      }
+    })
+    const got = (await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })).body as { state: OrchState; version: number }
+    const done2: OrchState = { ...got.state, tasks: got.state.tasks.map((t) => (t.id === ids.taskId ? { ...t, status: 'completed' } : t)) }
+    logs = []
+    expect((await orch.call({ cmd: 'state-put', args: { state: done2, version: got.version }, sessionId: '', from: app })).status).toBe(200)
+    expect(finished).toEqual([done2.runs[0].id])
+    expect(logs.some((l) => /poster boom/.test(l))).toBe(true)
   })
 
   it('a commit with no finished Run calls nothing', async () => {

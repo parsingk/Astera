@@ -24,6 +24,12 @@ export function sanitizeForController(state: OrchState): OrchState {
       const { createdBy: _maker, pausedBy: _why, ...rest } = j
       return rest
     }),
+    // A Run's report is the Host's snapshot: a controller reads it through `runs-report` (run report design C12).
+    runs: state.runs.map((r) => {
+      if (r.report === undefined) return r
+      const { report: _report, ...rest } = r
+      return rest
+    }),
     tasks: state.tasks.map((t) =>
       t.checks
         ? {

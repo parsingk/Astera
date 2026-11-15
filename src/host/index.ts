@@ -117,6 +117,7 @@ import { createRunGitRecorder, type RunGitRecorder } from './runGitRecorder'
 import { createGithubWatch, type GithubWatch } from './githubWatch'
 import { armEarlyLoad } from './earlyLoad'
 import { createLifecycleCi, type LifecycleCi } from './lifecycleCi'
+import { createRunReportPoster, type RunReportPoster } from './runReportPost'
 import { ancestry, createDraftPr, headOf, pushBranch } from '../core/github/lifecyclePush'
 import { findOpenPrs } from '../core/github/prBinding'
 import { readPrState } from '../core/github/prState'
@@ -159,6 +160,9 @@ const EXIT_HAMMER_MS = 1_500
 /** How long `leave` waits for the log appends already in flight before its final sync flush (stage 3,
  *  task 3, review I1). Short: a disk that stalls this long gets the sync flush anyway. */
 const LEAVE_LOG_FLUSH_CAP_MS = 1_000
+/** How long `leave` waits for a run report's comment still on its way to the pull request. Short: a post that does not
+ *  land by then is dropped with the process, and the Run's outcome never depended on it. */
+const RUN_REPORT_IDLE_CAP_MS = 3_000
 
 async function main(): Promise<void> {
   // Before anything can create a child: node-pty forks a helper on every ConPTY kill, and from 1.3.20
@@ -390,6 +394,11 @@ async function main(): Promise<void> {
       if (spawner) await spawner.closeAndSettle(SPAWN_DEADLINE_MS).catch((err) => log.write(`the spawns in flight could not be waited for: ${String(err)}`))
       // The plugins, awaited before the server closes (started at the top of this tail).
       await pluginsStopped
+      // A run report's comment already on its way finishes first, while the orch still answers its record. Capped. Never rejects.
+      if (runReportPoster)
+        await disposeWithin(runReportPoster.idle().catch(() => {}), RUN_REPORT_IDLE_CAP_MS, () =>
+          log.write(`a run report was still being posted after ${RUN_REPORT_IDLE_CAP_MS / 1000} s; leaving anyway`)
+        )
       await server
         .close()
         .catch((err) => log.write(`the server did not close cleanly: ${String(err)}`))
@@ -444,6 +453,8 @@ async function main(): Promise<void> {
   let runGit: RunGitRecorder | null = null
   let githubWatch: GithubWatch | null = null
   let lifecycleCi: LifecycleCi | null = null
+  /** Assigned below `createHostOrch`, which it needs: the orch hands it every Run a commit finishes (run report C2). */
+  let runReportPoster: RunReportPoster | null = null
   let earlyLoad: { cancel(): void } | null = null
   const worktrees = createHostWorktrees({
     profileDir,
@@ -1042,6 +1053,7 @@ async function main(): Promise<void> {
     })
   const orch = createHostOrch({
     profileDir,
+    runReports: { finished: (id) => runReportPoster?.finished(id) },
     useRecorder,
     version: hostVersion,
     controllers,
@@ -1200,6 +1212,17 @@ async function main(): Promise<void> {
     // `runtime-reload` and `runtime-status`, and revocation closing live connections (remote runtime design §2.9, §3.3).
     gateway,
     closeControllerConns: (conns) => gateway.link()?.closeConns(conns)
+  })
+  // The run report's comment on a finished Run's pull request (run report C2, R8). The Slack side goes through the Host's Slack wiring (C13).
+  runReportPoster = createRunReportPoster({
+    state: () => orch.state(),
+    gh: hostGh,
+    accounts: async () => (await readAccountEntries(path.join(profileDir, 'accounts.json'), readFileRetrying)).map((x) => ({ id: x.id, label: x.label })),
+    record: (args) => orch.handle('runs-github-record', args),
+    slack: slackWiring,
+    prefixes: [os.homedir(), profileDir],
+    lang: () => (wiring ? wiring.checks.langNow() : 'en'),
+    log: (m) => log.write(m)
   })
   runGit = createRunGitRecorder({
     record: (args) => orch.handle('runs-git-record', args),
