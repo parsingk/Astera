@@ -19,9 +19,31 @@ async function exists(p: string): Promise<boolean> {
   }
 }
 
-/** Decides by the presence of a marker file inside configDir (codex, and claude on win32). */
-export function fileMarkerProbe(marker: string): LoginProbe {
-  return (configDir) => exists(path.join(configDir, marker))
+/** On Windows, removes an EMPTY folder at a login file's path before the probe looks (sandbox design §6). Codex's Windows
+ *  sandbox makes a missing deny-read path a folder before it denies it (windows-sandbox-rs deny_read_acl.rs
+ *  `apply_deny_read_acls`: "Missing paths are materialized as directories"; the same at rust-v0.160.0 and rust-v0.169.0).
+ *  A session that started while the account was logged in keeps naming its login file, so after a logout its next
+ *  command leaves an empty folder named `auth.json` or `.credentials.json`, which the probe would read as a login and
+ *  which the CLI's next login could not write its file over. `rmdir` removes only an empty folder: a file, a folder that
+ *  holds something, or a path that is not there is left as it is, and it is never recursive. Never throws. Nothing
+ *  happens off Windows. */
+async function dropEmptyFolder(p: string, platform: NodeJS.Platform): Promise<void> {
+  if (platform !== 'win32') return
+  try {
+    await fs.rmdir(p)
+  } catch {
+    /* a file, a folder with something in it, or nothing there: nothing to heal */
+  }
+}
+
+/** Decides by the presence of a marker file inside configDir (codex, and claude on win32). On Windows an empty folder at
+ *  the marker's path is removed first (dropEmptyFolder), so a logged-out account reads as logged out. */
+export function fileMarkerProbe(marker: string, platform: NodeJS.Platform): LoginProbe {
+  return async (configDir) => {
+    const file = path.join(configDir, marker)
+    await dropEmptyFolder(file, platform)
+    return exists(file)
+  }
 }
 
 /**
@@ -45,6 +67,7 @@ export function claudeLoginProbe(opts: {
 }): LoginProbe {
   return async (configDir) => {
     const credPath = path.join(configDir, '.credentials.json')
+    await dropEmptyFolder(credPath, opts.platform)
     if (await exists(credPath)) {
       // The file's presence still settles a login, with one exception: a refresh token whose recorded
       // expiry has passed. The CLI writes `claudeAiOauth.refreshTokenExpiresAt` in ms; once it is behind
