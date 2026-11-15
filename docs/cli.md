@@ -942,7 +942,10 @@ of a Task does not move; a run that finished before this version of Astera count
 before the update. The Host reads them in every mode from what Claude and Codex already write (a Claude session's
 transcript and its sub-agents' files, a chat's stream, a Codex rollout) and keeps them in `token-totals.json` in the
 profile until the run is deleted. Each is left out when the Host read none, such as for a session the app ran without a
-Host. MCP's `get_task` carries the Task's own `tokens`. What they cost in money is not shown. MCP's `get_task` lists the Task's attempts, and the attempt of a review by an external reviewer carries `externalReviewer` with its `id` and `name`; its `provider` is the implementer's and its `accountId` is empty.
+Host. MCP's `get_task` carries the Task's own `tokens`. What they cost in money is not shown.
+
+MCP's `get_task` lists the Task's attempts. The attempt of a review by an external reviewer carries `externalReviewer`
+with its `id` and `name`; its `provider` is the implementer's and its `accountId` is empty.
 
 **`runs get` carries `github`** for a run of a `--github-lifecycle` Job: the pull request Astera bound for the run's
 branch, its head, the CI checks of that head with the `verdict` and the check that failed first (with its `class`, such
