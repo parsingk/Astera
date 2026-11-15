@@ -71,7 +71,7 @@ import { codexNoDaemonProbe, type CodexNoDaemonProbe } from '../core/sessions/co
 import { noteRolloutPath } from '../core/sessions/codexRolloutWatcher'
 import { findInstalledHostExe } from '../core/host/installedRuntime'
 import { hostRuntimeBase } from '../core/host/runtime'
-import { ensureOwnFolders, installRootOf, localAsteraDir, nodeLinkLook, presentOrNull, publicShuttleFiles, sandboxReadOnly, updaterCacheDir, type LinkLook } from '../core/sandbox/locations'
+import { agentLoginEntries, ensureOwnFolders, installRootOf, localAsteraDir, nodeLinkLook, presentOrNull, publicShuttleFiles, sandboxReadOnly, updaterCacheDir, type DenyEntry, type LinkLook } from '../core/sandbox/locations'
 import { claudeUsernsCheck, type SandboxWarnSink } from '../core/sandbox/startWarnings'
 import { hidingLog } from '../core/extensions/secrets'
 import { setBounded } from '../core/bounded'
@@ -194,6 +194,10 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
   /** The profile's app key file, which a sandboxed Codex session's profile denies on every OS, terminal or chat (sandbox
    *  follow-ups, item 1). */
   appKeyFile?: string | null
+  /** The agents' login files of every registered account and the default folders, which a sandboxed session's profile
+   *  denies on every OS, terminal or chat, each only if it is there at the start (sandbox design §6, locations.ts
+   *  agentLoginEntries): the list this Host's last read of `accounts.json` gave. */
+  agentLogins?: () => readonly DenyEntry[]
   /** The read-only folders a sandboxed Codex session's profile keeps on every OS, terminal or chat (Task E and its fix
    *  round 1): the profile and every place Astera writes code or an installer to and runs unsandboxed. */
   readOnly?: readonly string[]
@@ -366,7 +370,11 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     return null
   }
   const { profileDir, platform, homeDir, registry, log } = d
-  const readAccounts = d.readAccounts ?? readAccountEntries
+  // Every read of `accounts.json` here is kept as the last list this Host saw: a spawn's own prepare has just read it, so
+  // the agents' login files its sandbox denies are those of the accounts it saw (agentLogins, below)
+  let lastAccounts: Account[] = []
+  const readAccountsFile = d.readAccounts ?? readAccountEntries
+  const readAccounts = async (file: string): Promise<Account[]> => (lastAccounts = await readAccountsFile(file))
   const descriptors = d.codexNoDaemon ? makeDescriptors(platform, undefined, undefined, d.codexNoDaemon) : makeDescriptors(platform)
   // Windows readiness for a sandboxed Codex start (sandbox design §6), asked by this spawner's prepares and the Host's chat
   // sessions alike
@@ -379,6 +387,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   // The key that lets a process be the app to this Host, which a sandboxed session's profile denies (sandbox follow-ups,
   // item 1)
   const appKeyFile = appKeyPath(profileDir)
+  // The agents' login files (sandbox design §6): the default folders' and every account's, from the last list read
+  const agentLogins = (): DenyEntry[] => agentLoginEntries({ homeDir, accounts: lastAccounts })
   // What a sandboxed session keeps read-only on every OS (Task E and its fix round 1): the profile folder and every place
   // Astera itself writes code or an installer to and runs unsandboxed — the Windows Host runtime it was handed from
   // (hostRuntimeBase, the same `cli/host.ts` rule this StatusLineManager's findRuntime uses), electron-updater's download
@@ -421,7 +431,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       // The sandbox's denied places are read under the person's home, from each session's own environment (its scope)
       homeDir,
       tmpDir,
-      readOnly
+      readOnly,
+      agentLogins
     }
   )
   const ensured = once(() => statusLine.ensureFiles())
@@ -509,7 +520,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     // Read at each spawn, not once: the Host completes its PATH when a CLI is missing (windowsPath.ts)
     () => hostWorkerBaseEnv(d.env),
     // The Host's own log: a spawn that had to fall back to a sync check says so in host.log.
-    { ...defaultSpawnChecks(log), codexWindowsReady, hostSocketDir, appKeyFile, readOnly, linkLook: nodeLinkLook, codexExcludes }
+    { ...defaultSpawnChecks(log), codexWindowsReady, hostSocketDir, appKeyFile, agentLogins, readOnly, linkLook: nodeLinkLook, codexExcludes }
   )
   // Shared extensions (Agent Control Plane release 1 design §4.5): `sessions.prepare` refreshes the account before
   // every spawn and roll, and the Host's chat sessions read the same cache
@@ -996,6 +1007,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     claudeSandbox,
     hostSocketDir,
     appKeyFile,
+    agentLogins,
     readOnly,
     sandboxWarn,
     linkLook: nodeLinkLook,

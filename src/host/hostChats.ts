@@ -57,6 +57,8 @@ export interface HostChatsDeps {
   hostSocketDir?: ChatManagerDeps['hostSocketDir']
   /** The profile's app key file, the spawner's: a sandboxed Codex chat's profile denies it on every OS. */
   appKeyFile?: ChatManagerDeps['appKeyFile']
+  /** The agents' login files, the spawner's: a sandboxed Codex chat's profile denies those there at the start on every OS. */
+  agentLogins?: ChatManagerDeps['agentLogins']
   /** The read-only folders, the spawner's: a sandboxed Codex chat's profile keeps them read on every OS (Task E and its
    *  fix round 1). */
   readOnly?: ChatManagerDeps['readOnly']
@@ -209,6 +211,7 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     ...(d.claudeSandbox ? { claudeSandbox: d.claudeSandbox } : {}),
     ...(d.hostSocketDir !== undefined ? { hostSocketDir: d.hostSocketDir } : {}),
     ...(d.appKeyFile !== undefined ? { appKeyFile: d.appKeyFile } : {}),
+    ...(d.agentLogins ? { agentLogins: d.agentLogins } : {}),
     ...(d.readOnly !== undefined ? { readOnly: d.readOnly } : {}),
     linkLook: d.linkLook,
     ...(d.sandboxWarn ? { sandboxWarn: d.sandboxWarn } : {}),

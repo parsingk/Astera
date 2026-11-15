@@ -55,7 +55,7 @@ import { codexCheckRunner } from '../core/sandbox/checkRunner'
 import { codexExcludesWriter } from '../core/sandbox/gitExcludes'
 import { hostAddress } from '../core/publicContract'
 import { appKeyPath } from '../core/host/hostKey'
-import { ensureOwnFolders, installRootOf, localAsteraDir, nodeLinkLook, presentOrNull, publicShuttleFiles, sandboxReadOnly, updaterCacheDir } from '../core/sandbox/locations'
+import { agentLoginEntries, ensureOwnFolders, installRootOf, localAsteraDir, nodeLinkLook, presentOrNull, publicShuttleFiles, sandboxReadOnly, updaterCacheDir, type DenyEntry } from '../core/sandbox/locations'
 import { binDirFor } from '../core/orchestration/cliInstall'
 import { shuttleNames } from '../core/orchestration/exec/shuttle'
 import { HOST_PROTOCOL } from '../core/host/protocol'
@@ -282,6 +282,9 @@ export async function createCore(userDataDir: string, osLocale: string, paths?: 
     publicShuttle: publicShuttleFiles({ platform: process.platform, binDir: binDirFor({ platform: process.platform, env: process.env, home: os.homedir() }), names: shuttleNames(process.platform), exists: existsSync }),
     resolve: presentOrNull
   })
+  // The agents' login files a sandboxed session may not read (sandbox design §6): the default folders' and every registered
+  // account's, from the registry as it is when a start asks, since accounts come and go while the app runs
+  const agentLogins = (): DenyEntry[] => agentLoginEntries({ homeDir: os.homedir(), accounts: accounts.list() })
   const statusLine = new StatusLineManager(
     userDataDir,
     process.platform !== 'win32'
@@ -295,7 +298,7 @@ export async function createCore(userDataDir: string, osLocale: string, paths?: 
           })) ?? 'node')
         : 'node',
     undefined,
-    { findRuntime, readOnly }
+    { findRuntime, readOnly, agentLogins }
   )
   await statusLine.init()
   // One factory for the app's life. Slice 2's Host-backed one is attached to it by registerIpc once
@@ -337,7 +340,7 @@ export async function createCore(userDataDir: string, osLocale: string, paths?: 
     [previewShotsDir(userDataDir)],
     process.env,
     // The folders a sandboxed Codex session keeps read-only (Task E and its fix round 1)
-    { ...defaultSpawnChecks(sessionsLog), hostSocketDir, appKeyFile, readOnly, linkLook: nodeLinkLook, codexExcludes }
+    { ...defaultSpawnChecks(sessionsLog), hostSocketDir, appKeyFile, agentLogins, readOnly, linkLook: nodeLinkLook, codexExcludes }
   )
   // Shared extensions (Agent Control Plane release 1 design §4.5). The two managers read the same cache:
   // a chat roll's respawn is prepared through `sessions.prepare`, which refreshes the target account
@@ -431,6 +434,7 @@ export async function createCore(userDataDir: string, osLocale: string, paths?: 
     claudeSandbox,
     hostSocketDir,
     appKeyFile,
+    agentLogins,
     readOnly,
     linkLook: nodeLinkLook,
     codexVersion: cliVersions,
