@@ -2832,6 +2832,7 @@ export const en: Record<keyof typeof ko, string> = {
   'runReport.caveat.unstable': 'Task {task}: a check flipped between pass and fail (check {check}).',
   'runReport.tasks.more': 'and {count} more Tasks',
   'runReport.caveats.more': 'and {count} more caveats',
+  'runReport.caveats.moreInApp': 'and {count} more caveats; see the Run in Astera',
   'runReport.cost.tokens': 'Tokens used: at least {total}.',
   'runReport.cost.tokensCoordinator': 'Tokens used: at least {total}, of which at least {coordinator} by the coordinator.',
   'runReport.cost.coordinatorOnly': 'Coordinator tokens used: at least {coordinator}.',

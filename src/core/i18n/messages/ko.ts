@@ -3086,6 +3086,7 @@ export const ko = {
   'runReport.caveat.unstable': 'Task {task}: 검사가 통과와 실패를 오갔습니다 (검사 {check}).',
   'runReport.tasks.more': '외 Task {count}개',
   'runReport.caveats.more': '외 {count}건',
+  'runReport.caveats.moreInApp': '외 주의할 점 {count}건. Astera 의 Run 에서 확인하세요',
   'runReport.cost.tokens': '토큰 사용량: 최소 {total}.',
   'runReport.cost.tokensCoordinator': '토큰 사용량: 최소 {total}, 그중 코디네이터 최소 {coordinator}.',
   'runReport.cost.coordinatorOnly': '코디네이터 토큰 사용량: 최소 {coordinator}.',

@@ -31,7 +31,11 @@ const POSIX_PATH = new RegExp(
   'g'
 )
 const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g
+// A GitHub user or team, not part of an email, a word or a path
+const MENTION = /(?<![\w@/.\-])@([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\/[A-Za-z0-9_.-]*[A-Za-z0-9_])?)/g
 const SECRET_MIN = 3
+/** A caveat's free text (a forced completion's reason) is cut here, in every rendering */
+export const CAVEAT_TEXT_MAX = 300
 
 const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
@@ -64,7 +68,11 @@ export function scrubText(text: string, ctx: ScrubContext): string {
     .filter((s) => s.length >= SECRET_MIN)
     .sort((a, b) => b.length - a.length)
   for (const secret of secrets) out = out.replace(new RegExp(`(?<!\\w)${escapeRegExp(secret)}(?!\\w)`, 'gi'), '…')
+  // Last: a @handle becomes a code span so the comment notifies no one; text already in backticks is left as it is
   return out
+    .split(/(`[^`]*`)/)
+    .map((part, i) => (i % 2 === 1 ? part : part.replace(MENTION, '`@$1`')))
+    .join('')
 }
 
 /** The report as the pull request comment may show it: no cost (D2), every free text scrubbed. The PR's own url stays. */
@@ -109,6 +117,10 @@ const SEP: Record<Lang, string> = { ko: ', ', en: ', ', ja: '、', es: ', ' }
 
 /** A free text on one line: a title with a line break must not break a list row */
 const oneLine = (s: string): string => s.replace(/\s+/g, ' ').trim()
+const cutText = (s: string): string => {
+  const one = oneLine(s)
+  return one.length > CAVEAT_TEXT_MAX ? `${one.slice(0, CAVEAT_TEXT_MAX)}…` : one
+}
 const shortSha = (sha: string): string => sha.slice(0, 7)
 
 function duration(ms: number, lang: Lang): string {
@@ -209,7 +221,7 @@ export function interventionsLine(r: RunReport, lang: Lang): string {
 export function caveatLine(c: RunReportCaveat, lang: Lang): string {
   switch (c.kind) {
     case 'forced':
-      return t(lang, 'runReport.caveat.forced', { task: oneLine(c.task), by: groupWord(c.by, lang), reason: oneLine(c.reason) })
+      return t(lang, 'runReport.caveat.forced', { task: oneLine(c.task), by: groupWord(c.by, lang), reason: cutText(c.reason) })
     case 'ci-skipped':
       return t(lang, 'runReport.caveat.ci-skipped')
     case 'check-skipped':
@@ -263,7 +275,7 @@ export function reportMarkdown(
   o: { audience: 'app' | 'pull-request'; accounts?: ReadonlyMap<string, string> }
 ): string {
   const pr = o.audience === 'pull-request'
-  const build = (taskRows: number): string => {
+  const build = (taskRows: number, caveatRows = r.caveats.length): string => {
     const blocks: string[] = []
     if (pr) blocks.push(RUN_REPORT_MARKER(r.runId))
     blocks.push(`**${outcomeLine(r, lang)}**`)
@@ -272,7 +284,12 @@ export function reportMarkdown(
     blocks.push(t(lang, 'runReport.asOf'))
     blocks.push(
       `### ${t(lang, 'runReport.section.caveats')}\n` +
-        (r.caveats.length > 0 ? r.caveats.map((c) => `- ${caveatLine(c, lang)}`).join('\n') : t(lang, 'runReport.caveats.none'))
+        (r.caveats.length > 0
+          ? [
+              ...r.caveats.slice(0, caveatRows).map((c) => `- ${caveatLine(c, lang)}`),
+              ...(caveatRows < r.caveats.length ? [`- ${t(lang, 'runReport.caveats.moreInApp', { count: r.caveats.length - caveatRows })}`] : [])
+            ].join('\n')
+          : t(lang, 'runReport.caveats.none'))
     )
     const rows = r.tasks.slice(0, taskRows).map((task) => `- ${taskLine(task, lang)}`)
     if (taskRows < r.tasks.length) rows.push(`- ${t(lang, 'runReport.tasks.more', { count: r.tasks.length - taskRows })}`)
@@ -283,9 +300,12 @@ export function reportMarkdown(
     if (cost) blocks.push(`### ${t(lang, 'runReport.section.cost')}\n${cost}`)
     return blocks.join('\n\n')
   }
-  // Over the comment's cap the Task rows are cut, never the caveats (R7)
+  // Over the comment's cap the Task rows are cut first (R7). Only when the caveats alone pass it are caveats cut from the
+  // end: a comment over the hard limit cannot be posted at all
   if (!pr) return build(r.tasks.length)
-  return build(largestFitting(r.tasks.length, (n) => build(n).length <= PR_COMMENT_MAX))
+  const rows = largestFitting(r.tasks.length, (n) => build(n).length <= PR_COMMENT_MAX)
+  if (build(rows).length <= PR_COMMENT_MAX) return build(rows)
+  return build(0, largestFitting(r.caveats.length, (n) => build(0, n).length <= PR_COMMENT_MAX))
 }
 
 // ---- Slack ----

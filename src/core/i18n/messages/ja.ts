@@ -2567,6 +2567,7 @@ export const ja: Catalog = {
   'runReport.caveat.unstable': 'Task {task}: チェックが合格と失敗を行き来しました（チェック {check}）。',
   'runReport.tasks.more': '他に Task {count} 件',
   'runReport.caveats.more': '他に {count} 件',
+  'runReport.caveats.moreInApp': '他に注意点が {count} 件あります。Astera の Run で確認してください',
   'runReport.cost.tokens': 'トークン使用量: 少なくとも {total}。',
   'runReport.cost.tokensCoordinator': 'トークン使用量: 少なくとも {total}、そのうちコーディネーターが少なくとも {coordinator}。',
   'runReport.cost.coordinatorOnly': 'コーディネーターのトークン使用量: 少なくとも {coordinator}。',

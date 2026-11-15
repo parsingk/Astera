@@ -3,6 +3,7 @@ import {
   RUN_REPORT_MARKER,
   PR_COMMENT_MAX,
   SLACK_POST_MAX,
+  CAVEAT_TEXT_MAX,
   scrubText,
   forPullRequest,
   outcomeLine,
@@ -107,6 +108,43 @@ describe('the pull request version', () => {
     expect(forPullRequest(report(), ctx).cost).toBeUndefined()
     expect(md).not.toContain('Work Account')
     expect(md).not.toContain('1,234,567')
+  })
+})
+
+describe('mentions and long caveat text', () => {
+  it('turns a mention into a code span in the pull request version only', () => {
+    const r = report({ tasks: [task('ping @octocat and @org/team, mail a@b.com `@kept`')] })
+    const pr = reportMarkdown(forPullRequest(r, ctx), 'en', { audience: 'pull-request' })
+    expect(pr).toContain('`@octocat`')
+    expect(pr).toContain('`@org/team`')
+    expect(pr).toContain('`@kept`')
+    expect(pr).not.toMatch(/(?<!`)@octocat/)
+    expect(pr).not.toContain('@b.com')
+    expect(pr).not.toContain('``')
+    expect(reportMarkdown(r, 'en', { audience: 'app' })).toContain('ping @octocat and')
+    expect(reportSlack(r, 'en', {})).toContain('ping @octocat and')
+  })
+
+  it('cuts a caveat reason at 300 characters', () => {
+    const c: RunReportCaveat = { kind: 'forced', task: 'T', by: 'person', reason: 'r'.repeat(1000) }
+    const line = caveatLine(c, 'en')
+    expect(line).toContain('r'.repeat(CAVEAT_TEXT_MAX) + '…')
+    expect(line).not.toContain('r'.repeat(CAVEAT_TEXT_MAX + 1))
+  })
+
+  it('cuts caveats from the end when they alone pass the comment cap', () => {
+    const caveats: RunReportCaveat[] = Array.from({ length: 200 }, (_, i) => ({
+      kind: 'forced' as const,
+      task: `T${i}`,
+      by: 'person' as const,
+      reason: 'z'.repeat(300)
+    }))
+    const md = reportMarkdown(forPullRequest(report({ caveats }), ctx), 'en', { audience: 'pull-request' })
+    expect(md.length).toBeLessThanOrEqual(PR_COMMENT_MAX)
+    const kept = md.split('\n').filter((l) => l.startsWith('- Task T')).length
+    expect(kept).toBeGreaterThan(0)
+    expect(kept).toBeLessThan(200)
+    expect(md).toContain(`and ${200 - kept} more caveats; see the Run in Astera`)
   })
 })
 

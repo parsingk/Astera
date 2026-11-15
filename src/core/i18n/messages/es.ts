@@ -2597,6 +2597,7 @@ export const es: Catalog = {
   'runReport.caveat.unstable': 'Task {task}: una comprobación alternó entre éxito y fallo (comprobación {check}).',
   'runReport.tasks.more': 'y {count} Tasks más',
   'runReport.caveats.more': 'y {count} salvedades más',
+  'runReport.caveats.moreInApp': 'y {count} salvedades más; consulta el Run en Astera',
   'runReport.cost.tokens': 'Tokens usados: al menos {total}.',
   'runReport.cost.tokensCoordinator': 'Tokens usados: al menos {total}, de ellos al menos {coordinator} del coordinador.',
   'runReport.cost.coordinatorOnly': 'Tokens usados por el coordinador: al menos {coordinator}.',
