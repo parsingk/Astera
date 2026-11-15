@@ -506,3 +506,27 @@ describe('slack', () => {
     expect(slack).not.toContain('<!channel>')
   })
 })
+
+describe('the review line names who reviewed', () => {
+  const rv = { rounds: 1, passed: true, blocking: [] as string[] }
+  it('appends the sentence in every language, with the language separator', () => {
+    const names = ['Gemini CLI', 'Codex']
+    expect(reviewLine({ ...rv, reviewedBy: names }, 'en')).toBe('Review passed (rounds: 1). Reviewed by Gemini CLI, Codex.')
+    expect(reviewLine({ ...rv, reviewedBy: names }, 'ko')).toContain('Gemini CLI, Codex')
+    expect(reviewLine({ ...rv, reviewedBy: names }, 'ja')).toContain('Gemini CLI、Codex')
+    expect(reviewLine({ ...rv, reviewedBy: names }, 'es')).toContain('Gemini CLI, Codex')
+    for (const lang of ['ko', 'ja', 'es'] as const) expect(reviewLine({ ...rv, reviewedBy: names }, lang)).not.toBe(reviewLine(rv, lang))
+  })
+  it('renders an old stored report without the field exactly as before', () => {
+    expect(reviewLine(rv, 'en')).toBe('Review passed (rounds: 1).')
+    expect(reviewLine({ ...rv, passed: false, blocking: ['A'] }, 'en')).toBe('Review did not pass (rounds: 1). Blocking issues: A.')
+  })
+  it('scrubs a name with a mention and a path in the pull request version, and leaves the app version as it is', () => {
+    const r = report({ tasks: [task('A', { review: { ...rv, reviewedBy: ['@octocat F:\\secret\\bin\\agent.exe', 'Codex'] } })] })
+    const md = reportMarkdown(forPullRequest(r, { roots: [], prefixes: [], secrets: [] }), 'en', { audience: 'pull-request' })
+    expect(md).toContain('`@octocat`')
+    expect(md).not.toContain('F:\\secret')
+    expect(md).toContain('Reviewed by')
+    expect(reportMarkdown(r, 'en', { audience: 'app' })).toContain('@octocat F:\\secret\\bin\\agent.exe')
+  })
+})

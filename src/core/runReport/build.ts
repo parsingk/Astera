@@ -33,11 +33,20 @@ const reviewOf = (task: Task, ds: readonly Dispatch[]): RunReportReview | undefi
     .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
     .at(-1)
   const passed = latest?.outcome === 'succeeded'
+  const reviewedBy = [
+    ...new Set(
+      reviews
+        .filter((d) => d.outcome !== undefined)
+        .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+        .map((d) => d.externalReviewer?.name ?? (d.provider === 'codex' ? 'Codex' : 'Claude'))
+    )
+  ]
   return {
     rounds: reviewRoundIn(ds),
     passed,
     blocking: passed ? [] : (task.reviewIssues ?? []).filter((i) => i.blocking).map((i) => i.title),
-    ...(task.reviewFileToolsOnly ? { fileToolsOnly: true as const } : {})
+    ...(task.reviewFileToolsOnly ? { fileToolsOnly: true as const } : {}),
+    ...(reviewedBy.length > 0 ? { reviewedBy } : {})
   }
 }
 
@@ -165,6 +174,8 @@ export function buildRunReport(s: OrchState, runId: string, o: { spent?: readonl
     if (id !== undefined && !accountIds.includes(id)) accountIds.push(id)
   }
   for (const d of [...all].sort((a, b) => a.startedAt.localeCompare(b.startedAt))) {
+    // An external review's account id is the empty placeholder
+    if (d.externalReviewer) continue
     see(d.accountId)
     for (const r of d.resumes ?? []) see(r.toAccountId)
   }

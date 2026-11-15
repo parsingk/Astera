@@ -112,7 +112,8 @@ const QUESTION_HIDDEN = ['resolvedBy'] as const
 
 /** A followed event's message body (pages long) and the app's link from an event to a tab. */
 // `github` (G7b): a GitHub line's facts for the app's timeline; the public line says them in its summary
-const FOLLOW_EVENT_HIDDEN = ['body', 'sessionId', 'github'] as const
+// `externalReviewer`: the app's chip for a review by an external reviewer; the public line says the name in its summary
+const FOLLOW_EVENT_HIDDEN = ['body', 'sessionId', 'github', 'externalReviewer'] as const
 
 // A Job's and a Run's derived fields (the package's DERIVED_FIELDS: outcome, progress, questionsOpen) are not fields
 // of the objects, so they are on neither side of these checks.

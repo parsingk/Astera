@@ -1206,6 +1206,15 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 /* Settings › GitHub's lifecycle defaults (G7a): a count and minutes, not a line of text */
 .settings-lifecycle-number { min-width: 0; width: 96px; }
 .settings-lifecycle-number:disabled { opacity: 0.5; }
+/* 외부 검토자 목록(ReviewerSettings). 새 색은 없다 — 형제인 settings-gen 과 같은 토큰 */
+.settings-reviewer-list { display: flex; flex-direction: column; gap: 6px; }
+.settings-reviewer-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.settings-reviewer-name { font-size: 13px; font-weight: 600; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-reviewer-line { flex: 1 1 160px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text-dim); }
+input.settings-reviewer-line { color: var(--text); }
+.settings-reviewer-actions { display: inline-flex; align-items: center; gap: 6px; }
+.settings-reviewer-result { flex-basis: 100%; }
+.settings-reviewer-result .loading-spinner { display: inline-block; vertical-align: middle; }
 .settings-gen-refresh { align-self: flex-start; padding: 5px 10px; border: 1px solid var(--line);
   border-radius: var(--radius); background: var(--bg); color: var(--text); cursor: pointer; font-size: 12px; }
 .settings-gen-refresh:disabled { opacity: 0.5; cursor: default; }

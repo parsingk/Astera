@@ -111,3 +111,10 @@ describe('the check words', () => {
     for (const key of keys) for (const lang of LANGS) expect((CATALOGS[lang].messages as Record<string, string>)[key], `${lang} ${key}`).toBeTruthy()
   })
 })
+
+describe('nodeMetaText: an external reviewer', () => {
+  it('is the reviewer name, cut at 20 characters', () => {
+    expect(nodeMetaText({ kind: 'external-reviewer', name: 'Gemini CLI' }, t)).toBe('Gemini CLI')
+    expect(nodeMetaText({ kind: 'external-reviewer', name: 'a'.repeat(25) }, t)).toBe('a'.repeat(20) + '…')
+  })
+})

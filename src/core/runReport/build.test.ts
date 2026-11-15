@@ -233,11 +233,42 @@ describe('buildRunReport', () => {
       tasks: [task('t1', { reviewRequested: true, reviewFileToolsOnly: true, reviewIssues: [{ id: 'i', severity: 'high', blocking: true, title: 'Bad', description: '' }] })],
       dispatches: [dispatch('d1', 't1'), dispatch('d2', 't1', { review: true, outcome: 'failed', startedAt: at(3) })]
     })
-    expect(report(s).tasks[0].review).toEqual({ rounds: 1, passed: false, blocking: ['Bad'], fileToolsOnly: true })
+    expect(report(s).tasks[0].review).toEqual({ rounds: 1, passed: false, blocking: ['Bad'], fileToolsOnly: true, reviewedBy: ['Claude'] })
   })
 
   it('returns null for a running Run and an unknown Run', () => {
     expect(buildRunReport(world({ tasks: [task('t1', { status: 'dispatched' })] }), 'run_1')).toBeNull()
     expect(buildRunReport(world({}), 'run_nope')).toBeNull()
+  })
+})
+
+describe('buildRunReport: who reviewed', () => {
+  const rev = (id: string, min: number, extra: Partial<Dispatch> = {}): Dispatch =>
+    dispatch(id, 't1', { review: true, startedAt: at(min), endedAt: at(min + 1), ...extra })
+  const ext = (name: string): Partial<Dispatch> => ({ accountId: '', externalReviewer: { id: 'ext_0a0b0c0d', name } })
+  const reviewedBy = (ds: Dispatch[]) =>
+    report(world({ tasks: [task('t1', { reviewRequested: true })], dispatches: [dispatch('d0', 't1'), ...ds] })).tasks[0].review?.reviewedBy
+
+  it('says Claude for a claude review and Codex for a codex review', () => {
+    expect(reviewedBy([rev('d1', 3, { provider: 'claude' })])).toEqual(['Claude'])
+    expect(reviewedBy([rev('d1', 3, { provider: 'codex' })])).toEqual(['Codex'])
+  })
+  it('says the external reviewer by name, never the placeholder provider', () => {
+    expect(reviewedBy([rev('d1', 3, ext('Gemini CLI'))])).toEqual(['Gemini CLI'])
+  })
+  it('lists distinct names in start order across rounds', () => {
+    expect(
+      reviewedBy([rev('d1', 3, ext('Gemini CLI')), rev('d2', 6, { provider: 'codex' }), rev('d3', 9, ext('Gemini CLI')), rev('d4', 12, { provider: 'codex' })])
+    ).toEqual(['Gemini CLI', 'Codex'])
+  })
+  it('is absent, not empty, when no review Dispatch has an outcome', () => {
+    const r = report(world({ tasks: [task('t1', { reviewRequested: true })], dispatches: [dispatch('d0', 't1')] })).tasks[0].review!
+    expect('reviewedBy' in r).toBe(false)
+    const open = reviewedBy([rev('d1', 3, { outcome: undefined, endedAt: undefined })])
+    expect(open).toBeUndefined()
+  })
+  it('keeps the empty account id of an external review out of the accounts list', () => {
+    const s = world({ tasks: [task('t1', { reviewRequested: true })], dispatches: [dispatch('d0', 't1'), rev('d1', 3, ext('Gemini CLI'))] })
+    expect(report(s).cost?.accountIds).toEqual(['acc_a'])
   })
 })

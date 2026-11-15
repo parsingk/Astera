@@ -358,6 +358,9 @@ export interface TaskAttempt {
   readonly accountId: string
   readonly repair?: RepairReason
   readonly review?: true
+  /** A review attempt made by an external reviewer: its id and name. `provider` and `accountId` are then the
+   *  implementer's provider and an empty string, not the reviewer's. */
+  readonly externalReviewer?: { readonly id: string; readonly name: string }
   readonly outcome?: Outcome
   readonly startedAt: string
   readonly endedAt?: string

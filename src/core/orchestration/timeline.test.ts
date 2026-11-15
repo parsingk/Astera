@@ -384,3 +384,15 @@ describe('eventCountsOf', () => {
     expect(eventCountFor(s, 'r1')).toBe(timelineFor(s, 'r1', anySession).length)
   })
 })
+
+describe('timelineFor: an external review', () => {
+  it('names the reviewer and does not show the placeholder provider', () => {
+    const d: Dispatch = { ...dispatch('d1', 't1'), review: true, externalReviewer: { id: 'ext_0a0b0c0d', name: 'Gemini CLI' }, accountId: '' }
+    const s = state({ runs: [run('r1')], tasks: [task('t1', 'r1')], dispatches: [d] })
+    const e = timelineFor(s, 'r1', anySession).find((x) => x.kind === 'dispatch-started')!
+    expect(e.externalReviewer).toEqual({ id: 'ext_0a0b0c0d', name: 'Gemini CLI' })
+    expect(e.summary).toBe('Gemini CLI')
+    expect(e.provider).toBeUndefined()
+    expect(e.review).toBe(true)
+  })
+})

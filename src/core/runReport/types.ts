@@ -22,6 +22,9 @@ export interface RunReportReview {
   passed: boolean
   blocking: string[]
   fileToolsOnly?: true
+  /** Who reviewed, distinct, in start order: `Claude`, `Codex` or an external reviewer's name. Absent when no review
+   *  Dispatch has an outcome, and in a report stored before the field */
+  reviewedBy?: string[]
 }
 
 export interface RunReportTask {
