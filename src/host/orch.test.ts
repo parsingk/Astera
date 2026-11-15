@@ -4669,6 +4669,49 @@ describe('the Host journal at the commit points (Host journal Task 5)', () => {
       expect(t.completionOverrideBy).toBe('coordinator')
     })
 
+    /** Forces the Task's completion past its policy from `from` and reads the group stamped on it. */
+    const forcedBy = async (from: OrchCaller | undefined, sessionId = ''): Promise<string | undefined> => {
+      const { taskId } = await seedGate({ convergence: true })
+      const orch = orchOver({ aliveSessionIds: () => new Set(['ses_c']) })
+      const r = await orch.call({ cmd: 'task-update', args: { id: taskId, status: 'completed', result: 'r', reason: 'why' }, sessionId, ...(from ? { from } : {}) })
+      expect(r.status, JSON.stringify(r.body)).toBe(200)
+      const t = orch.state().tasks[0]
+      expect(t.completionOverride?.reason).toBe('why')
+      return t.completionOverrideBy
+    }
+
+    it('the app forces a completion as a person', async () => expect(await forcedBy(app)).toBe('person'))
+    it('a controller whose kind is person forces a completion as a person', async () => expect(await forcedBy(controller('person'))).toBe('person'))
+    it('a controller whose kind is agent forces a completion as unknown', async () => expect(await forcedBy(controller('agent'))).toBe('unknown'))
+    it('a CLI with no session forces a completion as unknown', async () => expect(await forcedBy({ role: 'cli', toOthers: () => {} })).toBe('unknown'))
+
+    // MCP reaches no command that forces a completion: task-update is not in its lists, so nothing is stamped
+    it('an MCP caller cannot force a completion', async () => {
+      await fs.writeFile(path.join(dir, 'app-settings.json'), JSON.stringify({ mcpAccess: 'control' }))
+      const { taskId } = await seedGate({ convergence: true })
+      const orch = orchOver({ aliveSessionIds: () => new Set(['ses_c']) })
+      const mcp: OrchCaller = { role: 'mcp', client: { name: 'claude-code' }, remote: '192.168.0.7', toOthers: () => {} }
+      const r = await orch.call({ cmd: 'task-update', args: { id: taskId, status: 'completed', result: 'r', reason: 'why' }, sessionId: '', from: mcp })
+      expect(r.status).toBe(403)
+      await orch.ready()
+      const t = orch.state().tasks[0]
+      expect(t.status).not.toBe('completed')
+      expect(t.completionOverride).toBeUndefined()
+      expect(t.completionOverrideBy).toBeUndefined()
+    })
+
+    it('a state-put that forces a completion is a person’s', async () => {
+      const { taskId } = await seedGate({ convergence: true })
+      const orch = orchOver({ aliveSessionIds: () => new Set(['ses_c']) })
+      const got = (await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })).body as { state: OrchState; version: number }
+      const forced: OrchState = {
+        ...got.state,
+        tasks: got.state.tasks.map((t) => (t.id === taskId ? { ...t, status: 'completed' as const, completionOverride: { reason: 'why', at: NOW } } : t))
+      }
+      expect((await orch.call({ cmd: 'state-put', args: { state: forced, version: got.version }, sessionId: '', from: app })).status).toBe(200)
+      expect(orch.state().tasks[0].completionOverrideBy).toBe('person')
+    })
+
     // Run report Task 3: the commit that finishes a Run stores its report, and a mirror cannot take it away.
     it('a commit that finishes a Run stores its report', async () => {
       const { taskId } = await seedGate({ convergence: true })
