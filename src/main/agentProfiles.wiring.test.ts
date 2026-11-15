@@ -229,12 +229,12 @@ describe('core.ts builds the read-only list once and hands it to the twins and b
   })
   // Fix round 5: and each looks at the links on the paths it names (nodeLinkLook)
   it('the StatusLineManager, the terminal checks and the chat deps all take that one list, and look at its links', () => {
-    expect(core).toMatch(/const statusLine = new StatusLineManager\(\n    userDataDir,[\s\S]*\{ findRuntime, readOnly \}\n  \)/)
+    expect(core).toMatch(/const statusLine = new StatusLineManager\(\n    userDataDir,[\s\S]*\{ findRuntime, readOnly, agentLogins \}\n  \)/)
     // Fix round 6: Claude's twins take the way to look from the scope each start hands them (claudeSandboxStart)
     expect(core).toMatch(/const claudeSandbox = claudeSandboxStart\(\{[\s\S]*?\n    linkLook: nodeLinkLook,\n    log: sessionsLog\n  \}\)/)
-    expect(core).toMatch(/\{ \.\.\.defaultSpawnChecks\(sessionsLog\), hostSocketDir, appKeyFile, readOnly, linkLook: nodeLinkLook, codexExcludes \}/)
+    expect(core).toMatch(/\{ \.\.\.defaultSpawnChecks\(sessionsLog\), hostSocketDir, appKeyFile, agentLogins, readOnly, linkLook: nodeLinkLook, codexExcludes \}/)
     const chat = core.slice(core.indexOf('const chat = new ChatSessionManager({'), core.indexOf('// Lazy history'))
-    expect(chat).toMatch(/\n    appKeyFile,\n    readOnly,\n    linkLook: nodeLinkLook,\n/)
+    expect(chat).toMatch(/\n    appKeyFile,\n    agentLogins,\n    readOnly,\n    linkLook: nodeLinkLook,\n/)
   })
 })
 
@@ -254,11 +254,17 @@ describe('the Host hands its chat sessions the spawner’s read-only list and ap
   // Fix round 5: the Host's terminal checks and twins look at the links on the paths they name, and so do its chats
   it('the spawner, rollingWiring and hostChats hand the way to look at links to every start', () => {
     const spawner = readFileSync(path.join(here, '..', 'host', 'spawner.ts'), 'utf8')
-    expect(spawner).toMatch(/\{ \.\.\.defaultSpawnChecks\(log\), codexWindowsReady, hostSocketDir, appKeyFile, readOnly, linkLook: nodeLinkLook, codexExcludes \}/)
+    expect(spawner).toMatch(/\{ \.\.\.defaultSpawnChecks\(log\), codexWindowsReady, hostSocketDir, appKeyFile, agentLogins, readOnly, linkLook: nodeLinkLook, codexExcludes \}/)
     expect(spawner).toMatch(/const claudeSandbox = claudeSandboxStart\(\{[\s\S]*?\n    linkLook: nodeLinkLook,\n    log\n  \}\)/)
     expect(spawner).toMatch(/\n    sandboxWarn,\n    linkLook: nodeLinkLook,\n/)
     expect(rollingWiring).toMatch(/readOnly: a\.spawner\.readOnly \?\? \[\],\n    linkLook: a\.spawner\.linkLook,\n/)
     expect(hostChats).toMatch(/\n    linkLook: d\.linkLook,\n/)
+  })
+  it('the Host names the agents login files from the last accounts list it read, for the twins, the checks and the chats', () => {
+    const spawner = readFileSync(path.join(here, '..', 'host', 'spawner.ts'), 'utf8')
+    expect(spawner).toMatch(/const agentLogins = \(\): DenyEntry\[\] => agentLoginEntries\(\{ homeDir, accounts: lastAccounts \}\)/)
+    expect(spawner).toMatch(/\n      readOnly,\n      agentLogins\n    \}/)
+    expect(spawner).toMatch(/\n    appKeyFile,\n    agentLogins,\n    readOnly,\n    sandboxWarn,\n/)
   })
   it('the spawner makes the updater cache and its runtime folder before it builds the list (fix round 4)', () => {
     const spawner = readFileSync(path.join(here, '..', 'host', 'spawner.ts'), 'utf8')
@@ -267,10 +273,10 @@ describe('the Host hands its chat sessions the spawner’s read-only list and ap
     expect(spawner.slice(at, spawner.indexOf('\n  })', at))).toMatch(/\n    updaterCache,\n/)
   })
   it('rollingWiring reads them off the spawner for the chat deps', () => {
-    expect(rollingWiring).toMatch(/appKeyFile: a\.spawner\.appKeyFile \?\? null,\n    readOnly: a\.spawner\.readOnly \?\? \[\],/)
+    expect(rollingWiring).toMatch(/appKeyFile: a\.spawner\.appKeyFile \?\? null,\n    \.\.\.\(a\.spawner\.agentLogins \? \{ agentLogins: a\.spawner\.agentLogins \} : \{\}\),\n    readOnly: a\.spawner\.readOnly \?\? \[\],/)
   })
   it('hostChats passes both on to the chat manager', () => {
-    expect(hostChats).toMatch(/\.\.\.\(d\.appKeyFile !== undefined \? \{ appKeyFile: d\.appKeyFile \} : \{\}\),\n    \.\.\.\(d\.readOnly !== undefined \? \{ readOnly: d\.readOnly \} : \{\}\),/)
+    expect(hostChats).toMatch(/\.\.\.\(d\.appKeyFile !== undefined \? \{ appKeyFile: d\.appKeyFile \} : \{\}\),\n    \.\.\.\(d\.agentLogins \? \{ agentLogins: d\.agentLogins \} : \{\}\),\n    \.\.\.\(d\.readOnly !== undefined \? \{ readOnly: d\.readOnly \} : \{\}\),/)
   })
 })
 
