@@ -9905,7 +9905,7 @@ describe('the external coordinator: run-create and check record the driving sess
 
 describe('run-create — the GitHub lifecycle (G1)', () => {
   const VIEW = 'repo view o/r --json nameWithOwner,viewerPermission'
-  const POLICY = { ci: { mode: 'required' }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const POLICY = { ci: { mode: 'required' }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90, postRunReport: true }
   const withGithub = (o: { permission?: string; origin?: string | null; initial?: OrchState } = {}) => {
     const deps = makeDeps(o.initial)
     const calls: string[] = []
@@ -9960,7 +9960,8 @@ describe('run-create — the GitHub lifecycle (G1)', () => {
       ci: { mode: 'selected', selectedChecks: ['build'] },
       autoRerunInfrastructureFailures: false,
       maxInfrastructureReruns: 5,
-      ciWaitMinutes: 30
+      ciWaitMinutes: 30,
+      postRunReport: true
     })
   })
 

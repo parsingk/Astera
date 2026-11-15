@@ -301,7 +301,7 @@ export class AppSettingsStore {
       this.mcpSessions = false
       this.mcpGithubWrite = false
       // The narrower side too (G7a final review M4): the file may have said "do not rerun", and the Host reads this one
-      this.githubLifecycle = { ...GITHUB_LIFECYCLE_DEFAULTS, autoRerunInfrastructureFailures: false }
+      this.githubLifecycle = { ...GITHUB_LIFECYCLE_DEFAULTS, autoRerunInfrastructureFailures: false, postRunReport: false }
       this.mcpHttp = mcpHttpOf(undefined)
       this.terminalFont = { latin: null, hangul: null }
       this.theme = DEFAULT_THEME_ID

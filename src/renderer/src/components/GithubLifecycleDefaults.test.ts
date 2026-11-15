@@ -11,7 +11,7 @@ vi.mock('../i18n/I18nProvider', () => ({
 }))
 
 const { GithubLifecycleDefaultsView, defaultsAfterInput, inputOutcome } = await import('./GithubLifecycleDefaults')
-const DEFAULTS = { autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+const DEFAULTS = { autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90, postRunReport: true }
 const render = (value = DEFAULTS): string =>
   renderToStaticMarkup(React.createElement(GithubLifecycleDefaultsView, { value, onChange: () => {} })).replace(/&quot;/g, '"')
 

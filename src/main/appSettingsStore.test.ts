@@ -961,7 +961,7 @@ describe('mcpSessions', () => {
 
 // G7a: the GitHub lifecycle's defaults (design §5.1), written only when they are not the built-in ones
 describe('githubLifecycle', () => {
-  const MINE = { autoRerunInfrastructureFailures: false, maxInfrastructureReruns: 4, ciWaitMinutes: 45 }
+  const MINE = { autoRerunInfrastructureFailures: false, maxInfrastructureReruns: 4, ciWaitMinutes: 45, postRunReport: true }
   it('is the built-in defaults until set, and is not written while it is', async () => {
     const store = new AppSettingsStore(file())
     await store.load()
@@ -996,9 +996,9 @@ describe('githubLifecycle', () => {
     await fs.writeFile(file(), '{ not json', 'utf8')
     const store = new AppSettingsStore(file())
     expect(await store.load()).toEqual({ recovered: true })
-    expect(store.getGithubLifecycle()).toEqual({ ...GITHUB_LIFECYCLE_DEFAULTS, autoRerunInfrastructureFailures: false })
+    expect(store.getGithubLifecycle()).toEqual({ ...GITHUB_LIFECYCLE_DEFAULTS, autoRerunInfrastructureFailures: false, postRunReport: false })
     await store.setLang('ko')
-    expect(JSON.parse(await fs.readFile(file(), 'utf8')).githubLifecycle).toEqual({ ...GITHUB_LIFECYCLE_DEFAULTS, autoRerunInfrastructureFailures: false })
+    expect(JSON.parse(await fs.readFile(file(), 'utf8')).githubLifecycle).toEqual({ ...GITHUB_LIFECYCLE_DEFAULTS, autoRerunInfrastructureFailures: false, postRunReport: false })
   })
 })
 
