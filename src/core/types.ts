@@ -1,5 +1,6 @@
 import type { GitHubLifecycleDefaults } from './github/lifecycleDefaults'
 import type { ReviewerSettings } from './settings/externalReviewers'
+import type { ReviewerProbe } from './acp/probeTypes'
 import type { CiFailureClass, GitHubInvalidatedReason } from './github/lifecycle'
 import type { GitHubLifecycleView } from './github/view'
 import type { RunConfig, RunStatus, SaveConfigsResult } from './run/config'
@@ -1522,6 +1523,8 @@ export interface CoreApi {
     // External reviewers registered and the one chosen (spec 3.1). The set returns the narrowed value it stored.
     getReviewerSettings(): Promise<ReviewerSettings>
     setReviewerSettings(next: ReviewerSettings): Promise<ReviewerSettings>
+    // Initialize and session/new against a registered reviewer's command, in a temporary folder (spec section 4, Test).
+    testExternalReviewer(reviewer: { command: string; args: string[] }): Promise<ReviewerProbe>
     // What an MCP client may do through `astera mcp serve`. See McpAccess.
     getMcpAccess(): Promise<McpAccess>
     setMcpAccess(v: McpAccess): Promise<void>

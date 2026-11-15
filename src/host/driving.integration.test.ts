@@ -32,7 +32,7 @@ import { readDispatchGate } from '../core/host/driver'
 import { HOST_YIELD_DISPATCH, type HostMessage } from '../core/host/protocol'
 import { HostRetiring } from '../core/host/hostRetiring'
 import { refusedBeforeActing, type OrchCaller } from '../core/host/orchProtocol'
-import { openDispatch, type OrchState } from '../core/orchestration/state'
+import { openDispatch, openReviewDispatch, type OrchState } from '../core/orchestration/state'
 import { outcomeOf } from '../core/orchestration/view'
 import type { Provider } from '../core/types'
 
@@ -64,7 +64,13 @@ interface RigOpts {
   retireOnFirstLoginCheck?: boolean
   /** B1: the first worktree fork (the loop's Run fork, inside a slot) does the same before it forks. */
   retireOnFirstFork?: boolean
+  /** app-settings.json registers the fake ACP agent (its mode and flags after the fixture's path) as the reviewer chosen. */
+  externalReviewer?: { args: string[] }
 }
+
+const fakeAgentPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'core', 'acp', '__fixtures__', 'fakeAgent.mjs')
+/** The final message of an approving verdict: prose, then the fenced block. */
+const APPROVED = ['Looks good.', '', '```json', '{ "outcome": "approved", "summary": "all good", "issues": [] }', '```'].join('\n')
 
 interface Spawn {
   dispatchId: string
@@ -95,7 +101,15 @@ async function rig(o: RigOpts) {
 
   // The profile: the migration marker (the Host may drive, F62), a worktrees root of the test's own, and
   // accounts logged in by their providers' own markers (C8's one login rule, read for real).
-  await fs.writeFile(path.join(profileDir, 'app-settings.json'), JSON.stringify({ orchAlwaysOnMigrated: true }))
+  await fs.writeFile(
+    path.join(profileDir, 'app-settings.json'),
+    JSON.stringify({
+      orchAlwaysOnMigrated: true,
+      ...(o.externalReviewer
+        ? { externalReviewers: [{ id: 'ext_0123abcd', name: 'Fake', command: process.execPath, args: [fakeAgentPath, ...o.externalReviewer.args] }], reviewBy: 'ext_0123abcd' }
+        : {})
+    })
+  )
   await fs.writeFile(path.join(profileDir, 'worktrees.json'), JSON.stringify({ root: path.join(home, 'wt'), items: [] }))
   const providers = o.accounts ?? ['claude']
   const accounts = await Promise.all(
@@ -433,6 +447,23 @@ async function rig(o: RigOpts) {
       return tasks[0].id
     },
     repairDispatches: () => state().dispatches.filter((d) => d.repair !== undefined),
+    externalDispatches: () => state().dispatches.filter((d) => d.externalReviewer !== undefined),
+    /** What a legacy app does when it starts an external review: opens its Dispatch on its mirror and puts that. */
+    appOpensExternalReview: async (taskId: string) => {
+      const seen = await (async () => {
+        const r = await orch.call({ cmd: 'state-get', args: {}, sessionId: '', from: appCaller })
+        return r.body as { state: OrchState; version: number }
+      })()
+      const opened = openReviewDispatch(
+        seen.state,
+        { taskId, provider: 'claude', accountId: '', sessionId: 'acp:feedbeef', cwd: repo, specPath: '', externalReviewer: { id: 'ext_0123abcd', name: 'Fake' } },
+        NOW
+      )
+      if (!opened.ok) throw new Error(`rig: the app could not open an external review: ${opened.error}`)
+      const r = await orch.call({ cmd: 'state-put', args: { state: opened.state, version: seen.version }, sessionId: '', from: appCaller })
+      if (r.status !== 200) throw new Error(`rig: state-put answered ${r.status} ${JSON.stringify(r.body)}`)
+      return opened.value.id
+    },
     server,
     profileDir,
     logs,
@@ -578,6 +609,52 @@ describe('the Host drives with no app (§9.3)', { timeout: 40_000 }, () => {
     expect(h.spawns()[1]).toMatchObject({ provider: 'codex', worktree: 'current' })
     await h.workerReports(h.spawns()[1], 'succeeded')
     await until(() => expect(h.runOutcome()).toBe('completed'))
+  })
+
+  it('review by an external reviewer, headless: the Host runs the agent itself and the Task completes', async () => {
+    const h = await rig({ tasks: 1, review: true, externalReviewer: { args: ['approve', '--message', APPROVED] } })
+    await h.cli('jobs-run', { id: h.jobId })
+    await until(() => expect(h.spawns()).toHaveLength(1))
+    await h.workerReports(h.spawns()[0], 'succeeded')
+    await until(() => expect(h.runOutcome()).toBe('completed'))
+    expect(h.spawns()).toHaveLength(1) // no second session: the agent was the reviewer
+    expect(h.externalDispatches()).toHaveLength(1)
+    expect(h.externalDispatches()[0]).toMatchObject({ accountId: '', outcome: 'succeeded' })
+  })
+
+  it('review by an external reviewer in a convergence Run reads its verdict from the file beside the spec', async () => {
+    const h = await rig({ tasks: 1, review: true, convergence: { maxFixAttempts: 1 }, externalReviewer: { args: ['approve', '--message', APPROVED] } })
+    await h.cli('jobs-run', { id: h.jobId })
+    await until(() => expect(h.spawns()).toHaveLength(1))
+    await h.workerReports(h.spawns()[0], 'succeeded')
+    await until(() => expect(h.runOutcome()).toBe('completed'))
+    const d = h.externalDispatches()[0]
+    expect(JSON.parse(readFileSync(`${d.specPath}.review.json`, 'utf8'))).toEqual({ issues: [] })
+  })
+
+  // Design 3.6: the agent of an external review a gone app held died with it. The Host closes that Dispatch at the handover,
+  // before its resume sweep, which reviews the convergence Run's Task again, now with the Host's own agent.
+  it('an external review left open by a gone app is closed at the handover and the Task is reviewed again by the Host', async () => {
+    const h = await rig({ tasks: 1, review: true, convergence: { maxFixAttempts: 1 }, externalReviewer: { args: ['approve', '--message', APPROVED] } })
+    await h.cli('jobs-run', { id: h.jobId })
+    await until(() => expect(h.spawns()).toHaveLength(1))
+    h.server.app = true // an older app attaches and drives
+    h.server.keeps = true
+    h.wiring.serverHooks.onAppsChanged()
+    await h.workerReports(h.spawns()[0], 'succeeded') // the review start is forwarded to it, and goes nowhere
+    await h.settle()
+    expect(h.task(h.onlyTaskId).status).toBe('reviewing')
+    const foreign = await h.appOpensExternalReview(h.onlyTaskId)
+    h.server.app = false // it closes: its agent died with it
+    h.server.keeps = false
+    h.wiring.serverHooks.onAppsChanged()
+    await until(() => expect(h.runOutcome()).toBe('completed'))
+    const all = h.externalDispatches()
+    expect(all).toHaveLength(2)
+    const closed = all.find((x) => x.id === foreign)!
+    expect(closed.endedAt).toBeDefined()
+    expect(closed.outcome).toBeUndefined()
+    expect(all.find((x) => x.id !== foreign)).toMatchObject({ outcome: 'succeeded' })
   })
 
   // The review of S4+S5, C1: a convergence reviewer writes its verdict beside its spec a few seconds

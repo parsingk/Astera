@@ -206,6 +206,7 @@ const api = {
     setAgentPermissionMode: invoke('settings.setAgentPermissionMode'),
     getReviewerSettings: invoke('settings.getReviewerSettings'),
     setReviewerSettings: invoke('settings.setReviewerSettings'),
+    testExternalReviewer: invoke('settings.testExternalReviewer'),
     getMcpAccess: invoke('settings.getMcpAccess'),
     setMcpAccess: invoke('settings.setMcpAccess'),
     getMcpSessions: invoke('settings.getMcpSessions'),

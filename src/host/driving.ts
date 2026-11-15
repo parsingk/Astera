@@ -117,7 +117,7 @@ export function createHostDriving(d: {
   spawner: Pick<HostSpawner, 'sessionBusy' | 'typeInto' | 'isRetiring' | 'inFlight'>
   worktrees: Pick<HostWorktrees, 'fork' | 'integrate' | 'reap' | 'isRegistered'>
   /** B3: the loop's accounts, login and sync lang come from the checks. */
-  checks: Pick<HostChecks, 'resumeSweep' | 'stopForeignValidations' | 'checking' | 'accounts' | 'loginStatus' | 'langNow' | 'lang'>
+  checks: Pick<HostChecks, 'resumeSweep' | 'stopForeignValidations' | 'closeOrphanedExternalReviews' | 'checking' | 'accounts' | 'loginStatus' | 'langNow' | 'lang'>
   /** The handover belt (N1): starts one open repair Dispatch that has no spec yet. */
   startRepair(a: { dispatchId: string }): void
   /** `sessionExitCode` answers the loop's `sessionGone` (limits pass L1), `lastOutput` its nudge's Enter; optional for
@@ -281,6 +281,18 @@ export function createHostDriving(d: {
       else await d.checks.stopForeignValidations()
       if (!mayStart()) {
         log(`${label}: the drive moved while the gone app's checks were stopped — no sweep from this Host`)
+        return
+      }
+      // The gone app's external reviews: their agent died with it, so nobody will answer them (design 3.6). Same
+      // filter as the checks above; before the sweep, which reviews a convergence Task again.
+      try {
+        if (d.server.hasApp() && goneAt !== undefined) await d.checks.closeOrphanedExternalReviews({ startedBefore: goneAt })
+        else await d.checks.closeOrphanedExternalReviews()
+      } catch (err) {
+        log(`${label}: the gone app's external reviews could not be closed: ${String(err)}`)
+      }
+      if (!mayStart()) {
+        log(`${label}: the drive moved while the gone app's external reviews were closed — no sweep from this Host`)
         return
       }
     }

@@ -5,6 +5,7 @@ import { describe, it, expect, expectTypeOf, vi, afterEach } from 'vitest'
 import fs, { promises as fsp } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createHostChecks, createHostChecksForTest, type HostChecks } from './checks'
 import { PtyRegistry, type RegistryPty } from './registry'
 import type { HostMessage, PtyEntry } from '../core/host/protocol'
@@ -54,7 +55,12 @@ interface RigOpts {
   checkLaunch?: (a: { accountId: string; cwd: string; command: string }) => Promise<{ file: string; args: string[] | string; env: Record<string, string>; runner?: true }>
   /** HostChecksDeps.accountName (fix round 2) */
   accountName?: (accountId: string) => Promise<string | null>
+  /** The Task is `reviewing` (its work done and validated), and app-settings.json registers the fake ACP agent as the reviewer
+   *  chosen. `args` follow the fixture's path: its mode and flags. */
+  externalReviewer?: { args: string[] }
 }
+
+const fakeAgentPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'core', 'acp', '__fixtures__', 'fakeAgent.mjs')
 
 async function rig(o: RigOpts = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'astera-checks-'))
@@ -64,8 +70,28 @@ async function rig(o: RigOpts = {}) {
   fs.mkdirSync(profileDir, { recursive: true })
   fs.mkdirSync(cwd, { recursive: true })
   fs.writeFileSync(path.join(cwd, 'package.json'), JSON.stringify({ scripts: { test: 'node -e "process.exit(0)"' } }))
+  let settings = o.settings
+  if (o.externalReviewer) {
+    // The fake agent behind a wrapper that writes its pid first, so a test can tell the process is gone
+    const wrapper = path.join(dir, 'agentWrapper.mjs')
+    fs.writeFileSync(
+      wrapper,
+      [
+        "import { writeFileSync } from 'node:fs'",
+        "const i = process.argv.indexOf('--pidfile')",
+        'if (i >= 0) writeFileSync(process.argv[i + 1], String(process.pid))',
+        `await import(${JSON.stringify(pathToFileURL(fakeAgentPath).href)})`,
+        ''
+      ].join('\n')
+    )
+    settings = {
+      ...(settings ?? {}),
+      externalReviewers: [{ id: 'ext_0123abcd', name: 'Fake', command: process.execPath, args: [wrapper, ...o.externalReviewer.args, '--pidfile', path.join(dir, 'agent.pid')] }],
+      reviewBy: 'ext_0123abcd'
+    }
+  }
   if (o.settingsText !== undefined) fs.writeFileSync(path.join(profileDir, 'app-settings.json'), o.settingsText)
-  else if (o.settings) fs.writeFileSync(path.join(profileDir, 'app-settings.json'), JSON.stringify(o.settings))
+  else if (settings) fs.writeFileSync(path.join(profileDir, 'app-settings.json'), JSON.stringify(settings))
   const accounts = ['acc_fake', ...(o.loggedIn ?? []).filter((id) => id !== 'acc_fake')].map((id) => {
     const configDir = path.join(dir, 'cfg', id)
     fs.mkdirSync(configDir, { recursive: true })
@@ -98,6 +124,8 @@ async function rig(o: RigOpts = {}) {
         { id: 'dsp_rep', taskId, provider: 'codex', accountId: 'acc_fake', sessionId: 'pending:rep', cwd, specPath: '', startedAt: NOW, workerState: 'ready', retained: false, repair: 'check-failure' }
       ]
     }
+
+  if (o.externalReviewer) state = { ...state, tasks: state.tasks.map((x) => (x.id === taskId ? { ...x, status: 'reviewing' as const } : x)) }
 
   const logs: string[] = []
   const sent: HostMessage[] = []
@@ -142,6 +170,12 @@ async function rig(o: RigOpts = {}) {
     },
     startWorker: vi.fn(async () => ({ sessionId: 'new', cwd, specPath: '' }))
   } as unknown as OrchServerDeps
+  /** HostChecksDeps.handle: the Host's command door, recording what a review sends through it. */
+  const handled: Array<{ cmd: string; args: Record<string, unknown> }> = []
+  const handle = vi.fn(async (cmd: string, args: Record<string, unknown>) => {
+    handled.push({ cmd, args })
+    return { status: 200, body: 'accepted' as unknown }
+  })
 
   const checks = createHostChecksForTest({
     profileDir,
@@ -154,6 +188,7 @@ async function rig(o: RigOpts = {}) {
     specsDir: path.join(profileDir, 'orch', 'specs'),
     log: (m) => logs.push(m),
     now: () => NOW,
+    handle,
     // Never a real taskkill: the fake pids are numbers some real process may hold.
     killRunner: (cmd) => endKilled(Number(cmd.args[cmd.args.indexOf('/pid') + 1])),
     ...(o.foreignKillWaitMs !== undefined ? { foreignKillWaitMs: o.foreignKillWaitMs } : {}),
@@ -185,9 +220,24 @@ async function rig(o: RigOpts = {}) {
     checks,
     taskId,
     cwd,
+    dir,
     logs,
     registry,
     openForeignRun,
+    handled,
+    /** The external reviews' open Dispatches. */
+    externalDispatches: () => state.dispatches.filter((x) => x.externalReviewer !== undefined),
+    /** Adds an open external review Dispatch no process of this Host owns (a gone app's). */
+    addForeignExternalReview: (id: string) => {
+      state = {
+        ...state,
+        dispatches: [
+          ...state.dispatches,
+          { id, taskId, provider: 'codex', accountId: '', sessionId: `acp:${id.slice(-8)}`, cwd, specPath: '', startedAt: NOW, workerState: 'ready', retained: false, externalReviewer: { id: 'ext_0123abcd', name: 'Fake' } }
+        ]
+      }
+    },
+    dispatches: () => state.dispatches,
     startWorker: (deps as unknown as { startWorker: ReturnType<typeof vi.fn> }).startWorker,
     task: () => state.tasks.find((x) => x.id === taskId)!,
     opened: (): PtyEntry[] => sent.flatMap((m) => (m.t === 'pty-opened' ? [m.entry] : [])),
@@ -513,4 +563,88 @@ describe('createHostChecks — checking (final review I1)', () => {
     expect(h.checks.checking(h.taskId)).toBe(true)
     await vi.waitFor(() => expect(h.checks.checking(h.taskId)).toBe(false))
   })
+})
+
+// External reviewers (design 3.5 and 3.6): the Host runs the chosen agent itself and answers through its own door.
+describe('createHostChecks, external reviews', () => {
+  const WAIT = { timeout: 20_000, interval: 20 }
+  /** The final message of an approving verdict: prose, then the fenced block. */
+  const APPROVED = ['Looks good.', '', '```json', '{ "outcome": "approved", "summary": "all good", "issues": [] }', '```'].join('\n')
+  const pidOf = (h: { dir: string }): number => Number(fs.readFileSync(path.join(h.dir, 'agent.pid'), 'utf8'))
+  const alive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  it('runs the chosen agent on startReview and settles the Task through the Host door, with no app', async () => {
+    const h = await rig({ externalReviewer: { args: ['approve', '--message', APPROVED] } })
+    h.checks.startReview({ taskId: h.taskId })
+    await vi.waitFor(() => expect(h.handled).toHaveLength(1), WAIT)
+    expect(h.handled[0].cmd).toBe('send')
+    expect(h.handled[0].args).toMatchObject({ type: 'worker_done', taskId: h.taskId, outcome: 'succeeded' })
+    const d = h.externalDispatches()
+    expect(d).toHaveLength(1)
+    expect(h.handled[0].args.dispatchId).toBe(d[0].id)
+    expect(d[0].sessionId).toMatch(/^acp:[0-9a-f]{8}$/)
+    // The review ends its agent; the folder is not removed under a live process
+    await vi.waitFor(() => expect(alive(pidOf(h))).toBe(false), { timeout: 20_000, interval: 50 })
+  }, 30_000)
+
+  it('starts nothing when no reviewer is chosen', async () => {
+    const h = await rig({ settings: { orchAlwaysOnMigrated: true } })
+    h.checks.startReview({ taskId: h.taskId })
+    await vi.waitFor(() => expect(h.checks.checking(h.taskId)).toBe(false))
+    expect(h.externalDispatches()).toHaveLength(0)
+    expect(h.handled).toHaveLength(0)
+  })
+
+  it('closeOrphanedExternalReviews closes a foreign open external Dispatch and leaves the Host own', async () => {
+    const h = await rig({ externalReviewer: { args: ['hang-prompt'] } })
+    h.checks.startReview({ taskId: h.taskId })
+    await vi.waitFor(() => expect(h.externalDispatches()).toHaveLength(1), WAIT)
+    await vi.waitFor(() => expect(fs.existsSync(path.join(h.dir, 'agent.pid'))).toBe(true), WAIT)
+    const pid = pidOf(h)
+    try {
+      const own = h.externalDispatches()[0].id
+      h.addForeignExternalReview('dsp_foreign01')
+      await h.checks.closeOrphanedExternalReviews()
+      const byId = (id: string) => h.dispatches().find((x) => x.id === id)!
+      expect(byId('dsp_foreign01').endedAt).toBeDefined()
+      expect(byId('dsp_foreign01').outcome).toBeUndefined()
+      expect(byId(own).endedAt).toBeUndefined()
+      // a filter older than a Dispatch's start leaves it open
+      h.addForeignExternalReview('dsp_foreign02')
+      await h.checks.closeOrphanedExternalReviews({ startedBefore: Date.parse(NOW) })
+      expect(byId('dsp_foreign02').endedAt).toBeUndefined()
+    } finally {
+      h.checks.dispose()
+      await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 20_000, interval: 50 }).catch(() => {
+        if (alive(pid)) process.kill(pid)
+      })
+    }
+  }, 40_000)
+
+  it('dispose kills a running review and commits nothing', async () => {
+    const h = await rig({ externalReviewer: { args: ['hang-prompt'] } })
+    h.checks.startReview({ taskId: h.taskId })
+    await vi.waitFor(() => expect(fs.existsSync(path.join(h.dir, 'agent.pid'))).toBe(true), WAIT)
+    const pid = pidOf(h)
+    await vi.waitFor(() => expect(h.externalDispatches()).toHaveLength(1), WAIT)
+    const before = JSON.stringify(h.dispatches())
+    const status = h.task().status
+    try {
+      h.checks.dispose()
+      await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 20_000, interval: 50 })
+      await new Promise((r) => setTimeout(r, 150))
+      expect(JSON.stringify(h.dispatches())).toBe(before)
+      expect(h.task().status).toBe(status)
+      expect(h.handled).toHaveLength(0)
+    } finally {
+      if (alive(pid)) process.kill(pid)
+    }
+  }, 40_000)
 })

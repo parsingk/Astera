@@ -258,10 +258,17 @@ async function rig(o: RigOpts = {}) {
     handled.push(cmd)
     return orch.handle(cmd, args)
   })
-  const resumeSweep = vi.fn()
+  /** The order the handover's three steps ran in. */
+  const handoverOrder: string[] = []
+  const resumeSweep = vi.fn((_why: string) => void handoverOrder.push('sweep'))
+  /** HostChecks.closeOrphanedExternalReviews: the gone app's external reviews, closed beside its checks. */
+  const closeOrphanedExternalReviews = vi.fn(async (_o?: { startedBefore?: number }) => void handoverOrder.push('close'))
   /** HostChecks.stopForeignValidations (Task 14 round 2): resolves at once unless a test holds it. */
   const foreign = { hold: null as Promise<number> | null }
-  const stopForeignValidations = vi.fn(() => foreign.hold ?? Promise.resolve(0))
+  const stopForeignValidations = vi.fn(() => {
+    handoverOrder.push('stop')
+    return foreign.hold ?? Promise.resolve(0)
+  })
   const startRepair = vi.fn()
   /** HostChecks.checking: the Tasks this Host's checks hold (a queued or running validation, a review
    *  start in flight, or a foreign validation run still alive in its folder). */
@@ -302,7 +309,7 @@ async function rig(o: RigOpts = {}) {
       },
       isRegistered: (p) => childWorktrees().includes(p)
     },
-    checks: { resumeSweep, stopForeignValidations, checking, accounts: async () => [ACCOUNT], loginStatus: async () => true, langNow: () => langNow, lang },
+    checks: { resumeSweep, stopForeignValidations, closeOrphanedExternalReviews, checking, accounts: async () => [ACCOUNT], loginStatus: async () => true, langNow: () => langNow, lang },
     startRepair,
     registry: {
       ...lastOutput,
@@ -365,6 +372,8 @@ async function rig(o: RigOpts = {}) {
     logs,
     resumeSweep,
     stopForeignValidations,
+    closeOrphanedExternalReviews,
+    handoverOrder,
     foreign,
     startRepair,
     drainOnce,
@@ -1063,6 +1072,7 @@ describe('createHostDriving — the handover stops a gone app’s checks (final 
     h.driving.appsChanged()
     await vi.waitFor(() => expect(h.resumeSweep).toHaveBeenCalledTimes(1))
     expect(h.stopForeignValidations).not.toHaveBeenCalled()
+    expect(h.closeOrphanedExternalReviews).not.toHaveBeenCalled()
   })
 })
 
@@ -1295,6 +1305,7 @@ describe('createHostDriving — the app-left grace (S4+S5 tidy)', () => {
     await h.settle()
     expect(h.startRepair).not.toHaveBeenCalled()
     expect(h.stopForeignValidations).not.toHaveBeenCalled()
+    expect(h.closeOrphanedExternalReviews).not.toHaveBeenCalled()
     expect(h.resumeSweep).toHaveBeenCalledTimes(sweepsBefore)
   })
 
@@ -1314,6 +1325,46 @@ describe('createHostDriving — the app-left grace (S4+S5 tidy)', () => {
     expect(h.startRepair).toHaveBeenCalledTimes(1)
     expect(h.stopForeignValidations).toHaveBeenCalledTimes(1)
     expect(h.resumeSweep).toHaveBeenLastCalledWith('an app left')
+  })
+
+  it('closes the gone app’s external reviews after stopping its checks and before the resume sweep, with no filter when no app is attached', async () => {
+    const h = await rig({ openRepairWithoutSpec: true })
+    h.server.app = true
+    await h.load()
+    h.driving.appsChanged()
+    await h.settle()
+    h.handoverOrder.length = 0
+    h.closeOrphanedExternalReviews.mockClear()
+    h.grace.hold = true
+    h.server.app = false
+    h.driving.appsChanged()
+    await h.settle()
+    expect(h.closeOrphanedExternalReviews).not.toHaveBeenCalled() // not before the grace
+    expect(h.fireGrace()).toBe(1)
+    await vi.waitFor(() => expect(h.handoverOrder).toContain('sweep'))
+    expect(h.handoverOrder).toEqual(['stop', 'close', 'sweep'])
+    expect(h.closeOrphanedExternalReviews).toHaveBeenCalledTimes(1)
+    expect(h.closeOrphanedExternalReviews).toHaveBeenCalledWith()
+  })
+
+  it('closes only the external reviews started before the gone instance went when a new instance attached within the grace', async () => {
+    const h = await rig({ openRepairWithoutSpec: true })
+    h.appPid.value = 4242
+    h.server.app = true
+    await h.load()
+    h.driving.appsChanged()
+    await h.settle()
+    h.closeOrphanedExternalReviews.mockClear()
+    h.grace.hold = true
+    h.server.app = false
+    h.appPid.value = null
+    h.driving.appsChanged()
+    await h.settle()
+    h.appPid.value = 5151
+    h.server.app = true
+    h.driving.appsChanged()
+    await vi.waitFor(() => expect(h.closeOrphanedExternalReviews).toHaveBeenCalledTimes(1))
+    expect(h.closeOrphanedExternalReviews).toHaveBeenCalledWith({ startedBefore: NOW_MS })
   })
 
   // Review of the tidy, Important: `system.relaunch` quits and starts a new instance at once. The new
@@ -1376,6 +1427,7 @@ describe('createHostDriving — the app-left grace (S4+S5 tidy)', () => {
     await h.settle()
     expect(h.startRepair).not.toHaveBeenCalled()
     expect(h.stopForeignValidations).not.toHaveBeenCalled()
+    expect(h.closeOrphanedExternalReviews).not.toHaveBeenCalled()
   })
 
   // Leftovers Task 1 (S6-3, S45-4a): an app that could not write app.pid is still told from a new instance,
@@ -1395,6 +1447,7 @@ describe('createHostDriving — the app-left grace (S4+S5 tidy)', () => {
     await h.settle()
     expect(h.startRepair).not.toHaveBeenCalled()
     expect(h.stopForeignValidations).not.toHaveBeenCalled()
+    expect(h.closeOrphanedExternalReviews).not.toHaveBeenCalled()
   })
 
   // Final review I1: the server forgets a dead last-app pid when asked, so the tick asks while no app is

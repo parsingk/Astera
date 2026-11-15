@@ -110,6 +110,9 @@ import { createMirrorStore, OrchStateConflict } from './orchestration/mirrorStor
 import { createResumeSweep, type ResumeSweep } from '../core/orchestration/exec/resumeSweep'
 import { createOrchCommitHook } from './orchestration/commitHook'
 import { createReviewStarter } from '../core/orchestration/exec/review'
+import { externalReviewIo } from '../core/orchestration/exec/externalReviewIo'
+import { probeReviewer, type ReviewerProbe } from '../core/acp/probe'
+import { nodeProcFactory } from '../core/sessions/nodeProcFactory'
 import {
   createDispatchLoop,
   ORCH_FIRE_TICK_MS,
@@ -119,7 +122,7 @@ import { answerOrchAct } from './orchestration/answerAct'
 import { appDiscardRunWorktree, appTimerTick, stopRunFromPanel } from './orchestration/yieldDispatch'
 import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
 import { readUnderstandingFile } from '../core/understanding/read'
-import { readChanges, readFileDiff, readRangeDiff } from '../core/git/changes'
+import { readChanges, readFileDiff, readRangeDiff, trackedTreeState } from '../core/git/changes'
 import { readWorkUnitsFile } from '../core/workUnit/store'
 import { HandoffStore } from './handoff/store'
 import { createAppJournal } from './continuity/appJournal'
@@ -3277,7 +3280,19 @@ export function registerIpc(
       // `(w)` 는 일부러다 — ipcConvergenceWiring.test.ts 의 남은 가드가 첫 `startWorker: (a) =>` 에 닻을 내린다.
       startWorker: (w) => deps.startWorker(w),
       specsDir,
-      rangeDiff: (cwd, base, head) => readRangeDiff(cwd, base, head)
+      rangeDiff: (cwd, base, head, o) => readRangeDiff(cwd, base, head, o),
+      // A reviewer registered in Settings runs as this process's own child (design 3.5): nodeProcFactory, never the Host's
+      // registry, so it dies with the app. `handle` is the in-process door, bound late like startWorker above.
+      external: {
+        settings: async () => core.appSettings.getReviewerSettings(),
+        handle: (cmd, args) => orchHandleCommand(deps, { sessionId: UI_CALLER }, cmd, args),
+        spawn: nodeProcFactory,
+        baseEnv: () => process.env,
+        platform: process.platform,
+        clientVersion: app.getVersion(),
+        ...externalReviewIo(orchLog),
+        treeState: trackedTreeState
+      }
     })
 
     /** What reapWorktree (core/orchestration/exec/integrateGit.ts) may close and ask in the app.
@@ -4093,6 +4108,8 @@ export function registerIpc(
     installStubsForCurrentToggles()
     orchWiring?.onStarted({
       stop: () => {
+        // The external reviewers' agents die with the app and record nothing: their Dispatches stay open for the Host.
+        startReview.disposeExternal()
         // The journal's handle goes with the server it was opened for; reopened by the next boot.
         closeContinuity()
         // 미뤄 둔 exit 를 버린다. 남겨 두면 서버가 내려간 뒤에 setState 가 돌 수 있다.
@@ -6229,6 +6246,34 @@ export function registerIpc(
   // reads the file when a Task is reviewed, so saving it is the whole effect.
   ipcMain.handle('settings.getReviewerSettings', () => core.appSettings.getReviewerSettings())
   ipcMain.handle('settings.setReviewerSettings', (_e, next: unknown) => core.appSettings.setReviewerSettings(next as ReviewerSettings))
+  // "Test this reviewer" (spec section 4): initialize and session/new in a temporary folder, with a review's own
+  // resolution and environment. A malformed argument answers without spawning.
+  ipcMain.handle('settings.testExternalReviewer', async (_e, reviewer: unknown): Promise<ReviewerProbe> => {
+    const r = reviewer as { command?: unknown; args?: unknown } | null
+    const valid =
+      typeof r === 'object' &&
+      r !== null &&
+      typeof r.command === 'string' &&
+      r.command.trim() !== '' &&
+      !/[\r\n]/.test(r.command) &&
+      Array.isArray(r.args) &&
+      r.args.length <= 20 &&
+      r.args.every((x) => typeof x === 'string')
+    if (!valid) return { ok: false, kind: 'protocol', message: 'invalid reviewer' }
+    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-reviewer-test-'))
+    try {
+      return await probeReviewer({
+        reviewer: { command: r.command as string, args: r.args as string[] },
+        cwd,
+        spawn: nodeProcFactory,
+        baseEnv: process.env,
+        platform: process.platform,
+        clientVersion: app.getVersion()
+      })
+    } finally {
+      await fs.rm(cwd, { recursive: true, force: true }).catch(() => {})
+    }
+  })
 
   // MCP access (MCP design M5). The Host reads the file on every MCP call (readMcpAccess), so saving it
   // is the whole effect.
