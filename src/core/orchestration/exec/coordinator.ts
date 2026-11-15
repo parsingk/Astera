@@ -603,6 +603,8 @@ export function buildReviewSpecFile(a: {
   diffText?: { text: string; truncated: boolean }
 }): string {
   const inline = a.report === 'inline'
+  // A context line of a markdown file can be " ```", which closes a three-backtick fence: the fence outgrows every run in the diff
+  const diffFence = '`'.repeat(Math.max(3, Math.max(0, ...(a.diffText?.text.match(/`+/g) ?? []).map((r) => r.length)) + 1))
   // 구현자용 문구를 그대로 쓰지 않는다. 구현자는 "고치기 전에 읽어라"를 받고, 검토자는 "다시 열린
   // 결정은 구체적 결함이다"를 받아야 한다 — 같은 글을 두 번 실으면 이 자리가 값을 못 낸다.
   // **좁혀 둔 판정 기준을 넓히지 않는다.** 아래 "The one question you answer" 가 취향으로 반려하는
@@ -799,9 +801,9 @@ ${
 
 The changes under review, as git prints them.${a.diffText.truncated ? ' The diff was cut at a size limit, so it is not the whole change: read the files for the rest.' : ''}
 
-\`\`\`diff
+${diffFence}diff
 ${a.diffText.text}
-\`\`\`
+${diffFence}
 `
       : `
 No diff is attached. Read the files listed above.

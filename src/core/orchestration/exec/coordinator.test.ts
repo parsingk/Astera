@@ -1497,6 +1497,22 @@ describe('buildReviewSpecFile, report: inline', () => {
     expect(inline({ diffText: { text: 'd', truncated: true } })).toMatch(/was cut/)
   })
 
+  it('fences the diff with more backticks than any run inside it', () => {
+    const fenceOf = (text: string): { open: string; close: string } => {
+      const s = inline({ diffText: { text, truncated: false } })
+      const lines = s.split('\n')
+      const open = lines.find((l) => /^`{3,}diff$/.test(l))!
+      const close = lines.slice(lines.lastIndexOf(open) + 1).find((l) => /^`{3,}$/.test(l)) ?? ''
+      return { open: open.slice(0, -4), close }
+    }
+    for (const [text, longest] of [[' context\n ```\n+added\n', 3], ['+`````\n', 5]] as const) {
+      const f = fenceOf(text)
+      expect(f.open.length).toBeGreaterThan(longest)
+      expect(f.close).toBe(f.open)
+    }
+    expect(inline({ diffText: { text: '+x\n', truncated: false } })).toContain('```diff\n+x\n\n```')
+  })
+
   it('says no diff is attached when there is none', () => {
     expect(inline()).toContain('No diff is attached. Read the files listed above.')
     expect(inline()).not.toContain('## The diff')
