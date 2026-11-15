@@ -3095,5 +3095,9 @@ export const ko = {
   'runReport.cost.tokens': '토큰 사용량: 최소 {total}.',
   'runReport.cost.tokensCoordinator': '토큰 사용량: 최소 {total}, 그중 코디네이터 최소 {coordinator}.',
   'runReport.cost.coordinatorOnly': '코디네이터 토큰 사용량: 최소 {coordinator}.',
-  'runReport.cost.accounts': '사용한 계정: {names}.'
+  'runReport.cost.accounts': '사용한 계정: {names}.',
+  'runReport.card.copy': '복사',
+  'runReport.card.copied': '복사했습니다.',
+  'runReport.card.commentFailed': 'PR 댓글을 남기지 못했습니다: {error}',
+  'runReport.card.accounts': '사용한 계정: {names}.'
 } as const

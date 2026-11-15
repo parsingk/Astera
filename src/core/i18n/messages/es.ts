@@ -2606,5 +2606,9 @@ export const es: Catalog = {
   'runReport.cost.tokens': 'Tokens usados: al menos {total}.',
   'runReport.cost.tokensCoordinator': 'Tokens usados: al menos {total}, de ellos al menos {coordinator} del coordinador.',
   'runReport.cost.coordinatorOnly': 'Tokens usados por el coordinador: al menos {coordinator}.',
-  'runReport.cost.accounts': 'Cuentas usadas: {names}.'
+  'runReport.cost.accounts': 'Cuentas usadas: {names}.',
+  'runReport.card.copy': 'Copiar',
+  'runReport.card.copied': 'Informe copiado.',
+  'runReport.card.commentFailed': 'No se pudo publicar el comentario en el pull request: {error}',
+  'runReport.card.accounts': 'Cuentas usadas: {names}.'
 }

@@ -2841,5 +2841,9 @@ export const en: Record<keyof typeof ko, string> = {
   'runReport.cost.tokens': 'Tokens used: at least {total}.',
   'runReport.cost.tokensCoordinator': 'Tokens used: at least {total}, of which at least {coordinator} by the coordinator.',
   'runReport.cost.coordinatorOnly': 'Coordinator tokens used: at least {coordinator}.',
-  'runReport.cost.accounts': 'Accounts used: {names}.'
+  'runReport.cost.accounts': 'Accounts used: {names}.',
+  'runReport.card.copy': 'Copy',
+  'runReport.card.copied': 'Copied the report.',
+  'runReport.card.commentFailed': 'The pull request comment could not be posted: {error}',
+  'runReport.card.accounts': 'Accounts used: {names}.'
 }

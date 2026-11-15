@@ -1862,6 +1862,18 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .detail-observe-deny { display: inline-flex; align-items: center; gap: 8px; }
 .detail-observe-link { background: none; border: 0; padding: 0; color: var(--accent); font-size: inherit; cursor: pointer; }
 .detail-observe-link:hover { text-decoration: underline; }
+/* The finished Run's report card (run report design §6.1): the GitHub block's frame, caveats in the warning colour */
+.run-report { flex: none; display: flex; flex-direction: column; gap: 4px; margin-top: 8px; padding: 8px 12px; border: 1px solid var(--line-soft); border-radius: 6px; font-size: 12px; max-height: 40vh; overflow-y: auto; }
+.run-report-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.run-report-outcome { font-size: 12.5px; }
+.run-report-copy { flex: none; background: none; border: 0; padding: 0; color: var(--accent); font-size: 11.5px; cursor: pointer; }
+.run-report-copy:hover { text-decoration: underline; }
+.run-report-asof { margin: 0; color: var(--text-dim); font-size: 11.5px; }
+.run-report-line { margin: 0; }
+.run-report-line.is-warning { color: var(--warn-ink); }
+.run-report-caveats, .run-report-tasks { margin: 0; padding-left: 18px; }
+.run-report-caveats { color: var(--warn-ink); }
+.run-report-tasks { color: var(--text); }
 /* 창을 닫는 ✕. 아래 .detail-clear 와 같은 모양을 쓰지만 margin-left: auto 가 아니다 — 제목이
    flex: 1 로 남는 자리를 다 가져가므로 개수 묶음과 이 버튼은 이미 오른쪽 끝에 붙어 있고, auto 를
    또 주면 개수 묶음과 이 버튼 사이가 벌어진다. 글자를 --text-faint 로 두지 않는 이유는 사이드바에서

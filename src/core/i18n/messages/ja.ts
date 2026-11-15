@@ -2576,5 +2576,9 @@ export const ja: Catalog = {
   'runReport.cost.tokens': 'トークン使用量: 少なくとも {total}。',
   'runReport.cost.tokensCoordinator': 'トークン使用量: 少なくとも {total}、そのうちコーディネーターが少なくとも {coordinator}。',
   'runReport.cost.coordinatorOnly': 'コーディネーターのトークン使用量: 少なくとも {coordinator}。',
-  'runReport.cost.accounts': '使用したアカウント: {names}。'
+  'runReport.cost.accounts': '使用したアカウント: {names}。',
+  'runReport.card.copy': 'コピー',
+  'runReport.card.copied': 'レポートをコピーしました。',
+  'runReport.card.commentFailed': 'プルリクエストへのコメントを投稿できませんでした: {error}',
+  'runReport.card.accounts': '使用したアカウント: {names}。'
 }
