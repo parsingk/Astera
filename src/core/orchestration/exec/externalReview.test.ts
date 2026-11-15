@@ -85,6 +85,10 @@ interface RigOpts {
   /** Replaces the real command handler's answer to the settle */
   settleAnswer?: { status: number; body: unknown }
   settingsThrow?: string
+  /** Holds one await of the start until `release()`: the settings read, the path guard, or the review Dispatch's commit
+   *  (the state is already changed when the commit is held, as a real store's is). `commitFails` rejects that commit. */
+  hold?: 'settings' | 'path' | 'commit'
+  commitFails?: boolean
   rangeDiff?: ReviewContext['rangeDiff']
 }
 
@@ -148,9 +152,13 @@ function rig(o: RigOpts = {}) {
   const reviewer: ExternalReviewer = { ...REVIEWER, ...o.reviewer }
   const reviewBy = o.reviewBy === undefined ? reviewer.id : o.reviewBy
   const settings: ReviewerSettings = { reviewers: [reviewer], reviewBy }
+  let release: () => void = () => {}
+  const held = new Promise<void>((r) => (release = r))
+  const holdAt = (at: NonNullable<RigOpts['hold']>): Promise<void> => (o.hold === at ? held : Promise.resolve())
 
   const external: ExternalReviewDeps = {
     settings: async () => {
+      await holdAt('settings')
       if (o.settingsThrow) throw new Error(o.settingsThrow)
       return settings
     },
@@ -187,14 +195,20 @@ function rig(o: RigOpts = {}) {
   const ctx: ReviewContext = {
     getState: () => state,
     setState: async (next) => {
+      const opening = !state.dispatches.some((x) => x.review) && next.dispatches.some((x) => x.review)
+      if (opening && o.commitFails) throw new Error('disk full')
       history.push(next)
       state = next
+      if (opening) await holdAt('commit')
     },
     now: () => NOW,
     log: (m) => logs.push(m),
     accounts: () => [claude('c1'), codex('x1')],
     loginStatus: async () => true,
-    assertAllowedPath: async (p) => p,
+    assertAllowedPath: async (p) => {
+      await holdAt('path')
+      return p
+    },
     startWorker,
     specsDir,
     ...(o.rangeDiff ? { rangeDiff: o.rangeDiff } : {}),
@@ -214,6 +228,7 @@ function rig(o: RigOpts = {}) {
     acpLines,
     reviewer,
     history,
+    release: () => release(),
     setState: (s: OrchState) => void (state = s),
     state: () => state,
     task: () => state.tasks.find((x) => x.id === taskId)!,
@@ -509,5 +524,105 @@ describe('createReviewStarter with an external reviewer', () => {
     const ours = made.filter((m) => m.delay === 12_345 || m.delay === 777)
     expect(ours).toHaveLength(6)
     for (const m of ours) expect(m.handle._destroyed, `a timer of ${m.delay} ms is still pending`).toBe(true)
+  })
+
+  // Fix round 1, finding 1: a driver that has been disposed starts nothing, wherever its start was suspended
+  describe('after disposeExternal', () => {
+    const quiet = (h: ReturnType<typeof rig>): void => {
+      expect(h.spawned).toEqual([])
+      expect(h.prompts()).toEqual([])
+      expect(h.handled).toEqual([])
+      expect(h.state().gates).toEqual([])
+      expect(h.start.externalInFlight().size).toBe(0)
+    }
+
+    it('a settings read that resolves only after the dispose opens no Dispatch, no Gate, and does not fall through to the automatic path', async () => {
+      const h = rig({ hold: 'settings' })
+      const starting = h.start({ taskId: h.taskId })
+      h.start.disposeExternal()
+      h.release()
+      await starting
+      quiet(h)
+      expect(h.review()).toBeUndefined()
+      expect(h.task().status).toBe('reviewing')
+      expect(h.startWorker).not.toHaveBeenCalled()
+    })
+
+    it('a settings read that fails after the dispose opens no Gate either', async () => {
+      const h = rig({ hold: 'settings', settingsThrow: 'EBUSY' })
+      const starting = h.start({ taskId: h.taskId })
+      h.start.disposeExternal()
+      h.release()
+      await starting
+      quiet(h)
+      expect(h.task().status).toBe('reviewing')
+    })
+
+    it('a start suspended at the path guard spawns nothing and opens no Dispatch', async () => {
+      const h = rig({ hold: 'path' })
+      const starting = h.start({ taskId: h.taskId })
+      await sleep(30)
+      h.start.disposeExternal()
+      h.release()
+      await starting
+      quiet(h)
+      expect(h.review()).toBeUndefined()
+    })
+
+    it('a start suspended at the commit of its Dispatch spawns nothing, and the Dispatch is left open for the next driver', async () => {
+      const h = rig({ hold: 'commit' })
+      const starting = h.start({ taskId: h.taskId })
+      await sleep(30)
+      // the state already has the Dispatch, and it is already counted as in flight
+      expect(h.review()).toBeDefined()
+      expect([...h.start.externalInFlight()]).toEqual([h.review()!.id])
+      h.start.disposeExternal()
+      h.release()
+      await starting
+      await h.start.externalIdle()
+      await sleep(100)
+      quiet(h)
+      expect(h.review()!.endedAt).toBeUndefined()
+    })
+
+    it('a later start on the same starter does nothing on the external path, and the automatic path still runs', async () => {
+      const h = rig()
+      h.start.disposeExternal()
+      await h.start({ taskId: h.taskId })
+      quiet(h)
+      expect(h.review()).toBeUndefined()
+      const auto = rig({ reviewBy: null })
+      auto.start.disposeExternal()
+      await auto.start({ taskId: auto.taskId })
+      expect(auto.startWorker).toHaveBeenCalledTimes(1)
+    })
+
+    it('a commit that fails takes the review out of the in-flight set and gates as a failed start does', async () => {
+      const h = rig({ commitFails: true })
+      await h.start({ taskId: h.taskId })
+      expect(h.start.externalInFlight().size).toBe(0)
+      await h.start.externalIdle()
+      expect(h.spawned).toEqual([])
+      expect(h.task().status).toBe('blocked')
+      expect(h.gateText()).toContain('disk full')
+    })
+  })
+
+  it('the new Dispatch is in externalInFlight as soon as startReview resolves', async () => {
+    const h = rig({ mode: 'hang-prompt' })
+    await h.start({ taskId: h.taskId })
+    expect([...h.start.externalInFlight()]).toEqual([h.review()!.id])
+  })
+
+  // Fix round 1, finding 2: spec 3.4 step 9, the agent's messages are in the transcript
+  it('keeps each turn’s message in the transcript, cut at a cap with a marker', async () => {
+    const h = rig()
+    await h.run()
+    expect(h.acpLines.map((l) => l.line).join('\n')).toContain('Second line.')
+    const long = rig({ mode: 'no-verdict-twice', message: 'x'.repeat(25_000) })
+    await long.run()
+    const logged = long.acpLines.map((l) => l.line)
+    expect(logged.some((l) => l.includes('x'.repeat(20_000)) && !l.includes('x'.repeat(20_001)))).toBe(true)
+    expect(logged.join('\n')).toMatch(/cut at 20000 characters/)
   })
 })

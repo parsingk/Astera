@@ -33,6 +33,8 @@ export const EXTERNAL_OPEN_POLL_MS = 2_000
 /** The diff embedded in the reviewer's prompt is cut here. */
 export const EXTERNAL_DIFF_MAX_BYTES = 150_000
 const STDERR_IN_REASON = 600
+/** One turn's message goes into the transcript cut here. */
+export const TRANSCRIPT_MESSAGE_MAX = 20_000
 
 export interface ExternalReviewStart {
   taskId: string
@@ -50,10 +52,14 @@ export interface ExternalReviews {
   start(a: ExternalReviewStart): Promise<void>
   inFlight(): ReadonlySet<string>
   dispose(): void
+  /** Whether `dispose` has been called: a disposed driver starts no more external reviews. */
+  disposed(): boolean
   idle(): Promise<void>
 }
 
 interface Running {
+  /** Resolves `done`; called once the review is out of `running`. */
+  release(): void
   /** Set by an end that records nothing (dispose, a closed Dispatch): every later commit is dropped. */
   silent: boolean
   stop(): void
@@ -88,6 +94,12 @@ export function createExternalReviews(c: {
 }): ExternalReviews {
   const ext = c.external
   const running = new Map<string, Running>()
+  let disposed = false
+  /** Takes a review out of `running` and releases whoever waits for it (`idle`). */
+  const unregister = (id: string, self: Running): void => {
+    if (running.get(id) === self) running.delete(id)
+    self.release()
+  }
 
   /** The one way a review ends without recording anything. */
   const abort = (dispatchId: string, record: false): void => {
@@ -116,6 +128,15 @@ export function createExternalReviews(c: {
     let poll: ReturnType<typeof setInterval> | undefined
     let stopped = false
     let timedOut = false
+
+    /** The agent's message is kept in the transcript: once the Dispatch is gone nothing else shows what it said. */
+    const logTurn = (turn: { stopReason: string; text: string }): void => {
+      const cut = turn.text.length > TRANSCRIPT_MESSAGE_MAX
+      log(`turn ended: ${turn.stopReason}`)
+      const kept = cut ? turn.text.slice(0, TRANSCRIPT_MESSAGE_MAX) : turn.text
+      const marker = cut ? `\n[message cut at ${TRANSCRIPT_MESSAGE_MAX} characters, ${turn.text.length - TRANSCRIPT_MESSAGE_MAX} more not kept]` : ''
+      log(`agent message:\n${kept}${marker}`)
+    }
 
     /** Ends the run on purpose and kills the process. Idempotent; synchronous. */
     const stop = (): void => {
@@ -212,7 +233,7 @@ export function createExternalReviews(c: {
 
       let turn = await session.prompt(prompt)
       checkpoint()
-      log(`turn ended: ${turn.stopReason}`)
+      logTurn(turn)
       let verdict: ExternalVerdict | undefined
       for (let attempt = 0; verdict === undefined; attempt++) {
         if (turn.stopReason !== 'end_turn') return await fail(`the external reviewer ${name} ended its turn with ${turn.stopReason}.`)
@@ -223,7 +244,7 @@ export function createExternalReviews(c: {
           log(`no readable verdict (${parsed.error}); asking once more`)
           turn = await session.prompt(VERDICT_RETRY_PROMPT)
           checkpoint()
-          log(`turn ended: ${turn.stopReason}`)
+          logTurn(turn)
         }
       }
 
@@ -273,6 +294,7 @@ export function createExternalReviews(c: {
 
   return {
     async start(a) {
+      if (disposed) return void c.log(`external review of task=${a.taskId} not started: this driver has been disposed`)
       // **A read of the state is not carried across an await** (review.ts says why): this one is used before the next one
       const st = c.getState()
       const task = st.tasks.find((t) => t.id === a.taskId)
@@ -282,6 +304,7 @@ export function createExternalReviews(c: {
           `this task's work ran in a sandbox, and the external reviewer ${a.reviewer.name} cannot be sandboxed. Set the reviewer to Automatic in Settings, or complete the task by hand.`
         ))
       await c.assertAllowedPath(a.cwd)
+      if (disposed) return void c.log(`external review of task=${a.taskId} not started: this driver was disposed while it began`)
       const fresh = c.getState()
       if (fresh.tasks.find((t) => t.id === a.taskId)?.status !== 'reviewing') return
       const opened = openReviewDispatch(
@@ -299,19 +322,33 @@ export function createExternalReviews(c: {
       )
       // `dispatch already open` is not a failure (reviewGate.onOpenRefused says why)
       if (!opened.ok) return void (await c.reviewGate.onOpenRefused({ taskId: a.taskId, error: opened.error }))
-      await c.setState(opened.state)
+      // Registered before the commit: the Dispatch is visible in the state as soon as the commit changes it, so it must
+      // be counted as in flight (and reachable by a dispose) from then on. The id is known synchronously.
+      const id = opened.value.id
+      let release: () => void = () => {}
+      const self: Running = { silent: false, stop: () => {}, release: () => release(), done: new Promise<void>((r) => (release = r)) }
+      running.set(id, self)
+      try {
+        await c.setState(opened.state)
+      } catch (e) {
+        unregister(id, self)
+        throw e
+      }
+      if (disposed || self.silent) {
+        // Disposed during the commit: the Dispatch stays open for the next driver, and nothing of ours runs for it
+        unregister(id, self)
+        return void c.log(`external review of task=${a.taskId} dispatch=${id} not run: this driver was disposed during its commit`)
+      }
       c.log(`external review started task=${a.taskId} reviewer=${a.reviewer.name} dispatch=${opened.value.id}`)
       // The rest runs detached; whatever it throws ends in a Gate or in the log, never in the caller
-      const self: Running = { silent: false, stop: () => {}, done: Promise.resolve() }
-      running.set(opened.value.id, self)
-      self.done = run(opened.value, a, self)
-        .catch((e) => c.log(`external review of task=${a.taskId} dispatch=${opened.value.id} ended with an error: ${String(e)}`))
-        .finally(() => {
-          if (running.get(opened.value.id) === self) running.delete(opened.value.id)
-        })
+      void run(opened.value, a, self)
+        .catch((e) => c.log(`external review of task=${a.taskId} dispatch=${id} ended with an error: ${String(e)}`))
+        .finally(() => unregister(id, self))
     },
     inFlight: () => new Set(running.keys()),
+    disposed: () => disposed,
     dispose() {
+      disposed = true
       for (const id of [...running.keys()]) abort(id, false)
     },
     async idle() {

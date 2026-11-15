@@ -156,6 +156,8 @@ export function createReviewStarter(c: ReviewContext): ReviewStarter {
         try {
           settings = await c.external.settings()
         } catch (e) {
+          // A disposed driver opens no Gate either
+          if (externalReviews.disposed()) return void c.log(`external review of task=${taskId} not started: this driver has been disposed`)
           return void (await gate(`could not read the reviewer setting: ${e instanceof Error ? e.message : String(e)}`))
         }
         const reviewer = chosenReviewer(settings)
