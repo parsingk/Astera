@@ -458,6 +458,9 @@ export interface Task {
   /** 완료 정책을 만족하지 않은 채 사람이 완료로 옮겼다 (설계 G4, 명세 §30). 이유는 사람이 적은 것
    *  그대로다 — 저널의 TASK_COMPLETED_WITH_OVERRIDE 가 이 칸을 읽는다. */
   completionOverride?: { reason: string; at: string }
+  /** Who forced it (`completionOverride`): a person, the coordinator, Astera itself, or a caller the Host cannot tell.
+   *  Stamped by the Host's commit path (`stampActedBy`); the journal holds the full actor. */
+  completionOverrideBy?: ActorGroup
   /** 이 Task 가 **처음 validating 이 된** 때 — 시간 예산의 시계(ConvergencePolicy.maxTotalMinutes).
    *  한 번만 찍고 덮지 않는다: 라운드마다 다시 찍으면 예산이 영원히 리셋된다. */
   convergenceStartedAt?: string
@@ -655,7 +658,13 @@ export interface Gate {
   resolution?: string
   createdAt: string
   resolvedAt?: string
+  /** Who answered it: a person, the coordinator, Astera itself, or a caller the Host cannot tell. Stamped by the Host's
+   *  commit path (`stampActedBy`); the journal holds the full actor. */
+  resolvedBy?: ActorGroup
 }
+
+/** Who acted on a Gate or forced a completion, as a group. No session id, address or pairing name rides on it. */
+export type ActorGroup = 'person' | 'coordinator' | 'astera' | 'unknown'
 
 /** Maximum messages in one Delivery batch */
 export const DELIVERY_MAX = 50
