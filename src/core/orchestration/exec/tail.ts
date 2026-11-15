@@ -36,6 +36,10 @@ export const TAIL_DEFAULT_LIMIT = 200
  *  when the app had not restarted). */
 export const TAIL_UNTRACKED =
   '(no output recorded for this dispatch — either the app restarted after it began, or its output was dropped to stay within the retention cap)'
+/** worker-read on an external review (external reviewers, final fix wave E4): it has no pty, and what it said is in its
+ *  transcript, a file of its own. */
+export const EXTERNAL_REVIEW_NO_OUTPUT =
+  'an external reviewer has no terminal output; its transcript is in the review-logs folder of the profile'
 /** Tracked, and nothing has arrived yet. Returning an empty string reads to the LLM on the other
  *  end as "the worker printed nothing" and leads it to decide to kill a live worker (this
  *  necessarily holds in the window right after worker-start, before the first PTY chunk arrives). */

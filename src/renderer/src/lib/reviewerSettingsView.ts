@@ -49,6 +49,12 @@ export function withReviewerAdded(s: ReviewerSettings, r: Fields): ReviewerSetti
   return { ...s, reviewers: [...s.reviewers, { id, ...c }] }
 }
 
+/** `r` without the entry of `id`: a reviewer's Test result once it no longer describes the reviewer (a saved edit). */
+export function withoutKey<T>(r: Record<string, T>, id: string): Record<string, T> {
+  const { [id]: _gone, ...rest } = r
+  return rest
+}
+
 /** A removed choice returns to automatic (null) */
 export function withReviewerRemoved(s: ReviewerSettings, id: string): ReviewerSettings {
   return { reviewers: s.reviewers.filter((r) => r.id !== id), reviewBy: s.reviewBy === id ? null : s.reviewBy }

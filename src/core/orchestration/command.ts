@@ -72,7 +72,7 @@ import { checksForRun } from './runChecks'
 import { completionForRun } from './runCompletion'
 import { taskDetailOf } from './taskDetail'
 import { checkOutputSlice, tailWindow } from './taskOutput'
-import { TAIL_UNTRACKED, TAIL_EMPTY } from './exec/tail'
+import { TAIL_UNTRACKED, TAIL_EMPTY, EXTERNAL_REVIEW_NO_OUTPUT } from './exec/tail'
 import { eventCountFor, timelineWith } from './timeline'
 import { workerDoneFieldError } from './sendArgs'
 import type { SessionState } from '../hooks/sessionState'
@@ -4480,8 +4480,9 @@ export async function handleCommand(
       const id = str(args.dispatch)
       if (!id) return bad('--dispatch is required')
       // An external review has no pty and no tail. Answered here, before the dep, so the app and the Host say the
-      // same thing as for an unknown tail whether or not an app is attached (the Host would forward the read).
-      if (s.dispatches.find((x) => x.id === id)?.externalReviewer) return okBody({ output: TAIL_UNTRACKED })
+      // same thing whether or not an app is attached (the Host would forward the read): an answer of the untracked
+      // kind, saying where its transcript is instead (final fix wave E4).
+      if (s.dispatches.find((x) => x.id === id)?.externalReviewer) return okBody({ output: EXTERNAL_REVIEW_NO_OUTPUT })
       return okBody({
         output: await deps.readWorker({
           dispatchId: id,

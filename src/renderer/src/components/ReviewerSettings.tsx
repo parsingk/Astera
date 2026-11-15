@@ -7,7 +7,8 @@ import {
   probeText,
   withReviewerAdded,
   withReviewerEdited,
-  withReviewerRemoved
+  withReviewerRemoved,
+  withoutKey
 } from '../lib/reviewerSettingsView'
 import { toast } from '../lib/toast'
 import { Select } from './Select'
@@ -96,6 +97,8 @@ export function ReviewerSettings(): React.JSX.Element {
     if ('error' in next) return setError(next.error)
     setError(null)
     setEditing(null)
+    // The Test result shown described the command before this edit
+    setResults((r) => withoutKey(r, id))
     save(next)
   }
 

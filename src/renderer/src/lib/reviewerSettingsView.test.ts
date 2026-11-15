@@ -8,7 +8,8 @@ import {
   reviewerChipName,
   withReviewerAdded,
   withReviewerEdited,
-  withReviewerRemoved
+  withReviewerRemoved,
+  withoutKey
 } from './reviewerSettingsView'
 import { MAX_EXTERNAL_REVIEWERS, reviewerSettingsOf, type ExternalReviewer, type ReviewerSettings } from '../../../core/settings/externalReviewers'
 
@@ -67,6 +68,16 @@ describe('withReviewerAdded', () => {
     if ('error' in r) throw new Error('unexpected')
     expect(r.reviewBy).toBe(rv(1).id)
     expect(r.reviewers).toHaveLength(2)
+  })
+})
+
+// Final fix wave E3: a saved edit drops the reviewer's shown Test result
+describe('withoutKey', () => {
+  it('drops one entry and keeps the rest, leaving the input as it was', () => {
+    const results = { a: { ok: true, text: 'x' }, b: { ok: false, text: 'y' } }
+    expect(withoutKey(results, 'a')).toEqual({ b: { ok: false, text: 'y' } })
+    expect(withoutKey(results, 'c')).toEqual(results)
+    expect(results).toHaveProperty('a')
   })
 })
 

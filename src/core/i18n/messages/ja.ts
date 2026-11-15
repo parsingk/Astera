@@ -970,7 +970,7 @@ export const ja: Catalog = {
   'settings.reviewer.title': 'レビュアー',
   'settings.reviewer.hint': 'レビューを求めた Task を誰がレビューするかを選びます。自動では反対側のモデルを使います。Claude の作業は Codex が、Codex の作業は Claude がレビューします。',
   'settings.reviewer.auto': '自動（反対側のモデル）',
-  'settings.reviewer.externalHint': '外部レビュアーは ACP を話す別のエージェントです。読むだけなのでファイルは変更できず、レビューを終えられないときは Task を止めて確認します。',
+  'settings.reviewer.externalHint': '外部レビュアーは ACP を話す別のエージェントです。Astera は読むことだけを求めます。それ以外の許可を求められても拒否し、ファイルを変更した場合はレビューを止めます。レビューを終えられないときは Task を止めて確認します。',
   'settings.reviewer.add': 'レビュアーを追加',
   'settings.reviewer.preset.custom': 'カスタム',
   'settings.reviewer.name': '名前',

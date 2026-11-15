@@ -982,7 +982,7 @@ export const es: Catalog = {
   'settings.reviewer.title': 'Revisor',
   'settings.reviewer.hint': 'Quién revisa una Task que pide revisión. Automático usa el modelo del otro proveedor: Codex revisa el trabajo de Claude y Claude revisa el de Codex.',
   'settings.reviewer.auto': 'Automático (el otro proveedor)',
-  'settings.reviewer.externalHint': 'Un revisor externo es otro agente que habla ACP. Solo lee: no puede cambiar archivos, y si no logra terminar una revisión, detiene la Task y te pregunta.',
+  'settings.reviewer.externalHint': 'Un revisor externo es otro agente que habla ACP. Astera le pide que solo lea: cualquier otro permiso que pida se rechaza, y la revisión se detiene si cambia un archivo. Si no logra terminar una revisión, detiene la Task y te pregunta.',
   'settings.reviewer.add': 'Añadir revisor',
   'settings.reviewer.preset.custom': 'Personalizado',
   'settings.reviewer.name': 'Nombre',

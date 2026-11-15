@@ -1163,7 +1163,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.reviewer.title': 'Reviewer',
   'settings.reviewer.hint': "Who reviews a Task that asks for a review. Automatic uses the other provider's model: Codex reviews Claude's work and Claude reviews Codex's.",
   'settings.reviewer.auto': 'Automatic (the other provider)',
-  'settings.reviewer.externalHint': 'An external reviewer is another agent that speaks ACP. It only reads: it cannot change files, and a review it cannot finish stops the Task and asks you.',
+  'settings.reviewer.externalHint': 'An external reviewer is another agent that speaks ACP. Astera asks it only to read: anything else it asks permission for is refused, and the review stops if it changes a file. A review it cannot finish stops the Task and asks you.',
   'settings.reviewer.add': 'Add reviewer',
   'settings.reviewer.preset.custom': 'Custom',
   'settings.reviewer.name': 'Name',

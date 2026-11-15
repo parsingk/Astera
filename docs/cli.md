@@ -372,8 +372,11 @@ replaced while a check runs does not count that check as failed. The next Host s
 
 **A review can be done by an external reviewer.** When the person chose one in Settings (a third-party ACP agent such as
 Gemini CLI), every `--review` goes to it instead of the other provider's model, and the Host runs it too, with Astera closed.
-It never falls back to the other provider: a review it cannot finish opens a question. Quitting Astera in the middle of an
-external review loses that review: a `--convergence` Job runs it again, and otherwise a question is opened.
+It never falls back to the other provider: a review it cannot finish opens a question. When the Host runs Jobs (the normal
+case), closing Astera does not touch a running external review. A review in flight is lost when the process that runs it
+goes away (the Host restarting or being replaced, or Astera quitting where Astera itself runs Jobs): a `--convergence` Job
+runs it again, and otherwise a question is opened. `worker-read` on such a review answers that it has no terminal output
+and that its transcript is in the `review-logs` folder of the profile.
 
 **A plugin's completion check that could not be made opens a question.** A `plugin:<id>` check is asked
 of the plugin rather than run in a terminal. A failure goes to the repair loop with the plugin's findings,

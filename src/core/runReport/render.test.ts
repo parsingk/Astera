@@ -512,7 +512,8 @@ describe('the review line names who reviewed', () => {
   it('appends the sentence in every language, with the language separator', () => {
     const names = ['Gemini CLI', 'Codex']
     expect(reviewLine({ ...rv, reviewedBy: names }, 'en')).toBe('Review passed (rounds: 1). Reviewed by Gemini CLI, Codex.')
-    expect(reviewLine({ ...rv, reviewedBy: names }, 'ko')).toContain('Gemini CLI, Codex')
+    // Final fix wave E2: no 이(가) after a name whose last sound decides it
+    expect(reviewLine({ ...rv, reviewedBy: names }, 'ko')).toContain('검토자는 Gemini CLI, Codex입니다.')
     expect(reviewLine({ ...rv, reviewedBy: names }, 'ja')).toContain('Gemini CLI、Codex')
     expect(reviewLine({ ...rv, reviewedBy: names }, 'es')).toContain('Gemini CLI, Codex')
     for (const lang of ['ko', 'ja', 'es'] as const) expect(reviewLine({ ...rv, reviewedBy: names }, lang)).not.toBe(reviewLine(rv, lang))

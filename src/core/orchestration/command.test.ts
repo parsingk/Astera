@@ -11352,7 +11352,8 @@ describe('handleCommand — an external review Dispatch', () => {
     expect(released).toEqual([])
   })
 
-  it('worker-read answers the untracked sentence without asking the dep', async () => {
+  // Final fix wave E4: an answer of its own, of the same kind as the untracked one, saying where the transcript is
+  it('worker-read answers where the transcript is, without asking the dep', async () => {
     const deps = makeDeps(world())
     let asked = 0
     deps.readWorker = async (): Promise<string> => {
@@ -11360,7 +11361,11 @@ describe('handleCommand — an external review Dispatch', () => {
       throw new Error('no app attached')
     }
     const r = await call(deps, 'worker-read', { dispatch: 'dsp_ext' })
-    expect(r).toEqual({ status: 200, body: { output: TAIL_UNTRACKED } })
+    expect(r).toEqual({
+      status: 200,
+      body: { output: 'an external reviewer has no terminal output; its transcript is in the review-logs folder of the profile' }
+    })
+    expect(r.body).not.toEqual({ output: TAIL_UNTRACKED })
     expect(asked).toBe(0)
   })
 })
